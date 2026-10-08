@@ -799,6 +799,26 @@ TEST(SettingsDocumentTest, DictionarySwitchesAreWrittenOnlyWhenStoredOrChanged) 
   EXPECT_EQ(dictionary->GetBool("autoWordsEnabled"), false);
 }
 
+TEST(SettingsDocumentTest, DictionarySwitchesLeftAsLoadedKeepEditsMadeSinceLoading) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_external");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{"sudachiEnabled":true}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_TRUE(loaded.settings.dictionary_loaded);
+  // Edited by hand while the settings app was open.
+  WriteText(path, R"({"dictionary":{"sudachiEnabled":false}})");
+  loaded.settings.dictionary->user_dictionary_enabled = false;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* dictionary = parsed->Find("dictionary");
+  ASSERT_TRUE(dictionary && dictionary->IsObject());
+  EXPECT_EQ(dictionary->GetBool("sudachiEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("userDictionaryEnabled"), false);
+  EXPECT_EQ(dictionary->AsObject().size(), 2u);
+}
+
 TEST(SettingsDocumentTest, GenericValuesAreWrittenOnlyWhenStoredOrChanged) {
   ScopedTempDirectory temp("azookey_settings_generic_values");
   const auto path = temp.path() / "settings.json";
@@ -879,6 +899,21 @@ TEST(SettingsDocumentTest, SafeModeIsOnlyClearedOnRequest) {
   EXPECT_EQ(safe_mode->GetBool("enabled"), false);
   EXPECT_EQ(safe_mode->GetString("enteredAt"), "2026-09-22T01:02:03Z");
   EXPECT_EQ(safe_mode->GetNumber("lastCrashCount"), 3.0);
+}
+
+TEST(SettingsDocumentTest, SafeModeEnteredAgainAfterLoadingIsNotCleared) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_reentry");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"safeMode":{"enabled":true,"enteredAt":"2026-09-22T01:02:03Z"}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  // The Host enters SafeMode again before the user saves the clear.
+  WriteText(path, R"({"safeMode":{"enabled":true,"enteredAt":"2026-09-23T04:05:06Z"}})");
+  loaded.settings.clear_safe_mode = true;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  EXPECT_TRUE(saved.safe_mode_reentered);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  EXPECT_EQ(parsed->Find("safeMode")->GetBool("enabled"), true);
 }
 
 TEST(SettingsDocumentTest, MissingDictionaryLoadsSchemaDefaults) {

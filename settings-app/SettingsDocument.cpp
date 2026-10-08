@@ -523,6 +523,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
     settings.log_level = it->second.AsString();
   }
   settings.dictionary = ExtractDictionarySettings(root);
+  settings.dictionary_loaded = settings.dictionary;
   for (const auto& field : GenericSettingFields()) {
     if (const auto* stored = FindPath(root, field.path)) {
       if (auto value = FromJson(field, *stored)) settings.values.emplace(field.path, *value);
@@ -657,6 +658,8 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
     for (const auto& [key, field] : kDictionaryFields) {
       const std::string dictionary_path = "dictionary." + std::string(key);
       const bool value = (*settings.dictionary).*field;
+      // A switch left as loaded keeps whatever is on disk now, even if it changed since.
+      if (settings.dictionary_loaded && value == (*settings.dictionary_loaded).*field) continue;
       if (FindPath(root, dictionary_path) || value != defaults.*field) {
         SetPath(&root, dictionary_path, j::Value(value));
       }
@@ -669,7 +672,14 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
     }
   }
   if (settings.clear_safe_mode && FindPath(root, "safeMode.enabled")) {
-    SetPath(&root, "safeMode.enabled", j::Value(false));
+    // The Host may have entered SafeMode again since the user asked; that entry is not cleared.
+    const auto* entered_at = FindPath(root, "safeMode.enteredAt");
+    const std::string current = entered_at && entered_at->IsString() ? entered_at->AsString() : "";
+    if (current == settings.safe_mode_entered_at) {
+      SetPath(&root, "safeMode.enabled", j::Value(false));
+    } else {
+      result.safe_mode_reentered = true;
+    }
   }
 
   if (settings.openai_api_key_changed) {

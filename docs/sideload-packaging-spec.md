@@ -1377,7 +1377,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー（`crashReportConsent` はバージョン） | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `profilesByApp` | map<string,object> | `{}` | —（保存時保持。編集 UI は持たない） | M48 | 即時 | `app-profile-spec.md` §4 |
-| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
+| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
 
 > オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
 > `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
@@ -1579,9 +1579,10 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
   既定）から変えたキーだけを書く。変えたキーも、`settings.json` にそのキーが無く値が schema 既定と等しいときは
   書かない。ユーザーが触れていないキーは、記述子の範囲外の値も含めてディスク上の値のまま残り、欠落キーは
   schema 既定を引き継ぎ続ける（§3.6 拡張方針「欠落キーは schema 既定で補完」）。有効なコントロールの値が
-  型・範囲・選択肢に合わないときは何も書かずに保存を失敗させ、該当する設定名を表示する。依存条件を満たさず
-  無効になっているコントロールの不正な値は、保存の対象から外す。`dictionary` の 7 キーは、ディスクにあるか
-  schema 既定と異なるときに書く。
+  型・範囲・選択肢に合わないときは何も書かずに保存を失敗させ、該当する設定名を表示し、そのペインを開いて
+  コントロールにフォーカスする。数値の入力は範囲へ丸めず、表示のために値を丸めない。依存条件を満たさず
+  無効になっているコントロールの不正な値は、保存の対象から外す。`dictionary` の 7 キーも、読み込んだ値から
+  変えたスイッチだけを、ディスクにあるか schema 既定と異なるときに書く。
 - Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
   §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 

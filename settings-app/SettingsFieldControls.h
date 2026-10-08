@@ -21,11 +21,15 @@ class SettingsFieldControls {
   // Every valid field value; returns false with the path of an enabled control that holds no
   // valid value. Disabled controls with no valid value are left out.
   bool Read(SettingValues* values, std::string* invalid_path) const;
+  // Moves keyboard focus to the field's control (its pane must already be shown).
+  void Focus(std::string_view path) const;
 
  private:
   struct Entry {
     const SettingField* field;
     winrt::Microsoft::UI::Xaml::Controls::Control control{nullptr};
+    winrt::hstring note;
+    winrt::hstring inactive_reason;
   };
 
   void RefreshActiveStates();

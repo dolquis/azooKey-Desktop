@@ -274,4 +274,9 @@
   <data name="ClearSafeModeButton.Content" xml:space="preserve"><value>セーフモードを解除する</value></data>
   <data name="SafeModeClearPending" xml:space="preserve"><value>保存するとセーフモードを解除します。</value></data>
   <data name="InvalidSettingValue" xml:space="preserve"><value>次の設定の値が正しくありません: </value></data>
+  <data name="SettingInactiveUntilOn" xml:space="preserve"><value>「{0}」をオンにすると使えます。</value></data>
+  <data name="SettingInactiveUntilValue" xml:space="preserve"><value>「{0}」が「{1}」のときに使えます。</value></data>
+  <data name="ClearSafeModeLabel" xml:space="preserve"><value>セーフモードを解除する</value></data>
+  <data name="CancelClearSafeModeLabel" xml:space="preserve"><value>解除を取り消す</value></data>
+  <data name="SafeModeReentered" xml:space="preserve"><value>Host が再びセーフモードに入ったため、解除しませんでした。設定アプリを開き直して状態を確認してください。</value></data>
 </root>

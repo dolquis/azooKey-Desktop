@@ -392,7 +392,11 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                        : log_index == 3 ? "debug"
                                         : "info";
   settings.dictionary = DictionaryFromControls();
+  settings.dictionary_loaded = saved_settings_.dictionary;
   settings.clear_safe_mode = clear_safe_mode_;
+  settings.safe_mode_enabled = saved_settings_.safe_mode_enabled;
+  settings.safe_mode_entered_at = saved_settings_.safe_mode_entered_at;
+  settings.safe_mode_last_crash_count = saved_settings_.safe_mode_last_crash_count;
   azookey::settings::SettingValues edited;
   if (std::string invalid_path; !field_controls_.Read(&edited, &invalid_path)) {
     ShowInvalidSetting(invalid_path);
@@ -463,8 +467,12 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
       // Turned back off before a restart, so the pack will not be fetched after all.
       RestartRequiredInfoBar().IsOpen(false);
     }
-    if (clear_safe_mode_) {
+    if (save_result.safe_mode_reentered) {
+      ShowSafeMode(saved_settings_);
+      SafeModeInfoBar().Message(final_resources.GetString(L"SafeModeReentered"));
+    } else if (clear_safe_mode_) {
       clear_safe_mode_ = false;
+      settings.safe_mode_enabled = false;
       SafeModeInfoBar().IsOpen(false);
     }
     auto saved_values = std::move(saved_settings_.values);
@@ -504,10 +512,10 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
 
 void MainWindow::ShowSafeMode(const azookey::settings::EditableSettings& settings) {
   clear_safe_mode_ = false;
-  ClearSafeModeButton().IsEnabled(true);
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ClearSafeModeButton().Content(winrt::box_value(resources.GetString(L"ClearSafeModeLabel")));
   SafeModeInfoBar().IsOpen(settings.safe_mode_enabled);
   if (!settings.safe_mode_enabled) return;
-  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
   auto message = resources.GetString(L"SafeModeMessage");
   if (!settings.safe_mode_entered_at.empty()) {
     message = message + L"\n" + resources.GetString(L"SafeModeEnteredAtLabel") +
@@ -521,13 +529,31 @@ void MainWindow::ShowSafeMode(const azookey::settings::EditableSettings& setting
 void MainWindow::ClearSafeModeButton_Click(Windows::Foundation::IInspectable const&,
                                            Microsoft::UI::Xaml::RoutedEventArgs const&) {
   // Only the user leaves SafeMode, and only through a save (sideload-packaging-spec section 3.6).
+  // A second press withdraws the request before it is saved.
+  if (clear_safe_mode_) {
+    ShowSafeMode(saved_settings_);
+    return;
+  }
   clear_safe_mode_ = true;
-  ClearSafeModeButton().IsEnabled(false);
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ClearSafeModeButton().Content(winrt::box_value(resources.GetString(L"CancelClearSafeModeLabel")));
   SafeModeInfoBar().Message(resources.GetString(L"SafeModeClearPending"));
 }
 
 void MainWindow::ShowInvalidSetting(const std::string& path) {
+  // Open the pane holding the field and put the focus on it, so the value can be corrected.
+  if (const auto* field = azookey::settings::FindSettingField(path)) {
+    using Pane = azookey::settings::SettingsPane;
+    const auto item = field->pane == Pane::General      ? GeneralNavigationItem()
+                      : field->pane == Pane::Input      ? InputNavigationItem()
+                      : field->pane == Pane::Dictionary ? DictionaryNavigationItem()
+                      : field->pane == Pane::Ai         ? AiNavigationItem()
+                      : field->pane == Pane::Privacy    ? PrivacyNavigationItem()
+                                                        : AdvancedNavigationItem();
+    SettingsNavigationView().SelectedItem(item);
+    DispatcherQueue().TryEnqueue(
+        [this, lifetime = get_strong(), path] { field_controls_.Focus(path); });
+  }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
   ShowStatus(
       Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,

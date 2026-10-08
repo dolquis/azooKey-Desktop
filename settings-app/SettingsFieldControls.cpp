@@ -5,6 +5,7 @@
 // clang-format on
 
 #include <winrt/Microsoft.UI.Text.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string>
 
 namespace azookey::settings {
 namespace {
@@ -30,6 +32,8 @@ controls::TextBlock SectionHeading(const winrt::hstring& text) {
   heading.Text(text);
   heading.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
   heading.Margin(xaml::ThicknessHelper::FromLengths(0, 8, 0, 0));
+  xaml::Automation::AutomationProperties::SetHeadingLevel(
+      heading, xaml::Automation::Peers::AutomationHeadingLevel::Level3);
   return heading;
 }
 
@@ -47,19 +51,36 @@ controls::NumberBox NumberControl(const SettingField& field) {
   controls::NumberBox box;
   box.SpinButtonPlacementMode(controls::NumberBoxSpinButtonPlacementMode::Compact);
   box.SmallChange(integer ? 1.0 : 0.05);
+  // The bounds limit the spin buttons only. Typed values are neither clamped nor rounded, so an
+  // out-of-range value is refused at save and a stored value is shown as it is (section 3.7).
+  box.ValidationMode(controls::NumberBoxValidationMode::Disabled);
   if (field.minimum) box.Minimum(*field.minimum);
   if (field.maximum) box.Maximum(*field.maximum);
-  winrt::Windows::Globalization::NumberFormatting::IncrementNumberRounder rounder;
-  rounder.Increment(integer ? 1.0 : 0.01);
-  rounder.RoundingAlgorithm(
-      winrt::Windows::Globalization::NumberFormatting::RoundingAlgorithm::RoundHalfUp);
   winrt::Windows::Globalization::NumberFormatting::DecimalFormatter formatter;
   formatter.IntegerDigits(1);
-  formatter.FractionDigits(integer ? 0 : 2);
+  formatter.FractionDigits(0);
   formatter.IsGrouped(false);
-  formatter.NumberRounder(rounder);
   box.NumberFormatter(formatter);
   return box;
+}
+
+// Names the switch a disabled control waits for, for screen readers.
+winrt::hstring InactiveReason(const ResourceLoader& resources, const SettingCondition& condition) {
+  const auto* parent = FindSettingField(condition.path);
+  if (!parent) return {};
+  std::wstring text(resources.GetString(parent->kind == SettingKind::Bool
+                                            ? L"SettingInactiveUntilOn"
+                                            : L"SettingInactiveUntilValue"));
+  const auto replace = [&text](std::wstring_view marker, const winrt::hstring& value) {
+    if (const auto at = text.find(marker); at != std::wstring::npos) {
+      text.replace(at, marker.size(), value);
+    }
+  };
+  replace(L"{0}", Resource(resources, SettingLabelResource(parent->path)));
+  if (parent->kind != SettingKind::Bool) {
+    replace(L"{1}", Resource(resources, SettingOptionResource(parent->path, condition.equals)));
+  }
+  return winrt::hstring(text);
 }
 
 }  // namespace
@@ -123,10 +144,13 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
     }
     xaml::Automation::AutomationProperties::SetAutomationId(control, winrt::to_hstring(field.path));
     panel.Children().Append(control);
+    Entry entry{&field, control};
     if (field.described) {
-      panel.Children().Append(Note(Resource(resources, SettingDescriptionResource(field.path))));
+      entry.note = Resource(resources, SettingDescriptionResource(field.path));
+      panel.Children().Append(Note(entry.note));
     }
-    entries_.push_back({&field, control});
+    if (field.active_when) entry.inactive_reason = InactiveReason(resources, *field.active_when);
+    entries_.push_back(std::move(entry));
   }
 }
 
@@ -221,7 +245,22 @@ void SettingsFieldControls::RefreshActiveStates() {
     if (auto value = ReadEntry(entry)) current[std::string(entry.field->path)] = std::move(*value);
   }
   for (const auto& entry : entries_) {
-    entry.control.IsEnabled(IsSettingFieldActive(*entry.field, current));
+    const bool active = IsSettingFieldActive(*entry.field, current);
+    entry.control.IsEnabled(active);
+    auto help = entry.note;
+    if (!active && !entry.inactive_reason.empty()) {
+      help = help.empty() ? entry.inactive_reason : help + L" " + entry.inactive_reason;
+    }
+    xaml::Automation::AutomationProperties::SetHelpText(entry.control, help);
+  }
+}
+
+void SettingsFieldControls::Focus(std::string_view path) const {
+  for (const auto& entry : entries_) {
+    if (entry.field->path != path) continue;
+    entry.control.StartBringIntoView();
+    entry.control.Focus(xaml::FocusState::Programmatic);
+    return;
   }
 }
 

@@ -35,15 +35,24 @@ struct EnglishDictionaryEntry {
   uint8_t flags{};
 };
 
+struct EnglishDictionaryLoadStats {
+  size_t skipped_lines{};  // Malformed or non-UTF-8 lines.
+  bool truncated{false};   // Stopped at kMaxEnglishDictionaryEntries.
+};
+
+// Bounds memory for a large or hostile file; the rest of the file is ignored.
+inline constexpr size_t kMaxEnglishDictionaryEntries = 200'000;
+
 // Section 4.4 TSV dictionary: surface<TAB>frequency[<TAB>flags], keyed by the
 // lowercased surface. Within a key, entries are ordered by frequency, highest
 // first; an exact duplicate surface keeps the last definition in the file.
 class EnglishDictionary {
  public:
-  static EnglishDictionary ParseTsv(std::string_view text, size_t* skipped_lines = nullptr);
+  static EnglishDictionary ParseTsv(std::string_view text,
+                                    EnglishDictionaryLoadStats* stats = nullptr);
   // nullopt when the file is missing, unreadable or larger than 64 MiB.
   static std::optional<EnglishDictionary> LoadTsv(const std::filesystem::path& path,
-                                                  size_t* skipped_lines = nullptr);
+                                                  EnglishDictionaryLoadStats* stats = nullptr);
 
   const std::vector<EnglishDictionaryEntry>& Lookup(std::string_view lower_key) const;
   size_t size() const { return size_; }

@@ -324,11 +324,30 @@ std::shared_ptr<const EnglishDictionary> InferenceEngine::EnglishDictionaryFor(
       return english_dictionary_;
     }
   }
-  // A missing or unreadable dictionary leaves only the baseline forms
-  // (section 4.2: s_dict stays 0). Parsed outside the lock.
-  auto loaded = EnglishDictionary::LoadTsv(*path);
-  auto dictionary =
-      loaded ? std::make_shared<const EnglishDictionary>(std::move(*loaded)) : nullptr;
+  // A missing, unreadable or unparseable dictionary leaves only the baseline
+  // forms (section 4.2: s_dict stays 0). Parsed outside the lock; an
+  // allocation failure on a huge file must not take the query down.
+  std::shared_ptr<const EnglishDictionary> dictionary;
+  EnglishDictionaryLoadStats stats;
+  bool failed = false;
+  try {
+    if (auto loaded = EnglishDictionary::LoadTsv(*path, &stats))
+      dictionary = std::make_shared<const EnglishDictionary>(std::move(*loaded));
+  } catch (const std::exception&) {
+    failed = true;
+  }
+  if (runtime_logger_) {
+    // Counts only: never the dictionary's words or its path (section 4.4).
+    const bool ok = dictionary && !failed;
+    runtime_logger_->Log(ok && stats.skipped_lines == 0 && !stats.truncated
+                             ? logging::RuntimeLogLevel::Info
+                             : logging::RuntimeLogLevel::Warn,
+                         "english_dictionary_load",
+                         {{"result", logging::RuntimeLogSafeText(ok ? "ok" : "error")},
+                          {"entries", static_cast<uint64_t>(dictionary ? dictionary->size() : 0)},
+                          {"skipped_lines", static_cast<uint64_t>(stats.skipped_lines)},
+                          {"truncated", stats.truncated}});
+  }
   std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
   english_dictionary_ = dictionary;
   english_dictionary_path_ = *path;
@@ -356,8 +375,11 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
       english.dictionary_enabled ? EnglishDictionaryFor(english.dictionary_path) : nullptr;
   std::vector<std::string> learned;
   {
-    std::lock_guard<std::mutex> lock(english_mutex_);
-    if (english_store_) {
+    // A commit may be saving (DPAPI + atomic write) under this lock; rather
+    // than stall the candidate window, offer the candidates without the
+    // learned surfaces this once.
+    std::unique_lock<std::mutex> lock(english_mutex_, std::try_to_lock);
+    if (lock.owns_lock() && english_store_) {
       // LookupPrefix ranks the whole prefix subtree; ask for enough that
       // longer learned words (th -> this, that ...) cannot crowd out exact
       // matches, then keep at most kMaxLearnedEnglish of those.
@@ -378,6 +400,12 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {
+  {
+    // Without an English store the id must not be consumed: a later resend
+    // after the store is attached still has to be recorded.
+    std::lock_guard<std::mutex> lock(english_mutex_);
+    if (!english_store_) return false;
+  }
   double alpha = 0.0;
   size_t max_records = 0;
   double min_weight = 0.0;

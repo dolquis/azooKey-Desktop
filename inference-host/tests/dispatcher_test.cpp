@@ -960,6 +960,18 @@ TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
     EXPECT_EQ(c.source, "heuristic");
   }
   EXPECT_EQ(english, (std::vector<std::string>{"nihon", "Nihon", "NIHON"}));
+
+  // inlineEnglishDictionary on but no file: the baseline forms still come.
+  auto config = engine.config();
+  config.english.dictionary_enabled = true;
+  config.english.dictionary_path = TempPath("azookey_dispatcher_missing_english_words.tsv");
+  std::remove(config.english.dictionary_path.c_str());
+  engine.ApplyConfig(config);
+  std::vector<std::string> without_dictionary;
+  for (const auto& c : query(903, true)) {
+    if (c.tag == kEnglish) without_dictionary.push_back(c.surface);
+  }
+  EXPECT_EQ(without_dictionary, english);
 }
 
 TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {

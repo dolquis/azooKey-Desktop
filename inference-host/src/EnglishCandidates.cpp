@@ -6,6 +6,7 @@
 #include <system_error>
 #include <utility>
 
+#include "azookey/core/DoubleArrayTrie.h"
 #include "azookey/core/RomajiKanaConverter.h"
 
 namespace azookey::host {
@@ -89,11 +90,17 @@ bool IsEnglishObservation(std::string_view reading, uint8_t tag) {
   return tag == static_cast<uint8_t>(core::CandidateTag::English) && IsPrintableAsciiWord(reading);
 }
 
-EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text, size_t* skipped_lines) {
+EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text,
+                                              EnglishDictionaryLoadStats* stats) {
   EnglishDictionary dictionary;
   size_t skipped = 0;
+  bool truncated = false;
   if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
   while (!text.empty()) {
+    if (dictionary.size_ >= kMaxEnglishDictionaryEntries) {
+      truncated = true;
+      break;
+    }
     const auto newline = text.find('\n');
     auto line = Trim(text.substr(0, newline));
     text.remove_prefix(newline == std::string_view::npos ? text.size() : newline + 1);
@@ -106,8 +113,11 @@ EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text, size_t* ski
     uint64_t frequency = 0;
     const auto* end = frequency_text.data() + frequency_text.size();
     const auto parsed = std::from_chars(frequency_text.data(), end, frequency);
-    if (surface.empty() || parsed.ec != std::errc{} || parsed.ptr != end || frequency == 0) {
-      ++skipped;  // Section 4.4: malformed lines are skipped, not fatal.
+    // Section 4.4: malformed lines are skipped, not fatal. A surface that is
+    // not UTF-8 would make the whole IPC response unparseable.
+    if (surface.empty() || !core::IsValidUtf8(surface) || parsed.ec != std::errc{} ||
+        parsed.ptr != end || frequency == 0) {
+      ++skipped;
       continue;
     }
     EnglishDictionaryEntry entry{
@@ -128,12 +138,15 @@ EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text, size_t* ski
     std::stable_sort(bucket.begin(), bucket.end(),
                      [](const auto& l, const auto& r) { return l.frequency > r.frequency; });
   }
-  if (skipped_lines) *skipped_lines = skipped;
+  if (stats) {
+    stats->skipped_lines = skipped;
+    stats->truncated = truncated;
+  }
   return dictionary;
 }
 
 std::optional<EnglishDictionary> EnglishDictionary::LoadTsv(const std::filesystem::path& path,
-                                                            size_t* skipped_lines) {
+                                                            EnglishDictionaryLoadStats* stats) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
   const auto size = std::filesystem::file_size(path, ec);
@@ -143,7 +156,7 @@ std::optional<EnglishDictionary> EnglishDictionary::LoadTsv(const std::filesyste
   std::string text(static_cast<size_t>(size), '\0');
   in.read(text.data(), static_cast<std::streamsize>(text.size()));
   if (in.gcount() != static_cast<std::streamsize>(text.size())) return std::nullopt;
-  return ParseTsv(text, skipped_lines);
+  return ParseTsv(text, stats);
 }
 
 const std::vector<EnglishDictionaryEntry>& EnglishDictionary::Lookup(
@@ -198,16 +211,24 @@ EnglishCandidates BuildEnglishCandidates(std::string_view raw_romaji,
                                FullWidth(lower),
                                FullWidth(Capitalized(lower)),
                                FullWidth(Upper(lower))};
+  // Section 4.4: a proper noun puts the capitalized form first, an acronym the
+  // uppercase one (among the half-width forms; full-width keeps its order).
+  uint8_t flags = 0;
+  for (const auto& entry : entries) flags |= entry.flags;
+  std::vector<size_t> half_width = {0, 1, 2};
+  if (flags & kEnglishWordAcronym) {
+    half_width = {2, 0, 1};
+  } else if (flags & kEnglishWordProper) {
+    half_width = {1, 0, 2};
+  }
   std::vector<std::string> surfaces;
   for (size_t i = 0; i < entries.size() && i < kMaxDictionarySurfaces; ++i)
     surfaces.push_back(entries[i].surface);
   surfaces.insert(surfaces.end(), learned.begin(), learned.end());
   if (std::find(std::begin(forms), std::end(forms), raw_romaji) == std::end(forms))
     surfaces.emplace_back(raw_romaji);
-  surfaces.push_back(forms[0]);
-  if (config.case_variants) {
-    surfaces.push_back(forms[1]);
-    surfaces.push_back(forms[2]);
+  for (const size_t form : half_width) {
+    if (form == 0 || config.case_variants) surfaces.push_back(forms[form]);
   }
   if (config.full_width) {
     surfaces.push_back(forms[3]);

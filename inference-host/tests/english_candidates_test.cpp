@@ -118,7 +118,7 @@ TEST(EnglishCandidatesTest, IntentSignalsFollowSection42) {
 }
 
 TEST(EnglishCandidatesTest, ParsesTheTsvDictionary) {
-  size_t skipped = 0;
+  azookey::host::EnglishDictionaryLoadStats stats;
   const auto dictionary = azookey::host::EnglishDictionary::ParseTsv(
       "\xEF\xBB\xBF# comment\n"
       "apple\t542316\n"
@@ -129,8 +129,9 @@ TEST(EnglishCandidatesTest, ParsesTheTsvDictionary) {
       "zero\t0\n"
       "\t5\n"
       "apple\t9\n",
-      &skipped);
-  EXPECT_EQ(skipped, 3u);
+      &stats);
+  EXPECT_EQ(stats.skipped_lines, 3u);
+  EXPECT_FALSE(stats.truncated);
   EXPECT_EQ(dictionary.size(), 3u);
   const auto& apple = dictionary.Lookup("apple");
   ASSERT_EQ(apple.size(), 2u);
@@ -155,6 +156,39 @@ TEST(EnglishCandidatesTest, DictionarySurfacesComeFirstWithoutReplacingTheForms)
   const auto without = azookey::host::BuildEnglishCandidates("iphone", {}, &dictionary);
   EXPECT_EQ(Surfaces(without.candidates), (std::vector<std::string>{"iphone", "Iphone", "IPHONE"}));
   EXPECT_GT(with.intent, without.intent);  // s_dict.
+}
+
+TEST(EnglishCandidatesTest, DictionarySkipsNonUtf8AndStopsAtTheEntryCap) {
+  azookey::host::EnglishDictionaryLoadStats stats;
+  const auto dictionary = azookey::host::EnglishDictionary::ParseTsv(
+      "good\t5\nb\xFF\xFE"
+      "d\t5\nok\t1\n",
+      &stats);
+  EXPECT_EQ(stats.skipped_lines, 1u);
+  EXPECT_EQ(dictionary.size(), 2u);
+  EXPECT_TRUE(dictionary
+                  .Lookup("b\xFF\xFE"
+                          "d")
+                  .empty());
+
+  std::string big;
+  for (size_t i = 0; i <= azookey::host::kMaxEnglishDictionaryEntries; ++i)
+    big += "w" + std::to_string(i) + "\t1\n";
+  azookey::host::EnglishDictionaryLoadStats big_stats;
+  const auto capped = azookey::host::EnglishDictionary::ParseTsv(big, &big_stats);
+  EXPECT_TRUE(big_stats.truncated);
+  EXPECT_EQ(capped.size(), azookey::host::kMaxEnglishDictionaryEntries);
+}
+
+TEST(EnglishCandidatesTest, ProperAndAcronymFlagsReorderTheHalfWidthForms) {
+  EnglishCandidateConfig config;
+  config.dictionary_enabled = true;
+  const auto proper = azookey::host::EnglishDictionary::ParseTsv("Apple\t5\tproper\n");
+  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("apple", config, &proper).candidates),
+            (std::vector<std::string>{"Apple", "apple", "APPLE"}));
+  const auto acronym = azookey::host::EnglishDictionary::ParseTsv("nasa\t5\tacronym\n");
+  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("nasa", config, &acronym).candidates),
+            (std::vector<std::string>{"nasa", "NASA", "Nasa"}));
 }
 
 TEST(EnglishCandidatesTest, DictionarySurfacesAreCappedAtFive) {
@@ -260,6 +294,13 @@ TEST(EnglishCandidatesTest, EngineLoadsAndReloadsTheDictionary) {
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "IPHONE");
 
   fs::remove(path);  // A missing dictionary falls back to the baseline forms.
+  EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
+
+  // A corrupt file (not text at all) or a directory in its place is not fatal.
+  WriteText(path, std::string("\x00\xFF\x01\xFE\tGGUF", 9));
+  EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
+  fs::remove(path);
+  fs::create_directories(path);
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
   fs::remove_all(dir);
 }

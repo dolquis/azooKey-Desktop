@@ -8348,3 +8348,131 @@ TEST(TsfTipTypoCorrectionTest, WireAdvertisesTypoAndSendsObservationWithoutWaiti
   EXPECT_FALSE(observations[0].secure);
   EXPECT_TRUE(observations[0].learning_allowed);
 }
+
+// DEV-1201 / legacy-parity-spec §6: Unicode input runs in core even when the
+// number rewriter would send digits to the legacy path.
+namespace {
+void PressCtrlShift(TextServiceHarness& h, WPARAM key, bool expect_eaten = true) {
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_EQ(h.TestPress(key), expect_eaten ? TRUE : FALSE);
+  EXPECT_EQ(h.Press(key), expect_eaten ? TRUE : FALSE);
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+}
+
+void PressBoth(TextServiceHarness& h, WPARAM key) {
+  EXPECT_TRUE(h.TestPress(key)) << key;
+  EXPECT_TRUE(h.Press(key)) << key;
+}
+}  // namespace
+
+TEST(TsfTipUnicodeInputTest, CtrlShiftUHexAndEnterCommitsTheCodepoint) {
+  using azookey::core::InputStateKind;
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter);
+    AsciiDecimalDigitTranslationGuard digit_translation;
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    h.service.set_number_rewriter_enabled_for_test(number_rewriter);
+    PressCtrlShift(h, 'U');
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+");
+    for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'A'}, WPARAM{'1'}}) PressBoth(h, key);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A1");
+    PressBoth(h, VK_BACK);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A");
+    PressBoth(h, VK_NUMPAD1);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A1");
+    PressBoth(h, VK_RETURN);
+    EXPECT_EQ(attachment.composition_range.last_text, L"ァ");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+    EXPECT_EQ(h.service.beep_count_for_test(), 0u);
+    // Idle -> UnicodeInput -> Idle reaches the debug window's transition ring.
+    EXPECT_GE(h.service.debug_log_for_test().transition_size(), 2u);
+  }
+}
+
+TEST(TsfTipUnicodeInputTest, SurrogateValueBeepsAndKeepsTheBuffer) {
+  using azookey::core::InputStateKind;
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'D'}, WPARAM{'8'}, WPARAM{'0'}, WPARAM{'0'}}) PressBoth(h, key);
+  PressBoth(h, VK_RETURN);
+  EXPECT_EQ(h.service.beep_count_for_test(), 1u);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(attachment.composition_range.last_text, L"U+D800");
+  PressBoth(h, VK_ESCAPE);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+TEST(TsfTipUnicodeInputTest, CtrlUWithoutShiftStillPassesThrough) {
+  TextServiceHarness h;
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_FALSE(h.TestPress('U'));
+  EXPECT_FALSE(h.Press('U'));
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+// legacy-parity-spec §7.2: Ctrl+Shift+Backspace forgets the pair of the last
+// learning observation the TIP actually sent.
+TEST(TsfTipForgetLearningTest, CtrlShiftBackspaceForgetsTheLastLearnedPairOnce) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  PressCtrlShift(h, VK_BACK);
+  const auto requests = h.service.queued_forget_requests_for_test();
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].store, "learning");
+  EXPECT_TRUE(requests[0].id.empty());
+  EXPECT_EQ(requests[0].reading, "かな");
+  EXPECT_EQ(requests[0].surface, "仮名");
+
+  // The pair is forgotten once; a second press goes to the app.
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_EQ(h.service.queued_forget_requests_for_test().size(), 1u);
+}
+
+TEST(TsfTipForgetLearningTest, CommitWithoutLearningIsNotForgettable) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+  // A later commit that was not observed hides the earlier one.
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+  CommitOneCandidate(h);
+
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+// legacy-parity-spec §8.1: F10 toggles the debug window, through OnKeyDown or
+// the preserved key, never both for one press.
+TEST(TsfTipDebugWindowTest, F10TogglesTheDebugWindow) {
+  TextServiceHarness h;
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+  EXPECT_TRUE(h.TestPress(VK_F10));
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+
+  BOOL eaten = FALSE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+  eaten = TRUE;
+  EXPECT_EQ(h.service.OnPreservedKey(&h.context, GUID{}, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+}

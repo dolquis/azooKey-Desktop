@@ -889,7 +889,14 @@ DisplayAttribute は通常の入力下線。
 
 hex バッファと範囲チェックは `core::InputState` の Unicode 入力状態（`HandleUnicodeInput`）が持ち、
 確定は UTF-8 の `ReplaceMarkedText` と `CommitMarkedText` で出す。サロゲートペアは TIP が
-UTF-8 を UTF-16 へ変換するときに生じる。範囲外の beep は `PlayBeep` の `ClientAction` である。
+UTF-8 を UTF-16 へ変換するときに生じる。範囲外の beep は `PlayBeep` の `ClientAction` であり、
+TIP は `MessageBeep(MB_OK)` で鳴らす。
+
+TIP は Unicode 入力状態の間、キーを状態 `UnicodeInput` として第 1 層へ渡し、hex 数字（主キーとテンキー）を
+キーボード配列によらずコードポイントにして core へ渡す。Unicode 入力のキーは数値リライターや一括変換が
+有効でも TIP 側の前処理を通さない。Ctrl+Shift+U で入れるのは、読みが無いときと、core が持つ読みや
+候補ウィンドウがあるときである。絵文字検索・カッコペア・一括変換の蓄積など TIP が持つ composition の
+途中では入らず、キーはアプリへ渡す。
 
 ## 7. 学習忘却 (M18-2)
 
@@ -919,6 +926,10 @@ public:
   そこで TIP が、最後に送った学習観測の `(reading, surface)` の組を保持する。
   Ctrl+Shift+Backspace では、その組を `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で
   Host へ送る。`learning_allowed` が false で送らなかった確定は直近として扱わない。
+  候補・読み・Unicode 入力を確定するたびに保持した組を捨て、学習観測を送ったときだけ組を保持し直す。学習観測を送らなかった
+  確定の後は忘却の対象が無く、それより前の組へは遡らない。忘却は 1 回送ると組を捨てる。
+  対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。English タグの組は送らない。組の形式で
+  指定できるのはかなチャネルだけだからである。
   `LearningStore` は直近の commit を持たず、`ForgetMostRecent` は置かない。
 - 変換器の学習バケットと自動単語登録（M36-A）への観測は取り消さない。
 
@@ -931,8 +942,10 @@ public:
 
 ### 8.1 起動と表示
 
-- 起動: F10（トグル）
-- ウィンドウ: `WS_POPUP | WS_BORDER`、半透明、サイズ 600×400
+- 起動: F10（トグル）。F10 は `WM_SYSKEYDOWN` として届き、キーイベントシンクに来ないホストがあるため、
+  TIP は F10 を TSF の preserved key としても登録する。登録できたときは preserved key の通知だけで切り替え、
+  `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない
+- ウィンドウ: `WS_POPUP | WS_BORDER`、半透明、サイズ 600×400。初回の表示で UI スレッドに作る
 - 内容:
   - 直近 50 件の IPC ログ（QueryCandidates / QueryLiveConversion /
     QueryPredictions の req_id, kana, 応答候補上位 3 件, latency_ms）
@@ -957,6 +970,8 @@ public:
 - ゲートが閉じているときは本文を `<redacted len=N>`（N はコードポイント数）に置き換える。
   ゲートの判定はログを記録する時点で行い、閉じていれば本文を保持しない。
   後でゲートが開いても、secure 中の本文は表示されない。
+  記録時の判定には、そのリクエストを出したときのプライバシー判定（secure と詳細ログ許可）を使う。
+  描画時の判定には、直近のプライバシー判定を使う。
 
 ## 9. マルチディスプレイ / カーソル追従 (M19)
 

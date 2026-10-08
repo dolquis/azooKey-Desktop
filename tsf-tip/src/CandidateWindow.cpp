@@ -863,7 +863,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       if (health_banner_visible_) {
         RECT banner_rc{0, HealthBannerTop(), client_rc.right, client_rc.bottom};
         SolidBrush(theme_.banner_background).Fill(hdc, banner_rc);
-        SetTextColor(hdc, theme_.text);
+        SetTextColor(hdc, theme_.info_text);
         RECT text_rc = banner_rc;
         text_rc.left += metrics_.horizontal_padding;
         text_rc.right -= metrics_.horizontal_padding;
@@ -876,7 +876,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (health_state_ == CandidateHealthState::DegradedModel) {
           RECT retry_rc = HealthRetryButtonRect(client_rc.right);
-          SetTextColor(hdc, retry_in_flight_ ? theme_.sub_text : theme_.text);
+          SetTextColor(hdc, retry_in_flight_ ? theme_.sub_text : theme_.info_text);
           DrawTextW(hdc, L"[再試行]", -1, &retry_rc,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }

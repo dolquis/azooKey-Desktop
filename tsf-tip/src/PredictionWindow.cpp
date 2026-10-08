@@ -212,6 +212,14 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   failure_stage_ = "";
   failure_hr_ = S_OK;
   const ScopedPerMonitorDpiAwareness dpi_context;
+  struct ShowingScope {
+    bool& flag;
+    explicit ShowingScope(bool& showing) : flag(showing) { flag = true; }
+    ~ShowingScope() { flag = false; }
+    ShowingScope(const ShowingScope&) = delete;
+    ShowingScope& operator=(const ShowingScope&) = delete;
+  } showing(showing_);
+  last_caret_rect_ = caret_rect_screen;
   if (candidates.empty()) {
     Hide();
     return;
@@ -319,26 +327,16 @@ LRESULT PredictionWindow::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, 
         UpdateTheme();
       if (IsVisible()) Draw();
       return 0;
-    case WM_DPICHANGED: {
+    case WM_DPICHANGED:
+      // The suggested rect is ignored: the surface size and the work-area
+      // placement both come from Show, which measures for the caret's monitor.
+      if (showing_) return 0;
       UpdateDpi(LOWORD(wparam));
-      const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-      if (suggested) {
-        SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
-                     suggested->right - suggested->left, suggested->bottom - suggested->top,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-      }
-      // Re-measure at the new DPI; the next Show re-places the window.
       if (IsVisible() && !candidates_.empty()) {
-        width_ = MeasureWidth();
-        height_ = padding_ * 2 + row_height_ * static_cast<int>(candidates_.size());
-        if (ResizeSurface(width_, height_)) {
-          SetWindowPos(hwnd, nullptr, 0, 0, width_, height_,
-                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
-          Draw();
-        }
+        const std::vector<std::wstring> candidates = candidates_;
+        Show(candidates, last_caret_rect_);
       }
       return 0;
-    }
     case WM_NCDESTROY:
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
       hwnd_ = nullptr;

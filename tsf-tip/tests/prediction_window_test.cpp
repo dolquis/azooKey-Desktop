@@ -67,15 +67,19 @@ TEST(PredictionWindowTest, DpiChangeRescalesTheVisibleWindow) {
   window.Show({L"日本"}, RECT{100, 200, 101, 216});
   ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
 
-  // 144 DPI differs from both the default and a 200% test monitor.
+  // The suggested rect is ignored; the window is re-shown for the caret's monitor.
   RECT suggested{100, 216, 300, 300};
   SendMessageW(window.hwnd_for_test(), WM_DPICHANGED, MAKEWPARAM(144, 144),
                reinterpret_cast<LPARAM>(&suggested));
 
   RECT client{};
   ASSERT_TRUE(GetClientRect(window.hwnd_for_test(), &client));
-  // One row at 144 DPI: padding 12 * 2 + row 42.
-  EXPECT_EQ(client.bottom - client.top, 66);
+  // One row: padding * 2 + row height at the window's DPI.
+  const UINT dpi = GetDpiForWindow(window.hwnd_for_test());
+  EXPECT_EQ(client.bottom - client.top, ScaleForDpi(8, dpi) * 2 + ScaleForDpi(28, dpi));
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+  EXPECT_NE(bounds.right - bounds.left, suggested.right - suggested.left);
   EXPECT_TRUE(window.IsVisible()) << window.failure_stage();
   window.Hide();
 }

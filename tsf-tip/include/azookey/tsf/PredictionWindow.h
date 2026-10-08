@@ -64,6 +64,10 @@ class PredictionWindow {
   int height_{0};
   int row_height_{28};
   int padding_{8};
+  // Show already measures and places for the target monitor; a WM_DPICHANGED
+  // raised by its own SetWindowPos must not resize the window again.
+  bool showing_{false};
+  RECT last_caret_rect_{0, 0, 0, 0};
   std::vector<std::wstring> candidates_;
   OnClickFn on_click_;
   ThemeMode theme_mode_{ThemeMode::Light};

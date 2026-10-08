@@ -48,7 +48,7 @@ C++/WinRT の `UISettings` は TIP DLL に WinRT 依存を持ち込むため使�
 | `border` | 予測候補ウィンドウの枠 | RGB(160,160,160) | RGB(80,80,80) | `COLOR_WINDOWTEXT` |
 | `panel_background` / `panel_text` | 案内行 | RGB(243,243,243) / 黒 | RGB(45,45,45) / 白 | `COLOR_BTNFACE` / `COLOR_BTNTEXT` |
 | `info_background` / `info_text` | secure toast、劣化の詳細 | RGB(255,255,225) / 黒 | RGB(56,56,40) / 白 | `COLOR_INFOBK` / `COLOR_INFOTEXT` |
-| `banner_background` | 劣化バナー | RGB(255,249,225) | RGB(67,53,25) | `COLOR_INFOBK` |
+| `banner_background` | 劣化バナー（文字は `info_text`） | RGB(255,249,225) | RGB(67,53,25) | `COLOR_INFOBK` |
 
 `ResolveThemeColors(mode)` は Light / Dark では固定表を返し、ハイコントラストでは
 `GetSysColor` から組み立てる（§5.1）。
@@ -137,10 +137,11 @@ layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, number_range);
 ```cpp
 ComPtr<ID2D1RenderTarget> rt;       // DComp surface から取得
 ComPtr<ID2D1SolidColorBrush> brush;
-rt->CreateSolidColorBrush(D2D1::ColorF(theme_.text), &brush);
+// COLORREF は 0x00BBGGRR なので、D2D1::ColorF(UINT32) へ直接渡さず変換する
+rt->CreateSolidColorBrush(ToColorF(theme_.text), &brush);
 
 rt->BeginDraw();
-rt->Clear(D2D1::ColorF(theme_.background));  // 不透明（§2.1）
+rt->Clear(ToColorF(theme_.background));  // 不透明（§2.1）
 rt->DrawTextLayout({ pad_x, pad_y }, layout.Get(), brush.Get());
 rt->EndDraw();
 ```
@@ -176,7 +177,10 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 ### 4.2 PredictionWindow.cpp（M15 新規）
 
 `RenderingEngine` で描き、色は §1.3 の `ThemeColors` を使う。
-`WM_DPICHANGED` で行高・余白・フォントを作り直し、表示中なら大きさを測り直して再描画する。
+`WM_DPICHANGED` で行高・余白・フォントを作り直し、表示中なら最後のキャレット矩形で表示をやり直す
+（測り直し、作業領域内への配置、再描画）。
+`WM_DPICHANGED` の推奨矩形は使わない。
+`Show` 自身の `SetWindowPos` が別 DPI のモニタへ動かして発生した通知は無視する（`Show` が移動先の DPI で測り終えているため）。
 
 ### 4.3 デバッグウィンドウ（M18-3）
 

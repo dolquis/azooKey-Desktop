@@ -46,6 +46,54 @@ TEST(CandidateWindowDpiTest, ZeroDpiFallsBackToDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(0), 24, 8, 400, 20, 60, 4);
 }
 
+void ExpectRect(const RECT& rect, LONG left, LONG top, LONG right, LONG bottom) {
+  EXPECT_EQ(rect.left, left);
+  EXPECT_EQ(rect.top, top);
+  EXPECT_EQ(rect.right, right);
+  EXPECT_EQ(rect.bottom, bottom);
+}
+
+TEST(CandidateWindowPlacementTest, OpensBelowTheAnchorWhenThereIsRoom) {
+  ExpectRect(CandidateWindow::ComputePlacement({100, 200}, {0, 0, 1920, 1040}, 300, 120, 20), 100,
+             200, 400, 320);
+}
+
+TEST(CandidateWindowPlacementTest, FlipsAboveTheCaretWhenTheBottomWouldOverflow) {
+  ExpectRect(CandidateWindow::ComputePlacement({100, 1000}, {0, 0, 1920, 1040}, 300, 120, 20), 100,
+             860, 400, 980);
+}
+
+TEST(CandidateWindowPlacementTest, ClampsToTheRightEdgeOfTheWorkArea) {
+  ExpectRect(CandidateWindow::ComputePlacement({1800, 200}, {0, 0, 1920, 1040}, 300, 120, 20), 1620,
+             200, 1920, 320);
+}
+
+TEST(CandidateWindowPlacementTest, StaysOnASecondaryMonitorAtNegativeCoordinates) {
+  const RECT work{-1280, 40, 0, 1024};
+  ExpectRect(CandidateWindow::ComputePlacement({-100, 300}, work, 300, 120, 20), -300, 300, 0, 420);
+  ExpectRect(CandidateWindow::ComputePlacement({-1400, 50}, work, 300, 1100, 20), -1280, 40, -980,
+             1140);
+}
+
+TEST(CandidateWindowPlacementTest, NarrowsToTheWorkAreaWidth) {
+  ExpectRect(CandidateWindow::ComputePlacement({50, 100}, {0, 0, 200, 600}, 300, 120, 20), 0, 100,
+             200, 220);
+}
+
+TEST(CandidateWindowPlacementTest, EmptyWorkAreaKeepsTheAnchor) {
+  ExpectRect(CandidateWindow::ComputePlacement({100, 200}, {}, 300, 120, 20), 100, 200, 400, 320);
+}
+
+TEST(CandidateWindowPlacementTest, DetailsOpenBelowOrAboveTheCandidateWindow) {
+  const RECT work{0, 0, 1920, 1040};
+  ExpectRect(CandidateWindow::ComputeDetailsPlacement({100, 200, 400, 320}, work, 480, 240), 100,
+             320, 580, 560);
+  ExpectRect(CandidateWindow::ComputeDetailsPlacement({1700, 900, 1900, 1000}, work, 480, 240),
+             1440, 660, 1920, 900);
+  ExpectRect(CandidateWindow::ComputeDetailsPlacement({10, 10, 50, 50}, {0, 0, 300, 200}, 480, 240),
+             0, 0, 300, 200);
+}
+
 TEST(CandidateWindowDpiTest, NoDescriptionKeepsLegacySingleColumnWidth) {
   const auto layout = CandidateWindow::ComputeColumnLayoutForTest(380, 0, 96);
   EXPECT_EQ(layout.surface_width, 0);

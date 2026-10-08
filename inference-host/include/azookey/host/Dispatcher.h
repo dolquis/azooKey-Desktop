@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -26,6 +27,8 @@ struct DispatcherConfig {
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
   std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};
+  // M45 ListModels root (UserDataPaths::models_dir). Empty disables the scan.
+  std::filesystem::path models_dir;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code
@@ -71,6 +74,8 @@ class Dispatcher {
   void HandleObserveTypo(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListNewWordCandidates(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleListModels(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
   bool LearningAllowed(bool secure, bool learning_allowed, bool host_learning_blocked) const;

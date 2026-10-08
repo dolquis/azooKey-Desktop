@@ -979,7 +979,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 | 辞書 category（§14.4） / 条件 | 候補タグ（M52） |
 |---|---|
 | `software` / `technical` / `product_name` | `Technical` |
-| surface が ASCII/ラテン文字主体（例 "TensorRT", "iPhone"） | `English` |
+| surface の空白（ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含む（例 "TensorRT", "iPhone"） | `English` |
 | その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | なし（既定） |
 
 - **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
@@ -990,7 +990,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
 - 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
-  §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]）として 1 回適用する
+  §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]。負の `final_score` は同じ倍率で割る）として 1 回適用する
   （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
   含めない（二重適用回避）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ

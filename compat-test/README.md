@@ -167,7 +167,7 @@ M50 ゲートは azooKey TIP を登録・選択した対話環境のレポート
 runner 実装前でも実機で確認できる手動チェックリストを同居させる。
 
 - [`m3_display_attribute_checklist.md`](m3_display_attribute_checklist.md) —
-  M3 の DisplayAttribute / CompositionSink のアプリ別描画差（D-01〜D-10）。
+  M3 の DisplayAttribute / CompositionSink のアプリ別描画差（D-01〜D-12。M23 の文節ごとの属性と preedit クリックを含む）。
   M50 のハーネス実装後は追加ケースとして取り込む。
 
 ## 観測性との整合

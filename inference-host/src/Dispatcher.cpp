@@ -6,6 +6,8 @@
 #include <cmath>
 #include <string_view>
 
+#include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/ModelScanner.h"
 #include "azookey/host/PunctuationInserter.h"
 
 #ifdef _WIN32
@@ -22,6 +24,7 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/CrashReporting.h"
 #include "azookey/core/EtwLogger.h"
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/ipc/TraceId.h"
 #include "azookey/logging/Phase.h"
@@ -197,7 +200,19 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   f.score = c.score;
   f.source = SourceToWire(c.source);
   f.description = c.description;
+  f.tag = static_cast<uint8_t>(c.tag);
   return f;
+}
+
+// docs/app-profile-spec.md section 3: an absent or unresolved app gets no
+// profile and no tag boost at all, not even the "default" profile's.
+TagBoosts ResolveTagBoosts(const EngineConfig& config, const std::optional<ipc::AppIdentity>& app) {
+  if (!config.app_profiles || !app || app->process_name.empty()) return {};
+  core::ForegroundApp foreground;
+  foreground.process_name = app->process_name;
+  foreground.window_class = app->window_class;
+  foreground.resolved = true;
+  return TagBoostsFromProfile(config.app_profiles->Resolve(foreground));
 }
 
 std::optional<BackendKind> ParseBackend(const std::string& backend) {
@@ -301,6 +316,10 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleQueryBatchConversion(req);
     case ipc::MessageType::ReverseConvert:
       return HandleReverseConvert(req);
+    case ipc::MessageType::ListModels:
+      return HandleListModels(req);
+    case ipc::MessageType::BenchmarkModel:
+      return HandleBenchmarkModel(req);
     case ipc::MessageType::Cancel:
       HandleCancel(req);
       return std::nullopt;
@@ -414,6 +433,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     }
     case ipc::MessageType::ReverseConvert:
       return MakeResponse(req, ipc::BuildReverseConvertResponse(ipc::ReverseConvertResponse{}));
+    case ipc::MessageType::ListModels: {
+      ipc::ListModelsResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildListModelsResponse(r));
+    }
+    case ipc::MessageType::BenchmarkModel: {
+      ipc::BenchmarkModelResponse r;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildBenchmarkModelResponse(r));
+    }
     case ipc::MessageType::Ping: {
       ipc::PingPayload p;
       p.nonce = 0;
@@ -448,8 +478,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
-  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion",
-                      "query_predictions"};
+  // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
+  // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
+  res.capabilities = {"oob_cancel",        "commit_segments", "query_live_conversion",
+                      "query_predictions", "app_profile",     "candidate_tag",
+                      "list_models",       "benchmark_model"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -659,9 +692,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
+    const auto tag_boosts = ResolveTagBoosts(engine_config, parsed->app);
     auto queried =
         engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
-                                   ordinary_limit, parsed->live, trace.context());
+                                   ordinary_limit, parsed->live, trace.context(), &tag_boosts);
     candidates = std::move(queried.candidates);
     corrected_reading = std::move(queried.corrected_reading);
     // Under auto_replace the conversion ran on the corrected reading, so the
@@ -1120,6 +1154,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
     return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
   }
 
+  if (load_result.settings.backend_preference_conflict) {
+    DispatcherLogger(runtime_logger_)
+        .Log(logging::RuntimeLogLevel::Warn, "backend_preference_conflict",
+             {{"request_id", req.request_id},
+              {"error_code", logging::RuntimeLogSafeText("business")}});
+  }
   auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings,
                                                         config_.default_backend);
   if (config_.override_backend) {
@@ -1148,6 +1188,86 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
     res.error = model_result.error.value_or("model load failed");
   }
   return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
+}
+
+// M45 (docs/model-management-spec.md section 4.1). Read-only: enumerates the
+// models directory and never loads anything, so the live backend is untouched.
+std::optional<ipc::Envelope> Dispatcher::HandleListModels(const ipc::Envelope& req) {
+  ipc::ListModelsResponse res;
+  const auto parsed = ipc::ParseListModelsRequest(req.payload_json);
+  const auto directory =
+      parsed ? ResolveModelListingDirectory(parsed->directory, config_.models_dir) : std::nullopt;
+  if (!parsed || !directory) {
+    res.ok = false;
+    res.error = !parsed                      ? "invalid_request"
+                : config_.models_dir.empty() ? "models_dir_unavailable"
+                                             : "directory_outside_models_root";
+    return MakeResponse(req, ipc::BuildListModelsResponse(res));
+  }
+  try {
+    ModelScanOptions options;
+    options.compute_sha256 = parsed->compute_sha256;
+    const auto health = engine_->health_snapshot();
+    const auto loaded_path = core::Utf8Path(health.model_path);
+    for (const auto& entry : ScanModelDirectory(*directory, options)) {
+      std::error_code ec;
+      const bool current =
+          !health.model_path.empty() && std::filesystem::equivalent(entry.path, loaded_path, ec);
+      std::string status = "not_loaded";
+      std::string error;
+      if (current && health.model_loaded) {
+        status = "success";
+      } else if (current && health.last_error) {
+        status = "failed";
+        error = "load_failed";
+      }
+      res.models.push_back(ToListedModel(entry, std::move(status), std::move(error)));
+    }
+  } catch (...) {
+    res.models.clear();
+    res.ok = false;
+    res.error = "scan_failed";
+  }
+  return MakeResponse(req, ipc::BuildListModelsResponse(res));
+}
+
+// M45 section 4.2: a separate engine, synchronous on this connection, bounded
+// by kBenchmarkBudget. The live engine keeps serving other connections.
+std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelope& req) {
+  ipc::BenchmarkModelResponse res;
+  const auto parsed = ipc::ParseBenchmarkModelRequest(req.payload_json);
+  if (!parsed) {
+    res.error = "invalid_request";
+  } else if (SafeModeEnabled()) {
+    res.backend = parsed->backend;
+    res.error = "safe_mode";
+  } else if (const auto resolved = ResolveModelListingDirectory(parsed->path, config_.models_dir);
+             !resolved) {
+    // Same boundary as ListModels: only models the settings app can list.
+    res.backend = parsed->backend;
+    res.error = config_.models_dir.empty() ? "models_dir_unavailable" : "path_outside_models_root";
+  } else {
+    // One benchmark per process: each loads a whole second model.
+    const auto slot = TryAcquireBenchmarkSlot();
+    if (!slot.owns_lock()) {
+      res.backend = parsed->backend;
+      res.error = "busy";
+      return MakeResponse(req, ipc::BuildBenchmarkModelResponse(res));
+    }
+    ModelBenchmarkOptions options;
+    options.base_config = engine_->config();
+    try {
+      // Load exactly the path that was checked, not the raw request spelling.
+      auto request = *parsed;
+      request.path = core::PathToUtf8(*resolved);
+      res = RunModelBenchmark(request, options);
+    } catch (...) {
+      res = ipc::BenchmarkModelResponse{};
+      res.backend = parsed->backend;
+      res.error = "benchmark_failed";
+    }
+  }
+  return MakeResponse(req, ipc::BuildBenchmarkModelResponse(res));
 }
 
 }  // namespace azookey::host

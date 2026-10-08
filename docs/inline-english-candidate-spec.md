@@ -539,8 +539,8 @@ stale 適用を起こさない。
 
 ### 6.1 `CandidateField` に `tag` を追加
 
-現状 `CandidateField` は `surface` / `reading` / `score` / `source` のみで候補タグを
-持たない。M60 は X-2-3 と統一して `tag`（`uint8`）を**新規追加**する。
+`CandidateField` の `tag`（`uint8`）は X-2-3 の候補タグで、M48（`docs/app-profile-spec.md` §7）
+が導入する。M60 は英単語候補に `English = 4` を付ける。
 
 | field | 型 | 既定 | 説明 |
 |---|---|---|---|
@@ -549,10 +549,11 @@ stale 適用を起こさない。
 `CandidateToJson` / `CandidateFromJson` 追記（規約例）:
 
 ```cpp
-// CandidateToJson
-o.emplace("tag", j::Value(static_cast<double>(c.tag)));
-// CandidateFromJson（後方互換: 省略時 0=None）
-c.tag = static_cast<uint8_t>(v.GetUInt("tag").value_or(0));
+// CandidateToJson（0 = None は省略）
+if (c.tag != 0) o.emplace("tag", j::Value(static_cast<uint64_t>(c.tag)));
+// CandidateFromJson（後方互換: 省略時と uint8 範囲外は 0 = None）
+const auto tag = v.GetUInt("tag").value_or(0);
+c.tag = tag <= 0xFF ? static_cast<uint8_t>(tag) : 0;
 ```
 
 `tag` の追加は `QueryCandidatesResponse` / `CommitObservationRequest`（`chosen` / `shown[]`）

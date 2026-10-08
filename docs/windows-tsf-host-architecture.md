@@ -102,6 +102,7 @@ Linear が持つ。
   応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,
   host_generation_id?, capabilities[])`。欠落するcapabilitiesは空配列として受理し、
   `oob_cancel`と`commit_segments`の広告をもとに長文の制御と学習通知を選ぶ。
+  `app_profile` と `candidate_tag` の広告は `docs/app-profile-spec.md` §3.1 に従う。
   `host_generation_id` は Host 起動ごとに生成し、同一プロセスの
   全接続で共有する UUID。省略する旧 Host は空文字として受理する。応答は TIP 向け runtime
   設定（下記「設定（SettingsStore）」）も載せる。
@@ -117,8 +118,9 @@ Linear が持つ。
   済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
   SafeMode 中はロードせず `ok=false` / `error: "safe_mode"` を返す
   （`docs/dev-infrastructure-spec.md` §8.5.3）。
-- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
-  応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
+- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?)` /
+  応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source,
+  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7 に従う。
   応答前に `max_candidates` で件数を切り詰める。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
   逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
@@ -383,7 +385,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト
 - `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
 - `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
-  フォールバック
+  フォールバックとモニタ作業領域の解決（`docs/legacy-parity-spec.md` §9）
 - `inference-host/src/AiBackend.cpp` — OpenAI 互換 API クライアント
 
 ### Phase 5〜6 横断（`docs/rich-features-spec.md`）
@@ -442,12 +444,13 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
 | `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。要求 ID は Envelope の `request_id` | legacy-parity §2 |
-| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15)。Envelope に要求 ID、要求 payload に `kana`・`leftSideContext`・`mode`、応答 payload に `predictions[]` | legacy-parity §3 + rich X-2 |
+| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15)。Envelope に要求 ID、要求 payload に `kana`・`leftSideContext`・`mode`・`app`（任意）、応答 payload に `predictions[]` | legacy-parity §3 + rich X-2 |
 | `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
 | `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
+| `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model` | model-management §4 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |

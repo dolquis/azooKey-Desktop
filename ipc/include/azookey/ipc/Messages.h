@@ -30,6 +30,9 @@ enum class MessageType {
   ListNewWordCandidates,
   ResolveNewWord,
   ReverseConvert,
+  // M45 model management (DEV-1191).
+  ListModels,
+  BenchmarkModel,
   Unknown,
 };
 

@@ -756,6 +756,10 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
   } else {
     self = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   }
+  // WM_PAINT fills the whole client area with the theme background. This is
+  // handled here, not as a case in HandleMessage: clang-cl 19 for ARM64 fails
+  // with "assembler label '' can not be undefined" when that switch gains it.
+  if (msg == WM_ERASEBKGND) return 1;
   if (self) return self->HandleMessage(hwnd, msg, wParam, lParam);
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -927,14 +931,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       return 0;
     }
 
-    case WM_ERASEBKGND:
-      return 1;  // WM_PAINT fills the whole client area with the theme background.
-
     case WM_SETTINGCHANGE:
     case WM_SYSCOLORCHANGE:
     case WM_THEMECHANGED:
-      if (msg != WM_SETTINGCHANGE || IsThemeSettingChange(lParam) ||
-          wParam == SPI_SETHIGHCONTRAST) {
+      if (msg != WM_SETTINGCHANGE || IsThemeSettingChange(wParam, lParam)) {
         UpdateTheme();
         Repaint();
         if (details_hwnd_) InvalidateRect(details_hwnd_, nullptr, FALSE);

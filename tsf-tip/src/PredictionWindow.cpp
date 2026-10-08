@@ -37,7 +37,22 @@ D2D1_COLOR_F ToColorF(COLORREF color) {
                       GetBValue(color) / 255.0f, 1.0f);
 }
 
+#ifdef AZOOKEY_TSF_TESTING
+UINT g_monitor_dpi_for_test = 0;
+#endif
+
+// The GPU was reset or removed; the whole device stack has to be rebuilt.
+bool IsDeviceLost(HRESULT hr) {
+  return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+         hr == D2DERR_RECREATE_TARGET;
+}
+
 }  // namespace
+
+#ifdef AZOOKEY_TSF_TESTING
+void PredictionWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
+bool PredictionWindow::IsDeviceLostForTest(HRESULT hr) { return IsDeviceLost(hr); }
+#endif
 
 struct PredictionWindow::RenderState {
   RenderingEngine engine;
@@ -88,6 +103,8 @@ bool PredictionWindow::InitializeRendering() {
 bool PredictionWindow::Fail(const char* stage, HRESULT hr) {
   failure_stage_ = stage;
   failure_hr_ = hr;
+  // Drop a lost device; the next Show initializes a new one.
+  if (IsDeviceLost(hr)) render_.reset();
   return false;
 }
 
@@ -224,6 +241,10 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
     Hide();
     return;
   }
+  if (!render_ && !InitializeRendering()) {
+    Hide();
+    return;
+  }
 
   candidates_.assign(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(
                                                                   VisibleCount(candidates.size())));
@@ -236,6 +257,9 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   if (!monitor.monitor ||
       FAILED(GetDpiForMonitor(monitor.monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) || !dpi_x)
     dpi_x = GetDpiForWindow(hwnd_);
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_monitor_dpi_for_test) dpi_x = g_monitor_dpi_for_test;
+#endif
   if (dpi_x != dpi_) UpdateDpi(dpi_x);
 
   width_ = MeasureWidth();
@@ -322,10 +346,10 @@ LRESULT PredictionWindow::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, 
     case WM_SETTINGCHANGE:
     case WM_SYSCOLORCHANGE:
     case WM_THEMECHANGED:
-      if (message != WM_SETTINGCHANGE || IsThemeSettingChange(lparam) ||
-          wparam == SPI_SETHIGHCONTRAST)
+      if (message != WM_SETTINGCHANGE || IsThemeSettingChange(wparam, lparam)) {
         UpdateTheme();
-      if (IsVisible()) Draw();
+        if (IsVisible() && !Draw()) Hide();
+      }
       return 0;
     case WM_DPICHANGED:
       // The suggested rect is ignored: the surface size and the work-area

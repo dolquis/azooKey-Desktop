@@ -58,10 +58,24 @@ TEST(ThemeColorsTest, HighContrastUsesSystemColors) {
   EXPECT_EQ(colors.info_text, FakeSysColor(COLOR_INFOTEXT));
 }
 
-TEST(ThemeColorsTest, OnlyImmersiveColorSetIsAThemeSettingChange) {
-  EXPECT_TRUE(IsThemeSettingChange(reinterpret_cast<LPARAM>(L"ImmersiveColorSet")));
-  EXPECT_FALSE(IsThemeSettingChange(reinterpret_cast<LPARAM>(L"Policy")));
-  EXPECT_FALSE(IsThemeSettingChange(0));
+TEST(ThemeColorsTest, OnlyImmersiveColorSetAndHighContrastAreThemeSettingChanges) {
+  EXPECT_TRUE(IsThemeSettingChange(0, reinterpret_cast<LPARAM>(L"ImmersiveColorSet")));
+  EXPECT_TRUE(IsThemeSettingChange(SPI_SETHIGHCONTRAST, 0));
+  EXPECT_FALSE(IsThemeSettingChange(0, reinterpret_cast<LPARAM>(L"Policy")));
+  EXPECT_FALSE(IsThemeSettingChange(0, reinterpret_cast<LPARAM>(L"ImmersiveColorSetX")));
+  EXPECT_FALSE(IsThemeSettingChange(0, 0));
+  // A nonzero wParam is an SPI_SET* code; its lParam is not read as a string.
+  EXPECT_FALSE(IsThemeSettingChange(SPI_SETWORKAREA, 1));
+}
+
+TEST(ThemeColorsTest, InjectedInputsDriveCurrentThemeMode) {
+  testing::SetThemeInputsForTest(false, 0u);
+  EXPECT_EQ(CurrentThemeMode(), ThemeMode::Dark);
+  testing::SetThemeInputsForTest(true, 0u);
+  EXPECT_EQ(CurrentThemeMode(), ThemeMode::HighContrast);
+  testing::SetThemeInputsForTest(false, std::nullopt);
+  EXPECT_EQ(CurrentThemeMode(), ThemeMode::Light);
+  testing::ClearThemeInputsForTest();
 }
 
 TEST(ThemeColorsTest, CurrentThemeModeReadsTheSystemWithoutFailing) {

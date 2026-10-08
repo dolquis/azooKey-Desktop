@@ -26,13 +26,18 @@ C++/WinRT の `UISettings` は TIP DLL に WinRT 依存を持ち込むため使�
 `WM_SETTINGCHANGE` の broadcast を直接受け取る。
 次のいずれかでテーマを読み直し、再描画する。
 
-- `WM_SETTINGCHANGE` で lParam が `"ImmersiveColorSet"`（`IsThemeSettingChange`）
+- `WM_SETTINGCHANGE` で wParam が 0 かつ lParam が `"ImmersiveColorSet"`
 - `WM_SETTINGCHANGE` で wParam が `SPI_SETHIGHCONTRAST`
 - `WM_SYSCOLORCHANGE`、`WM_THEMECHANGED`
 
+`WM_SETTINGCHANGE` の判定は `IsThemeSettingChange(wParam, lParam)` が持つ。
+TIP は他プロセスに読み込まれ、broadcast の lParam を検証できないため、lParam は wParam が 0 のときだけ
+文字列として読み、`"ImmersiveColorSet"` の長さを超えて読まない。
+
 テーマを読み直すときは、色テーブルを差し替え、`DwmSetWindowAttribute` の
 `DWMWA_USE_IMMERSIVE_DARK_MODE`（属性値 20）で枠の明暗も合わせる。
-この属性を持たない OS では呼び出しが失敗するだけで、表示には影響しない。
+属性値 20 が失敗したときは、Windows 10 1809〜1909 の値 19 を試す。
+どちらも持たない OS では呼び出しが失敗するだけで、表示には影響しない。
 
 ### 1.3 色テーブル
 
@@ -85,6 +90,9 @@ D3D11 + Direct2D + DirectComposition + DirectWrite の組を持つ。
 | `BeginDraw()` | surface 全体の描画を始め、96 DPI・surface 原点基準の `ID2D1DeviceContext` を返す |
 | `EndDraw()` | 描画を終えて composition を commit する |
 | `failure_stage()` / `failure_hr()` | 直近の失敗段階と HRESULT（描画内容は含まない） |
+
+描画中に `DXGI_ERROR_DEVICE_REMOVED`、`DXGI_ERROR_DEVICE_RESET`、`D2DERR_RECREATE_TARGET` を受けたら
+デバイスの組を捨て、次の表示で `Initialize` からやり直す。
 
 `DCompositionCreateDevice2` は `IDCompositionDevice2` を直接返さないため、
 `IDCompositionDesktopDevice` で作ってから `IDCompositionDevice2` を QI する。
@@ -181,6 +189,9 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 （測り直し、作業領域内への配置、再描画）。
 `WM_DPICHANGED` の推奨矩形は使わない。
 `Show` 自身の `SetWindowPos` が別 DPI のモニタへ動かして発生した通知は無視する（`Show` が移動先の DPI で測り終えているため）。
+DPI の変化で表示をやり直すときのキャレット矩形は、直前の `Show` の値である。
+ウィンドウの移動でキャレットの位置も変わっていた場合は、次の preedit 更新による `Show` で正しい位置へ戻る。
+テーマの変更通知では、テーマを読み直したときだけ再描画し、描画に失敗したらウィンドウを隠す。
 
 ### 4.3 デバッグウィンドウ（M18-3）
 

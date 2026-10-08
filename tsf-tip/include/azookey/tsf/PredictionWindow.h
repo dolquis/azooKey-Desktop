@@ -41,6 +41,10 @@ class PredictionWindow {
 #ifdef AZOOKEY_TSF_TESTING
   HWND hwnd_for_test() const { return hwnd_; }
   const ThemeColors& theme_for_test() const { return theme_; }
+  int row_height_for_test() const { return row_height_; }
+  // Overrides the caret monitor's DPI that Show measures with; 0 restores it.
+  static void SetMonitorDpiForTest(UINT dpi);
+  static bool IsDeviceLostForTest(HRESULT hr);
 #endif
 
  private:

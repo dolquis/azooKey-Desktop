@@ -42,18 +42,29 @@ TEST(CandidateWindowDpiTest, EmojiDetectionDoesNotReclassifyKanjiOrTextSymbols) 
     EXPECT_TRUE(CandidateWindow::NeedsColorEmoji(text));
 }
 
-TEST(CandidateWindowDpiTest, CreateResolvesTheCurrentThemeAndFollowsAThemeChange) {
+TEST(CandidateWindowDpiTest, ThemeFollowsTheSystemSettingChanges) {
+  testing::SetThemeInputsForTest(false, 1u);
   CandidateWindow window;
   ASSERT_TRUE(window.Create());
-  const ThemeColors expected = ResolveThemeColors(CurrentThemeMode());
-  EXPECT_EQ(window.theme_for_test().background, expected.background);
-  EXPECT_EQ(window.theme_for_test().selection, expected.selection);
-  // An unrelated setting change keeps the colors; ImmersiveColorSet re-reads them.
+  EXPECT_EQ(window.theme_for_test().background, kLightTheme.background);
+
+  // The app theme changes, but an unrelated setting change does not re-read it.
+  testing::SetThemeInputsForTest(false, 0u);
   SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"Policy"));
+  EXPECT_EQ(window.theme_for_test().background, kLightTheme.background);
   SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, 0,
                reinterpret_cast<LPARAM>(L"ImmersiveColorSet"));
-  EXPECT_EQ(window.theme_for_test().text, ResolveThemeColors(CurrentThemeMode()).text);
+  EXPECT_EQ(window.theme_for_test().background, kDarkTheme.background);
+  EXPECT_EQ(window.theme_for_test().selection, kDarkTheme.selection);
+
+  // High contrast wins over the dark app theme and uses the system colors.
+  testing::SetThemeInputsForTest(true, 0u);
+  SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, SPI_SETHIGHCONTRAST, 0);
+  EXPECT_EQ(window.theme_for_test().background, GetSysColor(COLOR_WINDOW));
+  EXPECT_EQ(window.theme_for_test().selection, GetSysColor(COLOR_HIGHLIGHT));
+
   window.Destroy();
+  testing::ClearThemeInputsForTest();
 }
 
 TEST(CandidateWindowDpiTest, ZeroDpiFallsBackToDefaultDpi) {

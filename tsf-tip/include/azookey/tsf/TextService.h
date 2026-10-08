@@ -981,7 +981,9 @@ class TextService final : public ITfTextInputProcessorEx,
                           bool cand_visible) const;
   void PlayBeep();
   void ToggleDebugWindow();
-  bool HasForgettableCommit() const { return !last_learned_commit_pairs_.empty(); }
+  // True when Ctrl+Shift+Backspace has a pair to forget here. A secure context
+  // drops the record and leaves the key to the application (M46).
+  bool ClaimsForgetKey(ITfContext* context);
   void ForgetLastCommit(ITfContext* context);
   void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
   void RegisterDebugPreservedKey();

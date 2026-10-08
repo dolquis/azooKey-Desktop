@@ -112,6 +112,13 @@ std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
 }
 
+// CTest runs each case in its own process concurrently, so fixture files carry
+// the test name: one case corrupting its M7 file must not reach another case.
+std::string PerTestFileName(const char* stem, const char* extension) {
+  const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
+  return std::string(stem) + "_" + (info ? info->name() : "no_test") + extension;
+}
+
 void RemovePathNoThrow(const std::filesystem::path& path) {
   std::error_code ec;
   std::filesystem::remove_all(path, ec);
@@ -175,8 +182,8 @@ class ThrowingConverter final : public azookey::core::IConverter {
 class DispatcherTest : public ::testing::Test {
  protected:
   DispatcherTest()
-      : learning_path("azookey_dispatcher_test_learning.tsv"),
-        user_dict_path("azookey_dispatcher_test_user.json"),
+      : learning_path(PerTestFileName("azookey_dispatcher_test_learning", ".tsv")),
+        user_dict_path(PerTestFileName("azookey_dispatcher_test_user", ".json")),
         store(learning_path, &azookey::learning::test::Crypto()),
         user_dict(user_dict_path, &azookey::learning::test::Crypto()),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),

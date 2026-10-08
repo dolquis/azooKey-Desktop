@@ -8593,7 +8593,8 @@ TEST(TsfTipUnicodeInputTest, ShiftDigitIsNotAHexDigit) {
   EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
 }
 
-// M46: the forget names a pair, so it never leaves a secure context.
+// M46: the forget names a pair, so it never leaves a secure context, and the
+// key, having nothing to do there, goes to the application.
 TEST(TsfTipForgetLearningTest, SecureContextDropsTheForgetAndTheRecord) {
   TextServiceHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
@@ -8602,8 +8603,9 @@ TEST(TsfTipForgetLearningTest, SecureContextDropsTheForgetAndTheRecord) {
   ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
 
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
-  PressCtrlShift(h, VK_BACK);
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
   EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
   // The record is gone, so a press after leaving secure mode reaches the app.
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
@@ -8739,6 +8741,51 @@ TEST(TsfTipForgetLearningTest, UnicodeCommitHidesTheEarlierLearnedPair) {
   EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
   PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
   EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+// legacy-parity-spec §7.2: the record belongs to the field it was committed in.
+TEST(TsfTipForgetLearningTest, RecordDoesNotCrossAFocusChange) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+
+  FakeDocumentMgr first;
+  FakeDocumentMgr second;
+  EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+TEST(TsfTipForgetLearningTest, RecordDoesNotSurviveDeactivate) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+  EXPECT_TRUE(SUCCEEDED(h.service.Deactivate()));
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+}
+
+// The "U+" that follows a commit is shown only after the commit; when the
+// commit fails, the state must not move on to Unicode input without it.
+TEST(TsfTipUnicodeInputTest, FailedCommitDoesNotEnterUnicodeInput) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  h.context.reject_write = true;
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.Press('U');
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_NE(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(h.context.document->text.find(L"U+"), std::wstring::npos);
 }
 
 // legacy-parity-spec §8.3 end to end: the IPC worker records each response

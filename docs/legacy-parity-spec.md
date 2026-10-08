@@ -940,7 +940,9 @@ public:
   確定（候補・読み・Unicode 入力・カッコ挿入・再変換）のたびに保持した組を捨て、学習観測を送ったときだけ
   保持し直す。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
   忘却の対象が無く、それより前の組へは遡らない。対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。
+  保持した組はフォーカスを跨がない。フォーカスの移動、context の push / pop、Deactivate で捨てる。
   secure の文脈では `ForgetLearningEntry` を送らず、組だけを捨てる（M46 の学習系メッセージと同じ扱い）。
+  このとき忘却の対象は無いので、Ctrl+Shift+Backspace はアプリへ渡す。
   English タグの組は保持しない。組の形式で指定できるのはかなチャネルだけだからである。
   `LearningStore` は直近の commit を持たず、`ForgetMostRecent` は置かない。
 - 変換器の学習バケットと自動単語登録（M36-A）への観測は取り消さない。

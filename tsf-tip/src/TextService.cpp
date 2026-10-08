@@ -1338,6 +1338,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ResetTypoTracking();
+  // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
+  last_learned_commit_pairs_.clear();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
   HRESULT result = UnadviseFunctionProvider();
@@ -1990,7 +1992,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
     // TSF delivers OnKeyDown only for keys claimed here, so a key that ends
-    // Unicode input must end it in this probe, before it is classified.
+    // Unicode input must end it in this probe, before it is classified. This
+    // commits from a test probe; hosts differ in whether they probe at all,
+    // which the OnKeyDown call below covers.
     if (const HRESULT finish_hr = FinishUnicodeInputBeforeKey(context, wParam, modifiers);
         FAILED(finish_hr))
       return finish_hr;
@@ -2037,7 +2041,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
     if (IsActionKey(m18_key, core::UserAction::Forget)) {
-      *eaten = HasForgettableCommit() ? TRUE : FALSE;
+      *eaten = ClaimsForgetKey(context) ? TRUE : FALSE;
       return S_OK;
     }
 
@@ -2310,7 +2314,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
     if (IsActionKey(mode_key, core::UserAction::Forget)) {
-      if (!HasForgettableCommit()) return S_OK;
+      if (!ClaimsForgetKey(context)) return S_OK;
       ForgetLastCommit(context);
       *eaten = TRUE;
       return S_OK;
@@ -3120,6 +3124,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     ResetTypoTracking();
+    last_learned_commit_pairs_.clear();
     UnadviseTextEditSink();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -3145,6 +3150,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
   if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
 #endif
   ClearReconversionState();
+  last_learned_commit_pairs_.clear();
   AdviseTextEditSink(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
@@ -3179,6 +3185,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
     reconversion_cache_candidates_.clear();
   }
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
+    last_learned_commit_pairs_.clear();
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
@@ -6135,6 +6142,14 @@ void TextService::ToggleDebugWindow() {
 // Ctrl+Shift+Backspace (spec §7.2): forget the pairs of the last learning
 // observation this TIP sent. Fire-and-forget on the existing queue; the Host
 // replies, so the item waits for its response like CommitObservation.
+bool TextService::ClaimsForgetKey(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (last_learned_commit_pairs_.empty()) return false;
+  if (context && !ResolvePrivacy(context, false).secure) return true;
+  last_learned_commit_pairs_.clear();
+  return false;
+}
+
 void TextService::ForgetLastCommit(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
   auto pairs = std::move(last_learned_commit_pairs_);
@@ -6426,9 +6441,14 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
           core_input_active_ = true;
           ApplyPostCommitActions(context, post_commit_actions);
         }
-      } else if (!committing_) {
-        commit_surface_.clear();
-        pending_commit_observation_.reset();
+      } else {
+        if (!committing_) {
+          commit_surface_.clear();
+          pending_commit_observation_.reset();
+        }
+        // The post-commit marked text (e.g. "U+") was never shown, so the
+        // state it belongs to must not survive the failed commit.
+        if (!post_commit_actions.empty()) input_state_ = input_state_.Reset();
       }
       if (hr != E_OUTOFMEMORY) hr = S_OK;
     }

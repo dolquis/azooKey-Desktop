@@ -206,10 +206,18 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
     if (p) *p = FALSE;
     return E_NOTIMPL;
   }
-  STDMETHODIMP PreserveKey(TfClientId, REFGUID, const TF_PRESERVEDKEY*, const WCHAR*, ULONG) override {
-    return E_NOTIMPL;
+  STDMETHODIMP PreserveKey(TfClientId, REFGUID guid, const TF_PRESERVEDKEY* key, const WCHAR*,
+                           ULONG) override {
+    ++preserve_calls;
+    preserved_guid = guid;
+    if (key) preserved_key = *key;
+    return preserve_result;
   }
-  STDMETHODIMP UnpreserveKey(REFGUID, const TF_PRESERVEDKEY*) override { return E_NOTIMPL; }
+  STDMETHODIMP UnpreserveKey(REFGUID guid, const TF_PRESERVEDKEY*) override {
+    ++unpreserve_calls;
+    unpreserved_guid = guid;
+    return preserve_result;
+  }
   STDMETHODIMP SetPreservedKeyDescription(REFGUID, const WCHAR*, ULONG) override { return E_NOTIMPL; }
   STDMETHODIMP GetPreservedKeyDescription(REFGUID, BSTR* p) override { if (p) *p = nullptr; return E_NOTIMPL; }
   STDMETHODIMP SimulatePreservedKey(ITfContext*, REFGUID, BOOL* p) override {
@@ -233,6 +241,13 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
 
   TfClientId client_id{7};
   MockKeyboardCompartment keyboard_compartment;
+  // Preserved keys (F10 debug window). E_NOTIMPL by default, as before.
+  HRESULT preserve_result{E_NOTIMPL};
+  int preserve_calls{0};
+  int unpreserve_calls{0};
+  GUID preserved_guid{};
+  GUID unpreserved_guid{};
+  TF_PRESERVEDKEY preserved_key{};
 
  private:
   static constexpr DWORD kSinkCookie = 0x515;
@@ -516,4 +531,68 @@ TEST(TsfTipActivateUiLessTest, OnPushContextConvertsAllocationFailureToOutOfMemo
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(service.OnPushContext(nullptr), E_OUTOFMEMORY);
   azookey::tsf::testing::ClearComBoundaryAllocationFailureForTest();
+}
+
+// Pins the F10 policy for one test: CI runs the suites in Debug and Release.
+struct DebugWindowKeyGuard {
+  explicit DebugWindowKeyGuard(bool enabled) {
+    azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(enabled);
+  }
+  ~DebugWindowKeyGuard() { azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(std::nullopt); }
+  DebugWindowKeyGuard(const DebugWindowKeyGuard&) = delete;
+  DebugWindowKeyGuard& operator=(const DebugWindowKeyGuard&) = delete;
+};
+
+// legacy-parity-spec §8.1: when F10 is registered as a preserved key,
+// OnPreservedKey owns the toggle and OnKeyDown only consumes the key.
+TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
+  DebugWindowKeyGuard debug_build(true);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.preserve_result = S_OK;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.preserve_calls, 1);
+  EXPECT_TRUE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
+  EXPECT_EQ(mock.preserved_key.uVKey, static_cast<UINT>(VK_F10));
+  EXPECT_EQ(mock.preserved_key.uModifiers, 0u);
+
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  eaten = FALSE;
+  ASSERT_EQ(service.OnKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_FALSE(service.debug_window_visible_for_test());
+  eaten = FALSE;
+  ASSERT_EQ(service.OnPreservedKey(nullptr, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+            S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.debug_window_visible_for_test());
+
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(mock.unpreserve_calls, 1);
+  EXPECT_TRUE(IsEqualGUID(mock.unpreserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
+  EXPECT_FALSE(service.debug_window_visible_for_test());
+}
+
+// A release build registers no F10 preserved key and passes F10 through.
+TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
+  DebugWindowKeyGuard release_build(false);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.preserve_result = S_OK;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.preserve_calls, 0);
+
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  BOOL eaten = TRUE;
+  ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  eaten = TRUE;
+  ASSERT_EQ(service.OnKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(service.debug_window_visible_for_test());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(mock.unpreserve_calls, 0);
 }

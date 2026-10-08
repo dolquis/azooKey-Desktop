@@ -83,6 +83,12 @@ const Entry kEntries[] = {
      {A::StartUnicodeInput, A::StartUnicodeInput, A::StartUnicodeInput, A::StartUnicodeInput, kNone,
       kNone}},
     {'U', kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    // The TIP's Unicode mode (spec §6) relies on these reaching the hex buffer.
+    {'U', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_NUMPAD0, 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
+    {VK_NUMPAD9, 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
+    {VK_BACK, kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_F10, kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_BACK, kCtrl | kShift, {A::Forget, kNone, kNone, kNone, kNone, kNone}},
     {VK_KANJI,
      0,

@@ -27,6 +27,7 @@
 
 #include "../../core/tests/EtwCapture.h"
 #include "KeyboardStateGuard.h"
+#include "azookey/core/BodyLogGate.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
@@ -8347,4 +8348,523 @@ TEST(TsfTipTypoCorrectionTest, WireAdvertisesTypoAndSendsObservationWithoutWaiti
   EXPECT_EQ(observations[0].correct_reading, "かみ");
   EXPECT_FALSE(observations[0].secure);
   EXPECT_TRUE(observations[0].learning_allowed);
+}
+
+// DEV-1201 / legacy-parity-spec §6: Unicode input runs in core even when the
+// number rewriter would send digits to the legacy path.
+namespace {
+void PressCtrlShift(TextServiceHarness& h, WPARAM key, bool expect_eaten = true) {
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_EQ(h.TestPress(key), expect_eaten ? TRUE : FALSE);
+  EXPECT_EQ(h.Press(key), expect_eaten ? TRUE : FALSE);
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+}
+
+void PressCtrlShift(DocumentPreeditHarness& h, WPARAM key) {
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.Press(key));
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+}
+
+template <typename Harness>
+size_t QueuedCount(Harness& h, azookey::ipc::MessageType type) {
+  const auto types = h.service.queued_ipc_types_for_test();
+  return static_cast<size_t>(std::count(types.begin(), types.end(), type));
+}
+
+void PressBoth(TextServiceHarness& h, WPARAM key) {
+  EXPECT_TRUE(h.TestPress(key)) << key;
+  EXPECT_TRUE(h.Press(key)) << key;
+}
+}  // namespace
+
+TEST(TsfTipUnicodeInputTest, CtrlShiftUHexAndEnterCommitsTheCodepoint) {
+  using azookey::core::InputStateKind;
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter);
+    AsciiDecimalDigitTranslationGuard digit_translation;
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    h.service.set_number_rewriter_enabled_for_test(number_rewriter);
+    PressCtrlShift(h, 'U');
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+");
+    for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'A'}, WPARAM{'1'}}) PressBoth(h, key);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A1");
+    PressBoth(h, VK_BACK);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A");
+    PressBoth(h, VK_NUMPAD1);
+    EXPECT_EQ(attachment.composition_range.last_text, L"U+30A1");
+    PressBoth(h, VK_RETURN);
+    EXPECT_EQ(attachment.composition_range.last_text, L"ァ");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+    EXPECT_EQ(h.service.beep_count_for_test(), 0u);
+    // Idle -> UnicodeInput -> Idle reaches the debug window's transition ring.
+    EXPECT_GE(h.service.debug_log_for_test().transition_size(), 2u);
+  }
+}
+
+TEST(TsfTipUnicodeInputTest, SurrogateValueBeepsAndKeepsTheBuffer) {
+  using azookey::core::InputStateKind;
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'D'}, WPARAM{'8'}, WPARAM{'0'}, WPARAM{'0'}}) PressBoth(h, key);
+  PressBoth(h, VK_RETURN);
+  EXPECT_EQ(h.service.beep_count_for_test(), 1u);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(attachment.composition_range.last_text, L"U+D800");
+  PressBoth(h, VK_ESCAPE);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+TEST(TsfTipUnicodeInputTest, CtrlUWithoutShiftStillPassesThrough) {
+  TextServiceHarness h;
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_FALSE(h.TestPress('U'));
+  EXPECT_FALSE(h.Press('U'));
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+// legacy-parity-spec §7.2: Ctrl+Shift+Backspace forgets the pair of the last
+// learning observation the TIP actually sent.
+TEST(TsfTipForgetLearningTest, CtrlShiftBackspaceForgetsTheLastLearnedPairOnce) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  PressCtrlShift(h, VK_BACK);
+  const auto requests = h.service.queued_forget_requests_for_test();
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].store, "learning");
+  EXPECT_TRUE(requests[0].id.empty());
+  EXPECT_EQ(requests[0].reading, "かな");
+  EXPECT_EQ(requests[0].surface, "仮名");
+
+  // The pair is forgotten once; a second press goes to the app.
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_EQ(h.service.queued_forget_requests_for_test().size(), 1u);
+}
+
+TEST(TsfTipForgetLearningTest, CommitWithoutLearningIsNotForgettable) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+  // A later commit that was not observed hides the earlier one.
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+  CommitOneCandidate(h);
+
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+// Pins the F10 policy for one test: CI runs the suites in Debug and Release.
+struct DebugWindowKeyGuard {
+  explicit DebugWindowKeyGuard(bool enabled) {
+    azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(enabled);
+  }
+  ~DebugWindowKeyGuard() { azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(std::nullopt); }
+  DebugWindowKeyGuard(const DebugWindowKeyGuard&) = delete;
+  DebugWindowKeyGuard& operator=(const DebugWindowKeyGuard&) = delete;
+};
+
+// legacy-parity-spec §8.1: in a Debug build F10 toggles the debug window,
+// through OnKeyDown or the preserved key, never both for one press.
+TEST(TsfTipDebugWindowTest, F10TogglesTheDebugWindow) {
+  DebugWindowKeyGuard debug_build(true);
+  TextServiceHarness h;
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+  EXPECT_TRUE(h.TestPress(VK_F10));
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+
+  BOOL eaten = FALSE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+  eaten = TRUE;
+  EXPECT_EQ(h.service.OnPreservedKey(&h.context, GUID{}, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+}
+
+// A core result that commits and then opens new marked text must commit what
+// was shown before, not the marked text that follows (legacy-parity-spec §6.4).
+namespace {
+void UseLearningApp(DocumentPreeditHarness& h) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+}
+}  // namespace
+
+TEST(TsfTipUnicodeInputTest, CtrlShiftUFromReadingCommitsTheReadingFirst) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  PressCtrlShift(h, 'U');
+  EXPECT_EQ(h.context.document->text, L"かなU+");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+TEST(TsfTipUnicodeInputTest, CtrlShiftUFromCandidatesCommitsAndObservesTheSelectionOnce) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[0].reading = "か";
+  candidates[0].source = "dictionary";
+  candidates[1].surface = "科";
+  candidates[1].reading = "か";
+  candidates[1].source = "dictionary";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting);
+
+  PressCtrlShift(h, 'U');
+  EXPECT_EQ(h.context.document->text, L"蚊U+");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 1u);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "蚊");
+
+  // The observed candidate, not "U+", is the pair Ctrl+Shift+Backspace forgets.
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  PressCtrlShift(h, VK_BACK);
+  const auto forgets = h.service.queued_forget_requests_for_test();
+  ASSERT_EQ(forgets.size(), 1u);
+  EXPECT_EQ(forgets[0].reading, "か");
+  EXPECT_EQ(forgets[0].surface, "蚊");
+}
+
+TEST(TsfTipUnicodeInputTest, NonHexKeyCommitsTheCodepointAndStartsComposing) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'A'}, WPARAM{'1'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"U+30A1");
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"ァか");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+TEST(TsfTipUnicodeInputTest, ShiftDigitIsNotAHexDigit) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  PressCtrlShift(h, 'U');
+  PressBoth(h, '4');
+  PressBoth(h, '1');
+  // Shift+3 is a symbol: it ends the buffer (committing U+0041) instead of
+  // appending a digit, then acts as it would from Idle.
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.TestPress('3');
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(attachment.composition_range.last_text.find(L"U+413"), std::wstring::npos);
+  EXPECT_EQ(attachment.composition_range.last_text, L"A");
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
+}
+
+// M46: the forget names a pair, so it never leaves a secure context, and the
+// key, having nothing to do there, goes to the application.
+TEST(TsfTipForgetLearningTest, SecureContextDropsTheForgetAndTheRecord) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  // The record is gone, so a press after leaving secure mode reaches the app.
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+// A release build never claims F10: it stays the application's menu-bar key.
+TEST(TsfTipDebugWindowTest, ReleaseBuildLeavesF10ToTheApplication) {
+  DebugWindowKeyGuard release_build(false);
+  TextServiceHarness h;
+  EXPECT_FALSE(h.TestPress(VK_F10));
+  EXPECT_FALSE(h.Press(VK_F10));
+  BOOL eaten = TRUE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+}
+
+TEST(TsfTipDebugWindowTest, PreservedKeyPassesThroughInAlphanumericMode) {
+  DebugWindowKeyGuard debug_build(true);
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press(VK_OEM_ATTN));  // Alphanumeric mode on.
+  BOOL eaten = TRUE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+  EXPECT_FALSE(h.TestPress(VK_F10));
+  EXPECT_FALSE(h.Press(VK_F10));
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+}
+
+// Spec §6.1: a key the hex buffer does not own ends Unicode input first and
+// then behaves as from Idle; keys that pass through from Idle still do.
+TEST(TsfTipUnicodeInputTest, UnmappedKeysFinishTheBufferAndPassThrough) {
+  using azookey::core::InputStateKind;
+  for (const WPARAM key : {WPARAM{VK_SPACE}, WPARAM{VK_RIGHT}}) {
+    SCOPED_TRACE(key);
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    PressCtrlShift(h, 'U');
+    for (const WPARAM hex : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}}) PressBoth(h, hex);
+    ASSERT_EQ(attachment.composition_range.last_text, L"U+3042");
+    EXPECT_FALSE(h.TestPress(key));
+    EXPECT_EQ(attachment.composition_range.last_text, L"あ");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+    EXPECT_FALSE(h.Press(key));
+    EXPECT_EQ(h.service.beep_count_for_test(), 0u);
+  }
+}
+
+TEST(TsfTipUnicodeInputTest, UnmappedKeyWithInvalidValueBeepsAndCancels) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM hex : {WPARAM{'D'}, WPARAM{'8'}, WPARAM{'0'}, WPARAM{'0'}}) PressBoth(h, hex);
+  EXPECT_FALSE(h.TestPress(VK_SPACE));
+  EXPECT_EQ(h.service.beep_count_for_test(), 1u);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+// With batch romaji the letter that ends Unicode input belongs to the batch
+// accumulation like any other first letter.
+TEST(TsfTipUnicodeInputTest, NonHexLetterContinuesInTheBatchPath) {
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"あか");
+  EXPECT_EQ(h.service.preedit_kana_, "\xE3\x81\x8B");
+  EXPECT_FALSE(h.service.core_input_active_for_test());
+}
+
+TEST(TsfTipForgetLearningTest, RecordFollowsWhatTheObservationActuallySent) {
+  using azookey::ipc::CandidateField;
+  auto field = [](std::string surface, uint8_t tag = 0) {
+    CandidateField candidate;
+    candidate.surface = std::move(surface);
+    candidate.source = "dictionary";
+    candidate.tag = tag;
+    return candidate;
+  };
+  const uint8_t english = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  TextServiceHarness h;
+  h.service.set_commit_segments_supported_for_test(true);
+
+  // Multi-segment commit: one pair per segment, English-tagged ones skipped.
+  h.service.post_pending_observation_for_test(
+      {{"きょう", field("今日")}, {"は", field("は")}, {"hello", field("hello", english)}}, false,
+      true);
+  ASSERT_TRUE(h.service.last_queued_segments_observation_for_test());
+  const std::vector<std::pair<std::string, std::string>> expected{{"きょう", "今日"}, {"は", "は"}};
+  EXPECT_EQ(h.service.learned_pairs_for_test(), expected);
+
+  // A single English-tagged commit leaves nothing to forget.
+  h.service.post_pending_observation_for_test({{"hello", field("hello", english)}}, false, true);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+
+  // A secure or learning-denied observation is not recorded.
+  h.service.post_pending_observation_for_test({{"かな", field("仮名")}}, true, true);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  h.service.post_pending_observation_for_test({{"かな", field("仮名")}}, false, false);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+
+  // A segments payload too large to send is not recorded either.
+  h.service.post_pending_observation_for_test(
+      {{std::string(azookey::ipc::kMaxFrameSize, 'a'), field("x")}, {"は", field("は")}}, false,
+      true);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+}
+
+TEST(TsfTipForgetLearningTest, UnicodeCommitHidesTheEarlierLearnedPair) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+  {
+    FakeCompositionAttachment attachment(h);
+    PressCtrlShift(h, 'U');
+    for (const WPARAM key : {WPARAM{'4'}, WPARAM{'1'}}) PressBoth(h, key);
+    PressBoth(h, VK_RETURN);
+    ASSERT_EQ(attachment.composition_range.last_text, L"A");
+  }
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+// legacy-parity-spec §7.2: the record belongs to the field it was committed in.
+TEST(TsfTipForgetLearningTest, RecordDoesNotCrossAFocusChange) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+
+  FakeDocumentMgr first;
+  FakeDocumentMgr second;
+  EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  PressCtrlShift(h, VK_BACK, /*expect_eaten=*/false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+}
+
+TEST(TsfTipForgetLearningTest, RecordDoesNotSurviveDeactivate) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+  EXPECT_TRUE(SUCCEEDED(h.service.Deactivate()));
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+}
+
+// The "U+" that follows a commit is shown only after the commit; when the
+// commit fails, the state must not move on to Unicode input without it.
+TEST(TsfTipUnicodeInputTest, FailedCommitDoesNotEnterUnicodeInput) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  UseLearningApp(h);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  h.context.reject_write = true;
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.Press('U');
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_NE(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+  EXPECT_EQ(h.context.document->text.find(L"U+"), std::wstring::npos);
+}
+
+// legacy-parity-spec §8.3 end to end: the IPC worker records each response
+// with the privacy of the request that produced it.
+TEST(TsfTipDebugWindowTest, IpcEntriesKeepBodiesOnlyWhenTheRequestAllowedThem) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-debug-window-ipc-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      QueryCandidatesResponse candidates;
+      CandidateField field;
+      field.surface = "蚊";
+      field.reading = "か";
+      field.source = "dictionary";
+      candidates.candidates.push_back(field);
+      response.payload_json = BuildQueryCandidatesResponse(candidates);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  char* previous = nullptr;
+  size_t previous_length = 0;
+  ASSERT_EQ(_dupenv_s(&previous, &previous_length, "AZOOKEY_LOG_BODY"), 0);
+  const std::string saved = previous ? previous : "";
+  std::free(previous);
+  ASSERT_EQ(_putenv_s("AZOOKEY_LOG_BODY", "1"), 0);
+  // Release builds keep the gate closed; then every case must be redacted.
+  const bool build_allows_body = azookey::core::BodyLoggingAllowed({false, true, true}, true);
+
+  struct Case {
+    const char* settings;
+    bool expect_body;
+  };
+  constexpr char kDetailed[] =
+      R"({"privacy":{"mode":"custom","autoSecureInput":false,"redactLogs":false,"custom":{"aiCandidate":true,"detailedLogging":true}}})";
+  for (const auto& item :
+       {Case{kDetailed, true},
+        Case{R"({"privacy":{"mode":"secure","autoSecureInput":false}})", false},
+        Case{R"({"privacy":{"mode":"normal","autoSecureInput":false}})", false}}) {
+    SCOPED_TRACE(item.settings);
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(item.settings);
+    azookey::tsf::ScopedFocusClassificationForTest focus(azookey::tsf::InputScopeClass::Normal);
+    PrivateScopeProperty property;
+    property.scope.value = IS_DEFAULT;
+    FakeRange selection;
+    h.context.input_scope_property = &property;
+    h.context.selection_range = &selection;
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    h.service.start_ipc_worker_for_test();
+    EXPECT_TRUE(WaitUntil([&] { return h.service.debug_log_for_test().ipc_size() >= 1; }));
+    h.service.stop_ipc_worker_for_test();
+    h.context.input_scope_property = nullptr;
+    h.context.selection_range = nullptr;
+    std::string line;
+    for (const auto& rendered : h.service.debug_log_for_test().RenderLines(true))
+      if (rendered.find("QueryCandidates") != std::string::npos) line = rendered;
+    ASSERT_FALSE(line.empty());
+    if (item.expect_body && build_allows_body) {
+      EXPECT_NE(line.find("蚊"), std::string::npos) << line;
+    } else {
+      EXPECT_EQ(line.find("蚊"), std::string::npos) << line;
+      EXPECT_NE(line.find("<redacted"), std::string::npos) << line;
+    }
+  }
+  _putenv_s("AZOOKEY_LOG_BODY", saved.c_str());
+  server.Stop();
 }

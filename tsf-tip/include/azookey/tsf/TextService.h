@@ -27,6 +27,7 @@
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
 #include "azookey/tsf/CharacterFormEditSession.h"
+#include "azookey/tsf/DebugWindow.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
@@ -39,6 +40,11 @@
 #endif
 
 namespace azookey::tsf {
+
+// TSF preserved key for F10, the debug window toggle (docs/legacy-parity-spec.md §8.1).
+// {3B7E9A52-6C1D-4F08-9E2A-8D5C4B1F7A63}
+inline constexpr GUID kDebugWindowPreservedKeyGuid = {
+    0x3b7e9a52, 0x6c1d, 0x4f08, {0x9e, 0x2a, 0x8d, 0x5c, 0x4b, 0x1f, 0x7a, 0x63}};
 
 // A prediction may be accepted only if its reading extends the current kana.
 std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
@@ -88,6 +94,8 @@ void ClearComBoundaryAllocationFailureForTest();
 bool IsFreshQueryResultForTest(bool has_newer_request, uint64_t pending_request_id,
                                uint64_t response_request_id);
 bool ConsumeComBoundaryAllocationFailureForTest();
+// nullopt restores the build default (F10 claimed only by a Debug build).
+void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled);
 void FailNextPendingCommitObservationForTest();
 void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
@@ -322,6 +330,41 @@ class TextService final : public ITfTextInputProcessorEx,
         return ipc::ParseCommitSegmentsObservationRequest(item->payload_json);
     return std::nullopt;
   }
+  std::vector<ipc::ForgetLearningEntryRequest> queued_forget_requests_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    std::vector<ipc::ForgetLearningEntryRequest> requests;
+    for (const auto& item : ipc_send_queue_)
+      if (item.type == ipc::MessageType::ForgetLearningEntry)
+        if (auto parsed = ipc::ParseForgetLearningEntryRequest(item.payload_json))
+          requests.push_back(std::move(*parsed));
+    return requests;
+  }
+  // Posts an observation as the commit edit session would. One entry is the
+  // single-candidate form; more entries are a multi-segment commit.
+  void post_pending_observation_for_test(
+      std::vector<std::pair<std::string, ipc::CandidateField>> segments, bool secure,
+      bool learning_allowed) {
+    PendingCommitObservation pending;
+    pending.secure = secure;
+    pending.learning_allowed = learning_allowed;
+    if (segments.size() == 1) {
+      pending.reading = std::move(segments[0].first);
+      pending.chosen = std::move(segments[0].second);
+    } else {
+      for (auto& [reading, chosen] : segments)
+        pending.segments.push_back(
+            {std::move(reading), std::move(chosen), {}, {}, secure, learning_allowed});
+    }
+    pending_commit_observation_ = std::move(pending);
+    PostPendingCommitObservation();
+  }
+  const std::vector<std::pair<std::string, std::string>>& learned_pairs_for_test() const {
+    return last_learned_commit_pairs_;
+  }
+  size_t beep_count_for_test() const { return beep_count_; }
+  bool core_input_active_for_test() const { return core_input_active_; }
+  bool debug_window_visible_for_test() const { return debug_window_.IsVisible(); }
+  const DebugLogBuffer& debug_log_for_test() const { return debug_window_.buffer(); }
   void set_commit_segments_supported_for_test(bool supported) {
     ipc_host_commit_segments_.store(supported);
   }
@@ -539,6 +582,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // The privacy permission for QueryPredictions, published by ResolvePrivacy
   // for the IPC worker. predictionEnabled controls the UI separately.
   std::atomic<bool> prediction_allowed_{false};
+  // detailed_logging_allowed of the latest ResolvePrivacy, captured into
+  // prediction requests for the debug window's M41 gate.
+  std::atomic<bool> detailed_logging_allowed_{false};
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
@@ -589,6 +635,20 @@ class TextService final : public ITfTextInputProcessorEx,
     bool learning_allowed{false};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
+  // (reading, surface) pairs of the last learning observation actually sent,
+  // the target of Ctrl+Shift+Backspace (docs/legacy-parity-spec.md §7.2).
+  // UI thread only.
+  std::vector<std::pair<std::string, std::string>> last_learned_commit_pairs_;
+
+  // M18-3 debug window (docs/legacy-parity-spec.md §8). The window is created
+  // lazily on the UI thread; the IPC worker only records into its buffer.
+  DebugWindow debug_window_;
+  // (secure, detailed_logging_allowed) last handed to debug_window_.
+  std::optional<std::pair<bool, bool>> debug_paint_policy_;
+  bool debug_preserved_key_registered_{false};
+#ifdef AZOOKEY_TSF_TESTING
+  size_t beep_count_{0};
+#endif
 
   // IPC worker thread state.
   std::string ipc_client_id_;
@@ -650,6 +710,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_pending_live_{true};
   bool ipc_pending_secure_{true};
   bool ipc_pending_learning_allowed_{false};
+  // M41 body-log permission of the pending request, for the debug window.
+  bool ipc_pending_detailed_logging_allowed_{false};
   std::string ipc_pending_emoji_trigger_;
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
@@ -700,6 +762,9 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string kana;
     std::string left_side_context;
     std::string trace_id;
+    // Privacy at request time, for the debug window's M41 gate.
+    bool detailed_logging_allowed{false};
+    bool secure{true};
   };
   std::optional<PredictionRequest> ipc_prediction_request_;  // ipc_mtx_
   uint64_t prediction_generation_{0};                        // ipc_mtx_
@@ -903,6 +968,26 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostCancel(uint64_t target_request_id);
   // Internal: push an item onto ipc_send_queue_ and notify the worker.
   void PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response);
+
+  // M18 (docs/legacy-parity-spec.md §6-§8).
+  void ApplyPostCommitActions(ITfContext* context, const std::vector<core::ClientAction>& actions);
+  HRESULT FinishUnicodeInputBeforeKey(ITfContext* context, WPARAM key, uint32_t modifiers);
+  bool UnicodeInputActive() const;
+  // Single policy point for whether the TIP takes F10 (spec §8.1).
+  bool ClaimsDebugWindowKey(ITfContext* context) const;
+  // True when the key enters or edits the core Unicode input state; such keys
+  // always take the core path, whatever the legacy pre-processing settings.
+  bool UnicodeInputRouted(const std::optional<core::UserActionEvent>& key_event, bool has_preedit,
+                          bool cand_visible) const;
+  void PlayBeep();
+  void ToggleDebugWindow();
+  // True when Ctrl+Shift+Backspace has a pair to forget here. A secure context
+  // drops the record and leaves the key to the application (M46).
+  bool ClaimsForgetKey(ITfContext* context);
+  void ForgetLastCommit(ITfContext* context);
+  void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
+  void RegisterDebugPreservedKey();
+  void UnregisterDebugPreservedKey();
 
   // M5 commit helpers.
   HRESULT CommitSelected(ITfContext* context);

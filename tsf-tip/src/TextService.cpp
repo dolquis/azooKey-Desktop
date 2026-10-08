@@ -364,16 +364,18 @@ bool HasSystemModifier(uint32_t modifiers) {
 }
 
 // First layer of the key pipeline (docs/legacy-parity-spec.md §1.5.3). The TIP
-// derives the state kind from its composition and candidate window, and passes
-// through actions whose effects it does not implement yet (Unicode input,
-// Forget, debug window).
+// derives the state kind from its composition and candidate window, or from the
+// core Unicode input state while that is active, and drops actions whose
+// effects it does not implement (replace suggestion and its double taps).
 std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t modifiers,
-                                                        bool has_preedit, bool cand_visible) {
+                                                        bool has_preedit, bool cand_visible,
+                                                        bool unicode_active) {
   using azookey::core::InputStateKind;
   using azookey::core::UserAction;
-  const InputStateKind kind = cand_visible  ? InputStateKind::Selecting
-                              : has_preedit ? InputStateKind::Composing
-                                            : InputStateKind::Idle;
+  const InputStateKind kind = unicode_active ? InputStateKind::UnicodeInput
+                              : cand_visible ? InputStateKind::Selecting
+                              : has_preedit  ? InputStateKind::Composing
+                                             : InputStateKind::Idle;
   auto event = azookey::core::MapUserAction(static_cast<uint32_t>(key), modifiers, kind);
   if (!event) return std::nullopt;
   switch (event->action) {
@@ -392,10 +394,105 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     case UserAction::ToggleHankaku:
     case UserAction::ToggleHiraKata:
     case UserAction::ToggleAlnum:
+    case UserAction::StartUnicodeInput:
+    case UserAction::Forget:
+    case UserAction::ToggleDebugWindow:
       return event;
     default:
       return std::nullopt;
   }
+}
+
+const char* InputStateKindName(azookey::core::InputStateKind kind) {
+  using azookey::core::InputStateKind;
+  switch (kind) {
+    case InputStateKind::Idle:
+      return "Idle";
+    case InputStateKind::Composing:
+      return "Composing";
+    case InputStateKind::Previewing:
+      return "Previewing";
+    case InputStateKind::Selecting:
+      return "Selecting";
+    case InputStateKind::ReplaceSuggestion:
+      return "ReplaceSuggestion";
+    case InputStateKind::UnicodeInput:
+      return "UnicodeInput";
+  }
+  return "Unknown";
+}
+
+// Hex digits typed in Unicode input mode, independent of the keyboard layout.
+// Shift+digit is a symbol on every layout, so only the unshifted digit row and
+// the numpad count as digits (spec §6.1 accepts [0-9a-fA-F]).
+std::optional<char32_t> UnicodeInputCodepoint(WPARAM key, uint32_t modifiers) {
+  const bool shift = (modifiers & azookey::core::kModifierShift) != 0;
+  if ((key >= '0' && key <= '9' && !shift) || (key >= 'A' && key <= 'Z'))
+    return static_cast<char32_t>(key);
+  if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9)
+    return static_cast<char32_t>(U'0' + (key - VK_NUMPAD0));
+  return std::nullopt;
+}
+
+bool IsUnicodeHexKey(WPARAM key, uint32_t modifiers) {
+  const auto cp = UnicodeInputCodepoint(key, modifiers);
+  return cp && ((*cp >= U'0' && *cp <= U'9') || (*cp >= U'A' && *cp <= U'F'));
+}
+
+// Mirrors core's Unicode range check (spec §6.3): 1-8 hex digits naming a
+// scalar value, surrogates excluded.
+bool IsUnicodeScalarHex(const std::string& hex) {
+  if (hex.empty() || hex.size() > 8) return false;
+  uint64_t value = 0;
+  for (const char c : hex) {
+    if (c >= '0' && c <= '9')
+      value = value * 16 + static_cast<uint64_t>(c - '0');
+    else if (c >= 'A' && c <= 'F')
+      value = value * 16 + static_cast<uint64_t>(c - 'A' + 10);
+    else
+      return false;
+  }
+  return value <= 0x10FFFF && !(value >= 0xD800 && value <= 0xDFFF);
+}
+
+bool IsModifierOnlyKey(WPARAM key) {
+  switch (key) {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+    case VK_LWIN:
+    case VK_RWIN:
+    case VK_CAPITAL:
+    case VK_NUMLOCK:
+    case VK_SCROLL:
+    case VK_PROCESSKEY:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::vector<std::string> TopCandidateSurfaces(
+    const std::vector<azookey::ipc::CandidateField>& list) {
+  std::vector<std::string> surfaces;
+  for (const auto& candidate : list) {
+    if (surfaces.size() >= azookey::tsf::kDebugLogTopCandidates) break;
+    surfaces.push_back(candidate.surface);
+  }
+  return surfaces;
+}
+
+uint32_t ElapsedMs(std::chrono::steady_clock::time_point since) {
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - since)
+                           .count();
+  return elapsed < 0 ? 0u : static_cast<uint32_t>(std::min<long long>(elapsed, UINT32_MAX));
 }
 
 bool IsActionKey(const std::optional<azookey::core::UserActionEvent>& event,
@@ -659,7 +756,21 @@ using azookey::tsf::IsUsableTextExtent;
 
 #ifdef AZOOKEY_TSF_TESTING
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
+std::optional<bool> g_debug_window_key_enabled_for_test;
 #endif
+
+// F10 opens the menu bar in most applications, so only a Debug build claims it
+// for the debug window (legacy-parity-spec §8.1). Tests choose either behavior.
+bool DebugWindowKeyEnabled() {
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_debug_window_key_enabled_for_test) return *g_debug_window_key_enabled_for_test;
+#endif
+#ifdef _DEBUG
+  return true;
+#else
+  return false;
+#endif
+}
 
 CaretWin32Api CurrentCaretWin32Api() {
 #ifdef AZOOKEY_TSF_TESTING
@@ -730,6 +841,10 @@ bool ConsumeComBoundaryAllocationFailureForTest() {
     }
   }
   return false;
+}
+
+void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled) {
+  g_debug_window_key_enabled_for_test = enabled;
 }
 
 void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
@@ -1223,6 +1338,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ResetTypoTracking();
+  // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
+  last_learned_commit_pairs_.clear();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
   HRESULT result = UnadviseFunctionProvider();
@@ -1238,6 +1355,7 @@ STDMETHODIMP TextService::Deactivate() try {
   UnadviseTextEditSink();
   ClearPrediction();
   prediction_window_.Destroy();
+  debug_window_.Destroy();
   prediction_logged_reasons_.store(0, std::memory_order_relaxed);
   ClearReconversionState();
   if (reconversion_cache_context_) {
@@ -1281,6 +1399,9 @@ HRESULT TextService::AdviseTextServiceSinks() {
   key_mgr->Release();
   if (FAILED(hr)) return hr;
   key_event_sink_advised_ = true;
+  // F10 arrives as WM_SYSKEYDOWN, which some hosts never route to the key
+  // event sink. Best effort: without it OnKeyDown still toggles.
+  RegisterDebugPreservedKey();
 
   ITfSource* source = nullptr;
   hr = thread_mgr_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
@@ -1312,6 +1433,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
     }
   }
 
+  UnregisterDebugPreservedKey();
   if (thread_mgr_ && key_event_sink_advised_) {
     ITfKeystrokeMgr* key_mgr = nullptr;
     HRESULT hr =
@@ -1692,6 +1814,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
     const HRESULT result =
         BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
     if (applied) {
+      // Inserted bracket text is an unobserved commit (legacy-parity-spec §7.2).
+      last_learned_commit_pairs_.clear();
       if (active_context_ != context) {
         if (active_context_) active_context_->Release();
         active_context_ = context;
@@ -1867,10 +1991,17 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = TRUE;
       return S_OK;
     }
+    // TSF delivers OnKeyDown only for keys claimed here, so a key that ends
+    // Unicode input must end it in this probe, before it is classified. This
+    // commits from a test probe; hosts differ in whether they probe at all,
+    // which the OnKeyDown call below covers.
+    if (const HRESULT finish_hr = FinishUnicodeInputBeforeKey(context, wParam, modifiers);
+        FAILED(finish_hr))
+      return finish_hr;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing()) &&
+                   candidate_ui_.IsShowing(), UnicodeInputActive()) &&
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
     if (committing_) {
@@ -1900,7 +2031,21 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       if (*eaten) return S_OK;
     }
 
-    if (!HasSystemModifier(modifiers)) {
+    // M18 actions are decided before the emoji and bracket handlers, matching
+    // OnKeyDown's mode-key block.
+    const auto m18_key =
+        MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                  candidate_ui_.IsShowing(), UnicodeInputActive());
+    if (IsActionKey(m18_key, core::UserAction::ToggleDebugWindow)) {
+      *eaten = ClaimsDebugWindowKey(context) ? TRUE : FALSE;
+      return S_OK;
+    }
+    if (IsActionKey(m18_key, core::UserAction::Forget)) {
+      *eaten = ClaimsForgetKey(context) ? TRUE : FALSE;
+      return S_OK;
+    }
+
+    if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
       const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled);
       if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
@@ -1918,7 +2063,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
-    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
+    const bool unicode_active = UnicodeInputActive();
+    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
     core::RomajiKanaConverter input_romaji = romaji_;
@@ -1927,7 +2073,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       input_romaji.SetCustomTable(local_settings_.RomajiSnapshot());
     }
     std::optional<char> custom_input;
-    if (!HasSystemModifier(modifiers) &&
+    if (!unicode_active && !HasSystemModifier(modifiers) &&
         (!key_event || key_event->action == core::UserAction::Input)) {
       if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
         custom_input = composition_symbol->raw;
@@ -1938,7 +2084,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       key_event = core::UserActionEvent{core::UserAction::Input, 0, modifiers, 0};
 
     using core::UserAction;
-    if (IsActionKey(key_event, UserAction::SelectByDigit)) {
+    if (IsActionKey(key_event, UserAction::StartUnicodeInput)) {
+      *eaten = UnicodeInputRouted(key_event, has_preedit, cand_visible) ? TRUE : FALSE;
+    } else if (unicode_active && (IsActionKey(key_event, UserAction::Input) ||
+                                  IsActionKey(key_event, UserAction::Backspace))) {
+      // The hex buffer owns digits and Backspace, which the empty preedit_kana_
+      // would otherwise leave to the app.
+      *eaten = TRUE;
+    } else if (IsActionKey(key_event, UserAction::SelectByDigit)) {
       *eaten = TRUE;
     } else if (IsActionKey(key_event, UserAction::ToggleHiraKata)) {
       const bool can_cycle = CharacterFormEditSession::CanCycleSelection(
@@ -2086,10 +2239,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
       }
     }
+    // Normally OnTestKeyDown already ended Unicode input for this key; this
+    // covers hosts that call OnKeyDown without the probe.
+    if (const HRESULT finish_hr = FinishUnicodeInputBeforeKey(context, wParam, modifiers);
+        FAILED(finish_hr))
+      return finish_hr;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing()) &&
+                   candidate_ui_.IsShowing(), UnicodeInputActive()) &&
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
 
@@ -2144,7 +2302,23 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     const auto mode_key =
         MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                  candidate_ui_.IsShowing());
+                  candidate_ui_.IsShowing(), UnicodeInputActive());
+    // M18 actions act outside the composition, so they run here whichever
+    // path (core or legacy) the key would otherwise take.
+    if (IsActionKey(mode_key, core::UserAction::ToggleDebugWindow)) {
+      if (!ClaimsDebugWindowKey(context)) return S_OK;
+      // A registered preserved key already delivered this press to
+      // OnPreservedKey; toggling again here would undo it.
+      if (!debug_preserved_key_registered_) ToggleDebugWindow();
+      *eaten = TRUE;
+      return S_OK;
+    }
+    if (IsActionKey(mode_key, core::UserAction::Forget)) {
+      if (!ClaimsForgetKey(context)) return S_OK;
+      ForgetLastCommit(context);
+      *eaten = TRUE;
+      return S_OK;
+    }
     if (IsActionKey(mode_key, core::UserAction::ToggleHankaku)) {
       recent_character_form_commit_.reset();
       const HRESULT hr = ToggleKeyboardOpen();
@@ -2186,7 +2360,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     recent_character_form_commit_.reset();
 
-    if (!HasSystemModifier(modifiers)) {
+    if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
       const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
       if (emoji_handled) core_input_active_ = false;
@@ -2282,10 +2456,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (FAILED(corrected_hr)) return corrected_hr;
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
-    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
+    const bool unicode_active = UnicodeInputActive();
+    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
+    const bool unicode_routed = UnicodeInputRouted(key_event, has_preedit, cand_visible);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
     using core::UserAction;
+    if (IsActionKey(key_event, UserAction::StartUnicodeInput) && !unicode_routed) return S_OK;
     core::RomajiKanaConverter input_romaji = romaji_;
     auto input_table = batch_romaji_table_;
     if (!has_preedit && batch_raw_romaji_.empty()) {
@@ -2294,7 +2471,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       input_romaji.SetCustomTable(input_table);
     }
     std::optional<char> custom_input;
-    if (!HasSystemModifier(modifiers) && (!key_event || key_event->action == UserAction::Input)) {
+    if (!unicode_active && !HasSystemModifier(modifiers) &&
+        (!key_event || key_event->action == UserAction::Input)) {
       if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
         custom_input = composition_symbol->raw;
       else
@@ -2322,13 +2500,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
     // and the rewriter Space path keep TIP pre-processing, while standalone
     // punctuation always uses the fixed local candidates in core mode.
+    // Unicode input (spec §6.4) lives only in core: its keys never take the
+    // legacy pre-processing, even with the number rewriter or batch mode on.
     const bool legacy_path =
-        BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
-        (!standalone_punctuation &&
-         ((number_rewriter_.load(std::memory_order_relaxed) && !custom_input) ||
-          (IsActionKey(key_event, UserAction::StartConversion) &&
-           (symbol_rewriter_.load(std::memory_order_relaxed) ||
-            emoji_rewriter_.load(std::memory_order_relaxed)))));
+        !unicode_routed &&
+        (BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
+         (!standalone_punctuation &&
+          ((number_rewriter_.load(std::memory_order_relaxed) && !custom_input) ||
+           (IsActionKey(key_event, UserAction::StartConversion) &&
+            (symbol_rewriter_.load(std::memory_order_relaxed) ||
+             emoji_rewriter_.load(std::memory_order_relaxed))))));
     if (!legacy_path && !core_input_active_ && !has_preedit && !cand_visible) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -2338,7 +2519,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       input_state_ = input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot());
       core::UserActionEvent event = *key_event;
       bool supported = true;
-      if (event.action == UserAction::Input) {
+      if (event.action == UserAction::Input && unicode_active) {
+        // FinishUnicodeInputBeforeKey already ended the buffer for non-hex
+        // keys, so only hex digits arrive here.
+        if (!IsUnicodeHexKey(wParam, modifiers)) {
+          *eaten = TRUE;
+          return S_OK;
+        }
+        event.codepoint = *UnicodeInputCodepoint(wParam, modifiers);
+      } else if (event.action == UserAction::Input) {
         if (custom_input) {
           event.codepoint = static_cast<unsigned char>(*custom_input);
         } else if (wParam >= 'A' && wParam <= 'Z') {
@@ -2890,13 +3079,20 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* context, WPARAM wParam, LPARAM lPa
   return S_OK;
 }
 
-STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOOL* eaten) {
+STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOOL* eaten) try {
   AZOOKEY_ASSERT_UI_THREAD();
-  UNREFERENCED_PARAMETER(context);
-  UNREFERENCED_PARAMETER(rguid);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  // With the IME closed, in alphanumeric mode or in an app-disabled context,
+  // F10 belongs to the application (menu activation).
+  if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) && ClaimsDebugWindowKey(context)) {
+    ToggleDebugWindow();
+    *eaten = TRUE;
+  }
   return S_OK;
+} catch (...) {
+  LogComBoundaryException("TextService::OnPreservedKey", E_FAIL);
+  return E_FAIL;
 }
 
 STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) {
@@ -2928,6 +3124,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     ResetTypoTracking();
+    last_learned_commit_pairs_.clear();
     UnadviseTextEditSink();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -2953,6 +3150,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
   if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
 #endif
   ClearReconversionState();
+  last_learned_commit_pairs_.clear();
   AdviseTextEditSink(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
@@ -2987,6 +3185,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
     reconversion_cache_candidates_.clear();
   }
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
+    last_learned_commit_pairs_.clear();
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
@@ -3343,7 +3542,19 @@ void TextService::PostPendingCommitObservation() {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
+  // Spec §7.2: a commit that was not observed is not the "last commit", so
+  // Ctrl+Shift+Backspace must not reach an older pair past it.
+  last_learned_commit_pairs_.clear();
   if (!pending.learning_allowed) return;
+  // PostIpcSend drops observations while the context is secure.
+  const bool sendable = !pending.secure && !secure_input_.load(std::memory_order_relaxed);
+  // The TIP addresses the kana channel by pair only; English-tagged commits
+  // go to the English store, which the pair form cannot name.
+  auto record = [this, sendable](const PendingCommitObservation& observation) {
+    if (!sendable || observation.chosen.tag == static_cast<uint8_t>(core::CandidateTag::English))
+      return;
+    last_learned_commit_pairs_.emplace_back(observation.reading, observation.chosen.surface);
+  };
   try {
 #ifdef AZOOKEY_TSF_TESTING
     if (testing::ConsumePendingCommitObservationFailureForTest()) {
@@ -3353,6 +3564,7 @@ void TextService::PostPendingCommitObservation() {
     if (pending.segments.empty()) {
       PostCommitObservation(pending.reading, pending.chosen, pending.shown, pending.secure,
                             pending.learning_allowed);
+      record(pending);
     } else if (ipc_host_commit_segments_.load(std::memory_order_relaxed)) {
       ipc::CommitSegmentsObservationRequest request;
       request.observation_id = NextCommitObservationId();
@@ -3361,12 +3573,16 @@ void TextService::PostPendingCommitObservation() {
       for (const auto& segment : pending.segments)
         request.segments.push_back({segment.reading, segment.chosen, segment.shown, false});
       auto payload = ipc::BuildCommitSegmentsObservationRequest(request);
-      if (payload.size() < ipc::kMaxFrameSize - 1024)
+      if (payload.size() < ipc::kMaxFrameSize - 1024) {
         PostIpcSend(ipc::MessageType::CommitSegmentsObservation, std::move(payload), true);
+        for (const auto& segment : pending.segments) record(segment);
+      }
     } else {
-      for (const auto& segment : pending.segments)
+      for (const auto& segment : pending.segments) {
         PostCommitObservation(segment.reading, segment.chosen, segment.shown, pending.secure,
                               pending.learning_allowed);
+        record(segment);
+      }
     }
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
@@ -4563,6 +4779,7 @@ void TextService::ServeConnection() {
     bool live = true;
     bool secure = true;
     bool learning_allowed = false;
+    bool detailed_logging_allowed = false;
     std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
     std::optional<ReconversionRequest> reconversion;
@@ -4611,6 +4828,7 @@ void TextService::ServeConnection() {
         live = ipc_pending_live_;
         secure = ipc_pending_secure_;
         learning_allowed = ipc_pending_learning_allowed_;
+        detailed_logging_allowed = ipc_pending_detailed_logging_allowed_;
         emoji_trigger = ipc_pending_emoji_trigger_;
         ipc_has_request_ = false;
         has_qc = true;
@@ -4797,6 +5015,7 @@ void TextService::ServeConnection() {
       ipc_inflight_trace_id_ = trace_id;
     }
 
+    const auto query_sent_at = std::chrono::steady_clock::now();
     if (!ipc_client_.Send(qenv)) {
       {
         std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -5009,6 +5228,14 @@ void TextService::ServeConnection() {
       // stream framing aligned for subsequent receives.
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_cancelled_reply_discarded",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
+      if (qres)
+        RecordDebugIpc({req_id,
+                        is_live_conversion ? "QueryLiveConversion" : "QueryCandidates",
+                        reading,
+                        {},
+                        ElapsedMs(query_sent_at),
+                        true},
+                       secure, detailed_logging_allowed);
       ++next_id;
       continue;
     }
@@ -5027,6 +5254,13 @@ void TextService::ServeConnection() {
               notify_ui = true;
             }
           }
+          RecordDebugIpc({req_id,
+                          "QueryLiveConversion",
+                          reading,
+                          {payload->surface},
+                          ElapsedMs(query_sent_at),
+                          !notify_ui},
+                         secure, detailed_logging_allowed);
           if (notify_ui) candidate_ui_.PostCandidatesReady();
         }
       }
@@ -5045,6 +5279,16 @@ void TextService::ServeConnection() {
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
     }
+    DebugIpcLogEntry debug_entry{req_id,
+                                 "QueryCandidates",
+                                 reading,
+                                 TopCandidateSurfaces(response_candidates),
+                                 ElapsedMs(query_sent_at),
+                                 false};
+    auto record_debug = [&](bool stale_dropped) {
+      debug_entry.stale_dropped = stale_dropped;
+      RecordDebugIpc(std::move(debug_entry), secure, detailed_logging_allowed);
+    };
 
     auto tip_candidates = BuildTipCandidates(
         corrected_reading.empty() ? reading : corrected_reading, std::move(response_candidates),
@@ -5087,37 +5331,41 @@ void TextService::ServeConnection() {
         std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
         if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) ||
             ipc_pending_trace_id_ != trace_id) {
-          ++next_id;
-          continue;
-        }
-        candidates_ = std::move(tip_candidates);
-        corrected_reading_result_.reset();
-        if (!corrected_reading.empty())
-          corrected_reading_result_ = CorrectedReadingResult{req_id, reading, corrected_reading};
-        candidates_trace_id_ = trace_id;
-        candidates_trace_start_ = trace_start;
-        candidates_trace_pending_ = true;
-        if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
-          live_conversion_result_ = LiveConversionResult{
-              req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
-        }
-        cached_batch_segments_.clear();
-        cached_batch_notice_.clear();
-        if (candidate_window_show_pending_) {
-          if (candidates_.empty()) {
-            candidate_window_show_pending_ = false;
-          } else {
-            notify_ui = true;
+          is_fresh = false;
+        } else {
+          candidates_ = std::move(tip_candidates);
+          corrected_reading_result_.reset();
+          if (!corrected_reading.empty())
+            corrected_reading_result_ = CorrectedReadingResult{req_id, reading, corrected_reading};
+          candidates_trace_id_ = trace_id;
+          candidates_trace_start_ = trace_start;
+          candidates_trace_pending_ = true;
+          if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
+            live_conversion_result_ = LiveConversionResult{
+                req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
+          }
+          cached_batch_segments_.clear();
+          cached_batch_notice_.clear();
+          if (candidate_window_show_pending_) {
+            if (candidates_.empty()) {
+              candidate_window_show_pending_ = false;
+            } else {
+              notify_ui = true;
+            }
           }
         }
       }
       // Deliver every fresh ordinary response on the UI thread, including a
       // live result that arrived before Space was pressed.
-      if (notify_ui || (!is_batch && emoji_trigger.empty())) candidate_ui_.PostCandidatesReady();
+      if (is_fresh && (notify_ui || (!is_batch && emoji_trigger.empty())))
+        candidate_ui_.PostCandidatesReady();
     } else {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
                  {{"request_id", req_id}});
     }
+    // Recorded after every lock is released: the debug window never holds up
+    // the UI thread waiting on ipc_mtx_.
+    record_debug(!is_fresh);
 
     ++next_id;
   }
@@ -5556,6 +5804,7 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     retry_dropped_request();
     return;
   }
+  const auto sent_at = std::chrono::steady_clock::now();
   if (!ipc_client_.Send(envelope)) {
     clear_inflight();
     retry_dropped_request();
@@ -5575,6 +5824,9 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     retry_dropped_request();
     return;
   }
+  DebugIpcLogEntry debug_entry{envelope.request_id, "QueryPredictions",
+                               request->kana,       TopCandidateSurfaces(parsed->predictions),
+                               ElapsedMs(sent_at),  false};
   bool notify = false;
   {
     std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
@@ -5586,6 +5838,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
       notify = true;
     }
   }
+  debug_entry.stale_dropped = !notify;
+  RecordDebugIpc(std::move(debug_entry), request->secure, request->detailed_logging_allowed);
   if (notify)
     candidate_ui_.PostCandidatesReady();
   else
@@ -5614,6 +5868,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
+  ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
   ipc_pending_reading_ = reading;
   ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = live;
@@ -5648,6 +5903,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_live_ = true;
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
+  ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -5729,6 +5985,18 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     corrected_reading_result_.reset();
   }
   prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
+  detailed_logging_allowed_.store(decision.detailed_logging_allowed, std::memory_order_relaxed);
+  // The debug window paints body text only under the current decision; stored
+  // entries were already gated when recorded (legacy-parity-spec §8.3).
+  const std::pair paint_policy{decision.secure, decision.detailed_logging_allowed};
+  if (debug_paint_policy_ != paint_policy) {
+    debug_paint_policy_ = paint_policy;
+    core::PrivacyPolicy policy;
+    policy.secure = decision.secure;
+    policy.detailed_logging_allowed = decision.detailed_logging_allowed;
+    policy.learning_allowed = decision.learning_allowed;
+    debug_window_.SetPrivacyPolicy(policy);
+  }
   // Spec §6: the indicator reflects the same decision every route just used.
   candidate_ui_.SetSecureState(decision.secure, ai_settings.show_secure_indicator);
   return decision;
@@ -5774,6 +6042,172 @@ std::vector<core::Candidate> TextService::CoreCandidatesFromCache() {
     result.push_back(std::move(candidate));
   }
   return result;
+}
+
+// Applies the marked-text actions that follow a completed commit in one core
+// result. The document commit has already happened, so failures here never
+// roll the key back; the next key or preedit update repairs the display.
+void TextService::ApplyPostCommitActions(ITfContext* context,
+                                         const std::vector<core::ClientAction>& actions) try {
+  bool preedit_update_needed = false;
+  bool commit_pending = false;
+  for (const auto& action : actions) {
+    if (std::holds_alternative<core::QueryCandidates>(action)) continue;
+    if (FAILED(ApplyClientAction(context, action, preedit_update_needed, commit_pending))) break;
+  }
+  preedit_kana_ = input_state_.confirmed_kana();
+  romaji_ = input_state_.pending_romaji();
+  selected_candidate_idx_ = static_cast<int>(input_state_.selected_index());
+  if (preedit_update_needed) (void)RequestPreeditUpdate(context);
+  for (const auto& action : actions) {
+    if (!std::holds_alternative<core::QueryCandidates>(action)) continue;
+    if (FAILED(ApplyClientAction(context, action, preedit_update_needed, commit_pending))) break;
+  }
+} catch (...) {
+  // Rolling back here would undo state for text already in the document.
+  LogComBoundaryException("TextService::ApplyPostCommitActions", E_FAIL);
+}
+
+// Spec §6.1: a key other than a hex digit, Backspace, Enter or Esc ends Unicode
+// input (commit the value; cancel when empty; beep and cancel when it names no
+// scalar value) and is then handled as if typed from Idle. Doing it before the
+// key is classified keeps OnTestKeyDown and OnKeyDown on the same decision and
+// lets legacy pre-processing (batch, number rewriter) see the key normally.
+HRESULT TextService::FinishUnicodeInputBeforeKey(ITfContext* context, WPARAM key,
+                                                 uint32_t modifiers) {
+  if (!UnicodeInputActive() || committing_ || IsModifierOnlyKey(key)) return S_OK;
+  if (const auto event = MapTipKey(key, modifiers, false, false, true)) {
+    switch (event->action) {
+      case core::UserAction::Input:
+        if (IsUnicodeHexKey(key, modifiers)) return S_OK;
+        break;
+      case core::UserAction::Backspace:
+      case core::UserAction::Commit:
+      case core::UserAction::Cancel:
+        return S_OK;
+      default:
+        // Mode and M18 keys act beside the buffer without ending it.
+        return S_OK;
+    }
+  }
+  const std::string& hex = input_state_.unicode_hex();
+  const bool valid = IsUnicodeScalarHex(hex);
+  if (!hex.empty() && !valid) PlayBeep();
+  const core::UserActionEvent finish{valid ? core::UserAction::Commit : core::UserAction::Cancel, 0,
+                                     0, 0};
+  return ApplyInputStateResult(context, input_state_.HandleEvent(finish));
+}
+
+bool TextService::ClaimsDebugWindowKey(ITfContext* context) const {
+  // The key paths reach this only after the same open / alphanumeric /
+  // disabled-context gate; the preserved-key path checks it here.
+  return DebugWindowKeyEnabled() && keyboard_open_ && !alnum_mode_ &&
+         !azookey::tsf::IsContextKeyboardDisabled(context);
+}
+
+bool TextService::UnicodeInputActive() const {
+  return core_input_active_ && input_state_.kind() == core::InputStateKind::UnicodeInput;
+}
+
+bool TextService::UnicodeInputRouted(const std::optional<core::UserActionEvent>& key_event,
+                                     bool has_preedit, bool cand_visible) const {
+  if (UnicodeInputActive()) return true;
+  if (!IsActionKey(key_event, core::UserAction::StartUnicodeInput)) return false;
+  // TIP-owned compositions (emoji query, bracket pair, batch accumulation,
+  // reconversion list) cannot hand their text to core.
+  if (emoji_mode_ != EmojiMode::Inactive || bracket_composition_ || !batch_raw_romaji_.empty() ||
+      reconversion_list_)
+    return false;
+  if (!has_preedit && !cand_visible) return true;
+  // From a reading, core commits it first; only a core-owned reading qualifies,
+  // under the same gate as OnKeyDown's core block.
+  const auto kind = input_state_.kind();
+  return core_input_active_ && ((!cand_visible && (kind == core::InputStateKind::Composing ||
+                                                   kind == core::InputStateKind::Previewing)) ||
+                                kind == core::InputStateKind::Selecting);
+}
+
+void TextService::PlayBeep() {
+#ifdef AZOOKEY_TSF_TESTING
+  ++beep_count_;
+#endif
+  MessageBeep(MB_OK);
+}
+
+void TextService::ToggleDebugWindow() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  debug_window_.Toggle();
+}
+
+// Ctrl+Shift+Backspace (spec §7.2): forget the pairs of the last learning
+// observation this TIP sent. Fire-and-forget on the existing queue; the Host
+// replies, so the item waits for its response like CommitObservation.
+bool TextService::ClaimsForgetKey(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (last_learned_commit_pairs_.empty()) return false;
+  if (context && !ResolvePrivacy(context, false).secure) return true;
+  last_learned_commit_pairs_.clear();
+  return false;
+}
+
+void TextService::ForgetLastCommit(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  auto pairs = std::move(last_learned_commit_pairs_);
+  last_learned_commit_pairs_.clear();
+  try {
+    // M46: no learning traffic leaves a secure context, including the forget
+    // that would name a pair. The record is dropped either way.
+    if (!context || ResolvePrivacy(context, false).secure) return;
+    for (auto& [reading, surface] : pairs) {
+      ipc::ForgetLearningEntryRequest request;
+      request.store = "learning";
+      request.reading = std::move(reading);
+      request.surface = std::move(surface);
+      PostIpcSend(ipc::MessageType::ForgetLearningEntry,
+                  ipc::BuildForgetLearningEntryRequest(request), true);
+    }
+  } catch (...) {
+    // Best effort like the observation it undoes; the key has been handled.
+  }
+}
+
+void TextService::RecordDebugIpc(DebugIpcLogEntry entry, bool secure,
+                                 bool detailed_logging_allowed) noexcept {
+  core::PrivacyPolicy privacy;
+  privacy.secure = secure;
+  privacy.detailed_logging_allowed = detailed_logging_allowed;
+  debug_window_.RecordIpc(std::move(entry), privacy);
+}
+
+void TextService::RegisterDebugPreservedKey() {
+  debug_preserved_key_registered_ = false;
+  // A release build leaves F10 to the application entirely.
+  if (!DebugWindowKeyEnabled() || !thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (FAILED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) ||
+      !key_mgr)
+    return;
+  static constexpr wchar_t kDescription[] = L"azooKey debug window";
+  const TF_PRESERVEDKEY key{VK_F10, 0};
+  debug_preserved_key_registered_ =
+      SUCCEEDED(key_mgr->PreserveKey(client_id_, kDebugWindowPreservedKeyGuid, &key, kDescription,
+                                     static_cast<ULONG>(std::size(kDescription) - 1)));
+  key_mgr->Release();
+}
+
+void TextService::UnregisterDebugPreservedKey() {
+  if (!debug_preserved_key_registered_ || !thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (SUCCEEDED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) &&
+      key_mgr) {
+    const TF_PRESERVEDKEY key{VK_F10, 0};
+    if (FAILED(key_mgr->UnpreserveKey(kDebugWindowPreservedKeyGuid, &key)))
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preserved_key_unpreserve_failed");
+    key_mgr->Release();
+  }
+  debug_preserved_key_registered_ = false;
 }
 
 HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,
@@ -5839,6 +6273,12 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
       else
         PostQueryCandidates(context, query->reading);
     }
+  } else if (std::holds_alternative<core::PlayBeep>(action)) {
+    PlayBeep();
+  } else if (std::holds_alternative<core::ToggleDebugWindow>(action)) {
+    ToggleDebugWindow();
+  } else if (std::holds_alternative<core::ForgetLastCommit>(action)) {
+    ForgetLastCommit(context);
   } else if (std::holds_alternative<core::CommitMarkedText>(action)) {
     pending_commit_observation_.reset();
     commit_pending = true;
@@ -5903,6 +6343,22 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     }
   };
   try {
+    // A result can commit and then open new marked text (Ctrl+Shift+U from a
+    // reading, or a non-hex key ending Unicode input). The commit and its
+    // ObserveCommit are applied first; the later actions describe the marked
+    // text after the commit and must not overwrite what gets committed.
+    std::vector<core::ClientAction> post_commit_actions;
+    {
+      auto split = std::find_if(result.actions.begin(), result.actions.end(), [](const auto& a) {
+        return std::holds_alternative<core::CommitMarkedText>(a);
+      });
+      if (split != result.actions.end()) ++split;
+      while (split != result.actions.end() && std::holds_alternative<core::ObserveCommit>(*split))
+        ++split;
+      post_commit_actions.assign(std::make_move_iterator(split),
+                                 std::make_move_iterator(result.actions.end()));
+      result.actions.erase(split, result.actions.end());
+    }
     input_state_ = std::move(result.next);
     core_action_in_progress_ = true;
     bool preedit_update_needed = false;
@@ -5965,6 +6421,9 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       const std::string recent_reading = previous_state.confirmed_kana() + final_romaji.Flush();
       const std::string committed_surface = commit_surface_;
       PrepareTypoCommit(recent_reading);
+      // Ending the composition may run the lifecycle cleanup, which resets
+      // input_state_; the post-commit marked text belongs to this state.
+      const core::InputState state_after_commit = input_state_;
       hr = RequestCommitEditSession(context);
       if (SUCCEEDED(hr)) {
         recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
@@ -5977,9 +6436,19 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         preedit_kana_.clear();
         romaji_.Reset();
         ClearBatchState();
-      } else if (!committing_) {
-        commit_surface_.clear();
-        pending_commit_observation_.reset();
+        if (!post_commit_actions.empty()) {
+          input_state_ = state_after_commit;
+          core_input_active_ = true;
+          ApplyPostCommitActions(context, post_commit_actions);
+        }
+      } else {
+        if (!committing_) {
+          commit_surface_.clear();
+          pending_commit_observation_.reset();
+        }
+        // The post-commit marked text (e.g. "U+") was never shown, so the
+        // state it belongs to must not survive the failed commit.
+        if (!post_commit_actions.empty()) input_state_ = input_state_.Reset();
       }
       if (hr != E_OUTOFMEMORY) hr = S_OK;
     }
@@ -5987,6 +6456,9 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       rollback();
       return hr;
     }
+    if (previous_state.kind() != input_state_.kind())
+      debug_window_.RecordTransition(
+          {InputStateKindName(previous_state.kind()), InputStateKindName(input_state_.kind())});
     if (!commit_pending) {
       preedit_kana_ = input_state_.confirmed_kana();
       romaji_ = input_state_.pending_romaji();
@@ -6315,8 +6787,13 @@ void TextService::RefreshPrediction(ITfContext* context) {
   prediction_retry_scheduled_generation_ = 0;
   {
     std::lock_guard lock(ipc_mtx_);
-    ipc_prediction_request_ = PredictionRequest{++prediction_generation_, kana,
-                                                prediction_left_context_, CurrentActionTraceId()};
+    ipc_prediction_request_ =
+        PredictionRequest{++prediction_generation_,
+                          kana,
+                          prediction_left_context_,
+                          CurrentActionTraceId(),
+                          detailed_logging_allowed_.load(std::memory_order_relaxed),
+                          secure_input_.load(std::memory_order_relaxed)};
   }
   LogPredictionOnce(PredictionLogReason::Queued);
   ipc_cv_.notify_one();
@@ -6591,6 +7068,9 @@ HRESULT TextService::CompleteReconversionSelection(size_t index) {
   list->AddRef();
   const HRESULT hr = list->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
   list->Release();
+  // A reconversion result is committed without a learning observation, so
+  // Ctrl+Shift+Backspace must not reach an older pair past it (spec §7.2).
+  if (SUCCEEDED(hr)) last_learned_commit_pairs_.clear();
   if (SUCCEEDED(hr) && reconversion_list_) ClearReconversionState();
   return hr;
 }
@@ -6941,7 +7421,8 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
   if ((secure_input_.load(std::memory_order_relaxed) &&
        (type == ipc::MessageType::CommitObservation ||
         type == ipc::MessageType::CommitSegmentsObservation ||
-        type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions)) ||
+        type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions ||
+        type == ipc::MessageType::ForgetLearningEntry)) ||
       (type == ipc::MessageType::QueryPredictions &&
        !prediction_allowed_.load(std::memory_order_relaxed)) ||
       (type == ipc::MessageType::ObserveTypo &&
@@ -7176,6 +7657,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         }
       }
       service_->CompleteTypoCommit(std::move(pending_typo_commit), committed_surface_in_document);
+      // This commit is now the most recent one (legacy-parity-spec §7.2); only
+      // a learning observation posted below makes it forgettable.
+      service_->last_learned_commit_pairs_.clear();
       if (committed_surface_in_document)
         post_pending_commit_observation();
       else

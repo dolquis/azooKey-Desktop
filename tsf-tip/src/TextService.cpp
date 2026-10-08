@@ -908,6 +908,7 @@ TextService::~TextService() {
   local_settings_.Stop();
   StopIpcWorker();
   ClearCommitContext();
+  UnadviseCompositionMouseSink();
 }
 
 STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
@@ -1246,6 +1247,8 @@ STDMETHODIMP TextService::Deactivate() try {
 
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
+  // Idempotent: also breaks the tracker <-> sink cycle if cleanup kept a composition.
+  UnadviseCompositionMouseSink();
   candidate_ui_.Destroy();
 
   if (active_context_) {
@@ -3115,18 +3118,31 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtn
     batch_segment_selections_ = previous_selections;
     shown_candidates_ = previous_candidates;
     selected_candidate_idx_ = previous_selected;
-    candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
-                          BuildCandidateViews(shown_candidates_), selected_candidate_idx_,
-                          shown_batch_notice_);
+    const HRESULT restore_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                                                     BuildCandidateViews(shown_candidates_),
+                                                     selected_candidate_idx_, shown_batch_notice_);
+    if (FAILED(restore_hr)) {
+      // The window stays hidden; clear the batch state so the preedit matches it.
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "mouse_focus_restore_failed",
+                 {{"hresult", static_cast<int64_t>(restore_hr)}});
+      candidate_ui_.EndUI();
+      ClearBatchState();
+      ITfContext* context = mouse_tracker_context_ ? mouse_tracker_context_ : active_context_;
+      if (context) RequestPreeditUpdate(context);
+    }
     return hr;
   }
   ITfContext* context = mouse_tracker_context_ ? mouse_tracker_context_ : active_context_;
   if (!context) return S_OK;
-  // A synchronous edit session would otherwise unadvise the sink being called.
-  mouse_event_in_progress_ = true;
-  const HRESULT update_hr = RequestPreeditUpdate(context);
-  mouse_event_in_progress_ = false;
-  return update_hr;
+  // A synchronous edit session must not unadvise the sink TSF is calling now.
+  struct MouseEventScope {
+    bool& flag;
+    explicit MouseEventScope(bool& in_progress) : flag(in_progress) { flag = true; }
+    ~MouseEventScope() { flag = false; }
+    MouseEventScope(const MouseEventScope&) = delete;
+    MouseEventScope& operator=(const MouseEventScope&) = delete;
+  } scope(mouse_event_in_progress_);
+  return RequestPreeditUpdate(context);
 } catch (const std::bad_alloc&) {
   LogComBoundaryException("TextService::OnMouseEvent", E_OUTOFMEMORY);
   return E_OUTOFMEMORY;
@@ -7293,6 +7309,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       }
       pProp->Release();
     }
+    // Re-advise on every update: SetText replaces the whole composition, and a
+    // tracked range is not guaranteed to grow with text inserted at its end
+    // (it depends on the range's gravity), so a sink advised once at
+    // StartComposition could miss clicks on later characters.
     if (!service_->mouse_event_in_progress_) service_->AdviseCompositionMouseSink(context_, pRange);
 
     // Keep the document caret at the end of the preedit without collapsing the

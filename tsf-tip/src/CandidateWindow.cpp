@@ -646,7 +646,7 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
       HDC hdc = BeginPaint(hwnd, &paint);
       RECT rect{};
       GetClientRect(hwnd, &rect);
-      const ThemeColors& theme = self ? self->theme_ : kLightTheme;
+      const ThemeColors theme = self ? self->theme_ : kLightTheme;
       SolidBrush(theme.info_background).Fill(hdc, rect);
       HGDIOBJ old_font = self && self->font_ ? SelectObject(hdc, self->font_) : nullptr;
       SetBkMode(hdc, TRANSPARENT);

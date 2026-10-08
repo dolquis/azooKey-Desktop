@@ -28,6 +28,23 @@ TEST(UserDataPathsTest, DefaultPathsUseLocalAppDataLayout) {
   EXPECT_EQ(paths->settings_path, local / "azooKey" / "config" / "settings.json");
   EXPECT_EQ(paths->learning_path, local / "azooKey" / "data" / "learning.tsv");
   EXPECT_EQ(paths->user_dict_path, local / "azooKey" / "data" / "user_dict.json");
+  EXPECT_EQ(paths->english_learning_path, local / "azooKey" / "data" / "english_learning.tsv");
+}
+
+TEST(UserDataPathsTest, ExpandsALeadingLocalAppDataPrefixOnly) {
+  using azookey::host::ExpandLocalAppDataPrefix;
+  EXPECT_EQ(ExpandLocalAppDataPrefix("C:/dict/words.tsv"),
+            std::filesystem::path("C:/dict/words.tsv"));
+  EXPECT_EQ(ExpandLocalAppDataPrefix("x/%LOCALAPPDATA%"),
+            std::filesystem::path("x/%LOCALAPPDATA%"));
+  const auto base = azookey::host::GetPlatformLocalAppData();
+  const auto expanded = ExpandLocalAppDataPrefix("%localappdata%/azooKey/dict/a.tsv");
+  if (!base) {
+    EXPECT_FALSE(expanded.has_value());
+    return;
+  }
+  EXPECT_EQ(expanded, *base / "azooKey/dict/a.tsv");
+  EXPECT_EQ(ExpandLocalAppDataPrefix("%LOCALAPPDATA%"), *base);
 }
 
 TEST(UserDataPathsTest, ExplicitPathsOverrideDefaults) {

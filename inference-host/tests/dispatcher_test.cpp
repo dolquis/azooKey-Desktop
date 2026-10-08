@@ -445,7 +445,7 @@ TEST_F(DispatcherTest, Handshake) {
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
   for (const char* capability :
-       {"app_profile", "candidate_tag", "list_models", "benchmark_model"}) {
+       {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -926,6 +926,125 @@ TEST_F(AppProfileDispatchTest, InvalidProfileValuesFallBackWithoutFailingTheQuer
       R"("style":"shouting"},"bad.exe":7}})");
   ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
   ExpectGlobalOrder(Query(ipc::AppIdentity{"bad.exe", ""}));
+}
+
+TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
+  const auto query = [&](uint64_t id, bool english) {
+    ipc::QueryCandidatesRequest q;
+    q.reading = "にほん";
+    q.raw_romaji = "nihon";
+    q.english_candidates = english;
+    const auto resp = dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  const auto has_english = [&](const std::vector<ipc::CandidateField>& candidates) {
+    return std::any_of(candidates.begin(), candidates.end(),
+                       [&](const auto& c) { return c.tag == kEnglish; });
+  };
+  // Older TIPs (no english_candidates) see exactly what they saw before.
+  EXPECT_FALSE(has_english(query(901, false)));
+
+  const auto with = query(902, true);
+  ASSERT_FALSE(with.empty());
+  EXPECT_EQ(with.front().surface, "日本");  // English never takes the first slot.
+  std::vector<std::string> english;
+  for (const auto& c : with) {
+    if (c.tag != kEnglish) continue;
+    english.push_back(c.surface);
+    EXPECT_EQ(c.reading, "nihon");
+    EXPECT_EQ(c.source, "heuristic");
+  }
+  EXPECT_EQ(english, (std::vector<std::string>{"nihon", "Nihon", "NIHON"}));
+
+  // inlineEnglishDictionary on but no file: the baseline forms still come.
+  auto config = engine.config();
+  config.english.dictionary_enabled = true;
+  config.english.dictionary_path = TempPath("azookey_dispatcher_missing_english_words.tsv");
+  std::remove(config.english.dictionary_path.c_str());
+  engine.ApplyConfig(config);
+  std::vector<std::string> without_dictionary;
+  for (const auto& c : query(903, true)) {
+    if (c.tag == kEnglish) without_dictionary.push_back(c.surface);
+  }
+  EXPECT_EQ(without_dictionary, english);
+}
+
+TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {
+  azookey::learning::LearningStore english_store(learning_path + ".english",
+                                                 &azookey::learning::test::Crypto());
+  engine.SetEnglishLearningStore(&english_store);
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "Nihon";
+  commit.chosen = {"Nihon", "Nihon", 0.0, "heuristic", "", 4};
+  commit.timestamp_ms = 1700000000000ULL;
+  const auto response = dispatcher.Dispatch(MakeReq(911, ipc::MessageType::CommitObservation,
+                                                    ipc::BuildCommitObservationRequest(commit)));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->ok);
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  EXPECT_GT(english_store.Score("nihon", "Nihon", now), 0.0);
+  EXPECT_DOUBLE_EQ(store.Score("Nihon", "Nihon", now), 0.0);
+  EXPECT_DOUBLE_EQ(store.Score("nihon", "Nihon", now), 0.0);
+
+  // The English tag on a kana reading (a dictionary iPhone) stays kana learning.
+  commit.reading = "あいふぉん";
+  commit.chosen = {"iPhone", "あいふぉん", 0.0, "system", "", 4};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(912, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  EXPECT_GT(store.Score("あいふぉん", "iPhone", now), 0.0);
+  EXPECT_DOUBLE_EQ(english_store.Score("あいふぉん", "iPhone", now), 0.0);
+  engine.SetEnglishLearningStore(nullptr);
+  std::remove((learning_path + ".english").c_str());
+}
+
+TEST_F(DispatcherTest, EnglishLearningHonorsPrivacyAndRoutesSegments) {
+  azookey::learning::LearningStore english_store(learning_path + ".english2",
+                                                 &azookey::learning::test::Crypto());
+  engine.SetEnglishLearningStore(&english_store);
+  EnableEventPrivacy(dispatcher);
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  // A secure field, or learning not allowed, records nothing in either channel.
+  for (const auto& [secure, allowed] : {std::pair{true, true}, std::pair{false, false}}) {
+    ipc::CommitObservationRequest commit;
+    commit.secure = secure;
+    commit.learning_allowed = allowed;
+    commit.reading = "secret";
+    commit.chosen = {"Secret", "secret", 0.0, "heuristic", "", 4};
+    ASSERT_TRUE(dispatcher.Dispatch(MakeReq(921, ipc::MessageType::CommitObservation,
+                                            ipc::BuildCommitObservationRequest(commit))));
+  }
+  EXPECT_EQ(english_store.size(), 0u);
+
+  ipc::CommitSegmentsObservationRequest segments;
+  segments.secure = false;
+  segments.learning_allowed = true;
+  ipc::ObservedSegment kana;
+  kana.reading = "きょう";
+  kana.chosen = {"今日", "きょう", 0.0, "system"};
+  ipc::ObservedSegment english;
+  english.reading = "github";
+  english.chosen = {"GitHub", "github", 0.0, "heuristic", "", 4};
+  segments.segments = {kana, english};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(922, ipc::MessageType::CommitSegmentsObservation,
+                                          ipc::BuildCommitSegmentsObservationRequest(segments))));
+  EXPECT_GT(english_store.Score("github", "GitHub", now), 0.0);
+  EXPECT_DOUBLE_EQ(store.Score("github", "GitHub", now), 0.0);
+  EXPECT_GT(store.Score("きょう", "今日", now), 0.0);
+  engine.SetEnglishLearningStore(nullptr);
+  std::remove((learning_path + ".english2").c_str());
 }
 
 TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {

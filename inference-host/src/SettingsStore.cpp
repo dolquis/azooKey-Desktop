@@ -251,6 +251,25 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       object, "batchConversionMode", settings.batch_conversion_mode, {"neural", "ai-cleanup"});
   settings.batch_auto_punctuation =
       ReadBool(object, "batchAutoPunctuation", settings.batch_auto_punctuation);
+  settings.inline_english_candidates =
+      ReadBool(object, "inlineEnglishCandidates", settings.inline_english_candidates);
+  settings.english.case_variants =
+      ReadBool(object, "inlineEnglishCaseVariants", settings.english.case_variants);
+  settings.english.full_width =
+      ReadBool(object, "fullWidthEnglishCandidate", settings.english.full_width);
+  settings.english.min_length = static_cast<uint32_t>(ReadRangedInt32(
+      object, "inlineEnglishMinLength", static_cast<int32_t>(settings.english.min_length), 1,
+      (std::numeric_limits<int32_t>::max)()));
+  if (const auto value = object.find("inlineEnglishPromoteThreshold");
+      value != object.end() && value->second.IsNumber() &&
+      std::isfinite(value->second.AsNumber()) && value->second.AsNumber() >= 0.0 &&
+      value->second.AsNumber() <= 1.0) {
+    settings.english.promote_threshold = value->second.AsNumber();
+  }
+  settings.english.dictionary_enabled =
+      ReadBool(object, "inlineEnglishDictionary", settings.english.dictionary_enabled);
+  settings.english.dictionary_path =
+      ReadString(object, "inlineEnglishDictionaryPath", settings.english.dictionary_path);
   settings.number_rewriter = ReadBool(object, "numberRewriter", settings.number_rewriter);
   settings.katakana_rewriter = ReadBool(object, "katakanaRewriter", settings.katakana_rewriter);
   settings.symbol_rewriter = ReadBool(object, "symbolRewriter", settings.symbol_rewriter);
@@ -521,6 +540,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     const InferenceThreadEnvironmentProvider& provider) {
   config.dictionary = settings.dictionary;
   config.app_profiles = settings.app_profiles;
+  config.english = settings.english;
   config.enable_live_conversion = settings.live_conversion;
   config.dynamic_punctuation = settings.dynamic_punctuation;
   config.segment_boundary_confidence = settings.segment_boundary_confidence;

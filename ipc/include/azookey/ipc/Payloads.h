@@ -110,6 +110,11 @@ struct QueryCandidatesRequest {
   // Absent from older clients and when the TIP could not identify the app;
   // either way the Host applies the global settings without tag boosts.
   std::optional<AppIdentity> app;
+  // M60 (docs/inline-english-candidate-spec.md section 6.2): the romaji as
+  // typed, kept apart from reading, and the TIP's inlineEnglishCandidates.
+  // Both are omitted on the wire when empty / false.
+  std::string raw_romaji;
+  bool english_candidates{false};
 };
 
 // Offsets count UTF-16 code units in candidates[0].surface. Surface and reading

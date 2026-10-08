@@ -463,6 +463,38 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   EXPECT_TRUE(result.settings.backend_preference_conflict);
 }
 
+TEST(SettingsStoreTest, InlineEnglishKeysReachTheEngineConfigAndRejectBadValues) {
+  ScopedTempDirectory temp("azookey_settings_inline_english");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({
+    "inlineEnglishCandidates": true,
+    "inlineEnglishCaseVariants": false,
+    "fullWidthEnglishCandidate": true,
+    "inlineEnglishMinLength": 3,
+    "inlineEnglishPromoteThreshold": 0.25,
+    "inlineEnglishDictionary": true,
+    "inlineEnglishDictionaryPath": "C:/dict/words.tsv"
+  })");
+  azookey::host::SettingsStore store(path);
+  const auto loaded = store.Load();
+  EXPECT_TRUE(loaded.settings.inline_english_candidates);
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      azookey::host::EngineConfig{}, loaded.settings);
+  EXPECT_FALSE(config.english.case_variants);
+  EXPECT_TRUE(config.english.full_width);
+  EXPECT_EQ(config.english.min_length, 3u);
+  EXPECT_DOUBLE_EQ(config.english.promote_threshold, 0.25);
+  EXPECT_TRUE(config.english.dictionary_enabled);
+  EXPECT_EQ(config.english.dictionary_path, "C:/dict/words.tsv");
+
+  WriteText(path, R"({"inlineEnglishMinLength": 0, "inlineEnglishPromoteThreshold": 1.5,
+                      "inlineEnglishCaseVariants": "yes"})");
+  const auto fallback = azookey::host::SettingsStore(path).Load().settings.english;
+  EXPECT_EQ(fallback.min_length, 2u);
+  EXPECT_DOUBLE_EQ(fallback.promote_threshold, 0.6);
+  EXPECT_TRUE(fallback.case_variants);
+}
+
 TEST(SettingsStoreTest, BackendPreferenceConflictNeedsBothKeys) {
   ScopedTempDirectory temp("azookey_settings_backend_conflict");
   const auto path = temp.path() / "settings.json";
@@ -847,6 +879,14 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   azookey::host::SettingsStore store(path);
   ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
   // These are the values settings/default-settings.sample.json ships.
+  EXPECT_FALSE(store.settings().inline_english_candidates);
+  EXPECT_TRUE(store.settings().english.case_variants);
+  EXPECT_FALSE(store.settings().english.full_width);
+  EXPECT_EQ(store.settings().english.min_length, 2u);
+  EXPECT_DOUBLE_EQ(store.settings().english.promote_threshold, 0.6);
+  EXPECT_FALSE(store.settings().english.dictionary_enabled);
+  EXPECT_EQ(store.settings().english.dictionary_path,
+            "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv");
   EXPECT_EQ(store.settings().typo_correction_mode, "suggest");
   EXPECT_EQ(store.settings().typo_min_count, 3);
   EXPECT_TRUE(store.settings().auto_word.mining_enabled);

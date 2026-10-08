@@ -59,7 +59,8 @@ $script:LearningSnapshotKnownStores = @(
   "learning.tsv",
   "user_dict.json",
   "typo_corrections.tsv",
-  "auto_words.tsv"
+  "auto_words.tsv",
+  "english_learning.tsv"
 )
 $script:LearningSnapshotLabelPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 $script:LearningSnapshotPathPattern = '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'

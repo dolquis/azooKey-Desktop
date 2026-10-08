@@ -12,6 +12,7 @@ add_library(azookey_host STATIC
   src/AiHttp.cpp
   src/CandidateTags.cpp
   src/DictionaryCandidateProvider.cpp
+  src/EnglishCandidates.cpp
   src/Dispatcher.cpp
   src/HealthStateMachine.cpp
   src/HostArgs.cpp

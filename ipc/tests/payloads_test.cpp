@@ -1299,3 +1299,30 @@ TEST(PayloadsTest, BenchmarkModelRoundTripAndStableSchema) {
   EXPECT_EQ(timeout->vram_mb, 300.0);
   EXPECT_FALSE(ParseBenchmarkModelResponse(R"({"backend":"cpu"})"));
 }
+
+TEST(PayloadsTest, QueryCandidatesCarriesRawRomajiAndTheEnglishFlag) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "あっぷる";
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(request))->Find("raw_romaji"));
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(request))->Find("english_candidates"));
+  request.raw_romaji = "Apple";
+  request.english_candidates = true;
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->raw_romaji, "Apple");
+  EXPECT_TRUE(parsed->english_candidates);
+  // Section 6.6: an older TIP omits both and gets the defaults.
+  const auto legacy = ParseQueryCandidatesRequest(R"({"reading":"あっぷる"})");
+  ASSERT_TRUE(legacy);
+  EXPECT_TRUE(legacy->raw_romaji.empty());
+  EXPECT_FALSE(legacy->english_candidates);
+
+  QueryCandidatesResponse response;
+  response.candidates = {{"アップル", "あっぷる", 0.8, "model"},
+                         {"apple", "apple", 0.8, "heuristic", "", 4}};
+  const auto parsed_response = ParseQueryCandidatesResponse(BuildQueryCandidatesResponse(response));
+  ASSERT_TRUE(parsed_response && parsed_response->candidates.size() == 2u);
+  EXPECT_EQ(parsed_response->candidates[1].tag, 4u);
+  EXPECT_EQ(parsed_response->candidates[1].reading, "apple");
+}

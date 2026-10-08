@@ -118,10 +118,13 @@ Linear が持つ。
   済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
   SafeMode 中はロードせず `ok=false` / `error: "safe_mode"` を返す
   （`docs/dev-infrastructure-spec.md` §8.5.3）。
-- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?)` /
+- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?, raw_romaji?,
+  english_candidates?)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source,
-  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7 に従う。
-  応答前に `max_candidates` で件数を切り詰める。
+  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7、
+  `raw_romaji` と `english_candidates` は `docs/inline-english-candidate-spec.md` §6.2 に従う。
+  変換候補は `max_candidates` で切り詰める。応答にはその後で、rewriter（記号・絵文字）の
+  追加分と M60 の英単語候補（辞書語 5 件・学習語 8 件・生ローマ字・6 形まで）が加わりうる。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
   逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
 - ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates)` /
@@ -304,6 +307,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.tsv.enc` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
+| `english_learning.tsv.enc` | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 

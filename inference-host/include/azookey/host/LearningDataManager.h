@@ -75,6 +75,10 @@ std::string LearningEntryId(LearningDataStore store, std::string_view channel,
 LearningDataPage ListLearningEntries(const LearningDataStores& stores, LearningDataStore store,
                                      std::string_view query, size_t offset, size_t limit);
 
+// The entry with this id, whatever the page size; nullopt when none matches.
+std::optional<LearningDataEntry> FindLearningEntry(const LearningDataStores& stores,
+                                                   LearningDataStore store, std::string_view id);
+
 // Per store (spec section 4.2): learning zeroes the pair (dropped on the next
 // save), typo and user_dict remove the entry, auto_word marks it rejected so it
 // is not proposed again. Returns false when nothing matched.

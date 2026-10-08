@@ -203,6 +203,14 @@ LearningDataPage ListLearningEntries(const LearningDataStores& stores, LearningD
   return page;
 }
 
+std::optional<LearningDataEntry> FindLearningEntry(const LearningDataStores& stores,
+                                                   LearningDataStore store, std::string_view id) {
+  for (auto& entry : CollectEntries(stores, store)) {
+    if (entry.id == id) return std::move(entry);
+  }
+  return std::nullopt;
+}
+
 bool ForgetLearningEntry(const LearningDataStores& stores, LearningDataStore store,
                          std::string_view id) {
   for (const auto& entry : CollectEntries(stores, store)) {

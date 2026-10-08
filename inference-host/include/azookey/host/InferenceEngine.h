@@ -23,8 +23,10 @@
 #include "azookey/host/CandidateTags.h"
 #include "azookey/host/EnglishCandidates.h"
 #include "azookey/host/HealthStateMachine.h"
+#include "azookey/host/LearningDataManager.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
+#include "azookey/host/UserLearningScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
@@ -93,6 +95,10 @@ struct EngineConfig {
   double segment_boundary_confidence{0.5};
   std::string punctuation_rules_path{"%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv"};
   double learning_alpha{0.8};
+  // M54: rank with UserLearningScorer instead of the M7 reranker. Internal
+  // switch, off until M52 calibrates the section 13 constants; not a
+  // settings.json key.
+  bool user_learning_scorer_enabled{false};
   size_t learning_flush_every_n{8};
   uint64_t learning_flush_interval_sec{5};
   size_t learning_max_records{10000};
@@ -243,8 +249,12 @@ class InferenceEngine {
   // that was already applied is ignored so a resend after a pipe drop does not
   // count the same commit twice; an empty id disables dedupe (legacy TIP).
   // Returns false when the observation was dropped as a duplicate.
+  // app_name is the foreground process (normalized by the store) and
+  // left_context the committed text before it; both feed the M54 app row and
+  // context hash and may be empty (global row, empty-context hash).
   bool CommitObservation(const std::string& reading, const std::string& surface,
-                         uint64_t now_epoch_sec, const std::string& observation_id = {});
+                         uint64_t now_epoch_sec, const std::string& observation_id = {},
+                         const std::string& app_name = {}, const std::string& left_context = {});
   bool CommitSegmentsObservation(const ipc::CommitSegmentsObservationRequest& request,
                                  uint64_t now_epoch_sec);
   // M35: records one observed (mistyped reading -> retyped reading) pair and
@@ -255,6 +265,25 @@ class InferenceEngine {
   void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
                         const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();
+
+  // M49 learning data management (DEV-1190, learning-data-management-spec
+  // section 4). Each call takes every store lock it needs at once and
+  // persists the stores it changed before it returns.
+  enum class ForgetOutcome { NotFound, Forgotten, SaveFailed };
+  LearningDataPage ListLearningEntries(LearningDataStore store, const std::string& query,
+                                       size_t offset, size_t limit);
+  ForgetOutcome ForgetLearningEntry(LearningDataStore store, const std::string& id);
+  // The TIP's Ctrl+Shift+Backspace: the kana pair, also removed from the M7 file.
+  ForgetOutcome ForgetLearningPair(const std::string& reading, const std::string& surface);
+  LearningExportResult ExportLearningData(const std::vector<LearningDataStore>& selected,
+                                          const std::filesystem::path& destination, bool encrypt,
+                                          const BackupManifest& meta);
+  LearningImportResult ImportLearningData(const std::vector<LearningDataStore>& selected,
+                                          const std::filesystem::path& source,
+                                          learning::ImportConflictPolicy policy);
+  // Encryption of backup archive entries; DPAPI unless a test injects a key.
+  void SetBackupCrypto(const learning::ByteCrypto* crypto);
+
   void ApplyConfig(const EngineConfig& config);
   // Uses only the data-index lock, never the model conversion lock.
   std::vector<core::Candidate> QueryRewriters(const RewriterConfig& config,
@@ -305,6 +334,11 @@ class InferenceEngine {
   std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
   void NoteModelLoadFailedLocked();
   void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
+  // The learning data view over every store; callers hold all store locks.
+  LearningDataStores LearningDataStoresLocked();
+  // Persists what a learning data operation may have changed. Holds every
+  // store lock; false when any store failed to save.
+  bool SaveLearningDataLocked();
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   // Flushes reached while queries wait on state_mutex_ pass zero: they try once
   // and keep the store dirty. Shutdown and explicit flushes retry conflicts.
@@ -323,6 +357,7 @@ class InferenceEngine {
   learning::UserDictionary* user_dict_{nullptr};
   learning::TypoCorrectionStore* typo_store_{nullptr};
   learning::AutoWordStore* auto_word_store_{nullptr};
+  const learning::ByteCrypto* backup_crypto_{nullptr};
   // Guards the English store and the English dictionary cache; never held
   // together with state_mutex_.
   mutable std::mutex english_mutex_;

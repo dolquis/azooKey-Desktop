@@ -34,6 +34,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
+#include "azookey/learning/ContextHash.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -3298,4 +3299,144 @@ TEST_F(DispatcherTest, SafeModeIsReportedRefusesModelLoadsAndClearsOnUpdateConfi
 
   std::remove(model_path.c_str());
   std::remove(settings_path.c_str());
+}
+
+TEST_F(DispatcherTest, LearningDataListForgetExportImportRoundTrip) {
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  EnableEventPrivacy(dispatcher);
+  azookey::learning::test::TestByteCrypto backup_crypto;
+  engine.SetBackupCrypto(&backup_crypto);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "にほん";
+  commit.chosen = {"日本", "にほん", 1.0, "model"};
+  commit.left_context = "ここは";
+  commit.app = ipc::AppIdentity{"Code.exe", "Chrome_WidgetWin_1"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(700, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  // The commit carries its app into the M54 app row.
+  const auto* rows = store.Rows("にほん", "日本");
+  ASSERT_NE(rows, nullptr);
+  ASSERT_EQ(rows->count("code.exe"), 1u);
+  EXPECT_EQ(rows->at("code.exe").context_hash, azookey::learning::ContextHash("ここは"));
+
+  ipc::ListLearningEntriesRequest list;
+  list.store = "learning";
+  auto response = dispatcher.Dispatch(MakeReq(701, ipc::MessageType::ListLearningEntries,
+                                              ipc::BuildListLearningEntriesRequest(list)));
+  ASSERT_TRUE(response);
+  auto listed = ipc::ParseListLearningEntriesResponse(response->payload_json);
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_EQ(listed->total, 1u);
+  EXPECT_EQ(listed->entries[0].channel, "kana");
+  EXPECT_EQ(listed->entries[0].tags, std::vector<std::string>{"code.exe"});
+
+  const auto dir = std::filesystem::temp_directory_path() / "azookey_dispatcher_learning_backup";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"learning", "user_dict"};
+  export_request.destination_path = azookey::core::PathToUtf8(dir / "backup.zip");
+  response = dispatcher.Dispatch(MakeReq(702, ipc::MessageType::ExportLearningData,
+                                         ipc::BuildExportLearningDataRequest(export_request)));
+  ASSERT_TRUE(response);
+  const auto exported = ipc::ParseExportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(exported);
+  EXPECT_EQ(exported->status, "success") << exported->error.value_or("");
+  EXPECT_GT(exported->file_size_bytes, 0u);
+
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.id = listed->entries[0].id;
+  response = dispatcher.Dispatch(MakeReq(703, ipc::MessageType::ForgetLearningEntry,
+                                         ipc::BuildForgetLearningEntryRequest(forget)));
+  ASSERT_TRUE(response);
+  auto forgot = ipc::ParseForgetLearningEntryResponse(response->payload_json);
+  ASSERT_TRUE(forgot && forgot->ok);
+  EXPECT_TRUE(forgot->removed);
+  EXPECT_DOUBLE_EQ(store.Score("にほん", "日本", now), 0.0);
+
+  ipc::ImportLearningDataRequest import_request;
+  import_request.source_path = export_request.destination_path;
+  import_request.stores = {"learning"};
+  response = dispatcher.Dispatch(MakeReq(704, ipc::MessageType::ImportLearningData,
+                                         ipc::BuildImportLearningDataRequest(import_request)));
+  ASSERT_TRUE(response);
+  const auto imported = ipc::ParseImportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(imported);
+  EXPECT_EQ(imported->status, "success") << imported->error.value_or("");
+  EXPECT_EQ(imported->imported_counts.at("learning"), 1u);
+  EXPECT_GT(store.Score("にほん", "日本", now), 0.0);
+
+  // The TIP form names the pair instead of an id.
+  forget = {};
+  forget.store = "learning";
+  forget.reading = "にほん";
+  forget.surface = "日本";
+  response = dispatcher.Dispatch(MakeReq(705, ipc::MessageType::ForgetLearningEntry,
+                                         ipc::BuildForgetLearningEntryRequest(forget)));
+  forgot = ipc::ParseForgetLearningEntryResponse(response->payload_json);
+  ASSERT_TRUE(forgot && forgot->ok);
+  EXPECT_TRUE(forgot->removed);
+  std::filesystem::remove_all(dir);
+}
+
+TEST_F(DispatcherTest, LearningDataRequestsRejectBadInput) {
+  ipc::ListLearningEntriesRequest list;
+  list.store = "everything";
+  auto response = dispatcher.Dispatch(MakeReq(710, ipc::MessageType::ListLearningEntries,
+                                              ipc::BuildListLearningEntriesRequest(list)));
+  auto listed = ipc::ParseListLearningEntriesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_FALSE(listed->ok);
+  EXPECT_EQ(listed->error, "invalid_request");
+
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"learning"};
+  export_request.destination_path = "relative.zip";
+  response = dispatcher.Dispatch(MakeReq(711, ipc::MessageType::ExportLearningData,
+                                         ipc::BuildExportLearningDataRequest(export_request)));
+  auto exported = ipc::ParseExportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(exported);
+  EXPECT_EQ(exported->status, "error");
+  EXPECT_EQ(exported->error, "invalid_path");
+
+  export_request.include_settings = true;
+  response = dispatcher.Dispatch(MakeReq(712, ipc::MessageType::ExportLearningData,
+                                         ipc::BuildExportLearningDataRequest(export_request)));
+  exported = ipc::ParseExportLearningDataResponse(response->payload_json);
+  ASSERT_TRUE(exported);
+  EXPECT_EQ(exported->error, "unsupported");
+
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.id = "0000000000000000";
+  response = dispatcher.Dispatch(MakeReq(713, ipc::MessageType::ForgetLearningEntry,
+                                         ipc::BuildForgetLearningEntryRequest(forget)));
+  auto forgot = ipc::ParseForgetLearningEntryResponse(response->payload_json);
+  ASSERT_TRUE(forgot && forgot->ok);
+  EXPECT_FALSE(forgot->removed);
+}
+
+TEST_F(DispatcherTest, LearningDataRequestsNeedAnAuthenticatedSession) {
+  auto config = DefaultDispatcherConfig();
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto list = token_dispatcher.Dispatch(
+      MakeReq(720, ipc::MessageType::ListLearningEntries, R"({"store":"learning"})"));
+  ASSERT_TRUE(list);
+  const auto listed = ipc::ParseListLearningEntriesResponse(list->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_FALSE(listed->ok);
+  EXPECT_EQ(listed->error, "not_authenticated");
+  for (const auto type :
+       {ipc::MessageType::ForgetLearningEntry, ipc::MessageType::ExportLearningData,
+        ipc::MessageType::ImportLearningData}) {
+    const auto reply = token_dispatcher.Dispatch(MakeReq(721, type, "{}"));
+    ASSERT_TRUE(reply);
+    EXPECT_NE(reply->payload_json.find("not_authenticated"), std::string::npos);
+  }
 }

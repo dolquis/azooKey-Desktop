@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <string_view>
 
 #include "azookey/host/ModelBenchmark.h"
@@ -350,6 +351,14 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return std::nullopt;
     case ipc::MessageType::ListNewWordCandidates:
       return HandleListNewWordCandidates(req);
+    case ipc::MessageType::ListLearningEntries:
+      return HandleListLearningEntries(req);
+    case ipc::MessageType::ForgetLearningEntry:
+      return HandleForgetLearningEntry(req);
+    case ipc::MessageType::ExportLearningData:
+      return HandleExportLearningData(req);
+    case ipc::MessageType::ImportLearningData:
+      return HandleImportLearningData(req);
     case ipc::MessageType::ResolveNewWord:
       return HandleResolveNewWord(req);
     default:
@@ -433,6 +442,28 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     }
     case ipc::MessageType::ReverseConvert:
       return MakeResponse(req, ipc::BuildReverseConvertResponse(ipc::ReverseConvertResponse{}));
+    case ipc::MessageType::ListLearningEntries: {
+      ipc::ListLearningEntriesResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildListLearningEntriesResponse(r));
+    }
+    case ipc::MessageType::ForgetLearningEntry: {
+      ipc::ForgetLearningEntryResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildForgetLearningEntryResponse(r));
+    }
+    case ipc::MessageType::ExportLearningData: {
+      ipc::ExportLearningDataResponse r;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildExportLearningDataResponse(r));
+    }
+    case ipc::MessageType::ImportLearningData: {
+      ipc::ImportLearningDataResponse r;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildImportLearningDataResponse(r));
+    }
     case ipc::MessageType::ListModels: {
       ipc::ListModelsResponse r;
       r.ok = false;
@@ -931,6 +962,123 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
   return reply();
 }
 
+namespace {
+// Store names on the wire; an unknown name fails the whole request.
+std::optional<std::vector<LearningDataStore>> ParseStoreList(
+    const std::vector<std::string>& names) {
+  std::vector<LearningDataStore> stores;
+  for (const auto& name : names) {
+    const auto store = ParseLearningDataStore(name);
+    if (!store) return std::nullopt;
+    stores.push_back(*store);
+  }
+  return stores;
+}
+}  // namespace
+
+std::optional<ipc::Envelope> Dispatcher::HandleListLearningEntries(const ipc::Envelope& req) {
+  ipc::ListLearningEntriesResponse res;
+  const auto parsed = ipc::ParseListLearningEntriesRequest(req.payload_json);
+  const auto store = parsed ? ParseLearningDataStore(parsed->store) : std::nullopt;
+  if (!store) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+    return MakeResponse(req, ipc::BuildListLearningEntriesResponse(res));
+  }
+  auto page = engine_->ListLearningEntries(*store, parsed->query, parsed->offset, parsed->limit);
+  res.total = page.total;
+  for (auto& entry : page.entries) {
+    res.entries.push_back({std::move(entry.id), std::move(entry.channel), std::move(entry.reading),
+                           std::move(entry.surface), entry.weight, entry.last_updated_epoch_sec,
+                           std::move(entry.tags), std::move(entry.metadata)});
+  }
+  return MakeResponse(req, ipc::BuildListLearningEntriesResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::Envelope& req) {
+  ipc::ForgetLearningEntryResponse res;
+  const auto reply = [&]() {
+    return MakeResponse(req, ipc::BuildForgetLearningEntryResponse(res));
+  };
+  const auto parsed = ipc::ParseForgetLearningEntryRequest(req.payload_json);
+  const auto store = parsed ? ParseLearningDataStore(parsed->store) : std::nullopt;
+  if (!store) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+    return reply();
+  }
+  // The TIP names the pair; the settings app names an id from the list.
+  const auto outcome = parsed->id.empty()
+                           ? engine_->ForgetLearningPair(parsed->reading, parsed->surface)
+                           : engine_->ForgetLearningEntry(*store, parsed->id);
+  res.removed = outcome == InferenceEngine::ForgetOutcome::Forgotten;
+  if (outcome == InferenceEngine::ForgetOutcome::SaveFailed) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorSaveFailed);
+  }
+  return reply();
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {
+  ipc::ExportLearningDataResponse res;
+  const auto reply = [&]() { return MakeResponse(req, ipc::BuildExportLearningDataResponse(res)); };
+  const auto parsed = ipc::ParseExportLearningDataRequest(req.payload_json);
+  const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
+  if (!stores) {
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+    return reply();
+  }
+  // settings.redacted.json is a follow-up; refuse rather than drop it silently.
+  if (parsed->include_settings) {
+    res.error = std::string(ipc::kLearningDataErrorUnsupported);
+    return reply();
+  }
+  BackupManifest meta;
+  meta.created_at = std::format(
+      "{:%FT%TZ}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+  meta.app_version = config_.host_version;
+  meta.host_version = config_.host_version;
+  const auto result = engine_->ExportLearningData(*stores, core::Utf8Path(parsed->destination_path),
+                                                  parsed->encrypt, meta);
+  if (result.error != BackupError::None) {
+    res.error = std::string(BackupErrorCode(result.error));
+    return reply();
+  }
+  res.status = "success";
+  res.file_size_bytes = result.file_size;
+  res.encrypted = result.manifest.encrypted;
+  for (const auto& item : result.manifest.items) {
+    res.items.push_back({item.name, item.file, item.count, item.sha256});
+  }
+  return reply();
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleImportLearningData(const ipc::Envelope& req) {
+  ipc::ImportLearningDataResponse res;
+  const auto reply = [&]() { return MakeResponse(req, ipc::BuildImportLearningDataResponse(res)); };
+  const auto parsed = ipc::ParseImportLearningDataRequest(req.payload_json);
+  const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
+  const auto policy =
+      parsed ? learning::ParseImportConflictPolicy(parsed->conflict_resolution) : std::nullopt;
+  if (!stores || !policy) {
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+    return reply();
+  }
+  const auto result =
+      engine_->ImportLearningData(*stores, core::Utf8Path(parsed->source_path), *policy);
+  if (result.error != BackupError::None) {
+    res.error = std::string(BackupErrorCode(result.error));
+    return reply();
+  }
+  res.status = "success";
+  for (const auto& [name, counts] : result.counts) {
+    res.imported_counts[name] = counts.imported;
+    res.skipped_counts[name] = counts.skipped;
+    res.conflict_counts[name] = counts.conflicts;
+  }
+  return reply();
+}
+
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json);
   InferenceTrace trace(
@@ -1108,8 +1256,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
       engine_->CommitEnglishObservation(parsed->reading, parsed->chosen.surface, NowSec(),
                                         parsed->observation_id);
     } else {
-      engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),
-                                 parsed->observation_id);
+      engine_->CommitObservation(
+          parsed->reading, parsed->chosen.surface, NowSec(), parsed->observation_id,
+          parsed->app ? parsed->app->process_name : std::string(), parsed->left_context);
     }
     res.ok = true;
   } else {

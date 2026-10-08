@@ -348,7 +348,10 @@ class UserLearningScorer {
 - `CategoryLookup` は `(reading, surface)` の M53 `category_mask` を返す関数で、
   Host は辞書層を引いて渡す。
 - `UserLearningScorerConfig` は減衰モード（§5）と §13 の係数を持つ。既定の減衰は `Legacy`。
-- 呼び出し位置は InferenceEngine の rerank フェーズ（現在 `Reranker` を通している箇所）である。
+- 呼び出し位置は InferenceEngine の rerank フェーズ（`ApplyRerankerOrRaw`）である。
+  内部の切り替え `EngineConfig::user_learning_scorer_enabled`（既定 false、`settings.json` のキーにはしない）が
+  true のときだけ `UserLearningScorer` で並べ、false のときは M7 の `Reranker` のまま並べる。
+  既定では順位も M52 の baseline も変わらない。M52 の校正の後に既定を切り替える。
 - 失敗時（store が無い、category の参照で例外が出た、値が非有限になった）は
   その候補の user_score を 0 として続行する。score が非有限の候補は並びの末尾に置く。
 

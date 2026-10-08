@@ -79,12 +79,24 @@ TEST(MessagesTest, TypeStringMapping) {
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ReverseConvert),
             "ReverseConvert");
   for (const auto type :
-       {azookey::ipc::MessageType::ListModels, azookey::ipc::MessageType::BenchmarkModel}) {
+       {azookey::ipc::MessageType::ListModels, azookey::ipc::MessageType::BenchmarkModel,
+        azookey::ipc::MessageType::ListLearningEntries,
+        azookey::ipc::MessageType::ForgetLearningEntry,
+        azookey::ipc::MessageType::ExportLearningData,
+        azookey::ipc::MessageType::ImportLearningData}) {
     EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
   }
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ListModels), "ListModels");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::BenchmarkModel),
             "BenchmarkModel");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ListLearningEntries),
+            "ListLearningEntries");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ForgetLearningEntry),
+            "ForgetLearningEntry");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ExportLearningData),
+            "ExportLearningData");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ImportLearningData),
+            "ImportLearningData");
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {

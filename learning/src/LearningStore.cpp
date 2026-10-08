@@ -290,6 +290,45 @@ void ParseRows(std::string_view text, OnRow on_row, OnMalformed on_malformed) {
   }
 }
 
+// The M7 text without the rows of the pair. Each kept line, its line ending
+// included, is copied byte for byte; malformed lines are kept as they are.
+// Sets `removed` when at least one row was dropped.
+std::string WithoutLegacyRows(std::string_view text, const std::string& reading,
+                              const std::string& surface, bool& removed) {
+  std::string kept;
+  kept.reserve(text.size());
+  removed = false;
+  bool escaped_fields = false;
+  bool first_line = true;
+  size_t begin = 0;
+  while (begin < text.size()) {
+    const size_t newline = text.find('\n', begin);
+    const size_t content_end = newline == std::string_view::npos ? text.size() : newline;
+    const size_t end = newline == std::string_view::npos ? text.size() : newline + 1;
+    const std::string_view segment = text.substr(begin, end - begin);
+    std::string line(text.substr(begin, content_end - begin));
+    begin = end;
+    bool drop = false;
+    if (first_line && line == kLearningStoreEscapedTsvHeader) {
+      escaped_fields = true;
+    } else if (!line.empty()) {
+      LearningEntry entry;
+      drop = ParseLegacyRow(line, escaped_fields, entry) && entry.reading == reading &&
+             entry.surface == surface;
+      SecureErase(entry.reading);
+      SecureErase(entry.surface);
+    }
+    first_line = false;
+    SecureErase(line);
+    if (drop) {
+      removed = true;
+    } else {
+      kept.append(segment);
+    }
+  }
+  return kept;
+}
+
 // Duplicate rows keep the first occurrence (spec section 14.3). Returns the
 // number of malformed rows that were skipped.
 size_t ParseInto(std::string_view text, const std::filesystem::path& path, Table& table) {
@@ -748,6 +787,25 @@ bool LearningStore::Forget(const std::string& reading, const std::string& surfac
   }
   dirty_ = true;
   return true;
+}
+
+bool LearningStore::RemoveFromLegacyFile(const std::string& reading,
+                                         const std::string& surface) const {
+  std::string text;
+  const auto source = ReadProtectedText(path_, *crypto_, text);
+  if (source == ProtectedFileSource::Missing) return true;
+  if (source == ProtectedFileSource::Error) {
+    SecureErase(text);
+    return false;
+  }
+  bool removed = false;
+  auto rewritten = WithoutLegacyRows(text, reading, surface, removed);
+  SecureErase(text);
+  // WriteProtectedText refuses unmigrated plaintext and undecipherable
+  // ciphertext, so the M7 file is either replaced atomically or left as it was.
+  const bool ok = !removed || WriteProtectedText(path_, rewritten, *crypto_);
+  SecureErase(rewritten);
+  return ok;
 }
 
 void LearningStore::Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec) {

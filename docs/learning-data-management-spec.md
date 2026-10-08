@@ -99,7 +99,8 @@ Response（host → settings-app）:
     "total": 1234,
     "entries": [
       {
-        "id": "abc",
+        "id": "0123456789abcdef",
+        "channel": "kana",
         "reading": "にほんご",
         "surface": "日本語",
         "weight": 4.2,
@@ -206,7 +207,10 @@ Response:
   "payload": {
     "status": "success",
     "file_size_bytes": 12345,
-    "manifest": {}
+    "encrypted": true,
+    "items": [
+      { "name": "learning", "file": "learning.tsv.enc", "count": 1234, "sha256": "..." }
+    ]
   }
 }
 ```
@@ -244,13 +248,36 @@ Response:
   "trace_id": "018fd2c2-...",
   "payload": {
     "status": "success",
-    "imported_counts": { "learning": 1234, "user_dict": 42 },
+    "imported_counts": { "learning": 1234, "user_dictionary": 42 },
     "skipped_counts": { "learning": 5 },
-    "conflicts": []
+    "conflict_counts": { "learning": 3 }
   }
 }
 ```
 
+counts のキーは archive の item 名（§5.1）である。
+
+### 4.5 共通の応答規則と配線
+
+- `ListLearningEntries` と `ForgetLearningEntry` の応答は `ok` と、失敗時の `error` を持つ。
+  `ExportLearningData` と `ImportLearningData` は `status`（`success` / `error`）と、失敗時の `error` を持つ。
+  `error` は次のどれかである。
+  - `invalid_request`: payload が不正、または未知のストア名、または未知の `conflict_resolution`。
+  - `not_authenticated`: Handshake のトークン認証の前に送った。
+  - `save_failed`: 忘却を保存できなかった。M7 ファイルからの除去の失敗も含む。
+  - `unsupported`: `include_settings = true` を指定した。`settings.redacted.json` の export は未対応で、黙って無視しない。
+  - archive の失敗は `invalid_path`、`destination_exists`、`decrypt_failed` などの名前で返す。
+    いずれも `BackupErrorCode` の名前で、`bad_item` と `store_unavailable` を含む。
+- `ForgetLearningEntry` は、`id` か、`reading` と `surface` の組のどちらか一方を受ける。
+  組の形は TIP の Ctrl+Shift+Backspace（`legacy-parity-spec.md` §7.2）が使い、`store` は `learning`（かなのチャネル）に限る。
+  一致する項目が無いときは `ok = true`、`removed = false` を返す。
+- export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
+- Host は 4 つの操作を `InferenceEngine` 上で行い、関係するストアのロックをまとめて取ってから
+  変更し、返る前に保存する。ユーザー辞書は、`AddUserWord` と同じくファイルロックを取って
+  ディスクの内容を読み直してから変更する。
+- 確定観測（`CommitObservation` / `CommitSegmentsObservation`）は任意の `app`
+  （`process_name`、`window_class`）を持つ。Host は `process_name` を正規化して学習の app 行とし、
+  `left_context` から `context_hash` を求める（`user-learning-enhancement-spec.md` §3.2、§8.1）。
 ## 5. バックアップ形式
 
 ```

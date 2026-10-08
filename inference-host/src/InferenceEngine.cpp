@@ -16,6 +16,7 @@
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/TraceId.h"
+#include "azookey/learning/ContextHash.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/PersistenceDiagnostics.h"
@@ -591,6 +592,13 @@ std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
   const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
   if (canceled()) return {};
   try {
+    if (config_.user_learning_scorer_enabled) {
+      // M54 section 7 scoring; off by default so the ranking and the
+      // benchmark baseline stay on the M7 reranker until M52 calibrates it.
+      auto ranked = candidates;
+      UserLearningScorer(store_, nullptr, {}).Score({kana, {}, now_epoch_sec}, ranked);
+      return canceled() ? std::vector<core::Candidate>{} : std::move(ranked);
+    }
     // Do not move candidates into Apply: fallback needs the raw order/scores.
     auto ranked = reranker_.Apply(kana, candidates, now_epoch_sec, cancel);
     return canceled() ? std::vector<core::Candidate>{} : std::move(ranked);
@@ -847,6 +855,7 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.max_candidates = config.max_candidates;
   config_.max_context_length = config.max_context_length;
   config_.learning_alpha = config.learning_alpha;
+  config_.user_learning_scorer_enabled = config.user_learning_scorer_enabled;
   config_.learning_flush_every_n = config.learning_flush_every_n;
   config_.learning_flush_interval_sec = config.learning_flush_interval_sec;
   config_.learning_max_records = config.learning_max_records;
@@ -1486,10 +1495,17 @@ bool InferenceEngine::CommitSegmentsObservation(
     if (!NoteObservationIdLocked(request.observation_id)) return false;
     alpha = config_.learning_alpha;
     if (store_) {
+      // Each segment's left context is the committed text plus the segments
+      // before it (user-learning-enhancement-spec section 8.1).
+      const auto app_name = request.app ? request.app->process_name : std::string();
+      std::string left_context = request.left_context;
       for (const auto& segment : request.segments) {
+        const auto context_hash = learning::ContextHash(left_context);
+        left_context += segment.chosen.surface;
         if (!segment.is_auto_punctuation && !english(segment)) {
-          store_->Observe(segment.reading, segment.chosen.surface, config_.learning_alpha,
-                          now_epoch_sec);
+          store_->ObserveEvent({segment.reading, segment.chosen.surface, app_name,
+                                learning::LearningEventType::Commit, context_hash},
+                               config_.learning_alpha, now_epoch_sec);
           core::EtwLogger::LogLearningObserve(segment.reading.size(),
                                               segment.chosen.surface.size());
         }
@@ -1564,7 +1580,10 @@ bool InferenceEngine::IsMiningCandidateLocked(const std::string& reading,
 }
 
 bool InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
-                                        uint64_t now_epoch_sec, const std::string& observation_id) {
+                                        uint64_t now_epoch_sec, const std::string& observation_id,
+                                        const std::string& app_name,
+                                        const std::string& left_context) {
+  const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   learning::AutoWordStore* auto_word_store = nullptr;
   uint32_t auto_word_min_count = 0;
@@ -1576,7 +1595,9 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     // the converter's own commit history.
     if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
-      store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
+      store_->ObserveEvent(
+          {reading, surface, app_name, learning::LearningEventType::Commit, context_hash},
+          config_.learning_alpha, now_epoch_sec);
       core::EtwLogger::LogLearningObserve(reading.size(), surface.size());
       NoteLearningMutationLocked(now_epoch_sec);
     }

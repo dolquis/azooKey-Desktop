@@ -21,4 +21,14 @@ inline constexpr std::size_t kMaxQueuedCommitObservations = 64;
 // unbounded page cannot make it serialize the whole store into one frame.
 inline constexpr uint32_t kMaxNewWordCandidates = 500;
 
+// M49 learning data management (docs/learning-data-management-spec.md section 4).
+// ListLearningEntries.limit is clamped to kMaxLearningEntries, and a response
+// carrying more entries is rejected, so a hostile peer cannot make the other side
+// hold an unbounded page. The remaining caps bound the per-entry tags / metadata
+// and the store lists, backup items and count maps of the archive messages.
+inline constexpr uint32_t kMaxLearningEntries = 500;
+inline constexpr std::size_t kMaxLearningEntryTags = 64;
+inline constexpr std::size_t kMaxLearningEntryMetadata = 32;
+inline constexpr std::size_t kMaxLearningDataStores = 16;
+
 }  // namespace azookey::ipc

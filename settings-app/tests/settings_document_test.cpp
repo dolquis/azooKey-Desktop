@@ -773,6 +773,63 @@ TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {
   EXPECT_EQ(dictionary->GetBool("appSpecificDictionaryEnabled"), false);
 }
 
+TEST(SettingsDocumentTest, DictionarySwitchesEditedInTheUiAreWrittenWithSchemaDefaults) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_edit");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{"technicalTermsEnabled":false}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_TRUE(loaded.settings.dictionary);
+  EXPECT_FALSE(loaded.settings.dictionary->technical_terms_enabled);
+  EXPECT_FALSE(loaded.settings.dictionary->neologd_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->sudachi_enabled);
+  loaded.settings.dictionary->neologd_enabled = true;
+  loaded.settings.dictionary->auto_words_enabled = false;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* dictionary = parsed->Find("dictionary");
+  ASSERT_TRUE(dictionary && dictionary->IsObject());
+  EXPECT_EQ(dictionary->AsObject().size(), 7u);
+  EXPECT_EQ(dictionary->GetBool("sudachiEnabled"), true);
+  EXPECT_EQ(dictionary->GetBool("neologdEnabled"), true);
+  EXPECT_EQ(dictionary->GetBool("namedEntityEnabled"), true);
+  EXPECT_EQ(dictionary->GetBool("technicalTermsEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("userDictionaryEnabled"), true);
+  EXPECT_EQ(dictionary->GetBool("autoWordsEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("appSpecificDictionaryEnabled"), true);
+}
+
+TEST(SettingsDocumentTest, MissingDictionaryLoadsSchemaDefaults) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_missing");
+  const auto loaded = azookey::settings::LoadSettingsDocument(temp.path() / "settings.json");
+  ASSERT_TRUE(loaded.settings.dictionary);
+  EXPECT_FALSE(loaded.settings.dictionary->neologd_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->sudachi_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->named_entity_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->technical_terms_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->user_dictionary_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->auto_words_enabled);
+  EXPECT_TRUE(loaded.settings.dictionary->app_specific_dictionary_enabled);
+}
+
+TEST(SettingsDocumentTest, OnlyTurningNeologdOnRequiresAHostRestart) {
+  azookey::settings::EditableSettings off;
+  off.dictionary = azookey::settings::DictionarySettings{};
+  auto on = off;
+  on.dictionary->neologd_enabled = true;
+  auto other = off;
+  other.dictionary->sudachi_enabled = false;
+  other.log_level = "debug";
+  other.model_enabled = false;
+
+  EXPECT_EQ(azookey::settings::SettingsRequiringHostRestart(off, on),
+            std::vector<std::string>{"dictionary.neologdEnabled"});
+  EXPECT_TRUE(azookey::settings::SettingsRequiringHostRestart(on, off).empty());
+  EXPECT_TRUE(azookey::settings::SettingsRequiringHostRestart(on, on).empty());
+  EXPECT_TRUE(azookey::settings::SettingsRequiringHostRestart(off, other).empty());
+}
+
 TEST(SettingsDocumentTest, UnknownAndMistypedDictionaryLayerValuesAreRemoved) {
   ScopedTempDirectory temp("azookey_settings_dictionary_invalid");
   const auto path = temp.path() / "settings.json";

@@ -101,6 +101,7 @@
     <ClInclude Include="App.xaml.h"><DependentUpon>App.xaml</DependentUpon></ClInclude>
     <ClInclude Include="LaunchArguments.h" />
     <ClInclude Include="MainWindow.xaml.h"><DependentUpon>MainWindow.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="NeologdAttribution.h" />
     <ClInclude Include="SettingsDocument.h" />
     <ClInclude Include="SettingsIpcClient.h" />
   </ItemGroup>
@@ -113,6 +114,8 @@
     <ClCompile Include="App.xaml.cpp"><DependentUpon>App.xaml</DependentUpon></ClCompile>
     <ClCompile Include="LaunchArguments.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="NeologdAttribution.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="$(AzooKeyNeologdPinSource)" Condition="'$(AzooKeyNeologdPinSource)'!=''"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\AppProfileResolver.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\CrashReporting.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -144,6 +147,11 @@
     <None Include="HybridCRT.props" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- settings-app/CMakeLists.txt generates the embedded neologd_lexicon pin. -->
+  <Target Name="ValidateNeologdPinSource" BeforeTargets="ClCompile">
+    <Error Condition="'$(AzooKeyNeologdPinSource)'=='' Or !Exists('$(AzooKeyNeologdPinSource)')"
+           Text="AzooKeyNeologdPinSource must name the generated NeologdPackPin.cpp; build the azookey_settings CMake target." />
+  </Target>
   <Target Name="ValidateProductVersion" BeforeTargets="ResourceCompile">
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(AzooKeyProductVersion)', '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'))"
            Text="AzooKeyProductVersion must be MAJOR.MINOR.PATCH." />

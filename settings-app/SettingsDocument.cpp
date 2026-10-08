@@ -407,6 +407,27 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
   return SanitizeRoot(parsed->AsObject(), warnings);
 }
 
+// The dictionary keys in schema order, paired with their EditableSettings field.
+constexpr std::pair<std::string_view, bool DictionarySettings::*> kDictionaryFields[] = {
+    {"sudachiEnabled", &DictionarySettings::sudachi_enabled},
+    {"neologdEnabled", &DictionarySettings::neologd_enabled},
+    {"namedEntityEnabled", &DictionarySettings::named_entity_enabled},
+    {"technicalTermsEnabled", &DictionarySettings::technical_terms_enabled},
+    {"userDictionaryEnabled", &DictionarySettings::user_dictionary_enabled},
+    {"autoWordsEnabled", &DictionarySettings::auto_words_enabled},
+    {"appSpecificDictionaryEnabled", &DictionarySettings::app_specific_dictionary_enabled},
+};
+
+DictionarySettings ExtractDictionarySettings(const j::Object& root) {
+  DictionarySettings dictionary;
+  const auto it = root.find("dictionary");
+  if (it == root.end() || !it->second.IsObject()) return dictionary;
+  for (const auto& [key, field] : kDictionaryFields) {
+    if (const auto value = it->second.GetBool(key)) dictionary.*field = *value;
+  }
+  return dictionary;
+}
+
 EditableSettings ExtractEditableSettings(const j::Object& root,
                                          std::vector<std::string>* warnings) {
   EditableSettings settings;
@@ -427,6 +448,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
   if (const auto it = root.find("logLevel"); it != root.end() && it->second.IsString()) {
     settings.log_level = it->second.AsString();
   }
+  settings.dictionary = ExtractDictionarySettings(root);
   const auto model_it = root.find("model");
   if (model_it == root.end() || !model_it->second.IsObject()) return settings;
   const auto& model = model_it->second.AsObject();
@@ -534,6 +556,13 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   privacy["crashReportConsent"] = j::Value(settings.crash_report_consent);
   root["privacy"] = j::Value(std::move(privacy));
   root.erase("backendPreference");
+  if (settings.dictionary) {
+    j::Object dictionary;
+    for (const auto& [key, field] : kDictionaryFields) {
+      dictionary[std::string(key)] = j::Value((*settings.dictionary).*field);
+    }
+    root["dictionary"] = j::Value(std::move(dictionary));
+  }
 
   if (settings.openai_api_key_changed) {
     if (settings.openai_api_key.empty()) {
@@ -565,6 +594,16 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   }
   result.ok = true;
   return result;
+}
+
+std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& before,
+                                                      const EditableSettings& after) {
+  const auto neologd = [](const EditableSettings& settings) {
+    return settings.dictionary.value_or(DictionarySettings{}).neologd_enabled;
+  };
+  std::vector<std::string> keys;
+  if (!neologd(before) && neologd(after)) keys.emplace_back("dictionary.neologdEnabled");
+  return keys;
 }
 
 }  // namespace azookey::settings

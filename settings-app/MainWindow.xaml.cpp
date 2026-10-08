@@ -11,6 +11,9 @@
 #include "MainWindow.g.cpp"
 #endif
 
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+
 #include <algorithm>
 #include <array>
 #include <coroutine>
@@ -82,8 +85,153 @@ namespace winrt::azookey_settings::implementation {
 MainWindow::MainWindow() {
   InitializeComponent();
   SaveButton().IsEnabled(false);
+  SettingsNavigationView().SelectedItem(GeneralNavigationItem());
+  neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
+      azookey::settings::PinnedNeologdPackManifestJson());
+  if (!neologd_attribution_ || !neologd_attribution_->published) {
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    NeologdPackStatusText().Text(resources.GetString(
+        neologd_attribution_ ? L"NeologdPackUnpublished" : L"NeologdNoticesUnavailable"));
+    NeologdPackStatusText().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
+    ShowNeologdNoticesButton().IsEnabled(neologd_attribution_.has_value());
+  }
   settings_path_ = azookey::settings::DefaultSettingsPath();
   LoadSettingsAsync();
+}
+
+void MainWindow::SettingsNavigationView_SelectionChanged(
+    Microsoft::UI::Xaml::Controls::NavigationView const&,
+    Microsoft::UI::Xaml::Controls::NavigationViewSelectionChangedEventArgs const& args) {
+  if (const auto item =
+          args.SelectedItem().try_as<Microsoft::UI::Xaml::Controls::NavigationViewItem>()) {
+    ShowPane(winrt::unbox_value_or<winrt::hstring>(item.Tag(), L""));
+  }
+}
+
+void MainWindow::ShowPane(std::wstring_view tag) {
+  const auto visible = [tag](std::wstring_view pane) {
+    return tag == pane ? Microsoft::UI::Xaml::Visibility::Visible
+                       : Microsoft::UI::Xaml::Visibility::Collapsed;
+  };
+  GeneralPane().Visibility(visible(L"General"));
+  DictionaryPane().Visibility(visible(L"Dictionary"));
+  AiPane().Visibility(visible(L"Ai"));
+  AdvancedPane().Visibility(visible(L"Advanced"));
+  VersionPane().Visibility(visible(L"Version"));
+}
+
+void MainWindow::ApplyDictionaryToControls(
+    const azookey::settings::DictionarySettings& dictionary) {
+  SudachiDictionaryToggle().IsOn(dictionary.sudachi_enabled);
+  NamedEntityDictionaryToggle().IsOn(dictionary.named_entity_enabled);
+  TechnicalTermsDictionaryToggle().IsOn(dictionary.technical_terms_enabled);
+  UserDictionaryToggle().IsOn(dictionary.user_dictionary_enabled);
+  AutoWordsDictionaryToggle().IsOn(dictionary.auto_words_enabled);
+  AppSpecificDictionaryToggle().IsOn(dictionary.app_specific_dictionary_enabled);
+  SetNeologdToggle(dictionary.neologd_enabled);
+  // Enabled only once the stored value is known, so a consent dialog never races the load.
+  NeologdDictionaryToggle().IsEnabled(true);
+}
+
+azookey::settings::DictionarySettings MainWindow::DictionaryFromControls() {
+  azookey::settings::DictionarySettings dictionary;
+  dictionary.sudachi_enabled = SudachiDictionaryToggle().IsOn();
+  dictionary.neologd_enabled = neologd_enabled_;
+  dictionary.named_entity_enabled = NamedEntityDictionaryToggle().IsOn();
+  dictionary.technical_terms_enabled = TechnicalTermsDictionaryToggle().IsOn();
+  dictionary.user_dictionary_enabled = UserDictionaryToggle().IsOn();
+  dictionary.auto_words_enabled = AutoWordsDictionaryToggle().IsOn();
+  dictionary.app_specific_dictionary_enabled = AppSpecificDictionaryToggle().IsOn();
+  return dictionary;
+}
+
+void MainWindow::SetNeologdToggle(bool enabled) {
+  // Record the value first so the Toggled handler sees no transition to consent to.
+  neologd_enabled_ = enabled;
+  NeologdDictionaryToggle().IsOn(enabled);
+}
+
+winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto lifetime = get_strong();
+  const bool requested = NeologdDictionaryToggle().IsOn();
+  if (!azookey::settings::NeologdConsentRequired(neologd_enabled_, requested)) {
+    neologd_enabled_ = requested;
+    co_return;
+  }
+  // auto-word-registration-spec section 14.9: the upstream license and attribution are shown,
+  // and the layer is enabled only after the user accepts them.
+  bool accepted = false;
+  if (neologd_attribution_) {
+    try {
+      accepted = co_await ShowNeologdNoticesAsync(true);
+    } catch (...) {
+      // For example another dialog is already open; say why the switch went back off.
+      accepted = false;
+      Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+      ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+                 resources.GetString(L"NeologdNoticesTitle"),
+                 resources.GetString(L"NeologdNoticesDialogFailed"));
+    }
+  } else {
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+               resources.GetString(L"NeologdNoticesTitle"),
+               resources.GetString(L"NeologdNoticesUnavailable"));
+  }
+  SetNeologdToggle(accepted);
+}
+
+winrt::fire_and_forget MainWindow::ShowNeologdNoticesButton_Click(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto lifetime = get_strong();
+  try {
+    co_await ShowNeologdNoticesAsync(false);
+  } catch (...) {
+    co_return;
+  }
+}
+
+Windows::Foundation::IAsyncOperation<bool> MainWindow::ShowNeologdNoticesAsync(bool ask_consent) {
+  const auto lifetime = get_strong();
+  if (!neologd_attribution_) co_return false;
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  Microsoft::UI::Xaml::Controls::StackPanel panel;
+  panel.Spacing(12);
+  const auto append_text = [&panel](const winrt::hstring& text) {
+    Microsoft::UI::Xaml::Controls::TextBlock block;
+    block.Text(text);
+    block.TextWrapping(Microsoft::UI::Xaml::TextWrapping::Wrap);
+    panel.Children().Append(block);
+  };
+  if (!neologd_attribution_->published) append_text(resources.GetString(L"NeologdPackUnpublished"));
+  append_text(resources.GetString(ask_consent ? L"NeologdConsentIntro" : L"NeologdNoticesIntro"));
+
+  // Shown verbatim from the pinned manifest (section 15.6 keeps notices unedited).
+  Microsoft::UI::Xaml::Controls::TextBlock notices;
+  notices.Text(winrt::to_hstring(neologd_attribution_->notices));
+  notices.TextWrapping(Microsoft::UI::Xaml::TextWrapping::Wrap);
+  notices.IsTextSelectionEnabled(true);
+  Microsoft::UI::Xaml::Automation::AutomationProperties::SetAutomationId(notices,
+                                                                         L"NeologdNoticesText");
+  Microsoft::UI::Xaml::Controls::ScrollViewer scroller;
+  scroller.MaxHeight(360);
+  scroller.Content(notices);
+  panel.Children().Append(scroller);
+
+  Microsoft::UI::Xaml::Controls::ContentDialog dialog;
+  dialog.XamlRoot(Content().XamlRoot());
+  dialog.Title(winrt::box_value(resources.GetString(L"NeologdNoticesTitle")));
+  dialog.Content(panel);
+  if (ask_consent) {
+    dialog.PrimaryButtonText(resources.GetString(L"NeologdConsentAcceptButton"));
+    dialog.CloseButtonText(resources.GetString(L"NeologdConsentCancelButton"));
+  } else {
+    dialog.CloseButtonText(resources.GetString(L"NeologdNoticesCloseButton"));
+  }
+  dialog.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Close);
+  const auto result = co_await dialog.ShowAsync();
+  co_return result == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary;
 }
 
 winrt::fire_and_forget MainWindow::LoadSettingsAsync() {
@@ -122,6 +270,10 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   SaveButton().IsEnabled(result.status !=
                              azookey::settings::SettingsDocumentStatus::LockUnavailable &&
                          result.status != azookey::settings::SettingsDocumentStatus::ReadError);
+  saved_settings_ = result.settings;
+  saved_settings_.openai_api_key.clear();  // Only compared for restart; keep no extra secret copy.
+  ApplyDictionaryToControls(
+      result.settings.dictionary.value_or(azookey::settings::DictionarySettings{}));
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
   OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
@@ -217,6 +369,7 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                        : log_index == 1 ? "warn"
                        : log_index == 3 ? "debug"
                                         : "info";
+  settings.dictionary = DictionaryFromControls();
 
   if (!settings.model_selected_path.empty()) {
     const std::filesystem::path model_path(ModelPathTextBox().Text().c_str());
@@ -266,6 +419,23 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
     openai_api_key_changed_ = false;
   }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
+  if (save_result.ok) {
+    // sideload-packaging-spec section 3.6: UpdateConfig cannot apply these, so say when they will.
+    if (!azookey::settings::SettingsRequiringHostRestart(saved_settings_, settings).empty()) {
+      // An unpublished pack is never fetched, so a restart would change nothing.
+      const bool published = neologd_attribution_ && neologd_attribution_->published;
+      RestartRequiredInfoBar().Title(final_resources.GetString(
+          published ? L"RestartRequiredTitle" : L"NeologdPackNotFetchedTitle"));
+      RestartRequiredInfoBar().Message(final_resources.GetString(
+          published ? L"NeologdRestartRequiredMessage" : L"NeologdPackUnpublished"));
+      RestartRequiredInfoBar().IsOpen(true);
+    } else if (!settings.dictionary->neologd_enabled) {
+      // Turned back off before a restart, so the pack will not be fetched after all.
+      RestartRequiredInfoBar().IsOpen(false);
+    }
+    saved_settings_ = settings;
+    saved_settings_.openai_api_key.clear();
+  }
   if (!save_result.ok) {
     ShowStatus(
         Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,

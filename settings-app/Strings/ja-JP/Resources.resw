@@ -35,7 +35,7 @@
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <data name="WindowTitle" xml:space="preserve"><value>azooKey 設定</value></data>
   <data name="PageTitle.Text" xml:space="preserve"><value>azooKey 設定</value></data>
-  <data name="PageDescription.Text" xml:space="preserve"><value>Zenzai モデルと診断ログの基本設定を変更できます。保存後、起動中の Host へ再読込を通知します。</value></data>
+  <data name="PageDescription.Text" xml:space="preserve"><value>azooKey の設定を変更できます。保存後、起動中の Host へ再読込を通知します。</value></data>
   <data name="GeneralSectionTitle.Text" xml:space="preserve"><value>一般</value></data>
   <data name="ModelEnabledToggle.Header" xml:space="preserve"><value>Zenzai を使う</value></data>
   <data name="BackendPreferenceLabel.Text" xml:space="preserve"><value>推論デバイス</value></data>
@@ -90,4 +90,35 @@
   <data name="CrashReportReady" xml:space="preserve"><value>この Settings アプリでの保存準備ができています。</value></data>
   <data name="CrashReportDisabled" xml:space="preserve"><value>この Settings アプリでは診断ファイルを収集しません。</value></data>
   <data name="CrashReportUnavailable" xml:space="preserve"><value>この Settings アプリでは診断ファイルを保存できません。保存先やアクセス権を確認してください。保存に失敗した障害は、OS の既定の障害処理へ引き継ぎます。</value></data>
+  <data name="GeneralNavigationItem.Content" xml:space="preserve"><value>一般</value></data>
+  <data name="DictionaryNavigationItem.Content" xml:space="preserve"><value>辞書</value></data>
+  <data name="AiNavigationItem.Content" xml:space="preserve"><value>AI</value></data>
+  <data name="AdvancedNavigationItem.Content" xml:space="preserve"><value>詳細</value></data>
+  <data name="VersionNavigationItem.Content" xml:space="preserve"><value>バージョン</value></data>
+  <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI</value></data>
+  <data name="CrashReportSectionTitle.Text" xml:space="preserve"><value>障害診断</value></data>
+  <data name="RestartRequiredTitle" xml:space="preserve"><value>Host の再起動後に反映される設定があります</value></data>
+  <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 辞書 pack は取得されません</value></data>
+  <data name="NeologdNoticesDialogFailed" xml:space="preserve"><value>ライセンスと帰属のダイアログを表示できなかったため、NEologd 辞書 pack を有効にしませんでした。もう一度切り替えてください。</value></data>
+  <data name="DictionarySectionTitle.Text" xml:space="preserve"><value>辞書</value></data>
+  <data name="DictionaryDescription.Text" xml:space="preserve"><value>変換に使う辞書層を個別に有効・無効にできます。保存すると次回の変換から反映されます。</value></data>
+  <data name="SudachiDictionaryToggle.Header" xml:space="preserve"><value>基本辞書（SudachiDict）</value></data>
+  <data name="NamedEntityDictionaryToggle.Header" xml:space="preserve"><value>固有名詞辞書</value></data>
+  <data name="TechnicalTermsDictionaryToggle.Header" xml:space="preserve"><value>技術用語辞書</value></data>
+  <data name="UserDictionaryToggle.Header" xml:space="preserve"><value>ユーザー辞書</value></data>
+  <data name="AutoWordsDictionaryToggle.Header" xml:space="preserve"><value>自動登録した単語</value></data>
+  <data name="AppSpecificDictionaryToggle.Header" xml:space="preserve"><value>アプリ別辞書</value></data>
+  <data name="NeologdSectionTitle.Text" xml:space="preserve"><value>追加辞書 pack（mecab-ipadic-NEologd）</value></data>
+  <data name="NeologdDictionaryToggle.Header" xml:space="preserve"><value>NEologd 辞書 pack を使う</value></data>
+  <data name="NeologdDescription.Text" xml:space="preserve"><value>NEologd 辞書 pack はインストーラーに含まれず、別にダウンロードします（既定は無効）。有効にする前に上流のライセンスと帰属を表示し、同意したときだけ有効にします。ダウンロードは Host の起動時に行います。</value></data>
+  <data name="ShowNeologdNoticesButton.Content" xml:space="preserve"><value>NEologd 辞書 pack のライセンスと帰属を表示</value></data>
+  <data name="NeologdPackUnpublished" xml:space="preserve"><value>現在は公開された NEologd 辞書 pack が無いため、有効にしてもダウンロードしません。</value></data>
+  <data name="NeologdNoticesUnavailable" xml:space="preserve"><value>NEologd 辞書 pack の帰属情報を読み込めないため、有効にできません。</value></data>
+  <data name="NeologdNoticesTitle" xml:space="preserve"><value>NEologd 辞書 pack のライセンスと帰属</value></data>
+  <data name="NeologdConsentIntro" xml:space="preserve"><value>次の上流ライセンスと帰属（個別の条件を含む）を確認し、同意する場合だけ有効にしてください。</value></data>
+  <data name="NeologdNoticesIntro" xml:space="preserve"><value>NEologd 辞書 pack の上流ライセンスと帰属です。</value></data>
+  <data name="NeologdConsentAcceptButton" xml:space="preserve"><value>同意して有効化</value></data>
+  <data name="NeologdConsentCancelButton" xml:space="preserve"><value>キャンセル</value></data>
+  <data name="NeologdNoticesCloseButton" xml:space="preserve"><value>閉じる</value></data>
+  <data name="NeologdRestartRequiredMessage" xml:space="preserve"><value>NEologd 辞書 pack は Host の起動時にダウンロードします。サインアウトして再度サインインした後に取得します。</value></data>
 </root>

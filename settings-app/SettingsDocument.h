@@ -8,6 +8,17 @@
 
 namespace azookey::settings {
 
+// The dictionary.* layer switches; defaults match settings/mvp-settings.schema.json.
+struct DictionarySettings {
+  bool sudachi_enabled{true};
+  bool neologd_enabled{false};
+  bool named_entity_enabled{true};
+  bool technical_terms_enabled{true};
+  bool user_dictionary_enabled{true};
+  bool auto_words_enabled{true};
+  bool app_specific_dictionary_enabled{true};
+};
+
 struct EditableSettings {
   bool model_enabled{true};
   std::optional<std::string> model_backend_preference{std::string("auto")};
@@ -18,6 +29,8 @@ struct EditableSettings {
   bool openai_api_key_unavailable{false};
   std::string log_level{"info"};
   std::string crash_report_consent{"off"};
+  // Unset keeps whatever dictionary object is on disk.
+  std::optional<DictionarySettings> dictionary;
 };
 
 enum class SettingsDocumentStatus {
@@ -51,5 +64,11 @@ SettingsDocumentResult LoadSettingsDocument(
 SettingsSaveResult SaveSettingsDocument(
     const std::filesystem::path& path, const EditableSettings& settings,
     std::chrono::milliseconds lock_timeout = std::chrono::milliseconds(5000));
+
+// Keys whose change between two saved states only takes effect after the Host restarts
+// (sideload-packaging-spec section 3.6). Turning dictionary.neologdEnabled on is the one
+// such change: the Host fetches the pack only at startup.
+std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& before,
+                                                      const EditableSettings& after);
 
 }  // namespace azookey::settings

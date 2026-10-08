@@ -84,6 +84,16 @@ struct CandidateField {
   double score{};
   std::string source;
   std::string description;
+  // core::CandidateTag value (docs/rich-features-spec.md X-2-3). Omitted on the
+  // wire when 0 (None); unknown values are carried through unchanged.
+  uint8_t tag{0};
+};
+
+// Foreground application identity (docs/app-profile-spec.md section 3.1). The
+// Host resolves the profile itself; titles are never sent.
+struct AppIdentity {
+  std::string process_name;
+  std::string window_class;
 };
 
 struct QueryCandidatesRequest {
@@ -97,6 +107,9 @@ struct QueryCandidatesRequest {
   // Missing or invalid event privacy is denied (protocol v1 additive fields).
   bool secure{true};
   bool learning_allowed{false};
+  // Absent from older clients and when the TIP could not identify the app;
+  // either way the Host applies the global settings without tag boosts.
+  std::optional<AppIdentity> app;
 };
 
 // Offsets count UTF-16 code units in candidates[0].surface. Surface and reading
@@ -142,6 +155,7 @@ struct QueryPredictionsRequest {
   std::string kana;
   std::string left_side_context;
   std::string mode{"word"};
+  std::optional<AppIdentity> app;  // As QueryCandidatesRequest::app.
 };
 
 struct QueryPredictionsResponse {

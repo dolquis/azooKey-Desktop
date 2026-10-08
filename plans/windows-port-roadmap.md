@@ -1117,7 +1117,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `settings/mvp-settings.schema.json`（`profilesByApp` ブロック
   追加、`promptPrefixByApp` を後方互換で読み続ける）、
   `core/src/AppProfileResolver.cpp`（新規）、
-  `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ `app_id` を伝播）、
+  `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ前面アプリ識別 `app` を伝播）、
   `settings-app/`（アプリ別設定タブ）。
 - **実装範囲**: `docs/app-profile-spec.md`。
   - `ForegroundAppDetector::Get()` による入力先検出とプロセス名キャッシュ

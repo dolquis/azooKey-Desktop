@@ -782,6 +782,135 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+namespace {
+
+// Fixed, score-ordered output so the M48 tests see only the tag boost move it.
+class FixedCandidatesConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
+    return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+
+class AppProfileDispatchTest : public ::testing::Test {
+ protected:
+  AppProfileDispatchTest()
+      : settings_path(TempPath("azookey_dispatcher_app_profile_settings.json")),
+        engine(std::make_unique<FixedCandidatesConverter>(), nullptr, {}) {}
+  ~AppProfileDispatchTest() override { std::remove(settings_path.c_str()); }
+
+  // Writes settings.json and publishes it through UpdateConfig, as the
+  // settings app does.
+  void ApplySettings(const std::string& json) {
+    {
+      std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+      ASSERT_TRUE(out.is_open());
+      out << json;
+    }
+    settings_store.emplace(settings_path);
+    settings_store->Load();
+    dispatcher.emplace(&engine, &scheduler, nullptr, DefaultDispatcherConfig(), &*settings_store);
+    ipc::Envelope update;
+    update.version = 1;
+    update.request_id = 1;
+    update.type = ipc::MessageType::UpdateConfig;
+    update.payload_json = "{}";
+    const auto response = dispatcher->Dispatch(update);
+    ASSERT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseUpdateConfigResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value());
+    ASSERT_TRUE(parsed->ok);
+  }
+
+  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app) {
+    ipc::QueryCandidatesRequest q;
+    q.reading = "にほん";
+    q.app = std::move(app);
+    ipc::Envelope env;
+    env.version = 1;
+    env.request_id = ++next_id;
+    env.type = ipc::MessageType::QueryCandidates;
+    env.payload_json = ipc::BuildQueryCandidatesRequest(q);
+    const auto response = dispatcher->Dispatch(env);
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  }
+
+  // Position of surface, or candidates.size() when absent.
+  static size_t IndexOf(const std::vector<ipc::CandidateField>& candidates,
+                        const std::string& surface) {
+    return static_cast<size_t>(
+        std::find_if(candidates.begin(), candidates.end(),
+                     [&](const ipc::CandidateField& c) { return c.surface == surface; }) -
+        candidates.begin());
+  }
+
+  static void ExpectGlobalOrder(const std::vector<ipc::CandidateField>& candidates) {
+    ASSERT_LT(IndexOf(candidates, "Nihon"), candidates.size());
+    EXPECT_LT(IndexOf(candidates, "日本"), IndexOf(candidates, "二本"));
+    EXPECT_LT(IndexOf(candidates, "二本"), IndexOf(candidates, "Nihon"));
+  }
+
+  std::string settings_path;
+  azookey::host::InferenceEngine engine;
+  azookey::host::RequestScheduler scheduler;
+  std::optional<azookey::host::SettingsStore> settings_store;
+  std::optional<azookey::host::Dispatcher> dispatcher;
+  uint64_t next_id = 100;
+};
+
+constexpr const char* kCodeProfileSettings =
+    R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":3.0}}}})";
+
+}  // namespace
+
+TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatchingApp) {
+  ApplySettings(kCodeProfileSettings);
+  const auto boosted = Query(ipc::AppIdentity{"Code.exe", "Chrome_WidgetWin_1"});
+  ASSERT_LT(IndexOf(boosted, "Nihon"), boosted.size());
+  // 6.0 x 3.0 overtakes 10.0; the untagged candidates keep their order.
+  EXPECT_LT(IndexOf(boosted, "Nihon"), IndexOf(boosted, "日本"));
+  EXPECT_LT(IndexOf(boosted, "日本"), IndexOf(boosted, "二本"));
+  EXPECT_EQ(boosted[IndexOf(boosted, "Nihon")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::English));
+}
+
+TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {
+  ApplySettings(kCodeProfileSettings);
+  ExpectGlobalOrder(Query(std::nullopt));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"notepad.exe", "Notepad"}));
+}
+
+TEST_F(AppProfileDispatchTest, InvalidProfileValuesFallBackWithoutFailingTheQuery) {
+  ApplySettings(
+      R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":"high","Unknown":2.0},)"
+      R"("style":"shouting"},"bad.exe":7}})");
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
+}
+
+TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
+  // technical maps to the Technical tag, which no candidate here carries, so
+  // the order holds; preferTechnicalTerms alone must not touch English either.
+  ApplySettings(
+      R"({"profilesByApp":{"code.exe":{"style":"technical","preferTechnicalTerms":true}}})");
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
+}
+
 TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {
   const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_trace_phase_test";
   RemovePathNoThrow(log_dir);

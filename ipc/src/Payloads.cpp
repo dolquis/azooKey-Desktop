@@ -19,7 +19,29 @@ j::Value CandidateToJson(const CandidateField& c) {
   o.emplace("score", j::Value(c.score));
   o.emplace("source", j::Value(c.source));
   if (!c.description.empty()) o.emplace("description", j::Value(c.description));
+  if (c.tag != 0) o.emplace("tag", j::Value(static_cast<uint64_t>(c.tag)));
   return j::Value(std::move(o));
+}
+
+void AppToJson(const std::optional<AppIdentity>& app, j::Object& o) {
+  if (!app) return;
+  j::Object a;
+  a.emplace("process_name", j::Value(app->process_name));
+  a.emplace("window_class", j::Value(app->window_class));
+  o.emplace("app", j::Value(std::move(a)));
+}
+
+// A malformed app object degrades to "unknown app" rather than rejecting the
+// query: the profile is an enhancement and the global settings still apply.
+std::optional<AppIdentity> AppFromJson(const j::Value& v) {
+  const auto* a = v.FindObject("app");
+  if (!a) return std::nullopt;
+  const j::Value app(*a);
+  AppIdentity identity;
+  identity.process_name = app.GetString("process_name").value_or(std::string());
+  identity.window_class = app.GetString("window_class").value_or(std::string());
+  if (identity.process_name.empty() && identity.window_class.empty()) return std::nullopt;
+  return identity;
 }
 
 std::optional<CandidateField> CandidateFromJson(const j::Value& v) {
@@ -35,6 +57,8 @@ std::optional<CandidateField> CandidateFromJson(const j::Value& v) {
   c.score = score.value_or(0.0);
   c.source = source.value_or(std::string());
   c.description = v.GetString("description").value_or(std::string());
+  const auto tag = v.GetUInt("tag").value_or(0);
+  c.tag = tag <= 0xFF ? static_cast<uint8_t>(tag) : 0;
   return c;
 }
 
@@ -314,6 +338,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   if (!p.emoji_trigger.empty()) o.emplace("emoji_trigger", j::Value(p.emoji_trigger));
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
+  AppToJson(p.app, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -332,6 +357,7 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.emoji_trigger = v->GetString("emoji_trigger").value_or(std::string());
   p.secure = v->GetBool("secure").value_or(true);
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
+  p.app = AppFromJson(*v);
   return p;
 }
 
@@ -465,6 +491,7 @@ std::string BuildQueryPredictionsRequest(const QueryPredictionsRequest& p) {
   o.emplace("kana", j::Value(p.kana));
   o.emplace("leftSideContext", j::Value(p.left_side_context));
   o.emplace("mode", j::Value(p.mode));
+  AppToJson(p.app, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -475,7 +502,8 @@ std::optional<QueryPredictionsRequest> ParseQueryPredictionsRequest(const std::s
   auto left_side_context = v->GetString("leftSideContext");
   auto mode = v->GetString("mode");
   if (!kana || !left_side_context || !mode) return std::nullopt;
-  return QueryPredictionsRequest{std::move(*kana), std::move(*left_side_context), std::move(*mode)};
+  return QueryPredictionsRequest{std::move(*kana), std::move(*left_side_context), std::move(*mode),
+                                 AppFromJson(*v)};
 }
 
 std::string BuildQueryPredictionsResponse(const QueryPredictionsResponse& p) {

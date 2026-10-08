@@ -435,6 +435,74 @@ TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
   EXPECT_TRUE(old_response->segments.empty());
 }
 
+TEST(PayloadsTest, QueryRequestsCarryTheForegroundAppAndOmitItWhenUnknown) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "かな";
+  request.app = AppIdentity{"code.exe", "Chrome_WidgetWin_1"};
+  const auto wire = json::Parse(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(wire);
+  const auto* app = wire->FindObject("app");
+  ASSERT_NE(app, nullptr);
+  EXPECT_EQ(json::Value(*app).GetString("process_name"), "code.exe");
+  EXPECT_EQ(json::Value(*app).GetString("window_class"), "Chrome_WidgetWin_1");
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed && parsed->app);
+  EXPECT_EQ(parsed->app->process_name, "code.exe");
+  EXPECT_EQ(parsed->app->window_class, "Chrome_WidgetWin_1");
+
+  request.app.reset();
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(request))->FindObject("app"));
+  // An older TIP never sends app; a malformed one degrades to "unknown app"
+  // instead of failing the query.
+  for (const char* payload :
+       {R"({"reading":"かな"})", R"({"reading":"かな","app":"code.exe"})",
+        R"({"reading":"かな","app":{"process_name":7}})", R"({"reading":"かな","app":{}})"}) {
+    const auto legacy = ParseQueryCandidatesRequest(payload);
+    ASSERT_TRUE(legacy) << payload;
+    EXPECT_FALSE(legacy->app.has_value()) << payload;
+  }
+
+  QueryPredictionsRequest prediction{"にほん", "", "word", AppIdentity{"outlook.exe", ""}};
+  const auto parsed_prediction =
+      ParseQueryPredictionsRequest(BuildQueryPredictionsRequest(prediction));
+  ASSERT_TRUE(parsed_prediction && parsed_prediction->app);
+  EXPECT_EQ(parsed_prediction->app->process_name, "outlook.exe");
+  EXPECT_TRUE(parsed_prediction->app->window_class.empty());
+  const auto legacy_prediction =
+      ParseQueryPredictionsRequest(R"({"kana":"かな","leftSideContext":"","mode":"word"})");
+  ASSERT_TRUE(legacy_prediction);
+  EXPECT_FALSE(legacy_prediction->app.has_value());
+}
+
+TEST(PayloadsTest, CandidateTagRoundTripsAndIsOmittedWhenNone) {
+  using namespace azookey::ipc;
+  QueryCandidatesResponse response;
+  response.candidates = {{"Nihon", "にほん", 1.0, "model", "", 4},
+                         {"日本", "にほん", 0.5, "system"}};
+  const auto json_text = BuildQueryCandidatesResponse(response);
+  const auto wire = json::Parse(json_text);
+  ASSERT_TRUE(wire);
+  const auto* candidates = wire->GetArray("candidates");
+  ASSERT_TRUE(candidates && candidates->size() == 2u);
+  EXPECT_EQ((*candidates)[0].GetUInt("tag"), 4u);
+  EXPECT_FALSE((*candidates)[1].Find("tag"));
+
+  const auto parsed = ParseQueryCandidatesResponse(json_text);
+  ASSERT_TRUE(parsed && parsed->candidates.size() == 2u);
+  EXPECT_EQ(parsed->candidates[0].tag, 4u);
+  EXPECT_EQ(parsed->candidates[1].tag, 0u);
+
+  // Unknown tags pass through; values beyond uint8 decode as None.
+  const auto other = ParseQueryCandidatesResponse(
+      R"({"candidates":[{"surface":"a","reading":"a","tag":9},)"
+      R"({"surface":"b","reading":"b","tag":256},{"surface":"c","reading":"c","tag":"x"}]})");
+  ASSERT_TRUE(other && other->candidates.size() == 3u);
+  EXPECT_EQ(other->candidates[0].tag, 9u);
+  EXPECT_EQ(other->candidates[1].tag, 0u);
+  EXPECT_EQ(other->candidates[2].tag, 0u);
+}
+
 TEST(PayloadsTest, QueryCandidatesResponseDropsMalformedEntries) {
   // A mix of valid and malformed candidate entries must parse successfully,
   // preserving the valid entries in order while silently dropping the malformed

@@ -212,7 +212,7 @@ struct Candidate {
 候補 UI のアノテーション列に `[敬]` `[砕]` `[技]` 等の 2 文字バッジを表示
 （`PredictionWindow.cpp` / `CandidateWindow.cpp` 共通）。
 
-IPC：`PredictionItem` / `CandidateItem` Payload に `tag: uint8` フィールド追加。
+IPC：`CandidateField`（候補・予測の両 payload が使う）に `tag: uint8` フィールドを追加する（0 = None は省略）。
 
 ### X-2-4. PredictWithLLM（Phase 6）
 

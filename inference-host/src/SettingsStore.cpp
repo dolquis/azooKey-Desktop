@@ -516,6 +516,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
     const InferenceThreadEnvironmentProvider& provider) {
   config.dictionary = settings.dictionary;
+  config.app_profiles = settings.app_profiles;
   config.enable_live_conversion = settings.live_conversion;
   config.dynamic_punctuation = settings.dynamic_punctuation;
   config.segment_boundary_confidence = settings.segment_boundary_confidence;

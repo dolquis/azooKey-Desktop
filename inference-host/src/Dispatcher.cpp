@@ -197,7 +197,21 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   f.score = c.score;
   f.source = SourceToWire(c.source);
   f.description = c.description;
+  f.tag = static_cast<uint8_t>(c.tag);
   return f;
+}
+
+// docs/app-profile-spec.md sections 3 and 9: an absent app, or no profiles,
+// leaves only the global settings, which carry no tag boosts by default.
+TagBoosts ResolveTagBoosts(const EngineConfig& config, const std::optional<ipc::AppIdentity>& app) {
+  if (!config.app_profiles) return {};
+  core::ForegroundApp foreground;
+  if (app) {
+    foreground.process_name = app->process_name;
+    foreground.window_class = app->window_class;
+    foreground.resolved = !app->process_name.empty();
+  }
+  return TagBoostsFromProfile(config.app_profiles->Resolve(foreground));
 }
 
 std::optional<BackendKind> ParseBackend(const std::string& backend) {
@@ -659,9 +673,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
+    const auto tag_boosts = ResolveTagBoosts(engine_config, parsed->app);
     auto queried =
         engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
-                                   ordinary_limit, parsed->live, trace.context());
+                                   ordinary_limit, parsed->live, trace.context(), &tag_boosts);
     candidates = std::move(queried.candidates);
     corrected_reading = std::move(queried.corrected_reading);
     // Under auto_replace the conversion ran on the corrected reading, so the

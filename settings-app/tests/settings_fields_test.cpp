@@ -204,6 +204,28 @@ TEST(SettingsFieldsTest, ValuesAreCheckedAgainstTypeRangeAndOptions) {
   EXPECT_TRUE(ValidateSettingValue(*FindSettingField("privacy.secureApps"), std::string("a")));
 }
 
+TEST(SettingsFieldsTest, OnlyValuesChangedFromWhatWasLoadedAreSaved) {
+  azookey::settings::SettingValues loaded{
+      {"maxCandidates", int64_t{12}},
+      {"privacy.secureApps", std::vector<std::string>{"", " KeePass.exe"}},
+  };
+  azookey::settings::SettingValues edited{
+      {"maxCandidates", int64_t{12}},
+      {"privacy.secureApps", std::vector<std::string>{"KeePass.exe"}},
+      // Shown at the default because the stored value was invalid for the field.
+      {"autoUpdate.checkIntervalHours", int64_t{24}},
+      {"inputMode", std::string("alnum_half")},
+      {"liveConversion", false},
+  };
+  const auto changed = azookey::settings::ChangedSettingValues(edited, loaded);
+  EXPECT_EQ(changed.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(changed.at("inputMode")), "alnum_half");
+  // The text box shows the list trimmed; leaving it as shown is not an edit.
+  EXPECT_FALSE(changed.contains("privacy.secureApps"));
+  EXPECT_FALSE(changed.contains("maxCandidates"));
+  EXPECT_FALSE(changed.contains("autoUpdate.checkIntervalHours"));
+}
+
 TEST(SettingsFieldsTest, ListTextIsOneTrimmedEntryPerLine) {
   using azookey::settings::FormatSettingList;
   using azookey::settings::ParseSettingList;

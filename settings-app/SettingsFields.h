@@ -69,6 +69,10 @@ std::optional<std::string> ValidateSettingValue(const SettingField& field,
 
 bool IsSettingFieldActive(const SettingField& field, const SettingValues& values);
 
+// The entries of `edited` that differ from what was loaded (or the default when nothing valid
+// was loaded), so a save leaves untouched keys exactly as they are on disk.
+SettingValues ChangedSettingValues(const SettingValues& edited, const SettingValues& loaded);
+
 // One entry per line; surrounding blanks are trimmed and empty lines dropped.
 std::vector<std::string> ParseSettingList(std::string_view text);
 std::string FormatSettingList(const std::vector<std::string>& items);

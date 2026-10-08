@@ -393,10 +393,13 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                                         : "info";
   settings.dictionary = DictionaryFromControls();
   settings.clear_safe_mode = clear_safe_mode_;
-  if (std::string invalid_path; !field_controls_.Read(&settings.values, &invalid_path)) {
+  azookey::settings::SettingValues edited;
+  if (std::string invalid_path; !field_controls_.Read(&edited, &invalid_path)) {
     ShowInvalidSetting(invalid_path);
     co_return;
   }
+  // Only changed values are written, so untouched keys keep whatever is on disk.
+  settings.values = azookey::settings::ChangedSettingValues(edited, saved_settings_.values);
 
   if (!settings.model_selected_path.empty()) {
     const std::filesystem::path model_path(ModelPathTextBox().Text().c_str());
@@ -464,7 +467,10 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
       clear_safe_mode_ = false;
       SafeModeInfoBar().IsOpen(false);
     }
+    auto saved_values = std::move(saved_settings_.values);
+    for (const auto& [setting, value] : settings.values) saved_values[setting] = value;
     saved_settings_ = settings;
+    saved_settings_.values = std::move(saved_values);
     saved_settings_.openai_api_key.clear();
   }
   if (save_result.invalid_setting) {

@@ -18,7 +18,8 @@ class SettingsFieldControls {
 
   void Build(const PanelForPane& panels);
   void Apply(const SettingValues& values);
-  // Every field's value; returns false with the path of a control that holds no valid value.
+  // Every valid field value; returns false with the path of an enabled control that holds no
+  // valid value. Disabled controls with no valid value are left out.
   bool Read(SettingValues* values, std::string* invalid_path) const;
 
  private:

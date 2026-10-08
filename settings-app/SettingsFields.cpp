@@ -302,6 +302,24 @@ bool IsSettingFieldActive(const SettingField& field, const SettingValues& values
   return true;
 }
 
+SettingValues ChangedSettingValues(const SettingValues& edited, const SettingValues& loaded) {
+  SettingValues changed;
+  for (const auto& [path, value] : edited) {
+    const auto* field = FindSettingField(path);
+    if (!field) {
+      changed.emplace(path, value);
+      continue;
+    }
+    auto original = SettingValueOrDefault(*field, loaded);
+    if (auto* items = std::get_if<std::vector<std::string>>(&original)) {
+      // Compare with what the text box showed, so an untouched list is not rewritten trimmed.
+      *items = ParseSettingList(FormatSettingList(*items));
+    }
+    if (value != original) changed.emplace(path, value);
+  }
+  return changed;
+}
+
 std::vector<std::string> ParseSettingList(std::string_view text) {
   std::vector<std::string> items;
   size_t start = 0;

@@ -194,14 +194,24 @@ std::optional<SettingValue> SettingsFieldControls::ReadEntry(const Entry& entry)
 }
 
 bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_path) const {
+  SettingValues read;
+  std::vector<const SettingField*> invalid;
   for (const auto& entry : entries_) {
     auto value = ReadEntry(entry);
-    if (!value || ValidateSettingValue(*entry.field, *value)) {
-      *invalid_path = std::string(entry.field->path);
+    if (value && !ValidateSettingValue(*entry.field, *value)) {
+      read[std::string(entry.field->path)] = std::move(*value);
+    } else {
+      invalid.push_back(entry.field);
+    }
+  }
+  // A disabled control cannot be corrected, so its invalid value is left out of the save.
+  for (const auto* field : invalid) {
+    if (IsSettingFieldActive(*field, read)) {
+      *invalid_path = std::string(field->path);
       return false;
     }
-    (*values)[std::string(entry.field->path)] = std::move(*value);
   }
+  for (auto& [path, value] : read) (*values)[path] = std::move(value);
   return true;
 }
 

@@ -4679,6 +4679,55 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {
   EXPECT_EQ(attachment.composition_range.last_text, L"科二");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PreeditClickFocusesTheSegmentUnderTheMouse) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  auto alternative = first;
+  alternative.surface = "科";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  h.service.set_cached_batch_segments_for_test({{"か", {first, alternative}}, {"に", {second}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.Press('2'));
+
+  BOOL eaten = TRUE;
+  // A move without the left button is not a click.
+  EXPECT_EQ(h.service.OnMouseEvent(1, 2, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  // Quadrant 1 of edge 1 lies on the first character, the focused segment already.
+  EXPECT_EQ(h.service.OnMouseEvent(1, 1, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnMouseEvent(1, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "二");
+  EXPECT_EQ(attachment.composition_range.last_text, L"科二");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditClickIsIgnoredWithoutBatchSegments) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+
+  BOOL eaten = TRUE;
+  EXPECT_EQ(h.service.OnMouseEvent(0, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.OnMouseEvent(0, 2, MK_LBUTTON, nullptr), E_INVALIDARG);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, SingleBatchSegmentNumberCommitsImmediately) {
   TextServiceHarness h;
   h.service.set_batch_romaji_options_for_test(true);
@@ -4838,7 +4887,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditCaretUsesGetTextExtContractMatrix) {
     EXPECT_EQ(context_view.get_wnd_count, test_case.get_text_ext_result == S_OK ? 1 : 0);
     EXPECT_EQ(context_view.last_edit_cookie, h.context.edit_cookie);
     EXPECT_EQ(context_view.last_range, &attachment.composition_range);
-    EXPECT_EQ(caret_fallback.logical_to_physical_count(), test_case.expect_view_transform ? 1 : 0);
+    // The anchor, then both corners of the prediction caret rect.
+    EXPECT_EQ(caret_fallback.logical_to_physical_count(), test_case.expect_view_transform ? 3 : 0);
     EXPECT_EQ(caret_fallback.last_logical_to_physical_window(),
               test_case.expect_view_transform ? view_window : nullptr);
     EXPECT_EQ(h.service.caret_point_valid_for_test(), true);

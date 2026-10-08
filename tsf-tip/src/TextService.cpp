@@ -930,6 +930,8 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
     *ppvObj = static_cast<ITfCompositionSink*>(this);
   } else if (riid == IID_ITfDisplayAttributeProvider) {
     *ppvObj = static_cast<ITfDisplayAttributeProvider*>(this);
+  } else if (riid == IID_ITfMouseSink) {
+    *ppvObj = static_cast<ITfMouseSink*>(this);
   } else if (riid == IID_ITfFnConfigure || riid == IID_ITfFunction) {
     *ppvObj = static_cast<ITfFnConfigure*>(this);
   } else {
@@ -2773,20 +2775,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                 IsActionKey(key_event, UserAction::Forward)) &&
                cand_visible && !shown_batch_segments_.empty()) {
       const auto rollback_state = capture_preedit_rollback_state();
-      batch_segment_selections_[batch_segment_cursor_] =
-          static_cast<size_t>(selected_candidate_idx_);
-      if (IsActionKey(key_event, UserAction::Backward) && batch_segment_cursor_ > 0)
-        --batch_segment_cursor_;
-      if (IsActionKey(key_event, UserAction::Forward) &&
-          batch_segment_cursor_ + 1 < shown_batch_segments_.size())
-        ++batch_segment_cursor_;
-      const auto& segment = shown_batch_segments_[batch_segment_cursor_];
-      shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
-      selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
-      candidate_ui_.EndUI();
-      const auto hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
-                                            BuildCandidateViews(shown_candidates_),
-                                            selected_candidate_idx_, shown_batch_notice_);
+      size_t target = batch_segment_cursor_;
+      if (IsActionKey(key_event, UserAction::Backward) && target > 0) --target;
+      if (IsActionKey(key_event, UserAction::Forward) && target + 1 < shown_batch_segments_.size())
+        ++target;
+      const auto hr = FocusBatchSegment(target);
       if (FAILED(hr)) {
         restore_preedit_state(rollback_state);
         return hr;
@@ -3026,6 +3019,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
     core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
   composition_->Release();
   composition_ = nullptr;
+  UnadviseCompositionMouseSink();
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   const bool preserve_pending_commit = committing_;
@@ -3080,9 +3074,10 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
   AZOOKEY_ASSERT_UI_THREAD();
   if (!ppInfo) return E_INVALIDARG;
   *ppInfo = nullptr;
-  if (IsEqualGUID(guidInfo, kInputAttributeGuid)) {
+  DisplayAttributeKind kind = DisplayAttributeKind::Input;
+  if (FindDisplayAttributeKind(guidInfo, &kind)) {
     try {
-      auto* info = NewComBoundaryObject<InputDisplayAttributeInfo>();
+      auto* info = NewComBoundaryObject<DisplayAttributeInfo>(kind);
       if (!info) return E_OUTOFMEMORY;
       *ppInfo = info;
       return S_OK;
@@ -3095,6 +3090,99 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
     }
   }
   return E_INVALIDARG;
+}
+
+STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtnStatus,
+                                       BOOL* pfEaten) try {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!pfEaten) return E_INVALIDARG;
+  *pfEaten = FALSE;
+  if (!(dwBtnStatus & MK_LBUTTON)) return S_OK;
+  size_t index = 0;
+  if (!SegmentIndexAtMouseEdge(DisplayedBatchSegments(), uEdge, uQuadrant, &index)) return S_OK;
+  *pfEaten = TRUE;
+  if (index == batch_segment_cursor_) return S_OK;
+
+  const size_t previous_cursor = batch_segment_cursor_;
+  const auto previous_selections = batch_segment_selections_;
+  const auto previous_candidates = shown_candidates_;
+  const int previous_selected = selected_candidate_idx_;
+  const HRESULT hr = FocusBatchSegment(index);
+  if (FAILED(hr)) {
+    batch_segment_cursor_ = previous_cursor;
+    batch_segment_selections_ = previous_selections;
+    shown_candidates_ = previous_candidates;
+    selected_candidate_idx_ = previous_selected;
+    candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                          BuildCandidateViews(shown_candidates_), selected_candidate_idx_,
+                          shown_batch_notice_);
+    return hr;
+  }
+  ITfContext* context = mouse_tracker_context_ ? mouse_tracker_context_ : active_context_;
+  return context ? RequestPreeditUpdate(context) : S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnMouseEvent", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnMouseEvent", E_FAIL);
+  return E_FAIL;
+}
+
+bool TextService::EnsureDisplayAttributeAtoms() {
+  const auto all_registered = [this] {
+    for (const TfGuidAtom atom : display_attribute_atoms_) {
+      if (atom == TF_INVALID_GUIDATOM) return false;
+    }
+    return true;
+  };
+  if (all_registered()) return true;
+  ITfCategoryMgr* category_mgr = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_ITfCategoryMgr, reinterpret_cast<void**>(&category_mgr))) ||
+      !category_mgr) {
+    return false;
+  }
+  for (ULONG index = 0; index < kDisplayAttributeKindCount; ++index) {
+    TfGuidAtom atom = TF_INVALID_GUIDATOM;
+    if (SUCCEEDED(category_mgr->RegisterGUID(
+            DisplayAttributeGuid(static_cast<DisplayAttributeKind>(index)), &atom))) {
+      display_attribute_atoms_[index] = atom;
+    }
+  }
+  category_mgr->Release();
+  return all_registered();
+}
+
+void TextService::AdviseCompositionMouseSink(ITfContext* context, ITfRange* range) {
+  UnadviseCompositionMouseSink();
+  if (!context || !range) return;
+  ITfMouseTracker* tracker = nullptr;
+  if (FAILED(context->QueryInterface(IID_ITfMouseTracker, reinterpret_cast<void**>(&tracker))) ||
+      !tracker) {
+    return;
+  }
+  DWORD cookie = 0;
+  if (FAILED(tracker->AdviseMouseSink(range, static_cast<ITfMouseSink*>(this), &cookie))) {
+    tracker->Release();
+    return;
+  }
+  mouse_tracker_ = tracker;
+  mouse_sink_cookie_ = cookie;
+  context->AddRef();
+  mouse_tracker_context_ = context;
+}
+
+void TextService::UnadviseCompositionMouseSink() {
+  if (mouse_tracker_) {
+    mouse_tracker_->UnadviseMouseSink(mouse_sink_cookie_);
+    mouse_tracker_->Release();
+    mouse_tracker_ = nullptr;
+  }
+  mouse_sink_cookie_ = 0;
+  if (mouse_tracker_context_) {
+    mouse_tracker_context_->Release();
+    mouse_tracker_context_ = nullptr;
+  }
 }
 
 STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
@@ -3380,6 +3468,7 @@ HRESULT TextService::ApplyPendingCorrectedReading(ITfContext* context) {
 
 void TextService::ClearTextStateForLifecycle() {
   ClearPrediction();
+  UnadviseCompositionMouseSink();
   if (composition_range_) {
     composition_range_->Release();
     composition_range_ = nullptr;
@@ -3534,6 +3623,7 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
       core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
       composition_->Release();
       composition_ = nullptr;
+      UnadviseCompositionMouseSink();
     }
     ClearTextStateForLifecycle();
   }
@@ -5910,21 +6000,58 @@ std::string TextService::CurrentPreeditSurface() const {
   return preedit_kana_ + romaji_.PreviewPending();
 }
 
+bool TextService::ShowsBatchSegments() const {
+  if (core_input_active_ && (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
+                             !core_marked_surface_.empty() || core_action_in_progress_))
+    return false;
+  return emoji_mode_ == EmojiMode::Inactive && candidate_ui_.IsShowing() &&
+         !shown_batch_segments_.empty();
+}
+
+const std::string& TextService::DisplayedBatchSegmentSurface(size_t index, bool* converted) const {
+  const auto& segment = shown_batch_segments_[index];
+  const size_t selection = index == batch_segment_cursor_
+                               ? static_cast<size_t>(selected_candidate_idx_)
+                               : batch_segment_selections_[index];
+  const bool has_candidate = selection < segment.candidates.size();
+  if (converted) *converted = has_candidate;
+  return has_candidate ? segment.candidates[selection].surface : segment.reading;
+}
+
+HRESULT TextService::FocusBatchSegment(size_t index) {
+  if (index >= shown_batch_segments_.size()) return E_INVALIDARG;
+  batch_segment_selections_[batch_segment_cursor_] = static_cast<size_t>(selected_candidate_idx_);
+  batch_segment_cursor_ = index;
+  const auto& segment = shown_batch_segments_[batch_segment_cursor_];
+  shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
+  selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
+  candidate_ui_.EndUI();
+  return candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                               BuildCandidateViews(shown_candidates_), selected_candidate_idx_,
+                               shown_batch_notice_);
+}
+
+std::vector<DisplayedSegment> TextService::DisplayedBatchSegments() const {
+  std::vector<DisplayedSegment> segments;
+  if (!ShowsBatchSegments()) return segments;
+  segments.reserve(shown_batch_segments_.size());
+  for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
+    bool converted = false;
+    const std::string& surface = DisplayedBatchSegmentSurface(i, &converted);
+    segments.push_back({static_cast<LONG>(Utf8ToWide(surface).size()), converted});
+  }
+  return segments;
+}
+
 std::string TextService::CurrentDisplayedPreeditSurface() const {
   if (core_input_active_ && (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
                              !core_marked_surface_.empty() || core_action_in_progress_))
     return core_marked_surface_;
   if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
-  if (candidate_ui_.IsShowing() && !shown_batch_segments_.empty()) {
+  if (ShowsBatchSegments()) {
     std::string surface;
-    for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
-      const auto& segment = shown_batch_segments_[i];
-      const size_t selection = i == batch_segment_cursor_
-                                   ? static_cast<size_t>(selected_candidate_idx_)
-                                   : batch_segment_selections_[i];
-      surface += selection < segment.candidates.size() ? segment.candidates[selection].surface
-                                                       : segment.reading;
-    }
+    for (size_t i = 0; i < shown_batch_segments_.size(); ++i)
+      surface += DisplayedBatchSegmentSurface(i, nullptr);
     return surface;
   }
   if (candidate_ui_.IsShowing() && selected_candidate_idx_ >= 0 &&
@@ -6984,6 +7111,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->etw_composition_end_in_progress_ = false;
         if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
           service_->composition_ = nullptr;
+          service_->UnadviseCompositionMouseSink();
           comp->Release();
         }
         comp->Release();
@@ -7031,6 +7159,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     // Normal preedit update.
     std::string displayed_surface = service_->CurrentDisplayedPreeditSurface();
     const std::wstring kana = Utf8ToWide(displayed_surface);
+    const std::vector<DisplayedSegment> displayed_segments = service_->DisplayedBatchSegments();
 
     if (kana.empty()) {
       if (service_->composition_) {
@@ -7052,6 +7181,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->etw_composition_end_in_progress_ = false;
         if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
           service_->composition_ = nullptr;
+          service_->UnadviseCompositionMouseSink();
           comp->Release();
         }
         comp->Release();
@@ -7133,29 +7263,24 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
                                          &service_->caret_rect_);
     }
 
-    // Apply underline display attribute via GUID_PROP_ATTRIBUTE.
+    // Apply per-segment display attributes, or the input underline over the
+    // whole composition (tsf-deep-integration-spec §5.6).
     ITfProperty* pProp = nullptr;
     if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {
-      ITfCategoryMgr* pCatMgr = nullptr;
-      if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                                     IID_ITfCategoryMgr, reinterpret_cast<void**>(&pCatMgr))) &&
-          pCatMgr) {
-        TfGuidAtom atom = TF_INVALID_GUIDATOM;
-        pCatMgr->RegisterGUID(kInputAttributeGuid, &atom);
-        if (atom != TF_INVALID_GUIDATOM) {
-          VARIANT var;
-          var.vt = VT_I4;
-          var.lVal = static_cast<LONG>(atom);
-          const HRESULT attr_hr = pProp->SetValue(ec, pRange, &var);
-          if (FAILED(attr_hr)) {
-            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
-                       "preedit_display_attribute_set_failed");
-          }
-        }
-        pCatMgr->Release();
+      service_->EnsureDisplayAttributeAtoms();
+      std::vector<SegmentAttributeRange> ranges =
+          BuildSegmentAttributeRanges(displayed_segments, service_->batch_segment_cursor_);
+      LONG segments_length = 0;
+      for (const auto& range : ranges) segments_length += range.length;
+      if (segments_length != static_cast<LONG>(kana.size())) ranges.clear();
+      const HRESULT attr_hr =
+          ApplyDisplayAttributes(ec, pProp, pRange, ranges, service_->display_attribute_atoms_);
+      if (FAILED(attr_hr)) {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preedit_display_attribute_set_failed");
       }
       pProp->Release();
     }
+    service_->AdviseCompositionMouseSink(context_, pRange);
 
     // Keep the document caret at the end of the preedit without collapsing the
     // range used for the full-composition display attribute above.

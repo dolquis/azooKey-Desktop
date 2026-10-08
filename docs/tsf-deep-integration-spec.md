@@ -664,48 +664,59 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 
 変換中の preedit を、文節（segment）ごとに異なる属性で表示：
 
-| 属性 | 用途 | 色 |
+| 属性 | 用途 | 想定する描画 |
 |---|---|---|
-| Focused | 注目文節（カーソルがある文節） | 青背景 |
-| Converted | 変換済み文節 | 黒 + 下線 |
-| Unconverted | 未変換文節 | グレー + 点線下線 |
+| Focused | 注目文節（カーソルがある文節） | 青背景（太い実線下線） |
+| Converted | 変換済み文節 | 実線下線 |
+| Unconverted | 未変換文節 | 点線下線 |
+
+色は provider から指定しない（§5.6）。
+「想定する描画」は、`bAttr` に応じてアプリが選ぶ配色の典型である。
 
 ### 5.2 GUID 定義
 
-`tsf-tip/src/DllMain.cpp` に追加：
+`tsf-tip/include/azookey/tsf/DisplayAttribute.h` に定義する：
 
 ```cpp
-constexpr GUID kFocusedSegmentGuid     = { 0xBBC0..., ... };
-constexpr GUID kConvertedSegmentGuid   = { 0xBBC1..., ... };
-constexpr GUID kUnconvertedSegmentGuid = { 0xBBC2..., ... };
+inline constexpr GUID kFocusedSegmentAttributeGuid     = {0x06c5c71c, ...};
+inline constexpr GUID kConvertedSegmentAttributeGuid   = {0x74ebd680, ...};
+inline constexpr GUID kUnconvertedSegmentAttributeGuid = {0xa46c0379, ...};
 ```
 
-`EnumDisplayAttributeInfo` へ 3 エントリを追加する（M3 の入力属性と合わせて
-計 4 エントリ。M3 属性との対応は §5.6）。
+`DisplayAttributeKind`（`Input` / `FocusedSegment` / `ConvertedSegment` / `UnconvertedSegment`）が
+GUID と `TF_DISPLAYATTRIBUTE` の対応を持つ。
+`EnumDisplayAttributeInfo` はこの順で 4 エントリを返し、M3 の入力属性が先頭に来る（§5.6）。
+`GetDisplayAttributeInfo` は 4 つの GUID のいずれにも応じる。
 
 ### 5.3 Property 設定
 
-EditSession 内で、文節ごとに `ITfRange` を分割：
+EditSession は、表示中の文節から `SegmentAttributeRange`（UTF-16 単位の開始位置、長さ、属性）
+の列を作り、文節ごとに composition range を clone して `GUID_PROP_ATTRIBUTE` を設定する。
 
 ```cpp
-for (const auto& seg : segments) {
-    ITfRange* segRange = ...; // composition range を seg.start..seg.end でクローン
-    VARIANT v;
-    v.vt   = VT_I4;
-    v.lVal = display_attr_provider_->GuidToAtom(
-        seg.is_focused ? kFocusedSegmentGuid :
-        seg.is_converted ? kConvertedSegmentGuid : kUnconvertedSegmentGuid);
-    attr_prop->SetValue(write_cookie, segRange, &v);
+for (const auto& segment : ranges) {
+    ITfRange* range = nullptr;
+    composition->Clone(&range);
+    range->Collapse(ec, TF_ANCHOR_START);
+    range->ShiftEnd(ec, segment.start + segment.length, &shifted, nullptr);
+    range->ShiftStart(ec, segment.start, &shifted, nullptr);
+    property->SetValue(ec, range, &atom_of(segment.kind));
 }
 ```
 
-`GuidToAtom` は `ITfCategoryMgr::RegisterGUID` 経由で取得するアトム。
-キャッシュは TextService インスタンス内に保持。
+属性の割り当ては、注目文節が Focused、それ以外は候補を表示している文節が Converted、
+読みのまま表示している文節が Unconverted である。
+長さ 0 の文節には range を作らない。
+
+アトムは `ITfCategoryMgr::RegisterGUID` で 4 つまとめて取得し、TextService インスタンス内に保持する。
 
 ### 5.4 文節境界
 
-Phase 5 では「変換候補 1 件 = 1 文節」として扱う。
-Phase 6 で Zenzai が複数文節を返すようになったら、`Candidate.segments[]` を活用。
+文節は一括変換の結果（`ipc::BatchConversionSegment`）である。
+segment は区間を持たないので、各文節が表示している文字列（選択中の候補の `surface`、
+候補を選んでいなければ `reading`）の UTF-16 長を先頭から積み上げて境界を決める。
+この文字列は preedit 全体の表示文字列を作る規則と同じであり、区間の和が composition の長さと
+一致しないときは文節属性を使わず §5.6 の fallback にする。
 
 ### 5.5 受け入れ条件
 
@@ -749,21 +760,33 @@ M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAt
 - `kInputAttributeGuid` は M23 実装後も残し、**文節情報が使えないときの fallback
   属性**として composition 全体に適用する。`EnumDisplayAttributeInfo` は M3 の 1
   エントリ + M23 の 3 エントリ = 4 エントリを返す。
-- fallback を使う条件は、`Candidate.segments[]` が空（§5.4 の Phase 5 段階を含む）、
-  Host が劣化モードで文節情報を返せない、M23 が未有効のいずれか。
-- 文節ごとの `SetValue`（§5.3）に 1 つでも失敗したときは、composition 全体を
-  fallback 属性で塗り直し、色が文節間で不揃いなまま残らないようにする。
+- fallback を使う条件は、一括変換の文節を候補ウィンドウで表示していないこと
+  （入力中の読み、ライブ変換の preedit、絵文字入力、core 経由の preedit を含む）、
+  または文節の区間の和が composition の長さと一致しないこと。
+  ライブ変換の preedit は文節情報を持たないため、常に fallback 属性で表示する。
+- 文節ごとの `SetValue`（§5.3）に 1 つでも失敗したとき、または文節属性のアトムを
+  取得できないときは、composition 全体を fallback 属性で塗り直し、色が文節間で
+  不揃いなまま残らないようにする。
 
 アプリ差についての前提: 多くのアプリは provider が指定した色をそのまま使わず、
 `bAttr` を見て自前の配色で描く。したがって色指定は「無視されうる」前提で決め、
 文節の区別は `bAttr` の選択で担保する。M3 が色を `TF_CT_NONE` にしているのは
 この前提に沿った選択であり、M23 で色を足すときも `bAttr` だけで区別が付く
 組み合わせを崩さない。
+M23 の 3 属性も色を `TF_CT_NONE` とし、`bAttr` と下線の線種・太さだけで区別する。
+Dark テーマやハイコントラストでの配色はアプリの描画に任せる。
+
+| 属性 | `bAttr` | `lsStyle` | `fBoldLine` |
+|---|---|---|---|
+| Input（fallback） | `TF_ATTR_INPUT` | `TF_LS_SOLID` | `FALSE` |
+| Focused | `TF_ATTR_TARGET_CONVERTED` | `TF_LS_SOLID` | `TRUE` |
+| Converted | `TF_ATTR_CONVERTED` | `TF_LS_SOLID` | `FALSE` |
+| Unconverted | `TF_ATTR_INPUT` | `TF_LS_DOT` | `FALSE` |
 
 回帰テストは `tsf-tip/tests/display_attribute_test.cpp`（属性値の定義、
-enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー）が担う。
-M23 で属性数が 1 → 4 に増えるとき、`kAttributeCount` に依存する境界テストも
-同時に更新する。
+enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー、文節の区間と属性の割り当て、
+文節ごとの `SetValue` と失敗時の fallback）が担う。
+enumerator の境界テストは属性数（`kDisplayAttributeKindCount`）を基準に書く。
 
 ### 5.7 アプリ互換チェックリスト（M3・実機 Win11）
 
@@ -772,7 +795,7 @@ M23 で属性数が 1 → 4 に増えるとき、`kAttributeCount` に依存す�
 `compat-test/m3_display_attribute_checklist.md`** に定める。実機 Win11 が必要な
 ため実走は DEV-365（`gate:human-required`）で行い、**アプリ別の実測結果（可変ログ）
 は docs ではなく DEV-365（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
-M23 で属性が増えたときは、同チェックリストへ文節ごとの色分け項目を追加する。
+M23 の文節ごとの属性とマウスクリックによる注目文節の移動も、同チェックリストの項目として確認する。
 
 ## 6. ITfFnConfigure (M30 連動)
 
@@ -851,22 +874,32 @@ Preedit テキスト上でマウスクリックされた箇所を「注目文節
 
 ### 7.2 実装
 
-`TextService::OnCompositionStart` で `ITfRange::AdviseSink(IID_ITfMouseSink, this, ...)` を呼ぶ。
+TextService は `ITfMouseSink` を実装する。
+EditSession が composition の文字列を更新するたびに、対象 context を QI した
+`ITfMouseTracker::AdviseMouseSink(composition range, this, &cookie)` で composition range を
+監視し直す。
+composition が終わったとき（確定、空にした更新、`OnCompositionTerminated`、フォーカス喪失などの
+lifecycle 後始末）は `UnadviseMouseSink` で解除する。
+`ITfMouseTracker` を返さない context では何もしない。
 
 ```cpp
-STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge,
-                                        ULONG uQuadrant,
-                                        DWORD dwBtnStatus,
-                                        BOOL* pfEaten) {
-    if (dwBtnStatus & MK_LBUTTON) {
-        // uEdge: クリック位置に最も近い range 境界
-        size_t segment_index = FindSegmentByEdge(uEdge);
-        SetFocusedSegment(segment_index);
-        *pfEaten = TRUE;
-    }
+STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant,
+                                       DWORD dwBtnStatus, BOOL* pfEaten) {
+    *pfEaten = FALSE;
+    if (!(dwBtnStatus & MK_LBUTTON)) return S_OK;
+    size_t index = 0;
+    if (!SegmentIndexAtMouseEdge(DisplayedBatchSegments(), uEdge, uQuadrant, &index))
+        return S_OK;  // 一括変換の文節を表示していない
+    *pfEaten = TRUE;
+    if (index != focused) FocusBatchSegment(index);  // 矢印キーと同じ処理
     return S_OK;
 }
 ```
+
+`uEdge` は composition 先頭からの文字境界で、`uQuadrant` の 0 と 1 は境界の手前、2 と 3 は
+境界の後ろを表す。
+手前ならその境界の直前の文字、後ろなら直後の文字を含む文節を選ぶ。
+composition の末尾より後ろは最後の文節とする。
 
 ### 7.3 受け入れ条件
 
@@ -910,8 +943,8 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 | KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
-| Segment DisplayAttribute | `tsf-tip/tests/segment_attr_test.cpp` | Windows 限定。3 文節の attribute 設定 |
-| DisplayAttribute（M3 単一属性・§5.6） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。属性値の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること |
+| DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
+| Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |
 
 ## 10. 参照
 

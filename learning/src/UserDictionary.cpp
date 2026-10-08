@@ -193,6 +193,45 @@ std::string UserDictionary::Serialize() const {
   return j::Stringify(j::Value(std::move(root)));
 }
 
+std::string UserDictionary::SerializeText() const { return Serialize(); }
+
+bool UserDictionary::LoadText(std::string_view text) {
+  auto v = j::Parse(text);
+  const auto* entries = v && v->IsObject() ? v->GetArray("entries") : nullptr;
+  if (!entries) return false;
+  Clear();
+  for (const auto& e : *entries) {
+    if (auto w = WordFromJson(e)) {
+      by_ruby_[w->ruby].push_back(std::move(*w));
+    }
+  }
+  return true;
+}
+
+ImportCounts UserDictionary::Merge(const UserDictionary& other, ImportConflictPolicy policy) {
+  ImportCounts counts;
+  for (const auto& word : other.All()) {
+    auto& bucket = by_ruby_[word.ruby];
+    auto it = std::find_if(bucket.begin(), bucket.end(),
+                           [&](const UserWord& x) { return x.word == word.word; });
+    if (it == bucket.end()) {
+      bucket.push_back(word);
+      ++counts.imported;
+      continue;
+    }
+    ++counts.conflicts;
+    // learning-data-management-spec section 6: merge keeps the local word.
+    if (policy == ImportConflictPolicy::Overwrite) {
+      *it = word;
+      ++counts.imported;
+    } else {
+      ++counts.skipped;
+    }
+  }
+  if (counts.imported > 0) ++revision_;
+  return counts;
+}
+
 bool UserDictionary::Add(const UserWord& w) {
   ++revision_;
   auto& bucket = by_ruby_[w.ruby];

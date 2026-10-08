@@ -20,6 +20,7 @@
 | データ | 既定パス | 由来 M | 暗号化 |
 |---|---|---|---|
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
+| `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。`learning.tsv` は移行元として残す） | M54 | M34 と同じ `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
 | `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
@@ -47,8 +48,8 @@
 操作:
 
 - **検索**: reading / surface の部分一致
-- **忘却**: 個別エントリを weight = 0 で削除（or remove）
-- **エクスポート**: 暗号化 ZIP 出力（§5）
+- **忘却**: 個別エントリを忘れる（ストアごとの規則は §4.2）
+- **エクスポート**: 各ファイルを DPAPI で暗号化した ZIP 出力（§5）
 - **インポート**: 別環境からの復元（§6）
 - **全削除**: 当該タブのデータを全消去（DPAPI 鍵は維持）
 
@@ -112,7 +113,18 @@ Response（host → settings-app）:
 ```
 
 ページネーション（`limit` / `offset`）必須。エントリ数が多くなる学習
-ストアでも UI 応答を保つ。
+ストアでも UI 応答を保つ。`limit` は 500 で頭打ちにし、`total` は検索に一致した全件数を返す。
+
+- **並び**: 学習チャネル、読み、表記の昇順。
+- **学習チャネル**: `learning` ストアはかな（`kana`）と英語（`english`、DEV-1196）の
+  2 つの `LearningStore` を列挙し、各 entry にチャネル名を持たせる。
+- **学習の entry**: 1 つの `(reading, surface)` を 1 entry とし、app 別の行
+  （`user-learning-enhancement-spec.md` §3.2）を合算する。`weight` は合計、
+  最終使用は最大、`tags` は app 名、`metadata` は `commit_count` / `accept_count` / `reject_count`。
+  忘却済みの組は出さない。
+- **id**: ストア名、チャネル、読み、表記をそれぞれ長さ付きで連結した文字列の
+  SHA-256 の先頭 16 桁（小文字 16 進）。キーから決まるので、Host の再起動後も変わらず、
+  採番状態を保存しない。
 
 ### 4.2 ForgetLearningEntry
 
@@ -145,8 +157,24 @@ Response:
 }
 ```
 
-該当エントリの weight を 0 化 + soft-delete。再観測時は新規エントリと
-して扱い、過去履歴を引き継がない。
+忘却の扱いはストアごとに次のとおり。
+
+| ストア | 忘却 |
+|---|---|
+| `learning` | 組の全 app 行の weight と回数を 0 にする。次の保存でファイルから除く。再観測時は新規として扱い、過去の回数を引き継がない |
+| `typo` | ペアを削除する |
+| `user_dict` | 単語を削除する |
+| `auto_word` | 状態を `rejected` にする。削除すると同じ語を再び候補として提案するため、行は残す |
+
+`learning` の 0 化した行を保存で除くのは、忘れた語をディスクに残さないためである。
+`learning_min_weight` の GC（`user-learning-enhancement-spec.md` §3.1.1）が無効でも除く。
+忘却した組は、前方一致の `min_score` の値によらず予測に出さない。
+
+M54 で v2 へ移行した利用者には、旧版の Host へ戻すための M7 ファイル（`learning.tsv.enc`）が残る
+（`user-learning-enhancement-spec.md` §3.1）。忘却は M7 ファイルにも及ぼし、同じ組の行を
+M7 の書式のまま M7 ファイルから除く。M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
+失敗しても M7 ファイルを壊さない（失敗したら忘却を失敗として返す）。
+M7 ファイルを書き換えるのはこの忘却だけで、通常の保存では書き換えない。
 
 ### 4.3 ExportLearningData
 
@@ -228,13 +256,31 @@ Response:
 ```
 azookey-backup-YYYYMMDD-HHMMSS.zip
 ├── manifest.json
-├── learning.tsv.enc       (DPAPI 暗号化)
+├── learning.tsv.enc       (DPAPI 暗号化。かなの学習)
+├── learning_english.tsv.enc  (英語の学習)
 ├── user_dict.json.enc
 ├── typo_corrections.tsv.enc
 ├── auto_words.tsv.enc
 ├── english_learning.tsv.enc
 └── settings.redacted.json  (include_settings=true 時のみ)
 ```
+
+- **ZIP**: 圧縮しない STORE 方式だけを使う（§7）。読み込みも STORE 以外、ZIP64、
+  暗号化フラグ、data descriptor を含む archive を拒否する。
+- **entry の中身**: 各ストアが保存時に書く平文（学習は v2 形式）を、ファイルごとに暗号化したもの。
+- **読み込みの制限**: Host は archive をディスクへ展開しない。manifest が挙げた
+  固定名の entry だけをメモリ上で読む。上限は archive 全体 64 MiB、entry 16 件、
+  1 entry 32 MiB で、読む前に検査する。
+- **パス**: `destination_path` / `source_path` は絶対パスで `..` を含まず、拡張子は `.zip` とする。
+  ファイル名に `:` を含むパス（NTFS の代替データストリーム）は拒否する。
+  UNC（`\\host\share`）とデバイス名前空間（`\\?\`、`\\.\`）、予約デバイス名
+  （`CON`、`PRN`、`AUX`、`NUL`、`COM1`〜`COM9`、`LPT1`〜`LPT9` など。拡張子が付いていても同じ）も拒否する。
+  `source_path` がシンボリックリンクなら、たどらずに拒否する。
+- **上書きしない確定**: export は同じディレクトリの一時ファイルへ書いてから、置換しない移動
+  （Windows では `MOVEFILE_REPLACE_EXISTING` なしの `MoveFileEx`）で確定する。
+  検査の後に別のプロセスが `destination_path` を作っても、上書きせずに `destination_exists` で失敗する。
+  `destination_path` は既存ファイルを上書きせず、親ディレクトリが存在すること。
+  `source_path` は存在する通常ファイルであること。
 
 ### 5.1 manifest.json
 
@@ -261,7 +307,10 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
 }
 ```
 
-各 entry に SHA-256 を含めて整合性を検証する。
+各 entry に SHA-256 を含めて整合性を検証する。SHA-256 は ZIP に格納したバイト列
+（暗号化後）に対して計算し、すべての entry を検証してから復号する。
+平文の SHA-256 は書かない。短い学習データは平文のハッシュから推測されうるためである。
+平文 export の `encryption_method` は `"none"` とする。
 
 ### 5.2 暗号化
 
@@ -277,45 +326,44 @@ DPAPI ユーザースコープ（`CryptProtectData`）で各ファイルを暗�
 
 | 衝突パターン | `merge` | `overwrite` | `keep_both` |
 |---|---|---|---|
-| 同 reading/surface の既存 weight あり | 加算 or 大きい方 | 上書き | 別 id で両方保持 |
-| user_dict で同 reading/word | 既存維持 | 上書き | 両方保持 |
-| auto_word で同 surface | count 加算 | 上書き | 両方保持 |
+| learning で同 reading/surface/app_name | weight と各回数を加算、最終使用と最後のイベントは新しい方 | 上書き | 既存維持 |
+| user_dict で同 reading/word | 既存維持 | 上書き | 既存維持 |
+| typo で同 wrong/correct | count 加算（上限で飽和）、最終使用は新しい方 | 上書き | 既存維持 |
+| auto_word で同 surface/reading | count 加算、状態は既存維持 | 上書き | 既存維持 |
 | 形式バージョン違い | migration 実行 | migration 実行 | migration 実行 |
 | 暗号化データで復号失敗 | error 返却 | error 返却 | error 返却 |
 
 `merge` を既定とする。UI で選択可能にする。
 
+- 衝突しないキーは、どの方式でも追加する。
+- 各ストアのキーは一意なので、`keep_both` は同じキーに 2 つの値を持てず、既存を維持する。
+- auto_word の `merge` で状態を既存のまま残すのは、import によってユーザーが却下した語が
+  候補に戻るのを防ぐためである。
+- archive の読み込み、checksum、復号、各ストアの解析がすべて成功してから、
+  ストアを変更する。どれかが失敗した場合はどのストアも変更しない。
+  解析できない行を 1 行でも含む item は、Host が書いたものではないとみなし、
+  import 全体を `bad_item` で失敗させる（一部だけ取り込んで成功を返さない）。
+- 選んだストアのどれかが読み込みに失敗して保存を止めている場合、export と import は
+  `store_unavailable` で失敗する。空のストアを正常なバックアップとして書き出したり、
+  保存されない merge を成功として返したりしないためである。
+- export の manifest の `count` は item に実際に書いた行数（学習では忘却した組を除く）とする。
+- learning の migration は v2 の読み込み規則（`user-learning-enhancement-spec.md` §3.1）による。
+  M7 形式の entry も v2 の行として取り込む。
+
 ## 7. BackupArchive 実装
 
-`inference-host/src/BackupArchive.cpp`（新規）:
+実装は 3 層に分ける。
 
-```cpp
-class BackupArchive {
-public:
-  Result Export(const ExportOptions& opts);
-  Result Import(const ImportOptions& opts);
-private:
-  std::vector<uint8_t> EncryptDpapi(std::span<const uint8_t> plain);
-  std::vector<uint8_t> DecryptDpapi(std::span<const uint8_t> encrypted);
-  bool VerifySha256(std::span<const uint8_t> data, std::string_view expected);
-};
-```
+| ファイル | 責務 |
+|---|---|
+| `inference-host/src/StoreOnlyZip.cpp` | STORE 方式だけの ZIP の書き出しと検証付き読み込み（CRC-32 を含む） |
+| `inference-host/src/BackupArchive.cpp` | manifest、entry ごとの暗号化と SHA-256、パスとサイズの検査（`WriteBackupArchive` / `ReadBackupArchive`） |
+| `inference-host/src/LearningDataManager.cpp` | ストアの一覧・忘却・export・import と衝突解決（§4、§6） |
 
-ZIP 操作は標準ライブラリだけでは困難なため、`miniz`（header-only 互換）
-を依存に追加する。M37 §3.2 の **オフライン既定** ビルド方針に従い、
-配布形態は以下とする:
-
-1. **vendored（既定）**: `third_party/miniz/` にソース 1〜2 ファイル
-   （`miniz.h` / `miniz.c`）を **submodule または直接コピー**で取り込み、
-   オフライン CI / 開発機でもネットワーク無しで configure / build が成功する
-2. **opt-in `FetchContent`**: `-DAZOOKEY_FETCH_MINIZ=ON` でのみ
-   `FetchContent_Declare(miniz ...)` を有効化（vendored を選べない CI 等の
-   逃げ道として残す）。既定 OFF
-3. **system package**: distro パッケージ（`apt install libminizip-dev` 等）
-   は API 差異があるため、本 M49 範囲では vendored を優先する
-
-CMake の探索順は vendored → opt-in fetch の 2 段。M37 の
-configure offline ガードに違反しないことを CI で確認する。
+暗号は `learning::ByteCrypto` を注入して使う。本番は DPAPI、テストはモック鍵である。
+ZIP ライブラリ（miniz など）は依存に加えない。DPAPI で暗号化した entry は圧縮が効かず、
+STORE 方式で足りるためである。平文 export は圧縮されない。
+外部の ZIP ツールで圧縮し直した archive は、STORE 以外の方式を含むので import できない。
 
 ## 8. プライバシー
 
@@ -330,9 +378,14 @@ configure offline ガードに違反しないことを CI で確認する。
 - unit: `BackupArchive` の暗号化 / 復号 round-trip
 - unit: manifest SHA-256 検証
 - unit: 衝突解決 3 種
-- integration: export → 別環境（別 DPAPI 鍵）で import 失敗
-- integration: 同一ユーザーでの export → import で件数一致
-- snapshot: manifest.json schema 固定
+- unit: export → 別の鍵（別 DPAPI 鍵に相当するモック鍵）で import 失敗、ストアは不変
+- unit: 同じ鍵での export → import で全ストアの内容が一致
+- unit: 不正な archive（ZIP の破損、manifest の不正、checksum 不一致）で失敗し、ストアは不変
+- 同じ入力から同じバイト列の archive を書くこと（manifest のキー集合の固定を兼ねる）
+
+テストの対応は `docs/test-inventory.md` の `host_store_only_zip_tests`、
+`host_backup_archive_tests`、`host_learning_data_manager_tests` を参照する。
+実 DPAPI での他ユーザーでの復号失敗は Human Gate（M34）である。
 
 ## 10. M49 受け入れ条件
 

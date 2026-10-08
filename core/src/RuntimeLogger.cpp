@@ -22,6 +22,7 @@
 #include <Windows.h>
 #endif
 
+#include "azookey/core/BodyLogGate.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/Redaction.h"
 
@@ -382,14 +383,7 @@ RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
 
 static std::string SerializeRecord(const RuntimeLogRecord& record, bool body_opt_in,
                                    core::PrivacyPolicy privacy) {
-  // Compile-time enforcement also covers manually constructed logger options.
-#if defined(_DEBUG) && !defined(NDEBUG)
-  const bool allow_body = body_opt_in && !privacy.secure && privacy.detailed_logging_allowed;
-#else
-  (void)body_opt_in;
-  (void)privacy;
-  constexpr bool allow_body = false;
-#endif
+  const bool allow_body = core::BodyLoggingAllowed(privacy, body_opt_in);
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << "{\"ts\":\"" << EscapeJson(record.timestamp) << "\",\"component\":\""

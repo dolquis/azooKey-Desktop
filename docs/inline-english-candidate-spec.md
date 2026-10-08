@@ -544,7 +544,9 @@ stale 適用を起こさない。
 - 学習の格納先は、かな漢字学習とは別ファイルの English チャネルとする。
   - 形式は `LearningStore` と同じ（DPAPI 保護の TSV）。ファイルは
     `UserDataPaths::english_learning_path`（学習 TSV と同じディレクトリの
-    `english_learning.tsv`）。
+    `english_learning.tsv`）。かな漢字の学習と同じく、保存は v2 形式で同じディレクトリの
+    `english_learning.v2.tsv` に行い、`english_learning.tsv` は移行元として読むだけである
+    （`user-learning-enhancement-spec.md` §3.1）。
   - キーは `lower(r)`。`Apple` と打って確定しても、次に `apple` と打ったときに同じ
     記録を引く。
   - 振り分けの条件は §6.4。English チャネルの記録は、かな漢字の候補・予測・逆変換・

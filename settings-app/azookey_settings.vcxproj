@@ -124,6 +124,7 @@
     <ClCompile Include="..\core\src\PlatformPaths.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\Redaction.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\RuntimeLogger.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\core\src\BodyLogGate.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\EtwLogger.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsIpcClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\ipc\src\Json.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

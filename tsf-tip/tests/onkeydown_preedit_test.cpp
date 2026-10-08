@@ -4696,7 +4696,10 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditClickFocusesTheSegmentUnderTheMouse) {
   second.surface = "二";
   h.service.set_cached_batch_segments_for_test({{"か", {first, alternative}}, {"に", {second}}});
   h.service.show_candidate_window_from_cache_for_test();
+  // The edit session records the segments it painted; clicks resolve against them.
+  FakeCompositionAttachment attachment(h);
   ASSERT_TRUE(h.Press('2'));
+  ASSERT_EQ(attachment.composition_range.last_text, L"科二");
 
   BOOL eaten = TRUE;
   // A move without the left button is not a click.
@@ -4709,7 +4712,6 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditClickFocusesTheSegmentUnderTheMouse) {
   EXPECT_EQ(h.service.OnMouseEvent(1, 2, MK_LBUTTON, &eaten), S_OK);
   EXPECT_TRUE(eaten);
 
-  FakeCompositionAttachment attachment(h);
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
   const auto observation = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(observation);

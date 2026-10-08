@@ -3098,8 +3098,10 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtn
   if (!pfEaten) return E_INVALIDARG;
   *pfEaten = FALSE;
   if (!(dwBtnStatus & MK_LBUTTON)) return S_OK;
+  if (!ShowsBatchSegments() || attributed_segments_.size() != shown_batch_segments_.size())
+    return S_OK;
   size_t index = 0;
-  if (!SegmentIndexAtMouseEdge(DisplayedBatchSegments(), uEdge, uQuadrant, &index)) return S_OK;
+  if (!SegmentIndexAtMouseEdge(attributed_segments_, uEdge, uQuadrant, &index)) return S_OK;
   *pfEaten = TRUE;
   if (index == batch_segment_cursor_) return S_OK;
 
@@ -3119,7 +3121,12 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtn
     return hr;
   }
   ITfContext* context = mouse_tracker_context_ ? mouse_tracker_context_ : active_context_;
-  return context ? RequestPreeditUpdate(context) : S_OK;
+  if (!context) return S_OK;
+  // A synchronous edit session would otherwise unadvise the sink being called.
+  mouse_event_in_progress_ = true;
+  const HRESULT update_hr = RequestPreeditUpdate(context);
+  mouse_event_in_progress_ = false;
+  return update_hr;
 } catch (const std::bad_alloc&) {
   LogComBoundaryException("TextService::OnMouseEvent", E_OUTOFMEMORY);
   return E_OUTOFMEMORY;
@@ -3154,7 +3161,10 @@ bool TextService::EnsureDisplayAttributeAtoms() {
 }
 
 void TextService::AdviseCompositionMouseSink(ITfContext* context, ITfRange* range) {
+  // Re-advising keeps the composition, so keep the segments just painted.
+  std::vector<DisplayedSegment> segments = std::move(attributed_segments_);
   UnadviseCompositionMouseSink();
+  attributed_segments_ = std::move(segments);
   if (!context || !range) return;
   ITfMouseTracker* tracker = nullptr;
   if (FAILED(context->QueryInterface(IID_ITfMouseTracker, reinterpret_cast<void**>(&tracker))) ||
@@ -3173,6 +3183,7 @@ void TextService::AdviseCompositionMouseSink(ITfContext* context, ITfRange* rang
 }
 
 void TextService::UnadviseCompositionMouseSink() {
+  attributed_segments_.clear();
   if (mouse_tracker_) {
     mouse_tracker_->UnadviseMouseSink(mouse_sink_cookie_);
     mouse_tracker_->Release();
@@ -7265,14 +7276,16 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 
     // Apply per-segment display attributes, or the input underline over the
     // whole composition (tsf-deep-integration-spec §5.6).
+    std::vector<SegmentAttributeRange> ranges =
+        BuildSegmentAttributeRanges(displayed_segments, service_->batch_segment_cursor_);
+    LONG segments_length = 0;
+    for (const auto& range : ranges) segments_length += range.length;
+    if (segments_length != static_cast<LONG>(kana.size())) ranges.clear();
+    service_->attributed_segments_ =
+        ranges.empty() ? std::vector<DisplayedSegment>{} : displayed_segments;
     ITfProperty* pProp = nullptr;
     if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {
       service_->EnsureDisplayAttributeAtoms();
-      std::vector<SegmentAttributeRange> ranges =
-          BuildSegmentAttributeRanges(displayed_segments, service_->batch_segment_cursor_);
-      LONG segments_length = 0;
-      for (const auto& range : ranges) segments_length += range.length;
-      if (segments_length != static_cast<LONG>(kana.size())) ranges.clear();
       const HRESULT attr_hr =
           ApplyDisplayAttributes(ec, pProp, pRange, ranges, service_->display_attribute_atoms_);
       if (FAILED(attr_hr)) {
@@ -7280,7 +7293,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       }
       pProp->Release();
     }
-    service_->AdviseCompositionMouseSink(context_, pRange);
+    if (!service_->mouse_event_in_progress_) service_->AdviseCompositionMouseSink(context_, pRange);
 
     // Keep the document caret at the end of the preedit without collapsing the
     // range used for the full-composition display attribute above.

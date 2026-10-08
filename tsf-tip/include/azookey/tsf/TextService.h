@@ -201,6 +201,10 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfMouseTracker* mouse_tracker_{nullptr};
   ITfContext* mouse_tracker_context_{nullptr};
   DWORD mouse_sink_cookie_{0};
+  // Segments the last edit session painted; mouse edges refer to this layout.
+  std::vector<DisplayedSegment> attributed_segments_;
+  // Keeps the sink TSF is delivering to from being re-advised under it.
+  bool mouse_event_in_progress_{false};
   // TfGuidAtoms for DisplayAttributeKind, registered on first use.
   TfGuidAtom display_attribute_atoms_[kDisplayAttributeKindCount]{};
   bool terminated_focus_cleanup_pending_{false};

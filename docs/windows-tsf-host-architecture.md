@@ -381,7 +381,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト
 - `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
 - `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
-  フォールバック
+  フォールバックとモニタ作業領域の解決（`docs/legacy-parity-spec.md` §9）
 - `inference-host/src/AiBackend.cpp` — OpenAI 互換 API クライアント
 
 ### Phase 5〜6 横断（`docs/rich-features-spec.md`）

@@ -723,6 +723,9 @@ segment は区間を持たないので、各文節が表示している文字列
 - 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
 - 矢印キー（Left/Right）で文節を移動できる（カーソル位置によって色が動く）
 
+provider は色を指定しないため、「青背景」はアプリが `TF_ATTR_TARGET_CONVERTED` を描く配色である。
+アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
+
 ### 5.6 M3 の単一 DisplayAttribute との対応関係
 
 M3（`plans/windows-port-roadmap.md` M3）では TIP が公開する表示属性は 1 つで、
@@ -751,9 +754,9 @@ M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAt
 
 | M23 属性 | 用途 | `bAttr` | 描画（§5.1） | M3 での扱い |
 |---|---|---|---|---|
-| Focused | 注目文節 | `TF_ATTR_TARGET_CONVERTED` | 青背景 | 区別しない（全体が未変換扱い） |
-| Converted | 変換済み文節 | `TF_ATTR_CONVERTED` | 黒 + 実線下線 | 区別しない（同上） |
-| Unconverted | 未変換文節 | `TF_ATTR_INPUT` | グレー + 点線下線 | M3 の属性が担う（実線・色指定なし） |
+| Focused | 注目文節 | `TF_ATTR_TARGET_CONVERTED` | 太い実線下線（アプリにより青背景） | 区別しない（全体が未変換扱い） |
+| Converted | 変換済み文節 | `TF_ATTR_CONVERTED` | 実線下線 | 区別しない（同上） |
+| Unconverted | 未変換文節 | `TF_ATTR_INPUT` | 点線下線 | M3 の属性が担う（実線・色指定なし） |
 
 移行規則と fallback:
 
@@ -888,7 +891,8 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant,
     *pfEaten = FALSE;
     if (!(dwBtnStatus & MK_LBUTTON)) return S_OK;
     size_t index = 0;
-    if (!SegmentIndexAtMouseEdge(DisplayedBatchSegments(), uEdge, uQuadrant, &index))
+    // 直前の EditSession が文節属性を当てた文節の並び（attributed_segments_）で判定する
+    if (!SegmentIndexAtMouseEdge(attributed_segments_, uEdge, uQuadrant, &index))
         return S_OK;  // 一括変換の文節を表示していない
     *pfEaten = TRUE;
     if (index != focused) FocusBatchSegment(index);  // 矢印キーと同じ処理
@@ -900,6 +904,10 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant,
 境界の後ろを表す。
 手前ならその境界の直前の文字、後ろなら直後の文字を含む文節を選ぶ。
 composition の末尾より後ろは最後の文節とする。
+`uEdge` は描画済みの composition に対する位置なので、判定には内部状態から作り直した文節ではなく、
+直前の EditSession が属性を当てた文節の並びを使う。
+`OnMouseEvent` から要求した preedit 更新が同期で走っても、配送中の sink を解除しないよう、
+その EditSession では監視を張り直さない（注目の移動では表示文字列が変わらないため）。
 
 ### 7.3 受け入れ条件
 

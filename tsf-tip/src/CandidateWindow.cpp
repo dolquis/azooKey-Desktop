@@ -606,11 +606,11 @@ void CandidateWindow::ShowDetails() {
 
   RECT candidate_rc{};
   GetWindowRect(hwnd_, &candidate_rc);
-  HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-  MONITORINFO monitor_info{};
-  monitor_info.cbSize = sizeof(monitor_info);
-  if (!GetMonitorInfoW(monitor, &monitor_info)) return;
-  const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor_info.rcWork,
+  const MonitorWorkArea monitor = ResolveMonitorWorkArea(
+      DefaultMonitorWin32Api(), {candidate_rc.left + (candidate_rc.right - candidate_rc.left) / 2,
+                                 candidate_rc.top + (candidate_rc.bottom - candidate_rc.top) / 2});
+  if (monitor.work_area.right <= monitor.work_area.left) return;
+  const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area,
                                                  ScaleForDpi(480, dpi_), ScaleForDpi(240, dpi_));
   details_hwnd_ = CreateWindowExW(
       WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kDetailsClassName, nullptr,

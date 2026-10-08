@@ -689,11 +689,12 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 ```
 Envelope:                  request_id
-QueryPredictionsRequest:   kana, leftSideContext, mode
+QueryPredictionsRequest:   kana, leftSideContext, mode, app?
 QueryPredictionsResponse:  predictions[], ok?, error?
 ```
 
-`predictions[]` の各要素は既存の `CandidateField` とする。
+`predictions[]` の各要素は既存の `CandidateField`（`tag` を含む）とする。`app` は
+`docs/app-profile-spec.md` §3.1 の前面アプリ識別で、予測には boost を掛けない（同 §7）。
 `ok` の省略時は `true` とみなし、`false` の場合は `error` に失敗理由を載せる。
 `mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 5 では `word` のみ。
 

@@ -694,6 +694,7 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.dictionary = config.dictionary;
   ApplyDictionaryConfigLocked();
   config_.rewriters = config.rewriters;
+  config_.app_profiles = config.app_profiles;
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
   config_.enable_live_conversion = config.enable_live_conversion;
@@ -825,9 +826,9 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
-    const InferenceTelemetry* telemetry) {
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
   return QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel, max_candidates, live,
-                               telemetry, false);
+                               telemetry, false, tag_boosts);
 }
 
 std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
@@ -843,7 +844,7 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
-    const InferenceTelemetry* telemetry, bool fast_only) {
+    const InferenceTelemetry* telemetry, bool fast_only, const TagBoosts* tag_boosts) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -1088,6 +1089,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start, "cancelled");
     return {};
   }
+  // M48 tag boost acts once, on the final score after reranking
+  // (docs/app-profile-spec.md section 7), and before the M35 suggestion so the
+  // suggestion keeps its pinned front position.
+  AssignHeuristicTags(result);
+  if (tag_boosts) ApplyTagBoosts(result, *tag_boosts);
   if (rerank_start)
     LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start, "ok");
 
@@ -1254,6 +1260,7 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
   append(dictionary_predictions, 2);
   if (canceled()) return {};
   append(candidates, kPredictionDisplayLimit);
+  AssignHeuristicTags(merged);
   return canceled() ? std::vector<core::Candidate>{} : std::move(merged);
 }
 

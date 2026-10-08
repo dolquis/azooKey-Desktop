@@ -43,8 +43,8 @@ fail-closed（`autoSecureInput` 有効時に解決不能を secure 扱い）は 
 
 ### 3.1 Host への伝達
 
-各 IPC リクエスト（`QueryCandidates` / `QueryPredictions` /
-`TransformSelectedText`）に `app` フィールドを追加する:
+IPC リクエスト `QueryCandidates` / `QueryPredictions` に任意フィールド `app`
+（`ipc::AppIdentity`）を追記する:
 
 ```json
 {
@@ -56,6 +56,18 @@ fail-closed（`autoSecureInput` 有効時に解決不能を secure 扱い）は 
 ```
 
 これは Host 向けの伝達契約である。検出器は IPC を送らず、タイトルやその hash も供給しない。
+
+- `app` を送らない旧クライアント、`app` が object でない、または `process_name` と
+  `window_class` がともに空の要求は「アプリ不明」として扱い、要求自体は拒否しない。
+- `process_name` が空の要求は `ForegroundApp.resolved == false` と同じく、
+  グローバル設定で処理する（§3）。
+- Host は `app` をログ・警告に出さない（§9.1）。
+- Host は Handshake 応答の `capabilities` で次の 2 つを広告する。
+  - `app_profile`: `QueryCandidates.app` からプロファイルを解決し、§7 のタグ boost を
+    掛ける。
+  - `candidate_tag`: 応答の `CandidateField.tag` を埋める。
+- TIP はこの 2 つを見て、`app` の送出とタグの表示を有効にする。広告しない旧 Host に
+  `app` を送っても無視されるだけで、要求は失敗しない。
 
 ## 4. 設定スキーマ
 
@@ -167,8 +179,8 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 | `learningEnabled` | bool | true | このアプリで学習するか |
 | `aiBackend` | enum | "auto" | `auto` / `local-zenzai` / `openai` / `none` |
 | `promptPrefix` | string | "" | Magic Conversion のプロンプト前置 |
-| `style` | enum | "auto" | `auto` / `polite` / `casual` / `technical` |
-| `preferTechnicalTerms` | bool | false | 技術語辞書を boost |
+| `style` | enum | "auto" | `auto` / `polite` / `casual` / `technical`。`auto` 以外は対応する候補タグ（`Polite` / `Casual` / `Technical`）へ暗黙倍率 1.5 を与える（§7） |
+| `preferTechnicalTerms` | bool | false | true で `Technical` タグへ暗黙倍率 1.5 を与える（§7） |
 | `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |
 | `privacyMode` | enum | "inherit" | `inherit` / `normal` / `private` / `secure` |
 | `bracketPairing` | enum | "auto" | `auto` / `on` / `off`。`auto` はグローバルのアプリリスト判定に従い、`on` / `off` はそれを上書きする。root の boolean マスターが false の場合と前面アプリ解決失敗時は常に無効 |
@@ -294,12 +306,35 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
 ```
 raw   = profile.candidateTagBoosts.get(tag, 1.0)
 boost = min(3.0, max(1.0, raw))   // [1.0, 3.0] にクランプ（手編集・移行値の暴走防止）
-candidate.final_score *= boost
+if candidate.final_score >= 0:
+    candidate.final_score *= boost
+else:
+    candidate.final_score /= boost  // 負のスコアも上げる方向に動かす
 ```
 
 `max(1.0, …)` で下げ方向には使わず、`min(3.0, …)` で上限もクランプする（§4.2 の
 `[1.0, 3.0]` を実際に強制するのはこのランタイム式）。boost のみ許可し、逆方向の調整は
 タグ別の score weight 設定で行う（M11 範疇）。
+
+- **暗黙倍率**: `style` と `preferTechnicalTerms` は対応タグへ倍率 1.5 を与える。
+  同じタグに `candidateTagBoosts` の明示値があれば、明示値と 1.5 の大きい方を使う。
+- **負のスコア**: スコアは対数確率などで負になり得る。負の `final_score` は倍率で
+  割り（`final_score /= boost`）、常に上げる方向に作用させる。
+- **並べ替え**: boost を受けた候補だけを、新しいスコアより低い候補の前へ移す。
+  boost を受けない候補どうしの相対順は変えない。
+- **適用位置**: rerank の後、M35 の補正読み提案を先頭へ挿入する前に 1 回適用する。
+  `live = true` の `QueryCandidates` も同じ経路を通る（`QueryLiveConversion` は
+  `app` を持たないため boost しない）。
+- **予測**: `QueryPredictions` は `app` を受け取るが、boost は適用しない。予測は
+  学習・モデル・辞書を出所ごとに混ぜており、出所間でスコアを比較できないため。
+- **タグの付与元**:
+  - 出所が既知のタグ（辞書 category 由来の `Technical` など）は出所側が付与する。
+  - 未付与の候補には Host が surface 形式から `English` を付与する。条件は、空白
+    （ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含むこと
+    （`docs/auto-word-registration-spec.md` の category → タグ写像）。
+  - タグは `core::Candidate::tag` と IPC の `CandidateField.tag` で運ぶ。
+- **タグ名の照合**: ASCII の大文字小文字を区別しない（`Technical` と `technical`
+  を同一視する）。
 
 ## 8. UI（設定アプリ）
 
@@ -342,9 +377,11 @@ public:
 };
 ```
 
-Dispatcher への適用では、IPC ハンドラの先頭で `Resolve` を呼び、
-プライバシー判定の許可範囲内で候補生成 / rerank / external AI を切り替える。
-この消費側の統合は共通基盤とは別に実装する。
+Host は resolver を `EngineConfig::app_profiles` として設定と一緒に公開する。
+`QueryCandidates` のハンドラは、要求ごとに `engine_->config()` のスナップショットから
+resolver を取り出して `Resolve` を呼ぶ。UpdateConfig のロックは取らない。
+タグ boost 以外のフィールド（学習・external AI・予測の切替）は、プライバシー判定の
+許可範囲内で消費側が個別に統合する。
 
 ### 9.1 共通基盤と機能への適用境界
 
@@ -368,6 +405,8 @@ resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作�
 - unit: `privacyMode = secure` の要求値とグローバル floor の解決
 - integration: `code.exe` 検出 → 技術語タグ boost
 - integration: `outlook.exe` 検出 → polite タグ boost
+  （この 2 件は、辞書 category から `Technical`、文体判定から `Polite` を付与する
+  経路が前提。Host が surface 形式から付与するタグは §7 の `English` だけである）
 - e2e（M50 connect）: アプリ切替 1 秒以内にプロファイル反映
 
 ## 11. M48 受け入れ条件

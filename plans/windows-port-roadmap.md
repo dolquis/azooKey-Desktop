@@ -1117,7 +1117,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `settings/mvp-settings.schema.json`（`profilesByApp` ブロック
   追加、`promptPrefixByApp` を後方互換で読み続ける）、
   `core/src/AppProfileResolver.cpp`（新規）、
-  `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ `app_id` を伝播）、
+  `ipc/`（`QueryCandidates` / `QueryPredictions` の `app`、`CandidateField.tag`）、
+  `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ前面アプリ識別 `app` を伝播）、
+  `inference-host/src/CandidateTags.cpp`（タグ付与と boost）、
   `settings-app/`（アプリ別設定タブ）。
 - **実装範囲**: `docs/app-profile-spec.md`。
   - `ForegroundAppDetector::Get()` による入力先検出とプロセス名キャッシュ
@@ -1129,6 +1131,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - VS Code（`code.exe`）で技術語タグの候補順位が上がる
   - Outlook（`outlook.exe`）で polite タグの候補順位が上がる
+  - 上の 2 件は、辞書 category から `Technical`、文体判定から `Polite` を付与する
+    経路（DEV-1520）が前提
   - secure 指定アプリ（`profile.privacyMode=secure`）で学習・外部 AI が停止する
     （M46 と整合）
   - アプリ切替後 1 秒以内にプロファイルが反映される

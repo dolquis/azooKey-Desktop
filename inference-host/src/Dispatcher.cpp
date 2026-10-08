@@ -197,7 +197,19 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   f.score = c.score;
   f.source = SourceToWire(c.source);
   f.description = c.description;
+  f.tag = static_cast<uint8_t>(c.tag);
   return f;
+}
+
+// docs/app-profile-spec.md section 3: an absent or unresolved app gets no
+// profile and no tag boost at all, not even the "default" profile's.
+TagBoosts ResolveTagBoosts(const EngineConfig& config, const std::optional<ipc::AppIdentity>& app) {
+  if (!config.app_profiles || !app || app->process_name.empty()) return {};
+  core::ForegroundApp foreground;
+  foreground.process_name = app->process_name;
+  foreground.window_class = app->window_class;
+  foreground.resolved = true;
+  return TagBoostsFromProfile(config.app_profiles->Resolve(foreground));
 }
 
 std::optional<BackendKind> ParseBackend(const std::string& backend) {
@@ -448,8 +460,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
-  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion",
-                      "query_predictions"};
+  // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
+  // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
+  res.capabilities = {"oob_cancel",        "commit_segments", "query_live_conversion",
+                      "query_predictions", "app_profile",     "candidate_tag"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -659,9 +673,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
+    const auto tag_boosts = ResolveTagBoosts(engine_config, parsed->app);
     auto queried =
         engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
-                                   ordinary_limit, parsed->live, trace.context());
+                                   ordinary_limit, parsed->live, trace.context(), &tag_boosts);
     candidates = std::move(queried.candidates);
     corrected_reading = std::move(queried.corrected_reading);
     // Under auto_replace the conversion ran on the corrected reading, so the

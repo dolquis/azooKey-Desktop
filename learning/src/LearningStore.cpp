@@ -414,8 +414,13 @@ std::optional<ImportConflictPolicy> ParseImportConflictPolicy(std::string_view n
 }
 
 std::filesystem::path LearningStoreV2PathFor(const std::filesystem::path& legacy_path) {
+  // Built from path pieces, never through string(): a narrow conversion
+  // throws for names the ANSI code page cannot represent (DEV-1011).
+  auto filename = legacy_path.stem();
+  filename += ".v2";
+  filename += legacy_path.extension();
   auto path = legacy_path;
-  path.replace_filename(legacy_path.stem().string() + ".v2" + legacy_path.extension().string());
+  path.replace_filename(filename);
   return path;
 }
 

@@ -76,6 +76,26 @@ TEST(LearningStoreV2Test, V2PathSitsBesideTheLegacyFile) {
             std::filesystem::path("data") / "learning.v2.tsv");
 }
 
+#ifdef _WIN32
+// No ANSI code page can represent U+1F600, so any narrow conversion of the
+// path would throw whatever the machine's code page is.
+TEST(LearningStoreV2Test, PathsOutsideEveryAnsiCodePageRoundTrip) {
+  const auto root = std::filesystem::temp_directory_path() / L"azookey_v2_\U0001F600";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  const auto path = root / L"\U0001F600.tsv";
+  EXPECT_EQ(learning::LearningStoreV2PathFor(path).filename(), L"\U0001F600.v2.tsv");
+
+  LearningStore store(path, &learning::test::Crypto());
+  store.Observe("にほんご", "日本語", 2.0, kNow);
+  ASSERT_TRUE(store.Save());
+  LearningStore loaded(path, &learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_DOUBLE_EQ(loaded.Score("にほんご", "日本語", kNow), 2.0);
+  std::filesystem::remove_all(root);
+}
+#endif
+
 TEST(LearningStoreV2Test, MigratesM7FileKeepingWeightsAndLeavesLegacyBytesUntouched) {
   ScopedLearningDirectory directory("azookey_learning_v2_migration");
   const auto path = directory.LegacyPath();

@@ -5,6 +5,7 @@ add_library(azookey_tsf_tip SHARED
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
+  src/CaretRectResolver.cpp
   src/PredictionWindow.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
@@ -54,6 +55,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/CandidateListUIElement.cpp
     src/CandidateUiCoordinator.cpp
     src/CandidateWindow.cpp
+  src/CaretRectResolver.cpp
     src/PredictionWindow.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp

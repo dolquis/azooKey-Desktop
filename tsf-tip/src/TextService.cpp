@@ -38,6 +38,7 @@
 #include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/BracketEditSession.h"
+#include "azookey/tsf/CaretRectResolver.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/IpcReconnectBackoff.h"
 #include "azookey/tsf/LeftContextReader.h"
@@ -651,42 +652,10 @@ std::string DescribeImmOpenStatus() {
   return open ? "open" : "closed";
 }
 
-using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
-using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
-using GetPhysicalCursorPosFn = BOOL(WINAPI*)(LPPOINT);
-using LogicalToPhysicalPointForPerMonitorDpiFn = BOOL(WINAPI*)(HWND, LPPOINT);
-using GetMonitorScalePercentFn = UINT (*)(POINT);
-
-struct CaretWin32Api {
-  GetGuiThreadInfoFn get_gui_thread_info;
-  ClientToScreenFn client_to_screen;
-  GetPhysicalCursorPosFn get_physical_cursor_pos;
-  LogicalToPhysicalPointForPerMonitorDpiFn logical_to_physical_point;
-  GetMonitorScalePercentFn get_monitor_scale_percent;
-};
-
-struct CaretAnchor {
-  POINT point{0, 0};
-  bool valid{false};
-};
-
-constexpr UINT kDefaultMonitorScalePercent = 100;
-
-UINT GetMonitorScalePercent(POINT screen_point) {
-  const HMONITOR monitor = MonitorFromPoint(screen_point, MONITOR_DEFAULTTONEAREST);
-  if (!monitor) return kDefaultMonitorScalePercent;
-
-  DEVICE_SCALE_FACTOR scale_factor = SCALE_100_PERCENT;
-  if (FAILED(GetScaleFactorForMonitor(monitor, &scale_factor))) {
-    return kDefaultMonitorScalePercent;
-  }
-  return static_cast<UINT>(scale_factor);
-}
-
-CaretWin32Api DefaultCaretWin32Api() {
-  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetPhysicalCursorPos,
-          &::LogicalToPhysicalPointForPerMonitorDPI, &GetMonitorScalePercent};
-}
+using azookey::tsf::CaretAnchor;
+using azookey::tsf::CaretWin32Api;
+using azookey::tsf::DefaultCaretWin32Api;
+using azookey::tsf::IsUsableTextExtent;
 
 #ifdef AZOOKEY_TSF_TESTING
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
@@ -700,55 +669,10 @@ CaretWin32Api CurrentCaretWin32Api() {
 #endif
 }
 
-bool IsUsableTextExtent(const RECT& rect) {
-  return rect.right > rect.left && rect.bottom > rect.top;
-}
-
-bool IsZeroRect(const RECT& rect) {
-  return rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0;
-}
-
-constexpr LONG kCursorFallbackCaretHeight = 16;
-
-CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect, HWND text_extent_window = nullptr) {
-  const CaretWin32Api api = CurrentCaretWin32Api();
-  if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
-    POINT point{text_ext_rect->left, text_ext_rect->bottom};
-    if (text_extent_window && api.logical_to_physical_point) {
-      POINT physical_point = point;
-      if (api.logical_to_physical_point(text_extent_window, &physical_point)) {
-        point = physical_point;
-      }
-    }
-    return {point, true};
-  }
-
-  GUITHREADINFO thread_info{};
-  thread_info.cbSize = sizeof(thread_info);
-  if (api.get_gui_thread_info && api.client_to_screen && api.get_gui_thread_info(0, &thread_info) &&
-      thread_info.hwndCaret && !IsZeroRect(thread_info.rcCaret)) {
-    POINT point{thread_info.rcCaret.left, thread_info.rcCaret.bottom};
-    if (api.client_to_screen(thread_info.hwndCaret, &point)) {
-      if (api.logical_to_physical_point) {
-        POINT physical_point = point;
-        if (api.logical_to_physical_point(thread_info.hwndCaret, &physical_point)) {
-          point = physical_point;
-        }
-      }
-      return {point, true};
-    }
-  }
-
-  POINT point{};
-  if (api.get_physical_cursor_pos && api.get_physical_cursor_pos(&point)) {
-    const UINT scale_percent = api.get_monitor_scale_percent ? api.get_monitor_scale_percent(point)
-                                                             : kDefaultMonitorScalePercent;
-    point.y += scale_percent > 0
-                   ? MulDiv(kCursorFallbackCaretHeight, static_cast<int>(scale_percent), 100)
-                   : kCursorFallbackCaretHeight;
-    return {point, true};
-  }
-  return {};
+CaretAnchor ResolveCurrentCaretAnchor(const RECT* text_ext_rect,
+                                      HWND text_extent_window = nullptr) {
+  return azookey::tsf::ResolveCaretAnchor(CurrentCaretWin32Api(), text_ext_rect,
+                                          text_extent_window);
 }
 
 bool IsExpectedIpcResponse(const azookey::ipc::Envelope& response, uint64_t expected_request_id,
@@ -890,7 +814,7 @@ void SetCaretWin32ApiForTest(
 void ClearCaretWin32ApiForTest() { g_caret_win32_api = DefaultCaretWin32Api(); }
 
 CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND text_extent_window) {
-  const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect, text_extent_window);
+  const CaretAnchor anchor = ResolveCurrentCaretAnchor(text_ext_rect, text_extent_window);
   return {anchor.point, anchor.valid};
 }
 
@@ -6112,8 +6036,7 @@ void TextService::OnCandidatesReady(void* context) {
 
 RECT TextService::PredictionCaretRect() {
   if (caret_rect_valid_) return caret_rect_;
-  const POINT point = CandidateAnchorPoint();
-  return {point.x, point.y - 16, point.x + 1, point.y};
+  return CaretRectFromAnchor(CurrentCaretWin32Api(), CandidateAnchorPoint());
 }
 
 void TextService::LogPredictionOnce(PredictionLogReason reason) noexcept {
@@ -6581,7 +6504,7 @@ void TextService::ShowReconversionResult() {
 
 POINT TextService::CandidateAnchorPoint() {
   if (caret_pt_valid_) return caret_pt_;
-  const CaretAnchor anchor = ResolveCaretAnchor(nullptr);
+  const CaretAnchor anchor = ResolveCurrentCaretAnchor(nullptr);
   caret_pt_ = anchor.point;
   caret_pt_valid_ = anchor.valid;
   return caret_pt_;
@@ -7201,28 +7124,13 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         }
       }
       if (pView) pView->Release();
-      const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect, text_extent_window);
+      const CaretAnchor anchor = ResolveCurrentCaretAnchor(text_ext_rect, text_extent_window);
       service_->caret_pt_ = anchor.point;
       service_->caret_pt_valid_ = anchor.valid;
-      service_->caret_rect_valid_ = false;
-      if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
-        RECT physical = *text_ext_rect;
-        bool converted = true;
-        if (text_extent_window) {
-          POINT top_left{physical.left, physical.top};
-          POINT bottom_right{physical.right, physical.bottom};
-          if (LogicalToPhysicalPointForPerMonitorDPI(text_extent_window, &top_left) &&
-              LogicalToPhysicalPointForPerMonitorDPI(text_extent_window, &bottom_right)) {
-            physical = {top_left.x, top_left.y, bottom_right.x, bottom_right.y};
-          } else {
-            converted = false;
-          }
-        }
-        if (converted) {
-          service_->caret_rect_ = physical;
-          service_->caret_rect_valid_ = true;
-        }
-      }
+      service_->caret_rect_valid_ =
+          text_ext_rect &&
+          azookey::tsf::ResolveCaretRect(CurrentCaretWin32Api(), *text_ext_rect, text_extent_window,
+                                         &service_->caret_rect_);
     }
 
     // Apply underline display attribute via GUID_PROP_ATTRIBUTE.

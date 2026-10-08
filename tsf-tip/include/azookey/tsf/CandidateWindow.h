@@ -57,6 +57,13 @@ class CandidateWindow {
   using OnRetryFn = std::function<void()>;
   void SetOnRetry(OnRetryFn fn) { on_retry_ = std::move(fn); }
   static bool NeedsColorEmoji(const std::wstring& text);
+  // Screen rect for the window: below the anchor, flipped above the caret when it
+  // would overflow the bottom of the work area, and kept inside the work area.
+  // An empty work area leaves the window at the anchor.
+  static RECT ComputePlacement(POINT anchor, RECT work_area, int width, int height, int caret_gap);
+  // Screen rect for the details popup: below the candidate window, or above it
+  // when there is no room, kept inside the work area.
+  static RECT ComputeDetailsPlacement(RECT candidate, RECT work_area, int width, int height);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);

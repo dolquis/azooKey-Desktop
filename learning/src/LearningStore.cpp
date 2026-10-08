@@ -524,9 +524,9 @@ bool LearningStore::dirty() const { return dirty_; }
 
 size_t LearningStore::size() const {
   size_t count = 0;
-  for (const auto& [_, surfaces] : table_) {
-    for (const auto& [__, apps] : surfaces) {
-      count += apps.size();
+  for (const auto& reading_entry : table_) {
+    for (const auto& surface_entry : reading_entry.second) {
+      count += surface_entry.second.size();
     }
   }
   return count;

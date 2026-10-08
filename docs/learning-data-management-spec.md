@@ -169,10 +169,11 @@ Response:
 `learning_min_weight` の GC（`user-learning-enhancement-spec.md` §3.1.1）が無効でも除く。
 忘却した組は、前方一致の `min_score` の値によらず予測に出さない。
 
-例外として、M54 で v2 へ移行した利用者の M7 ファイル（`learning.tsv.enc`）は書き換えない
-（`user-learning-enhancement-spec.md` §3.1）。移行前に学習した組を忘却しても、M7 ファイルの行は残る。
-Host は v2 ファイルがある限り M7 ファイルを読まないので、候補には現れない。
-M7 ファイルの削除は別の Issue で扱い、それまでは旧版の Host へ戻すと忘却前の学習が見える。
+M54 で v2 へ移行した利用者には、旧版の Host へ戻すための M7 ファイル（`learning.tsv.enc`）が残る
+（`user-learning-enhancement-spec.md` §3.1）。忘却は M7 ファイルにも及ぼし、同じ組の行を
+M7 の書式のまま M7 ファイルから除く。M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
+失敗しても M7 ファイルを壊さない（失敗したら忘却を失敗として返す）。
+M7 ファイルを書き換えるのはこの忘却だけで、通常の保存では書き換えない。
 
 ### 4.3 ExportLearningData
 

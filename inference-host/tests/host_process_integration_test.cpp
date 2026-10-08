@@ -359,7 +359,8 @@ class HostProcessTest : public ::testing::Test {
     const auto first_commit =
         azookey::ipc::ParseCommitObservationResponse(first_response->payload_json);
     ASSERT_TRUE(first_commit && first_commit->ok);
-    const auto encrypted = azookey::learning::EncryptedPathFor(LearningPath());
+    const auto encrypted = azookey::learning::EncryptedPathFor(
+        azookey::learning::LearningStoreV2PathFor(LearningPath()));
     ASSERT_TRUE(std::filesystem::exists(encrypted));
     ASSERT_TRUE(ContainsLearning("first-stdio"));
     const auto first_write = std::filesystem::last_write_time(encrypted);
@@ -462,7 +463,8 @@ TEST_F(HostProcessTest, CtrlCFlushesPendingLearning) {
   azookey::ipc::NamedPipeClient client;
   ASSERT_TRUE(ConnectLearningClient(&client));
   ASSERT_TRUE(SendCommit(&client, 2, "first-c"));
-  const auto encrypted = azookey::learning::EncryptedPathFor(LearningPath());
+  const auto encrypted = azookey::learning::EncryptedPathFor(
+      azookey::learning::LearningStoreV2PathFor(LearningPath()));
   ASSERT_TRUE(std::filesystem::exists(encrypted));
   const auto first_write = std::filesystem::last_write_time(encrypted);
   Sleep(250);
@@ -479,7 +481,8 @@ TEST_F(HostProcessTest, CtrlBreakFlushesPendingLearning) {
   azookey::ipc::NamedPipeClient client;
   ASSERT_TRUE(ConnectLearningClient(&client));
   ASSERT_TRUE(SendCommit(&client, 2, "first-break"));
-  const auto encrypted = azookey::learning::EncryptedPathFor(LearningPath());
+  const auto encrypted = azookey::learning::EncryptedPathFor(
+      azookey::learning::LearningStoreV2PathFor(LearningPath()));
   ASSERT_TRUE(std::filesystem::exists(encrypted));
   const auto first_write = std::filesystem::last_write_time(encrypted);
   Sleep(250);

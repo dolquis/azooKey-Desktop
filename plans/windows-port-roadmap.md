@@ -686,11 +686,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 3 つの周辺機能をまとめて実装。
 - **前提**: M13 完了。
-- **変更対象**: `core/src/UnicodeInputBuffer.cpp`（新規）、`learning/src/LearningStore.cpp`
-  （Forget API 追加）、`tsf-tip/src/DebugWindow.cpp`（新規）。
+- **変更対象**: `core/src/InputState.cpp`（Unicode 入力状態）、`learning/src/LearningStore.cpp`
+  （Forget API 追加）、`tsf-tip/src/DebugLogBuffer.cpp` と `tsf-tip/src/DebugWindow.cpp`（新規）、
+  `tsf-tip/src/TextService.cpp`（キーと `ClientAction` の配線）。
 - **実装範囲**:
   - M18-1: 仕様書 §6（Ctrl+Shift+U、hex バッファ、サロゲートペア生成）
-  - M18-2: 仕様書 §7（Forget、ForgetMostRecent、TSV 永続化）
+  - M18-2: 仕様書 §7（Forget、直近 commit の忘却、永続化）
   - M18-3: 仕様書 §8（F10 起動、IPC ログ・状態遷移ログ、セキュリティ配慮）
 - **受け入れ条件**:
   - Ctrl+Shift+U → `30A1` Enter で「ァ」が入る、範囲外は beep

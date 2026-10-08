@@ -4,6 +4,18 @@ target_link_libraries(learning_tests
 )
 azookey_discover_tests(learning_tests)
 
+add_executable(learning_store_v2_tests learning_store_v2_test.cpp)
+target_link_libraries(learning_store_v2_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(learning_store_v2_tests)
+
+add_executable(sha256_tests sha256_test.cpp)
+target_link_libraries(sha256_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(sha256_tests)
+
 add_executable(dpapi_crypto_tests dpapi_crypto_test.cpp)
 target_link_libraries(dpapi_crypto_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

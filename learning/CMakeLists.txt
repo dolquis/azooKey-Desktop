@@ -1,9 +1,12 @@
 add_library(azookey_learning STATIC
   src/AutoWordStore.cpp
+  src/ContextHash.cpp
   src/DictionaryStore.cpp
   src/DpapiCrypto.cpp
+  src/LearningDecay.cpp
   src/LearningStore.cpp
   src/Reranker.cpp
+  src/Sha256.cpp
   src/TypoCorrectionStore.cpp
   src/UserDictionary.cpp
 )
@@ -19,5 +22,6 @@ target_link_libraries(azookey_learning
 )
 
 if(WIN32)
-  target_link_libraries(azookey_learning PUBLIC crypt32)
+  # normaliz: NormalizeString for the context hash NFC step.
+  target_link_libraries(azookey_learning PUBLIC crypt32 normaliz)
 endif()

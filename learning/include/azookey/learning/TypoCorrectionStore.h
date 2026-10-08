@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/ImportConflictPolicy.h"
 
 namespace azookey::learning {
 
@@ -87,6 +88,17 @@ class TypoCorrectionStore {
   std::vector<TypoCorrectionEntry> All() const;
   const std::filesystem::path& path() const { return path_; }
 
+  // The file text, as Save writes it before encryption.
+  std::string SerializeText() const;
+  // Replaces the contents with rows parsed from `text`; touches no file.
+  // Malformed rows are skipped and make the result false.
+  bool LoadText(std::string_view text);
+  // True after a failed Load: Save refuses to run.
+  bool save_blocked() const;
+  bool Remove(const std::string& wrong, const std::string& correct);
+  // Adds every pair of `other`; Merge adds the counts of a pair on both sides.
+  ImportCounts Merge(const TypoCorrectionStore& other, ImportConflictPolicy policy);
+
   // Section 5-1: kana occupies three bytes in UTF-8, so both helpers work in
   // code points. Invalid sequences are consumed one byte at a time, matching
   // core's UTF-8 decoding behaviour.
@@ -98,6 +110,8 @@ class TypoCorrectionStore {
   static size_t EditDistanceLimit(size_t reading_length);
 
  private:
+  bool ParseText(std::string_view text);
+
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   std::map<std::string, std::map<std::string, TypoCorrectionRecord>> table_;

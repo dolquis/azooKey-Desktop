@@ -124,11 +124,18 @@ std::string TsvLine(const LookupMatch& match) {
   return out.str();
 }
 
+// The learning store saves beside its M7 path (learning.v2.tsv), so any of the
+// four files means there is a store to read.
 bool PathExists(const std::filesystem::path& path, bool* exists) {
   std::error_code error;
-  *exists = std::filesystem::exists(learning::EncryptedPathFor(path), error);
-  if (!error && !*exists) *exists = std::filesystem::exists(path, error);
-  return !error;
+  *exists = false;
+  for (const auto& base : {learning::LearningStoreV2PathFor(path), path}) {
+    for (const auto& candidate : {learning::EncryptedPathFor(base), base}) {
+      *exists = std::filesystem::exists(candidate, error);
+      if (error || *exists) return !error;
+    }
+  }
+  return true;
 }
 
 }  // namespace

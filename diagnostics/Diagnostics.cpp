@@ -444,55 +444,27 @@ bool ValidateModel(const std::filesystem::path& path) {
   return std::filesystem::is_directory(path, ec) && !ec && ValidateOnnxGenAi(path);
 }
 
-bool ParseLearningRecord(std::string_view line) {
-  if (line.empty() || line == learning::kLearningStoreEscapedTsvHeader) return true;
-  const auto first = line.find('\t');
-  const auto second = first == std::string_view::npos ? first : line.find('\t', first + 1);
-  if (first == std::string_view::npos || second == std::string_view::npos) return false;
-  const auto values = line.substr(second + 1);
-  const auto separator = values.find(' ');
-  if (separator == std::string_view::npos ||
-      values.find(' ', separator + 1) != std::string_view::npos) {
-    return false;
-  }
-  double weight = 0.0;
-  const auto weight_result = std::from_chars(values.data(), values.data() + separator, weight);
-  if (weight_result.ec != std::errc{} || weight_result.ptr != values.data() + separator ||
-      !std::isfinite(weight) || weight < 0.0) {
-    return false;
-  }
-  uint64_t timestamp = 0;
-  const auto time_begin = values.data() + separator + 1;
-  const auto time_result = std::from_chars(time_begin, values.data() + values.size(), timestamp);
-  return time_result.ec == std::errc{} && time_result.ptr == values.data() + values.size();
-}
-
 bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries,
                         bool* migration_available = nullptr) {
   *entries = 0;
   if (migration_available) *migration_available = false;
+  // The Host reads the v2 file once it exists and the M7 file before that.
   std::string text;
-  const auto source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
+  auto source = learning::ReadProtectedText(learning::LearningStoreV2PathFor(path),
+                                            learning::DpapiCrypto(), text);
+  if (source == learning::ProtectedFileSource::Missing) {
+    source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
+  }
   if (source == learning::ProtectedFileSource::Missing) return true;
   if (source == learning::ProtectedFileSource::Error) return false;
-  const bool legacy_format = !text.empty() && !std::string_view(text).starts_with(
-                                                  learning::kLearningStoreEscapedTsvHeader);
-  std::string_view remaining(text);
-  bool valid = true;
-  while (!remaining.empty()) {
-    const auto end = remaining.find('\n');
-    const auto line = remaining.substr(0, end);
-    if (!ParseLearningRecord(line)) {
-      valid = false;
-      break;
-    }
-    if (!line.empty() && line != learning::kLearningStoreEscapedTsvHeader) ++*entries;
-    if (end == std::string_view::npos) break;
-    remaining.remove_prefix(end + 1);
-  }
-  if (valid && migration_available) *migration_available = legacy_format;
+  const std::string_view view(text);
+  const bool legacy_format =
+      !text.empty() && !view.starts_with(learning::kLearningStoreEscapedTsvHeader);
+  const auto rows = learning::CountValidLearningRows(view);
+  if (rows) *entries = *rows;
+  if (rows && migration_available) *migration_available = legacy_format;
   learning::SecureErase(text);
-  return valid;
+  return rows.has_value();
 }
 
 bool ProbeUserDictionary(const std::filesystem::path& path, uint64_t* entries,

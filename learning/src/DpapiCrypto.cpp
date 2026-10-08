@@ -326,11 +326,11 @@ bool MigratePlaintextFile(const std::filesystem::path& plain_path, std::string_v
   return source.Remove();
 }
 
-bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_view text,
-                        const ByteCrypto& crypto, std::chrono::milliseconds retry_budget) {
-  const auto encrypted_path = EncryptedPathFor(plain_path);
-  auto lock = LockProtectedFile(encrypted_path);
-  if (!lock) return false;
+namespace {
+// The checks a write must pass, run under the caller's lock. Finishes an
+// interrupted migration by removing plaintext that matches its .bak.
+bool PrepareProtectedWrite(const std::filesystem::path& plain_path,
+                           const std::filesystem::path& encrypted_path, const ByteCrypto& crypto) {
   bool plain_exists = false;
   bool encrypted_exists = false;
   auto backup = plain_path;
@@ -358,7 +358,24 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
     SecureErase(backed_up);
     if (!matches_backup) return detail::ReportPersistenceFailure("migration-source");
   }
+  return true;
+}
+}  // namespace
+
+bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_view text,
+                        const ByteCrypto& crypto, std::chrono::milliseconds retry_budget) {
+  const auto encrypted_path = EncryptedPathFor(plain_path);
+  auto lock = LockProtectedFile(encrypted_path);
+  if (!lock) return false;
+  if (!PrepareProtectedWrite(plain_path, encrypted_path, crypto)) return false;
   return EncryptAndWrite(encrypted_path, text, crypto, retry_budget);
+}
+
+bool SettleProtectedFile(const std::filesystem::path& plain_path, const ByteCrypto& crypto) {
+  const auto encrypted_path = EncryptedPathFor(plain_path);
+  auto lock = LockProtectedFile(encrypted_path);
+  if (!lock) return false;
+  return PrepareProtectedWrite(plain_path, encrypted_path, crypto);
 }
 
 SecretResult ProtectSecret(std::string_view plain, const ByteCrypto& crypto) {

@@ -562,7 +562,7 @@ TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-cl
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | M43 で導入（§9） |
 | nlohmann-json | header-only | 任意・保留 | §6・§11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | §7・§11 参照（自前ロガーを優先評価） |
-| miniz | 要ビルド（C ソース 2 ファイル） | vendored（既定） →（オプトイン時）`FetchContent`（`-DAZOOKEY_FETCH_MINIZ=ON`） | M49 で導入予定（`docs/learning-data-management-spec.md` §7 の ZIP backup で使用） |
+| miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
 
 ### 3.3 vcpkg.json の扱い
 

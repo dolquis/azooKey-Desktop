@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/ImportConflictPolicy.h"
 
 namespace azookey::learning {
 
@@ -97,7 +98,21 @@ class AutoWordStore {
   size_t Size() const;
   const std::filesystem::path& path() const { return path_; }
 
+  std::vector<AutoWord> All() const;
+  // The file text, as Save writes it before encryption.
+  std::string SerializeText() const;
+  // Replaces the contents with rows parsed from `text`; touches no file.
+  // Malformed rows are skipped and make the result false.
+  bool LoadText(std::string_view text);
+  // True after a failed Load: Save refuses to run.
+  bool save_blocked() const;
+  // Adds every word of `other`. Merge adds counts and keeps the local state,
+  // so an import never revives a rejected word.
+  ImportCounts Merge(const AutoWordStore& other, ImportConflictPolicy policy);
+
  private:
+  bool ParseTextLocked(std::string_view text);
+  std::string SerializeTextLocked() const;
   AutoWord* FindLocked(const std::string& surface, const std::string& reading);
   bool SetStateLocked(const std::string& surface, const std::string& reading, AutoWordState state);
 

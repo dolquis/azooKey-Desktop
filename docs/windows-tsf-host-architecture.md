@@ -184,8 +184,9 @@ Linear が持つ。
 
 - モデル重みは更新しない（安全性優先）。
 - `learning.db` 相当の永続層へ観測を保存し、再ランキングで反映。
-- 永続フォーマットは現状 TSV。未指定時は
-  `%LOCALAPPDATA%\azooKey\data\learning.tsv` に保存する。
+- 永続フォーマットは TSV。未指定時は `%LOCALAPPDATA%\azooKey\data\learning.tsv` を
+  M7 形式の位置とし、M54 の v2 形式を同じディレクトリの `learning.v2.tsv` に保存する
+  （`docs/user-learning-enhancement-spec.md` §3.1）。
 - TSV の `reading` / `surface` は保存時に
   `# azookey-learning-tsv escaped=1` ヘッダーを付け、`\` → `\\`、
   tab → `\t`、LF → `\n`、CR → `\r` としてエスケープする。ヘッダーのない
@@ -306,8 +307,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 |---|---|---|---|
 | `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
-| `learning.tsv.enc` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
-| `english_learning.tsv.enc` | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
+| `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
+| `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
 | `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
@@ -382,7 +383,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `core/include/azookey/core/InputState.h` — 入力状態機械
 - `core/src/UserActionMap.cpp` — VK → UserAction 変換テーブル
 - `core/src/CustomRomajiLoader.cpp` — TSV パース + ホットリロード
-- `core/src/UnicodeInputBuffer.cpp` — Ctrl+Shift+U hex バッファ
+- `core/src/InputState.cpp` — Ctrl+Shift+U hex バッファ（Unicode 入力状態）
+- `tsf-tip/src/DebugLogBuffer.cpp` — F10 デバッグウィンドウのログ保持と本文ゲート
 - `tsf-tip/src/PredictionWindow.cpp` — 予測候補 HWND
 - `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト
 - `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ

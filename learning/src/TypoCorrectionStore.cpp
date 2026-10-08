@@ -308,7 +308,26 @@ bool TypoCorrectionStore::Load() {
     save_blocked_by_load_failure_ = true;
     return false;
   }
-  std::istringstream ifs(text);
+  ParseText(text);
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_load_failure_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
+  return true;
+}
+
+bool TypoCorrectionStore::LoadText(std::string_view text) {
+  table_.clear();
+  return ParseText(text);
+}
+
+bool TypoCorrectionStore::save_blocked() const { return save_blocked_by_load_failure_; }
+
+bool TypoCorrectionStore::ParseText(std::string_view text) {
+  bool all_valid = true;
+  std::istringstream ifs{std::string(text)};
 
   std::string line;
   size_t line_number = 0;
@@ -328,10 +347,12 @@ bool TypoCorrectionStore::Load() {
     TypoCorrectionRecord rec;
     if (!(std::getline(iss, wrong, '\t') && std::getline(iss, correct, '\t') &&
           std::getline(iss, count_timestamp))) {
+      all_valid = false;
       LogMalformedLine(path_, line_number);
       continue;
     }
     if (!ParseRecordValues(count_timestamp, rec)) {
+      all_valid = false;
       LogMalformedLine(path_, line_number);
       continue;
     }
@@ -342,22 +363,24 @@ bool TypoCorrectionStore::Load() {
     // A row that no longer passes the accept filters (written by an older build,
     // or hand-edited) must not become a correction nobody can explain.
     if (!IsLearnablePair(wrong, correct)) {
+      all_valid = false;
       LogMalformedLine(path_, line_number);
       continue;
     }
     table_[wrong][correct] = rec;
   }
-  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
-    save_blocked_by_load_failure_ = true;
-    SecureErase(text);
-    return false;
-  }
-  SecureErase(text);
-  return true;
+  return all_valid;
 }
 
 bool TypoCorrectionStore::Save() const {
   if (save_blocked_by_load_failure_) return false;
+  auto text = SerializeText();
+  const bool saved = WriteProtectedText(path_, text, *crypto_);
+  SecureErase(text);
+  return saved;
+}
+
+std::string TypoCorrectionStore::SerializeText() const {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kTypoCorrectionStoreEscapedTsvHeader << '\n';
@@ -367,7 +390,50 @@ bool TypoCorrectionStore::Save() const {
           << record.last_updated_epoch_sec << '\n';
     }
   }
-  return WriteProtectedText(path_, out.str(), *crypto_);
+  return out.str();
+}
+
+bool TypoCorrectionStore::Remove(const std::string& wrong, const std::string& correct) {
+  const auto it = table_.find(wrong);
+  if (it == table_.end() || it->second.erase(correct) == 0) return false;
+  if (it->second.empty()) table_.erase(it);
+  return true;
+}
+
+ImportCounts TypoCorrectionStore::Merge(const TypoCorrectionStore& other,
+                                        ImportConflictPolicy policy) {
+  ImportCounts counts;
+  for (const auto& [wrong, corrections] : other.table_) {
+    for (const auto& [correct, record] : corrections) {
+      const auto [it, inserted] = table_[wrong].emplace(correct, record);
+      if (inserted) {
+        ++counts.imported;
+        continue;
+      }
+      ++counts.conflicts;
+      auto& existing = it->second;
+      switch (policy) {
+        case ImportConflictPolicy::Merge: {
+          // Saturate like Observe does.
+          const uint64_t sum = uint64_t{existing.count} + record.count;
+          existing.count = static_cast<uint32_t>(
+              std::min<uint64_t>(sum, (std::numeric_limits<uint32_t>::max)()));
+          existing.last_updated_epoch_sec =
+              std::max(existing.last_updated_epoch_sec, record.last_updated_epoch_sec);
+          ++counts.imported;
+          break;
+        }
+        case ImportConflictPolicy::Overwrite:
+          existing = record;
+          ++counts.imported;
+          break;
+        case ImportConflictPolicy::KeepBoth:
+          ++counts.skipped;
+          break;
+      }
+    }
+  }
+  return counts;
 }
 
 void TypoCorrectionStore::Reset() { table_.clear(); }

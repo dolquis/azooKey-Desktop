@@ -18,11 +18,18 @@ namespace {
 
 void RemoveStoreFiles(const std::filesystem::path& path) {
   std::error_code ec;
-  std::filesystem::remove(path, ec);
-  std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
-  auto backup = path;
-  backup += ".bak";
-  std::filesystem::remove(backup, ec);
+  for (const auto& base : {path, azookey::learning::LearningStoreV2PathFor(path)}) {
+    std::filesystem::remove(base, ec);
+    std::filesystem::remove(azookey::learning::EncryptedPathFor(base), ec);
+    auto backup = base;
+    backup += ".bak";
+    std::filesystem::remove(backup, ec);
+  }
+}
+
+// Where a LearningStore constructed with `path` saves.
+std::filesystem::path StoredPath(const std::filesystem::path& path) {
+  return azookey::learning::EncryptedPathFor(azookey::learning::LearningStoreV2PathFor(path));
 }
 
 class CommaDecimalPunct : public std::numpunct<char> {
@@ -78,7 +85,7 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
   azookey::learning::LearningStore store(path.string(), &azookey::learning::test::Crypto());
   store.Observe("とうきょう", "東京", 1.0, 200);
   EXPECT_TRUE(store.Save());
-  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredPath(path)));
 
   size_t temp_files = 0;
   for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
@@ -231,10 +238,11 @@ TEST(LearningStoreTest, SaveWritesClassicNumericFieldsIndependentOfGlobalLocale)
   }
 
   std::string content;
-  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::test::Crypto(), content),
+  ASSERT_EQ(azookey::learning::ReadProtectedText(azookey::learning::LearningStoreV2PathFor(path),
+                                                 azookey::learning::test::Crypto(), content),
             azookey::learning::ProtectedFileSource::Encrypted);
-  EXPECT_NE(content.find("1.5 400"), std::string::npos);
-  EXPECT_EQ(content.find("1,5 400"), std::string::npos);
+  EXPECT_NE(content.find("1.5\t400"), std::string::npos);
+  EXPECT_EQ(content.find("1,5\t400"), std::string::npos);
 
   RemoveStoreFiles(path);
 }
@@ -329,7 +337,7 @@ TEST(LearningStoreTest, DirtyTracksSaveSuccessAndFailure) {
   EXPECT_EQ(loaded.size(), 1u);
 
   const auto blocked_path = root / "blocked-directory";
-  std::filesystem::create_directories(blocked_path);
+  std::filesystem::create_directories(azookey::learning::LearningStoreV2PathFor(blocked_path));
   azookey::learning::LearningStore failing(blocked_path.string(),
                                            &azookey::learning::test::Crypto());
   failing.Observe("reading", "blocked", 1.0, 300);
@@ -445,12 +453,14 @@ TEST(LearningStoreTest, LegacyRowsRemainFirstWinsAndSaveInSerializedKeyOrder) {
   ASSERT_TRUE(store.Save());
 
   std::string saved;
-  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::test::Crypto(), saved),
+  ASSERT_EQ(azookey::learning::ReadProtectedText(azookey::learning::LearningStoreV2PathFor(path),
+                                                 azookey::learning::test::Crypto(), saved),
             azookey::learning::ProtectedFileSource::Encrypted);
+  // Migrated rows estimate commit_count from the weight (2 / 0.8 rounds to 3).
   EXPECT_EQ(saved,
-            "# azookey-learning-tsv escaped=1\n"
-            "a\tA\t1 2000000000\n"
-            "b\tB\t2 2000000000\n");
+            "# azookey-learning-tsv escaped=1 version=2\n"
+            "a\tA\t1\t2000000000\t1\t0\t0\t\t\t\n"
+            "b\tB\t2\t2000000000\t3\t0\t0\t\t\t\n");
   RemoveStoreFiles(path);
 }
 
@@ -476,7 +486,7 @@ TEST(LearningStoreTest, NonAsciiWindowsPathRoundTripsWithoutNarrowing) {
   azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
   store.Observe("にほんご", "日本語", 2.0, kNow);
   ASSERT_TRUE(store.Save());
-  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredPath(path)));
 
   azookey::learning::LearningStore loaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());

@@ -1372,7 +1372,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 > 再掲せず、ネスト構造の単一情報源を維持する。
 >
 > 「—（保存時保持）」のキーは設定アプリに編集 UI を持たないが、保存時に有効な値を書き戻す
-> （§3.7「書き戻し」）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
+> （§3.7 の write-back 規則）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
 > `model.benchmarkHistory`）は、設定アプリから編集しない。
 
 > **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
@@ -1438,7 +1438,7 @@ schema 自体は superset のまま変えない。
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 一般 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
 | `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
@@ -1531,7 +1531,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
-| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
+| `model.backendPreference` | ◯（詳細、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
 | `model.selectedPath` | ◯（一般） | — |
 | `logLevel` | ◯（詳細） | — |
 | `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |
@@ -1545,7 +1545,8 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `contextReselection` / `postCommitLint` / `retroactiveRecompute` / `sentenceCompletion`（実験） | — | rich（M30 以降。実験フラグ） |
 | `batchRomajiConversion` / `batchRomajiPreviewStyle` / `batchConversionMode` / `batchAutoPunctuation` | — | M58 |
 | `autoUpdate.*` | — | M32（v1.0＝M11/M12 より後。一般ペインに UI 化） |
-| 予定済み拡張: `privacy.*` / `profilesByApp` | — | M46 / M48（schema 統合は §3.6 拡張方針） |
+| `dictionary.*` | — | M53 / M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
+| `privacy.*` / `profilesByApp` | — | M46 / M48（下位フィールドの正典は §3.6「拡張方針」） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
 > 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。

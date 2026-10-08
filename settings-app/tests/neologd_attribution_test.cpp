@@ -24,7 +24,7 @@ constexpr const char* kUnpublished = R"({
 
 }  // namespace
 
-TEST(NeologdAttributionTest, EmbeddedPinIsTheManifestFileAndItsNoticesAreShown) {
+TEST(NeologdAttributionTest, EmbeddedPinIsTheManifestFileAndYieldsItsNotices) {
   const auto file = ReadPinnedManifestFile();
   ASSERT_FALSE(file.empty());
   EXPECT_EQ(azookey::settings::PinnedNeologdPackManifestJson(), file);

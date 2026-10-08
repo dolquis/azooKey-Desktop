@@ -93,6 +93,7 @@
                                Style="{StaticResource BodyStrongTextBlockStyle}" />
                     <ToggleSwitch x:Name="NeologdDictionaryToggle"
                                   x:Uid="NeologdDictionaryToggle"
+                                  IsEnabled="False"
                                   Toggled="NeologdDictionaryToggle_Toggled"
                                   AutomationProperties.AutomationId="NeologdDictionaryToggle" />
                     <TextBlock x:Uid="NeologdDescription" TextWrapping="Wrap"

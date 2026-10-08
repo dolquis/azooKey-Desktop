@@ -129,6 +129,8 @@ void MainWindow::ApplyDictionaryToControls(
   AutoWordsDictionaryToggle().IsOn(dictionary.auto_words_enabled);
   AppSpecificDictionaryToggle().IsOn(dictionary.app_specific_dictionary_enabled);
   SetNeologdToggle(dictionary.neologd_enabled);
+  // Enabled only once the stored value is known, so a consent dialog never races the load.
+  NeologdDictionaryToggle().IsEnabled(true);
 }
 
 azookey::settings::DictionarySettings MainWindow::DictionaryFromControls() {
@@ -421,6 +423,9 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
       }
       RestartRequiredInfoBar().Message(message);
       RestartRequiredInfoBar().IsOpen(true);
+    } else if (!settings.dictionary->neologd_enabled) {
+      // Turned back off before a restart, so the pack will not be fetched after all.
+      RestartRequiredInfoBar().IsOpen(false);
     }
     saved_settings_ = settings;
     saved_settings_.openai_api_key.clear();

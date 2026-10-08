@@ -15,6 +15,7 @@
 
 #include "CandidateSelection.h"
 #include "azookey/tsf/CaretRectResolver.h"
+#include "azookey/tsf/DpiScaling.h"
 
 namespace azookey::tsf {
 
@@ -231,24 +232,22 @@ HMODULE GetTipModuleHandle() {
   return nullptr;
 }
 
-UINT NormalizeDpi(UINT dpi) { return dpi == 0 ? USER_DEFAULT_SCREEN_DPI : dpi; }
-
-class ScopedThreadDpiAwarenessContext {
+// Owns a GDI brush for one paint pass.
+class SolidBrush {
  public:
-  explicit ScopedThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT context)
-      : previous_context_(SetThreadDpiAwarenessContext(context)) {}
+  explicit SolidBrush(COLORREF color) : brush_(CreateSolidBrush(color)) {}
+  ~SolidBrush() {
+    if (brush_) DeleteObject(brush_);
+  }
+  SolidBrush(const SolidBrush&) = delete;
+  SolidBrush& operator=(const SolidBrush&) = delete;
 
-  ~ScopedThreadDpiAwarenessContext() {
-    if (previous_context_) {
-      SetThreadDpiAwarenessContext(previous_context_);
-    }
+  void Fill(HDC hdc, const RECT& rect) const {
+    if (brush_) FillRect(hdc, &rect, brush_);
   }
 
-  ScopedThreadDpiAwarenessContext(const ScopedThreadDpiAwarenessContext&) = delete;
-  ScopedThreadDpiAwarenessContext& operator=(const ScopedThreadDpiAwarenessContext&) = delete;
-
  private:
-  DPI_AWARENESS_CONTEXT previous_context_;
+  HBRUSH brush_;
 };
 }  // namespace
 
@@ -257,9 +256,7 @@ CandidateWindow::CandidateWindow() = default;
 CandidateWindow::~CandidateWindow() { Destroy(); }
 
 // static
-int CandidateWindow::ScaleForDpi(int value, UINT dpi) {
-  return MulDiv(value, static_cast<int>(NormalizeDpi(dpi)), static_cast<int>(kDefaultDpi));
-}
+int CandidateWindow::ScaleForDpi(int value, UINT dpi) { return tsf::ScaleForDpi(value, dpi); }
 
 // static
 CandidateWindow::LayoutMetrics CandidateWindow::ComputeLayoutMetrics(UINT dpi) {
@@ -369,6 +366,12 @@ HFONT CandidateWindow::CreateMessageFont(UINT dpi) {
   return CreateFontIndirectW(&log_font);
 }
 
+void CandidateWindow::UpdateTheme() {
+  const ThemeMode mode = CurrentThemeMode();
+  theme_ = ResolveThemeColors(mode);
+  ApplyWindowFrameTheme(hwnd_, mode);
+}
+
 void CandidateWindow::UpdateDpi(UINT dpi) {
   dpi = NormalizeDpi(dpi);
   if (dpi == dpi_ && font_) return;
@@ -406,13 +409,14 @@ bool CandidateWindow::Create() {
   if (!s_atom) return false;
 
   {
-    const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const ScopedPerMonitorDpiAwareness dpi_context;
     hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName,
                             nullptr, WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr,
                             nullptr, GetTipModuleHandle(), this);
   }
   if (hwnd_) {
     UpdateDpi(GetDpiForWindow(hwnd_));
+    UpdateTheme();
   }
   return hwnd_ != nullptr;
 }
@@ -436,7 +440,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   if (!hwnd_ || items.empty()) return;
   last_anchor_ = pt;
 
-  const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  const ScopedPerMonitorDpiAwareness dpi_context;
   items_ = items;
   notice_ = std::move(notice);
   if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
@@ -642,10 +646,11 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
       HDC hdc = BeginPaint(hwnd, &paint);
       RECT rect{};
       GetClientRect(hwnd, &rect);
-      FillRect(hdc, &rect, reinterpret_cast<HBRUSH>(COLOR_INFOBK + 1));
+      const ThemeColors& theme = self ? self->theme_ : kLightTheme;
+      SolidBrush(theme.info_background).Fill(hdc, rect);
       HGDIOBJ old_font = self && self->font_ ? SelectObject(hdc, self->font_) : nullptr;
       SetBkMode(hdc, TRANSPARENT);
-      SetTextColor(hdc, GetSysColor(COLOR_INFOTEXT));
+      SetTextColor(hdc, theme.info_text);
       const int pad = self ? self->metrics_.horizontal_padding : 8;
       InflateRect(&rect, -pad, -pad);
       rect.bottom -= self ? self->metrics_.item_height : 24;
@@ -663,6 +668,8 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
       EndPaint(hwnd, &paint);
       return 0;
     }
+    case WM_ERASEBKGND:
+      return 1;  // WM_PAINT fills the whole client area.
     case WM_LBUTTONDOWN:
       if (self) self->HideDetails();
       return 0;
@@ -768,6 +775,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
       RECT client_rc{};
       GetClientRect(hwnd, &client_rc);
+      SolidBrush(theme_.background).Fill(hdc, client_rc);
+      const SolidBrush selection_brush(theme_.selection);
       // Candidate text stops short of the secure indicator column.
       const LONG content_right = client_rc.right - SecureIndicatorWidth();
 
@@ -775,12 +784,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         RECT row_rc = {0, i * metrics_.item_height, client_rc.right,
                        (i + 1) * metrics_.item_height};
         if (i == selected_idx_) {
-          FillRect(hdc, &row_rc,
-                   reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_HIGHLIGHT + 1)));
-          SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+          selection_brush.Fill(hdc, row_rc);
+          SetTextColor(hdc, theme_.selection_text);
         } else {
-          FillRect(hdc, &row_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_WINDOW + 1)));
-          SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+          SetTextColor(hdc, theme_.text);
         }
         const auto& item = items_[static_cast<size_t>(i)];
         std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
@@ -809,7 +816,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (!item.description.empty()) {
-          if (i != selected_idx_) SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
+          if (i != selected_idx_) SetTextColor(hdc, theme_.sub_text);
           RECT description_rc = row_rc;
           description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
           description_rc.right = content_right - metrics_.horizontal_padding;
@@ -823,7 +830,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       if (secure_indicator_visible_ && !items_.empty()) {
         // Top-right corner of the first row; drawn over that row's background.
         RECT icon_rc{content_right, 0, client_rc.right, metrics_.item_height};
-        SetTextColor(hdc, GetSysColor(selected_idx_ == 0 ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+        SetTextColor(hdc, selected_idx_ == 0 ? theme_.selection_text : theme_.text);
         const std::wstring icon = kSecureIndicatorText;
         if (!emoji_cache_ || !DrawColorEmoji(*emoji_cache_, hdc, font_, icon, icon_rc)) {
           DrawTextW(hdc, icon.c_str(), static_cast<int>(icon.size()), &icon_rc,
@@ -833,9 +840,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
       if (!notice_.empty()) {
         RECT notice_rc = {0, notice_top, client_rc.right, notice_top + metrics_.item_height};
-        FillRect(hdc, &notice_rc,
-                 reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_BTNFACE + 1)));
-        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        SolidBrush(theme_.panel_background).Fill(hdc, notice_rc);
+        SetTextColor(hdc, theme_.panel_text);
         notice_rc.left += metrics_.horizontal_padding;
         notice_rc.right -= metrics_.horizontal_padding;
         DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
@@ -844,8 +850,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       if (secure_toast_visible_) {
         const int toast_top = FooterTop();
         RECT toast_rc{0, toast_top, client_rc.right, toast_top + metrics_.item_height};
-        FillRect(hdc, &toast_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_INFOBK + 1)));
-        SetTextColor(hdc, GetSysColor(COLOR_INFOTEXT));
+        SolidBrush(theme_.info_background).Fill(hdc, toast_rc);
+        SetTextColor(hdc, theme_.info_text);
         toast_rc.left += metrics_.horizontal_padding;
         toast_rc.right -= metrics_.horizontal_padding;
         const std::wstring toast = kSecureToastText;
@@ -856,12 +862,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       }
       if (health_banner_visible_) {
         RECT banner_rc{0, HealthBannerTop(), client_rc.right, client_rc.bottom};
-        HBRUSH background = CreateSolidBrush(RGB(255, 249, 225));
-        if (background) {
-          FillRect(hdc, &banner_rc, background);
-          DeleteObject(background);
-        }
-        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        SolidBrush(theme_.banner_background).Fill(hdc, banner_rc);
+        SetTextColor(hdc, theme_.text);
         RECT text_rc = banner_rc;
         text_rc.left += metrics_.horizontal_padding;
         text_rc.right -= metrics_.horizontal_padding;
@@ -874,8 +876,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (health_state_ == CandidateHealthState::DegradedModel) {
           RECT retry_rc = HealthRetryButtonRect(client_rc.right);
-          SetTextColor(
-              hdc, retry_in_flight_ ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(COLOR_WINDOWTEXT));
+          SetTextColor(hdc, retry_in_flight_ ? theme_.sub_text : theme_.text);
           DrawTextW(hdc, L"[再試行]", -1, &retry_rc,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
@@ -925,6 +926,20 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       }
       return 0;
     }
+
+    case WM_ERASEBKGND:
+      return 1;  // WM_PAINT fills the whole client area with the theme background.
+
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE:
+    case WM_THEMECHANGED:
+      if (msg != WM_SETTINGCHANGE || IsThemeSettingChange(lParam) ||
+          wParam == SPI_SETHIGHCONTRAST) {
+        UpdateTheme();
+        Repaint();
+        if (details_hwnd_) InvalidateRect(details_hwnd_, nullptr, FALSE);
+      }
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
 
     case kCandidatesReadyMessage:
       if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);

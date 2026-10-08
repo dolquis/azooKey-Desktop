@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/PredictionWindow.h"
 
 namespace azookey::tsf {
@@ -56,6 +57,35 @@ TEST(PredictionWindowTest, CreateAndShowMakeTheWindowVisible) {
                                   << static_cast<unsigned long>(window.failure_hr());
   window.Hide();
   EXPECT_FALSE(window.IsVisible());
+}
+
+TEST(PredictionWindowTest, DpiChangeRescalesTheVisibleWindow) {
+  // Read sizes in physical pixels whatever this test thread's DPI awareness is.
+  const ScopedPerMonitorDpiAwareness dpi_context;
+  PredictionWindow window;
+  ASSERT_TRUE(window.Create()) << window.failure_stage();
+  window.Show({L"日本"}, RECT{100, 200, 101, 216});
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+
+  // 144 DPI differs from both the default and a 200% test monitor.
+  RECT suggested{100, 216, 300, 300};
+  SendMessageW(window.hwnd_for_test(), WM_DPICHANGED, MAKEWPARAM(144, 144),
+               reinterpret_cast<LPARAM>(&suggested));
+
+  RECT client{};
+  ASSERT_TRUE(GetClientRect(window.hwnd_for_test(), &client));
+  // One row at 144 DPI: padding 12 * 2 + row 42.
+  EXPECT_EQ(client.bottom - client.top, 66);
+  EXPECT_TRUE(window.IsVisible()) << window.failure_stage();
+  window.Hide();
+}
+
+TEST(PredictionWindowTest, CreateResolvesTheCurrentTheme) {
+  PredictionWindow window;
+  ASSERT_TRUE(window.Create()) << window.failure_stage();
+  const ThemeColors expected = ResolveThemeColors(CurrentThemeMode());
+  EXPECT_EQ(window.theme_for_test().background, expected.background);
+  EXPECT_EQ(window.theme_for_test().text, expected.text);
 }
 
 }  // namespace

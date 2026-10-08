@@ -7,126 +7,88 @@
 
 ### 1.1 検出
 
-```cpp
-bool ShouldAppsUseDarkMode() {
-    HKEY hkey;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        0, KEY_READ, &hkey) != ERROR_SUCCESS) return false;
-    DWORD val = 0, size = sizeof(val);
-    RegGetValueW(hkey, nullptr, L"AppsUseLightTheme", RRF_RT_REG_DWORD,
-                 nullptr, &val, &size);
-    RegCloseKey(hkey);
-    return val == 0;  // 0=Dark, 1=Light
-}
-```
+テーマの判定は `tsf-tip/include/azookey/tsf/ThemeColors.h` の `ThemeMode`（`Light` / `Dark` /
+`HighContrast`）で表す。
+`CurrentThemeMode()` は次の順で決める。
+
+1. `SystemParametersInfoW(SPI_GETHIGHCONTRAST)` で `HCF_HIGHCONTRASTON` が立っていれば `HighContrast`
+2. HKCU `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` の
+   `AppsUseLightTheme` が 0 なら `Dark`
+3. 値が 1、または読めなければ `Light`
+
+判定規則そのものは `ThemeModeFrom(high_contrast, apps_use_light_theme)` に分け、
+レジストリと SPI を読まずにテストする。
+C++/WinRT の `UISettings` は TIP DLL に WinRT 依存を持ち込むため使わない。
 
 ### 1.2 変化の購読
 
-```cpp
-case WM_SETTINGCHANGE:
-    if (lParam && _wcsicmp((LPCWSTR)lParam, L"ImmersiveColorSet") == 0) {
-        OnThemeChanged(ShouldAppsUseDarkMode());
-    }
-    break;
-```
+候補ウィンドウと予測候補ウィンドウは owner を持たない top-level の `WS_POPUP` なので、
+`WM_SETTINGCHANGE` の broadcast を直接受け取る。
+次のいずれかでテーマを読み直し、再描画する。
 
-`OnThemeChanged(bool dark)`：
-- 色テーブルを切替
-- 既存ウィンドウを再描画
-- DComp Visual Tree の backdrop を切替
+- `WM_SETTINGCHANGE` で lParam が `"ImmersiveColorSet"`（`IsThemeSettingChange`）
+- `WM_SETTINGCHANGE` で wParam が `SPI_SETHIGHCONTRAST`
+- `WM_SYSCOLORCHANGE`、`WM_THEMECHANGED`
+
+テーマを読み直すときは、色テーブルを差し替え、`DwmSetWindowAttribute` の
+`DWMWA_USE_IMMERSIVE_DARK_MODE`（属性値 20）で枠の明暗も合わせる。
+この属性を持たない OS では呼び出しが失敗するだけで、表示には影響しない。
 
 ### 1.3 色テーブル
 
-`tsf-tip/src/ThemeColors.h`（新規）：
+`ThemeColors` は両ウィンドウが描く要素ごとの色を持つ。
 
-```cpp
-struct ThemeColors {
-    COLORREF background;
-    COLORREF selection;
-    COLORREF text;
-    COLORREF sub_text;
-    COLORREF underline;
-    COLORREF shadow;
-};
+| フィールド | 用途 | `kLightTheme` | `kDarkTheme` | ハイコントラスト |
+|---|---|---|---|---|
+| `background` | 背景 | RGB(255,255,255) | RGB(32,32,32) | `COLOR_WINDOW` |
+| `text` | 候補 | RGB(0,0,0) | RGB(255,255,255) | `COLOR_WINDOWTEXT` |
+| `sub_text` | 説明、無効なボタン | RGB(96,96,96) | RGB(160,160,160) | `COLOR_GRAYTEXT` |
+| `selection` | 選択行の背景 | RGB(0,120,215) | RGB(76,194,255) | `COLOR_HIGHLIGHT` |
+| `selection_text` | 選択行の文字 | RGB(255,255,255) | RGB(0,0,0) | `COLOR_HIGHLIGHTTEXT` |
+| `border` | 予測候補ウィンドウの枠 | RGB(160,160,160) | RGB(80,80,80) | `COLOR_WINDOWTEXT` |
+| `panel_background` / `panel_text` | 案内行 | RGB(243,243,243) / 黒 | RGB(45,45,45) / 白 | `COLOR_BTNFACE` / `COLOR_BTNTEXT` |
+| `info_background` / `info_text` | secure toast、劣化の詳細 | RGB(255,255,225) / 黒 | RGB(56,56,40) / 白 | `COLOR_INFOBK` / `COLOR_INFOTEXT` |
+| `banner_background` | 劣化バナー | RGB(255,249,225) | RGB(67,53,25) | `COLOR_INFOBK` |
 
-constexpr ThemeColors kLightTheme = {
-    /*background*/  RGB(255, 255, 255),
-    /*selection*/   RGB(0,   120, 215),
-    /*text*/        RGB(0,   0,   0),
-    /*sub_text*/    RGB(96,  96,  96),
-    /*underline*/   RGB(0,   0,   0),
-    /*shadow*/      RGB(0,   0,   0),
-};
+`ResolveThemeColors(mode)` は Light / Dark では固定表を返し、ハイコントラストでは
+`GetSysColor` から組み立てる（§5.1）。
+選択色に Windows のアクセント色は使わない（`UISettings` を使わないため）。
 
-constexpr ThemeColors kDarkTheme = {
-    /*background*/  RGB(32,  32,  32),
-    /*selection*/   RGB(76,  194, 255),
-    /*text*/        RGB(255, 255, 255),
-    /*sub_text*/    RGB(160, 160, 160),
-    /*underline*/   RGB(255, 255, 255),
-    /*shadow*/      RGB(0,   0,   0),
-};
-```
+## 2. 背景と DirectComposition
 
-選択色（selection）は Windows 11 のアクセント色を尊重する場合、
-`UISettings::GetColorValue(UIColorType::Accent)`（C++/WinRT）から取得。
+### 2.1 背景効果
 
-## 2. DirectComposition + Mica/Acrylic
+候補ウィンドウと予測候補ウィンドウの背景は、テーマ色の不透明な塗りとする。
+Mica / Acrylic などのシステム背景効果は使わない。
 
-### 2.1 Mica 適用
+- Mica（`DWMSBT_MAINWINDOW`）はアクティブなウィンドウ向けで、非アクティブなウィンドウでは
+  単色になる。両ウィンドウは `WS_EX_NOACTIVATE` で常に非アクティブなので、効果が出ない。
+- Acrylic（`DWMSBT_TRANSIENTWINDOW`）は popup 向けで非アクティブでも描かれるが、
+  `DwmExtendFrameIntoClientArea` と透明なクリアが要る。
+  GDI で描く候補ウィンドウは透明なクリアができないため、候補ウィンドウを DirectComposition に
+  移すまで、両ウィンドウとも背景効果を付けない（統一を優先する）。
+- `DwmEnableBlurBehindWindow` は Windows 8 以降では効果がなく、Acrylic の代わりにならない。
 
-```cpp
-#include <dwmapi.h>
-#pragma comment(lib, "Dwmapi.lib")
+Acrylic の採用は、候補ウィンドウの DirectComposition 移行と同時に判断する（§4.1）。
+採用するときは build 22621 未満で不透明のテーマ色へ落とす。
 
-void EnableMica(HWND hwnd, bool dark) {
-    BOOL use_dark = dark ? TRUE : FALSE;
-    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                          &use_dark, sizeof(use_dark));
-    DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_MAINWINDOW; // Mica
-    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
-                          &backdrop, sizeof(backdrop));
-}
-```
+### 2.2 RenderingEngine
 
-サポート OS:
-- Windows 11 22H2 以降: Mica
-- それ以前: アクリル `DwmEnableBlurBehindWindow` フォールバック
-- Windows 10 LTSC: 単色背景
+`tsf-tip/src/RenderingEngine.cpp` の `RenderingEngine` が、1 つの popup HWND に対する
+D3D11 + Direct2D + DirectComposition + DirectWrite の組を持つ。
+ウィンドウは `WS_EX_NOREDIRECTIONBITMAP` で作る。
 
-OS バージョン判定：`RtlGetVersion` (`ntdll.dll`)。
-Windows 11 22H2 = build 22621。
+| メソッド | 役割 |
+|---|---|
+| `Initialize(hwnd)` | D3D11 device（hardware、失敗時は WARP）、D2D factory / device、`IDCompositionDesktopDevice`、topmost の composition target、root visual、DWrite factory を作る |
+| `ResizeSurface(width, height)` | 物理 px の `IDCompositionSurface` を作り直して visual に付ける（同じ大きさなら何もしない） |
+| `BeginDraw()` | surface 全体の描画を始め、96 DPI・surface 原点基準の `ID2D1DeviceContext` を返す |
+| `EndDraw()` | 描画を終えて composition を commit する |
+| `failure_stage()` / `failure_hr()` | 直近の失敗段階と HRESULT（描画内容は含まない） |
 
-### 2.2 DComp Visual Tree
-
-```
-root visual
- ├─ backdrop visual (Mica/Acrylic surface)
- └─ content visual
-     ├─ selection highlight visual
-     └─ text visual (DirectWrite render target)
-```
-
-実装：
-
-```cpp
-ComPtr<IDCompositionDevice> device;
-DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&device));
-
-ComPtr<IDCompositionTarget> target;
-device->CreateTargetForHwnd(hwnd, FALSE, &target);
-
-ComPtr<IDCompositionVisual> root, backdrop, content;
-device->CreateVisual(&root);
-device->CreateVisual(&backdrop);
-device->CreateVisual(&content);
-root->AddVisual(backdrop.Get(), TRUE, nullptr);
-root->AddVisual(content.Get(), FALSE, nullptr);
-
-target->SetRoot(root.Get());
-device->Commit();
-```
+`DCompositionCreateDevice2` は `IDCompositionDevice2` を直接返さないため、
+`IDCompositionDesktopDevice` で作ってから `IDCompositionDevice2` を QI する。
+visual tree は root visual に surface を 1 枚載せるだけとし、背景用の visual は持たない（§2.1）。
 
 ## 3. DirectWrite 描画
 
@@ -178,7 +140,7 @@ ComPtr<ID2D1SolidColorBrush> brush;
 rt->CreateSolidColorBrush(D2D1::ColorF(theme_.text), &brush);
 
 rt->BeginDraw();
-rt->Clear(D2D1::ColorF(theme_.background, 0.0f));  // backdrop が透ける
+rt->Clear(D2D1::ColorF(theme_.background));  // 不透明（§2.1）
 rt->DrawTextLayout({ pad_x, pad_y }, layout.Get(), brush.Get());
 rt->EndDraw();
 ```
@@ -202,19 +164,24 @@ dc4->DrawText(text.c_str(), text.size(),
 
 ### 4.1 CandidateWindow.cpp
 
-既存 GDI 実装を以下に置換：
+GDI で描き、色は §1.3 の `ThemeColors` を使う。
+`WM_ERASEBKGND` は何もせず、`WM_PAINT` がクライアント領域全体をテーマの背景で塗る。
+DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azookey/tsf/DpiScaling.h`）に従う。
 
-- WS_POPUP HWND は維持
-- 描画レイヤを GDI → DComp + D2D + DirectWrite に置換
-- ヒットテスト・キャレット追従ロジックは変更なし
+描画レイヤを GDI から `RenderingEngine` へ移すことは後続とする。
+移すときも `WS_POPUP` の HWND、ヒットテスト、キャレット追従の配置計算
+（`docs/legacy-parity-spec.md` §9.2）は変えない。
+カラー絵文字は、移行後は `D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT` で描く（§3.4）。
 
 ### 4.2 PredictionWindow.cpp（M15 新規）
 
-最初から DComp + D2D + DirectWrite で実装。
+`RenderingEngine` で描き、色は §1.3 の `ThemeColors` を使う。
+`WM_DPICHANGED` で行高・余白・フォントを作り直し、表示中なら大きさを測り直して再描画する。
 
 ### 4.3 デバッグウィンドウ（M18-3）
 
-Phase 6-C で同じ仕組みに統一。Phase 5 では GDI で実装してよい。
+M18-3 では GDI で実装してよい。
+`RenderingEngine` と `ThemeColors` へ載せるのは、候補ウィンドウの移行（§4.1）と同じ後続で扱う。
 
 ### 4.4 Magic Conversion プロンプト（M16）
 
@@ -248,8 +215,8 @@ bool high_contrast = (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
 ```
 
 `high_contrast == true` のとき：
-- Mica 無効化（不透明背景）
-- システムテーマ色を `GetSysColor` で取得
+- 背景効果を使わない（不透明背景。§2.1 により常に不透明）
+- システムテーマ色を `GetSysColor` で取得（§1.3 のハイコントラスト列）
 - フォントを `GetThemeSysFont(SPI_GETICONTITLELOGFONT)` から
 
 ### 5.2 UI Automation
@@ -290,10 +257,11 @@ device->Commit();
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| Theme 切替 | `tsf-tip/tests/theme_test.cpp`（新規） | Windows 限定。WM_SETTINGCHANGE で色テーブル切替 |
-| DPI scaling | `tsf-tip/tests/candidate_window_dpi_test.cpp`（既存） | 96/144/192 DPI でフォントサイズ計算 |
-| High contrast | `tsf-tip/tests/high_contrast_test.cpp`（新規） | Windows 限定。HCF_HIGHCONTRASTON 検出 |
-| 描画 smoke | `tsf-tip/tests/render_smoke_test.cpp`（新規） | Windows 限定。DComp + D2D + DirectWrite で 1 フレーム描画 |
+| テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
+| DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
+| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示 |
+
+実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。
 
 CI では `windows-2022` ランナーで実行。アーティファクトとしてスクリーンショットを
 `bench/` で出力（Phase 6-C 完了時の見栄え確認用）。

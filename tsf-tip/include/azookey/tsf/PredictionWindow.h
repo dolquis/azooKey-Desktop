@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/tsf/ThemeColors.h"
+
 namespace azookey::tsf {
 
 // Owns a separate, non-activating popup for predictions. All methods except
@@ -36,6 +38,11 @@ class PredictionWindow {
   static constexpr std::size_t VisibleCount(std::size_t count) { return count < 5 ? count : 5; }
   static RECT ComputePlacement(RECT caret, RECT work_area, int width, int height);
 
+#ifdef AZOOKEY_TSF_TESTING
+  HWND hwnd_for_test() const { return hwnd_; }
+  const ThemeColors& theme_for_test() const { return theme_; }
+#endif
+
  private:
   struct RenderState;
 
@@ -48,6 +55,7 @@ class PredictionWindow {
   bool Draw();
   int MeasureWidth() const;
   void UpdateDpi(UINT dpi);
+  void UpdateTheme();
 
   HWND hwnd_{nullptr};
   DWORD ui_thread_id_{0};
@@ -58,6 +66,8 @@ class PredictionWindow {
   int padding_{8};
   std::vector<std::wstring> candidates_;
   OnClickFn on_click_;
+  ThemeMode theme_mode_{ThemeMode::Light};
+  ThemeColors theme_{kLightTheme};
   std::unique_ptr<RenderState> render_;
   const char* failure_stage_{""};
   HRESULT failure_hr_{S_OK};

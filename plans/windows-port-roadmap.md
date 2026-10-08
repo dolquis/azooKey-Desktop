@@ -812,19 +812,23 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - バッテリ駆動時に Heavy レーンが Fast にデグレ
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §5, §6
 
-### M26: PerMonitorV2 DPI / Dark / Mica / DirectWrite
+### M26: PerMonitorV2 DPI / Dark / DirectWrite
 
-- **目的**: 候補・予測・デバッグウィンドウを Windows 11 標準ルックに統一。
+- **目的**: 候補・予測ウィンドウの DPI 換算と配色を Windows 11 のテーマに揃える。
 - **前提**: M19 完了。
 - **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
-  `tsf-tip/src/ThemeColors.h`（新規）、`tsf-tip/src/RenderingEngine.cpp`（新規、
+  `tsf-tip/include/azookey/tsf/ThemeColors.h` と `tsf-tip/src/ThemeColors.cpp`（新規）、
+  `tsf-tip/include/azookey/tsf/DpiScaling.h`（新規）、`tsf-tip/src/RenderingEngine.cpp`（新規、
   DComp + D2D + DirectWrite ラッパ）。
 - **実装範囲**: `docs/copilot-pc-backend-spec.md` §7、`docs/native-ui-spec.md`
   §1〜§4。
 - **受け入れ条件**:
   - 96/144/192 DPI で正しくスケール
-  - Dark/Light テーマがシステムに追従
-  - Windows 11 22H2 以降で Mica 背景
+  - Dark/Light テーマとハイコントラストがシステムに追従
+  - 背景はテーマ色の不透明な塗りとし、背景効果に未対応の OS でも同じ見た目になる
+- **範囲外**: 候補ウィンドウの描画を `RenderingEngine` へ移すこと、Acrylic 背景、
+  デバッグウィンドウ（M18-3）を新しい描画へ載せること。いずれも後続で扱う
+  （`docs/native-ui-spec.md` §2.1、§4）。
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §7、`docs/native-ui-spec.md`
 
 ### M27: ARM64 ビルド

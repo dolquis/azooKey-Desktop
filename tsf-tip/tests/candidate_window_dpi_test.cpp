@@ -42,6 +42,20 @@ TEST(CandidateWindowDpiTest, EmojiDetectionDoesNotReclassifyKanjiOrTextSymbols) 
     EXPECT_TRUE(CandidateWindow::NeedsColorEmoji(text));
 }
 
+TEST(CandidateWindowDpiTest, CreateResolvesTheCurrentThemeAndFollowsAThemeChange) {
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  const ThemeColors expected = ResolveThemeColors(CurrentThemeMode());
+  EXPECT_EQ(window.theme_for_test().background, expected.background);
+  EXPECT_EQ(window.theme_for_test().selection, expected.selection);
+  // An unrelated setting change keeps the colors; ImmersiveColorSet re-reads them.
+  SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"Policy"));
+  SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, 0,
+               reinterpret_cast<LPARAM>(L"ImmersiveColorSet"));
+  EXPECT_EQ(window.theme_for_test().text, ResolveThemeColors(CurrentThemeMode()).text);
+  window.Destroy();
+}
+
 TEST(CandidateWindowDpiTest, ZeroDpiFallsBackToDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(0), 24, 8, 400, 20, 60, 4);
 }

@@ -410,7 +410,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ### Phase 6-C（UI モダン化、`docs/native-ui-spec.md`）
 
-- `tsf-tip/src/ThemeColors.h` — Light/Dark 色テーブル
+- `tsf-tip/src/ThemeColors.cpp` — Light/Dark/ハイコントラストの判定と色テーブル
+- `tsf-tip/include/azookey/tsf/DpiScaling.h` — DPI 換算と PMv2 の一時切替
 - `tsf-tip/src/RenderingEngine.cpp` — DComp + D2D + DirectWrite 共通
 
 ### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）

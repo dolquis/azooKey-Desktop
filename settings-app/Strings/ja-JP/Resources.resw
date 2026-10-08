@@ -97,7 +97,9 @@
   <data name="VersionNavigationItem.Content" xml:space="preserve"><value>バージョン</value></data>
   <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI</value></data>
   <data name="CrashReportSectionTitle.Text" xml:space="preserve"><value>障害診断</value></data>
-  <data name="RestartRequiredInfoBar.Title" xml:space="preserve"><value>Host の再起動後に反映される設定があります</value></data>
+  <data name="RestartRequiredTitle" xml:space="preserve"><value>Host の再起動後に反映される設定があります</value></data>
+  <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 辞書 pack は取得されません</value></data>
+  <data name="NeologdNoticesDialogFailed" xml:space="preserve"><value>ライセンスと帰属のダイアログを表示できなかったため、NEologd 辞書 pack を有効にしませんでした。もう一度切り替えてください。</value></data>
   <data name="DictionarySectionTitle.Text" xml:space="preserve"><value>辞書</value></data>
   <data name="DictionaryDescription.Text" xml:space="preserve"><value>変換に使う辞書層を個別に有効・無効にできます。保存すると次回の変換から反映されます。</value></data>
   <data name="SudachiDictionaryToggle.Header" xml:space="preserve"><value>基本辞書（SudachiDict）</value></data>

@@ -166,7 +166,12 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
     try {
       accepted = co_await ShowNeologdNoticesAsync(true);
     } catch (...) {
+      // For example another dialog is already open; say why the switch went back off.
       accepted = false;
+      Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+      ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+                 resources.GetString(L"NeologdNoticesTitle"),
+                 resources.GetString(L"NeologdNoticesDialogFailed"));
     }
   } else {
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
@@ -417,11 +422,12 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   if (save_result.ok) {
     // sideload-packaging-spec section 3.6: UpdateConfig cannot apply these, so say when they will.
     if (!azookey::settings::SettingsRequiringHostRestart(saved_settings_, settings).empty()) {
-      auto message = final_resources.GetString(L"NeologdRestartRequiredMessage");
-      if (neologd_attribution_ && !neologd_attribution_->published) {
-        message = message + L"\n" + final_resources.GetString(L"NeologdPackUnpublished");
-      }
-      RestartRequiredInfoBar().Message(message);
+      // An unpublished pack is never fetched, so a restart would change nothing.
+      const bool published = neologd_attribution_ && neologd_attribution_->published;
+      RestartRequiredInfoBar().Title(final_resources.GetString(
+          published ? L"RestartRequiredTitle" : L"NeologdPackNotFetchedTitle"));
+      RestartRequiredInfoBar().Message(final_resources.GetString(
+          published ? L"NeologdRestartRequiredMessage" : L"NeologdPackUnpublished"));
       RestartRequiredInfoBar().IsOpen(true);
     } else if (!settings.dictionary->neologd_enabled) {
       // Turned back off before a restart, so the pack will not be fetched after all.

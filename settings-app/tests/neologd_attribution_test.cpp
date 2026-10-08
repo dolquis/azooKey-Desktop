@@ -57,6 +57,15 @@ TEST(NeologdAttributionTest, PublishedFollowsTheManifestUrl) {
   EXPECT_EQ(published->upstream_revision, "v0.0.7");
 }
 
+// The notice catalog keeps upstream text verbatim, including HTML entities such as &quot;.
+TEST(NeologdAttributionTest, NoticesAreKeptVerbatimIncludingEntities) {
+  const auto parsed = azookey::settings::ParseNeologdPackAttribution(R"({
+    "attribution": {"notices": "&quot;Hatena&quot; \"keyword\"\nline 2\n"},
+    "pack_id": "neologd_lexicon", "upstream_revision": "", "url": ""})");
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->notices, "&quot;Hatena&quot; \"keyword\"\nline 2\n");
+}
+
 TEST(NeologdAttributionTest, ManifestsWithoutUsableNoticesAreRejected) {
   using azookey::settings::ParseNeologdPackAttribution;
   EXPECT_FALSE(ParseNeologdPackAttribution("not json"));

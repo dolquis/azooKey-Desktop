@@ -1214,6 +1214,11 @@ Host の IPC を読むペインは、その IPC を呼ぶ設定アプリ側の c
 | Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
 | 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
+上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「入力」「プライバシー」と
+§3.6 の残りのキーは DEV-1208、「モデル」は DEV-1530、「学習」は DEV-1531、「校正」は DEV-1532、
+「Persona」は DEV-1533、`neologd_lexicon` pack の状態表示は DEV-1534、`profilesByApp` の編集 UI は
+DEV-1535 で追う。
+
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。
 

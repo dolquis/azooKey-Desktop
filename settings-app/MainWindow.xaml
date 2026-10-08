@@ -48,7 +48,6 @@
                          IsClosable="True"
                          AutomationProperties.AutomationId="SettingsStatusInfoBar" />
                 <InfoBar x:Name="RestartRequiredInfoBar"
-                         x:Uid="RestartRequiredInfoBar"
                          IsOpen="False"
                          IsClosable="True"
                          Severity="Informational"

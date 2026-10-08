@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/tsf/ThemeColors.h"
+
 namespace azookey::tsf {
 
 // Owns a separate, non-activating popup for predictions. All methods except
@@ -36,6 +38,15 @@ class PredictionWindow {
   static constexpr std::size_t VisibleCount(std::size_t count) { return count < 5 ? count : 5; }
   static RECT ComputePlacement(RECT caret, RECT work_area, int width, int height);
 
+#ifdef AZOOKEY_TSF_TESTING
+  HWND hwnd_for_test() const { return hwnd_; }
+  const ThemeColors& theme_for_test() const { return theme_; }
+  int row_height_for_test() const { return row_height_; }
+  // Overrides the caret monitor's DPI that Show measures with; 0 restores it.
+  static void SetMonitorDpiForTest(UINT dpi);
+  static bool IsDeviceLostForTest(HRESULT hr);
+#endif
+
  private:
   struct RenderState;
 
@@ -48,6 +59,7 @@ class PredictionWindow {
   bool Draw();
   int MeasureWidth() const;
   void UpdateDpi(UINT dpi);
+  void UpdateTheme();
 
   HWND hwnd_{nullptr};
   DWORD ui_thread_id_{0};
@@ -56,8 +68,14 @@ class PredictionWindow {
   int height_{0};
   int row_height_{28};
   int padding_{8};
+  // Show already measures and places for the target monitor; a WM_DPICHANGED
+  // raised by its own SetWindowPos must not resize the window again.
+  bool showing_{false};
+  RECT last_caret_rect_{0, 0, 0, 0};
   std::vector<std::wstring> candidates_;
   OnClickFn on_click_;
+  ThemeMode theme_mode_{ThemeMode::Light};
+  ThemeColors theme_{kLightTheme};
   std::unique_ptr<RenderState> render_;
   const char* failure_stage_{""};
   HRESULT failure_hr_{S_OK};

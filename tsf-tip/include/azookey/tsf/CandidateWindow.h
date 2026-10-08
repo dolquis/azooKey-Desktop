@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/tsf/ThemeColors.h"
+
 namespace azookey::tsf {
 struct EmojiDrawingCache;
 
@@ -110,6 +112,7 @@ class CandidateWindow {
   }
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
   HWND hwnd_for_test() const { return hwnd_; }
+  const ThemeColors& theme_for_test() const { return theme_; }
   const std::wstring& notice_for_test() const { return notice_; }
   bool secure_indicator_visible_for_test() const { return secure_indicator_visible_; }
   bool secure_toast_visible_for_test() const { return secure_toast_visible_; }
@@ -164,6 +167,7 @@ class CandidateWindow {
   int selected_idx_{0};
   OnClickFn on_click_;
   OnRetryFn on_retry_;
+  ThemeColors theme_{kLightTheme};
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
   bool health_banner_visible_{false};
   ULONGLONG health_banner_until_{0};  // GetTickCount64 deadline of the last banner.
@@ -189,6 +193,7 @@ class CandidateWindow {
   // a valid handle for DefWindowProcW).
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   void UpdateDpi(UINT dpi);
+  void UpdateTheme();
   void Repaint() const;
   void ResizeAtLastAnchor();
   void ShowDetails();

@@ -35,10 +35,11 @@ bool IsAsciiDominant(std::string_view surface) {
   size_t code_points = 0;
   size_t ascii = 0;
   bool has_ascii_letter = false;
-  for (const char ch : surface) {
-    const auto byte = static_cast<unsigned char>(ch);
+  for (size_t i = 0; i < surface.size(); ++i) {
+    const auto byte = static_cast<unsigned char>(surface[i]);
     if ((byte & 0xC0) == 0x80) continue;  // UTF-8 continuation byte.
-    if (byte == ' ') continue;
+    if (byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r') continue;
+    if (surface.compare(i, 3, "\xE3\x80\x80") == 0) continue;  // U+3000 ideographic space.
     ++code_points;
     if (byte < 0x80) {
       ++ascii;

@@ -83,10 +83,15 @@ TEST(CandidateTagsTest, BoostsAreClampedAndMalformedEntriesIgnored) {
 
 TEST(CandidateTagsTest, AsciiDominantSurfacesAreTaggedEnglish) {
   std::vector<Candidate> candidates = {
-      Tagged("TensorRT", 1.0, CandidateTag::None),  Tagged("iPhone 15", 1.0, CandidateTag::None),
-      Tagged("日本", 1.0, CandidateTag::None),      Tagged("Aさん", 1.0, CandidateTag::None),
-      Tagged("123", 1.0, CandidateTag::None),       Tagged("", 1.0, CandidateTag::None),
+      Tagged("TensorRT", 1.0, CandidateTag::None),
+      Tagged("iPhone 15", 1.0, CandidateTag::None),
+      Tagged("日本", 1.0, CandidateTag::None),
+      Tagged("Aさん", 1.0, CandidateTag::None),
+      Tagged("123", 1.0, CandidateTag::None),
+      Tagged("", 1.0, CandidateTag::None),
       Tagged("Rust", 1.0, CandidateTag::Technical),
+      Tagged("Aさ\tん\xE3\x80\x80x", 1.0, CandidateTag::None),
+      Tagged("ABさ\xE3\x80\x80", 1.0, CandidateTag::None),
   };
   azookey::host::AssignHeuristicTags(candidates);
   EXPECT_EQ(candidates[0].tag, CandidateTag::English);
@@ -96,6 +101,9 @@ TEST(CandidateTagsTest, AsciiDominantSurfacesAreTaggedEnglish) {
   EXPECT_EQ(candidates[4].tag, CandidateTag::None);  // No ASCII letter.
   EXPECT_EQ(candidates[5].tag, CandidateTag::None);
   EXPECT_EQ(candidates[6].tag, CandidateTag::Technical);  // A source tag is kept.
+  // Tab and U+3000 are skipped like ' ': A, x of A,さ,ん,x is not a majority.
+  EXPECT_EQ(candidates[7].tag, CandidateTag::None);
+  EXPECT_EQ(candidates[8].tag, CandidateTag::English);  // A, B of A,B,さ once U+3000 is skipped.
 }
 
 TEST(CandidateTagsTest, BoostMovesOnlyTheBoostedCandidatesUp) {

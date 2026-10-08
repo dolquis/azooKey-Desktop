@@ -794,7 +794,9 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
  public:
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
                                                 const azookey::core::ConversionContext&) override {
-    return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}};
+    azookey::core::Candidate technical{"技術", kana, 5.0};
+    technical.tag = azookey::core::CandidateTag::Technical;
+    return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
   }
   std::vector<azookey::core::Candidate> PredictNext(
       const std::string& kana, const azookey::core::ConversionContext& context) override {
@@ -906,19 +908,34 @@ TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {
   ExpectGlobalOrder(Query(ipc::AppIdentity{"notepad.exe", "Notepad"}));
 }
 
+TEST_F(AppProfileDispatchTest, TheDefaultProfileDoesNotApplyWithoutAResolvedApp) {
+  ApplySettings(R"({"profilesByApp":{"default":{"candidateTagBoosts":{"English":3.0}}}})");
+  ExpectGlobalOrder(Query(std::nullopt));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"", "Chrome_WidgetWin_1"}));
+  // A resolved app with no profile of its own does get the default profile.
+  const auto resolved = Query(ipc::AppIdentity{"notepad.exe", ""});
+  EXPECT_LT(IndexOf(resolved, "Nihon"), IndexOf(resolved, "日本"));
+}
+
 TEST_F(AppProfileDispatchTest, InvalidProfileValuesFallBackWithoutFailingTheQuery) {
   ApplySettings(
       R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":"high","Unknown":2.0},)"
       R"("style":"shouting"},"bad.exe":7}})");
   ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"bad.exe", ""}));
 }
 
 TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
-  // technical maps to the Technical tag, which no candidate here carries, so
-  // the order holds; preferTechnicalTerms alone must not touch English either.
-  ApplySettings(
-      R"({"profilesByApp":{"code.exe":{"style":"technical","preferTechnicalTerms":true}}})");
-  ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
+  ApplySettings(R"({"profilesByApp":{"code.exe":{"style":"technical"}}})");
+  const auto plain = Query(ipc::AppIdentity{"notepad.exe", ""});
+  EXPECT_LT(IndexOf(plain, "Nihon"), IndexOf(plain, "技術"));
+  // 5.0 x 1.5 = 7.5 passes Nihon (6.0) but not 二本 (8.0); English stays put.
+  const auto technical = Query(ipc::AppIdentity{"code.exe", ""});
+  ASSERT_LT(IndexOf(technical, "技術"), technical.size());
+  EXPECT_LT(IndexOf(technical, "技術"), IndexOf(technical, "Nihon"));
+  EXPECT_LT(IndexOf(technical, "二本"), IndexOf(technical, "技術"));
+  EXPECT_EQ(technical[IndexOf(technical, "技術")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::Technical));
 }
 
 TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {

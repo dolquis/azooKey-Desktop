@@ -62,6 +62,12 @@ IPC リクエスト `QueryCandidates` / `QueryPredictions` に任意フィール
 - `process_name` が空の要求は `ForegroundApp.resolved == false` と同じく、
   グローバル設定で処理する（§3）。
 - Host は `app` をログ・警告に出さない（§9.1）。
+- Host は Handshake 応答の `capabilities` で次の 2 つを広告する。
+  - `app_profile`: `QueryCandidates.app` からプロファイルを解決し、§7 のタグ boost を
+    掛ける。
+  - `candidate_tag`: 応答の `CandidateField.tag` を埋める。
+- TIP はこの 2 つを見て、`app` の送出とタグの表示を有効にする。広告しない旧 Host に
+  `app` を送っても無視されるだけで、要求は失敗しない。
 
 ## 4. 設定スキーマ
 
@@ -300,7 +306,10 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
 ```
 raw   = profile.candidateTagBoosts.get(tag, 1.0)
 boost = min(3.0, max(1.0, raw))   // [1.0, 3.0] にクランプ（手編集・移行値の暴走防止）
-candidate.final_score *= boost
+if candidate.final_score >= 0:
+    candidate.final_score *= boost
+else:
+    candidate.final_score /= boost  // 負のスコアも上げる方向に動かす
 ```
 
 `max(1.0, …)` で下げ方向には使わず、`min(3.0, …)` で上限もクランプする（§4.2 の
@@ -320,8 +329,8 @@ candidate.final_score *= boost
   学習・モデル・辞書を出所ごとに混ぜており、出所間でスコアを比較できないため。
 - **タグの付与元**:
   - 出所が既知のタグ（辞書 category 由来の `Technical` など）は出所側が付与する。
-  - 未付与の候補には Host が surface 形式から `English` を付与する。条件は、空白を
-    除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含むこと
+  - 未付与の候補には Host が surface 形式から `English` を付与する。条件は、空白
+    （ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含むこと
     （`docs/auto-word-registration-spec.md` の category → タグ写像）。
   - タグは `core::Candidate::tag` と IPC の `CandidateField.tag` で運ぶ。
 - **タグ名の照合**: ASCII の大文字小文字を区別しない（`Technical` と `technical`
@@ -368,9 +377,11 @@ public:
 };
 ```
 
-Dispatcher への適用では、IPC ハンドラの先頭で `Resolve` を呼び、
-プライバシー判定の許可範囲内で候補生成 / rerank / external AI を切り替える。
-この消費側の統合は共通基盤とは別に実装する。
+Host は resolver を `EngineConfig::app_profiles` として設定と一緒に公開する。
+`QueryCandidates` のハンドラは、要求ごとに `engine_->config()` のスナップショットから
+resolver を取り出して `Resolve` を呼ぶ。UpdateConfig のロックは取らない。
+タグ boost 以外のフィールド（学習・external AI・予測の切替）は、プライバシー判定の
+許可範囲内で消費側が個別に統合する。
 
 ### 9.1 共通基盤と機能への適用境界
 
@@ -394,6 +405,8 @@ resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作�
 - unit: `privacyMode = secure` の要求値とグローバル floor の解決
 - integration: `code.exe` 検出 → 技術語タグ boost
 - integration: `outlook.exe` 検出 → polite タグ boost
+  （この 2 件は、辞書 category から `Technical`、文体判定から `Polite` を付与する
+  経路が前提。Host が surface 形式から付与するタグは §7 の `English` だけである）
 - e2e（M50 connect）: アプリ切替 1 秒以内にプロファイル反映
 
 ## 11. M48 受け入れ条件

@@ -201,16 +201,14 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   return f;
 }
 
-// docs/app-profile-spec.md sections 3 and 9: an absent app, or no profiles,
-// leaves only the global settings, which carry no tag boosts by default.
+// docs/app-profile-spec.md section 3: an absent or unresolved app gets no
+// profile and no tag boost at all, not even the "default" profile's.
 TagBoosts ResolveTagBoosts(const EngineConfig& config, const std::optional<ipc::AppIdentity>& app) {
-  if (!config.app_profiles) return {};
+  if (!config.app_profiles || !app || app->process_name.empty()) return {};
   core::ForegroundApp foreground;
-  if (app) {
-    foreground.process_name = app->process_name;
-    foreground.window_class = app->window_class;
-    foreground.resolved = !app->process_name.empty();
-  }
+  foreground.process_name = app->process_name;
+  foreground.window_class = app->window_class;
+  foreground.resolved = true;
   return TagBoostsFromProfile(config.app_profiles->Resolve(foreground));
 }
 

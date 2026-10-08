@@ -181,10 +181,11 @@ enum class PredictionMode : uint8_t {
 
 ```
 QueryPredictionsRequest:
-  request_id, kana, paragraph_context, mode, app_id
+  request_id, kana, paragraph_context, mode, app
 ```
 
-`app_id` は ForegroundAppDetector が返す `process_name`（X-4-2）。
+`app` は `{process_name, window_class}`（`docs/app-profile-spec.md` §3.1）。値は
+ForegroundAppDetector が返す `process_name` / `window_class`（X-4-2）。
 
 ### X-2-3. ラベル付き候補
 

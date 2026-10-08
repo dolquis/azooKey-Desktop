@@ -627,11 +627,6 @@ CommitObservationRequest{
 分離する（混線させない。§5）。host 側は `chosen.tag == English` を見て English チャネル
 （or source タグ）へ振り分ける。
 
-`tag == English` は M48 が surface 形式からも付与する（`docs/app-profile-spec.md` §7）。
-そのため、かな読みの辞書候補（読み `あいふぉん` の `iPhone`）も `tag:4` を持ちうる。
-host は `tag == English` に加えて `reading` が ASCII だけで構成される場合に限り English
-チャネルへ振り分け、かな読みの確定は通常チャネルで学習する。
-
 英単語確定が**文の一部（multi-segment）**の場合は、当該文節を `ObservedSegment`
 （`reading=生ローマ字`、`chosen.tag=English`）として
 **`CommitSegmentsObservation`**（`docs/romaji-batch-conversion-spec.md` §6.4）に含めて送る。

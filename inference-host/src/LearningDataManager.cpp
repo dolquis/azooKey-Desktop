@@ -203,6 +203,14 @@ LearningDataPage ListLearningEntries(const LearningDataStores& stores, LearningD
   return page;
 }
 
+std::optional<LearningDataEntry> FindLearningEntry(const LearningDataStores& stores,
+                                                   LearningDataStore store, std::string_view id) {
+  for (auto& entry : CollectEntries(stores, store)) {
+    if (entry.id == id) return std::move(entry);
+  }
+  return std::nullopt;
+}
+
 bool ForgetLearningEntry(const LearningDataStores& stores, LearningDataStore store,
                          std::string_view id) {
   for (const auto& entry : CollectEntries(stores, store)) {
@@ -221,15 +229,12 @@ bool ForgetLearningPair(const LearningDataStores& stores, const std::string& rea
   return false;
 }
 
-LearningExportResult ExportLearningData(const LearningDataStores& stores,
-                                        const std::vector<LearningDataStore>& selected,
-                                        const std::filesystem::path& destination, bool encrypt,
-                                        const learning::ByteCrypto& crypto,
-                                        const BackupManifest& meta) {
-  LearningExportResult result;
+std::optional<std::vector<BackupItem>> CollectBackupItems(
+    const LearningDataStores& stores, const std::vector<LearningDataStore>& selected, bool encrypt,
+    BackupError* error) {
   if (AnySelectedStoreBlocked(stores, selected)) {
-    result.error = BackupError::StoreUnavailable;
-    return result;
+    if (error) *error = BackupError::StoreUnavailable;
+    return std::nullopt;
   }
   std::vector<BackupItem> items;
   if (Selected(selected, LearningDataStore::Learning)) {
@@ -256,11 +261,30 @@ LearningExportResult ExportLearningData(const LearningDataStores& stores,
     items.push_back(BackupItem{"auto_words", ItemFile("auto_words.tsv", encrypt),
                                stores.auto_word->Size(), stores.auto_word->SerializeText()});
   }
+  if (error) *error = BackupError::None;
+  return items;
+}
 
+LearningExportResult WriteLearningBackup(std::vector<BackupItem> items,
+                                         const std::filesystem::path& destination, bool encrypt,
+                                         const learning::ByteCrypto& crypto,
+                                         const BackupManifest& meta) {
+  LearningExportResult result;
   WriteBackupArchive(destination, items, encrypt, crypto, meta, &result.manifest, &result.file_size,
                      &result.error);
   for (auto& item : items) learning::SecureErase(item.plaintext);
   return result;
+}
+
+LearningExportResult ExportLearningData(const LearningDataStores& stores,
+                                        const std::vector<LearningDataStore>& selected,
+                                        const std::filesystem::path& destination, bool encrypt,
+                                        const learning::ByteCrypto& crypto,
+                                        const BackupManifest& meta) {
+  LearningExportResult result;
+  auto items = CollectBackupItems(stores, selected, encrypt, &result.error);
+  if (!items) return result;
+  return WriteLearningBackup(std::move(*items), destination, encrypt, crypto, meta);
 }
 
 LearningImportResult ImportLearningData(const LearningDataStores& stores,
@@ -277,6 +301,22 @@ LearningImportResult ImportLearningData(const LearningDataStores& stores,
   BackupManifest manifest;
   auto items = ReadBackupArchive(source, crypto, &manifest, &result.error);
   if (!items) return result;
+  return ApplyImportedItems(stores, selected, std::move(*items), policy);
+}
+
+LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
+                                        const std::vector<LearningDataStore>& selected,
+                                        std::vector<BackupItem> items_in,
+                                        learning::ImportConflictPolicy policy) {
+  LearningImportResult result;
+  if (AnySelectedStoreBlocked(stores, selected)) {
+    for (auto& item : items_in) learning::SecureErase(item.plaintext);
+    result.error = BackupError::StoreUnavailable;
+    return result;
+  }
+  // Scratch stores never touch a file, so they need no real key.
+  const learning::ByteCrypto* crypto = nullptr;
+  auto* items = &items_in;
   // A row that does not parse means the item is not what this Host wrote;
   // importing the rest would lose data silently.
   const auto parsed_or_fail = [&](bool ok) {
@@ -291,7 +331,7 @@ LearningImportResult ImportLearningData(const LearningDataStores& stores,
       const auto name = LearningItemName(channel.name);
       const auto* item = channel.store ? FindItem(*items, name) : nullptr;
       if (!item) continue;
-      auto scratch = std::make_unique<learning::LearningStore>(std::filesystem::path{}, &crypto);
+      auto scratch = std::make_unique<learning::LearningStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(scratch->LoadText(item->plaintext));
       parsed.learning.push_back(ParsedLearning{name, channel.store, std::move(scratch)});
     }
@@ -299,21 +339,20 @@ LearningImportResult ImportLearningData(const LearningDataStores& stores,
   if (Selected(selected, LearningDataStore::UserDictionary) && stores.user_dictionary) {
     if (const auto* item = FindItem(*items, "user_dictionary")) {
       parsed.user_dictionary =
-          std::make_unique<learning::UserDictionary>(std::filesystem::path{}, &crypto);
+          std::make_unique<learning::UserDictionary>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.user_dictionary->LoadText(item->plaintext));
     }
   }
   if (Selected(selected, LearningDataStore::Typo) && stores.typo) {
     if (const auto* item = FindItem(*items, "typo_corrections")) {
       parsed.typo =
-          std::make_unique<learning::TypoCorrectionStore>(std::filesystem::path{}, &crypto);
+          std::make_unique<learning::TypoCorrectionStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.typo->LoadText(item->plaintext));
     }
   }
   if (Selected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
     if (const auto* item = FindItem(*items, "auto_words")) {
-      parsed.auto_word =
-          std::make_unique<learning::AutoWordStore>(std::filesystem::path{}, &crypto);
+      parsed.auto_word = std::make_unique<learning::AutoWordStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.auto_word->LoadText(item->plaintext));
     }
   }

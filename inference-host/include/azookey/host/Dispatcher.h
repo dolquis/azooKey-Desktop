@@ -73,6 +73,10 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleUpdateConfig(const ipc::Envelope& req);
   void HandleObserveTypo(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListNewWordCandidates(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleListLearningEntries(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleForgetLearningEntry(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleExportLearningData(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleImportLearningData(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListModels(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);

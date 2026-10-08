@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -221,6 +222,9 @@ struct CommitObservationRequest {
   // Missing or invalid event privacy is denied (protocol v1 additive fields).
   bool secure{true};
   bool learning_allowed{false};
+  // Foreground app at commit (M54 app rows, DEV-1184). Absent means unknown,
+  // which records the global row.
+  std::optional<AppIdentity> app;
 };
 
 struct CommitObservationResponse {
@@ -242,6 +246,9 @@ struct CommitSegmentsObservationRequest {
   // Missing or invalid event privacy is denied (protocol v1 additive fields).
   bool secure{true};
   bool learning_allowed{false};
+  // Foreground app at commit (M54 app rows, DEV-1184). Absent means unknown,
+  // which records the global row.
+  std::optional<AppIdentity> app;
 };
 
 std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
@@ -476,5 +483,118 @@ std::optional<ListModelsRequest> ParseListModelsRequest(const std::string& json)
 std::optional<ListModelsResponse> ParseListModelsResponse(const std::string& json);
 std::optional<BenchmarkModelRequest> ParseBenchmarkModelRequest(const std::string& json);
 std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::string& json);
+
+// ---------------------------------------------------------------------------
+// M49 learning data management: ListLearningEntries / ForgetLearningEntry /
+// ExportLearningData / ImportLearningData (DEV-1190,
+// docs/learning-data-management-spec.md section 4).
+
+// Error codes carried in the `error` field of the four responses. Archive
+// failures use the BackupErrorCode strings ("invalid_path", "decrypt_failed",
+// ...) instead.
+inline constexpr std::string_view kLearningDataErrorInvalidRequest = "invalid_request";
+inline constexpr std::string_view kLearningDataErrorNotAuthenticated = "not_authenticated";
+inline constexpr std::string_view kLearningDataErrorStoreUnavailable = "store_unavailable";
+inline constexpr std::string_view kLearningDataErrorSaveFailed = "save_failed";
+inline constexpr std::string_view kLearningDataErrorUnsupported = "unsupported";
+
+struct ListLearningEntriesRequest {
+  // "learning" | "user_dict" | "typo" | "auto_word"; required.
+  std::string store;
+  std::string query;  // Substring of reading or surface; empty matches all.
+  uint32_t limit{100};
+  uint32_t offset{0};
+};
+
+struct LearningEntryField {
+  std::string id;
+  std::string channel;  // Learning channel ("kana" / "english"); omitted when empty.
+  std::string reading;
+  std::string surface;
+  double weight{};
+  uint64_t last_updated_epoch_sec{};
+  std::vector<std::string> tags;
+  std::map<std::string, std::string> metadata;
+};
+
+struct ListLearningEntriesResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+  uint64_t total{};
+  std::vector<LearningEntryField> entries;
+};
+
+// Exactly one form: `id` (settings app), or `reading` + `surface` with
+// store "learning" (the TIP's Ctrl+Shift+Backspace, legacy-parity-spec 7.2).
+struct ForgetLearningEntryRequest {
+  std::string store;
+  std::string id;
+  std::string reading;
+  std::string surface;
+};
+
+struct ForgetLearningEntryResponse {
+  bool ok{true};
+  // true when an entry matched and is now forgotten (on disk, for learning).
+  bool removed{false};
+  std::optional<std::string> error;
+};
+
+struct ExportLearningDataRequest {
+  std::vector<std::string> stores;
+  std::string destination_path;  // UTF-8 absolute path ending in .zip.
+  bool encrypt{true};
+  bool include_settings{false};  // Not supported yet: true is rejected.
+};
+
+struct LearningBackupItemField {
+  std::string name;
+  std::string file;
+  uint64_t count{};
+  std::string sha256;
+};
+
+struct ExportLearningDataResponse {
+  // "success" or "error"; `error` carries the reason.
+  std::string status{"error"};
+  std::optional<std::string> error;
+  uint64_t file_size_bytes{};
+  bool encrypted{true};
+  std::vector<LearningBackupItemField> items;
+};
+
+struct ImportLearningDataRequest {
+  std::string source_path;                   // UTF-8 absolute path ending in .zip.
+  std::string conflict_resolution{"merge"};  // "merge" | "overwrite" | "keep_both".
+  std::vector<std::string> stores;
+};
+
+struct ImportLearningDataResponse {
+  std::string status{"error"};
+  std::optional<std::string> error;
+  // Keyed by archive item name ("learning", "user_dictionary", ...).
+  std::map<std::string, uint64_t> imported_counts;
+  std::map<std::string, uint64_t> skipped_counts;
+  std::map<std::string, uint64_t> conflict_counts;
+};
+
+std::string BuildListLearningEntriesRequest(const ListLearningEntriesRequest& p);
+std::string BuildListLearningEntriesResponse(const ListLearningEntriesResponse& p);
+std::string BuildForgetLearningEntryRequest(const ForgetLearningEntryRequest& p);
+std::string BuildForgetLearningEntryResponse(const ForgetLearningEntryResponse& p);
+std::string BuildExportLearningDataRequest(const ExportLearningDataRequest& p);
+std::string BuildExportLearningDataResponse(const ExportLearningDataResponse& p);
+std::string BuildImportLearningDataRequest(const ImportLearningDataRequest& p);
+std::string BuildImportLearningDataResponse(const ImportLearningDataResponse& p);
+std::optional<ListLearningEntriesRequest> ParseListLearningEntriesRequest(const std::string& json);
+std::optional<ListLearningEntriesResponse> ParseListLearningEntriesResponse(
+    const std::string& json);
+std::optional<ForgetLearningEntryRequest> ParseForgetLearningEntryRequest(const std::string& json);
+std::optional<ForgetLearningEntryResponse> ParseForgetLearningEntryResponse(
+    const std::string& json);
+std::optional<ExportLearningDataRequest> ParseExportLearningDataRequest(const std::string& json);
+std::optional<ExportLearningDataResponse> ParseExportLearningDataResponse(const std::string& json);
+std::optional<ImportLearningDataRequest> ParseImportLearningDataRequest(const std::string& json);
+std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const std::string& json);
 
 }  // namespace azookey::ipc

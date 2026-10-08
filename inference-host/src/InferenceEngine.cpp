@@ -592,7 +592,8 @@ std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
   const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
   if (canceled()) return {};
   try {
-    if (config_.user_learning_scorer_enabled) {
+    // Without a store the M7 path below returns the raw order unchanged.
+    if (config_.user_learning_scorer_enabled && store_) {
       // M54 section 7 scoring; off by default so the ranking and the
       // benchmark baseline stay on the M7 reranker until M52 calibrates it.
       auto ranked = candidates;

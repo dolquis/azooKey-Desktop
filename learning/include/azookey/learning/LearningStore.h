@@ -156,8 +156,10 @@ class LearningStore {
   // section 4.2). Every other line keeps its bytes. True when the file is
   // missing or holds no such row (nothing is written); false when the file
   // cannot be read or WriteProtectedText refuses or fails, leaving it as it was.
-  // Never touches the v2 file.
-  bool RemoveFromLegacyFile(const std::string& reading, const std::string& surface) const;
+  // Never touches the v2 file. `removed_rows`, when given, says whether a row
+  // was removed (a pair learned only before v2 has no v2 row to forget).
+  bool RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
+                            bool* removed_rows = nullptr) const;
   void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
   // Decayed weight summed over the app rows of the pair.
   virtual double Score(const std::string& reading, const std::string& surface,

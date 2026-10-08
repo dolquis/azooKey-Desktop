@@ -1038,8 +1038,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M6（Commit / Observation）完了。M7（学習）と独立に着手可能。
 - **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックと
   して前倒し可能。Zenzai・TSF 深耕・パッケージングのいずれにも依存しない
-  小規模機能（3〜4 週）で、差別化価値を早期に提供できる。設定 UI（M30）完成
-  までは host CLI / 環境変数で実効値を受ける。
+  小規模機能（3〜4 週）で、差別化価値を早期に提供できる。設定は設定アプリの
+  「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `learning/src/TypoCorrectionStore.cpp`（新規）、`ipc/src/Payloads.cpp`
   ・`ipc/src/Messages.cpp`（`ObserveTypo` 追加）、`inference-host/src/InferenceEngine.cpp`
   ・`Dispatcher.cpp`・`main.cpp`、`tsf-tip/src/TextService.cpp`、
@@ -1266,7 +1266,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   M8（Zenzai）に依存。X-1-2（`TypingTempoTracker`）を安定化に再利用するため M14 末の
   リッチ化と前後して実装すると効率がよい。
 - **推奨実装時期**: M14（ライブ変換）完了直後、X-1 リッチ化と並行する独立トラック。
-  設定 UI（M30）完成までは host CLI / 環境変数で実効値を受ける。
+  設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `inference-host/`（`PunctuationInserter` 新規、`Dispatcher` /
   `InferenceEngine` の `auto_punctuation` / `punctuation_style` 処理と segments 返却）、
   `ipc/`（`QueryCandidates` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
@@ -1311,8 +1311,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   描画は X-2-3（`CandidateTag`）を再利用。辞書ゲーティング（品質レイヤ）は任意で、
   ベースライン（生ローマ字 + 大文字化）は辞書なしで動作する。
 - **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックとして
-  前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定 UI（M30）
-  完成までは host CLI / 環境変数で実効値を受ける。
+  前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定は設定アプリの
+  「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持の共有・候補注入経路・
   英単語確定時の Observe）、`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・候補 `tag`）、
   `inference-host/`（`EnglishCandidateProvider` / `EnglishDictionary` 新規、`Dispatcher` /
@@ -1357,9 +1357,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M13（InputState 状態機械）完了。確定 + カーソル配置は既存 M5/M6 の commit
   経路（`SetText` → `Collapse` → `SetSelection`）を再利用するため追加の前提なし。
 - **推奨実装時期**: M13 完了直後、Phase 5 と並行可能な独立トラック。Zenzai・TSF 深耕・
-  パッケージングに依存しない小規模・無 IPC 機能。設定 UI（M30）完成までは
-  `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読み（手編集 / 環境変数で補う。
-  host CLI 経由にしない。§6.1）。
+  パッケージングに依存しない小規模・無 IPC 機能。設定は
+  `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読みし、設定アプリの「入力」ペインで
+  編集する（host CLI 経由にしない。§6.1）。
 - **変更対象**: `core/`（`InputState` へ新 `ClientAction` 3 種と `EditContextHint`、
   `UserActionMap` のブラケット VK 拡張〔新 `UserAction` enum 値は追加しない〕、
   `BracketTable` 新規）、`tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` の

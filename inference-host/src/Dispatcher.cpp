@@ -462,8 +462,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
-  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion",
-                      "query_predictions"};
+  // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
+  // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
+  res.capabilities = {"oob_cancel",        "commit_segments", "query_live_conversion",
+                      "query_predictions", "app_profile",     "candidate_tag"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||

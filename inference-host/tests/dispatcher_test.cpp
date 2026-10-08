@@ -442,6 +442,11 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
+  for (const char* capability : {"app_profile", "candidate_tag"}) {
+    EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
+              parsed->capabilities.end())
+        << capability;
+  }
 
   ipc::HandshakeRequest bad = req;
   bad.protocol_version = 999;
@@ -807,7 +812,12 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
 class AppProfileDispatchTest : public ::testing::Test {
  protected:
   AppProfileDispatchTest()
-      : settings_path(TempPath("azookey_dispatcher_app_profile_settings.json")),
+      // Per-test name: CTest runs each TEST_F in its own process, possibly in
+      // parallel, so a shared file would be rewritten under another test.
+      : settings_path(TempPath(
+            ("azookey_dispatcher_app_profile_" +
+             std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()) + ".json")
+                .c_str())),
         engine(std::make_unique<FixedCandidatesConverter>(), nullptr, {}) {}
   ~AppProfileDispatchTest() override { std::remove(settings_path.c_str()); }
 

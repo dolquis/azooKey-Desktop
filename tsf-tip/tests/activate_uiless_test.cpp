@@ -533,9 +533,20 @@ TEST(TsfTipActivateUiLessTest, OnPushContextConvertsAllocationFailureToOutOfMemo
   azookey::tsf::testing::ClearComBoundaryAllocationFailureForTest();
 }
 
+// Pins the F10 policy for one test: CI runs the suites in Debug and Release.
+struct DebugWindowKeyGuard {
+  explicit DebugWindowKeyGuard(bool enabled) {
+    azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(enabled);
+  }
+  ~DebugWindowKeyGuard() { azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(std::nullopt); }
+  DebugWindowKeyGuard(const DebugWindowKeyGuard&) = delete;
+  DebugWindowKeyGuard& operator=(const DebugWindowKeyGuard&) = delete;
+};
+
 // legacy-parity-spec §8.1: when F10 is registered as a preserved key,
 // OnPreservedKey owns the toggle and OnKeyDown only consumes the key.
 TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
+  DebugWindowKeyGuard debug_build(true);
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(0);
   mock.preserve_result = S_OK;
@@ -563,4 +574,25 @@ TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
   EXPECT_EQ(mock.unpreserve_calls, 1);
   EXPECT_TRUE(IsEqualGUID(mock.unpreserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
   EXPECT_FALSE(service.debug_window_visible_for_test());
+}
+
+// A release build registers no F10 preserved key and passes F10 through.
+TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
+  DebugWindowKeyGuard release_build(false);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.preserve_result = S_OK;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.preserve_calls, 0);
+
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  BOOL eaten = TRUE;
+  ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  eaten = TRUE;
+  ASSERT_EQ(service.OnKeyDown(nullptr, VK_F10, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(service.debug_window_visible_for_test());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(mock.unpreserve_calls, 0);
 }

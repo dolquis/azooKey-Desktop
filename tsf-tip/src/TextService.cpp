@@ -756,7 +756,21 @@ using azookey::tsf::IsUsableTextExtent;
 
 #ifdef AZOOKEY_TSF_TESTING
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
+std::optional<bool> g_debug_window_key_enabled_for_test;
 #endif
+
+// F10 opens the menu bar in most applications, so only a Debug build claims it
+// for the debug window (legacy-parity-spec §8.1). Tests choose either behavior.
+bool DebugWindowKeyEnabled() {
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_debug_window_key_enabled_for_test) return *g_debug_window_key_enabled_for_test;
+#endif
+#ifdef _DEBUG
+  return true;
+#else
+  return false;
+#endif
+}
 
 CaretWin32Api CurrentCaretWin32Api() {
 #ifdef AZOOKEY_TSF_TESTING
@@ -827,6 +841,10 @@ bool ConsumeComBoundaryAllocationFailureForTest() {
     }
   }
   return false;
+}
+
+void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled) {
+  g_debug_window_key_enabled_for_test = enabled;
 }
 
 void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
@@ -6076,7 +6094,8 @@ HRESULT TextService::FinishUnicodeInputBeforeKey(ITfContext* context, WPARAM key
 bool TextService::ClaimsDebugWindowKey(ITfContext* context) const {
   // The key paths reach this only after the same open / alphanumeric /
   // disabled-context gate; the preserved-key path checks it here.
-  return keyboard_open_ && !alnum_mode_ && !azookey::tsf::IsContextKeyboardDisabled(context);
+  return DebugWindowKeyEnabled() && keyboard_open_ && !alnum_mode_ &&
+         !azookey::tsf::IsContextKeyboardDisabled(context);
 }
 
 bool TextService::UnicodeInputActive() const {
@@ -6147,7 +6166,8 @@ void TextService::RecordDebugIpc(DebugIpcLogEntry entry, bool secure,
 
 void TextService::RegisterDebugPreservedKey() {
   debug_preserved_key_registered_ = false;
-  if (!thread_mgr_) return;
+  // A release build leaves F10 to the application entirely.
+  if (!DebugWindowKeyEnabled() || !thread_mgr_) return;
   ITfKeystrokeMgr* key_mgr = nullptr;
   if (FAILED(
           thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) ||

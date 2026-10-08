@@ -8469,9 +8469,20 @@ TEST(TsfTipForgetLearningTest, CommitWithoutLearningIsNotForgettable) {
   EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
 }
 
-// legacy-parity-spec §8.1: F10 toggles the debug window, through OnKeyDown or
-// the preserved key, never both for one press.
+// Pins the F10 policy for one test: CI runs the suites in Debug and Release.
+struct DebugWindowKeyGuard {
+  explicit DebugWindowKeyGuard(bool enabled) {
+    azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(enabled);
+  }
+  ~DebugWindowKeyGuard() { azookey::tsf::testing::SetDebugWindowKeyEnabledForTest(std::nullopt); }
+  DebugWindowKeyGuard(const DebugWindowKeyGuard&) = delete;
+  DebugWindowKeyGuard& operator=(const DebugWindowKeyGuard&) = delete;
+};
+
+// legacy-parity-spec §8.1: in a Debug build F10 toggles the debug window,
+// through OnKeyDown or the preserved key, never both for one press.
 TEST(TsfTipDebugWindowTest, F10TogglesTheDebugWindow) {
+  DebugWindowKeyGuard debug_build(true);
   TextServiceHarness h;
   EXPECT_FALSE(h.service.debug_window_visible_for_test());
   EXPECT_TRUE(h.TestPress(VK_F10));
@@ -8599,7 +8610,22 @@ TEST(TsfTipForgetLearningTest, SecureContextDropsTheForgetAndTheRecord) {
   EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
 }
 
+// A release build never claims F10: it stays the application's menu-bar key.
+TEST(TsfTipDebugWindowTest, ReleaseBuildLeavesF10ToTheApplication) {
+  DebugWindowKeyGuard release_build(false);
+  TextServiceHarness h;
+  EXPECT_FALSE(h.TestPress(VK_F10));
+  EXPECT_FALSE(h.Press(VK_F10));
+  BOOL eaten = TRUE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+}
+
 TEST(TsfTipDebugWindowTest, PreservedKeyPassesThroughInAlphanumericMode) {
+  DebugWindowKeyGuard debug_build(true);
   TextServiceHarness h;
   ASSERT_TRUE(h.Press(VK_OEM_ATTN));  // Alphanumeric mode on.
   BOOL eaten = TRUE;

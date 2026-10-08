@@ -94,6 +94,8 @@ void ClearComBoundaryAllocationFailureForTest();
 bool IsFreshQueryResultForTest(bool has_newer_request, uint64_t pending_request_id,
                                uint64_t response_request_id);
 bool ConsumeComBoundaryAllocationFailureForTest();
+// nullopt restores the build default (F10 claimed only by a Debug build).
+void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled);
 void FailNextPendingCommitObservationForTest();
 void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();

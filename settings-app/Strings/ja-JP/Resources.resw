@@ -121,4 +121,157 @@
   <data name="NeologdConsentCancelButton" xml:space="preserve"><value>キャンセル</value></data>
   <data name="NeologdNoticesCloseButton" xml:space="preserve"><value>閉じる</value></data>
   <data name="NeologdRestartRequiredMessage" xml:space="preserve"><value>NEologd 辞書 pack は Host の起動時にダウンロードします。サインアウトして再度サインインした後に取得します。</value></data>
+  <data name="Setting_autoUpdate_enabled" xml:space="preserve"><value>自動更新を確認する</value></data>
+  <data name="Setting_autoUpdate_channel" xml:space="preserve"><value>更新チャネル</value></data>
+  <data name="Setting_autoUpdate_checkIntervalHours" xml:space="preserve"><value>更新を確認する間隔（時間）</value></data>
+  <data name="Setting_inputMode" xml:space="preserve"><value>起動時の入力モード</value></data>
+  <data name="Setting_inputStyle" xml:space="preserve"><value>ローマ字テーブル</value></data>
+  <data name="Setting_customRomajiTablePath" xml:space="preserve"><value>カスタムローマ字テーブルのパス</value></data>
+  <data name="Setting_liveConversion" xml:space="preserve"><value>ライブ変換</value></data>
+  <data name="Setting_predictionEnabled" xml:space="preserve"><value>予測変換</value></data>
+  <data name="Setting_dynamicPunctuation" xml:space="preserve"><value>句読点を自動で補う</value></data>
+  <data name="Setting_dynamicPunctuationStyle" xml:space="preserve"><value>句読点の種類</value></data>
+  <data name="Setting_dynamicPunctuationStability" xml:space="preserve"><value>句読点を確定するタイミング</value></data>
+  <data name="Setting_dynamicPunctuationIdleMs" xml:space="preserve"><value>入力が止まってから句読点を補うまでの時間（ミリ秒）</value></data>
+  <data name="Setting_segmentBoundaryConfidence" xml:space="preserve"><value>文節境界の確信度のしきい値（0〜1）</value></data>
+  <data name="Setting_punctuationRulesPath" xml:space="preserve"><value>句読点ルールのパス</value></data>
+  <data name="Setting_batchRomajiConversion" xml:space="preserve"><value>ローマ字の一括変換</value></data>
+  <data name="Setting_batchRomajiPreviewStyle" xml:space="preserve"><value>一括変換のプレビュー表示</value></data>
+  <data name="Setting_batchConversionMode" xml:space="preserve"><value>一括変換の方式</value></data>
+  <data name="Setting_batchAutoPunctuation" xml:space="preserve"><value>一括変換で句読点を補う</value></data>
+  <data name="Setting_inlineEnglishCandidates" xml:space="preserve"><value>ローマ字入力中に英単語を候補に出す</value></data>
+  <data name="Setting_inlineEnglishCaseVariants" xml:space="preserve"><value>大文字・小文字の候補も出す</value></data>
+  <data name="Setting_fullWidthEnglishCandidate" xml:space="preserve"><value>全角英字の候補も出す</value></data>
+  <data name="Setting_inlineEnglishMinLength" xml:space="preserve"><value>英単語候補を出す最小文字数</value></data>
+  <data name="Setting_inlineEnglishPromoteThreshold" xml:space="preserve"><value>英単語候補を上位に出すしきい値（0〜1）</value></data>
+  <data name="Setting_inlineEnglishDictionary" xml:space="preserve"><value>英単語辞書を使う</value></data>
+  <data name="Setting_inlineEnglishDictionaryPath" xml:space="preserve"><value>英単語辞書のパス</value></data>
+  <data name="Setting_numberRewriter" xml:space="preserve"><value>数字の表記候補</value></data>
+  <data name="Setting_katakanaRewriter" xml:space="preserve"><value>カタカナの全角・半角候補</value></data>
+  <data name="Setting_symbolRewriter" xml:space="preserve"><value>記号の候補</value></data>
+  <data name="Setting_symbolDataPath" xml:space="preserve"><value>記号データのパス</value></data>
+  <data name="Setting_emojiRewriter" xml:space="preserve"><value>絵文字の候補</value></data>
+  <data name="Setting_emojiTriggerSearch" xml:space="preserve"><value>読みで絵文字を検索する</value></data>
+  <data name="Setting_emojiMaxCandidates" xml:space="preserve"><value>絵文字候補の最大数</value></data>
+  <data name="Setting_emojiTriggerMinQueryLength" xml:space="preserve"><value>絵文字検索を始める最小文字数</value></data>
+  <data name="Setting_emojiDataPath" xml:space="preserve"><value>絵文字データのパス</value></data>
+  <data name="Setting_bracketPairing" xml:space="preserve"><value>括弧を自動で閉じる</value></data>
+  <data name="Setting_bracketPairingTrigger" xml:space="preserve"><value>閉じ括弧を入れるタイミング</value></data>
+  <data name="Setting_bracketSkipOverClosing" xml:space="preserve"><value>閉じ括弧の入力で既存の閉じ括弧を飛び越す</value></data>
+  <data name="Setting_bracketBackspaceDeletesPair" xml:space="preserve"><value>Backspace で括弧の組を消す</value></data>
+  <data name="Setting_bracketPairingInAlnumMode" xml:space="preserve"><value>英数モードでも括弧を閉じる</value></data>
+  <data name="Setting_bracketSymmetricQuotePairing" xml:space="preserve"><value>引用符も対にする</value></data>
+  <data name="Setting_bracketWrapSelection" xml:space="preserve"><value>選択範囲を括弧で囲む</value></data>
+  <data name="Setting_bracketPairingAppPolicy" xml:space="preserve"><value>アプリの指定方法</value></data>
+  <data name="Setting_bracketPairingApps" xml:space="preserve"><value>対象アプリ（実行ファイル名）</value></data>
+  <data name="Setting_bracketPairsPath" xml:space="preserve"><value>括弧の組のパス</value></data>
+  <data name="Setting_autoWordRegistration_miningEnabled" xml:space="preserve"><value>入力から新語を集める</value></data>
+  <data name="Setting_autoWordRegistration_miningMinCount" xml:space="preserve"><value>新語とみなす最小出現回数</value></data>
+  <data name="Setting_autoWordRegistration_trendingEnabled" xml:space="preserve"><value>流行語を取り込む</value></data>
+  <data name="Setting_autoWordRegistration_trendingIntervalHours" xml:space="preserve"><value>流行語を取り込む間隔（時間）</value></data>
+  <data name="Setting_autoWordRegistration_registrationMode" xml:space="preserve"><value>新語の登録方法</value></data>
+  <data name="Setting_typoCorrectionMode" xml:space="preserve"><value>タイプミスの訂正</value></data>
+  <data name="Setting_typoMinCount" xml:space="preserve"><value>タイプミスとみなす最小回数</value></data>
+  <data name="Setting_aiBackend" xml:space="preserve"><value>AI バックエンド</value></data>
+  <data name="Setting_llmMagicConversion" xml:space="preserve"><value>AI による変換（Magic Conversion）</value></data>
+  <data name="Setting_includeContextInAITransform" xml:space="preserve"><value>AI に前後の文脈を送る</value></data>
+  <data name="Setting_openAiApiEndpoint" xml:space="preserve"><value>OpenAI API のエンドポイント</value></data>
+  <data name="Setting_openAiModel" xml:space="preserve"><value>OpenAI のモデル</value></data>
+  <data name="Setting_openAiTimeoutMs" xml:space="preserve"><value>OpenAI の応答待ち時間（ミリ秒）</value></data>
+  <data name="Setting_privacy_mode" xml:space="preserve"><value>プライバシーモード</value></data>
+  <data name="Setting_privacy_custom_learning" xml:space="preserve"><value>学習する</value></data>
+  <data name="Setting_privacy_custom_prediction" xml:space="preserve"><value>予測する</value></data>
+  <data name="Setting_privacy_custom_aiCandidate" xml:space="preserve"><value>AI 候補を使う</value></data>
+  <data name="Setting_privacy_custom_externalAi" xml:space="preserve"><value>外部 AI を使う</value></data>
+  <data name="Setting_privacy_custom_detailedLogging" xml:space="preserve"><value>詳細なログを残す</value></data>
+  <data name="Setting_privacy_redactLogs" xml:space="preserve"><value>ログから入力内容を伏せる</value></data>
+  <data name="Setting_privacy_autoSecureInput" xml:space="preserve"><value>パスワード欄などで自動的にセーフ入力にする</value></data>
+  <data name="Setting_privacy_secureApps" xml:space="preserve"><value>常にセーフ入力にするアプリ（実行ファイル名）</value></data>
+  <data name="Setting_privacy_showSecureIndicator" xml:space="preserve"><value>セーフ入力中の表示を出す</value></data>
+  <data name="Setting_powerProfile" xml:space="preserve"><value>電源プロファイル</value></data>
+  <data name="Setting_inferenceThreads" xml:space="preserve"><value>推論スレッド数</value></data>
+  <data name="Setting_maxCandidates" xml:space="preserve"><value>候補の最大数</value></data>
+  <data name="Setting_maxContextLength" xml:space="preserve"><value>送る左文脈の最大文字数</value></data>
+  <data name="Setting_contextReselection" xml:space="preserve"><value>文脈からの再選択（実験）</value></data>
+  <data name="Setting_postCommitLint" xml:space="preserve"><value>確定後の校正（実験）</value></data>
+  <data name="Setting_retroactiveRecompute" xml:space="preserve"><value>遡って再変換（実験）</value></data>
+  <data name="Setting_sentenceCompletion" xml:space="preserve"><value>文の補完（実験）</value></data>
+  <data name="SettingSection_AutoUpdate" xml:space="preserve"><value>自動更新</value></data>
+  <data name="SettingSection_InputMethod" xml:space="preserve"><value>入力方式</value></data>
+  <data name="SettingSection_Punctuation" xml:space="preserve"><value>句読点</value></data>
+  <data name="SettingSection_Batch" xml:space="preserve"><value>ローマ字の一括変換</value></data>
+  <data name="SettingSection_English" xml:space="preserve"><value>英単語候補</value></data>
+  <data name="SettingSection_Rewriters" xml:space="preserve"><value>候補の書き換え</value></data>
+  <data name="SettingSection_Brackets" xml:space="preserve"><value>括弧</value></data>
+  <data name="SettingSection_AutoWords" xml:space="preserve"><value>新語の自動登録</value></data>
+  <data name="SettingSection_Typo" xml:space="preserve"><value>タイプミスの学習</value></data>
+  <data name="SettingSection_AiBackend" xml:space="preserve"><value>AI</value></data>
+  <data name="SettingSection_OpenAi" xml:space="preserve"><value>OpenAI</value></data>
+  <data name="SettingSection_PrivacyMode" xml:space="preserve"><value>プライバシーモード</value></data>
+  <data name="SettingSection_SecureInput" xml:space="preserve"><value>セーフ入力</value></data>
+  <data name="SettingSection_Performance" xml:space="preserve"><value>性能</value></data>
+  <data name="SettingSection_Experimental" xml:space="preserve"><value>実験的な機能</value></data>
+  <data name="SettingOption_autoUpdate_channel_stable" xml:space="preserve"><value>安定版</value></data>
+  <data name="SettingOption_autoUpdate_channel_beta" xml:space="preserve"><value>ベータ版</value></data>
+  <data name="SettingOption_inputMode_hiragana" xml:space="preserve"><value>ひらがな</value></data>
+  <data name="SettingOption_inputMode_alnum_half" xml:space="preserve"><value>半角英数</value></data>
+  <data name="SettingOption_inputMode_alnum_full" xml:space="preserve"><value>全角英数</value></data>
+  <data name="SettingOption_inputStyle_default" xml:space="preserve"><value>標準</value></data>
+  <data name="SettingOption_inputStyle_custom" xml:space="preserve"><value>カスタム</value></data>
+  <data name="SettingOption_dynamicPunctuationStyle_ja" xml:space="preserve"><value>、。</value></data>
+  <data name="SettingOption_dynamicPunctuationStyle_fullwidth_latin" xml:space="preserve"><value>，．</value></data>
+  <data name="SettingOption_dynamicPunctuationStability_onPause" xml:space="preserve"><value>入力が止まったとき</value></data>
+  <data name="SettingOption_dynamicPunctuationStability_eager" xml:space="preserve"><value>すぐに</value></data>
+  <data name="SettingOption_batchRomajiPreviewStyle_kana" xml:space="preserve"><value>かな</value></data>
+  <data name="SettingOption_batchRomajiPreviewStyle_romaji" xml:space="preserve"><value>ローマ字</value></data>
+  <data name="SettingOption_batchConversionMode_neural" xml:space="preserve"><value>ニューラル変換</value></data>
+  <data name="SettingOption_batchConversionMode_ai_cleanup" xml:space="preserve"><value>AI で整える</value></data>
+  <data name="SettingOption_bracketPairingTrigger_immediate" xml:space="preserve"><value>開き括弧の入力時</value></data>
+  <data name="SettingOption_bracketPairingTrigger_composition" xml:space="preserve"><value>変換の確定時</value></data>
+  <data name="SettingOption_bracketPairingAppPolicy_denylist" xml:space="preserve"><value>指定したアプリでは使わない</value></data>
+  <data name="SettingOption_bracketPairingAppPolicy_allowlist" xml:space="preserve"><value>指定したアプリだけで使う</value></data>
+  <data name="SettingOption_autoWordRegistration_registrationMode_confirm" xml:space="preserve"><value>確認してから登録</value></data>
+  <data name="SettingOption_autoWordRegistration_registrationMode_auto" xml:space="preserve"><value>自動で登録</value></data>
+  <data name="SettingOption_typoCorrectionMode_off" xml:space="preserve"><value>しない</value></data>
+  <data name="SettingOption_typoCorrectionMode_suggest" xml:space="preserve"><value>候補として示す</value></data>
+  <data name="SettingOption_typoCorrectionMode_auto_replace" xml:space="preserve"><value>自動で置き換える</value></data>
+  <data name="SettingOption_aiBackend_none" xml:space="preserve"><value>使わない</value></data>
+  <data name="SettingOption_aiBackend_openai" xml:space="preserve"><value>OpenAI</value></data>
+  <data name="SettingOption_aiBackend_local_zenzai" xml:space="preserve"><value>ローカル（Zenzai）</value></data>
+  <data name="SettingOption_privacy_mode_normal" xml:space="preserve"><value>通常</value></data>
+  <data name="SettingOption_privacy_mode_private" xml:space="preserve"><value>プライベート</value></data>
+  <data name="SettingOption_privacy_mode_secure" xml:space="preserve"><value>セーフ</value></data>
+  <data name="SettingOption_privacy_mode_offline" xml:space="preserve"><value>オフライン</value></data>
+  <data name="SettingOption_privacy_mode_custom" xml:space="preserve"><value>カスタム</value></data>
+  <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
+  <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
+  <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
+  <data name="SettingNote_dynamicPunctuation" xml:space="preserve"><value>ライブ変換が有効なときだけ働きます。</value></data>
+  <data name="SettingNote_dynamicPunctuationIdleMs" xml:space="preserve"><value>確定のタイミングが「入力が止まったとき」の場合だけ使います。</value></data>
+  <data name="SettingNote_batchConversionMode" xml:space="preserve"><value>「AI で整える」は、AI バックエンドが「使わない」のときニューラル変換になります。</value></data>
+  <data name="SettingNote_symbolDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
+  <data name="SettingNote_emojiTriggerSearch" xml:space="preserve"><value>ひらがなモードのときだけ働きます。</value></data>
+  <data name="SettingNote_emojiDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
+  <data name="SettingNote_bracketPairingAppPolicy" xml:space="preserve"><value>「指定したアプリでは使わない」には、組み込みのアプリ（Visual Studio Code など）も含まれます。</value></data>
+  <data name="SettingNote_bracketPairingApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: Code.exe）を書きます。大文字と小文字は区別しません。</value></data>
+  <data name="SettingNote_bracketPairsPath" xml:space="preserve"><value>空欄なら %LOCALAPPDATA%\azooKey\bracket-pairs.tsv を使います。</value></data>
+  <data name="SettingNote_openAiApiEndpoint" xml:space="preserve"><value>HTTPS の URL を指定します（ループバックアドレスを除く）。</value></data>
+  <data name="SettingNote_privacy_mode" xml:space="preserve"><value>セーフは常に最優先です。カスタムでは下の項目を個別に設定します。</value></data>
+  <data name="SettingNote_privacy_custom_externalAi" xml:space="preserve"><value>「AI 候補を使う」がオフのときは使いません。</value></data>
+  <data name="SettingNote_privacy_custom_detailedLogging" xml:space="preserve"><value>「ログから入力内容を伏せる」がオンのときは残しません。</value></data>
+  <data name="SettingNote_privacy_autoSecureInput" xml:space="preserve"><value>オフでも、アプリが IME を無効にした欄ではセーフ入力になります。</value></data>
+  <data name="SettingNote_privacy_secureApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: keepass.exe）を書きます。組み込みのアプリは常に対象です。</value></data>
+  <data name="SettingNote_inferenceThreads" xml:space="preserve"><value>0 なら電源プロファイルに従います。</value></data>
+  <data name="SettingNote_maxContextLength" xml:space="preserve"><value>0 なら左文脈を送りません。</value></data>
+  <data name="InputNavigationItem.Content" xml:space="preserve"><value>入力</value></data>
+  <data name="PrivacyNavigationItem.Content" xml:space="preserve"><value>プライバシー</value></data>
+  <data name="InputSectionTitle.Text" xml:space="preserve"><value>入力</value></data>
+  <data name="PrivacySectionTitle.Text" xml:space="preserve"><value>プライバシー</value></data>
+  <data name="SafeModeInfoBar.Title" xml:space="preserve"><value>セーフモードで動作しています</value></data>
+  <data name="SafeModeMessage" xml:space="preserve"><value>Host が繰り返し異常終了したため、安全な構成で動作しています。</value></data>
+  <data name="SafeModeEnteredAtLabel" xml:space="preserve"><value>開始時刻: </value></data>
+  <data name="SafeModeCrashCountLabel" xml:space="preserve"><value>直前の異常終了回数: </value></data>
+  <data name="ClearSafeModeButton.Content" xml:space="preserve"><value>セーフモードを解除する</value></data>
+  <data name="SafeModeClearPending" xml:space="preserve"><value>保存するとセーフモードを解除します。</value></data>
+  <data name="InvalidSettingValue" xml:space="preserve"><value>次の設定の値が正しくありません: </value></data>
 </root>

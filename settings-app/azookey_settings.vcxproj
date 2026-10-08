@@ -103,6 +103,8 @@
     <ClInclude Include="MainWindow.xaml.h"><DependentUpon>MainWindow.xaml</DependentUpon></ClInclude>
     <ClInclude Include="NeologdAttribution.h" />
     <ClInclude Include="SettingsDocument.h" />
+    <ClInclude Include="SettingsFieldControls.h" />
+    <ClInclude Include="SettingsFields.h" />
     <ClInclude Include="SettingsIpcClient.h" />
   </ItemGroup>
   <ItemGroup>
@@ -117,6 +119,8 @@
     <ClCompile Include="NeologdAttribution.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(AzooKeyNeologdPinSource)" Condition="'$(AzooKeyNeologdPinSource)'!=''"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="SettingsFieldControls.cpp" />
+    <ClCompile Include="SettingsFields.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\AppProfileResolver.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\CrashReporting.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\ThreadStackGuarantee.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

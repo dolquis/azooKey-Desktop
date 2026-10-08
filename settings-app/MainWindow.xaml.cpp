@@ -85,6 +85,24 @@ namespace winrt::azookey_settings::implementation {
 MainWindow::MainWindow() {
   InitializeComponent();
   SaveButton().IsEnabled(false);
+  field_controls_.Build([this](azookey::settings::SettingsPane pane) {
+    using Pane = azookey::settings::SettingsPane;
+    switch (pane) {
+      case Pane::General:
+        return GeneralFieldsPanel();
+      case Pane::Input:
+        return InputFieldsPanel();
+      case Pane::Dictionary:
+        return DictionaryFieldsPanel();
+      case Pane::Ai:
+        return AiFieldsPanel();
+      case Pane::Privacy:
+        return PrivacyFieldsPanel();
+      case Pane::Advanced:
+        break;
+    }
+    return AdvancedFieldsPanel();
+  });
   SettingsNavigationView().SelectedItem(GeneralNavigationItem());
   neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
       azookey::settings::PinnedNeologdPackManifestJson());
@@ -114,8 +132,10 @@ void MainWindow::ShowPane(std::wstring_view tag) {
                        : Microsoft::UI::Xaml::Visibility::Collapsed;
   };
   GeneralPane().Visibility(visible(L"General"));
+  InputPane().Visibility(visible(L"Input"));
   DictionaryPane().Visibility(visible(L"Dictionary"));
   AiPane().Visibility(visible(L"Ai"));
+  PrivacyPane().Visibility(visible(L"Privacy"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
 }
@@ -274,6 +294,8 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   saved_settings_.openai_api_key.clear();  // Only compared for restart; keep no extra secret copy.
   ApplyDictionaryToControls(
       result.settings.dictionary.value_or(azookey::settings::DictionarySettings{}));
+  field_controls_.Apply(result.settings.values);
+  ShowSafeMode(result.settings);
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
   OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
@@ -370,6 +392,11 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                        : log_index == 3 ? "debug"
                                         : "info";
   settings.dictionary = DictionaryFromControls();
+  settings.clear_safe_mode = clear_safe_mode_;
+  if (std::string invalid_path; !field_controls_.Read(&settings.values, &invalid_path)) {
+    ShowInvalidSetting(invalid_path);
+    co_return;
+  }
 
   if (!settings.model_selected_path.empty()) {
     const std::filesystem::path model_path(ModelPathTextBox().Text().c_str());
@@ -433,10 +460,16 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
       // Turned back off before a restart, so the pack will not be fetched after all.
       RestartRequiredInfoBar().IsOpen(false);
     }
+    if (clear_safe_mode_) {
+      clear_safe_mode_ = false;
+      SafeModeInfoBar().IsOpen(false);
+    }
     saved_settings_ = settings;
     saved_settings_.openai_api_key.clear();
   }
-  if (!save_result.ok) {
+  if (save_result.invalid_setting) {
+    ShowInvalidSetting(*save_result.invalid_setting);
+  } else if (!save_result.ok) {
     ShowStatus(
         Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
         final_resources.GetString(L"SaveFailedTitle"),
@@ -461,6 +494,40 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                final_resources.GetString(L"SaveSucceededTitle"),
                final_resources.GetString(L"SaveSucceededMessage"));
   }
+}
+
+void MainWindow::ShowSafeMode(const azookey::settings::EditableSettings& settings) {
+  clear_safe_mode_ = false;
+  ClearSafeModeButton().IsEnabled(true);
+  SafeModeInfoBar().IsOpen(settings.safe_mode_enabled);
+  if (!settings.safe_mode_enabled) return;
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  auto message = resources.GetString(L"SafeModeMessage");
+  if (!settings.safe_mode_entered_at.empty()) {
+    message = message + L"\n" + resources.GetString(L"SafeModeEnteredAtLabel") +
+              winrt::to_hstring(settings.safe_mode_entered_at);
+  }
+  message = message + L"\n" + resources.GetString(L"SafeModeCrashCountLabel") +
+            winrt::to_hstring(settings.safe_mode_last_crash_count);
+  SafeModeInfoBar().Message(message);
+}
+
+void MainWindow::ClearSafeModeButton_Click(Windows::Foundation::IInspectable const&,
+                                           Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  // Only the user leaves SafeMode, and only through a save (sideload-packaging-spec section 3.6).
+  clear_safe_mode_ = true;
+  ClearSafeModeButton().IsEnabled(false);
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  SafeModeInfoBar().Message(resources.GetString(L"SafeModeClearPending"));
+}
+
+void MainWindow::ShowInvalidSetting(const std::string& path) {
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ShowStatus(
+      Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+      resources.GetString(L"SaveFailedTitle"),
+      resources.GetString(L"InvalidSettingValue") +
+          resources.GetString(winrt::to_hstring(azookey::settings::SettingLabelResource(path))));
 }
 
 void MainWindow::UpdateCrashReportStatus() {

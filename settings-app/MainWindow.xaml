@@ -15,6 +15,11 @@
                                 AutomationProperties.AutomationId="GeneralNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem x:Uid="InputNavigationItem"
+                                Tag="Input"
+                                AutomationProperties.AutomationId="InputNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Keyboard" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem x:Uid="DictionaryNavigationItem"
                                 Tag="Dictionary"
                                 AutomationProperties.AutomationId="DictionaryNavigationItem">
@@ -24,6 +29,11 @@
                                 Tag="Ai"
                                 AutomationProperties.AutomationId="AiNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Message" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Uid="PrivacyNavigationItem"
+                                Tag="Privacy"
+                                AutomationProperties.AutomationId="PrivacyNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="ProtectedDocument" /></NavigationViewItem.Icon>
             </NavigationViewItem>
             <NavigationViewItem x:Uid="AdvancedNavigationItem"
                                 Tag="Advanced"
@@ -62,6 +72,26 @@
                     <TextBox x:Name="ModelPathTextBox"
                              x:Uid="ModelPathTextBox"
                              AutomationProperties.AutomationId="ModelPathTextBox" />
+                    <InfoBar x:Name="SafeModeInfoBar"
+                             x:Uid="SafeModeInfoBar"
+                             IsOpen="False"
+                             IsClosable="False"
+                             Severity="Warning"
+                             AutomationProperties.AutomationId="SafeModeInfoBar">
+                        <InfoBar.ActionButton>
+                            <Button x:Name="ClearSafeModeButton"
+                                    x:Uid="ClearSafeModeButton"
+                                    Click="ClearSafeModeButton_Click"
+                                    AutomationProperties.AutomationId="ClearSafeModeButton" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
+                    <StackPanel x:Name="GeneralFieldsPanel" Spacing="16" />
+                </StackPanel>
+
+                <StackPanel x:Name="InputPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="InputSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel x:Name="InputFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="DictionaryPane" Spacing="16" Visibility="Collapsed">
@@ -106,11 +136,13 @@
                                      x:Uid="ShowNeologdNoticesButton"
                                      Click="ShowNeologdNoticesButton_Click"
                                      AutomationProperties.AutomationId="ShowNeologdNoticesButton" />
+                    <StackPanel x:Name="DictionaryFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="AiPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AiSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel x:Name="AiFieldsPanel" Spacing="16" />
                     <PasswordBox x:Name="OpenAiApiKeyPasswordBox"
                                  x:Uid="OpenAiApiKeyPasswordBox"
                                  PasswordChanged="OpenAiApiKeyPasswordBox_PasswordChanged"
@@ -121,6 +153,12 @@
                             AutomationProperties.AutomationId="ClearOpenAiApiKeyButton" />
                     <TextBlock x:Uid="OpenAiApiKeyDescription" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel x:Name="PrivacyPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="PrivacySectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel x:Name="PrivacyFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
@@ -153,6 +191,7 @@
                             <ComboBoxItem Content="debug" />
                         </ComboBox>
                     </StackPanel>
+                    <StackPanel x:Name="AdvancedFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="VersionPane" Spacing="16" Visibility="Collapsed">

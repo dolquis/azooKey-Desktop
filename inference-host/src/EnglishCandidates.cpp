@@ -14,6 +14,8 @@ namespace {
 
 constexpr uint64_t kMaxDictionaryBytes = 64ULL * 1024 * 1024;
 constexpr size_t kPlacementDepth = 5;  // Section 4.3: "after the top five".
+// Bounds a user-edited TSV with many surfaces under one key.
+constexpr size_t kMaxDictionarySurfaces = 5;
 
 bool IsAsciiUpper(char c) { return c >= 'A' && c <= 'Z'; }
 bool IsAsciiLower(char c) { return c >= 'a' && c <= 'z'; }
@@ -197,7 +199,8 @@ EnglishCandidates BuildEnglishCandidates(std::string_view raw_romaji,
                                FullWidth(Capitalized(lower)),
                                FullWidth(Upper(lower))};
   std::vector<std::string> surfaces;
-  for (const auto& entry : entries) surfaces.push_back(entry.surface);
+  for (size_t i = 0; i < entries.size() && i < kMaxDictionarySurfaces; ++i)
+    surfaces.push_back(entries[i].surface);
   surfaces.insert(surfaces.end(), learned.begin(), learned.end());
   if (std::find(std::begin(forms), std::end(forms), raw_romaji) == std::end(forms))
     surfaces.emplace_back(raw_romaji);

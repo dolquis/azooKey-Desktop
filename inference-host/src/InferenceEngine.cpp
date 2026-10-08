@@ -271,6 +271,15 @@ InferenceEngine::~InferenceEngine() {
     }
     if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
+  // M60: the English channel saves on every commit; a save that failed then
+  // gets the same bounded retries here.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    {
+      std::lock_guard<std::mutex> lock(english_mutex_);
+      if (SaveEnglishStoreLocked(learning::kTransientFileRetryBudget)) break;
+    }
+    if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
 }
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
@@ -294,29 +303,46 @@ void InferenceEngine::SetEnglishLearningStore(learning::LearningStore* store) {
   english_store_ = store;
 }
 
-std::shared_ptr<const EnglishDictionary> InferenceEngine::EnglishDictionaryLocked(
+std::shared_ptr<const EnglishDictionary> InferenceEngine::EnglishDictionaryFor(
     const std::string& utf8_path) {
   const auto path = ExpandLocalAppDataPrefix(utf8_path);
   if (!path) return nullptr;
   std::error_code ec;
   const auto mtime = std::filesystem::last_write_time(*path, ec);
+  const auto size = ec ? uintmax_t{0} : std::filesystem::file_size(*path, ec);
   if (ec) {
+    std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
     english_dictionary_.reset();
     english_dictionary_path_.clear();
     return nullptr;
   }
-  if (english_dictionary_ && english_dictionary_path_ == *path &&
-      english_dictionary_mtime_ == mtime) {
-    return english_dictionary_;
+  {
+    std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
+    // Size too: a copy that keeps the timestamp (robocopy, restore) still reloads.
+    if (english_dictionary_ && english_dictionary_path_ == *path &&
+        english_dictionary_mtime_ == mtime && english_dictionary_size_ == size) {
+      return english_dictionary_;
+    }
   }
   // A missing or unreadable dictionary leaves only the baseline forms
-  // (section 4.2: s_dict stays 0).
+  // (section 4.2: s_dict stays 0). Parsed outside the lock.
   auto loaded = EnglishDictionary::LoadTsv(*path);
-  english_dictionary_ =
+  auto dictionary =
       loaded ? std::make_shared<const EnglishDictionary>(std::move(*loaded)) : nullptr;
+  std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
+  english_dictionary_ = dictionary;
   english_dictionary_path_ = *path;
   english_dictionary_mtime_ = mtime;
-  return english_dictionary_;
+  english_dictionary_size_ = size;
+  return dictionary;
+}
+
+bool InferenceEngine::SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget) {
+  if (!english_store_ || !english_store_->dirty()) return true;
+  if (english_store_->Save(retry_budget)) return true;
+  if (runtime_logger_)
+    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "english_learning_save_failed", {});
+  return false;
 }
 
 EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw_romaji,
@@ -326,15 +352,23 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
     std::lock_guard<std::mutex> lock(state_mutex_);
     english = config_.english;
   }
-  std::shared_ptr<const EnglishDictionary> dictionary;
+  const auto dictionary =
+      english.dictionary_enabled ? EnglishDictionaryFor(english.dictionary_path) : nullptr;
   std::vector<std::string> learned;
   {
     std::lock_guard<std::mutex> lock(english_mutex_);
-    if (english.dictionary_enabled) dictionary = EnglishDictionaryLocked(english.dictionary_path);
     if (english_store_) {
+      // LookupPrefix ranks the whole prefix subtree; ask for enough that
+      // longer learned words (th -> this, that ...) cannot crowd out exact
+      // matches, then keep at most kMaxLearnedEnglish of those.
+      constexpr size_t kPrefixWindow = 256;
+      constexpr size_t kMaxLearnedEnglish = 8;
       const auto key = EnglishLookupKey(raw_romaji);
-      for (auto& match : english_store_->LookupPrefix(key, 8, 0.0, now_epoch_sec).matches) {
-        if (match.reading == key) learned.push_back(std::move(match.surface));
+      for (auto& match :
+           english_store_->LookupPrefix(key, kPrefixWindow, 0.0, now_epoch_sec).matches) {
+        if (match.reading != key) continue;
+        learned.push_back(std::move(match.surface));
+        if (learned.size() == kMaxLearnedEnglish) break;
       }
     }
   }
@@ -345,19 +379,25 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {
   double alpha = 0.0;
+  size_t max_records = 0;
+  double min_weight = 0.0;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!NoteObservationIdLocked(observation_id)) return false;
     alpha = config_.learning_alpha;
+    max_records = config_.learning_max_records;
+    min_weight = config_.learning_min_weight;
   }
   std::lock_guard<std::mutex> lock(english_mutex_);
   if (!english_store_) return false;
   // Section 5: keyed by the lowercased raw romaji, so "Apple" and "apple"
   // typed later find the same record.
   english_store_->Observe(EnglishLookupKey(raw_romaji), surface, alpha, now_epoch_sec);
+  english_store_->Prune(max_records, min_weight, now_epoch_sec);
   // English commits are rare; save now rather than joining the kana store's
-  // burst scheduling. A failed save stays dirty for FlushLearningStore.
-  (void)english_store_->Save(std::chrono::milliseconds::zero());
+  // burst scheduling. A failed save stays dirty and is retried by the next
+  // English commit and at shutdown.
+  (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
   return true;
 }
 
@@ -1439,7 +1479,7 @@ bool InferenceEngine::CommitSegmentsObservation(
           english_store_->Observe(EnglishLookupKey(segment.reading), segment.chosen.surface, alpha,
                                   now_epoch_sec);
       }
-      (void)english_store_->Save(std::chrono::milliseconds::zero());
+      (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
     }
   }
   std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
@@ -1591,9 +1631,7 @@ bool InferenceEngine::FlushLearningStore() {
     ok = FlushLearningStoreLocked(learning::kTransientFileRetryBudget);
   }
   std::lock_guard<std::mutex> lock(english_mutex_);
-  if (english_store_ && english_store_->dirty())
-    ok = english_store_->Save(learning::kTransientFileRetryBudget) && ok;
-  return ok;
+  return SaveEnglishStoreLocked(learning::kTransientFileRetryBudget) && ok;
 }
 
 void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {

@@ -157,6 +157,18 @@ TEST(EnglishCandidatesTest, DictionarySurfacesComeFirstWithoutReplacingTheForms)
   EXPECT_GT(with.intent, without.intent);  // s_dict.
 }
 
+TEST(EnglishCandidatesTest, DictionarySurfacesAreCappedAtFive) {
+  // Seven surfaces under the one key "abc", most frequent first.
+  const auto dictionary = azookey::host::EnglishDictionary::ParseTsv(
+      "ABc\t9\nAbC\t8\naBC\t7\nAbc\t6\nabC\t5\naBc\t4\nABC\t3\n");
+  EnglishCandidateConfig config;
+  config.dictionary_enabled = true;
+  config.case_variants = false;
+  const auto result = azookey::host::BuildEnglishCandidates("abc", config, &dictionary);
+  EXPECT_EQ(Surfaces(result.candidates),
+            (std::vector<std::string>{"ABc", "AbC", "aBC", "Abc", "abC", "abc"}));
+}
+
 TEST(EnglishCandidatesTest, LearnedSurfacesFollowTheDictionary) {
   const auto result =
       azookey::host::BuildEnglishCandidates("apple", {}, nullptr, {"APPLE", "Apple Inc."});

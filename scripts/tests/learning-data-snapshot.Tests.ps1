@@ -116,7 +116,8 @@ Describe "Learning data snapshot" {
 
       $snapshot = (Add-LearningSnapshot -SnapshotLabel "a" -DataDirectory $data -OutputPath $output).Snapshot
 
-      foreach ($store in @("learning.tsv", "user_dict.json", "typo_corrections.tsv", "auto_words.tsv")) {
+      foreach ($store in @("learning.tsv", "user_dict.json", "typo_corrections.tsv", "auto_words.tsv",
+                           "english_learning.tsv")) {
         @($snapshot.files | Where-Object { $_.path -eq $store }).Count | Should -Be 1
         @($snapshot.files | Where-Object { $_.path -eq "$store.enc" }).Count | Should -Be 1
       }

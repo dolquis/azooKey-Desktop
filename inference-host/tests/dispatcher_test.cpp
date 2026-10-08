@@ -995,6 +995,45 @@ TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {
   std::remove((learning_path + ".english").c_str());
 }
 
+TEST_F(DispatcherTest, EnglishLearningHonorsPrivacyAndRoutesSegments) {
+  azookey::learning::LearningStore english_store(learning_path + ".english2",
+                                                 &azookey::learning::test::Crypto());
+  engine.SetEnglishLearningStore(&english_store);
+  EnableEventPrivacy(dispatcher);
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  // A secure field, or learning not allowed, records nothing in either channel.
+  for (const auto& [secure, allowed] : {std::pair{true, true}, std::pair{false, false}}) {
+    ipc::CommitObservationRequest commit;
+    commit.secure = secure;
+    commit.learning_allowed = allowed;
+    commit.reading = "secret";
+    commit.chosen = {"Secret", "secret", 0.0, "heuristic", "", 4};
+    ASSERT_TRUE(dispatcher.Dispatch(MakeReq(921, ipc::MessageType::CommitObservation,
+                                            ipc::BuildCommitObservationRequest(commit))));
+  }
+  EXPECT_EQ(english_store.size(), 0u);
+
+  ipc::CommitSegmentsObservationRequest segments;
+  segments.secure = false;
+  segments.learning_allowed = true;
+  ipc::ObservedSegment kana;
+  kana.reading = "きょう";
+  kana.chosen = {"今日", "きょう", 0.0, "system"};
+  ipc::ObservedSegment english;
+  english.reading = "github";
+  english.chosen = {"GitHub", "github", 0.0, "heuristic", "", 4};
+  segments.segments = {kana, english};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(922, ipc::MessageType::CommitSegmentsObservation,
+                                          ipc::BuildCommitSegmentsObservationRequest(segments))));
+  EXPECT_GT(english_store.Score("github", "GitHub", now), 0.0);
+  EXPECT_DOUBLE_EQ(store.Score("github", "GitHub", now), 0.0);
+  EXPECT_GT(store.Score("きょう", "今日", now), 0.0);
+  engine.SetEnglishLearningStore(nullptr);
+  std::remove((learning_path + ".english2").c_str());
+}
+
 TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
   ApplySettings(R"({"profilesByApp":{"code.exe":{"style":"technical"}}})");
   const auto plain = Query(ipc::AppIdentity{"notepad.exe", ""});

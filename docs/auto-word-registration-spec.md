@@ -1717,3 +1717,23 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **ログ**: 結果は `neologd_pack_load` イベントに記録する。`result` は `ok` /
   `missing_pack` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
   パスとサーバの応答はログに出さない。
+
+**設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
+§14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である
+（`docs/sideload-packaging-spec.md` §3.2）。
+
+- **文面の出所**: 設定アプリも pin したマニフェストをビルド時にバイト列として埋め込み
+  （`settings-app/EmbedNeologdPin.cmake`）、`attribution.notices` を逐語で表示する。UI 側に
+  帰属の文面を持たない。埋め込んだバイト列がマニフェストと一致することは
+  `azookey_settings_persistence_tests` が確かめる。
+- **同意**: 切替を偽から真へ操作したときに `attribution.notices` を表示するダイアログを出し、
+  「同意して有効化」を選んだときだけ真にする。取り消すと偽へ戻す。保存済みの値が真のときや、
+  保存の操作ではダイアログを出さない。帰属情報を読めないときは真にしない。
+  帰属は切替の下のボタンからいつでも表示できる。
+- **未公開のとき**: マニフェストの `url` が空なら、切替は操作できるまま、公開された pack が
+  無いため取得しない旨を表示する。Host はこの状態を missing-pack として扱う。
+- **反映の時期**: 真にして保存したときは、Host の再起動後（サインアウトして再度サインイン）に
+  取得する旨を表示する（`docs/sideload-packaging-spec.md` §3.6「反映方法の確定」）。
+- **既知の制限**: 同意を記録する設定キーは持たず、opt-in は `neologdEnabled` だけである。
+  `settings.json` を直接編集して真にすると、帰属の提示を経ずに Host が取得する。
+  pin したマニフェストの `attribution` が更新されても、すでに真のユーザーへ再同意は求めない。

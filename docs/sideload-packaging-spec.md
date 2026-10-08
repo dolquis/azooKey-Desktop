@@ -1191,15 +1191,28 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 ### 3.2 ナビゲーション
 
+設定アプリは左側の `NavigationView` でペインを切り替える。起動時は「一般」を表示する。
+保存ボタンと保存結果の InfoBar は全ペインで共通とし、保存は全ペインの値をまとめて書く。
+
 | ペイン | 内容 |
 |---|---|
-| 一般 | 起動時に IME を有効化 / 自動更新 ON/OFF |
-| 入力 | inputStyle / customRomajiTablePath / liveConversion / predictionEnabled |
-| AI | aiBackend / openAiApiKey / openAiApiEndpoint / promptPrefixByApp |
-| 学習 | LearningStore 表示 / エクスポート / リセット / Persona 表示 |
-| 詳細 | backendPreference / epPreference / powerProfile / logLevel |
-| 校正 | （M30 後半）バッチ訂正ビュー |
-| バージョン | バージョン情報 / 更新確認 / ライセンス |
+| 一般 | `model.enabled` / `model.selectedPath` / `autoUpdate` / SafeMode の解除 |
+| 入力 | 入力方式（`inputMode` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点 / バッチ変換 / インライン英単語候補 / 候補リライター / 括弧ペアリング |
+| 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意を含む）/ `autoWordRegistration` / タイプミス学習 |
+| AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
+| プライバシー | `privacy`（`crashReportConsent` を除く） |
+| 詳細 | `model.backendPreference` / `model.epPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / `reranker` / 実験フラグ |
+| バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
+
+Host の IPC を読むペインは、その IPC を呼ぶ設定アプリ側の client と同じ変更でナビゲーションに加え、
+中身の無いペインは置かない。対象は次の 4 つである。
+
+| ペイン | 内容 | 使う Host 側の機能 |
+|---|---|---|
+| モデル | モデル一覧 / ベンチマーク | `ListModels` / `BenchmarkModel`（`model-management-spec.md`） |
+| 学習 | LearningStore 表示 / エクスポート / リセット / 個別忘却 | 学習データ管理 IPC（`learning-data-management-spec.md`） |
+| Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
+| 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。
@@ -1235,7 +1248,8 @@ UpdateConfigResponse:
 
 Host は `settings.json` を再読込し、即時反映可能なものを適用する。破損などで
 再読込結果が invalid の場合、`ok=false` と `error` を返し、現在の runtime 設定は
-維持する。再起動が必要な設定は M30 の UI 本格化時に settings app 側の表示で扱う。
+維持する。応答は再起動の要否を持たない。Host の再起動後にだけ反映される変更は、設定アプリが
+保存の成功後に再起動指示を表示する（対象は §3.6「反映方法の確定」）。
 
 ### 3.4 設定ファイルパス
 
@@ -1329,7 +1343,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI | M16 | 即時 | roadmap M16 |
 | `openAiModel` | string | `gpt-4o-mini` | AI | M16 | 即時 | roadmap M16 |
 | `includeContextInAITransform` | bool | `true` | AI | M16 | 即時 | roadmap M16 |
-| `promptPrefixByApp` | map<string,string> | `{}` | AI | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
+| `promptPrefixByApp` | map<string,string> | `{}` | —（保存時保持。編集 UI は持たない。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
 | `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
@@ -1338,12 +1352,28 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル / 一般 | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | 一般（`enabled` / `selectedPath`）/ 詳細（`backendPreference` / `epPreference`）/ モデル（§3.2） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
-| `dictionary` | object（7つの層切替） | 下位キーの既定に従う | UI 非表示・保存時保持 | M53 | 即時（設定再読込） | `auto-word-registration-spec.md` §14.8 |
+| `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
+| `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI | M16 | 即時 | `ai-backend-spec.md` |
+| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `10` | 詳細 | — | 即時 | `windows-tsf-host-architecture.md` |
+| `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 入力 | M61 | 即時 | `bracket-pairing-spec.md` |
+| `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 入力 | M60 | 即時 | `inline-english-candidate-spec.md` |
+| `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 入力 | M62 | 即時 | `candidate-rewriter-spec.md` |
+| `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
+| `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
+| `reranker` | object | 下位キーの既定に従う | 詳細 | M56 | 即時 | `neural-reranker-spec.md` |
+| `privacy` | object | 下位キーの既定に従う | プライバシー（`crashReportConsent` はバージョン） | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
+| `profilesByApp` | map<string,object> | `{}` | —（保存時保持。編集 UI は持たない） | M48 | 即時 | `app-profile-spec.md` §4 |
+| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
 
-> オブジェクト型キー（`model` / `autoUpdate` / `dictionary`）の下位フィールドは「正典」列の spec が確定形を
-> 持つ。本表で再掲せず、ネスト構造の単一情報源を維持する。
+> オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
+> `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
+> 再掲せず、ネスト構造の単一情報源を維持する。
+>
+> 「—（保存時保持）」のキーは設定アプリに編集 UI を持たないが、保存時に有効な値を書き戻す
+> （§3.7「書き戻し」）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
+> `model.benchmarkHistory`）は、設定アプリから編集しない。
 
 > **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
 > 下位レイヤ**であり（解決順 `model.*` ＞ root、`model-management-spec.md` §5.2）、設定アプリの device 選択 UI は
@@ -1362,8 +1392,11 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **反映方法の確定（v1.0 キー）**: Host は `settings.json` を hot-reload し、**プロセス再起動を要する
   キーを持たない**。モデルロードに影響するキー（`backendPreference` / `epPreference` / `model.*`）は
   Host 内部の推論エンジン再ロードで反映する（`model-management-spec.md` §5.3、`model.autoLoadOnHostStart`）。
-  それ以外は次回変換から即時反映する。§3.3 の「再起動が必要な設定」は v1.0 では発生せず、将来キーで
-  必要になった場合のみ M30 設定アプリが再起動指示を表示する。
+  それ以外は次回変換から即時反映する。例外は `dictionary.neologdEnabled` を偽から真にする変更で、
+  Host は `neologd_lexicon` pack を起動時にだけ取得するため（`auto-word-registration-spec.md` §15.14）、
+  反映は Host の再起動後になる。設定アプリはこの変更を保存したときに、サインアウトして再度サインイン
+  すると反映される旨を表示する（Host はログオン時に起動する。§1.7）。再起動を要する変更の判定は
+  設定アプリが持つ静的な分類で行い、`UpdateConfig` の応答には含めない。
 - **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（§9）。
   平文保存は移行期のみ許容し、Host は両形式を受理する。
 
@@ -1376,16 +1409,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
   行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
   `app-profile-spec.md` §4 と同方針）。
-- **予定済み top-level 拡張**（現行 `mvp-settings.schema.json` には未統合。各 spec の fragment が確定形で、
-  統合 PR で本ファイルへマージする）:
-  - `privacy`（`docs/privacy-and-secure-input-spec.md` §7 が schema fragment を正典とする）。
-    object 全体（`mode` / `custom` / secure 各軸）の統合は **M46** だが、**`crashReportConsent`
-    subfield のみ M33（ETW/WER）で先行導入**する。M33 受け入れ条件が
-    `privacy.crashReportConsent = off` を要求するため（§8.3）、M33 統合 PR で `privacy` object に
-    `crashReportConsent` を既定値付きで追加し（schema とコードを同一 PR で）、残り subfield は M46 で
-    加算する（加算的拡張は本節「拡張方針」）。subfield ごとの導入 M は privacy spec §7 を正典とする。
-  - `profilesByApp`（M48。前面アプリ別プロファイル。`docs/app-profile-spec.md` §4 が schema fragment を
-    正典とする。既存 `promptPrefixByApp` との統合は同 §6）。
+- **下位フィールドの正典**: `privacy`（M46。`crashReportConsent` だけ M33）は
+  `docs/privacy-and-secure-input-spec.md` §7、`profilesByApp`（M48）は `docs/app-profile-spec.md` §4 の
+  schema fragment を正典とする。既存 `promptPrefixByApp` との統合は `app-profile-spec.md` §6 に従う。
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
   §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
   が制御する）。LearningStore / Persona 表示はキーではなく読み取り専用ビューである。

@@ -1,5 +1,16 @@
 find_program(AZOOKEY_MSBUILD_EXECUTABLE NAMES MSBuild.exe msbuild REQUIRED)
 
+# The settings app shows the neologd_lexicon attribution from the same pinned manifest the
+# Host embeds (auto-word-registration-spec section 15.14).
+set(AZOOKEY_SETTINGS_NEOLOGD_PIN "${PROJECT_SOURCE_DIR}/dictbuild/packs/neologd_lexicon.manifest.json")
+set(AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/NeologdPackPin.cpp")
+add_custom_command(OUTPUT "${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}"
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${AZOOKEY_SETTINGS_NEOLOGD_PIN}
+    -DOUTPUT=${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/EmbedNeologdPin.cmake"
+  DEPENDS "${AZOOKEY_SETTINGS_NEOLOGD_PIN}" "${CMAKE_CURRENT_SOURCE_DIR}/EmbedNeologdPin.cmake"
+  VERBATIM)
+
 if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
   add_executable(azookey_settings_launch_arguments_tests
     LaunchArguments.cpp
@@ -18,15 +29,19 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
   azookey_discover_tests(azookey_settings_launch_arguments_tests LABEL settings-app)
 
   add_executable(azookey_settings_persistence_tests
+    NeologdAttribution.cpp
     SettingsDocument.cpp
     SettingsIpcClient.cpp
+    "${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}"
+    tests/neologd_attribution_test.cpp
     tests/settings_document_test.cpp
     tests/settings_ipc_client_test.cpp
   )
   target_include_directories(azookey_settings_persistence_tests
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_definitions(azookey_settings_persistence_tests
-    PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+      AZOOKEY_NEOLOGD_PIN_PATH="${AZOOKEY_SETTINGS_NEOLOGD_PIN}")
   target_link_libraries(azookey_settings_persistence_tests
     PRIVATE
       azookey_learning
@@ -62,6 +77,8 @@ add_custom_target(azookey_settings
           /property:OutDir=${AZOOKEY_SETTINGS_OUTPUT_DIR}
           /property:IntDir=${CMAKE_CURRENT_BINARY_DIR}/obj/${AZOOKEY_SETTINGS_CONFIGURATION}/
           /property:AzooKeyWilIncludeDir=${AZOOKEY_SETTINGS_WIL_INCLUDE_DIR}
+          /property:AzooKeyNeologdPinSource=${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}
+  DEPENDS "${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}"
   BYPRODUCTS "${AZOOKEY_SETTINGS_OUTPUT_DIR}/azookey_settings.exe"
   USES_TERMINAL
   VERBATIM

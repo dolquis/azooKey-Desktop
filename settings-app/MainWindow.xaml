@@ -2,119 +2,219 @@
     x:Class="azookey_settings.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer>
-        <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
-            <TextBlock x:Uid="PageTitle"
-                       Style="{StaticResource TitleTextBlockStyle}"
-                       AutomationProperties.AutomationId="PageTitle" />
-            <TextBlock x:Uid="PageDescription"
-                       TextWrapping="Wrap" />
-            <InfoBar x:Name="SettingsStatusInfoBar"
-                     IsOpen="False"
-                     IsClosable="True"
-                     AutomationProperties.AutomationId="SettingsStatusInfoBar" />
-            <TextBlock x:Uid="GeneralSectionTitle"
-                       Style="{StaticResource SubtitleTextBlockStyle}" />
-            <ToggleSwitch x:Name="ModelEnabledToggle"
-                          x:Uid="ModelEnabledToggle"
-                          AutomationProperties.AutomationId="ModelEnabledToggle" />
-            <StackPanel Spacing="4">
-                <TextBlock x:Uid="BackendPreferenceLabel" />
-                <ComboBox x:Name="BackendPreferenceCombo"
-                          HorizontalAlignment="Stretch"
-                          AutomationProperties.AutomationId="BackendPreferenceCombo">
-                    <ComboBoxItem x:Uid="BackendAuto" />
-                    <ComboBoxItem x:Uid="BackendCpu" />
-                </ComboBox>
-                <TextBlock x:Uid="CpuOnlyDistributionNote"
-                           TextWrapping="Wrap"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <TextBlock x:Name="UnsupportedBackendText"
-                           Visibility="Collapsed"
-                           TextWrapping="Wrap"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
-            <TextBox x:Name="ModelPathTextBox"
-                     x:Uid="ModelPathTextBox"
-                     AutomationProperties.AutomationId="ModelPathTextBox" />
-            <PasswordBox x:Name="OpenAiApiKeyPasswordBox"
-                         x:Uid="OpenAiApiKeyPasswordBox"
-                         PasswordChanged="OpenAiApiKeyPasswordBox_PasswordChanged"
-                         AutomationProperties.AutomationId="OpenAiApiKeyPasswordBox" />
-            <Button x:Name="ClearOpenAiApiKeyButton"
-                    x:Uid="ClearOpenAiApiKeyButton"
-                    Click="ClearOpenAiApiKeyButton_Click"
-                    AutomationProperties.AutomationId="ClearOpenAiApiKeyButton" />
-            <TextBlock x:Uid="OpenAiApiKeyDescription" TextWrapping="Wrap"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <TextBlock x:Uid="AdvancedSectionTitle"
-                       Margin="0,8,0,0"
-                       Style="{StaticResource SubtitleTextBlockStyle}" />
-            <StackPanel Spacing="4">
-                <TextBlock x:Uid="LogLevelLabel" />
-                <ComboBox x:Name="LogLevelCombo"
-                          HorizontalAlignment="Stretch"
-                          AutomationProperties.AutomationId="LogLevelCombo">
-                    <ComboBoxItem Content="error" />
-                    <ComboBoxItem Content="warn" />
-                    <ComboBoxItem Content="info" />
-                    <ComboBoxItem Content="debug" />
-                </ComboBox>
-            </StackPanel>
-            <ToggleSwitch x:Name="CrashReportConsentToggle"
-                          x:Uid="CrashReportConsentToggle"
-                          AutomationProperties.AutomationId="CrashReportConsentToggle" />
-            <TextBlock x:Uid="CrashReportDescription" TextWrapping="Wrap"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <TextBlock x:Name="CrashReportStatusText" TextWrapping="Wrap"
-                       AutomationProperties.AutomationId="CrashReportStatusText" />
-            <Button x:Uid="OpenCrashReportsButton"
-                    Click="OpenCrashReportsButton_Click"
-                    AutomationProperties.AutomationId="OpenCrashReportsButton" />
-            <TextBlock x:Uid="LicensesSectionTitle"
-                       Margin="0,8,0,0"
-                       Style="{StaticResource SubtitleTextBlockStyle}" />
-            <TextBlock x:Uid="LicensesDescription" TextWrapping="Wrap"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <HyperlinkButton x:Uid="OpenThirdPartyNoticesButton"
-                             Click="OpenThirdPartyNoticesButton_Click"
-                             AutomationProperties.AutomationId="OpenThirdPartyNoticesButton" />
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <Button x:Name="SaveButton"
-                        x:Uid="SaveButton"
-                        Click="SaveButton_Click"
-                        AutomationProperties.AutomationId="SaveButton" />
-                <ProgressRing x:Name="SaveProgressRing"
-                              Width="24"
-                              Height="24"
-                              IsActive="False"
-                              Visibility="Collapsed" />
-            </StackPanel>
-            <InfoBar x:Uid="LaunchContextInfoBar"
-                     IsOpen="True"
-                     Severity="Informational"
-                     AutomationProperties.AutomationId="LaunchContextInfoBar">
-                <Grid RowSpacing="8" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <TextBlock x:Uid="LanguageLabel" />
-                    <TextBlock x:Name="LanguageValueText"
-                               Grid.Column="1"
-                               AutomationProperties.AutomationId="LanguageValue" />
-                    <TextBlock x:Uid="ProfileLabel" Grid.Row="1" />
-                    <TextBlock x:Name="ProfileValueText"
-                               Grid.Row="1"
-                               Grid.Column="1"
+    <NavigationView x:Name="SettingsNavigationView"
+                    PaneDisplayMode="Left"
+                    IsBackButtonVisible="Collapsed"
+                    IsSettingsVisible="False"
+                    SelectionChanged="SettingsNavigationView_SelectionChanged"
+                    AutomationProperties.AutomationId="SettingsNavigationView">
+        <NavigationView.MenuItems>
+            <NavigationViewItem x:Name="GeneralNavigationItem"
+                                x:Uid="GeneralNavigationItem"
+                                Tag="General"
+                                AutomationProperties.AutomationId="GeneralNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Uid="DictionaryNavigationItem"
+                                Tag="Dictionary"
+                                AutomationProperties.AutomationId="DictionaryNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Uid="AiNavigationItem"
+                                Tag="Ai"
+                                AutomationProperties.AutomationId="AiNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Message" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Uid="AdvancedNavigationItem"
+                                Tag="Advanced"
+                                AutomationProperties.AutomationId="AdvancedNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Uid="VersionNavigationItem"
+                                Tag="Version"
+                                AutomationProperties.AutomationId="VersionNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Help" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <ScrollViewer>
+            <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
+                <TextBlock x:Uid="PageTitle"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           AutomationProperties.AutomationId="PageTitle" />
+                <TextBlock x:Uid="PageDescription"
+                           TextWrapping="Wrap" />
+                <InfoBar x:Name="SettingsStatusInfoBar"
+                         IsOpen="False"
+                         IsClosable="True"
+                         AutomationProperties.AutomationId="SettingsStatusInfoBar" />
+                <InfoBar x:Name="RestartRequiredInfoBar"
+                         x:Uid="RestartRequiredInfoBar"
+                         IsOpen="False"
+                         IsClosable="True"
+                         Severity="Informational"
+                         AutomationProperties.AutomationId="RestartRequiredInfoBar" />
+
+                <StackPanel x:Name="GeneralPane" Spacing="16">
+                    <TextBlock x:Uid="GeneralSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ToggleSwitch x:Name="ModelEnabledToggle"
+                                  x:Uid="ModelEnabledToggle"
+                                  AutomationProperties.AutomationId="ModelEnabledToggle" />
+                    <TextBox x:Name="ModelPathTextBox"
+                             x:Uid="ModelPathTextBox"
+                             AutomationProperties.AutomationId="ModelPathTextBox" />
+                </StackPanel>
+
+                <StackPanel x:Name="DictionaryPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="DictionarySectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="DictionaryDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ToggleSwitch x:Name="SudachiDictionaryToggle"
+                                  x:Uid="SudachiDictionaryToggle"
+                                  AutomationProperties.AutomationId="SudachiDictionaryToggle" />
+                    <ToggleSwitch x:Name="NamedEntityDictionaryToggle"
+                                  x:Uid="NamedEntityDictionaryToggle"
+                                  AutomationProperties.AutomationId="NamedEntityDictionaryToggle" />
+                    <ToggleSwitch x:Name="TechnicalTermsDictionaryToggle"
+                                  x:Uid="TechnicalTermsDictionaryToggle"
+                                  AutomationProperties.AutomationId="TechnicalTermsDictionaryToggle" />
+                    <ToggleSwitch x:Name="UserDictionaryToggle"
+                                  x:Uid="UserDictionaryToggle"
+                                  AutomationProperties.AutomationId="UserDictionaryToggle" />
+                    <ToggleSwitch x:Name="AutoWordsDictionaryToggle"
+                                  x:Uid="AutoWordsDictionaryToggle"
+                                  AutomationProperties.AutomationId="AutoWordsDictionaryToggle" />
+                    <ToggleSwitch x:Name="AppSpecificDictionaryToggle"
+                                  x:Uid="AppSpecificDictionaryToggle"
+                                  AutomationProperties.AutomationId="AppSpecificDictionaryToggle" />
+                    <TextBlock x:Uid="NeologdSectionTitle"
+                               Margin="0,8,0,0"
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <ToggleSwitch x:Name="NeologdDictionaryToggle"
+                                  x:Uid="NeologdDictionaryToggle"
+                                  Toggled="NeologdDictionaryToggle_Toggled"
+                                  AutomationProperties.AutomationId="NeologdDictionaryToggle" />
+                    <TextBlock x:Uid="NeologdDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="NeologdPackStatusText"
+                               Visibility="Collapsed"
                                TextWrapping="Wrap"
-                               AutomationProperties.AutomationId="ProfileValue" />
-                </Grid>
-            </InfoBar>
-        </StackPanel>
-    </ScrollViewer>
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               AutomationProperties.AutomationId="NeologdPackStatusText" />
+                    <HyperlinkButton x:Name="ShowNeologdNoticesButton"
+                                     x:Uid="ShowNeologdNoticesButton"
+                                     Click="ShowNeologdNoticesButton_Click"
+                                     AutomationProperties.AutomationId="ShowNeologdNoticesButton" />
+                </StackPanel>
+
+                <StackPanel x:Name="AiPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="AiSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <PasswordBox x:Name="OpenAiApiKeyPasswordBox"
+                                 x:Uid="OpenAiApiKeyPasswordBox"
+                                 PasswordChanged="OpenAiApiKeyPasswordBox_PasswordChanged"
+                                 AutomationProperties.AutomationId="OpenAiApiKeyPasswordBox" />
+                    <Button x:Name="ClearOpenAiApiKeyButton"
+                            x:Uid="ClearOpenAiApiKeyButton"
+                            Click="ClearOpenAiApiKeyButton_Click"
+                            AutomationProperties.AutomationId="ClearOpenAiApiKeyButton" />
+                    <TextBlock x:Uid="OpenAiApiKeyDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="AdvancedSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Uid="BackendPreferenceLabel" />
+                        <ComboBox x:Name="BackendPreferenceCombo"
+                                  HorizontalAlignment="Stretch"
+                                  AutomationProperties.AutomationId="BackendPreferenceCombo">
+                            <ComboBoxItem x:Uid="BackendAuto" />
+                            <ComboBoxItem x:Uid="BackendCpu" />
+                        </ComboBox>
+                        <TextBlock x:Uid="CpuOnlyDistributionNote"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="UnsupportedBackendText"
+                                   Visibility="Collapsed"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Uid="LogLevelLabel" />
+                        <ComboBox x:Name="LogLevelCombo"
+                                  HorizontalAlignment="Stretch"
+                                  AutomationProperties.AutomationId="LogLevelCombo">
+                            <ComboBoxItem Content="error" />
+                            <ComboBoxItem Content="warn" />
+                            <ComboBoxItem Content="info" />
+                            <ComboBoxItem Content="debug" />
+                        </ComboBox>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel x:Name="VersionPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="CrashReportSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ToggleSwitch x:Name="CrashReportConsentToggle"
+                                  x:Uid="CrashReportConsentToggle"
+                                  AutomationProperties.AutomationId="CrashReportConsentToggle" />
+                    <TextBlock x:Uid="CrashReportDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="CrashReportStatusText" TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="CrashReportStatusText" />
+                    <Button x:Uid="OpenCrashReportsButton"
+                            Click="OpenCrashReportsButton_Click"
+                            AutomationProperties.AutomationId="OpenCrashReportsButton" />
+                    <TextBlock x:Uid="LicensesSectionTitle"
+                               Margin="0,8,0,0"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="LicensesDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <HyperlinkButton x:Uid="OpenThirdPartyNoticesButton"
+                                     Click="OpenThirdPartyNoticesButton_Click"
+                                     AutomationProperties.AutomationId="OpenThirdPartyNoticesButton" />
+                    <InfoBar x:Uid="LaunchContextInfoBar"
+                             IsOpen="True"
+                             Severity="Informational"
+                             AutomationProperties.AutomationId="LaunchContextInfoBar">
+                        <Grid RowSpacing="8" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock x:Uid="LanguageLabel" />
+                            <TextBlock x:Name="LanguageValueText"
+                                       Grid.Column="1"
+                                       AutomationProperties.AutomationId="LanguageValue" />
+                            <TextBlock x:Uid="ProfileLabel" Grid.Row="1" />
+                            <TextBlock x:Name="ProfileValueText"
+                                       Grid.Row="1"
+                                       Grid.Column="1"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="ProfileValue" />
+                        </Grid>
+                    </InfoBar>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="SaveButton"
+                            x:Uid="SaveButton"
+                            Click="SaveButton_Click"
+                            AutomationProperties.AutomationId="SaveButton" />
+                    <ProgressRing x:Name="SaveProgressRing"
+                                  Width="24"
+                                  Height="24"
+                                  IsActive="False"
+                                  Visibility="Collapsed" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </NavigationView>
 </Window>

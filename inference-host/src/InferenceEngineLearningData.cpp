@@ -70,13 +70,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
     case LearningDataStore::Learning: {
       for (const auto& channel : stores.learning) {
         if (channel.name != entry->channel) continue;
-        channel.store->Forget(entry->reading, entry->surface);
-        // Forgetting reaches the M7 file too, so an older Host never shows
-        // the word again (spec section 4.2).
-        const bool legacy_removed =
-            channel.store->RemoveFromLegacyFile(entry->reading, entry->surface);
-        return SaveLearningDataLocked() && legacy_removed ? ForgetOutcome::Forgotten
-                                                          : ForgetOutcome::SaveFailed;
+        return ForgetPairLocked(*channel.store, entry->reading, entry->surface);
       }
       return ForgetOutcome::NotFound;
     }
@@ -124,26 +118,58 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningPair(const std::string& reading,
                                                                    const std::string& surface) {
   std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
-  if (!store_ || !store_->Forget(reading, surface)) return ForgetOutcome::NotFound;
-  const bool legacy_removed = store_->RemoveFromLegacyFile(reading, surface);
-  return SaveLearningDataLocked() && legacy_removed ? ForgetOutcome::Forgotten
-                                                    : ForgetOutcome::SaveFailed;
+  if (!store_) return ForgetOutcome::NotFound;
+  return ForgetPairLocked(*store_, reading, surface);
+}
+
+// Forgets the pair in memory (dropped from the v2 file by the save) and in the
+// M7 file. The M7 removal is attempted even when the v2 store has no such pair:
+// a pair learned only before v2, or one whose earlier M7 removal failed, is
+// still there, and a retry must be able to finish it.
+InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::LearningStore& store,
+                                                                 const std::string& reading,
+                                                                 const std::string& surface) {
+  const bool in_store = store.Forget(reading, surface);
+  bool legacy_removed = false;
+  const bool legacy_ok = store.RemoveFromLegacyFile(reading, surface, &legacy_removed);
+  const bool saved = SaveLearningDataLocked();
+  if (!legacy_ok || !saved) return ForgetOutcome::SaveFailed;
+  return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
 }
 
 LearningExportResult InferenceEngine::ExportLearningData(
     const std::vector<LearningDataStore>& selected, const std::filesystem::path& destination,
     bool encrypt, const BackupManifest& meta) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
-  const auto& crypto = backup_crypto_ ? *backup_crypto_ : learning::DpapiCrypto();
-  return host::ExportLearningData(LearningDataStoresLocked(), selected, destination, encrypt,
-                                  crypto, meta);
+  // Snapshot under the store locks; encrypt, zip and write outside them so the
+  // conversion path is not stalled by the export.
+  std::optional<std::vector<BackupItem>> items;
+  const learning::ByteCrypto* crypto = nullptr;
+  LearningExportResult result;
+  {
+    std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+    crypto = backup_crypto_ ? backup_crypto_ : &learning::DpapiCrypto();
+    items = CollectBackupItems(LearningDataStoresLocked(), selected, encrypt, &result.error);
+  }
+  if (!items) return result;
+  return WriteLearningBackup(std::move(*items), destination, encrypt, *crypto, meta);
 }
 
 LearningImportResult InferenceEngine::ImportLearningData(
     const std::vector<LearningDataStore>& selected, const std::filesystem::path& source,
     learning::ImportConflictPolicy policy) {
+  // Read, verify and decrypt the archive outside the store locks; only the
+  // parse and merge below hold them.
+  const learning::ByteCrypto* crypto = nullptr;
+  {
+    std::scoped_lock lock(state_mutex_);
+    crypto = backup_crypto_ ? backup_crypto_ : &learning::DpapiCrypto();
+  }
+  LearningImportResult read_failure;
+  BackupManifest manifest;
+  auto items = ReadBackupArchive(source, *crypto, &manifest, &read_failure.error);
+  if (!items) return read_failure;
+
   std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
-  const auto& crypto = backup_crypto_ ? *backup_crypto_ : learning::DpapiCrypto();
   const bool with_user_dictionary =
       Selected(selected, LearningDataStore::UserDictionary) && user_dict_;
 
@@ -168,8 +194,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
     user_dict_before = user_dict_->All();
   }
 
-  auto result =
-      host::ImportLearningData(LearningDataStoresLocked(), selected, source, policy, crypto);
+  auto result = ApplyImportedItems(LearningDataStoresLocked(), selected, std::move(*items), policy);
   if (result.error != BackupError::None) return result;
 
   bool saved = SaveLearningDataLocked();
@@ -187,7 +212,10 @@ LearningImportResult InferenceEngine::ImportLearningData(
       saved = false;
     }
   }
-  // The merge stays in memory and is retried by the next flush; report it.
+  // A store that failed to save keeps the merge in memory and retries it at
+  // the next flush (the user dictionary is rolled back above); the response
+  // says "io" so the settings app reports that the import is not on disk yet
+  // (learning-data-management-spec section 4.5).
   if (!saved) result.error = BackupError::Io;
   return result;
 }

@@ -339,6 +339,8 @@ class InferenceEngine {
   // Persists what a learning data operation may have changed. Holds every
   // store lock; false when any store failed to save.
   bool SaveLearningDataLocked();
+  ForgetOutcome ForgetPairLocked(learning::LearningStore& store, const std::string& reading,
+                                 const std::string& surface);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   // Flushes reached while queries wait on state_mutex_ pass zero: they try once
   // and keep the store dirty. Shutdown and explicit flushes retry conflicts.
@@ -358,8 +360,9 @@ class InferenceEngine {
   learning::TypoCorrectionStore* typo_store_{nullptr};
   learning::AutoWordStore* auto_word_store_{nullptr};
   const learning::ByteCrypto* backup_crypto_{nullptr};
-  // Guards the English store and the English dictionary cache; never held
-  // together with state_mutex_.
+  // Guards the English store and the English dictionary cache. Only the
+  // learning data operations hold it together with state_mutex_ (through one
+  // std::scoped_lock); the conversion path takes it alone.
   mutable std::mutex english_mutex_;
   learning::LearningStore* english_store_{nullptr};
   // The dictionary cache has its own lock so a reload never blocks learning.
@@ -372,9 +375,10 @@ class InferenceEngine {
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};
   bool user_dictionary_enabled_{true};
-  // Serializes TypoCorrectionStore, which keeps no lock of its own. Held on its
-  // own, never nested with state_mutex_, so the store's disk write does not
-  // stall the query path that takes state_mutex_ several times per request.
+  // Serializes TypoCorrectionStore, which keeps no lock of its own. The query
+  // path holds it on its own, so the store's disk write does not stall queries
+  // that take state_mutex_ several times per request; only the learning data
+  // operations take it together with state_mutex_ (one std::scoped_lock).
   mutable std::mutex typo_store_mutex_;
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;

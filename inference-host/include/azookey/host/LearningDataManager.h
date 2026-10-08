@@ -107,6 +107,23 @@ struct LearningImportResult {
   std::map<std::string, learning::ImportCounts> counts;
 };
 
+// The two halves of ExportLearningData, so a caller can take the snapshot under
+// its store locks and write the archive (encryption, ZIP, disk) outside them.
+std::optional<std::vector<BackupItem>> CollectBackupItems(
+    const LearningDataStores& stores, const std::vector<LearningDataStore>& selected, bool encrypt,
+    BackupError* error);
+LearningExportResult WriteLearningBackup(std::vector<BackupItem> items,
+                                         const std::filesystem::path& destination, bool encrypt,
+                                         const learning::ByteCrypto& crypto,
+                                         const BackupManifest& meta);
+
+// The store half of ImportLearningData: parses the decrypted items, then merges
+// them only when all parse. ReadBackupArchive can run outside the locks.
+LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
+                                        const std::vector<LearningDataStore>& selected,
+                                        std::vector<BackupItem> items,
+                                        learning::ImportConflictPolicy policy);
+
 // Reads and parses every selected item before changing any store, so a bad
 // archive leaves the stores untouched. A selected store absent from the
 // archive is skipped.

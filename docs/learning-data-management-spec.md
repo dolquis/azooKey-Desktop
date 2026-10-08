@@ -272,9 +272,20 @@ counts のキーは archive の item 名（§5.1）である。
   組の形は TIP の Ctrl+Shift+Backspace（`legacy-parity-spec.md` §7.2）が使い、`store` は `learning`（かなのチャネル）に限る。
   一致する項目が無いときは `ok = true`、`removed = false` を返す。
 - export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
+- Host は Handshake の capabilities に `learning_data_management` を載せる。
 - Host は 4 つの操作を `InferenceEngine` 上で行い、関係するストアのロックをまとめて取ってから
   変更し、返る前に保存する。ユーザー辞書は、`AddUserWord` と同じくファイルロックを取って
   ディスクの内容を読み直してから変更する。
+- export はロックを持ったままストアの内容を複写し、暗号化と ZIP の書き出しはロックの外で行う。
+  import は archive の読み込み・検証・復号をロックの外で行い、解析と merge と保存だけをロックの中で行う。
+  いずれも変換の経路を止める時間を短くするためである。
+- import の後の保存に失敗したときは `error = "io"` を返す。ユーザー辞書は変更前に戻す。
+  学習・typo・auto_word は merge した内容をメモリに残し、次の flush で保存を再試行する。
+  設定アプリは、取り込みがまだディスクに無いことを利用者に伝える。
+- 学習の忘却は、v2 側に組が無くても M7 ファイルからの除去を試みる。M7 ファイルからの除去に失敗すると
+  `save_failed` を返す（v2 側の忘却は保存済みでありうる）。このとき一覧からは組が消えて id では届かないので、
+  TIP と同じ `{reading, surface}` の形で再試行すると、M7 ファイルの行を除いて `removed = true` を返す。
+  移行前にだけ学習した組（M7 ファイルにだけある組）も、この形で除ける。一覧は v2 側の組だけを出す。
 - 確定観測（`CommitObservation` / `CommitSegmentsObservation`）は任意の `app`
   （`process_name`、`window_class`）を持つ。Host は `process_name` を正規化して学習の app 行とし、
   `left_context` から `context_hash` を求める（`user-learning-enhancement-spec.md` §3.2、§8.1）。

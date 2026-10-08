@@ -106,7 +106,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
 | `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
 | `ReverseConvert` | codec + Host + TIP | M20 の再変換で、確定済み表層（`surface`）から読み（`reading`）を引く |
-| `ListLearningEntries` | codec + Host | M49 の学習データ一覧。`store`・`query`・`limit`（上限 `kMaxLearningEntries` で頭打ち）・`offset` を送り、`total`・`entries[]` を受け取る。応答は `ok` / `error` を持つ（`docs/learning-data-management-spec.md` §4.1） |
+| `ListLearningEntries` | codec + Host | M49 の学習データ一覧（4 メッセージとも capability `learning_data_management`）。`store`・`query`・`limit`（上限 `kMaxLearningEntries` で頭打ち）・`offset` を送り、`total`・`entries[]` を受け取る。応答は `ok` / `error` を持つ（`docs/learning-data-management-spec.md` §4.1） |
 | `ForgetLearningEntry` | codec + Host | M49 の 1 エントリ忘却。`store` に加え `id` か、`learning` ストアに限り `reading` + `surface` のどちらか一方の形だけを受け付ける。応答は `removed` / `ok` / `error`（§4.2） |
 | `ExportLearningData` | codec + Host | M49 のバックアップ書き出し。`stores`・`destination_path`・`encrypt`（既定 `true`）・`include_settings`（既定 `false`）を送り、`status`・`file_size_bytes`・`encrypted`・`items[]` を受け取る（§4.3） |
 | `ImportLearningData` | codec + Host | M49 のバックアップ取り込み。`source_path`・`stores`・`conflict_resolution`（`merge` / `overwrite` / `keep_both`、既定 `merge`）を送り、`status` とストア別の `imported_counts` / `skipped_counts` / `conflict_counts` を受け取る（§4.4） |

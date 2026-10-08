@@ -511,9 +511,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_generation_id = config_.host_generation_id;
   // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
-  res.capabilities = {"oob_cancel",        "commit_segments", "query_live_conversion",
-                      "query_predictions", "app_profile",     "candidate_tag",
-                      "list_models",       "benchmark_model", "english_candidates"};
+  res.capabilities = {
+      "oob_cancel",         "commit_segments",         "query_live_conversion", "query_predictions",
+      "app_profile",        "candidate_tag",           "list_models",           "benchmark_model",
+      "english_candidates", "learning_data_management"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -1007,7 +1008,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::En
     res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
     return reply();
   }
-  // The TIP names the pair; the settings app names an id from the list.
+  // The TIP names the pair, which addresses the kana learning channel only;
+  // the settings app names an id from the list.
+  if (parsed->id.empty() && *store != LearningDataStore::Learning) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+    return reply();
+  }
   const auto outcome = parsed->id.empty()
                            ? engine_->ForgetLearningPair(parsed->reading, parsed->surface)
                            : engine_->ForgetLearningEntry(*store, parsed->id);

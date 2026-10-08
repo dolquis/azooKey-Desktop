@@ -789,8 +789,9 @@ bool LearningStore::Forget(const std::string& reading, const std::string& surfac
   return true;
 }
 
-bool LearningStore::RemoveFromLegacyFile(const std::string& reading,
-                                         const std::string& surface) const {
+bool LearningStore::RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
+                                         bool* removed_rows) const {
+  if (removed_rows) *removed_rows = false;
   std::string text;
   const auto source = ReadProtectedText(path_, *crypto_, text);
   if (source == ProtectedFileSource::Missing) return true;
@@ -805,6 +806,7 @@ bool LearningStore::RemoveFromLegacyFile(const std::string& reading,
   // ciphertext, so the M7 file is either replaced atomically or left as it was.
   const bool ok = !removed || WriteProtectedText(path_, rewritten, *crypto_);
   SecureErase(rewritten);
+  if (removed_rows) *removed_rows = removed && ok;
   return ok;
 }
 

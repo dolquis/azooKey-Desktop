@@ -445,8 +445,8 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
-  for (const char* capability :
-       {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates"}) {
+  for (const char* capability : {"app_profile", "candidate_tag", "list_models", "benchmark_model",
+                                 "english_candidates", "learning_data_management"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -3439,4 +3439,193 @@ TEST_F(DispatcherTest, LearningDataRequestsNeedAnAuthenticatedSession) {
     ASSERT_TRUE(reply);
     EXPECT_NE(reply->payload_json.find("not_authenticated"), std::string::npos);
   }
+}
+
+namespace {
+std::optional<ipc::Envelope> SendLearningData(azookey::host::Dispatcher& target, uint64_t id,
+                                              ipc::MessageType type, const std::string& payload) {
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = id;
+  env.trace_id = "trace-" + std::to_string(id);
+  env.type = type;
+  env.payload_json = payload;
+  return target.Dispatch(env);
+}
+
+std::filesystem::path FreshBackupDirectory(const char* name) {
+  const auto dir = std::filesystem::temp_directory_path() / name;
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+void RemoveLearningFiles(const std::filesystem::path& path) {
+  std::error_code ec;
+  for (const auto& base : {path, azookey::learning::LearningStoreV2PathFor(path)}) {
+    std::filesystem::remove(base, ec);
+    std::filesystem::remove(azookey::learning::EncryptedPathFor(base), ec);
+    auto backup = base;
+    backup += ".bak";
+    std::filesystem::remove(backup, ec);
+  }
+}
+}  // namespace
+
+TEST_F(DispatcherTest, LearningDataListsAndForgetsTheEnglishChannel) {
+  const std::filesystem::path english_path = "azookey_dispatcher_test_english.tsv";
+  RemoveLearningFiles(english_path);
+  azookey::learning::LearningStore english(english_path, &azookey::learning::test::Crypto());
+  english.Observe("apple", "Apple Inc.", 0.8, 1'700'000'000);
+  engine.SetEnglishLearningStore(&english);
+
+  ipc::ListLearningEntriesRequest list;
+  list.store = "learning";
+  auto reply = SendLearningData(dispatcher, 730, ipc::MessageType::ListLearningEntries,
+                                ipc::BuildListLearningEntriesRequest(list));
+  const auto listed = ipc::ParseListLearningEntriesResponse(reply->payload_json);
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_EQ(listed->total, 1u);
+  EXPECT_EQ(listed->entries[0].channel, "english");
+
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.id = listed->entries[0].id;
+  reply = SendLearningData(dispatcher, 731, ipc::MessageType::ForgetLearningEntry,
+                           ipc::BuildForgetLearningEntryRequest(forget));
+  const auto forgot = ipc::ParseForgetLearningEntryResponse(reply->payload_json);
+  ASSERT_TRUE(forgot && forgot->ok);
+  EXPECT_TRUE(forgot->removed);
+  EXPECT_DOUBLE_EQ(english.Score("apple", "Apple Inc.", 1'700'000'000), 0.0);
+  engine.SetEnglishLearningStore(nullptr);
+  RemoveLearningFiles(english_path);
+
+  // The pair form addresses the kana channel only.
+  forget = {};
+  forget.store = "typo";
+  forget.reading = "あ";
+  forget.surface = "亜";
+  reply = SendLearningData(dispatcher, 732, ipc::MessageType::ForgetLearningEntry,
+                           ipc::BuildForgetLearningEntryRequest(forget));
+  const auto rejected = ipc::ParseForgetLearningEntryResponse(reply->payload_json);
+  ASSERT_TRUE(rejected);
+  EXPECT_FALSE(rejected->ok);
+}
+
+TEST_F(DispatcherTest, LearningDataExportImportRestoresContentUnderEachPolicy) {
+  azookey::learning::test::TestByteCrypto backup_crypto;
+  engine.SetBackupCrypto(&backup_crypto);
+  constexpr uint64_t kWhen = 1'700'000'000;
+  store.Observe("にほん", "日本", 0.8, kWhen);
+  store.Observe("にほん", "日本", 0.8, kWhen);
+  const auto original = store.Rows("にほん", "日本")->at("");
+
+  const auto dir = FreshBackupDirectory("azookey_dispatcher_backup_policies");
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"learning"};
+  export_request.destination_path = azookey::core::PathToUtf8(dir / "backup.zip");
+  auto reply = SendLearningData(dispatcher, 740, ipc::MessageType::ExportLearningData,
+                                ipc::BuildExportLearningDataRequest(export_request));
+  const auto exported = ipc::ParseExportLearningDataResponse(reply->payload_json);
+  ASSERT_TRUE(exported);
+  ASSERT_EQ(exported->status, "success") << exported->error.value_or("");
+
+  const auto import_with = [&](const char* policy, uint64_t id) {
+    ipc::ImportLearningDataRequest request;
+    request.source_path = export_request.destination_path;
+    request.stores = {"learning"};
+    request.conflict_resolution = policy;
+    const auto response = SendLearningData(dispatcher, id, ipc::MessageType::ImportLearningData,
+                                           ipc::BuildImportLearningDataRequest(request));
+    return ipc::ParseImportLearningDataResponse(response->payload_json);
+  };
+
+  // Round trip: forget, import, and every column comes back.
+  store.Forget("にほん", "日本");
+  auto imported = import_with("merge", 741);
+  ASSERT_TRUE(imported);
+  ASSERT_EQ(imported->status, "success") << imported->error.value_or("");
+  const auto restored = store.Rows("にほん", "日本")->at("");
+  EXPECT_DOUBLE_EQ(restored.weight, original.weight);
+  EXPECT_EQ(restored.commit_count, original.commit_count);
+  EXPECT_EQ(restored.last_updated_epoch_sec, original.last_updated_epoch_sec);
+
+  // merge adds, overwrite replaces, keep_both keeps the local row.
+  imported = import_with("merge", 742);
+  ASSERT_TRUE(imported);
+  EXPECT_EQ(imported->conflict_counts.at("learning"), 1u);
+  EXPECT_DOUBLE_EQ(store.Rows("にほん", "日本")->at("").weight, original.weight * 2);
+  imported = import_with("overwrite", 743);
+  ASSERT_TRUE(imported);
+  EXPECT_DOUBLE_EQ(store.Rows("にほん", "日本")->at("").weight, original.weight);
+  store.Observe("にほん", "日本", 0.8, kWhen);
+  imported = import_with("keep_both", 744);
+  ASSERT_TRUE(imported);
+  EXPECT_EQ(imported->skipped_counts.at("learning"), 1u);
+  EXPECT_DOUBLE_EQ(store.Rows("にほん", "日本")->at("").weight, original.weight + 0.8);
+  std::filesystem::remove_all(dir);
+}
+
+TEST_F(DispatcherTest, LearningDataImportRejectsBadArchivesWithoutCrashing) {
+  const auto dir = FreshBackupDirectory("azookey_dispatcher_bad_backups");
+  const auto import_from = [&](const std::filesystem::path& path, uint64_t id) {
+    ipc::ImportLearningDataRequest request;
+    request.source_path = azookey::core::PathToUtf8(path);
+    request.stores = {"learning"};
+    const auto response = SendLearningData(dispatcher, id, ipc::MessageType::ImportLearningData,
+                                           ipc::BuildImportLearningDataRequest(request));
+    return ipc::ParseImportLearningDataResponse(response->payload_json);
+  };
+  {
+    std::ofstream out(dir / "garbage.zip", std::ios::binary);
+    out << "PK not really a zip";
+  }
+  auto result = import_from(dir / "garbage.zip", 750);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->status, "error");
+  EXPECT_EQ(result->error, "not_archive");
+  result = import_from(dir / "missing.zip", 751);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->error, "source_missing");
+  result = import_from(dir / ".." / "escape.zip", 752);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->error, "invalid_path");
+  EXPECT_EQ(store.size(), 0u);
+  std::filesystem::remove_all(dir);
+}
+
+TEST_F(DispatcherTest, ForgettingReachesPairsOnlyInTheLegacyFile) {
+  RemoveLearningFiles(learning_path);
+  // Learned before v2: the pair is only in the M7 file.
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(learning_path, "にほん\t日本\t1 100\n",
+                                                    azookey::learning::test::Crypto()));
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.reading = "にほん";
+  forget.surface = "日本";
+  auto reply = SendLearningData(dispatcher, 760, ipc::MessageType::ForgetLearningEntry,
+                                ipc::BuildForgetLearningEntryRequest(forget));
+  auto forgot = ipc::ParseForgetLearningEntryResponse(reply->payload_json);
+  ASSERT_TRUE(forgot && forgot->ok);
+  EXPECT_TRUE(forgot->removed);
+  std::string legacy;
+  ASSERT_EQ(azookey::learning::ReadProtectedText(learning_path, azookey::learning::test::Crypto(),
+                                                 legacy),
+            azookey::learning::ProtectedFileSource::Encrypted);
+  EXPECT_EQ(legacy.find("日本"), std::string::npos);
+
+  // An unreadable M7 file fails the forget instead of claiming success.
+  {
+    std::ofstream out(azookey::learning::EncryptedPathFor(learning_path),
+                      std::ios::binary | std::ios::trunc);
+    out << "undecipherable";
+  }
+  store.Observe("にほん", "日本", 0.8, 1'700'000'000);
+  reply = SendLearningData(dispatcher, 761, ipc::MessageType::ForgetLearningEntry,
+                           ipc::BuildForgetLearningEntryRequest(forget));
+  forgot = ipc::ParseForgetLearningEntryResponse(reply->payload_json);
+  ASSERT_TRUE(forgot);
+  EXPECT_FALSE(forgot->ok);
+  EXPECT_EQ(forgot->error, "save_failed");
+  RemoveLearningFiles(learning_path);
 }

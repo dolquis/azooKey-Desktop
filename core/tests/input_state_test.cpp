@@ -648,6 +648,22 @@ TEST(InputStateTest, UnicodeInputBackspaceAndEmptyExit) {
   EXPECT_EQ(empty.HandleEvent(Ev(UserAction::Commit)).actions, (Actions{CancelMarkedText{}}));
 }
 
+// M18 acceptance: Ctrl+Shift+U, 30A1, Enter commits 「ァ」 (U+30A1, UTF-8 E3 82 A1).
+TEST(InputStateTest, CtrlShiftUThenHexAndEnterCommitsSmallKatakanaA) {
+  const auto start = MapUserAction('U', kModifierCtrl | kModifierShift, K::Idle);
+  ASSERT_TRUE(start.has_value());
+  EXPECT_EQ(start->action, UserAction::StartUnicodeInput);
+  const InputState typed = Feed(InputState{}.HandleEvent(*start).next, U"30A1");
+  EXPECT_EQ(typed.unicode_hex(), "30A1");
+
+  const auto enter = MapUserAction(vk::kReturn, 0, typed.kind());
+  ASSERT_TRUE(enter.has_value());
+  EXPECT_EQ(enter->action, UserAction::Commit);
+  const HandleResult committed = typed.HandleEvent(*enter);
+  EXPECT_EQ(committed.next.kind(), K::Idle);
+  EXPECT_EQ(committed.actions, (Actions{ReplaceMarkedText{"\xE3\x82\xA1"}, CommitMarkedText{}}));
+}
+
 TEST(InputStateTest, StartUnicodeInputFromCompositionCommitsReadingFirst) {
   const HandleResult result = Composing().HandleEvent(Ev(UserAction::StartUnicodeInput));
   EXPECT_EQ(result.next.kind(), K::UnicodeInput);

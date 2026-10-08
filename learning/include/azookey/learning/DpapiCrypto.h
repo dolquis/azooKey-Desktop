@@ -47,6 +47,12 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
                         const ByteCrypto& crypto,
                         std::chrono::milliseconds retry_budget = kTransientFileRetryBudget);
 
+// Runs WriteProtectedText's checks on plain_path without writing it: fails on
+// an orphan .bak, undecipherable ciphertext or unmigrated plaintext, and
+// finishes an interrupted migration. For a store moving to a new file, so
+// that the old file is never shadowed while it still needs attention.
+bool SettleProtectedFile(const std::filesystem::path& plain_path, const ByteCrypto& crypto);
+
 enum class SecretStatus { Ok, InvalidEncoding, CryptoUnavailable, CryptoFailure };
 
 struct SecretResult {

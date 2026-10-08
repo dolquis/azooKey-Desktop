@@ -10,6 +10,7 @@ target_link_libraries(azookey_host_paths
 add_library(azookey_host STATIC
   src/AiBackend.cpp
   src/AiHttp.cpp
+  src/BackupArchive.cpp
   src/DictionaryCandidateProvider.cpp
   src/Dispatcher.cpp
   src/HealthStateMachine.cpp
@@ -17,6 +18,7 @@ add_library(azookey_host STATIC
   src/HostStartup.cpp
   src/HttpDownloader.cpp
   src/InferenceEngine.cpp
+  src/LearningDataManager.cpp
   src/LookupCli.cpp
   src/NewWordsCli.cpp
   src/ModelCatalog.cpp
@@ -26,7 +28,9 @@ add_library(azookey_host STATIC
   src/RequestScheduler.cpp
   src/RewriterData.cpp
   src/SettingsStore.cpp
+  src/StoreOnlyZip.cpp
   src/UserDictCli.cpp
+  src/UserLearningScorer.cpp
   src/ZenzaiModelConverter.cpp
 )
 

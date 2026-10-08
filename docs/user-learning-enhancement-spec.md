@@ -44,19 +44,29 @@ tab → `\t`、LF → `\n`、CR → `\r` の順で表現し、ヘッダー付き
 backslash を literal として扱い、`C:\temp` のような既存 surface を `\t`
 escape と誤解しない。復旧不能な行は Host stderr に警告を出してスキップし、
 正常行の読み込みを継続する。
-M54 では以下のいずれかを選択する:
+M54 は TSV を拡張する（§3.2）。SQLite 化は将来の独立 M（M54-B など）で扱う（§3.3）。
 
-**Option A: TSV 拡張**（軽量・既定）
-- 新規列 `app_name` `event_type` `context_hash` を tab 末尾に追加
-- 旧形式は読み込み時に新列を空で補う
-- 既存ユーザーの学習データを壊さない
+v2 は M7 のファイルを置き換えず、同じディレクトリの別ファイルに保存する。
+`LearningStore` は M7 の位置（`learning.tsv`）で構築し、保存先は
+`LearningStoreV2PathFor` が返す `learning.v2.tsv`（DPAPI 保存では
+`learning.v2.tsv.enc`）とする。読み込みと移行の規則は次のとおり。
 
-**Option B: SQLite 化**（将来）
-- M54 v2 で実施。本 M54 では Option A を採用し、v2 で SQLite に移行
-  するパスを spec に残す
+- v2 ファイルがあれば v2 ファイルだけを読む。M7 ファイルは参照しない。
+- v2 ファイルが無ければ M7 ファイルを読み、各行を v2 の行へ変換する。
+  変換した行は dirty として扱い、次の flush で v2 ファイルへ書く。
+  M7 ファイルの中身は書き換えない。平文の M7 ファイルを DPAPI 形式へ移す
+  既存の移行（`learning-data-management-spec.md` の M34 の規約）だけは従来どおり行う。
+- M7 の行は `app_name`、`event_type`、`context_hash` を空、`accept_count` と
+  `reject_count` を 0 で補う。`commit_count` は `max(1, round(weight / 0.8))`
+  で推定する（0.8 は M7 の 1 確定あたりの weight）。weight が 0 の行は 0 とする。
+  推定しないと §6 の `log(1 + commit_count)` が 0 になり、移行した学習の効果が消える。
+- v2 ファイルが復号できないなど読み込みに失敗した場合は、空のストアで動作し、
+  保存を止める。M7 ファイルにも v2 ファイルにも書き込まない。
 
-本 M54 では **Option A** を採用する。SQLite 化は将来の独立 M（M54-B
-など）で扱う。
+M7 ファイルを残すのは、v2 を読めない旧版の Host へ戻したときの保護である。
+旧版は v2 の行を不正行として読み飛ばすため、同じファイルへ v2 を書くと、
+旧版の次回保存で学習が空になる。別ファイルにしておけば、旧版は M7 ファイルを読み、
+M54 導入後の学習だけを失う。M7 ファイルの削除は別の Issue で扱う。
 
 ### 3.1.1 M7 現行 LearningStore の永続化運用（DEV-11）
 
@@ -68,8 +78,8 @@ M7 の現行 `LearningStore` は TSV 全体を書き出すため、Host は確�
 |---|---:|---|
 | `learning_flush_every_n` | 8 | 未保存の observation が N 件に達したら `Save()` |
 | `learning_flush_interval_sec` | 5 | 最初の未保存 observation から T 秒経過したら timer で `Save()` |
-| `learning_max_records` | 10000 | 保持する `(reading, surface)` レコード上限。0 は上限なし |
-| `learning_min_weight` | 0.05 | `Score(now)` が閾値未満のレコードを GC。0 以下は閾値 GC 無効 |
+| `learning_max_records` | 10000 | 保持する `(reading, surface, app_name)` 行の上限。0 は上限なし |
+| `learning_min_weight` | 0.05 | `Score(now)`（組の app 行の合計）が閾値未満の `(reading, surface)` を、全 app 行ごと GC。0 以下は閾値 GC 無効。`reject_count` の合計が `accept_count` の合計を上回る組は GC しない（§6.2 のペナルティを保つため。拒否で weight が 0 になった組ほど消えやすいので除外が要る）。`learning_max_records` の上限は除外しない |
 
 Interval flush は次の observation を待たずに background timer で実行する。`FlushLearningStore()` は明示 flush API とし、Host の破棄時および `LoadModel`
 境界で呼ぶ。`Save()` 失敗時は Host stderr に error ログを出し、dirty と
@@ -86,28 +96,36 @@ burst につき最大 1 回に収まり、確定ごとの同期保存にはな�
 
 ### 3.2 TSV スキーマ（拡張）
 
+先頭行は `# azookey-learning-tsv escaped=1 version=2` とし、以降の 1 行が
+`(reading, surface, app_name)` の 1 組を表す。列はすべて tab で区切る。
+
 ```
-# learning.tsv (v2)
-# reading	surface	weight	last_updated_epoch_sec	commit_count	app_name	event_type	context_hash
-にほんご	日本語	4.2	1780000000	12	code.exe	commit	0xabcd1234
-こうしょう	交渉	2.8	1779999000	8	outlook.exe	commit	0xef567890
-こうしょう	校章	0.0	1779990000	0	outlook.exe	correction_reject	0xef567890
+# azookey-learning-tsv escaped=1 version=2
+にほんご	日本語	9.6	1780000000	12	0	0	code.exe	commit	0xabcd1234
+こうしょう	交渉	6.4	1779999000	8	1	0	outlook.exe	correction_accept	0xef567890
+こうしょう	校章	0	1779990000	0	0	2	outlook.exe	correction_reject	0xef567890
 ```
 
 | 列 | 内容 |
 |---|---|
 | `reading` | 読み（ひらがな） |
 | `surface` | 表記 |
-| `weight` | 重み（log(1 + commit_count) × recency × ...） |
-| `last_updated_epoch_sec` | epoch 秒（`LearningStore.cpp` の実装と一致。ミリ秒ではない） |
-| `commit_count` | 確定回数 |
-| `app_name` | 確定時の前面アプリ（M48）。空文字列 = グローバル |
-| `event_type` | `commit` / `correction_accept` / `correction_reject` / `typo_accept` / `typo_reject` |
-| `context_hash` | 左文脈 hash（M46 と整合） |
+| `weight` | §4 の各イベントが加減した値の累計。M7 の weight と同じ意味で、§14 の前方一致と M7 減衰の `Score()` が使う。`user_score`（§6）は保存せず、スコア時に回数列から求める |
+| `last_updated_epoch_sec` | 最後のイベントの epoch 秒（ミリ秒ではない） |
+| `commit_count` | 確定回数。`correction_accept` と `typo_accept` も確定として数える |
+| `accept_count` | `correction_accept` と `typo_accept` の累計（§6.2） |
+| `reject_count` | `correction_reject` と `typo_reject` の累計（§6.2） |
+| `app_name` | 確定時の前面アプリ（M48）を §6.1 の規則で正規化した値。空文字列 = グローバル |
+| `event_type` | 最後のイベント。`commit` / `correction_accept` / `correction_reject` / `typo_accept` / `typo_reject`。M7 から移行した行は空 |
+| `context_hash` | 最後のイベントの左文脈 hash（§8.1）。M7 から移行した行は空 |
 
-TSV の text 列には §3.1 と同じエスケープ規約を適用する。`reading` /
-`surface` だけでなく、将来追加する `app_name` などの文字列列も raw tab /
-raw 改行を含めない。
+TSV の text 列（`reading`、`surface`、`app_name`）には §3.1 と同じエスケープ規約を適用する。
+列数が 10 でない行、数値列が非負の有限値でない行、未知の `event_type`、
+`0x` と小文字 16 進 8 桁以外の `context_hash`、空の `reading` または `surface` は不正行として読み飛ばす。
+同じ組の重複行は先勝ちとする。
+
+`weight`、`commit_count`、`accept_count`、`reject_count` がすべて 0 の行は忘却済み（§7、
+`legacy-parity-spec.md` §7）を表し、保存時に書き出さない。
 
 ### 3.3 SQLite 化（v2 ロードマップ）
 
@@ -151,18 +169,24 @@ CREATE TABLE app_profiles_learning (
 
 ## 4. 学習イベント
 
-`Dispatcher` は以下のイベントを `LearningStore::Observe` 経由で記録
-する:
+Host は以下のイベントを `LearningStore::ObserveEvent` で記録する。
+`Observe(reading, surface, alpha, now)` は app と文脈の無い `commit`、
+`ObserveCorrection` は選んだ表記の `correction_accept` と拒否した表記の
+`correction_reject` の組であり、M7 の呼び出し元はそのまま使える。
+`alpha` は確定 1 回の weight（`learning_alpha`、既定 0.8）である。
 
-| イベント | 学習内容 |
-|---|---|
-| 候補確定（`commit`） | `commit_count += 1`、weight 更新 |
-| 即 Backspace（`commit` → 直後 `backspace`） | 直前候補を `correction_reject` で記録 |
-| 再変換（`recommit`） | 変更前を負例、変更後を正例 |
-| ユーザー辞書登録 | weight を最優先（M9） |
-| アプリ別確定 | `app_name` フィールドに記録 |
-| typo 補正候補の採用（M55） | `typo_accept` イベント、pattern 信頼度 +0.25 |
-| typo 補正候補の拒否（M55） | `typo_reject` イベント、pattern 信頼度 -0.45 |
+| イベント | 記録する event | weight | 回数 |
+|---|---|---|---|
+| 候補確定 | `commit` | `+alpha` | `commit_count += 1` |
+| 即 Backspace（確定の直後の取り消し） | 直前候補の `correction_reject` | `-alpha`（0 で止める） | `reject_count += 1` |
+| 再変換（`recommit`） | 変更前の `correction_reject` と変更後の `correction_accept` | `-alpha` / `+alpha` | `reject_count` / `commit_count` と `accept_count` |
+| typo 補正候補の採用（M55） | `typo_accept` | `+0.25` | `commit_count` と `accept_count` |
+| typo 補正候補の拒否（M55） | `typo_reject` | `-0.45`（0 で止める） | `reject_count += 1` |
+| アプリ別確定 | 上記の各 event を `app_name` の行に記録 | — | — |
+
+ユーザー辞書登録は `LearningStore` に記録しない。登録語は辞書層の優先度（M9）で
+候補の最上位に出る。どの event も `last_updated_epoch_sec`、`event_type`、
+`context_hash` をそのイベントの値で上書きする。
 
 ## 5. 時間減衰
 
@@ -192,6 +216,24 @@ half_life は category（M53 辞書層から取得）で切り替える。catego
 （辞書で多義）は **最長の half_life** を採用する（保守的に長く保持し、誤って
 速く忘れない）。
 
+M53 の `category_mask`（ビットの並びは `auto-word-registration-spec.md` §14.4 の表の順）から
+half_life への対応は `HalfLifeDaysForCategoryMask` が持ち、M53 の obsolete_penalty と同じ表を使う。
+
+| category_mask | half_life |
+|---|---:|
+| `technical` を含む | 120 日 |
+| `person_name`、`place_name`、`station_name`、`product_name`、`software`、`anime_game`、`company_org` のいずれかを含む | 90 日 |
+| `neologism` だけ | 60 日 |
+| それ以外（`general` と不明） | 30 日 |
+
+`event_type` が `typo_accept` / `typo_reject` の行は打ち間違えパターンとして扱い、
+category の half_life と 60 日の長い方を使う。一時的な話題語（14 日）に対応する
+category は現在の M53 の表に無く、値だけを予約する。
+
+本番の減衰は M52 の校正が済むまで M7 の `exp(-0.15 × days)` のままとする
+（§14.4）。§5 の half_life による減衰は `UserLearningScorer` の
+`LearningDecayMode::CategoryHalfLife` で有効になり、既定は `LearningDecayMode::Legacy` である（§7）。
+
 これらの half_life は初期値であり、M52 `user_adapt` カテゴリの学習前後比較
 （§11・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
 ただし「一般語 < 固有名詞・打ち間違え < 技術語」「一時話題が最短」という
@@ -213,6 +255,9 @@ user_score =
 | `recency_score` | §5 の時間減衰 |
 | `app_profile_weight` | M48 のプロファイル一致度（§6.1） |
 | `correction_penalty` | `correction_reject` 件数に応じ減衰（§6.2、値域 0.0〜1.0） |
+
+1 つの `(reading, surface)` が複数の `app_name` 行を持つ場合、`user_score` は
+行ごとにこの式で求めた値の和とする。
 
 `user_score` は乗算合成であり、各因子は **1.0 を中立（影響なし）** とする。
 これにより M48（app）/ M46（context）/ M55（typo）いずれかが未完了の段階でも、
@@ -250,8 +295,8 @@ correction_penalty = max(P_min, 1 - k_reject × net_reject)
 ```
 
 - `correction_reject_count` / `correction_accept_count` は当該
-  `(reading, surface[, app_name])` に対する `correction_reject` /
-  `correction_accept` イベント（§4）の累積数。`net_reject` を使うことで、
+  `(reading, surface, app_name)` 行の `reject_count` / `accept_count` 列（§3.2）であり、
+  `correction_*` と `typo_*` のイベント（§4）の累積数である。`net_reject` を使うことで、
   一度拒否された surface を後に再採用した場合（状況依存の拒否だった）に
   ペナルティが回復する。
 - 既定係数は `k_reject = 0.3` / `P_min = 0.0`。`net_reject = 1` で 0.7、
@@ -265,22 +310,30 @@ correction_penalty = max(P_min, 1 - k_reject × net_reject)
 
 ## 7. UserLearningScorer
 
-`inference-host/src/UserLearningScorer.cpp`（新規）として実装:
+`inference-host/src/UserLearningScorer.cpp` に実装する:
 
 ```cpp
 class UserLearningScorer {
-public:
-  // candidate に user_score を付与
-  void Score(const Context& ctx, std::span<Candidate> candidates);
-private:
-  double CalcUserScore(const LearningEntry& e, const Context& ctx);
-  double RecencyScore(int64_t last_used_at, std::string_view category);
-  double AppProfileWeight(std::string_view e_app, std::string_view ctx_app);
+ public:
+  UserLearningScorer(const learning::LearningStore* store, CategoryLookup category_lookup,
+                     UserLearningScorerConfig config = {});
+  // 各候補の score に user_score を足し、score の降順に安定ソートする
+  void Score(const UserLearningContext& context, std::span<core::Candidate> candidates) const;
+  double CalcUserScore(const UserLearningContext& context, const std::string& surface) const;
+  double RecencyScore(const learning::LearningRecord& record, uint16_t category_mask,
+                      uint64_t now_epoch_sec) const;
+  double AppProfileWeight(std::string_view record_app, std::string_view current_app) const;
+  double CorrectionPenalty(const learning::LearningRecord& record) const;
 };
 ```
 
-`Dispatcher` の rerank フェーズで呼び出す。失敗時（store 読み込み失敗等）
-は user_score を 0 として続行（fallback 必須）。
+- `UserLearningContext` は読み、前面アプリのプロセス名、現在時刻を持つ。
+- `CategoryLookup` は `(reading, surface)` の M53 `category_mask` を返す関数で、
+  Host は辞書層を引いて渡す。
+- `UserLearningScorerConfig` は減衰モード（§5）と §13 の係数を持つ。既定の減衰は `Legacy`。
+- 呼び出し位置は InferenceEngine の rerank フェーズ（現在 `Reranker` を通している箇所）である。
+- 失敗時（store が無い、category の参照で例外が出た、値が非有限になった）は
+  その候補の user_score を 0 として続行する。score が非有限の候補は並びの末尾に置く。
 
 ## 8. プライバシー
 
@@ -306,7 +359,11 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
   予約値 `0x00000000` とする。K は左文脈の語数を概ね 1〜2 文節に収める長さで、
   プライバシー（長い原文を復元させない）と弁別性のバランスから既定 8。
 - **正規化**: NFC 正規化のみ行い、大文字小文字や字種はそのまま保つ（日本語
-  文脈が主対象のため lowercase 化はしない）。
+  文脈が主対象のため lowercase 化はしない）。NFC は Windows の `NormalizeString`
+  で行う。Windows 以外のビルドはテスト用であり、入力をそのまま使う
+  （Host が受け取る文字列は Windows の TIP から来る）。不正な UTF-8 は正規化せずに使う。
+- **実装**: `learning/src/ContextHash.cpp` の `ContextHash`。SHA-256 は OS に依存しない
+  `learning/src/Sha256.cpp` を使う。
 - **役割**: `context_hash` は `user_score`（§6）の連続因子ではなく、学習
   レコードの **検索・バケット用キー**である。同一 `context_hash` のレコードに
   限定して優先採用する将来拡張（context 一致ボーナス `W_ctx_match`）の
@@ -319,11 +376,11 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 
 ## 9. 既存 M7 との関係
 
-- 既存 `LearningStore::Save` / `Load` は維持（TSV 列追加で後方互換）
-- 既存 `LearningStore::Observe` シグネチャは互換維持。新列は
-  `Observe(reading, surface, OptionalContext)` のように追加引数で対応
-- 既存 `Reranker` を `UserLearningScorer` にリネーム（または並存）。
-  旧 `Reranker` 名を 1 マイナーバージョン deprecation 後に削除
+- `LearningStore::Save` / `Load` の呼び出し方は変えない。保存先と移行は §3.1 に従う。
+- `LearningStore::Observe` / `ObserveCorrection` のシグネチャは互換を保つ。
+  app と文脈を持つイベントは `ObserveEvent(LearningObservation, alpha, now)` で記録する（§4）。
+- `Reranker` は `UserLearningScorer` と並存させる。InferenceEngine の rerank を
+  `UserLearningScorer` に切り替えた後、`Reranker` を 1 マイナーバージョンの deprecation を経て削除する。
 
 ## 10. テスト
 
@@ -392,10 +449,10 @@ M7 の `LearningStore` は `reading<TAB>surface` を 1 本の文字列キーへ�
 永続化の行スキーマ（§3.1 / §3.2）は変えない。
 §3〜§13 の M54 本体とは独立に着手できる。
 
-### 14.1 永続化形式を変更しない決定
+### 14.1 二層化は永続化形式を変えない
 
-`learning.tsv` の行形式と `# azookey-learning-tsv escaped=1` ヘッダーを変えない。
-二層化はメモリ内の索引だけに適用し、ファイル形式のバージョンは上げず、移行処理も設けない。
+二層化はメモリ内の索引だけに適用し、行形式には持ち込まない。
+永続化形式の版と移行は M54 の §3.1 / §3.2 だけが決める。
 
 読みごとのブロックへ入れ子化しない理由は 2 つある。
 1 行 1 レコードという形は §3.1 の破損耐性を支えており、入れ子にすると 1 行の破損が
@@ -403,25 +460,26 @@ M7 の `LearningStore` は `reading<TAB>surface` を 1 本の文字列キーへ�
 また §3.2 の列追加（`commit_count` / `app_name` / `event_type` / `context_hash`）は
 同じ行スキーマ上の拡張であり、入れ子形式へ替えると M54 v1 の拡張と衝突する。
 
-したがって旧形式からの移行は、ヘッダー無し M7 TSV の読み込み規則（§3.1）が
-そのまま残るだけで、二層化に固有の移行処理は発生しない。
+二層化に固有の移行処理は発生しない。
 
-**書き出し順**: `Save()` の出力順は、エスケープ後の読みと TAB と表記を連結した
-バイト列の昇順とする（現行実装と同じ）。
-二層構造から書き出す実装でも、この連結キーの昇順を再現する。
-読みと表記を独立に比較して並べると、制御文字を含む読みで現行と順序が入れ替わりうるため、
+**書き出し順**: `Save()` の出力順は、エスケープ後の読み、TAB、表記、TAB、`app_name` を連結した
+バイト列の昇順とする。
+多層構造から書き出す実装でも、この連結キーの昇順を再現する。
+各列を独立に比較して並べると、制御文字を含む読みで順序が入れ替わりうるため、
 比較対象は連結後のキーで固定する。
 
-**重複行**: 同一の `(reading, surface)` が複数行ある場合、先に現れた行を採用して
-後続を捨てる（現行 `Load()` の `emplace` と同じ先勝ち）。
-二層構造への組み替え後もこの規則を維持する。
+**重複行**: 同一の `(reading, surface, app_name)` が複数行ある場合、先に現れた行を採用して
+後続を捨てる（`Load()` の `emplace` による先勝ち）。
 
 ### 14.2 メモリ内データ構造
 
 ```cpp
-// reading -> surface -> record
-std::map<std::string, std::map<std::string, LearningRecord>> table_;
+// reading -> surface -> app_name -> record
+std::map<std::string, std::map<std::string, std::map<std::string, LearningRecord>>> table_;
 ```
+
+M54 の `app_name` 行（§3.2）は表記の下の 3 層目に置く。前方一致（§14.3）、
+`Score()`、`ReverseLookup()` は表記ごとに app 行の減衰後 weight を合計した値を使う。
 
 キーはエスケープ前の生の文字列とする。
 エスケープは §3.1 のとおり入出力の境界だけで行い、索引のキーには持ち込まない。
@@ -575,7 +633,7 @@ M15 payload に replacement や delete count を導入する必要もない。
 
 - `Observe` / `ObserveCorrection` / `Score` / `Prune` / `Save` / `Load` のシグネチャと
   意味を変えない。`LookupPrefix` を追加するだけとする。
-- `Prune` の `max_records` は現行どおり `(reading, surface)` の組の数を数える。
+- `Prune` の `max_records` は `(reading, surface, app_name)` の行数を数える。
   読みの種類数ではない。
 - `CandidateSource`（`core/include/azookey/core/Candidate.h`）へ `Learning` を末尾追加し、
   `inference-host/src/Dispatcher.cpp` の `SourceToWire` で `"learning"` へ写す。
@@ -597,7 +655,7 @@ M15 payload に replacement や delete count を導入する必要もない。
   （`min_score` で除外された分を含み、範囲外を含まない）。
 - `あ` の先頭 2 バイトのように文字の途中で切れた prefix で、当該読みがバイト前方一致でヒットする
   （§14.3 のバイト境界の契約）。
-- ヘッダー無しの M7 TSV を読み込んで保存すると、現行実装と同じ並びのバイト列になる（形式不変の回帰）。
+- ヘッダー無しの M7 TSV を読み込んで保存すると、§14.1 の連結キーの昇順で v2 形式の行が並ぶ。
 - 同一の `(reading, surface)` を含む重複行で先勝ちになる。
 - `ObserveCorrection` で weight が 0 になったレコードが前方一致の結果に出ない。
 - 予測供給で、学習枠の上限と表記重複の先勝ちと表示上限の切り詰めが順に効く。
@@ -610,7 +668,7 @@ M15 payload に replacement や delete count を導入する必要もない。
 
 - 読みの前方一致で学習履歴を引け、結果が §14.5 の順序で返る。
 - 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）。
-- `learning.tsv` の形式が変わらず、M7 形式のファイルをそのまま読み書きできる。
+- 二層化だけを理由に永続化形式が変わらない（形式の版は §3 が決める）。
 - 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給され、
   受理が §14.6.1 の追記動作で成立する。
 - 減衰後スコアが `exp(-0.15 * days)` のまま維持されている。

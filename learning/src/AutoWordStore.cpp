@@ -351,7 +351,30 @@ bool AutoWordStore::Load() {
     save_blocked_by_load_failure_ = true;
     return false;
   }
-  std::istringstream ifs(text);
+  ParseTextLocked(text);
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_load_failure_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
+  return true;
+}
+
+bool AutoWordStore::LoadText(std::string_view text) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  table_.clear();
+  return ParseTextLocked(text);
+}
+
+bool AutoWordStore::save_blocked() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return save_blocked_by_load_failure_;
+}
+
+bool AutoWordStore::ParseTextLocked(std::string_view text) {
+  bool all_valid = true;
+  std::istringstream ifs{std::string(text)};
 
   std::string line;
   size_t line_number = 0;
@@ -368,6 +391,7 @@ bool AutoWordStore::Load() {
                                               : std::getline(iss, fields[i], '\t'));
     }
     if (!complete) {
+      all_valid = false;
       LogMalformedLine(path_, line_number);
       continue;
     }
@@ -380,23 +404,30 @@ bool AutoWordStore::Load() {
         !ParseAutoWordState(fields[3], word.state) || !ParseUnsigned(fields[4], word.count) ||
         !ParseUnsigned(fields[5], word.first_seen_epoch) ||
         !ParseUnsigned(fields[6], word.last_seen_epoch) || !ParseScore(fields[7], word.score)) {
+      all_valid = false;
       LogMalformedLine(path_, line_number);
       continue;
     }
     table_[word.reading].emplace(word.surface, std::move(word));
   }
-  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
-    save_blocked_by_load_failure_ = true;
-    SecureErase(text);
-    return false;
-  }
-  SecureErase(text);
-  return true;
+  return all_valid;
 }
 
 bool AutoWordStore::Save() const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (save_blocked_by_load_failure_) return false;
+  auto text = SerializeTextLocked();
+  const bool saved = WriteProtectedText(path_, text, *crypto_);
+  SecureErase(text);
+  return saved;
+}
+
+std::string AutoWordStore::SerializeText() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return SerializeTextLocked();
+}
+
+std::string AutoWordStore::SerializeTextLocked() const {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kAutoWordStoreTsvHeader << '\n';
@@ -411,7 +442,55 @@ bool AutoWordStore::Save() const {
           << FormatScore(word.score) << '\n';
     }
   }
-  return WriteProtectedText(path_, out.str(), *crypto_);
+  return out.str();
+}
+
+std::vector<AutoWord> AutoWordStore::All() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<AutoWord> words;
+  for (const auto& [reading, surfaces] : table_) {
+    for (const auto& [surface, word] : surfaces) words.push_back(word);
+  }
+  return words;
+}
+
+ImportCounts AutoWordStore::Merge(const AutoWordStore& other, ImportConflictPolicy policy) {
+  if (&other == this) return {};
+  std::scoped_lock lock(mutex_, other.mutex_);
+  ImportCounts counts;
+  for (const auto& [reading, surfaces] : other.table_) {
+    for (const auto& [surface, word] : surfaces) {
+      const auto [it, inserted] = table_[reading].emplace(surface, word);
+      if (inserted) {
+        ++counts.imported;
+        continue;
+      }
+      ++counts.conflicts;
+      auto& existing = it->second;
+      switch (policy) {
+        case ImportConflictPolicy::Merge: {
+          // Counts add (learning-data-management-spec section 6). The local
+          // state wins so that an import never revives a word the user rejected.
+          const uint64_t sum = uint64_t{existing.count} + word.count;
+          existing.count = static_cast<uint32_t>(
+              std::min<uint64_t>(sum, (std::numeric_limits<uint32_t>::max)()));
+          existing.first_seen_epoch = std::min(existing.first_seen_epoch, word.first_seen_epoch);
+          existing.last_seen_epoch = std::max(existing.last_seen_epoch, word.last_seen_epoch);
+          existing.score = std::max(existing.score, word.score);
+          ++counts.imported;
+          break;
+        }
+        case ImportConflictPolicy::Overwrite:
+          existing = word;
+          ++counts.imported;
+          break;
+        case ImportConflictPolicy::KeepBoth:
+          ++counts.skipped;
+          break;
+      }
+    }
+  }
+  return counts;
 }
 
 }  // namespace azookey::learning

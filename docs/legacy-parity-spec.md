@@ -884,6 +884,12 @@ DisplayAttribute は通常の入力下線。
 - サロゲート領域 `0xD800`〜`0xDFFF` は拒否（beep）
 - それ以外は `wchar_t[2]` でサロゲートペアを生成
 
+### 6.4 実装の配置
+
+hex バッファと範囲チェックは `core::InputState` の Unicode 入力状態（`HandleUnicodeInput`）が持ち、
+確定は UTF-8 の `ReplaceMarkedText` と `CommitMarkedText` で出す。サロゲートペアは TIP が
+UTF-8 を UTF-16 へ変換するときに生じる。範囲外の beep は `PlayBeep` の `ClientAction` である。
+
 ## 7. 学習忘却 (M18-2)
 
 ### 7.1 トリガ
@@ -893,37 +899,32 @@ DisplayAttribute は通常の入力下線。
 
 ### 7.2 API
 
-`learning/include/azookey/learning/LearningStore.h` に追加：
+`learning/include/azookey/learning/LearningStore.h`:
 
 ```cpp
 class LearningStore {
 public:
-    // 既存
-    void Observe(reading, surface, ...);
-    double Score(reading, surface, now) const;
-
-    // 新規
-    void Forget(const std::string& reading,
-                const std::string& surface);
-    void ForgetMostRecent();  // 直近 commit を忘却
-    size_t Size() const;
+    // 組の全 app 行の weight と回数を 0 にする。行が無ければ false
+    bool Forget(const std::string& reading, const std::string& surface);
+    size_t size() const;
 };
 ```
 
-実装方針：
-- `Forget(reading, surface)`: エントリの weight を 0 にリセット
-  （エントリ自体は残す → 同じ reading/surface を再 commit した時の挙動を
-  「初回扱い」に揃える）
-- `ForgetMostRecent()`: 直近の Observe（メモリ内ログ）を逆操作
+- `Forget(reading, surface)`: 組の weight と回数（`user-learning-enhancement-spec.md` §3.2）を
+  0 にする。同じ組を再 commit すると初回として扱う。`Score()` は 0 を返し、前方一致にも出ない。
+- **直近 commit の忘却**: Ctrl+Shift+Backspace は直近 commit の組の weight を 0 にする。
+  `Observe` の逆操作（weight から 1 回分を引くこと）ではない。
+  Host は複数の TIP から確定を受けるため、「直近」は TIP ごとに決まる。
+  そこで TIP が、最後に送った学習観測の `(reading, surface)` の組を保持する。
+  Ctrl+Shift+Backspace では、その組を `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で
+  Host へ送る。`learning_allowed` が false で送らなかった確定は直近として扱わない。
+  `LearningStore` は直近の commit を持たず、`ForgetMostRecent` は置かない。
+- 変換器の学習バケットと自動単語登録（M36-A）への観測は取り消さない。
 
-`Reranker::Apply` は weight=0 を「LearningStore に存在しない」と同等に扱う
-ので、追加の修正は不要。
+### 7.3 永続化
 
-### 7.3 TSV 永続化
-
-既存の学習 TSV（未指定時は `%LOCALAPPDATA%\azooKey\data\learning.tsv`）の
-該当行を weight=0 で書き戻す。
-ファイルロックは既存の `Save()` フローに従う。
+`Forget` した組は次の保存で学習ファイルから除く
+（`learning-data-management-spec.md` §4.2）。ファイルロックは既存の `Save()` フローに従う。
 
 ## 8. デバッグウィンドウ (M18-3)
 
@@ -939,14 +940,22 @@ public:
 
 ### 8.2 実装
 
-- TIP プロセス内で circular buffer に保持
-- `WM_PAINT` で GDI 描画（Phase 6-C で DirectWrite に置換）
-- ログ取得は `OutputDebugString` と二重出力（既存の DebugView 経路も維持）
+- TIP プロセス内で circular buffer に保持（`tsf-tip/src/DebugLogBuffer.cpp`。
+  IPC ログと状態遷移ログをそれぞれ直近 50 件。Windows API に依存しない）
+- `WM_PAINT` で GDI 描画（`tsf-tip/src/DebugWindow.cpp`。Phase 6-C で DirectWrite に置換）
+- ログ取得は `OutputDebugString` と二重出力（既存の DebugView 経路も維持）。
+  二重出力するのは §8.3 のゲートを通した後の行だけである
 
 ### 8.3 セキュリティ
 
 - 入力中のキー押下や preedit 文字は表示しない（ログに漏れない）
-- Reading と候補テキストのみ。Magic Conversion のプロンプトは表示しない
+- 表示してよい本文は Reading と候補テキストだけ。Magic Conversion のプロンプトは表示しない
+- Reading と候補テキストも、M41 の本文ログゲート（`core::BodyLoggingAllowed`。
+  `dev-infrastructure-spec.md` の本文ログ規則）が開いているときだけ表示する。
+  ゲートは Debug ビルド、`AZOOKEY_LOG_BODY=1`、非 secure、詳細ログ許可のすべてを要する。
+- ゲートが閉じているときは本文を `<redacted len=N>`（N はコードポイント数）に置き換える。
+  ゲートの判定はログを記録する時点で行い、閉じていれば本文を保持しない。
+  後でゲートが開いても、secure 中の本文は表示されない。
 
 ## 9. マルチディスプレイ / カーソル追従 (M19)
 
@@ -1003,8 +1012,8 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | InputState 遷移 | `core/tests/input_state_test.cpp` | 全状態 × 全 UserAction の遷移網羅 |
 | ライブ変換 IPC | `ipc/tests/payloads_test.cpp` | `QueryLiveConversion` の build/parse |
 | カスタムローマ字 TSV | `core/tests/custom_romaji_test.cpp` | パース、重複、コメント、不正行 |
-| LearningStore::Forget | `learning/tests/learning_test.cpp` | Forget 後の Score=0、ForgetMostRecent |
-| Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
+| LearningStore::Forget | `learning/tests/learning_store_v2_test.cpp` | Forget 後の Score=0、保存で行が除かれること、再観測が初回扱いになること |
+| Unicode 入力 | `core/tests/input_state_test.cpp` | 範囲チェック、桁数上限、`30A1` の確定 |
 | 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
 | 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |

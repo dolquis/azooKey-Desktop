@@ -5,6 +5,8 @@ add_library(azookey_tsf_tip SHARED
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
+  src/DebugLogBuffer.cpp
+  src/DebugWindow.cpp
   src/PredictionWindow.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
@@ -54,6 +56,8 @@ if(AZOOKEY_BUILD_TESTS)
     src/CandidateListUIElement.cpp
     src/CandidateUiCoordinator.cpp
     src/CandidateWindow.cpp
+    src/DebugLogBuffer.cpp
+    src/DebugWindow.cpp
     src/PredictionWindow.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
@@ -148,6 +152,11 @@ if(AZOOKEY_BUILD_TESTS)
   target_link_libraries(tsf_tip_local_settings_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
   azookey_discover_tests(tsf_tip_local_settings_tests TIMEOUT 30)
+  add_executable(tsf_tip_debug_log_buffer_tests src/DebugLogBuffer.cpp tests/debug_log_buffer_test.cpp)
+  target_include_directories(tsf_tip_debug_log_buffer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(tsf_tip_debug_log_buffer_tests PRIVATE
+    azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_debug_log_buffer_tests TIMEOUT 30)
   add_executable(tsf_tip_runtime_log_tests src/TipRuntimeLog.cpp tests/runtime_log_test.cpp)
   target_include_directories(tsf_tip_runtime_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_definitions(tsf_tip_runtime_log_tests PRIVATE

@@ -1,5 +1,6 @@
 add_library(azookey_core STATIC
   src/AppProfileResolver.cpp
+  src/BodyLogGate.cpp
   src/BracketPairing.cpp
   src/BracketSettings.cpp
   src/BracketTable.cpp

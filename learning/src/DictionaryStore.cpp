@@ -5,6 +5,8 @@
 #include <limits>
 #include <tuple>
 
+#include "azookey/learning/LearningDecay.h"
+
 namespace azookey::learning {
 namespace {
 size_t IndexOf(LayerId layer) { return static_cast<size_t>(layer); }
@@ -25,10 +27,7 @@ double Score(const DictionaryEntry& entry, const LookupContext& ctx) {
   double penalty = 0;
   if (entry.source >= LayerId::User && entry.last_used && ctx.now_epoch_sec > entry.last_used) {
     const double days = static_cast<double>(ctx.now_epoch_sec - entry.last_used) / 86400.0;
-    const double half_life = entry.category_mask & (1U << 8)   ? 120.0
-                             : entry.category_mask & 254U      ? 90.0
-                             : entry.category_mask & (1U << 9) ? 60.0
-                                                               : 30.0;
+    const double half_life = HalfLifeDaysForCategoryMask(entry.category_mask);
     penalty = .10 * (1.0 - std::exp2(-days / half_life));
   }
   const double bonus = entry.kind == core::MatchKind::Exact   ? .10

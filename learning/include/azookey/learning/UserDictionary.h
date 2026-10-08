@@ -5,9 +5,11 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/ImportConflictPolicy.h"
 
 namespace azookey::learning {
 
@@ -72,6 +74,17 @@ class UserDictionary {
   size_t Size() const;
   uint64_t revision() const noexcept { return revision_; }
   void Clear();
+
+  // The JSON text, as Save writes it before encryption.
+  std::string SerializeText() const;
+  // Replaces the contents with words parsed from `text`; touches no file.
+  // Returns false (contents unchanged) when the JSON is not a dictionary.
+  bool LoadText(std::string_view text);
+  // True after a corrupt or undecipherable Load: Save refuses to run.
+  bool save_blocked() const { return save_blocked_by_corrupt_load_; }
+  // Adds every word of `other`. Only Overwrite replaces a word already
+  // present under the same reading.
+  ImportCounts Merge(const UserDictionary& other, ImportConflictPolicy policy);
 
   const std::filesystem::path& path() const { return path_; }
   std::filesystem::path storage_path() const { return EncryptedPathFor(path_); }

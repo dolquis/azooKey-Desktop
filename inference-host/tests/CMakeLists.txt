@@ -116,3 +116,27 @@ if(WIN32)
   set_tests_properties(host_cli_unicode_argv PROPERTIES TIMEOUT 60)
 endif()
 set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS azookey_inference_host)
+
+add_executable(host_store_only_zip_tests store_only_zip_test.cpp)
+target_link_libraries(host_store_only_zip_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_store_only_zip_tests)
+
+add_executable(host_backup_archive_tests backup_archive_test.cpp)
+target_link_libraries(host_backup_archive_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_backup_archive_tests)
+
+add_executable(host_learning_data_manager_tests learning_data_manager_test.cpp)
+target_link_libraries(host_learning_data_manager_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_learning_data_manager_tests)
+
+add_executable(host_user_learning_scorer_tests user_learning_scorer_test.cpp)
+target_link_libraries(host_user_learning_scorer_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_user_learning_scorer_tests)

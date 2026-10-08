@@ -81,15 +81,24 @@ class ScopedTempDirectory {
   static inline std::atomic<uint64_t> next_id_{0};
 };
 
-// The constructor still accepts the legacy path, while persistence uses .enc.
-// Return the removal status of .enc for tests that assert a prior flush.
+// Where a LearningStore constructed with `path` saves (the v2 file, .enc).
+std::filesystem::path StoredLearningPath(const std::filesystem::path& path) {
+  return EncryptedPathFor(azookey::learning::LearningStoreV2PathFor(path));
+}
+
+// The constructor still accepts the legacy path, while persistence uses .enc
+// (and, for the learning store, the v2 file beside it). Return the removal
+// status of the saved file for tests that assert a prior flush.
 int RemoveProtectedStoreFile(const std::filesystem::path& path) {
   std::error_code ec;
-  const bool removed = std::filesystem::remove(EncryptedPathFor(path), ec);
-  std::filesystem::remove(path, ec);
-  auto backup = path;
-  backup += ".bak";
-  std::filesystem::remove(backup, ec);
+  bool removed = false;
+  for (const auto& base : {path, azookey::learning::LearningStoreV2PathFor(path)}) {
+    removed = std::filesystem::remove(EncryptedPathFor(base), ec) || removed;
+    std::filesystem::remove(base, ec);
+    auto backup = base;
+    backup += ".bak";
+    std::filesystem::remove(backup, ec);
+  }
   return removed ? 0 : -1;
 }
 
@@ -438,15 +447,15 @@ TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 2);
   engine->CommitObservation("reading", "surface", kNowBase + 3);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_TRUE(store.dirty());
 
   engine->CommitObservation("reading", "surface", kNowBase + 4);
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
@@ -578,14 +587,14 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("initial", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
   engine->CommitObservation("reading", "surface", kNowBase + 14);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
 
   engine->CommitObservation("reading", "surface", kNowBase + 15);
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
@@ -605,11 +614,11 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("initial", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
-  EXPECT_TRUE(WaitForFileExists(EncryptedPathFor(path), std::chrono::milliseconds(2500)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
+  EXPECT_TRUE(WaitForFileExists(StoredLearningPath(path), std::chrono::milliseconds(2500)));
 
   // The flush renames a complete temp file into place, so a failed Load here
   // is an open that lost to another handle on the fresh file (the rename
@@ -641,12 +650,12 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("pending", "observation", kNowBase + 2);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_TRUE(engine->FlushLearningStore());
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
@@ -667,18 +676,18 @@ TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("a", "first", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("b", "second", kNowBase + 2);
   engine->CommitObservation("b", "second", kNowBase + 3);
   EXPECT_EQ(store.size(), 2u);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
 
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(store.size(), 1u);
   EXPECT_EQ(store.Score("a", "first", kNowBase + 3), 0.0);
   EXPECT_GT(store.Score("b", "second", kNowBase + 3), 0.0);
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
 
   engine.reset();
   RemoveProtectedStoreFile(path);
@@ -689,7 +698,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
       std::filesystem::temp_directory_path() / "azookey_host_engine_learning_save_failure";
   const auto blocked_path = root / "learning-as-directory.tsv";
   std::filesystem::remove_all(root);
-  std::filesystem::create_directories(blocked_path);
+  std::filesystem::create_directories(azookey::learning::LearningStoreV2PathFor(blocked_path));
   azookey::learning::LearningStore store(blocked_path.string(), &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -707,7 +716,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
   std::filesystem::remove_all(root);
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_FALSE(store.dirty());
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(blocked_path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(blocked_path)));
 
   engine.reset();
   std::filesystem::remove_all(root);
@@ -726,7 +735,7 @@ TEST(InferenceEngineTest, ShutdownFlushRecoversAfterTemporaryReplaceBlocker) {
   engine->CommitObservation("first", "saved", kNowBase + 1);
   engine->CommitObservation("pending", "observation", kNowBase + 2);
   ASSERT_TRUE(store.dirty());
-  const auto encrypted = EncryptedPathFor(path);
+  const auto encrypted = StoredLearningPath(path);
   HANDLE reader = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   ASSERT_NE(reader, INVALID_HANDLE_VALUE);
@@ -754,7 +763,7 @@ TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
   auto engine = MakeEngine(store, cfg);
   engine->CommitObservation("first", "saved", kNowBase + 1);
   ASSERT_FALSE(store.dirty());
-  const auto encrypted = EncryptedPathFor(path);
+  const auto encrypted = StoredLearningPath(path);
   HANDLE reader = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   ASSERT_NE(reader, INVALID_HANDLE_VALUE);
@@ -786,7 +795,7 @@ TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicit
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_FALSE(store.dirty());
 
   azookey::learning::LearningStore loaded(path, &azookey::learning::test::Crypto());
@@ -810,11 +819,11 @@ TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("first", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_TRUE(std::filesystem::exists(StoredLearningPath(path)));
   ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
 
   engine->CommitObservation("second", "pending", kNowBase + 2);
-  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(StoredLearningPath(path)));
   EXPECT_TRUE(store.dirty());
 
   engine.reset();

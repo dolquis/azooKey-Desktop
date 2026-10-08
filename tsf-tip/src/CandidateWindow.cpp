@@ -14,6 +14,7 @@
 #include <string>
 
 #include "CandidateSelection.h"
+#include "azookey/tsf/CaretRectResolver.h"
 
 namespace azookey::tsf {
 
@@ -286,6 +287,40 @@ CandidateWindow::ColumnLayout CandidateWindow::ComputeColumnLayout(int max_surfa
 }
 
 // static
+RECT CandidateWindow::ComputePlacement(POINT anchor, RECT work_area, int width, int height,
+                                       int caret_gap) {
+  width = std::max(width, 0);
+  height = std::max(height, 0);
+  if (work_area.right <= work_area.left || work_area.bottom <= work_area.top) {
+    return {anchor.x, anchor.y, anchor.x + width, anchor.y + height};
+  }
+  width = std::min(width, static_cast<int>(work_area.right - work_area.left));
+  int x = std::clamp(static_cast<int>(anchor.x), static_cast<int>(work_area.left),
+                     static_cast<int>(work_area.right) - width);
+  int y = anchor.y;
+  // The anchor is the caret's bottom-left; the gap stands in for the caret height.
+  if (y + height > work_area.bottom) y = anchor.y - height - caret_gap;
+  y = std::max(y, static_cast<int>(work_area.top));
+  return {x, y, x + width, y + height};
+}
+
+// static
+RECT CandidateWindow::ComputeDetailsPlacement(RECT candidate, RECT work_area, int width,
+                                              int height) {
+  width = std::clamp(width, 0, static_cast<int>(std::max(0L, work_area.right - work_area.left)));
+  height = std::clamp(height, 0, static_cast<int>(std::max(0L, work_area.bottom - work_area.top)));
+  const int x = std::clamp(
+      static_cast<int>(candidate.left), static_cast<int>(work_area.left),
+      std::max(static_cast<int>(work_area.left), static_cast<int>(work_area.right) - width));
+  int y = static_cast<int>(candidate.bottom);
+  if (y + height > work_area.bottom) y = static_cast<int>(candidate.top) - height;
+  y = std::clamp(
+      y, static_cast<int>(work_area.top),
+      std::max(static_cast<int>(work_area.top), static_cast<int>(work_area.bottom) - height));
+  return {x, y, x + width, y + height};
+}
+
+// static
 UINT CandidateWindow::DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd) {
   UINT dpi_x = 0;
   UINT dpi_y = 0;
@@ -407,8 +442,8 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
   emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
-  HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-  UpdateDpi(DpiForMonitor(mon, hwnd_));
+  const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), pt);
+  UpdateDpi(DpiForMonitor(monitor.monitor, hwnd_));
 
   // Measure maximum text width using the window's DC.
   HDC hdc = GetDC(hwnd_);
@@ -470,20 +505,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
     height += HealthBannerHeight();
   }
 
-  // Keep window on-screen: flip above caret if it would overflow below.
-  MONITORINFO mi{};
-  mi.cbSize = sizeof(mi);
-  GetMonitorInfoW(mon, &mi);
-  width = std::min(width, static_cast<int>(mi.rcWork.right - mi.rcWork.left));
-  if (pt.x + width > mi.rcWork.right) pt.x = mi.rcWork.right - width;
-  if (pt.x < mi.rcWork.left) pt.x = mi.rcWork.left;
-  if (pt.y + height > mi.rcWork.bottom) {
-    // Estimate caret height and flip to open upward when it would overflow.
-    pt.y = pt.y - height - metrics_.caret_gap;
-  }
-  if (pt.y < mi.rcWork.top) pt.y = mi.rcWork.top;
-
-  SetWindowPos(hwnd_, HWND_TOPMOST, pt.x, pt.y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  const RECT placement = ComputePlacement(pt, monitor.work_area, width, height, metrics_.caret_gap);
+  SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placement.right - placement.left,
+               placement.bottom - placement.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
   InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
@@ -582,26 +606,16 @@ void CandidateWindow::ShowDetails() {
 
   RECT candidate_rc{};
   GetWindowRect(hwnd_, &candidate_rc);
-  HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-  MONITORINFO monitor_info{};
-  monitor_info.cbSize = sizeof(monitor_info);
-  if (!GetMonitorInfoW(monitor, &monitor_info)) return;
-  const int width = std::min(ScaleForDpi(480, dpi_), static_cast<int>(monitor_info.rcWork.right -
-                                                                      monitor_info.rcWork.left));
-  const int height = std::min(ScaleForDpi(240, dpi_), static_cast<int>(monitor_info.rcWork.bottom -
-                                                                       monitor_info.rcWork.top));
-  int x =
-      std::clamp(static_cast<int>(candidate_rc.left), static_cast<int>(monitor_info.rcWork.left),
-                 std::max(static_cast<int>(monitor_info.rcWork.left),
-                          static_cast<int>(monitor_info.rcWork.right) - width));
-  int y = static_cast<int>(candidate_rc.bottom);
-  if (y + height > monitor_info.rcWork.bottom) y = static_cast<int>(candidate_rc.top) - height;
-  y = std::clamp(y, static_cast<int>(monitor_info.rcWork.top),
-                 std::max(static_cast<int>(monitor_info.rcWork.top),
-                          static_cast<int>(monitor_info.rcWork.bottom) - height));
-  details_hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                  kDetailsClassName, nullptr, WS_POPUP | WS_BORDER, x, y, width,
-                                  height, hwnd_, nullptr, GetTipModuleHandle(), this);
+  const MonitorWorkArea monitor = ResolveMonitorWorkArea(
+      DefaultMonitorWin32Api(), {candidate_rc.left + (candidate_rc.right - candidate_rc.left) / 2,
+                                 candidate_rc.top + (candidate_rc.bottom - candidate_rc.top) / 2});
+  if (monitor.work_area.right <= monitor.work_area.left) return;
+  const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area,
+                                                 ScaleForDpi(480, dpi_), ScaleForDpi(240, dpi_));
+  details_hwnd_ = CreateWindowExW(
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kDetailsClassName, nullptr,
+      WS_POPUP | WS_BORDER, placement.left, placement.top, placement.right - placement.left,
+      placement.bottom - placement.top, hwnd_, nullptr, GetTipModuleHandle(), this);
   if (details_hwnd_) ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
 }
 

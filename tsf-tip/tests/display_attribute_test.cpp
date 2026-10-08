@@ -8,16 +8,27 @@
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
 
-void ExpectInputAttributeGuid(ITfDisplayAttributeInfo* info) {
+constexpr ULONG kAttributeCount = azookey::tsf::kDisplayAttributeKindCount;
+
+void ExpectAttributeGuid(ITfDisplayAttributeInfo* info, const GUID& expected) {
   ASSERT_NE(info, nullptr);
   GUID guid{};
   ASSERT_EQ(info->GetGUID(&guid), S_OK);
-  EXPECT_TRUE(IsEqualGUID(guid, azookey::tsf::kInputAttributeGuid));
+  EXPECT_TRUE(IsEqualGUID(guid, expected));
+}
+
+void ExpectInputAttributeGuid(ITfDisplayAttributeInfo* info) {
+  ExpectAttributeGuid(info, azookey::tsf::kInputAttributeGuid);
 }
 
 void ExpectSameColor(const TF_DA_COLOR& lhs, const TF_DA_COLOR& rhs) {
@@ -84,13 +95,20 @@ TEST(TsfTipDisplayAttributeTest, TextServiceEnumeratesInputAttributeAndResets) {
   ASSERT_EQ(service.EnumDisplayAttributeInfo(&enumerator), S_OK);
   ASSERT_NE(enumerator, nullptr);
 
-  ITfDisplayAttributeInfo* infos[2] = {};
+  // The input underline comes first so a single-attribute consumer still finds it.
+  ITfDisplayAttributeInfo* infos[kAttributeCount + 1] = {};
   ULONG fetched = 0;
-  EXPECT_EQ(enumerator->Next(2, infos, &fetched), S_FALSE);
-  EXPECT_EQ(fetched, 1u);
+  EXPECT_EQ(enumerator->Next(kAttributeCount + 1, infos, &fetched), S_FALSE);
+  EXPECT_EQ(fetched, kAttributeCount);
   ASSERT_NO_FATAL_FAILURE(ExpectInputAttributeGuid(infos[0]));
-  EXPECT_EQ(infos[1], nullptr);
-  infos[0]->Release();
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectAttributeGuid(infos[1], azookey::tsf::kFocusedSegmentAttributeGuid));
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectAttributeGuid(infos[2], azookey::tsf::kConvertedSegmentAttributeGuid));
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectAttributeGuid(infos[3], azookey::tsf::kUnconvertedSegmentAttributeGuid));
+  EXPECT_EQ(infos[kAttributeCount], nullptr);
+  for (ULONG i = 0; i < kAttributeCount; ++i) infos[i]->Release();
 
   fetched = 999;
   infos[0] = nullptr;
@@ -116,7 +134,7 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorSkipsToEnd) {
   ASSERT_EQ(service.EnumDisplayAttributeInfo(&enumerator), S_OK);
   ASSERT_NE(enumerator, nullptr);
 
-  EXPECT_EQ(enumerator->Skip(1), S_OK);
+  EXPECT_EQ(enumerator->Skip(kAttributeCount), S_OK);
 
   ITfDisplayAttributeInfo* info = nullptr;
   ULONG fetched = 999;
@@ -145,10 +163,11 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorCloneKeepsCurrentPosi
   ASSERT_NE(clone, nullptr);
 
   info = nullptr;
-  fetched = 999;
-  EXPECT_EQ(clone->Next(1, &info, &fetched), S_FALSE);
-  EXPECT_EQ(fetched, 0u);
-  EXPECT_EQ(info, nullptr);
+  fetched = 0;
+  ASSERT_EQ(clone->Next(1, &info, &fetched), S_OK);
+  EXPECT_EQ(fetched, 1u);
+  ASSERT_NO_FATAL_FAILURE(ExpectAttributeGuid(info, azookey::tsf::kFocusedSegmentAttributeGuid));
+  info->Release();
 
   clone->Release();
   enumerator->Release();
@@ -198,23 +217,23 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorCloneAdvancesIndepend
   ASSERT_NE(clone, nullptr);
 
   // Draining the clone must not move the source cursor.
-  ITfDisplayAttributeInfo* info = nullptr;
+  ITfDisplayAttributeInfo* infos[kAttributeCount] = {};
   ULONG fetched = 0;
-  ASSERT_EQ(clone->Next(1, &info, &fetched), S_OK);
-  EXPECT_EQ(fetched, 1u);
-  info->Release();
+  ASSERT_EQ(clone->Next(kAttributeCount, infos, &fetched), S_OK);
+  EXPECT_EQ(fetched, kAttributeCount);
+  for (auto* drained : infos) drained->Release();
 
-  info = nullptr;
+  ITfDisplayAttributeInfo* info = nullptr;
   fetched = 999;
   EXPECT_EQ(clone->Next(1, &info, &fetched), S_FALSE);
   EXPECT_EQ(fetched, 0u);
   EXPECT_EQ(info, nullptr);
 
   fetched = 0;
-  ASSERT_EQ(enumerator->Next(1, &info, &fetched), S_OK);
-  EXPECT_EQ(fetched, 1u);
-  ASSERT_NO_FATAL_FAILURE(ExpectInputAttributeGuid(info));
-  info->Release();
+  ASSERT_EQ(enumerator->Next(kAttributeCount, infos, &fetched), S_OK);
+  EXPECT_EQ(fetched, kAttributeCount);
+  ASSERT_NO_FATAL_FAILURE(ExpectInputAttributeGuid(infos[0]));
+  for (auto* drained : infos) drained->Release();
 
   // Resetting the clone must not rewind the exhausted source either.
   ASSERT_EQ(clone->Reset(), S_OK);
@@ -235,7 +254,7 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorClonePreservesSkipOff
   ASSERT_EQ(service.EnumDisplayAttributeInfo(&enumerator), S_OK);
   ASSERT_NE(enumerator, nullptr);
 
-  ASSERT_EQ(enumerator->Skip(1), S_OK);
+  ASSERT_EQ(enumerator->Skip(kAttributeCount), S_OK);
 
   IEnumTfDisplayAttributeInfo* clone = nullptr;
   ASSERT_EQ(enumerator->Clone(&clone), S_OK);
@@ -288,7 +307,7 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeAllocationFailuresReturnOutOfMe
 }
 
 TEST(TsfTipDisplayAttributeTest, InputAttributeInfoReturnsUnderlineDefinition) {
-  azookey::tsf::InputDisplayAttributeInfo info;
+  azookey::tsf::DisplayAttributeInfo info;
 
   GUID guid{};
   EXPECT_EQ(info.GetGUID(&guid), S_OK);
@@ -314,4 +333,255 @@ TEST(TsfTipDisplayAttributeTest, InputAttributeInfoReturnsUnderlineDefinition) {
   EXPECT_EQ(info.GetAttributeInfo(nullptr), E_INVALIDARG);
   EXPECT_EQ(info.SetAttributeInfo(&attr), E_NOTIMPL);
   EXPECT_EQ(info.Reset(), S_OK);
+}
+
+namespace {
+
+using azookey::tsf::DisplayAttributeKind;
+using azookey::tsf::DisplayedSegment;
+using azookey::tsf::SegmentAttributeRange;
+
+// Range over [start, end) of a composition of `limit` characters. Clones are
+// owned by the composition so the test can inspect them afterwards.
+class OffsetRange final : public ITfRange {
+ public:
+  OffsetRange(LONG start, LONG end, LONG limit, std::vector<std::unique_ptr<OffsetRange>>* clones)
+      : start_(start), end_(end), limit_(limit), clones_(clones) {}
+
+  STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
+    if (!object) return E_POINTER;
+    *object = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfRange) return E_NOINTERFACE;
+    *object = static_cast<ITfRange*>(this);
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 1; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetText(TfEditCookie, DWORD, WCHAR*, ULONG, ULONG*) override { return E_NOTIMPL; }
+  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR*, LONG) override { return E_NOTIMPL; }
+  STDMETHODIMP GetFormattedText(TfEditCookie, IDataObject**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetEmbedded(TfEditCookie, REFGUID, REFIID, IUnknown**) override { return E_NOTIMPL; }
+  STDMETHODIMP InsertEmbedded(TfEditCookie, DWORD, IDataObject*) override { return E_NOTIMPL; }
+  STDMETHODIMP ShiftStart(TfEditCookie, LONG count, LONG* shifted, const TF_HALTCOND*) override {
+    const LONG target = std::clamp(start_ + count, 0L, limit_);
+    if (shifted) *shifted = target - start_;
+    start_ = target;
+    if (end_ < start_) end_ = start_;
+    return S_OK;
+  }
+  STDMETHODIMP ShiftEnd(TfEditCookie, LONG count, LONG* shifted, const TF_HALTCOND*) override {
+    if (fail_shift) return E_FAIL;
+    const LONG target = std::clamp(end_ + count, 0L, limit_);
+    if (shifted) *shifted = target - end_;
+    end_ = target;
+    if (start_ > end_) start_ = end_;
+    return S_OK;
+  }
+  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
+  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
+  STDMETHODIMP ShiftStartRegion(TfEditCookie, TfShiftDir, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP ShiftEndRegion(TfEditCookie, TfShiftDir, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP IsEmpty(TfEditCookie, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP Collapse(TfEditCookie, TfAnchor anchor) override {
+    if (anchor == TF_ANCHOR_START)
+      end_ = start_;
+    else
+      start_ = end_;
+    return S_OK;
+  }
+  STDMETHODIMP IsEqualStart(TfEditCookie, ITfRange*, TfAnchor, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP IsEqualEnd(TfEditCookie, ITfRange*, TfAnchor, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP CompareStart(TfEditCookie, ITfRange*, TfAnchor, LONG*) override { return E_NOTIMPL; }
+  STDMETHODIMP CompareEnd(TfEditCookie, ITfRange*, TfAnchor, LONG*) override { return E_NOTIMPL; }
+  STDMETHODIMP AdjustForInsert(TfEditCookie, ULONG, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetGravity(TfGravity*, TfGravity*) override { return E_NOTIMPL; }
+  STDMETHODIMP SetGravity(TfEditCookie, TfGravity, TfGravity) override { return E_NOTIMPL; }
+  STDMETHODIMP Clone(ITfRange** clone) override {
+    if (!clone) return E_POINTER;
+    clones_->push_back(std::make_unique<OffsetRange>(start_, end_, limit_, clones_));
+    clones_->back()->fail_shift = fail_shift_in_clones;
+    *clone = clones_->back().get();
+    return S_OK;
+  }
+  STDMETHODIMP GetContext(ITfContext**) override { return E_NOTIMPL; }
+
+  LONG start() const { return start_; }
+  LONG end() const { return end_; }
+  bool fail_shift{false};
+  bool fail_shift_in_clones{false};
+
+ private:
+  LONG start_;
+  LONG end_;
+  LONG limit_;
+  std::vector<std::unique_ptr<OffsetRange>>* clones_;
+};
+
+struct AttributeWrite {
+  LONG start;
+  LONG end;
+  TfGuidAtom atom;
+};
+
+class RecordingProperty final : public ITfProperty {
+ public:
+  STDMETHODIMP QueryInterface(REFIID, void** object) override {
+    if (object) *object = nullptr;
+    return E_NOINTERFACE;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 1; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetType(GUID*) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumRanges(TfEditCookie, IEnumTfRanges**, ITfRange*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetValue(TfEditCookie, ITfRange*, VARIANT*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetContext(ITfContext**) override { return E_NOTIMPL; }
+  STDMETHODIMP FindRange(TfEditCookie, ITfRange*, ITfRange**, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetValueStore(TfEditCookie, ITfRange*, ITfPropertyStore*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetValue(TfEditCookie, ITfRange* range, const VARIANT* value) override {
+    auto* offsets = static_cast<OffsetRange*>(range);
+    if (value->vt != VT_I4) return E_INVALIDARG;
+    writes.push_back({offsets->start(), offsets->end(), static_cast<TfGuidAtom>(value->lVal)});
+    return S_OK;
+  }
+  STDMETHODIMP Clear(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+
+  std::vector<AttributeWrite> writes;
+};
+
+constexpr TfGuidAtom kAtoms[azookey::tsf::kDisplayAttributeKindCount] = {11, 12, 13, 14};
+
+}  // namespace
+
+TEST(TsfTipDisplayAttributeTest, SegmentAttributesDifferByAttributeAndUnderlineOnly) {
+  const auto focused =
+      azookey::tsf::DisplayAttributeDefinition(DisplayAttributeKind::FocusedSegment);
+  const auto converted =
+      azookey::tsf::DisplayAttributeDefinition(DisplayAttributeKind::ConvertedSegment);
+  const auto unconverted =
+      azookey::tsf::DisplayAttributeDefinition(DisplayAttributeKind::UnconvertedSegment);
+
+  EXPECT_EQ(focused.bAttr, TF_ATTR_TARGET_CONVERTED);
+  EXPECT_EQ(focused.lsStyle, TF_LS_SOLID);
+  EXPECT_EQ(focused.fBoldLine, TRUE);
+  EXPECT_EQ(converted.bAttr, TF_ATTR_CONVERTED);
+  EXPECT_EQ(converted.lsStyle, TF_LS_SOLID);
+  EXPECT_EQ(converted.fBoldLine, FALSE);
+  EXPECT_EQ(unconverted.bAttr, TF_ATTR_INPUT);
+  EXPECT_EQ(unconverted.lsStyle, TF_LS_DOT);
+  for (const auto& attr : {focused, converted, unconverted}) {
+    EXPECT_EQ(attr.crText.type, TF_CT_NONE);
+    EXPECT_EQ(attr.crBk.type, TF_CT_NONE);
+    EXPECT_EQ(attr.crLine.type, TF_CT_NONE);
+  }
+}
+
+TEST(TsfTipDisplayAttributeTest, TextServiceResolvesEverySegmentAttributeGuid) {
+  azookey::tsf::TextService service;
+
+  for (const GUID* guid :
+       {&azookey::tsf::kFocusedSegmentAttributeGuid, &azookey::tsf::kConvertedSegmentAttributeGuid,
+        &azookey::tsf::kUnconvertedSegmentAttributeGuid}) {
+    ITfDisplayAttributeInfo* info = nullptr;
+    ASSERT_EQ(service.GetDisplayAttributeInfo(*guid, &info), S_OK);
+    ASSERT_NO_FATAL_FAILURE(ExpectAttributeGuid(info, *guid));
+    BSTR description = nullptr;
+    ASSERT_EQ(info->GetDescription(&description), S_OK);
+    EXPECT_NE(std::wstring(description), L"azooKey Input");
+    SysFreeString(description);
+    info->Release();
+  }
+}
+
+TEST(TsfTipDisplayAttributeTest, SegmentRangesFollowTheFocusAndWhatEachSegmentShows) {
+  const std::vector<DisplayedSegment> segments{{2, true}, {0, true}, {3, false}, {1, true}};
+
+  const auto ranges = azookey::tsf::BuildSegmentAttributeRanges(segments, 3);
+
+  ASSERT_EQ(ranges.size(), 3u);
+  EXPECT_EQ(ranges[0].start, 0);
+  EXPECT_EQ(ranges[0].length, 2);
+  EXPECT_EQ(ranges[0].kind, DisplayAttributeKind::ConvertedSegment);
+  EXPECT_EQ(ranges[1].start, 2);
+  EXPECT_EQ(ranges[1].length, 3);
+  EXPECT_EQ(ranges[1].kind, DisplayAttributeKind::UnconvertedSegment);
+  EXPECT_EQ(ranges[2].start, 5);
+  EXPECT_EQ(ranges[2].kind, DisplayAttributeKind::FocusedSegment);
+  EXPECT_TRUE(azookey::tsf::BuildSegmentAttributeRanges({}, 0).empty());
+}
+
+TEST(TsfTipDisplayAttributeTest, MouseEdgeAndQuadrantPickTheSegmentUnderTheClick) {
+  const std::vector<DisplayedSegment> segments{{2, true}, {0, true}, {3, true}};
+  size_t index = 99;
+
+  // Quadrants 0 and 1 precede the edge, so edge 2 then lies on the first segment.
+  ASSERT_TRUE(azookey::tsf::SegmentIndexAtMouseEdge(segments, 2, 1, &index));
+  EXPECT_EQ(index, 0u);
+  ASSERT_TRUE(azookey::tsf::SegmentIndexAtMouseEdge(segments, 2, 2, &index));
+  EXPECT_EQ(index, 2u);
+  ASSERT_TRUE(azookey::tsf::SegmentIndexAtMouseEdge(segments, 0, 0, &index));
+  EXPECT_EQ(index, 0u);
+  // Past the end of the composition clamps to the last segment.
+  ASSERT_TRUE(azookey::tsf::SegmentIndexAtMouseEdge(segments, 9, 3, &index));
+  EXPECT_EQ(index, 2u);
+  EXPECT_FALSE(azookey::tsf::SegmentIndexAtMouseEdge({{0, true}}, 0, 2, &index));
+}
+
+TEST(TsfTipDisplayAttributeTest, AppliesEachSegmentAttributeToItsOwnRange) {
+  std::vector<std::unique_ptr<OffsetRange>> clones;
+  OffsetRange composition(0, 5, 5, &clones);
+  RecordingProperty property;
+  const std::vector<SegmentAttributeRange> ranges{
+      {0, 2, DisplayAttributeKind::FocusedSegment},
+      {2, 3, DisplayAttributeKind::UnconvertedSegment},
+  };
+
+  ASSERT_EQ(azookey::tsf::ApplyDisplayAttributes(1, &property, &composition, ranges, kAtoms), S_OK);
+
+  ASSERT_EQ(property.writes.size(), 2u);
+  EXPECT_EQ(property.writes[0].start, 0);
+  EXPECT_EQ(property.writes[0].end, 2);
+  EXPECT_EQ(property.writes[0].atom, 12u);
+  EXPECT_EQ(property.writes[1].start, 2);
+  EXPECT_EQ(property.writes[1].end, 5);
+  EXPECT_EQ(property.writes[1].atom, 14u);
+  // The composition range itself stays whole for the selection update.
+  EXPECT_EQ(composition.start(), 0);
+  EXPECT_EQ(composition.end(), 5);
+}
+
+TEST(TsfTipDisplayAttributeTest, FallsBackToTheInputAttributeOverTheWholeComposition) {
+  std::vector<std::unique_ptr<OffsetRange>> clones;
+  OffsetRange composition(0, 5, 5, &clones);
+  RecordingProperty property;
+
+  ASSERT_EQ(azookey::tsf::ApplyDisplayAttributes(1, &property, &composition, {}, kAtoms), S_OK);
+  ASSERT_EQ(property.writes.size(), 1u);
+  EXPECT_EQ(property.writes[0].start, 0);
+  EXPECT_EQ(property.writes[0].end, 5);
+  EXPECT_EQ(property.writes[0].atom, 11u);
+
+  // A segment that cannot be isolated repaints everything with the fallback.
+  property.writes.clear();
+  composition.fail_shift_in_clones = true;
+  ASSERT_EQ(azookey::tsf::ApplyDisplayAttributes(
+                1, &property, &composition, {{0, 2, DisplayAttributeKind::FocusedSegment}}, kAtoms),
+            S_OK);
+  ASSERT_EQ(property.writes.size(), 1u);
+  EXPECT_EQ(property.writes[0].end, 5);
+  EXPECT_EQ(property.writes[0].atom, 11u);
+
+  // A missing segment atom also falls back.
+  property.writes.clear();
+  composition.fail_shift_in_clones = false;
+  const TfGuidAtom missing[azookey::tsf::kDisplayAttributeKindCount] = {11, 0, 13, 14};
+  ASSERT_EQ(
+      azookey::tsf::ApplyDisplayAttributes(1, &property, &composition,
+                                           {{0, 5, DisplayAttributeKind::FocusedSegment}}, missing),
+      S_OK);
+  ASSERT_EQ(property.writes.size(), 1u);
+  EXPECT_EQ(property.writes[0].atom, 11u);
 }

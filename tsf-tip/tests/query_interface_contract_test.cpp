@@ -64,7 +64,7 @@ TEST(TsfTipQueryInterfaceContractTest, NullOutParamReturnsPointer) {
   azookey::tsf::TextService service;
   azookey::tsf::EditSession edit_session(&service, nullptr);
   azookey::tsf::TextServiceFactory factory;
-  azookey::tsf::InputDisplayAttributeInfo input_attribute;
+  azookey::tsf::DisplayAttributeInfo input_attribute;
   azookey::tsf::EnumDisplayAttributeInfo attribute_enumerator;
   azookey::tsf::CandidateListUIElement candidates({L"candidate"}, 0);
 
@@ -80,7 +80,7 @@ TEST(TsfTipQueryInterfaceContractTest, UnsupportedInterfaceClearsOutParam) {
   azookey::tsf::TextService service;
   azookey::tsf::EditSession edit_session(&service, nullptr);
   azookey::tsf::TextServiceFactory factory;
-  azookey::tsf::InputDisplayAttributeInfo input_attribute;
+  azookey::tsf::DisplayAttributeInfo input_attribute;
   azookey::tsf::EnumDisplayAttributeInfo attribute_enumerator;
   azookey::tsf::CandidateListUIElement candidates({L"candidate"}, 0);
 
@@ -116,6 +116,26 @@ TEST(TsfTipQueryInterfaceContractTest, TextServiceExposesConfigureFunction) {
   configure_identity->Release();
   service_identity->Release();
   configure->Release();
+}
+
+TEST(TsfTipQueryInterfaceContractTest, TextServiceExposesMouseSinkWithTheSameIdentity) {
+  azookey::tsf::TextService service;
+  ITfMouseSink* mouse_sink = nullptr;
+
+  ASSERT_EQ(service.QueryInterface(IID_ITfMouseSink, reinterpret_cast<void**>(&mouse_sink)), S_OK);
+  ASSERT_NE(mouse_sink, nullptr);
+
+  IUnknown* service_identity = nullptr;
+  IUnknown* sink_identity = nullptr;
+  ASSERT_EQ(service.QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&service_identity)),
+            S_OK);
+  ASSERT_EQ(mouse_sink->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&sink_identity)),
+            S_OK);
+  EXPECT_EQ(service_identity, sink_identity);
+
+  sink_identity->Release();
+  service_identity->Release();
+  mouse_sink->Release();
 }
 
 TEST(TsfTipQueryInterfaceContractTest, TextServiceExposesFunctionBaseInterface) {

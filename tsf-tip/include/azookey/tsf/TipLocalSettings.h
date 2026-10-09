@@ -55,6 +55,8 @@ class TipLocalSettings final {
   bool LiveConversionSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
   bool PredictionEnabledSnapshot() const;
+  // inlineEnglishCandidates (M60). An absent or unreadable value is false.
+  bool InlineEnglishCandidatesSnapshot() const;
   std::shared_ptr<const core::CustomRomajiTable> RomajiSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -63,6 +65,7 @@ class TipLocalSettings final {
   void SetLiveConversionForTest(bool enabled);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
+  void SetInlineEnglishCandidatesForTest(bool enabled);
   void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
   bool WaitForEnabledForTest(bool enabled);
   bool WaitForPrivacyForTest(const std::function<bool(const core::PrivacyPolicy&)>& predicate);
@@ -95,6 +98,7 @@ class TipLocalSettings final {
   bool live_conversion_{false};
   uint32_t max_context_length_{10};
   bool prediction_enabled_{true};
+  bool inline_english_candidates_{false};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;
   std::filesystem::path path_;
   std::filesystem::path table_path_;

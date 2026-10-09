@@ -371,7 +371,7 @@ TIP 側 composition 状態:
 ```cpp
 // TIP（tsf-tip）side composition state（概念。既存 TextService に統合）
 std::string kana_buffer_;        // 打鍵由来の読み。編集の正典
-std::string raw_romaji_;         // 生ローマ字（M58/M60 と共有）
+std::string raw_romaji_;         // 生ローマ字（M58 と共有。M60 は Shift の大小を保つ別バッファ）
 std::string rendered_surface_;   // 句読点込み表示文字列。毎回再計算で全置換
 std::vector<LiveSegment> segments_;  // host 応答（§7.2）。auto_punctuation マーカ付き
 ```

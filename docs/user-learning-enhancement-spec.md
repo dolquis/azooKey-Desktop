@@ -207,10 +207,28 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 
 ### 4.1 訂正の IPC（`CommitCorrection`）
 
-即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と Host 側の処理を定める。
-TIP 側の検出と送信は DEV-1529 の TIP 部分で追跡する。Host は Handshake の capability に
-`commit_correction` を載せ、TIP は Host がそれを告知したときだけ送る。
-応答は `CommitObservation` と同じ `{ "ok": bool }` である。
+即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と、TIP の検出・送信と、
+Host 側の処理を定める。Host は Handshake の capability に `commit_correction` を載せ、
+TIP は Host がそれを告知したときだけ送る。応答は `CommitObservation` と同じ `{ "ok": bool }` である。
+
+TIP は次のときに送る。
+
+- **`undo`**: 学習観測を送った確定の直後の**最初の 1 キー**が、Ctrl / Alt / Win を伴わない
+  Backspace で、preedit と候補 UI が無く、確定した context と同じ context のとき。
+  M55 の typo 学習と同じ 1 キーの窓で、別のキーを先に押すと窓は閉じる。キー以外の操作
+  （マウスでキャレットを動かすなど）では窓は閉じない。この Backspace は typo 学習の判定にも
+  そのまま使われる。対象は、その確定の**最後の文節**（Backspace が消す側）である。
+  最後の文節が学習されなかった場合（English タグ、送信しなかった観測）は、前の文節を代わりに
+  拒否せず、何も送らない。Ctrl+Shift+Backspace（Forget、`legacy-parity-spec.md` §7.2）は
+  忘却だけを送り、`undo` は送らない。1 回の打鍵が両方を送ることはない。
+- **`reconvert`**: azooKey の候補 UI で開いた再変換で、元の表記と違う候補を確定したとき。
+  `reading` は再変換の逆変換で得た読み、`rejected_surface` は元の表記、`selected_surface` は
+  選んだ候補である。元の表記を選び直したときは送らない。再変換の確定は Forget の対象にしない。
+  アプリが自前の UI で TSF の候補一覧から選ぶ経路は、確定を TIP が知れないため送らない。
+- 送るかは送信時に判定する。secure の文脈、または学習が許可されない文脈では送らない
+  （`privacy-and-secure-input-spec.md` §5.1.1。`PostIpcSend` も secure では落とす）。
+  `observation_id` は訂正ごとに新しく採番する。`left_context` と `app` は `CommitObservation` と
+  同じく TIP がまだ送らない（空 / 欠落。Host は大域行に記録する）。
 
 | フィールド | 型 | 意味 |
 |---|---|---|

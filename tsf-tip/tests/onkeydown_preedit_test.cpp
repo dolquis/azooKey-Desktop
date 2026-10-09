@@ -9019,3 +9019,177 @@ TEST(TsfTipEnglishCandidatesTest, EnglishCommitKeepsTheKanaReadingWithoutTheCapa
   ASSERT_TRUE(observation);
   EXPECT_EQ(observation->reading, "あっpぇ");
 }
+
+// DEV-1529 / user-learning-enhancement-spec §4.1: a plain Backspace as the
+// first key after a learned commit sends CommitCorrection "undo" for it.
+namespace {
+void PrepareCorrectionHarness(TextServiceHarness& h) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  h.service.set_commit_correction_supported_for_test(true);
+}
+
+// Gives the harness an active context without leaving a composition, so an
+// observation posted directly is bound to h.context as a real commit is.
+void BindHarnessContext(TextServiceHarness& h) {
+  h.Press('A');
+  h.Press(VK_ESCAPE);
+  ASSERT_TRUE(h.service.active_context_is_for_test(&h.context));
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+}
+}  // namespace
+
+TEST(TsfTipCommitCorrectionTest, BackspaceRightAfterCommitSendsUndoOnce) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  CommitOneCandidate(h);
+  const auto commit = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(commit);
+
+  // TSF calls OnKeyDown only for keys the probe claims; Backspace goes to the app.
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].kind, "undo");
+  EXPECT_EQ(corrections[0].reading, "かな");
+  EXPECT_EQ(corrections[0].rejected_surface, "仮名");
+  EXPECT_FALSE(corrections[0].selected_surface.has_value());
+  EXPECT_FALSE(corrections[0].secure);
+  EXPECT_TRUE(corrections[0].learning_allowed);
+  // A correction's own id, never the corrected commit's (the Host would drop
+  // it as a resend of that commit).
+  EXPECT_FALSE(corrections[0].observation_id.empty());
+  EXPECT_NE(corrections[0].observation_id, commit->observation_id);
+
+  // The window was the first key only.
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
+}
+
+TEST(TsfTipCommitCorrectionTest, AnotherKeyFirstClosesTheUndoWindow) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.TestPress(VK_LEFT));
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+}
+
+TEST(TsfTipCommitCorrectionTest, ForgetKeyOnlyForgetsAndBackspaceOnlyUndoes) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  CommitOneCandidate(h);
+  PressCtrlShift(h, VK_BACK);
+  EXPECT_EQ(h.service.queued_forget_requests_for_test().size(), 1u);
+  EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+
+  TextServiceHarness g;
+  PrepareCorrectionHarness(g);
+  CommitOneCandidate(g);
+  EXPECT_FALSE(g.TestPress(VK_BACK));
+  EXPECT_EQ(g.service.queued_corrections_for_test().size(), 1u);
+  EXPECT_TRUE(g.service.queued_forget_requests_for_test().empty());
+}
+
+TEST(TsfTipCommitCorrectionTest, NothingIsSentToAHostWithoutTheCapability) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  h.service.set_commit_correction_supported_for_test(false);
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+}
+
+// The same event privacy as CommitObservation: a commit that was not learned
+// opens no window, and a context that turned secure sends nothing.
+TEST(TsfTipCommitCorrectionTest, SecureContextsSendNoUndo) {
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    h.service.set_foreground_app_for_test({"KeePass.exe", "WindowsForms10.Window.8.app.0", true});
+    CommitOneCandidate(h);
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    h.service.set_foreground_app_for_test({"KeePass.exe", "WindowsForms10.Window.8.app.0", true});
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+  {
+    // Learning denied by the privacy mode, not by a secure field.
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+}
+
+TEST(TsfTipCommitCorrectionTest, BackspaceInAnotherContextSendsNoUndo) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  CommitOneCandidate(h);
+  NoopContext other;
+  h.keyboard_state.Reapply();
+  BOOL eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&other, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+}
+
+TEST(TsfTipCommitCorrectionTest, UndoTargetsTheLastSegmentOnlyWhenItWasLearned) {
+  using azookey::ipc::CandidateField;
+  auto field = [](std::string surface, uint8_t tag = 0) {
+    CandidateField candidate;
+    candidate.surface = std::move(surface);
+    candidate.source = "dictionary";
+    candidate.tag = tag;
+    return candidate;
+  };
+  const uint8_t english = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    h.service.set_commit_segments_supported_for_test(true);
+    BindHarnessContext(h);
+    h.service.post_pending_observation_for_test({{"きょう", field("今日")}, {"は", field("は")}},
+                                                false, true);
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    const auto corrections = h.service.queued_corrections_for_test();
+    ASSERT_EQ(corrections.size(), 1u);
+    EXPECT_EQ(corrections[0].reading, "は");
+    EXPECT_EQ(corrections[0].rejected_surface, "は");
+  }
+  {
+    // Backspace erases the English word, which the kana channel cannot name;
+    // the earlier segment must not be rejected in its place.
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    h.service.set_commit_segments_supported_for_test(true);
+    BindHarnessContext(h);
+    h.service.post_pending_observation_for_test(
+        {{"きょう", field("今日")}, {"hello", field("hello", english)}}, false, true);
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+}
+
+// Review follow-up of #507: the typed romaji ends with its composition, so a
+// later query cannot carry romaji typed for an earlier one.
+TEST(TsfTipEnglishCandidatesTest, CommitAndCancelClearTheTypedRomaji) {
+  for (const WPARAM end_key : {WPARAM{VK_RETURN}, WPARAM{VK_ESCAPE}}) {
+    SCOPED_TRACE(end_key == VK_RETURN ? "commit" : "cancel");
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(true);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'K'}, WPARAM{'U'}}) h.Press(key);
+    ASSERT_EQ(h.service.english_raw_romaji_for_test(), "kaku");
+    FakeCompositionAttachment attachment(h);
+    h.Press(end_key);
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_TRUE(h.service.english_raw_romaji_for_test().empty());
+  }
+}

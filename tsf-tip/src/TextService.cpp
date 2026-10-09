@@ -1954,6 +1954,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   bracket_test_context_ = nullptr;
   try {
     TrackTypoKey(context, wParam);
+    TrackUndoKey(context, wParam);
     typo_test_key_context_ = context;
     typo_test_key_ = wParam;
 #ifdef AZOOKEY_TSF_TESTING
@@ -2188,8 +2189,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
   try {
-    if (typo_test_key_context_ != context || typo_test_key_ != wParam)
+    if (typo_test_key_context_ != context || typo_test_key_ != wParam) {
       TrackTypoKey(context, wParam);
+      TrackUndoKey(context, wParam);
+    }
     typo_test_key_context_ = nullptr;
     // A new key in the same context means the host kept input focus. If the
     // key belongs to another context, finish the old text before using it.
@@ -3228,6 +3231,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_.clear();
     reconversion_cache_candidates_.clear();
+    reconversion_cache_reading_.clear();
   }
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
     last_learned_commit_pairs_.clear();
@@ -3602,6 +3606,7 @@ void TextService::PostPendingCommitObservation() {
   // Spec §7.2: a commit that was not observed is not the "last commit", so
   // Ctrl+Shift+Backspace must not reach an older pair past it.
   last_learned_commit_pairs_.clear();
+  undo_target_.reset();
   if (!pending.learning_allowed) return;
   // PostIpcSend drops observations while the context is secure.
   const bool sendable = !pending.secure && !secure_input_.load(std::memory_order_relaxed);
@@ -3641,6 +3646,16 @@ void TextService::PostPendingCommitObservation() {
         record(segment);
       }
     }
+    // A Backspace right after this commit erases its last segment, so that
+    // segment is the undo target, and only when it was learned: an English or
+    // unsent last segment arms nothing rather than an earlier segment.
+    const auto& last = pending.segments.empty() ? pending : pending.segments.back();
+    const void* committed_context =
+        ComIdentity(commit_context_ ? commit_context_ : active_context_);
+    if (committed_context && !last_learned_commit_pairs_.empty() &&
+        last.chosen.tag != static_cast<uint8_t>(core::CandidateTag::English) &&
+        last_learned_commit_pairs_.back() == std::pair{last.reading, last.chosen.surface})
+      undo_target_ = UndoTarget{last.reading, last.chosen.surface, committed_context};
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
     // observations are posted. Drop best-effort learning telemetry rather than
@@ -3678,6 +3693,56 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
       !ResolvePrivacy(context, false).learning_allowed)
     return;
   typo_tracker_.BeginKey(backspace, empty);
+}
+
+// User-learning-enhancement-spec §4.1: only the first key after a learned
+// commit can take it back, mirroring the typo tracker's post-commit window. A
+// plain Backspace there sends "undo". Ctrl+Shift+Backspace is the Forget key
+// and only forgets; a system modifier closes the window without an undo.
+void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
+  if (committing_ || !undo_target_) return;  // A retry key is consumed before the next input.
+  auto target = std::move(*undo_target_);
+  undo_target_.reset();
+  // The Backspace must land in the context that was committed to: a focus
+  // change can leave the record while active_context_ is already released.
+  if (key != VK_BACK || HasSystemModifier(CurrentKeyModifiers()) ||
+      !CurrentPreeditSurface().empty() || candidate_ui_.IsShowing() ||
+      last_learned_commit_pairs_.empty() || !context || ComIdentity(context) != target.context)
+    return;
+  PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(target.reading),
+                       std::move(target.surface), std::nullopt);
+}
+
+void TextService::PostCommitCorrection(ITfContext* context, std::string_view kind,
+                                       std::string reading, std::string rejected_surface,
+                                       std::optional<std::string> selected_surface) {
+  if (!ipc_host_commit_correction_.load(std::memory_order_relaxed) || !context || reading.empty() ||
+      rejected_surface.empty())
+    return;
+  try {
+    // The same event privacy as CommitObservation, decided now: a secure or
+    // learning-denied context sends nothing (PostIpcSend also drops it).
+    const auto privacy = ResolvePrivacy(context, false);
+    if (privacy.secure || !privacy.learning_allowed) return;
+    ipc::CommitCorrectionRequest request;
+    request.kind = std::string(kind);
+    request.reading = std::move(reading);
+    request.rejected_surface = std::move(rejected_surface);
+    request.selected_surface = std::move(selected_surface);
+    request.timestamp_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count());
+    // A fresh id per correction: reusing the commit's id would make the Host
+    // drop the correction as a resend of that commit.
+    request.observation_id = NextCommitObservationId();
+    request.secure = false;
+    request.learning_allowed = true;
+    PostIpcSend(ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(request),
+                true);
+  } catch (...) {
+    // Best effort like the observation it corrects; the key is not affected.
+  }
 }
 
 void TextService::PrepareTypoCommit(const std::string& reading) {
@@ -3904,6 +3969,7 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_.clear();
     reconversion_cache_candidates_.clear();
+    reconversion_cache_reading_.clear();
   }
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
@@ -4612,6 +4678,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     ipc_host_english_candidates_.store(
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "english_candidates") != hpayload->capabilities.end(),
+        std::memory_order_relaxed);
+    ipc_host_commit_correction_.store(
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "commit_correction") != hpayload->capabilities.end(),
         std::memory_order_relaxed);
     batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
                                        std::memory_order_relaxed);
@@ -5504,6 +5574,7 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_.clear();
     reconversion_cache_candidates_.clear();
+    reconversion_cache_reading_.clear();
   }
   TF_SELECTION selected{};
   ULONG fetched = 0;
@@ -5534,6 +5605,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
     return true;
   }
   std::vector<std::wstring> candidates;
+  std::string reading;
   bool connected = true;
   bool responded = false;
   // The last step reached; logged once so a silent empty result has a reason.
@@ -5567,6 +5639,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
     } else if (request.generation != reconversion_generation_.load()) {
       outcome = "stale_after_reverse";
     } else {
+      reading = payload->reading;
       QueryCandidatesRequest query;
       query.reading = payload->reading;
       query.max_candidates = max_candidates_.load(std::memory_order_relaxed);
@@ -5636,8 +5709,9 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
       if (request.generation != reconversion_generation_.load()) return connected;
       reconversion_cache_surface_ = Utf8ToWide(request.surface);
       reconversion_cache_candidates_ = candidates;
+      reconversion_cache_reading_ = reading;
       reconversion_result_ = ReconversionResult{request.generation, reconversion_cache_surface_,
-                                                std::move(candidates)};
+                                                std::move(candidates), std::move(reading)};
     }
     candidate_ui_.PostCandidatesReady();
   }
@@ -6307,6 +6381,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     preedit_update_needed = true;
   } else if (std::holds_alternative<core::CancelMarkedText>(action)) {
     core_marked_surface_.clear();
+    english_raw_romaji_.clear();
     live_display_reading_.clear();
     live_display_surface_.clear();
     CancelPendingQueriesForLifecycle();
@@ -7024,6 +7099,8 @@ void TextService::ClearReconversionState() {
     reconversion_range_ = nullptr;
   }
   reconversion_surface_.clear();
+  reconversion_shown_reading_.clear();
+  reconversion_shown_candidates_.clear();
   reconversion_prefetch_surface_.clear();
   if (had_reconversion_ui && candidate_ui_.IsShowing()) candidate_ui_.EndUI();
   ++reconversion_generation_;
@@ -7053,6 +7130,7 @@ void TextService::PrefetchSelectedReconversion() {
       return;
     reconversion_cache_surface_.clear();
     reconversion_cache_candidates_.clear();
+    reconversion_cache_reading_.clear();
   }
   if (reconversion_cache_context_) reconversion_cache_context_->Release();
   reconversion_cache_context_ = context;
@@ -7106,12 +7184,15 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
     return S_OK;
   }
   std::vector<std::wstring> cached_candidates;
+  std::string cached_reading;
   bool prefetch_completed = false;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     if (SameComIdentity(context, reconversion_cache_context_) &&
-        surface == reconversion_cache_surface_)
+        surface == reconversion_cache_surface_) {
       cached_candidates = reconversion_cache_candidates_;
+      cached_reading = reconversion_cache_reading_;
+    }
     prefetch_completed =
         reconversion_result_ && reconversion_result_->generation == reconversion_generation_.load();
   }
@@ -7135,8 +7216,9 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
     LogReconversion("start", "cached", S_OK, cached_candidates.size());
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
-      reconversion_result_ = ReconversionResult{reconversion_generation_, reconversion_surface_,
-                                                std::move(cached_candidates)};
+      reconversion_result_ =
+          ReconversionResult{reconversion_generation_, reconversion_surface_,
+                             std::move(cached_candidates), std::move(cached_reading)};
     }
     ShowReconversionResult();
     return S_OK;
@@ -7153,14 +7235,43 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
 
 HRESULT TextService::CompleteReconversionSelection(size_t index) {
   if (!reconversion_list_) return S_FALSE;
-  // SetResult can synchronously notify OnEndEdit, which may release our list.
+  // SetResult can synchronously notify OnEndEdit, which clears the
+  // reconversion state, so what the correction needs is copied first. The
+  // copy is best effort: an allocation failure loses only the correction.
+  struct Correction {
+    std::string reading;
+    std::string rejected;
+    std::string selected;
+  };
+  std::optional<Correction> correction;
+  ITfContext* context = nullptr;  // The reconverted range's, AddRef'd.
+  try {
+    if (index < reconversion_shown_candidates_.size() &&
+        !reconversion_shown_candidates_[index].empty() &&
+        reconversion_shown_candidates_[index] != reconversion_surface_) {
+      correction = Correction{reconversion_shown_reading_, WideToUtf8(reconversion_surface_),
+                              WideToUtf8(reconversion_shown_candidates_[index])};
+      if (reconversion_range_) (void)reconversion_range_->GetContext(&context);
+    }
+  } catch (...) {
+    correction.reset();
+  }
   ITfCandidateList* list = reconversion_list_;
   list->AddRef();
   const HRESULT hr = list->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
   list->Release();
-  // A reconversion result is committed without a learning observation, so
-  // Ctrl+Shift+Backspace must not reach an older pair past it (spec §7.2).
-  if (SUCCEEDED(hr)) last_learned_commit_pairs_.clear();
+  // Choosing another candidate corrects the earlier commit (user-learning-
+  // enhancement-spec §4.1). The correction is its learning event, so the pair
+  // is not Forget's to name, and Ctrl+Shift+Backspace must not reach an older
+  // pair past it either (spec §7.2).
+  if (SUCCEEDED(hr)) {
+    last_learned_commit_pairs_.clear();
+    undo_target_.reset();
+    if (correction && context)
+      PostCommitCorrection(context, ipc::kCorrectionKindReconvert, std::move(correction->reading),
+                           std::move(correction->rejected), std::move(correction->selected));
+  }
+  if (context) context->Release();
   if (SUCCEEDED(hr) && reconversion_list_) ClearReconversionState();
   return hr;
 }
@@ -7223,6 +7334,8 @@ void TextService::ShowReconversionResult() {
     return;
   }
   reconversion_list_ = list;
+  reconversion_shown_reading_ = std::move(result->reading);
+  reconversion_shown_candidates_ = std::move(result->candidates);
   LogReconversion("show", "shown", S_OK, items.size());
 }
 
@@ -7494,6 +7607,10 @@ void TextService::ClearBatchState() {
   batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;
   batch_raw_romaji_.clear();
+  // Every composition end (commit, cancel, lifecycle) passes here. Romaji
+  // left over would spell a later reading again, for example the same reading
+  // reconverted, and go out as raw_romaji the user did not type for it.
+  english_raw_romaji_.clear();
   batch_romaji_table_.reset();
   batch_query_in_progress_ = false;
 }
@@ -7536,7 +7653,8 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
        (type == ipc::MessageType::CommitObservation ||
         type == ipc::MessageType::CommitSegmentsObservation ||
         type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions ||
-        type == ipc::MessageType::ForgetLearningEntry)) ||
+        type == ipc::MessageType::ForgetLearningEntry ||
+        type == ipc::MessageType::CommitCorrection)) ||
       (type == ipc::MessageType::QueryPredictions &&
        !prediction_allowed_.load(std::memory_order_relaxed)) ||
       (type == ipc::MessageType::ObserveTypo &&

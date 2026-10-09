@@ -330,6 +330,19 @@ class TextService final : public ITfTextInputProcessorEx,
         return ipc::ParseCommitSegmentsObservationRequest(item->payload_json);
     return std::nullopt;
   }
+  void set_commit_correction_supported_for_test(bool supported) {
+    ipc_host_commit_correction_.store(supported);
+  }
+  std::vector<ipc::CommitCorrectionRequest> queued_corrections_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    std::vector<ipc::CommitCorrectionRequest> requests;
+    for (const auto& item : ipc_send_queue_)
+      if (item.type == ipc::MessageType::CommitCorrection)
+        if (auto parsed = ipc::ParseCommitCorrectionRequest(item.payload_json))
+          requests.push_back(std::move(*parsed));
+    return requests;
+  }
+  const std::string& english_raw_romaji_for_test() const { return english_raw_romaji_; }
   std::vector<ipc::ForgetLearningEntryRequest> queued_forget_requests_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     std::vector<ipc::ForgetLearningEntryRequest> requests;
@@ -398,13 +411,15 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_reconversion_request_ ? ipc_reconversion_request_->surface : std::string{};
   }
   void set_reconversion_cache_for_test(ITfContext* context, std::wstring surface,
-                                       std::vector<std::wstring> candidates) {
+                                       std::vector<std::wstring> candidates,
+                                       std::string reading = {}) {
     if (reconversion_cache_context_) reconversion_cache_context_->Release();
     reconversion_cache_context_ = context;
     if (context) context->AddRef();
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_ = std::move(surface);
     reconversion_cache_candidates_ = std::move(candidates);
+    reconversion_cache_reading_ = std::move(reading);
   }
   void set_reconversion_ui_for_test(ITfContext* context, ITfRange* range, ITfCandidateList* list) {
     ClearReconversionState();
@@ -665,6 +680,19 @@ class TextService final : public ITfTextInputProcessorEx,
   // the target of Ctrl+Shift+Backspace (docs/legacy-parity-spec.md §7.2).
   // UI thread only.
   std::vector<std::pair<std::string, std::string>> last_learned_commit_pairs_;
+  // The (reading, surface) a Backspace right after the commit takes back: the
+  // last segment of the last learning observation, when it was learned. Only
+  // the first key after that commit may use it (user-learning-enhancement-spec
+  // §4.1, the same one-key window as typo learning). `context` is the COM
+  // identity of the committed context, compared only. Every place that clears
+  // last_learned_commit_pairs_ also closes this window: TrackUndoKey sends
+  // nothing while the pairs are empty. UI thread only.
+  struct UndoTarget {
+    std::string reading;
+    std::string surface;
+    const void* context{nullptr};
+  };
+  std::optional<UndoTarget> undo_target_;
 
   // M18-3 debug window (docs/legacy-parity-spec.md §8). The window is created
   // lazily on the UI thread; the IPC worker only records into its buffer.
@@ -760,6 +788,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // Handshake capability "english_candidates" (M60). Without it the TIP sends
   // neither raw_romaji nor english_candidates.
   std::atomic<bool> ipc_host_english_candidates_{false};
+  // Handshake capability "commit_correction" (DEV-1529); CommitCorrection is
+  // sent only to a Host that advertises it.
+  std::atomic<bool> ipc_host_commit_correction_{false};
 #ifdef AZOOKEY_TSF_TESTING
   std::atomic<bool> handshake_token_unavailable_for_test_{false};
 #endif
@@ -836,10 +867,14 @@ class TextService final : public ITfTextInputProcessorEx,
     uint64_t generation;
     std::wstring surface;
     std::vector<std::wstring> candidates;
+    // The reverse-converted reading, for the CommitCorrection a different
+    // choice sends (user-learning-enhancement-spec §4.1). May be empty.
+    std::string reading;
   };
   std::optional<ReconversionResult> reconversion_result_;    // candidates_mtx_
   std::wstring reconversion_cache_surface_;                  // candidates_mtx_
   std::vector<std::wstring> reconversion_cache_candidates_;  // candidates_mtx_
+  std::string reconversion_cache_reading_;                   // candidates_mtx_
   ITfContext* reconversion_cache_context_{nullptr};          // UI thread
   ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
   DWORD text_edit_cookie_{TF_INVALID_COOKIE};
@@ -849,6 +884,9 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
   std::wstring reconversion_surface_;             // UI thread only
+  // What the open reconversion list offers, kept with reconversion_list_.
+  std::string reconversion_shown_reading_;                   // UI thread only
+  std::vector<std::wstring> reconversion_shown_candidates_;  // UI thread only
 
   void StartIpcWorker();
   void StopIpcWorker();
@@ -974,6 +1012,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void ClearCommitContext();
   void PostPendingCommitObservation();
   void TrackTypoKey(ITfContext* context, WPARAM key);
+  // Consumes the one-key undo window; a plain Backspace in it sends "undo".
+  void TrackUndoKey(ITfContext* context, WPARAM key);
+  void PostCommitCorrection(ITfContext* context, std::string_view kind, std::string reading,
+                            std::string rejected_surface,
+                            std::optional<std::string> selected_surface);
   void PrepareTypoCommit(const std::string& reading);
   void CompleteTypoCommit(std::optional<PendingTypoCommit> pending, bool committed) noexcept;
   void ResetTypoTracking();

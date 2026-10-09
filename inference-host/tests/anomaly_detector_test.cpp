@@ -34,10 +34,12 @@ TEST(AnomalyDetectorTest, PlacesQuotesAsUtf16OffsetsInOrder) {
   EXPECT_EQ((*findings)[0].start, 5u);
   EXPECT_EQ((*findings)[0].length, 4u);
   EXPECT_DOUBLE_EQ((*findings)[0].confidence, 0.5);  // missing -> 0.5
-  // The repeated quote maps to the first, then the second occurrence.
+  // The repeated quote maps to the first, then the second occurrence, and is
+  // marked ambiguous by a capped confidence.
   EXPECT_EQ((*findings)[1].start, 13u);
   EXPECT_EQ((*findings)[2].start, 21u);
-  EXPECT_DOUBLE_EQ((*findings)[2].confidence, 1.0);  // clamped
+  EXPECT_DOUBLE_EQ((*findings)[1].confidence, 0.3);
+  EXPECT_DOUBLE_EQ((*findings)[2].confidence, 0.3);
   // A suggestion equal to the quote is not a correction.
   EXPECT_EQ((*findings)[1].suggestions, std::vector<std::string>{"雨です"});
 }
@@ -70,6 +72,42 @@ TEST(AnomalyDetectorTest, ReportsTheSameSpanOnceButKeepsOverlaps) {
   EXPECT_EQ((*findings)[0].length, 1u);
   EXPECT_EQ((*findings)[1].start, 3u);
   EXPECT_EQ((*findings)[1].length, 4u);
+}
+
+TEST(AnomalyDetectorTest, AmbiguousQuotesAreDroppedWhenShortAndDowngradedOtherwise) {
+  const std::string text = "私は彼は来ると思う。彼は来ると思う。";
+  const auto findings = ParseAnomalyFindings(
+      text,
+      R"([{"quote":"は","confidence":0.9},{"quote":"来ると思う","confidence":0.9},)"
+      R"({"quote":"私は","confidence":0.9},{"quote":"clamped","confidence":2}])",
+      10);
+  ASSERT_TRUE(findings.has_value());
+  ASSERT_EQ(findings->size(), 2u);
+  // "私は" occurs once: placed with the model's confidence.
+  EXPECT_EQ((*findings)[0].start, 0u);
+  EXPECT_DOUBLE_EQ((*findings)[0].confidence, 0.9);
+  // "来ると思う" occurs twice: kept, but no more than 0.3.
+  EXPECT_EQ((*findings)[1].start, 4u);
+  EXPECT_DOUBLE_EQ((*findings)[1].confidence, 0.3);
+}
+
+TEST(AnomalyDetectorTest, BoundsTheModelText) {
+  const std::string text = "今日は晴れでした。";
+  const std::string long_reason(600, 'r');
+  const std::string long_suggestion(300, 's');
+  const auto findings = ParseAnomalyFindings(
+      text,
+      R"([{"quote":"晴れでした","reason":")" + long_reason + R"(","suggestions":[")" +
+          long_suggestion + R"(","晴れです"]},{"quote":"今日は","reason":")" +
+          std::string(200, 'x') + std::string("あい") + std::string(400, 'y') + R"("}])",
+      10);
+  ASSERT_TRUE(findings.has_value());
+  ASSERT_EQ(findings->size(), 2u);
+  EXPECT_EQ((*findings)[1].reason.size(), 512u);
+  EXPECT_EQ((*findings)[1].suggestions, std::vector<std::string>{"晴れです"});
+  // Truncation keeps whole code points.
+  EXPECT_LE((*findings)[0].reason.size(), 512u);
+  EXPECT_EQ(Utf16Length((*findings)[0].reason), (*findings)[0].reason.size() - 4u);
 }
 
 TEST(AnomalyDetectorTest, PersonaHintOnlyWithSamples) {

@@ -108,7 +108,8 @@ std::string BuildAiInstruction(const AiTransformRequest& request) {
         "conversion mistakes, grammar errors, inconsistent politeness, or subject and "
         "predicate that do not agree. Do not rewrite the text. The result string must "
         "contain a JSON array; each element is an object with quote (the exact span copied "
-        "from the text), reason (a short Japanese explanation), suggestions (an array of "
+        "from the text, long enough to occur only once in it), reason (a short Japanese "
+        "explanation), suggestions (an array of "
         "replacement strings) and confidence (a number from 0 to 1). Return [] when "
         "nothing looks wrong. ";
     instruction += request.prompt;

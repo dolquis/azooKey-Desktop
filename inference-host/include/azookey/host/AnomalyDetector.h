@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,7 +23,10 @@ std::string AnomalyPersonaHint(const std::optional<learning::Persona>& persona);
 // {quote, reason, suggestions[], confidence}. Each quote is searched in `text`
 // from the end of the previous match (then from the start), so repeated
 // phrases map to successive occurrences. Unplaceable, empty or malformed items
-// and exact duplicates of a placed span are dropped; overlapping spans are kept. nullopt when
+// and exact duplicates of a placed span are dropped; overlapping spans are kept.
+// A quote that occurs more than once in `text` is ambiguous: shorter than three
+// UTF-16 units it is dropped, otherwise its confidence is capped at 0.3. The
+// reason is truncated to kMaxAnomalyReasonBytes and longer suggestions dropped. nullopt when
 // `result` is not a JSON array at all. At most `max_findings` findings, ordered by start.
 std::optional<std::vector<ipc::AnomalyFindingField>> ParseAnomalyFindings(std::string_view text,
                                                                           std::string_view result,

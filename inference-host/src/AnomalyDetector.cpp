@@ -11,6 +11,34 @@ namespace azookey::host {
 namespace {
 namespace j = ipc::json;
 
+// A quote that occurs more than once cannot be placed with certainty: one this
+// short is dropped, a longer one is kept with its confidence capped.
+constexpr uint32_t kMinAmbiguousQuoteUnits = 3;
+constexpr double kAmbiguousConfidence = 0.3;
+
+size_t CountOccurrences(std::string_view text, std::string_view quote) {
+  size_t count = 0;
+  for (size_t at = text.find(quote); at != std::string_view::npos; at = text.find(quote, at + 1)) {
+    ++count;
+  }
+  return count;
+}
+
+// Cuts at a code point boundary so the result stays valid UTF-8.
+std::string Truncate(std::string text, size_t max_bytes) {
+  if (text.size() <= max_bytes) return text;
+  size_t end = 0;
+  for (size_t pos = 0; pos < text.size();) {
+    char32_t cp{};
+    size_t next = pos;
+    core::DecodeNextUtf8(text, next, cp);
+    if (next > max_bytes) break;
+    end = pos = next;
+  }
+  text.resize(end);
+  return text;
+}
+
 std::string Ratio(double value) {
   char buffer[16];
   std::snprintf(buffer, sizeof(buffer), "%.2f", value);
@@ -58,6 +86,8 @@ std::optional<std::vector<ipc::AnomalyFindingField>> ParseAnomalyFindings(std::s
     ipc::AnomalyFindingField finding;
     finding.start = Utf16Length(text.substr(0, at));
     finding.length = Utf16Length(*quote);
+    const bool ambiguous = CountOccurrences(text, *quote) > 1;
+    if (ambiguous && finding.length < kMinAmbiguousQuoteUnits) continue;
     // The same span twice (a quote found again from the start) is one finding;
     // overlapping spans are kept, each with its own reason.
     if (std::any_of(findings.begin(), findings.end(), [&](const auto& placed) {
@@ -65,12 +95,15 @@ std::optional<std::vector<ipc::AnomalyFindingField>> ParseAnomalyFindings(std::s
         })) {
       continue;
     }
-    finding.reason = item.GetString("reason").value_or(std::string());
+    finding.reason =
+        Truncate(item.GetString("reason").value_or(std::string()), ipc::kMaxAnomalyReasonBytes);
     finding.confidence = std::clamp(item.GetNumber("confidence").value_or(0.5), 0.0, 1.0);
+    if (ambiguous) finding.confidence = std::min(finding.confidence, kAmbiguousConfidence);
     if (const auto* suggestions = item.GetArray("suggestions")) {
       for (const auto& suggestion : *suggestions) {
         if (finding.suggestions.size() >= ipc::kMaxAnomalySuggestions) break;
         if (suggestion.IsString() && !suggestion.AsString().empty() &&
+            suggestion.AsString().size() <= ipc::kMaxAnomalySuggestionBytes &&
             suggestion.AsString() != *quote) {
           finding.suggestions.push_back(suggestion.AsString());
         }

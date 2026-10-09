@@ -1157,7 +1157,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   privacy.reset();
 
   AiBackendOptions options;
-  core::AiPrivacy ai_privacy{true, true};
+  // Without settings there is no consent to send anything anywhere.
+  core::AiPrivacy ai_privacy{false, false};
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {

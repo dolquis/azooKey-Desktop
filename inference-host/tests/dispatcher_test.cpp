@@ -3976,6 +3976,28 @@ TEST_F(DispatcherTest, ForgettingALearningPairRefreshesThePersona) {
   RemoveLearningFiles(learning_path);
 }
 
+// Without a settings store there is no AI consent at all.
+TEST_F(DispatcherTest, DetectAnomaliesWithoutSettingsSendsNothing) {
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config);
+  ipc::DetectAnomaliesRequest request;
+  request.text = "今日は晴れでした。";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto response = handler.Dispatch(
+      MakeReq(770, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(response->payload_json)->error,
+            std::optional<std::string>("unsupported"));
+  EXPECT_EQ(calls, 0u);
+}
+
 // rich-features-spec X-3-6 (DEV-1532): the remote AI backend finds the spans,
 // the Host places them; privacy and a missing backend are refused explicitly.
 TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) {
@@ -4080,6 +4102,23 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   settings.Reload();
   EXPECT_EQ(detect(767, request)->error, std::optional<std::string>("blocked"));
   EXPECT_TRUE(sent.empty());
+
+  // Without AI consent (ai off, or external off with openai and a key), nothing
+  // is sent and the answer is "unsupported".
+  for (
+      const auto* privacy :
+      {R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":false}})",
+       R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
+    {
+      std::ofstream file(settings_path, std::ios::trunc);
+      file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)" << privacy << "}";
+    }
+    settings.Reload();
+    const auto refused = detect(769, request);
+    ASSERT_TRUE(refused.has_value()) << privacy;
+    EXPECT_EQ(refused->error, std::optional<std::string>("unsupported")) << privacy;
+    EXPECT_TRUE(sent.empty()) << privacy;
+  }
 
   // A request canceled before it runs gets no reply.
   {

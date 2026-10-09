@@ -988,7 +988,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置 |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
-| unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
+| unit | マージ経路の source 設定（§7.1 手順 3）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき**ソース優先で user_dict を保持**（明示 value が低い/負 例 -3.0 でも Zenzai に落とされない）。user_dict を含まない重複は最高 score を残す |
 | unit | 劣化モード（hard failure）: 例外/空生成/**usable beam が無い**ケースで `DegradeToFallback` され候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー＝`degraded`（§9.2.1） |
 | unit | deadline 超過で **best-so-far beam あり**（§6.4/§9.2.2）: Zenzai の best-so-far を返し、`DegradeToFallback` を経由しない・valid な Zenzai 出力を捨てない・`degraded` にしない（normal budget expiry を hard failure と区別） |

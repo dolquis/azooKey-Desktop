@@ -546,8 +546,10 @@ Host は `auto_punctuation` が `true` で、設定の `liveConversion` と `dyn
 ### 7.2 Response（`segments[]` を追加）
 
 `QueryLiveConversionResponse` は `surface` + `confidence` に加えて、
-**任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。Host は句読点を挿入した応答にだけ
-`segments` を付ける。`segments` を省略した応答は従来どおり（句読点なし・文節情報なし）に解釈される。
+**任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。Host は挿入が有効な要求（§7.1 の
+3 条件がすべて真）の応答に `segments` を付ける。規則に当たらず句読点が入らなかったときも文節を返すので、
+句読点が入ったかどうかは各 segment の `auto_punctuation` で判断する。挿入が無効な要求の応答は
+`segments` を付けず、従来どおり（句読点なし・文節情報なし）に解釈される。
 代替経路の `QueryCandidatesResponse` も、`candidates[]` + `partial` に加えて同じ `segments[]` を持つ。
 
 変換器が文節境界を返さない場合、host は最良候補全体を 1 文節として扱い、
@@ -775,7 +777,7 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 - これらを欠く JSON のパースで `false` / `"ja"` の既定になる（後方互換）。
 - `QueryLiveConversionResponse`（と `QueryCandidatesResponse`）の round-trip で `segments[]`
   （`auto_punctuation` マーカ・`surface`・`reading`・UTF-16 オフセット）が保存される。`segments` を欠く
-  JSON は空 `segments` にパースされ、従来応答として解釈できる。句読点を挿入しない応答は `segments` を
+  JSON は空 `segments` にパースされ、従来応答として解釈できる。挿入が無効な要求への応答は `segments` を
   wire に載せない。各 `segments[].surface` の連結が応答の `surface` と一致する。
 - **学習スライスのバイト安全性** (host or 状態機械テスト): 日本語を含む確定で、各文節の学習
   surface が **`seg.surface` 文字列**から取られ、UTF-16 オフセットでの `substr` で壊れないこと

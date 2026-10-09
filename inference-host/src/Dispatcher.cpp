@@ -858,11 +858,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   }
   if (candidate) {
     response.surface = candidate->surface;
-    if (auto inserted =
-            InsertLivePunctuation(engine_->config(), parsed->auto_punctuation,
-                                  parsed->punctuation_style, candidate->surface, parsed->kana)) {
-      response.surface = std::move(inserted->surface);
-      response.segments = std::move(inserted->segments);
+    // The reading the candidate was converted from: a typo auto-replace has
+    // already corrected it, and the segments feed learning (section 5.3).
+    const auto& reading = candidate->reading.empty() ? parsed->kana : candidate->reading;
+    if (parsed->auto_punctuation) {
+      if (auto inserted = InsertLivePunctuation(engine_->config(), true, parsed->punctuation_style,
+                                                candidate->surface, reading)) {
+        response.surface = std::move(inserted->surface);
+        response.segments = std::move(inserted->segments);
+      }
     }
     if (std::isfinite(candidate->score)) {
       // M14 fallback scores are unbounded ranking values. A zero-baseline

@@ -178,9 +178,9 @@ struct QueryLiveConversionRequest {
 struct QueryLiveConversionResponse {
   std::string surface;
   double confidence{};  // Normalized to [0.0, 1.0].
-  // Set when the Host inserted punctuation: the segments of `surface`, with
-  // the inserted marks flagged auto_punctuation (section 7.4). Omitted from
-  // the wire when empty.
+  // Set when punctuation insertion was enabled for this request (section
+  // 7.2): the segments of `surface`, with any inserted mark flagged
+  // auto_punctuation (section 7.4). Omitted from the wire when empty.
   std::vector<LiveSegment> segments;
 };
 

@@ -87,7 +87,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `Handshake` | codec + Host | version、capability、client ID、tokenの交換 |
 | `LoadModel` | codec + Host | モデル読込指示 |
 | `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
-| `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答に句読点を挿入したときだけ `segments[]` を持つ（`docs/dynamic-punctuation-spec.md` §7） |
+| `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答は挿入が有効な要求のときだけ `segments[]` を持つ（`docs/dynamic-punctuation-spec.md` §7） |
 | `QueryBatchConversion` | codec + Host + TIP | batch romajiの一括変換要求 |
 | `QueryPredictions` | codec + Host + TIP | 予測変換候補の要求。`kana`・`left_side_context`・`mode` を送り、`predictions` を受け取る |
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |

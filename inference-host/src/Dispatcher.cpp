@@ -848,6 +848,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
+  const auto punctuation_config =
+      parsed->auto_punctuation ? std::optional{engine_->config()} : std::nullopt;
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
                                                       cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
@@ -861,9 +863,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
     // The reading the candidate was converted from: a typo auto-replace has
     // already corrected it, and the segments feed learning (section 5.3).
     const auto& reading = candidate->reading.empty() ? parsed->kana : candidate->reading;
-    if (parsed->auto_punctuation) {
-      if (auto inserted = InsertLivePunctuation(engine_->config(), true, parsed->punctuation_style,
-                                                candidate->surface, reading)) {
+    if (punctuation_config) {
+      if (auto inserted = InsertLivePunctuation(
+              *punctuation_config, true, parsed->punctuation_style, candidate->surface, reading)) {
         response.surface = std::move(inserted->surface);
         response.segments = std::move(inserted->segments);
       }

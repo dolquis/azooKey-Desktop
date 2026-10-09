@@ -50,6 +50,10 @@ std::string TypeToString(MessageType type) {
       return "ExportLearningData";
     case MessageType::ImportLearningData:
       return "ImportLearningData";
+    case MessageType::ResetLearningStore:
+      return "ResetLearningStore";
+    case MessageType::QueryPersona:
+      return "QueryPersona";
     default: return "Unknown";
   }
 }
@@ -83,6 +87,8 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ForgetLearningEntry") return MessageType::ForgetLearningEntry;
   if (value == "ExportLearningData") return MessageType::ExportLearningData;
   if (value == "ImportLearningData") return MessageType::ImportLearningData;
+  if (value == "ResetLearningStore") return MessageType::ResetLearningStore;
+  if (value == "QueryPersona") return MessageType::QueryPersona;
   return MessageType::Unknown;
 }
 

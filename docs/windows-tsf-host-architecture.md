@@ -457,6 +457,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
 | `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model` | model-management §4 |
 | `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` / `ImportLearningData` | 設定アプリ → Host（`ForgetLearningEntry` の `reading` + `surface` 形は TIP → Host） | M49、capability `learning_data_management`。payload codec は `Payloads.h` の M49 節 | learning-data-management §4 |
+| `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
+| `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |

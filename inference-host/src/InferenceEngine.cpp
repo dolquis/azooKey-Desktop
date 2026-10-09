@@ -1793,9 +1793,19 @@ void InferenceEngine::RecordUserDictionaryFailureLocked(const char* error) {
 void InferenceEngine::LearningFlushWorker() {
   std::unique_lock<std::mutex> lock(state_mutex_);
   while (!learning_flush_stop_) {
+    // rich-features-spec X-2-7: the persona is computed at startup (the store
+    // is loaded before the engine) and again every kPersonaRefreshInterval.
+    const auto persona_due = persona_computed_steady_
+                                 ? *persona_computed_steady_ + kPersonaRefreshInterval
+                                 : std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() >= persona_due) {
+      RefreshPersonaLocked();
+      continue;
+    }
+
     if (!store_ || !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
-      learning_flush_cv_.wait(lock, [this]() {
+      learning_flush_cv_.wait_until(lock, persona_due, [this]() {
         return learning_flush_stop_ ||
                (store_ && store_->dirty() && config_.learning_flush_interval_sec > 0 &&
                 first_unsaved_observation_steady_.has_value());
@@ -1803,14 +1813,15 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
 
-    const auto deadline = *first_unsaved_observation_steady_ +
-                          std::chrono::seconds(config_.learning_flush_interval_sec);
-    const bool changed = learning_flush_cv_.wait_until(lock, deadline, [this]() {
-      return learning_flush_stop_ || !store_ || !store_->dirty() ||
-             config_.learning_flush_interval_sec == 0 ||
-             !first_unsaved_observation_steady_.has_value();
-    });
-    if (changed) {
+    const auto flush_deadline = *first_unsaved_observation_steady_ +
+                                std::chrono::seconds(config_.learning_flush_interval_sec);
+    const bool changed =
+        learning_flush_cv_.wait_until(lock, (std::min)(flush_deadline, persona_due), [this]() {
+          return learning_flush_stop_ || !store_ || !store_->dirty() ||
+                 config_.learning_flush_interval_sec == 0 ||
+                 !first_unsaved_observation_steady_.has_value();
+        });
+    if (changed || std::chrono::steady_clock::now() < flush_deadline) {
       continue;
     }
 

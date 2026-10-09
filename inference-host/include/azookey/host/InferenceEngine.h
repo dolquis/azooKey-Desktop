@@ -32,6 +32,7 @@
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/Persona.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -289,6 +290,23 @@ class InferenceEngine {
   LearningImportResult ImportLearningData(const std::vector<LearningDataStore>& selected,
                                           const std::filesystem::path& source,
                                           learning::ImportConflictPolicy policy);
+  // Empties one store on disk and in memory (learning-data-management-spec
+  // section 4.6). "learning" covers every learning channel and the M7 file.
+  // On SaveFailed the in-memory contents are put back as they were.
+  enum class ResetOutcome { Reset, Unavailable, SaveFailed };
+  ResetOutcome ResetLearningStore(LearningDataStore store);
+
+  // rich-features-spec X-2-7: the persona of the kana learning store, computed
+  // by the learning flush worker at startup and every kPersonaRefreshInterval.
+  struct PersonaSnapshot {
+    learning::Persona persona;
+    uint64_t computed_at_epoch_sec{};
+  };
+  static constexpr std::chrono::hours kPersonaRefreshInterval{24};
+  // nullopt without a learning store. Computes now when the worker has not yet.
+  std::optional<PersonaSnapshot> CurrentPersona();
+  // Recomputes immediately (tests, and the worker).
+  void RefreshPersona();
   // Encryption of backup archive entries; DPAPI unless a test injects a key.
   void SetBackupCrypto(const learning::ByteCrypto* crypto);
 
@@ -356,6 +374,8 @@ class InferenceEngine {
   void RecordLearningSaveFailureLocked();
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
+  ResetOutcome ResetLearningChannelsLocked();
+  void RefreshPersonaLocked();
   void RefreshDictionaryLocked();
   void ApplyDictionaryConfigLocked();
 
@@ -412,6 +432,8 @@ class InferenceEngine {
   // docs/learning-data-management-spec.md, at-least-once section).
   std::deque<std::string> applied_observation_ids_;
   std::unordered_set<std::string> applied_observation_id_set_;
+  std::optional<PersonaSnapshot> persona_;
+  std::optional<std::chrono::steady_clock::time_point> persona_computed_steady_;
   std::condition_variable learning_flush_cv_;
   std::thread learning_flush_thread_;
   std::thread model_preload_thread_;

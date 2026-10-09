@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "azookey/learning/DpapiCrypto.h"
@@ -160,6 +161,9 @@ class LearningStore {
   // was removed (a pair learned only before v2 has no v2 row to forget).
   bool RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
                             bool* removed_rows = nullptr) const;
+  // Removes every M7 row from the M7 file (the reset of the whole store) with
+  // the same guarantees as RemoveFromLegacyFile.
+  bool ClearLegacyFile() const;
   void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
   // Decayed weight summed over the app rows of the pair.
   virtual double Score(const std::string& reading, const std::string& surface,
@@ -177,6 +181,9 @@ class LearningStore {
 
  private:
   bool LoadImpl(bool migrate_plaintext);
+  // nullopt removes every row.
+  bool RewriteLegacyFile(const std::optional<std::pair<std::string, std::string>>& pair,
+                         bool* removed_rows) const;
   bool KeepAsideCopy(const std::filesystem::path& v2_path) const;
 
   std::filesystem::path path_;

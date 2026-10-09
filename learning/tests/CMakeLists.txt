@@ -10,6 +10,12 @@ target_link_libraries(learning_store_v2_tests
 )
 azookey_discover_tests(learning_store_v2_tests)
 
+add_executable(persona_tests persona_test.cpp)
+target_link_libraries(persona_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(persona_tests)
+
 add_executable(sha256_tests sha256_test.cpp)
 target_link_libraries(sha256_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

@@ -55,7 +55,7 @@
 
 ## 4. IPC
 
-設定アプリは学習データファイルを直接開かず、一覧、忘却、エクスポート、インポートを
+設定アプリは学習データファイルを直接開かず、一覧、忘却、エクスポート、インポート、全削除を
 すべて Host への IPC として発行する（writer 責務の正典は
 `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 `user_dict.json` を含む本節の対象ストアはすべてこの経路に従う。
@@ -289,6 +289,44 @@ counts のキーは archive の item 名（§5.1）である。
 - 確定観測（`CommitObservation` / `CommitSegmentsObservation`）は任意の `app`
   （`process_name`、`window_class`）を持つ。Host は `process_name` を正規化して学習の app 行とし、
   `left_context` から `context_hash` を求める（`user-learning-enhancement-spec.md` §3.2、§8.1）。
+
+### 4.6 ResetLearningStore
+
+§3 の「全削除」は `ResetLearningStore` で Host へ送る。Host は Handshake の capabilities に
+`learning_reset` を載せ、設定アプリはそれを告知した Host にだけ送る。
+
+```json
+{ "type": "ResetLearningStore", "payload": { "store": "learning" } }
+```
+
+応答は `{ "ok": bool, "error": str（失敗時） }` である。`error` は §4.5 の名前を使い、
+`invalid_request`（`store` が無い、または未知）、`not_authenticated`、`store_unavailable`
+（そのストアを Host が持っていない）、`save_failed` のいずれかである。
+
+ストアごとの範囲は次のとおり。
+
+| `store` | 消す範囲 |
+|---|---|
+| `learning` | かなと英語の学習チャネルの全行と、M7 ファイル（§4.2）の全行 |
+| `user_dict` | ユーザー辞書の全単語 |
+| `typo` | タイプミス補正の全ペア |
+| `auto_word` | 新語候補の全行。`rejected` も消えるので、断った語も再び候補になりうる |
+
+リセットは途中で失敗しても半端に消えない。Host はストアの内容を退避してから空にして保存し、
+保存に失敗したら退避した内容をメモリへ戻して `save_failed` を返す。`learning` は複数のファイルに
+またがるので、次の順に処理する。
+
+1. 読み込みに失敗して保存を止めているチャネルが 1 つでもあれば、何も変えずに `save_failed` を返す。
+   保存できないファイルは空にできず、`ok` を返すと消えていないデータが次の起動で戻るためである。
+2. 各チャネルを空にして v2 ファイルへ保存する。
+3. M7 ファイルの全行を除く。v2 ファイルが先にあるので、M7 ファイルが学習の唯一の写しになる時点は無い。
+4. 手順 2 か 3 が失敗したら、全チャネルを退避した内容へ戻して保存し直し、`save_failed` を返す。
+   保存し直しにも失敗したチャネルは、戻した内容をメモリに持ち、次の flush で再び保存する。
+
+このため `save_failed` の後も Host が提示する学習の内容は変わらない。変換器が確定時にメモリへ覚えた履歴
+（`IConverter::Commit`）は、個別の忘却と同じくリセットの対象外で、Host の再起動まで残る。
+`user_dict` は `AddUserWord` と同じくファイルロックを取り、ディスクの内容を読み直してから空にする。
+
 ## 5. バックアップ形式
 
 ```

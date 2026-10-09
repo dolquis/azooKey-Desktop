@@ -913,6 +913,45 @@ TEST(PayloadsTest, CommitCorrectionDeniesPrivacyByDefaultAndRejectsInconsistentK
   }
 }
 
+TEST(PayloadsTest, ResetLearningStoreAndQueryPersonaRoundTrip) {
+  using namespace azookey::ipc;
+  ResetLearningStoreRequest reset;
+  reset.store = "typo";
+  const auto parsed_reset = ParseResetLearningStoreRequest(BuildResetLearningStoreRequest(reset));
+  ASSERT_TRUE(parsed_reset.has_value());
+  EXPECT_EQ(parsed_reset->store, "typo");
+  EXPECT_FALSE(ParseResetLearningStoreRequest("{}").has_value());
+  EXPECT_FALSE(ParseResetLearningStoreRequest(R"({"store":""})").has_value());
+
+  ResetLearningStoreResponse failed;
+  failed.ok = false;
+  failed.error = std::string(kLearningDataErrorSaveFailed);
+  const auto parsed_failed =
+      ParseResetLearningStoreResponse(BuildResetLearningStoreResponse(failed));
+  ASSERT_TRUE(parsed_failed.has_value());
+  EXPECT_FALSE(parsed_failed->ok);
+  EXPECT_EQ(parsed_failed->error, std::optional<std::string>("save_failed"));
+
+  QueryPersonaResponse persona;
+  persona.polite_ratio = 0.5;
+  persona.casual_ratio = 0.25;
+  persona.technical_ratio = 0.125;
+  persona.kaomoji_ratio = 0.0;
+  persona.sample_count = 8;
+  persona.computed_at_epoch_sec = 1700000000;
+  const auto parsed_persona = ParseQueryPersonaResponse(BuildQueryPersonaResponse(persona));
+  ASSERT_TRUE(parsed_persona.has_value());
+  EXPECT_TRUE(parsed_persona->ok);
+  EXPECT_DOUBLE_EQ(parsed_persona->polite_ratio, 0.5);
+  EXPECT_DOUBLE_EQ(parsed_persona->casual_ratio, 0.25);
+  EXPECT_DOUBLE_EQ(parsed_persona->technical_ratio, 0.125);
+  EXPECT_EQ(parsed_persona->sample_count, 8u);
+  EXPECT_EQ(parsed_persona->computed_at_epoch_sec, 1700000000u);
+  // A ratio outside [0, 1] is not displayed.
+  EXPECT_FALSE(ParseQueryPersonaResponse(R"({"ok":true,"polite_ratio":1.5})").has_value());
+  EXPECT_FALSE(ParseQueryPersonaResponse(R"({"polite_ratio":0.5})").has_value());
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());

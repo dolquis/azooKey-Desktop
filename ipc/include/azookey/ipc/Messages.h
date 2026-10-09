@@ -38,6 +38,10 @@ enum class MessageType {
   ForgetLearningEntry,
   ExportLearningData,
   ImportLearningData,
+  // DEV-1208 settings app: whole-store reset (learning-data-management-spec
+  // section 4.6) and the persona view (rich-features-spec X-2-7).
+  ResetLearningStore,
+  QueryPersona,
   Unknown,
 };
 

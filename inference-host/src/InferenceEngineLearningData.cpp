@@ -4,9 +4,12 @@
 // the conversion path touches them one at a time.
 
 #include <algorithm>
+#include <chrono>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/learning/AtomicFile.h"
@@ -135,6 +138,101 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::Learn
   const bool saved = SaveLearningDataLocked();
   if (!legacy_ok || !saved) return ForgetOutcome::SaveFailed;
   return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
+}
+
+InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {
+  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  switch (store) {
+    case LearningDataStore::Learning:
+      return ResetLearningChannelsLocked();
+    case LearningDataStore::Typo: {
+      if (!typo_store_) return ResetOutcome::Unavailable;
+      const auto before = typo_store_->SerializeText();
+      typo_store_->Reset();
+      if (typo_store_->Save()) return ResetOutcome::Reset;
+      typo_store_->LoadText(before);
+      return ResetOutcome::SaveFailed;
+    }
+    case LearningDataStore::AutoWord: {
+      if (!auto_word_store_) return ResetOutcome::Unavailable;
+      const auto before = auto_word_store_->SerializeText();
+      auto_word_store_->Reset();
+      if (auto_word_store_->Save()) return ResetOutcome::Reset;
+      auto_word_store_->LoadText(before);
+      return ResetOutcome::SaveFailed;
+    }
+    case LearningDataStore::UserDictionary:
+      break;
+  }
+
+  // User dictionary: the same disk-first protocol as RemoveUserWord.
+  if (!user_dict_) return ResetOutcome::Unavailable;
+  learning::FileLockFailure lock_failure;
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
+  if (!file_lock) {
+    learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
+    return ResetOutcome::SaveFailed;
+  }
+  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+    return ResetOutcome::SaveFailed;
+  }
+  const auto before = user_dict_->All();
+  user_dict_->Clear();
+  if (!user_dict_->Save()) {
+    RestoreUserDictionaryLocked(before);
+    return ResetOutcome::SaveFailed;
+  }
+  RefreshDictionaryLocked();
+  return ResetOutcome::Reset;
+}
+
+// Every learning channel is emptied or none is. A store whose file could not
+// be read refuses to save, so its file would survive an "ok"; it is refused
+// before anything changes. The v2 files are emptied before the M7 file, so the
+// v2 file exists (empty) before its M7 source is touched. A failure at either
+// step puts the snapshot back in memory and saves it again.
+InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannelsLocked() {
+  std::vector<std::pair<learning::LearningStore*, std::string>> snapshots;
+  for (auto* store : {store_, english_store_}) {
+    if (!store) continue;
+    if (store->save_blocked()) return ResetOutcome::SaveFailed;
+    snapshots.emplace_back(store, store->SerializeText());
+  }
+  if (snapshots.empty()) return ResetOutcome::Unavailable;
+  for (auto& [store, text] : snapshots) store->Reset();
+  if (SaveLearningDataLocked() && (!store_ || store_->ClearLegacyFile())) {
+    RefreshPersonaLocked();
+    return ResetOutcome::Reset;
+  }
+  for (auto& [store, text] : snapshots) store->LoadText(text);
+  // Best effort: a channel whose empty file did reach the disk gets its rows
+  // back; one that still fails keeps them in memory for the next flush.
+  (void)SaveLearningDataLocked();
+  return ResetOutcome::SaveFailed;
+}
+
+std::optional<InferenceEngine::PersonaSnapshot> InferenceEngine::CurrentPersona() {
+  std::scoped_lock lock(state_mutex_);
+  if (!store_) return std::nullopt;
+  if (!persona_) RefreshPersonaLocked();
+  return persona_;
+}
+
+void InferenceEngine::RefreshPersona() {
+  std::scoped_lock lock(state_mutex_);
+  RefreshPersonaLocked();
+}
+
+void InferenceEngine::RefreshPersonaLocked() {
+  if (!store_) return;
+  PersonaSnapshot snapshot;
+  snapshot.persona = learning::ComputePersona(store_->Aggregates());
+  snapshot.computed_at_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  persona_ = snapshot;
+  persona_computed_steady_ = std::chrono::steady_clock::now();
 }
 
 LearningExportResult InferenceEngine::ExportLearningData(

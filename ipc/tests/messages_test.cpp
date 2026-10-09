@@ -83,7 +83,8 @@ TEST(MessagesTest, TypeStringMapping) {
         azookey::ipc::MessageType::ListLearningEntries,
         azookey::ipc::MessageType::ForgetLearningEntry,
         azookey::ipc::MessageType::ExportLearningData,
-        azookey::ipc::MessageType::ImportLearningData}) {
+        azookey::ipc::MessageType::ImportLearningData,
+        azookey::ipc::MessageType::ResetLearningStore, azookey::ipc::MessageType::QueryPersona}) {
     EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
   }
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ListModels), "ListModels");
@@ -97,6 +98,9 @@ TEST(MessagesTest, TypeStringMapping) {
             "ExportLearningData");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ImportLearningData),
             "ImportLearningData");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ResetLearningStore),
+            "ResetLearningStore");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryPersona), "QueryPersona");
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
@@ -1650,6 +1651,79 @@ std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const 
       !CountsFromJson(*v, "skipped_counts", p.skipped_counts) ||
       !CountsFromJson(*v, "conflict_counts", p.conflict_counts))
     return std::nullopt;
+  return p;
+}
+
+// -------- ResetLearningStore --------
+
+std::string BuildResetLearningStoreRequest(const ResetLearningStoreRequest& p) {
+  j::Object o;
+  o.emplace("store", j::Value(p.store));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResetLearningStoreRequest> ParseResetLearningStoreRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto store = ReadNonEmptyString(*v, "store");
+  if (!store) return std::nullopt;
+  ResetLearningStoreRequest p;
+  p.store = std::move(*store);
+  return p;
+}
+
+std::string BuildResetLearningStoreResponse(const ResetLearningStoreResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResetLearningStoreResponse> ParseResetLearningStoreResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  ResetLearningStoreResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  return p;
+}
+
+// -------- QueryPersona --------
+
+std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("polite_ratio", j::Value(p.polite_ratio));
+  o.emplace("casual_ratio", j::Value(p.casual_ratio));
+  o.emplace("technical_ratio", j::Value(p.technical_ratio));
+  o.emplace("kaomoji_ratio", j::Value(p.kaomoji_ratio));
+  o.emplace("sample_count", j::Value(p.sample_count));
+  o.emplace("computed_at_epoch_sec", j::Value(p.computed_at_epoch_sec));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  QueryPersonaResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  // A ratio outside [0, 1] is not a ratio; reject rather than display it.
+  for (auto [key, out] :
+       {std::pair{"polite_ratio", &p.polite_ratio}, std::pair{"casual_ratio", &p.casual_ratio},
+        std::pair{"technical_ratio", &p.technical_ratio},
+        std::pair{"kaomoji_ratio", &p.kaomoji_ratio}}) {
+    const double ratio = v->GetNumber(key).value_or(0.0);
+    if (!(ratio >= 0.0 && ratio <= 1.0)) return std::nullopt;
+    *out = ratio;
+  }
+  p.sample_count = v->GetUInt("sample_count").value_or(0);
+  p.computed_at_epoch_sec = v->GetUInt("computed_at_epoch_sec").value_or(0);
   return p;
 }
 

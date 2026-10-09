@@ -361,6 +361,10 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleExportLearningData(req);
     case ipc::MessageType::ImportLearningData:
       return HandleImportLearningData(req);
+    case ipc::MessageType::ResetLearningStore:
+      return HandleResetLearningStore(req);
+    case ipc::MessageType::QueryPersona:
+      return HandleQueryPersona(req);
     case ipc::MessageType::ResolveNewWord:
       return HandleResolveNewWord(req);
     default:
@@ -467,6 +471,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildImportLearningDataResponse(r));
     }
+    case ipc::MessageType::ResetLearningStore: {
+      ipc::ResetLearningStoreResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildResetLearningStoreResponse(r));
+    }
+    case ipc::MessageType::QueryPersona: {
+      ipc::QueryPersonaResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildQueryPersonaResponse(r));
+    }
     case ipc::MessageType::ListModels: {
       ipc::ListModelsResponse r;
       r.ok = false;
@@ -524,7 +540,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "benchmark_model",
                       "english_candidates",
                       "learning_data_management",
-                      "commit_correction"};
+                      "commit_correction",
+                      "learning_reset",
+                      "persona"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -1035,6 +1053,46 @@ std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::En
     res.error = std::string(ipc::kLearningDataErrorSaveFailed);
   }
   return reply();
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleResetLearningStore(const ipc::Envelope& req) {
+  ipc::ResetLearningStoreResponse res;
+  const auto parsed = ipc::ParseResetLearningStoreRequest(req.payload_json);
+  const auto store = parsed ? ParseLearningDataStore(parsed->store) : std::nullopt;
+  if (!store) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+  } else {
+    switch (engine_->ResetLearningStore(*store)) {
+      case InferenceEngine::ResetOutcome::Reset:
+        break;
+      case InferenceEngine::ResetOutcome::Unavailable:
+        res.ok = false;
+        res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
+        break;
+      case InferenceEngine::ResetOutcome::SaveFailed:
+        res.ok = false;
+        res.error = std::string(ipc::kLearningDataErrorSaveFailed);
+        break;
+    }
+  }
+  return MakeResponse(req, ipc::BuildResetLearningStoreResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryPersona(const ipc::Envelope& req) {
+  ipc::QueryPersonaResponse res;
+  if (const auto snapshot = engine_->CurrentPersona()) {
+    res.polite_ratio = snapshot->persona.polite_ratio;
+    res.casual_ratio = snapshot->persona.casual_ratio;
+    res.technical_ratio = snapshot->persona.technical_ratio;
+    res.kaomoji_ratio = snapshot->persona.kaomoji_ratio;
+    res.sample_count = snapshot->persona.sample_count;
+    res.computed_at_epoch_sec = snapshot->computed_at_epoch_sec;
+  } else {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
+  }
+  return MakeResponse(req, ipc::BuildQueryPersonaResponse(res));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {

@@ -643,4 +643,40 @@ std::optional<ExportLearningDataResponse> ParseExportLearningDataResponse(const 
 std::optional<ImportLearningDataRequest> ParseImportLearningDataRequest(const std::string& json);
 std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const std::string& json);
 
+// Whole-store reset (learning-data-management-spec section 4.6). Capability
+// "learning_reset". Errors are the kLearningDataError* codes.
+struct ResetLearningStoreRequest {
+  // "learning" | "user_dict" | "typo" | "auto_word"; required.
+  std::string store;
+};
+
+struct ResetLearningStoreResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+};
+
+std::string BuildResetLearningStoreRequest(const ResetLearningStoreRequest& p);
+std::string BuildResetLearningStoreResponse(const ResetLearningStoreResponse& p);
+std::optional<ResetLearningStoreRequest> ParseResetLearningStoreRequest(const std::string& json);
+std::optional<ResetLearningStoreResponse> ParseResetLearningStoreResponse(const std::string& json);
+
+// Persona ratios (rich-features-spec X-2-7). Capability "persona"; the request
+// payload is an empty object. Only the four ratios and their basis are sent,
+// never a surface. A failure carries kLearningDataErrorNotAuthenticated or
+// kLearningDataErrorStoreUnavailable.
+struct QueryPersonaResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+  double polite_ratio{};
+  double casual_ratio{};
+  double technical_ratio{};
+  double kaomoji_ratio{};
+  // Commits the ratios were computed from; 0 means there is no data yet.
+  uint64_t sample_count{};
+  uint64_t computed_at_epoch_sec{};
+};
+
+std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p);
+std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json);
+
 }  // namespace azookey::ipc

@@ -1733,6 +1733,11 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
   Host が pack を扱うのは起動時だけなので、起動後に `neologdEnabled` を真にしても、
   Host が再起動するまで `not_requested` のままである。
 
+  設定アプリは「辞書」ペインの切替の下に、この状態を `QueryDiagnostics` で読んで表示する。
+  切替が真のときの `not_requested` は失敗ではなく、「Host の再起動後に取得する」（切替が未保存なら
+  「保存すると、Host の再起動後に取得する」）と示す。`error` のときは `reason` を添える。
+  Host が `neologd_layer` を返さない（旧版の）ときは、状態を返さない旨を示す。
+
 **設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
 §14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である
 （`docs/sideload-packaging-spec.md` §3.2）。

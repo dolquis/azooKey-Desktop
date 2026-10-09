@@ -30,6 +30,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   void SelectTab(int index);
   winrt::fire_and_forget LoadPage();
   winrt::fire_and_forget Forget(azookey::ipc::LearningEntryField entry);
+  winrt::fire_and_forget Reset();
   winrt::fire_and_forget Export();
   winrt::fire_and_forget Import();
   winrt::Windows::Foundation::IAsyncOperation<bool> Confirm(winrt::hstring title,
@@ -51,6 +52,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel backup_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox search_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button search_button_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button reset_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel entries_panel_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock page_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button previous_button_{nullptr};

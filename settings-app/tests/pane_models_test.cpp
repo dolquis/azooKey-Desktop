@@ -40,7 +40,8 @@ std::set<std::string> ResourcesUsedBy(const char* source) {
   buffer << input.rdbuf();
   const auto text = buffer.str();
   std::set<std::string> used;
-  const std::regex pattern(R"(L"((?:Models|Learning|Profiles|HostCall)_[A-Za-z0-9_]+)\")");
+  const std::regex pattern(
+      R"(L"((?:Models|Learning|Profiles|HostCall|Persona|NeologdStatus)_[A-Za-z0-9_]+)\")");
   for (std::sregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it) {
     used.insert((*it)[1].str());
   }
@@ -127,6 +128,10 @@ TEST(LearningPaneModelTest, EveryErrorStoreAndConflictOptionHasAString) {
   for (const auto& tab : azookey::settings::kLearningStoreTabs) {
     EXPECT_TRUE(names.contains(std::string(tab.resource))) << tab.resource;
   }
+  for (const auto& tab : azookey::settings::kLearningStoreTabs) {
+    const auto name = "Learning_ResetNote_" + std::string(tab.id);
+    EXPECT_TRUE(names.contains(name)) << name;
+  }
   for (const auto option : azookey::settings::kConflictResolutions) {
     EXPECT_TRUE(names.contains("LearningConflict_" + std::string(option))) << option;
   }
@@ -184,7 +189,8 @@ TEST(LearningPaneModelTest, AcceptsOnlyAnAbsoluteZipPathForABackup) {
 
 TEST(PaneSourcesTest, EveryStringTheNewPanesLoadIsInTheResources) {
   const auto names = ResourceNames();
-  for (const char* source : {"ModelPane.cpp", "LearningPane.cpp", "ProfilesPane.cpp"}) {
+  for (const char* source :
+       {"ModelPane.cpp", "LearningPane.cpp", "ProfilesPane.cpp", "PersonaPane.cpp"}) {
     const auto used = ResourcesUsedBy(source);
     EXPECT_FALSE(used.empty()) << source;
     for (const auto& name : used) {

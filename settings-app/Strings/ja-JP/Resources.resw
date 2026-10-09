@@ -453,4 +453,35 @@
   <data name="Profiles_Migrated" xml:space="preserve"><value>移行済み</value></data>
   <data name="Learning_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
   <data name="Models_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
+  <data name="PersonaNavigationItem.Content" xml:space="preserve"><value>Persona</value></data>
+  <data name="NeologdStatus_Unknown" xml:space="preserve"><value>Host の状態: この Host は NEologd 層の状態を返しません。</value></data>
+  <data name="NeologdStatus_NotEnabled" xml:space="preserve"><value>Host の状態: 使っていません。</value></data>
+  <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>Host の状態: Host の再起動後に取得します（サインアウトして再度サインインしてください）。</value></data>
+  <data name="NeologdStatus_FetchAfterSaveAndRestart" xml:space="preserve"><value>Host の状態: 保存すると、Host の再起動後に取得します。</value></data>
+  <data name="NeologdStatus_Loading" xml:space="preserve"><value>Host の状態: 取得・読み込み中です。</value></data>
+  <data name="NeologdStatus_Ready" xml:space="preserve"><value>Host の状態: 読み込み済みで、変換に使っています。</value></data>
+  <data name="NeologdStatus_MissingPack" xml:space="preserve"><value>Host の状態: 公開された pack が無いため、取得していません。</value></data>
+  <data name="NeologdStatus_Error" xml:space="preserve"><value>Host の状態: 取得または読み込みに失敗しました。</value></data>
+  <data name="Persona_Title" xml:space="preserve"><value>Persona</value></data>
+  <data name="Persona_Description" xml:space="preserve"><value>学習した確定の傾向を、Host が数えた割合で表示します（読み取り専用）。語句や読みは表示しません。</value></data>
+  <data name="Persona_RefreshButton" xml:space="preserve"><value>再読み込み</value></data>
+  <data name="Persona_ProblemTitle" xml:space="preserve"><value>Persona を読み込めませんでした</value></data>
+  <data name="Persona_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
+  <data name="Persona_NoData" xml:space="preserve"><value>データ不足です。入力して確定した語が増えると表示されます。</value></data>
+  <data name="Persona_Polite" xml:space="preserve"><value>丁寧（です・ます）</value></data>
+  <data name="Persona_Casual" xml:space="preserve"><value>くだけた言い回し</value></data>
+  <data name="Persona_Technical" xml:space="preserve"><value>技術的な語（英数字・識別子）</value></data>
+  <data name="Persona_Kaomoji" xml:space="preserve"><value>顔文字</value></data>
+  <data name="Persona_SampleCount" xml:space="preserve"><value>集計に使った確定の回数</value></data>
+  <data name="Persona_ComputedAt" xml:space="preserve"><value>算出時刻</value></data>
+  <data name="Learning_ResetButton" xml:space="preserve"><value>全削除</value></data>
+  <data name="Learning_ResetConfirmTitle" xml:space="preserve"><value>このタブのデータをすべて削除しますか？</value></data>
+  <data name="Learning_ResetConfirmMessage" xml:space="preserve"><value>表示中のストアの内容をすべて消します。元に戻せません。</value></data>
+  <data name="Learning_ResetNote_learning" xml:space="preserve"><value>かなと英語の学習結果がすべて消えます。入力の予測や並びがもとに戻ります。</value></data>
+  <data name="Learning_ResetNote_user_dict" xml:space="preserve"><value>ユーザー辞書の単語がすべて消えます。</value></data>
+  <data name="Learning_ResetNote_typo" xml:space="preserve"><value>タイプミス補正の登録がすべて消えます。</value></data>
+  <data name="Learning_ResetNote_auto_word" xml:space="preserve"><value>新語候補がすべて消えます。断った語も消えるので、同じ語が再び候補になることがあります。</value></data>
+  <data name="Learning_ResetDoneTitle" xml:space="preserve"><value>削除しました</value></data>
+  <data name="Learning_ResetDoneMessage" xml:space="preserve"><value>このタブのデータを削除しました。</value></data>
+  <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>Host の状態: 不明な状態です（この設定アプリより新しい Host かもしれません）。</value></data>
 </root>

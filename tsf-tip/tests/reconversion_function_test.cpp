@@ -940,4 +940,89 @@ TEST(ReconversionFunctionTest, SelectionAndContextChangesInvalidateDelayedHostCa
   server.Stop();
 }
 
+// DEV-1529 / user-learning-enhancement-spec §4.1: choosing another candidate
+// in the azooKey reconversion UI sends CommitCorrection "reconvert"; keeping
+// the original sends nothing.
+TEST(ReconversionFunctionTest, ChoosingAnotherCandidateSendsReconvertCorrection) {
+  for (const bool choose_other : {true, false}) {
+    SCOPED_TRACE(choose_other ? "other candidate" : "original kept");
+    TestContext context;
+    auto text = std::make_shared<std::wstring>(L"明日");
+    TestRange range(&context, text, 0, 2);
+    context.selection = &range;
+    azookey::tsf::TextService service;
+    service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    service.set_commit_correction_supported_for_test(true);
+    service.set_text_edit_context_for_test(&context);
+    service.set_reconversion_cache_for_test(&context, L"明日", {L"明日", L"あした"}, "あした");
+    IUnknown* unknown = nullptr;
+    ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+    ITfFnReconversion* function = nullptr;
+    ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+              S_OK);
+    unknown->Release();
+    EXPECT_EQ(function->Reconvert(&range), S_OK);
+    ASSERT_TRUE(service.has_reconversion_ui_for_test());
+
+    KeyboardStateGuard keyboard_state;
+    BOOL eaten = FALSE;
+    if (choose_other) {
+      ASSERT_EQ(service.OnKeyDown(&context, VK_DOWN, 0, &eaten), S_OK);
+      EXPECT_TRUE(eaten);
+    }
+    eaten = FALSE;
+    ASSERT_EQ(service.OnKeyDown(&context, VK_RETURN, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+
+    const auto corrections = service.queued_corrections_for_test();
+    if (choose_other) {
+      EXPECT_EQ(*text, L"あした");
+      ASSERT_EQ(corrections.size(), 1u);
+      EXPECT_EQ(corrections[0].kind, "reconvert");
+      EXPECT_EQ(corrections[0].reading, "あした");
+      EXPECT_EQ(corrections[0].rejected_surface, "明日");
+      ASSERT_TRUE(corrections[0].selected_surface.has_value());
+      EXPECT_EQ(*corrections[0].selected_surface, "あした");
+      EXPECT_FALSE(corrections[0].observation_id.empty());
+    } else {
+      EXPECT_EQ(*text, L"明日");
+      EXPECT_TRUE(corrections.empty());
+    }
+    function->Release();
+    service.Deactivate();
+  }
+}
+
+TEST(ReconversionFunctionTest, ReconvertInAContextThatTurnedSecureSendsNoCorrection) {
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日");
+  TestRange range(&context, text, 0, 2);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  service.set_commit_correction_supported_for_test(true);
+  service.set_text_edit_context_for_test(&context);
+  service.set_reconversion_cache_for_test(&context, L"明日", {L"明日", L"あした"}, "あした");
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  EXPECT_EQ(function->Reconvert(&range), S_OK);
+  ASSERT_TRUE(service.has_reconversion_ui_for_test());
+
+  service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+  KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(service.OnKeyDown(&context, VK_DOWN, 0, &eaten), S_OK);
+  eaten = FALSE;
+  ASSERT_EQ(service.OnKeyDown(&context, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_TRUE(service.queued_corrections_for_test().empty());
+  function->Release();
+  service.Deactivate();
+}
+
 }  // namespace

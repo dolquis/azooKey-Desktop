@@ -1260,7 +1260,7 @@ JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame
 - `Payloads.cpp` 側で必須キー欠損・型不一致を安全に拒否する
 
 **enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
-`CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
+`UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
 ⚠️ 項）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
 応答待ちの blocking client をハングさせないため、既存ワイヤ形式の envelope に
 「未対応 type」を表す `{"ok":false,"error":"unsupported_message_type"}` を載せ、
@@ -2980,12 +2980,19 @@ Response:
       "learning_entries": int, "user_dict_entries": int,
       "fallback_state": "healthy" | "degraded_simple" |
                         "degraded_model" | "safe_mode",
-      "last_error": str (optional)
+      "last_error": str (optional),
+      "neologd_layer": {                       (optional)
+        "state": "not_requested" | "loading" | "ready" | "missing_pack" | "error",
+        "reason": str (optional, state="error" のときの固定の分類名)
+      }
     } }
 ```
 
 v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落を `0` として扱う。
 `engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
+`neologd_layer` は protocol v1 の追加フィールドで、欠落と未知の `state` はどちらも「無し」として
+扱い、payload 全体は不正にしない。値の意味は `docs/auto-word-registration-spec.md` §15.14 が定める。
+`reason` は `neologd_pack_load` ログと同じ固定の分類名だけで、パスやサーバの応答を含まない。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 `last_error` / `ep_last_error` は失敗時にユーザーパスを含みうるため、保存前に

@@ -326,6 +326,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return std::nullopt;
     case ipc::MessageType::CommitObservation:
       return HandleCommitObservation(req);
+    case ipc::MessageType::CommitCorrection:
+      return HandleCommitCorrection(req);
     case ipc::MessageType::CommitSegmentsObservation: {
       auto privacy =
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
@@ -389,7 +391,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       return MakeResponse(req, ipc::BuildUpdateConfigResponse(r));
     }
     case ipc::MessageType::CommitSegmentsObservation:
-    case ipc::MessageType::CommitObservation: {
+    case ipc::MessageType::CommitObservation:
+    case ipc::MessageType::CommitCorrection: {
       ipc::CommitObservationResponse r;
       r.ok = false;
       return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
@@ -511,10 +514,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_generation_id = config_.host_generation_id;
   // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
-  res.capabilities = {
-      "oob_cancel",         "commit_segments",         "query_live_conversion", "query_predictions",
-      "app_profile",        "candidate_tag",           "list_models",           "benchmark_model",
-      "english_candidates", "learning_data_management"};
+  res.capabilities = {"oob_cancel",
+                      "commit_segments",
+                      "query_live_conversion",
+                      "query_predictions",
+                      "app_profile",
+                      "candidate_tag",
+                      "list_models",
+                      "benchmark_model",
+                      "english_candidates",
+                      "learning_data_management",
+                      "commit_correction"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -629,6 +639,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   } else {
     p.fallback_state = "healthy";
   }
+  if (config_.neologd_layer) p.neologd_layer = config_.neologd_layer->Snapshot();
   return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 
@@ -1270,6 +1281,25 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
     res.ok = true;
   } else {
     res.ok = false;
+  }
+  return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envelope& req) {
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  ipc::CommitObservationResponse res;
+  // Same privacy gate as CommitObservation (user-learning-enhancement-spec
+  // section 4); a duplicate resend is answered ok=true without re-recording.
+  if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
+      parsed &&
+      LearningAllowed(parsed->secure, parsed->learning_allowed,
+                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+    engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
+                              NowSec(), parsed->observation_id,
+                              parsed->app ? parsed->app->process_name : std::string(),
+                              parsed->left_context);
+    res.ok = true;
   }
   return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
 }

@@ -1717,6 +1717,21 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **ログ**: 結果は `neologd_pack_load` イベントに記録する。`result` は `ok` /
   `missing_pack` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
   パスとサーバの応答はログに出さない。
+- **状態の照会**: 同じ結果を `QueryDiagnostics` 応答の任意フィールド `neologd_layer`
+  （`docs/dev-infrastructure-spec.md` §12.6）で返す。`state` は次のいずれかで、`reason` は
+  `error` のときだけログと同じ分類名を入れる。値は Host プロセスの寿命の間だけ保持し、
+  永続化しない。
+
+  | `state` | 意味 |
+  |---|---|
+  | `not_requested` | この起動では pack を扱っていない（`neologdEnabled` が偽、SafeMode、`packs` が無い） |
+  | `loading` | 取得・検証・ロードの途中 |
+  | `ready` | 層へロードした |
+  | `missing_pack` | マニフェストが未公開 |
+  | `error` | 取得・検証・ロードのいずれかで失敗した。層は missing-pack のまま |
+
+  Host が pack を扱うのは起動時だけなので、起動後に `neologdEnabled` を真にしても、
+  Host が再起動するまで `not_requested` のままである。
 
 **設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
 §14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である

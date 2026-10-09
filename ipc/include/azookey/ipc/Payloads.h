@@ -53,6 +53,23 @@ struct HealthPayload {
   std::optional<std::string> last_error;
 };
 
+// State of the neologd_lexicon layer in this Host process
+// (auto-word-registration-spec section 15.14). The Host handles the pack only
+// at startup, so a consent given after startup stays "not_requested" until
+// the Host restarts.
+inline constexpr std::string_view kNeologdLayerNotRequested = "not_requested";
+inline constexpr std::string_view kNeologdLayerLoading = "loading";
+inline constexpr std::string_view kNeologdLayerReady = "ready";
+inline constexpr std::string_view kNeologdLayerMissingPack = "missing_pack";
+inline constexpr std::string_view kNeologdLayerError = "error";
+
+struct NeologdLayerStatus {
+  std::string state{kNeologdLayerNotRequested};
+  // Fixed failure class from the neologd_pack_load log; never a path or a
+  // server response. Present only for "error".
+  std::optional<std::string> reason;
+};
+
 struct QueryDiagnosticsPayload {
   bool model_loaded{false};
   std::optional<std::string> loaded_model_path;
@@ -66,6 +83,8 @@ struct QueryDiagnosticsPayload {
   uint64_t user_dict_entries{};
   std::string fallback_state;
   std::optional<std::string> last_error;
+  // Protocol v1 additive field (DEV-1534). Absent from Hosts that predate it.
+  std::optional<NeologdLayerStatus> neologd_layer;
 };
 
 struct LoadModelRequest {
@@ -254,6 +273,33 @@ struct CommitSegmentsObservationRequest {
 std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
 std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
     const std::string& json);
+
+// Correction of a commit (user-learning-enhancement-spec section 4, DEV-1529).
+// "undo" is an immediate Backspace right after the commit: the rejected
+// surface is penalized and nothing is accepted. "reconvert" replaces the
+// rejected surface with selected_surface. Sent only to Hosts that advertise
+// the "commit_correction" capability; the answer is CommitObservationResponse.
+inline constexpr std::string_view kCorrectionKindUndo = "undo";
+inline constexpr std::string_view kCorrectionKindReconvert = "reconvert";
+
+struct CommitCorrectionRequest {
+  std::string kind;
+  std::string reading;
+  std::string rejected_surface;
+  // Required for "reconvert" and must differ from rejected_surface; absent
+  // for "undo".
+  std::optional<std::string> selected_surface;
+  std::string left_context;
+  uint64_t timestamp_ms{};
+  std::string observation_id;
+  // Missing or invalid event privacy is denied.
+  bool secure{true};
+  bool learning_allowed{false};
+  std::optional<AppIdentity> app;
+};
+
+std::string BuildCommitCorrectionRequest(const CommitCorrectionRequest& p);
+std::optional<CommitCorrectionRequest> ParseCommitCorrectionRequest(const std::string& json);
 
 struct AddUserWordRequest {
   std::string word;

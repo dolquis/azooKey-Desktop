@@ -93,7 +93,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
 | `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
 | `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |
-| `CommitCorrection` | enumのみ | 将来の補正確定通知用予約 |
+| `CommitCorrection` | codec + Host | 即 Backspace（`kind="undo"`）と再変換（`kind="reconvert"`）の学習フィードバック。Host は capability `commit_correction` を告知し、応答は `CommitObservation` と同じ `ok` |
 | `AddUserWord` | codec + Host | ユーザ辞書追加 |
 | `UpdateUserWord` | enumのみ | 将来のユーザ辞書更新用予約 |
 | `RemoveUserWord` | codec + Host | ユーザ辞書削除 |

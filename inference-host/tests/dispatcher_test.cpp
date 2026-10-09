@@ -452,8 +452,9 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
-  for (const char* capability : {"app_profile", "candidate_tag", "list_models", "benchmark_model",
-                                 "english_candidates", "learning_data_management"}) {
+  for (const char* capability :
+       {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
+        "learning_data_management", "commit_correction"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -632,6 +633,21 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   ASSERT_TRUE(add_before_payload.has_value());
   EXPECT_FALSE(add_before_payload->ok);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+
+  ipc::CommitCorrectionRequest correction;
+  correction.kind = std::string(ipc::kCorrectionKindUndo);
+  correction.reading = "かんじ";
+  correction.rejected_surface = "幹事";
+  correction.secure = false;
+  correction.learning_allowed = true;
+  const auto correction_before_handshake = token_dispatcher.Dispatch(MakeReq(
+      7, ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(correction)));
+  ASSERT_TRUE(correction_before_handshake.has_value());
+  const auto correction_before_payload =
+      ipc::ParseCommitObservationResponse(correction_before_handshake->payload_json);
+  ASSERT_TRUE(correction_before_payload.has_value());
+  EXPECT_FALSE(correction_before_payload->ok);
+  EXPECT_EQ(store.size(), 0u);
 
   // The approval messages say why they refused instead of looking like an
   // empty store.
@@ -1643,8 +1659,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
 }
 
 TEST_F(DispatcherTest, AuthenticatedUnsupportedMessagesReturnExplicitTypedErrors) {
-  for (const auto type : {ipc::MessageType::QueryCorrections, ipc::MessageType::CommitCorrection,
-                          ipc::MessageType::UpdateUserWord, ipc::MessageType::Unknown}) {
+  for (const auto type : {ipc::MessageType::QueryCorrections, ipc::MessageType::UpdateUserWord,
+                          ipc::MessageType::Unknown}) {
     const auto response = dispatcher.Dispatch(MakeReq(32, type, "{}"));
     ASSERT_TRUE(response.has_value()) << ipc::TypeToString(type);
     EXPECT_EQ(response->type, type);
@@ -1716,6 +1732,103 @@ TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCountin
   EXPECT_TRUE(resend_parsed->ok);
   EXPECT_EQ(store.size(), entries_after_first);
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1700000000ULL), score_after_first);
+}
+
+// DEV-1529: an immediate Backspace penalizes only the rejected surface, on the
+// app row and with the context hash, and teaches the converter nothing.
+TEST_F(DispatcherTest, CommitCorrectionUndoRecordsOnlyTheRejectOnTheAppRow) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindUndo);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.left_context = "今日の";
+  request.secure = false;
+  request.learning_allowed = true;
+  request.app = ipc::AppIdentity{"Notepad.exe", "Notepad"};
+
+  const auto response = dispatcher.Dispatch(
+      MakeReq(52, ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->type, ipc::MessageType::CommitCorrection);
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+
+  EXPECT_EQ(store.size(), 1u);
+  const auto* rows = store.Rows("かんじ", "幹事");
+  ASSERT_NE(rows, nullptr);
+  const auto row = rows->find("notepad.exe");
+  ASSERT_NE(row, rows->end());
+  EXPECT_EQ(row->second.reject_count, 1u);
+  EXPECT_EQ(row->second.accept_count, 0u);
+  EXPECT_EQ(row->second.last_event, azookey::learning::LearningEventType::CorrectionReject);
+  EXPECT_EQ(row->second.context_hash, azookey::learning::ContextHash("今日の"));
+}
+
+TEST_F(DispatcherTest, CommitCorrectionReconvertRecordsBothAndDeduplicatesResends) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindReconvert);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.selected_surface = "漢字";
+  request.observation_id = "tip-1:12";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto payload = ipc::BuildCommitCorrectionRequest(request);
+
+  for (const uint64_t id : {53u, 3u}) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitCorrection, payload));
+    ASSERT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed->ok);
+  }
+
+  const auto* accepted = store.Rows("かんじ", "漢字");
+  const auto* rejected = store.Rows("かんじ", "幹事");
+  ASSERT_NE(accepted, nullptr);
+  ASSERT_NE(rejected, nullptr);
+  ASSERT_EQ(accepted->count(""), 1u);
+  ASSERT_EQ(rejected->count(""), 1u);
+  EXPECT_EQ(accepted->at("").accept_count, 1u);
+  EXPECT_EQ(rejected->at("").reject_count, 1u);
+}
+
+TEST_F(DispatcherTest, CommitCorrectionIsDeniedWithoutEventPrivacyOrWithAMismatchedKind) {
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindUndo);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto ok_of = [&](uint64_t id, const std::string& payload) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitCorrection, payload));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseCommitObservationResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed && parsed->ok;
+  };
+
+  // No secure_flag capability in the handshake: learning is refused outright.
+  EXPECT_FALSE(ok_of(54, ipc::BuildCommitCorrectionRequest(request)));
+
+  EnableEventPrivacy(dispatcher);
+  auto secure = request;
+  secure.secure = true;
+  EXPECT_FALSE(ok_of(55, ipc::BuildCommitCorrectionRequest(secure)));
+  auto not_allowed = request;
+  not_allowed.learning_allowed = false;
+  EXPECT_FALSE(ok_of(56, ipc::BuildCommitCorrectionRequest(not_allowed)));
+  // An undo that names a selected surface would record an accept it did not mean.
+  auto mismatched = request;
+  mismatched.selected_surface = "漢字";
+  EXPECT_FALSE(ok_of(57, ipc::BuildCommitCorrectionRequest(mismatched)));
+  EXPECT_EQ(store.size(), 0u);
 }
 
 TEST_F(DispatcherTest, CommitSegmentsSkipsAutomaticPunctuationAndDeduplicates) {
@@ -2168,6 +2281,40 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_EQ(parsed->learning_entries, 0u);
   EXPECT_EQ(parsed->user_dict_entries, 0u);
   EXPECT_EQ(parsed->fallback_state, "healthy");
+  // No layer state was injected, so the field is left out.
+  EXPECT_FALSE(parsed->neologd_layer.has_value());
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsReportsTheNeologdLayerState) {
+  auto config = DefaultDispatcherConfig();
+  config.neologd_layer = std::make_shared<azookey::host::NeologdLayerState>();
+  azookey::host::Dispatcher layer_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto layer_of = [&](uint64_t id) {
+    const auto response =
+        layer_dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryDiagnostics, "{}"));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryDiagnostics(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->neologd_layer : std::nullopt;
+  };
+
+  auto layer = layer_of(702);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerNotRequested);
+  EXPECT_FALSE(layer->reason.has_value());
+
+  config.neologd_layer->Set(ipc::kNeologdLayerError, std::string("pack download failed"));
+  layer = layer_of(703);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerError);
+  EXPECT_EQ(layer->reason, std::optional<std::string>("pack download failed"));
+
+  config.neologd_layer->Set(ipc::kNeologdLayerReady);
+  layer = layer_of(704);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerReady);
+  EXPECT_FALSE(layer->reason.has_value());
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsModelFailureAndDisabledModelWithoutChangingState) {
@@ -2895,10 +3042,20 @@ TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
     observation.secure = false;
     observation.learning_allowed = true;
     const auto before = store.size();
+    ipc::CommitCorrectionRequest correction;
+    correction.kind = std::string(ipc::kCorrectionKindReconvert);
+    correction.reading = commit.reading;
+    correction.rejected_surface = "あずきー社";
+    correction.selected_surface = commit.chosen.surface;
+    correction.secure = false;
+    correction.learning_allowed = true;
     for (auto type :
-         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation,
+          ipc::MessageType::CommitCorrection}) {
       const auto payload = type == ipc::MessageType::CommitObservation
                                ? ipc::BuildCommitObservationRequest(commit)
+                           : type == ipc::MessageType::CommitCorrection
+                               ? ipc::BuildCommitCorrectionRequest(correction)
                                : ipc::BuildCommitSegmentsObservationRequest(segments);
       const auto response = target.Dispatch(MakeReq(9300, type, payload));
       ASSERT_TRUE(response);

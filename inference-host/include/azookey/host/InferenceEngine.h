@@ -262,8 +262,16 @@ class InferenceEngine {
   // the accept filters.
   bool ObserveTypo(const std::string& wrong_reading, const std::string& correct_reading,
                    uint64_t now_epoch_sec);
-  void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
-                        const std::string& selected_surface, uint64_t now_epoch_sec);
+  // M54 correction (user-learning-enhancement-spec section 4, DEV-1529).
+  // Without selected_surface it is an immediate Backspace: only
+  // correction_reject is recorded and the converter is left alone. With it, a
+  // reconversion records correction_accept and correction_reject and commits
+  // the selected surface. app_name, left_context and observation_id work as in
+  // CommitObservation. Returns false when the call was dropped as a duplicate.
+  bool CommitCorrection(const std::string& reading, const std::string& rejected_surface,
+                        const std::optional<std::string>& selected_surface, uint64_t now_epoch_sec,
+                        const std::string& observation_id = {}, const std::string& app_name = {},
+                        const std::string& left_context = {});
   bool FlushLearningStore();
 
   // M49 learning data management (DEV-1190, learning-data-management-spec

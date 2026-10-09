@@ -54,6 +54,8 @@ std::string TypeToString(MessageType type) {
       return "ResetLearningStore";
     case MessageType::QueryPersona:
       return "QueryPersona";
+    case MessageType::DetectAnomalies:
+      return "DetectAnomalies";
     default: return "Unknown";
   }
 }
@@ -89,6 +91,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ImportLearningData") return MessageType::ImportLearningData;
   if (value == "ResetLearningStore") return MessageType::ResetLearningStore;
   if (value == "QueryPersona") return MessageType::QueryPersona;
+  if (value == "DetectAnomalies") return MessageType::DetectAnomalies;
   return MessageType::Unknown;
 }
 

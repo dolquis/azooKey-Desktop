@@ -422,17 +422,8 @@ LLM で「不自然な確定箇所」を検出する API。Phase 5 の Post-Comm
 似ているが、より長文（〜段落単位）を対象に、文法 / 敬語不一致 / 主述不一致
 までを検出する。
 
-```cpp
-struct AnomalyFinding {
-    Range            range;
-    std::string      reason;
-    std::vector<std::string> suggestions;
-    float            confidence;
-};
-
-std::vector<AnomalyFinding>
-InferenceEngine::DetectAnomalies(std::string_view paragraph, const Persona& p);
-```
+検出の入口は IPC `DetectAnomalies` で、所見は `start` / `length`（UTF-16 code unit）、`reason`、
+`suggestions[]`、`confidence` を持つ。X-2-7 の Persona を文体の手がかりに使う。経路と制約は X-3-6 が定める。
 
 ### X-3-5. 訂正の学習
 
@@ -459,7 +450,40 @@ Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに
   - Host に `DetectAnomalies` を投げる
   - 一覧表示、項目クリックでアプリ側のキャレットを該当箇所に移動 + 候補提示
 
-Phase 7 まで実装しない（Phase 5 ではホットキー登録のみ）。
+ホットキー、文書全体の取得、キャレットの移動は TIP 側の作業である（DEV-1540）。
+
+**Host の検出**（`inference-host/include/azookey/host/AnomalyDetector.h`）。X-3-4 の検出は、AI 整文
+（`ai-cleanup`）と同じ AI バックエンド設定（`aiBackend` / `openAi*`）と AI の同意
+（`privacy.ai` / `privacy.external`）の下で、外部バックエンドだけを使う。設定が読めないときは同意が無いものとして扱う。ローカル経路には段落の誤りを
+判定できるモデルが無いので使わない。使えないときは結果を推測せず、`unsupported` を返す。
+モデルには、誤りと見た箇所を位置ではなく本文の文字列（`quote`）で返させる。Host はその文字列を本文で
+前から順に探して UTF-16 の位置に直し、見つからない項目と、すでに置いた範囲とまったく同じ範囲の項目は捨てる。
+範囲が重なるだけの項目は、理由が別なので残す。本文に 2 回以上現れる文字列は位置を一つに決められないので、
+3 文字（UTF-16）未満なら捨て、それ以上なら `confidence` を 0.3 以下に下げて曖昧であることを示す。
+`reason` は 512 バイトで切り、256 バイトを超える修正候補は捨てる。`reason` と `suggestions` はモデルの出力を
+そのまま返すので、設定アプリはテキストとして表示し、指示として解釈しない。
+本文と一緒に、Persona の 4 比率（数値だけ）も外部バックエンドへ送られる。X-2-7 の Persona があれば、文体の
+手がかりとして指示に添える。
+
+**IPC `DetectAnomalies`**（capability `detect_anomalies`）。設定アプリが送る。
+
+| 要求フィールド | 型 | 意味 |
+|---|---|---|
+| `text` | str（非空、`kMaxAnomalyTextBytes` = 60 KiB 以下） | 検査する本文（UTF-8）。AI バックエンドの要求上限 64 KiB に指示文と共に収まる大きさ |
+| `max_findings` | uint（既定 20、1〜50 に丸める） | 返す件数の上限 |
+| `secure` / `learning_allowed` | bool（既定 `true` / `false`） | 本文を取った文脈の event privacy |
+
+secure の文脈、または学習を許さない文脈の本文は送らない。Host も、要求の `secure` が真か
+`learning_allowed` が偽のとき、または Host の privacy 設定が学習を止めているときは、AI へ渡さずに
+`blocked` を返す。利用者が設定アプリへ貼り付けた本文は、`secure=false`、`learning_allowed=true` で送る。
+
+| 応答フィールド | 型 | 意味 |
+|---|---|---|
+| `ok` / `error` | bool / str | `error` は `invalid_request` / `not_authenticated` / `unsupported`（使える AI バックエンド・API キー・同意が無い）/ `blocked` / `backend_failed`（認証・通信・応答形式の失敗） |
+| `findings[]` | 配列（50 件以下、`start` 順） | 各項目は `start` / `length`（本文上の UTF-16 code unit）、`reason`、`suggestions[]`（5 件以下）、`confidence`（0〜1。モデルが返さなければ 0.5） |
+
+文書全体の取得、ホットキー、キャレットの移動は TIP 側の作業で、DEV-1540 で追跡する。それまで設定アプリの
+「校正」ペインは、利用者が貼り付けた本文を検査する。
 
 ### X-3-7. 個人タイプミス学習（関連機能・別仕様）
 

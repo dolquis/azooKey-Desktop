@@ -1753,4 +1753,86 @@ std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string&
   return p;
 }
 
+// -------- DetectAnomalies --------
+
+std::string BuildDetectAnomaliesRequest(const DetectAnomaliesRequest& p) {
+  j::Object o;
+  o.emplace("text", j::Value(p.text));
+  o.emplace("max_findings", j::Value(static_cast<uint64_t>(p.max_findings)));
+  o.emplace("secure", j::Value(p.secure));
+  o.emplace("learning_allowed", j::Value(p.learning_allowed));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<DetectAnomaliesRequest> ParseDetectAnomaliesRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto text = v->GetString("text");
+  if (!text || text->empty() || text->size() > kMaxAnomalyTextBytes) return std::nullopt;
+  DetectAnomaliesRequest p;
+  p.text = std::move(*text);
+  const auto max_findings = v->GetUInt("max_findings").value_or(kDefaultAnomalyFindings);
+  p.max_findings = static_cast<uint32_t>(
+      std::clamp<uint64_t>(max_findings, 1, static_cast<uint64_t>(kMaxAnomalyFindings)));
+  p.secure = v->GetBool("secure").value_or(true);
+  p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
+  return p;
+}
+
+std::string BuildDetectAnomaliesResponse(const DetectAnomaliesResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  j::Array findings;
+  for (const auto& finding : p.findings) {
+    j::Array suggestions;
+    for (const auto& suggestion : finding.suggestions) suggestions.emplace_back(suggestion);
+    j::Object item;
+    item.emplace("start", j::Value(static_cast<uint64_t>(finding.start)));
+    item.emplace("length", j::Value(static_cast<uint64_t>(finding.length)));
+    item.emplace("reason", j::Value(finding.reason));
+    item.emplace("suggestions", j::Value(std::move(suggestions)));
+    item.emplace("confidence", j::Value(finding.confidence));
+    findings.emplace_back(std::move(item));
+  }
+  o.emplace("findings", j::Value(std::move(findings)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<DetectAnomaliesResponse> ParseDetectAnomaliesResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  DetectAnomaliesResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  const auto* findings = v->GetArray("findings");
+  if (!findings) return p;
+  if (findings->size() > kMaxAnomalyFindings) return std::nullopt;
+  for (const auto& item : *findings) {
+    const auto start = item.GetUInt("start");
+    const auto length = item.GetUInt("length");
+    const auto confidence = item.GetNumber("confidence");
+    // A finding that cannot be placed or rated is dropped, as malformed
+    // candidates are.
+    if (!item.IsObject() || !start || !length || *length == 0 || *start > UINT32_MAX ||
+        *length > UINT32_MAX - *start || !confidence || !(*confidence >= 0.0 && *confidence <= 1.0))
+      continue;
+    AnomalyFindingField finding;
+    finding.start = static_cast<uint32_t>(*start);
+    finding.length = static_cast<uint32_t>(*length);
+    finding.reason = item.GetString("reason").value_or(std::string());
+    finding.confidence = *confidence;
+    if (const auto* suggestions = item.GetArray("suggestions")) {
+      for (const auto& suggestion : *suggestions) {
+        if (finding.suggestions.size() >= kMaxAnomalySuggestions) break;
+        if (suggestion.IsString()) finding.suggestions.push_back(suggestion.AsString());
+      }
+    }
+    p.findings.push_back(std::move(finding));
+  }
+  return p;
+}
+
 }  // namespace azookey::ipc

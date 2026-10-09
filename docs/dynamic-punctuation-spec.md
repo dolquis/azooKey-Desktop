@@ -481,6 +481,8 @@ reading 長 0 として写像に組み込む。
 その要求（§7.1）と応答（§7.2）に任意フィールドを足す。TIP は Host が Handshake で
 `query_live_conversion` を告知したときにこの経路を使う。告知の無い Host に対する代替経路
 `QueryCandidates` の `live=true` も同じフィールドを持ち、Host は同じ規則で句読点を挿入する。
+本節は IPC 契約と Host 側の処理を定める。TIP 側の送信（§7.1.1 の timing 符号化、§7.3 の最終要求、
+§7.4 の文節を分けた観測）は DEV-1541 で追跡する。
 
 > **確定（commit）経路は別**: 自動句読点を学習から除外する原子的な multi-segment 確定には、
 > **新 `MessageType::CommitSegmentsObservation`（M58-B と共有。`docs/romaji-batch-conversion-spec.md`
@@ -548,8 +550,9 @@ Host は `auto_punctuation` が `true` で、設定の `liveConversion` と `dyn
 `QueryLiveConversionResponse` は `surface` + `confidence` に加えて、
 **任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。Host は挿入が有効な要求（§7.1 の
 3 条件がすべて真）の応答に `segments` を付ける。規則に当たらず句読点が入らなかったときも文節を返すので、
-句読点が入ったかどうかは各 segment の `auto_punctuation` で判断する。挿入が無効な要求の応答は
-`segments` を付けず、従来どおり（句読点なし・文節情報なし）に解釈される。
+句読点が入ったかどうかは各 segment の `auto_punctuation` で判断する。挿入が無効な要求の応答と、
+変換結果が空（`surface` が空）の応答は `segments` を付けず、従来どおり（句読点なし・文節情報なし）に
+解釈される。
 代替経路の `QueryCandidatesResponse` も、`candidates[]` + `partial` に加えて同じ `segments[]` を持つ。
 
 変換器が文節境界を返さない場合、host は最良候補全体を 1 文節として扱い、
@@ -578,9 +581,8 @@ TIP の `ITfRange` 範囲操作専用、学習スライスは `surface` 文字�
   "surface": "今日はいい天気です。",
   "confidence": 0.93,
   "segments": [
-    { "start_char": 0,  "end_char": 3,  "score": 0.95, "auto_punctuation": false, "surface": "今日は",     "reading": "きょうは" },
-    { "start_char": 3,  "end_char": 9,  "score": 0.90, "auto_punctuation": false, "surface": "いい天気です", "reading": "いいてんきです" },
-    { "start_char": 9,  "end_char": 10, "score": 0.0,  "auto_punctuation": true,  "surface": "。",          "reading": "" }
+    { "start_char": 0,  "end_char": 9,  "score": 1.0, "auto_punctuation": false, "surface": "今日はいい天気です", "reading": "きょうはいいてんきです" },
+    { "start_char": 9,  "end_char": 10, "score": 0.0, "auto_punctuation": true,  "surface": "。",                "reading": "" }
   ]
 }
 ```

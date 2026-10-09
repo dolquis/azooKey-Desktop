@@ -290,11 +290,12 @@ void ParseRows(std::string_view text, OnRow on_row, OnMalformed on_malformed) {
   }
 }
 
-// The M7 text without the rows of the pair. Each kept line, its line ending
-// included, is copied byte for byte; malformed lines are kept as they are.
-// Sets `removed` when at least one row was dropped.
-std::string WithoutLegacyRows(std::string_view text, const std::string& reading,
-                              const std::string& surface, bool& removed) {
+// The M7 text without the rows of the pair, or without every row when `pair`
+// is null. Each kept line, its line ending included, is copied byte for byte;
+// malformed lines are kept as they are. Sets `removed` when at least one row
+// was dropped.
+std::string WithoutLegacyRows(std::string_view text,
+                              const std::pair<std::string, std::string>* pair, bool& removed) {
   std::string kept;
   kept.reserve(text.size());
   removed = false;
@@ -313,8 +314,8 @@ std::string WithoutLegacyRows(std::string_view text, const std::string& reading,
       escaped_fields = true;
     } else if (!line.empty()) {
       LearningEntry entry;
-      drop = ParseLegacyRow(line, escaped_fields, entry) && entry.reading == reading &&
-             entry.surface == surface;
+      drop = ParseLegacyRow(line, escaped_fields, entry) &&
+             (!pair || (entry.reading == pair->first && entry.surface == pair->second));
       SecureErase(entry.reading);
       SecureErase(entry.surface);
     }
@@ -791,6 +792,13 @@ bool LearningStore::Forget(const std::string& reading, const std::string& surfac
 
 bool LearningStore::RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
                                          bool* removed_rows) const {
+  return RewriteLegacyFile(std::make_pair(reading, surface), removed_rows);
+}
+
+bool LearningStore::ClearLegacyFile() const { return RewriteLegacyFile(std::nullopt, nullptr); }
+
+bool LearningStore::RewriteLegacyFile(
+    const std::optional<std::pair<std::string, std::string>>& pair, bool* removed_rows) const {
   if (removed_rows) *removed_rows = false;
   std::string text;
   const auto source = ReadProtectedText(path_, *crypto_, text);
@@ -800,7 +808,7 @@ bool LearningStore::RemoveFromLegacyFile(const std::string& reading, const std::
     return false;
   }
   bool removed = false;
-  auto rewritten = WithoutLegacyRows(text, reading, surface, removed);
+  auto rewritten = WithoutLegacyRows(text, pair ? &*pair : nullptr, removed);
   SecureErase(text);
   // WriteProtectedText refuses unmigrated plaintext and undecipherable
   // ciphertext, so the M7 file is either replaced atomically or left as it was.

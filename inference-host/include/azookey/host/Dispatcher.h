@@ -7,6 +7,7 @@
 #include <string>
 
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/NeologdLayerState.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Messages.h"
@@ -29,6 +30,9 @@ struct DispatcherConfig {
   std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};
   // M45 ListModels root (UserDataPaths::models_dir). Empty disables the scan.
   std::filesystem::path models_dir;
+  // Shared with the startup pack worker. nullptr omits neologd_layer from
+  // QueryDiagnostics.
+  std::shared_ptr<NeologdLayerState> neologd_layer;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code
@@ -68,6 +72,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleReverseConvert(const ipc::Envelope& req);
   void HandleCancel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleCommitObservation(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleCommitCorrection(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleAddUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleRemoveUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleUpdateConfig(const ipc::Envelope& req);
@@ -77,6 +82,8 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleForgetLearningEntry(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleExportLearningData(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleImportLearningData(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleResetLearningStore(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryPersona(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListModels(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);

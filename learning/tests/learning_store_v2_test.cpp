@@ -316,6 +316,31 @@ TEST(LearningStoreV2Test, RemoveFromLegacyFileComparesRawFieldsWithoutTheHeader)
   EXPECT_EQ(LegacyText(path), "にほん\t日本\t2 1999999000\n");
 }
 
+// learning-data-management-spec section 4.6: the reset drops every M7 row and
+// keeps the header and the lines that are not rows.
+TEST(LearningStoreV2Test, ClearLegacyFileDropsEveryRow) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_clear");
+  const auto path = directory.LegacyPath();
+  ASSERT_TRUE(learning::WriteProtectedText(path,
+                                           "# azookey-learning-tsv escaped=1\n"
+                                           "こうしょう\t交渉\t2.4 1999999000\n"
+                                           "broken row\n"
+                                           "a\\tb\tA\t0.8 1999999000\n",
+                                           learning::test::Crypto()));
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.ClearLegacyFile());
+  EXPECT_EQ(LegacyText(path),
+            "# azookey-learning-tsv escaped=1\n"
+            "broken row\n");
+  EXPECT_FALSE(
+      std::filesystem::exists(learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path))));
+
+  ScopedLearningDirectory missing("azookey_learning_v2_legacy_clear_missing");
+  LearningStore empty(missing.LegacyPath(), &learning::test::Crypto());
+  EXPECT_TRUE(empty.ClearLegacyFile());
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(missing.LegacyPath())));
+}
+
 TEST(LearningStoreV2Test, RemoveFromLegacyFileIsANoOpWithoutTheFile) {
   ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_missing");
   const auto path = directory.LegacyPath();

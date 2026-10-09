@@ -5,6 +5,7 @@ add_library(azookey_learning STATIC
   src/DpapiCrypto.cpp
   src/LearningDecay.cpp
   src/LearningStore.cpp
+  src/Persona.cpp
   src/Reranker.cpp
   src/Sha256.cpp
   src/TypoCorrectionStore.cpp

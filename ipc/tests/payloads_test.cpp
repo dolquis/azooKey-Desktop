@@ -805,6 +805,153 @@ TEST(PayloadsTest, QueryDiagnosticsDefaultsMissingCounters) {
   EXPECT_EQ(parsed->user_dict_entries, 0);
 }
 
+// DEV-1534: neologd_layer is a protocol v1 additive field, so a Host that
+// predates it and an unknown state both decode as "absent".
+TEST(PayloadsTest, QueryDiagnosticsCarriesTheNeologdLayerAsAnOptionalField) {
+  using namespace azookey::ipc;
+  QueryDiagnosticsPayload payload;
+  payload.engine = "mock";
+  payload.backend = "cpu";
+  payload.fallback_state = "healthy";
+  EXPECT_FALSE(json::Parse(BuildQueryDiagnostics(payload))->Find("neologd_layer"));
+  EXPECT_FALSE(ParseQueryDiagnostics(BuildQueryDiagnostics(payload))->neologd_layer);
+
+  payload.neologd_layer = NeologdLayerStatus{std::string(kNeologdLayerError), "pack size mismatch"};
+  const auto error = ParseQueryDiagnostics(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(error && error->neologd_layer);
+  EXPECT_EQ(error->neologd_layer->state, kNeologdLayerError);
+  EXPECT_EQ(error->neologd_layer->reason, std::optional<std::string>("pack size mismatch"));
+
+  payload.neologd_layer = NeologdLayerStatus{std::string(kNeologdLayerMissingPack), std::nullopt};
+  const auto missing = ParseQueryDiagnostics(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(missing && missing->neologd_layer);
+  EXPECT_EQ(missing->neologd_layer->state, kNeologdLayerMissingPack);
+  EXPECT_FALSE(missing->neologd_layer->reason.has_value());
+
+  const auto unknown =
+      ParseQueryDiagnostics(R"({"engine":"mock","backend":"cpu","fallback_state":"healthy",)"
+                            R"("neologd_layer":{"state":"downloading"}})");
+  ASSERT_TRUE(unknown.has_value());
+  EXPECT_FALSE(unknown->neologd_layer.has_value());
+
+  const std::string base = R"({"engine":"mock","backend":"cpu","fallback_state":"healthy",)";
+  for (const char* layer : {R"("neologd_layer":"ready"})", R"("neologd_layer":{"state":1}})",
+                            R"("neologd_layer":{"reason":"pack size mismatch"}})"}) {
+    const auto malformed = ParseQueryDiagnostics(base + layer);
+    ASSERT_TRUE(malformed.has_value()) << layer;
+    EXPECT_FALSE(malformed->neologd_layer.has_value()) << layer;
+  }
+  // reason belongs to "error" only.
+  const auto ready = ParseQueryDiagnostics(
+      base + R"("neologd_layer":{"state":"ready","reason":"pack size mismatch"}})");
+  ASSERT_TRUE(ready && ready->neologd_layer);
+  EXPECT_FALSE(ready->neologd_layer->reason.has_value());
+}
+
+// DEV-1529: CommitCorrection shares the commit privacy and dedupe fields, and
+// kind must agree with selected_surface.
+TEST(PayloadsTest, CommitCorrectionRoundTripsBothKinds) {
+  using namespace azookey::ipc;
+  CommitCorrectionRequest undo;
+  undo.kind = std::string(kCorrectionKindUndo);
+  undo.reading = "かんじ";
+  undo.rejected_surface = "幹事";
+  undo.left_context = "今日の";
+  undo.timestamp_ms = 1700000000000ULL;
+  undo.observation_id = "tip-1:3";
+  undo.secure = false;
+  undo.learning_allowed = true;
+  undo.app = AppIdentity{"notepad.exe", "Notepad"};
+  EXPECT_FALSE(json::Parse(BuildCommitCorrectionRequest(undo))->Find("selected_surface"));
+  const auto parsed_undo = ParseCommitCorrectionRequest(BuildCommitCorrectionRequest(undo));
+  ASSERT_TRUE(parsed_undo.has_value());
+  EXPECT_EQ(parsed_undo->kind, kCorrectionKindUndo);
+  EXPECT_EQ(parsed_undo->reading, "かんじ");
+  EXPECT_EQ(parsed_undo->rejected_surface, "幹事");
+  EXPECT_FALSE(parsed_undo->selected_surface.has_value());
+  EXPECT_EQ(parsed_undo->left_context, "今日の");
+  EXPECT_EQ(parsed_undo->timestamp_ms, 1700000000000ULL);
+  EXPECT_EQ(parsed_undo->observation_id, "tip-1:3");
+  EXPECT_FALSE(parsed_undo->secure);
+  EXPECT_TRUE(parsed_undo->learning_allowed);
+  ASSERT_TRUE(parsed_undo->app.has_value());
+  EXPECT_EQ(parsed_undo->app->process_name, "notepad.exe");
+
+  CommitCorrectionRequest reconvert = undo;
+  reconvert.kind = std::string(kCorrectionKindReconvert);
+  reconvert.selected_surface = "漢字";
+  const auto parsed_reconvert =
+      ParseCommitCorrectionRequest(BuildCommitCorrectionRequest(reconvert));
+  ASSERT_TRUE(parsed_reconvert.has_value());
+  EXPECT_EQ(parsed_reconvert->kind, kCorrectionKindReconvert);
+  EXPECT_EQ(parsed_reconvert->selected_surface, std::optional<std::string>("漢字"));
+}
+
+TEST(PayloadsTest, CommitCorrectionDeniesPrivacyByDefaultAndRejectsInconsistentKinds) {
+  using namespace azookey::ipc;
+  const auto minimal = ParseCommitCorrectionRequest(
+      R"({"kind":"undo","reading":"かんじ","rejected_surface":"幹事"})");
+  ASSERT_TRUE(minimal.has_value());
+  EXPECT_TRUE(minimal->secure);
+  EXPECT_FALSE(minimal->learning_allowed);
+  EXPECT_TRUE(minimal->observation_id.empty());
+  EXPECT_FALSE(minimal->app.has_value());
+
+  for (
+      const char* json : {
+          R"({"kind":"undo","reading":"かんじ","rejected_surface":"幹事","selected_surface":"漢字"})",
+          R"({"kind":"reconvert","reading":"かんじ","rejected_surface":"幹事"})",
+          R"({"kind":"reconvert","reading":"かんじ","rejected_surface":"幹事","selected_surface":"幹事"})",
+          R"({"kind":"reconvert","reading":"かんじ","rejected_surface":"幹事","selected_surface":""})",
+          R"({"kind":"replace","reading":"かんじ","rejected_surface":"幹事"})",
+          R"({"reading":"かんじ","rejected_surface":"幹事"})",
+          R"({"kind":"undo","reading":"","rejected_surface":"幹事"})",
+          R"({"kind":"undo","reading":"かんじ","rejected_surface":""})",
+          R"({"kind":"undo","reading":"かんじ"})",
+      }) {
+    EXPECT_FALSE(ParseCommitCorrectionRequest(json).has_value()) << json;
+  }
+}
+
+TEST(PayloadsTest, ResetLearningStoreAndQueryPersonaRoundTrip) {
+  using namespace azookey::ipc;
+  ResetLearningStoreRequest reset;
+  reset.store = "typo";
+  const auto parsed_reset = ParseResetLearningStoreRequest(BuildResetLearningStoreRequest(reset));
+  ASSERT_TRUE(parsed_reset.has_value());
+  EXPECT_EQ(parsed_reset->store, "typo");
+  EXPECT_FALSE(ParseResetLearningStoreRequest("{}").has_value());
+  EXPECT_FALSE(ParseResetLearningStoreRequest(R"({"store":""})").has_value());
+
+  ResetLearningStoreResponse failed;
+  failed.ok = false;
+  failed.error = std::string(kLearningDataErrorSaveFailed);
+  const auto parsed_failed =
+      ParseResetLearningStoreResponse(BuildResetLearningStoreResponse(failed));
+  ASSERT_TRUE(parsed_failed.has_value());
+  EXPECT_FALSE(parsed_failed->ok);
+  EXPECT_EQ(parsed_failed->error, std::optional<std::string>("save_failed"));
+
+  QueryPersonaResponse persona;
+  persona.polite_ratio = 0.5;
+  persona.casual_ratio = 0.25;
+  persona.technical_ratio = 0.125;
+  persona.kaomoji_ratio = 0.0;
+  persona.sample_count = 8;
+  persona.computed_at_epoch_sec = 1700000000;
+  const auto parsed_persona = ParseQueryPersonaResponse(BuildQueryPersonaResponse(persona));
+  ASSERT_TRUE(parsed_persona.has_value());
+  EXPECT_TRUE(parsed_persona->ok);
+  EXPECT_DOUBLE_EQ(parsed_persona->polite_ratio, 0.5);
+  EXPECT_DOUBLE_EQ(parsed_persona->casual_ratio, 0.25);
+  EXPECT_DOUBLE_EQ(parsed_persona->technical_ratio, 0.125);
+  EXPECT_EQ(parsed_persona->sample_count, 8u);
+  EXPECT_EQ(parsed_persona->computed_at_epoch_sec, 1700000000u);
+  // A ratio outside [0, 1] is not displayed.
+  EXPECT_FALSE(ParseQueryPersonaResponse(R"({"ok":true,"polite_ratio":1.5})").has_value());
+  EXPECT_FALSE(ParseQueryPersonaResponse(R"({"polite_ratio":0.5})").has_value());
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());

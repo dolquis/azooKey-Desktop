@@ -153,7 +153,9 @@ Linear が持つ。
   モデルを再ロードする。settings.json が invalid な場合は engine を触らず `ok=false` を返す。
 - ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
   `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
-  learning_entries, user_dict_entries, fallback_state, last_error?)`。
+  learning_entries, user_dict_entries, fallback_state, last_error?, neologd_layer?)`。
+  `neologd_layer` は `neologd_lexicon` 層の状態で、値の意味は `docs/auto-word-registration-spec.md` §15.14、
+  wire の形は `docs/dev-infrastructure-spec.md` §12.6 が定める。
   `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` / `safe_mode` のいずれかで、
   `safe_mode`（`docs/dev-infrastructure-spec.md` §8.5.3）は他のどの判定より優先する。
   送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
@@ -457,9 +459,12 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
 | `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model` | model-management §4 |
 | `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` / `ImportLearningData` | 設定アプリ → Host（`ForgetLearningEntry` の `reading` + `surface` 形は TIP → Host） | M49、capability `learning_data_management`。payload codec は `Payloads.h` の M49 節 | learning-data-management §4 |
+| `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
+| `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
-| `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
+| `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
+| `CommitCorrection` Payload | TIP → Host | M54、Host 配線済み。capability `commit_correction` | user-learning-enhancement §4.1 |
 
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、

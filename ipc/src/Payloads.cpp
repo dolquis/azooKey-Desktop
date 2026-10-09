@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
@@ -258,8 +259,39 @@ std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p) {
   o.emplace("user_dict_entries", j::Value(p.user_dict_entries));
   o.emplace("fallback_state", j::Value(p.fallback_state));
   if (p.last_error) o.emplace("last_error", j::Value(*p.last_error));
+  if (p.neologd_layer) {
+    j::Object layer;
+    layer.emplace("state", j::Value(p.neologd_layer->state));
+    if (p.neologd_layer->reason) layer.emplace("reason", j::Value(*p.neologd_layer->reason));
+    o.emplace("neologd_layer", j::Value(std::move(layer)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
+
+namespace {
+
+bool IsNeologdLayerState(std::string_view state) {
+  return state == kNeologdLayerNotRequested || state == kNeologdLayerLoading ||
+         state == kNeologdLayerReady || state == kNeologdLayerMissingPack ||
+         state == kNeologdLayerError;
+}
+
+// The layer status is informational, so an unknown or malformed object
+// degrades to "absent" instead of rejecting the whole diagnostics payload.
+std::optional<NeologdLayerStatus> NeologdLayerFromJson(const j::Value& v) {
+  const auto* object = v.FindObject("neologd_layer");
+  if (!object) return std::nullopt;
+  const j::Value layer(*object);
+  auto state = layer.GetString("state");
+  if (!state || !IsNeologdLayerState(*state)) return std::nullopt;
+  NeologdLayerStatus status;
+  // reason belongs to "error" only (auto-word-registration-spec section 15.14).
+  if (*state == kNeologdLayerError) status.reason = layer.GetString("reason");
+  status.state = std::move(*state);
+  return status;
+}
+
+}  // namespace
 
 std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& json) {
   auto v = ParseObject(json);
@@ -281,6 +313,7 @@ std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& 
   p.user_dict_entries = v->GetUInt("user_dict_entries").value_or(0);
   p.fallback_state = *fallback_state;
   p.last_error = v->GetString("last_error");
+  p.neologd_layer = NeologdLayerFromJson(*v);
   return p;
 }
 
@@ -760,6 +793,54 @@ std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRe
   request.learning_allowed = object->GetBool("learning_allowed").value_or(false);
   request.app = AppFromJson(*object);
   return request;
+}
+
+// -------- CommitCorrection --------
+
+std::string BuildCommitCorrectionRequest(const CommitCorrectionRequest& p) {
+  j::Object o;
+  o.emplace("kind", j::Value(p.kind));
+  o.emplace("reading", j::Value(p.reading));
+  o.emplace("rejected_surface", j::Value(p.rejected_surface));
+  if (p.selected_surface) o.emplace("selected_surface", j::Value(*p.selected_surface));
+  o.emplace("left_context", j::Value(p.left_context));
+  o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
+  o.emplace("observation_id", j::Value(p.observation_id));
+  o.emplace("secure", j::Value(p.secure));
+  o.emplace("learning_allowed", j::Value(p.learning_allowed));
+  AppToJson(p.app, o);
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<CommitCorrectionRequest> ParseCommitCorrectionRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto kind = v->GetString("kind");
+  auto reading = v->GetString("reading");
+  auto rejected = v->GetString("rejected_surface");
+  if (!kind || !reading || !rejected || reading->empty() || rejected->empty()) return std::nullopt;
+  CommitCorrectionRequest p;
+  p.selected_surface = v->GetString("selected_surface");
+  // The kind must agree with selected_surface, so a sender cannot ask for an
+  // accept it did not mean (or lose one it did).
+  if (*kind == kCorrectionKindUndo) {
+    if (p.selected_surface) return std::nullopt;
+  } else if (*kind == kCorrectionKindReconvert) {
+    if (!p.selected_surface || p.selected_surface->empty() || *p.selected_surface == *rejected)
+      return std::nullopt;
+  } else {
+    return std::nullopt;
+  }
+  p.kind = std::move(*kind);
+  p.reading = std::move(*reading);
+  p.rejected_surface = std::move(*rejected);
+  p.left_context = v->GetString("left_context").value_or(std::string());
+  p.timestamp_ms = v->GetUInt("timestamp_ms").value_or(0);
+  p.observation_id = v->GetString("observation_id").value_or(std::string());
+  p.secure = v->GetBool("secure").value_or(true);
+  p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
+  p.app = AppFromJson(*v);
+  return p;
 }
 
 std::optional<CommitObservationResponse> ParseCommitObservationResponse(const std::string& json) {
@@ -1570,6 +1651,79 @@ std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const 
       !CountsFromJson(*v, "skipped_counts", p.skipped_counts) ||
       !CountsFromJson(*v, "conflict_counts", p.conflict_counts))
     return std::nullopt;
+  return p;
+}
+
+// -------- ResetLearningStore --------
+
+std::string BuildResetLearningStoreRequest(const ResetLearningStoreRequest& p) {
+  j::Object o;
+  o.emplace("store", j::Value(p.store));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResetLearningStoreRequest> ParseResetLearningStoreRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto store = ReadNonEmptyString(*v, "store");
+  if (!store) return std::nullopt;
+  ResetLearningStoreRequest p;
+  p.store = std::move(*store);
+  return p;
+}
+
+std::string BuildResetLearningStoreResponse(const ResetLearningStoreResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResetLearningStoreResponse> ParseResetLearningStoreResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  ResetLearningStoreResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  return p;
+}
+
+// -------- QueryPersona --------
+
+std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("polite_ratio", j::Value(p.polite_ratio));
+  o.emplace("casual_ratio", j::Value(p.casual_ratio));
+  o.emplace("technical_ratio", j::Value(p.technical_ratio));
+  o.emplace("kaomoji_ratio", j::Value(p.kaomoji_ratio));
+  o.emplace("sample_count", j::Value(p.sample_count));
+  o.emplace("computed_at_epoch_sec", j::Value(p.computed_at_epoch_sec));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  QueryPersonaResponse p;
+  p.ok = *ok;
+  p.error = v->GetString("error");
+  // A ratio outside [0, 1] is not a ratio; reject rather than display it.
+  for (auto [key, out] :
+       {std::pair{"polite_ratio", &p.polite_ratio}, std::pair{"casual_ratio", &p.casual_ratio},
+        std::pair{"technical_ratio", &p.technical_ratio},
+        std::pair{"kaomoji_ratio", &p.kaomoji_ratio}}) {
+    const double ratio = v->GetNumber(key).value_or(0.0);
+    if (!(ratio >= 0.0 && ratio <= 1.0)) return std::nullopt;
+    *out = ratio;
+  }
+  p.sample_count = v->GetUInt("sample_count").value_or(0);
+  p.computed_at_epoch_sec = v->GetUInt("computed_at_epoch_sec").value_or(0);
   return p;
 }
 

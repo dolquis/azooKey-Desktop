@@ -93,14 +93,14 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
 | `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
 | `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |
-| `CommitCorrection` | enumのみ | 将来の補正確定通知用予約 |
+| `CommitCorrection` | codec + Host | 即 Backspace（`kind="undo"`）と再変換（`kind="reconvert"`）の学習フィードバック。Host は capability `commit_correction` を告知し、応答は `CommitObservation` と同じ `ok` |
 | `AddUserWord` | codec + Host | ユーザ辞書追加 |
 | `UpdateUserWord` | enumのみ | 将来のユーザ辞書更新用予約 |
 | `RemoveUserWord` | codec + Host | ユーザ辞書削除 |
 | `UpdateConfig` | Host + response codec | settings再読込。要求payloadは空オブジェクト |
 | `Ping` | codec + Host | 疎通確認 |
 | `Health` | codec + Host | Host状態取得 |
-| `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback stateの取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
+| `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback state、任意の`neologd_layer`（`state`と失敗時の固定の分類名`reason`。`docs/dev-infrastructure-spec.md` §12.6）の取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
 | `CommitSegmentsObservation` | codec + Host + TIP | 一括変換で確定した文節列（`ObservedSegment` の配列、左文脈、`observation_id`）の学習フィードバック。TIP は確定文節が非空で、かつ Handshake で Host が対応を告知した場合だけ送り、それ以外は `CommitObservation` へ落とす |
 | `ObserveTypo` | codec + Host | M35 の打ち間違えペアの観測。Host は応答を返さない。TIP は secure 時の遮断対象に含めるが送信元ではない |
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
@@ -110,6 +110,8 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ForgetLearningEntry` | codec + Host | M49 の 1 エントリ忘却。`store` に加え `id` か、`learning` ストアに限り `reading` + `surface` のどちらか一方の形だけを受け付ける。応答は `removed` / `ok` / `error`（§4.2） |
 | `ExportLearningData` | codec + Host | M49 のバックアップ書き出し。`stores`・`destination_path`・`encrypt`（既定 `true`）・`include_settings`（既定 `false`）を送り、`status`・`file_size_bytes`・`encrypted`・`items[]` を受け取る（§4.3） |
 | `ImportLearningData` | codec + Host | M49 のバックアップ取り込み。`source_path`・`stores`・`conflict_resolution`（`merge` / `overwrite` / `keep_both`、既定 `merge`）を送り、`status` とストア別の `imported_counts` / `skipped_counts` / `conflict_counts` を受け取る（§4.4） |
+| `ResetLearningStore` | codec + Host | 設定アプリの全削除。`store` を送り、`ok` / `error` を受け取る。capability `learning_reset`。途中で失敗しても半端に消さない（`docs/learning-data-management-spec.md` §4.6） |
+| `QueryPersona` | codec + Host | 学習ストアから算出した Persona の 4 比率と `sample_count`・`computed_at_epoch_sec` の取得。要求 payload は空オブジェクト。capability `persona`（`docs/rich-features-spec.md` X-2-7） |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

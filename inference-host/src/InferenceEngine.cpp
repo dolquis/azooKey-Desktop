@@ -1650,28 +1650,42 @@ bool InferenceEngine::NoteObservationIdLocked(const std::string& observation_id)
   return true;
 }
 
-void InferenceEngine::CommitCorrection(const std::string& reading,
+bool InferenceEngine::CommitCorrection(const std::string& reading,
                                        const std::string& rejected_surface,
-                                       const std::string& selected_surface,
-                                       uint64_t now_epoch_sec) {
+                                       const std::optional<std::string>& selected_surface,
+                                       uint64_t now_epoch_sec, const std::string& observation_id,
+                                       const std::string& app_name,
+                                       const std::string& left_context) {
+  const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
-      store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha,
-                                now_epoch_sec);
-      core::EtwLogger::LogLearningObserve(reading.size(), selected_surface.size());
+      if (selected_surface) {
+        store_->ObserveEvent({reading, *selected_surface, app_name,
+                              learning::LearningEventType::CorrectionAccept, context_hash},
+                             config_.learning_alpha, now_epoch_sec);
+      }
+      store_->ObserveEvent({reading, rejected_surface, app_name,
+                            learning::LearningEventType::CorrectionReject, context_hash},
+                           config_.learning_alpha, now_epoch_sec);
+      core::EtwLogger::LogLearningObserve(
+          reading.size(), selected_surface ? selected_surface->size() : rejected_surface.size());
       NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
   }
+  // An undo accepts nothing, so there is no surface to teach the converter.
+  if (!selected_surface) return true;
 
   core::ConversionContext context;
   context.rejected_surfaces.push_back(rejected_surface);
   std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
-  converter->Commit(core::Candidate{selected_surface, reading, 1.0,
+  converter->Commit(core::Candidate{*selected_surface, reading, 1.0,
                                     core::CandidateSource::UserDictionary, "correction-commit"},
                     context);
+  return true;
 }
 
 bool InferenceEngine::FlushLearningStore() {
@@ -1779,9 +1793,19 @@ void InferenceEngine::RecordUserDictionaryFailureLocked(const char* error) {
 void InferenceEngine::LearningFlushWorker() {
   std::unique_lock<std::mutex> lock(state_mutex_);
   while (!learning_flush_stop_) {
+    // rich-features-spec X-2-7: the persona is computed at startup (the store
+    // is loaded before the engine) and again every kPersonaRefreshInterval.
+    const auto persona_due = persona_computed_steady_
+                                 ? *persona_computed_steady_ + kPersonaRefreshInterval
+                                 : std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() >= persona_due) {
+      RefreshPersonaLocked();
+      continue;
+    }
+
     if (!store_ || !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
-      learning_flush_cv_.wait(lock, [this]() {
+      learning_flush_cv_.wait_until(lock, persona_due, [this]() {
         return learning_flush_stop_ ||
                (store_ && store_->dirty() && config_.learning_flush_interval_sec > 0 &&
                 first_unsaved_observation_steady_.has_value());
@@ -1789,14 +1813,15 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
 
-    const auto deadline = *first_unsaved_observation_steady_ +
-                          std::chrono::seconds(config_.learning_flush_interval_sec);
-    const bool changed = learning_flush_cv_.wait_until(lock, deadline, [this]() {
-      return learning_flush_stop_ || !store_ || !store_->dirty() ||
-             config_.learning_flush_interval_sec == 0 ||
-             !first_unsaved_observation_steady_.has_value();
-    });
-    if (changed) {
+    const auto flush_deadline = *first_unsaved_observation_steady_ +
+                                std::chrono::seconds(config_.learning_flush_interval_sec);
+    const bool changed =
+        learning_flush_cv_.wait_until(lock, (std::min)(flush_deadline, persona_due), [this]() {
+          return learning_flush_stop_ || !store_ || !store_->dirty() ||
+                 config_.learning_flush_interval_sec == 0 ||
+                 !first_unsaved_observation_steady_.has_value();
+        });
+    if (changed || std::chrono::steady_clock::now() < flush_deadline) {
       continue;
     }
 

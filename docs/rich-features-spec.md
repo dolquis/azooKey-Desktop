@@ -289,6 +289,37 @@ struct Persona {
 
 毎日 1 回（起動時 + 24h）バックグラウンドで再計算してキャッシュ。
 
+**算出の近似**（`learning/include/azookey/learning/Persona.h`）。`LearningStore` は確定した文を持たず、
+`(reading, surface)` ごとの集約行だけを持つ。このため各比率は、集約行の surface を分類し、
+`commit_count` で重み付けした割合として求める。分母は総 `commit_count` で、確定の無い行（拒否だけの行）は
+数えない。対象はかなの学習チャネルだけで、英語チャネル・typo・auto_word は含めない。
+
+| 比率 | surface の条件 |
+|---|---|
+| `polite_ratio` | 「ます」「です」「いただ」のいずれかを含む |
+| `casual_ratio` | 「だよ」「だね」「じゃん」のいずれかを含む |
+| `technical_ratio` | ASCII の英字・数字・`_` だけから成り、2 文字以上で、英字を 1 つ以上含む |
+| `kaomoji_ratio` | 記号（ASCII の英数字、かな、漢字、全角英数字、空白、文の句読点 `、。，．「」『』…‥` 以外の文字）が 3〜10 個続く箇所を含む |
+
+surface は文節単位なので、「だ」「よ」のように別々の文節で確定した語尾は数えない。4 比率は独立に数えるので、
+合計は 1 にならない。
+
+**再計算とキャッシュ**。Host の学習 flush worker が、起動時（学習ストアのロード後）と、前回の算出から
+24 時間ごとに再計算する。学習の全削除（`learning-data-management-spec.md` §4.6）の直後にも再計算する。
+バッテリ駆動時の間隔延長（`copilot-pc-backend-spec.md`）は扱わない。
+
+**設定アプリへの経路**。設定アプリは `QueryPersona`（要求 payload は空オブジェクト）で
+キャッシュを読む。Host は capability `persona` を告知する。
+
+| 応答フィールド | 型 | 意味 |
+|---|---|---|
+| `ok` / `error` | bool / str | 失敗時は `not_authenticated` か `store_unavailable`（学習ストアが無い） |
+| `polite_ratio` ほか 3 比率 | 0〜1 の数 | 上表の比率 |
+| `sample_count` | uint | 分母の確定回数。0 のときは 4 比率とも 0 で、設定アプリは「データ不足」と示す |
+| `computed_at_epoch_sec` | uint | 算出時刻 |
+
+応答は比率と件数だけを持ち、surface や読みを含めない。
+
 ## X-3. 誤変換訂正のリッチ化
 
 ### X-3-1. RomajiKanaConverter::FuzzyMatch

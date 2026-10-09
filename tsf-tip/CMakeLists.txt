@@ -181,6 +181,7 @@ if(AZOOKEY_BUILD_TESTS)
   azookey_discover_tests(tsf_tip_keymap_tests TIMEOUT 30)
   add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ipc_connection_state_tests tests/ipc_connection_state_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_handshake_log_tests tests/handshake_log_test.cpp TIMEOUT 60)
   add_tsf_tip_unit_test(tsf_tip_ipc_reconnect_backoff_tests tests/ipc_reconnect_backoff_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
     LABEL tsf-com

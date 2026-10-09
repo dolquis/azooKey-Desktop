@@ -29,12 +29,17 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
   azookey_discover_tests(azookey_settings_launch_arguments_tests LABEL settings-app)
 
   add_executable(azookey_settings_persistence_tests
+    AppProfiles.cpp
+    LearningPaneModel.cpp
+    ModelPaneModel.cpp
     NeologdAttribution.cpp
     SettingsDocument.cpp
     SettingsFields.cpp
     SettingsIpcClient.cpp
     "${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}"
+    tests/app_profiles_test.cpp
     tests/neologd_attribution_test.cpp
+    tests/pane_models_test.cpp
     tests/settings_document_test.cpp
     tests/settings_fields_test.cpp
     tests/settings_ipc_client_test.cpp
@@ -45,7 +50,8 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
       AZOOKEY_NEOLOGD_PIN_PATH="${AZOOKEY_SETTINGS_NEOLOGD_PIN}"
       AZOOKEY_SETTINGS_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/settings/mvp-settings.schema.json"
-      AZOOKEY_SETTINGS_RESW_PATH="${CMAKE_CURRENT_SOURCE_DIR}/Strings/ja-JP/Resources.resw")
+      AZOOKEY_SETTINGS_RESW_PATH="${CMAKE_CURRENT_SOURCE_DIR}/Strings/ja-JP/Resources.resw"
+      AZOOKEY_SETTINGS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(azookey_settings_persistence_tests
     PRIVATE
       azookey_learning

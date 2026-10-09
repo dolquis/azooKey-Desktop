@@ -89,7 +89,8 @@ BatchConverting の Space は in-flight を `Cancel` してローカル候補で
 
 `batchRomajiConversion == false` のときは従来どおり Composing / Previewing に
 遷移し、本状態は使われない。ライブ変換（M14）・予測（M15）は
-BatchAccumulating 中は抑制する。
+BatchAccumulating 中は抑制する。候補 UI をアプリが描く UI-less
+（`TF_TMF_UIELEMENTENABLEDONLY`）でも、打鍵ごとに問い合わせないことは変わらない。
 
 `QueryBatchConversion` は非同期のため、Space 直後は `Selecting` ではなく
 `BatchConverting`（応答待ち）に入る。応答前の追加打鍵 / Esc は in-flight を `Cancel`

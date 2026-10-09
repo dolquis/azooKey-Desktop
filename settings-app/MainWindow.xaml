@@ -39,6 +39,24 @@
                                 AutomationProperties.AutomationId="PrivacyNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="ProtectedDocument" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem x:Name="ProfilesNavigationItem"
+                                x:Uid="ProfilesNavigationItem"
+                                Tag="Profiles"
+                                AutomationProperties.AutomationId="ProfilesNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="AllApps" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Name="ModelsNavigationItem"
+                                x:Uid="ModelsNavigationItem"
+                                Tag="Models"
+                                AutomationProperties.AutomationId="ModelsNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Calculator" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Name="LearningNavigationItem"
+                                x:Uid="LearningNavigationItem"
+                                Tag="Learning"
+                                AutomationProperties.AutomationId="LearningNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Edit" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem x:Name="AdvancedNavigationItem"
                                 x:Uid="AdvancedNavigationItem"
                                 Tag="Advanced"
@@ -165,6 +183,12 @@
                                Style="{StaticResource SubtitleTextBlockStyle}" />
                     <StackPanel x:Name="PrivacyFieldsPanel" Spacing="16" />
                 </StackPanel>
+
+                <StackPanel x:Name="ProfilesPaneHost" Spacing="16" Visibility="Collapsed" />
+
+                <StackPanel x:Name="ModelsPaneHost" Spacing="16" Visibility="Collapsed" />
+
+                <StackPanel x:Name="LearningPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AdvancedSectionTitle"

@@ -544,6 +544,14 @@ struct OemCompositionSymbol {
   std::string surface;
 };
 
+// The reading the Host gives an English candidate: raw romaji, printable ASCII
+// without spaces (docs/inline-english-candidate-spec.md §6.4). A kana reading
+// with an English tag (an M48 dictionary word) does not qualify.
+bool IsRawRomajiReading(const std::string& reading) {
+  return !reading.empty() &&
+         std::all_of(reading.begin(), reading.end(), [](char c) { return c > 0x20 && c < 0x7F; });
+}
+
 std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
   std::string surface;
   for (const char c : text) {
@@ -2486,9 +2494,44 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       // A watcher reload must not rewrite an existing preedit.
       romaji_ = std::move(input_romaji);
       batch_romaji_table_ = std::move(input_table);
+      english_raw_romaji_.clear();
       if (input_state_.kind() == core::InputStateKind::Idle)
         input_state_ = input_state_.WithComposition(std::string{}, romaji_);
     }
+    // M60 raw_romaji: record the key as typed. A key that does not end up in
+    // the preedit is dropped by the next sync, and EnglishRawRomajiFor sends
+    // nothing for romaji that no longer spells the reading. Turning the
+    // setting on mid-composition leaves romaji that spells nothing, so no key
+    // pays for the conversions while the feature is off.
+    if (is_input && !unicode_active && !BatchRomajiEnabled() && EnglishCandidatesEnabled()) {
+      std::optional<char> typed;
+      if (custom_input)
+        typed = *custom_input;
+      else if (wParam >= 'A' && wParam <= 'Z')
+        typed = (modifiers & core::kModifierShift) != 0
+                    ? static_cast<char>(wParam)
+                    : static_cast<char>(std::tolower(static_cast<unsigned char>(wParam)));
+      else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT)
+        typed = '-';
+      else if (composition_symbol)
+        typed = composition_symbol->raw;
+      if (typed) {
+        SyncEnglishRawRomaji();
+        english_raw_romaji_.push_back(*typed);
+      }
+    }
+    // M60 §4.1: Space opens the window from a live = false query that can
+    // carry English candidates, like the rewriter Space path, instead of the
+    // per-key (live) cache that never holds them.
+    const bool english_conversion = [&] {
+      if (!IsActionKey(key_event, UserAction::StartConversion) || BatchRomajiEnabled() ||
+          cand_visible || !EnglishCandidatesEnabled())
+        return false;
+      // A Backspace right before Space has not been synced by a later key.
+      SyncEnglishRawRomaji();
+      auto flushed = romaji_;
+      return !EnglishRawRomajiFor(preedit_kana_ + flushed.Flush()).empty();
+    }();
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
     // A composing digit not mapped by core belongs to the number rewriter's
     // legacy path; a digit selecting a visible punctuation candidate stays in core.
@@ -2507,6 +2550,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         (BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
          (!standalone_punctuation &&
           ((number_rewriter_.load(std::memory_order_relaxed) && !custom_input) ||
+           english_conversion ||
            (IsActionKey(key_event, UserAction::StartConversion) &&
             (symbol_rewriter_.load(std::memory_order_relaxed) ||
              emoji_rewriter_.load(std::memory_order_relaxed))))));
@@ -2911,8 +2955,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
             const bool host_unavailable = IpcHostUnavailable();
-            if (!host_unavailable && (symbol_rewriter_.load(std::memory_order_relaxed) ||
-                                      emoji_rewriter_.load(std::memory_order_relaxed))) {
+            if (!host_unavailable &&
+                (english_conversion || symbol_rewriter_.load(std::memory_order_relaxed) ||
+                 emoji_rewriter_.load(std::memory_order_relaxed))) {
               {
                 std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
                 if (candidate_window_show_pending_ && !ipc_pending_live_ &&
@@ -3542,6 +3587,18 @@ void TextService::PostPendingCommitObservation() {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
+  // M60 §6.4: an English candidate is learned under the raw romaji, which the
+  // Host returned as its reading, not the kana the composition showed. That
+  // keeps it out of kana learning, for a single commit and for one segment.
+  if (ipc_host_english_candidates_.load(std::memory_order_relaxed)) {
+    const auto use_raw_romaji = [](PendingCommitObservation& observation) {
+      if (observation.chosen.tag == static_cast<uint8_t>(core::CandidateTag::English) &&
+          IsRawRomajiReading(observation.chosen.reading))
+        observation.reading = observation.chosen.reading;
+    };
+    use_raw_romaji(pending);
+    for (auto& segment : pending.segments) use_raw_romaji(segment);
+  }
   // Spec §7.2: a commit that was not observed is not the "last commit", so
   // Ctrl+Shift+Backspace must not reach an older pair past it.
   last_learned_commit_pairs_.clear();
@@ -4486,7 +4543,12 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
                      "cancel",
                      "secure_flag"};
   hs.client_id = ipc_client_id_;
-  const auto token = ReadClientHandshakeToken();
+  auto token = ReadClientHandshakeToken();
+#ifdef AZOOKEY_TSF_TESTING
+  // Without the environment override the token comes from the real per-user
+  // file, so a missing token cannot be arranged from a test otherwise.
+  if (handshake_token_unavailable_for_test_.load()) token.reset();
+#endif
   if (!token) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable");
     return false;
@@ -4547,6 +4609,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_segments") != hpayload->capabilities.end(),
         std::memory_order_relaxed);
+    ipc_host_english_candidates_.store(
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "english_candidates") != hpayload->capabilities.end(),
+        std::memory_order_relaxed);
     batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
                                        std::memory_order_relaxed);
     batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
@@ -4561,9 +4627,16 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     emoji_trigger_min_query_length_.store(hpayload->emoji_trigger_min_query_length,
                                           std::memory_order_relaxed);
     max_candidates_.store(hpayload->max_candidates, std::memory_order_relaxed);
+    // The option flags show which batch mode this TIP serves keys with, so a
+    // per-key query under batchRomajiConversion can be traced to a stale
+    // handshake (DEV-1493). Booleans only: no input, token or path. The key
+    // avoids "candidate", which the logger redacts as possible body text.
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
-                {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
+                {"host_generation_id", SafeLogText(hpayload->host_generation_id)},
+                {"batch_romaji_conversion", hpayload->batch_romaji_conversion},
+                {"batch_conversion_ai_cleanup", hpayload->batch_conversion_mode == "ai-cleanup"},
+                {"english_supported", ipc_host_english_candidates_.load()}});
     health_diagnostics_pending_ = true;
     health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
     health_probe_before_diagnostics_retry_ = false;
@@ -4768,6 +4841,7 @@ void TextService::ServeConnection() {
     std::string reading;
     std::string left_context;
     std::string raw_romaji;
+    bool english_candidates = false;
     std::string batch_mode;
     std::string trace_id;
     std::chrono::steady_clock::time_point trace_start;
@@ -4818,6 +4892,7 @@ void TextService::ServeConnection() {
         reading = ipc_pending_reading_;
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
+        english_candidates = ipc_pending_english_candidates_;
         batch_mode = ipc_pending_batch_mode_;
         trace_id = ipc_pending_trace_id_;
         trace_start = ipc_pending_trace_start_;
@@ -4902,6 +4977,10 @@ void TextService::ServeConnection() {
         return;
       }
       NoteHostResponded();
+      // Separates a settings refresh from the activation handshake in the
+      // log; the ipc_connected record just before it carries the new flags.
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_host_options_refreshed",
+                 {{"batch_romaji_conversion", batch_romaji_conversion_.load()}});
     }
 
     // Drain fire-and-forget queue (CommitObservation, Cancel) first. A send or
@@ -4999,6 +5078,10 @@ void TextService::ServeConnection() {
         qreq.secure = secure;
         qreq.learning_allowed = learning_allowed;
         qreq.emoji_trigger = emoji_trigger;
+        if (english_candidates) {
+          qreq.raw_romaji = raw_romaji;
+          qreq.english_candidates = true;
+        }
         if (!emoji_trigger.empty()) {
           qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
         }
@@ -5865,6 +5948,10 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   const std::string left_context = CaptureLeftContext(context, privacy.secure);
   const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
                                   !core_input_active_ && local_settings_.LiveConversionSnapshot();
+  // M60 §4.1 / §6.2: English candidates join only the candidate window
+  // (live = false), and the romaji goes only while it still spells the reading.
+  const bool english = !live && emoji_trigger.empty() && EnglishCandidatesEnabled();
+  std::string raw_romaji = english ? EnglishRawRomajiFor(reading) : std::string{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -5873,7 +5960,8 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
-  ipc_pending_raw_romaji_.clear();
+  ipc_pending_english_candidates_ = !raw_romaji.empty();
+  ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -5905,6 +5993,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
   ipc_pending_raw_romaji_.clear();
+  ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -6016,6 +6105,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
+  ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -7346,6 +7436,30 @@ void TextService::stop_ipc_worker_for_test() { StopIpcWorker(); }
 
 bool TextService::BatchRomajiEnabled() const {
   return batch_romaji_conversion_.load(std::memory_order_relaxed);
+}
+
+bool TextService::EnglishCandidatesEnabled() const {
+  return ipc_host_english_candidates_.load(std::memory_order_relaxed) &&
+         local_settings_.InlineEnglishCandidatesSnapshot();
+}
+
+std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
+  if (english_raw_romaji_.empty() || reading.empty()) return {};
+  const auto& table = batch_romaji_table_;
+  // The reading is either the preview (pending romaji shown as typed) or, once
+  // Space flushed it, the committed conversion; the romaji must spell one.
+  if (ApplyDefaultCompositionPunctuation(
+          core::RomajiKanaConverter::ConvertForCommit(english_raw_romaji_, table)) == reading ||
+      ApplyDefaultCompositionPunctuation(
+          core::RomajiKanaConverter::Preview(english_raw_romaji_, table)) == reading)
+    return english_raw_romaji_;
+  return {};
+}
+
+void TextService::SyncEnglishRawRomaji() {
+  const std::string surface = CurrentPreeditSurface();
+  while (!english_raw_romaji_.empty() && EnglishRawRomajiFor(surface).empty())
+    english_raw_romaji_.pop_back();
 }
 
 std::string TextService::BatchPreviewSurface() const {

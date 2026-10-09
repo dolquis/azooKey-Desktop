@@ -1307,14 +1307,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: ローマ字で `apple` と打つと、かな漢字候補に加え英単語候補（`apple` /
   `Apple` …）を注入し、英数モード切替なしで英単語を入力できるようにする。
-- **前提**: M5（候補 UI）、M6（Commit / Observation）完了。生ローマ字バッファ保持
-  （`docs/romaji-batch-conversion-spec.md` §4.1）を M58 と共有・再利用する。English タグ
+- **前提**: M5（候補 UI）、M6（Commit / Observation）完了。生ローマ字を reading と別フィールドで
+  送る M58 の原則（`docs/romaji-batch-conversion-spec.md` §4.1）を再利用する（バッファは別に持つ）。English タグ
   描画は X-2-3（`CandidateTag`）を再利用。辞書ゲーティング（品質レイヤ）は任意で、
   ベースライン（生ローマ字 + 大文字化）は辞書なしで動作する。
 - **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックとして
   前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定は設定アプリの
   「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
-- **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持の共有・候補注入経路・
+- **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持・候補注入経路・
   英単語確定時の Observe）、`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・候補 `tag`）、
   `inference-host/`（`EnglishCandidateProvider` / `EnglishDictionary` 新規、`Dispatcher` /
   `InferenceEngine` 配線）、`learning/`（English チャネルの区別）、
@@ -2355,8 +2355,8 @@ M36-A/B を内包する辞書層全体の再設計であり、同じ正典 spec�
 （一括変換 + ai-cleanup 限定の句読点挿入）とは別経路で、逐次ライブ変換中に動作する。
 X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 
-インライン英単語候補（M60）は X-2-3（`CandidateTag::English`）と生ローマ字バッファ保持
-（M58 §4.1）を再利用する候補注入機能であり、`docs/inline-english-candidate-spec.md` を
+インライン英単語候補（M60）は X-2-3（`CandidateTag::English`）と、生ローマ字を reading と
+分ける原則（M58 §4.1）を再利用する候補注入機能であり、`docs/inline-english-candidate-spec.md` を
 正典とする。スコープは 1 語単位の候補注入のみで、連続英文タイプは将来課題。
 
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と

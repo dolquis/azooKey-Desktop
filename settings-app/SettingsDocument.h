@@ -2,10 +2,12 @@
 
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "AppProfiles.h"
 #include "SettingsFields.h"
 
 namespace azookey::settings {
@@ -21,11 +23,25 @@ struct DictionarySettings {
   bool app_specific_dictionary_enabled{true};
 };
 
+// One entry of model.benchmarkHistory, which the Host writes and the settings app only shows
+// (sideload-packaging-spec section 3.6). The Host has not fixed the entry's shape yet, so the
+// keys of a BenchmarkModel response are read, plus a model name or path; others are ignored.
+struct BenchmarkHistoryEntry {
+  std::string model;
+  std::string backend;
+  std::string status;
+  std::optional<double> p50_ms;
+  std::optional<double> p95_ms;
+  std::optional<double> p99_ms;
+};
+
 struct EditableSettings {
   bool model_enabled{true};
   std::optional<std::string> model_backend_preference{std::string("auto")};
   std::string hidden_backend_preference;
   std::string model_selected_path;
+  // Shown by the "モデル" pane; never written by a save.
+  std::vector<BenchmarkHistoryEntry> benchmark_history;
   std::string openai_api_key;
   bool openai_api_key_changed{false};
   bool openai_api_key_unavailable{false};
@@ -35,6 +51,13 @@ struct EditableSettings {
   std::optional<DictionarySettings> dictionary;
   // The switches the UI started from; when set, only switches that differ from it are written.
   std::optional<DictionarySettings> dictionary_loaded;
+  // profilesByApp as edited in the "アプリ別" pane (app-profile-spec section 8). Unset keeps the
+  // object on disk. The whole object is written, and only when it differs from
+  // `profiles_by_app_loaded`, so a save that did not touch profiles leaves them alone.
+  std::optional<AppProfiles> profiles_by_app;
+  std::optional<AppProfiles> profiles_by_app_loaded;
+  // promptPrefixByApp, shown read-only; a save never changes it (app-profile-spec section 6).
+  std::map<std::string, std::string> legacy_prompt_prefixes;
   // Fields of the generic panes (GenericSettingFields), keyed by path. Only valid stored values
   // are loaded; an absent path keeps what is on disk when saved.
   SettingValues values;

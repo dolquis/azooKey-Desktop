@@ -99,13 +99,20 @@
     <ResourceCompile Include="azookey_settings.rc" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="App.xaml.h"><DependentUpon>App.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="AppProfiles.h" />
     <ClInclude Include="LaunchArguments.h" />
+    <ClInclude Include="LearningPane.h" />
+    <ClInclude Include="LearningPaneModel.h" />
+    <ClInclude Include="ModelPane.h" />
+    <ClInclude Include="ModelPaneModel.h" />
     <ClInclude Include="MainWindow.xaml.h"><DependentUpon>MainWindow.xaml</DependentUpon></ClInclude>
     <ClInclude Include="NeologdAttribution.h" />
+    <ClInclude Include="ProfilesPane.h" />
     <ClInclude Include="SettingsDocument.h" />
     <ClInclude Include="SettingsFieldControls.h" />
     <ClInclude Include="SettingsFields.h" />
     <ClInclude Include="SettingsIpcClient.h" />
+    <ClInclude Include="UiDispatch.h" />
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -114,10 +121,16 @@
   <ItemGroup>
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="App.xaml.cpp"><DependentUpon>App.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="AppProfiles.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="LaunchArguments.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="LearningPane.cpp" />
+    <ClCompile Include="LearningPaneModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ModelPane.cpp" />
+    <ClCompile Include="ModelPaneModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
     <ClCompile Include="NeologdAttribution.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(AzooKeyNeologdPinSource)" Condition="'$(AzooKeyNeologdPinSource)'!=''"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ProfilesPane.cpp" />
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsFieldControls.cpp" />
     <ClCompile Include="SettingsFields.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

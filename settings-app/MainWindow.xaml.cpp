@@ -5,12 +5,14 @@
 #include "LaunchArguments.h"
 #include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
+#include "UiDispatch.h"
 // clang-format on
 
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
 #endif
 
+#include <microsoft.ui.xaml.window.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
@@ -25,24 +27,7 @@
 
 namespace {
 
-struct DispatcherQueueAwaiter {
-  winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher;
-
-  bool await_ready() const noexcept { return false; }
-
-  void await_suspend(std::coroutine_handle<> continuation) const {
-    if (!dispatcher.TryEnqueue([continuation]() noexcept { continuation.resume(); })) {
-      throw winrt::hresult_error(E_ABORT, L"The UI dispatcher is shutting down.");
-    }
-  }
-
-  void await_resume() const noexcept {}
-};
-
-DispatcherQueueAwaiter ResumeForeground(
-    winrt::Microsoft::UI::Dispatching::DispatcherQueue const& dispatcher) {
-  return {dispatcher};
-}
+using azookey::settings::ResumeForeground;
 
 winrt::hstring LoadProblemMessage(
     const azookey::settings::SettingsDocumentResult& result,
@@ -103,6 +88,37 @@ MainWindow::MainWindow() {
     }
     return AdvancedFieldsPanel();
   });
+  // The panes keep these callbacks for requests that outlive a click, so they must not touch the
+  // window once it has closed.
+  Closed([alive = alive_](auto const&, auto const&) { *alive = false; });
+  profiles_pane_ = std::make_shared<azookey::settings::ProfilesPane>();
+  profiles_pane_->Build(ProfilesPaneHost(), {[this, alive = alive_] {
+                          if (!*alive) throw winrt::hresult_error(E_ABORT);
+                          return Content().XamlRoot();
+                        }});
+  model_pane_ = std::make_shared<azookey::settings::ModelPane>();
+  model_pane_->Build(ModelsPaneHost(), DispatcherQueue(),
+                     {[this, alive = alive_] {
+                        return *alive ? winrt::to_string(ModelPathTextBox().Text()) : std::string();
+                      },
+                      [this, alive = alive_](const std::string& path) {
+                        if (*alive) ModelPathTextBox().Text(winrt::to_hstring(path));
+                      }});
+  learning_pane_ = std::make_shared<azookey::settings::LearningPane>();
+  learning_pane_->Build(LearningPaneHost(), DispatcherQueue(),
+                        {[this, alive = alive_] {
+                           if (!*alive) throw winrt::hresult_error(E_ABORT);
+                           return Content().XamlRoot();
+                         },
+                         [this, alive = alive_] {
+                           HWND window = nullptr;
+                           if (*alive) {
+                             if (const auto native = this->try_as<::IWindowNative>()) {
+                               native->get_WindowHandle(&window);
+                             }
+                           }
+                           return window;
+                         }});
   SettingsNavigationView().SelectedItem(GeneralNavigationItem());
   neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
       azookey::settings::PinnedNeologdPackManifestJson());
@@ -136,8 +152,13 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   DictionaryPane().Visibility(visible(L"Dictionary"));
   AiPane().Visibility(visible(L"Ai"));
   PrivacyPane().Visibility(visible(L"Privacy"));
+  ProfilesPaneHost().Visibility(visible(L"Profiles"));
+  ModelsPaneHost().Visibility(visible(L"Models"));
+  LearningPaneHost().Visibility(visible(L"Learning"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
+  if (tag == L"Models" && model_pane_) model_pane_->OnShown();
+  if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
 }
 
 void MainWindow::ApplyDictionaryToControls(
@@ -298,6 +319,10 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   ShowSafeMode(result.settings);
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
+  model_pane_->SetHistory(result.settings.benchmark_history);
+  profiles_pane_->SetProfiles(
+      result.settings.profiles_by_app.value_or(azookey::settings::AppProfiles{}),
+      result.settings.legacy_prompt_prefixes);
   OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
   openai_api_key_changed_ = false;
   if (result.settings.model_backend_preference) {
@@ -393,6 +418,8 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                                         : "info";
   settings.dictionary = DictionaryFromControls();
   settings.dictionary_loaded = saved_settings_.dictionary;
+  settings.profiles_by_app = profiles_pane_->Profiles();
+  settings.profiles_by_app_loaded = saved_settings_.profiles_by_app;
   settings.clear_safe_mode = clear_safe_mode_;
   settings.safe_mode_enabled = saved_settings_.safe_mode_enabled;
   settings.safe_mode_entered_at = saved_settings_.safe_mode_entered_at;
@@ -542,6 +569,7 @@ void MainWindow::ClearSafeModeButton_Click(Windows::Foundation::IInspectable con
 
 void MainWindow::ShowInvalidSetting(const std::string& path) {
   // Open the pane holding the field and put the focus on it, so the value can be corrected.
+  if (path == "profilesByApp") SettingsNavigationView().SelectedItem(ProfilesNavigationItem());
   if (const auto* field = azookey::settings::FindSettingField(path)) {
     using Pane = azookey::settings::SettingsPane;
     const auto item = field->pane == Pane::General      ? GeneralNavigationItem()

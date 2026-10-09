@@ -368,6 +368,24 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_commit_segments_supported_for_test(bool supported) {
     ipc_host_commit_segments_.store(supported);
   }
+  // As Activate leaves it for TF_TMF_UIELEMENTENABLEDONLY (Edge and other
+  // UI-less hosts), without a thread manager.
+  void set_ui_less_mode_for_test(bool ui_less) {
+    ui_less_mode_ = ui_less;
+    candidate_ui_.SetUiLessMode(ui_less);
+  }
+  void set_english_candidates_for_test(bool enabled, bool host_supported = true) {
+    local_settings_.SetInlineEnglishCandidatesForTest(enabled);
+    ipc_host_english_candidates_.store(host_supported);
+  }
+  bool pending_ipc_english_candidates_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_english_candidates_;
+  }
+  bool pending_ipc_live_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_live_;
+  }
   std::vector<ipc::MessageType> queued_ipc_types_for_test();
   void post_commit_observation_for_test(const std::string& reading,
                                         const ipc::CandidateField& chosen) {
@@ -455,6 +473,10 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string pending_ipc_raw_romaji_for_test();
   void set_ipc_pipe_name_for_test(std::string pipe_name);
   void request_host_option_refresh_for_test() { RequestHostOptionRefresh(); }
+  // Call before start_ipc_worker_for_test: handshakes then find no token.
+  void set_handshake_token_unavailable_for_test(bool unavailable) {
+    handshake_token_unavailable_for_test_.store(unavailable);
+  }
   void retry_model_for_test() { RetryModelFromUi(); }
   bool batch_romaji_conversion_for_test() const {
     return batch_romaji_conversion_.load(std::memory_order_relaxed);
@@ -569,6 +591,10 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string core_marked_surface_;
   std::vector<TipCandidate> core_cached_metadata_;
   std::string batch_raw_romaji_;
+  // M60 raw_romaji of the ordinary (non-batch) composition: the keys as typed,
+  // Shift case kept for the Host's s_case signal. Kept apart from
+  // batch_raw_romaji_, which is lowercase. UI thread only.
+  std::string english_raw_romaji_;
   std::shared_ptr<const core::CustomRomajiTable> batch_romaji_table_;
   bool batch_query_in_progress_{false};
   // AI axis of the batch path: an ai-cleanup conversion whose privacy was
@@ -698,6 +724,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_reading_;
   std::string ipc_pending_left_context_;
   std::string ipc_pending_raw_romaji_;
+  bool ipc_pending_english_candidates_{false};  // ipc_mtx_
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   std::string ipc_pending_trace_id_;       // protected by ipc_mtx_
@@ -730,6 +757,12 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> prediction_settings_refreshing_{false};
   std::atomic<uint64_t> prediction_retry_generation_{0};
   std::atomic<bool> ipc_host_commit_segments_{false};
+  // Handshake capability "english_candidates" (M60). Without it the TIP sends
+  // neither raw_romaji nor english_candidates.
+  std::atomic<bool> ipc_host_english_candidates_{false};
+#ifdef AZOOKEY_TSF_TESTING
+  std::atomic<bool> handshake_token_unavailable_for_test_{false};
+#endif
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
   std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
 
@@ -919,6 +952,14 @@ class TextService final : public ITfTextInputProcessorEx,
   void AdviseCompositionMouseSink(ITfContext* context, ITfRange* range);
   void UnadviseCompositionMouseSink();
   bool BatchRomajiEnabled() const;
+  // M60: inlineEnglishCandidates is on and the Host advertised
+  // "english_candidates" (docs/inline-english-candidate-spec.md §6.2, §7).
+  bool EnglishCandidatesEnabled() const;
+  // The typed romaji when it still spells `reading`, empty otherwise.
+  std::string EnglishRawRomajiFor(const std::string& reading) const;
+  // Drops trailing romaji until the rest spells the current preedit, so a
+  // Backspace that erased a whole kana also erases the keys that typed it.
+  void SyncEnglishRawRomaji();
   std::string BatchPreviewSurface() const;
   std::string BatchReadingForConversion() const;
   void RefreshBatchPreeditSurface();

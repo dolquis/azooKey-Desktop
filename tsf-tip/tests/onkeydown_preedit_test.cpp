@@ -8868,3 +8868,154 @@ TEST(TsfTipDebugWindowTest, IpcEntriesKeepBodiesOnlyWhenTheRequestAllowedThem) {
   _putenv_s("AZOOKEY_LOG_BODY", saved.c_str());
   server.Stop();
 }
+
+// DEV-1493: batch accumulation queries nothing per key (spec §2 transition
+// table, "IPC 無し"), whether the application draws the candidate UI (Edge,
+// TF_TMF_UIELEMENTENABLEDONLY) or the TIP does, and with live conversion on.
+TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiQueriesNothingPerKeyInEitherCandidateUiMode) {
+  for (const bool ui_less : {false, true}) {
+    SCOPED_TRACE(ui_less ? "ui-less" : "tip-drawn");
+    TextServiceHarness h;
+    h.service.set_ui_less_mode_for_test(ui_less);
+    h.service.set_live_conversion_for_test(true);
+    h.service.set_batch_romaji_options_for_test(true);
+
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'Y'}, WPARAM{'O'}, WPARAM{'U'}}) {
+      EXPECT_TRUE(h.Press(key));
+      EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+      EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+      for (const auto type : h.service.queued_ipc_types_for_test()) {
+        EXPECT_NE(type, azookey::ipc::MessageType::QueryCandidates);
+        EXPECT_NE(type, azookey::ipc::MessageType::QueryLiveConversion);
+        EXPECT_NE(type, azookey::ipc::MessageType::QueryPredictions);
+      }
+    }
+    EXPECT_EQ(h.service.preedit_kana_, "きょう");
+
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  }
+}
+
+// M60 (DEV-1523): Space asks for the candidate window with live = false and the
+// romaji as typed, so the Host can add English candidates (spec §4.1, §6.2).
+TEST(TsfTipEnglishCandidatesTest, SpaceSendsTheTypedRomajiWithTheCandidateQuery) {
+  TextServiceHarness h;
+  h.service.set_english_candidates_for_test(true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.Press('A'));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  for (const WPARAM key : {WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}}) {
+    EXPECT_TRUE(h.Press(key));
+    // Per-key queries feed the live cache and never carry English candidates.
+    EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+    EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+  }
+  const std::string reading = h.service.preedit_kana_;
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_live_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), reading);
+  // The Shift case reaches the Host for its s_case signal.
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "Apple");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+}
+
+TEST(TsfTipEnglishCandidatesTest, BackspaceDropsTheRomajiOfTheErasedKana) {
+  TextServiceHarness h;
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'K'}, WPARAM{'I'}}) h.Press(key);
+  EXPECT_TRUE(h.Press(VK_BACK));
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'U'}}) h.Press(key);
+  ASSERT_EQ(h.service.preedit_kana_, "かく");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kaku");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+TEST(TsfTipEnglishCandidatesTest, SpaceRightAfterBackspaceStillSendsTheRomaji) {
+  TextServiceHarness h;
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'K'}, WPARAM{'I'}, WPARAM{'I'}})
+    h.Press(key);
+  EXPECT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.service.preedit_kana_, "かき");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.pending_ipc_live_for_test());
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kaki");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+TEST(TsfTipEnglishCandidatesTest, NothingIsSentWithoutTheSettingOrTheHostCapability) {
+  for (const auto& [enabled, supported] : {std::pair{false, true}, std::pair{true, false}}) {
+    SCOPED_TRACE(std::string("setting=") + (enabled ? "on" : "off") +
+                 " capability=" + (supported ? "on" : "off"));
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(enabled, supported);
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      h.Press(key);
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+    EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+  }
+}
+
+// M60 §5 / §6.4: an English candidate is learned under the raw romaji (the
+// reading the Host gave it), single and as one segment of several.
+TEST(TsfTipEnglishCandidatesTest, EnglishCommitIsObservedUnderTheRawRomaji) {
+  using azookey::ipc::CandidateField;
+  const uint8_t english = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  auto field = [](std::string surface, std::string reading, uint8_t tag) {
+    CandidateField candidate;
+    candidate.surface = std::move(surface);
+    candidate.reading = std::move(reading);
+    candidate.source = "heuristic";
+    candidate.tag = tag;
+    return candidate;
+  };
+  TextServiceHarness h;
+  h.service.set_english_candidates_for_test(true);
+  h.service.set_commit_segments_supported_for_test(true);
+
+  h.service.post_pending_observation_for_test({{"あっpぇ", field("Apple", "apple", english)}},
+                                              false, true);
+  auto single = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(single);
+  EXPECT_EQ(single->reading, "apple");
+  EXPECT_EQ(single->chosen.tag, english);
+
+  // A kana-read word with the English tag (M48) stays in kana learning.
+  h.service.post_pending_observation_for_test(
+      {{"あいふぉん", field("iPhone", "あいふぉん", english)}}, false, true);
+  single = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(single);
+  EXPECT_EQ(single->reading, "あいふぉん");
+
+  h.service.post_pending_observation_for_test(
+      {{"きょう", field("今日", "きょう", 0)}, {"あっpぇ", field("apple", "apple", english)}},
+      false, true);
+  const auto segments = h.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(segments);
+  ASSERT_EQ(segments->segments.size(), 2u);
+  EXPECT_EQ(segments->segments[0].reading, "きょう");
+  EXPECT_EQ(segments->segments[1].reading, "apple");
+  EXPECT_EQ(segments->segments[1].chosen.tag, english);
+}
+
+TEST(TsfTipEnglishCandidatesTest, EnglishCommitKeepsTheKanaReadingWithoutTheCapability) {
+  azookey::ipc::CandidateField chosen;
+  chosen.surface = "Apple";
+  chosen.reading = "apple";
+  chosen.source = "heuristic";
+  chosen.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  TextServiceHarness h;
+  h.service.set_english_candidates_for_test(true, /*host_supported=*/false);
+  h.service.post_pending_observation_for_test({{"あっpぇ", chosen}}, false, true);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->reading, "あっpぇ");
+}

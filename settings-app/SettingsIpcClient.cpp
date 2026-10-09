@@ -269,6 +269,14 @@ HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
       azookey::ipc::ParseQueryPersonaResponse);
 }
 
+HostCallResult<azookey::ipc::DetectAnomaliesResponse> RequestDetectAnomalies(
+    const SettingsIpcOptions& options, const azookey::ipc::DetectAnomaliesRequest& request) {
+  return Call<azookey::ipc::DetectAnomaliesResponse>(
+      options, kCapabilityDetectAnomalies, MessageType::DetectAnomalies,
+      azookey::ipc::BuildDetectAnomaliesRequest(request), options.long_response_timeout_ms,
+      azookey::ipc::ParseDetectAnomaliesResponse);
+}
+
 HostCallResult<azookey::ipc::QueryDiagnosticsPayload> RequestQueryDiagnostics(
     const SettingsIpcOptions& options) {
   return Call<azookey::ipc::QueryDiagnosticsPayload>(

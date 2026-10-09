@@ -123,6 +123,8 @@ MainWindow::MainWindow() {
                          }});
   persona_pane_ = std::make_shared<azookey::settings::PersonaPane>();
   persona_pane_->Build(PersonaPaneHost(), DispatcherQueue());
+  proofread_pane_ = std::make_shared<azookey::settings::ProofreadPane>();
+  proofread_pane_->Build(ProofreadPaneHost(), DispatcherQueue());
   SettingsNavigationView().SelectedItem(GeneralNavigationItem());
   neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
       azookey::settings::PinnedNeologdPackManifestJson());
@@ -160,6 +162,7 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   ModelsPaneHost().Visibility(visible(L"Models"));
   LearningPaneHost().Visibility(visible(L"Learning"));
   PersonaPaneHost().Visibility(visible(L"Persona"));
+  ProofreadPaneHost().Visibility(visible(L"Proofread"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
   if (tag == L"Models" && model_pane_) model_pane_->OnShown();

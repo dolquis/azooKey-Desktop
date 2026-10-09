@@ -11,6 +11,7 @@
 #include "NeologdAttribution.h"
 #include "PersonaPane.h"
 #include "ProfilesPane.h"
+#include "ProofreadPane.h"
 #include "SettingsDocument.h"
 #include "SettingsFieldControls.h"
 #include "pch.h"
@@ -77,6 +78,7 @@ struct MainWindow : MainWindowT<MainWindow> {
   std::shared_ptr<azookey::settings::ModelPane> model_pane_;
   std::shared_ptr<azookey::settings::LearningPane> learning_pane_;
   std::shared_ptr<azookey::settings::PersonaPane> persona_pane_;
+  std::shared_ptr<azookey::settings::ProofreadPane> proofread_pane_;
   bool clear_safe_mode_{false};
 };
 

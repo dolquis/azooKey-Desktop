@@ -14,6 +14,8 @@ namespace azookey::settings {
 enum class NeologdStatusKind {
   // The Host did not report a state (it predates the field).
   Unknown,
+  // The Host reported a state this version does not know.
+  UnknownState,
   // Switched off, and the Host is not using the layer.
   NotEnabled,
   // Switched on and saved; the Host fetches the pack when it next starts.
@@ -35,7 +37,8 @@ NeologdStatusKind ClassifyNeologdStatus(
 // "NeologdStatus_<kind>" string name.
 std::string NeologdStatusResource(NeologdStatusKind kind);
 
-// 0..1 as a percentage with one decimal: "45.2%". Values outside the range are clamped.
+// 0..1 as a percentage with one decimal: "45.2%". Values outside the range are clamped, and a
+// value that is not a number is shown as "-".
 std::string FormatRatioPercent(double ratio);
 
 // Local time as "YYYY-MM-DD HH:MM"; empty for 0.

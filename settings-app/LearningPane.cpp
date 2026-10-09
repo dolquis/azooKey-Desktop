@@ -470,7 +470,18 @@ winrt::fire_and_forget LearningPane::Reset() {
   const auto& tab = kLearningStoreTabs[static_cast<size_t>(tab_index_)];
   const auto dispatcher = dispatcher_;
   try {
+    // Ask the Host first, so a Host that cannot reset never shows a dialog for it.
+    SetBusy(true);
+    co_await winrt::resume_background();
+    const auto probe = ProbeHostCapability(DefaultSettingsIpcOptions(), kCapabilityLearningReset);
+    co_await ResumeForeground(dispatcher);
+    SetBusy(false);
     ResourceLoader resources;
+    if (probe != HostCallStatus::Ok) {
+      ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Learning_ProblemTitle"),
+                 Str(resources, HostCallStatusResource(probe)));
+      co_return;
+    }
     const auto message =
         resources.GetString(L"Learning_ResetConfirmMessage") + L"\n" +
         resources.GetString(winrt::to_hstring("Learning_ResetNote_" + std::string(tab.id)));

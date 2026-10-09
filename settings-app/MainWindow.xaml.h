@@ -66,6 +66,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   std::optional<azookey::settings::NeologdPackAttribution> neologd_attribution_;
   // The neologd switch value the user has accepted; programmatic changes keep it in sync.
   bool neologd_enabled_{false};
+  // Bumped for each neologd status query; an answer for an older one is dropped.
+  uint64_t neologd_status_generation_{0};
   // The last state read from or written to disk, to tell which saved changes need a restart.
   azookey::settings::EditableSettings saved_settings_;
   azookey::settings::SettingsFieldControls field_controls_;

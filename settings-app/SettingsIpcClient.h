@@ -53,6 +53,11 @@ inline constexpr const char* kCapabilityLearningData = "learning_data_management
 inline constexpr const char* kCapabilityLearningReset = "learning_reset";
 inline constexpr const char* kCapabilityPersona = "persona";
 
+// Connects and completes the Handshake only, to learn whether the Host advertises `capability`
+// before the user is asked to confirm an operation. Ok means it does; Unsupported means it does
+// not.
+HostCallStatus ProbeHostCapability(const SettingsIpcOptions& options, const char* capability);
+
 // Each call connects, completes the Handshake, sends one request and waits for its response.
 HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
     const SettingsIpcOptions& options, const azookey::ipc::ListModelsRequest& request);

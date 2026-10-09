@@ -1,6 +1,7 @@
 #include "StatusPaneModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 
@@ -22,13 +23,15 @@ NeologdStatusKind ClassifyNeologdStatus(
     }
     return NeologdStatusKind::NotEnabled;
   }
-  return NeologdStatusKind::Unknown;
+  return NeologdStatusKind::UnknownState;
 }
 
 std::string NeologdStatusResource(NeologdStatusKind kind) {
   switch (kind) {
     case NeologdStatusKind::Unknown:
       return "NeologdStatus_Unknown";
+    case NeologdStatusKind::UnknownState:
+      return "NeologdStatus_UnknownState";
     case NeologdStatusKind::NotEnabled:
       return "NeologdStatus_NotEnabled";
     case NeologdStatusKind::FetchAfterRestart:
@@ -48,6 +51,7 @@ std::string NeologdStatusResource(NeologdStatusKind kind) {
 }
 
 std::string FormatRatioPercent(double ratio) {
+  if (!std::isfinite(ratio)) return "-";
   const double clamped = std::clamp(ratio, 0.0, 1.0);
   char buffer[32]{};
   std::snprintf(buffer, sizeof(buffer), "%.1f%%", clamped * 100.0);

@@ -9,6 +9,8 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "LearningPaneModel.h"
@@ -59,7 +61,7 @@ controls::StackPanel RatioRow(const winrt::hstring& label, double ratio, const w
   controls::ProgressBar bar;
   bar.Minimum(0);
   bar.Maximum(1);
-  bar.Value(ratio < 0 ? 0 : (ratio > 1 ? 1 : ratio));
+  bar.Value(std::isfinite(ratio) ? std::clamp(ratio, 0.0, 1.0) : 0.0);
   SetId(bar, std::wstring(id) + L"Bar");
   row.Children().Append(bar);
   return row;
@@ -147,8 +149,9 @@ winrt::fire_and_forget PersonaPane::Refresh() {
           winrt::to_hstring(LearningErrorResource(persona.error.value_or("")))));
       co_return;
     }
-    loaded_once_ = true;
     content_.Children().Clear();
+    // With no data the next visit asks again: the Host may have counted commits since.
+    loaded_once_ = PersonaHasData(persona);
     if (!PersonaHasData(persona)) {
       content_.Children().Append(Block(resources.GetString(L"Persona_NoData")));
       co_return;

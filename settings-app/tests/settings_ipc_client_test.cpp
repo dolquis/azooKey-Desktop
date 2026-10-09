@@ -337,6 +337,26 @@ TEST(SettingsIpcClientTest, ResetLearningStoreSendsTheStoreAndNeedsItsCapability
   EXPECT_EQ(older.requests(), 0);
 }
 
+TEST(SettingsIpcClientTest, ProbingACapabilitySendsNoRequest) {
+  FakeHost host({"learning_reset"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(host.started());
+
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(host.Options(), "learning_reset"),
+            HostCallStatus::Ok);
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(host.Options(), "persona"),
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(host.requests(), 0);
+
+  azookey::settings::SettingsIpcOptions absent;
+  absent.pipe_name = "\\\\.\\pipe\\azookey-settings-probe-absent";
+  absent.handshake_token = "settings-test-token";
+  absent.connect_timeout_ms = 100;
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(absent, "learning_reset"),
+            HostCallStatus::HostNotRunning);
+}
+
 TEST(SettingsIpcClientTest, QueryPersonaSendsAnEmptyObjectAndNeedsItsCapability) {
   std::string seen_payload;
   FakeHost host({"persona"}, [&](azookey::ipc::MessageType type, const std::string& payload) {

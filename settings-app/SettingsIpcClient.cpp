@@ -198,6 +198,14 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
   return result;
 }
 
+HostCallStatus ProbeHostCapability(const SettingsIpcOptions& options, const char* capability) {
+  HostSession session;
+  if (const auto failure = session.Open(options); failure != OpenFailure::None) {
+    return StatusFor(failure);
+  }
+  return session.HasCapability(capability) ? HostCallStatus::Ok : HostCallStatus::Unsupported;
+}
+
 HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
     const SettingsIpcOptions& options, const azookey::ipc::ListModelsRequest& request) {
   return Call<azookey::ipc::ListModelsResponse>(

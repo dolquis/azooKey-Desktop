@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -56,15 +57,16 @@ TEST(NeologdStatusTest, ANotRequestedLayerAfterConsentIsNotAFailure) {
             NeologdStatusKind::NotEnabled);
 }
 
-TEST(NeologdStatusTest, AHostWithoutTheFieldOrWithAnUnknownStateIsUnknown) {
+TEST(NeologdStatusTest, AHostWithoutTheFieldIsUnknownAndAnUnknownStateIsNamedAsSuch) {
   EXPECT_EQ(ClassifyNeologdStatus(std::nullopt, true, true), NeologdStatusKind::Unknown);
-  EXPECT_EQ(ClassifyNeologdStatus(Layer("something_new"), true, true), NeologdStatusKind::Unknown);
+  EXPECT_EQ(ClassifyNeologdStatus(Layer("something_new"), true, true),
+            NeologdStatusKind::UnknownState);
 }
 
 TEST(NeologdStatusTest, EveryKindHasAString) {
   const auto names = ResourceNames();
   for (const auto kind :
-       {NeologdStatusKind::Unknown, NeologdStatusKind::NotEnabled,
+       {NeologdStatusKind::Unknown, NeologdStatusKind::UnknownState, NeologdStatusKind::NotEnabled,
         NeologdStatusKind::FetchAfterRestart, NeologdStatusKind::FetchAfterSaveAndRestart,
         NeologdStatusKind::Loading, NeologdStatusKind::Ready, NeologdStatusKind::MissingPack,
         NeologdStatusKind::Error}) {
@@ -80,6 +82,8 @@ TEST(PersonaFormatTest, FormatsRatiosAndTimes) {
   EXPECT_EQ(FormatRatioPercent(1), "100.0%");
   EXPECT_EQ(FormatRatioPercent(-0.5), "0.0%");
   EXPECT_EQ(FormatRatioPercent(7), "100.0%");
+  EXPECT_EQ(FormatRatioPercent(std::nan("")), "-");
+  EXPECT_EQ(FormatRatioPercent(HUGE_VAL), "-");
   EXPECT_EQ(FormatPersonaTime(0), "");
   const auto time = FormatPersonaTime(1780000000);
   ASSERT_EQ(time.size(), 16u);

@@ -235,12 +235,13 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
 winrt::fire_and_forget MainWindow::RefreshNeologdLayerStatus() {
   const auto lifetime = get_strong();
   const auto dispatcher = DispatcherQueue();
+  const auto generation = ++neologd_status_generation_;
   try {
     co_await winrt::resume_background();
     const auto result =
         azookey::settings::RequestQueryDiagnostics(azookey::settings::DefaultSettingsIpcOptions());
     co_await ResumeForeground(dispatcher);
-    if (!*alive_) co_return;
+    if (!*alive_ || generation != neologd_status_generation_) co_return;
 
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
     winrt::hstring text;
@@ -362,6 +363,10 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
   model_pane_->SetHistory(result.settings.benchmark_history);
+  // The stored switch decides how a not_requested layer reads, so ask again now it is known.
+  if (DictionaryPane().Visibility() == Microsoft::UI::Xaml::Visibility::Visible) {
+    RefreshNeologdLayerStatus();
+  }
   profiles_pane_->SetProfiles(
       result.settings.profiles_by_app.value_or(azookey::settings::AppProfiles{}),
       result.settings.legacy_prompt_prefixes);

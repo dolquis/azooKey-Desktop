@@ -483,4 +483,5 @@
   <data name="Learning_ResetNote_auto_word" xml:space="preserve"><value>新語候補がすべて消えます。断った語も消えるので、同じ語が再び候補になることがあります。</value></data>
   <data name="Learning_ResetDoneTitle" xml:space="preserve"><value>削除しました</value></data>
   <data name="Learning_ResetDoneMessage" xml:space="preserve"><value>このタブのデータを削除しました。</value></data>
+  <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>Host の状態: 不明な状態です（この設定アプリより新しい Host かもしれません）。</value></data>
 </root>

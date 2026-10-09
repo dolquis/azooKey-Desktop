@@ -73,11 +73,11 @@ VM なら失敗しても復元で済む。
 1. 人が、展開した zip の `unregister-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll` で解除する。
 2. `azookey_diag.exe --json` で登録の残骸が無いことを確かめる。
 3. `learning-data-snapshot.ps1 -Label after` を記録し、`-From before -To after` で学習データの変化を見る。
-4. 課題の手順が書き込んだユーザーデータは、§4 で退避したコピーへ戻す。普段の開発で使う登録があれば、元のとおり登録し直す。
+4. 課題の手順が書き込んだユーザーデータは、§4 で退避したコピーから元に戻す。普段の開発で使う登録があれば、元のとおり登録し直す。
 
 ## 7. 記録
 
 検証メモの環境欄には「開発機（物理）」と書き、VM での結果と区別する。
-OS のビルド番号、検証 zip の commit、Microsoft IME 以外に入っている IME も書く。
+OS のビルド番号、検証 zip の commit、azooKey と Microsoft IME 以外に入っている IME も書く。
 メモの様式は [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md) Part C を使う。
 ユーザー名を含むローカルの絶対パス、入力した本文、秘密情報は書かない。

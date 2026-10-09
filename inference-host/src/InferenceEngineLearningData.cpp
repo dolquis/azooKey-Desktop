@@ -141,6 +141,14 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::Learn
   return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
 }
 
+bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>& words,
+                                          uint64_t now_epoch, bool auto_promote) {
+  std::scoped_lock lock(state_mutex_);
+  if (!auto_word_store_ || auto_word_store_->save_blocked()) return false;
+  auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
+  return auto_word_store_->Save();
+}
+
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {
   std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
   switch (store) {

@@ -39,6 +39,12 @@ HttpDownloadResult Failure(std::string message) {
 
 constexpr DWORD kHttpStatusRangeNotSatisfiable = 416;
 
+bool CheckCancelled(const std::function<bool()>& cancelled, std::string* error) {
+  if (!cancelled || !cancelled()) return false;
+  *error = "HTTP request cancelled";
+  return true;
+}
+
 std::string WindowsError(std::string_view operation, DWORD error = GetLastError()) {
   return std::string(operation) + " failed (Windows error " + std::to_string(error) + ")";
 }
@@ -96,7 +102,9 @@ std::string LowerAscii(std::string value) {
   return value;
 }
 
-std::optional<std::string> Sha256File(const std::filesystem::path& path, std::string* error) {
+std::optional<std::string> Sha256File(const std::filesystem::path& path, std::string* error,
+                                      const std::function<bool()>& cancelled = {}) {
+  if (CheckCancelled(cancelled, error)) return std::nullopt;
   UniqueFileHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
   if (!file) {
@@ -133,6 +141,7 @@ std::optional<std::string> Sha256File(const std::filesystem::path& path, std::st
 
   std::array<UCHAR, 65'536> buffer{};
   for (;;) {
+    if (CheckCancelled(cancelled, error)) return std::nullopt;
     DWORD read = 0;
     if (!ReadFile(file.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr)) {
       *error = WindowsError("reading file for SHA256");
@@ -163,8 +172,9 @@ std::optional<std::string> Sha256File(const std::filesystem::path& path, std::st
   return encoded;
 }
 
-bool FileMatches(const std::filesystem::path& path, std::string_view expected, std::string* error) {
-  auto actual = Sha256File(path, error);
+bool FileMatches(const std::filesystem::path& path, std::string_view expected, std::string* error,
+                 const std::function<bool()>& cancelled = {}) {
+  auto actual = Sha256File(path, error, cancelled);
   return actual && *actual == expected;
 }
 
@@ -302,10 +312,28 @@ UniqueFileHandle OpenPartFile(const std::filesystem::path& path, bool append, st
   return file;
 }
 
-bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, uint64_t max_bytes,
-                        uint64_t* bytes_received, std::string* error) {
+bool SendGetRequest(HINTERNET request, const std::function<bool()>& cancelled, std::string* error) {
+  if (CheckCancelled(cancelled, error)) return false;
+  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0,
+                          0)) {
+    *error = WindowsError("sending HTTP request");
+    return false;
+  }
+  if (CheckCancelled(cancelled, error)) return false;
+  if (!WinHttpReceiveResponse(request, nullptr)) {
+    *error = WindowsError("receiving HTTP response");
+    return false;
+  }
+  return !CheckCancelled(cancelled, error);
+}
+
+template <typename Sink>
+bool ReadResponse(HINTERNET request, uint64_t initial_size, uint64_t max_bytes,
+                  uint64_t* bytes_received, const std::function<bool()>& cancelled, Sink&& sink,
+                  std::string* error) {
   std::array<unsigned char, 65'536> buffer{};
   for (;;) {
+    if (CheckCancelled(cancelled, error)) return false;
     DWORD available = 0;
     if (!WinHttpQueryDataAvailable(request, &available)) {
       *error = WindowsError("querying HTTP response data");
@@ -313,12 +341,14 @@ bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, u
     }
     if (available == 0) break;
     while (available > 0) {
+      if (CheckCancelled(cancelled, error)) return false;
       const DWORD requested = std::min<DWORD>(available, static_cast<DWORD>(buffer.size()));
       DWORD read = 0;
       if (!WinHttpReadData(request, buffer.data(), requested, &read)) {
         *error = WindowsError("reading HTTP response");
         return false;
       }
+      if (CheckCancelled(cancelled, error)) return false;
       if (read == 0) {
         *error = "HTTP response ended before the advertised data was read";
         return false;
@@ -328,14 +358,29 @@ bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, u
         *error = "HTTP response exceeds the configured maximum size";
         return false;
       }
-      DWORD written = 0;
-      if (!WriteFile(file, buffer.data(), read, &written, nullptr) || written != read) {
-        *error = WindowsError("writing partial download");
-        return false;
-      }
+      if (!sink(buffer.data(), read)) return false;
       *bytes_received += read;
       available -= read;
     }
+  }
+  return !CheckCancelled(cancelled, error);
+}
+
+bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, uint64_t max_bytes,
+                        uint64_t* bytes_received, const std::function<bool()>& cancelled,
+                        std::string* error) {
+  if (!ReadResponse(
+          request, initial_size, max_bytes, bytes_received, cancelled,
+          [&](const unsigned char* data, DWORD size) {
+            DWORD written = 0;
+            if (!WriteFile(file, data, size, &written, nullptr) || written != size) {
+              *error = WindowsError("writing partial download");
+              return false;
+            }
+            return true;
+          },
+          error)) {
+    return false;
   }
   if (!FlushFileBuffers(file)) {
     *error = WindowsError("flushing partial download");
@@ -371,6 +416,70 @@ std::optional<std::string> ComputeFileSha256(const std::filesystem::path& path,
 #endif
 }
 
+std::optional<std::string> ComputeSha256(std::string_view bytes, std::string* error) {
+  std::string ignored;
+  std::string& sink = error ? *error : ignored;
+#ifdef _WIN32
+  BCRYPT_ALG_HANDLE algorithm_raw = nullptr;
+  NTSTATUS status =
+      BCryptOpenAlgorithmProvider(&algorithm_raw, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+  if (status < 0) {
+    sink = "opening SHA256 provider failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  UniqueAlgorithmHandle algorithm(algorithm_raw);
+
+  DWORD object_size = 0;
+  DWORD copied = 0;
+  status =
+      BCryptGetProperty(algorithm.get(), BCRYPT_OBJECT_LENGTH,
+                        reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size), &copied, 0);
+  if (status < 0) {
+    sink = "querying SHA256 object length failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  std::vector<UCHAR> object(object_size);
+  BCRYPT_HASH_HANDLE hash_raw = nullptr;
+  status = BCryptCreateHash(algorithm.get(), &hash_raw, object.data(), object_size, nullptr, 0, 0);
+  if (status < 0) {
+    sink = "creating SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  UniqueHashHandle hash(hash_raw);
+
+  while (!bytes.empty()) {
+    // Bound each update before narrowing size_t to CNG's ULONG byte count.
+    const auto chunk_size = std::min(bytes.size(), std::size_t{65'536});
+    status = BCryptHashData(hash.get(), reinterpret_cast<PUCHAR>(const_cast<char*>(bytes.data())),
+                            static_cast<ULONG>(chunk_size), 0);
+    if (status < 0) {
+      sink = "updating SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+      return std::nullopt;
+    }
+    bytes.remove_prefix(chunk_size);
+  }
+
+  std::array<UCHAR, 32> digest{};
+  status = BCryptFinishHash(hash.get(), digest.data(), static_cast<ULONG>(digest.size()), 0);
+  if (status < 0) {
+    sink = "finishing SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  constexpr std::string_view kHex = "0123456789abcdef";
+  std::string encoded;
+  encoded.reserve(digest.size() * std::size_t{2});
+  for (const auto byte : digest) {
+    encoded.push_back(kHex.at(byte >> 4));
+    encoded.push_back(kHex.at(byte & 0x0f));
+  }
+  return encoded;
+#else
+  (void)bytes;
+  sink = "SHA256 is only supported on Windows";
+  return std::nullopt;
+#endif
+}
+
 HttpDownloader::HttpDownloader(std::wstring user_agent) : user_agent_(std::move(user_agent)) {}
 
 HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) const {
@@ -384,16 +493,20 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         "download request requires an HTTP URL, destination, 64-character SHA256, and max_bytes");
   }
   const auto expected = LowerAscii(request.expected_sha256);
+  std::string error;
+  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
 
   std::error_code ec;
   if (std::filesystem::is_regular_file(request.destination, ec) && !ec) {
     std::string hash_error;
-    if (FileMatches(request.destination, expected, &hash_error)) {
+    if (FileMatches(request.destination, expected, &hash_error, request.cancelled)) {
+      if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
       HttpDownloadResult result;
       result.status = HttpDownloadStatus::AlreadyValid;
       return result;
     }
   }
+  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
 
   const auto parent = request.destination.parent_path();
   if (!parent.empty()) {
@@ -403,20 +516,22 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   auto part = request.destination;
   part += L".part";
 
-  std::string error;
   auto parsed = ParseUrl(request.url, &error);
   if (!parsed) return Failure(std::move(error));
+  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
 
   UniqueInternetHandle session(OpenHttpSession(
       user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
       static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return Failure(WindowsError("opening WinHTTP session"));
+  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
 
   UniqueInternetHandle connection(
       WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));
   if (!connection) return Failure(WindowsError("opening WinHTTP connection"));
 
   for (int attempt = 0; attempt < 2; ++attempt) {
+    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
     auto part_size = RegularFileSize(part, &error);
     if (!part_size) return Failure(std::move(error));
     if (*part_size > request.max_bytes) {
@@ -428,6 +543,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
     if (!http_request) return Failure(WindowsError("opening HTTP request"));
+    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
 
     if (resume_offset > 0) {
       const auto range = L"Range: bytes=" + std::to_wstring(resume_offset) + L"-";
@@ -437,10 +553,8 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         return Failure(WindowsError("adding HTTP Range header"));
       }
     }
-    if (!WinHttpSendRequest(http_request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(http_request.get(), nullptr)) {
-      return Failure(WindowsError("downloading file"));
+    if (!SendGetRequest(http_request.get(), request.cancelled, &error)) {
+      return Failure(std::move(error));
     }
 
     auto status = QueryStatusCode(http_request.get(), &error);
@@ -448,7 +562,8 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
 
     if (*status == kHttpStatusRangeNotSatisfiable && resume_offset > 0) {
       std::string hash_error;
-      if (FileMatches(part, expected, &hash_error)) {
+      if (FileMatches(part, expected, &hash_error, request.cancelled)) {
+        if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
         if (!PromotePartFile(part, request.destination, &error)) return Failure(std::move(error));
         HttpDownloadResult result;
         result.status = HttpDownloadStatus::Downloaded;
@@ -472,26 +587,79 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
 
     HttpDownloadResult result;
     result.resumed = partial;
+    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
     auto file = OpenPartFile(part, partial, &error);
     if (!file) return Failure(std::move(error));
     const uint64_t initial_size = partial ? resume_offset : 0;
     if (!ReadResponseToFile(http_request.get(), file.get(), initial_size, request.max_bytes,
-                            &result.bytes_received, &error)) {
+                            &result.bytes_received, request.cancelled, &error)) {
       return Failure(std::move(error));
     }
     file.reset();
 
     std::string hash_error;
-    if (!FileMatches(part, expected, &hash_error)) {
+    if (!FileMatches(part, expected, &hash_error, request.cancelled)) {
       return Failure(hash_error.empty() ? "downloaded file SHA256 does not match expected value"
                                         : std::move(hash_error));
     }
+    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
     if (!PromotePartFile(part, request.destination, &error)) return Failure(std::move(error));
     result.status = HttpDownloadStatus::Downloaded;
     return result;
   }
 
   return Failure("HTTP resume could not be restarted");
+#endif
+}
+
+HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
+#ifndef _WIN32
+  (void)request;
+  return {{}, "HTTP downloads are only supported on Windows"};
+#else
+  if (request.url.empty() || request.max_bytes == 0) {
+    return {{}, "text request requires an HTTP URL and max_bytes"};
+  }
+  std::string error;
+  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  auto parsed = ParseUrl(request.url, &error);
+  if (!parsed) return {{}, std::move(error)};
+  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+
+  UniqueInternetHandle session(OpenHttpSession(
+      user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
+      static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
+  if (!session) return {{}, WindowsError("opening WinHTTP session")};
+  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  UniqueInternetHandle connection(
+      WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));
+  if (!connection) return {{}, WindowsError("opening WinHTTP connection")};
+  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  UniqueInternetHandle http_request(WinHttpOpenRequest(
+      connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
+      WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
+  if (!http_request) return {{}, WindowsError("opening HTTP request")};
+  if (!SendGetRequest(http_request.get(), request.cancelled, &error)) {
+    return {{}, std::move(error)};
+  }
+  const auto status = QueryStatusCode(http_request.get(), &error);
+  if (!status) return {{}, std::move(error)};
+  if (*status != HTTP_STATUS_OK) {
+    return {{}, "HTTP text request failed with status " + std::to_string(*status)};
+  }
+
+  HttpTextResult result;
+  uint64_t received = 0;
+  if (!ReadResponse(
+          http_request.get(), 0, request.max_bytes, &received, request.cancelled,
+          [&](const unsigned char* data, DWORD size) {
+            result.body.append(reinterpret_cast<const char*>(data), size);
+            return true;
+          },
+          &error)) {
+    return {{}, std::move(error)};
+  }
+  return result;
 #endif
 }
 

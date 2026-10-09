@@ -29,6 +29,30 @@ constexpr std::string_view kFixture(kFixtureBytes, sizeof(kFixtureBytes));
 constexpr std::string_view kFixtureSha256 =
     "cce8fa5c83c8d9494aec0ed9c4ec59739e15c6352216e2f4377b3d8194e48082";
 
+TEST(HttpDownloaderTest, ComputeSha256MatchesKnownVectors) {
+  std::string error;
+  const auto empty = azookey::host::ComputeSha256({}, &error);
+  ASSERT_TRUE(empty) << error;
+  EXPECT_EQ(*empty, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  const auto abc = azookey::host::ComputeSha256("abc", nullptr);
+  ASSERT_TRUE(abc);
+  EXPECT_EQ(*abc, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+TEST(HttpDownloaderTest, ComputeSha256IncludesEmbeddedNullBytes) {
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(kFixture, &error);
+  ASSERT_TRUE(hash) << error;
+  EXPECT_EQ(*hash, kFixtureSha256);
+}
+
+TEST(HttpDownloaderTest, ComputeSha256HashesAcrossMultipleChunks) {
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(std::string(1'000'000, 'a'), &error);
+  ASSERT_TRUE(hash) << error;
+  EXPECT_EQ(*hash, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+}
+
 class WinsockScope {
  public:
   WinsockScope() {
@@ -477,6 +501,119 @@ TEST(HttpDownloaderTest, RejectsCleartextHttpForNonLoopbackHost) {
   EXPECT_NE(result.error->find("loopback"), std::string::npos) << *result.error;
   EXPECT_FALSE(std::filesystem::exists(destination));
   EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
+}
+
+TEST(HttpDownloaderTest, FetchTextGetsBoundedChecksumWithoutUploading) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  const std::string checksum = std::string(kFixtureSha256) + "  trending-words.json\n";
+  LocalHttpServer server(checksum, false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = checksum.size();
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  ASSERT_TRUE(result.ok()) << result.error.value_or("");
+  EXPECT_EQ(result.body, checksum);
+  const auto sent = server.request();
+  EXPECT_TRUE(sent.starts_with("GET /model.gguf "));
+  EXPECT_TRUE(sent.ends_with("\r\n\r\n"));
+  EXPECT_EQ(sent.find("Range:"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRejectsOversizedResponseAndDiscardsPartialBody) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server(std::string(131072, 'x'), false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 65537;
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("maximum size"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRejectsHttpErrorsWithoutReturningBody) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server("must not expose error response", false, 1, 0, 503);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 1024;
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("503"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRequiresSizeLimitAndRejectsNonLoopbackHttpAndLocalFiles) {
+  azookey::host::HttpTextRequest request;
+  request.url = L"http://127.0.0.1:1/unavailable";
+  const azookey::host::HttpDownloader downloader;
+  EXPECT_FALSE(downloader.FetchText(request).ok());
+  request.max_bytes = 1024;
+  request.url = L"http://example.com/checksum";
+  const auto cleartext = downloader.FetchText(request);
+  ASSERT_TRUE(cleartext.error);
+  EXPECT_NE(cleartext.error->find("loopback"), std::string::npos);
+  request.url = L"file:///C:/checksum.sha256";
+  EXPECT_FALSE(downloader.FetchText(request).ok());
+}
+
+TEST(HttpDownloaderTest, CancelledDownloadPreservesExistingFileBeforeNetwork) {
+  TempDirectory temp;
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request =
+      Request(L"http://127.0.0.1:1/unavailable", destination, std::string(kFixtureSha256));
+  request.cancelled = [] { return true; };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+  EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
+}
+
+TEST(HttpDownloaderTest, CancelledDownloadAfterRequestNeverPromotes) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), false);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.cancelled = [&] { return !server.request().empty(); };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+}
+
+TEST(HttpDownloaderTest, FetchTextCancellationDiscardsResponse) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server(std::string(kFixtureSha256), false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 1024;
+  request.cancelled = [&] { return !server.request().empty(); };
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
 }
 
 }  // namespace

@@ -20,6 +20,7 @@ add_library(azookey_host STATIC
   src/HostArgs.cpp
   src/HostStartup.cpp
   src/HttpDownloader.cpp
+  src/TrendingWordFetcher.cpp
   src/InferenceEngine.cpp
   src/InferenceEngineLearningData.cpp
   src/LearningDataManager.cpp

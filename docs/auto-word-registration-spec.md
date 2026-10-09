@@ -235,12 +235,38 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 
 ### 5-1. `host::TrendingWordFetcher`
 
+本節のログ契約は `dev-infrastructure-spec.md` §7 と `debugging.md`「ログ収集」から参照する。
+
 - 新規 `inference-host/include/azookey/host/TrendingWordFetcher.h` /
   `src/TrendingWordFetcher.cpp`（WinHTTP 使用）。
 - 起動時 1 回 + `interval_hours`（既定 24h）周期で `FetchOnce` を実行:
   DL → SHA256 検証 → JSON パース → `AutoWordStore::IngestTrending`。
 - 検証・ネットワーク失敗時はストアを変更しない。`ETag` / `generated_at` 比較で
   無変更時はスキップ。
+
+worker は `Start` / `Stop` で所有し、終了時に join してストアより先に破棄する。
+`UpdateSettings` は取得の設定世代を更新する。無効化・間隔変更・登録モード変更で
+進行中の取得をキャンセルし、古い世代の結果は取り込まない。設定更新は通信の終了を
+待たず、再有効化時には直ちに取得する。同じ設定の再適用では周期をリセットしない。
+起動時から無効な場合は、HTTP セッションもソケットも生成しない。
+
+チェックサムは 1 KiB、JSON は共有 JSON parser と同じ 1 MiB を上限とする。各 WinHTTP 操作の timeout は
+1 秒、取得全体の協調キャンセル期限は 15 秒。実行中の同期 WinHTTP 操作はその
+timeout まで待ち、操作間と受信ループで停止を確認する。
+`generated_at` は保存に成功した直近の値と比較し、同じ値なら再取り込みと recency 更新を
+省略する。この比較値は Host 内で保持し、再起動後の初回取得では再検証・取り込みを行う。
+
+Host は `TrendingFetchDependencies::ingest_and_save` を
+`InferenceEngine::IngestTrendingWords` へ接続する。同メソッドは `state_mutex_` を保持して
+取り込みから保存まで行い、学習ストアの全削除・忘却が失敗した際の巻き戻しと直列化する。
+Fetcher の設定 mutex → engine の state mutex → store の mutex の順で取得する。
+`Dispatcher::HandleUpdateConfig` は `ApplyConfig` が戻り state mutex が解放された後に
+Fetcher の設定 callback を呼ぶ。`Stop` / join も engine のロック外で行う。
+
+診断イベント `trending_word_fetch` は固定の `reason`（`disabled`、
+`source_unavailable`、`unchanged`、`ingested`、`failed`、`cancelled`）だけで結果を区別する。
+URL、取得本文、ユーザー語は記録しない。失敗と取得先未設定は warning とし、
+Host の変換処理を継続する。
 
 ### 5-2. 取得元 — プロジェクトホストの静的アセット
 
@@ -252,9 +278,19 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
   HuggingFace データセット）。
 - 併置の `trending-words.json.sha256` でハッシュ検証。将来は detached 署名
   （`.sig`）対応の余地を残す。
+  checksum は取得したアセットの完全性を確認するもので、配信元の正当性を保証しない。
 - 検証通過後、ローカルキャッシュへアトミック書き込み（macOS 版
   `legacy/Core/Sources/Core/InputUtils/DebugTypoCorrectionWeights.swift` の
   アトミック展開パターンを踏襲）。
+- キャッシュは解決済みユーザーデータの `data/trending-words.json` とする。
+  専用 staging に SHA256 検証付きで取得する。staging から一度読み込んだ同じバイト列を
+  SHA256 検証・JSON 検証・キャッシュ書込みに使い、既存キャッシュを atomic replace
+  する。通信・検証・キャッシュ書込みの失敗時は旧キャッシュを保持し、staging と
+  `.part` を削除する。ストアの保存失敗時は検証済みキャッシュとメモリ上の語を保持し、
+  保存成功の比較値を更新せず次回取得で再試行する。
+  取得先が空なら通信を開始しない。上記の例示 URL を暗黙の配信先として使わない。
+  本番の取得先は配信契約の承認を受けて設定する。取得先が空の無通信構成での
+  取得基盤の受入と、アセットの実配信の受入は区別する。
 - **上流のデータ生成パイプライン**（Google Trends 等からの収集・整形・
   スコアリング）は別リポジトリ / CI ジョブで運用し、**本書はクライアントの
   DL・検証・取り込みのみを規定する**。
@@ -271,15 +307,35 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 }
 ```
 
-- `reading` は上流で付与済み（クライアントで読み推定はしない）。reading 欠落
+- `reading` は上流で付与済み（クライアントで読み推定はしない）。reading 欠落・空の
   エントリは取り込みスキップ。
 - `rank` から初期 `count` / `score` を導出
   （例: `score = base + (max_rank - rank) / max_rank * k`）。
+  v1 では正の `uint32_t` rank を使い、`count = max_rank - rank + 1`、
+  `score = 1.0 + 0.2 * (max_rank - rank) / max_rank` とする。
+  `max_rank` は reading のある取り込み対象の最大 rank とする。
+  version は 1、`generated_at` は空でない 64 バイト以下の文字列、`words` は配列を必須とする。
+  reading 欠落・空のエントリ以外の形式不正はアセット全体を拒否する。
+
+入力の上限と文字制約は次のとおりとする。JSON 全体の上限は §5-1 の 1 MiB を維持する。
+
+- `words` 配列は最大 10000 件。reading が欠落・空で取り込みをスキップする要素も数える。
+- `surface` と `reading` は、それぞれ JSON のエスケープを解釈した後の UTF-8 で
+  最大 256 バイトとし、妥当な UTF-8 であることを要求する。`surface` は空文字列を許可しない。
+- 両文字列で C0（U+0000〜U+001F）、C1 と DEL（U+007F〜U+009F）、
+  双方向制御文字（U+061C、U+200E〜U+200F、U+202A〜U+202E、U+2066〜U+2069）を拒否する。
+- `reading` の文字は U+3041〜U+309F または U+30A0〜U+30FF に限る。
+  全角の長音符・結合濁点・中点は許可範囲に含め、半角カナは拒否する。
+
+reading 欠落・空のエントリをスキップする場合を除き、上限超過・文字制約違反・型不正は
+アセット全体の拒否とする。検証を通過するまで取り込みやキャッシュの置換を行わず、
+拒否時は既存のストアとキャッシュを保持する。
 
 ### 5-4. M32 WinHTTP 基盤との関係
 
 M32（自動更新）の `UpdateChecker.cpp` と HTTP DL + SHA256 検証パターンが共通。
-共通ヘルパ `inference-host/src/HttpDownloader.{h,cpp}` を `UpdateChecker`（M32）と
+共通ヘルパ `inference-host/include/azookey/host/HttpDownloader.h` と
+`inference-host/src/HttpDownloader.cpp` を `UpdateChecker`（M32）と
 `TrendingWordFetcher`（M36-B）で共有する。**`HttpDownloader` は M32 が新設し
 （M32 は自動更新 §6 に加え `docs/sideload-packaging-spec.md` §1.6.1 (b) の初回
 モデル DL でも利用）、M36-B はそれを再利用する**（依存順は M32 → M36-B。
@@ -459,8 +515,11 @@ parser の受理条件:
 `auto_word_mining_enabled` / `auto_word_auto_register`（`registrationMode == "auto"`）/
 `auto_word_min_count` へ反映する。
 
-`trendingIntervalHours` の上限は 8760（1 年）とする。`auto_word_trending_enabled` は
-取り込みを持つ側の課題（M36-B）で `EngineConfig` へ追加する。
+`trendingIntervalHours` の上限は 8760（1 年）とする。`EngineConfig` の
+`auto_word_trending_enabled` / `auto_word_trending_interval_hours` へも反映し、
+`Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
+SafeMode または `privacy.mode=offline` では `trendingEnabled` の実効値を false とする。
+offline による抑止は保存された `trendingEnabled` を変更せず、通常モードへ戻ると元の設定を使う。
 `auto_word_default_score` は §6 の注入が使う `EngineConfig` の内部値であり、
 設定キーを持たない。
 
@@ -472,6 +531,8 @@ parser の受理条件:
 - **トレンド取得はダウンロードのみ** — `TrendingWordFetcher` は公開静的アセットを
   GET するだけ。ユーザー語・入力統計・端末情報をリクエストに含めない
   （User-Agent はバージョン文字列のみ、M32 と同様）。アップロードは行わない。
+  `privacy.mode=offline` は公開アセットの取得も禁止する。起動時は通信せず、実行中に
+  offline へ切り替えると設定世代を更新し、進行中の取得を協調キャンセルする。
 - **DPAPI 暗号化（M34）対象に新ストアを含める** — `auto_words.tsv` はユーザーの
   未知語（固有名詞・個人情報を含みうる）を蓄積するため、`learning.tsv` /
   `user_dict.json` と同等の機微情報として M34 の暗号化対象に追加する。
@@ -541,16 +602,17 @@ parser の受理条件:
   JSON・TSV 出力 / `--offline` での直接編集 / host 不在時にファイルを触らず
   失敗すること / 稼働中の Dispatcher 経由の confirm で pending → confirmed →
   注入まで通ること。
-- 新規 `inference-host/tests/trending_word_fetcher_test.cpp`（M36-B）:
-  SHA256 検証成功/失敗の分岐。`HttpDownloader` をインターフェース化し
-  テストダブルを注入（HTTP はモック / ローカルファイル経由）。
+- `inference-host/tests/trending_word_fetcher_test.cpp`（M36-B）:
+  `TrendingFetchDependencies` から取得関数と時刻を注入し、ローカル fixture の SHA256
+  検証・取り込み・永続化、無効時の通信入口未呼出し、通信・検証失敗時の保持、
+  保存失敗後の再試行、設定世代によるキャンセル、worker 終了、仮想時刻での周期再取得を検証する。
 
 ## 13. 検証手順（実装後）
 
 1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
 2. テスト: `ctest --preset windows-debug --output-on-failure`
    （`auto_word_store_tests` / `payloads_test` / `engine_test` /
-   `dispatcher_test`、M36-B では `trending_word_fetcher_tests` が green）。
+   `dispatcher_test`、M36-B では `host_trending_word_fetcher_tests` が green）。
 3. `settings.json` に `autoWordRegistration.miningEnabled: true` と
    `registrationMode: "auto"` を書いて host を stdio 起動し、辞書に無い
    `(reading, surface)` の `CommitObservation` を `miningMinCount` 回送ってから

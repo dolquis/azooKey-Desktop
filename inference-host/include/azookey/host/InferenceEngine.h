@@ -113,8 +113,10 @@ struct EngineConfig {
   // M35 typo correction; docs/typo-correction-learning-spec.md section 5-2.
   std::string typo_correction_mode{"suggest"};
   uint32_t typo_min_count{learning::kTypoCorrectionDefaultMinCount};
-  // M36-A mining; docs/auto-word-registration-spec.md section 8.
+  // M36 mining and trending; docs/auto-word-registration-spec.md section 8.
   bool auto_word_mining_enabled{true};
+  bool auto_word_trending_enabled{false};
+  uint32_t auto_word_trending_interval_hours{24};
   bool auto_word_auto_register{false};
   uint32_t auto_word_min_count{3};
   // Score for a confirmed auto-word that carries none of its own (every mined
@@ -295,6 +297,10 @@ class InferenceEngine {
   // On SaveFailed the in-memory contents are put back as they were.
   enum class ResetOutcome { Reset, Unavailable, SaveFailed };
   ResetOutcome ResetLearningStore(LearningDataStore store);
+  // Serializes the ingest/save transaction with reset and its failure rollback.
+  // A failed save retains valid ingested words in memory for the next retry.
+  bool IngestTrendingWords(const std::vector<learning::AutoWord>& words, uint64_t now_epoch,
+                           bool auto_promote);
 
   // rich-features-spec X-2-7: the persona of the kana learning store, computed
   // by the learning flush worker at startup and every kPersonaRefreshInterval.

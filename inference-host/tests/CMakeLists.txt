@@ -62,6 +62,12 @@ if(WIN32)
     PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings ws2_32
   )
   azookey_discover_tests(host_http_downloader_tests)
+
+  add_executable(host_trending_word_fetcher_tests trending_word_fetcher_test.cpp)
+  target_link_libraries(host_trending_word_fetcher_tests
+    PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+  )
+  azookey_discover_tests(host_trending_word_fetcher_tests)
 endif()
 
 add_executable(host_userdict_cli_tests userdict_cli_test.cpp)

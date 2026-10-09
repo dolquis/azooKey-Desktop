@@ -431,6 +431,7 @@ Health は Linear の health フィールドで設定し、本文に重ねて書
 - AREA_LABELS: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core, area:settings, area:build, area:docs
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Merged（PR マージ済み・検証メモ待ち）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜7 + 独立トラック）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
+- VERIFY_ENV_LABELS: `env:vm`、`env:dev-machine`（label group `env`、単一選択）。`gate:human-required` の実機検証に、実施してよい環境を 1 つ付ける。`env:vm` は checkpoint で巻き戻せる Hyper-V VM でだけ行う課題、`env:dev-machine` は Windows の開発機で行ってよい課題を表す（VM で行ってもよい）。判定基準は `docs/handoff/dev-machine-verification.md` §2・§3 が正典で、迷ったら `env:vm` とする。実機検証でない人間ゲートには付けない。
 
 ### 関連 Issue の塊と PR
 

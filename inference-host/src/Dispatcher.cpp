@@ -1346,6 +1346,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
     engine_->RestoreHealthState(HealthState::SafeMode);
   }
   engine_->ApplyConfig(next_config);
+  if (config_.on_config_applied) {
+    config_.on_config_applied(next_config);
+  }
   const auto model_result = engine_->LoadModelWithResult(
       ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers,
                        next_config.inference_threads});

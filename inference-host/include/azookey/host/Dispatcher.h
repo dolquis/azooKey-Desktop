@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +30,9 @@ struct DispatcherConfig {
   std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};
   // M45 ListModels root (UserDataPaths::models_dir). Empty disables the scan.
   std::filesystem::path models_dir;
+  // Runs under update_config_mutex after ApplyConfig and before model loading.
+  // Callbacks must not wait for background network work to finish.
+  std::function<void(const EngineConfig&)> on_config_applied;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code

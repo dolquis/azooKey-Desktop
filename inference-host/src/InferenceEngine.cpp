@@ -867,6 +867,8 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.typo_correction_mode = config.typo_correction_mode;
   config_.typo_min_count = config.typo_min_count;
   config_.auto_word_mining_enabled = config.auto_word_mining_enabled;
+  config_.auto_word_trending_enabled = config.auto_word_trending_enabled;
+  config_.auto_word_trending_interval_hours = config.auto_word_trending_interval_hours;
   config_.auto_word_auto_register = config.auto_word_auto_register;
   config_.auto_word_min_count = config.auto_word_min_count;
   config_.auto_word_default_score = config.auto_word_default_score;

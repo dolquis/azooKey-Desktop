@@ -42,6 +42,7 @@
 #include "azookey/host/NewWordsCli.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/host/TrendingWordFetcher.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -776,6 +777,55 @@ int main(int argc, char** argv) {
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
   engine.SetEnglishLearningStore(&english_store);
+  // No distribution endpoint is configured until the release asset contract is approved.
+  const std::wstring trending_asset_url;
+  azookey::host::TrendingFetchDependencies trending_dependencies;
+  trending_dependencies.report = [&runtime_log](azookey::host::TrendingFetchStatus status) {
+    using azookey::host::TrendingFetchStatus;
+    const char* result = "failed";
+    switch (status) {
+      case TrendingFetchStatus::Disabled:
+        result = "disabled";
+        break;
+      case TrendingFetchStatus::SourceUnavailable:
+        result = "source_unavailable";
+        break;
+      case TrendingFetchStatus::Unchanged:
+        result = "unchanged";
+        break;
+      case TrendingFetchStatus::Ingested:
+        result = "ingested";
+        break;
+      case TrendingFetchStatus::Failed:
+        result = "failed";
+        break;
+      case TrendingFetchStatus::Cancelled:
+        result = "cancelled";
+        break;
+    }
+    if (status == TrendingFetchStatus::Failed || status == TrendingFetchStatus::SourceUnavailable) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "trending_word_fetch",
+                      {{"result", SafeLogText("error")},
+                       {"reason", SafeLogText(result)},
+                       {"error_code", SafeLogText("business")}});
+    } else {
+      runtime_log.Log(
+          azookey::logging::RuntimeLogLevel::Info, "trending_word_fetch",
+          {{"result", SafeLogText(status == TrendingFetchStatus::Cancelled ? "cancelled" : "ok")},
+           {"reason", SafeLogText(result)}});
+    }
+  };
+  // Declared after the stores and before dispatchers so the worker joins before store teardown.
+  azookey::host::TrendingWordFetcher trending_fetcher(
+      auto_word_store, auto_word_store.path().parent_path() / "trending-words.json",
+      trending_asset_url, std::move(trending_dependencies));
+  const auto update_trending_settings =
+      [&trending_fetcher](const azookey::host::EngineConfig& applied) {
+        trending_fetcher.UpdateSettings(applied.auto_word_trending_enabled,
+                                        applied.auto_word_trending_interval_hours,
+                                        applied.auto_word_auto_register);
+      };
+  update_trending_settings(engine.config());
   if (entered_safe_mode) {
     (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected);
   } else if (safe_mode) {
@@ -844,6 +894,7 @@ int main(int argc, char** argv) {
 #endif
   dconf.default_backend = default_backend;
   dconf.models_dir = user_paths->models_dir;
+  dconf.on_config_applied = update_trending_settings;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }
@@ -948,6 +999,7 @@ int main(int argc, char** argv) {
                     {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
     start_neologd_pack();
+    trending_fetcher.Start();
     auto supervisor_state = supervisor_process.GetState();
     while (!StopRequested() &&
            supervisor_state == azookey::host::SupervisorLifetime::State::Running) {
@@ -955,6 +1007,7 @@ int main(int argc, char** argv) {
       supervisor_state = supervisor_process.GetState();
     }
     server.Stop();
+    trending_fetcher.Stop();
     const bool wait_failed = supervisor_state == azookey::host::SupervisorLifetime::State::Failed;
     const auto stop_reason = wait_failed       ? "supervisor_wait_failed"
                              : StopRequested() ? "requested"
@@ -978,6 +1031,7 @@ int main(int argc, char** argv) {
   }
 
   start_neologd_pack();
+  trending_fetcher.Start();
   std::string line;
   while (ReadStdioLine(line)) {
     if (line.empty()) continue;
@@ -1001,6 +1055,7 @@ int main(int argc, char** argv) {
       }
     }
   }
+  trending_fetcher.Stop();
   runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
                   {{"result", SafeLogText("ok")}});
   return 0;

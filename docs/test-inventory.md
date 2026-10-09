@@ -26,7 +26,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 下表は CMake が登録するテストと 1 行ずつ対応し、`scripts/check_test_inventory.py` が
 `CMakeLists.txt` 側の登録との差分を検査する（テストを追加・削除する PR は同じ PR で
 本表を更新する）。登録の一部は構成に依存し、`tsf-tip` / `settings-app` / `diagnostics` /
-`compat-test` と `host_http_downloader_tests` / `azookey_conversion_quality_smoke` は
+`compat-test` と `host_http_downloader_tests` / `host_trending_word_fetcher_tests` / `azookey_conversion_quality_smoke` は
 `WIN32` のとき、`azookey_nll_real_model_*` と `azookey_zenzai_real_model_*` は
 `AZOOKEY_WITH_LLAMA_CPP` かつ `AZOOKEY_ZENZAI_TEST_MODEL` を与えたとき、
 `azookey_zenzai_bench_smoke` / `azookey_zenzai_bench_json_smoke` /
@@ -94,7 +94,8 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_learning_data_manager_tests` | `inference-host/tests/learning_data_manager_test.cpp` | M49 の store 名の往復、kana / english チャネルをまたぐ学習ペアの一覧・検索・ページングと上限、4 store の一覧、id の安定性と store・チャネル・境界ずらしでの区別、store ごとの忘却規則（学習は 0 化、typo と user_dict は削除、auto_word は rejected）、TIP 形式の忘却が kana チャネルだけに効くこと、モック鍵での export → import の全 store 一致、平文 export、別鍵・壊れた archive・欠落ファイル・不正な行を含む item（`bad_item`）で store を変えないこと、保存を止めている store での export / import の `store_unavailable`、manifest の件数が忘却した組を除くこと、代替データストリーム・予約デバイス名・Windows のデバイス名前空間と UNC を指すパスとシンボリックリンクの source の拒否、衝突解決 3 方式 |
 | `host_user_learning_scorer_tests` | `inference-host/tests/user_learning_scorer_test.cpp` | M54 の `user_score`: `log(1 + commit_count)` と M7 減衰の積、category 別半減期モード、typo 行の半減期下限、app の一致・不一致・不明・無効時の重み、純拒否の乗算ペナルティと accept による回復、候補の並べ替えと非有限値の末尾化、category 参照の失敗と store なしでの 0 |
 | `host_model_catalog_tests` | `inference-host/tests/model_catalog_test.cpp` | モデルカタログの既定補完と明示既定 id、不正・重複 id と未知既定の reject、`models\zenzai\` 配下での解決、ローカル欠落の報告 |
-| `host_http_downloader_tests` | `inference-host/tests/http_downloader_test.cpp` | SHA256 不一致時の `.part` 非昇格、Range 再開・Range 無視サーバでの再取得、上限超過応答の非昇格、非 loopback 平文 HTTP の接続前 reject、DPAPI 保護キーの復号失敗時の再入力分類とエラー応答本文非伝搬 |
+| `host_http_downloader_tests` | `inference-host/tests/http_downloader_test.cpp` | SHA256 不一致時の `.part` 非昇格、Range 再開・Range 無視サーバでの再取得、上限超過応答の非昇格、非 loopback 平文 HTTP の接続前 reject、サイズ制限付き metadata GET、事前・通信後キャンセル、DPAPI 保護キーの復号失敗時の再入力分類とエラー応答本文非伝搬 |
+| `host_trending_word_fetcher_tests` | `inference-host/tests/trending_word_fetcher_test.cpp` | ローカル fixture の SHA256 検証・取り込み・atomic cache・永続化、無効時の通信入口未呼出し、SHA 不一致・JSON 不正・通信失敗時の保持、重複スキップ、rejected と mining 優先、設定変更で旧結果を破棄、worker の起動・終了と仮想時刻の周期取得 |
 | `host_userdict_cli_tests` | `inference-host/tests/userdict_cli_test.cpp` | `userdict` CLI の add/list/remove ラウンドトリップ、dry-run、稼働中 Host 優先と直接編集の使い分け、import/export と非 ASCII パス保持 |
 | `host_process_integration_tests` | `inference-host/tests/host_process_integration_test.cpp` | 一時 data root の実 Host 子プロセスで IPC と `--offline` の user_dict 同時追加、および `CTRL_C_EVENT` / `CTRL_BREAK_EVENT` 後の未保存学習 flush、stdio モードで stdin を開いたまま `CTRL_BREAK_EVENT` を受けたときの読み取り解除と正常終了。stdout の停止テストは同じ main.cpp の専用 Host で flush 間隔を1時間に延ばし、定期保存前に `CTRL_C_EVENT` / `CTRL_BREAK_EVENT` または broken pipe で書込みを解除して正常終了・未保存学習の再読込を検証 |
 | `host_lookup_cli_tests` | `inference-host/tests/lookup_cli_test.cpp` | `lookup` CLI の読み完全一致・読み前置一致・表記一致、ロック取得不可時の失敗、TSV/JSON の列、0 バイトの学習ストアを繰り返し読めること、平文の学習ストアを移行せずに読むこと、0 バイトのユーザー辞書を変更せずに空として読むこと、破損ユーザー辞書を隔離も変更もしないこと |

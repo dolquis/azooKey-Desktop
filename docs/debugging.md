@@ -177,6 +177,10 @@ Debug ビルドでは、TIP の構造化 JSON レコードを `OutputDebugString
 DebugView または WinDbg で同じフィールドと redaction ポリシー適用後の値を観測できる。
 Host の stderr も従来どおり残る。
 
+トレンド語の取得失敗は Host ログの `event=trending_word_fetch` と固定の `reason` で
+確認する。取得先未設定は `source_unavailable`、通信・検証・保存失敗は `failed` となる。
+各値の契約は `auto-word-registration-spec.md` §5-1 を参照する。
+
 本文を確認する場合は Debug ビルドに加え、`AZOOKEY_LOG_BODY=1`、非 secure の入力、
 `privacy.redactLogs=false`、詳細ログを許可するモードがすべて必要となる。
 許可するモードは `normal` / `offline`、または `custom.detailedLogging=true` の

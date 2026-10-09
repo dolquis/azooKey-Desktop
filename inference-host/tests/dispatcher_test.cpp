@@ -2317,6 +2317,67 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
   std::remove(model_path.c_str());
 }
 
+TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInvalidReload) {
+  const auto settings_path =
+      TempPath(PerTestFileName("azookey_dispatcher_trending_callback", ".json").c_str());
+  struct SettingsCleanup {
+    std::string path;
+    ~SettingsCleanup() { std::remove(path.c_str()); }
+  } cleanup{settings_path};
+  const auto write_settings = [&](const std::string& json) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    EXPECT_TRUE(out.is_open());
+    out << json;
+  };
+  azookey::host::SettingsStore settings_store(settings_path);
+  std::vector<azookey::host::EngineConfig> applied_configs;
+  auto config = DefaultDispatcherConfig();
+  config.on_config_applied = [&](const azookey::host::EngineConfig& applied) {
+    // Publication must happen before the callback can notify its worker.
+    EXPECT_EQ(engine.config().auto_word_trending_enabled, applied.auto_word_trending_enabled);
+    EXPECT_EQ(engine.config().auto_word_trending_interval_hours,
+              applied.auto_word_trending_interval_hours);
+    applied_configs.push_back(applied);
+  };
+  azookey::host::Dispatcher first(&engine, &scheduler, &user_dict, config, &settings_store);
+  azookey::host::Dispatcher second(&engine, &scheduler, &user_dict, config, &settings_store);
+
+  write_settings(R"({"autoWordRegistration":{"trendingEnabled":true,
+                    "trendingIntervalHours":6,"registrationMode":"auto"}})");
+  const auto enabled = first.Dispatch(MakeReq(740, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(enabled);
+  const auto enabled_payload = ipc::ParseUpdateConfigResponse(enabled->payload_json);
+  ASSERT_TRUE(enabled_payload);
+  ASSERT_TRUE(enabled_payload->ok);
+  ASSERT_EQ(applied_configs.size(), 1u);
+  EXPECT_TRUE(applied_configs.back().auto_word_trending_enabled);
+  EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
+  EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
+
+  write_settings(R"({"safeMode":{"enabled":true},"autoWordRegistration":{
+                    "trendingEnabled":true,"trendingIntervalHours":12}})");
+  const auto safe = second.Dispatch(MakeReq(741, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(safe);
+  const auto safe_payload = ipc::ParseUpdateConfigResponse(safe->payload_json);
+  ASSERT_TRUE(safe_payload);
+  ASSERT_TRUE(safe_payload->ok);
+  ASSERT_EQ(applied_configs.size(), 2u);
+  EXPECT_FALSE(applied_configs.back().auto_word_trending_enabled);
+  EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 12u);
+  EXPECT_FALSE(applied_configs.back().auto_word_auto_register);
+  EXPECT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+
+  write_settings("{ invalid json");
+  const auto invalid = first.Dispatch(MakeReq(742, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(invalid);
+  const auto invalid_payload = ipc::ParseUpdateConfigResponse(invalid->payload_json);
+  ASSERT_TRUE(invalid_payload);
+  EXPECT_FALSE(invalid_payload->ok);
+  EXPECT_EQ(applied_configs.size(), 2u);
+  EXPECT_FALSE(engine.config().auto_word_trending_enabled);
+  EXPECT_EQ(engine.config().auto_word_trending_interval_hours, 12u);
+}
+
 TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

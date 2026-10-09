@@ -479,4 +479,117 @@ TEST(HttpDownloaderTest, RejectsCleartextHttpForNonLoopbackHost) {
   EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
 }
 
+TEST(HttpDownloaderTest, FetchTextGetsBoundedChecksumWithoutUploading) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  const std::string checksum = std::string(kFixtureSha256) + "  trending-words.json\n";
+  LocalHttpServer server(checksum, false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = checksum.size();
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  ASSERT_TRUE(result.ok()) << result.error.value_or("");
+  EXPECT_EQ(result.body, checksum);
+  const auto sent = server.request();
+  EXPECT_TRUE(sent.starts_with("GET /model.gguf "));
+  EXPECT_TRUE(sent.ends_with("\r\n\r\n"));
+  EXPECT_EQ(sent.find("Range:"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRejectsOversizedResponseAndDiscardsPartialBody) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server(std::string(131072, 'x'), false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 65537;
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("maximum size"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRejectsHttpErrorsWithoutReturningBody) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server("must not expose error response", false, 1, 0, 503);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 1024;
+
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("503"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, FetchTextRequiresSizeLimitAndRejectsNonLoopbackHttpAndLocalFiles) {
+  azookey::host::HttpTextRequest request;
+  request.url = L"http://127.0.0.1:1/unavailable";
+  const azookey::host::HttpDownloader downloader;
+  EXPECT_FALSE(downloader.FetchText(request).ok());
+  request.max_bytes = 1024;
+  request.url = L"http://example.com/checksum";
+  const auto cleartext = downloader.FetchText(request);
+  ASSERT_TRUE(cleartext.error);
+  EXPECT_NE(cleartext.error->find("loopback"), std::string::npos);
+  request.url = L"file:///C:/checksum.sha256";
+  EXPECT_FALSE(downloader.FetchText(request).ok());
+}
+
+TEST(HttpDownloaderTest, CancelledDownloadPreservesExistingFileBeforeNetwork) {
+  TempDirectory temp;
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request =
+      Request(L"http://127.0.0.1:1/unavailable", destination, std::string(kFixtureSha256));
+  request.cancelled = [] { return true; };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+  EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
+}
+
+TEST(HttpDownloaderTest, CancelledDownloadAfterRequestNeverPromotes) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), false);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.cancelled = [&] { return !server.request().empty(); };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+}
+
+TEST(HttpDownloaderTest, FetchTextCancellationDiscardsResponse) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  LocalHttpServer server(std::string(kFixtureSha256), false);
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 1024;
+  request.cancelled = [&] { return !server.request().empty(); };
+  const auto result = azookey::host::HttpDownloader().FetchText(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.body.empty());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+}
+
 }  // namespace

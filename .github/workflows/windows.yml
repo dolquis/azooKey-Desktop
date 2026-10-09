@@ -1554,6 +1554,12 @@ jobs:
             Write-Host ("{0} -> machine=0x{1:X4} (ARM64)" -f $binary, $machine)
           }
 
+          # Use the installed x64-host ARM64 toolchain's dumpbin explicitly;
+          # PATH can otherwise resolve a different developer environment.
+          $env:VSLANG = '1033'
+          $dumpbin = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/arm64/dumpbin.exe'
+          ./scripts/check-arm64-hardening.ps1 -BinaryPath $binaries -DumpbinPath $dumpbin -OutputDirectory arm64-hardening
+
       - name: Upload ARM64 cross-build logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1562,6 +1568,7 @@ jobs:
           path: |
             configure-arm64.log
             build-arm64.log
+            arm64-hardening/*.txt
           if-no-files-found: ignore
 
       - name: Upload ARM64 binaries

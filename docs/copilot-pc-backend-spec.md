@@ -636,7 +636,8 @@ Codex review 指摘）:
   が `'0'` でなければ `exit 1` する。ARM64 行で ctest を**スキップ**すると `tests_ec` が
   未設定（空文字）になり、`'' -ne '0'` が真となってビルド成功でも落ちる。
 
-専用ジョブ例（**ビルドゲートのみ・ctest なし・arch を含む一意な artifact 名**）:
+専用ジョブの構成例（**ctest なし・arch を含む一意な artifact 名**）:
+以下は環境構築とビルドの抜粋であり、後述の成果物検査とそのログ保存も必須とする。
 
 ```yaml
 jobs:
@@ -660,7 +661,7 @@ jobs:
             configure-arm64.log
             build-arm64.log
           if-no-files-found: ignore
-      # このジョブの fail ゲートは configure + build のみを見る（tests_ec は参照しない）。
+      # fail ゲートは configure / build / 成果物検査を見る（tests_ec は参照しない）。
 ```
 
 既存 `windows-build`（x64）matrix に ARM64 を**足さない**ため、x64 側の artifact 名・
@@ -668,6 +669,14 @@ fail ゲートは無改変で済む。`windows-release-arm64` preset は `window
 上記 toolchain file を `CMAKE_TOOLCHAIN_FILE` で指す（または同じ変数群を
 `cacheVariables` で直接指定する）。なお §8.4 の `windows-11-arm` ネイティブテストジョブも
 別ジョブとして独立させ、そちらは build + ctest + 自前の fail ゲートを持つ。
+
+ARM64 クロスビルドは `scripts/check-arm64-hardening.ps1` で TIP DLL と Host の
+`dumpbin /headers /loadconfig` を検査する。ARM64 machine、CFG の DLL characteristic、
+`CF instrumented` / `FID table present`、非ゼロの関数テーブルと件数、
+`Dependent Load Flag 0B00` を必須とし、出力をログ artifact に保存する。
+`dumpbin` は MSVC cross 環境の `VCToolsInstallDir/bin/Hostx64/arm64/dumpbin.exe` を
+明示して呼ぶ。clang-cl の未知引数・未使用引数は toolchain でエラーにする。
+フラグ適用の正典は `dev-infrastructure-spec.md` §2.2、検査対象は同 §4.3 に従う。
 
 ### 8.2 ARM 最適化フラグ（cross-compile セーフ）
 
@@ -773,7 +782,7 @@ ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM
 **M27 受け入れ条件の確定（roadmap M27 を補足）**:
 
 1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルド（clang-cl / ARM64 toolchain）が
-   既存 x64 ランナーで成功すること。ARM64 バイナリの生成までを CI の最小ゲートとする
+   既存 x64 ランナーで成功すること。ARM64 バイナリの生成と §8.1 の成果物検査を CI の最小ゲートとする
    （新インフラ不要）。
 2. **ARM64 単体テスト実行** = `windows-11-arm` ランナーで `ctest` を緑にする。**public /
    private いずれでも label は有効**（private は従量課金）なので、リポジトリ可視性に

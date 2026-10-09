@@ -63,8 +63,8 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | `ipc/**`、wire schema | 親が `tsf-ipc-protocol` Skill を読んで確認する | TIP consumer 変更なら親が `tsf-tip-development` Skill を読んで確認する |
 | `core/**`、候補生成 | 親が `azookey-core-conversion` Skill を読んで確認する | spec 変更なら `spec-drift-checker` |
 | `learning/**`、privacy 設定 | 親が `azookey-learning-data-safety` Skill を読んで確認する | IPC 経由なら親が `tsf-ipc-protocol` Skill を読んで確認する |
-| `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 対応する境界 |
-| C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、対応する境界 |
+| `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する |
+| C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 
 `diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。

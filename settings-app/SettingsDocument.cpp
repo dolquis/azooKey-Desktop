@@ -524,6 +524,17 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
   }
   settings.dictionary = ExtractDictionarySettings(root);
   settings.dictionary_loaded = settings.dictionary;
+  if (const auto it = root.find("profilesByApp"); it != root.end() && it->second.IsObject()) {
+    settings.profiles_by_app = ParseAppProfiles(it->second.AsObject());
+  } else {
+    settings.profiles_by_app = AppProfiles{};
+  }
+  settings.profiles_by_app_loaded = settings.profiles_by_app;
+  if (const auto it = root.find("promptPrefixByApp"); it != root.end() && it->second.IsObject()) {
+    for (const auto& [app, prefix] : it->second.AsObject()) {
+      if (prefix.IsString()) settings.legacy_prompt_prefixes.emplace(app, prefix.AsString());
+    }
+  }
   for (const auto& field : GenericSettingFields()) {
     if (const auto* stored = FindPath(root, field.path)) {
       if (auto value = FromJson(field, *stored)) settings.values.emplace(field.path, *value);
@@ -542,6 +553,20 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
   }
   if (const auto it = model.find("selectedPath"); it != model.end() && it->second.IsString()) {
     settings.model_selected_path = it->second.AsString();
+  }
+  if (const auto it = model.find("benchmarkHistory"); it != model.end() && it->second.IsArray()) {
+    for (const auto& item : it->second.AsArray()) {
+      if (!item.IsObject()) continue;
+      BenchmarkHistoryEntry entry;
+      entry.model = item.GetString("model").value_or(
+          item.GetString("path").value_or(item.GetString("model_path").value_or("")));
+      entry.backend = item.GetString("backend").value_or("");
+      entry.status = item.GetString("status").value_or("");
+      entry.p50_ms = item.GetNumber("p50_ms");
+      entry.p95_ms = item.GetNumber("p95_ms");
+      entry.p99_ms = item.GetNumber("p99_ms");
+      settings.benchmark_history.push_back(std::move(entry));
+    }
   }
   if (const auto it = model.find("backendPreference"); it != model.end() && it->second.IsString()) {
     const auto& value = it->second.AsString();
@@ -615,6 +640,15 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
       return result;
     }
   }
+  const bool write_profiles =
+      settings.profiles_by_app && settings.profiles_by_app != settings.profiles_by_app_loaded;
+  if (write_profiles) {
+    if (const auto problem = ValidateAppProfiles(*settings.profiles_by_app)) {
+      result.error = "profilesByApp: " + *problem;
+      result.invalid_setting = "profilesByApp";
+      return result;
+    }
+  }
   auto lock = azookey::learning::AcquireExclusiveFileLockForPath(path, lock_timeout);
   if (!lock) {
     result.error = "settings.json is busy; no changes were written";
@@ -664,6 +698,9 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
         SetPath(&root, dictionary_path, j::Value(value));
       }
     }
+  }
+  if (write_profiles) {
+    root["profilesByApp"] = j::Value(AppProfilesToJson(*settings.profiles_by_app));
   }
   for (const auto& [setting, value] : settings.values) {
     const auto* field = FindSettingField(setting);

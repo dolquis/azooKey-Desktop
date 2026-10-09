@@ -338,7 +338,8 @@ else:
 
 ## 8. UI（設定アプリ）
 
-設定アプリに `アプリ別設定` タブを追加（M30 完了後の M48 着手時）:
+設定アプリの「アプリ別」ペイン（`sideload-packaging-spec.md` §3.2）は、次の画面でプロファイルを扱う。
+前面アプリの検出表示と「全削除」は持たない。プロファイルの削除は 1 件ずつ行う:
 
 ```
 [アプリ別設定]
@@ -358,7 +359,17 @@ else:
 編集ダイアログ:
 - profileName / predictionEnabled / sentenceCompletion /
   learningEnabled / aiBackend / promptPrefix / style /
-  preferTechnicalTerms / candidateTagBoosts / privacyMode
+  preferTechnicalTerms / candidateTagBoosts / privacyMode / bracketPairing
+
+各フィールドは「指定しない（継承）」を選べ、指定しないフィールドは `settings.json` に書かない（§4）。
+`promptPrefix` は「指定する」を切り替え、指定して空にすると §6 の「明示的な空文字」になる。
+`candidateTagBoosts` は、タグ名と倍率（1.0〜3.0）の行を足し引きして編集する。範囲外の倍率、
+空または重複したタグ名、既にあるアプリ名（大文字小文字を区別しない）は、ダイアログを閉じられない。
+保存は、読み込み時と異なるときだけ `profilesByApp` 全体を書く。
+`promptPrefixByApp`（従来）は、プロファイル一覧の下に読み取り専用で並べ、保存しても消さない。
+各行の「プロファイルへ移す」は、同じアプリ（大文字小文字を区別しない）のプロファイルの `promptPrefix` へ値をコピーする。
+プロファイルが無ければ `promptPrefix` だけを持つプロファイルを、従来のキー表記のまま作る。
+既に `promptPrefix` を持つプロファイルは上書きしない（§6-1 でそちらが優先される）。従来のキーは消さない。
 
 ## 9. AppProfileResolver
 

@@ -310,32 +310,68 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 
 ## 7. 多ソース候補統合（スコープ #5）
 
-### 7.1 現行の合成順（`InferenceEngine::QueryCandidates`）
+### 7.1 候補の合成順（`InferenceEngine::QueryCandidatesExImpl`）
 
-統合は **converter ではなく `QueryCandidates` 側**で行われる（現行コード）:
+統合は **converter ではなく engine 側**で行う。
+`inference-host/src/InferenceEngine.cpp` の `QueryCandidatesExImpl` は次の順で処理する。
 
-```
-1. user_dict_->Lookup(kana)   → score = value or user_word_default_score(1.5), debug="user-dict", source=UserDictionary
-2. active_converter_->Convert(kana, ctx)  → Zenzai or SimpleConverter の候補を末尾連結
-3. Reranker::Apply → 各候補 score += LearningStore::Score(reading, surface, now)  → score 降順 stable_sort
-```
+1. **typo 補正読みの解決**: `TypoCorrectionStore::Lookup` の結果を、`auto_replace` なら
+   `corrected_reading` に設定し、以降の辞書検索・変換・rerank に同じ補正読みを使う。
+   `suggest` なら元の読みを保ち、補正読みを手順 10 の提案用に保持する。
+2. **辞書レイヤの完全一致検索**: `RefreshDictionaryLocked` の後、
+   `DictionaryCandidates(dictionaries_, kana, LookupMode::Exact, …, 32, false)` で候補を得る。
+   この呼び出しでは user_dict を除外し、手順 3 で entry value を保持して追加する。
+3. **user_dict**: 有効時に `user_dict_->Lookup(kana)` の結果を末尾へ追加する。
+   `score = value.value_or(user_word_default_score)`、`source = UserDictionary`、
+   `debug_info = "user-dict"` とする。
+4. **確定 auto-word**: auto-word が有効なら `LookupConfirmed(kana)` の結果を追加する。
+   pending / rejected は含めない。正の保存 score があればそれを使い、それ以外は
+   `auto_word_default_score` を使う。`source = UserDictionary`、`debug_info = "auto-word"` とする。
+5. **converter**: 通常は `active_converter_`、`fast_only` では `fallback_converter_` を使う。
+   `kModelConversionBudget`（§8.2）の deadline、末尾を長さ制限した文脈、候補上限を
+   `BuildContext` 経由で渡して `Convert` する。モデル converter から例外が出て
+   fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は
+   §7.4 に従う。返された候補を末尾へ連結する。
+6. **表層 dedup**: `DedupMergedCandidates` で全ソースの重複を除く（§7.6）。
+7. **NLL 補正**: `config.nll.enabled && !live` のとき、変換が例外終了しておらず、
+   `ZenzaiModelConverter` の runtime がロードされ、`last_error()` がない場合に
+   `RerankNll` を呼ぶ。手順 5 と同じ deadline を引き継ぐ。対象ソース・減点による
+   score 合成・予算の正典は `neural-reranker-spec.md` §B5〜B7 とする。
+8. **学習 reranker**: `ApplyRerankerOrRaw` を適用する。既定の `Reranker::Apply` は
+   `LearningStore::Score` を加算し、非有限 score を除いて score 降順に stable_sort する。
+   store がなければ入力の順序・score を保つ。`user_learning_scorer_enabled` と store が
+   有効なら `UserLearningScorer` を使う（`user-learning-enhancement-spec.md` §7）。
+   rerank が例外終了した場合は、rerank 前の候補・score に戻す。
+9. **タグ補正**: `AssignHeuristicTags` の後、`tag_boosts` があれば `ApplyTagBoosts` を適用する。
+   タグ補正は rerank 後の score に 1 回適用する（`app-profile-spec.md` §7）。
+10. **typo 提案**: `suggest` の補正読みがあり、live 変換でなく、キャンセルされていなければ、
+    新しい `kModelConversionBudget` の deadline で補正読みを追加変換する。主変換が例外から
+    fallback した場合は提案にも fallback を使う。返却順で最初の、既存候補と表層が重ならない
+    1 件を `debug_info = "typo-correction"` として先頭へ挿入する。提案変換の例外は提案なしとする。
+11. **件数制限と返却**: リクエストと設定の候補上限を合成し、両方が非 0 なら小さい方、
+    片方が 0 なら他方を上限とする。上限が非 0 なら末尾を切り詰め、候補列を返す。
 
-手順 1 の user_dict 候補はマージ経路で `c.source = core::CandidateSource::UserDictionary`
-（`core/include/azookey/core/Candidate.h`）を明示設定する。§7.2 の source 帯と source 依存の
-マージ/dedup（§7.6）はこの設定を前提とする。
-
-`ZenzaiModelConverter::Convert` は **手順 2 の候補列を返すだけ**であり、user_dict や
-reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source / debug_info）が
-この合成にそのまま乗る。
+処理中のキャンセル検査でキャンセルを検出した場合は空結果を返す。
+`ZenzaiModelConverter::Convert` は **手順 5 の候補列を返すだけ**であり、辞書レイヤや
+user_dict との統合は行わない。本書の Zenzai 契約（§6.5 の score / source / debug_info）を
+この合成へ渡す。
 
 ### 7.2 各ソースの score 帯（正規化の正典）
 
+以下は NLL・学習・タグ補正より前の score である。`CandidateSource` は
+`core/include/azookey/core/Candidate.h` に定義する。
+
 | ソース | source enum | score 帯 | 備考 |
 |---|---|---|---|
-| user_dict（読み完全一致） | `UserDictionary` | 既定 **1.5**（`user_word_default_score`）/ entry value | 最優先帯 |
+| 辞書レイヤ（`DictionaryCandidates`） | 静的レイヤは `SystemDictionary`、`LayerId::User` 以降は `UserDictionary` | `DictionaryStore::Lookup` の `entry.score` | provider では再正規化しない。§7.1 手順 2 は User レイヤを除外 |
+| user_dict（読み完全一致） | `UserDictionary` | 既定 **1.5**（`user_word_default_score`）/ entry value | 明示 value は低値・負値も保持 |
+| 確定 auto-word（`LookupConfirmed`） | `UserDictionary` | 正の保存 score / それ以外は既定 **1.2**（`auto_word_default_score`） | `debug_info = "auto-word"` |
 | Zenzai | **`Model`** | **[0.3, 1.4]**（§6.5） | local model 変換。`Llm` は M16 クラウド用に予約 |
 | SimpleConverter（辞書/heuristic） | `SystemDictionary` / `Heuristic` | 0.1〜1.2 | fallback / 劣化時 |
-| 学習加点（reranker） | （加算） | weight×decay（≈0.8/確定、半減期≈4.6日） | 全ソースに加算 |
+
+NLL は §7.1 手順 7 の対象候補だけを減点する。既定 reranker の学習加点は
+weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合に全ソースへ加算する。
+`UserLearningScorer` の加点式は `user-learning-enhancement-spec.md` §7 に従う。
 
 > **設計判断**: Zenzai を `CandidateSource::Model` とし、`CandidateSource::Llm` は
 > M16「Magic Conversion」（OpenAI 等クラウド LLM）に予約する。両者は性質
@@ -343,17 +379,21 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
 
 ### 7.3 順位規則
 
-- 最終順位は `score + 学習加点` の**降順 stable_sort**（現行 reranker のまま）。
-- **user_dict 最優先**（roadmap M9）は **既定 value（無指定＝1.5）** の場合、Zenzai 帯上限
-  （1.4）より上に収まるため**スコア単独キーのまま自然に担保**される（合成順・reranker の
-  ソートキーは変更不要）。
+- 学習 rerank の順位は、NLL 適用後の `score + 学習加点` の**降順 stable_sort**とする。
+  store 不在・rerank 例外時の順序保持は §7.1 手順 8 に従う。その後、タグ補正による
+  並べ替え、typo 提案の先頭挿入、件数制限を行うため、返却順はこれらの影響も受ける。
+- **user_dict の既定 value（無指定＝1.5）** は、補正前の Zenzai 候補の帯上限（1.4）を
+  上回る。この比較は、他の辞書レイヤや保存 score を持つ auto-word を含む全ソースに対する
+  最終先頭順位を保証しない。
 - **明示 value の扱い**: user_dict の score は `w.value.value_or(1.5)`。user が**明示的に低い/
   負の value** を設定した場合（`AddUserWord` 任意値）はその値で順位付けされる＝user の意図的な
-  格下げを尊重する（M9「最優先」は既定登録語が対象）。ただし**重複表層の dedup** では value に
-  関わらず user_dict を保持する（§7.6 のソース優先）。
+  格下げを尊重する（M9「最優先」は既定登録語が対象）。ただし**他ソースとの重複表層の dedup**
+  では value に関わらず `UserDictionary` を優先し、同じ source 間は §7.6 の score 比較に従う。
 - 例外: ユーザーが Zenzai 候補を繰り返し確定すると学習加点でその候補が 1.5 を超え
   user_dict 既定を上回り得る — これは**学習された選好の反映**として正しい挙動。
-- 同点時は stable_sort により**挿入順**（user_dict → Zenzai → Simple）が保たれる。
+- 学習 rerank の同点時は stable_sort により **dedup 後の入力順**が保たれる。
+  合成時の挿入順は辞書レイヤ → user_dict → 確定 auto-word → converter 候補であり、
+  dedup で代表が置き換わっても、その表層が最初に出現した位置を保つ。
 
 ### 7.4 劣化モード（degraded）の順位
 
@@ -368,7 +408,7 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
   同ロック内で**専用フィールド `model_runtime_error_` にミラー**し `effective_last_error()`
   経由で Health に反映。汎用 `last_error_`〔load/learning〕には**混ぜない**ので成功変換で確実に
   クリアできる）。
-- user_dict は degraded でも手順 1 でそのまま最優先帯に残る（Host は落ちない）。
+- user_dict は degraded でも §7.1 手順 3 で得た候補を保つ（既定 score は §7.2）。
 
 ### 7.5 将来の score 統合（参照）
 
@@ -380,26 +420,23 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 
 ### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
 
-§7.1 の合成では user_dict と converter（Zenzai/Simple）が**独立に同一表層を出し得る**
-（例: user_dict「日本語」と Zenzai「日本語」）。現行 `QueryCandidates` は両者を連結し
-reranker でソートするのみで**クロスソース dedup をしない**ため、UI に重複候補が出る。
-これを防ぐため**マージ経路に表層 dedup を追加する**（M8 統合 = DEV-221 スコープの小改修）。
+§7.1 の辞書レイヤ、user_dict、確定 auto-word、converter は独立に同一表層を出し得る。
+`DedupMergedCandidates` は候補を連結した後、NLL と学習 reranker より前に
+表層ごとの代表を選ぶ。辞書レイヤ内での重複除去とは別に、合成した全候補へ適用する。
 
 規則:
 
 - キーは表層 `surface`（同一読み `kana` 内での合成のため読みは共通）。
-- **ソース優先で残す**: 重複集合に user_dict（`source==UserDictionary`）候補があれば
-  **score の高低に関わらず user_dict を残す**（user が登録した表層はその値ごと user の
-  エントリで代表させる）。`w.value` が明示的に低い/負（`AddUserWord` は任意値を受理、既存
-  テストは -3.0 を送る）でも user_dict を保持する — §7.2 の帯依存（1.5>1.4）では保証
-  できないため **source 優先で担保**する。
-- user_dict を含まない重複（Zenzai × Simple 等）は**最高 score の 1 件**を残す。残す側の
-  `debug_info` に脱落側 source を併記（例 `user-dict;dup:zenzai`）して証跡を保つ。
-- **survivor 選択はソース優先を一次キーとする**（score-based first-wins より前）: 表層グループ
-  ごとに ①user_dict があれば user_dict、②無ければ最高 score、を survivor に選び他を除去する。
-  最終順位（§7.3 降順 stable_sort）は survivor 確定後の集合に適用する。**sort 後の単純 first-wins は
-  使わない**（低 value user_dict が高 score Zenzai に落とされ source 優先と矛盾するため、survivor
-  選択を sort と独立に行う）。
+- **ソース優先で残す**: `source == UserDictionary` と他ソースの衝突では、score に
+  関わらず `UserDictionary` を残す。この扱いは user_dict だけでなく確定 auto-word など
+  同じ source を持つ候補にも適用する。低値・負値の user_dict も他ソースより優先する。
+- 双方が `UserDictionary`、または双方がそれ以外なら **score の高い候補**を残す。
+  同点なら先着を残す。したがって user_dict と確定 auto-word の衝突でも score を比較する。
+- 代表を置き換える場合も、その表層の最初の出現位置を保つ。残す側の `debug_info` に
+  脱落側の `debug_info` を `dup:` 付きで追記する（例 `user-dict;dup:zenzai`）。
+- 代表の選択と最終順位付けは分離する。NLL・学習・タグ補正は代表確定後に適用し、
+  **sort 後の単純 first-wins は使わない**。typo 提案はこれらの後で挿入するが、
+  §7.1 手順 10 で既存表層との重複を避ける。
 
 ---
 
@@ -951,7 +988,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置 |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
-| unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
+| unit | マージ経路の source 設定（§7.1 手順 3）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき**ソース優先で user_dict を保持**（明示 value が低い/負 例 -3.0 でも Zenzai に落とされない）。user_dict を含まない重複は最高 score を残す |
 | unit | 劣化モード（hard failure）: 例外/空生成/**usable beam が無い**ケースで `DegradeToFallback` され候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー＝`degraded`（§9.2.1） |
 | unit | deadline 超過で **best-so-far beam あり**（§6.4/§9.2.2）: Zenzai の best-so-far を返し、`DegradeToFallback` を経由しない・valid な Zenzai 出力を捨てない・`degraded` にしない（normal budget expiry を hard failure と区別） |

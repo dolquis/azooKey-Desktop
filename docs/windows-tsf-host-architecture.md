@@ -461,10 +461,11 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` / `ImportLearningData` | 設定アプリ → Host（`ForgetLearningEntry` の `reading` + `surface` 形は TIP → Host） | M49、capability `learning_data_management`。payload codec は `Payloads.h` の M49 節 | learning-data-management §4 |
 | `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
 | `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |
+| `DetectAnomalies` | 設定アプリ → Host | M30、capability `detect_anomalies` | rich X-3-6 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
-| `CommitCorrection` Payload | TIP → Host | M54、Host 配線済み。capability `commit_correction` | user-learning-enhancement §4.1 |
+| `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
 
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、

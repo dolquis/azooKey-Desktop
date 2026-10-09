@@ -15,6 +15,7 @@
 #endif
 #include <Windows.h>
 
+#include "ProofreadModel.h"
 #include "SettingsIpcClient.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -303,6 +304,179 @@ TEST(SettingsIpcClientTest, LearningDataMessagesRoundTrip) {
   EXPECT_EQ(imported.response->imported_counts.at("learning"), 3U);
 
   EXPECT_EQ(seen.size(), 4U);
+}
+
+TEST(SettingsIpcClientTest, ResetLearningStoreSendsTheStoreAndNeedsItsCapability) {
+  std::optional<azookey::ipc::ResetLearningStoreRequest> seen;
+  FakeHost host(
+      {"learning_reset"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+        EXPECT_EQ(type, azookey::ipc::MessageType::ResetLearningStore);
+        seen = azookey::ipc::ParseResetLearningStoreRequest(payload);
+        azookey::ipc::ResetLearningStoreResponse response;
+        response.ok = false;
+        response.error = "save_failed";
+        return std::optional<std::string>(azookey::ipc::BuildResetLearningStoreResponse(response));
+      });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::ResetLearningStoreRequest request;
+  request.store = "auto_word";
+
+  const auto result = azookey::settings::RequestResetLearningStore(host.Options(), request);
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  EXPECT_FALSE(result.response->ok);
+  EXPECT_EQ(result.response->error, "save_failed");
+  ASSERT_TRUE(seen);
+  EXPECT_EQ(seen->store, "auto_word");
+
+  FakeHost older({"learning_data_management"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(older.started());
+  EXPECT_EQ(azookey::settings::RequestResetLearningStore(older.Options(), request).status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(older.requests(), 0);
+}
+
+TEST(SettingsIpcClientTest, ProbingACapabilitySendsNoRequest) {
+  FakeHost host({"learning_reset"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(host.started());
+
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(host.Options(), "learning_reset"),
+            HostCallStatus::Ok);
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(host.Options(), "persona"),
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(host.requests(), 0);
+
+  azookey::settings::SettingsIpcOptions absent;
+  absent.pipe_name = "\\\\.\\pipe\\azookey-settings-probe-absent";
+  absent.handshake_token = "settings-test-token";
+  absent.connect_timeout_ms = 100;
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(absent, "learning_reset"),
+            HostCallStatus::HostNotRunning);
+}
+
+TEST(SettingsIpcClientTest, QueryPersonaSendsAnEmptyObjectAndNeedsItsCapability) {
+  std::string seen_payload;
+  FakeHost host({"persona"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+    EXPECT_EQ(type, azookey::ipc::MessageType::QueryPersona);
+    seen_payload = payload;
+    azookey::ipc::QueryPersonaResponse response;
+    response.polite_ratio = 0.5;
+    response.sample_count = 12;
+    response.computed_at_epoch_sec = 1780000000;
+    return std::optional<std::string>(azookey::ipc::BuildQueryPersonaResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+
+  const auto result = azookey::settings::RequestQueryPersona(host.Options());
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  EXPECT_EQ(seen_payload, "{}");
+  EXPECT_DOUBLE_EQ(result.response->polite_ratio, 0.5);
+  EXPECT_EQ(result.response->sample_count, 12u);
+
+  FakeHost older({"settings"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(older.started());
+  EXPECT_EQ(azookey::settings::RequestQueryPersona(older.Options()).status,
+            HostCallStatus::Unsupported);
+}
+
+TEST(SettingsIpcClientTest, QueryDiagnosticsReadsTheNeologdLayerWhenTheHostSendsIt) {
+  FakeHost host({"settings"}, [](azookey::ipc::MessageType type, const std::string&) {
+    EXPECT_EQ(type, azookey::ipc::MessageType::QueryDiagnostics);
+    azookey::ipc::QueryDiagnosticsPayload diagnostics;
+    azookey::ipc::NeologdLayerStatus layer;
+    layer.state = "error";
+    layer.reason = "verify_failed";
+    diagnostics.neologd_layer = layer;
+    return std::optional<std::string>(azookey::ipc::BuildQueryDiagnostics(diagnostics));
+  });
+  ASSERT_TRUE(host.started());
+
+  const auto result = azookey::settings::RequestQueryDiagnostics(host.Options());
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  ASSERT_TRUE(result.response->neologd_layer);
+  EXPECT_EQ(result.response->neologd_layer->state, "error");
+  EXPECT_EQ(result.response->neologd_layer->reason, "verify_failed");
+}
+
+TEST(SettingsIpcClientTest, QueryDiagnosticsFromAHostWithoutTheFieldHasNoLayer) {
+  FakeHost host({"settings"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>(
+        azookey::ipc::BuildQueryDiagnostics(azookey::ipc::QueryDiagnosticsPayload{}));
+  });
+  ASSERT_TRUE(host.started());
+
+  const auto result = azookey::settings::RequestQueryDiagnostics(host.Options());
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  EXPECT_FALSE(result.response->neologd_layer);
+}
+
+TEST(SettingsIpcClientTest, DetectAnomaliesCarriesTheRequestAndTheFindings) {
+  std::optional<azookey::ipc::DetectAnomaliesRequest> seen;
+  FakeHost host(
+      {"detect_anomalies"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+        EXPECT_EQ(type, azookey::ipc::MessageType::DetectAnomalies);
+        seen = azookey::ipc::ParseDetectAnomaliesRequest(payload);
+        azookey::ipc::DetectAnomaliesResponse response;
+        azookey::ipc::AnomalyFindingField finding;
+        finding.start = 2;
+        finding.length = 3;
+        finding.reason = "reason <b>text</b>";
+        finding.suggestions = {"one", "two"};
+        finding.confidence = 0.75;
+        response.findings.push_back(finding);
+        return std::optional<std::string>(azookey::ipc::BuildDetectAnomaliesResponse(response));
+      });
+  ASSERT_TRUE(host.started());
+
+  const auto result = azookey::settings::RequestDetectAnomalies(
+      host.Options(), azookey::settings::MakeProofreadRequest("pasted text"));
+
+  ASSERT_EQ(result.status, HostCallStatus::Ok);
+  ASSERT_TRUE(seen);
+  EXPECT_EQ(seen->text, "pasted text");
+  EXPECT_FALSE(seen->secure);
+  EXPECT_TRUE(seen->learning_allowed);
+  ASSERT_EQ(result.response->findings.size(), 1u);
+  const auto& finding = result.response->findings[0];
+  EXPECT_EQ(finding.start, 2u);
+  EXPECT_EQ(finding.length, 3u);
+  // The AI's words arrive as they are; the pane shows them as plain text.
+  EXPECT_EQ(finding.reason, "reason <b>text</b>");
+  EXPECT_EQ(finding.suggestions.size(), 2u);
+}
+
+TEST(SettingsIpcClientTest, DetectAnomaliesReturnsTheHostsRefusalAndNeedsItsCapability) {
+  FakeHost host({"detect_anomalies"}, [](azookey::ipc::MessageType, const std::string&) {
+    azookey::ipc::DetectAnomaliesResponse response;
+    response.ok = false;
+    response.error = "unsupported";
+    return std::optional<std::string>(azookey::ipc::BuildDetectAnomaliesResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+  const auto refused = azookey::settings::RequestDetectAnomalies(
+      host.Options(), azookey::settings::MakeProofreadRequest("text"));
+  ASSERT_EQ(refused.status, HostCallStatus::Ok);
+  EXPECT_FALSE(refused.response->ok);
+  EXPECT_EQ(refused.response->error, "unsupported");
+
+  FakeHost older({"persona"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(older.started());
+  EXPECT_EQ(azookey::settings::RequestDetectAnomalies(
+                older.Options(), azookey::settings::MakeProofreadRequest("text"))
+                .status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(older.requests(), 0);
 }
 
 TEST(SettingsIpcClientTest, AnUnparsableResponseIsReportedAsInvalid) {

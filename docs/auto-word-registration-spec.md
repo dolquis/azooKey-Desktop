@@ -278,6 +278,7 @@ Host の変換処理を継続する。
   HuggingFace データセット）。
 - 併置の `trending-words.json.sha256` でハッシュ検証。将来は detached 署名
   （`.sig`）対応の余地を残す。
+  checksum は取得したアセットの完全性を確認するもので、配信元の正当性を保証しない。
 - 検証通過後、ローカルキャッシュへアトミック書き込み（macOS 版
   `legacy/Core/Sources/Core/InputUtils/DebugTypoCorrectionWeights.swift` の
   アトミック展開パターンを踏襲）。
@@ -288,6 +289,8 @@ Host の変換処理を継続する。
   `.part` を削除する。ストアの保存失敗時は検証済みキャッシュとメモリ上の語を保持し、
   保存成功の比較値を更新せず次回取得で再試行する。
   取得先が空なら通信を開始しない。上記の例示 URL を暗黙の配信先として使わない。
+  本番の取得先は配信契約の承認を受けて設定する。取得先が空の無通信構成での
+  取得基盤の受入と、アセットの実配信の受入は区別する。
 - **上流のデータ生成パイプライン**（Google Trends 等からの収集・整形・
   スコアリング）は別リポジトリ / CI ジョブで運用し、**本書はクライアントの
   DL・検証・取り込みのみを規定する**。
@@ -304,7 +307,7 @@ Host の変換処理を継続する。
 }
 ```
 
-- `reading` は上流で付与済み（クライアントで読み推定はしない）。reading 欠落
+- `reading` は上流で付与済み（クライアントで読み推定はしない）。reading 欠落・空の
   エントリは取り込みスキップ。
 - `rank` から初期 `count` / `score` を導出
   （例: `score = base + (max_rank - rank) / max_rank * k`）。
@@ -313,6 +316,20 @@ Host の変換処理を継続する。
   `max_rank` は reading のある取り込み対象の最大 rank とする。
   version は 1、`generated_at` は空でない 64 バイト以下の文字列、`words` は配列を必須とする。
   reading 欠落・空のエントリ以外の形式不正はアセット全体を拒否する。
+
+入力の上限と文字制約は次のとおりとする。JSON 全体の上限は §5-1 の 1 MiB を維持する。
+
+- `words` 配列は最大 10000 件。reading が欠落・空で取り込みをスキップする要素も数える。
+- `surface` と `reading` は、それぞれ JSON のエスケープを解釈した後の UTF-8 で
+  最大 256 バイトとし、妥当な UTF-8 であることを要求する。`surface` は空文字列を許可しない。
+- 両文字列で C0（U+0000〜U+001F）、C1 と DEL（U+007F〜U+009F）、
+  双方向制御文字（U+061C、U+200E〜U+200F、U+202A〜U+202E、U+2066〜U+2069）を拒否する。
+- `reading` の文字は U+3041〜U+309F または U+30A0〜U+30FF に限る。
+  全角の長音符・結合濁点・中点は許可範囲に含め、半角カナは拒否する。
+
+reading 欠落・空のエントリをスキップする場合を除き、上限超過・文字制約違反・型不正は
+アセット全体の拒否とする。検証を通過するまで取り込みやキャッシュの置換を行わず、
+拒否時は既存のストアとキャッシュを保持する。
 
 ### 5-4. M32 WinHTTP 基盤との関係
 
@@ -1777,6 +1794,11 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 
   Host が pack を扱うのは起動時だけなので、起動後に `neologdEnabled` を真にしても、
   Host が再起動するまで `not_requested` のままである。
+
+  設定アプリは「辞書」ペインの切替の下に、この状態を `QueryDiagnostics` で読んで表示する。
+  切替が真のときの `not_requested` は失敗ではなく、「Host の再起動後に取得する」（切替が未保存なら
+  「保存すると、Host の再起動後に取得する」）と示す。`error` のときは `reason` を添える。
+  Host が `neologd_layer` を返さない（旧版の）ときは、状態を返さない旨を示す。
 
 **設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
 §14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である

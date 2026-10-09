@@ -33,6 +33,8 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     LearningPaneModel.cpp
     ModelPaneModel.cpp
     NeologdAttribution.cpp
+    ProofreadModel.cpp
+    StatusPaneModel.cpp
     SettingsDocument.cpp
     SettingsFields.cpp
     SettingsIpcClient.cpp
@@ -40,6 +42,8 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     tests/app_profiles_test.cpp
     tests/neologd_attribution_test.cpp
     tests/pane_models_test.cpp
+    tests/proofread_model_test.cpp
+    tests/status_pane_model_test.cpp
     tests/settings_document_test.cpp
     tests/settings_fields_test.cpp
     tests/settings_ipc_client_test.cpp

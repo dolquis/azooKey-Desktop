@@ -455,7 +455,8 @@ TEST_F(DispatcherTest, Handshake) {
       parsed->capabilities.end());
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
-        "learning_data_management", "commit_correction", "learning_reset", "persona"}) {
+        "learning_data_management", "commit_correction", "learning_reset", "persona",
+        "detect_anomalies"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -3771,7 +3772,7 @@ TEST_F(DispatcherTest, LearningDataRequestsNeedAnAuthenticatedSession) {
   for (const auto type :
        {ipc::MessageType::ForgetLearningEntry, ipc::MessageType::ExportLearningData,
         ipc::MessageType::ImportLearningData, ipc::MessageType::ResetLearningStore,
-        ipc::MessageType::QueryPersona}) {
+        ipc::MessageType::QueryPersona, ipc::MessageType::DetectAnomalies}) {
     const auto reply = token_dispatcher.Dispatch(MakeReq(721, type, "{}"));
     ASSERT_TRUE(reply);
     EXPECT_NE(reply->payload_json.find("not_authenticated"), std::string::npos);
@@ -4068,6 +4069,162 @@ TEST_F(DispatcherTest, ForgettingALearningPairRefreshesThePersona) {
                                           ipc::BuildForgetLearningEntryRequest(forget))));
   EXPECT_EQ(engine.CurrentPersona()->persona.sample_count, 0u);
   RemoveLearningFiles(learning_path);
+}
+
+// Without a settings store there is no AI consent at all.
+TEST_F(DispatcherTest, DetectAnomaliesWithoutSettingsSendsNothing) {
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config);
+  ipc::DetectAnomaliesRequest request;
+  request.text = "今日は晴れでした。";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto response = handler.Dispatch(
+      MakeReq(770, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(response->payload_json)->error,
+            std::optional<std::string>("unsupported"));
+  EXPECT_EQ(calls, 0u);
+}
+
+// rich-features-spec X-3-6 (DEV-1532): the remote AI backend finds the spans,
+// the Host places them; privacy and a missing backend are refused explicitly.
+TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) {
+  const auto settings_path = TempPath("azookey_detect_anomalies_settings.json");
+  {
+    std::ofstream file(settings_path);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  std::string sent;
+  std::string content = R"({"result":"[]"})";
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string& body, const auto*, auto) {
+        sent = body;
+        ipc::json::Object message{{"content", content}};
+        ipc::json::Object choice{{"message", std::move(message)}, {"finish_reason", "stop"}};
+        ipc::json::Array choices;
+        choices.emplace_back(std::move(choice));
+        return azookey::host::AiHttpResponse{
+            200, ipc::json::Stringify(ipc::json::Object{{"choices", std::move(choices)}})};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+  const auto detect = [&](uint64_t id, const ipc::DetectAnomaliesRequest& request) {
+    const auto response = handler.Dispatch(
+        MakeReq(id, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseDetectAnomaliesResponse(response->payload_json) : std::nullopt;
+  };
+  ipc::DetectAnomaliesRequest request;
+  request.text = "今日は晴れでした。";
+  request.secure = false;
+  request.learning_allowed = true;
+  ipc::json::Array findings;
+  findings.emplace_back(ipc::json::Object{{"quote", "晴れでした"},
+                                          {"reason", "時制が合わない"},
+                                          {"suggestions", ipc::json::Array{"晴れです"}},
+                                          {"confidence", 0.9}});
+  content = ipc::json::Stringify(
+      ipc::json::Object{{"result", ipc::json::Stringify(ipc::json::Value(std::move(findings)))}});
+
+  const auto found = detect(760, request);
+  ASSERT_TRUE(found.has_value());
+  EXPECT_TRUE(found->ok) << found->error.value_or("");
+  ASSERT_EQ(found->findings.size(), 1u);
+  EXPECT_EQ(found->findings[0].start, 3u);
+  EXPECT_EQ(found->findings[0].length, 5u);
+  EXPECT_EQ(found->findings[0].suggestions, std::vector<std::string>{"晴れです"});
+  EXPECT_NE(sent.find("今日は晴れでした"), std::string::npos);
+
+  // A result that is not a findings array is a backend failure, not "none".
+  content = R"({"result":"looks fine"})";
+  const auto garbled = detect(761, request);
+  ASSERT_TRUE(garbled.has_value());
+  EXPECT_FALSE(garbled->ok);
+  EXPECT_EQ(garbled->error, std::optional<std::string>("backend_failed"));
+
+  // Text from a secure or learning-disallowed context is never sent.
+  sent.clear();
+  auto secure = request;
+  secure.secure = true;
+  const auto blocked = detect(762, secure);
+  ASSERT_TRUE(blocked.has_value());
+  EXPECT_EQ(blocked->error, std::optional<std::string>("blocked"));
+  auto not_allowed = request;
+  not_allowed.learning_allowed = false;
+  EXPECT_EQ(detect(763, not_allowed)->error, std::optional<std::string>("blocked"));
+  EXPECT_TRUE(sent.empty());
+
+  // Without a configured backend the answer is "unsupported".
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"none"})";
+  }
+  settings.Reload();
+  const auto unsupported = detect(764, request);
+  ASSERT_TRUE(unsupported.has_value());
+  EXPECT_EQ(unsupported->error, std::optional<std::string>("unsupported"));
+  EXPECT_TRUE(sent.empty());
+
+  const auto invalid = handler.Dispatch(MakeReq(765, ipc::MessageType::DetectAnomalies, "{}"));
+  ASSERT_TRUE(invalid.has_value());
+  EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(invalid->payload_json)->error,
+            std::optional<std::string>("invalid_request"));
+
+  // An openai backend without an API key is a setting to make, not a failure.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai"})";
+  }
+  settings.Reload();
+  EXPECT_EQ(detect(766, request)->error, std::optional<std::string>("unsupported"));
+  EXPECT_TRUE(sent.empty());
+
+  // The Host's own privacy setting blocks the text before any backend sees it.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+            R"("privacy":{"mode":"private"}})";
+  }
+  settings.Reload();
+  EXPECT_EQ(detect(767, request)->error, std::optional<std::string>("blocked"));
+  EXPECT_TRUE(sent.empty());
+
+  // Without AI consent (ai off, or external off with openai and a key), nothing
+  // is sent and the answer is "unsupported".
+  for (
+      const auto* privacy :
+      {R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":false}})",
+       R"("privacy":{"mode":"custom","custom":{"learning":true,"aiCandidate":true,"externalAi":false}})"}) {
+    {
+      std::ofstream file(settings_path, std::ios::trunc);
+      file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)" << privacy << "}";
+    }
+    settings.Reload();
+    const auto refused = detect(769, request);
+    ASSERT_TRUE(refused.has_value()) << privacy;
+    EXPECT_EQ(refused->error, std::optional<std::string>("unsupported")) << privacy;
+    EXPECT_TRUE(sent.empty()) << privacy;
+  }
+
+  // A request canceled before it runs gets no reply.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  settings.Reload();
+  scheduler.Cancel(768);
+  EXPECT_FALSE(handler.Dispatch(
+      MakeReq(768, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request))));
+  std::remove(settings_path.c_str());
 }
 
 TEST_F(DispatcherTest, LearningDataListsAndForgetsTheEnglishChannel) {

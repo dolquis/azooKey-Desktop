@@ -204,7 +204,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 
 | 抑止対象 | 実装ポイント |
 |---|---|
-| 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` を経路共通の choke point として落とす |
+| 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` / `CommitCorrection` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |

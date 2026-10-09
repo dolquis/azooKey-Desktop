@@ -5,7 +5,9 @@
 #include "LaunchArguments.h"
 #include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
+#include "StatusPaneModel.h"
 #include "UiDispatch.h"
+#include "ModelPaneModel.h"
 // clang-format on
 
 #if __has_include("MainWindow.g.cpp")
@@ -119,6 +121,10 @@ MainWindow::MainWindow() {
                            }
                            return window;
                          }});
+  persona_pane_ = std::make_shared<azookey::settings::PersonaPane>();
+  persona_pane_->Build(PersonaPaneHost(), DispatcherQueue());
+  proofread_pane_ = std::make_shared<azookey::settings::ProofreadPane>();
+  proofread_pane_->Build(ProofreadPaneHost(), DispatcherQueue());
   SettingsNavigationView().SelectedItem(GeneralNavigationItem());
   neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
       azookey::settings::PinnedNeologdPackManifestJson());
@@ -155,10 +161,14 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   ProfilesPaneHost().Visibility(visible(L"Profiles"));
   ModelsPaneHost().Visibility(visible(L"Models"));
   LearningPaneHost().Visibility(visible(L"Learning"));
+  PersonaPaneHost().Visibility(visible(L"Persona"));
+  ProofreadPaneHost().Visibility(visible(L"Proofread"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
   if (tag == L"Models" && model_pane_) model_pane_->OnShown();
   if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
+  if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
+  if (tag == L"Dictionary") RefreshNeologdLayerStatus();
 }
 
 void MainWindow::ApplyDictionaryToControls(
@@ -198,6 +208,7 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
   const bool requested = NeologdDictionaryToggle().IsOn();
   if (!azookey::settings::NeologdConsentRequired(neologd_enabled_, requested)) {
     neologd_enabled_ = requested;
+    RefreshNeologdLayerStatus();
     co_return;
   }
   // auto-word-registration-spec section 14.9: the upstream license and attribution are shown,
@@ -221,6 +232,41 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
                resources.GetString(L"NeologdNoticesUnavailable"));
   }
   SetNeologdToggle(accepted);
+  RefreshNeologdLayerStatus();
+}
+
+winrt::fire_and_forget MainWindow::RefreshNeologdLayerStatus() {
+  const auto lifetime = get_strong();
+  const auto dispatcher = DispatcherQueue();
+  const auto generation = ++neologd_status_generation_;
+  try {
+    co_await winrt::resume_background();
+    const auto result =
+        azookey::settings::RequestQueryDiagnostics(azookey::settings::DefaultSettingsIpcOptions());
+    co_await ResumeForeground(dispatcher);
+    if (!*alive_ || generation != neologd_status_generation_) co_return;
+
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    winrt::hstring text;
+    if (result.status != azookey::settings::HostCallStatus::Ok) {
+      text = resources.GetString(
+          winrt::to_hstring(azookey::settings::HostCallStatusResource(result.status)));
+    } else {
+      const bool saved_enabled =
+          saved_settings_.dictionary && saved_settings_.dictionary->neologd_enabled;
+      const auto kind = azookey::settings::ClassifyNeologdStatus(result.response->neologd_layer,
+                                                                 saved_enabled, neologd_enabled_);
+      text = resources.GetString(winrt::to_hstring(azookey::settings::NeologdStatusResource(kind)));
+      if (kind == azookey::settings::NeologdStatusKind::Error &&
+          result.response->neologd_layer->reason) {
+        text = text + L" (" + winrt::to_hstring(*result.response->neologd_layer->reason) + L")";
+      }
+    }
+    NeologdLayerStatusText().Text(text);
+    NeologdLayerStatusText().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
+  } catch (...) {
+    // The status line is informational; a failed query leaves the last text.
+  }
 }
 
 winrt::fire_and_forget MainWindow::ShowNeologdNoticesButton_Click(
@@ -320,6 +366,10 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
   model_pane_->SetHistory(result.settings.benchmark_history);
+  // The stored switch decides how a not_requested layer reads, so ask again now it is known.
+  if (DictionaryPane().Visibility() == Microsoft::UI::Xaml::Visibility::Visible) {
+    RefreshNeologdLayerStatus();
+  }
   profiles_pane_->SetProfiles(
       result.settings.profiles_by_app.value_or(azookey::settings::AppProfiles{}),
       result.settings.legacy_prompt_prefixes);
@@ -478,6 +528,7 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   }
   if (save_result.ok) {
     openai_api_key_changed_ = false;
+    RefreshNeologdLayerStatus();
   }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
   if (save_result.ok) {

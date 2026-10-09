@@ -1198,32 +1198,32 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 |---|---|
 | 一般 | `model.enabled` / `model.selectedPath` / `autoUpdate` / SafeMode の解除 |
 | 入力 | 入力方式（`inputMode` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点 / バッチ変換 / インライン英単語候補 / 候補リライター / 括弧ペアリング |
-| 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意を含む）/ `autoWordRegistration` / タイプミス学習 |
+| 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 |
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
 | モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
-| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
+| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
+| Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
+| 校正 | 貼り付けた文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
 | 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
-モデル / 学習のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
+モデル / 学習 / Persona / 校正のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
 ナビゲーションに置く。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
 保存ボタンが `model.selectedPath` を書く。選べるのは検証に通った GGUF だけである。
+Host が capability（`learning_reset` / `persona` など）を告知しないときは、その操作を送らず、
+ペインに「この Host は未対応」と示す。
 `ListModels` が返す `onnx_genai` は一覧に出すが選択と測定の対象にしない。学習データは
 設定アプリが直接開かず、一覧・忘却・エクスポート・インポートをすべて Host への IPC で行う。
-忘却とインポートは確認ダイアログを経る。暗号化しないエクスポートは警告を出して確認する。
+忘却・全削除・インポートは確認ダイアログを経る。暗号化しないエクスポートは警告を出して確認する。
 
 Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更でナビゲーションに加え、
-中身の無いペインは置かない。次のペインは同じ規則で、上の表へ加えるまで置かない。
+中身の無いペインは置かない。
 
-| ペイン | 内容 | 使う Host 側の機能 |
-|---|---|---|
-| Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
-| 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
-
-上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」は DEV-1532、
-「Persona」は DEV-1533、`neologd_lexicon` pack の状態表示は DEV-1534 で追う。
+上の表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」が読む文章を設定アプリへ貼り付けず、
+フォアグラウンドのアプリから取る経路（ホットキー、文書全体の取得、キャレットの移動）は TIP 側の作業で、
+DEV-1540 で追う。
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。

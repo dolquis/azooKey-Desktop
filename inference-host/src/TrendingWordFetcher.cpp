@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/Utf8.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/learning/AtomicFile.h"
@@ -20,6 +21,23 @@ namespace {
 constexpr uint64_t kMaxAssetBytes = ipc::kMaxJsonInputBytes;
 constexpr uint64_t kMaxChecksumBytes = 1024;
 constexpr uint32_t kStageTimeoutMs = 1000;
+constexpr size_t kMaxWordBytes = 256;
+constexpr size_t kMaxWords = 10'000;
+
+bool IsValidWord(std::string_view text, bool reading) {
+  if (text.empty() || text.size() > kMaxWordBytes) return false;
+  size_t offset = 0;
+  while (offset < text.size()) {
+    char32_t cp;
+    if (!core::DecodeNextUtf8(text, offset, cp)) return false;
+    if (cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || cp == 0x61c || (cp >= 0x200e && cp <= 0x200f) ||
+        (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069))
+      return false;
+    if (reading && !((cp >= 0x3041 && cp <= 0x309f) || (cp >= 0x30a0 && cp <= 0x30ff)))
+      return false;
+  }
+  return true;
+}
 
 std::optional<std::string> ParseChecksum(std::string_view text) {
   // Accept the bare digest or the conventional sha256sum line for this asset.
@@ -47,7 +65,9 @@ std::optional<TrendingAsset> ParseAsset(const std::string& text) {
   if (!root || !root->IsObject() || root->GetUInt("version") != 1) return std::nullopt;
   const auto generated = root->GetString("generated_at");
   const auto* words = root->GetArray("words");
-  if (!generated || generated->empty() || generated->size() > 64 || !words) return std::nullopt;
+  if (!generated || generated->empty() || generated->size() > 64 || !words ||
+      words->size() > kMaxWords)
+    return std::nullopt;
   TrendingAsset asset{*generated, {}};
   uint32_t max_rank = 1;
   std::vector<uint32_t> ranks;
@@ -60,8 +80,8 @@ std::optional<TrendingAsset> ParseAsset(const std::string& text) {
     if (!reading || reading->empty()) continue;
     const auto surface = value.GetString("surface");
     const auto rank = value.GetUInt("rank");
-    if (!surface || surface->empty() || !rank || *rank == 0 ||
-        *rank > (std::numeric_limits<uint32_t>::max)())
+    if (!surface || !IsValidWord(*surface, false) || !IsValidWord(*reading, true) || !rank ||
+        *rank == 0 || *rank > (std::numeric_limits<uint32_t>::max)())
       return std::nullopt;
     learning::AutoWord word;
     word.surface = *surface;

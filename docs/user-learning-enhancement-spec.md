@@ -207,10 +207,37 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 
 ### 4.1 訂正の IPC（`CommitCorrection`）
 
-即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と Host 側の処理を定める。
-TIP 側の検出と送信は DEV-1529 の TIP 部分で追跡する。Host は Handshake の capability に
-`commit_correction` を載せ、TIP は Host がそれを告知したときだけ送る。
-応答は `CommitObservation` と同じ `{ "ok": bool }` である。
+即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と、TIP の検出・送信と、
+Host 側の処理を定める。Host は Handshake の capability に `commit_correction` を載せ、
+TIP は Host がそれを告知したときだけ送る。応答は `CommitObservation` と同じ `{ "ok": bool }` である。
+
+TIP は次のときに送る。
+
+- **`undo`**: 学習観測を送った確定の直後の**最初の 1 キー**が、Ctrl / Alt / Win を伴わない
+  Backspace で、preedit と候補 UI が無く、確定した context と同じ context のとき。
+  M55 の typo 学習と同じ 1 キーの窓で、別のキーを先に押すと窓は閉じる。次のときも窓は閉じる。
+  - 確定から 5 秒が過ぎたとき。
+  - 確定の編集の後に選択やキャレットが変わったとき（マウスのクリック、アプリによる編集）。
+    TSF の text edit sink が見ている context でだけ窓を開くので、この変化を必ず見られる。
+  - フォーカスやアプリの切り替え、TIP の非活性化のとき。
+  - TIP がフォーカスやライフサイクルの喪失、またはホストによる composition の終了で、
+    確定を完了させたとき。その確定はユーザーの打鍵の直後ではないので、窓を開かない。
+  - 確定の直後に括弧などのテキストを TIP が足したとき（Backspace が消すのはその文字になる）。
+
+  この Backspace は M55 の typo 学習（確定直後の打ち直し）の判定にも使われる。二つは別の学習である。
+  typo 学習はローマ字の打ち間違い（読みの組）を、`undo` は候補表記の拒否を記録する。
+  同じ打鍵が両方に入ることは意図した動作である。対象は、その確定の**最後の文節**（Backspace が消す側）である。
+  最後の文節が学習されなかった場合（English タグ、送信しなかった観測）は、前の文節を代わりに
+  拒否せず、何も送らない。Ctrl+Shift+Backspace（Forget、`legacy-parity-spec.md` §7.2）は
+  忘却だけを送り、`undo` は送らない。1 回の打鍵が両方を送ることはない。
+- **`reconvert`**: azooKey の候補 UI で開いた再変換で、元の表記と違う候補を確定したとき。
+  `reading` は再変換の逆変換で得た読み、`rejected_surface` は元の表記、`selected_surface` は
+  選んだ候補である。元の表記を選び直したときは送らない。再変換の確定は Forget の対象にしない。
+  アプリが自前の UI で TSF の候補一覧から選ぶ経路は、確定を TIP が知れないため送らない。
+- 送るかは送信時に判定する。secure の文脈、または学習が許可されない文脈では送らない
+  （`privacy-and-secure-input-spec.md` §5.1.1。`PostIpcSend` も secure では落とす）。
+  `observation_id` は訂正ごとに新しく採番する。`left_context` と `app` は `CommitObservation` と
+  同じく TIP がまだ送らない（空 / 欠落。Host は大域行に記録する）。
 
 | フィールド | 型 | 意味 |
 |---|---|---|

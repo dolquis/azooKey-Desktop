@@ -998,6 +998,64 @@ TEST(PayloadsTest, ResetLearningStoreAndQueryPersonaRoundTrip) {
   EXPECT_FALSE(ParseQueryPersonaResponse(R"({"polite_ratio":0.5})").has_value());
 }
 
+// DEV-1532: DetectAnomalies denies privacy by default, bounds its text and
+// findings, and drops a finding it cannot place.
+TEST(PayloadsTest, DetectAnomaliesRoundTripsAndBoundsItsFields) {
+  using namespace azookey::ipc;
+  DetectAnomaliesRequest request;
+  request.text = "今日は晴れでした。";
+  request.max_findings = 7;
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto parsed = ParseDetectAnomaliesRequest(BuildDetectAnomaliesRequest(request));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->text, request.text);
+  EXPECT_EQ(parsed->max_findings, 7u);
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_TRUE(parsed->learning_allowed);
+
+  const auto defaults = ParseDetectAnomaliesRequest(R"({"text":"あ"})");
+  ASSERT_TRUE(defaults.has_value());
+  EXPECT_TRUE(defaults->secure);
+  EXPECT_FALSE(defaults->learning_allowed);
+  EXPECT_EQ(defaults->max_findings, kDefaultAnomalyFindings);
+  EXPECT_EQ(ParseDetectAnomaliesRequest(R"({"text":"あ","max_findings":0})")->max_findings, 1u);
+  EXPECT_EQ(ParseDetectAnomaliesRequest(R"({"text":"あ","max_findings":999})")->max_findings,
+            kMaxAnomalyFindings);
+  EXPECT_FALSE(ParseDetectAnomaliesRequest(R"({"text":""})").has_value());
+  EXPECT_FALSE(ParseDetectAnomaliesRequest("{}").has_value());
+  DetectAnomaliesRequest oversized;
+  oversized.text = std::string(kMaxAnomalyTextBytes + 1, 'a');
+  EXPECT_FALSE(ParseDetectAnomaliesRequest(BuildDetectAnomaliesRequest(oversized)).has_value());
+
+  DetectAnomaliesResponse response;
+  response.findings.push_back({2, 4, "時制", {"晴れです"}, 0.75});
+  const auto parsed_response = ParseDetectAnomaliesResponse(BuildDetectAnomaliesResponse(response));
+  ASSERT_TRUE(parsed_response.has_value());
+  EXPECT_TRUE(parsed_response->ok);
+  ASSERT_EQ(parsed_response->findings.size(), 1u);
+  EXPECT_EQ(parsed_response->findings[0].start, 2u);
+  EXPECT_EQ(parsed_response->findings[0].length, 4u);
+  EXPECT_EQ(parsed_response->findings[0].reason, "時制");
+  EXPECT_EQ(parsed_response->findings[0].suggestions, std::vector<std::string>{"晴れです"});
+  EXPECT_DOUBLE_EQ(parsed_response->findings[0].confidence, 0.75);
+
+  const auto dropped = ParseDetectAnomaliesResponse(
+      R"({"ok":true,"findings":[{"start":0,"length":0,"confidence":0.5},)"
+      R"({"start":0,"length":1,"confidence":1.5},{"start":1,"length":1,"confidence":0.5}]})");
+  ASSERT_TRUE(dropped.has_value());
+  ASSERT_EQ(dropped->findings.size(), 1u);
+  EXPECT_EQ(dropped->findings[0].start, 1u);
+
+  DetectAnomaliesResponse failed;
+  failed.ok = false;
+  failed.error = std::string(kAnomalyErrorBlocked);
+  const auto parsed_failed = ParseDetectAnomaliesResponse(BuildDetectAnomaliesResponse(failed));
+  ASSERT_TRUE(parsed_failed.has_value());
+  EXPECT_FALSE(parsed_failed->ok);
+  EXPECT_EQ(parsed_failed->error, std::optional<std::string>("blocked"));
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());

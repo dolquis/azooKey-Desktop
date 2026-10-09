@@ -9,8 +9,13 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include "azookey/core/Utf8.h"
 #include "azookey/host/TrendingWordFetcher.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/learning/AtomicFile.h"
 
 namespace {
@@ -31,6 +36,22 @@ const std::string kAsset = R"({"version":1,"generated_at":"2026-10-09T00:00:00Z"
   {"surface":"推し活","reading":"おしかつ","rank":1},
   {"surface":"新語","reading":"しんご","rank":3},
   {"surface":"読みなし","rank":2}]})";
+
+std::string AssetWithWords(std::string_view words) {
+  return R"({"version":1,"generated_at":"2026-10-09T00:00:00Z","words":[)" + std::string(words) +
+         "]}";
+}
+
+std::string AssetWord(std::string_view surface, std::string_view reading) {
+  return "{\"surface\":\"" + azookey::ipc::json::EscapeString(surface) + "\",\"reading\":\"" +
+         azookey::ipc::json::EscapeString(reading) + "\",\"rank\":1}";
+}
+
+std::string Utf8Scalar(char32_t codepoint) {
+  std::string text;
+  azookey::core::AppendUtf8(text, codepoint);
+  return text;
+}
 
 class TrendingWordFetcherTest : public ::testing::Test {
  protected:
@@ -87,6 +108,17 @@ class TrendingWordFetcherTest : public ::testing::Test {
     store_->Observe("既存語", "きぞんご", 10, 3, false);
     ASSERT_TRUE(store_->Save());
     ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(Cache(), "old cache"));
+  }
+  void ExpectRejectedAssetPreservesStoreAndCache(const std::string& text) {
+    const auto before = store_->SerializeText();
+    const auto cache = ReadCache();
+    SetAsset(text);
+    TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                                Dependencies());
+    fetcher.UpdateSettings(true, 24, true);
+    EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Failed);
+    EXPECT_EQ(store_->SerializeText(), before);
+    EXPECT_EQ(ReadCache(), cache);
   }
   std::filesystem::path directory_;
   std::unique_ptr<AutoWordStore> store_;
@@ -264,6 +296,134 @@ TEST_F(TrendingWordFetcherTest, NonStringReadingRejectsWholeAsset) {
     EXPECT_EQ(store_->SerializeText(), before);
     EXPECT_EQ(ReadCache(), "old cache");
   }
+}
+
+TEST_F(TrendingWordFetcherTest, WordByteLimitsAcceptBoundaryAndRejectOverflow) {
+  SeedExisting();
+  std::string reading;
+  for (size_t i = 0; i < 85; ++i) reading += "あ";
+  ASSERT_EQ(reading.size(), 255u);
+  const std::vector<std::pair<std::string, std::string>> valid = {{std::string(256, 'a'), "しんご"},
+                                                                  {"新語", reading}};
+  for (const auto& [surface, ruby] : valid) {
+    SCOPED_TRACE(surface.size());
+    SetAsset(AssetWithWords(AssetWord(surface, ruby)));
+    TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                                Dependencies());
+    fetcher.UpdateSettings(true, 24, true);
+    ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+    const auto confirmed = store_->LookupConfirmed(ruby);
+    ASSERT_EQ(confirmed.size(), 1u);
+    EXPECT_EQ(confirmed.front().surface, surface);
+  }
+  ExpectRejectedAssetPreservesStoreAndCache(
+      AssetWithWords(AssetWord(std::string(257, 'a'), "しんご")));
+  ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(AssetWord("新語", reading + "あ")));
+}
+
+TEST_F(TrendingWordFetcherTest, ValidUnicodeSurfaceAndKanaMarksArePreserved) {
+  const std::string surface = "漢字かなカナ🙂𠮷";
+  std::string reading;
+  for (char32_t cp : {0x3041, 0x309F, 0x30A0, 0x30FF, 0x3099, 0x309A, 0x30FC, 0x30FB}) {
+    reading += Utf8Scalar(cp);
+  }
+  SetAsset(AssetWithWords(AssetWord(surface, reading)));
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              Dependencies());
+  fetcher.UpdateSettings(true, 24, true);
+  ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+  const auto words = store_->LookupConfirmed(reading);
+  ASSERT_EQ(words.size(), 1u);
+  EXPECT_EQ(words.front().surface, surface);
+  EXPECT_EQ(words.front().reading, reading);
+}
+
+TEST_F(TrendingWordFetcherTest, EveryControlAndBidiScalarRejectsBothWordFields) {
+  SeedExisting();
+  std::vector<char32_t> forbidden;
+  for (char32_t cp = 0; cp <= 0x1F; ++cp) forbidden.push_back(cp);
+  for (char32_t cp = 0x7F; cp <= 0x9F; ++cp) forbidden.push_back(cp);
+  forbidden.push_back(0x061C);
+  for (char32_t cp = 0x200E; cp <= 0x200F; ++cp) forbidden.push_back(cp);
+  for (char32_t cp = 0x202A; cp <= 0x202E; ++cp) forbidden.push_back(cp);
+  for (char32_t cp = 0x2066; cp <= 0x2069; ++cp) forbidden.push_back(cp);
+  for (const char32_t cp : forbidden) {
+    SCOPED_TRACE(static_cast<uint32_t>(cp));
+    const auto scalar = Utf8Scalar(cp);
+    // EscapeString makes C0 valid JSON escapes; rejection must happen after parsing.
+    for (const bool in_reading : {false, true}) {
+      SCOPED_TRACE(in_reading ? "reading" : "surface");
+      ExpectRejectedAssetPreservesStoreAndCache(
+          AssetWithWords(AssetWord(in_reading ? "新語" : "新" + scalar + "語",
+                                   in_reading ? "し" + scalar + "んご" : "しんご")));
+    }
+  }
+}
+
+TEST_F(TrendingWordFetcherTest, InvalidUtf8AndNonKanaReadingsRejectWholeAsset) {
+  SeedExisting();
+  const std::vector<std::string> malformed = {
+      std::string("\x80", 1),         std::string("\xE3\x81", 2),
+      std::string("\xC0\xAF", 2),     std::string("\xE0\x80\x80", 3),
+      std::string("\xED\xA0\x80", 3), std::string("\xF4\x90\x80\x80", 4)};
+  for (size_t i = 0; i < malformed.size(); ++i) {
+    SCOPED_TRACE(i);
+    for (const bool in_reading : {false, true}) {
+      SCOPED_TRACE(in_reading ? "reading" : "surface");
+      ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(
+          AssetWord(in_reading ? "新語" : malformed[i], in_reading ? malformed[i] : "しんご")));
+    }
+  }
+  for (const std::string ruby : {"abc", "ｼﾝｺﾞ", "漢字", "しん ご", "しん1ご"}) {
+    SCOPED_TRACE(ruby);
+    ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(AssetWord("新語", ruby)));
+  }
+  for (char32_t cp : {0x3040, 0x3100}) {
+    SCOPED_TRACE(static_cast<uint32_t>(cp));
+    ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(AssetWord("新語", Utf8Scalar(cp))));
+  }
+  ExpectRejectedAssetPreservesStoreAndCache(
+      AssetWithWords(R"({"surface":"\ud800","reading":"しんご","rank":1})"));
+  ExpectRejectedAssetPreservesStoreAndCache(
+      AssetWithWords(R"({"surface":"新語","reading":"\udc00","rank":1})"));
+}
+
+TEST_F(TrendingWordFetcherTest, WordCountLimitIncludesMissingAndEmptyReadings) {
+  SeedExisting();
+  const auto word = AssetWord("新語", "しんご");
+  for (const bool skipped_readings : {false, true}) {
+    SCOPED_TRACE(skipped_readings);
+    std::string words = word;
+    for (size_t i = 1; i < 10000; ++i) {
+      words += ',';
+      words += skipped_readings ? (i % 2 == 0 ? R"({"surface":"読みなし"})"
+                                              : R"({"surface":"空読み","reading":""})")
+                                : word;
+    }
+    const auto at_limit = AssetWithWords(words);
+    ASSERT_LT(at_limit.size(), 1024u * 1024);
+    SetAsset(at_limit);
+    TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                                Dependencies());
+    fetcher.UpdateSettings(true, 24, true);
+    ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+    ASSERT_EQ(store_->LookupConfirmed("しんご").size(), 1u);
+    EXPECT_EQ(store_->Size(), 2u);
+    words += skipped_readings ? R"(,{"surface":"読みなし"})" : ',' + word;
+    ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(words));
+  }
+}
+
+TEST_F(TrendingWordFetcherTest, InvalidSecondWordNeverPartiallyIngestsInAutoMode) {
+  SeedExisting();
+  const auto before = store_->SerializeText();
+  ExpectRejectedAssetPreservesStoreAndCache(
+      AssetWithWords(AssetWord("新語", "しんご") + ',' + AssetWord("汚染語", "not-kana")));
+  EXPECT_TRUE(store_->ListByState(AutoWordState::Confirmed).empty());
+  EXPECT_EQ(ReadCache(), "old cache");
+  AutoWordStore reloaded(store_->path());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.SerializeText(), before);
 }
 
 TEST_F(TrendingWordFetcherTest, FailedStoreSaveKeepsValidMemoryAndRetriesUnchangedGeneration) {

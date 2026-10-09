@@ -10,6 +10,7 @@ target_link_libraries(azookey_host_paths
 add_library(azookey_host STATIC
   src/AiBackend.cpp
   src/AiHttp.cpp
+  src/AnomalyDetector.cpp
   src/BackupArchive.cpp
   src/CandidateTags.cpp
   src/DictionaryCandidateProvider.cpp

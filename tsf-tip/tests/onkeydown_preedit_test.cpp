@@ -9027,6 +9027,40 @@ void PrepareCorrectionHarness(TextServiceHarness& h) {
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   h.service.set_commit_correction_supported_for_test(true);
+  // The undo window opens only in the context the text edit sink watches.
+  h.service.set_text_edit_context_for_test(&h.context);
+}
+
+// An edit record whose selection changed, as TSF reports the end of an edit
+// session that moved the caret.
+class SelectionChangedRecord final : public ITfEditRecord {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfEditRecord) return E_NOINTERFACE;
+    *out = static_cast<ITfEditRecord*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+  STDMETHODIMP_(ULONG) Release() override { return --refs_; }
+  STDMETHODIMP GetSelectionStatus(BOOL* changed) override {
+    if (!changed) return E_POINTER;
+    *changed = TRUE;
+    return S_OK;
+  }
+  STDMETHODIMP GetTextAndPropertyUpdates(DWORD, const GUID**, ULONG, IEnumTfRanges**) override {
+    return E_NOTIMPL;
+  }
+
+ private:
+  ULONG refs_{1};
+};
+
+void EndEditWithSelectionChange(TextServiceHarness& h) {
+  SelectionChangedRecord record;
+  EXPECT_EQ(h.service.OnEndEdit(&h.context, 1, &record), S_OK);
 }
 
 // Gives the harness an active context without leaving a composition, so an
@@ -9139,6 +9173,62 @@ TEST(TsfTipCommitCorrectionTest, BackspaceInAnotherContextSendsNoUndo) {
   BOOL eaten = TRUE;
   ASSERT_EQ(h.service.OnTestKeyDown(&other, VK_BACK, 0, &eaten), S_OK);
   EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+}
+
+// #516 review M2: the commit's own edit keeps the window, but a later
+// selection change (a mouse click in the field) closes it.
+TEST(TsfTipCommitCorrectionTest, CaretMoveAfterTheCommitClosesTheUndoWindow) {
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    EndEditWithSelectionChange(h);  // The commit's own edit session.
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
+  }
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    EndEditWithSelectionChange(h);  // The commit's own edit session.
+    EndEditWithSelectionChange(h);  // The user moves the caret.
+    EXPECT_FALSE(h.service.undo_window_open_for_test());
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+}
+
+// #516 review M1: leaving the application closes the window, so the first key
+// after coming back to the same field is no undo.
+TEST(TsfTipCommitCorrectionTest, FocusLossClosesTheUndoWindow) {
+  TextServiceHarness h;
+  PrepareCorrectionHarness(h);
+  CommitOneCandidate(h);
+  ASSERT_TRUE(h.service.undo_window_open_for_test());
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.undo_window_open_for_test());
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+}
+
+TEST(TsfTipCommitCorrectionTest, LateOrModifiedBackspaceSendsNoUndo) {
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    h.service.age_undo_window_for_test(std::chrono::seconds(6));
+    EXPECT_FALSE(h.TestPress(VK_BACK));
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
+  {
+    TextServiceHarness h;
+    PrepareCorrectionHarness(h);
+    CommitOneCandidate(h);
+    h.keyboard_state.SetDown(VK_CONTROL, true);
+    h.TestPress(VK_BACK);
+    h.keyboard_state.SetDown(VK_CONTROL, false);
+    EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
+  }
 }
 
 TEST(TsfTipCommitCorrectionTest, UndoTargetsTheLastSegmentOnlyWhenItWasLearned) {

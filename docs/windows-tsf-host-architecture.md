@@ -464,7 +464,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
-| `CommitCorrection` Payload | TIP → Host | M54、Host 配線済み。capability `commit_correction` | user-learning-enhancement §4.1 |
+| `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
 
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、

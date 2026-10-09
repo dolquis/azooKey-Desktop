@@ -333,6 +333,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_commit_correction_supported_for_test(bool supported) {
     ipc_host_commit_correction_.store(supported);
   }
+  bool undo_window_open_for_test() const { return undo_target_.has_value(); }
+  void age_undo_window_for_test(std::chrono::steady_clock::duration age) {
+    if (undo_target_) undo_target_->armed_at -= age;
+  }
   std::vector<ipc::CommitCorrectionRequest> queued_corrections_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     std::vector<ipc::CommitCorrectionRequest> requests;
@@ -674,6 +678,9 @@ class TextService final : public ITfTextInputProcessorEx,
     std::vector<PendingCommitObservation> segments;
     bool secure{true};
     bool learning_allowed{false};
+    // False for a commit the TIP forces on focus or lifecycle loss: the user
+    // did not just make it, so a later Backspace is no undo of it.
+    bool arms_undo{true};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
   // (reading, surface) pairs of the last learning observation actually sent,
@@ -684,13 +691,19 @@ class TextService final : public ITfTextInputProcessorEx,
   // last segment of the last learning observation, when it was learned. Only
   // the first key after that commit may use it (user-learning-enhancement-spec
   // §4.1, the same one-key window as typo learning). `context` is the COM
-  // identity of the committed context, compared only. Every place that clears
-  // last_learned_commit_pairs_ also closes this window: TrackUndoKey sends
-  // nothing while the pairs are empty. UI thread only.
+  // identity of the committed context, compared only. The window also closes
+  // on focus or lifecycle loss (ResetTypoTracking), on a selection change that
+  // is not the commit's own edit (OnEndEdit), and after kUndoWindow. Every
+  // place that clears last_learned_commit_pairs_ also closes it: TrackUndoKey
+  // sends nothing while the pairs are empty. UI thread only.
   struct UndoTarget {
     std::string reading;
     std::string surface;
     const void* context{nullptr};
+    std::chrono::steady_clock::time_point armed_at;
+    // The commit's own edit has not reached OnEndEdit yet; that one
+    // selection change is ours and keeps the window open.
+    bool awaiting_commit_edit{true};
   };
   std::optional<UndoTarget> undo_target_;
 
@@ -1021,7 +1034,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void CompleteTypoCommit(std::optional<PendingTypoCommit> pending, bool committed) noexcept;
   void ResetTypoTracking();
   HRESULT ApplyPendingCorrectedReading(ITfContext* context);
-  bool CanSendTypoObservation(const IpcSendItem& item) const;
+  bool CanSendQueuedItem(const IpcSendItem& item) const;
   void ClearTextStateForLifecycle();
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   HRESULT RequestCommitEditSession(ITfContext* context);

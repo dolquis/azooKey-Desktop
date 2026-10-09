@@ -1823,7 +1823,9 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
         BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
     if (applied) {
       // Inserted bracket text is an unobserved commit (legacy-parity-spec §7.2).
+      // A Backspace now erases the bracket, not the word committed before it.
       last_learned_commit_pairs_.clear();
+      undo_target_.reset();
       if (active_context_ != context) {
         if (active_context_) active_context_->Release();
         active_context_ = context;
@@ -3290,6 +3292,9 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
     committing_ = true;
     commit_surface_ = pending_commit_surface;
     pending_commit_observation_ = pending_commit_observation;
+    // The host ended the composition; the commit completes later, outside the
+    // user's keystroke, so it does not open the undo window.
+    if (pending_commit_observation_) pending_commit_observation_->arms_undo = false;
     SetCommitContext(pending_commit_context);
   }
   if (pending_commit_context) pending_commit_context->Release();
@@ -3649,13 +3654,18 @@ void TextService::PostPendingCommitObservation() {
     // A Backspace right after this commit erases its last segment, so that
     // segment is the undo target, and only when it was learned: an English or
     // unsent last segment arms nothing rather than an earlier segment.
+    // The window opens only in the context the text edit sink watches: a
+    // caret move there closes it in OnEndEdit, and elsewhere it could not.
     const auto& last = pending.segments.empty() ? pending : pending.segments.back();
     const void* committed_context =
         ComIdentity(commit_context_ ? commit_context_ : active_context_);
-    if (committed_context && !last_learned_commit_pairs_.empty() &&
+    if (pending.arms_undo && committed_context &&
+        committed_context == ComIdentity(text_edit_context_) &&
+        !last_learned_commit_pairs_.empty() &&
         last.chosen.tag != static_cast<uint8_t>(core::CandidateTag::English) &&
         last_learned_commit_pairs_.back() == std::pair{last.reading, last.chosen.surface})
-      undo_target_ = UndoTarget{last.reading, last.chosen.surface, committed_context};
+      undo_target_ = UndoTarget{last.reading, last.chosen.surface, committed_context,
+                                std::chrono::steady_clock::now()};
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
     // observations are posted. Drop best-effort learning telemetry rather than
@@ -3664,6 +3674,9 @@ void TextService::PostPendingCommitObservation() {
 }
 
 void TextService::ResetTypoTracking() {
+  // Focus, activation and lifecycle loss end the undo window with the typo one:
+  // the first key after returning is no immediate reaction to the commit.
+  undo_target_.reset();
   typo_tracker_.Reset();
   pending_typo_commit_.reset();
   typo_test_key_context_ = nullptr;
@@ -3673,7 +3686,11 @@ void TextService::ResetTypoTracking() {
                 [](const auto& item) { return item.type == ipc::MessageType::ObserveTypo; });
 }
 
-bool TextService::CanSendTypoObservation(const IpcSendItem& item) const {
+bool TextService::CanSendQueuedItem(const IpcSendItem& item) const {
+  // A correction queued before a reconnect must not reach a Host that no
+  // longer advertises commit_correction; the gate at posting time is not enough.
+  if (item.type == ipc::MessageType::CommitCorrection)
+    return ipc_host_commit_correction_.load(std::memory_order_relaxed);
   return item.type != ipc::MessageType::ObserveTypo ||
          (!secure_input_.load(std::memory_order_relaxed) &&
           typo_learning_allowed_.load(std::memory_order_relaxed) &&
@@ -3705,9 +3722,13 @@ void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
   undo_target_.reset();
   // The Backspace must land in the context that was committed to: a focus
   // change can leave the record while active_context_ is already released.
+  // The window is also short: a Backspace long after the commit is more
+  // likely an ordinary edit than a reaction to the committed word.
+  constexpr auto kUndoWindow = std::chrono::seconds(5);
   if (key != VK_BACK || HasSystemModifier(CurrentKeyModifiers()) ||
       !CurrentPreeditSurface().empty() || candidate_ui_.IsShowing() ||
-      last_learned_commit_pairs_.empty() || !context || ComIdentity(context) != target.context)
+      last_learned_commit_pairs_.empty() || !context || ComIdentity(context) != target.context ||
+      std::chrono::steady_clock::now() - target.armed_at > kUndoWindow)
     return;
   PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(target.reading),
                        std::move(target.surface), std::nullopt);
@@ -3959,6 +3980,9 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
 void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                           LifecycleCleanupFailurePolicy failure_policy) {
   ResetTypoTracking();
+  // A commit finished here, now or by a later edit session, is forced by the
+  // focus or lifecycle loss and must not reopen the undo window.
+  if (pending_commit_observation_) pending_commit_observation_->arms_undo = false;
   recent_character_form_commit_.reset();
   ClearReconversionState();
   if (reconversion_cache_context_) {
@@ -5060,7 +5084,7 @@ void TextService::ServeConnection() {
     // instead of looping back to the wait on a dead connection.
     for (size_t i = 0; i < to_send.size(); ++i) {
       auto& item = to_send[i];
-      if (!CanSendTypoObservation(item)) continue;
+      if (!CanSendQueuedItem(item)) continue;
       Envelope env;
       env.version = 1;
       env.request_id = next_id++;
@@ -5211,7 +5235,7 @@ void TextService::ServeConnection() {
         ipc_send_queue_ = std::move(deferred);
       }
       for (auto& item : faf_now) {
-        if (!CanSendTypoObservation(item)) continue;
+        if (!CanSendQueuedItem(item)) continue;
         Envelope env;
         env.version = 1;
         env.request_id = next_id++;
@@ -5299,7 +5323,7 @@ void TextService::ServeConnection() {
         ipc_send_queue_ = std::move(deferred);
       }
       for (auto& item : mid_faf) {
-        if (!CanSendTypoObservation(item)) continue;
+        if (!CanSendQueuedItem(item)) continue;
         ipc::Envelope env;
         env.version = 1;
         env.request_id = next_id++;
@@ -5560,7 +5584,18 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   AZOOKEY_ASSERT_UI_THREAD();
   if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
   BOOL changed = FALSE;
-  if (FAILED(record->GetSelectionStatus(&changed)) || !changed) return S_OK;
+  const bool selection_status_read = SUCCEEDED(record->GetSelectionStatus(&changed));
+  // The first edit after a commit opened the undo window is the commit's own
+  // (TSF reports an edit session when it ends). Any later selection change,
+  // a mouse click or an application edit, means the next Backspace no longer
+  // erases the committed word, so the window closes (spec §4.1).
+  if (undo_target_) {
+    if (undo_target_->awaiting_commit_edit)
+      undo_target_->awaiting_commit_edit = false;
+    else if (!selection_status_read || changed)
+      undo_target_.reset();
+  }
+  if (!selection_status_read || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
   reconversion_prefetch_surface_.clear();
   ++reconversion_generation_;

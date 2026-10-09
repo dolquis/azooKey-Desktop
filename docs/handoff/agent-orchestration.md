@@ -59,15 +59,14 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 
 | 変更範囲 | 必須 | 条件付き |
 |---|---|---|
-| `tsf-tip/**` | `boundary-reviewer`（tsf） | IPC も変わるなら `boundary-reviewer`（ipc）を別 spawn |
-| `ipc/**`、wire schema | `boundary-reviewer`（ipc） | TIP consumer 変更なら tsf |
-| `core/**`、候補生成 | `boundary-reviewer`（conversion） | spec 変更なら `spec-drift-checker` |
-| `learning/**`、privacy 設定 | `boundary-reviewer`（learning-privacy） | IPC 経由なら ipc |
-| `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 対応する境界 |
-| C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、対応する境界 |
+| `tsf-tip/**` | 親が `tsf-tip-development` Skill を読んで確認する | IPC も変わるなら親が `tsf-ipc-protocol` Skill を読んで確認する |
+| `ipc/**`、wire schema | 親が `tsf-ipc-protocol` Skill を読んで確認する | TIP consumer 変更なら親が `tsf-tip-development` Skill を読んで確認する |
+| `core/**`、候補生成 | 親が `azookey-core-conversion` Skill を読んで確認する | spec 変更なら `spec-drift-checker` |
+| `learning/**`、privacy 設定 | 親が `azookey-learning-data-safety` Skill を読んで確認する | IPC 経由なら親が `tsf-ipc-protocol` Skill を読んで確認する |
+| `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する |
+| C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 
-`boundary-reviewer` は境界名を受け取る汎用 read-only agent で、境界ごとに別 spawn する（1 体に複数境界を渡さない）。`.claude/agents/MANIFEST.md` に定義が無いハーネスでは、同じ境界の確認を親が対応 Skill（`tsf-tip-development`、`tsf-ipc-protocol`、`azookey-core-conversion`、`azookey-learning-data-safety`）を読んで担当する（parent-only fallback）。
 `diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。
 
 ## background と並列実行
@@ -75,7 +74,7 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 background へ回してよいもの:
 
 - 変更停止後の read-only 差分レビュー。
-- 互いに独立した spec drift 確認と境界の不変条件確認。
+- 互いに独立した spec drift 確認。
 - 親が生成したログ・評価出力の読み解き。
 - 専用 build directory を確保し、他の writer が停止している状態での長時間 build / test。
 
@@ -128,7 +127,7 @@ Validation owned by parent: <commands>
 
 1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`scripts/check_agent_definitions.py` は `enabled = false` を検出するので、縮退中は CI の docs-lint ジョブがその旨を報告する。
 2. Claude Code は `.claude/settings.json` の `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` を外し、通常の単一 subagent または親のみへ戻す。
-3. agent が使えない環境では、上記 parent-only fallback のとおり同じ検証範囲を親が担当する。
+3. agent が使えない環境では、同じ検証範囲を親が担当する。
 4. 該当する Linear Issue は Canceled または Backlog へ戻し、理由をコメントに残す。アーカイブしない。
 
 ## 機械検査

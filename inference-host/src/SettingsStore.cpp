@@ -212,6 +212,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.secure_apps = core::ParseSecureApps(ipc::json::Value(object));
   if (const auto privacy = object.find("privacy");
       privacy != object.end() && privacy->second.IsObject()) {
+    settings.offline_mode = privacy->second.GetString("mode").value_or("normal") == "offline";
     settings.crash_report_consent =
         ReadEnum(privacy->second.AsObject(), "crashReportConsent", "off", {"off", "local"});
     settings.show_secure_indicator =
@@ -574,7 +575,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.typo_correction_mode = settings.typo_correction_mode;
   config.typo_min_count = static_cast<uint32_t>(settings.typo_min_count);
   config.auto_word_mining_enabled = settings.auto_word.mining_enabled;
-  config.auto_word_trending_enabled = settings.auto_word.trending_enabled;
+  config.auto_word_trending_enabled = settings.auto_word.trending_enabled && !settings.offline_mode;
   config.auto_word_trending_interval_hours =
       static_cast<uint32_t>(settings.auto_word.trending_interval_hours);
   config.auto_word_auto_register = settings.auto_word.registration_mode == "auto";

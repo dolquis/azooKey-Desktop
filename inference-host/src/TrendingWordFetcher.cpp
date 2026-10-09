@@ -11,12 +11,13 @@
 #include <vector>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/learning/AtomicFile.h"
 
 namespace azookey::host {
 namespace {
 
-constexpr uint64_t kMaxAssetBytes = 4 * 1024 * 1024;
+constexpr uint64_t kMaxAssetBytes = ipc::kMaxJsonInputBytes;
 constexpr uint64_t kMaxChecksumBytes = 1024;
 constexpr uint32_t kStageTimeoutMs = 1000;
 
@@ -125,6 +126,13 @@ TrendingWordFetcher::TrendingWordFetcher(learning::AutoWordStore& store,
     };
   }
   if (!dependencies_.steady_now) dependencies_.steady_now = std::chrono::steady_clock::now;
+  if (!dependencies_.ingest_and_save) {
+    dependencies_.ingest_and_save = [this](const std::vector<learning::AutoWord>& words,
+                                           uint64_t now_epoch, bool auto_promote) {
+      store_.IngestTrending(words, now_epoch, auto_promote);
+      return store_.Save();
+    };
+  }
 }
 
 TrendingWordFetcher::~TrendingWordFetcher() { Stop(); }
@@ -241,11 +249,11 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
   if (!dependencies_.download(request).ok())
     return cancelled() ? TrendingFetchStatus::Cancelled : TrendingFetchStatus::Failed;
   if (cancelled()) return TrendingFetchStatus::Cancelled;
-  // Verify the seam too: a fake or future transport cannot bypass the SHA gate.
-  std::string error;
-  if (ComputeFileSha256(staging_path, &error) != hash) return TrendingFetchStatus::Failed;
   const auto text = ReadAsset(staging_path);
   if (!text) return TrendingFetchStatus::Failed;
+  // Hash exactly the bytes that are parsed and cached, including at the test seam.
+  std::string error;
+  if (ComputeSha256(*text, &error) != hash) return TrendingFetchStatus::Failed;
   const auto asset = ParseAsset(*text);
   if (!asset) return TrendingFetchStatus::Failed;
 
@@ -256,8 +264,8 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
   // Only verified, parsed public data reaches the atomic cache. Rejected words
   // and mining precedence remain the existing store's responsibility.
   if (!learning::WriteTextFileAtomically(cache_path_, *text)) return TrendingFetchStatus::Failed;
-  store_.IngestTrending(asset->words, dependencies_.now_epoch(), auto_promote_);
-  if (!store_.Save()) return TrendingFetchStatus::Failed;
+  if (!dependencies_.ingest_and_save(asset->words, dependencies_.now_epoch(), auto_promote_))
+    return TrendingFetchStatus::Failed;
   ingested_generated_at_ = asset->generated_at;
   return TrendingFetchStatus::Ingested;
 }

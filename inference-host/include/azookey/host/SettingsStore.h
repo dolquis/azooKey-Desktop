@@ -93,6 +93,8 @@ struct RuntimeSettings {
   bool prediction_enabled{true};
   std::string ai_backend{"none"};
   core::AiPrivacy ai_privacy{true, true};
+  // Unlike AI external access, offline mode also forbids public asset downloads.
+  bool offline_mode{false};
   core::PrivacyPolicy privacy_policy{false, false, true};
   int32_t open_ai_timeout_ms{30000};
   std::string open_ai_api_key;

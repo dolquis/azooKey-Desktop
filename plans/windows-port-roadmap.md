@@ -371,7 +371,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
    配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
 3. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で
    `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
-4. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には
+4. **`QueryPredictions`/`QueryCorrections` payload** — `InferenceEngine` には
    既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
@@ -1270,7 +1270,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `inference-host/`（`PunctuationInserter` 新規、`Dispatcher` /
   `InferenceEngine` の `auto_punctuation` / `punctuation_style` 処理と segments 返却）、
-  `ipc/`（`QueryCandidates` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
+  `ipc/`（`QueryLiveConversion` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
   `core/`（`InputState` の Backspace 削除単位、`SegmentPos` 新規、`PunctuationRules` 新規）、
   `tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
   `settings/mvp-settings.schema.json`。

@@ -29,6 +29,30 @@ constexpr std::string_view kFixture(kFixtureBytes, sizeof(kFixtureBytes));
 constexpr std::string_view kFixtureSha256 =
     "cce8fa5c83c8d9494aec0ed9c4ec59739e15c6352216e2f4377b3d8194e48082";
 
+TEST(HttpDownloaderTest, ComputeSha256MatchesKnownVectors) {
+  std::string error;
+  const auto empty = azookey::host::ComputeSha256({}, &error);
+  ASSERT_TRUE(empty) << error;
+  EXPECT_EQ(*empty, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  const auto abc = azookey::host::ComputeSha256("abc", nullptr);
+  ASSERT_TRUE(abc);
+  EXPECT_EQ(*abc, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+TEST(HttpDownloaderTest, ComputeSha256IncludesEmbeddedNullBytes) {
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(kFixture, &error);
+  ASSERT_TRUE(hash) << error;
+  EXPECT_EQ(*hash, kFixtureSha256);
+}
+
+TEST(HttpDownloaderTest, ComputeSha256HashesAcrossMultipleChunks) {
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(std::string(1'000'000, 'a'), &error);
+  ASSERT_TRUE(hash) << error;
+  EXPECT_EQ(*hash, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+}
+
 class WinsockScope {
  public:
   WinsockScope() {

@@ -87,6 +87,8 @@ struct NeologdPackSink {
   std::mutex mutex;
   azookey::host::InferenceEngine* engine{nullptr};
   azookey::logging::RuntimeLogger* log{nullptr};
+  // Shared with every Dispatcher for QueryDiagnostics; outlives main's scope.
+  std::shared_ptr<azookey::host::NeologdLayerState> layer;
 };
 
 class NeologdPackSinkGuard {
@@ -107,6 +109,7 @@ class NeologdPackSinkGuard {
 // Section 15.14: only a pack that passed every check reaches the layer, so a failed pack
 // leaves neologd_lexicon in the missing-pack state.
 void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem::path packs_dir) {
+  sink->layer->Set(azookey::ipc::kNeologdLayerLoading);
   std::thread([sink = std::move(sink), packs_dir = std::move(packs_dir)] {
     azookey::host::NeologdPackResult result;
     try {
@@ -124,6 +127,7 @@ void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem
     }
     std::lock_guard<std::mutex> lock(sink->mutex);
     if (!sink->engine || !sink->log) return;
+    bool layer_reported = false;
     try {
       if (result.status == azookey::host::NeologdPackStatus::Ready &&
           !sink->engine->LoadDictionaryLayer(azookey::learning::LayerId::Neologd, result.path)) {
@@ -131,11 +135,17 @@ void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem
         result.error = "pack load failed";
       }
       if (result.status == azookey::host::NeologdPackStatus::Failed) {
+        sink->layer->Set(azookey::ipc::kNeologdLayerError, result.error);
+        layer_reported = true;
         sink->log->Log(azookey::logging::RuntimeLogLevel::Warn, "neologd_pack_load",
                        {{"result", SafeLogText("error")},
                         {"error_code", SafeLogText("business")},
                         {"reason", SafeLogText(result.error)}});
       } else {
+        sink->layer->Set(result.status == azookey::host::NeologdPackStatus::Ready
+                             ? azookey::ipc::kNeologdLayerReady
+                             : azookey::ipc::kNeologdLayerMissingPack);
+        layer_reported = true;
         sink->log->Log(
             azookey::logging::RuntimeLogLevel::Info, "neologd_pack_load",
             {{"result", SafeLogText(result.status == azookey::host::NeologdPackStatus::Ready
@@ -144,6 +154,11 @@ void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem
       }
     } catch (...) {
       // Nothing escapes a detached thread; the layer stays as the store left it.
+      // A throw from the load itself leaves the state unreported, so report it
+      // as a load failure; a throw from the log keeps the state already set.
+      if (!layer_reported) {
+        sink->layer->Set(azookey::ipc::kNeologdLayerError, std::string("pack load failed"));
+      }
     }
   }).detach();
 }
@@ -815,6 +830,11 @@ int main(int argc, char** argv) {
            {"reason", SafeLogText(result)}});
     }
   };
+  trending_dependencies.ingest_and_save = [&engine](
+                                              const std::vector<azookey::learning::AutoWord>& words,
+                                              uint64_t now_epoch, bool auto_promote) {
+    return engine.IngestTrendingWords(words, now_epoch, auto_promote);
+  };
   // Declared after the stores and before dispatchers so the worker joins before store teardown.
   azookey::host::TrendingWordFetcher trending_fetcher(
       auto_word_store, auto_word_store.path().parent_path() / "trending-words.json",
@@ -850,6 +870,7 @@ int main(int argc, char** argv) {
   auto neologd_pack_sink = std::make_shared<NeologdPackSink>();
   neologd_pack_sink->engine = &engine;
   neologd_pack_sink->log = &runtime_log;
+  neologd_pack_sink->layer = std::make_shared<azookey::host::NeologdLayerState>();
   NeologdPackSinkGuard neologd_pack_guard(neologd_pack_sink);
   // Settings reach the pack only at startup (auto-word-registration-spec section 15.14).
   // Called once this Host owns its transport, so a rejected duplicate never downloads.
@@ -895,6 +916,7 @@ int main(int argc, char** argv) {
   dconf.default_backend = default_backend;
   dconf.models_dir = user_paths->models_dir;
   dconf.on_config_applied = update_trending_settings;
+  dconf.neologd_layer = neologd_pack_sink->layer;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }

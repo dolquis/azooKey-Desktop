@@ -250,11 +250,18 @@ worker は `Start` / `Stop` で所有し、終了時に join してストアよ�
 待たず、再有効化時には直ちに取得する。同じ設定の再適用では周期をリセットしない。
 起動時から無効な場合は、HTTP セッションもソケットも生成しない。
 
-チェックサムは 1 KiB、JSON は 4 MiB を上限とする。各 WinHTTP 操作の timeout は
+チェックサムは 1 KiB、JSON は共有 JSON parser と同じ 1 MiB を上限とする。各 WinHTTP 操作の timeout は
 1 秒、取得全体の協調キャンセル期限は 15 秒。実行中の同期 WinHTTP 操作はその
 timeout まで待ち、操作間と受信ループで停止を確認する。
 `generated_at` は保存に成功した直近の値と比較し、同じ値なら再取り込みと recency 更新を
 省略する。この比較値は Host 内で保持し、再起動後の初回取得では再検証・取り込みを行う。
+
+Host は `TrendingFetchDependencies::ingest_and_save` を
+`InferenceEngine::IngestTrendingWords` へ接続する。同メソッドは `state_mutex_` を保持して
+取り込みから保存まで行い、学習ストアの全削除・忘却が失敗した際の巻き戻しと直列化する。
+Fetcher の設定 mutex → engine の state mutex → store の mutex の順で取得する。
+`Dispatcher::HandleUpdateConfig` は `ApplyConfig` が戻り state mutex が解放された後に
+Fetcher の設定 callback を呼ぶ。`Stop` / join も engine のロック外で行う。
 
 診断イベント `trending_word_fetch` は固定の `reason`（`disabled`、
 `source_unavailable`、`unchanged`、`ingested`、`failed`、`cancelled`）だけで結果を区別する。
@@ -275,7 +282,8 @@ Host の変換処理を継続する。
   `legacy/Core/Sources/Core/InputUtils/DebugTypoCorrectionWeights.swift` の
   アトミック展開パターンを踏襲）。
 - キャッシュは解決済みユーザーデータの `data/trending-words.json` とする。
-  専用 staging に SHA256 検証付きで取得し、JSON 検証後に既存キャッシュを atomic replace
+  専用 staging に SHA256 検証付きで取得する。staging から一度読み込んだ同じバイト列を
+  SHA256 検証・JSON 検証・キャッシュ書込みに使い、既存キャッシュを atomic replace
   する。通信・検証・キャッシュ書込みの失敗時は旧キャッシュを保持し、staging と
   `.part` を削除する。ストアの保存失敗時は検証済みキャッシュとメモリ上の語を保持し、
   保存成功の比較値を更新せず次回取得で再試行する。
@@ -493,7 +501,8 @@ parser の受理条件:
 `trendingIntervalHours` の上限は 8760（1 年）とする。`EngineConfig` の
 `auto_word_trending_enabled` / `auto_word_trending_interval_hours` へも反映し、
 `Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
-SafeMode では `trendingEnabled` の実効値を false とする。
+SafeMode または `privacy.mode=offline` では `trendingEnabled` の実効値を false とする。
+offline による抑止は保存された `trendingEnabled` を変更せず、通常モードへ戻ると元の設定を使う。
 `auto_word_default_score` は §6 の注入が使う `EngineConfig` の内部値であり、
 設定キーを持たない。
 
@@ -505,6 +514,8 @@ SafeMode では `trendingEnabled` の実効値を false とする。
 - **トレンド取得はダウンロードのみ** — `TrendingWordFetcher` は公開静的アセットを
   GET するだけ。ユーザー語・入力統計・端末情報をリクエストに含めない
   （User-Agent はバージョン文字列のみ、M32 と同様）。アップロードは行わない。
+  `privacy.mode=offline` は公開アセットの取得も禁止する。起動時は通信せず、実行中に
+  offline へ切り替えると設定世代を更新し、進行中の取得を協調キャンセルする。
 - **DPAPI 暗号化（M34）対象に新ストアを含める** — `auto_words.tsv` はユーザーの
   未知語（固有名詞・個人情報を含みうる）を蓄積するため、`learning.tsv` /
   `user_dict.json` と同等の機微情報として M34 の暗号化対象に追加する。
@@ -1751,6 +1762,21 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **ログ**: 結果は `neologd_pack_load` イベントに記録する。`result` は `ok` /
   `missing_pack` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
   パスとサーバの応答はログに出さない。
+- **状態の照会**: 同じ結果を `QueryDiagnostics` 応答の任意フィールド `neologd_layer`
+  （`docs/dev-infrastructure-spec.md` §12.6）で返す。`state` は次のいずれかで、`reason` は
+  `error` のときだけログと同じ分類名を入れる。値は Host プロセスの寿命の間だけ保持し、
+  永続化しない。
+
+  | `state` | 意味 |
+  |---|---|
+  | `not_requested` | この起動では pack を扱っていない（`neologdEnabled` が偽、SafeMode、`packs` が無い） |
+  | `loading` | 取得・検証・ロードの途中 |
+  | `ready` | 層へロードした |
+  | `missing_pack` | マニフェストが未公開 |
+  | `error` | 取得・検証・ロードのいずれかで失敗した。層は missing-pack のまま |
+
+  Host が pack を扱うのは起動時だけなので、起動後に `neologdEnabled` を真にしても、
+  Host が再起動するまで `not_requested` のままである。
 
 **設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
 §14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である

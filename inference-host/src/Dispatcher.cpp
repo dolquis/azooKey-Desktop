@@ -272,6 +272,26 @@ void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                {"result", logging::RuntimeLogSafeText(std::string(result))}});
 }
 
+// M59 (dynamic-punctuation-spec section 7): the live conversion surface as one
+// converted segment, with punctuation inserted by the configured rules.
+// nullopt when the request or the settings leave punctuation off.
+std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& config,
+                                                       bool auto_punctuation,
+                                                       const std::string& style,
+                                                       const std::string& surface,
+                                                       const std::string& reading) {
+  if (!auto_punctuation || !config.enable_live_conversion || !config.dynamic_punctuation ||
+      surface.empty()) {
+    return std::nullopt;
+  }
+  ipc::LiveSegment converted;
+  converted.surface = surface;
+  converted.reading = reading;
+  converted.score = 1.0;
+  const auto rules = PunctuationInserter::LoadRules(config.punctuation_rules_path);
+  return PunctuationInserter::Insert({converted}, rules, style, config.segment_boundary_confidence);
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
@@ -326,6 +346,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return std::nullopt;
     case ipc::MessageType::CommitObservation:
       return HandleCommitObservation(req);
+    case ipc::MessageType::CommitCorrection:
+      return HandleCommitCorrection(req);
     case ipc::MessageType::CommitSegmentsObservation: {
       auto privacy =
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
@@ -359,6 +381,10 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleExportLearningData(req);
     case ipc::MessageType::ImportLearningData:
       return HandleImportLearningData(req);
+    case ipc::MessageType::ResetLearningStore:
+      return HandleResetLearningStore(req);
+    case ipc::MessageType::QueryPersona:
+      return HandleQueryPersona(req);
     case ipc::MessageType::ResolveNewWord:
       return HandleResolveNewWord(req);
     default:
@@ -389,7 +415,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       return MakeResponse(req, ipc::BuildUpdateConfigResponse(r));
     }
     case ipc::MessageType::CommitSegmentsObservation:
-    case ipc::MessageType::CommitObservation: {
+    case ipc::MessageType::CommitObservation:
+    case ipc::MessageType::CommitCorrection: {
       ipc::CommitObservationResponse r;
       r.ok = false;
       return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
@@ -464,6 +491,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildImportLearningDataResponse(r));
     }
+    case ipc::MessageType::ResetLearningStore: {
+      ipc::ResetLearningStoreResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildResetLearningStoreResponse(r));
+    }
+    case ipc::MessageType::QueryPersona: {
+      ipc::QueryPersonaResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildQueryPersonaResponse(r));
+    }
     case ipc::MessageType::ListModels: {
       ipc::ListModelsResponse r;
       r.ok = false;
@@ -511,10 +550,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_generation_id = config_.host_generation_id;
   // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
-  res.capabilities = {
-      "oob_cancel",         "commit_segments",         "query_live_conversion", "query_predictions",
-      "app_profile",        "candidate_tag",           "list_models",           "benchmark_model",
-      "english_candidates", "learning_data_management"};
+  res.capabilities = {"oob_cancel",
+                      "commit_segments",
+                      "query_live_conversion",
+                      "query_predictions",
+                      "app_profile",
+                      "candidate_tag",
+                      "list_models",
+                      "benchmark_model",
+                      "english_candidates",
+                      "learning_data_management",
+                      "commit_correction",
+                      "learning_reset",
+                      "persona"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -629,6 +677,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   } else {
     p.fallback_state = "healthy";
   }
+  if (config_.neologd_layer) p.neologd_layer = config_.neologd_layer->Snapshot();
   return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 
@@ -756,17 +805,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   ipc::QueryCandidatesResponse res;
   for (auto& c : candidates) res.candidates.push_back(ToField(c));
-  if (parsed->live && parsed->auto_punctuation && engine_config.enable_live_conversion &&
-      engine_config.dynamic_punctuation && !res.candidates.empty()) {
-    ipc::LiveSegment converted;
-    converted.surface = res.candidates.front().surface;
-    converted.reading = res.candidates.front().reading;
-    converted.score = 1.0;
-    const auto rules = PunctuationInserter::LoadRules(engine_config.punctuation_rules_path);
-    auto inserted = PunctuationInserter::Insert({converted}, rules, parsed->punctuation_style,
-                                                engine_config.segment_boundary_confidence);
-    res.candidates.front().surface = std::move(inserted.surface);
-    res.segments = std::move(inserted.segments);
+  // The pre-M14 carrier of live conversion; current TIPs use QueryLiveConversion.
+  if (parsed->live && !res.candidates.empty()) {
+    if (auto inserted = InsertLivePunctuation(
+            engine_config, parsed->auto_punctuation, parsed->punctuation_style,
+            res.candidates.front().surface, res.candidates.front().reading)) {
+      res.candidates.front().surface = std::move(inserted->surface);
+      res.segments = std::move(inserted->segments);
+    }
   }
   if (!parsed->emoji_trigger.empty() && parsed->max_candidates > 0 &&
       res.candidates.size() > parsed->max_candidates) {
@@ -802,6 +848,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
+  const auto punctuation_config =
+      parsed->auto_punctuation ? std::optional{engine_->config()} : std::nullopt;
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
                                                       cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
@@ -812,6 +860,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   }
   if (candidate) {
     response.surface = candidate->surface;
+    // The reading the candidate was converted from: a typo auto-replace has
+    // already corrected it, and the segments feed learning (section 5.3).
+    const auto& reading = candidate->reading.empty() ? parsed->kana : candidate->reading;
+    if (punctuation_config) {
+      if (auto inserted = InsertLivePunctuation(
+              *punctuation_config, true, parsed->punctuation_style, candidate->surface, reading)) {
+        response.surface = std::move(inserted->surface);
+        response.segments = std::move(inserted->segments);
+      }
+    }
     if (std::isfinite(candidate->score)) {
       // M14 fallback scores are unbounded ranking values. A zero-baseline
       // sigmoid preserves their ordering without pinning ordinary scores >1
@@ -1024,6 +1082,46 @@ std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::En
     res.error = std::string(ipc::kLearningDataErrorSaveFailed);
   }
   return reply();
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleResetLearningStore(const ipc::Envelope& req) {
+  ipc::ResetLearningStoreResponse res;
+  const auto parsed = ipc::ParseResetLearningStoreRequest(req.payload_json);
+  const auto store = parsed ? ParseLearningDataStore(parsed->store) : std::nullopt;
+  if (!store) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorInvalidRequest);
+  } else {
+    switch (engine_->ResetLearningStore(*store)) {
+      case InferenceEngine::ResetOutcome::Reset:
+        break;
+      case InferenceEngine::ResetOutcome::Unavailable:
+        res.ok = false;
+        res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
+        break;
+      case InferenceEngine::ResetOutcome::SaveFailed:
+        res.ok = false;
+        res.error = std::string(ipc::kLearningDataErrorSaveFailed);
+        break;
+    }
+  }
+  return MakeResponse(req, ipc::BuildResetLearningStoreResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryPersona(const ipc::Envelope& req) {
+  ipc::QueryPersonaResponse res;
+  if (const auto snapshot = engine_->CurrentPersona()) {
+    res.polite_ratio = snapshot->persona.polite_ratio;
+    res.casual_ratio = snapshot->persona.casual_ratio;
+    res.technical_ratio = snapshot->persona.technical_ratio;
+    res.kaomoji_ratio = snapshot->persona.kaomoji_ratio;
+    res.sample_count = snapshot->persona.sample_count;
+    res.computed_at_epoch_sec = snapshot->computed_at_epoch_sec;
+  } else {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
+  }
+  return MakeResponse(req, ipc::BuildQueryPersonaResponse(res));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {
@@ -1270,6 +1368,25 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
     res.ok = true;
   } else {
     res.ok = false;
+  }
+  return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envelope& req) {
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  ipc::CommitObservationResponse res;
+  // Same privacy gate as CommitObservation (user-learning-enhancement-spec
+  // section 4); a duplicate resend is answered ok=true without re-recording.
+  if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
+      parsed &&
+      LearningAllowed(parsed->secure, parsed->learning_allowed,
+                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+    engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
+                              NowSec(), parsed->observation_id,
+                              parsed->app ? parsed->app->process_name : std::string(),
+                              parsed->left_context);
+    res.ok = true;
   }
   return MakeResponse(req, ipc::BuildCommitObservationResponse(res));
 }

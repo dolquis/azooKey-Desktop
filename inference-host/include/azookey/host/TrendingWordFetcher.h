@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "azookey/host/HttpDownloader.h"
 #include "azookey/learning/AutoWordStore.h"
@@ -29,6 +30,9 @@ struct TrendingFetchDependencies {
   std::function<HttpDownloadResult(const HttpDownloadRequest&)> download;
   std::function<uint64_t()> now_epoch;
   std::function<std::chrono::steady_clock::time_point()> steady_now;
+  // Host supplies the engine's serialized commit so reset/forget rollback cannot
+  // overwrite a successful ingestion. An isolated store may use the default.
+  std::function<bool(const std::vector<learning::AutoWord>&, uint64_t, bool)> ingest_and_save;
   // Invoked on the worker, with no URL, downloaded text or user words.
   std::function<void(TrendingFetchStatus)> report;
 };

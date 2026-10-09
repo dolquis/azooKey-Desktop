@@ -2718,6 +2718,150 @@ TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
             nullptr);
 }
 
+TEST(EngineAutoWordTest, TrendingIngestWaitsForFailedResetRollbackAndPreservesBothWords) {
+  class FailNextEncryption final : public azookey::learning::ByteCrypto {
+   public:
+    mutable std::atomic<bool> fail_next{false};
+    mutable std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      if (fail_next.exchange(false)) {
+        entered.set_value();
+        released.wait();
+        return false;
+      }
+      return cipher_.Encrypt(plain, cipher);
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return cipher_.Decrypt(cipher, plain);
+    }
+
+   private:
+    azookey::learning::test::TestByteCrypto cipher_;
+  } crypto;
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"));
+  azookey::learning::TypoCorrectionStore typo_store(temp.File("typos.tsv"), &crypto);
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"), &crypto);
+  auto_words.Observe("旧語", "きゅうご", kNowBase, 1, true);
+  ASSERT_TRUE(auto_words.Save());
+  auto engine = MakeEngine(store);
+  engine->SetAutoWordStore(&auto_words);
+  crypto.fail_next = true;
+  auto entered = crypto.entered.get_future();
+  auto reset = std::async(std::launch::async, [&] {
+    return engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord);
+  });
+  const auto reset_entered = entered.wait_for(std::chrono::seconds(5));
+  if (reset_entered != std::future_status::ready) {
+    crypto.release.set_value();
+    reset.wait();
+    FAIL() << "Reset did not reach the encryption barrier";
+  }
+  const std::vector<azookey::learning::AutoWord> words{{"新語", "しんご"}};
+  std::promise<void> ingest_started;
+  auto started = ingest_started.get_future();
+  auto ingest = std::async(std::launch::async, [&] {
+    ingest_started.set_value();
+    return engine->IngestTrendingWords(words, kNowBase + 1, true);
+  });
+  const auto ingest_entered = started.wait_for(std::chrono::seconds(5));
+  const auto ingest_pending = ingest.wait_for(std::chrono::milliseconds(50));
+  crypto.release.set_value();
+  EXPECT_EQ(ingest_entered, std::future_status::ready);
+  EXPECT_EQ(ingest_pending, std::future_status::timeout);
+  EXPECT_EQ(reset.get(), azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
+  ASSERT_TRUE(ingest.get());
+  EXPECT_EQ(auto_words.LookupConfirmed("きゅうご").size(), 1u);
+  EXPECT_EQ(auto_words.LookupConfirmed("しんご").size(), 1u);
+  azookey::learning::AutoWordStore reloaded(auto_words.path(), &crypto);
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.SerializeText(), auto_words.SerializeText());
+
+  // Prove the engine boundary is shared independently of AutoWordStore's mutex:
+  // a typo reset holds state_mutex_ but leaves the auto-word store unlocked.
+  engine->SetTypoStore(&typo_store);
+  crypto.entered = std::promise<void>();
+  crypto.release = std::promise<void>();
+  crypto.released = crypto.release.get_future().share();
+  crypto.fail_next = true;
+  auto typo_entered = crypto.entered.get_future();
+  auto typo_reset = std::async(std::launch::async, [&] {
+    return engine->ResetLearningStore(azookey::host::LearningDataStore::Typo);
+  });
+  if (typo_entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    crypto.release.set_value();
+    typo_reset.wait();
+    FAIL() << "Typo reset did not reach the encryption barrier";
+  }
+  std::promise<void> second_started;
+  auto second_entered = second_started.get_future();
+  auto second_ingest = std::async(std::launch::async, [&] {
+    second_started.set_value();
+    return engine->IngestTrendingWords(words, kNowBase + 2, true);
+  });
+  const auto second_attempted = second_entered.wait_for(std::chrono::seconds(5));
+  const auto second_pending = second_ingest.wait_for(std::chrono::milliseconds(100));
+  crypto.release.set_value();
+  EXPECT_EQ(second_attempted, std::future_status::ready);
+  EXPECT_EQ(second_pending, std::future_status::timeout);
+  EXPECT_EQ(typo_reset.get(), azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
+  ASSERT_TRUE(second_ingest.get());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.SerializeText(), auto_words.SerializeText());
+}
+
+TEST(EngineAutoWordTest, TrendingIngestRejectsUnavailableAndUnreadableStores) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"));
+  const azookey::learning::test::TestByteCrypto crypto;
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"), &crypto);
+  auto engine = MakeEngine(store);
+  const std::vector<azookey::learning::AutoWord> words{{"新語", "しんご"}};
+  EXPECT_FALSE(engine->IngestTrendingWords(words, kNowBase, true));
+  const auto encrypted_path = EncryptedPathFor(auto_words.path());
+  {
+    std::ofstream file(encrypted_path, std::ios::binary);
+    ASSERT_TRUE(file.is_open());
+    file << "unreadable encrypted data";
+  }
+  ASSERT_FALSE(auto_words.Load());
+  ASSERT_TRUE(auto_words.save_blocked());
+  engine->SetAutoWordStore(&auto_words);
+  EXPECT_FALSE(engine->IngestTrendingWords(words, kNowBase, true));
+  EXPECT_EQ(auto_words.Size(), 0u);
+  std::ifstream file(encrypted_path, std::ios::binary);
+  std::string preserved;
+  std::getline(file, preserved);
+  EXPECT_EQ(preserved, "unreadable encrypted data");
+}
+
+TEST(EngineAutoWordTest, TrendingIngestSaveFailureRetainsWordsForRetry) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"));
+  const auto blocked_parent = temp.File("blocked");
+  {
+    std::ofstream file(blocked_parent);
+    ASSERT_TRUE(file.is_open());
+    file << "block directory creation";
+  }
+  const azookey::learning::test::TestByteCrypto crypto;
+  azookey::learning::AutoWordStore auto_words(
+      std::filesystem::path(blocked_parent) / "auto_words.tsv", &crypto);
+  auto engine = MakeEngine(store);
+  engine->SetAutoWordStore(&auto_words);
+  const std::vector<azookey::learning::AutoWord> words{{"新語", "しんご"}};
+  EXPECT_FALSE(engine->IngestTrendingWords(words, kNowBase, true));
+  EXPECT_EQ(auto_words.LookupConfirmed("しんご").size(), 1u);
+  ASSERT_TRUE(std::filesystem::remove(blocked_parent));
+  ASSERT_TRUE(std::filesystem::create_directory(blocked_parent));
+  ASSERT_TRUE(engine->IngestTrendingWords(words, kNowBase + 1, true));
+  azookey::learning::AutoWordStore reloaded(auto_words.path(), &crypto);
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.SerializeText(), auto_words.SerializeText());
+}
+
 TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   ScopedTempDirectory temp;
   azookey::learning::LearningStore store(temp.File("azookey_engine_applyconfig_learning.tsv"),

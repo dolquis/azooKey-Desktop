@@ -26,6 +26,7 @@
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/PunctuationInserter.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -452,8 +453,9 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
-  for (const char* capability : {"app_profile", "candidate_tag", "list_models", "benchmark_model",
-                                 "english_candidates", "learning_data_management"}) {
+  for (const char* capability :
+       {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
+        "learning_data_management", "commit_correction", "learning_reset", "persona"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -632,6 +634,21 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   ASSERT_TRUE(add_before_payload.has_value());
   EXPECT_FALSE(add_before_payload->ok);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+
+  ipc::CommitCorrectionRequest correction;
+  correction.kind = std::string(ipc::kCorrectionKindUndo);
+  correction.reading = "かんじ";
+  correction.rejected_surface = "幹事";
+  correction.secure = false;
+  correction.learning_allowed = true;
+  const auto correction_before_handshake = token_dispatcher.Dispatch(MakeReq(
+      7, ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(correction)));
+  ASSERT_TRUE(correction_before_handshake.has_value());
+  const auto correction_before_payload =
+      ipc::ParseCommitObservationResponse(correction_before_handshake->payload_json);
+  ASSERT_TRUE(correction_before_payload.has_value());
+  EXPECT_FALSE(correction_before_payload->ok);
+  EXPECT_EQ(store.size(), 0u);
 
   // The approval messages say why they refused instead of looking like an
   // empty store.
@@ -1332,6 +1349,82 @@ TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   EXPECT_LE(parsed->confidence, 1.0);
 }
 
+// DEV-1442 / dynamic-punctuation-spec section 7: the Host inserts punctuation
+// into the live conversion surface only when the request asks for it and both
+// liveConversion and dynamicPunctuation are on, and flags the inserted mark as
+// a segment without a reading. The legacy QueryCandidates live=true carrier
+// follows the same rule.
+TEST_F(DispatcherTest, QueryLiveConversionInsertsPunctuationOnlyWhenAskedAndEnabled) {
+  // Long enough, and ending in "です", for the sentence-final rule.
+  const std::string kana = "きょうはいいてんきです";
+  const auto live = [&](uint64_t id, bool auto_punctuation) {
+    ipc::QueryLiveConversionRequest request{kana, ""};
+    request.auto_punctuation = auto_punctuation;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        id, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseQueryLiveConversionResponse(response->payload_json) : std::nullopt;
+  };
+  const auto ends_with_period = [](const std::string& text) {
+    const std::string period = "。";
+    return text.size() > period.size() &&
+           text.compare(text.size() - period.size(), period.size(), period) == 0;
+  };
+
+  // The setting is off by default: the request flag alone changes nothing.
+  const auto off = live(1401, true);
+  ASSERT_TRUE(off);
+  const auto plain = off->surface;
+  EXPECT_FALSE(ends_with_period(plain));
+  EXPECT_TRUE(off->segments.empty());
+
+  auto config = engine.config();
+  config.dynamic_punctuation = true;
+  config.punctuation_rules_path = "";
+  engine.ApplyConfig(config);
+
+  const auto on = live(1402, true);
+  ASSERT_TRUE(on);
+  EXPECT_EQ(on->surface, plain + "。");
+  ASSERT_GE(on->segments.size(), 2u);
+  EXPECT_FALSE(on->segments.front().auto_punctuation);
+  EXPECT_EQ(on->segments.front().reading, kana);
+  EXPECT_TRUE(on->segments.back().auto_punctuation);
+  EXPECT_EQ(on->segments.back().surface, "。");
+  EXPECT_TRUE(on->segments.back().reading.empty());
+  std::string joined;
+  for (const auto& segment : on->segments) joined += segment.surface;
+  EXPECT_EQ(joined, on->surface);
+
+  // onPause typing sends false (section 7.1.1): no punctuation, no segments.
+  const auto typing = live(1403, false);
+  ASSERT_TRUE(typing);
+  EXPECT_EQ(typing->surface, plain);
+  EXPECT_TRUE(typing->segments.empty());
+
+  // The legacy carrier, for a Host that does not advertise query_live_conversion.
+  ipc::QueryCandidatesRequest legacy;
+  legacy.reading = kana;
+  legacy.live = true;
+  legacy.auto_punctuation = true;
+  const auto legacy_response = dispatcher.Dispatch(
+      MakeReq(1404, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(legacy)));
+  ASSERT_TRUE(legacy_response);
+  const auto legacy_parsed = ipc::ParseQueryCandidatesResponse(legacy_response->payload_json);
+  ASSERT_TRUE(legacy_parsed && !legacy_parsed->candidates.empty());
+  EXPECT_EQ(legacy_parsed->candidates.front().surface, plain + "。");
+  ASSERT_FALSE(legacy_parsed->segments.empty());
+  EXPECT_TRUE(legacy_parsed->segments.back().auto_punctuation);
+
+  // liveConversion off disables the feature even with dynamicPunctuation on.
+  config.enable_live_conversion = false;
+  engine.ApplyConfig(config);
+  const auto disabled = live(1405, true);
+  ASSERT_TRUE(disabled);
+  EXPECT_EQ(disabled->surface, plain);
+  EXPECT_TRUE(disabled->segments.empty());
+}
+
 TEST_F(DispatcherTest, QueryLiveConversionDoesNotSaturateUserWordScore) {
   azookey::learning::UserWord word;
   word.word = "独自語";
@@ -1643,8 +1736,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
 }
 
 TEST_F(DispatcherTest, AuthenticatedUnsupportedMessagesReturnExplicitTypedErrors) {
-  for (const auto type : {ipc::MessageType::QueryCorrections, ipc::MessageType::CommitCorrection,
-                          ipc::MessageType::UpdateUserWord, ipc::MessageType::Unknown}) {
+  for (const auto type : {ipc::MessageType::QueryCorrections, ipc::MessageType::UpdateUserWord,
+                          ipc::MessageType::Unknown}) {
     const auto response = dispatcher.Dispatch(MakeReq(32, type, "{}"));
     ASSERT_TRUE(response.has_value()) << ipc::TypeToString(type);
     EXPECT_EQ(response->type, type);
@@ -1716,6 +1809,103 @@ TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCountin
   EXPECT_TRUE(resend_parsed->ok);
   EXPECT_EQ(store.size(), entries_after_first);
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1700000000ULL), score_after_first);
+}
+
+// DEV-1529: an immediate Backspace penalizes only the rejected surface, on the
+// app row and with the context hash, and teaches the converter nothing.
+TEST_F(DispatcherTest, CommitCorrectionUndoRecordsOnlyTheRejectOnTheAppRow) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindUndo);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.left_context = "今日の";
+  request.secure = false;
+  request.learning_allowed = true;
+  request.app = ipc::AppIdentity{"Notepad.exe", "Notepad"};
+
+  const auto response = dispatcher.Dispatch(
+      MakeReq(52, ipc::MessageType::CommitCorrection, ipc::BuildCommitCorrectionRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->type, ipc::MessageType::CommitCorrection);
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+
+  EXPECT_EQ(store.size(), 1u);
+  const auto* rows = store.Rows("かんじ", "幹事");
+  ASSERT_NE(rows, nullptr);
+  const auto row = rows->find("notepad.exe");
+  ASSERT_NE(row, rows->end());
+  EXPECT_EQ(row->second.reject_count, 1u);
+  EXPECT_EQ(row->second.accept_count, 0u);
+  EXPECT_EQ(row->second.last_event, azookey::learning::LearningEventType::CorrectionReject);
+  EXPECT_EQ(row->second.context_hash, azookey::learning::ContextHash("今日の"));
+}
+
+TEST_F(DispatcherTest, CommitCorrectionReconvertRecordsBothAndDeduplicatesResends) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindReconvert);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.selected_surface = "漢字";
+  request.observation_id = "tip-1:12";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto payload = ipc::BuildCommitCorrectionRequest(request);
+
+  for (const uint64_t id : {53u, 3u}) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitCorrection, payload));
+    ASSERT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed->ok);
+  }
+
+  const auto* accepted = store.Rows("かんじ", "漢字");
+  const auto* rejected = store.Rows("かんじ", "幹事");
+  ASSERT_NE(accepted, nullptr);
+  ASSERT_NE(rejected, nullptr);
+  ASSERT_EQ(accepted->count(""), 1u);
+  ASSERT_EQ(rejected->count(""), 1u);
+  EXPECT_EQ(accepted->at("").accept_count, 1u);
+  EXPECT_EQ(rejected->at("").reject_count, 1u);
+}
+
+TEST_F(DispatcherTest, CommitCorrectionIsDeniedWithoutEventPrivacyOrWithAMismatchedKind) {
+  ipc::CommitCorrectionRequest request;
+  request.kind = std::string(ipc::kCorrectionKindUndo);
+  request.reading = "かんじ";
+  request.rejected_surface = "幹事";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto ok_of = [&](uint64_t id, const std::string& payload) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitCorrection, payload));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseCommitObservationResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed && parsed->ok;
+  };
+
+  // No secure_flag capability in the handshake: learning is refused outright.
+  EXPECT_FALSE(ok_of(54, ipc::BuildCommitCorrectionRequest(request)));
+
+  EnableEventPrivacy(dispatcher);
+  auto secure = request;
+  secure.secure = true;
+  EXPECT_FALSE(ok_of(55, ipc::BuildCommitCorrectionRequest(secure)));
+  auto not_allowed = request;
+  not_allowed.learning_allowed = false;
+  EXPECT_FALSE(ok_of(56, ipc::BuildCommitCorrectionRequest(not_allowed)));
+  // An undo that names a selected surface would record an accept it did not mean.
+  auto mismatched = request;
+  mismatched.selected_surface = "漢字";
+  EXPECT_FALSE(ok_of(57, ipc::BuildCommitCorrectionRequest(mismatched)));
+  EXPECT_EQ(store.size(), 0u);
 }
 
 TEST_F(DispatcherTest, CommitSegmentsSkipsAutomaticPunctuationAndDeduplicates) {
@@ -2168,6 +2358,40 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_EQ(parsed->learning_entries, 0u);
   EXPECT_EQ(parsed->user_dict_entries, 0u);
   EXPECT_EQ(parsed->fallback_state, "healthy");
+  // No layer state was injected, so the field is left out.
+  EXPECT_FALSE(parsed->neologd_layer.has_value());
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsReportsTheNeologdLayerState) {
+  auto config = DefaultDispatcherConfig();
+  config.neologd_layer = std::make_shared<azookey::host::NeologdLayerState>();
+  azookey::host::Dispatcher layer_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto layer_of = [&](uint64_t id) {
+    const auto response =
+        layer_dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryDiagnostics, "{}"));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryDiagnostics(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->neologd_layer : std::nullopt;
+  };
+
+  auto layer = layer_of(702);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerNotRequested);
+  EXPECT_FALSE(layer->reason.has_value());
+
+  config.neologd_layer->Set(ipc::kNeologdLayerError, std::string("pack download failed"));
+  layer = layer_of(703);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerError);
+  EXPECT_EQ(layer->reason, std::optional<std::string>("pack download failed"));
+
+  config.neologd_layer->Set(ipc::kNeologdLayerReady);
+  layer = layer_of(704);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->state, ipc::kNeologdLayerReady);
+  EXPECT_FALSE(layer->reason.has_value());
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsModelFailureAndDisabledModelWithoutChangingState) {
@@ -2354,6 +2578,40 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
   EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
 
+  write_settings(R"({"privacy":{"mode":"offline"},"autoWordRegistration":{
+                    "trendingEnabled":true,"trendingIntervalHours":6,"registrationMode":"auto"}})");
+  const auto offline = second.Dispatch(MakeReq(743, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(offline);
+  const auto offline_payload = ipc::ParseUpdateConfigResponse(offline->payload_json);
+  ASSERT_TRUE(offline_payload);
+  ASSERT_TRUE(offline_payload->ok);
+  ASSERT_EQ(applied_configs.size(), 2u);
+  EXPECT_FALSE(applied_configs.back().auto_word_trending_enabled);
+  EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
+  EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
+  EXPECT_TRUE(settings_store.settings().auto_word.trending_enabled);
+
+  write_settings("{ invalid json");
+  const auto invalid_offline = first.Dispatch(MakeReq(744, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(invalid_offline);
+  const auto invalid_offline_payload =
+      ipc::ParseUpdateConfigResponse(invalid_offline->payload_json);
+  ASSERT_TRUE(invalid_offline_payload);
+  EXPECT_FALSE(invalid_offline_payload->ok);
+  EXPECT_EQ(applied_configs.size(), 2u);
+  EXPECT_FALSE(engine.config().auto_word_trending_enabled);
+
+  write_settings(R"({"privacy":{"mode":"normal"},"autoWordRegistration":{
+                    "trendingEnabled":true,"trendingIntervalHours":6,"registrationMode":"auto"}})");
+  const auto resumed = first.Dispatch(MakeReq(745, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resumed);
+  const auto resumed_payload = ipc::ParseUpdateConfigResponse(resumed->payload_json);
+  ASSERT_TRUE(resumed_payload);
+  ASSERT_TRUE(resumed_payload->ok);
+  ASSERT_EQ(applied_configs.size(), 3u);
+  EXPECT_TRUE(applied_configs.back().auto_word_trending_enabled);
+  EXPECT_TRUE(settings_store.settings().auto_word.trending_enabled);
+
   write_settings(R"({"safeMode":{"enabled":true},"autoWordRegistration":{
                     "trendingEnabled":true,"trendingIntervalHours":12}})");
   const auto safe = second.Dispatch(MakeReq(741, ipc::MessageType::UpdateConfig, "{}"));
@@ -2361,7 +2619,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   const auto safe_payload = ipc::ParseUpdateConfigResponse(safe->payload_json);
   ASSERT_TRUE(safe_payload);
   ASSERT_TRUE(safe_payload->ok);
-  ASSERT_EQ(applied_configs.size(), 2u);
+  ASSERT_EQ(applied_configs.size(), 4u);
   EXPECT_FALSE(applied_configs.back().auto_word_trending_enabled);
   EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 12u);
   EXPECT_FALSE(applied_configs.back().auto_word_auto_register);
@@ -2373,7 +2631,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   const auto invalid_payload = ipc::ParseUpdateConfigResponse(invalid->payload_json);
   ASSERT_TRUE(invalid_payload);
   EXPECT_FALSE(invalid_payload->ok);
-  EXPECT_EQ(applied_configs.size(), 2u);
+  EXPECT_EQ(applied_configs.size(), 4u);
   EXPECT_FALSE(engine.config().auto_word_trending_enabled);
   EXPECT_EQ(engine.config().auto_word_trending_interval_hours, 12u);
 }
@@ -2956,10 +3214,20 @@ TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
     observation.secure = false;
     observation.learning_allowed = true;
     const auto before = store.size();
+    ipc::CommitCorrectionRequest correction;
+    correction.kind = std::string(ipc::kCorrectionKindReconvert);
+    correction.reading = commit.reading;
+    correction.rejected_surface = "あずきー社";
+    correction.selected_surface = commit.chosen.surface;
+    correction.secure = false;
+    correction.learning_allowed = true;
     for (auto type :
-         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation,
+          ipc::MessageType::CommitCorrection}) {
       const auto payload = type == ipc::MessageType::CommitObservation
                                ? ipc::BuildCommitObservationRequest(commit)
+                           : type == ipc::MessageType::CommitCorrection
+                               ? ipc::BuildCommitCorrectionRequest(correction)
                                : ipc::BuildCommitSegmentsObservationRequest(segments);
       const auto response = target.Dispatch(MakeReq(9300, type, payload));
       ASSERT_TRUE(response);
@@ -3502,11 +3770,109 @@ TEST_F(DispatcherTest, LearningDataRequestsNeedAnAuthenticatedSession) {
   EXPECT_EQ(listed->error, "not_authenticated");
   for (const auto type :
        {ipc::MessageType::ForgetLearningEntry, ipc::MessageType::ExportLearningData,
-        ipc::MessageType::ImportLearningData}) {
+        ipc::MessageType::ImportLearningData, ipc::MessageType::ResetLearningStore,
+        ipc::MessageType::QueryPersona}) {
     const auto reply = token_dispatcher.Dispatch(MakeReq(721, type, "{}"));
     ASSERT_TRUE(reply);
     EXPECT_NE(reply->payload_json.find("not_authenticated"), std::string::npos);
   }
+}
+
+// learning-data-management-spec section 4.6: the reset empties the store on
+// disk, so a fresh load finds nothing, and an unknown store is refused.
+TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheStoreAndItsFile) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "にほん";
+  commit.chosen = {"日本", "にほん", 1.0, "model"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(730, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  ASSERT_TRUE(engine.FlushLearningStore());
+  ASSERT_EQ(store.size(), 1u);
+
+  const auto reset_of = [&](uint64_t id, const std::string& name) {
+    ipc::ResetLearningStoreRequest request;
+    request.store = name;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        id, ipc::MessageType::ResetLearningStore, ipc::BuildResetLearningStoreRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseResetLearningStoreResponse(response->payload_json) : std::nullopt;
+  };
+  const auto reset = reset_of(731, "learning");
+  ASSERT_TRUE(reset.has_value());
+  EXPECT_TRUE(reset->ok);
+  EXPECT_FALSE(reset->error.has_value());
+  EXPECT_EQ(store.size(), 0u);
+  azookey::learning::LearningStore reloaded(learning_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.size(), 0u);
+
+  ipc::AddUserWordRequest add;
+  add.word = "azooKey";
+  add.ruby = "あずきー";
+  ASSERT_TRUE(dispatcher.Dispatch(
+      MakeReq(732, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))));
+  ASSERT_FALSE(user_dict.Lookup("あずきー").empty());
+  const auto user_dict_reset = reset_of(733, "user_dict");
+  ASSERT_TRUE(user_dict_reset.has_value());
+  EXPECT_TRUE(user_dict_reset->ok);
+  EXPECT_TRUE(user_dict.Lookup("あずきー").empty());
+
+  // The fixture engine has no typo store.
+  const auto typo_reset = reset_of(734, "typo");
+  ASSERT_TRUE(typo_reset.has_value());
+  EXPECT_FALSE(typo_reset->ok);
+  EXPECT_EQ(typo_reset->error, std::optional<std::string>("store_unavailable"));
+
+  const auto unknown = reset_of(735, "everything");
+  ASSERT_TRUE(unknown.has_value());
+  EXPECT_FALSE(unknown->ok);
+  EXPECT_EQ(unknown->error, std::optional<std::string>("invalid_request"));
+}
+
+// rich-features-spec X-2-7: QueryPersona returns the cached ratios, and only
+// the ratios.
+TEST_F(DispatcherTest, QueryPersonaReturnsTheRatiosOfTheLearningStore) {
+  EnableEventPrivacy(dispatcher);
+  for (const auto& [reading, surface] :
+       {std::pair{"します", "します"}, std::pair{"だよ", "だよ"}, std::pair{"ゆーざー", "user_id"},
+        std::pair{"にほん", "日本"}}) {
+    ipc::CommitObservationRequest commit;
+    commit.secure = false;
+    commit.learning_allowed = true;
+    commit.reading = reading;
+    commit.chosen = {surface, reading, 1.0, "model"};
+    ASSERT_TRUE(dispatcher.Dispatch(MakeReq(740, ipc::MessageType::CommitObservation,
+                                            ipc::BuildCommitObservationRequest(commit))));
+  }
+  engine.RefreshPersona();
+
+  const auto response = dispatcher.Dispatch(MakeReq(741, ipc::MessageType::QueryPersona, "{}"));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->type, ipc::MessageType::QueryPersona);
+  const auto persona = ipc::ParseQueryPersonaResponse(response->payload_json);
+  ASSERT_TRUE(persona.has_value());
+  EXPECT_TRUE(persona->ok);
+  EXPECT_EQ(persona->sample_count, 4u);
+  EXPECT_DOUBLE_EQ(persona->polite_ratio, 0.25);
+  EXPECT_DOUBLE_EQ(persona->casual_ratio, 0.25);
+  EXPECT_DOUBLE_EQ(persona->technical_ratio, 0.25);
+  EXPECT_DOUBLE_EQ(persona->kaomoji_ratio, 0.0);
+  EXPECT_GT(persona->computed_at_epoch_sec, 0u);
+  EXPECT_EQ(response->payload_json.find("user_id"), std::string::npos);
+
+  // The cache is what the 24-hour worker refreshes; a reset refreshes it too.
+  ipc::ResetLearningStoreRequest reset;
+  reset.store = "learning";
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(742, ipc::MessageType::ResetLearningStore,
+                                          ipc::BuildResetLearningStoreRequest(reset))));
+  const auto after = dispatcher.Dispatch(MakeReq(743, ipc::MessageType::QueryPersona, "{}"));
+  ASSERT_TRUE(after.has_value());
+  const auto emptied = ipc::ParseQueryPersonaResponse(after->payload_json);
+  ASSERT_TRUE(emptied.has_value());
+  EXPECT_EQ(emptied->sample_count, 0u);
 }
 
 namespace {
@@ -3538,7 +3904,171 @@ void RemoveLearningFiles(const std::filesystem::path& path) {
     std::filesystem::remove(backup, ec);
   }
 }
+
+std::string ReadAllBytes(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void WriteAllBytes(const std::filesystem::path& path, const std::string& bytes) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out << bytes;
+}
 }  // namespace
+
+// learning-data-management-spec section 4.6 step 1: a store whose file could
+// not be read cannot be emptied on disk, so the reset refuses before changing
+// anything rather than answering ok over data that would come back.
+TEST_F(DispatcherTest, ResetLearningStoreRefusesAStoreWhoseFileCouldNotBeRead) {
+  const auto v2_file = azookey::learning::EncryptedPathFor(
+      azookey::learning::LearningStoreV2PathFor(std::filesystem::path(learning_path)));
+  WriteAllBytes(v2_file, "not a protected blob");
+  ASSERT_FALSE(store.Load());
+  ASSERT_TRUE(store.save_blocked());
+
+  ipc::ResetLearningStoreRequest request;
+  request.store = "learning";
+  const auto response = dispatcher.Dispatch(MakeReq(750, ipc::MessageType::ResetLearningStore,
+                                                    ipc::BuildResetLearningStoreRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseResetLearningStoreResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, std::optional<std::string>("save_failed"));
+  EXPECT_EQ(ReadAllBytes(v2_file), "not a protected blob");
+  RemoveLearningFiles(learning_path);
+}
+
+// Steps 2 to 4: the v2 file is emptied first; when the M7 file then cannot be
+// rewritten, the snapshot goes back into memory and onto the v2 file.
+TEST_F(DispatcherTest, ResetLearningStoreRestoresTheStoreWhenTheM7FileCannotBeRewritten) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "にほん";
+  commit.chosen = {"日本", "にほん", 1.0, "model"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(751, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  ASSERT_TRUE(engine.FlushLearningStore());
+  const auto m7_file = azookey::learning::EncryptedPathFor(std::filesystem::path(learning_path));
+  WriteAllBytes(m7_file, "not a protected blob");
+
+  ipc::ResetLearningStoreRequest request;
+  request.store = "learning";
+  const auto response = dispatcher.Dispatch(MakeReq(752, ipc::MessageType::ResetLearningStore,
+                                                    ipc::BuildResetLearningStoreRequest(request)));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseResetLearningStoreResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, std::optional<std::string>("save_failed"));
+  EXPECT_EQ(store.size(), 1u);
+  EXPECT_EQ(ReadAllBytes(m7_file), "not a protected blob");
+  azookey::learning::LearningStore reloaded(learning_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.size(), 1u);
+  RemoveLearningFiles(learning_path);
+}
+
+TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
+  const auto typo_path = TempPath("azookey_dispatcher_reset_typo.tsv");
+  const auto mining_path = TempPath("azookey_dispatcher_reset_mining.tsv");
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(typo.Observe("こんちには", "こんにちは", 1700000000));
+  mining.Observe("azooKey社", "あずきーしゃ", 1700000000, 3, false);
+  ASSERT_EQ(typo.size(), 1u);
+  ASSERT_FALSE(mining.All().empty());
+  engine.SetTypoStore(&typo);
+  engine.SetAutoWordStore(&mining);
+
+  for (const auto* name : {"typo", "auto_word"}) {
+    ipc::ResetLearningStoreRequest request;
+    request.store = name;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        753, ipc::MessageType::ResetLearningStore, ipc::BuildResetLearningStoreRequest(request)));
+    ASSERT_TRUE(response.has_value()) << name;
+    const auto parsed = ipc::ParseResetLearningStoreResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value()) << name;
+    EXPECT_TRUE(parsed->ok) << name;
+  }
+  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_TRUE(mining.All().empty());
+  azookey::learning::TypoCorrectionStore typo_reloaded(typo_path,
+                                                       &azookey::learning::test::Crypto());
+  ASSERT_TRUE(typo_reloaded.Load());
+  EXPECT_EQ(typo_reloaded.size(), 0u);
+
+  engine.SetTypoStore(nullptr);
+  engine.SetAutoWordStore(nullptr);
+  std::error_code ec;
+  for (const auto& path : {typo_path, mining_path}) {
+    std::filesystem::remove(path, ec);
+    std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  }
+}
+
+TEST_F(DispatcherTest, ResetLearningStoreRefusesUnreadableTypoAndAutoWordFiles) {
+  const auto typo_path = TempPath("azookey_dispatcher_reset_blocked_typo.tsv");
+  const auto mining_path = TempPath("azookey_dispatcher_reset_blocked_mining.tsv");
+  for (const auto& path : {typo_path, mining_path}) {
+    WriteAllBytes(azookey::learning::EncryptedPathFor(path), "not a protected blob");
+  }
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
+  ASSERT_FALSE(typo.Load());
+  ASSERT_FALSE(mining.Load());
+  ASSERT_TRUE(typo.save_blocked());
+  ASSERT_TRUE(mining.save_blocked());
+  engine.SetTypoStore(&typo);
+  engine.SetAutoWordStore(&mining);
+
+  for (const auto* name : {"typo", "auto_word"}) {
+    ipc::ResetLearningStoreRequest request;
+    request.store = name;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        754, ipc::MessageType::ResetLearningStore, ipc::BuildResetLearningStoreRequest(request)));
+    ASSERT_TRUE(response.has_value()) << name;
+    const auto parsed = ipc::ParseResetLearningStoreResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value()) << name;
+    EXPECT_FALSE(parsed->ok) << name;
+    EXPECT_EQ(parsed->error, std::optional<std::string>("save_failed")) << name;
+  }
+  for (const auto& path : {typo_path, mining_path}) {
+    EXPECT_EQ(ReadAllBytes(azookey::learning::EncryptedPathFor(path)), "not a protected blob");
+  }
+
+  engine.SetTypoStore(nullptr);
+  engine.SetAutoWordStore(nullptr);
+  std::error_code ec;
+  for (const auto& path : {typo_path, mining_path}) {
+    std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  }
+}
+
+// The persona follows a forget of the kana channel, as it follows a reset.
+TEST_F(DispatcherTest, ForgettingALearningPairRefreshesThePersona) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "します";
+  commit.chosen = {"します", "します", 1.0, "model"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(755, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  engine.RefreshPersona();
+  ASSERT_EQ(engine.CurrentPersona()->persona.sample_count, 1u);
+
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.reading = "します";
+  forget.surface = "します";
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(756, ipc::MessageType::ForgetLearningEntry,
+                                          ipc::BuildForgetLearningEntryRequest(forget))));
+  EXPECT_EQ(engine.CurrentPersona()->persona.sample_count, 0u);
+  RemoveLearningFiles(learning_path);
+}
 
 TEST_F(DispatcherTest, LearningDataListsAndForgetsTheEnglishChannel) {
   const std::filesystem::path english_path = "azookey_dispatcher_test_english.tsv";

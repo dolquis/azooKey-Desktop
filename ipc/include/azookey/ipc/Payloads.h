@@ -53,6 +53,23 @@ struct HealthPayload {
   std::optional<std::string> last_error;
 };
 
+// State of the neologd_lexicon layer in this Host process
+// (auto-word-registration-spec section 15.14). The Host handles the pack only
+// at startup, so a consent given after startup stays "not_requested" until
+// the Host restarts.
+inline constexpr std::string_view kNeologdLayerNotRequested = "not_requested";
+inline constexpr std::string_view kNeologdLayerLoading = "loading";
+inline constexpr std::string_view kNeologdLayerReady = "ready";
+inline constexpr std::string_view kNeologdLayerMissingPack = "missing_pack";
+inline constexpr std::string_view kNeologdLayerError = "error";
+
+struct NeologdLayerStatus {
+  std::string state{kNeologdLayerNotRequested};
+  // Fixed failure class from the neologd_pack_load log; never a path or a
+  // server response. Present only for "error".
+  std::optional<std::string> reason;
+};
+
 struct QueryDiagnosticsPayload {
   bool model_loaded{false};
   std::optional<std::string> loaded_model_path;
@@ -66,6 +83,8 @@ struct QueryDiagnosticsPayload {
   uint64_t user_dict_entries{};
   std::string fallback_state;
   std::optional<std::string> last_error;
+  // Protocol v1 additive field (DEV-1534). Absent from Hosts that predate it.
+  std::optional<NeologdLayerStatus> neologd_layer;
 };
 
 struct LoadModelRequest {
@@ -149,11 +168,20 @@ struct QueryCandidatesResponse {
 struct QueryLiveConversionRequest {
   std::string kana;
   std::string context;
+  // M59 dynamic punctuation (dynamic-punctuation-spec section 7.1). The TIP
+  // decides the timing (section 7.1.1); absent fields keep the pre-M59 shape
+  // (no punctuation, "ja").
+  bool auto_punctuation{false};
+  std::string punctuation_style{"ja"};
 };
 
 struct QueryLiveConversionResponse {
   std::string surface;
   double confidence{};  // Normalized to [0.0, 1.0].
+  // Set when punctuation insertion was enabled for this request (section
+  // 7.2): the segments of `surface`, with any inserted mark flagged
+  // auto_punctuation (section 7.4). Omitted from the wire when empty.
+  std::vector<LiveSegment> segments;
 };
 
 // request_id travels in the Envelope. Phase 5 supports only mode="word".
@@ -254,6 +282,33 @@ struct CommitSegmentsObservationRequest {
 std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
 std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
     const std::string& json);
+
+// Correction of a commit (user-learning-enhancement-spec section 4.1, DEV-1529).
+// "undo" is an immediate Backspace right after the commit: the rejected
+// surface is penalized and nothing is accepted. "reconvert" replaces the
+// rejected surface with selected_surface. Sent only to Hosts that advertise
+// the "commit_correction" capability; the answer is CommitObservationResponse.
+inline constexpr std::string_view kCorrectionKindUndo = "undo";
+inline constexpr std::string_view kCorrectionKindReconvert = "reconvert";
+
+struct CommitCorrectionRequest {
+  std::string kind;
+  std::string reading;
+  std::string rejected_surface;
+  // Required for "reconvert" and must differ from rejected_surface; absent
+  // for "undo".
+  std::optional<std::string> selected_surface;
+  std::string left_context;
+  uint64_t timestamp_ms{};
+  std::string observation_id;
+  // Missing or invalid event privacy is denied.
+  bool secure{true};
+  bool learning_allowed{false};
+  std::optional<AppIdentity> app;
+};
+
+std::string BuildCommitCorrectionRequest(const CommitCorrectionRequest& p);
+std::optional<CommitCorrectionRequest> ParseCommitCorrectionRequest(const std::string& json);
 
 struct AddUserWordRequest {
   std::string word;
@@ -596,5 +651,41 @@ std::optional<ExportLearningDataRequest> ParseExportLearningDataRequest(const st
 std::optional<ExportLearningDataResponse> ParseExportLearningDataResponse(const std::string& json);
 std::optional<ImportLearningDataRequest> ParseImportLearningDataRequest(const std::string& json);
 std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const std::string& json);
+
+// Whole-store reset (learning-data-management-spec section 4.6). Capability
+// "learning_reset". Errors are the kLearningDataError* codes.
+struct ResetLearningStoreRequest {
+  // "learning" | "user_dict" | "typo" | "auto_word"; required.
+  std::string store;
+};
+
+struct ResetLearningStoreResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+};
+
+std::string BuildResetLearningStoreRequest(const ResetLearningStoreRequest& p);
+std::string BuildResetLearningStoreResponse(const ResetLearningStoreResponse& p);
+std::optional<ResetLearningStoreRequest> ParseResetLearningStoreRequest(const std::string& json);
+std::optional<ResetLearningStoreResponse> ParseResetLearningStoreResponse(const std::string& json);
+
+// Persona ratios (rich-features-spec X-2-7). Capability "persona"; the request
+// payload is an empty object. Only the four ratios and their basis are sent,
+// never a surface. A failure carries kLearningDataErrorNotAuthenticated or
+// kLearningDataErrorStoreUnavailable.
+struct QueryPersonaResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+  double polite_ratio{};
+  double casual_ratio{};
+  double technical_ratio{};
+  double kaomoji_ratio{};
+  // Commits the ratios were computed from; 0 means there is no data yet.
+  uint64_t sample_count{};
+  uint64_t computed_at_epoch_sec{};
+};
+
+std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p);
+std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json);
 
 }  // namespace azookey::ipc

@@ -416,6 +416,70 @@ std::optional<std::string> ComputeFileSha256(const std::filesystem::path& path,
 #endif
 }
 
+std::optional<std::string> ComputeSha256(std::string_view bytes, std::string* error) {
+  std::string ignored;
+  std::string& sink = error ? *error : ignored;
+#ifdef _WIN32
+  BCRYPT_ALG_HANDLE algorithm_raw = nullptr;
+  NTSTATUS status =
+      BCryptOpenAlgorithmProvider(&algorithm_raw, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+  if (status < 0) {
+    sink = "opening SHA256 provider failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  UniqueAlgorithmHandle algorithm(algorithm_raw);
+
+  DWORD object_size = 0;
+  DWORD copied = 0;
+  status =
+      BCryptGetProperty(algorithm.get(), BCRYPT_OBJECT_LENGTH,
+                        reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size), &copied, 0);
+  if (status < 0) {
+    sink = "querying SHA256 object length failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  std::vector<UCHAR> object(object_size);
+  BCRYPT_HASH_HANDLE hash_raw = nullptr;
+  status = BCryptCreateHash(algorithm.get(), &hash_raw, object.data(), object_size, nullptr, 0, 0);
+  if (status < 0) {
+    sink = "creating SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  UniqueHashHandle hash(hash_raw);
+
+  while (!bytes.empty()) {
+    // Bound each update before narrowing size_t to CNG's ULONG byte count.
+    const auto chunk_size = std::min(bytes.size(), std::size_t{65'536});
+    status = BCryptHashData(hash.get(), reinterpret_cast<PUCHAR>(const_cast<char*>(bytes.data())),
+                            static_cast<ULONG>(chunk_size), 0);
+    if (status < 0) {
+      sink = "updating SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+      return std::nullopt;
+    }
+    bytes.remove_prefix(chunk_size);
+  }
+
+  std::array<UCHAR, 32> digest{};
+  status = BCryptFinishHash(hash.get(), digest.data(), static_cast<ULONG>(digest.size()), 0);
+  if (status < 0) {
+    sink = "finishing SHA256 hash failed (NTSTATUS " + std::to_string(status) + ")";
+    return std::nullopt;
+  }
+  constexpr std::string_view kHex = "0123456789abcdef";
+  std::string encoded;
+  encoded.reserve(digest.size() * std::size_t{2});
+  for (const auto byte : digest) {
+    encoded.push_back(kHex.at(byte >> 4));
+    encoded.push_back(kHex.at(byte & 0x0f));
+  }
+  return encoded;
+#else
+  (void)bytes;
+  sink = "SHA256 is only supported on Windows";
+  return std::nullopt;
+#endif
+}
+
 HttpDownloader::HttpDownloader(std::wstring user_agent) : user_agent_(std::move(user_agent)) {}
 
 HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) const {

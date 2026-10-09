@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace azookey::host {
 
@@ -55,6 +56,11 @@ struct HttpDownloadResult {
 // Lowercase hex SHA-256 of a file (Windows CNG). nullopt with *error set when
 // the file cannot be read, and always on platforms without CNG.
 std::optional<std::string> ComputeFileSha256(const std::filesystem::path& path, std::string* error);
+
+// Lowercase hex SHA-256 of exactly these bytes, including embedded NULs (Windows CNG).
+// Empty input is valid. Returns nullopt on failure or on platforms without CNG.
+// error may be null; otherwise failures set *error.
+std::optional<std::string> ComputeSha256(std::string_view bytes, std::string* error);
 
 class HttpDownloader {
  public:

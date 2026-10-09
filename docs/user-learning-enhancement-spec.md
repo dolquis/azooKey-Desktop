@@ -205,6 +205,38 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 候補の最上位に出る。どの event も `last_updated_epoch_sec`、`event_type`、
 `context_hash` をそのイベントの値で上書きする。
 
+### 4.1 訂正の IPC（`CommitCorrection`）
+
+即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と Host 側の処理を定める。
+TIP 側の検出と送信は DEV-1529 の TIP 部分で追跡する。Host は Handshake の capability に
+`commit_correction` を載せ、TIP は Host がそれを告知したときだけ送る。
+応答は `CommitObservation` と同じ `{ "ok": bool }` である。
+
+| フィールド | 型 | 意味 |
+|---|---|---|
+| `kind` | `"undo"` \| `"reconvert"` | `undo` は即 Backspace、`reconvert` は再変換 |
+| `reading` | str（非空） | 訂正した文節の読み |
+| `rejected_surface` | str（非空） | 取り消した、または置き換えた確定表記 |
+| `selected_surface` | str（任意） | `reconvert` で選び直した表記。`undo` では送らない |
+| `left_context` | str | 文節より前の確定済みテキスト。`context_hash` の入力 |
+| `timestamp_ms` | uint | 送信時刻 |
+| `observation_id` | str | 再送の重複排除キー。訂正イベントごとに固有の値とし、訂正対象の確定に付けた id を再利用しない（Host は `CommitObservation` と同じ集合で重複を判定する） |
+| `secure` / `learning_allowed` | bool | `CommitObservation` と同じ event privacy。欠落時は `true` / `false` |
+| `app` | `{process_name, window_class}`（任意） | 前面アプリ。欠落時は大域行に記録する |
+
+`kind` と `selected_surface` は一致しなければならない。`undo` に `selected_surface` がある要求、
+`reconvert` に `selected_surface` が無い、空、または `rejected_surface` と同じ要求は不正とし、
+Host は何も記録せず `ok: false` を返す。
+
+Host は `CommitObservation` と同じ判定（Handshake の `secure_flag`、要求の `secure` /
+`learning_allowed`、Host の privacy 設定）で学習を許すかを決め、許さないときは `ok: false` を返す。
+許すときは、`observation_id` が既に適用済みなら記録せずに `ok: true` を返す。それ以外は、
+`app` の行と `left_context` の `context_hash` で次を記録する。
+
+- `undo`: `rejected_surface` の `correction_reject` だけを記録する。変換器には何も教えない。
+- `reconvert`: `selected_surface` の `correction_accept` と `rejected_surface` の
+  `correction_reject` を記録し、`selected_surface` を確定として変換器へ渡す。
+
 ## 5. 時間減衰
 
 ```
@@ -425,6 +457,9 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 - `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
   実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
   は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可
+- 即 Backspace と再変換が `CommitCorrection`（§4.1）で Host に届き、`correction_reject` /
+  `correction_accept` が app 行と `context_hash` 付きで記録される。privacy で拒否された訂正と
+  再送は記録しない
 - `event_type` 列が拡張可能な enum として実装され、`commit` /
   `correction_accept` / `correction_reject` を記録できる。M55 完了後は
   同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は

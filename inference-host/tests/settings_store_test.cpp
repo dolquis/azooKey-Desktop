@@ -875,6 +875,34 @@ TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
   EXPECT_EQ(config.auto_word_trending_interval_hours, 24u);
 }
 
+TEST(SettingsStoreTest, OfflineModeSuppressesTrendingWithoutChangingRegistrationPreference) {
+  ScopedTempDirectory temp("azookey_settings_offline_trending");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"privacy":{"mode":"offline"},"autoWordRegistration":{
+    "trendingEnabled":true,"trendingIntervalHours":6,"registrationMode":"auto"}})");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_TRUE(store.settings().offline_mode);
+  EXPECT_TRUE(store.settings().auto_word.trending_enabled);
+  auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, store.settings());
+  EXPECT_FALSE(config.auto_word_trending_enabled);
+  EXPECT_EQ(config.auto_word_trending_interval_hours, 6u);
+  EXPECT_TRUE(config.auto_word_auto_register);
+  EXPECT_TRUE(config.auto_word_mining_enabled);
+
+  // Private mode limits user-data transmission, not public dictionary downloads.
+  for (const auto* privacy :
+       {R"("privacy":{"mode":"normal"},)", R"("privacy":{"mode":"private"},)", ""}) {
+    WriteText(path,
+              std::string("{") + privacy + R"("autoWordRegistration":{"trendingEnabled":true}})");
+    ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    EXPECT_FALSE(store.settings().offline_mode);
+    EXPECT_TRUE(store.settings().auto_word.trending_enabled);
+    config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, store.settings());
+    EXPECT_TRUE(config.auto_word_trending_enabled);
+  }
+}
+
 TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   ScopedTempDirectory temp("azookey_settings_typo_auto_word_empty");
   const auto& dir = temp.path();

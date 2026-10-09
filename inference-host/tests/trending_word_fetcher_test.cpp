@@ -69,7 +69,7 @@ class TrendingWordFetcherTest : public ::testing::Test {
     dependencies.download = [this](const HttpDownloadRequest& request) {
       ++download_calls_;
       EXPECT_EQ(request.url, L"https://fixture.invalid/trending-words.json");
-      EXPECT_EQ(request.max_bytes, 4u * 1024 * 1024);
+      EXPECT_EQ(request.max_bytes, 1024u * 1024);
       EXPECT_TRUE(static_cast<bool>(request.cancelled));
       std::filesystem::copy_file(directory_ / "source.json", request.destination,
                                  std::filesystem::copy_options::overwrite_existing);
@@ -112,6 +112,50 @@ TEST_F(TrendingWordFetcherTest, LocalFixtureIsVerifiedCachedAndPersisted) {
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.SerializeText(), store_->SerializeText());
   EXPECT_FALSE(std::filesystem::exists(Cache().wstring() + L".download"));
+}
+
+TEST_F(TrendingWordFetcherTest, AssetByteLimitMatchesJsonParserAndPreservesStoreOnOverflow) {
+  std::string text = kAsset;
+  text.resize(1024u * 1024, ' ');
+  SetAsset(text);
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              Dependencies());
+  fetcher.UpdateSettings(true, 24, false);
+  ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+  const auto before = store_->SerializeText();
+  const auto cache = ReadCache();
+  text += ' ';
+  SetAsset(text);
+  EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Failed);
+  EXPECT_EQ(store_->SerializeText(), before);
+  EXPECT_EQ(ReadCache(), cache);
+}
+
+TEST_F(TrendingWordFetcherTest, HostCommitCallbackOwnsIngestionAndFailedCommitCanRetry) {
+  SeedExisting();
+  const auto before = store_->SerializeText();
+  auto dependencies = Dependencies();
+  unsigned commits = 0;
+  dependencies.ingest_and_save = [&](const std::vector<azookey::learning::AutoWord>& words,
+                                     uint64_t now_epoch, bool auto_promote) {
+    ++commits;
+    EXPECT_EQ(words.size(), 2u);
+    EXPECT_EQ(now_epoch, epoch_);
+    EXPECT_TRUE(auto_promote);
+    EXPECT_EQ(ReadCache(), kAsset);
+    if (commits == 1) return false;
+    store_->IngestTrending(words, now_epoch, auto_promote);
+    return store_->Save();
+  };
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              std::move(dependencies));
+  fetcher.UpdateSettings(true, 24, true);
+  EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Failed);
+  EXPECT_EQ(store_->SerializeText(), before);
+  EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+  EXPECT_EQ(store_->LookupConfirmed("おしかつ").size(), 1u);
+  EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Unchanged);
+  EXPECT_EQ(commits, 2u);
 }
 
 TEST_F(TrendingWordFetcherTest, DisabledNeverEntersEitherSocketCreatingTransport) {

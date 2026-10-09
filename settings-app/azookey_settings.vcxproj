@@ -110,6 +110,8 @@
     <ClInclude Include="MainWindow.xaml.h"><DependentUpon>MainWindow.xaml</DependentUpon></ClInclude>
     <ClInclude Include="NeologdAttribution.h" />
     <ClInclude Include="ProfilesPane.h" />
+    <ClInclude Include="ProofreadModel.h" />
+    <ClInclude Include="ProofreadPane.h" />
     <ClInclude Include="SettingsDocument.h" />
     <ClInclude Include="SettingsFieldControls.h" />
     <ClInclude Include="SettingsFields.h" />
@@ -135,6 +137,8 @@
     <ClCompile Include="NeologdAttribution.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(AzooKeyNeologdPinSource)" Condition="'$(AzooKeyNeologdPinSource)'!=''"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ProfilesPane.cpp" />
+    <ClCompile Include="ProofreadModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ProofreadPane.cpp" />
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsFieldControls.cpp" />
     <ClCompile Include="SettingsFields.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

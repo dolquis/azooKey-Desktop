@@ -52,6 +52,7 @@ inline constexpr const char* kCapabilityBenchmarkModel = "benchmark_model";
 inline constexpr const char* kCapabilityLearningData = "learning_data_management";
 inline constexpr const char* kCapabilityLearningReset = "learning_reset";
 inline constexpr const char* kCapabilityPersona = "persona";
+inline constexpr const char* kCapabilityDetectAnomalies = "detect_anomalies";
 
 // Connects and completes the Handshake only, to learn whether the Host advertises `capability`
 // before the user is asked to confirm an operation. Ok means it does; Unsupported means it does
@@ -76,6 +77,10 @@ HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningSto
 // Persona ratios (rich-features-spec X-2-7); the request payload is an empty object.
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
     const SettingsIpcOptions& options);
+// Asks the Host's external AI backend for likely mistakes in a pasted text; the call waits as
+// long as a benchmark, because the answer comes from a remote service.
+HostCallResult<azookey::ipc::DetectAnomaliesResponse> RequestDetectAnomalies(
+    const SettingsIpcOptions& options, const azookey::ipc::DetectAnomaliesRequest& request);
 // QueryDiagnostics has no capability of its own: a Host that predates a field leaves it out of
 // the response, so the caller reads the optional fields.
 HostCallResult<azookey::ipc::QueryDiagnosticsPayload> RequestQueryDiagnostics(

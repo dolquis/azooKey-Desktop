@@ -63,6 +63,12 @@
                                 AutomationProperties.AutomationId="PersonaNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Contact" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem x:Name="ProofreadNavigationItem"
+                                x:Uid="ProofreadNavigationItem"
+                                Tag="Proofread"
+                                AutomationProperties.AutomationId="ProofreadNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Accept" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem x:Name="AdvancedNavigationItem"
                                 x:Uid="AdvancedNavigationItem"
                                 Tag="Advanced"
@@ -197,6 +203,8 @@
                 <StackPanel x:Name="ProfilesPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="PersonaPaneHost" Spacing="16" Visibility="Collapsed" />
+
+                <StackPanel x:Name="ProofreadPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="ModelsPaneHost" Spacing="16" Visibility="Collapsed" />
 

@@ -484,4 +484,30 @@
   <data name="Learning_ResetDoneTitle" xml:space="preserve"><value>削除しました</value></data>
   <data name="Learning_ResetDoneMessage" xml:space="preserve"><value>このタブのデータを削除しました。</value></data>
   <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>Host の状態: 不明な状態です（この設定アプリより新しい Host かもしれません）。</value></data>
+  <data name="ProofreadNavigationItem.Content" xml:space="preserve"><value>校正</value></data>
+  <data name="Proofread_Title" xml:space="preserve"><value>校正</value></data>
+  <data name="Proofread_Description" xml:space="preserve"><value>文章を貼り付けると、誤変換や誤りの疑いがある箇所を AI が探して一覧にします。アプリ内の文章を自動で読み取る機能は含みません。</value></data>
+  <data name="Proofread_ExternalNoticeTitle" xml:space="preserve"><value>本文は外部の AI サービスへ送られます</value></data>
+  <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、貼り付けた本文が、設定した外部の AI バックエンドへ送信されます。「AI」ペインの AI の設定と、プライバシーの AI に関する同意（AI 整文と同じ設定）が必要です。送りたくない文章は貼り付けないでください。</value></data>
+  <data name="Proofread_InputHeader" xml:space="preserve"><value>検査する文章</value></data>
+  <data name="Proofread_InputPlaceholder" xml:space="preserve"><value>ここに文章を貼り付けます</value></data>
+  <data name="Proofread_TooLargeSuffix" xml:space="preserve"><value>（60 KiB を超えているため送れません）</value></data>
+  <data name="Proofread_CheckButton" xml:space="preserve"><value>検査する</value></data>
+  <data name="Proofread_Checking" xml:space="preserve"><value>検査しています…</value></data>
+  <data name="Proofread_ProblemTitle" xml:space="preserve"><value>検査できませんでした</value></data>
+  <data name="Proofread_DoneTitle" xml:space="preserve"><value>検査しました</value></data>
+  <data name="Proofread_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
+  <data name="Proofread_EmptyInput" xml:space="preserve"><value>検査する文章を貼り付けてください。</value></data>
+  <data name="Proofread_TooLarge" xml:space="preserve"><value>文章が 60 KiB を超えているため、送信しませんでした。短く分けてください。</value></data>
+  <data name="Proofread_NoFindings" xml:space="preserve"><value>誤りの疑いがある箇所は見つかりませんでした。</value></data>
+  <data name="Proofread_RangeUnavailable" xml:space="preserve"><value>（箇所を特定できません）</value></data>
+  <data name="Proofread_SuggestionPrefix" xml:space="preserve"><value>候補: </value></data>
+  <data name="Proofread_Confidence" xml:space="preserve"><value>確信度</value></data>
+  <data name="Proofread_SelectButton" xml:space="preserve"><value>該当箇所を選択</value></data>
+  <data name="Proofread_Error_invalid_request" xml:space="preserve"><value>要求が不正です（文章が空か、大きすぎます）。</value></data>
+  <data name="Proofread_Error_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
+  <data name="Proofread_Error_unsupported" xml:space="preserve"><value>使える AI がありません。「AI」ペインで外部の AI バックエンドと API キーを設定し、プライバシーの AI に関する同意（AI 整文と同じ設定）を有効にしてください。</value></data>
+  <data name="Proofread_Error_blocked" xml:space="preserve"><value>プライバシーの設定により、この文章は AI へ送れません。</value></data>
+  <data name="Proofread_Error_backend_failed" xml:space="preserve"><value>AI サービスとの通信または応答の読み取りに失敗しました。時間をおいて試してください。</value></data>
+  <data name="Proofread_Error_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
 </root>

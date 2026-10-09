@@ -1205,10 +1205,11 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
 | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
 | Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
+| 校正 | 貼り付けた文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
 | 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
-モデル / 学習 / Persona のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
+モデル / 学習 / Persona / 校正のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
 ナビゲーションに置く。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
 保存ボタンが `model.selectedPath` を書く。選べるのは検証に通った GGUF だけである。
 Host が capability（`learning_reset` / `persona` など）を告知しないときは、その操作を送らず、
@@ -1222,7 +1223,6 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 
 | ペイン | 内容 | 使う Host 側の機能 |
 |---|---|---|
-| 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
 上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」は DEV-1532 で追う。
 

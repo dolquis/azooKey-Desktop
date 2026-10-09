@@ -7,10 +7,12 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -20,6 +22,7 @@
 
 #include "azookey/host/AiBackend.h"
 #include "azookey/host/HttpDownloader.h"
+#include "azookey/host/TrendingWordFetcher.h"
 
 namespace {
 
@@ -100,8 +103,10 @@ bool SendAll(SOCKET socket, std::string_view data) {
 class LocalHttpServer {
  public:
   LocalHttpServer(std::string body, bool honor_range, size_t request_count = 1,
-                  unsigned delay_ms = 0, unsigned status = 200)
+                  unsigned delay_ms = 0, unsigned status = 200,
+                  std::map<std::string, std::string> path_bodies = {})
       : body_(std::move(body)),
+        path_bodies_(std::move(path_bodies)),
         honor_range_(honor_range),
         request_count_(request_count),
         delay_ms_(delay_ms),
@@ -128,7 +133,7 @@ class LocalHttpServer {
       return;
     }
     port_ = ntohs(address.sin_port);
-    worker_ = std::thread([this] { Serve(); });
+    worker_ = std::thread([this, listener = socket_] { Serve(listener); });
   }
 
   ~LocalHttpServer() {
@@ -141,8 +146,8 @@ class LocalHttpServer {
   }
 
   bool ok() const { return socket_ != INVALID_SOCKET; }
-  std::wstring url() const {
-    return L"http://127.0.0.1:" + std::to_wstring(port_) + L"/model.gguf";
+  std::wstring url(std::wstring_view path = L"/model.gguf") const {
+    return L"http://127.0.0.1:" + std::to_wstring(port_) + std::wstring(path);
   }
   void Wait() {
     if (worker_.joinable()) worker_.join();
@@ -153,15 +158,25 @@ class LocalHttpServer {
   }
 
  private:
-  void Serve() {
+  void Serve(SOCKET listener) {
     for (size_t index = 0; index < request_count_; ++index) {
-      if (!ServeOne()) break;
+      if (!ServeOne(listener)) break;
     }
   }
 
-  bool ServeOne() {
-    const SOCKET client = accept(socket_, nullptr, nullptr);
+  bool ServeOne(SOCKET listener) {
+    const SOCKET client = accept(listener, nullptr, nullptr);
     if (client == INVALID_SOCKET) return false;
+    // A failed test may stop before sending every header or reading the body.
+    // Bound accepted sockets too; closing the listener only releases accept().
+    const DWORD timeout_ms = 5000;
+    if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                   sizeof(timeout_ms)) == SOCKET_ERROR ||
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                   sizeof(timeout_ms)) == SOCKET_ERROR) {
+      closesocket(client);
+      return false;
+    }
 
     std::string request;
     char buffer[1024];
@@ -186,6 +201,22 @@ class LocalHttpServer {
     }
     if (delay_ms_) std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms_));
 
+    std::string_view body = body_;
+    unsigned status = status_;
+    if (!path_bodies_.empty()) {
+      const auto path_begin = request.find(' ');
+      const auto path_end = request.find(' ', path_begin == std::string::npos ? 0 : path_begin + 1);
+      const auto found =
+          path_begin == std::string::npos || path_end == std::string::npos
+              ? path_bodies_.end()
+              : path_bodies_.find(request.substr(path_begin + 1, path_end - path_begin - 1));
+      if (found == path_bodies_.end()) {
+        status = 404;
+        body = {};
+      } else {
+        body = found->second;
+      }
+    }
     size_t offset = 0;
     bool partial = false;
     bool range_not_satisfiable = false;
@@ -197,26 +228,25 @@ class LocalHttpServer {
       if (end != std::string::npos) {
         try {
           offset = std::stoull(request.substr(begin, end - begin));
-          partial = offset < body_.size();
-          range_not_satisfiable = offset >= body_.size();
+          partial = offset < body.size();
+          range_not_satisfiable = offset >= body.size();
         } catch (...) {
           offset = 0;
         }
       }
     }
 
-    const std::string_view payload = range_not_satisfiable
-                                         ? std::string_view{}
-                                         : std::string_view(body_).substr(partial ? offset : 0);
+    const std::string_view payload =
+        range_not_satisfiable ? std::string_view{} : body.substr(partial ? offset : 0);
     std::string response = range_not_satisfiable ? "HTTP/1.1 416 Range Not Satisfiable\r\n"
                                                  : (partial ? "HTTP/1.1 206 Partial Content\r\n"
                                                             : "HTTP/1.1 200 OK\r\n");
-    if (status_ != 200) response = "HTTP/1.1 " + std::to_string(status_) + " Error\r\n";
+    if (status != 200) response = "HTTP/1.1 " + std::to_string(status) + " Error\r\n";
     if (partial) {
       response += "Content-Range: bytes " + std::to_string(offset) + "-" +
-                  std::to_string(body_.size() - 1) + "/" + std::to_string(body_.size()) + "\r\n";
+                  std::to_string(body.size() - 1) + "/" + std::to_string(body.size()) + "\r\n";
     } else if (range_not_satisfiable) {
-      response += "Content-Range: bytes */" + std::to_string(body_.size()) + "\r\n";
+      response += "Content-Range: bytes */" + std::to_string(body.size()) + "\r\n";
     }
     response +=
         "Content-Length: " + std::to_string(payload.size()) + "\r\nConnection: close\r\n\r\n";
@@ -228,6 +258,7 @@ class LocalHttpServer {
   }
 
   std::string body_;
+  const std::map<std::string, std::string> path_bodies_;
   bool honor_range_{false};
   size_t request_count_{1};
   unsigned delay_ms_{0};
@@ -261,6 +292,125 @@ azookey::host::HttpDownloadRequest Request(std::wstring url,
   request.send_timeout_ms = 1000;
   request.receive_timeout_ms = 1000;
   return request;
+}
+
+constexpr std::string_view kTrendingAsset =
+    R"({"version":1,"generated_at":"2026-10-09T00:00:00Z","words":[)"
+    R"({"surface":"新語","reading":"しんご","rank":1}]})";
+
+class TrendingWordHttpIntegrationTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ASSERT_TRUE(winsock_.ok());
+    ASSERT_TRUE(store_.Load());
+    store_.Observe("既存語", "きぞんご", 10, 3, false);
+    ASSERT_TRUE(store_.Save());
+    WriteFile(cache_, "old cache");
+    ASSERT_EQ(ReadFile(cache_), "old cache");
+  }
+
+  azookey::host::TrendingFetchStatus Fetch(LocalHttpServer& server) {
+    azookey::host::TrendingFetchDependencies dependencies;
+    dependencies.fetch_text = [this](const azookey::host::HttpTextRequest& request) {
+      metadata_result_ = azookey::host::HttpDownloader().FetchText(request);
+      return *metadata_result_;
+    };
+    dependencies.download = [this](const azookey::host::HttpDownloadRequest& request) {
+      download_result_ = azookey::host::HttpDownloader().Download(request);
+      return *download_result_;
+    };
+    dependencies.now_epoch = [] { return uint64_t{100}; };
+    azookey::host::TrendingWordFetcher fetcher(store_, cache_, server.url(L"/trending-words.json"),
+                                               std::move(dependencies));
+    fetcher.UpdateSettings(true, 24, false);
+    return fetcher.FetchOnce();
+  }
+
+  void ExpectDownloadRequestsAndCleanStaging(const LocalHttpServer& server) {
+    EXPECT_TRUE(server.request(0).starts_with("GET /trending-words.json.sha256 "));
+    EXPECT_TRUE(server.request(1).starts_with("GET /trending-words.json "));
+    EXPECT_TRUE(server.request(0).ends_with("\r\n\r\n"));
+    EXPECT_TRUE(server.request(1).ends_with("\r\n\r\n"));
+    EXPECT_TRUE(server.request(2).empty());
+    EXPECT_FALSE(std::filesystem::exists(cache_.wstring() + L".download"));
+    EXPECT_FALSE(std::filesystem::exists(cache_.wstring() + L".download.part"));
+  }
+
+  void ExpectOldStoreAndCache(const std::string& before) {
+    EXPECT_EQ(ReadFile(cache_), "old cache");
+    EXPECT_EQ(store_.SerializeText(), before);
+    azookey::learning::AutoWordStore reloaded(store_.path());
+    ASSERT_TRUE(reloaded.Load());
+    EXPECT_EQ(reloaded.SerializeText(), before);
+  }
+
+  WinsockScope winsock_;
+  TempDirectory temp_;
+  azookey::learning::AutoWordStore store_{temp_.path() / "auto_words.tsv"};
+  const std::filesystem::path cache_{temp_.path() / "trending-words.json"};
+  std::optional<azookey::host::HttpTextResult> metadata_result_;
+  std::optional<azookey::host::HttpDownloadResult> download_result_;
+};
+
+TEST_F(TrendingWordHttpIntegrationTest, RealHttpVerifiesIngestsAndPersistsAsset) {
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(kTrendingAsset, &error);
+  ASSERT_TRUE(hash) << error;
+  LocalHttpServer server("", false, 2, 0, 200,
+                         {{"/trending-words.json.sha256", *hash + "  trending-words.json\n"},
+                          {"/trending-words.json", std::string(kTrendingAsset)}});
+  ASSERT_TRUE(server.ok());
+  ASSERT_EQ(Fetch(server), azookey::host::TrendingFetchStatus::Ingested);
+  ASSERT_TRUE(metadata_result_ && metadata_result_->ok());
+  ASSERT_TRUE(download_result_ && download_result_->ok());
+  ExpectDownloadRequestsAndCleanStaging(server);
+  EXPECT_EQ(ReadFile(cache_), kTrendingAsset);
+  EXPECT_EQ(store_.Size(), 2u);
+  const auto words = store_.ListByState(azookey::learning::AutoWordState::Pending);
+  ASSERT_EQ(words.size(), 2u);
+  const auto found = std::find_if(words.begin(), words.end(), [](const auto& word) {
+    return word.surface == "新語" && word.reading == "しんご";
+  });
+  ASSERT_NE(found, words.end());
+  EXPECT_EQ(found->source, azookey::learning::AutoWordSource::Trending);
+  EXPECT_EQ(found->last_seen_epoch, 100u);
+  azookey::learning::AutoWordStore reloaded(store_.path());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.SerializeText(), store_.SerializeText());
+}
+
+TEST_F(TrendingWordHttpIntegrationTest, RealHttpShaMismatchPreservesStoreAndCache) {
+  const auto before = store_.SerializeText();
+  LocalHttpServer server("", false, 2, 0, 200,
+                         {{"/trending-words.json.sha256", std::string(64, '0')},
+                          {"/trending-words.json", std::string(kTrendingAsset)}});
+  ASSERT_TRUE(server.ok());
+  EXPECT_EQ(Fetch(server), azookey::host::TrendingFetchStatus::Failed);
+  ASSERT_TRUE(metadata_result_ && metadata_result_->ok());
+  ASSERT_TRUE(download_result_ && download_result_->error);
+  EXPECT_FALSE(download_result_->ok());
+  EXPECT_NE(download_result_->error->find("SHA256"), std::string::npos);
+  ExpectDownloadRequestsAndCleanStaging(server);
+  ExpectOldStoreAndCache(before);
+}
+
+TEST_F(TrendingWordHttpIntegrationTest, RealHttpValidHashWithInvalidAssetPreservesStoreAndCache) {
+  const std::string invalid_asset =
+      R"({"version":1,"generated_at":"2026-10-09T00:00:00Z","words":[)"
+      R"({"surface":"新語","reading":"not-kana","rank":1}]})";
+  std::string error;
+  const auto hash = azookey::host::ComputeSha256(invalid_asset, &error);
+  ASSERT_TRUE(hash) << error;
+  const auto before = store_.SerializeText();
+  LocalHttpServer server(
+      "", false, 2, 0, 200,
+      {{"/trending-words.json.sha256", *hash}, {"/trending-words.json", invalid_asset}});
+  ASSERT_TRUE(server.ok());
+  EXPECT_EQ(Fetch(server), azookey::host::TrendingFetchStatus::Failed);
+  ASSERT_TRUE(metadata_result_ && metadata_result_->ok());
+  ASSERT_TRUE(download_result_ && download_result_->ok());
+  ExpectDownloadRequestsAndCleanStaging(server);
+  ExpectOldStoreAndCache(before);
 }
 
 TEST(AiHttpTest, PostsToLoopbackAndBoundsResponse) {

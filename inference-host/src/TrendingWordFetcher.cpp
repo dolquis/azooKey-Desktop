@@ -235,9 +235,9 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
     if (asset_url_.empty()) return TrendingFetchStatus::SourceUnavailable;
     generation = generation_.load();
   }
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  const auto deadline = dependencies_.steady_now() + std::chrono::seconds(15);
   const auto cancelled = [this, generation, deadline] {
-    return stopped_ || generation_ != generation || std::chrono::steady_clock::now() >= deadline;
+    return stopped_ || generation_ != generation || dependencies_.steady_now() >= deadline;
   };
   HttpTextRequest checksum_request;
   checksum_request.url = asset_url_ + L".sha256";

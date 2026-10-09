@@ -677,6 +677,11 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
+- trending アセットの公開前 validator — Build workflow の `quality`（表示名 `Pre-commit`）
+  ジョブで `python scripts/tests/test_validate_trending_asset.py` を実行する。
+  runtime の入力形式・サイズ・Unicode 制約、元バイト列の SHA256 と checksum 出力の保持を検証する。
+  実データの出典・利用許諾・内容のレビューと公開操作は
+  [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) に従う。
 - 配布バイナリの app-local MSVC runtime — `windows-llama-build` は Release / CPU / llama.cpp
   構成で TIP、Host、self-contained 設定アプリをビルドし、MSVC 開発者環境から
   `scripts/check-app-local-runtime.ps1` を実行する。`Package.wxs` の個別ファイルと設定アプリの

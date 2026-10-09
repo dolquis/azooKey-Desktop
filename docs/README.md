@@ -79,6 +79,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 役割 |
 |---|---|
 | [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `dev-infrastructure-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook |
+| [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) | trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック |
 | [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証をまとめる runbook |
 | [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
 | [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |

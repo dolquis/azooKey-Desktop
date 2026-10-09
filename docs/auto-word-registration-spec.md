@@ -270,6 +270,9 @@ Host の変換処理を継続する。
 
 ### 5-2. 取得元 — プロジェクトホストの静的アセット
 
+公開・更新・ロールバックの運用手順は
+[`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) を正典とする。
+
 クライアント（IME）は **Google Trends を直接スクレイピングしない**。代わりに
 プロジェクトがホストする整形済みの静的アセットを定期 DL する。
 

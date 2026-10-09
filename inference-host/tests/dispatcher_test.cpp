@@ -26,6 +26,7 @@
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/PunctuationInserter.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -1346,6 +1347,53 @@ TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   EXPECT_EQ(parsed->surface, "日本");
   EXPECT_GE(parsed->confidence, 0.0);
   EXPECT_LE(parsed->confidence, 1.0);
+}
+
+// DEV-1442 / dynamic-punctuation-spec section 7: the Host inserts punctuation
+// into the live conversion surface only when the request asks for it and the
+// dynamicPunctuation setting is on, and flags the inserted marks.
+TEST_F(DispatcherTest, QueryLiveConversionInsertsPunctuationOnlyWhenAskedAndEnabled) {
+  const auto query = [&](uint64_t id, bool auto_punctuation) {
+    ipc::QueryLiveConversionRequest request{"にほん", ""};
+    request.auto_punctuation = auto_punctuation;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        id, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseQueryLiveConversionResponse(response->payload_json) : std::nullopt;
+  };
+
+  // The setting is off by default: the request flag alone changes nothing.
+  auto off = query(1401, true);
+  ASSERT_TRUE(off);
+  EXPECT_EQ(off->surface, "日本");
+  EXPECT_TRUE(off->segments.empty());
+
+  auto config = engine.config();
+  config.dynamic_punctuation = true;
+  config.punctuation_rules_path = "";
+  engine.ApplyConfig(config);
+  ipc::LiveSegment converted;
+  converted.surface = "日本";
+  converted.reading = "にほん";
+  converted.score = 1.0;
+  const auto expected = azookey::host::PunctuationInserter::Insert(
+      {converted}, azookey::host::PunctuationInserter::LoadRules(""), "ja",
+      config.segment_boundary_confidence);
+
+  const auto on = query(1402, true);
+  ASSERT_TRUE(on);
+  EXPECT_EQ(on->surface, expected.surface);
+  ASSERT_EQ(on->segments.size(), expected.segments.size());
+  for (size_t i = 0; i < expected.segments.size(); ++i) {
+    EXPECT_EQ(on->segments[i].surface, expected.segments[i].surface);
+    EXPECT_EQ(on->segments[i].auto_punctuation, expected.segments[i].auto_punctuation);
+  }
+
+  // onPause typing sends false (section 7.1.1): no punctuation, no segments.
+  const auto typing = query(1403, false);
+  ASSERT_TRUE(typing);
+  EXPECT_EQ(typing->surface, "日本");
+  EXPECT_TRUE(typing->segments.empty());
 }
 
 TEST_F(DispatcherTest, QueryLiveConversionDoesNotSaturateUserWordScore) {

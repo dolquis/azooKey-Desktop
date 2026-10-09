@@ -596,7 +596,8 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 新規 Payload: `QueryLiveConversion(request_id, kana, context)` →
 `QueryLiveConversionResponse(request_id, surface, confidence)`
 `request_id` は既存の IPC `Envelope` に置き、Payload は `kana/context` と
-`surface/confidence` をそれぞれ持つ。`confidence` は有限の 0.0..1.0 とする。
+`surface/confidence` をそれぞれ持つ。M59 の動的句読点の任意フィールド（要求の
+`auto_punctuation` / `punctuation_style`、応答の `segments[]`）は `docs/dynamic-punctuation-spec.md` §7 が定める。`confidence` は有限の 0.0..1.0 とする。
 M14 の軽量経路では候補の順位スコアをゼロ基準の sigmoid で単調に写像する。
 X-1 の多 pass 推論では上位 2 候補の差を使って信頼度を較正する。
 Host は Handshake 応答で `query_live_conversion` capability を広告する。

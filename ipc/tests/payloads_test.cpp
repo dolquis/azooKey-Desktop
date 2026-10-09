@@ -331,6 +331,52 @@ TEST(PayloadsTest, QueryLiveConversionRoundTrip) {
   EXPECT_DOUBLE_EQ(parsed_response->confidence, response.confidence);
 }
 
+// DEV-1442: M59 punctuation travels on QueryLiveConversion; a peer that
+// predates it neither sends nor expects the fields.
+TEST(PayloadsTest, QueryLiveConversionCarriesPunctuationAndDefaultsOff) {
+  using namespace azookey::ipc;
+  QueryLiveConversionRequest request{"きょうはいい", ""};
+  request.auto_punctuation = true;
+  request.punctuation_style = "fullwidth_latin";
+  const auto parsed_request =
+      ParseQueryLiveConversionRequest(BuildQueryLiveConversionRequest(request));
+  ASSERT_TRUE(parsed_request);
+  EXPECT_TRUE(parsed_request->auto_punctuation);
+  EXPECT_EQ(parsed_request->punctuation_style, "fullwidth_latin");
+
+  const auto legacy = ParseQueryLiveConversionRequest(R"({"kana":"かな","context":""})");
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->auto_punctuation);
+  EXPECT_EQ(legacy->punctuation_style, "ja");
+
+  QueryLiveConversionResponse response{"今日は、", 0.5};
+  LiveSegment word;
+  word.end_char = 3;
+  word.score = 1.0;
+  word.surface = "今日は";
+  word.reading = "きょうは";
+  LiveSegment comma;
+  comma.start_char = 3;
+  comma.end_char = 4;
+  comma.score = 1.0;
+  comma.auto_punctuation = true;
+  comma.surface = "、";
+  response.segments = {word, comma};
+  const auto parsed_response =
+      ParseQueryLiveConversionResponse(BuildQueryLiveConversionResponse(response));
+  ASSERT_TRUE(parsed_response);
+  ASSERT_EQ(parsed_response->segments.size(), 2u);
+  EXPECT_EQ(parsed_response->segments[0].reading, "きょうは");
+  EXPECT_FALSE(parsed_response->segments[0].auto_punctuation);
+  EXPECT_TRUE(parsed_response->segments[1].auto_punctuation);
+  EXPECT_EQ(parsed_response->segments[1].surface, "、");
+  EXPECT_TRUE(parsed_response->segments[1].reading.empty());
+
+  // Without punctuation the response keeps its pre-M59 shape on the wire.
+  const auto plain = BuildQueryLiveConversionResponse({"今日は", 0.5});
+  EXPECT_FALSE(json::Parse(plain)->Find("segments"));
+}
+
 TEST(PayloadsTest, QueryLiveConversionRejectsMalformedPayloads) {
   using namespace azookey::ipc;
   EXPECT_FALSE(ParseQueryLiveConversionRequest("{}").has_value());

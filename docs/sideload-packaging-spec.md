@@ -1208,7 +1208,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
 モデル / 学習のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
-ナビゲーションに加えた。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
+ナビゲーションに置く。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
 保存ボタンが `model.selectedPath` を書く。選べるのは検証に通った GGUF だけである。
 `ListModels` が返す `onnx_genai` は一覧に出すが選択と測定の対象にしない。学習データは
 設定アプリが直接開かず、一覧・忘却・エクスポート・インポートをすべて Host への IPC で行う。
@@ -1222,10 +1222,8 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 | Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
 | 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
-上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「モデル」は DEV-1530、
-「学習」は DEV-1531、「校正」は DEV-1532、
-「Persona」は DEV-1533、`neologd_lexicon` pack の状態表示は DEV-1534、`profilesByApp` の編集 UI は
-DEV-1535 で追う。
+上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」は DEV-1532、
+「Persona」は DEV-1533、`neologd_lexicon` pack の状態表示は DEV-1534 で追う。
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。

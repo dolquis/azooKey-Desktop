@@ -1503,7 +1503,7 @@ jobs:
 
       # 受け入れ条件の機械検査。configure ログで §8.2 の分岐が効いたことを確認し、
       # 生成物が ARM64 イメージであることを PE の COFF ヘッダから確認する。
-      # ヘッダは直接読む（dumpbin は amd64_arm64 環境での PATH 解決に依存するため）。
+      # Machine は直接読み、緩和策は VCToolsInstallDir から明示解決した dumpbin で検査する。
       - name: Verify ARM64 target resolution and binaries
         id: verify
         if: steps.build.outcome == 'success'

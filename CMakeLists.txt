@@ -272,6 +272,7 @@ target_link_options(azookey_binary_hardening INTERFACE
   # and host executable while excluding the current directory and PATH.
   $<$<CXX_COMPILER_ID:MSVC>:/DEPENDENTLOADFLAG:0xB00>
   $<$<BOOL:${AZOOKEY_CLANG_CL}>:/GUARD:CF /DYNAMICBASE /NXCOMPAT /DEPENDENTLOADFLAG:0xB00>
+  $<$<AND:$<BOOL:${AZOOKEY_CLANG_CL}>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>:/HIGHENTROPYVA>
 )
 
 if(AZOOKEY_ENABLE_ASAN)

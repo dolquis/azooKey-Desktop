@@ -671,7 +671,8 @@ fail ゲートは無改変で済む。`windows-release-arm64` preset は `window
 別ジョブとして独立させ、そちらは build + ctest + 自前の fail ゲートを持つ。
 
 ARM64 クロスビルドは `scripts/check-arm64-hardening.ps1` で TIP DLL と Host の
-`dumpbin /headers /loadconfig` を検査する。ARM64 machine、CFG の DLL characteristic、
+`dumpbin /headers /loadconfig` を検査する。ARM64 machine、DLL characteristics の
+CFG / DYNAMIC_BASE / NX_COMPAT / HIGH_ENTROPY_VA（必須ビット `0x4160`）、
 `CF instrumented` / `FID table present`、非ゼロの関数テーブルと件数、
 `Dependent Load Flag 0B00` を必須とし、出力をログ artifact に保存する。
 `dumpbin` は MSVC cross 環境の `VCToolsInstallDir/bin/Hostx64/arm64/dumpbin.exe` を

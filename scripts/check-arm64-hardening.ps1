@@ -37,9 +37,10 @@ function Assert-Arm64HardeningReport {
     throw "Expected AA64 machine (ARM64)."
   }
   $dllCharacteristics = Get-Arm64PeHexValue -Text $Text -Label "DLL characteristics" -MaxDigits 4
-  if (($dllCharacteristics -band 0x4000) -eq 0 -or
+  # GUARD_CF | NX_COMPAT | DYNAMIC_BASE | HIGH_ENTROPY_VA must all be set.
+  if (($dllCharacteristics -band 0x4160) -ne 0x4160 -or
       $Text -notmatch '(?mi)^[ \t]*Control Flow Guard[ \t]*\r?$') {
-    throw "Missing Control Flow Guard DLL characteristic."
+    throw "DLL characteristics must include CFG, NX compatibility, dynamic base and high entropy VA (0x4160)."
   }
   $guardFlags = Get-Arm64PeHexValue -Text $Text -Label "Guard Flags" -MaxDigits 8
   if (($guardFlags -band 0x500) -ne 0x500 -or

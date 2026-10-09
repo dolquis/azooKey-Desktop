@@ -82,6 +82,10 @@ OPTIONAL HEADER VALUES
   It "rejects invalid <Field>" -TestCases @(
     @{ Field = "AA64 machine (ARM64)"; Replacement = "8664 machine (x64)" }
     @{ Field = "4160 DLL characteristics"; Replacement = "0160 DLL characteristics" }
+    @{ Field = "4160 DLL characteristics"; Replacement = "4120 DLL characteristics" }
+    @{ Field = "4160 DLL characteristics"; Replacement = "4060 DLL characteristics" }
+    @{ Field = "4160 DLL characteristics"; Replacement = "4140 DLL characteristics" }
+    @{ Field = "4160 DLL characteristics"; Replacement = "4100 DLL characteristics" }
     @{ Field = "4160 DLL characteristics"; Replacement = "nope DLL characteristics" }
     @{ Field = "4160 DLL characteristics"; Replacement = "100004160 DLL characteristics" }
     @{ Field = "10417500 Guard Flags"; Replacement = "10417400 Guard Flags" }

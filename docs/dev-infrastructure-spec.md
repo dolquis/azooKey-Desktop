@@ -106,7 +106,8 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
   directory と `PATH` を除外しつつ、MSI が TIP / Host と同じ `INSTALLFOLDER` に配置する
   app-local VC runtime、および MSVC ASan の隣接 runtime DLL を解決できる構成である。
   clang-cl にも `/GUARD:CF` `/DYNAMICBASE` `/NXCOMPAT` と同じ
-  `/DEPENDENTLOADFLAG:0xB00` を適用する。ARM64 には x64 用の追加フラグを渡さない。
+  `/DEPENDENTLOADFLAG:0xB00` を適用する。64-bit clang-cl には ARM64 も含め
+  `/HIGHENTROPYVA` を明示する。`/CETCOMPAT` は x64 専用のため ARM64 には渡さない。
 
 `/Qspectre` は 2026-08-31 に MSVC Release の `azookey_bench` を各 30 回交互実行して
 採用した。p95 中央値は 0.0018 ms から 0.0023 ms（+0.0005 ms）、p99 中央値は
@@ -740,7 +741,7 @@ OFF のまま）。
   ないため、後者は `dumpbin` で機械判定する。署名は CI packaging 後に行うため
   `BA2022.SignSecurely` だけを設定ファイルで無効化し、他のルールは既定のまま維持する
 - ARM64 binary hardening — ARM64 クロスビルドの TIP / Host を
-  `scripts/check-arm64-hardening.ps1` で検査し、CFG と `DependentLoadFlags=0xB00` を
+  `scripts/check-arm64-hardening.ps1` で検査し、CFG、ASLR、NX、High Entropy VA と `DependentLoadFlags=0xB00` を
   必須ゲートにする。検査項目と実行経路は `copilot-pc-backend-spec.md` §8.1 を参照する。
   x64 Release の BinSkim advisory とは独立して扱う。
 - GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ

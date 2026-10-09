@@ -451,4 +451,6 @@
   <data name="Profiles_Error_BoostRange" xml:space="preserve"><value>倍率は 1.0 から 3.0 の数値で指定してください。</value></data>
   <data name="Profiles_MigrateButton" xml:space="preserve"><value>プロファイルへ移す</value></data>
   <data name="Profiles_Migrated" xml:space="preserve"><value>移行済み</value></data>
+  <data name="Learning_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
+  <data name="Models_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
 </root>

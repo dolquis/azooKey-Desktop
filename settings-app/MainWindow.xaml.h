@@ -66,6 +66,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   // The last state read from or written to disk, to tell which saved changes need a restart.
   azookey::settings::EditableSettings saved_settings_;
   azookey::settings::SettingsFieldControls field_controls_;
+  // Cleared when the window closes; callbacks the panes keep check it before using `this`.
+  std::shared_ptr<bool> alive_{std::make_shared<bool>(true)};
   std::shared_ptr<azookey::settings::ProfilesPane> profiles_pane_;
   std::shared_ptr<azookey::settings::ModelPane> model_pane_;
   std::shared_ptr<azookey::settings::LearningPane> learning_pane_;

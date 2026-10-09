@@ -210,11 +210,11 @@ struct ProfilesPane::Editor {
       const auto first = tag.find_first_not_of(" \t");
       if (first == std::string::npos) return L"Profiles_Error_TagEmpty";
       tag = tag.substr(first, tag.find_last_not_of(" \t") - first + 1);
-      const double value = boost.value.Value();
+      const double value = RoundBoost(boost.value.Value());
       if (!std::isfinite(value) || value < kMinTagBoost || value > kMaxTagBoost) {
         return L"Profiles_Error_BoostRange";
       }
-      if (!read.candidate_tag_boosts.emplace(tag, RoundBoost(value)).second) {
+      if (!read.candidate_tag_boosts.emplace(tag, value).second) {
         return L"Profiles_Error_TagDuplicate";
       }
     }

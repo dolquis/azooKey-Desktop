@@ -247,7 +247,9 @@ void LearningPane::Build(controls::StackPanel panel,
 }
 
 void LearningPane::OnShown() {
-  if (!loaded_once_ && tab_index_ < static_cast<int>(kLearningStoreTabs.size())) LoadPage();
+  if (!loaded_once_ && !busy_ && tab_index_ < static_cast<int>(kLearningStoreTabs.size())) {
+    LoadPage();
+  }
 }
 
 void LearningPane::SelectTab(int index) {
@@ -258,7 +260,9 @@ void LearningPane::SelectTab(int index) {
   backup_section_.Visibility(backup ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
   status_bar_.IsOpen(false);
   if (backup) {
+    // A listing still in flight is dropped as stale and would never clear the busy state.
     ++generation_;
+    SetBusy(false);
     return;
   }
   query_.clear();
@@ -268,6 +272,18 @@ void LearningPane::SelectTab(int index) {
   entries_.clear();
   RenderEntries();
   LoadPage();
+}
+
+void LearningPane::RecoverFromFailure() {
+  // Reached from catch blocks that may run on a background thread, so the controls are only
+  // touched from the UI thread.
+  dispatcher_.TryEnqueue([self = shared_from_this()] {
+    self->SetBusy(false);
+    ResourceLoader resources;
+    self->ShowStatus(controls::InfoBarSeverity::Error,
+                     resources.GetString(L"Learning_ProblemTitle"),
+                     resources.GetString(L"Learning_UnexpectedError"));
+  });
 }
 
 void LearningPane::SetBusy(bool busy) {
@@ -323,7 +339,6 @@ winrt::fire_and_forget LearningPane::LoadPage() {
   request.query = query_;
   request.limit = kLearningPageSize;
   request.offset = offset_;
-  loaded_once_ = true;
   SetBusy(true);
   status_bar_.IsOpen(false);
   const auto dispatcher = dispatcher_;
@@ -345,11 +360,12 @@ winrt::fire_and_forget LearningPane::LoadPage() {
                  Str(resources, LearningErrorResource(result.response->error.value_or(""))));
       co_return;
     }
+    loaded_once_ = true;
     entries_ = result.response->entries;
     total_ = result.response->total;
     RenderEntries();
   } catch (...) {
-    SetBusy(false);
+    RecoverFromFailure();
   }
 }
 
@@ -436,7 +452,7 @@ winrt::fire_and_forget LearningPane::Forget(azookey::ipc::LearningEntryField ent
     }
     LoadPage();
   } catch (...) {
-    SetBusy(false);
+    RecoverFromFailure();
   }
 }
 
@@ -468,21 +484,22 @@ winrt::fire_and_forget LearningPane::Export() {
     const auto file = co_await picker.PickSaveFileAsync();
     if (!file) co_return;
     request.destination_path = winrt::to_string(file.Path());
-    // The picker creates an empty placeholder, which the Host would refuse as an existing
-    // destination. Only an empty file is removed; a file with content is left for the Host to
-    // report as destination_exists, so nothing the user wrote is deleted here.
-    std::error_code ignored;
-    const std::filesystem::path chosen(file.Path().c_str());
-    if (std::filesystem::is_regular_file(chosen, ignored) &&
-        std::filesystem::file_size(chosen, ignored) == 0) {
-      std::filesystem::remove(chosen, ignored);
-    }
     if (!IsBackupArchivePath(request.destination_path)) {
       ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Learning_ProblemTitle"),
                  resources.GetString(L"Learning_NotZipPath"));
       co_return;
     }
 
+    // The picker creates an empty placeholder, which the Host would refuse as an existing
+    // destination. It is removed only now, after the local checks and just before the request.
+    // Only an empty file is removed; a file with content is left for the Host to report as
+    // destination_exists, so nothing the user wrote is deleted here.
+    std::error_code ignored;
+    const std::filesystem::path chosen(file.Path().c_str());
+    if (std::filesystem::is_regular_file(chosen, ignored) &&
+        std::filesystem::file_size(chosen, ignored) == 0) {
+      std::filesystem::remove(chosen, ignored);
+    }
     SetBusy(true);
     co_await winrt::resume_background();
     const auto result = RequestExportLearningData(DefaultSettingsIpcOptions(), request);
@@ -512,7 +529,7 @@ winrt::fire_and_forget LearningPane::Export() {
     ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ExportDoneTitle"),
                after.GetString(L"Learning_ExportDone"));
   } catch (...) {
-    SetBusy(false);
+    RecoverFromFailure();
   }
 }
 
@@ -592,7 +609,7 @@ winrt::fire_and_forget LearningPane::Import() {
     ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ImportDoneTitle"),
                after.GetString(L"Learning_ImportDone"));
   } catch (...) {
-    SetBusy(false);
+    RecoverFromFailure();
   }
 }
 

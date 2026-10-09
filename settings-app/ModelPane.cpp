@@ -142,6 +142,20 @@ void ModelPane::SetHistory(std::vector<BenchmarkHistoryEntry> history) {
   if (history_panel_) RenderHistory();
 }
 
+void ModelPane::RecoverFromFailure() {
+  // Reached from catch blocks that may run on a background thread, so the flags and controls
+  // are only touched from the UI thread.
+  dispatcher_.TryEnqueue([self = shared_from_this()] {
+    self->listing_ = false;
+    self->benchmarking_ = false;
+    self->refresh_button_.IsEnabled(true);
+    ResourceLoader resources;
+    self->benchmark_text_.Text(resources.GetString(L"Models_BenchmarkNone"));
+    self->RenderModels();
+    self->ShowProblem(resources.GetString(L"Models_UnexpectedError"));
+  });
+}
+
 void ModelPane::ShowProblem(const winrt::hstring& message) {
   ResourceLoader resources;
   problem_bar_.Severity(controls::InfoBarSeverity::Error);
@@ -175,7 +189,7 @@ winrt::fire_and_forget ModelPane::Refresh() {
       RenderModels();
     }
   } catch (...) {
-    listing_ = false;
+    RecoverFromFailure();
   }
 }
 
@@ -301,7 +315,7 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
     line(L"Models_Bench_Iterations", std::to_string(r.iterations_completed));
     benchmark_text_.Text(text);
   } catch (...) {
-    benchmarking_ = false;
+    RecoverFromFailure();
   }
 }
 

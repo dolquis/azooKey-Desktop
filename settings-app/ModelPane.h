@@ -36,6 +36,7 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   void RenderModels();
   void RenderHistory();
   void ShowProblem(const winrt::hstring& message);
+  void RecoverFromFailure();
 
   winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
   Host host_;

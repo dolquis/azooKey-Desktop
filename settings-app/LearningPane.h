@@ -38,6 +38,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   void RenderEntries();
   void UpdatePager();
   void SetBusy(bool busy);
+  void RecoverFromFailure();
   void ShowStatus(winrt::Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                   const winrt::hstring& title, const winrt::hstring& message);
   std::vector<std::string> CheckedStores() const;

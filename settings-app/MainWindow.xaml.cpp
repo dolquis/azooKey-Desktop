@@ -88,20 +88,34 @@ MainWindow::MainWindow() {
     }
     return AdvancedFieldsPanel();
   });
+  // The panes keep these callbacks for requests that outlive a click, so they must not touch the
+  // window once it has closed.
+  Closed([alive = alive_](auto const&, auto const&) { *alive = false; });
   profiles_pane_ = std::make_shared<azookey::settings::ProfilesPane>();
-  profiles_pane_->Build(ProfilesPaneHost(), {[this] { return Content().XamlRoot(); }});
+  profiles_pane_->Build(ProfilesPaneHost(), {[this, alive = alive_] {
+                          if (!*alive) throw winrt::hresult_error(E_ABORT);
+                          return Content().XamlRoot();
+                        }});
   model_pane_ = std::make_shared<azookey::settings::ModelPane>();
-  model_pane_->Build(
-      ModelsPaneHost(), DispatcherQueue(),
-      {[this] { return winrt::to_string(ModelPathTextBox().Text()); },
-       [this](const std::string& path) { ModelPathTextBox().Text(winrt::to_hstring(path)); }});
+  model_pane_->Build(ModelsPaneHost(), DispatcherQueue(),
+                     {[this, alive = alive_] {
+                        return *alive ? winrt::to_string(ModelPathTextBox().Text()) : std::string();
+                      },
+                      [this, alive = alive_](const std::string& path) {
+                        if (*alive) ModelPathTextBox().Text(winrt::to_hstring(path));
+                      }});
   learning_pane_ = std::make_shared<azookey::settings::LearningPane>();
   learning_pane_->Build(LearningPaneHost(), DispatcherQueue(),
-                        {[this] { return Content().XamlRoot(); },
-                         [this] {
+                        {[this, alive = alive_] {
+                           if (!*alive) throw winrt::hresult_error(E_ABORT);
+                           return Content().XamlRoot();
+                         },
+                         [this, alive = alive_] {
                            HWND window = nullptr;
-                           if (const auto native = this->try_as<::IWindowNative>()) {
-                             native->get_WindowHandle(&window);
+                           if (*alive) {
+                             if (const auto native = this->try_as<::IWindowNative>()) {
+                               native->get_WindowHandle(&window);
+                             }
                            }
                            return window;
                          }});

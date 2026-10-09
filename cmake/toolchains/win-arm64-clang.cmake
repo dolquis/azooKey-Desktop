@@ -16,3 +16,8 @@ set(CMAKE_C_COMPILER clang-cl)
 set(CMAKE_CXX_COMPILER clang-cl)
 set(CMAKE_C_COMPILER_TARGET arm64-pc-windows-msvc)
 set(CMAKE_CXX_COMPILER_TARGET arm64-pc-windows-msvc)
+
+# Do not silently accept unsupported cl.exe options in the ARM64 toolchain,
+# including third-party targets that do not use azookey_project_options.
+set(CMAKE_C_FLAGS_INIT "-Werror=unknown-argument -Werror=unused-command-line-argument")
+set(CMAKE_CXX_FLAGS_INIT "-Werror=unknown-argument -Werror=unused-command-line-argument")

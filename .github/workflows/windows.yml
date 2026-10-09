@@ -1503,7 +1503,7 @@ jobs:
 
       # 受け入れ条件の機械検査。configure ログで §8.2 の分岐が効いたことを確認し、
       # 生成物が ARM64 イメージであることを PE の COFF ヘッダから確認する。
-      # ヘッダは直接読む（dumpbin は amd64_arm64 環境での PATH 解決に依存するため）。
+      # Machine は直接読み、緩和策は VCToolsInstallDir から明示解決した dumpbin で検査する。
       - name: Verify ARM64 target resolution and binaries
         id: verify
         if: steps.build.outcome == 'success'
@@ -1554,6 +1554,12 @@ jobs:
             Write-Host ("{0} -> machine=0x{1:X4} (ARM64)" -f $binary, $machine)
           }
 
+          # Use the installed x64-host ARM64 toolchain's dumpbin explicitly;
+          # PATH can otherwise resolve a different developer environment.
+          $env:VSLANG = '1033'
+          $dumpbin = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/arm64/dumpbin.exe'
+          ./scripts/check-arm64-hardening.ps1 -BinaryPath $binaries -DumpbinPath $dumpbin -OutputDirectory arm64-hardening
+
       - name: Upload ARM64 cross-build logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1562,6 +1568,7 @@ jobs:
           path: |
             configure-arm64.log
             build-arm64.log
+            arm64-hardening/*.txt
           if-no-files-found: ignore
 
       - name: Upload ARM64 binaries

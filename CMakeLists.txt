@@ -31,6 +31,13 @@ endif()
 
 project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
 
+# clang-cl identifies as Clang but uses the MSVC ABI and linker conventions.
+set(AZOOKEY_CLANG_CL OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
+   CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+  set(AZOOKEY_CLANG_CL ON)
+endif()
+
 # Emit compile_commands.json in the build dir for clang-tidy and editor tooling
 # (gitignored). The committed .clangd points clangd at the separately generated
 # build/clangd database.
@@ -130,10 +137,20 @@ function(azookey_add_llama_cpp)
   endif()
   # llama.cpp and ggml do not link azookey_project_options. Scope the MSVC
   # hardening flags to their subdirectory so every third-party object that is
-  # linked into the host receives CFG and Spectre instrumentation as well.
-  if(MSVC)
+  # linked into the host receives CFG. Spectre instrumentation is MSVC-only.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     string(APPEND CMAKE_C_FLAGS " /guard:cf /Qspectre")
     string(APPEND CMAKE_CXX_FLAGS " /guard:cf /Qspectre")
+  elseif(AZOOKEY_CLANG_CL)
+    # The root project enables only CXX; llama.cpp enables C later. Do not
+    # shadow CMAKE_C_FLAGS_INIT (including toolchain diagnostics) with a
+    # normal CMAKE_C_FLAGS variable before C's flags have been initialized.
+    if(CMAKE_C_COMPILER_LOADED OR DEFINED CMAKE_C_FLAGS)
+      string(APPEND CMAKE_C_FLAGS " /guard:cf")
+    else()
+      string(APPEND CMAKE_C_FLAGS_INIT " /guard:cf")
+    endif()
+    string(APPEND CMAKE_CXX_FLAGS " /guard:cf")
   endif()
 
   if(AZOOKEY_LLAMA_CPP_SOURCE_DIR)
@@ -240,6 +257,7 @@ add_library(azookey_project_options INTERFACE)
 target_compile_features(azookey_project_options INTERFACE cxx_std_20)
 target_compile_options(azookey_project_options INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl /guard:cf /Qspectre>
+  $<$<BOOL:${AZOOKEY_CLANG_CL}>:/utf-8 /EHsc /guard:cf>
 )
 
 # Link-time mitigations are limited to the two native shipping binaries.
@@ -253,6 +271,8 @@ target_link_options(azookey_binary_hardening INTERFACE
   # The first two preserve the MSI app-local CRT contract for both the TIP DLL
   # and host executable while excluding the current directory and PATH.
   $<$<CXX_COMPILER_ID:MSVC>:/DEPENDENTLOADFLAG:0xB00>
+  $<$<BOOL:${AZOOKEY_CLANG_CL}>:/GUARD:CF /DYNAMICBASE /NXCOMPAT /DEPENDENTLOADFLAG:0xB00>
+  $<$<AND:$<BOOL:${AZOOKEY_CLANG_CL}>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>:/HIGHENTROPYVA>
 )
 
 if(AZOOKEY_ENABLE_ASAN)

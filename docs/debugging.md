@@ -248,6 +248,16 @@ cmake --build --preset windows-debug --target azookey_check
   reason は TSF context の可否を示さないため、`docs/dev-infrastructure-spec.md` §13 の
   互換性テストで確認する。
   診断 JSON にウィンドウタイトルや入力本文は含めない。
+- **一括変換を有効にしたのに、打鍵ごとに候補の問い合わせが出る**: その TIP が一括変換を
+  無効のまま動いている可能性がある。TIP は一括変換の有無を Handshake の応答でだけ受け取るためである。
+  対象アプリの `tip-YYYYMMDD.jsonl` で、最後の `ipc_connected` の `batch_romaji_conversion`
+  を見る。設定の保存後に `ipc_host_options_refreshed` が出ていなければ、再 Handshake が
+  失敗した（`ipc_handshake_rejected` などを確認する）か、設定ファイルの監視が変更を受け取って
+  いない（`tip_settings_watch_unarmed` / `tip_settings_watch_wait_failed` を確認する）。
+  出ていて値が `false` なら、Host が古い設定を返している。`ipc_connected` に足した
+  `batch_romaji_conversion` / `batch_conversion_ai_cleanup` / `english_supported`（Host の
+  capability `english_candidates`）と `ipc_host_options_refreshed` は bool だけで、
+  入力本文・トークン・パスを含まない。
 - **TIP は動くが候補が遅延**: Host 未起動 / 名前付きパイプ接続失敗を疑う。
   TIP は 250ms から 3000ms までの jitter 付き指数バックオフで再接続を試み続け、Deactivate まで
   諦めない（DEV-168）。接続の状態は TIP の構造化ログ `ipc_connection_state_transition`

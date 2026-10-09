@@ -12,8 +12,8 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
   カスタムローマ字テーブル（§5）。本機能は候補生成・確定動線を土台にする。
 - `docs/rich-features-spec.md` … X-2-3（ラベル付き候補・`CandidateTag::English`）。
   英単語候補の識別・バッジ表示に再利用する。
-- `docs/romaji-batch-conversion-spec.md` … §4.1（生ローマ字バッファの常時保持）。
-  本機能の英単語候補は同じ生ローマ字バッファを基にする。
+- `docs/romaji-batch-conversion-spec.md` … §4.1（生ローマ字バッファの保持）。
+  本機能は生ローマ字を reading と別フィールドで送る同じ方針に従うが、バッファは別に持つ（§4.1）。
 
 ## 1. 目的（と背景）
 
@@ -45,9 +45,10 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 
 ## 2. 設計原則
 
-- **生ローマ字バッファを基にする。** TIP はかなバッファとは別に**生ローマ字（半角英字）
-  バッファを常時保持**する（`docs/romaji-batch-conversion-spec.md` §4.1 が確立した
-  方針を共有・再利用）。英単語候補はこの生ローマ字を素材に生成する。
+- **生ローマ字バッファを基にする。** TIP は、本機能が有効なとき、かなバッファとは別に
+  **打鍵どおりの生ローマ字（印字可能 ASCII、Shift の大文字を保つ）**を持つ（§4.1）。
+  生ローマ字を reading と分ける方針は `docs/romaji-batch-conversion-spec.md` §4.1 と同じだが、
+  小文字で持つ M58 のバッファとは共有しない。英単語候補はこの生ローマ字を素材に生成する。
 - **決定的ベースライン + 辞書品質向上の二層。** まず生ローマ字そのもの + 大文字化
   バリアント（決定的・辞書不要）を必ず提示できるベースラインとし、英単語辞書による
   ランキング・ゲーティングを上位品質レイヤとする（SimpleConverter → Zenzai と同じ
@@ -101,6 +102,20 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
 - **ライブ変換（M14）/ 予測（M15）**: 注入しない。Host は `QueryCandidates` の `live = false`
   の要求にだけ英単語候補を足す。ライブ変換は第 1 候補を使い、英単語は第 1 候補を
   取らない（§4.3）ため、注入しても表示が変わらない。
+
+TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilities に
+`english_candidates` があるときだけ、`raw_romaji` と `english_candidates` を送る。
+
+- 生ローマ字は、通常の（一括変換でない）composition で打鍵した文字を、Shift の大文字のまま
+  持つ（`s_case` のため）。小文字で持つ M58 の `batch_raw_romaji` とは別に持つ。
+- 送るのは `live = false` の `QueryCandidates` だけである。生ローマ字をローマ字かな変換した
+  結果が `reading` と一致しないとき（Backspace で消したかなの打鍵、記号、Unicode 入力、
+  読みの補正など）は、どちらのフィールドも送らない。Backspace でかなを消したときは、
+  次の打鍵の前に、残りが preedit と一致するまで生ローマ字を末尾から削る。
+- 打鍵ごとの問い合わせは `live = true` のため、そのキャッシュには英単語候補が入らない。
+  そのため有効時の Space は、このキャッシュを使わず、`live = false` の問い合わせの応答を
+  待って候補ウィンドウを開く。記号・絵文字リライター有効時の Space と同じ経路である。
+- 一括変換（M58）の Space は `QueryBatchConversion` を送るため、英単語候補は加わらない（§9）。
 
 ### 4.2 ゲーティング（いつ出すか）
 
@@ -594,7 +609,7 @@ c.tag = tag <= 0xFF ? static_cast<uint8_t>(tag) : 0;
 | field | 型 | 既定 | 説明 |
 |---|---|---|---|
 | `raw_romaji` | string | `""` | 生ローマ字（英単語候補の素材）。`reading` とは別フィールド |
-| `english_candidates` | bool | `false` | `inlineEnglishCandidates` を伝搬 |
+| `english_candidates` | bool | `false` | `inlineEnglishCandidates` を伝搬。TIP は §4.1 の条件のときだけ true にする |
 
 ```jsonc
 {
@@ -667,6 +682,11 @@ CommitObservationRequest{
 **`CommitSegmentsObservation`**（`docs/romaji-batch-conversion-spec.md` §6.4）に含めて送る。
 単発の英単語確定は上記の単発 `CommitObservation` を使う。
 
+TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ字の条件を満たすときに、
+観測の `reading` を `chosen.reading`（Host が §6.3 で入れた生ローマ字）に置き換える。
+単発の確定と各文節に同じ規則を適用する。capabilities に `english_candidates` が無い Host には
+置き換えず、かなの `reading` のまま送る。
+
 ### 6.5 staleness・Cancel
 
 候補生成経路のため、既存 M10 の staleness / Cancel（`CancelPayload.target_request_id`）を
@@ -686,7 +706,8 @@ CommitObservationRequest{
 合わせる）。schema の正典は `settings/mvp-settings.schema.json` とし、下表はその要約である。
 Host は `inlineEnglishCandidates` を要求の `english_candidates` から受け取り、残りの
 6 キーを `EngineConfig::english` として使う。Handshake 応答の capabilities
-`english_candidates` で、Host が対応版であることを示す。
+`english_candidates` で、Host が対応版であることを示す。TIP は `inlineEnglishCandidates` を
+設定ファイルから読み（設定の監視で再読込する。欠落・読めない値は false）、§4.1 の条件で要求に載せる。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|
@@ -757,6 +778,11 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
   （先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。`content_hash` が base ヘッダから読めること。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
+- **TIP** (`tsf-tip/tests/onkeydown_preedit_test.cpp`): Space の `live = false` 問い合わせに
+  打鍵どおりの生ローマ字（Shift の大文字を含む）と `english_candidates` が載ること。
+  打鍵ごとの問い合わせには載らないこと。Backspace で消したかなの打鍵が生ローマ字から除かれること。
+  設定または capability が無いときに送らないこと。英単語の確定（単発・文節）が
+  reading=生ローマ字で観測され、かな読みの English タグ候補はかなの reading のままであること。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字
   学習と混線しないこと。再度同じローマ字で英単語候補が再提示されること。
 - **手動 / 実機（Win11、`gate:human-required`）**: Japanese モードのまま `apple` を打つと
@@ -783,4 +809,4 @@ roadmap は受け入れ条件の「定義」、達成状態は Linear）。
   （`englishCandidateInRoman2KanaInput` / `fullWidthRomanCandidate` / `requireEnglishPrediction`）
 - 候補生成・確定動線: `docs/legacy-parity-spec.md` §1.2・§1.3
 - ラベル付き候補（English タグ）: `docs/rich-features-spec.md` X-2-3
-- 生ローマ字バッファ保持: `docs/romaji-batch-conversion-spec.md` §4.1
+- 生ローマ字を reading と分ける原則: `docs/romaji-batch-conversion-spec.md` §4.1。TIP 側の保持は本書 §4.1

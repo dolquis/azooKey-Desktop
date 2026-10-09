@@ -1,5 +1,6 @@
 #include "azookey/tsf/TipRuntimeLog.h"
 
+#include <atomic>
 #include <exception>
 #include <new>
 #include <string>
@@ -8,7 +9,20 @@
 
 namespace azookey::tsf {
 
+#ifdef AZOOKEY_TSF_TESTING
+namespace {
+std::atomic<logging::RuntimeLogger*> g_logger_for_test{nullptr};
+}  // namespace
+
+void SetTipRuntimeLoggerForTest(logging::RuntimeLogger* logger) noexcept {
+  g_logger_for_test.store(logger);
+}
+#endif
+
 logging::RuntimeLogger& TipRuntimeLogger() {
+#ifdef AZOOKEY_TSF_TESTING
+  if (auto* logger = g_logger_for_test.load()) return *logger;
+#endif
   static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("tip"));
   return logger;
 }

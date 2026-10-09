@@ -13,6 +13,12 @@ namespace azookey::tsf {
 // Process-wide opt-in TIP logger (AZOOKEY_LOG=1, component "tip").
 logging::RuntimeLogger& TipRuntimeLogger();
 
+#ifdef AZOOKEY_TSF_TESTING
+// Routes TipRuntimeLogger() to `logger` until called again with nullptr. Set it
+// before constructing a TextService: its IPC client keeps the logger it gets.
+void SetTipRuntimeLoggerForTest(logging::RuntimeLogger* logger) noexcept;
+#endif
+
 // Writes one record through `logger`. Debug builds also mirror it to
 // OutputDebugStringA, matching the TIP diagnostics contract.
 void TipRuntimeLog(logging::RuntimeLogger& logger, logging::RuntimeLogLevel level,

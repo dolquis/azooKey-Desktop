@@ -40,8 +40,8 @@ std::set<std::string> ResourcesUsedBy(const char* source) {
   buffer << input.rdbuf();
   const auto text = buffer.str();
   std::set<std::string> used;
-  const std::regex pattern(
-      R"(L"((?:Models|Learning|Profiles|HostCall|Persona|NeologdStatus|Proofread)_[A-Za-z0-9_]+)\")");
+  const std::regex pattern(R"(L"((?:Models|Learning|Profiles|HostCall|Persona|NeologdStatus|)"
+                           R"(Proofread)_[A-Za-z0-9_]+)\")");
   for (std::sregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it) {
     used.insert((*it)[1].str());
   }

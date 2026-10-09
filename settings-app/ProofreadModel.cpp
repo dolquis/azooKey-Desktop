@@ -1,6 +1,7 @@
 #include "ProofreadModel.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace azookey::settings {
 namespace {

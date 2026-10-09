@@ -510,4 +510,5 @@
   <data name="Proofread_Error_blocked" xml:space="preserve"><value>プライバシーの設定により、この文章は AI へ送れません。</value></data>
   <data name="Proofread_Error_backend_failed" xml:space="preserve"><value>AI サービスとの通信または応答の読み取りに失敗しました。時間をおいて試してください。</value></data>
   <data name="Proofread_Error_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
+  <data name="Proofread_TimeoutNote" xml:space="preserve"><value>本文はすでに外部の AI サービスへ送られていて、Host がまだ処理を続けている可能性があります。</value></data>
 </root>

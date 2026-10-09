@@ -153,13 +153,14 @@ winrt::fire_and_forget ProofreadPane::Check() {
       break;
   }
 
-  busy_ = true;
-  check_button_.IsEnabled(false);
-  results_.Children().Clear();
-  results_.Children().Append(PlainText(resources.GetString(L"Proofread_Checking"), true));
   const auto request = MakeProofreadRequest(utf8);
   const auto dispatcher = dispatcher_;
+  // Set up inside the try, so a failure while building the controls still releases the button.
+  busy_ = true;
   try {
+    check_button_.IsEnabled(false);
+    results_.Children().Clear();
+    results_.Children().Append(PlainText(resources.GetString(L"Proofread_Checking"), true));
     co_await winrt::resume_background();
     const auto result = RequestDetectAnomalies(DefaultSettingsIpcOptions(), request);
     co_await ResumeForeground(dispatcher);
@@ -169,8 +170,12 @@ winrt::fire_and_forget ProofreadPane::Check() {
     results_.Children().Clear();
     ResourceLoader after;
     if (result.status != HostCallStatus::Ok) {
-      ShowStatus(controls::InfoBarSeverity::Error,
-                 after.GetString(winrt::to_hstring(HostCallStatusResource(result.status))));
+      auto message = after.GetString(winrt::to_hstring(HostCallStatusResource(result.status)));
+      if (result.status == HostCallStatus::Timeout) {
+        // The Host may still be waiting on the external service with the text already sent.
+        message = message + L"\n" + after.GetString(L"Proofread_TimeoutNote");
+      }
+      ShowStatus(controls::InfoBarSeverity::Error, message);
       co_return;
     }
     const auto& response = *result.response;

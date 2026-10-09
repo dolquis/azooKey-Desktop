@@ -47,6 +47,18 @@ std::string AssetWord(std::string_view surface, std::string_view reading) {
          azookey::ipc::json::EscapeString(reading) + "\",\"rank\":1}";
 }
 
+std::string AssetWithWordCount(size_t count, bool skipped_readings) {
+  const auto word = AssetWord("新語", "しんご");
+  std::string words = word;
+  for (size_t i = 1; i < count; ++i) {
+    words += ',';
+    words += skipped_readings ? (i % 2 == 0 ? R"({"surface":"読みなし"})"
+                                            : R"({"surface":"空読み","reading":""})")
+                              : word;
+  }
+  return AssetWithWords(words);
+}
+
 std::string Utf8Scalar(char32_t codepoint) {
   std::string text;
   azookey::core::AppendUtf8(text, codepoint);
@@ -97,6 +109,9 @@ class TrendingWordFetcherTest : public ::testing::Test {
       return HttpDownloadResult{HttpDownloadStatus::Downloaded};
     };
     dependencies.now_epoch = [this] { return epoch_; };
+    // Parsing/asset limits must not depend on instrumentation or machine speed.
+    // Deadline and worker interval tests advance this clock explicitly.
+    dependencies.steady_now = [] { return std::chrono::steady_clock::time_point{}; };
     return dependencies;
   }
   std::filesystem::path Cache() const { return directory_ / "trending-words.json"; }
@@ -388,29 +403,83 @@ TEST_F(TrendingWordFetcherTest, InvalidUtf8AndNonKanaReadingsRejectWholeAsset) {
       AssetWithWords(R"({"surface":"新語","reading":"\udc00","rank":1})"));
 }
 
+TEST_F(TrendingWordFetcherTest, WordCountLimitAcceptsTenThousandReadings) {
+  SeedExisting();
+  const auto at_limit = AssetWithWordCount(10000, false);
+  ASSERT_LT(at_limit.size(), 1024u * 1024);
+  SetAsset(at_limit);
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              Dependencies());
+  fetcher.UpdateSettings(true, 24, true);
+  ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+  ASSERT_EQ(store_->LookupConfirmed("しんご").size(), 1u);
+  EXPECT_EQ(store_->Size(), 2u);
+}
+
+TEST_F(TrendingWordFetcherTest, WordCountLimitRejectsTenThousandAndOneReadings) {
+  SeedExisting();
+  ExpectRejectedAssetPreservesStoreAndCache(AssetWithWordCount(10001, false));
+}
+
 TEST_F(TrendingWordFetcherTest, WordCountLimitIncludesMissingAndEmptyReadings) {
   SeedExisting();
-  const auto word = AssetWord("新語", "しんご");
-  for (const bool skipped_readings : {false, true}) {
-    SCOPED_TRACE(skipped_readings);
-    std::string words = word;
-    for (size_t i = 1; i < 10000; ++i) {
-      words += ',';
-      words += skipped_readings ? (i % 2 == 0 ? R"({"surface":"読みなし"})"
-                                              : R"({"surface":"空読み","reading":""})")
-                                : word;
+  SetAsset(AssetWithWordCount(10000, true));
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              Dependencies());
+  fetcher.UpdateSettings(true, 24, true);
+  ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+  ASSERT_EQ(store_->LookupConfirmed("しんご").size(), 1u);
+  EXPECT_EQ(store_->Size(), 2u);
+}
+
+TEST_F(TrendingWordFetcherTest, WordCountLimitRejectsOverflowIncludingMissingAndEmptyReadings) {
+  SeedExisting();
+  ExpectRejectedAssetPreservesStoreAndCache(AssetWithWordCount(10001, true));
+}
+
+TEST_F(TrendingWordFetcherTest, DeadlineUsesInjectedClockAtAndAroundFifteenSeconds) {
+  SeedExisting();
+  for (const bool during_download : {false, true}) {
+    SCOPED_TRACE(during_download ? "asset download" : "checksum fetch");
+    for (const auto elapsed : {14999ms, 15000ms, 15001ms}) {
+      SCOPED_TRACE(elapsed.count());
+      const auto before = store_->SerializeText();
+      const auto cache = ReadCache();
+      const auto downloads_before = download_calls_.load();
+      std::chrono::milliseconds clock{0};
+      auto dependencies = Dependencies();
+      dependencies.steady_now = [&] { return std::chrono::steady_clock::time_point{} + clock; };
+      const auto fetch_text = dependencies.fetch_text;
+      dependencies.fetch_text = [&](const HttpTextRequest& request) {
+        auto result = fetch_text(request);
+        if (!during_download) clock = elapsed;
+        return result;
+      };
+      const auto download = dependencies.download;
+      dependencies.download = [&](const HttpDownloadRequest& request) {
+        auto result = download(request);
+        if (during_download) clock = elapsed;
+        return result;
+      };
+      TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                                  dependencies);
+      fetcher.UpdateSettings(true, 24, false);
+      if (elapsed < 15s) {
+        EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
+        EXPECT_EQ(ReadCache(), kAsset);
+      } else {
+        EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Cancelled);
+        EXPECT_EQ(store_->SerializeText(), before);
+        EXPECT_EQ(ReadCache(), cache);
+        AutoWordStore reloaded(store_->path());
+        ASSERT_TRUE(reloaded.Load());
+        EXPECT_EQ(reloaded.SerializeText(), before);
+      }
+      EXPECT_EQ(download_calls_.load() - downloads_before,
+                during_download || elapsed < 15s ? 1u : 0u);
+      EXPECT_FALSE(std::filesystem::exists(Cache().wstring() + L".download"));
+      EXPECT_FALSE(std::filesystem::exists(Cache().wstring() + L".download.part"));
     }
-    const auto at_limit = AssetWithWords(words);
-    ASSERT_LT(at_limit.size(), 1024u * 1024);
-    SetAsset(at_limit);
-    TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
-                                Dependencies());
-    fetcher.UpdateSettings(true, 24, true);
-    ASSERT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Ingested);
-    ASSERT_EQ(store_->LookupConfirmed("しんご").size(), 1u);
-    EXPECT_EQ(store_->Size(), 2u);
-    words += skipped_readings ? R"(,{"surface":"読みなし"})" : ',' + word;
-    ExpectRejectedAssetPreservesStoreAndCache(AssetWithWords(words));
   }
 }
 

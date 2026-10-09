@@ -29,6 +29,8 @@ struct TrendingFetchDependencies {
   std::function<HttpTextResult(const HttpTextRequest&)> fetch_text;
   std::function<HttpDownloadResult(const HttpDownloadRequest&)> download;
   std::function<uint64_t()> now_epoch;
+  // Monotonic clock for both polling intervals and the 15-second fetch deadline.
+  // Production defaults to steady_clock; test overrides must be thread-safe.
   std::function<std::chrono::steady_clock::time_point()> steady_now;
   // Host supplies the engine's serialized commit so reset/forget rollback cannot
   // overwrite a successful ingestion. An isolated store may use the default.

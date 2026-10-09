@@ -274,6 +274,9 @@ jobs:
       - name: Test quality benchmark reporting
         run: python scripts/tests/test_quality_bench.py
 
+      - name: Test trending asset validation
+        run: python scripts/tests/test_validate_trending_asset.py
+
   dependency-review:
     name: Dependency review
     needs: changes

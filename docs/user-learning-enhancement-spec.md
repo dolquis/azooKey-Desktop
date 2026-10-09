@@ -207,8 +207,9 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 
 ### 4.1 訂正の IPC（`CommitCorrection`）
 
-即 Backspace と再変換は、TIP が `CommitCorrection` で Host へ送る。Host は Handshake の
-capability に `commit_correction` を載せ、TIP は Host がそれを告知したときだけ送る。
+即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と Host 側の処理を定める。
+TIP 側の検出と送信は DEV-1529 の TIP 部分で追跡する。Host は Handshake の capability に
+`commit_correction` を載せ、TIP は Host がそれを告知したときだけ送る。
 応答は `CommitObservation` と同じ `{ "ok": bool }` である。
 
 | フィールド | 型 | 意味 |
@@ -456,6 +457,9 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 - `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
   実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
   は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可
+- 即 Backspace と再変換が `CommitCorrection`（§4.1）で Host に届き、`correction_reject` /
+  `correction_accept` が app 行と `context_hash` 付きで記録される。privacy で拒否された訂正と
+  再送は記録しない
 - `event_type` 列が拡張可能な enum として実装され、`commit` /
   `correction_accept` / `correction_reject` を記録できる。M55 完了後は
   同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は

@@ -3837,6 +3837,67 @@ TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
   }
 }
 
+TEST_F(DispatcherTest, ResetLearningStoreRefusesUnreadableTypoAndAutoWordFiles) {
+  const auto typo_path = TempPath("azookey_dispatcher_reset_blocked_typo.tsv");
+  const auto mining_path = TempPath("azookey_dispatcher_reset_blocked_mining.tsv");
+  for (const auto& path : {typo_path, mining_path}) {
+    WriteAllBytes(azookey::learning::EncryptedPathFor(path), "not a protected blob");
+  }
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
+  ASSERT_FALSE(typo.Load());
+  ASSERT_FALSE(mining.Load());
+  ASSERT_TRUE(typo.save_blocked());
+  ASSERT_TRUE(mining.save_blocked());
+  engine.SetTypoStore(&typo);
+  engine.SetAutoWordStore(&mining);
+
+  for (const auto* name : {"typo", "auto_word"}) {
+    ipc::ResetLearningStoreRequest request;
+    request.store = name;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        754, ipc::MessageType::ResetLearningStore, ipc::BuildResetLearningStoreRequest(request)));
+    ASSERT_TRUE(response.has_value()) << name;
+    const auto parsed = ipc::ParseResetLearningStoreResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value()) << name;
+    EXPECT_FALSE(parsed->ok) << name;
+    EXPECT_EQ(parsed->error, std::optional<std::string>("save_failed")) << name;
+  }
+  for (const auto& path : {typo_path, mining_path}) {
+    EXPECT_EQ(ReadAllBytes(azookey::learning::EncryptedPathFor(path)), "not a protected blob");
+  }
+
+  engine.SetTypoStore(nullptr);
+  engine.SetAutoWordStore(nullptr);
+  std::error_code ec;
+  for (const auto& path : {typo_path, mining_path}) {
+    std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  }
+}
+
+// The persona follows a forget of the kana channel, as it follows a reset.
+TEST_F(DispatcherTest, ForgettingALearningPairRefreshesThePersona) {
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "します";
+  commit.chosen = {"します", "します", 1.0, "model"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(755, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  engine.RefreshPersona();
+  ASSERT_EQ(engine.CurrentPersona()->persona.sample_count, 1u);
+
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.reading = "します";
+  forget.surface = "します";
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(756, ipc::MessageType::ForgetLearningEntry,
+                                          ipc::BuildForgetLearningEntryRequest(forget))));
+  EXPECT_EQ(engine.CurrentPersona()->persona.sample_count, 0u);
+  RemoveLearningFiles(learning_path);
+}
+
 TEST_F(DispatcherTest, LearningDataListsAndForgetsTheEnglishChannel) {
   const std::filesystem::path english_path = "azookey_dispatcher_test_english.tsv";
   RemoveLearningFiles(english_path);

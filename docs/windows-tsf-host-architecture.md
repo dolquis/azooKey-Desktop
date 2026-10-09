@@ -153,7 +153,9 @@ Linear が持つ。
   モデルを再ロードする。settings.json が invalid な場合は engine を触らず `ok=false` を返す。
 - ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
   `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
-  learning_entries, user_dict_entries, fallback_state, last_error?)`。
+  learning_entries, user_dict_entries, fallback_state, last_error?, neologd_layer?)`。
+  `neologd_layer` は `neologd_lexicon` 層の状態で、値の意味は `docs/auto-word-registration-spec.md` §15.14、
+  wire の形は `docs/dev-infrastructure-spec.md` §12.6 が定める。
   `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` / `safe_mode` のいずれかで、
   `safe_mode`（`docs/dev-infrastructure-spec.md` §8.5.3）は他のどの判定より優先する。
   送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、

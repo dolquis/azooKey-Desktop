@@ -136,6 +136,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::Learn
   bool legacy_removed = false;
   const bool legacy_ok = store.RemoveFromLegacyFile(reading, surface, &legacy_removed);
   const bool saved = SaveLearningDataLocked();
+  if (in_store && &store == store_) RefreshPersonaLocked();
   if (!legacy_ok || !saved) return ForgetOutcome::SaveFailed;
   return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
 }
@@ -147,6 +148,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
       return ResetLearningChannelsLocked();
     case LearningDataStore::Typo: {
       if (!typo_store_) return ResetOutcome::Unavailable;
+      // A store whose file could not be read keeps that file; refuse up front.
+      if (typo_store_->save_blocked()) return ResetOutcome::SaveFailed;
       const auto before = typo_store_->SerializeText();
       typo_store_->Reset();
       if (typo_store_->Save()) return ResetOutcome::Reset;
@@ -155,6 +158,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ResetOutcome::Unavailable;
+      if (auto_word_store_->save_blocked()) return ResetOutcome::SaveFailed;
       const auto before = auto_word_store_->SerializeText();
       auto_word_store_->Reset();
       if (auto_word_store_->Save()) return ResetOutcome::Reset;
@@ -294,6 +298,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
 
   auto result = ApplyImportedItems(LearningDataStoresLocked(), selected, std::move(*items), policy);
   if (result.error != BackupError::None) return result;
+  if (Selected(selected, LearningDataStore::Learning)) RefreshPersonaLocked();
 
   bool saved = SaveLearningDataLocked();
   if (Selected(selected, LearningDataStore::Typo) && typo_store_) {

@@ -274,7 +274,7 @@ std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservatio
 std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
     const std::string& json);
 
-// Correction of a commit (user-learning-enhancement-spec section 4, DEV-1529).
+// Correction of a commit (user-learning-enhancement-spec section 4.1, DEV-1529).
 // "undo" is an immediate Backspace right after the commit: the rejected
 // surface is penalized and nothing is accepted. "reconvert" replaces the
 // rejected surface with selected_surface. Sent only to Hosts that advertise

@@ -62,8 +62,8 @@
 - 「バックアップ」タブ: 対象ストアの選択、暗号化の切替、エクスポート、取り込み時の衝突解決
   （`merge` / `overwrite` / `keep_both`）の選択、インポートを持つ。暗号化をオフにしたときは警告を出し、
   書き出す前に確認する。インポートは確認ダイアログを経てから送る。
-- 「全削除」は `ForgetLearningEntry` が 1 件単位のため、1 つの要求で原子的に行える専用の message を
-  足すまでペインに置かない。
+- 「全削除」は確認ダイアログを経てから `ResetLearningStore`（§4.6、capability `learning_reset`）で
+  ストア単位に送る。
 
 ## 4. IPC
 
@@ -285,7 +285,7 @@ counts のキーは archive の item 名（§5.1）である。
   一致する項目が無いときは `ok = true`、`removed = false` を返す。
 - export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
 - Host は Handshake の capabilities に `learning_data_management` を載せる。
-- Host は 4 つの操作を `InferenceEngine` 上で行い、関係するストアのロックをまとめて取ってから
+- Host は一覧・忘却・エクスポート・インポート・全削除の 5 つの操作を `InferenceEngine` 上で行い、関係するストアのロックをまとめて取ってから
   変更し、返る前に保存する。ユーザー辞書は、`AddUserWord` と同じくファイルロックを取って
   ディスクの内容を読み直してから変更する。
 - export はロックを持ったままストアの内容を複写し、暗号化と ZIP の書き出しはロックの外で行う。

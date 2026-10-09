@@ -1270,7 +1270,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `inference-host/`（`PunctuationInserter` 新規、`Dispatcher` /
   `InferenceEngine` の `auto_punctuation` / `punctuation_style` 処理と segments 返却）、
-  `ipc/`（`QueryCandidates` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
+  `ipc/`（`QueryLiveConversion` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
   `core/`（`InputState` の Backspace 削除単位、`SegmentPos` 新規、`PunctuationRules` 新規）、
   `tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
   `settings/mvp-settings.schema.json`。

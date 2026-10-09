@@ -360,6 +360,64 @@ std::optional<LoadModelResponse> ParseLoadModelResponse(const std::string& json)
 
 // -------- QueryCandidates --------
 
+namespace {
+
+j::Value LiveSegmentsToJson(const std::vector<LiveSegment>& segments) {
+  j::Array array;
+  for (const auto& segment : segments) {
+    j::Object item;
+    item.emplace("start_char", j::Value(static_cast<uint64_t>(segment.start_char)));
+    item.emplace("end_char", j::Value(static_cast<uint64_t>(segment.end_char)));
+    item.emplace("score", j::Value(segment.score));
+    item.emplace("auto_punctuation", j::Value(segment.auto_punctuation));
+    item.emplace("surface", j::Value(segment.surface));
+    item.emplace("reading", j::Value(segment.reading));
+    item.emplace("pos", j::Value(static_cast<uint64_t>(segment.pos)));
+    item.emplace("head_pos", j::Value(static_cast<uint64_t>(segment.head_pos)));
+    item.emplace("sem", j::Value(static_cast<uint64_t>(segment.sem)));
+    item.emplace("head_sem", j::Value(static_cast<uint64_t>(segment.head_sem)));
+    array.emplace_back(std::move(item));
+  }
+  return j::Value(std::move(array));
+}
+
+// Malformed segments are skipped, as malformed candidates are.
+std::vector<LiveSegment> LiveSegmentsFromJson(const j::Value& v) {
+  std::vector<LiveSegment> result;
+  const auto* segments = v.GetArray("segments");
+  if (!segments) return result;
+  for (const auto& item : *segments) {
+    if (!item.IsObject()) continue;
+    const auto start = item.GetUInt("start_char");
+    const auto end = item.GetUInt("end_char");
+    const auto score = item.GetNumber("score");
+    const auto surface = item.GetString("surface");
+    if (!start || !end || *start > UINT32_MAX || *end > UINT32_MAX || *end < *start || !score ||
+        !surface)
+      continue;
+    LiveSegment segment;
+    segment.start_char = static_cast<uint32_t>(*start);
+    segment.end_char = static_cast<uint32_t>(*end);
+    segment.score = *score;
+    segment.auto_punctuation = item.GetBool("auto_punctuation").value_or(false);
+    segment.surface = *surface;
+    segment.reading = item.GetString("reading").value_or("");
+    if (segment.auto_punctuation && !segment.reading.empty()) continue;
+    const auto read_byte = [&item](const char* field) -> uint8_t {
+      const auto value = item.GetUInt(field).value_or(0);
+      return value <= UINT8_MAX ? static_cast<uint8_t>(value) : 0;
+    };
+    segment.pos = read_byte("pos");
+    segment.head_pos = read_byte("head_pos");
+    segment.sem = read_byte("sem");
+    segment.head_sem = read_byte("head_sem");
+    result.push_back(std::move(segment));
+  }
+  return result;
+}
+
+}  // namespace
+
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   j::Object o;
   o.emplace("reading", j::Value(p.reading));
@@ -406,24 +464,7 @@ std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p) {
   for (const auto& c : p.candidates) arr.push_back(CandidateToJson(c));
   o.emplace("candidates", j::Value(std::move(arr)));
   o.emplace("partial", j::Value(p.partial));
-  if (!p.segments.empty()) {
-    j::Array segments;
-    for (const auto& segment : p.segments) {
-      j::Object item;
-      item.emplace("start_char", j::Value(static_cast<uint64_t>(segment.start_char)));
-      item.emplace("end_char", j::Value(static_cast<uint64_t>(segment.end_char)));
-      item.emplace("score", j::Value(segment.score));
-      item.emplace("auto_punctuation", j::Value(segment.auto_punctuation));
-      item.emplace("surface", j::Value(segment.surface));
-      item.emplace("reading", j::Value(segment.reading));
-      item.emplace("pos", j::Value(static_cast<uint64_t>(segment.pos)));
-      item.emplace("head_pos", j::Value(static_cast<uint64_t>(segment.head_pos)));
-      item.emplace("sem", j::Value(static_cast<uint64_t>(segment.sem)));
-      item.emplace("head_sem", j::Value(static_cast<uint64_t>(segment.head_sem)));
-      segments.emplace_back(std::move(item));
-    }
-    o.emplace("segments", j::Value(std::move(segments)));
-  }
+  if (!p.segments.empty()) o.emplace("segments", LiveSegmentsToJson(p.segments));
   // Omitted when empty so a response to a client that predates M35 keeps its
   // previous shape on the wire.
   if (!p.corrected_reading.empty()) {
@@ -450,35 +491,7 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
     }
   }
   p.partial = v->GetBool("partial").value_or(false);
-  if (const auto* segments = v->GetArray("segments")) {
-    for (const auto& item : *segments) {
-      if (!item.IsObject()) continue;
-      const auto start = item.GetUInt("start_char");
-      const auto end = item.GetUInt("end_char");
-      const auto score = item.GetNumber("score");
-      const auto surface = item.GetString("surface");
-      if (!start || !end || *start > UINT32_MAX || *end > UINT32_MAX || *end < *start || !score ||
-          !surface)
-        continue;
-      LiveSegment segment;
-      segment.start_char = static_cast<uint32_t>(*start);
-      segment.end_char = static_cast<uint32_t>(*end);
-      segment.score = *score;
-      segment.auto_punctuation = item.GetBool("auto_punctuation").value_or(false);
-      segment.surface = *surface;
-      segment.reading = item.GetString("reading").value_or("");
-      if (segment.auto_punctuation && !segment.reading.empty()) continue;
-      const auto read_byte = [&item](const char* field) -> uint8_t {
-        const auto value = item.GetUInt(field).value_or(0);
-        return value <= UINT8_MAX ? static_cast<uint8_t>(value) : 0;
-      };
-      segment.pos = read_byte("pos");
-      segment.head_pos = read_byte("head_pos");
-      segment.sem = read_byte("sem");
-      segment.head_sem = read_byte("head_sem");
-      p.segments.push_back(std::move(segment));
-    }
-  }
+  p.segments = LiveSegmentsFromJson(*v);
   // Absent for hosts that predate M35: decodes as "no correction applied".
   p.corrected_reading = v->GetString("corrected_reading").value_or(std::string());
   return p;
@@ -490,6 +503,8 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   j::Object o;
   o.emplace("kana", j::Value(p.kana));
   o.emplace("context", j::Value(p.context));
+  o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
+  o.emplace("punctuation_style", j::Value(p.punctuation_style));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -499,13 +514,20 @@ std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const 
   auto kana = v->GetString("kana");
   auto context = v->GetString("context");
   if (!kana || !context) return std::nullopt;
-  return QueryLiveConversionRequest{std::move(*kana), std::move(*context)};
+  QueryLiveConversionRequest p;
+  p.kana = std::move(*kana);
+  p.context = std::move(*context);
+  // Absent for TIPs that predate M59 on this message: no punctuation.
+  p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
+  p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
+  return p;
 }
 
 std::string BuildQueryLiveConversionResponse(const QueryLiveConversionResponse& p) {
   j::Object o;
   o.emplace("surface", j::Value(p.surface));
   o.emplace("confidence", j::Value(p.confidence));
+  if (!p.segments.empty()) o.emplace("segments", LiveSegmentsToJson(p.segments));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -518,7 +540,11 @@ std::optional<QueryLiveConversionResponse> ParseQueryLiveConversionResponse(
   if (!surface || !confidence || !std::isfinite(*confidence) || *confidence < 0.0 ||
       *confidence > 1.0)
     return std::nullopt;
-  return QueryLiveConversionResponse{std::move(*surface), *confidence};
+  QueryLiveConversionResponse p;
+  p.surface = std::move(*surface);
+  p.confidence = *confidence;
+  p.segments = LiveSegmentsFromJson(*v);
+  return p;
 }
 
 // -------- QueryPredictions --------

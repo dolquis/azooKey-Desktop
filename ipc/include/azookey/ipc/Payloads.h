@@ -679,4 +679,41 @@ struct QueryPersonaResponse {
 std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p);
 std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json);
 
+// Batch correction view (rich-features-spec X-3-6, DEV-1532). Capability
+// "detect_anomalies". The settings app sends text the user chose to check;
+// text from a secure or learning-disallowed context is never sent, and the
+// Host refuses it if it is.
+inline constexpr std::string_view kAnomalyErrorBlocked = "blocked";
+inline constexpr std::string_view kAnomalyErrorBackendFailed = "backend_failed";
+
+struct DetectAnomaliesRequest {
+  std::string text;           // UTF-8, non-empty, at most kMaxAnomalyTextBytes.
+  uint32_t max_findings{20};  // Clamped to [1, kMaxAnomalyFindings].
+  bool secure{true};
+  bool learning_allowed{false};
+};
+
+struct AnomalyFindingField {
+  // UTF-16 code units into `text`, the unit the WinUI view and ITfRange use.
+  uint32_t start{};
+  uint32_t length{};
+  std::string reason;
+  std::vector<std::string> suggestions;
+  double confidence{};  // [0, 1]
+};
+
+// error: kLearningDataErrorInvalidRequest, kLearningDataErrorNotAuthenticated,
+// kLearningDataErrorUnsupported (no usable AI backend or consent),
+// kAnomalyErrorBlocked or kAnomalyErrorBackendFailed.
+struct DetectAnomaliesResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+  std::vector<AnomalyFindingField> findings;
+};
+
+std::string BuildDetectAnomaliesRequest(const DetectAnomaliesRequest& p);
+std::string BuildDetectAnomaliesResponse(const DetectAnomaliesResponse& p);
+std::optional<DetectAnomaliesRequest> ParseDetectAnomaliesRequest(const std::string& json);
+std::optional<DetectAnomaliesResponse> ParseDetectAnomaliesResponse(const std::string& json);
+
 }  // namespace azookey::ipc

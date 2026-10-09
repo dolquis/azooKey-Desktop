@@ -89,6 +89,41 @@ TEST(AiBackendTest, RejectsInvalidUtf8AndNulInOutput) {
     EXPECT_FALSE(backend.Transform(Cleanup(), Remote()).ok);
   }
 }
+// DEV-1532: anomaly detection is remote-only and carries the persona hint.
+TEST(AiBackendTest, AnomaliesNeverUseTheLocalPathAndCarryThePersonaHint) {
+  unsigned local_calls = 0;
+  AiLocalTransform local = [&](const auto&, const auto*, auto) {
+    ++local_calls;
+    return AiTransformResult{true, "[]", AiErrorClass::None};
+  };
+  std::string body;
+  AiBackend backend([&](const auto&, const std::string& value, const auto*, auto) {
+    body = value;
+    return AiHttpResponse{200, Reply(R"({"result":"[]"})")};
+  });
+  AiTransformRequest request;
+  request.task = AiTask::Anomalies;
+  request.text = "今日は晴れでした。";
+  request.prompt = "The writer's usual style: polite 0.80. ";
+  request.ai_allowed = true;
+  request.external_allowed = false;
+  EXPECT_EQ(backend.Transform(request, Remote(), nullptr, local).error_class,
+            AiErrorClass::Disabled);
+  auto local_options = Remote();
+  local_options.backend = "local-zenzai";
+  request.external_allowed = true;
+  EXPECT_EQ(backend.Transform(request, local_options, nullptr, local).error_class,
+            AiErrorClass::Disabled);
+  EXPECT_EQ(local_calls, 0u);
+  EXPECT_TRUE(body.empty());
+
+  const auto result = backend.Transform(request, Remote(), nullptr, local);
+  EXPECT_TRUE(result.ok);
+  EXPECT_EQ(result.result, "[]");
+  EXPECT_NE(body.find("polite 0.80"), std::string::npos);
+  EXPECT_NE(body.find("quote"), std::string::npos);
+}
+
 TEST(AiBackendTest, SecureAndDisabledNeverReachEitherBackend) {
   unsigned calls = 0;
   AiBackend backend([&](const auto&, const auto&, const auto*, auto) {

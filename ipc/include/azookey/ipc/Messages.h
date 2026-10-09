@@ -42,6 +42,8 @@ enum class MessageType {
   // section 4.6) and the persona view (rich-features-spec X-2-7).
   ResetLearningStore,
   QueryPersona,
+  // DEV-1532 batch correction view (rich-features-spec X-3-6).
+  DetectAnomalies,
   Unknown,
 };
 

@@ -7,6 +7,7 @@
 #include <format>
 #include <string_view>
 
+#include "azookey/host/AnomalyDetector.h"
 #include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/ModelScanner.h"
 #include "azookey/host/PunctuationInserter.h"
@@ -365,6 +366,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleResetLearningStore(req);
     case ipc::MessageType::QueryPersona:
       return HandleQueryPersona(req);
+    case ipc::MessageType::DetectAnomalies:
+      return HandleDetectAnomalies(req);
     case ipc::MessageType::ResolveNewWord:
       return HandleResolveNewWord(req);
     default:
@@ -483,6 +486,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildQueryPersonaResponse(r));
     }
+    case ipc::MessageType::DetectAnomalies: {
+      ipc::DetectAnomaliesResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildDetectAnomaliesResponse(r));
+    }
     case ipc::MessageType::ListModels: {
       ipc::ListModelsResponse r;
       r.ok = false;
@@ -542,7 +551,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "learning_data_management",
                       "commit_correction",
                       "learning_reset",
-                      "persona"};
+                      "persona",
+                      "detect_anomalies"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -1093,6 +1103,68 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPersona(const ipc::Envelope&
     res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
   }
   return MakeResponse(req, ipc::BuildQueryPersonaResponse(res));
+}
+
+// rich-features-spec X-3-6 (DEV-1532). The AI backend runs under the same
+// settings and consent as ai-cleanup, but only on the remote path; without it
+// the answer is "unsupported" rather than a guess from a weaker model.
+std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelope& req) {
+  ipc::DetectAnomaliesResponse res;
+  const auto fail = [&](std::string_view error) {
+    res.ok = false;
+    res.error = std::string(error);
+    return MakeResponse(req, ipc::BuildDetectAnomaliesResponse(res));
+  };
+  const auto parsed = ipc::ParseDetectAnomaliesRequest(req.payload_json);
+  if (!parsed) return fail(ipc::kLearningDataErrorInvalidRequest);
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  const bool host_blocked =
+      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed);
+  // Text from a secure or learning-disallowed context never leaves the Host.
+  if (parsed->secure || !parsed->learning_allowed || host_blocked) {
+    return fail(ipc::kAnomalyErrorBlocked);
+  }
+  privacy.reset();
+
+  AiBackendOptions options;
+  core::AiPrivacy ai_privacy{true, true};
+  {
+    std::lock_guard lock(*config_.update_config_mutex);
+    if (settings_store_) {
+      const auto& settings = settings_store_->settings();
+      options.backend = settings.ai_backend;
+      options.endpoint = settings.open_ai_api_endpoint;
+      options.api_key = settings.open_ai_api_key;
+      options.model = settings.open_ai_model;
+      options.timeout_ms = settings.open_ai_timeout_ms;
+      ai_privacy = settings.ai_privacy;
+    }
+  }
+  AiTransformRequest transform;
+  transform.task = AiTask::Anomalies;
+  transform.text = parsed->text;
+  const auto persona = engine_->CurrentPersona();
+  transform.prompt = AnomalyPersonaHint(persona ? std::optional{persona->persona} : std::nullopt);
+  transform.ai_allowed = ai_privacy.ai;
+  transform.external_allowed = ai_privacy.external;
+
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) return fail(ipc::kAnomalyErrorBackendFailed);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
+  const auto result = config_.ai_backend->Transform(transform, options, cancel.get());
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  completion.Complete();
+  if (canceled || result.error_class == AiErrorClass::Canceled) return std::nullopt;
+  if (!result.ok) {
+    const bool unavailable = result.error_class == AiErrorClass::Disabled ||
+                             result.error_class == AiErrorClass::BlockedBySecure;
+    return fail(unavailable ? ipc::kLearningDataErrorUnsupported : ipc::kAnomalyErrorBackendFailed);
+  }
+  auto findings = ParseAnomalyFindings(parsed->text, result.result, parsed->max_findings);
+  if (!findings) return fail(ipc::kAnomalyErrorBackendFailed);
+  res.findings = std::move(*findings);
+  return MakeResponse(req, ipc::BuildDetectAnomaliesResponse(res));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {

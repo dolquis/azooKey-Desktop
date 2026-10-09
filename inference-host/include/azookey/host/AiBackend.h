@@ -9,7 +9,9 @@
 
 namespace azookey::host {
 
-enum class AiTask { Transform, Cleanup, Lint };
+// Anomalies: rich-features-spec X-3-4 detection for the X-3-6 view. It is
+// remote-only: the local path has no model that can do it.
+enum class AiTask { Transform, Cleanup, Lint, Anomalies };
 enum class AiErrorClass {
   None,
   Auth,

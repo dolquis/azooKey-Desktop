@@ -461,6 +461,34 @@ Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに
 
 Phase 7 まで実装しない（Phase 5 ではホットキー登録のみ）。
 
+**Host の検出**（`inference-host/include/azookey/host/AnomalyDetector.h`）。X-3-4 の検出は、AI 整文
+（`ai-cleanup`）と同じ AI バックエンド設定（`aiBackend` / `openAi*`）と AI の同意
+（`privacy.ai` / `privacy.external`）の下で、外部バックエンドだけを使う。ローカル経路には段落の誤りを
+判定できるモデルが無いので使わない。使えないときは結果を推測せず、`unsupported` を返す。
+モデルには、誤りと見た箇所を位置ではなく本文の文字列（`quote`）で返させる。Host はその文字列を本文で
+前から順に探して UTF-16 の位置に直し、見つからない項目は捨てる。X-2-7 の Persona があれば、文体の
+手がかりとして指示に添える。
+
+**IPC `DetectAnomalies`**（capability `detect_anomalies`）。設定アプリが送る。
+
+| 要求フィールド | 型 | 意味 |
+|---|---|---|
+| `text` | str（非空、`kMaxAnomalyTextBytes` = 60 KiB 以下） | 検査する本文（UTF-8）。AI バックエンドの要求上限 64 KiB に指示文と共に収まる大きさ |
+| `max_findings` | uint（既定 20、1〜50 に丸める） | 返す件数の上限 |
+| `secure` / `learning_allowed` | bool（既定 `true` / `false`） | 本文を取った文脈の event privacy |
+
+secure の文脈、または学習を許さない文脈の本文は送らない。Host も、要求の `secure` が真か
+`learning_allowed` が偽のとき、または Host の privacy 設定が学習を止めているときは、AI へ渡さずに
+`blocked` を返す。利用者が設定アプリへ貼り付けた本文は、`secure=false`、`learning_allowed=true` で送る。
+
+| 応答フィールド | 型 | 意味 |
+|---|---|---|
+| `ok` / `error` | bool / str | `error` は `invalid_request` / `not_authenticated` / `unsupported`（使える AI バックエンドや同意が無い）/ `blocked` / `backend_failed` |
+| `findings[]` | 配列（50 件以下、`start` 順） | 各項目は `start` / `length`（本文上の UTF-16 code unit）、`reason`、`suggestions[]`（5 件以下）、`confidence`（0〜1） |
+
+文書全体の取得、ホットキー、キャレットの移動は TIP 側の作業で、DEV-1540 で追跡する。それまで設定アプリの
+「校正」ペインは、利用者が貼り付けた本文を検査する。
+
 ### X-3-7. 個人タイプミス学習（関連機能・別仕様）
 
 X-3 が対象とするのは「変換結果（surface）の誤り」だが、これと関連して

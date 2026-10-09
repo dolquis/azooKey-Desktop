@@ -31,4 +31,12 @@ inline constexpr std::size_t kMaxLearningEntryTags = 64;
 inline constexpr std::size_t kMaxLearningEntryMetadata = 32;
 inline constexpr std::size_t kMaxLearningDataStores = 16;
 
+// DetectAnomalies (rich-features-spec X-3-6). The text has to fit, with the
+// instruction, inside the AI backend's 64 KiB request budget; the findings and
+// their suggestions are bounded so a response stays a small frame.
+inline constexpr std::size_t kMaxAnomalyTextBytes = 60 * 1024;
+inline constexpr uint32_t kDefaultAnomalyFindings = 20;
+inline constexpr uint32_t kMaxAnomalyFindings = 50;
+inline constexpr std::size_t kMaxAnomalySuggestions = 5;
+
 }  // namespace azookey::ipc

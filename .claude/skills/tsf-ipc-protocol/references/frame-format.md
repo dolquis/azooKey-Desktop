@@ -112,6 +112,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ImportLearningData` | codec + Host | M49 のバックアップ取り込み。`source_path`・`stores`・`conflict_resolution`（`merge` / `overwrite` / `keep_both`、既定 `merge`）を送り、`status` とストア別の `imported_counts` / `skipped_counts` / `conflict_counts` を受け取る（§4.4） |
 | `ResetLearningStore` | codec + Host | 設定アプリの全削除。`store` を送り、`ok` / `error` を受け取る。capability `learning_reset`。途中で失敗しても半端に消さない（`docs/learning-data-management-spec.md` §4.6） |
 | `QueryPersona` | codec + Host | 学習ストアから算出した Persona の 4 比率と `sample_count`・`computed_at_epoch_sec` の取得。要求 payload は空オブジェクト。capability `persona`（`docs/rich-features-spec.md` X-2-7） |
+| `DetectAnomalies` | codec + Host | 校正ビューの検出。`text`・`max_findings`・`secure`・`learning_allowed` を送り、`findings[]`（UTF-16 の `start`・`length`、`reason`、`suggestions[]`、`confidence`）を受け取る。capability `detect_anomalies`。AI 整文と同じ設定・同意の外部バックエンドだけを使い、使えなければ `unsupported`（`docs/rich-features-spec.md` X-3-6） |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

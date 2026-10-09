@@ -26,6 +26,7 @@
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/PunctuationInserter.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -1347,6 +1348,82 @@ TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   EXPECT_EQ(parsed->surface, "日本");
   EXPECT_GE(parsed->confidence, 0.0);
   EXPECT_LE(parsed->confidence, 1.0);
+}
+
+// DEV-1442 / dynamic-punctuation-spec section 7: the Host inserts punctuation
+// into the live conversion surface only when the request asks for it and both
+// liveConversion and dynamicPunctuation are on, and flags the inserted mark as
+// a segment without a reading. The legacy QueryCandidates live=true carrier
+// follows the same rule.
+TEST_F(DispatcherTest, QueryLiveConversionInsertsPunctuationOnlyWhenAskedAndEnabled) {
+  // Long enough, and ending in "です", for the sentence-final rule.
+  const std::string kana = "きょうはいいてんきです";
+  const auto live = [&](uint64_t id, bool auto_punctuation) {
+    ipc::QueryLiveConversionRequest request{kana, ""};
+    request.auto_punctuation = auto_punctuation;
+    const auto response = dispatcher.Dispatch(MakeReq(
+        id, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseQueryLiveConversionResponse(response->payload_json) : std::nullopt;
+  };
+  const auto ends_with_period = [](const std::string& text) {
+    const std::string period = "。";
+    return text.size() > period.size() &&
+           text.compare(text.size() - period.size(), period.size(), period) == 0;
+  };
+
+  // The setting is off by default: the request flag alone changes nothing.
+  const auto off = live(1401, true);
+  ASSERT_TRUE(off);
+  const auto plain = off->surface;
+  EXPECT_FALSE(ends_with_period(plain));
+  EXPECT_TRUE(off->segments.empty());
+
+  auto config = engine.config();
+  config.dynamic_punctuation = true;
+  config.punctuation_rules_path = "";
+  engine.ApplyConfig(config);
+
+  const auto on = live(1402, true);
+  ASSERT_TRUE(on);
+  EXPECT_EQ(on->surface, plain + "。");
+  ASSERT_GE(on->segments.size(), 2u);
+  EXPECT_FALSE(on->segments.front().auto_punctuation);
+  EXPECT_EQ(on->segments.front().reading, kana);
+  EXPECT_TRUE(on->segments.back().auto_punctuation);
+  EXPECT_EQ(on->segments.back().surface, "。");
+  EXPECT_TRUE(on->segments.back().reading.empty());
+  std::string joined;
+  for (const auto& segment : on->segments) joined += segment.surface;
+  EXPECT_EQ(joined, on->surface);
+
+  // onPause typing sends false (section 7.1.1): no punctuation, no segments.
+  const auto typing = live(1403, false);
+  ASSERT_TRUE(typing);
+  EXPECT_EQ(typing->surface, plain);
+  EXPECT_TRUE(typing->segments.empty());
+
+  // The legacy carrier, for a Host that does not advertise query_live_conversion.
+  ipc::QueryCandidatesRequest legacy;
+  legacy.reading = kana;
+  legacy.live = true;
+  legacy.auto_punctuation = true;
+  const auto legacy_response = dispatcher.Dispatch(
+      MakeReq(1404, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(legacy)));
+  ASSERT_TRUE(legacy_response);
+  const auto legacy_parsed = ipc::ParseQueryCandidatesResponse(legacy_response->payload_json);
+  ASSERT_TRUE(legacy_parsed && !legacy_parsed->candidates.empty());
+  EXPECT_EQ(legacy_parsed->candidates.front().surface, plain + "。");
+  ASSERT_FALSE(legacy_parsed->segments.empty());
+  EXPECT_TRUE(legacy_parsed->segments.back().auto_punctuation);
+
+  // liveConversion off disables the feature even with dynamicPunctuation on.
+  config.enable_live_conversion = false;
+  engine.ApplyConfig(config);
+  const auto disabled = live(1405, true);
+  ASSERT_TRUE(disabled);
+  EXPECT_EQ(disabled->surface, plain);
+  EXPECT_TRUE(disabled->segments.empty());
 }
 
 TEST_F(DispatcherTest, QueryLiveConversionDoesNotSaturateUserWordScore) {
@@ -3984,6 +4061,35 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   ASSERT_TRUE(invalid.has_value());
   EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(invalid->payload_json)->error,
             std::optional<std::string>("invalid_request"));
+
+  // An openai backend without an API key is a setting to make, not a failure.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai"})";
+  }
+  settings.Reload();
+  EXPECT_EQ(detect(766, request)->error, std::optional<std::string>("unsupported"));
+  EXPECT_TRUE(sent.empty());
+
+  // The Host's own privacy setting blocks the text before any backend sees it.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+            R"("privacy":{"mode":"private"}})";
+  }
+  settings.Reload();
+  EXPECT_EQ(detect(767, request)->error, std::optional<std::string>("blocked"));
+  EXPECT_TRUE(sent.empty());
+
+  // A request canceled before it runs gets no reply.
+  {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  settings.Reload();
+  scheduler.Cancel(768);
+  EXPECT_FALSE(handler.Dispatch(
+      MakeReq(768, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request))));
   std::remove(settings_path.c_str());
 }
 

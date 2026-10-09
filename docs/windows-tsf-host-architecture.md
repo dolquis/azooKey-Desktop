@@ -450,7 +450,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
-| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。要求 ID は Envelope の `request_id` | legacy-parity §2 |
+| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答に `segments[]` を持つ（dynamic-punctuation §7）。要求 ID は Envelope の `request_id` | legacy-parity §2 |
 | `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15)。Envelope に要求 ID、要求 payload に `kana`・`leftSideContext`・`mode`・`app`（任意）、応答 payload に `predictions[]` | legacy-parity §3 + rich X-2 |
 | `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
 | `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |

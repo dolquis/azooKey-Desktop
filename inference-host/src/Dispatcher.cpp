@@ -273,6 +273,26 @@ void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                {"result", logging::RuntimeLogSafeText(std::string(result))}});
 }
 
+// M59 (dynamic-punctuation-spec section 7): the live conversion surface as one
+// converted segment, with punctuation inserted by the configured rules.
+// nullopt when the request or the settings leave punctuation off.
+std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& config,
+                                                       bool auto_punctuation,
+                                                       const std::string& style,
+                                                       const std::string& surface,
+                                                       const std::string& reading) {
+  if (!auto_punctuation || !config.enable_live_conversion || !config.dynamic_punctuation ||
+      surface.empty()) {
+    return std::nullopt;
+  }
+  ipc::LiveSegment converted;
+  converted.surface = surface;
+  converted.reading = reading;
+  converted.score = 1.0;
+  const auto rules = PunctuationInserter::LoadRules(config.punctuation_rules_path);
+  return PunctuationInserter::Insert({converted}, rules, style, config.segment_boundary_confidence);
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
@@ -795,17 +815,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   ipc::QueryCandidatesResponse res;
   for (auto& c : candidates) res.candidates.push_back(ToField(c));
-  if (parsed->live && parsed->auto_punctuation && engine_config.enable_live_conversion &&
-      engine_config.dynamic_punctuation && !res.candidates.empty()) {
-    ipc::LiveSegment converted;
-    converted.surface = res.candidates.front().surface;
-    converted.reading = res.candidates.front().reading;
-    converted.score = 1.0;
-    const auto rules = PunctuationInserter::LoadRules(engine_config.punctuation_rules_path);
-    auto inserted = PunctuationInserter::Insert({converted}, rules, parsed->punctuation_style,
-                                                engine_config.segment_boundary_confidence);
-    res.candidates.front().surface = std::move(inserted.surface);
-    res.segments = std::move(inserted.segments);
+  // The pre-M14 carrier of live conversion; current TIPs use QueryLiveConversion.
+  if (parsed->live && !res.candidates.empty()) {
+    if (auto inserted = InsertLivePunctuation(
+            engine_config, parsed->auto_punctuation, parsed->punctuation_style,
+            res.candidates.front().surface, res.candidates.front().reading)) {
+      res.candidates.front().surface = std::move(inserted->surface);
+      res.segments = std::move(inserted->segments);
+    }
   }
   if (!parsed->emoji_trigger.empty() && parsed->max_candidates > 0 &&
       res.candidates.size() > parsed->max_candidates) {
@@ -851,6 +868,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   }
   if (candidate) {
     response.surface = candidate->surface;
+    // The reading the candidate was converted from: a typo auto-replace has
+    // already corrected it, and the segments feed learning (section 5.3).
+    const auto& reading = candidate->reading.empty() ? parsed->kana : candidate->reading;
+    if (parsed->auto_punctuation) {
+      if (auto inserted = InsertLivePunctuation(engine_->config(), true, parsed->punctuation_style,
+                                                candidate->surface, reading)) {
+        response.surface = std::move(inserted->surface);
+        response.segments = std::move(inserted->segments);
+      }
+    }
     if (std::isfinite(candidate->score)) {
       // M14 fallback scores are unbounded ranking values. A zero-baseline
       // sigmoid preserves their ordering without pinning ordinary scores >1
@@ -1157,8 +1184,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   completion.Complete();
   if (canceled || result.error_class == AiErrorClass::Canceled) return std::nullopt;
   if (!result.ok) {
+    // No API key is a setting the user has to make, as Disabled is.
     const bool unavailable = result.error_class == AiErrorClass::Disabled ||
-                             result.error_class == AiErrorClass::BlockedBySecure;
+                             result.error_class == AiErrorClass::BlockedBySecure ||
+                             (result.error_class == AiErrorClass::Auth && options.api_key.empty());
     return fail(unavailable ? ipc::kLearningDataErrorUnsupported : ipc::kAnomalyErrorBackendFailed);
   }
   auto findings = ParseAnomalyFindings(parsed->text, result.result, parsed->max_findings);

@@ -106,8 +106,8 @@ std::string BuildAiInstruction(const AiTransformRequest& request) {
     instruction +=
         "The text is Japanese typed with an input method. Find spans that look like "
         "conversion mistakes, grammar errors, inconsistent politeness, or subject and "
-        "predicate that do not agree. Do not rewrite the text. The value of result must "
-        "be a JSON array; each element is an object with quote (the exact span copied "
+        "predicate that do not agree. Do not rewrite the text. The result string must "
+        "contain a JSON array; each element is an object with quote (the exact span copied "
         "from the text), reason (a short Japanese explanation), suggestions (an array of "
         "replacement strings) and confidence (a number from 0 to 1). Return [] when "
         "nothing looks wrong. ";

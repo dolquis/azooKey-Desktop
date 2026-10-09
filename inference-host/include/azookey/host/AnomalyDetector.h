@@ -22,8 +22,8 @@ std::string AnomalyPersonaHint(const std::optional<learning::Persona>& persona);
 // {quote, reason, suggestions[], confidence}. Each quote is searched in `text`
 // from the end of the previous match (then from the start), so repeated
 // phrases map to successive occurrences. Unplaceable, empty or malformed items
-// are dropped. nullopt when `result` is not a JSON array at all. At most
-// `max_findings` findings, ordered by start.
+// and exact duplicates of a placed span are dropped; overlapping spans are kept. nullopt when
+// `result` is not a JSON array at all. At most `max_findings` findings, ordered by start.
 std::optional<std::vector<ipc::AnomalyFindingField>> ParseAnomalyFindings(std::string_view text,
                                                                           std::string_view result,
                                                                           size_t max_findings);

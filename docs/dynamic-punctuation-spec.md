@@ -69,7 +69,7 @@ surface へ自動句読点を含めて表示する。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
+| Composing/Previewing | Input | Previewing | ライブ変換要求（`QueryLiveConversion`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
 | Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求（Backspace も編集イベント。`auto_punctuation` は §7.1.1 の timing 規則に従い `onPause` 編集中は `false`、idle タイマー再アーム） |
 | Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
 | Previewing | Commit (Enter) | Idle | **`onPause` で句読点未反映なら最終 `auto_punctuation=true` 要求を発行・待機**してから確定（§7.3。in-flight 打鍵要求は Cancel、タイムアウト時は現 surface 確定）。`CommitSegmentsObservation` は自動句読点を分離して観測（§5・§7） |
@@ -476,12 +476,11 @@ reading 長 0 として写像に組み込む。
 
 ## 7. IPC プロトコル
 
-**クエリ（ライブ変換）経路は新 `MessageType` を追加しない。実装の現状整合**: ライブ変換は現状
-`QueryCandidatesRequest.live = true`（`ipc/include/azookey/ipc/Payloads.h`）で運ばれており、
-`docs/legacy-parity-spec.md` §2.2 が提案した独立 `QueryLiveConversion` payload は未実装。
-よって M59 のクエリ拡張は**現行 `QueryCandidates` 経路にオプションフィールドを追加**する。M14 が独立
-`QueryLiveConversion` payload に分離する場合は、本節のフィールドを**そのまま新 payload へ
-移設**する（フィールド定義・既定値・後方互換規約は不変）。
+**クエリ（ライブ変換）経路は新 `MessageType` を追加しない**。ライブ変換は M14 の
+`MessageType::QueryLiveConversion`（`ipc/include/azookey/ipc/Payloads.h`）で運ぶ。M59 のクエリ拡張は、
+その要求（§7.1）と応答（§7.2）に任意フィールドを足す。TIP は Host が Handshake で
+`query_live_conversion` を告知したときにこの経路を使う。告知の無い Host に対する代替経路
+`QueryCandidates` の `live=true` も同じフィールドを持ち、Host は同じ規則で句読点を挿入する。
 
 > **確定（commit）経路は別**: 自動句読点を学習から除外する原子的な multi-segment 確定には、
 > **新 `MessageType::CommitSegmentsObservation`（M58-B と共有。`docs/romaji-batch-conversion-spec.md`
@@ -495,9 +494,9 @@ reading 長 0 として写像に組み込む。
 （Build = `o.emplace(...)`、Parse = `GetBool/GetString/GetUInt/...().value_or(既定)`）に従う。
 省略時は既定値となり、旧 TIP / 旧 host と相互運用できる。
 
-### 7.1 Request（`QueryCandidatesRequest` 拡張）
+### 7.1 Request（`QueryLiveConversionRequest` 拡張）
 
-既存フィールド: `reading` / `left_context` / `max_candidates` / `live`。追加:
+既存フィールド: `kana` / `context`。追加:
 
 | field | 型 | 既定 | 説明 |
 |---|---|---|---|
@@ -522,10 +521,8 @@ host 側のモード判定なしに区別できる（Codex 指摘の「host が�
 
 ```jsonc
 {
-  "reading": "きょうはいいてんきです",
-  "left_context": "",
-  "max_candidates": 10,
-  "live": true,                  // ライブ変換経路（既存）
+  "kana": "きょうはいいてんきです",
+  "context": "",
   "auto_punctuation": true,       // 追加（例: idle/commit/eager の挿入リクエスト。onPause 打鍵中は false。§7.1.1）
   "punctuation_style": "ja"       // 追加
 }
@@ -542,13 +539,18 @@ p.auto_punctuation  = v->GetBool("auto_punctuation").value_or(false);
 p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
 ```
 
-`auto_punctuation` は `live == true` のときのみ意味を持つ（host は `live==false` では無視）。
+Host は `auto_punctuation` が `true` で、設定の `liveConversion` と `dynamicPunctuation` が
+どちらも真のときだけ句読点を挿入する。代替経路の `QueryCandidatesRequest` の同名フィールドは
+`live == true` のときだけ意味を持ち、`live == false` では無視する。
 
-### 7.2 Response（`QueryCandidatesResponse` に `segments[]` を追加）
+### 7.2 Response（`segments[]` を追加）
 
-`QueryCandidatesResponse` は `candidates[]` + `partial` に加えて、
-**任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。`segments` を
-省略した応答は従来どおり（句読点なし・文節情報なし）に解釈される。
+`QueryLiveConversionResponse` は `surface` + `confidence` に加えて、
+**任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。Host は挿入が有効な要求（§7.1 の
+3 条件がすべて真）の応答に `segments` を付ける。規則に当たらず句読点が入らなかったときも文節を返すので、
+句読点が入ったかどうかは各 segment の `auto_punctuation` で判断する。挿入が無効な要求の応答は
+`segments` を付けず、従来どおり（句読点なし・文節情報なし）に解釈される。
+代替経路の `QueryCandidatesResponse` も、`candidates[]` + `partial` に加えて同じ `segments[]` を持つ。
 
 変換器が文節境界を返さない場合、host は最良候補全体を 1 文節として扱い、
 `pos` / `head_pos` / `sem` / `head_sem` は `Unknown` とする。この場合は
@@ -566,17 +568,15 @@ p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
 | `surface` | string | ○ | 文節の表層（UTF-8）。**学習・確定はこれを直接使う**（§5.3） |
 | `reading` | string | 既定 "" | 文節読み（`auto_punctuation=true` は空） |
 
-最良 surface 全体は `candidates[0].surface`（句読点込み）に等しく、各 `segments[].surface` の
+最良 surface 全体は応答の `surface`（代替経路では `candidates[0].surface`。句読点込み）に等しく、各 `segments[].surface` の
 連結と一致する。**per-segment `surface` を持たせる**のは、学習・確定で `start_char`/`end_char`
 （UTF-16）を UTF-8 文字列のバイトオフセットに誤用して切り出す事故を避けるため（§5.1）。オフセットは
 TIP の `ITfRange` 範囲操作専用、学習スライスは `surface` 文字列を使う。
 
 ```jsonc
 {
-  "candidates": [
-    { "surface": "今日はいい天気です。", "reading": "きょうはいいてんきです", "score": 0.93, "source": "model" }
-  ],
-  "partial": false,
+  "surface": "今日はいい天気です。",
+  "confidence": 0.93,
   "segments": [
     { "start_char": 0,  "end_char": 3,  "score": 0.95, "auto_punctuation": false, "surface": "今日は",     "reading": "きょうは" },
     { "start_char": 3,  "end_char": 9,  "score": 0.90, "auto_punctuation": false, "surface": "いい天気です", "reading": "いいてんきです" },
@@ -772,11 +772,13 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 
 ### 7.5 payloads_test 期待値（`ipc/tests/payloads_test.cpp`）
 
-- `QueryCandidatesRequest` round-trip で `auto_punctuation` / `punctuation_style` が保存される。
+- `QueryLiveConversionRequest`（と代替経路の `QueryCandidatesRequest`）の round-trip で
+  `auto_punctuation` / `punctuation_style` が保存される。
 - これらを欠く JSON のパースで `false` / `"ja"` の既定になる（後方互換）。
-- `QueryCandidatesResponse` round-trip で `segments[]`（`auto_punctuation` マーカ・`surface`・
-  `reading`・UTF-16 オフセット）が保存される。`segments` を欠く JSON は空 `segments` にパースされ、
-  従来応答として解釈できる。各 `segments[].surface` の連結が `candidates[0].surface` と一致する。
+- `QueryLiveConversionResponse`（と `QueryCandidatesResponse`）の round-trip で `segments[]`
+  （`auto_punctuation` マーカ・`surface`・`reading`・UTF-16 オフセット）が保存される。`segments` を欠く
+  JSON は空 `segments` にパースされ、従来応答として解釈できる。挿入が無効な要求への応答は `segments` を
+  wire に載せない。各 `segments[].surface` の連結が応答の `surface` と一致する。
 - **学習スライスのバイト安全性** (host or 状態機械テスト): 日本語を含む確定で、各文節の学習
   surface が **`seg.surface` 文字列**から取られ、UTF-16 オフセットでの `substr` で壊れないこと
   （マルチバイト境界を割らない。§5.1・§5.3）。
@@ -819,7 +821,7 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で
   あること、OFF で従来遷移が不変であること。
-- **IPC** (`ipc/tests/payloads_test.cpp`): ライブ変換要求（現状 `QueryCandidates`、§7）の
+- **IPC** (`ipc/tests/payloads_test.cpp`): ライブ変換要求（`QueryLiveConversion`、§7）の
   `auto_punctuation` / `punctuation_style` フィールド、応答 `segments[]`（`auto_punctuation` /
   `surface` / `reading`）の build/parse 往復。`CommitSegmentsObservation` の往復（§7.4）。
 - **学習分離** (`learning/tests`): 自動句読点を含む確定で、句読点が `(reading, surface)`

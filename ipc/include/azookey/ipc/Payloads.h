@@ -168,11 +168,20 @@ struct QueryCandidatesResponse {
 struct QueryLiveConversionRequest {
   std::string kana;
   std::string context;
+  // M59 dynamic punctuation (dynamic-punctuation-spec section 7.1). The TIP
+  // decides the timing (section 7.1.1); absent fields keep the pre-M59 shape
+  // (no punctuation, "ja").
+  bool auto_punctuation{false};
+  std::string punctuation_style{"ja"};
 };
 
 struct QueryLiveConversionResponse {
   std::string surface;
   double confidence{};  // Normalized to [0.0, 1.0].
+  // Set when punctuation insertion was enabled for this request (section
+  // 7.2): the segments of `surface`, with any inserted mark flagged
+  // auto_punctuation (section 7.4). Omitted from the wire when empty.
+  std::vector<LiveSegment> segments;
 };
 
 // request_id travels in the Envelope. Phase 5 supports only mode="word".

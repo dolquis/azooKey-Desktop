@@ -60,6 +60,18 @@ TEST(AnomalyDetectorTest, DropsUnplaceableItemsAndCapsTheCount) {
   EXPECT_TRUE(none->empty());
 }
 
+TEST(AnomalyDetectorTest, ReportsTheSameSpanOnceButKeepsOverlaps) {
+  const std::string text = "明日は雨でした。";
+  const auto findings =
+      ParseAnomalyFindings(text, R"([{"quote":"雨"},{"quote":"雨"},{"quote":"雨でした"}])", 10);
+  ASSERT_TRUE(findings.has_value());
+  ASSERT_EQ(findings->size(), 2u);
+  EXPECT_EQ((*findings)[0].start, 3u);
+  EXPECT_EQ((*findings)[0].length, 1u);
+  EXPECT_EQ((*findings)[1].start, 3u);
+  EXPECT_EQ((*findings)[1].length, 4u);
+}
+
 TEST(AnomalyDetectorTest, PersonaHintOnlyWithSamples) {
   EXPECT_TRUE(AnomalyPersonaHint(std::nullopt).empty());
   azookey::learning::Persona persona;

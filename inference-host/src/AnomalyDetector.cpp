@@ -58,6 +58,13 @@ std::optional<std::vector<ipc::AnomalyFindingField>> ParseAnomalyFindings(std::s
     ipc::AnomalyFindingField finding;
     finding.start = Utf16Length(text.substr(0, at));
     finding.length = Utf16Length(*quote);
+    // The same span twice (a quote found again from the start) is one finding;
+    // overlapping spans are kept, each with its own reason.
+    if (std::any_of(findings.begin(), findings.end(), [&](const auto& placed) {
+          return placed.start == finding.start && placed.length == finding.length;
+        })) {
+      continue;
+    }
     finding.reason = item.GetString("reason").value_or(std::string());
     finding.confidence = std::clamp(item.GetNumber("confidence").value_or(0.5), 0.0, 1.0);
     if (const auto* suggestions = item.GetArray("suggestions")) {

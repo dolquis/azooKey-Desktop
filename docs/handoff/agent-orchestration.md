@@ -74,7 +74,7 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 background へ回してよいもの:
 
 - 変更停止後の read-only 差分レビュー。
-- 互いに独立した spec drift 確認と境界の不変条件確認。
+- 互いに独立した spec drift 確認。
 - 親が生成したログ・評価出力の読み解き。
 - 専用 build directory を確保し、他の writer が停止している状態での長時間 build / test。
 

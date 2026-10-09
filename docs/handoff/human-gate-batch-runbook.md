@@ -8,6 +8,11 @@ VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文�
 - 打鍵チェック項目 A1〜A8 と B1〜B7：[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
 - compat runner の実行と出力レイアウト：[`../../compat-test/README.md`](../../compat-test/README.md)
 - dump、ETW、Process Monitor の採取：[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)
+- VM と開発機の振り分け基準、開発機での手順：[`dev-machine-verification.md`](./dev-machine-verification.md)
+
+本書のレーンは VM で行う。
+対象の選定では、Linear で `env:vm` が付いた課題を本書のレーンへ、`env:dev-machine` が付いた課題を開発機へ割り当てる。
+`env:dev-machine` の課題を VM のレーンで行ってもよい。逆は行わない。
 
 進捗と状態の正典は Linear（team `Dev` / project *azooKey Desktop / Windows IME MVP*）である。
 本書は手順と記録様式だけを持ち、実走の履歴と個別課題の状態は持たない。

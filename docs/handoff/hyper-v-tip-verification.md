@@ -12,6 +12,7 @@ azooKey TIP（`tsf-tip`）と inference-host を Hyper-V の Windows 11 VM 上�
 
 TIP は全プロセスにロードされる IME であり、machine-wide 登録（HKLM COM + TSF profile）を伴う。
 不具合があるとホスト OS の文字入力に波及し得るため、隔離された VM で検証し、チェックポイントで即座に戻せるようにする。
+VM を要しない課題を開発機で行う場合の範囲と手順は [`dev-machine-verification.md`](./dev-machine-verification.md) が定める。
 
 ## 安全装置（先に押さえる4点）
 

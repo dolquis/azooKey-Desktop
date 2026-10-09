@@ -144,6 +144,13 @@ void LearningPane::Build(controls::StackPanel panel,
     }
   });
   search_row.Children().Append(search_button_);
+  reset_button_ = controls::Button();
+  reset_button_.Content(winrt::box_value(resources.GetString(L"Learning_ResetButton")));
+  SetId(reset_button_, L"LearningResetButton");
+  reset_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->Reset();
+  });
+  search_row.Children().Append(reset_button_);
   entries_section_.Children().Append(search_row);
 
   entries_panel_ = controls::StackPanel();
@@ -289,6 +296,7 @@ void LearningPane::RecoverFromFailure() {
 void LearningPane::SetBusy(bool busy) {
   busy_ = busy;
   search_button_.IsEnabled(!busy);
+  reset_button_.IsEnabled(!busy);
   export_button_.IsEnabled(!busy);
   import_button_.IsEnabled(!busy);
   if (busy) {
@@ -450,6 +458,50 @@ winrt::fire_and_forget LearningPane::Forget(azookey::ipc::LearningEntryField ent
     if (entries_.size() == 1 && offset_ > 0) {
       offset_ = offset_ > kLearningPageSize ? offset_ - kLearningPageSize : 0;
     }
+    LoadPage();
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+winrt::fire_and_forget LearningPane::Reset() {
+  const auto self = shared_from_this();
+  if (busy_ || tab_index_ >= static_cast<int>(kLearningStoreTabs.size())) co_return;
+  const auto& tab = kLearningStoreTabs[static_cast<size_t>(tab_index_)];
+  const auto dispatcher = dispatcher_;
+  try {
+    ResourceLoader resources;
+    const auto message =
+        resources.GetString(L"Learning_ResetConfirmMessage") + L"\n" +
+        resources.GetString(winrt::to_hstring("Learning_ResetNote_" + std::string(tab.id)));
+    if (!co_await Confirm(resources.GetString(L"Learning_ResetConfirmTitle") + L" (" +
+                              resources.GetString(winrt::to_hstring(std::string(tab.resource))) +
+                              L")",
+                          message, resources.GetString(L"Learning_ResetButton"))) {
+      co_return;
+    }
+    SetBusy(true);
+    azookey::ipc::ResetLearningStoreRequest request;
+    request.store = std::string(tab.id);
+    co_await winrt::resume_background();
+    const auto result = RequestResetLearningStore(DefaultSettingsIpcOptions(), request);
+    co_await ResumeForeground(dispatcher);
+
+    SetBusy(false);
+    ResourceLoader after;
+    if (result.status != HostCallStatus::Ok) {
+      ShowStatus(controls::InfoBarSeverity::Error, after.GetString(L"Learning_ProblemTitle"),
+                 Str(after, HostCallStatusResource(result.status)));
+      co_return;
+    }
+    if (!result.response->ok) {
+      ShowStatus(controls::InfoBarSeverity::Error, after.GetString(L"Learning_ProblemTitle"),
+                 Str(after, LearningErrorResource(result.response->error.value_or(""))));
+      co_return;
+    }
+    ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ResetDoneTitle"),
+               after.GetString(L"Learning_ResetDoneMessage"));
+    offset_ = 0;
     LoadPage();
   } catch (...) {
     RecoverFromFailure();

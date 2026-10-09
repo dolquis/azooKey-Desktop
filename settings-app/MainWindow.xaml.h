@@ -9,6 +9,7 @@
 #include "MainWindow.g.h"
 #include "ModelPane.h"
 #include "NeologdAttribution.h"
+#include "PersonaPane.h"
 #include "ProfilesPane.h"
 #include "SettingsDocument.h"
 #include "SettingsFieldControls.h"
@@ -54,6 +55,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   void ApplyDictionaryToControls(const azookey::settings::DictionarySettings& dictionary);
   azookey::settings::DictionarySettings DictionaryFromControls();
   void SetNeologdToggle(bool enabled);
+  // Asks the Host (QueryDiagnostics) what became of the neologd layer and shows it.
+  winrt::fire_and_forget RefreshNeologdLayerStatus();
   Windows::Foundation::IAsyncOperation<bool> ShowNeologdNoticesAsync(bool ask_consent);
   void ShowSafeMode(const azookey::settings::EditableSettings& settings);
   void ShowInvalidSetting(const std::string& path);
@@ -71,6 +74,7 @@ struct MainWindow : MainWindowT<MainWindow> {
   std::shared_ptr<azookey::settings::ProfilesPane> profiles_pane_;
   std::shared_ptr<azookey::settings::ModelPane> model_pane_;
   std::shared_ptr<azookey::settings::LearningPane> learning_pane_;
+  std::shared_ptr<azookey::settings::PersonaPane> persona_pane_;
   bool clear_safe_mode_{false};
 };
 

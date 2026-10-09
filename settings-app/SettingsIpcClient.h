@@ -50,6 +50,8 @@ struct HostCallResult {
 inline constexpr const char* kCapabilityListModels = "list_models";
 inline constexpr const char* kCapabilityBenchmarkModel = "benchmark_model";
 inline constexpr const char* kCapabilityLearningData = "learning_data_management";
+inline constexpr const char* kCapabilityLearningReset = "learning_reset";
+inline constexpr const char* kCapabilityPersona = "persona";
 
 // Each call connects, completes the Handshake, sends one request and waits for its response.
 HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
@@ -64,5 +66,14 @@ HostCallResult<azookey::ipc::ExportLearningDataResponse> RequestExportLearningDa
     const SettingsIpcOptions& options, const azookey::ipc::ExportLearningDataRequest& request);
 HostCallResult<azookey::ipc::ImportLearningDataResponse> RequestImportLearningData(
     const SettingsIpcOptions& options, const azookey::ipc::ImportLearningDataRequest& request);
+HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningStore(
+    const SettingsIpcOptions& options, const azookey::ipc::ResetLearningStoreRequest& request);
+// Persona ratios (rich-features-spec X-2-7); the request payload is an empty object.
+HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
+    const SettingsIpcOptions& options);
+// QueryDiagnostics has no capability of its own: a Host that predates a field leaves it out of
+// the response, so the caller reads the optional fields.
+HostCallResult<azookey::ipc::QueryDiagnosticsPayload> RequestQueryDiagnostics(
+    const SettingsIpcOptions& options);
 
 }  // namespace azookey::settings

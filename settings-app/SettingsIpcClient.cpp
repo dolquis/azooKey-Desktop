@@ -137,7 +137,7 @@ HostCallResult<Response> Call(const SettingsIpcOptions& options, const char* cap
     result.status = StatusFor(failure);
     return result;
   }
-  if (!session.HasCapability(capability)) {
+  if (capability != nullptr && !session.HasCapability(capability)) {
     result.status = HostCallStatus::Unsupported;
     return result;
   }
@@ -244,6 +244,28 @@ HostCallResult<azookey::ipc::ImportLearningDataResponse> RequestImportLearningDa
       options, kCapabilityLearningData, MessageType::ImportLearningData,
       azookey::ipc::BuildImportLearningDataRequest(request), options.long_response_timeout_ms,
       azookey::ipc::ParseImportLearningDataResponse);
+}
+
+HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningStore(
+    const SettingsIpcOptions& options, const azookey::ipc::ResetLearningStoreRequest& request) {
+  return Call<azookey::ipc::ResetLearningStoreResponse>(
+      options, kCapabilityLearningReset, MessageType::ResetLearningStore,
+      azookey::ipc::BuildResetLearningStoreRequest(request), options.long_response_timeout_ms,
+      azookey::ipc::ParseResetLearningStoreResponse);
+}
+
+HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
+    const SettingsIpcOptions& options) {
+  return Call<azookey::ipc::QueryPersonaResponse>(
+      options, kCapabilityPersona, MessageType::QueryPersona, "{}", options.response_timeout_ms,
+      azookey::ipc::ParseQueryPersonaResponse);
+}
+
+HostCallResult<azookey::ipc::QueryDiagnosticsPayload> RequestQueryDiagnostics(
+    const SettingsIpcOptions& options) {
+  return Call<azookey::ipc::QueryDiagnosticsPayload>(
+      options, nullptr, MessageType::QueryDiagnostics, "{}", options.response_timeout_ms,
+      azookey::ipc::ParseQueryDiagnostics);
 }
 
 }  // namespace azookey::settings

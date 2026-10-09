@@ -466,6 +466,12 @@ Backend: auto → CPU
 - **選択モデルをロード**: `LoadModel` IPC を送信、進捗バー表示
 - **ベンチマーク**: `BenchmarkModel` IPC を送信、結果を表示・保存
 
+設定アプリの「モデル」ペイン（`sideload-packaging-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
+検証結果の表示、ベンチマーク（`BenchmarkModel`。backend は `cpu`）、モデルの選択、`model.benchmarkHistory` の
+表示である。モデルの選択は「一般」のモデルのパス欄へ入れるだけで、`model.selectedPath` は共通の保存ボタンが
+書く。選択と測定の対象は、`valid` な `gguf` に限る（`onnx_genai` は一覧に出すが選べない）。
+「モデルを追加」「フォルダを開く」「選択モデルをロード」は、このペインに置かない。
+
 ### 6.2 状態表示
 
 | 表示 | 意味 |

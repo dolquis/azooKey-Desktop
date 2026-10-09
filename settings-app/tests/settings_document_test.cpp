@@ -1002,3 +1002,40 @@ TEST(SettingsDocumentTest, SafeModeSurvivesASaveAndInvalidFieldsAreDropped) {
   EXPECT_EQ(safe_mode.at("lastCrashCount").AsNumber(), 3.0);
   EXPECT_FALSE(safe_mode.contains("unknownKey"));
 }
+
+TEST(SettingsDocumentTest, BenchmarkHistoryIsShownAndSurvivesASave) {
+  const auto dir = TestDir("azookey_settings_benchmark_history");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "model": {
+      "selectedPath": "C:/models/zenz.gguf",
+      "benchmarkHistory": [
+        {"path": "C:/models/zenz.gguf", "backend": "cpu", "status": "success",
+         "p50_ms": 18.5, "p95_ms": 41.0, "p99_ms": 78.4, "extra": 1},
+        "not an object",
+        {"backend": "cpu", "status": "timeout"}
+      ]
+    }
+  })");
+
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+
+  ASSERT_EQ(loaded.settings.benchmark_history.size(), 2u);
+  const auto& first = loaded.settings.benchmark_history[0];
+  EXPECT_EQ(first.model, "C:/models/zenz.gguf");
+  EXPECT_EQ(first.backend, "cpu");
+  EXPECT_EQ(first.status, "success");
+  ASSERT_TRUE(first.p50_ms);
+  EXPECT_DOUBLE_EQ(*first.p50_ms, 18.5);
+  EXPECT_FALSE(loaded.settings.benchmark_history[1].p50_ms);
+
+  loaded.settings.model_selected_path = "C:/models/other.gguf";
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& model = parsed->AsObject().at("model").AsObject();
+  EXPECT_EQ(model.at("selectedPath").AsString(), "C:/models/other.gguf");
+  ASSERT_TRUE(model.at("benchmarkHistory").IsArray());
+  EXPECT_EQ(model.at("benchmarkHistory").AsArray().size(), 3u);
+  std::filesystem::remove_all(dir);
+}

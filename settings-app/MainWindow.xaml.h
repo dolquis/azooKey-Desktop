@@ -1,11 +1,15 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string_view>
 
+#include "LearningPane.h"
 #include "MainWindow.g.h"
+#include "ModelPane.h"
 #include "NeologdAttribution.h"
+#include "ProfilesPane.h"
 #include "SettingsDocument.h"
 #include "SettingsFieldControls.h"
 #include "pch.h"
@@ -62,6 +66,9 @@ struct MainWindow : MainWindowT<MainWindow> {
   // The last state read from or written to disk, to tell which saved changes need a restart.
   azookey::settings::EditableSettings saved_settings_;
   azookey::settings::SettingsFieldControls field_controls_;
+  std::shared_ptr<azookey::settings::ProfilesPane> profiles_pane_;
+  std::shared_ptr<azookey::settings::ModelPane> model_pane_;
+  std::shared_ptr<azookey::settings::LearningPane> learning_pane_;
   bool clear_safe_mode_{false};
 };
 

@@ -212,22 +212,25 @@ const std::vector<std::string_view>& DedicatedSettingPaths() {
       "dictionary.autoWordsEnabled",
       "dictionary.appSpecificDictionaryEnabled",
       "safeMode.enabled",
+      "profilesByApp",
   };
   return paths;
 }
 
 const std::vector<UneditedSetting>& UneditedSettings() {
   static const std::vector<UneditedSetting> settings = {
-      {"profilesByApp", "per-app profile editor (DEV-1535)"},
       {"promptPrefixByApp", "legacy; new edits go to profilesByApp (app-profile-spec section 6)"},
       {"backendPreference", "root tier is not bound to the UI (section 3.6)"},
       {"epPreference", "root tier is not bound to the UI (section 3.6)"},
       {"model.epPreference", "exposed once a build links the backend (section 3.7)"},
-      {"model.nGpuLayers", "model pane (DEV-1530)"},
-      {"model.autoLoadOnHostStart", "model pane (DEV-1530)"},
-      {"model.fallbackToSimpleConverter", "model pane (DEV-1530)"},
-      {"model.benchmarkOnModelChange", "model pane (DEV-1530)"},
-      {"model.benchmarkHistory", "written by the Host"},
+      {"model.nGpuLayers", "no editing UI; the model pane lists and benchmarks models only"},
+      {"model.autoLoadOnHostStart",
+       "no editing UI; the model pane lists and benchmarks models only"},
+      {"model.fallbackToSimpleConverter",
+       "no editing UI; the model pane lists and benchmarks models only"},
+      {"model.benchmarkOnModelChange",
+       "no editing UI; the model pane lists and benchmarks models only"},
+      {"model.benchmarkHistory", "written by the Host; the model pane only shows it"},
       {"reranker.nllRerankEnabled", "no dedicated UI (neural-reranker-spec B9)"},
       {"reranker.nllTopK", "no dedicated UI (neural-reranker-spec B9)"},
       {"reranker.nllWeight", "no dedicated UI (neural-reranker-spec B9)"},

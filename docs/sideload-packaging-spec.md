@@ -1201,16 +1201,24 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意を含む）/ `autoWordRegistration` / タイプミス学習 |
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
+| アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
+| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
+| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
 | 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
-Host の IPC を読むペインは、その IPC を呼ぶ設定アプリ側の client と同じ変更でナビゲーションに加え、
-中身の無いペインは置かない。対象は次の 4 つである。
+モデル / 学習のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
+ナビゲーションに加えた。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
+保存ボタンが `model.selectedPath` を書く。選べるのは検証に通った GGUF だけである。
+`ListModels` が返す `onnx_genai` は一覧に出すが選択と測定の対象にしない。学習データは
+設定アプリが直接開かず、一覧・忘却・エクスポート・インポートをすべて Host への IPC で行う。
+忘却とインポートは確認ダイアログを経る。暗号化しないエクスポートは警告を出して確認する。
+
+Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更でナビゲーションに加え、
+中身の無いペインは置かない。次のペインは同じ規則で、上の表へ加えるまで置かない。
 
 | ペイン | 内容 | 使う Host 側の機能 |
 |---|---|---|
-| モデル | モデル一覧 / ベンチマーク | `ListModels` / `BenchmarkModel`（`model-management-spec.md`） |
-| 学習 | LearningStore 表示 / エクスポート / リセット / 個別忘却 | 学習データ管理 IPC（`learning-data-management-spec.md`） |
 | Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
 | 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
@@ -1355,7 +1363,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI | M16 | 即時 | roadmap M16 |
 | `openAiModel` | string | `gpt-4o-mini` | AI | M16 | 即時 | roadmap M16 |
 | `includeContextInAITransform` | bool | `true` | AI | M16 | 即時 | roadmap M16 |
-| `promptPrefixByApp` | map<string,string> | `{}` | —（保存時保持。編集 UI は持たない。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
+| `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
 | `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
@@ -1376,7 +1384,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー（`crashReportConsent` はバージョン） | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
-| `profilesByApp` | map<string,object> | `{}` | —（保存時保持。編集 UI は持たない） | M48 | 即時 | `app-profile-spec.md` §4 |
+| `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
 | `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
 
 > オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
@@ -1385,7 +1393,8 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 >
 > 「—（保存時保持）」のキーは設定アプリに編集 UI を持たないが、保存時に有効な値を書き戻す
 > （§3.7 の write-back 規則）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
-> `model.benchmarkHistory`）は、設定アプリから編集しない。
+> `model.benchmarkHistory`）は、設定アプリから編集しない。`model.benchmarkHistory` は「モデル」ペインが
+> 表示だけし、保存は既存の値を書き戻す。
 
 > **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
 > 下位レイヤ**であり（解決順 `model.*` ＞ root、`model-management-spec.md` §5.2）、設定アプリの device 選択 UI は

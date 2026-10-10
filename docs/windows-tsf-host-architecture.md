@@ -199,7 +199,10 @@ Linear が持つ。
   `azookey_inference_host.exe [--user-dict <path>] userdict ...` を提供する。
   `add` / `remove` は既定で起動中 Host へ IPC 送信し、未起動時や検証用の直接編集では
   `--offline` を付ける。`list` / `import <path-to-tsv>` / `export <path-to-json>` は
-  永続ファイルを直接読み書きする。
+  永続ファイルを直接読み書きする。`list` / `export` は読み取り専用で読み込み、平文の
+  `user_dict.json` の移行（`.bak` / `.enc` の作成）も、解釈できない JSON の隔離
+  （`.corrupt.<stamp>`）も行わない。解釈できないファイルは `lookup` と同じく読み込み失敗
+  として終了コード 1 を返す。
 - `userdict import` の TSV は
   `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` の 5 列（後ろ 3 列は空可）を受け付ける。
   不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで

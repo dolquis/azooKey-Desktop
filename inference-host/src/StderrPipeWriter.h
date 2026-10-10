@@ -4,7 +4,6 @@
 
 #include <Windows.h>
 
-#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -13,12 +12,15 @@
 #include <string>
 #include <thread>
 
+#include "StderrLineQueue.h"
+
 namespace azookey::host {
 
 // A pipe reader must not control the lifetime of the Host or its learning flush.
 // Install before any Host workers and destroy after they have joined. Host
 // std::cerr pipe I/O runs only on this thread; cancelling it cannot abort file
-// saves. Direct C stdio / third-party diagnostics do not use this buffer.
+// saves. The Host's llama callback also uses cerr; direct third-party C stdio
+// diagnostics do not use this buffer.
 class StderrPipeWriter final : private std::streambuf {
  public:
   StderrPipeWriter() {
@@ -48,7 +50,7 @@ class StderrPipeWriter final : private std::streambuf {
     // between WriteLoop checking discard_ and entering WriteFile.
     if (!changed_.wait_for(lock, std::chrono::milliseconds(100), [this] { return done_; })) {
       discard_ = true;
-      pending_.clear();
+      queue_.Clear();
       changed_.notify_all();
       while (!done_) {
         CancelSynchronousIo(worker_.native_handle());
@@ -64,8 +66,7 @@ class StderrPipeWriter final : private std::streambuf {
     if (size <= 0) return 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      const auto accepted = std::min(static_cast<size_t>(size), kQueueLimit - pending_.size());
-      pending_.append(text, accepted);
+      queue_.Append(std::string_view(text, static_cast<size_t>(size)));
     }
     changed_.notify_all();
     // Queue saturation drops diagnostics without putting cerr into fail state,
@@ -85,10 +86,9 @@ class StderrPipeWriter final : private std::streambuf {
   void WriteLoop() {
     std::unique_lock<std::mutex> lock(mutex_);
     for (;;) {
-      changed_.wait(lock, [this] { return closing_ || !pending_.empty(); });
-      if (discard_ || (closing_ && pending_.empty())) break;
-      std::string batch;
-      batch.swap(pending_);
+      changed_.wait(lock, [this] { return closing_ || !queue_.Empty(); });
+      if (discard_ || (closing_ && queue_.Empty())) break;
+      std::string batch = queue_.Take();
       lock.unlock();
       size_t offset = 0;
       while (offset < batch.size()) {
@@ -110,13 +110,12 @@ class StderrPipeWriter final : private std::streambuf {
     changed_.notify_all();
   }
 
-  static constexpr size_t kQueueLimit = 64 * 1024;
   HANDLE pipe_ = nullptr;
   std::streambuf* previous_buffer_ = nullptr;
   std::ostream* previous_tie_ = nullptr;
   std::mutex mutex_;
   std::condition_variable changed_;
-  std::string pending_;
+  detail::StderrLineQueue queue_;
   bool closing_ = false;
   bool discard_ = false;
   bool done_ = false;

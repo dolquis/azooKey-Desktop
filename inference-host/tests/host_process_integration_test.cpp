@@ -405,7 +405,8 @@ class HostProcessTest : public ::testing::Test {
               std::string::npos);
   }
 
-  void CheckBlockedStderr(DWORD control_event, bool fail_shutdown_save = false) {
+  void CheckBlockedStderr(DWORD control_event, bool fail_shutdown_save = false,
+                          bool model_diagnostics = false) {
     SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
     HANDLE input_read = nullptr;
     HANDLE input_write = nullptr;
@@ -434,7 +435,8 @@ class HostProcessTest : public ::testing::Test {
     // Keep all paths and the reserved pipe name isolated, while malformed
     // envelopes exercise the stdio parser rather than the named-pipe server.
     args.push_back(L"--stdio");
-    const auto shutdown_host = azookey::core::Utf8Path(HOST_SHUTDOWN_TEST_EXE);
+    const auto shutdown_host = azookey::core::Utf8Path(
+        model_diagnostics ? HOST_MODEL_DIAGNOSTIC_TEST_EXE : HOST_SHUTDOWN_TEST_EXE);
     ASSERT_TRUE(std::filesystem::exists(shutdown_host));
     const bool started =
         host_.Start(shutdown_host, args, CREATE_NEW_CONSOLE, directory_.root / "host.log",
@@ -520,15 +522,19 @@ class HostProcessTest : public ::testing::Test {
       ASSERT_NE(blocked, INVALID_HANDLE_VALUE);
       save_blocker.reset(blocked);
     }
-    std::string malformed;
-    for (int i = 0; i < 2048; ++i) malformed += "not-an-envelope\n";
-    ASSERT_GT(malformed.size(), 4U * error_capacity);
-    ASSERT_TRUE(send_line(malformed));
+    if (!model_diagnostics) {
+      std::string malformed;
+      for (int i = 0; i < 2048; ++i) malformed += "not-an-envelope\n";
+      ASSERT_GT(malformed.size(), 4U * error_capacity);
+      ASSERT_TRUE(send_line(malformed));
+    }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
     DWORD available = 0;
     // The asynchronous writer uses raw LF. This shorter frame is also a
     // conservative bound for a synchronous CRT writer that expands to CRLF.
-    constexpr DWORD kDiagnosticFrameBytes = sizeof("warn: failed to parse envelope\n") - 1;
+    const DWORD kDiagnosticFrameBytes = model_diagnostics
+                                            ? sizeof("llama fixture: model load diagnostic\n") - 1
+                                            : sizeof("warn: failed to parse envelope\n") - 1;
     ASSERT_GT(error_capacity, kDiagnosticFrameBytes);
     do {
       ASSERT_TRUE(PeekNamedPipe(error_read, nullptr, 0, nullptr, &available, nullptr));
@@ -705,6 +711,14 @@ TEST_F(HostProcessTest, CtrlBreakUnblocksStderrWhenShutdownLearningSaveFails) {
 
 TEST_F(HostProcessTest, CtrlCUnblocksStderrWhenShutdownLearningSaveFails) {
   CheckBlockedStderr(CTRL_C_EVENT, true);
+}
+
+TEST_F(HostProcessTest, CtrlCUnblocksModelDiagnosticsAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_C_EVENT, false, true);
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksModelDiagnosticsAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_BREAK_EVENT, false, true);
 }
 
 }  // namespace

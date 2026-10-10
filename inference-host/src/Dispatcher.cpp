@@ -1640,12 +1640,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
       res = RunModelBenchmark(request, options);
     } catch (...) {
       res = ipc::BenchmarkModelResponse{};
-      res.backend = parsed->backend;
+      res.backend = parsed->backend.empty() ? "cpu" : parsed->backend;
       res.error = "benchmark_failed";
     }
-    // Validation rejections from RunModelBenchmark never started a benchmark.
-    if (settings_store_ && res.error != "invalid_request" && res.error != "unsupported_backend" &&
-        res.error != "invalid_model" && res.error != "busy") {
+    // The store excludes admission rejections, including worker-side busy.
+    if (settings_store_) {
       try {
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::system_clock::now().time_since_epoch())

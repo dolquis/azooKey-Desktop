@@ -1105,7 +1105,7 @@ TEST(DiagnosticsTest, EmbeddedSettingsSchemaValidatesCanonicalBenchmarkHistoryWi
   for (const auto& [key, unused] : canonical) {
     auto row = canonical;
     row.erase(key);
-    probe({j::Value(std::move(row))}, false);
+    probe({j::Value(std::move(row))}, key == "completedAt");
   }
   for (const auto* key : {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb", "vram_mb"}) {
     auto row = canonical;
@@ -1202,6 +1202,63 @@ TEST(DiagnosticsTest, RegisteredLegacyBenchmarkHistoryWarnsWithoutHidingOtherInv
               R"(":"legacy.gguf","backend":"cpu","p50_ms":1}]}})",
           true, true);
   }
+  const j::Object legacy{{"path", j::Value("legacy.gguf")},
+                         {"backend", j::Value("cpu")},
+                         {"status", j::Value("error")},
+                         {"p50_ms", j::Value{}},
+                         {"p95_ms", j::Value(1.0)},
+                         {"p99_ms", j::Value(2.0)},
+                         {"load_ms", j::Value(3.0)},
+                         {"rss_mb", j::Value(4.0)},
+                         {"vram_mb", j::Value{}},
+                         {"iterations_completed", j::Value(0.0)},
+                         {"error", j::Value{}}};
+  const auto document = [](j::Array rows) {
+    return j::Stringify(j::Value(j::Object{
+        {"model", j::Value(j::Object{{"benchmarkHistory", j::Value(std::move(rows))}})}}));
+  };
+  probe(document({j::Value(legacy)}), true, true);
+  for (const auto* key :
+       {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb", "vram_mb", "iterations_completed"}) {
+    auto row = legacy;
+    row[key] = j::Value{};
+    probe(document({j::Value(std::move(row))}), true, true);
+  }
+  for (const auto& [key, invalid] : j::Object{{"load_ms", j::Value("invalid")},
+                                              {"rss_mb", j::Value(true)},
+                                              {"error", j::Value(1.0)},
+                                              {"iterations_completed", j::Value(0.5)},
+                                              {"vram_mb", j::Value(false)}}) {
+    auto row = legacy;
+    row[key] = invalid;
+    probe(document({j::Value(std::move(row))}), false, false);
+  }
+  for (const double iterations : {-1.0, 4294967296.0}) {
+    auto row = legacy;
+    row["iterations_completed"] = j::Value(iterations);
+    probe(document({j::Value(std::move(row))}), false, false);
+  }
+  auto canonical = legacy;
+  canonical["path"] = j::Value("C:/models/new.gguf");
+  canonical["completedAt"] = j::Value("2026-10-10T10:00:00Z");
+  canonical["p50_ms"] = j::Value(0.0);
+  probe(document({j::Value(legacy), j::Value(canonical)}), true, true);
+  for (const auto& timestamp :
+       {j::Value("2026-10-10T10:00:00Z"), j::Value("invalid"), j::Value{}, j::Value(1.0)}) {
+    auto row = canonical;
+    row["completedAt"] = timestamp;
+    row.erase("load_ms");
+    probe(document({j::Value(legacy), j::Value(std::move(row))}), false, false);
+  }
+  auto effective_openai = j::Parse(document({j::Value(legacy)}));
+  ASSERT_TRUE(effective_openai);
+  auto openai_document = effective_openai->AsObject();
+  openai_document["aiBackend"] = j::Value("openai");
+  openai_document["openAiApiKey"] = j::Value("legacy-key");
+  MockDpapiCrypto crypto;
+  EXPECT_EQ(
+      diag::ProbeDpapiSettingsJson(j::Stringify(j::Value(std::move(openai_document))), crypto),
+      diag::DpapiState::Plaintext);
   probe(R"({"model":{"benchmarkHistory":[]}})", true, false);
   probe(R"({"maxCandidates":99,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false, false);
   probe(R"({"unknownSetting":true,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false,
@@ -1210,8 +1267,8 @@ TEST(DiagnosticsTest, RegisteredLegacyBenchmarkHistoryWarnsWithoutHidingOtherInv
   probe(R"({"model":{"benchmarkHistory":[{"model":"legacy","extra":true}]}})", false, false);
   probe(R"({"model":{"benchmarkHistory":[{"path":"legacy","completedAt":"invalid"}]}})", false,
         false);
-  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy"},{"path":"new","rss_mb":-1}]}})", false,
-        false);
+  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy"},{"path":"new","rss_mb":"invalid"}]}})",
+        false, false);
   std::filesystem::remove_all(directory);
 }
 

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/UtcTimestamp.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -41,25 +42,7 @@ bool IsBenchmarkHistoryEntry(const j::Value& entry) {
   const auto path = entry.GetString("path");
   const auto completed_at = entry.GetString("completedAt");
   if (!path || path->empty() || !core::Utf8Path(*path).is_absolute() || !completed_at ||
-      completed_at->size() != 20)
-    return false;
-  const auto& stamp = *completed_at;
-  for (size_t i = 0; i < stamp.size(); ++i) {
-    const char separator = i == 4 || i == 7     ? '-'
-                           : i == 10            ? 'T'
-                           : i == 13 || i == 16 ? ':'
-                           : i == 19            ? 'Z'
-                                                : '\0';
-    if (separator ? stamp[i] != separator : stamp[i] < '0' || stamp[i] > '9') return false;
-  }
-  const auto number = [&stamp](size_t offset, size_t length) {
-    return std::stoi(stamp.substr(offset, length));
-  };
-  const std::chrono::year_month_day date{std::chrono::year{number(0, 4)},
-                                         std::chrono::month{static_cast<unsigned>(number(5, 2))},
-                                         std::chrono::day{static_cast<unsigned>(number(8, 2))}};
-  if (number(0, 4) == 0 || !date.ok() || number(11, 2) > 23 || number(14, 2) > 59 ||
-      number(17, 2) > 59)
+      !core::IsUtcSecondTimestamp(*completed_at))
     return false;
   if (!IsOneOf(entry.GetString("backend").value_or(""), {"cpu", "cuda", "vulkan"}) ||
       !IsOneOf(entry.GetString("status").value_or(""), {"success", "timeout", "error"}))

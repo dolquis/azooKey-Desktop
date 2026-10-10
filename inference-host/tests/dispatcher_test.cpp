@@ -1279,6 +1279,7 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
                 std::filesystem::weakly_canonical(root / "models" / "attempt.gguf")));
   EXPECT_EQ(history->front().GetString("status"), attempted->status);
   EXPECT_EQ(history->front().GetString("backend"), attempted->backend);
+  EXPECT_EQ(attempted->backend, "cpu");
   EXPECT_EQ(history->front().GetNumber("load_ms"), attempted->load_ms);
   EXPECT_TRUE(history->front().GetString("completedAt"));
   // Persistence failure leaves the same benchmark outcome available to the client.

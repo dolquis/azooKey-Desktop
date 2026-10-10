@@ -1231,13 +1231,20 @@ TEST(SettingsStoreTest, BenchmarkHistoryRejectsInvalidNewEntriesWithoutWriting) 
   response.backend = "cpu";
   response.status = "success";
   EXPECT_FALSE(store.PersistBenchmarkResult("relative.gguf", "2026-10-10T10:00:00Z", response));
-  EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-02-30T10:00:00Z", response));
+  for (const auto* timestamp :
+       {"0000-10-10T10:00:00Z", "2026-02-29T10:00:00Z", "2026-02-30T10:00:00Z",
+        "2026-10-10T24:00:00Z", "2026-10-10T10:60:00Z", "2026-10-10T10:00:60Z",
+        "2026-10-10T10:00:00+00:00"}) {
+    EXPECT_FALSE(store.PersistBenchmarkResult(model_path, timestamp, response)) << timestamp;
+  }
   response.p50_ms = -1;
   EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
   response.p50_ms = 0;
   response.status = "unknown";
   EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
   EXPECT_EQ(ReadText(path), "{}");
+  response.status = "success";
+  EXPECT_TRUE(store.PersistBenchmarkResult(model_path, "2024-02-29T23:59:59Z", response));
 }
 
 TEST(SettingsStoreTest, BenchmarkHistoryExcludesAdmissionRejectionsButRecordsExecutedErrors) {

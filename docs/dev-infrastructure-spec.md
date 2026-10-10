@@ -2790,12 +2790,14 @@ schema に適合するため D-012 では `ok` とし、非推奨であること
 登録済み旧形式は、`model.benchmarkHistory` の旧表示用要素である。
 旧設定アプリが読んだ `model` / `path` / `model_path` の少なくとも一つが非空文字列で、
 要素のキーがこれらの識別子と `backend` / `status`（文字列）、
-`p50_ms` / `p95_ms` / `p99_ms`（数値）だけの場合に識別する。
+`p50_ms` / `p95_ms` / `p99_ms` / `load_ms` / `rss_mb` / `vram_mb`（数値または null）、
+`iterations_completed`（uint32 範囲の整数または null）、`error`（文字列または null）だけの場合に識別する。
+応答の追加フィールドと nullable な計測値も旧設定アプリが保持していたため、識別対象に含める。
 旧形式を診断上だけ取り除いた文書全体が現行 schema に適合する場合に限り D-012 は `warning` とする。
 他の設定不正、未登録キー、または新形式の要素の不正が残れば `error` とする。
-`completedAt` / `load_ms` / `rss_mb` / `vram_mb` / `iterations_completed` / `error` を含む要素は
-旧形式に分類しない。版識別子が無いため、例えば `{"path":"model.gguf","p50_ms":1}` は
-旧表示用形式として扱うが、新形式から `completedAt` だけが欠けた要素は他の新規キーが残るため `error` になる。
+`completedAt` を含む要素は、その値や型によらず旧形式に分類しない。
+版識別子が無いため、新形式から `completedAt` だけが欠けた要素も、上記の旧応答形式と
+区別できない場合は移行対象として扱う。`completedAt` がある新形式の必須キー欠落や型不正は `error` になる。
 移行経路は `model-management-spec.md` §7.1 の Host 追記時整理であり、
 利用者が次回ベンチマークを実行した際に旧要素を除き、新しい結果を追記する。
 設定アプリの通常保存と診断は旧要素を保持し、診断も `--repair` もこの整理を実行しない。

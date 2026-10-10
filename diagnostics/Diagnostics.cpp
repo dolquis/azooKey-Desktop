@@ -4,7 +4,6 @@
 #include <array>
 #include <atomic>
 #include <cctype>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -35,6 +34,7 @@
 #include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/CrashRetention.h"
 #include "azookey/core/Redaction.h"
+#include "azookey/core/UtcTimestamp.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
@@ -212,27 +212,6 @@ bool MatchesType(const j::Value& value, std::string_view type) {
   return true;
 }
 
-bool MatchesUtcDateTime(std::string_view text) {
-  if (text.size() != 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' ||
-      text[16] != ':' || text[19] != 'Z') {
-    return false;
-  }
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19) continue;
-    if (text[i] < '0' || text[i] > '9') return false;
-  }
-  const auto number = [&](size_t offset, size_t count) {
-    int result{};
-    std::from_chars(text.data() + offset, text.data() + offset + count, result);
-    return result;
-  };
-  const int year = number(0, 4);
-  const auto date = std::chrono::year_month_day(
-      std::chrono::year(year), std::chrono::month(number(5, 2)), std::chrono::day(number(8, 2)));
-  return year != 0 && date.ok() && number(11, 2) <= 23 && number(14, 2) <= 59 &&
-         number(17, 2) <= 59;
-}
-
 bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
   if (!schema.IsObject()) return true;
   if (const auto type = schema.GetString("type"); type && !MatchesType(value, *type)) return false;
@@ -273,7 +252,7 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
     }
     // The embedded schema's date-time field also requires UTC second precision.
     if (const auto format = schema.GetString("format");
-        format && *format == "date-time" && !MatchesUtcDateTime(text)) {
+        format && *format == "date-time" && !core::IsUtcSecondTimestamp(text)) {
       return false;
     }
   }
@@ -342,14 +321,24 @@ bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
 }
 
 bool IsLegacyBenchmarkHistoryEntry(const j::Value& row) {
-  if (!row.IsObject()) return false;
-  constexpr std::array<std::string_view, 8> legacy_keys = {
-      "model", "path", "model_path", "backend", "status", "p50_ms", "p95_ms", "p99_ms"};
+  if (!row.IsObject() || row.Find("completedAt")) return false;
+  constexpr std::array<std::string_view, 13> legacy_keys = {
+      "model",  "path",   "model_path", "backend", "status",  "p50_ms",
+      "p95_ms", "p99_ms", "load_ms",    "rss_mb",  "vram_mb", "iterations_completed",
+      "error"};
   bool has_identifier = false;
   for (const auto& [key, value] : row.AsObject()) {
     if (std::find(legacy_keys.begin(), legacy_keys.end(), key) == legacy_keys.end()) return false;
-    if (key == "p50_ms" || key == "p95_ms" || key == "p99_ms") {
-      if (!value.IsNumber()) return false;
+    if (key == "p50_ms" || key == "p95_ms" || key == "p99_ms" || key == "load_ms" ||
+        key == "rss_mb" || key == "vram_mb") {
+      if (!value.IsNumber() && !value.IsNull()) return false;
+    } else if (key == "iterations_completed") {
+      if (!value.IsNull()) {
+        const auto iterations = row.GetUInt(key);
+        if (!iterations || *iterations > UINT32_MAX) return false;
+      }
+    } else if (key == "error") {
+      if (!value.IsString() && !value.IsNull()) return false;
     } else {
       if (!value.IsString()) return false;
       if ((key == "model" || key == "path" || key == "model_path") && !value.AsString().empty()) {

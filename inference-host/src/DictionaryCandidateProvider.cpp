@@ -1,10 +1,15 @@
 #include "azookey/host/DictionaryCandidateProvider.h"
 
+#include "azookey/learning/DictionaryCategory.h"
+
 namespace azookey::host {
 namespace {
 // auto-word-registration-spec sections 14.4 / 14.12; category ids are the
 // .azdic bit positions. Technical takes precedence over surface-derived English.
-constexpr uint16_t kTechnicalCategories = (1U << 4) | (1U << 5) | (1U << 8);
+constexpr uint16_t kTechnicalCategories =
+    learning::CategoryBit(learning::DictionaryCategory::ProductName) |
+    learning::CategoryBit(learning::DictionaryCategory::Software) |
+    learning::CategoryBit(learning::DictionaryCategory::Technical);
 }  // namespace
 
 std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStore& store,

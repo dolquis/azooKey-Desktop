@@ -716,6 +716,10 @@ auto-word の既知語判定（§4-2）が見るのは、この辞書層とフ�
 | `technical` | 技術用語 |
 | `neologism` | 新語 |
 
+`.azdic` の category bit は表の順に 0〜9 とする。C++ の共有定義は
+`learning/include/azookey/learning/DictionaryCategory.h` に置き、Python ビルダの
+`CATEGORIES` との一致を `dictbuild_python_tests` で検査する。
+
 M54 の time-decay half_life もこの category で切り替える（一般語 30 日、
 固有名詞 90 日、技術語 120 日）。
 

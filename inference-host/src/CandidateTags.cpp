@@ -68,6 +68,8 @@ core::CandidateTag HeuristicStyleTag(std::string_view surface) {
     if (!IsTrailingStyleSeparator(cp)) end = offset;
   }
   surface = surface.substr(0, end);
+  // Keep all approved suffixes from app-profile-spec section 7 explicit, even
+  // when a longer suffix also ends with a shorter one in this table.
   static constexpr std::string_view kPoliteSuffixes[] = {
       "です",         "ます",       "でした",       "ました",  "ません",
       "ませんでした", "ございます", "ございました", "ください"};

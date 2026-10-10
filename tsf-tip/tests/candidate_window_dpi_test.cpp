@@ -290,8 +290,8 @@ TEST(CandidateWindowHitTest, ClickRegionsScaleAt96And144And192Dpi) {
 }
 
 TEST(CandidateWindowHitTest, DetailsButtonMovesRightWithoutTheRetryButton) {
-  CandidateWindow::HitLayout layout{24,    1,   400, 0, true, 24, {340, 72, 392, 96},
-                                    false, {332, 72, 392, 96}};
+  CandidateWindow::HitLayout layout{
+      24, 1, 400, 0, true, 24, {340, 72, 392, 96}, false, {332, 72, 392, 96}};
   EXPECT_EQ(CandidateWindow::HitTest(layout, {391, 72}).target,
             CandidateWindow::HitTarget::HealthDetailsButton);
   EXPECT_EQ(CandidateWindow::HitTest(layout, {335, 72}).target,

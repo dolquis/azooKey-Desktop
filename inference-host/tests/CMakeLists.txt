@@ -46,6 +46,12 @@ target_link_libraries(host_args_tests
 )
 azookey_discover_tests(host_args_tests)
 
+add_executable(host_stderr_line_queue_tests stderr_line_queue_test.cpp)
+target_link_libraries(host_stderr_line_queue_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_stderr_line_queue_tests)
+
 add_executable(host_user_data_paths_tests user_data_paths_test.cpp)
 target_link_libraries(host_user_data_paths_tests
   PRIVATE azookey_host_paths GTest::gtest_main azookey_project_options azookey_project_warnings
@@ -107,14 +113,22 @@ if(WIN32)
     AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec})
   target_link_libraries(host_shutdown_test_fixture PRIVATE
     azookey_host azookey_binary_hardening azookey_project_options azookey_project_warnings)
+  add_executable(host_model_diagnostic_test_fixture ../src/main.cpp)
+  target_compile_definitions(host_model_diagnostic_test_fixture PRIVATE
+    AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec}
+    AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD=1)
+  target_link_libraries(host_model_diagnostic_test_fixture PRIVATE
+    azookey_host azookey_binary_hardening azookey_project_options azookey_project_warnings)
   add_executable(host_process_integration_tests host_process_integration_test.cpp)
   target_compile_definitions(host_process_integration_tests PRIVATE
     HOST_PROCESS_TEST_EXE="$<TARGET_FILE:azookey_inference_host>"
     HOST_SHUTDOWN_TEST_EXE="$<TARGET_FILE:host_shutdown_test_fixture>"
+    HOST_MODEL_DIAGNOSTIC_TEST_EXE="$<TARGET_FILE:host_model_diagnostic_test_fixture>"
     AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec})
   target_link_libraries(host_process_integration_tests
     PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings)
-  add_dependencies(host_process_integration_tests azookey_inference_host host_shutdown_test_fixture)
+  add_dependencies(host_process_integration_tests azookey_inference_host host_shutdown_test_fixture
+    host_model_diagnostic_test_fixture)
   azookey_discover_tests(host_process_integration_tests
     RESOURCE_LOCK host_process_integration)
 

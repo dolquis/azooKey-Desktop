@@ -62,9 +62,11 @@ class DebugWindow {
   DWORD ui_thread_id_{0};
   mutable std::mutex policy_mutex_;
   core::PrivacyPolicy paint_policy_{};
-  // UI thread only.
+  // Created, drawn and reset on the UI thread. After a Destroy from another
+  // thread it stays until the next Create or ~DebugWindow, which may run there.
   struct RenderState;
   std::unique_ptr<RenderState> render_;
+  int render_init_failures_{0};  // Initialize stops retrying after a few failures.
   ThemeMode theme_mode_{ThemeMode::Light};
   ThemeColors theme_{kLightTheme};
 };

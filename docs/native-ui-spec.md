@@ -110,6 +110,8 @@ visual tree は root visual に surface を 1 枚載せるだけとし、背景�
 `CreateMessageTextFormat(factory, dpi, format)` は、システムのメッセージフォント
 （`SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS)` の `lfMessageFont`）の family・太さ・em サイズで
 96 DPI の device context 用 text format を作る。読めないときは 9 pt の Yu Gothic UI とする。
+`lfHeight` が負なら em サイズとしてそのまま使い、正（セルの高さ）なら
+フォントの `designUnitsPerEm / (ascent + descent)` を掛けて em サイズにする。
 候補ウィンドウとデバッグウィンドウはこれを使う。
 
 ## 3. DirectWrite 描画
@@ -199,6 +201,7 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 - `Show` は位置と大きさを決め、その大きさで描いて commit してから `SetWindowPos` で表示する。
   選択の移動、テーマの変更、再試行中の表示はその場で描き直す。
   DirectComposition は最後のフレームを保つので、`WM_PAINT` は描かずに検証だけする。
+  表示中にデバイスを失っても、次に描くとき（選択の移動、テーマの変更、`Show`）まで作り直さない。
 - `WM_DPICHANGED` の推奨矩形は使わず、表示中なら最後のアンカーで `Show` をやり直す。
   `Show` 自身の `SetWindowPos` が発生させた通知は無視する。
 - 描画に失敗しても窓とクリック領域は残し、失敗段階と HRESULT を保持する。
@@ -308,7 +311,7 @@ device->Commit();
 | テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
 | DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
 | 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
-| 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと |
+| 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる |
 
 実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。
 

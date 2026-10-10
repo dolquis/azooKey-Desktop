@@ -5,7 +5,6 @@
 #include <d2d1_1helper.h>
 #include <d3d11.h>
 #include <dwrite.h>
-#include <icu.h>
 #include <windowsx.h>
 #include <wrl/client.h>
 
@@ -20,21 +19,6 @@
 #include "azookey/tsf/RenderingEngine.h"
 
 namespace azookey::tsf {
-
-bool CandidateWindow::NeedsColorEmoji(const std::wstring& text) {
-  for (size_t i = 0; i < text.size(); ++i) {
-    UChar32 cp = text[i];
-    if (cp >= 0xd800 && cp <= 0xdbff) {
-      if (i + 1 >= text.size() || text[i + 1] < 0xdc00 || text[i + 1] > 0xdfff) continue;
-      cp = 0x10000 + ((cp - 0xd800) << 10) + (text[++i] - 0xdc00);
-    }
-    if (i + 1 < text.size() && text[i + 1] == 0xfe0e) continue;
-    if (u_hasBinaryProperty(cp, UCHAR_EMOJI_PRESENTATION) ||
-        (i + 1 < text.size() && text[i + 1] == 0xfe0f && u_hasBinaryProperty(cp, UCHAR_EMOJI)))
-      return true;
-  }
-  return false;
-}
 
 using Microsoft::WRL::ComPtr;
 
@@ -309,6 +293,11 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 
 // static
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
+
+bool CandidateWindow::RenderForTest() {
+  RECT client_rc{};
+  return hwnd_ && GetClientRect(hwnd_, &client_rc) && Render(client_rc.right, client_rc.bottom);
+}
 #endif
 
 // static
@@ -344,8 +333,11 @@ void CandidateWindow::UpdateDpi(UINT dpi) {
   dpi = NormalizeDpi(dpi);
   if (dpi == dpi_ && text_style_) return;
 
+  auto next = CreateTextStyle(dpi);
+  // Keep the metrics and the text at one DPI: a failed style keeps the old pair.
+  if (!next && text_style_) return;
   metrics_ = ComputeLayoutMetrics(dpi);
-  if (auto next = CreateTextStyle(dpi)) text_style_ = std::move(next);
+  text_style_ = std::move(next);
   dpi_ = dpi;
 }
 
@@ -1004,6 +996,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     case WM_DESTROY:
       HideDetails();
+      // The device stack is bound to this HWND; a later Create makes a new one.
+      render_.reset();
       hwnd_ = nullptr;
       return 0;
 

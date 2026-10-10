@@ -52,13 +52,6 @@ TEST(CandidateWindowDpiTest, LayoutMetricsScaleFromDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(192), 48, 16, 800, 40, 120, 8);
 }
 
-TEST(CandidateWindowDpiTest, EmojiDetectionDoesNotReclassifyKanjiOrTextSymbols) {
-  for (const auto* text : {L"𠮟", L"𩸽", L"★☆♪✓✂☀", L"😄︎", L"abc"})
-    EXPECT_FALSE(CandidateWindow::NeedsColorEmoji(text));
-  for (const auto* text : {L"😄", L"☀️", L"👩‍💻", L"🇯🇵", L"1️⃣"})
-    EXPECT_TRUE(CandidateWindow::NeedsColorEmoji(text));
-}
-
 TEST(CandidateWindowDpiTest, ThemeFollowsTheSystemSettingChanges) {
   testing::SetThemeInputsForTest(false, 1u);
   CandidateWindow window;
@@ -322,6 +315,8 @@ TEST(CandidateWindowRenderTest, FillsEachRegionWithTheThemeAt96And144And192Dpi) 
       window.ShowSecureToast();
       window.ShowHealthBanner(CandidateHealthState::DegradedModel);
       EXPECT_STREQ(window.failure_stage_for_test(), "");
+      // The production path (RenderingEngine and the DComp surface) commits a frame.
+      EXPECT_TRUE(window.RenderForTest()) << window.failure_stage_for_test();
       EXPECT_NE(GetWindowLongPtrW(window.hwnd_for_test(), GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP,
                 0);
 
@@ -416,6 +411,7 @@ TEST(CandidateWindowRenderTest, DpiChangeRemeasuresAtTheAnchorAndIgnoresTheSugge
   EXPECT_EQ(bounds.bottom - bounds.top, 2 * 36);
   EXPECT_GT(bounds.right - bounds.left, 10);
   EXPECT_STREQ(window.failure_stage_for_test(), "");
+  EXPECT_TRUE(window.RenderForTest()) << window.failure_stage_for_test();
   window.Destroy();
 }
 

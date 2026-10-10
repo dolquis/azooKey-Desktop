@@ -59,7 +59,6 @@ class CandidateWindow {
   bool IsSecureToastVisible() const { return secure_toast_visible_; }
   using OnRetryFn = std::function<void()>;
   void SetOnRetry(OnRetryFn fn) { on_retry_ = std::move(fn); }
-  static bool NeedsColorEmoji(const std::wstring& text);
   // Screen rect for the window: below the anchor, flipped above the caret when it
   // would overflow the bottom of the work area, and kept inside the work area.
   // An empty work area leaves the window at the anchor.
@@ -155,6 +154,9 @@ class CandidateWindow {
   // and returns the pixels row by row as RGB values.
   bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
   const char* failure_stage_for_test() const { return failure_stage_; }
+  // Draws through the production path (RenderingEngine and the DComp surface)
+  // at the client size; true when the frame was committed.
+  bool RenderForTest();
 #endif
 
  private:

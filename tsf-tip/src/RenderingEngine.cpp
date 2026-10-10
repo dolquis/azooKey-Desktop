@@ -27,6 +27,32 @@ struct RenderingEngine::State {
   int surface_height{0};
 };
 
+namespace {
+
+// GDI maps a positive LOGFONT height to the cell height (ascent + descent); the
+// em size is that height scaled by the font's design units per em.
+FLOAT EmSizeFromCellHeight(IDWriteFactory* factory, const wchar_t* family, LONG cell_height) {
+  const auto fallback = static_cast<FLOAT>(cell_height);
+  ComPtr<IDWriteFontCollection> fonts;
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  ComPtr<IDWriteFontFamily> font_family;
+  ComPtr<IDWriteFont> font;
+  if (FAILED(factory->GetSystemFontCollection(&fonts)) ||
+      FAILED(fonts->FindFamilyName(family, &index, &exists)) || !exists ||
+      FAILED(fonts->GetFontFamily(index, &font_family)) ||
+      FAILED(font_family->GetFirstMatchingFont(
+          DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font)))
+    return fallback;
+  DWRITE_FONT_METRICS metrics{};
+  font->GetMetrics(&metrics);
+  const UINT32 cell_units = static_cast<UINT32>(metrics.ascent) + metrics.descent;
+  if (cell_units == 0 || metrics.designUnitsPerEm == 0) return fallback;
+  return fallback * static_cast<FLOAT>(metrics.designUnitsPerEm) / static_cast<FLOAT>(cell_units);
+}
+
+}  // namespace
+
 HRESULT CreateMessageTextFormat(IDWriteFactory* factory, UINT dpi, IDWriteTextFormat** format) {
   if (!factory || !format) return E_POINTER;
   dpi = dpi ? dpi : USER_DEFAULT_SCREEN_DPI;
@@ -38,10 +64,9 @@ HRESULT CreateMessageTextFormat(IDWriteFactory* factory, UINT dpi, IDWriteTextFo
   if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi)) {
     const LOGFONTW& font = metrics.lfMessageFont;
     if (font.lfFaceName[0]) family = font.lfFaceName;
-    // A negative height is the em size; a positive one is the cell height, which
-    // GDI also maps to a slightly smaller em size. Both are used as the em size.
-    if (font.lfHeight != 0)
-      size = static_cast<FLOAT>(font.lfHeight < 0 ? -font.lfHeight : font.lfHeight);
+    // A negative height is the em size; a positive one is the cell height.
+    if (font.lfHeight < 0) size = static_cast<FLOAT>(-font.lfHeight);
+    if (font.lfHeight > 0) size = EmSizeFromCellHeight(factory, family, font.lfHeight);
     if (font.lfWeight > 0) weight = static_cast<DWRITE_FONT_WEIGHT>(font.lfWeight);
   }
   return factory->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,

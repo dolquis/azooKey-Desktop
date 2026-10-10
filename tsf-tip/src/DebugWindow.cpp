@@ -25,6 +25,8 @@ constexpr int kDebugWindowHeight = 400;
 constexpr int kDebugWindowMargin = 16;
 constexpr int kDebugWindowPadding = 6;
 constexpr BYTE kDebugWindowAlpha = 220;
+// A device stack that failed this many times is not retried until the next Create.
+constexpr int kMaxRenderInitFailures = 3;
 
 HMODULE DebugWindowModule() {
   HMODULE module = nullptr;
@@ -99,6 +101,7 @@ bool DebugWindow::Create() {
   ui_thread_id_ = GetCurrentThreadId();
   // A device stack left by a Destroy from another thread belongs to the old window.
   render_.reset();
+  render_init_failures_ = 0;
   // The surface's alpha makes the window semi-transparent (native-ui-spec §4.3).
   HWND hwnd = CreateWindowExW(
       WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
@@ -207,8 +210,12 @@ void DebugWindow::Render(HWND hwnd) {
   RECT client{};
   if (!GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0) return;
   if (!render_) {
+    if (render_init_failures_ >= kMaxRenderInitFailures) return;
     auto next = std::make_unique<RenderState>();
-    if (!next->engine.Initialize(hwnd, SurfaceAlpha::Premultiplied)) return;
+    if (!next->engine.Initialize(hwnd, SurfaceAlpha::Premultiplied)) {
+      ++render_init_failures_;
+      return;
+    }
     render_ = std::move(next);
   }
   RenderingEngine& engine = render_->engine;

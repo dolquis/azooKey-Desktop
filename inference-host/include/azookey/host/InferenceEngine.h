@@ -372,8 +372,13 @@ class InferenceEngine {
   // Persists what a learning data operation may have changed. Holds every
   // store lock; false when any store failed to save.
   bool SaveLearningDataLocked();
-  ForgetOutcome ForgetPairLocked(learning::LearningStore& store, const std::string& reading,
-                                 const std::string& surface);
+  using LearningSnapshots =
+      std::vector<std::pair<learning::LearningStore*, learning::LearningStore>>;
+  LearningSnapshots SnapshotLearningStoresLocked();
+  bool SaveLearningSnapshots(LearningSnapshots& snapshots);
+  void PublishLearningSnapshotsLocked(LearningSnapshots& snapshots);
+  ForgetOutcome ForgetPairSnapshot(learning::LearningStore& store, const std::string& reading,
+                                   const std::string& surface);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   // Flushes reached while queries wait on state_mutex_ pass zero: they try once
   // and keep the store dirty. Shutdown and explicit flushes retry conflicts.
@@ -381,7 +386,7 @@ class InferenceEngine {
   void RecordLearningSaveFailureLocked();
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
-  ResetOutcome ResetLearningChannelsLocked();
+  ResetOutcome ResetLearningChannels();
   void RefreshPersonaLocked();
   void RefreshDictionaryLocked();
   void ApplyDictionaryConfigLocked();
@@ -415,6 +420,13 @@ class InferenceEngine {
   mutable std::mutex typo_store_mutex_;
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
+  // Serializes commits with erasure across disk writes and the reset's final
+  // state/converter reacquisition. Take before either engine mutex; queries do
+  // not take it, and disk I/O never needs converter_call_mutex_.
+  std::mutex learning_history_mutex_;
+  // Written with state_mutex_ and english_mutex_; either protects reads.
+  // Background/explicit flushes leave the live snapshot alone during erasure.
+  bool learning_erasure_in_progress_{false};
   std::mutex model_load_mutex_;
   std::mutex model_preload_thread_mutex_;
   EngineConfig config_;

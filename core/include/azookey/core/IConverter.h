@@ -42,6 +42,11 @@ class IConverter {
   virtual void Learn(const std::string& committed_surface,
                      const std::string& committed_reading) = 0;
 
+  // Remove commit history without removing dictionary entries. Stateless
+  // converters need no action. Callers serialize these with conversion/Commit.
+  virtual void Forget(const std::string&, const std::string&) {}
+  virtual void ResetLearned() {}
+
   // Whether (reading, surface) is a real dictionary entry of this converter, as
   // opposed to something Convert can synthesize heuristically or something
   // Learn recorded from a commit. New-word mining (M36-A) needs that

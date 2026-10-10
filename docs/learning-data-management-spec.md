@@ -20,7 +20,7 @@
 | データ | 既定パス | 由来 M | 暗号化 |
 |---|---|---|---|
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
-| `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。`learning.tsv` は移行元として残す） | M54 | M34 と同じ `.enc` |
+| `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。暗号化された移行元 `learning.tsv.enc` は v2 保存・読み戻し検証後に削除する） | M54 | M34 と同じ `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
 | `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
@@ -182,12 +182,15 @@ Response:
 `learning` の 0 化した行を保存で除くのは、忘れた語をディスクに残さないためである。
 `learning_min_weight` の GC（`user-learning-enhancement-spec.md` §3.1.1）が無効でも除く。
 忘却した組は、前方一致の `min_score` の値によらず予測に出さない。
+変換器がメモリに持つ同じ組の確定履歴も消す。辞書由来の候補は元のスコアと属性に戻し、
+確定だけで追加された候補は除く。ほかの組の履歴は保つ。
 
-M54 で v2 へ移行した利用者には、旧版の Host へ戻すための M7 ファイル（`learning.tsv.enc`）が残る
-（`user-learning-enhancement-spec.md` §3.1）。忘却は M7 ファイルにも及ぼし、同じ組の行を
-M7 の書式のまま M7 ファイルから除く。M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
+v2 の保存・読み戻し検証後は M7 ファイル（`learning.tsv.enc`）を削除する
+（`user-learning-enhancement-spec.md` §3.1）。検証や削除に失敗して M7 ファイルが残っている場合は、
+忘却を M7 ファイルにも及ぼし、同じ組の行を M7 の書式のまま除く。
+M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
 失敗しても M7 ファイルを壊さない（失敗したら忘却を失敗として返す）。
-M7 ファイルを書き換えるのはこの忘却だけで、通常の保存では書き換えない。
+通常の保存では M7 の行を書き換えず、検証済みの暗号化 M7 ファイルを削除する。
 
 ### 4.3 ExportLearningData
 
@@ -285,9 +288,12 @@ counts のキーは archive の item 名（§5.1）である。
   一致する項目が無いときは `ok = true`、`removed = false` を返す。
 - export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
 - Host は Handshake の capabilities に `learning_data_management` を載せる。
-- Host は一覧・忘却・エクスポート・インポート・全削除の 5 つの操作を `InferenceEngine` 上で行い、関係するストアのロックをまとめて取ってから
-  変更し、返る前に保存する。ユーザー辞書は、`AddUserWord` と同じくファイルロックを取って
-  ディスクの内容を読み直してから変更する。
+- Host は一覧・忘却・エクスポート・インポート・全削除を `InferenceEngine` 上で行う。
+  忘却・全削除は確定観測などの writer と専用の mutex で直列化し、ストアを短いロック区間で複写する。
+  暗号化・保存・旧形式の書き戻し・再試行は状態と変換器のロックの外で行い、返る前に結果を反映する。
+  保存中の問い合わせは直前に公開されたストアを参照できる。学習の反映と変換器の履歴更新は同じ区間で行う。
+  定期 flush は操作中の snapshot を上書きせず、操作終了後に再開する。
+  ユーザー辞書は、`AddUserWord` と同じくファイルロックを取り、ディスクの内容を読み直した複写へ変更する。
 - export はロックを持ったままストアの内容を複写し、暗号化と ZIP の書き出しはロックの外で行う。
   import は archive の読み込み・検証・復号をロックの外で行い、解析と merge と保存だけをロックの中で行う。
   いずれも変換の経路を止める時間を短くするためである。
@@ -324,8 +330,8 @@ counts のキーは archive の item 名（§5.1）である。
 | `typo` | タイプミス補正の全ペア |
 | `auto_word` | 新語候補の全行。`rejected` も消えるので、断った語も再び候補になりうる |
 
-リセットは途中で失敗しても半端に消えない。Host はストアの内容を退避してから空にして保存し、
-保存に失敗したら退避した内容をメモリへ戻して `save_failed` を返す。`learning` は複数のファイルに
+リセットは途中で失敗しても半端に消えない。Host は複写を空にして保存し、成功時だけ公開する。
+保存に失敗したら公開済みの内容を保って `save_failed` を返す。`learning` は複数のファイルに
 またがるので、次の順に処理する。
 
 1. 読み込みに失敗して保存を止めているチャネルが 1 つでもあれば、何も変えずに `save_failed` を返す。
@@ -335,8 +341,11 @@ counts のキーは archive の item 名（§5.1）である。
 4. 手順 2 か 3 が失敗したら、全チャネルを退避した内容へ戻して保存し直し、`save_failed` を返す。
    保存し直しにも失敗したチャネルは、戻した内容をメモリに持ち、次の flush で再び保存する。
 
-このため `save_failed` の後も Host が提示する学習の内容は変わらない。変換器が確定時にメモリへ覚えた履歴
-（`IConverter::Commit`）は、個別の忘却と同じくリセットの対象外で、Host の再起動まで残る。
+このため `save_failed` の後も Host が提示する学習の内容は変わらない。
+`learning` のリセット成功時は、変換器がメモリに持つ確定履歴も全て消す。
+保存に失敗したリセットでは、変換器の履歴を保つ。
+`auto_word` の忘却・全削除と新語の承認・却下は、writer の mutex を保持して複写を変更・保存する。
+保存成功時だけ表を公開する。同時操作はその後に進むため、失敗時に承認・却下を上書きしない。
 `user_dict` は `AddUserWord` と同じくファイルロックを取り、ディスクの内容を読み直してから空にする。
 
 ## 5. バックアップ形式

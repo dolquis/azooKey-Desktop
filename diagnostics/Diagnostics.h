@@ -102,6 +102,7 @@ struct Snapshot {
   DpapiState dpapi_state{DpapiState::NotRequired};
   bool learning_store_valid{true};
   bool learning_store_migration_available{false};
+  bool learning_store_legacy_retained{false};
   bool user_dict_valid{true};
   uint64_t learning_entries{};
   uint64_t user_dict_entries{};
@@ -176,7 +177,7 @@ bool ProbeSettingsFile(const std::filesystem::path& path);
 DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto);
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries,
-                            bool* migration_available = nullptr);
+                            bool* migration_available = nullptr, bool* legacy_retained = nullptr);
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
                              uint64_t* skipped_entries);
 bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords();

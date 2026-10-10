@@ -64,78 +64,165 @@ LearningDataPage InferenceEngine::ListLearningEntries(LearningDataStore store,
 
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningDataStore store,
                                                                     const std::string& id) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
-  const auto stores = LearningDataStoresLocked();
-  const auto entry = FindLearningEntry(stores, store, id);
+  std::lock_guard history_lock(learning_history_mutex_);
+  LearningDataStores stores;
+  std::optional<LearningDataEntry> entry;
+  {
+    std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+    stores = LearningDataStoresLocked();
+    entry = FindLearningEntry(stores, store, id);
+  }
   if (!entry) return ForgetOutcome::NotFound;
 
   switch (store) {
     case LearningDataStore::Learning: {
       for (const auto& channel : stores.learning) {
         if (channel.name != entry->channel) continue;
-        return ForgetPairLocked(*channel.store, entry->reading, entry->surface);
+        return ForgetPairSnapshot(*channel.store, entry->reading, entry->surface);
       }
       return ForgetOutcome::NotFound;
     }
     case LearningDataStore::Typo: {
-      if (!typo_store_ || !typo_store_->Remove(entry->reading, entry->surface)) {
-        return ForgetOutcome::NotFound;
+      std::optional<learning::TypoCorrectionStore> snapshot;
+      {
+        std::scoped_lock lock(state_mutex_, typo_store_mutex_);
+        if (!typo_store_) return ForgetOutcome::NotFound;
+        snapshot = *typo_store_;
       }
-      return typo_store_->Save() ? ForgetOutcome::Forgotten : ForgetOutcome::SaveFailed;
+      if (!snapshot->Remove(entry->reading, entry->surface)) return ForgetOutcome::NotFound;
+      const bool saved = snapshot->Save();
+      std::scoped_lock lock(state_mutex_, typo_store_mutex_);
+      *typo_store_ = std::move(*snapshot);
+      return saved ? ForgetOutcome::Forgotten : ForgetOutcome::SaveFailed;
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ForgetOutcome::NotFound;
-      const auto previous = auto_word_store_->SetState(entry->surface, entry->reading,
-                                                       learning::AutoWordState::Rejected);
-      if (!previous) return ForgetOutcome::NotFound;
-      if (auto_word_store_->Save()) return ForgetOutcome::Forgotten;
-      auto_word_store_->CompareAndSetState(entry->surface, entry->reading,
-                                           learning::AutoWordState::Rejected, *previous);
-      return ForgetOutcome::SaveFailed;
+      const auto outcome = auto_word_store_->SetStateAndSave(entry->surface, entry->reading,
+                                                             learning::AutoWordState::Rejected);
+      if (outcome == learning::AutoWordSaveOutcome::NotFound) return ForgetOutcome::NotFound;
+      return outcome == learning::AutoWordSaveOutcome::SaveFailed ? ForgetOutcome::SaveFailed
+                                                                  : ForgetOutcome::Forgotten;
     }
     case LearningDataStore::UserDictionary:
       break;
   }
 
-  // User dictionary: the same disk-first protocol as RemoveUserWord.
+  // Keep the live dictionary available while the snapshot follows the same
+  // disk-first/file-lock protocol as RemoveUserWord.
   if (!user_dict_) return ForgetOutcome::NotFound;
+  std::optional<learning::UserDictionary> snapshot;
+  {
+    std::scoped_lock lock(state_mutex_);
+    snapshot = *user_dict_;
+  }
   learning::FileLockFailure lock_failure;
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(snapshot->path(), lock_failure);
   if (!file_lock) {
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ForgetOutcome::SaveFailed;
   }
-  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+  if (UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
     return ForgetOutcome::SaveFailed;
   }
-  const auto before = user_dict_->All();
-  if (!user_dict_->Remove(entry->surface, entry->reading)) return ForgetOutcome::NotFound;
-  if (!user_dict_->Save()) {
-    RestoreUserDictionaryLocked(before);
-    return ForgetOutcome::SaveFailed;
-  }
+  const auto before = *snapshot;
+  if (!snapshot->Remove(entry->surface, entry->reading)) return ForgetOutcome::NotFound;
+  const bool saved = snapshot->Save();
+  if (!saved) *snapshot = before;
+  std::scoped_lock lock(state_mutex_);
+  *user_dict_ = std::move(*snapshot);
+  indexed_user_dict_ = nullptr;
   RefreshDictionaryLocked();
-  return ForgetOutcome::Forgotten;
+  return saved ? ForgetOutcome::Forgotten : ForgetOutcome::SaveFailed;
 }
 
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningPair(const std::string& reading,
                                                                    const std::string& surface) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  std::lock_guard history_lock(learning_history_mutex_);
   if (!store_) return ForgetOutcome::NotFound;
-  return ForgetPairLocked(*store_, reading, surface);
+  return ForgetPairSnapshot(*store_, reading, surface);
+}
+
+InferenceEngine::LearningSnapshots InferenceEngine::SnapshotLearningStoresLocked() {
+  LearningSnapshots snapshots;
+  for (auto* store : {store_, english_store_}) {
+    if (store) snapshots.emplace_back(store, *store);
+  }
+  learning_erasure_in_progress_ = true;
+  learning_flush_cv_.notify_all();
+  return snapshots;
+}
+
+bool InferenceEngine::SaveLearningSnapshots(LearningSnapshots& snapshots) {
+  bool saved = true;
+  for (auto& [target, snapshot] : snapshots) {
+    if (!snapshot.dirty() || snapshot.Save(learning::kTransientFileRetryBudget)) continue;
+    saved = false;
+    if (target == store_) {
+      std::scoped_lock lock(state_mutex_);
+      RecordLearningSaveFailureLocked();
+      first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
+    } else if (runtime_logger_) {
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "english_learning_save_failed", {});
+    }
+  }
+  return saved;
+}
+
+void InferenceEngine::PublishLearningSnapshotsLocked(LearningSnapshots& snapshots) {
+  for (auto& [target, snapshot] : snapshots) *target = std::move(snapshot);
+  learning_erasure_in_progress_ = false;
+  // A successful snapshot save already cleared dirty: this only clears the
+  // burst counters, and performs no I/O. A failed save retains its retry state.
+  if (store_ && !store_->dirty()) (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
+  learning_flush_cv_.notify_all();
 }
 
 // Forgets the pair in memory (dropped from the v2 file by the save) and in the
 // M7 file. The M7 removal is attempted even when the v2 store has no such pair:
 // a pair learned only before v2, or one whose earlier M7 removal failed, is
 // still there, and a retry must be able to finish it.
-InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::LearningStore& store,
-                                                                 const std::string& reading,
-                                                                 const std::string& surface) {
-  const bool in_store = store.Forget(reading, surface);
+InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::LearningStore& store,
+                                                                   const std::string& reading,
+                                                                   const std::string& surface) {
+  LearningSnapshots snapshots;
+  learning::LearningStore* selected = nullptr;
+  bool in_store = false;
+  {
+    std::scoped_lock lock(state_mutex_, english_mutex_);
+    snapshots = SnapshotLearningStoresLocked();
+    for (auto& [target, snapshot] : snapshots) {
+      if (target == &store) {
+        in_store = snapshot.Forget(reading, surface);
+        selected = &snapshot;
+      }
+      if (target == store_ && snapshot.dirty() &&
+          (last_unsaved_observation_epoch_sec_ || first_unsaved_observation_epoch_sec_)) {
+        snapshot.Prune(config_.learning_max_records, config_.learning_min_weight,
+                       last_unsaved_observation_epoch_sec_.value_or(
+                           first_unsaved_observation_epoch_sec_.value_or(0)));
+      }
+    }
+  }
   bool legacy_removed = false;
-  const bool legacy_ok = store.RemoveFromLegacyFile(reading, surface, &legacy_removed);
-  const bool saved = SaveLearningDataLocked();
+  bool legacy_ok = false;
+  bool saved = false;
+  try {
+    legacy_ok = selected && selected->RemoveFromLegacyFile(reading, surface, &legacy_removed);
+    saved = SaveLearningSnapshots(snapshots);
+  } catch (...) {
+    std::scoped_lock lock(state_mutex_, english_mutex_);
+    learning_erasure_in_progress_ = false;
+    learning_flush_cv_.notify_all();
+    throw;
+  }
+  // Queries read the live stores during persistence. Publish memory-first
+  // forgetting even on an I/O failure, atomically with converter erasure.
+  std::scoped_lock lock(state_mutex_, english_mutex_, converter_call_mutex_);
+  PublishLearningSnapshotsLocked(snapshots);
+  if (&store == store_) {
+    fallback_converter_->Forget(reading, surface);
+    if (model_converter_) model_converter_->Forget(reading, surface);
+  }
   if (in_store && &store == store_) RefreshPersonaLocked();
   if (!legacy_ok || !saved) return ForgetOutcome::SaveFailed;
   return in_store || legacy_removed ? ForgetOutcome::Forgotten : ForgetOutcome::NotFound;
@@ -143,35 +230,35 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::Learn
 
 bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>& words,
                                           uint64_t now_epoch, bool auto_promote) {
-  std::scoped_lock lock(state_mutex_);
+  std::lock_guard history_lock(learning_history_mutex_);
   if (!auto_word_store_ || auto_word_store_->save_blocked()) return false;
   auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
   return auto_word_store_->Save();
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  std::lock_guard history_lock(learning_history_mutex_);
+  if (store == LearningDataStore::Learning) return ResetLearningChannels();
   switch (store) {
     case LearningDataStore::Learning:
-      return ResetLearningChannelsLocked();
+      break;  // Handled above, including the converter history reset.
     case LearningDataStore::Typo: {
-      if (!typo_store_) return ResetOutcome::Unavailable;
-      // A store whose file could not be read keeps that file; refuse up front.
-      if (typo_store_->save_blocked()) return ResetOutcome::SaveFailed;
-      const auto before = typo_store_->SerializeText();
-      typo_store_->Reset();
-      if (typo_store_->Save()) return ResetOutcome::Reset;
-      typo_store_->LoadText(before);
-      return ResetOutcome::SaveFailed;
+      std::optional<learning::TypoCorrectionStore> snapshot;
+      {
+        std::scoped_lock lock(state_mutex_, typo_store_mutex_);
+        if (!typo_store_) return ResetOutcome::Unavailable;
+        if (typo_store_->save_blocked()) return ResetOutcome::SaveFailed;
+        snapshot = *typo_store_;
+      }
+      snapshot->Reset();
+      if (!snapshot->Save()) return ResetOutcome::SaveFailed;
+      std::scoped_lock lock(state_mutex_, typo_store_mutex_);
+      *typo_store_ = std::move(*snapshot);
+      return ResetOutcome::Reset;
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ResetOutcome::Unavailable;
-      if (auto_word_store_->save_blocked()) return ResetOutcome::SaveFailed;
-      const auto before = auto_word_store_->SerializeText();
-      auto_word_store_->Reset();
-      if (auto_word_store_->Save()) return ResetOutcome::Reset;
-      auto_word_store_->LoadText(before);
-      return ResetOutcome::SaveFailed;
+      return auto_word_store_->ResetAndSave() ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
     }
     case LearningDataStore::UserDictionary:
       break;
@@ -179,23 +266,29 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
 
   // User dictionary: the same disk-first protocol as RemoveUserWord.
   if (!user_dict_) return ResetOutcome::Unavailable;
+  std::optional<learning::UserDictionary> snapshot;
+  {
+    std::scoped_lock lock(state_mutex_);
+    snapshot = *user_dict_;
+  }
   learning::FileLockFailure lock_failure;
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(snapshot->path(), lock_failure);
   if (!file_lock) {
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ResetOutcome::SaveFailed;
   }
-  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+  if (UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
     return ResetOutcome::SaveFailed;
   }
-  const auto before = user_dict_->All();
-  user_dict_->Clear();
-  if (!user_dict_->Save()) {
-    RestoreUserDictionaryLocked(before);
-    return ResetOutcome::SaveFailed;
-  }
+  const auto before = *snapshot;
+  snapshot->Clear();
+  const bool saved = snapshot->Save();
+  if (!saved) *snapshot = before;
+  std::scoped_lock lock(state_mutex_);
+  *user_dict_ = std::move(*snapshot);
+  indexed_user_dict_ = nullptr;
   RefreshDictionaryLocked();
-  return ResetOutcome::Reset;
+  return saved ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
 }
 
 // Every learning channel is emptied or none is. A store whose file could not
@@ -203,24 +296,42 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
 // before anything changes. The v2 files are emptied before the M7 file, so the
 // v2 file exists (empty) before its M7 source is touched. A failure at either
 // step puts the snapshot back in memory and saves it again.
-InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannelsLocked() {
-  std::vector<std::pair<learning::LearningStore*, std::string>> snapshots;
-  for (auto* store : {store_, english_store_}) {
-    if (!store) continue;
-    if (store->save_blocked()) return ResetOutcome::SaveFailed;
-    snapshots.emplace_back(store, store->SerializeText());
+InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannels() {
+  LearningSnapshots snapshots;
+  {
+    std::scoped_lock lock(state_mutex_, english_mutex_);
+    for (auto* store : {store_, english_store_}) {
+      if (store && store->save_blocked()) return ResetOutcome::SaveFailed;
+    }
+    if (!store_ && !english_store_) return ResetOutcome::Unavailable;
+    snapshots = SnapshotLearningStoresLocked();
   }
-  if (snapshots.empty()) return ResetOutcome::Unavailable;
-  for (auto& [store, text] : snapshots) store->Reset();
-  if (SaveLearningDataLocked() && (!store_ || store_->ClearLegacyFile())) {
+  const auto before = snapshots;
+  bool saved = false;
+  try {
+    for (auto& [target, snapshot] : snapshots) snapshot.Reset();
+    saved = SaveLearningSnapshots(snapshots) && (!store_ || store_->ClearLegacyFile());
+    if (!saved) {
+      for (size_t i = 0; i < snapshots.size(); ++i)
+        snapshots[i].second.LoadText(before[i].second.SerializeText());
+      // A channel whose empty snapshot reached disk gets its old rows back;
+      // a failed rollback remains dirty for the next flush.
+      (void)SaveLearningSnapshots(snapshots);
+    }
+  } catch (...) {
+    std::scoped_lock lock(state_mutex_, english_mutex_);
+    learning_erasure_in_progress_ = false;
+    learning_flush_cv_.notify_all();
+    throw;
+  }
+  std::scoped_lock lock(state_mutex_, english_mutex_, converter_call_mutex_);
+  PublishLearningSnapshotsLocked(snapshots);
+  if (saved) {
+    fallback_converter_->ResetLearned();
+    if (model_converter_) model_converter_->ResetLearned();
     RefreshPersonaLocked();
-    return ResetOutcome::Reset;
   }
-  for (auto& [store, text] : snapshots) store->LoadText(text);
-  // Best effort: a channel whose empty file did reach the disk gets its rows
-  // back; one that still fails keeps them in memory for the next flush.
-  (void)SaveLearningDataLocked();
-  return ResetOutcome::SaveFailed;
+  return saved ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
 }
 
 std::optional<InferenceEngine::PersonaSnapshot> InferenceEngine::CurrentPersona() {
@@ -267,6 +378,7 @@ LearningExportResult InferenceEngine::ExportLearningData(
 LearningImportResult InferenceEngine::ImportLearningData(
     const std::vector<LearningDataStore>& selected, const std::filesystem::path& source,
     learning::ImportConflictPolicy policy) {
+  std::lock_guard history_lock(learning_history_mutex_);
   // Read, verify and decrypt the archive outside the store locks; only the
   // parse and merge below hold them.
   const learning::ByteCrypto* crypto = nullptr;

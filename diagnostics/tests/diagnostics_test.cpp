@@ -175,7 +175,7 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
       "name": "learning_store",
       "status": "ok",
       "message": "Learning store is readable",
-      "details": {"entries": 2}
+      "details": {"entries": 2, "legacy_retained": false}
     },
     {
       "id": "D-011",
@@ -712,6 +712,93 @@ TEST(DiagnosticsTest, LegacyLearningStoreIsWarningOnlyWhenReadable) {
   }
   EXPECT_FALSE(diag::ProbeLearningStoreFile(path, &entries, &migration_available));
   EXPECT_FALSE(migration_available);
+  std::error_code ec;
+  std::filesystem::remove_all(directory, ec);
+}
+
+TEST(DiagnosticsTest, RetainedEncryptedLegacyLearningWarnsUntilRemovedWithoutExposingText) {
+  if (!azookey::learning::DpapiCrypto().IsAvailable()) {
+    GTEST_SKIP() << "DPAPI is unavailable on this platform";
+  }
+  const auto directory = UniqueTempDirectory("azookey-diag-retained-learning-");
+  const auto path = directory / "learning.tsv";
+  azookey::learning::LearningStore learning(path.string());
+  learning.Observe("private-reading", "private-surface", 0.8, 100);
+  ASSERT_TRUE(learning.Save());
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(
+      path, "private-reading\tprivate-surface\t0.8 100\n", azookey::learning::DpapiCrypto()));
+
+  uint64_t entries = 0;
+  bool migration_available = true;
+  bool legacy_retained = false;
+  ASSERT_TRUE(diag::ProbeLearningStoreFile(path, &entries, &migration_available, &legacy_retained));
+  EXPECT_EQ(entries, 1U);
+  EXPECT_FALSE(migration_available);
+  EXPECT_TRUE(legacy_retained);
+  diag::Snapshot snapshot;
+  snapshot.learning_entries = entries;
+  snapshot.learning_store_legacy_retained = legacy_retained;
+  auto report = diag::EvaluateSnapshot(snapshot, 1);
+  auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                            [](const auto& item) { return item.id == "D-010"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Warning);
+  EXPECT_EQ(check->message, "Legacy learning store cleanup is pending");
+  const auto details = j::Parse(check->details_json);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(details->GetBool("legacy_retained"), true);
+  const auto json = diag::SerializeReport(report);
+  EXPECT_EQ(json.find("private-reading"), std::string::npos);
+  EXPECT_EQ(json.find("private-surface"), std::string::npos);
+
+  // Other legacy artifacts are preserved and do not represent pending encrypted cleanup.
+  for (const auto* suffix : {"", ".bak", ".corrupt-100"}) {
+    std::ofstream output(path.string() + suffix, std::ios::binary);
+    output << "private-reading\tprivate-surface\t0.8 100\n";
+  }
+  ASSERT_TRUE(std::filesystem::remove(azookey::learning::EncryptedPathFor(path)));
+  ASSERT_TRUE(diag::ProbeLearningStoreFile(path, &entries, &migration_available, &legacy_retained));
+  EXPECT_FALSE(legacy_retained);
+  EXPECT_FALSE(migration_available);
+  snapshot.learning_store_legacy_retained = legacy_retained;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  check = std::find_if(report.checks.begin(), report.checks.end(),
+                       [](const auto& item) { return item.id == "D-010"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Ok);
+  const auto cleaned_details = j::Parse(check->details_json);
+  ASSERT_TRUE(cleaned_details);
+  EXPECT_EQ(cleaned_details->GetBool("legacy_retained"), false);
+  std::error_code ec;
+  std::filesystem::remove_all(directory, ec);
+}
+
+TEST(DiagnosticsTest, UnreadableV2LearningTakesPriorityOverRetainedLegacyWarning) {
+  const auto directory = UniqueTempDirectory("azookey-diag-corrupt-v2-learning-");
+  const auto path = directory / "learning.tsv";
+  for (const auto& plain_path : {path, azookey::learning::LearningStoreV2PathFor(path)}) {
+    std::ofstream output(azookey::learning::EncryptedPathFor(plain_path), std::ios::binary);
+    output << "invalid encrypted learning";
+  }
+  uint64_t entries = 99;
+  bool migration_available = true;
+  bool legacy_retained = false;
+  const bool valid =
+      diag::ProbeLearningStoreFile(path, &entries, &migration_available, &legacy_retained);
+  EXPECT_FALSE(valid);
+  EXPECT_EQ(entries, 0U);
+  EXPECT_FALSE(migration_available);
+  EXPECT_TRUE(legacy_retained);
+  diag::Snapshot snapshot;
+  snapshot.learning_store_valid = valid;
+  snapshot.learning_store_legacy_retained = legacy_retained;
+  const auto report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                                  [](const auto& item) { return item.id == "D-010"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Error);
+  EXPECT_EQ(check->message, "Learning store is unreadable or corrupt");
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
   std::error_code ec;
   std::filesystem::remove_all(directory, ec);
 }

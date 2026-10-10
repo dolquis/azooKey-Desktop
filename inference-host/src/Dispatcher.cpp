@@ -1010,20 +1010,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
 
   const auto target = parsed->action == "confirm" ? learning::AutoWordState::Confirmed
                                                   : learning::AutoWordState::Rejected;
-  const auto previous = auto_word_store_->SetState(parsed->surface, parsed->reading, target);
-  if (!previous) return fail(ipc::kNewWordErrorNotFound);
+  const auto outcome = auto_word_store_->SetStateAndSave(parsed->surface, parsed->reading, target);
+  if (outcome == learning::AutoWordSaveOutcome::NotFound) return fail(ipc::kNewWordErrorNotFound);
   // A repeated click is a success that changed nothing, and it does not
   // rewrite the file.
-  if (*previous == target) {
+  if (outcome == learning::AutoWordSaveOutcome::Unchanged) {
     res.ok = true;
     return reply();
   }
-  if (!auto_word_store_->Save()) {
-    // Put the word back so memory keeps matching the file: otherwise a failed
-    // confirm would still inject the word until the host restarts. Only if it
-    // is still in our state, so a concurrent resolve from another connection
-    // is not undone.
-    auto_word_store_->CompareAndSetState(parsed->surface, parsed->reading, target, *previous);
+  if (outcome == learning::AutoWordSaveOutcome::SaveFailed) {
     return fail(ipc::kNewWordErrorSaveFailed);
   }
   res.ok = true;

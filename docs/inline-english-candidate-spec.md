@@ -115,7 +115,38 @@ TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilit
 - 打鍵ごとの問い合わせは `live = true` のため、そのキャッシュには英単語候補が入らない。
   そのため有効時の Space は、このキャッシュを使わず、`live = false` の問い合わせの応答を
   待って候補ウィンドウを開く。記号・絵文字リライター有効時の Space と同じ経路である。
-- 一括変換（M58）の Space は `QueryBatchConversion` を送るため、英単語候補は加わらない（§9）。
+- 一括変換（M58）の Space は `QueryBatchConversion` を送る。英単語候補は、一括変換の結果が
+  1 文節になる `neural` の要求にだけ加わる（§4.1.1）。
+
+#### 4.1.1 一括変換（M58）での注入
+
+一括変換の文節は、Host が読みを句読点か固定長で区切った chunk であり
+（`docs/romaji-batch-conversion-spec.md` §7）、各候補は chunk 全体の変換である。
+TIP は生ローマ字を要求単位でしか送らず、Host は chunk ごとの生ローマ字を持たない。
+inputStyle=custom の表は TIP にだけあり、読みには句読点が足されうるため、Host は
+生ローマ字を chunk に割り振れない。そのため、英単語候補は要求全体が 1 文節になる場合に限る。
+1 語の英単語は常にこの場合に当たる。
+
+- TIP は、`inlineEnglishCandidates` が true、Handshake 応答の capabilities に
+  `english_candidates` がある、解決後の mode が `neural`、論理バッチのサブリクエストが 1 件、
+  の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
+  （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
+- Host は、`mode` が `ai-cleanup` でなく、`english_candidates` が true、`raw_romaji` が空でなく、
+  読みが 1 chunk のときだけ、その文節の候補を `max_candidates` で切り詰めた後に英単語候補を
+  §4.3 の規則で加える。`ai-cleanup` は、`neural` へ fallback した場合も対象外とする。
+- capabilities に `english_candidates` を持っていても、一括変換に英単語候補を配線していない
+  Host は、このフィールドを無視する。その場合、英単語候補は何も示さずに出ない。新しい
+  capability は設けない。
+- 確定と学習は §5・§6.4 と同じである。1 文節の確定は `CommitObservation` で、English タグの
+  候補は `reading` を生ローマ字に置き換えて送る。
+
+制約:
+
+- M58 の `batch_raw_romaji` は小文字で持つため、`s_case` は常に 0 になる。Shift で打った
+  大文字は英語意図スコアに寄与しない。
+- 句読点を含まない短い文（例: `kyouhaiitenkidesune`）も 1 文節になる。この場合、文全体の
+  `lower(r)` が英単語候補として加わる。英語意図スコアは低いので、通常入力と同じく日本語候補の
+  後ろに並ぶ。
 
 ### 4.2 ゲーティング（いつ出すか）
 
@@ -737,6 +768,22 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 - `QueryCandidatesRequest` round-trip で `raw_romaji` / `english_candidates` が保存される。
   欠落 JSON で `""` / `false` の既定（後方互換）。
 - 英単語候補（`tag=4`、`reading=生ローマ字`）を含む `QueryCandidatesResponse` の往復。
+- `QueryBatchConversionRequest` の `english_candidates` が往復で保存される。false は wire に
+  出さない。欠落 JSON と bool 以外の値で `false`。
+
+### 6.7 一括変換（`QueryBatchConversionRequest` 拡張）
+
+新 `MessageType` は追加せず、`QueryBatchConversionRequest`
+（`docs/romaji-batch-conversion-spec.md` §6.1）に任意フィールドを 1 つ足す。生ローマ字は既存の
+`raw_romaji` を使う。
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `english_candidates` | bool | `false` | §4.1.1 の条件のとき TIP が true にする。false は省略する |
+
+英単語候補は、応答の唯一の `segments[0].candidates[]` に、§6.3 と同じ形（`tag = English(4)`、
+`reading = 生ローマ字`）で加わる。応答の形は変えない。旧 Host はこのフィールドを無視し、
+旧 TIP は送らないので、どちらの組み合わせでも挙動は変わらない。
 
 ## 7. 設定スキーマ
 
@@ -816,12 +863,19 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
   `content_hash` が変わり、`overlay.base_fingerprint` と不一致で overlay が破棄されること
   （先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。`content_hash` が base ヘッダから読めること。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
-  `english_candidates` フィールド、候補 `tag` の build/parse 往復。
+  `english_candidates` フィールド、候補 `tag` の build/parse 往復。`QueryBatchConversion` の
+  `english_candidates` の往復と欠落時の既定（§6.6）。
+- **一括変換の Host** (`inference-host/tests/dispatcher_test.cpp`): 1 文節の `neural` 要求で、
+  `max_candidates` で切り詰めた後に英単語候補が加わること。フラグなし、2 文節以上、
+  `ai-cleanup` では加わらないこと（§4.1.1）。
 - **TIP** (`tsf-tip/tests/onkeydown_preedit_test.cpp`): Space の `live = false` 問い合わせに
   打鍵どおりの生ローマ字（Shift の大文字を含む）と `english_candidates` が載ること。
   打鍵ごとの問い合わせには載らないこと。Backspace で消したかなの打鍵が生ローマ字から除かれること。
   設定または capability が無いときに送らないこと。英単語の確定（単発・文節）が
   reading=生ローマ字で観測され、かな読みの English タグ候補はかなの reading のままであること。
+  一括変換の Space では、§4.1.1 の条件のときだけ `QueryBatchConversion` に
+  `english_candidates` が載り、サブリクエストが 2 件以上のときと `ai-cleanup` では載らないこと。
+  一括変換で英単語候補を確定すると reading=生ローマ字で観測されること。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字
   学習と混線しないこと。再度同じローマ字で英単語候補が再提示されること。
 - **手動 / 実機（Win11、`gate:human-required`）**: Japanese モードのまま `apple` を打つと
@@ -832,7 +886,8 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
 
 - **連続英文タイプ**: スペースを含む複数語の英文を Japanese モードのまま連続入力する
   体験。語間スペース処理・文単位英語予測（`requireEnglishPrediction` 相当）・M58
-  一括変換との統合が必要。
+  一括変換との統合が必要。1 語の英単語候補を一括変換の 1 文節へ加える範囲は §4.1.1 が持つ。
+  2 文節以上の一括変換で文節ごとに英単語候補を出すには、文節ごとの生ローマ字が要る。
 - **英語スペル補正・補完**: 辞書ゲーティングを超える補正・補完。
 - **アプリ別の英語優先度**: M48（アプリ別入力プロファイル）で、コードエディタ等では
   英単語タグを boost する（`docs/app-profile-spec.md` の候補タグ重みと接続）。

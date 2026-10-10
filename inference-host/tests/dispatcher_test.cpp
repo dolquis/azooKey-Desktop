@@ -1527,6 +1527,58 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
   EXPECT_EQ(parsed->full_surface, "日本");
 }
 
+TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment) {
+  constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  const auto query = [&](uint64_t id, const std::string& reading, const std::string& mode,
+                         bool english) {
+    ipc::QueryBatchConversionRequest q;
+    q.reading = reading;
+    q.raw_romaji = "nihon";
+    q.mode = mode;
+    q.ai_allowed = true;
+    q.max_candidates = 1;
+    q.english_candidates = english;
+    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                                                  ipc::BuildQueryBatchConversionRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryBatchConversionResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? std::move(parsed->segments) : std::vector<ipc::BatchConversionSegment>{};
+  };
+  const auto english_of = [&](const ipc::BatchConversionSegment& segment) {
+    std::vector<std::string> surfaces;
+    for (const auto& c : segment.candidates) {
+      if (c.tag != kEnglish) continue;
+      surfaces.push_back(c.surface);
+      EXPECT_EQ(c.reading, "nihon");
+    }
+    return surfaces;
+  };
+
+  // English is placed after max_candidates truncates the kana candidates.
+  const auto single = query(1101, "にほん", "neural", true);
+  ASSERT_EQ(single.size(), 1u);
+  ASSERT_FALSE(single.front().candidates.empty());
+  EXPECT_EQ(single.front().candidates.front().surface, "日本");
+  EXPECT_EQ(english_of(single.front()), (std::vector<std::string>{"nihon", "Nihon", "NIHON"}));
+  EXPECT_EQ(single.front().candidates.size(), 4u);
+
+  // Older TIPs (flag absent) see what they saw before.
+  const auto without = query(1102, "にほん", "neural", false);
+  ASSERT_EQ(without.size(), 1u);
+  EXPECT_TRUE(english_of(without.front()).empty());
+
+  // A split reading has no per-segment romaji, so no segment gets English.
+  const auto split = query(1103, "にほん。にほん", "neural", true);
+  ASSERT_EQ(split.size(), 2u);
+  for (const auto& segment : split) EXPECT_TRUE(english_of(segment).empty());
+
+  // ai-cleanup is out of scope, even when it falls back to neural.
+  const auto cleanup = query(1104, "にほん", "ai-cleanup", true);
+  ASSERT_EQ(cleanup.size(), 1u);
+  EXPECT_TRUE(english_of(cleanup.front()).empty());
+}
+
 TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {
   ipc::QueryBatchConversionRequest request;
   request.mode = "ai-cleanup";

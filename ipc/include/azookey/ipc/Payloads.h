@@ -212,6 +212,9 @@ struct QueryBatchConversionRequest {
   bool ai_allowed{false};
   bool external_ai_allowed{false};
   std::string ai_backend;  // Empty preserves the host's root setting for older clients.
+  // M60 (docs/romaji-batch-conversion-spec.md section 6.1): English candidates
+  // for a neural batch that stays one segment. Omitted on the wire when false.
+  bool english_candidates{false};
 };
 
 struct QueryBatchConversionResponse {

@@ -179,7 +179,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   "ai_allowed": false,           // TIPの安全入力判定。欠落・型不正はfalse
   "external_ai_allowed": false,  // ai_allowedとの積。hostの設定でも再制限
   "ai_backend": "none",         // アプリ別解決後。欠落時はhostのroot設定を継承
-  "max_candidates": 5            // 文節あたり候補数
+  "max_candidates": 5,           // 文節あたり候補数
+  "english_candidates": true     // 任意。M60 の英単語候補。false は省略
   // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
   // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
 }
@@ -196,6 +197,10 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   挿入は host 側で行われるため、設定値をペイロードに載せないと host が ON/OFF を
   判別できず、roadmap M58-C の「ON/OFF で句読点挿入が切り替わる」受け入れ条件を
   満たせない。`mode=neural` では無視される。
+- `english_candidates` は M60 の英単語候補を要求する任意フィールドで、欠落と bool 以外の値は
+  false とする。Host は、`mode=neural` で読みが 1 文節になるときだけ、その文節の候補に
+  `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
+  `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 
 ### 6.2 Response
 

@@ -1105,7 +1105,7 @@ TEST(DiagnosticsTest, EmbeddedSettingsSchemaValidatesCanonicalBenchmarkHistoryWi
   for (const auto& [key, unused] : canonical) {
     auto row = canonical;
     row.erase(key);
-    probe({j::Value(std::move(row))}, key == "completedAt");
+    probe({j::Value(std::move(row))}, false);
   }
   for (const auto* key : {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb", "vram_mb"}) {
     auto row = canonical;
@@ -1163,12 +1163,10 @@ TEST(DiagnosticsTest, EmbeddedSettingsSchemaRejectsUnknownAndOutOfRangeInference
   std::filesystem::remove(path);
 }
 
-diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing,
-                                 bool settings_migration_available = false) {
+diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing) {
   diag::Snapshot snapshot;
   snapshot.settings_valid = settings_valid;
   snapshot.settings_missing = settings_missing;
-  snapshot.settings_migration_available = settings_migration_available;
   const auto report = diag::EvaluateSnapshot(snapshot, 1);
   const auto check = std::find_if(report.checks.begin(), report.checks.end(),
                                   [](const auto& item) { return item.id == "D-012"; });
@@ -1176,21 +1174,18 @@ diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing,
   return check->status;
 }
 
-TEST(DiagnosticsTest, RegisteredLegacyBenchmarkHistoryWarnsWithoutHidingOtherInvalidSettings) {
+TEST(DiagnosticsTest, LegacyBenchmarkHistoryIsErrorAndProbeLeavesFileUnchanged) {
   const auto directory = UniqueTempDirectory("azookey-diag-legacy-benchmark-history-");
   const auto path = directory / "settings.json";
-  const auto probe = [&](const std::string& text, bool expected_valid, bool expected_migration) {
+  const auto probe = [&](const std::string& text, bool expected_valid) {
     {
       std::ofstream out(path, std::ios::binary | std::ios::trunc);
       out << text;
     }
-    bool migration = true;
-    const bool valid = diag::ProbeSettingsFile(path, &migration);
+    const bool valid = diag::ProbeSettingsFile(path);
     EXPECT_EQ(valid, expected_valid) << text;
-    EXPECT_EQ(migration, expected_migration) << text;
-    EXPECT_EQ(SettingsCheckStatus(valid, false, migration),
-              !expected_valid ? diag::Status::Error
-                              : (expected_migration ? diag::Status::Warning : diag::Status::Ok));
+    EXPECT_EQ(SettingsCheckStatus(valid, false),
+              expected_valid ? diag::Status::Ok : diag::Status::Error);
     MockDpapiCrypto crypto;
     EXPECT_EQ(diag::ProbeDpapiSettingsJson(text, crypto),
               expected_valid ? diag::DpapiState::NotRequired : diag::DpapiState::Unavailable);
@@ -1200,75 +1195,18 @@ TEST(DiagnosticsTest, RegisteredLegacyBenchmarkHistoryWarnsWithoutHidingOtherInv
   for (const auto* identifier : {"model", "model_path", "path"}) {
     probe(std::string(R"({"model":{"benchmarkHistory":[{")") + identifier +
               R"(":"legacy.gguf","backend":"cpu","p50_ms":1}]}})",
-          true, true);
+          false);
   }
-  const j::Object legacy{{"path", j::Value("legacy.gguf")},
-                         {"backend", j::Value("cpu")},
-                         {"status", j::Value("error")},
-                         {"p50_ms", j::Value{}},
-                         {"p95_ms", j::Value(1.0)},
-                         {"p99_ms", j::Value(2.0)},
-                         {"load_ms", j::Value(3.0)},
-                         {"rss_mb", j::Value(4.0)},
-                         {"vram_mb", j::Value{}},
-                         {"iterations_completed", j::Value(0.0)},
-                         {"error", j::Value{}}};
-  const auto document = [](j::Array rows) {
-    return j::Stringify(j::Value(j::Object{
-        {"model", j::Value(j::Object{{"benchmarkHistory", j::Value(std::move(rows))}})}}));
-  };
-  probe(document({j::Value(legacy)}), true, true);
-  for (const auto* key :
-       {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb", "vram_mb", "iterations_completed"}) {
-    auto row = legacy;
-    row[key] = j::Value{};
-    probe(document({j::Value(std::move(row))}), true, true);
-  }
-  for (const auto& [key, invalid] : j::Object{{"load_ms", j::Value("invalid")},
-                                              {"rss_mb", j::Value(true)},
-                                              {"error", j::Value(1.0)},
-                                              {"iterations_completed", j::Value(0.5)},
-                                              {"vram_mb", j::Value(false)}}) {
-    auto row = legacy;
-    row[key] = invalid;
-    probe(document({j::Value(std::move(row))}), false, false);
-  }
-  for (const double iterations : {-1.0, 4294967296.0}) {
-    auto row = legacy;
-    row["iterations_completed"] = j::Value(iterations);
-    probe(document({j::Value(std::move(row))}), false, false);
-  }
-  auto canonical = legacy;
-  canonical["path"] = j::Value("C:/models/new.gguf");
-  canonical["completedAt"] = j::Value("2026-10-10T10:00:00Z");
-  canonical["p50_ms"] = j::Value(0.0);
-  probe(document({j::Value(legacy), j::Value(canonical)}), true, true);
-  for (const auto& timestamp :
-       {j::Value("2026-10-10T10:00:00Z"), j::Value("invalid"), j::Value{}, j::Value(1.0)}) {
-    auto row = canonical;
-    row["completedAt"] = timestamp;
-    row.erase("load_ms");
-    probe(document({j::Value(legacy), j::Value(std::move(row))}), false, false);
-  }
-  auto effective_openai = j::Parse(document({j::Value(legacy)}));
-  ASSERT_TRUE(effective_openai);
-  auto openai_document = effective_openai->AsObject();
-  openai_document["aiBackend"] = j::Value("openai");
-  openai_document["openAiApiKey"] = j::Value("legacy-key");
-  MockDpapiCrypto crypto;
-  EXPECT_EQ(
-      diag::ProbeDpapiSettingsJson(j::Stringify(j::Value(std::move(openai_document))), crypto),
-      diag::DpapiState::Plaintext);
-  probe(R"({"model":{"benchmarkHistory":[]}})", true, false);
-  probe(R"({"maxCandidates":99,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false, false);
-  probe(R"({"unknownSetting":true,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false,
-        false);
-  probe(R"({"model":{"selectedPath":42,"benchmarkHistory":[{"model":"legacy"}]}})", false, false);
-  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy","extra":true}]}})", false, false);
-  probe(R"({"model":{"benchmarkHistory":[{"path":"legacy","completedAt":"invalid"}]}})", false,
-        false);
-  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy"},{"path":"new","rss_mb":"invalid"}]}})",
-        false, false);
+  probe(
+      R"({"model":{"benchmarkHistory":[{"path":"C:/models/legacy.gguf","backend":"cpu","status":"error","p50_ms":null,"p95_ms":1,"p99_ms":2,"load_ms":3,"rss_mb":4,"vram_mb":null,"iterations_completed":0,"error":null}]}})",
+      false);
+  probe(
+      R"({"model":{"benchmarkHistory":[{"model":"legacy"},{"path":"C:/models/new.gguf","completedAt":"2026-10-10T10:00:00Z","backend":"cpu","status":"success","p50_ms":0,"p95_ms":0,"p99_ms":0,"load_ms":0,"rss_mb":0,"vram_mb":null,"iterations_completed":0,"error":null}]}})",
+      false);
+  probe(R"({"model":{"benchmarkHistory":[]}})", true);
+  probe(R"({"maxCandidates":99,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false);
+  probe(R"({"unknownSetting":true,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false);
+  probe(R"({"model":{"selectedPath":42,"benchmarkHistory":[{"model":"legacy"}]}})", false);
   std::filesystem::remove_all(directory);
 }
 

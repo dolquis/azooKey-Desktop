@@ -320,66 +320,9 @@ bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
   return true;
 }
 
-bool IsLegacyBenchmarkHistoryEntry(const j::Value& row) {
-  if (!row.IsObject() || row.Find("completedAt")) return false;
-  constexpr std::array<std::string_view, 13> legacy_keys = {
-      "model",  "path",   "model_path", "backend", "status",  "p50_ms",
-      "p95_ms", "p99_ms", "load_ms",    "rss_mb",  "vram_mb", "iterations_completed",
-      "error"};
-  bool has_identifier = false;
-  for (const auto& [key, value] : row.AsObject()) {
-    if (std::find(legacy_keys.begin(), legacy_keys.end(), key) == legacy_keys.end()) return false;
-    if (key == "p50_ms" || key == "p95_ms" || key == "p99_ms" || key == "load_ms" ||
-        key == "rss_mb" || key == "vram_mb") {
-      if (!value.IsNumber() && !value.IsNull()) return false;
-    } else if (key == "iterations_completed") {
-      if (!value.IsNull()) {
-        const auto iterations = row.GetUInt(key);
-        if (!iterations || *iterations > UINT32_MAX) return false;
-      }
-    } else if (key == "error") {
-      if (!value.IsString() && !value.IsNull()) return false;
-    } else {
-      if (!value.IsString()) return false;
-      if ((key == "model" || key == "path" || key == "model_path") && !value.AsString().empty()) {
-        has_identifier = true;
-      }
-    }
-  }
-  return has_identifier;
-}
-
-bool ValidateSettingsDocument(const j::Value& settings, const j::Value& schema,
-                              bool* migration_available = nullptr) {
-  if (migration_available) *migration_available = false;
-  if (ValidateJsonSchema(settings, schema)) return true;
-  const auto* model = settings.FindObject("model");
-  if (!model) return false;
-  const auto history = model->find("benchmarkHistory");
-  if (history == model->end() || !history->second.IsArray()) return false;
-  j::Array canonical_rows;
-  bool legacy_found = false;
-  for (const auto& row : history->second.AsArray()) {
-    if (IsLegacyBenchmarkHistoryEntry(row)) {
-      legacy_found = true;
-    } else {
-      canonical_rows.push_back(row);
-    }
-  }
-  if (!legacy_found) return false;
-  auto projected_model = *model;
-  projected_model["benchmarkHistory"] = j::Value(std::move(canonical_rows));
-  auto projected_root = settings.AsObject();
-  projected_root["model"] = j::Value(std::move(projected_model));
-  if (!ValidateJsonSchema(j::Value(std::move(projected_root)), schema)) return false;
-  if (migration_available) *migration_available = true;
-  return true;
-}
-
 struct SettingsProbe {
   bool valid{true};
   bool missing{true};
-  bool migration_available{false};
   bool model_enabled{true};
   std::string selected_path;
   DpapiState dpapi_state{DpapiState::NotRequired};
@@ -443,8 +386,7 @@ SettingsProbe ProbeSettings(const std::filesystem::path& path) {
   }
   const auto value = j::Parse(*text);
   const auto schema = j::Parse(kSettingsSchemaJson);
-  if (!value || !value->IsObject() || !schema ||
-      !ValidateSettingsDocument(*value, *schema, &result.migration_available)) {
+  if (!value || !value->IsObject() || !schema || !ValidateJsonSchema(*value, *schema)) {
     result.valid = false;
     result.dpapi_state = DpapiState::Unavailable;
     return result;
@@ -1199,9 +1141,8 @@ void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
 
 }  // namespace
 
-bool ProbeSettingsFile(const std::filesystem::path& path, bool* migration_available) {
+bool ProbeSettingsFile(const std::filesystem::path& path) {
   const auto result = ProbeSettings(path);
-  if (migration_available) *migration_available = result.migration_available;
   return result.valid;
 }
 
@@ -1209,8 +1150,7 @@ DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto) {
   const auto settings = j::Parse(settings_json);
   const auto schema = j::Parse(kSettingsSchemaJson);
-  if (!settings || !settings->IsObject() || !schema ||
-      !ValidateSettingsDocument(*settings, *schema))
+  if (!settings || !settings->IsObject() || !schema || !ValidateJsonSchema(*settings, *schema))
     return DpapiState::Unavailable;
   return ProbeDpapiSettings(*settings, crypto);
 }
@@ -1544,18 +1484,12 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            {{"entries", j::Value(snapshot.user_dict_entries)},
             {"skipped_entries", j::Value(snapshot.user_dict_skipped_entries)}});
 
-  const auto settings_status =
-      !snapshot.settings_valid
-          ? Status::Error
-          : (!snapshot.settings_missing && snapshot.settings_migration_available ? Status::Warning
-                                                                                 : Status::Ok);
+  const auto settings_status = snapshot.settings_valid ? Status::Ok : Status::Error;
   AddCheck(report, "D-012", "settings", settings_status,
            settings_status == Status::Error
                ? "Settings failed schema validation"
-               : (settings_status == Status::Warning
-                      ? "Legacy benchmark history is removed on the next Host benchmark append"
-                      : (snapshot.settings_missing ? "Settings file is absent; defaults apply"
-                                                   : "Settings conform to the embedded schema")),
+               : (snapshot.settings_missing ? "Settings file is absent; defaults apply"
+                                            : "Settings conform to the embedded schema"),
            {{"missing", j::Value(snapshot.settings_missing)},
             {"valid", j::Value(snapshot.settings_valid)}});
 
@@ -1659,7 +1593,6 @@ ProbeResult ProbeSystem() {
     const auto settings = ProbeSettings(paths->settings_path);
     snapshot.settings_valid = settings.valid;
     snapshot.settings_missing = settings.missing;
-    snapshot.settings_migration_available = settings.migration_available;
     snapshot.dpapi_state = settings.dpapi_state;
     snapshot.model_enabled = settings.model_enabled;
     snapshot.selected_model_path = settings.selected_path;

@@ -99,7 +99,6 @@ struct Snapshot {
   bool selected_model_valid{false};
   bool settings_valid{true};
   bool settings_missing{true};
-  bool settings_migration_available{false};
   DpapiState dpapi_state{DpapiState::NotRequired};
   bool learning_store_valid{true};
   bool learning_store_migration_available{false};
@@ -173,7 +172,7 @@ std::string SerializeRepairReport(const RepairReport& report);
 std::string RepairStatusName(RepairStatus status);
 bool RepairReportSucceeded(const RepairReport& report);
 
-bool ProbeSettingsFile(const std::filesystem::path& path, bool* migration_available = nullptr);
+bool ProbeSettingsFile(const std::filesystem::path& path);
 DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto);
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries,

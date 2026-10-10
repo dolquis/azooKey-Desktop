@@ -20,6 +20,9 @@ inline constexpr uint32_t kEnglishBaseVersion = 1;
 inline constexpr uint32_t kEnglishOverlayVersion = 1;
 inline constexpr size_t kEnglishBaseHeaderSize = 32;
 inline constexpr size_t kEnglishOverlayHeaderSize = 16;
+// A base loads only up to this many entries: the 200,000 a TSV may hold plus
+// as many added by compaction. Compaction stops before it.
+inline constexpr uint32_t kMaxEnglishBaseEntries = 400'000;
 
 struct EnglishBaseHeader {
   uint32_t version{};
@@ -153,13 +156,15 @@ bool ReinitEnglishOverlay(const std::filesystem::path& overlay, uint32_t base_co
                           const EnglishWriteHook& hook = {});
 // Merges the base with an overlay that matches it into a new base with
 // generation + 1, replaces the base atomically, then reinitializes the overlay
-// with the new content_hash. A stale overlay is not merged; a base older than
-// the TSV is not compacted (false).
+// with the new content_hash. A stale overlay is not merged. false, leaving
+// both files, when the base's mtime is not the TSV's (it is about to be
+// recompiled), when an overlay for this base cannot be read whole, or when the
+// merge would exceed kMaxEnglishBaseEntries.
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths,
                               const EnglishWriteHook& hook = {});
 // Writes base bytes atomically (temporary file, flush, MoveFileEx). With
-// tsv_time (the TSV mtime the bytes reflect), a base mtime older than it is
-// raised to it so the next read does not recompile.
+// tsv_time (the TSV mtime the bytes reflect), the base's mtime is set to it:
+// section 4.5 reads the .bin only while the two are equal.
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
                       std::optional<std::filesystem::file_time_type> tsv_time = std::nullopt);
 

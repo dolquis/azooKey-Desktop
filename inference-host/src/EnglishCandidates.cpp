@@ -88,7 +88,8 @@ bool IsEnglishObservation(std::string_view reading, uint8_t tag) {
 std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
                                                EnglishDictionaryLoadStats* stats) {
   std::vector<EnglishWordRecord> records;
-  std::unordered_map<std::string, size_t> by_surface;
+  // Keys view the input text, which outlives the map.
+  std::unordered_map<std::string_view, size_t> by_surface;
   size_t skipped = 0;
   bool truncated = false;
   if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
@@ -121,7 +122,7 @@ std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
         EnglishLookupKey(surface), std::string(surface),
         static_cast<uint32_t>(std::min<uint64_t>(frequency, UINT32_MAX)),
         tab2 == std::string_view::npos ? uint8_t{0} : ParseFlags(rest.substr(tab2 + 1))};
-    const auto [same, inserted] = by_surface.emplace(record.surface, records.size());
+    const auto [same, inserted] = by_surface.emplace(surface, records.size());
     if (inserted) {
       records.push_back(std::move(record));
     } else {

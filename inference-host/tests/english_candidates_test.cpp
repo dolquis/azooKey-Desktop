@@ -174,8 +174,10 @@ TEST(EnglishCandidatesTest, DictionarySkipsNonUtf8AndStopsAtTheEntryCap) {
   std::string big;
   for (size_t i = 0; i <= azookey::host::kMaxEnglishDictionaryEntries; ++i)
     big += "w" + std::to_string(i) + "\t1\n";
+  // The cap applies while parsing; checked without compiling the 200,000
+  // records into a .bin image, which is slow under coverage.
   azookey::host::EnglishDictionaryLoadStats big_stats;
-  const auto capped = azookey::host::EnglishDictionary::ParseTsv(big, &big_stats);
+  const auto capped = azookey::host::ParseEnglishTsv(big, &big_stats);
   EXPECT_TRUE(big_stats.truncated);
   EXPECT_EQ(capped.size(), azookey::host::kMaxEnglishDictionaryEntries);
 }

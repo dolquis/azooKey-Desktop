@@ -14,10 +14,17 @@ namespace {
 
 namespace fs = std::filesystem;
 
-bool BaseNotOlderThan(const fs::path& base, fs::file_time_type tsv_time) {
+// Section 4.5: a .bin carries the mtime of the TSV it was compiled from, so
+// any other TSV mtime (an edit, or a restored copy with an older timestamp)
+// means the .bin no longer reflects it.
+bool BaseMatchesTsv(const fs::path& base, fs::file_time_type tsv_time) {
   std::error_code ec;
   const auto base_time = fs::last_write_time(base, ec);
-  return !ec && base_time >= tsv_time;
+  return !ec && base_time == tsv_time;
+}
+
+bool SameEntry(const EnglishOverlayOp& a, const EnglishOverlayOp& b) {
+  return a.key == b.key && a.surface == b.surface;
 }
 
 }  // namespace
@@ -44,23 +51,49 @@ EnglishDictionaryStore::Sample EnglishDictionaryStore::TakeSample() const {
 }
 
 std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::SnapshotFor(const Sample& sample) {
+  std::shared_ptr<const EnglishDictionary> previous;
+  bool has_previous = false;
   {
-    std::shared_lock lock(mutex_);
+    std::lock_guard lock(snapshot_mutex_);
+    if (snapshot_sample_ == sample) return snapshot_;
+    previous = snapshot_;
+    has_previous = loaded_once_;
+  }
+  // Section 4.7 (A): while a writer or another reader rebuilds (TSV parse,
+  // file lock wait, compaction), a reader keeps the previous snapshot instead
+  // of waiting. Only the very first load waits.
+  std::unique_lock update(update_mutex_, std::try_to_lock);
+  if (!update.owns_lock()) {
+    if (has_previous) return previous;
+    update.lock();
+  }
+  {
+    std::lock_guard lock(snapshot_mutex_);
     if (snapshot_sample_ == sample) return snapshot_;
   }
-  std::unique_lock lock(mutex_);
-  if (snapshot_sample_ == sample) return snapshot_;
   try {
     return RebuildLocked(sample);
   } catch (const std::exception&) {
     // An allocation failure on a huge file must not take the query down; the
     // baseline forms still work (section 4.4).
     base_.reset();
-    snapshot_.reset();
-    snapshot_sample_.reset();
+    Publish(nullptr, std::nullopt);
     if (listener_) listener_(EnglishDictionaryLoadReport{});
     return nullptr;
   }
+}
+
+void EnglishDictionaryStore::Publish(std::shared_ptr<const EnglishDictionary> snapshot,
+                                     std::optional<Sample> sample) {
+  std::lock_guard lock(snapshot_mutex_);
+  snapshot_ = std::move(snapshot);
+  snapshot_sample_ = std::move(sample);
+  loaded_once_ = true;
+}
+
+void EnglishDictionaryStore::Invalidate() {
+  std::lock_guard lock(snapshot_mutex_);
+  snapshot_sample_.reset();
 }
 
 std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::RebuildLocked(const Sample& sample,
@@ -69,9 +102,13 @@ std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::RebuildLocked(c
   bool loaded = false;
   bool consistent = true;
   std::shared_ptr<const EnglishBaseImage> base;
-  // Section 4.5 order: a valid .bin no older than the TSV (or without one),
+  // Within this process a TSV whose size changed under the same mtime is
+  // compiled again too.
+  const bool tsv_changed = sample.tsv && compiled_tsv_ && *compiled_tsv_ != *sample.tsv;
+  // Section 4.5 order: a valid .bin compiled from this TSV (or without one),
   // else the TSV (recompiling the .bin), else no dictionary.
-  if (sample.base && (!sample.tsv || BaseNotOlderThan(paths_.base, sample.tsv->first))) {
+  if (sample.base && !tsv_changed &&
+      (!sample.tsv || BaseMatchesTsv(paths_.base, sample.tsv->first))) {
     if (base_ && base_->header() == *sample.base) {
       base = base_;
     } else {
@@ -86,8 +123,9 @@ std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::RebuildLocked(c
     report = {};
     report.source = "tsv";
     loaded = true;
-    base = CompileTsvLocked(report, sample.tsv->first, file_locked);
+    base = CompileTsvLocked(report, sample.tsv->first, tsv_changed, file_locked);
   }
+  compiled_tsv_ = sample.tsv;
   std::vector<EnglishOverlayOp> ops;
   if (base) {
     // An overlay for another base is stale and read as empty (section 4.6).
@@ -107,33 +145,31 @@ std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::RebuildLocked(c
     listener_(report);
   }
   base_ = base;
-  snapshot_ = snapshot;
-  if (consistent) {
-    snapshot_sample_ = sample;
-  } else {
-    snapshot_sample_.reset();
-  }
+  Publish(snapshot, consistent ? std::optional<Sample>(sample) : std::nullopt);
   return snapshot;
 }
 
 std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked(
-    EnglishDictionaryLoadReport& report, fs::file_time_type tsv_time, bool file_locked) {
+    EnglishDictionaryLoadReport& report, fs::file_time_type tsv_time, bool force,
+    bool file_locked) {
   const auto text = ReadEnglishTsvFile(paths_.tsv);
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
-  // The .bin is a cache: without the lock or write access the parsed TSV is
-  // used from memory (section 4.5).
+  // The .bin is a cache: without the lock or write access (a read-only TSV
+  // folder) the parsed TSV is used from memory (section 4.5).
   const auto lock = file_locked ? std::optional<EnglishDictionaryFileLock>{}
                                 : EnglishDictionaryFileLock::Acquire(paths_.lock);
   const bool locked = file_locked || lock.has_value();
-  if (locked && ReadEnglishBaseHeader(paths_.base) && BaseNotOlderThan(paths_.base, tsv_time)) {
+  if (locked && !force && ReadEnglishBaseHeader(paths_.base) &&
+      BaseMatchesTsv(paths_.base, tsv_time)) {
     // Another host recompiled it while this one waited for the lock.
     if (auto mapped = EnglishBaseImage::Map(paths_.base)) return mapped;
   }
   const auto previous = ReadEnglishBaseHeader(paths_.base);
   auto bytes = EncodeEnglishBase(std::move(records), previous ? previous->generation + 1 : 1);
   std::shared_ptr<const EnglishBaseImage> base;
-  // The mtime the parse saw, so a TSV saved again meanwhile stays newer.
+  // Stamped with the mtime the parse saw, so a TSV saved again meanwhile no
+  // longer matches it.
   if (locked && WriteEnglishBase(paths_, bytes, tsv_time))
     base = EnglishBaseImage::Map(paths_.base);
   return base ? base : EnglishBaseImage::FromBytes(std::move(bytes));
@@ -145,14 +181,13 @@ std::vector<EnglishDictionaryEntry> EnglishDictionaryStore::Lookup(std::string_v
   });
 }
 
-bool EnglishDictionaryStore::AppendLocked(EnglishOverlayOp op) {
+bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
   bool persisted = false;
   try {
     // The base is settled under the writer lock, so a compaction by another
     // host while this one waited is attached to rather than missed.
     const auto lock = EnglishDictionaryFileLock::Acquire(paths_.lock);
-    const auto sample = TakeSample();
-    if (snapshot_sample_ != sample) RebuildLocked(sample, lock.has_value());
+    RebuildLocked(TakeSample(), lock.has_value());
     if (!base_) return false;
     const auto hash = base_->header().content_hash;
     // Only attach to the base on disk; an in-memory base (the .bin could not
@@ -167,32 +202,44 @@ bool EnglishDictionaryStore::AppendLocked(EnglishOverlayOp op) {
         CompactEnglishDictionary(paths_, write_hook_);
       }
     }
+    // Memory ops replay after the file ops, so an older memory op on the same
+    // entry would override this newer persisted one (section 4.6: the later
+    // op wins). Drop it; a new memory op replaces older ones the same way.
+    memory_ops_.erase(std::remove_if(memory_ops_.begin(), memory_ops_.end(),
+                                     [&](const auto& m) { return SameEntry(m, op); }),
+                      memory_ops_.end());
     // Without write access or the lock the op lives in memory until restart (4.7).
-    if (!persisted) memory_ops_.push_back(std::move(op));
+    if (!persisted) memory_ops_.push_back(op);
   } catch (const std::exception&) {
-    // An allocation failure on a huge base leaves the files as they were.
-    persisted = false;
+    // An allocation failure on a huge base leaves the files as they were. An
+    // op not yet persisted is kept in memory when that is still possible.
+    if (!persisted) {
+      try {
+        memory_ops_.push_back(op);
+      } catch (const std::exception&) {
+      }
+    }
   }
-  snapshot_sample_.reset();
+  Invalidate();
   return persisted;
 }
 
 bool EnglishDictionaryStore::Upsert(std::string_view surface, uint32_t frequency, uint8_t flags) {
   if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return false;
-  std::unique_lock lock(mutex_);
+  std::lock_guard lock(update_mutex_);
   return AppendLocked({EnglishOverlayOpKind::Upsert, flags, EnglishLookupKey(surface),
                        std::string(surface), frequency});
 }
 
 bool EnglishDictionaryStore::Remove(std::string_view surface) {
   if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return false;
-  std::unique_lock lock(mutex_);
+  std::lock_guard lock(update_mutex_);
   return AppendLocked(
       {EnglishOverlayOpKind::Delete, 0, EnglishLookupKey(surface), std::string(surface), 0});
 }
 
 bool EnglishDictionaryStore::Compact() {
-  std::unique_lock lock(mutex_);
+  std::lock_guard lock(update_mutex_);
   bool ok = false;
   try {
     const auto file_lock = EnglishDictionaryFileLock::Acquire(paths_.lock);
@@ -200,17 +247,17 @@ bool EnglishDictionaryStore::Compact() {
   } catch (const std::exception&) {
     ok = false;  // The old base and overlay stay in place.
   }
-  snapshot_sample_.reset();
+  Invalidate();
   return ok;
 }
 
 void EnglishDictionaryStore::SetWriteHookForTest(EnglishWriteHook hook) {
-  std::unique_lock lock(mutex_);
+  std::lock_guard lock(update_mutex_);
   write_hook_ = std::move(hook);
 }
 
 void EnglishDictionaryStore::SetReadHookForTest(std::function<void()> hook) {
-  std::unique_lock lock(mutex_);
+  std::lock_guard lock(update_mutex_);
   read_hook_ = std::move(hook);
 }
 

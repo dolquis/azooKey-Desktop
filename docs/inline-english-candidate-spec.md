@@ -307,15 +307,21 @@ string pool（strings_offset 以降）
 - host は TSV と同ディレクトリの同名 `.bin`（拡張子のみ差替え。例
   `english-words.tsv` → `english-words.bin`）を参照する。
 - **優先順**:
-  1. `.bin` が存在し妥当（`magic`/`version` OK）で、かつ **TSV が無い、または `.bin` mtime ≥ TSV
-     mtime** → `.bin` を mmap（**TSV 不在は `.bin` 単体ロードの正規ケース**）。
+  1. `.bin` が存在し妥当（`magic`/`version`/サイズ/`content_hash` OK）で、かつ **TSV が無い、または
+     `.bin` の mtime が TSV の mtime と一致** → `.bin` を mmap（**TSV 不在は `.bin` 単体ロードの正規
+     ケース**）。
   2. そうでなく **TSV が存在** → TSV をパースし、書込可能なら `.bin` を再生成してキャッシュ。
   3. **どちらも無い** → 英単語辞書は無効（辞書なし。生ローマ字 + 大文字化のベースラインは動作）。
-- `.bin` の再生成（2）とコンパクション（§4.6）は `english-words.lock` の下で一時ファイル +
-  `MoveFileEx` により原子置換し、置換後の `.bin` の mtime を TSV の mtime 以上に揃える（未来日付の
-  TSV で毎回再コンパイルしないため）。`generation` は直前の妥当な `.bin` の値 + 1（無ければ 1）。
+- `.bin` の mtime は、元にした TSV の識別として使う。`.bin` の再生成（2）とコンパクション（§4.6）は
+  `english-words.lock` の下で一時ファイル + `MoveFileEx` により原子置換し、置換後の `.bin` の mtime を
+  パース時に観測した TSV の mtime に設定する。TSV の編集でも、古い日付の TSV への差し替え
+  （robocopy・バックアップからの復元）でも mtime が一致しなくなり、再生成される。同じ mtime のまま
+  サイズだけが変わった TSV は、host の実行中に限り再生成する（再起動をまたぐと、mtime が同じで
+  中身だけ違う差し替えは検出しない）。`generation` は直前の妥当な `.bin` の値 + 1（無ければ 1）。
 - host は英単語候補を作るたびに TSV の mtime / サイズ、`.bin` ヘッダ、overlay ヘッダを確かめ、
   変化があれば上記の順で読み直す（§4.4 のホットリロード）。
+- `.bin` の `entry_count` は 400,000（TSV の上限 200,000 + 追加分）までとし、超えるものは破損として
+  扱う。コンパクションはこの上限を超えるマージをしない（overlay を保持する）。
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
@@ -431,9 +437,14 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   swap で無停止。**正確な順序（generation を rename 前の新 base に先行書込し、overlay 初期化
   〔fingerprint 更新含む〕は新 base が durable になった後）は §4.7**。
 - 失敗時は旧 base + overlay を維持（部分書き込みを採用しない）。
-- TSV があり base の mtime が TSV より古いときはコンパクションしない（次の読み取りで TSV から
-  再コンパイルされる。古い base を新しい mtime で置き換えると TSV の編集が隠れるため）。置換後の
-  base の mtime は、ロック下で観測した TSV の mtime に揃える。
+- TSV があり base の mtime が TSV の mtime と一致しないときはコンパクションしない（次の読み取りで
+  TSV から再コンパイルされる。古い base を現在の TSV の mtime で置き換えると TSV の編集が隠れるため）。
+  置換後の base の mtime は、ロック下で観測した TSV の mtime に設定する（§4.5）。
+- 現 base 向けの overlay を全部読めない（`op_count` に満たない、または 64 MiB を超える）ときは
+  コンパクションしない。追記も、64 MiB を超えた overlay を再初期化せずに失敗させ、その op は
+  メモリ内差分に残す（永続化済みの op を消さないため。読み取り側は当該 overlay を読み捨てる）。
+- メモリ内差分（§4.7 権限なし / ロック不可）は永続化した op の後に再生する。同じ
+  `(lower_key, surface)` の op がのちに永続化されたら、メモリ内の古い op は捨てる（後勝ちを保つ）。
 - writer は `english-words.lock` を取ってから現 base を確定させる（ロック待ちの間に別 host が
   コンパクションしても、その新 base へ追記する）。
 
@@ -460,8 +471,10 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
 
 **(A) プロセス内（host 内のワーカスレッド間）**:
 
-- base ポインタ + overlay 構造を `std::shared_mutex` で保護。lookup は **shared（読み）**、
-  append / コンパクションは **exclusive（書き）**。
+- 読み直し（TSV パース・ロック待ち・再 mmap）と append / コンパクションは更新用の mutex で
+  直列化する。lookup が使うスナップショット（base + overlay 索引の不変オブジェクト）は別の短い
+  ロックの下でポインタだけを差し替える。更新中に lookup が来たら、待たずに直前のスナップショットで
+  答える（初回ロードだけは完了を待つ）。
 - base 差し替え（コンパクション）は新 mmap を作ってから**ポインタを atomic swap**し、
   旧 mmap は参照が抜けてから unmap（読み取りは無停止）。
 

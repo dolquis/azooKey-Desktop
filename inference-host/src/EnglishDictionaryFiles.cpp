@@ -39,8 +39,8 @@ constexpr char kOverlayMagic[4] = {'A', 'Z', 'E', 'O'};
 constexpr size_t kRecordSize = 20;
 constexpr size_t kFrameHeaderSize = 10;
 constexpr uint32_t kSortedFlag = 1;
-// A base holds at most 200,000 entries; the bound keeps a hostile file from
-// being mapped whole. The overlay stays small through compaction.
+// The bounds keep a hostile file from being mapped or read whole. The overlay
+// stays small through compaction.
 constexpr uint64_t kMaxBaseBytes = 256ULL * 1024 * 1024;
 constexpr uint64_t kMaxOverlayBytes = 64ULL * 1024 * 1024;
 constexpr auto kLockBudget = std::chrono::milliseconds(500);
@@ -377,11 +377,14 @@ EnglishBaseImage::~EnglishBaseImage() {
 bool EnglishBaseImage::Validate() {
   if (size_ > kMaxBaseBytes) return false;
   const auto header = ParseBaseHeader(data_, size_);
-  if (!header || header->records_offset < kEnglishBaseHeaderSize ||
-      header->strings_offset > size_ ||
+  if (!header || header->entry_count > kMaxEnglishBaseEntries ||
+      header->records_offset < kEnglishBaseHeaderSize || header->strings_offset > size_ ||
       uint64_t{header->records_offset} + uint64_t{header->entry_count} * kRecordSize > size_) {
     return false;
   }
+  // Once per load: a base whose records or string pool do not hash to its
+  // content_hash (truncated, partly overwritten) is corrupt (section 4.5).
+  if (ContentHash(data_, size_, *header) != header->content_hash) return false;
   header_ = *header;
   return true;
 }
@@ -525,9 +528,12 @@ EnglishDictionaryFileLock::EnglishDictionaryFileLock(EnglishDictionaryFileLock&&
 EnglishDictionaryFileLock::~EnglishDictionaryFileLock() {
   if (handle_ == -1) return;
 #ifdef _WIN32
-  // Closing the handle releases the byte-range lock.
-  CloseHandle(reinterpret_cast<HANDLE>(handle_));
+  const auto h = reinterpret_cast<HANDLE>(handle_);
+  OVERLAPPED at{};
+  UnlockFileEx(h, 0, 1, 0, &at);
+  CloseHandle(h);
 #else
+  flock(static_cast<int>(handle_), LOCK_UN);
   close(static_cast<int>(handle_));
 #endif
 }
@@ -545,6 +551,10 @@ bool AppendEnglishOverlayOp(const fs::path& overlay, uint32_t base_content_hash,
   if (file->ReadAt(0, head, sizeof(head))) {
     const auto header = ParseOverlayHeader(head);
     if (header && header->base_fingerprint == base_content_hash) {
+      // An overlay past the size bound (compaction kept failing) is not
+      // treated as corrupt: reinitializing it would drop its persisted ops.
+      const auto size = file->Size();
+      if (!size || *size - kEnglishOverlayHeaderSize > kMaxOverlayBytes) return false;
       if (const auto rest = file->ReadRest(kEnglishOverlayHeaderSize, kMaxOverlayBytes)) {
         if (const auto walked = WalkFrames(*rest, header->op_count, nullptr)) {
           end = kEnglishOverlayHeaderSize + *walked;
@@ -579,23 +589,32 @@ bool ReinitEnglishOverlay(const fs::path& overlay, uint32_t base_content_hash,
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
                       std::optional<fs::file_time_type> tsv_time) {
   if (!learning::WriteTextFileAtomically(paths.base, bytes)) return false;
-  // A TSV saved again after tsv_time stays newer, so its edit is still read.
+  // Section 4.5: the base carries the mtime of the TSV it reflects. A TSV
+  // saved again after tsv_time, or restored with another timestamp, then no
+  // longer matches it.
   std::error_code ec;
-  const auto base_time = fs::last_write_time(paths.base, ec);
-  if (tsv_time && !ec && base_time < *tsv_time) fs::last_write_time(paths.base, *tsv_time, ec);
+  if (tsv_time) fs::last_write_time(paths.base, *tsv_time, ec);
   return true;
 }
 
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const EnglishWriteHook& hook) {
-  // A base older than the TSV is about to be recompiled from it; compacting it
-  // would give the stale content a newer mtime and hide the TSV edit.
+  // A base not compiled from the current TSV is about to be recompiled from
+  // it; compacting it would stamp the stale content as current.
   const auto tsv_time = TsvTime(paths);
   std::error_code ec;
-  if (tsv_time && (fs::last_write_time(paths.base, ec) < *tsv_time || ec)) return false;
+  if (tsv_time && (fs::last_write_time(paths.base, ec) != *tsv_time || ec)) return false;
   const auto base = EnglishBaseImage::Map(paths.base);
   if (!base) return false;
   auto records = base->Records();
   const auto overlay = ReadEnglishOverlay(paths.overlay);
+  // An overlay for this base that cannot be read whole (over the size bound,
+  // or a writer mid-way) must not be reset below, or its ops would be lost.
+  const auto overlay_header = ReadEnglishOverlayHeader(paths.overlay);
+  if (!overlay && overlay_header &&
+      overlay_header->base_fingerprint == base->header().content_hash &&
+      overlay_header->op_count > 0) {
+    return false;
+  }
   // A stale overlay belongs to another base and must not be merged (4.7).
   if (overlay && overlay->header.base_fingerprint == base->header().content_hash) {
     std::map<std::pair<std::string, std::string>, size_t> index;
@@ -627,6 +646,8 @@ bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const English
   }
   // The new generation and content_hash travel inside the new base, so they
   // are durable before the rename makes it live.
+  // Past the entry bound the new base would not load; keep the overlay.
+  if (records.size() > kMaxEnglishBaseEntries) return false;
   const auto bytes = EncodeEnglishBase(std::move(records), base->header().generation + 1);
   if (!WriteEnglishBase(paths, bytes, tsv_time)) return false;
   if (!Step(hook, EnglishWriteStep::CompactBaseReplaced)) return false;

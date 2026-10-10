@@ -124,10 +124,13 @@ TEST(EnglishDictionaryFilesTest, BadBinariesFallBackToTheTsvOrToNoDictionary) {
   auto bad_version = good;
   bad_version[4] = 9;
   const std::string truncated = good.substr(0, good.size() - 3 - 20);
-  for (const auto& bytes : {bad_magic, bad_version, truncated}) {
+  // Records intact, only the string pool cut short: caught by content_hash.
+  const std::string short_pool = good.substr(0, good.size() - 2);
+  for (const auto& bytes : {bad_magic, bad_version, truncated, short_pool}) {
     WriteText(bin, bytes);
-    // Newer than the TSV, so only its validity sends the store to the TSV.
-    fs::last_write_time(bin, fs::last_write_time(tsv) + std::chrono::seconds(5));
+    // Stamped as compiled from this TSV, so only its validity sends the store
+    // to the TSV.
+    fs::last_write_time(bin, fs::last_write_time(tsv));
     EnglishDictionaryStore store(tsv);
     EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
     // And the .bin was regenerated from the TSV.
@@ -141,7 +144,7 @@ TEST(EnglishDictionaryFilesTest, BadBinariesFallBackToTheTsvOrToNoDictionary) {
   fs::remove_all(dir);
 }
 
-TEST(EnglishDictionaryFilesTest, ANewerBinIsUsedAndAnOlderOneIsRegenerated) {
+TEST(EnglishDictionaryFilesTest, ABinStampedWithTheTsvMtimeIsUsedAndAnyOtherIsRegenerated) {
   const auto dir = TestDir();
   const auto tsv = dir / "english-words.tsv";
   const auto bin = dir / "english-words.bin";
@@ -149,27 +152,42 @@ TEST(EnglishDictionaryFilesTest, ANewerBinIsUsedAndAnOlderOneIsRegenerated) {
   {
     EnglishDictionaryStore store(tsv);
     EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+    EXPECT_EQ(fs::last_write_time(bin), fs::last_write_time(tsv));
   }
-  // A .bin no older than the TSV wins over it.
+  // A .bin carrying the TSV's mtime is used without parsing the TSV.
   WriteText(bin, EncodeEnglishBase(ParseEnglishTsv("Apple\t10\n"), 2));
-  fs::last_write_time(bin, fs::last_write_time(tsv) + std::chrono::seconds(5));
+  fs::last_write_time(bin, fs::last_write_time(tsv));
   EnglishDictionaryStore store(tsv);
   EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"Apple"});
   // A TSV edited after it is compiled again, by the same store.
   WriteText(tsv, "APPLE\t10\n");
   fs::last_write_time(tsv, fs::last_write_time(bin) + std::chrono::seconds(5));
   EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"APPLE"});
-  EXPECT_GE(fs::last_write_time(bin), fs::last_write_time(tsv));
+  EXPECT_EQ(fs::last_write_time(bin), fs::last_write_time(tsv));
   EXPECT_EQ(EnglishBaseImage::Map(bin)->Lookup("apple").front().surface, "APPLE");
+  // A TSV restored with an older timestamp (robocopy, backup) is read too,
+  // also by a host started afterwards.
+  WriteText(tsv, "aPPle\t10\n");
+  fs::last_write_time(tsv, fs::last_write_time(bin) - std::chrono::hours(24));
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"aPPle"});
+  WriteText(tsv, "ApplE\t10\n");
+  fs::last_write_time(tsv, fs::last_write_time(bin) - std::chrono::hours(48));
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("apple")),
+            std::vector<std::string>{"ApplE"});
+  // Within a host, a TSV whose size changes under the same mtime is read too.
+  const auto stamp = fs::last_write_time(tsv);
+  WriteText(tsv, "APPle\t10\nbanana\t1\n");
+  fs::last_write_time(tsv, stamp);
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"APPle"});
 
   // Without a TSV the .bin alone is the dictionary, also when it is the
   // configured path (a bundled .bin).
   fs::remove(tsv);
-  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"APPLE"});
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"APPle"});
   EnglishDictionaryStore bundled(bin);
   EXPECT_TRUE(bundled.paths().tsv.empty());
   EXPECT_EQ(bundled.paths().overlay, dir / "english-words.delta.bin");
-  EXPECT_EQ(Surfaces(bundled.Lookup("apple")), std::vector<std::string>{"APPLE"});
+  EXPECT_EQ(Surfaces(bundled.Lookup("apple")), std::vector<std::string>{"APPle"});
   fs::remove_all(dir);
 }
 
@@ -529,5 +547,120 @@ TEST(EnglishDictionaryFilesTest, AppendWaitingForTheLockAttachesToTheCompactedBa
   EnglishDictionaryStore reloaded(tsv);
   EXPECT_EQ(Surfaces(reloaded.Lookup("swift")), std::vector<std::string>{"Swift"});
   EXPECT_EQ(Surfaces(reloaded.Lookup("kotlin")), std::vector<std::string>{"kotlin"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, APersistedOpOverridesAnOlderMemoryOpOnTheSameEntry) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  {
+    const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+    ASSERT_TRUE(held);
+    EXPECT_FALSE(store.Upsert("Foo", 5));  // Kept in memory only.
+  }
+  ASSERT_EQ(Surfaces(store.Lookup("foo")), std::vector<std::string>{"Foo"});
+  // The later delete reaches the file and must win over the older memory op,
+  // also after compaction.
+  ASSERT_TRUE(store.Remove("Foo"));
+  EXPECT_TRUE(store.Lookup("foo").empty());
+  ASSERT_TRUE(store.Compact());
+  EXPECT_TRUE(store.Lookup("foo").empty());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, AReaderDoesNotWaitBehindAWriter) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+  ASSERT_TRUE(held);
+  // The writer waits up to 500 ms for the file lock held above.
+  std::thread writer([&] { (void)store.Upsert("kotlin", 7); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  // A changed TSV forces a rebuild; the reader keeps the previous snapshot
+  // rather than queueing behind the writer.
+  WriteText(tsv, "Apple\t50\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(300));
+  held.reset();
+  writer.join();
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"Apple"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, MalformedBasesAndOverlaysAreRejected) {
+  const auto good = EncodeEnglishBase(ParseEnglishTsv("apple\t10\nbanana\t5\n"), 1);
+  ASSERT_TRUE(EnglishBaseImage::FromBytes(good));
+  EXPECT_FALSE(EnglishBaseImage::FromBytes(""));
+  EXPECT_FALSE(EnglishBaseImage::FromBytes(good.substr(0, kEnglishBaseHeaderSize)));
+  // A header alone is a valid, empty base.
+  const auto empty = EnglishBaseImage::FromBytes(EncodeEnglishBase({}, 1));
+  ASSERT_TRUE(empty);
+  EXPECT_TRUE(empty->Lookup("apple").empty());
+  // A record whose string offset points past the end.
+  auto bad_offset = good;
+  bad_offset[kEnglishBaseHeaderSize + 8] = '\xFF';
+  bad_offset[kEnglishBaseHeaderSize + 9] = '\xFF';
+  EXPECT_FALSE(EnglishBaseImage::FromBytes(bad_offset));
+  // An entry_count far beyond the records and the entry bound.
+  auto huge_count = good;
+  huge_count[8] = huge_count[9] = huge_count[10] = '\xFF';
+  huge_count[11] = '\x7F';
+  EXPECT_FALSE(EnglishBaseImage::FromBytes(huge_count));
+
+  const auto dir = TestDir();
+  const auto overlay = dir / "english-words.delta.bin";
+  ASSERT_TRUE(AppendEnglishOverlayOp(overlay, 1, Upsert("apple", 1)));
+  auto bytes = ReadBytes(overlay);
+  bytes[16 + 2] = '\xFF';  // key_len runs past the file.
+  WriteText(overlay, bytes);
+  EXPECT_FALSE(ReadEnglishOverlay(overlay));
+  bytes = ReadBytes(overlay);
+  bytes[16 + 2] = 5;
+  bytes[16 + 4] = '\xFF';  // surface_len runs past the file.
+  WriteText(overlay, bytes);
+  EXPECT_FALSE(ReadEnglishOverlay(overlay));
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, CompactionKeepsAnOverlayItCannotReadWhole) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_TRUE(store.Upsert("kotlin", 7));
+  // op_count claims a frame the file does not hold (a writer mid-way, or an
+  // overlay past the size bound): compaction must not reset it.
+  auto bytes = ReadBytes(store.paths().overlay);
+  bytes[12] = 2;
+  WriteText(store.paths().overlay, bytes);
+  EXPECT_FALSE(CompactEnglishDictionary(store.paths()));
+  EXPECT_EQ(ReadBytes(store.paths().overlay), bytes);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, AnUnwritableDictionaryFolderFallsBackToTheTsvInMemory) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  // Neither the lock nor the .bin can be created (a directory is in their
+  // place), as in a read-only share or under Program Files.
+  fs::create_directories(dir / "english-words.lock");
+  EnglishDictionaryStore store(tsv);
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+  EXPECT_FALSE(fs::exists(dir / "english-words.bin"));
+  EXPECT_FALSE(store.Upsert("kotlin", 7));
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"kotlin"});
+  EXPECT_FALSE(fs::exists(dir / "english-words.delta.bin"));
+  // No temporary files are left behind.
+  size_t files = 0;
+  for (const auto& entry : fs::directory_iterator(dir)) files += entry.is_regular_file() ? 1 : 0;
+  EXPECT_EQ(files, 1u);
   fs::remove_all(dir);
 }

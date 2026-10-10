@@ -338,17 +338,20 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 | 層 | 対象 | 値（既定） | 備考 |
 |---|---|---|---|
 | 外部 API（本書） | OpenAI HTTP receive | **30 s**（接続/送信は各 10 s） | `chat/completions`。設定 `openAiTimeoutMs`（§11、既定 30000）で調整可 |
-| **外部 AI 経路の IPC deadline** | TIP↔Host（M16 / M58-C の openai backend） | **`openAiTimeoutMs` + 余裕（既定 約 35 s）** | **M47 の Heavy 800 ms を流用しない**。外部 AI 応答は通常 800 ms を超え、Heavy を流用すると正常応答が stale 化して M16 が壊れて見える。`dev-infrastructure-spec.md` の timeout 表「Heavy inference（Magic Conversion 等）」行は本値に従う |
-| ローカル経路の IPC（M47） | Zenzai 変換等（外部 AI でない重処理） | M47 規約（Heavy 800 ms 等） | connected-but-silent を timeout 視（M47） |
+| **外部 AI 経路の IPC deadline** | TIP↔Host（M16 / M58-C の openai backend） | **`openAiTimeoutMs` + 余裕（既定 約 35 s）** | **M47 の 150 ms などの短い deadline や、ローカル Zenzai の設計上限 800 ms を流用しない**。外部 AI 応答は通常 800 ms を超え、流用すると正常応答が stale 化して M16 が壊れて見える。`dev-infrastructure-spec.md` §8.5.2 の timeout 表「外部 AI 呼び出し」行は本値に従う |
+| ローカル経路の IPC（M47） | Zenzai 変換等（外部 AI でない重処理） | M47 の要求種別ごとの deadline（`dev-infrastructure-spec.md` §8.5.2。ライブ変換 150 ms など。一括変換は 30 s） | connected-but-silent を timeout 視（M47） |
 
-- **外部 AI 経路（openai backend）は M47 の Heavy 800 ms ではなく、上表の「外部 AI 経路の
+- **外部 AI 経路（openai backend）は M47 の短い deadline ではなく、上表の「外部 AI 経路の
   IPC deadline」（`openAiTimeoutMs` + 余裕）で TIP が監視する**。Host は外部 API 待ちの間に
   TIP からの `Cancel`（§6.1）を受理し得る。タイムアウトした要求は破棄し、古い結果が
   後着しても捨てる（staleness check。M47 準拠）。
 - 代替として M16 ダイアログ経路を**非同期化**してよい（変換中はスピナー表示で同期 deadline で
   殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
   壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
-- `local-zenzai` backend の通常のAI経路はM47の800 ms期限に従う。
+- `local-zenzai` backend の通常のAI経路はM47の要求種別ごとの deadline（§8.5.2）に従う。
+  Hostの`AiBackend`は、ローカル経路の`Cleanup`以外（Magic Conversion、Lintなど）に800 msの
+  deadlineを課し、超過は`Timeout`とする。一方で変換要求（`QueryCandidates`、一括変換）には、
+  800 msは1変換のハード予算の上限を決める設計値であり、request deadlineではない。
   M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
   全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
 - X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。

@@ -823,6 +823,7 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
  public:
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
                                                 const azookey::core::ConversionContext&) override {
+    if (kana == "てんそるあーるてぃー") return {{"テンソルRT", kana, 1.8}, {"TensorRT", kana, 1.5}};
     azookey::core::Candidate technical{"技術", kana, 5.0};
     technical.tag = azookey::core::CandidateTag::Technical;
     return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
@@ -875,9 +876,10 @@ class AppProfileDispatchTest : public ::testing::Test {
     ASSERT_TRUE(parsed->ok);
   }
 
-  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app) {
+  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app,
+                                         const std::string& reading = "にほん") {
     ipc::QueryCandidatesRequest q;
-    q.reading = "にほん";
+    q.reading = reading;
     q.app = std::move(app);
     ipc::Envelope env;
     env.version = 1;
@@ -929,6 +931,29 @@ TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatching
   EXPECT_LT(IndexOf(boosted, "日本"), IndexOf(boosted, "二本"));
   EXPECT_EQ(boosted[IndexOf(boosted, "Nihon")].tag,
             static_cast<uint8_t>(azookey::core::CandidateTag::English));
+}
+
+TEST_F(AppProfileDispatchTest, CodeProfileBoostsDictionaryTechnicalInsteadOfEnglish) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::TechnicalTerms,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "profile" / "technical_terms.azdic", true));
+  ApplySettings(R"({"profilesByApp":{"code.exe":{"style":"technical",)"
+                R"("candidateTagBoosts":{"English":3.0}}}})");
+  const auto global = Query(std::nullopt, "てんそるあーるてぃー");
+  ASSERT_LT(IndexOf(global, "TensorRT"), global.size());
+  EXPECT_LT(IndexOf(global, "テンソルRT"), IndexOf(global, "TensorRT"));
+  // The converter's higher dictionary duplicate score survives the merge,
+  // but its absent tag is filled from the real .azdic category.
+  EXPECT_EQ(global[IndexOf(global, "TensorRT")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::Technical));
+  EXPECT_DOUBLE_EQ(global[IndexOf(global, "TensorRT")].score, 1.5);
+
+  const auto code = Query(ipc::AppIdentity{"Code.exe", ""}, "てんそるあーるてぃー");
+  ASSERT_LT(IndexOf(code, "TensorRT"), code.size());
+  EXPECT_LT(IndexOf(code, "TensorRT"), IndexOf(code, "テンソルRT"));
+  EXPECT_DOUBLE_EQ(code[IndexOf(code, "TensorRT")].score, 1.5 * 1.5);
+  const auto other = Query(ipc::AppIdentity{"notepad.exe", ""}, "てんそるあーるてぃー");
+  EXPECT_LT(IndexOf(other, "テンソルRT"), IndexOf(other, "TensorRT"));
 }
 
 TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {

@@ -329,6 +329,8 @@ else:
   学習・モデル・辞書を出所ごとに混ぜており、出所間でスコアを比較できないため。
 - **タグの付与元**:
   - 出所が既知のタグ（辞書 category 由来の `Technical` など）は出所側が付与する。
+    同一 surface の候補統合でも辞書由来タグを保持する規則は
+    `docs/auto-word-registration-spec.md` の category → タグ写像に従う。
   - 未付与の候補には Host が surface 形式から `English` を付与する。条件は、空白
     （ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含むこと
     （`docs/auto-word-registration-spec.md` の category → タグ写像）。

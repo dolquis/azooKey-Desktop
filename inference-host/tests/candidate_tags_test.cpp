@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "azookey/host/CandidateTags.h"
+#include "azookey/host/DictionaryCandidateProvider.h"
 
 namespace {
 
@@ -104,6 +105,50 @@ TEST(CandidateTagsTest, AsciiDominantSurfacesAreTaggedEnglish) {
   // Tab and U+3000 are skipped like ' ': A, x of A,さ,ん,x is not a majority.
   EXPECT_EQ(candidates[7].tag, CandidateTag::None);
   EXPECT_EQ(candidates[8].tag, CandidateTag::English);  // A, B of A,B,さ once U+3000 is skipped.
+}
+
+TEST(CandidateTagsTest, DictionaryCategoriesAssignTechnicalBeforeEnglish) {
+  for (uint16_t category = 0; category < 10; ++category) {
+    SCOPED_TRACE(category);
+    azookey::learning::DictionaryStore store;
+    azookey::learning::DictionaryEntry entry;
+    entry.surface = "TensorRT";
+    entry.reading = "てんそる";
+    entry.frequency = .72;
+    entry.category_mask = static_cast<uint16_t>(1U << category);
+    store.ReplaceMutable(azookey::learning::LayerId::AppSpecific, {entry});
+    for (const auto mode :
+         {azookey::learning::LookupMode::Exact, azookey::learning::LookupMode::PredictivePrefix}) {
+      auto candidates = azookey::host::DictionaryCandidates(
+          store, mode == azookey::learning::LookupMode::Exact ? "てんそる" : "てん", mode, 0, 10);
+      ASSERT_EQ(candidates.size(), 1U);
+      const bool technical = category == 4 || category == 5 || category == 8;
+      EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::None);
+      const double dictionary_score = candidates[0].score;
+      azookey::host::AssignHeuristicTags(candidates);
+      EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::English);
+      // Tag assignment does not apply a profile boost to dictionary_score.
+      EXPECT_DOUBLE_EQ(candidates[0].score, dictionary_score);
+    }
+  }
+}
+
+TEST(CandidateTagsTest, DictionaryCategoryUnionKeepsTechnicalForTheWinningLayer) {
+  azookey::learning::DictionaryStore store;
+  azookey::learning::DictionaryEntry entry;
+  entry.surface = "専門用語";
+  entry.reading = "せんもん";
+  entry.frequency = .72;
+  entry.category_mask = 1U << 5;  // software, from a lower-priority layer.
+  store.ReplaceMutable(azookey::learning::LayerId::AppSpecific, {entry});
+  entry.category_mask = 1U << 1;  // person_name; higher-priority user entry wins.
+  store.ReplaceMutable(azookey::learning::LayerId::User, {entry});
+  auto candidates = azookey::host::DictionaryCandidates(
+      store, entry.reading, azookey::learning::LookupMode::Exact, 0, 10);
+  ASSERT_EQ(candidates.size(), 1U);
+  EXPECT_EQ(candidates[0].source, azookey::core::CandidateSource::UserDictionary);
+  azookey::host::AssignHeuristicTags(candidates);
+  EXPECT_EQ(candidates[0].tag, CandidateTag::Technical);
 }
 
 TEST(CandidateTagsTest, BoostMovesOnlyTheBoostedCandidatesUp) {

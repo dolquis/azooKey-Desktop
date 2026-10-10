@@ -42,6 +42,19 @@ def generate(directory: Path) -> None:
     repeated, _ = dictbuild.build([tsv], metadata, 4, directory)
     assert image == repeated
     (directory / "valid.azdic").write_bytes(image)
+    # Same reading, score-ordered dictionary candidates for app-profile tests.
+    # The ordinary spelling precedes the ASCII technical term before any boost.
+    profile_tsv = directory / "profile.lex.tsv"
+    profile_tsv.write_text(
+        "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+        "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n"
+        "テンソルRT\tてんそるあーるてぃー\t名詞\t1000\t0.99\tgeneral\tfixture\n"
+        "TensorRT\tてんそるあーるてぃー\t名詞\t4200\t0.72\ttechnical\tfixture\n",
+        encoding="utf-8", newline="\n")
+    profile_image, _ = dictbuild.build([profile_tsv], metadata, 4, directory)
+    profile_directory = directory / "profile"
+    profile_directory.mkdir(exist_ok=True)
+    (profile_directory / "technical_terms.azdic").write_bytes(profile_image)
     bundled = directory / "bundled"
     bundled.mkdir(exist_ok=True)
     (bundled / "base_lexicon.azdic").write_bytes(image)  # Deliberately wrong layer.

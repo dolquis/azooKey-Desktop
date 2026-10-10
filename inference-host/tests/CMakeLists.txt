@@ -20,7 +20,9 @@ target_include_directories(host_dispatcher_tests PRIVATE
   ${PROJECT_SOURCE_DIR}/ipc/tests ${PROJECT_SOURCE_DIR}/core/tests)
 target_compile_definitions(host_dispatcher_tests PRIVATE
   AZOOKEY_IPC_TESTDATA_DIR="${PROJECT_SOURCE_DIR}/ipc/testdata"
+  AZOOKEY_DICT_FIXTURE="${PROJECT_BINARY_DIR}/dictbuild/fixtures"
 )
+add_dependencies(host_dispatcher_tests dictionary_fixtures)
 target_link_libraries(host_dispatcher_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

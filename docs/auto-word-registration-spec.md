@@ -1047,6 +1047,10 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 | surface の空白（ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含む（例 "TensorRT", "iPhone"） | `English` |
 | その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | なし（既定） |
 
+- category は `DictionaryStore` が同一エントリのカテゴリを union した結果から写像する。
+  Host が同一 surface の候補を統合するときも、辞書由来の `Technical` を無タグ・
+  `English` の勝者へ引き継ぐ。採用する score / reading / source と予測の出所別枠は変えず、
+  表示上限や辞書追加枠の外にある取得済み辞書候補からもタグを補完する。
 - **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
   X-2-3 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
   複数行に該当する候補（例 "TensorRT" = `Technical` かつ surface=ASCII）には

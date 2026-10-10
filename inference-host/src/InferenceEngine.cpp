@@ -196,6 +196,12 @@ void AppendDebugTag(std::string& debug_info, const std::string& tag) {
   debug_info += ";" + tag;
 }
 
+void PreserveTechnicalTag(core::Candidate& winner, const core::Candidate& other) {
+  if (other.tag == core::CandidateTag::Technical &&
+      (winner.tag == core::CandidateTag::None || winner.tag == core::CandidateTag::English))
+    winner.tag = core::CandidateTag::Technical;
+}
+
 void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
   std::vector<core::Candidate> deduped;
   deduped.reserve(candidates.size());
@@ -210,9 +216,11 @@ void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
 
     const bool replace = PreferMergedCandidate(candidate, *existing);
     if (replace) {
+      PreserveTechnicalTag(candidate, *existing);
       AppendDebugTag(candidate.debug_info, "dup:" + existing->debug_info);
       *existing = std::move(candidate);
     } else {
+      PreserveTechnicalTag(*existing, candidate);
       AppendDebugTag(existing->debug_info, "dup:" + candidate.debug_info);
     }
   }
@@ -1414,6 +1422,16 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
   append(dictionary_predictions, 2);
   if (canceled()) return {};
   append(candidates, kPredictionDisplayLimit);
+  // The display/dictionary quotas can stop append before a duplicate is visited.
+  // Fill tags from every retrieved dictionary entry without changing provenance,
+  // score or the source-specific prediction order. Moved entries are already in
+  // merged with their tags; their empty surfaces cannot match here.
+  for (auto& candidate : merged) {
+    for (const auto& dictionary_candidate : dictionary_predictions) {
+      if (candidate.surface == dictionary_candidate.surface)
+        PreserveTechnicalTag(candidate, dictionary_candidate);
+    }
+  }
   AssignHeuristicTags(merged);
   return canceled() ? std::vector<core::Candidate>{} : std::move(merged);
 }

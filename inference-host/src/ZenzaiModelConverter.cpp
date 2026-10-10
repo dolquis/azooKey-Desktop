@@ -1063,7 +1063,8 @@ struct ZenzaiModelRuntime {
       ZenzaiDecodeStats decode_stats;
       decode_stats.deadline_exceeded = true;
       last_decode_stats = decode_stats;
-      return {GeneratedCandidate{"協議す", -0.003, 3, true}, GeneratedCandidate{"協議する", -0.8, 5}};
+      return {GeneratedCandidate{"協議す", -0.003, 3, true},
+              GeneratedCandidate{"協議する", -0.8, 5}};
     }
     if (ToKatakana(kana) == "ナイブムコウ") {
       return {GeneratedCandidate{std::string("日") + std::string("\xE3X", 2), -0.42, 2, true}};
@@ -1187,8 +1188,8 @@ std::vector<core::Candidate> RankUnfinishedBehindCompleted(std::vector<core::Can
   std::optional<double> lowest_completed;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (!unfinished[i]) {
-      lowest_completed = lowest_completed ? std::min(*lowest_completed, candidates[i].score)
-                                          : candidates[i].score;
+      lowest_completed =
+          lowest_completed ? std::min(*lowest_completed, candidates[i].score) : candidates[i].score;
     }
   }
   std::vector<core::Candidate> ranked;

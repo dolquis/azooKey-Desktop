@@ -1881,8 +1881,8 @@ TEST(InferenceEngineTest, UnfinishedCandidatesFollowEveryCompletedCandidate) {
   candidates[3].surface = "協議し";
   candidates[3].score = 0.50;
 
-  const auto ranked = azookey::host::RankUnfinishedBehindCompleted(candidates,
-                                                                   {true, false, false, true});
+  const auto ranked =
+      azookey::host::RankUnfinishedBehindCompleted(candidates, {true, false, false, true});
 
   ASSERT_EQ(ranked.size(), 4u);
   EXPECT_EQ(ranked[0].surface, "協議する");
@@ -1904,8 +1904,7 @@ TEST(InferenceEngineTest, UnfinishedCandidatesKeepScoresWithoutCompletedCandidat
 
   ASSERT_EQ(ranked.size(), 1u);
   EXPECT_DOUBLE_EQ(ranked[0].score, 1.2);
-  EXPECT_THROW(azookey::host::RankUnfinishedBehindCompleted(candidates, {}),
-               std::invalid_argument);
+  EXPECT_THROW(azookey::host::RankUnfinishedBehindCompleted(candidates, {}), std::invalid_argument);
 }
 
 #ifdef AZOOKEY_AI_TEST_MODEL
@@ -1920,8 +1919,8 @@ TEST(InferenceEngineTest, RealZenzaiNBestKeepsReadingTail) {
   options.path = AZOOKEY_AI_TEST_MODEL;
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
-  const auto candidates = engine->QueryCandidates(
-      "けいやくこうしんのじょうけんをきょうぎする", "", kNowBase, nullptr, 5, false);
+  const auto candidates = engine->QueryCandidates("けいやくこうしんのじょうけんをきょうぎする", "",
+                                                  kNowBase, nullptr, 5, false);
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "契約更新の条件を協議する");
 

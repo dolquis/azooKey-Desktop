@@ -2293,15 +2293,69 @@ TEST(TsfTipOnKeyDownPreeditTest, HostPredictionsOpenThePredictionWindowWithAndWi
     h.service.start_ipc_worker_for_test();
     for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
     ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
-    ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+    // Wait for the window itself: a delivered result is only shown once the
+    // candidates-ready notification has run for the current reading.
+    EXPECT_TRUE(WaitUntil([&] {
+      h.service.process_candidates_ready_for_test();
+      return h.service.shown_prediction_count_for_test() == 2u;
+    }));
     EXPECT_GT(prediction_queries.load(), 0u);
-
-    h.service.process_candidates_ready_for_test();
-    EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
     EXPECT_TRUE(h.service.prediction_window_visible_for_test());
     h.service.stop_ipc_worker_for_test();
     server.Stop();
   }
+}
+
+// DEV-1528: a result delivered for an earlier reading must not stay in the
+// slot once the next reading is queued, or it stands in for the pending query
+// and is then dropped as stale instead of the current result being shown.
+TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNextIsQueued) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-earlier-reading-test-" +
+                                std::to_string(GetCurrentProcessId());
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  // The pending 'h' keeps the reading at "に", so its result arrives before
+  // 'O' queues "にほ"; this is the ordering that coverage timing produced.
+  for (const WPARAM key : {'N', 'I', 'H'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+  ASSERT_TRUE(h.Press('O'));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
+
+  ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBeforeCommit) {

@@ -2,6 +2,7 @@
 #include <d2d1_1helper.h>
 #include <gtest/gtest.h>
 
+#include "azookey/tsf/DebugWindow.h"
 #include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/RenderingEngine.h"
 #include "azookey/tsf/ThemeColors.h"
@@ -112,8 +113,9 @@ TEST(RenderingEngineTest, DrawsAndCommitsToACompositionSurface) {
   EXPECT_EQ(engine.BeginDraw(), nullptr);
   EXPECT_STREQ(engine.failure_stage(), "no_render");
 
-  ASSERT_TRUE(engine.Initialize(hwnd)) << engine.failure_stage() << " hr=0x" << std::hex
-                                       << static_cast<unsigned long>(engine.failure_hr());
+  ASSERT_TRUE(engine.Initialize(hwnd, SurfaceAlpha::Opaque))
+      << engine.failure_stage() << " hr=0x" << std::hex
+      << static_cast<unsigned long>(engine.failure_hr());
   ASSERT_NE(engine.write_factory(), nullptr);
   ASSERT_TRUE(engine.ResizeSurface(64, 32));
   ID2D1DeviceContext* context = engine.BeginDraw();
@@ -124,6 +126,22 @@ TEST(RenderingEngineTest, DrawsAndCommitsToACompositionSurface) {
   engine.Reset();
   EXPECT_FALSE(engine.IsInitialized());
   DestroyWindow(hwnd);
+}
+
+TEST(DebugWindowRenderTest, DrawsThroughDirectCompositionWithoutALayeredWindow) {
+  DebugWindow window;
+  ASSERT_TRUE(window.Create());
+  const HWND hwnd = window.hwnd_for_test();
+  const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  EXPECT_NE(ex_style & WS_EX_NOREDIRECTIONBITMAP, 0);
+  EXPECT_EQ(ex_style & WS_EX_LAYERED, 0);
+  EXPECT_FALSE(window.rendering_for_test());
+
+  window.RecordTransition({"idle", "composing"});
+  window.Show();
+  UpdateWindow(hwnd);  // Delivers WM_PAINT, which draws the lines.
+  EXPECT_TRUE(window.rendering_for_test());
+  window.Destroy();
 }
 
 }  // namespace

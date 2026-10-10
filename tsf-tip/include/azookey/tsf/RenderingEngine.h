@@ -6,8 +6,22 @@
 
 struct ID2D1DeviceContext;
 struct IDWriteFactory;
+struct IDWriteTextFormat;
 
 namespace azookey::tsf {
+
+// How the surface's alpha channel is composed (native-ui-spec §2.1).
+enum class SurfaceAlpha : unsigned char {
+  // The alpha channel is ignored; the window is opaque and text keeps ClearType.
+  Opaque,
+  // Premultiplied alpha; the desktop shows through and text is grayscale.
+  Premultiplied,
+};
+
+// Creates a text format from the system message font (SPI_GETNONCLIENTMETRICS)
+// at the given DPI, in pixels for a 96 DPI device context. Falls back to
+// 9 pt Yu Gothic UI when the metrics cannot be read.
+HRESULT CreateMessageTextFormat(IDWriteFactory* factory, UINT dpi, IDWriteTextFormat** format);
 
 // DirectComposition + Direct2D + DirectWrite stack for one popup HWND
 // (native-ui-spec §2.2, §3). The window should use WS_EX_NOREDIRECTIONBITMAP.
@@ -21,7 +35,7 @@ class RenderingEngine {
   RenderingEngine& operator=(const RenderingEngine&) = delete;
 
   // Creates the devices and a composition target for the window.
-  bool Initialize(HWND hwnd);
+  bool Initialize(HWND hwnd, SurfaceAlpha alpha);
   void Reset();
   bool IsInitialized() const;
 

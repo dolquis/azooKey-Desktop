@@ -293,7 +293,10 @@ TEST(EnglishCandidatesTest, EngineLoadsAndReloadsTheDictionary) {
   fs::last_write_time(path, fs::last_write_time(path) + std::chrono::seconds(5));
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "IPHONE");
 
-  fs::remove(path);  // A missing dictionary falls back to the baseline forms.
+  // Without the TSV the compiled .bin next to it is still the dictionary.
+  fs::remove(path);
+  EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "IPHONE");
+  fs::remove(dir / "english-words.bin");  // Neither falls back to the baseline forms.
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
 
   // A corrupt file (not text at all) or a directory in its place is not fatal.

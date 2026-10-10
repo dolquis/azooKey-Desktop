@@ -237,9 +237,10 @@ NASA	8123	acronym
 
 **ロードと性能**:
 
-- 起動時にメモリへロード（`std::unordered_map<lower_surface, std::vector<Entry>>`）。
-- 想定規模は数万〜十数万語。10 万語 × 平均 16 B 表層 + 頻度で数 MB 程度を目安とし、
-  超える場合はコンパイル済みバイナリ形式（将来・M53 辞書層と共有）を検討する。
+- 初回利用時に読み込む。TSV は §4.5 の `.bin` へコンパイルして参照し、以後は `.bin` を mmap する。
+- 想定規模は数万〜十数万語。10 万語 × 平均 16 B 表層 + 頻度で数 MB 程度を目安とする。
+- `.bin` の `frequency` は 32 bit のため、TSV の頻度が `UINT32_MAX` を超えるときは `UINT32_MAX` に
+  飽和させる。surface が 65,535 バイトを超える行は不正行としてスキップする。
 - パース失敗行（列不足、頻度が正の整数でない、surface が UTF-8 でない）はスキップする
   （M17 と同流儀）。同一 `surface` 完全一致の重複は **ファイル末尾の定義を優先**（M17 と揃える）。
 - エントリは 200,000 件で読み込みを打ち切る。読み込みでメモリ確保に失敗した場合も
@@ -310,6 +311,11 @@ string pool（strings_offset 以降）
      mtime** → `.bin` を mmap（**TSV 不在は `.bin` 単体ロードの正規ケース**）。
   2. そうでなく **TSV が存在** → TSV をパースし、書込可能なら `.bin` を再生成してキャッシュ。
   3. **どちらも無い** → 英単語辞書は無効（辞書なし。生ローマ字 + 大文字化のベースラインは動作）。
+- `.bin` の再生成（2）とコンパクション（§4.6）は `english-words.lock` の下で一時ファイル +
+  `MoveFileEx` により原子置換し、置換後の `.bin` の mtime を TSV の mtime 以上に揃える（未来日付の
+  TSV で毎回再コンパイルしないため）。`generation` は直前の妥当な `.bin` の値 + 1（無ければ 1）。
+- host は英単語候補を作るたびに TSV の mtime / サイズ、`.bin` ヘッダ、overlay ヘッダを確かめ、
+  変化があれば上記の順で読み直す（§4.4 のホットリロード）。
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
@@ -418,12 +424,18 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
 
 **コンパクション（base への取り込み）**:
 
-- トリガ: overlay の op 数が base の一定割合（例 10%）超 or `op_count` > 閾値、または明示要求。
+- トリガ: append 後の `op_count` が「64 と base `entry_count` の 10% の大きい方」を超えたとき、
+  または明示要求。
 - 動作: base + overlay をマージして**新 base を一時ファイルへ書き、rename で原子置換**、
   overlay を**新 base の `base_fingerprint` + `op_count=0` で初期化**。読み取りは mmap ポインタ
   swap で無停止。**正確な順序（generation を rename 前の新 base に先行書込し、overlay 初期化
   〔fingerprint 更新含む〕は新 base が durable になった後）は §4.7**。
 - 失敗時は旧 base + overlay を維持（部分書き込みを採用しない）。
+- TSV があり base の mtime が TSV より古いときはコンパクションしない（次の読み取りで TSV から
+  再コンパイルされる。古い base を新しい mtime で置き換えると TSV の編集が隠れるため）。置換後の
+  base の mtime は、ロック下で観測した TSV の mtime に揃える。
+- writer は `english-words.lock` を取ってから現 base を確定させる（ロック待ちの間に別 host が
+  コンパクションしても、その新 base へ追記する）。
 
 **整合・堅牢化**:
 
@@ -524,7 +536,10 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
     受け、通知時のみ上記の再オープン・再 mmap を行う（ポーリング回避）。
   - **共有モード**: 全プロセスは base / overlay を **`FILE_SHARE_READ | FILE_SHARE_WRITE |
     FILE_SHARE_DELETE`** で開く。`FILE_SHARE_DELETE` が無いと writer の `MoveFileEx`
-    （REPLACE_EXISTING）が共有違反で失敗する。
+    （REPLACE_EXISTING）が共有違反で失敗する。`FILE_SHARE_DELETE` 付きでも、置換先に開いた
+    ハンドルが残っていると `MoveFileEx` は `ERROR_ACCESS_DENIED` で失敗する。reader は mapping
+    を作ったらファイルハンドルを閉じ（view は旧ファイルを保持し続ける）、ヘッダ read のハンドルも
+    読んだら閉じる。writer は一時的な `ERROR_ACCESS_DENIED` / 共有違反を短い予算内で再試行する。
 - **読み取りの一貫性（seqlock 的リトライ）**: lock-free reader は base 置換 / overlay 再初期化と
   競合しうる。例: reader が `MoveFileEx` 直前に base ヘッダを sample し旧 mmap を保持したまま、
   compaction step 4a で `op_count=0`（`base_fingerprint` はまだ旧値の窓）を読むと、「旧 base に対する

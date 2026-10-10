@@ -73,11 +73,6 @@ uint8_t ParseFlags(std::string_view text) {
   return flags;
 }
 
-const std::vector<EnglishDictionaryEntry>& EmptyEntries() {
-  static const std::vector<EnglishDictionaryEntry> empty;
-  return empty;
-}
-
 }  // namespace
 
 std::string EnglishLookupKey(std::string_view raw_romaji) {
@@ -90,14 +85,15 @@ bool IsEnglishObservation(std::string_view reading, uint8_t tag) {
   return tag == static_cast<uint8_t>(core::CandidateTag::English) && IsPrintableAsciiWord(reading);
 }
 
-EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text,
-                                              EnglishDictionaryLoadStats* stats) {
-  EnglishDictionary dictionary;
+std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
+                                               EnglishDictionaryLoadStats* stats) {
+  std::vector<EnglishWordRecord> records;
+  std::unordered_map<std::string, size_t> by_surface;
   size_t skipped = 0;
   bool truncated = false;
   if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
   while (!text.empty()) {
-    if (dictionary.size_ >= kMaxEnglishDictionaryEntries) {
+    if (records.size() >= kMaxEnglishDictionaryEntries) {
       truncated = true;
       break;
     }
@@ -114,39 +110,32 @@ EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text,
     const auto* end = frequency_text.data() + frequency_text.size();
     const auto parsed = std::from_chars(frequency_text.data(), end, frequency);
     // Section 4.4: malformed lines are skipped, not fatal. A surface that is
-    // not UTF-8 would make the whole IPC response unparseable.
-    if (surface.empty() || !core::IsValidUtf8(surface) || parsed.ec != std::errc{} ||
-        parsed.ptr != end || frequency == 0) {
+    // not UTF-8 would make the whole IPC response unparseable; one longer than
+    // the .bin length field (section 4.5) cannot be stored.
+    if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface) ||
+        parsed.ec != std::errc{} || parsed.ptr != end || frequency == 0) {
       ++skipped;
       continue;
     }
-    EnglishDictionaryEntry entry{
-        std::string(surface), frequency,
+    EnglishWordRecord record{
+        EnglishLookupKey(surface), std::string(surface),
+        static_cast<uint32_t>(std::min<uint64_t>(frequency, UINT32_MAX)),
         tab2 == std::string_view::npos ? uint8_t{0} : ParseFlags(rest.substr(tab2 + 1))};
-    auto& bucket = dictionary.by_key_[EnglishLookupKey(surface)];
-    const auto same = std::find_if(bucket.begin(), bucket.end(), [&](const auto& existing) {
-      return existing.surface == entry.surface;
-    });
-    if (same != bucket.end()) {
-      *same = std::move(entry);  // The later definition wins.
+    const auto [same, inserted] = by_surface.emplace(record.surface, records.size());
+    if (inserted) {
+      records.push_back(std::move(record));
     } else {
-      bucket.push_back(std::move(entry));
-      ++dictionary.size_;
+      records[same->second] = std::move(record);  // The later definition wins.
     }
-  }
-  for (auto& [key, bucket] : dictionary.by_key_) {
-    std::stable_sort(bucket.begin(), bucket.end(),
-                     [](const auto& l, const auto& r) { return l.frequency > r.frequency; });
   }
   if (stats) {
     stats->skipped_lines = skipped;
     stats->truncated = truncated;
   }
-  return dictionary;
+  return records;
 }
 
-std::optional<EnglishDictionary> EnglishDictionary::LoadTsv(const std::filesystem::path& path,
-                                                            EnglishDictionaryLoadStats* stats) {
+std::optional<std::string> ReadEnglishTsvFile(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
   const auto size = std::filesystem::file_size(path, ec);
@@ -156,13 +145,69 @@ std::optional<EnglishDictionary> EnglishDictionary::LoadTsv(const std::filesyste
   std::string text(static_cast<size_t>(size), '\0');
   in.read(text.data(), static_cast<std::streamsize>(text.size()));
   if (in.gcount() != static_cast<std::streamsize>(text.size())) return std::nullopt;
-  return ParseTsv(text, stats);
+  return text;
 }
 
-const std::vector<EnglishDictionaryEntry>& EnglishDictionary::Lookup(
-    std::string_view lower_key) const {
-  const auto it = by_key_.find(std::string(lower_key));
-  return it == by_key_.end() ? EmptyEntries() : it->second;
+EnglishDictionary::EnglishDictionary(std::shared_ptr<const EnglishBaseImage> base,
+                                     const std::vector<EnglishOverlayOp>& ops)
+    : base_(std::move(base)) {
+  for (const auto& op : ops) {
+    auto& bucket = overlay_[op.key];
+    const auto same = std::find_if(bucket.begin(), bucket.end(), [&](const auto& existing) {
+      return existing.surface == op.surface;
+    });
+    if (same != bucket.end()) {
+      *same = op;
+    } else {
+      bucket.push_back(op);
+    }
+  }
+  size_ = base_ ? base_->header().entry_count : 0;
+  for (const auto& [key, bucket] : overlay_) {
+    const auto records = base_ ? base_->Lookup(key) : std::vector<EnglishWordRecord>{};
+    for (const auto& op : bucket) {
+      const bool in_base = std::any_of(records.begin(), records.end(),
+                                       [&](const auto& r) { return r.surface == op.surface; });
+      const bool live = op.kind == EnglishOverlayOpKind::Upsert && !op.surface.empty();
+      if (live && !in_base) ++size_;
+      if (!live && in_base) --size_;
+    }
+  }
+}
+
+EnglishDictionary EnglishDictionary::ParseTsv(std::string_view text,
+                                              EnglishDictionaryLoadStats* stats) {
+  return EnglishDictionary(
+      EnglishBaseImage::FromBytes(EncodeEnglishBase(ParseEnglishTsv(text, stats), 0)));
+}
+
+std::optional<EnglishDictionary> EnglishDictionary::LoadTsv(const std::filesystem::path& path,
+                                                            EnglishDictionaryLoadStats* stats) {
+  const auto text = ReadEnglishTsvFile(path);
+  if (!text) return std::nullopt;
+  return ParseTsv(*text, stats);
+}
+
+std::vector<EnglishDictionaryEntry> EnglishDictionary::Lookup(std::string_view lower_key) const {
+  std::vector<EnglishDictionaryEntry> out;
+  if (base_) {
+    for (auto& record : base_->Lookup(lower_key))
+      out.push_back({std::move(record.surface), record.frequency, record.flags});
+  }
+  const auto overlay = overlay_.find(std::string(lower_key));
+  if (overlay == overlay_.end()) return out;
+  for (const auto& op : overlay->second) {
+    // An upsert replaces the base entry with the same surface; a delete is a
+    // tombstone that hides it (section 4.6).
+    out.erase(std::remove_if(out.begin(), out.end(),
+                             [&](const auto& e) { return e.surface == op.surface; }),
+              out.end());
+    if (op.kind == EnglishOverlayOpKind::Upsert && !op.surface.empty())
+      out.push_back({op.surface, op.frequency, op.flags});
+  }
+  std::stable_sort(out.begin(), out.end(),
+                   [](const auto& l, const auto& r) { return l.frequency > r.frequency; });
+  return out;
 }
 
 double EnglishIntent::Score() const {
@@ -201,8 +246,9 @@ EnglishCandidates BuildEnglishCandidates(std::string_view raw_romaji,
     return result;
   }
   const auto lower = EnglishLookupKey(raw_romaji);
-  const auto& entries =
-      config.dictionary_enabled && dictionary ? dictionary->Lookup(lower) : EmptyEntries();
+  const auto entries = config.dictionary_enabled && dictionary
+                           ? dictionary->Lookup(lower)
+                           : std::vector<EnglishDictionaryEntry>{};
   result.intent = ComputeEnglishIntent(raw_romaji, !entries.empty(), config.min_length).Score();
 
   const std::string forms[] = {lower,

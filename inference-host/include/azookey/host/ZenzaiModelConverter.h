@@ -55,6 +55,30 @@ BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_
                                              const std::vector<int32_t>& active_sequences,
                                              int32_t max_working_sequences = 4);
 
+struct BeamScore {
+  double total_logprob{};
+  int32_t token_count{};
+};
+
+// Mean token logprob; hypotheses without output tokens rank last.
+double BeamRankScore(double total_logprob, int32_t token_count);
+
+// A hypothesis completed by end-of-sequence pays for that token, so a prefix the model does
+// not expect to end there ranks below the hypothesis that keeps consuming the reading.
+BeamScore CompletedBeamScore(double prefix_logprob, int32_t prefix_tokens, double eos_logprob);
+
+// Beam search stops once `candidate_limit` distinct completed hypotheses exist and no active
+// beam outranks the weakest of the best `candidate_limit` of them. `completed_scores` holds
+// one rank score per distinct completed surface.
+bool ShouldStopBeamSearch(std::vector<double> completed_scores,
+                          const std::vector<double>& active_scores, size_t candidate_limit);
+
+// Candidates cut off by the deadline or the token limit have not paid for end-of-sequence, so
+// their scores are capped at the lowest completed score and they follow every completed
+// candidate, tagged `unfinished`. `unfinished[i]` describes `candidates[i]`.
+std::vector<core::Candidate> RankUnfinishedBehindCompleted(std::vector<core::Candidate> candidates,
+                                                           const std::vector<bool>& unfinished);
+
 struct ZenzaiModelRuntime;
 
 struct ZenzaiLoadResult {

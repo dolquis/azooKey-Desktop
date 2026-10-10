@@ -10,8 +10,9 @@
 
 #include "azookey/tsf/ThemeColors.h"
 
+struct ID2D1DeviceContext;
+
 namespace azookey::tsf {
-struct EmojiDrawingCache;
 
 struct CandidateViewItem {
   std::wstring surface;
@@ -40,6 +41,11 @@ class CandidateWindow {
             std::wstring notice = {});
   void Hide();
   bool IsVisible() const;
+
+  // Stage and HRESULT of the most recent drawing failure (native-ui-spec §4.1);
+  // empty and S_OK after a committed frame. Never drawn content.
+  const char* failure_stage() const { return failure_stage_; }
+  HRESULT failure_hr() const { return failure_hr_; }
   void ShowHealthBanner(CandidateHealthState state);
   void HideHealthBanner();
   // Brings back a banner that a re-show of the window hid, for whatever is left
@@ -58,7 +64,6 @@ class CandidateWindow {
   bool IsSecureToastVisible() const { return secure_toast_visible_; }
   using OnRetryFn = std::function<void()>;
   void SetOnRetry(OnRetryFn fn) { on_retry_ = std::move(fn); }
-  static bool NeedsColorEmoji(const std::wstring& text);
   // Screen rect for the window: below the anchor, flipped above the caret when it
   // would overflow the bottom of the work area, and kept inside the work area.
   // An empty work area leaves the window at the anchor.
@@ -66,6 +71,33 @@ class CandidateWindow {
   // Screen rect for the details popup: below the candidate window, or above it
   // when there is no room, kept inside the work area.
   static RECT ComputeDetailsPlacement(RECT candidate, RECT work_area, int width, int height);
+
+  // What a left click at a client point lands on.
+  enum class HitTarget {
+    None,
+    Candidate,
+    SecureIndicator,
+    HealthBanner,
+    HealthDetailsButton,
+    HealthRetryButton,
+  };
+  struct Hit {
+    HitTarget target;
+    int index;  // Candidate row; -1 for every other target.
+  };
+  // The click regions of one shown window, in client pixels.
+  struct HitLayout {
+    int item_height;
+    int item_count;
+    int client_width;
+    int secure_indicator_width;  // 0 when the lock is hidden.
+    bool health_banner_visible;
+    int health_banner_top;
+    RECT details_button;
+    bool has_retry_button;
+    RECT retry_button;
+  };
+  static Hit HitTest(const HitLayout& layout, POINT point);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);
@@ -119,6 +151,20 @@ class CandidateWindow {
   bool health_banner_visible_for_test() const { return health_banner_visible_; }
   int footer_top_for_test() const { return FooterTop(); }
   int health_banner_top_for_test() const { return HealthBannerTop(); }
+  // Hit test against the window's current client width.
+  Hit HitTestForTest(POINT point) const;
+  // Pretends every monitor has this DPI; 0 restores the real lookup.
+  static void SetMonitorDpiForTest(UINT dpi);
+  // Draws the current content offscreen at the client size with grayscale text
+  // and returns the pixels row by row as RGB values.
+  bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
+  enum class RenderFailureForTest { None, Initialize, Draw };
+  // Makes RenderingEngine initialization, or every frame, fail until reset.
+  static void SetRenderFailureForTest(RenderFailureForTest failure);
+  int render_init_failures_for_test() const { return render_init_failures_; }
+  // Draws through the production path (RenderingEngine and the DComp surface)
+  // at the client size; true when the frame was committed.
+  bool RenderForTest();
 #endif
 
  private:
@@ -157,8 +203,17 @@ class CandidateWindow {
   HWND hwnd_{nullptr};
   HWND details_hwnd_{nullptr};
   UINT dpi_{kDefaultDpi};
-  HFONT font_{nullptr};
-  std::unique_ptr<EmojiDrawingCache> emoji_cache_;
+  struct TextStyle;
+  struct RenderState;
+  std::unique_ptr<TextStyle> text_style_;
+  std::unique_ptr<RenderState> render_;
+  std::unique_ptr<RenderState> details_render_;
+  const char* failure_stage_{""};
+  HRESULT failure_hr_{S_OK};
+  bool showing_{false};  // Show is moving and sizing the window.
+  // The last frame failed, so the window is hidden while it should be shown.
+  bool render_failed_{false};
+  int render_init_failures_{0};
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;
@@ -184,7 +239,6 @@ class CandidateWindow {
   static ColumnLayout ComputeColumnLayout(int max_surface_width, int max_description_width,
                                           UINT dpi);
   static UINT DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd);
-  static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   static LRESULT CALLBACK DetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -194,7 +248,20 @@ class CandidateWindow {
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   void UpdateDpi(UINT dpi);
   void UpdateTheme();
-  void Repaint() const;
+  void Repaint();
+  int MeasureText(const std::wstring& text) const;
+  // Draws the window at this client size and commits it (native-ui-spec §4.1).
+  bool Render(int width, int height);
+  using DrawFn = void (CandidateWindow::*)(ID2D1DeviceContext*, int, int) const;
+  // init_failures counts failed Initialize calls in a row; at the limit the
+  // device stack is not created again.
+  bool RenderTo(std::unique_ptr<RenderState>& state, int& init_failures, HWND hwnd, int width,
+                int height, DrawFn draw) noexcept;
+  static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
+  void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
+  void RenderDetails();
+  void DrawDetails(ID2D1DeviceContext* context, int width, int height) const;
+  bool Fail(const char* stage, HRESULT hr);
   void ResizeAtLastAnchor();
   void ShowDetails();
   void HideDetails();
@@ -206,6 +273,7 @@ class CandidateWindow {
   int SecureIndicatorWidth() const;
   RECT HealthDetailsButtonRect(int width) const;
   RECT HealthRetryButtonRect(int width) const;
+  HitLayout CurrentHitLayout(int client_width) const;
 };
 
 }  // namespace azookey::tsf

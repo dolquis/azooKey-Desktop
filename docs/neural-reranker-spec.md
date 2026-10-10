@@ -348,7 +348,23 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - 推論 timeout → 当該リクエストの rerank skip、log 記録、続行
 - 入力 NaN/Inf 検出 → 当該候補だけ skip、他は継続
 
-M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
+上記の失敗はいずれも**要求単位の fallback**であり、M47 の健康状態機械
+（`docs/dev-infrastructure-spec.md` §8.5.1）は遷移させない。reranker の失敗で
+`HealthEvent::ModelFailed` を発火せず、`DegradedModel` / `RecoveringModel` にも入らない。
+`ModelFailed` を発火するのは Zenzai モデルのロード失敗だけである。Host は落ちない。
+
+`Health` への現れ方は次のとおり。
+
+- reranker の失敗は状態機械の状態を変えない。`fallback_state` と §8.5.4 の
+  劣化表示（Zenzai を使えない旨）は reranker の失敗では出ない。
+- 既存の `learning::Reranker` 経路（`ApplyRerankerOrRaw`）が例外を握り潰して raw 候補を
+  返すときは、汎用の `last_error_` に固定の理由語を記録する。`Health.last_error` は
+  `last_error_` を `model_runtime_error_` より優先して返すため、この値は Health の
+  `last_error` に出て、`HealthPayload.status` を `ok` から `degraded` へ動かしうる。
+  これは `last_error` から決まる粗い表示値であり、状態機械の遷移ではない。
+- Zenzai 由来の NLL スコアラの runtime 失敗だけは、§B8 のとおり `model_runtime_error_` へ
+  `nll-scorer:<reason>` をミラーする。§7.2 の `reason` 群（`timeout` / `infer_error` など）は
+  構造化ログと `fallback_rate` 集計に使い、Health へはミラーしない。
 
 ### 7.2 timeout / 失敗の閾値（決定）
 

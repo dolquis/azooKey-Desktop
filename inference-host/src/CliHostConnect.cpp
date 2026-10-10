@@ -29,9 +29,9 @@ bool HostPipeIsBusy(const std::string& pipe_name) {
 
 bool ConnectToRunningHost(ipc::NamedPipeClient& client, const std::string& pipe_name,
                           uint32_t connect_timeout_ms, uint32_t busy_timeout_ms) {
+#ifdef _WIN32
   const auto start = std::chrono::steady_clock::now();
   if (client.Connect(pipe_name, connect_timeout_ms)) return true;
-#ifdef _WIN32
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - start)
                            .count();
@@ -39,8 +39,11 @@ bool ConnectToRunningHost(ipc::NamedPipeClient& client, const std::string& pipe_
   // the budget is enough; any other failure returns from it immediately.
   if (elapsed < busy_timeout_ms && HostPipeIsBusy(pipe_name))
     return client.Connect(pipe_name, static_cast<uint32_t>(busy_timeout_ms - elapsed));
-#endif
   return false;
+#else
+  (void)busy_timeout_ms;
+  return client.Connect(pipe_name, connect_timeout_ms);
+#endif
 }
 
 }  // namespace azookey::host

@@ -298,6 +298,12 @@ TEST(CliHostConnectTest, WaitsForABusyHostPipeUntilAnInstanceFrees) {
   const auto start = std::chrono::steady_clock::now();
   const bool connected = azookey::host::ConnectToRunningHost(client, pipe_name, 100, 2000);
   const auto elapsed = std::chrono::steady_clock::now() - start;
+  if (!connected && WaitNamedPipeW(wide_name.c_str(), 5000)) {
+    // Release the server's blocking accept so a regression fails instead of hanging.
+    const HANDLE unblock = CreateFileW(wide_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                       OPEN_EXISTING, 0, nullptr);
+    if (unblock != INVALID_HANDLE_VALUE) CloseHandle(unblock);
+  }
   release.join();
   EXPECT_TRUE(connected);
   EXPECT_TRUE(accepted.load());

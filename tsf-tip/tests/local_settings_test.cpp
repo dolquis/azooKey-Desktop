@@ -441,8 +441,9 @@ TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
 }
 
 // The settings app saves by replacing the file (AtomicFile's MoveFileExW, which
-// retries while another process holds the old file). Unlike a POSIX delete, a
-// replacement that goes through is reported under the new name (DEV-1545).
+// retries when the replacement fails because another process holds the old
+// file). Unlike a POSIX delete, a replacement that goes through is reported
+// under the new name (DEV-1545).
 TEST_F(LocalSettingsTest, DetectsReplacementRetriedWhileAnotherHandleHoldsTheOldFile) {
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.Start(path));

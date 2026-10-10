@@ -15,6 +15,8 @@ add_library(azookey_host STATIC
   src/CandidateTags.cpp
   src/DictionaryCandidateProvider.cpp
   src/EnglishCandidates.cpp
+  src/EnglishDictionaryFiles.cpp
+  src/EnglishDictionaryStore.cpp
   src/Dispatcher.cpp
   src/HealthStateMachine.cpp
   src/HostArgs.cpp
@@ -50,6 +52,9 @@ set_source_files_properties(src/ZenzaiModelConverter.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 # HttpDownloader.cpp and ModelCatalog.cpp both define IsValidSha256 and LowerAscii.
 set_source_files_properties(src/HttpDownloader.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# EnglishDictionaryFiles.cpp includes <Windows.h> and defines GetU32/PutU32.
+set_source_files_properties(src/EnglishDictionaryFiles.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(AZOOKEY_NEOLOGD_PIN "${PROJECT_SOURCE_DIR}/dictbuild/packs/neologd_lexicon.manifest.json")

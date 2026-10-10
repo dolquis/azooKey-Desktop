@@ -1381,8 +1381,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
       if (parsed->max_candidates > 0 && candidates.size() > parsed->max_candidates) {
         candidates.resize(parsed->max_candidates);
       }
-      // English goes after the truncation, as in QueryCandidates (section 4.3).
-      if (english) {
+      // English goes after the truncation, as in QueryCandidates (section 4.3),
+      // and never into an empty list, where it would take the first slot.
+      if (english && !candidates.empty() && !cancel->load(std::memory_order_acquire)) {
         auto english_result = engine_->QueryEnglishCandidates(parsed->raw_romaji, NowSec());
         PlaceEnglishCandidates(candidates, std::move(english_result.candidates),
                                english_result.intent, engine_->config().english.promote_threshold);

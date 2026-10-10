@@ -132,6 +132,8 @@ Linear が持つ。
   `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で
   cancel / latest を追跡し、キャンセル時は `canceled=true` と空の segments を返す。
   現状の segments は 1 要素（文節分割は未実装）で、`full_surface` は先頭候補の surface。
+  任意の `english_candidates` は `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 に従う。
+  読みが 1 文節のときは、`max_candidates` で切り詰めた後に M60 の英単語候補が加わりうる。
 - ✅ `Cancel(target_request_id)`
 - ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms, observation_id)` /
   応答 `CommitObservationResponse(ok)`。配送保証は at-least-once で、TIP は応答を受け取れ

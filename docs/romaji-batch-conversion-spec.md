@@ -198,7 +198,7 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   判別できず、roadmap M58-C の「ON/OFF で句読点挿入が切り替わる」受け入れ条件を
   満たせない。`mode=neural` では無視される。
 - `english_candidates` は M60 の英単語候補を要求する任意フィールドで、欠落と bool 以外の値は
-  false とする。Host は、`mode=neural` で読みが 1 文節になるときだけ、その文節の候補に
+  false とする。Host は、`mode` が `ai-cleanup` でなく読みが 1 文節になるときだけ、その文節の候補に
   `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 

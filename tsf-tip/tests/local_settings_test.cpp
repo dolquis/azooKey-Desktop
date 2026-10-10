@@ -22,6 +22,23 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
+// std::filesystem::remove deletes with POSIX semantics. If another process (an
+// antivirus scan of the file just written, for one) holds a handle at that
+// moment, the directory watch never reports the removal: a documented limit of
+// the watcher (docs/bracket-pairing-spec.md), not what these tests exercise
+// (DEV-1545). A classic delete is reported once the last handle closes.
+bool DeleteReportedToWatchers(const std::filesystem::path& file) {
+  const HANDLE handle =
+      CreateFileW(file.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                  nullptr, OPEN_EXISTING, 0, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return false;
+  FILE_DISPOSITION_INFO disposition{TRUE};
+  const BOOL deleted =
+      SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition));
+  CloseHandle(handle);
+  return deleted != FALSE;
+}
+
 class LocalSettingsTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -320,7 +337,7 @@ TEST_F(LocalSettingsTest, ReloadsTableCreationOverrideDisableAndDeletion) {
     stream << "(\t)\toff\n";
   }
   ASSERT_TRUE(expect_close(0));
-  std::filesystem::remove(table);
+  ASSERT_TRUE(DeleteReportedToWatchers(table));
   ASSERT_TRUE(expect_close(U')'));
 }
 
@@ -411,7 +428,7 @@ TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
   ASSERT_TRUE(reader.WaitForEnabledForTest(false));
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.WaitForEnabledForTest(true));
-  ASSERT_TRUE(std::filesystem::remove(path));
+  ASSERT_TRUE(DeleteReportedToWatchers(path));
   ASSERT_TRUE(reader.WaitForEnabledForTest(false));
   auto temporary = path;
   temporary += L".tmp";
@@ -421,6 +438,38 @@ TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
   }
   std::filesystem::rename(temporary, path);
   ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+}
+
+// The settings app saves by replacing the file (AtomicFile's MoveFileExW, which
+// retries while another process holds the old file). Unlike a POSIX delete, a
+// replacement that goes through is reported under the new name (DEV-1545).
+TEST_F(LocalSettingsTest, DetectsReplacementRetriedWhileAnotherHandleHoldsTheOldFile) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  const HANDLE held = CreateFileW(path.c_str(), GENERIC_READ,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                  OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(held, INVALID_HANDLE_VALUE);
+  auto temporary = path;
+  temporary += L".tmp";
+  {
+    std::ofstream stream(temporary, std::ios::binary);
+    stream << R"({"bracketPairing":false})";
+  }
+  std::thread release([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CloseHandle(held);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  BOOL replaced = FALSE;
+  while (!(replaced = MoveFileExW(temporary.c_str(), path.c_str(),
+                                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  release.join();
+  ASSERT_TRUE(replaced);
+  EXPECT_TRUE(reader.WaitForEnabledForTest(false));
 }
 
 // DEV-1143: the observer is what makes an already-connected TIP re-handshake,

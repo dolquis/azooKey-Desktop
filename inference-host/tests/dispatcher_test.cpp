@@ -1334,6 +1334,8 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
   EXPECT_EQ(history->front().GetString("backend"), attempted->backend);
   EXPECT_EQ(attempted->backend, "cpu");
   EXPECT_EQ(history->front().GetNumber("load_ms"), attempted->load_ms);
+  EXPECT_EQ(history->front().GetNumber("rss_mb"), attempted->rss_mb);
+  EXPECT_EQ(history->front().GetUInt("iterations_completed"), attempted->iterations_completed);
   EXPECT_TRUE(history->front().GetString("completedAt"));
   // Persistence failure leaves the same benchmark outcome available to the client.
   {

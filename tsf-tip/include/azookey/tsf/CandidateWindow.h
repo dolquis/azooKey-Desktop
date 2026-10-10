@@ -67,6 +67,33 @@ class CandidateWindow {
   // when there is no room, kept inside the work area.
   static RECT ComputeDetailsPlacement(RECT candidate, RECT work_area, int width, int height);
 
+  // What a left click at a client point lands on.
+  enum class HitTarget {
+    None,
+    Candidate,
+    SecureIndicator,
+    HealthBanner,
+    HealthDetailsButton,
+    HealthRetryButton,
+  };
+  struct Hit {
+    HitTarget target;
+    int index;  // Candidate row; -1 for every other target.
+  };
+  // The click regions of one shown window, in client pixels.
+  struct HitLayout {
+    int item_height;
+    int item_count;
+    int client_width;
+    int secure_indicator_width;  // 0 when the lock is hidden.
+    bool health_banner_visible;
+    int health_banner_top;
+    RECT details_button;
+    bool has_retry_button;
+    RECT retry_button;
+  };
+  static Hit HitTest(const HitLayout& layout, POINT point);
+
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);
   void SetSelected(int idx);
@@ -119,6 +146,10 @@ class CandidateWindow {
   bool health_banner_visible_for_test() const { return health_banner_visible_; }
   int footer_top_for_test() const { return FooterTop(); }
   int health_banner_top_for_test() const { return HealthBannerTop(); }
+  // Hit test against the window's current client width.
+  Hit HitTestForTest(POINT point) const;
+  // Pretends every monitor has this DPI; 0 restores the real lookup.
+  static void SetMonitorDpiForTest(UINT dpi);
 #endif
 
  private:
@@ -206,6 +237,7 @@ class CandidateWindow {
   int SecureIndicatorWidth() const;
   RECT HealthDetailsButtonRect(int width) const;
   RECT HealthRetryButtonRect(int width) const;
+  HitLayout CurrentHitLayout(int client_width) const;
 };
 
 }  // namespace azookey::tsf

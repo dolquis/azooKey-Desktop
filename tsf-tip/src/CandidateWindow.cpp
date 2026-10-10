@@ -318,7 +318,35 @@ RECT CandidateWindow::ComputeDetailsPlacement(RECT candidate, RECT work_area, in
 }
 
 // static
+CandidateWindow::Hit CandidateWindow::HitTest(const HitLayout& layout, POINT point) {
+  constexpr Hit kNone{HitTarget::None, -1};
+  if (layout.health_banner_visible && point.y >= layout.health_banner_top) {
+    if (PtInRect(&layout.details_button, point)) return {HitTarget::HealthDetailsButton, -1};
+    if (layout.has_retry_button && PtInRect(&layout.retry_button, point))
+      return {HitTarget::HealthRetryButton, -1};
+    return {HitTarget::HealthBanner, -1};
+  }
+  // The lock is not a candidate.
+  if (layout.secure_indicator_width > 0 && point.y < layout.item_height &&
+      point.x >= layout.client_width - layout.secure_indicator_width)
+    return {HitTarget::SecureIndicator, -1};
+  if (layout.item_height <= 0) return kNone;
+  const int index = point.y / layout.item_height;
+  if (index >= 0 && index < layout.item_count) return {HitTarget::Candidate, index};
+  return kNone;
+}
+
+namespace {
+#ifdef AZOOKEY_TSF_TESTING
+UINT g_monitor_dpi_for_test = 0;
+#endif
+}  // namespace
+
+// static
 UINT CandidateWindow::DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_monitor_dpi_for_test) return g_monitor_dpi_for_test;
+#endif
   UINT dpi_x = 0;
   UINT dpi_y = 0;
   if (monitor && SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) &&
@@ -346,6 +374,15 @@ CandidateWindow::ColumnLayoutForTest CandidateWindow::ComputeColumnLayoutForTest
   const ColumnLayout layout = ComputeColumnLayout(max_surface_width, max_description_width, dpi);
   return {layout.surface_width, layout.column_gap, layout.content_width};
 }
+
+CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
+  RECT client_rc{};
+  if (hwnd_) GetClientRect(hwnd_, &client_rc);
+  return HitTest(CurrentHitLayout(client_rc.right), point);
+}
+
+// static
+void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 #endif
 
 // static
@@ -714,6 +751,18 @@ RECT CandidateWindow::HealthRetryButtonRect(int width) const {
   return {right - ScaleForDpi(60, dpi_), top, right, top + metrics_.item_height};
 }
 
+CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) const {
+  return {metrics_.item_height,
+          static_cast<int>(items_.size()),
+          client_width,
+          SecureIndicatorWidth(),
+          health_banner_visible_,
+          HealthBannerTop(),
+          HealthDetailsButtonRect(client_width),
+          health_state_ == CandidateHealthState::DegradedModel,
+          HealthRetryButtonRect(client_width)};
+}
+
 void CandidateWindow::PostCandidatesReady() {
   if (hwnd_) PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
 }
@@ -891,42 +940,35 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     }
 
     case WM_LBUTTONDOWN: {
-      int x = GET_X_LPARAM(lParam);
-      int y = GET_Y_LPARAM(lParam);
-      if (health_banner_visible_ && y >= HealthBannerTop()) {
-        RECT client_rc{};
-        GetClientRect(hwnd, &client_rc);
-        POINT click{x, y};
-        const RECT details_rc = HealthDetailsButtonRect(client_rc.right);
-        if (PtInRect(&details_rc, click)) {
+      RECT client_rc{};
+      GetClientRect(hwnd, &client_rc);
+      const Hit hit =
+          HitTest(CurrentHitLayout(client_rc.right), {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+      switch (hit.target) {
+        case HitTarget::HealthDetailsButton:
           ShowDetails();
-        } else if (health_state_ == CandidateHealthState::DegradedModel && !retry_in_flight_) {
-          const RECT retry_rc = HealthRetryButtonRect(client_rc.right);
-          if (PtInRect(&retry_rc, click) && on_retry_) {
-            retry_in_flight_ = true;
+          break;
+        case HitTarget::HealthRetryButton:
+          if (retry_in_flight_ || !on_retry_) break;
+          retry_in_flight_ = true;
+          Repaint();
+          try {
+            on_retry_();
+          } catch (...) {
+            // Never unwind through a Win32 window procedure.
+            retry_in_flight_ = false;
             Repaint();
-            try {
-              on_retry_();
-            } catch (...) {
-              // Never unwind through a Win32 window procedure.
-              retry_in_flight_ = false;
-              Repaint();
-            }
           }
-        }
-        return 0;
-      }
-      if (secure_indicator_visible_ && y < metrics_.item_height) {
-        RECT client_rc{};
-        GetClientRect(hwnd, &client_rc);
-        // The lock is not a candidate.
-        if (x >= client_rc.right - SecureIndicatorWidth()) return 0;
-      }
-      int idx = y / metrics_.item_height;
-      if (idx >= 0 && idx < static_cast<int>(items_.size())) {
-        selected_idx_ = idx;
-        Repaint();
-        if (on_click_) on_click_(idx);
+          break;
+        case HitTarget::Candidate:
+          selected_idx_ = hit.index;
+          Repaint();
+          if (on_click_) on_click_(hit.index);
+          break;
+        case HitTarget::None:
+        case HitTarget::SecureIndicator:
+        case HitTarget::HealthBanner:
+          break;
       }
       return 0;
     }

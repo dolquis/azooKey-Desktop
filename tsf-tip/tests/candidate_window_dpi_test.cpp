@@ -218,5 +218,72 @@ TEST(CandidateWindowDpiTest, SecureToastShiftsHealthButtonsAndLockIsNotACandidat
   window.Destroy();
 }
 
+TEST(CandidateWindowHitTest, ClickRegionsScaleAt96And144And192Dpi) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  using Target = CandidateWindow::HitTarget;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.SetSecureIndicator(true);
+    window.Show(POINT{20, 20}, {{L"候補", L"説明"}, {L"二", L""}}, 0, L"案内");
+    window.ShowSecureToast();
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    const int row = scale(24);
+    ASSERT_EQ(window.current_metrics_for_test().item_height, row);
+    RECT client{};
+    ASSERT_TRUE(GetClientRect(window.hwnd_for_test(), &client));
+    const int width = client.right;
+    const auto expect = [&](POINT point, Target target, int index = -1) {
+      const auto hit = window.HitTestForTest(point);
+      EXPECT_EQ(hit.target, target) << point.x << "," << point.y;
+      EXPECT_EQ(hit.index, index) << point.x << "," << point.y;
+    };
+
+    // Rows 0 and 1 are candidates; the lock takes the right end of row 0.
+    expect({0, 0}, Target::Candidate, 0);
+    expect({width - scale(24) - 1, row - 1}, Target::Candidate, 0);
+    expect({width - scale(24), 0}, Target::SecureIndicator);
+    expect({width - 1, row - 1}, Target::SecureIndicator);
+    expect({width - 1, row}, Target::Candidate, 1);
+    expect({0, 2 * row - 1}, Target::Candidate, 1);
+    // The notice row and the toast row are not clickable.
+    expect({0, 2 * row}, Target::None);
+    expect({0, 4 * row - 1}, Target::None);
+    // The banner starts below the toast; its buttons sit on its third row.
+    expect({0, 4 * row}, Target::HealthBanner);
+    const int button_top = 6 * row;
+    const int retry_right = width - scale(8);
+    expect({retry_right - scale(60), button_top}, Target::HealthRetryButton);
+    expect({retry_right - 1, button_top + row - 1}, Target::HealthRetryButton);
+    expect({retry_right, button_top}, Target::HealthBanner);
+    expect({retry_right - 1, button_top - 1}, Target::HealthBanner);
+    const int details_right = retry_right - scale(68);
+    expect({details_right - scale(52), button_top}, Target::HealthDetailsButton);
+    expect({details_right - 1, button_top + row - 1}, Target::HealthDetailsButton);
+    expect({details_right - scale(52) - 1, button_top}, Target::HealthBanner);
+    expect({details_right, button_top}, Target::HealthBanner);
+    window.Destroy();
+  }
+  CandidateWindow::SetMonitorDpiForTest(0);
+}
+
+TEST(CandidateWindowHitTest, DetailsButtonMovesRightWithoutTheRetryButton) {
+  CandidateWindow::HitLayout layout{24,    1,   400, 0, true, 24, {340, 72, 392, 96},
+                                    false, {332, 72, 392, 96}};
+  EXPECT_EQ(CandidateWindow::HitTest(layout, {391, 72}).target,
+            CandidateWindow::HitTarget::HealthDetailsButton);
+  EXPECT_EQ(CandidateWindow::HitTest(layout, {335, 72}).target,
+            CandidateWindow::HitTarget::HealthBanner);
+  // Above the banner the first row is a candidate even at its right edge.
+  const auto hit = CandidateWindow::HitTest(layout, {399, 0});
+  EXPECT_EQ(hit.target, CandidateWindow::HitTarget::Candidate);
+  EXPECT_EQ(hit.index, 0);
+}
+
 }  // namespace
 }  // namespace azookey::tsf

@@ -68,7 +68,8 @@ class ChildProcess {
 
   bool Start(const std::filesystem::path& executable, const std::vector<std::wstring>& args,
              DWORD flags, const std::filesystem::path& log_path = {},
-             HANDLE stdin_override = nullptr, HANDLE stdout_override = nullptr) {
+             HANDLE stdin_override = nullptr, HANDLE stdout_override = nullptr,
+             HANDLE stderr_override = nullptr) {
     std::wstring command = L"\"" + executable.wstring() + L"\"";
     for (const auto& arg : args) command += L" \"" + arg + L"\"";
     STARTUPINFOW startup{};
@@ -91,7 +92,7 @@ class ChildProcess {
       startup.dwFlags |= STARTF_USESTDHANDLES;
       startup.hStdInput = stdin_override != nullptr ? stdin_override : input;
       startup.hStdOutput = stdout_override != nullptr ? stdout_override : log;
-      startup.hStdError = log;
+      startup.hStdError = stderr_override != nullptr ? stderr_override : log;
     }
     PROCESS_INFORMATION info{};
     const bool created =
@@ -404,6 +405,163 @@ class HostProcessTest : public ::testing::Test {
               std::string::npos);
   }
 
+  void CheckBlockedStderr(DWORD control_event, bool fail_shutdown_save = false,
+                          bool model_diagnostics = false) {
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+    HANDLE input_read = nullptr;
+    HANDLE input_write = nullptr;
+    HANDLE output_read = nullptr;
+    HANDLE output_write = nullptr;
+    HANDLE error_read = nullptr;
+    HANDLE error_write = nullptr;
+    ASSERT_TRUE(CreatePipe(&input_read, &input_write, &attributes, 128 * 1024));
+    std::unique_ptr<void, decltype(&CloseHandle)> input_reader(input_read, &CloseHandle);
+    std::unique_ptr<void, decltype(&CloseHandle)> input_writer(input_write, &CloseHandle);
+    ASSERT_TRUE(CreatePipe(&output_read, &output_write, &attributes, 4096));
+    std::unique_ptr<void, decltype(&CloseHandle)> output_reader(output_read, &CloseHandle);
+    std::unique_ptr<void, decltype(&CloseHandle)> output_writer(output_write, &CloseHandle);
+    ASSERT_TRUE(CreatePipe(&error_read, &error_write, &attributes, 4096));
+    std::unique_ptr<void, decltype(&CloseHandle)> error_reader(error_read, &CloseHandle);
+    std::unique_ptr<void, decltype(&CloseHandle)> error_writer(error_write, &CloseHandle);
+    ASSERT_TRUE(SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0));
+    ASSERT_TRUE(SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0));
+    ASSERT_TRUE(SetHandleInformation(error_read, HANDLE_FLAG_INHERIT, 0));
+    DWORD error_capacity = 0;
+    DWORD input_capacity = 0;
+    ASSERT_TRUE(GetNamedPipeInfo(error_write, nullptr, &error_capacity, nullptr, nullptr));
+    ASSERT_TRUE(GetNamedPipeInfo(input_write, nullptr, &input_capacity, nullptr, nullptr));
+    ASSERT_TRUE(SetConsoleCtrlHandler(nullptr, FALSE));
+    auto args = CommonArgs();
+    // Keep all paths and the reserved pipe name isolated, while malformed
+    // envelopes exercise the stdio parser rather than the named-pipe server.
+    args.push_back(L"--stdio");
+    const auto shutdown_host = azookey::core::Utf8Path(
+        model_diagnostics ? HOST_MODEL_DIAGNOSTIC_TEST_EXE : HOST_SHUTDOWN_TEST_EXE);
+    ASSERT_TRUE(std::filesystem::exists(shutdown_host));
+    const bool started =
+        host_.Start(shutdown_host, args, CREATE_NEW_CONSOLE, directory_.root / "host.log",
+                    input_read, output_write, error_write);
+    input_reader.reset();
+    output_writer.reset();
+    error_writer.reset();
+    ASSERT_TRUE(started);
+
+    const auto send_line = [&](const std::string& line) {
+      // A single bounded write fits even if Host is blocked and stops reading.
+      if (line.size() > input_capacity) return false;
+      DWORD written = 0;
+      return WriteFile(input_write, line.data(), static_cast<DWORD>(line.size()), &written,
+                       nullptr) &&
+             written == line.size();
+    };
+    const auto send = [&](const azookey::ipc::Envelope& request) {
+      const auto serialized = azookey::ipc::Serialize(request);
+      return serialized && send_line(*serialized + '\n');
+    };
+    const auto read_response = [&]() -> std::optional<azookey::ipc::Envelope> {
+      std::string line;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+      while (std::chrono::steady_clock::now() < deadline && host_.Running()) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(output_read, nullptr, 0, nullptr, &available, nullptr)) return {};
+        if (available == 0) {
+          Sleep(10);
+          continue;
+        }
+        char ch = 0;
+        DWORD read = 0;
+        if (!ReadFile(output_read, &ch, 1, &read, nullptr) || read != 1) return {};
+        if (ch == '\n') return azookey::ipc::Deserialize(line);
+        line += ch;
+      }
+      return {};
+    };
+    azookey::ipc::HandshakeRequest handshake;
+    handshake.tip_version = "host-process-test";
+    handshake.client_id = "host-process-test";
+    handshake.capabilities = {"secure_flag"};
+    azookey::ipc::Envelope handshake_request;
+    handshake_request.request_id = 1;
+    handshake_request.trace_id = "host-process";
+    handshake_request.type = azookey::ipc::MessageType::Handshake;
+    handshake_request.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
+    ASSERT_TRUE(send(handshake_request));
+    const auto handshake_response = read_response();
+    ASSERT_TRUE(handshake_response);
+    const auto accepted = azookey::ipc::ParseHandshakeResponse(handshake_response->payload_json);
+    ASSERT_TRUE(accepted && accepted->accepted);
+
+    const auto first_observation_at = std::chrono::steady_clock::now();
+    ASSERT_TRUE(send(CommitRequest(2, "first-stderr")));
+    const auto first_response = read_response();
+    ASSERT_TRUE(first_response);
+    const auto first_commit =
+        azookey::ipc::ParseCommitObservationResponse(first_response->payload_json);
+    ASSERT_TRUE(first_commit && first_commit->ok);
+    const auto encrypted = azookey::learning::EncryptedPathFor(
+        azookey::learning::LearningStoreV2PathFor(LearningPath()));
+    ASSERT_TRUE(std::filesystem::exists(encrypted));
+    ASSERT_TRUE(ContainsLearning("first-stderr"));
+    const auto first_write = std::filesystem::last_write_time(encrypted);
+    const std::string reading = "pending-stderr";
+    ASSERT_TRUE(send(CommitRequest(3, reading)));
+    const auto pending_response = read_response();
+    ASSERT_TRUE(pending_response);
+    const auto pending_commit =
+        azookey::ipc::ParseCommitObservationResponse(pending_response->payload_json);
+    ASSERT_TRUE(pending_commit && pending_commit->ok);
+    ASSERT_EQ(std::filesystem::last_write_time(encrypted), first_write);
+    ASSERT_FALSE(ContainsLearning(reading));
+
+    std::unique_ptr<void, decltype(&CloseHandle)> save_blocker(nullptr, &CloseHandle);
+    if (fail_shutdown_save) {
+      // Deny replacement/deletion of the first successfully saved store. Keep
+      // this handle open throughout every bounded shutdown save retry.
+      const HANDLE blocked = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      ASSERT_NE(blocked, INVALID_HANDLE_VALUE);
+      save_blocker.reset(blocked);
+    }
+    if (!model_diagnostics) {
+      std::string malformed;
+      for (int i = 0; i < 2048; ++i) malformed += "not-an-envelope\n";
+      ASSERT_GT(malformed.size(), 4U * error_capacity);
+      ASSERT_TRUE(send_line(malformed));
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+    DWORD available = 0;
+    // The asynchronous writer uses raw LF. This shorter frame is also a
+    // conservative bound for a synchronous CRT writer that expands to CRLF.
+    const DWORD kDiagnosticFrameBytes = model_diagnostics
+                                            ? sizeof("llama fixture: model load diagnostic\n") - 1
+                                            : sizeof("warn: failed to parse envelope\n") - 1;
+    ASSERT_GT(error_capacity, kDiagnosticFrameBytes);
+    do {
+      ASSERT_TRUE(PeekNamedPipe(error_read, nullptr, 0, nullptr, &available, nullptr));
+      ASSERT_TRUE(host_.Running()) << "Host exited before stderr filled";
+      ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+          << "stderr did not fill; available=" << available << " capacity=" << error_capacity;
+      if (available <= error_capacity - kDiagnosticFrameBytes) Sleep(10);
+    } while (available <= error_capacity - kDiagnosticFrameBytes);
+    // Less than one diagnostic frame remains: a further worker write cannot
+    // complete. Never drain stderr or close stdin before the control event.
+    const auto flush_interval = std::chrono::seconds(AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC);
+    ASSERT_LT(std::chrono::steady_clock::now() - first_observation_at + std::chrono::seconds(30),
+              flush_interval);
+    ASSERT_TRUE(StopHost(control_event));
+    ASSERT_LT(std::chrono::steady_clock::now() - first_observation_at, flush_interval);
+    if (fail_shutdown_save) {
+      save_blocker.reset();
+      EXPECT_EQ(std::filesystem::last_write_time(encrypted), first_write);
+      EXPECT_TRUE(ContainsLearning("first-stderr"));
+      // Exit does not imply successful persistence: the denied save must lose
+      // this pending observation, even though its diagnostic cannot be drained.
+      EXPECT_FALSE(ContainsLearning(reading));
+    } else {
+      EXPECT_TRUE(ContainsLearning(reading));
+    }
+  }
+
   TestDirectory directory_;
   ChildProcess host_;
   std::filesystem::path host_executable_;
@@ -537,6 +695,30 @@ TEST_F(HostProcessTest, CtrlBreakUnblocksStdioWriteAndFlushesPendingLearning) {
 
 TEST_F(HostProcessTest, BrokenStdoutFlushesPendingLearning) {
   CheckBlockedStdioWrite(std::nullopt);
+}
+
+TEST_F(HostProcessTest, CtrlCUnblocksStderrAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_C_EVENT);
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksStderrAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_BREAK_EVENT);
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksStderrWhenShutdownLearningSaveFails) {
+  CheckBlockedStderr(CTRL_BREAK_EVENT, true);
+}
+
+TEST_F(HostProcessTest, CtrlCUnblocksStderrWhenShutdownLearningSaveFails) {
+  CheckBlockedStderr(CTRL_C_EVENT, true);
+}
+
+TEST_F(HostProcessTest, CtrlCUnblocksModelDiagnosticsAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_C_EVENT, false, true);
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksModelDiagnosticsAndFlushesPendingLearning) {
+  CheckBlockedStderr(CTRL_BREAK_EVENT, false, true);
 }
 
 }  // namespace

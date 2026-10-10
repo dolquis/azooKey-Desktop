@@ -326,21 +326,22 @@ Response（host → client）:
 ```
 
 ベンチは **既存稼働中の backend と並行する独立 runtime インスタンス**
-（別 InferenceEngine + 別 model handle）で実行し、ライブの
-`QueryCandidates` は本番 backend に routing し続ける。M24 完了済み環境
-では Heavy レーンスケジューラ上に独立 worker として配置し、M24 未完了
-環境では、要求を受けた接続のスレッドで同期実行する（どちらの場合も
-ライブクエリ用 worker とは別 thread / 別 backend ハンドルを保つ）。
+（専用子プロセス内の別 InferenceEngine + 別 model handle）で実行し、ライブの
+`QueryCandidates` は本番 backend に routing し続ける。接続のスレッドは子プロセスの
+期限と終了を監視する。子プロセスは Host の IPC・学習データ・設定の起動経路を通らず、
+ベンチ要求とロードに必要な backend / GPU layer 数 / thread 数だけを受け取る。
 対象 backend のロード / iteration 実行 / unload が完了するまでベンチ用
 runtime のみを更新し、既存 backend の差し替えは行わない。これにより
 load/unload とライブクエリの race を構造的に排除する。
 
 `BenchmarkModel` の契約:
 
-- 要求を受けた接続のスレッドで同期実行し、ベンチ用の別 `InferenceEngine` に
-  ロードする。ほかの接続のライブクエリは稼働中のエンジンで処理を続ける。
+- ベンチ用の子プロセスにロードする。ほかの接続のライブクエリは稼働中のエンジンで
+  処理を続ける。入力は継承する専用の共有メモリで渡し、読み・モデルパスを argv に載せない。
+  子プロセスの標準入力は NUL の EOF、標準出力・標準エラーは NUL へ破棄する。
+  親の標準入出力ハンドルは継承しない。
 - Host プロセス全体で同時に 1 本だけ実行する。実行中に届いた要求には
-  `error: "busy"` を返す。
+  `error: "busy"` を返す。実行枠は子プロセスの終了を確認してから解放する。
 - `path` は ListModels と同じく models ディレクトリ配下に限る。
 - 応答の `backend` は実際にロードされた backend。CUDA が未リンク、または Vulkan の
   初期化に失敗して CPU で動いた場合は `cpu` を返す。
@@ -349,18 +350,28 @@ load/unload とライブクエリの race を構造的に排除する。
   `warmup` 回は計測しない。
 - 上限: `iterations` は 1〜1000、`warmup` は 0〜100、`cases` は 32 件・各 256 バイトまで。
 - `status` は `success` / `timeout` / `error`。
-  - `timeout`: ロードを含めて 60 秒（§8）を超えた。判定は iteration の合間に行うため、
-    ロード中と 1 回の `QueryCandidates` の途中では打ち切らない。それまでの計測値と
-    `iterations_completed` を返す。
+  - `success`: 終了待ちで子プロセスの正常終了と完了した結果を確認した。
+    待機後に親スレッドの再開が遅れて期限を過ぎても、成功した終了待ちを `timeout` に変えない。
+  - `timeout`: 子プロセスの起動・ファイル検証・ロード・推論・unload を含めて 60 秒（§8）を
+    超え、終了待ちで完了を確認できなかった。ロード中や 1 回の `QueryCandidates` の途中でも
+    子プロセスの終了を要求する。
+    完了して公開された iteration の計測値と `iterations_completed` を返し、途中の iteration は
+    計上しない。ロード未完了なら `load_ms` は `0`。unload 中の timeout でも成功を返さない。
   - `error`: `error` に固定カテゴリを入れる。`invalid_request`（上限外・空の case）、
     `unsupported_backend`、`invalid_model`（§3.3 の R1 検証に通らない。R2 を含む）、
     `path_outside_models_root`、`models_dir_unavailable`、`busy`、`load_failed`、
     `safe_mode`、`benchmark_failed`、`not authenticated`（Handshake 前）。
-- `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` は Host
-  プロセスの working set（ライブエンジンを含む）で、Windows 以外では計測せず `0` を返す。
-- 既知の制約: ロードや 1 回の `QueryCandidates` が戻らない場合、ベンチの実行枠は
-  解放されず、以後の `BenchmarkModel` は Host を再起動するまで `busy` になる。
-  ロード中の中断は llama.cpp 側の協力が要るため、別途扱う。
+- `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` はベンチ用
+  子プロセスの working set を MiB で記録する。ロード後と完了した query 後に計測し、
+  unload 前に公開した最後の値を応答・履歴へ返す。timeout でも完了した snapshot の値を保持し、
+  親 Host の RSS で上書きしない。未計測・取得失敗、Windows 以外では `0` を返す。
+- 子プロセスは Windows Job Object に起動と同時に所属させる。Job の process 数上限は 1 とし、
+  Host 終了時の Job handle close でも停止する。timeout 後の終了確認は最大 1 秒とする。
+  driver / pending I/O 等で終了確認が遅れた場合は `timeout` を返し、子プロセスと Job を
+  最大 1 組だけ保持する。以後は終了を確認するまで `busy` とし、新たな worker を積まない。
+  この場合は未回収の共有メモリを読まず、`load_ms`・percentile・`iterations_completed` を
+  `0` とする。`rss_mb` も `0`、`vram_mb` は `null`。終了後の次の要求で回収し、
+  ベンチを再実行できる。
 - p50 / p95 / p99 は計測サンプルの nearest-rank。
 
 ### 4.3 IPC 追加方針
@@ -567,12 +578,17 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - `ListModels` は ファイル列挙 + GGUF magic 読み（先頭 4 KB）のみで
   完結させる。完全 parse は明示的 `compute_sha256 = true` または ロード
   試行時のみ。
-- `BenchmarkModel` は 60 秒を超えたら次の iteration に進まず打ち切り、
-  `status = timeout` を返す（ロード中は中断しない。§4.2）。
+- `BenchmarkModel` の監視期限は起動時間を含めて 60 秒とし、期限後は終了確認の最大 1 秒を
+  加えた範囲で `status = timeout` を返す。同期の Windows 起動 API が返るまでは期限を
+  判定できないため、その API 自体が停止する場合の応答時間上限は保証しない。
+  停止・回収・資源上限は §4.2 に従う。
 - Host 占有中の表示は M47 `Recovering` 状態として候補ウィンドウに通知。
 
 ## 9. テスト
 
+- integration: 戻らない load / query / unload を模擬する子プロセスで、timeout、
+  完了 iteration の部分結果、終了確認後の再実行、同時実行拒否、process / handle 回収、
+  起動失敗後の枠回復、親の deadline 超過を検証する
 - unit: `ModelCatalog` の宣言的 catalog parse / default 補完 / 不正 entry reject /
   `zenzai\` パス resolver、および一覧検出 / 検証 / 履歴更新
 - integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、

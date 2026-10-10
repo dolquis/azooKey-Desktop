@@ -20,6 +20,7 @@
 #include <thread>
 #include <utility>
 
+#include "ModelDiagnostics.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/Utf8.h"
 
@@ -125,7 +126,7 @@ class LlamaLogCapture {
       return;
     }
 
-    std::fputs(text, stderr);
+    detail::WriteModelDiagnostic(text);
 
     auto* capture = ActiveCapture();
     if (!capture) {

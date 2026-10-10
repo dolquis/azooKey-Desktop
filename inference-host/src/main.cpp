@@ -23,6 +23,13 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+
+#include "StderrPipeWriter.h"
+#ifdef AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD
+#include <future>
+
+#include "ModelDiagnostics.h"
+#endif
 #else
 #include <signal.h>
 #endif
@@ -37,6 +44,7 @@
 #include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
+#include "azookey/host/ModelBenchmarkWorker.h"
 #include "azookey/host/ModelsCli.h"
 #include "azookey/host/NeologdPack.h"
 #include "azookey/host/NewWordsCli.h"
@@ -415,6 +423,9 @@ int main(int argc, char** argv) {
   // Construct before the engine so its destructor signals completion only
   // after the engine destructor has flushed pending learning observations.
   ConsoleControlRegistration console_control;
+  // Keep diagnostics cancellable on their own thread, including diagnostics
+  // from the engine's periodic worker and shutdown save retries.
+  azookey::host::StderrPipeWriter stderr_pipe_writer;
 #endif
   azookey::host::EngineConfig config;
 #ifdef AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC
@@ -433,6 +444,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> raw_args;
   if (!command_line->empty()) {
     raw_args.assign(command_line->begin() + 1, command_line->end());
+  }
+  if (raw_args.size() == 2 && raw_args[0] == "--model-benchmark-worker") {
+    return azookey::host::RunModelBenchmarkWorker(raw_args[1]);
   }
   if (raw_args == std::vector<std::string>{"--probe-vulkan"}) {
     const auto count = azookey::host::ProbeVulkanDevices();
@@ -879,6 +893,24 @@ int main(int argc, char** argv) {
       StartNeologdPackLoad(neologd_pack_sink, user_paths->packs_dir);
     }
   };
+#ifdef AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD
+  // Test-only executable: exercise the real preload thread and shutdown join
+  // without a model or GPU. All diagnostic bytes use the actual llama route.
+  auto preload_entered = std::make_shared<std::promise<void>>();
+  auto preload_ready = preload_entered->get_future();
+  azookey::host::ModelLoadOptions diagnostic_preload;
+  diagnostic_preload.path =
+      azookey::core::PathToUtf8(user_paths->models_dir / "stderr-fixture-missing.gguf");
+  diagnostic_preload.before_probe_for_tests = [preload_entered] {
+    preload_entered->set_value();
+    for (int i = 0; i < 4096; ++i) {
+      azookey::host::detail::WriteModelDiagnostic("llama fixture: model load diagnostic\n");
+    }
+  };
+  if (!engine.StartModelPreload(std::move(diagnostic_preload))) return 1;
+  // Model-load's initial learning flush must precede the test's observations.
+  preload_ready.wait();
+#endif
   if (explicit_model_path && !safe_mode) {
     const bool model_loaded = engine.LoadModel();
     LogBusinessOutcome(runtime_log,

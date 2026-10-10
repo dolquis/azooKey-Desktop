@@ -9101,7 +9101,8 @@ TEST(TsfTipEnglishCandidatesTest, BatchSpaceAsksForEnglishOnlyInNeuralMode) {
 }
 
 // The flag reaches the wire for a batch sent as one request, and never for a
-// batch split into several (no sub-request owns the whole romaji).
+// batch split into several (no sub-request owns the whole romaji). The English
+// candidate the Host returns then commits through ConvertBatch end to end.
 TEST(TsfTipEnglishCandidatesTest, BatchWireCarriesEnglishOnlyForASingleRequest) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-tip-batch-english-test-" + std::to_string(GetCurrentProcessId());
@@ -9134,7 +9135,17 @@ TEST(TsfTipEnglishCandidatesTest, BatchWireCarriesEnglishOnlyForASingleRequest) 
         candidate.surface = request->reading;
         candidate.source = "model";
         payload.full_surface = candidate.surface;
-        payload.segments.push_back({request->reading, {std::move(candidate)}});
+        std::vector<azookey::ipc::CandidateField> candidates{std::move(candidate)};
+        if (request->english_candidates) {
+          // What the Host adds (spec §6.7): tag English, reading = raw romaji.
+          azookey::ipc::CandidateField english;
+          english.surface = "Apple";
+          english.reading = request->raw_romaji;
+          english.source = "heuristic";
+          english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+          candidates.push_back(std::move(english));
+        }
+        payload.segments.push_back({request->reading, std::move(candidates)});
         res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
         return res;
       }));
@@ -9155,6 +9166,16 @@ TEST(TsfTipEnglishCandidatesTest, BatchWireCarriesEnglishOnlyForASingleRequest) 
     ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
     EXPECT_EQ(take_flags(), std::vector<bool>{true});
     h.service.stop_ipc_worker_for_test();
+    // The English candidate the response carried commits and is learned
+    // under the raw romaji (spec §4.1.1, §6.4).
+    h.service.show_candidate_window_from_cache_for_test();
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press('2'));
+    EXPECT_EQ(attachment.composition_range.last_text, L"Apple");
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->reading, "apple");
+    EXPECT_EQ(observation->chosen.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English));
   }
   {
     TextServiceHarness h;

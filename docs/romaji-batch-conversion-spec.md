@@ -179,7 +179,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   "ai_allowed": false,           // TIPの安全入力判定。欠落・型不正はfalse
   "external_ai_allowed": false,  // ai_allowedとの積。hostの設定でも再制限
   "ai_backend": "none",         // アプリ別解決後。欠落時はhostのroot設定を継承
-  "max_candidates": 5,           // 文節あたり候補数
+  "max_candidates": 5,           // 文節あたり候補数。1 文節の neural 要求では、この後に
+                                 // 英単語候補（tag=4、reading=生ローマ字）が加わりうる
   "english_candidates": true     // 任意。M60 の英単語候補。false は省略
   // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
   // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
@@ -198,7 +199,7 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   判別できず、roadmap M58-C の「ON/OFF で句読点挿入が切り替わる」受け入れ条件を
   満たせない。`mode=neural` では無視される。
 - `english_candidates` は M60 の英単語候補を要求する任意フィールドで、欠落と bool 以外の値は
-  false とする。Host は、`mode` が `ai-cleanup` でなく読みが 1 文節になるときだけ、その文節の候補に
+  false とする。Host は、`mode=neural` で読みが 1 文節になるときだけ、その文節の候補に
   `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 
@@ -557,6 +558,8 @@ hostの再選択単位は句点・改行を優先し、最大96バイト程度�
   segments 構造の往復、`partial` フラグ、Cancel の ID 整合。`HandshakeResponse.
   capabilities` の round-trip（`"oob_cancel"` を含む応答 / 欠落応答）と、欠落時に TIP が
   out-of-band Cancel に依存せず best-effort fallback を選ぶこと（§6.3.2）。
+  `english_candidates` の往復と、Host・TIP の英単語候補のテストは
+  `docs/inline-english-candidate-spec.md` §8 が持つ。
 - **out-of-band Cancel** (`inference-host/tests` + `ipc/tests`): 共有
   `CancellationRegistry` 経由で、別接続（control 接続相当）からの `Cancel` が in-flight な
   長い `QueryBatchConversion` をチャンク境界で中止させ、canceled 応答（部分結果なし・

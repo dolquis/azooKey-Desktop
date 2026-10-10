@@ -132,9 +132,11 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
   `english_candidates` がある、解決後の mode が `neural`、論理バッチのサブリクエストが 1 件、
   の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
-- Host は、`mode` が `ai-cleanup` でなく、`english_candidates` が true、`raw_romaji` が空でなく、
-  読みが 1 chunk のときだけ、その文節の候補を `max_candidates` で切り詰めた後に英単語候補を
-  §4.3 の規則で加える。かなの候補が 1 件も無いときは加えない（英単語が第 1 候補になるため）。`ai-cleanup` は、`neural` へ fallback した場合も対象外とする。
+- Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
+  読みが 1 chunk、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
+  英単語候補を §4.3 の規則で加える。
+- かなの候補が 1 件も無いときは加えない（英単語が第 1 候補になるため）。`ai-cleanup` は、
+  `neural` へ fallback した場合も対象外とする。
 - capabilities に `english_candidates` を持っていても、一括変換に英単語候補を配線していない
   Host は、このフィールドを無視する。その場合、英単語候補は何も示さずに出ない。新しい
   capability は設けない。

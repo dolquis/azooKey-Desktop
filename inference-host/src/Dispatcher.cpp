@@ -1372,7 +1372,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     const auto chunks = core::SplitBatchConversion(parsed->reading);
     // M60: only a batch that stays one segment pairs raw_romaji with a
     // segment; a split reading has no per-segment romaji to offer.
-    const bool english = parsed->mode != "ai-cleanup" && parsed->english_candidates &&
+    const bool english = parsed->mode == "neural" && parsed->english_candidates &&
                          !parsed->raw_romaji.empty() && chunks.size() == 1;
     for (const auto& reading : chunks) {
       if (cancel->load(std::memory_order_acquire)) break;

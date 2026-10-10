@@ -1530,10 +1530,10 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
 TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment) {
   constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
   const auto query = [&](uint64_t id, const std::string& reading, const std::string& mode,
-                         bool english) {
+                         bool english, const std::string& raw_romaji = "nihon") {
     ipc::QueryBatchConversionRequest q;
     q.reading = reading;
-    q.raw_romaji = "nihon";
+    q.raw_romaji = raw_romaji;
     q.mode = mode;
     q.ai_allowed = true;
     q.max_candidates = 1;
@@ -1577,6 +1577,60 @@ TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment
   const auto cleanup = query(1104, "にほん", "ai-cleanup", true);
   ASSERT_EQ(cleanup.size(), 1u);
   EXPECT_TRUE(english_of(cleanup.front()).empty());
+
+  // Without the romaji there is nothing to build English from.
+  const auto no_romaji = query(1105, "にほん", "neural", true, "");
+  ASSERT_EQ(no_romaji.size(), 1u);
+  EXPECT_TRUE(english_of(no_romaji.front()).empty());
+}
+
+namespace {
+class EmptyConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+}  // namespace
+
+// A segment with no kana candidate keeps its kana fallback first; English must
+// not take that slot (spec §4.1.1).
+TEST(DispatcherBatchEnglishTest, NoKanaCandidatesMeansNoEnglish) {
+  azookey::host::InferenceEngine engine(std::make_unique<EmptyConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  ipc::QueryBatchConversionRequest q;
+  q.reading = "にほん";
+  q.raw_romaji = "nihon";
+  q.mode = "neural";
+  q.english_candidates = true;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 1107;
+  env.type = ipc::MessageType::QueryBatchConversion;
+  env.payload_json = ipc::BuildQueryBatchConversionRequest(q);
+  const auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  const auto parsed = ipc::ParseQueryBatchConversionResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->segments.size(), 1u);
+  const auto& candidates = parsed->segments.front().candidates;
+  ASSERT_EQ(candidates.size(), 1u);
+  EXPECT_EQ(candidates.front().source, "fallback");
+  for (const auto& c : candidates)
+    EXPECT_NE(c.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English)) << c.surface;
 }
 
 TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {

@@ -1,16 +1,23 @@
 #include <gtest/gtest.h>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/CliHostConnect.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/NewWordsCli.h"
@@ -259,3 +266,52 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   engine.SetAutoWordStore(nullptr);
   std::filesystem::remove_all(dir);
 }
+
+#ifdef _WIN32
+// DEV-1521: the Host listens on one pipe instance at a time, so CLIs started
+// together find it busy. A busy pipe is waited for within its own budget; only
+// a missing pipe keeps failing at the short connect timeout.
+TEST(CliHostConnectTest, WaitsForABusyHostPipeUntilAnInstanceFrees) {
+  const std::string pipe_name = UniquePipeName("azookey-cli-busy-pipe");
+  const std::wstring wide_name(pipe_name.begin(), pipe_name.end());
+  const HANDLE server = CreateNamedPipeW(wide_name.c_str(), PIPE_ACCESS_DUPLEX,
+                                         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1,
+                                         4096, 4096, 0, nullptr);
+  ASSERT_NE(server, INVALID_HANDLE_VALUE);
+  HANDLE occupier = CreateFileW(wide_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(occupier, INVALID_HANDLE_VALUE);
+
+  // With no budget beyond the connect timeout, a busy pipe fails as before.
+  azookey::ipc::NamedPipeClient rejected;
+  EXPECT_FALSE(azookey::host::ConnectToRunningHost(rejected, pipe_name, 100, 100));
+
+  std::atomic<bool> accepted{false};
+  std::thread release([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CloseHandle(occupier);
+    DisconnectNamedPipe(server);
+    const BOOL connected = ConnectNamedPipe(server, nullptr);
+    accepted = connected || GetLastError() == ERROR_PIPE_CONNECTED;
+  });
+  azookey::ipc::NamedPipeClient client;
+  const auto start = std::chrono::steady_clock::now();
+  const bool connected = azookey::host::ConnectToRunningHost(client, pipe_name, 100, 2000);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  release.join();
+  EXPECT_TRUE(connected);
+  EXPECT_TRUE(accepted.load());
+  EXPECT_GE(elapsed, std::chrono::milliseconds(200));
+  client.Disconnect();
+  CloseHandle(server);
+}
+
+TEST(CliHostConnectTest, MissingHostPipeStillFailsAtTheConnectTimeout) {
+  azookey::ipc::NamedPipeClient client;
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_FALSE(azookey::host::ConnectToRunningHost(
+      client, UniquePipeName("azookey-cli-missing-pipe"), 100, 2000));
+  // Well under the 2 s busy budget: no Host means no extra wait.
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(1000));
+}
+#endif

@@ -481,7 +481,8 @@ parser の受理条件:
      - `confirm` / `reject` は既定で稼働中の host へ Named Pipe で接続し、
        Handshake の後に `ResolveNewWord` を送る。host はストアをメモリ上に持ち、
        次の保存でファイル全体を書き直す。稼働中の host の裏でファイルを編集すると
-       変更が失われるため、接続できない場合は失敗とする。`--offline` を付けた
+       変更が失われるため、接続できない場合は失敗とする（接続の待ち時間は
+       `docs/windows-tsf-host-architecture.md` の CLI の項に従う）。`--offline` を付けた
        ときだけファイルを直接編集する。直接編集は host と同じ `Load` / `Save`
        を使うので、読めなかった破損行は書き直しで失われる（§3-2 のスキップ規則）。
      - JSON 出力は 1 行 1 オブジェクトとする。`list` は語ごとに `op` / `ok` /

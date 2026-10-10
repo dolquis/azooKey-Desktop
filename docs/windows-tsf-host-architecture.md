@@ -213,6 +213,10 @@ Linear が持つ。
   `confirm` / `reject` は `userdict add` と同じく既定で起動中 Host へ IPC 送信し、
   直接編集は `--offline` を付けたときだけ行う。構文と出力は
   `docs/auto-word-registration-spec.md` §7-3 に従う。
+- `userdict` / `newwords` の IPC 送信は、Host の pipe が無ければ約 100 ms で接続失敗とする。
+  pipe はあるが空いた待ち受けが無い（Host が 1 本ずつ受け付けている途中の）ときは、
+  呼び出しから合計 2 秒まで接続を待つ。複数の CLI を同時に起動しても、Host が
+  稼働していれば順に接続できる。
 - M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
   CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
   低レベル操作面として削除しない。

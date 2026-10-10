@@ -89,7 +89,13 @@ HMODULE GetTipModuleHandle() {
 
 #ifdef AZOOKEY_TSF_TESTING
 UINT g_monitor_dpi_for_test = 0;
+CandidateWindow::RenderFailureForTest g_render_failure_for_test =
+    CandidateWindow::RenderFailureForTest::None;
 #endif
+
+// A device stack that failed to initialize this many times in a row is not
+// retried until the next Create (native-ui-spec §4.1).
+constexpr int kMaxRenderInitFailures = 3;
 
 // The GPU was reset or removed; the whole device stack has to be rebuilt.
 bool IsDeviceLost(HRESULT hr) {
@@ -294,6 +300,11 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 // static
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 
+// static
+void CandidateWindow::SetRenderFailureForTest(RenderFailureForTest failure) {
+  g_render_failure_for_test = failure;
+}
+
 bool CandidateWindow::RenderForTest() {
   RECT client_rc{};
   return hwnd_ && GetClientRect(hwnd_, &client_rc) && Render(client_rc.right, client_rc.bottom);
@@ -375,6 +386,8 @@ bool CandidateWindow::Create() {
     UpdateDpi(GetDpiForWindow(hwnd_));
     UpdateTheme();
   }
+  render_init_failures_ = 0;
+  render_failed_ = false;
   return hwnd_ != nullptr;
 }
 
@@ -443,15 +456,23 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   const int placed_width = placement.right - placement.left;
   const int placed_height = placement.bottom - placement.top;
   showing_ = true;
-  // A failed frame keeps the window and its click regions; failure_stage_ says why.
-  Render(placed_width, placed_height);
-  SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
-               SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  // Without a committed frame the window would be invisible yet still take
+  // clicks, so it stays hidden until a later Show or state change draws one.
+  if (Render(placed_width, placed_height)) {
+    render_failed_ = false;
+    SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
+                 SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  } else {
+    render_failed_ = true;
+    HideDetails();
+    ShowWindow(hwnd_, SW_HIDE);
+  }
   showing_ = false;
 }
 
 void CandidateWindow::Hide() {
   HideDetails();
+  render_failed_ = false;
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
   HideHealthBanner();
   HideSecureToast();
@@ -557,7 +578,7 @@ void CandidateWindow::ShowDetails() {
       GetTipModuleHandle(), this);
   if (!details_hwnd_) return;
   RenderDetails();
-  ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
+  if (details_hwnd_) ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
 }
 
 void CandidateWindow::HideDetails() {
@@ -571,10 +592,13 @@ void CandidateWindow::RenderDetails() {
   // The failure record belongs to the candidate window; the popup does not overwrite it.
   const char* const stage = failure_stage_;
   const HRESULT hr = failure_hr_;
-  RenderTo(details_render_, details_hwnd_, client_rc.right, client_rc.bottom,
-           &CandidateWindow::DrawDetails);
+  int init_failures = 0;  // The popup retries each time it opens.
+  const bool drawn = RenderTo(details_render_, init_failures, details_hwnd_, client_rc.right,
+                              client_rc.bottom, &CandidateWindow::DrawDetails);
   failure_stage_ = stage;
   failure_hr_ = hr;
+  // An undrawn popup would be invisible yet close on a click; drop it instead.
+  if (!drawn) HideDetails();
 }
 
 void CandidateWindow::DrawDetails(ID2D1DeviceContext* context, int width, int height) const {
@@ -702,9 +726,19 @@ void CandidateWindow::SetSelected(int idx) {
 }
 
 void CandidateWindow::Repaint() {
+  // A window hidden by a failed frame retries through Show, which shows it again.
+  if (render_failed_) {
+    ResizeAtLastAnchor();
+    return;
+  }
   RECT client_rc{};
   if (!IsVisible() || !GetClientRect(hwnd_, &client_rc)) return;
-  Render(client_rc.right, client_rc.bottom);
+  if (Render(client_rc.right, client_rc.bottom)) return;
+  // The surface keeps the previous frame, which no longer matches the click
+  // regions; hide the window instead of taking clicks against it.
+  render_failed_ = true;
+  HideDetails();
+  ShowWindow(hwnd_, SW_HIDE);
 }
 
 bool CandidateWindow::Fail(const char* stage, HRESULT hr) {
@@ -714,22 +748,41 @@ bool CandidateWindow::Fail(const char* stage, HRESULT hr) {
 }
 
 bool CandidateWindow::Render(int width, int height) {
-  return RenderTo(render_, hwnd_, width, height, &CandidateWindow::DrawContent);
+  return RenderTo(render_, render_init_failures_, hwnd_, width, height,
+                  &CandidateWindow::DrawContent);
 }
 
-bool CandidateWindow::RenderTo(std::unique_ptr<RenderState>& state, HWND hwnd, int width,
-                               int height, DrawFn draw) noexcept {
+bool CandidateWindow::RenderTo(std::unique_ptr<RenderState>& state, int& init_failures, HWND hwnd,
+                               int width, int height, DrawFn draw) noexcept {
   try {
     if (!hwnd || width <= 0 || height <= 0) return Fail("size", E_FAIL);
     if (!text_style_) return Fail("text_style", E_FAIL);
+#ifdef AZOOKEY_TSF_TESTING
+    if (g_render_failure_for_test == RenderFailureForTest::Draw) return Fail("injected", E_FAIL);
+#endif
+    // Keep the stage of the last real failure; only the attempt is skipped.
+    if (!state && init_failures >= kMaxRenderInitFailures) return false;
     failure_stage_ = "";
     failure_hr_ = S_OK;
     // A lost device is rebuilt once; any other failure waits for the next frame.
     for (int attempt = 0; attempt < 2; ++attempt) {
       if (!state) {
         auto next = std::make_unique<RenderState>();
-        if (!next->engine.Initialize(hwnd, SurfaceAlpha::Opaque))
-          return Fail(next->engine.failure_stage(), next->engine.failure_hr());
+        bool initialized = false;
+#ifdef AZOOKEY_TSF_TESTING
+        if (g_render_failure_for_test == RenderFailureForTest::Initialize) {
+          Fail("injected", E_FAIL);
+        } else
+#endif
+        {
+          initialized = next->engine.Initialize(hwnd, SurfaceAlpha::Opaque);
+          if (!initialized) Fail(next->engine.failure_stage(), next->engine.failure_hr());
+        }
+        if (!initialized) {
+          ++init_failures;
+          return false;
+        }
+        init_failures = 0;
         state = std::move(next);
       }
       RenderingEngine& engine = state->engine;
@@ -922,6 +975,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     }
 
     case WM_LBUTTONDOWN: {
+      // No click is taken against a frame that was not drawn.
+      if (render_failed_) return 0;
       RECT client_rc{};
       GetClientRect(hwnd, &client_rc);
       const Hit hit =

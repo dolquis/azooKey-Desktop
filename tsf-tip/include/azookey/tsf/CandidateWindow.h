@@ -41,6 +41,11 @@ class CandidateWindow {
             std::wstring notice = {});
   void Hide();
   bool IsVisible() const;
+
+  // Stage and HRESULT of the most recent drawing failure (native-ui-spec §4.1);
+  // empty and S_OK after a committed frame. Never drawn content.
+  const char* failure_stage() const { return failure_stage_; }
+  HRESULT failure_hr() const { return failure_hr_; }
   void ShowHealthBanner(CandidateHealthState state);
   void HideHealthBanner();
   // Brings back a banner that a re-show of the window hid, for whatever is left
@@ -153,7 +158,10 @@ class CandidateWindow {
   // Draws the current content offscreen at the client size with grayscale text
   // and returns the pixels row by row as RGB values.
   bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
-  const char* failure_stage_for_test() const { return failure_stage_; }
+  enum class RenderFailureForTest { None, Initialize, Draw };
+  // Makes RenderingEngine initialization, or every frame, fail until reset.
+  static void SetRenderFailureForTest(RenderFailureForTest failure);
+  int render_init_failures_for_test() const { return render_init_failures_; }
   // Draws through the production path (RenderingEngine and the DComp surface)
   // at the client size; true when the frame was committed.
   bool RenderForTest();
@@ -203,6 +211,9 @@ class CandidateWindow {
   const char* failure_stage_{""};
   HRESULT failure_hr_{S_OK};
   bool showing_{false};  // Show is moving and sizing the window.
+  // The last frame failed, so the window is hidden while it should be shown.
+  bool render_failed_{false};
+  int render_init_failures_{0};
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;
@@ -242,8 +253,10 @@ class CandidateWindow {
   // Draws the window at this client size and commits it (native-ui-spec §4.1).
   bool Render(int width, int height);
   using DrawFn = void (CandidateWindow::*)(ID2D1DeviceContext*, int, int) const;
-  bool RenderTo(std::unique_ptr<RenderState>& state, HWND hwnd, int width, int height,
-                DrawFn draw) noexcept;
+  // init_failures counts failed Initialize calls in a row; at the limit the
+  // device stack is not created again.
+  bool RenderTo(std::unique_ptr<RenderState>& state, int& init_failures, HWND hwnd, int width,
+                int height, DrawFn draw) noexcept;
   static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
   void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
   void RenderDetails();

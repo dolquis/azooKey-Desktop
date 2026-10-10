@@ -28,6 +28,7 @@ class ScopedTestInputs {
  public:
   ScopedTestInputs() = default;
   ~ScopedTestInputs() {
+    CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
     CandidateWindow::SetMonitorDpiForTest(0);
     tsf::testing::ClearThemeInputsForTest();
   }
@@ -314,9 +315,9 @@ TEST(CandidateWindowRenderTest, FillsEachRegionWithTheThemeAt96And144And192Dpi) 
       window.Show(POINT{20, 20}, {{L"候補", L"説明"}, {L"二", L""}}, 1, L"案内");
       window.ShowSecureToast();
       window.ShowHealthBanner(CandidateHealthState::DegradedModel);
-      EXPECT_STREQ(window.failure_stage_for_test(), "");
+      EXPECT_STREQ(window.failure_stage(), "");
       // The production path (RenderingEngine and the DComp surface) commits a frame.
-      EXPECT_TRUE(window.RenderForTest()) << window.failure_stage_for_test();
+      EXPECT_TRUE(window.RenderForTest()) << window.failure_stage();
       EXPECT_NE(GetWindowLongPtrW(window.hwnd_for_test(), GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP,
                 0);
 
@@ -410,8 +411,88 @@ TEST(CandidateWindowRenderTest, DpiChangeRemeasuresAtTheAnchorAndIgnoresTheSugge
   ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
   EXPECT_EQ(bounds.bottom - bounds.top, 2 * 36);
   EXPECT_GT(bounds.right - bounds.left, 10);
-  EXPECT_STREQ(window.failure_stage_for_test(), "");
-  EXPECT_TRUE(window.RenderForTest()) << window.failure_stage_for_test();
+  EXPECT_STREQ(window.failure_stage(), "");
+  EXPECT_TRUE(window.RenderForTest()) << window.failure_stage();
+  window.Destroy();
+}
+
+TEST(CandidateWindowRenderTest, InitFailureKeepsTheWindowHiddenAndClicksDoNotSelect) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  CandidateWindow::SetRenderFailureForTest(Failure::Initialize);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  int clicks = 0;
+  window.SetOnClick([&](int) { ++clicks; });
+  window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}}, 0);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_STREQ(window.failure_stage(), "injected");
+  EXPECT_EQ(window.render_init_failures_for_test(), 1);
+
+  // A click on the first row does not select it.
+  SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(clicks, 0);
+  // Keys still move the selection; each change retries until the limit of three.
+  window.MoveSelection(1);
+  EXPECT_EQ(window.GetSelected(), 1);
+  window.MoveSelection(1);
+  EXPECT_EQ(window.render_init_failures_for_test(), 3);
+  EXPECT_FALSE(window.IsVisible());
+
+  // At the limit the device stack is not created again, even once it would work.
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.MoveSelection(1);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(window.render_init_failures_for_test(), 3);
+  EXPECT_EQ(clicks, 0);
+  window.Destroy();
+
+  // A new Create starts counting again.
+  ASSERT_TRUE(window.Create());
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_STREQ(window.failure_stage(), "");
+  window.Destroy();
+}
+
+TEST(CandidateWindowRenderTest, RenderFailureHidesTheWindowUntilAStateChangeDrawsAgain) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  int clicks = 0;
+  window.SetOnClick([&](int) { ++clicks; });
+
+  // One failed Initialize, then the next state change draws and shows the window.
+  CandidateWindow::SetRenderFailureForTest(Failure::Initialize);
+  window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}}, 0);
+  EXPECT_FALSE(window.IsVisible());
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.MoveSelection(1);
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_STREQ(window.failure_stage(), "");
+  EXPECT_EQ(window.render_init_failures_for_test(), 0);
+
+  // A failed frame while shown hides the window instead of keeping the old frame.
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  window.MoveSelection(1);
+  EXPECT_FALSE(window.IsVisible());
+  SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(clicks, 0);
+  EXPECT_EQ(window.GetSelected(), 0);
+
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.MoveSelection(1);
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_EQ(window.GetSelected(), 1);
+  // Hide clears the failed state; it is not shown again by a later change.
+  window.Hide();
+  window.MoveSelection(1);
+  EXPECT_FALSE(window.IsVisible());
   window.Destroy();
 }
 

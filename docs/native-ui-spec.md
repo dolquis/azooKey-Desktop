@@ -204,8 +204,16 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
   表示中にデバイスを失っても、次に描くとき（選択の移動、テーマの変更、`Show`）まで作り直さない。
 - `WM_DPICHANGED` の推奨矩形は使わず、表示中なら最後のアンカーで `Show` をやり直す。
   `Show` 自身の `SetWindowPos` が発生させた通知は無視する。
-- 描画に失敗しても窓とクリック領域は残し、失敗段階と HRESULT を保持する。
+- 描画に失敗したら窓を表示しない。表示中なら隠す。
+  中身の無い窓や前のフレームのままの窓が、クリックで候補を確定させないためである。
+  失敗した状態のあいだ、`WM_LBUTTONDOWN` は何もしない。
+  キー操作による候補の選択と確定は、窓の表示に依存せず従来どおり動く。
+- 失敗の後は、次の `Show` や状態の変化（選択の移動、テーマの変更など）で描き直しを試み、成功したら表示する。
+  `RenderingEngine` の初期化が 3 回続けて失敗したら、次の `Create` まで初期化を試みない。
+  `Hide` は失敗した状態を解く。
+- 失敗段階と HRESULT は `failure_stage()` / `failure_hr()` で読める。描画内容は含まない。
   デバイスを失った（§2.2）ときは組を作り直して 1 回だけ描き直す。
+- 詳細ポップアップは、描画に失敗したら閉じる。
 
 クリック領域は `CandidateWindow::HitTest` が決める。
 行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、
@@ -311,7 +319,7 @@ device->Commit();
 | テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
 | DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
 | 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
-| 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる |
+| 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる。初期化と描画の失敗を注入し、窓が表示されずクリックで候補が選ばれないこと、状態の変化で描き直して表示すること、初期化の再試行が 3 回で止まることを確かめる |
 
 実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。
 

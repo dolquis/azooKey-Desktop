@@ -304,57 +304,31 @@ void InferenceEngine::SetEnglishLearningStore(learning::LearningStore* store) {
   english_store_ = store;
 }
 
-std::shared_ptr<const EnglishDictionary> InferenceEngine::EnglishDictionaryFor(
+std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
     const std::string& utf8_path) {
   const auto path = ExpandLocalAppDataPrefix(utf8_path);
   if (!path) return nullptr;
-  std::error_code ec;
-  const auto mtime = std::filesystem::last_write_time(*path, ec);
-  const auto size = ec ? uintmax_t{0} : std::filesystem::file_size(*path, ec);
-  if (ec) {
-    std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
-    english_dictionary_.reset();
-    english_dictionary_path_.clear();
-    return nullptr;
-  }
-  {
-    std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
-    // Size too: a copy that keeps the timestamp (robocopy, restore) still reloads.
-    if (english_dictionary_ && english_dictionary_path_ == *path &&
-        english_dictionary_mtime_ == mtime && english_dictionary_size_ == size) {
-      return english_dictionary_;
-    }
-  }
-  // A missing, unreadable or unparseable dictionary leaves only the baseline
-  // forms (section 4.2: s_dict stays 0). Parsed outside the lock; an
-  // allocation failure on a huge file must not take the query down.
-  std::shared_ptr<const EnglishDictionary> dictionary;
-  EnglishDictionaryLoadStats stats;
-  bool failed = false;
-  try {
-    if (auto loaded = EnglishDictionary::LoadTsv(*path, &stats))
-      dictionary = std::make_shared<const EnglishDictionary>(std::move(*loaded));
-  } catch (const std::exception&) {
-    failed = true;
-  }
-  if (runtime_logger_) {
-    // Counts only: never the dictionary's words or its path (section 4.4).
-    const bool ok = dictionary && !failed;
-    runtime_logger_->Log(ok && stats.skipped_lines == 0 && !stats.truncated
-                             ? logging::RuntimeLogLevel::Info
-                             : logging::RuntimeLogLevel::Warn,
-                         "english_dictionary_load",
-                         {{"result", logging::RuntimeLogSafeText(ok ? "ok" : "error")},
-                          {"entries", static_cast<uint64_t>(dictionary ? dictionary->size() : 0)},
-                          {"skipped_lines", static_cast<uint64_t>(stats.skipped_lines)},
-                          {"truncated", stats.truncated}});
-  }
   std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
-  english_dictionary_ = dictionary;
+  if (english_dictionary_ && english_dictionary_path_ == *path) return english_dictionary_;
+  // A missing, unreadable or unparseable dictionary leaves only the baseline
+  // forms (section 4.2: s_dict stays 0). The store reloads on its own when the
+  // TSV, the .bin or the overlay changes.
+  english_dictionary_ = std::make_shared<EnglishDictionaryStore>(
+      *path, [this](const EnglishDictionaryLoadReport& report) {
+        if (!runtime_logger_) return;
+        // Counts only: never the dictionary's words or its path (section 4.4).
+        runtime_logger_->Log(report.ok && report.stats.skipped_lines == 0 && !report.stats.truncated
+                                 ? logging::RuntimeLogLevel::Info
+                                 : logging::RuntimeLogLevel::Warn,
+                             "english_dictionary_load",
+                             {{"result", logging::RuntimeLogSafeText(report.ok ? "ok" : "error")},
+                              {"source", logging::RuntimeLogSafeText(report.source)},
+                              {"entries", static_cast<uint64_t>(report.entries)},
+                              {"skipped_lines", static_cast<uint64_t>(report.stats.skipped_lines)},
+                              {"truncated", report.stats.truncated}});
+      });
   english_dictionary_path_ = *path;
-  english_dictionary_mtime_ = mtime;
-  english_dictionary_size_ = size;
-  return dictionary;
+  return english_dictionary_;
 }
 
 bool InferenceEngine::SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget) {
@@ -395,7 +369,11 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
       }
     }
   }
-  return BuildEnglishCandidates(raw_romaji, english, dictionary.get(), learned);
+  if (!dictionary) return BuildEnglishCandidates(raw_romaji, english, nullptr, learned);
+  // Section 4.7: the store retries a read that crossed a compaction.
+  return dictionary->Read([&](const EnglishDictionary* snapshot) {
+    return BuildEnglishCandidates(raw_romaji, english, snapshot, learned);
+  });
 }
 
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,

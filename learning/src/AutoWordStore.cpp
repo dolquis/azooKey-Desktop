@@ -181,6 +181,7 @@ AutoWord* AutoWordStore::FindLocked(const std::string& surface, const std::strin
 bool AutoWordStore::Observe(const std::string& surface, const std::string& reading,
                             uint64_t now_epoch, uint32_t promote_threshold, bool auto_promote) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   if (auto* existing = FindLocked(surface, reading)) {
     // A rejected word stays rejected: not even its count moves, so it cannot
     // creep back above the promotion threshold.
@@ -213,6 +214,7 @@ bool AutoWordStore::Observe(const std::string& surface, const std::string& readi
 void AutoWordStore::IngestTrending(const std::vector<AutoWord>& batch, uint64_t now_epoch,
                                    bool auto_promote) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   for (const auto& incoming : batch) {
     // A trending entry without a reading cannot be looked up later.
     if (incoming.surface.empty() || incoming.reading.empty()) continue;
@@ -239,7 +241,7 @@ void AutoWordStore::IngestTrending(const std::vector<AutoWord>& batch, uint64_t 
 }
 
 std::vector<AutoWord> AutoWordStore::ListByState(AutoWordState state) const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> result;
   for (const auto& [reading, surfaces] : table_) {
     for (const auto& [surface, word] : surfaces) {
@@ -260,11 +262,13 @@ bool AutoWordStore::SetStateLocked(const std::string& surface, const std::string
 
 bool AutoWordStore::Confirm(const std::string& surface, const std::string& reading) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   return SetStateLocked(surface, reading, AutoWordState::Confirmed);
 }
 
 bool AutoWordStore::Reject(const std::string& surface, const std::string& reading) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   // Rejected entries are kept, not erased: the record is what stops the word
   // from being mined again.
   return SetStateLocked(surface, reading, AutoWordState::Rejected);
@@ -274,6 +278,7 @@ std::optional<AutoWordState> AutoWordStore::SetState(const std::string& surface,
                                                      const std::string& reading,
                                                      AutoWordState state) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   auto* word = FindLocked(surface, reading);
   if (!word) return std::nullopt;
   const AutoWordState previous = word->state;
@@ -284,6 +289,7 @@ std::optional<AutoWordState> AutoWordStore::SetState(const std::string& surface,
 bool AutoWordStore::CompareAndSetState(const std::string& surface, const std::string& reading,
                                        AutoWordState expected, AutoWordState desired) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   auto* word = FindLocked(surface, reading);
   if (!word || word->state != expected) return false;
   word->state = desired;
@@ -291,7 +297,7 @@ bool AutoWordStore::CompareAndSetState(const std::string& surface, const std::st
 }
 
 std::vector<AutoWord> AutoWordStore::LookupConfirmed(const std::string& reading) const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> result;
   const auto by_reading = table_.find(reading);
   if (by_reading == table_.end()) return result;
@@ -303,6 +309,7 @@ std::vector<AutoWord> AutoWordStore::LookupConfirmed(const std::string& reading)
 
 size_t AutoWordStore::PrunePending(uint64_t now_epoch, uint64_t max_age_sec) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   size_t removed = 0;
   for (auto reading = table_.begin(); reading != table_.end();) {
     auto& surfaces = reading->second;
@@ -326,7 +333,7 @@ size_t AutoWordStore::PrunePending(uint64_t now_epoch, uint64_t max_age_sec) {
 }
 
 size_t AutoWordStore::Size() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(table_mutex_);
   size_t count = 0;
   for (const auto& [reading, surfaces] : table_) count += surfaces.size();
   return count;
@@ -334,45 +341,48 @@ size_t AutoWordStore::Size() const {
 
 void AutoWordStore::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> table_lock(table_mutex_);
   table_.clear();
 }
 
 bool AutoWordStore::Load() {
   std::lock_guard<std::mutex> lock(mutex_);
-  table_.clear();
-  save_blocked_by_load_failure_ = false;
+  Table loaded;
   std::string text;
   const auto source = ReadProtectedText(path_, *crypto_, text);
-  if (source == ProtectedFileSource::Missing) {
-    // No file yet is an empty store, matching UserDictionary::Load.
-    return true;
-  }
-  if (source == ProtectedFileSource::Error) {
-    save_blocked_by_load_failure_ = true;
-    return false;
-  }
-  ParseTextLocked(text);
-  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
-    save_blocked_by_load_failure_ = true;
-    SecureErase(text);
-    return false;
+  bool blocked = source == ProtectedFileSource::Error;
+  if (source != ProtectedFileSource::Missing && source != ProtectedFileSource::Error) {
+    ParseText(text, loaded);
+    if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+      blocked = true;
+    }
   }
   SecureErase(text);
-  return true;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    table_.swap(loaded);
+    save_blocked_by_load_failure_ = blocked;
+  }
+  return !blocked;
 }
 
 bool AutoWordStore::LoadText(std::string_view text) {
   std::lock_guard<std::mutex> lock(mutex_);
-  table_.clear();
-  return ParseTextLocked(text);
+  Table loaded;
+  const bool valid = ParseText(text, loaded);
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    table_.swap(loaded);
+  }
+  return valid;
 }
 
 bool AutoWordStore::save_blocked() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(table_mutex_);
   return save_blocked_by_load_failure_;
 }
 
-bool AutoWordStore::ParseTextLocked(std::string_view text) {
+bool AutoWordStore::ParseText(std::string_view text, Table& table) const {
   bool all_valid = true;
   std::istringstream ifs{std::string(text)};
 
@@ -408,19 +418,24 @@ bool AutoWordStore::ParseTextLocked(std::string_view text) {
       LogMalformedLine(path_, line_number);
       continue;
     }
-    table_[word.reading].emplace(word.surface, std::move(word));
+    table[word.reading].emplace(word.surface, std::move(word));
   }
   return all_valid;
 }
 
 bool AutoWordStore::Save() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return SaveLocked();
+  Table snapshot;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    snapshot = table_;
+  }
+  return SaveSnapshot(snapshot);
 }
 
-bool AutoWordStore::SaveLocked() const {
+bool AutoWordStore::SaveSnapshot(const Table& table) const {
   if (save_blocked_by_load_failure_) return false;
-  auto text = SerializeTextLocked();
+  auto text = SerializeTable(table);
   const bool saved = WriteProtectedText(path_, text, *crypto_);
   SecureErase(text);
   return saved;
@@ -430,39 +445,51 @@ AutoWordSaveOutcome AutoWordStore::SetStateAndSave(const std::string& surface,
                                                    const std::string& reading,
                                                    AutoWordState state) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto* word = FindLocked(surface, reading);
-  if (!word) return AutoWordSaveOutcome::NotFound;
-  if (word->state == state) return AutoWordSaveOutcome::Unchanged;
-  const auto previous = word->state;
-  word->state = state;
-  if (SaveLocked()) return AutoWordSaveOutcome::Changed;
-  word->state = previous;
-  return AutoWordSaveOutcome::SaveFailed;
+  Table replacement;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    const auto* word = FindLocked(surface, reading);
+    if (!word) return AutoWordSaveOutcome::NotFound;
+    if (word->state == state) return AutoWordSaveOutcome::Unchanged;
+    replacement = table_;
+  }
+  replacement.at(reading).at(surface).state = state;
+  if (!SaveSnapshot(replacement)) return AutoWordSaveOutcome::SaveFailed;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    table_.swap(replacement);
+  }
+  return AutoWordSaveOutcome::Changed;
 }
 
 bool AutoWordStore::ResetAndSave() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (save_blocked_by_load_failure_) return false;
-  auto before = std::move(table_);
-  table_.clear();
-  if (SaveLocked()) return true;
-  table_ = std::move(before);
-  return false;
+  Table empty;
+  if (!SaveSnapshot(empty)) return false;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    table_.swap(empty);
+  }
+  return true;
 }
 
 std::string AutoWordStore::SerializeText() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return SerializeTextLocked();
+  Table snapshot;
+  {
+    std::lock_guard<std::mutex> table_lock(table_mutex_);
+    snapshot = table_;
+  }
+  return SerializeTable(snapshot);
 }
 
-std::string AutoWordStore::SerializeTextLocked() const {
+std::string AutoWordStore::SerializeTable(const Table& table) {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kAutoWordStoreTsvHeader << '\n';
   // Written as a comment so the column order is documented in the file without
   // the reader having to tell a header row apart from a record.
   out << kColumnHeader << '\n';
-  for (const auto& [reading, surfaces] : table_) {
+  for (const auto& [reading, surfaces] : table) {
     for (const auto& [surface, word] : surfaces) {
       out << EscapeTsvField(word.surface) << '\t' << EscapeTsvField(word.reading) << '\t'
           << AutoWordSourceName(word.source) << '\t' << AutoWordStateName(word.state) << '\t'
@@ -474,7 +501,7 @@ std::string AutoWordStore::SerializeTextLocked() const {
 }
 
 std::vector<AutoWord> AutoWordStore::All() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(table_mutex_);
   std::vector<AutoWord> words;
   for (const auto& [reading, surfaces] : table_) {
     for (const auto& [surface, word] : surfaces) words.push_back(word);
@@ -485,6 +512,7 @@ std::vector<AutoWord> AutoWordStore::All() const {
 ImportCounts AutoWordStore::Merge(const AutoWordStore& other, ImportConflictPolicy policy) {
   if (&other == this) return {};
   std::scoped_lock lock(mutex_, other.mutex_);
+  std::scoped_lock table_lock(table_mutex_, other.table_mutex_);
   ImportCounts counts;
   for (const auto& [reading, surfaces] : other.table_) {
     for (const auto& [surface, word] : surfaces) {

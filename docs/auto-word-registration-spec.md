@@ -91,7 +91,7 @@ class AutoWordStore {
   bool Load();
   bool Save() const;
   void Reset();
-  // 変更・保存・失敗時の巻き戻しを 1 回の mutex 保持で行う。
+  // writer を直列化し、保存成功後に変更を公開する。
   bool ResetAndSave();
   AutoWordSaveOutcome SetStateAndSave(const std::string& surface, const std::string& reading,
                                      AutoWordState state);
@@ -132,10 +132,11 @@ class AutoWordStore {
 - 責務は「保存・状態遷移・ルックアップ」に限定。OOV 判定・しきい値・DL は持たない
   （`InferenceEngine` と `TrendingWordFetcher` が担う）。
 - 却下語は削除せず `state=rejected` で永続化し、再観測しても pending に戻さない。
-- `TrendingWordFetcher` のワーカースレッドから変更されるため、**内部に mutex を
-  持ちスレッド安全**にする。
+- `TrendingWordFetcher` のワーカースレッドから変更されるため、内部で writer を直列化する。
+  表の読み取りには別の mutex を使い、暗号化・保存中も直前に公開された表を参照できる。
 - `ResolveNewWord` と学習データ管理の忘却は `SetStateAndSave`、全削除は `ResetAndSave` を使う。
-  退避から保存失敗時の巻き戻しまで mutex を保持し、同時操作の変更を巻き戻さない。
+  writer の mutex を保持して複写を変更・保存し、成功したときだけ短い表のロック区間で公開する。
+  保存失敗時は公開済みの表を変更せず、同時操作の更新を上書きしない。
   `AutoWordSaveOutcome` は変更・保存成功を `Changed`、同じ状態を `Unchanged`、
   キー無しを `NotFound`、保存失敗を `SaveFailed` として返す。同じ状態は保存し直さない。
 
@@ -265,9 +266,10 @@ timeout まで待ち、操作間と受信ループで停止を確認する。
 省略する。この比較値は Host 内で保持し、再起動後の初回取得では再検証・取り込みを行う。
 
 Host は `TrendingFetchDependencies::ingest_and_save` を
-`InferenceEngine::IngestTrendingWords` へ接続する。同メソッドは `state_mutex_` を保持して
-取り込みから保存まで行い、学習ストアの全削除・忘却が失敗した際の巻き戻しと直列化する。
-Fetcher の設定 mutex → engine の state mutex → store の mutex の順で取得する。
+`InferenceEngine::IngestTrendingWords` へ接続する。同メソッドは writer 専用の
+`learning_history_mutex_` を保持して取り込みから保存まで行い、忘却・全削除と直列化する。
+保存中は `state_mutex_` を保持しない。
+Fetcher の設定 mutex → engine の writer mutex → store の writer mutex の順で取得する。
 `Dispatcher::HandleUpdateConfig` は `ApplyConfig` が戻り state mutex が解放された後に
 Fetcher の設定 callback を呼ぶ。`Stop` / join も engine のロック外で行う。
 
@@ -373,10 +375,8 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
 
 - **pending 語は注入しない**（`LookupConfirmed` が Confirmed 限定）。承認後に
   初めて変換へ反映される。
-- `LookupConfirmed` は `state_mutex_` の外で呼ぶ。`AutoWordStore` は自前の
-  mutex を持ち、`CommitObservation` の `Save()` はディスクへの flush の間
-  その mutex を保持する。`state_mutex_` の下で待つと、Health やモデル切替が
-  確定時の書き込みの後ろで止まる。
+- `LookupConfirmed` は `state_mutex_` の外で呼ぶ。表を複写する短い区間だけロックし、
+  writer が `Save()` の暗号化・flush を行う間も、公開済みの確定語を読み取れる。
 - `EngineConfig::auto_word_default_score`（既定 1.2）は、スコアを持たない語
   （マイニング由来の語はすべて `score == 0`）に使う。user_dict の既定値
   `user_word_default_score`（1.5）より低いので、同じ surface のユーザー辞書語が
@@ -459,8 +459,8 @@ parser の受理条件:
 - `HandleResolveNewWord`: action に応じた目標状態を `AutoWordStore::SetStateAndSave`
   へ渡す。`Changed` は `ok=true, changed=true`、`Unchanged` は保存せず
   `ok=true, changed=false` を返す。`NotFound` は `not_found`、`SaveFailed` は
-  `save_failed` を返す。失敗時の巻き戻しはストアの mutex を保持したまま行い、
-  別の接続の承認・却下を待たせる。
+  `save_failed` を返す。保存中は writer の mutex で別の接続の承認・却下を待たせ、
+  成功時だけ表を公開する。失敗時の表は操作前のままである。
 
 ### 7-3. UI と MVP 暫定
 

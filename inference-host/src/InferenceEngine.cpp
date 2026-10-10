@@ -292,22 +292,26 @@ InferenceEngine::~InferenceEngine() {
 }
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
   RefreshDictionaryLocked();
 }
 
 void InferenceEngine::SetTypoStore(learning::TypoCorrectionStore* store) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   typo_store_ = store;
 }
 
 void InferenceEngine::SetAutoWordStore(learning::AutoWordStore* store) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   auto_word_store_ = store;
 }
 
 void InferenceEngine::SetEnglishLearningStore(learning::LearningStore* store) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(english_mutex_);
   english_store_ = store;
 }
@@ -340,6 +344,7 @@ std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
 }
 
 bool InferenceEngine::SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget) {
+  if (learning_erasure_in_progress_) return false;
   if (!english_store_ || !english_store_->dirty()) return true;
   if (english_store_->Save(retry_budget)) return true;
   if (runtime_logger_)
@@ -387,6 +392,7 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {
+  std::lock_guard history_lock(learning_history_mutex_);
   {
     // Without an English store the id must not be consumed: a later resend
     // after the store is attached still has to be recorded.
@@ -418,6 +424,7 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
 
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
                                   const std::string& correct_reading, uint64_t now_epoch_sec) {
+  std::lock_guard history_lock(learning_history_mutex_);
   learning::TypoCorrectionStore* store = nullptr;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -514,6 +521,7 @@ void InferenceEngine::ApplyDictionaryConfigLocked() {
 }
 
 bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (!user_dict_) {
     return false;
@@ -543,6 +551,7 @@ bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
 }
 
 bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string& ruby) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (!user_dict_) {
     return false;
@@ -1055,10 +1064,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     }
   }
   if (auto_word_store && config.dictionary.auto_words_enabled) {
-    // M36-A (spec section 6). Outside state_mutex_: the store has its own
-    // mutex, and CommitObservation holds it across Save()'s disk flush, which
-    // must not stall Health or model swaps behind this query. Pending and
-    // rejected words never come back from LookupConfirmed.
+    // M36-A (spec section 6). Read the store's published table outside the
+    // engine state lock; a writer's crypto/disk flush never holds its table
+    // mutex. Pending and rejected words are not returned.
     for (auto& w : auto_word_store->LookupConfirmed(kana)) {
       core::Candidate c;
       c.surface = std::move(w.surface);
@@ -1484,13 +1492,16 @@ AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& requ
 
 bool InferenceEngine::CommitSegmentsObservation(
     const ipc::CommitSegmentsObservationRequest& request, uint64_t now_epoch_sec) {
+  std::lock_guard history_lock(learning_history_mutex_);
   std::shared_ptr<core::IConverter> converter;
   const auto english = [](const ipc::ObservedSegment& segment) {
     return IsEnglishObservation(segment.reading, segment.chosen.tag);
   };
   double alpha = 0.0;
   {
-    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
+    std::unique_lock state_lock(state_mutex_, std::defer_lock);
+    std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
+    std::lock(state_lock, converter_lock);
     if (!NoteObservationIdLocked(request.observation_id)) return false;
     alpha = config_.learning_alpha;
     if (store_) {
@@ -1509,20 +1520,29 @@ bool InferenceEngine::CommitSegmentsObservation(
                                               segment.chosen.surface.size());
         }
       }
-      NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
-    core::ConversionContext context;
-    context.preceding_text = request.left_context;
-    for (const auto& segment : request.segments) {
-      if (!segment.is_auto_punctuation && !english(segment)) {
-        converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
-                                          core::CandidateSource::UserDictionary, "commit"},
-                          context);
+    const auto finish_observation = [&] {
+      converter_lock.unlock();
+      if (store_) NoteLearningMutationLocked(now_epoch_sec);
+    };
+    try {
+      core::ConversionContext context;
+      context.preceding_text = request.left_context;
+      for (const auto& segment : request.segments) {
+        if (!segment.is_auto_punctuation && !english(segment)) {
+          converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
+                                            core::CandidateSource::UserDictionary, "commit"},
+                            context);
+        }
+        context.preceding_text =
+            core::TakeLastUtf8Codepoints(context.preceding_text + segment.chosen.surface, 128);
       }
-      context.preceding_text =
-          core::TakeLastUtf8Codepoints(context.preceding_text + segment.chosen.surface, 128);
+    } catch (...) {
+      finish_observation();
+      throw;
     }
+    finish_observation();
   }
   // M60 section 6.4: English segments go to the English channel only.
   if (std::any_of(request.segments.begin(), request.segments.end(), english)) {
@@ -1581,13 +1601,16 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
                                         uint64_t now_epoch_sec, const std::string& observation_id,
                                         const std::string& app_name,
                                         const std::string& left_context) {
+  std::lock_guard history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   learning::AutoWordStore* auto_word_store = nullptr;
   uint32_t auto_word_min_count = 0;
   bool auto_word_auto_register = false;
   {
-    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
+    std::unique_lock state_lock(state_mutex_, std::defer_lock);
+    std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
+    std::lock(state_lock, converter_lock);
     // A resend after a pipe drop must not re-apply an observation the Host
     // already recorded, so the dedupe check gates both the learning store and
     // the converter's own commit history.
@@ -1597,7 +1620,6 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
           {reading, surface, app_name, learning::LearningEventType::Commit, context_hash},
           config_.learning_alpha, now_epoch_sec);
       core::EtwLogger::LogLearningObserve(reading.size(), surface.size());
-      NoteLearningMutationLocked(now_epoch_sec);
     }
     // M36-A: decide here, while the dictionary index is held, whether this
     // commit looks like an unknown word.
@@ -1613,10 +1635,20 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     // The membership question has to be answered before Commit: Commit feeds
     // Learn(), which inserts the pair into the converter's own bucket, so
     // asking afterwards would report every committed word as already known.
-    if (auto_word_store && converter->Contains(reading, surface)) auto_word_store = nullptr;
-    converter->Commit(
-        core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
-        core::ConversionContext{});
+    const auto finish_observation = [&] {
+      converter_lock.unlock();
+      if (store_) NoteLearningMutationLocked(now_epoch_sec);
+    };
+    try {
+      if (auto_word_store && converter->Contains(reading, surface)) auto_word_store = nullptr;
+      converter->Commit(
+          core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
+          core::ConversionContext{});
+    } catch (...) {
+      finish_observation();
+      throw;
+    }
+    finish_observation();
   }
   if (auto_word_store) {
     // Deliberately outside both engine mutexes: Save() writes a temp file,
@@ -1652,10 +1684,13 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
                                        uint64_t now_epoch_sec, const std::string& observation_id,
                                        const std::string& app_name,
                                        const std::string& left_context) {
+  std::lock_guard history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   {
-    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
+    std::unique_lock state_lock(state_mutex_, std::defer_lock);
+    std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
+    std::lock(state_lock, converter_lock);
     if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
       if (selected_surface) {
@@ -1668,22 +1703,33 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
                            config_.learning_alpha, now_epoch_sec);
       core::EtwLogger::LogLearningObserve(
           reading.size(), selected_surface ? selected_surface->size() : rejected_surface.size());
-      NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
-    // An undo accepts nothing, so there is no surface to teach the converter.
-    if (!selected_surface) return true;
-
-    core::ConversionContext context;
-    context.rejected_surfaces.push_back(rejected_surface);
-    converter->Commit(core::Candidate{*selected_surface, reading, 1.0,
-                                      core::CandidateSource::UserDictionary, "correction-commit"},
-                      context);
+    const auto finish_observation = [&] {
+      converter_lock.unlock();
+      if (store_) NoteLearningMutationLocked(now_epoch_sec);
+    };
+    try {
+      // An undo accepts nothing, but still persists its rejection above.
+      if (selected_surface) {
+        core::ConversionContext context;
+        context.rejected_surfaces.push_back(rejected_surface);
+        converter->Commit(
+            core::Candidate{*selected_surface, reading, 1.0, core::CandidateSource::UserDictionary,
+                            "correction-commit"},
+            context);
+      }
+    } catch (...) {
+      finish_observation();
+      throw;
+    }
+    finish_observation();
   }
   return true;
 }
 
 bool InferenceEngine::FlushLearningStore() {
+  std::lock_guard history_lock(learning_history_mutex_);
   bool ok = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1736,6 +1782,7 @@ bool InferenceEngine::ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) con
 }
 
 bool InferenceEngine::FlushLearningStoreLocked(std::chrono::milliseconds retry_budget) {
+  if (learning_erasure_in_progress_) return false;
   if (!store_) {
     return true;
   }
@@ -1798,11 +1845,13 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
 
-    if (!store_ || !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
+    if (learning_erasure_in_progress_ || !store_ || !store_->dirty() ||
+        config_.learning_flush_interval_sec == 0 ||
         !first_unsaved_observation_steady_.has_value()) {
       learning_flush_cv_.wait_until(lock, persona_due, [this]() {
         return learning_flush_stop_ ||
-               (store_ && store_->dirty() && config_.learning_flush_interval_sec > 0 &&
+               (!learning_erasure_in_progress_ && store_ && store_->dirty() &&
+                config_.learning_flush_interval_sec > 0 &&
                 first_unsaved_observation_steady_.has_value());
       });
       continue;
@@ -1812,8 +1861,8 @@ void InferenceEngine::LearningFlushWorker() {
                                 std::chrono::seconds(config_.learning_flush_interval_sec);
     const bool changed =
         learning_flush_cv_.wait_until(lock, (std::min)(flush_deadline, persona_due), [this]() {
-          return learning_flush_stop_ || !store_ || !store_->dirty() ||
-                 config_.learning_flush_interval_sec == 0 ||
+          return learning_flush_stop_ || learning_erasure_in_progress_ || !store_ ||
+                 !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
                  !first_unsaved_observation_steady_.has_value();
         });
     if (changed || std::chrono::steady_clock::now() < flush_deadline) {

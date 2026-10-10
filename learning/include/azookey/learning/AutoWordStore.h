@@ -62,7 +62,8 @@ class AutoWordStore {
   bool Load();
   bool Save() const;
   void Reset();
-  // Mutation, persistence and failure rollback share one mutex acquisition.
+  // Writers remain serialized through persistence. Readers keep seeing the
+  // previous table until the saved replacement is published.
   bool ResetAndSave();
   AutoWordSaveOutcome SetStateAndSave(const std::string& surface, const std::string& reading,
                                       AutoWordState state);
@@ -115,19 +116,23 @@ class AutoWordStore {
   ImportCounts Merge(const AutoWordStore& other, ImportConflictPolicy policy);
 
  private:
-  bool ParseTextLocked(std::string_view text);
-  bool SaveLocked() const;
-  std::string SerializeTextLocked() const;
+  using Table = std::map<std::string, std::map<std::string, AutoWord>>;
+  bool ParseText(std::string_view text, Table& table) const;
+  bool SaveSnapshot(const Table& table) const;
+  static std::string SerializeTable(const Table& table);
   AutoWord* FindLocked(const std::string& surface, const std::string& reading);
   bool SetStateLocked(const std::string& surface, const std::string& reading, AutoWordState state);
 
+  // Lock order: writer mutex_, then table_mutex_. Readers take only the latter;
+  // encryption, file I/O and snapshot serialization never hold table_mutex_.
   mutable std::mutex mutex_;
+  mutable std::mutex table_mutex_;
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   bool save_blocked_by_load_failure_{false};
   // reading -> surface -> word. Gives (surface, reading) uniqueness and the
   // reading-keyed lookup LookupConfirmed needs from one container.
-  std::map<std::string, std::map<std::string, AutoWord>> table_;
+  Table table_;
 };
 
 }  // namespace azookey::learning

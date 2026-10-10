@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -371,20 +372,28 @@ void SortAndLimitModelCandidates(std::vector<core::Candidate>& candidates, size_
 }
 
 #if AZOOKEY_WITH_LLAMA_CPP
-size_t CountSaneUniqueGeneratedCandidates(const std::vector<GeneratedCandidate>& candidates) {
+// Best rank score per distinct usable surface.
+std::vector<double> SaneUniqueGeneratedScores(const std::vector<GeneratedCandidate>& candidates) {
   std::vector<std::string> seen_surfaces;
+  std::vector<double> scores;
   seen_surfaces.reserve(candidates.size());
+  scores.reserve(candidates.size());
   for (const auto& candidate : candidates) {
     const auto surface = UsableGeneratedSurface(candidate);
     if (!surface) {
       continue;
     }
-    if (std::find(seen_surfaces.begin(), seen_surfaces.end(), *surface) != seen_surfaces.end()) {
+    const double score = BeamRankScore(candidate.total_logprob, candidate.token_count);
+    const auto seen = std::find(seen_surfaces.begin(), seen_surfaces.end(), *surface);
+    if (seen != seen_surfaces.end()) {
+      auto& kept = scores[static_cast<size_t>(std::distance(seen_surfaces.begin(), seen))];
+      kept = std::max(kept, score);
       continue;
     }
     seen_surfaces.push_back(*surface);
+    scores.push_back(score);
   }
-  return seen_surfaces.size();
+  return scores;
 }
 
 class LlamaBackendSession {
@@ -563,13 +572,6 @@ bool DecodeBeamStep(llama_context* context, const std::vector<LlamaBeam>& beams,
   return true;
 }
 
-double BeamRankScore(double total_logprob, int32_t output_tokens) {
-  if (output_tokens <= 0) {
-    return -std::numeric_limits<double>::infinity();
-  }
-  return total_logprob / static_cast<double>(output_tokens);
-}
-
 void PruneBeams(std::vector<LlamaBeam>& beams, size_t max_beams) {
   std::sort(beams.begin(), beams.end(), [](const auto& lhs, const auto& rhs) {
     return BeamRankScore(lhs.total_logprob, lhs.output_tokens) >
@@ -580,12 +582,29 @@ void PruneBeams(std::vector<LlamaBeam>& beams, size_t max_beams) {
   }
 }
 
-void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam,
-                         bool allow_incomplete_utf8_suffix = false) {
+// Keeps a beam cut off by the deadline or the token limit; it has not emitted end-of-sequence.
+void AppendUnfinishedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam) {
   if (!beam.surface.empty() && beam.output_tokens > 0) {
-    generated.push_back(GeneratedCandidate{beam.surface, beam.total_logprob, beam.output_tokens,
-                                           allow_incomplete_utf8_suffix});
+    generated.push_back(
+        GeneratedCandidate{beam.surface, beam.total_logprob, beam.output_tokens, true});
   }
+}
+
+void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam,
+                         double eos_logprob) {
+  if (!beam.surface.empty() && beam.output_tokens > 0) {
+    const auto score = CompletedBeamScore(beam.total_logprob, beam.output_tokens, eos_logprob);
+    generated.push_back(GeneratedCandidate{beam.surface, score.total_logprob, score.token_count});
+  }
+}
+
+std::vector<double> ActiveBeamScores(const std::vector<LlamaBeam>& beams) {
+  std::vector<double> scores;
+  scores.reserve(beams.size());
+  for (const auto& beam : beams) {
+    scores.push_back(BeamRankScore(beam.total_logprob, beam.output_tokens));
+  }
+  return scores;
 }
 
 #endif
@@ -882,7 +901,7 @@ struct ZenzaiModelRuntime {
       if (DeadlineExpired(conversion_context)) {
         decode_stats.deadline_exceeded = true;
         for (const auto& beam : beams) {
-          AppendCompletedBeam(generated, beam, true);
+          AppendUnfinishedBeam(generated, beam);
         }
         beams.clear();
         break;
@@ -903,7 +922,7 @@ struct ZenzaiModelRuntime {
           }
           decode_stats.deadline_exceeded = true;
           for (const auto& beam : beams) {
-            AppendCompletedBeam(generated, beam, true);
+            AppendUnfinishedBeam(generated, beam);
           }
           beams.clear();
           break;
@@ -927,7 +946,7 @@ struct ZenzaiModelRuntime {
 
         for (const auto& choice : choices) {
           if (llama_vocab_is_eog(vocab, choice.token)) {
-            AppendCompletedBeam(generated, beam);
+            AppendCompletedBeam(generated, beam, choice.logprob);
             continue;
           }
 
@@ -969,15 +988,19 @@ struct ZenzaiModelRuntime {
         next_beams[i].sequence_id = sequence_plan.assignments[i];
       }
       beams = std::move(next_beams);
-      if (CountSaneUniqueGeneratedCandidates(generated) >= candidate_limit) {
+      // Stopping as soon as the quota fills would drop an active beam that still outranks a
+      // completed one, e.g. the full reading one step behind prefixes that ended early.
+      if (ShouldStopBeamSearch(SaneUniqueGeneratedScores(generated), ActiveBeamScores(beams),
+                               candidate_limit)) {
         completed_quota_reached = true;
         break;
       }
     }
 
-    if (!completed_quota_reached) {
+    if (!completed_quota_reached &&
+        SaneUniqueGeneratedScores(generated).size() < candidate_limit) {
       for (const auto& beam : beams) {
-        AppendCompletedBeam(generated, beam, true);
+        AppendUnfinishedBeam(generated, beam);
       }
     }
     std::sort(generated.begin(), generated.end(), [](const auto& lhs, const auto& rhs) {
@@ -1119,6 +1142,30 @@ BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_
     plan.copies.push_back(BeamSequenceCopy{parent_sequences[i], next_free});
   }
   return plan;
+}
+
+double BeamRankScore(double total_logprob, int32_t token_count) {
+  if (token_count <= 0) {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return total_logprob / static_cast<double>(token_count);
+}
+
+BeamScore CompletedBeamScore(double prefix_logprob, int32_t prefix_tokens, double eos_logprob) {
+  return BeamScore{prefix_logprob + eos_logprob, prefix_tokens + 1};
+}
+
+bool ShouldStopBeamSearch(std::vector<double> completed_scores,
+                          const std::vector<double>& active_scores, size_t candidate_limit) {
+  if (candidate_limit == 0 || completed_scores.size() < candidate_limit) {
+    return false;
+  }
+  std::nth_element(completed_scores.begin(),
+                   completed_scores.begin() + static_cast<std::ptrdiff_t>(candidate_limit - 1),
+                   completed_scores.end(), std::greater<>());
+  const double weakest_kept = completed_scores[candidate_limit - 1];
+  return std::none_of(active_scores.begin(), active_scores.end(),
+                      [weakest_kept](double score) { return score > weakest_kept; });
 }
 
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer) {

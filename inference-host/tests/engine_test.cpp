@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -1885,6 +1886,40 @@ TEST(InferenceEngineTest, PlansPrunedBeamSequencesWithoutUnnecessaryCopies) {
   EXPECT_EQ(plan.assignments, (std::vector<int32_t>{2, 1}));
   EXPECT_EQ(plan.releases, (std::vector<int32_t>{3, 4}));
   EXPECT_TRUE(plan.copies.empty());
+}
+
+TEST(InferenceEngineTest, CompletedBeamPaysForEndOfSequenceSoTruncatedReadingRanksBelowFullReading) {
+  using azookey::host::BeamRankScore;
+  using azookey::host::CompletedBeamScore;
+  // 「…協議す」 ends one character early: its prefix is confident but the model does not
+  // expect end-of-sequence after it. 「…協議する」 ends where the model expects it to.
+  const auto truncated = CompletedBeamScore(-0.0034, 11, -6.0);
+  const auto full = CompletedBeamScore(-0.0040, 12, -0.001);
+
+  EXPECT_DOUBLE_EQ(truncated.total_logprob, -6.0034);
+  EXPECT_EQ(truncated.token_count, 12);
+  EXPECT_GT(BeamRankScore(full.total_logprob, full.token_count),
+            BeamRankScore(truncated.total_logprob, truncated.token_count));
+  // Without the end-of-sequence cost the truncated prefix would rank first.
+  EXPECT_GT(BeamRankScore(-0.0034, 11), BeamRankScore(-0.0040, 12));
+  EXPECT_EQ(BeamRankScore(0.0, 0), -std::numeric_limits<double>::infinity());
+}
+
+TEST(InferenceEngineTest, BeamSearchKeepsGoingWhileActiveBeamOutranksCompletedQuota) {
+  using azookey::host::ShouldStopBeamSearch;
+  // Four truncated hypotheses completed in the same step; the full reading is still active.
+  EXPECT_FALSE(ShouldStopBeamSearch({-0.50, -0.52, -0.55, -0.60}, {-0.0003, -0.9}, 4));
+  EXPECT_FALSE(ShouldStopBeamSearch({-0.01, -0.02, -0.03}, {-5.0}, 4));
+  EXPECT_FALSE(ShouldStopBeamSearch({-0.01}, {}, 0));
+}
+
+TEST(InferenceEngineTest, BeamSearchStopsWhenNoActiveBeamOutranksWeakestKeptCompletion) {
+  using azookey::host::ShouldStopBeamSearch;
+  EXPECT_TRUE(ShouldStopBeamSearch({-0.0004, -0.50, -0.52, -0.55}, {-0.60, -0.9}, 4));
+  EXPECT_TRUE(ShouldStopBeamSearch({-0.10}, {}, 1));
+  // Only the best `candidate_limit` completions are kept, so the threshold is the 4th best.
+  EXPECT_FALSE(ShouldStopBeamSearch({-5.0, -0.1, -0.2, -0.3, -0.4}, {-0.35}, 4));
+  EXPECT_TRUE(ShouldStopBeamSearch({-5.0, -0.1, -0.2, -0.3, -0.4}, {-0.45}, 4));
 }
 
 TEST(InferenceEngineTest, ModelConversionDeadlineUsesSixHundredMillisecondBudget) {

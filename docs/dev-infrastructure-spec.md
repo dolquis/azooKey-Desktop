@@ -2765,7 +2765,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化）。Host に到達できず `QueryDiagnostics` を得られない場合は、`model.enabled` なら `degraded_simple`、そうでなければ `healthy` とみなす（§8.5.1） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由。`safe_mode` の解除は §8.5.3） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
-| D-012 | schema validation 成功、または `settings.json` が無い（既定値で動作） | 本節の登録済み旧形式に一致し、登録された移行経路で移行できる（登録済みの旧形式は無い。下記） | 読み込み不可、JSON 不正、または validation 失敗（登録済み旧形式に一致しない非適合を含む） | ✗（不正値リセットは確認後） |
+| D-012 | schema validation 成功、または `settings.json` が無い（既定値で動作） | 本節の登録済み旧形式に一致し、登録された移行経路で移行できる（旧ベンチマーク履歴。下記） | 読み込み不可、JSON 不正、または validation 失敗（登録済み旧形式に一致しない非適合を含む） | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可）、または settings の読み込み・schema 検証の失敗や DPAPI を使えないことで判定できない（`details.state` が `unavailable`。settings の不備そのものは D-012 が担う） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
@@ -2785,10 +2785,25 @@ schema に適合するため D-012 では `ok` とし、非推奨であること
 旧形式の登録は、キーの改名・削除・enum 縮小を伴う schema 変更と同じ PR で行い、
 旧形式の識別方法と、Host の `SettingsStore` または設定アプリの `settings-app/SettingsDocument.*` に
 実装した移行経路を併記する。`docs/app-profile-spec.md` §6 が予定する `promptPrefixByApp` の削除や、
-`directml` / `npu` を enum から外す変更は、この登録の対象になる。登録済みの旧形式は無い。
+`directml` / `npu` を enum から外す変更は、この登録の対象になる。
+
+登録済み旧形式は、`model.benchmarkHistory` の旧表示用要素である。
+旧設定アプリが読んだ `model` / `path` / `model_path` の少なくとも一つが非空文字列で、
+要素のキーがこれらの識別子と `backend` / `status`（文字列）、
+`p50_ms` / `p95_ms` / `p99_ms`（数値）だけの場合に識別する。
+旧形式を診断上だけ取り除いた文書全体が現行 schema に適合する場合に限り D-012 は `warning` とする。
+他の設定不正、未登録キー、または新形式の要素の不正が残れば `error` とする。
+`completedAt` / `load_ms` / `rss_mb` / `vram_mb` / `iterations_completed` / `error` を含む要素は
+旧形式に分類しない。版識別子が無いため、例えば `{"path":"model.gguf","p50_ms":1}` は
+旧表示用形式として扱うが、新形式から `completedAt` だけが欠けた要素は他の新規キーが残るため `error` になる。
+移行経路は `model-management-spec.md` §7.1 の Host 追記時整理であり、
+利用者が次回ベンチマークを実行した際に旧要素を除き、新しい結果を追記する。
+設定アプリの通常保存と診断は旧要素を保持し、診断も `--repair` もこの整理を実行しない。
+
 登録済みの旧形式に一致しない schema 非適合は、旧形式らしく見えても（`schemaVersion` などの
 未定義キーを含む場合も）旧形式と推定せず `error` とする。D-012 の判定は `settings.json` を
-読むだけで書き換えない。移行と不正値のリセットは `--repair` の対象外とし、利用者の確認を経て行う。
+読むだけで書き換えない。移行と不正値のリセットは `--repair` の対象外とし、
+上記の登録済み移行経路または利用者の確認を経て行う。
 
 ARM64 ホストでは `IsWow64Process2` の結果だけで x64 エミュレーションと ARM64
 ネイティブを区別できないため、`GetProcessInformation(ProcessMachineTypeInfo)` で

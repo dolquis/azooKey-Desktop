@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -211,9 +212,37 @@ bool MatchesType(const j::Value& value, std::string_view type) {
   return true;
 }
 
+bool MatchesUtcDateTime(std::string_view text) {
+  if (text.size() != 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' ||
+      text[16] != ':' || text[19] != 'Z') {
+    return false;
+  }
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (i == 4 || i == 7 || i == 10 || i == 13 || i == 16 || i == 19) continue;
+    if (text[i] < '0' || text[i] > '9') return false;
+  }
+  const auto number = [&](size_t offset, size_t count) {
+    int result{};
+    std::from_chars(text.data() + offset, text.data() + offset + count, result);
+    return result;
+  };
+  const int year = number(0, 4);
+  const auto date = std::chrono::year_month_day(
+      std::chrono::year(year), std::chrono::month(number(5, 2)), std::chrono::day(number(8, 2)));
+  return year != 0 && date.ok() && number(11, 2) <= 23 && number(14, 2) <= 59 &&
+         number(17, 2) <= 59;
+}
+
 bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
   if (!schema.IsObject()) return true;
   if (const auto type = schema.GetString("type"); type && !MatchesType(value, *type)) return false;
+  if (const auto* types = schema.GetArray("type")) {
+    if (!std::any_of(types->begin(), types->end(), [&](const auto& type) {
+          return type.IsString() && MatchesType(value, type.AsString());
+        })) {
+      return false;
+    }
+  }
   if (const auto* values = schema.GetArray("enum")) {
     const bool matched = std::any_of(values->begin(), values->end(), [&](const auto& candidate) {
       return JsonValueEquals(value, candidate);
@@ -228,7 +257,32 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
       return false;
     }
   }
+  if (value.IsString()) {
+    const auto& text = value.AsString();
+    const auto length = static_cast<uint64_t>(std::count_if(
+        text.begin(), text.end(), [](unsigned char c) { return (c & 0xc0) != 0x80; }));
+    if (const auto minimum = schema.GetUInt("minLength"); minimum && length < *minimum) {
+      return false;
+    }
+    if (const auto pattern = schema.GetString("pattern")) {
+      try {
+        if (!std::regex_search(text, std::regex(*pattern))) return false;
+      } catch (const std::regex_error&) {
+        return false;
+      }
+    }
+    // The embedded schema's date-time field also requires UTC second precision.
+    if (const auto format = schema.GetString("format");
+        format && *format == "date-time" && !MatchesUtcDateTime(text)) {
+      return false;
+    }
+  }
   if (value.IsObject()) {
+    if (const auto* required = schema.GetArray("required")) {
+      for (const auto& key : *required) {
+        if (!key.IsString() || !value.Find(key.AsString())) return false;
+      }
+    }
     const auto* properties = schema.FindObject("properties");
     const bool allow_additional = !schema.Find("additionalProperties") ||
                                   !schema.Find("additionalProperties")->IsBool() ||
@@ -247,6 +301,10 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
     }
   }
   if (value.IsArray()) {
+    if (const auto maximum = schema.GetUInt("maxItems");
+        maximum && value.AsArray().size() > *maximum) {
+      return false;
+    }
     if (const auto* item_schema = schema.Find("items")) {
       for (const auto& child : value.AsArray()) {
         if (!ValidateJsonSchema(child, *item_schema)) return false;
@@ -258,12 +316,19 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
 
 bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
   if (!schema.IsObject()) return true;
-  constexpr std::array<std::string_view, 11> supported = {
-      "$schema", "additionalProperties", "default", "description", "enum", "items", "maximum",
-      "minimum", "properties",           "title",   "type",
+  constexpr std::array<std::string_view, 16> supported = {
+      "$schema",    "additionalProperties",
+      "default",    "description",
+      "enum",       "format",
+      "items",      "maximum",
+      "maxItems",   "minimum",
+      "minLength",  "pattern",
+      "properties", "required",
+      "title",      "type",
   };
   for (const auto& [key, value] : schema.AsObject()) {
     if (std::find(supported.begin(), supported.end(), key) == supported.end()) return false;
+    if (key == "format" && (!value.IsString() || value.AsString() != "date-time")) return false;
     if (key == "properties") {
       if (!value.IsObject()) return false;
       for (const auto& [_, child_schema] : value.AsObject()) {
@@ -276,9 +341,56 @@ bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
   return true;
 }
 
+bool IsLegacyBenchmarkHistoryEntry(const j::Value& row) {
+  if (!row.IsObject()) return false;
+  constexpr std::array<std::string_view, 8> legacy_keys = {
+      "model", "path", "model_path", "backend", "status", "p50_ms", "p95_ms", "p99_ms"};
+  bool has_identifier = false;
+  for (const auto& [key, value] : row.AsObject()) {
+    if (std::find(legacy_keys.begin(), legacy_keys.end(), key) == legacy_keys.end()) return false;
+    if (key == "p50_ms" || key == "p95_ms" || key == "p99_ms") {
+      if (!value.IsNumber()) return false;
+    } else {
+      if (!value.IsString()) return false;
+      if ((key == "model" || key == "path" || key == "model_path") && !value.AsString().empty()) {
+        has_identifier = true;
+      }
+    }
+  }
+  return has_identifier;
+}
+
+bool ValidateSettingsDocument(const j::Value& settings, const j::Value& schema,
+                              bool* migration_available = nullptr) {
+  if (migration_available) *migration_available = false;
+  if (ValidateJsonSchema(settings, schema)) return true;
+  const auto* model = settings.FindObject("model");
+  if (!model) return false;
+  const auto history = model->find("benchmarkHistory");
+  if (history == model->end() || !history->second.IsArray()) return false;
+  j::Array canonical_rows;
+  bool legacy_found = false;
+  for (const auto& row : history->second.AsArray()) {
+    if (IsLegacyBenchmarkHistoryEntry(row)) {
+      legacy_found = true;
+    } else {
+      canonical_rows.push_back(row);
+    }
+  }
+  if (!legacy_found) return false;
+  auto projected_model = *model;
+  projected_model["benchmarkHistory"] = j::Value(std::move(canonical_rows));
+  auto projected_root = settings.AsObject();
+  projected_root["model"] = j::Value(std::move(projected_model));
+  if (!ValidateJsonSchema(j::Value(std::move(projected_root)), schema)) return false;
+  if (migration_available) *migration_available = true;
+  return true;
+}
+
 struct SettingsProbe {
   bool valid{true};
   bool missing{true};
+  bool migration_available{false};
   bool model_enabled{true};
   std::string selected_path;
   DpapiState dpapi_state{DpapiState::NotRequired};
@@ -342,7 +454,8 @@ SettingsProbe ProbeSettings(const std::filesystem::path& path) {
   }
   const auto value = j::Parse(*text);
   const auto schema = j::Parse(kSettingsSchemaJson);
-  if (!value || !value->IsObject() || !schema || !ValidateJsonSchema(*value, *schema)) {
+  if (!value || !value->IsObject() || !schema ||
+      !ValidateSettingsDocument(*value, *schema, &result.migration_available)) {
     result.valid = false;
     result.dpapi_state = DpapiState::Unavailable;
     return result;
@@ -1097,14 +1210,19 @@ void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
 
 }  // namespace
 
-bool ProbeSettingsFile(const std::filesystem::path& path) { return ProbeSettings(path).valid; }
+bool ProbeSettingsFile(const std::filesystem::path& path, bool* migration_available) {
+  const auto result = ProbeSettings(path);
+  if (migration_available) *migration_available = result.migration_available;
+  return result.valid;
+}
 
 DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto) {
   const auto settings = j::Parse(settings_json);
   const auto schema = j::Parse(kSettingsSchemaJson);
   if (!settings || !settings->IsObject() || !schema ||
-      !ValidateJsonSchema(*settings, *schema)) return DpapiState::Unavailable;
+      !ValidateSettingsDocument(*settings, *schema))
+    return DpapiState::Unavailable;
   return ProbeDpapiSettings(*settings, crypto);
 }
 
@@ -1437,13 +1555,18 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            {{"entries", j::Value(snapshot.user_dict_entries)},
             {"skipped_entries", j::Value(snapshot.user_dict_skipped_entries)}});
 
-  // No settings.json legacy format is registered (dev-infrastructure-spec §12.2.1), so unlike
-  // D-010 there is no warning; a schema mismatch is never presumed migratable.
-  AddCheck(report, "D-012", "settings", snapshot.settings_valid ? Status::Ok : Status::Error,
-           snapshot.settings_valid
-               ? (snapshot.settings_missing ? "Settings file is absent; defaults apply"
-                                            : "Settings conform to the embedded schema")
-               : "Settings failed schema validation",
+  const auto settings_status =
+      !snapshot.settings_valid
+          ? Status::Error
+          : (!snapshot.settings_missing && snapshot.settings_migration_available ? Status::Warning
+                                                                                 : Status::Ok);
+  AddCheck(report, "D-012", "settings", settings_status,
+           settings_status == Status::Error
+               ? "Settings failed schema validation"
+               : (settings_status == Status::Warning
+                      ? "Legacy benchmark history is removed on the next Host benchmark append"
+                      : (snapshot.settings_missing ? "Settings file is absent; defaults apply"
+                                                   : "Settings conform to the embedded schema")),
            {{"missing", j::Value(snapshot.settings_missing)},
             {"valid", j::Value(snapshot.settings_valid)}});
 
@@ -1547,6 +1670,7 @@ ProbeResult ProbeSystem() {
     const auto settings = ProbeSettings(paths->settings_path);
     snapshot.settings_valid = settings.valid;
     snapshot.settings_missing = settings.missing;
+    snapshot.settings_migration_available = settings.migration_available;
     snapshot.dpapi_state = settings.dpapi_state;
     snapshot.model_enabled = settings.model_enabled;
     snapshot.selected_model_path = settings.selected_path;

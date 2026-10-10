@@ -1060,6 +1060,87 @@ TEST(DiagnosticsTest, EmbeddedSchemaAndDefaultSettingsStaySupported) {
   EXPECT_TRUE(diag::ProbeSettingsFile(sample));
 }
 
+TEST(DiagnosticsTest, EmbeddedSettingsSchemaValidatesCanonicalBenchmarkHistoryWithoutWriting) {
+  const auto directory = UniqueTempDirectory("azookey-diag-benchmark-history-");
+  const auto path = directory / "settings.json";
+  const auto parsed =
+      j::Parse(R"({"path":"C:/models/model.gguf","completedAt":"2026-10-10T10:00:00Z",
+    "backend":"cpu","status":"success","p50_ms":1,"p95_ms":2,"p99_ms":3,"load_ms":4,
+    "rss_mb":5,"vram_mb":null,"iterations_completed":6,"error":null})");
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto canonical = parsed->AsObject();
+  const auto probe = [&](const j::Array& rows, bool expected) {
+    j::Object model;
+    model["benchmarkHistory"] = j::Value(rows);
+    j::Object root;
+    root["model"] = j::Value(std::move(model));
+    const auto original = j::Stringify(j::Value(std::move(root)));
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out << original;
+    }
+    EXPECT_EQ(diag::ProbeSettingsFile(path), expected) << original;
+    std::ifstream in(path, std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), original);
+  };
+  probe({}, true);
+  probe(j::Array(7, j::Value(canonical)), true);
+  probe(j::Array(8, j::Value(canonical)), false);
+  probe({j::Value(1.0)}, false);
+  for (const auto* model_path :
+       {"C:\\models\\model.gguf", "\\\\server\\models\\model.gguf", "/models/model.gguf"}) {
+    auto row = canonical;
+    row["path"] = j::Value(model_path);
+    row["completedAt"] = j::Value("2024-02-29T23:59:59Z");
+    row["iterations_completed"] = j::Value(4294967295.0);
+    probe({j::Value(std::move(row))}, true);
+  }
+  for (const auto* status : {"success", "timeout", "error"}) {
+    auto row = canonical;
+    row["status"] = j::Value(status);
+    row["vram_mb"] = j::Value(0.0);
+    row["error"] = j::Value("load_failed");
+    probe({j::Value(std::move(row))}, true);
+  }
+  for (const auto& [key, unused] : canonical) {
+    auto row = canonical;
+    row.erase(key);
+    probe({j::Value(std::move(row))}, false);
+  }
+  for (const auto* key : {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb", "vram_mb"}) {
+    auto row = canonical;
+    row[key] = j::Value(-1.0);
+    probe({j::Value(std::move(row))}, false);
+  }
+  for (const auto* timestamp : {"2026-02-30T10:00:00Z", "2026-10-10T24:00:00Z",
+                                "2026-10-10T10:00:00+00:00", "2026-10-10T10:00:00.001Z"}) {
+    auto row = canonical;
+    row["completedAt"] = j::Value(timestamp);
+    probe({j::Value(std::move(row))}, false);
+  }
+  for (const auto* model_path : {"", "model.gguf", "C:model.gguf"}) {
+    auto row = canonical;
+    row["path"] = j::Value(model_path);
+    probe({j::Value(std::move(row))}, false);
+  }
+  for (const double iterations : {-1.0, 4294967296.0}) {
+    auto row = canonical;
+    row["iterations_completed"] = j::Value(iterations);
+    probe({j::Value(std::move(row))}, false);
+  }
+  for (const auto& [key, invalid] : j::Object{{"backend", j::Value("auto")},
+                                              {"status", j::Value("unknown")},
+                                              {"iterations_completed", j::Value(0.5)},
+                                              {"error", j::Value(true)},
+                                              {"vram_mb", j::Value("unknown")},
+                                              {"extra", j::Value(true)}}) {
+    auto row = canonical;
+    row[key] = invalid;
+    probe({j::Value(std::move(row))}, false);
+  }
+  std::filesystem::remove_all(directory);
+}
+
 TEST(DiagnosticsTest, EmbeddedSettingsSchemaRejectsUnknownAndOutOfRangeInferenceSettings) {
   const auto path = TempPath("azookey_diagnostics_inference_settings.json");
   {
@@ -1082,15 +1163,56 @@ TEST(DiagnosticsTest, EmbeddedSettingsSchemaRejectsUnknownAndOutOfRangeInference
   std::filesystem::remove(path);
 }
 
-diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing) {
+diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing,
+                                 bool settings_migration_available = false) {
   diag::Snapshot snapshot;
   snapshot.settings_valid = settings_valid;
   snapshot.settings_missing = settings_missing;
+  snapshot.settings_migration_available = settings_migration_available;
   const auto report = diag::EvaluateSnapshot(snapshot, 1);
   const auto check = std::find_if(report.checks.begin(), report.checks.end(),
                                   [](const auto& item) { return item.id == "D-012"; });
   if (check == report.checks.end()) throw std::runtime_error("D-012 check is missing");
   return check->status;
+}
+
+TEST(DiagnosticsTest, RegisteredLegacyBenchmarkHistoryWarnsWithoutHidingOtherInvalidSettings) {
+  const auto directory = UniqueTempDirectory("azookey-diag-legacy-benchmark-history-");
+  const auto path = directory / "settings.json";
+  const auto probe = [&](const std::string& text, bool expected_valid, bool expected_migration) {
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out << text;
+    }
+    bool migration = true;
+    const bool valid = diag::ProbeSettingsFile(path, &migration);
+    EXPECT_EQ(valid, expected_valid) << text;
+    EXPECT_EQ(migration, expected_migration) << text;
+    EXPECT_EQ(SettingsCheckStatus(valid, false, migration),
+              !expected_valid ? diag::Status::Error
+                              : (expected_migration ? diag::Status::Warning : diag::Status::Ok));
+    MockDpapiCrypto crypto;
+    EXPECT_EQ(diag::ProbeDpapiSettingsJson(text, crypto),
+              expected_valid ? diag::DpapiState::NotRequired : diag::DpapiState::Unavailable);
+    std::ifstream in(path, std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), text);
+  };
+  for (const auto* identifier : {"model", "model_path", "path"}) {
+    probe(std::string(R"({"model":{"benchmarkHistory":[{")") + identifier +
+              R"(":"legacy.gguf","backend":"cpu","p50_ms":1}]}})",
+          true, true);
+  }
+  probe(R"({"model":{"benchmarkHistory":[]}})", true, false);
+  probe(R"({"maxCandidates":99,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false, false);
+  probe(R"({"unknownSetting":true,"model":{"benchmarkHistory":[{"model":"legacy"}]}})", false,
+        false);
+  probe(R"({"model":{"selectedPath":42,"benchmarkHistory":[{"model":"legacy"}]}})", false, false);
+  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy","extra":true}]}})", false, false);
+  probe(R"({"model":{"benchmarkHistory":[{"path":"legacy","completedAt":"invalid"}]}})", false,
+        false);
+  probe(R"({"model":{"benchmarkHistory":[{"model":"legacy"},{"path":"new","rss_mb":-1}]}})", false,
+        false);
+  std::filesystem::remove_all(directory);
 }
 
 TEST(DiagnosticsTest, BackwardCompatibleSettingsAreOkAndProbeLeavesFileUnchanged) {

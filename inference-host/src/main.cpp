@@ -23,6 +23,8 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+
+#include "StderrPipeWriter.h"
 #else
 #include <signal.h>
 #endif
@@ -415,6 +417,9 @@ int main(int argc, char** argv) {
   // Construct before the engine so its destructor signals completion only
   // after the engine destructor has flushed pending learning observations.
   ConsoleControlRegistration console_control;
+  // Keep diagnostics cancellable on their own thread, including diagnostics
+  // from the engine's periodic worker and shutdown save retries.
+  azookey::host::StderrPipeWriter stderr_pipe_writer;
 #endif
   azookey::host::EngineConfig config;
 #ifdef AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC

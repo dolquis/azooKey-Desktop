@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -23,16 +24,21 @@ struct DictionarySettings {
   bool app_specific_dictionary_enabled{true};
 };
 
-// One entry of model.benchmarkHistory, which the Host writes and the settings app only shows
-// (sideload-packaging-spec section 3.6). The Host has not fixed the entry's shape yet, so the
-// keys of a BenchmarkModel response are read, plus a model name or path; others are ignored.
+// Model-management spec section 7.1: the Host writes history; settings only
+// displays it. Missing fields in older entries remain empty for compatibility.
 struct BenchmarkHistoryEntry {
-  std::string model;
+  std::string path;
+  std::string completed_at;
   std::string backend;
   std::string status;
   std::optional<double> p50_ms;
   std::optional<double> p95_ms;
   std::optional<double> p99_ms;
+  std::optional<double> load_ms;
+  std::optional<double> rss_mb;
+  std::optional<double> vram_mb;
+  std::optional<uint32_t> iterations_completed;
+  std::optional<std::string> error;
 };
 
 struct EditableSettings {

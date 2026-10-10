@@ -1204,7 +1204,10 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
   }
   auto config = DefaultDispatcherConfig();
   config.models_dir = root / "models";
-  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto settings_path = root / "settings.json";
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config,
+                                              &settings_store);
   const auto bench_in = [&](uint64_t id, const std::filesystem::path& path) {
     ipc::BenchmarkModelRequest request;
     request.path = azookey::core::PathToUtf8(path);
@@ -1229,6 +1232,69 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
     EXPECT_EQ(busy->status, "error");
     EXPECT_EQ(busy->error, "busy");
   }
+  EXPECT_EQ(engine.model_loaded(), loaded_before);
+  EXPECT_FALSE(std::filesystem::exists(settings_path));  // Rejections are not history.
+
+  // Scanner-valid GGUF header without tensors: exercises the load attempt,
+  // using the mock runtime or returning load_failed with a real loader.
+  std::string gguf = "GGUF";
+  const auto integer = [&gguf](uint64_t value, int bytes) {
+    for (int i = 0; i < bytes; ++i) gguf.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+  };
+  const auto text = [&gguf, &integer](const char* value) {
+    const std::string s(value);
+    integer(s.size(), 8);
+    gguf += s;
+  };
+  integer(3, 4);
+  integer(1, 8);
+  integer(3, 8);
+  text("general.name");
+  integer(8, 4);
+  text("fixture");
+  text("general.architecture");
+  integer(8, 4);
+  text("gpt2");
+  text("general.file_type");
+  integer(4, 4);
+  integer(15, 4);
+  {
+    std::ofstream out(root / "models" / "attempt.gguf", std::ios::binary);
+    out << gguf;
+  }
+  const auto attempted = bench_in(816, root / "models" / "attempt.gguf");
+  ASSERT_TRUE(attempted);
+  ASSERT_NE(attempted->error, "invalid_model");
+  std::ifstream settings_file(settings_path, std::ios::binary);
+  const std::string settings_text((std::istreambuf_iterator<char>(settings_file)),
+                                  std::istreambuf_iterator<char>());
+  settings_file.close();
+  const auto saved = ipc::json::Parse(settings_text);
+  ASSERT_TRUE(saved && saved->Find("model"));
+  const auto* history = saved->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history);
+  ASSERT_EQ(history->size(), 1u);
+  EXPECT_EQ(history->front().GetString("path"),
+            azookey::core::PathToUtf8(
+                std::filesystem::weakly_canonical(root / "models" / "attempt.gguf")));
+  EXPECT_EQ(history->front().GetString("status"), attempted->status);
+  EXPECT_EQ(history->front().GetString("backend"), attempted->backend);
+  EXPECT_EQ(history->front().GetNumber("load_ms"), attempted->load_ms);
+  EXPECT_TRUE(history->front().GetString("completedAt"));
+  // Persistence failure leaves the same benchmark outcome available to the client.
+  {
+    std::ofstream invalid(settings_path, std::ios::binary);
+    invalid << "{ not json";
+  }
+  const auto unpersisted = bench_in(817, root / "models" / "attempt.gguf");
+  ASSERT_TRUE(unpersisted);
+  EXPECT_EQ(unpersisted->status, attempted->status);
+  EXPECT_EQ(unpersisted->error, attempted->error);
+  std::ifstream original(settings_path, std::ios::binary);
+  EXPECT_EQ(
+      std::string((std::istreambuf_iterator<char>(original)), std::istreambuf_iterator<char>()),
+      "{ not json");
+  original.close();
   EXPECT_EQ(engine.model_loaded(), loaded_before);
   RemovePathNoThrow(root);
 }

@@ -1022,7 +1022,7 @@ TEST(SettingsDocumentTest, BenchmarkHistoryIsShownAndSurvivesASave) {
 
   ASSERT_EQ(loaded.settings.benchmark_history.size(), 2u);
   const auto& first = loaded.settings.benchmark_history[0];
-  EXPECT_EQ(first.model, "C:/models/zenz.gguf");
+  EXPECT_EQ(first.path, "C:/models/zenz.gguf");
   EXPECT_EQ(first.backend, "cpu");
   EXPECT_EQ(first.status, "success");
   ASSERT_TRUE(first.p50_ms);
@@ -1037,5 +1037,43 @@ TEST(SettingsDocumentTest, BenchmarkHistoryIsShownAndSurvivesASave) {
   EXPECT_EQ(model.at("selectedPath").AsString(), "C:/models/other.gguf");
   ASSERT_TRUE(model.at("benchmarkHistory").IsArray());
   EXPECT_EQ(model.at("benchmarkHistory").AsArray().size(), 3u);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, CanonicalBenchmarkHistoryIsReadAndConcurrentAppendSurvivesSave) {
+  const auto dir = TestDir("azookey_settings_canonical_benchmark_history");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"model":{"benchmarkHistory":[{
+    "path":"C:/models/zenz.gguf","completedAt":"2026-10-10T10:00:00Z",
+    "backend":"cpu","status":"timeout","p50_ms":1,"p95_ms":2,"p99_ms":3,
+    "load_ms":4,"rss_mb":5,"vram_mb":null,"iterations_completed":6,"error":null
+  }]}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_EQ(loaded.settings.benchmark_history.size(), 1u);
+  const auto& entry = loaded.settings.benchmark_history.front();
+  EXPECT_EQ(entry.path, "C:/models/zenz.gguf");
+  EXPECT_EQ(entry.completed_at, "2026-10-10T10:00:00Z");
+  EXPECT_EQ(entry.load_ms, 4);
+  EXPECT_EQ(entry.rss_mb, 5);
+  EXPECT_FALSE(entry.vram_mb);
+  EXPECT_EQ(entry.iterations_completed, 6u);
+  EXPECT_FALSE(entry.error);
+  // Host appended after this UI loaded. Saving a stale UI snapshot must retain
+  // the latest history on disk rather than the UI's earlier copy.
+  WriteText(path, R"({"model":{"benchmarkHistory":[{
+    "path":"C:/models/other.gguf","completedAt":"2026-10-10T10:01:00Z",
+    "backend":"vulkan","status":"error","p50_ms":0,"p95_ms":0,"p99_ms":0,
+    "load_ms":2,"rss_mb":5,"vram_mb":7,"iterations_completed":0,"error":"load_failed"
+  }]}})");
+  loaded.settings.model_selected_path = "C:/models/selected.gguf";
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  const auto saved = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_EQ(saved.settings.benchmark_history.size(), 1u);
+  const auto& latest = saved.settings.benchmark_history.front();
+  EXPECT_EQ(latest.path, "C:/models/other.gguf");
+  EXPECT_EQ(latest.completed_at, "2026-10-10T10:01:00Z");
+  EXPECT_EQ(latest.vram_mb, 7);
+  EXPECT_EQ(latest.error, "load_failed");
+  EXPECT_EQ(saved.settings.model_selected_path, "C:/models/selected.gguf");
   std::filesystem::remove_all(dir);
 }

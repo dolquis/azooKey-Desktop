@@ -26,6 +26,8 @@
 #endif
 
 #include "azookey/host/SettingsStore.h"
+#include "azookey/ipc/Json.h"
+#include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
 
@@ -1124,3 +1126,238 @@ TEST(SettingsStoreTest, PersistSafeModeLeavesAnUnparsableFileAlone) {
   EXPECT_FALSE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
   EXPECT_EQ(ReadText(path), "{ not json");
 }
+
+TEST(SettingsStoreTest, BenchmarkHistoryRetainsSevenResultsAndLatestDiskSettings) {
+  ScopedTempDirectory temp("azookey_benchmark_history");
+  const auto settings_path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  WriteText(settings_path, R"({"maxCandidates":5,"model":{"selectedPath":"old.gguf"}})");
+  azookey::host::SettingsStore store(settings_path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  // A different writer changed the file after Load; never merge into the snapshot.
+  WriteText(settings_path, R"({"maxCandidates":9,"safeMode":{"enabled":true},
+      "unknownRoot":[1],"model":{"selectedPath":"new.gguf","unknownModel":true,
+      "benchmarkHistory":[{"model":"legacy","status":"success"},false]}})");
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.p50_ms = 1;
+  response.p95_ms = 2;
+  response.p99_ms = 3;
+  response.load_ms = 4;
+  response.rss_mb = 5;
+  response.vram_mb = 6;
+  for (uint32_t i = 0; i < 9; ++i) {
+    response.status = i % 3 == 0 ? "success" : i % 3 == 1 ? "timeout" : "error";
+    response.error =
+        response.status == "error" ? std::optional<std::string>{"load_failed"} : std::nullopt;
+    response.iterations_completed = i;
+    ASSERT_TRUE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  }
+  const auto document = azookey::ipc::json::Parse(ReadText(settings_path));
+  ASSERT_TRUE(document);
+  EXPECT_EQ(document->GetInt("maxCandidates"), 9);
+  EXPECT_TRUE(document->Find("unknownRoot"));
+  ASSERT_TRUE(document->FindObject("safeMode"));
+  EXPECT_TRUE(document->FindObject("safeMode")->at("enabled").AsBool());
+  const auto* model = document->Find("model");
+  ASSERT_TRUE(model);
+  EXPECT_EQ(model->GetString("selectedPath"), "new.gguf");
+  EXPECT_EQ(model->GetBool("unknownModel"), true);
+  const auto* history = model->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history);
+  ASSERT_EQ(history->size(), 7u);
+  for (size_t i = 0; i < history->size(); ++i) {
+    EXPECT_EQ((*history)[i].GetUInt("iterations_completed"), i + 2);
+    EXPECT_EQ((*history)[i].GetString("path"), model_path);
+    EXPECT_EQ((*history)[i].GetString("completedAt"), "2026-10-10T10:00:00Z");
+  }
+  const auto& last = history->back();
+  EXPECT_EQ(last.GetString("status"), "error");
+  EXPECT_EQ(last.GetString("error"), "load_failed");
+  EXPECT_EQ(last.GetNumber("p50_ms"), 1);
+  EXPECT_EQ(last.GetNumber("p95_ms"), 2);
+  EXPECT_EQ(last.GetNumber("p99_ms"), 3);
+  EXPECT_EQ(last.GetNumber("load_ms"), 4);
+  EXPECT_EQ(last.GetNumber("rss_mb"), 5);
+  EXPECT_EQ(last.GetNumber("vram_mb"), 6);
+  EXPECT_EQ(store.settings().max_candidates, 5);  // No runtime reload.
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryCreatesMissingFileAndPreservesNullMetrics) {
+  ScopedTempDirectory temp("azookey_benchmark_missing");
+  const auto path = temp.path() / "config" / "settings.json";
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  ASSERT_TRUE(store.PersistBenchmarkResult(azookey::core::PathToUtf8(temp.path() / "model.gguf"),
+                                           "2026-10-10T10:00:00Z", response));
+  const auto document = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(document && document->Find("model"));
+  const auto* history = document->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history);
+  ASSERT_EQ(history->size(), 1u);
+  EXPECT_TRUE(history->front().Find("vram_mb")->IsNull());
+  EXPECT_TRUE(history->front().Find("error")->IsNull());
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryLeavesUnreadableAndInvalidDocumentsAlone) {
+  ScopedTempDirectory temp("azookey_benchmark_invalid");
+  const auto path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  for (const auto* text : {"{ not json", "[]", R"({"model":false})"}) {
+    WriteText(path, text);
+    EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+    EXPECT_EQ(ReadText(path), text);
+    EXPECT_FALSE(std::filesystem::exists(path.string() + ".invalid"));
+  }
+  std::filesystem::remove(path);
+  std::filesystem::create_directory(path);
+  EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  EXPECT_TRUE(std::filesystem::is_directory(path));
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryRejectsInvalidNewEntriesWithoutWriting) {
+  ScopedTempDirectory temp("azookey_benchmark_entry_invalid");
+  const auto path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  WriteText(path, "{}");
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  EXPECT_FALSE(store.PersistBenchmarkResult("relative.gguf", "2026-10-10T10:00:00Z", response));
+  EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-02-30T10:00:00Z", response));
+  response.p50_ms = -1;
+  EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  response.p50_ms = 0;
+  response.status = "unknown";
+  EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  EXPECT_EQ(ReadText(path), "{}");
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryLockTimeoutLeavesOriginalFileAlone) {
+  ScopedTempDirectory temp("azookey_benchmark_locked");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, "{}");
+  std::promise<bool> acquired;
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::thread holder([&] {
+    const auto lock = azookey::learning::AcquireExclusiveFileLockForPath(path);
+    acquired.set_value(lock.has_value());
+    released.wait();
+  });
+  const bool locked = acquired.get_future().get();
+  azookey::host::SettingsStore store(path, std::chrono::milliseconds(0));
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  const bool saved = store.PersistBenchmarkResult(azookey::core::PathToUtf8(temp.path() / "model"),
+                                                  "2026-10-10T10:00:00Z", response);
+  release.set_value();
+  holder.join();
+  ASSERT_TRUE(locked);
+  EXPECT_FALSE(saved);
+  EXPECT_EQ(ReadText(path), "{}");
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryConcurrentWritersRetainBothResults) {
+  ScopedTempDirectory temp("azookey_benchmark_concurrent");
+  const auto path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  azookey::host::SettingsStore first(path);
+  azookey::host::SettingsStore second(path);
+  std::promise<void> start;
+  const auto ready = start.get_future().share();
+  const auto write = [&](azookey::host::SettingsStore& store, const char* backend) {
+    ready.wait();
+    azookey::ipc::BenchmarkModelResponse response;
+    response.backend = backend;
+    response.status = "success";
+    return store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response);
+  };
+  auto a = std::async(std::launch::async, [&] { return write(first, "cpu"); });
+  auto b = std::async(std::launch::async, [&] { return write(second, "vulkan"); });
+  start.set_value();
+  EXPECT_TRUE(a.get());
+  EXPECT_TRUE(b.get());
+  const auto document = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(document && document->Find("model"));
+  const auto* history = document->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history);
+  ASSERT_EQ(history->size(), 2u);
+  EXPECT_NE(history->front().GetString("backend"), history->back().GetString("backend"));
+}
+
+TEST(SettingsStoreTest, BenchmarkHistoryDropsMalformedCanonicalRowsOnAppend) {
+  ScopedTempDirectory temp("azookey_benchmark_bad_rows");
+  const auto path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  ASSERT_TRUE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->Find("model"));
+  const auto* history = parsed->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history && !history->empty());
+  const auto canonical = history->front().AsObject();
+  azookey::ipc::json::Array rows{azookey::ipc::json::Value(canonical)};
+  for (const auto& [key, value] : azookey::ipc::json::Object{{"completedAt", "not-a-date"},
+                                                             {"status", "unknown"},
+                                                             {"p95_ms", -1},
+                                                             {"vram_mb", "invalid"},
+                                                             {"iterations_completed", 1.5},
+                                                             {"error", false},
+                                                             {"extra", true}}) {
+    auto malformed = canonical;
+    malformed[key] = value;
+    rows.emplace_back(std::move(malformed));
+  }
+  auto missing = canonical;
+  missing.erase("load_ms");
+  rows.emplace_back(std::move(missing));
+  auto model = parsed->Find("model")->AsObject();
+  model["benchmarkHistory"] = azookey::ipc::json::Value(std::move(rows));
+  auto root = parsed->AsObject();
+  root["model"] = azookey::ipc::json::Value(std::move(model));
+  WriteText(path, azookey::ipc::json::Stringify(azookey::ipc::json::Value(std::move(root))));
+  ASSERT_TRUE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:01:00Z", response));
+  const auto saved = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(saved && saved->Find("model"));
+  const auto* kept = saved->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(kept);
+  ASSERT_EQ(kept->size(), 2u);
+  EXPECT_EQ(kept->front().GetString("completedAt"), "2026-10-10T10:00:00Z");
+  EXPECT_EQ(kept->back().GetString("completedAt"), "2026-10-10T10:01:00Z");
+}
+
+#ifdef _WIN32
+TEST(SettingsStoreTest, BenchmarkHistoryReplacementFailurePreservesOriginal) {
+  ScopedTempDirectory temp("azookey_benchmark_replace_failure");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, "{}");
+  // Reads remain possible, but replacement needs FILE_SHARE_DELETE.
+  const HANDLE held = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(held, INVALID_HANDLE_VALUE);
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.status = "success";
+  const bool saved = store.PersistBenchmarkResult(azookey::core::PathToUtf8(temp.path() / "model"),
+                                                  "2026-10-10T10:00:00Z", response);
+  CloseHandle(held);
+  EXPECT_FALSE(saved);
+  EXPECT_EQ(ReadText(path), "{}");
+  for (const auto& file : std::filesystem::directory_iterator(temp.path())) {
+    EXPECT_EQ(file.path(), path);  // No orphaned atomic-write temporary file.
+  }
+}
+#endif

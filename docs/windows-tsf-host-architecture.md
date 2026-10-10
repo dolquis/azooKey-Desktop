@@ -332,7 +332,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json.enc` 自体は変更しない。`user_dict.json.enc` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリと、SafeMode に入るときの Host である。Host は同じファイルロックの下でディスク上の内容へ `safeMode` だけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` を保つ。
+- `settings.json` を保存するのは設定アプリと、SafeMode 記録・ベンチマーク履歴追記を行う Host である。Host は同じファイルロックの下でディスク上の内容へ対象キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` と `model.benchmarkHistory` を保つ。履歴の形式・保持規則は `model-management-spec.md` §7.1 に従う。
   どちらも mutator である。
   設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。
   ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。

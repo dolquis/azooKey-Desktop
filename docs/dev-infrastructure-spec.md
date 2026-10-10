@@ -1479,8 +1479,9 @@ wall-clock deadline を超えて待ってはならない**。
 受信 API は **スライス幅と request の残デッドラインを別の引数として受け取る**
 （1 引数形は「両者が等しい単発呼び出し」と定義する。実装形は DEV-744）。
 呼び出し側が絶対 deadline を持たない場合は「なし」を渡せるものとし、その場合の
-相 B は read ハードのみで縛る。§8.5.2 に値を持つ要求（Ping・QueryCandidates・
-Live・Heavy）と M58-B の `T_sub` は、いずれも request deadline として渡す。
+相 B は read ハードのみで縛る。§8.5.2 に値を持つ要求（Ping・`Health`・
+QueryCandidates / ライブ変換・再変換・一括変換・外部 AI 呼び出し）と M58-B の `T_sub` は、
+いずれも request deadline として渡す。
 
 **相 A（フレーム到着待ち）**: 1 byte も届いていない間の待ち。上限はスライス幅。
 超過時は `nullopt` を返し、接続は維持し、pipe からは何も取り出さない。
@@ -2120,7 +2121,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
 - 推論の失敗と打ち切りは、単発でも連続でも Host の状態機械を変えない（model 系の対象外）。
   ロード済みモデルの推論が 1 変換ハード予算（`docs/zenzai-inference-spec.md` §8.2 の 600ms。
-  上限は §8.5.2 の Heavy inference）を超えた要求は、その時点の best-so-far beam があれば
+  上限の設計値は §8.5.2 の 800ms）を超えた要求は、その時点の best-so-far beam があれば
   Zenzai の候補として返し、劣化として扱わない。例外・空生成・best-so-far の無い打ち切りで
   失敗した要求だけを SimpleConverter の候補へ落とす（`ZenzaiModelConverter` の fallback。
   同 §6.4 / §9.2.2）。次の要求は再び Zenzai で処理する。IPC の deadline 超過は transport 系
@@ -2209,10 +2210,12 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 | 処理 | timeout |
 |---|---:|
 | IPC Ping / `Health`（TIP の監視は `Health` を使う。§8.3）/ TIP の `QueryDiagnostics`（§8.5.1） | 500ms |
-| `QueryCandidates` fast | 150ms |
-| ライブ変換（`QueryLiveConversion`。M14 以前の Host へは `QueryCandidates` の `live=true` で代替する） | 80ms |
-| Heavy inference（ローカル Zenzai 変換等） | 800ms |
-| 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕。正典は `docs/ai-backend-spec.md` §7.1 |
+| `QueryCandidates` fast / ライブ変換（`QueryLiveConversion`。M14 以前の Host へは `QueryCandidates` の `live=true` で代替する）/ `QueryPredictions` | 150ms |
+| 再変換（`live=true` の `QueryCandidates` と読みの逆引き） | 750ms |
+| 一括変換（`QueryBatchConversion`）の neural | 30s |
+| 一括変換の ai-cleanup（`local-zenzai` など外部 AI でない backend） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
+| 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕（TIP は 5s を足す）。正典は `docs/ai-backend-spec.md` §7.1 |
+| （設計値）ローカル Zenzai 1 変換のハード予算の上限 | 800ms。request deadline ではない（下記） |
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 
@@ -2221,8 +2224,15 @@ connected-but-silent Host でも、pipe 切断や blocking read の解除を待�
 
 本表は Host 内の推論予算とも別レイヤである。Host の `InferenceEngine` は 1 変換ごとに
 `docs/zenzai-inference-spec.md` §8.2 の 1 変換ハード予算（600ms）を設定し、超過時は
-best-so-far を返す。Heavy inference はこの予算の上限であり、値を一致させない。
-600ms を上限に揃えない根拠は同 §8.2 の上限と下限の制約である。
+best-so-far を返す。表の「ローカル Zenzai 1 変換のハード予算の上限」800ms は、この予算の
+上限を決める設計値であり、実行時に強制される request deadline ではない。ローカル Zenzai の
+変換が 800ms で client から打ち切られるわけではなく、client が待つ時間は要求の種別ごとの上の行
+（fast / ライブ変換 150ms、再変換 750ms、一括変換 30s）が決める。600ms を上限に揃えない根拠は
+同 §8.2 の上限と下限の制約である。
+
+ライブ変換は `QueryCandidates` fast と同じ 150ms を TIP の 1 つの定数で待つ。
+候補表示レイテンシの性能目標（§10 の p50 < 80ms）は目標値であり、打ち切りの deadline ではない。
+
 Host は `QueryCandidates` fast とライブ変換の値を自分の deadline として持たない。
 この 2 つは client 側の deadline と Cancel（§7.5）が打ち切る。
 Host 側に置かない理由は次のとおり。
@@ -2236,7 +2246,7 @@ Host 側に置かない理由は次のとおり。
 本表は request レイヤの値であり、transport のフレームデッドライン（§6.4.7。
 read 2000ms / write 5000ms）とは別レイヤである。本表の値を変えても §6.4.7 は
 追従せず、逆も同様。フレームデッドラインには推論時間が算入されないため、
-Heavy inference 800ms や Model load 30s と比較して短いことは矛盾しない。
+一括変換 30s や Model load 30s と比較して短いことは矛盾しない。
 値は独立だが**優先関係はある**: client の受信で両者が同時に効く場合、本表の
 deadline がフレームデッドラインより短ければ本表が勝つ（§6.4.8）。上記の
 「blocking read の解除を待たない」を transport 側が破らないための規約である。
@@ -2356,8 +2366,7 @@ karukan は `max_latency_ms` を超えたら main（90M）から light（26M）�
 返す」ことは、**M47 の要求単位の fallback が担う**。§8.5.1 のとおり、推論が 1 変換
 ハード予算を超えた要求は、best-so-far beam があればそれを返し、無ければその要求だけを
 SimpleConverter の候補へ落とす。いずれの場合も状態機械は遷移させない。
-この予算は `docs/zenzai-inference-spec.md` §8.2 の 600ms（上限は §8.5.2 の Heavy inference
-800ms）であり、これが karukan の `max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
+この予算は `docs/zenzai-inference-spec.md` §8.2 の 600ms（上限の設計値は §8.5.2 の 800ms）であり、これが karukan の `max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
 SimpleConverter の経路であり、モデルをもう 1 つ常駐させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
 CPU backend へ再試行し、それも失敗したら SimpleConverter へ落とす経路は
 `docs/model-management-spec.md` §5.3 が定めている。

@@ -547,3 +547,88 @@ TEST(UserDictCliTest, DirectImportExportKeepsNonAsciiPathsAsUtf8) {
 
   std::filesystem::remove_all(root);
 }
+
+namespace {
+
+std::string ReadAll(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+bool HasMigrationArtifact(const std::filesystem::path& root) {
+  for (const auto& entry : std::filesystem::directory_iterator(root)) {
+    const auto name = entry.path().filename().string();
+    if (name.find(".bak") != std::string::npos || name.find(".enc") != std::string::npos ||
+        name.find(".corrupt.") != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(UserDictCliTest, ListAndExportReadPlaintextWithoutMigration) {
+  const auto path = TestPath("azookey_userdict_cli_readonly_plaintext");
+  const auto root = path.parent_path();
+  const auto export_path = root / "export.json";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  const std::string plaintext = R"({"entries":[{"word":"A","ruby":"a"}]})";
+  {
+    std::ofstream out(path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out << plaintext;
+  }
+
+  auto list = Parse({"list", "--format", "tsv"});
+  ASSERT_TRUE(list.has_value());
+  auto list_result = azookey::host::RunUserDictCli(*list, DirectRunOptions(path));
+  EXPECT_EQ(list_result.exit_code, 0) << list_result.error;
+  ASSERT_EQ(list_result.output_lines.size(), 1u);
+  EXPECT_EQ(list_result.output_lines.front(), "a\tA\t\t\t");
+
+  std::vector<std::string> export_args = {"export", export_path.string()};
+  std::string error;
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  auto export_result = azookey::host::RunUserDictCli(*export_options, DirectRunOptions(path));
+  EXPECT_EQ(export_result.exit_code, 0) << export_result.error;
+  EXPECT_TRUE(std::filesystem::exists(export_path));
+
+  EXPECT_EQ(ReadAll(path), plaintext);
+  EXPECT_FALSE(HasMigrationArtifact(root));
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(UserDictCliTest, ListAndExportLeaveCorruptFileInPlace) {
+  const auto path = TestPath("azookey_userdict_cli_readonly_corrupt");
+  const auto root = path.parent_path();
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream out(path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out << "not valid json";
+  }
+
+  auto list = Parse({"list"});
+  ASSERT_TRUE(list.has_value());
+  auto list_result = azookey::host::RunUserDictCli(*list, DirectRunOptions(path));
+  EXPECT_EQ(list_result.exit_code, 1);
+  EXPECT_EQ(list_result.error, "failed to load user dictionary");
+
+  std::vector<std::string> export_args = {"export", (root / "export.json").string()};
+  std::string error;
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  auto export_result = azookey::host::RunUserDictCli(*export_options, DirectRunOptions(path));
+  EXPECT_EQ(export_result.exit_code, 1);
+  EXPECT_FALSE(std::filesystem::exists(root / "export.json"));
+
+  EXPECT_EQ(ReadAll(path), "not valid json");
+  EXPECT_FALSE(HasMigrationArtifact(root));
+
+  std::filesystem::remove_all(root);
+}

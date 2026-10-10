@@ -13,6 +13,7 @@ add_library(azookey_host STATIC
   src/AnomalyDetector.cpp
   src/BackupArchive.cpp
   src/CandidateTags.cpp
+  src/CliHostConnect.cpp
   src/DictionaryCandidateProvider.cpp
   src/EnglishCandidates.cpp
   src/EnglishDictionaryFiles.cpp

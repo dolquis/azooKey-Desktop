@@ -6986,7 +6986,10 @@ void TextService::RefreshPrediction(ITfContext* context) {
   candidate_ui_.CancelScheduledCandidatesReady();
   prediction_retry_scheduled_generation_ = 0;
   {
-    std::lock_guard lock(ipc_mtx_);
+    // A result for an earlier generation can no longer be shown; dropping it
+    // with the generation bump keeps the slot to the queued reading only.
+    std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+    prediction_result_.reset();
     ipc_prediction_request_ =
         PredictionRequest{++prediction_generation_,
                           kana,

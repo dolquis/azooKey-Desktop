@@ -5,6 +5,7 @@
 #include <sstream>
 #include <utility>
 
+#include "azookey/host/CliHostConnect.h"
 #include "azookey/host/CliText.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
@@ -167,7 +168,8 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
   azookey::ipc::NamedPipeClient client;
   const std::string pipe_name =
       run_options.pipe_name.empty() ? azookey::ipc::DefaultPipeName() : run_options.pipe_name;
-  if (!client.Connect(pipe_name, run_options.connect_timeout_ms)) {
+  if (!ConnectToRunningHost(client, pipe_name, run_options.connect_timeout_ms,
+                            run_options.busy_connect_timeout_ms)) {
     return ResolveResult(
         options, false, false, "ipc",
         "failed to connect to running host; pass --offline to edit the file directly");

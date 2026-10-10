@@ -267,6 +267,12 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 - **ビームサーチ**（beam width = `B`、既定 4）を採用。サンプリング（temperature>0）は
   IME の決定性を損なうため**既定では使わない**（再現性・テスト容易性を優先）。
 - 各ビームは系列 logprob（トークン logprob の総和）を保持。`[EOS]` / トークン上限で確定。
+- `[EOS]` で確定した系列は、`[EOS]` 自身の logprob を系列 logprob に加え、トークン数にも
+  1 を数える。モデルがそこで終わると見ていない prefix（読みの末尾を欠いた表層）は、
+  `[EOS]` が beam 内の上位に入っても低く採点され、読みを最後まで消費した系列より下に並ぶ。
+- 探索は、表層が互いに異なる確定系列が `N_zenzai` 件そろい、かつ進行中のどのビームも
+  その上位 `N_zenzai` 件の最下位を平均 logprob で上回らないときに止める。確定系列が
+  そろった時点で止めると、1 step 遅れて読みを消費し切る系列を捨てるためである。
 - top-`N_zenzai` の確定系列を候補化する。
 
 ### 6.3 inferenceLimit のマッピング
@@ -294,7 +300,7 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
   指数を取り、加算スケールへ写す:
 
   ```
-  avg_lp   = total_logprob / num_output_tokens     // ≤ 0
+  avg_lp   = total_logprob / num_output_tokens     // ≤ 0、[EOS] で確定した系列は [EOS] を含む
   prob_geo = exp(avg_lp)                            // (0, 1]  幾何平均トークン確率
   score    = Z_FLOOR + (Z_CEIL - Z_FLOOR) * prob_geo
   ```

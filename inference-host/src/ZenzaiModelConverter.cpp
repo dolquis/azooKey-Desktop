@@ -997,8 +997,7 @@ struct ZenzaiModelRuntime {
       }
     }
 
-    if (!completed_quota_reached &&
-        SaneUniqueGeneratedScores(generated).size() < candidate_limit) {
+    if (!completed_quota_reached && SaneUniqueGeneratedScores(generated).size() < candidate_limit) {
       for (const auto& beam : beams) {
         AppendUnfinishedBeam(generated, beam);
       }

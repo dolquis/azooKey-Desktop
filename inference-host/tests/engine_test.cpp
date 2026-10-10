@@ -1888,7 +1888,8 @@ TEST(InferenceEngineTest, PlansPrunedBeamSequencesWithoutUnnecessaryCopies) {
   EXPECT_TRUE(plan.copies.empty());
 }
 
-TEST(InferenceEngineTest, CompletedBeamPaysForEndOfSequenceSoTruncatedReadingRanksBelowFullReading) {
+TEST(InferenceEngineTest,
+     CompletedBeamPaysForEndOfSequenceSoTruncatedReadingRanksBelowFullReading) {
   using azookey::host::BeamRankScore;
   using azookey::host::CompletedBeamScore;
   // 「…協議す」 ends one character early: its prefix is confident but the model does not

@@ -1494,7 +1494,7 @@ bool InferenceEngine::CommitSegmentsObservation(
   };
   double alpha = 0.0;
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
     if (!NoteObservationIdLocked(request.observation_id)) return false;
     alpha = config_.learning_alpha;
     if (store_) {
@@ -1516,6 +1516,17 @@ bool InferenceEngine::CommitSegmentsObservation(
       NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
+    core::ConversionContext context;
+    context.preceding_text = request.left_context;
+    for (const auto& segment : request.segments) {
+      if (!segment.is_auto_punctuation && !english(segment)) {
+        converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
+                                          core::CandidateSource::UserDictionary, "commit"},
+                          context);
+      }
+      context.preceding_text =
+          core::TakeLastUtf8Codepoints(context.preceding_text + segment.chosen.surface, 128);
+    }
   }
   // M60 section 6.4: English segments go to the English channel only.
   if (std::any_of(request.segments.begin(), request.segments.end(), english)) {
@@ -1528,18 +1539,6 @@ bool InferenceEngine::CommitSegmentsObservation(
       }
       (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
     }
-  }
-  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
-  core::ConversionContext context;
-  context.preceding_text = request.left_context;
-  for (const auto& segment : request.segments) {
-    if (!segment.is_auto_punctuation && !english(segment)) {
-      converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
-                                        core::CandidateSource::UserDictionary, "commit"},
-                        context);
-    }
-    context.preceding_text =
-        core::TakeLastUtf8Codepoints(context.preceding_text + segment.chosen.surface, 128);
   }
   return true;
 }
@@ -1592,7 +1591,7 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
   uint32_t auto_word_min_count = 0;
   bool auto_word_auto_register = false;
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
     // A resend after a pipe drop must not re-apply an observation the Host
     // already recorded, so the dedupe check gates both the learning store and
     // the converter's own commit history.
@@ -1613,9 +1612,8 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
       auto_word_auto_register = config_.auto_word_auto_register;
     }
     converter = active_converter_;
-  }
-  {
-    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    // Keep the store observation and converter history in one critical section:
+    // forgetting between them must not revive history after the deletion.
     // The membership question has to be answered before Commit: Commit feeds
     // Learn(), which inserts the pair into the converter's own bucket, so
     // asking afterwards would report every committed word as already known.
@@ -1661,7 +1659,7 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::scoped_lock lock(state_mutex_, converter_call_mutex_);
     if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
       if (selected_surface) {
@@ -1677,16 +1675,15 @@ bool InferenceEngine::CommitCorrection(const std::string& reading,
       NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
-  }
-  // An undo accepts nothing, so there is no surface to teach the converter.
-  if (!selected_surface) return true;
+    // An undo accepts nothing, so there is no surface to teach the converter.
+    if (!selected_surface) return true;
 
-  core::ConversionContext context;
-  context.rejected_surfaces.push_back(rejected_surface);
-  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
-  converter->Commit(core::Candidate{*selected_surface, reading, 1.0,
-                                    core::CandidateSource::UserDictionary, "correction-commit"},
-                    context);
+    core::ConversionContext context;
+    context.rejected_surfaces.push_back(rejected_surface);
+    converter->Commit(core::Candidate{*selected_surface, reading, 1.0,
+                                      core::CandidateSource::UserDictionary, "correction-commit"},
+                      context);
+  }
   return true;
 }
 

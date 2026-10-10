@@ -1576,6 +1576,14 @@ void ZenzaiModelConverter::Learn(const std::string& committed_surface,
   fallback_->Learn(committed_surface, committed_reading);
 }
 
+void ZenzaiModelConverter::Forget(const std::string& reading, const std::string& surface) {
+  if (fallback_) fallback_->Forget(reading, surface);
+}
+
+void ZenzaiModelConverter::ResetLearned() {
+  if (fallback_) fallback_->ResetLearned();
+}
+
 bool ZenzaiModelConverter::Contains(const std::string& reading, const std::string& surface) const {
   return fallback_ && fallback_->Contains(reading, surface);
 }

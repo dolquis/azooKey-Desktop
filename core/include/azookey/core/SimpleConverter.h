@@ -31,6 +31,8 @@ class SimpleConverter final : public IConverter {
                                  const ConversionContext& context) override;
   void Commit(const Candidate& selected_candidate, const ConversionContext& context) override;
   void Learn(const std::string& committed_surface, const std::string& committed_reading) override;
+  void Forget(const std::string& reading, const std::string& surface) override;
+  void ResetLearned() override;
   bool Contains(const std::string& reading, const std::string& surface) const override;
 
  private:
@@ -39,6 +41,8 @@ class SimpleConverter final : public IConverter {
   // Contains() excludes them so new-word mining can tell the lexicon from the
   // converter's own commit history.
   std::unordered_set<std::string> learned_only_keys_;
+  // First pre-learning candidate, or nullopt for a learned-only addition.
+  std::unordered_map<std::string, std::optional<Candidate>> learned_originals_;
   std::unordered_map<std::string, std::unordered_map<std::string, double>> bigram_bonus_;
 };
 

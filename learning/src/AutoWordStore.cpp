@@ -415,11 +415,39 @@ bool AutoWordStore::ParseTextLocked(std::string_view text) {
 
 bool AutoWordStore::Save() const {
   std::lock_guard<std::mutex> lock(mutex_);
+  return SaveLocked();
+}
+
+bool AutoWordStore::SaveLocked() const {
   if (save_blocked_by_load_failure_) return false;
   auto text = SerializeTextLocked();
   const bool saved = WriteProtectedText(path_, text, *crypto_);
   SecureErase(text);
   return saved;
+}
+
+AutoWordSaveOutcome AutoWordStore::SetStateAndSave(const std::string& surface,
+                                                   const std::string& reading,
+                                                   AutoWordState state) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto* word = FindLocked(surface, reading);
+  if (!word) return AutoWordSaveOutcome::NotFound;
+  if (word->state == state) return AutoWordSaveOutcome::Unchanged;
+  const auto previous = word->state;
+  word->state = state;
+  if (SaveLocked()) return AutoWordSaveOutcome::Changed;
+  word->state = previous;
+  return AutoWordSaveOutcome::SaveFailed;
+}
+
+bool AutoWordStore::ResetAndSave() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (save_blocked_by_load_failure_) return false;
+  auto before = std::move(table_);
+  table_.clear();
+  if (SaveLocked()) return true;
+  table_ = std::move(before);
+  return false;
 }
 
 std::string AutoWordStore::SerializeText() const {

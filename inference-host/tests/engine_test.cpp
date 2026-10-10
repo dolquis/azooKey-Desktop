@@ -2850,6 +2850,159 @@ TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
             nullptr);
 }
 
+TEST(EngineLearningErasureTest, ForgetPairRestoresDictionaryRankWithoutRestart) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  const auto baseline = engine->QueryCandidates("にほん", "", kNowBase);
+  for (int i = 0; i < 8; ++i) engine->CommitObservation("にほん", "二本", kNowBase);
+  ASSERT_EQ(engine->QueryCandidates("にほん", "", kNowBase).front().surface, "二本");
+  ASSERT_EQ(engine->ForgetLearningPair("にほん", "二本"),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  const auto after = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_EQ(after.size(), baseline.size());
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    EXPECT_EQ(after[i].surface, baseline[i].surface);
+    EXPECT_DOUBLE_EQ(after[i].score, baseline[i].score);
+  }
+}
+
+TEST(EngineLearningErasureTest, ForgetEntryRemovesCorrectionHistoryButKeepsOtherPairs) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  ASSERT_TRUE(engine->CommitCorrection("しんご", "誤語", std::string("新語"), kNowBase));
+  ASSERT_TRUE(engine->CommitObservation("べつご", "別語", kNowBase));
+  const auto page =
+      engine->ListLearningEntries(azookey::host::LearningDataStore::Learning, "新語", 0, 10);
+  ASSERT_EQ(page.entries.size(), 1u);
+  ASSERT_EQ(engine->ForgetLearningEntry(azookey::host::LearningDataStore::Learning,
+                                        page.entries.front().id),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  const auto after = engine->QueryCandidates("しんご", "", kNowBase);
+  EXPECT_TRUE(
+      std::none_of(after.begin(), after.end(), [](const auto& c) { return c.surface == "新語"; }));
+  EXPECT_EQ(engine->QueryCandidates("べつご", "", kNowBase).front().surface, "別語");
+}
+
+TEST(EngineLearningErasureTest, ResetRemovesSegmentAndCorrectionHistoryWithoutRestart) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::ipc::CommitSegmentsObservationRequest request;
+  azookey::ipc::ObservedSegment segment;
+  segment.reading = "しんご";
+  segment.chosen.surface = "新語";
+  request.segments.push_back(segment);
+  ASSERT_TRUE(engine->CommitSegmentsObservation(request, kNowBase));
+  ASSERT_TRUE(engine->CommitCorrection("べつご", "誤語", std::string("別語"), kNowBase));
+  ASSERT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::Learning),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  for (const auto& reading : {"しんご", "べつご"}) {
+    const auto after = engine->QueryCandidates(reading, "", kNowBase);
+    EXPECT_TRUE(std::none_of(after.begin(), after.end(), [](const auto& c) {
+      return c.surface == "新語" || c.surface == "別語";
+    }));
+  }
+}
+
+TEST(EngineLearningErasureTest, FailedResetKeepsConverterHistory) {
+  class FailEncryption final : public azookey::learning::ByteCrypto {
+   public:
+    bool Encrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+    bool Decrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+  } crypto;
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"), &crypto);
+  auto engine = MakeEngine(store);
+  ASSERT_TRUE(engine->CommitObservation("しんご", "新語", kNowBase));
+  const auto before = store.SerializeText();
+  ASSERT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::Learning),
+            azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
+  EXPECT_EQ(store.SerializeText(), before);
+  EXPECT_EQ(engine->QueryCandidates("しんご", "", kNowBase).front().surface, "新語");
+}
+
+TEST(EngineLearningErasureTest, ForgetAndResetWaitForConcurrentCommit) {
+  class BlockingCommit final : public azookey::core::IConverter {
+   public:
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    std::vector<azookey::core::Candidate> Convert(
+        const std::string& reading, const azookey::core::ConversionContext& context) override {
+      return converter_.Convert(reading, context);
+    }
+    std::vector<azookey::core::Candidate> PredictNext(
+        const std::string& reading, const azookey::core::ConversionContext& context) override {
+      return converter_.PredictNext(reading, context);
+    }
+    std::vector<azookey::core::Candidate> Correct(
+        const std::string& reading, const azookey::core::CorrectionHint& hint,
+        const azookey::core::ConversionContext& context) override {
+      return converter_.Correct(reading, hint, context);
+    }
+    void Commit(const azookey::core::Candidate& candidate,
+                const azookey::core::ConversionContext& context) override {
+      entered.set_value();
+      released.wait();
+      converter_.Commit(candidate, context);
+    }
+    void Learn(const std::string& surface, const std::string& reading) override {
+      converter_.Learn(surface, reading);
+    }
+    void Forget(const std::string& reading, const std::string& surface) override {
+      converter_.Forget(reading, surface);
+    }
+    void ResetLearned() override { converter_.ResetLearned(); }
+
+   private:
+    azookey::core::SimpleConverter converter_;
+  };
+  for (const bool reset : {false, true}) {
+    ScopedTempDirectory temp;
+    azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                           &azookey::learning::test::Crypto());
+    auto converter = std::make_unique<BlockingCommit>();
+    auto* barrier = converter.get();
+    auto entered = barrier->entered.get_future();
+    azookey::host::InferenceEngine engine(std::move(converter), &store, {});
+    auto commit = std::async(std::launch::async,
+                             [&] { return engine.CommitObservation("しんご", "新語", kNowBase); });
+    if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+      barrier->release.set_value();
+      commit.wait();
+      FAIL() << "Commit did not reach the converter barrier";
+    }
+    std::promise<void> attempted;
+    auto started = attempted.get_future();
+    auto erase = std::async(std::launch::async, [&] {
+      attempted.set_value();
+      return reset ? engine.ResetLearningStore(azookey::host::LearningDataStore::Learning) ==
+                         azookey::host::InferenceEngine::ResetOutcome::Reset
+                   : engine.ForgetLearningPair("しんご", "新語") ==
+                         azookey::host::InferenceEngine::ForgetOutcome::Forgotten;
+    });
+    const auto erase_started = started.wait_for(std::chrono::seconds(5));
+    const auto pending = erase.wait_for(std::chrono::milliseconds(50));
+    barrier->release.set_value();
+    EXPECT_EQ(erase_started, std::future_status::ready);
+    EXPECT_EQ(pending, std::future_status::timeout);
+    EXPECT_TRUE(commit.get());
+    ASSERT_TRUE(erase.get());
+    const auto after = engine.QueryCandidates("しんご", "", kNowBase);
+    EXPECT_TRUE(std::none_of(after.begin(), after.end(),
+                             [](const auto& c) { return c.surface == "新語"; }));
+  }
+}
+
 TEST(EngineAutoWordTest, TrendingIngestWaitsForFailedResetRollbackAndPreservesBothWords) {
   class FailNextEncryption final : public azookey::learning::ByteCrypto {
    public:

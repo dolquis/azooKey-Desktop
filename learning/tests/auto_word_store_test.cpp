@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
 
 #include "TestByteCrypto.h"
@@ -55,6 +57,92 @@ TEST(AutoWordStoreTest, ObserveAddsPendingThenCountsRepeats) {
   // first_seen is when the word appeared; last_seen tracks the latest sighting.
   EXPECT_EQ(pending[0].first_seen_epoch, kNow);
   EXPECT_EQ(pending[0].last_seen_epoch, kNow + 10);
+}
+
+TEST(AutoWordStoreTest, StateAndResetTransactionsRestoreMemoryOnSaveFailure) {
+  class FailEncryption final : public azookey::learning::ByteCrypto {
+   public:
+    bool Encrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+    bool Decrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+  } crypto;
+  AutoWordStore store(TempPath("azookey_auto_word_atomic_failure.tsv"), &crypto);
+  store.Observe("語", "ご", kNow, 2, false);
+  const auto before = store.SerializeText();
+  EXPECT_EQ(store.SetStateAndSave("なし", "なし", AutoWordState::Confirmed),
+            azookey::learning::AutoWordSaveOutcome::NotFound);
+  EXPECT_EQ(store.SetStateAndSave("語", "ご", AutoWordState::Pending),
+            azookey::learning::AutoWordSaveOutcome::Unchanged);
+  EXPECT_EQ(store.SetStateAndSave("語", "ご", AutoWordState::Rejected),
+            azookey::learning::AutoWordSaveOutcome::SaveFailed);
+  EXPECT_EQ(store.SerializeText(), before);
+  EXPECT_FALSE(store.ResetAndSave());
+  EXPECT_EQ(store.SerializeText(), before);
+}
+
+TEST(AutoWordStoreTest, FailedTransactionsCannotUndoConcurrentApproval) {
+  class BlockingFailure final : public azookey::learning::ByteCrypto {
+   public:
+    mutable std::atomic<bool> fail_next{false};
+    mutable std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      if (fail_next.exchange(false)) {
+        entered.set_value();
+        released.wait();
+        return false;
+      }
+      return crypto_.Encrypt(plain, cipher);
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return crypto_.Decrypt(cipher, plain);
+    }
+
+   private:
+    azookey::learning::test::TestByteCrypto crypto_;
+  } crypto;
+  AutoWordStore store(TempPath("azookey_auto_word_atomic_concurrent.tsv"), &crypto);
+  for (const bool reset : {false, true}) {
+    store.Reset();
+    store.Observe("語", "ご", kNow, 2, false);
+    ASSERT_TRUE(store.Save());
+    crypto.entered = std::promise<void>();
+    crypto.release = std::promise<void>();
+    crypto.released = crypto.release.get_future().share();
+    auto entered = crypto.entered.get_future();
+    crypto.fail_next = true;
+    auto failure = std::async(std::launch::async, [&] {
+      return reset ? !store.ResetAndSave()
+                   : store.SetStateAndSave("語", "ご", AutoWordState::Rejected) ==
+                         azookey::learning::AutoWordSaveOutcome::SaveFailed;
+    });
+    if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+      crypto.release.set_value();
+      failure.wait();
+      FAIL() << "Transaction did not reach the encryption barrier";
+    }
+    std::promise<void> attempted;
+    auto started = attempted.get_future();
+    auto approval = std::async(std::launch::async, [&] {
+      attempted.set_value();
+      return store.SetStateAndSave("語", "ご", AutoWordState::Confirmed);
+    });
+    const auto approval_started = started.wait_for(std::chrono::seconds(5));
+    const auto pending = approval.wait_for(std::chrono::milliseconds(50));
+    crypto.release.set_value();
+    EXPECT_EQ(approval_started, std::future_status::ready);
+    EXPECT_EQ(pending, std::future_status::timeout);
+    EXPECT_TRUE(failure.get());
+    EXPECT_EQ(approval.get(), azookey::learning::AutoWordSaveOutcome::Changed);
+    EXPECT_EQ(store.LookupConfirmed("ご").size(), 1u);
+    AutoWordStore reloaded(store.path(), &crypto);
+    ASSERT_TRUE(reloaded.Load());
+    EXPECT_EQ(reloaded.SerializeText(), store.SerializeText());
+  }
 }
 
 TEST(AutoWordStoreTest, ConfirmModeNeverPromotesAutomatically) {

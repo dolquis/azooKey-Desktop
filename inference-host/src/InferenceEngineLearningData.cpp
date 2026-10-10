@@ -64,7 +64,7 @@ LearningDataPage InferenceEngine::ListLearningEntries(LearningDataStore store,
 
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningDataStore store,
                                                                     const std::string& id) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_, converter_call_mutex_);
   const auto stores = LearningDataStoresLocked();
   const auto entry = FindLearningEntry(stores, store, id);
   if (!entry) return ForgetOutcome::NotFound;
@@ -85,13 +85,11 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ForgetOutcome::NotFound;
-      const auto previous = auto_word_store_->SetState(entry->surface, entry->reading,
-                                                       learning::AutoWordState::Rejected);
-      if (!previous) return ForgetOutcome::NotFound;
-      if (auto_word_store_->Save()) return ForgetOutcome::Forgotten;
-      auto_word_store_->CompareAndSetState(entry->surface, entry->reading,
-                                           learning::AutoWordState::Rejected, *previous);
-      return ForgetOutcome::SaveFailed;
+      const auto outcome = auto_word_store_->SetStateAndSave(entry->surface, entry->reading,
+                                                             learning::AutoWordState::Rejected);
+      if (outcome == learning::AutoWordSaveOutcome::NotFound) return ForgetOutcome::NotFound;
+      return outcome == learning::AutoWordSaveOutcome::SaveFailed ? ForgetOutcome::SaveFailed
+                                                                  : ForgetOutcome::Forgotten;
     }
     case LearningDataStore::UserDictionary:
       break;
@@ -120,7 +118,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
 
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningPair(const std::string& reading,
                                                                    const std::string& surface) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_, converter_call_mutex_);
   if (!store_) return ForgetOutcome::NotFound;
   return ForgetPairLocked(*store_, reading, surface);
 }
@@ -133,6 +131,10 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairLocked(learning::Learn
                                                                  const std::string& reading,
                                                                  const std::string& surface) {
   const bool in_store = store.Forget(reading, surface);
+  if (&store == store_) {
+    fallback_converter_->Forget(reading, surface);
+    if (model_converter_) model_converter_->Forget(reading, surface);
+  }
   bool legacy_removed = false;
   const bool legacy_ok = store.RemoveFromLegacyFile(reading, surface, &legacy_removed);
   const bool saved = SaveLearningDataLocked();
@@ -150,7 +152,7 @@ bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>&
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_, converter_call_mutex_);
   switch (store) {
     case LearningDataStore::Learning:
       return ResetLearningChannelsLocked();
@@ -166,12 +168,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ResetOutcome::Unavailable;
-      if (auto_word_store_->save_blocked()) return ResetOutcome::SaveFailed;
-      const auto before = auto_word_store_->SerializeText();
-      auto_word_store_->Reset();
-      if (auto_word_store_->Save()) return ResetOutcome::Reset;
-      auto_word_store_->LoadText(before);
-      return ResetOutcome::SaveFailed;
+      return auto_word_store_->ResetAndSave() ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
     }
     case LearningDataStore::UserDictionary:
       break;
@@ -213,6 +210,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningChannelsLocked() {
   if (snapshots.empty()) return ResetOutcome::Unavailable;
   for (auto& [store, text] : snapshots) store->Reset();
   if (SaveLearningDataLocked() && (!store_ || store_->ClearLegacyFile())) {
+    fallback_converter_->ResetLearned();
+    if (model_converter_) model_converter_->ResetLearned();
     RefreshPersonaLocked();
     return ResetOutcome::Reset;
   }

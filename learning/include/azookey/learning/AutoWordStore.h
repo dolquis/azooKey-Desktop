@@ -22,6 +22,7 @@ inline constexpr uint64_t kAutoWordDefaultPendingMaxAgeSec = 90ULL * 24 * 60 * 6
 
 enum class AutoWordSource { Mining, Trending };
 enum class AutoWordState { Pending, Confirmed, Rejected };
+enum class AutoWordSaveOutcome { Changed, Unchanged, NotFound, SaveFailed };
 
 struct AutoWord {
   std::string surface;
@@ -61,6 +62,10 @@ class AutoWordStore {
   bool Load();
   bool Save() const;
   void Reset();
+  // Mutation, persistence and failure rollback share one mutex acquisition.
+  bool ResetAndSave();
+  AutoWordSaveOutcome SetStateAndSave(const std::string& surface, const std::string& reading,
+                                      AutoWordState state);
 
   // Records one mining observation. A new key is added as Pending; an existing
   // key has its count incremented. A rejected key is ignored entirely, count
@@ -78,14 +83,13 @@ class AutoWordStore {
   bool Confirm(const std::string& surface, const std::string& reading);
   bool Reject(const std::string& surface, const std::string& reading);
   // Moves the word to `state` whatever it was before and returns the previous
-  // state, or nullopt when the key is absent. The approval handler uses the
-  // previous state to tell an idempotent repeat from a change and to roll the
-  // change back when Save() fails.
+  // state, or nullopt when the key is absent. This only changes memory; use
+  // SetStateAndSave for persistent approval/forget operations.
   std::optional<AutoWordState> SetState(const std::string& surface, const std::string& reading,
                                         AutoWordState state);
   // Moves the word from `expected` to `desired` only if it is still in
-  // `expected`. A rollback uses this so it cannot undo a decision another
-  // connection made in the meantime. Returns whether the state was changed.
+  // `expected`. This only changes memory, not a persistence transaction.
+  // Returns whether the state was changed.
   bool CompareAndSetState(const std::string& surface, const std::string& reading,
                           AutoWordState expected, AutoWordState desired);
 
@@ -112,6 +116,7 @@ class AutoWordStore {
 
  private:
   bool ParseTextLocked(std::string_view text);
+  bool SaveLocked() const;
   std::string SerializeTextLocked() const;
   AutoWord* FindLocked(const std::string& surface, const std::string& reading);
   bool SetStateLocked(const std::string& surface, const std::string& reading, AutoWordState state);

@@ -245,6 +245,7 @@ void SimpleConverter::Learn(const std::string& committed_surface, const std::str
     return c.surface == committed_surface;
   });
   if (found != bucket.end()) {
+    learned_originals_.try_emplace(ProvenanceKey(committed_reading, committed_surface), *found);
     found->score += 0.2;
     found->debug_info = "learned";
     return;
@@ -253,7 +254,42 @@ void SimpleConverter::Learn(const std::string& committed_surface, const std::str
   // debug_info cannot carry that fact: the branch above rewrites it the next
   // time the same pair is committed.
   learned_only_keys_.insert(ProvenanceKey(committed_reading, committed_surface));
+  learned_originals_.try_emplace(ProvenanceKey(committed_reading, committed_surface), std::nullopt);
   bucket.insert(bucket.begin(), Candidate{committed_surface, committed_reading, 1.2, CandidateSource::UserDictionary, "learned-new"});
+}
+
+void SimpleConverter::Forget(const std::string& reading, const std::string& surface) {
+  const auto key = ProvenanceKey(reading, surface);
+  const auto original = learned_originals_.find(key);
+  if (original == learned_originals_.end()) return;
+  const auto bucket = dictionary_.find(reading);
+  if (bucket != dictionary_.end()) {
+    auto& candidates = bucket->second;
+    const auto found = std::find_if(candidates.begin(), candidates.end(),
+                                    [&](const Candidate& c) { return c.surface == surface; });
+    if (found != candidates.end()) {
+      if (original->second) {
+        *found = *original->second;
+      } else {
+        candidates.erase(found);
+      }
+    }
+    if (candidates.empty()) dictionary_.erase(bucket);
+  }
+  learned_originals_.erase(original);
+  learned_only_keys_.erase(key);
+}
+
+void SimpleConverter::ResetLearned() {
+  std::vector<std::pair<std::string, std::string>> pairs;
+  for (const auto& [reading, candidates] : dictionary_) {
+    for (const auto& c : candidates) {
+      if (learned_originals_.contains(ProvenanceKey(reading, c.surface))) {
+        pairs.emplace_back(reading, c.surface);
+      }
+    }
+  }
+  for (const auto& [reading, surface] : pairs) Forget(reading, surface);
 }
 
 bool SimpleConverter::Contains(const std::string& reading, const std::string& surface) const {

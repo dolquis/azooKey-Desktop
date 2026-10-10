@@ -91,6 +91,10 @@ class AutoWordStore {
   bool Load();
   bool Save() const;
   void Reset();
+  // 変更・保存・失敗時の巻き戻しを 1 回の mutex 保持で行う。
+  bool ResetAndSave();
+  AutoWordSaveOutcome SetStateAndSave(const std::string& surface, const std::string& reading,
+                                     AutoWordState state);
 
   // マイニング観測。新規は pending 追加、既存は count++。
   // rejected キーは count も更新せず無視（再提示抑止）。
@@ -108,10 +112,10 @@ class AutoWordStore {
   std::vector<AutoWord> ListByState(AutoWordState state) const;
   bool Confirm(const std::string& surface, const std::string& reading);
   bool Reject(const std::string& surface, const std::string& reading);
-  // 承認 IPC 用: 状態を無条件に設定し、直前の状態を返す（キーが無ければ nullopt）
+  // メモリ上の状態を設定し、直前の状態を返す（キーが無ければ nullopt）。保存はしない。
   std::optional<AutoWordState> SetState(const std::string& surface, const std::string& reading,
                                         AutoWordState state);
-  // 保存失敗時の巻き戻し用: 現在の状態が expected のときだけ desired へ変える
+  // 現在の状態が expected のときだけ desired へ変える。保存はしない。
   bool CompareAndSetState(const std::string& surface, const std::string& reading,
                           AutoWordState expected, AutoWordState desired);
 
@@ -130,6 +134,10 @@ class AutoWordStore {
 - 却下語は削除せず `state=rejected` で永続化し、再観測しても pending に戻さない。
 - `TrendingWordFetcher` のワーカースレッドから変更されるため、**内部に mutex を
   持ちスレッド安全**にする。
+- `ResolveNewWord` と学習データ管理の忘却は `SetStateAndSave`、全削除は `ResetAndSave` を使う。
+  退避から保存失敗時の巻き戻しまで mutex を保持し、同時操作の変更を巻き戻さない。
+  `AutoWordSaveOutcome` は変更・保存成功を `Changed`、同じ状態を `Unchanged`、
+  キー無しを `NotFound`、保存失敗を `SaveFailed` として返す。同じ状態は保存し直さない。
 
 ## 4. マイニング検出（M36-A）
 
@@ -448,11 +456,11 @@ parser の受理条件:
 - `Dispatch` の switch に 2 ケース追加。
 - `HandleListNewWordCandidates`: `auto_word_store_->ListByState(...)` の結果を
   `last_seen_epoch` の新しい順に並べ、`max_items` 件で切って `NewWordField` に変換。
-- `HandleResolveNewWord`: action に応じた目標状態を `AutoWordStore::SetState`
-  で設定し、直前の状態を受け取る。直前の状態が目標と同じなら保存せず
-  `ok=true, changed=false` を返す。変わった場合は `Save()` し、失敗したら
-  直前の状態へ戻して `save_failed` を返す。戻すのは語がまだ目標状態にある
-  場合だけとし（`CompareAndSetState`）、その間に別の接続が下した判断を消さない。
+- `HandleResolveNewWord`: action に応じた目標状態を `AutoWordStore::SetStateAndSave`
+  へ渡す。`Changed` は `ok=true, changed=true`、`Unchanged` は保存せず
+  `ok=true, changed=false` を返す。`NotFound` は `not_found`、`SaveFailed` は
+  `save_failed` を返す。失敗時の巻き戻しはストアの mutex を保持したまま行い、
+  別の接続の承認・却下を待たせる。
 
 ### 7-3. UI と MVP 暫定
 

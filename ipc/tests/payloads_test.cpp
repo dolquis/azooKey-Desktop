@@ -631,6 +631,33 @@ TEST(PayloadsTest, QueryBatchConversion) {
   EXPECT_EQ(res_parsed->segments[0].candidates[0].surface, "日本語");
 }
 
+TEST(PayloadsTest, QueryBatchConversionEnglishCandidatesIsOptional) {
+  azookey::ipc::QueryBatchConversionRequest req;
+  req.reading = "あっぷる";
+  req.raw_romaji = "apple";
+  // false stays off the wire so older hosts see the payload unchanged.
+  auto json = azookey::ipc::BuildQueryBatchConversionRequest(req);
+  EXPECT_EQ(json.find("\"english_candidates\""), std::string::npos);
+  auto parsed = azookey::ipc::ParseQueryBatchConversionRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->english_candidates);
+
+  req.english_candidates = true;
+  parsed = azookey::ipc::ParseQueryBatchConversionRequest(
+      azookey::ipc::BuildQueryBatchConversionRequest(req));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->english_candidates);
+
+  // An older TIP's payload, and a non-bool value, mean no English candidates.
+  parsed = azookey::ipc::ParseQueryBatchConversionRequest(R"({"reading":"かな"})");
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->english_candidates);
+  parsed = azookey::ipc::ParseQueryBatchConversionRequest(
+      R"({"reading":"かな","english_candidates":"yes"})");
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->english_candidates);
+}
+
 TEST(PayloadsTest, QueryBatchConversionErrorClassRoundTrip) {
   azookey::ipc::QueryBatchConversionResponse response;
   response.error_class = "Network";

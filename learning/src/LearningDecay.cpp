@@ -3,14 +3,16 @@
 #include <cmath>
 #include <numbers>
 
+#include "azookey/learning/DictionaryCategory.h"
+
 namespace azookey::learning {
 
 namespace {
-constexpr uint16_t kTechnicalBit = 1U << 8;
-constexpr uint16_t kNeologismBit = 1U << 9;
-// person_name, place_name, station_name, product_name, software, anime_game,
-// company_org.
-constexpr uint16_t kProperNounBits = 254U;
+constexpr uint16_t kProperNounBits =
+    CategoryBit(DictionaryCategory::PersonName) | CategoryBit(DictionaryCategory::PlaceName) |
+    CategoryBit(DictionaryCategory::StationName) | CategoryBit(DictionaryCategory::ProductName) |
+    CategoryBit(DictionaryCategory::Software) | CategoryBit(DictionaryCategory::AnimeGame) |
+    CategoryBit(DictionaryCategory::CompanyOrg);
 
 double ElapsedDays(uint64_t last_updated_epoch_sec, uint64_t now_epoch_sec) {
   const double elapsed_seconds = now_epoch_sec >= last_updated_epoch_sec
@@ -21,11 +23,11 @@ double ElapsedDays(uint64_t last_updated_epoch_sec, uint64_t now_epoch_sec) {
 }  // namespace
 
 double HalfLifeDaysForCategoryMask(uint16_t category_mask) {
-  if (category_mask & kTechnicalBit) return kTechnicalHalfLifeDays;
+  if (category_mask & CategoryBit(DictionaryCategory::Technical)) return kTechnicalHalfLifeDays;
   if (category_mask & kProperNounBits) return kProperNounHalfLifeDays;
   // A neologism fades like a typing habit: longer than general words, shorter
   // than proper nouns. This matches the M53 obsolete_penalty table.
-  if (category_mask & kNeologismBit) return kTypoPatternHalfLifeDays;
+  if (category_mask & CategoryBit(DictionaryCategory::Neologism)) return kTypoPatternHalfLifeDays;
   return kGeneralHalfLifeDays;
 }
 

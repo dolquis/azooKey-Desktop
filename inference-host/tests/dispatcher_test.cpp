@@ -823,6 +823,10 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
  public:
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
                                                 const azookey::core::ConversionContext&) override {
+    if (kana == "てんそるあーるてぃー") return {{"テンソルRT", kana, 1.8}, {"TensorRT", kana, 1.5}};
+    if (kana == "おねがい")
+      return {
+          {"お願いだ", kana, 8.0}, {"お願いします。　", kana, 6.0}, {"お願いだよ！", kana, 5.0}};
     azookey::core::Candidate technical{"技術", kana, 5.0};
     technical.tag = azookey::core::CandidateTag::Technical;
     return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
@@ -875,9 +879,10 @@ class AppProfileDispatchTest : public ::testing::Test {
     ASSERT_TRUE(parsed->ok);
   }
 
-  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app) {
+  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app,
+                                         const std::string& reading = "にほん") {
     ipc::QueryCandidatesRequest q;
-    q.reading = "にほん";
+    q.reading = reading;
     q.app = std::move(app);
     ipc::Envelope env;
     env.version = 1;
@@ -929,6 +934,54 @@ TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatching
   EXPECT_LT(IndexOf(boosted, "日本"), IndexOf(boosted, "二本"));
   EXPECT_EQ(boosted[IndexOf(boosted, "Nihon")].tag,
             static_cast<uint8_t>(azookey::core::CandidateTag::English));
+}
+
+TEST_F(AppProfileDispatchTest, CodeProfileBoostsDictionaryTechnicalInsteadOfEnglish) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::TechnicalTerms,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "profile" / "technical_terms.azdic", true));
+  ApplySettings(R"({"profilesByApp":{"code.exe":{"style":"technical",)"
+                R"("candidateTagBoosts":{"English":3.0}}}})");
+  const auto global = Query(std::nullopt, "てんそるあーるてぃー");
+  ASSERT_LT(IndexOf(global, "TensorRT"), global.size());
+  EXPECT_LT(IndexOf(global, "テンソルRT"), IndexOf(global, "TensorRT"));
+  // The converter's higher dictionary duplicate score survives the merge,
+  // but its absent tag is filled from the real .azdic category.
+  EXPECT_EQ(global[IndexOf(global, "TensorRT")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::Technical));
+  EXPECT_DOUBLE_EQ(global[IndexOf(global, "TensorRT")].score, 1.5);
+
+  const auto code = Query(ipc::AppIdentity{"Code.exe", ""}, "てんそるあーるてぃー");
+  ASSERT_LT(IndexOf(code, "TensorRT"), code.size());
+  EXPECT_LT(IndexOf(code, "TensorRT"), IndexOf(code, "テンソルRT"));
+  EXPECT_DOUBLE_EQ(code[IndexOf(code, "TensorRT")].score, 1.5 * 1.5);
+  const auto other = Query(ipc::AppIdentity{"notepad.exe", ""}, "てんそるあーるてぃー");
+  EXPECT_LT(IndexOf(other, "テンソルRT"), IndexOf(other, "TensorRT"));
+}
+
+TEST_F(AppProfileDispatchTest, OutlookProfileBoostsSuffixTaggedPoliteCandidatesOnce) {
+  ApplySettings(R"({"profilesByApp":{"outlook.exe":{"style":"polite",)"
+                R"("candidateTagBoosts":{"Polite":1.4}}}})");
+  for (const auto app :
+       {std::optional<ipc::AppIdentity>{}, std::optional<ipc::AppIdentity>{{"notepad.exe", ""}}}) {
+    const auto global = Query(app, "おねがい");
+    ASSERT_EQ(global.size(), 3U);
+    EXPECT_EQ(global[0].surface, "お願いだ");
+    EXPECT_EQ(global[1].surface, "お願いします。　");
+    EXPECT_EQ(global[2].surface, "お願いだよ！");
+    EXPECT_EQ(global[1].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Polite));
+    EXPECT_EQ(global[2].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Casual));
+    EXPECT_DOUBLE_EQ(global[1].score, 6.0);
+    EXPECT_DOUBLE_EQ(global[2].score, 5.0);
+  }
+  const auto outlook = Query(ipc::AppIdentity{"OUTLOOK.EXE", ""}, "おねがい");
+  ASSERT_EQ(outlook.size(), 3U);
+  EXPECT_EQ(outlook[0].surface, "お願いします。　");
+  EXPECT_EQ(outlook[0].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Polite));
+  EXPECT_DOUBLE_EQ(outlook[0].score, 6.0 * 1.5);  // max(implicit 1.5, explicit 1.4), once.
+  EXPECT_EQ(outlook[1].surface, "お願いだ");
+  EXPECT_EQ(outlook[2].surface, "お願いだよ！");
+  EXPECT_DOUBLE_EQ(outlook[2].score, 5.0);
 }
 
 TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {
@@ -1525,6 +1578,112 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
   ASSERT_FALSE(parsed->segments.front().candidates.empty());
   EXPECT_EQ(parsed->segments.front().candidates.front().surface, "日本");
   EXPECT_EQ(parsed->full_surface, "日本");
+}
+
+TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment) {
+  constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  const auto query = [&](uint64_t id, const std::string& reading, const std::string& mode,
+                         bool english, const std::string& raw_romaji = "nihon") {
+    ipc::QueryBatchConversionRequest q;
+    q.reading = reading;
+    q.raw_romaji = raw_romaji;
+    q.mode = mode;
+    q.ai_allowed = true;
+    q.max_candidates = 1;
+    q.english_candidates = english;
+    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                                                  ipc::BuildQueryBatchConversionRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryBatchConversionResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? std::move(parsed->segments) : std::vector<ipc::BatchConversionSegment>{};
+  };
+  const auto english_of = [&](const ipc::BatchConversionSegment& segment) {
+    std::vector<std::string> surfaces;
+    for (const auto& c : segment.candidates) {
+      if (c.tag != kEnglish) continue;
+      surfaces.push_back(c.surface);
+      EXPECT_EQ(c.reading, "nihon");
+    }
+    return surfaces;
+  };
+
+  // English is placed after max_candidates truncates the kana candidates.
+  const auto single = query(1101, "にほん", "neural", true);
+  ASSERT_EQ(single.size(), 1u);
+  ASSERT_FALSE(single.front().candidates.empty());
+  EXPECT_EQ(single.front().candidates.front().surface, "日本");
+  EXPECT_EQ(english_of(single.front()), (std::vector<std::string>{"nihon", "Nihon", "NIHON"}));
+  EXPECT_EQ(single.front().candidates.size(), 4u);
+
+  // Older TIPs (flag absent) see what they saw before.
+  const auto without = query(1102, "にほん", "neural", false);
+  ASSERT_EQ(without.size(), 1u);
+  EXPECT_TRUE(english_of(without.front()).empty());
+
+  // A split reading has no per-segment romaji, so no segment gets English.
+  const auto split = query(1103, "にほん。にほん", "neural", true);
+  ASSERT_EQ(split.size(), 2u);
+  for (const auto& segment : split) EXPECT_TRUE(english_of(segment).empty());
+
+  // ai-cleanup is out of scope, even when it falls back to neural.
+  const auto cleanup = query(1104, "にほん", "ai-cleanup", true);
+  ASSERT_EQ(cleanup.size(), 1u);
+  EXPECT_TRUE(english_of(cleanup.front()).empty());
+
+  // Without the romaji there is nothing to build English from.
+  const auto no_romaji = query(1105, "にほん", "neural", true, "");
+  ASSERT_EQ(no_romaji.size(), 1u);
+  EXPECT_TRUE(english_of(no_romaji.front()).empty());
+}
+
+namespace {
+class EmptyConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+}  // namespace
+
+// A segment with no kana candidate keeps its kana fallback first; English must
+// not take that slot (spec §4.1.1).
+TEST(DispatcherBatchEnglishTest, NoKanaCandidatesMeansNoEnglish) {
+  azookey::host::InferenceEngine engine(std::make_unique<EmptyConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  ipc::QueryBatchConversionRequest q;
+  q.reading = "にほん";
+  q.raw_romaji = "nihon";
+  q.mode = "neural";
+  q.english_candidates = true;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 1107;
+  env.type = ipc::MessageType::QueryBatchConversion;
+  env.payload_json = ipc::BuildQueryBatchConversionRequest(q);
+  const auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  const auto parsed = ipc::ParseQueryBatchConversionResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->segments.size(), 1u);
+  const auto& candidates = parsed->segments.front().candidates;
+  ASSERT_EQ(candidates.size(), 1u);
+  EXPECT_EQ(candidates.front().source, "fallback");
+  for (const auto& c : candidates)
+    EXPECT_NE(c.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English)) << c.surface;
 }
 
 TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {

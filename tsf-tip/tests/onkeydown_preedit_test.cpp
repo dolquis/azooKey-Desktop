@@ -9074,6 +9074,159 @@ TEST(TsfTipEnglishCandidatesTest, EnglishCommitKeepsTheKanaReadingWithoutTheCapa
   EXPECT_EQ(observation->reading, "あっpぇ");
 }
 
+// DEV-1539 (spec §4.1.1): the batch Space asks for English candidates only
+// with the setting, the Host capability and the neural mode.
+TEST(TsfTipEnglishCandidatesTest, BatchSpaceAsksForEnglishOnlyInNeuralMode) {
+  struct Case {
+    bool enabled;
+    bool supported;
+    bool ai_cleanup;
+    bool expected;
+  };
+  for (const auto& item : {Case{true, true, false, true}, Case{false, true, false, false},
+                           Case{true, false, false, false}, Case{true, true, true, false}}) {
+    SCOPED_TRACE(std::string("setting=") + (item.enabled ? "on" : "off") +
+                 " capability=" + (item.supported ? "on" : "off") +
+                 " ai-cleanup=" + (item.ai_cleanup ? "on" : "off"));
+    TextServiceHarness h;
+    h.service.set_batch_romaji_options_for_test(true, false, false, item.ai_cleanup);
+    h.service.set_english_candidates_for_test(item.enabled, item.supported);
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+    EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "apple");
+    EXPECT_EQ(h.service.pending_ipc_english_candidates_for_test(), item.expected);
+  }
+}
+
+// The flag reaches the wire for a batch sent as one request, and never for a
+// batch split into several (no sub-request owns the whole romaji). The English
+// candidate the Host returns then commits through ConvertBatch end to end.
+TEST(TsfTipEnglishCandidatesTest, BatchWireCarriesEnglishOnlyForASingleRequest) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-batch-english-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<bool> handshaken{false};
+  std::mutex mutex;
+  std::vector<bool> flags;
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.capabilities = {"oob_cancel", "english_candidates"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          handshaken = true;
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request) return std::nullopt;
+        {
+          const std::lock_guard<std::mutex> lock(mutex);
+          flags.push_back(request->english_candidates);
+        }
+        azookey::ipc::QueryBatchConversionResponse payload;
+        azookey::ipc::CandidateField candidate;
+        candidate.reading = request->reading;
+        candidate.surface = request->reading;
+        candidate.source = "model";
+        payload.full_surface = candidate.surface;
+        std::vector<azookey::ipc::CandidateField> candidates{std::move(candidate)};
+        if (request->english_candidates) {
+          // What the Host adds (spec §6.7): tag English, reading = raw romaji.
+          azookey::ipc::CandidateField english;
+          english.surface = "Apple";
+          english.reading = request->raw_romaji;
+          english.source = "heuristic";
+          english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+          candidates.push_back(std::move(english));
+        }
+        payload.segments.push_back({request->reading, std::move(candidates)});
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  const auto take_flags = [&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return std::exchange(flags, {});
+  };
+
+  {
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.batch_romaji_conversion_for_test(); }));
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+    EXPECT_EQ(take_flags(), std::vector<bool>{true});
+    h.service.stop_ipc_worker_for_test();
+    // The English candidate the response carried commits and is learned
+    // under the raw romaji (spec §4.1.1, §6.4).
+    h.service.show_candidate_window_from_cache_for_test();
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press('2'));
+    EXPECT_EQ(attachment.composition_range.last_text, L"Apple");
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->reading, "apple");
+    EXPECT_EQ(observation->chosen.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English));
+  }
+  {
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.batch_romaji_conversion_for_test(); }));
+    for (int i = 0; i < 260; ++i) {
+      ASSERT_TRUE(h.Press('K'));
+      ASSERT_TRUE(h.Press('A'));
+    }
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+    const auto split = take_flags();
+    EXPECT_GE(split.size(), 2u);
+    EXPECT_EQ(std::count(split.begin(), split.end(), true), 0);
+    h.service.stop_ipc_worker_for_test();
+  }
+  EXPECT_TRUE(handshaken.load());
+  server.Stop();
+}
+
+// An English candidate committed from a one-segment batch is learned under
+// the raw romaji, like a single commit (spec §4.1.1, §6.4).
+TEST(TsfTipEnglishCandidatesTest, BatchEnglishCommitIsObservedUnderTheRawRomaji) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField kana;
+  kana.reading = "あっpぇ";
+  kana.surface = "アップル";
+  kana.source = "model";
+  azookey::ipc::CandidateField english;
+  english.reading = "apple";
+  english.surface = "Apple";
+  english.source = "heuristic";
+  english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  h.service.set_cached_batch_segments_for_test({{"あっpぇ", {kana, english}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"Apple");
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->reading, "apple");
+  EXPECT_EQ(observation->chosen.tag, english.tag);
+}
+
 // DEV-1529 / user-learning-enhancement-spec §4.1: a plain Backspace as the
 // first key after a learned commit sends CommitCorrection "undo" for it.
 namespace {

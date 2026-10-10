@@ -127,11 +127,15 @@ Linear が持つ。
   追加分と M60 の英単語候補（辞書語 5 件・学習語 8 件・生ローマ字・6 形まで）が加わりうる。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
   逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
-- ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates)` /
+- ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates,
+  english_candidates?)` /
   応答 `(segments[], full_surface, partial, canceled)`。各 segment は
   `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で
   cancel / latest を追跡し、キャンセル時は `canceled=true` と空の segments を返す。
-  現状の segments は 1 要素（文節分割は未実装）で、`full_surface` は先頭候補の surface。
+  Host は読みを chunk に分けて segments を返し（`docs/romaji-batch-conversion-spec.md` §7）、
+  `full_surface` は各 segment の先頭候補の surface を連結したものである。
+  任意の `english_candidates` は `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 に従う。
+  segments が 1 要素のときは、`max_candidates` で切り詰めた後に M60 の英単語候補が加わりうる。
 - ✅ `Cancel(target_request_id)`
 - ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms, observation_id)` /
   応答 `CommitObservationResponse(ok)`。配送保証は at-least-once で、TIP は応答を受け取れ

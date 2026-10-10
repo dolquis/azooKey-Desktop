@@ -26,7 +26,9 @@ struct ModelBenchmarkOptions {
   // come from the request.
   EngineConfig base_config;
   std::chrono::milliseconds budget{kBenchmarkBudget};
-  // Process working set in MiB; null measures this process (0 off Windows).
+  // Inline-only test seam for the benchmark process's working set in MiB.
+  // Null measures that process (0 if unavailable / off Windows). The isolated
+  // Windows worker measures itself; the parent never calls this callback.
   std::function<double()> rss_mb;
   // Test-only: lets a no-llama build answer from the probe-only GGUF fixture.
   bool mock_zenzai_candidates_for_tests{false};

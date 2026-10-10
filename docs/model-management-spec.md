@@ -338,6 +338,8 @@ load/unload とライブクエリの race を構造的に排除する。
 
 - ベンチ用の子プロセスにロードする。ほかの接続のライブクエリは稼働中のエンジンで
   処理を続ける。入力は継承する専用の共有メモリで渡し、読み・モデルパスを argv に載せない。
+  子プロセスの標準入力は NUL の EOF、標準出力・標準エラーは NUL へ破棄する。
+  親の標準入出力ハンドルは継承しない。
 - Host プロセス全体で同時に 1 本だけ実行する。実行中に届いた要求には
   `error: "busy"` を返す。実行枠は子プロセスの終了を確認してから解放する。
 - `path` は ListModels と同じく models ディレクトリ配下に限る。
@@ -348,23 +350,27 @@ load/unload とライブクエリの race を構造的に排除する。
   `warmup` 回は計測しない。
 - 上限: `iterations` は 1〜1000、`warmup` は 0〜100、`cases` は 32 件・各 256 バイトまで。
 - `status` は `success` / `timeout` / `error`。
+  - `success`: 終了待ちで子プロセスの正常終了と完了した結果を確認した。
+    待機後に親スレッドの再開が遅れて期限を過ぎても、成功した終了待ちを `timeout` に変えない。
   - `timeout`: 子プロセスの起動・ファイル検証・ロード・推論・unload を含めて 60 秒（§8）を
-    超えた。ロード中や 1 回の `QueryCandidates` の途中でも子プロセスの終了を要求する。
+    超え、終了待ちで完了を確認できなかった。ロード中や 1 回の `QueryCandidates` の途中でも
+    子プロセスの終了を要求する。
     完了して公開された iteration の計測値と `iterations_completed` を返し、途中の iteration は
     計上しない。ロード未完了なら `load_ms` は `0`。unload 中の timeout でも成功を返さない。
   - `error`: `error` に固定カテゴリを入れる。`invalid_request`（上限外・空の case）、
     `unsupported_backend`、`invalid_model`（§3.3 の R1 検証に通らない。R2 を含む）、
     `path_outside_models_root`、`models_dir_unavailable`、`busy`、`load_failed`、
     `safe_mode`、`benchmark_failed`、`not authenticated`（Handshake 前）。
-- `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` は Host
-  プロセスの working set（ライブエンジンを含む、ベンチ用子プロセスは含まない）で、
-  Windows 以外では計測せず `0` を返す。
+- `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` はベンチ用
+  子プロセスの working set を MiB で記録する。ロード後と完了した query 後に計測し、
+  unload 前に公開した最後の値を応答・履歴へ返す。timeout でも完了した snapshot の値を保持し、
+  親 Host の RSS で上書きしない。未計測・取得失敗、Windows 以外では `0` を返す。
 - 子プロセスは Windows Job Object に起動と同時に所属させる。Job の process 数上限は 1 とし、
   Host 終了時の Job handle close でも停止する。timeout 後の終了確認は最大 1 秒とする。
   driver / pending I/O 等で終了確認が遅れた場合は `timeout` を返し、子プロセスと Job を
   最大 1 組だけ保持する。以後は終了を確認するまで `busy` とし、新たな worker を積まない。
   この場合は未回収の共有メモリを読まず、`load_ms`・percentile・`iterations_completed` を
-  `0` とする。`rss_mb` は Host の実測、`vram_mb` は `null`。終了後の次の要求で回収し、
+  `0` とする。`rss_mb` も `0`、`vram_mb` は `null`。終了後の次の要求で回収し、
   ベンチを再実行できる。
 - p50 / p95 / p99 は計測サンプルの nearest-rank。
 

@@ -6,12 +6,14 @@
 #endif
 #include <Windows.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -148,6 +150,34 @@ class ReleaseCallbackOnExit {
   bool released_{false};
 };
 
+class ScopedStandardHandles {
+ public:
+  ScopedStandardHandles() {
+    for (size_t i = 0; i < ids_.size(); ++i) saved_[i] = GetStdHandle(ids_[i]);
+  }
+  ~ScopedStandardHandles() {
+    while (changed_ != 0) {
+      --changed_;
+      SetStdHandle(ids_[changed_], saved_[changed_]);
+    }
+  }
+  ScopedStandardHandles(const ScopedStandardHandles&) = delete;
+  ScopedStandardHandles& operator=(const ScopedStandardHandles&) = delete;
+
+  bool Redirect(HANDLE handle) {
+    for (const auto id : ids_) {
+      if (!SetStdHandle(id, handle)) return false;
+      ++changed_;
+    }
+    return true;
+  }
+
+ private:
+  const std::array<DWORD, 3> ids_{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  std::array<HANDLE, 3> saved_{};
+  size_t changed_{0};
+};
+
 class ModelBenchmarkProcessTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -228,6 +258,7 @@ TEST_F(ModelBenchmarkProcessTest, TerminatesAnUncooperativeQueryAndKeepsComplete
   EXPECT_GT(response.p50_ms, 0.0);
   EXPECT_LE(response.p50_ms, response.p95_ms);
   EXPECT_LE(response.p95_ms, response.p99_ms);
+  EXPECT_GT(response.rss_mb, 0.0);
   ExpectSuccessfulRestart();
 }
 
@@ -237,6 +268,7 @@ TEST_F(ModelBenchmarkProcessTest, TerminatesAnUncooperativeUnloadAndKeepsAllSamp
   EXPECT_GT(response.p50_ms, 0.0);
   EXPECT_LE(response.p50_ms, response.p95_ms);
   EXPECT_LE(response.p95_ms, response.p99_ms);
+  EXPECT_GT(response.rss_mb, 0.0);
   ExpectSuccessfulRestart();
 }
 #endif
@@ -338,7 +370,7 @@ TEST_F(ModelBenchmarkProcessTest, ThrowingStartupObserverTerminatesTheWorkerAndR
 }
 
 #if !AZOOKEY_WITH_LLAMA_CPP
-TEST_F(ModelBenchmarkProcessTest, AnExitedWorkerCannotReportSuccessAfterTheParentDeadline) {
+TEST_F(ModelBenchmarkProcessTest, CompletedWorkerAtZeroRemainingWaitKeepsTheResult) {
   WorkerObservation observation;
   auto options = Options(observation);
   auto now = Clock::now();
@@ -353,9 +385,52 @@ TEST_F(ModelBenchmarkProcessTest, AnExitedWorkerCannotReportSuccessAfterTheParen
     now += options.budget;
   };
   const auto response = RunModelBenchmark(Request(), options);
-  EXPECT_EQ(response.status, "timeout");
-  EXPECT_EQ(response.error, "timeout");
+  EXPECT_EQ(response.status, "success");
+  EXPECT_FALSE(response.error.has_value());
   EXPECT_EQ(response.iterations_completed, Request().iterations);
+  observation.ExpectExited();
+  ExpectSlotAvailable();
+}
+
+TEST_F(ModelBenchmarkProcessTest, CompletedWaitIsNotOverriddenByALaterDeadlineReading) {
+  WorkerObservation observation;
+  auto options = Options(observation);
+  const auto start = Clock::now();
+  unsigned clock_reads = 0;
+  options.now_for_tests = [&] {
+    // The old implementation reads the clock a third time after a successful
+    // wait. Model scheduling delay there without delaying the actual worker.
+    return ++clock_reads >= 3 ? start + options.budget : start;
+  };
+  options.worker_started_for_tests = [&](uint32_t pid) {
+    observation.Started(pid);
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!process) throw std::runtime_error("OpenProcess failed");
+    const auto waited = WaitForSingleObject(process, 5000);
+    CloseHandle(process);
+    if (waited != WAIT_OBJECT_0) throw std::runtime_error("worker did not complete");
+  };
+  const auto response = RunModelBenchmark(Request(), options);
+  EXPECT_EQ(response.status, "success");
+  EXPECT_FALSE(response.error.has_value());
+  EXPECT_EQ(response.iterations_completed, Request().iterations);
+  observation.ExpectExited();
+  ExpectSlotAvailable();
+}
+
+TEST_F(ModelBenchmarkProcessTest, ReportsWorkerRssWithoutSamplingTheParent) {
+  WorkerObservation observation;
+  auto options = Options(observation);
+  bool sampled_parent = false;
+  options.rss_mb = [&] {
+    sampled_parent = true;
+    return 1'000'000.0;
+  };
+  const auto response = RunModelBenchmark(Request(), options);
+  EXPECT_EQ(response.status, "success");
+  EXPECT_FALSE(sampled_parent);
+  EXPECT_GT(response.rss_mb, 0.0);
+  EXPECT_NE(response.rss_mb, 1'000'000.0);
   observation.ExpectExited();
   ExpectSlotAvailable();
 }
@@ -384,6 +459,53 @@ TEST_F(ModelBenchmarkProcessTest, PreservesOptionalLoaderSettingsAcrossTheWorker
   zero.ExpectExited();
 }
 #endif
+
+TEST_F(ModelBenchmarkProcessTest, AnIncompleteWorkerAtTheDeadlineStillTimesOut) {
+  WorkerObservation observation;
+  auto options = Options(observation);
+  auto now = Clock::now();
+  options.now_for_tests = [&] { return now; };
+  options.worker_started_for_tests = [&](uint32_t pid) {
+    observation.Started(pid);
+    now += options.budget;
+  };
+  const auto response = RunModelBenchmark(Request("hang-load"), options);
+  EXPECT_EQ(response.status, "timeout");
+  EXPECT_EQ(response.error, "timeout");
+  EXPECT_EQ(response.iterations_completed, 0u);
+  observation.ExpectExited();
+  ExpectSlotAvailable();
+}
+
+TEST_F(ModelBenchmarkProcessTest, WorkerGetsWritableNullStdioWhenParentHandlesAreRedirected) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+  const auto handle =
+      CreateFileW(temp_.File("parent-stdio.bin").c_str(), GENERIC_READ | GENERIC_WRITE,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, CREATE_ALWAYS, 0, nullptr);
+  ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+  const auto close = [](void* file) { CloseHandle(file); };
+  const std::unique_ptr<void, decltype(close)> file(handle, close);
+  WorkerObservation observation;
+  auto options = Options(observation);
+  options.budget = 5s;
+  auto request = Request("stdio-handles");
+  request.path = azookey::core::PathToUtf8(temp_.File("missing.gguf"));
+  BenchmarkModelResponse response;
+  {
+    ScopedStandardHandles redirected;
+    ASSERT_TRUE(redirected.Redirect(file.get()));
+    response = RunModelBenchmark(request, options);
+  }
+  // The worker hook verifies all Win32 and CRT std handles before model
+  // validation. A hook failure would instead produce benchmark_failed.
+  EXPECT_EQ(response.status, "error");
+  EXPECT_EQ(response.error, "invalid_model");
+  LARGE_INTEGER bytes{};
+  ASSERT_TRUE(GetFileSizeEx(file.get(), &bytes));
+  EXPECT_EQ(bytes.QuadPart, 0);
+  observation.ExpectExited();
+  ExpectSlotAvailable();
+}
 
 TEST_F(ModelBenchmarkProcessTest, ACrashOrMissingFinalResultCannotReportSuccess) {
   for (const auto* stage : {"crash-worker", "no-result-worker"}) {

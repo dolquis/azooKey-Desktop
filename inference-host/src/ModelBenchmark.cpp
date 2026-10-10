@@ -97,7 +97,6 @@ ipc::BenchmarkModelResponse RunModelBenchmark(const ipc::BenchmarkModelRequest& 
 #else
   response = RunModelBenchmarkInline(request, options);
 #endif
-  response.rss_mb = options.rss_mb ? options.rss_mb() : ProcessWorkingSetMb();
   return response;
 }
 
@@ -107,6 +106,10 @@ ipc::BenchmarkModelResponse RunModelBenchmarkInline(
     const BenchmarkWorkerTestHooks& hooks) {
   ipc::BenchmarkModelResponse response;
   response.backend = request.backend.empty() ? "cpu" : request.backend;
+  const auto publish_response = [&] {
+    response.rss_mb = options.rss_mb ? options.rss_mb() : ProcessWorkingSetMb();
+    if (publish) publish(response);
+  };
   const auto backend = BenchmarkBackend(request.backend);
   if (!backend) return Error(std::move(response), "unsupported_backend");
   const auto cases = request.cases.empty() ? DefaultBenchmarkCases() : request.cases;
@@ -133,13 +136,13 @@ ipc::BenchmarkModelResponse RunModelBenchmarkInline(
   response.load_ms = ElapsedMs(start, Clock::now());
   if (!loaded.ok) {
     response = Error(std::move(response), "load_failed");
-    if (publish) publish(response);
+    publish_response();
     return response;
   }
   // The engine may have fallen back (CUDA is not linked yet; Vulkan init can
   // fail): report the backend that actually ran, not the one requested.
   response.backend = BackendName(engine.health_snapshot().backend);
-  if (publish) publish(response);
+  publish_response();
 
   const auto timed_out = [&] { return Clock::now() >= deadline; };
   std::vector<double> samples;
@@ -152,7 +155,7 @@ ipc::BenchmarkModelResponse RunModelBenchmarkInline(
     response.p50_ms = Percentile(sorted, 50.0);
     response.p95_ms = Percentile(sorted, 95.0);
     response.p99_ms = Percentile(sorted, 99.0);
-    if (publish) publish(response);
+    publish_response();
   };
   const uint64_t total = uint64_t{request.warmup} + request.iterations;
   for (uint64_t i = 0; i < total; ++i) {
@@ -177,7 +180,7 @@ ipc::BenchmarkModelResponse RunModelBenchmarkInline(
     response.status = "success";
     response.error = std::nullopt;
   }
-  if (publish) publish(response);
+  publish_response();
   if (hooks.before_unload) hooks.before_unload(request);
   return response;
 }

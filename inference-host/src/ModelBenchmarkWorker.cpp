@@ -1,6 +1,7 @@
 #include "azookey/host/ModelBenchmarkWorker.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstring>
 #include <limits>
@@ -75,7 +76,7 @@ std::unique_ptr<BenchmarkChild>& RetiredWorker() {
 
 class WorkerAttributes {
  public:
-  bool Initialize(HANDLE mapping, HANDLE job) {
+  bool Initialize(HANDLE mapping, HANDLE job, HANDLE input, HANDLE output) {
     SIZE_T bytes = 0;
     InitializeProcThreadAttributeList(nullptr, 2, 0, &bytes);
     storage_.resize(bytes);
@@ -84,10 +85,11 @@ class WorkerAttributes {
       list_ = nullptr;
       return false;
     }
-    mapping_ = mapping;
+    inherited_handles_ = {mapping, input, output};
     job_ = job;
-    return UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &mapping_,
-                                     sizeof(mapping_), nullptr, nullptr) &&
+    return UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                     inherited_handles_.data(), sizeof(inherited_handles_), nullptr,
+                                     nullptr) &&
            UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job_, sizeof(job_),
                                      nullptr, nullptr);
   }
@@ -99,7 +101,7 @@ class WorkerAttributes {
  private:
   std::vector<unsigned char> storage_;
   LPPROC_THREAD_ATTRIBUTE_LIST list_{nullptr};
-  HANDLE mapping_{nullptr};
+  std::array<HANDLE, 3> inherited_handles_{};
   HANDLE job_{nullptr};
 };
 
@@ -142,10 +144,25 @@ bool StartWorker(BenchmarkChild& child, const ipc::BenchmarkModelRequest& reques
   if (!SetInformationJobObject(child.job.get(), JobObjectExtendedLimitInformation, &limits,
                                sizeof(limits)))
     return false;
+  // Give the child real std handles without inheriting the Host's pipes/files.
+  const auto input_handle = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        &attributes, OPEN_EXISTING, 0, nullptr);
+  if (input_handle == INVALID_HANDLE_VALUE) return false;
+  WorkerHandle null_input(input_handle);
+  const auto output_handle = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                         &attributes, OPEN_EXISTING, 0, nullptr);
+  if (output_handle == INVALID_HANDLE_VALUE) return false;
+  WorkerHandle null_output(output_handle);
   WorkerAttributes startup_attributes;
-  if (!startup_attributes.Initialize(child.mapping.get(), child.job.get())) return false;
+  if (!startup_attributes.Initialize(child.mapping.get(), child.job.get(), null_input.get(),
+                                     null_output.get()))
+    return false;
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = null_input.get();
+  startup.StartupInfo.hStdOutput = null_output.get();
+  startup.StartupInfo.hStdError = null_output.get();
   startup.lpAttributeList = startup_attributes.get();
   auto command = L"\"" + executable.wstring() + L"\" --model-benchmark-worker " +
                  std::to_wstring(reinterpret_cast<uintptr_t>(child.mapping.get()));
@@ -219,7 +236,9 @@ ipc::BenchmarkModelResponse RunIsolatedModelBenchmark(const ipc::BenchmarkModelR
     waited = WaitForSingleObject(child->process.get(),
                                  static_cast<DWORD>(std::clamp<int64_t>(
                                      remaining.count(), 0, static_cast<int64_t>(INFINITE) - 1)));
-    expired = now() >= deadline;
+    // A signaled process has completed; later scheduling of this thread must
+    // not turn a successful wait into a timeout.
+    expired = waited != WAIT_OBJECT_0 && now() >= deadline;
   } catch (...) {
     // A test observer must not strand a running process on exception.
     waited = WAIT_FAILED;

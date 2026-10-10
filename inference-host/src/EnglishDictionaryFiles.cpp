@@ -587,14 +587,19 @@ bool ReinitEnglishOverlay(const fs::path& overlay, uint32_t base_content_hash,
 }
 
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
-                      std::optional<fs::file_time_type> tsv_time) {
+                      std::optional<fs::file_time_type> tsv_time, const EnglishWriteHook& hook) {
   if (!learning::WriteTextFileAtomically(paths.base, bytes)) return false;
+  if (!tsv_time) return true;
+  if (!Step(hook, EnglishWriteStep::BaseRenamed)) return false;
   // Section 4.5: the base carries the mtime of the TSV it reflects. A TSV
   // saved again after tsv_time, or restored with another timestamp, then no
-  // longer matches it.
+  // longer matches it. Read back: a share (AV, indexer) or a coarse clock
+  // (FAT, SMB) can leave another value.
   std::error_code ec;
-  if (tsv_time) fs::last_write_time(paths.base, *tsv_time, ec);
-  return true;
+  fs::last_write_time(paths.base, *tsv_time, ec);
+  if (ec) return false;
+  const auto stamped = fs::last_write_time(paths.base, ec);
+  return !ec && stamped == *tsv_time;
 }
 
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const EnglishWriteHook& hook) {
@@ -649,7 +654,7 @@ bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const English
   // Past the entry bound the new base would not load; keep the overlay.
   if (records.size() > kMaxEnglishBaseEntries) return false;
   const auto bytes = EncodeEnglishBase(std::move(records), base->header().generation + 1);
-  if (!WriteEnglishBase(paths, bytes, tsv_time)) return false;
+  if (!WriteEnglishBase(paths, bytes, tsv_time, hook)) return false;
   if (!Step(hook, EnglishWriteStep::CompactBaseReplaced)) return false;
   // Only now, with the new base durable, the overlay is emptied for it.
   return ReinitEnglishOverlay(paths.overlay, GetU32(Bytes(bytes) + 28), hook);

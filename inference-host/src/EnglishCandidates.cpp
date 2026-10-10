@@ -86,7 +86,8 @@ bool IsEnglishObservation(std::string_view reading, uint8_t tag) {
 }
 
 std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
-                                               EnglishDictionaryLoadStats* stats) {
+                                               EnglishDictionaryLoadStats* stats,
+                                               size_t max_entries) {
   std::vector<EnglishWordRecord> records;
   // Keys view the input text, which outlives the map.
   std::unordered_map<std::string_view, size_t> by_surface;
@@ -94,7 +95,7 @@ std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
   bool truncated = false;
   if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
   while (!text.empty()) {
-    if (records.size() >= kMaxEnglishDictionaryEntries) {
+    if (records.size() >= max_entries) {
       truncated = true;
       break;
     }

@@ -49,8 +49,10 @@ inline constexpr size_t kMaxEnglishDictionaryEntries = 200'000;
 // lowercased surface, in file order; an exact duplicate surface keeps the last
 // definition in the file at the place of the first. A frequency above
 // UINT32_MAX saturates (the section 4.5 .bin field is 32-bit).
+// max_entries is the cap; tests lower it to check the boundary cheaply.
 std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
-                                               EnglishDictionaryLoadStats* stats = nullptr);
+                                               EnglishDictionaryLoadStats* stats = nullptr,
+                                               size_t max_entries = kMaxEnglishDictionaryEntries);
 // nullopt when the file is missing, unreadable or larger than 64 MiB.
 std::optional<std::string> ReadEnglishTsvFile(const std::filesystem::path& path);
 

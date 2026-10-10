@@ -91,6 +91,7 @@ class EnglishDictionaryStore {
                                                            bool force, bool file_locked);
   bool AppendLocked(const EnglishOverlayOp& op);
   void Publish(std::shared_ptr<const EnglishDictionary> snapshot, std::optional<Sample> sample);
+  bool IsCurrent(const Sample& sample) const;
   void Invalidate();
 
   EnglishDictionaryPaths paths_;
@@ -105,6 +106,11 @@ class EnglishDictionaryStore {
   bool loaded_once_{false};
   // Under update_mutex_.
   std::shared_ptr<const EnglishBaseImage> base_;
+  // base_ was compiled into memory (the .bin could not be written or stamped).
+  bool base_in_memory_{false};
+  // ...because writing or stamping it failed under the lock: not retried
+  // until the TSV changes.
+  bool base_write_failed_{false};
   std::optional<std::pair<std::filesystem::file_time_type, uintmax_t>> compiled_tsv_;
   std::vector<EnglishOverlayOp> memory_ops_;
   EnglishWriteHook write_hook_;

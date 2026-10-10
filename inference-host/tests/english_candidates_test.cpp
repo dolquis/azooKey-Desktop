@@ -171,15 +171,19 @@ TEST(EnglishCandidatesTest, DictionarySkipsNonUtf8AndStopsAtTheEntryCap) {
                           "d")
                   .empty());
 
-  std::string big;
-  for (size_t i = 0; i <= azookey::host::kMaxEnglishDictionaryEntries; ++i)
-    big += "w" + std::to_string(i) + "\t1\n";
-  // The cap applies while parsing; checked without compiling the 200,000
-  // records into a .bin image, which is slow under coverage.
-  azookey::host::EnglishDictionaryLoadStats big_stats;
-  const auto capped = azookey::host::ParseEnglishTsv(big, &big_stats);
-  EXPECT_TRUE(big_stats.truncated);
-  EXPECT_EQ(capped.size(), azookey::host::kMaxEnglishDictionaryEntries);
+  // The cap is checked at a small value: 200,000 real lines take tens of
+  // seconds under coverage. A duplicate surface does not count toward it.
+  constexpr size_t kCap = 3;
+  azookey::host::EnglishDictionaryLoadStats at_cap;
+  EXPECT_EQ(azookey::host::ParseEnglishTsv("a\t1\nb\t1\na\t2\nc\t1\n", &at_cap, kCap).size(), kCap);
+  EXPECT_FALSE(at_cap.truncated);
+  azookey::host::EnglishDictionaryLoadStats over_cap;
+  const auto capped =
+      azookey::host::ParseEnglishTsv("a\t1\nb\t1\nc\t1\nd\t1\ne\t1\n", &over_cap, kCap);
+  EXPECT_TRUE(over_cap.truncated);
+  ASSERT_EQ(capped.size(), kCap);
+  EXPECT_EQ(capped.back().surface, "c");
+  static_assert(azookey::host::kMaxEnglishDictionaryEntries == 200'000);
 }
 
 TEST(EnglishCandidatesTest, ProperAndAcronymFlagsReorderTheHalfWidthForms) {

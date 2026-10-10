@@ -124,6 +124,7 @@ enum class EnglishWriteStep {
   ReinitCountCleared,        // op_count = 0 is durable.
   ReinitTruncated,           // Frames past the header are gone.
   ReinitFingerprintWritten,  // base_fingerprint names the current base.
+  BaseRenamed,               // A new base is live; its mtime is not yet the TSV's.
   CompactBaseReplaced,       // The merged base is live; the overlay is untouched.
 };
 // Test seam: called after each step; false stops the writer there, as a
@@ -163,9 +164,12 @@ bool ReinitEnglishOverlay(const std::filesystem::path& overlay, uint32_t base_co
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths,
                               const EnglishWriteHook& hook = {});
 // Writes base bytes atomically (temporary file, flush, MoveFileEx). With
-// tsv_time (the TSV mtime the bytes reflect), the base's mtime is set to it:
-// section 4.5 reads the .bin only while the two are equal.
+// tsv_time (the TSV mtime the bytes reflect), the base's mtime is set to it
+// and read back: section 4.5 reads the .bin only while the two are equal.
+// false when the write fails, or when the mtime could not be set or reads back
+// rounded (the .bin is then live but not current for the TSV).
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
-                      std::optional<std::filesystem::file_time_type> tsv_time = std::nullopt);
+                      std::optional<std::filesystem::file_time_type> tsv_time = std::nullopt,
+                      const EnglishWriteHook& hook = {});
 
 }  // namespace azookey::host

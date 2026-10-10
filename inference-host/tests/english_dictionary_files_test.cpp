@@ -664,3 +664,38 @@ TEST(EnglishDictionaryFilesTest, AnUnwritableDictionaryFolderFallsBackToTheTsvIn
   EXPECT_EQ(files, 1u);
   fs::remove_all(dir);
 }
+
+TEST(EnglishDictionaryFilesTest, ABinWhoseMtimeCannotBeStampedIsNotUsedOrRetried) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  // Far from now, so an unstamped .bin written in the same clock tick cannot
+  // match it by chance.
+  fs::last_write_time(tsv, fs::last_write_time(tsv) - std::chrono::hours(1));
+  int tsv_loads = 0;
+  EnglishDictionaryStore store(tsv, [&](const EnglishDictionaryLoadReport& report) {
+    if (std::string(report.source) == "tsv") ++tsv_loads;
+  });
+  // The .bin is renamed into place but its mtime is never set (a share by an
+  // antivirus or indexer, or a coarse clock that rounds it).
+  store.SetWriteHookForTest(
+      [](EnglishWriteStep step) { return step != EnglishWriteStep::BaseRenamed; });
+  for (int i = 0; i < 5; ++i)
+    EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+  // Served from memory, parsed once, not rewritten on every read.
+  EXPECT_EQ(tsv_loads, 1);
+  EXPECT_NE(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  // An op cannot attach to a .bin that is not current for the TSV.
+  EXPECT_FALSE(store.Upsert("kotlin", 7));
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"kotlin"});
+  EXPECT_EQ(tsv_loads, 1);
+  // Once the TSV changes, the .bin is tried again.
+  store.SetWriteHookForTest({});
+  WriteText(tsv, "Apple\t50\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"Apple"});
+  EXPECT_EQ(tsv_loads, 2);
+  EXPECT_EQ(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  EXPECT_TRUE(store.Upsert("Swift", 3));
+  fs::remove_all(dir);
+}

@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/ModelBenchmarkWorker.h"
 #include "azookey/host/ModelScanner.h"
 #include "azookey/host/ModelsCli.h"
 #include "azookey/ipc/Json.h"
@@ -299,7 +301,7 @@ TEST(ModelBenchmarkTest, ReportsPercentilesAndHonorsTheBudget) {
   azookey::host::ModelBenchmarkOptions options;
   options.mock_zenzai_candidates_for_tests = true;
   options.rss_mb = [] { return 42.0; };
-  const auto done = azookey::host::RunModelBenchmark(request, options);
+  const auto done = azookey::host::RunModelBenchmarkInline(request, options);
   EXPECT_EQ(done.status, "success") << done.error.value_or("");
   EXPECT_FALSE(done.error.has_value());
   EXPECT_EQ(done.backend, "cpu");
@@ -311,9 +313,55 @@ TEST(ModelBenchmarkTest, ReportsPercentilesAndHonorsTheBudget) {
   EXPECT_FALSE(done.vram_mb.has_value());
 
   options.budget = std::chrono::milliseconds{0};
-  const auto timed_out = azookey::host::RunModelBenchmark(request, options);
+  const auto timed_out = azookey::host::RunModelBenchmarkInline(request, options);
   EXPECT_EQ(timed_out.status, "timeout");
   EXPECT_EQ(timed_out.iterations_completed, 0u);
+  fs::remove_all(dir);
+}
+
+TEST(ModelBenchmarkTest, InlineSnapshotsRetainMeasuredRssBeforeUnloadOrInterruption) {
+  const auto dir = TestDir();
+  WriteFile(dir / "model.gguf", GgufHeader({}));
+  azookey::ipc::BenchmarkModelRequest request;
+  request.path = azookey::core::PathToUtf8(dir / "model.gguf");
+  request.iterations = 3;
+  request.warmup = 0;
+  azookey::host::ModelBenchmarkOptions options;
+  options.mock_zenzai_candidates_for_tests = true;
+  double rss = 42.0;
+  options.rss_mb = [&] { return rss; };
+  azookey::host::BenchmarkWorkerTestHooks hooks;
+  hooks.before_query = [&](const auto&, uint64_t i) { rss = 100.0 + static_cast<double>(i); };
+  hooks.before_unload = [&](const auto&) { rss = 999.0; };
+  std::vector<azookey::ipc::BenchmarkModelResponse> snapshots;
+  const auto publish = [&](const auto& response) { snapshots.push_back(response); };
+
+  const auto done = azookey::host::RunModelBenchmarkInline(request, options, publish, hooks);
+  ASSERT_EQ(snapshots.size(), 5u);
+  EXPECT_DOUBLE_EQ(snapshots.front().rss_mb, 42.0);
+  EXPECT_EQ(snapshots.front().iterations_completed, 0u);
+  for (size_t i = 1; i <= request.iterations; ++i) {
+    EXPECT_EQ(snapshots[i].iterations_completed, i);
+    EXPECT_DOUBLE_EQ(snapshots[i].rss_mb, 99.0 + static_cast<double>(i));
+  }
+  EXPECT_EQ(done.status, "success");
+  EXPECT_EQ(snapshots.back().status, "success");
+  EXPECT_DOUBLE_EQ(done.rss_mb, 102.0);
+  EXPECT_DOUBLE_EQ(snapshots.back().rss_mb, 102.0);
+  EXPECT_DOUBLE_EQ(rss, 999.0);
+
+  snapshots.clear();
+  rss = 42.0;
+  hooks.before_query = [&](const auto&, uint64_t i) {
+    rss = 100.0 + static_cast<double>(i);
+    if (i == 2) throw std::runtime_error("interrupted query");
+  };
+  EXPECT_THROW(azookey::host::RunModelBenchmarkInline(request, options, publish, hooks),
+               std::runtime_error);
+  ASSERT_EQ(snapshots.size(), 3u);
+  EXPECT_EQ(snapshots.back().iterations_completed, 2u);
+  EXPECT_DOUBLE_EQ(snapshots.back().rss_mb, 101.0);
+  EXPECT_DOUBLE_EQ(rss, 102.0);
   fs::remove_all(dir);
 }
 #endif

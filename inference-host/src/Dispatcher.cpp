@@ -1623,19 +1623,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
     res.backend = parsed->backend;
     res.error = config_.models_dir.empty() ? "models_dir_unavailable" : "path_outside_models_root";
   } else {
-    // One benchmark per process: each loads a whole second model.
-    const auto slot = TryAcquireBenchmarkSlot();
-    if (!slot.owns_lock()) {
-      res.backend = parsed->backend;
-      res.error = "busy";
-      return MakeResponse(req, ipc::BuildBenchmarkModelResponse(res));
-    }
     ModelBenchmarkOptions options;
     options.base_config = engine_->config();
     try {
       // Load exactly the path that was checked, not the raw request spelling.
       auto request = *parsed;
       request.path = core::PathToUtf8(*resolved);
+      // RunModelBenchmark owns the slot through child-process reclamation.
       res = RunModelBenchmark(request, options);
     } catch (...) {
       res = ipc::BenchmarkModelResponse{};

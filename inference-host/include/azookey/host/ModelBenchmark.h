@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -25,10 +26,16 @@ struct ModelBenchmarkOptions {
   // come from the request.
   EngineConfig base_config;
   std::chrono::milliseconds budget{kBenchmarkBudget};
-  // Process working set in MiB; null measures this process (0 off Windows).
+  // Inline-only test seam for the benchmark process's working set in MiB.
+  // Null measures that process (0 if unavailable / off Windows). The isolated
+  // Windows worker measures itself; the parent never calls this callback.
   std::function<double()> rss_mb;
   // Test-only: lets a no-llama build answer from the probe-only GGUF fixture.
   bool mock_zenzai_candidates_for_tests{false};
+  // Test-only process seam. Production relaunches its own executable.
+  std::filesystem::path worker_executable_for_tests;
+  std::function<void(uint32_t)> worker_started_for_tests;
+  std::function<std::chrono::steady_clock::time_point()> now_for_tests;
 };
 
 std::vector<std::string> DefaultBenchmarkCases();
@@ -37,8 +44,10 @@ std::vector<std::string> DefaultBenchmarkCases();
 // an unlocked result means another benchmark is running ("busy").
 std::unique_lock<std::mutex> TryAcquireBenchmarkSlot();
 
-// Loads the model into a separate InferenceEngine (never the live one), runs
-// warmup + iterations of QueryCandidates over the cases in turn, and reports
+// On Windows, loads the model in a disposable child process (never the live
+// engine). The process-wide slot is held until the child has exited; a delayed
+// termination is retained as the sole worker and blocks further launches.
+// Runs warmup + iterations of QueryCandidates over the cases in turn and reports
 // latency percentiles. Exceeding the budget (load included) stops the run with
 // status "timeout" and the iterations completed so far. Invalid requests and
 // load failures report status "error" with a fixed error category.

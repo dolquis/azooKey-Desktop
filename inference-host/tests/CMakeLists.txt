@@ -13,7 +13,7 @@ if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
 endif()
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp ai_backend_test.cpp host_etw_test.cpp
-  anomaly_detector_test.cpp)
+  anomaly_detector_test.cpp benchmark_worker_test_main.cpp)
 # Both dispatcher_test.cpp and host_etw_test.cpp define ThrowingConverter.
 set_source_files_properties(host_etw_test.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(host_dispatcher_tests PRIVATE
@@ -24,7 +24,7 @@ target_compile_definitions(host_dispatcher_tests PRIVATE
 )
 add_dependencies(host_dispatcher_tests dictionary_fixtures)
 target_link_libraries(host_dispatcher_tests
-  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+  PRIVATE azookey_host GTest::gtest azookey_project_options azookey_project_warnings
 )
 azookey_discover_tests(host_dispatcher_tests)
 
@@ -58,10 +58,17 @@ target_link_libraries(host_user_data_paths_tests
 )
 azookey_discover_tests(host_user_data_paths_tests)
 
-add_executable(host_model_catalog_tests model_catalog_test.cpp model_scanner_test.cpp)
+add_executable(host_model_catalog_tests model_catalog_test.cpp model_scanner_test.cpp
+  model_benchmark_process_test.cpp benchmark_worker_test_main.cpp)
+# The scanner and process tests define the same GGUF fixture helpers.
+set_source_files_properties(model_benchmark_process_test.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_link_libraries(host_model_catalog_tests
-  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+  PRIVATE azookey_host GTest::gtest azookey_project_options azookey_project_warnings
 )
+target_compile_definitions(host_model_catalog_tests PRIVATE
+  AZOOKEY_BENCHMARK_HOST_EXECUTABLE="$<TARGET_FILE:azookey_inference_host>")
+add_dependencies(host_model_catalog_tests azookey_inference_host)
 azookey_discover_tests(host_model_catalog_tests)
 
 if(WIN32)

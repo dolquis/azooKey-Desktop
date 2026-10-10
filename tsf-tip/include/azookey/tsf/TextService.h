@@ -913,7 +913,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id);
   void QueryPendingPrediction(uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
-                    const std::string& mode, const std::string& trace_id);
+                    const std::string& mode, const std::string& trace_id, bool english_candidates);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options,

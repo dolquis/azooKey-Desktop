@@ -2215,7 +2215,8 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 | 一括変換（`QueryBatchConversion`）の neural | 30s |
 | 一括変換の ai-cleanup（`local-zenzai` など外部 AI でない backend） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
 | 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕（TIP は 5s を足す）。正典は `docs/ai-backend-spec.md` §7.1 |
-| （設計値）ローカル Zenzai 1 変換のハード予算の上限 | 800ms。request deadline ではない（下記） |
+| （設計値）ローカル Zenzai 1 変換のハード予算の上限 | 800ms。変換要求（`QueryCandidates` / 一括変換）の request deadline ではない（下記） |
+| ローカルの非 Cleanup AI 変換（`local-zenzai` / 外部 AI 不許可 / Lint。Host の `AiBackend`） | 800ms（Host が強制する deadline。超過は `Timeout`） |
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 
@@ -2225,8 +2226,8 @@ connected-but-silent Host でも、pipe 切断や blocking read の解除を待�
 本表は Host 内の推論予算とも別レイヤである。Host の `InferenceEngine` は 1 変換ごとに
 `docs/zenzai-inference-spec.md` §8.2 の 1 変換ハード予算（600ms）を設定し、超過時は
 best-so-far を返す。表の「ローカル Zenzai 1 変換のハード予算の上限」800ms は、この予算の
-上限を決める設計値であり、実行時に強制される request deadline ではない。ローカル Zenzai の
-変換が 800ms で client から打ち切られるわけではなく、client が待つ時間は要求の種別ごとの上の行
+上限を決める設計値であり、変換要求（`QueryCandidates` / 一括変換）に対しては実行時に強制される
+request deadline ではない。ローカル Zenzai の変換が 800ms で client から打ち切られるわけではなく、client が待つ時間は要求の種別ごとの上の行
 （fast / ライブ変換 150ms、再変換 750ms、一括変換 30s）が決める。600ms を上限に揃えない根拠は
 同 §8.2 の上限と下限の制約である。
 

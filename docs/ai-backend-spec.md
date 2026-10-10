@@ -349,6 +349,8 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
   殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
   壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
 - `local-zenzai` backend の通常のAI経路はM47の要求種別ごとの deadline（§8.5.2）に従う。
+  Hostの`AiBackend`は、ローカル経路の`Cleanup`以外（Magic Conversion、Lintなど）に800 msの
+  deadlineを課し、超過は`Timeout`とする。一方で変換要求（`QueryCandidates`、一括変換）には、
   800 msは1変換のハード予算の上限を決める設計値であり、request deadlineではない。
   M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
   全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。

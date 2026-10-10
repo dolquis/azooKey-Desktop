@@ -44,6 +44,8 @@ struct UserDictCliRunOptions {
   std::string handshake_token;
   bool prefer_pipe{true};
   uint32_t connect_timeout_ms{100};
+  // Total wait while the Host pipe exists but every instance is busy.
+  uint32_t busy_connect_timeout_ms{2000};
   uint32_t response_timeout_ms{2000};
   const learning::ByteCrypto* crypto{nullptr};
 };

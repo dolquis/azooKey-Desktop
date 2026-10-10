@@ -1832,6 +1832,103 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   RemoveProtectedStoreFile(lpath);
 }
 
+TEST(InferenceEngineTest, DeadlineCutBeamRanksBehindCompletedZenzaiCandidate) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_unfinished_rank.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_unfinished_rank_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto candidates = engine->QueryCandidates("うちきり", "", kNowBase, nullptr, 10, false);
+  const auto find = [&](const std::string& surface) {
+    return std::find_if(candidates.begin(), candidates.end(),
+                        [&](const auto& c) { return c.surface == surface; });
+  };
+  const auto completed = find("協議する");
+  const auto cut = find("協議す");
+  ASSERT_NE(completed, candidates.end());
+  ASSERT_NE(cut, candidates.end());
+  EXPECT_LT(completed, cut);
+  EXPECT_LE(cut->score, completed->score);
+  EXPECT_NE(cut->debug_info.find("unfinished"), std::string::npos);
+  EXPECT_EQ(completed->debug_info.find("unfinished"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
+TEST(InferenceEngineTest, UnfinishedCandidatesFollowEveryCompletedCandidate) {
+  std::vector<azookey::core::Candidate> candidates(4);
+  candidates[0].surface = "協議す";
+  candidates[0].score = 1.39;
+  candidates[1].surface = "協議する";
+  candidates[1].score = 1.20;
+  candidates[2].surface = "競技する";
+  candidates[2].score = 0.90;
+  candidates[3].surface = "協議し";
+  candidates[3].score = 0.50;
+
+  const auto ranked = azookey::host::RankUnfinishedBehindCompleted(candidates,
+                                                                   {true, false, false, true});
+
+  ASSERT_EQ(ranked.size(), 4u);
+  EXPECT_EQ(ranked[0].surface, "協議する");
+  EXPECT_EQ(ranked[1].surface, "競技する");
+  EXPECT_EQ(ranked[2].surface, "協議す");
+  EXPECT_DOUBLE_EQ(ranked[2].score, 0.90);
+  EXPECT_NE(ranked[2].debug_info.find("unfinished"), std::string::npos);
+  EXPECT_EQ(ranked[3].surface, "協議し");
+  EXPECT_DOUBLE_EQ(ranked[3].score, 0.50);
+  EXPECT_TRUE(ranked[0].debug_info.empty());
+}
+
+TEST(InferenceEngineTest, UnfinishedCandidatesKeepScoresWithoutCompletedCandidate) {
+  std::vector<azookey::core::Candidate> candidates(1);
+  candidates[0].surface = "日本語";
+  candidates[0].score = 1.2;
+
+  const auto ranked = azookey::host::RankUnfinishedBehindCompleted(candidates, {true});
+
+  ASSERT_EQ(ranked.size(), 1u);
+  EXPECT_DOUBLE_EQ(ranked[0].score, 1.2);
+  EXPECT_THROW(azookey::host::RankUnfinishedBehindCompleted(candidates, {}),
+               std::invalid_argument);
+}
+
+#ifdef AZOOKEY_AI_TEST_MODEL
+// Exercises the beam loop wiring (end-of-sequence cost and stop condition) that the pure
+// function tests above cannot reach. Runs only when a real Zenzai model is configured.
+TEST(InferenceEngineTest, RealZenzaiNBestKeepsReadingTail) {
+  const char* lpath = "azookey_host_engine_zenzai_real_tail.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::host::ModelLoadOptions options;
+  options.path = AZOOKEY_AI_TEST_MODEL;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto candidates = engine->QueryCandidates(
+      "けいやくこうしんのじょうけんをきょうぎする", "", kNowBase, nullptr, 5, false);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "契約更新の条件を協議する");
+
+  RemoveProtectedStoreFile(lpath);
+}
+#endif
+
 TEST(InferenceEngineTest, RecommendsAvailableZenzaiThreadsCappedAtEight) {
   EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(0), 1);
   EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(2), 2);

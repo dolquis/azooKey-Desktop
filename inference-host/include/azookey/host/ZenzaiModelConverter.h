@@ -73,6 +73,12 @@ BeamScore CompletedBeamScore(double prefix_logprob, int32_t prefix_tokens, doubl
 bool ShouldStopBeamSearch(std::vector<double> completed_scores,
                           const std::vector<double>& active_scores, size_t candidate_limit);
 
+// Candidates cut off by the deadline or the token limit have not paid for end-of-sequence, so
+// their scores are capped at the lowest completed score and they follow every completed
+// candidate, tagged `unfinished`. `unfinished[i]` describes `candidates[i]`.
+std::vector<core::Candidate> RankUnfinishedBehindCompleted(std::vector<core::Candidate> candidates,
+                                                           const std::vector<bool>& unfinished);
+
 struct ZenzaiModelRuntime;
 
 struct ZenzaiLoadResult {

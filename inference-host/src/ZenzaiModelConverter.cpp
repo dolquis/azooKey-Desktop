@@ -58,7 +58,10 @@ struct GeneratedCandidate {
   std::string surface;
   double total_logprob{};
   int32_t token_count{};
-  bool allow_incomplete_utf8_suffix{};
+  // Cut off by the deadline or the token limit before end-of-sequence. Such a surface may end
+  // inside a UTF-8 sequence and has not paid for end-of-sequence, so it ranks behind every
+  // completed candidate.
+  bool unfinished{};
 };
 
 size_t RequestedCandidateLimit(const core::ConversionContext& context) {
@@ -249,7 +252,7 @@ std::optional<std::string> UsableGeneratedSurface(const GeneratedCandidate& cand
   if (IsValidUtf8String(candidate.surface)) {
     return candidate.surface;
   }
-  if (!candidate.allow_incomplete_utf8_suffix) {
+  if (!candidate.unfinished) {
     return std::nullopt;
   }
   const auto prefix_length = CompleteUtf8PrefixLength(candidate.surface);
@@ -997,7 +1000,9 @@ struct ZenzaiModelRuntime {
       }
     }
 
-    if (!completed_quota_reached && SaneUniqueGeneratedScores(generated).size() < candidate_limit) {
+    // Beams still active at the token limit become unfinished candidates; Convert ranks them
+    // behind every completed one.
+    if (!completed_quota_reached) {
       for (const auto& beam : beams) {
         AppendUnfinishedBeam(generated, beam);
       }
@@ -1052,6 +1057,13 @@ struct ZenzaiModelRuntime {
       last_decode_stats = decode_stats;
       return {
           GeneratedCandidate{std::string("日本語") + std::string("\xE3\x81", 2), -0.42, 3, true}};
+    }
+    if (ToKatakana(kana) == "ウチキリ") {
+      // Test fixture: a beam cut off at the deadline outranks the completed one by raw score.
+      ZenzaiDecodeStats decode_stats;
+      decode_stats.deadline_exceeded = true;
+      last_decode_stats = decode_stats;
+      return {GeneratedCandidate{"協議す", -0.003, 3, true}, GeneratedCandidate{"協議する", -0.8, 5}};
     }
     if (ToKatakana(kana) == "ナイブムコウ") {
       return {GeneratedCandidate{std::string("日") + std::string("\xE3X", 2), -0.42, 2, true}};
@@ -1165,6 +1177,38 @@ bool ShouldStopBeamSearch(std::vector<double> completed_scores,
   const double weakest_kept = completed_scores[candidate_limit - 1];
   return std::none_of(active_scores.begin(), active_scores.end(),
                       [weakest_kept](double score) { return score > weakest_kept; });
+}
+
+std::vector<core::Candidate> RankUnfinishedBehindCompleted(std::vector<core::Candidate> candidates,
+                                                           const std::vector<bool>& unfinished) {
+  if (unfinished.size() != candidates.size()) {
+    throw std::invalid_argument("unfinished flags must match candidates");
+  }
+  std::optional<double> lowest_completed;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (!unfinished[i]) {
+      lowest_completed = lowest_completed ? std::min(*lowest_completed, candidates[i].score)
+                                          : candidates[i].score;
+    }
+  }
+  std::vector<core::Candidate> ranked;
+  ranked.reserve(candidates.size());
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (!unfinished[i]) {
+      ranked.push_back(std::move(candidates[i]));
+    }
+  }
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (unfinished[i]) {
+      auto& candidate = candidates[i];
+      if (lowest_completed) {
+        candidate.score = std::min(candidate.score, *lowest_completed);
+      }
+      AppendDebugTag(candidate.debug_info, "unfinished");
+      ranked.push_back(std::move(candidate));
+    }
+  }
+  return ranked;
 }
 
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer) {
@@ -1451,6 +1495,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   }
 
   std::vector<core::Candidate> candidates;
+  std::vector<bool> unfinished;
   std::optional<std::string> skipped_reason;
   try {
     const auto generated = runtime_->Generate(kana, context);
@@ -1458,6 +1503,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
       return {};
     }
     candidates.reserve(generated.size());
+    unfinished.reserve(generated.size());
     for (const auto& item : generated) {
       const auto surface = UsableGeneratedSurface(item);
       if (!surface) {
@@ -1480,7 +1526,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
         AppendDebugTag(candidate.debug_info, "utf8-prefix-trimmed");
       }
       candidates.push_back(std::move(candidate));
+      unfinished.push_back(item.unfinished);
     }
+    candidates = RankUnfinishedBehindCompleted(std::move(candidates), unfinished);
   } catch (const std::exception& ex) {
     return DegradeToFallback(kana, context, std::string("exception:") + ex.what());
   } catch (...) {

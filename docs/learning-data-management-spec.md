@@ -20,7 +20,7 @@
 | データ | 既定パス | 由来 M | 暗号化 |
 |---|---|---|---|
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
-| `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。`learning.tsv` は移行元として残す） | M54 | M34 と同じ `.enc` |
+| `learning.v2.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv`（M54 の v2 形式。暗号化された移行元 `learning.tsv.enc` は v2 保存・読み戻し検証後に削除する） | M54 | M34 と同じ `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
 | `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
@@ -185,11 +185,12 @@ Response:
 変換器がメモリに持つ同じ組の確定履歴も消す。辞書由来の候補は元のスコアと属性に戻し、
 確定だけで追加された候補は除く。ほかの組の履歴は保つ。
 
-M54 で v2 へ移行した利用者には、旧版の Host へ戻すための M7 ファイル（`learning.tsv.enc`）が残る
-（`user-learning-enhancement-spec.md` §3.1）。忘却は M7 ファイルにも及ぼし、同じ組の行を
-M7 の書式のまま M7 ファイルから除く。M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
+v2 の保存・読み戻し検証後は M7 ファイル（`learning.tsv.enc`）を削除する
+（`user-learning-enhancement-spec.md` §3.1）。検証や削除に失敗して M7 ファイルが残っている場合は、
+忘却を M7 ファイルにも及ぼし、同じ組の行を M7 の書式のまま除く。
+M7 ファイルへの書き戻しは既存の atomic replace と file lock に従い、
 失敗しても M7 ファイルを壊さない（失敗したら忘却を失敗として返す）。
-M7 ファイルを書き換えるのはこの忘却だけで、通常の保存では書き換えない。
+通常の保存では M7 の行を書き換えず、検証済みの暗号化 M7 ファイルを削除する。
 
 ### 4.3 ExportLearningData
 

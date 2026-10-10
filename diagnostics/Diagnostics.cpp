@@ -445,13 +445,23 @@ bool ValidateModel(const std::filesystem::path& path) {
 }
 
 bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries,
-                        bool* migration_available = nullptr) {
+                        bool* migration_available = nullptr, bool* legacy_retained = nullptr) {
   *entries = 0;
   if (migration_available) *migration_available = false;
+  if (legacy_retained) *legacy_retained = false;
   // The Host reads the v2 file once it exists and the M7 file before that.
   std::string text;
   auto source = learning::ReadProtectedText(learning::LearningStoreV2PathFor(path),
                                             learning::DpapiCrypto(), text);
+  if (source != learning::ProtectedFileSource::Missing) {
+    std::error_code ec;
+    const bool retained = std::filesystem::exists(learning::EncryptedPathFor(path), ec);
+    if (ec) {
+      learning::SecureErase(text);
+      return false;
+    }
+    if (legacy_retained) *legacy_retained = retained;
+  }
   if (source == learning::ProtectedFileSource::Missing) {
     source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
   }
@@ -1109,8 +1119,8 @@ DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
 }
 
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries,
-                            bool* migration_available) {
-  return ProbeLearningStore(path, entries, migration_available);
+                            bool* migration_available, bool* legacy_retained) {
+  return ProbeLearningStore(path, entries, migration_available, legacy_retained);
 }
 
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
@@ -1422,13 +1432,18 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
   const auto learning_status =
       !snapshot.learning_store_valid
           ? Status::Error
-          : (snapshot.learning_store_migration_available ? Status::Warning : Status::Ok);
+          : (snapshot.learning_store_migration_available || snapshot.learning_store_legacy_retained
+                 ? Status::Warning
+                 : Status::Ok);
   AddCheck(report, "D-010", "learning_store", learning_status,
-           learning_status == Status::Error
-               ? "Learning store is unreadable or corrupt"
-               : (learning_status == Status::Warning ? "Legacy learning store can be migrated"
-                                                     : "Learning store is readable"),
-           {{"entries", j::Value(snapshot.learning_entries)}});
+           learning_status == Status::Error ? "Learning store is unreadable or corrupt"
+                                            : (snapshot.learning_store_legacy_retained
+                                                   ? "Legacy learning store cleanup is pending"
+                                                   : (snapshot.learning_store_migration_available
+                                                          ? "Legacy learning store can be migrated"
+                                                          : "Learning store is readable")),
+           {{"entries", j::Value(snapshot.learning_entries)},
+            {"legacy_retained", j::Value(snapshot.learning_store_legacy_retained)}});
 
   AddCheck(report, "D-011", "user_dictionary",
            snapshot.user_dict_valid ? Status::Ok : Status::Error,
@@ -1555,9 +1570,9 @@ ProbeResult ProbeSystem() {
     snapshot.selected_model_exists =
         !model_path.empty() && std::filesystem::exists(model_path, ec) && !ec;
     snapshot.selected_model_valid = snapshot.selected_model_exists && ValidateModel(model_path);
-    snapshot.learning_store_valid =
-        ProbeLearningStore(paths->learning_path, &snapshot.learning_entries,
-                           &snapshot.learning_store_migration_available);
+    snapshot.learning_store_valid = ProbeLearningStore(
+        paths->learning_path, &snapshot.learning_entries,
+        &snapshot.learning_store_migration_available, &snapshot.learning_store_legacy_retained);
     snapshot.user_dict_valid = ProbeUserDictionary(
         paths->user_dict_path, &snapshot.user_dict_entries, &snapshot.user_dict_skipped_entries);
   } else {

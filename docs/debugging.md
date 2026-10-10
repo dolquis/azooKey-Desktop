@@ -321,3 +321,11 @@ cmake --build --preset windows-debug --target azookey_check
   テストには一時ディレクトリ内の合成データだけを使い、実ユーザーデータを渡さない。
 - **学習暴走**: `learning_alpha` を下げる（既定 0.8）。`LearningStore::Reset` または
   `%LOCALAPPDATA%\azooKey\data\learning.tsv` を削除して再起動。
+- **D-010 の legacy cleanup 待ち**: `details.legacy_retained=true` は v2 と
+  `learning.tsv.enc` の併存を表す。v2 が読める場合は warning、読めない場合は error を優先する。
+  Host は次の成功した学習保存で cleanup を再試行する。保存時の lock 競合、復号失敗、
+  全行検査の失敗、削除権限を確認する。v2 の保存成功は cleanup の成功を保証しない。
+  `azookey_diag` / `--repair` は学習ファイルを削除しない。
+  cleanup は `learning.tsv.enc` だけを対象とし、平文、`.bak`、`.corrupt-*` は保全する。
+  削除後は旧版 Host が移行前の学習を引き継げない。条件の正典は
+  `docs/user-learning-enhancement-spec.md` §3.1 を参照する。

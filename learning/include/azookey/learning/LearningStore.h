@@ -115,7 +115,7 @@ class LearningStore {
  public:
   // `path` is the M7 location (learning.tsv). Saves go to
   // LearningStoreV2PathFor(path); the M7 file is read to migrate it and is
-  // rewritten only by RemoveFromLegacyFile.
+  // rewritten by RemoveFromLegacyFile and removed after a verified v2 save.
   explicit LearningStore(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
   virtual ~LearningStore() = default;
 
@@ -185,6 +185,8 @@ class LearningStore {
   bool RewriteLegacyFile(const std::optional<std::pair<std::string, std::string>>& pair,
                          bool* removed_rows) const;
   bool KeepAsideCopy(const std::filesystem::path& v2_path) const;
+  void RemoveVerifiedLegacyFile(std::string_view saved_text,
+                                std::chrono::milliseconds lock_timeout) const;
 
   std::filesystem::path path_;
   const ByteCrypto* crypto_;

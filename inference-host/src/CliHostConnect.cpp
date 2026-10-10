@@ -1,5 +1,6 @@
 #include "azookey/host/CliHostConnect.h"
 
+#include <algorithm>
 #include <chrono>
 
 #ifdef _WIN32
@@ -10,6 +11,8 @@ namespace azookey::host {
 namespace {
 
 #ifdef _WIN32
+constexpr uint32_t kBusySliceMs = 100;
+
 // True when the pipe has instances but none is free (or one has just been
 // freed). No instance at all means no Host, which must keep failing fast.
 bool HostPipeIsBusy(const std::string& pipe_name) {
@@ -30,16 +33,23 @@ bool HostPipeIsBusy(const std::string& pipe_name) {
 bool ConnectToRunningHost(ipc::NamedPipeClient& client, const std::string& pipe_name,
                           uint32_t connect_timeout_ms, uint32_t busy_timeout_ms) {
 #ifdef _WIN32
-  const auto start = std::chrono::steady_clock::now();
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
   if (client.Connect(pipe_name, connect_timeout_ms)) return true;
-  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start)
-                           .count();
-  // Connect retries a busy pipe on its own, so one more call with the rest of
-  // the budget is enough; any other failure returns from it immediately.
-  if (elapsed < busy_timeout_ms && HostPipeIsBusy(pipe_name))
-    return client.Connect(pipe_name, static_cast<uint32_t>(busy_timeout_ms - elapsed));
-  return false;
+  // Wait in short slices and look at the pipe between them, so a Host that
+  // exits while the CLI waits still fails within one slice rather than after
+  // the whole budget (Connect keeps retrying a missing pipe until its timeout).
+  for (;;) {
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+    if (elapsed >= busy_timeout_ms || !HostPipeIsBusy(pipe_name)) return false;
+    const auto slice = (std::min)(kBusySliceMs, static_cast<uint32_t>(busy_timeout_ms - elapsed));
+    const auto slice_start = Clock::now();
+    if (client.Connect(pipe_name, slice)) return true;
+    // A busy or missing pipe uses up the slice; an early return is a failure
+    // that retrying cannot fix (another logon's server, a handle error).
+    if (Clock::now() - slice_start < std::chrono::milliseconds(slice)) return false;
+  }
 #else
   (void)busy_timeout_ms;
   return client.Connect(pipe_name, connect_timeout_ms);

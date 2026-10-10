@@ -312,6 +312,30 @@ TEST(CliHostConnectTest, WaitsForABusyHostPipeUntilAnInstanceFrees) {
   CloseHandle(server);
 }
 
+TEST(CliHostConnectTest, HostPipeThatDisappearsWhileBusyFailsWithoutTheWholeBudget) {
+  const std::string pipe_name = UniquePipeName("azookey-cli-vanishing-pipe");
+  const std::wstring wide_name(pipe_name.begin(), pipe_name.end());
+  const HANDLE server = CreateNamedPipeW(wide_name.c_str(), PIPE_ACCESS_DUPLEX,
+                                         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1,
+                                         4096, 4096, 0, nullptr);
+  ASSERT_NE(server, INVALID_HANDLE_VALUE);
+  const HANDLE occupier = CreateFileW(wide_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                      OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(occupier, INVALID_HANDLE_VALUE);
+  // The Host exits while the CLI waits: every instance of the pipe goes away.
+  std::thread exit_host([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CloseHandle(occupier);
+    CloseHandle(server);
+  });
+  azookey::ipc::NamedPipeClient client;
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_FALSE(azookey::host::ConnectToRunningHost(client, pipe_name, 100, 5000));
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  exit_host.join();
+  EXPECT_LT(elapsed, std::chrono::milliseconds(2000));
+}
+
 TEST(CliHostConnectTest, MissingHostPipeStillFailsAtTheConnectTimeout) {
   azookey::ipc::NamedPipeClient client;
   const auto start = std::chrono::steady_clock::now();

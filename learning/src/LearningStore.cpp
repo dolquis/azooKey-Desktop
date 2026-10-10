@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "azookey/learning/AtomicFile.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningDecay.h"
 
 namespace azookey::learning {
@@ -493,8 +494,8 @@ bool LearningStore::LoadImpl(bool migrate_plaintext) {
   dirty_ = false;
   save_blocked_by_load_failure_ = false;
   preserve_before_save_ = false;
-  // The v2 file wins once it exists. Until then the M7 file is the source; it
-  // is never rewritten in v2, so an older Host can still read it.
+  // The v2 file wins once it exists. Until then the M7 file is the source;
+  // it remains in M7 format until a verified v2 save removes it.
   auto source_path = LearningStoreV2PathFor(path_);
   std::string text;
   auto source = ReadProtectedText(source_path, *crypto_, text);
@@ -581,12 +582,44 @@ bool LearningStore::Save(std::chrono::milliseconds retry_budget) const {
   if (preserve_before_save_ && !KeepAsideCopy(v2_path)) return false;
   auto text = SerializeText();
   const bool saved = WriteProtectedText(v2_path, text, *crypto_, retry_budget);
+  if (saved) RemoveVerifiedLegacyFile(text, retry_budget);
   SecureErase(text);
   if (saved) {
     dirty_ = false;
     preserve_before_save_ = false;
   }
   return saved;
+}
+
+void LearningStore::RemoveVerifiedLegacyFile(std::string_view saved_text,
+                                             std::chrono::milliseconds lock_timeout) const {
+  const auto legacy_file = EncryptedPathFor(path_);
+  std::error_code ec;
+  if (!std::filesystem::exists(legacy_file, ec) || ec) return;
+  const auto v2_path = LearningStoreV2PathFor(path_);
+  FileLockFailure failure;
+  // Reacquire after WriteProtectedText releases its lock: do not nest a
+  // nonrecursive flock. Comparing all bytes rejects an intervening writer.
+  auto v2_lock = AcquireExclusiveFileLockForPath(EncryptedPathFor(v2_path), failure, lock_timeout);
+  if (!v2_lock) return;
+  auto legacy_lock = AcquireExclusiveFileLockForPath(legacy_file, failure, lock_timeout);
+  if (!legacy_lock) return;
+  // An unfinished plaintext migration keeps its encrypted source as well.
+  if (std::filesystem::exists(path_, ec) || ec) return;
+  std::string verified;
+  const auto v2_source = ReadProtectedText(v2_path, *crypto_, verified);
+  const bool valid_v2 = v2_source == ProtectedFileSource::Encrypted && verified == saved_text &&
+                        CountValidLearningRows(verified).has_value();
+  SecureErase(verified);
+  if (!valid_v2) return;
+  const auto legacy_source = ReadProtectedText(path_, *crypto_, verified);
+  const bool valid_legacy = legacy_source == ProtectedFileSource::Encrypted &&
+                            CountValidLearningRows(verified).has_value();
+  SecureErase(verified);
+  if (!valid_legacy) return;
+  // Cleanup is best effort. Failure retains the old file and does not turn
+  // a durable v2 save into a failure (callers may roll back their memory).
+  std::filesystem::remove(legacy_file, ec);
 }
 
 // Copies the file as stored (still encrypted) to <file>.corrupt-<epoch>. An

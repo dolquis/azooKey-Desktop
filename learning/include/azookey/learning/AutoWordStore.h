@@ -22,6 +22,7 @@ inline constexpr uint64_t kAutoWordDefaultPendingMaxAgeSec = 90ULL * 24 * 60 * 6
 
 enum class AutoWordSource { Mining, Trending };
 enum class AutoWordState { Pending, Confirmed, Rejected };
+enum class AutoWordSaveOutcome { Changed, Unchanged, NotFound, SaveFailed };
 
 struct AutoWord {
   std::string surface;
@@ -61,6 +62,11 @@ class AutoWordStore {
   bool Load();
   bool Save() const;
   void Reset();
+  // Writers remain serialized through persistence. Readers keep seeing the
+  // previous table until the saved replacement is published.
+  bool ResetAndSave();
+  AutoWordSaveOutcome SetStateAndSave(const std::string& surface, const std::string& reading,
+                                      AutoWordState state);
 
   // Records one mining observation. A new key is added as Pending; an existing
   // key has its count incremented. A rejected key is ignored entirely, count
@@ -78,14 +84,13 @@ class AutoWordStore {
   bool Confirm(const std::string& surface, const std::string& reading);
   bool Reject(const std::string& surface, const std::string& reading);
   // Moves the word to `state` whatever it was before and returns the previous
-  // state, or nullopt when the key is absent. The approval handler uses the
-  // previous state to tell an idempotent repeat from a change and to roll the
-  // change back when Save() fails.
+  // state, or nullopt when the key is absent. This only changes memory; use
+  // SetStateAndSave for persistent approval/forget operations.
   std::optional<AutoWordState> SetState(const std::string& surface, const std::string& reading,
                                         AutoWordState state);
   // Moves the word from `expected` to `desired` only if it is still in
-  // `expected`. A rollback uses this so it cannot undo a decision another
-  // connection made in the meantime. Returns whether the state was changed.
+  // `expected`. This only changes memory, not a persistence transaction.
+  // Returns whether the state was changed.
   bool CompareAndSetState(const std::string& surface, const std::string& reading,
                           AutoWordState expected, AutoWordState desired);
 
@@ -111,18 +116,23 @@ class AutoWordStore {
   ImportCounts Merge(const AutoWordStore& other, ImportConflictPolicy policy);
 
  private:
-  bool ParseTextLocked(std::string_view text);
-  std::string SerializeTextLocked() const;
+  using Table = std::map<std::string, std::map<std::string, AutoWord>>;
+  bool ParseText(std::string_view text, Table& table) const;
+  bool SaveSnapshot(const Table& table) const;
+  static std::string SerializeTable(const Table& table);
   AutoWord* FindLocked(const std::string& surface, const std::string& reading);
   bool SetStateLocked(const std::string& surface, const std::string& reading, AutoWordState state);
 
+  // Lock order: writer mutex_, then table_mutex_. Readers take only the latter;
+  // encryption, file I/O and snapshot serialization never hold table_mutex_.
   mutable std::mutex mutex_;
+  mutable std::mutex table_mutex_;
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   bool save_blocked_by_load_failure_{false};
   // reading -> surface -> word. Gives (surface, reading) uniqueness and the
   // reading-keyed lookup LookupConfirmed needs from one container.
-  std::map<std::string, std::map<std::string, AutoWord>> table_;
+  Table table_;
 };
 
 }  // namespace azookey::learning

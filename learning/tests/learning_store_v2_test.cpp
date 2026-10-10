@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@
 #include "TestByteCrypto.h"
 #include "azookey/learning/ContextHash.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningDecay.h"
 #include "azookey/learning/LearningStore.h"
 
@@ -29,8 +31,9 @@ constexpr uint64_t kDay = 24 * 60 * 60;
 class ScopedLearningDirectory {
  public:
   explicit ScopedLearningDirectory(const char* name)
-      : root_(std::filesystem::temp_directory_path() / name) {
-    std::filesystem::remove_all(root_);
+      : root_(std::filesystem::temp_directory_path() /
+              (std::string(name) + "-" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
     std::filesystem::create_directories(root_);
   }
   ~ScopedLearningDirectory() {
@@ -96,7 +99,7 @@ TEST(LearningStoreV2Test, PathsOutsideEveryAnsiCodePageRoundTrip) {
 }
 #endif
 
-TEST(LearningStoreV2Test, MigratesM7FileKeepingWeightsAndLeavesLegacyBytesUntouched) {
+TEST(LearningStoreV2Test, MigratesM7FileKeepingWeightsAndRemovesVerifiedLegacyFile) {
   ScopedLearningDirectory directory("azookey_learning_v2_migration");
   const auto path = directory.LegacyPath();
   ASSERT_TRUE(learning::WriteProtectedText(path,
@@ -116,9 +119,10 @@ TEST(LearningStoreV2Test, MigratesM7FileKeepingWeightsAndLeavesLegacyBytesUntouc
   ASSERT_NE(rows, nullptr);
   EXPECT_EQ(rows->at("").commit_count, 3u);
   EXPECT_EQ(rows->at("").last_event, LearningEventType::None);
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), legacy_bytes);
 
   ASSERT_TRUE(store.Save());
-  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), legacy_bytes);
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
 
   LearningStore reloaded(path, &learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
@@ -126,6 +130,214 @@ TEST(LearningStoreV2Test, MigratesM7FileKeepingWeightsAndLeavesLegacyBytesUntouc
   EXPECT_DOUBLE_EQ(reloaded.Score("にほん", "日本", 1999999000), 2.4);
   EXPECT_DOUBLE_EQ(reloaded.Score("a\tb", "A", 1999999000), 0.8);
 }
+
+TEST(LearningStoreV2Test, ReadOnlyMigrationAndFailedSaveKeepLegacyFile) {
+  ScopedLearningDirectory directory("azookey_learning_v2_cleanup_failed_save");
+  const auto path = directory.LegacyPath();
+  ASSERT_TRUE(
+      learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\n", learning::test::Crypto()));
+  const auto original = ReadBytes(learning::EncryptedPathFor(path));
+  LearningStore read_only(path, &learning::test::Crypto());
+  ASSERT_TRUE(read_only.LoadReadOnly());
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+  class FailWrite final : public learning::ByteCrypto {
+   public:
+    bool Encrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return learning::test::Crypto().Decrypt(cipher, plain);
+    }
+  } crypto;
+  LearningStore store(path, &crypto);
+  ASSERT_TRUE(store.Load());
+  EXPECT_FALSE(store.Save());
+  EXPECT_TRUE(store.dirty());
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+  EXPECT_FALSE(
+      std::filesystem::exists(learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path))));
+}
+
+TEST(LearningStoreV2Test, FailedReadBackKeepsLegacyFileUntilVerifiedSave) {
+  class BadReadBack final : public learning::ByteCrypto {
+   public:
+    int mode{};
+    mutable bool written{false};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      const bool result = learning::test::Crypto().Encrypt(plain, cipher);
+      written = result;
+      return result;
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      if (written && mode == 1) return false;
+      if (!learning::test::Crypto().Decrypt(cipher, plain)) return false;
+      if (written && mode != 0) {
+        const std::string replacement =
+            mode == 2 ? std::string(learning::kLearningStoreV2Header) + "\n" : "broken row\n";
+        plain.assign(replacement.begin(), replacement.end());
+      }
+      return true;
+    }
+  } crypto;
+  for (const int mode : {1, 2, 3}) {
+    ScopedLearningDirectory directory("azookey_learning_v2_cleanup_bad_readback");
+    const auto path = directory.LegacyPath();
+    ASSERT_TRUE(learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\n",
+                                             learning::test::Crypto()));
+    const auto original = ReadBytes(learning::EncryptedPathFor(path));
+    crypto.written = false;
+    crypto.mode = mode;
+    LearningStore store(path, &crypto);
+    ASSERT_TRUE(store.Load());
+    // The v2 write succeeds; an unverified cleanup never rolls it back.
+    ASSERT_TRUE(store.Save());
+    EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+    EXPECT_EQ(SavedV2Text(path), store.SerializeText());
+    crypto.mode = 0;
+    ASSERT_TRUE(store.Save());
+    EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+  }
+}
+
+TEST(LearningStoreV2Test, MalformedOrUnreadableLegacyFilesAreNotDeleted) {
+  for (const bool unreadable : {false, true}) {
+    ScopedLearningDirectory directory("azookey_learning_v2_cleanup_bad_legacy");
+    const auto path = directory.LegacyPath();
+    LearningStore store(path, &learning::test::Crypto());
+    store.Observe("にほん", "日本", 2.0, kNow);
+    ASSERT_TRUE(store.Save());
+    if (unreadable) {
+      WriteBytes(learning::EncryptedPathFor(path), "not a protected blob");
+    } else {
+      ASSERT_TRUE(learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\nbroken row\n",
+                                               learning::test::Crypto()));
+    }
+    const auto original = ReadBytes(learning::EncryptedPathFor(path));
+    ASSERT_TRUE(store.Save());
+    EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+  }
+}
+
+TEST(LearningStoreV2Test, CleanupPreservesPlaintextAndMigrationBackup) {
+  ScopedLearningDirectory directory("azookey_learning_v2_cleanup_plaintext");
+  const auto path = directory.LegacyPath();
+  const std::string legacy = "にほん\t日本\t2 1999999000\n";
+  WriteBytes(path, legacy);
+  auto backup = path;
+  backup += ".bak";
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.Load());
+  const auto original = ReadBytes(learning::EncryptedPathFor(path));
+  ASSERT_TRUE(store.Save());
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+  EXPECT_EQ(ReadBytes(backup), legacy);
+  // Pending plaintext must not lose the encrypted source that shadows it.
+  WriteBytes(learning::EncryptedPathFor(path), original);
+  WriteBytes(path, legacy);
+  ASSERT_TRUE(store.Save());
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+  EXPECT_EQ(ReadBytes(path), legacy);
+  EXPECT_EQ(ReadBytes(backup), legacy);
+}
+
+TEST(LearningStoreV2Test, ContendedLegacyLockDefersCleanupWithoutFailingV2Save) {
+  ScopedLearningDirectory directory("azookey_learning_v2_cleanup_lock");
+  const auto path = directory.LegacyPath();
+  ASSERT_TRUE(
+      learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\n", learning::test::Crypto()));
+  const auto original = ReadBytes(learning::EncryptedPathFor(path));
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.Load());
+  ASSERT_TRUE(learning::WriteProtectedText(learning::LearningStoreV2PathFor(path),
+                                           store.SerializeText(), learning::test::Crypto()));
+  {
+    learning::FileLockFailure failure;
+    auto lock =
+        learning::AcquireExclusiveFileLockForPath(learning::EncryptedPathFor(path), failure);
+    ASSERT_TRUE(lock.has_value());
+    auto save =
+        std::async(std::launch::async, [&] { return store.Save(std::chrono::milliseconds(0)); });
+    const auto ready = save.wait_for(std::chrono::seconds(5));
+    lock.reset();
+    ASSERT_EQ(ready, std::future_status::ready);
+    ASSERT_TRUE(save.get());
+    EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
+  }
+  ASSERT_TRUE(store.Save());
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+}
+
+TEST(LearningStoreV2Test, ReadBackAndDeletionHoldBothFileLocks) {
+  class BlockingReadBack final : public learning::ByteCrypto {
+   public:
+    mutable std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    mutable bool written{false};
+    mutable int reads{};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      const bool result = learning::test::Crypto().Encrypt(plain, cipher);
+      written = result;
+      return result;
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      if (written && ++reads == 2) {
+        entered.set_value();
+        released.wait();
+      }
+      return learning::test::Crypto().Decrypt(cipher, plain);
+    }
+  } crypto;
+  ScopedLearningDirectory directory("azookey_learning_v2_cleanup_both_locks");
+  const auto path = directory.LegacyPath();
+  ASSERT_TRUE(
+      learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\n", learning::test::Crypto()));
+  LearningStore store(path, &crypto);
+  ASSERT_TRUE(store.Load());
+  auto entered = crypto.entered.get_future();
+  auto save = std::async(std::launch::async, [&] { return store.Save(); });
+  if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    crypto.release.set_value();
+    save.wait();
+    FAIL() << "Cleanup did not reach the locked read-back";
+  }
+  learning::FileLockFailure failure;
+  auto v2_lock = learning::AcquireExclusiveFileLockForPath(
+      learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path)), failure,
+      std::chrono::milliseconds(0));
+  auto legacy_lock = learning::AcquireExclusiveFileLockForPath(
+      learning::EncryptedPathFor(path), failure, std::chrono::milliseconds(0));
+  crypto.release.set_value();
+  EXPECT_FALSE(v2_lock.has_value());
+  EXPECT_FALSE(legacy_lock.has_value());
+  ASSERT_TRUE(save.get());
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+}
+
+#ifdef _WIN32
+TEST(LearningStoreV2Test, FailedDeletionKeepsLegacyFileUntilNextSave) {
+  ScopedLearningDirectory directory("azookey_learning_v2_cleanup_delete_denied");
+  const auto path = directory.LegacyPath();
+  const auto legacy_file = learning::EncryptedPathFor(path);
+  ASSERT_TRUE(
+      learning::WriteProtectedText(path, "にほん\t日本\t2 1999999000\n", learning::test::Crypto()));
+  const auto original = ReadBytes(legacy_file);
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.Load());
+  {
+    const HANDLE raw =
+        CreateFileW(legacy_file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(raw, INVALID_HANDLE_VALUE);
+    std::unique_ptr<void, decltype(&CloseHandle)> handle(raw, &CloseHandle);
+    ASSERT_TRUE(store.Save());
+    EXPECT_EQ(ReadBytes(legacy_file), original);
+    EXPECT_EQ(SavedV2Text(path), store.SerializeText());
+  }
+  ASSERT_TRUE(store.Save());
+  EXPECT_FALSE(std::filesystem::exists(legacy_file));
+}
+#endif
 
 TEST(LearningStoreV2Test, UnreadableV2FileBlocksSaveAndKeepsBothFiles) {
   ScopedLearningDirectory directory("azookey_learning_v2_unreadable");

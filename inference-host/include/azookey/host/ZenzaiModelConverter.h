@@ -152,6 +152,8 @@ class ZenzaiModelConverter final : public core::IConverter {
   void Commit(const core::Candidate& selected_candidate,
               const core::ConversionContext& context) override;
   void Learn(const std::string& committed_surface, const std::string& committed_reading) override;
+  void Forget(const std::string& reading, const std::string& surface) override;
+  void ResetLearned() override;
   // Answers from the fallback converter's lexicon, the same one Commit and
   // Learn feed. The model's own vocabulary has no (reading, surface) index to
   // ask, so a word only Zenzai knows still reads as unknown to mining.

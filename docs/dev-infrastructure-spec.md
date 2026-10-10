@@ -2725,7 +2725,7 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 | D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
 | D-008 | モデル検証 | 形式別検証（R1=GGUF magic / version、R2=`genai_config.json` + 参照 ONNX） | 破損モデル扱い |
 | D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行。`safe_mode` は `safeMode.enabled=false` に変更し、Host を再起動するか `UpdateConfig` を送る（§8.5.3） |
-| D-010 | learning store | 読み込み可能か、破損していないか | バックアップ後に初期化 |
+| D-010 | learning store | 読み込み可能か、破損していないか、v2 と暗号化 M7 の併存 | 保存による M7 cleanup の再試行、破損時はバックアップ後に初期化 |
 | D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
 | D-012 | settings | schema validation 成功 | 不正値のリセット |
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
@@ -2763,7 +2763,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
 | D-008 | `model.enabled=false`、またはモデル未選択（`model.selectedPath` 空 = 検証対象なし。該当なしとし、未選択の warning は D-007 が担う）、または enabled かつ**選択済み**モデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ選択済みモデルが `valid` だが未ロード（fallback 動作中）、または Host の実効ランタイムが `mock`（§12.6 `engine`） | enabled かつ**選択済み**モデルの形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
 | D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化）。Host に到達できず `QueryDiagnostics` を得られない場合は、`model.enabled` なら `degraded_simple`、そうでなければ `healthy` とみなす（§8.5.1） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由。`safe_mode` の解除は §8.5.3） |
-| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
+| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む）かつ暗号化 M7 の cleanup 待ちでない | 旧 schema だが migration 可能、または可読な v2 と `learning.tsv.enc` が併存 | 読み込み不可 / 破損 / cleanup 対象の存在確認不可 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功、または `settings.json` が無い（既定値で動作） | 本節の登録済み旧形式に一致し、登録された移行経路で移行できる | 読み込み不可、JSON 不正、または validation 失敗（旧ベンチマーク履歴の例外を含む） | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
@@ -2772,6 +2772,15 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 
 D-002 の `warning` は任意の表示名だけが欠けた状態であり、`--repair` は登録を再実行しない。
 必須登録に不備がある `error` の場合だけ再登録し、再診断で `warning` まで改善した場合は修復成功とする。
+
+D-010 の `details.legacy_retained` は、v2 の検出時に `learning.tsv.enc` の存在を
+確認した結果を真偽値で返す。存在確認に失敗した場合は `error` とする。
+v2 が可読なら併存を cleanup 待ちの `warning` とし、v2 が読めない場合の `error` を
+優先する。v2 がなく、可読で非空のヘッダなし旧 TSV を読んだ場合は migration の `warning` とする。
+`escaped=1` の M7 ファイルだけがある場合は、それだけでは `warning` にしない。
+診断はファイルを削除せず、v2 との併存判定では legacy の本文を復号・出力しない。削除と再試行の条件は
+`docs/user-learning-enhancement-spec.md` §3.1 に従う。平文 M7、`.bak`、`.corrupt-*` の
+残存だけでは cleanup 待ちと判定しない。
 
 D-012 が `warning` とする旧形式は、本節に登録したものに限る。`settings.json` は版識別子を持たず、
 `settings/mvp-settings.schema.json` は加算的に拡張する（`docs/sideload-packaging-spec.md` §3.6

@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <stdexcept>
 #include <string>
 
 #include "TestByteCrypto.h"
@@ -17,6 +21,60 @@ using azookey::learning::AutoWordStore;
 
 constexpr uint64_t kNow = 1'700'000'000;
 constexpr uint64_t kDay = 24 * 60 * 60;
+
+class ScopedTempDirectory {
+ public:
+  ScopedTempDirectory() {
+    const auto base = std::filesystem::temp_directory_path();
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = base / ("azookey_auto_word_fixture_" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                      "_" + std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique auto-word test directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+  std::filesystem::path File(const char* name) const { return path_ / name; }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
+
+class BlockingSaveCrypto final : public azookey::learning::ByteCrypto {
+ public:
+  explicit BlockingSaveCrypto(bool save_succeeds) : save_succeeds_(save_succeeds) {}
+
+  mutable std::atomic<bool> block_next{false};
+  mutable std::promise<void> entered;
+  std::promise<void> release;
+
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+    if (block_next.exchange(false)) {
+      entered.set_value();
+      released_.wait();
+      if (!save_succeeds_) return false;
+    }
+    return crypto_.Encrypt(plain, cipher);
+  }
+
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+    return crypto_.Decrypt(cipher, plain);
+  }
+
+ private:
+  const bool save_succeeds_;
+  std::shared_future<void> released_{release.get_future().share()};
+  azookey::learning::test::TestByteCrypto crypto_;
+};
 
 std::filesystem::path TempPath(const char* name) {
   auto path = std::filesystem::temp_directory_path() / name;
@@ -55,6 +113,190 @@ TEST(AutoWordStoreTest, ObserveAddsPendingThenCountsRepeats) {
   // first_seen is when the word appeared; last_seen tracks the latest sighting.
   EXPECT_EQ(pending[0].first_seen_epoch, kNow);
   EXPECT_EQ(pending[0].last_seen_epoch, kNow + 10);
+}
+
+TEST(AutoWordStoreTest, StateAndResetTransactionsRestoreMemoryOnSaveFailure) {
+  ScopedTempDirectory temp;
+  class FailEncryption final : public azookey::learning::ByteCrypto {
+   public:
+    bool Encrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+    bool Decrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+      return false;
+    }
+  } crypto;
+  AutoWordStore store(temp.File("auto_words.tsv"), &crypto);
+  store.Observe("語", "ご", kNow, 2, false);
+  const auto before = store.SerializeText();
+  EXPECT_EQ(store.SetStateAndSave("なし", "なし", AutoWordState::Confirmed),
+            azookey::learning::AutoWordSaveOutcome::NotFound);
+  EXPECT_EQ(store.SetStateAndSave("語", "ご", AutoWordState::Pending),
+            azookey::learning::AutoWordSaveOutcome::Unchanged);
+  EXPECT_EQ(store.SetStateAndSave("語", "ご", AutoWordState::Rejected),
+            azookey::learning::AutoWordSaveOutcome::SaveFailed);
+  EXPECT_EQ(store.SerializeText(), before);
+  EXPECT_FALSE(store.ResetAndSave());
+  EXPECT_EQ(store.SerializeText(), before);
+}
+
+TEST(AutoWordStoreTest, FailedTransactionsCannotUndoConcurrentApproval) {
+  ScopedTempDirectory temp;
+  class BlockingFailure final : public azookey::learning::ByteCrypto {
+   public:
+    mutable std::atomic<bool> fail_next{false};
+    mutable std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      if (fail_next.exchange(false)) {
+        entered.set_value();
+        released.wait();
+        return false;
+      }
+      return crypto_.Encrypt(plain, cipher);
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return crypto_.Decrypt(cipher, plain);
+    }
+
+   private:
+    azookey::learning::test::TestByteCrypto crypto_;
+  } crypto;
+  AutoWordStore store(temp.File("auto_words.tsv"), &crypto);
+  for (const bool reset : {false, true}) {
+    store.Reset();
+    store.Observe("語", "ご", kNow, 2, false);
+    ASSERT_TRUE(store.Save());
+    crypto.entered = std::promise<void>();
+    crypto.release = std::promise<void>();
+    crypto.released = crypto.release.get_future().share();
+    auto entered = crypto.entered.get_future();
+    crypto.fail_next = true;
+    auto failure = std::async(std::launch::async, [&] {
+      return reset ? !store.ResetAndSave()
+                   : store.SetStateAndSave("語", "ご", AutoWordState::Rejected) ==
+                         azookey::learning::AutoWordSaveOutcome::SaveFailed;
+    });
+    if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+      crypto.release.set_value();
+      failure.wait();
+      FAIL() << "Transaction did not reach the encryption barrier";
+    }
+    std::promise<void> attempted;
+    auto started = attempted.get_future();
+    auto approval = std::async(std::launch::async, [&] {
+      attempted.set_value();
+      return store.SetStateAndSave("語", "ご", AutoWordState::Confirmed);
+    });
+    const auto approval_started = started.wait_for(std::chrono::seconds(5));
+    const auto pending = approval.wait_for(std::chrono::milliseconds(50));
+    crypto.release.set_value();
+    EXPECT_EQ(approval_started, std::future_status::ready);
+    EXPECT_EQ(pending, std::future_status::timeout);
+    EXPECT_TRUE(failure.get());
+    EXPECT_EQ(approval.get(), azookey::learning::AutoWordSaveOutcome::Changed);
+    EXPECT_EQ(store.LookupConfirmed("ご").size(), 1u);
+    AutoWordStore reloaded(store.path(), &crypto);
+    ASSERT_TRUE(reloaded.Load());
+    EXPECT_EQ(reloaded.SerializeText(), store.SerializeText());
+  }
+}
+
+TEST(AutoWordStoreTest, LookupDuringPersistenceReadsLastPublishedTable) {
+  // Save, state replacement and reset must all leave reads independent of the
+  // encryption/file-write transaction, on both success and failure.
+  for (const int operation : {0, 1, 2}) {
+    for (const bool succeeds : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "operation=" << operation << ", success=" << succeeds);
+      ScopedTempDirectory temp;
+      BlockingSaveCrypto crypto(succeeds);
+      AutoWordStore store(temp.File("auto_words.tsv"), &crypto);
+      ASSERT_TRUE(store.Observe("語", "ご", kNow, 1, true));
+      ASSERT_TRUE(store.Save());
+      const auto before = store.SerializeText();
+      auto entered = crypto.entered.get_future();
+      crypto.block_next = true;
+      auto save = std::async(std::launch::async, [&] {
+        if (operation == 0) return store.Save();
+        if (operation == 1) {
+          return store.SetStateAndSave("語", "ご", AutoWordState::Rejected) ==
+                 azookey::learning::AutoWordSaveOutcome::Changed;
+        }
+        return store.ResetAndSave();
+      });
+      if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        crypto.release.set_value();
+        save.wait();
+        FAIL() << "Save did not reach the encryption barrier";
+      }
+      auto lookup = std::async(std::launch::async, [&] { return store.LookupConfirmed("ご"); });
+      const auto readable = lookup.wait_for(std::chrono::seconds(1));
+      // Always release the writer before an assertion can leave this scope.
+      crypto.release.set_value();
+      EXPECT_EQ(readable, std::future_status::ready);
+      const auto confirmed = lookup.get();
+      ASSERT_EQ(confirmed.size(), 1u);
+      EXPECT_EQ(confirmed.front().surface, "語");
+      EXPECT_EQ(confirmed.front().state, AutoWordState::Confirmed);
+      EXPECT_EQ(save.get(), succeeds);
+      if (!succeeds || operation == 0) {
+        EXPECT_EQ(store.SerializeText(), before);
+        EXPECT_EQ(store.LookupConfirmed("ご").size(), 1u);
+      } else {
+        EXPECT_TRUE(store.LookupConfirmed("ご").empty());
+      }
+      AutoWordStore reloaded(store.path(), &crypto);
+      ASSERT_TRUE(reloaded.Load());
+      EXPECT_EQ(reloaded.SerializeText(), store.SerializeText());
+    }
+  }
+}
+
+TEST(AutoWordStoreTest, SuccessfulTransactionsDoNotOverwriteWaitingWriters) {
+  for (const bool reset : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "reset=" << reset);
+    ScopedTempDirectory temp;
+    BlockingSaveCrypto crypto(true);
+    AutoWordStore store(temp.File("auto_words.tsv"), &crypto);
+    ASSERT_TRUE(store.Observe("語", "ご", kNow, 1, true));
+    store.Observe("承認", "しょうにん", kNow, 2, false);
+    ASSERT_TRUE(store.Save());
+    auto entered = crypto.entered.get_future();
+    crypto.block_next = true;
+    auto transaction = std::async(std::launch::async, [&] {
+      return reset ? store.ResetAndSave()
+                   : store.SetStateAndSave("語", "ご", AutoWordState::Rejected) ==
+                         azookey::learning::AutoWordSaveOutcome::Changed;
+    });
+    if (entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+      crypto.release.set_value();
+      transaction.wait();
+      FAIL() << "Transaction did not reach the encryption barrier";
+    }
+    std::promise<void> attempted;
+    auto started = attempted.get_future();
+    auto update = std::async(std::launch::async, [&] {
+      attempted.set_value();
+      if (reset) {
+        store.Observe("承認", "しょうにん", kNow, 2, false);
+      }
+      return store.SetStateAndSave("承認", "しょうにん", AutoWordState::Confirmed);
+    });
+    const auto update_started = started.wait_for(std::chrono::seconds(5));
+    const auto waiting = update.wait_for(std::chrono::milliseconds(50));
+    crypto.release.set_value();
+    EXPECT_EQ(update_started, std::future_status::ready);
+    EXPECT_EQ(waiting, std::future_status::timeout);
+    EXPECT_TRUE(transaction.get());
+    EXPECT_EQ(update.get(), azookey::learning::AutoWordSaveOutcome::Changed);
+    EXPECT_TRUE(store.LookupConfirmed("ご").empty());
+    EXPECT_EQ(store.LookupConfirmed("しょうにん").size(), 1u);
+    EXPECT_EQ(store.Size(), reset ? 1u : 2u);
+    AutoWordStore reloaded(store.path(), &crypto);
+    ASSERT_TRUE(reloaded.Load());
+    EXPECT_EQ(reloaded.SerializeText(), store.SerializeText());
+  }
 }
 
 TEST(AutoWordStoreTest, ConfirmModeNeverPromotesAutomatically) {

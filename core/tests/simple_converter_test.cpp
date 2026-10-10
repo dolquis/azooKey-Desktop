@@ -52,6 +52,59 @@ TEST(SimpleConverterTest, BuiltinDictionary) {
   EXPECT_GE(relearned.size(), 3u);
 }
 
+TEST(SimpleConverterTest, ForgetRestoresDictionaryScoreAndKeepsOtherHistory) {
+  azookey::core::SimpleConverter converter;
+  const auto before = converter.Convert("にほん", {});
+  const auto original = *FindCandidate(before, "二本");
+  converter.Learn("二本", "にほん");
+  converter.Learn("二本", "にほん");
+  converter.Learn("新語", "しんご");
+  converter.Forget("にほん", "二本");
+  const auto after = converter.Convert("にほん", {});
+  const auto* restored = FindCandidate(after, "二本");
+  ASSERT_NE(restored, nullptr);
+  EXPECT_DOUBLE_EQ(restored->score, original.score);
+  EXPECT_EQ(restored->debug_info, original.debug_info);
+  EXPECT_EQ(restored->source, original.source);
+  EXPECT_TRUE(converter.Contains("にほん", "二本"));
+  EXPECT_EQ(converter.Convert("しんご", {}).front().surface, "新語");
+}
+
+TEST(SimpleConverterTest, ResetLearnedRemovesOnlyCommitHistoryAndAllowsRelearning) {
+  azookey::core::SimpleConverter converter;
+  const auto baseline = converter.Convert("にほん", {});
+  converter.Learn("二本", "にほん");
+  converter.Learn("新語", "しんご");
+  converter.Learn("新語", "しんご");
+  converter.ResetLearned();
+  converter.ResetLearned();
+  const auto restored = converter.Convert("にほん", {});
+  ASSERT_EQ(restored.size(), baseline.size());
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    EXPECT_EQ(restored[i].surface, baseline[i].surface);
+    EXPECT_DOUBLE_EQ(restored[i].score, baseline[i].score);
+    EXPECT_EQ(restored[i].debug_info, baseline[i].debug_info);
+  }
+  EXPECT_EQ(FindCandidate(converter.Convert("しんご", {}), "新語"), nullptr);
+  converter.Learn("新語", "しんご");
+  EXPECT_EQ(converter.Convert("しんご", {}).front().surface, "新語");
+  converter.Forget("しんご", "新語");
+  EXPECT_EQ(FindCandidate(converter.Convert("しんご", {}), "新語"), nullptr);
+}
+
+TEST_F(SimpleConverterTsvTest, ForgetKeepsLexiconLoadedAfterCommit) {
+  const std::string path = "simple_converter_forget_loaded.tsv";
+  WriteFixture(path, "しんご\t新語\t0.9\tsystem\n");
+  azookey::core::SimpleConverter converter;
+  converter.Learn("新語", "しんご");
+  ASSERT_TRUE(converter.LoadFromTsv(path));
+  converter.Forget("しんご", "新語");
+  const auto after = converter.Convert("しんご", {});
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_DOUBLE_EQ(after.front().score, 0.9);
+  EXPECT_TRUE(converter.Contains("しんご", "新語"));
+}
+
 TEST_F(SimpleConverterTsvTest, TsvLoad) {
   const std::string path = "simple_converter_tsv_fixture.tsv";
   WriteFixture(path,

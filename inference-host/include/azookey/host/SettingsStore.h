@@ -17,6 +17,7 @@
 #include "azookey/core/PrivacyPolicy.h"
 #include "azookey/core/SecureApps.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/ipc/Payloads.h"
 
 namespace azookey::host {
 
@@ -183,6 +184,12 @@ class SettingsStore {
   // flag is not worth replacing settings the user may still recover. Does not
   // reload; the caller loads the result.
   bool PersistSafeModeEntered(const std::string& entered_at, int32_t crash_count);
+  // Model-management spec section 7: append one completed benchmark, retaining
+  // the newest seven canonical entries. Shares the settings-app file lock and
+  // merges only history into the latest disk contents; never reloads runtime
+  // settings or replaces an unreadable/invalid document.
+  bool PersistBenchmarkResult(const std::string& path, const std::string& completed_at,
+                              const ipc::BenchmarkModelResponse& response);
 
  private:
   static constexpr int64_t kNoWriteTime = (std::numeric_limits<int64_t>::min)();

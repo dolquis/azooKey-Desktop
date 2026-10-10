@@ -531,6 +531,48 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 | `benchmarkOnModelChange` | bool | false | モデル変更時に自動ベンチ |
 | `benchmarkHistory` | array | [] | 直近 7 件のベンチ結果（自動回収） |
 
+### 7.1 ベンチマーク履歴
+
+`model.benchmarkHistory` の writer は Host の `BenchmarkModel` 処理である。
+各要素は、検証済みモデルの絶対パス `path`、終了時刻 `completedAt`（UTC RFC 3339、
+秒精度の `YYYY-MM-DDTHH:MM:SSZ`）と、`BenchmarkModel` 応答の全フィールドを同じ階層に持つ。
+応答フィールドの型・意味は `ipc/include/azookey/ipc/Payloads.h` の
+`BenchmarkModelResponse`、保存時の制約は `settings/mvp-settings.schema.json` が定義する。
+
+```json
+{
+  "path": "C:\\Users\\me\\AppData\\Local\\azooKey\\models\\zenzai-small-q4.gguf",
+  "completedAt": "2026-10-10T10:00:00Z",
+  "backend": "cpu",
+  "status": "success",
+  "p50_ms": 18.2,
+  "p95_ms": 41.7,
+  "p99_ms": 78.4,
+  "load_ms": 1300,
+  "rss_mb": 1850,
+  "vram_mb": null,
+  "iterations_completed": 50,
+  "error": null
+}
+```
+
+- 実行結果の `success` / `timeout` / `error` を終了順（古いものから新しいもの）に
+  追記し、モデル・backend をまたいで最新 7 件だけ保持する。同じ秒に終了した結果も
+  配列の追記順で区別し、時刻では並べ替えない。
+- 認証・SafeMode・models ルート・入力・backend・モデル形式の検証に失敗した要求と
+  `busy` は、実行開始前の拒否なので記録しない。ロード開始後の `load_failed` や
+  `benchmark_failed` は記録する。独立 CLI の `models bench` は設定へ追記しない。
+- Host は設定アプリと同じファイルロックで最新文書を読み、履歴だけを合成して
+  atomic replace する。他の設定、未知キー、`safeMode` は保持し、runtime 設定は
+  再読込しない。設定ファイル欠落時は作成する。ロック・読取・parse・置換の失敗や
+  `model` が object でない場合は原本を保全し、履歴保存の失敗でベンチ応答は変えない。
+- `schemaVersion` は変更しない。設定アプリは `model` / `model_path` の旧別名や
+  欠落フィールドも読み、保存時はディスク上の履歴を保持する。Host が追記するときに
+  新形式へ適合しない旧行・不正行を除外して 7 件に収める。新しい schema の検証は
+  この正規形を対象にする。
+- 設定アプリはパス、UTC 終了時刻、status、backend、計測値・完了 iteration 数・
+  error を表示し、`BenchmarkModel` の応答後にファイルから履歴を読み直す。
+
 ## 8. 性能・コスト
 
 - `ListModels` は ファイル列挙 + GGUF magic 読み（先頭 4 KB）のみで

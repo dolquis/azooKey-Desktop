@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,8 @@
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/ModelScanner.h"
+#include "azookey/host/SettingsStore.h"
+#include "azookey/ipc/Json.h"
 
 namespace {
 
@@ -226,6 +229,38 @@ class ModelBenchmarkProcessTest : public ::testing::Test {
     EXPECT_TRUE(slot.owns_lock());
   }
 
+  void ExpectPersistedWorkerResponse(const BenchmarkModelResponse& response) const {
+    const auto settings_path = temp_.File("settings.json");
+    {
+      std::ofstream out(settings_path, std::ios::binary);
+      out << R"({"maxCandidates":5,"model":{"selectedPath":"kept.gguf","benchmarkHistory":[{"model":"legacy"}]}})";
+    }
+    azookey::host::SettingsStore store(settings_path);
+    ASSERT_TRUE(store.PersistBenchmarkResult(Request().path, "2026-10-10T10:00:00Z", response));
+    std::ifstream in(settings_path, std::ios::binary);
+    const auto document =
+        azookey::ipc::json::Parse(std::string(std::istreambuf_iterator<char>(in), {}));
+    ASSERT_TRUE(document && document->Find("model"));
+    EXPECT_EQ(document->GetUInt("maxCandidates"), 5u);
+    EXPECT_EQ(document->Find("model")->GetString("selectedPath"), "kept.gguf");
+    const auto* history = document->Find("model")->GetArray("benchmarkHistory");
+    ASSERT_TRUE(history);
+    ASSERT_EQ(history->size(), 1u);  // The next append removes the old display row.
+    const auto& row = history->front();
+    EXPECT_EQ(row.GetString("path"), Request().path);
+    EXPECT_EQ(row.GetString("completedAt"), "2026-10-10T10:00:00Z");
+    EXPECT_EQ(row.GetString("backend"), "cpu");
+    EXPECT_EQ(row.GetString("status"), response.status);
+    EXPECT_EQ(row.GetString("error"), response.error);
+    EXPECT_EQ(row.GetNumber("p50_ms"), response.p50_ms);
+    EXPECT_EQ(row.GetNumber("p95_ms"), response.p95_ms);
+    EXPECT_EQ(row.GetNumber("p99_ms"), response.p99_ms);
+    EXPECT_EQ(row.GetNumber("load_ms"), response.load_ms);
+    EXPECT_EQ(row.GetNumber("rss_mb"), response.rss_mb);
+    EXPECT_EQ(row.GetNumber("vram_mb"), response.vram_mb);
+    EXPECT_EQ(row.GetUInt("iterations_completed"), response.iterations_completed);
+  }
+
 #if !AZOOKEY_WITH_LLAMA_CPP
   void ExpectSuccessfulRestart() const {
     WorkerObservation observation;
@@ -259,6 +294,7 @@ TEST_F(ModelBenchmarkProcessTest, TerminatesAnUncooperativeQueryAndKeepsComplete
   EXPECT_LE(response.p50_ms, response.p95_ms);
   EXPECT_LE(response.p95_ms, response.p99_ms);
   EXPECT_GT(response.rss_mb, 0.0);
+  ExpectPersistedWorkerResponse(response);
   ExpectSuccessfulRestart();
 }
 
@@ -302,6 +338,18 @@ TEST_F(ModelBenchmarkProcessTest, RejectsASecondLaunchUntilTheFirstWorkerHasExit
   EXPECT_EQ(busy.status, "error");
   EXPECT_EQ(busy.error, "busy");
   EXPECT_EQ(second_launches, 0u);
+  const auto settings_path = temp_.File("settings.json");
+  const std::string original = R"({"model":{"benchmarkHistory":[{"model":"legacy"}]}})";
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << original;
+  }
+  azookey::host::SettingsStore store(settings_path);
+  EXPECT_FALSE(store.PersistBenchmarkResult(Request().path, "2026-10-10T10:00:00Z", busy));
+  {
+    std::ifstream in(settings_path, std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), original);
+  }
   release_on_exit.Release();
   ASSERT_EQ(running.wait_for(kReturnBound), std::future_status::ready);
   const auto response = running.get();
@@ -431,6 +479,7 @@ TEST_F(ModelBenchmarkProcessTest, ReportsWorkerRssWithoutSamplingTheParent) {
   EXPECT_FALSE(sampled_parent);
   EXPECT_GT(response.rss_mb, 0.0);
   EXPECT_NE(response.rss_mb, 1'000'000.0);
+  ExpectPersistedWorkerResponse(response);
   observation.ExpectExited();
   ExpectSlotAvailable();
 }

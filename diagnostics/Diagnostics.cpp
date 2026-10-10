@@ -4,7 +4,6 @@
 #include <array>
 #include <atomic>
 #include <cctype>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -13,6 +12,7 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -34,6 +34,7 @@
 #include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/CrashRetention.h"
 #include "azookey/core/Redaction.h"
+#include "azookey/core/UtcTimestamp.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
@@ -214,6 +215,13 @@ bool MatchesType(const j::Value& value, std::string_view type) {
 bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
   if (!schema.IsObject()) return true;
   if (const auto type = schema.GetString("type"); type && !MatchesType(value, *type)) return false;
+  if (const auto* types = schema.GetArray("type")) {
+    if (!std::any_of(types->begin(), types->end(), [&](const auto& type) {
+          return type.IsString() && MatchesType(value, type.AsString());
+        })) {
+      return false;
+    }
+  }
   if (const auto* values = schema.GetArray("enum")) {
     const bool matched = std::any_of(values->begin(), values->end(), [&](const auto& candidate) {
       return JsonValueEquals(value, candidate);
@@ -228,7 +236,32 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
       return false;
     }
   }
+  if (value.IsString()) {
+    const auto& text = value.AsString();
+    const auto length = static_cast<uint64_t>(std::count_if(
+        text.begin(), text.end(), [](unsigned char c) { return (c & 0xc0) != 0x80; }));
+    if (const auto minimum = schema.GetUInt("minLength"); minimum && length < *minimum) {
+      return false;
+    }
+    if (const auto pattern = schema.GetString("pattern")) {
+      try {
+        if (!std::regex_search(text, std::regex(*pattern))) return false;
+      } catch (const std::regex_error&) {
+        return false;
+      }
+    }
+    // The embedded schema's date-time field also requires UTC second precision.
+    if (const auto format = schema.GetString("format");
+        format && *format == "date-time" && !core::IsUtcSecondTimestamp(text)) {
+      return false;
+    }
+  }
   if (value.IsObject()) {
+    if (const auto* required = schema.GetArray("required")) {
+      for (const auto& key : *required) {
+        if (!key.IsString() || !value.Find(key.AsString())) return false;
+      }
+    }
     const auto* properties = schema.FindObject("properties");
     const bool allow_additional = !schema.Find("additionalProperties") ||
                                   !schema.Find("additionalProperties")->IsBool() ||
@@ -247,6 +280,10 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
     }
   }
   if (value.IsArray()) {
+    if (const auto maximum = schema.GetUInt("maxItems");
+        maximum && value.AsArray().size() > *maximum) {
+      return false;
+    }
     if (const auto* item_schema = schema.Find("items")) {
       for (const auto& child : value.AsArray()) {
         if (!ValidateJsonSchema(child, *item_schema)) return false;
@@ -258,12 +295,19 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
 
 bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
   if (!schema.IsObject()) return true;
-  constexpr std::array<std::string_view, 11> supported = {
-      "$schema", "additionalProperties", "default", "description", "enum", "items", "maximum",
-      "minimum", "properties",           "title",   "type",
+  constexpr std::array<std::string_view, 16> supported = {
+      "$schema",    "additionalProperties",
+      "default",    "description",
+      "enum",       "format",
+      "items",      "maximum",
+      "maxItems",   "minimum",
+      "minLength",  "pattern",
+      "properties", "required",
+      "title",      "type",
   };
   for (const auto& [key, value] : schema.AsObject()) {
     if (std::find(supported.begin(), supported.end(), key) == supported.end()) return false;
+    if (key == "format" && (!value.IsString() || value.AsString() != "date-time")) return false;
     if (key == "properties") {
       if (!value.IsObject()) return false;
       for (const auto& [_, child_schema] : value.AsObject()) {
@@ -1107,14 +1151,17 @@ void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
 
 }  // namespace
 
-bool ProbeSettingsFile(const std::filesystem::path& path) { return ProbeSettings(path).valid; }
+bool ProbeSettingsFile(const std::filesystem::path& path) {
+  const auto result = ProbeSettings(path);
+  return result.valid;
+}
 
 DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto) {
   const auto settings = j::Parse(settings_json);
   const auto schema = j::Parse(kSettingsSchemaJson);
-  if (!settings || !settings->IsObject() || !schema ||
-      !ValidateJsonSchema(*settings, *schema)) return DpapiState::Unavailable;
+  if (!settings || !settings->IsObject() || !schema || !ValidateJsonSchema(*settings, *schema))
+    return DpapiState::Unavailable;
   return ProbeDpapiSettings(*settings, crypto);
 }
 
@@ -1452,13 +1499,12 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            {{"entries", j::Value(snapshot.user_dict_entries)},
             {"skipped_entries", j::Value(snapshot.user_dict_skipped_entries)}});
 
-  // No settings.json legacy format is registered (dev-infrastructure-spec §12.2.1), so unlike
-  // D-010 there is no warning; a schema mismatch is never presumed migratable.
-  AddCheck(report, "D-012", "settings", snapshot.settings_valid ? Status::Ok : Status::Error,
-           snapshot.settings_valid
-               ? (snapshot.settings_missing ? "Settings file is absent; defaults apply"
-                                            : "Settings conform to the embedded schema")
-               : "Settings failed schema validation",
+  const auto settings_status = snapshot.settings_valid ? Status::Ok : Status::Error;
+  AddCheck(report, "D-012", "settings", settings_status,
+           settings_status == Status::Error
+               ? "Settings failed schema validation"
+               : (snapshot.settings_missing ? "Settings file is absent; defaults apply"
+                                            : "Settings conform to the embedded schema"),
            {{"missing", j::Value(snapshot.settings_missing)},
             {"valid", j::Value(snapshot.settings_valid)}});
 

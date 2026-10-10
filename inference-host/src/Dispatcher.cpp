@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "azookey/host/AnomalyDetector.h"
+#include "azookey/host/HealthStateMachine.h"
 #include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/ModelScanner.h"
 #include "azookey/host/PunctuationInserter.h"
@@ -1628,8 +1629,20 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
       res = RunModelBenchmark(request, options);
     } catch (...) {
       res = ipc::BenchmarkModelResponse{};
-      res.backend = parsed->backend;
+      res.backend = parsed->backend.empty() ? "cpu" : parsed->backend;
       res.error = "benchmark_failed";
+    }
+    // The store excludes admission rejections, including worker-side busy.
+    if (settings_store_) {
+      try {
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+        settings_store_->PersistBenchmarkResult(core::PathToUtf8(*resolved), FormatRfc3339Utc(now),
+                                                res);
+      } catch (...) {
+        // History is best-effort; preserve the benchmark response on I/O failure.
+      }
     }
   }
   return MakeResponse(req, ipc::BuildBenchmarkModelResponse(res));

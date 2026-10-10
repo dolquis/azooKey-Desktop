@@ -558,13 +558,22 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
     for (const auto& item : it->second.AsArray()) {
       if (!item.IsObject()) continue;
       BenchmarkHistoryEntry entry;
-      entry.model = item.GetString("model").value_or(
-          item.GetString("path").value_or(item.GetString("model_path").value_or("")));
+      entry.path = item.GetString("path").value_or(
+          item.GetString("model").value_or(item.GetString("model_path").value_or("")));
+      entry.completed_at = item.GetString("completedAt").value_or("");
       entry.backend = item.GetString("backend").value_or("");
       entry.status = item.GetString("status").value_or("");
       entry.p50_ms = item.GetNumber("p50_ms");
       entry.p95_ms = item.GetNumber("p95_ms");
       entry.p99_ms = item.GetNumber("p99_ms");
+      entry.load_ms = item.GetNumber("load_ms");
+      entry.rss_mb = item.GetNumber("rss_mb");
+      entry.vram_mb = item.GetNumber("vram_mb");
+      if (const auto completed = item.GetUInt("iterations_completed");
+          completed && *completed <= UINT32_MAX) {
+        entry.iterations_completed = static_cast<uint32_t>(*completed);
+      }
+      entry.error = item.GetString("error");
       settings.benchmark_history.push_back(std::move(entry));
     }
   }

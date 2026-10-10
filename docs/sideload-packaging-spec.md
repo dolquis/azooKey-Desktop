@@ -1249,9 +1249,8 @@ DEV-1540 で追う。
 
 設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
 payload 空の `UpdateConfig` メッセージを送信して再読込を促す。設定オブジェクトは
-IPC schema に二重定義しない。`settings.json` を保存するのは設定アプリだけだが、Host も
-parse に失敗した `settings.json` を `.invalid*` へ rename するため mutator である。保存側と
-Host の read から rename までは同一の named mutex 下で直列化する（writer 責務とこの排他の
+IPC schema に二重定義しない。設定アプリと Host の保存・quarantine は同一の named mutex 下で
+read-modify-write または read から rename までを直列化する（writer 責務とこの排他の
 正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 
 ```

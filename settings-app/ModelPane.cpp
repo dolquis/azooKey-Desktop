@@ -285,6 +285,12 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
     request.path = path;
     request.backend = "cpu";
     const auto result = RequestBenchmarkModel(DefaultSettingsIpcOptions(), request);
+    std::optional<SettingsDocumentResult> history;
+    if (result.status == HostCallStatus::Ok) {
+      if (const auto settings_path = DefaultSettingsPath()) {
+        history = LoadSettingsDocument(*settings_path);
+      }
+    }
     co_await ResumeForeground(dispatcher);
 
     benchmarking_ = false;
@@ -294,6 +300,9 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
       benchmark_text_.Text(resources.GetString(L"Models_BenchmarkNone"));
       ShowProblem(Str(resources, HostCallStatusResource(result.status)));
       co_return;
+    }
+    if (history && history->status == SettingsDocumentStatus::Loaded) {
+      SetHistory(std::move(history->settings.benchmark_history));
     }
     const auto& r = *result.response;
     std::wstring text(winrt::to_hstring(file_name));
@@ -333,7 +342,8 @@ void ModelPane::RenderHistory() {
       if (!line.empty()) line += " / ";
       line += part;
     };
-    append(entry.model);
+    append(entry.path);
+    append(entry.completed_at);
     append(entry.backend);
     append(entry.status);
     if (entry.p50_ms || entry.p95_ms || entry.p99_ms) {
@@ -343,6 +353,11 @@ void ModelPane::RenderHistory() {
       append("p50/p95/p99 " + ms(entry.p50_ms) + "/" + ms(entry.p95_ms) + "/" + ms(entry.p99_ms) +
              " ms");
     }
+    if (entry.load_ms) append("load " + OneDecimal(*entry.load_ms) + " ms");
+    if (entry.rss_mb) append("RSS " + OneDecimal(*entry.rss_mb) + " MB");
+    if (entry.vram_mb) append("VRAM " + OneDecimal(*entry.vram_mb) + " MB");
+    if (entry.iterations_completed) append(std::to_string(*entry.iterations_completed));
+    if (entry.error) append(winrt::to_string(Str(resources, ModelErrorResource(*entry.error))));
     if (line.empty()) continue;
     history_panel_.Children().Append(Block(winrt::to_hstring(line), true));
   }

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/UtcTimestamp.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -19,6 +20,7 @@
 #endif
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
 
@@ -33,6 +35,29 @@ bool IsOneOf(const std::string& value, std::initializer_list<const char*> allowe
     if (value == item) return true;
   }
   return false;
+}
+
+bool IsBenchmarkHistoryEntry(const j::Value& entry) {
+  if (!entry.IsObject() || entry.AsObject().size() != 12) return false;
+  const auto path = entry.GetString("path");
+  const auto completed_at = entry.GetString("completedAt");
+  if (!path || path->empty() || !core::Utf8Path(*path).is_absolute() || !completed_at ||
+      !core::IsUtcSecondTimestamp(*completed_at))
+    return false;
+  if (!IsOneOf(entry.GetString("backend").value_or(""), {"cpu", "cuda", "vulkan"}) ||
+      !IsOneOf(entry.GetString("status").value_or(""), {"success", "timeout", "error"}))
+    return false;
+  for (const auto* key : {"p50_ms", "p95_ms", "p99_ms", "load_ms", "rss_mb"}) {
+    const auto value = entry.GetNumber(key);
+    if (!value || !std::isfinite(*value) || *value < 0) return false;
+  }
+  const auto* vram = entry.Find("vram_mb");
+  const auto* error = entry.Find("error");
+  const auto iterations = entry.GetUInt("iterations_completed");
+  return vram &&
+         (vram->IsNull() ||
+          (vram->IsNumber() && std::isfinite(vram->AsNumber()) && vram->AsNumber() >= 0)) &&
+         error && (error->IsNull() || error->IsString()) && iterations && *iterations <= UINT32_MAX;
 }
 
 std::string ReadString(const j::Object& object, const char* key, const std::string& fallback) {
@@ -479,6 +504,54 @@ bool SettingsStore::PersistSafeModeEntered(const std::string& entered_at, int32_
   std::string serialized = j::Stringify(j::Value(std::move(root)));
   serialized.push_back('\n');
   return azookey::learning::WriteTextFileAtomically(settings_path_, serialized);
+}
+
+bool SettingsStore::PersistBenchmarkResult(const std::string& path, const std::string& completed_at,
+                                           const ipc::BenchmarkModelResponse& response) {
+  // Admission rejections can also be returned by the benchmark worker itself.
+  if (response.error == "invalid_request" || response.error == "unsupported_backend" ||
+      response.error == "invalid_model" || response.error == "busy") {
+    return false;
+  }
+  auto entry = j::Parse(ipc::BuildBenchmarkModelResponse(response));
+  if (!entry || !entry->IsObject()) return false;
+  auto object = entry->AsObject();
+  object["path"] = j::Value(path);
+  object["completedAt"] = j::Value(completed_at);
+  *entry = j::Value(std::move(object));
+  if (!IsBenchmarkHistoryEntry(*entry)) return false;
+
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(settings_path_, file_lock_timeout_);
+  if (!file_lock) return false;
+  j::Object root;
+  std::error_code ec;
+  const bool exists = std::filesystem::exists(settings_path_, ec);
+  if (ec) return false;
+  if (exists) {
+    const auto content = ReadFile(settings_path_, nullptr);
+    if (!content) return false;
+    const auto parsed = j::Parse(*content);
+    if (!parsed || !parsed->IsObject()) return false;
+    root = parsed->AsObject();
+  }
+  j::Object model;
+  if (const auto it = root.find("model"); it != root.end()) {
+    if (!it->second.IsObject()) return false;
+    model = it->second.AsObject();
+  }
+  j::Array history;
+  if (const auto it = model.find("benchmarkHistory"); it != model.end() && it->second.IsArray()) {
+    for (const auto& previous : it->second.AsArray()) {
+      if (IsBenchmarkHistoryEntry(previous)) history.push_back(previous);
+    }
+  }
+  history.push_back(std::move(*entry));
+  if (history.size() > 7) history.erase(history.begin(), history.end() - 7);
+  model["benchmarkHistory"] = j::Value(std::move(history));
+  root["model"] = j::Value(std::move(model));
+  std::string serialized = j::Stringify(j::Value(std::move(root)));
+  serialized.push_back('\n');
+  return learning::WriteTextFileAtomically(settings_path_, serialized);
 }
 
 SettingsLoadResult SettingsStore::Load() { return LoadImpl(false); }

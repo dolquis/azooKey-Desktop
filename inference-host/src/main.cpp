@@ -37,6 +37,7 @@
 #include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
+#include "azookey/host/ModelBenchmarkWorker.h"
 #include "azookey/host/ModelsCli.h"
 #include "azookey/host/NeologdPack.h"
 #include "azookey/host/NewWordsCli.h"
@@ -433,6 +434,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> raw_args;
   if (!command_line->empty()) {
     raw_args.assign(command_line->begin() + 1, command_line->end());
+  }
+  if (raw_args.size() == 2 && raw_args[0] == "--model-benchmark-worker") {
+    return azookey::host::RunModelBenchmarkWorker(raw_args[1]);
   }
   if (raw_args == std::vector<std::string>{"--probe-vulkan"}) {
     const auto count = azookey::host::ProbeVulkanDevices();

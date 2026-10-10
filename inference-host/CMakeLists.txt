@@ -26,6 +26,7 @@ add_library(azookey_host STATIC
   src/LearningDataManager.cpp
   src/LookupCli.cpp
   src/ModelBenchmark.cpp
+  src/ModelBenchmarkWorker.cpp
   src/ModelScanner.cpp
   src/ModelsCli.cpp
   src/NewWordsCli.cpp

@@ -639,6 +639,7 @@ std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& 
   o.emplace("mode", j::Value(p.mode));
   o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
+  if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -660,6 +661,7 @@ std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
   p.mode = v->GetString("mode").value_or(std::string("neural"));
   p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
+  p.english_candidates = v->GetBool("english_candidates").value_or(false);
   return p;
 }
 

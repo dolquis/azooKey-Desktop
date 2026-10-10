@@ -525,6 +525,11 @@ bool SettingsStore::PersistSafeModeEntered(const std::string& entered_at, int32_
 
 bool SettingsStore::PersistBenchmarkResult(const std::string& path, const std::string& completed_at,
                                            const ipc::BenchmarkModelResponse& response) {
+  // Admission rejections can also be returned by the benchmark worker itself.
+  if (response.error == "invalid_request" || response.error == "unsupported_backend" ||
+      response.error == "invalid_model" || response.error == "busy") {
+    return false;
+  }
   auto entry = j::Parse(ipc::BuildBenchmarkModelResponse(response));
   if (!entry || !entry->IsObject()) return false;
   auto object = entry->AsObject();

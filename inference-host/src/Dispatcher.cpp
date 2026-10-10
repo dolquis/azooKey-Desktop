@@ -1645,7 +1645,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
     }
     // Validation rejections from RunModelBenchmark never started a benchmark.
     if (settings_store_ && res.error != "invalid_request" && res.error != "unsupported_backend" &&
-        res.error != "invalid_model") {
+        res.error != "invalid_model" && res.error != "busy") {
       try {
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::system_clock::now().time_since_epoch())

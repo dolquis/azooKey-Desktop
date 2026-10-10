@@ -1240,6 +1240,37 @@ TEST(SettingsStoreTest, BenchmarkHistoryRejectsInvalidNewEntriesWithoutWriting) 
   EXPECT_EQ(ReadText(path), "{}");
 }
 
+TEST(SettingsStoreTest, BenchmarkHistoryExcludesAdmissionRejectionsButRecordsExecutedErrors) {
+  ScopedTempDirectory temp("azookey_benchmark_admission");
+  const auto path = temp.path() / "settings.json";
+  const auto model_path = azookey::core::PathToUtf8(temp.path() / "model.gguf");
+  azookey::host::SettingsStore store(path);
+  azookey::ipc::BenchmarkModelResponse response;
+  response.backend = "cpu";
+  for (const auto* error : {"invalid_request", "unsupported_backend", "invalid_model", "busy"}) {
+    response.error = error;
+    EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+    EXPECT_FALSE(std::filesystem::exists(path));
+  }
+  for (const auto* error : {"load_failed", "benchmark_failed"}) {
+    response.error = error;
+    ASSERT_TRUE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+  }
+  const auto original = ReadText(path);
+  for (const auto* error : {"invalid_request", "unsupported_backend", "invalid_model", "busy"}) {
+    response.error = error;
+    EXPECT_FALSE(store.PersistBenchmarkResult(model_path, "2026-10-10T10:00:00Z", response));
+    EXPECT_EQ(ReadText(path), original);
+  }
+  const auto document = azookey::ipc::json::Parse(original);
+  ASSERT_TRUE(document && document->Find("model"));
+  const auto* history = document->Find("model")->GetArray("benchmarkHistory");
+  ASSERT_TRUE(history);
+  ASSERT_EQ(history->size(), 2u);
+  EXPECT_EQ(history->front().GetString("error"), "load_failed");
+  EXPECT_EQ(history->back().GetString("error"), "benchmark_failed");
+}
+
 TEST(SettingsStoreTest, BenchmarkHistoryLockTimeoutLeavesOriginalFileAlone) {
   ScopedTempDirectory temp("azookey_benchmark_locked");
   const auto path = temp.path() / "settings.json";

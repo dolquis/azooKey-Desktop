@@ -133,6 +133,70 @@ TEST(CandidateTagsTest, DictionaryCategoriesAssignTechnicalBeforeEnglish) {
   }
 }
 
+TEST(CandidateTagsTest, ApprovedStyleSuffixesTagUntaggedCandidates) {
+  for (const auto suffix :
+       {"です", "ます", "でした", "ました", "ません", "ませんでした", "ございます", "ございました",
+        "ください", "だよ", "だね", "だぞ", "だぜ", "だろ", "じゃん"}) {
+    SCOPED_TRACE(suffix);
+    const bool casual =
+        std::string_view(suffix).starts_with("だ") || std::string_view(suffix) == "じゃん";
+    const auto expected = casual ? CandidateTag::Casual : CandidateTag::Polite;
+    std::vector<Candidate> candidates = {
+        Tagged(suffix, 1.0, CandidateTag::None),
+        Tagged(std::string("文末") + suffix, -2.0, CandidateTag::None),
+        Tagged(std::string("ABCDEFG") + suffix, 3.0, CandidateTag::None),
+    };
+    const auto original = candidates;
+    azookey::host::AssignHeuristicTags(candidates);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      EXPECT_EQ(candidates[i].tag, expected);
+      EXPECT_EQ(candidates[i].surface, original[i].surface);
+      EXPECT_DOUBLE_EQ(candidates[i].score, original[i].score);
+    }
+  }
+}
+
+TEST(CandidateTagsTest, StyleSuffixesIgnoreOnlyTrailingWhitespaceAndApprovedPunctuation) {
+  for (const auto tail :
+       {"。", "！", "!", "？", "?", "　 \t\r\n\v\f。！!?？　", "\xC2\xA0\xE2\x80\xAF"}) {
+    SCOPED_TRACE(tail);
+    std::vector<Candidate> candidates = {
+        Tagged(std::string("そうです") + tail, 1.0, CandidateTag::None),
+        Tagged(std::string("そうだよ") + tail, 1.0, CandidateTag::None),
+    };
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, CandidateTag::Polite);
+    EXPECT_EQ(candidates[1].tag, CandidateTag::Casual);
+  }
+  for (const auto surface : {"", "。！!?？　 \t", "サラダ", "そうだ", "ですけど", "だよね",
+                             "ですと言った", "だよと言った", "です、", "です,", "です.", "です…",
+                             "です」", "だよ😊", "で す", "だ よ"}) {
+    SCOPED_TRACE(surface);
+    std::vector<Candidate> candidates = {Tagged(surface, 1.0, CandidateTag::None)};
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, CandidateTag::None);
+  }
+}
+
+TEST(CandidateTagsTest, StyleSuffixesPreserveEveryExistingTagAndRejectInvalidUtf8) {
+  for (const auto tag : {CandidateTag::Polite, CandidateTag::Casual, CandidateTag::Technical,
+                         CandidateTag::English, CandidateTag::Kaomoji, CandidateTag::Idiom}) {
+    SCOPED_TRACE(static_cast<int>(tag));
+    std::vector<Candidate> candidates = {Tagged("そうです", 1.0, tag),
+                                         Tagged("そうだよ", 1.0, tag)};
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, tag);
+    EXPECT_EQ(candidates[1].tag, tag);
+  }
+  std::vector<Candidate> malformed = {
+      Tagged(std::string("\xFF") + "です", 1.0, CandidateTag::None),
+      Tagged(std::string("だよ") + "\xE3\x80", 1.0, CandidateTag::None),
+  };
+  azookey::host::AssignHeuristicTags(malformed);
+  EXPECT_EQ(malformed[0].tag, CandidateTag::None);
+  EXPECT_EQ(malformed[1].tag, CandidateTag::None);
+}
+
 TEST(CandidateTagsTest, DictionaryCategoryUnionKeepsTechnicalForTheWinningLayer) {
   azookey::learning::DictionaryStore store;
   azookey::learning::DictionaryEntry entry;

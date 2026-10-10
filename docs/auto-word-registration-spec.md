@@ -1044,8 +1044,8 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 | 辞書 category（§14.4） / 条件 | 候補タグ（M52） |
 |---|---|
 | `software` / `technical` / `product_name` | `Technical` |
-| surface の空白（ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含む（例 "TensorRT", "iPhone"） | `English` |
-| その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | なし（既定） |
+| 未付与かつ app-profile-spec §7 の文体判定に一致せず、surface の空白（ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含む（例 "TensorRT", "iPhone"） | `English` |
+| その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | category 由来タグなし。未付与候補は app-profile-spec §7 の文体判定・English fallback へ進む |
 
 - category は `DictionaryStore` が同一エントリのカテゴリを union した結果から写像する。
   Host が同一 surface の候補を統合するときも、辞書由来の `Technical` を無タグ・
@@ -1054,16 +1054,17 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 - **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
   X-2-3 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
   複数行に該当する候補（例 "TensorRT" = `Technical` かつ surface=ASCII）には
-  **precedence で 1 つだけ付与**する: **`Technical` > `English` > なし**
-  （辞書 category 由来タグを surface 形式由来タグより優先）。両タグの同時保持・
+  **辞書 category から付与した `Technical` を保持**する。既存タグの保持と
+  未付与候補の文体判定・English fallback は **app-profile-spec §7** を正典とする。
+  両タグの同時保持・
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
 - 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
   §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]。負の `final_score` は同じ倍率で割る）として 1 回適用する
   （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
   含めない（二重適用回避）。
-- 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ
-  （`Technical` / `English`）への写像であり、未知タグは「なし」とする。
+- 候補タグの確定 taxonomy は M52 ベンチで定義する。辞書 category からの
+  `Technical` への写像は本表、文体と surface からのタグ判定は app-profile-spec §7 が持つ。
 - 固有名詞系のスコア寄与は **`category_bonus`（§14.8 の `categoryBoosts` +
   `named_entity` umbrella、`dictionary_score` 内）** で行い、候補タグ経由では
   ない。M48 タグ boost は候補タグ（前面アプリ文脈）専用で `final_score` 段

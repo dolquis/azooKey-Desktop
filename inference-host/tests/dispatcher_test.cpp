@@ -824,6 +824,9 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
                                                 const azookey::core::ConversionContext&) override {
     if (kana == "てんそるあーるてぃー") return {{"テンソルRT", kana, 1.8}, {"TensorRT", kana, 1.5}};
+    if (kana == "おねがい")
+      return {
+          {"お願いだ", kana, 8.0}, {"お願いします。　", kana, 6.0}, {"お願いだよ！", kana, 5.0}};
     azookey::core::Candidate technical{"技術", kana, 5.0};
     technical.tag = azookey::core::CandidateTag::Technical;
     return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
@@ -954,6 +957,31 @@ TEST_F(AppProfileDispatchTest, CodeProfileBoostsDictionaryTechnicalInsteadOfEngl
   EXPECT_DOUBLE_EQ(code[IndexOf(code, "TensorRT")].score, 1.5 * 1.5);
   const auto other = Query(ipc::AppIdentity{"notepad.exe", ""}, "てんそるあーるてぃー");
   EXPECT_LT(IndexOf(other, "テンソルRT"), IndexOf(other, "TensorRT"));
+}
+
+TEST_F(AppProfileDispatchTest, OutlookProfileBoostsSuffixTaggedPoliteCandidatesOnce) {
+  ApplySettings(R"({"profilesByApp":{"outlook.exe":{"style":"polite",)"
+                R"("candidateTagBoosts":{"Polite":1.4}}}})");
+  for (const auto app :
+       {std::optional<ipc::AppIdentity>{}, std::optional<ipc::AppIdentity>{{"notepad.exe", ""}}}) {
+    const auto global = Query(app, "おねがい");
+    ASSERT_EQ(global.size(), 3U);
+    EXPECT_EQ(global[0].surface, "お願いだ");
+    EXPECT_EQ(global[1].surface, "お願いします。　");
+    EXPECT_EQ(global[2].surface, "お願いだよ！");
+    EXPECT_EQ(global[1].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Polite));
+    EXPECT_EQ(global[2].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Casual));
+    EXPECT_DOUBLE_EQ(global[1].score, 6.0);
+    EXPECT_DOUBLE_EQ(global[2].score, 5.0);
+  }
+  const auto outlook = Query(ipc::AppIdentity{"OUTLOOK.EXE", ""}, "おねがい");
+  ASSERT_EQ(outlook.size(), 3U);
+  EXPECT_EQ(outlook[0].surface, "お願いします。　");
+  EXPECT_EQ(outlook[0].tag, static_cast<uint8_t>(azookey::core::CandidateTag::Polite));
+  EXPECT_DOUBLE_EQ(outlook[0].score, 6.0 * 1.5);  // max(implicit 1.5, explicit 1.4), once.
+  EXPECT_EQ(outlook[1].surface, "お願いだ");
+  EXPECT_EQ(outlook[2].surface, "お願いだよ！");
+  EXPECT_DOUBLE_EQ(outlook[2].score, 5.0);
 }
 
 TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {

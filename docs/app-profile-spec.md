@@ -331,7 +331,17 @@ else:
   - 出所が既知のタグ（辞書 category 由来の `Technical` など）は出所側が付与する。
     同一 surface の候補統合でも辞書由来タグを保持する規則は
     `docs/auto-word-registration-spec.md` の category → タグ写像に従う。
-  - 未付与の候補には Host が surface 形式から `English` を付与する。条件は、空白
+  - 既存タグは文体判定で上書きしない。未付与の候補には Host が surface の文末を
+    `Polite` → `Casual` → `English` の順に判定し、最初に一致したタグを付与する。
+    文体判定では末尾に連続する Unicode White_Space と `。！!？?` だけを除いてから、
+    次の語尾へ一致するか調べる。元の surface、reading、score は変更しない。
+    - `Polite`: `です`、`ます`、`でした`、`ました`、`ません`、`ませんでした`、
+      `ございます`、`ございました`、`ください`。
+    - `Casual`: `だよ`、`だね`、`だぞ`、`だぜ`、`だろ`、`じゃん`。
+    裸の `だ`、文中の一致、語尾の後に続く `、,.…」` などは対象外とする。
+    文体判定は形態素解析を伴わない保守的な語尾一致であり、`かます` などの語彙も
+    `Polite` に一致し得る。不正 UTF-8 は文体タグの対象外とする。
+  - 文体に一致しなかった未付与の候補には `English` を付与する。条件は、空白
     （ASCII と U+3000）を除くコードポイントの過半が ASCII で、ASCII 英字を 1 字以上含むこと
     （`docs/auto-word-registration-spec.md` の category → タグ写像）。
   - タグは `core::Candidate::tag` と IPC の `CandidateField.tag` で運ぶ。
@@ -417,9 +427,8 @@ resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作�
 - unit: `promptPrefixByApp` legacy 読み込み + `profilesByApp` 優先
 - unit: `privacyMode = secure` の要求値とグローバル floor の解決
 - integration: `code.exe` 検出 → 技術語タグ boost
-- integration: `outlook.exe` 検出 → polite タグ boost
-  （この 2 件は、辞書 category から `Technical`、文体判定から `Polite` を付与する
-  経路が前提。Host が surface 形式から付与するタグは §7 の `English` だけである）
+- integration: `outlook.exe` 検出 → §7 の文末判定で付与した `Polite` タグを boost。
+  別アプリと app 未指定では boost せず、IPC に同じタグと元の候補文字列を運ぶ。
 - e2e（M50 connect）: アプリ切替 1 秒以内にプロファイル反映
 
 ## 11. M48 受け入れ条件

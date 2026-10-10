@@ -22,9 +22,31 @@ struct RenderingEngine::State {
   ComPtr<IDCompositionSurface> surface;
   ComPtr<IDWriteFactory> write_factory;
   ComPtr<ID2D1DeviceContext> drawing;
+  SurfaceAlpha alpha{SurfaceAlpha::Opaque};
   int surface_width{0};
   int surface_height{0};
 };
+
+HRESULT CreateMessageTextFormat(IDWriteFactory* factory, UINT dpi, IDWriteTextFormat** format) {
+  if (!factory || !format) return E_POINTER;
+  dpi = dpi ? dpi : USER_DEFAULT_SCREEN_DPI;
+  NONCLIENTMETRICSW metrics{};
+  metrics.cbSize = sizeof(metrics);
+  const wchar_t* family = L"Yu Gothic UI";
+  FLOAT size = 9.0f * static_cast<FLOAT>(dpi) / 72.0f;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_REGULAR;
+  if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi)) {
+    const LOGFONTW& font = metrics.lfMessageFont;
+    if (font.lfFaceName[0]) family = font.lfFaceName;
+    // A negative height is the em size; a positive one is the cell height, which
+    // GDI also maps to a slightly smaller em size. Both are used as the em size.
+    if (font.lfHeight != 0)
+      size = static_cast<FLOAT>(font.lfHeight < 0 ? -font.lfHeight : font.lfHeight);
+    if (font.lfWeight > 0) weight = static_cast<DWRITE_FONT_WEIGHT>(font.lfWeight);
+  }
+  return factory->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+                                   DWRITE_FONT_STRETCH_NORMAL, size, L"ja-JP", format);
+}
 
 RenderingEngine::RenderingEngine() = default;
 RenderingEngine::~RenderingEngine() = default;
@@ -35,10 +57,11 @@ bool RenderingEngine::Fail(const char* stage, HRESULT hr) {
   return false;
 }
 
-bool RenderingEngine::Initialize(HWND hwnd) {
+bool RenderingEngine::Initialize(HWND hwnd, SurfaceAlpha alpha) {
   failure_stage_ = "";
   failure_hr_ = S_OK;
   auto state = std::make_unique<State>();
+  state->alpha = alpha;
   constexpr UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
   HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
                                  D3D11_SDK_VERSION, &state->d3d_device, nullptr, nullptr);
@@ -98,7 +121,9 @@ bool RenderingEngine::ResizeSurface(int width, int height) {
   ComPtr<IDCompositionSurface> surface;
   HRESULT hr = S_OK;
   if (FAILED(hr = state_->composition_device->CreateSurface(
-                 width, height, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
+                 width, height, DXGI_FORMAT_B8G8R8A8_UNORM,
+                 state_->alpha == SurfaceAlpha::Opaque ? DXGI_ALPHA_MODE_IGNORE
+                                                       : DXGI_ALPHA_MODE_PREMULTIPLIED,
                  &surface)) ||
       FAILED(hr = state_->visual->SetContent(surface.Get())))
     return Fail("surface", hr);

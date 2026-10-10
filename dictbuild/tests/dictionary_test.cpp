@@ -430,6 +430,67 @@ class PredictingConverter : public core::IConverter {
   void Learn(const std::string&, const std::string&) override {}
 };
 
+class TechnicalDuplicateConverter : public PredictingConverter {
+ public:
+  explicit TechnicalDuplicateConverter(core::CandidateTag tag) : tag_(tag) {}
+  std::vector<core::Candidate> Convert(const std::string& kana,
+                                       const core::ConversionContext&) override {
+    core::Candidate candidate{"TensorRT", kana, 10.0, core::CandidateSource::Model};
+    candidate.tag = tag_;
+    return {candidate};
+  }
+  std::vector<core::Candidate> PredictNext(const std::string&,
+                                           const core::ConversionContext&) override {
+    // high7 is behind the first two dictionary additions and must still get
+    // its category when the five display slots have already filled.
+    core::Candidate candidate{"high7", "よ7", 10.0, core::CandidateSource::Model};
+    candidate.tag = tag_;
+    return {candidate, {"model", "よもでる", 9.0, core::CandidateSource::Model}};
+  }
+
+ private:
+  core::CandidateTag tag_;
+};
+
+TEST(DictionaryHost, TechnicalCategorySurvivesHigherScoreConverterDuplicates) {
+  for (const auto tag : {core::CandidateTag::None, core::CandidateTag::English}) {
+    SCOPED_TRACE(static_cast<int>(tag));
+    host::InferenceEngine engine(std::make_unique<TechnicalDuplicateConverter>(tag), nullptr, {});
+    ASSERT_TRUE(engine.LoadDictionaryLayer(learning::LayerId::TechnicalTerms,
+                                           Fixture("valid.azdic"), true));
+    const auto candidates =
+        engine.QueryCandidates("てんそるあーるてぃー", "", 0, nullptr, 10, false);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates[0].tag, core::CandidateTag::Technical);
+    EXPECT_EQ(candidates[0].source, core::CandidateSource::Model);
+    EXPECT_DOUBLE_EQ(candidates[0].score, 10.0);
+  }
+}
+
+TEST(DictionaryHost, TechnicalCategorySurvivesPredictionDisplayAndDictionaryLimits) {
+  for (const auto tag : {core::CandidateTag::None, core::CandidateTag::English}) {
+    SCOPED_TRACE(static_cast<int>(tag));
+    learning::test::TestByteCrypto crypto;
+    ScopedMiningDirectory temp;
+    learning::LearningStore learning_store(temp.File("learning.tsv"), &crypto);
+    learning_store.Observe("よがくしゅう", "学習予測", 5.0, 1);
+    host::InferenceEngine engine(std::make_unique<TechnicalDuplicateConverter>(tag),
+                                 &learning_store, {});
+    ASSERT_TRUE(engine.LoadDictionaryLayer(learning::LayerId::TechnicalTerms,
+                                           Fixture("valid.azdic"), true));
+    const auto predictions = engine.QueryPredictions("よ", "", 1);
+    ASSERT_EQ(predictions.size(), 5U);
+    EXPECT_EQ(predictions[0].surface, "学習予測");
+    ASSERT_EQ(predictions[1].surface, "high7");
+    EXPECT_EQ(predictions[1].tag, core::CandidateTag::Technical);
+    EXPECT_EQ(predictions[1].source, core::CandidateSource::Model);
+    EXPECT_DOUBLE_EQ(predictions[1].score, 10.0);
+    EXPECT_EQ(predictions[2].surface, "model");
+    EXPECT_EQ(predictions[3].tag, core::CandidateTag::Technical);
+    EXPECT_EQ(predictions[4].tag, core::CandidateTag::Technical);
+  }
+}
+
 TEST(DictionaryHost, DisabledStaticKnownWordsStayOutOfMiningAcrossSettingsReload) {
   for (const auto& [layer, name] :
        {std::pair{learning::LayerId::Sudachi, "sudachi_lexicon.azdic"},

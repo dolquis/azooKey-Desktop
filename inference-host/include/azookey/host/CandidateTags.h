@@ -30,10 +30,11 @@ std::optional<core::CandidateTag> CandidateTagFromName(std::string_view name);
 inline constexpr double kImplicitTagBoost = 1.5;
 TagBoosts TagBoostsFromProfile(const ipc::json::Object& resolved_profile);
 
-// Tags the candidates that have none from their surface form: a surface whose
+// Tags untagged candidates from their surface: polite/casual suffixes take
+// precedence over English (docs/app-profile-spec.md section 7). A surface whose
 // code points, whitespace (ASCII and U+3000) aside, are mostly ASCII and that
 // has at least one ASCII letter is English. Dictionary category tags
-// (Technical) are assigned by their sources and are kept.
+// (Technical) and all other existing tags are kept. Surface/reading/score are unchanged.
 void AssignHeuristicTags(std::vector<core::Candidate>& candidates);
 
 // Raises each boosted candidate's score by its multiplier and moves it up past

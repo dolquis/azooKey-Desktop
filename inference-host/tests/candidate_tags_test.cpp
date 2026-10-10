@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "azookey/host/CandidateTags.h"
+#include "azookey/host/DictionaryCandidateProvider.h"
 
 namespace {
 
@@ -104,6 +105,114 @@ TEST(CandidateTagsTest, AsciiDominantSurfacesAreTaggedEnglish) {
   // Tab and U+3000 are skipped like ' ': A, x of A,さ,ん,x is not a majority.
   EXPECT_EQ(candidates[7].tag, CandidateTag::None);
   EXPECT_EQ(candidates[8].tag, CandidateTag::English);  // A, B of A,B,さ once U+3000 is skipped.
+}
+
+TEST(CandidateTagsTest, DictionaryCategoriesAssignTechnicalBeforeEnglish) {
+  for (uint16_t category = 0; category < 10; ++category) {
+    SCOPED_TRACE(category);
+    azookey::learning::DictionaryStore store;
+    azookey::learning::DictionaryEntry entry;
+    entry.surface = "TensorRT";
+    entry.reading = "てんそる";
+    entry.frequency = .72;
+    entry.category_mask = static_cast<uint16_t>(1U << category);
+    store.ReplaceMutable(azookey::learning::LayerId::AppSpecific, {entry});
+    for (const auto mode :
+         {azookey::learning::LookupMode::Exact, azookey::learning::LookupMode::PredictivePrefix}) {
+      auto candidates = azookey::host::DictionaryCandidates(
+          store, mode == azookey::learning::LookupMode::Exact ? "てんそる" : "てん", mode, 0, 10);
+      ASSERT_EQ(candidates.size(), 1U);
+      const bool technical = category == 4 || category == 5 || category == 8;
+      EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::None);
+      const double dictionary_score = candidates[0].score;
+      azookey::host::AssignHeuristicTags(candidates);
+      EXPECT_EQ(candidates[0].tag, technical ? CandidateTag::Technical : CandidateTag::English);
+      // Tag assignment does not apply a profile boost to dictionary_score.
+      EXPECT_DOUBLE_EQ(candidates[0].score, dictionary_score);
+    }
+  }
+}
+
+TEST(CandidateTagsTest, ApprovedStyleSuffixesTagUntaggedCandidates) {
+  for (const auto suffix :
+       {"です", "ます", "でした", "ました", "ません", "ませんでした", "ございます", "ございました",
+        "ください", "だよ", "だね", "だぞ", "だぜ", "だろ", "じゃん"}) {
+    SCOPED_TRACE(suffix);
+    const bool casual =
+        std::string_view(suffix).starts_with("だ") || std::string_view(suffix) == "じゃん";
+    const auto expected = casual ? CandidateTag::Casual : CandidateTag::Polite;
+    std::vector<Candidate> candidates = {
+        Tagged(suffix, 1.0, CandidateTag::None),
+        Tagged(std::string("文末") + suffix, -2.0, CandidateTag::None),
+        Tagged(std::string("ABCDEFG") + suffix, 3.0, CandidateTag::None),
+    };
+    const auto original = candidates;
+    azookey::host::AssignHeuristicTags(candidates);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      EXPECT_EQ(candidates[i].tag, expected);
+      EXPECT_EQ(candidates[i].surface, original[i].surface);
+      EXPECT_DOUBLE_EQ(candidates[i].score, original[i].score);
+    }
+  }
+}
+
+TEST(CandidateTagsTest, StyleSuffixesIgnoreOnlyTrailingWhitespaceAndApprovedPunctuation) {
+  for (const auto tail :
+       {"。", "！", "!", "？", "?", "　 \t\r\n\v\f。！!?？　", "\xC2\xA0\xE2\x80\xAF"}) {
+    SCOPED_TRACE(tail);
+    std::vector<Candidate> candidates = {
+        Tagged(std::string("そうです") + tail, 1.0, CandidateTag::None),
+        Tagged(std::string("そうだよ") + tail, 1.0, CandidateTag::None),
+    };
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, CandidateTag::Polite);
+    EXPECT_EQ(candidates[1].tag, CandidateTag::Casual);
+  }
+  for (const auto surface : {"", "。！!?？　 \t", "サラダ", "そうだ", "ですけど", "だよね",
+                             "ですと言った", "だよと言った", "です、", "です,", "です.", "です…",
+                             "です」", "だよ😊", "で す", "だ よ"}) {
+    SCOPED_TRACE(surface);
+    std::vector<Candidate> candidates = {Tagged(surface, 1.0, CandidateTag::None)};
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, CandidateTag::None);
+  }
+}
+
+TEST(CandidateTagsTest, StyleSuffixesPreserveEveryExistingTagAndRejectInvalidUtf8) {
+  for (const auto tag : {CandidateTag::Polite, CandidateTag::Casual, CandidateTag::Technical,
+                         CandidateTag::English, CandidateTag::Kaomoji, CandidateTag::Idiom}) {
+    SCOPED_TRACE(static_cast<int>(tag));
+    std::vector<Candidate> candidates = {Tagged("そうです", 1.0, tag),
+                                         Tagged("そうだよ", 1.0, tag)};
+    azookey::host::AssignHeuristicTags(candidates);
+    EXPECT_EQ(candidates[0].tag, tag);
+    EXPECT_EQ(candidates[1].tag, tag);
+  }
+  std::vector<Candidate> malformed = {
+      Tagged(std::string("\xFF") + "です", 1.0, CandidateTag::None),
+      Tagged(std::string("だよ") + "\xE3\x80", 1.0, CandidateTag::None),
+  };
+  azookey::host::AssignHeuristicTags(malformed);
+  EXPECT_EQ(malformed[0].tag, CandidateTag::None);
+  EXPECT_EQ(malformed[1].tag, CandidateTag::None);
+}
+
+TEST(CandidateTagsTest, DictionaryCategoryUnionKeepsTechnicalForTheWinningLayer) {
+  azookey::learning::DictionaryStore store;
+  azookey::learning::DictionaryEntry entry;
+  entry.surface = "専門用語";
+  entry.reading = "せんもん";
+  entry.frequency = .72;
+  entry.category_mask = 1U << 5;  // software, from a lower-priority layer.
+  store.ReplaceMutable(azookey::learning::LayerId::AppSpecific, {entry});
+  entry.category_mask = 1U << 1;  // person_name; higher-priority user entry wins.
+  store.ReplaceMutable(azookey::learning::LayerId::User, {entry});
+  auto candidates = azookey::host::DictionaryCandidates(
+      store, entry.reading, azookey::learning::LookupMode::Exact, 0, 10);
+  ASSERT_EQ(candidates.size(), 1U);
+  EXPECT_EQ(candidates[0].source, azookey::core::CandidateSource::UserDictionary);
+  azookey::host::AssignHeuristicTags(candidates);
+  EXPECT_EQ(candidates[0].tag, CandidateTag::Technical);
 }
 
 TEST(CandidateTagsTest, BoostMovesOnlyTheBoostedCandidatesUp) {

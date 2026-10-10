@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "azookey/core/Utf8.h"
+
 namespace azookey::host {
 
 namespace {
@@ -47,6 +49,39 @@ bool IsAsciiDominant(std::string_view surface) {
     }
   }
   return has_ascii_letter && ascii * 2 > code_points;
+}
+
+bool IsTrailingStyleSeparator(char32_t cp) {
+  // Unicode White_Space plus only the punctuation allowed by app-profile-spec section 7.
+  return (cp >= 0x9 && cp <= 0xd) || cp == U' ' || cp == 0x85 || cp == 0xa0 || cp == 0x1680 ||
+         (cp >= 0x2000 && cp <= 0x200a) || cp == 0x2028 || cp == 0x2029 || cp == 0x202f ||
+         cp == 0x205f || cp == 0x3000 || cp == U'。' || cp == U'！' || cp == U'!' || cp == U'？' ||
+         cp == U'?';
+}
+
+core::CandidateTag HeuristicStyleTag(std::string_view surface) {
+  size_t offset = 0;
+  size_t end = 0;
+  char32_t cp = 0;
+  while (offset < surface.size()) {
+    if (!core::DecodeNextUtf8(surface, offset, cp)) return core::CandidateTag::None;
+    if (!IsTrailingStyleSeparator(cp)) end = offset;
+  }
+  surface = surface.substr(0, end);
+  // Keep all approved suffixes from app-profile-spec section 7 explicit, even
+  // when a longer suffix also ends with a shorter one in this table.
+  static constexpr std::string_view kPoliteSuffixes[] = {
+      "です",         "ます",       "でした",       "ました",  "ません",
+      "ませんでした", "ございます", "ございました", "ください"};
+  for (const auto suffix : kPoliteSuffixes) {
+    if (surface.ends_with(suffix)) return core::CandidateTag::Polite;
+  }
+  static constexpr std::string_view kCasualSuffixes[] = {"だよ", "だね", "だぞ",
+                                                         "だぜ", "だろ", "じゃん"};
+  for (const auto suffix : kCasualSuffixes) {
+    if (surface.ends_with(suffix)) return core::CandidateTag::Casual;
+  }
+  return core::CandidateTag::None;
 }
 
 double Boosted(double score, double multiplier) {
@@ -98,6 +133,8 @@ TagBoosts TagBoostsFromProfile(const j::Object& resolved_profile) {
 
 void AssignHeuristicTags(std::vector<core::Candidate>& candidates) {
   for (auto& candidate : candidates) {
+    if (candidate.tag != core::CandidateTag::None) continue;
+    candidate.tag = HeuristicStyleTag(candidate.surface);
     if (candidate.tag == core::CandidateTag::None && IsAsciiDominant(candidate.surface))
       candidate.tag = core::CandidateTag::English;
   }

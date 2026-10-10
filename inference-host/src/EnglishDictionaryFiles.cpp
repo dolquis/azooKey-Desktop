@@ -1,6 +1,7 @@
 #include "azookey/host/EnglishDictionaryFiles.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -588,18 +589,61 @@ bool ReinitEnglishOverlay(const fs::path& overlay, uint32_t base_content_hash,
 
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
                       std::optional<fs::file_time_type> tsv_time, const EnglishWriteHook& hook) {
-  if (!learning::WriteTextFileAtomically(paths.base, bytes)) return false;
-  if (!tsv_time) return true;
-  if (!Step(hook, EnglishWriteStep::BaseRenamed)) return false;
-  // Section 4.5: the base carries the mtime of the TSV it reflects. A TSV
-  // saved again after tsv_time, or restored with another timestamp, then no
-  // longer matches it. Read back: a share (AV, indexer) or a coarse clock
-  // (FAT, SMB) can leave another value.
   std::error_code ec;
-  fs::last_write_time(paths.base, *tsv_time, ec);
-  if (ec) return false;
-  const auto stamped = fs::last_write_time(paths.base, ec);
-  return !ec && stamped == *tsv_time;
+  if (!paths.base.parent_path().empty()) fs::create_directories(paths.base.parent_path(), ec);
+  // Unique per write across threads and processes.
+  static std::atomic<uint64_t> sequence{0};
+#ifdef _WIN32
+  const unsigned long pid = GetCurrentProcessId();
+#else
+  const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+  auto temp = paths.base;
+  temp += ".tmp." + std::to_string(pid) + "." + std::to_string(sequence.fetch_add(1));
+  const auto discard = [&] {
+    std::error_code ignored;
+    fs::remove(temp, ignored);
+    return false;
+  };
+  {
+    auto file = RawFile::Open(temp, true);
+    if (!file || !file->WriteAt(0, bytes.data(), bytes.size()) || !file->Flush()) return discard();
+  }
+  if (tsv_time) {
+    // Section 4.5: the base carries the mtime of the TSV it reflects; a TSV
+    // saved again or restored with another timestamp then no longer matches.
+    // Stamped and read back before the rename, so a share (AV, indexer) or a
+    // coarse clock (FAT, SMB) that defeats it leaves the live base untouched.
+    fs::last_write_time(temp, *tsv_time, ec);
+    if (ec) return discard();
+    const auto stamped = fs::last_write_time(temp, ec);
+    if (ec || stamped != *tsv_time) return discard();
+  }
+  if (!Step(hook, EnglishWriteStep::BaseStamped)) return discard();
+#ifdef _WIN32
+  // A reader's brief header read or another host's handle can make the
+  // replace fail for a moment; retry within the transient budget.
+  const DWORD error = learning::detail::RetryTransientFileOperation(
+      [&] {
+        return MoveFileExW(temp.c_str(), paths.base.c_str(),
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+                   ? ERROR_SUCCESS
+                   : GetLastError();
+      },
+      learning::kTransientFileRetryBudget, true);
+  if (error != ERROR_SUCCESS) return discard();
+#else
+  fs::rename(temp, paths.base, ec);
+  if (ec) return discard();
+  if (const auto dir = paths.base.parent_path(); !dir.empty()) {
+    const int dir_fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dir_fd >= 0) {
+      fsync(dir_fd);
+      close(dir_fd);
+    }
+  }
+#endif
+  return true;
 }
 
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const EnglishWriteHook& hook) {

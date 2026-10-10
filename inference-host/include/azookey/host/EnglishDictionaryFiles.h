@@ -124,7 +124,7 @@ enum class EnglishWriteStep {
   ReinitCountCleared,        // op_count = 0 is durable.
   ReinitTruncated,           // Frames past the header are gone.
   ReinitFingerprintWritten,  // base_fingerprint names the current base.
-  BaseRenamed,               // A new base is live; its mtime is not yet the TSV's.
+  BaseStamped,               // A new base is written and stamped, not yet renamed.
   CompactBaseReplaced,       // The merged base is live; the overlay is untouched.
 };
 // Test seam: called after each step; false stops the writer there, as a
@@ -163,11 +163,11 @@ bool ReinitEnglishOverlay(const std::filesystem::path& overlay, uint32_t base_co
 // merge would exceed kMaxEnglishBaseEntries.
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths,
                               const EnglishWriteHook& hook = {});
-// Writes base bytes atomically (temporary file, flush, MoveFileEx). With
-// tsv_time (the TSV mtime the bytes reflect), the base's mtime is set to it
-// and read back: section 4.5 reads the .bin only while the two are equal.
-// false when the write fails, or when the mtime could not be set or reads back
-// rounded (the .bin is then live but not current for the TSV).
+// Writes base bytes atomically: temporary file, flush, then with tsv_time (the
+// TSV mtime the bytes reflect) its mtime set to it and read back, then
+// MoveFileEx (rename keeps the mtime). Section 4.5 reads the .bin only while
+// its mtime equals the TSV's. false, with the live base untouched, when any
+// step fails, including an mtime that cannot be set or reads back rounded.
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
                       std::optional<std::filesystem::file_time_type> tsv_time = std::nullopt,
                       const EnglishWriteHook& hook = {});

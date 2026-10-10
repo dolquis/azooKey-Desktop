@@ -209,7 +209,11 @@ bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
     // The base is settled under the writer lock, so a compaction by another
     // host while this one waited is attached to rather than missed.
     const auto lock = EnglishDictionaryFileLock::Acquire(paths_.lock);
-    if (const auto sample = TakeSample(); !IsCurrent(sample))
+    // A base held in memory only because the lock was busy when it was
+    // compiled gets its .bin now that this writer holds the lock; the sample
+    // alone would not show that anything changed.
+    const auto sample = TakeSample();
+    if (!IsCurrent(sample) || (lock && base_in_memory_ && !base_write_failed_))
       RebuildLocked(sample, lock.has_value());
     if (!base_) return false;
     const auto hash = base_->header().content_hash;

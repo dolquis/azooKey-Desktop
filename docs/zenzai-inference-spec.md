@@ -508,8 +508,12 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 - 600ms は次の 2 つの制約から決めた。
   - **上限**: `dev-infrastructure-spec` §8.5.2 が 1 変換ハード予算の上限として置く
     設計値 800ms を下回らなければならない。800ms は変換要求（`QueryCandidates` / 一括変換）に対して
-    実行時に強制される request deadline ではなく、client の待ちは要求の種別ごとの deadline（同表）が決める。engine 側の予算を
-    この設計値以下に保ち、§6.4 の best-so-far 経路が 1 変換の待ちの中で必ず終わるようにする。
+    実行時に強制される request deadline ではなく、client の待ちは要求の種別ごとの deadline（同表）が決める。
+    800ms 以上の待ちを持つ要求（再変換 750ms は 600ms の予算より長く、一括変換 30s、Host の
+    `AiBackend` がローカルの非 Cleanup AI 変換に課す 800ms）では、engine 側の予算をこの設計値以下に
+    保つことで、§6.4 の best-so-far 経路が client の待ちの中で終わる。fast / ライブ変換の 150ms は
+    600ms の予算より短く、client が先に打ち切って Cancel する。この 2 つでは best-so-far は届かず、
+    先に打ち切ることを意図した設計である。
   - **下限**: §8.1 の p95 目標 300ms を十分上回らなければならない。ハード予算が
     分位点目標に近いと打ち切りが常態化し、§8.1 の「打ち切り 0 件」条件を満たす計測
     が取れなくなる。

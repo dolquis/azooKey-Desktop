@@ -3,6 +3,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -628,6 +629,34 @@ TEST(UserDictCliTest, ListAndExportLeaveCorruptFileInPlace) {
   EXPECT_FALSE(std::filesystem::exists(root / "export.json"));
 
   EXPECT_EQ(ReadAll(path), "not valid json");
+  EXPECT_FALSE(HasMigrationArtifact(root));
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(UserDictCliTest, ListAndExportDoNotMigrateZeroByteFile) {
+  const auto path = TestPath("azookey_userdict_cli_readonly_zero_byte");
+  const auto root = path.parent_path();
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream out(path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+  }
+
+  auto list = Parse({"list"});
+  ASSERT_TRUE(list.has_value());
+  auto list_result = azookey::host::RunUserDictCli(*list, DirectRunOptions(path));
+  EXPECT_EQ(list_result.exit_code, 0) << list_result.error;
+
+  std::vector<std::string> export_args = {"export", (root / "export.json").string()};
+  std::string error;
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  auto export_result = azookey::host::RunUserDictCli(*export_options, DirectRunOptions(path));
+  EXPECT_EQ(export_result.exit_code, 0) << export_result.error;
+
+  EXPECT_TRUE(ReadAll(path).empty());
   EXPECT_FALSE(HasMigrationArtifact(root));
 
   std::filesystem::remove_all(root);

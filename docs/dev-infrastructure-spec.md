@@ -2213,7 +2213,7 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 | `QueryCandidates` fast / ライブ変換（`QueryLiveConversion`。M14 以前の Host へは `QueryCandidates` の `live=true` で代替する）/ `QueryPredictions` | 150ms |
 | 再変換（`live=true` の `QueryCandidates` と読みの逆引き） | 750ms |
 | 一括変換（`QueryBatchConversion`）の neural | 30s |
-| 一括変換の ai-cleanup（`local-zenzai` など外部 AI でない backend） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
+| 一括変換の ai-cleanup（外部 AI を使わない経路。`local-zenzai`、または openai でも外部不許可） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
 | 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕（TIP は 5s を足す）。正典は `docs/ai-backend-spec.md` §7.1 |
 | （設計値）ローカル Zenzai 1 変換のハード予算の上限 | 800ms。変換要求（`QueryCandidates` / 一括変換）の request deadline ではない（下記） |
 | ローカルの非 Cleanup AI 変換（`local-zenzai` / 外部 AI 不許可 / Lint。Host の `AiBackend`） | 800ms（Host が強制する deadline。超過は `Timeout`） |
@@ -2383,7 +2383,7 @@ CPU backend へ再試行し、それも失敗したら SimpleConverter へ落と
 - Host 再起動後に自動復帰する（M42 と同じ）
 - Zenzai モデルロード失敗時に `DegradedModel` 状態が UI に明示される
 - 連続クラッシュ時は `SafeMode` に入り、次回起動時に通知する
-- 各処理の timeout が §8.5.2 の表通りに動作する
+- 各処理の timeout が §8.5.2 の表通りに動作する（request deadline の行が対象。「設計値」の行は含まない）
 
 ### 8.6 推論 Worker プロセス分離（Broker/Worker, MVP後）
 

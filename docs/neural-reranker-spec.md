@@ -355,15 +355,18 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 
 `Health` への現れ方は次のとおり。
 
-- reranker の失敗は状態機械の状態を変えない。`fallback_state` と §8.5.4 の
-  劣化表示（Zenzai を使えない旨）は reranker の失敗では出ない。
+- reranker の失敗は状態機械の状態を変えない。`QueryDiagnostics.fallback_state`
+  （状態機械の状態と設定から決まる）と §8.5.4 の劣化表示（Zenzai を使えない旨）は
+  reranker の失敗では出ない。
 - 既存の `learning::Reranker` 経路（`ApplyRerankerOrRaw`）が例外を握り潰して raw 候補を
   返すときは、汎用の `last_error_` に固定の理由語を記録する。`Health.last_error` は
   `last_error_` を `model_runtime_error_` より優先して返すため、この値は Health の
-  `last_error` に出て、`HealthPayload.status` を `ok` から `degraded` へ動かしうる。
+  `last_error` に出る。`HealthPayload.status` は `last_error` があればモデルがロード済みまたは
+  パス設定済みのとき `degraded`、モデル未ロードかつパス未設定なら `error` になる。
   これは `last_error` から決まる粗い表示値であり、状態機械の遷移ではない。
 - Zenzai 由来の NLL スコアラの runtime 失敗だけは、§B8 のとおり `model_runtime_error_` へ
-  `nll-scorer:<reason>` をミラーする。§7.2 の `reason` 群（`timeout` / `infer_error` など）は
+  `nll-scorer:<reason>` をミラーする（`nll-scorer:infer_error` など。§B8 の `reason`）。
+  これに対し、Track A（tiny reranker）の §7.2 の `reason` 群（`timeout` / `infer_error` など）は
   構造化ログと `fallback_rate` 集計に使い、Health へはミラーしない。
 
 ### 7.2 timeout / 失敗の閾値（決定）

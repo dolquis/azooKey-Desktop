@@ -964,7 +964,7 @@ public:
   TIP は F10 を TSF の preserved key としても登録する。登録できたときは preserved key の通知だけで切り替え、
   `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない。IME が閉じているとき、英数モード、
   アプリがキーボード入力を無効にした文脈では、どちらの経路でも F10 をアプリへ渡す
-- ウィンドウ: `WS_POPUP | WS_BORDER`、半透明、サイズ 600×400。初回の表示で UI スレッドに作る
+- ウィンドウ: `WS_POPUP`（枠は描画で付ける）、半透明、サイズ 600×400。初回の表示で UI スレッドに作る
 - 内容:
   - 直近 50 件の IPC ログ（QueryCandidates / QueryLiveConversion /
     QueryPredictions の req_id, kana, 応答候補上位 3 件, latency_ms）
@@ -975,7 +975,7 @@ public:
 
 - TIP プロセス内で circular buffer に保持（`tsf-tip/src/DebugLogBuffer.cpp`。
   IPC ログと状態遷移ログをそれぞれ直近 50 件。Windows API に依存しない）
-- `WM_PAINT` で GDI 描画（`tsf-tip/src/DebugWindow.cpp`。Phase 6-C で DirectWrite に置換）
+- `WM_PAINT` で `RenderingEngine` により描画（`tsf-tip/src/DebugWindow.cpp`。`native-ui-spec.md` §4.3）
 - ログ取得は `OutputDebugString` と二重出力（既存の DebugView 経路も維持）。
   二重出力するのは §8.3 のゲートを通した後の行だけである
 

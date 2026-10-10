@@ -1369,16 +1369,28 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     }
   }
   if (res.segments.empty()) {
-    for (const auto& reading : core::SplitBatchConversion(parsed->reading)) {
+    const auto chunks = core::SplitBatchConversion(parsed->reading);
+    // M60: only a batch that stays one segment pairs raw_romaji with a
+    // segment; a split reading has no per-segment romaji to offer.
+    const bool english = parsed->mode == "neural" && parsed->english_candidates &&
+                         !parsed->raw_romaji.empty() && chunks.size() == 1;
+    for (const auto& reading : chunks) {
       if (cancel->load(std::memory_order_acquire)) break;
       auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
                                                  parsed->max_candidates, false, trace.context());
+      if (parsed->max_candidates > 0 && candidates.size() > parsed->max_candidates) {
+        candidates.resize(parsed->max_candidates);
+      }
+      // English goes after the truncation, as in QueryCandidates (section 4.3),
+      // and never into an empty list, where it would take the first slot.
+      if (english && !candidates.empty() && !cancel->load(std::memory_order_acquire)) {
+        auto english_result = engine_->QueryEnglishCandidates(parsed->raw_romaji, NowSec());
+        PlaceEnglishCandidates(candidates, std::move(english_result.candidates),
+                               english_result.intent, engine_->config().english.promote_threshold);
+      }
       ipc::BatchConversionSegment segment;
       segment.reading = reading;
       for (auto& candidate : candidates) segment.candidates.push_back(ToField(candidate));
-      if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
-        segment.candidates.resize(parsed->max_candidates);
-      }
       if (segment.candidates.empty()) {
         ipc::CandidateField fallback;
         fallback.reading = reading;

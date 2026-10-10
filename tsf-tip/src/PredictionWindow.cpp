@@ -92,7 +92,7 @@ ATOM PredictionWindow::RegisterWindowClass() {
 
 bool PredictionWindow::InitializeRendering() {
   auto state = std::make_unique<RenderState>();
-  if (!state->engine.Initialize(hwnd_))
+  if (!state->engine.Initialize(hwnd_, SurfaceAlpha::Opaque))
     return Fail(state->engine.failure_stage(), state->engine.failure_hr());
   render_ = std::move(state);
   UpdateDpi(GetDpiForWindow(hwnd_));

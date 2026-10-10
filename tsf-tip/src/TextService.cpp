@@ -5142,7 +5142,7 @@ void TextService::ServeConnection() {
       continue;
     }
     if (is_batch) {
-      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id);
+      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id, english_candidates);
       if (!ipc_client_.IsConnected()) return;
       continue;
     }
@@ -5755,7 +5755,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
 
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
                                const std::string& raw_romaji, const std::string& mode,
-                               const std::string& trace_id) {
+                               const std::string& trace_id, bool english_candidates) {
   using namespace azookey::ipc;
   core::AiPrivacy privacy;
   std::string backend;
@@ -5778,6 +5778,9 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "batch_chunking_unsupported");
     chunks = {{raw_romaji, reading}};
   }
+  // M60 §4.1.1: only a neural batch sent as one request can pair its romaji
+  // with the one segment the Host may return.
+  const bool english = english_candidates && mode == "neural" && chunks.size() == 1 && has_raw;
   bool failed = false;
   const auto rearm_neural = [&](const std::wstring& notice) {
     if (mode != "ai-cleanup") return false;
@@ -5815,6 +5818,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     request.ai_backend = backend;
     request.max_candidates = max_candidates_.load(std::memory_order_relaxed);
     request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
+    request.english_candidates = english;
     Envelope envelope;
     envelope.request_id = active_id;
     envelope.trace_id = trace_id;
@@ -6214,7 +6218,8 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
-  ipc_pending_english_candidates_ = false;
+  // ai-cleanup stays without English even when it falls back to neural.
+  ipc_pending_english_candidates_ = !ai_cleanup && EnglishCandidatesEnabled();
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();

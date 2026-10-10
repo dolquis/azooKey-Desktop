@@ -6,6 +6,7 @@ import io
 import json
 import lzma
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -26,6 +27,15 @@ import neologd_pack
 
 
 class BuilderTests(unittest.TestCase):
+    def test_category_ids_match_cpp_dictionary_contract(self):
+        header = (Path(__file__).resolve().parents[2] / "learning" / "include" /
+                  "azookey" / "learning" / "DictionaryCategory.h").read_text(encoding="utf-8")
+        cpp_ids = {
+            re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower(): int(category_id)
+            for name, category_id in re.findall(r"^\s+(\w+) = (\d+),?$", header, re.MULTILINE)
+        }
+        self.assertEqual(cpp_ids, {name: index for index, name in enumerate(dictbuild.CATEGORIES)})
+
     def test_round_trip_reproducibility_and_corruption(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)

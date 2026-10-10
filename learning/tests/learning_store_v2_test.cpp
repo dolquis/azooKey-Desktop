@@ -685,6 +685,18 @@ TEST(LearningDecayTest, CategoryHalfLivesKeepTheSpecifiedOrder) {
   EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(1), learning::kGeneralHalfLifeDays);
   EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(kPersonName),
                    learning::kProperNounHalfLifeDays);
+  // Every proper-noun bit retains 90 days, including product_name / software
+  // that also map to the Host's Technical tag (not the 120-day technical category).
+  for (uint16_t category = 1; category <= 7; ++category) {
+    SCOPED_TRACE(category);
+    const auto mask = static_cast<uint16_t>(1U << category);
+    EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(mask),
+                     learning::kProperNounHalfLifeDays);
+    EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(mask | kNeologism),
+                     learning::kProperNounHalfLifeDays);
+    EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(mask | kTechnical),
+                     learning::kTechnicalHalfLifeDays);
+  }
   EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(kTechnical),
                    learning::kTechnicalHalfLifeDays);
   EXPECT_DOUBLE_EQ(learning::HalfLifeDaysForCategoryMask(kNeologism),

@@ -10,8 +10,9 @@
 
 #include "azookey/tsf/ThemeColors.h"
 
+struct ID2D1DeviceContext;
+
 namespace azookey::tsf {
-struct EmojiDrawingCache;
 
 struct CandidateViewItem {
   std::wstring surface;
@@ -150,6 +151,10 @@ class CandidateWindow {
   Hit HitTestForTest(POINT point) const;
   // Pretends every monitor has this DPI; 0 restores the real lookup.
   static void SetMonitorDpiForTest(UINT dpi);
+  // Draws the current content offscreen at the client size with grayscale text
+  // and returns the pixels row by row as RGB values.
+  bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
+  const char* failure_stage_for_test() const { return failure_stage_; }
 #endif
 
  private:
@@ -188,8 +193,14 @@ class CandidateWindow {
   HWND hwnd_{nullptr};
   HWND details_hwnd_{nullptr};
   UINT dpi_{kDefaultDpi};
-  HFONT font_{nullptr};
-  std::unique_ptr<EmojiDrawingCache> emoji_cache_;
+  struct TextStyle;
+  struct RenderState;
+  std::unique_ptr<TextStyle> text_style_;
+  std::unique_ptr<RenderState> render_;
+  std::unique_ptr<RenderState> details_render_;
+  const char* failure_stage_{""};
+  HRESULT failure_hr_{S_OK};
+  bool showing_{false};  // Show is moving and sizing the window.
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;
@@ -215,7 +226,6 @@ class CandidateWindow {
   static ColumnLayout ComputeColumnLayout(int max_surface_width, int max_description_width,
                                           UINT dpi);
   static UINT DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd);
-  static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   static LRESULT CALLBACK DetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -225,7 +235,18 @@ class CandidateWindow {
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   void UpdateDpi(UINT dpi);
   void UpdateTheme();
-  void Repaint() const;
+  void Repaint();
+  int MeasureText(const std::wstring& text) const;
+  // Draws the window at this client size and commits it (native-ui-spec §4.1).
+  bool Render(int width, int height);
+  using DrawFn = void (CandidateWindow::*)(ID2D1DeviceContext*, int, int) const;
+  bool RenderTo(std::unique_ptr<RenderState>& state, HWND hwnd, int width, int height,
+                DrawFn draw) noexcept;
+  static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
+  void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
+  void RenderDetails();
+  void DrawDetails(ID2D1DeviceContext* context, int width, int height) const;
+  bool Fail(const char* stage, HRESULT hr);
   void ResizeAtLastAnchor();
   void ShowDetails();
   void HideDetails();

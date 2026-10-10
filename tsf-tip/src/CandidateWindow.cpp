@@ -1,33 +1,25 @@
 #include "azookey/tsf/CandidateWindow.h"
 
 #include <ShellScalingApi.h>
-#include <dwrite_2.h>
+#include <d2d1_1.h>
+#include <d2d1_1helper.h>
+#include <d3d11.h>
+#include <dwrite.h>
 #include <icu.h>
 #include <windowsx.h>
-#include <wrl.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
-#include <map>
 #include <string>
 
 #include "CandidateSelection.h"
 #include "azookey/tsf/CaretRectResolver.h"
 #include "azookey/tsf/DpiScaling.h"
+#include "azookey/tsf/RenderingEngine.h"
 
 namespace azookey::tsf {
-
-struct EmojiDrawingCache {
-  Microsoft::WRL::ComPtr<IDWriteFactory2> factory;
-  Microsoft::WRL::ComPtr<IDWriteGdiInterop> interop;
-  Microsoft::WRL::ComPtr<IDWriteBitmapRenderTarget> target;
-  Microsoft::WRL::ComPtr<IDWriteRenderingParams> params;
-  Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
-  std::map<std::wstring, Microsoft::WRL::ComPtr<IDWriteTextLayout>> layouts;
-  float font_size{};
-};
 
 bool CandidateWindow::NeedsColorEmoji(const std::wstring& text) {
   for (size_t i = 0; i < text.size(); ++i) {
@@ -44,145 +36,24 @@ bool CandidateWindow::NeedsColorEmoji(const std::wstring& text) {
   return false;
 }
 
-namespace {
 using Microsoft::WRL::ComPtr;
 
-class ColorGlyphRenderer final
-    : public Microsoft::WRL::RuntimeClass<
-          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IDWriteTextRenderer> {
- public:
-  ColorGlyphRenderer(IDWriteFactory2* factory, IDWriteBitmapRenderTarget* target,
-                     IDWriteRenderingParams* params, COLORREF color)
-      : factory_(factory), target_(target), params_(params), color_(color) {}
-  IFACEMETHODIMP IsPixelSnappingDisabled(void*, BOOL* value) override {
-    if (!value) return E_POINTER;
-    *value = FALSE;
-    return S_OK;
-  }
-  IFACEMETHODIMP GetCurrentTransform(void*, DWRITE_MATRIX* value) override {
-    return target_->GetCurrentTransform(value);
-  }
-  IFACEMETHODIMP GetPixelsPerDip(void*, FLOAT* value) override {
-    if (!value) return E_POINTER;
-    *value = target_->GetPixelsPerDip();
-    return S_OK;
-  }
-  IFACEMETHODIMP DrawGlyphRun(void*, FLOAT x, FLOAT y, DWRITE_MEASURING_MODE mode,
-                              const DWRITE_GLYPH_RUN* run,
-                              const DWRITE_GLYPH_RUN_DESCRIPTION* description, IUnknown*) override {
-    ComPtr<IDWriteColorGlyphRunEnumerator> layers;
-    const auto hr =
-        factory_->TranslateColorGlyphRun(x, y, run, description, mode, nullptr, 0, &layers);
-    if (hr == DWRITE_E_NOCOLOR)
-      return target_->DrawGlyphRun(x, y, mode, run, params_.Get(), color_, nullptr);
-    if (FAILED(hr)) return hr;
-    BOOL more = FALSE;
-    for (;;) {
-      const auto next = layers->MoveNext(&more);
-      if (FAILED(next)) return next;
-      if (!more) return S_OK;
-      const DWRITE_COLOR_GLYPH_RUN* layer = nullptr;
-      const auto current = layers->GetCurrentRun(&layer);
-      if (FAILED(current)) return current;
-      const auto channel = [](float value) { return static_cast<BYTE>(value * 255.0f + 0.5f); };
-      const auto color = layer->paletteIndex == 0xffff
-                             ? color_
-                             : RGB(channel(layer->runColor.r), channel(layer->runColor.g),
-                                   channel(layer->runColor.b));
-      const auto draw = target_->DrawGlyphRun(layer->baselineOriginX, layer->baselineOriginY, mode,
-                                              &layer->glyphRun, params_.Get(), color, nullptr);
-      if (FAILED(draw)) return draw;
-    }
-  }
-  IFACEMETHODIMP DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override {
-    return S_OK;  // Candidate layouts never request decoration.
-  }
-  IFACEMETHODIMP DrawStrikethrough(void*, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH*,
-                                   IUnknown*) override {
-    return S_OK;
-  }
-  IFACEMETHODIMP DrawInlineObject(void* context, FLOAT x, FLOAT y, IDWriteInlineObject* object,
-                                  BOOL sideways, BOOL rtl, IUnknown* effect) override {
-    return object->Draw(context, this, x, y, sideways, rtl, effect);
-  }
-
- private:
-  ComPtr<IDWriteFactory2> factory_;
-  ComPtr<IDWriteBitmapRenderTarget> target_;
-  ComPtr<IDWriteRenderingParams> params_;
-  COLORREF color_;
+// Text formats from the system message font at the window's DPI.
+struct CandidateWindow::TextStyle {
+  ComPtr<IDWriteFactory> factory;
+  ComPtr<IDWriteTextFormat> line;      // One line, left aligned, cut with an ellipsis.
+  ComPtr<IDWriteTextFormat> centered;  // Buttons and the lock.
+  ComPtr<IDWriteTextFormat> wrapped;   // Banner and details text, from the top.
 };
 
-ComPtr<IDWriteTextLayout> EmojiLayout(EmojiDrawingCache& cache, HFONT font,
-                                      const std::wstring& text, float width, float height) {
-  if (!cache.factory) {
-    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory2),
-                                   reinterpret_cast<IUnknown**>(cache.factory.GetAddressOf()))))
-      return {};
-  }
-  if (!cache.interop && FAILED(cache.factory->GetGdiInterop(&cache.interop))) return {};
-  if (!cache.params && FAILED(cache.factory->CreateRenderingParams(&cache.params))) return {};
-  LOGFONTW logfont{};
-  const float size = font && GetObjectW(font, sizeof(logfont), &logfont)
-                         ? static_cast<float>(std::abs(logfont.lfHeight))
-                         : 16.0f;
-  // GDI font and layout dimensions are physical pixels; pixelsPerDip=1 deliberately
-  // makes one layout unit one pixel, including when the message font is DPI-scaled.
-  if (!cache.format || cache.font_size != size) {
-    cache.format.Reset();
-    cache.layouts.clear();
-    cache.font_size = size;
-    if (FAILED(cache.factory->CreateTextFormat(
-            L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, size, L"ja-JP", &cache.format)))
-      return {};
-    cache.format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    cache.format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    ComPtr<IDWriteInlineObject> ellipsis;
-    if (SUCCEEDED(cache.factory->CreateEllipsisTrimmingSign(cache.format.Get(), &ellipsis))) {
-      const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-      cache.format->SetTrimming(&trimming, ellipsis.Get());
-    }
-  }
-  auto& layout = cache.layouts[text];
-  if (!layout &&
-      FAILED(cache.factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()),
-                                             cache.format.Get(), width, height, &layout)))
-    return {};
-  layout->SetMaxWidth(width);
-  layout->SetMaxHeight(height);
-  return layout;
-}
+struct CandidateWindow::RenderState {
+  RenderingEngine engine;
+};
 
-bool DrawColorEmoji(EmojiDrawingCache& cache, HDC hdc, HFONT font, const std::wstring& text,
-                    const RECT& rect) {
-  const auto width = rect.right - rect.left;
-  const auto height = rect.bottom - rect.top;
-  if (width <= 0 || height <= 0) return false;
-  const auto layout =
-      EmojiLayout(cache, font, text, static_cast<float>(width), static_cast<float>(height));
-  if (!layout) return false;
-  if (!cache.target) {
-    if (FAILED(cache.interop->CreateBitmapRenderTarget(hdc, width, height, &cache.target)))
-      return false;
-    cache.target->SetPixelsPerDip(1.0f);
-  } else {
-    SIZE size{};
-    if (FAILED(cache.target->GetSize(&size))) return false;
-    if ((size.cx != width || size.cy != height) && FAILED(cache.target->Resize(width, height)))
-      return false;
-  }
-  const auto memory_dc = cache.target->GetMemoryDC();
-  if (!BitBlt(memory_dc, 0, 0, width, height, hdc, rect.left, rect.top, SRCCOPY)) return false;
-  const auto renderer = Microsoft::WRL::Make<ColorGlyphRenderer>(
-      cache.factory.Get(), cache.target.Get(), cache.params.Get(), GetTextColor(hdc));
-  if (!renderer || FAILED(layout->Draw(nullptr, renderer.Get(), 0, 0))) return false;
-  return BitBlt(hdc, rect.left, rect.top, width, height, memory_dc, 0, 0, SRCCOPY) != FALSE;
-}
+namespace {
 
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
 constexpr wchar_t kDetailsClassName[] = L"azooKeyCandidateHealthDetailsWnd";
-constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
 constexpr wchar_t kSecureIndicatorText[] = L"🔒";
 constexpr wchar_t kSecureToastText[] = L"🔒 セーフ入力中: 学習・AI・予測は停止しています";
 
@@ -232,23 +103,84 @@ HMODULE GetTipModuleHandle() {
   return nullptr;
 }
 
-// Owns a GDI brush for one paint pass.
-class SolidBrush {
- public:
-  explicit SolidBrush(COLORREF color) : brush_(CreateSolidBrush(color)) {}
-  ~SolidBrush() {
-    if (brush_) DeleteObject(brush_);
-  }
-  SolidBrush(const SolidBrush&) = delete;
-  SolidBrush& operator=(const SolidBrush&) = delete;
+#ifdef AZOOKEY_TSF_TESTING
+UINT g_monitor_dpi_for_test = 0;
+#endif
 
-  void Fill(HDC hdc, const RECT& rect) const {
-    if (brush_) FillRect(hdc, &rect, brush_);
+// The GPU was reset or removed; the whole device stack has to be rebuilt.
+bool IsDeviceLost(HRESULT hr) {
+  return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+         hr == D2DERR_RECREATE_TARGET;
+}
+
+D2D1_COLOR_F ToColorF(COLORREF color) {
+  return D2D1::ColorF(GetRValue(color) / 255.0f, GetGValue(color) / 255.0f,
+                      GetBValue(color) / 255.0f, 1.0f);
+}
+
+D2D1_RECT_F ToRectF(const RECT& rect) {
+  return D2D1::RectF(static_cast<FLOAT>(rect.left), static_cast<FLOAT>(rect.top),
+                     static_cast<FLOAT>(rect.right), static_cast<FLOAT>(rect.bottom));
+}
+
+HRESULT CreateFormat(IDWriteFactory* factory, UINT dpi, DWRITE_WORD_WRAPPING wrapping,
+                     DWRITE_TEXT_ALIGNMENT text_alignment,
+                     DWRITE_PARAGRAPH_ALIGNMENT paragraph_alignment, bool ellipsis,
+                     ComPtr<IDWriteTextFormat>& format) {
+  HRESULT hr = CreateMessageTextFormat(factory, dpi, &format);
+  if (FAILED(hr) || FAILED(hr = format->SetWordWrapping(wrapping)) ||
+      FAILED(hr = format->SetTextAlignment(text_alignment)) ||
+      FAILED(hr = format->SetParagraphAlignment(paragraph_alignment)))
+    return hr;
+  if (!ellipsis) return S_OK;
+  ComPtr<IDWriteInlineObject> sign;
+  if (FAILED(hr = factory->CreateEllipsisTrimmingSign(format.Get(), &sign))) return hr;
+  const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+  return format->SetTrimming(&trimming, sign.Get());
+}
+
+// One drawing pass: fills, a frame, and text with color fonts (native-ui-spec §3.4).
+class Painter {
+ public:
+  Painter(ID2D1DeviceContext* context, IDWriteFactory* factory)
+      : context_(context), factory_(factory) {
+    context_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f), &brush_);
+  }
+
+  bool ok() const { return brush_ != nullptr; }
+
+  void Fill(const RECT& rect, COLORREF color) {
+    brush_->SetColor(ToColorF(color));
+    context_->FillRectangle(ToRectF(rect), brush_.Get());
+  }
+
+  // A one-pixel border along the inside of the client area.
+  void Frame(int width, int height, COLORREF color) {
+    brush_->SetColor(ToColorF(color));
+    context_->DrawRectangle(D2D1::RectF(0.5f, 0.5f, static_cast<FLOAT>(width) - 0.5f,
+                                        static_cast<FLOAT>(height) - 0.5f),
+                            brush_.Get());
+  }
+
+  void Text(const std::wstring& text, IDWriteTextFormat* format, const RECT& rect, COLORREF color) {
+    if (text.empty() || rect.right <= rect.left || rect.bottom <= rect.top) return;
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(factory_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format,
+                                          static_cast<FLOAT>(rect.right - rect.left),
+                                          static_cast<FLOAT>(rect.bottom - rect.top), &layout)))
+      return;
+    brush_->SetColor(ToColorF(color));
+    context_->DrawTextLayout(
+        D2D1::Point2F(static_cast<FLOAT>(rect.left), static_cast<FLOAT>(rect.top)), layout.Get(),
+        brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP);
   }
 
  private:
-  HBRUSH brush_;
+  ID2D1DeviceContext* context_;
+  IDWriteFactory* factory_;
+  ComPtr<ID2D1SolidColorBrush> brush_;
 };
+
 }  // namespace
 
 CandidateWindow::CandidateWindow() = default;
@@ -336,12 +268,6 @@ CandidateWindow::Hit CandidateWindow::HitTest(const HitLayout& layout, POINT poi
   return kNone;
 }
 
-namespace {
-#ifdef AZOOKEY_TSF_TESTING
-UINT g_monitor_dpi_for_test = 0;
-#endif
-}  // namespace
-
 // static
 UINT CandidateWindow::DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd) {
 #ifdef AZOOKEY_TSF_TESTING
@@ -386,21 +312,26 @@ void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = 
 #endif
 
 // static
-HFONT CandidateWindow::CreateMessageFont(UINT dpi) {
-  dpi = NormalizeDpi(dpi);
-
-  NONCLIENTMETRICSW nonclient_metrics{};
-  nonclient_metrics.cbSize = sizeof(nonclient_metrics);
-  LOGFONTW log_font{};
-  if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(nonclient_metrics),
-                                 &nonclient_metrics, 0, dpi)) {
-    log_font = nonclient_metrics.lfMessageFont;
-  } else {
-    log_font.lfHeight = -MulDiv(9, static_cast<int>(dpi), 72);
-    log_font.lfWeight = FW_NORMAL;
-    lstrcpynW(log_font.lfFaceName, kFallbackFontFace, LF_FACESIZE);
+std::unique_ptr<CandidateWindow::TextStyle> CandidateWindow::CreateTextStyle(UINT dpi) noexcept {
+  try {
+    auto style = std::make_unique<TextStyle>();
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                   reinterpret_cast<IUnknown**>(style->factory.GetAddressOf()))))
+      return nullptr;
+    IDWriteFactory* factory = style->factory.Get();
+    if (FAILED(CreateFormat(factory, dpi, DWRITE_WORD_WRAPPING_NO_WRAP,
+                            DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true,
+                            style->line)) ||
+        FAILED(CreateFormat(factory, dpi, DWRITE_WORD_WRAPPING_NO_WRAP,
+                            DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false,
+                            style->centered)) ||
+        FAILED(CreateFormat(factory, dpi, DWRITE_WORD_WRAPPING_WRAP, DWRITE_TEXT_ALIGNMENT_LEADING,
+                            DWRITE_PARAGRAPH_ALIGNMENT_NEAR, true, style->wrapped)))
+      return nullptr;
+    return style;
+  } catch (...) {
+    return nullptr;
   }
-  return CreateFontIndirectW(&log_font);
 }
 
 void CandidateWindow::UpdateTheme() {
@@ -411,14 +342,10 @@ void CandidateWindow::UpdateTheme() {
 
 void CandidateWindow::UpdateDpi(UINT dpi) {
   dpi = NormalizeDpi(dpi);
-  if (dpi == dpi_ && font_) return;
+  if (dpi == dpi_ && text_style_) return;
 
   metrics_ = ComputeLayoutMetrics(dpi);
-  HFONT next_font = CreateMessageFont(dpi);
-  if (next_font) {
-    if (font_) DeleteObject(font_);
-    font_ = next_font;
-  }
+  if (auto next = CreateTextStyle(dpi)) text_style_ = std::move(next);
   dpi_ = dpi;
 }
 
@@ -430,7 +357,6 @@ ATOM CandidateWindow::RegisterWindowClass() {
   wc.lpfnWndProc = WndProc;
   wc.hInstance = GetTipModuleHandle();
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   wc.lpszClassName = kClassName;
   ATOM a = RegisterClassExW(&wc);
   if (!a && GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
@@ -447,9 +373,11 @@ bool CandidateWindow::Create() {
 
   {
     const ScopedPerMonitorDpiAwareness dpi_context;
-    hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName,
-                            nullptr, WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr,
-                            nullptr, GetTipModuleHandle(), this);
+    // DirectComposition draws the whole window, the border included (native-ui-spec §4.1).
+    hwnd_ = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP, kClassName,
+        nullptr, WS_POPUP, 0, 0, 200, metrics_.item_height, nullptr, nullptr, GetTipModuleHandle(),
+        this);
   }
   if (hwnd_) {
     UpdateDpi(GetDpiForWindow(hwnd_));
@@ -466,10 +394,19 @@ void CandidateWindow::Destroy() {
     DestroyWindow(hwnd_);
     // hwnd_ is cleared in WM_DESTROY handler.
   }
-  if (font_) {
-    DeleteObject(font_);
-    font_ = nullptr;
-  }
+  render_.reset();
+}
+
+int CandidateWindow::MeasureText(const std::wstring& text) const {
+  if (!text_style_ || text.empty()) return 0;
+  ComPtr<IDWriteTextLayout> layout;
+  DWRITE_TEXT_METRICS measured{};
+  if (FAILED(text_style_->factory->CreateTextLayout(
+          text.c_str(), static_cast<UINT32>(text.size()), text_style_->line.Get(), 100000.0f,
+          static_cast<FLOAT>(metrics_.item_height), &layout)) ||
+      FAILED(layout->GetMetrics(&measured)))
+    return 0;
+  return static_cast<int>(std::ceil(measured.widthIncludingTrailingWhitespace));
 }
 
 void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
@@ -480,58 +417,22 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   const ScopedPerMonitorDpiAwareness dpi_context;
   items_ = items;
   notice_ = std::move(notice);
-  if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
-  emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
   const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), pt);
   UpdateDpi(DpiForMonitor(monitor.monitor, hwnd_));
 
-  // Measure maximum text width using the window's DC.
-  HDC hdc = GetDC(hwnd_);
-  HGDIOBJ old_font = nullptr;
-  if (hdc && font_) old_font = SelectObject(hdc, font_);
+  // DirectWrite measures the same strings GDI did; widths may differ by a few
+  // pixels, while the rows, padding and columns keep their metrics.
   int max_surface_w = metrics_.min_text_width;
   int max_description_w = 0;
-  int notice_width = 0;
-  if (hdc) {
-    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-      const auto& item = items_[static_cast<size_t>(i)];
-      std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
-      SIZE sz{};
-      GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
-      if (NeedsColorEmoji(item.surface)) {
-        const auto layout = EmojiLayout(*emoji_cache_, font_, item.surface, 100000.0f,
-                                        static_cast<float>(metrics_.item_height));
-        DWRITE_TEXT_METRICS measured{};
-        if (layout && SUCCEEDED(layout->GetMetrics(&measured))) {
-          const auto prefix = std::to_wstring(i + 1) + L". ";
-          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &sz);
-          sz.cx += static_cast<LONG>(std::ceil(measured.widthIncludingTrailingWhitespace));
-        }
-      }
-      max_surface_w = std::max(max_surface_w, static_cast<int>(sz.cx));
-      if (!item.description.empty()) {
-        GetTextExtentPoint32W(hdc, item.description.c_str(),
-                              static_cast<int>(item.description.size()), &sz);
-        max_description_w = std::max(max_description_w, static_cast<int>(sz.cx));
-      }
-    }
-    if (!notice_.empty()) {
-      SIZE size{};
-      GetTextExtentPoint32W(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &size);
-      notice_width = size.cx;
-    }
-    if (secure_toast_visible_) {
-      SIZE size{};
-      GetTextExtentPoint32W(hdc, kSecureToastText, static_cast<int>(wcslen(kSecureToastText)),
-                            &size);
-      notice_width = std::max(notice_width, static_cast<int>(size.cx));
-    }
+  for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+    const auto& item = items_[static_cast<size_t>(i)];
+    max_surface_w =
+        std::max(max_surface_w, MeasureText(std::to_wstring(i + 1) + L". " + item.surface));
+    max_description_w = std::max(max_description_w, MeasureText(item.description));
   }
-  if (hdc) {
-    if (old_font) SelectObject(hdc, old_font);
-    ReleaseDC(hwnd_, hdc);
-  }
+  int notice_width = MeasureText(notice_);
+  if (secure_toast_visible_) notice_width = std::max(notice_width, MeasureText(kSecureToastText));
 
   const ColumnLayout columns = ComputeColumnLayout(max_surface_w, max_description_w, dpi_);
   surface_column_width_ = columns.surface_width;
@@ -547,9 +448,14 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   }
 
   const RECT placement = ComputePlacement(pt, monitor.work_area, width, height, metrics_.caret_gap);
-  SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placement.right - placement.left,
-               placement.bottom - placement.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
-  InvalidateRect(hwnd_, nullptr, TRUE);
+  const int placed_width = placement.right - placement.left;
+  const int placed_height = placement.bottom - placement.top;
+  showing_ = true;
+  // A failed frame keeps the window and its click regions; failure_stage_ says why.
+  Render(placed_width, placed_height);
+  SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
+               SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  showing_ = false;
 }
 
 void CandidateWindow::Hide() {
@@ -637,7 +543,6 @@ void CandidateWindow::ShowDetails() {
     wc.lpfnWndProc = DetailsWndProc;
     wc.hInstance = GetTipModuleHandle();
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_INFOBK + 1);
     wc.lpszClassName = kDetailsClassName;
     ATOM atom = RegisterClassExW(&wc);
     if (atom) return atom;
@@ -654,14 +559,45 @@ void CandidateWindow::ShowDetails() {
   const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area,
                                                  ScaleForDpi(480, dpi_), ScaleForDpi(240, dpi_));
   details_hwnd_ = CreateWindowExW(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kDetailsClassName, nullptr,
-      WS_POPUP | WS_BORDER, placement.left, placement.top, placement.right - placement.left,
-      placement.bottom - placement.top, hwnd_, nullptr, GetTipModuleHandle(), this);
-  if (details_hwnd_) ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
+      kDetailsClassName, nullptr, WS_POPUP, placement.left, placement.top,
+      placement.right - placement.left, placement.bottom - placement.top, hwnd_, nullptr,
+      GetTipModuleHandle(), this);
+  if (!details_hwnd_) return;
+  RenderDetails();
+  ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
 }
 
 void CandidateWindow::HideDetails() {
   if (details_hwnd_) DestroyWindow(details_hwnd_);
+  details_render_.reset();
+}
+
+void CandidateWindow::RenderDetails() {
+  RECT client_rc{};
+  if (!details_hwnd_ || !GetClientRect(details_hwnd_, &client_rc)) return;
+  // The failure record belongs to the candidate window; the popup does not overwrite it.
+  const char* const stage = failure_stage_;
+  const HRESULT hr = failure_hr_;
+  RenderTo(details_render_, details_hwnd_, client_rc.right, client_rc.bottom,
+           &CandidateWindow::DrawDetails);
+  failure_stage_ = stage;
+  failure_hr_ = hr;
+}
+
+void CandidateWindow::DrawDetails(ID2D1DeviceContext* context, int width, int height) const {
+  // Clear first so a failed brush still commits a defined frame.
+  context->Clear(ToColorF(theme_.info_background));
+  Painter paint(context, text_style_->factory.Get());
+  if (!paint.ok()) return;
+  RECT text_rc{0, 0, width, height};
+  InflateRect(&text_rc, -metrics_.horizontal_padding, -metrics_.horizontal_padding);
+  text_rc.bottom -= metrics_.item_height;
+  paint.Text(HealthDetailsText(health_state_), text_style_->wrapped.Get(), text_rc,
+             theme_.info_text);
+  const RECT close_rc{width - ScaleForDpi(90, dpi_), height - metrics_.item_height, width, height};
+  paint.Text(L"[閉じる]", text_style_->centered.Get(), close_rc, theme_.info_text);
+  paint.Frame(width, height, theme_.border);
 }
 
 // static
@@ -679,39 +615,22 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
     case WM_MOUSEACTIVATE:
       return MA_NOACTIVATE;
     case WM_PAINT: {
+      // DirectComposition keeps the last frame; RenderDetails draws on change.
       PAINTSTRUCT paint{};
-      HDC hdc = BeginPaint(hwnd, &paint);
-      RECT rect{};
-      GetClientRect(hwnd, &rect);
-      const ThemeColors theme = self ? self->theme_ : kLightTheme;
-      SolidBrush(theme.info_background).Fill(hdc, rect);
-      HGDIOBJ old_font = self && self->font_ ? SelectObject(hdc, self->font_) : nullptr;
-      SetBkMode(hdc, TRANSPARENT);
-      SetTextColor(hdc, theme.info_text);
-      const int pad = self ? self->metrics_.horizontal_padding : 8;
-      InflateRect(&rect, -pad, -pad);
-      rect.bottom -= self ? self->metrics_.item_height : 24;
-      if (self) {
-        DrawTextW(hdc, HealthDetailsText(self->health_state_), -1, &rect,
-                  DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
-      }
-      RECT close_rect{};
-      GetClientRect(hwnd, &close_rect);
-      close_rect.left = close_rect.right - (self ? ScaleForDpi(90, self->dpi_) : 90);
-      close_rect.top = close_rect.bottom - (self ? self->metrics_.item_height : 24);
-      DrawTextW(hdc, L"[閉じる]", -1, &close_rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-      if (old_font) SelectObject(hdc, old_font);
+      BeginPaint(hwnd, &paint);
       EndPaint(hwnd, &paint);
       return 0;
     }
     case WM_ERASEBKGND:
-      return 1;  // WM_PAINT fills the whole client area.
+      return 1;
     case WM_LBUTTONDOWN:
       if (self) self->HideDetails();
       return 0;
     case WM_DESTROY:
-      if (self) self->details_hwnd_ = nullptr;
+      if (self) {
+        self->details_hwnd_ = nullptr;
+        self->details_render_.reset();
+      }
       return 0;
     default:
       return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -790,9 +709,193 @@ void CandidateWindow::SetSelected(int idx) {
   Repaint();
 }
 
-void CandidateWindow::Repaint() const {
-  if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+void CandidateWindow::Repaint() {
+  RECT client_rc{};
+  if (!IsVisible() || !GetClientRect(hwnd_, &client_rc)) return;
+  Render(client_rc.right, client_rc.bottom);
 }
+
+bool CandidateWindow::Fail(const char* stage, HRESULT hr) {
+  failure_stage_ = stage;
+  failure_hr_ = hr;
+  return false;
+}
+
+bool CandidateWindow::Render(int width, int height) {
+  return RenderTo(render_, hwnd_, width, height, &CandidateWindow::DrawContent);
+}
+
+bool CandidateWindow::RenderTo(std::unique_ptr<RenderState>& state, HWND hwnd, int width,
+                               int height, DrawFn draw) noexcept {
+  try {
+    if (!hwnd || width <= 0 || height <= 0) return Fail("size", E_FAIL);
+    if (!text_style_) return Fail("text_style", E_FAIL);
+    failure_stage_ = "";
+    failure_hr_ = S_OK;
+    // A lost device is rebuilt once; any other failure waits for the next frame.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      if (!state) {
+        auto next = std::make_unique<RenderState>();
+        if (!next->engine.Initialize(hwnd, SurfaceAlpha::Opaque))
+          return Fail(next->engine.failure_stage(), next->engine.failure_hr());
+        state = std::move(next);
+      }
+      RenderingEngine& engine = state->engine;
+      bool drawn = engine.ResizeSurface(width, height);
+      if (drawn) {
+        ID2D1DeviceContext* context = engine.BeginDraw();
+        drawn = context != nullptr;
+        if (drawn) {
+          (this->*draw)(context, width, height);
+          drawn = engine.EndDraw();
+        }
+      }
+      if (drawn) return true;
+      Fail(engine.failure_stage(), engine.failure_hr());
+      if (!IsDeviceLost(failure_hr_)) return false;
+      state.reset();
+    }
+    return false;
+  } catch (...) {
+    // Never unwind into a window procedure or the TSF caller.
+    state.reset();
+    return Fail("exception", E_OUTOFMEMORY);
+  }
+}
+
+void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int height) const {
+  // Clear first so a failed brush still commits a defined frame.
+  context->Clear(ToColorF(theme_.background));
+  Painter paint(context, text_style_->factory.Get());
+  if (!paint.ok()) return;
+  const TextStyle& style = *text_style_;
+  // Candidate text stops short of the secure indicator column.
+  const int content_right = width - SecureIndicatorWidth();
+
+  for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+    const RECT row_rc = {0, i * metrics_.item_height, width, (i + 1) * metrics_.item_height};
+    const bool selected = i == selected_idx_;
+    if (selected) paint.Fill(row_rc, theme_.selection);
+    const auto& item = items_[static_cast<size_t>(i)];
+    RECT surface_rc = row_rc;
+    surface_rc.left += metrics_.horizontal_padding;
+    surface_rc.right = surface_column_width_ > 0
+                           ? std::min(content_right - metrics_.horizontal_padding,
+                                      static_cast<int>(surface_rc.left) + surface_column_width_)
+                           : content_right - metrics_.horizontal_padding;
+    // Font fallback picks Segoe UI Emoji for emoji, drawn in color (native-ui-spec §3.4).
+    paint.Text(std::to_wstring(i + 1) + L". " + item.surface, style.line.Get(), surface_rc,
+               selected ? theme_.selection_text : theme_.text);
+    if (!item.description.empty()) {
+      RECT description_rc = row_rc;
+      description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
+      description_rc.right = content_right - metrics_.horizontal_padding;
+      paint.Text(item.description, style.line.Get(), description_rc,
+                 selected ? theme_.selection_text : theme_.sub_text);
+    }
+  }
+  if (secure_indicator_visible_ && !items_.empty()) {
+    // Top-right corner of the first row; drawn over that row's background.
+    const RECT icon_rc{content_right, 0, width, metrics_.item_height};
+    paint.Text(kSecureIndicatorText, style.centered.Get(), icon_rc,
+               selected_idx_ == 0 ? theme_.selection_text : theme_.text);
+  }
+  const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
+  if (!notice_.empty()) {
+    RECT notice_rc = {0, notice_top, width, notice_top + metrics_.item_height};
+    paint.Fill(notice_rc, theme_.panel_background);
+    InflateRect(&notice_rc, -metrics_.horizontal_padding, 0);
+    paint.Text(notice_, style.line.Get(), notice_rc, theme_.panel_text);
+  }
+  if (secure_toast_visible_) {
+    const int toast_top = FooterTop();
+    RECT toast_rc{0, toast_top, width, toast_top + metrics_.item_height};
+    paint.Fill(toast_rc, theme_.info_background);
+    InflateRect(&toast_rc, -metrics_.horizontal_padding, 0);
+    paint.Text(kSecureToastText, style.line.Get(), toast_rc, theme_.info_text);
+  }
+  if (health_banner_visible_) {
+    const RECT banner_rc{0, HealthBannerTop(), width, height};
+    paint.Fill(banner_rc, theme_.banner_background);
+    RECT text_rc = banner_rc;
+    text_rc.left += metrics_.horizontal_padding;
+    text_rc.right -= metrics_.horizontal_padding;
+    text_rc.top += ScaleForDpi(3, dpi_);
+    text_rc.bottom = banner_rc.bottom - metrics_.item_height;
+    paint.Text(HealthBannerText(health_state_), style.wrapped.Get(), text_rc, theme_.info_text);
+    paint.Text(L"[詳細]", style.centered.Get(), HealthDetailsButtonRect(width), theme_.info_text);
+    if (health_state_ == CandidateHealthState::DegradedModel) {
+      paint.Text(L"[再試行]", style.centered.Get(), HealthRetryButtonRect(width),
+                 retry_in_flight_ ? theme_.sub_text : theme_.info_text);
+    }
+  }
+  paint.Frame(width, height, theme_.border);
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+bool CandidateWindow::RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width,
+                                          int* height) const {
+  RECT client_rc{};
+  if (!pixels || !width || !height || !hwnd_ || !text_style_ || !GetClientRect(hwnd_, &client_rc) ||
+      client_rc.right <= 0 || client_rc.bottom <= 0)
+    return false;
+  const auto w = static_cast<UINT32>(client_rc.right);
+  const auto h = static_cast<UINT32>(client_rc.bottom);
+
+  ComPtr<ID3D11Device> d3d_device;
+  ComPtr<IDXGIDevice> dxgi_device;
+  ComPtr<ID2D1Factory1> factory;
+  ComPtr<ID2D1Device> device;
+  ComPtr<ID2D1DeviceContext> context;
+  if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
+                               D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
+                               &d3d_device, nullptr, nullptr)) ||
+      FAILED(d3d_device.As(&dxgi_device)) ||
+      FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), nullptr,
+                               reinterpret_cast<void**>(factory.GetAddressOf()))) ||
+      FAILED(factory->CreateDevice(dxgi_device.Get(), &device)) ||
+      FAILED(device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &context)))
+    return false;
+
+  const D2D1_PIXEL_FORMAT format =
+      D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE);
+  ComPtr<ID2D1Bitmap1> target;
+  ComPtr<ID2D1Bitmap1> readback;
+  if (FAILED(context->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0,
+                                   D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, format),
+                                   &target)) ||
+      FAILED(context->CreateBitmap(
+          D2D1::SizeU(w, h), nullptr, 0,
+          D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                                  format),
+          &readback)))
+    return false;
+  context->SetTarget(target.Get());
+  context->SetDpi(96.0f, 96.0f);
+  // Grayscale text keeps every non-emoji pixel neutral, so color means a color font.
+  context->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+  context->BeginDraw();
+  DrawContent(context.Get(), client_rc.right, client_rc.bottom);
+  if (FAILED(context->EndDraw()) ||
+      FAILED(readback->CopyFromBitmap(nullptr, target.Get(), nullptr)))
+    return false;
+
+  D2D1_MAPPED_RECT mapped{};
+  if (FAILED(readback->Map(D2D1_MAP_OPTIONS_READ, &mapped))) return false;
+  pixels->assign(static_cast<size_t>(w) * h, 0);
+  for (UINT32 y = 0; y < h; ++y) {
+    const BYTE* row = mapped.bits + static_cast<size_t>(y) * mapped.pitch;
+    for (UINT32 x = 0; x < w; ++x) {
+      const BYTE* bgra = row + static_cast<size_t>(x) * 4;
+      (*pixels)[static_cast<size_t>(y) * w + x] = RGB(bgra[2], bgra[1], bgra[0]);
+    }
+  }
+  readback->Unmap();
+  *width = client_rc.right;
+  *height = client_rc.bottom;
+  return true;
+}
+#endif
 
 // static
 LRESULT CALLBACK CandidateWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -805,9 +908,9 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
   } else {
     self = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   }
-  // WM_PAINT fills the whole client area with the theme background. This is
-  // handled here, not as a case in HandleMessage: clang-cl 19 for ARM64 fails
-  // with "assembler label '' can not be undefined" when that switch gains it.
+  // DirectComposition draws the whole client area. This is handled here, not
+  // as a case in HandleMessage: clang-cl 19 for ARM64 fails with "assembler
+  // label '' can not be undefined" when that switch gains it.
   if (msg == WM_ERASEBKGND) return 1;
   if (self) return self->HandleMessage(hwnd, msg, wParam, lParam);
   return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -819,122 +922,9 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       return MA_NOACTIVATE;
 
     case WM_PAINT: {
+      // DirectComposition keeps the last frame; Render draws on every change.
       PAINTSTRUCT ps;
-      HDC hdc = BeginPaint(hwnd, &ps);
-      UpdateDpi(GetDpiForWindow(hwnd));
-      HGDIOBJ old_font = nullptr;
-      if (font_) old_font = SelectObject(hdc, font_);
-      SetBkMode(hdc, TRANSPARENT);
-
-      RECT client_rc{};
-      GetClientRect(hwnd, &client_rc);
-      SolidBrush(theme_.background).Fill(hdc, client_rc);
-      const SolidBrush selection_brush(theme_.selection);
-      // Candidate text stops short of the secure indicator column.
-      const LONG content_right = client_rc.right - SecureIndicatorWidth();
-
-      for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-        RECT row_rc = {0, i * metrics_.item_height, client_rc.right,
-                       (i + 1) * metrics_.item_height};
-        if (i == selected_idx_) {
-          selection_brush.Fill(hdc, row_rc);
-          SetTextColor(hdc, theme_.selection_text);
-        } else {
-          SetTextColor(hdc, theme_.text);
-        }
-        const auto& item = items_[static_cast<size_t>(i)];
-        std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
-        RECT surface_rc = row_rc;
-        surface_rc.left += metrics_.horizontal_padding;
-        surface_rc.right = surface_column_width_ > 0
-                               ? std::min(content_right - metrics_.horizontal_padding,
-                                          surface_rc.left + surface_column_width_)
-                               : content_right - metrics_.horizontal_padding;
-        bool color_drawn = false;
-        if (NeedsColorEmoji(item.surface) && emoji_cache_) {
-          const auto prefix = std::to_wstring(i + 1) + L". ";
-          SIZE prefix_size{};
-          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_size);
-          RECT emoji_rect = surface_rc;
-          emoji_rect.left += prefix_size.cx;
-          color_drawn = DrawColorEmoji(*emoji_cache_, hdc, font_, item.surface, emoji_rect);
-          if (color_drawn) {
-            RECT prefix_rect = surface_rc;
-            prefix_rect.right = emoji_rect.left;
-            DrawTextW(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_rect,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-          }
-        }
-        if (!color_drawn)
-          DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-        if (!item.description.empty()) {
-          if (i != selected_idx_) SetTextColor(hdc, theme_.sub_text);
-          RECT description_rc = row_rc;
-          description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
-          description_rc.right = content_right - metrics_.horizontal_padding;
-          if (description_rc.left < description_rc.right) {
-            DrawTextW(hdc, item.description.c_str(), static_cast<int>(item.description.size()),
-                      &description_rc,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-          }
-        }
-      }
-      if (secure_indicator_visible_ && !items_.empty()) {
-        // Top-right corner of the first row; drawn over that row's background.
-        RECT icon_rc{content_right, 0, client_rc.right, metrics_.item_height};
-        SetTextColor(hdc, selected_idx_ == 0 ? theme_.selection_text : theme_.text);
-        const std::wstring icon = kSecureIndicatorText;
-        if (!emoji_cache_ || !DrawColorEmoji(*emoji_cache_, hdc, font_, icon, icon_rc)) {
-          DrawTextW(hdc, icon.c_str(), static_cast<int>(icon.size()), &icon_rc,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        }
-      }
-      const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
-      if (!notice_.empty()) {
-        RECT notice_rc = {0, notice_top, client_rc.right, notice_top + metrics_.item_height};
-        SolidBrush(theme_.panel_background).Fill(hdc, notice_rc);
-        SetTextColor(hdc, theme_.panel_text);
-        notice_rc.left += metrics_.horizontal_padding;
-        notice_rc.right -= metrics_.horizontal_padding;
-        DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-      }
-      if (secure_toast_visible_) {
-        const int toast_top = FooterTop();
-        RECT toast_rc{0, toast_top, client_rc.right, toast_top + metrics_.item_height};
-        SolidBrush(theme_.info_background).Fill(hdc, toast_rc);
-        SetTextColor(hdc, theme_.info_text);
-        toast_rc.left += metrics_.horizontal_padding;
-        toast_rc.right -= metrics_.horizontal_padding;
-        const std::wstring toast = kSecureToastText;
-        if (!emoji_cache_ || !DrawColorEmoji(*emoji_cache_, hdc, font_, toast, toast_rc)) {
-          DrawTextW(hdc, toast.c_str(), static_cast<int>(toast.size()), &toast_rc,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-        }
-      }
-      if (health_banner_visible_) {
-        RECT banner_rc{0, HealthBannerTop(), client_rc.right, client_rc.bottom};
-        SolidBrush(theme_.banner_background).Fill(hdc, banner_rc);
-        SetTextColor(hdc, theme_.info_text);
-        RECT text_rc = banner_rc;
-        text_rc.left += metrics_.horizontal_padding;
-        text_rc.right -= metrics_.horizontal_padding;
-        text_rc.top += ScaleForDpi(3, dpi_);
-        text_rc.bottom = banner_rc.bottom - metrics_.item_height;
-        DrawTextW(hdc, HealthBannerText(health_state_), -1, &text_rc,
-                  DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS);
-        RECT details_rc = HealthDetailsButtonRect(client_rc.right);
-        DrawTextW(hdc, L"[詳細]", -1, &details_rc,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        if (health_state_ == CandidateHealthState::DegradedModel) {
-          RECT retry_rc = HealthRetryButtonRect(client_rc.right);
-          SetTextColor(hdc, retry_in_flight_ ? theme_.sub_text : theme_.info_text);
-          DrawTextW(hdc, L"[再試行]", -1, &retry_rc,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        }
-      }
-      if (old_font) SelectObject(hdc, old_font);
+      BeginPaint(hwnd, &ps);
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -979,7 +969,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       if (msg != WM_SETTINGCHANGE || IsThemeSettingChange(wParam, lParam)) {
         UpdateTheme();
         Repaint();
-        if (details_hwnd_) InvalidateRect(details_hwnd_, nullptr, FALSE);
+        RenderDetails();
       }
       return DefWindowProcW(hwnd, msg, wParam, lParam);
 
@@ -1003,17 +993,14 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       }
       return DefWindowProcW(hwnd, msg, wParam, lParam);
 
-    case WM_DPICHANGED: {
+    case WM_DPICHANGED:
+      // The suggested rect is ignored: the surface size and the placement both
+      // come from Show, which measures for the anchor's monitor. A change that
+      // Show's own SetWindowPos causes is already measured for.
+      if (showing_) return 0;
       UpdateDpi(LOWORD(wParam));
-      RECT* suggested = reinterpret_cast<RECT*>(lParam);
-      if (suggested) {
-        SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
-                     suggested->right - suggested->left, suggested->bottom - suggested->top,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-      }
-      InvalidateRect(hwnd, nullptr, TRUE);
+      if (IsVisible()) ResizeAtLastAnchor();
       return 0;
-    }
 
     case WM_DESTROY:
       HideDetails();

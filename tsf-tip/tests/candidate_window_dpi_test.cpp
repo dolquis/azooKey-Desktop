@@ -1,4 +1,9 @@
+#include <dwrite.h>
 #include <gtest/gtest.h>
+#include <wrl/client.h>
+
+#include <algorithm>
+#include <vector>
 
 #include "azookey/tsf/CandidateWindow.h"
 
@@ -16,6 +21,18 @@ class ScopedPerMonitorDpi {
 
  private:
   DPI_AWARENESS_CONTEXT previous_{nullptr};
+};
+
+// Restores the injected monitor DPI and theme inputs even when an ASSERT leaves early.
+class ScopedTestInputs {
+ public:
+  ScopedTestInputs() = default;
+  ~ScopedTestInputs() {
+    CandidateWindow::SetMonitorDpiForTest(0);
+    tsf::testing::ClearThemeInputsForTest();
+  }
+  ScopedTestInputs(const ScopedTestInputs&) = delete;
+  ScopedTestInputs& operator=(const ScopedTestInputs&) = delete;
 };
 
 void ExpectMetrics(const CandidateWindow::LayoutMetricsForTest& metrics, int item_height,
@@ -221,6 +238,7 @@ TEST(CandidateWindowDpiTest, SecureToastShiftsHealthButtonsAndLockIsNotACandidat
 TEST(CandidateWindowHitTest, ClickRegionsScaleAt96And144And192Dpi) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
   using Target = CandidateWindow::HitTarget;
   for (const UINT dpi : {96u, 144u, 192u}) {
     SCOPED_TRACE(dpi);
@@ -269,7 +287,6 @@ TEST(CandidateWindowHitTest, ClickRegionsScaleAt96And144And192Dpi) {
     expect({details_right, button_top}, Target::HealthBanner);
     window.Destroy();
   }
-  CandidateWindow::SetMonitorDpiForTest(0);
 }
 
 TEST(CandidateWindowHitTest, DetailsButtonMovesRightWithoutTheRetryButton) {
@@ -283,6 +300,123 @@ TEST(CandidateWindowHitTest, DetailsButtonMovesRightWithoutTheRetryButton) {
   const auto hit = CandidateWindow::HitTest(layout, {399, 0});
   EXPECT_EQ(hit.target, CandidateWindow::HitTarget::Candidate);
   EXPECT_EQ(hit.index, 0);
+}
+
+TEST(CandidateWindowRenderTest, FillsEachRegionWithTheThemeAt96And144And192Dpi) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  struct ThemeCase {
+    bool high_contrast;
+    DWORD apps_use_light_theme;
+  };
+  for (const ThemeCase theme : {ThemeCase{false, 1u}, ThemeCase{false, 0u}, ThemeCase{true, 1u}}) {
+    for (const UINT dpi : {96u, 144u, 192u}) {
+      SCOPED_TRACE(::testing::Message() << "high_contrast=" << theme.high_contrast << " light="
+                                        << theme.apps_use_light_theme << " dpi=" << dpi);
+      tsf::testing::SetThemeInputsForTest(theme.high_contrast, theme.apps_use_light_theme);
+      CandidateWindow::SetMonitorDpiForTest(dpi);
+      CandidateWindow window;
+      ASSERT_TRUE(window.Create());
+      window.Show(POINT{20, 20}, {{L"候補", L"説明"}, {L"二", L""}}, 1, L"案内");
+      window.ShowSecureToast();
+      window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+      EXPECT_STREQ(window.failure_stage_for_test(), "");
+      EXPECT_NE(GetWindowLongPtrW(window.hwnd_for_test(), GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP,
+                0);
+
+      std::vector<COLORREF> pixels;
+      int width = 0;
+      int height = 0;
+      ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+      const int row = MulDiv(24, static_cast<int>(dpi), 96);
+      ASSERT_EQ(height, 7 * row);
+      const auto at = [&](int x, int y) { return pixels[static_cast<size_t>(y * width + x)]; };
+      const ThemeColors& colors = window.theme_for_test();
+      // Inside the right padding no text reaches, so each row shows its fill.
+      const int x = width - 3;
+      EXPECT_EQ(at(x, row / 2), colors.background);
+      EXPECT_EQ(at(x, row + row / 2), colors.selection);
+      EXPECT_EQ(at(x, 2 * row + row / 2), colors.panel_background);
+      EXPECT_EQ(at(x, 3 * row + row / 2), colors.info_background);
+      EXPECT_EQ(at(x, 5 * row), colors.banner_background);
+      EXPECT_EQ(at(0, row / 2), colors.border);
+      EXPECT_EQ(at(width - 1, 6 * row), colors.border);
+      window.Destroy();
+    }
+  }
+}
+
+// Pixels whose channels differ this much are colored, not gray.
+bool RowHasColor(const std::vector<COLORREF>& pixels, int width, int top, int bottom) {
+  for (int y = top; y < bottom; ++y) {
+    for (int x = 1; x < width - 1; ++x) {
+      const COLORREF pixel = pixels[static_cast<size_t>(y * width + x)];
+      const int r = GetRValue(pixel);
+      const int g = GetGValue(pixel);
+      const int b = GetBValue(pixel);
+      if (std::max({r, g, b}) - std::min({r, g, b}) > 64) return true;
+    }
+  }
+  return false;
+}
+
+TEST(CandidateWindowRenderTest, DrawsEmojiWithTheColorFont) {
+  Microsoft::WRL::ComPtr<IDWriteFactory> factory;
+  ASSERT_TRUE(SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                            reinterpret_cast<IUnknown**>(factory.GetAddressOf()))));
+  Microsoft::WRL::ComPtr<IDWriteFontCollection> fonts;
+  ASSERT_TRUE(SUCCEEDED(factory->GetSystemFontCollection(&fonts)));
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  ASSERT_TRUE(SUCCEEDED(fonts->FindFamilyName(L"Segoe UI Emoji", &index, &exists)));
+  if (!exists) GTEST_SKIP() << "Segoe UI Emoji is not installed";
+
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  tsf::testing::SetThemeInputsForTest(false, 1u);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  std::vector<COLORREF> pixels;
+  int width = 0;
+  int height = 0;
+  const int row = window.current_metrics_for_test().item_height;
+
+  // The second row is selected so the first row stays black text on white.
+  window.Show(POINT{20, 20}, {{L"abc", L""}, {L"x", L""}}, 1);
+  ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+  EXPECT_FALSE(RowHasColor(pixels, width, 1, row));
+
+  window.Show(POINT{20, 20}, {{L"😄", L""}, {L"x", L""}}, 1);
+  ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+  EXPECT_TRUE(RowHasColor(pixels, width, 1, row));
+  window.Destroy();
+}
+
+TEST(CandidateWindowRenderTest, DpiChangeRemeasuresAtTheAnchorAndIgnoresTheSuggestedRect) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow::SetMonitorDpiForTest(96);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}}, 0);
+  const HWND hwnd = window.hwnd_for_test();
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * 24);
+
+  // The window moved to a 144 DPI monitor; the suggested 10x10 rect is not used.
+  CandidateWindow::SetMonitorDpiForTest(144);
+  RECT suggested{0, 0, 10, 10};
+  SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(144, 144), reinterpret_cast<LPARAM>(&suggested));
+  EXPECT_EQ(window.current_metrics_for_test().item_height, 36);
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * 36);
+  EXPECT_GT(bounds.right - bounds.left, 10);
+  EXPECT_STREQ(window.failure_stage_for_test(), "");
+  window.Destroy();
 }
 
 }  // namespace

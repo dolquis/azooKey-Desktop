@@ -63,19 +63,28 @@ TIP は他プロセスに読み込まれ、broadcast の lParam を検証でき�
 
 ### 2.1 背景効果
 
-候補ウィンドウと予測候補ウィンドウの背景は、テーマ色の不透明な塗りとする。
-Mica / Acrylic などのシステム背景効果は使わない。
+候補ウィンドウ、予測候補ウィンドウ、詳細ポップアップの背景は、テーマ色の不透明な塗りとする。
+3 つとも DirectComposition で描くが、Mica / Acrylic などのシステム背景効果は使わない。
+surface は `SurfaceAlpha::Opaque`（`DXGI_ALPHA_MODE_IGNORE`）で作り、文字は ClearType で描く。
+
+採らない理由は次のとおり。
 
 - Mica（`DWMSBT_MAINWINDOW`）はアクティブなウィンドウ向けで、非アクティブなウィンドウでは
-  単色になる。両ウィンドウは `WS_EX_NOACTIVATE` で常に非アクティブなので、効果が出ない。
-- Acrylic（`DWMSBT_TRANSIENTWINDOW`）は popup 向けで非アクティブでも描かれるが、
-  `DwmExtendFrameIntoClientArea` と透明なクリアが要る。
-  GDI で描く候補ウィンドウは透明なクリアができないため、候補ウィンドウを DirectComposition に
-  移すまで、両ウィンドウとも背景効果を付けない（統一を優先する）。
+  単色になる。候補系のウィンドウは `WS_EX_NOACTIVATE` で常に非アクティブなので、効果が出ない。
+- popup に Acrylic を付ける公開 API は、`DWMWA_SYSTEMBACKDROP_TYPE` の `DWMSBT_TRANSIENTWINDOW`、
+  `DwmExtendFrameIntoClientArea` の全面拡張、透明なクリアの組だけである
+  （DirectComposition 単体には公開の backdrop brush がない）。
+  caption を持たない `WS_POPUP` と `WS_EX_NOREDIRECTIONBITMAP` の組で backdrop が描かれるかは、
+  実機でしか確かめられない。
+- 透明効果が無効のときとバッテリー節約機能が有効のとき、DWM は独自の fallback 色で塗る。
+  この色は §1.3 のテーマ色と一致しないため、検出して不透明へ戻す経路が別に要る。
+  build 22621 未満とハイコントラスト（§5.1）でも不透明の経路を保つことになり、
+  Acrylic を足しても不透明の描画は省けない。
+- 半透明の背景では、下のウィンドウによって文字のコントラストが変わる。
+  surface が premultiplied alpha になるため、文字は ClearType ではなく grayscale で描かれる。
 - `DwmEnableBlurBehindWindow` は Windows 8 以降では効果がなく、Acrylic の代わりにならない。
 
-Acrylic の採用は、候補ウィンドウの DirectComposition 移行と同時に判断する（§4.1）。
-採用するときは build 22621 未満で不透明のテーマ色へ落とす。
+デバッグウィンドウ（§4.3）だけは、開発者向けの半透明表示のため `SurfaceAlpha::Premultiplied` で描く。
 
 ### 2.2 RenderingEngine
 
@@ -85,8 +94,8 @@ D3D11 + Direct2D + DirectComposition + DirectWrite の組を持つ。
 
 | メソッド | 役割 |
 |---|---|
-| `Initialize(hwnd)` | D3D11 device（hardware、失敗時は WARP）、D2D factory / device、`IDCompositionDesktopDevice`、topmost の composition target、root visual、DWrite factory を作る |
-| `ResizeSurface(width, height)` | 物理 px の `IDCompositionSurface` を作り直して visual に付ける（同じ大きさなら何もしない） |
+| `Initialize(hwnd, alpha)` | D3D11 device（hardware、失敗時は WARP）、D2D factory / device、`IDCompositionDesktopDevice`、topmost の composition target、root visual、DWrite factory を作る。`alpha` は surface の合成方法（`SurfaceAlpha::Opaque` は `DXGI_ALPHA_MODE_IGNORE`、`SurfaceAlpha::Premultiplied` は `DXGI_ALPHA_MODE_PREMULTIPLIED`）。§2.1 |
+| `ResizeSurface(width, height)` | 物理 px の `IDCompositionSurface` を `Initialize` の `alpha` で作り直して visual に付ける（同じ大きさなら何もしない） |
 | `BeginDraw()` | surface 全体の描画を始め、96 DPI・surface 原点基準の `ID2D1DeviceContext` を返す |
 | `EndDraw()` | 描画を終えて composition を commit する |
 | `failure_stage()` / `failure_hr()` | 直近の失敗段階と HRESULT（描画内容は含まない） |
@@ -97,6 +106,11 @@ D3D11 + Direct2D + DirectComposition + DirectWrite の組を持つ。
 `DCompositionCreateDevice2` は `IDCompositionDevice2` を直接返さないため、
 `IDCompositionDesktopDevice` で作ってから `IDCompositionDevice2` を QI する。
 visual tree は root visual に surface を 1 枚載せるだけとし、背景用の visual は持たない（§2.1）。
+
+`CreateMessageTextFormat(factory, dpi, format)` は、システムのメッセージフォント
+（`SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS)` の `lfMessageFont`）の family・太さ・em サイズで
+96 DPI の device context 用 text format を作る。読めないときは 9 pt の Yu Gothic UI とする。
+候補ウィンドウとデバッグウィンドウはこれを使う。
 
 ## 3. DirectWrite 描画
 
@@ -156,31 +170,43 @@ rt->EndDraw();
 
 ### 3.4 絵文字（カラーフォント）
 
-`IDWriteTextRenderer` のカスタム実装または、`ID2D1DeviceContext4::DrawText`
-（カラー絵文字をフルカラーで描画）。
+文字は `DrawTextLayout` / `DrawText` に `D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT` を付けて描く。
+本文のフォントに無い絵文字は DirectWrite のフォントフォールバックが Segoe UI Emoji を選び、
+COLR のカラーグリフとしてフルカラーで描かれる。
+絵文字を含むかどうかで描き分けず、DWrite-GDI interop のビットマップ経由の描画も使わない。
 
 ```cpp
-ComPtr<ID2D1DeviceContext4> dc4;
-rt.As(&dc4);
-dc4->DrawText(text.c_str(), text.size(),
-              text_format.Get(), &layout_rect, brush.Get(),
-              D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+context->DrawTextLayout(origin, layout.Get(), brush.Get(),
+                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT |
+                            D2D1_DRAW_TEXT_OPTIONS_CLIP);
 ```
-
-「Segoe UI Emoji」が候補に含まれるとき自動的にカラー絵文字レンダリング。
 
 ## 4. 適用範囲
 
 ### 4.1 CandidateWindow.cpp
 
-GDI で描き、色は §1.3 の `ThemeColors` を使う。
-`WM_ERASEBKGND` は何もせず、`WM_PAINT` がクライアント領域全体をテーマの背景で塗る。
+`RenderingEngine`（`SurfaceAlpha::Opaque`）で描き、色は §1.3 の `ThemeColors` を使う。
+候補ウィンドウと詳細ポップアップは `WS_POPUP` と `WS_EX_NOREDIRECTIONBITMAP` で作り、
+それぞれが `RenderingEngine` を 1 組持つ。詳細ポップアップの組は表示のたびに作り、閉じると捨てる。
+枠は `WS_BORDER` ではなく、クライアント領域の内側 1 px に `ThemeColors::border` で描く。
 DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azookey/tsf/DpiScaling.h`）に従う。
 
-描画レイヤを GDI から `RenderingEngine` へ移すことは後続とする。
-移すときも `WS_POPUP` の HWND、ヒットテスト、キャレット追従の配置計算
-（`docs/legacy-parity-spec.md` §9.2）は変えない。
-カラー絵文字は、移行後は `D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT` で描く（§3.4）。
+- 文字はメッセージフォントの text format（§2.2 の `CreateMessageTextFormat`）で描き、絵文字は §3.4 で描く。
+  行は 1 行で、はみ出す分は末尾を省略記号にする。劣化バナーと詳細の本文は折り返す。
+- 窓の幅は DirectWrite で測る。行の高さ、余白、列の構成、配色、クリック領域は
+  DPI から決まる値であり、文字の測り方によらない。
+  窓の幅だけは、GDI の `GetTextExtentPoint32W` と DirectWrite の測り方の差で数 px 変わりうる。
+- `Show` は位置と大きさを決め、その大きさで描いて commit してから `SetWindowPos` で表示する。
+  選択の移動、テーマの変更、再試行中の表示はその場で描き直す。
+  DirectComposition は最後のフレームを保つので、`WM_PAINT` は描かずに検証だけする。
+- `WM_DPICHANGED` の推奨矩形は使わず、表示中なら最後のアンカーで `Show` をやり直す。
+  `Show` 自身の `SetWindowPos` が発生させた通知は無視する。
+- 描画に失敗しても窓とクリック領域は残し、失敗段階と HRESULT を保持する。
+  デバイスを失った（§2.2）ときは組を作り直して 1 回だけ描き直す。
+
+クリック領域は `CandidateWindow::HitTest` が決める。
+行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、
+キャレット追従の配置計算（`ComputePlacement`、`docs/legacy-parity-spec.md` §9.2）とともに描画方式の影響を受けない。
 
 ### 4.2 PredictionWindow.cpp（M15 新規）
 
@@ -195,8 +221,11 @@ DPI の変化で表示をやり直すときのキャレット矩形は、直前�
 
 ### 4.3 デバッグウィンドウ（M18-3）
 
-M18-3 では GDI で実装してよい。
-`RenderingEngine` と `ThemeColors` へ載せるのは、候補ウィンドウの移行（§4.1）と同じ後続で扱う。
+`RenderingEngine`（`SurfaceAlpha::Premultiplied`）で描き、色は §1.3 の `ThemeColors` を使う。
+`WS_EX_LAYERED` は使わず、`WS_EX_NOREDIRECTIONBITMAP` の surface に背景色をアルファ 220/255 で塗って半透明にする。
+ハイコントラストでは不透明に塗る（§5.1）。
+文字はメッセージフォントの text format（§2.2）で grayscale で描き、最新の行から収まる分だけを表示する。
+`RenderingEngine` は最初の `WM_PAINT` で作り、UI スレッドだけが触る。
 
 ### 4.4 Magic Conversion プロンプト（M16）
 
@@ -278,7 +307,8 @@ device->Commit();
 |---|---|---|
 | テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
 | DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
-| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示 |
+| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
+| 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと |
 
 実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。
 

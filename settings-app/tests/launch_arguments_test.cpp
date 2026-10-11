@@ -62,3 +62,34 @@ TEST(SettingsLaunchArgumentsTest, RejectsDuplicateOrUnknownOptions) {
 }
 
 }  // namespace
+
+// rich-features-spec X-3-6: the TIP opens the batch correction view with a session token only.
+TEST(SettingsLaunchArgumentsTest, AcceptsAProofreadSessionToken) {
+  const auto arguments = azookey::settings::ParseLaunchArguments(
+      L"--proofread-session 0123456789abcdef0123456789abcdef");
+
+  EXPECT_FALSE(arguments.parse_error);
+  EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
+  EXPECT_EQ(arguments.proofread_session_token, "0123456789abcdef0123456789abcdef");
+  EXPECT_EQ(arguments.langid_status, LaunchArgumentStatus::NotSupplied);
+  EXPECT_EQ(arguments.profile_status, LaunchArgumentStatus::NotSupplied);
+}
+
+TEST(SettingsLaunchArgumentsTest, RejectsAnythingButALowercaseHexToken) {
+  for (const wchar_t* raw : {
+           L"--proofread-session",
+           L"--proofread-session 0123456789ABCDEF0123456789abcdef",
+           L"--proofread-session 0123456789abcdef",
+           L"--proofread-session 0123456789abcdef0123456789abcdef0",
+           L"--proofread-session ..\\..\\pipe\\0123456789abcdef0123",
+           L"--proofread-session ０123456789abcdef0123456789abcdef",
+           L"--proofread-session 0123456789abcdef0123456789abcdef "
+           L"--proofread-session fedcba9876543210fedcba9876543210",
+       }) {
+    SCOPED_TRACE(raw);
+    const auto arguments = azookey::settings::ParseLaunchArguments(raw);
+    EXPECT_TRUE(arguments.parse_error);
+    EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Invalid);
+    EXPECT_TRUE(arguments.proofread_session_token.empty());
+  }
+}

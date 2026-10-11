@@ -486,7 +486,7 @@
   <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>Host の状態: 不明な状態です（この設定アプリより新しい Host かもしれません）。</value></data>
   <data name="ProofreadNavigationItem.Content" xml:space="preserve"><value>校正</value></data>
   <data name="Proofread_Title" xml:space="preserve"><value>校正</value></data>
-  <data name="Proofread_Description" xml:space="preserve"><value>文章を貼り付けると、誤変換や誤りの疑いがある箇所を AI が探して一覧にします。アプリ内の文章を自動で読み取る機能は含みません。</value></data>
+  <data name="Proofread_Description" xml:space="preserve"><value>文章を貼り付けると、誤変換や誤りの疑いがある箇所を AI が探して一覧にします。azooKey で入力中のアプリで Ctrl+Shift+Space を押すと、そのアプリの文章を読み込んでここに開きます。</value></data>
   <data name="Proofread_ExternalNoticeTitle" xml:space="preserve"><value>本文は外部の AI サービスへ送られます</value></data>
   <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、貼り付けた本文が、設定した外部の AI バックエンドへ送信されます。「AI」ペインの AI の設定と、プライバシーの AI に関する同意（AI 整文と同じ設定）が必要です。送りたくない文章は貼り付けないでください。</value></data>
   <data name="Proofread_InputHeader" xml:space="preserve"><value>検査する文章</value></data>
@@ -511,4 +511,15 @@
   <data name="Proofread_Error_backend_failed" xml:space="preserve"><value>AI サービスとの通信または応答の読み取りに失敗しました。時間をおいて試してください。</value></data>
   <data name="Proofread_Error_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
   <data name="Proofread_TimeoutNote" xml:space="preserve"><value>本文はすでに外部の AI サービスへ送られていて、Host がまだ処理を続けている可能性があります。</value></data>
+  <data name="Proofread_SessionTitle" xml:space="preserve"><value>入力中のアプリの文章</value></data>
+  <data name="Proofread_Session_captured" xml:space="preserve"><value>入力中のアプリから文章を読み込みました。「検査する」を押すと、外部の AI サービスへ送られます。一覧の「該当箇所を選択」を押すと、アプリ側の該当箇所を選択します。</value></data>
+  <data name="Proofread_Session_blocked" xml:space="preserve"><value>保護された入力欄（パスワード欄など）か、学習を許可しない設定の入力欄のため、文章を読み込みませんでした。</value></data>
+  <data name="Proofread_Session_unavailable" xml:space="preserve"><value>このアプリからは文章を読み取れませんでした。文章を貼り付けて検査してください。</value></data>
+  <data name="Proofread_Session_failed" xml:space="preserve"><value>入力中のアプリから文章を受け取れませんでした。もう一度 Ctrl+Shift+Space を押してください。</value></data>
+  <data name="Proofread_SelectResult_ok" xml:space="preserve"><value>アプリ側の該当箇所を選択しました。</value></data>
+  <data name="Proofread_SelectResult_document_changed" xml:space="preserve"><value>アプリ側の文章が検査したときから変わっているため、選択しませんでした。もう一度 Ctrl+Shift+Space で読み込んでください。</value></data>
+  <data name="Proofread_SelectResult_context_gone" xml:space="preserve"><value>アプリ側の文章が閉じられたため、選択できませんでした。</value></data>
+  <data name="Proofread_SelectResult_invalid_range" xml:space="preserve"><value>この箇所はアプリ側で選択できません。</value></data>
+  <data name="Proofread_SelectResult_failed" xml:space="preserve"><value>アプリ側で選択できませんでした。入力の途中なら、確定してからもう一度押してください。</value></data>
+  <data name="Proofread_SelectResult_lost" xml:space="preserve"><value>入力中のアプリとの接続が切れました。もう一度 Ctrl+Shift+Space を押してください。</value></data>
 </root>

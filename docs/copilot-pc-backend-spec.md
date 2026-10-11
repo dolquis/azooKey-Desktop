@@ -652,6 +652,7 @@ jobs:
           arch: amd64_arm64        # ARM64 の SDK ヘッダ / import lib / リンカ環境
       - run: cmake --preset windows-release-arm64 -DAZOOKEY_FETCH_GOOGLETEST=ON
       - run: cmake --build --preset windows-release-arm64
+      - run: cmake --build --preset windows-release-arm64 --target azookey_settings
       # ctest は実行しない（x64 ホストで ARM64 バイナリは走らない）。実行は §8.4。
       - uses: actions/upload-artifact@v4
         if: always()
@@ -678,6 +679,9 @@ CFG / DYNAMIC_BASE / NX_COMPAT / HIGH_ENTROPY_VA（必須ビット `0x4160`）�
 `dumpbin` は MSVC cross 環境の `VCToolsInstallDir/bin/Hostx64/arm64/dumpbin.exe` を
 明示して呼ぶ。clang-cl の未知引数・未使用引数は toolchain でエラーにする。
 フラグ適用の正典は `dev-infrastructure-spec.md` §2.2、検査対象は同 §4.3 に従う。
+設定アプリも `azookey_settings` ターゲットで ARM64 構成を生成し、PE Machine が
+`0xAA64` であることを検査して `windows-arm64-crossbuild-binaries` に含める。
+設定アプリの構成と NuGet lock は §8.3 に従い、TIP / Host の緩和策検査とは分ける。
 
 ### 8.2 ARM 最適化フラグ（cross-compile セーフ）
 
@@ -754,18 +758,23 @@ endif()
   optional add-on（CUDA / Vulkan）** に収束する。各 add-on の構成は
   `docs/sideload-packaging-spec.md` §1.6 と §1.6.3 が正典。アーキ別に別 payload を
   後決めする必要はない（後戻り回避）。
-- リリース CI（`.github/workflows/release.yml`）は現状 **x64 専用**で、`cmake --preset
-  windows-release`（x64）を configure/build し、署名・verify・upload 対象を
-  `Package_1.0.0_x64.msix` に**ハードコード**している。winget マニフェスト
-  （`docs/sideload-packaging-spec.md`）が `arm64.msix` を参照するため、M28/M29 有効化時の
-  ARM64 リリースは **wapproj の `Platform=ARM64` だけでは不十分**で、次を一式アーキ別に
+- リリース CI（`.github/workflows/release.yml`）は **x64 専用**で、`cmake --preset
+  windows-release`（x64）を configure/build し、`pkg/msi/azooKey.wixproj` の
+  `InstallerPlatform=x64` で未署名 MSI を生成し、未署名であることを検査して upload する。
+  winget 用 MSI の定義は `docs/sideload-packaging-spec.md` に従う。本節の M28/M29 が扱う
+  ARM64 MSIX は **wapproj の `Platform=ARM64` だけでは不十分**で、次を一式アーキ別に
   parameterize する必要がある（さもないと x64 バイナリを包むか、`arm64.msix` が署名・
   公開されない）:
   1. **ARM64 CMake ビルド出力**: `windows-release-arm64` preset（clang-cl・§8.1）で
      ARM64 バイナリ（TIP DLL / host / settings EXE）を生成。
+     設定アプリの MSBuild `Platform` は `CMAKE_CXX_COMPILER_ARCHITECTURE_ID` を優先し、
+     値がない場合は `CMAKE_SYSTEM_PROCESSOR` から x64 / ARM64 を解決する。
+     未対応アーキでは設定アプリのターゲットを省略する。
+     vcxproj は両アーキの Debug / Release 構成を持つ。`RuntimeIdentifiers` は
+     `win10-x64;win10-arm64` とし、共通の `packages.lock.json` は Windows 上の NuGet
+     restore で生成する。出力先は各 preset の `settings-app/<Debug|Release>/`（構成名）とする。
   2. **wapproj `Platform=ARM64`** でその ARM64 出力を取り込み MSIX 化。
-  3. **署名 / verify / upload をアーキ別パスに一般化**（`Package_1.0.0_x64.msix`
-     ハードコードを `Package_1.0.0_${arch}.msix` 等へ）。
+  3. **MSIX の署名 / verify / upload をアーキ別パスで定義**（`Package_1.0.0_${arch}.msix` 等）。
   WAP 自体は x64 ホストから ARM64 をクロスパッケージ可能だが、上記 1〜3 が揃って初めて
   `arm64.msix` が成立する。詳細レシピは M28/M29（`docs/sideload-packaging-spec.md` §1/§2）で
   確定する。

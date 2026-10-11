@@ -21,7 +21,7 @@ using azookey::core::Candidate;
 using azookey::core::CandidateTag;
 using azookey::host::EnglishCandidateConfig;
 
-std::vector<std::string> Surfaces(const std::vector<Candidate>& candidates) {
+std::vector<std::string> EnglishCandidateSurfaces(const std::vector<Candidate>& candidates) {
   std::vector<std::string> out;
   for (const auto& c : candidates) out.push_back(c.surface);
   return out;
@@ -33,7 +33,7 @@ EnglishCandidateConfig AllForms() {
   return config;
 }
 
-fs::path TestDir() {
+fs::path EnglishCandidatesTestDir() {
   const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
   auto path = fs::temp_directory_path() /
               (std::string("azookey_english_") + info->test_suite_name() + "_" + info->name());
@@ -42,7 +42,7 @@ fs::path TestDir() {
   return path;
 }
 
-void WriteText(const fs::path& path, const std::string& text) {
+void EnglishCandidatesWriteText(const fs::path& path, const std::string& text) {
   std::ofstream out(path, std::ios::binary);
   out << text;
 }
@@ -60,7 +60,7 @@ Candidate Japanese(const char* surface, double score) {
 TEST(EnglishCandidatesTest, BuildsTheSixFormsFromTheLowercasedRomaji) {
   for (const char* typed : {"apple", "Apple", "APPLE"}) {
     const auto result = azookey::host::BuildEnglishCandidates(typed, AllForms(), nullptr);
-    EXPECT_EQ(Surfaces(result.candidates),
+    EXPECT_EQ(EnglishCandidateSurfaces(result.candidates),
               (std::vector<std::string>{"apple", "Apple", "APPLE", "ａｐｐｌｅ", "Ａｐｐｌｅ",
                                         "ＡＰＰＬＥ"}))
         << typed;
@@ -74,17 +74,19 @@ TEST(EnglishCandidatesTest, BuildsTheSixFormsFromTheLowercasedRomaji) {
 
 TEST(EnglishCandidatesTest, KeepsAnUnusualCasingAsItsOwnCandidate) {
   const auto result = azookey::host::BuildEnglishCandidates("aPPle", {}, nullptr);
-  EXPECT_EQ(Surfaces(result.candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(result.candidates),
             (std::vector<std::string>{"aPPle", "apple", "Apple", "APPLE"}));
 }
 
 TEST(EnglishCandidatesTest, TogglesRemoveVariants) {
   EnglishCandidateConfig config;
   config.case_variants = false;
-  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("apple", config, nullptr).candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(
+                azookey::host::BuildEnglishCandidates("apple", config, nullptr).candidates),
             (std::vector<std::string>{"apple"}));
   config.full_width = true;
-  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("apple", config, nullptr).candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(
+                azookey::host::BuildEnglishCandidates("apple", config, nullptr).candidates),
             (std::vector<std::string>{"apple", "ａｐｐｌｅ"}));
 }
 
@@ -151,10 +153,11 @@ TEST(EnglishCandidatesTest, DictionarySurfacesComeFirstWithoutReplacingTheForms)
   EnglishCandidateConfig config;
   config.dictionary_enabled = true;
   const auto with = azookey::host::BuildEnglishCandidates("iphone", config, &dictionary);
-  EXPECT_EQ(Surfaces(with.candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(with.candidates),
             (std::vector<std::string>{"iPhone", "iphone", "Iphone", "IPHONE"}));
   const auto without = azookey::host::BuildEnglishCandidates("iphone", {}, &dictionary);
-  EXPECT_EQ(Surfaces(without.candidates), (std::vector<std::string>{"iphone", "Iphone", "IPHONE"}));
+  EXPECT_EQ(EnglishCandidateSurfaces(without.candidates),
+            (std::vector<std::string>{"iphone", "Iphone", "IPHONE"}));
   EXPECT_GT(with.intent, without.intent);  // s_dict.
 }
 
@@ -190,10 +193,12 @@ TEST(EnglishCandidatesTest, ProperAndAcronymFlagsReorderTheHalfWidthForms) {
   EnglishCandidateConfig config;
   config.dictionary_enabled = true;
   const auto proper = azookey::host::EnglishDictionary::ParseTsv("Apple\t5\tproper\n");
-  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("apple", config, &proper).candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(
+                azookey::host::BuildEnglishCandidates("apple", config, &proper).candidates),
             (std::vector<std::string>{"Apple", "apple", "APPLE"}));
   const auto acronym = azookey::host::EnglishDictionary::ParseTsv("nasa\t5\tacronym\n");
-  EXPECT_EQ(Surfaces(azookey::host::BuildEnglishCandidates("nasa", config, &acronym).candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(
+                azookey::host::BuildEnglishCandidates("nasa", config, &acronym).candidates),
             (std::vector<std::string>{"nasa", "NASA", "Nasa"}));
 }
 
@@ -205,14 +210,14 @@ TEST(EnglishCandidatesTest, DictionarySurfacesAreCappedAtFive) {
   config.dictionary_enabled = true;
   config.case_variants = false;
   const auto result = azookey::host::BuildEnglishCandidates("abc", config, &dictionary);
-  EXPECT_EQ(Surfaces(result.candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(result.candidates),
             (std::vector<std::string>{"ABc", "AbC", "aBC", "Abc", "abC", "abc"}));
 }
 
 TEST(EnglishCandidatesTest, LearnedSurfacesFollowTheDictionary) {
   const auto result =
       azookey::host::BuildEnglishCandidates("apple", {}, nullptr, {"APPLE", "Apple Inc."});
-  EXPECT_EQ(Surfaces(result.candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(result.candidates),
             (std::vector<std::string>{"APPLE", "Apple Inc.", "apple", "Apple"}));
 }
 
@@ -229,11 +234,13 @@ TEST(EnglishCandidatesTest, PlacementNeverTakesTheFirstJapaneseCandidate) {
 
   std::vector<Candidate> strong = {Japanese("あ", 9), Japanese("い", 8)};
   azookey::host::PlaceEnglishCandidates(strong, english, 0.6, 0.6);
-  EXPECT_EQ(Surfaces(strong), (std::vector<std::string>{"あ", "apple", "Apple", "APPLE", "い"}));
+  EXPECT_EQ(EnglishCandidateSurfaces(strong),
+            (std::vector<std::string>{"あ", "apple", "Apple", "APPLE", "い"}));
 
   std::vector<Candidate> duplicate = {Japanese("Apple", 9)};
   azookey::host::PlaceEnglishCandidates(duplicate, english, 1.0, 0.6);
-  EXPECT_EQ(Surfaces(duplicate), (std::vector<std::string>{"Apple", "apple", "APPLE"}));
+  EXPECT_EQ(EnglishCandidateSurfaces(duplicate),
+            (std::vector<std::string>{"Apple", "apple", "APPLE"}));
 }
 
 TEST(EnglishCandidatesTest, OnlyAsciiReadingsWithTheEnglishTagAreEnglishCommits) {
@@ -245,7 +252,7 @@ TEST(EnglishCandidatesTest, OnlyAsciiReadingsWithTheEnglishTagAreEnglishCommits)
 }
 
 TEST(EnglishCandidatesTest, EngineKeepsEnglishLearningOutOfTheKanaStore) {
-  const auto dir = TestDir();
+  const auto dir = EnglishCandidatesTestDir();
   azookey::learning::LearningStore kana(dir / "learning.tsv", &azookey::learning::test::Crypto());
   azookey::learning::LearningStore english(dir / "english_learning.tsv",
                                            &azookey::learning::test::Crypto());
@@ -263,7 +270,7 @@ TEST(EnglishCandidatesTest, EngineKeepsEnglishLearningOutOfTheKanaStore) {
 
   // Retyping the same romaji offers the learned surface again (section 5).
   const auto again = engine.QueryEnglishCandidates("apple", kNow);
-  EXPECT_EQ(Surfaces(again.candidates),
+  EXPECT_EQ(EnglishCandidateSurfaces(again.candidates),
             (std::vector<std::string>{"Apple Inc.", "apple", "Apple", "APPLE"}));
 
   // A multi-segment commit routes its English segment the same way.
@@ -284,9 +291,9 @@ TEST(EnglishCandidatesTest, EngineKeepsEnglishLearningOutOfTheKanaStore) {
 }
 
 TEST(EnglishCandidatesTest, EngineLoadsAndReloadsTheDictionary) {
-  const auto dir = TestDir();
+  const auto dir = EnglishCandidatesTestDir();
   const auto path = dir / "english-words.tsv";
-  WriteText(path, "iPhone\t100\n");
+  EnglishCandidatesWriteText(path, "iPhone\t100\n");
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
                                         {});
   azookey::host::EngineConfig config;
@@ -295,7 +302,7 @@ TEST(EnglishCandidatesTest, EngineLoadsAndReloadsTheDictionary) {
   engine.ApplyConfig(config);
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iPhone");
 
-  WriteText(path, "IPHONE\t100\n");
+  EnglishCandidatesWriteText(path, "IPHONE\t100\n");
   fs::last_write_time(path, fs::last_write_time(path) + std::chrono::seconds(5));
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "IPHONE");
 
@@ -306,7 +313,7 @@ TEST(EnglishCandidatesTest, EngineLoadsAndReloadsTheDictionary) {
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
 
   // A corrupt file (not text at all) or a directory in its place is not fatal.
-  WriteText(path, std::string("\x00\xFF\x01\xFE\tGGUF", 9));
+  EnglishCandidatesWriteText(path, std::string("\x00\xFF\x01\xFE\tGGUF", 9));
   EXPECT_EQ(engine.QueryEnglishCandidates("iphone", 0).candidates.front().surface, "iphone");
   fs::remove(path);
   fs::create_directories(path);

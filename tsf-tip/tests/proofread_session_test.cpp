@@ -226,11 +226,13 @@ struct ServerProbe {
   int ends{0};
   ProofreadSessionServer* server{nullptr};
   std::optional<proofread::SelectResult> answer;
+  std::optional<bool> held_document_at_select;
 };
 
 void ProbeSelect(void* context, proofread::SelectRequest request) noexcept {
   auto* probe = static_cast<ServerProbe*>(context);
   probe->requests.push_back(request);
+  if (probe->server) probe->held_document_at_select = probe->server->holds_document_for_test();
   if (probe->answer) probe->server->CompleteSelection(*probe->answer);
 }
 
@@ -285,6 +287,8 @@ TEST(ProofreadSessionServerTest, ServesTheDocumentAndAnswersSelectRequests) {
   ASSERT_TRUE(parsed);
   EXPECT_EQ(parsed->text, "本文");
   ASSERT_EQ(probe.requests.size(), 1u);
+  // The text left the server's memory once the document was sent.
+  EXPECT_EQ(probe.held_document_at_select, false);
   EXPECT_EQ(probe.requests[0].start, 1u);
   EXPECT_EQ(probe.requests[0].length, 1u);
   ASSERT_TRUE(response);

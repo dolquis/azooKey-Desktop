@@ -76,6 +76,12 @@ class ProofreadSessionServer final {
   // Ends the session. No callback runs after this returns.
   void Stop();
   bool active() const { return hwnd_ != nullptr; }
+#ifdef AZOOKEY_TSF_TESTING
+  bool holds_document_for_test() {
+    std::lock_guard lock(mutex_);
+    return !document_json_.empty();
+  }
+#endif
 
   // The client is the settings app next to this TIP (SettingsLauncher).
   static bool VerifySettingsAppClient(HANDLE pipe) noexcept;

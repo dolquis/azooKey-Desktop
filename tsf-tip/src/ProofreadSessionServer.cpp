@@ -295,6 +295,14 @@ void ProofreadSessionServer::Run() noexcept {
                          static_cast<DWORD>(document->size()), idle);
     if (wait == IoWait::Stopped) stopped = true;
     if (wait != IoWait::Done) return;
+    // Sent: the TIP keeps no copy of the text for the rest of the session.
+    document->assign(document->size(), 0);
+    {
+      std::lock_guard lock(mutex_);
+      document_json_.assign(document_json_.size(), '\0');
+      document_json_.clear();
+      document_json_.shrink_to_fit();
+    }
 
     for (;;) {
       uint8_t header[4]{};

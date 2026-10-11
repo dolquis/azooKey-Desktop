@@ -355,10 +355,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     return result;
   }
   azookey::learning::UserDictionary dict(run_options.user_dict_path, run_options.crypto);
-  // list / export only read, so they must not migrate a plaintext file or
-  // quarantine an unreadable one; the writer table treats them as readers.
-  const bool read_only =
-      options.command == UserDictCliCommand::List || options.command == UserDictCliCommand::Export;
+  // Readers and dry-runs must not migrate plaintext or quarantine unreadable files.
+  const bool read_only = options.dry_run || options.command == UserDictCliCommand::List ||
+                         options.command == UserDictCliCommand::Export;
   if (!(read_only ? dict.LoadReadOnly() : dict.Load())) {
     result.exit_code = 1;
     result.error = "failed to load user dictionary";

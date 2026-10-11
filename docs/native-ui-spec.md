@@ -209,11 +209,16 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
   失敗した状態のあいだ、`WM_LBUTTONDOWN` は何もしない。
   キー操作による候補の選択と確定は、窓の表示に依存せず従来どおり動く。
 - 失敗の後は、次の `Show` や状態の変化（選択の移動、テーマの変更など）で描き直しを試み、成功したら表示する。
+  劣化バナー、secure indicator、secure toast の表示・非表示・再開も再試行の対象とする。
   `RenderingEngine` の初期化が 3 回続けて失敗したら、次の `Create` まで初期化を試みない。
   `Hide` は失敗した状態を解く。
 - 失敗段階と HRESULT は `failure_stage()` / `failure_hr()` で読める。描画内容は含まない。
+  `CandidateUiCoordinator` は描画結果の通知を受け、失敗を RuntimeLogger へ記録する
+  （イベントと重複抑止は `docs/dev-infrastructure-spec.md` §7.2）。
+  成功して表示に戻ったら、保留中の secure toast と劣化バナーを表示する。
   デバイスを失った（§2.2）ときは組を作り直して 1 回だけ描き直す。
-- 詳細ポップアップは、描画に失敗したら閉じる。
+- 詳細ポップアップは、描画に失敗したら閉じ、`ShowDetails` / `RenderDetails` は `false` を返す。
+  この失敗は候補窓の失敗段階と HRESULT を上書きしない。
 
 クリック領域は `CandidateWindow::HitTest` が決める。
 行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、

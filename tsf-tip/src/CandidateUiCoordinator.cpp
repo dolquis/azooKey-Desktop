@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "CandidateSelection.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 namespace azookey::tsf {
 
@@ -34,12 +35,19 @@ CandidateUiCoordinator::~CandidateUiCoordinator() { Destroy(); }
 
 bool CandidateUiCoordinator::Create() {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  logged_render_failure_stages_.clear();
+  own_window_.SetOnRenderResult(
+      [](bool drawn, void* context) noexcept {
+        static_cast<CandidateUiCoordinator*>(context)->OnWindowRenderResult(drawn);
+      },
+      this);
   return own_window_.Create();
 }
 
 void CandidateUiCoordinator::Destroy() {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   EndUI();
+  own_window_.SetOnRenderResult(nullptr, nullptr);
   own_window_.Destroy();
   ReleaseUiElementMgr();
 }
@@ -316,17 +324,46 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
 
 void CandidateUiCoordinator::ShowPendingHealthBanner() {
   if (!health_banner_pending_ || !own_window_.IsVisible()) return;
-  own_window_.ShowHealthBanner(health_state_);
-  health_banner_pending_ = false;
   if (health_state_ == CandidateHealthState::SafeMode) {
     notified_safe_mode_generations_.push_back(host_generation_id_);
   }
+  health_banner_pending_ = false;
+  own_window_.ShowHealthBanner(health_state_);
 }
 
 void CandidateUiCoordinator::ShowPendingSecureToast() {
   if (!secure_toast_pending_ || !own_window_.IsVisible()) return;
-  own_window_.ShowSecureToast();
   secure_toast_pending_ = false;
+  own_window_.ShowSecureToast();
+}
+
+void CandidateUiCoordinator::OnWindowRenderResult(bool drawn) noexcept {
+  // Showing a pending footer redraws the candidate frame and calls us again.
+  if (drawn && handling_render_result_) return;
+  const bool was_handling = handling_render_result_;
+  handling_render_result_ = true;
+  try {
+    if (drawn) {
+      if (showing_ && tip_draws_) {
+        ShowPendingSecureToast();
+        ShowPendingHealthBanner();
+      }
+    } else {
+      const std::string stage(own_window_.failure_stage());
+      if (!stage.empty() &&
+          std::find(logged_render_failure_stages_.begin(), logged_render_failure_stages_.end(),
+                    stage) == logged_render_failure_stages_.end()) {
+        logged_render_failure_stages_.push_back(stage);
+        TipRuntimeLog(TipRuntimeLogger(), logging::RuntimeLogLevel::Warn,
+                      "candidate_window_render_failed",
+                      {{"stage", logging::RuntimeLogSafeText(stage)},
+                       {"hr", static_cast<int64_t>(own_window_.failure_hr())}});
+      }
+    }
+  } catch (...) {
+    // Best-effort diagnostics and footer recovery must not unwind through WndProc.
+  }
+  handling_render_result_ = was_handling;
 }
 
 void CandidateUiCoordinator::OnElementShow(bool show) {

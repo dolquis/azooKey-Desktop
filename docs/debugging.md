@@ -216,6 +216,9 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 
 候補 UI の開始に失敗した場合は、試行ごとに 1 行出力される
 `candidate_ui_begin_failed` レコードの `hresult` を確認する。
+TIP が自前描画する候補窓が表示されない場合は、
+`candidate_window_render_failed` レコードの `stage` と `hr` を確認する。
+記録するフィールドと重複抑止の正典は `docs/dev-infrastructure-spec.md` §7.2 とする。
 検証メモには、対象アプリ名、`process_id`、取得日時、`ui_less`、`pb_show`、`tip_draws`、
 `ui_element_mgr_available`、`pb_show_available`、`ui_element_id` または `hresult` を転記する。
 

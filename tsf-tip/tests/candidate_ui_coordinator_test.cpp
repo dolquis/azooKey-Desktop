@@ -9,8 +9,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <thread>
@@ -18,11 +23,46 @@
 
 #include "../src/CandidateSelection.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
 #endif
 
 namespace {
+
+class ScopedCandidateRenderLog {
+ public:
+  explicit ScopedCandidateRenderLog(bool enabled = true) {
+    static std::atomic<unsigned> sequence{0};
+    const auto component = "candidate-render-test-" + std::to_string(GetCurrentProcessId()) + "-" +
+                           std::to_string(GetTickCount64()) + "-" + std::to_string(sequence++);
+    root_ = std::filesystem::temp_directory_path() / component;
+    azookey::logging::RuntimeLoggerOptions options;
+    options.enabled = enabled;
+    options.body_opt_in = true;
+    options.component = component;  // Isolates the OS mutex from production TIP and other tests.
+    options.logs_directory = root_;
+    options.output_path = root_ / "render.jsonl";
+    logger_ = std::make_unique<azookey::logging::RuntimeLogger>(options);
+    azookey::tsf::SetTipRuntimeLoggerForTest(logger_.get());
+  }
+  ~ScopedCandidateRenderLog() {
+    azookey::tsf::CandidateWindow::SetRenderFailureForTest(
+        azookey::tsf::CandidateWindow::RenderFailureForTest::None);
+    azookey::tsf::SetTipRuntimeLoggerForTest(nullptr);
+    logger_.reset();
+    std::error_code error;
+    std::filesystem::remove_all(root_, error);
+  }
+  std::string Read() const {
+    std::ifstream input(root_ / "render.jsonl", std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  }
+
+ private:
+  std::filesystem::path root_;
+  std::unique_ptr<azookey::logging::RuntimeLogger> logger_;
+};
 
 class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIElementMgr {
  public:
@@ -452,6 +492,124 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowTrueUsesTipUiWithoutUpdateNotificat
 
   EXPECT_EQ(coordinator.EndUI(), S_OK);
   EXPECT_EQ(thread_mgr.end_count, 1);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, RenderFailureLogsOncePerStageUntilCreateWithoutBody) {
+  using azookey::tsf::CandidateWindow;
+  const ScopedCandidateRenderLog log;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Initialize);
+  const std::vector<azookey::tsf::CandidateViewItem> items{
+      {L"private-candidate-sentinel", L"private-description-sentinel"}};
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, items, 0, L"private-notice-sentinel"),
+            S_OK);
+  EXPECT_EQ(coordinator.UpdateUI(items, 0), S_OK);
+  EXPECT_EQ(coordinator.MoveSelection(1), S_OK);
+  EXPECT_FALSE(coordinator.own_window_for_test().IsVisible());
+  const auto record = log.Read();
+  EXPECT_EQ(std::count(record.begin(), record.end(), '\n'), 1);
+  EXPECT_NE(record.find("\"event\":\"candidate_window_render_failed\""), std::string::npos);
+  EXPECT_NE(record.find("\"level\":\"warn\""), std::string::npos);
+  EXPECT_NE(record.find("\"stage\":\"injected\""), std::string::npos);
+  EXPECT_NE(record.find("\"hr\":" + std::to_string(static_cast<int64_t>(E_FAIL))),
+            std::string::npos);
+  EXPECT_EQ(record.find("private-"), std::string::npos);
+  EXPECT_EQ(record.find("surface"), std::string::npos);
+  EXPECT_EQ(record.find("description"), std::string::npos);
+  EXPECT_EQ(record.find("notice"), std::string::npos);
+
+  // Hide/end do not reset deduplication. Create starts a new rendering lifetime.
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, items, 0), S_OK);
+  EXPECT_EQ(log.Read(), record);
+  coordinator.Destroy();
+  ASSERT_TRUE(coordinator.Create());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, items, 0), S_OK);
+  const auto recreated = log.Read();
+  EXPECT_EQ(std::count(recreated.begin(), recreated.end(), '\n'), 2);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, DisabledRenderLoggerDoesNotWriteARecord) {
+  const ScopedCandidateRenderLog log(false);
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  azookey::tsf::CandidateWindow::SetRenderFailureForTest(
+      azookey::tsf::CandidateWindow::RenderFailureForTest::Initialize);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_TRUE(log.Read().empty());
+  EXPECT_FALSE(coordinator.own_window_for_test().IsVisible());
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, RecoveredFrameDisplaysPendingToastAndBanner) {
+  using azookey::tsf::CandidateHealthState;
+  using azookey::tsf::CandidateWindow;
+  const ScopedCandidateRenderLog log;
+  for (int retry = 0; retry < 3; ++retry) {
+    SCOPED_TRACE(retry);
+    MockThreadMgrWithUiElementMgr thread_mgr;
+    thread_mgr.expose_ui_element_mgr = false;
+    azookey::tsf::CandidateUiCoordinator coordinator;
+    ASSERT_TRUE(coordinator.Create());
+    coordinator.SetSecureState(true, true);
+    coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-1");
+    CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Initialize);
+    ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+    ASSERT_TRUE(coordinator.secure_toast_pending_for_test());
+    ASSERT_TRUE(coordinator.health_banner_pending_for_test());
+    const auto& window = coordinator.own_window_for_test();
+    ASSERT_FALSE(window.IsVisible());
+    CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
+    if (retry == 0) {
+      EXPECT_EQ(coordinator.MoveSelection(1), S_OK);
+    } else if (retry == 1) {
+      SendMessageW(window.hwnd_for_test(), WM_THEMECHANGED, 0, 0);
+    } else {
+      coordinator.SetRetryInFlight(true);
+    }
+    EXPECT_TRUE(window.IsVisible());
+    EXPECT_TRUE(window.secure_toast_visible_for_test());
+    EXPECT_TRUE(window.health_banner_visible_for_test());
+    EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+    EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+    // The restored SafeMode banner is still counted once for this Host generation.
+    coordinator.SetHealthState(CandidateHealthState::Healthy, "generation-1");
+    coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-1");
+    EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+    EXPECT_FALSE(window.health_banner_visible_for_test());
+    EXPECT_EQ(coordinator.EndUI(), S_OK);
+    EXPECT_EQ(coordinator.MoveSelection(1), S_OK);
+    EXPECT_FALSE(window.IsVisible());
+  }
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, ReplacingHealthBannerKeepsTheNewStateAndResumeDeadline) {
+  using azookey::tsf::CandidateHealthState;
+  const ScopedCandidateRenderLog log;
+  for (const auto initial : {CandidateHealthState::DegradedModel, CandidateHealthState::SafeMode}) {
+    SCOPED_TRACE(static_cast<int>(initial));
+    MockThreadMgrWithUiElementMgr thread_mgr;
+    thread_mgr.expose_ui_element_mgr = false;
+    azookey::tsf::CandidateUiCoordinator coordinator;
+    ASSERT_TRUE(coordinator.Create());
+    ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+    coordinator.SetHealthState(initial, "generation-1");
+    const auto& window = coordinator.own_window_for_test();
+    ASSERT_TRUE(window.health_banner_visible_for_test());
+
+    coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-2");
+    EXPECT_EQ(window.health_state_for_test(), CandidateHealthState::SafeMode);
+    EXPECT_TRUE(window.health_banner_visible_for_test());
+    EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+    // Re-showing the list hides then resumes the new banner within its deadline.
+    ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+    EXPECT_EQ(window.health_state_for_test(), CandidateHealthState::SafeMode);
+    EXPECT_TRUE(window.health_banner_visible_for_test());
+  }
 }
 
 TEST(TsfTipCandidateUiCoordinatorTest, HealthBannerQueuesUntilCandidateWindowIsShown) {

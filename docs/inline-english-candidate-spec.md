@@ -499,6 +499,11 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   **reader は当該 overlay を読み捨てる**（base のみで動作）、**writer は最初の append 前に overlay
   ヘッダを再初期化**してから追記する（§4.7「attach 前の fingerprint 検査」）。これにより
   stale な差分が現 base へ誤適用されず、かつ不一致 overlay へ追記して後で失う事故も防ぐ。
+- TSV を編集・差し替えて base を TSV から作り直すと、実行時に追加した op（M36 の英単語、
+  ユーザーの追加・削除）は失われる。overlay は fingerprint 不一致で読み捨て・再初期化され、
+  コンパクションで base に取り込んだ op も TSV からの再コンパイルで消える。追加語を TSV の
+  再コンパイルをまたいで保つ仕組みは本書の対象外とする（§9）。確定した英単語の再提示は §5 の
+  English 学習チャネルが別ファイルに持つので、TSV の編集では消えない。
 - overlay 破損 → 破棄して base のみで動作（差分は最適化であり必須でない）。
 - 書込権限が無い環境では overlay を作らず**メモリ内差分のみ**（再起動で消える）。
 - reader は base を read-only mmap、overlay 反映はメモリ上で COW ポインタ swap。
@@ -520,13 +525,18 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   直列化する。lookup が使うスナップショット（base + overlay 索引の不変オブジェクト）は別の短い
   ロックの下でポインタだけを差し替える。更新中に lookup が来たら、待たずに直前のスナップショットで
   答える（初回ロードだけは完了を待つ）。
+- 読み直しで TSV から base を作り直すとき（読み取り、またはロックを取れなかった writer の読み直し）は、
+  `english-words.lock` を 1 回だけ試し、待たない。取れなければ TSV をメモリから使う（§4.5 の
+  「ロックを取れずに TSV をメモリから使ったとき」）。ロックを待つのは、overlay へ追記・
+  コンパクションする writer だけである（(B)）。
 - base 差し替え（コンパクション）は新 mmap を作ってから**ポインタを atomic swap**し、
   旧 mmap は参照が抜けてから unmap（読み取りは無停止）。
 
 **(B) プロセス間（複数 host）**:
 
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
-  append / コンパクションを行う。reader はロック不要（下記コミット規約で安全に読む）。
+  append / コンパクションを行う。取得は 10 ms 間隔で試し、500 ms で諦める（ロック不可として
+  下記「権限なし / ロック不可」の扱いになる）。reader はロック不要（下記コミット規約で安全に読む）。
 - **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
   書く操作（**append / コンパクション**）に入る前に、現 live base ヘッダの `content_hash`（§4.5
   offset 28 を read。フル走査不要）を、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら
@@ -894,6 +904,8 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
 - **英語スペル補正・補完**: 辞書ゲーティングを超える補正・補完。
 - **アプリ別の英語優先度**: M48（アプリ別入力プロファイル）で、コードエディタ等では
   英単語タグを boost する（`docs/app-profile-spec.md` の候補タグ重みと接続）。
+- **追加語の TSV 再コンパイル越しの保持と M36 配線**: 実行時に追加した英単語を TSV の編集・差し替え
+  後も保つ永続ストアと、M36 の確定語を overlay へ upsert する配線（§4.6「整合・堅牢化」）。
 
 ## 10. 受け入れ条件（M60）
 

@@ -44,8 +44,6 @@ constexpr uint32_t kSortedFlag = 1;
 // stays small through compaction.
 constexpr uint64_t kMaxBaseBytes = 256ULL * 1024 * 1024;
 constexpr uint64_t kMaxOverlayBytes = 64ULL * 1024 * 1024;
-constexpr auto kLockBudget = std::chrono::milliseconds(500);
-constexpr auto kLockPoll = std::chrono::milliseconds(10);
 
 uint32_t GetU32(const uint8_t* p) {
   return static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 |
@@ -496,7 +494,7 @@ EnglishDictionaryPaths EnglishDictionaryPaths::From(const fs::path& configured) 
 }
 
 std::optional<EnglishDictionaryFileLock> EnglishDictionaryFileLock::Acquire(
-    const fs::path& path, const EnglishLockClock& clock) {
+    const fs::path& path, const EnglishLockClock& clock, std::chrono::milliseconds budget) {
   const auto now = [&] { return clock.now ? clock.now() : std::chrono::steady_clock::now(); };
   const auto sleep = [&](std::chrono::steady_clock::duration duration) {
     if (clock.sleep) {
@@ -506,7 +504,7 @@ std::optional<EnglishDictionaryFileLock> EnglishDictionaryFileLock::Acquire(
     }
   };
   EnglishDictionaryFileLock lock;
-  const auto deadline = now() + kLockBudget;
+  const auto deadline = now() + budget;
 #ifdef _WIN32
   const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -518,7 +516,7 @@ std::optional<EnglishDictionaryFileLock> EnglishDictionaryFileLock::Acquire(
     if (LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at))
       return lock;
     if (GetLastError() != ERROR_LOCK_VIOLATION || now() >= deadline) return std::nullopt;
-    sleep(kLockPoll);
+    sleep(kEnglishLockPoll);
   }
 #else
   const int fd = open(path.c_str(), O_RDWR | O_CREAT, 0644);
@@ -527,7 +525,7 @@ std::optional<EnglishDictionaryFileLock> EnglishDictionaryFileLock::Acquire(
   while (true) {
     if (flock(fd, LOCK_EX | LOCK_NB) == 0) return lock;
     if (errno != EWOULDBLOCK || now() >= deadline) return std::nullopt;
-    sleep(kLockPoll);
+    sleep(kEnglishLockPoll);
   }
 #endif
 }

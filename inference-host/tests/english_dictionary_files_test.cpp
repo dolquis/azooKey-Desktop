@@ -144,6 +144,21 @@ class EnglishDictLockBarrier {
   std::thread thread_;
 };
 
+// A lock wait clock that moves only when the wait sleeps, recording each
+// sleep.
+struct EnglishDictSteppedClock {
+  std::chrono::steady_clock::time_point now{};
+  std::vector<std::chrono::steady_clock::duration> sleeps;
+
+  EnglishLockClock Clock() {
+    return {[this] { return now; },
+            [this](std::chrono::steady_clock::duration duration) {
+              sleeps.push_back(duration);
+              now += duration;
+            }};
+  }
+};
+
 }  // namespace
 
 TEST(EnglishDictionaryFilesTest, BinaryRoundTripMatchesTheTsv) {
@@ -649,6 +664,72 @@ TEST(EnglishDictionaryFilesTest, APersistedOpOverridesAnOlderMemoryOpOnTheSameEn
   EXPECT_TRUE(store.Lookup("foo").empty());
   ASSERT_TRUE(store.Compact());
   EXPECT_TRUE(store.Lookup("foo").empty());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, AHeldLockIsPolledEvery10MsAndGivenUpAfter500Ms) {
+  const auto dir = TestDir();
+  const auto lock_path = dir / "english-words.lock";
+  const auto held = EnglishDictionaryFileLock::Acquire(lock_path);
+  ASSERT_TRUE(held);
+  EnglishDictSteppedClock clock;
+  EXPECT_FALSE(EnglishDictionaryFileLock::Acquire(lock_path, clock.Clock()));
+  // Attempts at 0, 10, ..., 490 ms sleep; the one at 500 ms gives up.
+  EXPECT_EQ(clock.sleeps.size(), 50u);
+  for (const auto& duration : clock.sleeps) EXPECT_EQ(duration, std::chrono::milliseconds(10));
+  // A zero budget tries once.
+  EnglishDictSteppedClock once;
+  EXPECT_FALSE(
+      EnglishDictionaryFileLock::Acquire(lock_path, once.Clock(), std::chrono::milliseconds{0}));
+  EXPECT_TRUE(once.sleeps.empty());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, AReaderRecompilingTheTsvDoesNotWaitForTheWriterLock) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictSteppedClock clock;
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+  store.SetLockClockForTest(clock.Clock());
+  {
+    // Another host holds the lock when the edited TSV is read: the reader
+    // serves it from memory at once and leaves the .bin alone.
+    const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+    ASSERT_TRUE(held);
+    WriteText(tsv, "Apple\t50\n");
+    fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+    EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"Apple"});
+    EXPECT_TRUE(clock.sleeps.empty());
+    EXPECT_NE(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  }
+  // The next writer that holds the lock compiles the .bin (section 4.5).
+  EXPECT_TRUE(store.Upsert("kotlin", 7));
+  EnglishDictionaryStore reloaded(tsv);
+  EXPECT_EQ(Surfaces(reloaded.Lookup("apple")), std::vector<std::string>{"Apple"});
+  EXPECT_EQ(Surfaces(reloaded.Lookup("kotlin")), std::vector<std::string>{"kotlin"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryFilesTest, AWriterThatMissedTheLockRecompilesWithoutWaitingAgain) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictSteppedClock clock;
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  store.SetLockClockForTest(clock.Clock());
+  const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+  ASSERT_TRUE(held);
+  WriteText(tsv, "Apple\t50\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  // One 500 ms wait for the append; the recompile of the edited TSV after it
+  // only tries the lock once.
+  EXPECT_FALSE(store.Upsert("kotlin", 7));
+  EXPECT_EQ(clock.sleeps.size(), 50u);
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"Apple"});
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"kotlin"});
   fs::remove_all(dir);
 }
 

@@ -170,9 +170,12 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
   // The .bin is a cache: without the lock or write access (a read-only TSV
-  // folder) the parsed TSV is used from memory (section 4.5).
+  // folder) the parsed TSV is used from memory (section 4.5). The lock is
+  // tried once, never waited for: this runs for a reader, or for a writer
+  // that has already spent its wait (section 4.7 (A)).
   const auto lock = file_locked ? std::optional<EnglishDictionaryFileLock>{}
-                                : EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_);
+                                : EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_,
+                                                                     std::chrono::milliseconds{0});
   const bool locked = file_locked || lock.has_value();
   if (locked && !force && ReadEnglishBaseHeader(paths_.base) &&
       BaseMatchesTsv(paths_.base, tsv_time)) {

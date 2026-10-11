@@ -139,13 +139,20 @@ struct EnglishLockClock {
   std::function<void(std::chrono::steady_clock::duration)> sleep;
 };
 
+// Section 4.7 (B): how long a writer that appends or compacts waits for the
+// lock, and how often it polls meanwhile.
+inline constexpr std::chrono::milliseconds kEnglishLockBudget{500};
+inline constexpr std::chrono::milliseconds kEnglishLockPoll{10};
+
 // Section 4.7 (B): the exclusive inter-process writer lock (LockFileEx on
-// Windows, flock elsewhere), polled every 10 ms for up to 500 ms. Released on
-// destruction.
+// Windows, flock elsewhere). Released on destruction.
 class EnglishDictionaryFileLock {
  public:
-  static std::optional<EnglishDictionaryFileLock> Acquire(const std::filesystem::path& path,
-                                                          const EnglishLockClock& clock = {});
+  // Polls every kEnglishLockPoll until budget runs out; a zero budget tries
+  // once and never sleeps.
+  static std::optional<EnglishDictionaryFileLock> Acquire(
+      const std::filesystem::path& path, const EnglishLockClock& clock = {},
+      std::chrono::milliseconds budget = kEnglishLockBudget);
   EnglishDictionaryFileLock(EnglishDictionaryFileLock&& other) noexcept;
   EnglishDictionaryFileLock& operator=(EnglishDictionaryFileLock&&) = delete;
   ~EnglishDictionaryFileLock();

@@ -22,10 +22,13 @@
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/NewWordsCli.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/AutoWordStore.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/PersistenceRetry.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace {
@@ -224,7 +227,8 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   run.pipe_name = pipe_name;
   run.handshake_token = "test-token";
   run.connect_timeout_ms = 2000;
-  run.response_timeout_ms = 2000;
+  run.handshake_timeout_ms = 2000;
+  run.command_timeout_ms = 2000;
 
   auto result = azookey::host::RunNewWordsCli(
       *Parse({"confirm", "--reading", "あずき", "--surface", "阿頭季"}), run);
@@ -265,6 +269,20 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   server.Stop();
   engine.SetAutoWordStore(nullptr);
   std::filesystem::remove_all(dir);
+}
+
+// DEV-1568: the Host may hold a userdict or newwords edit for the file lock
+// wait and the flush and replace retries before it replies. A CLI that stops
+// waiting earlier reports a failure for an edit the Host still commits.
+TEST(CliHostConnectTest, PersistentCommandWaitCoversTheHostSaveBound) {
+  const auto host_bound =
+      azookey::learning::kDefaultFileLockTimeout + 2 * azookey::learning::kTransientFileRetryBudget;
+  EXPECT_GT(std::chrono::milliseconds(azookey::host::kPersistentCommandResponseTimeoutMs),
+            host_bound);
+  EXPECT_EQ(azookey::host::UserDictCliRunOptions{}.command_timeout_ms,
+            azookey::host::kPersistentCommandResponseTimeoutMs);
+  EXPECT_EQ(azookey::host::NewWordsCliRunOptions{}.command_timeout_ms,
+            azookey::host::kPersistentCommandResponseTimeoutMs);
 }
 
 #ifdef _WIN32

@@ -17,4 +17,13 @@ namespace azookey::host {
 bool ConnectToRunningHost(ipc::NamedPipeClient& client, const std::string& pipe_name,
                           uint32_t connect_timeout_ms, uint32_t busy_timeout_ms);
 
+// Wait for the Host's reply to a command that saves a protected file
+// (userdict add/remove, newwords confirm/reject). The Host may wait
+// learning::kDefaultFileLockTimeout for the cross-process file lock and then
+// spend a transient retry budget on each of the flush and the replace; one
+// more second covers the DPAPI and file I/O themselves. A CLI that stops
+// waiting earlier reports a failure for an edit the Host may still commit
+// (DEV-1568).
+extern const uint32_t kPersistentCommandResponseTimeoutMs;
+
 }  // namespace azookey::host

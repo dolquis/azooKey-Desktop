@@ -190,7 +190,8 @@ TEST(UserDictCliTest, RequiresOfflineForDirectEditWhenPipeUnavailable) {
   run_options.pipe_name = UniquePipeName("azookey-userdict-cli-missing-pipe");
   run_options.prefer_pipe = true;
   run_options.connect_timeout_ms = 1;
-  run_options.response_timeout_ms = 100;
+  run_options.handshake_timeout_ms = 100;
+  run_options.command_timeout_ms = 100;
 
   auto add = Parse({"add", "--reading", "offline", "--surface", "Offline"});
   ASSERT_TRUE(add.has_value());
@@ -298,7 +299,8 @@ TEST(UserDictCliTest, PrefersRunningHostOverDirectEdit) {
   run_options.handshake_token = "test-token";
   run_options.prefer_pipe = true;
   run_options.connect_timeout_ms = 2000;
-  run_options.response_timeout_ms = 2000;
+  run_options.handshake_timeout_ms = 2000;
+  run_options.command_timeout_ms = 2000;
 
   auto add = Parse({"add", "--reading", "pipe", "--surface", "Pipe", "--cid", "100", "--mid", "200",
                     "--weight", "-1.25"});
@@ -401,7 +403,8 @@ TEST(UserDictCliTest, RunningHostRejectionSurfacesFailure) {
   run_options.pipe_name = pipe_name;
   run_options.prefer_pipe = true;
   run_options.connect_timeout_ms = 2000;
-  run_options.response_timeout_ms = 2000;
+  run_options.handshake_timeout_ms = 2000;
+  run_options.command_timeout_ms = 2000;
 
   auto add = Parse({"add", "--reading", "reject", "--surface", "Reject"});
   ASSERT_TRUE(add.has_value());

@@ -45,7 +45,7 @@ void ExpectUnchanged(const std::vector<Candidate>& actual, const std::vector<Can
 }
 
 struct Decoder : NllDecoder {
-  int prefix_calls{}, rollbacks{};
+  int prefix_calls{}, suffix_calls{};
   std::vector<std::vector<int32_t>> decoded;
   std::vector<float> current{0.0f, 2.0f, -2.0f};
   std::vector<int32_t> TokenizeSurface(std::string_view surface) override {
@@ -55,14 +55,41 @@ struct Decoder : NllDecoder {
     ++prefix_calls;
     return current;
   }
-  std::vector<std::vector<float>> DecodeSuffix(std::span<const int32_t> tokens) override {
-    decoded.emplace_back(tokens.begin(), tokens.end());
-    if (tokens.empty()) return {};
-    current = {5.0f, -3.0f, 0.0f};
-    return {{-1.0f, 0.0f, 3.0f}, current};
+  void DecodeSuffixes(std::span<const std::vector<int32_t>> tokens,
+                      const SuffixRow& consume) override {
+    ++suffix_calls;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+      decoded.emplace_back(tokens[i].begin(), tokens[i].end() - 1);
+      if (tokens[i].size() == 1) continue;
+      current = {-1.0f, 0.0f, 3.0f};
+      consume(i, 0, current);
+      // Reuse the same borrowed buffer, like the runtime's next decode does.
+      current = {5.0f, -3.0f, 0.0f};
+      consume(i, 1, current);
+    }
   }
-  void Rollback() override { ++rollbacks; }  // KV rollback intentionally does not restore logits.
 };
+
+TEST(NllScorerTest, SuffixGroupsFitSharedKvAndSequenceLimits) {
+  const std::vector<std::vector<int32_t>> tokens{{1, 2, 3}, {1}, {2, 3, 4}, {1, 2}};
+  const auto first = PlanNllSuffixBatch(tokens, 4, 16);
+  EXPECT_EQ(first.candidates, 3u);
+  EXPECT_EQ(first.tokens, 4u);  // Final tokens and the shared prefix consume no suffix cells.
+  const auto second = PlanNllSuffixBatch(std::span(tokens).subspan(first.candidates), 4, 16);
+  EXPECT_EQ(second.candidates, 1u);
+  EXPECT_EQ(second.tokens, 1u);
+  const auto limited = PlanNllSuffixBatch(tokens, 100, 2);
+  EXPECT_EQ(limited.candidates, 2u);
+  EXPECT_EQ(limited.tokens, 2u);
+  const std::vector<std::vector<int32_t>> singletons(17, std::vector<int32_t>{1});
+  const auto no_decode = PlanNllSuffixBatch(singletons, 0, 16);
+  EXPECT_EQ(no_decode.candidates, 16u);
+  EXPECT_EQ(no_decode.tokens, 0u);
+  EXPECT_THROW(PlanNllSuffixBatch(tokens, 1, 16), std::runtime_error);
+  EXPECT_THROW(PlanNllSuffixBatch(tokens, 4, 0), std::runtime_error);
+  EXPECT_THROW(PlanNllSuffixBatch(std::vector<std::vector<int32_t>>{{}}, 4, 16),
+               std::runtime_error);
+}
 
 TEST(NllScorerTest, PrefixSnapshotAndNextTokenPositionsExcludeFinalDecode) {
   Decoder decoder;
@@ -75,10 +102,76 @@ TEST(NllScorerTest, PrefixSnapshotAndNextTokenPositionsExcludeFinalDecode) {
   EXPECT_NEAR(result.scores[0], (prefix_z - 2 + row1_z - 3 + row2_z - 5) / 2, 1e-12);
   EXPECT_NEAR(result.scores[1], prefix_z + 2, 1e-12);
   EXPECT_EQ(decoder.prefix_calls, 1);
-  EXPECT_EQ(decoder.rollbacks, 2);
+  EXPECT_EQ(decoder.suffix_calls, 1);
   ASSERT_EQ(decoder.decoded.size(), 2u);
   EXPECT_EQ(decoder.decoded[0], (std::vector<int32_t>{1, 2}));
   EXPECT_TRUE(decoder.decoded[1].empty());
+}
+
+struct ScriptedDecoder : Decoder {
+  std::function<void(std::span<const std::vector<int32_t>>, const SuffixRow&)> emit;
+  void DecodeSuffixes(std::span<const std::vector<int32_t>> tokens,
+                      const SuffixRow& consume) override {
+    emit(tokens, consume);
+  }
+};
+
+TEST(NllScorerTest, BatchedRowsMayInterleaveCandidatesWithoutChangingScores) {
+  const std::array<std::string, 3> surfaces{"AA", "B", "AA"};
+  Decoder serial;
+  const auto expected = EvaluateNll(serial, surfaces, {}).scores;
+  ScriptedDecoder batched;
+  batched.emit = [](auto tokens, const auto& consume) {
+    ASSERT_EQ(tokens.size(), 3u);
+    EXPECT_EQ(tokens[0], (std::vector<int32_t>{1, 2, 0}));
+    EXPECT_EQ(tokens[1], (std::vector<int32_t>{2}));
+    const std::array<float, 3> first{-1.0f, 0.0f, 3.0f}, second{5.0f, -3.0f, 0.0f};
+    consume(2, 0, first);
+    consume(0, 0, first);
+    consume(0, 1, second);
+    consume(2, 1, second);
+  };
+  EXPECT_EQ(EvaluateNll(batched, surfaces, {}).scores, expected);
+}
+
+TEST(NllScorerTest, BatchedEvaluationRejectsMissingDuplicateAndMisroutedRows) {
+  const std::array<std::string, 2> surfaces{"AA", "B"};
+  for (int mode = 0; mode < 5; ++mode) {
+    ScriptedDecoder decoder;
+    decoder.emit = [mode](auto, const auto& consume) {
+      const std::array<float, 3> row{0.0f, 1.0f, 2.0f};
+      if (mode == 0) return;  // Missing both suffix rows.
+      if (mode == 1) {
+        consume(0, 0, row);
+        consume(0, 0, row);  // Duplicate.
+      } else if (mode == 2) {
+        consume(0, 1, row);  // Out of order.
+      } else if (mode == 3) {
+        consume(2, 0, row);  // Unknown candidate.
+      } else {
+        consume(1, 0, row);  // One-token candidate has no suffix rows.
+      }
+    };
+    EXPECT_THROW(EvaluateNll(decoder, surfaces, {}), std::runtime_error);
+  }
+}
+
+TEST(NllScorerTest, AbortDuringOrAfterBatchDiscardsEvaluation) {
+  for (const bool during : {false, true}) {
+    std::atomic_bool cancel{false};
+    ConversionContext context;
+    context.cancel = &cancel;
+    ScriptedDecoder decoder;
+    decoder.emit = [&cancel, during](auto, const auto& consume) {
+      const std::array<float, 3> row{0.0f, 1.0f, 2.0f};
+      consume(0, 0, row);
+      if (during) cancel.store(true);
+      consume(0, 1, row);
+      cancel.store(true);
+    };
+    EXPECT_THROW(EvaluateNll(decoder, std::array<std::string, 1>{"AA"}, context),
+                 std::runtime_error);
+  }
 }
 
 TEST(NllScorerTest, LogSoftmaxRemainsStableForLargeCommonLogitOffsets) {

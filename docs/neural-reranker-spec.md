@@ -620,17 +620,27 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 
 1 リクエスト内で `P` は全候補に共通である。これを候補ごとに decode し直すと
 コストが候補数に比例して跳ね上がるため、**prefix の KV を 1 回だけ作って
-候補ごとにロールバックする**。
+候補の作業 sequence へ共有する**。CPU・Vulkan とも、候補全体が高々 2 token
+（suffix が高々 1 token）の連続候補を最大 16 sequence にまとめる。長い候補は
+候補単位で decode し、従来の chunk 形状を維持する。batch の演算形状による数値差の
+検査は §B11 に従い、prefix 共有・生成の同等性検査とは分ける。
 
 ```
 1. 再利用できない範囲の KV を落とし、P の残りを decode する（prefix KV 確立、prefix_len トークン。§B3.4）
 1'. prefix 最終位置の logits を**スナップショットへ複製**する（§B3.1）
 2. 各候補 s について:
    a. t_1 の logprob は 1'. のスナップショットから読む
-   b. t_1 … t_{m-1} を decode し、t_2 … t_m の logprob を読む
-   c. KV を prefix_len へロールバックする
-3. 予算 / cancel は 1.・2.a の前と 2.c の後で確認する（§B7）
+   b. sequence 0 の prefix を候補専用 sequence へ複製する
+3. 上記の単位で t_1 … t_{m-1} を decode し、t_2 … t_m の logprob を読む
+4. 候補の作業 sequence を解放し、sequence 0 の prefix と logits を保持する
+5. 予算 / cancel は prefix decode、候補準備、suffix decode の前後と logits 集計中に確認する（§B7）
 ```
+
+候補群の suffix 合計が共有 KV の空き容量を超える場合は、収まる候補群に分けて
+3.・4. を繰り返す。単独候補の context 上限は変えず、batch の token 数は
+`min(32, llama_n_batch)` 以下に分割する。長い候補は従来の 32 token 区切りを維持する。
+各 chunk の decode 前後で `ShouldAbort` を確認し、次の chunk へ進む前に中断する。
+1 token の候補には suffix decode が不要である。
 
 ### B3.1 prefix logits のスナップショット契約
 
@@ -677,8 +687,10 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 
 `llama_batch_init` で batch を確保し、`pos` と `seq_id` を明示する。
 候補の位置ごとに `logits[]` を立て、`llama_get_logits_ith` で対応する行を読む。
-候補間では `llama_memory_seq_rm(llama_get_memory(context), 0, prefix_len, -1)` で
-prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
+`llama_memory_seq_cp` で sequence 0 の prefix を作業 sequence へ共有する。
+suffix の行は次の decode より前に logprob へ集計し、候補ごとの全 vocab 行の
+コピーは保持しない。集計後に `llama_memory_seq_rm` で作業 sequence を全て解放する。
+pin の正典は `CMakeLists.txt` の
 `AZOOKEY_LLAMA_CPP_GIT_TAG` とする。
 
 ### B3.4 `llama_context` の共有とスレッド
@@ -690,10 +702,16 @@ prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
   評価は beam の作業シーケンスを解放し、sequence 0 を再利用できる prefix 長へ
   切り詰めてから、残りのトークンだけを decode する。prompt が生成時のものと一致し、
   その最終トークンの logits を保持していれば decode するトークンは 0 になる。
-- 生成は prompt の最終トークンを必ず decode し直す。beam の初手はその decode の
-  logits を読むためである。
-- 候補ごとの rollback は prefix 長で止まるので、評価を終えた時点で sequence 0 は
-  prompt だけを保持する。キャッシュはその prompt を指したまま次の生成へ引き継ぐ。
+- 生成も prompt token 列がキャッシュと完全一致し、その末尾の logits を保持していれば、
+  prompt 全体を再利用する。beam の初手はそのスナップショットを読む。部分一致時は
+  必要な suffix を decode してスナップショットを更新する。suffix が空でも cancel と
+  deadline を確認する。
+- sequence 0 は prompt 専用とし、生成の beam は 1〜4、NLL は最大 1〜16 を
+  作業用に使う。長い候補は候補ごとに sequence 1 を再利用する。
+  `n_seq_max` は 17、`kv_unified` は true とし、KV 容量は共有 prefix と同時に保持する
+  suffix の合計で管理する。両経路は排他実行で、開始時に作業 sequence を解放する。
+- NLL は sequence 0 に suffix を追加しない。評価後は作業 sequence を解放し、
+  キャッシュが指す prompt と logits を次の生成へ引き継ぐ。
 - 途中の失敗や cancel では prefix キャッシュを無効化して KV を消去し、次の生成が
   古いキャッシュを参照しないようにする。
 - NllScorer を別スレッドへ出さない（`llama_context` は共有できない）。
@@ -771,8 +789,8 @@ NLL の数値計算・候補選別・予算制御は `NllScorer.h` / `NllScorer.
 | `Llm` | 対象外 | M16 クラウド整文用の予約。性質が異なる |
 
 - 上限 `nllTopK`（既定 **8**、範囲 1〜16）。適用直前の score 降順で上位から採る。
-  候補あたり 1 回の decode が要るためコストは `K` に線形で、予算（§B7）は `K` で
-  決まる。
+  suffix をまとめる単位は §B3 に従う。コストは候補数に加え、suffix token の合計、
+  KV と batch の容量による分割数に依存する。予算（§B7）はリクエスト全体へ適用する。
 - 対象が 0 件のときは何もしない（§B8 の `no_target`。失敗ではない）。
 
 ### B5.1 選択集合の外に対する保証
@@ -862,7 +880,8 @@ Track B が単独で成立するための形式である。
     timeout に対して whole-request skip を選ぶのと同じ方針）。
   - 実装上は `Candidate::score` を直接書き換えず、bonus を別配列に貯め、
     **完走したときだけ**適用する。
-- cancel は prefix decode の前、各候補の decode の前後で確認する。
+- cancel は prefix decode と suffix batch decode の前後、候補準備時、候補群の境界、
+  logits 集計中に確認する。
 - **cancel は失敗ではなく中断**（決定）: 現行 `QueryCandidates` は cancel 観測時に
   候補列そのものを返さない（空を返す）。したがって cancel 時の NllScorer は
   「fallback で順序を保つ」対象ですらなく、単に処理を放棄して cancel 経路へ抜ける。
@@ -988,11 +1007,27 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   prefix 平均と p95、prefix 再利用トークン数の最小値、全評価 p95、20ms 超過件数と
   割合、各反復の内訳を出す。
   生成前（prefix を全 decode）と生成後（prefix を共有）で NLL スコアが一致すること、
-  評価順序を逆転させた NLL の一致、NLL 評価の前後での候補順序と件数の一致も検証し、
-  生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  NLL 評価の前後での生成候補順序と件数の一致も検証する。独立にロードしたモデルの
+  cold 生成を基準に、warm 生成と cold NLL 評価後の生成が同じ候補順序・件数・スコアを
+  返すことを必須とする。生成スコアの最大絶対差は 0 とし、NLL 評価後や再利用後の
+  反復でも検証して `generation_max_score_delta` に記録する。
+  `--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  batch 評価は、計測区間外で各候補の単独評価と、評価順序を逆転して元の候補位置へ
+  戻した評価と比較する。全経路で件数とスコアの有限性を検査し、CPU は絶対誤差
+  `1e-5` 以下、Vulkan は最上位を含む全候補順位の一致を `batch_invariant` として検証する。
+  Vulkan の異なる表層の同点は元の候補位置順で扱い、同じ表層同士の入れ替えは許容する。
+  16 候補、80 token の長い候補、短長混在候補にも同じ検査を適用し、
+  `extended_batch_invariant` と比較方式 `batch_comparison`、最大絶対差
+  `batch_max_score_delta` を出力する。この比較方式は prefix 共有の絶対誤差 `1e-5`
+  以下の検査や、生成候補の同等性契約を変更しない。
+  cancel、期限切れ、空の候補による失敗後は、次の評価で prefix を再利用せず、cold 評価と
+  同じスコアへ絶対誤差 `1e-5` 以下で復帰することを計測区間外で確認し、
+  `cache_invalidation` として出力する。
   計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
 - `--backend cpu|vulkan` で実行経路を指定する。Vulkan は対応ビルドとデバイスを必要とし、
   CPU への暗黙の代替を測定成功としない。
+- `azookey_nll_bench --self-test` はモデルを使わず、比較器が最上位・下位の行入れ替え、
+  非有限値、件数不一致を拒否し、CPU の絶対誤差、同点、重複表層を扱うことを検査する。
 - `--query-dictionary <azdic>` は合成の TechnicalTerms 辞書を読み込み、NLL OFF と ON の
   `QueryCandidates` をそれぞれ 2 回の OFF warm-up 後に連続計測する。
   `bench/data/nll_fixture.lex.tsv` と同名の metadata JSON が固定入力である。

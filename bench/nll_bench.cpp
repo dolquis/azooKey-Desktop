@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -29,6 +31,57 @@ double Mean(const std::vector<double>& samples) {
   return std::accumulate(samples.begin(), samples.end(), 0.0) / static_cast<double>(samples.size());
 }
 
+// Scores are aligned to the original candidate indices before comparison. Lower NLL wins.
+// Identical surfaces have the same rank; distinct surfaces use index order for exact ties.
+double RequireSameNllRanking(const std::vector<std::string>& surfaces,
+                             const std::vector<double>& before, const std::vector<double>& after,
+                             bool exact_scores) {
+  if (surfaces.empty() || before.size() != surfaces.size() || after.size() != surfaces.size())
+    throw std::runtime_error("NLL comparison count mismatch");
+  double max_delta = 0.0;
+  for (size_t i = 0; i < surfaces.size(); ++i) {
+    if (!std::isfinite(before[i]) || !std::isfinite(after[i]))
+      throw std::runtime_error("nonfinite NLL comparison score");
+    max_delta = std::max(max_delta, std::abs(before[i] - after[i]));
+  }
+  if (exact_scores && max_delta > 1e-5)
+    throw std::runtime_error("NLL comparison score delta=" + std::to_string(max_delta));
+  if (exact_scores) return max_delta;
+  for (size_t i = 0; i < surfaces.size(); ++i) {
+    for (size_t j = i + 1; j < surfaces.size(); ++j) {
+      if (surfaces[i] == surfaces[j]) continue;
+      if ((before[i] <= before[j]) != (after[i] <= after[j]))
+        throw std::runtime_error("NLL candidate rank changed: first=" + std::to_string(i) +
+                                 " second=" + std::to_string(j));
+    }
+  }
+  return max_delta;
+}
+
+void TestNllComparison() {
+  const std::vector<std::string> surfaces{"A", "B", "C"};
+  const std::vector<double> reference{1.0, 2.0, 3.0};
+  const auto reject = [&](const std::vector<double>& scores, bool exact_scores) {
+    bool rejected = false;
+    try {
+      (void)RequireSameNllRanking(surfaces, reference, scores, exact_scores);
+    } catch (const std::runtime_error&) {
+      rejected = true;
+    }
+    if (!rejected) throw std::runtime_error("NLL comparison negative test accepted");
+  };
+  reject({2.0, 1.0, 3.0}, false);  // Top candidate swapped.
+  reject({1.0, 3.0, 2.0}, false);  // Same top, lower ranks swapped.
+  reject({1.0, std::numeric_limits<double>::quiet_NaN(), 3.0}, false);
+  reject({1.0, std::numeric_limits<double>::infinity(), 3.0}, false);
+  reject({1.0, 2.0}, false);
+  reject({1.01, 2.01, 3.01}, true);  // CPU still enforces absolute tolerance.
+  (void)RequireSameNllRanking(surfaces, reference, {1.01, 2.01, 3.01}, false);
+  (void)RequireSameNllRanking(surfaces, reference, {1.000001, 2.000001, 3.000001}, true);
+  (void)RequireSameNllRanking(surfaces, {1.0, 1.0, 3.0}, {1.0, 1.0, 3.0}, false);
+  (void)RequireSameNllRanking({"A", "A", "B"}, {1.0, 1.01, 2.0}, {1.01, 1.0, 2.0}, false);
+}
+
 double RequireSameCandidates(const std::vector<azookey::core::Candidate>& before,
                              const std::vector<azookey::core::Candidate>& after,
                              bool exact_scores = false) {
@@ -51,6 +104,11 @@ double RequireSameCandidates(const std::vector<azookey::core::Candidate>& before
 int main(int argc, char** argv) {
   try {
     const auto args = azookey::bench::Utf8CommandLineArguments(argc, argv);
+    if (args.size() == 2 && args[1] == "--self-test") {
+      TestNllComparison();
+      std::cout << "status=ok comparison_self_test=1\n";
+      return 0;
+    }
     std::string model, left_context, expected_top, dictionary, backend = "cpu";
     int iterations = 10, top_k = 8, threads = 8;
     for (size_t i = 1; i < args.size(); ++i) {
@@ -95,6 +153,22 @@ int main(int argc, char** argv) {
       azookey::host::ZenzaiModelConverter converter(std::move(loaded), &fallback);
       azookey::core::ConversionContext context;
       context.preceding_text = left_context;
+      // Capture a generation-produced prefix independently, without warming the NLL converter.
+      std::vector<azookey::core::Candidate> cold_generation;
+      {
+        auto fresh_loaded = azookey::host::LoadZenzaiGgufModel(model, options);
+        if (!fresh_loaded.ok) throw std::runtime_error("fresh generation model load failed");
+        azookey::host::ZenzaiModelConverter fresh_converter(std::move(fresh_loaded), &fallback);
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        cold_generation = fresh_converter.Convert("こうせい", context);
+        if (cold_generation.empty() ||
+            cold_generation.front().source != azookey::core::CandidateSource::Model)
+          throw std::runtime_error("fresh cold generation unavailable");
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto warm_generation = fresh_converter.Convert("こうせい", context);
+        if (RequireSameCandidates(cold_generation, warm_generation) != 0.0)
+          throw std::runtime_error("fresh cold and warm generation scores differ");
+      }
       std::vector<std::string> surfaces{"構成", "公正", "校正", "更生",
                                         "厚生", "後世", "恒星", "攻勢"};
       surfaces.resize(static_cast<size_t>(top_k));
@@ -109,12 +183,88 @@ int main(int argc, char** argv) {
       const auto cold = converter.EvaluateNllForValidation("こうせい", surfaces, context);
       if (cold.scores.size() != surfaces.size()) throw std::runtime_error("incomplete cold scores");
       if (cold.prefix_reused_tokens != 0) throw std::runtime_error("cold evaluation reused a KV");
+      // Compare decode shapes before timing. CPU retains its absolute tolerance;
+      // Vulkan shape-dependent rounding may change scores but not candidate ranking.
+      double batch_max_score_delta = 0.0;
+      const auto check_batch = [&](const std::vector<std::string>& fixture,
+                                   const std::vector<double>& batch_scores) {
+        std::vector<double> singles;
+        for (const auto& surface : fixture) {
+          context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+          const auto single = converter.EvaluateNllForValidation(
+              "こうせい", std::array<std::string, 1>{surface}, context);
+          if (single.scores.size() != 1) throw std::runtime_error("incomplete single NLL score");
+          singles.push_back(single.scores[0]);
+        }
+        batch_max_score_delta =
+            std::max(batch_max_score_delta,
+                     RequireSameNllRanking(fixture, singles, batch_scores, !options.use_vulkan));
+        auto reversed = fixture;
+        std::reverse(reversed.begin(), reversed.end());
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        auto reverse_scores = converter.EvaluateNllForValidation("こうせい", reversed, context);
+        std::reverse(reverse_scores.scores.begin(), reverse_scores.scores.end());
+        batch_max_score_delta =
+            std::max(batch_max_score_delta,
+                     RequireSameNllRanking(fixture, batch_scores, reverse_scores.scores,
+                                           !options.use_vulkan));
+      };
+      check_batch(surfaces, cold.scores);
+      std::string long_first, long_second;
+      for (int i = 0; i < 40; ++i) {
+        long_first += "構成";
+        long_second += "後世";
+      }
+      const std::vector<std::string> short_fixture{"構成", "公正", "校正", "更生",
+                                                   "厚生", "後世", "恒星", "攻勢"};
+      auto sixteen = short_fixture;
+      sixteen.insert(sixteen.end(), short_fixture.begin(), short_fixture.end());
+      const std::vector<std::vector<std::string>> extended_fixtures{
+          {long_first, long_second}, sixteen, {"の", "構成", long_first, "日本語", "校正"}};
+      for (const auto& fixture : extended_fixtures) {
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto batch = converter.EvaluateNllForValidation("こうせい", fixture, context);
+        check_batch(fixture, batch.scores);
+      }
+      std::cout << "batch_comparison=" << (options.use_vulkan ? "ranking" : "absolute_1e-5")
+                << " batch_max_score_delta=" << batch_max_score_delta
+                << " extended_batch_invariant=1\n";
+      // A failed request must discard both KV and its cached logits before recovery.
+      for (int failure = 0; failure < 3; ++failure) {
+        std::atomic<bool> cancelled{true};
+        auto failed_context = context;
+        failed_context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        if (failure == 0) failed_context.cancel = &cancelled;
+        if (failure == 1) failed_context.deadline = std::chrono::steady_clock::now();
+        auto failed_surfaces = surfaces;
+        if (failure == 2) failed_surfaces.front().clear();
+        bool rejected = false;
+        try {
+          (void)converter.EvaluateNllForValidation("こうせい", failed_surfaces, failed_context);
+        } catch (const std::runtime_error&) {
+          rejected = true;
+        }
+        if (!rejected) throw std::runtime_error("invalid NLL request was accepted");
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto recovered = converter.EvaluateNllForValidation("こうせい", surfaces, context);
+        if (recovered.prefix_reused_tokens != 0 || recovered.scores.size() != cold.scores.size())
+          throw std::runtime_error("failed NLL request preserved its cache");
+        for (size_t i = 0; i < cold.scores.size(); ++i) {
+          if (!std::isfinite(recovered.scores[i]) ||
+              std::abs(recovered.scores[i] - cold.scores[i]) > 1e-5)
+            throw std::runtime_error("NLL recovery changed scores");
+        }
+      }
       // Two warm-ups, then measure the scoring layer after generation has used the same KV.
       for (int i = -2; i < iterations; ++i) {
         context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         const auto generated = converter.Convert("こうせい", context);
         if (generated.empty() || generated.front().source != azookey::core::CandidateSource::Model)
           throw std::runtime_error("real generation unavailable");
+        generation_score_delta =
+            std::max(generation_score_delta, RequireSameCandidates(cold_generation, generated));
+        if (generation_score_delta != 0.0)
+          throw std::runtime_error("NLL prefix changed fresh cold generation score");
         const auto measure_convert = [&](std::vector<double>& durations,
                                          std::vector<double>& prompts) {
           context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -125,6 +275,8 @@ int main(int argc, char** argv) {
                   .count();
           generation_score_delta =
               std::max(generation_score_delta, RequireSameCandidates(generated, result));
+          if (generation_score_delta != 0.0)
+            throw std::runtime_error("generation score changed after NLL or warm reuse");
           const auto stats = converter.last_decode_stats();
           if (!stats || stats->deadline_exceeded)
             throw std::runtime_error("decode stats unavailable");
@@ -159,15 +311,10 @@ int main(int argc, char** argv) {
       auto reversed = surfaces;
       std::reverse(reversed.begin(), reversed.end());
       context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      const auto reverse_scores = converter.EvaluateNllForValidation("こうせい", reversed, context);
-      if (reverse_scores.scores.size() != last.scores.size())
-        throw std::runtime_error("incomplete reverse NLL scores");
-      for (size_t i = 0; i < last.scores.size(); ++i) {
-        if (!std::isfinite(last.scores[i]) ||
-            !std::isfinite(reverse_scores.scores[last.scores.size() - 1 - i]) ||
-            std::abs(last.scores[i] - reverse_scores.scores[last.scores.size() - 1 - i]) > 1e-5)
-          throw std::runtime_error("candidate order changed NLL");
-      }
+      auto reverse_scores = converter.EvaluateNllForValidation("こうせい", reversed, context);
+      std::reverse(reverse_scores.scores.begin(), reverse_scores.scores.end());
+      const auto order_max_score_delta =
+          RequireSameNllRanking(surfaces, last.scores, reverse_scores.scores, !options.use_vulkan);
       const auto winner = static_cast<size_t>(
           std::min_element(last.scores.begin(), last.scores.end()) - last.scores.begin());
       if (!expected_top.empty() && surfaces[winner] != expected_top)
@@ -217,6 +364,9 @@ int main(int argc, char** argv) {
                 << " after_nll_prompt_mean_ms=" << Mean(after_nll_prompt)
                 << " within_default_budget=" << (p95 <= default_budget_ms)
                 << " order_invariant=1 generation_order_invariant=1 shared_prefix_invariant=1"
+                << " batch_invariant=1 cache_invalidation=1"
+                << " extended_batch_invariant=1 batch_max_score_delta=" << batch_max_score_delta
+                << " order_max_score_delta=" << order_max_score_delta
                 << " generation_max_score_delta=" << generation_score_delta
                 << " top=" << surfaces[winner] << '\n';
       for (size_t i = 0; i < last.scores.size(); ++i)

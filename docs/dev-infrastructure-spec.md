@@ -2648,7 +2648,8 @@ unity ビルドの成果物で CTest は全件成功する。
 衝突を core target の `NOMINMAX` で防ぐ。無名 namespace の同名 helper を持つ
 学習ストア、Host CLI / モデル関連ソース、core / Host のテストソースは、該当 target の
 `CMakeLists.txt` で衝突する組から必要なソースだけを unity batch から除外する。
-helper をソース固有の名前に変えて衝突を解消できる場合は、unity batch からの除外を不要とする。
+同じ契約の helper は内部共通 helper へ集約し、意味が異なる helper はソース固有の名前にする。
+これで衝突を解消できる場合は、unity batch からの除外を不要とする。
 `CrashReporting.cpp` と `ThreadStackGuarantee.cpp` も別 object にして、TIP DLL が
 クラッシュフィルタ本体を取り込まないリンク境界を保つ。これらは unity build の既定採用を
 意味しない。

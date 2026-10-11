@@ -23,6 +23,14 @@ namespace azookey::host {
 // list, forget, export and import through the Host.
 enum class LearningDataStore : uint8_t { Learning, UserDictionary, Typo, AutoWord };
 
+namespace detail {
+// Shared by store management and engine operations; not an IPC API.
+bool LearningStoreSelected(const std::vector<LearningDataStore>& selected, LearningDataStore store);
+// Check ciphertext independently of the available crypto, then legacy plaintext.
+// Filesystem errors do not count as an existing file; Load handles its contents.
+bool UserDictionaryFileExists(const learning::UserDictionary& dict);
+}  // namespace detail
+
 // IPC names: "learning", "user_dict", "typo", "auto_word".
 std::string_view LearningDataStoreName(LearningDataStore store);
 std::optional<LearningDataStore> ParseLearningDataStore(std::string_view name);

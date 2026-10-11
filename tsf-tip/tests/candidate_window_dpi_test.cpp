@@ -496,5 +496,82 @@ TEST(CandidateWindowRenderTest, RenderFailureHidesTheWindowUntilAStateChangeDraw
   window.Destroy();
 }
 
+TEST(CandidateWindowRenderTest, FooterChangesRetryFailedFramesWithoutReshowingHiddenUi) {
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  for (int change = 0; change < 7; ++change) {
+    SCOPED_TRACE(change);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+    window.ShowSecureToast();
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+    CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+    window.MoveSelection(1);
+    ASSERT_FALSE(window.IsVisible());
+    if (change == 2) window.HideSecureToast();
+    if (change == 5) window.HideHealthBanner();
+    CandidateWindow::SetRenderFailureForTest(Failure::None);
+    const auto apply_change = [&] {
+      switch (change) {
+        case 0:
+          window.SetSecureIndicator(true);
+          break;
+        case 1:
+          window.ShowSecureToast();
+          break;
+        case 2:
+          window.ResumeSecureToast();
+          break;
+        case 3:
+          window.ShowHealthBanner(CandidateHealthState::SafeMode);
+          break;
+        case 4:
+          window.HideHealthBanner();
+          break;
+        case 5:
+          window.ResumeHealthBanner();
+          break;
+        case 6:
+          window.HideSecureToast();
+          break;
+      }
+    };
+    apply_change();
+    EXPECT_TRUE(window.IsVisible());
+    EXPECT_STREQ(window.failure_stage(), "");
+    window.Hide();
+    apply_change();
+    EXPECT_FALSE(window.IsVisible());
+  }
+}
+
+TEST(CandidateWindowRenderTest, DetailsFailureReturnsFalseAndClosesOnlyThePopup) {
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  ASSERT_TRUE(window.IsVisible());
+
+  CandidateWindow::SetRenderFailureForTest(Failure::Initialize);
+  EXPECT_FALSE(window.ShowDetailsForTest());
+  EXPECT_FALSE(window.details_visible_for_test());
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_STREQ(window.failure_stage(), "");
+  EXPECT_EQ(window.failure_hr(), S_OK);
+
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  ASSERT_TRUE(window.ShowDetailsForTest());
+  ASSERT_TRUE(window.details_visible_for_test());
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  EXPECT_FALSE(window.RenderDetailsForTest());
+  EXPECT_FALSE(window.details_visible_for_test());
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_STREQ(window.failure_stage(), "");
+  EXPECT_EQ(window.failure_hr(), S_OK);
+}
+
 }  // namespace
 }  // namespace azookey::tsf

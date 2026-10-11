@@ -468,6 +468,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
     ShowWindow(hwnd_, SW_HIDE);
   }
   showing_ = false;
+  if (on_render_result_) on_render_result_(!render_failed_, on_render_result_context_);
 }
 
 void CandidateWindow::Hide() {
@@ -481,14 +482,14 @@ void CandidateWindow::Hide() {
 void CandidateWindow::SetSecureIndicator(bool visible) {
   if (secure_indicator_visible_ == visible) return;
   secure_indicator_visible_ = visible;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
 }
 
 void CandidateWindow::ShowSecureToast() {
   if (!hwnd_) return;
   secure_toast_visible_ = true;
   secure_toast_until_ = GetTickCount64() + kSecureToastDurationMs;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
   SetTimer(hwnd_, kSecureToastTimer, kSecureToastDurationMs, nullptr);
 }
 
@@ -497,7 +498,7 @@ void CandidateWindow::ResumeSecureToast() {
   const ULONGLONG now = GetTickCount64();
   if (now >= secure_toast_until_) return;
   secure_toast_visible_ = true;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
   SetTimer(hwnd_, kSecureToastTimer, static_cast<UINT>(secure_toast_until_ - now), nullptr);
 }
 
@@ -505,15 +506,17 @@ void CandidateWindow::HideSecureToast() {
   if (hwnd_) KillTimer(hwnd_, kSecureToastTimer);
   if (!secure_toast_visible_) return;
   secure_toast_visible_ = false;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
 }
 
 void CandidateWindow::ShowHealthBanner(CandidateHealthState state) {
   if (state == CandidateHealthState::Healthy) {
     HideDetails();
-    HideHealthBanner();
+    // Hiding the banner redraws synchronously and may show a pending replacement.
+    // Settle the old state before that callback so it cannot overwrite the new one.
     health_state_ = state;
     health_banner_until_ = 0;
+    HideHealthBanner();
     return;
   }
   if (!hwnd_) return;
@@ -521,7 +524,7 @@ void CandidateWindow::ShowHealthBanner(CandidateHealthState state) {
   health_state_ = state;
   health_banner_visible_ = true;
   health_banner_until_ = GetTickCount64() + kHealthBannerDurationMs;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
   SetTimer(hwnd_, kHealthBannerTimer, kHealthBannerDurationMs, nullptr);
 }
 
@@ -530,7 +533,7 @@ void CandidateWindow::ResumeHealthBanner() {
   const ULONGLONG now = GetTickCount64();
   if (now >= health_banner_until_) return;
   health_banner_visible_ = true;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
   SetTimer(hwnd_, kHealthBannerTimer, static_cast<UINT>(health_banner_until_ - now), nullptr);
 }
 
@@ -538,7 +541,7 @@ void CandidateWindow::HideHealthBanner() {
   if (hwnd_) KillTimer(hwnd_, kHealthBannerTimer);
   if (!health_banner_visible_) return;
   health_banner_visible_ = false;
-  if (IsVisible()) ResizeAtLastAnchor();
+  if (IsVisible() || render_failed_) ResizeAtLastAnchor();
 }
 
 void CandidateWindow::SetRetryInFlight(bool in_flight) {
@@ -546,8 +549,8 @@ void CandidateWindow::SetRetryInFlight(bool in_flight) {
   Repaint();
 }
 
-void CandidateWindow::ShowDetails() {
-  if (!hwnd_ || health_state_ == CandidateHealthState::Healthy) return;
+bool CandidateWindow::ShowDetails() {
+  if (!IsVisible() || health_state_ == CandidateHealthState::Healthy) return false;
   HideDetails();
   static const ATOM details_class = []() -> ATOM {
     WNDCLASSEXW wc{};
@@ -561,14 +564,14 @@ void CandidateWindow::ShowDetails() {
     if (atom) return atom;
     return GetLastError() == ERROR_CLASS_ALREADY_EXISTS ? ATOM{1} : ATOM{0};
   }();
-  if (!details_class) return;
+  if (!details_class) return false;
 
   RECT candidate_rc{};
   GetWindowRect(hwnd_, &candidate_rc);
   const MonitorWorkArea monitor = ResolveMonitorWorkArea(
       DefaultMonitorWin32Api(), {candidate_rc.left + (candidate_rc.right - candidate_rc.left) / 2,
                                  candidate_rc.top + (candidate_rc.bottom - candidate_rc.top) / 2});
-  if (monitor.work_area.right <= monitor.work_area.left) return;
+  if (monitor.work_area.right <= monitor.work_area.left) return false;
   const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area,
                                                  ScaleForDpi(480, dpi_), ScaleForDpi(240, dpi_));
   details_hwnd_ = CreateWindowExW(
@@ -576,9 +579,9 @@ void CandidateWindow::ShowDetails() {
       kDetailsClassName, nullptr, WS_POPUP, placement.left, placement.top,
       placement.right - placement.left, placement.bottom - placement.top, hwnd_, nullptr,
       GetTipModuleHandle(), this);
-  if (!details_hwnd_) return;
-  RenderDetails();
-  if (details_hwnd_) ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
+  if (!details_hwnd_ || !RenderDetails()) return false;
+  ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
+  return true;
 }
 
 void CandidateWindow::HideDetails() {
@@ -586,9 +589,13 @@ void CandidateWindow::HideDetails() {
   details_render_.reset();
 }
 
-void CandidateWindow::RenderDetails() {
+bool CandidateWindow::RenderDetails() {
   RECT client_rc{};
-  if (!details_hwnd_ || !GetClientRect(details_hwnd_, &client_rc)) return;
+  if (!details_hwnd_) return false;
+  if (!GetClientRect(details_hwnd_, &client_rc)) {
+    HideDetails();
+    return false;
+  }
   // The failure record belongs to the candidate window; the popup does not overwrite it.
   const char* const stage = failure_stage_;
   const HRESULT hr = failure_hr_;
@@ -599,6 +606,7 @@ void CandidateWindow::RenderDetails() {
   failure_hr_ = hr;
   // An undrawn popup would be invisible yet close on a click; drop it instead.
   if (!drawn) HideDetails();
+  return drawn;
 }
 
 void CandidateWindow::DrawDetails(ID2D1DeviceContext* context, int width, int height) const {
@@ -733,12 +741,16 @@ void CandidateWindow::Repaint() {
   }
   RECT client_rc{};
   if (!IsVisible() || !GetClientRect(hwnd_, &client_rc)) return;
-  if (Render(client_rc.right, client_rc.bottom)) return;
+  if (Render(client_rc.right, client_rc.bottom)) {
+    if (on_render_result_) on_render_result_(true, on_render_result_context_);
+    return;
+  }
   // The surface keeps the previous frame, which no longer matches the click
   // regions; hide the window instead of taking clicks against it.
   render_failed_ = true;
   HideDetails();
   ShowWindow(hwnd_, SW_HIDE);
+  if (on_render_result_) on_render_result_(false, on_render_result_context_);
 }
 
 bool CandidateWindow::Fail(const char* stage, HRESULT hr) {

@@ -289,7 +289,9 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
   bool auto_promote;
   {
     std::lock_guard lock(settings_mutex_);
-    if (cancelled()) return TrendingFetchStatus::Cancelled;
+    // The 15-second deadline bounds the network stages only; the cache write above
+    // must not turn a finished download into a cancellation.
+    if (stopped_ || generation_ != generation) return TrendingFetchStatus::Cancelled;
     // Every change of auto_promote_ starts a new generation, so this copy stays valid
     // for as long as still_current below holds.
     auto_promote = auto_promote_;

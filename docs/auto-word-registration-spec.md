@@ -1793,8 +1793,13 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
   取得やロードはしない。
 - **offline**: `privacy.mode=offline` の間は通信しない。宛先に SHA256 の一致するファイルが
   あればそれを検証してロードし、無ければ取得せずに終える。設定の再読込で offline へ
-  切り替えると、取得中の通信を協調キャンセルする。通常モードへ戻しても再取得はせず、
+  切り替えると、取得中の通信を協調キャンセルする。協調キャンセルは操作の間で確認するので、
+  実行中の WinHTTP 操作はその timeout（接続・送信 15 秒、受信 30 秒）まで待つ。
+  `Dispatcher::HandleUpdateConfig` は有効な再読込のたびに、Fetcher の設定 callback の直後に
+  通信の可否を通知する（`DispatcherConfig::on_network_policy_applied`）。不正な再読込では
+  通知せず、直前の可否を保つ。通常モードへ戻しても再取得はせず、
   次の起動で `neologdEnabled` に従う。保存された `neologdEnabled` は変更しない。
+  設定アプリの「再起動後に取得します」の表示は、offline の間は取得しないことを併記する。
 - **pin の読み方**: pin したマニフェストは、ビルド時に `azookey_host` へバイト列として
   埋め込む。配布物に `neologd_lexicon.*` のファイルは置かないので、§14.10 の配布ガードは
   そのまま成り立つ。

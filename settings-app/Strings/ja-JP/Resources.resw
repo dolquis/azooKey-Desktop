@@ -456,8 +456,8 @@
   <data name="PersonaNavigationItem.Content" xml:space="preserve"><value>Persona</value></data>
   <data name="NeologdStatus_Unknown" xml:space="preserve"><value>Host の状態: この Host は NEologd 層の状態を返しません。</value></data>
   <data name="NeologdStatus_NotEnabled" xml:space="preserve"><value>Host の状態: 使っていません。</value></data>
-  <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>Host の状態: Host の再起動後に取得します（サインアウトして再度サインインしてください）。</value></data>
-  <data name="NeologdStatus_FetchAfterSaveAndRestart" xml:space="preserve"><value>Host の状態: 保存すると、Host の再起動後に取得します。</value></data>
+  <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>Host の状態: Host の再起動後に取得します（サインアウトして再度サインインしてください）。オフラインモードの間は取得しません。</value></data>
+  <data name="NeologdStatus_FetchAfterSaveAndRestart" xml:space="preserve"><value>Host の状態: 保存すると、Host の再起動後に取得します。オフラインモードの間は取得しません。</value></data>
   <data name="NeologdStatus_Loading" xml:space="preserve"><value>Host の状態: 取得・読み込み中です。</value></data>
   <data name="NeologdStatus_Ready" xml:space="preserve"><value>Host の状態: 読み込み済みで、変換に使っています。</value></data>
   <data name="NeologdStatus_MissingPack" xml:space="preserve"><value>Host の状態: 公開された pack が無いため、取得していません。</value></data>

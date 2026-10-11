@@ -89,7 +89,9 @@ DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGU
 取得手順は次のとおり。
 
 1. 確定パスの既存ファイルが期待 SHA256 と一致する場合は、ネットワークへ接続せず
-   `AlreadyValid` を返す。
+   `AlreadyValid` を返す。一致しないときに要求の `network_allowed` が偽なら
+   （`privacy.mode=offline`）、接続せずに失敗する。取得中に偽へ変わった場合は
+   `cancelled` と同じく操作の間で打ち切る。
 2. `<file>.gguf.part` が存在する場合は、そのサイズを始点とする `Range: bytes=<size>-`
    を送る。
    `206 Partial Content` は `Content-Range` の始点が一致した場合だけ追記する。

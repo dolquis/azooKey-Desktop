@@ -1610,6 +1610,14 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 その処理の行は呼び出したプロセスの `component` で書く。どのコードが計測したかは
 `event` と `phase` で表し、`component` を増やして表さない。
 
+候補窓の描画失敗は `component=tip`、`level=warn`、
+`event=candidate_window_render_failed` として記録する。
+フィールドは `stage`（描画処理が定義する固定の失敗段階）と `hr`（符号付き HRESULT）に限定し、
+入力本文、候補本文、注釈、案内文は渡さない。記録は `AZOOKEY_LOG` の opt-in に従う。
+同じ stage は `CandidateUiCoordinator::Create` から次の `Create` まで一度だけ記録し、
+その最初の HRESULT を保持する。表示の終了や描画の成功では重複抑止を解除しない。
+候補窓の再試行と復旧通知は `docs/native-ui-spec.md` §4.1 に従う。
+
 `phase` の取り得る値は §7.7.2 の 11 値に固定し、`core/include/azookey/logging/Phase.h`
 の `azookey::logging::Phase` を全コンポーネント（tip / host）の正典とする。
 所要時間フィールドは `latency_ms` を正典名とし、`duration_ms` 等の別名は使わない。

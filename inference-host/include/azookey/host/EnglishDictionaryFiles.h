@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -131,11 +132,20 @@ enum class EnglishWriteStep {
 // crash at that point would.
 using EnglishWriteHook = std::function<bool(EnglishWriteStep)>;
 
+// Test seam for the writer lock wait: now and sleep stand in for steady_clock
+// and sleep_for. sleep is called only after an attempt found the lock held.
+struct EnglishLockClock {
+  std::function<std::chrono::steady_clock::time_point()> now;
+  std::function<void(std::chrono::steady_clock::duration)> sleep;
+};
+
 // Section 4.7 (B): the exclusive inter-process writer lock (LockFileEx on
-// Windows, flock elsewhere). Released on destruction.
+// Windows, flock elsewhere), polled every 10 ms for up to 500 ms. Released on
+// destruction.
 class EnglishDictionaryFileLock {
  public:
-  static std::optional<EnglishDictionaryFileLock> Acquire(const std::filesystem::path& path);
+  static std::optional<EnglishDictionaryFileLock> Acquire(const std::filesystem::path& path,
+                                                          const EnglishLockClock& clock = {});
   EnglishDictionaryFileLock(EnglishDictionaryFileLock&& other) noexcept;
   EnglishDictionaryFileLock& operator=(EnglishDictionaryFileLock&&) = delete;
   ~EnglishDictionaryFileLock();

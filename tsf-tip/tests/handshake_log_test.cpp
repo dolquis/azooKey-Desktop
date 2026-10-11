@@ -50,15 +50,19 @@ class ScopedTipLog {
  public:
   ScopedTipLog() {
     static std::atomic<unsigned> sequence{0};
+    const auto instance = sequence.fetch_add(1);
     root_ = std::filesystem::temp_directory_path() /
             (L"azookey-tip-handshake-log-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-             std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(sequence++));
+             std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(instance));
     std::filesystem::create_directories(root_);
     azookey::logging::RuntimeLoggerOptions options;
     options.enabled = true;
     // Even the body opt-in must not let the token through.
     options.body_opt_in = true;
-    options.component = "tip";
+    // RuntimeLogger's named mutex is keyed by component, not output_path.
+    // Isolate it too: unrelated TIP processes must not make this test drop a record.
+    options.component = "tip-handshake-log-" + std::to_string(GetCurrentProcessId()) + "-" +
+                        std::to_string(instance);
     options.logs_directory = root_;
     options.output_path = root_ / L"tip.jsonl";
     logger_ = std::make_unique<azookey::logging::RuntimeLogger>(options);
@@ -76,10 +80,13 @@ class ScopedTipLog {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
   }
 
-  // Waits for a record containing every fragment, returning the whole log.
-  std::string WaitFor(std::initializer_list<std::string> fragments) const {
+  // Waits for a record containing every fragment and, when requested, client
+  // readiness after the handshake options have been applied. Returns the whole log.
+  std::string WaitFor(std::initializer_list<std::string> fragments,
+                      const azookey::tsf::TextService* ready_service = nullptr) const {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     std::string log;
+    bool matching_record_found = false;
     while (std::chrono::steady_clock::now() < deadline) {
       log = Read();
       size_t start = 0;
@@ -90,12 +97,22 @@ class ScopedTipLog {
         bool all = true;
         for (const auto& fragment : fragments)
           all = all && line.find(fragment) != std::string::npos;
-        if (all) return log;
+        if (all) {
+          matching_record_found = true;
+          if (!ready_service || ready_service->ipc_connection_state_for_test() ==
+                                    azookey::tsf::IpcConnectionState::Ready)
+            return log;
+        }
         start = end + 1;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    ADD_FAILURE() << "log record not found; log:\n" << log;
+    ADD_FAILURE() << "matching_record_found=" << matching_record_found << ", client_state="
+                  << (ready_service ? azookey::tsf::IpcConnectionStateName(
+                                          ready_service->ipc_connection_state_for_test())
+                                    : "not observed")
+                  << "; log:\n"
+                  << log;
     return log;
   }
 
@@ -148,7 +165,7 @@ TEST(TsfTipHandshakeLogTest, AcceptedHandshakeLogsWithoutToken) {
     azookey::tsf::TextService service;
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
-    const auto text = log.WaitFor({"\"event\":\"ipc_connected\""});
+    const auto text = log.WaitFor({"\"event\":\"ipc_connected\""}, &service);
     service.stop_ipc_worker_for_test();
     ExpectNoToken(text);
   }
@@ -209,7 +226,7 @@ TEST(TsfTipHandshakeLogTest, RefreshLogsTheBatchModeItApplied) {
     azookey::tsf::TextService service;
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
-    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"});
+    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"}, &service);
     EXPECT_FALSE(service.batch_romaji_conversion_for_test());
     service.request_host_option_refresh_for_test();
     log.WaitFor({"\"event\":\"ipc_host_options_refreshed\"", "\"batch_romaji_conversion\":true"});

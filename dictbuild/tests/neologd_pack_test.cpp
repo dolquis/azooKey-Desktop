@@ -69,6 +69,11 @@ class FakeDownloader final : public host::IPackDownloader {
     requests.push_back(request);
     if (on_download) on_download();
     host::HttpDownloadResult result;
+    // Like HttpDownloader once a request is no longer allowed on the network.
+    if (request.network_allowed && !request.network_allowed()) {
+      result.error = "network disabled";
+      return result;
+    }
     result.status = status_;
     if (status_ == host::HttpDownloadStatus::Downloaded)
       std::filesystem::copy_file(source_, request.destination,

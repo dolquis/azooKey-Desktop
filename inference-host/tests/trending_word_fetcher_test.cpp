@@ -651,7 +651,8 @@ TEST_F(TrendingWordFetcherTest, StopWaitsForCommitInProgressBeforeReturning) {
                                      const std::function<bool()>& still_current) {
     if (!still_current()) return TrendingFetchStatus::Cancelled;
     commit.entered.set_value();
-    commit.released.wait();
+    // Past its check, the commit keeps going once Stop has started.
+    while (still_current()) std::this_thread::yield();
     store_->IngestTrending(words, now_epoch, auto_promote);
     const bool saved = store_->Save();
     commit.finished = true;
@@ -667,7 +668,6 @@ TEST_F(TrendingWordFetcherTest, StopWaitsForCommitInProgressBeforeReturning) {
     fetcher.Stop();
     finished_when_stopped = commit.finished.load();
   });
-  commit.release.set_value();
   EXPECT_EQ(entered, std::future_status::ready);
   EXPECT_EQ(stop.wait_for(30s), std::future_status::ready);
   stop.get();

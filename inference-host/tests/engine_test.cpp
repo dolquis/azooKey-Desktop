@@ -3443,7 +3443,7 @@ TEST(EngineAutoWordTest, TrendingIngestCancelledByDisableNeverSurvivesFollowingR
   EXPECT_EQ(auto_words.Size(), 0u);
 
   // The ingestion passed its check and holds the lock in Save when trending is
-  // disabled and a reset is requested: the reset runs after it and removes the words.
+  // disabled; the reset requested next runs after it and removes the words.
   current = true;
   crypto.block_next = true;
   auto entered = crypto.entered.get_future();

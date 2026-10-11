@@ -1,6 +1,8 @@
 #include "azookey/host/NeologdPack.h"
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <set>
 #include <system_error>
 
@@ -198,11 +200,20 @@ NeologdPackResult PrepareNeologdPack(const NeologdPackManifest& manifest,
   request.destination = packs_dir / manifest.file_name;
   request.expected_sha256 = manifest.sha256;
   request.max_bytes = manifest.size;
-  request.network_allowed = network_allowed;
+  // Records a refusal when it happens, so a later return to normal mode does not turn an
+  // offline cancellation into a download failure.
+  const auto refused = std::make_shared<std::atomic<bool>>(false);
+  if (network_allowed) {
+    request.network_allowed = [network_allowed, refused] {
+      if (network_allowed()) return true;
+      *refused = true;
+      return false;
+    };
+  }
   // The downloader reuses a destination whose SHA256 already matches, without network.
   if (!downloader.Download(request).ok()) {
     // Also covers a fetch that a switch to offline cancelled midway.
-    if (network_allowed && !network_allowed()) {
+    if (*refused) {
       result.status = NeologdPackStatus::Offline;
       return result;
     }

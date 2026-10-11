@@ -801,6 +801,9 @@ artifact として保存する。PR diagnostic コメントは
 経路の p95 < 50ms を確認する。
 `azookey_zenzai_bench` は llama.cpp 無効構成の mock smoke と、pin 済み実モデルを使う
 llama.cpp 構成の smoke を CTest へ登録する。
+実モデルの `zenzai-real-model` ラベルには、非ライブ複数候補の最上位で
+`けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` を
+厳密一致で検証する読み末尾欠けの回帰テストを含める。
 
 両 bench は既存の人間向け text 出力を既定とし、次の共通オプションを追加する。
 

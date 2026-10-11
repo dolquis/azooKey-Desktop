@@ -34,6 +34,8 @@
 #include "azookey/tsf/IpcConnectionState.h"
 #include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/PredictionWindow.h"
+#include "azookey/tsf/ProofreadDocumentReader.h"
+#include "azookey/tsf/ProofreadSessionServer.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #include "azookey/tsf/TypoCorrectionTracker.h"
@@ -47,6 +49,29 @@ namespace azookey::tsf {
 // {3B7E9A52-6C1D-4F08-9E2A-8D5C4B1F7A63}
 inline constexpr GUID kDebugWindowPreservedKeyGuid = {
     0x3b7e9a52, 0x6c1d, 0x4f08, {0x9e, 0x2a, 0x8d, 0x5c, 0x4b, 0x1f, 0x7a, 0x63}};
+
+// TSF preserved key for Ctrl+Shift+Space, the batch correction view
+// (docs/rich-features-spec.md X-3-6).
+// {C8BE9EA1-D1EA-4A0F-BBCC-0277F468BCB7}
+inline constexpr GUID kProofreadPreservedKeyGuid = {
+    0xc8be9ea1, 0xd1ea, 0x4a0f, {0xbb, 0xcc, 0x02, 0x77, 0xf4, 0x68, 0xbc, 0xb7}};
+
+// What the batch correction hotkey took from the focused document.
+struct ProofreadCapture {
+  enum class Status : uint8_t {
+    // A secure or no-learning context, or one where external AI is not
+    // allowed: no text was read.
+    Blocked,
+    // The application exposed no readable text.
+    Unavailable,
+    Captured,
+  };
+  Status status{Status::Unavailable};
+  // Event privacy of the context, passed on to DetectAnomalies.
+  bool secure{true};
+  bool learning_allowed{false};
+  ProofreadDocument document;
+};
 
 // A prediction may be accepted only if its reading extends the current kana.
 std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
@@ -98,6 +123,13 @@ bool IsFreshQueryResultForTest(bool has_newer_request, uint64_t pending_request_
 bool ConsumeComBoundaryAllocationFailureForTest();
 // nullopt restores the build default (F10 claimed only by a Debug build).
 void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled);
+// nullopt restores the test default: the batch correction view is enabled
+// whatever the integrity of the test process.
+void SetProofreadEnabledForTest(std::optional<bool> enabled);
+// nullptr restores the settings-app check of the session client.
+void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier);
+// nullopt restores the 10-minute idle limit of a session.
+void SetProofreadIdleTimeoutForTest(std::optional<std::chrono::milliseconds> timeout);
 void FailNextPendingCommitObservationForTest();
 void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
@@ -285,6 +317,12 @@ class TextService final : public ITfTextInputProcessorEx,
     return candidate_ui_.own_window_for_test().secure_indicator_visible_for_test();
   }
   bool bracket_composition_for_test() const { return bracket_composition_; }
+  const std::optional<ProofreadCapture>& proofread_capture_for_test() const {
+    return proofread_capture_for_test_;
+  }
+  bool proofread_session_active_for_test() const {
+    return proofread_session_ && proofread_session_->active();
+  }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));
   }
@@ -753,6 +791,18 @@ class TextService final : public ITfTextInputProcessorEx,
   // (secure, detailed_logging_allowed) last handed to debug_window_.
   std::optional<std::pair<bool, bool>> debug_paint_policy_;
   bool debug_preserved_key_registered_{false};
+  bool proofread_preserved_key_registered_{false};
+  // The batch correction session (X-3-6). The TIP keeps the window range and
+  // its hash, not the text, to place the selection the settings app asks for.
+  std::unique_ptr<ProofreadSessionServer> proofread_session_;
+  Microsoft::WRL::ComPtr<ITfContext> proofread_context_;
+  Microsoft::WRL::ComPtr<ITfRange> proofread_range_;
+  uint64_t proofread_hash_{0};
+  size_t proofread_length_{0};
+  uint64_t proofread_generation_{0};
+#ifdef AZOOKEY_TSF_TESTING
+  std::optional<ProofreadCapture> proofread_capture_for_test_;
+#endif
 #ifdef AZOOKEY_TSF_TESTING
   size_t beep_count_{0};
 #endif
@@ -1160,6 +1210,21 @@ class TextService final : public ITfTextInputProcessorEx,
   void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
   void RegisterDebugPreservedKey();
   void UnregisterDebugPreservedKey();
+  // Ctrl+Shift+Space (rich-features-spec X-3-6). Taken only with the IME open
+  // in kana mode, no reading in progress, and a context that accepts keys.
+  bool ClaimsProofreadKey(ITfContext* context) const;
+  ProofreadCapture CaptureProofreadDocument(ITfContext* context);
+  // Replaces any session: captures the document, serves it on a new session
+  // pipe and opens the settings app on it.
+  void StartProofreadSession(ITfContext* context);
+  void EndProofreadSession();
+  static void OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept;
+  static void OnProofreadEnd(void* context) noexcept;
+  void ApplyProofreadSelection(ipc::proofread::SelectRequest request);
+  void CompleteProofreadSelection(uint64_t generation, ipc::proofread::SelectResult result);
+  friend class ProofreadSelectSession;
+  void RegisterProofreadPreservedKey();
+  void UnregisterProofreadPreservedKey();
 
   // M5 commit helpers.
   HRESULT CommitSelected(ITfContext* context);

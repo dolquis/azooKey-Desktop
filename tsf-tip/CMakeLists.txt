@@ -10,6 +10,8 @@ add_library(azookey_tsf_tip SHARED
   src/DebugWindow.cpp
   src/DelayedActionTimer.cpp
   src/PredictionWindow.cpp
+  src/ProofreadDocumentReader.cpp
+  src/ProofreadSessionServer.cpp
   src/RenderingEngine.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
@@ -66,6 +68,8 @@ if(AZOOKEY_BUILD_TESTS)
     src/DebugWindow.cpp
     src/DelayedActionTimer.cpp
     src/PredictionWindow.cpp
+    src/ProofreadDocumentReader.cpp
+    src/ProofreadSessionServer.cpp
     src/RenderingEngine.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
@@ -197,6 +201,9 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_theme_colors_tests tests/theme_colors_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_proofread_document_reader_tests
+    tests/proofread_document_reader_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_proofread_session_tests tests/proofread_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_query_interface_contract_tests
     tests/query_interface_contract_test.cpp
     LABEL tsf-com

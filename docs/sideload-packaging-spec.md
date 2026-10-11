@@ -1205,7 +1205,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
 | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
 | Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
-| 校正 | 貼り付けた文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
+| 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
 | 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
@@ -1221,9 +1221,9 @@ Host が capability（`learning_reset` / `persona` など）を告知しない�
 Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更でナビゲーションに加え、
 中身の無いペインは置かない。
 
-上の表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」が読む文章を設定アプリへ貼り付けず、
-フォアグラウンドのアプリから取る経路（ホットキー、文書全体の取得、キャレットの移動）は TIP 側の作業で、
-DEV-1540 で追う。
+上の表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」が読む文章をフォアグラウンドの
+アプリから取る経路（TIP の preserved key、選択位置の周りの文書の取得、TIP 所有の session、アプリ側の範囲の
+選択）は `rich-features-spec.md` X-3-6 が正典である。
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。
@@ -1310,6 +1310,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   `RedirectActivationToAsync` で新しい引数を既存インスタンスへ転送する。既存ウィンドウは転送後に
   前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
   profile を GUID として検証し、未指定と不正値を区別する。
+- **校正ビューの引数**: TIP の校正ビュー（`rich-features-spec.md` X-3-6）は
+  `--proofread-session <token>` だけを渡す。token は小文字 16 進 32 桁で、重複・値なし・それ以外の値は
+  parse error とする。後続起動の転送でも同じく既存インスタンスへ渡り、「校正」ペインがその session を開く。
 - **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
   インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。

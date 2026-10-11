@@ -6582,15 +6582,14 @@ class ProofreadSelectSession final : public ITfEditSession {
  public:
   ProofreadSelectSession(TextService* owner, uint64_t generation, ITfContext* context,
                          ITfRange* range, uint64_t hash, size_t length,
-                         ipc::proofread::SelectRequest request, bool reconvert)
+                         ipc::proofread::SelectRequest request)
       : owner_(owner),
         generation_(generation),
         context_(context),
         range_(range),
         hash_(hash),
         length_(length),
-        request_(request),
-        reconvert_(reconvert) {
+        request_(request) {
     owner_->AddRef();
   }
 
@@ -6672,7 +6671,7 @@ class ProofreadSelectSession final : public ITfEditSession {
     selection.style.ase = TF_AE_END;
     selection.style.fInterimChar = FALSE;
     if (FAILED(context_->SetSelection(cookie, 1, &selection))) return SelectResult::Failed;
-    if (reconvert_)
+    if (request_.reconvert)
       QueueReconversion(
           cookie, target.Get(),
           text.substr(static_cast<size_t>(request_.start), static_cast<size_t>(request_.length)));
@@ -6698,7 +6697,6 @@ class ProofreadSelectSession final : public ITfEditSession {
   uint64_t hash_;
   size_t length_;
   ipc::proofread::SelectRequest request_;
-  bool reconvert_;
   bool completed_{false};
 };
 
@@ -6775,7 +6773,7 @@ void TextService::EndProofreadSession() {
 
 void TextService::OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept {
   try {
-    static_cast<TextService*>(context)->ApplyProofreadSelection(request, request.reconvert);
+    static_cast<TextService*>(context)->ApplyProofreadSelection(request);
   } catch (...) {
     LogComBoundaryException("TextService::OnProofreadSelect", E_FAIL);
   }
@@ -6785,9 +6783,11 @@ void TextService::OnProofreadEnd(void* context) noexcept {
   static_cast<TextService*>(context)->EndProofreadSession();
 }
 
-void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request, bool reconvert) {
+void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request) {
   AZOOKEY_ASSERT_UI_THREAD();
   using ipc::proofread::SelectResult;
+  // A newer select replaces the candidates an earlier one queued, whatever it answers.
+  pending_proofread_reconversion_.reset();
   const uint64_t generation = proofread_generation_;
   if (!proofread_context_ || !proofread_range_) {
     CompleteProofreadSelection(generation, SelectResult::ContextGone);
@@ -6804,7 +6804,7 @@ void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request,
   }
   auto* session =
       new ProofreadSelectSession(this, generation, proofread_context_.Get(), proofread_range_.Get(),
-                                 proofread_hash_, proofread_length_, request, reconvert);
+                                 proofread_hash_, proofread_length_, request);
   Microsoft::WRL::ComPtr<ITfEditSession> owner;
   owner.Attach(session);
   HRESULT session_hr = E_FAIL;

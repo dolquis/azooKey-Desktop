@@ -1066,11 +1066,16 @@ class ProofreadReconversion {
     service.Deactivate();
   }
   std::optional<azookey::ipc::proofread::SelectResult> Select(bool reconvert = true) {
-    service.apply_proofread_selection_for_test(kTomorrow, reconvert);
+    return Select({kTomorrow.start, kTomorrow.length, reconvert});
+  }
+  std::optional<azookey::ipc::proofread::SelectResult> Select(
+      azookey::ipc::proofread::SelectRequest request) {
+    service.apply_proofread_selection_for_test(request);
     return service.last_proofread_select_result_for_test();
   }
 
-  static constexpr azookey::ipc::proofread::SelectRequest kTomorrow{3, 2};
+  static constexpr azookey::ipc::proofread::SelectRequest kToday{0, 2, true};
+  static constexpr azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true};
   TestContext context;
   std::shared_ptr<std::wstring> text;
   TestRange window;
@@ -1172,6 +1177,34 @@ TEST(ProofreadReconversionTest, EndedSessionDropsPendingCandidates) {
   EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
   test.service.run_pending_proofread_reconversion_for_test();
   EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+}
+
+TEST(ProofreadReconversionTest, NewerSelectReplacesQueuedCandidates) {
+  {
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  }
+  {
+    // A refused select still drops the earlier one's candidates.
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    EXPECT_EQ(test.Select({7, 5, true}), SelectResult::InvalidRange);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  }
+  {
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    (*test.text)[6] = L'元';
+    EXPECT_EQ(test.Select(), SelectResult::DocumentChanged);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  }
 }
 
 TEST(ProofreadReconversionTest, UnfocusedContextOpensNoCandidates) {

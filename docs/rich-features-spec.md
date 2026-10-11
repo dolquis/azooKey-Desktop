@@ -481,7 +481,7 @@ logon SID だけを許し、強制ラベル（medium、no-read-up / no-write-up 
 | メッセージ | 向き | フィールド |
 |---|---|---|
 | `document` | TIP → 設定アプリ（接続直後に 1 回） | `status`（`captured` / `blocked` / `unavailable`）、`text`（`captured` のときだけ非空の UTF-8）、`secure` / `learning_allowed`、`window`（前面へ戻すアプリのウィンドウ） |
-| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit）、`reconvert`（省略時 `false`。真なら選択した範囲に再変換の候補を出す） |
+| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit）、`reconvert`（省略時と bool 以外は `false` として扱い、session は終えない。真なら選択した範囲に再変換の候補を出す） |
 | `select_result` | TIP → 設定アプリ | `result`（`ok` / `document_changed` / `context_gone` / `invalid_range` / `failed`） |
 
 各メッセージは 4 バイト little-endian の長さに続く JSON で、`document` は 512 KiB、ほかは 4 KiB を上限とする。

@@ -335,8 +335,8 @@ class TextService final : public ITfTextInputProcessorEx,
     proofread_length_ = text.size();
   }
   void end_proofread_session_for_test() { EndProofreadSession(); }
-  void apply_proofread_selection_for_test(ipc::proofread::SelectRequest request, bool reconvert) {
-    ApplyProofreadSelection(request, reconvert);
+  void apply_proofread_selection_for_test(ipc::proofread::SelectRequest request) {
+    ApplyProofreadSelection(request);
   }
   std::optional<ipc::proofread::SelectResult> last_proofread_select_result_for_test() const {
     return last_proofread_select_result_for_test_;
@@ -1252,8 +1252,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void EndProofreadSession();
   static void OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept;
   static void OnProofreadEnd(void* context) noexcept;
-  // With `reconvert`, a placed selection also opens reconversion candidates.
-  void ApplyProofreadSelection(ipc::proofread::SelectRequest request, bool reconvert);
+  // With `request.reconvert`, a placed selection also opens reconversion candidates.
+  void ApplyProofreadSelection(ipc::proofread::SelectRequest request);
   void CompleteProofreadSelection(uint64_t generation, ipc::proofread::SelectResult result);
   void QueueProofreadReconversion(uint64_t generation, ITfContext* context, ITfRange* range,
                                   std::wstring surface);

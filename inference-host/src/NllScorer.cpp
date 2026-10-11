@@ -104,6 +104,21 @@ size_t ApplyNllScores(std::vector<core::Candidate>& candidates, std::span<const 
   return applied;
 }
 
+NllSuffixBatch PlanNllSuffixBatch(std::span<const std::vector<int32_t>> tokens, size_t free_cells,
+                                  size_t max_sequences) {
+  if (max_sequences == 0) throw std::runtime_error("nll sequences unavailable");
+  NllSuffixBatch result;
+  for (const auto& candidate : tokens.first(std::min(tokens.size(), max_sequences))) {
+    if (candidate.empty() || candidate.size() - 1 > free_cells)
+      throw std::runtime_error("nll context capacity exceeded");
+    const auto suffix_size = candidate.size() - 1;
+    if (suffix_size > free_cells - result.tokens) break;
+    result.tokens += suffix_size;
+    ++result.candidates;
+  }
+  return result;
+}
+
 NllEvaluation EvaluateNll(NllDecoder& decoder, std::span<const std::string> surfaces,
                           const core::ConversionContext& context) {
   CheckAbort(context);
@@ -113,19 +128,29 @@ NllEvaluation EvaluateNll(NllDecoder& decoder, std::span<const std::string> surf
   result.prefix_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   const auto prefix_normalizer = LogNormalizer(prefix_logits);
+  std::vector<std::vector<int32_t>> tokenized;
+  std::vector<std::vector<double>> logprobs;
   for (const auto& surface : surfaces) {
     CheckAbort(context);
-    const auto tokens = decoder.TokenizeSurface(surface);
+    auto tokens = decoder.TokenizeSurface(surface);
     if (tokens.empty()) throw std::runtime_error("empty nll tokenization");
-    std::vector<double> logprobs;
-    logprobs.push_back(LogProbability(prefix_logits, prefix_normalizer, tokens.front()));
-    const auto rows = decoder.DecodeSuffix(std::span(tokens).first(tokens.size() - 1));
-    if (rows.size() != tokens.size() - 1) throw std::runtime_error("missing nll rows");
-    for (size_t i = 0; i < rows.size(); ++i)
-      logprobs.push_back(LogProbability(rows[i], LogNormalizer(rows[i]), tokens[i + 1]));
-    result.scores.push_back(NllPerCharacter(logprobs, surface));
-    decoder.Rollback();
-    CheckAbort(context);
+    logprobs.push_back({LogProbability(prefix_logits, prefix_normalizer, tokens.front())});
+    tokenized.push_back(std::move(tokens));
+  }
+  CheckAbort(context);
+  decoder.DecodeSuffixes(
+      tokenized, [&](size_t candidate, size_t position, std::span<const float> logits) {
+        CheckAbort(context);
+        if (candidate >= tokenized.size() || position >= tokenized[candidate].size() - 1 ||
+            position != logprobs[candidate].size() - 1)
+          throw std::runtime_error("invalid nll row position");
+        logprobs[candidate].push_back(
+            LogProbability(logits, LogNormalizer(logits), tokenized[candidate][position + 1]));
+      });
+  CheckAbort(context);
+  for (size_t i = 0; i < surfaces.size(); ++i) {
+    if (logprobs[i].size() != tokenized[i].size()) throw std::runtime_error("missing nll rows");
+    result.scores.push_back(NllPerCharacter(logprobs[i], surfaces[i]));
   }
   return result;
 }

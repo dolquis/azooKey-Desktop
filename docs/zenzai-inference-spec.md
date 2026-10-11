@@ -789,8 +789,9 @@ KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` �
   生成 token はここにだけ入る。
 
 beam index と `seq_id` の対応は固定しない。対応は step ごとに §9.2.3.3 の規則で決まるため、
-実装は beam 側に「現在占有している working sequence」を持たせる。`llama_context` は
-`n_seq_max = kMaxModelCandidates + 1`（= 5）で作る。B が 1 の変換でも context は作り直さない。
+実装は beam 側に「現在占有している working sequence」を持たせる。`llama_context` の
+sequence 上限は、排他実行する NLL と共有する（`neural-reranker-spec.md` §B3.4）。
+生成で使う working sequence は 1〜4 のままで、B が 1 の変換でも context は作り直さない。
 
 各 step の開始時点で次が成り立つ（**不変条件**）。
 
@@ -914,7 +915,9 @@ DEV-857 以前の方式を維持する。
 位置予算は、どの working sequence も P + `max_new` 位置を保持できることを条件とする
 （`max_new` は §8 の `MaxNewTokensForReading`、上限 64）。`n_ctx` が sequence 間で分割される
 構成では `n_ctx ≥ n_seq_max × (P の最大値 + max_new)`、共有される構成では
-`n_ctx ≥ P の最大値 + n_seq_max × max_new` を満たす値へ引き上げる。P の最大値はプロンプト契約
+`n_ctx ≥ P の最大値 + kMaxModelCandidates × max_new` を満たす容量を確保する。NLL の候補群は
+`neural-reranker-spec.md` §B3 に従って共有 KV 容量内に分割し、生成と同時には保持しない。
+P の最大値はプロンプト契約
 （§3.2、左文脈 30 コードポイント）と受理する読み長から見積もる。予算を超える入力では KV を
 溢れさせず degrade する（§7.4）。
 
@@ -923,7 +926,7 @@ llama.cpp のヘッダで次を確認する。
 
 - seq 単位のコピー操作の名前と、複製先が空であることを要求するかどうか
 - セル共有型（unified）の KV キャッシュが既定か、明示指定が要るか
-- 並列 sequence 数の上限定数が 5 以上か
+- 並列 sequence 数の上限定数が共有 context の設定を満たすか（`neural-reranker-spec.md` §B3.4）
 - `n_ctx` が sequence 間で分割されるか共有されるか
 
 #### 9.2.3.8 本契約が変更しないもの

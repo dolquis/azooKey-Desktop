@@ -632,6 +632,7 @@ struct ZenzaiModelRuntime {
   ZenzaiModelRuntime& operator=(const ZenzaiModelRuntime&) = delete;
 
   static constexpr int32_t kMaxWorkingSequences = 4;
+  static constexpr int32_t kMaxNllSequences = 16;
 
   llama_model* model{nullptr};
   llama_context* context{nullptr};
@@ -744,16 +745,78 @@ struct ZenzaiModelRuntime {
         runtime.cached_prompt_logits = rows.front();
         return std::move(rows.front());
       }
-      std::vector<std::vector<float>> DecodeSuffix(std::span<const int32_t> tokens) override {
-        return Decode(tokens, prefix_length, true);
-      }
-      void Rollback() override {
-        if (!llama_memory_seq_rm(llama_get_memory(runtime.context), 0, prefix_length, -1))
-          throw std::runtime_error("nll KV rollback failed");
+      void DecodeSuffixes(std::span<const std::vector<int32_t>> tokens,
+                          const SuffixRow& consume) override {
+        const auto vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(runtime.model));
+        if (vocab_size <= 0) throw std::runtime_error("nll vocabulary unavailable");
+        auto* memory = llama_get_memory(runtime.context);
+        // Unified KV stores the shared prefix once. Keep the existing context size;
+        // unusually long candidate sets are split into groups that fit its free cells.
+        const auto capacity =
+            static_cast<size_t>(llama_n_ctx(runtime.context)) - static_cast<size_t>(prefix_length);
+        const auto batch_capacity = static_cast<size_t>(llama_n_batch(runtime.context));
+        if (capacity == 0 || batch_capacity == 0)
+          throw std::runtime_error("nll context capacity exceeded");
+        for (size_t begin = 0; begin < tokens.size();) {
+          if (control.ShouldAbort()) throw std::runtime_error("nll aborted");
+          const auto plan = PlanNllSuffixBatch(tokens.subspan(begin), capacity, kMaxNllSequences);
+          const auto end = begin + plan.candidates;
+          const auto count = plan.tokens;
+          // Each group uses fresh working sequences; sequence 0 is never extended.
+          for (size_t candidate = begin; candidate < end; ++candidate) {
+            if (tokens[candidate].size() == 1) continue;
+            llama_memory_seq_cp(memory, 0, static_cast<llama_seq_id>(candidate - begin + 1), 0,
+                                prefix_length);
+          }
+          if (count != 0) {
+            const auto chunk_capacity = std::min(count, batch_capacity);
+            auto batch = llama_batch_init(static_cast<int32_t>(chunk_capacity), 0, 1);
+            struct BatchGuard {
+              llama_batch& batch;
+              ~BatchGuard() { llama_batch_free(batch); }
+            } guard{batch};
+            std::vector<std::pair<size_t, size_t>> positions;
+            positions.reserve(chunk_capacity);
+            batch.n_tokens = 0;
+            const auto flush = [&] {
+              if (control.ShouldAbort()) throw std::runtime_error("nll aborted");
+              if (llama_decode(runtime.context, batch) != 0 || control.ShouldAbort())
+                throw std::runtime_error("nll decode failed");
+              for (int32_t row = 0; row < batch.n_tokens; ++row) {
+                const auto* logits = llama_get_logits_ith(runtime.context, row);
+                if (!logits) throw std::runtime_error("nll logits unavailable");
+                const auto [candidate, position] = positions[static_cast<size_t>(row)];
+                consume(candidate, position, {logits, static_cast<size_t>(vocab_size)});
+              }
+              batch.n_tokens = 0;
+              positions.clear();
+            };
+            for (size_t candidate = begin; candidate < end; ++candidate) {
+              for (size_t position = 0; position + 1 < tokens[candidate].size(); ++position) {
+                const auto row = batch.n_tokens++;
+                batch.token[row] = tokens[candidate][position];
+                batch.pos[row] = prefix_length + static_cast<llama_pos>(position);
+                batch.n_seq_id[row] = 1;
+                batch.seq_id[row][0] = static_cast<llama_seq_id>(candidate - begin + 1);
+                batch.logits[row] = true;
+                positions.emplace_back(candidate, position);
+                if (static_cast<size_t>(batch.n_tokens) == chunk_capacity) flush();
+              }
+            }
+            if (batch.n_tokens != 0) flush();
+          }
+          for (size_t candidate = begin; candidate < end; ++candidate) {
+            if (!llama_memory_seq_rm(memory, static_cast<llama_seq_id>(candidate - begin + 1), -1,
+                                     -1))
+              throw std::runtime_error("nll KV rollback failed");
+          }
+          if (control.ShouldAbort()) throw std::runtime_error("nll aborted");
+          begin = end;
+        }
       }
     } decoder{*this, kana, conversion_context, control};
     auto evaluation = EvaluateNll(decoder, surfaces, conversion_context);
-    // Every candidate rolled its suffix back, so sequence 0 again holds exactly the prompt.
+    // Working sequences have been released; sequence 0 still holds exactly the prompt.
     evaluation.prefix_reused_tokens = static_cast<uint64_t>(decoder.reused_tokens);
     cache_guard.preserve = true;
     return evaluation;
@@ -773,7 +836,7 @@ struct ZenzaiModelRuntime {
   // its first step reads the logits of the token it just decoded.
   size_t PreparePromptPrefix(const std::vector<llama_token>& prompt_tokens, bool allow_full_reuse) {
     auto* memory = llama_get_memory(context);
-    for (int32_t sequence = 1; sequence <= kMaxWorkingSequences; ++sequence) {
+    for (int32_t sequence = 1; sequence <= kMaxNllSequences; ++sequence) {
       (void)llama_memory_seq_rm(memory, sequence, -1, -1);
     }
     const size_t retained = RetainedPromptPrefixLength(
@@ -1400,8 +1463,9 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   context_params.n_ctx = 512;
   context_params.n_batch = context_params.n_ctx;
   context_params.n_ubatch = context_params.n_ctx;
-  context_params.n_seq_max = 5;      // prompt sequence 0 plus working beam sequences 1..4
-  context_params.kv_unified = true;  // beam sequences share the decoded prompt prefix
+  // Serialized generation/NLL reuse working IDs: beam 1..4, NLL 1..16, prompt 0.
+  context_params.n_seq_max = ZenzaiModelRuntime::kMaxNllSequences + 1;
+  context_params.kv_unified = true;  // beam and NLL sequences share the decoded prompt prefix
   const auto n_threads =
       options.n_threads.value_or(RecommendedZenzaiThreadCount(std::thread::hardware_concurrency()));
   context_params.n_threads = n_threads;

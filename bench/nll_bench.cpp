@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -109,6 +110,16 @@ int main(int argc, char** argv) {
       const auto cold = converter.EvaluateNllForValidation("こうせい", surfaces, context);
       if (cold.scores.size() != surfaces.size()) throw std::runtime_error("incomplete cold scores");
       if (cold.prefix_reused_tokens != 0) throw std::runtime_error("cold evaluation reused a KV");
+      // A one-candidate call exercises the independent sequence path. Compare against
+      // it outside timing so batching cannot hide cross-candidate attention or row swaps.
+      for (size_t i = 0; i < surfaces.size(); ++i) {
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto single = converter.EvaluateNllForValidation(
+            "こうせい", std::array<std::string, 1>{surfaces[i]}, context);
+        if (single.scores.size() != 1 || !std::isfinite(single.scores[0]) ||
+            !std::isfinite(cold.scores[i]) || std::abs(single.scores[0] - cold.scores[i]) > 1e-5)
+          throw std::runtime_error("batched suffix changed NLL");
+      }
       // Two warm-ups, then measure the scoring layer after generation has used the same KV.
       for (int i = -2; i < iterations; ++i) {
         context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -217,6 +228,7 @@ int main(int argc, char** argv) {
                 << " after_nll_prompt_mean_ms=" << Mean(after_nll_prompt)
                 << " within_default_budget=" << (p95 <= default_budget_ms)
                 << " order_invariant=1 generation_order_invariant=1 shared_prefix_invariant=1"
+                << " batch_invariant=1"
                 << " generation_max_score_delta=" << generation_score_delta
                 << " top=" << surfaces[winner] << '\n';
       for (size_t i = 0; i < last.scores.size(); ++i)

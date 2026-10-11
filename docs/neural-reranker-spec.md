@@ -620,17 +620,22 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 
 1 リクエスト内で `P` は全候補に共通である。これを候補ごとに decode し直すと
 コストが候補数に比例して跳ね上がるため、**prefix の KV を 1 回だけ作って
-候補ごとにロールバックする**。
+候補の作業 sequence へ共有し、suffix をまとめて decode する**。
 
 ```
 1. 再利用できない範囲の KV を落とし、P の残りを decode する（prefix KV 確立、prefix_len トークン。§B3.4）
 1'. prefix 最終位置の logits を**スナップショットへ複製**する（§B3.1）
 2. 各候補 s について:
    a. t_1 の logprob は 1'. のスナップショットから読む
-   b. t_1 … t_{m-1} を decode し、t_2 … t_m の logprob を読む
-   c. KV を prefix_len へロールバックする
-3. 予算 / cancel は 1.・2.a の前と 2.c の後で確認する（§B7）
+   b. sequence 0 の prefix を候補専用 sequence へ複製する
+3. 各候補の t_1 … t_{m-1} を同じ batch で decode し、t_2 … t_m の logprob を読む
+4. 候補の作業 sequence を解放し、sequence 0 の prefix と logits を保持する
+5. 予算 / cancel は prefix decode、候補準備、suffix decode の前後と logits 集計中に確認する（§B7）
 ```
+
+候補群の suffix 合計が共有 KV の空き容量を超える場合は、収まる候補群に分けて
+3.・4. を繰り返す。単独候補の context 上限は変えず、batch の token 数は
+`llama_n_batch` 以下に分割する。1 token の候補には suffix decode が不要である。
 
 ### B3.1 prefix logits のスナップショット契約
 
@@ -677,8 +682,10 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 
 `llama_batch_init` で batch を確保し、`pos` と `seq_id` を明示する。
 候補の位置ごとに `logits[]` を立て、`llama_get_logits_ith` で対応する行を読む。
-候補間では `llama_memory_seq_rm(llama_get_memory(context), 0, prefix_len, -1)` で
-prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
+`llama_memory_seq_cp` で sequence 0 の prefix を作業 sequence へ共有する。
+suffix の行は次の decode より前に logprob へ集計し、候補ごとの全 vocab 行の
+コピーは保持しない。集計後に `llama_memory_seq_rm` で作業 sequence を全て解放する。
+pin の正典は `CMakeLists.txt` の
 `AZOOKEY_LLAMA_CPP_GIT_TAG` とする。
 
 ### B3.4 `llama_context` の共有とスレッド
@@ -692,8 +699,11 @@ prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
   その最終トークンの logits を保持していれば decode するトークンは 0 になる。
 - 生成は prompt の最終トークンを必ず decode し直す。beam の初手はその decode の
   logits を読むためである。
-- 候補ごとの rollback は prefix 長で止まるので、評価を終えた時点で sequence 0 は
-  prompt だけを保持する。キャッシュはその prompt を指したまま次の生成へ引き継ぐ。
+- sequence 0 は prompt 専用とし、生成の beam は 1〜4、NLL は 1〜16 を作業用に使う。
+  `n_seq_max` は 17、`kv_unified` は true とし、KV 容量は共有 prefix と同時に保持する
+  suffix の合計で管理する。両経路は排他実行で、開始時に作業 sequence を解放する。
+- NLL は sequence 0 に suffix を追加しない。評価後は作業 sequence を解放し、
+  キャッシュが指す prompt と logits を次の生成へ引き継ぐ。
 - 途中の失敗や cancel では prefix キャッシュを無効化して KV を消去し、次の生成が
   古いキャッシュを参照しないようにする。
 - NllScorer を別スレッドへ出さない（`llama_context` は共有できない）。
@@ -771,8 +781,8 @@ NLL の数値計算・候補選別・予算制御は `NllScorer.h` / `NllScorer.
 | `Llm` | 対象外 | M16 クラウド整文用の予約。性質が異なる |
 
 - 上限 `nllTopK`（既定 **8**、範囲 1〜16）。適用直前の score 降順で上位から採る。
-  候補あたり 1 回の decode が要るためコストは `K` に線形で、予算（§B7）は `K` で
-  決まる。
+  suffix をまとめる単位は §B3 に従う。コストは候補数に加え、suffix token の合計、
+  KV と batch の容量による分割数に依存する。予算（§B7）はリクエスト全体へ適用する。
 - 対象が 0 件のときは何もしない（§B8 の `no_target`。失敗ではない）。
 
 ### B5.1 選択集合の外に対する保証
@@ -862,7 +872,8 @@ Track B が単独で成立するための形式である。
     timeout に対して whole-request skip を選ぶのと同じ方針）。
   - 実装上は `Candidate::score` を直接書き換えず、bonus を別配列に貯め、
     **完走したときだけ**適用する。
-- cancel は prefix decode の前、各候補の decode の前後で確認する。
+- cancel は prefix decode と suffix batch decode の前後、候補準備時、候補群の境界、
+  logits 集計中に確認する。
 - **cancel は失敗ではなく中断**（決定）: 現行 `QueryCandidates` は cancel 観測時に
   候補列そのものを返さない（空を返す）。したがって cancel 時の NllScorer は
   「fallback で順序を保つ」対象ですらなく、単に処理を放棄して cancel 経路へ抜ける。
@@ -990,6 +1001,8 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   生成前（prefix を全 decode）と生成後（prefix を共有）で NLL スコアが一致すること、
   評価順序を逆転させた NLL の一致、NLL 評価の前後での候補順序と件数の一致も検証し、
   生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  batch 評価は、計測区間外で各候補の単独評価と比較し、同じ許容誤差でのスコア一致を
+  `batch_invariant` として検証する。
   計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
 - `--backend cpu|vulkan` で実行経路を指定する。Vulkan は対応ビルドとデバイスを必要とし、
   CPU への暗黙の代替を測定成功としない。

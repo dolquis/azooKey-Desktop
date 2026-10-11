@@ -25,14 +25,29 @@ std::vector<size_t> SelectNllCandidates(const std::vector<core::Candidate>& cand
 size_t ApplyNllScores(std::vector<core::Candidate>& candidates, std::span<const size_t> indices,
                       std::span<const double> scores, double weight);
 
+struct NllSuffixBatch {
+  size_t candidates{};
+  size_t tokens{};
+};
+// Select a leading group whose suffixes fit the free unified KV cells and sequence IDs.
+NllSuffixBatch PlanNllSuffixBatch(std::span<const std::vector<int32_t>> tokens, size_t free_cells,
+                                  size_t max_sequences);
+
 // Each row predicts the NEXT token. Prefix output is copied before any suffix decode.
 class NllDecoder {
  public:
+  // The row predicts tokens[candidate][position + 1]. Consume it synchronously:
+  // the span is borrowed and expires when the callback returns.
+  using SuffixRow =
+      std::function<void(size_t candidate, size_t position, std::span<const float> logits)>;
   virtual ~NllDecoder() = default;
   virtual std::vector<int32_t> TokenizeSurface(std::string_view surface) = 0;
   virtual std::vector<float> DecodePrefix() = 0;
-  virtual std::vector<std::vector<float>> DecodeSuffix(std::span<const int32_t> tokens) = 0;
-  virtual void Rollback() = 0;
+  // Full token sequences, including the final token (which must not be decoded).
+  // Emit each candidate's rows in position order; candidates may be interleaved.
+  // On success release all suffix KV, preserving the prompt and its snapshot.
+  virtual void DecodeSuffixes(std::span<const std::vector<int32_t>> tokens,
+                              const SuffixRow& consume) = 0;
 };
 
 struct NllEvaluation {

@@ -28,9 +28,11 @@
 #include "azookey/tsf/CandidateUiCoordinator.h"
 #include "azookey/tsf/CharacterFormEditSession.h"
 #include "azookey/tsf/DebugWindow.h"
+#include "azookey/tsf/DelayedActionTimer.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
+#include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
@@ -487,6 +489,41 @@ class TextService final : public ITfTextInputProcessorEx,
     return live_conversion_result_.has_value();
   }
   void apply_live_conversion_result_for_test() { ApplyLiveConversionResult(); }
+  void set_live_conversion_result_with_segments_for_test(uint64_t request_id, std::string reading,
+                                                         std::string surface,
+                                                         std::vector<ipc::LiveSegment> segments,
+                                                         bool auto_punctuation) {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    LiveConversionResult result{request_id, std::move(reading), std::move(surface)};
+    result.segments = std::move(segments);
+    result.auto_punctuation = auto_punctuation;
+    live_conversion_result_ = std::move(result);
+  }
+  void set_dynamic_punctuation_for_test(const TipDynamicPunctuationSettings& settings) {
+    local_settings_.SetDynamicPunctuationForTest(settings);
+  }
+  bool pending_ipc_auto_punctuation_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_auto_punctuation_;
+  }
+  std::string pending_ipc_punctuation_style_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_punctuation_style_;
+  }
+  bool punctuation_timer_armed_for_test(DelayedActionTimer::Slot slot) const {
+    return punctuation_timer_.IsArmed(slot);
+  }
+  uint32_t punctuation_timer_delay_for_test(DelayedActionTimer::Slot slot) const {
+    return punctuation_timer_.ArmedDelayMs(slot);
+  }
+  // Runs the handler an expired timer would, without waiting.
+  void fire_punctuation_timer_for_test(DelayedActionTimer::Slot slot) {
+    punctuation_timer_.FireForTest(slot);
+  }
+  void set_final_request_timeout_for_test(uint32_t ms) { final_request_timeout_ms_ = ms; }
+  bool final_punctuation_hold_pending_for_test() const {
+    return final_punctuation_hold_.has_value();
+  }
   const std::string& ipc_client_id_for_test() const { return ipc_client_id_; }
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
@@ -681,6 +718,9 @@ class TextService final : public ITfTextInputProcessorEx,
     // False for a commit the TIP forces on focus or lifecycle loss: the user
     // did not just make it, so a later Backspace is no undo of it.
     bool arms_undo{true};
+    // M59 section 7.4: a segment the Host inserted without a reading. It is sent
+    // as is_auto_punctuation and never observed or recorded for undo.
+    bool is_auto_punctuation{false};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
   // (reading, surface) pairs of the last learning observation actually sent,
@@ -775,6 +815,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_pending_is_batch_{false};
   bool ipc_pending_is_live_conversion_{false};
   bool ipc_pending_apply_live_preview_{false};
+  bool ipc_pending_auto_punctuation_{false};  // M59 section 7.1.
+  std::string ipc_pending_punctuation_style_{"ja"};
   bool ipc_pending_live_{true};
   bool ipc_pending_secure_{true};
   bool ipc_pending_learning_allowed_{false};
@@ -865,6 +907,9 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string surface;
     std::string trace_id;
     std::chrono::steady_clock::time_point trace_start{};
+    // M59: the response segments, and whether the request asked for punctuation.
+    std::vector<ipc::LiveSegment> segments;
+    bool auto_punctuation{false};
   };
   std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
   struct PredictionResult {
@@ -876,6 +921,24 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<PredictionResult> prediction_result_;  // candidates_mtx_
   std::string live_display_reading_;                   // UI thread only.
   std::string live_display_surface_;                   // UI thread only.
+  // M59: the segments of live_display_surface_ and whether its request asked for
+  // punctuation (an idle, final or eager request). UI thread only.
+  std::vector<ipc::LiveSegment> live_display_segments_;
+  bool live_display_auto_punctuation_{false};
+  // Reading of the last live request, for the idle timer. UI thread only.
+  std::string live_query_reading_;
+  // Idle timer (section 4.3.1) and the bounded wait of the final request
+  // (section 7.3). UI thread only.
+  DelayedActionTimer punctuation_timer_;
+  uint32_t final_request_timeout_ms_{kFinalPunctuationRequestTimeoutMs};
+  // Enter that waits for the final request; input_state_ is not advanced until
+  // it resolves. UI thread only.
+  struct FinalPunctuationHold {
+    wil::com_ptr_nothrow<ITfContext> context;
+    core::HandleResult result;
+    uint64_t request_id{0};
+  };
+  std::optional<FinalPunctuationHold> final_punctuation_hold_;
   struct ReconversionResult {
     uint64_t generation;
     std::wstring surface;
@@ -946,7 +1009,19 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string CurrentActionTraceId() const;
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
-  void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
+  void PostQueryLiveConversion(ITfContext* context, const std::string& reading,
+                               LiveRequestTiming timing = LiveRequestTiming::Edit);
+  // M59 dynamic punctuation (docs/dynamic-punctuation-spec.md sections 4.3.1, 7.3, 7.4).
+  void ArmIdlePunctuationTimer();
+  void OnPunctuationTimer(DelayedActionTimer::Slot slot);
+  static void PunctuationTimerTrampoline(void* context, DelayedActionTimer::Slot slot) noexcept;
+  bool BeginFinalPunctuationHold(ITfContext* context, const core::InputState& previous,
+                                 core::HandleResult& result);
+  void ResolveFinalPunctuationHold();
+  void AbortFinalPunctuationHold();
+  void CancelPunctuationTimers();
+  void AdoptLiveCommitObservation(ITfContext* context);
+  std::optional<uint64_t> ApplyLiveConversionResultImpl();
   std::string CaptureLeftContext(ITfContext* context, bool secure);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);

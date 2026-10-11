@@ -35,6 +35,7 @@
 #include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
+#include "azookey/tsf/ProofreadSessionServer.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #include "azookey/tsf/TypoCorrectionTracker.h"
@@ -65,6 +66,9 @@ struct ProofreadCapture {
     Captured,
   };
   Status status{Status::Unavailable};
+  // Event privacy of the context, passed on to DetectAnomalies.
+  bool secure{true};
+  bool learning_allowed{false};
   ProofreadDocument document;
 };
 
@@ -118,6 +122,13 @@ bool IsFreshQueryResultForTest(bool has_newer_request, uint64_t pending_request_
 bool ConsumeComBoundaryAllocationFailureForTest();
 // nullopt restores the build default (F10 claimed only by a Debug build).
 void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled);
+// nullopt restores the test default: the batch correction view is enabled
+// whatever the integrity of the test process.
+void SetProofreadEnabledForTest(std::optional<bool> enabled);
+// nullptr restores the settings-app check of the session client.
+void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier);
+// nullopt restores the 10-minute idle limit of a session.
+void SetProofreadIdleTimeoutForTest(std::optional<std::chrono::milliseconds> timeout);
 void FailNextPendingCommitObservationForTest();
 void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
@@ -306,7 +317,10 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   const std::optional<ProofreadCapture>& proofread_capture_for_test() const {
-    return proofread_capture_;
+    return proofread_capture_for_test_;
+  }
+  bool proofread_session_active_for_test() const {
+    return proofread_session_ && proofread_session_->active();
   }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));
@@ -777,8 +791,17 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<std::pair<bool, bool>> debug_paint_policy_;
   bool debug_preserved_key_registered_{false};
   bool proofread_preserved_key_registered_{false};
-  // The last batch correction capture (X-3-6). Cleared on deactivation.
-  std::optional<ProofreadCapture> proofread_capture_;
+  // The batch correction session (X-3-6). The TIP keeps the window range and
+  // its hash, not the text, to place the selection the settings app asks for.
+  std::unique_ptr<ProofreadSessionServer> proofread_session_;
+  Microsoft::WRL::ComPtr<ITfContext> proofread_context_;
+  Microsoft::WRL::ComPtr<ITfRange> proofread_range_;
+  uint64_t proofread_hash_{0};
+  size_t proofread_length_{0};
+  uint64_t proofread_generation_{0};
+#ifdef AZOOKEY_TSF_TESTING
+  std::optional<ProofreadCapture> proofread_capture_for_test_;
+#endif
 #ifdef AZOOKEY_TSF_TESTING
   size_t beep_count_{0};
 #endif
@@ -1189,7 +1212,16 @@ class TextService final : public ITfTextInputProcessorEx,
   // Ctrl+Shift+Space (rich-features-spec X-3-6). Taken only with the IME open
   // in kana mode, no reading in progress, and a context that accepts keys.
   bool ClaimsProofreadKey(ITfContext* context) const;
-  void CaptureProofreadDocument(ITfContext* context);
+  ProofreadCapture CaptureProofreadDocument(ITfContext* context);
+  // Replaces any session: captures the document, serves it on a new session
+  // pipe and opens the settings app on it.
+  void StartProofreadSession(ITfContext* context);
+  void EndProofreadSession();
+  static void OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept;
+  static void OnProofreadEnd(void* context) noexcept;
+  void ApplyProofreadSelection(ipc::proofread::SelectRequest request);
+  void CompleteProofreadSelection(uint64_t generation, ipc::proofread::SelectResult result);
+  friend class ProofreadSelectSession;
   void RegisterProofreadPreservedKey();
   void UnregisterProofreadPreservedKey();
 

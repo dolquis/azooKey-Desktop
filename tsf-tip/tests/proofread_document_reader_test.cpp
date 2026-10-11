@@ -3,15 +3,20 @@
 #include <msctf.h>
 
 #include <algorithm>
+#include <atomic>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "KeyboardStateGuard.h"
+#include "ProofreadPipeClient.h"
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
+#include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
 
 // Batch correction view (docs/rich-features-spec.md X-3-6): the window cut to
@@ -115,6 +120,9 @@ class TestRange final : public ITfRange {
   }
   STDMETHODIMP GetContext(ITfContext** out) override;
 
+  size_t start() const { return start_; }
+  size_t end() const { return end_; }
+
  private:
   ~TestRange() = default;
 
@@ -161,7 +169,13 @@ class TestContext final : public ITfContext {
     *fetched = 1;
     return S_OK;
   }
-  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override { return E_NOTIMPL; }
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG count, const TF_SELECTION* in) override {
+    if (!count || !in || !in->range) return E_INVALIDARG;
+    const auto* range = dynamic_cast<TestRange*>(in->range);
+    if (!range) return E_INVALIDARG;
+    selected = std::make_pair(range->start(), range->end());
+    return S_OK;
+  }
   STDMETHODIMP GetStart(TfEditCookie, ITfRange** out) override {
     if (!out) return E_POINTER;
     *out = new TestRange(this, document_, 0, 0);
@@ -186,6 +200,8 @@ class TestContext final : public ITfContext {
   bool permit{true};
   // The selection start; nullopt makes GetSelection fail.
   std::optional<size_t> selection;
+  // The range SetSelection last received.
+  std::optional<std::pair<size_t, size_t>> selected;
   std::vector<DWORD> flags_seen;
 
  private:
@@ -336,13 +352,71 @@ TEST(ProofreadDocumentReaderTest, ReportsNothingWithoutAContext) {
   EXPECT_FALSE(ReadProofreadDocument(nullptr, 7));
 }
 
+std::wstring g_launch_parameters;
+
+BOOL WINAPI CaptureLaunch(SHELLEXECUTEINFOW* info) {
+  g_launch_parameters = info->lpParameters ? info->lpParameters : L"";
+  return TRUE;
+}
+
+bool AcceptAnyClient(HANDLE) noexcept { return true; }
+
+namespace proofread = azookey::ipc::proofread;
+
 // The hotkey (OnPreservedKey with kProofreadPreservedKeyGuid) reads nothing
-// from a context whose text may not leave the TIP (DEV-1532 contract).
+// from a context whose text may not leave the TIP (DEV-1532 contract), and
+// opens the settings app on a session pipe.
 class ProofreadHotkeyTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    g_launch_parameters.clear();
+    azookey::tsf::testing::SetSettingsLauncherForTest(L"C:\\azooKey\\azookey_settings.exe",
+                                                      &CaptureLaunch);
+    azookey::tsf::testing::SetProofreadClientVerifierForTest(&AcceptAnyClient);
     service_.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
     service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  }
+  void TearDown() override {
+    azookey::tsf::testing::SetProofreadClientVerifierForTest(nullptr);
+    azookey::tsf::testing::ClearSettingsLauncherForTest();
+  }
+
+  // The token the settings app was launched with.
+  std::string LaunchedToken() const {
+    constexpr std::wstring_view kPrefix = L"--proofread-session ";
+    if (g_launch_parameters.rfind(kPrefix, 0) != 0) return {};
+    std::string token;
+    for (const wchar_t c : g_launch_parameters.substr(kPrefix.size()))
+      token.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+    return token;
+  }
+
+  struct ClientRun {
+    std::optional<proofread::DocumentMessage> document;
+    std::optional<proofread::SelectResult> result;
+  };
+
+  // Plays the settings app: reads the document and, when given, sends one
+  // select request, while this thread runs the TIP's message loop.
+  ClientRun RunClient(std::optional<proofread::SelectRequest> request) {
+    ClientRun run;
+    std::atomic<bool> finished{false};
+    const auto token = LaunchedToken();
+    std::thread client_thread([&] {
+      azookey::tsf::test::ProofreadPipeClient client;
+      if (client.Connect(token)) {
+        if (const auto json = client.Read(proofread::kMaxDocumentFrameBytes))
+          run.document = proofread::ParseDocumentMessage(*json);
+        if (request && client.Write(proofread::BuildSelectRequest(*request))) {
+          if (const auto json = client.Read(proofread::kMaxRequestFrameBytes))
+            run.result = proofread::ParseSelectResponse(*json);
+        }
+      }
+      finished = true;
+    });
+    EXPECT_TRUE(azookey::tsf::test::PumpUntil([&] { return finished.load(); }));
+    client_thread.join();
+    return run;
   }
 
   BOOL Press(ITfContext* context) {
@@ -352,13 +426,20 @@ class ProofreadHotkeyTest : public ::testing::Test {
     return eaten;
   }
 
+  // A session keeps a reference to its context, so the contexts outlive the
+  // service (members are destroyed in reverse order).
+  TestContext& NewContext(std::shared_ptr<Document> document) {
+    return contexts_.emplace_back(std::move(document));
+  }
+
   azookey::tsf::ScopedFocusClassificationForTest focus_{azookey::tsf::InputScopeClass::Normal};
+  std::deque<TestContext> contexts_;
   azookey::tsf::TextService service_;
 };
 
 TEST_F(ProofreadHotkeyTest, CapturesTheDocumentInAnOrdinaryContext) {
   auto document = MakeDocument(L"校正する本文。");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 3;
   EXPECT_TRUE(Press(&context));
   const auto& capture = service_.proofread_capture_for_test();
@@ -371,7 +452,7 @@ TEST_F(ProofreadHotkeyTest, CapturesTheDocumentInAnOrdinaryContext) {
 TEST_F(ProofreadHotkeyTest, ReadsNoTextFromASecureContext) {
   service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
   auto document = MakeDocument(L"秘密の本文。");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 0;
   EXPECT_TRUE(Press(&context));
   const auto& capture = service_.proofread_capture_for_test();
@@ -384,7 +465,7 @@ TEST_F(ProofreadHotkeyTest, ReadsNoTextFromASecureContext) {
 TEST_F(ProofreadHotkeyTest, ReadsNoTextWhereLearningIsNotAllowed) {
   service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
   auto document = MakeDocument(L"学習しない文脈の本文。");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 0;
   EXPECT_TRUE(Press(&context));
   const auto& capture = service_.proofread_capture_for_test();
@@ -395,7 +476,7 @@ TEST_F(ProofreadHotkeyTest, ReadsNoTextWhereLearningIsNotAllowed) {
 
 TEST_F(ProofreadHotkeyTest, ReportsAnApplicationWithoutReadableText) {
   auto document = MakeDocument(L"");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 0;
   EXPECT_TRUE(Press(&context));
   const auto& capture = service_.proofread_capture_for_test();
@@ -405,7 +486,7 @@ TEST_F(ProofreadHotkeyTest, ReportsAnApplicationWithoutReadableText) {
 
 TEST_F(ProofreadHotkeyTest, LeavesTheKeyToTheApplicationDuringAReading) {
   auto document = MakeDocument(L"本文");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 0;
   service_.preedit_kana_ = "か";
   EXPECT_FALSE(Press(&context));
@@ -415,7 +496,7 @@ TEST_F(ProofreadHotkeyTest, LeavesTheKeyToTheApplicationDuringAReading) {
 
 TEST_F(ProofreadHotkeyTest, LeavesTheKeyToTheApplicationInAlphanumericMode) {
   auto document = MakeDocument(L"本文");
-  TestContext context(document);
+  auto& context = NewContext(document);
   context.selection = 0;
   azookey::tsf::test::KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
@@ -423,6 +504,114 @@ TEST_F(ProofreadHotkeyTest, LeavesTheKeyToTheApplicationInAlphanumericMode) {
   ASSERT_TRUE(eaten);
   EXPECT_FALSE(Press(&context));
   EXPECT_FALSE(service_.proofread_capture_for_test());
+  EXPECT_EQ(document->get_text_calls, 0);
+}
+
+TEST_F(ProofreadHotkeyTest, LaunchesTheSettingsAppWithOnlyTheSessionToken) {
+  auto document = MakeDocument(L"校正する本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  EXPECT_TRUE(proofread::IsValidSessionToken(LaunchedToken()));
+  EXPECT_EQ(g_launch_parameters.find(L"本文"), std::wstring::npos);
+  EXPECT_TRUE(service_.proofread_session_active_for_test());
+
+  const auto run = RunClient(std::nullopt);
+  ASSERT_TRUE(run.document);
+  EXPECT_EQ(run.document->status, proofread::DocumentStatus::Captured);
+  EXPECT_EQ(run.document->text, "校正する本文。");
+  EXPECT_FALSE(run.document->secure);
+  EXPECT_TRUE(run.document->learning_allowed);
+}
+
+TEST_F(ProofreadHotkeyTest, SecureContextOpensASessionWithoutText) {
+  service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  auto document = MakeDocument(L"秘密の本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  const auto run = RunClient(proofread::SelectRequest{0, 1});
+  ASSERT_TRUE(run.document);
+  EXPECT_EQ(run.document->status, proofread::DocumentStatus::Blocked);
+  EXPECT_TRUE(run.document->text.empty());
+  EXPECT_TRUE(run.document->secure);
+  EXPECT_EQ(run.result, proofread::SelectResult::ContextGone);
+  EXPECT_FALSE(context.selected);
+  EXPECT_EQ(document->get_text_calls, 0);
+}
+
+TEST_F(ProofreadHotkeyTest, SelectsTheRequestedRangeOfTheCheckedText) {
+  auto document = MakeDocument(L"前の行。\r\n校正する本文。");
+  auto& context = NewContext(document);
+  context.selection = 6;
+  EXPECT_TRUE(Press(&context));
+  const auto run = RunClient(proofread::SelectRequest{6, 2});
+  EXPECT_EQ(run.result, proofread::SelectResult::Ok);
+  ASSERT_TRUE(context.selected);
+  EXPECT_EQ(context.selected->first, 6u);
+  EXPECT_EQ(context.selected->second, 8u);
+}
+
+TEST_F(ProofreadHotkeyTest, RefusesToSelectAfterTheDocumentChanged) {
+  auto document = MakeDocument(L"校正する本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  document->text[2] = L'X';
+  const auto run = RunClient(proofread::SelectRequest{0, 2});
+  EXPECT_EQ(run.result, proofread::SelectResult::DocumentChanged);
+  EXPECT_FALSE(context.selected);
+}
+
+TEST_F(ProofreadHotkeyTest, RefusesARangeOutsideTheWindowOrInsideASurrogatePair) {
+  auto document = MakeDocument(L"絵文字\U0001F600です。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  for (const auto request : {proofread::SelectRequest{6, 5}, proofread::SelectRequest{4, 1}}) {
+    const auto run = RunClient(request);
+    EXPECT_EQ(run.result, proofread::SelectResult::InvalidRange);
+    // Each client run ends that session; start the next one.
+    EXPECT_TRUE(Press(&context));
+  }
+  EXPECT_FALSE(context.selected);
+}
+
+TEST_F(ProofreadHotkeyTest, PressingAgainReplacesTheSession) {
+  auto document = MakeDocument(L"本文");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  const auto first = LaunchedToken();
+  EXPECT_TRUE(Press(&context));
+  const auto second = LaunchedToken();
+  EXPECT_NE(first, second);
+  azookey::tsf::test::ProofreadPipeClient stale;
+  EXPECT_FALSE(stale.Connect(first));
+  EXPECT_TRUE(service_.proofread_session_active_for_test());
+}
+
+TEST_F(ProofreadHotkeyTest, NoSessionWhenTheSettingsAppCannotStart) {
+  azookey::tsf::testing::SetSettingsLauncherForTest(L"C:\\azooKey\\azookey_settings.exe",
+                                                    [](SHELLEXECUTEINFOW*) -> BOOL {
+                                                      SetLastError(ERROR_FILE_NOT_FOUND);
+                                                      return FALSE;
+                                                    });
+  auto document = MakeDocument(L"本文");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  EXPECT_FALSE(service_.proofread_session_active_for_test());
+}
+
+TEST_F(ProofreadHotkeyTest, DisabledProcessLeavesTheKeyToTheApplication) {
+  azookey::tsf::testing::SetProofreadEnabledForTest(false);
+  auto document = MakeDocument(L"本文");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_FALSE(Press(&context));
+  azookey::tsf::testing::SetProofreadEnabledForTest(std::nullopt);
+  EXPECT_FALSE(service_.proofread_session_active_for_test());
   EXPECT_EQ(document->get_text_calls, 0);
 }
 

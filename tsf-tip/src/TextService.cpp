@@ -765,6 +765,9 @@ using azookey::tsf::IsUsableTextExtent;
 #ifdef AZOOKEY_TSF_TESTING
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
 std::optional<bool> g_debug_window_key_enabled_for_test;
+std::optional<bool> g_proofread_enabled_for_test;
+azookey::tsf::ProofreadSessionServer::ClientVerifier g_proofread_client_verifier_for_test = nullptr;
+std::optional<std::chrono::milliseconds> g_proofread_idle_timeout_for_test;
 #endif
 
 // F10 opens the menu bar in most applications, so only a Debug build claims it
@@ -777,6 +780,16 @@ bool DebugWindowKeyEnabled() {
   return true;
 #else
   return false;
+#endif
+}
+
+// rich-features-spec X-3-6: no batch correction view in an elevated, low or
+// AppContainer process. Tests choose either behavior.
+bool ProofreadEnabled() {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_proofread_enabled_for_test.value_or(true);
+#else
+  return azookey::tsf::ProofreadAllowedInCurrentProcess();
 #endif
 }
 
@@ -853,6 +866,18 @@ bool ConsumeComBoundaryAllocationFailureForTest() {
 
 void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled) {
   g_debug_window_key_enabled_for_test = enabled;
+}
+
+void SetProofreadEnabledForTest(std::optional<bool> enabled) {
+  g_proofread_enabled_for_test = enabled;
+}
+
+void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier) {
+  g_proofread_client_verifier_for_test = verifier;
+}
+
+void SetProofreadIdleTimeoutForTest(std::optional<std::chrono::milliseconds> timeout) {
+  g_proofread_idle_timeout_for_test = timeout;
 }
 
 void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
@@ -1446,7 +1471,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 
   UnregisterProofreadPreservedKey();
   UnregisterDebugPreservedKey();
-  proofread_capture_.reset();
+  EndProofreadSession();
   if (thread_mgr_ && key_event_sink_advised_) {
     ITfKeystrokeMgr* key_mgr = nullptr;
     HRESULT hr =
@@ -3165,7 +3190,7 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
     ToggleDebugWindow();
     *eaten = TRUE;
   } else if (IsEqualGUID(rguid, kProofreadPreservedKeyGuid) && ClaimsProofreadKey(context)) {
-    CaptureProofreadDocument(context);
+    StartProofreadSession(context);
     *eaten = TRUE;
   }
   return S_OK;
@@ -3189,6 +3214,14 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
+  }
+  if (proofread_context_ && pdim) {
+    ITfDocumentMgr* document_mgr = nullptr;
+    if (SUCCEEDED(proofread_context_->GetDocumentMgr(&document_mgr)) && document_mgr) {
+      const bool owns_session = SameComIdentity(document_mgr, pdim);
+      document_mgr->Release();
+      if (owns_session) EndProofreadSession();
+    }
   }
   return S_OK;
 } catch (const std::bad_alloc&) {
@@ -6484,17 +6517,19 @@ void TextService::UnregisterDebugPreservedKey() {
 bool TextService::ClaimsProofreadKey(ITfContext* context) const {
   // The key belongs to the application while a reading is in progress, with
   // the IME closed or in alphanumeric mode, and in a disabled context.
-  return context && keyboard_open_ && !alnum_mode_ && !composition_ && preedit_kana_.empty() &&
-         !romaji_.HasPending() && !candidate_ui_.IsShowing() &&
+  return context && ProofreadEnabled() && keyboard_open_ && !alnum_mode_ && !composition_ &&
+         preedit_kana_.empty() && !romaji_.HasPending() && !candidate_ui_.IsShowing() &&
          !azookey::tsf::IsContextKeyboardDisabled(context);
 }
 
-void TextService::CaptureProofreadDocument(ITfContext* context) {
+ProofreadCapture TextService::CaptureProofreadDocument(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
   ProofreadCapture capture;
   // DEV-1532 contract: no text leaves a secure or no-learning context, so it
   // is not read at all.
   const auto privacy = ResolvePrivacy(context, false);
+  capture.secure = privacy.secure;
+  capture.learning_allowed = privacy.learning_allowed;
   if (privacy.secure || !privacy.learning_allowed) {
     capture.status = ProofreadCapture::Status::Blocked;
   } else if (auto document = ReadProofreadDocument(context, client_id_)) {
@@ -6505,12 +6540,260 @@ void TextService::CaptureProofreadDocument(ITfContext* context) {
              capture.status == ProofreadCapture::Status::Captured  ? "proofread_captured"
              : capture.status == ProofreadCapture::Status::Blocked ? "proofread_blocked"
                                                                    : "proofread_unavailable");
-  proofread_capture_ = std::move(capture);
+  return capture;
+}
+
+namespace {
+
+std::optional<std::string> ProofreadTextToUtf8(const std::wstring& text) {
+  if (text.empty()) return std::string();
+  // Default flags write U+FFFD for an unpaired surrogate, one UTF-16 unit as
+  // the window counted it, so the offsets still match.
+  const int length = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                         nullptr, 0, nullptr, nullptr);
+  if (length <= 0) return std::nullopt;
+  std::string result(static_cast<size_t>(length), '\0');
+  if (WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(),
+                          length, nullptr, nullptr) != length)
+    return std::nullopt;
+  return result;
+}
+
+HWND ContextWindow(ITfContext* context) {
+  ITfContextView* view = nullptr;
+  HWND window = nullptr;
+  if (SUCCEEDED(context->GetActiveView(&view)) && view) {
+    if (FAILED(view->GetWnd(&window))) window = nullptr;
+    view->Release();
+  }
+  return window;
+}
+
+}  // namespace
+
+// Reads the window range again under a read-write lock and selects the
+// requested part only when the text is still the one that was checked.
+class ProofreadSelectSession final : public ITfEditSession {
+ public:
+  ProofreadSelectSession(TextService* owner, uint64_t generation, ITfContext* context,
+                         ITfRange* range, uint64_t hash, size_t length,
+                         ipc::proofread::SelectRequest request)
+      : owner_(owner),
+        generation_(generation),
+        context_(context),
+        range_(range),
+        hash_(hash),
+        length_(length),
+        request_(request) {
+    owner_->AddRef();
+  }
+
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfEditSession) return E_NOINTERFACE;
+    *out = static_cast<ITfEditSession*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refs_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG refs = static_cast<ULONG>(InterlockedDecrement(&refs_));
+    if (!refs) delete this;
+    return refs;
+  }
+  STDMETHODIMP DoEditSession(TfEditCookie cookie) override {
+    ipc::proofread::SelectResult result = ipc::proofread::SelectResult::Failed;
+    try {
+      result = Apply(cookie);
+    } catch (...) {
+      LogComBoundaryException("ProofreadSelectSession::DoEditSession", E_FAIL);
+    }
+    Complete(result);
+    return result == ipc::proofread::SelectResult::Ok ? S_OK : E_FAIL;
+  }
+
+  bool completed() const { return completed_; }
+  void Complete(ipc::proofread::SelectResult result) {
+    if (completed_) return;
+    completed_ = true;
+    owner_->CompleteProofreadSelection(generation_, result);
+  }
+
+ private:
+  ~ProofreadSelectSession() { owner_->Release(); }
+
+  ipc::proofread::SelectResult Apply(TfEditCookie cookie) {
+    using ipc::proofread::SelectResult;
+    Microsoft::WRL::ComPtr<ITfRange> reader;
+    if (FAILED(range_->Clone(&reader)) || !reader) return SelectResult::ContextGone;
+    // One code unit past the window tells a longer text from the checked one.
+    std::wstring text;
+    std::array<wchar_t, 4096> buffer{};
+    while (text.size() <= length_) {
+      BOOL empty = FALSE;
+      if (FAILED(reader->IsEmpty(cookie, &empty))) return SelectResult::ContextGone;
+      if (empty) break;
+      ULONG read = 0;
+      const ULONG capacity =
+          static_cast<ULONG>((std::min)(buffer.size(), length_ + 1 - text.size()));
+      if (FAILED(reader->GetText(cookie, TF_TF_MOVESTART, buffer.data(), capacity, &read)) ||
+          !read || read > capacity)
+        return SelectResult::ContextGone;
+      text.append(buffer.data(), read);
+    }
+    if (text.size() != length_ || ProofreadTextHash(text) != hash_)
+      return SelectResult::DocumentChanged;
+    if (!IsValidProofreadSelection(text, request_.start, request_.length))
+      return SelectResult::InvalidRange;
+
+    Microsoft::WRL::ComPtr<ITfRange> target;
+    if (FAILED(range_->Clone(&target)) || !target) return SelectResult::ContextGone;
+    const LONG end = static_cast<LONG>(request_.start + request_.length);
+    const LONG start = static_cast<LONG>(request_.start);
+    LONG shifted = 0;
+    if (FAILED(target->Collapse(cookie, TF_ANCHOR_START)) ||
+        FAILED(target->ShiftEnd(cookie, end, &shifted, nullptr)) || shifted != end ||
+        FAILED(target->ShiftStart(cookie, start, &shifted, nullptr)) || shifted != start)
+      return SelectResult::Failed;
+    TF_SELECTION selection{};
+    selection.range = target.Get();
+    selection.style.ase = TF_AE_END;
+    selection.style.fInterimChar = FALSE;
+    return SUCCEEDED(context_->SetSelection(cookie, 1, &selection)) ? SelectResult::Ok
+                                                                    : SelectResult::Failed;
+  }
+
+  LONG refs_{1};
+  TextService* owner_;
+  uint64_t generation_;
+  Microsoft::WRL::ComPtr<ITfContext> context_;
+  Microsoft::WRL::ComPtr<ITfRange> range_;
+  uint64_t hash_;
+  size_t length_;
+  ipc::proofread::SelectRequest request_;
+  bool completed_{false};
+};
+
+void TextService::StartProofreadSession(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  EndProofreadSession();
+  auto capture = CaptureProofreadDocument(context);
+#ifdef AZOOKEY_TSF_TESTING
+  proofread_capture_for_test_ = capture;
+#endif
+  ipc::proofread::DocumentMessage message;
+  message.secure = capture.secure;
+  message.learning_allowed = capture.learning_allowed;
+  const HWND window = ContextWindow(context);
+  message.window = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window));
+  if (capture.status == ProofreadCapture::Status::Captured) {
+    auto text = ProofreadTextToUtf8(capture.document.text);
+    if (text && !text->empty() && text->size() <= ipc::kMaxAnomalyTextBytes) {
+      message.status = ipc::proofread::DocumentStatus::Captured;
+      message.text = std::move(*text);
+    }
+  } else if (capture.status == ProofreadCapture::Status::Blocked) {
+    message.status = ipc::proofread::DocumentStatus::Blocked;
+  }
+
+  const auto token = ipc::proofread::GenerateSessionToken();
+  if (!token) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_token_failed");
+    return;
+  }
+  ProofreadSessionServer::Options options;
+#ifdef AZOOKEY_TSF_TESTING
+  options.verifier = g_proofread_client_verifier_for_test;
+  if (g_proofread_idle_timeout_for_test) options.idle_timeout = *g_proofread_idle_timeout_for_test;
+#endif
+  auto server = std::make_unique<ProofreadSessionServer>();
+  if (!server->Start(*token, ipc::proofread::BuildDocumentMessage(message),
+                     {this, &TextService::OnProofreadSelect, &TextService::OnProofreadEnd},
+                     options)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_start_failed");
+    return;
+  }
+  if (FAILED(LaunchSettingsApplicationForProofread(window, *token))) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_settings_launch_failed");
+    return;
+  }
+  proofread_session_ = std::move(server);
+  ++proofread_generation_;
+  if (message.status == ipc::proofread::DocumentStatus::Captured) {
+    proofread_context_ = context;
+    proofread_range_ = std::move(capture.document.range);
+    proofread_hash_ = ProofreadTextHash(capture.document.text);
+    proofread_length_ = capture.document.text.size();
+  }
+}
+
+void TextService::EndProofreadSession() {
+  ++proofread_generation_;
+  // Moved out first: this may run inside the server's own end callback.
+  auto session = std::move(proofread_session_);
+  if (session) session->Stop();
+  proofread_context_.Reset();
+  proofread_range_.Reset();
+  proofread_hash_ = 0;
+  proofread_length_ = 0;
+}
+
+void TextService::OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept {
+  try {
+    static_cast<TextService*>(context)->ApplyProofreadSelection(request);
+  } catch (...) {
+    LogComBoundaryException("TextService::OnProofreadSelect", E_FAIL);
+  }
+}
+
+void TextService::OnProofreadEnd(void* context) noexcept {
+  static_cast<TextService*>(context)->EndProofreadSession();
+}
+
+void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  using ipc::proofread::SelectResult;
+  const uint64_t generation = proofread_generation_;
+  if (!proofread_context_ || !proofread_range_) {
+    CompleteProofreadSelection(generation, SelectResult::ContextGone);
+    return;
+  }
+  if (request.start > proofread_length_ || request.length > proofread_length_ - request.start) {
+    CompleteProofreadSelection(generation, SelectResult::InvalidRange);
+    return;
+  }
+  // Moving the selection would cut a reading the user is typing.
+  if (composition_ || !preedit_kana_.empty()) {
+    CompleteProofreadSelection(generation, SelectResult::Failed);
+    return;
+  }
+  auto* session =
+      new ProofreadSelectSession(this, generation, proofread_context_.Get(), proofread_range_.Get(),
+                                 proofread_hash_, proofread_length_, request);
+  Microsoft::WRL::ComPtr<ITfEditSession> owner;
+  owner.Attach(session);
+  HRESULT session_hr = E_FAIL;
+  const HRESULT hr = proofread_context_->RequestEditSession(
+      client_id_, session, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+  // A queued session answers when it runs; one that never ran answers now.
+  if (!session->completed() && (FAILED(hr) || session_hr != TF_S_ASYNC))
+    session->Complete(SelectResult::ContextGone);
+}
+
+void TextService::CompleteProofreadSelection(uint64_t generation,
+                                             ipc::proofread::SelectResult result) {
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "proofread_select",
+             {{"result", SafeLogText(std::string(ipc::proofread::SelectResultName(result)))}});
+  if (generation != proofread_generation_ || !proofread_session_) return;
+  proofread_session_->CompleteSelection(result);
 }
 
 void TextService::RegisterProofreadPreservedKey() {
   proofread_preserved_key_registered_ = false;
-  if (!thread_mgr_) return;
+  if (!ProofreadEnabled() || !thread_mgr_) return;
   ITfKeystrokeMgr* key_mgr = nullptr;
   if (FAILED(
           thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) ||

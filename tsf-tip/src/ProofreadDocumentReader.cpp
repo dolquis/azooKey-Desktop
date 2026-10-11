@@ -103,6 +103,16 @@ class ReadSession final : public ITfEditSession {
       document.text = text.substr(window.start, window.length);
       document.anchor =
           (std::min)(anchor_offset - (std::min)(anchor_offset, window.start), document.text.size());
+      if (!document.text.empty()) {
+        hr = anchor->Clone(&document.range);
+        if (FAILED(hr) || !document.range) return E_FAIL;
+        const LONG back = static_cast<LONG>(document.anchor);
+        const LONG ahead = static_cast<LONG>(document.text.size() - document.anchor);
+        if (FAILED(document.range->ShiftStart(cookie, -back, &shifted, nullptr)) ||
+            shifted != -back ||
+            FAILED(document.range->ShiftEnd(cookie, ahead, &shifted, nullptr)) || shifted != ahead)
+          return E_FAIL;
+      }
       result_ = std::move(document);
       return S_OK;
     } catch (...) {

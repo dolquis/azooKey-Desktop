@@ -443,14 +443,58 @@ LLM で「不自然な確定箇所」を検出する API。Phase 5 の Post-Comm
 
 Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに表示。
 
-- 起動: グローバルホットキー（TIP プロセスから `RegisterHotKey`）
+- 起動: TSF の preserved key（`ITfKeystrokeMgr::PreserveKey`、Ctrl+Shift+Space）
 - 表示: 設定アプリ内の「校正」タブ（Phase 7-M30）
 - 動作:
-  - フォアグラウンドアプリから可能な限り文書全体を取得（`ITfContext` 全 range）
-  - Host に `DetectAnomalies` を投げる
-  - 一覧表示、項目クリックでアプリ側のキャレットを該当箇所に移動 + 候補提示
+  - フォアグラウンドアプリの選択位置の周りから文書を取得（`ITfContext` の range）
+  - 設定アプリが Host に `DetectAnomalies` を投げる
+  - 一覧表示、項目クリックでアプリ側の該当範囲を選択する。候補の提示は別 Issue で扱う
 
-ホットキー、文書全体の取得、キャレットの移動は TIP 側の作業である（DEV-1540）。
+**ホットキー**。TIP は有効化のたびに Ctrl+Shift+Space を preserved key として登録し、無効化で解除する。
+`RegisterHotKey` は使わない。TIP は各アプリのプロセスに読み込まれるので、グローバルホットキーは最初に
+登録した 1 プロセスにしか届かず、前面アプリの文脈を取れない。preserved key は azooKey が有効な入力文脈にだけ
+届く。TIP がキーを取るのは、IME がオンで英数モードでなく、読みの入力中でも候補の表示中でもなく、文脈の
+キーボードが無効（`GUID_COMPARTMENT_KEYBOARD_DISABLED` / `EMPTYCONTEXT`）でないときだけで、それ以外は
+アプリへ渡す。IME オンの間は、Excel（列の選択）、Word（改行しないスペース）、VS Code（パラメーターヒント）
+など Ctrl+Shift+Space を使うアプリの操作より TIP が優先する。
+
+**対象外のプロセス**。昇格したプロセス、整合性レベルが medium 未満のプロセス、AppContainer の中の TIP は、
+キーを登録せずアプリへ渡す。昇格したプロセスから起動した設定アプリは昇格したまま動き、低い整合性レベルの
+プロセスは medium の設定アプリへ session pipe を提供できないため。
+
+**文書の取得**。TIP は event privacy（下の `DetectAnomalies` の `secure` / `learning_allowed`）が secure の文脈、または学習を
+許さない文脈では本文を一切読まない。それ以外では、選択の開始位置（選択が無ければ文書の先頭）から前後に
+UTF-16 で `kMaxAnomalyTextBytes` ずつまでを読み取り専用の edit session で読み、選択位置を中心に UTF-8 で
+`kMaxAnomalyTextBytes` 以下の窓を切り出す。窓はサロゲートペアを割らず、対になっていないサロゲートは
+U+FFFD（3 バイト）として数える。読めた本文が空のアプリ、edit session や `GetText` を拒むアプリでは、本文を
+取得できないものとして扱う。
+
+**session**（`ipc/include/azookey/ipc/ProofreadSession.h`）。TIP は押下のたびに使い捨ての named pipe
+`\\.\pipe\azookey-proofread-<token>` を作り、設定アプリを `--proofread-session <token>` だけを引数に起動する。
+token はシステムの乱数から作る 128 bit（小文字 16 進 32 桁）で、本文はコマンドライン、ディスク、ログのいずれにも
+出さない。pipe は 1 instance、`FILE_FLAG_FIRST_PIPE_INSTANCE`、`PIPE_REJECT_REMOTE_CLIENTS` で、DACL は現在の
+logon SID だけを許す。TIP は接続してきたプロセスの実行ファイルが TIP と同じフォルダの `azookey_settings.exe`
+であることを確かめ、違えば切断する（8 回で session を終える）。
+
+| メッセージ | 向き | フィールド |
+|---|---|---|
+| `document` | TIP → 設定アプリ（接続直後に 1 回） | `status`（`captured` / `blocked` / `unavailable`）、`text`（`captured` のときだけ非空の UTF-8）、`secure` / `learning_allowed`、`window`（前面へ戻すアプリのウィンドウ） |
+| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit） |
+| `select_result` | TIP → 設定アプリ | `result`（`ok` / `document_changed` / `context_gone` / `invalid_range` / `failed`） |
+
+各メッセージは 4 バイト little-endian の長さに続く JSON で、`document` は 512 KiB、ほかは 4 KiB を上限とする。
+上限を超える、または解釈できないメッセージを受けたら TIP は session を終える。`blocked` と `unavailable` の
+session は本文を持たず、設定アプリはその理由だけを表示する。
+
+**範囲の選択**。TIP は窓の range と、窓の本文の UTF-16 長とハッシュだけを保持する（本文は保持しない）。
+`select` を受けると、範囲が窓に収まらなければ `invalid_range` を返す。収まれば read-write の edit session で
+窓を読み直し、長さとハッシュが取得時と同じときだけ、境界がサロゲートペアの途中でないことを確かめて
+その範囲を選択する。文書が変わっていれば `document_changed`、本文を持たない session や文書が閉じられた
+session では `context_gone`、読みの入力中は `failed` を返す。設定アプリは `select` を送る前に `window` を
+前面へ戻す。
+
+session は、同じ TIP で再び押されたとき（新しい session に置き換える）、設定アプリが切断したとき、文書の
+document manager が破棄されたとき、TIP が無効化されたとき、10 分間 `select` が来なかったときに終わる。
 
 **Host の検出**（`inference-host/include/azookey/host/AnomalyDetector.h`）。X-3-4 の検出は、AI 整文
 （`ai-cleanup`）と同じ AI バックエンド設定（`aiBackend` / `openAi*`）と AI の同意
@@ -481,9 +525,6 @@ secure の文脈、または学習を許さない文脈の本文は送らない�
 |---|---|---|
 | `ok` / `error` | bool / str | `error` は `invalid_request` / `not_authenticated` / `unsupported`（使える AI バックエンド・API キー・同意が無い）/ `blocked` / `backend_failed`（認証・通信・応答形式の失敗） |
 | `findings[]` | 配列（50 件以下、`start` 順） | 各項目は `start` / `length`（本文上の UTF-16 code unit）、`reason`、`suggestions[]`（5 件以下）、`confidence`（0〜1。モデルが返さなければ 0.5） |
-
-文書全体の取得、ホットキー、キャレットの移動は TIP 側の作業で、DEV-1540 で追跡する。それまで設定アプリの
-「校正」ペインは、利用者が貼り付けた本文を検査する。
 
 **設定アプリの「校正」ペイン**。
 

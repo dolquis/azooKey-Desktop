@@ -1,6 +1,7 @@
 #pragma once
 
 #include <msctf.h>
+#include <wrl/client.h>
 
 #include <cstddef>
 #include <optional>
@@ -19,6 +20,9 @@ struct ProofreadDocument {
   size_t anchor{0};
   // The readable text around the selection did not fit and was cut.
   bool truncated{false};
+  // Covers `text` in the document; TSF keeps it in place across edits, so a
+  // later edit session can find the window again.
+  Microsoft::WRL::ComPtr<ITfRange> range;
 };
 
 struct ProofreadWindow {

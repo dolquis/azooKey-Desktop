@@ -255,8 +255,14 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 
 worker は `Start` / `Stop` で所有し、終了時に join してストアより先に破棄する。
 `UpdateSettings` は取得の設定世代を更新する。無効化・間隔変更・登録モード変更で
-進行中の取得をキャンセルし、古い世代の結果は取り込まない。設定更新は通信の終了を
-待たず、再有効化時には直ちに取得する。同じ設定の再適用では周期をリセットしない。
+進行中の取得をキャンセルし、古い世代の結果は取り込まない。設定更新は通信の終了も
+キャッシュ・ストアの書込みも待たず、再有効化時には直ちに取得する。同じ設定の再適用では
+周期をリセットしない。取り込みの線形化点は、engine の writer mutex の下で設定世代を
+再確認する時点とする。この確認を通った取り込みは設定更新より前に起きたものとして扱い、
+`UpdateSettings` が戻った後に保存を終えることがある。確認の時点で世代が変わっていれば
+ストアを変更しない。したがって、無効化の後に忘却・全削除を行うと、旧世代の語は残らない。
+キャンセルされた世代でも、公開アセットのキャッシュ `trending-words.json` は更新されうる。
+`Stop` は実行中の取り込みの終了を待つので、`Stop` の後にストアを破棄してよい。
 起動時から無効な場合は、HTTP セッションもソケットも生成しない。
 
 チェックサムは 1 KiB、JSON は共有 JSON parser と同じ 1 MiB を上限とする。各 WinHTTP 操作の timeout は
@@ -267,9 +273,10 @@ timeout まで待ち、操作間と受信ループで停止を確認する。
 
 Host は `TrendingFetchDependencies::ingest_and_save` を
 `InferenceEngine::IngestTrendingWords` へ接続する。同メソッドは writer 専用の
-`learning_history_mutex_` を保持して取り込みから保存まで行い、忘却・全削除と直列化する。
+`learning_history_mutex_` を保持して設定世代の確認から取り込み・保存まで行い、忘却・全削除と直列化する。
 保存中は `state_mutex_` を保持しない。
-Fetcher の設定 mutex → engine の writer mutex → store の writer mutex の順で取得する。
+Fetcher の設定 mutex はキャッシュ・ストアの書込みをまたいで保持しない。取り込みと保存は
+Fetcher の取得 mutex → engine の writer mutex → store の writer mutex の順で取得する。
 `Dispatcher::HandleUpdateConfig` は `ApplyConfig` が戻り state mutex が解放された後に
 Fetcher の設定 callback を呼ぶ。`Stop` / join も engine のロック外で行う。
 
@@ -618,7 +625,8 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 - `inference-host/tests/trending_word_fetcher_test.cpp`（M36-B）:
   `TrendingFetchDependencies` から取得関数と時刻を注入し、ローカル fixture の SHA256
   検証・取り込み・永続化、無効時の通信入口未呼出し、通信・検証失敗時の保持、
-  保存失敗後の再試行、設定世代によるキャンセル、worker 終了、仮想時刻での周期再取得を検証する。
+  保存失敗後の再試行、設定世代によるキャンセル、取り込み中の設定更新が書込みを待たないこと、
+  `Stop` が取り込みの終了を待つこと、worker 終了、仮想時刻での周期再取得を検証する。
 
 ## 13. 検証手順（実装後）
 

@@ -853,11 +853,21 @@ int main(int argc, char** argv) {
            {"reason", SafeLogText(result)}});
     }
   };
-  trending_dependencies.ingest_and_save = [&engine](
-                                              const std::vector<azookey::learning::AutoWord>& words,
-                                              uint64_t now_epoch, bool auto_promote) {
-    return engine.IngestTrendingWords(words, now_epoch, auto_promote);
-  };
+  trending_dependencies.ingest_and_save =
+      [&engine](const std::vector<azookey::learning::AutoWord>& words, uint64_t now_epoch,
+                bool auto_promote, const std::function<bool()>& still_current) {
+        using Outcome = azookey::host::InferenceEngine::TrendingIngestOutcome;
+        using azookey::host::TrendingFetchStatus;
+        switch (engine.IngestTrendingWords(words, now_epoch, auto_promote, still_current)) {
+          case Outcome::Saved:
+            return TrendingFetchStatus::Ingested;
+          case Outcome::Cancelled:
+            return TrendingFetchStatus::Cancelled;
+          case Outcome::SaveFailed:
+            break;
+        }
+        return TrendingFetchStatus::Failed;
+      };
   // Declared after the stores and before dispatchers so the worker joins before store teardown.
   azookey::host::TrendingWordFetcher trending_fetcher(
       auto_word_store, auto_word_store.path().parent_path() / "trending-words.json",

@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <stdexcept>
@@ -184,15 +185,17 @@ TEST_F(TrendingWordFetcherTest, HostCommitCallbackOwnsIngestionAndFailedCommitCa
   auto dependencies = Dependencies();
   unsigned commits = 0;
   dependencies.ingest_and_save = [&](const std::vector<azookey::learning::AutoWord>& words,
-                                     uint64_t now_epoch, bool auto_promote) {
+                                     uint64_t now_epoch, bool auto_promote,
+                                     const std::function<bool()>& still_current) {
     ++commits;
     EXPECT_EQ(words.size(), 2u);
     EXPECT_EQ(now_epoch, epoch_);
     EXPECT_TRUE(auto_promote);
+    EXPECT_TRUE(still_current());
     EXPECT_EQ(ReadCache(), kAsset);
-    if (commits == 1) return false;
+    if (commits == 1) return TrendingFetchStatus::Failed;
     store_->IngestTrending(words, now_epoch, auto_promote);
-    return store_->Save();
+    return store_->Save() ? TrendingFetchStatus::Ingested : TrendingFetchStatus::Failed;
   };
   TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
                               std::move(dependencies));
@@ -568,6 +571,108 @@ TEST_F(TrendingWordFetcherTest, DisableDuringDownloadDiscardsObsoleteResultAndCa
                                 Dependencies());
   reenabled.UpdateSettings(true, 1, false);
   EXPECT_EQ(reenabled.FetchOnce(), TrendingFetchStatus::Ingested);
+}
+
+// Blocks the commit after its generation check, as a slow DPAPI or atomic write would.
+struct BlockedCommit {
+  std::promise<void> entered;
+  std::promise<void> release;
+  std::shared_future<void> released{release.get_future().share()};
+  std::atomic<bool> finished{false};
+};
+
+TEST_F(TrendingWordFetcherTest, UpdateSettingsDoesNotWaitForCommitPastItsGenerationCheck) {
+  BlockedCommit commit;
+  auto dependencies = Dependencies();
+  dependencies.ingest_and_save = [&](const std::vector<azookey::learning::AutoWord>& words,
+                                     uint64_t now_epoch, bool auto_promote,
+                                     const std::function<bool()>& still_current) {
+    if (!still_current()) return TrendingFetchStatus::Cancelled;
+    store_->IngestTrending(words, now_epoch, auto_promote);
+    commit.entered.set_value();
+    commit.released.wait();
+    return store_->Save() ? TrendingFetchStatus::Ingested : TrendingFetchStatus::Failed;
+  };
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              std::move(dependencies));
+  fetcher.UpdateSettings(true, 24, false);
+  auto result = std::async(std::launch::async, [&] { return fetcher.FetchOnce(); });
+  const auto entered = commit.entered.get_future().wait_for(30s);
+  auto update = std::async(std::launch::async, [&] { fetcher.UpdateSettings(false, 24, false); });
+  // The bound only turns a regression into a failure instead of a hang.
+  const auto updated = update.wait_for(30s);
+  commit.release.set_value();
+  EXPECT_EQ(entered, std::future_status::ready);
+  EXPECT_EQ(updated, std::future_status::ready);
+  update.get();
+  // The commit was ordered before the disable; the next attempt follows the disable.
+  EXPECT_EQ(result.get(), TrendingFetchStatus::Ingested);
+  EXPECT_EQ(fetcher.FetchOnce(), TrendingFetchStatus::Disabled);
+  AutoWordStore reloaded(directory_ / "auto_words.tsv");
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.ListByState(AutoWordState::Pending).size(), 2u);
+}
+
+TEST_F(TrendingWordFetcherTest, DisableBeforeGenerationCheckCancelsCommitWithoutWaitingForIt) {
+  BlockedCommit commit;
+  auto dependencies = Dependencies();
+  dependencies.ingest_and_save = [&](const std::vector<azookey::learning::AutoWord>& words,
+                                     uint64_t now_epoch, bool auto_promote,
+                                     const std::function<bool()>& still_current) {
+    // Stands for the commit waiting on the engine lock before its check.
+    commit.entered.set_value();
+    commit.released.wait();
+    if (!still_current()) return TrendingFetchStatus::Cancelled;
+    store_->IngestTrending(words, now_epoch, auto_promote);
+    return store_->Save() ? TrendingFetchStatus::Ingested : TrendingFetchStatus::Failed;
+  };
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              std::move(dependencies));
+  fetcher.UpdateSettings(true, 24, false);
+  auto result = std::async(std::launch::async, [&] { return fetcher.FetchOnce(); });
+  const auto entered = commit.entered.get_future().wait_for(30s);
+  auto update = std::async(std::launch::async, [&] { fetcher.UpdateSettings(false, 24, false); });
+  const auto updated = update.wait_for(30s);
+  commit.release.set_value();
+  EXPECT_EQ(entered, std::future_status::ready);
+  EXPECT_EQ(updated, std::future_status::ready);
+  update.get();
+  EXPECT_EQ(result.get(), TrendingFetchStatus::Cancelled);
+  EXPECT_EQ(store_->Size(), 0u);
+  // Only the public cache may have been refreshed by the cancelled generation.
+  EXPECT_EQ(ReadCache(), kAsset);
+}
+
+TEST_F(TrendingWordFetcherTest, StopWaitsForCommitInProgressBeforeReturning) {
+  BlockedCommit commit;
+  auto dependencies = Dependencies();
+  dependencies.ingest_and_save = [&](const std::vector<azookey::learning::AutoWord>& words,
+                                     uint64_t now_epoch, bool auto_promote,
+                                     const std::function<bool()>& still_current) {
+    if (!still_current()) return TrendingFetchStatus::Cancelled;
+    commit.entered.set_value();
+    commit.released.wait();
+    store_->IngestTrending(words, now_epoch, auto_promote);
+    const bool saved = store_->Save();
+    commit.finished = true;
+    return saved ? TrendingFetchStatus::Ingested : TrendingFetchStatus::Failed;
+  };
+  TrendingWordFetcher fetcher(*store_, Cache(), L"https://fixture.invalid/trending-words.json",
+                              std::move(dependencies));
+  fetcher.UpdateSettings(true, 24, false);
+  fetcher.Start();
+  const auto entered = commit.entered.get_future().wait_for(30s);
+  std::atomic<bool> finished_when_stopped{false};
+  auto stop = std::async(std::launch::async, [&] {
+    fetcher.Stop();
+    finished_when_stopped = commit.finished.load();
+  });
+  commit.release.set_value();
+  EXPECT_EQ(entered, std::future_status::ready);
+  EXPECT_EQ(stop.wait_for(30s), std::future_status::ready);
+  stop.get();
+  // The store may be destroyed once Stop returns, so the commit must be over.
+  EXPECT_TRUE(finished_when_stopped);
 }
 
 TEST_F(TrendingWordFetcherTest, WorkerFetchesAtStartAndStopInterruptsIntervalWait) {

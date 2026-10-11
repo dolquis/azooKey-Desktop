@@ -148,9 +148,11 @@ TrendingWordFetcher::TrendingWordFetcher(learning::AutoWordStore& store,
   if (!dependencies_.steady_now) dependencies_.steady_now = std::chrono::steady_clock::now;
   if (!dependencies_.ingest_and_save) {
     dependencies_.ingest_and_save = [this](const std::vector<learning::AutoWord>& words,
-                                           uint64_t now_epoch, bool auto_promote) {
+                                           uint64_t now_epoch, bool auto_promote,
+                                           const std::function<bool()>& still_current) {
+      if (!still_current()) return TrendingFetchStatus::Cancelled;
       store_.IngestTrending(words, now_epoch, auto_promote);
-      return store_.Save();
+      return store_.Save() ? TrendingFetchStatus::Ingested : TrendingFetchStatus::Failed;
     };
   }
 }
@@ -277,17 +279,28 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
   const auto asset = ParseAsset(*text);
   if (!asset) return TrendingFetchStatus::Failed;
 
-  std::lock_guard lock(settings_mutex_);
+  // The commit runs under fetch_mutex_ only, so UpdateSettings never waits for its I/O.
   if (cancelled()) return TrendingFetchStatus::Cancelled;
   if (asset->generated_at == ingested_generated_at_) return TrendingFetchStatus::Unchanged;
   if (store_.save_blocked()) return TrendingFetchStatus::Failed;
   // Only verified, parsed public data reaches the atomic cache. Rejected words
   // and mining precedence remain the existing store's responsibility.
   if (!learning::WriteTextFileAtomically(cache_path_, *text)) return TrendingFetchStatus::Failed;
-  if (!dependencies_.ingest_and_save(asset->words, dependencies_.now_epoch(), auto_promote_))
-    return TrendingFetchStatus::Failed;
-  ingested_generated_at_ = asset->generated_at;
-  return TrendingFetchStatus::Ingested;
+  bool auto_promote;
+  {
+    std::lock_guard lock(settings_mutex_);
+    if (cancelled()) return TrendingFetchStatus::Cancelled;
+    // Every change of auto_promote_ starts a new generation, so this copy stays valid
+    // for as long as still_current below holds.
+    auto_promote = auto_promote_;
+  }
+  const auto still_current = [this, generation] {
+    return !stopped_ && generation_ == generation;
+  };
+  const auto status = dependencies_.ingest_and_save(asset->words, dependencies_.now_epoch(),
+                                                    auto_promote, still_current);
+  if (status == TrendingFetchStatus::Ingested) ingested_generated_at_ = asset->generated_at;
+  return status;
 }
 
 }  // namespace azookey::host

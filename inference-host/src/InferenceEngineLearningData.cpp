@@ -230,10 +230,21 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
 
 bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>& words,
                                           uint64_t now_epoch, bool auto_promote) {
+  return IngestTrendingWords(words, now_epoch, auto_promote, {}) ==
+         TrendingIngestOutcome::Saved;
+}
+
+InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(
+    const std::vector<learning::AutoWord>& words, uint64_t now_epoch, bool auto_promote,
+    const std::function<bool()>& still_current) {
   std::lock_guard history_lock(learning_history_mutex_);
-  if (!auto_word_store_ || auto_word_store_->save_blocked()) return false;
+  if (still_current && !still_current()) return TrendingIngestOutcome::Cancelled;
+  if (!auto_word_store_ || auto_word_store_->save_blocked()) {
+    return TrendingIngestOutcome::SaveFailed;
+  }
   auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
-  return auto_word_store_->Save();
+  return auto_word_store_->Save() ? TrendingIngestOutcome::Saved
+                                  : TrendingIngestOutcome::SaveFailed;
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {

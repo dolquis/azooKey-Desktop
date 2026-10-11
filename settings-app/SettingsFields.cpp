@@ -164,7 +164,7 @@ std::vector<SettingField> BuildFields() {
            {"auto", "performance", "battery_saver"}),
       Integer("inferenceThreads", Pane::Advanced, "Performance", 0, 0.0, 8.0, std::nullopt, true),
       Integer("maxCandidates", Pane::Advanced, "Performance", 9, 1.0, 32.0),
-      Integer("maxContextLength", Pane::Advanced, "Performance", 10, 0.0, 30.0, std::nullopt, true),
+      Integer("maxContextLength", Pane::Advanced, "Performance", 30, 0.0, 30.0, std::nullopt, true),
       Bool("contextReselection", Pane::Advanced, "Experimental", false),
       Bool("postCommitLint", Pane::Advanced, "Experimental", false),
       Bool("retroactiveRecompute", Pane::Advanced, "Experimental", false),

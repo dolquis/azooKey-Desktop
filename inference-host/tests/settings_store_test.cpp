@@ -302,7 +302,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.nll, azookey::host::NllConfig{});
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
   EXPECT_TRUE(result.settings.prediction_enabled);
   EXPECT_TRUE(result.settings.privacy_policy.learning_allowed);
   EXPECT_EQ(result.settings.backend_preference, "auto");
@@ -572,7 +572,7 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   auto result = store.Load();
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
 
   WriteText(path, R"({
     "inferenceThreads": "8",
@@ -582,7 +582,7 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   result = store.Reload();
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
 }
 
 TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {

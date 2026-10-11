@@ -191,7 +191,7 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
                                 azookey::ipc::BuildHandshakeRequest(handshake), trace_id))) {
     return ResolveResult(options, false, false, "ipc", "failed to send handshake to running host");
   }
-  auto handshake_resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);
+  auto handshake_resp = client.ReceiveWithTimeout(run_options.handshake_timeout_ms);
   if (!handshake_resp) {
     return ResolveResult(options, false, false, "ipc",
                          "timed out waiting for handshake response from running host");
@@ -209,7 +209,7 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
                                 azookey::ipc::BuildResolveNewWordRequest(req), trace_id))) {
     return ResolveResult(options, false, false, "ipc", "failed to send request to running host");
   }
-  auto resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);
+  auto resp = client.ReceiveWithTimeout(run_options.command_timeout_ms);
   if (!resp) {
     return ResolveResult(options, false, false, "ipc",
                          "timed out waiting for response from running host");

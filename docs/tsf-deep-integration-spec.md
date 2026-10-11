@@ -818,7 +818,8 @@ COM identity を返す。
 `LaunchSettingsApplication` は `--langid 0xNNNN --profile {GUID}` を生成し、§6.4 の固定パスを
 `ShellExecuteExW` で非同期起動する。起動 API が失敗した場合は `GetLastError()` を HRESULT へ
 変換し、エラー値が設定されていない場合も `E_FAIL` を返す。成功時に得た process handle は
-直ちに閉じる。
+直ちに閉じる。校正ビュー（`docs/rich-features-spec.md` X-3-6）は同じ固定パスを
+`LaunchSettingsApplicationForProofread` で起動し、引数は `--proofread-session <token>` だけとする。
 
 > **重要: `kTextServiceClsid` の COM オブジェクトが `ITfFnConfigure` を QI で返すこと**:
 > 言語/IME 設定は `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` でこの機能を取得する

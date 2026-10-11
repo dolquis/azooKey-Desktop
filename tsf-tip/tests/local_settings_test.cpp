@@ -89,13 +89,14 @@ TEST_F(LocalSettingsTest, LiveConversionDefaultsOffAndReloads) {
 TEST_F(LocalSettingsTest, MaxContextLengthUsesSchemaRangeAndReloads) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));
-  EXPECT_EQ(reader.MaxContextLengthSnapshot(), 10u);
+  EXPECT_EQ(reader.MaxContextLengthSnapshot(), 30u);
   Write(R"({"maxContextLength":0})");
   ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 0; }));
-  Write(R"({"maxContextLength":30})");
-  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 30; }));
+  Write(R"({"maxContextLength":20})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 20; }));
+  // The default equals the schema maximum, so step away from it before checking the fallback.
   Write(R"({"maxContextLength":31})");
-  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 10; }));
+  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 30; }));
 }
 
 TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {

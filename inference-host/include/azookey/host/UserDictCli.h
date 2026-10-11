@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "azookey/host/CliHostConnect.h"
+
 namespace azookey::learning {
 class ByteCrypto;
 }
@@ -46,7 +48,9 @@ struct UserDictCliRunOptions {
   uint32_t connect_timeout_ms{100};
   // Total wait while the Host pipe exists but every instance is busy.
   uint32_t busy_connect_timeout_ms{2000};
-  uint32_t response_timeout_ms{2000};
+  // The handshake touches no persisted file, so its reply comes quickly.
+  uint32_t handshake_timeout_ms{2000};
+  uint32_t command_timeout_ms{kPersistentCommandResponseTimeoutMs};
   const learning::ByteCrypto* crypto{nullptr};
 };
 

@@ -44,6 +44,13 @@ class ScopedHandshakeToken {
   std::string original_;
 };
 
+bool ClientReadyWithBatchMode(const azookey::tsf::TextService& service,
+                              std::optional<bool> expected_batch_mode = std::nullopt) {
+  return service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready &&
+         (!expected_batch_mode ||
+          service.batch_romaji_conversion_for_test() == *expected_batch_mode);
+}
+
 // Owns the temporary log and the logger override. Declared before the
 // TextService so the service, which keeps a pointer to the logger, goes first.
 class ScopedTipLog {
@@ -81,9 +88,10 @@ class ScopedTipLog {
   }
 
   // Waits for a record containing every fragment and, when requested, client
-  // readiness after the handshake options have been applied. Returns the whole log.
+  // readiness with the expected batch mode. Returns the whole log.
   std::string WaitFor(std::initializer_list<std::string> fragments,
-                      const azookey::tsf::TextService* ready_service = nullptr) const {
+                      const azookey::tsf::TextService* ready_service = nullptr,
+                      std::optional<bool> expected_batch_mode = std::nullopt) const {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     std::string log;
     bool matching_record_found = false;
@@ -99,8 +107,7 @@ class ScopedTipLog {
           all = all && line.find(fragment) != std::string::npos;
         if (all) {
           matching_record_found = true;
-          if (!ready_service || ready_service->ipc_connection_state_for_test() ==
-                                    azookey::tsf::IpcConnectionState::Ready)
+          if (!ready_service || ClientReadyWithBatchMode(*ready_service, expected_batch_mode))
             return log;
         }
         start = end + 1;
@@ -111,6 +118,12 @@ class ScopedTipLog {
                   << (ready_service ? azookey::tsf::IpcConnectionStateName(
                                           ready_service->ipc_connection_state_for_test())
                                     : "not observed")
+                  << ", expected_batch_mode="
+                  << (expected_batch_mode ? (*expected_batch_mode ? "true" : "false") : "any")
+                  << ", actual_batch_mode="
+                  << (ready_service
+                          ? (ready_service->batch_romaji_conversion_for_test() ? "true" : "false")
+                          : "not observed")
                   << "; log:\n"
                   << log;
     return log;
@@ -226,12 +239,19 @@ TEST(TsfTipHandshakeLogTest, RefreshLogsTheBatchModeItApplied) {
     azookey::tsf::TextService service;
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
-    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"}, &service);
+    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"}, &service,
+                false);
     EXPECT_FALSE(service.batch_romaji_conversion_for_test());
+    // A settings refresh keeps the old Ready state. It must not satisfy the
+    // readiness predicate for the new handshake's batch mode.
+    ASSERT_TRUE(ClientReadyWithBatchMode(service, false));
+    EXPECT_FALSE(ClientReadyWithBatchMode(service, true));
     service.request_host_option_refresh_for_test();
-    log.WaitFor({"\"event\":\"ipc_host_options_refreshed\"", "\"batch_romaji_conversion\":true"});
-    const auto text =
-        log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":true"});
+    log.WaitFor({"\"event\":\"ipc_host_options_refreshed\"", "\"batch_romaji_conversion\":true"},
+                &service, true);
+    const auto text = log.WaitFor(
+        {"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":true"}, &service, true);
+    ASSERT_TRUE(ClientReadyWithBatchMode(service, true));
     service.stop_ipc_worker_for_test();
     EXPECT_TRUE(service.batch_romaji_conversion_for_test());
     EXPECT_NE(text.find("\"batch_conversion_ai_cleanup\":false"), std::string::npos) << text;

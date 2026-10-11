@@ -536,7 +536,8 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
 
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
   append / コンパクションを行う。取得は 10 ms 間隔で試し、500 ms で諦める（ロック不可として
-  下記「権限なし / ロック不可」の扱いになる）。reader はロック不要（下記コミット規約で安全に読む）。
+  下記「権限なし / ロック不可」の扱いになる）。TSV から `.bin` を作り直す書込みも同じロックの下で
+  行うが、(A) のとおり 1 回だけ試して待たない。reader はロック不要（下記コミット規約で安全に読む）。
 - **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
   書く操作（**append / コンパクション**）に入る前に、現 live base ヘッダの `content_hash`（§4.5
   offset 28 を read。フル走査不要）を、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら

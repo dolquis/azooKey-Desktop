@@ -323,6 +323,28 @@ class TextService final : public ITfTextInputProcessorEx,
   bool proofread_session_active_for_test() const {
     return proofread_session_ && proofread_session_->active();
   }
+  // The state StartProofreadSession keeps for a captured document, without a
+  // pipe or the settings app.
+  void begin_proofread_session_for_test(ITfContext* context, ITfRange* range,
+                                        std::wstring_view text) {
+    EndProofreadSession();
+    ++proofread_generation_;
+    proofread_context_ = context;
+    proofread_range_ = range;
+    proofread_hash_ = ProofreadTextHash(text);
+    proofread_length_ = text.size();
+  }
+  void end_proofread_session_for_test() { EndProofreadSession(); }
+  void apply_proofread_selection_for_test(ipc::proofread::SelectRequest request, bool reconvert) {
+    ApplyProofreadSelection(request, reconvert);
+  }
+  std::optional<ipc::proofread::SelectResult> last_proofread_select_result_for_test() const {
+    return last_proofread_select_result_for_test_;
+  }
+  bool has_pending_proofread_reconversion_for_test() const {
+    return pending_proofread_reconversion_.has_value();
+  }
+  void run_pending_proofread_reconversion_for_test() { RunPendingProofreadReconversion(); }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));
   }
@@ -800,8 +822,18 @@ class TextService final : public ITfTextInputProcessorEx,
   uint64_t proofread_hash_{0};
   size_t proofread_length_{0};
   uint64_t proofread_generation_{0};
+  // Candidates for the range a select placed. The reconversion path takes its
+  // own edit sessions, so it runs on the UI thread after the select session.
+  struct PendingProofreadReconversion {
+    uint64_t generation{0};
+    Microsoft::WRL::ComPtr<ITfContext> context;
+    Microsoft::WRL::ComPtr<ITfRange> range;
+    std::wstring surface;
+  };
+  std::optional<PendingProofreadReconversion> pending_proofread_reconversion_;
 #ifdef AZOOKEY_TSF_TESTING
   std::optional<ProofreadCapture> proofread_capture_for_test_;
+  std::optional<ipc::proofread::SelectResult> last_proofread_select_result_for_test_;
 #endif
 #ifdef AZOOKEY_TSF_TESTING
   size_t beep_count_{0};
@@ -1220,8 +1252,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void EndProofreadSession();
   static void OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept;
   static void OnProofreadEnd(void* context) noexcept;
-  void ApplyProofreadSelection(ipc::proofread::SelectRequest request);
+  // With `reconvert`, a placed selection also opens reconversion candidates.
+  void ApplyProofreadSelection(ipc::proofread::SelectRequest request, bool reconvert);
   void CompleteProofreadSelection(uint64_t generation, ipc::proofread::SelectResult result);
+  void QueueProofreadReconversion(uint64_t generation, ITfContext* context, ITfRange* range,
+                                  std::wstring surface);
+  void RunPendingProofreadReconversion();
   friend class ProofreadSelectSession;
   void RegisterProofreadPreservedKey();
   void UnregisterProofreadPreservedKey();

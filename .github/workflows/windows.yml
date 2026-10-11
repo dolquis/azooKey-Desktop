@@ -1453,8 +1453,7 @@ jobs:
   # ビルド成功でも落ちることの 2 点による（spec §8.1）。
   #
   # 対象外: ctest（x64 ホストで ARM64 バイナリは実行できない。ネイティブ実行は
-  # spec §8.4）、azookey_settings.exe（vcxproj が x64 の ProjectConfiguration と
-  # packages.lock.json しか持たず、アーキ別 parameterize は spec §8.3 の M28/M29）。
+  # spec §8.4）。設定アプリは MSBuild の ARM64 構成で生成する（spec §8.3）。
   windows-arm64-crossbuild:
     name: Windows ARM64 cross-build
     needs: changes
@@ -1505,6 +1504,8 @@ jobs:
         run: |
           cmake --build --preset windows-release-arm64 2>&1 | Tee-Object -FilePath build-arm64.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset windows-release-arm64 --target azookey_settings 2>&1 | Tee-Object -Append -FilePath build-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Report sccache stats
         if: always()
@@ -1553,7 +1554,8 @@ jobs:
             'build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll',
             'build/windows-release-arm64/inference-host/azookey_inference_host.exe'
           )
-          foreach ($binary in $binaries) {
+          $settingsBinary = 'build/windows-release-arm64/settings-app/Release/azookey_settings.exe'
+          foreach ($binary in ($binaries + $settingsBinary)) {
             if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
               throw "ARM64 build output is missing: $binary"
             }
@@ -1589,6 +1591,7 @@ jobs:
           path: |
             build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll
             build/windows-release-arm64/inference-host/azookey_inference_host.exe
+            build/windows-release-arm64/settings-app/Release/azookey_settings.exe
           if-no-files-found: error
           retention-days: 14
 

@@ -46,6 +46,12 @@ class CandidateWindow {
   // empty and S_OK after a committed frame. Never drawn content.
   const char* failure_stage() const { return failure_stage_; }
   HRESULT failure_hr() const { return failure_hr_; }
+  // Runs on the owning UI thread after the candidate frame's visibility is settled.
+  using OnRenderResultFn = void (*)(bool drawn, void* context) noexcept;
+  void SetOnRenderResult(OnRenderResultFn fn, void* context) {
+    on_render_result_ = fn;
+    on_render_result_context_ = context;
+  }
   void ShowHealthBanner(CandidateHealthState state);
   void HideHealthBanner();
   // Brings back a banner that a re-show of the window hid, for whatever is left
@@ -149,6 +155,7 @@ class CandidateWindow {
   bool secure_indicator_visible_for_test() const { return secure_indicator_visible_; }
   bool secure_toast_visible_for_test() const { return secure_toast_visible_; }
   bool health_banner_visible_for_test() const { return health_banner_visible_; }
+  CandidateHealthState health_state_for_test() const { return health_state_; }
   int footer_top_for_test() const { return FooterTop(); }
   int health_banner_top_for_test() const { return HealthBannerTop(); }
   // Hit test against the window's current client width.
@@ -165,6 +172,9 @@ class CandidateWindow {
   // Draws through the production path (RenderingEngine and the DComp surface)
   // at the client size; true when the frame was committed.
   bool RenderForTest();
+  bool ShowDetailsForTest() { return ShowDetails(); }
+  bool RenderDetailsForTest() { return RenderDetails(); }
+  bool details_visible_for_test() const { return details_hwnd_ && IsWindowVisible(details_hwnd_); }
 #endif
 
  private:
@@ -233,6 +243,8 @@ class CandidateWindow {
   POINT last_anchor_{0, 0};
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};
+  OnRenderResultFn on_render_result_{nullptr};
+  void* on_render_result_context_{nullptr};
 
   static int ScaleForDpi(int value, UINT dpi);
   static LayoutMetrics ComputeLayoutMetrics(UINT dpi);
@@ -259,11 +271,11 @@ class CandidateWindow {
                 int height, DrawFn draw) noexcept;
   static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
   void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
-  void RenderDetails();
+  bool RenderDetails();
   void DrawDetails(ID2D1DeviceContext* context, int width, int height) const;
   bool Fail(const char* stage, HRESULT hr);
   void ResizeAtLastAnchor();
-  void ShowDetails();
+  bool ShowDetails();
   void HideDetails();
   int HealthBannerHeight() const;
   // Candidate rows and the notice row end here; the secure toast row, then the

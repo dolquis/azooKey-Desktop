@@ -82,6 +82,7 @@ class CandidateUiCoordinator {
   void OnElementShow(bool show);
   void ShowPendingHealthBanner();
   void ShowPendingSecureToast();
+  void OnWindowRenderResult(bool drawn) noexcept;
   void ReleaseUiElement();
   void ReleaseUiElementMgr();
   void NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available, bool pb_show_available,
@@ -113,6 +114,8 @@ class CandidateUiCoordinator {
   bool secure_toast_pending_{false};
   CandidateUiBeginObserver begin_observer_{nullptr};
   void* begin_observer_context_{nullptr};
+  std::vector<std::string> logged_render_failure_stages_;
+  bool handling_render_result_{false};
 };
 
 }  // namespace azookey::tsf

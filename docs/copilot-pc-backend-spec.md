@@ -767,10 +767,12 @@ endif()
   公開されない）:
   1. **ARM64 CMake ビルド出力**: `windows-release-arm64` preset（clang-cl・§8.1）で
      ARM64 バイナリ（TIP DLL / host / settings EXE）を生成。
-     設定アプリの MSBuild `Platform` は `CMAKE_SYSTEM_PROCESSOR` から x64 / ARM64 を
-     解決し、vcxproj は両アーキの Debug / Release 構成を持つ。`RuntimeIdentifiers` は
+     設定アプリの MSBuild `Platform` は `CMAKE_CXX_COMPILER_ARCHITECTURE_ID` を優先し、
+     値がない場合は `CMAKE_SYSTEM_PROCESSOR` から x64 / ARM64 を解決する。
+     未対応アーキでは設定アプリのターゲットを省略する。
+     vcxproj は両アーキの Debug / Release 構成を持つ。`RuntimeIdentifiers` は
      `win10-x64;win10-arm64` とし、共通の `packages.lock.json` は Windows 上の NuGet
-     restore で生成する。出力先は各 preset の `settings-app/Release/` とする。
+     restore で生成する。出力先は各 preset の `settings-app/<Debug|Release>/`（構成名）とする。
   2. **wapproj `Platform=ARM64`** でその ARM64 出力を取り込み MSIX 化。
   3. **MSIX の署名 / verify / upload をアーキ別パスで定義**（`Package_1.0.0_${arch}.msix` 等）。
   WAP 自体は x64 ホストから ARM64 をクロスパッケージ可能だが、上記 1〜3 が揃って初めて

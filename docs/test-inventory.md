@@ -160,11 +160,12 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_bench_trace_smoke` | `azookey_bench` と `azookey_trace_viewer` | `--trace` 実行時の JSONL に `total` と Host の `model_inference` が出力され、viewer で集計できること |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
 | `azookey_nll_fixture_smoke` | `bench/BuildNllFixture.cmake` | NLL 実モデルテストが要求する辞書 fixture の生成（fixture setup） |
+| `azookey_nll_comparison_self_test` | `azookey_nll_bench --self-test` | モデルなしで NLL 比較器の行入れ替え、NaN / Inf、件数不一致の拒否、CPU 絶対誤差、同点と重複表層を検証 |
 | `azookey_zenzai_bench_missing_model_output` | `azookey_zenzai_bench` | モデル未指定時に degraded を JSON へ記録し、実行自体は落ちないこと |
 | `azookey_zenzai_bench_smoke` | `azookey_zenzai_bench` | mock Zenzai 経路の実行（llama.cpp 無効ビルド） |
 | `azookey_zenzai_bench_json_smoke` | `azookey_zenzai_bench` | mock Zenzai 経路の JSON schema 固定と `passed` 真、`status=ok` 行の非混入 |
 | `azookey_zenzai_bench_rejects_degraded_mock` | `azookey_zenzai_bench` | `--require-zenzai` 指定時に degraded な mock 結果を失敗として扱うこと |
-| `azookey_nll_real_model_context` | `azookey_nll_bench` | pin した実 Zenzai GGUF と fixture 辞書で、文脈ありの NLL 再スコア最上位、cancel・期限切れ・失敗後のキャッシュ破棄とスコア復帰を検証 |
+| `azookey_nll_real_model_context` | `azookey_nll_bench` | pin した実 Zenzai GGUF と fixture 辞書で、文脈ありの NLL 再スコア最上位、16 候補・80 token 候補・短長混在の batch / 単独 / 逆順比較（CPU は絶対誤差、Vulkan は全順位）、cancel・期限切れ・失敗後のキャッシュ破棄とスコア復帰を検証。比較契約は `neural-reranker-spec.md` §B11 |
 | `azookey_nll_real_model_no_context` | `azookey_nll_bench` | 同じ pin モデルと fixture 辞書で、文脈なしの NLL 再スコア最上位を検証 |
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |

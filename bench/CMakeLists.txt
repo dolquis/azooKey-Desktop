@@ -74,6 +74,8 @@ set(AZOOKEY_ZENZAI_TEST_MODEL "" CACHE FILEPATH
     "Path to a real Zenzai GGUF used by the llama.cpp CTest smoke")
 
 if(AZOOKEY_BUILD_TESTS)
+  add_test(NAME azookey_nll_comparison_self_test COMMAND azookey_nll_bench --self-test)
+  set_tests_properties(azookey_nll_comparison_self_test PROPERTIES TIMEOUT 10)
   find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
   set(NLL_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/nll-fixture")
   add_test(NAME azookey_nll_fixture_smoke

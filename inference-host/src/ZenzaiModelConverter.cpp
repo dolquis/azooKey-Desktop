@@ -754,12 +754,22 @@ struct ZenzaiModelRuntime {
         // unusually long candidate sets are split into groups that fit its free cells.
         const auto capacity =
             static_cast<size_t>(llama_n_ctx(runtime.context)) - static_cast<size_t>(prefix_length);
-        const auto batch_capacity = static_cast<size_t>(llama_n_batch(runtime.context));
+        // Preserve the former chunk shape for multi-token suffixes. Larger batches
+        // can select different backend arithmetic and change scores even on CPU.
+        const auto batch_capacity = std::min<size_t>(32, llama_n_batch(runtime.context));
         if (capacity == 0 || batch_capacity == 0)
           throw std::runtime_error("nll context capacity exceeded");
         for (size_t begin = 0; begin < tokens.size();) {
           if (control.ShouldAbort()) throw std::runtime_error("nll aborted");
-          const auto plan = PlanNllSuffixBatch(tokens.subspan(begin), capacity, kMaxNllSequences);
+          // Batch only consecutive candidates with at most one suffix token; longer
+          // candidates retain their original independent 32-token decode chunks.
+          size_t max_sequences = 0;
+          while (max_sequences < kMaxNllSequences && begin + max_sequences < tokens.size() &&
+                 tokens[begin + max_sequences].size() <= 2) {
+            ++max_sequences;
+          }
+          max_sequences = std::max<size_t>(1, max_sequences);
+          const auto plan = PlanNllSuffixBatch(tokens.subspan(begin), capacity, max_sequences);
           const auto end = begin + plan.candidates;
           const auto count = plan.tokens;
           // Each group uses fresh working sequences; sequence 0 is never extended.

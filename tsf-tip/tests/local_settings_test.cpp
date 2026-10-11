@@ -547,4 +547,72 @@ TEST_F(LocalSettingsTest, WatchesUnicodePathsAndRecreatedConfigDirectory) {
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.WaitForEnabledForTest(true));
 }
+TEST_F(LocalSettingsTest, DynamicPunctuationDefaultsOffAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  auto settings = reader.DynamicPunctuationSnapshot();
+  EXPECT_FALSE(settings.enabled);
+  EXPECT_EQ(settings.style, "ja");
+  EXPECT_FALSE(settings.eager);
+  EXPECT_EQ(settings.idle_ms, 400u);
+
+  Write(R"({"dynamicPunctuation":true,"dynamicPunctuationStyle":"fullwidth_latin",)"
+        R"("dynamicPunctuationStability":"eager","dynamicPunctuationIdleMs":250})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.DynamicPunctuationSnapshot().enabled; }));
+  settings = reader.DynamicPunctuationSnapshot();
+  EXPECT_EQ(settings.style, "fullwidth_latin");
+  EXPECT_TRUE(settings.eager);
+  EXPECT_EQ(settings.idle_ms, 250u);
+
+  // Values outside the schema fall back to the defaults instead of disabling
+  // the feature or arming a zero-length timer.
+  Write(R"({"dynamicPunctuation":true,"dynamicPunctuationStyle":"x",)"
+        R"("dynamicPunctuationStability":"never","dynamicPunctuationIdleMs":0})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.DynamicPunctuationSnapshot().eager; }));
+  settings = reader.DynamicPunctuationSnapshot();
+  EXPECT_TRUE(settings.enabled);
+  EXPECT_EQ(settings.style, "ja");
+  EXPECT_EQ(settings.idle_ms, 400u);
+}
+
+TEST(LivePunctuationPolicyTest, EncodesTheTimingTableOfSection711) {
+  using azookey::tsf::AutoPunctuationFor;
+  using azookey::tsf::LiveRequestTiming;
+  azookey::tsf::TipDynamicPunctuationSettings on_pause;
+  on_pause.enabled = true;
+  auto eager = on_pause;
+  eager.eager = true;
+  const azookey::tsf::TipDynamicPunctuationSettings off;
+
+  EXPECT_FALSE(AutoPunctuationFor(on_pause, true, LiveRequestTiming::Edit));
+  EXPECT_TRUE(AutoPunctuationFor(on_pause, true, LiveRequestTiming::Idle));
+  EXPECT_TRUE(AutoPunctuationFor(on_pause, true, LiveRequestTiming::Final));
+  EXPECT_TRUE(AutoPunctuationFor(eager, true, LiveRequestTiming::Edit));
+  for (const auto timing :
+       {LiveRequestTiming::Edit, LiveRequestTiming::Idle, LiveRequestTiming::Final}) {
+    EXPECT_FALSE(AutoPunctuationFor(off, true, timing));
+    EXPECT_FALSE(AutoPunctuationFor(on_pause, false, timing));
+    EXPECT_FALSE(AutoPunctuationFor(eager, false, timing));
+  }
+}
+
+TEST(LivePunctuationPolicyTest, OnlyOnPauseNeedsTheIdleTimerAndTheFinalRequest) {
+  using azookey::tsf::NeedsFinalPunctuationRequest;
+  using azookey::tsf::UsesIdleTimer;
+  azookey::tsf::TipDynamicPunctuationSettings on_pause;
+  on_pause.enabled = true;
+  auto eager = on_pause;
+  eager.eager = true;
+
+  EXPECT_TRUE(UsesIdleTimer(on_pause, true));
+  EXPECT_FALSE(UsesIdleTimer(on_pause, false));
+  EXPECT_FALSE(UsesIdleTimer(eager, true));
+  EXPECT_FALSE(UsesIdleTimer({}, true));
+
+  EXPECT_TRUE(NeedsFinalPunctuationRequest(on_pause, true, false));
+  EXPECT_FALSE(NeedsFinalPunctuationRequest(on_pause, true, true));
+  EXPECT_FALSE(NeedsFinalPunctuationRequest(eager, true, false));
+  EXPECT_FALSE(NeedsFinalPunctuationRequest(on_pause, false, false));
+}
+
 }  // namespace

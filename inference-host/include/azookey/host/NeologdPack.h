@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,7 +50,8 @@ class HttpPackDownloader final : public IPackDownloader {
   HttpDownloader downloader_;
 };
 
-enum class NeologdPackStatus : uint8_t { Ready, MissingPack, Failed };
+// Offline: privacy.mode=offline left no verified copy to use, so nothing was fetched.
+enum class NeologdPackStatus : uint8_t { Ready, MissingPack, Failed, Offline };
 
 struct NeologdPackResult {
   NeologdPackStatus status{NeologdPackStatus::Failed};
@@ -65,8 +67,10 @@ std::optional<std::string> VerifyNeologdPackFile(const NeologdPackManifest& mani
 
 // Fetches the published pack into packs_dir, or reuses a valid copy there, then verifies
 // it. Other versions of the pack in packs_dir are removed once the current one is ready.
+// network_allowed is passed to the downloader as HttpDownloadRequest::network_allowed.
 NeologdPackResult PrepareNeologdPack(const NeologdPackManifest& manifest,
                                      const std::filesystem::path& packs_dir,
-                                     IPackDownloader& downloader);
+                                     IPackDownloader& downloader,
+                                     std::function<bool()> network_allowed = {});
 
 }  // namespace azookey::host

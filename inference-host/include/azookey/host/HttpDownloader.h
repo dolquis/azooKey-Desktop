@@ -26,6 +26,10 @@ struct HttpDownloadRequest {
   // Cooperative cancellation between blocking operations; in-flight WinHTTP calls
   // still use the timeouts above. The callback runs on the calling thread.
   std::function<bool()> cancelled;
+  // privacy.mode=offline. Empty allows the network. A destination whose SHA256
+  // already matches is still reused; otherwise false fails before any network
+  // operation, and a change to false is cooperative cancellation like the above.
+  std::function<bool()> network_allowed;
 };
 
 struct HttpTextRequest {
@@ -35,6 +39,8 @@ struct HttpTextRequest {
   uint32_t send_timeout_ms{15'000};
   uint32_t receive_timeout_ms{30'000};
   std::function<bool()> cancelled;
+  // Same as HttpDownloadRequest::network_allowed, with no local copy to reuse.
+  std::function<bool()> network_allowed;
 };
 
 struct HttpTextResult {

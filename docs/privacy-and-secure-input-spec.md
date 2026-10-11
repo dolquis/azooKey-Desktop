@@ -40,6 +40,9 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 | `offline` | ON | ON | local のみ | 通常 | ネットワーク禁止 |
 | `custom` | 個別指定 | 個別指定 | 個別指定 | 個別指定 | 上級者向け |
 
+`offline` のネットワーク禁止は、外部 AI に加えて公開アセットの取得にも及ぶ。
+Host での適用は `docs/auto-word-registration-spec.md` §9（trending）と §15.14（neologd pack）に従う。
+
 既定モードは `normal`。ユーザーが明示的に変更しない限り、自動 secure
 判定（§4）でのみ一時的に `secure` へ落とす。
 

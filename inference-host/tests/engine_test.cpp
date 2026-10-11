@@ -28,6 +28,7 @@
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/ContextHash.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -1007,6 +1008,47 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_TRUE(loaded.Lookup("external").empty());
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1568: an edit that waits for another holder of the user dictionary file
+// lock must not hold the state lock that handshakes and queries take.
+TEST(InferenceEngineTest, UserWordEditWaitingForTheFileLockDoesNotBlockQueries) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_lock_wait.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_lock_wait.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::FileLockFailure failure;
+  auto holder = azookey::learning::AcquireExclusiveFileLockForPath(udict_path, failure);
+  ASSERT_TRUE(holder.has_value());
+  azookey::learning::UserWord word;
+  word.word = "Waited";
+  word.ruby = "waited";
+  std::promise<void> started;
+  auto started_future = started.get_future();
+  auto added = std::async(std::launch::async, [&] {
+    started.set_value();
+    return engine->AddUserWord(word);
+  });
+  started_future.wait();
+  // This thread releases the file lock only after both calls return. An edit
+  // that held the state lock while waiting would block them until its lock
+  // wait timed out, and the add would then fail.
+  (void)engine->model_loaded();
+  (void)engine->QueryCandidates("にほん", "", kNowBase);
+  EXPECT_EQ(added.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+  holder.reset();
+  EXPECT_TRUE(added.get());
+  EXPECT_EQ(dict.Lookup("waited").size(), 1u);
 
   RemoveProtectedStoreFile(udict_path);
   RemoveProtectedStoreFile(lpath);

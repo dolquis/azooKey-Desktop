@@ -367,6 +367,8 @@ class InferenceEngine {
   std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
   void NoteModelLoadFailedLocked();
   void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
+  // Caller holds learning_history_mutex_ and not state_mutex_.
+  bool EditUserDictionary(const std::function<bool(learning::UserDictionary&)>& edit);
   // The learning data view over every store; callers hold all store locks.
   LearningDataStores LearningDataStoresLocked();
   // Persists what a learning data operation may have changed. Holds every
@@ -432,7 +434,8 @@ class InferenceEngine {
   EngineConfig config_;
   uint64_t nll_config_revision_{};
   logging::RuntimeLogger* runtime_logger_;  // Non-owning; must outlive the engine.
-  bool model_loaded_{false};
+  // Written under state_mutex_; the handshake reads it without the lock.
+  std::atomic<bool> model_loaded_{false};
   bool model_preload_in_progress_{false};
   HealthStateMachine health_;
   std::optional<std::string> last_error_;

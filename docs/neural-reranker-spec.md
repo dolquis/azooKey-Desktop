@@ -702,8 +702,10 @@ pin の正典は `CMakeLists.txt` の
   評価は beam の作業シーケンスを解放し、sequence 0 を再利用できる prefix 長へ
   切り詰めてから、残りのトークンだけを decode する。prompt が生成時のものと一致し、
   その最終トークンの logits を保持していれば decode するトークンは 0 になる。
-- 生成は prompt の最終トークンを必ず decode し直す。beam の初手はその decode の
-  logits を読むためである。
+- 生成も prompt token 列がキャッシュと完全一致し、その末尾の logits を保持していれば、
+  prompt 全体を再利用する。beam の初手はそのスナップショットを読む。部分一致時は
+  必要な suffix を decode してスナップショットを更新する。suffix が空でも cancel と
+  deadline を確認する。
 - sequence 0 は prompt 専用とし、生成の beam は 1〜4、NLL は最大 1〜16 を
   作業用に使う。長い候補は候補ごとに sequence 1 を再利用する。
   `n_seq_max` は 17、`kv_unified` は true とし、KV 容量は共有 prefix と同時に保持する
@@ -1005,8 +1007,11 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   prefix 平均と p95、prefix 再利用トークン数の最小値、全評価 p95、20ms 超過件数と
   割合、各反復の内訳を出す。
   生成前（prefix を全 decode）と生成後（prefix を共有）で NLL スコアが一致すること、
-  NLL 評価の前後での生成候補順序と件数の一致も検証し、
-  生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  NLL 評価の前後での生成候補順序と件数の一致も検証する。独立にロードしたモデルの
+  cold 生成を基準に、warm 生成と cold NLL 評価後の生成が同じ候補順序・件数・スコアを
+  返すことを必須とする。生成スコアの最大絶対差は 0 とし、NLL 評価後や再利用後の
+  反復でも検証して `generation_max_score_delta` に記録する。
+  `--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
   batch 評価は、計測区間外で各候補の単独評価と、評価順序を逆転して元の候補位置へ
   戻した評価と比較する。全経路で件数とスコアの有限性を検査し、CPU は絶対誤差
   `1e-5` 以下、Vulkan は最上位を含む全候補順位の一致を `batch_invariant` として検証する。

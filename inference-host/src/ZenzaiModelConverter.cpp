@@ -842,8 +842,7 @@ struct ZenzaiModelRuntime {
 
   // Releases the beam working sequences, trims sequence 0 to the reusable prompt prefix and
   // returns its length. allow_full_reuse lets a caller that can serve the final prompt token's
-  // logits from cached_prompt_logits skip decoding altogether; generation passes false because
-  // its first step reads the logits of the token it just decoded.
+  // logits from cached_prompt_logits skip decoding altogether, including generation's first step.
   size_t PreparePromptPrefix(const std::vector<llama_token>& prompt_tokens, bool allow_full_reuse) {
     auto* memory = llama_get_memory(context);
     for (int32_t sequence = 1; sequence <= kMaxNllSequences; ++sequence) {
@@ -945,15 +944,16 @@ struct ZenzaiModelRuntime {
     bool completed_quota_reached = false;
 
     ZenzaiDecodeStats decode_stats;
-    // llama.cpp does not retain logits for an arbitrary cached prefix, and step zero reads the
-    // logits of the last decoded token, so generation never reuses the prompt whole.
-    const size_t retained_prompt_tokens = PreparePromptPrefix(prompt_tokens, false);
+    // A complete cached prompt includes its own logits snapshot. Reuse both KV and logits
+    // so warm generation does not change backend arithmetic by decoding only the last token.
+    const size_t retained_prompt_tokens = PreparePromptPrefix(prompt_tokens, true);
     std::vector<llama_token> prompt_suffix(prompt_tokens.begin() + retained_prompt_tokens,
                                            prompt_tokens.end());
     decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_suffix.size());
     decode_stats.prompt_reused_tokens = static_cast<uint64_t>(retained_prompt_tokens);
     const auto prompt_decode_start = std::chrono::steady_clock::now();
     const bool prompt_decoded =
+        !decode_control.ShouldAbort() &&
         DecodeTokens(context, prompt_suffix, decode_control, "llama.cpp prompt decode failed");
     decode_stats.prompt_decode_ms = std::chrono::duration<double, std::milli>(
                                         std::chrono::steady_clock::now() - prompt_decode_start)
@@ -968,7 +968,10 @@ struct ZenzaiModelRuntime {
     cached_prompt_tokens = prompt_tokens;
     // Step zero and a following NLL evaluation want the same row; copy it before the beams
     // overwrite the output buffer.
-    CachePromptLogits();
+    if (!prompt_suffix.empty()) CachePromptLogits();
+    if (cached_prompt_logits.empty()) {
+      throw std::runtime_error("llama.cpp prompt logits are not available");
+    }
     const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
@@ -1010,8 +1013,9 @@ struct ZenzaiModelRuntime {
       next_beams.reserve(candidate_limit * candidate_limit);
       for (size_t beam_index = 0; beam_index < beams.size(); ++beam_index) {
         const auto& beam = beams[beam_index];
-        float* logits =
-            llama_get_logits_ith(context, step == 0 ? -1 : static_cast<int32_t>(beam_index));
+        const float* logits = step == 0
+                                  ? cached_prompt_logits.data()
+                                  : llama_get_logits_ith(context, static_cast<int32_t>(beam_index));
         if (!logits) {
           throw std::runtime_error("llama.cpp logits are not available");
         }

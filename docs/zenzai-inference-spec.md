@@ -662,13 +662,14 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
-- CPU の llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と
+- llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と
   直前の正常完了時に記録した token 列の共通接頭辞長を `p` とし、sequence 0 の `p` 以降を
   削除して suffix だけを decode する。共通接頭辞が無い場合は sequence 0 を全削除して
-  prompt 全体を decode する。生成経路では、今回の prompt 全体が接頭辞に含まれる場合も、
-  現在の prompt 末尾の logits を得るため最終 token だけは削除して再 decode する。beam の
-  初手がその decode の logits を読むためである。末尾 token の logits を記録している
-  consumer は prompt 全体を再利用してよい（`docs/neural-reranker-spec.md` §B3.4）。
+  prompt 全体を decode する。token 列が完全一致し、末尾 token の logits のスナップショット
+  を保持している場合は、生成も NLL 評価も prompt 全体を再利用する。beam の初手は
+  そのスナップショットを読む。完全再利用できない場合は、最終 token を含む suffix を
+  decode してスナップショットを更新する。suffix が空でも cancel と deadline を確認する
+  （`docs/neural-reranker-spec.md` §B3.4）。
   beam ごとの KV キャッシュの扱い
   （sequence 割り当て、prune 時の付け替え、中断時の状態）は **§9.2.3** が規定し、beam は
   sequence 0 を変更しない。
@@ -685,7 +686,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   sequence 0 に prompt だけを残すため、同じくキャッシュを維持する。
 - `azookey_zenzai_bench` は、プロンプトと beam の decode 時間、decode token 数、
   prompt の再利用 token 数、beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
-  統計は正常完了した変換だけを対象とし、中断または例外で終わった変換の途中経過は公開しない。
+  prompt 全体を再利用した場合は、prompt の decode token 数を 0、再利用 token 数を
+  prompt 全体の token 数とする。
+  正常完了時の統計に加え、deadline 超過時は `deadline_exceeded=true` の診断統計を
+  公開する。prompt 準備中の期限切れでは、suffix が空の場合を含め、候補を返さずに
+  その時点の統計を記録する。beam 探索中の期限切れでは best-so-far とともに記録する。
+  これらを正常完了のスコアや機能検証の成功とみなさない。deadline 超過を伴わない
+  cancel や例外で終了した変換の途中統計は公開しない。
   phase 時間は性能原因の切り分けに使い、候補の機能検証や全体レイテンシの代替にはしない。
 
 ### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
@@ -809,8 +816,8 @@ sequence 上限は、排他実行する NLL と共有する（`neural-reranker-s
 3. 相異なる live beam は相異なる working sequence を占有する。
 4. `seq_id` 0 は prompt の P 位置だけを保持する。
 
-n = 0（prompt decode 直後）だけは例外で、live beam は根 1 本、working sequence をまだ持たず、
-最初の token の logits は prompt decode の最終位置から読む。
+n = 0（prompt の準備直後）だけは例外で、live beam は根 1 本、working sequence をまだ持たず、
+最初の token の logits は prompt 最終位置のスナップショットから読む。
 
 #### 9.2.3.2 1 step の手続き
 
@@ -908,9 +915,8 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   切り詰めた時点でこの logits 記録を無効化する。記録が無い consumer は最終 token を
   decode し直す。
 
-常駐接頭辞の再利用者は `neural-reranker-spec` §B3.4 の NllScorer であり、上の 4 制約は
-その consumer に課される。DEV-857 の実装時点では再利用者が存在せず、`Generate` 冒頭の
-KV 全体 clear を残したまま常駐長の記録を後回しにしてよかった。
+常駐接頭辞の再利用者は生成経路と `neural-reranker-spec` §B3.4 の NllScorer であり、
+上の 4 制約は両方の consumer に課される。
 
 #### 9.2.3.7 context のサイズと実装時に確認する項目
 

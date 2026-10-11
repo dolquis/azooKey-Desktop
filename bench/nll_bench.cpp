@@ -153,6 +153,22 @@ int main(int argc, char** argv) {
       azookey::host::ZenzaiModelConverter converter(std::move(loaded), &fallback);
       azookey::core::ConversionContext context;
       context.preceding_text = left_context;
+      // Capture a generation-produced prefix independently, without warming the NLL converter.
+      std::vector<azookey::core::Candidate> cold_generation;
+      {
+        auto fresh_loaded = azookey::host::LoadZenzaiGgufModel(model, options);
+        if (!fresh_loaded.ok) throw std::runtime_error("fresh generation model load failed");
+        azookey::host::ZenzaiModelConverter fresh_converter(std::move(fresh_loaded), &fallback);
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        cold_generation = fresh_converter.Convert("こうせい", context);
+        if (cold_generation.empty() ||
+            cold_generation.front().source != azookey::core::CandidateSource::Model)
+          throw std::runtime_error("fresh cold generation unavailable");
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto warm_generation = fresh_converter.Convert("こうせい", context);
+        if (RequireSameCandidates(cold_generation, warm_generation) != 0.0)
+          throw std::runtime_error("fresh cold and warm generation scores differ");
+      }
       std::vector<std::string> surfaces{"構成", "公正", "校正", "更生",
                                         "厚生", "後世", "恒星", "攻勢"};
       surfaces.resize(static_cast<size_t>(top_k));
@@ -245,6 +261,10 @@ int main(int argc, char** argv) {
         const auto generated = converter.Convert("こうせい", context);
         if (generated.empty() || generated.front().source != azookey::core::CandidateSource::Model)
           throw std::runtime_error("real generation unavailable");
+        generation_score_delta =
+            std::max(generation_score_delta, RequireSameCandidates(cold_generation, generated));
+        if (generation_score_delta != 0.0)
+          throw std::runtime_error("NLL prefix changed fresh cold generation score");
         const auto measure_convert = [&](std::vector<double>& durations,
                                          std::vector<double>& prompts) {
           context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -255,6 +275,8 @@ int main(int argc, char** argv) {
                   .count();
           generation_score_delta =
               std::max(generation_score_delta, RequireSameCandidates(generated, result));
+          if (generation_score_delta != 0.0)
+            throw std::runtime_error("generation score changed after NLL or warm reuse");
           const auto stats = converter.last_decode_stats();
           if (!stats || stats->deadline_exceeded)
             throw std::runtime_error("decode stats unavailable");

@@ -2194,6 +2194,60 @@ TEST_F(DispatcherTest, AddRemoveUserWord) {
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
 }
 
+// DEV-1572: each user dictionary edit leaves one record with its stages and
+// its trace id, and never the word.
+TEST_F(DispatcherTest, UserWordEditsAreLoggedWithStagesAndWithoutTheWord) {
+  const auto log_dir = std::filesystem::path(temp_directory.File("azookey_user_dict_edit_log"));
+  RemovePathNoThrow(log_dir);
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::Dispatcher logging_dispatcher(
+      &engine, &scheduler, &user_dict, DefaultDispatcherConfig(), nullptr, nullptr, &logger);
+
+  ipc::AddUserWordRequest add;
+  add.word = "ログ確認語";
+  add.ruby = "ろぐかくにんご";
+  auto request = MakeReq(64, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add));
+  request.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e3";
+  ASSERT_TRUE(logging_dispatcher.Dispatch(request));
+  ipc::RemoveUserWordRequest rm;
+  rm.word = "存在しない語";
+  rm.ruby = "そんざいしないご";
+  ASSERT_TRUE(logging_dispatcher.Dispatch(
+      MakeReq(65, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(rm))));
+
+  std::vector<std::string> results;
+  ASSERT_TRUE(std::filesystem::exists(log_dir));
+  for (const auto& file : std::filesystem::directory_iterator(log_dir)) {
+    if (file.path().extension() != ".jsonl") continue;
+    std::ifstream stream(file.path());
+    for (std::string line; std::getline(stream, line);) {
+      const auto record = ipc::json::Parse(line);
+      ASSERT_TRUE(record);
+      if (record->GetString("event") != "persistent_edit") continue;
+      EXPECT_EQ(line.find(add.word), std::string::npos);
+      EXPECT_EQ(line.find(add.ruby), std::string::npos);
+      EXPECT_EQ(line.find(rm.word), std::string::npos);
+      for (const char* key : {"writer_wait_ms", "lock_wait_ms", "load_ms", "save_ms", "total_ms"}) {
+        ASSERT_TRUE(record->GetNumber(key)) << key;
+        EXPECT_GE(*record->GetNumber(key), 0.0) << key;
+      }
+      ASSERT_TRUE(record->GetString("op"));
+      ASSERT_TRUE(record->GetString("result"));
+      if (record->GetString("op") == "user_dict_add") {
+        EXPECT_EQ(record->GetString("trace_id"), request.trace_id);
+        EXPECT_EQ(record->GetUInt("request_id"), 64u);
+      }
+      results.push_back(*record->GetString("op") + ":" + *record->GetString("result"));
+    }
+  }
+  EXPECT_EQ(results, (std::vector<std::string>{"user_dict_add:ok", "user_dict_remove:not_found"}));
+  RemovePathNoThrow(log_dir);
+}
+
 TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
   const auto blocking_parent =
       std::filesystem::path(temp_directory.File("azookey_dispatcher_user_dict_blocker_add"));

@@ -323,7 +323,11 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
   auto command_resp = client.ReceiveWithTimeout(run_options.command_timeout_ms);
   if (!command_resp) {
     result.exit_code = 1;
-    result.error = "timed out waiting for userdict response from running host";
+    // DEV-1572: the Host gives up before this wait ends, but a save that it had
+    // already started may still complete.
+    result.error =
+        "timed out waiting for userdict response from running host; the edit may still "
+        "complete, check with userdict list";
     return result;
   }
 

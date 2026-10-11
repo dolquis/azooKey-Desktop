@@ -98,6 +98,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
   // Keep the live dictionary available while the snapshot follows the same
   // disk-first/file-lock protocol as RemoveUserWord.
   if (!user_dict_) return ForgetOutcome::NotFound;
+  std::lock_guard writer_lock(user_dict_writer_mutex_);
   std::optional<learning::UserDictionary> snapshot;
   {
     std::scoped_lock lock(state_mutex_);
@@ -264,6 +265,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
 
   // User dictionary: the same disk-first protocol as RemoveUserWord.
   if (!user_dict_) return ResetOutcome::Unavailable;
+  std::lock_guard writer_lock(user_dict_writer_mutex_);
   std::optional<learning::UserDictionary> snapshot;
   {
     std::scoped_lock lock(state_mutex_);
@@ -389,54 +391,76 @@ LearningImportResult InferenceEngine::ImportLearningData(
   auto items = ReadBackupArchive(source, *crypto, &manifest, &read_failure.error);
   if (!items) return read_failure;
 
-  std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+  // learning_history_mutex_ keeps user_dict_ (the pointer) in place.
   const bool with_user_dictionary =
       detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) && user_dict_;
 
   // The user dictionary is shared with the userdict CLI: take its file lock
-  // and start from the disk state, as AddUserWord does.
+  // and start from the disk state, as AddUserWord does. The merge goes into a
+  // copy, and the wait for the file lock and the copy's load and save happen
+  // outside state_mutex_, so queries are not held behind them (DEV-1572).
+  std::unique_lock<std::timed_mutex> user_dict_writer(user_dict_writer_mutex_, std::defer_lock);
   std::optional<learning::ScopedFileLock> user_dict_lock;
-  std::vector<learning::UserWord> user_dict_before;
+  std::optional<learning::UserDictionary> user_dict_copy;
   if (with_user_dictionary) {
+    user_dict_writer.lock();
+    {
+      std::scoped_lock lock(state_mutex_);
+      user_dict_copy = *user_dict_;
+    }
+    if (before_user_dictionary_file_lock_for_tests_) before_user_dictionary_file_lock_for_tests_();
     learning::FileLockFailure lock_failure;
-    user_dict_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
+    user_dict_lock =
+        learning::AcquireExclusiveFileLockForPath(user_dict_copy->path(), lock_failure);
     if (!user_dict_lock) {
       learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
       LearningImportResult failed;
       failed.error = BackupError::StoreUnavailable;
       return failed;
     }
-    if (detail::UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+    if (detail::UserDictionaryFileExists(*user_dict_copy) && !user_dict_copy->Load()) {
       LearningImportResult failed;
       failed.error = BackupError::StoreUnavailable;
       return failed;
     }
-    user_dict_before = user_dict_->All();
   }
 
-  auto result = ApplyImportedItems(LearningDataStoresLocked(), selected, std::move(*items), policy);
-  if (result.error != BackupError::None) return result;
-  if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) RefreshPersonaLocked();
+  LearningImportResult result;
+  bool saved = true;
+  {
+    std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
+    auto stores = LearningDataStoresLocked();
+    if (user_dict_copy) stores.user_dictionary = &*user_dict_copy;
+    result = ApplyImportedItems(stores, selected, std::move(*items), policy);
+    if (result.error != BackupError::None) return result;
+    if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
+      RefreshPersonaLocked();
+    }
 
-  bool saved = SaveLearningDataLocked();
-  if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && typo_store_) {
-    saved = typo_store_->Save() && saved;
+    saved = SaveLearningDataLocked();
+    if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && typo_store_) {
+      saved = typo_store_->Save() && saved;
+    }
+    if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && auto_word_store_) {
+      saved = auto_word_store_->Save() && saved;
+    }
   }
-  if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && auto_word_store_) {
-    saved = auto_word_store_->Save() && saved;
-  }
-  if (with_user_dictionary) {
-    if (user_dict_->Save()) {
+  if (user_dict_copy) {
+    // Published only once on disk; a failed save leaves the live dictionary
+    // as it was before the import.
+    if (user_dict_copy->Save()) {
+      std::scoped_lock lock(state_mutex_);
+      *user_dict_ = std::move(*user_dict_copy);
+      indexed_user_dict_ = nullptr;
       RefreshDictionaryLocked();
     } else {
-      RestoreUserDictionaryLocked(user_dict_before);
       saved = false;
     }
   }
   // A store that failed to save keeps the merge in memory and retries it at
-  // the next flush (the user dictionary is rolled back above); the response
-  // says "io" so the settings app reports that the import is not on disk yet
-  // (learning-data-management-spec section 4.5).
+  // the next flush (the user dictionary keeps its state before the import);
+  // the response says "io" so the settings app reports that the import is not
+  // on disk yet (learning-data-management-spec section 4.5).
   if (!saved) result.error = BackupError::Io;
   return result;
 }

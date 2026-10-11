@@ -6,11 +6,11 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "../../learning/tests/TestByteCrypto.h"
+#include "ScopedTempDirectory.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Json.h"
@@ -571,33 +571,6 @@ bool HasMigrationArtifact(const std::filesystem::path& root) {
   return false;
 }
 
-class ScopedUserDictDirectory {
- public:
-  ScopedUserDictDirectory() {
-    for (int attempt = 0; attempt < 16; ++attempt) {
-      path_ = std::filesystem::temp_directory_path() /
-              ("azookey_userdict_migration_" +
-               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
-               std::to_string(attempt));
-      if (std::filesystem::create_directory(path_)) return;
-    }
-    throw std::runtime_error("Could not create a unique userdict test directory");
-  }
-
-  ~ScopedUserDictDirectory() {
-    std::error_code ec;
-    std::filesystem::remove_all(path_, ec);
-  }
-
-  ScopedUserDictDirectory(const ScopedUserDictDirectory&) = delete;
-  ScopedUserDictDirectory& operator=(const ScopedUserDictDirectory&) = delete;
-
-  const std::filesystem::path& path() const { return path_; }
-
- private:
-  std::filesystem::path path_;
-};
-
 class UserDictCliMigrationTest
     : public ::testing::TestWithParam<azookey::host::UserDictCliCommand> {
  protected:
@@ -641,7 +614,7 @@ class UserDictCliMigrationTest
     output << contents;
   }
 
-  ScopedUserDictDirectory directory_;
+  azookey::host::test::ScopedTempDirectory directory_;
   std::filesystem::path path_;
   std::filesystem::path import_path_;
 };

@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <gtest/gtest.h>
+#include <inputscope.h>
 #include <msctf.h>
 
 #include <algorithm>
@@ -14,6 +15,8 @@
 
 #include "KeyboardStateGuard.h"
 #include "ProofreadPipeClient.h"
+#include "azookey/core/AppProfileResolver.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
 #include "azookey/tsf/SettingsLauncher.h"
@@ -38,6 +41,76 @@ struct Document {
 };
 
 class TestContext;
+
+// An input field that says IS_DEFAULT: an ordinary field the AI routes accept.
+class DefaultInputScope final : public ITfInputScope {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfInputScope) return E_NOINTERFACE;
+    *out = static_cast<ITfInputScope*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetInputScopes(InputScope** out, UINT* count) override {
+    if (!out || !count) return E_POINTER;
+    auto* buffer = static_cast<InputScope*>(CoTaskMemAlloc(sizeof(InputScope)));
+    if (!buffer) return E_OUTOFMEMORY;
+    *buffer = IS_DEFAULT;
+    *out = buffer;
+    *count = 1;
+    return S_OK;
+  }
+  STDMETHODIMP GetPhrase(BSTR**, UINT* count) override {
+    if (count) *count = 0;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetRegularExpression(BSTR*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetSRGS(BSTR*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetXML(BSTR*) override { return E_NOTIMPL; }
+};
+
+class DefaultInputScopeProperty final : public ITfReadOnlyProperty {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfReadOnlyProperty) return E_NOINTERFACE;
+    *out = static_cast<ITfReadOnlyProperty*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetType(GUID* type) override {
+    if (type) *type = GUID_PROP_INPUTSCOPE;
+    return S_OK;
+  }
+  STDMETHODIMP EnumRanges(TfEditCookie, IEnumTfRanges** out, ITfRange*) override {
+    if (out) *out = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetValue(TfEditCookie, ITfRange*, VARIANT* value) override {
+    if (!value) return E_POINTER;
+    VariantInit(value);
+    value->vt = VT_UNKNOWN;
+    value->punkVal = static_cast<IUnknown*>(&scope_);
+    scope_.AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP GetContext(ITfContext** context) override {
+    if (context) *context = nullptr;
+    return E_NOTIMPL;
+  }
+
+ private:
+  DefaultInputScope scope_;
+};
+
+DefaultInputScopeProperty g_default_input_scope;
 
 class TestRange final : public ITfRange {
  public:
@@ -186,7 +259,13 @@ class TestContext final : public ITfContext {
   STDMETHODIMP EnumViews(IEnumTfContextViews**) override { return E_NOTIMPL; }
   STDMETHODIMP GetStatus(TF_STATUS*) override { return E_NOTIMPL; }
   STDMETHODIMP GetProperty(REFGUID, ITfProperty**) override { return E_NOTIMPL; }
-  STDMETHODIMP GetAppProperty(REFGUID, ITfReadOnlyProperty**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetAppProperty(REFGUID guid, ITfReadOnlyProperty** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (!provides_input_scope || guid != GUID_PROP_INPUTSCOPE) return E_NOTIMPL;
+    *out = &g_default_input_scope;
+    return S_OK;
+  }
   STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
                                ITfReadOnlyProperty**) override {
     return E_NOTIMPL;
@@ -202,6 +281,8 @@ class TestContext final : public ITfContext {
   std::optional<size_t> selection;
   // The range SetSelection last received.
   std::optional<std::pair<size_t, size_t>> selected;
+  // GUID_PROP_INPUTSCOPE answers IS_DEFAULT; without it the field is unknown.
+  bool provides_input_scope{true};
   std::vector<DWORD> flags_seen;
 
  private:
@@ -465,6 +546,51 @@ TEST_F(ProofreadHotkeyTest, ReadsNoTextFromASecureContext) {
 TEST_F(ProofreadHotkeyTest, ReadsNoTextWhereLearningIsNotAllowed) {
   service_.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
   auto document = MakeDocument(L"学習しない文脈の本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  const auto& capture = service_.proofread_capture_for_test();
+  ASSERT_TRUE(capture);
+  EXPECT_EQ(capture->status, ProofreadCapture::Status::Blocked);
+  EXPECT_EQ(document->get_text_calls, 0);
+}
+
+// The AI routes' gate (rich-features-spec X-3-6): the Host checks with an external backend only.
+TEST_F(ProofreadHotkeyTest, ReadsNoTextFromAnInputFieldOfUnknownKind) {
+  auto document = MakeDocument(L"種類の分からない入力欄の本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  context.provides_input_scope = false;
+  EXPECT_TRUE(Press(&context));
+  const auto& capture = service_.proofread_capture_for_test();
+  ASSERT_TRUE(capture);
+  EXPECT_EQ(capture->status, ProofreadCapture::Status::Blocked);
+  EXPECT_EQ(document->get_text_calls, 0);
+}
+
+TEST_F(ProofreadHotkeyTest, ReadsNoTextInAnAppProfiledForLocalAi) {
+  const auto json = azookey::ipc::json::Parse(
+      R"({"profilesByApp":{"notepad.exe":{"aiBackend":"local-zenzai"}}})");
+  ASSERT_TRUE(json);
+  azookey::core::BracketSettings settings;
+  settings.profiles = std::make_shared<const azookey::core::AppProfileResolver>(
+      azookey::core::AppProfileResolver::FromSettings(*json));
+  service_.set_bracket_settings_for_test(settings);
+  auto document = MakeDocument(L"ローカルの AI だけを使うアプリの本文。");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  const auto& capture = service_.proofread_capture_for_test();
+  ASSERT_TRUE(capture);
+  EXPECT_EQ(capture->status, ProofreadCapture::Status::Blocked);
+  EXPECT_EQ(document->get_text_calls, 0);
+}
+
+TEST_F(ProofreadHotkeyTest, ReadsNoTextForAnUnresolvedApplication) {
+  service_.set_foreground_app_for_test({"", "", false});
+  service_.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  auto document = MakeDocument(L"前面アプリを特定できないときの本文。");
   auto& context = NewContext(document);
   context.selection = 0;
   EXPECT_TRUE(Press(&context));

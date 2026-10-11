@@ -250,8 +250,12 @@ winrt::fire_and_forget ProofreadPane::Check() {
 void ProofreadPane::CloseSession() {
   // A select still running holds its own reference; the pipe closes when that ends.
   session_.reset();
+  if (session_document_)
+    SecureZeroMemory(session_document_->text.data(), session_document_->text.size());
   session_document_.reset();
+  SecureZeroMemory(session_text_.data(), session_text_.size() * sizeof(wchar_t));
   session_text_.clear();
+  SecureZeroMemory(session_input_text_.data(), session_input_text_.size() * sizeof(wchar_t));
   session_input_text_.clear();
   checked_session_text_ = false;
 }
@@ -260,12 +264,19 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
   const auto self = shared_from_this();
   const auto dispatcher = dispatcher_;
   CloseSession();
+  const uint64_t generation = ++open_generation_;
   try {
     auto client = std::make_shared<ProofreadSessionClient>();
     co_await winrt::resume_background();
     auto document = client->Open(token);
     co_await ResumeForeground(dispatcher);
 
+    // The newest OpenSession wins; an older one that finishes later is dropped.
+    if (generation != open_generation_) {
+      if (document) SecureZeroMemory(document->text.data(), document->text.size());
+      client->Close();
+      co_return;
+    }
     ResourceLoader resources;
     if (!document) {
       ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Proofread_Session_failed"),
@@ -278,11 +289,6 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
       // No text came with it: only the reason is shown, and the session is not kept.
       client->Close();
       ShowStatus(controls::InfoBarSeverity::Warning, message, L"Proofread_SessionTitle");
-      co_return;
-    }
-    // A newer session may have opened while this one connected.
-    if (session_) {
-      client->Close();
       co_return;
     }
     session_ = std::move(client);

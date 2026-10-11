@@ -202,6 +202,16 @@ void ProofreadSessionServer::Stop() {
   result_event_ = nullptr;
   pending_request_.reset();
   result_.reset();
+  WipeDocumentLocked();
+}
+
+void ProofreadSessionServer::WipeDocument() {
+  std::lock_guard lock(mutex_);
+  WipeDocumentLocked();
+}
+
+void ProofreadSessionServer::WipeDocumentLocked() {
+  SecureZeroMemory(document_json_.data(), document_json_.size());
   document_json_.clear();
   document_json_.shrink_to_fit();
 }
@@ -294,16 +304,11 @@ void ProofreadSessionServer::Run() noexcept {
     if (!document) return;
     auto wait = Transfer(true, pipe_, io_event, stop_event_, document->data(),
                          static_cast<DWORD>(document->size()), idle);
+    // Sent or not, the TIP keeps no copy of the text for the rest of the session.
+    SecureZeroMemory(document->data(), document->size());
+    WipeDocument();
     if (wait == IoWait::Stopped) stopped = true;
     if (wait != IoWait::Done) return;
-    // Sent: the TIP keeps no copy of the text for the rest of the session.
-    document->assign(document->size(), 0);
-    {
-      std::lock_guard lock(mutex_);
-      document_json_.assign(document_json_.size(), '\0');
-      document_json_.clear();
-      document_json_.shrink_to_fit();
-    }
 
     for (;;) {
       uint8_t header[4]{};

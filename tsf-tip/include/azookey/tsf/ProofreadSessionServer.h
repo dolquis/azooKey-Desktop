@@ -91,6 +91,8 @@ class ProofreadSessionServer final {
   void Run() noexcept;
   void DeliverSelect();
   void DeliverEnd();
+  void WipeDocument();
+  void WipeDocumentLocked();
 
   HWND hwnd_{nullptr};
   HANDLE pipe_{INVALID_HANDLE_VALUE};

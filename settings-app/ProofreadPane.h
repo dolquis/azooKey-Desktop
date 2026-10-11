@@ -47,6 +47,8 @@ class ProofreadPane : public std::enable_shared_from_this<ProofreadPane> {
   std::wstring session_input_text_;
   // The findings came from the session's document, so their ranges are the application's.
   bool checked_session_text_{false};
+  // Counts OpenSession calls; a connection that finishes after a newer call is dropped.
+  uint64_t open_generation_{0};
 };
 
 }  // namespace azookey::settings

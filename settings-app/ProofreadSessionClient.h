@@ -18,9 +18,12 @@ namespace azookey::settings {
 // pane makes them off the UI thread; `timeout` bounds each wait.
 class ProofreadSessionClient final {
  public:
-  explicit ProofreadSessionClient(
-      std::chrono::milliseconds timeout = std::chrono::seconds(10)) noexcept
-      : timeout_(timeout) {}
+  // Decides whether the process serving the pipe may be trusted with the session.
+  using ServerVerifier = bool (*)(HANDLE pipe) noexcept;
+
+  explicit ProofreadSessionClient(std::chrono::milliseconds timeout = std::chrono::seconds(10),
+                                  ServerVerifier verifier = &VerifySessionServer) noexcept
+      : timeout_(timeout), verifier_(verifier) {}
   ~ProofreadSessionClient();
   ProofreadSessionClient(const ProofreadSessionClient&) = delete;
   ProofreadSessionClient& operator=(const ProofreadSessionClient&) = delete;
@@ -34,11 +37,18 @@ class ProofreadSessionClient final {
   std::optional<ipc::proofread::SelectResult> Select(uint64_t start, uint64_t length);
   void Close();
 
+  // The server runs as this user in this logon session at medium integrity or
+  // above. A failed query refuses it. A legitimate TIP never serves from a
+  // lower integrity process, so a low or AppContainer process that names its
+  // own pipe on the command line is refused here.
+  static bool VerifySessionServer(HANDLE pipe) noexcept;
+
  private:
   bool Transfer(bool write, uint8_t* data, DWORD size);
   std::optional<std::string> ReadMessage(uint32_t max_bytes);
 
   std::chrono::milliseconds timeout_;
+  ServerVerifier verifier_;
   std::mutex mutex_;
   HANDLE pipe_{INVALID_HANDLE_VALUE};
   HANDLE event_{nullptr};

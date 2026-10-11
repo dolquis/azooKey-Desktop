@@ -97,10 +97,13 @@ class ReadSession final : public ITfEditSession {
       if (FAILED(hr)) return hr;
       text += tail;
 
+      // The reads are wiped once the window is cut out of them.
+      SecureZeroMemory(tail.data(), tail.size() * sizeof(wchar_t));
       const auto window = SelectProofreadWindow(text, anchor_offset, ipc::kMaxAnomalyTextBytes);
       ProofreadDocument document;
       document.truncated = window.length < text.size();
       document.text = text.substr(window.start, window.length);
+      SecureZeroMemory(text.data(), text.size() * sizeof(wchar_t));
       document.anchor =
           (std::min)(anchor_offset - (std::min)(anchor_offset, window.start), document.text.size());
       if (!document.text.empty()) {

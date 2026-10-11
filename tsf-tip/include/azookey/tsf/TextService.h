@@ -59,7 +59,8 @@ inline constexpr GUID kProofreadPreservedKeyGuid = {
 // What the batch correction hotkey took from the focused document.
 struct ProofreadCapture {
   enum class Status : uint8_t {
-    // A secure or no-learning context: no text was read.
+    // A secure or no-learning context, or one where external AI is not
+    // allowed: no text was read.
     Blocked,
     // The application exposed no readable text.
     Unavailable,

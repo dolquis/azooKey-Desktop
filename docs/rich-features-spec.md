@@ -462,8 +462,9 @@ Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに
 キーを登録せずアプリへ渡す。昇格したプロセスから起動した設定アプリは昇格したまま動き、低い整合性レベルの
 プロセスは medium の設定アプリへ session pipe を提供できないため。
 
-**文書の取得**。TIP は event privacy（下の `DetectAnomalies` の `secure` / `learning_allowed`）が secure の文脈、または学習を
-許さない文脈では本文を一切読まない。それ以外では、選択の開始位置（選択が無ければ文書の先頭）から前後に
+**文書の取得**。TIP は既存の AI 経路と同じ判定（event privacy の `secure` / `learning_allowed` と AI の可否）で、
+secure の文脈、学習を許さない文脈、外部 AI を使えない文脈（入力欄の種類を判定できない、前面アプリを
+特定できない、アプリ別プロファイルの `aiBackend` が `local-zenzai` など）では本文を一切読まない。それ以外では、選択の開始位置（選択が無ければ文書の先頭）から前後に
 UTF-16 で `kMaxAnomalyTextBytes` ずつまでを読み取り専用の edit session で読み、選択位置を中心に UTF-8 で
 `kMaxAnomalyTextBytes` 以下の窓を切り出す。窓はサロゲートペアを割らず、対になっていないサロゲートは
 U+FFFD（3 バイト）として数える。読めた本文が空のアプリ、edit session や `GetText` を拒むアプリでは、本文を
@@ -473,8 +474,9 @@ U+FFFD（3 バイト）として数える。読めた本文が空のアプリ、
 `\\.\pipe\azookey-proofread-<token>` を作り、設定アプリを `--proofread-session <token>` だけを引数に起動する。
 token はシステムの乱数から作る 128 bit（小文字 16 進 32 桁）で、本文はコマンドライン、ディスク、ログのいずれにも
 出さない。pipe は 1 instance、`FILE_FLAG_FIRST_PIPE_INSTANCE`、`PIPE_REJECT_REMOTE_CLIENTS` で、DACL は現在の
-logon SID だけを許す。TIP は接続してきたプロセスの実行ファイルが TIP と同じフォルダの `azookey_settings.exe`
-であることを確かめ、違えば切断する（8 回で session を終える）。
+logon SID だけを許し、強制ラベル（medium、no-read-up / no-write-up / no-execute-up）で整合性レベルの低い
+プロセスからの接続を止める。TIP は接続してきたプロセスの実行ファイルが TIP と同じフォルダの
+`azookey_settings.exe` であることを確かめ、違えば切断する（8 回で session を終える）。
 
 | メッセージ | 向き | フィールド |
 |---|---|---|
@@ -486,7 +488,9 @@ logon SID だけを許す。TIP は接続してきたプロセスの実行ファ
 上限を超える、または解釈できないメッセージを受けたら TIP は session を終える。`blocked` と `unavailable` の
 session は本文を持たず、設定アプリはその理由だけを表示する。
 
-**範囲の選択**。TIP は窓の range と、窓の本文の UTF-16 長とハッシュだけを保持する（本文は保持しない）。
+**範囲の選択**。TIP は窓の range と、窓の本文の UTF-16 長とハッシュだけを保持する。送った本文の最終バッファ
+（読み取った本文、送信用の JSON と frame）は送信の成否によらず消去する。JSON ライブラリ内部などの中間の
+コピーは解放だけで、消去はしない。
 `select` を受けると、範囲が窓に収まらなければ `invalid_range` を返す。収まれば read-write の edit session で
 窓を読み直し、長さとハッシュが取得時と同じときだけ、境界がサロゲートペアの途中でないことを確かめて
 その範囲を選択する。文書が変わっていれば `document_changed`、本文を持たない session や文書が閉じられた
@@ -541,9 +545,10 @@ secure の文脈、または学習を許さない文脈の本文は送らない�
   本文のまま編集されていないときだけ、その範囲を入力欄で選択する。範囲が本文に収まらない項目や、
   サロゲートペアの途中を指す項目では、箇所を示さず選択も出さない。
 - `--proofread-session <token>` で起動されたとき（起動済みの設定アプリへ渡されたときも同じ）は、ペインを
-  開いて TIP の session に接続する。session の pipe を提供しているプロセスが `document` の `window` を持つ
-  プロセスでなければ接続を捨てる（アプリが view のウィンドウを返さず `window` が 0 の session では、この確認を
-  しない。pipe の名前は推測できない token で、TIP が最初の instance として作っている）。`captured` の本文は入力欄に入れ、「検査する」を押したときに送る
+  開いて TIP の session に接続する。pipe を提供しているプロセスが自分と同じユーザー SID と logon SID を持ち、
+  整合性レベルが medium 以上であることを確かめ、確かめられなければ何も読まずに接続を捨てる。さらに、
+  そのプロセスが `document` の `window` を持つプロセスでなければ捨てる（アプリが view のウィンドウを返さず
+  `window` が 0 の session では、この確認だけをしない）。続けて起動されたときは最後の起動の session を採る。`captured` の本文は入力欄に入れ、「検査する」を押したときに送る
   （自動では送らない）。入力欄が session の本文のままなら、要求の `secure` / `learning_allowed` は
   `document` の値をそのまま使い、本文は入力欄ではなく `document` の `text` を送る（入力欄は改行を変えるため、
   一覧の位置は `document` の本文で数える）。編集した本文は貼り付けた本文として扱う。

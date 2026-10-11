@@ -7,6 +7,71 @@ namespace azookey::settings {
 
 namespace proofread = azookey::ipc::proofread;
 
+namespace {
+
+std::vector<uint8_t> TokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS type) {
+  DWORD size = 0;
+  GetTokenInformation(token, type, nullptr, 0, &size);
+  std::vector<uint8_t> buffer(size);
+  if (size == 0 || !GetTokenInformation(token, type, buffer.data(), size, &size)) buffer.clear();
+  return buffer;
+}
+
+PSID LogonSid(const std::vector<uint8_t>& groups_buffer) {
+  if (groups_buffer.empty()) return nullptr;
+  const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(groups_buffer.data());
+  for (DWORD i = 0; i < groups->GroupCount; ++i) {
+    if ((groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+      return groups->Groups[i].Sid;
+  }
+  return nullptr;
+}
+
+struct TokenIdentity {
+  std::vector<uint8_t> user;
+  std::vector<uint8_t> groups;
+  std::vector<uint8_t> label;
+};
+
+bool ReadIdentity(HANDLE process, TokenIdentity& identity) {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return false;
+  identity.user = TokenInformation(token, TokenUser);
+  identity.groups = TokenInformation(token, TokenGroups);
+  identity.label = TokenInformation(token, TokenIntegrityLevel);
+  CloseHandle(token);
+  return !identity.user.empty() && !identity.groups.empty() && !identity.label.empty();
+}
+
+}  // namespace
+
+bool ProofreadSessionClient::VerifySessionServer(HANDLE pipe) noexcept {
+  try {
+    ULONG server_process = 0;
+    if (!GetNamedPipeServerProcessId(pipe, &server_process)) return false;
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_process);
+    if (!process) return false;
+    TokenIdentity server;
+    const bool read = ReadIdentity(process, server);
+    CloseHandle(process);
+    TokenIdentity self;
+    if (!read || !ReadIdentity(GetCurrentProcess(), self)) return false;
+
+    const auto* server_user = reinterpret_cast<const TOKEN_USER*>(server.user.data());
+    const auto* self_user = reinterpret_cast<const TOKEN_USER*>(self.user.data());
+    if (!EqualSid(server_user->User.Sid, self_user->User.Sid)) return false;
+    const PSID server_logon = LogonSid(server.groups);
+    const PSID self_logon = LogonSid(self.groups);
+    if (!server_logon || !self_logon || !EqualSid(server_logon, self_logon)) return false;
+    const auto* label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(server.label.data());
+    const UCHAR count = *GetSidSubAuthorityCount(label->Label.Sid);
+    if (count == 0) return false;
+    return *GetSidSubAuthority(label->Label.Sid, count - 1u) >= SECURITY_MANDATORY_MEDIUM_RID;
+  } catch (...) {
+    return false;
+  }
+}
+
 ProofreadSessionClient::~ProofreadSessionClient() { Close(); }
 
 void ProofreadSessionClient::Close() {
@@ -68,11 +133,18 @@ std::optional<proofread::DocumentMessage> ProofreadSessionClient::Open(std::stri
     Close();
     return std::nullopt;
   }
+  // Nothing is read from a server that fails the check.
+  if (!verifier_ || !verifier_(pipe_)) {
+    Close();
+    return std::nullopt;
+  }
   std::optional<proofread::DocumentMessage> document;
   {
     std::lock_guard lock(mutex_);
-    if (const auto json = ReadMessage(proofread::kMaxDocumentFrameBytes))
+    if (auto json = ReadMessage(proofread::kMaxDocumentFrameBytes)) {
       document = proofread::ParseDocumentMessage(*json);
+      SecureZeroMemory(json->data(), json->size());
+    }
   }
   // The document names the application window; the pipe must be served from
   // that application, so another process holding the name is refused.

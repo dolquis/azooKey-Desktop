@@ -85,7 +85,8 @@ std::optional<uint32_t> DecodeFrameLength(const uint8_t (&header)[4], uint32_t m
 std::optional<std::string> GenerateSessionToken();
 
 // The server end of a session pipe: one instance, first instance only, local
-// clients only, overlapped, and a DACL that admits the current logon SID only.
+// clients only, overlapped, a DACL that admits the current logon SID only, and
+// a medium mandatory label that refuses lower-integrity processes.
 // INVALID_HANDLE_VALUE on failure (also when the logon SID cannot be read).
 HANDLE CreateSessionPipe(std::string_view token);
 #endif

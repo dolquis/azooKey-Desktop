@@ -156,6 +156,33 @@ TEST(ProofreadSessionClientTest, RefusesAServerThatDoesNotOwnTheDocumentWindow) 
   EXPECT_FALSE(client.Select(0, 1));
 }
 
+bool RefuseServer(HANDLE) noexcept { return false; }
+
+// A server that fails the identity check gets nothing read from it.
+TEST(ProofreadSessionClientTest, RefusesAServerThatFailsTheIdentityCheck) {
+  const auto token = FreshToken();
+  StandInTip tip(token, Document(0));
+  ProofreadSessionClient client(std::chrono::seconds(10), &RefuseServer);
+  EXPECT_FALSE(client.Open(token));
+  EXPECT_FALSE(client.Select(0, 1));
+}
+
+// The stand-in server is this process: same user and logon, at medium or above.
+TEST(ProofreadSessionClientTest, IdentityCheckAdmitsAServerOfThisLogonSession) {
+  const auto token = FreshToken();
+  const HANDLE pipe = proofread::CreateSessionPipe(token);
+  ASSERT_NE(pipe, INVALID_HANDLE_VALUE);
+  const auto name = proofread::SessionPipeName(token);
+  const HANDLE client = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                    OPEN_EXISTING, 0, nullptr);
+  ASSERT_NE(client, INVALID_HANDLE_VALUE);
+  EXPECT_TRUE(ProofreadSessionClient::VerifySessionServer(client));
+  // A handle that is not a pipe cannot be checked, so it is refused.
+  EXPECT_FALSE(ProofreadSessionClient::VerifySessionServer(GetCurrentProcess()));
+  CloseHandle(client);
+  CloseHandle(pipe);
+}
+
 TEST(ProofreadSessionClientTest, RefusesAMalformedDocument) {
   const auto token = FreshToken();
   StandInTip tip(token, R"({"kind":"document","status":"blocked","text":"leaked"})");

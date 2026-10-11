@@ -6528,12 +6528,14 @@ bool TextService::ClaimsProofreadKey(ITfContext* context) const {
 ProofreadCapture TextService::CaptureProofreadDocument(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
   ProofreadCapture capture;
-  // DEV-1532 contract: no text leaves a secure or no-learning context, so it
-  // is not read at all.
-  const auto privacy = ResolvePrivacy(context, false);
+  // DEV-1532 contract and the AI routes' gate: no text leaves a secure or
+  // no-learning context, nor one where external AI is not allowed (unknown
+  // input scope, unresolved app, a local-zenzai app profile), so it is not
+  // read at all. The Host detects with an external backend only.
+  const auto privacy = ResolvePrivacy(context, true);
   capture.secure = privacy.secure;
   capture.learning_allowed = privacy.learning_allowed;
-  if (privacy.secure || !privacy.learning_allowed) {
+  if (privacy.secure || !privacy.learning_allowed || !privacy.ai.ai || !privacy.ai.external) {
     capture.status = ProofreadCapture::Status::Blocked;
   } else if (auto document = ReadProofreadDocument(context, client_id_)) {
     capture.status = ProofreadCapture::Status::Captured;
@@ -6720,10 +6722,10 @@ void TextService::StartProofreadSession(ITfContext* context) {
       server->Start(*token, ipc::proofread::BuildDocumentMessage(message),
                     {this, &TextService::OnProofreadSelect, &TextService::OnProofreadEnd}, options);
   // Only the server keeps the text, until it is sent.
-  std::fill(message.text.begin(), message.text.end(), '\0');
+  SecureZeroMemory(message.text.data(), message.text.size());
   const auto length = capture.document.text.size();
   const auto hash = ProofreadTextHash(capture.document.text);
-  std::fill(capture.document.text.begin(), capture.document.text.end(), L'\0');
+  SecureZeroMemory(capture.document.text.data(), capture.document.text.size() * sizeof(wchar_t));
   if (!started) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_start_failed");
     return;

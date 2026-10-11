@@ -176,6 +176,26 @@ TEST(ProofreadSessionPipeTest, AdmitsOnlyTheLogonSessionAndOneInstance) {
   LocalFree(sid);
   LocalFree(descriptor);
 
+  // A medium mandatory label with no-read-up / no-write-up / no-execute-up.
+  PACL sacl = nullptr;
+  PSECURITY_DESCRIPTOR label_descriptor = nullptr;
+  ASSERT_EQ(GetSecurityInfo(pipe, SE_KERNEL_OBJECT, LABEL_SECURITY_INFORMATION, nullptr, nullptr,
+                            nullptr, &sacl, &label_descriptor),
+            static_cast<DWORD>(ERROR_SUCCESS));
+  ASSERT_NE(sacl, nullptr);
+  ASSERT_EQ(sacl->AceCount, 1u);
+  void* label_ace = nullptr;
+  ASSERT_TRUE(GetAce(sacl, 0, &label_ace));
+  const auto* label = static_cast<const SYSTEM_MANDATORY_LABEL_ACE*>(label_ace);
+  EXPECT_EQ(label->Header.AceType, SYSTEM_MANDATORY_LABEL_ACE_TYPE);
+  EXPECT_EQ(label->Mask, static_cast<ACCESS_MASK>(SYSTEM_MANDATORY_LABEL_NO_READ_UP |
+                                                  SYSTEM_MANDATORY_LABEL_NO_WRITE_UP |
+                                                  SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP));
+  const auto label_sid = const_cast<DWORD*>(&label->SidStart);
+  EXPECT_EQ(*GetSidSubAuthority(label_sid, *GetSidSubAuthorityCount(label_sid) - 1u),
+            static_cast<DWORD>(SECURITY_MANDATORY_MEDIUM_RID));
+  LocalFree(label_descriptor);
+
   DWORD flags = 0;
   DWORD max_instances = 0;
   ASSERT_TRUE(GetNamedPipeInfo(pipe, &flags, nullptr, nullptr, &max_instances));

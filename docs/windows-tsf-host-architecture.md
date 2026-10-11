@@ -485,6 +485,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 | `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
 
+校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session（`ipc/include/azookey/ipc/ProofreadSession.h`）は
+Host の IPC ではなく、TIP が押下ごとに作る使い捨ての pipe で、本表の `MessageType` には含めない（rich X-3-6）。
+
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、
 現行の要求 payload は空オブジェクトである。roadmap M30 は変更対象に `ipc/src/Payloads.cpp`

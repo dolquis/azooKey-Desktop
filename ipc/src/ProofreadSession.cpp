@@ -217,7 +217,10 @@ HANDLE CreateSessionPipe(std::string_view token) {
   // session does not start.
   const auto logon_sid = CurrentLogonSid();
   if (logon_sid.empty()) return INVALID_HANDLE_VALUE;
-  const auto sddl = internal::BuildPipeSecuritySddl(logon_sid, false);
+  // The medium mandatory label keeps a lower-integrity process of the same
+  // logon from reading, writing or running the pipe (and from using up the
+  // TIP's refusals of unexpected clients).
+  const auto sddl = internal::BuildPipeSecuritySddl(logon_sid, false) + L"S:(ML;;NRNWNX;;;ME)";
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1,
                                                             &descriptor, nullptr))

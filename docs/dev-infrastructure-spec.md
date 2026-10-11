@@ -642,7 +642,7 @@ GoogleTest と WIL は推論品質に影響しないため、比較は「CTest �
   （`cl`、`link`、`ninja`、`MSBuild`、`clang-cl`、`cargo`、`rustc`）が
   動いていないことを確かめて記録する。
 * 前後を交互（ABAB）に実行し、各条件を同じ回数・同じ引数で測る。
-  スレッド数は §8.1.1 の既定値（`zenzai-inference-spec`）に固定する。
+  スレッド数は `zenzai-inference-spec` §8.1.1 の上限値 8 に固定する。
 * OS のファイルキャッシュは消せない。「cold」は、プロセス起動直後の 1 回目
   （モデルを再マップした直後）の値と定義して明記する。
 
@@ -651,11 +651,11 @@ GoogleTest と WIL は推論品質に影響しないため、比較は「CTest �
 | 比較項目 | コマンド | 回帰と見なす条件（出典） |
 |---|---|---|
 | モデルロード | `ctest -L zenzai-real-model`。prompt token ids は同ラベルの `--expected-prompt-token-ids` で照合する。ロード時間は `azookey_zenzai_bench` の text 出力の `load_ms` を記録する | 1 件でも失敗。ロード時間は計測のみでゲートしない（`zenzai-inference-spec` §8.1）。増減があれば llama.cpp のロードログで内訳を示す |
-| 代表プロンプト出力 | `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --model <GGUF> --json` を前後 2 回ずつ | `top1_accuracy` が −0.5pp を超えて悪化（`conversion-quality-benchmark-spec` §14.3） |
-| レイテンシ | `azookey_zenzai_bench --model <GGUF> --input <読み> --threads 8 --warmup 5 --iterations 50 --json` を短い読みと長い読みで、前後 3 セットずつ | p95 / p99 が 10% 超かつ 0.05ms 超の悪化（§4.5）。読み 8 文字以下の p50 / p95 目標と打ち切り率（`zenzai-inference-spec` §8.1、§8.2） |
+| 代表プロンプト出力 | `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --model <GGUF> --per-case <path> --output <path>` を前後 2 回ずつ。per-case の候補列も前後で比べる | `top1_accuracy` が −0.5pp を超えて悪化（`conversion-quality-benchmark-spec` §14.3） |
+| レイテンシ | `azookey_zenzai_bench --model <GGUF> --input <読み> --threads 8 --warmup 5 --iterations 50 --output <path>` を短い読みと長い読みで、前後 3 セットずつ。text 出力の `load_ms` と `top_debug_info` も残す | p95 / p99 が 10% 超かつ 0.05ms 超の悪化（§4.5）。読み 8 文字以下の p50 / p95 目標と打ち切り率（`zenzai-inference-spec` §8.1、§8.2） |
 | メモリ | 上記 bench プロセスの `PeakWorkingSet64` と、品質ベンチ出力の `memory_peak_mb` | +10% または +20MB を超える増加で、原因を特定するまで更新を止める |
 
-生成スコアが CPU で前後一致しない場合は、原因を特定するまで更新を止める。
+生成スコア（`top_debug_info` の `lp`）が CPU で前後一致しない場合は、原因を特定するまで更新を止める。
 
 #### 独立 PR の規約と記録先
 

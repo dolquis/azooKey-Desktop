@@ -440,6 +440,32 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
   EXPECT_EQ(reader.ReloadsForTest(), reloads);
 }
 
+// A write to a file next to settings.json always reaches the watch, so unlike
+// the nested case above this does not depend on what NTFS reports late. The
+// worker must wake for it and drop it without reading the settings again.
+TEST_F(LocalSettingsTest, SiblingFileWritesWakeTheWatchWithoutReloadingSettings) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.WatchNotificationsForTest(); }));
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.ReloadsForTest(); }));
+  const auto notifications = reader.WatchNotificationsForTest();
+  const auto reloads = reader.ReloadsForTest();
+  const auto sibling = path.parent_path() / L"unrelated.txt";
+  // The watch is re-armed only after it consumed the previous wake-up, so a
+  // write made in between is not reported: keep writing until two arrived. The
+  // second one can only be received after the worker finished the first.
+  int round = 0;
+  ASSERT_TRUE(WaitUntil([&] {
+    std::ofstream stream(sibling, std::ios::binary | std::ios::trunc);
+    stream << "round " << ++round;
+    stream.close();
+    return reader.WatchNotificationsForTest() >= notifications + 2;
+  }));
+  EXPECT_EQ(reader.ReloadsForTest(), reloads);
+  EXPECT_TRUE(reader.Snapshot().pairing.enabled);
+}
+
 TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {
   for (int iteration = 0; iteration < 20; ++iteration) {
     SCOPED_TRACE(iteration);

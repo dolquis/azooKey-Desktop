@@ -228,8 +228,7 @@ int main(int argc, char** argv) {
                 << " after_nll_prompt_mean_ms=" << Mean(after_nll_prompt)
                 << " within_default_budget=" << (p95 <= default_budget_ms)
                 << " order_invariant=1 generation_order_invariant=1 shared_prefix_invariant=1"
-                << " batch_invariant=1"
-                << " generation_max_score_delta=" << generation_score_delta
+                << " batch_invariant=1" << " generation_max_score_delta=" << generation_score_delta
                 << " top=" << surfaces[winner] << '\n';
       for (size_t i = 0; i < last.scores.size(); ++i)
         std::cout << "fixture=" << surfaces[i] << " nll=" << last.scores[i] << '\n';

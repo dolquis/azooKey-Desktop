@@ -230,14 +230,14 @@ Linear が持つ。
   1 秒を足した時間（7 秒）まで待つ。busy 接続と handshake の待ちを合わせると、失敗を表示するまで最悪約 11 秒かかる。
 - Host の `AddUserWord` / `RemoveUserWord` は、要求の受信から数えて 5 秒を待ちの予算とする。予算は、同じ Host の
   他のユーザー辞書の編集の終わりを待つ時間と、ユーザー辞書のファイルロックを待つ時間を合わせて数える。
-  予算を使い切ったとき、またはロックを取った後の読み直しの時点で予算を過ぎていたときは、保存せずに `ok=false` を返し、
+  予算を使い切ったとき、またはロックを取り読み直して保存を始める前の時点で予算を過ぎていたときは、保存せずに `ok=false` を返し、
   Health の `last_error` に `user dictionary busy` を残す。応答には理由のフィールドが無いので、CLI は
   `running host rejected add`（`remove`）と表示する。保存を始めた後は打ち切らない。
 - Host はファイルロックを取った後、ディスクのユーザー辞書を読み直してから編集する。暗号化ファイルの大きさ・最終書込み時刻・ファイル識別子（NTFS のファイル番号、Linux では inode）が、この Host が前回読み書きしたときから変わらず、
   その後メモリ上の辞書を変えていなければ、読み直しを省く（`load_skipped`）。他の writer は一時ファイルからの置換で書くので、識別子が変わる。
-- したがって CLI が応答待ちを諦めた後に Host の編集が成功するのは、読み直しと保存（DPAPI と flush・置換）に
-  合わせて 2 秒より長くかかったときだけである。CLI の時間切れの表示は、編集が後から成功しうることと、
-  `userdict list`（`newwords list`）で確かめることを示す。
+- したがって `userdict add` / `remove` で CLI が応答待ちを諦めた後に Host の編集が成功するのは、要求が Host に届くまでの時間と、
+  読み直しと保存（DPAPI と flush・置換）に合わせて 2 秒より長くかかったときだけである。新語の確定・却下には待ちの予算が無い。
+  CLI の時間切れの表示は、変更が後から成功しうることと、`userdict list`（`newwords list`）で確かめることを示す。
 - Host は、ユーザー辞書の追加・削除と新語の確定・却下を 1 件ずつ RuntimeLogger のイベント `persistent_edit` に記録する。
   項目は `trace_id`、`request_id`、`op`（`user_dict_add` / `user_dict_remove` / `new_word_resolve`）、`result`、
   同じ Host の編集を待った時間 `writer_wait_ms`、ファイルロックを待った時間 `lock_wait_ms`、`load_ms`、`load_skipped`、

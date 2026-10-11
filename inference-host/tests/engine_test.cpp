@@ -1074,6 +1074,8 @@ TEST(InferenceEngineTest, UserWordEditFailsBusyWhenTheFileLockOutlastsItsBudget)
   azookey::learning::UserWord word;
   word.word = "Busy";
   word.ruby = "busy";
+  std::atomic<bool> reached_file_lock{false};
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { reached_file_lock = true; });
   azookey::host::UserDictionaryEditReport report;
   azookey::host::UserDictionaryEditOptions options;
   options.wait_budget = std::chrono::milliseconds::zero();
@@ -1084,6 +1086,8 @@ TEST(InferenceEngineTest, UserWordEditFailsBusyWhenTheFileLockOutlastsItsBudget)
       std::async(std::launch::async, [&] { return engine->AddUserWord(word, options); }).get());
   holder.reset();
 
+  // Busy at the file lock, not at the writer mutex.
+  EXPECT_TRUE(reached_file_lock);
   EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
   EXPECT_EQ(report.save_ms, 0.0);
   EXPECT_TRUE(dict.Lookup("busy").empty());
@@ -1165,7 +1169,11 @@ TEST(InferenceEngineTest, UserWordEditPastItsBudgetDoesNotSave) {
   azookey::host::UserDictionaryEditOptions options;
   options.received = std::chrono::steady_clock::now() - std::chrono::hours(1);
   options.report = &report;
+  // Nothing else holds either lock: the edit takes both and gives up before saving.
+  std::atomic<bool> reached_file_lock{false};
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { reached_file_lock = true; });
   EXPECT_FALSE(engine->AddUserWord(word, options));
+  EXPECT_TRUE(reached_file_lock);
   EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
   EXPECT_EQ(report.save_ms, 0.0);
   EXPECT_TRUE(dict.Lookup("late").empty());

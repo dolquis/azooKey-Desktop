@@ -8,6 +8,7 @@ add_library(azookey_tsf_tip SHARED
   src/CaretRectResolver.cpp
   src/DebugLogBuffer.cpp
   src/DebugWindow.cpp
+  src/DelayedActionTimer.cpp
   src/PredictionWindow.cpp
   src/RenderingEngine.cpp
   src/DllMain.cpp
@@ -63,6 +64,7 @@ if(AZOOKEY_BUILD_TESTS)
   src/CaretRectResolver.cpp
     src/DebugLogBuffer.cpp
     src/DebugWindow.cpp
+    src/DelayedActionTimer.cpp
     src/PredictionWindow.cpp
     src/RenderingEngine.cpp
     src/DisplayAttribute.cpp

@@ -274,6 +274,29 @@ void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                {"result", logging::RuntimeLogSafeText(std::string(result))}});
 }
 
+// DEV-1572: one record per user dictionary or new-word edit, so a CLI failure
+// can be matched with what the Host was waiting for. Never the word itself.
+// The receipt is the record's timestamp minus total_ms.
+void LogPersistentEdit(logging::RuntimeLogger* logger, const ipc::Envelope& req,
+                       std::string_view op, const UserDictionaryEditReport& report) {
+  if (!logger || !logger->enabled()) return;
+  const bool failed = report.result != UserDictionaryEditResult::Ok &&
+                      report.result != UserDictionaryEditResult::NotFound;
+  logger->Log(failed ? logging::RuntimeLogLevel::Warn : logging::RuntimeLogLevel::Info,
+              "persistent_edit",
+              {{"trace_id",
+                logging::RuntimeLogSafeText(ipc::IsValidTraceId(req.trace_id) ? req.trace_id : "")},
+               {"request_id", req.request_id},
+               {"op", logging::RuntimeLogSafeText(std::string(op))},
+               {"result", logging::RuntimeLogSafeText(UserDictionaryEditResultName(report.result))},
+               {"writer_wait_ms", report.writer_wait_ms},
+               {"lock_wait_ms", report.lock_wait_ms},
+               {"load_ms", report.load_ms},
+               {"load_skipped", report.load_skipped},
+               {"save_ms", report.save_ms},
+               {"total_ms", report.total_ms}});
+}
+
 // M59 (dynamic-punctuation-spec section 7): the live conversion surface as one
 // converted segment, with punctuation inserted by the configured rules.
 // nullopt when the request or the settings leave punctuation off.
@@ -998,6 +1021,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleListNewWordCandidates(const ipc::
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelope& req) {
+  const auto received = std::chrono::steady_clock::now();
   ipc::ResolveNewWordResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildResolveNewWordResponse(res)); };
   const auto fail = [&](std::string_view error) {
@@ -1011,7 +1035,22 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
 
   const auto target = parsed->action == "confirm" ? learning::AutoWordState::Confirmed
                                                   : learning::AutoWordState::Rejected;
+  // DEV-1572: the store takes no file lock; its in-process wait and the save
+  // are logged together as save_ms.
+  const auto save_start = std::chrono::steady_clock::now();
   const auto outcome = auto_word_store_->SetStateAndSave(parsed->surface, parsed->reading, target);
+  UserDictionaryEditReport report;
+  report.save_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - save_start)
+          .count();
+  report.total_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - received)
+          .count();
+  report.result =
+      outcome == learning::AutoWordSaveOutcome::NotFound     ? UserDictionaryEditResult::NotFound
+      : outcome == learning::AutoWordSaveOutcome::SaveFailed ? UserDictionaryEditResult::SaveFailed
+                                                             : UserDictionaryEditResult::Ok;
+  LogPersistentEdit(runtime_logger_, req, "new_word_resolve", report);
   if (outcome == learning::AutoWordSaveOutcome::NotFound) return fail(ipc::kNewWordErrorNotFound);
   // A repeated click is a success that changed nothing, and it does not
   // rewrite the file.
@@ -1475,6 +1514,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envel
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& req) {
+  // DEV-1572: the edit's wait budget runs from here.
+  UserDictionaryEditReport report;
+  UserDictionaryEditOptions options;
+  options.report = &report;
   ipc::AddUserWordResponse res;
   if (!user_dict_) {
     res.ok = false;
@@ -1487,19 +1530,24 @@ std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& 
     w.cid = parsed->cid;
     w.mid = parsed->mid;
     w.value = parsed->value;
-    res.ok = engine_->AddUserWord(w);
+    res.ok = engine_->AddUserWord(w, options);
+    LogPersistentEdit(runtime_logger_, req, "user_dict_add", report);
   }
   return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelope& req) {
+  UserDictionaryEditReport report;
+  UserDictionaryEditOptions options;
+  options.report = &report;
   ipc::RemoveUserWordResponse res;
   if (!user_dict_) {
     res.ok = false;
     return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
   }
   if (auto parsed = ipc::ParseRemoveUserWordRequest(req.payload_json)) {
-    res.ok = engine_->RemoveUserWord(parsed->word, parsed->ruby);
+    res.ok = engine_->RemoveUserWord(parsed->word, parsed->ruby, options);
+    LogPersistentEdit(runtime_logger_, req, "user_dict_remove", report);
   }
   return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
 }

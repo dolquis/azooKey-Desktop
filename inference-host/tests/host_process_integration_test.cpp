@@ -598,28 +598,52 @@ TEST_F(HostProcessTest, ConcurrentIpcAndOfflineUserDictAddsPreserveAllEntries) {
     }
   }
   for (const auto& child : children) ASSERT_TRUE(child->Resume());
+  // DEV-1572: the Host may refuse an IPC add whose wait budget runs out under
+  // load, and then writes nothing. Every add the CLI reports as done must be
+  // on disk exactly once, and every add it reports as failed must be absent.
+  std::vector<bool> succeeded(children.size());
+  int ipc_succeeded = 0;
+  int ipc_rejected = 0;
   for (size_t i = 0; i < children.size(); ++i) {
     const auto& child = children[i];
     const auto log = directory_.root / ("cli-" + std::to_string(i) + ".log");
-    const char* route = i % 2 == 0 ? "ipc" : "offline";
+    const bool ipc = i % 2 == 0;
+    const char* route = ipc ? "ipc" : "offline";
     ASSERT_EQ(child->Wait(), WAIT_OBJECT_0)
         << "CLI timed out: index=" << i << " via=" << route << " pid=" << child->pid() << '\n'
         << ReadLog(log);
-    EXPECT_EQ(child->ExitCode(), 0U)
-        << "CLI index=" << i << " via=" << route << " pid=" << child->pid() << '\n'
-        << ReadLog(log);
-  }
-  azookey::learning::UserDictionary dictionary(UserDictPath());
-  ASSERT_TRUE(dictionary.Load());
-  EXPECT_EQ(dictionary.Size(), 2U * kPairs);
-  for (int i = 0; i < kPairs; ++i) {
-    for (const std::string stem : {"ipc-", "offline-"}) {
-      const auto reading = stem + std::to_string(i);
-      const auto matches = dictionary.Lookup(reading);
-      ASSERT_EQ(matches.size(), 1U) << reading;
-      EXPECT_EQ(matches.front().word, reading);
+    succeeded[i] = child->ExitCode() == 0U;
+    if (ipc) {
+      (succeeded[i] ? ipc_succeeded : ipc_rejected) += 1;
+    } else {
+      // An offline add takes the file lock with its own timeout, not the
+      // Host's budget, so it still has to succeed.
+      EXPECT_TRUE(succeeded[i]) << "CLI index=" << i << " via=" << route << " pid=" << child->pid()
+                                << '\n'
+                                << ReadLog(log);
     }
   }
+  // Not a failure: shows when a slow runner starts to exhaust the budget.
+  RecordProperty("ipc_rejected", ipc_rejected);
+  std::cout << "ipc adds rejected by the Host: " << ipc_rejected << " of " << kPairs << '\n';
+  EXPECT_GE(ipc_succeeded, 1);
+  azookey::learning::UserDictionary dictionary(UserDictPath());
+  ASSERT_TRUE(dictionary.Load());
+  size_t expected_size = 0;
+  for (size_t i = 0; i < children.size(); ++i) {
+    const std::string stem = i % 2 == 0 ? "ipc-" : "offline-";
+    const auto reading = stem + std::to_string(i / 2);
+    const auto matches = dictionary.Lookup(reading);
+    if (!succeeded[i]) {
+      EXPECT_TRUE(matches.empty()) << reading << " was reported as failed but is on disk";
+      continue;
+    }
+    ++expected_size;
+    ASSERT_EQ(matches.size(), 1U) << reading;
+    EXPECT_EQ(matches.front().word, reading);
+  }
+  EXPECT_EQ(dictionary.Size(), expected_size);
+  EXPECT_EQ(expected_size + static_cast<size_t>(ipc_rejected), 2U * kPairs);
   EXPECT_TRUE(StopHost(CTRL_BREAK_EVENT));
 }
 

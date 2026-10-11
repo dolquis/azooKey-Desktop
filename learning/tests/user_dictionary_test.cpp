@@ -283,3 +283,63 @@ TEST(UserDictionaryTest, NonAsciiWindowsPathRoundTripsAndPreservesUndecryptableF
   std::filesystem::remove_all(root);
 }
 #endif
+
+// DEV-1572: ReloadIfChanged skips the read only while memory still holds what
+// the encrypted file on disk holds.
+TEST(UserDictionaryTest, ReloadIfChangedSkipsOnlyTheFileThisInstanceLastSaved) {
+  const auto path = std::filesystem::temp_directory_path() / "azookey_user_dict_reload_if.json";
+  RemoveStoreFiles(path);
+  azookey::learning::UserDictionary dict(path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  dict.Add({"ああ", "ああ"});
+  ASSERT_TRUE(dict.Save());
+
+  bool skipped = false;
+  ASSERT_TRUE(dict.ReloadIfChanged(&skipped));
+  EXPECT_TRUE(skipped);
+  // A copy carries what it was copied from.
+  auto copy = dict;
+  ASSERT_TRUE(copy.ReloadIfChanged(&skipped));
+  EXPECT_TRUE(skipped);
+
+  // Another writer (another process, in production) replaces the file with
+  // one of the same size, usually within the same timestamp tick.
+  {
+    azookey::learning::UserDictionary other(path, &azookey::learning::test::Crypto());
+    ASSERT_TRUE(other.Load());
+    ASSERT_TRUE(other.Remove("ああ", "ああ"));
+    other.Add({"いい", "いい"});
+    ASSERT_TRUE(other.Save());
+  }
+  ASSERT_TRUE(dict.ReloadIfChanged(&skipped));
+  EXPECT_FALSE(skipped);
+  EXPECT_TRUE(dict.Lookup("ああ").empty());
+  EXPECT_EQ(dict.Lookup("いい").size(), 1u);
+  // The file just read is now the one memory holds.
+  ASSERT_TRUE(dict.ReloadIfChanged(&skipped));
+  EXPECT_TRUE(skipped);
+
+  // An unsaved change in memory makes the next call read the file again.
+  dict.Add({"うう", "うう"});
+  ASSERT_TRUE(dict.ReloadIfChanged(&skipped));
+  EXPECT_FALSE(skipped);
+  EXPECT_TRUE(dict.Lookup("うう").empty());
+  RemoveStoreFiles(path);
+}
+
+// DEV-1572: a dictionary that never read or wrote the encrypted file always reads it.
+TEST(UserDictionaryTest, ReloadIfChangedReadsWithoutAKnownFile) {
+  const auto path = std::filesystem::temp_directory_path() / "azookey_user_dict_reload_new.json";
+  RemoveStoreFiles(path);
+  {
+    azookey::learning::UserDictionary writer(path, &azookey::learning::test::Crypto());
+    writer.Add({"ええ", "ええ"});
+    ASSERT_TRUE(writer.Save());
+  }
+  azookey::learning::UserDictionary dict(path, &azookey::learning::test::Crypto());
+  bool skipped = true;
+  ASSERT_TRUE(dict.ReloadIfChanged(&skipped));
+  EXPECT_FALSE(skipped);
+  EXPECT_EQ(dict.Lookup("ええ").size(), 1u);
+  RemoveStoreFiles(path);
+}

@@ -32,6 +32,7 @@
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Persona.h"
 #include "azookey/learning/Reranker.h"
@@ -146,6 +147,65 @@ struct ModelLoadResult {
   std::optional<std::string> error;
 };
 
+// DEV-1572: a user dictionary edit waits at most this long, from the receipt of
+// the request, for the other edits of this Host and for the cross-process file
+// lock together. The CLI's response wait (kPersistentCommandResponseTimeoutMs)
+// is this plus the save's retry budgets plus one second.
+inline constexpr std::chrono::milliseconds kUserDictionaryEditWaitBudget =
+    learning::kDefaultFileLockTimeout;
+
+enum class UserDictionaryEditResult {
+  Ok,
+  // Remove of a word the dictionary does not hold; nothing was written.
+  NotFound,
+  // No user dictionary is attached.
+  Unavailable,
+  // The wait budget ran out before the edit could be saved; nothing was written.
+  Busy,
+  LockFailed,
+  LoadFailed,
+  SaveFailed,
+};
+
+constexpr const char* UserDictionaryEditResultName(UserDictionaryEditResult result) {
+  switch (result) {
+    case UserDictionaryEditResult::Ok:
+      return "ok";
+    case UserDictionaryEditResult::NotFound:
+      return "not_found";
+    case UserDictionaryEditResult::Unavailable:
+      return "unavailable";
+    case UserDictionaryEditResult::Busy:
+      return "busy";
+    case UserDictionaryEditResult::LockFailed:
+      return "lock_failed";
+    case UserDictionaryEditResult::LoadFailed:
+      return "load_failed";
+    case UserDictionaryEditResult::SaveFailed:
+      return "save_failed";
+  }
+  return "unavailable";
+}
+
+// Where the time of one edit went, for the Host's structured log. Durations
+// are in milliseconds; a stage the edit did not reach stays 0.
+struct UserDictionaryEditReport {
+  UserDictionaryEditResult result{UserDictionaryEditResult::Unavailable};
+  double writer_wait_ms{};
+  double lock_wait_ms{};
+  double load_ms{};
+  double save_ms{};
+  double total_ms{};
+  bool load_skipped{false};
+};
+
+struct UserDictionaryEditOptions {
+  // The wait budget is measured from here; the Dispatcher passes the receipt.
+  std::chrono::steady_clock::time_point received{std::chrono::steady_clock::now()};
+  std::chrono::milliseconds wait_budget{kUserDictionaryEditWaitBudget};
+  UserDictionaryEditReport* report{nullptr};
+};
+
 struct EngineHealthSnapshot {
   BackendKind backend{BackendKind::Cpu};
   bool model_loaded{false};
@@ -192,8 +252,15 @@ class InferenceEngine {
   bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
                            bool verify = false);
   void EnableDictionaryLayer(learning::LayerId layer, bool enabled);
-  bool AddUserWord(const learning::UserWord& word);
-  bool RemoveUserWord(const std::string& word, const std::string& ruby);
+  // false on any failure, including a Busy wait budget (DEV-1572); the
+  // dictionary on disk and in memory is then unchanged by this call.
+  bool AddUserWord(const learning::UserWord& word, const UserDictionaryEditOptions& options = {});
+  bool RemoveUserWord(const std::string& word, const std::string& ruby,
+                      const UserDictionaryEditOptions& options = {});
+  // Test-only: runs when an edit or an import holds user_dict_writer_mutex_
+  // and is about to wait for the user dictionary file lock. Set it before
+  // any edit starts.
+  void SetBeforeUserDictionaryFileLockForTests(std::function<void()> hook);
 
   bool LoadModel();
   AiTransformResult TransformLocal(const AiTransformRequest& request,
@@ -372,9 +439,9 @@ class InferenceEngine {
   void MirrorModelRuntimeErrorLocked(const std::shared_ptr<core::IConverter>& converter);
   std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
   void NoteModelLoadFailedLocked();
-  void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
-  // Caller holds learning_history_mutex_ and not state_mutex_.
-  bool EditUserDictionary(const std::function<bool(learning::UserDictionary&)>& edit);
+  // Takes user_dict_writer_mutex_ itself; the caller holds no engine mutex.
+  bool EditUserDictionary(const std::function<bool(learning::UserDictionary&)>& edit,
+                          const UserDictionaryEditOptions& options);
   // The learning data view over every store; callers hold all store locks.
   LearningDataStores LearningDataStoresLocked();
   // Persists what a learning data operation may have changed. Holds every
@@ -432,6 +499,13 @@ class InferenceEngine {
   // state/converter reacquisition. Take before either engine mutex; queries do
   // not take it, and disk I/O never needs converter_call_mutex_.
   std::mutex learning_history_mutex_;
+  // Serializes every in-process taker of the user dictionary file lock, so
+  // edits of this Host are not lost (DEV-1572). Lock order:
+  // learning_history_mutex_ (not taken by AddUserWord / RemoveUserWord), then
+  // this, then the file lock, then state_mutex_. Timed, so an edit can give
+  // up within its wait budget instead of queueing without bound.
+  std::timed_mutex user_dict_writer_mutex_;
+  std::function<void()> before_user_dictionary_file_lock_for_tests_;
   // Written with state_mutex_ and english_mutex_; either protects reads.
   // Background/explicit flushes leave the live snapshot alone during erasure.
   bool learning_erasure_in_progress_{false};

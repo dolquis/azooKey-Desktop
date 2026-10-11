@@ -296,7 +296,9 @@ Linear が持つ。
   自動導出値は `std::thread::hardware_concurrency()` で上限化し、並列度が 0 の場合は 1 とする。
   `inferenceThreads=1..8` の明示指定は電源状態・並列度より優先する。
   電源状態は起動時と設定再読込時に取得し、決定した実効値をモデル再ロードでも使う。
-  `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 10 とする。
+  `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 30 とする。
+  settings.json に明示で書かれた値は既定値より優先し、既定値が変わっても移行しない
+  （settings-app は変更したキーだけを保存するので、明示値はユーザーが選んだ値である）。
   `maxContextLength` の単位は Unicode コードポイント数であり、0 の場合は左文脈を推論へ渡さない。
   TIP は非 secure 入力で同じ行の composition または選択範囲の開始位置直前から
   最大 30 コードポイントを読み、

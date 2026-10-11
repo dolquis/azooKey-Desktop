@@ -123,7 +123,7 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
    最後の行を採用、先頭空白を除去（legacy `getCleanLeftSideContext` と同義）。
    空なら context フィールドを省く。
    `preceding_text` は、Convert へ渡る前に `InferenceEngine::QueryCandidates` が設定
-   `maxContextLength`（既定 10、範囲 0〜30、`windows-tsf-host-architecture.md`）の
+   `maxContextLength`（既定 30、範囲 0〜30、`windows-tsf-host-architecture.md`）の
    末尾コードポイント数へ切り詰めている。TIP も送信前に同じ値で短縮する
    （`privacy-and-secure-input-spec.md` §5.3）。このため prompt に入る左文脈の上限は
    `maxContextLength` で決まり、本節の 30 文字の切り詰めはそれ以上の文字を落とさない。

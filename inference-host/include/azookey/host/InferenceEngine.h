@@ -91,7 +91,7 @@ struct EngineConfig {
   std::optional<int32_t> n_gpu_layers;
   std::optional<int32_t> inference_threads;
   uint32_t max_candidates{9};
-  uint32_t max_context_length{10};
+  uint32_t max_context_length{30};
   bool enable_live_conversion{true};
   bool dynamic_punctuation{false};
   double segment_boundary_confidence{0.5};

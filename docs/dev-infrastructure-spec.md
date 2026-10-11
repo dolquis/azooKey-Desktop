@@ -801,6 +801,9 @@ artifact として保存する。PR diagnostic コメントは
 経路の p95 < 50ms を確認する。
 `azookey_zenzai_bench` は llama.cpp 無効構成の mock smoke と、pin 済み実モデルを使う
 llama.cpp 構成の smoke を CTest へ登録する。
+実モデルの `zenzai-real-model` ラベルには、非ライブ複数候補の最上位で
+`けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` を
+厳密一致で検証する読み末尾欠けの回帰テストを含める。
 
 両 bench は既存の人間向け text 出力を既定とし、次の共通オプションを追加する。
 
@@ -1609,6 +1612,14 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 `core/` と `ipc/` はライブラリとして TIP / Host に組み込まれ、自分のファイルを持たないため、
 その処理の行は呼び出したプロセスの `component` で書く。どのコードが計測したかは
 `event` と `phase` で表し、`component` を増やして表さない。
+
+候補窓の描画失敗は `component=tip`、`level=warn`、
+`event=candidate_window_render_failed` として記録する。
+フィールドは `stage`（描画処理が定義する固定の失敗段階）と `hr`（符号付き HRESULT）に限定し、
+入力本文、候補本文、注釈、案内文は渡さない。記録は `AZOOKEY_LOG` の opt-in に従う。
+同じ stage は `CandidateUiCoordinator::Create` から次の `Create` まで一度だけ記録し、
+その最初の HRESULT を保持する。表示の終了や描画の成功では重複抑止を解除しない。
+候補窓の再試行と復旧通知は `docs/native-ui-spec.md` §4.1 に従う。
 
 `phase` の取り得る値は §7.7.2 の 11 値に固定し、`core/include/azookey/logging/Phase.h`
 の `azookey::logging::Phase` を全コンポーネント（tip / host）の正典とする。

@@ -304,7 +304,9 @@ Linear が持つ。
   自動導出値は `std::thread::hardware_concurrency()` で上限化し、並列度が 0 の場合は 1 とする。
   `inferenceThreads=1..8` の明示指定は電源状態・並列度より優先する。
   電源状態は起動時と設定再読込時に取得し、決定した実効値をモデル再ロードでも使う。
-  `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 10 とする。
+  `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 30 とする。
+  settings.json に明示で書かれた値は既定値より優先し、既定値が変わっても移行しない
+  （settings-app は変更したキーだけを保存するので、明示値はユーザーが選んだ値である）。
   `maxContextLength` の単位は Unicode コードポイント数であり、0 の場合は左文脈を推論へ渡さない。
   TIP は非 secure 入力で同じ行の composition または選択範囲の開始位置直前から
   最大 30 コードポイントを読み、
@@ -485,6 +487,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 | `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
+
+校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session（`ipc/include/azookey/ipc/ProofreadSession.h`）は
+Host の IPC ではなく、TIP が押下ごとに作る使い捨ての pipe で、本表の `MessageType` には含めない（rich X-3-6）。
 
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、

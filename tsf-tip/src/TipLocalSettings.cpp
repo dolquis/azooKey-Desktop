@@ -231,7 +231,7 @@ void TipLocalSettings::Stop() noexcept {
   ai_ = {};
   live_conversion_ = false;
   dynamic_punctuation_ = {};
-  max_context_length_ = 10;
+  max_context_length_ = 30;
   prediction_enabled_ = true;
   inline_english_candidates_ = false;
   romaji_table_.reset();
@@ -289,7 +289,7 @@ void TipLocalSettings::Reload() noexcept {
   ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
   TipDynamicPunctuationSettings dynamic_punctuation;
-  uint32_t max_context_length = 10;
+  uint32_t max_context_length = 30;
   bool prediction_enabled = true;
   bool inline_english_candidates = false;
   bool custom_romaji = false;

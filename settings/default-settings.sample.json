@@ -50,7 +50,7 @@
   "powerProfile": "auto",
   "inferenceThreads": 0,
   "maxCandidates": 9,
-  "maxContextLength": 10,
+  "maxContextLength": 30,
   "promptPrefixByApp": {},
   "batchRomajiConversion": false,
   "batchRomajiPreviewStyle": "kana",

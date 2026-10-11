@@ -25,6 +25,35 @@ azookey::ipc::DetectAnomaliesRequest MakeProofreadRequest(std::string utf8_text)
   return request;
 }
 
+azookey::ipc::DetectAnomaliesRequest MakeSessionProofreadRequest(
+    const azookey::ipc::proofread::DocumentMessage& document) {
+  azookey::ipc::DetectAnomaliesRequest request;
+  request.text = document.text;
+  request.secure = document.secure;
+  request.learning_allowed = document.learning_allowed;
+  return request;
+}
+
+std::string ProofreadSessionStatusResource(azookey::ipc::proofread::DocumentStatus status) {
+  using azookey::ipc::proofread::DocumentStatus;
+  switch (status) {
+    case DocumentStatus::Captured:
+      return "Proofread_Session_captured";
+    case DocumentStatus::Blocked:
+      return "Proofread_Session_blocked";
+    case DocumentStatus::Unavailable:
+      break;
+  }
+  return "Proofread_Session_unavailable";
+}
+
+std::string ProofreadSelectResultResource(
+    std::optional<azookey::ipc::proofread::SelectResult> result) {
+  if (!result) return "Proofread_SelectResult_lost";
+  return "Proofread_SelectResult_" +
+         std::string(azookey::ipc::proofread::SelectResultName(*result));
+}
+
 std::string ProofreadErrorResource(std::string_view error) {
   const bool known = std::find(kProofreadErrorCodes.begin(), kProofreadErrorCodes.end(), error) !=
                      kProofreadErrorCodes.end();

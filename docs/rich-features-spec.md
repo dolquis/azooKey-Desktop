@@ -552,8 +552,9 @@ secure の文脈、または学習を許さない文脈の本文は送らない�
   （自動では送らない）。入力欄が session の本文のままなら、要求の `secure` / `learning_allowed` は
   `document` の値をそのまま使い、本文は入力欄ではなく `document` の `text` を送る（入力欄は改行を変えるため、
   一覧の位置は `document` の本文で数える）。編集した本文は貼り付けた本文として扱う。
-- `blocked` と `unavailable` の session では、入力欄を変えずに、保護された入力欄または学習を許さない
-  入力欄であること、またはアプリから本文を読めなかったことだけを表示する。
+- `blocked` と `unavailable` の session では、入力欄を変えずに理由だけを表示する。`blocked` は理由を
+  分けず、保護された入力欄、学習や AI の利用を許さない設定、種類を判定できない入力欄のいずれかであるため
+  送れないことを示す。`unavailable` はアプリから本文を読めなかったことを示す。
 - session の本文を検査した一覧では、「該当箇所を選択」は `window` を前面へ戻してから `select` を送り、
   `select_result` を文で表示する（`ok` 以外は選択しなかった理由）。session が応答しなくなったら session を
   閉じ、もう一度 Ctrl+Shift+Space を押すよう表示する。

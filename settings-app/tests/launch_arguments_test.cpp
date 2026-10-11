@@ -66,11 +66,11 @@ TEST(SettingsLaunchArgumentsTest, RejectsDuplicateOrUnknownOptions) {
 // rich-features-spec X-3-6: the TIP opens the batch correction view with a session token only.
 TEST(SettingsLaunchArgumentsTest, AcceptsAProofreadSessionToken) {
   const auto arguments = azookey::settings::ParseLaunchArguments(
-      L"--proofread-session 0123456789abcdef0123456789abcdef");
+      L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
   EXPECT_FALSE(arguments.parse_error);
   EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
-  EXPECT_EQ(arguments.proofread_session_token, "0123456789abcdef0123456789abcdef");
+  EXPECT_EQ(arguments.proofread_session_token, std::string(32, 'a'));
   EXPECT_EQ(arguments.langid_status, LaunchArgumentStatus::NotSupplied);
   EXPECT_EQ(arguments.profile_status, LaunchArgumentStatus::NotSupplied);
 }
@@ -78,13 +78,13 @@ TEST(SettingsLaunchArgumentsTest, AcceptsAProofreadSessionToken) {
 TEST(SettingsLaunchArgumentsTest, RejectsAnythingButALowercaseHexToken) {
   for (const wchar_t* raw : {
            L"--proofread-session",
-           L"--proofread-session 0123456789ABCDEF0123456789abcdef",
-           L"--proofread-session 0123456789abcdef",
-           L"--proofread-session 0123456789abcdef0123456789abcdef0",
-           L"--proofread-session ..\\..\\pipe\\0123456789abcdef0123",
-           L"--proofread-session ０123456789abcdef0123456789abcdef",
-           L"--proofread-session 0123456789abcdef0123456789abcdef "
-           L"--proofread-session fedcba9876543210fedcba9876543210",
+           L"--proofread-session AAAAAAAAAAAAAAAAaaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session ..\\..\\pipe\\aaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session ａaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+           L"--proofread-session bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
        }) {
     SCOPED_TRACE(raw);
     const auto arguments = azookey::settings::ParseLaunchArguments(raw);

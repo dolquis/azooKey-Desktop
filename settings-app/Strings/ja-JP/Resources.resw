@@ -513,7 +513,7 @@
   <data name="Proofread_TimeoutNote" xml:space="preserve"><value>本文はすでに外部の AI サービスへ送られていて、Host がまだ処理を続けている可能性があります。</value></data>
   <data name="Proofread_SessionTitle" xml:space="preserve"><value>入力中のアプリの文章</value></data>
   <data name="Proofread_Session_captured" xml:space="preserve"><value>入力中のアプリから文章を読み込みました。「検査する」を押すと、外部の AI サービスへ送られます。一覧の「該当箇所を選択」を押すと、アプリ側の該当箇所を選択します。</value></data>
-  <data name="Proofread_Session_blocked" xml:space="preserve"><value>保護された入力欄（パスワード欄など）か、学習を許可しない設定の入力欄のため、文章を読み込みませんでした。</value></data>
+  <data name="Proofread_Session_blocked" xml:space="preserve"><value>この入力欄の文章は校正に送れないため、読み込みませんでした。保護された入力欄（パスワード欄など）、学習や AI の利用を許可しない設定の入力欄、または種類を判定できない入力欄では、文章を読み込みません。</value></data>
   <data name="Proofread_Session_unavailable" xml:space="preserve"><value>このアプリからは文章を読み取れませんでした。文章を貼り付けて検査してください。</value></data>
   <data name="Proofread_Session_failed" xml:space="preserve"><value>入力中のアプリから文章を受け取れませんでした。もう一度 Ctrl+Shift+Space を押してください。</value></data>
   <data name="Proofread_SelectResult_ok" xml:space="preserve"><value>アプリ側の該当箇所を選択しました。</value></data>

@@ -26,7 +26,8 @@ using azookey::tsf::ProofreadSessionServer;
 using azookey::tsf::test::ProofreadPipeClient;
 using azookey::tsf::test::PumpUntil;
 
-constexpr char kToken[] = "0123456789abcdef0123456789abcdef";
+// An obvious dummy in the token format; real tokens come from GenerateSessionToken.
+constexpr char kToken[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 // A fresh pipe name per use: CTest runs test processes in parallel.
 std::string FreshToken() {
@@ -124,12 +125,12 @@ TEST(ProofreadProtocolTest, TokensAre128RandomBitsInLowercaseHex) {
   EXPECT_TRUE(proofread::IsValidSessionToken(*first));
   EXPECT_NE(*first, *second);
   EXPECT_TRUE(proofread::IsValidSessionToken(kToken));
-  EXPECT_FALSE(proofread::IsValidSessionToken("0123456789ABCDEF0123456789abcdef"));
-  EXPECT_FALSE(proofread::IsValidSessionToken("0123456789abcdef"));
-  EXPECT_FALSE(proofread::IsValidSessionToken("0123456789abcdef0123456789abcdeg"));
-  EXPECT_FALSE(proofread::IsValidSessionToken("..\\..\\0123456789abcdef0123456789"));
+  EXPECT_FALSE(proofread::IsValidSessionToken("AAAAAAAAAAAAAAAAaaaaaaaaaaaaaaaa"));
+  EXPECT_FALSE(proofread::IsValidSessionToken("aaaaaaaaaaaaaaaa"));
+  EXPECT_FALSE(proofread::IsValidSessionToken("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag"));
+  EXPECT_FALSE(proofread::IsValidSessionToken("..\\..\\aaaaaaaaaaaaaaaaaaaaaaaaaa"));
   EXPECT_EQ(proofread::SessionPipeName(kToken),
-            L"\\\\.\\pipe\\azookey-proofread-0123456789abcdef0123456789abcdef");
+            L"\\\\.\\pipe\\azookey-proofread-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 }
 
 std::wstring CurrentLogonSidForTest() {

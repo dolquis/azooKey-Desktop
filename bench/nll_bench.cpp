@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -118,7 +119,36 @@ int main(int argc, char** argv) {
             "こうせい", std::array<std::string, 1>{surfaces[i]}, context);
         if (single.scores.size() != 1 || !std::isfinite(single.scores[0]) ||
             !std::isfinite(cold.scores[i]) || std::abs(single.scores[0] - cold.scores[i]) > 1e-5)
-          throw std::runtime_error("batched suffix changed NLL");
+          throw std::runtime_error(
+              "batched suffix changed NLL: candidate=" + std::to_string(i) +
+              " single=" + (single.scores.empty() ? "missing" : std::to_string(single.scores[0])) +
+              " batch=" + std::to_string(cold.scores[i]));
+      }
+      // A failed request must discard both KV and its cached logits before recovery.
+      for (int failure = 0; failure < 3; ++failure) {
+        std::atomic<bool> cancelled{true};
+        auto failed_context = context;
+        failed_context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        if (failure == 0) failed_context.cancel = &cancelled;
+        if (failure == 1) failed_context.deadline = std::chrono::steady_clock::now();
+        auto failed_surfaces = surfaces;
+        if (failure == 2) failed_surfaces.front().clear();
+        bool rejected = false;
+        try {
+          (void)converter.EvaluateNllForValidation("こうせい", failed_surfaces, failed_context);
+        } catch (const std::runtime_error&) {
+          rejected = true;
+        }
+        if (!rejected) throw std::runtime_error("invalid NLL request was accepted");
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto recovered = converter.EvaluateNllForValidation("こうせい", surfaces, context);
+        if (recovered.prefix_reused_tokens != 0 || recovered.scores.size() != cold.scores.size())
+          throw std::runtime_error("failed NLL request preserved its cache");
+        for (size_t i = 0; i < cold.scores.size(); ++i) {
+          if (!std::isfinite(recovered.scores[i]) ||
+              std::abs(recovered.scores[i] - cold.scores[i]) > 1e-5)
+            throw std::runtime_error("NLL recovery changed scores");
+        }
       }
       // Two warm-ups, then measure the scoring layer after generation has used the same KV.
       for (int i = -2; i < iterations; ++i) {
@@ -228,7 +258,8 @@ int main(int argc, char** argv) {
                 << " after_nll_prompt_mean_ms=" << Mean(after_nll_prompt)
                 << " within_default_budget=" << (p95 <= default_budget_ms)
                 << " order_invariant=1 generation_order_invariant=1 shared_prefix_invariant=1"
-                << " batch_invariant=1" << " generation_max_score_delta=" << generation_score_delta
+                << " batch_invariant=1 cache_invalidation=1"
+                << " generation_max_score_delta=" << generation_score_delta
                 << " top=" << surfaces[winner] << '\n';
       for (size_t i = 0; i < last.scores.size(); ++i)
         std::cout << "fixture=" << surfaces[i] << " nll=" << last.scores[i] << '\n';

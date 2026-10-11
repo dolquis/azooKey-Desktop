@@ -45,6 +45,19 @@ bool CheckCancelled(const std::function<bool()>& cancelled, std::string* error) 
   return true;
 }
 
+constexpr const char* kNetworkDisabled = "network disabled by privacy mode";
+
+bool NetworkDisabled(const std::function<bool()>& network_allowed) {
+  return network_allowed && !network_allowed();
+}
+
+// A request already on the network stops at the next check once it is no longer allowed.
+std::function<bool()> WithNetworkPolicy(const std::function<bool()>& cancelled,
+                                        const std::function<bool()>& network_allowed) {
+  if (!network_allowed) return cancelled;
+  return [cancelled, network_allowed] { return (cancelled && cancelled()) || !network_allowed(); };
+}
+
 std::string WindowsError(std::string_view operation, DWORD error = GetLastError()) {
   return std::string(operation) + " failed (Windows error " + std::to_string(error) + ")";
 }
@@ -507,6 +520,9 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
     }
   }
   if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+  // The local copy above is the only source privacy.mode=offline permits.
+  if (NetworkDisabled(request.network_allowed)) return Failure(kNetworkDisabled);
+  const auto cancelled = WithNetworkPolicy(request.cancelled, request.network_allowed);
 
   const auto parent = request.destination.parent_path();
   if (!parent.empty()) {
@@ -518,20 +534,20 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
 
   auto parsed = ParseUrl(request.url, &error);
   if (!parsed) return Failure(std::move(error));
-  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+  if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
   UniqueInternetHandle session(OpenHttpSession(
       user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
       static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return Failure(WindowsError("opening WinHTTP session"));
-  if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+  if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
   UniqueInternetHandle connection(
       WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));
   if (!connection) return Failure(WindowsError("opening WinHTTP connection"));
 
   for (int attempt = 0; attempt < 2; ++attempt) {
-    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+    if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
     auto part_size = RegularFileSize(part, &error);
     if (!part_size) return Failure(std::move(error));
     if (*part_size > request.max_bytes) {
@@ -543,7 +559,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
     if (!http_request) return Failure(WindowsError("opening HTTP request"));
-    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+    if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
     if (resume_offset > 0) {
       const auto range = L"Range: bytes=" + std::to_wstring(resume_offset) + L"-";
@@ -553,7 +569,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         return Failure(WindowsError("adding HTTP Range header"));
       }
     }
-    if (!SendGetRequest(http_request.get(), request.cancelled, &error)) {
+    if (!SendGetRequest(http_request.get(), cancelled, &error)) {
       return Failure(std::move(error));
     }
 
@@ -562,8 +578,8 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
 
     if (*status == kHttpStatusRangeNotSatisfiable && resume_offset > 0) {
       std::string hash_error;
-      if (FileMatches(part, expected, &hash_error, request.cancelled)) {
-        if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+      if (FileMatches(part, expected, &hash_error, cancelled)) {
+        if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
         if (!PromotePartFile(part, request.destination, &error)) return Failure(std::move(error));
         HttpDownloadResult result;
         result.status = HttpDownloadStatus::Downloaded;
@@ -587,22 +603,22 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
 
     HttpDownloadResult result;
     result.resumed = partial;
-    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+    if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
     auto file = OpenPartFile(part, partial, &error);
     if (!file) return Failure(std::move(error));
     const uint64_t initial_size = partial ? resume_offset : 0;
     if (!ReadResponseToFile(http_request.get(), file.get(), initial_size, request.max_bytes,
-                            &result.bytes_received, request.cancelled, &error)) {
+                            &result.bytes_received, cancelled, &error)) {
       return Failure(std::move(error));
     }
     file.reset();
 
     std::string hash_error;
-    if (!FileMatches(part, expected, &hash_error, request.cancelled)) {
+    if (!FileMatches(part, expected, &hash_error, cancelled)) {
       return Failure(hash_error.empty() ? "downloaded file SHA256 does not match expected value"
                                         : std::move(hash_error));
     }
-    if (CheckCancelled(request.cancelled, &error)) return Failure(std::move(error));
+    if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
     if (!PromotePartFile(part, request.destination, &error)) return Failure(std::move(error));
     result.status = HttpDownloadStatus::Downloaded;
     return result;
@@ -622,24 +638,26 @@ HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
   }
   std::string error;
   if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  if (NetworkDisabled(request.network_allowed)) return {{}, kNetworkDisabled};
+  const auto cancelled = WithNetworkPolicy(request.cancelled, request.network_allowed);
   auto parsed = ParseUrl(request.url, &error);
   if (!parsed) return {{}, std::move(error)};
-  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
 
   UniqueInternetHandle session(OpenHttpSession(
       user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
       static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return {{}, WindowsError("opening WinHTTP session")};
-  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
   UniqueInternetHandle connection(
       WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));
   if (!connection) return {{}, WindowsError("opening WinHTTP connection")};
-  if (CheckCancelled(request.cancelled, &error)) return {{}, std::move(error)};
+  if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
   UniqueInternetHandle http_request(WinHttpOpenRequest(
       connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
       WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
   if (!http_request) return {{}, WindowsError("opening HTTP request")};
-  if (!SendGetRequest(http_request.get(), request.cancelled, &error)) {
+  if (!SendGetRequest(http_request.get(), cancelled, &error)) {
     return {{}, std::move(error)};
   }
   const auto status = QueryStatusCode(http_request.get(), &error);
@@ -651,7 +669,7 @@ HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
   HttpTextResult result;
   uint64_t received = 0;
   if (!ReadResponse(
-          http_request.get(), 0, request.max_bytes, &received, request.cancelled,
+          http_request.get(), 0, request.max_bytes, &received, cancelled,
           [&](const unsigned char* data, DWORD size) {
             result.body.append(reinterpret_cast<const char*>(data), size);
             return true;

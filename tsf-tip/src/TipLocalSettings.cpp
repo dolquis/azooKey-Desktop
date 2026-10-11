@@ -230,6 +230,7 @@ void TipLocalSettings::Stop() noexcept {
   rewriters_.reset();
   ai_ = {};
   live_conversion_ = false;
+  dynamic_punctuation_ = {};
   max_context_length_ = 10;
   prediction_enabled_ = true;
   inline_english_candidates_ = false;
@@ -254,6 +255,11 @@ TipAiSettings TipLocalSettings::AiSnapshot() const {
 bool TipLocalSettings::LiveConversionSnapshot() const {
   const std::lock_guard lock(mutex_);
   return live_conversion_;
+}
+
+TipDynamicPunctuationSettings TipLocalSettings::DynamicPunctuationSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return dynamic_punctuation_;
 }
 
 uint32_t TipLocalSettings::MaxContextLengthSnapshot() const {
@@ -282,6 +288,7 @@ void TipLocalSettings::Reload() noexcept {
   TipAiSettings ai;
   ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
+  TipDynamicPunctuationSettings dynamic_punctuation;
   uint32_t max_context_length = 10;
   bool prediction_enabled = true;
   bool inline_english_candidates = false;
@@ -316,6 +323,15 @@ void TipLocalSettings::Reload() noexcept {
       rewriters.minimum = static_cast<uint32_t>(
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
+      dynamic_punctuation.enabled = json->GetBool("dynamicPunctuation").value_or(false);
+      if (const auto style = json->GetString("dynamicPunctuationStyle");
+          style && *style == "fullwidth_latin")
+        dynamic_punctuation.style = "fullwidth_latin";
+      dynamic_punctuation.eager =
+          json->GetString("dynamicPunctuationStability").value_or("onPause") == "eager";
+      if (const auto idle = json->GetInt("dynamicPunctuationIdleMs");
+          idle && *idle >= 1 && *idle <= INT32_MAX)
+        dynamic_punctuation.idle_ms = static_cast<uint32_t>(*idle);
       if (const auto configured = json->GetInt("maxContextLength");
           configured && *configured >= 0 && *configured <= 30)
         max_context_length = static_cast<uint32_t>(*configured);
@@ -388,6 +404,7 @@ void TipLocalSettings::Reload() noexcept {
     rewriters_ = rewriters;
     ai_ = ai;
     live_conversion_ = live_conversion;
+    dynamic_punctuation_ = std::move(dynamic_punctuation);
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
     inline_english_candidates_ = inline_english_candidates;
@@ -535,6 +552,11 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   live_conversion_ = enabled;
+}
+
+void TipLocalSettings::SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  dynamic_punctuation_ = settings;
 }
 
 void TipLocalSettings::SetInlineEnglishCandidatesForTest(bool enabled) {

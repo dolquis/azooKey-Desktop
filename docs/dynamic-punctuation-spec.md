@@ -482,7 +482,7 @@ reading 長 0 として写像に組み込む。
 `query_live_conversion` を告知したときにこの経路を使う。告知の無い Host に対する代替経路
 `QueryCandidates` の `live=true` も同じフィールドを持ち、Host は同じ規則で句読点を挿入する。
 本節は IPC 契約と Host 側の処理を定める。TIP 側の送信（§7.1.1 の timing 符号化、§7.3 の最終要求、
-§7.4 の文節を分けた観測）は DEV-1541 で追跡する。
+§7.4 の文節を分けた観測）は TIP が実装する。
 
 > **確定（commit）経路は別**: 自動句読点を学習から除外する原子的な multi-segment 確定には、
 > **新 `MessageType::CommitSegmentsObservation`（M58-B と共有。`docs/romaji-batch-conversion-spec.md`
@@ -761,6 +761,18 @@ host は §7.2.2・§7.2.3 のマッピングを、辞書アセット同梱の *
 **タイムアウト fallback**: 最終要求が失敗 / タイムアウト（実装定義、目安 200ms）したら、
 **入力を失わないため現在の surface（句読点なしでも）を確定**する。確定でユーザーをブロック
 し続けない。
+
+**TIP の待ち方（非同期の保留確定）**: TIP は UI スレッドを塞がない。`auto_punctuation=true` の最終要求を
+post して Enter のキーを保留し、応答の到着・タイムアウト（実装定義。既定 200ms の one-shot タイマー）・
+次のキーのいずれか早いものでその時点の surface を確定する。待ち中に次のキーが来たときは、現 surface で
+保留中の確定を済ませてから、そのキーを通常どおり処理する。フォーカス喪失・composition 終了・Deactivate
+では保留とタイマーを捨てる。idle タイマー（§4.3.1）は同じ UI スレッドのタイマーで、候補ウィンドウの
+予測再試行とは別の枠を持つ。
+
+保留せずに従来どおり即確定するのは、§7.3 の省略条件のほか、次のときである。キーが Commit（Enter）以外
+の確定（Ctrl+Shift+U など）のとき、secure な文脈のとき（最終要求の本文を Host へ出さないという
+privacy 上の意図）、候補ウィンドウの表示中・確定処理中・Host 不通・標準句読点のみの preedit のとき、
+タイマーを作れないとき。
 
 ### 7.4 確定観測の整合（学習分離 / multi-segment commit）
 

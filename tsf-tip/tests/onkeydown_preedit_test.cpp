@@ -9490,3 +9490,404 @@ TEST(TsfTipEnglishCandidatesTest, CommitAndCancelClearTheTypedRomaji) {
     EXPECT_TRUE(h.service.english_raw_romaji_for_test().empty());
   }
 }
+
+// M59 dynamic punctuation (docs/dynamic-punctuation-spec.md sections 4.3.1, 7.1.1,
+// 7.3, 7.4). Timers are driven directly; nothing here waits on real time.
+namespace {
+using azookey::tsf::DelayedActionTimer;
+using azookey::tsf::TipDynamicPunctuationSettings;
+
+TipDynamicPunctuationSettings DynamicPunctuation(bool eager = false, uint32_t idle_ms = 400,
+                                                 std::string style = "ja") {
+  TipDynamicPunctuationSettings settings;
+  settings.enabled = true;
+  settings.eager = eager;
+  settings.idle_ms = idle_ms;
+  settings.style = std::move(style);
+  return settings;
+}
+
+azookey::ipc::LiveSegment LiveSeg(std::string surface, std::string reading, bool auto_punctuation) {
+  azookey::ipc::LiveSegment segment;
+  segment.surface = std::move(surface);
+  segment.reading = std::move(reading);
+  segment.auto_punctuation = auto_punctuation;
+  segment.score = auto_punctuation ? 0.0 : 1.0;
+  return segment;
+}
+
+void StartLive(DocumentPreeditHarness& h, const TipDynamicPunctuationSettings& settings,
+               bool commit_segments = false) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_dynamic_punctuation_for_test(settings);
+  h.service.set_commit_segments_supported_for_test(commit_segments);
+}
+
+// Types か and shows the Host's answer to the typed request.
+void TypeKaAndShow(DocumentPreeditHarness& h, const std::string& surface = "蚊") {
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(id, "か", surface);
+  h.service.apply_live_conversion_result_for_test();
+}
+}  // namespace
+
+TEST(TsfTipDynamicPunctuationTest, OnPauseSuppressesTypedKeysAndArmsTheIdleTimer) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation(false, 250));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_auto_punctuation_for_test());
+  EXPECT_EQ(h.service.pending_ipc_punctuation_style_for_test(), "ja");
+  ASSERT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  EXPECT_EQ(h.service.punctuation_timer_delay_for_test(DelayedActionTimer::kIdle), 250u);
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+
+  // Backspace is an editing event too: still suppressed, timer re-armed.
+  ASSERT_TRUE(h.Press('N'));
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_auto_punctuation_for_test());
+  EXPECT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+}
+
+TEST(TsfTipDynamicPunctuationTest, IdleTimerPostsOneInsertingRequest) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation(false, 250, "fullwidth_latin"));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t typed = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kIdle);
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_auto_punctuation_for_test());
+  EXPECT_EQ(h.service.pending_ipc_punctuation_style_for_test(), "fullwidth_latin");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "か");
+  EXPECT_GT(h.service.pending_ipc_request_id_for_test(), typed);
+  // One request per expiry: the timer is not armed again until the next edit.
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kIdle);
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+
+  // The next typed key is suppressed again and re-arms the timer.
+  ASSERT_TRUE(h.Press('N'));
+  EXPECT_FALSE(h.service.pending_ipc_auto_punctuation_for_test());
+  EXPECT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+}
+
+TEST(TsfTipDynamicPunctuationTest, EagerInsertsOnEveryKeyWithoutAnIdleTimer) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation(true));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_auto_punctuation_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_TRUE(h.service.pending_ipc_auto_punctuation_for_test());
+}
+
+TEST(TsfTipDynamicPunctuationTest, DisabledOrWithoutLiveConversionNeverInserts) {
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, TipDynamicPunctuationSettings{});
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+    EXPECT_FALSE(h.service.pending_ipc_auto_punctuation_for_test());
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation());
+    h.service.set_live_conversion_for_test(false);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_FALSE(h.service.pending_ipc_auto_punctuation_for_test());
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+}
+
+TEST(TsfTipDynamicPunctuationTest, EnterWaitsForTheFinalRequestAndCommitsItsPunctuation) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation(), /*commit_segments=*/true);
+  h.service.set_final_request_timeout_for_test(300);
+  TypeKaAndShow(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_auto_punctuation_for_test());
+  ASSERT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_EQ(h.service.punctuation_timer_delay_for_test(DelayedActionTimer::kFinal), 300u);
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_EQ(h.context.document->text, L"蚊。");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+
+  // Section 7.4: the mark travels as is_auto_punctuation with no reading and is
+  // never observed; the segment keeps the Host's own surface string.
+  const auto observation = h.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  ASSERT_EQ(observation->segments.size(), 2u);
+  EXPECT_EQ(observation->segments[0].reading, "か");
+  EXPECT_EQ(observation->segments[0].chosen.surface, "蚊");
+  EXPECT_FALSE(observation->segments[0].is_auto_punctuation);
+  EXPECT_EQ(observation->segments[1].reading, "");
+  EXPECT_EQ(observation->segments[1].chosen.surface, "。");
+  EXPECT_TRUE(observation->segments[1].is_auto_punctuation);
+}
+
+TEST(TsfTipDynamicPunctuationTest, OlderHostWithoutCommitSegmentsObservesOnlyTheReadingSegments) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation(), /*commit_segments=*/false);
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊。");
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(),
+                       azookey::ipc::MessageType::CommitSegmentsObservation),
+            0);
+  const auto single = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(single.has_value());
+  EXPECT_EQ(single->reading, "か");
+  EXPECT_EQ(single->chosen.surface, "蚊");
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            1);
+}
+
+TEST(TsfTipDynamicPunctuationTest, TimeoutCommitsTheDisplayedSurfaceAndIgnoresALateResponse) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+TEST(TsfTipDynamicPunctuationTest, StaleTypedResponseDoesNotResolveTheHold) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t typed = h.service.pending_ipc_request_id_for_test();
+  // The typed request is still in flight when Enter arrives.
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+  EXPECT_GT(final_id, typed);
+
+  h.service.set_live_conversion_result_for_test(typed, "か", "古");
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_NE(h.context.document->text, L"古");
+
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"蚊。");
+}
+
+TEST(TsfTipDynamicPunctuationTest, AppliedIdleResultAndEagerCommitWithoutAFinalRequest) {
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation());
+    TypeKaAndShow(h);
+    h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kIdle);
+    const uint64_t idle_id = h.service.pending_ipc_request_id_for_test();
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_live_conversion_result_with_segments_for_test(
+        idle_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+    h.service.apply_live_conversion_result_for_test();
+    ASSERT_EQ(h.context.document->text, L"蚊。");
+
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+    EXPECT_EQ(h.context.document->text, L"蚊。");
+  }
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation(true));
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    const uint64_t id = h.service.pending_ipc_request_id_for_test();
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_live_conversion_result_with_segments_for_test(
+        id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+    h.service.apply_live_conversion_result_for_test();
+    ASSERT_EQ(h.context.document->text, L"蚊。");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.context.document->text, L"蚊。");
+  }
+}
+
+TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  // The held commit happened exactly once and the new key starts a composition.
+  const std::wstring text = h.context.document->text;
+  ASSERT_FALSE(text.empty());
+  EXPECT_EQ(text.front(), L'蚊');
+  EXPECT_EQ(text.find(L'蚊', 1), std::wstring::npos);
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            1);
+}
+
+// TSF probes a key with OnTestKeyDown before OnKeyDown, and the probe tracks it
+// for undo learning. The held Enter must already be committed by then, and the
+// probe's answer must be the one for the committed (Idle) state.
+TEST(TsfTipDynamicPunctuationTest, ProbeResolvesTheHoldBeforeTrackingAndAnswersForIdle) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  h.service.set_commit_correction_supported_for_test(true);
+  h.service.set_text_edit_context_for_test(&h.context);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+
+  // First Backspace: the probe commits the held Enter, so the key is the first
+  // one after the commit (an undo) and the probe says it is not ours to eat.
+  h.keyboard_state.Reapply();
+  BOOL eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  const auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections.front().kind, azookey::ipc::kCorrectionKindUndo);
+
+  // A second Backspace is no longer the first key after the commit.
+  eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
+}
+
+TEST(TsfTipDynamicPunctuationTest, OnlyEnterCommitsAreHeld) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  // Esc is not a commit and must never wait for a final request.
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+TEST(TsfTipDynamicPunctuationTest, FocusLossAndCompositionEndLeaveNoHoldOrTimer) {
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation());
+    TypeKaAndShow(h);
+    h.service.mark_pending_ipc_query_sent_for_test();
+    ASSERT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+  {
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation());
+    TypeKaAndShow(h);
+    h.service.mark_pending_ipc_query_sent_for_test();
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.ExternallyTerminate(), S_OK);
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+  {
+    // A deactivated service has no timer left to fire into freed state.
+    DocumentPreeditHarness h;
+    StartLive(h, DynamicPunctuation());
+    TypeKaAndShow(h);
+    ASSERT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+    h.service.Deactivate();
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  }
+}
+
+TEST(TsfTipDynamicPunctuationTest, SecureContextCommitsAtOnceWithoutAHold) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+}

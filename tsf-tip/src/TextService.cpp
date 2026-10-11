@@ -6670,8 +6670,23 @@ class ProofreadSelectSession final : public ITfEditSession {
     selection.range = target.Get();
     selection.style.ase = TF_AE_END;
     selection.style.fInterimChar = FALSE;
-    return SUCCEEDED(context_->SetSelection(cookie, 1, &selection)) ? SelectResult::Ok
-                                                                    : SelectResult::Failed;
+    if (FAILED(context_->SetSelection(cookie, 1, &selection))) return SelectResult::Failed;
+    if (request_.reconvert)
+      QueueReconversion(
+          cookie, target.Get(),
+          text.substr(static_cast<size_t>(request_.start), static_cast<size_t>(request_.length)));
+    return SelectResult::Ok;
+  }
+
+  // The privacy is read with the selected text, under this lock. A secure
+  // context gets the selection only.
+  void QueueReconversion(TfEditCookie cookie, ITfRange* target, std::wstring surface) {
+    if (surface.empty()) return;
+    if (owner_->ResolvePrivacy(context_.Get(), false, cookie).secure) {
+      LogReconversion("proofread", "secure");
+      return;
+    }
+    owner_->QueueProofreadReconversion(generation_, context_.Get(), target, std::move(surface));
   }
 
   LONG refs_{1};
@@ -6749,6 +6764,7 @@ void TextService::EndProofreadSession() {
   // Moved out first: this may run inside the server's own end callback.
   auto session = std::move(proofread_session_);
   if (session) session->Stop();
+  pending_proofread_reconversion_.reset();
   proofread_context_.Reset();
   proofread_range_.Reset();
   proofread_hash_ = 0;
@@ -6770,6 +6786,8 @@ void TextService::OnProofreadEnd(void* context) noexcept {
 void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request) {
   AZOOKEY_ASSERT_UI_THREAD();
   using ipc::proofread::SelectResult;
+  // A newer select replaces the candidates an earlier one queued, whatever it answers.
+  pending_proofread_reconversion_.reset();
   const uint64_t generation = proofread_generation_;
   if (!proofread_context_ || !proofread_range_) {
     CompleteProofreadSelection(generation, SelectResult::ContextGone);
@@ -6801,8 +6819,40 @@ void TextService::CompleteProofreadSelection(uint64_t generation,
                                              ipc::proofread::SelectResult result) {
   RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "proofread_select",
              {{"result", SafeLogText(std::string(ipc::proofread::SelectResultName(result)))}});
+#ifdef AZOOKEY_TSF_TESTING
+  if (generation == proofread_generation_) last_proofread_select_result_for_test_ = result;
+#endif
   if (generation != proofread_generation_ || !proofread_session_) return;
   proofread_session_->CompleteSelection(result);
+}
+
+void TextService::QueueProofreadReconversion(uint64_t generation, ITfContext* context,
+                                             ITfRange* range, std::wstring surface) {
+  pending_proofread_reconversion_ =
+      PendingProofreadReconversion{generation, context, range, std::move(surface)};
+  candidate_ui_.PostCandidatesReady();
+}
+
+void TextService::RunPendingProofreadReconversion() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!pending_proofread_reconversion_) return;
+  auto pending = std::move(*pending_proofread_reconversion_);
+  pending_proofread_reconversion_.reset();
+  if (pending.generation != proofread_generation_) {
+    LogReconversion("proofread", "stale_session");
+    return;
+  }
+  // The candidate UI follows the focused context's caret. The settings app
+  // gives the window the foreground before select, but focus may come later.
+  if (!SameComIdentity(pending.context.Get(), text_edit_context_)) {
+    LogReconversion("proofread", "not_focused_context");
+    return;
+  }
+  // Rechecks a reading in progress, the privacy, and that the selection still
+  // holds the same text.
+  const HRESULT hr =
+      StartSelectionReconversion(pending.context.Get(), &pending.surface, pending.range.Get());
+  LogReconversion("proofread", hr == S_OK ? "started" : "not_started", hr);
 }
 
 void TextService::RegisterProofreadPreservedKey() {
@@ -7218,6 +7268,7 @@ void TextService::OnCandidatesReady(void* context) {
     service->retry_in_flight_.store(false, std::memory_order_release);
     service->candidate_ui_.SetRetryInFlight(false);
   }
+  service->RunPendingProofreadReconversion();
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
   service->ApplyLiveConversionResult();

@@ -27,6 +27,12 @@ using azookey::tsf::test::KeyboardStateGuard;
 
 class TestContext final : public ITfContext {
  public:
+  TestContext() = default;
+  TestContext(const TestContext&) = delete;
+  TestContext& operator=(const TestContext&) = delete;
+  ~TestContext() {
+    if (placed) placed->Release();
+  }
   STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
     if (!out) return E_POINTER;
     *out = nullptr;
@@ -60,7 +66,15 @@ class TestContext final : public ITfContext {
     *fetched = 1;
     return S_OK;
   }
-  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override { return E_NOTIMPL; }
+  // With `selectable`, the range a TIP selects becomes the selection.
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG count, const TF_SELECTION* in) override {
+    if (!selectable) return E_NOTIMPL;
+    if (count != 1 || !in || !in[0].range) return E_INVALIDARG;
+    if (placed) placed->Release();
+    if (FAILED(in[0].range->Clone(&placed))) return E_FAIL;
+    selection = placed;
+    return S_OK;
+  }
   STDMETHODIMP GetStart(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
   STDMETHODIMP GetEnd(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
   STDMETHODIMP GetActiveView(ITfContextView**) override { return E_NOTIMPL; }
@@ -79,7 +93,9 @@ class TestContext final : public ITfContext {
   }
 
   bool permit{true};
+  bool selectable{false};
   ITfRange* selection{nullptr};
+  ITfRange* placed{nullptr};
   std::vector<DWORD> flags_seen;
 
  private:
@@ -155,7 +171,15 @@ class TestRange final : public ITfRange {
     *out = start_ == end_ ? TRUE : FALSE;
     return S_OK;
   }
-  STDMETHODIMP Collapse(TfEditCookie, TfAnchor) override { return E_NOTIMPL; }
+  STDMETHODIMP Collapse(TfEditCookie, TfAnchor anchor) override {
+    if (!context_->selectable) return E_NOTIMPL;
+    if (anchor == TF_ANCHOR_START) {
+      end_ = start_;
+    } else {
+      start_ = end_;
+    }
+    return S_OK;
+  }
   STDMETHODIMP IsEqualStart(TfEditCookie, ITfRange* range, TfAnchor anchor, BOOL* equal) override {
     if (!equal || !range) return E_INVALIDARG;
     const auto* other = dynamic_cast<TestRange*>(range);
@@ -1023,6 +1047,173 @@ TEST(ReconversionFunctionTest, ReconvertInAContextThatTurnedSecureSendsNoCorrect
   EXPECT_TRUE(service.queued_corrections_for_test().empty());
   function->Release();
   service.Deactivate();
+}
+
+// X-3-6: a select from the batch correction view places the selection and,
+// once the select session has returned, opens reconversion for that range.
+class ProofreadReconversion {
+ public:
+  ProofreadReconversion()
+      : text(std::make_shared<std::wstring>(L"今日は明日の天気")),
+        window(&context, text, 0, text->size()) {
+    context.selectable = true;
+    service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    service.set_text_edit_context_for_test(&context);
+    service.begin_proofread_session_for_test(&context, &window, *text);
+  }
+  ~ProofreadReconversion() {
+    service.preedit_kana_.clear();
+    service.Deactivate();
+  }
+  std::optional<azookey::ipc::proofread::SelectResult> Select(bool reconvert = true) {
+    return Select({kTomorrow.start, kTomorrow.length, reconvert});
+  }
+  std::optional<azookey::ipc::proofread::SelectResult> Select(
+      azookey::ipc::proofread::SelectRequest request) {
+    service.apply_proofread_selection_for_test(request);
+    return service.last_proofread_select_result_for_test();
+  }
+
+  static constexpr azookey::ipc::proofread::SelectRequest kToday{0, 2, true};
+  static constexpr azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true};
+  TestContext context;
+  std::shared_ptr<std::wstring> text;
+  TestRange window;
+  azookey::tsf::TextService service;
+};
+
+using azookey::ipc::proofread::SelectResult;
+
+TEST(ProofreadReconversionTest, PlacedSelectionAsksTheHostAfterTheSelectSessionReturns) {
+  ProofreadReconversion test;
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  ASSERT_NE(test.context.placed, nullptr);
+  // Nothing starts inside the select session.
+  EXPECT_TRUE(test.service.has_pending_proofread_reconversion_for_test());
+  EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  EXPECT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  EXPECT_EQ(*test.text, L"今日は明日の天気");
+}
+
+TEST(ProofreadReconversionTest, PlacedSelectionOpensCachedCandidates) {
+  ProofreadReconversion test;
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明日"});
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(*test.text, L"今日は明日の天気");
+}
+
+TEST(ProofreadReconversionTest, SelectWithoutReconvertOnlySelects) {
+  ProofreadReconversion test;
+  EXPECT_EQ(test.Select(false), SelectResult::Ok);
+  EXPECT_NE(test.context.placed, nullptr);
+  EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+}
+
+TEST(ProofreadReconversionTest, ChangedDocumentOpensNoCandidates) {
+  {
+    ProofreadReconversion test;
+    (*test.text)[3] = L'昨';
+    EXPECT_EQ(test.Select(), SelectResult::DocumentChanged);
+    EXPECT_EQ(test.context.placed, nullptr);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  }
+  {
+    // The text under the selection changes before the candidates open.
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    (*test.text)[3] = L'昨';
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  }
+}
+
+TEST(ProofreadReconversionTest, SecureContextGetsTheSelectionOnly) {
+  {
+    ProofreadReconversion test;
+    test.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  }
+  {
+    // The context turns secure before the candidates open.
+    ProofreadReconversion test;
+    test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした"});
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    test.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  }
+}
+
+TEST(ProofreadReconversionTest, ReadingInProgressOpensNoCandidates) {
+  {
+    ProofreadReconversion test;
+    test.service.preedit_kana_ = "あ";
+    EXPECT_EQ(test.Select(), SelectResult::Failed);
+    EXPECT_EQ(test.context.placed, nullptr);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  }
+  {
+    // A reading starts before the candidates open.
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    test.service.preedit_kana_ = "あ";
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  }
+}
+
+TEST(ProofreadReconversionTest, EndedSessionDropsPendingCandidates) {
+  ProofreadReconversion test;
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  ASSERT_TRUE(test.service.has_pending_proofread_reconversion_for_test());
+  test.service.end_proofread_session_for_test();
+  EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+}
+
+TEST(ProofreadReconversionTest, NewerSelectReplacesQueuedCandidates) {
+  {
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  }
+  {
+    // A refused select still drops the earlier one's candidates.
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    EXPECT_EQ(test.Select({7, 5, true}), SelectResult::InvalidRange);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  }
+  {
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(ProofreadReconversion::kToday), SelectResult::Ok);
+    (*test.text)[6] = L'元';
+    EXPECT_EQ(test.Select(), SelectResult::DocumentChanged);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  }
+}
+
+TEST(ProofreadReconversionTest, UnfocusedContextOpensNoCandidates) {
+  ProofreadReconversion test;
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  test.service.set_text_edit_context_for_test(nullptr);
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+  EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
 }
 
 }  // namespace

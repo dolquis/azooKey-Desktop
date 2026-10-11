@@ -122,11 +122,12 @@ TEST(ProofreadSessionClientTest, ReadsTheDocumentAndSelects) {
     EXPECT_EQ(document->text, "アプリの本文");
     EXPECT_FALSE(document->secure);
     EXPECT_TRUE(document->learning_allowed);
-    EXPECT_EQ(client.Select(3, 2), proofread::SelectResult::DocumentChanged);
+    EXPECT_EQ(client.Select(3, 2, true), proofread::SelectResult::DocumentChanged);
   }
   ASSERT_TRUE(seen);
   EXPECT_EQ(seen->start, 3u);
   EXPECT_EQ(seen->length, 2u);
+  EXPECT_TRUE(seen->reconvert);
 }
 
 TEST(ProofreadSessionClientTest, AcceptsAServerThatOwnsTheDocumentWindow) {

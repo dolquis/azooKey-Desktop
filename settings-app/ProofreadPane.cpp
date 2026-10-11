@@ -314,7 +314,7 @@ winrt::fire_and_forget ProofreadPane::SelectInApplication(uint32_t start, uint32
     const auto window = reinterpret_cast<HWND>(static_cast<uintptr_t>(session_document_->window));
     if (window && IsWindow(window)) SetForegroundWindow(window);
     co_await winrt::resume_background();
-    const auto result = client->Select(start, length);
+    const auto result = client->Select(start, length, true);
     co_await ResumeForeground(dispatcher);
 
     ResourceLoader resources;

@@ -94,6 +94,23 @@ TEST(ProofreadProtocolTest, SelectRequestAndResponseRoundTrip) {
   ASSERT_TRUE(request);
   EXPECT_EQ(request->start, 12u);
   EXPECT_EQ(request->length, 3u);
+  EXPECT_FALSE(request->reconvert);
+  const auto reconvert =
+      proofread::ParseSelectRequest(proofread::BuildSelectRequest({12, 3, true}));
+  ASSERT_TRUE(reconvert);
+  EXPECT_TRUE(reconvert->reconvert);
+  // A settings app that does not send the flag asks for the selection only.
+  const auto legacy = proofread::ParseSelectRequest(R"({"kind":"select","start":1,"length":2})");
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->reconvert);
+  // A flag that is not a bool reads as false and keeps the request.
+  for (const char* json : {R"({"kind":"select","start":1,"length":2,"reconvert":"yes"})",
+                           R"({"kind":"select","start":1,"length":2,"reconvert":1})"}) {
+    SCOPED_TRACE(json);
+    const auto odd = proofread::ParseSelectRequest(json);
+    ASSERT_TRUE(odd);
+    EXPECT_FALSE(odd->reconvert);
+  }
   EXPECT_FALSE(proofread::ParseSelectRequest(R"({"kind":"select","start":-1,"length":1})"));
   EXPECT_FALSE(proofread::ParseSelectRequest(R"({"kind":"select","start":1})"));
   for (const auto result :

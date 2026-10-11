@@ -54,6 +54,9 @@ struct DocumentMessage {
 struct SelectRequest {
   uint64_t start{0};
   uint64_t length{0};
+  // Also open reconversion candidates for the selected range. Missing reads
+  // as false, so a TIP that does not know it only selects.
+  bool reconvert{false};
 };
 
 enum class SelectResult : uint8_t {

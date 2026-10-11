@@ -22,6 +22,9 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
+// How long a test listens for a notification that must not arrive.
+constexpr std::chrono::milliseconds kAbsenceWindow{300};
+
 // std::filesystem::remove deletes with POSIX semantics. If another process (an
 // antivirus scan of the file just written, for one) holds a handle at that
 // moment, the directory watch never reports the removal: a documented limit of
@@ -395,13 +398,20 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
   }
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.Start(path));
-  const auto before = reader.WatchNotificationsForTest();
+  // Not the raw wake-up count: NTFS can report the timestamp of an entry
+  // directly in a watched directory ("unrelated") late, after a write made
+  // before or during this window, which says nothing about the watch scope
+  // (DEV-1574). A write below an unwatched directory only reaches a
+  // notification if the watch became recursive, and then it names a nested path.
+  const auto before = azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest();
   {
     std::ofstream stream(file);
     stream << "changed cache contents";
   }
-  std::this_thread::sleep_for(std::chrono::milliseconds(300));
-  EXPECT_EQ(reader.WatchNotificationsForTest(), before);
+  // Absence has no event to wait for; a recursive watch reports the write
+  // within milliseconds, so this only bounds how long the test listens.
+  std::this_thread::sleep_for(kAbsenceWindow);
+  EXPECT_EQ(azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest(), before);
 }
 
 TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {

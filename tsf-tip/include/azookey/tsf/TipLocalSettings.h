@@ -83,6 +83,11 @@ class TipLocalSettings final {
   // Makes the next `count` directory-watch arms fail, standing in for the
   // transient CreateFileW/ReadDirectoryChangesW failures a TIP cannot provoke.
   static void RefuseWatchArmsForTest(unsigned count);
+  // Process-wide count of watch notifications that named an entry below a
+  // watched directory (a recursive watch would produce them). Unlike
+  // WatchNotificationsForTest it ignores the entries directly in the directory,
+  // which NTFS may report late for writes made well before the watch armed.
+  static unsigned NestedWatchNotificationsForTest();
 #endif
 
  private:

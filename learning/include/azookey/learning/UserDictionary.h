@@ -47,6 +47,13 @@ class UserDictionary {
   // Load without quarantining or otherwise changing a malformed source file.
   bool LoadReadOnly();
 
+  // Load, unless nothing in memory has changed since this instance (or the
+  // one it was copied from) loaded or saved the encrypted file, and that file
+  // is still the same one (size, last write time and file identity). Call it
+  // under the dictionary's file lock, as Load. *skipped tells whether the
+  // file was left unread (DEV-1572).
+  bool ReloadIfChanged(bool* skipped = nullptr);
+
   // Persist current state as user-scoped ciphertext. Returns false after a
   // failed load or while unmigrated plaintext is present.
   bool Save() const;
@@ -90,14 +97,32 @@ class UserDictionary {
   std::filesystem::path storage_path() const { return EncryptedPathFor(path_); }
 
  private:
+  // What identifies one version of the encrypted file on disk.
+  struct FileStamp {
+    uint64_t device{};
+    uint64_t file_id{};
+    uint64_t size{};
+    int64_t write_time{};
+    int64_t change_time{};
+    bool operator==(const FileStamp&) const = default;
+  };
+  // The encrypted file the contents match, with the revision they had then.
+  struct DiskState {
+    FileStamp stamp;
+    uint64_t revision{};
+  };
+
   bool LoadImpl(bool quarantine_corrupt_file);
   std::string Serialize() const;
+  std::optional<FileStamp> ReadStorageStamp() const;
 
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
   bool save_blocked_by_corrupt_load_{false};
   uint64_t revision_{};
+  // Set by a load of the encrypted file and by a save; Save is const.
+  mutable std::optional<DiskState> disk_state_;
 };
 
 }  // namespace azookey::learning

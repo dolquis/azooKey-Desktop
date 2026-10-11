@@ -1182,6 +1182,47 @@ TEST(InferenceEngineTest, UserWordEditPastItsBudgetDoesNotSave) {
   RemoveProtectedStoreFile(lpath);
 }
 
+// DEV-1572: an edit skips reloading the file this Host saved last, and still
+// reloads one that another writer replaced since.
+TEST(InferenceEngineTest, UserWordEditSkipsTheReloadOnlyWhileTheFileIsUnchanged) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_skip_reload.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_skip_reload.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions options;
+  options.report = &report;
+  ASSERT_TRUE(engine->AddUserWord({"First", "first"}, options));
+  options.received = std::chrono::steady_clock::now();
+  ASSERT_TRUE(engine->AddUserWord({"Second", "second"}, options));
+  EXPECT_TRUE(report.load_skipped);
+
+  {
+    azookey::learning::UserDictionary writer(udict_path, &azookey::learning::test::Crypto());
+    ASSERT_TRUE(writer.Load());
+    writer.Add({"External", "external"});
+    ASSERT_TRUE(writer.Save());
+  }
+  options.received = std::chrono::steady_clock::now();
+  ASSERT_TRUE(engine->AddUserWord({"Third", "third"}, options));
+  EXPECT_FALSE(report.load_skipped);
+
+  azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Size(), 4u);
+  EXPECT_EQ(loaded.Lookup("external").size(), 1u);
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
 // DEV-1572: an edit waiting for the file lock holds neither the state lock
 // nor the learning history lock, so commits are recorded meanwhile.
 TEST(InferenceEngineTest, UserWordEditWaitingForTheFileLockDoesNotBlockCommits) {

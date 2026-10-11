@@ -16,6 +16,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#else
+#include <sys/stat.h>
 #endif
 
 #include "azookey/ipc/Json.h"
@@ -78,12 +80,69 @@ bool UserDictionary::Load() { return LoadImpl(true); }
 
 bool UserDictionary::LoadReadOnly() { return LoadImpl(false); }
 
+// DEV-1572: a writer replaces the encrypted file through a new temporary file,
+// so a file written since this instance last read or wrote it differs in its
+// identity (NTFS file index, or inode), and also in size or write time unless
+// the write landed within the file system's timestamp granularity. Every
+// mutator bumps revision_, so an equal revision means the contents are still
+// the ones that file holds. When the encrypted file exists, Load reads it and
+// nothing else, so skipping the load reads the same state Load would have.
+bool UserDictionary::ReloadIfChanged(bool* skipped) {
+  if (skipped) *skipped = false;
+  if (disk_state_ && disk_state_->revision == revision_) {
+    if (const auto stamp = ReadStorageStamp(); stamp && *stamp == disk_state_->stamp) {
+      if (skipped) *skipped = true;
+      return true;
+    }
+  }
+  return Load();
+}
+
+std::optional<UserDictionary::FileStamp> UserDictionary::ReadStorageStamp() const {
+  FileStamp stamp;
+#ifdef _WIN32
+  const HANDLE file = ::CreateFileW(storage_path().c_str(), FILE_READ_ATTRIBUTES,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return std::nullopt;
+  BY_HANDLE_FILE_INFORMATION info{};
+  FILE_BASIC_INFO basic{};
+  const bool read = ::GetFileInformationByHandle(file, &info) &&
+                    ::GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
+  ::CloseHandle(file);
+  if (!read) return std::nullopt;
+  stamp.device = info.dwVolumeSerialNumber;
+  stamp.file_id = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+  stamp.size = (static_cast<uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+  stamp.write_time = basic.LastWriteTime.QuadPart;
+  stamp.change_time = basic.ChangeTime.QuadPart;
+#else
+  struct stat info {};
+  if (::stat(storage_path().c_str(), &info) != 0) return std::nullopt;
+  stamp.device = static_cast<uint64_t>(info.st_dev);
+  stamp.file_id = static_cast<uint64_t>(info.st_ino);
+  stamp.size = static_cast<uint64_t>(info.st_size);
+  stamp.write_time = static_cast<int64_t>(info.st_mtim.tv_sec) * 1'000'000'000 +
+                     static_cast<int64_t>(info.st_mtim.tv_nsec);
+  stamp.change_time = static_cast<int64_t>(info.st_ctim.tv_sec) * 1'000'000'000 +
+                      static_cast<int64_t>(info.st_ctim.tv_nsec);
+#endif
+  return stamp;
+}
+
 bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
   ++revision_;
   by_ruby_.clear();
   save_blocked_by_corrupt_load_ = false;
+  disk_state_.reset();
+  // Taken before the read: a file replaced in between then fails to match.
+  const auto stamp = ReadStorageStamp();
   std::string text;
   const auto source = ReadProtectedText(path_, *crypto_, text);
+  const auto remember_encrypted_file = [&] {
+    if (source == ProtectedFileSource::Encrypted && stamp)
+      disk_state_ = DiskState{*stamp, revision_};
+  };
   if (source == ProtectedFileSource::Missing) {
     return true;  // missing file is fine
   }
@@ -99,6 +158,7 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
       save_blocked_by_corrupt_load_ = true;
       return false;
     }
+    remember_encrypted_file();
     return true;
   }
   auto v = j::Parse(text);
@@ -127,6 +187,7 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
     return false;
   }
   SecureErase(text);
+  remember_encrypted_file();
   return true;
 }
 
@@ -167,7 +228,12 @@ bool UserDictionary::Save() const {
   if (save_blocked_by_corrupt_load_) {
     return false;
   }
-  return WriteProtectedText(path_, Serialize(), *crypto_);
+  disk_state_.reset();
+  if (!WriteProtectedText(path_, Serialize(), *crypto_)) return false;
+  // Read after the write, under the caller's file lock: no other writer can
+  // have replaced the file in between.
+  if (const auto stamp = ReadStorageStamp()) disk_state_ = DiskState{*stamp, revision_};
+  return true;
 }
 
 bool UserDictionary::SavePlaintextExport(const std::filesystem::path& export_path) const {

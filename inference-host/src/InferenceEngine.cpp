@@ -599,7 +599,7 @@ bool InferenceEngine::EditUserDictionary(const std::function<bool(learning::User
                : finish(UserDictionaryEditResult::LockFailed, kUserDictionaryLockError);
   }
   stage_start = SteadyClock::now();
-  if (detail::UserDictionaryFileExists(*edited) && !edited->Load()) {
+  if (detail::UserDictionaryFileExists(*edited) && !edited->ReloadIfChanged(&report.load_skipped)) {
     report.load_ms = MillisecondsBetween(stage_start, SteadyClock::now());
     return finish(UserDictionaryEditResult::LoadFailed, kUserDictionaryLoadError);
   }

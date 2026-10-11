@@ -110,7 +110,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ForgetOutcome::SaveFailed;
   }
-  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
+  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ForgetOutcome::SaveFailed;
   }
   const auto before = *snapshot;
@@ -277,7 +277,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ResetOutcome::SaveFailed;
   }
-  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
+  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ResetOutcome::SaveFailed;
   }
   const auto before = *snapshot;
@@ -418,7 +418,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
       failed.error = BackupError::StoreUnavailable;
       return failed;
     }
-    if (detail::UserDictionaryFileExists(*user_dict_copy) && !user_dict_copy->Load()) {
+    if (detail::UserDictionaryFileExists(*user_dict_copy) && !user_dict_copy->ReloadIfChanged()) {
       LearningImportResult failed;
       failed.error = BackupError::StoreUnavailable;
       return failed;

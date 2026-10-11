@@ -1408,6 +1408,8 @@ HRESULT TextService::AdviseTextServiceSinks() {
   key_mgr->Release();
   if (FAILED(hr)) return hr;
   key_event_sink_advised_ = true;
+  // Ctrl+Shift+Space (X-3-6) exists only as a preserved key. Best effort.
+  RegisterProofreadPreservedKey();
   // F10 arrives as WM_SYSKEYDOWN, which some hosts never route to the key
   // event sink. Best effort: without it OnKeyDown still toggles.
   RegisterDebugPreservedKey();
@@ -1442,7 +1444,9 @@ HRESULT TextService::UnadviseTextServiceSinks() {
     }
   }
 
+  UnregisterProofreadPreservedKey();
   UnregisterDebugPreservedKey();
+  proofread_capture_.reset();
   if (thread_mgr_ && key_event_sink_advised_) {
     ITfKeystrokeMgr* key_mgr = nullptr;
     HRESULT hr =
@@ -3159,6 +3163,9 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
   // F10 belongs to the application (menu activation).
   if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) && ClaimsDebugWindowKey(context)) {
     ToggleDebugWindow();
+    *eaten = TRUE;
+  } else if (IsEqualGUID(rguid, kProofreadPreservedKeyGuid) && ClaimsProofreadKey(context)) {
+    CaptureProofreadDocument(context);
     *eaten = TRUE;
   }
   return S_OK;
@@ -6472,6 +6479,65 @@ void TextService::UnregisterDebugPreservedKey() {
     key_mgr->Release();
   }
   debug_preserved_key_registered_ = false;
+}
+
+bool TextService::ClaimsProofreadKey(ITfContext* context) const {
+  // The key belongs to the application while a reading is in progress, with
+  // the IME closed or in alphanumeric mode, and in a disabled context.
+  return context && keyboard_open_ && !alnum_mode_ && !composition_ && preedit_kana_.empty() &&
+         !romaji_.HasPending() && !candidate_ui_.IsShowing() &&
+         !azookey::tsf::IsContextKeyboardDisabled(context);
+}
+
+void TextService::CaptureProofreadDocument(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  ProofreadCapture capture;
+  // DEV-1532 contract: no text leaves a secure or no-learning context, so it
+  // is not read at all.
+  const auto privacy = ResolvePrivacy(context, false);
+  if (privacy.secure || !privacy.learning_allowed) {
+    capture.status = ProofreadCapture::Status::Blocked;
+  } else if (auto document = ReadProofreadDocument(context, client_id_)) {
+    capture.status = ProofreadCapture::Status::Captured;
+    capture.document = std::move(*document);
+  }
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info,
+             capture.status == ProofreadCapture::Status::Captured  ? "proofread_captured"
+             : capture.status == ProofreadCapture::Status::Blocked ? "proofread_blocked"
+                                                                   : "proofread_unavailable");
+  proofread_capture_ = std::move(capture);
+}
+
+void TextService::RegisterProofreadPreservedKey() {
+  proofread_preserved_key_registered_ = false;
+  if (!thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (FAILED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) ||
+      !key_mgr)
+    return;
+  static constexpr wchar_t kDescription[] = L"azooKey proofread";
+  const TF_PRESERVEDKEY key{VK_SPACE, TF_MOD_CONTROL | TF_MOD_SHIFT};
+  proofread_preserved_key_registered_ =
+      SUCCEEDED(key_mgr->PreserveKey(client_id_, kProofreadPreservedKeyGuid, &key, kDescription,
+                                     static_cast<ULONG>(std::size(kDescription) - 1)));
+  if (!proofread_preserved_key_registered_)
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_preserve_key_failed");
+  key_mgr->Release();
+}
+
+void TextService::UnregisterProofreadPreservedKey() {
+  if (!proofread_preserved_key_registered_ || !thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (SUCCEEDED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) &&
+      key_mgr) {
+    const TF_PRESERVEDKEY key{VK_SPACE, TF_MOD_CONTROL | TF_MOD_SHIFT};
+    if (FAILED(key_mgr->UnpreserveKey(kProofreadPreservedKeyGuid, &key)))
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preserved_key_unpreserve_failed");
+    key_mgr->Release();
+  }
+  proofread_preserved_key_registered_ = false;
 }
 
 HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,

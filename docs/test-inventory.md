@@ -168,6 +168,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_nll_real_model_no_context` | `azookey_nll_bench` | 同じ pin モデルと fixture 辞書で、文脈なしの NLL 再スコア最上位を検証 |
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
+| `azookey_zenzai_real_model_reading_tail_smoke` | `azookey_zenzai_bench` | 同じ pin モデルの非ライブ複数候補で `けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在を検証 |
 | `azookey_zenzai_real_model_json_smoke` | `azookey_zenzai_bench` | 同じ pin モデルでの JSON 出力の schema 固定と `passed` 真、`status=ok` 行の非混入 |
 
 ## CTest 以外の自動検査

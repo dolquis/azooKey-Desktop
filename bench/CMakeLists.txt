@@ -215,6 +215,18 @@ if(AZOOKEY_BUILD_TESTS)
       RUN_SERIAL TRUE
       TIMEOUT 120
     )
+    add_test(NAME azookey_zenzai_real_model_reading_tail_smoke
+             COMMAND azookey_zenzai_bench
+                     --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --input "けいやくこうしんのじょうけんをきょうぎする"
+                     --iterations 1 --warmup 0 --require-model --require-zenzai)
+    set_tests_properties(azookey_zenzai_real_model_reading_tail_smoke PROPERTIES
+      LABELS "zenzai-real-model"
+      PASS_REGULAR_EXPRESSION "zenzai_candidates=[1-9][0-9]* top_surface=契約更新の条件を協議する "
+      FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
+      RUN_SERIAL TRUE
+      TIMEOUT 120
+    )
     add_test(NAME azookey_zenzai_real_model_json_smoke
              COMMAND azookey_zenzai_bench
                      --model "${AZOOKEY_ZENZAI_TEST_MODEL}"

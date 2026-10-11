@@ -545,6 +545,7 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
   （User-Agent はバージョン文字列のみ、M32 と同様）。アップロードは行わない。
   `privacy.mode=offline` は公開アセットの取得も禁止する。起動時は通信せず、実行中に
   offline へ切り替えると設定世代を更新し、進行中の取得を協調キャンセルする。
+  neologd pack にも同じ禁止を適用する（§15.14）。
 - **DPAPI 暗号化（M34）対象に新ストアを含める** — `auto_words.tsv` はユーザーの
   未知語（固有名詞・個人情報を含みうる）を蓄積するため、`learning.tsv` /
   `user_dict.json` と同等の機微情報として M34 の暗号化対象に追加する。
@@ -1782,6 +1783,10 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **起動時だけ**: Host は起動時に一度だけ pack を扱う。`dictionary.neologdEnabled` が真で、
   SafeMode でないときに限る。設定の再読込（§14.8）は層の有効フラグだけを更新し、pack の
   取得やロードはしない。
+- **offline**: `privacy.mode=offline` の間は通信しない。宛先に SHA256 の一致するファイルが
+  あればそれを検証してロードし、無ければ取得せずに終える。設定の再読込で offline へ
+  切り替えると、取得中の通信を協調キャンセルする。通常モードへ戻しても再取得はせず、
+  次の起動で `neologdEnabled` に従う。保存された `neologdEnabled` は変更しない。
 - **pin の読み方**: pin したマニフェストは、ビルド時に `azookey_host` へバイト列として
   埋め込む。配布物に `neologd_lexicon.*` のファイルは置かないので、§14.10 の配布ガードは
   そのまま成り立つ。
@@ -1798,7 +1803,8 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **旧版の削除**: ロードできる pack がそろったら、`packs` 内の別の版の
   `neologd_lexicon-*.azdic` と、その `.part` を削除する。
 - **ログ**: 結果は `neologd_pack_load` イベントに記録する。`result` は `ok` /
-  `missing_pack` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
+  `missing_pack` / `offline` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
+  `offline` は offline のために取得しなかったことを表す。
   パスとサーバの応答はログに出さない。
 - **状態の照会**: 同じ結果を `QueryDiagnostics` 応答の任意フィールド `neologd_layer`
   （`docs/dev-infrastructure-spec.md` §12.6）で返す。`state` は次のいずれかで、`reason` は
@@ -1807,7 +1813,7 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 
   | `state` | 意味 |
   |---|---|
-  | `not_requested` | この起動では pack を扱っていない（`neologdEnabled` が偽、SafeMode、`packs` が無い） |
+  | `not_requested` | この起動では pack を扱っていない（`neologdEnabled` が偽、SafeMode、`packs` が無い、offline で検証済みのコピーが無い） |
   | `loading` | 取得・検証・ロードの途中 |
   | `ready` | 層へロードした |
   | `missing_pack` | マニフェストが未公開 |

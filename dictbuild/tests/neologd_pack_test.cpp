@@ -67,6 +67,7 @@ class FakeDownloader final : public host::IPackDownloader {
       : source_(std::move(source)), status_(status) {}
   host::HttpDownloadResult Download(const host::HttpDownloadRequest& request) override {
     requests.push_back(request);
+    if (on_download) on_download();
     host::HttpDownloadResult result;
     result.status = status_;
     if (status_ == host::HttpDownloadStatus::Downloaded)
@@ -76,6 +77,7 @@ class FakeDownloader final : public host::IPackDownloader {
     return result;
   }
   std::vector<host::HttpDownloadRequest> requests;
+  std::function<void()> on_download;
 
  private:
   std::filesystem::path source_;
@@ -238,7 +240,40 @@ TEST(NeologdPack, DownloadFailureAndReuseOfAVerifiedCopy) {
   EXPECT_TRUE(std::filesystem::exists(result.path));
 }
 
+TEST(NeologdPack, SwitchToOfflineDuringFetchReportsOfflineNotFailure) {
+  const auto manifest = Manifest("valid");
+  TempDirectory directory;
+  std::atomic<bool> network_allowed{true};
+  FakeDownloader downloader(Case("valid") / manifest.file_name, host::HttpDownloadStatus::Failed);
+  downloader.on_download = [&] { network_allowed = false; };
+  const auto result = host::PrepareNeologdPack(manifest, directory.packs(), downloader,
+                                               [&] { return network_allowed.load(); });
+  EXPECT_EQ(result.status, host::NeologdPackStatus::Offline);
+  EXPECT_TRUE(result.error.empty());
+  ASSERT_EQ(downloader.requests.size(), 1u);
+  ASSERT_TRUE(downloader.requests[0].network_allowed);
+  EXPECT_FALSE(downloader.requests[0].network_allowed());
+  EXPECT_FALSE(std::filesystem::exists(directory.packs() / manifest.file_name));
+}
+
 #ifdef _WIN32
+// Offline: a verified copy still loads, and without one nothing is fetched.
+TEST(NeologdPack, OfflineReusesVerifiedCopyAndOtherwiseNeverFetches) {
+  auto manifest = Manifest("valid");
+  manifest.url = "http://127.0.0.1:1/neologd_lexicon-1.azdic";
+  TempDirectory directory;
+  host::HttpPackDownloader downloader;
+  const auto offline = [] { return false; };
+  auto result = host::PrepareNeologdPack(manifest, directory.packs(), downloader, offline);
+  EXPECT_EQ(result.status, host::NeologdPackStatus::Offline);
+  EXPECT_FALSE(std::filesystem::exists(directory.packs() / manifest.file_name));
+  EXPECT_FALSE(std::filesystem::exists(directory.packs() / (manifest.file_name + ".part")));
+  std::filesystem::copy_file(Case("valid") / manifest.file_name,
+                             directory.packs() / manifest.file_name);
+  result = host::PrepareNeologdPack(manifest, directory.packs(), downloader, offline);
+  EXPECT_EQ(result.status, host::NeologdPackStatus::Ready) << result.error;
+}
+
 // The production downloader: a copy whose SHA256 matches is reused without network, and a
 // missing one fails against an unreachable loopback port instead of loading anything.
 TEST(NeologdPack, HttpPackDownloaderReusesVerifiedCopyWithoutNetwork) {

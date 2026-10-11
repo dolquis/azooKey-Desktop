@@ -750,6 +750,52 @@ TEST(HttpDownloaderTest, CancelledDownloadAfterRequestNeverPromotes) {
   EXPECT_EQ(ReadFile(destination), "existing-model");
 }
 
+TEST(HttpDownloaderTest, NetworkDisallowedReusesVerifiedCopyAndOtherwiseFailsBeforeNetwork) {
+  TempDirectory temp;
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, kFixture);
+  auto request =
+      Request(L"http://127.0.0.1:1/unavailable.gguf", destination, std::string(kFixtureSha256));
+  request.network_allowed = [] { return false; };
+  EXPECT_EQ(azookey::host::HttpDownloader().Download(request).status,
+            azookey::host::HttpDownloadStatus::AlreadyValid);
+
+  WriteFile(destination, "existing-model");
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("network disabled"), std::string::npos) << *result.error;
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+  EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
+
+  azookey::host::HttpTextRequest text;
+  text.url = L"http://127.0.0.1:1/unavailable.sha256";
+  text.max_bytes = 1024;
+  text.network_allowed = [] { return false; };
+  const auto text_result = azookey::host::HttpDownloader().FetchText(text);
+  EXPECT_TRUE(text_result.body.empty());
+  ASSERT_TRUE(text_result.error);
+  EXPECT_NE(text_result.error->find("network disabled"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, NetworkDisallowedAfterRequestNeverPromotes) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), false);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  // Switching to offline once the request reached the server.
+  request.network_allowed = [&] { return server.request().empty(); };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+}
+
 TEST(HttpDownloaderTest, FetchTextCancellationDiscardsResponse) {
   WinsockScope winsock;
   ASSERT_TRUE(winsock.ok());

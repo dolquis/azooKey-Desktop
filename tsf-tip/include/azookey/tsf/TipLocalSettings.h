@@ -80,9 +80,17 @@ class TipLocalSettings final {
     return watch_directories_;
   }
   unsigned WatchNotificationsForTest() const { return watch_notifications_.load(); }
+  // Settings-file loads so far, the activation load included.
+  unsigned ReloadsForTest() const { return reloads_.load(); }
   // Makes the next `count` directory-watch arms fail, standing in for the
   // transient CreateFileW/ReadDirectoryChangesW failures a TIP cannot provoke.
   static void RefuseWatchArmsForTest(unsigned count);
+  // Process-wide count of watch notifications that named an entry below a
+  // watched directory (a recursive watch would produce them). Never reset: compare
+  // a value taken earlier in the test. Unlike
+  // WatchNotificationsForTest it ignores the entries directly in the directory,
+  // which NTFS may report late for writes made well before the watch armed.
+  static unsigned NestedWatchNotificationsForTest();
 #endif
 
  private:
@@ -115,6 +123,7 @@ class TipLocalSettings final {
 #ifdef AZOOKEY_TSF_TESTING
   std::array<std::filesystem::path, 2> watch_directories_;
   std::atomic<unsigned> watch_notifications_{0};
+  std::atomic<unsigned> reloads_{0};
 #endif
 };
 

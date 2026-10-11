@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cwchar>
 #include <string>
 #include <system_error>
 
@@ -95,6 +97,11 @@ bool RefuseArmForTest() {
   }
   return remaining != 0;
 }
+
+// Notifications naming an entry below the watched directory. A watch that is
+// not recursive never reports one, whatever NTFS reports lazily for the entries
+// directly inside it.
+std::atomic<unsigned> g_nested_notifications{0};
 #endif
 
 class DirectoryWatch final {
@@ -145,6 +152,9 @@ class DirectoryWatch final {
       if (offset + offsetof(FILE_NOTIFY_INFORMATION, FileName) + change->FileNameLength >
           transferred)
         break;
+#ifdef AZOOKEY_TSF_TESTING
+      if (std::wmemchr(change->FileName, L'\\', length)) ++g_nested_notifications;
+#endif
       if (length <= relative_.size() &&
           CompareStringOrdinal(change->FileName, static_cast<int>(length), relative_.data(),
                                static_cast<int>(length), TRUE) == CSTR_EQUAL &&
@@ -283,6 +293,9 @@ std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot(
 }
 
 void TipLocalSettings::Reload() noexcept {
+#ifdef AZOOKEY_TSF_TESTING
+  ++reloads_;
+#endif
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
@@ -533,6 +546,10 @@ void TipLocalSettings::Watch() noexcept {
 
 #ifdef AZOOKEY_TSF_TESTING
 void TipLocalSettings::RefuseWatchArmsForTest(unsigned count) { g_refused_arms.store(count); }
+
+unsigned TipLocalSettings::NestedWatchNotificationsForTest() {
+  return g_nested_notifications.load();
+}
 
 void TipLocalSettings::SetForTest(const core::BracketSettings& settings) {
   const std::lock_guard<std::mutex> lock(mutex_);

@@ -1956,6 +1956,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   *eaten = FALSE;
   bracket_test_context_ = nullptr;
   try {
+    // TSF probes every key before OnKeyDown, and the probe tracks the key for
+    // typo and undo learning. A held Enter commits first so that tracking, and
+    // the eaten answer below, see the state after the commit (section 7.3).
+    if (final_punctuation_hold_) ResolveFinalPunctuationHold();
     TrackTypoKey(context, wParam);
     TrackUndoKey(context, wParam);
     typo_test_key_context_ = context;
@@ -2625,7 +2629,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const std::string before_backspace =
             event.action == UserAction::Backspace && !romaji_.HasPending() ? preedit_kana_
                                                                            : std::string{};
-        if (BeginFinalPunctuationHold(context, input_state_, result)) {
+        // Spec section 3 names Commit (Enter) only; other commits (Ctrl+Shift+U
+        // and the like) keep their synchronous path.
+        if (event.action == UserAction::Commit &&
+            BeginFinalPunctuationHold(context, input_state_, result)) {
           core_commit_selected_index_.reset();
           *eaten = TRUE;
           return S_OK;
@@ -3147,6 +3154,7 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  if (final_punctuation_hold_) ResolveFinalPunctuationHold();
   // With the IME closed, in alphanumeric mode or in an app-disabled context,
   // F10 belongs to the application (menu activation).
   if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) && ClaimsDebugWindowKey(context)) {

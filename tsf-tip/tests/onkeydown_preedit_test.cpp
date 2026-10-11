@@ -9767,7 +9767,14 @@ TEST(TsfTipDynamicPunctuationTest, AppliedIdleResultAndEagerCommitWithoutAFinalR
 TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   DocumentPreeditHarness h;
   StartLive(h, DynamicPunctuation());
-  TypeKaAndShow(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
   h.service.mark_pending_ipc_query_sent_for_test();
   ASSERT_TRUE(h.Press(VK_RETURN));
   ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
@@ -9775,8 +9782,64 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   ASSERT_TRUE(h.Press('K'));
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
-  ASSERT_FALSE(h.context.document->text.empty());
-  EXPECT_EQ(h.context.document->text.front(), L'蚊');
+  // The held commit happened exactly once and the new key starts a composition.
+  const std::wstring text = h.context.document->text;
+  ASSERT_FALSE(text.empty());
+  EXPECT_EQ(text.front(), L'蚊');
+  EXPECT_EQ(text.find(L'蚊', 1), std::wstring::npos);
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            1);
+}
+
+// TSF probes a key with OnTestKeyDown before OnKeyDown, and the probe tracks it
+// for undo learning. The held Enter must already be committed by then, and the
+// probe's answer must be the one for the committed (Idle) state.
+TEST(TsfTipDynamicPunctuationTest, ProbeResolvesTheHoldBeforeTrackingAndAnswersForIdle) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  h.service.set_commit_correction_supported_for_test(true);
+  h.service.set_text_edit_context_for_test(&h.context);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+
+  // First Backspace: the probe commits the held Enter, so the key is the first
+  // one after the commit (an undo) and the probe says it is not ours to eat.
+  h.keyboard_state.Reapply();
+  BOOL eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  const auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections.front().kind, azookey::ipc::kCorrectionKindUndo);
+
+  // A second Backspace is no longer the first key after the commit.
+  eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
+}
+
+TEST(TsfTipDynamicPunctuationTest, OnlyEnterCommitsAreHeld) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  // Esc is not a commit and must never wait for a final request.
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
 }
 
 TEST(TsfTipDynamicPunctuationTest, FocusLossAndCompositionEndLeaveNoHoldOrTimer) {

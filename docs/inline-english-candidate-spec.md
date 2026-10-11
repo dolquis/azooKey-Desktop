@@ -499,9 +499,10 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   **reader は当該 overlay を読み捨てる**（base のみで動作）、**writer は最初の append 前に overlay
   ヘッダを再初期化**してから追記する（§4.7「attach 前の fingerprint 検査」）。これにより
   stale な差分が現 base へ誤適用されず、かつ不一致 overlay へ追記して後で失う事故も防ぐ。
-- TSV を編集・差し替えて base を TSV から作り直すと、実行時に追加した op（M36 の英単語、
+- TSV を編集・差し替えて base を TSV から作り直すと、実行時に追加して永続化した op（M36 の英単語、
   ユーザーの追加・削除）は失われる。overlay は fingerprint 不一致で読み捨て・再初期化され、
-  コンパクションで base に取り込んだ op も TSV からの再コンパイルで消える。追加語を TSV の
+  コンパクションで base に取り込んだ op も TSV からの再コンパイルで消える。メモリ内差分
+  （ロック不可・権限なしで永続化しなかった op）は新しい base に重ねて再生され、再起動まで残る。追加語を TSV の
   再コンパイルをまたいで保つ仕組みは本書の対象外とする（§9）。確定した英単語の再提示は §5 の
   English 学習チャネルが別ファイルに持つので、TSV の編集では消えない。
 - overlay 破損 → 破棄して base のみで動作（差分は最適化であり必須でない）。
@@ -537,7 +538,8 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
   append / コンパクションを行う。取得は 10 ms 間隔で試し、500 ms で諦める（ロック不可として
   下記「権限なし / ロック不可」の扱いになる）。TSV から `.bin` を作り直す書込みも同じロックの下で
-  行うが、(A) のとおり 1 回だけ試して待たない。reader はロック不要（下記コミット規約で安全に読む）。
+  行う。ロックを取った writer はそのロックの下で作り直し、読み取り、またはロックを取れなかった
+  writer の作り直しは (A) のとおり 1 回だけ試して待たない。reader はロック不要（下記コミット規約で安全に読む）。
 - **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
   書く操作（**append / コンパクション**）に入る前に、現 live base ヘッダの `content_hash`（§4.5
   offset 28 を read。フル走査不要）を、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら

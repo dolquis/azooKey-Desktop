@@ -5,7 +5,10 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "azookey/ipc/ProofreadSession.h"
 
 namespace {
 
@@ -69,7 +72,7 @@ azookey::settings::LaunchArguments ParseTokens(const std::vector<std::wstring_vi
 
   for (size_t index = 0; index < arguments.size();) {
     const std::wstring_view option = arguments[index];
-    if (option != L"--langid" && option != L"--profile") {
+    if (option != L"--langid" && option != L"--profile" && option != L"--proofread-session") {
       result.parse_error = true;
       ++index;
       continue;
@@ -83,6 +86,22 @@ azookey::settings::LaunchArguments ParseTokens(const std::vector<std::wstring_vi
         result.langid_status = ParseLangId(arguments[index + 1], &result.langid)
                                    ? LaunchArgumentStatus::Valid
                                    : LaunchArgumentStatus::Invalid;
+      }
+    } else if (option == L"--proofread-session") {
+      std::string token;
+      if (has_value) {
+        for (const wchar_t character : arguments[index + 1]) {
+          token.push_back(character < 0x80 ? static_cast<char>(character) : '?');
+        }
+      }
+      if (!has_value || result.proofread_session_status != LaunchArgumentStatus::NotSupplied ||
+          !azookey::ipc::proofread::IsValidSessionToken(token)) {
+        result.proofread_session_status = LaunchArgumentStatus::Invalid;
+        result.proofread_session_token.clear();
+        result.parse_error = true;
+      } else {
+        result.proofread_session_status = LaunchArgumentStatus::Valid;
+        result.proofread_session_token = std::move(token);
       }
     } else {
       if (!has_value || result.profile_status != LaunchArgumentStatus::NotSupplied) {

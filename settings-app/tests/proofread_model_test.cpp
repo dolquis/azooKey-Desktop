@@ -5,6 +5,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include "ProofreadModel.h"
 
@@ -104,4 +105,44 @@ TEST(ProofreadModelTest, ALongExcerptIsCutWithoutSplittingAPair) {
   EXPECT_EQ(odd->size(), 4u + 3u);
 
   EXPECT_FALSE(FindingExcerpt(text, 99, 5));
+}
+
+// rich-features-spec X-3-6: the document a TIP session hands over keeps the privacy the TIP read.
+TEST(ProofreadModelTest, ASessionDocumentKeepsTheTipsEventPrivacy) {
+  azookey::ipc::proofread::DocumentMessage document;
+  document.status = azookey::ipc::proofread::DocumentStatus::Captured;
+  document.text = "app text";
+  for (const auto [secure, learning] :
+       {std::pair{false, true}, std::pair{true, false}, std::pair{false, false}}) {
+    document.secure = secure;
+    document.learning_allowed = learning;
+    const auto request = azookey::settings::MakeSessionProofreadRequest(document);
+    EXPECT_EQ(request.text, "app text");
+    EXPECT_EQ(request.secure, secure);
+    EXPECT_EQ(request.learning_allowed, learning);
+  }
+}
+
+TEST(ProofreadModelTest, SessionStatusesAndSelectResultsHaveStrings) {
+  using azookey::ipc::proofread::DocumentStatus;
+  using azookey::ipc::proofread::SelectResult;
+  using azookey::settings::ProofreadSelectResultResource;
+  using azookey::settings::ProofreadSessionStatusResource;
+  const auto names = ResourceNames();
+  EXPECT_EQ(ProofreadSessionStatusResource(DocumentStatus::Blocked), "Proofread_Session_blocked");
+  for (const auto status :
+       {DocumentStatus::Captured, DocumentStatus::Blocked, DocumentStatus::Unavailable}) {
+    EXPECT_TRUE(names.contains(ProofreadSessionStatusResource(status)));
+  }
+  EXPECT_EQ(ProofreadSelectResultResource(SelectResult::DocumentChanged),
+            "Proofread_SelectResult_document_changed");
+  EXPECT_EQ(ProofreadSelectResultResource(std::nullopt), "Proofread_SelectResult_lost");
+  for (const auto result :
+       {SelectResult::Ok, SelectResult::DocumentChanged, SelectResult::ContextGone,
+        SelectResult::InvalidRange, SelectResult::Failed}) {
+    EXPECT_TRUE(names.contains(ProofreadSelectResultResource(result)));
+  }
+  EXPECT_TRUE(names.contains(ProofreadSelectResultResource(std::nullopt)));
+  EXPECT_TRUE(names.contains("Proofread_Session_failed"));
+  EXPECT_TRUE(names.contains("Proofread_SessionTitle"));
 }

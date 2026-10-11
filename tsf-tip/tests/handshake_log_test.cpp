@@ -44,21 +44,32 @@ class ScopedHandshakeToken {
   std::string original_;
 };
 
+bool ClientReadyWithBatchMode(const azookey::tsf::TextService& service,
+                              std::optional<bool> expected_batch_mode = std::nullopt) {
+  return service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready &&
+         (!expected_batch_mode ||
+          service.batch_romaji_conversion_for_test() == *expected_batch_mode);
+}
+
 // Owns the temporary log and the logger override. Declared before the
 // TextService so the service, which keeps a pointer to the logger, goes first.
 class ScopedTipLog {
  public:
   ScopedTipLog() {
     static std::atomic<unsigned> sequence{0};
+    const auto instance = sequence.fetch_add(1);
     root_ = std::filesystem::temp_directory_path() /
             (L"azookey-tip-handshake-log-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-             std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(sequence++));
+             std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(instance));
     std::filesystem::create_directories(root_);
     azookey::logging::RuntimeLoggerOptions options;
     options.enabled = true;
     // Even the body opt-in must not let the token through.
     options.body_opt_in = true;
-    options.component = "tip";
+    // RuntimeLogger's named mutex is keyed by component, not output_path.
+    // Isolate it too: unrelated TIP processes must not make this test drop a record.
+    options.component = "tip-handshake-log-" + std::to_string(GetCurrentProcessId()) + "-" +
+                        std::to_string(instance);
     options.logs_directory = root_;
     options.output_path = root_ / L"tip.jsonl";
     logger_ = std::make_unique<azookey::logging::RuntimeLogger>(options);
@@ -76,10 +87,14 @@ class ScopedTipLog {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
   }
 
-  // Waits for a record containing every fragment, returning the whole log.
-  std::string WaitFor(std::initializer_list<std::string> fragments) const {
+  // Waits for a record containing every fragment and, when requested, client
+  // readiness with the expected batch mode. Returns the whole log.
+  std::string WaitFor(std::initializer_list<std::string> fragments,
+                      const azookey::tsf::TextService* ready_service = nullptr,
+                      std::optional<bool> expected_batch_mode = std::nullopt) const {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     std::string log;
+    bool matching_record_found = false;
     while (std::chrono::steady_clock::now() < deadline) {
       log = Read();
       size_t start = 0;
@@ -90,12 +105,27 @@ class ScopedTipLog {
         bool all = true;
         for (const auto& fragment : fragments)
           all = all && line.find(fragment) != std::string::npos;
-        if (all) return log;
+        if (all) {
+          matching_record_found = true;
+          if (!ready_service || ClientReadyWithBatchMode(*ready_service, expected_batch_mode))
+            return log;
+        }
         start = end + 1;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    ADD_FAILURE() << "log record not found; log:\n" << log;
+    ADD_FAILURE() << "matching_record_found=" << matching_record_found << ", client_state="
+                  << (ready_service ? azookey::tsf::IpcConnectionStateName(
+                                          ready_service->ipc_connection_state_for_test())
+                                    : "not observed")
+                  << ", expected_batch_mode="
+                  << (expected_batch_mode ? (*expected_batch_mode ? "true" : "false") : "any")
+                  << ", actual_batch_mode="
+                  << (ready_service
+                          ? (ready_service->batch_romaji_conversion_for_test() ? "true" : "false")
+                          : "not observed")
+                  << "; log:\n"
+                  << log;
     return log;
   }
 
@@ -148,7 +178,7 @@ TEST(TsfTipHandshakeLogTest, AcceptedHandshakeLogsWithoutToken) {
     azookey::tsf::TextService service;
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
-    const auto text = log.WaitFor({"\"event\":\"ipc_connected\""});
+    const auto text = log.WaitFor({"\"event\":\"ipc_connected\""}, &service);
     service.stop_ipc_worker_for_test();
     ExpectNoToken(text);
   }
@@ -209,12 +239,19 @@ TEST(TsfTipHandshakeLogTest, RefreshLogsTheBatchModeItApplied) {
     azookey::tsf::TextService service;
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
-    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"});
+    log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":false"}, &service,
+                false);
     EXPECT_FALSE(service.batch_romaji_conversion_for_test());
+    // A settings refresh keeps the old Ready state. It must not satisfy the
+    // readiness predicate for the new handshake's batch mode.
+    ASSERT_TRUE(ClientReadyWithBatchMode(service, false));
+    EXPECT_FALSE(ClientReadyWithBatchMode(service, true));
     service.request_host_option_refresh_for_test();
-    log.WaitFor({"\"event\":\"ipc_host_options_refreshed\"", "\"batch_romaji_conversion\":true"});
-    const auto text =
-        log.WaitFor({"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":true"});
+    log.WaitFor({"\"event\":\"ipc_host_options_refreshed\"", "\"batch_romaji_conversion\":true"},
+                &service, true);
+    const auto text = log.WaitFor(
+        {"\"event\":\"ipc_connected\"", "\"batch_romaji_conversion\":true"}, &service, true);
+    ASSERT_TRUE(ClientReadyWithBatchMode(service, true));
     service.stop_ipc_worker_for_test();
     EXPECT_TRUE(service.batch_romaji_conversion_for_test());
     EXPECT_NE(text.find("\"batch_conversion_ai_cleanup\":false"), std::string::npos) << text;

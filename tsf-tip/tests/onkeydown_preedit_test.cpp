@@ -4421,11 +4421,22 @@ TEST(TsfTipOnKeyDownPreeditTest, AiFailureNoticeFollowsFallbackWithoutChangingCo
         }));
 
     TextServiceHarness h;
-    h.service.set_batch_romaji_options_for_test(true, false, false, true);
+    EXPECT_FALSE(h.service.batch_romaji_conversion_for_test());
     h.service.set_ipc_pipe_name_for_test(pipe_name);
     h.service.start_ipc_worker_for_test();
-    ASSERT_TRUE(WaitUntil([&] { return handshaken.load(); }));
-    ASSERT_TRUE(h.Press('N'));
+    // The server flag precedes sending the reply. Ready is published only after
+    // the client has accepted the handshake and applied the Host's options.
+    ASSERT_TRUE(WaitUntil([&] {
+      return h.service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready;
+    })) << "server_handshaken="
+        << handshaken.load() << ", client_state="
+        << azookey::tsf::IpcConnectionStateName(h.service.ipc_connection_state_for_test());
+    ASSERT_TRUE(h.service.batch_romaji_conversion_for_test());
+    ASSERT_TRUE(h.Press('N')) << "client_state="
+                              << azookey::tsf::IpcConnectionStateName(
+                                     h.service.ipc_connection_state_for_test())
+                              << ", batch_romaji_conversion="
+                              << h.service.batch_romaji_conversion_for_test();
     ASSERT_TRUE(h.Press('I'));
     ASSERT_TRUE(h.Press(VK_SPACE));
     ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));

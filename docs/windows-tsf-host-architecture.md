@@ -206,7 +206,10 @@ Linear が持つ。
   永続ファイルを直接読み書きする。`list` / `export` は読み取り専用で読み込み、平文の
   `user_dict.json` の移行（`.bak` / `.enc` の作成）も、解釈できない JSON の隔離
   （`.corrupt.<stamp>`）も行わない。解釈できないファイルは `lookup` と同じく読み込み失敗
-  として終了コード 1 を返す。
+  として終了コード 1 を返す。`--dry-run` を付けた add / remove / import / export も
+  読み取り専用で読み込み、辞書や export 先を変更せず、移行・隔離を行わない。
+  通常の直接 writer（`--offline` の add / remove、`import`）は旧平文を `.bak` に保全して
+  `.enc` へ移行する。解釈できない平文は `.corrupt.<stamp>` へ隔離し、終了コード 1 を返す。
 - `userdict import` の TSV は
   `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` の 5 列（後ろ 3 列は空可）を受け付ける。
   不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
@@ -484,6 +487,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 | `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
+
+校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session（`ipc/include/azookey/ipc/ProofreadSession.h`）は
+Host の IPC ではなく、TIP が押下ごとに作る使い捨ての pipe で、本表の `MessageType` には含めない（rich X-3-6）。
 
 `UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
 M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、

@@ -770,14 +770,20 @@ manifest、パッケージ定義、`scripts/vm-verify-fixtures/` と Pester が�
 スクリプト・ライセンス、doctor の入力（`.clangd`・`justfile`・WPR profile）、診断マーカー・
 互換性ケースである。入力の対応は `windows.yml` の `powershell_quality` 分類コメントに記す。
 Markdown・`docs/`・`plans/` だけの変更では PowerShell quality を起動しない。
-`cpp-tidy` は portable subset の C++ source、`windows-coverage` は build 対象を扱う。
+`cpp-tidy` は portable subset の C++ source と runner / 契約テストの変更、
+`windows-coverage` は build 対象を扱う。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
 これらの専門ジョブをすべて起動する。
 
 clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
-する）。ただし変更行 clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
+する）。ただし変更 TU の clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
 非ブロッキング）として実行し、変更 C++ ソースの静的解析所見を可視化する。
 所見の有無で PR を止めない（§11.5）。CodeQL は将来拡張のまま据え置く。
+offline configure は GoogleTest を取得せず、変更した portable subset の TU を
+`compile_commands.json` の登録と照合する。DB 外の TU（取得を省いたテストなど）は
+解析せず skip とし、job summary に成功・skip・解析失敗の件数、skip と失敗の path・
+理由を表示する。configure や compile DB の取得に失敗した場合も summary に記録し、
+古い DB で解析を続行しない。advisory の成功は全変更 TU の解析完了を意味しない。
 なお `clang-format`（必須）と `clang-tidy`（advisory）は独立ジョブ
 （`cpp-format` / `cpp-tidy`）に分割し、GitHub Actions 上で並行実行して CI 全体の
 所要時間を短縮する。加えてワークフロー全体に `concurrency` グループを設定し、
@@ -801,6 +807,9 @@ artifact として保存する。PR diagnostic コメントは
 経路の p95 < 50ms を確認する。
 `azookey_zenzai_bench` は llama.cpp 無効構成の mock smoke と、pin 済み実モデルを使う
 llama.cpp 構成の smoke を CTest へ登録する。
+実モデルの `zenzai-real-model` ラベルには、非ライブ複数候補の最上位で
+`けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` を
+厳密一致で検証する読み末尾欠けの回帰テストを含める。
 
 両 bench は既存の人間向け text 出力を既定とし、次の共通オプションを追加する。
 
@@ -1609,6 +1618,14 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 `core/` と `ipc/` はライブラリとして TIP / Host に組み込まれ、自分のファイルを持たないため、
 その処理の行は呼び出したプロセスの `component` で書く。どのコードが計測したかは
 `event` と `phase` で表し、`component` を増やして表さない。
+
+候補窓の描画失敗は `component=tip`、`level=warn`、
+`event=candidate_window_render_failed` として記録する。
+フィールドは `stage`（描画処理が定義する固定の失敗段階）と `hr`（符号付き HRESULT）に限定し、
+入力本文、候補本文、注釈、案内文は渡さない。記録は `AZOOKEY_LOG` の opt-in に従う。
+同じ stage は `CandidateUiCoordinator::Create` から次の `Create` まで一度だけ記録し、
+その最初の HRESULT を保持する。表示の終了や描画の成功では重複抑止を解除しない。
+候補窓の再試行と復旧通知は `docs/native-ui-spec.md` §4.1 に従う。
 
 `phase` の取り得る値は §7.7.2 の 11 値に固定し、`core/include/azookey/logging/Phase.h`
 の `azookey::logging::Phase` を全コンポーネント（tip / host）の正典とする。
@@ -2522,8 +2539,8 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 
 CI への clang-tidy / CodeQL の**必須化**は導入・調整コストが高い。本トラックでは
 `clang-format`（変更行ゲート）までを必須とし、clang-tidy / CodeQL は必須ゲートに
-しない（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、既存負債で
-PR が止まるのを避けつつ新規コード品質を上げる中間策として、`cpp-tidy` ジョブに
+しない（§4.3）。変更 TU 全体の clang-tidy 解析は、既存負債で
+PR が止まるのを避けつつ変更コード品質を上げる中間策として、`cpp-tidy` ジョブに
 **advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
 （全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
 ツール導入 第2弾）。
@@ -2642,6 +2659,8 @@ unity ビルドの成果物で CTest は全件成功する。
 衝突を core target の `NOMINMAX` で防ぐ。無名 namespace の同名 helper を持つ
 学習ストア、Host CLI / モデル関連ソース、core / Host のテストソースは、該当 target の
 `CMakeLists.txt` で衝突する組から必要なソースだけを unity batch から除外する。
+同じ契約の helper は内部共通 helper へ集約し、意味が異なる helper はソース固有の名前にする。
+これで衝突を解消できる場合は、unity batch からの除外を不要とする。
 `CrashReporting.cpp` と `ThreadStackGuarantee.cpp` も別 object にして、TIP DLL が
 クラッシュフィルタ本体を取り込まないリンク境界を保つ。これらは unity build の既定採用を
 意味しない。

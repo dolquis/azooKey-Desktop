@@ -112,6 +112,63 @@ TEST(LearningDataManagerTest, StoreNamesRoundTrip) {
   EXPECT_FALSE(host::ParseLearningDataStore("dictionary").has_value());
 }
 
+TEST(LearningDataManagerTest, UserDictionaryPresenceLoadsLegacyAndEncryptedFiles) {
+  ScopedDirectory temp;
+  const auto path = temp.File("user_dict.json");
+  learning::UserDictionary dictionary(path, &kKeyA);
+  EXPECT_FALSE(host::detail::UserDictionaryFileExists(dictionary));
+  {
+    std::ofstream out(path);
+    out << R"({"entries":[{"word":"legacy","ruby":"legacy"}]})";
+    ASSERT_TRUE(out.good());
+  }
+  ASSERT_TRUE(host::detail::UserDictionaryFileExists(dictionary));
+  ASSERT_TRUE(dictionary.Load());
+  EXPECT_EQ(dictionary.Lookup("legacy").size(), 1u);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  ASSERT_TRUE(std::filesystem::exists(dictionary.storage_path()));
+
+  learning::UserDictionary reader(path, &kKeyA);
+  ASSERT_TRUE(host::detail::UserDictionaryFileExists(reader));
+  ASSERT_TRUE(reader.Load());
+  EXPECT_EQ(reader.Lookup("legacy").size(), 1u);
+}
+
+TEST(LearningDataManagerTest, UserDictionaryPresenceDoesNotHideUnreadableCiphertext) {
+  ScopedDirectory temp;
+  const auto path = temp.File("user_dict.json");
+  {
+    std::ofstream out(learning::EncryptedPathFor(path));
+    out << "invalid ciphertext";
+    ASSERT_TRUE(out.good());
+  }
+  {
+    std::ofstream out(path);
+    out << R"({"entries":[{"word":"legacy","ruby":"legacy"}]})";
+    ASSERT_TRUE(out.good());
+  }
+  learning::UserDictionary dictionary(path, &kKeyA);
+  ASSERT_TRUE(host::detail::UserDictionaryFileExists(dictionary));
+  EXPECT_FALSE(dictionary.Load());
+  EXPECT_TRUE(dictionary.save_blocked());
+  EXPECT_FALSE(dictionary.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(dictionary.storage_path()));
+  learning::UserDictionary default_crypto(path);
+  EXPECT_TRUE(host::detail::UserDictionaryFileExists(default_crypto));
+}
+
+TEST(LearningDataManagerTest, UserDictionaryPresenceRejectsUnusablePath) {
+  ScopedDirectory temp;
+  // Platforms may report this as missing or as a filesystem error.
+  const std::string invalid_name(512, 'x');
+  const auto path = temp.File(invalid_name.c_str());
+  std::error_code ec;
+  EXPECT_FALSE(std::filesystem::exists(path, ec));
+  learning::UserDictionary dictionary(path, &kKeyA);
+  EXPECT_FALSE(host::detail::UserDictionaryFileExists(dictionary));
+}
+
 TEST(LearningDataManagerTest, ListsLearningPairsAcrossChannelsWithPaging) {
   Stores stores;
   stores.Fill();

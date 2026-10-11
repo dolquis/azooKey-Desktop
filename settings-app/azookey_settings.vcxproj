@@ -21,7 +21,7 @@
     <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
-    <RuntimeIdentifiers>win10-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win10-x64;win10-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>false</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
@@ -37,6 +37,14 @@
     <ProjectConfiguration Include="Release|x64">
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Configuration">
@@ -112,6 +120,7 @@
     <ClInclude Include="ProfilesPane.h" />
     <ClInclude Include="ProofreadModel.h" />
     <ClInclude Include="ProofreadPane.h" />
+    <ClInclude Include="ProofreadSessionClient.h" />
     <ClInclude Include="SettingsDocument.h" />
     <ClInclude Include="SettingsFieldControls.h" />
     <ClInclude Include="SettingsFields.h" />
@@ -139,6 +148,7 @@
     <ClCompile Include="ProfilesPane.cpp" />
     <ClCompile Include="ProofreadModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ProofreadPane.cpp" />
+    <ClCompile Include="ProofreadSessionClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsFieldControls.cpp" />
     <ClCompile Include="SettingsFields.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -158,6 +168,7 @@
     <ClCompile Include="..\ipc\src\NamedPipeTransport.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\ipc\src\TraceId.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\ipc\src\Payloads.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\ipc\src\ProofreadSession.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\learning\src\DpapiCrypto.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>

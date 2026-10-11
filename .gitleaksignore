@@ -1,0 +1,2 @@
+# DEV-1540 (PR #542): test-only dummy session token, not a secret; replaced with a low-entropy dummy in the work tree by 9c1834e7.
+72408bae0c626d645c87a72b8da8d6a8e86f06c3:settings-app/tests/launch_arguments_test.cpp:generic-api-key:73

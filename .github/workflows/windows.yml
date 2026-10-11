@@ -110,6 +110,9 @@ jobs:
                   cpp_tidy=true
                   vulkan_compile=true
                   ;;
+                scripts/run-clang-tidy.py|scripts/tests/test_run_clang_tidy.py)
+                  cpp_tidy=true
+                  ;;
                 settings/*)
                   settings_schema=true
                   ;;
@@ -1404,6 +1407,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build clang-tidy-18 libicu-dev
 
+      - name: Test clang-tidy runner
+        run: python3 scripts/tests/test_run_clang_tidy.py
+
       # Advisory only (dev-infra spec §11.5: clang-tidy is an optional extension,
       # not a required gate). Surfaces static-analysis findings on changed files
       # without failing the build; never blocks a PR.
@@ -1414,7 +1420,7 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           if [ "$EVENT" = "pull_request" ]; then
             BASE="$PR_BASE"
           else
@@ -1425,17 +1431,18 @@ jobs:
           fi
           # Offline configure only to emit compile_commands.json (tests excluded;
           # keeps the offline-build principle, spec §1). tsf-tip is Windows-only
-          # and absent from the Linux DB, so it is naturally skipped here.
-          cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF >/dev/null
-          mapfile -t CHANGED < <(git diff --name-only --diff-filter=ACM "$BASE" HEAD \
-            | grep -E '^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$' || true)
-          if [ "${#CHANGED[@]}" -eq 0 ]; then
-            echo "clang-tidy: no changed C++ source files in the portable subset."
-            exit 0
+          # and absent from the Linux DB. The runner explicitly reports any
+          # changed portable TU absent from the DB instead of parsing it without
+          # its include paths. Never use an old DB after a failed configure.
+          CONFIGURE_EXIT=0
+          if cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF; then
+            :
+          else
+            CONFIGURE_EXIT=$?
           fi
-          echo "Running clang-tidy on:"
-          printf '%s\n' "${CHANGED[@]}"
-          clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true
+          python3 scripts/run-clang-tidy.py --base "$BASE" \
+            --build-dir build/linux-debug --clang-tidy clang-tidy-18 \
+            --configure-exit-code "$CONFIGURE_EXIT" --summary "$GITHUB_STEP_SUMMARY"
 
   # ARM64（Windows on Arm）クロスビルドゲート。正典は
   # docs/copilot-pc-backend-spec.md §8.1 / §8.4 受け入れ条件 1。
@@ -1446,8 +1453,7 @@ jobs:
   # ビルド成功でも落ちることの 2 点による（spec §8.1）。
   #
   # 対象外: ctest（x64 ホストで ARM64 バイナリは実行できない。ネイティブ実行は
-  # spec §8.4）、azookey_settings.exe（vcxproj が x64 の ProjectConfiguration と
-  # packages.lock.json しか持たず、アーキ別 parameterize は spec §8.3 の M28/M29）。
+  # spec §8.4）。設定アプリは MSBuild の ARM64 構成で生成する（spec §8.3）。
   windows-arm64-crossbuild:
     name: Windows ARM64 cross-build
     needs: changes
@@ -1498,6 +1504,8 @@ jobs:
         run: |
           cmake --build --preset windows-release-arm64 2>&1 | Tee-Object -FilePath build-arm64.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset windows-release-arm64 --target azookey_settings 2>&1 | Tee-Object -Append -FilePath build-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Report sccache stats
         if: always()
@@ -1546,7 +1554,8 @@ jobs:
             'build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll',
             'build/windows-release-arm64/inference-host/azookey_inference_host.exe'
           )
-          foreach ($binary in $binaries) {
+          $settingsBinary = 'build/windows-release-arm64/settings-app/Release/azookey_settings.exe'
+          foreach ($binary in ($binaries + $settingsBinary)) {
             if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
               throw "ARM64 build output is missing: $binary"
             }
@@ -1582,6 +1591,7 @@ jobs:
           path: |
             build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll
             build/windows-release-arm64/inference-host/azookey_inference_host.exe
+            build/windows-release-arm64/settings-app/Release/azookey_settings.exe
           if-no-files-found: error
           retention-days: 14
 

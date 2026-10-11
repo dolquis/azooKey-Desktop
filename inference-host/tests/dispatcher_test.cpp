@@ -12,7 +12,6 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -21,6 +20,7 @@
 
 #include "../../learning/tests/TestByteCrypto.h"
 #include "IpcTestData.h"
+#include "ScopedTempDirectory.h"
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
@@ -109,44 +109,7 @@ namespace {
 
 constexpr int kProtocolVersion = 1;
 
-std::string TempPath(const char* name) {
-  return (std::filesystem::temp_directory_path() / name).string();
-}
-
-class ScopedTempDirectory {
- public:
-  ScopedTempDirectory() {
-    const auto base = std::filesystem::temp_directory_path();
-    for (int attempt = 0; attempt < 16; ++attempt) {
-      path_ = base / ("azookey_dispatcher_fixture_" +
-                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-                      "_" + std::to_string(next_id_++));
-      if (std::filesystem::create_directory(path_)) return;
-    }
-    throw std::runtime_error("Could not create a unique dispatcher test directory");
-  }
-
-  ~ScopedTempDirectory() {
-    std::error_code ec;
-    std::filesystem::remove_all(path_, ec);
-  }
-
-  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
-  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
-
-  std::string File(const char* name) const { return (path_ / name).string(); }
-
- private:
-  std::filesystem::path path_;
-  static inline std::atomic<uint64_t> next_id_{0};
-};
-
-// CTest runs each case in its own process concurrently, so fixture files carry
-// the test name: one case corrupting its M7 file must not reach another case.
-std::string PerTestFileName(const char* stem, const char* extension) {
-  const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-  return std::string(stem) + "_" + (info ? info->name() : "no_test") + extension;
-}
+using azookey::host::test::ScopedTempDirectory;
 
 void RemovePathNoThrow(const std::filesystem::path& path) {
   std::error_code ec;
@@ -253,8 +216,7 @@ class DispatcherTest : public ::testing::Test {
 };
 
 TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
-  const auto directory = std::filesystem::temp_directory_path() /
-                         ("azookey_dispatcher_query_log_" + std::to_string(std::random_device{}()));
+  const auto directory = std::filesystem::path(temp_directory.File("query_logs"));
   struct Cleanup {
     std::filesystem::path path;
     ~Cleanup() { RemovePathNoThrow(path); }
@@ -290,8 +252,7 @@ TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
 }
 
 TEST_F(DispatcherTest, HandshakeTokenValuesNeverReachRuntimeLogOrResponses) {
-  const auto directory = std::filesystem::temp_directory_path() /
-                         ("azookey_dispatcher_token_log_" + std::to_string(std::random_device{}()));
+  const auto directory = std::filesystem::path(temp_directory.File("token_logs"));
   struct Cleanup {
     std::filesystem::path path;
     ~Cleanup() { RemovePathNoThrow(path); }
@@ -497,7 +458,7 @@ TEST_F(DispatcherTest, Handshake) {
 }
 
 TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
-  const std::string settings_path = TempPath("azookey_dispatcher_batch_settings.json");
+  const std::string settings_path = temp_directory.File("azookey_dispatcher_batch_settings.json");
   std::remove(settings_path.c_str());
   {
     std::ofstream out(settings_path);
@@ -537,7 +498,7 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
 // answered with the values the store loaded before that write. The reply reads
 // the file without adopting it, so UpdateConfig still owns the reload.
 TEST_F(DispatcherTest, HandshakeAnswersFromSettingsWrittenBeforeUpdateConfig) {
-  const std::string settings_path = TempPath("azookey_dispatcher_reread_settings.json");
+  const std::string settings_path = temp_directory.File("azookey_dispatcher_reread_settings.json");
   std::remove(settings_path.c_str());
   const auto write = [&](const std::string& contents) {
     std::ofstream out(settings_path);
@@ -616,7 +577,8 @@ TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
 }
 
 TEST_F(DispatcherTest, GeneratedTokenFileAuthenticatesHandshake) {
-  const auto path = std::filesystem::path(TempPath("azookey_dispatcher_generated_token"));
+  const auto path =
+      std::filesystem::path(temp_directory.File("azookey_dispatcher_generated_token"));
   RemovePathNoThrow(path);
   const auto generated = ipc::GenerateHandshakeToken();
   ASSERT_TRUE(generated);
@@ -871,12 +833,7 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
 class AppProfileDispatchTest : public ::testing::Test {
  protected:
   AppProfileDispatchTest()
-      // Per-test name: CTest runs each TEST_F in its own process, possibly in
-      // parallel, so a shared file would be rewritten under another test.
-      : settings_path(TempPath(
-            ("azookey_dispatcher_app_profile_" +
-             std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()) + ".json")
-                .c_str())),
+      : settings_path(temp_directory.File("app_profile.json")),
         engine(std::make_unique<FixedCandidatesConverter>(), nullptr, {}) {}
   ~AppProfileDispatchTest() override { std::remove(settings_path.c_str()); }
 
@@ -936,6 +893,7 @@ class AppProfileDispatchTest : public ::testing::Test {
     EXPECT_LT(IndexOf(candidates, "二本"), IndexOf(candidates, "Nihon"));
   }
 
+  ScopedTempDirectory temp_directory;
   std::string settings_path;
   azookey::host::InferenceEngine engine;
   azookey::host::RequestScheduler scheduler;
@@ -1067,7 +1025,8 @@ TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
   // inlineEnglishDictionary on but no file: the baseline forms still come.
   auto config = engine.config();
   config.english.dictionary_enabled = true;
-  config.english.dictionary_path = TempPath("azookey_dispatcher_missing_english_words.tsv");
+  config.english.dictionary_path =
+      temp_directory.File("azookey_dispatcher_missing_english_words.tsv");
   std::remove(config.english.dictionary_path.c_str());
   engine.ApplyConfig(config);
   std::vector<std::string> without_dictionary;
@@ -1164,7 +1123,7 @@ TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
 }
 
 TEST_F(DispatcherTest, ListModelsScansOnlyTheModelsDirectory) {
-  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_models";
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_list_models"));
   RemovePathNoThrow(root);
   std::filesystem::create_directories(root / "models");
   {
@@ -1210,7 +1169,7 @@ TEST_F(DispatcherTest, ListModelsScansOnlyTheModelsDirectory) {
 #if !AZOOKEY_WITH_LLAMA_CPP
 // The header-only GGUF loads only in the probe-only (no llama.cpp) build.
 TEST_F(DispatcherTest, ListModelsReportsTheModelTheLiveEngineLoaded) {
-  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_loaded";
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_list_loaded"));
   RemovePathNoThrow(root);
   std::filesystem::create_directories(root);
   const auto model = root / "live.gguf";
@@ -1270,7 +1229,7 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
   EXPECT_EQ(unconfigured->status, "error");
   EXPECT_EQ(unconfigured->error, "models_dir_unavailable");
 
-  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_benchmark";
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_benchmark"));
   RemovePathNoThrow(root);
   std::filesystem::create_directories(root / "models");
   {
@@ -1380,7 +1339,8 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
 }
 
 TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {
-  const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_trace_phase_test";
+  ScopedTempDirectory temp_directory;
+  const auto log_dir = std::filesystem::path(temp_directory.File("azookey_host_trace_phase_test"));
   RemovePathNoThrow(log_dir);
   azookey::logging::RuntimeLoggerOptions options;
   options.enabled = true;
@@ -1434,7 +1394,9 @@ TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {
 }
 
 TEST(DispatcherTraceTest, InvalidClientTraceIdNeverEntersHostPhaseLog) {
-  const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_invalid_trace_test";
+  ScopedTempDirectory temp_directory;
+  const auto log_dir =
+      std::filesystem::path(temp_directory.File("azookey_host_invalid_trace_test"));
   RemovePathNoThrow(log_dir);
   azookey::logging::RuntimeLoggerOptions options;
   options.enabled = true;
@@ -1793,7 +1755,7 @@ TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {
 }
 
 TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecureGate) {
-  const auto path = TempPath("azookey_cleanup_settings.json");
+  const auto path = temp_directory.File("azookey_cleanup_settings.json");
   {
     std::ofstream file(path);
     file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
@@ -1917,8 +1879,9 @@ TEST_F(DispatcherTest, BatchConversionPreservesAllReadingsAcrossHardSplits) {
 }
 
 TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
-  const std::string dict_path = TempPath("azookey_dispatcher_tsv_source_fixture.tsv");
-  const std::string tsv_learning_path = TempPath("azookey_dispatcher_tsv_source_learning.tsv");
+  const std::string dict_path = temp_directory.File("azookey_dispatcher_tsv_source_fixture.tsv");
+  const std::string tsv_learning_path =
+      temp_directory.File("azookey_dispatcher_tsv_source_learning.tsv");
   std::remove(dict_path.c_str());
   std::remove(tsv_learning_path.c_str());
   {
@@ -1966,8 +1929,8 @@ TEST_F(DispatcherTest, QueryCancelBeforeReply) {
 }
 
 TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
-  const char* throwing_path = "azookey_dispatcher_throwing_learning.tsv";
-  std::remove(throwing_path);
+  const auto throwing_path = temp_directory.File("azookey_dispatcher_throwing_learning.tsv");
+  std::remove(throwing_path.c_str());
   azookey::learning::LearningStore throwing_store(throwing_path,
                                                   &azookey::learning::test::Crypto());
   azookey::host::InferenceEngine throwing_engine(std::make_unique<ThrowingConverter>(),
@@ -1985,7 +1948,7 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   throwing_scheduler.MarkLatest(32);
   EXPECT_FALSE(throwing_scheduler.IsCanceled(31));
 
-  std::remove(throwing_path);
+  std::remove(throwing_path.c_str());
 }
 
 TEST_F(DispatcherTest, AuthenticatedUnsupportedMessagesReturnExplicitTypedErrors) {
@@ -2233,7 +2196,7 @@ TEST_F(DispatcherTest, AddRemoveUserWord) {
 
 TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
   const auto blocking_parent =
-      std::filesystem::path(TempPath("azookey_dispatcher_user_dict_blocker_add"));
+      std::filesystem::path(temp_directory.File("azookey_dispatcher_user_dict_blocker_add"));
   RemovePathNoThrow(blocking_parent);
   {
     std::ofstream blocker(blocking_parent, std::ios::binary | std::ios::trunc);
@@ -2268,7 +2231,7 @@ TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
 
 TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
   const auto blocking_parent =
-      std::filesystem::path(TempPath("azookey_dispatcher_user_dict_blocker_remove"));
+      std::filesystem::path(temp_directory.File("azookey_dispatcher_user_dict_blocker_remove"));
   RemovePathNoThrow(blocking_parent);
   {
     std::ofstream blocker(blocking_parent, std::ios::binary | std::ios::trunc);
@@ -2309,7 +2272,7 @@ TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
 
 TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   ipc::LoadModelRequest req;
-  req.path = "private-candidate-prompt.gguf";
+  req.path = temp_directory.File("private-candidate-prompt.gguf");
   req.backend = "cuda";
   req.n_gpu_layers = 24;
 
@@ -2348,7 +2311,7 @@ TEST_F(DispatcherTest, LoadModelVulkanFallbackReportsDegradedCpu) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture only exercises the mock control path.";
   }
-  const auto model_path = TempPath("azookey_dispatcher_vulkan_fallback.gguf");
+  const auto model_path = temp_directory.File("azookey_dispatcher_vulkan_fallback.gguf");
   WriteMinimalGguf(model_path);
   ipc::LoadModelRequest req;
   req.path = model_path;
@@ -2392,7 +2355,7 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
                     "loads require a full model fixture.";
   }
 
-  const std::string model_path = TempPath("azookey_dispatcher_valid_zenzai.gguf");
+  const std::string model_path = temp_directory.File("azookey_dispatcher_valid_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -2446,7 +2409,7 @@ TEST_F(DispatcherTest, NoLlamaZenzaiRuntimeStaysFallbackOnly) {
                     "loads require a full model fixture.";
   }
 
-  const std::string model_path = TempPath("azookey_dispatcher_degraded_zenzai.gguf");
+  const std::string model_path = temp_directory.File("azookey_dispatcher_degraded_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -2486,7 +2449,7 @@ TEST_F(DispatcherTest, QueryCandidatesSerializesStableModelSource) {
                     "loads require a full model fixture.";
   }
 
-  const std::string model_path = TempPath("azookey_dispatcher_model_source_zenzai.gguf");
+  const std::string model_path = temp_directory.File("azookey_dispatcher_model_source_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -2517,7 +2480,7 @@ TEST_F(DispatcherTest, NoLlamaZenzaiFallbackResponseIsParseable) {
                     "loads require a full model fixture.";
   }
 
-  const std::string model_path = TempPath("azookey_dispatcher_invalid_utf8_zenzai.gguf");
+  const std::string model_path = temp_directory.File("azookey_dispatcher_invalid_utf8_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -2557,7 +2520,8 @@ TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
                     "loads require a full model fixture.";
   }
 
-  const std::string model_path = TempPath("azookey_dispatcher_cuda_fallback_zenzai.gguf");
+  const std::string model_path =
+      temp_directory.File("azookey_dispatcher_cuda_fallback_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -2648,14 +2612,14 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsTheNeologdLayerState) {
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsModelFailureAndDisabledModelWithoutChangingState) {
-  const auto missing_path = TempPath("azookey_dispatcher_diagnostics_missing.gguf");
+  const auto missing_path = temp_directory.File("azookey_dispatcher_diagnostics_missing.gguf");
   std::remove(missing_path.c_str());
   azookey::host::ModelLoadOptions options;
   options.path = missing_path;
   ASSERT_FALSE(engine.LoadModelWithResult(options).ok);
   ASSERT_EQ(engine.health_state(), azookey::host::HealthState::DegradedModel);
 
-  const auto settings_path = TempPath("azookey_dispatcher_diagnostics_settings.json");
+  const auto settings_path = temp_directory.File("azookey_dispatcher_diagnostics_settings.json");
   std::remove(settings_path.c_str());
   {
     std::ofstream out(settings_path, std::ios::binary);
@@ -2712,7 +2676,7 @@ TEST_F(DispatcherTest, DispatcherConfigCopiesShareUpdateConfigMutex) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
-  const auto settings_path = TempPath("azookey_dispatcher_settings.json");
+  const auto settings_path = temp_directory.File("azookey_dispatcher_settings.json");
   std::remove(settings_path.c_str());
 
   {
@@ -2753,8 +2717,8 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
                     "loads require a full model fixture.";
   }
 
-  const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
-  const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
+  const auto settings_path = temp_directory.File("azookey_dispatcher_invalid_reload_settings.json");
+  const auto model_path = temp_directory.File("azookey_dispatcher_invalid_reload_zenzai.gguf");
   const auto model_json_path = std::filesystem::path(model_path).generic_string();
   std::remove(settings_path.c_str());
   std::remove(model_path.c_str());
@@ -2795,8 +2759,7 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInvalidReload) {
-  const auto settings_path =
-      TempPath(PerTestFileName("azookey_dispatcher_trending_callback", ".json").c_str());
+  const auto settings_path = temp_directory.File("azookey_dispatcher_trending_callback.json");
   struct SettingsCleanup {
     std::string path;
     ~SettingsCleanup() { std::remove(path.c_str()); }
@@ -2904,8 +2867,8 @@ TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
                     "loads require a full model fixture.";
   }
 
-  const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
-  const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");
+  const auto settings_path = temp_directory.File("azookey_dispatcher_override_settings.json");
+  const auto cli_model_path = temp_directory.File("azookey_dispatcher_override_zenzai.gguf");
   std::remove(settings_path.c_str());
   std::remove(cli_model_path.c_str());
   WriteMinimalGguf(cli_model_path);
@@ -3059,8 +3022,7 @@ TEST_F(DispatcherTest, RepeatedHandshakeDoesNotRetainClientStateAfterDisconnect)
 
 TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
   EnableEventPrivacy(dispatcher);
-  const auto typo_path =
-      (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo.tsv").string();
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo.tsv");
   std::remove(typo_path.c_str());
   azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
@@ -3087,8 +3049,7 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
 }
 
 TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace) {
-  const auto typo_path =
-      (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo_auto.tsv").string();
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_auto.tsv");
   std::remove(typo_path.c_str());
   azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
@@ -3120,8 +3081,7 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 }
 
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
-  const auto auto_word_path =
-      (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words.tsv").string();
+  const auto auto_word_path = temp_directory.File("azookey_dispatcher_auto_words.tsv");
   std::remove(auto_word_path.c_str());
   azookey::learning::AutoWordStore auto_words(auto_word_path, &azookey::learning::test::Crypto());
   auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
@@ -3237,7 +3197,8 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
 
 TEST_F(DispatcherTest, ResolveNewWordRollsBackWhenSaveFails) {
   // The store's parent "directory" is a regular file, so every Save() fails.
-  const auto blocker = std::filesystem::temp_directory_path() / "azookey_dispatcher_save_blocker";
+  const auto blocker =
+      std::filesystem::path(temp_directory.File("azookey_dispatcher_save_blocker"));
   std::filesystem::remove_all(blocker);
   // The temporary stream closes the file at the end of the statement.
   std::ofstream(blocker) << "not a directory";
@@ -3267,9 +3228,7 @@ TEST_F(DispatcherTest, ResolveNewWordRollsBackWhenSaveFails) {
 }
 
 TEST_F(DispatcherTest, ConfirmedNewWordIsInjectedOnlyAfterApproval) {
-  const auto auto_word_path =
-      (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words_inject.tsv")
-          .string();
+  const auto auto_word_path = temp_directory.File("azookey_dispatcher_auto_words_inject.tsv");
   std::remove(auto_word_path.c_str());
   azookey::learning::AutoWordStore auto_words(auto_word_path, &azookey::learning::test::Crypto());
   // registrationMode=confirm: the threshold is reached but auto_promote is off.
@@ -3337,7 +3296,7 @@ TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
 
 TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
   EnableEventPrivacy(dispatcher);
-  const auto typo_path = TempPath("azookey_event_privacy_typo.tsv");
+  const auto typo_path = temp_directory.File("azookey_event_privacy_typo.tsv");
   std::remove(typo_path.c_str());
   azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
@@ -3435,9 +3394,9 @@ TEST_F(DispatcherTest, SecureFlagCapabilityIsConnectionLocalAndResetOnEveryHands
 }
 
 TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
-  const auto settings_path = TempPath("azookey_learning_privacy_settings.json");
-  const auto mining_path = TempPath("azookey_learning_privacy_mining.tsv");
-  const auto typo_path = TempPath("azookey_learning_privacy_typo.tsv");
+  const auto settings_path = temp_directory.File("azookey_learning_privacy_settings.json");
+  const auto mining_path = temp_directory.File("azookey_learning_privacy_mining.tsv");
+  const auto typo_path = temp_directory.File("azookey_learning_privacy_typo.tsv");
   for (const auto* policy : {
            R"({"privacy":{"mode":"secure"}})",
            R"({"privacy":{"mode":"private"}})",
@@ -3511,7 +3470,7 @@ TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
 }
 
 TEST_F(DispatcherTest, HostCustomLearningOptInRestoresObservations) {
-  const auto settings_path = TempPath("azookey_custom_learning_settings.json");
+  const auto settings_path = temp_directory.File("azookey_custom_learning_settings.json");
   {
     std::ofstream out(settings_path);
     out << R"({"privacy":{"mode":"custom","custom":{"learning":true}}})";
@@ -3539,7 +3498,7 @@ TEST_F(DispatcherTest, HostCustomLearningOptInRestoresObservations) {
 
 TEST_F(DispatcherTest, LearningPrivacyDoesNotWaitForUpdateConfigModelLoad) {
   using namespace std::chrono_literals;
-  const auto path = TempPath("azookey_privacy_model_reload.json");
+  const auto path = temp_directory.File("azookey_privacy_model_reload.json");
   for (bool secure : {false, true}) {
     SCOPED_TRACE(secure);
     // Start with the opposite policy so publication is observable without
@@ -3563,7 +3522,7 @@ TEST_F(DispatcherTest, LearningPrivacyDoesNotWaitForUpdateConfigModelLoad) {
     auto entered = loading.get_future();
     auto released = release.get_future().share();
     azookey::host::ModelLoadOptions options;
-    options.path = "missing-privacy-test-model.gguf";
+    options.path = temp_directory.File("missing-privacy-test-model.gguf");
     options.before_probe_for_tests = [&] {
       loading.set_value();
       released.wait();
@@ -3733,7 +3692,7 @@ TEST_F(DispatcherTest, QueryPredictionsDropsStaleResultAfterNewerRequest) {
 // only the reply, so a converter that runs past the TIP's deadline does not
 // hold the next request back.
 TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
-  const std::string path = TempPath("azookey_dispatcher_cancel_reaches_converter.tsv");
+  const std::string path = temp_directory.File("azookey_dispatcher_cancel_reaches_converter.tsv");
   std::remove(path.c_str());
   azookey::learning::LearningStore cancel_store(path, &azookey::learning::test::Crypto());
   auto converter = std::make_unique<CancelObservingConverter>();
@@ -3783,10 +3742,7 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
 }
 
 TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
-  const auto log_dir =
-      std::filesystem::temp_directory_path() /
-      ("azookey_prediction_cancel_trace_" +
-       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto log_dir = std::filesystem::path(temp_directory.File("prediction_cancel_logs"));
   azookey::logging::RuntimeLoggerOptions options;
   options.enabled = true;
   options.component = "host";
@@ -3848,7 +3804,7 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
 // M47 section 8.5.3 / 12.6: SafeMode is reported first, refuses model loads,
 // and ends when the user turns the flag off.
 TEST_F(DispatcherTest, SafeModeIsReportedRefusesModelLoadsAndClearsOnUpdateConfig) {
-  const auto settings_path = TempPath("azookey_dispatcher_safe_mode_settings.json");
+  const auto settings_path = temp_directory.File("azookey_dispatcher_safe_mode_settings.json");
   std::remove(settings_path.c_str());
   {
     std::ofstream out(settings_path, std::ios::binary);
@@ -3872,7 +3828,7 @@ TEST_F(DispatcherTest, SafeModeIsReportedRefusesModelLoadsAndClearsOnUpdateConfi
   // model.enabled=false would otherwise read as healthy (D-009).
   EXPECT_EQ(fallback_state(81), "safe_mode");
 
-  const auto model_path = TempPath("azookey_dispatcher_safe_mode_model.gguf");
+  const auto model_path = temp_directory.File("azookey_dispatcher_safe_mode_model.gguf");
   WriteMinimalGguf(model_path);
   ipc::LoadModelRequest load;
   load.path = model_path;
@@ -3932,7 +3888,7 @@ TEST_F(DispatcherTest, LearningDataListForgetExportImportRoundTrip) {
   EXPECT_EQ(listed->entries[0].channel, "kana");
   EXPECT_EQ(listed->entries[0].tags, std::vector<std::string>{"code.exe"});
 
-  const auto dir = std::filesystem::temp_directory_path() / "azookey_dispatcher_learning_backup";
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_learning_backup"));
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   ipc::ExportLearningDataRequest export_request;
@@ -4149,9 +4105,9 @@ std::optional<ipc::Envelope> SendLearningData(azookey::host::Dispatcher& target,
   return target.Dispatch(env);
 }
 
-std::filesystem::path FreshBackupDirectory(const char* name) {
-  const auto dir = std::filesystem::temp_directory_path() / name;
-  std::filesystem::remove_all(dir);
+std::filesystem::path FreshBackupDirectory(const ScopedTempDirectory& temp_directory,
+                                           const char* name) {
+  const auto dir = std::filesystem::path(temp_directory.File(name));
   std::filesystem::create_directories(dir);
   return dir;
 }
@@ -4234,8 +4190,8 @@ TEST_F(DispatcherTest, ResetLearningStoreRestoresTheStoreWhenTheM7FileCannotBeRe
 }
 
 TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
-  const auto typo_path = TempPath("azookey_dispatcher_reset_typo.tsv");
-  const auto mining_path = TempPath("azookey_dispatcher_reset_mining.tsv");
+  const auto typo_path = temp_directory.File("azookey_dispatcher_reset_typo.tsv");
+  const auto mining_path = temp_directory.File("azookey_dispatcher_reset_mining.tsv");
   azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(typo.Observe("こんちには", "こんにちは", 1700000000));
@@ -4272,8 +4228,8 @@ TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheTypoAndAutoWordStores) {
 }
 
 TEST_F(DispatcherTest, ResetLearningStoreRefusesUnreadableTypoAndAutoWordFiles) {
-  const auto typo_path = TempPath("azookey_dispatcher_reset_blocked_typo.tsv");
-  const auto mining_path = TempPath("azookey_dispatcher_reset_blocked_mining.tsv");
+  const auto typo_path = temp_directory.File("azookey_dispatcher_reset_blocked_typo.tsv");
+  const auto mining_path = temp_directory.File("azookey_dispatcher_reset_blocked_mining.tsv");
   for (const auto& path : {typo_path, mining_path}) {
     WriteAllBytes(azookey::learning::EncryptedPathFor(path), "not a protected blob");
   }
@@ -4357,7 +4313,7 @@ TEST_F(DispatcherTest, DetectAnomaliesWithoutSettingsSendsNothing) {
 // rich-features-spec X-3-6 (DEV-1532): the remote AI backend finds the spans,
 // the Host places them; privacy and a missing backend are refused explicitly.
 TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) {
-  const auto settings_path = TempPath("azookey_detect_anomalies_settings.json");
+  const auto settings_path = temp_directory.File("azookey_detect_anomalies_settings.json");
   {
     std::ofstream file(settings_path);
     file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
@@ -4489,7 +4445,8 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
 }
 
 TEST_F(DispatcherTest, LearningDataListsAndForgetsTheEnglishChannel) {
-  const std::filesystem::path english_path = "azookey_dispatcher_test_english.tsv";
+  const std::filesystem::path english_path =
+      temp_directory.File("azookey_dispatcher_test_english.tsv");
   RemoveLearningFiles(english_path);
   azookey::learning::LearningStore english(english_path, &azookey::learning::test::Crypto());
   english.Observe("apple", "Apple Inc.", 0.8, 1'700'000'000);
@@ -4536,7 +4493,7 @@ TEST_F(DispatcherTest, LearningDataExportImportRestoresContentUnderEachPolicy) {
   store.Observe("にほん", "日本", 0.8, kWhen);
   const auto original = store.Rows("にほん", "日本")->at("");
 
-  const auto dir = FreshBackupDirectory("azookey_dispatcher_backup_policies");
+  const auto dir = FreshBackupDirectory(temp_directory, "azookey_dispatcher_backup_policies");
   ipc::ExportLearningDataRequest export_request;
   export_request.stores = {"learning"};
   export_request.destination_path = azookey::core::PathToUtf8(dir / "backup.zip");
@@ -4583,7 +4540,7 @@ TEST_F(DispatcherTest, LearningDataExportImportRestoresContentUnderEachPolicy) {
 }
 
 TEST_F(DispatcherTest, LearningDataImportRejectsBadArchivesWithoutCrashing) {
-  const auto dir = FreshBackupDirectory("azookey_dispatcher_bad_backups");
+  const auto dir = FreshBackupDirectory(temp_directory, "azookey_dispatcher_bad_backups");
   const auto import_from = [&](const std::filesystem::path& path, uint64_t id) {
     ipc::ImportLearningDataRequest request;
     request.source_path = azookey::core::PathToUtf8(path);

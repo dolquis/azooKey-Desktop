@@ -17,18 +17,6 @@
 
 namespace azookey::host {
 
-namespace {
-bool Selected(const std::vector<LearningDataStore>& selected, LearningDataStore store) {
-  return std::find(selected.begin(), selected.end(), store) != selected.end();
-}
-
-bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
-  std::error_code ec;
-  return std::filesystem::exists(dict.storage_path(), ec) ||
-         std::filesystem::exists(dict.path(), ec);
-}
-}  // namespace
-
 void InferenceEngine::SetBackupCrypto(const learning::ByteCrypto* crypto) {
   std::scoped_lock lock(state_mutex_);
   backup_crypto_ = crypto;
@@ -121,7 +109,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ForgetOutcome::SaveFailed;
   }
-  if (UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
+  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
     return ForgetOutcome::SaveFailed;
   }
   const auto before = *snapshot;
@@ -287,7 +275,7 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return ResetOutcome::SaveFailed;
   }
-  if (UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
+  if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->Load()) {
     return ResetOutcome::SaveFailed;
   }
   const auto before = *snapshot;
@@ -403,7 +391,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
 
   std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
   const bool with_user_dictionary =
-      Selected(selected, LearningDataStore::UserDictionary) && user_dict_;
+      detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) && user_dict_;
 
   // The user dictionary is shared with the userdict CLI: take its file lock
   // and start from the disk state, as AddUserWord does.
@@ -418,7 +406,7 @@ LearningImportResult InferenceEngine::ImportLearningData(
       failed.error = BackupError::StoreUnavailable;
       return failed;
     }
-    if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+    if (detail::UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
       LearningImportResult failed;
       failed.error = BackupError::StoreUnavailable;
       return failed;
@@ -428,13 +416,13 @@ LearningImportResult InferenceEngine::ImportLearningData(
 
   auto result = ApplyImportedItems(LearningDataStoresLocked(), selected, std::move(*items), policy);
   if (result.error != BackupError::None) return result;
-  if (Selected(selected, LearningDataStore::Learning)) RefreshPersonaLocked();
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) RefreshPersonaLocked();
 
   bool saved = SaveLearningDataLocked();
-  if (Selected(selected, LearningDataStore::Typo) && typo_store_) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && typo_store_) {
     saved = typo_store_->Save() && saved;
   }
-  if (Selected(selected, LearningDataStore::AutoWord) && auto_word_store_) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && auto_word_store_) {
     saved = auto_word_store_->Save() && saved;
   }
   if (with_user_dictionary) {

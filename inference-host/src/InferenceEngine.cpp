@@ -234,14 +234,6 @@ void ApplyModelConfigFields(EngineConfig& target, const EngineConfig& source) {
   target.inference_threads = source.inference_threads;
 }
 
-bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
-  std::error_code ec;
-  if (std::filesystem::exists(learning::EncryptedPathFor(dict.path()), ec) && !ec) {
-    return true;
-  }
-  ec.clear();
-  return std::filesystem::exists(dict.path(), ec) && !ec;
-}
 }  // namespace
 
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
@@ -548,7 +540,7 @@ bool InferenceEngine::EditUserDictionary(
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     return fail(kUserDictionaryLockError);
   }
-  if (UserDictionaryFileExists(*edited) && !edited->Load()) {
+  if (detail::UserDictionaryFileExists(*edited) && !edited->Load()) {
     return fail(kUserDictionaryLoadError);
   }
   if (!edit(*edited)) return false;

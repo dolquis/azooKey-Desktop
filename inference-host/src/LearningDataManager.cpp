@@ -8,6 +8,22 @@
 
 namespace azookey::host {
 
+namespace detail {
+bool LearningStoreSelected(const std::vector<LearningDataStore>& selected,
+                           LearningDataStore store) {
+  return std::find(selected.begin(), selected.end(), store) != selected.end();
+}
+
+bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
+  std::error_code ec;
+  if (std::filesystem::exists(learning::EncryptedPathFor(dict.path()), ec) && !ec) {
+    return true;
+  }
+  ec.clear();
+  return std::filesystem::exists(dict.path(), ec) && !ec;
+}
+}  // namespace detail
+
 namespace {
 constexpr size_t kEntryIdHexDigits = 16;
 
@@ -129,23 +145,19 @@ struct ParsedItems {
   std::unique_ptr<learning::AutoWordStore> auto_word;
 };
 
-bool Selected(const std::vector<LearningDataStore>& selected, LearningDataStore store) {
-  return std::find(selected.begin(), selected.end(), store) != selected.end();
-}
-
 bool AnySelectedStoreBlocked(const LearningDataStores& stores,
                              const std::vector<LearningDataStore>& selected) {
-  if (Selected(selected, LearningDataStore::Learning)) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
     for (const auto& channel : stores.learning) {
       if (channel.store && channel.store->save_blocked()) return true;
     }
   }
-  return (Selected(selected, LearningDataStore::UserDictionary) && stores.user_dictionary &&
-          stores.user_dictionary->save_blocked()) ||
-         (Selected(selected, LearningDataStore::Typo) && stores.typo &&
+  return (detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) &&
+          stores.user_dictionary && stores.user_dictionary->save_blocked()) ||
+         (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo &&
           stores.typo->save_blocked()) ||
-         (Selected(selected, LearningDataStore::AutoWord) && stores.auto_word &&
-          stores.auto_word->save_blocked());
+         (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) &&
+          stores.auto_word && stores.auto_word->save_blocked());
 }
 
 const BackupItem* FindItem(const std::vector<BackupItem>& items, std::string_view name) {
@@ -237,7 +249,7 @@ std::optional<std::vector<BackupItem>> CollectBackupItems(
     return std::nullopt;
   }
   std::vector<BackupItem> items;
-  if (Selected(selected, LearningDataStore::Learning)) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
     for (const auto& channel : stores.learning) {
       if (!channel.store) continue;
       const auto name = LearningItemName(channel.name);
@@ -248,16 +260,17 @@ std::optional<std::vector<BackupItem>> CollectBackupItems(
       items.push_back(BackupItem{name, ItemFile(name + ".tsv", encrypt), rows, std::move(text)});
     }
   }
-  if (Selected(selected, LearningDataStore::UserDictionary) && stores.user_dictionary) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) &&
+      stores.user_dictionary) {
     items.push_back(BackupItem{"user_dictionary", ItemFile("user_dict.json", encrypt),
                                stores.user_dictionary->Size(),
                                stores.user_dictionary->SerializeText()});
   }
-  if (Selected(selected, LearningDataStore::Typo) && stores.typo) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo) {
     items.push_back(BackupItem{"typo_corrections", ItemFile("typo_corrections.tsv", encrypt),
                                stores.typo->size(), stores.typo->SerializeText()});
   }
-  if (Selected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
     items.push_back(BackupItem{"auto_words", ItemFile("auto_words.tsv", encrypt),
                                stores.auto_word->Size(), stores.auto_word->SerializeText()});
   }
@@ -326,7 +339,7 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
   // Parse everything first: a store is changed only once the whole archive
   // is known to be usable.
   ParsedItems parsed;
-  if (Selected(selected, LearningDataStore::Learning)) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
     for (const auto& channel : stores.learning) {
       const auto name = LearningItemName(channel.name);
       const auto* item = channel.store ? FindItem(*items, name) : nullptr;
@@ -336,21 +349,22 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
       parsed.learning.push_back(ParsedLearning{name, channel.store, std::move(scratch)});
     }
   }
-  if (Selected(selected, LearningDataStore::UserDictionary) && stores.user_dictionary) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) &&
+      stores.user_dictionary) {
     if (const auto* item = FindItem(*items, "user_dictionary")) {
       parsed.user_dictionary =
           std::make_unique<learning::UserDictionary>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.user_dictionary->LoadText(item->plaintext));
     }
   }
-  if (Selected(selected, LearningDataStore::Typo) && stores.typo) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo) {
     if (const auto* item = FindItem(*items, "typo_corrections")) {
       parsed.typo =
           std::make_unique<learning::TypoCorrectionStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.typo->LoadText(item->plaintext));
     }
   }
-  if (Selected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
+  if (detail::LearningStoreSelected(selected, LearningDataStore::AutoWord) && stores.auto_word) {
     if (const auto* item = FindItem(*items, "auto_words")) {
       parsed.auto_word = std::make_unique<learning::AutoWordStore>(std::filesystem::path{}, crypto);
       parsed_or_fail(parsed.auto_word->LoadText(item->plaintext));

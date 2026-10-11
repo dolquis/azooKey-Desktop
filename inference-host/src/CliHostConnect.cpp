@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <chrono>
 
+#include "azookey/learning/FileLock.h"
+#include "azookey/learning/PersistenceRetry.h"
+
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -29,6 +32,11 @@ bool HostPipeIsBusy(const std::string& pipe_name) {
 #endif
 
 }  // namespace
+
+const uint32_t kPersistentCommandResponseTimeoutMs =
+    static_cast<uint32_t>((learning::kDefaultFileLockTimeout +
+                           2 * learning::kTransientFileRetryBudget + std::chrono::seconds(1))
+                              .count());
 
 bool ConnectToRunningHost(ipc::NamedPipeClient& client, const std::string& pipe_name,
                           uint32_t connect_timeout_ms, uint32_t busy_timeout_ms) {

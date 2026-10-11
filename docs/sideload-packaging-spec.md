@@ -1373,7 +1373,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI | M16 | 即時 | `ai-backend-spec.md` |
-| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `10` | 詳細 | — | 即時 | `windows-tsf-host-architecture.md` |
+| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | 詳細 | — | 即時 | `windows-tsf-host-architecture.md` |
 | `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 入力 | M61 | 即時 | `bracket-pairing-spec.md` |
 | `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 入力 | M60 | 即時 | `inline-english-candidate-spec.md` |
 | `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 入力 | M62 | 即時 | `candidate-rewriter-spec.md` |

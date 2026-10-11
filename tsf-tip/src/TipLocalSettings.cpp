@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cwchar>
 #include <string>
 #include <system_error>
 
@@ -291,6 +293,9 @@ std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot(
 }
 
 void TipLocalSettings::Reload() noexcept {
+#ifdef AZOOKEY_TSF_TESTING
+  ++reloads_;
+#endif
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;

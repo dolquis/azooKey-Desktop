@@ -22,6 +22,26 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
+// True once `value()` has not changed for `quiet`; false if `limit` passes first.
+template <typename Value>
+bool WaitForQuiet(Value value, std::chrono::milliseconds quiet = std::chrono::milliseconds(200),
+                  std::chrono::milliseconds limit = std::chrono::milliseconds(5000)) {
+  const auto deadline = std::chrono::steady_clock::now() + limit;
+  auto last = value();
+  auto since = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto now = std::chrono::steady_clock::now();
+    if (const auto current = value(); current != last) {
+      last = current;
+      since = now;
+    } else if (now - since >= quiet) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // How long a test listens for a notification that must not arrive.
 constexpr std::chrono::milliseconds kAbsenceWindow{300};
 
@@ -404,6 +424,11 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
   // (DEV-1574). A write below an unwatched directory only reaches a
   // notification if the watch became recursive, and then it names a nested path.
   const auto before = azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest();
+  // The raw wake-up may still arrive, but Consume() drops it without reading
+  // the file again, so the load count must hold once the activation loads and
+  // any late report of the files written above have settled.
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.ReloadsForTest(); }));
+  const auto reloads = reader.ReloadsForTest();
   {
     std::ofstream stream(file);
     stream << "changed cache contents";
@@ -412,6 +437,7 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
   // within milliseconds, so this only bounds how long the test listens.
   std::this_thread::sleep_for(kAbsenceWindow);
   EXPECT_EQ(azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest(), before);
+  EXPECT_EQ(reader.ReloadsForTest(), reloads);
 }
 
 TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {

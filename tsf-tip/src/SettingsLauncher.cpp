@@ -10,6 +10,8 @@
 #include <string>
 #include <system_error>
 #include <vector>
+
+#include "azookey/ipc/ProofreadSession.h"
 #ifdef AZOOKEY_TSF_TESTING
 #include <utility>
 #endif
@@ -22,6 +24,10 @@ constexpr wchar_t kSettingsExecutable[] = L"azookey_settings.exe";
 std::wstring g_test_executable;
 azookey::tsf::testing::ShellExecuteExFn g_test_shell_execute = nullptr;
 #endif
+
+}  // namespace
+
+namespace azookey::tsf {
 
 HRESULT ResolveSettingsExecutable(std::wstring* executable) {
 #ifdef AZOOKEY_TSF_TESTING
@@ -72,16 +78,44 @@ HRESULT ResolveSettingsExecutable(std::wstring* executable) {
   return S_OK;
 }
 
-}  // namespace
+namespace {
 
-namespace azookey::tsf {
+HRESULT LaunchWithParameters(HWND parent, const std::wstring& parameters) {
+  std::wstring executable;
+  const HRESULT resolve_hr = ResolveSettingsExecutable(&executable);
+  if (FAILED(resolve_hr)) return resolve_hr;
+  const std::wstring working_directory = std::filesystem::path(executable).parent_path().wstring();
+
+  SHELLEXECUTEINFOW execute_info{};
+  execute_info.cbSize = sizeof(execute_info);
+  execute_info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_LOG_USAGE;
+  execute_info.hwnd = parent;
+  execute_info.lpVerb = L"open";
+  execute_info.lpFile = executable.c_str();
+  execute_info.lpParameters = parameters.c_str();
+  execute_info.lpDirectory = working_directory.c_str();
+  execute_info.nShow = SW_SHOWNORMAL;
+
+#ifdef AZOOKEY_TSF_TESTING
+  const auto shell_execute =
+      g_test_shell_execute != nullptr ? g_test_shell_execute : ShellExecuteExW;
+#else
+  const auto shell_execute = ShellExecuteExW;
+#endif
+  if (!shell_execute(&execute_info)) {
+    const DWORD error = GetLastError();
+    return error != ERROR_SUCCESS ? HRESULT_FROM_WIN32(error) : E_FAIL;
+  }
+  if (execute_info.hProcess != nullptr) {
+    CloseHandle(execute_info.hProcess);
+  }
+  return S_OK;
+}
+
+}  // namespace
 
 HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
   try {
-    std::wstring executable;
-    const HRESULT resolve_hr = ResolveSettingsExecutable(&executable);
-    if (FAILED(resolve_hr)) return resolve_hr;
-
     std::array<wchar_t, 40> profile_text{};
     if (StringFromGUID2(profile, profile_text.data(), static_cast<int>(profile_text.size())) == 0) {
       return E_UNEXPECTED;
@@ -91,35 +125,21 @@ HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
     if (swprintf_s(langid_text, L"0x%04X", static_cast<unsigned int>(langid)) < 0) {
       return E_UNEXPECTED;
     }
-    const std::wstring parameters =
-        L"--langid " + std::wstring(langid_text) + L" --profile " + profile_text.data();
-    const std::wstring working_directory =
-        std::filesystem::path(executable).parent_path().wstring();
+    return LaunchWithParameters(
+        parent, L"--langid " + std::wstring(langid_text) + L" --profile " + profile_text.data());
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
+}
 
-    SHELLEXECUTEINFOW execute_info{};
-    execute_info.cbSize = sizeof(execute_info);
-    execute_info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_LOG_USAGE;
-    execute_info.hwnd = parent;
-    execute_info.lpVerb = L"open";
-    execute_info.lpFile = executable.c_str();
-    execute_info.lpParameters = parameters.c_str();
-    execute_info.lpDirectory = working_directory.c_str();
-    execute_info.nShow = SW_SHOWNORMAL;
-
-#ifdef AZOOKEY_TSF_TESTING
-    const auto shell_execute =
-        g_test_shell_execute != nullptr ? g_test_shell_execute : ShellExecuteExW;
-#else
-    const auto shell_execute = ShellExecuteExW;
-#endif
-    if (!shell_execute(&execute_info)) {
-      const DWORD error = GetLastError();
-      return error != ERROR_SUCCESS ? HRESULT_FROM_WIN32(error) : E_FAIL;
-    }
-    if (execute_info.hProcess != nullptr) {
-      CloseHandle(execute_info.hProcess);
-    }
-    return S_OK;
+HRESULT LaunchSettingsApplicationForProofread(HWND parent, std::string_view session_token) {
+  try {
+    if (!ipc::proofread::IsValidSessionToken(session_token)) return E_INVALIDARG;
+    std::wstring parameters = L"--proofread-session ";
+    parameters.append(session_token.begin(), session_token.end());
+    return LaunchWithParameters(parent, parameters);
   } catch (const std::bad_alloc&) {
     return E_OUTOFMEMORY;
   } catch (...) {

@@ -22,6 +22,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
   target_link_libraries(azookey_settings_launch_arguments_tests
     PRIVATE
+      azookey_ipc
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings
@@ -34,6 +35,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     ModelPaneModel.cpp
     NeologdAttribution.cpp
     ProofreadModel.cpp
+    ProofreadSessionClient.cpp
     StatusPaneModel.cpp
     SettingsDocument.cpp
     SettingsFields.cpp
@@ -43,6 +45,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     tests/neologd_attribution_test.cpp
     tests/pane_models_test.cpp
     tests/proofread_model_test.cpp
+    tests/proofread_session_client_test.cpp
     tests/status_pane_model_test.cpp
     tests/settings_document_test.cpp
     tests/settings_fields_test.cpp

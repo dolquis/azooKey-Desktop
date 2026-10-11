@@ -721,6 +721,12 @@ void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
   } else {
     ProfileValueText().Text(StatusText(profile_status, resources));
   }
+
+  // Ctrl+Shift+Space in an application (rich-features-spec X-3-6).
+  if (arguments.proofread_session_status == azookey::settings::LaunchArgumentStatus::Valid) {
+    SettingsNavigationView().SelectedItem(ProofreadNavigationItem());
+    proofread_pane_->OpenSession(arguments.proofread_session_token);
+  }
 }
 
 }  // namespace winrt::azookey_settings::implementation

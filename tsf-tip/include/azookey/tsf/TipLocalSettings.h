@@ -101,7 +101,7 @@ class TipLocalSettings final {
   TipAiSettings ai_;
   bool live_conversion_{false};
   TipDynamicPunctuationSettings dynamic_punctuation_;
-  uint32_t max_context_length_{10};
+  uint32_t max_context_length_{30};
   bool prediction_enabled_{true};
   bool inline_english_candidates_{false};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;

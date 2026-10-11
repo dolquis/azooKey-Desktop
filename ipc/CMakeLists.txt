@@ -7,6 +7,7 @@ add_library(azookey_ipc STATIC
   src/Messages.cpp
   src/NamedPipeTransport.cpp
   src/Payloads.cpp
+  src/ProofreadSession.cpp
   src/TraceId.cpp
 )
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -82,7 +83,7 @@ bool UserDictionary::LoadReadOnly() { return LoadImpl(false); }
 
 // DEV-1572: a writer replaces the encrypted file through a new temporary file,
 // so a file written since this instance last read or wrote it differs in its
-// identity (NTFS file index, or inode), and also in size or write time unless
+// identity (the Windows file id, or the inode), and also in size or write time unless
 // the write landed within the file system's timestamp granularity. Every
 // mutator bumps revision_, so an equal revision means the contents are still
 // the ones that file holds. When the encrypted file exists, Load reads it and
@@ -105,15 +106,23 @@ std::optional<UserDictionary::FileStamp> UserDictionary::ReadStorageStamp() cons
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
   if (file == INVALID_HANDLE_VALUE) return std::nullopt;
-  BY_HANDLE_FILE_INFORMATION info{};
+  // FileIdInfo: the 128-bit id, unique on ReFS too, where the 64-bit file
+  // index of GetFileInformationByHandle is not. Any query that fails leaves
+  // no stamp, so the caller reads the file.
+  FILE_ID_INFO id{};
+  FILE_STANDARD_INFO standard{};
   FILE_BASIC_INFO basic{};
-  const bool read = ::GetFileInformationByHandle(file, &info) &&
-                    ::GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
+  const bool read =
+      ::GetFileInformationByHandleEx(file, FileIdInfo, &id, sizeof(id)) &&
+      ::GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) &&
+      ::GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
   ::CloseHandle(file);
   if (!read) return std::nullopt;
-  stamp.device = info.dwVolumeSerialNumber;
-  stamp.file_id = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
-  stamp.size = (static_cast<uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+  static_assert(sizeof(id.FileId.Identifier) == 2 * sizeof(uint64_t));
+  stamp.device = id.VolumeSerialNumber;
+  std::memcpy(&stamp.file_id, id.FileId.Identifier, sizeof(uint64_t));
+  std::memcpy(&stamp.file_id_high, id.FileId.Identifier + sizeof(uint64_t), sizeof(uint64_t));
+  stamp.size = static_cast<uint64_t>(standard.EndOfFile.QuadPart);
   stamp.write_time = basic.LastWriteTime.QuadPart;
   stamp.change_time = basic.ChangeTime.QuadPart;
 #else

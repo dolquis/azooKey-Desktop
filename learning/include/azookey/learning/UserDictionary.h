@@ -101,6 +101,8 @@ class UserDictionary {
   struct FileStamp {
     uint64_t device{};
     uint64_t file_id{};
+    // The upper half of the Windows 128-bit FileId; 0 elsewhere.
+    uint64_t file_id_high{};
     uint64_t size{};
     int64_t write_time{};
     int64_t change_time{};

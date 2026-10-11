@@ -110,6 +110,9 @@ jobs:
                   cpp_tidy=true
                   vulkan_compile=true
                   ;;
+                scripts/run-clang-tidy.py|scripts/tests/test_run_clang_tidy.py)
+                  cpp_tidy=true
+                  ;;
                 settings/*)
                   settings_schema=true
                   ;;
@@ -1404,6 +1407,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build clang-tidy-18 libicu-dev
 
+      - name: Test clang-tidy runner
+        run: python3 scripts/tests/test_run_clang_tidy.py
+
       # Advisory only (dev-infra spec §11.5: clang-tidy is an optional extension,
       # not a required gate). Surfaces static-analysis findings on changed files
       # without failing the build; never blocks a PR.
@@ -1414,7 +1420,7 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           if [ "$EVENT" = "pull_request" ]; then
             BASE="$PR_BASE"
           else
@@ -1425,17 +1431,18 @@ jobs:
           fi
           # Offline configure only to emit compile_commands.json (tests excluded;
           # keeps the offline-build principle, spec §1). tsf-tip is Windows-only
-          # and absent from the Linux DB, so it is naturally skipped here.
-          cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF >/dev/null
-          mapfile -t CHANGED < <(git diff --name-only --diff-filter=ACM "$BASE" HEAD \
-            | grep -E '^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$' || true)
-          if [ "${#CHANGED[@]}" -eq 0 ]; then
-            echo "clang-tidy: no changed C++ source files in the portable subset."
-            exit 0
+          # and absent from the Linux DB. The runner explicitly reports any
+          # changed portable TU absent from the DB instead of parsing it without
+          # its include paths. Never use an old DB after a failed configure.
+          CONFIGURE_EXIT=0
+          if cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF; then
+            :
+          else
+            CONFIGURE_EXIT=$?
           fi
-          echo "Running clang-tidy on:"
-          printf '%s\n' "${CHANGED[@]}"
-          clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true
+          python3 scripts/run-clang-tidy.py --base "$BASE" \
+            --build-dir build/linux-debug --clang-tidy clang-tidy-18 \
+            --configure-exit-code "$CONFIGURE_EXIT" --summary "$GITHUB_STEP_SUMMARY"
 
   # ARM64（Windows on Arm）クロスビルドゲート。正典は
   # docs/copilot-pc-backend-spec.md §8.1 / §8.4 受け入れ条件 1。

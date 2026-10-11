@@ -770,14 +770,20 @@ manifest、パッケージ定義、`scripts/vm-verify-fixtures/` と Pester が�
 スクリプト・ライセンス、doctor の入力（`.clangd`・`justfile`・WPR profile）、診断マーカー・
 互換性ケースである。入力の対応は `windows.yml` の `powershell_quality` 分類コメントに記す。
 Markdown・`docs/`・`plans/` だけの変更では PowerShell quality を起動しない。
-`cpp-tidy` は portable subset の C++ source、`windows-coverage` は build 対象を扱う。
+`cpp-tidy` は portable subset の C++ source と runner / 契約テストの変更、
+`windows-coverage` は build 対象を扱う。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
 これらの専門ジョブをすべて起動する。
 
 clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
-する）。ただし変更行 clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
+する）。ただし変更 TU の clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
 非ブロッキング）として実行し、変更 C++ ソースの静的解析所見を可視化する。
 所見の有無で PR を止めない（§11.5）。CodeQL は将来拡張のまま据え置く。
+offline configure は GoogleTest を取得せず、変更した portable subset の TU を
+`compile_commands.json` の登録と照合する。DB 外の TU（取得を省いたテストなど）は
+解析せず skip とし、job summary に成功・skip・解析失敗の件数、skip と失敗の path・
+理由を表示する。configure や compile DB の取得に失敗した場合も summary に記録し、
+古い DB で解析を続行しない。advisory の成功は全変更 TU の解析完了を意味しない。
 なお `clang-format`（必須）と `clang-tidy`（advisory）は独立ジョブ
 （`cpp-format` / `cpp-tidy`）に分割し、GitHub Actions 上で並行実行して CI 全体の
 所要時間を短縮する。加えてワークフロー全体に `concurrency` グループを設定し、
@@ -2522,8 +2528,8 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 
 CI への clang-tidy / CodeQL の**必須化**は導入・調整コストが高い。本トラックでは
 `clang-format`（変更行ゲート）までを必須とし、clang-tidy / CodeQL は必須ゲートに
-しない（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、既存負債で
-PR が止まるのを避けつつ新規コード品質を上げる中間策として、`cpp-tidy` ジョブに
+しない（§4.3）。変更 TU 全体の clang-tidy 解析は、既存負債で
+PR が止まるのを避けつつ変更コード品質を上げる中間策として、`cpp-tidy` ジョブに
 **advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
 （全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
 ツール導入 第2弾）。
@@ -2642,6 +2648,7 @@ unity ビルドの成果物で CTest は全件成功する。
 衝突を core target の `NOMINMAX` で防ぐ。無名 namespace の同名 helper を持つ
 学習ストア、Host CLI / モデル関連ソース、core / Host のテストソースは、該当 target の
 `CMakeLists.txt` で衝突する組から必要なソースだけを unity batch から除外する。
+helper をソース固有の名前に変えて衝突を解消できる場合は、unity batch からの除外を不要とする。
 `CrashReporting.cpp` と `ThreadStackGuarantee.cpp` も別 object にして、TIP DLL が
 クラッシュフィルタ本体を取り込まないリンク境界を保つ。これらは unity build の既定採用を
 意味しない。

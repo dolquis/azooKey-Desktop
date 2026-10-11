@@ -13,7 +13,7 @@ namespace {
 
 namespace j = ::azookey::ipc::json;
 
-ModelCatalogParseResult ParseError(std::string error) {
+ModelCatalogParseResult CatalogParseError(std::string error) {
   ModelCatalogParseResult result;
   result.error = std::move(error);
   return result;
@@ -174,22 +174,22 @@ const ModelCatalogEntry* FindModelById(const ModelCatalog& catalog, std::string_
 ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   auto parsed = j::Parse(text);
   if (!parsed || !parsed->IsObject()) {
-    return ParseError("invalid model catalog JSON");
+    return CatalogParseError("invalid model catalog JSON");
   }
 
   const auto& root = parsed->AsObject();
   if (!HasOnlyKeys(root, {"schemaVersion", "defaultModelId", "models"})) {
-    return ParseError("model catalog contains an unknown top-level field");
+    return CatalogParseError("model catalog contains an unknown top-level field");
   }
 
   const auto* schema_version = FindValue(root, "schemaVersion");
   if (!schema_version || !schema_version->IsNumber() || schema_version->AsNumber() != 1.0) {
-    return ParseError("model catalog schemaVersion must be 1");
+    return CatalogParseError("model catalog schemaVersion must be 1");
   }
 
   const auto* models = FindValue(root, "models");
   if (!models || !models->IsArray() || models->AsArray().empty()) {
-    return ParseError("model catalog requires a non-empty models array");
+    return CatalogParseError("model catalog requires a non-empty models array");
   }
 
   ModelCatalog catalog;
@@ -197,24 +197,24 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   std::set<std::string> seen_ids;
   for (const auto& item : models->AsArray()) {
     if (!item.IsObject()) {
-      return ParseError("model catalog models items must be objects");
+      return CatalogParseError("model catalog models items must be objects");
     }
     std::string error;
     auto entry = ParseModelEntry(item.AsObject(), &error);
-    if (!entry) return ParseError(std::move(error));
+    if (!entry) return CatalogParseError(std::move(error));
     if (!seen_ids.insert(entry->id).second) {
-      return ParseError("model catalog contains duplicate model id: " + entry->id);
+      return CatalogParseError("model catalog contains duplicate model id: " + entry->id);
     }
     catalog.models.push_back(std::move(*entry));
   }
 
   std::string error;
   auto default_model_id = ReadDefaultModelId(root, &error);
-  if (!error.empty()) return ParseError(std::move(error));
+  if (!error.empty()) return CatalogParseError(std::move(error));
   catalog.default_model_id = default_model_id.value_or(catalog.models.front().id);
   if (!FindModelById(catalog, catalog.default_model_id)) {
-    return ParseError("model catalog defaultModelId does not match a model id: " +
-                      catalog.default_model_id);
+    return CatalogParseError("model catalog defaultModelId does not match a model id: " +
+                             catalog.default_model_id);
   }
 
   ModelCatalogParseResult result;

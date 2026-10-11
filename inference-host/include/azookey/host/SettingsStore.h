@@ -115,7 +115,7 @@ struct RuntimeSettings {
   std::string power_profile{"auto"};
   int32_t inference_threads{0};
   int32_t max_candidates{9};
-  int32_t max_context_length{10};
+  int32_t max_context_length{30};
   bool batch_romaji_conversion{false};
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};

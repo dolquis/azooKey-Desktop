@@ -16,6 +16,7 @@
 #include "azookey/core/BracketSettings.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/PrivacyPolicy.h"
+#include "azookey/tsf/LivePunctuation.h"
 
 namespace azookey::tsf {
 
@@ -53,6 +54,8 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> RewriterSnapshot() const;
   TipAiSettings AiSnapshot() const;
   bool LiveConversionSnapshot() const;
+  // dynamicPunctuation* (M59). Defaults when absent or malformed: off, "ja", onPause, 400 ms.
+  TipDynamicPunctuationSettings DynamicPunctuationSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
   bool PredictionEnabledSnapshot() const;
   // inlineEnglishCandidates (M60). An absent or unreadable value is false.
@@ -63,6 +66,7 @@ class TipLocalSettings final {
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
   void SetLiveConversionForTest(bool enabled);
+  void SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
   void SetInlineEnglishCandidatesForTest(bool enabled);
@@ -96,7 +100,8 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> rewriters_;
   TipAiSettings ai_;
   bool live_conversion_{false};
-  uint32_t max_context_length_{10};
+  TipDynamicPunctuationSettings dynamic_punctuation_;
+  uint32_t max_context_length_{30};
   bool prediction_enabled_{true};
   bool inline_english_candidates_{false};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;

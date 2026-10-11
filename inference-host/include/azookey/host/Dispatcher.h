@@ -34,6 +34,9 @@ struct DispatcherConfig {
   // Runs under update_config_mutex after ApplyConfig and before model loading.
   // Callbacks must not wait for background network work to finish.
   std::function<void(const EngineConfig&)> on_config_applied;
+  // Runs right after on_config_applied on every valid reload, with false under
+  // privacy.mode=offline. Not called for an invalid reload, so the policy in effect stays.
+  std::function<void(bool network_allowed)> on_network_policy_applied;
   // Shared with the startup pack worker. nullptr omits neologd_layer from
   // QueryDiagnostics.
   std::shared_ptr<NeologdLayerState> neologd_layer;

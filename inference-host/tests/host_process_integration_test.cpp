@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/DpapiCrypto.h"
@@ -572,6 +573,14 @@ class HostProcessTest : public ::testing::Test {
 TEST_F(HostProcessTest, ConcurrentIpcAndOfflineUserDictAddsPreserveAllEntries) {
   ASSERT_TRUE(StartHost()) << "Host failed to listen (exit=" << host_.ExitCode() << ")";
   constexpr int kPairs = 8;
+  // An IPC add queues behind every other writer of the dictionary lock. The
+  // CLI waits for the busy pipe, the handshake and the Host's save bound
+  // (DEV-1568); the process wait must cover all three so that a slow Host
+  // shows up as the CLI's own error instead of a killed CLI.
+  const azookey::host::UserDictCliRunOptions cli_defaults;
+  ASSERT_GT(kProcessTimeoutMs, cli_defaults.busy_connect_timeout_ms +
+                                   cli_defaults.handshake_timeout_ms +
+                                   cli_defaults.command_timeout_ms);
   std::vector<std::unique_ptr<ChildProcess>> children;
   for (int i = 0; i < kPairs; ++i) {
     for (const bool offline : {false, true}) {

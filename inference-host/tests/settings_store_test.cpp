@@ -302,7 +302,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.nll, azookey::host::NllConfig{});
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
   EXPECT_TRUE(result.settings.prediction_enabled);
   EXPECT_TRUE(result.settings.privacy_policy.learning_allowed);
   EXPECT_EQ(result.settings.backend_preference, "auto");
@@ -572,7 +572,7 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   auto result = store.Load();
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
 
   WriteText(path, R"({
     "inferenceThreads": "8",
@@ -582,7 +582,7 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   result = store.Reload();
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
-  EXPECT_EQ(result.settings.max_context_length, 10);
+  EXPECT_EQ(result.settings.max_context_length, 30);
 }
 
 TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
@@ -746,25 +746,57 @@ TEST(SettingsStoreTest, SharedLockSerializesAtomicWriterBeforeRead) {
   const auto path = dir / "settings.json";
   WriteText(path, "{ invalid json");
 
+  using Clock = std::chrono::steady_clock;
+  const auto elapsed_ms = [](Clock::time_point from, Clock::time_point to) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count();
+  };
+  // Upper bounds that only keep a broken run from hanging; a passing run never
+  // waits for them. The writer releases the lock as soon as its write returns.
+  constexpr auto kHangGuard = std::chrono::seconds(30);
+
   std::promise<bool> acquired;
+  std::promise<void> reader_ready;
+  auto reader_ready_future = reader_ready.get_future().share();
   bool write_succeeded = false;
+  bool saw_reader_ready = false;
+  Clock::time_point locked_at;
+  Clock::time_point written_at;
   std::thread writer([&] {
-    auto lock =
-        azookey::learning::AcquireExclusiveFileLockForPath(path, std::chrono::milliseconds(1000));
+    auto lock = azookey::learning::AcquireExclusiveFileLockForPath(
+        path, std::chrono::duration_cast<std::chrono::milliseconds>(kHangGuard));
     acquired.set_value(lock.has_value());
     if (!lock) return;
+    locked_at = Clock::now();
+    // Hold the lock until the reader is about to Load(), then give it a short
+    // moment to reach the lock wait before the file changes.
+    saw_reader_ready = reader_ready_future.wait_for(kHangGuard) == std::future_status::ready;
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     write_succeeded = azookey::learning::WriteTextFileAtomically(
         path, R"({"liveConversion":true,"predictionEnabled":true})");
+    written_at = Clock::now();
   });
   const bool has_lock = acquired.get_future().get();
   if (!has_lock) writer.join();
   ASSERT_TRUE(has_lock);
 
-  azookey::host::SettingsStore store(path, std::chrono::milliseconds(1000));
+  // The reader's lock timeout is only a hang guard. If the shared lock did not
+  // serialize the reader behind the writer, it would read the initial invalid
+  // JSON and fail the Loaded assertion below.
+  azookey::host::SettingsStore store(
+      path, std::chrono::duration_cast<std::chrono::milliseconds>(kHangGuard));
+  const auto load_started = Clock::now();
+  reader_ready.set_value();
   const auto result = store.Load();
+  const auto load_finished = Clock::now();
   writer.join();
 
+  SCOPED_TRACE("result.error=" + result.error.value_or("<none>") +
+               " write_succeeded=" + std::to_string(write_succeeded) +
+               " saw_reader_ready=" + std::to_string(saw_reader_ready) +
+               " load_ms=" + std::to_string(elapsed_ms(load_started, load_finished)) +
+               " lock_held_ms=" + std::to_string(elapsed_ms(locked_at, written_at)) +
+               " load_after_write_ms=" + std::to_string(elapsed_ms(written_at, load_finished)));
+  EXPECT_TRUE(saw_reader_ready);
   EXPECT_TRUE(write_succeeded);
   EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
   EXPECT_TRUE(result.settings.live_conversion);

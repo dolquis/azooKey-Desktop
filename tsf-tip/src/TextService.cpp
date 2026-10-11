@@ -765,6 +765,9 @@ using azookey::tsf::IsUsableTextExtent;
 #ifdef AZOOKEY_TSF_TESTING
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
 std::optional<bool> g_debug_window_key_enabled_for_test;
+std::optional<bool> g_proofread_enabled_for_test;
+azookey::tsf::ProofreadSessionServer::ClientVerifier g_proofread_client_verifier_for_test = nullptr;
+std::optional<std::chrono::milliseconds> g_proofread_idle_timeout_for_test;
 #endif
 
 // F10 opens the menu bar in most applications, so only a Debug build claims it
@@ -777,6 +780,16 @@ bool DebugWindowKeyEnabled() {
   return true;
 #else
   return false;
+#endif
+}
+
+// rich-features-spec X-3-6: no batch correction view in an elevated, low or
+// AppContainer process. Tests choose either behavior.
+bool ProofreadEnabled() {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_proofread_enabled_for_test.value_or(true);
+#else
+  return azookey::tsf::ProofreadAllowedInCurrentProcess();
 #endif
 }
 
@@ -853,6 +866,18 @@ bool ConsumeComBoundaryAllocationFailureForTest() {
 
 void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled) {
   g_debug_window_key_enabled_for_test = enabled;
+}
+
+void SetProofreadEnabledForTest(std::optional<bool> enabled) {
+  g_proofread_enabled_for_test = enabled;
+}
+
+void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier) {
+  g_proofread_client_verifier_for_test = verifier;
+}
+
+void SetProofreadIdleTimeoutForTest(std::optional<std::chrono::milliseconds> timeout) {
+  g_proofread_idle_timeout_for_test = timeout;
 }
 
 void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
@@ -1376,6 +1401,7 @@ STDMETHODIMP TextService::Deactivate() try {
   // Idempotent: also breaks the tracker <-> sink cycle if cleanup kept a composition.
   UnadviseCompositionMouseSink();
   candidate_ui_.Destroy();
+  punctuation_timer_.Destroy();
 
   if (active_context_) {
     active_context_->Release();
@@ -1407,6 +1433,8 @@ HRESULT TextService::AdviseTextServiceSinks() {
   key_mgr->Release();
   if (FAILED(hr)) return hr;
   key_event_sink_advised_ = true;
+  // Ctrl+Shift+Space (X-3-6) exists only as a preserved key. Best effort.
+  RegisterProofreadPreservedKey();
   // F10 arrives as WM_SYSKEYDOWN, which some hosts never route to the key
   // event sink. Best effort: without it OnKeyDown still toggles.
   RegisterDebugPreservedKey();
@@ -1441,7 +1469,9 @@ HRESULT TextService::UnadviseTextServiceSinks() {
     }
   }
 
+  UnregisterProofreadPreservedKey();
   UnregisterDebugPreservedKey();
+  EndProofreadSession();
   if (thread_mgr_ && key_event_sink_advised_) {
     ITfKeystrokeMgr* key_mgr = nullptr;
     HRESULT hr =
@@ -1955,6 +1985,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   *eaten = FALSE;
   bracket_test_context_ = nullptr;
   try {
+    // TSF probes every key before OnKeyDown, and the probe tracks the key for
+    // typo and undo learning. A held Enter commits first so that tracking, and
+    // the eaten answer below, see the state after the commit (section 7.3).
+    if (final_punctuation_hold_) ResolveFinalPunctuationHold();
     TrackTypoKey(context, wParam);
     TrackUndoKey(context, wParam);
     typo_test_key_context_ = context;
@@ -2191,6 +2225,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
   try {
+    // Section 7.3: another key ends the wait for the final request; the held
+    // Enter commits the surface shown now, before this key is tracked (so a
+    // Backspace right after it still finds the commit's undo window) and handled.
+    if (final_punctuation_hold_) ResolveFinalPunctuationHold();
     if (typo_test_key_context_ != context || typo_test_key_ != wParam) {
       TrackTypoKey(context, wParam);
       TrackUndoKey(context, wParam);
@@ -2620,6 +2658,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const std::string before_backspace =
             event.action == UserAction::Backspace && !romaji_.HasPending() ? preedit_kana_
                                                                            : std::string{};
+        // Spec section 3 names Commit (Enter) only; other commits (Ctrl+Shift+U
+        // and the like) keep their synchronous path.
+        if (event.action == UserAction::Commit &&
+            BeginFinalPunctuationHold(context, input_state_, result)) {
+          core_commit_selected_index_.reset();
+          *eaten = TRUE;
+          return S_OK;
+        }
         const HRESULT hr = ApplyInputStateResult(context, std::move(result));
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
@@ -3072,6 +3118,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
         live_display_reading_.clear();
         live_display_surface_.clear();
+        live_display_segments_.clear();
+        live_display_auto_punctuation_ = false;
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
@@ -3101,6 +3149,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           CancelPendingQueriesForLifecycle();
           live_display_reading_.clear();
           live_display_surface_.clear();
+          live_display_segments_.clear();
+          live_display_auto_punctuation_ = false;
         }
         *eaten = TRUE;
       }
@@ -3133,10 +3183,14 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  if (final_punctuation_hold_) ResolveFinalPunctuationHold();
   // With the IME closed, in alphanumeric mode or in an app-disabled context,
   // F10 belongs to the application (menu activation).
   if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) && ClaimsDebugWindowKey(context)) {
     ToggleDebugWindow();
+    *eaten = TRUE;
+  } else if (IsEqualGUID(rguid, kProofreadPreservedKeyGuid) && ClaimsProofreadKey(context)) {
+    StartProofreadSession(context);
     *eaten = TRUE;
   }
   return S_OK;
@@ -3160,6 +3214,14 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
+  }
+  if (proofread_context_ && pdim) {
+    ITfDocumentMgr* document_mgr = nullptr;
+    if (SUCCEEDED(proofread_context_->GetDocumentMgr(&document_mgr)) && document_mgr) {
+      const bool owns_session = SameComIdentity(document_mgr, pdim);
+      document_mgr->Release();
+      if (owns_session) EndProofreadSession();
+    }
   }
   return S_OK;
 } catch (const std::bad_alloc&) {
@@ -3226,6 +3288,9 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
       document->Release();
     }
   }
+  // The document may already be off its manager when OnUninitDocumentMgr runs.
+  if (pic && proofread_context_ && SameComIdentity(pic, proofread_context_.Get()))
+    EndProofreadSession();
   if (pic && SameComIdentity(pic, reconversion_cache_context_)) {
     ClearReconversionState();
     reconversion_cache_context_->Release();
@@ -3555,6 +3620,9 @@ void TextService::ClearCandidateStateForLifecycle() {
 }
 
 void TextService::CancelPendingQueriesForLifecycle() {
+  // Focus loss, composition end and deactivation leave no held commit and no timer.
+  AbortFinalPunctuationHold();
+  punctuation_timer_.CancelAll();
   std::lock_guard<std::mutex> lk(ipc_mtx_);
   const bool can_send_cancel = ipc_thread_.joinable() && !ipc_stop_.load();
   bool need_notify = false;
@@ -3638,14 +3706,18 @@ void TextService::PostPendingCommitObservation() {
       request.secure = pending.secure;
       request.learning_allowed = pending.learning_allowed;
       for (const auto& segment : pending.segments)
-        request.segments.push_back({segment.reading, segment.chosen, segment.shown, false});
+        request.segments.push_back(
+            {segment.reading, segment.chosen, segment.shown, segment.is_auto_punctuation});
       auto payload = ipc::BuildCommitSegmentsObservationRequest(request);
       if (payload.size() < ipc::kMaxFrameSize - 1024) {
         PostIpcSend(ipc::MessageType::CommitSegmentsObservation, std::move(payload), true);
-        for (const auto& segment : pending.segments) record(segment);
+        for (const auto& segment : pending.segments)
+          if (!segment.is_auto_punctuation) record(segment);
       }
     } else {
       for (const auto& segment : pending.segments) {
+        // Section 7.4 fallback: an automatic mark has no reading and is never learned.
+        if (segment.is_auto_punctuation) continue;
         PostCommitObservation(segment.reading, segment.chosen, segment.shown, pending.secure,
                               pending.learning_allowed);
         record(segment);
@@ -3875,6 +3947,8 @@ void TextService::ClearTextStateForLifecycle() {
   core_marked_surface_.clear();
   live_display_reading_.clear();
   live_display_surface_.clear();
+  live_display_segments_.clear();
+  live_display_auto_punctuation_ = false;
   core_input_active_ = true;
   ClearBatchState();
   committing_ = false;
@@ -4148,6 +4222,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     romaji_.Reset();
     live_display_reading_.clear();
     live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -4223,6 +4299,8 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     romaji_.Reset();
     live_display_reading_.clear();
     live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -4944,6 +5022,8 @@ void TextService::ServeConnection() {
     bool is_batch = false;
     bool is_live_conversion = false;
     bool apply_live_preview = false;
+    bool auto_punctuation = false;
+    std::string punctuation_style;
     bool live = true;
     bool secure = true;
     bool learning_allowed = false;
@@ -4994,6 +5074,8 @@ void TextService::ServeConnection() {
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
         apply_live_preview = ipc_pending_apply_live_preview_;
+        auto_punctuation = ipc_pending_auto_punctuation_;
+        punctuation_style = ipc_pending_punctuation_style_;
         live = ipc_pending_live_;
         secure = ipc_pending_secure_;
         learning_allowed = ipc_pending_learning_allowed_;
@@ -5162,7 +5244,8 @@ void TextService::ServeConnection() {
       qenv.trace_id = trace_id;
       if (is_live_conversion) {
         qenv.type = MessageType::QueryLiveConversion;
-        qenv.payload_json = BuildQueryLiveConversionRequest({reading, left_context});
+        qenv.payload_json = BuildQueryLiveConversionRequest(
+            {reading, left_context, auto_punctuation, punctuation_style});
       } else {
         QueryCandidatesRequest qreq;
         qreq.reading = reading;
@@ -5426,8 +5509,11 @@ void TextService::ServeConnection() {
             std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
             if (IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) &&
                 ipc_pending_trace_id_ == trace_id) {
-              live_conversion_result_ =
-                  LiveConversionResult{req_id, reading, payload->surface, trace_id, trace_start};
+              LiveConversionResult live_result{req_id, reading, payload->surface, trace_id,
+                                               trace_start};
+              live_result.segments = std::move(payload->segments);
+              live_result.auto_punctuation = auto_punctuation;
+              live_conversion_result_ = std::move(live_result);
               notify_ui = true;
             }
           }
@@ -6082,12 +6168,14 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = apply_live_preview;
+  ipc_pending_auto_punctuation_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
 }
 
-void TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading) {
+void TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading,
+                                          LiveRequestTiming timing) {
   const auto privacy = ResolvePrivacy(context, false);
   if (privacy.secure) {
     // The M14 wire request has no privacy bit. Keep the local reading instead
@@ -6095,10 +6183,24 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     CancelPendingQueriesForLifecycle();
     live_display_reading_.clear();
     live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
     return;
   }
   const std::string left_context = CaptureLeftContext(context, false);
+  // Section 7.1.1: the timing of the insertion is the TIP's decision, carried in
+  // this request only.
+  const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
+  const bool live_conversion = local_settings_.LiveConversionSnapshot();
+  live_query_reading_ = reading;
+  if (timing == LiveRequestTiming::Edit && UsesIdleTimer(punctuation, live_conversion)) {
+    ArmIdlePunctuationTimer();
+  } else {
+    punctuation_timer_.Cancel(DelayedActionTimer::kIdle);
+  }
   std::lock_guard<std::mutex> lock(ipc_mtx_);
+  ipc_pending_auto_punctuation_ = AutoPunctuationFor(punctuation, live_conversion, timing);
+  ipc_pending_punctuation_style_ = punctuation.style;
   ipc_pending_reading_ = reading;
   ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = true;
@@ -6227,6 +6329,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_is_batch_ = true;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = false;
+  ipc_pending_auto_punctuation_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
@@ -6414,6 +6517,326 @@ void TextService::UnregisterDebugPreservedKey() {
   debug_preserved_key_registered_ = false;
 }
 
+bool TextService::ClaimsProofreadKey(ITfContext* context) const {
+  // The key belongs to the application while a reading is in progress, with
+  // the IME closed or in alphanumeric mode, and in a disabled context.
+  return context && ProofreadEnabled() && keyboard_open_ && !alnum_mode_ && !composition_ &&
+         preedit_kana_.empty() && !romaji_.HasPending() && !candidate_ui_.IsShowing() &&
+         !azookey::tsf::IsContextKeyboardDisabled(context);
+}
+
+ProofreadCapture TextService::CaptureProofreadDocument(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  ProofreadCapture capture;
+  // DEV-1532 contract and the AI routes' gate: no text leaves a secure or
+  // no-learning context, nor one where external AI is not allowed (unknown
+  // input scope, unresolved app, a local-zenzai app profile), so it is not
+  // read at all. The Host detects with an external backend only.
+  const auto privacy = ResolvePrivacy(context, true);
+  capture.secure = privacy.secure;
+  capture.learning_allowed = privacy.learning_allowed;
+  if (privacy.secure || !privacy.learning_allowed || !privacy.ai.ai || !privacy.ai.external) {
+    capture.status = ProofreadCapture::Status::Blocked;
+  } else if (auto document = ReadProofreadDocument(context, client_id_)) {
+    capture.status = ProofreadCapture::Status::Captured;
+    capture.document = std::move(*document);
+  }
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info,
+             capture.status == ProofreadCapture::Status::Captured  ? "proofread_captured"
+             : capture.status == ProofreadCapture::Status::Blocked ? "proofread_blocked"
+                                                                   : "proofread_unavailable");
+  return capture;
+}
+
+namespace {
+
+std::optional<std::string> ProofreadTextToUtf8(const std::wstring& text) {
+  if (text.empty()) return std::string();
+  // Default flags write U+FFFD for an unpaired surrogate, one UTF-16 unit as
+  // the window counted it, so the offsets still match.
+  const int length = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                         nullptr, 0, nullptr, nullptr);
+  if (length <= 0) return std::nullopt;
+  std::string result(static_cast<size_t>(length), '\0');
+  if (WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(),
+                          length, nullptr, nullptr) != length)
+    return std::nullopt;
+  return result;
+}
+
+HWND ContextWindow(ITfContext* context) {
+  ITfContextView* view = nullptr;
+  HWND window = nullptr;
+  if (SUCCEEDED(context->GetActiveView(&view)) && view) {
+    if (FAILED(view->GetWnd(&window))) window = nullptr;
+    view->Release();
+  }
+  return window;
+}
+
+}  // namespace
+
+// Reads the window range again under a read-write lock and selects the
+// requested part only when the text is still the one that was checked.
+class ProofreadSelectSession final : public ITfEditSession {
+ public:
+  ProofreadSelectSession(TextService* owner, uint64_t generation, ITfContext* context,
+                         ITfRange* range, uint64_t hash, size_t length,
+                         ipc::proofread::SelectRequest request)
+      : owner_(owner),
+        generation_(generation),
+        context_(context),
+        range_(range),
+        hash_(hash),
+        length_(length),
+        request_(request) {
+    owner_->AddRef();
+  }
+
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfEditSession) return E_NOINTERFACE;
+    *out = static_cast<ITfEditSession*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refs_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG refs = static_cast<ULONG>(InterlockedDecrement(&refs_));
+    if (!refs) delete this;
+    return refs;
+  }
+  STDMETHODIMP DoEditSession(TfEditCookie cookie) override {
+    ipc::proofread::SelectResult result = ipc::proofread::SelectResult::Failed;
+    try {
+      result = Apply(cookie);
+    } catch (...) {
+      LogComBoundaryException("ProofreadSelectSession::DoEditSession", E_FAIL);
+    }
+    Complete(result);
+    return result == ipc::proofread::SelectResult::Ok ? S_OK : E_FAIL;
+  }
+
+  bool completed() const { return completed_; }
+  void Complete(ipc::proofread::SelectResult result) {
+    if (completed_) return;
+    completed_ = true;
+    owner_->CompleteProofreadSelection(generation_, result);
+  }
+
+ private:
+  ~ProofreadSelectSession() { owner_->Release(); }
+
+  ipc::proofread::SelectResult Apply(TfEditCookie cookie) {
+    using ipc::proofread::SelectResult;
+    // A queued session may run after the session was replaced or a reading started.
+    if (owner_->proofread_generation_ != generation_) return SelectResult::ContextGone;
+    if (owner_->composition_ || !owner_->preedit_kana_.empty()) return SelectResult::Failed;
+    Microsoft::WRL::ComPtr<ITfRange> reader;
+    if (FAILED(range_->Clone(&reader)) || !reader) return SelectResult::ContextGone;
+    // One code unit past the window tells a longer text from the checked one.
+    std::wstring text;
+    std::array<wchar_t, 4096> buffer{};
+    while (text.size() <= length_) {
+      BOOL empty = FALSE;
+      if (FAILED(reader->IsEmpty(cookie, &empty))) return SelectResult::ContextGone;
+      if (empty) break;
+      ULONG read = 0;
+      const ULONG capacity =
+          static_cast<ULONG>((std::min)(buffer.size(), length_ + 1 - text.size()));
+      if (FAILED(reader->GetText(cookie, TF_TF_MOVESTART, buffer.data(), capacity, &read)) ||
+          !read || read > capacity)
+        return SelectResult::ContextGone;
+      text.append(buffer.data(), read);
+    }
+    if (text.size() != length_ || ProofreadTextHash(text) != hash_)
+      return SelectResult::DocumentChanged;
+    if (!IsValidProofreadSelection(text, request_.start, request_.length))
+      return SelectResult::InvalidRange;
+
+    Microsoft::WRL::ComPtr<ITfRange> target;
+    if (FAILED(range_->Clone(&target)) || !target) return SelectResult::ContextGone;
+    const LONG end = static_cast<LONG>(request_.start + request_.length);
+    const LONG start = static_cast<LONG>(request_.start);
+    LONG shifted = 0;
+    if (FAILED(target->Collapse(cookie, TF_ANCHOR_START)) ||
+        FAILED(target->ShiftEnd(cookie, end, &shifted, nullptr)) || shifted != end ||
+        FAILED(target->ShiftStart(cookie, start, &shifted, nullptr)) || shifted != start)
+      return SelectResult::Failed;
+    TF_SELECTION selection{};
+    selection.range = target.Get();
+    selection.style.ase = TF_AE_END;
+    selection.style.fInterimChar = FALSE;
+    return SUCCEEDED(context_->SetSelection(cookie, 1, &selection)) ? SelectResult::Ok
+                                                                    : SelectResult::Failed;
+  }
+
+  LONG refs_{1};
+  TextService* owner_;
+  uint64_t generation_;
+  Microsoft::WRL::ComPtr<ITfContext> context_;
+  Microsoft::WRL::ComPtr<ITfRange> range_;
+  uint64_t hash_;
+  size_t length_;
+  ipc::proofread::SelectRequest request_;
+  bool completed_{false};
+};
+
+void TextService::StartProofreadSession(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  EndProofreadSession();
+  auto capture = CaptureProofreadDocument(context);
+#ifdef AZOOKEY_TSF_TESTING
+  proofread_capture_for_test_ = capture;
+#endif
+  ipc::proofread::DocumentMessage message;
+  message.secure = capture.secure;
+  message.learning_allowed = capture.learning_allowed;
+  const HWND window = ContextWindow(context);
+  message.window = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window));
+  if (capture.status == ProofreadCapture::Status::Captured) {
+    auto text = ProofreadTextToUtf8(capture.document.text);
+    if (text && !text->empty() && text->size() <= ipc::kMaxAnomalyTextBytes) {
+      message.status = ipc::proofread::DocumentStatus::Captured;
+      message.text = std::move(*text);
+    }
+  } else if (capture.status == ProofreadCapture::Status::Blocked) {
+    message.status = ipc::proofread::DocumentStatus::Blocked;
+  }
+
+  const auto token = ipc::proofread::GenerateSessionToken();
+  if (!token) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_token_failed");
+    return;
+  }
+  ProofreadSessionServer::Options options;
+#ifdef AZOOKEY_TSF_TESTING
+  options.verifier = g_proofread_client_verifier_for_test;
+  if (g_proofread_idle_timeout_for_test) options.idle_timeout = *g_proofread_idle_timeout_for_test;
+#endif
+  auto server = std::make_unique<ProofreadSessionServer>();
+  const bool started =
+      server->Start(*token, ipc::proofread::BuildDocumentMessage(message),
+                    {this, &TextService::OnProofreadSelect, &TextService::OnProofreadEnd}, options);
+  // Only the server keeps the text, until it is sent.
+  SecureZeroMemory(message.text.data(), message.text.size());
+  const auto length = capture.document.text.size();
+  const auto hash = ProofreadTextHash(capture.document.text);
+  SecureZeroMemory(capture.document.text.data(), capture.document.text.size() * sizeof(wchar_t));
+  if (!started) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_start_failed");
+    return;
+  }
+  if (FAILED(LaunchSettingsApplicationForProofread(window, *token))) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_settings_launch_failed");
+    return;
+  }
+  proofread_session_ = std::move(server);
+  ++proofread_generation_;
+  if (message.status == ipc::proofread::DocumentStatus::Captured) {
+    proofread_context_ = context;
+    proofread_range_ = std::move(capture.document.range);
+    proofread_hash_ = hash;
+    proofread_length_ = length;
+  }
+}
+
+void TextService::EndProofreadSession() {
+  ++proofread_generation_;
+  // Moved out first: this may run inside the server's own end callback.
+  auto session = std::move(proofread_session_);
+  if (session) session->Stop();
+  proofread_context_.Reset();
+  proofread_range_.Reset();
+  proofread_hash_ = 0;
+  proofread_length_ = 0;
+}
+
+void TextService::OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept {
+  try {
+    static_cast<TextService*>(context)->ApplyProofreadSelection(request);
+  } catch (...) {
+    LogComBoundaryException("TextService::OnProofreadSelect", E_FAIL);
+  }
+}
+
+void TextService::OnProofreadEnd(void* context) noexcept {
+  static_cast<TextService*>(context)->EndProofreadSession();
+}
+
+void TextService::ApplyProofreadSelection(ipc::proofread::SelectRequest request) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  using ipc::proofread::SelectResult;
+  const uint64_t generation = proofread_generation_;
+  if (!proofread_context_ || !proofread_range_) {
+    CompleteProofreadSelection(generation, SelectResult::ContextGone);
+    return;
+  }
+  if (request.start > proofread_length_ || request.length > proofread_length_ - request.start) {
+    CompleteProofreadSelection(generation, SelectResult::InvalidRange);
+    return;
+  }
+  // Moving the selection would cut a reading the user is typing.
+  if (composition_ || !preedit_kana_.empty()) {
+    CompleteProofreadSelection(generation, SelectResult::Failed);
+    return;
+  }
+  auto* session =
+      new ProofreadSelectSession(this, generation, proofread_context_.Get(), proofread_range_.Get(),
+                                 proofread_hash_, proofread_length_, request);
+  Microsoft::WRL::ComPtr<ITfEditSession> owner;
+  owner.Attach(session);
+  HRESULT session_hr = E_FAIL;
+  const HRESULT hr = proofread_context_->RequestEditSession(
+      client_id_, session, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+  // A queued session answers when it runs; one that never ran answers now.
+  if (!session->completed() && (FAILED(hr) || session_hr != TF_S_ASYNC))
+    session->Complete(SelectResult::ContextGone);
+}
+
+void TextService::CompleteProofreadSelection(uint64_t generation,
+                                             ipc::proofread::SelectResult result) {
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "proofread_select",
+             {{"result", SafeLogText(std::string(ipc::proofread::SelectResultName(result)))}});
+  if (generation != proofread_generation_ || !proofread_session_) return;
+  proofread_session_->CompleteSelection(result);
+}
+
+void TextService::RegisterProofreadPreservedKey() {
+  proofread_preserved_key_registered_ = false;
+  if (!ProofreadEnabled() || !thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (FAILED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) ||
+      !key_mgr)
+    return;
+  static constexpr wchar_t kDescription[] = L"azooKey proofread";
+  const TF_PRESERVEDKEY key{VK_SPACE, TF_MOD_CONTROL | TF_MOD_SHIFT};
+  proofread_preserved_key_registered_ =
+      SUCCEEDED(key_mgr->PreserveKey(client_id_, kProofreadPreservedKeyGuid, &key, kDescription,
+                                     static_cast<ULONG>(std::size(kDescription) - 1)));
+  if (!proofread_preserved_key_registered_)
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_preserve_key_failed");
+  key_mgr->Release();
+}
+
+void TextService::UnregisterProofreadPreservedKey() {
+  if (!proofread_preserved_key_registered_ || !thread_mgr_) return;
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  if (SUCCEEDED(
+          thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr))) &&
+      key_mgr) {
+    const TF_PRESERVEDKEY key{VK_SPACE, TF_MOD_CONTROL | TF_MOD_SHIFT};
+    if (FAILED(key_mgr->UnpreserveKey(kProofreadPreservedKeyGuid, &key)))
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preserved_key_unpreserve_failed");
+    key_mgr->Release();
+  }
+  proofread_preserved_key_registered_ = false;
+}
+
 HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,
                                        bool& preedit_update_needed, bool& commit_pending) {
   if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) {
@@ -6424,6 +6847,8 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     english_raw_romaji_.clear();
     live_display_reading_.clear();
     live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
     CancelPendingQueriesForLifecycle();
     preedit_update_needed = true;
   } else if (std::holds_alternative<core::HideCandidateWindow>(action)) {
@@ -6433,6 +6858,8 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     if (input_state_.kind() == core::InputStateKind::Composing && !live_display_surface_.empty()) {
       live_display_reading_.clear();
       live_display_surface_.clear();
+      live_display_segments_.clear();
+      live_display_auto_punctuation_ = false;
     }
     preedit_update_needed = true;
   } else if (const auto* show = std::get_if<core::ShowCandidateWindow>(&action)) {
@@ -6463,6 +6890,8 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     if (live_display_reading_ != query->reading) {
       live_display_reading_.clear();
       live_display_surface_.clear();
+      live_display_segments_.clear();
+      live_display_auto_punctuation_ = false;
     }
     core_cached_metadata_.clear();
     {
@@ -6592,10 +7021,14 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       if ((previous_state.kind() == core::InputStateKind::Composing ||
            previous_state.kind() == core::InputStateKind::Previewing) &&
           live_display_reading_ == core_marked_surface_ && !live_display_surface_.empty() &&
-          previous_marked == live_display_surface_)
+          previous_marked == live_display_surface_) {
         core_marked_surface_ = live_display_surface_;
+        AdoptLiveCommitObservation(context);
+      }
       // A queued or in-flight query must be cancelled even when no worker has
-      // started yet (the existing M10 commit contract).
+      // started yet (the existing M10 commit contract). The text is final, so
+      // no idle expiry may post another request for it.
+      punctuation_timer_.CancelAll();
       {
         std::lock_guard<std::mutex> lock(ipc_mtx_);
         bool need_notify = false;
@@ -6636,6 +7069,8 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         core_marked_surface_.clear();
         live_display_reading_.clear();
         live_display_surface_.clear();
+        live_display_segments_.clear();
+        live_display_auto_punctuation_ = false;
         shown_candidates_.clear();
         selected_candidate_idx_ = 0;
         preedit_kana_.clear();
@@ -7086,12 +7521,173 @@ HRESULT TextService::ApplyPredictionReading(ITfContext* context, const std::stri
   return ApplyInputStateResult(context, std::move(result));
 }
 
+void TextService::PunctuationTimerTrampoline(void* context,
+                                             DelayedActionTimer::Slot slot) noexcept {
+  try {
+    if (context) static_cast<TextService*>(context)->OnPunctuationTimer(slot);
+  } catch (...) {
+    LogComBoundaryException("TextService::OnPunctuationTimer", E_FAIL);
+  }
+}
+
+void TextService::ArmIdlePunctuationTimer() {
+  if (!punctuation_timer_.Create(&TextService::PunctuationTimerTrampoline, this)) return;
+  const auto settings = local_settings_.DynamicPunctuationSnapshot();
+  punctuation_timer_.Arm(DelayedActionTimer::kIdle, settings.idle_ms);
+}
+
+// Section 4.3.1: the idle timer expired, or section 7.3: the final request ran
+// out of time.
+void TextService::OnPunctuationTimer(DelayedActionTimer::Slot slot) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (slot == DelayedActionTimer::kFinal) {
+    ResolveFinalPunctuationHold();
+    return;
+  }
+  const bool live_conversion = local_settings_.LiveConversionSnapshot();
+  if (final_punctuation_hold_ || !active_context_ || committing_ ||
+      !UsesIdleTimer(local_settings_.DynamicPunctuationSnapshot(), live_conversion) ||
+      !core_input_active_ ||
+      (input_state_.kind() != core::InputStateKind::Composing &&
+       input_state_.kind() != core::InputStateKind::Previewing) ||
+      input_state_.awaiting_candidates() || candidate_ui_.IsShowing() ||
+      live_query_reading_.empty() || live_query_reading_ != CurrentPreeditSurface())
+    return;
+  PostQueryLiveConversion(active_context_, live_query_reading_, LiveRequestTiming::Idle);
+}
+
+// Section 7.3: Enter with no punctuation applied yet waits for an
+// auto_punctuation=true request instead of committing the displayed surface.
+// The wait is asynchronous: the key is consumed, input_state_ stays as it was,
+// and the commit runs when the response arrives, the timer expires or another
+// key comes. Returns false when the commit should proceed at once.
+bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::InputState& previous,
+                                            core::HandleResult& result) {
+  if (final_punctuation_hold_ || !context || !core_input_active_ || !input_state_.live_conversion())
+    return false;
+  if (previous.kind() != core::InputStateKind::Composing &&
+      previous.kind() != core::InputStateKind::Previewing)
+    return false;
+  const bool commits = std::any_of(result.actions.begin(), result.actions.end(), [](const auto& a) {
+    return std::holds_alternative<core::CommitMarkedText>(a);
+  });
+  if (!commits || candidate_ui_.IsShowing() || committing_ || IpcHostUnavailable()) return false;
+  const std::string reading = CurrentPreeditSurface();
+  if (reading.empty() || IsStandalonePunctuation(reading)) return false;
+  const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
+  const bool live_conversion = local_settings_.LiveConversionSnapshot();
+  // Eager results always carry the punctuation, and an onPause result that came
+  // from an idle or final request and has not changed already does.
+  const bool displayed_punctuated = live_display_auto_punctuation_ &&
+                                    live_display_reading_ == reading &&
+                                    !live_display_surface_.empty();
+  if (!NeedsFinalPunctuationRequest(punctuation, live_conversion, displayed_punctuated))
+    return false;
+  if (ResolvePrivacy(context, false).secure) return false;
+  // Without a timer the wait could never end; commit as before instead.
+  if (!punctuation_timer_.Create(&TextService::PunctuationTimerTrampoline, this) ||
+      !punctuation_timer_.Arm(DelayedActionTimer::kFinal, final_request_timeout_ms_))
+    return false;
+  punctuation_timer_.Cancel(DelayedActionTimer::kIdle);
+  {
+    // The typed request that is still in flight is no longer wanted.
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    if (ipc_inflight_id_ != 0 && ipc_thread_.joinable() && !ipc_stop_.load()) {
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                                 false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+      TrimIpcSendQueueLocked();
+      ipc_cv_.notify_one();
+    }
+  }
+  PostQueryLiveConversion(context, reading, LiveRequestTiming::Final);
+  FinalPunctuationHold hold;
+  hold.context = context;
+  hold.result = std::move(result);
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    hold.request_id = ipc_pending_id_;
+  }
+  final_punctuation_hold_ = std::move(hold);
+  return true;
+}
+
+void TextService::ResolveFinalPunctuationHold() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!final_punctuation_hold_) return;
+  auto hold = std::move(*final_punctuation_hold_);
+  final_punctuation_hold_.reset();
+  punctuation_timer_.Cancel(DelayedActionTimer::kFinal);
+  // The commit runs outside the key handler, so its edit session can be refused.
+  // The composition then stays (rolled back) and the next Enter commits it.
+  if (const HRESULT hr = ApplyInputStateResult(hold.context.get(), std::move(hold.result));
+      FAILED(hr)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "final_punctuation_commit_failed",
+               {{"hresult", static_cast<uint64_t>(static_cast<uint32_t>(hr))}});
+  }
+}
+
+void TextService::AbortFinalPunctuationHold() {
+  final_punctuation_hold_.reset();
+  punctuation_timer_.Cancel(DelayedActionTimer::kFinal);
+}
+
+// Section 7.4: the commit of a live surface that has segments is observed per
+// segment, with each automatic mark flagged and without a reading, so a mark
+// never reaches learning. The surface of every segment comes from the Host's
+// own strings, never from slicing the UTF-16 offsets (section 5.1).
+void TextService::AdoptLiveCommitObservation(ITfContext* context) {
+  if (live_display_segments_.empty()) return;
+  std::string joined;
+  for (const auto& segment : live_display_segments_) {
+    if (segment.surface.empty() || (!segment.auto_punctuation && segment.reading.empty())) return;
+    joined += segment.surface;
+  }
+  if (joined != live_display_surface_) return;
+  const auto privacy = ResolvePrivacy(context, false);
+  const bool learning = privacy.learning_allowed && batch_learning_allowed_;
+  const auto make = [&](const ipc::LiveSegment& segment) {
+    PendingCommitObservation observed;
+    observed.reading = segment.auto_punctuation ? std::string{} : segment.reading;
+    observed.chosen.surface = segment.surface;
+    observed.chosen.reading = observed.reading;
+    observed.chosen.score = segment.score;
+    observed.chosen.source = "live";
+    observed.secure = privacy.secure;
+    observed.learning_allowed = learning;
+    observed.is_auto_punctuation = segment.auto_punctuation;
+    return observed;
+  };
+  if (live_display_segments_.size() == 1 && !live_display_segments_.front().auto_punctuation) {
+    pending_commit_observation_ = make(live_display_segments_.front());
+    return;
+  }
+  PendingCommitObservation batch;
+  batch.reading = live_display_reading_;
+  batch.chosen.surface = live_display_surface_;
+  batch.chosen.reading = live_display_reading_;
+  batch.chosen.source = "live";
+  batch.secure = privacy.secure;
+  batch.learning_allowed = learning;
+  for (const auto& segment : live_display_segments_) batch.segments.push_back(make(segment));
+  pending_commit_observation_ = std::move(batch);
+}
+
+// A held commit (section 7.3) resolves on the response to its final request,
+// whether or not that response could be displayed.
 void TextService::ApplyLiveConversionResult() {
+  const auto consumed = ApplyLiveConversionResultImpl();
+  if (consumed && final_punctuation_hold_ && *consumed == final_punctuation_hold_->request_id)
+    ResolveFinalPunctuationHold();
+}
+
+std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
   std::optional<LiveConversionResult> result;
+  std::optional<uint64_t> consumed;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     result = std::move(live_conversion_result_);
     live_conversion_result_.reset();
+    if (result) consumed = result->request_id;
     if (candidate_window_show_pending_) result.reset();
   }
   if (!result || result->surface.empty() || !active_context_ ||
@@ -7099,10 +7695,10 @@ void TextService::ApplyLiveConversionResult() {
       result->reading != CurrentPreeditSurface() ||
       (core_input_active_ && input_state_.kind() != core::InputStateKind::Composing &&
        input_state_.kind() != core::InputStateKind::Previewing))
-    return;
+    return consumed;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, result->request_id)) return;
+    if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, result->request_id)) return consumed;
   }
   const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
                             ? std::chrono::steady_clock::now()
@@ -7110,15 +7706,21 @@ void TextService::ApplyLiveConversionResult() {
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
+  auto previous_segments = std::move(live_display_segments_);
+  const bool previous_auto_punctuation = live_display_auto_punctuation_;
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
+  live_display_segments_ = std::move(result->segments);
+  live_display_auto_punctuation_ = result->auto_punctuation;
   if (core_input_active_) core_marked_surface_ = result->surface;
   const HRESULT update_hr = RequestPreeditUpdate(active_context_);
   if (update_hr == E_OUTOFMEMORY) {
     core_marked_surface_ = previous_marked;
     live_display_reading_ = previous_reading;
     live_display_surface_ = previous_surface;
-    return;
+    live_display_segments_ = std::move(previous_segments);
+    live_display_auto_punctuation_ = previous_auto_punctuation;
+    return consumed;
   }
   if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {
     const auto ui_end = std::chrono::steady_clock::now();
@@ -7129,6 +7731,7 @@ void TextService::ApplyLiveConversionResult() {
                  std::chrono::duration<double, std::milli>(ui_end - result->trace_start).count());
     }
   }
+  return consumed;
 }
 
 void TextService::ClearReconversionState() {

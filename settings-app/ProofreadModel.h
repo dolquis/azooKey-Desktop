@@ -8,6 +8,7 @@
 
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/ProofreadSession.h"
 
 namespace azookey::settings {
 
@@ -21,6 +22,20 @@ ProofreadInputProblem CheckProofreadInput(std::string_view utf8_text);
 // not from a secure context and learning is allowed (rich-features-spec X-3-6). The Host still
 // refuses it unless the AI cleanup settings and consent allow an external backend.
 azookey::ipc::DetectAnomaliesRequest MakeProofreadRequest(std::string utf8_text);
+
+// The request for the document a TIP session handed over: the event privacy the TIP read from the
+// application's context goes to the Host as it is, so the Host can still refuse it.
+azookey::ipc::DetectAnomaliesRequest MakeSessionProofreadRequest(
+    const azookey::ipc::proofread::DocumentMessage& document);
+
+// What the pane shows when a session opens: "Proofread_Session_<status>". A blocked or unavailable
+// session carries no text, so only this reason is shown.
+std::string ProofreadSessionStatusResource(azookey::ipc::proofread::DocumentStatus status);
+
+// The answer to "select this range in the application": "Proofread_SelectResult_<result>", or
+// "Proofread_SelectResult_lost" when the session no longer answers.
+std::string ProofreadSelectResultResource(
+    std::optional<azookey::ipc::proofread::SelectResult> result);
 
 // Error categories a DetectAnomalies response carries. Each has a "Proofread_Error_<code>" string;
 // any other falls back to "Proofread_Error_other".

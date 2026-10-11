@@ -551,7 +551,8 @@ TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
   MockThreadMgrEx mock(0);
   mock.preserve_result = S_OK;
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  EXPECT_EQ(mock.preserve_calls, 1);
+  // Ctrl+Shift+Space (X-3-6) is preserved first, then F10.
+  EXPECT_EQ(mock.preserve_calls, 2);
   EXPECT_TRUE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
   EXPECT_EQ(mock.preserved_key.uVKey, static_cast<UINT>(VK_F10));
   EXPECT_EQ(mock.preserved_key.uModifiers, 0u);
@@ -571,7 +572,7 @@ TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
   EXPECT_TRUE(service.debug_window_visible_for_test());
 
   EXPECT_EQ(service.Deactivate(), S_OK);
-  EXPECT_EQ(mock.unpreserve_calls, 1);
+  EXPECT_EQ(mock.unpreserve_calls, 2);
   EXPECT_TRUE(IsEqualGUID(mock.unpreserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
   EXPECT_FALSE(service.debug_window_visible_for_test());
 }
@@ -583,7 +584,9 @@ TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
   MockThreadMgrEx mock(0);
   mock.preserve_result = S_OK;
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  EXPECT_EQ(mock.preserve_calls, 0);
+  // Only the Ctrl+Shift+Space preserved key (X-3-6).
+  EXPECT_EQ(mock.preserve_calls, 1);
+  EXPECT_FALSE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
 
   azookey::tsf::test::KeyboardStateGuard keyboard_state;
   BOOL eaten = TRUE;
@@ -594,5 +597,94 @@ TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
   EXPECT_FALSE(eaten);
   EXPECT_FALSE(service.debug_window_visible_for_test());
   EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(mock.unpreserve_calls, 1);
+}
+
+// rich-features-spec X-3-6: Ctrl+Shift+Space is a preserved key in every
+// build, and only a registered key is unpreserved.
+TEST(TsfTipActivateUiLessTest, CtrlShiftSpaceIsPreservedForTheProofreadView) {
+  DebugWindowKeyGuard release_build(false);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.preserve_result = S_OK;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.preserve_calls, 1);
+  EXPECT_TRUE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kProofreadPreservedKeyGuid));
+  EXPECT_EQ(mock.preserved_key.uVKey, static_cast<UINT>(VK_SPACE));
+  EXPECT_EQ(mock.preserved_key.uModifiers, static_cast<UINT>(TF_MOD_CONTROL | TF_MOD_SHIFT));
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(mock.unpreserve_calls, 1);
+  EXPECT_TRUE(IsEqualGUID(mock.unpreserved_guid, azookey::tsf::kProofreadPreservedKeyGuid));
+}
+
+TEST(TsfTipActivateUiLessTest, RefusedProofreadPreservedKeyIsNotUnpreserved) {
+  DebugWindowKeyGuard release_build(false);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);  // PreserveKey answers E_NOTIMPL.
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(mock.preserve_calls, 1);
+  EXPECT_EQ(service.Deactivate(), S_OK);
   EXPECT_EQ(mock.unpreserve_calls, 0);
+}
+
+// A context the closed-keyboard decision never reads.
+class UnusedContext final : public ITfContext {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfContext) return E_NOINTERFACE;
+    *ppv = static_cast<ITfContext*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP RequestEditSession(TfClientId, ITfEditSession*, DWORD, HRESULT* result) override {
+    ++uses;
+    if (result) *result = E_FAIL;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP InWriteSession(TfClientId, BOOL*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION*, ULONG*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetStart(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetEnd(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetActiveView(ITfContextView**) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumViews(IEnumTfContextViews**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetStatus(TF_STATUS*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetProperty(REFGUID, ITfProperty**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetAppProperty(REFGUID, ITfReadOnlyProperty**) override { return E_NOTIMPL; }
+  STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
+                               ITfReadOnlyProperty**) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP EnumProperties(IEnumTfProperties**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetDocumentMgr(ITfDocumentMgr**) override { return E_NOTIMPL; }
+  STDMETHODIMP CreateRangeBackup(TfEditCookie, ITfRange*, ITfRangeBackup**) override {
+    return E_NOTIMPL;
+  }
+
+  int uses{0};
+};
+
+// With the IME closed the key belongs to the application.
+TEST(TsfTipActivateUiLessTest, ClosedKeyboardLeavesCtrlShiftSpaceToTheApplication) {
+  DebugWindowKeyGuard release_build(false);
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.preserve_result = S_OK;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.ToggleKeyboardOpen(), S_OK);
+  ASSERT_FALSE(service.keyboard_open());
+  UnusedContext context;
+  BOOL eaten = TRUE;
+  ASSERT_EQ(service.OnPreservedKey(&context, azookey::tsf::kProofreadPreservedKeyGuid, &eaten),
+            S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(service.proofread_capture_for_test());
+  EXPECT_EQ(context.uses, 0);
+  EXPECT_EQ(service.Deactivate(), S_OK);
 }

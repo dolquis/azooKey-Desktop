@@ -28,6 +28,7 @@
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/ContextHash.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -1007,6 +1008,47 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_TRUE(loaded.Lookup("external").empty());
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1568: an edit that waits for another holder of the user dictionary file
+// lock must not hold the state lock that handshakes and queries take.
+TEST(InferenceEngineTest, UserWordEditWaitingForTheFileLockDoesNotBlockQueries) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_lock_wait.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_lock_wait.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::FileLockFailure failure;
+  auto holder = azookey::learning::AcquireExclusiveFileLockForPath(udict_path, failure);
+  ASSERT_TRUE(holder.has_value());
+  azookey::learning::UserWord word;
+  word.word = "Waited";
+  word.ruby = "waited";
+  std::promise<void> started;
+  auto started_future = started.get_future();
+  auto added = std::async(std::launch::async, [&] {
+    started.set_value();
+    return engine->AddUserWord(word);
+  });
+  started_future.wait();
+  // This thread releases the file lock only after both calls return. An edit
+  // that held the state lock while waiting would block them until its lock
+  // wait timed out, and the add would then fail.
+  (void)engine->model_loaded();
+  (void)engine->QueryCandidates("にほん", "", kNowBase);
+  EXPECT_EQ(added.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+  holder.reset();
+  EXPECT_TRUE(added.get());
+  EXPECT_EQ(dict.Lookup("waited").size(), 1u);
 
   RemoveProtectedStoreFile(udict_path);
   RemoveProtectedStoreFile(lpath);
@@ -3399,6 +3441,70 @@ TEST(EngineAutoWordTest, TrendingIngestWaitsForFailedResetRollbackAndPreservesBo
   ASSERT_TRUE(second_ingest.get());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.SerializeText(), auto_words.SerializeText());
+}
+
+// DEV-1547: the trending fetcher's generation is rechecked under the engine's history
+// lock, so trending disabled and then a reset never leaves the old generation's words,
+// whichever of the reset and the ingestion takes the lock first.
+TEST(EngineAutoWordTest, TrendingIngestCancelledByDisableNeverSurvivesFollowingReset) {
+  class BlockNextEncryption final : public azookey::learning::ByteCrypto {
+   public:
+    mutable std::atomic<bool> block_next{false};
+    mutable std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
+      if (block_next.exchange(false)) {
+        entered.set_value();
+        released.wait();
+      }
+      return cipher_.Encrypt(plain, cipher);
+    }
+    bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
+      return cipher_.Decrypt(cipher, plain);
+    }
+
+   private:
+    azookey::learning::test::TestByteCrypto cipher_;
+  } crypto;
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"), &crypto);
+  auto engine = MakeEngine(store);
+  engine->SetAutoWordStore(&auto_words);
+  const std::vector<azookey::learning::AutoWord> words{{"新語", "しんご"}};
+  using Outcome = azookey::host::InferenceEngine::TrendingIngestOutcome;
+
+  // Disable and reset before the ingestion reaches the lock: nothing is ingested.
+  std::atomic<bool> current{true};
+  const auto still_current = [&] { return current.load(); };
+  current = false;
+  EXPECT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  EXPECT_EQ(engine->IngestTrendingWords(words, kNowBase, true, still_current), Outcome::Cancelled);
+  EXPECT_EQ(auto_words.Size(), 0u);
+
+  // The ingestion passed its check and holds the lock in Save when trending is
+  // disabled; the reset requested next runs after it and removes the words.
+  current = true;
+  crypto.block_next = true;
+  auto entered = crypto.entered.get_future();
+  auto ingest = std::async(std::launch::async, [&] {
+    return engine->IngestTrendingWords(words, kNowBase + 1, true, still_current);
+  });
+  const auto ingest_entered = entered.wait_for(std::chrono::seconds(30));
+  current = false;
+  auto reset = std::async(std::launch::async, [&] {
+    return engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord);
+  });
+  crypto.release.set_value();
+  EXPECT_EQ(ingest_entered, std::future_status::ready);
+  EXPECT_EQ(ingest.get(), Outcome::Saved);
+  EXPECT_EQ(reset.get(), azookey::host::InferenceEngine::ResetOutcome::Reset);
+  EXPECT_TRUE(auto_words.LookupConfirmed("しんご").empty());
+  azookey::learning::AutoWordStore reloaded(auto_words.path(), &crypto);
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.Size(), 0u);
 }
 
 TEST(EngineAutoWordTest, TrendingIngestRejectsUnavailableAndUnreadableStores) {

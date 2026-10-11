@@ -112,10 +112,12 @@ void ProofreadPane::UpdateCounter() {
                 (too_large ? resources.GetString(L"Proofread_TooLargeSuffix") : winrt::hstring()));
 }
 
-void ProofreadPane::ShowStatus(controls::InfoBarSeverity severity, const winrt::hstring& message) {
+void ProofreadPane::ShowStatus(controls::InfoBarSeverity severity, const winrt::hstring& message,
+                               const wchar_t* title) {
   ResourceLoader resources;
   status_bar_.Severity(severity);
-  status_bar_.Title(resources.GetString(severity == controls::InfoBarSeverity::Success
+  status_bar_.Title(resources.GetString(title ? title
+                                        : severity == controls::InfoBarSeverity::Success
                                             ? L"Proofread_DoneTitle"
                                             : L"Proofread_ProblemTitle"));
   status_bar_.Message(message);
@@ -153,7 +155,11 @@ winrt::fire_and_forget ProofreadPane::Check() {
       break;
   }
 
-  const auto request = MakeProofreadRequest(utf8);
+  // The session's document keeps the privacy the TIP read; edited or pasted text is the user's.
+  const bool from_session =
+      session_ && session_document_ && std::wstring(text) == session_input_text_;
+  const auto request =
+      from_session ? MakeSessionProofreadRequest(*session_document_) : MakeProofreadRequest(utf8);
   const auto dispatcher = dispatcher_;
   // Set up inside the try, so a failure while building the controls still releases the button.
   busy_ = true;
@@ -185,7 +191,9 @@ winrt::fire_and_forget ProofreadPane::Check() {
           after.GetString(winrt::to_hstring(ProofreadErrorResource(response.error.value_or("")))));
       co_return;
     }
-    checked_text_ = std::wstring(text);
+    // Offsets of the findings refer to the text that was sent.
+    checked_text_ = from_session ? session_text_ : std::wstring(text);
+    checked_session_text_ = from_session;
     if (response.findings.empty()) {
       results_.Children().Append(PlainText(after.GetString(L"Proofread_NoFindings")));
       co_return;
@@ -220,6 +228,12 @@ winrt::fire_and_forget ProofreadPane::Check() {
           if (!pane) return;
           // Ranges can overlap; selecting one never changes the others. The text must still be the
           // one that was checked, or the offsets point at something else.
+          if (pane->checked_session_text_) {
+            if (pane->session_ && pane->checked_text_ == pane->session_text_ &&
+                std::wstring(pane->input_.Text()) == pane->session_input_text_)
+              pane->SelectInApplication(start, length);
+            return;
+          }
           if (std::wstring(pane->input_.Text()) != pane->checked_text_) return;
           pane->input_.Focus(xaml::FocusState::Programmatic);
           pane->input_.Select(static_cast<int32_t>(start), static_cast<int32_t>(length));
@@ -228,6 +242,87 @@ winrt::fire_and_forget ProofreadPane::Check() {
       }
       results_.Children().Append(card);
     }
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+void ProofreadPane::CloseSession() {
+  // A select still running holds its own reference; the pipe closes when that ends.
+  session_.reset();
+  if (session_document_)
+    SecureZeroMemory(session_document_->text.data(), session_document_->text.size());
+  session_document_.reset();
+  SecureZeroMemory(session_text_.data(), session_text_.size() * sizeof(wchar_t));
+  session_text_.clear();
+  SecureZeroMemory(session_input_text_.data(), session_input_text_.size() * sizeof(wchar_t));
+  session_input_text_.clear();
+  checked_session_text_ = false;
+}
+
+winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
+  const auto self = shared_from_this();
+  const auto dispatcher = dispatcher_;
+  CloseSession();
+  const uint64_t generation = ++open_generation_;
+  try {
+    auto client = std::make_shared<ProofreadSessionClient>();
+    co_await winrt::resume_background();
+    auto document = client->Open(token);
+    co_await ResumeForeground(dispatcher);
+
+    // The newest OpenSession wins; an older one that finishes later is dropped.
+    if (generation != open_generation_) {
+      if (document) SecureZeroMemory(document->text.data(), document->text.size());
+      client->Close();
+      co_return;
+    }
+    ResourceLoader resources;
+    if (!document) {
+      ShowStatus(controls::InfoBarSeverity::Error, resources.GetString(L"Proofread_Session_failed"),
+                 L"Proofread_SessionTitle");
+      co_return;
+    }
+    const auto message =
+        resources.GetString(winrt::to_hstring(ProofreadSessionStatusResource(document->status)));
+    if (document->status != azookey::ipc::proofread::DocumentStatus::Captured) {
+      // No text came with it: only the reason is shown, and the session is not kept.
+      client->Close();
+      ShowStatus(controls::InfoBarSeverity::Warning, message, L"Proofread_SessionTitle");
+      co_return;
+    }
+    session_ = std::move(client);
+    session_text_ = std::wstring(winrt::to_hstring(document->text));
+    session_document_ = std::move(document);
+    results_.Children().Clear();
+    checked_text_.clear();
+    input_.Text(winrt::hstring(session_text_));
+    session_input_text_ = std::wstring(input_.Text());
+    ShowStatus(controls::InfoBarSeverity::Informational, message, L"Proofread_SessionTitle");
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+winrt::fire_and_forget ProofreadPane::SelectInApplication(uint32_t start, uint32_t length) {
+  const auto self = shared_from_this();
+  const auto dispatcher = dispatcher_;
+  const auto client = session_;
+  if (!client || !session_document_) co_return;
+  try {
+    // The settings app is in the foreground now, so it may hand that to the application.
+    const auto window = reinterpret_cast<HWND>(static_cast<uintptr_t>(session_document_->window));
+    if (window && IsWindow(window)) SetForegroundWindow(window);
+    co_await winrt::resume_background();
+    const auto result = client->Select(start, length);
+    co_await ResumeForeground(dispatcher);
+
+    ResourceLoader resources;
+    const bool ok = result == azookey::ipc::proofread::SelectResult::Ok;
+    if (!result && session_ == client) CloseSession();
+    ShowStatus(ok ? controls::InfoBarSeverity::Success : controls::InfoBarSeverity::Warning,
+               resources.GetString(winrt::to_hstring(ProofreadSelectResultResource(result))),
+               L"Proofread_SessionTitle");
   } catch (...) {
     RecoverFromFailure();
   }

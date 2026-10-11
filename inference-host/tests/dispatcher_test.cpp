@@ -2816,6 +2816,12 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
               applied.auto_word_trending_interval_hours);
     applied_configs.push_back(applied);
   };
+  std::vector<bool> network_policies;
+  config.on_network_policy_applied = [&](bool network_allowed) {
+    // Follows the trending notification of the same reload.
+    EXPECT_EQ(network_policies.size() + 1, applied_configs.size());
+    network_policies.push_back(network_allowed);
+  };
   azookey::host::Dispatcher first(&engine, &scheduler, &user_dict, config, &settings_store);
   azookey::host::Dispatcher second(&engine, &scheduler, &user_dict, config, &settings_store);
 
@@ -2843,6 +2849,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
   EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
   EXPECT_TRUE(settings_store.settings().auto_word.trending_enabled);
+  EXPECT_EQ(network_policies, (std::vector<bool>{true, false}));
 
   write_settings("{ invalid json");
   const auto invalid_offline = first.Dispatch(MakeReq(744, ipc::MessageType::UpdateConfig, "{}"));
@@ -2852,6 +2859,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   ASSERT_TRUE(invalid_offline_payload);
   EXPECT_FALSE(invalid_offline_payload->ok);
   EXPECT_EQ(applied_configs.size(), 2u);
+  EXPECT_EQ(network_policies.size(), 2u);
   EXPECT_FALSE(engine.config().auto_word_trending_enabled);
 
   write_settings(R"({"privacy":{"mode":"normal"},"autoWordRegistration":{
@@ -2864,6 +2872,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   ASSERT_EQ(applied_configs.size(), 3u);
   EXPECT_TRUE(applied_configs.back().auto_word_trending_enabled);
   EXPECT_TRUE(settings_store.settings().auto_word.trending_enabled);
+  EXPECT_EQ(network_policies, (std::vector<bool>{true, false, true}));
 
   write_settings(R"({"safeMode":{"enabled":true},"autoWordRegistration":{
                     "trendingEnabled":true,"trendingIntervalHours":12}})");

@@ -520,65 +520,58 @@ void InferenceEngine::ApplyDictionaryConfigLocked() {
   user_dictionary_enabled_ = config_.dictionary.user_dictionary_enabled;
 }
 
-bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
-  std::lock_guard history_lock(learning_history_mutex_);
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!user_dict_) {
-    return false;
+// Lock order for user dictionary edits: learning_history_mutex_, then the
+// user dictionary file lock, then state_mutex_ only to copy and to publish.
+// Every in-process taker of the file lock holds learning_history_mutex_, so
+// the edits are serialized and none is lost. Waiting for another process's
+// file lock and the disk I/O happen outside state_mutex_, so handshakes and
+// queries are not held behind a dictionary save (DEV-1568). The live
+// dictionary changes only after the save succeeds.
+bool InferenceEngine::EditUserDictionary(
+    const std::function<bool(learning::UserDictionary&)>& edit) {
+  std::optional<learning::UserDictionary> edited;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!user_dict_) return false;
+    edited = *user_dict_;
   }
+  const auto fail = [this](const char* error) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    RecordUserDictionaryFailureLocked(error);
+    return false;
+  };
 
   // Disk is the cross-process source of truth for user dictionary edits.
   learning::FileLockFailure lock_failure;
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(edited->path(), lock_failure);
   if (!file_lock) {
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
-    RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
-    return false;
+    return fail(kUserDictionaryLockError);
   }
-  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
-    RecordUserDictionaryFailureLocked(kUserDictionaryLoadError);
-    return false;
+  if (UserDictionaryFileExists(*edited) && !edited->Load()) {
+    return fail(kUserDictionaryLoadError);
   }
-  const auto before = user_dict_->All();
-  user_dict_->Add(word);
-  if (user_dict_->Save()) {
-    return true;
-  }
+  if (!edit(*edited)) return false;
+  if (!edited->Save()) return fail(kUserDictionarySaveError);
 
-  RestoreUserDictionaryLocked(before);
-  RecordUserDictionaryFailureLocked(kUserDictionarySaveError);
-  return false;
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  *user_dict_ = std::move(*edited);
+  indexed_user_dict_ = nullptr;
+  return true;
+}
+
+bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
+  std::lock_guard history_lock(learning_history_mutex_);
+  return EditUserDictionary([&word](learning::UserDictionary& dict) {
+    dict.Add(word);
+    return true;
+  });
 }
 
 bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string& ruby) {
   std::lock_guard history_lock(learning_history_mutex_);
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!user_dict_) {
-    return false;
-  }
-
-  learning::FileLockFailure lock_failure;
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
-  if (!file_lock) {
-    learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
-    RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
-    return false;
-  }
-  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
-    RecordUserDictionaryFailureLocked(kUserDictionaryLoadError);
-    return false;
-  }
-  const auto before = user_dict_->All();
-  if (!user_dict_->Remove(word, ruby)) {
-    return false;
-  }
-  if (user_dict_->Save()) {
-    return true;
-  }
-
-  RestoreUserDictionaryLocked(before);
-  RecordUserDictionaryFailureLocked(kUserDictionarySaveError);
-  return false;
+  return EditUserDictionary(
+      [&](learning::UserDictionary& dict) { return dict.Remove(word, ruby); });
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
@@ -912,10 +905,7 @@ EngineHealthSnapshot InferenceEngine::health_snapshot() const {
   return snapshot;
 }
 
-bool InferenceEngine::model_loaded() const {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  return model_loaded_;
-}
+bool InferenceEngine::model_loaded() const { return model_loaded_.load(); }
 
 bool InferenceEngine::model_preload_in_progress() const {
   std::lock_guard<std::mutex> lock(state_mutex_);

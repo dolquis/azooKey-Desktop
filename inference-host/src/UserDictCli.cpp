@@ -284,7 +284,7 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     result.error = "failed to send handshake to running host";
     return result;
   }
-  auto handshake_resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);
+  auto handshake_resp = client.ReceiveWithTimeout(run_options.handshake_timeout_ms);
   if (!handshake_resp) {
     result.exit_code = 1;
     result.error = "timed out waiting for handshake response from running host";
@@ -320,7 +320,7 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     result.error = "failed to send userdict command to running host";
     return result;
   }
-  auto command_resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);
+  auto command_resp = client.ReceiveWithTimeout(run_options.command_timeout_ms);
   if (!command_resp) {
     result.exit_code = 1;
     result.error = "timed out waiting for userdict response from running host";

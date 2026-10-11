@@ -652,13 +652,13 @@ GoogleTest と WIL は推論品質に影響しないため、比較は「CTest �
 
 | 比較項目 | コマンド | 回帰と見なす条件（出典） |
 |---|---|---|
-| モデルロード | `ctest -L zenzai-real-model`。prompt token ids は、同ラベルのうち `--expected-prompt-token-ids` を指定した smoke で照合する。ロード時間は `azookey_zenzai_bench` の text 出力の `load_ms` を記録する | 1 件でも失敗。ロード時間は計測のみでゲートしない（`zenzai-inference-spec` §8）。増減があれば llama.cpp のロードログで内訳を示す |
+| モデルロード | `ctest -L zenzai-real-model`。prompt token ids は、同ラベルのうち `--expected-prompt-token-ids` を指定した smoke で照合する | 1 件でも失敗 |
+| ロード時間 | 下記レイテンシ行の `azookey_zenzai_bench` の text 出力にある `load_ms` を記録する | 計測のみでゲートしない（`zenzai-inference-spec` §8）。増減があれば llama.cpp のロードログで内訳を示す |
 | 代表プロンプト出力 | `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --model <GGUF> --per-case <path> --output <path>` を前後 2 回ずつ。per-case の候補列も前後で比べる | `top1_accuracy` が −0.5pp を超えて悪化（`conversion-quality-benchmark-spec` §14.3） |
 | レイテンシ | `azookey_zenzai_bench --model <GGUF> --input <読み> --threads 8 --warmup 5 --iterations 50 --output <path>` を短い読みと長い読みで、前後 3 セットずつ。text 出力の `load_ms` と `top_debug_info` も残す。新 pin の計測で旧 pin の JSON を `--baseline` に渡すと、右欄の §4.5 判定が出力に入る | p95 / p99 が 10% 超かつ 0.05ms 超の悪化（§4.5）。読み 8 文字以下の p50 / p95 目標と打ち切り率（`zenzai-inference-spec` §8.1、§8.2） |
-| メモリ | 上記 bench プロセスの `PeakWorkingSet64` と、品質ベンチ出力の `memory_peak_mb` | 上表の「明確な増加」の目安を +10% または +20MB 超とし、該当すれば理由を特定する |
+| メモリ | 上記 bench プロセスの `PeakWorkingSet64` と、品質ベンチ出力の `memory_peak_mb` | 明確な増加があれば理由を特定する（上表） |
 
-生成スコア（`top_debug_info` の `lp`）と per-case の候補列は前後で比べ、差があれば PR 本文に記録して、
-top1 と候補順位の変化と合わせて評価する。
+生成スコア（`top_debug_info` の `lp`）と per-case の候補列は前後で比べ、差があれば PR 本文に記録する。
 
 #### 独立 PR の規約と記録先
 

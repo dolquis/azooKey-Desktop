@@ -32,9 +32,12 @@ class ProofreadSessionClient final {
   // sends first. std::nullopt when the pipe is missing, the server is not the
   // process that owns the document's window, or the document is malformed.
   std::optional<ipc::proofread::DocumentMessage> Open(std::string_view token);
-  // Asks the TIP to select [start, start + length) of the document text.
-  // std::nullopt when the session is gone or the answer is malformed.
-  std::optional<ipc::proofread::SelectResult> Select(uint64_t start, uint64_t length);
+  // Asks the TIP to select [start, start + length) of the document text and,
+  // with `reconvert`, to open reconversion candidates for it. The result is
+  // the selection's only. std::nullopt when the session is gone or the answer
+  // is malformed.
+  std::optional<ipc::proofread::SelectResult> Select(uint64_t start, uint64_t length,
+                                                     bool reconvert = false);
   void Close();
 
   // The server runs as this user in this logon session at medium integrity or

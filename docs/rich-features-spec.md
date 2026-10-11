@@ -448,7 +448,7 @@ Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに
 - 動作:
   - フォアグラウンドアプリの選択位置の周りから文書を取得（`ITfContext` の range）
   - 設定アプリが Host に `DetectAnomalies` を投げる
-  - 一覧表示、項目クリックでアプリ側の該当範囲を選択する。候補の提示は別 Issue で扱う
+  - 一覧表示、項目クリックでアプリ側の該当範囲を選択し、その範囲に再変換の候補を出す
 
 **ホットキー**。TIP は有効化のたびに Ctrl+Shift+Space を preserved key として登録し、無効化で解除する。
 `RegisterHotKey` は使わない。TIP は各アプリのプロセスに読み込まれるので、グローバルホットキーは最初に
@@ -481,7 +481,7 @@ logon SID だけを許し、強制ラベル（medium、no-read-up / no-write-up 
 | メッセージ | 向き | フィールド |
 |---|---|---|
 | `document` | TIP → 設定アプリ（接続直後に 1 回） | `status`（`captured` / `blocked` / `unavailable`）、`text`（`captured` のときだけ非空の UTF-8）、`secure` / `learning_allowed`、`window`（前面へ戻すアプリのウィンドウ） |
-| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit） |
+| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit）、`reconvert`（省略時 `false`。真なら選択した範囲に再変換の候補を出す） |
 | `select_result` | TIP → 設定アプリ | `result`（`ok` / `document_changed` / `context_gone` / `invalid_range` / `failed`） |
 
 各メッセージは 4 バイト little-endian の長さに続く JSON で、`document` は 512 KiB、ほかは 4 KiB を上限とする。
@@ -496,6 +496,14 @@ session は本文を持たず、設定アプリはその理由だけを表示す
 その範囲を選択する。文書が変わっていれば `document_changed`、本文を持たない session や文書が閉じられた
 session では `context_gone`、読みの入力中は `failed` を返す。設定アプリは `select` を送る前に `window` を
 前面へ戻す。
+
+**候補の提示**。`reconvert` が真で選択が `ok` のとき、TIP は選択と同じ edit session の中で event privacy を
+確かめ、secure の文脈では選択だけで候補を出さない。候補は edit session を抜けた後に TIP の UI スレッドで、
+変換キーの再変換と同じ経路で開く。開く前に、session が続いていること、その文脈に focus があること、読みの
+入力中でないこと、secure でないこと、選択がまだ同じ範囲と本文であることを確かめ、どれかが外れれば候補を
+出さず、理由はログにだけ残す。`select_result` は選択の結果だけを表し、候補を出せたかどうかを含まない。
+`reconvert` を知らない TIP は選択だけを行う。候補は Host の再変換の候補だけで、finding の `suggestions[]` は
+混ぜない。候補を選ぶと、変換キーの再変換と同じく置き換えと訂正の学習を行う。
 
 session は、同じ TIP で再び押されたとき（新しい session に置き換える）、設定アプリが切断したとき、文書の
 document manager が破棄されたとき、TIP が無効化されたとき、10 分間 `select` が来なかったときに終わる。
@@ -555,7 +563,7 @@ secure の文脈、または学習を許さない文脈の本文は送らない�
 - `blocked` と `unavailable` の session では、入力欄を変えずに理由だけを表示する。`blocked` は理由を
   分けず、保護された入力欄、学習や AI の利用を許さない設定、種類を判定できない入力欄のいずれかであるため
   送れないことを示す。`unavailable` はアプリから本文を読めなかったことを示す。
-- session の本文を検査した一覧では、「該当箇所を選択」は `window` を前面へ戻してから `select` を送り、
+- session の本文を検査した一覧では、「該当箇所を選択」は `window` を前面へ戻してから `reconvert` を真にした `select` を送り、
   `select_result` を文で表示する（`ok` 以外は選択しなかった理由）。session が応答しなくなったら session を
   閉じ、もう一度 Ctrl+Shift+Space を押すよう表示する。
 

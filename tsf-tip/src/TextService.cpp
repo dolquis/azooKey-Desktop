@@ -6775,7 +6775,7 @@ void TextService::EndProofreadSession() {
 
 void TextService::OnProofreadSelect(void* context, ipc::proofread::SelectRequest request) noexcept {
   try {
-    static_cast<TextService*>(context)->ApplyProofreadSelection(request, false);
+    static_cast<TextService*>(context)->ApplyProofreadSelection(request, request.reconvert);
   } catch (...) {
     LogComBoundaryException("TextService::OnProofreadSelect", E_FAIL);
   }

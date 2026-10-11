@@ -105,6 +105,7 @@ std::string BuildSelectRequest(const SelectRequest& request) {
   o.emplace("kind", j::Value(std::string(kKindSelect)));
   o.emplace("start", j::Value(request.start));
   o.emplace("length", j::Value(request.length));
+  o.emplace("reconvert", j::Value(request.reconvert));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -114,7 +115,7 @@ std::optional<SelectRequest> ParseSelectRequest(std::string_view json) {
   const auto start = value->GetUInt("start");
   const auto length = value->GetUInt("length");
   if (!start || !length) return std::nullopt;
-  return SelectRequest{*start, *length};
+  return SelectRequest{*start, *length, value->GetBool("reconvert").value_or(false)};
 }
 
 std::string_view SelectResultName(SelectResult result) noexcept {

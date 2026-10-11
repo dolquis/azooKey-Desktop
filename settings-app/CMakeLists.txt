@@ -70,6 +70,14 @@ endif()
 
 set(AZOOKEY_PRODUCT_VERSION "0.0.0" CACHE STRING "Product version (MAJOR.MINOR.PATCH)")
 set(AZOOKEY_SETTINGS_CONFIGURATION "$<IF:$<CONFIG:Debug>,Debug,Release>")
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" AZOOKEY_SETTINGS_PROCESSOR)
+if(AZOOKEY_SETTINGS_PROCESSOR MATCHES "^(arm64|aarch64)$")
+  set(AZOOKEY_SETTINGS_PLATFORM ARM64)
+elseif(AZOOKEY_SETTINGS_PROCESSOR MATCHES "^(amd64|x86_64|x64)$")
+  set(AZOOKEY_SETTINGS_PLATFORM x64)
+else()
+  message(FATAL_ERROR "Unsupported settings app target processor: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
 set(AZOOKEY_SETTINGS_OUTPUT_DIR
     "${CMAKE_BINARY_DIR}/settings-app/${AZOOKEY_SETTINGS_CONFIGURATION}/")
 if(EXISTS "${AZOOKEY_WIL_SOURCE_DIR}/include/wil/resource.h")
@@ -86,7 +94,7 @@ add_custom_target(azookey_settings
           /restore
           /target:Build
           /property:Configuration=${AZOOKEY_SETTINGS_CONFIGURATION}
-          /property:Platform=x64
+          /property:Platform=${AZOOKEY_SETTINGS_PLATFORM}
           /property:AzooKeyProductVersion=${AZOOKEY_PRODUCT_VERSION}
           /property:OutDir=${AZOOKEY_SETTINGS_OUTPUT_DIR}
           /property:IntDir=${CMAKE_CURRENT_BINARY_DIR}/obj/${AZOOKEY_SETTINGS_CONFIGURATION}/

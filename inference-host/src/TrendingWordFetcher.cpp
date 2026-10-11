@@ -294,9 +294,7 @@ TrendingFetchStatus TrendingWordFetcher::FetchOnceImpl() {
     // for as long as still_current below holds.
     auto_promote = auto_promote_;
   }
-  const auto still_current = [this, generation] {
-    return !stopped_ && generation_ == generation;
-  };
+  const auto still_current = [this, generation] { return !stopped_ && generation_ == generation; };
   const auto status = dependencies_.ingest_and_save(asset->words, dependencies_.now_epoch(),
                                                     auto_promote, still_current);
   if (status == TrendingFetchStatus::Ingested) ingested_generated_at_ = asset->generated_at;

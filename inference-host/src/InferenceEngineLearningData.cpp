@@ -230,8 +230,7 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetPairSnapshot(learning::Lea
 
 bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>& words,
                                           uint64_t now_epoch, bool auto_promote) {
-  return IngestTrendingWords(words, now_epoch, auto_promote, {}) ==
-         TrendingIngestOutcome::Saved;
+  return IngestTrendingWords(words, now_epoch, auto_promote, {}) == TrendingIngestOutcome::Saved;
 }
 
 InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(

@@ -3439,8 +3439,7 @@ TEST(EngineAutoWordTest, TrendingIngestCancelledByDisableNeverSurvivesFollowingR
   current = false;
   EXPECT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
             azookey::host::InferenceEngine::ResetOutcome::Reset);
-  EXPECT_EQ(engine->IngestTrendingWords(words, kNowBase, true, still_current),
-            Outcome::Cancelled);
+  EXPECT_EQ(engine->IngestTrendingWords(words, kNowBase, true, still_current), Outcome::Cancelled);
   EXPECT_EQ(auto_words.Size(), 0u);
 
   // The ingestion passed its check and holds the lock in Save when trending is

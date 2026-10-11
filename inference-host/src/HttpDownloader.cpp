@@ -55,9 +55,7 @@ bool NetworkDisabled(const std::function<bool()>& network_allowed) {
 std::function<bool()> WithNetworkPolicy(const std::function<bool()>& cancelled,
                                         const std::function<bool()>& network_allowed) {
   if (!network_allowed) return cancelled;
-  return [cancelled, network_allowed] {
-    return (cancelled && cancelled()) || !network_allowed();
-  };
+  return [cancelled, network_allowed] { return (cancelled && cancelled()) || !network_allowed(); };
 }
 
 std::string WindowsError(std::string_view operation, DWORD error = GetLastError()) {

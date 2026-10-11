@@ -113,6 +113,34 @@ std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
 }
 
+class ScopedTempDirectory {
+ public:
+  ScopedTempDirectory() {
+    const auto base = std::filesystem::temp_directory_path();
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = base / ("azookey_dispatcher_fixture_" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                      "_" + std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique dispatcher test directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+
+  std::string File(const char* name) const { return (path_ / name).string(); }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
+
 // CTest runs each case in its own process concurrently, so fixture files carry
 // the test name: one case corrupting its M7 file must not reach another case.
 std::string PerTestFileName(const char* stem, const char* extension) {
@@ -183,22 +211,16 @@ class ThrowingConverter final : public azookey::core::IConverter {
 class DispatcherTest : public ::testing::Test {
  protected:
   DispatcherTest()
-      : learning_path(PerTestFileName("azookey_dispatcher_test_learning", ".tsv")),
-        user_dict_path(PerTestFileName("azookey_dispatcher_test_user", ".json")),
+      : learning_path(temp_directory.File("learning.tsv")),
+        user_dict_path(temp_directory.File("user.json")),
         store(learning_path, &azookey::learning::test::Crypto()),
         user_dict(user_dict_path, &azookey::learning::test::Crypto()),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),
         dispatcher(&engine, &scheduler, &user_dict, DefaultDispatcherConfig()) {
-    std::remove(learning_path.c_str());
-    std::remove(user_dict_path.c_str());
     engine.SetUserDictionary(&user_dict);
   }
 
-  ~DispatcherTest() override {
-    engine.FlushLearningStore();
-    std::remove(learning_path.c_str());
-    std::remove(user_dict_path.c_str());
-  }
+  ~DispatcherTest() override { engine.FlushLearningStore(); }
 
   ipc::Envelope MakeReq(uint64_t id, ipc::MessageType type, const std::string& payload_json) {
     ipc::Envelope env;
@@ -219,6 +241,8 @@ class DispatcherTest : public ::testing::Test {
         MakeReq(9000, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(request)));
   }
 
+  // Destroy stores and the engine before removing all derived persistence files.
+  ScopedTempDirectory temp_directory;
   std::string learning_path;
   std::string user_dict_path;
   azookey::learning::LearningStore store;

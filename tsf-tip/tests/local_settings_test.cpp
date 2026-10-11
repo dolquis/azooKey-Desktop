@@ -22,6 +22,29 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
+// True once `value()` has not changed for `quiet`; false if `limit` passes first.
+template <typename Value>
+bool WaitForQuiet(Value value, std::chrono::milliseconds quiet = std::chrono::milliseconds(200),
+                  std::chrono::milliseconds limit = std::chrono::milliseconds(5000)) {
+  const auto deadline = std::chrono::steady_clock::now() + limit;
+  auto last = value();
+  auto since = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto now = std::chrono::steady_clock::now();
+    if (const auto current = value(); current != last) {
+      last = current;
+      since = now;
+    } else if (now - since >= quiet) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// How long a test listens for a notification that must not arrive.
+constexpr std::chrono::milliseconds kAbsenceWindow{300};
+
 // std::filesystem::remove deletes with POSIX semantics. If another process (an
 // antivirus scan of the file just written, for one) holds a handle at that
 // moment, the directory watch never reports the removal: a documented limit of
@@ -395,13 +418,52 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
   }
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.Start(path));
-  const auto before = reader.WatchNotificationsForTest();
+  // Not the raw wake-up count: NTFS can report the timestamp of an entry
+  // directly in a watched directory ("unrelated") late, after a write made
+  // before or during this window, which says nothing about the watch scope
+  // (DEV-1574). A write below an unwatched directory only reaches a
+  // notification if the watch became recursive, and then it names a nested path.
+  const auto before = azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest();
+  // The raw wake-up may still arrive, but Consume() drops it without reading
+  // the file again, so the load count must hold once the activation loads and
+  // any late report of the files written above have settled.
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.ReloadsForTest(); }));
+  const auto reloads = reader.ReloadsForTest();
   {
     std::ofstream stream(file);
     stream << "changed cache contents";
   }
-  std::this_thread::sleep_for(std::chrono::milliseconds(300));
-  EXPECT_EQ(reader.WatchNotificationsForTest(), before);
+  // Absence has no event to wait for; a recursive watch reports the write
+  // within milliseconds, so this only bounds how long the test listens.
+  std::this_thread::sleep_for(kAbsenceWindow);
+  EXPECT_EQ(azookey::tsf::TipLocalSettings::NestedWatchNotificationsForTest(), before);
+  EXPECT_EQ(reader.ReloadsForTest(), reloads);
+}
+
+// A write to a file next to settings.json always reaches the watch, so unlike
+// the nested case above this does not depend on what NTFS reports late. The
+// worker must wake for it and drop it without reading the settings again.
+TEST_F(LocalSettingsTest, SiblingFileWritesWakeTheWatchWithoutReloadingSettings) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.WatchNotificationsForTest(); }));
+  ASSERT_TRUE(WaitForQuiet([&] { return reader.ReloadsForTest(); }));
+  const auto notifications = reader.WatchNotificationsForTest();
+  const auto reloads = reader.ReloadsForTest();
+  const auto sibling = path.parent_path() / L"unrelated.txt";
+  // The watch is re-armed only after it consumed the previous wake-up, so a
+  // write made in between is not reported: keep writing until two arrived. The
+  // second one can only be received after the worker finished the first.
+  int round = 0;
+  ASSERT_TRUE(WaitUntil([&] {
+    std::ofstream stream(sibling, std::ios::binary | std::ios::trunc);
+    stream << "round " << ++round;
+    stream.close();
+    return reader.WatchNotificationsForTest() >= notifications + 2;
+  }));
+  EXPECT_EQ(reader.ReloadsForTest(), reloads);
+  EXPECT_TRUE(reader.Snapshot().pairing.enabled);
 }
 
 TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {

@@ -212,7 +212,8 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
   auto resp = client.ReceiveWithTimeout(run_options.command_timeout_ms);
   if (!resp) {
     return ResolveResult(options, false, false, "ipc",
-                         "timed out waiting for response from running host");
+                         "timed out waiting for response from running host; the change may "
+                         "still complete, check with newwords list");
   }
   auto parsed = azookey::ipc::ParseResolveNewWordResponse(resp->payload_json);
   if (!parsed) {

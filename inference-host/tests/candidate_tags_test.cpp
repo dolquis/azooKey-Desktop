@@ -27,7 +27,7 @@ Candidate Tagged(std::string surface, double score, CandidateTag tag) {
   return c;
 }
 
-std::vector<std::string> Surfaces(const std::vector<Candidate>& candidates) {
+std::vector<std::string> CandidateTagSurfaces(const std::vector<Candidate>& candidates) {
   std::vector<std::string> surfaces;
   for (const auto& c : candidates) surfaces.push_back(c.surface);
   return surfaces;
@@ -225,7 +225,7 @@ TEST(CandidateTagsTest, BoostMovesOnlyTheBoostedCandidatesUp) {
   TagBoosts boosts;
   boosts.multipliers[static_cast<size_t>(CandidateTag::English)] = 1.5;
   azookey::host::ApplyTagBoosts(candidates, boosts);
-  EXPECT_EQ(Surfaces(candidates), (std::vector<std::string>{"a", "c", "b", "d"}));
+  EXPECT_EQ(CandidateTagSurfaces(candidates), (std::vector<std::string>{"a", "c", "b", "d"}));
   EXPECT_DOUBLE_EQ(candidates[1].score, 9.0);
 }
 
@@ -237,7 +237,7 @@ TEST(CandidateTagsTest, NegativeScoresAreRaisedTowardZero) {
   TagBoosts boosts;
   boosts.multipliers[static_cast<size_t>(CandidateTag::English)] = 2.0;
   azookey::host::ApplyTagBoosts(candidates, boosts);
-  EXPECT_EQ(Surfaces(candidates), (std::vector<std::string>{"b", "a"}));
+  EXPECT_EQ(CandidateTagSurfaces(candidates), (std::vector<std::string>{"b", "a"}));
   EXPECT_DOUBLE_EQ(candidates[0].score, -1.5);
 }
 
@@ -247,7 +247,7 @@ TEST(CandidateTagsTest, NeutralBoostsLeaveUnsortedInputAlone) {
       Tagged("high", 5.0, CandidateTag::None),
   };
   azookey::host::ApplyTagBoosts(candidates, TagBoosts{});
-  EXPECT_EQ(Surfaces(candidates), (std::vector<std::string>{"low", "high"}));
+  EXPECT_EQ(CandidateTagSurfaces(candidates), (std::vector<std::string>{"low", "high"}));
   EXPECT_DOUBLE_EQ(candidates[0].score, 1.0);
 }
 

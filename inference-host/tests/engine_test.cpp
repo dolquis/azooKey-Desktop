@@ -1054,6 +1054,271 @@ TEST(InferenceEngineTest, UserWordEditWaitingForTheFileLockDoesNotBlockQueries) 
   RemoveProtectedStoreFile(lpath);
 }
 
+// DEV-1572: the budget covers the file lock wait. A zero budget makes the
+// wait a single attempt, so no test time is spent waiting.
+TEST(InferenceEngineTest, UserWordEditFailsBusyWhenTheFileLockOutlastsItsBudget) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_busy_lock.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_busy_lock.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::FileLockFailure failure;
+  auto holder = azookey::learning::AcquireExclusiveFileLockForPath(udict_path, failure);
+  ASSERT_TRUE(holder.has_value());
+  azookey::learning::UserWord word;
+  word.word = "Busy";
+  word.ruby = "busy";
+  std::atomic<bool> reached_file_lock{false};
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { reached_file_lock = true; });
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions options;
+  options.wait_budget = std::chrono::milliseconds::zero();
+  options.report = &report;
+  // The file lock is a mutex its owner may re-enter, so the edit runs on
+  // another thread than the holder.
+  EXPECT_FALSE(
+      std::async(std::launch::async, [&] { return engine->AddUserWord(word, options); }).get());
+  holder.reset();
+
+  // Busy at the file lock, not at the writer mutex.
+  EXPECT_TRUE(reached_file_lock);
+  EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
+  EXPECT_EQ(report.save_ms, 0.0);
+  EXPECT_TRUE(dict.Lookup("busy").empty());
+  EXPECT_FALSE(std::filesystem::exists(dict.storage_path()));
+  ASSERT_TRUE(engine->last_error().has_value());
+  EXPECT_EQ(*engine->last_error(), "user dictionary busy");
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1572: the budget also covers the queue behind this Host's other edits.
+TEST(InferenceEngineTest, UserWordEditFailsBusyBehindAnotherEditPastItsBudget) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_busy_writer.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_busy_writer.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  std::promise<void> first_waiting;
+  std::promise<void> release_first;
+  auto release_first_future = release_first.get_future().share();
+  std::once_flag once;
+  engine->SetBeforeUserDictionaryFileLockForTests([&] {
+    std::call_once(once, [&] {
+      first_waiting.set_value();
+      release_first_future.wait();
+    });
+  });
+  azookey::learning::UserWord first;
+  first.word = "First";
+  first.ruby = "first";
+  auto first_added = std::async(std::launch::async, [&] { return engine->AddUserWord(first); });
+  first_waiting.get_future().wait();
+
+  azookey::learning::UserWord second;
+  second.word = "Second";
+  second.ruby = "second";
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions options;
+  options.wait_budget = std::chrono::milliseconds::zero();
+  options.report = &report;
+  EXPECT_FALSE(engine->AddUserWord(second, options));
+  EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
+  EXPECT_EQ(report.lock_wait_ms, 0.0);
+
+  release_first.set_value();
+  EXPECT_TRUE(first_added.get());
+  EXPECT_EQ(dict.Lookup("first").size(), 1u);
+  EXPECT_TRUE(dict.Lookup("second").empty());
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1572: an edit whose budget ran out while it held both locks gives up
+// before saving, so a CLI that has stopped waiting never sees it land later.
+TEST(InferenceEngineTest, UserWordEditPastItsBudgetDoesNotSave) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_past_budget.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_past_budget.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::UserWord word;
+  word.word = "Late";
+  word.ruby = "late";
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions options;
+  options.received = std::chrono::steady_clock::now() - std::chrono::hours(1);
+  options.report = &report;
+  // Nothing else holds either lock: the edit takes both and gives up before saving.
+  std::atomic<bool> reached_file_lock{false};
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { reached_file_lock = true; });
+  EXPECT_FALSE(engine->AddUserWord(word, options));
+  EXPECT_TRUE(reached_file_lock);
+  EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Busy);
+  EXPECT_EQ(report.save_ms, 0.0);
+  EXPECT_TRUE(dict.Lookup("late").empty());
+  EXPECT_FALSE(std::filesystem::exists(dict.storage_path()));
+
+  // Within its budget the same edit saves and reports each stage.
+  options.received = std::chrono::steady_clock::now();
+  EXPECT_TRUE(engine->AddUserWord(word, options));
+  EXPECT_EQ(report.result, azookey::host::UserDictionaryEditResult::Ok);
+  EXPECT_GE(report.total_ms, report.save_ms);
+  EXPECT_EQ(dict.Lookup("late").size(), 1u);
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1572: an edit skips reloading the file this Host saved last, and still
+// reloads one that another writer replaced since.
+TEST(InferenceEngineTest, UserWordEditSkipsTheReloadOnlyWhileTheFileIsUnchanged) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_skip_reload.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_skip_reload.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::host::UserDictionaryEditReport report;
+  azookey::host::UserDictionaryEditOptions options;
+  options.report = &report;
+  ASSERT_TRUE(engine->AddUserWord({"First", "first"}, options));
+  options.received = std::chrono::steady_clock::now();
+  ASSERT_TRUE(engine->AddUserWord({"Second", "second"}, options));
+  EXPECT_TRUE(report.load_skipped);
+
+  {
+    azookey::learning::UserDictionary writer(udict_path, &azookey::learning::test::Crypto());
+    ASSERT_TRUE(writer.Load());
+    writer.Add({"External", "external"});
+    ASSERT_TRUE(writer.Save());
+  }
+  options.received = std::chrono::steady_clock::now();
+  ASSERT_TRUE(engine->AddUserWord({"Third", "third"}, options));
+  EXPECT_FALSE(report.load_skipped);
+
+  azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Size(), 4u);
+  EXPECT_EQ(loaded.Lookup("external").size(), 1u);
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1572: an edit waiting for the file lock holds neither the state lock
+// nor the learning history lock, so commits are recorded meanwhile.
+TEST(InferenceEngineTest, UserWordEditWaitingForTheFileLockDoesNotBlockCommits) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_commit_wait.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_commit_wait.json");
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::FileLockFailure failure;
+  auto holder = azookey::learning::AcquireExclusiveFileLockForPath(udict_path, failure);
+  ASSERT_TRUE(holder.has_value());
+  std::promise<void> waiting;
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { waiting.set_value(); });
+  azookey::learning::UserWord word;
+  word.word = "Waited";
+  word.ruby = "waited";
+  auto added = std::async(std::launch::async, [&] { return engine->AddUserWord(word); });
+  waiting.get_future().wait();
+  // This thread releases the file lock only after the commit returns.
+  EXPECT_TRUE(engine->CommitObservation("にほん", "日本", kNowBase, "dev-1572-commit"));
+  EXPECT_EQ(added.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+  holder.reset();
+  EXPECT_TRUE(added.get());
+  EXPECT_EQ(dict.Lookup("waited").size(), 1u);
+
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1572: an import waiting for the user dictionary file lock does not hold
+// the state lock, and publishes the merged dictionary once it is saved.
+TEST(InferenceEngineTest, ImportWaitingForTheUserDictionaryFileLockDoesNotBlockQueries) {
+  const std::string lpath = TempPath("azookey_host_engine_import_lock_wait.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_import_lock_wait.json");
+  const auto archive = std::filesystem::path(TempPath("azookey_host_engine_import_lock_wait.zip"));
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
+  std::filesystem::remove(archive);
+
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  engine->SetBackupCrypto(&azookey::learning::test::Crypto());
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+  azookey::learning::UserWord word;
+  word.word = "Imported";
+  word.ruby = "imported";
+  ASSERT_TRUE(engine->AddUserWord(word));
+  const std::vector<azookey::host::LearningDataStore> selected{
+      azookey::host::LearningDataStore::UserDictionary};
+  ASSERT_EQ(engine->ExportLearningData(selected, archive, true, {}).error,
+            azookey::host::BackupError::None);
+  ASSERT_TRUE(engine->RemoveUserWord("Imported", "imported"));
+
+  azookey::learning::FileLockFailure failure;
+  auto holder = azookey::learning::AcquireExclusiveFileLockForPath(udict_path, failure);
+  ASSERT_TRUE(holder.has_value());
+  std::promise<void> waiting;
+  engine->SetBeforeUserDictionaryFileLockForTests([&] { waiting.set_value(); });
+  auto imported = std::async(std::launch::async, [&] {
+    return engine->ImportLearningData(selected, archive,
+                                      azookey::learning::ImportConflictPolicy::Merge);
+  });
+  waiting.get_future().wait();
+  // This thread releases the file lock only after both calls return.
+  (void)engine->model_loaded();
+  (void)engine->QueryCandidates("にほん", "", kNowBase);
+  EXPECT_EQ(imported.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+  EXPECT_TRUE(dict.Lookup("imported").empty());
+  holder.reset();
+  EXPECT_EQ(imported.get().error, azookey::host::BackupError::None);
+  EXPECT_EQ(dict.Lookup("imported").size(), 1u);
+  azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Lookup("imported").size(), 1u);
+
+  std::filesystem::remove(archive);
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTest, CancelEarlyReturn) {
   const char* lpath = "azookey_host_engine_cancel.tsv";
   RemoveProtectedStoreFile(lpath);

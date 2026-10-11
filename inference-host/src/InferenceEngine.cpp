@@ -47,6 +47,7 @@ constexpr const char* kLearningSaveError = "failed to save learning store";
 constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary";
 constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
+constexpr const char* kUserDictionaryBusyError = "user dictionary busy";
 // Backend diagnostics may contain a path, prompt, or candidate text. Only known
 // model runtime identifiers may leave the engine through Health or QueryDiagnostics.
 std::optional<std::string> SafeModelRuntimeError(const std::optional<std::string>& error) {
@@ -285,6 +286,8 @@ InferenceEngine::~InferenceEngine() {
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard history_lock(learning_history_mutex_);
+  // An edit in flight publishes into the dictionary it copied.
+  std::lock_guard writer_lock(user_dict_writer_mutex_);
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
   RefreshDictionaryLocked();
@@ -512,58 +515,131 @@ void InferenceEngine::ApplyDictionaryConfigLocked() {
   user_dictionary_enabled_ = config_.dictionary.user_dictionary_enabled;
 }
 
-// Lock order for user dictionary edits: learning_history_mutex_, then the
+namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+
+double MillisecondsBetween(SteadyClock::time_point from, SteadyClock::time_point to) {
+  return std::chrono::duration<double, std::milli>(to - from).count();
+}
+
+// The file lock's own timeout, as opposed to a lock that could not be made.
+bool IsFileLockTimeout(const learning::FileLockFailure& failure) {
+#ifdef _WIN32
+  constexpr int kTimeout = ERROR_TIMEOUT;
+#else
+  constexpr int kTimeout = ETIMEDOUT;
+#endif
+  return failure.stage && std::string_view(failure.stage) == "lock-wait" &&
+         failure.error.value() == kTimeout;
+}
+
+}  // namespace
+
+// Lock order for user dictionary edits: user_dict_writer_mutex_, then the
 // user dictionary file lock, then state_mutex_ only to copy and to publish.
-// Every in-process taker of the file lock holds learning_history_mutex_, so
-// the edits are serialized and none is lost. Waiting for another process's
-// file lock and the disk I/O happen outside state_mutex_, so handshakes and
-// queries are not held behind a dictionary save (DEV-1568). The live
-// dictionary changes only after the save succeeds.
-bool InferenceEngine::EditUserDictionary(
-    const std::function<bool(learning::UserDictionary&)>& edit) {
+// The other takers of the file lock (forget, reset, import, SetUserDictionary)
+// take learning_history_mutex_ before user_dict_writer_mutex_; nothing takes
+// them the other way round. Every in-process taker of the file lock holds the
+// writer mutex and keeps the file lock until it has published, so the edits
+// are serialized in the order they took the file lock and none is lost.
+// Waiting for another process's file lock and the disk I/O happen outside
+// state_mutex_, so handshakes and queries are not held behind a dictionary
+// save (DEV-1568), and outside learning_history_mutex_, so commits are not
+// either (DEV-1572). The live dictionary changes only after the save succeeds.
+//
+// DEV-1572: the waits for the writer mutex and for the file lock share one
+// budget measured from options.received. An edit that runs out of it, even
+// after taking both locks, fails Busy without writing: the CLI derives its
+// response wait from the same budget, and a save that starts after it could
+// complete after the CLI has reported a failure.
+bool InferenceEngine::EditUserDictionary(const std::function<bool(learning::UserDictionary&)>& edit,
+                                         const UserDictionaryEditOptions& options) {
+  UserDictionaryEditReport report;
+  const auto deadline = options.received + options.wait_budget;
+  const auto finish = [&](UserDictionaryEditResult result, const char* error = nullptr) {
+    report.result = result;
+    report.total_ms = MillisecondsBetween(options.received, SteadyClock::now());
+    if (options.report) *options.report = report;
+    if (error) {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      RecordUserDictionaryFailureLocked(error);
+    }
+    return result == UserDictionaryEditResult::Ok;
+  };
+
+  auto stage_start = SteadyClock::now();
+  std::unique_lock<std::timed_mutex> writer_lock(user_dict_writer_mutex_, std::defer_lock);
+  const bool writer_locked = writer_lock.try_lock_until(deadline);
+  report.writer_wait_ms = MillisecondsBetween(stage_start, SteadyClock::now());
+  if (!writer_locked) {
+    return finish(UserDictionaryEditResult::Busy, kUserDictionaryBusyError);
+  }
+
   std::optional<learning::UserDictionary> edited;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    if (!user_dict_) return false;
-    edited = *user_dict_;
+    if (user_dict_) edited = *user_dict_;
   }
-  const auto fail = [this](const char* error) {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    RecordUserDictionaryFailureLocked(error);
-    return false;
-  };
+  if (!edited) return finish(UserDictionaryEditResult::Unavailable);
+  if (before_user_dictionary_file_lock_for_tests_) before_user_dictionary_file_lock_for_tests_();
 
   // Disk is the cross-process source of truth for user dictionary edits.
+  stage_start = SteadyClock::now();
+  const auto remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - stage_start);
   learning::FileLockFailure lock_failure;
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(edited->path(), lock_failure);
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(
+      edited->path(), lock_failure, (std::max)(remaining, std::chrono::milliseconds::zero()));
+  report.lock_wait_ms = MillisecondsBetween(stage_start, SteadyClock::now());
   if (!file_lock) {
     learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
-    return fail(kUserDictionaryLockError);
+    return IsFileLockTimeout(lock_failure)
+               ? finish(UserDictionaryEditResult::Busy, kUserDictionaryBusyError)
+               : finish(UserDictionaryEditResult::LockFailed, kUserDictionaryLockError);
   }
-  if (detail::UserDictionaryFileExists(*edited) && !edited->Load()) {
-    return fail(kUserDictionaryLoadError);
+  stage_start = SteadyClock::now();
+  if (detail::UserDictionaryFileExists(*edited) && !edited->ReloadIfChanged(&report.load_skipped)) {
+    report.load_ms = MillisecondsBetween(stage_start, SteadyClock::now());
+    return finish(UserDictionaryEditResult::LoadFailed, kUserDictionaryLoadError);
   }
-  if (!edit(*edited)) return false;
-  if (!edited->Save()) return fail(kUserDictionarySaveError);
+  report.load_ms = MillisecondsBetween(stage_start, SteadyClock::now());
+  if (!edit(*edited)) return finish(UserDictionaryEditResult::NotFound);
+  // The last point at which giving up leaves the dictionary as it was.
+  if (SteadyClock::now() > deadline) {
+    return finish(UserDictionaryEditResult::Busy, kUserDictionaryBusyError);
+  }
+  stage_start = SteadyClock::now();
+  const bool saved = edited->Save();
+  report.save_ms = MillisecondsBetween(stage_start, SteadyClock::now());
+  if (!saved) return finish(UserDictionaryEditResult::SaveFailed, kUserDictionarySaveError);
 
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  *user_dict_ = std::move(*edited);
-  indexed_user_dict_ = nullptr;
-  return true;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    *user_dict_ = std::move(*edited);
+    indexed_user_dict_ = nullptr;
+  }
+  return finish(UserDictionaryEditResult::Ok);
 }
 
-bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
-  std::lock_guard history_lock(learning_history_mutex_);
-  return EditUserDictionary([&word](learning::UserDictionary& dict) {
-    dict.Add(word);
-    return true;
-  });
+void InferenceEngine::SetBeforeUserDictionaryFileLockForTests(std::function<void()> hook) {
+  before_user_dictionary_file_lock_for_tests_ = std::move(hook);
 }
 
-bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string& ruby) {
-  std::lock_guard history_lock(learning_history_mutex_);
+bool InferenceEngine::AddUserWord(const learning::UserWord& word,
+                                  const UserDictionaryEditOptions& options) {
   return EditUserDictionary(
-      [&](learning::UserDictionary& dict) { return dict.Remove(word, ruby); });
+      [&word](learning::UserDictionary& dict) {
+        dict.Add(word);
+        return true;
+      },
+      options);
+}
+
+bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string& ruby,
+                                     const UserDictionaryEditOptions& options) {
+  return EditUserDictionary([&](learning::UserDictionary& dict) { return dict.Remove(word, ruby); },
+                            options);
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
@@ -1792,16 +1868,6 @@ bool InferenceEngine::FlushLearningStoreLocked(std::chrono::milliseconds retry_b
   last_unsaved_observation_epoch_sec_.reset();
   first_unsaved_observation_steady_.reset();
   return true;
-}
-
-void InferenceEngine::RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries) {
-  if (!user_dict_) {
-    return;
-  }
-  user_dict_->Clear();
-  for (const auto& entry : entries) {
-    user_dict_->Add(entry);
-  }
 }
 
 void InferenceEngine::RecordLearningSaveFailureLocked() {

@@ -97,6 +97,8 @@ struct NeologdPackSink {
   azookey::logging::RuntimeLogger* log{nullptr};
   // Shared with every Dispatcher for QueryDiagnostics; outlives main's scope.
   std::shared_ptr<azookey::host::NeologdLayerState> layer;
+  // False under privacy.mode=offline; UpdateConfig also cancels a fetch in progress.
+  std::atomic<bool> network_allowed{true};
 };
 
 class NeologdPackSinkGuard {
@@ -125,7 +127,9 @@ void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem
           azookey::host::ParseNeologdPackManifest(azookey::host::PinnedNeologdPackManifestJson());
       if (parsed.manifest) {
         azookey::host::HttpPackDownloader downloader;
-        result = azookey::host::PrepareNeologdPack(*parsed.manifest, packs_dir, downloader);
+        result = azookey::host::PrepareNeologdPack(
+            *parsed.manifest, packs_dir, downloader,
+            [network = sink.get()] { return network->network_allowed.load(); });
       } else {
         result.error = "invalid pinned manifest";
       }
@@ -142,7 +146,12 @@ void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem
         result.status = azookey::host::NeologdPackStatus::Failed;
         result.error = "pack load failed";
       }
-      if (result.status == azookey::host::NeologdPackStatus::Failed) {
+      if (result.status == azookey::host::NeologdPackStatus::Offline) {
+        sink->layer->Set(azookey::ipc::kNeologdLayerNotRequested);
+        layer_reported = true;
+        sink->log->Log(azookey::logging::RuntimeLogLevel::Info, "neologd_pack_load",
+                       {{"result", SafeLogText("offline")}});
+      } else if (result.status == azookey::host::NeologdPackStatus::Failed) {
         sink->layer->Set(azookey::ipc::kNeologdLayerError, result.error);
         layer_reported = true;
         sink->log->Log(azookey::logging::RuntimeLogLevel::Warn, "neologd_pack_load",
@@ -844,11 +853,21 @@ int main(int argc, char** argv) {
            {"reason", SafeLogText(result)}});
     }
   };
-  trending_dependencies.ingest_and_save = [&engine](
-                                              const std::vector<azookey::learning::AutoWord>& words,
-                                              uint64_t now_epoch, bool auto_promote) {
-    return engine.IngestTrendingWords(words, now_epoch, auto_promote);
-  };
+  trending_dependencies.ingest_and_save =
+      [&engine](const std::vector<azookey::learning::AutoWord>& words, uint64_t now_epoch,
+                bool auto_promote, const std::function<bool()>& still_current) {
+        using Outcome = azookey::host::InferenceEngine::TrendingIngestOutcome;
+        using azookey::host::TrendingFetchStatus;
+        switch (engine.IngestTrendingWords(words, now_epoch, auto_promote, still_current)) {
+          case Outcome::Saved:
+            return TrendingFetchStatus::Ingested;
+          case Outcome::Cancelled:
+            return TrendingFetchStatus::Cancelled;
+          case Outcome::SaveFailed:
+            break;
+        }
+        return TrendingFetchStatus::Failed;
+      };
   // Declared after the stores and before dispatchers so the worker joins before store teardown.
   azookey::host::TrendingWordFetcher trending_fetcher(
       auto_word_store, auto_word_store.path().parent_path() / "trending-words.json",
@@ -885,8 +904,10 @@ int main(int argc, char** argv) {
   neologd_pack_sink->engine = &engine;
   neologd_pack_sink->log = &runtime_log;
   neologd_pack_sink->layer = std::make_shared<azookey::host::NeologdLayerState>();
+  neologd_pack_sink->network_allowed = !settings_store.settings().offline_mode;
   NeologdPackSinkGuard neologd_pack_guard(neologd_pack_sink);
-  // Settings reach the pack only at startup (auto-word-registration-spec section 15.14).
+  // Settings reach the pack only at startup (auto-word-registration-spec section 15.14),
+  // except that offline mode keeps blocking its network access during the session.
   // Called once this Host owns its transport, so a rejected duplicate never downloads.
   const auto start_neologd_pack = [&] {
     if (config.dictionary.neologd_enabled && !safe_mode && !user_paths->packs_dir.empty()) {
@@ -949,6 +970,9 @@ int main(int argc, char** argv) {
   dconf.models_dir = user_paths->models_dir;
   dconf.on_config_applied = update_trending_settings;
   dconf.neologd_layer = neologd_pack_sink->layer;
+  dconf.on_network_policy_applied = [sink = neologd_pack_sink](bool network_allowed) {
+    sink->network_allowed = network_allowed;
+  };
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }

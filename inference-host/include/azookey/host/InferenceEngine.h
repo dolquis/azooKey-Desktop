@@ -302,6 +302,12 @@ class InferenceEngine {
   // A failed save retains valid ingested words in memory for the next retry.
   bool IngestTrendingWords(const std::vector<learning::AutoWord>& words, uint64_t now_epoch,
                            bool auto_promote);
+  // Cancelled when still_current is false under the same lock, before anything changes,
+  // so a reset that follows a cancellation never sees these words afterwards.
+  enum class TrendingIngestOutcome { Saved, Cancelled, SaveFailed };
+  TrendingIngestOutcome IngestTrendingWords(const std::vector<learning::AutoWord>& words,
+                                            uint64_t now_epoch, bool auto_promote,
+                                            const std::function<bool()>& still_current);
 
   // rich-features-spec X-2-7: the persona of the kana learning store, computed
   // by the learning flush worker at startup and every kPersonaRefreshInterval.

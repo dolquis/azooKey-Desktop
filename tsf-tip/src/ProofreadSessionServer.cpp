@@ -143,7 +143,8 @@ bool ProofreadSessionServer::Start(std::string_view token, std::string document_
                                    Callbacks callbacks, Options options) {
   Stop();
   if (!callbacks.on_select || !callbacks.on_end) return false;
-  if (!proofread::EncodeFrame(document_json, proofread::kMaxDocumentFrameBytes)) return false;
+  if (document_json.empty() || document_json.size() > proofread::kMaxDocumentFrameBytes)
+    return false;
   HINSTANCE instance = nullptr;
   GetModuleHandleExW(
       GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,

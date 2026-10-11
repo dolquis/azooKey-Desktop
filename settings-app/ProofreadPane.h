@@ -43,6 +43,8 @@ class ProofreadPane : public std::enable_shared_from_this<ProofreadPane> {
   std::shared_ptr<ProofreadSessionClient> session_;
   std::optional<azookey::ipc::proofread::DocumentMessage> session_document_;
   std::wstring session_text_;
+  // The input box's text right after the document was put in; the box changes line breaks.
+  std::wstring session_input_text_;
   // The findings came from the session's document, so their ranges are the application's.
   bool checked_session_text_{false};
 };

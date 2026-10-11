@@ -591,6 +591,18 @@ TEST_F(ProofreadHotkeyTest, PressingAgainReplacesTheSession) {
   EXPECT_TRUE(service_.proofread_session_active_for_test());
 }
 
+TEST_F(ProofreadHotkeyTest, PoppingTheContextEndsItsSession) {
+  auto document = MakeDocument(L"本文");
+  auto& context = NewContext(document);
+  context.selection = 0;
+  EXPECT_TRUE(Press(&context));
+  auto& other = NewContext(MakeDocument(L"別の文書"));
+  ASSERT_EQ(service_.OnPopContext(&other), S_OK);
+  EXPECT_TRUE(service_.proofread_session_active_for_test());
+  ASSERT_EQ(service_.OnPopContext(&context), S_OK);
+  EXPECT_FALSE(service_.proofread_session_active_for_test());
+}
+
 TEST_F(ProofreadHotkeyTest, NoSessionWhenTheSettingsAppCannotStart) {
   azookey::tsf::testing::SetSettingsLauncherForTest(L"C:\\azooKey\\azookey_settings.exe",
                                                     [](SHELLEXECUTEINFOW*) -> BOOL {

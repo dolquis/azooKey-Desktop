@@ -156,7 +156,8 @@ winrt::fire_and_forget ProofreadPane::Check() {
   }
 
   // The session's document keeps the privacy the TIP read; edited or pasted text is the user's.
-  const bool from_session = session_ && session_document_ && std::wstring(text) == session_text_;
+  const bool from_session =
+      session_ && session_document_ && std::wstring(text) == session_input_text_;
   const auto request =
       from_session ? MakeSessionProofreadRequest(*session_document_) : MakeProofreadRequest(utf8);
   const auto dispatcher = dispatcher_;
@@ -190,7 +191,8 @@ winrt::fire_and_forget ProofreadPane::Check() {
           after.GetString(winrt::to_hstring(ProofreadErrorResource(response.error.value_or("")))));
       co_return;
     }
-    checked_text_ = std::wstring(text);
+    // Offsets of the findings refer to the text that was sent.
+    checked_text_ = from_session ? session_text_ : std::wstring(text);
     checked_session_text_ = from_session;
     if (response.findings.empty()) {
       results_.Children().Append(PlainText(after.GetString(L"Proofread_NoFindings")));
@@ -226,12 +228,13 @@ winrt::fire_and_forget ProofreadPane::Check() {
           if (!pane) return;
           // Ranges can overlap; selecting one never changes the others. The text must still be the
           // one that was checked, or the offsets point at something else.
-          if (std::wstring(pane->input_.Text()) != pane->checked_text_) return;
-          if (pane->checked_session_text_ && pane->session_ &&
-              pane->checked_text_ == pane->session_text_) {
-            pane->SelectInApplication(start, length);
+          if (pane->checked_session_text_) {
+            if (pane->session_ && pane->checked_text_ == pane->session_text_ &&
+                std::wstring(pane->input_.Text()) == pane->session_input_text_)
+              pane->SelectInApplication(start, length);
             return;
           }
+          if (std::wstring(pane->input_.Text()) != pane->checked_text_) return;
           pane->input_.Focus(xaml::FocusState::Programmatic);
           pane->input_.Select(static_cast<int32_t>(start), static_cast<int32_t>(length));
         });
@@ -249,6 +252,7 @@ void ProofreadPane::CloseSession() {
   session_.reset();
   session_document_.reset();
   session_text_.clear();
+  session_input_text_.clear();
   checked_session_text_ = false;
 }
 
@@ -287,6 +291,7 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
     results_.Children().Clear();
     checked_text_.clear();
     input_.Text(winrt::hstring(session_text_));
+    session_input_text_ = std::wstring(input_.Text());
     ShowStatus(controls::InfoBarSeverity::Informational, message, L"Proofread_SessionTitle");
   } catch (...) {
     RecoverFromFailure();

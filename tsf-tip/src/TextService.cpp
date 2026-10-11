@@ -3288,6 +3288,9 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
       document->Release();
     }
   }
+  // The document may already be off its manager when OnUninitDocumentMgr runs.
+  if (pic && proofread_context_ && SameComIdentity(pic, proofread_context_.Get()))
+    EndProofreadSession();
   if (pic && SameComIdentity(pic, reconversion_cache_context_)) {
     ClearReconversionState();
     reconversion_cache_context_->Release();
@@ -6627,6 +6630,9 @@ class ProofreadSelectSession final : public ITfEditSession {
 
   ipc::proofread::SelectResult Apply(TfEditCookie cookie) {
     using ipc::proofread::SelectResult;
+    // A queued session may run after the session was replaced or a reading started.
+    if (owner_->proofread_generation_ != generation_) return SelectResult::ContextGone;
+    if (owner_->composition_ || !owner_->preedit_kana_.empty()) return SelectResult::Failed;
     Microsoft::WRL::ComPtr<ITfRange> reader;
     if (FAILED(range_->Clone(&reader)) || !reader) return SelectResult::ContextGone;
     // One code unit past the window tells a longer text from the checked one.
@@ -6710,9 +6716,15 @@ void TextService::StartProofreadSession(ITfContext* context) {
   if (g_proofread_idle_timeout_for_test) options.idle_timeout = *g_proofread_idle_timeout_for_test;
 #endif
   auto server = std::make_unique<ProofreadSessionServer>();
-  if (!server->Start(*token, ipc::proofread::BuildDocumentMessage(message),
-                     {this, &TextService::OnProofreadSelect, &TextService::OnProofreadEnd},
-                     options)) {
+  const bool started =
+      server->Start(*token, ipc::proofread::BuildDocumentMessage(message),
+                    {this, &TextService::OnProofreadSelect, &TextService::OnProofreadEnd}, options);
+  // Only the server keeps the text, until it is sent.
+  std::fill(message.text.begin(), message.text.end(), '\0');
+  const auto length = capture.document.text.size();
+  const auto hash = ProofreadTextHash(capture.document.text);
+  std::fill(capture.document.text.begin(), capture.document.text.end(), L'\0');
+  if (!started) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_start_failed");
     return;
   }
@@ -6725,8 +6737,8 @@ void TextService::StartProofreadSession(ITfContext* context) {
   if (message.status == ipc::proofread::DocumentStatus::Captured) {
     proofread_context_ = context;
     proofread_range_ = std::move(capture.document.range);
-    proofread_hash_ = ProofreadTextHash(capture.document.text);
-    proofread_length_ = capture.document.text.size();
+    proofread_hash_ = hash;
+    proofread_length_ = length;
   }
 }
 

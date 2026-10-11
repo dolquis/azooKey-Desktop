@@ -6,6 +6,7 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -566,6 +567,180 @@ bool HasMigrationArtifact(const std::filesystem::path& root) {
   }
   return false;
 }
+
+class ScopedUserDictDirectory {
+ public:
+  ScopedUserDictDirectory() {
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = std::filesystem::temp_directory_path() /
+              ("azookey_userdict_migration_" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+               std::to_string(attempt));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique userdict test directory");
+  }
+
+  ~ScopedUserDictDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedUserDictDirectory(const ScopedUserDictDirectory&) = delete;
+  ScopedUserDictDirectory& operator=(const ScopedUserDictDirectory&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+};
+
+class UserDictCliMigrationTest
+    : public ::testing::TestWithParam<azookey::host::UserDictCliCommand> {
+ protected:
+  void SetUp() override {
+    path_ = directory_.path() / "user_dict.json";
+    import_path_ = directory_.path() / "import.tsv";
+    std::ofstream input(import_path_, std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    input << "b\tB\t\t\t\n";
+  }
+
+  azookey::host::UserDictCliResult Run(bool dry_run) {
+    using azookey::host::UserDictCliCommand;
+    std::vector<std::string> args;
+    if (GetParam() == UserDictCliCommand::Import) {
+      args = {"import", azookey::core::PathToUtf8(import_path_)};
+    } else if (GetParam() == UserDictCliCommand::Remove) {
+      args = {"remove", "--reading", "a", "--surface", "A"};
+    } else {
+      args = {"add", "--reading", "b", "--surface", "B"};
+    }
+    args.push_back(dry_run ? "--dry-run" : "--offline");
+    std::string error;
+    auto options = azookey::host::ParseUserDictCliArgs(args, &error);
+    if (!options) {
+      ADD_FAILURE() << error;
+      azookey::host::UserDictCliResult result;
+      result.exit_code = 2;
+      return result;
+    }
+    auto run_options = DirectRunOptions(path_);
+    // A dry-run must select direct read-only mode even with Host IPC preferred.
+    run_options.prefer_pipe = true;
+    run_options.pipe_name = UniquePipeName("azookey-userdict-migration-test");
+    return azookey::host::RunUserDictCli(*options, run_options);
+  }
+
+  void WriteDictionary(const std::string& contents) {
+    std::ofstream output(path_, std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << contents;
+  }
+
+  ScopedUserDictDirectory directory_;
+  std::filesystem::path path_;
+  std::filesystem::path import_path_;
+};
+
+TEST_P(UserDictCliMigrationTest, DryRunReadsPlaintextWithoutMigration) {
+  const std::string plaintext = R"({"entries":[{"word":"A","ruby":"a"}]})";
+  WriteDictionary(plaintext);
+
+  const auto result = Run(true);
+  ASSERT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto report = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(report.has_value());
+  EXPECT_TRUE(report->GetBool("dry_run").value_or(false));
+  if (GetParam() == azookey::host::UserDictCliCommand::Import) {
+    EXPECT_EQ(report->GetUInt("imported"), 1u);
+    EXPECT_EQ(report->GetUInt("skipped"), 0u);
+  }
+  EXPECT_EQ(ReadAll(path_), plaintext);
+  EXPECT_FALSE(HasMigrationArtifact(directory_.path()));
+  EXPECT_EQ(ReadAll(import_path_), "b\tB\t\t\t\n");
+}
+
+TEST_P(UserDictCliMigrationTest, DryRunDoesNotMigrateZeroByteFile) {
+  WriteDictionary("");
+
+  const auto result = Run(true);
+  if (GetParam() == azookey::host::UserDictCliCommand::Remove) {
+    EXPECT_EQ(result.exit_code, 1);
+    EXPECT_EQ(result.error, "entry not found");
+  } else {
+    EXPECT_EQ(result.exit_code, 0) << result.error;
+  }
+  EXPECT_TRUE(std::filesystem::exists(path_));
+  EXPECT_TRUE(ReadAll(path_).empty());
+  EXPECT_FALSE(HasMigrationArtifact(directory_.path()));
+}
+
+TEST_P(UserDictCliMigrationTest, DryRunLeavesCorruptFileInPlace) {
+  WriteDictionary("not valid json");
+
+  const auto result = Run(true);
+  EXPECT_EQ(result.exit_code, 1);
+  EXPECT_EQ(result.error, "failed to load user dictionary");
+  EXPECT_TRUE(std::filesystem::exists(path_));
+  EXPECT_EQ(ReadAll(path_), "not valid json");
+  EXPECT_FALSE(HasMigrationArtifact(directory_.path()));
+}
+
+TEST_P(UserDictCliMigrationTest, WriterMigratesPlaintextAndPreservesBackup) {
+  const std::string plaintext = R"({"entries":[{"word":"A","ruby":"a"}]})";
+  WriteDictionary(plaintext);
+
+  const auto result = Run(false);
+  ASSERT_EQ(result.exit_code, 0) << result.error;
+  EXPECT_FALSE(std::filesystem::exists(path_));
+  auto backup = path_;
+  backup += ".bak";
+  ASSERT_TRUE(std::filesystem::exists(backup));
+  EXPECT_EQ(ReadAll(backup), plaintext);
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path_)));
+  azookey::learning::UserDictionary saved(path_, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(saved.LoadReadOnly());
+  if (GetParam() == azookey::host::UserDictCliCommand::Remove) {
+    EXPECT_TRUE(saved.Lookup("a").empty());
+    EXPECT_EQ(saved.Size(), 0u);
+  } else {
+    const auto old_entries = saved.Lookup("a");
+    ASSERT_EQ(old_entries.size(), 1u);
+    EXPECT_EQ(old_entries.front().word, "A");
+    const auto new_entries = saved.Lookup("b");
+    ASSERT_EQ(new_entries.size(), 1u);
+    EXPECT_EQ(new_entries.front().word, "B");
+    EXPECT_EQ(saved.Size(), 2u);
+  }
+}
+
+TEST_P(UserDictCliMigrationTest, WriterQuarantinesCorruptFileAndFails) {
+  WriteDictionary("not valid json");
+
+  const auto result = Run(false);
+  EXPECT_EQ(result.exit_code, 1);
+  EXPECT_EQ(result.error, "failed to load user dictionary");
+  EXPECT_FALSE(std::filesystem::exists(path_));
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path_)));
+  auto backup = path_;
+  backup += ".bak";
+  EXPECT_FALSE(std::filesystem::exists(backup));
+  size_t quarantined = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(directory_.path())) {
+    if (entry.path().filename().string().find("user_dict.json.corrupt.") == 0) {
+      ++quarantined;
+      EXPECT_EQ(ReadAll(entry.path()), "not valid json");
+    }
+  }
+  EXPECT_EQ(quarantined, 1u);
+}
+
+INSTANTIATE_TEST_SUITE_P(DirectMutations, UserDictCliMigrationTest,
+                         ::testing::Values(azookey::host::UserDictCliCommand::Add,
+                                           azookey::host::UserDictCliCommand::Remove,
+                                           azookey::host::UserDictCliCommand::Import));
 
 }  // namespace
 

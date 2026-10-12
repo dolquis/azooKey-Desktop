@@ -3995,3 +3995,76 @@ TEST(InferenceEngineTest, UserLearningScorerRanksOnlyWhenSwitchedOn) {
   ASSERT_FALSE(scored.empty());
   EXPECT_EQ(scored.front().surface, "候補1");
 }
+
+// DEV-1584 (inline-english-candidate-spec section 4.8): a confirmed M36 word
+// that is an English word joins the English dictionary.
+class EngineConfirmedEnglishWordTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    tsv_ = std::filesystem::path(temp_.File("english-words.tsv"));
+    std::ofstream(tsv_, std::ios::binary) << "apple\t50\n";
+    cfg_.english.dictionary_enabled = true;
+    cfg_.english.dictionary_path = tsv_.string();
+    engine_ = MakeEngine(store_, cfg_);
+    engine_->SetAutoWordStore(&auto_words_);
+  }
+
+  std::vector<azookey::host::EnglishDictionaryEntry> Lookup(const std::string& key) {
+    // A fresh store reads what reached the files.
+    return azookey::host::EnglishDictionaryStore(tsv_).Lookup(key);
+  }
+
+  ScopedTempDirectory temp_;
+  std::filesystem::path tsv_;
+  azookey::learning::LearningStore store_{temp_.File("learning.tsv"),
+                                          &azookey::learning::test::Crypto()};
+  azookey::learning::AutoWordStore auto_words_{temp_.File("auto_words.tsv"),
+                                               &azookey::learning::test::Crypto()};
+  azookey::host::EngineConfig cfg_;
+  std::unique_ptr<azookey::host::InferenceEngine> engine_;
+};
+
+TEST_F(EngineConfirmedEnglishWordTest, OnlyNewAsciiLetterWordsAreUpsertedWithTheLowestFrequency) {
+  engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
+  const auto kotlin = Lookup("kotlin");
+  ASSERT_EQ(kotlin.size(), 1u);
+  EXPECT_EQ(kotlin[0].surface, "Kotlin");
+  EXPECT_EQ(kotlin[0].frequency, 1u);
+  EXPECT_TRUE(
+      azookey::host::ReadEnglishJournal(azookey::host::EnglishDictionaryPaths::From(tsv_).journal)
+          .has_value());
+
+  // Already in the dictionary: its frequency stays.
+  engine_->RegisterConfirmedEnglishWord("apple", "test");
+  const auto apple = Lookup("apple");
+  ASSERT_EQ(apple.size(), 1u);
+  EXPECT_EQ(apple[0].frequency, 50u);
+
+  // Not ASCII letters, or shorter than inlineEnglishMinLength.
+  engine_->RegisterConfirmedEnglishWord("C3PO", "test");
+  engine_->RegisterConfirmedEnglishWord("Wi-Fi", "test");
+  engine_->RegisterConfirmedEnglishWord("X", "test");
+  engine_->RegisterConfirmedEnglishWord("アズーキー", "test");
+  EXPECT_TRUE(Lookup("c3po").empty());
+  EXPECT_TRUE(Lookup("wi-fi").empty());
+  EXPECT_TRUE(Lookup("x").empty());
+}
+
+TEST_F(EngineConfirmedEnglishWordTest, NothingIsWrittenWhileTheDictionaryIsOff) {
+  auto config = engine_->config();
+  config.english.dictionary_enabled = false;
+  engine_->ApplyConfig(config);
+  engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
+  EXPECT_TRUE(Lookup("kotlin").empty());
+}
+
+TEST_F(EngineConfirmedEnglishWordTest, TrendingAutoPromotionUpsertsTheNewlyConfirmedWords) {
+  const std::vector<azookey::learning::AutoWord> words{
+      {"Kotlin", "ことりん"}, {"新語", "しんご"}, {"Swift", "すいふと"}};
+  // Without auto_promote the words stay pending and nothing is upserted.
+  ASSERT_TRUE(engine_->IngestTrendingWords(words, kNowBase, false));
+  EXPECT_TRUE(Lookup("kotlin").empty());
+  ASSERT_TRUE(engine_->IngestTrendingWords(words, kNowBase + 1, true));
+  EXPECT_EQ(Lookup("kotlin").size(), 1u);
+  EXPECT_EQ(Lookup("swift").size(), 1u);
+}

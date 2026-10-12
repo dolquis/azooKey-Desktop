@@ -230,9 +230,28 @@ InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(
   if (!auto_word_store_ || auto_word_store_->save_blocked()) {
     return TrendingIngestOutcome::SaveFailed;
   }
+  // DEV-1584: which words of the batch this ingest promotes to Confirmed. Only
+  // ASCII words can enter the English dictionary; the rest are not tracked.
+  const auto is_confirmed = [&](const learning::AutoWord& word) {
+    const auto confirmed = auto_word_store_->LookupConfirmed(word.reading);
+    return std::any_of(confirmed.begin(), confirmed.end(),
+                       [&](const auto& c) { return c.surface == word.surface; });
+  };
+  std::vector<const learning::AutoWord*> unconfirmed;
+  if (auto_promote) {
+    for (const auto& word : words) {
+      const bool ascii = !word.surface.empty() &&
+                         std::all_of(word.surface.begin(), word.surface.end(),
+                                     [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+      if (ascii && !is_confirmed(word)) unconfirmed.push_back(&word);
+    }
+  }
   auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
-  return auto_word_store_->Save() ? TrendingIngestOutcome::Saved
-                                  : TrendingIngestOutcome::SaveFailed;
+  if (!auto_word_store_->Save()) return TrendingIngestOutcome::SaveFailed;
+  for (const auto* word : unconfirmed) {
+    if (is_confirmed(*word)) RegisterConfirmedEnglishWord(word->surface, "trending");
+  }
+  return TrendingIngestOutcome::Saved;
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {

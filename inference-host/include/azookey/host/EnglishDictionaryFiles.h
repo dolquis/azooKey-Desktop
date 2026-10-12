@@ -13,9 +13,10 @@
 namespace azookey::host {
 
 // M60 English dictionary files (docs/inline-english-candidate-spec.md
-// sections 4.5 to 4.7): the compiled base english-words.bin ("AZED"), the
-// overlay english-words.delta.bin ("AZEO") and the writer lock
-// english-words.lock. All integers are little-endian.
+// sections 4.5 to 4.8): the compiled base english-words.bin ("AZED"), the
+// overlay english-words.delta.bin ("AZEO"), the added-words journal
+// english-words.added.bin ("AZEJ") and the writer lock english-words.lock.
+// All integers are little-endian.
 
 inline constexpr uint32_t kEnglishBaseVersion = 1;
 inline constexpr uint32_t kEnglishOverlayVersion = 1;
@@ -24,6 +25,10 @@ inline constexpr size_t kEnglishOverlayHeaderSize = 16;
 // A base loads only up to this many entries: the 200,000 a TSV may hold plus
 // as many added by compaction. Compaction stops before it.
 inline constexpr uint32_t kMaxEnglishBaseEntries = 400'000;
+// Section 4.8: the journal holds at most this many distinct (key, surface)
+// entries, so a TSV of 200,000 plus the journal stays under the base bound.
+inline constexpr uint32_t kMaxEnglishJournalEntries = 10'000;
+inline constexpr uint32_t kEnglishJournalVersion = 1;
 
 struct EnglishBaseHeader {
   uint32_t version{};
@@ -113,8 +118,10 @@ struct EnglishDictionaryPaths {
   std::filesystem::path tsv;  // Empty when the configured path is the .bin itself.
   std::filesystem::path base;
   std::filesystem::path overlay;
+  std::filesystem::path journal;
   std::filesystem::path lock;
-  // english-words.tsv -> english-words.bin / .delta.bin / .lock (4.5, 4.6, 4.7).
+  // english-words.tsv -> english-words.bin / .delta.bin / .added.bin / .lock
+  // (4.5 to 4.8).
   static EnglishDictionaryPaths From(const std::filesystem::path& configured);
 };
 
@@ -127,6 +134,9 @@ enum class EnglishWriteStep {
   ReinitFingerprintWritten,  // base_fingerprint names the current base.
   BaseStamped,               // A new base is written and stamped, not yet renamed.
   CompactBaseReplaced,       // The merged base is live; the overlay is untouched.
+  JournalFrameWritten,       // A journal frame is durable; its op_count is not yet raised.
+  JournalCountPublished,     // The journal's op_count now covers the frame.
+  JournalRewriteWritten,     // A deduplicated journal is written, not yet renamed.
 };
 // Test seam: called after each step; false stops the writer there, as a
 // crash at that point would.
@@ -162,6 +172,34 @@ class EnglishDictionaryFileLock {
   intptr_t handle_{-1};
 };
 
+// Section 4.8: the journal of runtime upserts and deletes that a TSV
+// recompile replays. Same frames as the overlay, under a 16-byte header with
+// magic "AZEJ" and no base fingerprint.
+struct EnglishJournalContents {
+  uint32_t op_count{};
+  std::vector<EnglishOverlayOp> ops;  // Arrival order; a later op wins.
+};
+// The first op_count frames. nullopt when missing, not a journal, or shorter
+// than op_count frames.
+std::optional<EnglishJournalContents> ReadEnglishJournal(const std::filesystem::path& path);
+
+// Section 4.8 merge for a TSV recompile. Per (key, surface), the latest
+// journal op decides: a delete hides the TSV record, an upsert adds the entry
+// only when the TSV lacks it (the TSV's frequency and flags win). At most
+// kMaxEnglishJournalEntries entries are applied.
+std::vector<EnglishWordRecord> ApplyEnglishJournal(std::vector<EnglishWordRecord> records,
+                                                   const std::vector<EnglishOverlayOp>& ops);
+
+enum class EnglishJournalAppendResult {
+  Appended,
+  // The journal was unreadable; it was moved to .corrupt.<stamp> and the op
+  // starts a new one.
+  Reset,
+  // The op would add an entry past kMaxEnglishJournalEntries; not written.
+  Full,
+  Failed,
+};
+
 // Writers. Each expects the caller to hold EnglishDictionaryFileLock.
 //
 // Appends op after checking the overlay against base_content_hash: a missing,
@@ -188,5 +226,14 @@ bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths,
 bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
                       std::optional<std::filesystem::file_time_type> tsv_time = std::nullopt,
                       const EnglishWriteHook& hook = {});
+// Appends op to the journal: frame, flush, then op_count + 1, flush, as the
+// overlay does; a torn frame past op_count is truncated first. When op_count
+// outgrows twice the distinct entries (and kMinEnglishJournalRewriteOps), the
+// journal is instead rewritten with the latest op per entry and replaced
+// atomically.
+EnglishJournalAppendResult AppendEnglishJournalOp(const std::filesystem::path& journal,
+                                                  const EnglishOverlayOp& op,
+                                                  const EnglishWriteHook& hook = {});
+inline constexpr uint32_t kMinEnglishJournalRewriteOps = 256;
 
 }  // namespace azookey::host

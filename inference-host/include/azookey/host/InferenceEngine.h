@@ -242,6 +242,14 @@ class InferenceEngine {
   // English store is set.
   bool CommitEnglishObservation(const std::string& raw_romaji, const std::string& surface,
                                 uint64_t now_epoch_sec, const std::string& observation_id = {});
+  // DEV-1584 (inline-english-candidate-spec section 4.8): an M36 word that has
+  // just become Confirmed enters the English dictionary when inlineEnglishDictionary
+  // is on and the surface is ASCII letters only, at least inlineEnglishMinLength
+  // long, and not already there. source names the path in the log
+  // ("new_word_resolve", "mining" or "trending"). It takes state_mutex_
+  // briefly, and the upsert may wait for the dictionary's writer lock; call it
+  // without holding state_mutex_ or converter_call_mutex_.
+  void RegisterConfirmedEnglishWord(const std::string& surface, std::string_view source);
   struct DictionaryLoadResult {
     std::string name;
     bool loaded;

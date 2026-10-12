@@ -29,6 +29,24 @@ bool SameEntry(const EnglishOverlayOp& a, const EnglishOverlayOp& b) {
 
 }  // namespace
 
+const char* EnglishWriteResultName(EnglishWriteResult result) {
+  switch (result) {
+    case EnglishWriteResult::Persisted:
+      return "persisted";
+    case EnglishWriteResult::JournalReset:
+      return "journal_reset";
+    case EnglishWriteResult::JournalFull:
+      return "journal_full";
+    case EnglishWriteResult::JournalFailed:
+      return "journal_failed";
+    case EnglishWriteResult::MemoryOnly:
+      return "memory_only";
+    case EnglishWriteResult::Dropped:
+      return "dropped";
+  }
+  return "dropped";
+}
+
 EnglishDictionaryStore::EnglishDictionaryStore(const fs::path& configured, LoadListener listener)
     : paths_(EnglishDictionaryPaths::From(configured)), listener_(std::move(listener)) {}
 
@@ -169,6 +187,11 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
   const auto text = ReadEnglishTsvFile(paths_.tsv);
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
+  // Section 4.8: runtime additions and deletes outlive the TSV edit. A missing
+  // or unreadable journal adds nothing; the next writer moves the latter aside.
+  if (auto journal = ReadEnglishJournal(paths_.journal)) {
+    records = ApplyEnglishJournal(std::move(records), journal->ops);
+  }
   // The .bin is a cache: without the lock or write access (a read-only TSV
   // folder) the parsed TSV is used from memory (section 4.5). The lock is
   // tried once, never waited for: this runs for a reader, or for a writer
@@ -206,8 +229,9 @@ std::vector<EnglishDictionaryEntry> EnglishDictionaryStore::Lookup(std::string_v
   });
 }
 
-bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
+EnglishWriteResult EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
   bool persisted = false;
+  auto result = EnglishWriteResult::MemoryOnly;
   try {
     // The base is settled under the writer lock, so a compaction by another
     // host while this one waited is attached to rather than missed.
@@ -218,7 +242,7 @@ bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
     const auto sample = TakeSample();
     if (!IsCurrent(sample) || (lock && base_in_memory_ && !base_write_failed_))
       RebuildLocked(sample, lock.has_value());
-    if (!base_) return false;
+    if (!base_) return EnglishWriteResult::Dropped;
     const auto hash = base_->header().content_hash;
     // Only attach to the base on disk; an in-memory base (the .bin could not
     // be written or stamped) keeps its ops in memory.
@@ -226,6 +250,24 @@ bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
         lock && !base_in_memory_ ? ReadEnglishBaseHeader(paths_.base) : std::nullopt;
     if (header && header->content_hash == hash) {
       persisted = AppendEnglishOverlayOp(paths_.overlay, hash, op, write_hook_);
+    }
+    if (persisted) {
+      // Section 4.8: after the overlay, under the same lock. A crash between
+      // the two loses the op only at the next TSV recompile.
+      switch (AppendEnglishJournalOp(paths_.journal, op, write_hook_)) {
+        case EnglishJournalAppendResult::Appended:
+          result = EnglishWriteResult::Persisted;
+          break;
+        case EnglishJournalAppendResult::Reset:
+          result = EnglishWriteResult::JournalReset;
+          break;
+        case EnglishJournalAppendResult::Full:
+          result = EnglishWriteResult::JournalFull;
+          break;
+        case EnglishJournalAppendResult::Failed:
+          result = EnglishWriteResult::JournalFailed;
+          break;
+      }
     }
     // Memory ops replay after the file ops, so an older memory op on the same
     // entry would override this newer persisted one (section 4.6: the later
@@ -249,25 +291,30 @@ bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
       try {
         memory_ops_.push_back(op);
       } catch (const std::exception&) {
+        result = EnglishWriteResult::Dropped;
       }
+    } else if (result == EnglishWriteResult::MemoryOnly) {
+      // In the overlay, but the journal append threw before it finished.
+      result = EnglishWriteResult::JournalFailed;
     }
   }
   Invalidate();
-  return persisted;
+  return result;
 }
 
-bool EnglishDictionaryStore::Upsert(std::string_view surface, uint32_t frequency, uint8_t flags) {
-  if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return false;
+EnglishWriteOutcome EnglishDictionaryStore::Upsert(std::string_view surface, uint32_t frequency,
+                                                   uint8_t flags) {
+  if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return {};
   std::lock_guard lock(update_mutex_);
-  return AppendLocked({EnglishOverlayOpKind::Upsert, flags, EnglishLookupKey(surface),
-                       std::string(surface), frequency});
+  return {AppendLocked({EnglishOverlayOpKind::Upsert, flags, EnglishLookupKey(surface),
+                        std::string(surface), frequency})};
 }
 
-bool EnglishDictionaryStore::Remove(std::string_view surface) {
-  if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return false;
+EnglishWriteOutcome EnglishDictionaryStore::Remove(std::string_view surface) {
+  if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface)) return {};
   std::lock_guard lock(update_mutex_);
-  return AppendLocked(
-      {EnglishOverlayOpKind::Delete, 0, EnglishLookupKey(surface), std::string(surface), 0});
+  return {AppendLocked(
+      {EnglishOverlayOpKind::Delete, 0, EnglishLookupKey(surface), std::string(surface), 0})};
 }
 
 bool EnglishDictionaryStore::Compact() {

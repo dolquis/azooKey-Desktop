@@ -37,6 +37,8 @@ namespace fs = std::filesystem;
 
 constexpr char kBaseMagic[4] = {'A', 'Z', 'E', 'D'};
 constexpr char kOverlayMagic[4] = {'A', 'Z', 'E', 'O'};
+constexpr char kJournalMagic[4] = {'A', 'Z', 'E', 'J'};
+constexpr size_t kJournalHeaderSize = 16;
 constexpr size_t kRecordSize = 20;
 constexpr size_t kFrameHeaderSize = 10;
 constexpr uint32_t kSortedFlag = 1;
@@ -488,6 +490,8 @@ EnglishDictionaryPaths EnglishDictionaryPaths::From(const fs::path& configured) 
   const auto stem = paths.base.stem();
   paths.overlay = paths.base.parent_path() / stem;
   paths.overlay += ".delta.bin";
+  paths.journal = paths.base.parent_path() / stem;
+  paths.journal += ".added.bin";
   paths.lock = paths.base.parent_path() / stem;
   paths.lock += ".lock";
   return paths;
@@ -594,10 +598,15 @@ bool ReinitEnglishOverlay(const fs::path& overlay, uint32_t base_content_hash,
   return file && Reinit(*file, base_content_hash, hook);
 }
 
-bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
-                      std::optional<fs::file_time_type> tsv_time, const EnglishWriteHook& hook) {
+namespace {
+
+// Temporary file, flush, optional mtime stamp read back, then MoveFileEx
+// (rename keeps the mtime). The target is untouched when any step fails.
+bool ReplaceFileAtomically(const fs::path& target, const std::string& bytes,
+                           std::optional<fs::file_time_type> tsv_time, const EnglishWriteHook& hook,
+                           EnglishWriteStep written_step) {
   std::error_code ec;
-  if (!paths.base.parent_path().empty()) fs::create_directories(paths.base.parent_path(), ec);
+  if (!target.parent_path().empty()) fs::create_directories(target.parent_path(), ec);
   // Unique per write across threads and processes.
   static std::atomic<uint64_t> sequence{0};
 #ifdef _WIN32
@@ -605,7 +614,7 @@ bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& by
 #else
   const unsigned long pid = static_cast<unsigned long>(getpid());
 #endif
-  auto temp = paths.base;
+  auto temp = target;
   temp += ".tmp." + std::to_string(pid) + "." + std::to_string(sequence.fetch_add(1));
   const auto discard = [&] {
     std::error_code ignored;
@@ -626,13 +635,13 @@ bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& by
     const auto stamped = fs::last_write_time(temp, ec);
     if (ec || stamped != *tsv_time) return discard();
   }
-  if (!Step(hook, EnglishWriteStep::BaseStamped)) return discard();
+  if (!Step(hook, written_step)) return discard();
 #ifdef _WIN32
   // A reader's brief header read or another host's handle can make the
   // replace fail for a moment; retry within the transient budget.
   const DWORD error = learning::detail::RetryTransientFileOperation(
       [&] {
-        return MoveFileExW(temp.c_str(), paths.base.c_str(),
+        return MoveFileExW(temp.c_str(), target.c_str(),
                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
                    ? ERROR_SUCCESS
                    : GetLastError();
@@ -640,9 +649,9 @@ bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& by
       learning::kTransientFileRetryBudget, true);
   if (error != ERROR_SUCCESS) return discard();
 #else
-  fs::rename(temp, paths.base, ec);
+  fs::rename(temp, target, ec);
   if (ec) return discard();
-  if (const auto dir = paths.base.parent_path(); !dir.empty()) {
+  if (const auto dir = target.parent_path(); !dir.empty()) {
     const int dir_fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
     if (dir_fd >= 0) {
       fsync(dir_fd);
@@ -651,6 +660,177 @@ bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& by
   }
 #endif
   return true;
+}
+
+}  // namespace
+
+bool WriteEnglishBase(const EnglishDictionaryPaths& paths, const std::string& bytes,
+                      std::optional<fs::file_time_type> tsv_time, const EnglishWriteHook& hook) {
+  return ReplaceFileAtomically(paths.base, bytes, tsv_time, hook, EnglishWriteStep::BaseStamped);
+}
+
+namespace {
+
+std::string EncodeJournal(const std::vector<EnglishOverlayOp>& ops) {
+  std::string bytes(kJournalHeaderSize, '\0');
+  auto* p = reinterpret_cast<uint8_t*>(bytes.data());
+  std::memcpy(p, kJournalMagic, 4);
+  PutU32(p + 4, kEnglishJournalVersion);
+  PutU32(p + 12, static_cast<uint32_t>(ops.size()));
+  for (const auto& op : ops) bytes += EncodeFrame(op);
+  return bytes;
+}
+
+// op_count, or nullopt when the header is not a version 1 journal.
+std::optional<uint32_t> ParseJournalHeader(const uint8_t* p) {
+  if (std::memcmp(p, kJournalMagic, 4) != 0 || GetU32(p + 4) != kEnglishJournalVersion)
+    return std::nullopt;
+  return GetU32(p + 12);
+}
+
+bool SameEntry(const EnglishOverlayOp& a, const EnglishOverlayOp& b) {
+  return a.key == b.key && a.surface == b.surface;
+}
+
+// The latest op per (key, surface), in the order those latest ops arrived.
+std::vector<EnglishOverlayOp> LatestJournalOps(std::vector<EnglishOverlayOp> ops) {
+  std::map<std::pair<std::string, std::string>, size_t> last;
+  for (size_t i = 0; i < ops.size(); ++i) last[{ops[i].key, ops[i].surface}] = i;
+  std::vector<EnglishOverlayOp> out;
+  out.reserve(last.size());
+  for (size_t i = 0; i < ops.size(); ++i) {
+    if (last[{ops[i].key, ops[i].surface}] == i) out.push_back(std::move(ops[i]));
+  }
+  return out;
+}
+
+}  // namespace
+
+std::optional<EnglishJournalContents> ReadEnglishJournal(const fs::path& path) {
+  const auto file = RawFile::Open(path, false);
+  uint8_t head[kJournalHeaderSize];
+  if (!file || !file->ReadAt(0, head, sizeof(head))) return std::nullopt;
+  const auto count = ParseJournalHeader(head);
+  if (!count) return std::nullopt;
+  // op_count first, then only that many frames, as for the overlay (4.7).
+  const auto rest = file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes);
+  if (!rest) return std::nullopt;
+  EnglishJournalContents contents;
+  contents.op_count = *count;
+  if (!WalkFrames(*rest, *count, &contents.ops)) return std::nullopt;
+  return contents;
+}
+
+std::vector<EnglishWordRecord> ApplyEnglishJournal(std::vector<EnglishWordRecord> records,
+                                                   const std::vector<EnglishOverlayOp>& ops) {
+  auto latest = LatestJournalOps(ops);
+  // A journal written by this code never holds more; a hand-made one is cut
+  // so that the base stays within kMaxEnglishBaseEntries.
+  if (latest.size() > kMaxEnglishJournalEntries) latest.resize(kMaxEnglishJournalEntries);
+  std::map<std::pair<std::string, std::string>, size_t> index;
+  for (size_t i = 0; i < records.size(); ++i) index[{records[i].key, records[i].surface}] = i;
+  std::vector<bool> erased(records.size(), false);
+  for (auto& op : latest) {
+    const auto found = index.find({op.key, op.surface});
+    if (op.kind == EnglishOverlayOpKind::Delete) {
+      // A runtime delete keeps hiding the word even when the TSV has it again.
+      if (found != index.end()) erased[found->second] = true;
+      continue;
+    }
+    // The TSV's own frequency and flags win over a runtime upsert.
+    if (found != index.end() || op.surface.empty()) continue;
+    index[{op.key, op.surface}] = records.size();
+    records.push_back({std::move(op.key), std::move(op.surface), op.frequency, op.flags});
+    erased.push_back(false);
+  }
+  std::vector<EnglishWordRecord> kept;
+  kept.reserve(records.size());
+  for (size_t i = 0; i < records.size(); ++i) {
+    if (!erased[i]) kept.push_back(std::move(records[i]));
+  }
+  return kept;
+}
+
+EnglishJournalAppendResult AppendEnglishJournalOp(const fs::path& journal,
+                                                  const EnglishOverlayOp& op,
+                                                  const EnglishWriteHook& hook) {
+  using Result = EnglishJournalAppendResult;
+  if (op.key.empty() || op.key.size() > 0xFFFF || op.surface.size() > 0xFFFF) return Result::Failed;
+  std::vector<EnglishOverlayOp> ops;
+  uint64_t end = kJournalHeaderSize;
+  bool fresh = false;
+  bool corrupt = false;
+  {
+    // A missing journal (or one this process cannot open) starts afresh; the
+    // write below then fails when it cannot be created either.
+    const auto file = RawFile::Open(journal, false);
+    const auto size = file ? file->Size() : std::nullopt;
+    if (!file || size == uint64_t{0}) {
+      fresh = true;
+    } else if (!size) {
+      return Result::Failed;
+    } else if (*size > kJournalHeaderSize + kMaxOverlayBytes) {
+      // Not corrupt, only too large to read: moving it aside would lose it.
+      return Result::Failed;
+    } else {
+      uint8_t head[kJournalHeaderSize];
+      const auto count = *size >= kJournalHeaderSize && file->ReadAt(0, head, sizeof(head))
+                             ? ParseJournalHeader(head)
+                             : std::nullopt;
+      const auto rest = count ? file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes) : std::nullopt;
+      const auto walked = rest ? WalkFrames(*rest, *count, &ops) : std::nullopt;
+      if (walked) {
+        end = kJournalHeaderSize + *walked;
+      } else {
+        corrupt = true;
+      }
+    }
+  }
+  if (corrupt) {
+    // Unlike a stale overlay, the journal is the only copy of its ops past a
+    // TSV recompile: keep the unreadable file for inspection and start anew.
+    const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+    auto aside = journal;
+    aside += ".corrupt." + std::to_string(stamp);
+    std::error_code ec;
+    fs::rename(journal, aside, ec);
+    if (ec) return Result::Failed;
+    ops.clear();
+    fresh = true;
+  }
+  auto latest = LatestJournalOps(ops);
+  const bool known =
+      std::any_of(latest.begin(), latest.end(), [&](const auto& m) { return SameEntry(m, op); });
+  if (!known && latest.size() >= kMaxEnglishJournalEntries) return Result::Full;
+  const size_t distinct = latest.size() + (known ? 0 : 1);
+  const Result done = corrupt ? Result::Reset : Result::Appended;
+  if (fresh || ops.size() + 1 > std::max<size_t>(kMinEnglishJournalRewriteOps, 2 * distinct)) {
+    // A new journal, or one grown well past its distinct entries: write the
+    // latest op per entry plus this one and replace the file atomically.
+    latest.erase(std::remove_if(latest.begin(), latest.end(),
+                                [&](const auto& m) { return SameEntry(m, op); }),
+                 latest.end());
+    latest.push_back(op);
+    return ReplaceFileAtomically(journal, EncodeJournal(latest), std::nullopt, hook,
+                                 EnglishWriteStep::JournalRewriteWritten)
+               ? done
+               : Result::Failed;
+  }
+  auto file = RawFile::Open(journal, true);
+  if (!file) return Result::Failed;
+  // Drop a torn frame a crashed writer left past op_count.
+  const auto size = file->Size();
+  if (!size || (*size > end && (!file->Truncate(end) || !file->Flush()))) return Result::Failed;
+  const auto frame = EncodeFrame(op);
+  if (!file->WriteAt(end, frame.data(), frame.size()) || !file->Flush()) return Result::Failed;
+  if (!Step(hook, EnglishWriteStep::JournalFrameWritten)) return Result::Failed;
+  uint8_t count[4];
+  PutU32(count, static_cast<uint32_t>(ops.size() + 1));
+  if (!file->WriteAt(12, count, 4) || !file->Flush()) return Result::Failed;
+  if (!Step(hook, EnglishWriteStep::JournalCountPublished)) return Result::Failed;
+  return done;
 }
 
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const EnglishWriteHook& hook) {

@@ -295,7 +295,7 @@ NASA	8123	acronym
 
 ### 4.5 辞書バイナリ形式（コンパイル済みキャッシュ）
 
-§4.5〜§4.7（`.bin`・差分 overlay・同時実行制御）は、§4.4 の TSV 辞書の後に追加する
+§4.5〜§4.8（`.bin`・差分 overlay・同時実行制御・追加語の journal）は、§4.4 の TSV 辞書の後に追加する
 拡張である。TSV だけでも §4.2〜§4.4 の契約は満たせる。
 
 §4.4 の TSV は**編集可能なソース**、本節の `.bin` は**起動高速化・低メモリのための
@@ -499,19 +499,19 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   **reader は当該 overlay を読み捨てる**（base のみで動作）、**writer は最初の append 前に overlay
   ヘッダを再初期化**してから追記する（§4.7「attach 前の fingerprint 検査」）。これにより
   stale な差分が現 base へ誤適用されず、かつ不一致 overlay へ追記して後で失う事故も防ぐ。
-- TSV を編集・差し替えて base を TSV から作り直すと、実行時に追加して永続化した op（M36 の英単語、
-  ユーザーの追加・削除）は失われる。overlay は fingerprint 不一致で読み捨て・再初期化され、
-  コンパクションで base に取り込んだ op も TSV からの再コンパイルで消える。メモリ内差分
-  （ロック不可・権限なしで永続化しなかった op）は新しい base に重ねて再生され、再起動まで残る。追加語を TSV の
-  再コンパイルをまたいで保つ仕組みは本書の対象外とする（§9）。確定した英単語の再提示は §5 の
-  English 学習チャネルが別ファイルに持つので、TSV の編集では消えない。
+- TSV を編集・差し替えて base を TSV から作り直すと、overlay は fingerprint 不一致で読み捨て・再初期化され、
+  コンパクションで base に取り込んだ op も TSV からの再コンパイルで base からは消える。実行時に追加・削除して
+  overlay へ永続化した op（M36 の英単語、ユーザーの追加・削除）は §4.8 の journal にも書かれ、再コンパイルで
+  TSV に重ねて再生される。メモリ内差分（ロック不可・権限なしで永続化しなかった op）は journal に書かれず、
+  新しい base に重ねて再生されて再起動まで残る。確定した英単語の再提示は §5 の English 学習チャネルが
+  別ファイルに持つので、TSV の編集では消えない。
 - overlay 破損 → 破棄して base のみで動作（差分は最適化であり必須でない）。
 - 書込権限が無い環境では overlay を作らず**メモリ内差分のみ**（再起動で消える）。
 - reader は base を read-only mmap、overlay 反映はメモリ上で COW ポインタ swap。
 
 **連携**:
 
-- **M36-A/B**: 自動取得した英単語（confirmed）を overlay の `upsert` として注入する自然な経路。
+- **M36-A/B**: 確定した英単語を overlay の `upsert` として注入する。対象と条件は §4.8「M36 の確定語の配線」。
 - **M53 辞書層**: 同じ base + overlay + コンパクション方式を共有・統合してよい。
 
 ### 4.7 overlay の同時実行・ロック
@@ -635,6 +635,77 @@ generation 先行永続化」「writer は書込前に fingerprint 不一致 ove
 lock-free + 現 base ヘッダ（パス再読込）で置換を検出し再 mmap + **読み取り後再チェックの seqlock
 リトライ**で compaction 境界跨ぎを排除」により、複数 host でも破損・取りこぼし・部分読み・
 stale 適用を起こさない。
+
+### 4.8 追加語の journal と M36 の確定語
+
+実行時の追加・削除を TSV の再コンパイルをまたいで保つため、overlay とは別に journal を置く。
+overlay とコンパクションの構成（§4.6・§4.7）は変えない。journal はコンパクションで base に混ぜない。
+
+**ファイル**: `english-words.added.bin`（base と同じディレクトリ・同じ stem）。16 B のヘッダの後に、
+§4.6 の overlay と同じ op フレームが到着順に続く。
+
+```text
+ヘッダ（16 B 固定、LE）
+  0  4  magic = 'A','Z','E','J'（azooKey English Journal）
+  4  4  version (uint32) = 1
+  8  4  reserved (uint32) = 0（base に依存しないので fingerprint を持たない）
+  12 4  op_count (uint32)
+```
+
+**書込み**:
+
+- `Upsert` / `Remove` は、`english-words.lock` の下で overlay へ追記できたときだけ、続けて同じ op を
+  journal へ追記する。ロック不可・権限なし・メモリ上の base でメモリ内差分に残した op は journal にも書かない。
+- 追記の順序は overlay と同じ（フレーム → flush → `op_count` + 1 → flush）。`op_count` を超える半端な
+  フレームは次の writer が truncate する。
+- `op_count` が「256 と一意エントリ数の 2 倍の大きい方」を超える追記では、`(lower_key, surface)` ごとに
+  最新の op だけを残した journal を一時ファイルへ書き、`MoveFileEx` で原子置換する。新しい journal も
+  同じ方法で作る。
+- 一意エントリは 10,000 件までとする。新しいエントリを足すと超える op は journal へ書かず、overlay にだけ
+  残す。既にあるエントリの op は書く。TSV の上限 200,000 件と合わせても base の上限 400,000 件（§4.5）を
+  超えない。
+- 読めない journal（magic・version の不一致、`op_count` 分のフレームが無い）は、次の writer が
+  `english-words.added.bin.corrupt.<UNIX ミリ秒>` へ改名して残し、新しい journal を始める。overlay と違い
+  journal は再コンパイル後に op を持つ唯一のファイルなので、再初期化で消さない。64 MiB を超える journal は
+  壊れているとはみなさず、追記を失敗させる。
+
+**再コンパイルでの適用**: TSV から base を作るとき、TSV のレコードに journal を重ねる。
+`(lower_key, surface)` ごとに journal の最新の op が決める。
+
+- delete は、TSV に同じ語があっても隠す。TSV へ語を書き戻しても、実行時に削除した語は隠れたままである。
+- upsert は、TSV に同じ語が無いときだけ足す。TSV にあれば TSV の frequency と flags を使う。
+- 読めない journal は何も足さない。一意エントリが 10,000 件を超える journal は、最初の 10,000 件だけを使う。
+
+実行時の削除を解除するには、同じ語を再び upsert するか、`english-words.added.bin` を削除する
+（削除すると、実行時に追加した語も次の再コンパイルで消える）。
+
+**クラッシュ地点と損失範囲**:
+
+- overlay の `op_count` 更新前: op は残らない（§4.7 と同じ）。
+- overlay 確定後・journal 確定前: op は overlay にあり、次に TSV から再コンパイルするまで有効で、そこで失われる。
+- journal のフレームの途中: `op_count` を超える半端なフレームは読まれず、次の writer が truncate する。
+- journal の書き直しの途中: 一時ファイルを捨て、元の journal が残る。
+
+**対象外**: TSV が無く `.bin` だけを差し替えた（再バンドルした）場合、journal は適用しない（TSV から base を
+作るときだけ適用する）。
+
+**M36 の確定語の配線**:
+
+- 対象は、Host の中で AutoWord（`docs/auto-word-registration-spec.md`）が Confirmed に変わる 3 経路である。
+  `ResolveNewWord` の confirm で状態が変わって保存できたとき、確定観測のマイニングが自動昇格して保存できたとき、
+  トレンド語の取り込み（auto_promote）で Confirmed になって保存できたとき。マイニングは純 ASCII の表層を
+  候補にしない（auto-word-registration-spec §4-3）ので、今の条件ではこの経路から英単語は入らない。
+- 条件は、`inlineEnglishDictionary` が有効で、表層が ASCII 英字だけからなり、`inlineEnglishMinLength`
+  以上の長さであること。キーは `lower(surface)` で、AutoWord のかなの読みは使わない。
+- 辞書（base と overlay）に同じ `(lower_key, surface)` が既にあれば書かない。無ければ frequency 1、
+  flags なしで upsert する。同じキーの辞書語より上に来ない（§4.3）。
+- 確定ごとに 1 回書く。`ResolveNewWord` の応答（`ok` / `changed`）は書込みの結果に左右されない。
+- 書くたびに RuntimeLogger のイベント `english_dictionary_upsert` を 1 件残す。項目は `source`
+  （`new_word_resolve` / `mining` / `trending`）と `result`（`persisted` / `journal_reset` / `journal_full` /
+  `journal_failed` / `memory_only` / `dropped`）で、`persisted` 以外は warning とする。語は記録しない。
+- English 学習チャネル（§5）の確定は対象外とする。§5 が別ファイルに持ち、再提示する。
+- Confirmed から Rejected に戻した語を辞書から外すこと、配線より前に Confirmed になっていた語と
+  `newwords confirm --offline` で確定した語の取り込みは、本節の対象外とする。
 
 ## 5. 確定と学習
 
@@ -878,6 +949,13 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
   `generation`・先頭レコード不変で後方エントリだけ差し替え**て再生成すると base ヘッダの
   `content_hash` が変わり、`overlay.base_fingerprint` と不一致で overlay が破棄されること
   （先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。`content_hash` が base ヘッダから読めること。
+- **追加語の journal** (host テスト): journal の最新の op がエントリを決め、delete が TSV の語を隠し、
+  upsert が TSV の frequency を上書きしないこと。overlay へ追記した op が TSV の再コンパイル後も残り、
+  コンパクションが journal を変えないこと。ロック不可のとき journal を書かないこと。追記の半端な
+  フレームが無視されて回収されること、書き直しが最新の op だけを残し、途中で失敗しても元の journal が
+  残ること、10,000 件で新しいエントリを書かないこと、読めない journal を退避して新しく始めること（§4.8）。
+- **M36 の確定語** (host テスト): `ResolveNewWord` の confirm とトレンド語の auto_promote で ASCII 英字の
+  語が frequency 1 で辞書に入り、reject・既存の語・英字以外・短い語・辞書無効では入らないこと（§4.8）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。`QueryBatchConversion` の
   `english_candidates` の往復と欠落時の既定（§6.6）。
@@ -907,8 +985,6 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
 - **英語スペル補正・補完**: 辞書ゲーティングを超える補正・補完。
 - **アプリ別の英語優先度**: M48（アプリ別入力プロファイル）で、コードエディタ等では
   英単語タグを boost する（`docs/app-profile-spec.md` の候補タグ重みと接続）。
-- **追加語の TSV 再コンパイル越しの保持と M36 配線**: 実行時に追加した英単語を TSV の編集・差し替え
-  後も保つ永続ストアと、M36 の確定語を overlay へ upsert する配線（§4.6「整合・堅牢化」）。
 
 ## 10. 受け入れ条件（M60）
 

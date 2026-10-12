@@ -4716,3 +4716,51 @@ TEST_F(DispatcherTest, ForgettingReachesPairsOnlyInTheLegacyFile) {
   EXPECT_EQ(forgot->error, "save_failed");
   RemoveLearningFiles(learning_path);
 }
+
+// DEV-1584: confirming an English new word adds it to the English dictionary;
+// rejecting one does not, and the reply does not depend on the dictionary.
+TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_english_m36"));
+  RemovePathNoThrow(dir);
+  std::filesystem::create_directories(dir);
+  const auto tsv = dir / "english-words.tsv";
+  std::ofstream(tsv, std::ios::binary) << "apple\t50\n";
+  auto config = engine.config();
+  config.english.dictionary_enabled = true;
+  config.english.dictionary_path = tsv.string();
+  engine.ApplyConfig(config);
+
+  const auto auto_word_path = (dir / "auto_words.tsv").string();
+  azookey::learning::AutoWordStore auto_words(auto_word_path, &azookey::learning::test::Crypto());
+  auto_words.Observe("Kotlin", "ことりん", 1'700'000'000ULL, 3, false);
+  auto_words.Observe("Swift", "すいふと", 1'700'000'000ULL, 3, false);
+  azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     nullptr, &auto_words);
+
+  const auto resolve = [&](uint64_t id, const char* surface, const char* reading,
+                           const char* action) {
+    ipc::ResolveNewWordRequest request;
+    request.surface = surface;
+    request.reading = reading;
+    request.action = action;
+    const auto response = approval.Dispatch(
+        MakeReq(id, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseResolveNewWordResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed && parsed->ok && parsed->changed);
+  };
+  resolve(90, "Kotlin", "ことりん", "confirm");
+  resolve(91, "Swift", "すいふと", "reject");
+
+  azookey::host::EnglishDictionaryStore reread(tsv);
+  const auto kotlin = reread.Lookup("kotlin");
+  ASSERT_EQ(kotlin.size(), 1u);
+  EXPECT_EQ(kotlin[0].surface, "Kotlin");
+  EXPECT_EQ(kotlin[0].frequency, 1u);
+  EXPECT_TRUE(reread.Lookup("swift").empty());
+
+  config.english.dictionary_enabled = false;
+  engine.ApplyConfig(config);
+  RemovePathNoThrow(dir);
+}

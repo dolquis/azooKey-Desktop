@@ -547,7 +547,12 @@ TEST(EnglishDictionaryFilesTest, AppendAfterABaseRecompileReinitializesTheOverla
   const auto tsv = dir / "english-words.tsv";
   WriteText(tsv, "apple\t50\n");
   EnglishDictionaryStore store(tsv);
-  ASSERT_TRUE(store.Remove("apple"));
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  // Straight to the overlay, so no journal entry carries it past the
+  // recompile (section 4.8).
+  ASSERT_TRUE(AppendEnglishOverlayOp(store.paths().overlay,
+                                     ReadEnglishBaseHeader(store.paths().base)->content_hash,
+                                     Delete("apple")));
   EXPECT_TRUE(store.Lookup("apple").empty());
   // The TSV changes; the recompiled base no longer matches the overlay.
   WriteText(tsv, "apple\t50\nbanana\t5\n");
@@ -634,7 +639,7 @@ TEST(EnglishDictionaryFilesTest, AppendWaitingForTheLockAttachesToTheCompactedBa
   {
     EnglishDictLockBarrier barrier(store);
     ASSERT_TRUE(barrier.held());
-    barrier.Start([&] { persisted = store.Upsert("Swift", 3); });
+    barrier.Start([&] { persisted = static_cast<bool>(store.Upsert("Swift", 3)); });
     ASSERT_TRUE(barrier.WaitForContention());
     // Another host compacts while this one waits for the lock.
     ASSERT_TRUE(CompactEnglishDictionary(store.paths()));
@@ -909,6 +914,237 @@ TEST(EnglishDictionaryFilesTest, ACompactionWhoseStampFailsLeavesTheBaseAndOverl
   // No temporary file is left next to it.
   size_t files = 0;
   for (const auto& entry : fs::directory_iterator(dir)) files += entry.is_regular_file() ? 1 : 0;
-  EXPECT_EQ(files, 4u);  // .tsv, .bin, .delta.bin, .lock
+  EXPECT_EQ(files, 5u);  // .tsv, .bin, .delta.bin, .added.bin, .lock
+  fs::remove_all(dir);
+}
+
+// Section 4.8 journal: the bytes a writer produces, for tests that need a
+// journal of a given shape without appending it op by op.
+std::string JournalBytes(const std::vector<EnglishOverlayOp>& ops) {
+  std::string bytes = "AZEJ";
+  const auto u32 = [&](uint32_t v) {
+    for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<char>(v >> (8 * i)));
+  };
+  u32(kEnglishJournalVersion);
+  u32(0);
+  u32(static_cast<uint32_t>(ops.size()));
+  for (const auto& op : ops) {
+    bytes.push_back(static_cast<char>(op.kind));
+    bytes.push_back(static_cast<char>(op.flags));
+    bytes.push_back(static_cast<char>(op.key.size() & 0xFF));
+    bytes.push_back(static_cast<char>(op.key.size() >> 8));
+    bytes.push_back(static_cast<char>(op.surface.size() & 0xFF));
+    bytes.push_back(static_cast<char>(op.surface.size() >> 8));
+    u32(op.frequency);
+    bytes += op.key + op.surface;
+  }
+  return bytes;
+}
+
+std::vector<std::string> RecordSurfaces(const std::vector<EnglishWordRecord>& records) {
+  std::vector<std::string> out;
+  for (const auto& r : records) out.push_back(r.surface);
+  return out;
+}
+
+TEST(EnglishDictionaryJournalTest, TheLatestOpPerEntryDecidesAndTheTsvKeepsItsFrequency) {
+  const auto records = ParseEnglishTsv("apple\t50\nApple\t40\tproper\nbanana\t30\n");
+  const auto merged = ApplyEnglishJournal(records, {
+                                                       Upsert("kotlin", 1),
+                                                       Delete("kotlin"),
+                                                       Delete("Swift"),
+                                                       Upsert("Swift", 1),
+                                                       Delete("Apple"),
+                                                       Upsert("apple", 1),
+                                                       Upsert("banana", 1, kEnglishWordTech),
+                                                   });
+  // kotlin's delete came last; Swift's upsert came last; the delete of a TSV
+  // word hides it; an upsert of a TSV word keeps the TSV's record.
+  EXPECT_EQ(RecordSurfaces(merged), (std::vector<std::string>{"apple", "banana", "Swift"}));
+  EXPECT_EQ(merged[0].frequency, 50u);
+  EXPECT_EQ(merged[1].frequency, 30u);
+  EXPECT_EQ(merged[1].flags, 0u);
+  EXPECT_EQ(merged[2].frequency, 1u);
+}
+
+TEST(EnglishDictionaryJournalTest, AtMostTheEntryBoundIsApplied) {
+  std::vector<EnglishOverlayOp> ops;
+  for (uint32_t i = 0; i <= kMaxEnglishJournalEntries; ++i) {
+    ops.push_back(Upsert("w" + std::to_string(i), 1));
+  }
+  EXPECT_EQ(ApplyEnglishJournal({}, ops).size(), kMaxEnglishJournalEntries);
+}
+
+TEST(EnglishDictionaryJournalTest, StoreOpsOutliveATsvRecompile) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\nApple\t40\tproper\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 2u);
+  EXPECT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(store.Remove("Apple").result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(store.Upsert("apple", 1).result, EnglishWriteResult::Persisted);
+  const auto journal = ReadEnglishJournal(store.paths().journal);
+  ASSERT_TRUE(journal);
+  EXPECT_EQ(journal->ops.size(), 3u);
+
+  // The TSV is edited: the base is recompiled and the overlay discarded, but
+  // the journal is replayed over the new TSV.
+  WriteText(tsv, "apple\t50\nApple\t40\tproper\nbanana\t30\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  // The delete still hides "Apple" although the TSV has it; "apple" keeps the
+  // TSV's frequency rather than the upsert's.
+  const auto apple = store.Lookup("apple");
+  EXPECT_EQ(Surfaces(apple), std::vector<std::string>{"apple"});
+  ASSERT_EQ(apple.size(), 1u);
+  EXPECT_EQ(apple[0].frequency, 50u);
+  EXPECT_EQ(Surfaces(store.Lookup("banana")), std::vector<std::string>{"banana"});
+  // And so does every other host, from the files alone.
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("kotlin")),
+            std::vector<std::string>{"Kotlin"});
+  // Compaction folds the overlay into the base but leaves the journal.
+  ASSERT_TRUE(store.Upsert("Swift", 1));
+  ASSERT_TRUE(store.Compact());
+  EXPECT_EQ(ReadEnglishJournal(store.paths().journal)->ops.size(), 4u);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryJournalTest, WithoutTheWriterLockNothingIsJournaled) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  {
+    const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+    ASSERT_TRUE(held);
+    EXPECT_EQ(store.Upsert("kotlin", 7).result, EnglishWriteResult::MemoryOnly);
+  }
+  EXPECT_FALSE(fs::exists(store.paths().journal));
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryJournalTest, AppendCrashLeavesATornFrameThatIsIgnoredAndReclaimed) {
+  const auto dir = TestDir();
+  const auto journal = dir / "english-words.added.bin";
+  // A new journal is written whole and renamed into place.
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Upsert("first", 1)),
+            EnglishJournalAppendResult::Appended);
+  const auto size_after_first = fs::file_size(journal);
+
+  // The writer dies after the frame, before op_count covers it.
+  std::vector<EnglishWriteStep> steps;
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Upsert("torn", 2),
+                                   [&](EnglishWriteStep s) {
+                                     steps.push_back(s);
+                                     return s != EnglishWriteStep::JournalFrameWritten;
+                                   }),
+            EnglishJournalAppendResult::Failed);
+  EXPECT_EQ(steps, std::vector<EnglishWriteStep>{EnglishWriteStep::JournalFrameWritten});
+  EXPECT_GT(fs::file_size(journal), size_after_first);
+  auto contents = ReadEnglishJournal(journal);
+  ASSERT_TRUE(contents);
+  ASSERT_EQ(contents->ops.size(), 1u);
+  EXPECT_EQ(contents->ops[0].surface, "first");
+
+  // The next writer truncates the torn frame and appends after "first".
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Upsert("second", 3)),
+            EnglishJournalAppendResult::Appended);
+  contents = ReadEnglishJournal(journal);
+  ASSERT_TRUE(contents);
+  ASSERT_EQ(contents->ops.size(), 2u);
+  EXPECT_EQ(contents->ops[1].surface, "second");
+  EXPECT_EQ(fs::file_size(journal), size_after_first + 10 + 2 * std::string("second").size());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryJournalTest, RepeatedOpsAreRewrittenToTheLatestPerEntry) {
+  const auto dir = TestDir();
+  const auto journal = dir / "english-words.added.bin";
+  ASSERT_EQ(AppendEnglishJournalOp(journal, Upsert("other", 1)),
+            EnglishJournalAppendResult::Appended);
+  for (uint32_t i = 0; i < 2 * kMinEnglishJournalRewriteOps; ++i) {
+    ASSERT_EQ(AppendEnglishJournalOp(journal, Upsert("same", i)),
+              EnglishJournalAppendResult::Appended);
+  }
+  auto contents = ReadEnglishJournal(journal);
+  ASSERT_TRUE(contents);
+  EXPECT_LE(contents->op_count, kMinEnglishJournalRewriteOps);
+  const auto merged = ApplyEnglishJournal({}, contents->ops);
+  ASSERT_EQ(merged.size(), 2u);
+  EXPECT_EQ(merged[0].surface, "other");
+  EXPECT_EQ(merged[1].frequency, 2 * kMinEnglishJournalRewriteOps - 1);
+
+  // A rewrite that dies before the rename leaves the old journal in place.
+  const auto before = ReadBytes(journal);
+  for (uint32_t i = 0; i < 2 * kMinEnglishJournalRewriteOps; ++i) {
+    const auto result = AppendEnglishJournalOp(
+        journal, Upsert("same", 1000 + i),
+        [](EnglishWriteStep s) { return s != EnglishWriteStep::JournalRewriteWritten; });
+    if (result == EnglishJournalAppendResult::Failed) break;
+  }
+  contents = ReadEnglishJournal(journal);
+  ASSERT_TRUE(contents);
+  EXPECT_GT(contents->op_count, 0u);
+  EXPECT_EQ(ApplyEnglishJournal({}, contents->ops).size(), 2u);
+  // No temporary file is left next to it.
+  size_t files = 0;
+  for (const auto& entry : fs::directory_iterator(dir)) files += entry.is_regular_file() ? 1 : 0;
+  EXPECT_EQ(files, 1u);
+  EXPECT_NE(ReadBytes(journal), before);  // The frame appends before the rewrite stuck.
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryJournalTest, AFullJournalTakesNoNewEntryButUpdatesAKnownOne) {
+  const auto dir = TestDir();
+  const auto journal = dir / "english-words.added.bin";
+  std::vector<EnglishOverlayOp> ops;
+  for (uint32_t i = 0; i < kMaxEnglishJournalEntries; ++i) {
+    ops.push_back(Upsert("w" + std::to_string(i), 1));
+  }
+  WriteText(journal, JournalBytes(ops));
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Upsert("extra", 1)), EnglishJournalAppendResult::Full);
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Delete("w7")), EnglishJournalAppendResult::Appended);
+  const auto contents = ReadEnglishJournal(journal);
+  ASSERT_TRUE(contents);
+  EXPECT_EQ(contents->ops.size(), kMaxEnglishJournalEntries + 1);
+
+  // The store keeps the op in the overlay and says the journal was full.
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  EXPECT_EQ(store.Upsert("extra", 1).result, EnglishWriteResult::JournalFull);
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("extra")),
+            std::vector<std::string>{"extra"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryJournalTest, AnUnreadableJournalIsMovedAsideAndStartsAnew) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);  // Compiles the base on first use.
+  WriteText(store.paths().journal, "garbage");
+  // A recompile with it applies nothing.
+  WriteText(tsv, "apple\t50\nbanana\t30\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  EXPECT_EQ(Surfaces(store.Lookup("banana")), std::vector<std::string>{"banana"});
+
+  EXPECT_EQ(store.Upsert("kotlin", 1).result, EnglishWriteResult::JournalReset);
+  const auto journal = ReadEnglishJournal(store.paths().journal);
+  ASSERT_TRUE(journal);
+  ASSERT_EQ(journal->ops.size(), 1u);
+  EXPECT_EQ(journal->ops[0].surface, "kotlin");
+  size_t aside = 0;
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    const auto name = entry.path().filename().string();
+    if (name.rfind("english-words.added.bin.corrupt.", 0) == 0) {
+      ++aside;
+      EXPECT_EQ(ReadBytes(entry.path()), "garbage");
+    }
+  }
+  EXPECT_EQ(aside, 1u);
   fs::remove_all(dir);
 }

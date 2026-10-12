@@ -444,9 +444,9 @@ Health は Linear の health フィールドで設定し、本文に重ねて書
 
 ### マージ後に Merged を省略できる場合
 
-共有コア §3 と §7.1.3-4 の「マージ → Merged → 検証メモ → Done」に対する本 repo の例外である。Merged は検証メモ待ちの滞留を見えるようにする状態であり、マージと同じ作業で検証メモを書けば滞留は生じない。次の 3 条件をすべて満たす Issue は、Merged を経ずに In Review から Done へ直接進めてよい。
+共有コア §3 と §7.1.3-4 の「マージ → Merged → 検証メモ → Done」に対する本 repo の例外である。Merged は検証メモ待ちの滞留を見えるようにする状態であり、マージと同じ作業で検証メモを書けば滞留は生じない。次の 3 条件をすべて満たす Issue は、Merged で止めずに In Review から Done へ直接進めてよい（closing キーワードで参照した Issue を GitHub 連携が先に Merged へ動かした場合も同じ）。`type:tracking` は §3.1 のとおり In Review / Merged に置かない Issue であり、この例外の対象外とする。
 
-1. `gate:human-required` の子 Issue や baseline 系ラベルが残っていない（人間ゲートを通る Issue は Done の条件を満たさないため、Merged で止める）。
+1. その Issue 自身にも子 Issue にも `gate:human-required` が残っていない（人間ゲートを通る Issue は Done の条件を満たさないため、Merged で止める）。
 2. 検証メモを、PR のマージと同じ作業で Issue にコメントする（確認したテスト名・CI ジョブ名を含める。§7.1.4 の「その場で書く」と同じ）。
 3. 複数 PR で分担する Issue は、最後の PR のマージ時に限る。途中の PR のマージでは Done にしない。
 

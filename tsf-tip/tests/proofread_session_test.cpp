@@ -178,10 +178,13 @@ TEST(ProofreadProtocolTest, SuggestionsAreBoundedPlainText) {
 }
 
 TEST(ProofreadProtocolTest, MalformedSuggestionsAreDroppedOneByOne) {
-  // Escapes decode before the check, so they are refused like the raw characters.
+  // Escapes decode before the check, so they are refused like the raw characters. The JSON
+  // escapes are in ordinary literals: some MSVC versions expand universal character names inside
+  // raw string literals.
   const auto parsed = proofread::ParseSelectRequest(
       R"({"kind":"select","start":1,"length":2,"reconvert":true,"suggestions":)"
-      R"(["ok",1,"",null,["x"],"a\nb","a\u202eb","a\u2028b","\ufeffa","a\u0085b","a\u2066b","good"]})");
+      "[\"ok\",1,\"\",null,[\"x\"],\"a\\nb\",\"a\\u202eb\",\"a\\u2028b\",\"\\ufeffa\","
+      "\"a\\u0085b\",\"a\\u2066b\",\"good\"]}");
   ASSERT_TRUE(parsed);
   EXPECT_TRUE(parsed->reconvert);
   EXPECT_EQ(parsed->suggestions, (std::vector<std::string>{"ok", "good"}));
@@ -198,7 +201,7 @@ TEST(ProofreadProtocolTest, MalformedSuggestionsAreDroppedOneByOne) {
   // A string JSON cannot hold (an unpaired surrogate) makes the whole request unreadable, like
   // any other malformed message.
   EXPECT_FALSE(proofread::ParseSelectRequest(
-      R"({"kind":"select","start":1,"length":2,"suggestions":["a\ud800b"]})"));
+      "{\"kind\":\"select\",\"start\":1,\"length\":2,\"suggestions\":[\"a\\ud800b\"]}"));
   // Suggestions that are not an array read as none and keep the request.
   for (const char* json : {R"({"kind":"select","start":1,"length":2,"suggestions":"x"})",
                            R"({"kind":"select","start":1,"length":2,"suggestions":{"a":"x"}})",

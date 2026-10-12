@@ -418,6 +418,45 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
   return true;
 }
 
+void InferenceEngine::RegisterConfirmedEnglishWord(const std::string& surface,
+                                                   std::string_view source) {
+  EnglishCandidateConfig english;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    english = config_.english;
+  }
+  if (!english.dictionary_enabled || surface.size() < english.min_length) return;
+  // Typed in Japanese mode as raw romaji: ASCII letters only (section 4.8).
+  const bool letters = std::all_of(surface.begin(), surface.end(), [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+  });
+  if (!letters) return;
+  const auto dictionary = EnglishDictionaryFor(english.dictionary_path);
+  if (!dictionary) return;
+  // Already a dictionary word: an upsert with the synthetic frequency would
+  // only lower its rank among the surfaces of its key.
+  const auto key = EnglishLookupKey(surface);
+  const bool present = dictionary->Read([&](const EnglishDictionary* snapshot) {
+    if (!snapshot) return false;
+    const auto entries = snapshot->Lookup(key);
+    return std::any_of(entries.begin(), entries.end(),
+                       [&](const auto& entry) { return entry.surface == surface; });
+  });
+  if (present) return;
+  // The lowest frequency, so the word never outranks a dictionary surface of
+  // the same key (section 4.3).
+  constexpr uint32_t kConfirmedEnglishFrequency = 1;
+  const auto outcome = dictionary->Upsert(surface, kConfirmedEnglishFrequency);
+  if (!runtime_logger_) return;
+  // Never the word itself.
+  runtime_logger_->Log(
+      outcome.result == EnglishWriteResult::Persisted ? logging::RuntimeLogLevel::Info
+                                                      : logging::RuntimeLogLevel::Warn,
+      "english_dictionary_upsert",
+      {{"source", logging::RuntimeLogSafeText(std::string(source))},
+       {"result", logging::RuntimeLogSafeText(EnglishWriteResultName(outcome.result))}});
+}
+
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
                                   const std::string& correct_reading, uint64_t now_epoch_sec) {
   std::lock_guard history_lock(learning_history_mutex_);
@@ -1662,7 +1701,7 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
                                         uint64_t now_epoch_sec, const std::string& observation_id,
                                         const std::string& app_name,
                                         const std::string& left_context) {
-  std::lock_guard history_lock(learning_history_mutex_);
+  std::unique_lock history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   learning::AutoWordStore* auto_word_store = nullptr;
@@ -1717,10 +1756,20 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     // converter_call_mutex_ to convert. Holding it across the flush would stall
     // the next candidate query behind this commit's disk write. AutoWordStore
     // has its own mutex, so it needs no help from ours.
-    auto_word_store->Observe(surface, reading, now_epoch_sec, auto_word_min_count,
-                             auto_word_auto_register);
-    if (!auto_word_store->Save() && runtime_logger_) {
+    const bool promoted = auto_word_store->Observe(surface, reading, now_epoch_sec,
+                                                   auto_word_min_count, auto_word_auto_register);
+    const bool saved = auto_word_store->Save();
+    if (!saved && runtime_logger_) {
       runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "auto_word_store_save_failed", {});
+    }
+    // DEV-1584: a word this commit promoted to Confirmed, once that is saved.
+    // IsMiningCandidateLocked keeps pure ASCII surfaces out, so this enters
+    // the English dictionary only if that filter ever lets one through. The
+    // upsert may wait for the dictionary's writer lock; commits do not queue
+    // behind it.
+    if (promoted && saved) {
+      history_lock.unlock();
+      RegisterConfirmedEnglishWord(surface, "mining");
     }
   }
   return true;

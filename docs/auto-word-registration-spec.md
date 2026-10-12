@@ -391,6 +391,7 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
   完全一致 0.10）よりは高い。設定キーは持たない。
 - `debug_info` は識別用の印である。重複除去で他の候補とまとめられると、
   `;dup:` 付きで連結される。
+- Confirmed になった ASCII 英字の語は、M60 の英単語辞書にも入る（`docs/inline-english-candidate-spec.md` §4.8）。
 
 ## 7. 承認フロー
 

@@ -1079,6 +1079,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
   if (outcome == learning::AutoWordSaveOutcome::SaveFailed) {
     return fail(ipc::kNewWordErrorSaveFailed);
   }
+  // DEV-1584: a newly confirmed English word joins the English dictionary. The
+  // reply does not depend on it; a failure is logged by the engine.
+  if (target == learning::AutoWordState::Confirmed) {
+    engine_->RegisterConfirmedEnglishWord(parsed->surface, "new_word_resolve");
+  }
   res.ok = true;
   res.changed = true;
   return reply();

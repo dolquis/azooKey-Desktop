@@ -23,7 +23,26 @@ struct EnglishDictionaryLoadReport {
   EnglishDictionaryLoadStats stats;
 };
 
-// The English dictionary at a configured path (sections 4.5 to 4.7):
+// Where an Upsert or Remove ended up (sections 4.6 to 4.8).
+enum class EnglishWriteResult {
+  Persisted,      // In the overlay and the journal.
+  JournalReset,   // In the overlay; an unreadable journal was moved aside for a new one.
+  JournalFull,    // In the overlay only: the journal holds kMaxEnglishJournalEntries.
+  JournalFailed,  // In the overlay only: the journal could not be written.
+  MemoryOnly,     // Not on disk (no lock, no write access): kept until restart.
+  Dropped,        // Not kept: there is no base, or memory ran out.
+};
+const char* EnglishWriteResultName(EnglishWriteResult result);
+
+struct EnglishWriteOutcome {
+  EnglishWriteResult result{EnglishWriteResult::Dropped};
+  // true when the op reached the overlay file.
+  explicit operator bool() const {
+    return result != EnglishWriteResult::MemoryOnly && result != EnglishWriteResult::Dropped;
+  }
+};
+
+// The English dictionary at a configured path (sections 4.5 to 4.8):
 // - reads the .bin when it is valid and its mtime equals the TSV's (or there
 //   is no TSV), otherwise parses the TSV and recompiles the .bin under the
 //   writer lock; with neither, there is no dictionary;
@@ -33,7 +52,9 @@ struct EnglishDictionaryLoadReport {
 //   they changed; during a rebuild by another thread it uses the previous
 //   snapshot;
 // - appends upserts and tombstones to the overlay and compacts it under the
-//   writer lock, or keeps them in memory when the files cannot be written.
+//   writer lock, or keeps them in memory when the files cannot be written;
+// - journals the ops it appended, and replays the journal over the TSV when it
+//   recompiles the base (section 4.8).
 class EnglishDictionaryStore {
  public:
   using LoadListener = std::function<void(const EnglishDictionaryLoadReport&)>;
@@ -56,10 +77,8 @@ class EnglishDictionaryStore {
   }
   std::vector<EnglishDictionaryEntry> Lookup(std::string_view lower_key);
 
-  // true when the op reached the overlay file. false when it was kept in
-  // memory only, or dropped (there is no base, or memory ran out).
-  bool Upsert(std::string_view surface, uint32_t frequency, uint8_t flags = 0);
-  bool Remove(std::string_view surface);
+  EnglishWriteOutcome Upsert(std::string_view surface, uint32_t frequency, uint8_t flags = 0);
+  EnglishWriteOutcome Remove(std::string_view surface);
   bool Compact();
 
   // Test seams: the write protocol steps, a call between sampling the base
@@ -90,7 +109,7 @@ class EnglishDictionaryStore {
   std::shared_ptr<const EnglishBaseImage> CompileTsvLocked(EnglishDictionaryLoadReport& report,
                                                            std::filesystem::file_time_type tsv_time,
                                                            bool force, bool file_locked);
-  bool AppendLocked(const EnglishOverlayOp& op);
+  EnglishWriteResult AppendLocked(const EnglishOverlayOp& op);
   void Publish(std::shared_ptr<const EnglishDictionary> snapshot, std::optional<Sample> sample);
   bool IsCurrent(const Sample& sample) const;
   void Invalidate();
@@ -112,6 +131,10 @@ class EnglishDictionaryStore {
   // ...because writing or stamping it failed under the lock: not retried
   // until the TSV changes.
   bool base_write_failed_{false};
+  // ...because the journal was there but could not be read (section 4.8): not
+  // compiled again for the same TSV until a writer finds the journal readable,
+  // or another host's .bin for this TSV appears.
+  bool journal_unavailable_{false};
   std::optional<std::pair<std::filesystem::file_time_type, uintmax_t>> compiled_tsv_;
   std::vector<EnglishOverlayOp> memory_ops_;
   EnglishWriteHook write_hook_;

@@ -662,7 +662,8 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
   最新の op だけを残した journal を一時ファイルへ書き、`MoveFileEx` で原子置換する。新しい journal も
   同じ方法で作る。
 - 一意エントリは 10,000 件までとする。新しいエントリを足すと超える op は journal へ書かず、overlay にだけ
-  残す。既にあるエントリの op は書く。TSV の上限 200,000 件と合わせても base の上限 400,000 件（§4.5）を
+  残す。delete も同じ扱いで、満杯のときに新しいエントリの delete は journal に残らないので、次の TSV の
+  再コンパイルで削除した語が戻りうる。既にあるエントリの op は書く。TSV の上限 200,000 件と合わせても base の上限 400,000 件（§4.5）を
   超えない。
 - 読めない journal（magic・version の不一致、`op_count` 分のフレームが無い）は、次の writer が
   `english-words.added.bin.corrupt.<UNIX ミリ秒>` へ改名して残し、新しい journal を始める。overlay と違い

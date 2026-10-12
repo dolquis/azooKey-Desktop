@@ -368,7 +368,8 @@ struct HostBackendSelection {
 };
 
 HostBackendSelection SelectAutoBackendForHost(const azookey::host::RuntimeSettings& settings,
-                                              bool safe_mode) {
+                                              bool safe_mode,
+                                              azookey::host::PowerSource power_source) {
   HostBackendSelection result;
   azookey::host::BackendSelectionPolicy policy;
   policy.safe_mode = safe_mode;
@@ -381,8 +382,8 @@ HostBackendSelection SelectAutoBackendForHost(const azookey::host::RuntimeSettin
   const auto adapters = azookey::host::MakeSystemAdapterEnumerator();
   const auto libraries = azookey::host::MakeSystemRuntimeLibraryProbe();
   const auto os = azookey::host::MakeSystemOsVersionProbe();
-  const bool on_battery = azookey::host::OnBatteryForBackendSelection(
-      azookey::host::QueryInferenceThreadEnvironment().power_source, settings.power_profile);
+  const bool on_battery =
+      azookey::host::OnBatteryForBackendSelection(power_source, settings.power_profile);
   result.facts = azookey::host::CollectBackendSystemFacts(*adapters, *libraries, *os, on_battery);
   result.selection = azookey::host::SelectAutoBackend(
       result.facts, azookey::host::CompiledBackendsForThisBuild(), policy);
@@ -869,14 +870,16 @@ int main(int argc, char** argv) {
   const auto cli_model_path = config.model_path;
   // M24: settings `auto` resolves to what BackendSelector picks for this
   // machine; an explicit --backend and a non-auto preference still win.
-  const auto auto_backend = SelectAutoBackendForHost(settings_result.settings, safe_mode);
+  // M25: read once, so the backend and the settings start from the same power
+  // source, and a change before the watcher starts can be caught up with.
+  const auto startup_power_source = azookey::host::QuerySystemPowerSource();
+  const auto auto_backend =
+      SelectAutoBackendForHost(settings_result.settings, safe_mode, startup_power_source);
   const auto default_backend = auto_backend.selection.backend;
-  // M25: kept so a power change before the watcher starts is not lost.
-  std::optional<azookey::host::PowerSource> startup_power_source;
   config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
-      config, settings_result.settings, default_backend, [&startup_power_source] {
+      config, settings_result.settings, default_backend, [startup_power_source] {
         auto environment = azookey::host::QueryInferenceThreadEnvironment();
-        startup_power_source = environment.power_source;
+        environment.power_source = startup_power_source;
         return environment;
       });
   if (explicit_backend) {
@@ -1131,6 +1134,9 @@ int main(int argc, char** argv) {
   dconf.runtime_tier = "mock";
 #endif
   dconf.default_backend = default_backend;
+  // M25: `auto` follows the power source; UpdateConfig reads the current value.
+  std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
+  dconf.auto_backend = [&current_auto_backend] { return current_auto_backend.load(); };
   dconf.models_dir = user_paths->models_dir;
   dconf.on_config_applied = update_trending_settings;
   dconf.neologd_layer = neologd_pack_sink->layer;
@@ -1187,7 +1193,6 @@ int main(int argc, char** argv) {
   // lane and the thread count follow it. The thread count takes effect at the
   // next model load. Once the change has stood for kPowerSettleQuiet, `auto`
   // is resolved again and a different backend reloads the model (section 4.4).
-  std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
   const auto apply_power_change = [&engine, &settings_store, &runtime_log, &current_auto_backend,
                                    update_config_mutex = dconf.update_config_mutex](
                                       azookey::host::PowerSource from,
@@ -1212,8 +1217,8 @@ int main(int argc, char** argv) {
     std::lock_guard<std::mutex> lock(*update_config_mutex);
     const auto& settings = settings_store.settings();
     azookey::host::BackendSelectionPolicy policy;
-    policy.safe_mode = settings.safe_mode.enabled ||
-                       engine.health_state() == azookey::host::HealthState::SafeMode;
+    policy.safe_mode =
+        settings.safe_mode.enabled || engine.health_state() == azookey::host::HealthState::SafeMode;
     const bool on_battery =
         azookey::host::OnBatteryForBackendSelection(source, settings.power_profile);
     const auto reselected = azookey::host::ReselectAutoBackendForPower(
@@ -1246,8 +1251,8 @@ int main(int argc, char** argv) {
       });
   // The settings applied at startup read the power source earlier, before the
   // dictionaries and the model preload; catch up if it has changed since.
-  if (startup_power_source && *startup_power_source != power_tracker.current()) {
-    power_change_worker.Request(*startup_power_source, power_tracker.current());
+  if (startup_power_source != power_tracker.current()) {
+    power_change_worker.Request(startup_power_source, power_tracker.current());
   }
   azookey::host::PowerStatusWatcher power_watcher(power_tracker);
   if (power_watcher.Start()) {

@@ -2825,6 +2825,35 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
   std::remove(settings_path.c_str());
 }
 
+// M25: the Host moves `auto` with the power source, and UpdateConfig resolves
+// `auto` to the value at the time of the reload, not the one from startup.
+TEST_F(DispatcherTest, UpdateConfigResolvesAutoToTheCurrentAutoBackend) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_auto_backend_settings.json");
+  std::remove(settings_path.c_str());
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"backendPreference":"auto"})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  auto config = DefaultDispatcherConfig();
+  config.default_backend = azookey::host::BackendKind::Cpu;
+  auto current = azookey::host::BackendKind::Vulkan;
+  config.auto_backend = [&current] { return current; };
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict, config,
+                                              &settings_store);
+
+  auto on_ac = config_dispatcher.Dispatch(MakeReq(77, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(on_ac.has_value());
+  EXPECT_EQ(engine.config().backend, azookey::host::BackendKind::Vulkan);
+
+  current = azookey::host::BackendKind::Cpu;  // the power source moved to battery
+  auto on_battery = config_dispatcher.Dispatch(MakeReq(78, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(on_battery.has_value());
+  EXPECT_EQ(engine.config().backend, azookey::host::BackendKind::Cpu);
+
+  std::remove(settings_path.c_str());
+}
+
 TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

@@ -59,8 +59,8 @@ TEST(BackendSelectorTest, PowerChangeMovesAutoBetweenVulkanAndCpu) {
 TEST(BackendSelectorTest, PowerChangeReloadsOnlyWhenTheAutoBackendChanges) {
   using azookey::host::ReselectAutoBackendForPower;
   // Same result as the backend in use.
-  EXPECT_FALSE(
-      ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true, BackendKind::Vulkan));
+  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true,
+                                           BackendKind::Vulkan));
   EXPECT_FALSE(
       ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, true, BackendKind::Cpu));
   // Without ggml-vulkan, `auto` is CPU on either power source.
@@ -76,8 +76,8 @@ TEST(BackendSelectorTest, PowerChangeReloadsOnlyWhenTheAutoBackendChanges) {
 TEST(BackendSelectorTest, PowerChangeLeavesExplicitRequestsAndSafeModeAlone) {
   using azookey::host::ReselectAutoBackendForPower;
   // A CLI backend or a non-auto preference is not re-resolved.
-  EXPECT_FALSE(
-      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, false, BackendKind::Vulkan));
+  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, false,
+                                           BackendKind::Vulkan));
   azookey::host::BackendSelectionPolicy safe_mode;
   safe_mode.safe_mode = true;
   EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), safe_mode, true,

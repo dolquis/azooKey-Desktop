@@ -1726,8 +1726,8 @@ TEST(InferenceEngineTest, RealLlamaMappedLoadFailureRetriesOnceWithoutMmap) {
 
 #ifdef AZOOKEY_AI_TEST_MODEL
 TEST(InferenceEngineTest, RealModelLoadsThroughTheMapping) {
-  const auto loaded =
-      azookey::host::LoadZenzaiGgufModel(AZOOKEY_AI_TEST_MODEL, azookey::host::ZenzaiRuntimeOptions{});
+  const auto loaded = azookey::host::LoadZenzaiGgufModel(AZOOKEY_AI_TEST_MODEL,
+                                                         azookey::host::ZenzaiRuntimeOptions{});
   ASSERT_TRUE(loaded.ok) << loaded.error;
   EXPECT_TRUE(loaded.mmap.used_mmap);
   EXPECT_FALSE(loaded.mmap.fallback.has_value());

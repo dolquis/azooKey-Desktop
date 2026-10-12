@@ -56,8 +56,8 @@
 | English 学習チャネル | `docs/inline-english-candidate-spec.md` §5 | 英語区間の確定の学習。かな漢字学習と混線しない |
 | 生ローマ字の送信（`raw_romaji`） | `ipc/src/Payloads.cpp`（`QueryCandidates`、`QueryBatchConversion`） | 分割の素材。`live = true` の問い合わせには載らない |
 | `CandidateTag::English` | `core/include/azookey/core/Candidate.h` | 英字候補の識別と `[英]` バッジ |
-| ライブ変換のチャンク分割（Convert / Verbatim） | `core/src/LiveConversionChunker.cpp` | 英語区間を Verbatim チャンクとして素通しする受け口 |
-| NllScorer（Zenzai による表層の NLL 採点） | `inference-host/src/NllScorer.cpp`、`docs/neural-reranker-spec.md` Track B | 分割候補や日英表層の文脈込みの比較 |
+| ライブ変換のチャンク分割（Convert / Verbatim） | `core/src/LiveConversionChunker.cpp` | 英語区間を Verbatim チャンクとして素通しする候補。本調査の時点では `core/tests` からだけ呼ばれ、TIP / Host のライブ変換経路には配線されていない。配線は M63 の工数に入る |
+| NllScorer（Zenzai による表層の NLL 採点） | `inference-host/src/NllScorer.cpp`、`docs/neural-reranker-spec.md` Track B | 分割候補や日英表層の文脈込みの比較。Track B はライブ変換（`live=true`）を対象外とし、採点対象を辞書由来の候補に限る（§B1・§B5）ため、ライブ変換で使うには適用範囲の拡張が要る |
 | 複数区間の確定観測 | `docs/romaji-batch-conversion-spec.md` §6.4（`CommitSegmentsObservation`） | 区間ごとの学習 |
 | 評価ベンチ | `bench/zenzai_bench.cpp`、`bench/nll_bench.cpp`、`bench/ConversionQuality.cpp` | 混在文の評価セットでの測定 |
 
@@ -82,6 +82,9 @@
 - Host へ届く `reading` と、ライブ変換の `kana` はこの崩れた読みであり、Zenzai も同じ読みを見る。
   Zenzai に英語区間を見せるには、分割後に英語区間を英字のまま入力へ入れる（§4.3）。
 - `kite` などはかなに完全に変換できるため、ローマ字の解析だけでは英語と判別できない。
+- `l` / `q` / `v` / `x` は内蔵のローマ字表で正規の入力である（`ltu` → `っ`、`qa` → `くぁ`、
+  `vaiorin` → `ゔぁいおりん`）。文字の種類だけで英語と判定すると日本語入力を奪う。`love` → `ぉゔぇ` の
+  ように、かなには変換できるが不自然な読みになる語もある。
 
 ### 4.2 生ローマ字はライブ変換に届かない
 
@@ -117,7 +120,8 @@ M63-0 の spec で、レイテンシとカスタム表の扱いを根拠に決�
 
 ライブ変換は打鍵ごとに走る。分割候補ごとに Zenzai を回すと推論回数が増える。分割候補の上限、
 確定済みの区間を再計算しない増分処理、予算超過時に M60 相当の候補注入へ落とす打ち切りを
-spec で定める必要がある。予算の正典は `docs/zenzai-inference-spec.md` §8。
+spec で定める必要がある。ライブ変換の待ち時間は `docs/dev-infrastructure-spec.md` §8.5.2 の timeout 表
+（150ms。client が打ち切る）が正典で、Zenzai 1 変換の予算（`docs/zenzai-inference-spec.md` §8）より短い。
 
 ### 4.6 辞書
 
@@ -212,5 +216,9 @@ UX の参照先になる（英語区間の前後の空白を半角・全角で�
 - Backspace や読みの補正で生ローマ字とかなの対応が崩れたときの戻し方（M60 §4.1 と揃える）。
 - 学習: 区間ごとの確定の記録先、ユーザーが英字を日本語へ選び直したときの次回の順位。
 - M58（一括変換）との統合: 一括変換でも同じ分割を使うか。
-- 設定キーと既定値、M60 の設定との関係。
+- 設定キーと既定値、M60 の設定との関係。M63 を `inlineEnglishCandidates` が ON のときだけ有効に
+  するか、独立させるか（TIP は M60 の設定が ON のときだけ生ローマ字を保持する）。M60 の spec
+  （§2・§4.1・§4.3）と受け入れ条件へ「M63 の設定が OFF のとき」の限定を加える範囲。
+- かなには変換できるが不自然な読みになる語（`love` → `ぉゔぇ`）を英語らしさの信号にするか。
+- 打ち間違い補正（M35 / M55）との優先。ローマ字かな変換の後に英字が残ることは両方の信号になる。
 - レイテンシ予算と打ち切り、劣化時の fallback。

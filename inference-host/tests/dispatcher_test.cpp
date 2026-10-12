@@ -677,6 +677,17 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
   EXPECT_EQ(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->error,
             "not_authenticated");
+  ipc::RemoveUserWordRequest remove;
+  remove.word = add.word;
+  remove.ruby = add.ruby;
+  auto remove_after_wrong = token_dispatcher.Dispatch(
+      MakeReq(87, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(remove)));
+  ASSERT_TRUE(remove_after_wrong.has_value());
+  auto remove_after_wrong_payload =
+      ipc::ParseRemoveUserWordResponse(remove_after_wrong->payload_json);
+  ASSERT_TRUE(remove_after_wrong_payload.has_value());
+  EXPECT_FALSE(remove_after_wrong_payload->ok);
+  EXPECT_EQ(remove_after_wrong_payload->error, "not_authenticated");
   ipc::QueryBatchConversionRequest batch;
   batch.reading = "にほん";
   batch.raw_romaji = "nihon";

@@ -262,7 +262,8 @@ std::string HostRejectionMessage(const char* op, const std::optional<std::string
   message += ": " + *code;
   const std::string_view c = *code;
   if (c == azookey::ipc::kUserDictErrorBusy) {
-    message += " (the user dictionary is in use by another edit; nothing was saved, retry)";
+    message +=
+        " (the user dictionary stayed busy until the wait ran out; nothing was saved, retry)";
   } else if (c == azookey::ipc::kUserDictErrorLockFailed) {
     message += " (could not lock the user dictionary file; nothing was saved)";
   } else if (c == azookey::ipc::kUserDictErrorLoadFailed) {

@@ -274,6 +274,22 @@ void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                {"result", logging::RuntimeLogSafeText(std::string(result))}});
 }
 
+// DEV-1581: the AddUserWord / RemoveUserWord `error` is the edit result's name.
+constexpr bool UserDictErrorMatches(UserDictionaryEditResult result, std::string_view code) {
+  return std::string_view(UserDictionaryEditResultName(result)) == code;
+}
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::Busy, ipc::kUserDictErrorBusy));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::LockFailed,
+                                   ipc::kUserDictErrorLockFailed));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::LoadFailed,
+                                   ipc::kUserDictErrorLoadFailed));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::SaveFailed,
+                                   ipc::kUserDictErrorSaveFailed));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::NotFound,
+                                   ipc::kUserDictErrorNotFound));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::Unavailable,
+                                   ipc::kUserDictErrorUnavailable));
+
 // DEV-1572: one record per user dictionary or new-word edit, so a CLI failure
 // can be matched with what the Host was waiting for. Never the word itself.
 // The receipt is the record's timestamp minus total_ms.
@@ -428,11 +444,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     case ipc::MessageType::AddUserWord: {
       ipc::AddUserWordResponse r;
       r.ok = false;
+      r.error = std::string(ipc::kUserDictErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildAddUserWordResponse(r));
     }
     case ipc::MessageType::RemoveUserWord: {
       ipc::RemoveUserWordResponse r;
       r.ok = false;
+      r.error = std::string(ipc::kUserDictErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildRemoveUserWordResponse(r));
     }
     case ipc::MessageType::UpdateConfig: {
@@ -1521,6 +1539,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& 
   ipc::AddUserWordResponse res;
   if (!user_dict_) {
     res.ok = false;
+    res.error = std::string(ipc::kUserDictErrorUnavailable);
     return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
   }
   if (auto parsed = ipc::ParseAddUserWordRequest(req.payload_json)) {
@@ -1531,7 +1550,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& 
     w.mid = parsed->mid;
     w.value = parsed->value;
     res.ok = engine_->AddUserWord(w, options);
+    if (!res.ok) res.error = UserDictionaryEditResultName(report.result);
     LogPersistentEdit(runtime_logger_, req, "user_dict_add", report);
+  } else {
+    res.error = std::string(ipc::kUserDictErrorInvalidRequest);
   }
   return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
 }
@@ -1543,11 +1565,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelop
   ipc::RemoveUserWordResponse res;
   if (!user_dict_) {
     res.ok = false;
+    res.error = std::string(ipc::kUserDictErrorUnavailable);
     return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
   }
   if (auto parsed = ipc::ParseRemoveUserWordRequest(req.payload_json)) {
     res.ok = engine_->RemoveUserWord(parsed->word, parsed->ruby, options);
+    if (!res.ok) res.error = UserDictionaryEditResultName(report.result);
     LogPersistentEdit(runtime_logger_, req, "user_dict_remove", report);
+  } else {
+    res.error = std::string(ipc::kUserDictErrorInvalidRequest);
   }
   return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
 }

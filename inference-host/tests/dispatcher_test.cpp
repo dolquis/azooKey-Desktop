@@ -675,6 +675,19 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
       MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
   ASSERT_TRUE(add_after_wrong.has_value());
   EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
+  EXPECT_EQ(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->error,
+            "not_authenticated");
+  ipc::RemoveUserWordRequest remove;
+  remove.word = add.word;
+  remove.ruby = add.ruby;
+  auto remove_after_wrong = token_dispatcher.Dispatch(
+      MakeReq(87, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(remove)));
+  ASSERT_TRUE(remove_after_wrong.has_value());
+  auto remove_after_wrong_payload =
+      ipc::ParseRemoveUserWordResponse(remove_after_wrong->payload_json);
+  ASSERT_TRUE(remove_after_wrong_payload.has_value());
+  EXPECT_FALSE(remove_after_wrong_payload->ok);
+  EXPECT_EQ(remove_after_wrong_payload->error, "not_authenticated");
   ipc::QueryBatchConversionRequest batch;
   batch.reading = "にほん";
   batch.raw_romaji = "nihon";
@@ -2191,7 +2204,52 @@ TEST_F(DispatcherTest, AddRemoveUserWord) {
   auto rparsed = ipc::ParseRemoveUserWordResponse(rresp->payload_json);
   ASSERT_TRUE(rparsed.has_value());
   EXPECT_TRUE(rparsed->ok);
+  EXPECT_FALSE(rparsed->error);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+
+  // DEV-1581: removing it again names the reason.
+  auto again = dispatcher.Dispatch(
+      MakeReq(63, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(rm)));
+  ASSERT_TRUE(again.has_value());
+  auto again_parsed = ipc::ParseRemoveUserWordResponse(again->payload_json);
+  ASSERT_TRUE(again_parsed.has_value());
+  EXPECT_FALSE(again_parsed->ok);
+  EXPECT_EQ(again_parsed->error, "not_found");
+
+  auto malformed =
+      dispatcher.Dispatch(MakeReq(64, ipc::MessageType::AddUserWord, R"({"word":"azooKey"})"));
+  ASSERT_TRUE(malformed.has_value());
+  auto malformed_parsed = ipc::ParseAddUserWordResponse(malformed->payload_json);
+  ASSERT_TRUE(malformed_parsed.has_value());
+  EXPECT_FALSE(malformed_parsed->ok);
+  EXPECT_EQ(malformed_parsed->error, "invalid_request");
+}
+
+// DEV-1581: a Dispatcher without a user dictionary says so.
+TEST_F(DispatcherTest, UserWordEditsWithoutUserDictionaryReportUnavailable) {
+  azookey::host::Dispatcher no_dict_dispatcher(&engine, &scheduler, nullptr,
+                                               DefaultDispatcherConfig());
+  ipc::AddUserWordRequest add;
+  add.word = "azooKey";
+  add.ruby = "あずきい";
+  auto add_resp = no_dict_dispatcher.Dispatch(
+      MakeReq(66, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(add_resp.has_value());
+  auto add_parsed = ipc::ParseAddUserWordResponse(add_resp->payload_json);
+  ASSERT_TRUE(add_parsed.has_value());
+  EXPECT_FALSE(add_parsed->ok);
+  EXPECT_EQ(add_parsed->error, "unavailable");
+
+  ipc::RemoveUserWordRequest rm;
+  rm.word = "azooKey";
+  rm.ruby = "あずきい";
+  auto rm_resp = no_dict_dispatcher.Dispatch(
+      MakeReq(67, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(rm)));
+  ASSERT_TRUE(rm_resp.has_value());
+  auto rm_parsed = ipc::ParseRemoveUserWordResponse(rm_resp->payload_json);
+  ASSERT_TRUE(rm_parsed.has_value());
+  EXPECT_FALSE(rm_parsed->ok);
+  EXPECT_EQ(rm_parsed->error, "unavailable");
 }
 
 // DEV-1572: each user dictionary edit leaves one record with its stages and
@@ -2275,6 +2333,7 @@ TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
   auto parsed = ipc::ParseAddUserWordResponse(resp->payload_json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, "save_failed");
   EXPECT_TRUE(bad_dict.Lookup("あずきい").empty());
   ASSERT_TRUE(engine.last_error().has_value());
   EXPECT_EQ(*engine.last_error(), "failed to save user dictionary");
@@ -2314,6 +2373,7 @@ TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
   auto parsed = ipc::ParseRemoveUserWordResponse(resp->payload_json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, "save_failed");
   auto hits = bad_dict.Lookup("あずきい");
   ASSERT_EQ(hits.size(), 1u);
   EXPECT_EQ(hits.front(), existing);

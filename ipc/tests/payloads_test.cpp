@@ -1233,6 +1233,41 @@ TEST(PayloadsTest, NewWordResponsesCarryAnErrorChannel) {
   EXPECT_FALSE(legacy_resolve->error);
 }
 
+// DEV-1581: the user dictionary edit responses carry the Host's reason, and a
+// response from an older Host without it still parses.
+TEST(PayloadsTest, UserWordResponsesCarryAnErrorChannel) {
+  azookey::ipc::AddUserWordResponse add;
+  add.ok = false;
+  add.error = std::string(azookey::ipc::kUserDictErrorBusy);
+  const auto parsed_add =
+      azookey::ipc::ParseAddUserWordResponse(azookey::ipc::BuildAddUserWordResponse(add));
+  ASSERT_TRUE(parsed_add);
+  EXPECT_FALSE(parsed_add->ok);
+  EXPECT_EQ(parsed_add->error, "busy");
+
+  azookey::ipc::RemoveUserWordResponse remove;
+  remove.ok = false;
+  remove.error = std::string(azookey::ipc::kUserDictErrorNotFound);
+  const auto parsed_remove =
+      azookey::ipc::ParseRemoveUserWordResponse(azookey::ipc::BuildRemoveUserWordResponse(remove));
+  ASSERT_TRUE(parsed_remove);
+  EXPECT_FALSE(parsed_remove->ok);
+  EXPECT_EQ(parsed_remove->error, "not_found");
+
+  azookey::ipc::AddUserWordResponse ok;
+  ok.ok = true;
+  EXPECT_EQ(azookey::ipc::BuildAddUserWordResponse(ok).find("error"), std::string::npos);
+
+  const auto legacy_add = azookey::ipc::ParseAddUserWordResponse(R"({"ok":false})");
+  ASSERT_TRUE(legacy_add);
+  EXPECT_FALSE(legacy_add->ok);
+  EXPECT_FALSE(legacy_add->error);
+  const auto legacy_remove = azookey::ipc::ParseRemoveUserWordResponse(R"({"ok":true})");
+  ASSERT_TRUE(legacy_remove);
+  EXPECT_TRUE(legacy_remove->ok);
+  EXPECT_FALSE(legacy_remove->error);
+}
+
 TEST(PayloadsTest, ListNewWordCandidatesRejectsUnknownFilterAndOutOfRangeLimit) {
   // Widening an unknown filter to "everything" would show the user words they
   // already rejected.

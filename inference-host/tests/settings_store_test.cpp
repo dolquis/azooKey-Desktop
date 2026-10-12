@@ -608,6 +608,48 @@ TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
   }
 }
 
+TEST(SettingsStoreTest, NllRerankFollowsThePowerLane) {
+  using namespace azookey::host;
+  struct Case {
+    std::string profile;
+    PowerSource source;
+    bool nll_enabled;
+  };
+  for (const auto& c :
+       {Case{"auto", PowerSource::Ac, true}, Case{"auto", PowerSource::Unknown, true},
+        Case{"auto", PowerSource::Battery, false}, Case{"performance", PowerSource::Battery, true},
+        Case{"battery_saver", PowerSource::Ac, false}}) {
+    RuntimeSettings settings;
+    settings.power_profile = c.profile;
+    settings.nll.enabled = true;
+    const auto config = ApplyRuntimeSettingsToEngineConfig(
+        {}, settings, BackendKind::Cpu, [&] { return InferenceThreadEnvironment{c.source, 8}; });
+    EXPECT_EQ(config.nll.enabled, c.nll_enabled) << c.profile;
+  }
+
+  // A user who left NLL off keeps it off on AC as well.
+  RuntimeSettings settings;
+  const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
+    return InferenceThreadEnvironment{PowerSource::Ac, 8};
+  });
+  EXPECT_FALSE(config.nll.enabled);
+}
+
+TEST(SettingsStoreTest, PowerProfileDecidesTheLaneWithoutQueryingTheEnvironment) {
+  using namespace azookey::host;
+  for (const std::string profile : {"performance", "battery_saver"}) {
+    RuntimeSettings settings;
+    settings.power_profile = profile;
+    settings.nll.enabled = true;
+    settings.inference_threads = 4;
+    const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
+      ADD_FAILURE() << "an explicit power profile must not query the environment";
+      return InferenceThreadEnvironment{PowerSource::Battery, 1};
+    });
+    EXPECT_EQ(config.nll.enabled, profile == "performance");
+  }
+}
+
 TEST(SettingsStoreTest, ExplicitInferenceThreadsOverrideEnvironmentWithoutQueryingIt) {
   using namespace azookey::host;
   for (const std::string profile : {"auto", "performance", "battery_saver"}) {

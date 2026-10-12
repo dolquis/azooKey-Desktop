@@ -1,11 +1,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -15,6 +17,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -49,6 +52,8 @@
 #include "azookey/host/ModelsCli.h"
 #include "azookey/host/NeologdPack.h"
 #include "azookey/host/NewWordsCli.h"
+#include "azookey/host/PowerLanePolicy.h"
+#include "azookey/host/PowerStatusWatcher.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/TrendingWordFetcher.h"
@@ -414,6 +419,63 @@ void LogBackendSelection(azookey::logging::RuntimeLogger& logger, std::string_vi
               {"winml_os_eligible", selection.winml_os_eligible},
               {"on_battery", facts.on_battery}});
 }
+
+// M25: applies a power source change off the watcher's window thread, so an
+// UpdateConfig model load holding the config lock does not stall the window.
+// Changes that arrive while one is applied collapse into one more run.
+class PowerChangeWorker {
+ public:
+  using Apply = std::function<void(azookey::host::PowerSource from, azookey::host::PowerSource to)>;
+
+  explicit PowerChangeWorker(Apply apply) : apply_(std::move(apply)), thread_([this] { Run(); }) {}
+  ~PowerChangeWorker() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    wake_.notify_one();
+    thread_.join();
+  }
+  PowerChangeWorker(const PowerChangeWorker&) = delete;
+  PowerChangeWorker& operator=(const PowerChangeWorker&) = delete;
+
+  void Request(azookey::host::PowerSource from, azookey::host::PowerSource to) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (pending_) {
+        pending_->second = to;
+      } else {
+        pending_.emplace(from, to);
+      }
+    }
+    wake_.notify_one();
+  }
+
+ private:
+  void Run() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (true) {
+      wake_.wait(lock, [this] { return stopping_ || pending_.has_value(); });
+      if (stopping_) return;
+      const auto change = *pending_;
+      pending_.reset();
+      lock.unlock();
+      try {
+        apply_(change.first, change.second);
+      } catch (...) {
+        // The next change applies the settings again.
+      }
+      lock.lock();
+    }
+  }
+
+  Apply apply_;
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::optional<std::pair<azookey::host::PowerSource, azookey::host::PowerSource>> pending_;
+  bool stopping_{false};
+  std::thread thread_;
+};
 
 #ifdef _WIN32
 std::filesystem::path GetExeDirectory() {
@@ -1081,6 +1143,44 @@ int main(int argc, char** argv) {
   // each client's authentication state is isolated.
   azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf,
                                              &settings_store, &auto_word_store, &runtime_log);
+
+  // M25 (docs/copilot-pc-backend-spec.md section 6): a power source change
+  // re-applies the runtime settings, under the lock UpdateConfig takes, so the
+  // lane and the thread count follow it. The thread count takes effect at the
+  // next model load; the backend stays the one chosen at startup.
+  PowerChangeWorker power_change_worker([&engine, &settings_store, &runtime_log,
+                                         update_config_mutex = dconf.update_config_mutex,
+                                         default_backend](azookey::host::PowerSource from,
+                                                          azookey::host::PowerSource to) {
+    std::lock_guard<std::mutex> lock(*update_config_mutex);
+    const auto& settings = settings_store.settings();
+    engine.ApplyConfig(azookey::host::ApplyRuntimeSettingsToEngineConfig(engine.config(), settings,
+                                                                         default_backend));
+    runtime_log.Log(
+        azookey::logging::RuntimeLogLevel::Info, "power_source_changed",
+        {{"from", SafeLogText(std::string(azookey::host::PowerSourceName(from)))},
+         {"to", SafeLogText(std::string(azookey::host::PowerSourceName(to)))},
+         {"on_battery", azookey::host::OnBatteryForBackendSelection(to, settings.power_profile)},
+         {"power_profile", SafeLogText(settings.power_profile)},
+         {"lane", SafeLogText(std::string(azookey::host::InferenceLaneName(
+                      azookey::host::ResolveInferenceLane(to, settings.power_profile))))}});
+  });
+  azookey::host::PowerStateTracker power_tracker(
+      azookey::host::QuerySystemPowerSource,
+      [&power_change_worker](azookey::host::PowerSource from, azookey::host::PowerSource to) {
+        power_change_worker.Request(from, to);
+      });
+  azookey::host::PowerStatusWatcher power_watcher(power_tracker);
+  if (power_watcher.Start()) {
+    runtime_log.Log(
+        azookey::logging::RuntimeLogLevel::Info, "power_watch_started",
+        {{"power_source",
+          SafeLogText(std::string(azookey::host::PowerSourceName(power_tracker.current())))}});
+  } else {
+    // Without the watcher the power source sampled at startup stays in effect.
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "power_watch_unavailable",
+                    {{"error_code", SafeLogText("business")}});
+  }
 
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="

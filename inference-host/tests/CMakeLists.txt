@@ -46,6 +46,12 @@ target_link_libraries(host_args_tests
 )
 azookey_discover_tests(host_args_tests)
 
+add_executable(host_power_tests power_status_test.cpp mmap_loader_test.cpp)
+target_link_libraries(host_power_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_power_tests)
+
 add_executable(host_stderr_line_queue_tests stderr_line_queue_test.cpp)
 target_link_libraries(host_stderr_line_queue_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings

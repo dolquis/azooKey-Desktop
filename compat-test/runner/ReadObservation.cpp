@@ -1,6 +1,7 @@
 #include "runner/ReadObservation.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cwctype>
 #include <utility>
 
@@ -42,6 +43,16 @@ TextRelation ClassifyRelation(const std::optional<std::wstring>& text,
   }
   return TextRelation::Other;
 }
+
+std::string VirtualKeyAction(unsigned virtual_key, bool with_modifier) {
+  char label[24]{};
+  std::snprintf(label, sizeof(label), "%svk:0x%02X", with_modifier ? "mod+" : "", virtual_key);
+  return label;
+}
+
+std::string AsciiInputAction(size_t count) { return "ascii:" + std::to_string(count); }
+
+std::string UnicodeInputAction(size_t count) { return "unicode:" + std::to_string(count); }
 
 const char* ReadSourceName(ReadSource source) {
   switch (source) {

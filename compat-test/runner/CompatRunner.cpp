@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstdio>
 #include <cwchar>
 #include <cwctype>
 #include <fstream>
@@ -525,9 +524,7 @@ bool AutomationSession::SendVirtualKey(WORD virtual_key) {
   INPUT up = down;
   up.ki.dwFlags = KEYEVENTF_KEYUP;
   const bool sent = SendKeyInputs({down, up});
-  char label[16]{};
-  std::snprintf(label, sizeof(label), "vk:0x%02X", static_cast<unsigned>(virtual_key));
-  NoteInputAction(label);
+  NoteInputAction(VirtualKeyAction(virtual_key, false));
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
   return sent;
 }
@@ -546,7 +543,7 @@ bool AutomationSession::SendAscii(const std::string& text) {
     if (!SendVirtualKey(key)) return false;
     typed_ascii_ += static_cast<char>(ch);
   }
-  NoteInputAction("ascii:" + std::to_string(text.size()));
+  NoteInputAction(AsciiInputAction(text.size()));
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   return true;
 }
@@ -566,7 +563,7 @@ bool AutomationSession::SendUnicode(std::wstring_view text) {
     inputs.push_back(up);
   }
   if (!SendKeyInputs(inputs)) return false;
-  NoteInputAction("unicode:" + std::to_string(text.size()));
+  NoteInputAction(UnicodeInputAction(text.size()));
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   return true;
 }
@@ -596,9 +593,7 @@ bool AutomationSession::SendModifiedKey(std::initializer_list<WORD> modifiers, W
     inputs.push_back(input);
   }
   const bool sent = SendKeyInputs(inputs);
-  char label[24]{};
-  std::snprintf(label, sizeof(label), "mod+vk:0x%02X", static_cast<unsigned>(virtual_key));
-  NoteInputAction(label);
+  NoteInputAction(VirtualKeyAction(virtual_key, true));
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
   return sent;
 }
@@ -680,8 +675,9 @@ void AutomationSession::BeginCase() {
   last_input_action_.clear();
 }
 
-void AutomationSession::RecordPostFailureReads() {
+void AutomationSession::AppendPostFailureReads(const std::filesystem::path& failure_log) {
   if (!editor_ || read_trace_.empty()) return;
+  const size_t recorded_before = read_trace_.size();
   // 失敗の判定後に値が変わるか（古い値を読んでいたか）を見る。判定結果は変えない。
   constexpr std::array<int, 4> kDelaysMs = {0, 250, 250, 500};
   for (const int delay_ms : kDelaysMs) {
@@ -692,6 +688,10 @@ void AutomationSession::RecordPostFailureReads() {
     read_trace_.RecordRead(ReadPhase::PostFailure, last_input_action_, elapsed,
                            {ReadTextPatternText(editor_), ReadSource::Text}, typed_ascii_);
   }
+  // 矩形と画像の採取（CaptureFailureArtifacts）より後に、追加分だけを failure.log へ足す。
+  std::ofstream log(failure_log, std::ios::binary | std::ios::app);
+  const auto lines = read_trace_.Lines();
+  for (size_t i = recorded_before; i < lines.size(); ++i) log << lines[i] << "\n";
 }
 
 std::optional<RECT> AutomationSession::CaretRect() const {
@@ -1046,8 +1046,8 @@ int wmain(int argc, wchar_t** argv) {
                                     .count());
       if (result.status != ResultStatus::Pass) {
         result.failure_directory = FailureDirectory(output_path, result);
-        session.RecordPostFailureReads();
         session.CaptureFailureArtifacts(result, output_path);
+        session.AppendPostFailureReads(result.failure_directory / "failure.log");
       }
       results.push_back(std::move(result));
     }

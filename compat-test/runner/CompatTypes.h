@@ -83,8 +83,9 @@ class AutomationSession {
   // 値の安定まで再読した値を返す（既定は従来どおり 1 回読み）。
   void BeginCase();
   void set_settle_reads(bool enabled) { settle_reads_ = enabled; }
-  // 失敗したケースの終了後に Value / Text を時間をおいて読み、記録へ足す（判定は変えない）。
-  void RecordPostFailureReads();
+  // 失敗したケースの終了後（CaptureFailureArtifacts の後）に Value / Text を時間をおいて読み、
+  // failure.log へ追記する（判定と成果物の採取時点は変えない）。
+  void AppendPostFailureReads(const std::filesystem::path& failure_log);
   std::optional<RECT> CaretRect() const;
   std::optional<RECT> CandidateRect() const;
   std::optional<RECT> PredictionRect() const;

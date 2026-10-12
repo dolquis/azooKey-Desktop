@@ -35,6 +35,11 @@ TextCensus CensusOf(std::wstring_view text);
 TextRelation ClassifyRelation(const std::optional<std::wstring>& text,
                               std::string_view typed_ascii);
 
+// failure.log の action 欄に出す、入力内容を含まないラベル（キーコードと文字数だけ）。
+std::string VirtualKeyAction(unsigned virtual_key, bool with_modifier);
+std::string AsciiInputAction(size_t count);
+std::string UnicodeInputAction(size_t count);
+
 const char* ReadSourceName(ReadSource source);
 const char* ReadPhaseName(ReadPhase phase);
 const char* TextRelationName(TextRelation relation);

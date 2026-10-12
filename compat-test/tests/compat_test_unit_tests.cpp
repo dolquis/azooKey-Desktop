@@ -747,6 +747,27 @@ TEST(ReadObservationTest, TraceLinesNeverContainTheObservedText) {
   EXPECT_NE(lines[2].find("relation=absent"), std::string::npos);
 }
 
+TEST(ReadObservationTest, FailureLogLinesCarryOnlyKeyCodesAndCountsForEveryInputAction) {
+  const std::wstring sentinel = L"SECRETsentinel秘密";
+  const std::string actions[] = {VirtualKeyAction(0x1B, false), VirtualKeyAction(0x0D, true),
+                                 AsciiInputAction(7), UnicodeInputAction(sentinel.size())};
+  EXPECT_EQ(actions[0], "vk:0x1B");
+  EXPECT_EQ(actions[1], "mod+vk:0x0D");
+  EXPECT_EQ(actions[2], "ascii:7");
+  EXPECT_EQ(actions[3], "unicode:16");
+  ReadTrace trace;
+  for (const auto& action : actions) {
+    trace.RecordRead(ReadPhase::Judge, action, 10, {sentinel, ReadSource::Value}, "nihongo");
+    trace.RecordRead(ReadPhase::PostFailure, action, 20, {sentinel, ReadSource::Text}, "nihongo");
+  }
+  trace.RecordSettleSummary(false, 4, 1500);
+  std::string everything;
+  for (const auto& line : trace.Lines()) everything += line + "\n";
+  EXPECT_EQ(everything.find("SECRET"), std::string::npos);
+  EXPECT_EQ(everything.find("sentinel"), std::string::npos);
+  for (const unsigned char ch : everything) EXPECT_LT(ch, 0x80u);
+}
+
 TEST(ReadObservationTest, ChangeDetectionIsTrackedPerSourceAndResetsWithTheCase) {
   ReadTrace trace;
   trace.RecordRead(ReadPhase::Judge, "", 1, {std::wstring(L"a"), ReadSource::Value}, "");
@@ -799,20 +820,30 @@ TEST_F(SettleReadsTest, ChangedValueRestartsTheCountAndReturnsTheSettledValue) {
   EXPECT_EQ(outcome.last.text, std::optional<std::wstring>(L"にほんご"));
 }
 
-TEST_F(SettleReadsTest, GivesUpAtTheCeilingAndReportsUnstable) {
+TEST_F(SettleReadsTest, SettlesOnTheNewValueAfterOneChangeWithinTheCeiling) {
   const auto outcome = Run({L"a", L"b"}, SettleOptions{2, 100, 450});
-  // 値が a→b で止まり、b が 2 回続くので 3 回目で安定する。
+  // a→b と変わったあと b が 2 回続くので 3 回目で安定する。
   EXPECT_TRUE(outcome.stable);
   EXPECT_EQ(outcome.reads, 3u);
+  EXPECT_EQ(outcome.last.text, std::optional<std::wstring>(L"b"));
+}
 
-  reads_ = 0;
-  now_ms_ = 0;
-  observed_ = 0;
-  const auto flapping =
-      Run({L"a", L"b", L"c", L"d", L"e", L"f", L"g", L"h"}, SettleOptions{2, 100, 450});
-  EXPECT_FALSE(flapping.stable);
-  EXPECT_EQ(flapping.reads, 6u);
-  EXPECT_EQ(now_ms_, 500u);
+TEST_F(SettleReadsTest, GivesUpAsSoonAsTheElapsedTimeEqualsTheCeiling) {
+  // 読み取りは 0 / 100 / 200 / 300 ms。4 回目の直後に経過が上限（300 ms）に達して打ち切る。
+  const auto outcome =
+      Run({L"a", L"b", L"c", L"d", L"e", L"f", L"g", L"h"}, SettleOptions{2, 100, 300});
+  EXPECT_FALSE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 4u);
+  EXPECT_EQ(now_ms_, 300u);
+}
+
+TEST_F(SettleReadsTest, ContinuesWhenTheElapsedTimeIsJustBelowTheCeiling) {
+  // 上限が 301 ms なら 4 回目（300 ms）の後も続き、5 回目（400 ms）で打ち切る。
+  const auto outcome =
+      Run({L"a", L"b", L"c", L"d", L"e", L"f", L"g", L"h"}, SettleOptions{2, 100, 301});
+  EXPECT_FALSE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 5u);
+  EXPECT_EQ(now_ms_, 400u);
 }
 
 TEST_F(SettleReadsTest, TreatsUnreadableAsAValueAndNeverWaitsPastTheLastRead) {

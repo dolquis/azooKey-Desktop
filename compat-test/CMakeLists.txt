@@ -2,6 +2,7 @@ add_library(azookey_compat_test_support STATIC
   runner/CaseSelection.cpp
   runner/CaseSupport.cpp
   runner/ClipboardIsolation.cpp
+  runner/ReadObservation.cpp
   runner/ReportWriter.cpp
   runner/ScreenshotCapture.cpp
   runner/TargetConfigLoader.cpp

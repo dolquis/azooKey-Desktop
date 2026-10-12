@@ -14,6 +14,8 @@
 #include <string_view>
 #include <vector>
 
+#include "runner/ReadObservation.h"
+
 struct IUIAutomation;
 struct IUIAutomationElement;
 
@@ -77,6 +79,13 @@ class AutomationSession {
                                          : "input-injection-failed";
   }
   std::optional<std::wstring> ReadEditorText();
+  // 診断用。ケースごとに読み取りの記録を空にする。--settle-reads 指定時は ReadEditorText が
+  // 値の安定まで再読した値を返す（既定は従来どおり 1 回読み）。
+  void BeginCase();
+  void set_settle_reads(bool enabled) { settle_reads_ = enabled; }
+  // 失敗したケースの終了後（CaptureFailureArtifacts の後）に Value / Text を時間をおいて読み、
+  // failure.log へ追記する（判定と成果物の採取時点は変えない）。
+  void AppendPostFailureReads(const std::filesystem::path& failure_log);
   std::optional<RECT> CaretRect() const;
   std::optional<RECT> CandidateRect() const;
   std::optional<RECT> PredictionRect() const;
@@ -95,6 +104,8 @@ class AutomationSession {
   bool SendKeyInputs(const std::vector<INPUT>& inputs);
   std::optional<RECT> WindowRectForClass(std::wstring_view class_name) const;
   void CloseLaunchedWindow();
+  void NoteInputAction(std::string action);
+  uint64_t MillisecondsSinceInput() const;
 
   TargetConfig target_;
   PROCESS_INFORMATION process_info_{};
@@ -110,6 +121,11 @@ class AutomationSession {
   bool focus_lost_{false};
   bool prediction_window_remained_{false};
   uint64_t editor_discovery_duration_ms_{0};
+  bool settle_reads_{false};
+  ReadTrace read_trace_;
+  std::string last_input_action_;
+  std::string typed_ascii_;
+  std::chrono::steady_clock::time_point last_input_at_{std::chrono::steady_clock::now()};
   std::filesystem::path temporary_document_;
 };
 

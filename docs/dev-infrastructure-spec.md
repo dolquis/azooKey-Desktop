@@ -3389,7 +3389,7 @@ compat-report-YYYYMMDD-HHMMSS/
 │   └── notepad_C-001_fail.png
 └── failures/
     └── notepad_C-001_fail/
-        ├── failure.log    # 固定 reason code と矩形のみ
+        ├── failure.log    # 固定 reason code・矩形・本文を含まない読み取り診断値のみ
         └── screenshot.png
 ```
 

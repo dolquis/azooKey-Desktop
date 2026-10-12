@@ -1459,7 +1459,7 @@ schema 自体は superset のまま変えない。
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時に BackendSelector が解決する backend（`copilot-pc-backend-spec.md` §4.4、`--backend` 明示時はその値）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
 | `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 

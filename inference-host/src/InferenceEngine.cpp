@@ -11,6 +11,7 @@
 #include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/core/Utf8.h"
+#include "azookey/host/BackendSelector.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/ZenzaiModelConverter.h"
@@ -773,7 +774,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     return result;
   }
 
-  if (next_config.backend == BackendKind::Cuda) {
+  // A backend this build cannot attempt is detected here rather than tried.
+  // Spec 4.4 keeps this CUDA fallback a successful load that only warns.
+  if (next_config.backend == BackendKind::Cuda && !CompiledBackendsForThisBuild().cuda) {
     next_config.backend = BackendKind::Cpu;
     result.error = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
   }

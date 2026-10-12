@@ -39,6 +39,7 @@
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/BackendSelector.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
 #include "azookey/host/HostStartup.h"
@@ -356,6 +357,55 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   }
 }
 
+struct HostBackendSelection {
+  azookey::host::BackendSystemFacts facts;
+  azookey::host::BackendSelection selection;
+};
+
+HostBackendSelection SelectAutoBackendForHost(const azookey::host::RuntimeSettings& settings) {
+  const auto adapters = azookey::host::MakeSystemAdapterEnumerator();
+  const auto libraries = azookey::host::MakeSystemRuntimeLibraryProbe();
+  const auto os = azookey::host::MakeSystemOsVersionProbe();
+  const bool on_battery = azookey::host::OnBatteryForBackendSelection(
+      azookey::host::QueryInferenceThreadEnvironment().power_source, settings.power_profile);
+  HostBackendSelection result;
+  result.facts = azookey::host::CollectBackendSystemFacts(*adapters, *libraries, *os, on_battery);
+  result.selection =
+      azookey::host::SelectAutoBackend(result.facts, azookey::host::CompiledBackendsForThisBuild());
+  return result;
+}
+
+std::string_view BackendRequestSource(bool explicit_backend,
+                                      const azookey::host::RuntimeSettings& settings) {
+  if (explicit_backend) return "cli";
+  if (settings.model.backend_preference != "auto" || settings.backend_preference != "auto") {
+    return "settings";
+  }
+  return "auto";
+}
+
+// The adapter names are left out; counts and reason codes are enough to
+// tell which branch ran.
+void LogBackendSelection(azookey::logging::RuntimeLogger& logger, std::string_view source,
+                         azookey::host::BackendKind requested,
+                         const HostBackendSelection& backend) {
+  const auto& selection = backend.selection;
+  const auto& facts = backend.facts;
+  logger.Log(azookey::logging::RuntimeLogLevel::Info, "backend_selected",
+             {{"source", SafeLogText(std::string(source))},
+              {"requested", SafeLogText(azookey::host::BackendName(requested))},
+              {"auto_backend", SafeLogText(azookey::host::BackendName(selection.backend))},
+              {"reason", SafeLogText(azookey::host::BackendSelectionReasonName(selection.reason))},
+              {"adapters_known", facts.adapters.has_value()},
+              {"hw_gpu_count", static_cast<uint64_t>(selection.hardware_gpu_count)},
+              {"hw_ml_only_count", static_cast<uint64_t>(selection.hardware_ml_only_count)},
+              {"vulkan_loader", facts.vulkan_loader_present},
+              {"cuda_runtime", facts.cuda_runtime_present},
+              {"os_build", static_cast<uint64_t>(facts.os_build.value_or(0))},
+              {"winml_os_eligible", selection.winml_os_eligible},
+              {"on_battery", facts.on_battery}});
+}
+
 #ifdef _WIN32
 std::filesystem::path GetExeDirectory() {
   wchar_t buf[MAX_PATH]{};
@@ -442,7 +492,6 @@ int main(int argc, char** argv) {
   config.learning_flush_interval_sec = AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC;
 #endif
   ApplyDefaultBackend(config);
-  const auto default_backend = config.backend;
   std::string args_error;
   auto command_line = azookey::core::Utf8CommandLineArguments(argc, argv, &args_error);
   if (!command_line) {
@@ -715,11 +764,17 @@ int main(int argc, char** argv) {
                   {{"status", static_cast<uint64_t>(azookey::core::CrashReporting::Status())}});
   const auto cli_backend = config.backend;
   const auto cli_model_path = config.model_path;
+  // M24: settings `auto` resolves to what BackendSelector picks for this
+  // machine; an explicit --backend and a non-auto preference still win.
+  const auto auto_backend = SelectAutoBackendForHost(settings_result.settings);
+  const auto default_backend = auto_backend.selection.backend;
   config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,
                                                              default_backend);
   if (explicit_backend) {
     config.backend = cli_backend;
   }
+  LogBackendSelection(runtime_log, BackendRequestSource(explicit_backend, settings_result.settings),
+                      config.backend, auto_backend);
   // SafeMode runs no model, including one named on the command line.
   if (explicit_model_path && !safe_mode) {
     config.model_path = cli_model_path;

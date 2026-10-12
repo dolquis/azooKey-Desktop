@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cwchar>
 #include <cwctype>
 #include <fstream>
@@ -222,50 +223,64 @@ std::wstring QuoteArgument(std::wstring_view value) {
   return result;
 }
 
-std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
-  const auto normalize = [](std::wstring value) {
-    while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) value.pop_back();
-    return value;
-  };
-  std::optional<std::wstring> empty_value;
-  IUnknown* unknown = nullptr;
-  if (SUCCEEDED(element->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {
-    IUIAutomationValuePattern* value_pattern = nullptr;
-    if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&value_pattern))) && value_pattern) {
-      BSTR value = nullptr;
-      const HRESULT hr = value_pattern->get_CurrentValue(&value);
-      std::wstring result =
-          SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value)) : std::wstring{};
-      if (value) SysFreeString(value);
-      SafeRelease(value_pattern);
-      SafeRelease(unknown);
-      if (SUCCEEDED(hr)) {
-        result = normalize(std::move(result));
-        if (!result.empty()) return result;
-        empty_value = std::move(result);
-      }
-    }
-    SafeRelease(unknown);
-  }
+std::wstring TrimTrailingLineBreaks(std::wstring value) {
+  while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) value.pop_back();
+  return value;
+}
 
-  if (SUCCEEDED(element->GetCurrentPattern(UIA_TextPatternId, &unknown)) && unknown) {
-    IUIAutomationTextPattern* text_pattern = nullptr;
-    if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&text_pattern))) && text_pattern) {
-      IUIAutomationTextRange* range = nullptr;
-      BSTR value = nullptr;
-      HRESULT hr = text_pattern->get_DocumentRange(&range);
-      if (SUCCEEDED(hr) && range) hr = range->GetText(-1, &value);
-      std::wstring result =
-          SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value)) : std::wstring{};
-      if (value) SysFreeString(value);
-      SafeRelease(range);
-      SafeRelease(text_pattern);
-      SafeRelease(unknown);
-      if (SUCCEEDED(hr)) return normalize(std::move(result));
-    }
-    SafeRelease(unknown);
+std::optional<std::wstring> ReadValuePatternText(IUIAutomationElement* element) {
+  IUnknown* unknown = nullptr;
+  if (FAILED(element->GetCurrentPattern(UIA_ValuePatternId, &unknown)) || !unknown) {
+    return std::nullopt;
   }
-  return empty_value;
+  std::optional<std::wstring> result;
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&value_pattern))) && value_pattern) {
+    BSTR value = nullptr;
+    const HRESULT hr = value_pattern->get_CurrentValue(&value);
+    if (SUCCEEDED(hr)) {
+      result =
+          TrimTrailingLineBreaks(value ? std::wstring(value, SysStringLen(value)) : std::wstring{});
+    }
+    if (value) SysFreeString(value);
+    SafeRelease(value_pattern);
+  }
+  SafeRelease(unknown);
+  return result;
+}
+
+std::optional<std::wstring> ReadTextPatternText(IUIAutomationElement* element) {
+  IUnknown* unknown = nullptr;
+  if (FAILED(element->GetCurrentPattern(UIA_TextPatternId, &unknown)) || !unknown) {
+    return std::nullopt;
+  }
+  std::optional<std::wstring> result;
+  IUIAutomationTextPattern* text_pattern = nullptr;
+  if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&text_pattern))) && text_pattern) {
+    IUIAutomationTextRange* range = nullptr;
+    BSTR value = nullptr;
+    HRESULT hr = text_pattern->get_DocumentRange(&range);
+    if (SUCCEEDED(hr) && range) hr = range->GetText(-1, &value);
+    if (SUCCEEDED(hr)) {
+      result =
+          TrimTrailingLineBreaks(value ? std::wstring(value, SysStringLen(value)) : std::wstring{});
+    }
+    if (value) SysFreeString(value);
+    SafeRelease(range);
+    SafeRelease(text_pattern);
+  }
+  SafeRelease(unknown);
+  return result;
+}
+
+// Value が非空ならそれを返す。空または取得不能なら TextPattern を読み、
+// それも取れなければ（Value が空の読み取りに成功していた場合に限り）空文字列を返す。
+ObservedRead ReadElementText(IUIAutomationElement* element) {
+  auto value = ReadValuePatternText(element);
+  if (value && !value->empty()) return {std::move(value), ReadSource::Value};
+  if (auto text = ReadTextPatternText(element)) return {std::move(text), ReadSource::Text};
+  if (value) return {std::move(value), ReadSource::Value};
+  return {};
 }
 
 std::filesystem::path FailureDirectory(const std::filesystem::path& output,
@@ -487,8 +502,20 @@ bool AutomationSession::SendKeyInputs(const std::vector<INPUT>& inputs) {
     focus_lost_ = true;
     return false;
   }
-  return SendInput(static_cast<UINT>(inputs.size()), const_cast<INPUT*>(inputs.data()),
-                   sizeof(INPUT)) == inputs.size();
+  const bool sent = SendInput(static_cast<UINT>(inputs.size()), const_cast<INPUT*>(inputs.data()),
+                              sizeof(INPUT)) == inputs.size();
+  last_input_at_ = std::chrono::steady_clock::now();
+  return sent;
+}
+
+void AutomationSession::NoteInputAction(std::string action) {
+  last_input_action_ = std::move(action);
+}
+
+uint64_t AutomationSession::MillisecondsSinceInput() const {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - last_input_at_)
+                                   .count());
 }
 
 bool AutomationSession::SendVirtualKey(WORD virtual_key) {
@@ -498,6 +525,9 @@ bool AutomationSession::SendVirtualKey(WORD virtual_key) {
   INPUT up = down;
   up.ki.dwFlags = KEYEVENTF_KEYUP;
   const bool sent = SendKeyInputs({down, up});
+  char label[16]{};
+  std::snprintf(label, sizeof(label), "vk:0x%02X", static_cast<unsigned>(virtual_key));
+  NoteInputAction(label);
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
   return sent;
 }
@@ -514,7 +544,9 @@ bool AutomationSession::SendAscii(const std::string& text) {
       return false;
     }
     if (!SendVirtualKey(key)) return false;
+    typed_ascii_ += static_cast<char>(ch);
   }
+  NoteInputAction("ascii:" + std::to_string(text.size()));
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   return true;
 }
@@ -534,6 +566,7 @@ bool AutomationSession::SendUnicode(std::wstring_view text) {
     inputs.push_back(up);
   }
   if (!SendKeyInputs(inputs)) return false;
+  NoteInputAction("unicode:" + std::to_string(text.size()));
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   return true;
 }
@@ -563,6 +596,9 @@ bool AutomationSession::SendModifiedKey(std::initializer_list<WORD> modifiers, W
     inputs.push_back(input);
   }
   const bool sent = SendKeyInputs(inputs);
+  char label[24]{};
+  std::snprintf(label, sizeof(label), "mod+vk:0x%02X", static_cast<unsigned>(virtual_key));
+  NoteInputAction(label);
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
   return sent;
 }
@@ -579,6 +615,7 @@ bool AutomationSession::DismissPredictionWindow() {
 }
 
 bool AutomationSession::ClearEditor() {
+  typed_ascii_.clear();
   if (!FocusEditor() || !DismissPredictionWindow()) return false;
   if (!SendVirtualKey(VK_ESCAPE)) return false;
   IUnknown* unknown = nullptr;
@@ -613,7 +650,48 @@ bool AutomationSession::ClearEditor() {
 
 std::optional<std::wstring> AutomationSession::ReadEditorText() {
   if (!editor_) return std::nullopt;
-  return ReadElementText(editor_);
+  if (!settle_reads_) {
+    auto read = ReadElementText(editor_);
+    read_trace_.RecordRead(ReadPhase::Judge, last_input_action_, MillisecondsSinceInput(), read,
+                           typed_ascii_);
+    return std::move(read.text);
+  }
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto outcome = SettleReads(
+      SettleOptions{}, [&] { return ReadElementText(editor_); },
+      [&] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - started_at)
+                                         .count());
+      },
+      [](uint64_t milliseconds) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+      },
+      [&](const ObservedRead& read) {
+        read_trace_.RecordRead(ReadPhase::Settle, last_input_action_, MillisecondsSinceInput(),
+                               read, typed_ascii_);
+      });
+  read_trace_.RecordSettleSummary(outcome.stable, outcome.reads, MillisecondsSinceInput());
+  return outcome.last.text;
+}
+
+void AutomationSession::BeginCase() {
+  read_trace_.Clear();
+  last_input_action_.clear();
+}
+
+void AutomationSession::RecordPostFailureReads() {
+  if (!editor_ || read_trace_.empty()) return;
+  // 失敗の判定後に値が変わるか（古い値を読んでいたか）を見る。判定結果は変えない。
+  constexpr std::array<int, 4> kDelaysMs = {0, 250, 250, 500};
+  for (const int delay_ms : kDelaysMs) {
+    if (delay_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    const auto elapsed = MillisecondsSinceInput();
+    read_trace_.RecordRead(ReadPhase::PostFailure, last_input_action_, elapsed,
+                           {ReadValuePatternText(editor_), ReadSource::Value}, typed_ascii_);
+    read_trace_.RecordRead(ReadPhase::PostFailure, last_input_action_, elapsed,
+                           {ReadTextPatternText(editor_), ReadSource::Text}, typed_ascii_);
+  }
 }
 
 std::optional<RECT> AutomationSession::CaretRect() const {
@@ -676,6 +754,9 @@ bool AutomationSession::CaptureFailureArtifacts(
       << "status=" << ResultStatusName(result.status) << "\n"
       << "reason_code=" << result.reason_code << "\n"
       << "editor_discovery_duration_ms=" << editor_discovery_duration_ms_ << "\n";
+  if (settle_reads_) log << "settle_reads=on\n";
+  // 読み取りの記録は長さ・文字種の個数・列挙ラベルだけで、観測した本文は書かない。
+  for (const auto& line : read_trace_.Lines()) log << line << "\n";
   if (!log.good()) return false;
   if (!window_) return true;
 
@@ -812,7 +893,8 @@ namespace {
 
 void PrintUsage() {
   std::cout << "compat_test [--target <target.json>] [--output <directory>]\n"
-               "            [--cases <C-NNN,...>] [--skip <C-NNN,...>]\n";
+               "            [--cases <C-NNN,...>] [--skip <C-NNN,...>]\n"
+               "            [--settle-reads]\n";
 }
 
 std::set<std::string> BaselineDependents(
@@ -838,6 +920,7 @@ int wmain(int argc, wchar_t** argv) {
   std::filesystem::path output_path;
   std::optional<std::vector<std::string>> requested_cases;
   std::optional<std::vector<std::string>> skipped_cases;
+  bool settle_reads = false;
   for (int i = 1; i < argc; ++i) {
     const std::wstring_view argument = argv[i];
     if (argument == L"--help" || argument == L"-h") {
@@ -850,7 +933,9 @@ int wmain(int argc, wchar_t** argv) {
       PrintUsage();
       return 64;
     }
-    if (argument == L"--target") {
+    if (argument == L"--settle-reads") {
+      settle_reads = true;
+    } else if (argument == L"--target") {
       target_path = argv[++i];
     } else if (argument == L"--output") {
       output_path = argv[++i];
@@ -935,12 +1020,14 @@ int wmain(int argc, wchar_t** argv) {
   std::vector<CaseResult> results;
   {
     AutomationSession session(*target);
+    session.set_settle_reads(settle_reads);
     std::string start_reason;
     const bool started = session.Start(&start_reason);
     for (const auto& case_id : plan->executed) {
       CaseResult result;
       result.id = case_id;
       const auto started_at = std::chrono::steady_clock::now();
+      session.BeginCase();
       if (!started) {
         result.status = ResultStatus::FailingSkip;
         result.reason_code = start_reason;
@@ -959,6 +1046,7 @@ int wmain(int argc, wchar_t** argv) {
                                     .count());
       if (result.status != ResultStatus::Pass) {
         result.failure_directory = FailureDirectory(output_path, result);
+        session.RecordPostFailureReads();
         session.CaptureFailureArtifacts(result, output_path);
       }
       results.push_back(std::move(result));

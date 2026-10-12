@@ -37,6 +37,11 @@ C-010 は終了するため、手動の打鍵確認後に分けて実行でき�
 .\build\windows-release\compat-test\compat_test.exe --cases C-010 --output compat-report-c010
 ```
 
+`--settle-reads`（既定は無効）を付けると、ケースの UIA 読み取りが「同じ値が 3 回連続する」まで
+50 ms 間隔・上限 1.5 秒で再読した値を判定に使う。Chromium のように UIA の値が非同期に
+更新されるアプリで、失敗が runner の読み取りによるものかを既定の実行と比べて切り分ける診断用で、
+指定しない限り合否判定は変わらない。
+
 Notepad は空の一時テキストファイル、VS Code は拡張機能を無効にした新規ウィンドウと
 一時テキストファイル、Edge は InPrivate の新規ウィンドウと外部通信を行わない一時 HTML
 を使う。runner は App Paths も検索するため、`Code.exe` / `msedge.exe` が `PATH` に無い
@@ -173,6 +178,15 @@ runner 実装前でも実機で確認できる手動チェックリストを同�
 ## 観測性との整合
 
 ログ・成果物は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシーに
-従う。レポートと失敗ログには固定の reason code だけを書き、観測した入力本文・
-候補本文は書かない。失敗スクリーンショットは元の画面ピクセルを取得せず、
+従う。レポートには固定の reason code だけを書き、失敗ログは reason code と
+本文を含まない診断値（下記）だけを書く。観測した入力本文・候補本文はどちらにも書かない。
+失敗スクリーンショットは元の画面ピクセルを取得せず、
 対象アプリと候補ウィンドウの矩形だけを空の画像へ安全な枠線で描く。
+
+`failure.log` には、UIA 読み取りの診断として `read[N]` 行も書く。1 行は
+読み取りの段階（`judge` / `settle` / `post-failure`）、直前の入力（`ascii:<文字数>`、`vk:0x..` など）、
+取得元（`value` / `text`）、入力からの経過 ms、期待入力との関係の列挙ラベル
+（`absent` / `empty` / `typed-ascii` / `other`）、UTF-16 長、文字種ごとの個数、
+直前の同じ取得元の読み取りからの変化の有無だけを持つ。
+失敗したケースでは判定後に Value と Text を 0 / 250 / 500 / 1000 ms で読み直して追記する
+（判定結果は変えない）。`--settle-reads` では再読の回数と安定したかを `settle_summary` に書く。

@@ -1701,7 +1701,7 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
                                         uint64_t now_epoch_sec, const std::string& observation_id,
                                         const std::string& app_name,
                                         const std::string& left_context) {
-  std::lock_guard history_lock(learning_history_mutex_);
+  std::unique_lock history_lock(learning_history_mutex_);
   const auto context_hash = learning::ContextHash(left_context);
   std::shared_ptr<core::IConverter> converter;
   learning::AutoWordStore* auto_word_store = nullptr;
@@ -1764,8 +1764,13 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     }
     // DEV-1584: a word this commit promoted to Confirmed, once that is saved.
     // IsMiningCandidateLocked keeps pure ASCII surfaces out, so this enters
-    // the English dictionary only if that filter ever lets one through.
-    if (promoted && saved) RegisterConfirmedEnglishWord(surface, "mining");
+    // the English dictionary only if that filter ever lets one through. The
+    // upsert may wait for the dictionary's writer lock; commits do not queue
+    // behind it.
+    if (promoted && saved) {
+      history_lock.unlock();
+      RegisterConfirmedEnglishWord(surface, "mining");
+    }
   }
   return true;
 }

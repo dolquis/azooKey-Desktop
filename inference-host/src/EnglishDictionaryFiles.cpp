@@ -706,19 +706,55 @@ std::vector<EnglishOverlayOp> LatestJournalOps(std::vector<EnglishOverlayOp> ops
 
 }  // namespace
 
-std::optional<EnglishJournalContents> ReadEnglishJournal(const fs::path& path) {
+EnglishJournalLoad LoadEnglishJournal(const fs::path& path) {
+  using State = EnglishJournalState;
+  EnglishJournalLoad load;
+  std::error_code ec;
+  const auto status = fs::status(path, ec);
+  if (status.type() == fs::file_type::not_found) return load;  // Missing.
+  // Something is there that this process cannot inspect or read as a file
+  // now (access denied, a directory in its place): not missing, not corrupt.
+  load.state = State::Unavailable;
+  if (ec || status.type() != fs::file_type::regular) return load;
   const auto file = RawFile::Open(path, false);
+  const auto size = file ? file->Size() : std::nullopt;
+  if (!size) return load;
+  if (*size == 0) {
+    load.state = State::Missing;
+    return load;
+  }
+  // Not corrupt, only too large to read: moving it aside would lose it.
+  if (*size > kJournalHeaderSize + kMaxOverlayBytes) return load;
   uint8_t head[kJournalHeaderSize];
-  if (!file || !file->ReadAt(0, head, sizeof(head))) return std::nullopt;
+  if (*size < kJournalHeaderSize) {
+    load.state = State::Corrupt;
+    return load;
+  }
+  if (!file->ReadAt(0, head, sizeof(head))) return load;
   const auto count = ParseJournalHeader(head);
-  if (!count) return std::nullopt;
+  if (!count) {
+    load.state = State::Corrupt;
+    return load;
+  }
   // op_count first, then only that many frames, as for the overlay (4.7).
   const auto rest = file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes);
-  if (!rest) return std::nullopt;
-  EnglishJournalContents contents;
-  contents.op_count = *count;
-  if (!WalkFrames(*rest, *count, &contents.ops)) return std::nullopt;
-  return contents;
+  if (!rest) return load;
+  const auto walked = WalkFrames(*rest, *count, &load.contents.ops);
+  if (!walked) {
+    load.contents.ops.clear();
+    load.state = State::Corrupt;
+    return load;
+  }
+  load.contents.op_count = *count;
+  load.end = kJournalHeaderSize + *walked;
+  load.state = State::Ok;
+  return load;
+}
+
+std::optional<EnglishJournalContents> ReadEnglishJournal(const fs::path& path) {
+  auto load = LoadEnglishJournal(path);
+  if (load.state != EnglishJournalState::Ok) return std::nullopt;
+  return std::move(load.contents);
 }
 
 std::vector<EnglishWordRecord> ApplyEnglishJournal(std::vector<EnglishWordRecord> records,
@@ -756,45 +792,16 @@ EnglishJournalAppendResult AppendEnglishJournalOp(const fs::path& journal,
                                                   const EnglishWriteHook& hook) {
   using Result = EnglishJournalAppendResult;
   if (op.key.empty() || op.key.size() > 0xFFFF || op.surface.size() > 0xFFFF) return Result::Failed;
-  std::vector<EnglishOverlayOp> ops;
-  uint64_t end = kJournalHeaderSize;
-  bool fresh = false;
-  bool corrupt = false;
-  {
-    // Only a journal that does not exist starts afresh. One that exists but
-    // cannot be opened or read now (access denied, a sharing violation, an I/O
-    // error) fails this append rather than being replaced or moved aside.
-    std::error_code ec;
-    const bool exists = fs::exists(journal, ec);
-    if (ec) return Result::Failed;
-    const auto file = exists ? RawFile::Open(journal, false) : std::nullopt;
-    if (exists && !file) return Result::Failed;
-    const auto size = file ? file->Size() : std::nullopt;
-    if (file && !size) return Result::Failed;
-    uint8_t head[kJournalHeaderSize];
-    if (!exists || size == uint64_t{0}) {
-      fresh = true;
-    } else if (*size > kJournalHeaderSize + kMaxOverlayBytes) {
-      // Not corrupt, only too large to read: moving it aside would lose it.
-      return Result::Failed;
-    } else if (*size < kJournalHeaderSize) {
-      corrupt = true;
-    } else if (!file->ReadAt(0, head, sizeof(head))) {
-      return Result::Failed;
-    } else if (const auto count = ParseJournalHeader(head); !count) {
-      corrupt = true;
-    } else {
-      const auto rest = file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes);
-      if (!rest) return Result::Failed;
-      // Only what the section 4.8 definition calls unreadable is moved aside:
-      // a header that is not a journal, or fewer frames than op_count.
-      if (const auto walked = WalkFrames(*rest, *count, &ops)) {
-        end = kJournalHeaderSize + *walked;
-      } else {
-        corrupt = true;
-      }
-    }
-  }
+  // Only a journal that does not exist starts afresh. One that exists but
+  // cannot be opened or read now (access denied, a sharing violation, an I/O
+  // error) fails this append rather than being replaced or moved aside; only
+  // what section 4.8 calls unreadable is moved aside.
+  auto load = LoadEnglishJournal(journal);
+  if (load.state == EnglishJournalState::Unavailable) return Result::Failed;
+  std::vector<EnglishOverlayOp> ops = std::move(load.contents.ops);
+  const uint64_t end = load.end;
+  bool fresh = load.state == EnglishJournalState::Missing;
+  const bool corrupt = load.state == EnglishJournalState::Corrupt;
   if (corrupt) {
     // Unlike a stale overlay, the journal is the only copy of its ops past a
     // TSV recompile: keep the unreadable file for inspection and start anew.

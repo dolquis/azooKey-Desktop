@@ -4068,3 +4068,29 @@ TEST_F(EngineConfirmedEnglishWordTest, TrendingAutoPromotionUpsertsTheNewlyConfi
   EXPECT_EQ(Lookup("kotlin").size(), 1u);
   EXPECT_EQ(Lookup("swift").size(), 1u);
 }
+
+TEST_F(EngineConfirmedEnglishWordTest, TheUpsertIsLoggedWithItsSourceAndResultButNotTheWord) {
+  const auto log_dir = std::filesystem::path(temp_.File("english_upsert_logs"));
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store_,
+                                        cfg_, &logger);
+  engine.RegisterConfirmedEnglishWord("Kotlin", "trending");
+  std::vector<std::string> records;
+  for (const auto& entry : std::filesystem::directory_iterator(log_dir)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    for (std::string line; std::getline(input, line);) {
+      if (line.find("\"event\":\"english_dictionary_upsert\"") != std::string::npos) {
+        records.push_back(line);
+      }
+    }
+  }
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_NE(records[0].find("\"source\":\"trending\""), std::string::npos) << records[0];
+  EXPECT_NE(records[0].find("\"result\":\"persisted\""), std::string::npos) << records[0];
+  EXPECT_EQ(records[0].find("otlin"), std::string::npos) << records[0];
+}

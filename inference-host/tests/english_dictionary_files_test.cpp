@@ -1168,3 +1168,85 @@ TEST(EnglishDictionaryJournalTest, AJournalThatCannotBeReadNowIsLeftInPlace) {
   EXPECT_EQ(entries, 1u);
   fs::remove_all(dir);
 }
+
+// The overlay took the op but the journal did not: the op stays for this and
+// every other host until the next TSV recompile, and the result says so.
+TEST(EnglishDictionaryJournalTest, AJournalFailureAfterTheOverlayKeepsTheOpInTheOverlay) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  // A new journal is written whole and renamed; stop before the rename.
+  store.SetWriteHookForTest(
+      [](EnglishWriteStep step) { return step != EnglishWriteStep::JournalRewriteWritten; });
+  const auto outcome = store.Upsert("kotlin", 7);
+  EXPECT_EQ(outcome.result, EnglishWriteResult::JournalFailed);
+  EXPECT_TRUE(outcome);
+  store.SetWriteHookForTest({});
+  EXPECT_FALSE(fs::exists(store.paths().journal));
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("kotlin")),
+            std::vector<std::string>{"kotlin"});
+  fs::remove_all(dir);
+}
+
+// Two hosts writing at once each journal every op under the writer lock.
+TEST(EnglishDictionaryJournalTest, TwoStoresWritingAtOnceJournalEveryOp) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore first(tsv);
+  EnglishDictionaryStore second(tsv);
+  ASSERT_EQ(first.Lookup("apple").size(), 1u);
+  ASSERT_EQ(second.Lookup("apple").size(), 1u);
+  constexpr int kWords = 20;
+  const auto write = [](EnglishDictionaryStore& store, const std::string& prefix) {
+    int persisted = 0;
+    for (int i = 0; i < kWords; ++i) {
+      if (store.Upsert(prefix + std::to_string(i), 1).result == EnglishWriteResult::Persisted)
+        ++persisted;
+    }
+    return persisted;
+  };
+  auto a = std::async(std::launch::async, [&] { return write(first, "alpha"); });
+  auto b = std::async(std::launch::async, [&] { return write(second, "beta"); });
+  const int persisted = a.get() + b.get();
+  const auto journal = ReadEnglishJournal(first.paths().journal);
+  ASSERT_TRUE(journal);
+  // An op whose writer lock wait ran out stays in memory and is not journaled.
+  EXPECT_EQ(journal->ops.size(), static_cast<size_t>(persisted));
+  EXPECT_GT(persisted, 0);
+  fs::remove_all(dir);
+}
+
+// A journal that is there but cannot be read when the TSV is recompiled is not
+// taken for a missing one: the base is served from memory without a stamp,
+// and the next writer that holds the lock compiles it again with the journal.
+TEST(EnglishDictionaryJournalTest, ARecompileThatCannotReadTheJournalDoesNotStampTheBase) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  // The journal cannot be read for now: a directory stands in its place.
+  const auto kept = dir / "journal.kept";
+  fs::rename(store.paths().journal, kept);
+  fs::create_directories(store.paths().journal / "inside");
+  WriteText(tsv, "apple\t50\nbanana\t30\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  EXPECT_EQ(Surfaces(store.Lookup("banana")), std::vector<std::string>{"banana"});
+  EXPECT_NE(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+
+  // Readable again: the next write compiles the base with the journal and
+  // stamps it.
+  fs::remove_all(store.paths().journal);
+  fs::rename(kept, store.paths().journal);
+  ASSERT_TRUE(store.Upsert("Swift", 1));
+  EXPECT_EQ(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("kotlin")),
+            std::vector<std::string>{"Kotlin"});
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(tsv).Lookup("swift")),
+            std::vector<std::string>{"Swift"});
+  fs::remove_all(dir);
+}

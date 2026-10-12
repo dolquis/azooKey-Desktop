@@ -183,6 +183,21 @@ struct EnglishJournalContents {
 // than op_count frames.
 std::optional<EnglishJournalContents> ReadEnglishJournal(const std::filesystem::path& path);
 
+enum class EnglishJournalState {
+  Missing,  // No journal, or an empty file: nothing to replay.
+  Ok,
+  Corrupt,      // Not a journal, or shorter than op_count frames.
+  Unavailable,  // There, but cannot be opened or read now, or past the size bound.
+};
+struct EnglishJournalLoad {
+  EnglishJournalState state{EnglishJournalState::Missing};
+  EnglishJournalContents contents;  // Filled when Ok.
+  uint64_t end{};                   // Ok: where the op_count frames end.
+};
+// Section 4.8: tells a journal that is not there from one that cannot be read
+// now, so neither a writer nor a recompile mistakes the latter for the former.
+EnglishJournalLoad LoadEnglishJournal(const std::filesystem::path& path);
+
 // Section 4.8 merge for a TSV recompile. Per (key, surface), the latest
 // journal op decides: a delete hides the TSV record, an upsert adds the entry
 // only when the TSV lacks it (the TSV's frequency and flags win). At most

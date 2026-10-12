@@ -195,25 +195,29 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
                                 : EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_,
                                                                      std::chrono::milliseconds{0});
   const bool locked = file_locked || lock.has_value();
-  // Section 4.8: runtime additions and deletes outlive the TSV edit. Read
-  // after the lock, so an op another host journaled before releasing it is in
-  // the base this one writes. A missing or unreadable journal adds nothing;
-  // the next writer moves the latter aside.
-  if (auto journal = ReadEnglishJournal(paths_.journal)) {
-    records = ApplyEnglishJournal(std::move(records), journal->ops);
-  }
   if (locked && !force && ReadEnglishBaseHeader(paths_.base) &&
       BaseMatchesTsv(paths_.base, tsv_time)) {
     // Another host recompiled it while this one waited for the lock.
     if (auto mapped = EnglishBaseImage::Map(paths_.base)) return mapped;
   }
+  // Section 4.8: runtime additions and deletes outlive the TSV edit. Read
+  // after the lock, so an op another host journaled before releasing it is in
+  // the base this one writes. A missing or corrupt journal adds nothing (the
+  // next writer moves a corrupt one aside). One that cannot be read now must
+  // not be taken for missing: the base is then served from memory only, not
+  // stamped, and the next writer that holds the lock compiles it again.
+  auto journal = LoadEnglishJournal(paths_.journal);
+  if (journal.state == EnglishJournalState::Ok) {
+    records = ApplyEnglishJournal(std::move(records), journal.contents.ops);
+  }
+  const bool journal_unavailable = journal.state == EnglishJournalState::Unavailable;
   const auto previous = ReadEnglishBaseHeader(paths_.base);
   auto bytes = EncodeEnglishBase(std::move(records), previous ? previous->generation + 1 : 1);
   std::shared_ptr<const EnglishBaseImage> base;
   // Stamped with the mtime the parse saw, so a TSV saved again meanwhile no
   // longer matches it. A .bin whose stamp did not hold is not used: this
   // TSV is served from memory instead.
-  if (locked) {
+  if (locked && !journal_unavailable) {
     if (WriteEnglishBase(paths_, bytes, tsv_time, write_hook_)) {
       base = EnglishBaseImage::Map(paths_.base);
     } else {

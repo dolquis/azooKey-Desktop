@@ -668,7 +668,7 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
 - 読めない journal（magic・version の不一致、`op_count` 分のフレームが無い）は、次の writer が
   `english-words.added.bin.corrupt.<UNIX ミリ秒>` へ改名して残し、新しい journal を始める。overlay と違い
   journal は再コンパイル後に op を持つ唯一のファイルなので、再初期化で消さない。64 MiB を超える journal と、
-  存在するのに開けない・読めない journal（アクセス拒否、共有違反、I/O エラー）は壊れているとはみなさず、
+  存在するのに開けない・読めない journal（アクセス拒否、共有違反、I/O エラー、通常のファイルでない）は壊れているとはみなさず、
   その追記を失敗させる。新しい journal を作るのは、journal が存在しないときだけである。
 
 **再コンパイルでの適用**: TSV から base を作るとき、TSV のレコードに journal を重ねる。
@@ -676,7 +676,12 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
 
 - delete は、TSV に同じ語があっても隠す。TSV へ語を書き戻しても、実行時に削除した語は隠れたままである。
 - upsert は、TSV に同じ語が無いときだけ足す。TSV にあれば TSV の frequency と flags を使う。
-- 読めない journal は何も足さない。一意エントリが 10,000 件を超える journal は、最初の 10,000 件だけを使う。
+- journal は `english-words.lock` を取った後に読む。無い journal と解析できない journal は何も足さない（解析できない
+  journal は次の writer が退避する）。一意エントリが 10,000 件を超える journal は、最初の 10,000 件だけを使う。
+- 存在するのに開けない・読めない journal（アクセス拒否、共有違反、I/O エラー、通常のファイルでない、64 MiB 超）は
+  無いものとして扱わない。TSV だけの base をメモリから使い、`.bin` を書かず mtime も設定しない。ロックを取って
+  次に追記する writer が base を作り直し、そのとき journal を読み直す（§4.5 の「ロックを取れずに TSV をメモリから
+  使ったとき」と同じ扱い）。
 
 実行時の削除を解除するには、同じ語を再び upsert するか、`english-words.added.bin` を削除する
 （削除すると、実行時に追加した語も次の再コンパイルで消える）。

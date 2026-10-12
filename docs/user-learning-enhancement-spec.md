@@ -245,6 +245,9 @@ TIP は次のときに送る。
   `reading` は再変換の逆変換で得た読み、`rejected_surface` は元の表記、`selected_surface` は
   選んだ候補である。元の表記を選び直したときは送らない。再変換の確定は Forget の対象にしない。
   アプリが自前の UI で TSF の候補一覧から選ぶ経路は、確定を TIP が知れないため送らない。
+  バッチ訂正ビュー（`rich-features-spec.md` X-3-6）が混ぜた修正候補（`suggestions`）を選んだときも送らない。
+  修正候補はモデルの出力で、Host の読みとの組を学習に入れないためである。Host の候補と同じ表記の修正候補は
+  Host の候補として扱い、選べば送る。
 - 送るかは送信時に判定する。secure の文脈、または学習が許可されない文脈では送らない
   （`privacy-and-secure-input-spec.md` §5.1.1。`PostIpcSend` も secure では落とす）。
   `observation_id` は訂正ごとに新しく採番する。`left_context` と `app` は `CommitObservation` と

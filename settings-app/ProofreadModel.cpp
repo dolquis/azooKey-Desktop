@@ -1,5 +1,7 @@
 #include "ProofreadModel.h"
 
+#include <Windows.h>
+
 #include <algorithm>
 #include <utility>
 
@@ -81,6 +83,30 @@ std::optional<std::wstring> FindingExcerpt(const std::wstring& text, uint32_t st
   // Do not cut between the halves of a surrogate pair.
   if (cut > 0 && IsHighSurrogate(text[start + cut - 1])) --cut;
   return text.substr(start, cut) + L"...";
+}
+
+std::vector<std::string> ProofreadSelectSuggestions(const std::wstring& text, uint32_t start,
+                                                    uint32_t length,
+                                                    const std::vector<std::string>& suggestions) {
+  namespace proofread = azookey::ipc::proofread;
+  std::vector<std::string> selected;
+  if (!IsValidFindingRange(text, start, length)) return selected;
+  // The range's own text replaces nothing; it is compared in UTF-8 like the suggestions.
+  std::string original;
+  const int units = static_cast<int>(length);
+  const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data() + start, units,
+                                        nullptr, 0, nullptr, nullptr);
+  if (bytes > 0) {
+    original.resize(static_cast<size_t>(bytes));
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data() + start, units, original.data(),
+                        bytes, nullptr, nullptr);
+  }
+  for (const auto& suggestion : suggestions) {
+    if (selected.size() >= proofread::kMaxSelectSuggestions) break;
+    if (suggestion != original && proofread::IsValidSelectSuggestion(suggestion))
+      selected.push_back(suggestion);
+  }
+  return selected;
 }
 
 }  // namespace azookey::settings

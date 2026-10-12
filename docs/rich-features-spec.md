@@ -481,7 +481,7 @@ logon SID だけを許し、強制ラベル（medium、no-read-up / no-write-up 
 | メッセージ | 向き | フィールド |
 |---|---|---|
 | `document` | TIP → 設定アプリ（接続直後に 1 回） | `status`（`captured` / `blocked` / `unavailable`）、`text`（`captured` のときだけ非空の UTF-8）、`secure` / `learning_allowed`、`window`（前面へ戻すアプリのウィンドウ） |
-| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit）、`reconvert`（省略時と bool 以外は `false` として扱い、session は終えない。真なら選択した範囲に再変換の候補を出す） |
+| `select` | 設定アプリ → TIP | `start` / `length`（`text` 上の UTF-16 code unit）、`reconvert`（省略時と bool 以外は `false` として扱い、session は終えない。真なら選択した範囲に再変換の候補を出す）、`suggestions`（省略可能な文字列の配列。その項目の `suggestions[]` を候補に混ぜる。下の「候補の提示」） |
 | `select_result` | TIP → 設定アプリ | `result`（`ok` / `document_changed` / `context_gone` / `invalid_range` / `failed`） |
 
 各メッセージは 4 バイト little-endian の長さに続く JSON で、`document` は 512 KiB、ほかは 4 KiB を上限とする。
@@ -501,9 +501,34 @@ session では `context_gone`、読みの入力中は `failed` を返す。設�
 確かめ、secure の文脈では選択だけで候補を出さない。候補は edit session を抜けた後に TIP の UI スレッドで、
 変換キーの再変換と同じ経路で開く。開く前に、session が続いていること、その文脈に focus があること、読みの
 入力中でないこと、secure でないこと、選択がまだ同じ範囲と本文であることを確かめ、どれかが外れれば候補を
-出さず、理由はログにだけ残す。日本語を含まない範囲と長すぎる範囲は、変換キーの再変換と同じく候補を出さない。`select_result` は選択の結果だけを表し、候補を出せたかどうかを含まない。
-`reconvert` を知らない TIP は選択だけを行う。候補は Host の再変換の候補だけで、finding の `suggestions[]` は
-混ぜない。候補を選ぶと、変換キーの再変換と同じく置き換えと訂正の学習を行う。
+出さず、理由はログにだけ残す。日本語を含まない範囲と長すぎる範囲は、変換キーの再変換と同じく候補を出さない（`suggestions` があっても出さない）。`select_result` は選択の結果だけを表し、候補を出せたかどうかを含まない。
+`reconvert` を知らない TIP は選択だけを行う。候補を選ぶと、変換キーの再変換と同じく置き換えと訂正の学習を行う。
+
+**修正候補の混在**。設定アプリは、選んだ項目の `suggestions[]` を `select` の `suggestions` に載せる。
+`suggestions` はモデルの出力なので、設定アプリは送る前に、TIP は受けた後に、同じ規則で要素ごとに検査する。
+
+- 要素ごとの検査は、JSON を decode した後の文字列に対して行う。文字列でない要素、空の要素、UTF-8 で 256 バイトを
+  超える要素は、その要素だけを捨てる。要求全体は拒否しない。残すのは検査を通った要素の先頭 5 件までとする。
+  配列でない `suggestions` は無いものとして扱い、session は終えない。JSON として読めない要求（生の不正な UTF-8、
+  対になっていないサロゲートの escape を含む）は、要素ごとの検査に届かず、ほかの解釈できないメッセージと同じく
+  session を終える。
+- 制御文字（U+0000–001F、U+007F–009F。タブと改行を含む）、U+2028 / U+2029、双方向制御文字（U+061C、
+  U+200E / U+200F、U+202A–202E、U+2066–2069）、U+FEFF、U+FFF9–FFFB、不可視の文字（U+200B、U+2060–2064、
+  tag 文字 U+E0000–E007F）を含む要素は、置き換えずに要素ごと捨てる。絵文字の連結と漢字の異体字に使う
+  U+200C / U+200D と異体字セレクタ（U+FE00–FE0F、U+E0100–E01EF）は捨てない。
+  JSON の escape で書かれた文字も、decode した後の文字で判定する。表示幅の上限は別に設けない。
+- 設定アプリは、項目の範囲の本文そのものと同じ要素も送らない。検査を通った要素だけを送るので、要求は 4 KiB に収まる。
+
+TIP は `suggestions` を候補の表記と置き換えの文字列としてだけ使い、指示・マークアップ・コマンド・読みとして
+解釈しない。Host へは送らず、候補の注記も付けず、ほかの候補と同じ平文で描画する。ログには件数だけを残す。
+並びは Host の先頭の候補、`suggestions`、残りの Host の候補の順で、既定の選択は Host の先頭の候補のままにする。
+選んだ範囲の元の表記と同じ要素、Host の候補と同じ要素（完全一致で比べ、正規化はしない）、重複した要素は捨て、
+Host の候補は元の順位に残す。選んだ範囲の再変換が始まったのに Host が候補を返さないとき（読みが得られない、Host に届かない）は `suggestions` だけを出す。
+同じ範囲の再変換がすでに開いているときは、開いている一覧をそのまま使い、`suggestions` を足さない。
+`suggestions` は再変換の cache に入れないので、アプリの再変換メニューや後の変換キーの再変換には出ない。
+`suggestions` から選んだ候補は置き換えだけを行い、`CommitCorrection` も確定の学習観測も送らない
+（`user-learning-enhancement-spec.md` §4.1）。secure の文脈で候補を出さない判定は、`suggestions` にもそのまま適用する。
+`suggestions` を知らない TIP はこのフィールドを無視し、Host の候補だけを出す。
 
 session は、同じ TIP で再び押されたとき（新しい session に置き換える）、設定アプリが切断したとき、文書の
 document manager が破棄されたとき、TIP が無効化されたとき、10 分間 `select` が来なかったときに終わる。

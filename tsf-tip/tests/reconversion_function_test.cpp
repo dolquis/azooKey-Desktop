@@ -1053,8 +1053,8 @@ TEST(ReconversionFunctionTest, ReconvertInAContextThatTurnedSecureSendsNoCorrect
 // once the select session has returned, opens reconversion for that range.
 class ProofreadReconversion {
  public:
-  ProofreadReconversion()
-      : text(std::make_shared<std::wstring>(L"今日は明日の天気")),
+  explicit ProofreadReconversion(std::wstring document = L"今日は明日の天気")
+      : text(std::make_shared<std::wstring>(std::move(document))),
         window(&context, text, 0, text->size()) {
     context.selectable = true;
     service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
@@ -1074,8 +1074,8 @@ class ProofreadReconversion {
     return service.last_proofread_select_result_for_test();
   }
 
-  static constexpr azookey::ipc::proofread::SelectRequest kToday{0, 2, true};
-  static constexpr azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true};
+  static inline const azookey::ipc::proofread::SelectRequest kToday{0, 2, true, {}};
+  static inline const azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true, {}};
   TestContext context;
   std::shared_ptr<std::wstring> text;
   TestRange window;
@@ -1214,6 +1214,227 @@ TEST(ProofreadReconversionTest, UnfocusedContextOpensNoCandidates) {
   test.service.run_pending_proofread_reconversion_for_test();
   EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
   EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+}
+
+// DEV-1583: a finding's suggestions join the candidates as text and are never learned.
+std::optional<SelectResult> SelectWithSuggestions(ProofreadReconversion& test,
+                                                  std::vector<std::string> suggestions) {
+  return test.Select({3, 2, true, std::move(suggestions)});
+}
+
+TEST(ProofreadReconversionTest, SuggestionsFollowTheHostsFirstCandidate) {
+  ProofreadReconversion test;
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日",
+                                               {L"あした", L"明日", L"明晩"}, "あした");
+  // Like the original or a Host candidate, or twice: dropped, the Host's keeps its place.
+  EXPECT_EQ(SelectWithSuggestions(test, {"明晩", "明日", "翌日", "翌日", "あす"}),
+            SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"あす", L"明日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, HostAnswerKeepsTheSuggestionOrder) {
+  // No cache: the Host is asked, and its answer is merged the same way.
+  ProofreadReconversion test;
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  test.service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, AdoptedPrefetchCarriesTheSuggestions) {
+  ProofreadReconversion test;
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  // The placed selection was already being prefetched when the candidates open.
+  test.service.prefetch_selected_reconversion_for_test();
+  ASSERT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  const uint64_t prefetch_generation = test.service.reconversion_generation_for_test();
+  test.service.run_pending_proofread_reconversion_for_test();
+  // Adopted: the in-flight request stays, rather than being cleared and sent again.
+  EXPECT_EQ(test.service.reconversion_generation_for_test(), prefetch_generation);
+  test.service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, OpenReconversionOfTheSameRangeGetsNoSuggestions) {
+  ProofreadReconversion test;
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"});
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  // A later select of the same range keeps the open list as it is.
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, RangeWithoutJapaneseOpensNothingEvenWithSuggestions) {
+  // Like the conversion key, a range without Japanese opens no reconversion at all.
+  ProofreadReconversion test(L"今日はABCの天気");
+  EXPECT_EQ(test.Select({3, 3, true, {"abc"}}), SelectResult::Ok);
+  ASSERT_NE(test.context.placed, nullptr);
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+}
+
+TEST(ProofreadReconversionTest, SuggestionLikeTheOriginalIsDropped) {
+  ProofreadReconversion test;
+  // The Host does not offer the original here, so only the original check drops it.
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"});
+  EXPECT_EQ(SelectWithSuggestions(test, {"明日", "翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, ChosenSuggestionReplacesWithoutLearning) {
+  enum class Path { Enter, Digit, Click };
+  for (const auto path : {Path::Enter, Path::Digit, Path::Click}) {
+    SCOPED_TRACE(static_cast<int>(path));
+    ProofreadReconversion test;
+    test.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    test.service.set_commit_correction_supported_for_test(true);
+    test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"},
+                                                 "あした");
+    EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+    test.service.run_pending_proofread_reconversion_for_test();
+    ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+    ASSERT_EQ(test.service.reconversion_shown_candidates_for_test(),
+              (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+
+    KeyboardStateGuard keyboard_state;
+    BOOL eaten = FALSE;
+    if (path == Path::Enter) {
+      ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_DOWN, 0, &eaten), S_OK);
+      ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_RETURN, 0, &eaten), S_OK);
+    } else if (path == Path::Digit) {
+      ASSERT_EQ(test.service.OnKeyDown(&test.context, '2', 0, &eaten), S_OK);
+    } else {
+      test.service.click_candidate_for_test(1);
+    }
+    EXPECT_EQ(*test.text, L"今日は翌日の天気");
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+    EXPECT_TRUE(test.service.queued_corrections_for_test().empty());
+    EXPECT_FALSE(test.service.last_queued_commit_observation_for_test());
+    EXPECT_FALSE(test.service.last_queued_typo_observation_for_test());
+    EXPECT_FALSE(test.service.last_queued_segments_observation_for_test());
+  }
+}
+
+TEST(ProofreadReconversionTest, ChosenHostCandidateStillSendsTheReconvertCorrection) {
+  ProofreadReconversion test;
+  test.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  test.service.set_commit_correction_supported_for_test(true);
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"},
+                                               "あした");
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(test.service.OnKeyDown(&test.context, '3', 0, &eaten), S_OK);
+  EXPECT_EQ(*test.text, L"今日は明晩の天気");
+  const auto corrections = test.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].kind, "reconvert");
+  EXPECT_EQ(corrections[0].reading, "あした");
+  EXPECT_EQ(corrections[0].rejected_surface, "明日");
+  ASSERT_TRUE(corrections[0].selected_surface.has_value());
+  EXPECT_EQ(*corrections[0].selected_surface, "明晩");
+}
+
+TEST(ProofreadReconversionTest, WithoutHostCandidatesOnlySuggestionsOpen) {
+  {
+    ProofreadReconversion test;
+    EXPECT_EQ(SelectWithSuggestions(test, {"翌日", "あす"}), SelectResult::Ok);
+    test.service.run_pending_proofread_reconversion_for_test();
+    ASSERT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+    // The Host found no reading for the range.
+    test.service.deliver_reconversion_result_for_test({});
+    ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+    EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+              (std::vector<std::wstring>{L"翌日", L"あす"}));
+  }
+  {
+    // Without suggestions an empty answer still opens nothing.
+    ProofreadReconversion test;
+    EXPECT_EQ(test.Select(), SelectResult::Ok);
+    test.service.run_pending_proofread_reconversion_for_test();
+    test.service.deliver_reconversion_result_for_test({});
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  }
+}
+
+TEST(ProofreadReconversionTest, SecureContextShowsNoSuggestions) {
+  {
+    ProofreadReconversion test;
+    test.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+    EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+    EXPECT_FALSE(test.service.has_pending_proofread_reconversion_for_test());
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  }
+  {
+    // The context turns secure before the candidates open.
+    ProofreadReconversion test;
+    test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした"});
+    EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+    test.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+    test.service.run_pending_proofread_reconversion_for_test();
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+    EXPECT_TRUE(test.service.reconversion_shown_candidates_for_test().empty());
+  }
+}
+
+TEST(ProofreadReconversionTest, SuggestionsStayOutOfTheCacheAndLaterReconversion) {
+  ProofreadReconversion test;
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"});
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_EQ(test.service.reconversion_shown_candidates_for_test().size(), 3u);
+  EXPECT_EQ(test.service.reconversion_cache_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"明晩"}));
+  KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_ESCAPE, 0, &eaten), S_OK);
+  ASSERT_FALSE(test.service.has_reconversion_ui_for_test());
+
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(test.service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  ASSERT_NE(test.context.placed, nullptr);
+  // Without focus, the application's own reconversion UI gets the Host's list only.
+  test.service.set_text_edit_context_for_test(nullptr);
+  ITfCandidateList* list = nullptr;
+  ASSERT_EQ(function->GetReconversion(test.context.placed, &list), S_OK);
+  ASSERT_NE(list, nullptr);
+  ULONG count = 0;
+  ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
+  EXPECT_EQ(count, 2u);
+  list->Release();
+  // With focus, the azooKey reconversion it opens offers the Host's only.
+  test.service.set_text_edit_context_for_test(&test.context);
+  list = nullptr;
+  ASSERT_EQ(function->GetReconversion(test.context.placed, &list), S_OK);
+  ASSERT_NE(list, nullptr);
+  list->Release();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"明晩"}));
+  function->Release();
 }
 
 }  // namespace

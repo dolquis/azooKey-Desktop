@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "azookey/ipc/Limits.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -51,12 +53,26 @@ struct DocumentMessage {
   uint64_t window{0};
 };
 
+// A finding's suggestions offered with the reconversion candidates. They are
+// model output, so they are bounded like DetectAnomalies' and used as text only.
+inline constexpr std::size_t kMaxSelectSuggestions = kMaxAnomalySuggestions;
+inline constexpr std::size_t kMaxSelectSuggestionBytes = kMaxAnomalySuggestionBytes;
+
+// Non-empty valid UTF-8 of at most kMaxSelectSuggestionBytes without control
+// characters, line or paragraph separators, bidirectional controls, a BOM,
+// interlinear annotation characters, or invisible characters (zero width
+// space, word joiner and invisible operators, tag characters).
+bool IsValidSelectSuggestion(std::string_view utf8) noexcept;
+
 struct SelectRequest {
   uint64_t start{0};
   uint64_t length{0};
   // Also open reconversion candidates for the selected range. Missing reads
   // as false, so a TIP that does not know it only selects.
   bool reconvert{false};
+  // At most kMaxSelectSuggestions, each passing IsValidSelectSuggestion; the
+  // codec drops any other element on both sides. Missing reads as none.
+  std::vector<std::string> suggestions;
 };
 
 enum class SelectResult : uint8_t {

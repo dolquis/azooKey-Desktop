@@ -1292,29 +1292,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   }
 
   candidate_ui_.Create();
-  candidate_ui_.SetOnClick([this](int idx) {
-    if (reconversion_list_) {
-      (void)CompleteReconversionSelection(static_cast<size_t>(idx));
-      return;
-    }
-    if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
-        active_context_) {
-      core::UserActionEvent event;
-      event.action = core::UserAction::SelectByDigit;
-      event.digit = idx + 1;
-      try {
-        auto result = input_state_.HandleEvent(event);
-        core_commit_selected_index_ = static_cast<size_t>(idx);
-        ApplyInputStateResult(active_context_, std::move(result));
-      } catch (...) {
-        core_action_in_progress_ = false;
-      }
-      core_commit_selected_index_.reset();
-      return;
-    }
-    selected_candidate_idx_ = idx;
-    if (active_context_) CommitSelected(active_context_);
-  });
+  candidate_ui_.SetOnClick([this](int idx) { OnCandidateClicked(idx); });
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
   candidate_ui_.SetOnRetry([this] { RetryModelFromUi(); });
   prediction_window_.SetOnClick([this](int index) {
@@ -6686,7 +6664,14 @@ class ProofreadSelectSession final : public ITfEditSession {
       LogReconversion("proofread", "secure");
       return;
     }
-    owner_->QueueProofreadReconversion(generation_, context_.Get(), target, std::move(surface));
+    // Model text, already bounded by the codec; kept as text only.
+    std::vector<std::wstring> suggestions;
+    for (const auto& suggestion : request_.suggestions) {
+      auto wide = Utf8ToWide(suggestion);
+      if (!wide.empty()) suggestions.push_back(std::move(wide));
+    }
+    owner_->QueueProofreadReconversion(generation_, context_.Get(), target, std::move(surface),
+                                       std::move(suggestions));
   }
 
   LONG refs_{1};
@@ -6827,9 +6812,10 @@ void TextService::CompleteProofreadSelection(uint64_t generation,
 }
 
 void TextService::QueueProofreadReconversion(uint64_t generation, ITfContext* context,
-                                             ITfRange* range, std::wstring surface) {
-  pending_proofread_reconversion_ =
-      PendingProofreadReconversion{generation, context, range, std::move(surface)};
+                                             ITfRange* range, std::wstring surface,
+                                             std::vector<std::wstring> suggestions) {
+  pending_proofread_reconversion_ = PendingProofreadReconversion{
+      generation, context, range, std::move(surface), std::move(suggestions)};
   candidate_ui_.PostCandidatesReady();
 }
 
@@ -6850,8 +6836,8 @@ void TextService::RunPendingProofreadReconversion() {
   }
   // Rechecks a reading in progress, the privacy, and that the selection still
   // holds the same text.
-  const HRESULT hr =
-      StartSelectionReconversion(pending.context.Get(), &pending.surface, pending.range.Get());
+  const HRESULT hr = StartSelectionReconversion(
+      pending.context.Get(), &pending.surface, pending.range.Get(), std::move(pending.suggestions));
   LogReconversion("proofread", hr == S_OK ? "started" : "not_started", hr);
 }
 
@@ -7798,6 +7784,8 @@ void TextService::ClearReconversionState() {
   reconversion_surface_.clear();
   reconversion_shown_reading_.clear();
   reconversion_shown_candidates_.clear();
+  reconversion_shown_origins_.clear();
+  reconversion_suggestions_.clear();
   reconversion_prefetch_surface_.clear();
   if (had_reconversion_ui && candidate_ui_.IsShowing()) candidate_ui_.EndUI();
   ++reconversion_generation_;
@@ -7844,7 +7832,8 @@ void TextService::PrefetchSelectedReconversion() {
 
 HRESULT TextService::StartSelectionReconversion(ITfContext* context,
                                                 const std::wstring* expected_surface,
-                                                ITfRange* expected_range) {
+                                                ITfRange* expected_range,
+                                                std::vector<std::wstring> suggestions) {
   if (!context || composition_ || !preedit_kana_.empty()) {
     LogReconversion("start", context ? "composing" : "no_context");
     return S_FALSE;
@@ -7901,11 +7890,13 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
     LogReconversion("start", "adopt_prefetch");
     reconversion_range_ = range;
     reconversion_surface_ = std::move(surface);
+    reconversion_suggestions_ = std::move(suggestions);
     return S_OK;
   }
   ClearReconversionState();
   reconversion_range_ = range;
   reconversion_surface_ = std::move(surface);
+  reconversion_suggestions_ = std::move(suggestions);
   if (reconversion_cache_context_) reconversion_cache_context_->Release();
   reconversion_cache_context_ = context;
   reconversion_cache_context_->AddRef();
@@ -7930,6 +7921,30 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
   return S_OK;
 }
 
+void TextService::OnCandidateClicked(int idx) {
+  if (reconversion_list_) {
+    (void)CompleteReconversionSelection(static_cast<size_t>(idx));
+    return;
+  }
+  if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
+      active_context_) {
+    core::UserActionEvent event;
+    event.action = core::UserAction::SelectByDigit;
+    event.digit = idx + 1;
+    try {
+      auto result = input_state_.HandleEvent(event);
+      core_commit_selected_index_ = static_cast<size_t>(idx);
+      ApplyInputStateResult(active_context_, std::move(result));
+    } catch (...) {
+      core_action_in_progress_ = false;
+    }
+    core_commit_selected_index_.reset();
+    return;
+  }
+  selected_candidate_idx_ = idx;
+  if (active_context_) CommitSelected(active_context_);
+}
+
 HRESULT TextService::CompleteReconversionSelection(size_t index) {
   if (!reconversion_list_) return S_FALSE;
   // SetResult can synchronously notify OnEndEdit, which clears the
@@ -7942,8 +7957,12 @@ HRESULT TextService::CompleteReconversionSelection(size_t index) {
   };
   std::optional<Correction> correction;
   ITfContext* context = nullptr;  // The reconverted range's, AddRef'd.
+  // A batch correction suggestion is model text: it replaces the range and is
+  // not learned. Read before SetResult, which may clear the state.
+  const bool learnable = index < reconversion_shown_origins_.size() &&
+                         reconversion_shown_origins_[index] == ReconversionOrigin::Host;
   try {
-    if (index < reconversion_shown_candidates_.size() &&
+    if (learnable && index < reconversion_shown_candidates_.size() &&
         !reconversion_shown_candidates_[index].empty() &&
         reconversion_shown_candidates_[index] != reconversion_surface_) {
       correction = Correction{reconversion_shown_reading_, WideToUtf8(reconversion_surface_),
@@ -7996,14 +8015,41 @@ void TextService::ShowReconversionResult() {
     LogReconversion("show", reason, S_OK, result->candidates.size());
     return;
   }
-  if (result->candidates.empty()) {
+  // X-3-6: a batch correction finding's suggestions join as text after the
+  // Host's first candidate, so the default choice stays the Host's. One equal
+  // to the original or to a Host candidate is dropped and the Host's stays
+  // where it was. Only this list carries them; the cache keeps the Host's.
+  std::vector<std::wstring> values;
+  std::vector<ReconversionOrigin> origins;
+  {
+    const auto& host = result->candidates;
+    std::vector<std::wstring> suggestions;
+    for (const auto& suggestion : reconversion_suggestions_) {
+      if (suggestion.empty() || suggestion == result->surface ||
+          std::find(host.begin(), host.end(), suggestion) != host.end() ||
+          std::find(suggestions.begin(), suggestions.end(), suggestion) != suggestions.end())
+        continue;
+      suggestions.push_back(suggestion);
+    }
+    const size_t lead = host.empty() ? 0 : 1;
+    values.reserve(host.size() + suggestions.size());
+    values.insert(values.end(), host.begin(), host.begin() + lead);
+    origins.assign(lead, ReconversionOrigin::Host);
+    for (auto& suggestion : suggestions) {
+      values.push_back(std::move(suggestion));
+      origins.push_back(ReconversionOrigin::Suggestion);
+    }
+    values.insert(values.end(), host.begin() + lead, host.end());
+    origins.resize(values.size(), ReconversionOrigin::Host);
+  }
+  if (values.empty()) {
     LogReconversion("show", "empty_candidates");
     ClearReconversionState();
     return;
   }
   auto* function = new (std::nothrow) ReconversionFunction(
-      client_id_, [expected = result->surface, values = result->candidates](
-                      ITfRange*, const std::wstring& surface, std::vector<std::wstring>& out) {
+      client_id_, [expected = result->surface, values](ITfRange*, const std::wstring& surface,
+                                                       std::vector<std::wstring>& out) {
         if (surface != expected) return TF_E_NOCONVERSION;
         out = values;
         return S_OK;
@@ -8021,8 +8067,9 @@ void TextService::ShowReconversionResult() {
     return;
   }
   std::vector<CandidateViewItem> items;
-  items.reserve(result->candidates.size());
-  for (const auto& value : result->candidates) items.push_back({value, L""});
+  items.reserve(values.size());
+  // Plain text rows; a suggestion gets no description of its own.
+  for (const auto& value : values) items.push_back({value, L""});
   const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
@@ -8032,7 +8079,8 @@ void TextService::ShowReconversionResult() {
   }
   reconversion_list_ = list;
   reconversion_shown_reading_ = std::move(result->reading);
-  reconversion_shown_candidates_ = std::move(result->candidates);
+  reconversion_shown_origins_ = std::move(origins);
+  reconversion_shown_candidates_ = std::move(values);
   LogReconversion("show", "shown", S_OK, items.size());
 }
 

@@ -48,6 +48,56 @@ std::optional<DocumentStatus> DocumentStatusFromName(std::string_view name) {
   return std::nullopt;
 }
 
+// The next code point of valid UTF-8 (shortest form, no surrogates), or
+// std::nullopt; `pos` moves past it.
+std::optional<char32_t> NextCodePoint(std::string_view text, std::size_t& pos) noexcept {
+  const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+  const unsigned char first = byte(pos);
+  std::size_t length = 0;
+  char32_t code = 0;
+  char32_t minimum = 0;
+  if (first < 0x80) {
+    ++pos;
+    return first;
+  } else if ((first & 0xE0) == 0xC0) {
+    length = 2, code = first & 0x1F, minimum = 0x80;
+  } else if ((first & 0xF0) == 0xE0) {
+    length = 3, code = first & 0x0F, minimum = 0x800;
+  } else if ((first & 0xF8) == 0xF0) {
+    length = 4, code = first & 0x07, minimum = 0x10000;
+  } else {
+    return std::nullopt;
+  }
+  if (text.size() - pos < length) return std::nullopt;
+  for (std::size_t i = 1; i < length; ++i) {
+    if ((byte(pos + i) & 0xC0) != 0x80) return std::nullopt;
+    code = (code << 6) | (byte(pos + i) & 0x3F);
+  }
+  if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return std::nullopt;
+  pos += length;
+  return code;
+}
+
+// Characters that would change how the candidate is laid out or read, that
+// hide text, or that do not belong in a one-line replacement. ZWNJ / ZWJ and
+// variation selectors stay: emoji sequences and kanji variants need them.
+bool IsRefusedSuggestionCodePoint(char32_t code) noexcept {
+  return code < 0x20 || (code >= 0x7F && code <= 0x9F) || code == 0x061C || code == 0x200B ||
+         code == 0x200E || code == 0x200F || code == 0x2028 || code == 0x2029 ||
+         (code >= 0x202A && code <= 0x202E) || (code >= 0x2060 && code <= 0x2064) ||
+         (code >= 0x2066 && code <= 0x2069) || code == 0xFEFF ||
+         (code >= 0xFFF9 && code <= 0xFFFB) || (code >= 0xE0000 && code <= 0xE007F);
+}
+
+std::vector<std::string> ValidSuggestions(const std::vector<std::string>& suggestions) {
+  std::vector<std::string> valid;
+  for (const auto& suggestion : suggestions) {
+    if (valid.size() >= kMaxSelectSuggestions) break;
+    if (IsValidSelectSuggestion(suggestion)) valid.push_back(suggestion);
+  }
+  return valid;
+}
+
 constexpr std::array kSelectResults{SelectResult::Ok, SelectResult::DocumentChanged,
                                     SelectResult::ContextGone, SelectResult::InvalidRange,
                                     SelectResult::Failed};
@@ -100,12 +150,28 @@ std::optional<DocumentMessage> ParseDocumentMessage(std::string_view json) {
   return message;
 }
 
+bool IsValidSelectSuggestion(std::string_view utf8) noexcept {
+  if (utf8.empty() || utf8.size() > kMaxSelectSuggestionBytes) return false;
+  for (std::size_t pos = 0; pos < utf8.size();) {
+    const auto code = NextCodePoint(utf8, pos);
+    if (!code || IsRefusedSuggestionCodePoint(*code)) return false;
+  }
+  return true;
+}
+
 std::string BuildSelectRequest(const SelectRequest& request) {
   j::Object o;
   o.emplace("kind", j::Value(std::string(kKindSelect)));
   o.emplace("start", j::Value(request.start));
   o.emplace("length", j::Value(request.length));
   o.emplace("reconvert", j::Value(request.reconvert));
+  // Only valid suggestions are sent, so the request stays within kMaxRequestFrameBytes.
+  auto suggestions = ValidSuggestions(request.suggestions);
+  if (!suggestions.empty()) {
+    j::Array items;
+    for (auto& suggestion : suggestions) items.emplace_back(std::move(suggestion));
+    o.emplace("suggestions", j::Value(std::move(items)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -115,7 +181,16 @@ std::optional<SelectRequest> ParseSelectRequest(std::string_view json) {
   const auto start = value->GetUInt("start");
   const auto length = value->GetUInt("length");
   if (!start || !length) return std::nullopt;
-  return SelectRequest{*start, *length, value->GetBool("reconvert").value_or(false)};
+  SelectRequest request{*start, *length, value->GetBool("reconvert").value_or(false), {}};
+  // A malformed element is dropped on its own; it does not end the session.
+  if (const auto* suggestions = value->GetArray("suggestions")) {
+    for (const auto& suggestion : *suggestions) {
+      if (request.suggestions.size() >= kMaxSelectSuggestions) break;
+      if (suggestion.IsString() && IsValidSelectSuggestion(suggestion.AsString()))
+        request.suggestions.push_back(suggestion.AsString());
+    }
+  }
+  return request;
 }
 
 std::string_view SelectResultName(SelectResult result) noexcept {

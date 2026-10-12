@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Payloads.h"
@@ -52,5 +53,12 @@ bool IsValidFindingRange(const std::wstring& text, uint32_t start, uint32_t leng
 // the range is not valid. The text is shown as plain text only.
 std::optional<std::wstring> FindingExcerpt(const std::wstring& text, uint32_t start,
                                            uint32_t length, size_t max_units = 40);
+
+// The suggestions of a finding that "select" offers as candidates for its range: model output, so
+// only those passing ipc::proofread::IsValidSelectSuggestion, without the range's own text, and at
+// most kMaxSelectSuggestions. None when the range is not valid.
+std::vector<std::string> ProofreadSelectSuggestions(const std::wstring& text, uint32_t start,
+                                                    uint32_t length,
+                                                    const std::vector<std::string>& suggestions);
 
 }  // namespace azookey::settings

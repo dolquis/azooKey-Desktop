@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "ProofreadSessionClient.h"
 #include "pch.h"
@@ -25,7 +26,9 @@ class ProofreadPane : public std::enable_shared_from_this<ProofreadPane> {
   void RecoverFromFailure();
   void ShowStatus(winrt::Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                   const winrt::hstring& message, const wchar_t* title = nullptr);
-  winrt::fire_and_forget SelectInApplication(uint32_t start, uint32_t length);
+  // `suggestions` is copied: the coroutine outlives the click handler.
+  winrt::fire_and_forget SelectInApplication(uint32_t start, uint32_t length,
+                                             std::vector<std::string> suggestions);
   void CloseSession();
   void UpdateCounter();
 

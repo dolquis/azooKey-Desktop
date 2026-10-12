@@ -439,8 +439,18 @@ Health は Linear の health フィールドで設定し、本文に重ねて書
 
 - branch 名は `dolquis/dev-<代表番号>-<slug>` とし、必要なら番号を並べる（例: `dolquis/dev-1434-1415-1492-<slug>`）。
 - PR 本文で塊に含まれる Issue をすべて参照する。closing キーワードの使い分け（§7.1.3）は Issue ごとに適用する。
-- Draft PR を作ったら、塊に含まれる Issue をすべて In Review にする。マージ後の Merged → 検証メモ → Done も Issue ごとに行う。
+- Draft PR を作ったら、塊に含まれる Issue をすべて In Review にする。マージ後の Merged → 検証メモ → Done も Issue ごとに行う（Merged を省略できる場合は「マージ後に Merged を省略できる場合」に従う）。
 - 管制塔セッションが塊ごとに子セッションを立てる場合の担い手（In Review までは子、マージ後は管制塔）は `docs/handoff/agent-orchestration.md`「管制塔セッションと子セッション」に従う。
+
+### マージ後に Merged を省略できる場合
+
+共有コア §3 と §7.1.3-4 の「マージ → Merged → 検証メモ → Done」に対する本 repo の例外である。Merged は検証メモ待ちの滞留を見えるようにする状態であり、マージと同じ作業で検証メモを書けば滞留は生じない。次の 3 条件をすべて満たす Issue は、Merged で止めずに In Review から Done へ直接進めてよい（closing キーワードで参照した Issue を GitHub 連携が先に Merged へ動かした場合も同じ）。`type:tracking` は §3.1 のとおり In Review / Merged に置かない Issue であり、この例外の対象外とする。
+
+1. その Issue 自身にも子 Issue にも `gate:human-required` が残っていない（人間ゲートを通る Issue は Done の条件を満たさないため、Merged で止める）。
+2. 検証メモを、PR のマージと同じ作業で Issue にコメントする（確認したテスト名・CI ジョブ名を含める。§7.1.4 の「その場で書く」と同じ）。
+3. 複数 PR で分担する Issue は、最後の PR のマージ時に限る。途中の PR のマージでは Done にしない。
+
+1 つでも満たさない場合と、検証メモをその場で書けない場合は、従来どおり Merged を経由する。Done へ進める前の確認事項（§7 Done チェックリスト）は変わらない。関連 Issue の塊では Issue ごとに判定する。
 
 ### 週次監査の repo 固有追加項目（spec-first 分業の担保）
 

@@ -1250,3 +1250,35 @@ TEST(EnglishDictionaryJournalTest, ARecompileThatCannotReadTheJournalDoesNotStam
             std::vector<std::string>{"Swift"});
   fs::remove_all(dir);
 }
+
+// While the journal stays unreadable, the same TSV is compiled once: neither
+// the writes nor the reads after them compile it again. A writer that finds
+// the journal readable compiles and stamps it.
+TEST(EnglishDictionaryJournalTest, AnUnreadableJournalCostsOneCompilePerTsv) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  int compiles = 0;
+  EnglishDictionaryStore store(tsv, [&](const EnglishDictionaryLoadReport& report) {
+    if (std::string(report.source) == "tsv") ++compiles;
+  });
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  ASSERT_EQ(compiles, 1);
+  fs::create_directories(store.paths().journal / "inside");
+  WriteText(tsv, "apple\t50\nbanana\t30\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  ASSERT_EQ(store.Lookup("banana").size(), 1u);
+  EXPECT_EQ(compiles, 2);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(store.Upsert("word" + std::to_string(i), 1).result, EnglishWriteResult::MemoryOnly);
+    EXPECT_EQ(store.Lookup("word" + std::to_string(i)).size(), 1u);
+  }
+  EXPECT_EQ(compiles, 2);
+  EXPECT_NE(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+
+  fs::remove_all(store.paths().journal);
+  EXPECT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(compiles, 3);
+  EXPECT_EQ(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  fs::remove_all(dir);
+}

@@ -131,14 +131,22 @@ std::shared_ptr<const EnglishDictionary> EnglishDictionaryStore::RebuildLocked(c
   // This TSV is already compiled into memory because writing or stamping its
   // .bin failed under the lock. A retry would rewrite the .bin, change the
   // sample and fail again on every read, so it waits for a TSV change (4.5).
+  const bool bin_matches = sample.base && !tsv_changed &&
+                           (!sample.tsv || BaseMatchesTsv(paths_.base, sample.tsv->first));
   if (base_ && base_write_failed_ && sample.tsv && compiled_tsv_ == sample.tsv) {
     base = base_;
-  } else if (sample.base && !tsv_changed &&
-             (!sample.tsv || BaseMatchesTsv(paths_.base, sample.tsv->first))) {
+  } else if (base_ && journal_unavailable_ && !bin_matches && sample.tsv &&
+             compiled_tsv_ == sample.tsv) {
+    // Section 4.8: compiled into memory because the journal could not be
+    // read. Compiling the same TSV again on every read would fail the same
+    // way; a writer that finds the journal readable compiles it again.
+    base = base_;
+  } else if (bin_matches) {
     // Section 4.5 order: a valid .bin compiled from this TSV (or without one),
     // else the TSV (recompiling the .bin), else no dictionary.
     base_in_memory_ = false;
     base_write_failed_ = false;
+    journal_unavailable_ = false;
     if (base_ && base_->header() == *sample.base) {
       base = base_;
     } else {
@@ -184,6 +192,7 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
     bool file_locked) {
   base_in_memory_ = false;
   base_write_failed_ = false;
+  journal_unavailable_ = false;
   const auto text = ReadEnglishTsvFile(paths_.tsv);
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
@@ -211,6 +220,7 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
     records = ApplyEnglishJournal(std::move(records), journal.contents.ops);
   }
   const bool journal_unavailable = journal.state == EnglishJournalState::Unavailable;
+  journal_unavailable_ = journal_unavailable;
   const auto previous = ReadEnglishBaseHeader(paths_.base);
   auto bytes = EncodeEnglishBase(std::move(records), previous ? previous->generation + 1 : 1);
   std::shared_ptr<const EnglishBaseImage> base;
@@ -246,7 +256,15 @@ EnglishWriteResult EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& 
     // compiled gets its .bin now that this writer holds the lock; the sample
     // alone would not show that anything changed.
     const auto sample = TakeSample();
-    if (!IsCurrent(sample) || (lock && base_in_memory_ && !base_write_failed_))
+    // A base held in memory because the journal could not be read is compiled
+    // again only once the journal reads (section 4.8); until then each write
+    // would recompile the whole TSV under the lock for nothing.
+    if (lock && base_in_memory_ && journal_unavailable_ &&
+        LoadEnglishJournal(paths_.journal).state != EnglishJournalState::Unavailable) {
+      journal_unavailable_ = false;
+    }
+    if (!IsCurrent(sample) ||
+        (lock && base_in_memory_ && !base_write_failed_ && !journal_unavailable_))
       RebuildLocked(sample, lock.has_value());
     if (!base_) return EnglishWriteResult::Dropped;
     const auto hash = base_->header().content_hash;

@@ -131,6 +131,10 @@ class EnglishDictionaryStore {
   // ...because writing or stamping it failed under the lock: not retried
   // until the TSV changes.
   bool base_write_failed_{false};
+  // ...because the journal was there but could not be read (section 4.8): not
+  // compiled again for the same TSV until a writer finds the journal readable,
+  // or another host's .bin for this TSV appears.
+  bool journal_unavailable_{false};
   std::optional<std::pair<std::filesystem::file_time_type, uintmax_t>> compiled_tsv_;
   std::vector<EnglishOverlayOp> memory_ops_;
   EnglishWriteHook write_hook_;

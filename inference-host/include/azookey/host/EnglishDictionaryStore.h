@@ -62,10 +62,11 @@ class EnglishDictionaryStore {
   bool Remove(std::string_view surface);
   bool Compact();
 
-  // Test seams: the write protocol steps, and a call between sampling the
-  // base header and reading the overlay.
+  // Test seams: the write protocol steps, a call between sampling the base
+  // header and reading the overlay, and the clock of the writer lock wait.
   void SetWriteHookForTest(EnglishWriteHook hook);
   void SetReadHookForTest(std::function<void()> hook);
+  void SetLockClockForTest(EnglishLockClock clock);
 
  private:
   static constexpr int kMaxReadAttempts = 4;
@@ -115,6 +116,7 @@ class EnglishDictionaryStore {
   std::vector<EnglishOverlayOp> memory_ops_;
   EnglishWriteHook write_hook_;
   std::function<void()> read_hook_;
+  EnglishLockClock lock_clock_;
 };
 
 }  // namespace azookey::host

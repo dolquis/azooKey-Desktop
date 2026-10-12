@@ -170,9 +170,12 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
   // The .bin is a cache: without the lock or write access (a read-only TSV
-  // folder) the parsed TSV is used from memory (section 4.5).
+  // folder) the parsed TSV is used from memory (section 4.5). The lock is
+  // tried once, never waited for: this runs for a reader, or for a writer
+  // that has already spent its wait (section 4.7 (A)).
   const auto lock = file_locked ? std::optional<EnglishDictionaryFileLock>{}
-                                : EnglishDictionaryFileLock::Acquire(paths_.lock);
+                                : EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_,
+                                                                     std::chrono::milliseconds{0});
   const bool locked = file_locked || lock.has_value();
   if (locked && !force && ReadEnglishBaseHeader(paths_.base) &&
       BaseMatchesTsv(paths_.base, tsv_time)) {
@@ -208,7 +211,7 @@ bool EnglishDictionaryStore::AppendLocked(const EnglishOverlayOp& op) {
   try {
     // The base is settled under the writer lock, so a compaction by another
     // host while this one waited is attached to rather than missed.
-    const auto lock = EnglishDictionaryFileLock::Acquire(paths_.lock);
+    const auto lock = EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_);
     // A base held in memory only because the lock was busy when it was
     // compiled gets its .bin now that this writer holds the lock; the sample
     // alone would not show that anything changed.
@@ -271,7 +274,7 @@ bool EnglishDictionaryStore::Compact() {
   std::lock_guard lock(update_mutex_);
   bool ok = false;
   try {
-    const auto file_lock = EnglishDictionaryFileLock::Acquire(paths_.lock);
+    const auto file_lock = EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_);
     ok = file_lock && CompactEnglishDictionary(paths_, write_hook_);
   } catch (const std::exception&) {
     ok = false;  // The old base and overlay stay in place.
@@ -288,6 +291,11 @@ void EnglishDictionaryStore::SetWriteHookForTest(EnglishWriteHook hook) {
 void EnglishDictionaryStore::SetReadHookForTest(std::function<void()> hook) {
   std::lock_guard lock(update_mutex_);
   read_hook_ = std::move(hook);
+}
+
+void EnglishDictionaryStore::SetLockClockForTest(EnglishLockClock clock) {
+  std::lock_guard lock(update_mutex_);
+  lock_clock_ = std::move(clock);
 }
 
 }  // namespace azookey::host

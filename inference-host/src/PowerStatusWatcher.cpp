@@ -1,6 +1,7 @@
 #include "azookey/host/PowerStatusWatcher.h"
 
 #include <future>
+#include <memory>
 #include <utility>
 
 #ifdef _WIN32
@@ -54,6 +55,69 @@ std::optional<PowerChangeDebouncer::Clock::time_point> PowerChangeDebouncer::dea
   return noted_at_ + quiet_;
 }
 
+PowerChangeWorker::PowerChangeWorker(Apply apply, Settle settle,
+                                     PowerChangeDebouncer::Clock::duration quiet)
+    : apply_(std::move(apply)),
+      settle_(std::move(settle)),
+      debouncer_(quiet),
+      thread_([this] { Run(); }) {}
+
+PowerChangeWorker::~PowerChangeWorker() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopping_ = true;
+  }
+  wake_.notify_one();
+  thread_.join();
+}
+
+void PowerChangeWorker::Request(PowerSource from, PowerSource to) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pending_) {
+      pending_->second = to;
+    } else {
+      pending_.emplace(from, to);
+    }
+  }
+  wake_.notify_one();
+}
+
+void PowerChangeWorker::Run() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  while (true) {
+    const auto ready = [this] { return stopping_ || pending_.has_value(); };
+    if (const auto deadline = debouncer_.deadline()) {
+      wake_.wait_until(lock, *deadline, ready);
+    } else {
+      wake_.wait(lock, ready);
+    }
+    if (stopping_) return;
+    if (pending_) {
+      const auto change = *pending_;
+      pending_.reset();
+      debouncer_.Note(change.second, PowerChangeDebouncer::Clock::now());
+      lock.unlock();
+      try {
+        if (apply_) apply_(change.first, change.second);
+      } catch (...) {
+        // The next change applies the settings again.
+      }
+      lock.lock();
+      continue;
+    }
+    if (const auto settled = debouncer_.TakeSettled(PowerChangeDebouncer::Clock::now())) {
+      lock.unlock();
+      try {
+        if (settle_) settle_(*settled);
+      } catch (...) {
+        // The backend stays as it is until the next change.
+      }
+      lock.lock();
+    }
+  }
+}
+
 PowerStatusWatcher::PowerStatusWatcher(PowerStateTracker& tracker) : tracker_(tracker) {}
 
 PowerStatusWatcher::~PowerStatusWatcher() { Stop(); }
@@ -93,11 +157,13 @@ LRESULT CALLBACK PowerWindowProc(HWND window, UINT message, WPARAM wparam, LPARA
 
 bool PowerStatusWatcher::Start() {
   if (thread_.joinable()) return window_ != nullptr;
-  std::promise<void*> created;
-  auto created_future = created.get_future();
+  // Shared: set_value may still be returning on the watcher thread when
+  // get() below wakes up and Start returns.
+  auto created = std::make_shared<std::promise<void*>>();
+  auto created_future = created->get_future();
   try {
     thread_ = std::thread(
-        [this, &created] { Run([&created](void* window) { created.set_value(window); }); });
+        [this, created] { Run([created](void* window) { created->set_value(window); }); });
   } catch (...) {
     return false;
   }

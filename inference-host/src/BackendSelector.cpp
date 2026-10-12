@@ -209,14 +209,15 @@ BackendSelection SelectAutoBackend(const BackendSystemFacts& facts,
   return selection;
 }
 
-std::optional<BackendSelection> ReselectAutoBackendForPower(
-    BackendSystemFacts startup_facts, bool on_battery, const CompiledBackends& compiled,
-    const BackendSelectionPolicy& policy, bool auto_requested, BackendKind current) {
-  if (!auto_requested || policy.safe_mode) return std::nullopt;
+PowerBackendPlan PlanAutoBackendForPower(BackendSystemFacts startup_facts, bool on_battery,
+                                         const CompiledBackends& compiled, BackendKind current_auto,
+                                         const PowerBackendReloadState& state) {
+  PowerBackendPlan plan;
   startup_facts.on_battery = on_battery;
-  const auto selection = SelectAutoBackend(startup_facts, compiled, policy);
-  if (selection.backend == current) return std::nullopt;
-  return selection;
+  plan.selection = SelectAutoBackend(startup_facts, compiled);
+  plan.changed = plan.selection.backend != current_auto;
+  plan.reload = plan.changed && state.auto_requested && !state.safe_mode && state.model_active;
+  return plan;
 }
 
 BackendSystemFacts CollectBackendSystemFacts(IAdapterEnumerator& adapters,

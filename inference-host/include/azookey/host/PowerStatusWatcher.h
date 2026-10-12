@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include "azookey/host/SettingsStore.h"
 
@@ -63,6 +66,37 @@ class PowerChangeDebouncer {
   Clock::duration quiet_;
   std::optional<PowerSource> pending_;
   Clock::time_point noted_at_{};
+};
+
+// Applies power changes on its own thread, off the watcher's window thread, so
+// a model load holding the config lock does not stall the window. Changes that
+// arrive while one is applied collapse into one more run. Once a source has
+// stood for `quiet`, `settle` runs with it (the backend re-resolution).
+class PowerChangeWorker {
+ public:
+  using Apply = std::function<void(PowerSource from, PowerSource to)>;
+  using Settle = std::function<void(PowerSource source)>;
+
+  PowerChangeWorker(Apply apply, Settle settle, PowerChangeDebouncer::Clock::duration quiet);
+  // Waits for a run in progress, then stops; pending changes are dropped.
+  ~PowerChangeWorker();
+  PowerChangeWorker(const PowerChangeWorker&) = delete;
+  PowerChangeWorker& operator=(const PowerChangeWorker&) = delete;
+
+  void Request(PowerSource from, PowerSource to);
+
+ private:
+  void Run();
+
+  Apply apply_;
+  Settle settle_;
+  // Touched only by the worker thread.
+  PowerChangeDebouncer debouncer_;
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::optional<std::pair<PowerSource, PowerSource>> pending_;
+  bool stopping_{false};
+  std::thread thread_;
 };
 
 // Receives WM_POWERBROADCAST in a hidden top-level window on its own thread.

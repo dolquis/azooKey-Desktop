@@ -404,11 +404,15 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 - OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の保留中は
   R1 の選択に使わない。
 - 電源の状態が変わったら（§6.1）、変化が 5 秒続いた後に `auto` を解決し直す
-  （`ReselectAutoBackendForPower`）。アダプタ・ランタイム DLL・OS build は起動時に集めた値を使い、
-  電源の状態だけを入れ替える。解決し直すのは、要求が `auto`（`source=auto`）で、SafeMode ではない
-  場合に限る。結果が今の `auto` の backend と違うときだけ、新しい backend でモデルを再ロードし、
-  `backend_selected` を `source=power_change` で出す（再ロードの結果は `power_backend_reload`）。
-  ggml-vulkan を含まないビルドでは `auto` は常に CPU なので、再ロードは起きない。
+  （`PlanAutoBackendForPower`）。アダプタ・ランタイム DLL・OS build は起動時に集めた値を使い、
+  電源の状態だけを入れ替える。`auto` の値は、要求が `auto` かどうか、SafeMode かどうかによらず
+  電源に追従させる。後から要求を `auto` に戻したときも、その時点の電源に合った値を `UpdateConfig` が
+  使うためである。値が変わったら `backend_selected` を `source=power_change` で出す。
+  モデルの再ロードは、値が変わり、要求が `auto`（`source=auto`）で、SafeMode ではなく、モデルが
+  ロード済みかロード中のときに限る（結果は `power_backend_reload`）。モデルをロードしていなければ
+  値の記録だけにとどめ、ロードは利用者の操作か `UpdateConfig` を待つ。SafeMode で起動した Host は
+  起動時の probe を実行していないので、`auto` は再起動まで CPU のままになる。ggml-vulkan を含まない
+  ビルドでは `auto` は常に CPU なので、再ロードは起きない。
 - 選択結果は Host の構造化ログ `backend_selected` に 1 件出す。フィールドは `source`
   （`cli` / `settings` / `auto` / `power_change`）、`requested`、`auto_backend`、`reason`、`adapters_known`、
   `hw_gpu_count`、`hw_ml_only_count`、`vulkan_loader`、`cuda_runtime`、`os_build`、
@@ -566,7 +570,7 @@ Fast、AC（`performance` と、電源の状態が不明な場合を含む）な
 
 | 項目 | AC 接続時 | バッテリ駆動時 | Host での扱い |
 |---|---|---|---|
-| バックエンド選択 | §4.5 のフォールバック段位に従う（R2 NPU/GPU → R1 CUDA/Vulkan/CPU） | §4.5 に従う（**R2 は NPU device のみ**、§4.6 のデバイスレベル絞り込み。discrete GPU / CUDA / Vulkan を回避し、NPU 不可なら R1 CPU） | `auto` は Host 起動時の電源の状態で解決する（§4.4） |
+| バックエンド選択 | §4.5 のフォールバック段位に従う（R2 NPU/GPU → R1 CUDA/Vulkan/CPU） | §4.5 に従う（**R2 は NPU device のみ**、§4.6 のデバイスレベル絞り込み。discrete GPU / CUDA / Vulkan を回避し、NPU 不可なら R1 CPU） | `auto` は Host 起動時の電源の状態で解決し、電源の変化が 5 秒続いたら解決し直す。値が変わり、モデルを使っていれば再ロードする（§4.4） |
 | 推論スレッド数（`inferenceThreads` が 0 のとき） | 8 | 2 | 電源の状態が不明なら 4。いずれも論理コア数を上限とする。電源の変化で設定し直し、次のモデルロードから効く |
 | NLL rerank（Heavy レーン） | 設定 `nll.enabled` に従う | 無効（Fast レーンのみ） | 電源の変化で設定し直し、次の変換から効く |
 | ライブ変換重い推論 | 有効 | 無効（Fast レーンのみ） | ライブ変換は電源によらず fallback converter（`fast_only`）で行う（`docs/zenzai-inference-spec.md` §7.1） |
@@ -902,7 +906,7 @@ public:
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU、電源の変化での解決し直し（`auto` のときだけ、結果が変わったときだけ、SafeMode では何もしない） |
+| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU、電源の変化での解決し直し（`auto` の値は常に追従し、再ロードは値が変わり、要求が `auto` で、SafeMode ではなく、モデルを使っているときだけ） |
 | MmapModelLoader | `inference-host/tests/mmap_loader_test.cpp` | マップの成功、ファイル不在と空ファイルのエラー、サイズ取得、解放後のファイル削除、`LoadWithMmapFallback` の試行順（preflight の失敗、マップ失敗後の 1 回の再試行、両方の失敗） |
 | Power Status | `inference-host/tests/power_status_test.cpp` | 電源状態の変化の検出と残量だけの変化の無視、不明を AC として扱うこと、`powerProfile` の上書き、変化によるレーンとスレッド数の切替え、Windows では watcher の window への `WM_POWERBROADCAST` が tracker に届くこと、変化が続いた後にだけ解決し直すためのデバウンス |
 | DPI changed | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |

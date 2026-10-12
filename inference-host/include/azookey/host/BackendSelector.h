@@ -119,13 +119,32 @@ BackendSelection SelectAutoBackend(const BackendSystemFacts& facts,
                                    const CompiledBackends& compiled,
                                    const BackendSelectionPolicy& policy = {});
 
-// M25 (spec 4.4): the selection `auto` moves to after a power change, or nullopt
-// when no reload is due. Only an `auto` request outside SafeMode is resolved
-// again, from the startup facts with the new power state, and only a backend
-// other than `current` is returned.
-std::optional<BackendSelection> ReselectAutoBackendForPower(
-    BackendSystemFacts startup_facts, bool on_battery, const CompiledBackends& compiled,
-    const BackendSelectionPolicy& policy, bool auto_requested, BackendKind current);
+// What decides whether a power change reloads the model (spec 4.4).
+struct PowerBackendReloadState {
+  // No CLI backend and no non-auto preference.
+  bool auto_requested{false};
+  bool safe_mode{false};
+  // A model is loaded or being preloaded.
+  bool model_active{false};
+};
+
+struct PowerBackendPlan {
+  // What `auto` resolves to with the new power state.
+  BackendSelection selection;
+  // The resolved backend differs from the current `auto`.
+  bool changed{false};
+  // The model is to be reloaded with it.
+  bool reload{false};
+};
+
+// M25 (spec 4.4): `auto` after a power change, resolved from the startup facts
+// with the new power state. `auto` follows the power source whatever is
+// requested, so a later switch back to `auto` finds it current; only a change
+// under an `auto` request, outside SafeMode, with a model in use reloads. A
+// Host started in SafeMode collected no facts, so `auto` stays on CPU.
+PowerBackendPlan PlanAutoBackendForPower(BackendSystemFacts startup_facts, bool on_battery,
+                                         const CompiledBackends& compiled, BackendKind current_auto,
+                                         const PowerBackendReloadState& state);
 
 // A probe that throws or fails leaves its fact unknown or false; never throws.
 BackendSystemFacts CollectBackendSystemFacts(IAdapterEnumerator& adapters,

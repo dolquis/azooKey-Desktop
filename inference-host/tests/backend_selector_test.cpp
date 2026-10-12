@@ -42,46 +42,62 @@ TEST(BackendSelectorTest, VulkanBuildWithHardwareGpuAndLoaderSelectsVulkan) {
   EXPECT_TRUE(selection.winml_os_eligible);
 }
 
-TEST(BackendSelectorTest, PowerChangeMovesAutoBetweenVulkanAndCpu) {
-  using azookey::host::ReselectAutoBackendForPower;
-  const auto to_battery =
-      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, true, BackendKind::Vulkan);
-  ASSERT_TRUE(to_battery.has_value());
-  EXPECT_EQ(to_battery->backend, BackendKind::Cpu);
-  EXPECT_EQ(to_battery->reason, BackendSelectionReason::OnBattery);
+azookey::host::PowerBackendReloadState AutoWithModel() {
+  azookey::host::PowerBackendReloadState state;
+  state.auto_requested = true;
+  state.model_active = true;
+  return state;
+}
 
-  const auto to_ac =
-      ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true, BackendKind::Cpu);
-  ASSERT_TRUE(to_ac.has_value());
-  EXPECT_EQ(to_ac->backend, BackendKind::Vulkan);
+TEST(BackendSelectorTest, PowerChangeMovesAutoBetweenVulkanAndCpu) {
+  using azookey::host::PlanAutoBackendForPower;
+  const auto to_battery = PlanAutoBackendForPower(ReadyFacts(), true, VulkanBuild(),
+                                                  BackendKind::Vulkan, AutoWithModel());
+  EXPECT_EQ(to_battery.selection.backend, BackendKind::Cpu);
+  EXPECT_EQ(to_battery.selection.reason, BackendSelectionReason::OnBattery);
+  EXPECT_TRUE(to_battery.changed);
+  EXPECT_TRUE(to_battery.reload);
+
+  const auto to_ac = PlanAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), BackendKind::Cpu,
+                                             AutoWithModel());
+  EXPECT_EQ(to_ac.selection.backend, BackendKind::Vulkan);
+  EXPECT_TRUE(to_ac.reload);
 }
 
 TEST(BackendSelectorTest, PowerChangeReloadsOnlyWhenTheAutoBackendChanges) {
-  using azookey::host::ReselectAutoBackendForPower;
-  // Same result as the backend in use.
-  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true,
-                                           BackendKind::Vulkan));
-  EXPECT_FALSE(
-      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, true, BackendKind::Cpu));
+  using azookey::host::PlanAutoBackendForPower;
+  const auto same_on_ac = PlanAutoBackendForPower(ReadyFacts(), false, VulkanBuild(),
+                                                  BackendKind::Vulkan, AutoWithModel());
+  EXPECT_FALSE(same_on_ac.changed);
+  EXPECT_FALSE(same_on_ac.reload);
   // Without ggml-vulkan, `auto` is CPU on either power source.
-  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, CompiledBackends{}, {}, true,
-                                           BackendKind::Cpu));
-  // Unknown adapters at startup keep `auto` on CPU after the change as well.
-  auto unknown = ReadyFacts();
-  unknown.adapters.reset();
-  EXPECT_FALSE(
-      ReselectAutoBackendForPower(unknown, false, VulkanBuild(), {}, true, BackendKind::Cpu));
+  const auto cpu_build = PlanAutoBackendForPower(ReadyFacts(), false, CompiledBackends{},
+                                                 BackendKind::Cpu, AutoWithModel());
+  EXPECT_FALSE(cpu_build.changed);
+  // A Host started in SafeMode collected no facts, so `auto` stays on CPU.
+  const auto no_facts = PlanAutoBackendForPower(BackendSystemFacts{}, false, VulkanBuild(),
+                                                BackendKind::Cpu, AutoWithModel());
+  EXPECT_EQ(no_facts.selection.backend, BackendKind::Cpu);
+  EXPECT_FALSE(no_facts.changed);
 }
 
-TEST(BackendSelectorTest, PowerChangeLeavesExplicitRequestsAndSafeModeAlone) {
-  using azookey::host::ReselectAutoBackendForPower;
-  // A CLI backend or a non-auto preference is not re-resolved.
-  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, false,
-                                           BackendKind::Vulkan));
-  azookey::host::BackendSelectionPolicy safe_mode;
+TEST(BackendSelectorTest, PowerChangeTracksAutoButReloadsOnlyAnAutoRequestWithAModel) {
+  using azookey::host::PlanAutoBackendForPower;
+  auto explicit_request = AutoWithModel();
+  explicit_request.auto_requested = false;
+  auto safe_mode = AutoWithModel();
   safe_mode.safe_mode = true;
-  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), safe_mode, true,
-                                           BackendKind::Cpu));
+  auto no_model = AutoWithModel();
+  no_model.model_active = false;
+  for (const auto& state : {explicit_request, safe_mode, no_model}) {
+    const auto plan =
+        PlanAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), BackendKind::Vulkan, state);
+    // `auto` still follows the power source, so switching back to it later
+    // resolves to the backend for the power source at that time.
+    EXPECT_EQ(plan.selection.backend, BackendKind::Cpu);
+    EXPECT_TRUE(plan.changed);
+    EXPECT_FALSE(plan.reload);
+  }
 }
 
 TEST(BackendSelectorTest, BuildWithoutVulkanAlwaysSelectsCpu) {

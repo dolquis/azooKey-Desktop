@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -164,6 +166,96 @@ TEST(PowerChangeDebouncerTest, AFlapRestartsTheQuietPeriodAndKeepsTheLatestSourc
   debouncer.Note(PowerSource::Ac, t0 + seconds(3));
   EXPECT_FALSE(debouncer.TakeSettled(t0 + seconds(6)).has_value());
   EXPECT_EQ(debouncer.TakeSettled(t0 + seconds(8)), PowerSource::Ac);
+}
+
+// Records calls from the worker thread; waits are bounded, never fixed sleeps.
+class WorkerCalls {
+ public:
+  void Apply(PowerSource from, PowerSource to) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    applied_.emplace_back(from, to);
+    changed_.notify_all();
+    changed_.wait(lock, [this] { return !hold_apply_; });
+  }
+  void Settle(PowerSource source) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    settled_.push_back(source);
+    changed_.notify_all();
+  }
+  void HoldApply(bool hold) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hold_apply_ = hold;
+    changed_.notify_all();
+  }
+  bool WaitApplied(size_t count) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kWaitLimit, [&] { return applied_.size() >= count; });
+  }
+  bool WaitSettled(size_t count) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kWaitLimit, [&] { return settled_.size() >= count; });
+  }
+  std::vector<Change> applied() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return applied_;
+  }
+  std::vector<PowerSource> settled() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return settled_;
+  }
+
+ private:
+  static constexpr std::chrono::seconds kWaitLimit{30};
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool hold_apply_{false};
+  std::vector<Change> applied_;
+  std::vector<PowerSource> settled_;
+};
+
+TEST(PowerChangeWorkerTest, AppliesAChangeAndSettlesItAfterTheQuietPeriod) {
+  WorkerCalls calls;
+  {
+    azookey::host::PowerChangeWorker worker(
+        [&calls](PowerSource from, PowerSource to) { calls.Apply(from, to); },
+        [&calls](PowerSource source) { calls.Settle(source); }, std::chrono::seconds(0));
+    worker.Request(PowerSource::Ac, PowerSource::Battery);
+    ASSERT_TRUE(calls.WaitSettled(1));
+  }
+  EXPECT_EQ(calls.applied(), (std::vector<Change>{{PowerSource::Ac, PowerSource::Battery}}));
+  EXPECT_EQ(calls.settled(), std::vector<PowerSource>{PowerSource::Battery});
+}
+
+TEST(PowerChangeWorkerTest, ChangesDuringAnApplyCollapseIntoOneMoreRun) {
+  WorkerCalls calls;
+  calls.HoldApply(true);
+  {
+    azookey::host::PowerChangeWorker worker(
+        [&calls](PowerSource from, PowerSource to) { calls.Apply(from, to); },
+        [&calls](PowerSource source) { calls.Settle(source); }, std::chrono::hours(1));
+    worker.Request(PowerSource::Ac, PowerSource::Battery);
+    ASSERT_TRUE(calls.WaitApplied(1));
+    worker.Request(PowerSource::Battery, PowerSource::Ac);
+    worker.Request(PowerSource::Ac, PowerSource::Battery);
+    calls.HoldApply(false);
+    ASSERT_TRUE(calls.WaitApplied(2));
+  }
+  EXPECT_EQ(calls.applied(), (std::vector<Change>{{PowerSource::Ac, PowerSource::Battery},
+                                                  {PowerSource::Battery, PowerSource::Battery}}));
+  // The quiet period had not passed when the worker stopped.
+  EXPECT_TRUE(calls.settled().empty());
+}
+
+TEST(PowerChangeWorkerTest, StopsWhileWaitingOutTheQuietPeriod) {
+  WorkerCalls calls;
+  {
+    azookey::host::PowerChangeWorker worker(
+        [&calls](PowerSource from, PowerSource to) { calls.Apply(from, to); },
+        [&calls](PowerSource source) { calls.Settle(source); }, std::chrono::hours(1));
+    worker.Request(PowerSource::Ac, PowerSource::Battery);
+    ASSERT_TRUE(calls.WaitApplied(1));
+  }  // The destructor returns without waiting out the hour.
+  EXPECT_TRUE(calls.settled().empty());
 }
 
 #ifdef _WIN32

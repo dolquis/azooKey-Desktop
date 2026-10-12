@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,7 @@
 #include "runner/CaseSelection.h"
 #include "runner/CaseSupport.h"
 #include "runner/ClipboardIsolation.h"
+#include "runner/ReadObservation.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
 #include "runner/TargetConfigLoader.h"
@@ -701,6 +703,159 @@ TEST(WindowOwnershipTest, ReportsMissingWindowWhenOnlyOtherExecutablesMatchWindo
 
   EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::None);
   EXPECT_EQ(selection.failure, TargetSurfaceFailure::NewWindowNotFound);
+}
+
+TEST(ReadObservationTest, CensusCountsCharacterClassesWithoutKeepingText) {
+  const auto census = CensusOf(L"にほんgoカ!");
+  EXPECT_EQ(census.utf16_length, 7u);
+  EXPECT_EQ(census.hiragana, 3u);
+  EXPECT_EQ(census.ascii_letters, 2u);
+  EXPECT_EQ(census.katakana, 1u);
+  EXPECT_EQ(census.other, 1u);
+}
+
+TEST(ReadObservationTest, RelationIsAFixedLabelRelativeToTheTypedAscii) {
+  EXPECT_EQ(ClassifyRelation(std::nullopt, "nihongo"), TextRelation::Absent);
+  EXPECT_EQ(ClassifyRelation(std::wstring{}, "nihongo"), TextRelation::Empty);
+  EXPECT_EQ(ClassifyRelation(std::wstring(L"NIHONGO"), "nihongo"), TextRelation::TypedAscii);
+  EXPECT_EQ(ClassifyRelation(std::wstring(L"にほんご"), "nihongo"), TextRelation::Other);
+  EXPECT_EQ(ClassifyRelation(std::wstring(L"nihon"), "nihongo"), TextRelation::Other);
+  EXPECT_EQ(ClassifyRelation(std::wstring(L"nihongo"), ""), TextRelation::Other);
+}
+
+TEST(ReadObservationTest, TraceLinesNeverContainTheObservedText) {
+  ReadTrace trace;
+  const std::wstring sentinel = L"SECRETsentinel秘密";
+  trace.RecordRead(ReadPhase::Judge, "ascii:7", 420, {sentinel, ReadSource::Value}, "nihongo");
+  trace.RecordRead(ReadPhase::PostFailure, "vk:0x1B", 900, {sentinel + L"x", ReadSource::Value},
+                   "nihongo");
+  trace.RecordRead(ReadPhase::PostFailure, "vk:0x1B", 900, {std::nullopt, ReadSource::Text},
+                   "nihongo");
+  const auto lines = trace.Lines();
+  ASSERT_EQ(lines.size(), 3u);
+  for (const auto& line : lines) {
+    EXPECT_EQ(line.find("SECRET"), std::string::npos);
+    EXPECT_EQ(line.find("sentinel"), std::string::npos);
+    for (const unsigned char ch : line) EXPECT_LT(ch, 0x80u);
+  }
+  EXPECT_EQ(lines[0],
+            "read[0] phase=judge action=ascii:7 source=value t_ms=420 relation=other "
+            "utf16_len=16 ascii_letters=14 hiragana=0 katakana=0 other=2 changed=n/a");
+  EXPECT_NE(lines[1].find("phase=post-failure"), std::string::npos);
+  EXPECT_NE(lines[1].find("changed=yes"), std::string::npos);
+  EXPECT_NE(lines[2].find("source=text"), std::string::npos);
+  EXPECT_NE(lines[2].find("relation=absent"), std::string::npos);
+}
+
+TEST(ReadObservationTest, FailureLogLinesCarryOnlyKeyCodesAndCountsForEveryInputAction) {
+  const std::wstring sentinel = L"SECRETsentinel秘密";
+  const std::string actions[] = {VirtualKeyAction(0x1B, false), VirtualKeyAction(0x0D, true),
+                                 AsciiInputAction(7), UnicodeInputAction(sentinel.size())};
+  EXPECT_EQ(actions[0], "vk:0x1B");
+  EXPECT_EQ(actions[1], "mod+vk:0x0D");
+  EXPECT_EQ(actions[2], "ascii:7");
+  EXPECT_EQ(actions[3], "unicode:16");
+  ReadTrace trace;
+  for (const auto& action : actions) {
+    trace.RecordRead(ReadPhase::Judge, action, 10, {sentinel, ReadSource::Value}, "nihongo");
+    trace.RecordRead(ReadPhase::PostFailure, action, 20, {sentinel, ReadSource::Text}, "nihongo");
+  }
+  trace.RecordSettleSummary(false, 4, 1500);
+  std::string everything;
+  for (const auto& line : trace.Lines()) everything += line + "\n";
+  EXPECT_EQ(everything.find("SECRET"), std::string::npos);
+  EXPECT_EQ(everything.find("sentinel"), std::string::npos);
+  for (const unsigned char ch : everything) EXPECT_LT(ch, 0x80u);
+}
+
+TEST(ReadObservationTest, ChangeDetectionIsTrackedPerSourceAndResetsWithTheCase) {
+  ReadTrace trace;
+  trace.RecordRead(ReadPhase::Judge, "", 1, {std::wstring(L"a"), ReadSource::Value}, "");
+  trace.RecordRead(ReadPhase::Judge, "", 2, {std::wstring(L"a"), ReadSource::Value}, "");
+  trace.RecordRead(ReadPhase::Judge, "", 3, {std::wstring(L"b"), ReadSource::Text}, "");
+  auto lines = trace.Lines();
+  EXPECT_NE(lines[1].find("changed=no"), std::string::npos);
+  EXPECT_NE(lines[2].find("changed=n/a"), std::string::npos);
+  trace.Clear();
+  EXPECT_TRUE(trace.empty());
+  trace.RecordRead(ReadPhase::Judge, "", 1, {std::wstring(L"b"), ReadSource::Value}, "");
+  EXPECT_NE(trace.Lines()[0].find("changed=n/a"), std::string::npos);
+  EXPECT_NE(trace.Lines()[0].find("action=none"), std::string::npos);
+}
+
+class SettleReadsTest : public ::testing::Test {
+ protected:
+  SettleOutcome Run(const std::vector<std::optional<std::wstring>>& values,
+                    const SettleOptions& options) {
+    return SettleReads(
+        options,
+        [&] {
+          const auto index = (std::min)(reads_, values.size() - 1);
+          ++reads_;
+          return ObservedRead{values[index], ReadSource::Value};
+        },
+        [&] { return now_ms_; }, [&](uint64_t milliseconds) { now_ms_ += milliseconds; },
+        [&](const ObservedRead&) { ++observed_; });
+  }
+
+  size_t reads_{0};
+  uint64_t now_ms_{0};
+  unsigned observed_{0};
+};
+
+TEST_F(SettleReadsTest, StopsAfterTheRequiredConsecutiveIdenticalReads) {
+  const auto outcome = Run({L"a", L"a", L"a", L"zzz"}, SettleOptions{3, 50, 1500});
+  EXPECT_TRUE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 3u);
+  EXPECT_EQ(observed_, 3u);
+  EXPECT_EQ(now_ms_, 100u);
+  EXPECT_EQ(outcome.last.text, std::optional<std::wstring>(L"a"));
+}
+
+TEST_F(SettleReadsTest, ChangedValueRestartsTheCountAndReturnsTheSettledValue) {
+  const auto outcome =
+      Run({L"nihongo", L"にほんご", L"にほんご", L"にほんご"}, SettleOptions{3, 50, 1500});
+  EXPECT_TRUE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 4u);
+  EXPECT_EQ(outcome.last.text, std::optional<std::wstring>(L"にほんご"));
+}
+
+TEST_F(SettleReadsTest, SettlesOnTheNewValueAfterOneChangeWithinTheCeiling) {
+  const auto outcome = Run({L"a", L"b"}, SettleOptions{2, 100, 450});
+  // a→b と変わったあと b が 2 回続くので 3 回目で安定する。
+  EXPECT_TRUE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 3u);
+  EXPECT_EQ(outcome.last.text, std::optional<std::wstring>(L"b"));
+}
+
+TEST_F(SettleReadsTest, GivesUpAsSoonAsTheElapsedTimeEqualsTheCeiling) {
+  // 読み取りは 0 / 100 / 200 / 300 ms。4 回目の直後に経過が上限（300 ms）に達して打ち切る。
+  const auto outcome =
+      Run({L"a", L"b", L"c", L"d", L"e", L"f", L"g", L"h"}, SettleOptions{2, 100, 300});
+  EXPECT_FALSE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 4u);
+  EXPECT_EQ(now_ms_, 300u);
+}
+
+TEST_F(SettleReadsTest, ContinuesWhenTheElapsedTimeIsJustBelowTheCeiling) {
+  // 上限が 301 ms なら 4 回目（300 ms）の後も続き、5 回目（400 ms）で打ち切る。
+  const auto outcome =
+      Run({L"a", L"b", L"c", L"d", L"e", L"f", L"g", L"h"}, SettleOptions{2, 100, 301});
+  EXPECT_FALSE(outcome.stable);
+  EXPECT_EQ(outcome.reads, 5u);
+  EXPECT_EQ(now_ms_, 400u);
+}
+
+TEST_F(SettleReadsTest, TreatsUnreadableAsAValueAndNeverWaitsPastTheLastRead) {
+  const auto outcome = Run({std::nullopt}, SettleOptions{2, 50, 1500});
+  EXPECT_TRUE(outcome.stable);
+  EXPECT_FALSE(outcome.last.text.has_value());
+  EXPECT_EQ(now_ms_, 50u);
+  const auto single = SettleReads(
+      SettleOptions{0, 50, 1500}, [] { return ObservedRead{std::wstring(L"x"), ReadSource::Text}; },
+      [] { return uint64_t{0}; }, [](uint64_t) {}, nullptr);
+  EXPECT_TRUE(single.stable);
+  EXPECT_EQ(single.reads, 1u);
 }
 
 }  // namespace

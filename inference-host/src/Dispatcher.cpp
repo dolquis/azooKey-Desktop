@@ -1608,8 +1608,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
              {{"request_id", req.request_id},
               {"error_code", logging::RuntimeLogSafeText("business")}});
   }
-  auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings,
-                                                        config_.default_backend);
+  const auto auto_backend = config_.auto_backend ? config_.auto_backend() : config_.default_backend;
+  auto next_config =
+      ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings, auto_backend);
   if (config_.override_backend) {
     next_config.backend = *config_.override_backend;
   }

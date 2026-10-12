@@ -11,6 +11,7 @@
 
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/UtcTimestamp.h"
+#include "azookey/host/PowerLanePolicy.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -625,10 +626,24 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   config.rewriters.symbol_path = core::Utf8Path(settings.symbol_data_path);
   config.rewriters.emoji_path = core::Utf8Path(settings.emoji_data_path);
   config.nll = ClampNllConfig(settings.nll);
+  // Sampled at most once, and only when a setting depends on the power source.
+  std::optional<InferenceThreadEnvironment> sampled_environment;
+  const auto sample_environment = [&]() -> const InferenceThreadEnvironment& {
+    if (!sampled_environment) sampled_environment = provider();
+    return *sampled_environment;
+  };
+  // Spec 6.2: on battery the NLL rerank, the Heavy lane's extra pass, is off.
+  if (config.nll.enabled) {
+    const auto source =
+        settings.power_profile == "auto" ? sample_environment().power_source : PowerSource::Unknown;
+    if (ResolveInferenceLane(source, settings.power_profile) == InferenceLane::Fast) {
+      config.nll.enabled = false;
+    }
+  }
   if (settings.inference_threads > 0) {
     config.inference_threads = settings.inference_threads;
   } else {
-    const auto environment = provider();
+    const auto& environment = sample_environment();
     unsigned int profile_threads = 4;
     if (settings.power_profile == "performance") {
       profile_threads = 8;

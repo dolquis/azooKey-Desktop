@@ -32,12 +32,15 @@ add_library(azookey_host STATIC
   src/ModelBenchmark.cpp
   src/ModelBenchmarkWorker.cpp
   src/ModelScanner.cpp
+  src/MmapModelLoader.cpp
   src/ModelsCli.cpp
   src/NewWordsCli.cpp
   src/ModelCatalog.cpp
   src/NeologdPack.cpp
   src/PunctuationInserter.cpp
   src/NllScorer.cpp
+  src/PowerLanePolicy.cpp
+  src/PowerStatusWatcher.cpp
   src/RequestScheduler.cpp
   src/RewriterData.cpp
   src/SettingsStore.cpp
@@ -91,7 +94,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp crypt32)
+  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp crypt32 user32)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)

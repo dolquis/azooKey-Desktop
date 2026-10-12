@@ -8,7 +8,9 @@
 #include <fstream>
 #include <limits>
 #include <locale>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
@@ -94,7 +96,8 @@ void AddWordFields(j::Object* object, const learning::UserWord& word) {
 }
 
 std::string OperationJsonLine(const char* op, bool ok, const learning::UserWord& word, bool dry_run,
-                              const std::string& via, const std::string& error = {}) {
+                              const std::string& via, const std::string& error = {},
+                              const std::string& reason = {}) {
   auto object = BaseOperationJson(op, ok);
   AddWordFields(&object, word);
   if (dry_run) {
@@ -105,6 +108,10 @@ std::string OperationJsonLine(const char* op, bool ok, const learning::UserWord&
   }
   if (!error.empty()) {
     object.emplace("error", j::Value(error));
+  }
+  // DEV-1581: the running Host's error code alone, for scripts.
+  if (!reason.empty()) {
+    object.emplace("reason", j::Value(reason));
   }
   return j::Stringify(j::Value(std::move(object)));
 }
@@ -247,6 +254,49 @@ azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageTy
   return env;
 }
 
+// DEV-1581: the Host's error code as the CLI may print it: printable ASCII
+// without spaces, at most 64 bytes. Empty when the Host sent none.
+std::string SanitizeHostErrorCode(const std::optional<std::string>& code) {
+  constexpr size_t kMaxCodeBytes = 64;
+  std::string out;
+  if (!code) return out;
+  for (const char ch : *code) {
+    if (out.size() == kMaxCodeBytes) break;
+    if (ch > ' ' && ch < 0x7F) out.push_back(ch);
+  }
+  return out;
+}
+
+// DEV-1581: the sanitized code, with what it means for a retry. An older Host
+// sends no code; a code this CLI does not know is not echoed.
+std::string HostRejectionMessage(const char* op, std::string_view c) {
+  std::string message = std::string("running host rejected ") + op;
+  if (c.empty()) return message;
+  message += ": ";
+  message += c;
+  if (c == azookey::ipc::kUserDictErrorBusy) {
+    message +=
+        " (the user dictionary stayed busy until the wait ran out; nothing was saved, retry)";
+  } else if (c == azookey::ipc::kUserDictErrorLockFailed) {
+    message += " (could not lock the user dictionary file; nothing was saved)";
+  } else if (c == azookey::ipc::kUserDictErrorLoadFailed) {
+    message += " (could not read the user dictionary file; nothing was saved)";
+  } else if (c == azookey::ipc::kUserDictErrorSaveFailed) {
+    message += " (could not save the user dictionary file; nothing was changed)";
+  } else if (c == azookey::ipc::kUserDictErrorNotFound) {
+    message += " (the word is not in the user dictionary)";
+  } else if (c == azookey::ipc::kUserDictErrorUnavailable) {
+    message += " (the running host has no user dictionary)";
+  } else if (c == azookey::ipc::kUserDictErrorInvalidRequest) {
+    message += " (the running host could not read the request)";
+  } else if (c == azookey::ipc::kUserDictErrorNotAuthenticated) {
+    message += " (the running host did not accept this connection)";
+  } else {
+    return std::string("running host rejected ") + op + " (unrecognized reason)";
+  }
+  return message;
+}
+
 UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
                              const UserDictCliRunOptions& run_options) {
   UserDictCliResult result;
@@ -332,17 +382,21 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
   }
 
   bool ok = false;
+  std::optional<std::string> host_error;
   if (options.command == UserDictCliCommand::Add) {
     if (auto parsed = azookey::ipc::ParseAddUserWordResponse(command_resp->payload_json)) {
       ok = parsed->ok;
+      host_error = std::move(parsed->error);
     }
   } else if (auto parsed = azookey::ipc::ParseRemoveUserWordResponse(command_resp->payload_json)) {
     ok = parsed->ok;
+    host_error = std::move(parsed->error);
   }
 
-  const std::string error = ok ? std::string() : std::string("running host rejected ") + op;
+  const std::string reason = ok ? std::string() : SanitizeHostErrorCode(host_error);
+  const std::string error = ok ? std::string() : HostRejectionMessage(op, reason);
   result.exit_code = ok ? 0 : 1;
-  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error));
+  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error, reason));
   if (!ok) {
     result.error = error;
   }

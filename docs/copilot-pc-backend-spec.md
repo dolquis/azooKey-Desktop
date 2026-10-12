@@ -65,6 +65,9 @@ NPU は省電力なので最優先のまま。GPU はバッテリを激しく消
 
 ### 2.3 BackendSelector
 
+> **注**: 下のスケッチは初期案である。R1 の `auto` 解決の実装と interface は §4.4
+> 「`auto` の解決（BackendSelector）」が正典。
+
 `inference-host/src/BackendSelector.h` / `.cpp`（新規）：
 
 ```cpp
@@ -125,6 +128,10 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 - AMD Ryzen AI: `"AMD XDNA"`
 
 これらは `BackendSelector::IsNpuAdapter(IDXCoreAdapter*)` 内で判定。
+
+> **注**: 本節と §3.1 は R2 再開時の NPU 判定の初期案である。R1 の `auto` 解決が使う列挙は
+> §4.4「`auto` の解決（BackendSelector）」が正典で、NPU は `D3D12_GENERIC_ML` のみを持つ
+> ハードウェアアダプタとして数えるだけに留める。
 
 ## 4. 推論エンジン × アクセラレータの選定（M8 / M24）
 
@@ -331,8 +338,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 
 - R1 アクセラレータ: `Vulkan` は ggml-vulkan のデバイスへ解決する。
   `AZOOKEY_BACKEND=vulkan`（`windows-vulkan-release` preset）は ggml-vulkan と CPU を
-  リンクし、Host の既定 backend を Vulkan とする。`auto` はこの既定へ従い、明示 `cpu` は
-  デバイスリストと演算 offload を無効にして CPU へ固定する。
+  リンクし、Vulkan を `auto` の候補にする。`auto` の解決は下の「`auto` の解決
+  （BackendSelector）」に従い、明示 `cpu` はデバイスリストと演算 offload を無効にして
+  CPU へ固定する。
   `nGpuLayers` 省略時は Vulkan へ全層 offload を要求する。ビルドには Vulkan SDK が必要で、
   Vulkan 版の実行環境には Vulkan loader と対応ドライバーを要する。
 - R2 エンジン追加: `WinML`（ONNX Runtime GenAI + Windows ML）を追加。**具体 EP
@@ -351,6 +359,55 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
     `last_error` に理由を設定。CPU でロードできれば `Health=degraded`、ロード不可なら `error`。
   - Vulkan デバイス不在、モデルまたは context 初期化失敗時は CPU で一度再試行し、成功時も
     降格理由を `last_error` に保持する。後続の成功 LoadModel またはモデル無効化で解除する。
+    `auto` から選んだ Vulkan が失敗した場合も同じ扱いとする。
+
+#### `auto` の解決（BackendSelector）
+
+`inference-host/include/azookey/host/BackendSelector.h` が、設定 `backendPreference` の
+`auto` を R1 のどの backend に解決するかを決める。決めた backend は一次フィルタを通った
+候補にすぎず、`InferenceEngine::LoadModelWithResult` で実際にロードを試み、失敗したら上記の
+とおり R1 CPU へ降格する（DLL の存在やアダプタの列挙は動作を保証しない）。
+
+- 優先順位: Host の `--backend` / `--cpu` / `--cuda` 明示 > 設定の `model.backendPreference`
+  （`auto` 以外）> 設定の `backendPreference`（`auto` 以外）> `auto`。`auto` は Host 起動時に
+  1 回だけ解決し、起動時と `UpdateConfig` の両方で同じ値を使う。
+- 入力はモック可能な 3 つの probe に分ける。
+  - アダプタ列挙: `dxcore.dll` を System32 から実行時に読み込み、§3 の DXCore で
+    `D3D12_GRAPHICS` と `D3D12_GENERIC_ML` のアダプタを列挙する。`IsHardware` が偽の
+    アダプタ（WARP、Microsoft Basic Render Driver）は GPU に数えない。DXCore が無い、
+    または列挙に失敗した場合は判定不能とする。
+  - ランタイム DLL: プロセスに読み込み済みか、System32 と実行ファイルのディレクトリに
+    ファイルがあるかだけを見る。新たにロードはしない。`vulkan-1.dll` = Vulkan loader、
+    `cudart64_12.dll` + `cublas64_12.dll` = CUDA runtime。
+  - OS build: `RtlGetVersion` で取得する。
+- 判定（上から順に、最初に当たったもので CPU に決める）:
+  0. SafeMode（`docs/dev-infrastructure-spec.md` §8.5.3。モデルを動かさないため probe を
+     実行せず、`reason=safe_mode` とする。SafeMode を `UpdateConfig` で解除しても、`auto` は
+     Host を再起動するまで CPU のまま）
+  1. ビルドに ggml-vulkan が無い（`AZOOKEY_BACKEND=vulkan` 以外）
+  2. バッテリ駆動（§6.3 の `powerProfile` が `performance` なら AC、`battery_saver` なら
+     バッテリとみなす）
+  3. アダプタが判定不能
+  4. ハードウェア GPU が無い
+  5. Vulkan loader が無い
+
+  ggml-vulkan のビルドは `vulkan-1.dll` をインポートするため、loader が無い環境ではこの判定に
+  至る前にプロセスが起動しない。この場合の CPU への切替えは `docs/sideload-packaging-spec.md`
+  §1.6.3 の 2 実行体構成が担い、判定 5 は loader が読み込めない構成への防御として残す。
+  `BackendSelectionPolicy::require_winml_os_build` を真にすると、判定 1 の次に「OS build が
+  26100 未満」を CPU の条件に加える（既定は偽）。
+
+  どれにも当たらなければ Vulkan を選ぶ。Windows 以外の OS では probe が判定不能を返すため、
+  `auto` は常に CPU になる。CUDA は ggml-cuda をリンクするビルドが無いため、
+  CUDA runtime があっても選ばない（明示 `cuda` は上記の CPU 降格）。
+- OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の保留中は
+  R1 の選択に使わない。
+- 電源状態の変化による再選択は §6 の範囲で扱い、`auto` の解決は起動時の電源状態だけを使う。
+- 選択結果は Host の構造化ログ `backend_selected` に 1 件出す。フィールドは `source`
+  （`cli` / `settings` / `auto`）、`requested`、`auto_backend`、`reason`、`adapters_known`、
+  `hw_gpu_count`、`hw_ml_only_count`、`vulkan_loader`、`cuda_runtime`、`os_build`、
+  `winml_os_eligible`、`on_battery`。アダプタ名は出さない。実際にロードした backend は
+  Health と QueryDiagnostics の `backend` が示す。
 
 ### 4.5 フォールバック段位
 
@@ -843,9 +900,9 @@ public:
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | DXCore 列挙のモック、優先順位、AC/バッテリ切替 |
+| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU |
 | MmapModelLoader | `inference-host/tests/mmap_loader_test.cpp` | ロード成功、ファイル不在エラー、サイズ取得 |
-| Power Status | `inference-host/tests/power_status_test.cpp` | `WM_POWERBROADCAST` で BackendSelector が呼ばれる |
+| Power Status | `inference-host/tests/power_status_test.cpp` | `WM_POWERBROADCAST` で BackendSelector が呼ばれる（電源変化時の再選択。M25 で追加） |
 | DPI changed | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |
 | ARM64 build | CI matrix | ビルド成功 + テスト pass |
 

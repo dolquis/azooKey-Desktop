@@ -1459,7 +1459,7 @@ schema 自体は superset のまま変えない。
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時に BackendSelector が解決する backend（`copilot-pc-backend-spec.md` §4.4、`--backend` 明示時はその値）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
 | `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
@@ -1471,23 +1471,22 @@ schema 自体は superset のまま変えない。
   ランタイムがあるか」であって、実際の制約は「配布ビルドが CUDA をリンクしていないか」だからである。
   CUDA ランタイムを備えた NVIDIA 機ではむしろ選択肢が有効化され、実効のない選択がそのまま残る。
   能力検出は CUDA リンク済みビルドを配布してから導入する。
-- **v1.0 の 2 値が持つ意味**: `auto` は Host 起動時の既定バックエンド（ビルド時 `AZOOKEY_BACKEND`
-  または `--backend`）に従い、`cpu` は CPU に固定する（解決順は `model-management-spec.md` §5.2、
+- **v1.0 の 2 値が持つ意味**: `auto` は Host 起動時に `docs/copilot-pc-backend-spec.md` §4.4
+  「`auto` の解決（BackendSelector）」が解決する backend に従い、`cpu` は CPU に固定する（解決順は `model-management-spec.md` §5.2、
   `auto` のときに root `backendPreference` へ委ねる挙動を含む）。CPU 推論のみを含む v1.0 配布ビルドでは
-  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレータを選ぶ経路が配線された
-  ビルドを配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。ここでいう配線とは、配布ビルドの
-  既定 backend をそのアクセラレータへ切り替えるか、`model-management-spec.md` §5.1 の auto 推奨ロジックを
-  実装して実行時に選ばせるかのいずれかである。`auto` はこの既定に委ねるだけで自ら列挙・選択しないため、
-  アクセラレータをリンクしただけでは追随しない。M11 の目的「デバイス選択」はこの 2 値で満たし、
+  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレータをリンクした
+  ビルドを配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。`auto` が選ぶのは、ビルドに
+  リンクされ、かつ同 §4.4 の一次フィルタ（ハードウェア GPU、loader、電源状態）を通ったアクセラレータに
+  限られ、選んだ backend もロードに失敗すれば CPU へ降格する。M11 の目的「デバイス選択」はこの 2 値で満たし、
   UI にはアクセラレーションの有無を誤解させないため「v1.0 の配布ビルドは CPU 推論のみを含む」という
   静的な補足文を添える。
 - **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
   v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
   §4.3 のとおり R2 は保留中である。R1 に属する `vulkan` を保留中の R2 に従属させないため、**露出条件を
   「ggml-vulkan ビルドを配布に含め、かつ実行時にそれを選ぶ経路が配線された時点」へ改める**（R1 側の
-  条件であり、M24 の進捗に依存しない）。**リンクだけでは足りない**。上記のとおり `auto` は既定 backend に
-  委ねるだけなので、配線がなければ `vulkan` を選んでも `auto` との差が生まれず、`cuda` と同じ実効のない
-  選択になる。Vulkan ビルドは `windows-vulkan-release` preset で既定 backend を Vulkan にする。
+  条件であり、M24 の進捗に依存しない）。実行時の選択は `docs/copilot-pc-backend-spec.md` §4.4 の
+  BackendSelector が担い、Vulkan ビルド（`windows-vulkan-release` preset）の `auto` は一次フィルタを
+  通った機器で Vulkan を選ぶ。
   配布物への組み込みと §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
   選択肢を追加し、それまでは **v1.0 UI には出さない**。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。

@@ -782,8 +782,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **推奨実装時期**: M8 完了後、Phase 5 と並行する「推論バックエンド トラック」
   として着手可能（M25/M27 がこの先に連なる）。Phase 6 への配置は主題分類で
   あり、Phase 5 完了を待つ必要はない。
-- **変更対象**: `inference-host/src/BackendSelector.cpp`（新規）、
-  `inference-host/src/InferenceEngine.cpp`（エンジン分岐）、
+- **変更対象**: `inference-host/include/azookey/host/BackendSelector.h` と
+  `inference-host/src/BackendSelector.cpp`（`auto` の解決。優先順位の適用は
+  `inference-host/src/main.cpp`）、`inference-host/src/InferenceEngine.cpp`（エンジン分岐）、
   `inference-host/src/WinMlBackend.cpp`（新規、ONNX Runtime GenAI + Windows ML。
   DirectML が sustained engineering 化したため旧 `DirectMlBackend.cpp` /
   `QnnBackend.cpp` の個別 SDK 実装は採らず、EP は Windows ML の自動配信に委ねる）。

@@ -459,7 +459,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ### Phase 6-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
 
-- `inference-host/src/BackendSelector.cpp` — DXCore 列挙 + 優先順
+- `inference-host/include/azookey/host/BackendSelector.h` / `src/BackendSelector.cpp` — DXCore 列挙・ランタイム DLL 判定による `auto` の解決（優先順位の適用は `src/main.cpp`）
 - `inference-host/src/MmapModelLoader.cpp` — `CreateFileMapping` + `MapViewOfFile`
 - `inference-host/src/PowerStatusWatcher.cpp` — AC/バッテリ検知
 - `inference-host/src/DirectMlBackend.cpp` — DirectML EP 経路

@@ -394,9 +394,10 @@ M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
 1. **engine の選択**: ONNX 変換モデルがあり Win11 24H2+ かつ対応 HW なら、まず §4.6 の
    EP 取得・登録フローを試行する（EP が `NotPresent` でも `EnsureReadyAsync()` で取得を
    試みる。**「未取得」を理由に即 R1 へ落とさない**）。取得・登録に成功したら
-   **R2（`winml`）**。取得失敗（`Failure`）/ ONNX モデル無し / 非対応 OS のときに **R1**:
-   NVIDIA かつ CUDA 可なら `cuda`、ベンダ横断 GPU（非 NVIDIA / R2 不可）なら `vulkan`
-   （ggml-vulkan ビルド時）、いずれも不可なら `cpu`。
+   **R2（`winml`）**。取得失敗（`Failure`）/ ONNX モデル無し / 非対応 OS のときに **R1**。
+   R1 の `auto` の解決は `docs/copilot-pc-backend-spec.md` §4.4「`auto` の解決
+   （BackendSelector）」が正典で、ggml-vulkan ビルドで一次フィルタを通れば `vulkan`、それ以外は
+   `cpu` とする。ggml-cuda をリンクするビルドが無いため、NVIDIA 機でも `auto` は `cuda` を選ばない。
    バッテリ駆動時は §4.5 / §4.6 に従い、NPU 系 EP のみ取得し、かつ **セッションで
    デバイスレベルに NPU へ絞る**（`SetEpSelectionPolicy(MAX_EFFICIENCY)` か `GetEpDevices()`
    の `HardwareDevice.Type == NPU` フィルタ。EP は silicon と 1:1 でないため登録の限定だけ
@@ -413,8 +414,8 @@ M45 は backend 順位を独自に上書きせず、`copilot-pc-backend-spec.md`
 `model.backendPreference` を非 `auto` 値に設定する。
 
 R2 の可用性検出（NPU/GPU EP）は Windows ML の `ExecutionProviderCatalog`
-（`FindAllProviders()` の `ReadyState`、§4.6）で行う。`IDXCoreAdapter` 列挙は
-device 名表示などの補助に留める。
+（`FindAllProviders()` の `ReadyState`、§4.6）で行う。`IDXCoreAdapter` 列挙は、
+R2 では device 名表示などの補助に留め、R1 の `auto` 解決では一次フィルタに使う（同 §4.4）。
 
 > **`directml` / `npu` 値の非推奨（M24 決定で更新）**: 旧 `backendPreference` の
 > `directml` / `npu` は、具体 EP を enum 値化しない方針（§4.4）に伴い **`winml` に

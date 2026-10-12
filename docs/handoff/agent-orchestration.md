@@ -16,7 +16,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 
 ## 不変条件
 
-1. 1 塊 = 1 branch = 1 Draft PR。塊は 1 Linear Issue か、1 PR にまとめた関連 Issue 群である（まとめ方は `docs/linear-conventions.md` §13「関連 Issue の塊と PR」）。commit、push、PR の作成・更新、塊に含まれる Issue の In Review への遷移は、その塊の親 agent が直列に行う。マージ後の Merged → 検証メモ → Done は、管制塔セッションがあれば管制塔が、無ければ親 agent が行う。管制塔セッションの子セッションは、それぞれが自分の塊の親 agent である。
+1. 1 塊 = 1 branch = 1 Draft PR。塊は 1 Linear Issue か、1 PR にまとめた関連 Issue 群である（まとめ方は `docs/linear-conventions.md` §13「関連 Issue の塊と PR」）。commit、push、PR の作成・更新、塊に含まれる Issue の In Review への遷移は、その塊の親 agent が直列に行う。マージ後の Merged → 検証メモ → Done は、管制塔セッションがあれば管制塔が、無ければ親 agent が行う（Merged を省略できる条件は `docs/linear-conventions.md` §13「マージ後に Merged を省略できる場合」）。管制塔セッションの子セッションは、それぞれが自分の塊の親 agent である。
 2. subagent は別 Issue、別 branch、別 PR を作らず、別セッションも起動しない。branch と PR を持つのは親 agent（子セッションを含む）だけである。
 3. 同じファイルを複数 writer に割り当てない。CMake build directory、生成物、Serena の対象切替を複数 agent で共有しない。
 4. Human Gate（実機確認、管理者権限、TIP 登録、署名）を CI、agent レビュー、シミュレーションで代替しない。
@@ -46,7 +46,7 @@ worktree をまたいで共有される資源（sccache、`%TEMP%`、ミュー�
 
 | 担い手 | 行うこと |
 |---|---|
-| 管制塔セッション | 塊の切り分け、子セッションの起動と指示、進捗確認と介入、PR のマージ後の Linear 遷移（Merged → 検証メモ → Done）、マージのたびに後続の子へ `main` の取り込みを指示すること |
+| 管制塔セッション | 塊の切り分け、子セッションの起動と指示、進捗確認と介入、PR のマージ後の Linear 遷移（Merged → 検証メモ → Done。省略条件は上記と同じ）、マージのたびに後続の子へ `main` の取り込みを指示すること |
 | 子セッション | 自分の塊の親 agent として、実装、subagent への分担、検証、commit、push、Draft PR の作成、塊に含まれる Issue の In Review への遷移。終わったら管制塔へ報告する |
 
 子セッションは push の前に `git remote get-url --push origin` が `dolquis/` 配下の repository であることを確かめる。

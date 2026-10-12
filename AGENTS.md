@@ -53,7 +53,7 @@
 ## Linear とレビュー指摘
 
 - 当該作業で修正しないレビューまたは監査の問題は、Linear の該当 Project に起票し、file / symbol、現象、影響、推奨修正、Priority、`repo:*`、`area:*`、担当 `agent:*` を記録する。人間専任課題では `gate:human-required` を付け、`agent:*` を省略できる。
-- ブランチ名は `dolquis/dev-<番号>-<slug>` とする。Draft PR 作成時に Linear を In Review、マージ時に Merged とし、検証メモを記載してから Done にする。
+- ブランチ名は `dolquis/dev-<番号>-<slug>` とする。Draft PR 作成時に Linear を In Review、マージ時に Merged とし、検証メモを記載してから Done にする（Merged を省略できる条件は `docs/linear-conventions.md` §13）。
 - PR 本文から対応する DEV 課題と GitHub mirror を相互参照する。Human Gate や検証メモ待ちの課題には `Fixes` を使わない。
 - Codex Cloud の assign、delegate、mention は、人間の明示許可なしに行わない。
 

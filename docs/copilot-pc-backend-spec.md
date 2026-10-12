@@ -372,9 +372,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
     `D3D12_GRAPHICS` と `D3D12_GENERIC_ML` のアダプタを列挙する。`IsHardware` が偽の
     アダプタ（WARP、Microsoft Basic Render Driver）は GPU に数えない。DXCore が無い、
     または列挙に失敗した場合は判定不能とする。
-  - ランタイム DLL: System32 と実行ファイルのディレクトリだけでファイルの有無を見る。
-    ロードはしない。`vulkan-1.dll` = Vulkan loader、`cudart64_12.dll` + `cublas64_12.dll`
-    = CUDA runtime。
+  - ランタイム DLL: プロセスに読み込み済みか、System32 と実行ファイルのディレクトリに
+    ファイルがあるかだけを見る。新たにロードはしない。`vulkan-1.dll` = Vulkan loader、
+    `cudart64_12.dll` + `cublas64_12.dll` = CUDA runtime。
   - OS build: `RtlGetVersion` で取得する。
 - 判定（上から順に、最初に当たったもので CPU に決める）:
   1. ビルドに ggml-vulkan が無い（`AZOOKEY_BACKEND=vulkan` 以外）
@@ -383,6 +383,12 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   3. アダプタが判定不能
   4. ハードウェア GPU が無い
   5. Vulkan loader が無い
+
+  ggml-vulkan のビルドは `vulkan-1.dll` をインポートするため、loader が無い環境ではこの判定に
+  至る前にプロセスが起動しない。この場合の CPU への切替えは `docs/sideload-packaging-spec.md`
+  §1.6.3 の 2 実行体構成が担い、判定 5 は loader が読み込めない構成への防御として残す。
+  `BackendSelectionPolicy::require_winml_os_build` を真にすると、判定 1 の次に「OS build が
+  26100 未満」を CPU の条件に加える（既定は偽）。
 
   どれにも当たらなければ Vulkan を選ぶ。CUDA は ggml-cuda をリンクするビルドが無いため、
   CUDA runtime があっても選ばない（明示 `cuda` は上記の CPU 降格）。

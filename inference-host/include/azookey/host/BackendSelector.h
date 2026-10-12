@@ -124,7 +124,7 @@ bool OnBatteryForBackendSelection(PowerSource source, std::string_view power_pro
 
 // DXCore loaded at run time from System32; nullopt where it is absent.
 std::unique_ptr<IAdapterEnumerator> MakeSystemAdapterEnumerator();
-// Checks System32 and the executable directory only.
+// Checks the modules already loaded, then System32 and the executable directory.
 std::unique_ptr<IRuntimeLibraryProbe> MakeSystemRuntimeLibraryProbe();
 std::unique_ptr<IOsVersionProbe> MakeSystemOsVersionProbe();
 

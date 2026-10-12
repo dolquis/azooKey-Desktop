@@ -116,6 +116,9 @@ class SystemRuntimeLibraryProbe final : public IRuntimeLibraryProbe {
 
   bool Exists(std::string_view dll_name) override {
     const std::filesystem::path name(std::wstring(dll_name.begin(), dll_name.end()));
+    // A Vulkan build imports vulkan-1.dll, so the loader it started with may
+    // sit on PATH rather than in either directory below.
+    if (GetModuleHandleW(name.c_str())) return true;
     for (const auto& directory : directories_) {
       if (IsRegularFile(directory / name)) return true;
     }

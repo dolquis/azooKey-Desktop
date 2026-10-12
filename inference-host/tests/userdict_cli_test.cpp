@@ -424,6 +424,83 @@ TEST(UserDictCliTest, RunningHostRejectionSurfacesFailure) {
   std::filesystem::remove_all(path.parent_path());
 }
 
+// DEV-1581: the Host's reason reaches the user, and busy asks for a retry.
+TEST(UserDictCliTest, RunningHostErrorCodeIsShown) {
+  const auto path = TestPath("azookey_userdict_cli_ipc_error_code");
+  std::filesystem::remove_all(path.parent_path());
+
+  const std::string pipe_name = UniquePipeName("azookey-userdict-cli-error-code-test");
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "userdict-cli-test-host";
+          payload.protocol_version = 1;
+          payload.accepted = true;
+          payload.model_loaded = false;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::AddUserWord) {
+          azookey::ipc::AddUserWordResponse payload;
+          payload.ok = false;
+          payload.error = std::string(azookey::ipc::kUserDictErrorBusy);
+          res.payload_json = azookey::ipc::BuildAddUserWordResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::RemoveUserWord) {
+          azookey::ipc::RemoveUserWordResponse payload;
+          payload.ok = false;
+          payload.error = std::string(azookey::ipc::kUserDictErrorNotFound);
+          res.payload_json = azookey::ipc::BuildRemoveUserWordResponse(payload);
+          return res;
+        }
+        return std::nullopt;
+      });
+  if (!started) {
+    GTEST_SKIP() << "NamedPipeTransport is Windows-only";
+  }
+
+  azookey::host::UserDictCliRunOptions run_options;
+  run_options.crypto = &azookey::learning::test::Crypto();
+  run_options.user_dict_path = path.string();
+  run_options.pipe_name = pipe_name;
+  run_options.prefer_pipe = true;
+  run_options.connect_timeout_ms = 2000;
+  run_options.handshake_timeout_ms = 2000;
+  run_options.command_timeout_ms = 2000;
+
+  auto add = Parse({"add", "--reading", "busy", "--surface", "Busy"});
+  ASSERT_TRUE(add.has_value());
+  auto added = azookey::host::RunUserDictCli(*add, run_options);
+  EXPECT_EQ(added.exit_code, 1);
+  EXPECT_EQ(added.error.rfind("running host rejected add: busy (", 0), 0u) << added.error;
+  EXPECT_NE(added.error.find("retry"), std::string::npos) << added.error;
+  ASSERT_EQ(added.output_lines.size(), 1u);
+  auto add_json = azookey::ipc::json::Parse(added.output_lines.front());
+  ASSERT_TRUE(add_json.has_value());
+  EXPECT_EQ(add_json->GetString("error"), added.error);
+
+  auto remove = Parse({"remove", "--reading", "missing", "--surface", "Missing"});
+  ASSERT_TRUE(remove.has_value());
+  auto removed = azookey::host::RunUserDictCli(*remove, run_options);
+  EXPECT_EQ(removed.exit_code, 1);
+  EXPECT_EQ(removed.error.rfind("running host rejected remove: not_found (", 0), 0u)
+      << removed.error;
+  EXPECT_EQ(removed.error.find("retry"), std::string::npos) << removed.error;
+  EXPECT_FALSE(std::filesystem::exists(path));
+
+  server.Stop();
+  std::filesystem::remove_all(path.parent_path());
+}
+
 TEST(UserDictCliTest, ListTsvUsesStableColumns) {
   const auto path = TestPath("azookey_userdict_cli_tsv");
   std::filesystem::remove_all(path.parent_path());

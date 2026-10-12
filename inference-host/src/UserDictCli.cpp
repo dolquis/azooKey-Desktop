@@ -8,7 +8,9 @@
 #include <fstream>
 #include <limits>
 #include <locale>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
@@ -247,6 +249,29 @@ azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageTy
   return env;
 }
 
+// DEV-1581: the Host's error code, with what it means for a retry. An older
+// Host sends no code.
+std::string HostRejectionMessage(const char* op, const std::optional<std::string>& code) {
+  std::string message = std::string("running host rejected ") + op;
+  if (!code || code->empty()) return message;
+  message += ": " + *code;
+  const std::string_view c = *code;
+  if (c == azookey::ipc::kUserDictErrorBusy) {
+    message += " (the user dictionary is in use by another edit; nothing was saved, retry)";
+  } else if (c == azookey::ipc::kUserDictErrorLockFailed) {
+    message += " (could not lock the user dictionary file; nothing was saved)";
+  } else if (c == azookey::ipc::kUserDictErrorLoadFailed) {
+    message += " (could not read the user dictionary file; nothing was saved)";
+  } else if (c == azookey::ipc::kUserDictErrorSaveFailed) {
+    message += " (could not save the user dictionary file; nothing was changed)";
+  } else if (c == azookey::ipc::kUserDictErrorNotFound) {
+    message += " (the word is not in the user dictionary)";
+  } else if (c == azookey::ipc::kUserDictErrorUnavailable) {
+    message += " (the running host has no user dictionary)";
+  }
+  return message;
+}
+
 UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
                              const UserDictCliRunOptions& run_options) {
   UserDictCliResult result;
@@ -332,15 +357,18 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
   }
 
   bool ok = false;
+  std::optional<std::string> host_error;
   if (options.command == UserDictCliCommand::Add) {
     if (auto parsed = azookey::ipc::ParseAddUserWordResponse(command_resp->payload_json)) {
       ok = parsed->ok;
+      host_error = std::move(parsed->error);
     }
   } else if (auto parsed = azookey::ipc::ParseRemoveUserWordResponse(command_resp->payload_json)) {
     ok = parsed->ok;
+    host_error = std::move(parsed->error);
   }
 
-  const std::string error = ok ? std::string() : std::string("running host rejected ") + op;
+  const std::string error = ok ? std::string() : HostRejectionMessage(op, host_error);
   result.exit_code = ok ? 0 : 1;
   result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error));
   if (!ok) {

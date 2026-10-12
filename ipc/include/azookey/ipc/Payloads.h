@@ -321,9 +321,23 @@ struct AddUserWordRequest {
   std::optional<double> value;
 };
 
+// Error codes carried in the `error` field of AddUserWordResponse and
+// RemoveUserWordResponse (DEV-1581). The first six are the names of
+// host::UserDictionaryEditResult; the Dispatcher checks that they agree.
+inline constexpr std::string_view kUserDictErrorBusy = "busy";
+inline constexpr std::string_view kUserDictErrorLockFailed = "lock_failed";
+inline constexpr std::string_view kUserDictErrorLoadFailed = "load_failed";
+inline constexpr std::string_view kUserDictErrorSaveFailed = "save_failed";
+inline constexpr std::string_view kUserDictErrorNotFound = "not_found";
+inline constexpr std::string_view kUserDictErrorUnavailable = "unavailable";
+inline constexpr std::string_view kUserDictErrorInvalidRequest = "invalid_request";
+inline constexpr std::string_view kUserDictErrorNotAuthenticated = "not_authenticated";
+
 struct AddUserWordResponse {
   bool ok{false};
   std::optional<std::string> generated_id;
+  // One of the kUserDictError* codes when ok=false; an older Host omits it.
+  std::optional<std::string> error;
 };
 
 struct RemoveUserWordRequest {
@@ -333,6 +347,7 @@ struct RemoveUserWordRequest {
 
 struct RemoveUserWordResponse {
   bool ok{false};
+  std::optional<std::string> error;
 };
 
 struct UpdateConfigResponse {

@@ -225,14 +225,41 @@ bool InferenceEngine::IngestTrendingWords(const std::vector<learning::AutoWord>&
 InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(
     const std::vector<learning::AutoWord>& words, uint64_t now_epoch, bool auto_promote,
     const std::function<bool()>& still_current) {
-  std::lock_guard history_lock(learning_history_mutex_);
-  if (still_current && !still_current()) return TrendingIngestOutcome::Cancelled;
-  if (!auto_word_store_ || auto_word_store_->save_blocked()) {
-    return TrendingIngestOutcome::SaveFailed;
+  std::vector<std::string> newly_confirmed;
+  {
+    std::lock_guard history_lock(learning_history_mutex_);
+    if (still_current && !still_current()) return TrendingIngestOutcome::Cancelled;
+    if (!auto_word_store_ || auto_word_store_->save_blocked()) {
+      return TrendingIngestOutcome::SaveFailed;
+    }
+    // DEV-1584: which words of the batch this ingest promotes to Confirmed.
+    // Only ASCII words can enter the English dictionary; the rest are not
+    // tracked.
+    const auto is_confirmed = [&](const learning::AutoWord& word) {
+      const auto confirmed = auto_word_store_->LookupConfirmed(word.reading);
+      return std::any_of(confirmed.begin(), confirmed.end(),
+                         [&](const auto& c) { return c.surface == word.surface; });
+    };
+    std::vector<const learning::AutoWord*> unconfirmed;
+    if (auto_promote) {
+      for (const auto& word : words) {
+        const bool ascii = !word.surface.empty() &&
+                           std::all_of(word.surface.begin(), word.surface.end(),
+                                       [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+        if (ascii && !is_confirmed(word)) unconfirmed.push_back(&word);
+      }
+    }
+    auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
+    if (!auto_word_store_->Save()) return TrendingIngestOutcome::SaveFailed;
+    for (const auto* word : unconfirmed) {
+      if (is_confirmed(*word)) newly_confirmed.push_back(word->surface);
+    }
   }
-  auto_word_store_->IngestTrending(words, now_epoch, auto_promote);
-  return auto_word_store_->Save() ? TrendingIngestOutcome::Saved
-                                  : TrendingIngestOutcome::SaveFailed;
+  // Outside the history lock: each upsert may wait for the English
+  // dictionary's writer lock and flush two files, and commits must not queue
+  // behind a whole batch of them.
+  for (const auto& surface : newly_confirmed) RegisterConfirmedEnglishWord(surface, "trending");
+  return TrendingIngestOutcome::Saved;
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {

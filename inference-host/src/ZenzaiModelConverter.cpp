@@ -1481,7 +1481,15 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
     if (!out.ok) out.error = log_capture->error();
     return out;
   };
-  const bool preflight_ok = !options.use_mmap || PreflightModelMapping(core::Utf8Path(path));
+  const auto preflight = [&path] {
+    try {
+      return PreflightModelMapping(core::Utf8Path(path));
+    } catch (...) {
+      // A path that does not convert is left to llama.cpp, which reports its own error.
+      return false;
+    }
+  };
+  const bool preflight_ok = !options.use_mmap || preflight();
   auto model_attempt = LoadWithMmapFallback(options.use_mmap, preflight_ok, attempt, &result.mmap);
   runtime->model = model_attempt.model;
   if (!runtime->model) {

@@ -22,8 +22,9 @@ namespace azookey::host {
 bool MmapModelLoader::Load(const std::filesystem::path& path) {
   Unload();
   error_.clear();
-  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
+  HANDLE file =
+      CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     error_ = "open failed: " + std::to_string(GetLastError());
     return false;
@@ -113,8 +114,12 @@ void MmapModelLoader::Unload() {
 #endif
 
 bool PreflightModelMapping(const std::filesystem::path& path) {
-  MmapModelLoader loader;
-  return loader.Load(path);
+  try {
+    MmapModelLoader loader;
+    return loader.Load(path);
+  } catch (...) {
+    return false;
+  }
 }
 
 std::string_view MmapFallbackReasonName(MmapFallbackReason reason) {

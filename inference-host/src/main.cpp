@@ -839,8 +839,14 @@ int main(int argc, char** argv) {
   // machine; an explicit --backend and a non-auto preference still win.
   const auto auto_backend = SelectAutoBackendForHost(settings_result.settings, safe_mode);
   const auto default_backend = auto_backend.selection.backend;
-  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,
-                                                             default_backend);
+  // M25: kept so a power change before the watcher starts is not lost.
+  std::optional<azookey::host::PowerSource> startup_power_source;
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      config, settings_result.settings, default_backend, [&startup_power_source] {
+        auto environment = azookey::host::QueryInferenceThreadEnvironment();
+        startup_power_source = environment.power_source;
+        return environment;
+      });
   if (explicit_backend) {
     config.backend = cli_backend;
   }
@@ -1170,12 +1176,20 @@ int main(int argc, char** argv) {
       [&power_change_worker](azookey::host::PowerSource from, azookey::host::PowerSource to) {
         power_change_worker.Request(from, to);
       });
+  // The settings applied at startup read the power source earlier, before the
+  // dictionaries and the model preload; catch up if it has changed since.
+  if (startup_power_source && *startup_power_source != power_tracker.current()) {
+    power_change_worker.Request(*startup_power_source, power_tracker.current());
+  }
   azookey::host::PowerStatusWatcher power_watcher(power_tracker);
   if (power_watcher.Start()) {
     runtime_log.Log(
         azookey::logging::RuntimeLogLevel::Info, "power_watch_started",
         {{"power_source",
           SafeLogText(std::string(azookey::host::PowerSourceName(power_tracker.current())))}});
+    // Resample once the window is up: a change between the tracker's first
+    // sample and the window's creation would otherwise go unnoticed.
+    (void)power_tracker.OnPowerBroadcast(azookey::host::kPowerBroadcastStatusChange);
   } else {
     // Without the watcher the power source sampled at startup stays in effect.
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "power_watch_unavailable",

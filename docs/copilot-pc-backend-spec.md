@@ -501,7 +501,9 @@ GGUF は llama.cpp の `use_mmap` でマップしてロードする。マップ�
    マップできないので失敗とする。preflight が失敗したら、手順 2 を省いて手順 3 へ進む。
 2. `llama_model_load_from_file` を `use_mmap=true` で呼ぶ。
 3. 手順 2 が失敗したら、`use_mmap=false`（読み込み）で 1 回だけ再試行する。llama.cpp は
-   マップの失敗を他のロード失敗と区別して返さないため、失敗の理由は問わない。
+   マップの失敗を他のロード失敗と区別して返さないため、失敗の理由は問わない。GGUF の破損や
+   Vulkan の初期化失敗でも再試行するので、`model_mmap_fallback` の `reason=load` はマップが原因で
+   あることを意味しない。
    再試行も失敗したら、通常のロード失敗として扱う（§4.4）。
 
 試行の順序は `LoadWithMmapFallback` が持ち、llama.cpp を含まないビルドでもテストできる。
@@ -539,6 +541,11 @@ watcher を起動せず、Host 起動時に読んだ電源の状態のまま動�
 ログ `power_source_changed` を出す。フィールドは `from`、`to`（`ac` / `battery` / `unknown`）、
 `on_battery`、`power_profile`、`lane`（`heavy` / `fast`）。backend は Host 起動時の選択（§4.4）の
 ままとし、電源の変化ではモデルを再ロードしない。
+
+Host 起動時の設定の適用から watcher の起動までの間に電源の状態が変わった場合も、watcher の起動後に
+読み直して同じ適用を行う。電源の変化と同時に進んでいたモデルロードは、完了時にロード開始時の
+推論スレッド数を設定へ書き戻す。この場合のスレッド数は、次の電源の変化か `UpdateConfig` で
+設定し直される。
 
 Host の終了時は、window を閉じてスレッドを join してから engine を破棄する。
 

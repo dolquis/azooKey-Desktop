@@ -319,7 +319,10 @@ TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
   azookey::host::SettingsStore store(path);
   const auto result = store.Load();
   ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
-  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings);
+  // On AC, so the power lane leaves NLL on whatever the test machine runs on.
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      {}, result.settings, azookey::host::BackendKind::Cpu,
+      [] { return azookey::host::InferenceThreadEnvironment{azookey::host::PowerSource::Ac, 8}; });
   EXPECT_TRUE(config.nll.enabled);
   EXPECT_EQ(config.nll.top_k, 16);
   EXPECT_EQ(config.nll.weight, 0.0);

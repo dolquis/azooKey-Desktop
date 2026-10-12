@@ -78,12 +78,15 @@ std::optional<char32_t> NextCodePoint(std::string_view text, std::size_t& pos) n
   return code;
 }
 
-// Characters that would change how the candidate is laid out or read, or that
-// do not belong in a one-line replacement.
+// Characters that would change how the candidate is laid out or read, that
+// hide text, or that do not belong in a one-line replacement. ZWNJ / ZWJ and
+// variation selectors stay: emoji sequences and kanji variants need them.
 bool IsRefusedSuggestionCodePoint(char32_t code) noexcept {
-  return code < 0x20 || (code >= 0x7F && code <= 0x9F) || code == 0x061C || code == 0x200E ||
-         code == 0x200F || code == 0x2028 || code == 0x2029 || (code >= 0x202A && code <= 0x202E) ||
-         (code >= 0x2066 && code <= 0x2069) || code == 0xFEFF || (code >= 0xFFF9 && code <= 0xFFFB);
+  return code < 0x20 || (code >= 0x7F && code <= 0x9F) || code == 0x061C || code == 0x200B ||
+         code == 0x200E || code == 0x200F || code == 0x2028 || code == 0x2029 ||
+         (code >= 0x202A && code <= 0x202E) || (code >= 0x2060 && code <= 0x2064) ||
+         (code >= 0x2066 && code <= 0x2069) || code == 0xFEFF ||
+         (code >= 0xFFF9 && code <= 0xFFFB) || (code >= 0xE0000 && code <= 0xE007F);
 }
 
 std::vector<std::string> ValidSuggestions(const std::vector<std::string>& suggestions) {

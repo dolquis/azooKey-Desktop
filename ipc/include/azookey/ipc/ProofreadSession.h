@@ -59,8 +59,9 @@ inline constexpr std::size_t kMaxSelectSuggestions = kMaxAnomalySuggestions;
 inline constexpr std::size_t kMaxSelectSuggestionBytes = kMaxAnomalySuggestionBytes;
 
 // Non-empty valid UTF-8 of at most kMaxSelectSuggestionBytes without control
-// characters, line or paragraph separators, bidirectional controls, a BOM or
-// interlinear annotation characters.
+// characters, line or paragraph separators, bidirectional controls, a BOM,
+// interlinear annotation characters, or invisible characters (zero width
+// space, word joiner and invisible operators, tag characters).
 bool IsValidSelectSuggestion(std::string_view utf8) noexcept;
 
 struct SelectRequest {

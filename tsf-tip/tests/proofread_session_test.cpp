@@ -177,6 +177,32 @@ TEST(ProofreadProtocolTest, SuggestionsAreBoundedPlainText) {
   }
 }
 
+// Invisible characters hide text; ZWNJ / ZWJ and variation selectors stay for emoji and kanji.
+TEST(ProofreadProtocolTest, InvisibleCharactersAreRefusedButJoinersAndSelectorsStay) {
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xE2\x80\x8B")));      // U+200B
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xE2\x81\xA0")));      // U+2060
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xE2\x81\xA4")));      // U+2064
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xF3\xA0\x80\x80")));  // U+E0000
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xF3\xA0\x81\x81")));  // U+E0041
+  EXPECT_FALSE(proofread::IsValidSelectSuggestion(std::string("a\xF3\xA0\x81\xBF")));  // U+E007F
+  EXPECT_TRUE(proofread::IsValidSelectSuggestion(
+      std::string("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9")));  // a ZWJ emoji sequence
+  EXPECT_TRUE(proofread::IsValidSelectSuggestion(std::string("a\xE2\x80\x8C")));  // ZWNJ
+  EXPECT_TRUE(proofread::IsValidSelectSuggestion(
+      std::string("\xE8\x91\x9B\xF3\xA0\x84\x80")));  // U+845B with U+E0100
+  EXPECT_TRUE(proofread::IsValidSelectSuggestion(
+      std::string("\xE2\x9D\xA4\xEF\xB8\x8F")));  // U+2764 with U+FE0F
+  // The same through JSON escapes (U+E0041 and U+E0100 as surrogate pairs).
+  const auto parsed = proofread::ParseSelectRequest(
+      "{\"kind\":\"select\",\"start\":1,\"length\":2,\"suggestions\":["
+      "\"a\\u200bb\",\"a\\u2060b\",\"a\\u2064b\",\"a\\udb40\\udc41b\",\"a\\u200db\","
+      "\"\\u845b\\udb40\\udd00\",\"ok\"]}");
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->suggestions,
+            (std::vector<std::string>{std::string("a\xE2\x80\x8D") + "b",
+                                      std::string("\xE8\x91\x9B\xF3\xA0\x84\x80"), "ok"}));
+}
+
 TEST(ProofreadProtocolTest, MalformedSuggestionsAreDroppedOneByOne) {
   // Escapes decode before the check, so they are refused like the raw characters. The JSON
   // escapes are in ordinary literals: some MSVC versions expand universal character names inside

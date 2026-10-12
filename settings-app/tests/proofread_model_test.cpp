@@ -160,6 +160,12 @@ TEST(ProofreadModelTest, SelectSuggestionsAreBoundedPlainTextOtherThanTheRange) 
             (std::vector<std::string>{"明日"}));
   EXPECT_EQ(ProofreadSelectSuggestions(text, 3, 2, {"1", "2", "3", "4", "5", "6"}),
             (std::vector<std::string>{"1", "2", "3", "4", "5"}));
+  // Invisible characters are not sent; a joiner in an emoji is.
+  EXPECT_EQ(
+      ProofreadSelectSuggestions(text, 3, 2,
+                                 {std::string("a\xE2\x80\x8B"),
+                                  std::string("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9")}),
+      (std::vector<std::string>{"\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9"}));
   // A range the text does not hold offers nothing.
   EXPECT_TRUE(ProofreadSelectSuggestions(text, 7, 5, {"明日"}).empty());
 }

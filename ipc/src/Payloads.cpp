@@ -912,6 +912,7 @@ std::string BuildAddUserWordResponse(const AddUserWordResponse& p) {
   j::Object o;
   o.emplace("ok", j::Value(p.ok));
   if (p.generated_id) o.emplace("generated_id", j::Value(*p.generated_id));
+  if (p.error) o.emplace("error", j::Value(*p.error));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -923,6 +924,7 @@ std::optional<AddUserWordResponse> ParseAddUserWordResponse(const std::string& j
   if (!ok) return std::nullopt;
   p.ok = *ok;
   if (auto id = v->GetString("generated_id")) p.generated_id = std::move(*id);
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
   return p;
 }
 
@@ -948,6 +950,7 @@ std::optional<RemoveUserWordRequest> ParseRemoveUserWordRequest(const std::strin
 std::string BuildRemoveUserWordResponse(const RemoveUserWordResponse& p) {
   j::Object o;
   o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -958,6 +961,7 @@ std::optional<RemoveUserWordResponse> ParseRemoveUserWordResponse(const std::str
   auto ok = v->GetBool("ok");
   if (!ok) return std::nullopt;
   p.ok = *ok;
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
   return p;
 }
 

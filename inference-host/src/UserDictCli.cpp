@@ -96,7 +96,8 @@ void AddWordFields(j::Object* object, const learning::UserWord& word) {
 }
 
 std::string OperationJsonLine(const char* op, bool ok, const learning::UserWord& word, bool dry_run,
-                              const std::string& via, const std::string& error = {}) {
+                              const std::string& via, const std::string& error = {},
+                              const std::string& reason = {}) {
   auto object = BaseOperationJson(op, ok);
   AddWordFields(&object, word);
   if (dry_run) {
@@ -107,6 +108,10 @@ std::string OperationJsonLine(const char* op, bool ok, const learning::UserWord&
   }
   if (!error.empty()) {
     object.emplace("error", j::Value(error));
+  }
+  // DEV-1581: the running Host's error code alone, for scripts.
+  if (!reason.empty()) {
+    object.emplace("reason", j::Value(reason));
   }
   return j::Stringify(j::Value(std::move(object)));
 }
@@ -370,7 +375,8 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
 
   const std::string error = ok ? std::string() : HostRejectionMessage(op, host_error);
   result.exit_code = ok ? 0 : 1;
-  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error));
+  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error,
+                                                  ok ? std::string() : host_error.value_or("")));
   if (!ok) {
     result.error = error;
   }

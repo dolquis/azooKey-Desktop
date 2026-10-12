@@ -418,6 +418,7 @@ TEST(UserDictCliTest, RunningHostRejectionSurfacesFailure) {
   EXPECT_FALSE(json->GetBool("ok").value_or(true));
   EXPECT_EQ(json->GetString("via"), "ipc");
   EXPECT_EQ(json->GetString("error"), "running host rejected add");
+  EXPECT_FALSE(json->GetString("reason"));
   EXPECT_FALSE(std::filesystem::exists(path));
 
   server.Stop();
@@ -487,6 +488,7 @@ TEST(UserDictCliTest, RunningHostErrorCodeIsShown) {
   auto add_json = azookey::ipc::json::Parse(added.output_lines.front());
   ASSERT_TRUE(add_json.has_value());
   EXPECT_EQ(add_json->GetString("error"), added.error);
+  EXPECT_EQ(add_json->GetString("reason"), "busy");
 
   auto remove = Parse({"remove", "--reading", "missing", "--surface", "Missing"});
   ASSERT_TRUE(remove.has_value());
@@ -495,6 +497,10 @@ TEST(UserDictCliTest, RunningHostErrorCodeIsShown) {
   EXPECT_EQ(removed.error.rfind("running host rejected remove: not_found (", 0), 0u)
       << removed.error;
   EXPECT_EQ(removed.error.find("retry"), std::string::npos) << removed.error;
+  ASSERT_EQ(removed.output_lines.size(), 1u);
+  auto remove_json = azookey::ipc::json::Parse(removed.output_lines.front());
+  ASSERT_TRUE(remove_json.has_value());
+  EXPECT_EQ(remove_json->GetString("reason"), "not_found");
   EXPECT_FALSE(std::filesystem::exists(path));
 
   server.Stop();

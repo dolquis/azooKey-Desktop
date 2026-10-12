@@ -66,10 +66,13 @@ struct BackendSystemFacts {
 struct BackendSelectionPolicy {
   // When set, an OS below kWinMlMinimumOsBuild keeps `auto` on CPU.
   bool require_winml_os_build{false};
+  // SafeMode runs no model, so the probes are skipped and `auto` stays on CPU.
+  bool safe_mode{false};
 };
 
 enum class BackendSelectionReason {
   VulkanCandidate,
+  SafeMode,
   VulkanNotCompiled,
   OsBuildBelowMinimum,
   OnBattery,
@@ -82,6 +85,8 @@ constexpr const char* BackendSelectionReasonName(BackendSelectionReason reason) 
   switch (reason) {
     case BackendSelectionReason::VulkanCandidate:
       return "vulkan_candidate";
+    case BackendSelectionReason::SafeMode:
+      return "safe_mode";
     case BackendSelectionReason::VulkanNotCompiled:
       return "vulkan_not_compiled";
     case BackendSelectionReason::OsBuildBelowMinimum:

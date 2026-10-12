@@ -129,6 +129,10 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 
 これらは `BackendSelector::IsNpuAdapter(IDXCoreAdapter*)` 内で判定。
 
+> **注**: 本節と §3.1 は R2 再開時の NPU 判定の初期案である。R1 の `auto` 解決が使う列挙は
+> §4.4「`auto` の解決（BackendSelector）」が正典で、NPU は `D3D12_GENERIC_ML` のみを持つ
+> ハードウェアアダプタとして数えるだけに留める。
+
 ## 4. 推論エンジン × アクセラレータの選定（M8 / M24）
 
 > **重要（2026 時点の Windows AI 指針）**: Microsoft は **DirectML を sustained
@@ -377,6 +381,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
     `cudart64_12.dll` + `cublas64_12.dll` = CUDA runtime。
   - OS build: `RtlGetVersion` で取得する。
 - 判定（上から順に、最初に当たったもので CPU に決める）:
+  0. SafeMode（`docs/dev-infrastructure-spec.md` §8.5.3。モデルを動かさないため probe を
+     実行せず、`reason=safe_mode` とする。SafeMode を `UpdateConfig` で解除しても、`auto` は
+     Host を再起動するまで CPU のまま）
   1. ビルドに ggml-vulkan が無い（`AZOOKEY_BACKEND=vulkan` 以外）
   2. バッテリ駆動（§6.3 の `powerProfile` が `performance` なら AC、`battery_saver` なら
      バッテリとみなす）
@@ -390,7 +397,8 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   `BackendSelectionPolicy::require_winml_os_build` を真にすると、判定 1 の次に「OS build が
   26100 未満」を CPU の条件に加える（既定は偽）。
 
-  どれにも当たらなければ Vulkan を選ぶ。CUDA は ggml-cuda をリンクするビルドが無いため、
+  どれにも当たらなければ Vulkan を選ぶ。Windows 以外の OS では probe が判定不能を返すため、
+  `auto` は常に CPU になる。CUDA は ggml-cuda をリンクするビルドが無いため、
   CUDA runtime があっても選ばない（明示 `cuda` は上記の CPU 降格）。
 - OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の保留中は
   R1 の選択に使わない。
@@ -892,9 +900,9 @@ public:
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | DXCore 列挙のモック、優先順位、AC/バッテリ切替 |
+| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU |
 | MmapModelLoader | `inference-host/tests/mmap_loader_test.cpp` | ロード成功、ファイル不在エラー、サイズ取得 |
-| Power Status | `inference-host/tests/power_status_test.cpp` | `WM_POWERBROADCAST` で BackendSelector が呼ばれる |
+| Power Status | `inference-host/tests/power_status_test.cpp` | `WM_POWERBROADCAST` で BackendSelector が呼ばれる（電源変化時の再選択。M25 で追加） |
 | DPI changed | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |
 | ARM64 build | CI matrix | ビルド成功 + テスト pass |
 

@@ -194,6 +194,7 @@ BackendSelection SelectAutoBackend(const BackendSystemFacts& facts,
     selection.reason = reason;
     return selection;
   };
+  if (policy.safe_mode) return cpu(BackendSelectionReason::SafeMode);
   if (!compiled.vulkan) return cpu(BackendSelectionReason::VulkanNotCompiled);
   if (policy.require_winml_os_build && !selection.winml_os_eligible) {
     return cpu(BackendSelectionReason::OsBuildBelowMinimum);

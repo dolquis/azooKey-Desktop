@@ -87,6 +87,26 @@ TEST(BackendSelectorTest, CudaRuntimeIsNeverSelectedWhileCudaIsNotLinked) {
   facts.cuda_runtime_present = true;
   EXPECT_EQ(SelectAutoBackend(facts, CompiledBackends{}).backend, BackendKind::Cpu);
   EXPECT_EQ(SelectAutoBackend(facts, VulkanBuild()).backend, BackendKind::Vulkan);
+  // Even a build that links CUDA leaves the choice to Vulkan or CPU.
+  EXPECT_EQ(SelectAutoBackend(facts, CompiledBackends{true, true}).backend, BackendKind::Vulkan);
+  EXPECT_EQ(SelectAutoBackend(facts, CompiledBackends{true, false}).backend, BackendKind::Cpu);
+}
+
+TEST(BackendSelectorTest, EarlierRuleDecidesTheReason) {
+  BackendSystemFacts facts;
+  facts.on_battery = true;
+  // Battery is checked before the adapters, which are unknown here too.
+  EXPECT_EQ(SelectAutoBackend(facts, VulkanBuild()).reason, BackendSelectionReason::OnBattery);
+  EXPECT_EQ(SelectAutoBackend(facts, CompiledBackends{}).reason,
+            BackendSelectionReason::VulkanNotCompiled);
+}
+
+TEST(BackendSelectorTest, SafeModeSelectsCpuBeforeAnyOtherRule) {
+  azookey::host::BackendSelectionPolicy policy;
+  policy.safe_mode = true;
+  const auto selection = SelectAutoBackend(ReadyFacts(), VulkanBuild(), policy);
+  EXPECT_EQ(selection.backend, BackendKind::Cpu);
+  EXPECT_EQ(selection.reason, BackendSelectionReason::SafeMode);
 }
 
 TEST(BackendSelectorTest, OldOsIsRecordedButDoesNotBlockVulkanByDefault) {

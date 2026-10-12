@@ -362,16 +362,25 @@ struct HostBackendSelection {
   azookey::host::BackendSelection selection;
 };
 
-HostBackendSelection SelectAutoBackendForHost(const azookey::host::RuntimeSettings& settings) {
+HostBackendSelection SelectAutoBackendForHost(const azookey::host::RuntimeSettings& settings,
+                                              bool safe_mode) {
+  HostBackendSelection result;
+  azookey::host::BackendSelectionPolicy policy;
+  policy.safe_mode = safe_mode;
+  // A crash-loop recovery must not walk the adapter and driver paths again.
+  if (safe_mode) {
+    result.selection = azookey::host::SelectAutoBackend(
+        result.facts, azookey::host::CompiledBackendsForThisBuild(), policy);
+    return result;
+  }
   const auto adapters = azookey::host::MakeSystemAdapterEnumerator();
   const auto libraries = azookey::host::MakeSystemRuntimeLibraryProbe();
   const auto os = azookey::host::MakeSystemOsVersionProbe();
   const bool on_battery = azookey::host::OnBatteryForBackendSelection(
       azookey::host::QueryInferenceThreadEnvironment().power_source, settings.power_profile);
-  HostBackendSelection result;
   result.facts = azookey::host::CollectBackendSystemFacts(*adapters, *libraries, *os, on_battery);
-  result.selection =
-      azookey::host::SelectAutoBackend(result.facts, azookey::host::CompiledBackendsForThisBuild());
+  result.selection = azookey::host::SelectAutoBackend(
+      result.facts, azookey::host::CompiledBackendsForThisBuild(), policy);
   return result;
 }
 
@@ -766,7 +775,7 @@ int main(int argc, char** argv) {
   const auto cli_model_path = config.model_path;
   // M24: settings `auto` resolves to what BackendSelector picks for this
   // machine; an explicit --backend and a non-auto preference still win.
-  const auto auto_backend = SelectAutoBackendForHost(settings_result.settings);
+  const auto auto_backend = SelectAutoBackendForHost(settings_result.settings, safe_mode);
   const auto default_backend = auto_backend.selection.backend;
   config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,
                                                              default_backend);

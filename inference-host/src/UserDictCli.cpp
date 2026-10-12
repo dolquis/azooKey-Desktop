@@ -254,13 +254,26 @@ azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageTy
   return env;
 }
 
-// DEV-1581: the Host's error code, with what it means for a retry. An older
-// Host sends no code.
-std::string HostRejectionMessage(const char* op, const std::optional<std::string>& code) {
+// DEV-1581: the Host's error code as the CLI may print it: printable ASCII
+// without spaces, at most 64 bytes. Empty when the Host sent none.
+std::string SanitizeHostErrorCode(const std::optional<std::string>& code) {
+  constexpr size_t kMaxCodeBytes = 64;
+  std::string out;
+  if (!code) return out;
+  for (const char ch : *code) {
+    if (out.size() == kMaxCodeBytes) break;
+    if (ch > ' ' && ch < 0x7F) out.push_back(ch);
+  }
+  return out;
+}
+
+// DEV-1581: the sanitized code, with what it means for a retry. An older Host
+// sends no code; a code this CLI does not know is not echoed.
+std::string HostRejectionMessage(const char* op, std::string_view c) {
   std::string message = std::string("running host rejected ") + op;
-  if (!code || code->empty()) return message;
-  message += ": " + *code;
-  const std::string_view c = *code;
+  if (c.empty()) return message;
+  message += ": ";
+  message += c;
   if (c == azookey::ipc::kUserDictErrorBusy) {
     message +=
         " (the user dictionary stayed busy until the wait ran out; nothing was saved, retry)";
@@ -274,6 +287,12 @@ std::string HostRejectionMessage(const char* op, const std::optional<std::string
     message += " (the word is not in the user dictionary)";
   } else if (c == azookey::ipc::kUserDictErrorUnavailable) {
     message += " (the running host has no user dictionary)";
+  } else if (c == azookey::ipc::kUserDictErrorInvalidRequest) {
+    message += " (the running host could not read the request)";
+  } else if (c == azookey::ipc::kUserDictErrorNotAuthenticated) {
+    message += " (the running host did not accept this connection)";
+  } else {
+    return std::string("running host rejected ") + op + " (unrecognized reason)";
   }
   return message;
 }
@@ -374,10 +393,10 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     host_error = std::move(parsed->error);
   }
 
-  const std::string error = ok ? std::string() : HostRejectionMessage(op, host_error);
+  const std::string reason = ok ? std::string() : SanitizeHostErrorCode(host_error);
+  const std::string error = ok ? std::string() : HostRejectionMessage(op, reason);
   result.exit_code = ok ? 0 : 1;
-  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error,
-                                                  ok ? std::string() : host_error.value_or("")));
+  result.output_lines.push_back(OperationJsonLine(op, ok, word, false, "ipc", error, reason));
   if (!ok) {
     result.error = error;
   }

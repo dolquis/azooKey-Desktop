@@ -236,12 +236,15 @@ Linear が持つ。
   他のユーザー辞書の編集の終わりを待つ時間と、ユーザー辞書のファイルロックを待つ時間を合わせて数える。
   予算を使い切ったとき、またはロックを取り読み直して保存を始める前の時点で予算を過ぎていたときは、保存せずに `ok=false` を返し、
   Health の `last_error` に `user dictionary busy` を残し、応答の `error` を `busy` にする。保存を始めた後は打ち切らない。
-- CLI は Host の拒否を `running host rejected add: <error>`（`remove`）と表示し、前の 6 語には括弧で説明を添える。
+- CLI は Host の拒否を `running host rejected add: <error> (<説明>)`（`remove`）と表示する。
   `busy` の説明は、何も保存していないことと再試行を促す。`lock_failed` / `load_failed` は何も保存していないこと、`save_failed` は
   辞書を変えていないこと、`not_found` は語が辞書に無いこと、`unavailable` は Host がユーザー辞書を持たないことを示す。
-  `error` を持たない古い Host の応答では `running host rejected add`（`remove`）とだけ表示する。
-  JSON 行の `error` はこの表示文で、Host のコードだけを `reason` に入れる（旧 Host の応答では省く）。
-  `newwords` CLI は稼働中 Host の拒否のとき `error` にコードを載せるので、スクリプトは `userdict` では `reason` を読む。
+  `invalid_request` と `not_authenticated` にも説明を添える。CLI の知らないコードは表示せず、
+  `running host rejected add (unrecognized reason)` とする。`error` を持たない古い Host の応答では
+  `running host rejected add`（`remove`）とだけ表示する。
+  JSON 行の `error` はこの表示文で、`reason` に Host のコードを入れる（空白・制御文字・非 ASCII を除き 64 バイトまで。旧 Host の応答では省く）。
+  `newwords confirm` / `reject` は、稼働中 Host が拒否したとき `ResolveNewWordResponse` の `error` のコードを
+  JSON 行の `error` にそのまま載せる。`userdict` では同じ役割を `reason` が持つ。
 - Host はファイルロックを取った後、ディスクのユーザー辞書を読み直してから編集する。暗号化ファイルの大きさ・最終書込み時刻・ファイル識別子（Windows では 128bit のファイル ID とボリュームのシリアル番号、Linux では inode）が、この Host が前回読み書きしたときから変わらず、
   その後メモリ上の辞書を変えていなければ、読み直しを省く（`load_skipped`）。他の writer は一時ファイルからの置換で書くので、識別子が変わる。
 - したがって `userdict add` / `remove` で CLI が応答待ちを諦めた後に Host の編集が成功するのは、要求が Host に届くまでの時間と、

@@ -453,6 +453,11 @@ TEST(UserDictCliTest, RunningHostErrorCodeIsShown) {
           azookey::ipc::AddUserWordResponse payload;
           payload.ok = false;
           payload.error = std::string(azookey::ipc::kUserDictErrorBusy);
+          // A code this CLI does not know, with control bytes and past 64 bytes.
+          const auto request = azookey::ipc::ParseAddUserWordRequest(req.payload_json);
+          if (request && request->word == "Odd") {
+            payload.error = "foo\x1b[31m\n" + std::string(100, 'x');
+          }
           res.payload_json = azookey::ipc::BuildAddUserWordResponse(payload);
           return res;
         }
@@ -489,6 +494,16 @@ TEST(UserDictCliTest, RunningHostErrorCodeIsShown) {
   ASSERT_TRUE(add_json.has_value());
   EXPECT_EQ(add_json->GetString("error"), added.error);
   EXPECT_EQ(add_json->GetString("reason"), "busy");
+
+  auto odd = Parse({"add", "--reading", "odd", "--surface", "Odd"});
+  ASSERT_TRUE(odd.has_value());
+  auto odd_result = azookey::host::RunUserDictCli(*odd, run_options);
+  EXPECT_EQ(odd_result.exit_code, 1);
+  EXPECT_EQ(odd_result.error, "running host rejected add (unrecognized reason)");
+  ASSERT_EQ(odd_result.output_lines.size(), 1u);
+  auto odd_json = azookey::ipc::json::Parse(odd_result.output_lines.front());
+  ASSERT_TRUE(odd_json.has_value());
+  EXPECT_EQ(odd_json->GetString("reason"), "foo[31m" + std::string(57, 'x'));
 
   auto remove = Parse({"remove", "--reading", "missing", "--surface", "Missing"});
   ASSERT_TRUE(remove.has_value());

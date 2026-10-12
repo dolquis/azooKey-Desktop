@@ -666,8 +666,9 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
   超えない。
 - 読めない journal（magic・version の不一致、`op_count` 分のフレームが無い）は、次の writer が
   `english-words.added.bin.corrupt.<UNIX ミリ秒>` へ改名して残し、新しい journal を始める。overlay と違い
-  journal は再コンパイル後に op を持つ唯一のファイルなので、再初期化で消さない。64 MiB を超える journal は
-  壊れているとはみなさず、追記を失敗させる。
+  journal は再コンパイル後に op を持つ唯一のファイルなので、再初期化で消さない。64 MiB を超える journal と、
+  存在するのに開けない・読めない journal（アクセス拒否、共有違反、I/O エラー）は壊れているとはみなさず、
+  その追記を失敗させる。新しい journal を作るのは、journal が存在しないときだけである。
 
 **再コンパイルでの適用**: TSV から base を作るとき、TSV のレコードに journal を重ねる。
 `(lower_key, surface)` ごとに journal の最新の op が決める。
@@ -684,7 +685,7 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
 - overlay の `op_count` 更新前: op は残らない（§4.7 と同じ）。
 - overlay 確定後・journal 確定前: op は overlay にあり、次に TSV から再コンパイルするまで有効で、そこで失われる。
 - journal のフレームの途中: `op_count` を超える半端なフレームは読まれず、次の writer が truncate する。
-- journal の書き直しの途中: 一時ファイルを捨て、元の journal が残る。
+- journal の書き直しの途中: 元の journal が残る。書き直し用の一時ファイル（`english-words.added.bin.tmp.*`）が残ることがある。
 
 **対象外**: TSV が無く `.bin` だけを差し替えた（再バンドルした）場合、journal は適用しない（TSV から base を
 作るときだけ適用する）。

@@ -761,25 +761,34 @@ EnglishJournalAppendResult AppendEnglishJournalOp(const fs::path& journal,
   bool fresh = false;
   bool corrupt = false;
   {
-    // A missing journal (or one this process cannot open) starts afresh; the
-    // write below then fails when it cannot be created either.
-    const auto file = RawFile::Open(journal, false);
+    // Only a journal that does not exist starts afresh. One that exists but
+    // cannot be opened or read now (access denied, a sharing violation, an I/O
+    // error) fails this append rather than being replaced or moved aside.
+    std::error_code ec;
+    const bool exists = fs::exists(journal, ec);
+    if (ec) return Result::Failed;
+    const auto file = exists ? RawFile::Open(journal, false) : std::nullopt;
+    if (exists && !file) return Result::Failed;
     const auto size = file ? file->Size() : std::nullopt;
-    if (!file || size == uint64_t{0}) {
+    if (file && !size) return Result::Failed;
+    uint8_t head[kJournalHeaderSize];
+    if (!exists || size == uint64_t{0}) {
       fresh = true;
-    } else if (!size) {
-      return Result::Failed;
     } else if (*size > kJournalHeaderSize + kMaxOverlayBytes) {
       // Not corrupt, only too large to read: moving it aside would lose it.
       return Result::Failed;
+    } else if (*size < kJournalHeaderSize) {
+      corrupt = true;
+    } else if (!file->ReadAt(0, head, sizeof(head))) {
+      return Result::Failed;
+    } else if (const auto count = ParseJournalHeader(head); !count) {
+      corrupt = true;
     } else {
-      uint8_t head[kJournalHeaderSize];
-      const auto count = *size >= kJournalHeaderSize && file->ReadAt(0, head, sizeof(head))
-                             ? ParseJournalHeader(head)
-                             : std::nullopt;
-      const auto rest = count ? file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes) : std::nullopt;
-      const auto walked = rest ? WalkFrames(*rest, *count, &ops) : std::nullopt;
-      if (walked) {
+      const auto rest = file->ReadRest(kJournalHeaderSize, kMaxOverlayBytes);
+      if (!rest) return Result::Failed;
+      // Only what the section 4.8 definition calls unreadable is moved aside:
+      // a header that is not a journal, or fewer frames than op_count.
+      if (const auto walked = WalkFrames(*rest, *count, &ops)) {
         end = kJournalHeaderSize + *walked;
       } else {
         corrupt = true;

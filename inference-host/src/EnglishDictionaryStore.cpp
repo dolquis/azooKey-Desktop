@@ -187,11 +187,6 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
   const auto text = ReadEnglishTsvFile(paths_.tsv);
   if (!text) return nullptr;
   auto records = ParseEnglishTsv(*text, &report.stats);
-  // Section 4.8: runtime additions and deletes outlive the TSV edit. A missing
-  // or unreadable journal adds nothing; the next writer moves the latter aside.
-  if (auto journal = ReadEnglishJournal(paths_.journal)) {
-    records = ApplyEnglishJournal(std::move(records), journal->ops);
-  }
   // The .bin is a cache: without the lock or write access (a read-only TSV
   // folder) the parsed TSV is used from memory (section 4.5). The lock is
   // tried once, never waited for: this runs for a reader, or for a writer
@@ -200,6 +195,13 @@ std::shared_ptr<const EnglishBaseImage> EnglishDictionaryStore::CompileTsvLocked
                                 : EnglishDictionaryFileLock::Acquire(paths_.lock, lock_clock_,
                                                                      std::chrono::milliseconds{0});
   const bool locked = file_locked || lock.has_value();
+  // Section 4.8: runtime additions and deletes outlive the TSV edit. Read
+  // after the lock, so an op another host journaled before releasing it is in
+  // the base this one writes. A missing or unreadable journal adds nothing;
+  // the next writer moves the latter aside.
+  if (auto journal = ReadEnglishJournal(paths_.journal)) {
+    records = ApplyEnglishJournal(std::move(records), journal->ops);
+  }
   if (locked && !force && ReadEnglishBaseHeader(paths_.base) &&
       BaseMatchesTsv(paths_.base, tsv_time)) {
     // Another host recompiled it while this one waited for the lock.

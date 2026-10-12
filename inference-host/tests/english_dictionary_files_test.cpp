@@ -1148,3 +1148,23 @@ TEST(EnglishDictionaryJournalTest, AnUnreadableJournalIsMovedAsideAndStartsAnew)
   EXPECT_EQ(aside, 1u);
   fs::remove_all(dir);
 }
+
+// A journal that exists but cannot be opened or read now is neither replaced
+// by a new one nor moved aside: the append fails and the file stays. A
+// directory in its place stands in for it (it fails to open on Windows and to
+// read elsewhere).
+TEST(EnglishDictionaryJournalTest, AJournalThatCannotBeReadNowIsLeftInPlace) {
+  const auto dir = TestDir();
+  const auto journal = dir / "english-words.added.bin";
+  fs::create_directories(journal / "inside");
+  EXPECT_EQ(AppendEnglishJournalOp(journal, Upsert("kotlin", 1)),
+            EnglishJournalAppendResult::Failed);
+  EXPECT_TRUE(fs::is_directory(journal / "inside"));
+  size_t entries = 0;
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    (void)entry;
+    ++entries;
+  }
+  EXPECT_EQ(entries, 1u);
+  fs::remove_all(dir);
+}

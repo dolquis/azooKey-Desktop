@@ -508,6 +508,12 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // The candidate window's click callback, without a window.
   void click_candidate_for_test(int idx) { OnCandidateClicked(idx); }
+  uint64_t reconversion_generation_for_test() const { return reconversion_generation_.load(); }
+  // The prefetch a selection change schedules, run now.
+  void prefetch_selected_reconversion_for_test() {
+    reconversion_prefetch_pending_ = true;
+    PrefetchSelectedReconversion();
+  }
   // The Host's answer for the open range, as the IPC worker posts it, then shown.
   void deliver_reconversion_result_for_test(std::vector<std::wstring> candidates,
                                             std::string reading = {}) {

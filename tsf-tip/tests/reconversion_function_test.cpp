@@ -1053,8 +1053,8 @@ TEST(ReconversionFunctionTest, ReconvertInAContextThatTurnedSecureSendsNoCorrect
 // once the select session has returned, opens reconversion for that range.
 class ProofreadReconversion {
  public:
-  ProofreadReconversion()
-      : text(std::make_shared<std::wstring>(L"今日は明日の天気")),
+  explicit ProofreadReconversion(std::wstring document = L"今日は明日の天気")
+      : text(std::make_shared<std::wstring>(std::move(document))),
         window(&context, text, 0, text->size()) {
     context.selectable = true;
     service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
@@ -1233,6 +1233,58 @@ TEST(ProofreadReconversionTest, SuggestionsFollowTheHostsFirstCandidate) {
   ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
   EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
             (std::vector<std::wstring>{L"あした", L"翌日", L"あす", L"明日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, HostAnswerKeepsTheSuggestionOrder) {
+  // No cache: the Host is asked, and its answer is merged the same way.
+  ProofreadReconversion test;
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  test.service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, AdoptedPrefetchCarriesTheSuggestions) {
+  ProofreadReconversion test;
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  // The placed selection was already being prefetched when the candidates open.
+  test.service.prefetch_selected_reconversion_for_test();
+  ASSERT_EQ(test.service.pending_reconversion_surface_for_test(), "明日");
+  const uint64_t prefetch_generation = test.service.reconversion_generation_for_test();
+  test.service.run_pending_proofread_reconversion_for_test();
+  // Adopted: the in-flight request stays, rather than being cleared and sent again.
+  EXPECT_EQ(test.service.reconversion_generation_for_test(), prefetch_generation);
+  test.service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"翌日", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, OpenReconversionOfTheSameRangeGetsNoSuggestions) {
+  ProofreadReconversion test;
+  test.service.set_reconversion_cache_for_test(&test.context, L"明日", {L"あした", L"明晩"});
+  EXPECT_EQ(test.Select(), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  // A later select of the same range keeps the open list as it is.
+  EXPECT_EQ(SelectWithSuggestions(test, {"翌日"}), SelectResult::Ok);
+  test.service.run_pending_proofread_reconversion_for_test();
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(test.service.reconversion_shown_candidates_for_test(),
+            (std::vector<std::wstring>{L"あした", L"明晩"}));
+}
+
+TEST(ProofreadReconversionTest, RangeWithoutJapaneseOpensNothingEvenWithSuggestions) {
+  // Like the conversion key, a range without Japanese opens no reconversion at all.
+  ProofreadReconversion test(L"今日はABCの天気");
+  EXPECT_EQ(test.Select({3, 3, true, {"abc"}}), SelectResult::Ok);
+  ASSERT_NE(test.context.placed, nullptr);
+  test.service.run_pending_proofread_reconversion_for_test();
+  EXPECT_TRUE(test.service.pending_reconversion_surface_for_test().empty());
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
 }
 
 TEST(ProofreadReconversionTest, SuggestionLikeTheOriginalIsDropped) {

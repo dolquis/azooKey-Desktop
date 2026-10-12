@@ -1074,8 +1074,8 @@ class ProofreadReconversion {
     return service.last_proofread_select_result_for_test();
   }
 
-  static constexpr azookey::ipc::proofread::SelectRequest kToday{0, 2, true};
-  static constexpr azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true};
+  static inline const azookey::ipc::proofread::SelectRequest kToday{0, 2, true, {}};
+  static inline const azookey::ipc::proofread::SelectRequest kTomorrow{3, 2, true, {}};
   TestContext context;
   std::shared_ptr<std::wstring> text;
   TestRange window;

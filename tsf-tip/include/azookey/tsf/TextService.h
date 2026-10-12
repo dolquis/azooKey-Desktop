@@ -503,6 +503,11 @@ class TextService final : public ITfTextInputProcessorEx,
     if (context) context->AddRef();
   }
   bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
+  const std::vector<std::wstring>& reconversion_shown_candidates_for_test() const {
+    return reconversion_shown_candidates_;
+  }
+  // The candidate window's click callback, without a window.
+  void click_candidate_for_test(int idx) { OnCandidateClicked(idx); }
   void process_candidates_ready_for_test() { OnCandidatesReady(this); }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
@@ -829,6 +834,7 @@ class TextService final : public ITfTextInputProcessorEx,
     Microsoft::WRL::ComPtr<ITfContext> context;
     Microsoft::WRL::ComPtr<ITfRange> range;
     std::wstring surface;
+    std::vector<std::wstring> suggestions;
   };
   std::optional<PendingProofreadReconversion> pending_proofread_reconversion_;
 #ifdef AZOOKEY_TSF_TESTING
@@ -1042,9 +1048,17 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
   std::wstring reconversion_surface_;             // UI thread only
+  // A batch correction finding's suggestions for the open range (X-3-6). They
+  // are model text: shown as candidates only, never cached, never learned.
+  std::vector<std::wstring> reconversion_suggestions_;  // UI thread only
+  // Where each shown candidate came from; a Suggestion is replaced without a
+  // CommitCorrection (user-learning-enhancement-spec §4.1).
+  enum class ReconversionOrigin : uint8_t { Host, Suggestion };
   // What the open reconversion list offers, kept with reconversion_list_.
-  std::string reconversion_shown_reading_;                   // UI thread only
-  std::vector<std::wstring> reconversion_shown_candidates_;  // UI thread only
+  // The vectors share the list's indices.
+  std::string reconversion_shown_reading_;                         // UI thread only
+  std::vector<std::wstring> reconversion_shown_candidates_;        // UI thread only
+  std::vector<ReconversionOrigin> reconversion_shown_origins_;     // UI thread only
 
   void StartIpcWorker();
   void StopIpcWorker();
@@ -1131,10 +1145,15 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
   HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
   RECT PredictionCaretRect();
+  // `suggestions` come only from a batch correction select (rich-features-spec
+  // X-3-6); every other caller opens Host candidates alone.
   HRESULT StartSelectionReconversion(ITfContext* context,
                                      const std::wstring* expected_surface = nullptr,
-                                     ITfRange* expected_range = nullptr);
+                                     ITfRange* expected_range = nullptr,
+                                     std::vector<std::wstring> suggestions = {});
   HRESULT CompleteReconversionSelection(size_t index);
+  // A left click on candidate row `idx`, from the candidate window.
+  void OnCandidateClicked(int idx);
   void ClearReconversionState();
   void ShowReconversionResult();
   void PrefetchSelectedReconversion();
@@ -1256,7 +1275,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyProofreadSelection(ipc::proofread::SelectRequest request);
   void CompleteProofreadSelection(uint64_t generation, ipc::proofread::SelectResult result);
   void QueueProofreadReconversion(uint64_t generation, ITfContext* context, ITfRange* range,
-                                  std::wstring surface);
+                                  std::wstring surface, std::vector<std::wstring> suggestions);
   void RunPendingProofreadReconversion();
   friend class ProofreadSelectSession;
   void RegisterProofreadPreservedKey();

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "ProofreadSessionClient.h"
 #include "azookey/ipc/ProofreadSession.h"
@@ -122,12 +123,15 @@ TEST(ProofreadSessionClientTest, ReadsTheDocumentAndSelects) {
     EXPECT_EQ(document->text, "アプリの本文");
     EXPECT_FALSE(document->secure);
     EXPECT_TRUE(document->learning_allowed);
-    EXPECT_EQ(client.Select(3, 2, true), proofread::SelectResult::DocumentChanged);
+    EXPECT_EQ(client.Select(3, 2, true, {"本文", "a\nb"}),
+              proofread::SelectResult::DocumentChanged);
   }
   ASSERT_TRUE(seen);
   EXPECT_EQ(seen->start, 3u);
   EXPECT_EQ(seen->length, 2u);
   EXPECT_TRUE(seen->reconvert);
+  // Suggestions travel as text; a malformed one is not sent.
+  EXPECT_EQ(seen->suggestions, (std::vector<std::string>{"本文"}));
 }
 
 TEST(ProofreadSessionClientTest, AcceptsAServerThatOwnsTheDocumentWindow) {

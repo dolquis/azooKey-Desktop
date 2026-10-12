@@ -162,11 +162,13 @@ std::optional<proofread::DocumentMessage> ProofreadSessionClient::Open(std::stri
 
 std::optional<proofread::SelectResult> ProofreadSessionClient::Select(uint64_t start,
                                                                       uint64_t length,
-                                                                      bool reconvert) {
+                                                                      bool reconvert,
+                                                                      std::vector<std::string> suggestions) {
   std::lock_guard lock(mutex_);
   if (pipe_ == INVALID_HANDLE_VALUE) return std::nullopt;
-  auto frame = proofread::EncodeFrame(proofread::BuildSelectRequest({start, length, reconvert}),
-                                      proofread::kMaxRequestFrameBytes);
+  auto frame = proofread::EncodeFrame(
+      proofread::BuildSelectRequest({start, length, reconvert, std::move(suggestions)}),
+      proofread::kMaxRequestFrameBytes);
   if (!frame || !Transfer(true, frame->data(), static_cast<DWORD>(frame->size())))
     return std::nullopt;
   const auto json = ReadMessage(proofread::kMaxRequestFrameBytes);

@@ -222,8 +222,11 @@ winrt::fire_and_forget ProofreadPane::Check() {
         controls::Button select;
         select.Content(winrt::box_value(after.GetString(L"Proofread_SelectButton")));
         SetId(select, L"ProofreadSelectButton_" + std::to_wstring(number));
-        select.Click([weak = weak_from_this(), start = finding.start, length = finding.length](
-                         auto const&, auto const&) {
+        // Offered with the application's reconversion candidates, as text only (X-3-6).
+        auto suggestions = ProofreadSelectSuggestions(checked_text_, finding.start,
+                                                      finding.length, finding.suggestions);
+        select.Click([weak = weak_from_this(), start = finding.start, length = finding.length,
+                      suggestions = std::move(suggestions)](auto const&, auto const&) {
           const auto pane = weak.lock();
           if (!pane) return;
           // Ranges can overlap; selecting one never changes the others. The text must still be the
@@ -231,7 +234,7 @@ winrt::fire_and_forget ProofreadPane::Check() {
           if (pane->checked_session_text_) {
             if (pane->session_ && pane->checked_text_ == pane->session_text_ &&
                 std::wstring(pane->input_.Text()) == pane->session_input_text_)
-              pane->SelectInApplication(start, length);
+              pane->SelectInApplication(start, length, suggestions);
             return;
           }
           if (std::wstring(pane->input_.Text()) != pane->checked_text_) return;
@@ -304,7 +307,8 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
   }
 }
 
-winrt::fire_and_forget ProofreadPane::SelectInApplication(uint32_t start, uint32_t length) {
+winrt::fire_and_forget ProofreadPane::SelectInApplication(uint32_t start, uint32_t length,
+                                                          std::vector<std::string> suggestions) {
   const auto self = shared_from_this();
   const auto dispatcher = dispatcher_;
   const auto client = session_;
@@ -314,7 +318,7 @@ winrt::fire_and_forget ProofreadPane::SelectInApplication(uint32_t start, uint32
     const auto window = reinterpret_cast<HWND>(static_cast<uintptr_t>(session_document_->window));
     if (window && IsWindow(window)) SetForegroundWindow(window);
     co_await winrt::resume_background();
-    const auto result = client->Select(start, length, true);
+    const auto result = client->Select(start, length, true, std::move(suggestions));
     co_await ResumeForeground(dispatcher);
 
     ResourceLoader resources;

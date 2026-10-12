@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "ProofreadModel.h"
 
@@ -145,4 +146,20 @@ TEST(ProofreadModelTest, SessionStatusesAndSelectResultsHaveStrings) {
   EXPECT_TRUE(names.contains(ProofreadSelectResultResource(std::nullopt)));
   EXPECT_TRUE(names.contains("Proofread_Session_failed"));
   EXPECT_TRUE(names.contains("Proofread_SessionTitle"));
+}
+
+// DEV-1583: a finding's suggestions go to the TIP as text candidates for its range.
+TEST(ProofreadModelTest, SelectSuggestionsAreBoundedPlainTextOtherThanTheRange) {
+  using azookey::settings::ProofreadSelectSuggestions;
+  const std::wstring text = L"今日は明目の天気";
+  EXPECT_EQ(ProofreadSelectSuggestions(text, 3, 2, {"明日", "あした"}),
+            (std::vector<std::string>{"明日", "あした"}));
+  // The range's own text, empty, oversized and control-carrying suggestions are not offered.
+  EXPECT_EQ(ProofreadSelectSuggestions(
+                text, 3, 2, {"明目", "", std::string(257, 'a'), "a\nb", "a\xE2\x80\xAE" "b", "明日"}),
+            (std::vector<std::string>{"明日"}));
+  EXPECT_EQ(ProofreadSelectSuggestions(text, 3, 2, {"1", "2", "3", "4", "5", "6"}),
+            (std::vector<std::string>{"1", "2", "3", "4", "5"}));
+  // A range the text does not hold offers nothing.
+  EXPECT_TRUE(ProofreadSelectSuggestions(text, 7, 5, {"明日"}).empty());
 }

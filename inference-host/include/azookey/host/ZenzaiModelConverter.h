@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/MmapModelLoader.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 
@@ -27,6 +28,8 @@ struct ZenzaiRuntimeOptions {
   bool mock_candidates_for_tests{false};
   // Select only the Vulkan registry's device; CPU loads pass an empty device list.
   bool use_vulkan{false};
+  // Spec 5: map the GGUF, falling back to a read load once when mapping fails.
+  bool use_mmap{true};
 };
 
 int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);
@@ -93,6 +96,7 @@ struct ZenzaiLoadResult {
   ZenzaiModelInfo info;
   std::string error;
   std::unique_ptr<ZenzaiModelRuntime> runtime;
+  MmapLoadReport mmap;
 };
 
 // Tokenizer-related GGUF metadata that the loader may need to override at load time.

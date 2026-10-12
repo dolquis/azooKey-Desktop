@@ -319,7 +319,10 @@ TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
   azookey::host::SettingsStore store(path);
   const auto result = store.Load();
   ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
-  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings);
+  // On AC, so the power lane leaves NLL on whatever the test machine runs on.
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      {}, result.settings, azookey::host::BackendKind::Cpu,
+      [] { return azookey::host::InferenceThreadEnvironment{azookey::host::PowerSource::Ac, 8}; });
   EXPECT_TRUE(config.nll.enabled);
   EXPECT_EQ(config.nll.top_k, 16);
   EXPECT_EQ(config.nll.weight, 0.0);
@@ -605,6 +608,48 @@ TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
         EXPECT_EQ(config.inference_threads, static_cast<int32_t>(expected));
       }
     }
+  }
+}
+
+TEST(SettingsStoreTest, NllRerankFollowsThePowerLane) {
+  using namespace azookey::host;
+  struct Case {
+    std::string profile;
+    PowerSource source;
+    bool nll_enabled;
+  };
+  for (const auto& c :
+       {Case{"auto", PowerSource::Ac, true}, Case{"auto", PowerSource::Unknown, true},
+        Case{"auto", PowerSource::Battery, false}, Case{"performance", PowerSource::Battery, true},
+        Case{"battery_saver", PowerSource::Ac, false}}) {
+    RuntimeSettings settings;
+    settings.power_profile = c.profile;
+    settings.nll.enabled = true;
+    const auto config = ApplyRuntimeSettingsToEngineConfig(
+        {}, settings, BackendKind::Cpu, [&] { return InferenceThreadEnvironment{c.source, 8}; });
+    EXPECT_EQ(config.nll.enabled, c.nll_enabled) << c.profile;
+  }
+
+  // A user who left NLL off keeps it off on AC as well.
+  RuntimeSettings settings;
+  const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
+    return InferenceThreadEnvironment{PowerSource::Ac, 8};
+  });
+  EXPECT_FALSE(config.nll.enabled);
+}
+
+TEST(SettingsStoreTest, PowerProfileDecidesTheLaneWithoutQueryingTheEnvironment) {
+  using namespace azookey::host;
+  for (const std::string profile : {"performance", "battery_saver"}) {
+    RuntimeSettings settings;
+    settings.power_profile = profile;
+    settings.nll.enabled = true;
+    settings.inference_threads = 4;
+    const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
+      ADD_FAILURE() << "an explicit power profile must not query the environment";
+      return InferenceThreadEnvironment{PowerSource::Battery, 1};
+    });
+    EXPECT_EQ(config.nll.enabled, profile == "performance");
   }
 }
 

@@ -209,6 +209,17 @@ BackendSelection SelectAutoBackend(const BackendSystemFacts& facts,
   return selection;
 }
 
+PowerBackendPlan PlanAutoBackendForPower(BackendSystemFacts startup_facts, bool on_battery,
+                                         const CompiledBackends& compiled, BackendKind current_auto,
+                                         const PowerBackendReloadState& state) {
+  PowerBackendPlan plan;
+  startup_facts.on_battery = on_battery;
+  plan.selection = SelectAutoBackend(startup_facts, compiled);
+  plan.changed = plan.selection.backend != current_auto;
+  plan.reload = plan.changed && state.auto_requested && !state.safe_mode && state.model_active;
+  return plan;
+}
+
 BackendSystemFacts CollectBackendSystemFacts(IAdapterEnumerator& adapters,
                                              IRuntimeLibraryProbe& libraries, IOsVersionProbe& os,
                                              bool on_battery) noexcept {

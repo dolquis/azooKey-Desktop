@@ -829,7 +829,15 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       if (options.before_load_for_tests) {
         options.before_load_for_tests(next_config.backend);
       }
-      return LoadZenzaiGgufModel(next_config.model_path, runtime_options);
+      auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
+      // Spec 5: a read load after a failed mapping still serves; only the log says so.
+      if (loaded.mmap.fallback && runtime_logger_) {
+        runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "model_mmap_fallback",
+                             {{"reason", logging::RuntimeLogSafeText(std::string(
+                                             MmapFallbackReasonName(*loaded.mmap.fallback)))},
+                              {"result", logging::RuntimeLogSafeText(loaded.ok ? "ok" : "error")}});
+      }
+      return loaded;
     } catch (const std::exception&) {
       ZenzaiLoadResult failed;
       failed.error = "model initialization failed";

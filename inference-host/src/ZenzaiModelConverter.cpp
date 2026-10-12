@@ -1417,7 +1417,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 #if AZOOKEY_WITH_LLAMA_CPP
   (void)LlamaBackend();
   auto runtime = std::make_unique<ZenzaiModelRuntime>();
-  LlamaLogCapture log_capture;
+  std::optional<LlamaLogCapture> log_capture;
+  log_capture.emplace();
 
   auto model_params = llama_model_default_params();
   std::array<ggml_backend_dev_t, 2> devices{};
@@ -1458,15 +1459,47 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!described_overrides.empty()) {
     model_params.kv_overrides = kv_overrides.data();
   }
-  // llama.cpp opens model files through ggml_fopen, which decodes the name as UTF-8
-  // on Windows, so the UTF-8 bytes are passed through unchanged.
-  runtime->model = llama_model_load_from_file(path.c_str(), model_params);
+  struct ModelAttempt {
+    bool ok{false};
+    llama_model* model{nullptr};
+    std::string error;
+  };
+  bool first_attempt = true;
+  const auto attempt = [&](bool use_mmap) {
+    // Each attempt reports only its own llama.cpp errors.
+    if (!first_attempt) {
+      log_capture.reset();
+      log_capture.emplace();
+    }
+    first_attempt = false;
+    // AUTO maps the file unless a device cannot use mapped buffers. A read load
+    // also turns lazy reading off, since that reads through a mapping as well.
+    model_params.load_mode = use_mmap ? LLAMA_LOAD_MODE_AUTO : LLAMA_LOAD_MODE_NONE;
+    model_params.lazy_mode = use_mmap ? LLAMA_LAZY_MODE_AUTO : LLAMA_LAZY_MODE_OFF;
+    ModelAttempt out;
+    // llama.cpp opens model files through ggml_fopen, which decodes the name as UTF-8
+    // on Windows, so the UTF-8 bytes are passed through unchanged.
+    out.model = llama_model_load_from_file(path.c_str(), model_params);
+    out.ok = out.model != nullptr;
+    if (!out.ok) out.error = log_capture->error();
+    return out;
+  };
+  const auto preflight = [&path] {
+    try {
+      return PreflightModelMapping(core::Utf8Path(path));
+    } catch (...) {
+      // A path that does not convert is left to llama.cpp, which reports its own error.
+      return false;
+    }
+  };
+  const bool preflight_ok = !options.use_mmap || preflight();
+  auto model_attempt = LoadWithMmapFallback(options.use_mmap, preflight_ok, attempt, &result.mmap);
+  runtime->model = model_attempt.model;
   if (!runtime->model) {
     result.ok = false;
     result.error = "llama.cpp model load failed";
-    const auto detail = log_capture.error();
-    if (!detail.empty()) {
-      result.error += ": " + detail;
+    if (!model_attempt.error.empty()) {
+      result.error += ": " + model_attempt.error;
     }
     return result;
   }
@@ -1488,7 +1521,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!runtime->context) {
     result.ok = false;
     result.error = "llama.cpp context creation failed";
-    const auto detail = log_capture.error();
+    const auto detail = log_capture->error();
     if (!detail.empty()) {
       result.error += ": " + detail;
     }

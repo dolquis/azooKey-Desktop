@@ -23,6 +23,10 @@ struct DispatcherConfig {
   std::string host_generation_id;
   std::string handshake_token;
   BackendKind default_backend{BackendKind::Cpu};
+  // When set, the `auto` backend UpdateConfig resolves to, read at each reload:
+  // the Host moves it with the power source (copilot-pc-backend-spec 4.4).
+  // default_backend applies when it is empty.
+  std::function<BackendKind()> auto_backend;
   std::optional<BackendKind> override_backend;
   std::optional<std::string> override_model_path;
   std::string runtime_tier{"mock"};

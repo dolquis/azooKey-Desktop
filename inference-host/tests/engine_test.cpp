@@ -1700,6 +1700,39 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
   ASSERT_TRUE(health.last_error.has_value());
   EXPECT_EQ(health.last_error, result.error);
 }
+
+// Spec 5.1: a mapped load that llama.cpp rejects is tried once more as a read
+// load, and the failure still comes back as an error rather than a crash.
+TEST(InferenceEngineTest, RealLlamaMappedLoadFailureRetriesOnceWithoutMmap) {
+  const std::string model_path = TempPath("azookey_mmap_retry_model.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ZenzaiRuntimeOptions options;
+  const auto mapped = azookey::host::LoadZenzaiGgufModel(model_path, options);
+  options.use_mmap = false;
+  const auto read = azookey::host::LoadZenzaiGgufModel(model_path, options);
+  std::remove(model_path.c_str());
+
+  EXPECT_FALSE(mapped.ok);
+  EXPECT_FALSE(mapped.runtime);
+  EXPECT_FALSE(mapped.mmap.used_mmap);
+  EXPECT_EQ(mapped.mmap.fallback, azookey::host::MmapFallbackReason::Load);
+  EXPECT_EQ(mapped.error.rfind("llama.cpp model load failed", 0), 0u) << mapped.error;
+
+  EXPECT_FALSE(read.ok);
+  EXPECT_FALSE(read.mmap.fallback.has_value());
+}
+
+#ifdef AZOOKEY_AI_TEST_MODEL
+TEST(InferenceEngineTest, RealModelLoadsThroughTheMapping) {
+  const auto loaded = azookey::host::LoadZenzaiGgufModel(AZOOKEY_AI_TEST_MODEL,
+                                                         azookey::host::ZenzaiRuntimeOptions{});
+  ASSERT_TRUE(loaded.ok) << loaded.error;
+  EXPECT_TRUE(loaded.mmap.used_mmap);
+  EXPECT_FALSE(loaded.mmap.fallback.has_value());
+}
+#endif
 #endif
 
 TEST(InferenceEngineTest, ResolvesOnlyZenzaiCustomPreTokenizerToUpstreamGpt2) {

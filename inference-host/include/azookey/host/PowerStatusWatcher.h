@@ -1,8 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <thread>
 
 #include "azookey/host/SettingsStore.h"
@@ -39,6 +41,28 @@ class PowerStateTracker {
   PowerSourceProbe probe_;
   Listener listener_;
   std::atomic<PowerSource> current_;
+};
+
+// Holds a power change until it has stood for `quiet`. Docking can flip the
+// source several times within a second, and each backend switch reloads the
+// model. Not thread-safe; the owner serializes the calls.
+class PowerChangeDebouncer {
+ public:
+  using Clock = std::chrono::steady_clock;
+
+  explicit PowerChangeDebouncer(Clock::duration quiet) : quiet_(quiet) {}
+
+  // Records the latest source and restarts the quiet period.
+  void Note(PowerSource source, Clock::time_point now);
+  // The latest source once it has stood for the quiet period; returned once.
+  std::optional<PowerSource> TakeSettled(Clock::time_point now);
+  // When TakeSettled next returns a source; nullopt with nothing pending.
+  std::optional<Clock::time_point> deadline() const;
+
+ private:
+  Clock::duration quiet_;
+  std::optional<PowerSource> pending_;
+  Clock::time_point noted_at_{};
 };
 
 // Receives WM_POWERBROADCAST in a hidden top-level window on its own thread.

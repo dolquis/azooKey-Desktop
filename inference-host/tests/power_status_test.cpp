@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -135,6 +136,34 @@ TEST(PowerStateTrackerTest, AChangeSwitchesTheLaneTheSettingsApply) {
   ASSERT_TRUE(tracker->OnPowerBroadcast(kPowerBroadcastStatusChange));
   EXPECT_TRUE(applied.nll.enabled);
   EXPECT_EQ(applied.inference_threads, 8);
+}
+
+TEST(PowerChangeDebouncerTest, SettlesOnlyAfterTheQuietPeriod) {
+  using azookey::host::PowerChangeDebouncer;
+  using std::chrono::seconds;
+  PowerChangeDebouncer debouncer(seconds(5));
+  const PowerChangeDebouncer::Clock::time_point t0{};
+  EXPECT_FALSE(debouncer.deadline().has_value());
+  EXPECT_FALSE(debouncer.TakeSettled(t0).has_value());
+
+  debouncer.Note(PowerSource::Battery, t0);
+  EXPECT_EQ(debouncer.deadline(), t0 + seconds(5));
+  EXPECT_FALSE(debouncer.TakeSettled(t0 + seconds(4)).has_value());
+  EXPECT_EQ(debouncer.TakeSettled(t0 + seconds(5)), PowerSource::Battery);
+  // Each settled source is handed out once.
+  EXPECT_FALSE(debouncer.TakeSettled(t0 + seconds(6)).has_value());
+  EXPECT_FALSE(debouncer.deadline().has_value());
+}
+
+TEST(PowerChangeDebouncerTest, AFlapRestartsTheQuietPeriodAndKeepsTheLatestSource) {
+  using azookey::host::PowerChangeDebouncer;
+  using std::chrono::seconds;
+  PowerChangeDebouncer debouncer(seconds(5));
+  const PowerChangeDebouncer::Clock::time_point t0{};
+  debouncer.Note(PowerSource::Battery, t0);
+  debouncer.Note(PowerSource::Ac, t0 + seconds(3));
+  EXPECT_FALSE(debouncer.TakeSettled(t0 + seconds(6)).has_value());
+  EXPECT_EQ(debouncer.TakeSettled(t0 + seconds(8)), PowerSource::Ac);
 }
 
 #ifdef _WIN32

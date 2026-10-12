@@ -42,6 +42,48 @@ TEST(BackendSelectorTest, VulkanBuildWithHardwareGpuAndLoaderSelectsVulkan) {
   EXPECT_TRUE(selection.winml_os_eligible);
 }
 
+TEST(BackendSelectorTest, PowerChangeMovesAutoBetweenVulkanAndCpu) {
+  using azookey::host::ReselectAutoBackendForPower;
+  const auto to_battery =
+      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, true, BackendKind::Vulkan);
+  ASSERT_TRUE(to_battery.has_value());
+  EXPECT_EQ(to_battery->backend, BackendKind::Cpu);
+  EXPECT_EQ(to_battery->reason, BackendSelectionReason::OnBattery);
+
+  const auto to_ac =
+      ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true, BackendKind::Cpu);
+  ASSERT_TRUE(to_ac.has_value());
+  EXPECT_EQ(to_ac->backend, BackendKind::Vulkan);
+}
+
+TEST(BackendSelectorTest, PowerChangeReloadsOnlyWhenTheAutoBackendChanges) {
+  using azookey::host::ReselectAutoBackendForPower;
+  // Same result as the backend in use.
+  EXPECT_FALSE(
+      ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), {}, true, BackendKind::Vulkan));
+  EXPECT_FALSE(
+      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, true, BackendKind::Cpu));
+  // Without ggml-vulkan, `auto` is CPU on either power source.
+  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, CompiledBackends{}, {}, true,
+                                           BackendKind::Cpu));
+  // Unknown adapters at startup keep `auto` on CPU after the change as well.
+  auto unknown = ReadyFacts();
+  unknown.adapters.reset();
+  EXPECT_FALSE(
+      ReselectAutoBackendForPower(unknown, false, VulkanBuild(), {}, true, BackendKind::Cpu));
+}
+
+TEST(BackendSelectorTest, PowerChangeLeavesExplicitRequestsAndSafeModeAlone) {
+  using azookey::host::ReselectAutoBackendForPower;
+  // A CLI backend or a non-auto preference is not re-resolved.
+  EXPECT_FALSE(
+      ReselectAutoBackendForPower(ReadyFacts(), true, VulkanBuild(), {}, false, BackendKind::Vulkan));
+  azookey::host::BackendSelectionPolicy safe_mode;
+  safe_mode.safe_mode = true;
+  EXPECT_FALSE(ReselectAutoBackendForPower(ReadyFacts(), false, VulkanBuild(), safe_mode, true,
+                                           BackendKind::Cpu));
+}
+
 TEST(BackendSelectorTest, BuildWithoutVulkanAlwaysSelectsCpu) {
   const auto selection = SelectAutoBackend(ReadyFacts(), CompiledBackends{});
   EXPECT_EQ(selection.backend, BackendKind::Cpu);

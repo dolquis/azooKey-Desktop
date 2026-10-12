@@ -370,7 +370,8 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 
 - 優先順位: Host の `--backend` / `--cpu` / `--cuda` 明示 > 設定の `model.backendPreference`
   （`auto` 以外）> 設定の `backendPreference`（`auto` 以外）> `auto`。`auto` は Host 起動時に
-  1 回だけ解決し、起動時と `UpdateConfig` の両方で同じ値を使う。
+  解決し、電源の状態が変わったときに解決し直す（下記）。`UpdateConfig` は、その時点で解決済みの
+  値を使う。
 - 入力はモック可能な 3 つの probe に分ける。
   - アダプタ列挙: `dxcore.dll` を System32 から実行時に読み込み、§3 の DXCore で
     `D3D12_GRAPHICS` と `D3D12_GENERIC_ML` のアダプタを列挙する。`IsHardware` が偽の
@@ -402,9 +403,14 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   CUDA runtime があっても選ばない（明示 `cuda` は上記の CPU 降格）。
 - OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の保留中は
   R1 の選択に使わない。
-- 電源状態の変化による再選択は §6 の範囲で扱い、`auto` の解決は起動時の電源状態だけを使う。
+- 電源の状態が変わったら（§6.1）、変化が 5 秒続いた後に `auto` を解決し直す
+  （`ReselectAutoBackendForPower`）。アダプタ・ランタイム DLL・OS build は起動時に集めた値を使い、
+  電源の状態だけを入れ替える。解決し直すのは、要求が `auto`（`source=auto`）で、SafeMode ではない
+  場合に限る。結果が今の `auto` の backend と違うときだけ、新しい backend でモデルを再ロードし、
+  `backend_selected` を `source=power_change` で出す（再ロードの結果は `power_backend_reload`）。
+  ggml-vulkan を含まないビルドでは `auto` は常に CPU なので、再ロードは起きない。
 - 選択結果は Host の構造化ログ `backend_selected` に 1 件出す。フィールドは `source`
-  （`cli` / `settings` / `auto`）、`requested`、`auto_backend`、`reason`、`adapters_known`、
+  （`cli` / `settings` / `auto` / `power_change`）、`requested`、`auto_backend`、`reason`、`adapters_known`、
   `hw_gpu_count`、`hw_ml_only_count`、`vulkan_loader`、`cuda_runtime`、`os_build`、
   `winml_os_eligible`、`on_battery`。アダプタ名は出さない。実際にロードした backend は
   Health と QueryDiagnostics の `backend` が示す。
@@ -486,7 +492,7 @@ EP の `ep` / `ep_state` / `ep_last_error` を診断に含める（`docs/dev-inf
 
 ## 5. mmap モデルロード
 
-GGUF は llama.cpp の `use_mmap` でマップしてロードする。マップしたページはファイルを裏付けにするため、
+GGUF は llama.cpp のマップでロードする。マップしたページはファイルを裏付けにするため、
 複数 Host プロセスが同じモデルを使うと物理ページを共有でき、メモリ圧迫時はカーネルが破棄して
 ファイルから読み直せる。
 
@@ -499,8 +505,10 @@ GGUF は llama.cpp の `use_mmap` でマップしてロードする。マップ�
    ファイル全体を読み取り専用でマップし、すぐに解放する。Windows は `CreateFileW`、
    `CreateFileMappingW`、`MapViewOfFile`、それ以外の OS は `mmap` を使う。空のファイルは
    マップできないので失敗とする。preflight が失敗したら、手順 2 を省いて手順 3 へ進む。
-2. `llama_model_load_from_file` を `use_mmap=true` で呼ぶ。
-3. 手順 2 が失敗したら、`use_mmap=false`（読み込み）で 1 回だけ再試行する。llama.cpp は
+2. `llama_model_load_from_file` を `load_mode=LLAMA_LOAD_MODE_AUTO` で呼ぶ。llama.cpp は、マップした
+   バッファを使えないデバイスがあればマップせずに読み込む。
+3. 手順 2 が失敗したら、`load_mode=LLAMA_LOAD_MODE_NONE` と `lazy_mode=LLAMA_LAZY_MODE_OFF`
+   （lazy 読み込みもマップを使うため）の読み込みで 1 回だけ再試行する。llama.cpp は
    マップの失敗を他のロード失敗と区別して返さないため、失敗の理由は問わない。GGUF の破損や
    Vulkan の初期化失敗でも再試行するので、`model_mmap_fallback` の `reason=load` はマップが原因で
    あることを意味しない。
@@ -539,8 +547,8 @@ watcher を起動せず、Host 起動時に読んだ電源の状態のまま動�
 `ApplyRuntimeSettingsToEngineConfig` で engine の設定を作り直して適用する。この適用は window の
 スレッドとは別のスレッドで行い、モデルのロード中も window のメッセージを止めない。適用のたびに
 ログ `power_source_changed` を出す。フィールドは `from`、`to`（`ac` / `battery` / `unknown`）、
-`on_battery`、`power_profile`、`lane`（`heavy` / `fast`）。backend は Host 起動時の選択（§4.4）の
-ままとし、電源の変化ではモデルを再ロードしない。
+`on_battery`、`power_profile`、`lane`（`heavy` / `fast`）。backend の解決し直しと、それに伴う
+モデルの再ロードは §4.4 に従う。
 
 Host 起動時の設定の適用から watcher の起動までの間に電源の状態が変わった場合も、watcher の起動後に
 読み直して同じ適用を行う。電源の変化と同時に進んでいたモデルロードは、完了時にロード開始時の
@@ -894,9 +902,9 @@ public:
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU |
+| BackendSelector | `inference-host/tests/backend_selector_test.cpp` | probe のモックによる §4.4 の判定と判定順、起動時の電源状態と `powerProfile` による上書き、probe 失敗時の CPU、電源の変化での解決し直し（`auto` のときだけ、結果が変わったときだけ、SafeMode では何もしない） |
 | MmapModelLoader | `inference-host/tests/mmap_loader_test.cpp` | マップの成功、ファイル不在と空ファイルのエラー、サイズ取得、解放後のファイル削除、`LoadWithMmapFallback` の試行順（preflight の失敗、マップ失敗後の 1 回の再試行、両方の失敗） |
-| Power Status | `inference-host/tests/power_status_test.cpp` | 電源状態の変化の検出と残量だけの変化の無視、不明を AC として扱うこと、`powerProfile` の上書き、変化によるレーンとスレッド数の切替え、Windows では watcher の window への `WM_POWERBROADCAST` が tracker に届くこと |
+| Power Status | `inference-host/tests/power_status_test.cpp` | 電源状態の変化の検出と残量だけの変化の無視、不明を AC として扱うこと、`powerProfile` の上書き、変化によるレーンとスレッド数の切替え、Windows では watcher の window への `WM_POWERBROADCAST` が tracker に届くこと、変化が続いた後にだけ解決し直すためのデバウンス |
 | DPI changed | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |
 | ARM64 build | CI matrix | ビルド成功 + テスト pass |
 

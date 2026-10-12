@@ -119,6 +119,14 @@ BackendSelection SelectAutoBackend(const BackendSystemFacts& facts,
                                    const CompiledBackends& compiled,
                                    const BackendSelectionPolicy& policy = {});
 
+// M25 (spec 4.4): the selection `auto` moves to after a power change, or nullopt
+// when no reload is due. Only an `auto` request outside SafeMode is resolved
+// again, from the startup facts with the new power state, and only a backend
+// other than `current` is returned.
+std::optional<BackendSelection> ReselectAutoBackendForPower(
+    BackendSystemFacts startup_facts, bool on_battery, const CompiledBackends& compiled,
+    const BackendSelectionPolicy& policy, bool auto_requested, BackendKind current);
+
 // A probe that throws or fails leaves its fact unknown or false; never throws.
 BackendSystemFacts CollectBackendSystemFacts(IAdapterEnumerator& adapters,
                                              IRuntimeLibraryProbe& libraries, IOsVersionProbe& os,

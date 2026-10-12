@@ -37,6 +37,23 @@ bool PowerStateTracker::OnPowerBroadcast(uintptr_t event) {
   return true;
 }
 
+void PowerChangeDebouncer::Note(PowerSource source, Clock::time_point now) {
+  pending_ = source;
+  noted_at_ = now;
+}
+
+std::optional<PowerSource> PowerChangeDebouncer::TakeSettled(Clock::time_point now) {
+  if (!pending_ || now < noted_at_ + quiet_) return std::nullopt;
+  const auto settled = pending_;
+  pending_.reset();
+  return settled;
+}
+
+std::optional<PowerChangeDebouncer::Clock::time_point> PowerChangeDebouncer::deadline() const {
+  if (!pending_) return std::nullopt;
+  return noted_at_ + quiet_;
+}
+
 PowerStatusWatcher::PowerStatusWatcher(PowerStateTracker& tracker) : tracker_(tracker) {}
 
 PowerStatusWatcher::~PowerStatusWatcher() { Stop(); }

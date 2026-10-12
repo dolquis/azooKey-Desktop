@@ -7,7 +7,7 @@
 #include <string_view>
 
 // M25 mmap model loading (docs/copilot-pc-backend-spec.md section 5). llama.cpp
-// maps the GGUF itself (use_mmap); this maps the file first so a file that
+// maps the GGUF itself (load_mode); this maps the file first so a file that
 // cannot be mapped goes straight to a read load.
 namespace azookey::host {
 

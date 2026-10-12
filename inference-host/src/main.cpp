@@ -420,14 +420,25 @@ void LogBackendSelection(azookey::logging::RuntimeLogger& logger, std::string_vi
               {"on_battery", facts.on_battery}});
 }
 
+// How long a power source must stand before `auto` is resolved again. Docking
+// flips the source several times in a second; each backend switch reloads the model.
+constexpr std::chrono::seconds kPowerSettleQuiet{5};
+
 // M25: applies a power source change off the watcher's window thread, so an
 // UpdateConfig model load holding the config lock does not stall the window.
-// Changes that arrive while one is applied collapse into one more run.
+// Changes that arrive while one is applied collapse into one more run. Once a
+// source has stood for the quiet period, `settle` runs with it (the backend
+// re-selection, which reloads the model).
 class PowerChangeWorker {
  public:
   using Apply = std::function<void(azookey::host::PowerSource from, azookey::host::PowerSource to)>;
+  using Settle = std::function<void(azookey::host::PowerSource source)>;
 
-  explicit PowerChangeWorker(Apply apply) : apply_(std::move(apply)), thread_([this] { Run(); }) {}
+  PowerChangeWorker(Apply apply, Settle settle, std::chrono::steady_clock::duration quiet)
+      : apply_(std::move(apply)),
+        settle_(std::move(settle)),
+        debouncer_(quiet),
+        thread_([this] { Run(); }) {}
   ~PowerChangeWorker() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -455,21 +466,42 @@ class PowerChangeWorker {
   void Run() {
     std::unique_lock<std::mutex> lock(mutex_);
     while (true) {
-      wake_.wait(lock, [this] { return stopping_ || pending_.has_value(); });
-      if (stopping_) return;
-      const auto change = *pending_;
-      pending_.reset();
-      lock.unlock();
-      try {
-        apply_(change.first, change.second);
-      } catch (...) {
-        // The next change applies the settings again.
+      const auto ready = [this] { return stopping_ || pending_.has_value(); };
+      if (const auto deadline = debouncer_.deadline()) {
+        wake_.wait_until(lock, *deadline, ready);
+      } else {
+        wake_.wait(lock, ready);
       }
-      lock.lock();
+      if (stopping_) return;
+      if (pending_) {
+        const auto change = *pending_;
+        pending_.reset();
+        debouncer_.Note(change.second, std::chrono::steady_clock::now());
+        lock.unlock();
+        try {
+          apply_(change.first, change.second);
+        } catch (...) {
+          // The next change applies the settings again.
+        }
+        lock.lock();
+        continue;
+      }
+      if (const auto settled = debouncer_.TakeSettled(std::chrono::steady_clock::now())) {
+        lock.unlock();
+        try {
+          settle_(*settled);
+        } catch (...) {
+          // The backend stays as it is until the next change.
+        }
+        lock.lock();
+      }
     }
   }
 
   Apply apply_;
+  Settle settle_;
+  // Touched only by the worker thread.
+  azookey::host::PowerChangeDebouncer debouncer_;
   std::mutex mutex_;
   std::condition_variable wake_;
   std::optional<std::pair<azookey::host::PowerSource, azookey::host::PowerSource>> pending_;
@@ -1153,15 +1185,17 @@ int main(int argc, char** argv) {
   // M25 (docs/copilot-pc-backend-spec.md section 6): a power source change
   // re-applies the runtime settings, under the lock UpdateConfig takes, so the
   // lane and the thread count follow it. The thread count takes effect at the
-  // next model load; the backend stays the one chosen at startup.
-  PowerChangeWorker power_change_worker([&engine, &settings_store, &runtime_log,
-                                         update_config_mutex = dconf.update_config_mutex,
-                                         default_backend](azookey::host::PowerSource from,
-                                                          azookey::host::PowerSource to) {
+  // next model load. Once the change has stood for kPowerSettleQuiet, `auto`
+  // is resolved again and a different backend reloads the model (section 4.4).
+  std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
+  const auto apply_power_change = [&engine, &settings_store, &runtime_log, &current_auto_backend,
+                                   update_config_mutex = dconf.update_config_mutex](
+                                      azookey::host::PowerSource from,
+                                      azookey::host::PowerSource to) {
     std::lock_guard<std::mutex> lock(*update_config_mutex);
     const auto& settings = settings_store.settings();
-    engine.ApplyConfig(azookey::host::ApplyRuntimeSettingsToEngineConfig(engine.config(), settings,
-                                                                         default_backend));
+    engine.ApplyConfig(azookey::host::ApplyRuntimeSettingsToEngineConfig(
+        engine.config(), settings, current_auto_backend.load()));
     runtime_log.Log(
         azookey::logging::RuntimeLogLevel::Info, "power_source_changed",
         {{"from", SafeLogText(std::string(azookey::host::PowerSourceName(from)))},
@@ -1170,7 +1204,41 @@ int main(int argc, char** argv) {
          {"power_profile", SafeLogText(settings.power_profile)},
          {"lane", SafeLogText(std::string(azookey::host::InferenceLaneName(
                       azookey::host::ResolveInferenceLane(to, settings.power_profile))))}});
-  });
+  };
+  const auto reselect_backend = [&engine, &settings_store, &runtime_log, &current_auto_backend,
+                                 &auto_backend, explicit_backend, explicit_model_path,
+                                 cli_model_path, update_config_mutex = dconf.update_config_mutex](
+                                    azookey::host::PowerSource source) {
+    std::lock_guard<std::mutex> lock(*update_config_mutex);
+    const auto& settings = settings_store.settings();
+    azookey::host::BackendSelectionPolicy policy;
+    policy.safe_mode = settings.safe_mode.enabled ||
+                       engine.health_state() == azookey::host::HealthState::SafeMode;
+    const bool on_battery =
+        azookey::host::OnBatteryForBackendSelection(source, settings.power_profile);
+    const auto reselected = azookey::host::ReselectAutoBackendForPower(
+        auto_backend.facts, on_battery, azookey::host::CompiledBackendsForThisBuild(), policy,
+        BackendRequestSource(explicit_backend, settings) == "auto", current_auto_backend.load());
+    if (!reselected) return;
+    current_auto_backend = reselected->backend;
+    HostBackendSelection logged{auto_backend.facts, *reselected};
+    logged.facts.on_battery = on_battery;
+    LogBackendSelection(runtime_log, "power_change", reselected->backend, logged);
+    // An `auto` request has no CLI backend and no non-auto preference, so the
+    // config's backend is the one just selected.
+    auto next = azookey::host::ApplyRuntimeSettingsToEngineConfig(engine.config(), settings,
+                                                                  reselected->backend);
+    if (explicit_model_path) next.model_path = cli_model_path;
+    engine.ApplyConfig(next);
+    if (next.model_path.empty()) return;
+    const auto loaded = engine.LoadModelWithResult(azookey::host::ModelLoadOptions{
+        next.model_path, next.backend, next.n_gpu_layers, next.inference_threads});
+    LogBusinessOutcome(runtime_log,
+                       loaded.ok ? azookey::logging::RuntimeLogLevel::Info
+                                 : azookey::logging::RuntimeLogLevel::Warn,
+                       "power_backend_reload", loaded.ok ? "ok" : "error");
+  };
+  PowerChangeWorker power_change_worker(apply_power_change, reselect_backend, kPowerSettleQuiet);
   azookey::host::PowerStateTracker power_tracker(
       azookey::host::QuerySystemPowerSource,
       [&power_change_worker](azookey::host::PowerSource from, azookey::host::PowerSource to) {

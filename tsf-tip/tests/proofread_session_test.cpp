@@ -147,18 +147,29 @@ TEST(ProofreadProtocolTest, SuggestionsAreBoundedPlainText) {
   EXPECT_FALSE(proofread::IsValidSelectSuggestion(japanese + "あ"));
   EXPECT_TRUE(proofread::IsValidSelectSuggestion("\xF0\x9F\x98\x80"));  // U+1F600
   for (const std::string refused : {
-           std::string(), std::string(257, 'a'), std::string("a\tb"), std::string("a\nb"),
-           std::string("a\rb"), std::string("a\x7F"), std::string("a\xC2\x85"),  // U+0085
-           std::string("a\xD8\x9C"),                                          // U+061C
-           std::string("a\xE2\x80\x8E"), std::string("a\xE2\x80\x8F"),        // U+200E/F
-           std::string("a\xE2\x80\xA8"), std::string("a\xE2\x80\xA9"),        // U+2028/9
-           std::string("a\xE2\x80\xAA"), std::string("a\xE2\x80\xAE"),        // U+202A, U+202E
-           std::string("a\xE2\x81\xA6"), std::string("a\xE2\x81\xA9"),        // U+2066, U+2069
-           std::string("\xEF\xBB\xBF" "a"),                                   // U+FEFF
-           std::string("a\xEF\xBF\xB9"), std::string("a\xEF\xBF\xBB"),        // U+FFF9, U+FFFB
-           std::string("a\xFF"), std::string("a\xC3"),                        // not UTF-8
-           std::string("\xC0\xAF"),                                           // overlong
-           std::string("\xED\xA0\x80"),                                       // a surrogate
+           std::string(),
+           std::string(257, 'a'),
+           std::string("a\tb"),
+           std::string("a\nb"),
+           std::string("a\rb"),
+           std::string("a\x7F"),
+           std::string("a\xC2\x85"),  // U+0085
+           std::string("a\xD8\x9C"),  // U+061C
+           std::string("a\xE2\x80\x8E"),
+           std::string("a\xE2\x80\x8F"),  // U+200E/F
+           std::string("a\xE2\x80\xA8"),
+           std::string("a\xE2\x80\xA9"),  // U+2028/9
+           std::string("a\xE2\x80\xAA"),
+           std::string("a\xE2\x80\xAE"),  // U+202A, U+202E
+           std::string("a\xE2\x81\xA6"),
+           std::string("a\xE2\x81\xA9"),       // U+2066, U+2069
+           std::string("\xEF\xBB\xBF") + "a",  // U+FEFF
+           std::string("a\xEF\xBF\xB9"),
+           std::string("a\xEF\xBF\xBB"),  // U+FFF9, U+FFFB
+           std::string("a\xFF"),
+           std::string("a\xC3"),         // not UTF-8
+           std::string("\xC0\xAF"),      // overlong
+           std::string("\xED\xA0\x80"),  // a surrogate
            std::string("a\0b", 3),
        }) {
     SCOPED_TRACE(refused);
@@ -170,13 +181,13 @@ TEST(ProofreadProtocolTest, MalformedSuggestionsAreDroppedOneByOne) {
   // Escapes decode before the check, so they are refused like the raw characters.
   const auto parsed = proofread::ParseSelectRequest(
       R"({"kind":"select","start":1,"length":2,"reconvert":true,"suggestions":)"
-      R"(["ok",1,"",null,["x"],"a\nb","a‮b","a b","﻿a","good"]})");
+      R"(["ok",1,"",null,["x"],"a\nb","a\u202eb","a\u2028b","\ufeffa","a\u0085b","a\u2066b","good"]})");
   ASSERT_TRUE(parsed);
   EXPECT_TRUE(parsed->reconvert);
   EXPECT_EQ(parsed->suggestions, (std::vector<std::string>{"ok", "good"}));
-  const auto long_element = proofread::ParseSelectRequest(
-      R"({"kind":"select","start":1,"length":2,"suggestions":[")" + std::string(257, 'a') +
-      R"(","b"]})");
+  const auto long_element =
+      proofread::ParseSelectRequest(R"({"kind":"select","start":1,"length":2,"suggestions":[")" +
+                                    std::string(257, 'a') + R"(","b"]})");
   ASSERT_TRUE(long_element);
   EXPECT_EQ(long_element->suggestions, (std::vector<std::string>{"b"}));
   // Only the first kMaxSelectSuggestions valid ones are kept.
@@ -184,6 +195,10 @@ TEST(ProofreadProtocolTest, MalformedSuggestionsAreDroppedOneByOne) {
       R"({"kind":"select","start":1,"length":2,"suggestions":["1","2","3","4","5","6"]})");
   ASSERT_TRUE(many);
   EXPECT_EQ(many->suggestions, (std::vector<std::string>{"1", "2", "3", "4", "5"}));
+  // A string JSON cannot hold (an unpaired surrogate) makes the whole request unreadable, like
+  // any other malformed message.
+  EXPECT_FALSE(proofread::ParseSelectRequest(
+      R"({"kind":"select","start":1,"length":2,"suggestions":["a\ud800b"]})"));
   // Suggestions that are not an array read as none and keep the request.
   for (const char* json : {R"({"kind":"select","start":1,"length":2,"suggestions":"x"})",
                            R"({"kind":"select","start":1,"length":2,"suggestions":{"a":"x"}})",

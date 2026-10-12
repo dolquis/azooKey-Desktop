@@ -508,6 +508,20 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // The candidate window's click callback, without a window.
   void click_candidate_for_test(int idx) { OnCandidateClicked(idx); }
+  // The Host's answer for the open range, as the IPC worker posts it, then shown.
+  void deliver_reconversion_result_for_test(std::vector<std::wstring> candidates,
+                                            std::string reading = {}) {
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      reconversion_result_ = ReconversionResult{reconversion_generation_, reconversion_surface_,
+                                                std::move(candidates), std::move(reading)};
+    }
+    ShowReconversionResult();
+  }
+  std::vector<std::wstring> reconversion_cache_candidates_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return reconversion_cache_candidates_;
+  }
   void process_candidates_ready_for_test() { OnCandidatesReady(this); }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
@@ -1056,9 +1070,9 @@ class TextService final : public ITfTextInputProcessorEx,
   enum class ReconversionOrigin : uint8_t { Host, Suggestion };
   // What the open reconversion list offers, kept with reconversion_list_.
   // The vectors share the list's indices.
-  std::string reconversion_shown_reading_;                         // UI thread only
-  std::vector<std::wstring> reconversion_shown_candidates_;        // UI thread only
-  std::vector<ReconversionOrigin> reconversion_shown_origins_;     // UI thread only
+  std::string reconversion_shown_reading_;                      // UI thread only
+  std::vector<std::wstring> reconversion_shown_candidates_;     // UI thread only
+  std::vector<ReconversionOrigin> reconversion_shown_origins_;  // UI thread only
 
   void StartIpcWorker();
   void StopIpcWorker();

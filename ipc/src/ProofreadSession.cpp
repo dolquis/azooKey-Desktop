@@ -73,8 +73,7 @@ std::optional<char32_t> NextCodePoint(std::string_view text, std::size_t& pos) n
     if ((byte(pos + i) & 0xC0) != 0x80) return std::nullopt;
     code = (code << 6) | (byte(pos + i) & 0x3F);
   }
-  if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
-    return std::nullopt;
+  if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return std::nullopt;
   pos += length;
   return code;
 }

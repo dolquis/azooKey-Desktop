@@ -6836,8 +6836,8 @@ void TextService::RunPendingProofreadReconversion() {
   }
   // Rechecks a reading in progress, the privacy, and that the selection still
   // holds the same text.
-  const HRESULT hr = StartSelectionReconversion(pending.context.Get(), &pending.surface,
-                                                pending.range.Get(), std::move(pending.suggestions));
+  const HRESULT hr = StartSelectionReconversion(
+      pending.context.Get(), &pending.surface, pending.range.Get(), std::move(pending.suggestions));
   LogReconversion("proofread", hr == S_OK ? "started" : "not_started", hr);
 }
 
@@ -8015,14 +8015,41 @@ void TextService::ShowReconversionResult() {
     LogReconversion("show", reason, S_OK, result->candidates.size());
     return;
   }
-  if (result->candidates.empty()) {
+  // X-3-6: a batch correction finding's suggestions join as text after the
+  // Host's first candidate, so the default choice stays the Host's. One equal
+  // to the original or to a Host candidate is dropped and the Host's stays
+  // where it was. Only this list carries them; the cache keeps the Host's.
+  std::vector<std::wstring> values;
+  std::vector<ReconversionOrigin> origins;
+  {
+    const auto& host = result->candidates;
+    std::vector<std::wstring> suggestions;
+    for (const auto& suggestion : reconversion_suggestions_) {
+      if (suggestion.empty() || suggestion == result->surface ||
+          std::find(host.begin(), host.end(), suggestion) != host.end() ||
+          std::find(suggestions.begin(), suggestions.end(), suggestion) != suggestions.end())
+        continue;
+      suggestions.push_back(suggestion);
+    }
+    const size_t lead = host.empty() ? 0 : 1;
+    values.reserve(host.size() + suggestions.size());
+    values.insert(values.end(), host.begin(), host.begin() + lead);
+    origins.assign(lead, ReconversionOrigin::Host);
+    for (auto& suggestion : suggestions) {
+      values.push_back(std::move(suggestion));
+      origins.push_back(ReconversionOrigin::Suggestion);
+    }
+    values.insert(values.end(), host.begin() + lead, host.end());
+    origins.resize(values.size(), ReconversionOrigin::Host);
+  }
+  if (values.empty()) {
     LogReconversion("show", "empty_candidates");
     ClearReconversionState();
     return;
   }
   auto* function = new (std::nothrow) ReconversionFunction(
-      client_id_, [expected = result->surface, values = result->candidates](
-                      ITfRange*, const std::wstring& surface, std::vector<std::wstring>& out) {
+      client_id_, [expected = result->surface, values](ITfRange*, const std::wstring& surface,
+                                                       std::vector<std::wstring>& out) {
         if (surface != expected) return TF_E_NOCONVERSION;
         out = values;
         return S_OK;
@@ -8040,8 +8067,9 @@ void TextService::ShowReconversionResult() {
     return;
   }
   std::vector<CandidateViewItem> items;
-  items.reserve(result->candidates.size());
-  for (const auto& value : result->candidates) items.push_back({value, L""});
+  items.reserve(values.size());
+  // Plain text rows; a suggestion gets no description of its own.
+  for (const auto& value : values) items.push_back({value, L""});
   const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
@@ -8051,8 +8079,8 @@ void TextService::ShowReconversionResult() {
   }
   reconversion_list_ = list;
   reconversion_shown_reading_ = std::move(result->reading);
-  reconversion_shown_origins_.assign(result->candidates.size(), ReconversionOrigin::Host);
-  reconversion_shown_candidates_ = std::move(result->candidates);
+  reconversion_shown_origins_ = std::move(origins);
+  reconversion_shown_candidates_ = std::move(values);
   LogReconversion("show", "shown", S_OK, items.size());
 }
 

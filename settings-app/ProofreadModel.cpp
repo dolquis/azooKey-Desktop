@@ -98,8 +98,8 @@ std::vector<std::string> ProofreadSelectSuggestions(const std::wstring& text, ui
                                         nullptr, 0, nullptr, nullptr);
   if (bytes > 0) {
     original.resize(static_cast<size_t>(bytes));
-    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data() + start, units,
-                        original.data(), bytes, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data() + start, units, original.data(),
+                        bytes, nullptr, nullptr);
   }
   for (const auto& suggestion : suggestions) {
     if (selected.size() >= proofread::kMaxSelectSuggestions) break;

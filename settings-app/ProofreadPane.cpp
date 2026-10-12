@@ -223,8 +223,8 @@ winrt::fire_and_forget ProofreadPane::Check() {
         select.Content(winrt::box_value(after.GetString(L"Proofread_SelectButton")));
         SetId(select, L"ProofreadSelectButton_" + std::to_wstring(number));
         // Offered with the application's reconversion candidates, as text only (X-3-6).
-        auto suggestions = ProofreadSelectSuggestions(checked_text_, finding.start,
-                                                      finding.length, finding.suggestions);
+        auto suggestions = ProofreadSelectSuggestions(checked_text_, finding.start, finding.length,
+                                                      finding.suggestions);
         select.Click([weak = weak_from_this(), start = finding.start, length = finding.length,
                       suggestions = std::move(suggestions)](auto const&, auto const&) {
           const auto pane = weak.lock();

@@ -160,10 +160,8 @@ std::optional<proofread::DocumentMessage> ProofreadSessionClient::Open(std::stri
   return document;
 }
 
-std::optional<proofread::SelectResult> ProofreadSessionClient::Select(uint64_t start,
-                                                                      uint64_t length,
-                                                                      bool reconvert,
-                                                                      std::vector<std::string> suggestions) {
+std::optional<proofread::SelectResult> ProofreadSessionClient::Select(
+    uint64_t start, uint64_t length, bool reconvert, std::vector<std::string> suggestions) {
   std::lock_guard lock(mutex_);
   if (pipe_ == INVALID_HANDLE_VALUE) return std::nullopt;
   auto frame = proofread::EncodeFrame(

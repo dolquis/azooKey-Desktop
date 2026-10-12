@@ -156,7 +156,7 @@ TEST(ProofreadModelTest, SelectSuggestionsAreBoundedPlainTextOtherThanTheRange) 
             (std::vector<std::string>{"明日", "あした"}));
   // The range's own text, empty, oversized and control-carrying suggestions are not offered.
   EXPECT_EQ(ProofreadSelectSuggestions(
-                text, 3, 2, {"明目", "", std::string(257, 'a'), "a\nb", "a\xE2\x80\xAE" "b", "明日"}),
+                text, 3, 2, {"明目", "", std::string(257, 'a'), "a\nb", "a\xE2\x80\xAE", "明日"}),
             (std::vector<std::string>{"明日"}));
   EXPECT_EQ(ProofreadSelectSuggestions(text, 3, 2, {"1", "2", "3", "4", "5", "6"}),
             (std::vector<std::string>{"1", "2", "3", "4", "5"}));

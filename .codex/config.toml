@@ -14,7 +14,7 @@
 # workspace-write: リポジトリ内の書き込みは許可、外部ネットワークは別途許可
 sandbox_mode = "workspace-write"
 
-# 重要操作はユーザー承認を仰ぐ
+# sandbox 外の操作は必要に応じて承認する。承認済みの作業範囲は AGENTS.md に従う。
 approval_policy = "on-request"
 
 # ─────────────────────────────────────────────
@@ -26,31 +26,12 @@ approval_policy = "on-request"
 network_access = true
 
 # ─────────────────────────────────────────────
-# Windows ネイティブ実行時の設定
+# ホスト固有の設定
 # ─────────────────────────────────────────────
 
-# TIP 登録は別途管理者で実行する運用なので unelevated を維持
-[windows]
-sandbox = "unelevated"
-sandbox_private_desktop = true
-
-# ─────────────────────────────────────────────
-# MCP サーバー定義 (共有)
-# ─────────────────────────────────────────────
-
-# PowerShell.MCP: scripts/register-dev.ps1 等の管理者コマンドを安全に提示
-# command は Get-MCPProxyPath が返す PowerShell.MCP.Proxy.exe の絶対パスを
-# 環境変数 POWERSHELL_MCP_PROXY に設定して参照する (Windows 専用)。
-# 詳細は docs/handoff/agent-tooling-setup.md を参照。
-[mcp_servers.powershell]
-command = "${POWERSHELL_MCP_PROXY}"
-startup_timeout_sec = 30
-
-# Windows-MCP: UI Automation で TIP の実アプリ入力を検証 (Windows 専用)
-[mcp_servers.windows-mcp]
-command = "uvx"
-args = ["windows-mcp", "serve"]
-startup_timeout_sec = 30
+# Windows sandbox の方式と任意 MCP はユーザー設定で選ぶ。
+# この repo ではホストの選択を上書きせず、未導入の UI ツールを起動しない。
+# 設定例と移行手順: docs/handoff/agent-tooling-setup.md
 
 # ─────────────────────────────────────────────
 # サブエージェント (カスタム agent は .codex/agents/*.toml)

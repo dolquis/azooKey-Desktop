@@ -6,7 +6,7 @@
 
 - ユーザーの未コミット変更を勝手に戻さない。同じファイルで交差する場合は差分を確認し、最小限の編集にする。
 - 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。remote の進捗・PR のマージ判定・レビュー base の確定前には `git fetch origin` を行い、`main` と `origin/main`、作業ブランチと `origin/main` の差を切替なしで確認する。同じ取得済み snapshot 内のローカル検証では繰り返さず、別作業からの再開や remote 更新の通知後は再取得する。
-- secret、credential、token、`.env`、ローカル設定、生成物、Context-Mode の DB / cache、CodeGraph の index を編集、index、commit しない。
+- secret、credential、token、`.env` を編集、検索 index 化、commit しない。生成物、DB / cache、検索 index は手編集・commit せず、許可されたツールの通常実行による生成・更新と区別する。CodeGraph の新規 index 作成はユーザー判断とする。ローカル設定はユーザーが依頼した範囲で整備できるが、commit 対象にしない。
 - `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
 - フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
 - 実機確認、管理者権限、署名などの Human Gate を CI の成功で代替しない。
@@ -25,12 +25,13 @@
 
 - 不明点が結果を大きく変える場合は確認する。軽微な判断は既存実装、仕様、リポジトリの慣習に従う。
 - 確認前に依頼、承認済み会話、Issue、spec、ADR、既存契約を照合する。外部挙動、schema、受入条件を変える未決事項は具体案と影響を示して確認し、回答に依存しない作業は進める。契約内の実装や仕様へ戻す修正は根拠を示して続行する。
+- 承認済み範囲の調査・実装・検証と変更起因の修正は継続する。確認待ちや権限拒否では該当操作だけを保留し、独立した作業を進める。拒否された操作を別ツールや経路で迂回しない。
 - 非自明な変更では、編集前にスコープ、予定ファイル、検証方法、主なリスクを短く整理する。
 - 最小差分を基本とし、無関係なリファクタリング、整形、rename、メタデータ更新を混ぜない。
-- 文字列検索・局所編集は Read / Edit / `rg`、symbol の宣言・実装・参照・診断・rename・削除はファイル数によらず Serena を優先する。
+- 文字列検索・局所編集は Read / Edit / `rg` を使う。symbol の宣言・実装・参照・診断・rename・削除は、Serena が利用可能で有効な場合に優先し、軽微な検索だけのために初期化しない。
 - `.codegraph/` があり CodeGraph が利用可能で、構造や影響範囲が不明なら先に使う。結果は実ファイルとテストで確認する。
-- Serena は初回に `initial_instructions` → `get_current_config` で対象の絶対パス・言語を確認する。未表示なら利用可能なツール探索で確認し、使えない場合は `rg`・実ファイル・関連テストで代替する。一時 worktree / checkout は登録しない。
-- Context-Mode が利用可能なら大量の文書・検索結果・diff・ログの整理に使い、symbol 解析は Serena に任せる。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
+- Serena を使う場合は初回に `initial_instructions` → `get_current_config` で対象の絶対パス・言語を確認する。未表示なら利用可能なツール探索で確認し、使えない場合は `rg`・実ファイル・関連テストで代替する。一時 worktree / checkout は登録しない。
+- Context-Mode が利用可能で有効なら大量の文書・検索結果・diff・ログの整理に使う。利用不能なら範囲を絞った実ファイル・diff の確認へ切り替える。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
 - 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
 - GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
 
@@ -43,6 +44,7 @@
 ## セルフレビューと PR
 
 - リポジトリ内ファイルを変更したら、利用可能な場合は、最終報告、stage、commit、push、PR 作成または更新の前に `pre-pr-self-review` を使う。
+- 同一の差分・base・検証条件に対するレビューとテスト結果は再利用し、編集や条件変更があれば影響範囲を再確認する。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テスト、高リスク変更は独立レビューを加える。判断基準と利用不能時の代替は `docs/handoff/agent-orchestration.md` に従う。
 - Skill の利用可否にかかわらず、レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまでとし、未追跡ファイルも確認する。既存 PR やユーザーが別 base を指定した場合はそれに従う。
 - push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。
 - 変更起因または変更範囲内の問題は修正して検証を再実行する。無関係な既存問題は勝手に直さず、必要なら Linear へ記録する。
@@ -59,7 +61,7 @@
 
 ## Skill の配置
 
-- Claude Code は `.claude/skills/`、Codex は `.agents/skills/` を読む。共有 Skill は `dolquis/agent-ops` を正典とし、product repo では直接改訂せずベンダリングする。
+- Claude Code は `.claude/skills/`、Codex は `.agents/skills/` を読む。同名 Skill は repo 内を優先し、無い場合に global 配置へフォールバックする。共有 Skill は `dolquis/agent-ops` を正典とし、product repo では直接改訂せずベンダリングする。
 - 両ツリーは本文と `references/` を同期し、ハーネス固有 frontmatter だけ差異を許す。`doc-coauthoring` などの Claude 専用 Skill は `.claude/skills/` のみに置く。
 - Skill の区分、origin、取り込み revision は `.claude/skills/MANIFEST.md` が正典。repo 固有 Skill の routing 表は `scripts/check_skill_references.py` が実体と突合する。
 - ベンダリングした共有 Skill の本文・`references/` と、`scripts/docs-lint.py`、`scripts/check_agent_instruction_size.py`、そのテスト、`.claude/hooks/post-edit-docs-lint.py` をこの repo で編集しない。repo 側の編集は silent fork になる。変更は origin で行い配布し直す。`.docs-lint.toml` と `.docs-lint-baseline.json` はこの repo が持つ。

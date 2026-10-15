@@ -3,9 +3,8 @@
 
 Claude Code reads `.claude/agents/<name>.md` (YAML frontmatter + Markdown body)
 and Codex reads `.codex/agents/<name>.toml` (`developer_instructions`). Both are
-supposed to carry the same instructions, and a read-only agent is supposed to be
-read-only on both sides. Nothing enforces either when one file is edited without
-the other, so this script does:
+supposed to carry the same role instructions. This static check does not prove
+runtime permissions or compliance with those instructions. It checks:
 
 - every agent file appears in the manifest and every manifest row has a file;
 - for `repo` agents the pair exists, `name` matches the file name on both
@@ -13,14 +12,17 @@ the other, so this script does:
   below the frontmatter vs. Codex `developer_instructions`, both stripped);
 - the manifest's 権限 column is honoured: `read-only` needs Claude
   `disallowedTools` (Edit, Write, NotebookEdit) plus a `hooks.PreToolUse` entry
-  on `Bash` that runs `agent-readonly-guard.py`, and Codex
-  `sandbox_mode = "read-only"`; `build-write` needs the Claude `disallowedTools`
-  and Codex `workspace-write`; every `repo` agent lists its `tools` explicitly
+  on `Bash` that runs `agent-readonly-guard.py`; `build-write` needs the Claude
+  `disallowedTools`; every `repo` Claude agent lists its `tools` explicitly
   and leaves `Agent` out, so it cannot spawn subagents;
 - back-quoted repository paths in `repo` bodies exist, and back-quoted tokens
   that look like repo-owned Skill names (`azookey-*`, `tsf-*`) are Skills;
-- `.codex/config.toml` and every `.codex/agents/*.toml` parse, and
-  `[agents].enabled` is not `false`.
+- `.codex/config.toml` and every `.codex/agents/*.toml` parse; required agent
+  strings and selected config types are valid. Ineffective custom-agent session
+  overrides are rejected. `agents.enabled = false` permits parent-only fallback.
+
+Codex agents inherit sandbox and approval settings from the parent turn. This
+is a targeted repository check, not a complete Codex schema validator.
 
 `shared` agents are distributed from `dolquis/agent-ops`; only the Claude-side
 file is required and its body is not compared, because a finding there could
@@ -59,6 +61,10 @@ GUARD_HOOK_NAME = "agent-readonly-guard.py"
 REQUIRED_DISALLOWED_TOOLS = ("Edit", "Write", "NotebookEdit")
 PERMISSIONS = ("read-only", "build-write")
 CLASSIFICATIONS = ("shared", "repo")
+CODEX_AGENT_SESSION_KEYS = (
+    "sandbox_mode", "sandbox_workspace_write", "approval_policy", "windows",
+    "model_provider", "mcp_servers", "sandbox_private_desktop",
+)
 
 MANIFEST_ROW_PATTERN = re.compile(
     r"^\|\s*`([^`]+)`\s*\|\s*([a-z-]+)\s*\|[^|]*\|[^|]*\|\s*([a-z-]+)"
@@ -197,6 +203,21 @@ def check_references(body: str, relative: str, repo_root: Path, paths_module) ->
     return problems
 
 
+def check_codex_agent(codex: dict, relative: str) -> list[str]:
+    """Check required strings and known ineffective session overrides offline."""
+    problems: list[str] = []
+    for key in ("name", "description", "developer_instructions"):
+        if not isinstance(codex.get(key), str) or not codex[key].strip():
+            problems.append(f"{relative}: {key} は空でない文字列が必要")
+    for key in ("model", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity"):
+        if key in codex and (not isinstance(codex[key], str) or not codex[key].strip()):
+            problems.append(f"{relative}: {key} は空でない文字列が必要")
+    for key in CODEX_AGENT_SESSION_KEYS:
+        if key in codex:
+            problems.append(f"{relative}: {key} は custom agent で上書きできない（親の設定を継承）")
+    return problems
+
+
 def check_pair(
     name: str,
     permission: str,
@@ -222,6 +243,7 @@ def check_pair(
     except tomllib.TOMLDecodeError as error:
         return [f"{codex_rel}: TOML として parse できない: {error}"]
 
+    problems.extend(check_codex_agent(codex, codex_rel))
     if str(frontmatter.get("name", "")).strip() != name:
         problems.append(f"{claude_rel}: frontmatter の name がファイル名 `{name}` と違う")
     if codex.get("name") != name:
@@ -244,17 +266,11 @@ def check_pair(
     missing = [tool for tool in REQUIRED_DISALLOWED_TOOLS if tool not in disallowed]
     if missing:
         problems.append(f"{claude_rel}: disallowedTools に {', '.join(missing)} が無い")
-    sandbox = codex.get("sandbox_mode")
     if permission == "read-only":
         if not declares_guard_hook(frontmatter):
             problems.append(
                 f"{claude_rel}: hooks.PreToolUse（matcher Bash、{GUARD_HOOK_NAME}）が無い"
             )
-        if sandbox != "read-only":
-            problems.append(f"{codex_rel}: sandbox_mode が read-only ではない（{sandbox!r}）")
-    elif permission == "build-write":
-        if sandbox != "workspace-write":
-            problems.append(f"{codex_rel}: sandbox_mode が workspace-write ではない（{sandbox!r}）")
 
     problems.extend(check_references(claude_body, claude_rel, repo_root, paths_module))
     return problems
@@ -268,10 +284,28 @@ def check_codex_config(repo_root: Path) -> list[str]:
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
         return [f"{CODEX_CONFIG_PATH}: TOML として parse できない: {error}"]
+    problems: list[str] = []
     agents = config.get("agents", {})
-    if isinstance(agents, dict) and agents.get("enabled") is False:
-        return [f"{CODEX_CONFIG_PATH}: [agents].enabled = false は subagent を無効化する"]
-    return []
+    if not isinstance(agents, dict):
+        problems.append(f"{CODEX_CONFIG_PATH}: agents は table が必要")
+    else:
+        for key in ("enabled", "interrupt_message"):
+            if key in agents and type(agents[key]) is not bool:
+                problems.append(f"{CODEX_CONFIG_PATH}: [agents].{key} は boolean が必要")
+        for key in ("max_concurrent_threads_per_session", "max_threads"):
+            if key in agents and (type(agents[key]) is not int or agents[key] < 1):
+                problems.append(f"{CODEX_CONFIG_PATH}: [agents].{key} は正の整数が必要")
+        for key in ("default_subagent_model", "default_subagent_reasoning_effort"):
+            if key in agents and (not isinstance(agents[key], str) or not agents[key].strip()):
+                problems.append(f"{CODEX_CONFIG_PATH}: [agents].{key} は空でない文字列が必要")
+    windows = config.get("windows", {})
+    if not isinstance(windows, dict):
+        problems.append(f"{CODEX_CONFIG_PATH}: windows は table が必要")
+    elif "sandbox_private_desktop" in windows:
+        problems.append(f"{CODEX_CONFIG_PATH}: [windows].sandbox_private_desktop は未対応の設定")
+    if "sandbox_private_desktop" in config:
+        problems.append(f"{CODEX_CONFIG_PATH}: sandbox_private_desktop は未対応の設定")
+    return problems
 
 
 def check(repo_root: Path) -> list[str]:
@@ -309,6 +343,7 @@ def check(repo_root: Path) -> list[str]:
                     continue
                 if codex.get("name") != name:
                     problems.append(f"{codex_path.relative_to(repo_root).as_posix()}: name がファイル名 `{name}` と違う")
+                problems.extend(check_codex_agent(codex, codex_path.relative_to(repo_root).as_posix()))
             continue
         codex_path = codex_dir / f"{name}.toml"
         if not codex_path.exists():
@@ -337,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         print(
-            "\nClaude / Codex の本文と権限を揃えるか、"
+            "\nClaude / Codex の本文・設定を確認するか、"
             f"{MANIFEST_RELATIVE_PATH} の区分・権限を見直してください。",
             file=sys.stderr,
         )

@@ -7,10 +7,9 @@
 name = "windows-build-runner"
 description = "Windows CMake / Ninja / MSVC の configure、build、CTest、bench を実行し、終了コード、失敗した target / CTest 名、重要 warning、ログの根拠位置だけを親へ返す実行専任 agent。長いビルドログを親のコンテキストから隔離したいとき、diff-auditor や pre-pr-self-review が要求する build / test ゲートを回すときに使う。ソース編集、git 操作、TIP 登録、署名は行わない。"
 
-# build directory への書き込みが必要なため workspace-write。ソース編集の禁止は
-# developer_instructions で担保し、git / TIP 登録 / 管理者操作は親と人間に返す。
-# MANIFEST.md の allowlist に登録した意図的な非対称（read-only ではない）。
-sandbox_mode = "workspace-write"
+# sandbox / approval は親ターンから継承し、このファイルでは上書きできない。
+# build directory だけに書く境界は本文の役割上の制約であり、OS の書込み制限ではない。
+# 親の実効権限で build を実行できない場合は親へ返す。
 
 developer_instructions = '''
 # Windows ビルド実行（build / test 専任）

@@ -579,6 +579,12 @@ struct StartupBackendSelectionCase {
   bool cli_override;
 };
 
+// GoogleTest's default struct printer includes pointer addresses and padding,
+// which makes independently discovered coverage shard inventories differ.
+void PrintTo(const StartupBackendSelectionCase& scenario, std::ostream* output) {
+  *output << scenario.name;
+}
+
 class StartupBackendSelectionTest
     : public HostProcessTest,
       public ::testing::WithParamInterface<StartupBackendSelectionCase> {};

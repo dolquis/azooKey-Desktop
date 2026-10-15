@@ -159,8 +159,9 @@ class HostProcessTest : public ::testing::Test {
     if (HasFailure()) std::cerr << "Host log:\n" << ReadLog(directory_.root / "host.log");
   }
 
-  bool StartHost() {
-    const auto args = CommonArgs();
+  bool StartHost(const std::vector<std::wstring>& extra_args = {}) {
+    auto args = CommonArgs();
+    args.insert(args.end(), extra_args.begin(), extra_args.end());
     // The Ctrl+C ignore attribute is inherited, including across a new console.
     if (!SetConsoleCtrlHandler(nullptr, FALSE)) return false;
     if (!host_.Start(host_executable_, args, CREATE_NEW_CONSOLE, directory_.root / "host.log"))
@@ -569,6 +570,73 @@ class HostProcessTest : public ::testing::Test {
   std::string pipe_name_;
   std::string token_;
 };
+
+struct StartupBackendSelectionCase {
+  const char* name;
+  const char* preference;
+  const char* source;
+  bool safe_mode;
+  bool cli_override;
+};
+
+class StartupBackendSelectionTest
+    : public HostProcessTest,
+      public ::testing::WithParamInterface<StartupBackendSelectionCase> {};
+
+TEST_P(StartupBackendSelectionTest, ReportsStartupDecisionThroughRealHostPipe) {
+  const auto& scenario = GetParam();
+  ASSERT_TRUE(directory_.root.is_absolute());
+  std::filesystem::create_directories(directory_.root / "config");
+  {
+    std::ofstream settings(directory_.root / "config" / "settings.json");
+    settings << R"({"model":{"enabled":false},"backendPreference":")" << scenario.preference
+             << R"(","safeMode":{"enabled":)" << (scenario.safe_mode ? "true" : "false") << "}}";
+    ASSERT_TRUE(settings.good());
+  }
+  ASSERT_TRUE(StartHost(scenario.cli_override ? std::vector<std::wstring>{L"--backend", L"cpu"}
+                                              : std::vector<std::wstring>{}));
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectLearningClient(&client));
+  azookey::ipc::Envelope request;
+  request.request_id = 2;
+  request.trace_id = "startup-backend-selection";
+  request.type = azookey::ipc::MessageType::QueryDiagnostics;
+  request.payload_json = "{}";
+  ASSERT_TRUE(client.Send(request));
+  const auto response = client.ReceiveWithTimeout(2000);
+  ASSERT_TRUE(response);
+  const auto parsed = azookey::ipc::ParseQueryDiagnostics(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->backend_selection);
+  EXPECT_FALSE(parsed->model_loaded);
+  EXPECT_EQ(parsed->backend, "cpu");
+  const auto& selection = *parsed->backend_selection;
+  EXPECT_EQ(selection.source, scenario.source);
+  EXPECT_FALSE(selection.reason.empty());
+  EXPECT_FALSE(selection.auto_backend.empty());
+  if (scenario.safe_mode) {
+    EXPECT_EQ(parsed->fallback_state, "safe_mode");
+    EXPECT_EQ(selection.auto_backend, "cpu");
+    EXPECT_EQ(selection.reason, "safe_mode");
+    EXPECT_FALSE(selection.adapters_known);
+    EXPECT_EQ(selection.hw_gpu_count, 0u);
+    EXPECT_EQ(selection.hw_ml_only_count, 0u);
+    EXPECT_FALSE(selection.vulkan_loader);
+    EXPECT_FALSE(selection.cuda_runtime);
+    EXPECT_EQ(selection.os_build, 0u);
+    EXPECT_FALSE(selection.winml_os_eligible);
+    EXPECT_FALSE(selection.on_battery);
+  }
+  client.Disconnect();
+  EXPECT_TRUE(StopHost(CTRL_BREAK_EVENT));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Startup, StartupBackendSelectionTest,
+    ::testing::Values(StartupBackendSelectionCase{"Auto", "auto", "auto", false, false},
+                      StartupBackendSelectionCase{"Settings", "cpu", "settings", false, false},
+                      StartupBackendSelectionCase{"Cli", "cpu", "cli", false, true},
+                      StartupBackendSelectionCase{"SafeMode", "auto", "auto", true, false}),
+    [](const auto& info) { return info.param.name; });
 
 TEST_F(HostProcessTest, ConcurrentIpcAndOfflineUserDictAddsPreserveAllEntries) {
   ASSERT_TRUE(StartHost()) << "Host failed to listen (exit=" << host_.ExitCode() << ")";

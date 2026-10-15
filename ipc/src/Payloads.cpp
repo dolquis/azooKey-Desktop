@@ -265,10 +265,53 @@ std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p) {
     if (p.neologd_layer->reason) layer.emplace("reason", j::Value(*p.neologd_layer->reason));
     o.emplace("neologd_layer", j::Value(std::move(layer)));
   }
+  if (p.backend_selection) {
+    const auto& s = *p.backend_selection;
+    j::Object selection;
+    selection.emplace("source", j::Value(s.source));
+    selection.emplace("auto_backend", j::Value(s.auto_backend));
+    selection.emplace("reason", j::Value(s.reason));
+    selection.emplace("adapters_known", j::Value(s.adapters_known));
+    selection.emplace("hw_gpu_count", j::Value(s.hw_gpu_count));
+    selection.emplace("hw_ml_only_count", j::Value(s.hw_ml_only_count));
+    selection.emplace("vulkan_loader", j::Value(s.vulkan_loader));
+    selection.emplace("cuda_runtime", j::Value(s.cuda_runtime));
+    selection.emplace("os_build", j::Value(static_cast<uint64_t>(s.os_build)));
+    selection.emplace("winml_os_eligible", j::Value(s.winml_os_eligible));
+    selection.emplace("on_battery", j::Value(s.on_battery));
+    o.emplace("backend_selection", j::Value(std::move(selection)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
 namespace {
+
+std::optional<BackendSelectionDiagnostics> BackendSelectionFromJson(const j::Value& v) {
+  const auto* object = v.FindObject("backend_selection");
+  if (!object) return std::nullopt;
+  const j::Value s(*object);
+  const auto source = s.GetString("source");
+  const auto backend = s.GetString("auto_backend");
+  const auto reason = s.GetString("reason");
+  const auto adapters = s.GetBool("adapters_known");
+  const auto gpu_count = s.GetUInt("hw_gpu_count");
+  const auto ml_count = s.GetUInt("hw_ml_only_count");
+  const auto vulkan = s.GetBool("vulkan_loader");
+  const auto cuda = s.GetBool("cuda_runtime");
+  const auto os_build = s.GetUInt("os_build");
+  const auto eligible = s.GetBool("winml_os_eligible");
+  const auto battery = s.GetBool("on_battery");
+  // Informational extension: malformed values omit only this object, keeping
+  // the existing v1 diagnostics usable. Unknown future keys are ignored.
+  if (!source || !backend || !reason || !adapters || !gpu_count || !ml_count || !vulkan || !cuda ||
+      !os_build || *os_build > UINT32_MAX || !eligible || !battery) {
+    return std::nullopt;
+  }
+  return BackendSelectionDiagnostics{*source,   *backend,   *reason,
+                                     *adapters, *gpu_count, *ml_count,
+                                     *vulkan,   *cuda,      static_cast<uint32_t>(*os_build),
+                                     *eligible, *battery};
+}
 
 bool IsNeologdLayerState(std::string_view state) {
   return state == kNeologdLayerNotRequested || state == kNeologdLayerLoading ||
@@ -314,6 +357,7 @@ std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& 
   p.fallback_state = *fallback_state;
   p.last_error = v->GetString("last_error");
   p.neologd_layer = NeologdLayerFromJson(*v);
+  p.backend_selection = BackendSelectionFromJson(*v);
   return p;
 }
 

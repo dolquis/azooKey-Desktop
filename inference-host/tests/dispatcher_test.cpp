@@ -2691,6 +2691,41 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_EQ(parsed->fallback_state, "healthy");
   // No layer state was injected, so the field is left out.
   EXPECT_FALSE(parsed->neologd_layer.has_value());
+  EXPECT_FALSE(parsed->backend_selection.has_value());
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsPreservesStartupBackendSelectionAcrossConnections) {
+  auto config = DefaultDispatcherConfig();
+  config.backend_selection = ipc::BackendSelectionDiagnostics{
+      "cli", "vulkan", "vulkan_candidate", true, 1, 2, true, false, 26100, true, false};
+  auto current_auto = azookey::host::BackendKind::Vulkan;
+  config.auto_backend = [&current_auto] { return current_auto; };
+  azookey::host::Dispatcher first(&engine, &scheduler, &user_dict, config);
+  azookey::host::Dispatcher second(&engine, &scheduler, &user_dict, config);
+  // Changing the live auto backend must not rewrite the startup explanation.
+  current_auto = azookey::host::BackendKind::Cpu;
+  for (auto* connection : {&first, &second}) {
+    const auto response =
+        connection->Dispatch(MakeReq(702, ipc::MessageType::QueryDiagnostics, "{}"));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+    ASSERT_TRUE(parsed && parsed->backend_selection);
+    EXPECT_EQ(parsed->backend, "cpu");
+    EXPECT_EQ(parsed->fallback_state, "healthy");
+    EXPECT_EQ(parsed->backend_selection->source, "cli");
+    EXPECT_EQ(parsed->backend_selection->auto_backend, "vulkan");
+    EXPECT_EQ(parsed->backend_selection->reason, "vulkan_candidate");
+    EXPECT_EQ(parsed->backend_selection->hw_gpu_count, 1u);
+    EXPECT_EQ(parsed->backend_selection->hw_ml_only_count, 2u);
+    EXPECT_EQ(parsed->backend_selection->os_build, 26100u);
+    const auto health = connection->Dispatch(MakeReq(703, ipc::MessageType::Health, "{}"));
+    ASSERT_TRUE(health);
+    const auto parsed_health = ipc::ParseHealth(health->payload_json);
+    ASSERT_TRUE(parsed_health);
+    EXPECT_EQ(parsed_health->status, "ok");
+    EXPECT_EQ(parsed_health->backend, "cpu");
+    EXPECT_EQ(health->payload_json.find("backend_selection"), std::string::npos);
+  }
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsTheNeologdLayerState) {

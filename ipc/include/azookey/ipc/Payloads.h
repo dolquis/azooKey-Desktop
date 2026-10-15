@@ -70,6 +70,22 @@ struct NeologdLayerStatus {
   std::optional<std::string> reason;
 };
 
+// Startup BackendSelector snapshot. Only fixed classification names and
+// non-identifying facts; never adapter names, paths, or free-form errors.
+struct BackendSelectionDiagnostics {
+  std::string source;  // "cli" | "settings" | "auto"
+  std::string auto_backend;
+  std::string reason;
+  bool adapters_known{false};
+  uint64_t hw_gpu_count{};
+  uint64_t hw_ml_only_count{};
+  bool vulkan_loader{false};
+  bool cuda_runtime{false};
+  uint32_t os_build{};  // 0 when unknown (including skipped SafeMode probes).
+  bool winml_os_eligible{false};
+  bool on_battery{false};
+};
+
 struct QueryDiagnosticsPayload {
   bool model_loaded{false};
   std::optional<std::string> loaded_model_path;
@@ -85,6 +101,8 @@ struct QueryDiagnosticsPayload {
   std::optional<std::string> last_error;
   // Protocol v1 additive field (DEV-1534). Absent from Hosts that predate it.
   std::optional<NeologdLayerStatus> neologd_layer;
+  // Protocol v1 additive field. Absent from Hosts that predate it.
+  std::optional<BackendSelectionDiagnostics> backend_selection;
 };
 
 struct LoadModelRequest {

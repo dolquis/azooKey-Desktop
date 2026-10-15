@@ -876,6 +876,86 @@ TEST(PayloadsTest, QueryDiagnosticsDefaultsMissingCounters) {
   EXPECT_EQ(parsed->rss_mb, 0);
   EXPECT_EQ(parsed->learning_entries, 0);
   EXPECT_EQ(parsed->user_dict_entries, 0);
+  EXPECT_FALSE(parsed->backend_selection);
+}
+
+TEST(PayloadsTest, QueryDiagnosticsBackendSelectionRoundTripsWithoutChangingLoadedBackend) {
+  using namespace azookey::ipc;
+  QueryDiagnosticsPayload payload;
+  payload.engine = "llama_cpp";
+  payload.backend = "cpu";
+  payload.fallback_state = "degraded_model";
+  EXPECT_FALSE(json::Parse(BuildQueryDiagnostics(payload))->Find("backend_selection"));
+  payload.backend_selection = BackendSelectionDiagnostics{
+      "settings", "vulkan", "vulkan_candidate", true, 2, 1, true, false, 26100, true, false};
+  const auto parsed = ParseQueryDiagnostics(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(parsed && parsed->backend_selection);
+  EXPECT_EQ(parsed->backend, "cpu");
+  EXPECT_EQ(parsed->fallback_state, "degraded_model");
+  const auto& selection = *parsed->backend_selection;
+  EXPECT_EQ(selection.source, "settings");
+  EXPECT_EQ(selection.auto_backend, "vulkan");
+  EXPECT_EQ(selection.reason, "vulkan_candidate");
+  EXPECT_TRUE(selection.adapters_known);
+  EXPECT_EQ(selection.hw_gpu_count, 2u);
+  EXPECT_EQ(selection.hw_ml_only_count, 1u);
+  EXPECT_TRUE(selection.vulkan_loader);
+  EXPECT_FALSE(selection.cuda_runtime);
+  EXPECT_EQ(selection.os_build, 26100u);
+  EXPECT_TRUE(selection.winml_os_eligible);
+  EXPECT_FALSE(selection.on_battery);
+}
+
+TEST(PayloadsTest, QueryDiagnosticsIgnoresMalformedBackendSelectionOnly) {
+  using namespace azookey::ipc;
+  QueryDiagnosticsPayload payload;
+  payload.engine = "mock";
+  payload.backend = "cpu";
+  payload.fallback_state = "healthy";
+  payload.backend_selection = BackendSelectionDiagnostics{
+      "auto", "cpu", "safe_mode", false, 0, 0, false, false, 0, false, false};
+  const auto valid = json::Parse(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(valid);
+  const auto selection = *valid->FindObject("backend_selection");
+  const auto parse_selection = [&](json::Value value) {
+    auto object = valid->AsObject();
+    object["backend_selection"] = std::move(value);
+    return ParseQueryDiagnostics(json::Stringify(json::Value(std::move(object))));
+  };
+  for (const auto& [key, value] : selection) {
+    auto missing = selection;
+    missing.erase(key);
+    const auto parsed_missing = parse_selection(json::Value(std::move(missing)));
+    ASSERT_TRUE(parsed_missing) << key;
+    EXPECT_FALSE(parsed_missing->backend_selection) << key;
+    auto wrong_type = selection;
+    wrong_type[key] = json::Value(json::Null{});
+    const auto parsed_wrong = parse_selection(json::Value(std::move(wrong_type)));
+    ASSERT_TRUE(parsed_wrong) << key;
+    EXPECT_FALSE(parsed_wrong->backend_selection) << key;
+  }
+  for (const auto& invalid : {json::Value("cpu"), json::Value(json::Null{})}) {
+    const auto parsed = parse_selection(invalid);
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->backend_selection);
+  }
+  for (const auto& key : {"hw_gpu_count", "hw_ml_only_count", "os_build"}) {
+    auto negative = selection;
+    negative[key] = json::Value(-1);
+    const auto parsed = parse_selection(json::Value(std::move(negative)));
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->backend_selection);
+  }
+  auto overflow = selection;
+  overflow["os_build"] = json::Value(uint64_t{UINT32_MAX} + 1);
+  const auto parsed_overflow = parse_selection(json::Value(std::move(overflow)));
+  ASSERT_TRUE(parsed_overflow);
+  EXPECT_FALSE(parsed_overflow->backend_selection);
+  auto future = selection;
+  future["future_key"] = json::Value(true);
+  const auto parsed_future = parse_selection(json::Value(std::move(future)));
+  ASSERT_TRUE(parsed_future && parsed_future->backend_selection);
+  EXPECT_EQ(parsed_future->backend_selection->reason, "safe_mode");
 }
 
 // DEV-1534: neologd_layer is a protocol v1 additive field, so a Host that

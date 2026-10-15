@@ -733,10 +733,16 @@ OFF のまま）。
   この検査を CI のどのジョブで走らせるかを定義する。
 - agent 定義の突合 — `.claude/agents/MANIFEST.md` が区分 `repo` としたカスタム agent は、
   `.claude/agents/<name>.md` と `.codex/agents/<name>.toml` で `name`・`description`・本文を
-  一致させ、権限列（`read-only` / `build-write`）に応じた `disallowedTools` と
-  `hooks.PreToolUse`、`sandbox_mode` を両側で持つ。`scripts/check_agent_definitions.py` が
-  `docs-lint` ジョブで検査し、`.codex/config.toml` の parse と `[agents].enabled` も確認する。
-  `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
+  一致させ、権限列（`read-only` / `build-write`）を役割上の書込み境界として扱う。
+  Claude 側は `disallowedTools` と read-only の `hooks.PreToolUse` で制限し、Codex 側は
+  親の sandbox と承認設定を継承する。`scripts/check_agent_definitions.py` が `docs-lint`
+  ジョブで本文・型・既知の無効な override を検査する。全 schema や実効権限の検査ではない。
+  `[agents].enabled = false` は親による代替実行を許す有効な設定とする。
+  Claude の `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
+- Codex の限定 push — `scripts/codex_push.py` は指定 branch と送信先を検査し、明示した
+  commit と宛先 ref だけを送る。利用条件は `docs/handoff/agent-tooling-setup.md` が定義する。
+  `docs-lint` ジョブで `scripts/tests/test_codex_push.py` を実行し、保護対象や曖昧な送信先の拒否、
+  送信範囲の固定を外部 push なしで検査する。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の

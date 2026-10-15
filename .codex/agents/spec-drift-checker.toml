@@ -7,9 +7,9 @@
 name = "spec-drift-checker"
 description = "変更した C++ シンボル、IPC payload フィールド、設定キー、テスト名を docs/*-spec.md、ipc/include/azookey/ipc/Payloads.h、settings/*.schema.json、docs/test-inventory.md と突き合わせ、spec 側で失効した記述と更新漏れを列挙する read-only agent。実装 PR の Draft 作成前、spec を伴う機能変更の最終報告前に使う。修正は行わず親へ返す。typo や 1 行の可逆な修正、docs だけの変更には使わない。"
 
-# read-only は sandbox が OS レベルで強制する。Claude 側は disallowedTools と
-# hooks.PreToolUse（agent-readonly-guard.py）で同じ境界を担保する。
-sandbox_mode = "read-only"
+# sandbox / approval は親ターンから継承し、このファイルでは上書きできない。
+# read-only は本文の役割上の制約であり、独立した OS sandbox ではない。
+# Claude 側の disallowedTools / hooks.PreToolUse はハーネス固有の制御として維持する。
 
 developer_instructions = '''
 # spec と実装の乖離検出（read-only）

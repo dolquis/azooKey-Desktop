@@ -7,7 +7,7 @@
 ## 設定の正典
 
 - Claude Code の repo MCP は `.mcp.json`、プラグインと permissions は `.claude/settings.json`、カスタム agent は `.claude/agents/*.md` が定義する。`git push` は ask ルールではなく `.claude/settings.json` の PreToolUse hook（`.claude/hooks/git-push-guard.py`）が検査し、push 先が `dolquis/` 配下の remote で保護 branch と削除を含まないときだけ承認なしで通す。判定の詳細は hook の docstring が正典である。
-- Codex の repo 固有 sandbox、MCP、`[agents]` は `.codex/config.toml`、カスタム agent は `.codex/agents/*.toml`、コマンドの実行ポリシー（execpolicy）は `.codex/rules/*.rules`、lifecycle hooks は `.codex/hooks.json` が定義する。いずれも project の `.codex/` 層を trust したときだけ読み込まれる。`.codex/hooks/` の adapter は `.claude/hooks/` のベンダリング hook を Codex の入力形式へ橋渡しする薄い層であり、検査本体は共有 hook が持つ。repo 固有 agent は両ディレクトリで本文を同期し、ハーネス固有の frontmatter / TOML キーだけ差異を許す。
+- Codex の repo 共通 sandbox と `[agents]` は `.codex/config.toml`、カスタム agent は `.codex/agents/*.toml`、コマンドの実行ポリシー（execpolicy）は `.codex/rules/*.rules`、lifecycle hooks は `.codex/hooks.json` が定義する。いずれも project の `.codex/` 層を trust したときだけ読み込まれる。Windows sandbox の方式と任意 MCP はユーザー設定で選び、repo から上書きしない。`.codex/hooks/` は共有 hook への adapter を持つ。repo 固有 agent の本文は両ハーネスで同期するが、権限の強制方法は `.claude/agents/MANIFEST.md` に従う。
 - Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。Context7 が利用できない場合、Microsoft API は Microsoft Learn の公式リファレンスを優先する。
 - Skill の配置とミラー規則は `AGENTS.md`「Skill の配置」に従う。
 
@@ -17,19 +17,30 @@
 ## ホスト側の前提
 
 - PowerShell 7+
-- PowerShell.MCP（machine-wide 操作を共有コンソールへ提示するため）
-- `uv` と `uvx`（`windows-mcp` の起動に必要）
+- PowerShell.MCP（machine-wide 操作を共有コンソールへ提示するときだけ必要）
+- `uv` と `uvx`（任意の `windows-mcp` を使う場合に必要）
 - `clangd.exe`（Claude Code の `clangd-lsp` プラグインに必要）
 - Windows CMake / Ninja / MSVC を使う Visual Studio C++ toolchain
 - 任意の補助コマンドとして `just`
 
-PowerShell.MCP は PowerShell 7 で次のように導入し、`Get-MCPProxyPath` が返す proxy の絶対パスをユーザー環境変数 `POWERSHELL_MCP_PROXY` に設定する。
+PowerShell.MCP を使う場合は PowerShell 7 で導入する。Claude Code の MCP 設定には `Get-MCPProxyPath` が返す proxy の絶対パスをユーザー環境変数 `POWERSHELL_MCP_PROXY` で渡す。
 
 ```powershell
 Install-PSResource PowerShell.MCP
 [Environment]::SetEnvironmentVariable(
   'POWERSHELL_MCP_PROXY', (Get-MCPProxyPath), 'User')
 ```
+
+Codex では、必要なサーバーだけをユーザー設定へ登録する。repo 設定から移す場合も、既存のユーザー設定や plugin に同じサーバーがあれば重複登録しない。proxy は環境変数展開に依存せず、解決したパスを渡す。
+
+```powershell
+codex mcp add powershell -- (Get-MCPProxyPath)
+codex mcp add windows-mcp -- uvx windows-mcp serve
+```
+
+任意の MCP が未導入でも通常の調査・実装を継続する。接続確認はそのツールが必要なときに行う。登録操作はユーザー設定を変更するため、依頼されたセットアップの範囲でだけ実施する。
+
+Windows sandbox はホストの対応状況と managed policy に従い、[公式手順](https://learn.chatgpt.com/docs/windows/windows-sandbox)で選ぶ。`elevated` は初期設定に管理者承認が要る方式で、sandbox 内のコマンドを管理者として動かす指定ではない。TIP 登録の承認とは分けて扱う。実効権限は repo 設定だけで断定せず、Codex の `/status` と `/debug-config` で確認する。
 
 WSL から Claude Code を使う場合、Windows CMake / Ninja / MSVC と PowerShell.MCP は `powershell.exe` 経由で Windows 側を駆動する。Codex で Windows Headless CMake Build が利用可能な場合はその手順を使い、実 build / test はホスト実行に必要な権限で起動する。どちらも README の preset と受け入れ条件を変更しない。
 
@@ -87,6 +98,21 @@ Serena の診断は C++ の build / test / lint の代替にしない。
 
 要約は候補抽出に使い、修正の判断は実ファイル、最新 diff、関連テストで行う。
 診断ログと Human Gate の記録は分ける。
+
+## Codex の branch push
+
+ユーザーが push / Draft PR 提出を依頼した範囲では、`scripts/codex_push.py` を使える。repo の execpolicy はこの helper を許可し、任意の `git push` は確認対象に残す。helper は現在 branch と指定名の一致、`dolquis/dev-<番号>-<slug>` の形、origin の単一 push URL がこの repository を指すことを検査する。送信する commit と宛先 ref を明示し、mirror、tag 追送、submodule の再帰 push を無効にする。force、削除、任意の Git オプションは受け付けない。
+
+```powershell
+# ローカル検査のみ。既定では送信しない。
+py -3.13 scripts/codex_push.py --branch dolquis/dev-123-example
+# push が依頼に含まれる場合だけ送信する。
+py -3.13 scripts/codex_push.py --branch dolquis/dev-123-example --publish
+```
+
+`--dry-run` は remote へ接続して検証するが ref は更新しない。helper は会話の承認範囲を判定する機構ではなく、送信先と操作範囲の検査を担う。`pre-pr-self-review` の検証と base / head 確認は省略しない。remote 設定を並行変更せず、信頼した checkout 内で使う。条件に合わない場合は勝手に権限を広げず、理由を確認する。
+
+ルール変更時は `codex execpolicy check --rules .codex/rules/azookey.rules -- <command>` で確認する。prefix 判定だけでは全引数を検査できないため、未一致を許可済みと解釈しない。新 branch 作成は一律 prompt から外すが、後続の破棄オプションまで許可する広い allow は設けない。通常の承認判定と sandbox 境界に従う。
 
 ## ローカル分担の例
 

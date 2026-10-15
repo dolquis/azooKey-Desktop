@@ -47,11 +47,10 @@ def claude_file(name: str, description: str, body: str, *, disallowed: bool = Tr
     return f"---\n{frontmatter}---\n\n{body}"
 
 
-def codex_file(name: str, description: str, body: str, sandbox: str) -> str:
+def codex_file(name: str, description: str, body: str) -> str:
     return (
         f'name = "{name}"\n'
         f'description = "{description}"\n'
-        f'sandbox_mode = "{sandbox}"\n'
         f"developer_instructions = '''\n{body}'''\n"
     )
 
@@ -68,9 +67,9 @@ def make_repo(root: Path, manifest: str = MANIFEST, config: str = "[agents]\nena
     write(root / ".claude" / "skills" / "tsf-skill" / "SKILL.md", "")
     write(root / ".claude" / "agents" / "shared-agent.md", "---\nname: shared-agent\ndescription: shared\n---\nanything\n")
     write(root / ".claude" / "agents" / "reviewer.md", claude_file("reviewer", "review", BODY))
-    write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", BODY, "read-only"))
+    write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", BODY))
     write(root / ".claude" / "agents" / "builder.md", claude_file("builder", "build", BODY, hook=False))
-    write(root / ".codex" / "agents" / "builder.toml", codex_file("builder", "build", BODY, "workspace-write"))
+    write(root / ".codex" / "agents" / "builder.toml", codex_file("builder", "build", BODY))
 
 
 class CheckAgentDefinitionsTest(unittest.TestCase):
@@ -84,7 +83,7 @@ class CheckAgentDefinitionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             make_repo(root)
-            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review!", BODY + "extra\n", "read-only"))
+            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review!", BODY + "extra\n"))
             problems = MODULE.check(root)
             self.assertTrue(any("description が一致しない" in p for p in problems))
             self.assertTrue(any("本文が byte 一致しない" in p for p in problems))
@@ -100,24 +99,40 @@ class CheckAgentDefinitionsTest(unittest.TestCase):
             self.assertTrue(any("`orphan`" in p for p in problems))
             self.assertTrue(any("reviewer.toml" in p and "Codex 側が無い" in p for p in problems))
 
-    def test_read_only_contract_is_enforced_on_both_sides(self) -> None:
+    def test_claude_read_only_guard_is_still_required(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             make_repo(root)
             write(root / ".claude" / "agents" / "reviewer.md", claude_file("reviewer", "review", BODY, disallowed=False, hook=False))
-            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", BODY, "workspace-write"))
+            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", BODY))
             problems = MODULE.check(root)
             self.assertTrue(any("disallowedTools" in p for p in problems))
             self.assertTrue(any("hooks.PreToolUse" in p for p in problems))
-            self.assertTrue(any("read-only ではない" in p for p in problems))
 
-    def test_build_write_needs_workspace_write(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            make_repo(root)
-            write(root / ".codex" / "agents" / "builder.toml", codex_file("builder", "build", BODY, "read-only"))
-            problems = MODULE.check(root)
-            self.assertTrue(any("workspace-write ではない" in p for p in problems))
+    def test_custom_agent_cannot_override_parent_session(self) -> None:
+        for key in ("sandbox_mode", "approval_policy", "sandbox_workspace_write", "windows", "model_provider", "mcp_servers", "sandbox_private_desktop"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                make_repo(root)
+                write(root / ".codex/agents/reviewer.toml",
+                      codex_file("reviewer", "review", BODY) + f'{key} = "value"\n')
+                self.assertTrue(any(key in p and "上書きできない" in p for p in MODULE.check(root)))
+
+    def test_custom_agent_requires_nonempty_strings(self) -> None:
+        for key in ("name", "description", "developer_instructions", "model"):
+            for value in (42, "", [], False):
+                with self.subTest(key=key, value=value):
+                    agent = {"name": "reviewer", "description": "review", "developer_instructions": BODY}
+                    agent[key] = value
+                    self.assertTrue(any(key in p for p in MODULE.check_codex_agent(agent, "agent.toml")))
+
+    def test_custom_agent_optional_model_settings_are_allowed(self) -> None:
+        agent = {
+            "name": "reviewer", "description": "review", "developer_instructions": BODY,
+            "model": "example-model", "model_reasoning_effort": "high",
+            "model_reasoning_summary": "auto", "model_verbosity": "low",
+        }
+        self.assertEqual(MODULE.check_codex_agent(agent, "agent.toml"), [])
 
     def test_name_mismatch_and_missing_references_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -126,22 +141,48 @@ class CheckAgentDefinitionsTest(unittest.TestCase):
             body = "See `docs/gone.md`, `azookey-missing-skill` and the `tsf-tip` directory.\n"
             (root / "tsf-tip").mkdir()
             write(root / ".claude" / "agents" / "reviewer.md", claude_file("other", "review", body))
-            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", body, "read-only"))
+            write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", body))
             problems = MODULE.check(root)
             self.assertTrue(any("name がファイル名" in p for p in problems))
             self.assertTrue(any("`docs/gone.md`" in p for p in problems))
             self.assertTrue(any("`azookey-missing-skill`" in p for p in problems))
             self.assertFalse(any("`tsf-tip`" in p for p in problems))
 
-    def test_codex_config_is_parsed_and_agents_stay_enabled(self) -> None:
+    def test_codex_config_is_parsed_and_disabled_agents_allow_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             make_repo(root, config="[agents]\nenabled = false\n")
-            self.assertTrue(any("[agents].enabled = false" in p for p in MODULE.check(root)))
+            self.assertEqual(MODULE.check(root), [])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             make_repo(root, config="[agents\nenabled = true\n")
             self.assertTrue(any("parse できない" in p for p in MODULE.check(root)))
+
+    def test_codex_config_rejects_wrong_types_and_unsupported_desktop_key(self) -> None:
+        cases = (
+            ('agents = false\n', "agents は table"),
+            ('[agents]\nenabled = "false"\n', "enabled は boolean"),
+            ('[agents]\ninterrupt_message = 1\n', "interrupt_message は boolean"),
+            ('[agents]\nmax_concurrent_threads_per_session = true\n', "正の整数"),
+            ('[agents]\nmax_concurrent_threads_per_session = 0\n', "正の整数"),
+            ('[agents]\nmax_threads = 1.5\n', "正の整数"),
+            ('[agents]\ndefault_subagent_model = 42\n', "空でない文字列"),
+            ('windows = false\n', "windows は table"),
+            ('[windows]\nsandbox_private_desktop = true\n', "未対応"),
+            ('sandbox_private_desktop = false\n', "未対応"),
+        )
+        for config, message in cases:
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                make_repo(root, config=config)
+                self.assertTrue(any(message in p for p in MODULE.check(root)))
+
+    def test_codex_config_allows_omitted_agents_and_legacy_thread_limit(self) -> None:
+        for config in ("", "[agents]\nmax_threads = 4\n", "[agents]\nmax_concurrent_threads_per_session = 4\n"):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                make_repo(root, config=config)
+                self.assertEqual(MODULE.check(root), [])
 
     def test_shared_agent_needs_only_claude_side(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

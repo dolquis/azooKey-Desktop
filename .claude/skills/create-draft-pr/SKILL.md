@@ -71,18 +71,17 @@ gh pr list --repo dolquis/<repository-name> --head <branch-name> --state all --j
 
 1. `pre-pr-self-review` を実行し、必要なレビューと検証を完了する。
 2. `dolquis/<repository-name>` の `main` に対応するremote-tracking refを `<base-ref>` として確定し、必要に応じてそのremoteをfetchする。
-3. 最新base tipからHEADまでの最終tree差分を確認する。merge-baseからHEADまでのcommit済み差分は `pre-pr-self-review` の確認結果を使い、ここでは再掲しない。
+3. 最新base tipからHEADまでの変更ファイル一覧を確認する。内容は `pre-pr-self-review` で確認済みなので、ここでは読み直さない。
 
 ```bash
 git diff --stat <base-ref> HEAD
 git diff --name-status <base-ref> HEAD
 git diff --check <base-ref> HEAD
-git diff <base-ref> HEAD
 git status -sb
 ```
 
-4. PR対象の変更がcommitされていることを確認する。未commit変更が残る場合は、それがPRに含まれないことを認識し、意図的な残存か確認する。
-5. compare範囲に、要求外のcommit、別タスクの変更、生成物、secretが含まれていないことを確認する。
+4. PR対象の変更がcommitされていることを確認する。未commit変更が残る場合は、それがPRに含まれないことを最終報告に書く。
+5. 変更ファイル一覧に、要求外のファイル、別タスクの変更、生成物、secretが含まれていないことを確認する。`pre-pr-self-review` の後にbaseを更新した場合は、増えたファイルだけ内容を確認する。
 6. squashまたはrebaseで既存PRが取り込まれた後は、`pre-pr-self-review` で確認したmerge-baseからの差分に取り込み済み変更が再表示される場合がある。`<base-ref>` からHEADまでの差分に、base側で追加されたファイルの意図しない削除や取り込み済み変更の再提案が見える場合は、pushやPR作成を停止し、更新済みbaseから新しいbranchを用意する。
 
 ## 手順4: head branchの公開
@@ -93,6 +92,7 @@ head branchが対象の `dolquis/<repository-name>` に存在しない、また�
 git push -u <dolquis-remote> <branch-name>
 ```
 
+- pushは `cd`、パイプ、commitとの連結を付けず、上の形を単独のコマンドで実行する。repoの `git-push-guard` hookとallowルールが判定できる形にすると、確認待ちやauto modeの過剰判定を避けられる。
 - `<dolquis-remote>` のfetch URLとpush URLが `dolquis/<repository-name>` を指すことを確認する。
 - push後、対象remote上のhead branchが存在し、そのcommitがローカルの `HEAD` と一致することを確認する。
 - `main` はpushしない。

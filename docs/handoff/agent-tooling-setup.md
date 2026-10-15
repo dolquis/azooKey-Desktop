@@ -6,7 +6,7 @@
 
 ## 設定の正典
 
-- Claude Code の repo MCP は `.mcp.json`、プラグインと permissions は `.claude/settings.json`、カスタム agent は `.claude/agents/*.md` が定義する。`git push` は ask ルールではなく `.claude/settings.json` の PreToolUse hook（`.claude/hooks/git-push-guard.py`）が検査し、push 先が `dolquis/` 配下の remote で保護 branch と削除を含まないときだけ承認なしで通す。判定の詳細は hook の docstring が正典である。
+- Claude Code の repo MCP は `.mcp.json`、プラグインと permissions は `.claude/settings.json`、カスタム agent は `.claude/agents/*.md` が定義する。`git push` は ask ルールではなく `.claude/settings.json` の PreToolUse hook（`.claude/hooks/git-push-guard.py`）が検査し、push 先が `dolquis/` 配下の remote で保護 branch と削除を含まないときだけ承認なしで通す。判定の詳細は hook の docstring が正典で、hook とそのテストは `dolquis/agent-ops` のベンダリングコピーである。
 - Codex の repo 共通 sandbox と `[agents]` は `.codex/config.toml`、カスタム agent は `.codex/agents/*.toml`、コマンドの実行ポリシー（execpolicy）は `.codex/rules/*.rules`、lifecycle hooks は `.codex/hooks.json` が定義する。いずれも project の `.codex/` 層を trust したときだけ読み込まれる。Windows sandbox の方式と任意 MCP はユーザー設定で選び、repo から上書きしない。`.codex/hooks/` は共有 hook への adapter を持つ。repo 固有 agent の本文は両ハーネスで同期するが、権限の強制方法は `.claude/agents/MANIFEST.md` に従う。
 - Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。Context7 が利用できない場合、Microsoft API は Microsoft Learn の公式リファレンスを優先する。
 - Skill の配置とミラー規則は `AGENTS.md`「Skill の配置」に従う。

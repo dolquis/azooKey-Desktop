@@ -27,7 +27,20 @@
       "Bash(python3 scripts/check_agent_instruction_size.py:*)",
       "Bash(python3 scripts/check_test_inventory.py:*)",
       "Bash(python3 scripts/check_skill_references.py:*)",
-      "Bash(python3 scripts/check_agent_definitions.py:*)"
+      "Bash(python3 scripts/check_agent_definitions.py:*)",
+      "Bash(git fetch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push -u origin claude/*)",
+      "Bash(git push origin claude/*)",
+      "Bash(git push -u origin dolquis/*)",
+      "Bash(git push origin dolquis/*)",
+      "Bash(cmake --preset:*)",
+      "Bash(cmake --build --preset:*)",
+      "Bash(ctest --preset:*)",
+      "Bash(pre-commit run:*)",
+      "Bash(python3 scripts/tests/test_git_push_guard.py)",
+      "Bash(python3 scripts/tests/test_agent_instruction_size.py)"
     ],
     "ask": [
       "Edit(legacy/**)"
@@ -37,7 +50,9 @@
       "Edit(**/secrets/**)",
       "Edit(.serena/memories/**)",
       "Edit(.codegraph/**)",
-      "Edit(.claude/settings.local.json)"
+      "Edit(.claude/settings.local.json)",
+      "Read(./.env)",
+      "Read(./.env.*)"
     ]
   },
   "hooks": {

@@ -23,7 +23,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 5. Codex Cloud への assign / delegate / mention は `docs/linear-conventions.md` §2.1 の人間承認規則に従う。
 6. agent の報告は完了判定ではなく入力である。親が実ファイルと最新 diff で検証する。
 7. reviewer と build runner は subagent を spawn しない。Claude Code の subagent は既定で再帰 spawn できるため、agent 本文で禁じるだけでなく、repo 所有 agent の `tools` を明示の allowlist にして `Agent` を含めない。`scripts/check_agent_definitions.py` がこれを検査する。
-8. read-only は文章ではなく機構で担保する。Codex 側は `sandbox_mode = "read-only"` で OS が強制する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）で書込み系 git、リダイレクト、build コマンドを止める。この hook は字句解析であり、インタプリタ経由の書込み（`python3 -c` など）は見えないため、逸脱のコストを上げる機構であって sandbox ではない。`windows-build-runner` は build directory へ書くため意図的な例外、`shared` の agent は origin の定義に従い、Claude 側の hook は再配布で取り込む。どちらも `.claude/agents/MANIFEST.md` の権限列に記録する。
+8. read-only という役割契約と、ハーネスの権限制御を区別する。Codex は親ターンの sandbox / approval を継承し、custom agent の `sandbox_mode` / `approval_policy` では上書きできない。本文の read-only 指示は独立した OS sandbox ではないため、親は実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親が担当する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）で書込み系 git、リダイレクト、build コマンドを止める。この hook は字句解析であり、インタプリタ経由の書込み（`python3 -c` など）は見えないため、逸脱のコストを上げる機構であって sandbox ではない。`windows-build-runner` は build directory へ書く役割、`shared` の agent は origin の定義に従い、Claude 側の hook は再配布で取り込む。役割上の境界は `.claude/agents/MANIFEST.md` の権限列に記録する。
    Agent Teams の teammate として spawn した場合、agent 定義のうち適用されるのは `tools`、`model`、本文だけで、frontmatter の `hooks` と `disallowedTools` は乗らない。Agent Teams が有効な session では、名前を付けて spawn した subagent は teammate として起動する。read-only reviewer は名前を付けず通常の subagent として起動し、teammate にするなら Bash guard が無いことを前提に `tools` の allowlist だけで運用する。
 9. 親が編集中の working tree を reviewer に読ませない。レビューは編集を止めた checkpoint に対して行う。
 10. typo、1 行の可逆な修正、直列依存だけの仕事、1 ファイルの明白な変更は分割しない。
@@ -38,7 +38,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 | L3 1 塊内の並列実装 | ファイル所有権を分割でき、契約（IPC payload、schema、関数シグネチャ）が先に固定済み | Agent Teams または独立 worker。writer ごとに非重複領域 |
 | L4 塊間並列 | Linear 上で独立した塊と依存が確定済み | 塊ごとに別 worktree / branch / Draft PR。管制塔セッションの子セッション、または Claude Code の `isolation: worktree` |
 
-L2 を標準とする。L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
+分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える。L2 は独立した境界が複数ある場合に選ぶ。L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
 L4 の実行形は 2 つある。管制塔セッションがユーザーの指示を受けて、塊ごとに子セッション（Claude Code Remote の `create_session`、各自の worktree）を立てる形と、1 セッションの親が Claude Code の `isolation: worktree` で subagent を分ける形である。どちらも build directory は共有されないが、worktree ごとに configure からやり直すため full rebuild になる。`isolation: worktree` は親が spawn 時に明示し、agent 定義には固定しない。
 worktree をまたいで共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と、並行する PR への `main` の取り込みは `docs/handoff/parallel-worktree-runbook.md` に従う。
 
@@ -50,7 +50,7 @@ worktree をまたいで共有される資源（sccache、`%TEMP%`、ミュー�
 | 子セッション | 自分の塊の親 agent として、実装、subagent への分担、検証、commit、push、Draft PR の作成、塊に含まれる Issue の In Review への遷移。終わったら管制塔へ報告する |
 
 子セッションは push の前に `git remote get-url --push origin` が `dolquis/` 配下の repository であることを確かめる。
-子セッションは PR のマージ、Ready 化、他の branch や worktree の操作を行わない。規約の解釈が分かれるとき、他の子が持つファイルを変える必要が出たとき、権限で拒否された操作があったときは、自分で決めずに管制塔へ報告して待つ。
+子セッションは PR のマージ、Ready 化、他の branch や worktree の操作を行わない。規約の解釈が分かれるとき、他の子が持つファイルを変える必要が出たとき、権限で拒否された操作があったときは、管制塔へ報告し該当操作を保留する。拒否された操作を別経路で迂回せず、承認済み範囲の独立した調査・実装・検証は継続する。
 子セッションの起動は、ユーザーが指示した範囲で管制塔が行う。Codex Cloud の起動、新しいユーザー所有タスクの作成、Human Gate の承認は、子セッションの起動によって代行されない（`docs/linear-conventions.md` §2.1）。
 
 specialist の同時起動は通常 2 体、横断変更でも 3 体までとし、4 枠目は Explore か build runner に残す。Codex の `.codex/config.toml` は `max_concurrent_threads_per_session = 4`（親を除く spawn 済み thread の上限）で、この配分に合わせてある。
@@ -64,10 +64,10 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | `core/**`、候補生成 | 親が `azookey-core-conversion` Skill を読んで確認する | spec 変更なら `spec-drift-checker` |
 | `learning/**`、privacy 設定 | 親が `azookey-learning-data-safety` Skill を読んで確認する | IPC 経由なら親が `tsf-ipc-protocol` Skill を読んで確認する |
 | `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する |
-| C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
+| C++ を含む高リスク差分 | `diff-auditor` による独立レビュー | コード品質の追加観点が必要なら `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 
-`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。
+`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。C++ という言語だけを理由に二重レビューを課さず、変更リスクと必要な観点で選ぶ。role や plugin が利用不能なら親が同じ観点を確認し、独立レビューを実施できなかった範囲と理由を報告する。必要な build / test と Human Gate は省略しない。
 
 ## background と並列実行
 
@@ -90,7 +90,7 @@ agent 定義には `background: true` と `isolation: worktree` を固定しな�
 
 ## snapshot 契約
 
-Claude Code の subagent も Codex の subagent も親の会話履歴を見ない。契約は spawn の prompt に全て書き、全履歴を複製しない。
+会話履歴の継承はハーネスと起動方法に依存する。Codex の `spawn_agent` は `fork_turns="all"` が既定で、独立した小タスクには `fork_turns="none"` を選べる。履歴の有無にかかわらず、対象・権限・成果形式の契約は spawn の prompt に明記する。
 
 ```text
 Issue: DEV-xxxx（塊なら DEV-xxxx, DEV-yyyy, ...）
@@ -106,7 +106,7 @@ Expected return: 本書「統一返却形式」
 Validation owned by parent: <commands>
 ```
 
-親が checkpoint 後に対象差分を変更した場合、その報告は stale として扱い、最終判断に流用しない。build / test runner は実行対象の commit SHA と使用した preset / build directory を返す。
+親が checkpoint 後に対象差分・base・検証条件を変更した場合、影響する報告を stale として再確認する。同一 snapshot と条件のレビュー・テスト結果は、stage、commit、最終報告の各段階で内容の一致を確かめて再利用する。build / test runner は実行対象の commit SHA と使用した preset / build directory を返す。
 
 ## 統一返却形式
 
@@ -125,12 +125,12 @@ Validation owned by parent: <commands>
 
 問題が出た場合は製品コードを戻さず Execution 層だけを縮退する。
 
-1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`scripts/check_agent_definitions.py` は `enabled = false` を検出するので、縮退中は CI の docs-lint ジョブがその旨を報告する。
+1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`enabled = false` は有効な縮退設定であり、親が同じ検証範囲を担当する。
 2. Claude Code は `.claude/settings.json` の `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` を外し、通常の単一 subagent または親のみへ戻す。
 3. agent が使えない環境では、同じ検証範囲を親が担当する。
-4. 該当する Linear Issue は Canceled または Backlog へ戻し、理由をコメントに残す。アーカイブしない。
+4. Execution 層の縮退だけを理由に製品 Issue を Canceled / Backlog へ戻さない。実行方法の変更と検証への影響をコメントし、製品 Issue の状態は実際の進捗と受入条件に従う。
 
 ## 機械検査
 
-`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、`.claude/agents/MANIFEST.md` の区分 `repo` の agent について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、権限列（read-only / build-write）と両側の設定の対応、`tools` が明示の allowlist で `Agent` を含まないこと、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse を検査する。
+`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、`.claude/agents/MANIFEST.md` の区分 `repo` の agent について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、役割上の権限列に対応する Claude 側の guard 宣言、`tools` が明示の allowlist で `Agent` を含まないこと、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse・限定的な型・無効な権限上書き指定を検査する。実効権限や実行時の役割契約の遵守を保証する検査ではない。
 `scripts/tests/test_agent_readonly_guard.py` は read-only guard hook の allow / deny 表を固定する。

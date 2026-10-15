@@ -32,7 +32,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 |---|---|
 | 複数ファイルや命名規約をまたぐ調査で、結論だけが要る | Explore agent。結果は実ファイルで確認する |
 | `AGENTS.md`「調査と実装」が求める、非自明な変更の編集前のスコープ整理 | Plan mode、または Plan agent |
-| Draft PR 作成前・最終報告前に、spec・安全規則・依頼範囲との整合を設計意図から切り離して読む | `diff-auditor`（`.claude/agents/`、read-only）。`pre-pr-self-review` の差分レビューと併用する |
+| 高リスク差分で、spec・安全規則・依頼範囲との整合を設計意図から切り離して読む | `diff-auditor`（`.claude/agents/`、read-only）。適用基準は `docs/handoff/agent-orchestration.md` に従い、`pre-pr-self-review` の差分レビューと併用する |
 | コード品質の観点別レビュー（規約準拠、silent failure、テスト網羅、型設計、コメント、簡素化） | `pr-review-toolkit` の各 agent。まとめて掛けるときは `/pr-review-toolkit:review-pr` |
 | 互いに独立した調査・実装を同時に進める | Agent tool を同一メッセージで複数起動する |
 | Windows の configure / build / CTest / bench を回し、失敗した target・CTest 名・warning・ログ位置だけが要る | `windows-build-runner`（`.claude/agents/`）。ソース編集と git 操作はしない |

@@ -1,9 +1,9 @@
 # Agent manifest
 
 `.claude/agents/*.md` と `.codex/agents/*.toml` に置くカスタム agent の区分、origin、取り込み時点の記録。
-1 ファイルだけを持ち、`.codex/agents/` には複製しない。`scripts/check_agent_definitions.py` は本表を読み、
+この manifest は `.claude/agents/MANIFEST.md` の 1 ファイルだけを持ち、`.codex/agents/` には複製しない。`scripts/check_agent_definitions.py` は本表を読み、
 区分 `repo` の agent について Claude / Codex ペアの存在、`name` の一致、本文の byte 一致、
-read-only 指定の対応、参照する repo path と Skill の実在を検査する。
+Claude 側の guard 宣言、Codex 設定の限定的な型・無効な上書き指定、参照する repo path と Skill の実在を検査する。
 
 区分の意味:
 
@@ -13,10 +13,13 @@ read-only 指定の対応、参照する repo path と Skill の実在を検査�
 「取り込み revision」は origin 側の commit を指す。origin 側の commit が記録に残っていない場合は
 `未記録` とし、取り込んだこの repo 側の commit だけを添える。推測で hash を書かない。
 
-区分 `repo` の agent は `tools` を明示の allowlist にし、`Agent` を含めない（subagent を spawn しない）。「権限」列は checker が両側で突き合わせる契約である。`read-only` は Claude 側に
-`disallowedTools: Edit, Write, NotebookEdit` と `hooks.PreToolUse`（`agent-readonly-guard.py`）、
-Codex 側に `sandbox_mode = "read-only"` を要求する。`build-write` は build directory へ書く agent の
-意図的な非対称で、Claude 側は `disallowedTools` だけ、Codex 側は `workspace-write` を許す。
+区分 `repo` の Claude agent は `tools` を明示の allowlist にし、`Agent` を含めない（subagent を spawn しない）。「権限」列は本文で指示する役割上の境界である。`read-only` はファイルを書かず、`build-write` は build directory だけに書く。
+Claude 側は両者に `disallowedTools: Edit, Write, NotebookEdit` を要求し、`read-only` には
+`hooks.PreToolUse`（`agent-readonly-guard.py`）も要求する。build runner に read-only guard は付けない。
+
+Codex は親ターンの sandbox / approval を継承する。custom agent の `sandbox_mode` や `approval_policy` では上書きできず、本文の制約は独立した OS sandbox を作らない。
+checker はこの無効な指定を検出するが、実効権限や実行時の遵守を保証しない。親が実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親へ戻す。
+`[agents].enabled = false` は有効な設定として認め、親が同じ検査範囲を実施する（parent-only fallback）。
 
 | agent | 区分 | origin | 取り込み revision | 権限 | Codex 側 |
 |---|---|---|---|---|---|

@@ -33,6 +33,7 @@
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/CrashRetention.h"
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/Redaction.h"
 #include "azookey/core/UtcTimestamp.h"
 #include "azookey/host/UserDataPaths.h"
@@ -429,10 +430,11 @@ std::filesystem::path ExpandEnvironmentPath(const std::string& path) {
 
 bool PathsEquivalent(const std::string& left, const std::string& right) {
   if (left.empty() || right.empty()) return false;
-  const auto normalized_left = ExpandEnvironmentPath(left).lexically_normal().string();
-  const auto normalized_right = ExpandEnvironmentPath(right).lexically_normal().string();
+  const auto normalized_left = ExpandEnvironmentPath(left).lexically_normal().native();
+  const auto normalized_right = ExpandEnvironmentPath(right).lexically_normal().native();
 #ifdef _WIN32
-  return LowerAscii(normalized_left) == LowerAscii(normalized_right);
+  return CompareStringOrdinal(normalized_left.c_str(), -1, normalized_right.c_str(), -1, TRUE) ==
+         CSTR_EQUAL;
 #else
   return normalized_left == normalized_right;
 #endif
@@ -451,8 +453,8 @@ bool ValidateGguf(const std::filesystem::path& path) {
 
 void CollectOnnxReferences(const j::Value& value, std::vector<std::filesystem::path>& paths) {
   if (value.IsString()) {
-    const std::filesystem::path path(value.AsString());
-    if (LowerAscii(path.extension().string()) == ".onnx") paths.push_back(path);
+    const auto path = core::Utf8Path(value.AsString());
+    if (LowerAscii(core::PathToUtf8(path.extension())) == ".onnx") paths.push_back(path);
     return;
   }
   if (value.IsArray()) {
@@ -482,7 +484,7 @@ bool ValidateOnnxGenAi(const std::filesystem::path& directory) {
 bool ValidateModel(const std::filesystem::path& path) {
   std::error_code ec;
   if (std::filesystem::is_regular_file(path, ec) && !ec) {
-    return LowerAscii(path.extension().string()) == ".gguf" && ValidateGguf(path);
+    return LowerAscii(core::PathToUtf8(path.extension())) == ".gguf" && ValidateGguf(path);
   }
   ec.clear();
   return std::filesystem::is_directory(path, ec) && !ec && ValidateOnnxGenAi(path);
@@ -844,7 +846,7 @@ void ProbeRegistration(Snapshot& snapshot) {
   const auto display_name = ReadRegistryDefault(HKEY_LOCAL_MACHINE, clsid_key);
   snapshot.tip_path_registered = registered && !registered->empty();
   if (registered) {
-    snapshot.tip_path = std::filesystem::path(*registered).string();
+    snapshot.tip_path = core::PathToUtf8(std::filesystem::path(*registered));
     std::error_code ec;
     snapshot.tip_path_exists = std::filesystem::is_regular_file(*registered, ec) && !ec;
     snapshot.tip_bitness_matches =
@@ -985,7 +987,7 @@ std::pair<uint16_t, uint16_t> CurrentDosDateTime() {
 }
 
 bool IsRuntimeLogFile(const std::filesystem::path& path) {
-  const auto name = path.filename().string();
+  const auto name = core::PathToUtf8(path.filename());
   if (name.rfind("host-", 0) != 0 && name.rfind("tip-", 0) != 0) return false;
   const auto marker = name.rfind(".jsonl");
   if (marker == std::string::npos) return false;
@@ -1109,7 +1111,7 @@ std::vector<ArchiveEntry> CollectRuntimeLogs(const std::filesystem::path& direct
     }
     collected_bytes += content.size();
     if (truncated) ++truncated_files;
-    entries.push_back({"logs/" + candidate.path.filename().string(), std::move(content)});
+    entries.push_back({"logs/" + core::PathToUtf8(candidate.path.filename()), std::move(content)});
   }
   std::sort(entries.begin(), entries.end(),
             [](const auto& left, const auto& right) { return left.name < right.name; });
@@ -1131,7 +1133,7 @@ void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
   for (const auto end = std::filesystem::directory_iterator(); !ec && iterator != end;
        iterator.increment(ec)) {
     const auto& entry = *iterator;
-    const auto name = entry.path().filename().string();
+    const auto name = core::PathToUtf8(entry.path().filename());
     if (name.rfind(kLogProbePrefix, 0) != 0 || entry.is_symlink(ec) || ec ||
         !entry.is_regular_file(ec) || ec) {
       ec.clear();

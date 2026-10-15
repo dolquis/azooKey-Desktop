@@ -6,6 +6,8 @@ param(
   [string]$MockDictionaryPath = "",
   [string]$ModelPath = "",
   [switch]$AllowNoModel,
+  [string]$BundledDictionaryDirectory = "",
+  [switch]$AllowNoDictionary,
   [switch]$IncludeCompat,
   [switch]$IncludeSettings,
   [switch]$IncludeDiagnostics,
@@ -714,6 +716,55 @@ function Compress-VmVerifyArchive {
   }
 }
 
+function Get-VmVerifyDictionaryPayload {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [string]$BundledDictionaryDirectory = "",
+    [switch]$AllowNoDictionary
+  )
+
+  $explicitDirectory = [bool]$BundledDictionaryDirectory
+  if (-not $BundledDictionaryDirectory) {
+    $BundledDictionaryDirectory = Join-Path $RepositoryRoot "build\bundled-dictionaries"
+  }
+  if (-not (Test-Path -LiteralPath $BundledDictionaryDirectory -PathType Container)) {
+    if (-not $explicitDirectory -and $AllowNoDictionary -and
+        -not (Test-Path -LiteralPath $BundledDictionaryDirectory)) {
+      Write-Warning "Bundled dictionaries omitted by -AllowNoDictionary; static dictionary verification is unavailable."
+      return
+    }
+    throw ("Bundled dictionary directory is missing: $BundledDictionaryDirectory. " +
+      "Generate it with python dictbuild/build_bundled.py --output build/bundled-dictionaries " +
+      "--cache build/dictionary-sources, " +
+      "or explicitly use -AllowNoDictionary when the default directory is absent.")
+  }
+
+  # Keep the installed names aligned with the Host's executable-relative dict/ lookup
+  # and the MSI allowlist. Never collect user dictionaries or opt-in download packs.
+  $payloads = @(
+    @{ Archive = "dict/sudachi_lexicon.azdic"; Role = "bundled-dictionary" }
+    @{ Archive = "dict/technical_terms_lexicon.azdic"; Role = "bundled-dictionary" }
+    @{ Archive = "ThirdPartyNotices.txt"; Role = "dictionary-notices" }
+  )
+  foreach ($payload in $payloads) {
+    $source = Join-Path $BundledDictionaryDirectory $payload.Archive
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+      throw "Required bundled dictionary payload is missing: $source"
+    }
+    if ((Get-Item -LiteralPath $source).Length -eq 0) {
+      throw "Required bundled dictionary payload is empty: $source"
+    }
+    if ($payload.Role -eq "dictionary-notices" -and
+        [string]::IsNullOrWhiteSpace([System.IO.File]::ReadAllText(
+            (Get-VmVerifyAbsolutePath -Path $source)))) {
+      throw "Required bundled dictionary notices are empty: $source"
+    }
+    $payload.Source = $source
+  }
+  return $payloads
+}
+
 function Export-VmVerifyPackage {
   param(
     [Parameter(Mandatory = $true)]
@@ -725,6 +776,8 @@ function Export-VmVerifyPackage {
     [string]$MockDictionary = "",
     [string]$Model = "",
     [switch]$AllowNoModel,
+    [string]$BundledDictionaryDirectory = "",
+    [switch]$AllowNoDictionary,
     [switch]$IncludeCompat,
     [switch]$IncludeSettings,
     [switch]$IncludeDiagnostics,
@@ -806,6 +859,10 @@ function Export-VmVerifyPackage {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
+  $dictionaryPayloads = @(Get-VmVerifyDictionaryPayload `
+    -RepositoryRoot $repository `
+    -BundledDictionaryDirectory $BundledDictionaryDirectory `
+    -AllowNoDictionary:$AllowNoDictionary)
   # As with OutDir in settings-app/CMakeLists.txt, everything but Debug goes to Release.
   $settingsConfiguration = if ($actualBuildType -ceq "Debug") { "Debug" } else { "Release" }
   $settingsDirectory = Join-Path $configuration.BinaryDir "settings-app\$settingsConfiguration"
@@ -867,6 +924,7 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "scripts\learning-data-snapshot.ps1"); Archive = "learning-data-snapshot.ps1"; Role = "learning-snapshot-script" }
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
     )
+    $payloads += $dictionaryPayloads
     if ($IncludeCompat) {
       $payloads += @{ Source = $compatExe; Archive = "compat_test.exe"; Role = "compat-runner" }
       $payloads += @{
@@ -976,6 +1034,8 @@ if ($MyInvocation.InvocationName -ne ".") {
     -MockDictionary $MockDictionaryPath `
     -Model $ModelPath `
     -AllowNoModel:$AllowNoModel `
+    -BundledDictionaryDirectory $BundledDictionaryDirectory `
+    -AllowNoDictionary:$AllowNoDictionary `
     -IncludeCompat:$IncludeCompat `
     -IncludeSettings:$IncludeSettings `
     -IncludeDiagnostics:$IncludeDiagnostics `

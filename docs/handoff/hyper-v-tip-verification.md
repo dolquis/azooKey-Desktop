@@ -55,6 +55,8 @@ Release ビルドでも、`AZOOKEY_LOG=1` を設定すると TIP / Host の JSON
 # リポジトリ直下
 cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-release
+python dictbuild/build_bundled.py --output build/bundled-dictionaries --cache build/dictionary-sources
+python dictbuild/check_bundle.py build/bundled-dictionaries --package pkg/msi/Package.wxs
 
 # VC++ Redistributable を同梱する場合だけ、ローカルの installer を明示する。
 .\scripts\make-vm-verify-package.ps1 `
@@ -82,6 +84,10 @@ mock dictionary は `-MockDictionaryPath`、GGUF は `-ModelPath` で追加で�
 生成スクリプトは同じ build directory の `azookey_zenzai_bench.exe` も収集し、
 VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動検出する。
 いずれもローカルファイルだけを収集し、ネットワークには接続しない。
+静的辞書2層と `ThirdPartyNotices.txt` は `-BundledDictionaryDirectory`（既定
+`build/bundled-dictionaries`）から同梱する。既定ディレクトリが存在しない場合だけ
+`-AllowNoDictionary` で省略できる。辞書省略時に実施できないゲートの扱いは
+[`human-gate-batch-runbook.md`「セッション前にホスト側で用意するもの」](./human-gate-batch-runbook.md#セッション前にホスト側で用意するもの) に従う。
 
 ## 手順
 
@@ -260,10 +266,11 @@ TIP のログを取るときは、User 環境変数として設定する。設�
 仮想キーを合成して行い、どちらで行ったかを記録する。ホストに無いキー（変換、半角/全角）も同じ扱いにする。
 
 > ⚠️ **変換能力の前提**: 検証パッケージを `make-vm-verify-package.ps1` の
-> `-AllowNoModel` を明示し、`-ModelPath <GGUF>` も `-MockDictionaryPath <TSV>` も指定せずに生成すると、bootstrap が
-> host へ渡す辞書もモデルも無く、`ZenzaiModelConverter` は `SimpleConverter` の静的辞書
-> （わたし / にほん / とうきょう 等＋学習語）へフォールバックする。この状態では**辞書外の
-> 語が漢字に変換されない**。判定の扱いは dev32-verification-checklist.md の同じ注記
+> `-AllowNoModel` を明示して GGUF / mock dictionary を指定しなくても、同梱辞書2層は
+> Host が読み込み、候補へ合流する。`static_dictionary_load` の両層のロード結果を記録する。
+> `-AllowNoDictionary` で辞書も省略した場合は、`SimpleConverter` の組込辞書
+> （わたし / にほん / とうきょう 等＋学習語）へのフォールバックとなり、辞書外の語は漢字に変換されない。
+> 判定の扱いは dev32-verification-checklist.md の同じ注記
 > （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルの登録手順は
 > `README.md`、計測ゲートは `docs/zenzai-gpu-route.md`「計測ゲート」を参照。
 

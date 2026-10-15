@@ -14,13 +14,7 @@
 
 本節は Claude Code 専用（Advisor は Claude Code 固有機能のため）。判断を誤るとコストの大きい局面では、Advisor 機能でアドバイザー（Fable）に相談してから進める。助言は批判的に検討し、最終判断は自分で行う。メインモデルが Fable のときは、上位への相談ではなく同格モデルの独立チェックとして扱う。アドバイザーは `.claude/settings.json` の `advisorModel: "fable"` でリポジトリ設定済み。この設定が無い環境（フォーク先等）では本節は無視してよい。
 
-相談する場面の例:
-
-- 複数ステップの作業で、実装方針・設計を確定する前の計画レビュー。
-- TSF / COM 境界や独自 IPC プロトコルなど、境界設計に踏み込む変更の着手前。
-- `legacy/`（macOS 実装）と Windows 仕様が食い違い、どちらを正解とするか判断するとき。
-- 同じエラー・テスト（CTest）失敗が繰り返し、原因の切り分けに行き詰まったとき。
-- 重要な変更を完了扱いにする前の独立チェック。
+相談する場面は、実装方針を確定する前の計画レビュー、TSF / COM 境界や独自 IPC プロトコルに踏み込む変更の着手前、`legacy/` と Windows 仕様の食い違いの判断、同じエラーや CTest 失敗が繰り返すとき、重要な変更を完了扱いにする前の独立チェックである。
 
 typo・コメントのみ・軽微で可逆な変更など計画の余地が小さい作業では使わない（トークンを消費し利用枠にも計上されるため）。`gate:human-required`（実機検証・TIP 登録・署名値設定など）や Linear 管制塔運用の代替にはしない。
 
@@ -42,9 +36,8 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 
 ### Agent Teams
 
-Agent Teams は `.claude/settings.json` の `env` で有効化してある（experimental。対話セッション専用で、`-p` 実行では通常のサブエージェントとして動く）。サブエージェントが親へ結果を返して終わるのに対し、teammate は自分のコンテキストを持ち、共有 task list と `SendMessage` で lead や他の teammate と協調する。使う場面は、互いに独立した実装を複数ファイルへ同時に進めるとき、または `diff-auditor` と `pr-review-toolkit` のレビューを実装と並行させるときに限る。調査だけなら Explore agent、build / test だけなら `windows-build-runner` で足りる。
+Agent Teams は `.claude/settings.json` の `env` で有効にしてある（experimental。対話セッション専用）。使う場面は、互いに独立した実装を複数ファイルへ同時に進めるときに限る。teammate に適用される定義、read-only reviewer を teammate にしない理由、書込み境界は `docs/handoff/agent-orchestration.md` に従う。表示モード（`teammateMode`）は個人設定で選び、repo 設定には置かない。
 
-- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読み、frontmatter の `hooks` と `disallowedTools` は適用されない。read-only reviewer は名前を付けない通常 subagent で起動する）。
-- 書込み境界は spawn prompt で明示する。同じファイルと共有 build directory を複数の teammate に割り当てない。push と PR 作成は lead が直列に行う。
-- in-process の teammate は background subagent を起動できない。`/resume` で teammate は復元されない。nested team は作れない。
-- 表示モード（`teammateMode`）は個人設定で選ぶ。repo 設定には置かない。
+## push・PR・マージ
+
+作業 branch を `dolquis/azooKey-Desktop` へ push し、`main` 向けの Draft PR を作るのは、依頼された作業の一部として承認なしで行う通常の手順である。push は `cd`、パイプ、commit との連結を付けず、`git push -u origin <branch>` を単独のコマンドで実行し、`.claude/hooks/git-push-guard.py` と allow ルールに判定させる。`main` への push、force push、upstream（`azooKey/`）への push はしない。マージは、人間 lead が PR を名指しで許可したときに限り、CI green を確かめてノーマルマージで行う。

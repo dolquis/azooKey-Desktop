@@ -1,6 +1,6 @@
 ---
 name: pre-pr-self-review
-description: リポジトリ内ファイルを変更した後のセルフレビューに使用する。最終報告、stage、commit、push、PR作成・更新の前に、baseとの差分、未追跡ファイル、検証、生成物、secret混入を確認する。読み取り専用の調査や説明だけには使用しない。
+description: リポジトリ内ファイルを変更した後のセルフレビューに使用する。push、PR作成・更新の前（pushしない作業では最終報告の前）に1回、baseとの差分、未追跡ファイル、検証、生成物、secret混入を確認する。読み取り専用の調査や説明だけには使用しない。
 ---
 
 # Pre-PR Self Review
@@ -11,14 +11,11 @@ description: リポジトリ内ファイルを変更した後のセルフレビ�
 
 ## 適用タイミング
 
-コード、設定、ドキュメントなどのリポジトリ内ファイルを変更した作業で、次のタイミングに使用する。
+コード、設定、ドキュメントなどのリポジトリ内ファイルを変更した作業で、pushとPRの作成・更新の前に1回使用する。pushを伴わない作業では最終報告の前に1回使用する。stageやcommitのたびに全フェーズを繰り返さない。
 
-1. 最終報告の前
-2. 変更をstageする前
-3. commitまたはpushの前
-4. PRを作成または更新する前
+レビュー後にファイルを変更した場合は、変更した範囲の差分と、それが影響する検証だけをやり直す。
 
-同じ作業中に複数のタイミングが該当する場合は、以下の該当フェーズを順番に実行する。最後のレビュー後にファイルを変更した場合は、影響するフェーズを再実行する。
+確認の深さは変更の大きさに合わせる。typo、ドキュメントだけの変更、1行の可逆な修正では、フェーズ1の範囲確定、フェーズ2の差分確認、変更に対応する検証だけでよい。
 
 ## 原則
 
@@ -90,29 +87,16 @@ git ls-files --others --exclude-standard
 
 ## フェーズ4: stage後の確認
 
-変更をstageした場合は、commit前に少なくとも次を確認する。
-
-```bash
-git status -sb
-git diff --cached --stat
-git diff --cached --check
-git diff --cached
-```
-
-- `git diff --cached` は次のcommitに入るstage済み差分の確認に使う。PR全体の差分確認の代用にはしない。
-- stage済み差分が今回のcommitに必要な内容だけであることを確認する。
-- ユーザー由来の無関係な変更、未完成の変更、生成物、secretがstageされている場合は、対象を壊さない方法でstageから外す。
-- stage内容を修正した場合は、このフェーズを再実行する。
+commit前に `git diff --cached --stat` で、stage済み差分が今回のcommitに必要なファイルだけであることを確認する。ユーザー由来の無関係な変更、未完成の変更、生成物、secretがstageされている場合は、対象を壊さない方法でstageから外す。フェーズ2で内容を確認したファイルを、ここで読み直さない。
 
 ## フェーズ5: commit、push、PR前の最終確認
 
-commit済みのPR差分は、少なくとも次の範囲で確認する。
+commit済みのPR差分は、少なくとも次の範囲で確認する。フェーズ2の後に編集したファイル（作業中の記録、または `git diff --stat` の比較で特定する）だけ内容を読み直し、フェーズ2で確認したままのファイルは読み直さない。特定できない場合は全差分を読み直す。
 
 ```bash
 git diff --stat <merge-base> HEAD
 git diff --name-status <merge-base> HEAD
 git diff --check <merge-base> HEAD
-git diff <merge-base> HEAD
 git status -sb
 ```
 

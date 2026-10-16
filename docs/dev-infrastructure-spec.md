@@ -178,6 +178,23 @@ zip を生成する。
 入力は CMake configure preset と出力先で、preset の既定値は
 `windows-release` とする。
 `-ModelPath` の省略には `-AllowNoModel` の明示を必須とする。
+`-BundledDictionaryDirectory` は `dictbuild/build_bundled.py` の出力先を受け取り、
+既定を `build/bundled-dictionaries` とする。同梱対象は
+`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic`、
+`ThirdPartyNotices.txt`、`bundle-provenance.json` で、zip 内でも同じ相対パスを保つ。role は辞書2層が
+`bundled-dictionary`、帰属表示が `dictionary-notices`、生成入力の記録が `dictionary-provenance` であり、SHA-256 を他の同梱物と
+同様に manifest へ記録する。配布可否と帰属の正典は
+`auto-word-registration-spec.md` §14.9 / §14.10 とする。
+既定ディレクトリが存在しない場合だけ、`-AllowNoDictionary` の明示で辞書省略を許可し、
+警告を出す。明示したディレクトリの不存在、2層の欠落・空ファイル、帰属表示の欠落・白紙は
+このスイッチでも許可しない。辞書省略時は辞書層を前提とする Human Gate の証跡に使わない。
+辞書を同梱する場合は Python 3.10 以降で `dictbuild/check_bundle.py --vm-package-json` を実行し、
+既存ビルダと同じ `.azdic` 形式検査、層ID、METAの出所・帰属と、生成入力の記録を検査する。
+生成時の入力SHA-256・Sudachi revision・取得アーカイブのpinを現在のcheckoutと照合し、
+記録の欠落、古い生成器・seed・metadata・notice、出力の不一致を拒否する。
+生成入力が同一なら無関係なcommit更新だけで再生成を要求しない。既存のclean判定と組み合わせ、
+manifestのcommitに含まれる生成入力と同梱辞書を結び付ける。コピー後の辞書・帰属表示・記録のSHA-256も
+検証時の値と一致しなければzipを生成しない。
 モデルを指定する場合は CMake cache の `AZOOKEY_FETCH_LLAMA_CPP` または
 `AZOOKEY_LLAMA_CPP_SOURCE_DIR` が有効であることを生成時に検査する。
 これは登録時の実行時 preflight や実 GGUF 推論の Human Gate を代替しない。
@@ -229,6 +246,9 @@ zip のルートには次を置く。
 - `verify-bootstrap.ps1`
 - `learning-data-snapshot.ps1`
 - `dev32-verification-checklist.md`
+- `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`。辞書省略時は含めない）
+- `ThirdPartyNotices.txt`（辞書省略時は含めない）
+- `bundle-provenance.json`（辞書省略時は含めない）
 - `manifest.json`
 
 `AppContainerAcl.ps1` は `register-dev.ps1` と `unregister-dev.ps1` が、
@@ -245,9 +265,12 @@ dot-source でこの形に解決できないものは見逃さずに失敗とし
 `%LOCALAPPDATA%\azooKey\data` の状態をラベル付きで JSON へ追記し、2 つのラベルを比べる。
 記録するのはファイルごとの相対パス、存在、サイズ、行数、更新時刻、SHA-256 だけで、
 本文とデータディレクトリの絶対パスは出さない。`.enc` は復号せず暗号文のハッシュで比べる。
-比較は既知のストアとその `.enc`、`.bak` について SHA-256 の変化、追加、削除を変化とし、
+比較は既知のストア（`learning.v2.tsv`、旧 `learning.tsv` を含む）とその `.enc`、`.bak` について
+SHA-256 の変化、追加、削除を変化とし、
 更新時刻だけの変化は変化に数えない。`host_run_state.txt` や Host の一時ファイルなど、
 データディレクトリにある学習データ以外のファイルは一覧に出すが変化には数えない。
+未知の `*.tsv`、`*.tsv.enc`、`*.json.enc` は警告し、対象ストアの見落としを示す。
+この警告がある比較の `Changed: no` だけでは学習不変の証跡としない。
 読めなかったファイルは例外の型だけを記録し、比較では `unreadable` として示す。
 データディレクトリは絶対パスの代わりに、記録ファイルごとのランダムな salt を付けたハッシュで識別し、
 識別子の違う 2 つのラベルは比較しない。ラベルは大文字小文字を区別せずに一意とする。
@@ -312,6 +335,7 @@ top-level field を持つ。
 | `preset` | string | 入力した configure preset 名 |
 | `buildType` | string | preset と cache で一致した `CMAKE_BUILD_TYPE` |
 | `buildPrerequisites` | object | cache の `AZOOKEY_FETCH_LLAMA_CPP` と `AZOOKEY_LLAMA_CPP_SOURCE_DIR` を同名キーの文字列で保持 |
+| `bundledDictionaries` | object | `selection` は `default` / `explicit` / `omitted`。辞書同梱時は `sudachiRevision`、`inputFingerprint`、`provenanceSha256` も記録する。選択したディレクトリのパスは記録しない |
 | `generatedAtUtc` | string | ISO 8601 UTC 生成時刻 |
 | `files` | array | 同梱ファイルの `path`、`role`、`size`、`sha256` |
 

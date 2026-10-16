@@ -7,13 +7,13 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 runbook は検証 zip に同梱されないため、環境ブロックはホスト側で runbook の様式、または `vm-verify-summary.ps1` が出力する `verification-summary.md` から用意する。
 その環境ブロックを記録の先頭に置き、本チェックリスト固有の次の欄を加える。セッション種別は**基本セッション（★必須）**とする。
 - ビルド構成: ☐ Debug（ログ取得可） ☐ Release
-- 辞書: ☐ `--mock-dict` 使用 ☐ なし
+- 辞書: ☐ 同梱2層（`static_dictionary_load` の両層 `result=ok` を記録） ☐ `--mock-dict` 使用 ☐ 省略
 
 > ⚠️ **変換能力の前提**: Host は `--model <GGUF>` 指定時のみ llama.cpp 経由の実推論を行う。
-> `--model` 未指定かつ `--mock-dict <TSV>` を使わない場合、**辞書外の語は漢字に変換されない**
-> （SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。A5 を「Pass」で
-> 評価したい場合は、辞書内語、`--mock-dict`、または実 GGUF モデルの `--model` 指定のいずれかを
-> 用意すること。
+> `--model` / `--mock-dict <TSV>` 未指定でも、同梱辞書層をロードしていれば候補へ合流する。
+> 同梱辞書も省略した場合は、SimpleConverter の組込辞書（わたし/にほん/とうきょう 等）と
+> 学習語の範囲に限られる。A5 は組込辞書語で評価し、組込辞書外語の A5-opt では同梱辞書の
+> ロード状態、`--mock-dict`、学習、実 GGUF モデルの `--model` 指定を記録すること。
 
 ## 事前確認（検証開始前）
 - ☐ `register-dev.ps1` が `TSF TIP registration complete (machine-wide).` を出力
@@ -71,7 +71,7 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 2. ビルド構成（preset）が同じである。zip の `manifest.json` の `preset` で照合する。
 3. 省略する行を確認するアプリと同じ target の report である。report が無いアプリでは省略しない。
 4. バックエンドと辞書の条件（環境ブロックの「バックエンド」欄と、上の「辞書」欄）が同じである。
-5. report で C-001 が pass であり、行の対応ケースもすべて pass である。C-011 を除く C-002 以降は、C-001 が pass でないと `failing-skip` になる。C-001 は辞書外の `nihongo` を確定するため、`--mock-dict`、`--model`、学習語のいずれも無い環境では fail になり、その場合は全行を実施する。
+5. report で C-001 が pass であり、行の対応ケースもすべて pass である。C-011 を除く C-002 以降は、C-001 が pass でないと `failing-skip` になる。C-001 は組込辞書外の `nihongo` を確定するため、同梱辞書、`--mock-dict`、`--model`、学習語のいずれも無い環境では fail になり、その場合は全行を実施する。
 6. report はゲストのコンソールの対話セッションで得たものである（`vm-verify-session.ps1 -Run` のスケジュールタスク実行、または基本セッションでの手動実行）。拡張セッションで得た結果を根拠にしない。
 
 **`failing-skip` と fail の扱い。**
@@ -105,8 +105,8 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 **A5. 候補変換（M4/M5）** — `watashi`（組込辞書語）→ Space で「私」等の漢字候補が出る
 ☐ PASS ☐ FAIL — 備考:（`watashi`/`nihon`/`toukyou` は組込辞書で必ず変換される。ここでの Fail は IPC/flush/候補 UI 等の **新規リグレッション**）
 
-**A5-opt. 辞書外語の変換（任意。結果サマリのコア 8 にはカウントしない）** — `nihongo`（辞書外語）→ Space。`--mock-dict`/学習/実 GGUF モデル（`--model`）のいずれも無ければ漢字化されない
-☐ 既知(GGUF 未指定: 漢字が出ない) ☐ PASS（`--mock-dict`/学習/`--model`使用時に漢字化） ☐ compat — 備考:
+**A5-opt. 組込辞書外語の変換（任意。結果サマリのコア 8 にはカウントしない）** — `nihongo` → Space。同梱辞書/`--mock-dict`/学習/実 GGUF モデル（`--model`）のいずれも無ければ漢字化されない
+☐ 既知(辞書・学習・GGUF 省略: 漢字が出ない) ☐ PASS（同梱辞書/`--mock-dict`/学習/`--model`使用時に漢字化） ☐ compat — 備考:
 
 **A6. 候補選択（M5）** — ↑↓ で選択移動、preedit 更新
 ☐ PASS ☐ FAIL ☐ compat — 備考:

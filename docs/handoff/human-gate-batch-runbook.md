@@ -42,6 +42,8 @@ cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
 cmake --build --preset windows-release --target azookey_settings
 cmake --build --preset windows-release --target azookey_etw_manifest
+python dictbuild/build_bundled.py --output build/bundled-dictionaries --cache build/dictionary-sources
+python dictbuild/check_bundle.py build/bundled-dictionaries --package pkg/msi/Package.wxs
 ```
 
 パッケージ生成時に CMake cache の llama.cpp 構成を自動検査する。
@@ -67,7 +69,18 @@ compiler cache（sccache）が別 checkout でコンパイルした結果を返�
 GGUF を使うゲートを同じ zip で検証する場合、`-ModelPath` は省略できない。
 スクリプトは `-AllowNoModel` を明示しない限りモデル省略を拒否する。
 DEV-1046 の local-zenzai 品質確認は実 GGUF での推論結果を見る。
-GGUF なしでは `SimpleConverter` の静的辞書しか動かず、その判定は成立しない。
+GGUF なしでは同梱辞書などの候補へフォールバックするため、その品質判定は成立しない。
+
+静的辞書は `-BundledDictionaryDirectory`（既定 `build/bundled-dictionaries`）から
+`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic` と
+`ThirdPartyNotices.txt` を同梱し、各ファイルの SHA-256 を `manifest.json` に記録する。
+生成入力と出力を結ぶ `bundle-provenance.json` も同梱する。パッケージ生成は形式・出所と現在の生成入力を照合するため、
+古い生成結果で拒否された場合は上の辞書生成コマンドを実行し直す。manifestの `bundledDictionaries` には
+既定/明示指定の区分とSudachi revisionを記録し、指定したディレクトリのパスは記録しない。
+既定の辞書ディレクトリが無い場合だけ、`-AllowNoDictionary` の明示で省略できる。
+明示したパスの不存在や、不完全な辞書セット・空の帰属表示は省略スイッチでも拒否する。
+辞書を省略した zip は辞書層を前提とする再変換・候補合流・未知語判定のゲートに使わない。
+展開後の Host ログでは `static_dictionary_load` の両層が `result=ok` であることを確認する。
 
 **compat runner の同梱**：`-IncludeCompat` で `compat_test.exe` と `targets/` 以下の全ファイルを
 同じ検証 zip に追加する。各ファイルの SHA-256 は `manifest.json` に記録される。
@@ -439,12 +452,13 @@ powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -Label aft
 powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From before-secure -To after-secure -OutputPath $snapshot
 ```
 
-比較結果の `Changed: yes` は、学習データのストア（`learning.tsv` などとその `.enc`、`.bak`）にハッシュの変化、ファイルの追加または削除があったことを示す。
+比較結果の `Changed: yes` は、学習データのストア（`learning.v2.tsv`、旧 `learning.tsv` などとその `.enc`、`.bak`）にハッシュの変化、ファイルの追加または削除があったことを示す。
 各行の `size` と `lines` は直前の記録からの差分であり、ファイルのサイズではない。`size 0` はファイルが空であることを示さない。
 更新時刻だけの変化は `touched` と表示し、変化に数えない。
 Host が起動と終了で書き換える `host_run_state.txt` などは `not learning data` と付けて表示し、変化に数えない。
-`Unverified` が出た場合は、ストアを読めなかったので、ラベルを変えて記録し直す。
+`Unverified` が出た場合は、読めなかったストアや未知ストアの警告を調べ、原因を解消してラベルを変えて記録し直す。
 `Warning: no learning store` が出た場合の `Changed: no` は証跡にならない。データディレクトリと、IME を使うユーザーのシェルで実行したかを確かめる。
+未知の `*.tsv`、`*.tsv.enc`、`*.json.enc` に対する警告が出た場合も、`Changed: no` だけで学習不変と判定しない。Host のストア名と記録スクリプトの対象を照合してから記録し直す。
 Host が平文のストアを読み込むと `.enc` と `.bak` への移行が起き、追加と削除が出るので、基準のラベルは Host 起動後に取る。
 記録するのはハッシュ、行数、サイズ、更新時刻だけで、学習データの本文は出力に含まれない。
 JSON は他のゲスト出力と一緒にホストへ回収する。

@@ -116,14 +116,43 @@ Describe "Learning data snapshot" {
 
       $snapshot = (Add-LearningSnapshot -SnapshotLabel "a" -DataDirectory $data -OutputPath $output).Snapshot
 
-      foreach ($store in @("learning.tsv", "user_dict.json", "typo_corrections.tsv", "auto_words.tsv",
-                           "english_learning.tsv")) {
+      foreach ($store in @("learning.tsv", "learning.v2.tsv", "user_dict.json", "typo_corrections.tsv", "auto_words.tsv",
+                           "english_learning.tsv", "english_learning.v2.tsv")) {
         @($snapshot.files | Where-Object { $_.path -eq $store }).Count | Should -Be 1
         @($snapshot.files | Where-Object { $_.path -eq "$store.enc" }).Count | Should -Be 1
       }
       $missing = Get-TestRecord -Snapshot $snapshot -Path "auto_words.tsv"
       $missing.exists | Should -BeFalse
       $missing.sha256 | Should -BeNullOrEmpty
+    }
+
+    It "keeps known stores aligned with Host paths and the learning v2 naming rule" {
+      $repoRoot = Split-Path -Parent (Split-Path -Parent $script:snapshotScript)
+      $hostPaths = [System.IO.File]::ReadAllText((Join-Path $repoRoot "inference-host/src/UserDataPaths.cpp"))
+      $hostStores = @([regex]::Matches($hostPaths,
+          '(?:paths\.data_dir|data_root)\s*/\s*"([^"/\\]+\.(?:tsv|json))"') |
+        ForEach-Object { $_.Groups[1].Value })
+      $hostStores.Count | Should -BeGreaterThan 0
+      $learning = [System.IO.File]::ReadAllText((Join-Path $repoRoot "learning/src/LearningStore.cpp"))
+      $v2Rule = [regex]::Match($learning,
+        '(?s)LearningStoreV2PathFor\([^)]*\)\s*\{.*?filename\s*\+=\s*"([^"/\\]+)";')
+      $v2Rule.Success | Should -BeTrue
+      $hostMain = [System.IO.File]::ReadAllText((Join-Path $repoRoot "inference-host/src/main.cpp"))
+      $learningPathFields = @([regex]::Matches($hostMain,
+          'azookey::learning::LearningStore\s+\w+\(user_paths->(\w+)\)') |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+      $learningPathFields | Should -Contain "learning_path"
+      $learningPathFields | Should -Contain "english_learning_path"
+      $v2Stores = foreach ($field in $learningPathFields) {
+        $legacyStore = [regex]::Match($hostPaths,
+          ('(?s)paths\.' + [regex]::Escape($field) + '\s*=.*?(?:paths\.data_dir|data_root)\s*/\s*"([^"/\\]+)"')).Groups[1].Value
+        $legacyStore | Should -Not -BeNullOrEmpty
+        [System.IO.Path]::GetFileNameWithoutExtension($legacyStore) +
+          $v2Rule.Groups[1].Value + [System.IO.Path]::GetExtension($legacyStore)
+      }
+
+      ($script:LearningSnapshotKnownStores | Sort-Object) -join "," |
+        Should -BeExactly (($hostStores + @($v2Stores) | Sort-Object -Unique) -join ",")
     }
 
     It "records a missing data directory as absent stores" {
@@ -186,6 +215,7 @@ Describe "Learning data snapshot" {
       $text | Should -Not -Match ([regex]::Escape($script:secretJapanese))
       $text | Should -Match "unrecognized-name-[0-9a-f]{12}"
       (Compare-LearningSnapshot -FromLabel "a" -ToLabel "b" -OutputPath $output).changed | Should -BeFalse
+      (Compare-LearningSnapshot -FromLabel "a" -ToLabel "b" -OutputPath $output).unknownStores | Should -Be 0
     }
 
     It "records nested files with forward-slash relative paths" {
@@ -255,6 +285,115 @@ Describe "Learning data snapshot" {
 
       $comparison.changed | Should -BeFalse
       @($comparison.files | Where-Object { $_.status -notin @("unchanged", "absent") }).Count | Should -Be 0
+    }
+
+    It "counts <Store> additions, changes, and removals without exposing contents" -ForEach @(
+      @{ Store = "learning.v2.tsv"; Encrypted = $false }
+      @{ Store = "learning.v2.tsv.enc"; Encrypted = $true }
+      @{ Store = "english_learning.v2.tsv"; Encrypted = $false }
+      @{ Store = "english_learning.v2.tsv.enc"; Encrypted = $true }
+    ) {
+      $path = Join-Path $script:data $Store
+      Write-TestFile -Path $path -Text "$($script:secretMarker)`n"
+      Add-LearningSnapshot -SnapshotLabel "added" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+      Write-TestFile -Path $path -Text "$($script:secretJapanese)`n$($script:secretMarker)`n"
+      $snapshot = (Add-LearningSnapshot -SnapshotLabel "edited" -DataDirectory $script:data `
+          -OutputPath $script:output).Snapshot
+      Remove-Item -LiteralPath $path
+      Add-LearningSnapshot -SnapshotLabel "removed" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+
+      foreach ($case in @(
+        @{ From = "before"; To = "added"; Status = "added" }
+        @{ From = "added"; To = "edited"; Status = "changed" }
+        @{ From = "edited"; To = "removed"; Status = "removed" }
+      )) {
+        $comparison = Compare-LearningSnapshot -FromLabel $case.From -ToLabel $case.To -OutputPath $script:output
+        $comparison.changed | Should -BeTrue
+        $entry = @($comparison.files | Where-Object { $_.path -eq $Store })[0]
+        $entry.learningStore | Should -BeTrue
+        $entry.status | Should -BeExactly $case.Status
+        $text = (Format-LearningSnapshotComparison -Comparison $comparison) -join "`n"
+        $text | Should -Match "Changed: yes"
+        $text | Should -Not -Match ([regex]::Escape($script:secretMarker))
+        $text | Should -Not -Match ([regex]::Escape($script:secretJapanese))
+        ($comparison | ConvertTo-Json -Depth 8) | Should -Not -Match ([regex]::Escape($script:secretMarker))
+      }
+      $record = Get-TestRecord -Snapshot $snapshot -Path $Store
+      $record.encrypted | Should -Be $Encrypted
+      if ($Encrypted) {
+        $record.lineCount | Should -BeNullOrEmpty
+      } else {
+        $record.lineCount | Should -Be 2
+      }
+      $snapshotText = [System.IO.File]::ReadAllText($script:output)
+      $snapshotText | Should -Not -Match ([regex]::Escape($script:secretMarker))
+      $snapshotText | Should -Not -Match ([regex]::Escape($script:secretJapanese))
+    }
+
+    It "warns for unknown store candidates even when they are unchanged" -ForEach @(
+      @{ Store = "future.tsv" }
+      @{ Store = "future.tsv.enc" }
+      @{ Store = "future.json.enc" }
+      @{ Store = "nested/FUTURE.TSV.ENC" }
+      @{ Store = "unknown name.tsv" }
+    ) {
+      Write-TestFile -Path (Join-Path $script:data $Store) -Text "$($script:secretMarker)`n"
+      Add-LearningSnapshot -SnapshotLabel "unknown-before" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+      Add-LearningSnapshot -SnapshotLabel "unknown-after" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+
+      foreach ($case in @(
+        @{ From = "before"; To = "unknown-before" }
+        @{ From = "unknown-before"; To = "unknown-after" }
+        @{ From = "unknown-after"; To = "before" }
+      )) {
+        $comparison = Compare-LearningSnapshot -FromLabel $case.From -ToLabel $case.To -OutputPath $script:output
+        $comparison.changed | Should -BeFalse
+        $comparison.unknownStores | Should -Be 1
+        $text = (Format-LearningSnapshotComparison -Comparison $comparison) -join "`n"
+        $text | Should -Match "Warning: unknown learning store"
+        $text | Should -Match "Unverified: 1 unknown store"
+        $text | Should -Not -Match "unknown store;.*not learning data"
+        $text | Should -Not -Match ([regex]::Escape($script:secretMarker))
+      }
+    }
+
+    It "warns when comparing older snapshots without the unknown store field" {
+      Write-TestFile -Path (Join-Path $script:data "future.tsv") -Text "x`n"
+      Add-LearningSnapshot -SnapshotLabel "after" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+      $document = [System.IO.File]::ReadAllText($script:output) | ConvertFrom-Json
+      foreach ($snapshot in $document.snapshots) {
+        foreach ($file in $snapshot.files) {
+          $file.PSObject.Properties.Remove("unknownStore")
+        }
+      }
+      [System.IO.File]::WriteAllText($script:output, ($document | ConvertTo-Json -Depth 8))
+
+      (Compare-LearningSnapshot -FromLabel "before" -ToLabel "after" -OutputPath $script:output).unknownStores |
+        Should -Be 1
+    }
+
+    It "leaves anonymized old snapshot paths unverified when their extension is lost" {
+      $path = Join-Path $script:data "future store.tsv"
+      Write-TestFile -Path $path -Text "$($script:secretMarker)`n"
+      Add-LearningSnapshot -SnapshotLabel "anonymous-before" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+      Write-TestFile -Path $path -Text "$($script:secretJapanese)`n"
+      Add-LearningSnapshot -SnapshotLabel "anonymous-after" -DataDirectory $script:data -OutputPath $script:output | Out-Null
+      $document = [System.IO.File]::ReadAllText($script:output) | ConvertFrom-Json
+      foreach ($snapshot in $document.snapshots) {
+        foreach ($file in $snapshot.files) {
+          $file.PSObject.Properties.Remove("unknownStore")
+        }
+      }
+      [System.IO.File]::WriteAllText($script:output, ($document | ConvertTo-Json -Depth 8))
+
+      $comparison = Compare-LearningSnapshot -FromLabel "anonymous-before" -ToLabel "anonymous-after" -OutputPath $script:output
+      $comparison.changed | Should -BeFalse
+      $comparison.unknownStores | Should -Be 1
+      $text = (Format-LearningSnapshotComparison -Comparison $comparison) -join "`n"
+      $text | Should -Match "Unverified: 1 unknown store"
+      $text | Should -Not -Match "future store"
+      $text | Should -Not -Match ([regex]::Escape($script:secretMarker))
+      $text | Should -Not -Match ([regex]::Escape($script:secretJapanese))
     }
 
     It "does not count a timestamp-only update as a change" {

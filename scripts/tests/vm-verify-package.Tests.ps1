@@ -16,6 +16,34 @@ Describe "VM verification package automation" {
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\inference-host") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\diagnostics") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\bench") -Force | Out-Null
+      foreach ($directory in @("dictbuild", "dictbuild\sources", "dictbuild\notices")) {
+        New-Item -ItemType Directory -Path (Join-Path $Root $directory) -Force | Out-Null
+      }
+      foreach ($module in @("build_bundled.py", "dictbuild.py", "extract_sudachi.py",
+          "bundle_provenance.py", "check_bundle.py")) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot "dictbuild\$module") `
+          -Destination (Join-Path $Root "dictbuild\$module")
+      }
+      foreach ($source in @("sudachi_lexicon.metadata.json", "technical_terms_lexicon.metadata.json",
+          "technical_terms_lexicon.lex.tsv")) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot "dictbuild\sources\$source") `
+          -Destination (Join-Path $Root "dictbuild\sources\$source")
+      }
+      Get-ChildItem -LiteralPath (Join-Path $repoRoot "dictbuild\notices") -Filter "*.txt" -File |
+        Copy-Item -Destination (Join-Path $Root "dictbuild\notices")
+      $fixtureArguments = @((Join-Path $repoRoot "dictbuild\tests\make_vm_bundle_fixture.py"),
+        "--repository", $Root, "--output", (Join-Path $Root "build\bundled-dictionaries"))
+      $previousErrorAction = $ErrorActionPreference
+      try {
+        $ErrorActionPreference = "Continue"
+        $fixtureOutput = & python @fixtureArguments 2>&1
+        $fixtureExitCode = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $previousErrorAction
+      }
+      if ($fixtureExitCode -ne 0) {
+        throw "Dictionary fixture generation failed: $fixtureOutput"
+      }
       New-Item -ItemType Directory -Path (Join-Path $Root "scripts") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "docs\handoff") -Force | Out-Null
 
@@ -179,7 +207,19 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 11
+      @($manifest.files).Count | Should -Be 15
+      $manifest.bundledDictionaries.selection | Should -BeExactly "default"
+      $manifest.bundledDictionaries.sudachiRevision | Should -BeExactly "20260723"
+      $manifest.bundledDictionaries.inputFingerprint | Should -Match '^[0-9a-f]{64}$'
+      @($manifest.bundledDictionaries.PSObject.Properties.Name) | Should -Be @(
+        "selection", "sudachiRevision", "inputFingerprint", "provenanceSha256")
+      $provenance = @($manifest.files | Where-Object { $_.role -eq "dictionary-provenance" })
+      $provenance.path | Should -BeExactly "bundle-provenance.json"
+      $provenance.sha256 | Should -BeExactly $manifest.bundledDictionaries.provenanceSha256
+      @($manifest.files | Where-Object { $_.role -eq "bundled-dictionary" }).path |
+        Should -Be @("dict/sudachi_lexicon.azdic", "dict/technical_terms_lexicon.azdic")
+      @($manifest.files | Where-Object { $_.role -eq "dictionary-notices" }).path |
+        Should -Be @("ThirdPartyNotices.txt")
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
       foreach ($file in $manifest.files) {
@@ -208,6 +248,266 @@ Describe "VM verification package automation" {
       Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly
       Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly `
         -ParameterFilter { -not $IncludeCompat -and -not $IncludeBench }
+    }
+
+    It "uses an explicit dictionary bundle and excludes unapproved extra layers" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      $bundle = Join-Path $TestDrive "custom-bundle"
+      Move-Item -LiteralPath (Join-Path $script:testRepository "build\bundled-dictionaries") `
+        -Destination $bundle
+      "unapproved" | Set-Content -LiteralPath (Join-Path $bundle "dict\neologd_lexicon.azdic")
+      "user data" | Set-Content -LiteralPath (Join-Path $bundle "dict\user_dictionary.azdic")
+
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+        -AllowNoModel -BundledDictionaryDirectory $bundle
+
+      $expanded = Join-Path $TestDrive "custom-expanded"
+      Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+      $result.Manifest.bundledDictionaries.selection | Should -BeExactly "explicit"
+      @($result.Manifest.bundledDictionaries.Keys) | Should -Be @(
+        "selection", "sudachiRevision", "inputFingerprint", "provenanceSha256")
+      ($result.Manifest.bundledDictionaries | ConvertTo-Json) | Should -Not -Match ([regex]::Escape($bundle))
+      @(Get-ChildItem -LiteralPath (Join-Path $expanded "dict") -File).Name |
+        Should -Be @("sudachi_lexicon.azdic", "technical_terms_lexicon.azdic")
+      foreach ($file in @($result.Manifest.files | Where-Object {
+            $_.role -in @("bundled-dictionary", "dictionary-notices", "dictionary-provenance")
+          })) {
+        (Get-FileHash -LiteralPath (Join-Path $bundle $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+        (Get-FileHash -LiteralPath (Join-Path $expanded $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+      }
+    }
+
+    It "resolves a relative dictionary bundle from the PowerShell current location" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      Push-Location -LiteralPath $script:testRepository
+      try {
+        $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+          -AllowNoModel -BundledDictionaryDirectory ".\build\bundled-dictionaries"
+      } finally {
+        Pop-Location
+      }
+
+      $result.Manifest.bundledDictionaries.selection | Should -BeExactly "explicit"
+      $expanded = Join-Path $TestDrive "relative-expanded"
+      Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+      foreach ($file in @($result.Manifest.files | Where-Object {
+            $_.role -in @("bundled-dictionary", "dictionary-notices", "dictionary-provenance")
+          })) {
+        (Get-FileHash -LiteralPath (Join-Path $expanded $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+      }
+      $provenance = @($result.Manifest.files | Where-Object { $_.role -eq "dictionary-provenance" })[0]
+      $provenance.sha256 | Should -BeExactly $result.Manifest.bundledDictionaries.provenanceSha256
+    }
+
+    It "requires explicit omission when the default dictionary bundle is absent" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      # All paths in this test are rooted in Pester's TestDrive fixture.
+      $bundle = Join-Path $script:testRepository "build\bundled-dictionaries"
+      Remove-Item -LiteralPath $bundle -Recurse -Force
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*AllowNoDictionary*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+        -AllowNoModel -AllowNoDictionary -WarningVariable omissionWarnings -WarningAction SilentlyContinue
+
+      $omissionWarnings | Should -Match "Bundled dictionaries omitted"
+      $result.Manifest.bundledDictionaries.selection | Should -BeExactly "omitted"
+      @($result.Manifest.bundledDictionaries.Keys) | Should -Be @("selection")
+      @($result.Manifest.files | Where-Object {
+          $_.role -in @("bundled-dictionary", "dictionary-notices", "dictionary-provenance")
+        }).Count | Should -Be 0
+      $expanded = Join-Path $TestDrive "without-dictionaries"
+      Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+      Test-Path -LiteralPath (Join-Path $expanded "dict") | Should -BeFalse
+      Test-Path -LiteralPath (Join-Path $expanded "ThirdPartyNotices.txt") | Should -BeFalse
+      Test-Path -LiteralPath (Join-Path $expanded "bundle-provenance.json") | Should -BeFalse
+    }
+
+    It "rejects an explicitly selected absent bundle even when omission is allowed" {
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+          -AllowNoModel -AllowNoDictionary `
+          -BundledDictionaryDirectory (Join-Path $TestDrive "absent-bundle")
+      } | Should -Throw "*Bundled dictionary directory is missing*absent-bundle*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects missing or empty dictionary payloads despite the omission switch: <Relative> / <State>" -ForEach @(
+      @{ Relative = "dict\sudachi_lexicon.azdic"; State = "missing" }
+      @{ Relative = "dict\technical_terms_lexicon.azdic"; State = "missing" }
+      @{ Relative = "ThirdPartyNotices.txt"; State = "missing" }
+      @{ Relative = "bundle-provenance.json"; State = "missing" }
+      @{ Relative = "dict\sudachi_lexicon.azdic"; State = "empty" }
+      @{ Relative = "dict\technical_terms_lexicon.azdic"; State = "empty" }
+      @{ Relative = "ThirdPartyNotices.txt"; State = "empty" }
+      @{ Relative = "bundle-provenance.json"; State = "empty" }
+      @{ Relative = "ThirdPartyNotices.txt"; State = "whitespace" }
+    ) {
+      $source = Join-Path (Join-Path $script:testRepository "build\bundled-dictionaries") $Relative
+      switch ($State) {
+        "missing" { Remove-Item -LiteralPath $source }
+        "empty" { [System.IO.File]::WriteAllBytes($source, [byte[]]@()) }
+        "whitespace" { " `t " | Set-Content -LiteralPath $source }
+      }
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+          -AllowNoModel -AllowNoDictionary
+      } | Should -Throw "*$(Split-Path -Leaf $Relative)*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects invalid dictionary bytes before creating output: <Mutation>" -ForEach @(
+      @{ Mutation = "magic" }
+      @{ Mutation = "truncation" }
+      @{ Mutation = "layer" }
+      @{ Mutation = "META" }
+    ) {
+      $artifact = Join-Path $script:testRepository "build\bundled-dictionaries\dict\sudachi_lexicon.azdic"
+      $bytes = [System.IO.File]::ReadAllBytes($artifact)
+      switch ($Mutation) {
+        "magic" { $bytes[0] = 0 }
+        "truncation" { $bytes = [byte[]]$bytes[0..63] }
+        "layer" { $bytes[16] = 2 }
+        "META" {
+          $offset = [System.Text.Encoding]::ASCII.GetString($bytes).IndexOf("META")
+          $offset | Should -BeGreaterThan 63
+          $bytes[$offset] = 0
+        }
+      }
+      [System.IO.File]::WriteAllBytes($artifact, $bytes)
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Bundled dictionary validation failed*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects stale generation provenance before creating output: <Mutation>" -ForEach @(
+      @{ Mutation = "source revision" }
+      @{ Mutation = "seed input" }
+      @{ Mutation = "generator input" }
+      @{ Mutation = "artifact" }
+    ) {
+      $bundle = Join-Path $script:testRepository "build\bundled-dictionaries"
+      switch ($Mutation) {
+        "source revision" {
+          $receiptPath = Join-Path $bundle "bundle-provenance.json"
+          $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+          $receipt.sudachi.revision = "20200101"
+          [System.IO.File]::WriteAllText($receiptPath, ($receipt | ConvertTo-Json -Depth 6),
+            [System.Text.UTF8Encoding]::new($false))
+        }
+        "seed input" {
+          Add-Content -LiteralPath (Join-Path $script:testRepository `
+            "dictbuild\sources\technical_terms_lexicon.lex.tsv") -Value "# changed seed"
+        }
+        "generator input" {
+          Add-Content -LiteralPath (Join-Path $script:testRepository "dictbuild\dictbuild.py") -Value "# changed generator"
+        }
+        "artifact" { Add-Content -LiteralPath (Join-Path $bundle "ThirdPartyNotices.txt") -Value "changed notices" }
+      }
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Bundled dictionary validation failed*does not match current inputs or artifacts*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "fails closed when the dictionary checker is missing" {
+      Remove-Item -LiteralPath (Join-Path $script:testRepository "dictbuild\check_bundle.py")
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Bundled dictionary checker is missing*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "fails closed when Python is unavailable" {
+      Mock Get-Command { $null } -ParameterFilter { $Name -eq "python" }
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Python 3.10 or newer is required*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "reports native checker errors without mixing stderr into JSON" {
+      'import sys; print("checker diagnostic", file=sys.stderr); sys.exit(23)' |
+        Set-Content -LiteralPath (Join-Path $script:testRepository "dictbuild\check_bundle.py") -Encoding ASCII
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*exit code 23*checker diagnostic*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects successful checker output with invalid JSON or metadata: <Output>" -ForEach @(
+      @{ Output = "not JSON" }
+      @{ Output = '{}' }
+      @{ Output = '[]' }
+      @{ Output = '{"schemaVersion":1,"sudachiRevision":"20260723","inputFingerprint":"bad","provenanceSha256":"bad"}' }
+    ) {
+      "print('$Output')" |
+        Set-Content -LiteralPath (Join-Path $script:testRepository "dictbuild\check_bundle.py") -Encoding ASCII
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Bundled dictionary checker returned invalid*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "accepts a valid checker result even when Python writes diagnostics to stderr" {
+      $checker = Join-Path $script:testRepository "dictbuild\check_bundle.py"
+      $content = [System.IO.File]::ReadAllText($checker).Replace(
+        "from __future__ import annotations", "from __future__ import annotations`nimport sys`nprint('checker diagnostic', file=sys.stderr)")
+      [System.IO.File]::WriteAllText($checker, $content, [System.Text.UTF8Encoding]::new($false))
+
+      $payloads = @(Get-VmVerifyDictionaryPayload -RepositoryRoot $script:testRepository)
+      $payloads.Count | Should -Be 4
+      @($payloads.Role) | Should -Contain "dictionary-provenance"
+    }
+
+    It "rejects a dictionary changed after validation while copying payloads" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      $script:copyPayloadFile = ${function:Add-VmVerifyPayloadFile}
+      Mock Add-VmVerifyPayloadFile {
+        param($SourcePath, $ArchivePath, $Role, $StagingDirectory)
+        if ($ArchivePath -eq "dict/sudachi_lexicon.azdic") {
+          [System.IO.File]::AppendAllText($SourcePath, "changed after validation")
+        }
+        & $script:copyPayloadFile -SourcePath $SourcePath -ArchivePath $ArchivePath `
+          -Role $Role -StagingDirectory $StagingDirectory
+      }
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Bundled dictionary payload changed after validation*"
+      @(Get-ChildItem -LiteralPath $script:testOutput -Filter "*.zip").Count | Should -Be 0
+      @(Get-ChildItem -LiteralPath $script:testOutput -Filter "*.manifest.json").Count | Should -Be 0
     }
 
     It "rejects a payload whose dot-source dependency is not packaged" {

@@ -6,6 +6,8 @@ param(
   [string]$MockDictionaryPath = "",
   [string]$ModelPath = "",
   [switch]$AllowNoModel,
+  [string]$BundledDictionaryDirectory = "",
+  [switch]$AllowNoDictionary,
   [switch]$IncludeCompat,
   [switch]$IncludeSettings,
   [switch]$IncludeDiagnostics,
@@ -714,6 +716,150 @@ function Compress-VmVerifyArchive {
   }
 }
 
+function Invoke-VmVerifyDictionaryChecker {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$BundleDirectory
+  )
+
+  $checker = Join-Path $RepositoryRoot "dictbuild\check_bundle.py"
+  if (-not (Test-Path -LiteralPath $checker -PathType Leaf)) {
+    throw "Bundled dictionary checker is missing: $checker"
+  }
+  $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $python) {
+    throw "Python 3.10 or newer is required to validate bundled dictionaries; install python and retry."
+  }
+  $arguments = @($checker, (Get-VmVerifyAbsolutePath -Path $BundleDirectory), "--vm-package-json")
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    # In Windows PowerShell 5.1, native stderr can emit ErrorRecords even for a
+    # successful process. Preserve it separately so stdout remains JSON only.
+    $previousErrorAction = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $output = @(& $python.Source @arguments 2> $stderrPath)
+      $checkerExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    $diagnostics = [System.IO.File]::ReadAllText($stderrPath).Trim()
+    if ($checkerExitCode -ne 0) {
+      throw "Bundled dictionary validation failed (exit code $checkerExitCode): $diagnostics"
+    }
+    try {
+      $metadata = ($output -join "`n") | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      throw "Bundled dictionary checker returned invalid JSON: $($_.Exception.Message)"
+    }
+    if ($null -eq $metadata -or $metadata -is [array] -or
+        ($metadata.schemaVersion -isnot [int] -and $metadata.schemaVersion -isnot [long]) -or
+        $metadata.schemaVersion -ne 1 -or
+        $metadata.sudachiRevision -isnot [string] -or
+        $metadata.sudachiRevision -cnotmatch '^[0-9]{8}$' -or
+        $metadata.inputFingerprint -isnot [string] -or
+        $metadata.inputFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
+        $metadata.provenanceSha256 -isnot [string] -or
+        $metadata.provenanceSha256 -cnotmatch '^[0-9a-f]{64}$') {
+      throw "Bundled dictionary checker returned invalid provenance metadata."
+    }
+    # Select only portable provenance; never copy checker paths into the manifest.
+    return [ordered]@{
+      sudachiRevision = $metadata.sudachiRevision
+      inputFingerprint = $metadata.inputFingerprint
+      provenanceSha256 = $metadata.provenanceSha256
+    }
+  } finally {
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Get-VmVerifyDictionaryPayload {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [string]$BundledDictionaryDirectory = "",
+    [switch]$AllowNoDictionary,
+    [ref]$ValidationMetadata
+  )
+
+  $explicitDirectory = [bool]$BundledDictionaryDirectory
+  if (-not $BundledDictionaryDirectory) {
+    $BundledDictionaryDirectory = Join-Path $RepositoryRoot "build\bundled-dictionaries"
+  }
+  $BundledDictionaryDirectory = Get-VmVerifyAbsolutePath -Path $BundledDictionaryDirectory
+  if (-not (Test-Path -LiteralPath $BundledDictionaryDirectory -PathType Container)) {
+    if (-not $explicitDirectory -and $AllowNoDictionary -and
+        -not (Test-Path -LiteralPath $BundledDictionaryDirectory)) {
+      Write-Warning "Bundled dictionaries omitted by -AllowNoDictionary; static dictionary verification is unavailable."
+      if ($ValidationMetadata) {
+        $ValidationMetadata.Value = [ordered]@{ selection = "omitted" }
+      }
+      return
+    }
+    throw ("Bundled dictionary directory is missing: $BundledDictionaryDirectory. " +
+      "Generate it with python dictbuild/build_bundled.py --output build/bundled-dictionaries " +
+      "--cache build/dictionary-sources, " +
+      "or explicitly use -AllowNoDictionary when the default directory is absent.")
+  }
+
+  # Keep the installed names aligned with the Host's executable-relative dict/ lookup
+  # and the MSI allowlist. Never collect user dictionaries or opt-in download packs.
+  $payloads = @(
+    @{ Archive = "dict/sudachi_lexicon.azdic"; Role = "bundled-dictionary" }
+    @{ Archive = "dict/technical_terms_lexicon.azdic"; Role = "bundled-dictionary" }
+    @{ Archive = "ThirdPartyNotices.txt"; Role = "dictionary-notices" }
+    @{ Archive = "bundle-provenance.json"; Role = "dictionary-provenance" }
+  )
+  foreach ($payload in $payloads) {
+    $source = Join-Path $BundledDictionaryDirectory $payload.Archive
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+      throw "Required bundled dictionary payload is missing: $source"
+    }
+    if ((Get-Item -LiteralPath $source).Length -eq 0) {
+      throw "Required bundled dictionary payload is empty: $source"
+    }
+    if ($payload.Role -eq "dictionary-notices" -and
+        [string]::IsNullOrWhiteSpace([System.IO.File]::ReadAllText(
+            (Get-VmVerifyAbsolutePath -Path $source)))) {
+      throw "Required bundled dictionary notices are empty: $source"
+    }
+    $payload.Source = $source
+  }
+  $provenance = Invoke-VmVerifyDictionaryChecker -RepositoryRoot $RepositoryRoot `
+    -BundleDirectory $BundledDictionaryDirectory
+  $receiptBytes = [System.IO.File]::ReadAllBytes((Join-Path $BundledDictionaryDirectory "bundle-provenance.json"))
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $receiptHash = [BitConverter]::ToString($sha256.ComputeHash($receiptBytes)).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+  if ($receiptHash -cne $provenance.provenanceSha256) {
+    throw "Bundled dictionary provenance changed after validation; retry with a stable bundle."
+  }
+  $receipt = [System.Text.Encoding]::UTF8.GetString($receiptBytes) | ConvertFrom-Json
+  foreach ($payload in $payloads) {
+    $payload.ExpectedSha256 = if ($payload.Role -eq "dictionary-provenance") {
+      $receiptHash
+    } else {
+      $receipt.artifacts.PSObject.Properties[$payload.Archive].Value
+    }
+  }
+  if ($ValidationMetadata) {
+    $ValidationMetadata.Value = [ordered]@{
+      selection = $(if ($explicitDirectory) { "explicit" } else { "default" })
+      sudachiRevision = $provenance.sudachiRevision
+      inputFingerprint = $provenance.inputFingerprint
+      provenanceSha256 = $provenance.provenanceSha256
+    }
+  }
+  return $payloads
+}
+
 function Export-VmVerifyPackage {
   param(
     [Parameter(Mandatory = $true)]
@@ -725,6 +871,8 @@ function Export-VmVerifyPackage {
     [string]$MockDictionary = "",
     [string]$Model = "",
     [switch]$AllowNoModel,
+    [string]$BundledDictionaryDirectory = "",
+    [switch]$AllowNoDictionary,
     [switch]$IncludeCompat,
     [switch]$IncludeSettings,
     [switch]$IncludeDiagnostics,
@@ -806,6 +954,11 @@ function Export-VmVerifyPackage {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
+  $dictionaryMetadata = $null
+  $dictionaryPayloads = @(Get-VmVerifyDictionaryPayload `
+    -RepositoryRoot $repository `
+    -BundledDictionaryDirectory $BundledDictionaryDirectory `
+    -AllowNoDictionary:$AllowNoDictionary -ValidationMetadata ([ref]$dictionaryMetadata))
   # As with OutDir in settings-app/CMakeLists.txt, everything but Debug goes to Release.
   $settingsConfiguration = if ($actualBuildType -ceq "Debug") { "Debug" } else { "Release" }
   $settingsDirectory = Join-Path $configuration.BinaryDir "settings-app\$settingsConfiguration"
@@ -867,6 +1020,7 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "scripts\learning-data-snapshot.ps1"); Archive = "learning-data-snapshot.ps1"; Role = "learning-snapshot-script" }
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
     )
+    $payloads += $dictionaryPayloads
     if ($IncludeCompat) {
       $payloads += @{ Source = $compatExe; Archive = "compat_test.exe"; Role = "compat-runner" }
       $payloads += @{
@@ -927,6 +1081,12 @@ function Export-VmVerifyPackage {
         -Role $payload.Role `
         -StagingDirectory $staging
     }
+    foreach ($payload in $dictionaryPayloads) {
+      $copied = @($files | Where-Object { $_.path -ceq $payload.Archive })
+      if ($copied.Count -ne 1 -or $copied[0].sha256 -cne $payload.ExpectedSha256) {
+        throw "Bundled dictionary payload changed after validation: $($payload.Archive). Retry with a stable bundle."
+      }
+    }
 
     # A missing dot-source dependency only surfaces on the VM, so fail before writing
     # the ZIP. Add-VmVerifyPayloadFile has already checked that each payload exists.
@@ -938,6 +1098,7 @@ function Export-VmVerifyPackage {
       preset = $PresetName
       buildType = $actualBuildType
       buildPrerequisites = $buildPrerequisites
+      bundledDictionaries = $dictionaryMetadata
       generatedAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
       files = @($files | Sort-Object path)
     }
@@ -976,6 +1137,8 @@ if ($MyInvocation.InvocationName -ne ".") {
     -MockDictionary $MockDictionaryPath `
     -Model $ModelPath `
     -AllowNoModel:$AllowNoModel `
+    -BundledDictionaryDirectory $BundledDictionaryDirectory `
+    -AllowNoDictionary:$AllowNoDictionary `
     -IncludeCompat:$IncludeCompat `
     -IncludeSettings:$IncludeSettings `
     -IncludeDiagnostics:$IncludeDiagnostics `

@@ -13,6 +13,7 @@ import urllib.request
 
 import dictbuild
 import extract_sudachi
+import bundle_provenance
 
 HERE = Path(__file__).resolve().parent
 SUDACHI_REVISION = "20260723"
@@ -70,6 +71,10 @@ def build_technical_terms() -> tuple[bytes, str]:
 
 
 def build_bundle(output: Path, cache: Path, offline: bool) -> None:
+    # Invalidate an earlier success before touching any artifact. Publish the new
+    # receipt only after every output and the input stability check succeed.
+    (output / bundle_provenance.RECEIPT).unlink(missing_ok=True)
+    inputs = bundle_provenance.generation_inputs(HERE.parent)
     dictionaries = output / "dict"
     dictionaries.mkdir(parents=True, exist_ok=True)
     notices = ["Notices for the bundled dictionaries\n"]
@@ -92,6 +97,9 @@ def build_bundle(output: Path, cache: Path, offline: bool) -> None:
             notices.append(f"{artifact.name}\n{description}\n\n{layer_notices}")
             print(f"build_bundled: wrote {artifact} ({len(image)} bytes)", file=sys.stderr)
     (output / "ThirdPartyNotices.txt").write_text("\n".join(notices), encoding="utf-8", newline="\n")
+    if bundle_provenance.generation_inputs(HERE.parent) != inputs:
+        raise ValueError("bundled dictionary inputs changed during generation; rebuild")
+    bundle_provenance.write_receipt(output, inputs, SUDACHI_REVISION, SUDACHI_ARCHIVES)
 
 
 def main() -> int:

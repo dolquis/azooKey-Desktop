@@ -11,8 +11,10 @@
     -From <name> -To <name>   : compare two recorded labels file by file
 
   Targets every file under -DataDirectory (default %LOCALAPPDATA%\azooKey\data) plus
-  the known stores (learning.tsv, user_dict.json, typo_corrections.tsv, auto_words.tsv
-  and their .enc). Known stores are recorded with exists=false when missing.
+  the known stores (learning.tsv, learning.v2.tsv, user_dict.json,
+  typo_corrections.tsv, auto_words.tsv, english_learning.tsv, english_learning.v2.tsv
+  and their .enc).
+  Known stores are recorded with exists=false when missing.
 
   Only the relative path, existence, size, line count, last write time (UTC) and
   SHA-256 of each file are recorded. File contents are never written out. The
@@ -32,9 +34,11 @@
   in the data directory, such as host_run_state.txt and the Host's temporary files,
   are listed but not counted. A file whose last write time alone changed ("touched")
   has the same contents and is not counted. A file that could not be read is recorded
-  with its exception type only and compares as "unreadable". The two labels must come
-  from the same data directory. The result is an observation; each gate's verdict
-  follows that issue's criteria and is decided by a human.
+  with its exception type only and compares as "unreadable".
+  Unknown *.tsv, *.tsv.enc, and *.json.enc files cause an unverified warning: they
+  cannot establish that learning data stayed unchanged, even if Changed says no.
+  The labels must come from the same data directory. The result is an observation;
+  each gate's verdict follows that issue's criteria and is decided by a human.
 
   Keep this file ASCII-only. It must run on Windows PowerShell 5.1 (the Windows 11
   default shell), which reads BOM-less UTF-8 as the ANSI code page.
@@ -57,10 +61,12 @@ $script:LearningSnapshotNotice =
 $script:LearningSnapshotDefaultDirectoryLabel = "%LOCALAPPDATA%\azooKey\data"
 $script:LearningSnapshotKnownStores = @(
   "learning.tsv",
+  "learning.v2.tsv",
   "user_dict.json",
   "typo_corrections.tsv",
   "auto_words.tsv",
-  "english_learning.tsv"
+  "english_learning.tsv",
+  "english_learning.v2.tsv"
 )
 $script:LearningSnapshotLabelPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 $script:LearningSnapshotPathPattern = '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'
@@ -193,6 +199,18 @@ function Test-LearningSnapshotStorePath {
   return $false
 }
 
+# Test the original path before anonymizing it, so an unsafe file name cannot hide
+# a possible future store. Host temporary and lock files do not match these endings.
+function Test-LearningSnapshotUnknownStorePath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  return (-not (Test-LearningSnapshotStorePath -Path $Path) -and
+    $Path -match '\.(tsv(\.enc)?|json\.enc)$')
+}
+
 function Get-LearningSnapshotFileRecord {
   param(
     [Parameter(Mandatory = $true)]
@@ -205,6 +223,7 @@ function Get-LearningSnapshotFileRecord {
   $record = [ordered]@{
     path = ConvertTo-LearningSnapshotPathToken -RelativePath $RelativePath
     learningStore = Test-LearningSnapshotStorePath -Path $RelativePath
+    unknownStore = Test-LearningSnapshotUnknownStorePath -Path $RelativePath
     exists = $false
     encrypted = $encrypted
     size = $null
@@ -577,11 +596,23 @@ function Compare-LearningSnapshot {
   $changed = $false
   $unreadable = 0
   $storesPresent = 0
+  $unknownStores = 0
   $entries = foreach ($relative in $paths) {
     $before = $beforeFiles[$relative]
     $after = $afterFiles[$relative]
     $status = Get-LearningSnapshotFileStatus -Before $before -After $after
     $isStore = Test-LearningSnapshotStorePath -Path $relative
+    # Older snapshots have no unknownStore field. An anonymized old path has lost
+    # its extension, so conservatively leave it unverified without recovering it.
+    $isLegacyAnonymous = $relative -like "unrecognized-name-*" -and (
+      ($null -ne $before -and $null -eq $before.PSObject.Properties["unknownStore"]) -or
+      ($null -ne $after -and $null -eq $after.PSObject.Properties["unknownStore"]))
+    $isUnknownStore = -not $isStore -and ($before.unknownStore -or $after.unknownStore -or
+      $isLegacyAnonymous -or
+      (Test-LearningSnapshotUnknownStorePath -Path $relative))
+    if ($isUnknownStore -and $status -ne "absent") {
+      $unknownStores++
+    }
     if ($isStore -and $status -in @("added", "removed", "changed")) {
       $changed = $true
     }
@@ -594,6 +625,7 @@ function Compare-LearningSnapshot {
     [pscustomobject][ordered]@{
       path = $relative
       learningStore = $isStore
+      unknownStore = $isUnknownStore
       status = $status
       sizeDelta = Get-LearningSnapshotDelta -Before $before -After $after -Field "size"
       lineCountDelta = Get-LearningSnapshotDelta -Before $before -After $after -Field "lineCount"
@@ -606,6 +638,7 @@ function Compare-LearningSnapshot {
     changed = $changed
     unreadableStores = $unreadable
     storesPresent = $storesPresent
+    unknownStores = $unknownStores
     notice = "Observations only. Human gate verdicts follow each issue's criteria."
     files = @($entries)
   }
@@ -630,7 +663,9 @@ function Format-LearningSnapshotComparison {
     if ($null -ne $entry.lineCountDelta) {
       $detail += " lines {0:+#;-#;0}" -f $entry.lineCountDelta
     }
-    if (-not $entry.learningStore) {
+    if ($entry.unknownStore) {
+      $detail += " (unknown store; unverified)"
+    } elseif (-not $entry.learningStore) {
       $detail += " (not learning data; not counted)"
     }
     $lines.Add(("  {0,-10} {1}{2}" -f $entry.status, $entry.path, $detail))
@@ -647,6 +682,10 @@ function Format-LearningSnapshotComparison {
   }
   if ($Comparison.unreadableStores -gt 0) {
     $lines.Add("Unverified: $($Comparison.unreadableStores) learning store file(s) could not be read. Record again.")
+  }
+  if ($Comparison.unknownStores -gt 0) {
+    $lines.Add("Warning: unknown learning store candidate(s) were found.")
+    $lines.Add("Unverified: $($Comparison.unknownStores) unknown store file(s). Changed: no is not evidence of unchanged learning data. Check the Host store definitions.")
   }
   $lines.Add($Comparison.notice)
   return $lines

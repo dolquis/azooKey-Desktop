@@ -418,6 +418,10 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   `hw_gpu_count`、`hw_ml_only_count`、`vulkan_loader`、`cuda_runtime`、`os_build`、
   `winml_os_eligible`、`on_battery`。アダプタ名は出さない。実際にロードした backend は
   Health と QueryDiagnostics の `backend` が示す。
+  QueryDiagnostics の任意の `backend_selection` は起動時の `source`、`auto_backend`、
+  `reason` と上記の事実を保持する。電源変化や設定再読込後も起動時の値として扱い、
+  実ロード状態と区別する。wire 定義と診断 CLI 出力は
+  `docs/dev-infrastructure-spec.md` §12.6 に従う。
 
 ### 4.5 フォールバック段位
 

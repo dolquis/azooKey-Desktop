@@ -56,6 +56,22 @@ class MockDpapiCrypto final : public azookey::learning::ByteCrypto {
   }
 };
 
+azookey::ipc::BackendSelectionDiagnostics BackendSelectionFixture() {
+  azookey::ipc::BackendSelectionDiagnostics selection;
+  selection.source = "settings";
+  selection.auto_backend = "vulkan";
+  selection.reason = "vulkan_candidate";
+  selection.adapters_known = true;
+  selection.hw_gpu_count = 2;
+  selection.hw_ml_only_count = 1;
+  selection.vulkan_loader = true;
+  selection.cuda_runtime = false;
+  selection.os_build = 26100;
+  selection.winml_os_eligible = true;
+  selection.on_battery = false;
+  return selection;
+}
+
 TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) {
   diag::Snapshot snapshot;
   snapshot.tip_path_registered = true;
@@ -217,6 +233,48 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
 )json");
   ASSERT_TRUE(expected.has_value());
   EXPECT_EQ(actual, j::Stringify(*expected));
+}
+
+TEST(DiagnosticsTest, BackendSelectionDetailsContainOnlyStartupFacts) {
+  diag::Snapshot snapshot;
+  azookey::ipc::QueryDiagnosticsPayload host;
+  host.engine = "llama_cpp";
+  host.backend = "cpu";
+  host.fallback_state = "healthy";
+  host.backend_selection = BackendSelectionFixture();
+  snapshot.host_diagnostics = host;
+
+  const auto report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                                  [](const auto& item) { return item.id == "D-008"; });
+  ASSERT_NE(check, report.checks.end());
+  const auto details = j::Parse(check->details_json);
+  ASSERT_TRUE(details.has_value());
+  EXPECT_EQ(check->status, diag::Status::Ok);
+  EXPECT_EQ(details->GetString("engine"), "llama_cpp");
+  EXPECT_EQ(details->GetBool("loaded"), false);
+  const auto* selection = details->Find("backend_selection");
+  ASSERT_NE(selection, nullptr);
+  const auto expected = j::Parse(R"({
+    "source":"settings","auto_backend":"vulkan","reason":"vulkan_candidate",
+    "adapters_known":true,"hw_gpu_count":2,"hw_ml_only_count":1,
+    "vulkan_loader":true,"cuda_runtime":false,"os_build":26100,
+    "winml_os_eligible":true,"on_battery":false
+  })");
+  ASSERT_TRUE(expected.has_value());
+  // Exact object equality excludes adapter names, IDs, LUIDs and driver strings.
+  EXPECT_EQ(j::Stringify(*selection), j::Stringify(*expected));
+  EXPECT_EQ(snapshot.host_diagnostics->backend, "cpu");
+}
+
+TEST(DiagnosticsTest, LegacyHostResponseOmitsBackendSelectionDetails) {
+  diag::Snapshot snapshot;
+  snapshot.host_diagnostics = azookey::ipc::ParseQueryDiagnostics(
+      R"({"engine":"llama_cpp","backend":"cpu","fallback_state":"healthy"})");
+  ASSERT_TRUE(snapshot.host_diagnostics.has_value());
+  const auto json = diag::SerializeReport(diag::EvaluateSnapshot(snapshot, 1));
+  EXPECT_EQ(json.find("backend_selection"), std::string::npos);
+  EXPECT_NE(json.find(R"("engine":"llama_cpp")"), std::string::npos);
 }
 
 TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
@@ -384,11 +442,18 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   diag::ProbeResult result;
   result.settings_path = settings_path;
   result.logs_directory = logs_directory;
-  result.report.timestamp_ms = 1;
+  diag::Snapshot snapshot;
+  azookey::ipc::QueryDiagnosticsPayload host;
+  host.engine = "llama_cpp";
+  host.backend = "cpu";
+  host.fallback_state = "healthy";
+  host.backend_selection = BackendSelectionFixture();
+  host.last_error = R"(Bearer private-token at D:\Users\bob\model.gguf)";
+  snapshot.host_diagnostics = host;
+  result.report = diag::EvaluateSnapshot(snapshot, 1);
   result.report.checks.push_back(
       {"D-001", "tip_dll", diag::Status::Ok, "ok", R"({"token":"sk-diagnostic"})"});
-  result.host_health_json =
-      R"({"last_error":"Bearer private-token at D:\\Users\\bob\\model.gguf"})";
+  result.host_health_json = azookey::ipc::BuildQueryDiagnostics(host);
   result.ipc_ping_json = R"({"status":"ok","rtt_ms":1})";
   {
     std::ofstream output(logs_directory / "host-20260802.jsonl");
@@ -435,6 +500,32 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   EXPECT_EQ(combined.find("bob"), std::string::npos);
   EXPECT_NE(combined.find("***redacted***"), std::string::npos);
   EXPECT_NE(combined.find("%USERPROFILE%"), std::string::npos);
+  const auto host_json = j::Parse(result.host_health_json);
+  ASSERT_TRUE(host_json.has_value());
+  const auto* expected_selection = host_json->Find("backend_selection");
+  ASSERT_NE(expected_selection, nullptr);
+  for (const auto& entry : entries) {
+    if (entry.name != "diag.json" && entry.name != "host-health.json") continue;
+    const auto collected = j::Parse(entry.content);
+    ASSERT_TRUE(collected.has_value()) << entry.name;
+    const j::Value* selection = nullptr;
+    if (entry.name == "diag.json") {
+      const auto* checks = collected->GetArray("checks");
+      ASSERT_NE(checks, nullptr);
+      const auto model_check = std::find_if(checks->begin(), checks->end(), [](const auto& check) {
+        return check.GetString("id") == "D-008";
+      });
+      ASSERT_NE(model_check, checks->end());
+      const auto* details = model_check->Find("details");
+      ASSERT_NE(details, nullptr);
+      selection = details->Find("backend_selection");
+    } else {
+      selection = collected->Find("backend_selection");
+      EXPECT_EQ(collected->GetString("backend"), "cpu");
+    }
+    ASSERT_NE(selection, nullptr) << entry.name;
+    EXPECT_EQ(j::Stringify(*selection), j::Stringify(*expected_selection)) << entry.name;
+  }
 
   std::filesystem::remove(settings_path, ec);
   std::filesystem::remove_all(logs_directory, ec);

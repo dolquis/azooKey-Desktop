@@ -24,6 +24,7 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/BackendSelector.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/PunctuationInserter.h"
@@ -2691,6 +2692,85 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_EQ(parsed->fallback_state, "healthy");
   // No layer state was injected, so the field is left out.
   EXPECT_FALSE(parsed->neologd_layer.has_value());
+  EXPECT_FALSE(parsed->backend_selection.has_value());
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsPreservesStartupBackendSelectionAcrossConnections) {
+  auto config = DefaultDispatcherConfig();
+  config.backend_selection = ipc::BackendSelectionDiagnostics{
+      "cli", "vulkan", "vulkan_candidate", true, 1, 2, true, false, 26100, true, false};
+  auto current_auto = azookey::host::BackendKind::Vulkan;
+  config.auto_backend = [&current_auto] { return current_auto; };
+  azookey::host::Dispatcher first(&engine, &scheduler, &user_dict, config);
+  azookey::host::Dispatcher second(&engine, &scheduler, &user_dict, config);
+  // Changing the live auto backend must not rewrite the startup explanation.
+  current_auto = azookey::host::BackendKind::Cpu;
+  for (auto* connection : {&first, &second}) {
+    const auto response =
+        connection->Dispatch(MakeReq(702, ipc::MessageType::QueryDiagnostics, "{}"));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+    ASSERT_TRUE(parsed && parsed->backend_selection);
+    EXPECT_EQ(parsed->backend, "cpu");
+    EXPECT_EQ(parsed->fallback_state, "healthy");
+    EXPECT_EQ(parsed->backend_selection->source, "cli");
+    EXPECT_EQ(parsed->backend_selection->auto_backend, "vulkan");
+    EXPECT_EQ(parsed->backend_selection->reason, "vulkan_candidate");
+    EXPECT_EQ(parsed->backend_selection->hw_gpu_count, 1u);
+    EXPECT_EQ(parsed->backend_selection->hw_ml_only_count, 2u);
+    EXPECT_EQ(parsed->backend_selection->os_build, 26100u);
+    const auto health = connection->Dispatch(MakeReq(703, ipc::MessageType::Health, "{}"));
+    ASSERT_TRUE(health);
+    const auto parsed_health = ipc::ParseHealth(health->payload_json);
+    ASSERT_TRUE(parsed_health);
+    EXPECT_EQ(parsed_health->status, "ok");
+    EXPECT_EQ(parsed_health->backend, "cpu");
+    EXPECT_EQ(health->payload_json.find("backend_selection"), std::string::npos);
+  }
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsReportsAutoVulkanBeforeModelLoad) {
+  // Supply hardware facts without probing or requiring an actual GPU/loader.
+  azookey::host::BackendSystemFacts facts;
+  facts.adapters = std::vector<azookey::host::GraphicsAdapterInfo>{{true, true, true}};
+  facts.vulkan_loader_present = true;
+  facts.os_build = 26100;
+  const auto selection =
+      azookey::host::SelectAutoBackend(facts, azookey::host::CompiledBackends{false, true});
+  ASSERT_EQ(selection.backend, azookey::host::BackendKind::Vulkan);
+
+  azookey::host::RuntimeSettings settings;
+  settings.model.enabled = false;
+  const auto engine_config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      azookey::host::EngineConfig{}, settings, selection.backend);
+  // Startup constructs the engine with the resolved config. ApplyConfig does
+  // not replace the backend of an existing engine.
+  azookey::host::InferenceEngine gpu_engine(std::make_unique<azookey::core::SimpleConverter>(),
+                                            nullptr, engine_config);
+  auto config = DefaultDispatcherConfig();
+  config.backend_selection =
+      ipc::BackendSelectionDiagnostics{"auto",
+                                       azookey::host::BackendName(selection.backend),
+                                       azookey::host::BackendSelectionReasonName(selection.reason),
+                                       true,
+                                       static_cast<uint64_t>(selection.hardware_gpu_count),
+                                       static_cast<uint64_t>(selection.hardware_ml_only_count),
+                                       true,
+                                       false,
+                                       26100,
+                                       selection.winml_os_eligible,
+                                       false};
+  azookey::host::Dispatcher gpu_dispatcher(&gpu_engine, &scheduler, &user_dict, config);
+  const auto response =
+      gpu_dispatcher.Dispatch(MakeReq(704, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->backend_selection);
+  EXPECT_FALSE(parsed->model_loaded);
+  EXPECT_EQ(parsed->backend, "vulkan");
+  EXPECT_EQ(parsed->backend, parsed->backend_selection->auto_backend);
+  EXPECT_EQ(parsed->backend_selection->reason, "vulkan_candidate");
+  EXPECT_EQ(parsed->backend_selection->hw_gpu_count, 1u);
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsTheNeologdLayerState) {

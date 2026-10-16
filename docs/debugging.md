@@ -248,6 +248,10 @@ cmake --build --preset windows-debug --target azookey_check
 
 ## 典型トラブル
 
+- **起動時の backend 選択を調べたい**: `azookey_diag --json` の
+  `D-008.details.backend_selection` で Host 起動時の選択元と自動判定理由を確認する。
+  電源変更後の実効 backend とは区別し、フィールドの定義は
+  [`dev-infrastructure-spec.md`](./dev-infrastructure-spec.md) §12 を参照する。
 - **特定のアプリだけ入力できない**: 対象アプリを前面にして `azookey_diag --json` の
   `D-015` を確認する。ターミナルを前面にしたまま起動するとターミナルが検査対象になるため、
   遅延起動などで診断時に対象アプリを前面にする。`details.reason` が `x86` / `unsupported_architecture` /

@@ -12,6 +12,7 @@
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Messages.h"
+#include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -44,6 +45,9 @@ struct DispatcherConfig {
   // Shared with the startup pack worker. nullptr omits neologd_layer from
   // QueryDiagnostics.
   std::shared_ptr<NeologdLayerState> neologd_layer;
+  // Immutable startup snapshot; power changes and model reloads do not
+  // replace it. The actual loaded backend remains the engine's health state.
+  std::optional<ipc::BackendSelectionDiagnostics> backend_selection;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code

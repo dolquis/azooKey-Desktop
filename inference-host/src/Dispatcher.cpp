@@ -730,6 +730,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
     p.fallback_state = "healthy";
   }
   if (config_.neologd_layer) p.neologd_layer = config_.neologd_layer->Snapshot();
+  p.backend_selection = config_.backend_selection;
   return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 

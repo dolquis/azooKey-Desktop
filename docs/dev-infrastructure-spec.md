@@ -3081,6 +3081,14 @@ Response:
       "loaded_model_path": str (optional, model_loaded=true のときだけ存在),
       "engine": "llama_cpp" | "mock" | "winml",
       "backend": str, "rss_mb": int,
+      "backend_selection": {                  (optional, 起動時の選択結果)
+        "source": "cli" | "settings" | "auto",
+        "auto_backend": str, "reason": str,
+        "adapters_known": bool,
+        "hw_gpu_count": uint64, "hw_ml_only_count": uint64,
+        "vulkan_loader": bool, "cuda_runtime": bool,
+        "os_build": uint32, "winml_os_eligible": bool, "on_battery": bool
+      },
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
       "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),
@@ -3100,6 +3108,18 @@ v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落�
 `neologd_layer` は protocol v1 の追加フィールドで、欠落と未知の `state` はどちらも「無し」として
 扱い、payload 全体は不正にしない。値の意味は `docs/auto-word-registration-spec.md` §15.14 が定める。
 `reason` は `neologd_pack_load` ログと同じ固定の分類名だけで、パスやサーバの応答を含まない。
+
+`backend_selection` は protocol v1 への省略可能な追加フィールドである。欠落、型違い、
+内部フィールドの欠落や数値範囲外は「無し」として扱い、payload 全体は不正にしない。
+未知の内部キーは無視する。値は Host 起動時の BackendSelector の結果で、選択規則と
+`reason` の固定分類名は `docs/copilot-pc-backend-spec.md` §4.4 に従う。
+`source` は起動時の要求元、`auto_backend` は一次フィルタの候補であり、明示指定や
+ロード失敗後の実 backend は従来どおり `backend` が示す。Health の意味も変えない。
+電源変化や `UpdateConfig` の後もこの起動時の値を保持する。
+`adapters_known=false` は列挙不能または SafeMode による probe 省略、`os_build=0` は
+OS build 不明を表す。SafeMode の probe 省略時は件数と bool も 0 / false になる。
+アダプタ名・識別子・パス・自由文は含めず、分類名と非識別の事実のみを返す。
+診断 CLI の JSON は `D-008` の `details.backend_selection` に同じ値を載せる。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 `last_error` / `ep_last_error` は失敗時にユーザーパスを含みうるため、保存前に

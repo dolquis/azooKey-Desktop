@@ -1049,6 +1049,22 @@ int main(int argc, char** argv) {
   dconf.runtime_tier = "mock";
 #endif
   dconf.default_backend = default_backend;
+  // Preserve the startup decision separately from the loaded backend and
+  // the `auto` value that subsequently follows power changes.
+  const auto& startup_selection = auto_backend.selection;
+  const auto& startup_facts = auto_backend.facts;
+  dconf.backend_selection = azookey::ipc::BackendSelectionDiagnostics{
+      std::string(BackendRequestSource(explicit_backend, settings_result.settings)),
+      azookey::host::BackendName(startup_selection.backend),
+      azookey::host::BackendSelectionReasonName(startup_selection.reason),
+      startup_facts.adapters.has_value(),
+      static_cast<uint64_t>(startup_selection.hardware_gpu_count),
+      static_cast<uint64_t>(startup_selection.hardware_ml_only_count),
+      startup_facts.vulkan_loader_present,
+      startup_facts.cuda_runtime_present,
+      startup_facts.os_build.value_or(0),
+      startup_selection.winml_os_eligible,
+      startup_facts.on_battery};
   // M25: `auto` follows the power source; UpdateConfig reads the current value.
   std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
   dconf.auto_backend = [&current_auto_backend] { return current_auto_backend.load(); };

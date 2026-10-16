@@ -723,6 +723,7 @@ TEST(DiagnosticsTest, LoadedUnicodeModelPathsPreserveComparisonAndRedaction) {
   host.engine = "llama_cpp";
   host.backend = "cpu";
   host.fallback_state = "healthy";
+  host.backend_selection = BackendSelectionFixture();
 
   for (const auto* loaded_path :
        {u8"C:\\Users\\private-user\\\uD55C\U00020BB7\\Model.GGUF",
@@ -748,6 +749,9 @@ TEST(DiagnosticsTest, LoadedUnicodeModelPathsPreserveComparisonAndRedaction) {
         const auto details = j::Parse(check.details_json);
         ASSERT_TRUE(details.has_value());
         EXPECT_EQ(details->GetBool("loaded"), std::optional<bool>(expected_loaded));
+        const auto* selection = details->Find("backend_selection");
+        ASSERT_NE(selection, nullptr);
+        EXPECT_EQ(selection->GetString("reason"), "vulkan_candidate");
       }
     }
     EXPECT_TRUE(seen_d007);

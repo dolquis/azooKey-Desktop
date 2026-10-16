@@ -1649,6 +1649,14 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 revision は `authored-v1`、ライセンスは Apache-2.0、category は `technical`（必要に応じ
 `software` も付与）とし、由来は隣接する metadata JSON に記録する。外部辞書は転記しない。
 帰属は層の固定順で `ThirdPartyNotices.txt` へ集約する。
+生成完了時に `bundle-provenance.json` を書き、生成器とその依存コード、両層のmetadata、
+技術用語seed、参照するnoticeのリポジトリ相対パスとSHA-256を固定順で集約する。
+記録は入力全体のfingerprint、Sudachi revisionとアーカイブのSHA-256 pin、辞書2層と
+帰属表示のSHA-256を結ぶ。生成の前後で入力が異なる場合は成功の記録を残さない。
+絶対パス、生成時刻、commitはこの記録に含めず、同一入力での決定性を保つ。
+実機検証zipの生成では `check_bundle.py --vm-package-json` が形式・出所・入力と出力の一致を検査する
+（`dev-infrastructure-spec.md` §2.6）。この記録はローカル成果物の取り違え・古い入力の検出に使い、
+署名済み配布物の真正性を保証するものではない。
 release workflow は同じキャッシュを使って別出力先へ2回生成し、2回目を `--offline` とする。
 `check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
 `content_hash`、ファイルサイズ、全バイトのSHA256と帰属文書の一致を検査する。

@@ -19,10 +19,12 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_bundle
 import build_bundled
+import bundle_provenance
 import dictbuild
 import extract_neologd
 import extract_sudachi
 from make_fixtures import generate
+from make_vm_bundle_fixture import generate as generate_vm_bundle
 import neologd_pack
 
 
@@ -515,6 +517,224 @@ class BundleGuardTests(unittest.TestCase):
                     redirect_stderr(stderr):
                 self.assertEqual(check_bundle.main(), 1)
             self.assertIn("neologd_lexicon.azdic: not a bundled static layer", stderr.getvalue())
+
+
+class VmBundleProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.repository = self.root / "repository"
+        self.code = self.repository / "dictbuild"
+        self.code.mkdir(parents=True)
+        for name in (*bundle_provenance.CODE_INPUTS, "check_bundle.py"):
+            shutil.copyfile(build_bundled.HERE / name, self.code / name)
+        for directory in ("sources", "notices"):
+            shutil.copytree(build_bundled.HERE / directory, self.code / directory)
+        self.bundle = self.root / "bundle"
+        self.build_here = mock.patch.object(build_bundled, "HERE", self.code)
+        self.check_here = mock.patch.object(check_bundle, "HERE", self.code)
+        self.build_here.start()
+        self.check_here.start()
+        self.addCleanup(self.build_here.stop)
+        self.addCleanup(self.check_here.stop)
+        with redirect_stderr(io.StringIO()):
+            generate_vm_bundle(self.repository, self.bundle)
+
+    def receipt(self):
+        return self.bundle / bundle_provenance.RECEIPT
+
+    def refresh_receipt(self):
+        bundle_provenance.write_receipt(self.bundle, bundle_provenance.generation_inputs(self.repository),
+                                        build_bundled.SUDACHI_REVISION, build_bundled.SUDACHI_ARCHIVES)
+
+    def rewrite_meta(self, change):
+        artifact = self.bundle / "dict" / "sudachi_lexicon.azdic"
+        image = artifact.read_bytes()
+        sections = []
+        for i in range(struct.unpack_from("<I", image, 28)[0]):
+            name, _, offset, length = struct.unpack_from("<4sIQQ", image, 64 + 24 * i)
+            body = image[offset:offset + length]
+            if name == b"META":
+                meta = json.loads(body)
+                change(meta)
+                body = json.dumps(meta).encode("utf-8")
+            sections.append((name, body))
+        artifact.write_bytes(dictbuild.pack(sections, 1, struct.unpack_from("<I", image, 20)[0],
+                                           struct.unpack_from("<I", image, 24)[0]))
+        self.refresh_receipt()
+
+    def test_accepts_valid_bundle_with_relative_deterministic_provenance(self):
+        result = check_bundle.check_vm_package(self.bundle)
+        self.assertEqual(set(result), {"schemaVersion", "sudachiRevision", "inputFingerprint", "provenanceSha256"})
+        self.assertEqual(result["sudachiRevision"], "20260723")
+        self.assertRegex(result["inputFingerprint"], r"^[a-f0-9]{64}$")
+        self.assertRegex(result["provenanceSha256"], r"^[a-f0-9]{64}$")
+        original = self.receipt().read_bytes()
+        self.assertNotIn(str(self.root).encode(), original)
+        with redirect_stderr(io.StringIO()):
+            generate_vm_bundle(self.repository, self.root / "second")
+        self.assertEqual(original, (self.root / "second" / bundle_provenance.RECEIPT).read_bytes())
+
+    def test_vm_allowlist_ignores_extra_files_but_default_guard_rejects_them(self):
+        (self.bundle / "dict" / "neologd_lexicon.azdic").write_bytes(b"not selected")
+        (self.bundle / "unrelated.txt").write_text("ignored")
+        check_bundle.check_vm_package(self.bundle)
+        self.assertTrue(any("not a bundled static layer" in e for e in check_bundle.check(self.bundle, None)))
+
+    def test_unrelated_repository_changes_do_not_invalidate_generation(self):
+        (self.repository / "unrelated.txt").write_text("new commit")
+        check_bundle.check_vm_package(self.bundle)
+
+    def test_missing_receipt_fails(self):
+        self.receipt().unlink()
+        with self.assertRaisesRegex(ValueError, "missing generation receipt"):
+            check_bundle.check_vm_package(self.bundle)
+
+    def test_every_generation_input_is_bound(self):
+        for relative in bundle_provenance.generation_inputs(self.repository):
+            with self.subTest(input=relative):
+                path = self.repository / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n")
+                try:
+                    with self.assertRaisesRegex(ValueError, "inputs does not match"):
+                        check_bundle.check_vm_package(self.bundle)
+                finally:
+                    path.write_bytes(original)
+
+    def test_receipt_fixed_fields_sets_pins_and_hashes_are_checked(self):
+        original = json.loads(self.receipt().read_text(encoding="utf-8"))
+        mutations = (
+            lambda r: r.update(schemaVersion=True),
+            lambda r: r.update(extra="unexpected"),
+            lambda r: r["sudachi"].update(revision="old"),
+            lambda r: r["sudachi"]["archives"].update({"small_lex.zip": "0" * 64}),
+            lambda r: r["inputs"].pop("dictbuild/build_bundled.py"),
+            lambda r: r["inputs"].update({str(self.root / "outside"): "0" * 64}),
+            lambda r: r["artifacts"].update({"../../outside": "0" * 64}),
+            lambda r: r["artifacts"].pop("ThirdPartyNotices.txt"),
+            lambda r: r.update(inputFingerprint="0" * 64),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                receipt = copy.deepcopy(original)
+                mutate(receipt)
+                self.receipt().write_text(json.dumps(receipt), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    check_bundle.check_vm_package(self.bundle)
+
+    def test_duplicate_receipt_keys_fail(self):
+        self.receipt().write_text('{"schemaVersion":1,"schemaVersion":1}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicate provenance field"):
+            check_bundle.check_vm_package(self.bundle)
+
+    def test_all_selected_artifact_hashes_are_bound(self):
+        for relative in bundle_provenance.ARTIFACTS:
+            with self.subTest(artifact=relative):
+                path = self.bundle / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b"changed")
+                try:
+                    with self.assertRaisesRegex(ValueError, "artifacts does not match"):
+                        check_bundle.check_vm_package(self.bundle)
+                finally:
+                    path.write_bytes(original)
+
+    def test_full_binary_validation_even_if_receipt_hash_is_updated(self):
+        artifact = self.bundle / "dict" / "sudachi_lexicon.azdic"
+        original = artifact.read_bytes()
+        mutations = {
+            "magic": lambda image: image.__setitem__(0, 0),
+            "version": lambda image: struct.pack_into("<H", image, 8, 2),
+            "layer": lambda image: struct.pack_into("<I", image, 16, 4),
+            "table": lambda image: struct.pack_into("<I", image, 28, 64),
+            "content hash": lambda image: image.__setitem__(32, image[32] ^ 1),
+            "truncation": lambda image: image.__delitem__(slice(-10, None)),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(corruption=name):
+                image = bytearray(original)
+                mutate(image)
+                artifact.write_bytes(image)
+                self.refresh_receipt()
+                with self.assertRaises(ValueError):
+                    check_bundle.check_vm_package(self.bundle)
+
+    def test_meta_sources_must_match_current_metadata(self):
+        self.rewrite_meta(lambda meta: meta.update(sources=[]))
+        with self.assertRaisesRegex(ValueError, "META sources"):
+            check_bundle.check_vm_package(self.bundle)
+
+    def test_meta_missing_sources_is_rejected(self):
+        self.rewrite_meta(lambda meta: meta.pop("sources"))
+        with self.assertRaises((ValueError, KeyError)):
+            check_bundle.check_vm_package(self.bundle)
+
+    def test_notices_must_include_full_source_attribution(self):
+        (self.bundle / "ThirdPartyNotices.txt").write_text("sudachidict-core\nazookey-technical-terms\n", encoding="utf-8")
+        self.refresh_receipt()
+        with self.assertRaisesRegex(ValueError, "source attribution"):
+            check_bundle.check_vm_package(self.bundle)
+
+    def test_failed_rebuild_invalidates_previous_receipt(self):
+        with mock.patch.object(build_bundled, "build_sudachi", side_effect=ValueError("failed build")):
+            with self.assertRaisesRegex(ValueError, "failed build"):
+                build_bundled.build_bundle(self.bundle, self.root / "cache", True)
+        self.assertFalse(self.receipt().exists())
+
+    def test_input_changes_during_build_prevent_receipt_publication(self):
+        original = bundle_provenance.generation_inputs(self.repository)
+        changed = dict(original, changed="0" * 64)
+        with mock.patch.object(bundle_provenance, "generation_inputs", side_effect=[original, changed]), \
+                redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "inputs changed during generation"):
+                generate_vm_bundle(self.repository, self.bundle)
+        self.assertFalse(self.receipt().exists())
+
+    def test_receipt_publish_failure_cannot_leave_an_old_success(self):
+        with mock.patch.object(bundle_provenance, "write_receipt", side_effect=OSError("publish failed")), \
+                redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(OSError, "publish failed"):
+                generate_vm_bundle(self.repository, self.bundle)
+        self.assertFalse(self.receipt().exists())
+
+    def test_validation_uses_one_snapshot_for_receipt_and_payload_hashes(self):
+        expected = check_bundle.check_vm_package(self.bundle)
+        original_read = Path.read_bytes
+        reads = {}
+
+        def read_once(path):
+            relative = path.relative_to(self.bundle).as_posix() if path.is_relative_to(self.bundle) else None
+            if relative in (*bundle_provenance.ARTIFACTS, bundle_provenance.RECEIPT):
+                reads[relative] = reads.get(relative, 0) + 1
+                self.assertEqual(reads[relative], 1, f"reread a changing file: {relative}")
+            return original_read(path)
+
+        with mock.patch.object(Path, "read_bytes", read_once):
+            self.assertEqual(check_bundle.check_vm_package(self.bundle), expected)
+        self.assertEqual(set(reads), {*bundle_provenance.ARTIFACTS, bundle_provenance.RECEIPT})
+
+    def test_fixture_cli_imports_and_fingerprints_the_requested_checkout(self):
+        helper = Path(__file__).resolve().parent / "make_vm_bundle_fixture.py"
+        output = self.root / "from-cli"
+        completed = subprocess.run([sys.executable, str(helper), "--repository", str(self.repository),
+                                    "--output", str(output)], capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads((output / bundle_provenance.RECEIPT).read_text(encoding="utf-8"))["inputs"],
+                         bundle_provenance.generation_inputs(self.repository))
+        check_bundle.check_vm_package(output)
+
+    def test_cli_outputs_only_json_and_errors_have_no_stdout(self):
+        command = [sys.executable, str(self.code / "check_bundle.py"), str(self.bundle), "--vm-package-json"]
+        accepted = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(json.loads(accepted.stdout), check_bundle.check_vm_package(self.bundle))
+        self.receipt().unlink()
+        rejected = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(rejected.returncode, 1)
+        self.assertEqual(rejected.stdout, "")
+        self.assertIn("missing generation receipt", rejected.stderr)
 
 
 if __name__ == "__main__":

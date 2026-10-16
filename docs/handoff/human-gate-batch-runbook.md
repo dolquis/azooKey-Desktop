@@ -74,6 +74,9 @@ GGUF なしでは同梱辞書などの候補へフォールバックするため
 静的辞書は `-BundledDictionaryDirectory`（既定 `build/bundled-dictionaries`）から
 `dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic` と
 `ThirdPartyNotices.txt` を同梱し、各ファイルの SHA-256 を `manifest.json` に記録する。
+生成入力と出力を結ぶ `bundle-provenance.json` も同梱する。パッケージ生成は形式・出所と現在の生成入力を照合するため、
+古い生成結果で拒否された場合は上の辞書生成コマンドを実行し直す。manifestの `bundledDictionaries` には
+既定/明示指定の区分とSudachi revisionを記録し、指定したディレクトリのパスは記録しない。
 既定の辞書ディレクトリが無い場合だけ、`-AllowNoDictionary` の明示で省略できる。
 明示したパスの不存在や、不完全な辞書セット・空の帰属表示は省略スイッチでも拒否する。
 辞書を省略した zip は辞書層を前提とする再変換・候補合流・未知語判定のゲートに使わない。

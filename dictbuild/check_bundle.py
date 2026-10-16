@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -18,15 +19,19 @@ import sys
 import xml.etree.ElementTree as ElementTree
 
 import dictbuild
+import build_bundled
+import bundle_provenance
+
+HERE = Path(__file__).resolve().parent
 
 BUNDLED = {f"{layer}.azdic": index for index, layer in enumerate(dictbuild.LAYERS)
            if layer != "neologd_lexicon"}
 WIX = "{http://wixtoolset.org/schemas/v4/wxs}"
 
 
-def read_header(path: Path) -> tuple[int, list[str]]:
+def read_header(path: Path, image: bytes | None = None) -> tuple[int, list[str]]:
     """Returns the layer id and META source ids without loading the whole artifact."""
-    with path.open("rb") as stream:
+    with (io.BytesIO(image) if image is not None else path.open("rb")) as stream:
         header = stream.read(64)
         if len(header) < 64 or header[:8] != b"AZDIC1\0\0":
             raise ValueError(f"{path.name}: not an .azdic v1 artifact")
@@ -34,6 +39,8 @@ def read_header(path: Path) -> tuple[int, list[str]]:
         if not 6 <= section_count <= 64:
             raise ValueError(f"{path.name}: invalid section table")
         table = stream.read(24 * section_count)
+        if len(table) != 24 * section_count:
+            raise ValueError(f"{path.name}: truncated section table")
         for i in range(section_count):
             name, _, offset, length = struct.unpack_from("<4sIQQ", table, 24 * i)
             if name == b"META":
@@ -41,6 +48,35 @@ def read_header(path: Path) -> tuple[int, list[str]]:
                 meta = json.loads(stream.read(length))
                 return layer, [source["source_id"] for source in meta["sources"]]
     raise ValueError(f"{path.name}: META section missing")
+
+
+def check_vm_package(bundle: Path) -> dict:
+    """Validate exactly the payload selected by the VM packager's allowlist."""
+    payload = {relative: (bundle / relative).read_bytes() for relative in bundle_provenance.ARTIFACTS}
+    artifact_hashes = {relative: hashlib.sha256(data).hexdigest() for relative, data in payload.items()}
+    result = bundle_provenance.validate_receipt(
+        bundle, HERE.parent, build_bundled.SUDACHI_REVISION, build_bundled.SUDACHI_ARCHIVES, artifact_hashes)
+    notices = payload["ThirdPartyNotices.txt"].decode("utf-8")
+    for bundled_layer in bundle_provenance.LAYERS:
+        name = f"{bundled_layer}.azdic"
+        expected_layer = BUNDLED[name]
+        artifact = bundle / "dict" / name
+        image = payload[f"dict/{name}"]
+        dictbuild.verify(image)
+        layer, sources = read_header(artifact, image)
+        if layer != expected_layer:
+            raise ValueError(f"{name}: layer id does not match the file name")
+        count = struct.unpack_from("<I", image, 28)[0]
+        sections = [struct.unpack_from("<4sIQQ", image, 64 + 24 * i) for i in range(count)]
+        _, _, offset, length = next(section for section in sections if section[0] == b"META")
+        metadata = json.loads(image[offset:offset + length])
+        expected = json.loads((HERE / "sources" / f"{artifact.stem}.metadata.json").read_text(encoding="utf-8"))
+        if metadata.get("sources") != expected["sources"]:
+            raise ValueError(f"{name}: META sources differ from the current bundled metadata")
+        attribution = dictbuild.validate_sources(metadata, HERE / "notices")
+        if not sources or attribution not in notices:
+            raise ValueError(f"{name}: source attribution is missing from ThirdPartyNotices.txt")
+    return result
 
 
 def packaged_dictionaries(package: Path) -> set[str]:
@@ -128,7 +164,19 @@ def main() -> int:
     parser.add_argument("bundle", type=Path, help="directory holding dict/ and ThirdPartyNotices.txt")
     parser.add_argument("--package", type=Path, help="pkg/msi/Package.wxs to compare against")
     parser.add_argument("--compare", type=Path, help="second build whose content_hash, bytes and notices must match")
+    parser.add_argument("--vm-package-json", action="store_true",
+                        help="validate the VM allowlist and generation receipt; emit JSON")
     args = parser.parse_args()
+    if args.vm_package_json:
+        if args.package or args.compare:
+            parser.error("--vm-package-json cannot be combined with --package or --compare")
+        try:
+            result = check_vm_package(args.bundle)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, struct.error) as exc:
+            print(f"check_bundle: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(result, sort_keys=True))
+        return 0
     errors = check(args.bundle, args.package)
     if args.compare:
         errors.extend(check(args.compare, args.package))

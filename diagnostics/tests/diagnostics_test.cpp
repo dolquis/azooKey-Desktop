@@ -1,3 +1,4 @@
+#include "CliOutput.h"
 #include "Diagnostics.h"
 
 #include <gtest/gtest.h>
@@ -643,15 +644,23 @@ TEST(DiagnosticsTest, LoadedUnicodeModelPathsPreserveComparisonAndRedaction) {
     diag::Report report;
     ASSERT_NO_THROW(report = diag::EvaluateSnapshot(snapshot, 1));
     const bool expected_loaded = host.loaded_model_path->find("other.gguf") == std::string::npos;
+    bool seen_d007 = false;
+    bool seen_d008 = false;
     for (const auto& check : report.checks) {
-      if (check.id == "D-007") EXPECT_EQ(check.status, diag::Status::Ok);
+      if (check.id == "D-007") {
+        seen_d007 = true;
+        EXPECT_EQ(check.status, diag::Status::Ok);
+      }
       if (check.id == "D-008") {
+        seen_d008 = true;
         EXPECT_EQ(check.status, expected_loaded ? diag::Status::Ok : diag::Status::Warning);
         const auto details = j::Parse(check.details_json);
         ASSERT_TRUE(details.has_value());
         EXPECT_EQ(details->GetBool("loaded"), std::optional<bool>(expected_loaded));
       }
     }
+    EXPECT_TRUE(seen_d007);
+    EXPECT_TRUE(seen_d008);
     std::string json;
     ASSERT_NO_THROW(json = diag::SerializeReport(report));
     EXPECT_TRUE(j::Parse(json).has_value());
@@ -686,6 +695,49 @@ TEST(DiagnosticsTest, UnicodeLogNamesCanBeProbedAndCollectedWithoutLeakingBodies
   std::error_code ec;
   std::filesystem::remove_all(directory, ec);
 }
+
+TEST(DiagnosticsTest, UnicodeCollectionOutputPreservesPathAndStatus) {
+  const auto directory = UniqueTempDirectory("azookey-diag-unicode-output-");
+  const auto output = directory / std::filesystem::path(u8"\uD55C\U00020BB7.zip");
+  std::string error;
+  ASSERT_TRUE(diag::WriteZip(output, {{"diag.json", "{}"}}, &error)) << error;
+  EXPECT_GT(std::filesystem::file_size(output), 0U);
+  for (const auto status : {diag::Status::Ok, diag::Status::Warning, diag::Status::Error}) {
+    std::string response;
+    ASSERT_NO_THROW(response = diag::detail::SerializeCollectionResult(output, status));
+    const auto json = j::Parse(response);
+    ASSERT_TRUE(json.has_value());
+    EXPECT_EQ(json->GetString("output"), azookey::core::PathToUtf8(output));
+    EXPECT_EQ(json->GetString("status"), diag::StatusName(status));
+    EXPECT_EQ(json->AsObject().size(), 2U);
+  }
+  std::error_code ec;
+  std::filesystem::remove_all(directory, ec);
+}
+
+#ifdef _WIN32
+TEST(DiagnosticsTest, MalformedUtf8ModelPathKeepsReplacementWithoutAcpFallback) {
+  diag::Snapshot snapshot;
+  snapshot.model_enabled = true;
+  snapshot.selected_model_path = std::string("C:\\Models\\") + '\xFF' + ".gguf";
+  snapshot.selected_model_exists = true;
+  snapshot.selected_model_valid = true;
+  azookey::ipc::QueryDiagnosticsPayload host;
+  host.model_loaded = true;
+  host.loaded_model_path =
+      azookey::core::PathToUtf8(std::filesystem::path(u8"C:\\Models\\\uFFFD.gguf"));
+  host.engine = "llama_cpp";
+  snapshot.host_diagnostics = host;
+  diag::Report report;
+  ASSERT_NO_THROW(report = diag::EvaluateSnapshot(snapshot, 1));
+  const auto model_check = std::find_if(report.checks.begin(), report.checks.end(),
+                                        [](const auto& check) { return check.id == "D-008"; });
+  ASSERT_NE(model_check, report.checks.end());
+  const auto details = j::Parse(model_check->details_json);
+  ASSERT_TRUE(details.has_value());
+  EXPECT_EQ(details->GetBool("loaded"), std::optional<bool>(true));
+}
+#endif
 
 TEST(DiagnosticsTest, StoredZipContainsOnlyDeclaredMembers) {
   const auto zip_path = TempPath("azookey-diag-test.zip");

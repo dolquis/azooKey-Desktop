@@ -409,12 +409,14 @@ SettingsProbe ProbeSettings(const std::filesystem::path& path) {
 std::filesystem::path ExpandEnvironmentPath(const std::string& path) {
 #ifdef _WIN32
   if (path.empty()) return {};
+  if (path.size() > static_cast<size_t>((std::numeric_limits<int>::max)())) return {};
   const int wide_size =
       MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), nullptr, 0);
-  if (wide_size <= 0) return std::filesystem::path(path);
+  if (wide_size <= 0) return {};
   std::wstring wide(static_cast<size_t>(wide_size), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), wide.data(),
-                      wide_size);
+  if (MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), wide.data(),
+                          wide_size) != wide_size)
+    return {};
   const DWORD needed = ExpandEnvironmentStringsW(wide.c_str(), nullptr, 0);
   if (needed == 0) return std::filesystem::path(wide);
   std::wstring expanded(needed, L'\0');
@@ -432,6 +434,7 @@ bool PathsEquivalent(const std::string& left, const std::string& right) {
   if (left.empty() || right.empty()) return false;
   const auto normalized_left = ExpandEnvironmentPath(left).lexically_normal().native();
   const auto normalized_right = ExpandEnvironmentPath(right).lexically_normal().native();
+  if (normalized_left.empty() || normalized_right.empty()) return false;
 #ifdef _WIN32
   return CompareStringOrdinal(normalized_left.c_str(), -1, normalized_right.c_str(), -1, TRUE) ==
          CSTR_EQUAL;

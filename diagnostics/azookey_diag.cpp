@@ -5,8 +5,8 @@
 #include <sstream>
 #include <string>
 
+#include "CliOutput.h"
 #include "Diagnostics.h"
-#include "azookey/ipc/Json.h"
 
 namespace {
 
@@ -174,11 +174,7 @@ int Run(const Options& options) {
     std::cerr << error << '\n';
     return 2;
   }
-  azookey::ipc::json::Object response;
-  response.emplace("output", azookey::ipc::json::Value(output.string()));
-  response.emplace(
-      "status", azookey::ipc::json::Value(azookey::diagnostics::StatusName(result.report.status)));
-  std::cout << azookey::ipc::json::Stringify(azookey::ipc::json::Value(std::move(response)))
+  std::cout << azookey::diagnostics::detail::SerializeCollectionResult(output, result.report.status)
             << '\n';
   return 0;
 }

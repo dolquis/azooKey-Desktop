@@ -1460,10 +1460,27 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
       validation_message = "Selected model is valid and loaded";
     }
   }
+  j::Object validation_details{{"valid", j::Value(snapshot.selected_model_valid)},
+                               {"loaded", j::Value(loaded)},
+                               {"engine", j::Value(engine)}};
+  if (snapshot.host_diagnostics && snapshot.host_diagnostics->backend_selection) {
+    const auto& selection = *snapshot.host_diagnostics->backend_selection;
+    validation_details.emplace(
+        "backend_selection",
+        j::Value(j::Object{{"source", j::Value(selection.source)},
+                           {"auto_backend", j::Value(selection.auto_backend)},
+                           {"reason", j::Value(selection.reason)},
+                           {"adapters_known", j::Value(selection.adapters_known)},
+                           {"hw_gpu_count", j::Value(selection.hw_gpu_count)},
+                           {"hw_ml_only_count", j::Value(selection.hw_ml_only_count)},
+                           {"vulkan_loader", j::Value(selection.vulkan_loader)},
+                           {"cuda_runtime", j::Value(selection.cuda_runtime)},
+                           {"os_build", j::Value(static_cast<uint64_t>(selection.os_build))},
+                           {"winml_os_eligible", j::Value(selection.winml_os_eligible)},
+                           {"on_battery", j::Value(selection.on_battery)}}));
+  }
   AddCheck(report, "D-008", "model_validation", validation_status, validation_message,
-           {{"valid", j::Value(snapshot.selected_model_valid)},
-            {"loaded", j::Value(loaded)},
-            {"engine", j::Value(engine)}});
+           std::move(validation_details));
 
   std::string fallback_state = snapshot.model_enabled ? "degraded_simple" : "healthy";
   if (snapshot.host_diagnostics) fallback_state = snapshot.host_diagnostics->fallback_state;

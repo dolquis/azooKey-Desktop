@@ -614,8 +614,12 @@ TEST_P(StartupBackendSelectionTest, ReportsStartupDecisionThroughRealHostPipe) {
   const auto parsed = azookey::ipc::ParseQueryDiagnostics(response->payload_json);
   ASSERT_TRUE(parsed && parsed->backend_selection);
   EXPECT_FALSE(parsed->model_loaded);
-  EXPECT_EQ(parsed->backend, "cpu");
   const auto& selection = *parsed->backend_selection;
+  if (!scenario.safe_mode && !scenario.cli_override && std::string(scenario.preference) == "auto") {
+    EXPECT_EQ(parsed->backend, selection.auto_backend);
+  } else {
+    EXPECT_EQ(parsed->backend, "cpu");
+  }
   EXPECT_EQ(selection.source, scenario.source);
   EXPECT_FALSE(selection.reason.empty());
   EXPECT_FALSE(selection.auto_backend.empty());

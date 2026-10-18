@@ -168,6 +168,31 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match 'Action="UnregisterTipOnInstallRollback"[\s\S]*?After="InstallFiles"'
   }
 
+  It "switches the installing user off azooKey only on a real uninstall (DEV-1654)" {
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+
+    $action = $xml.SelectSingleNode('//w:CustomAction[@Id="SwitchAwayFromTip"]', $ns)
+    $action | Should -Not -BeNullOrEmpty
+    $action.GetAttribute("Execute") | Should -Be "immediate"
+    $action.GetAttribute("Return") | Should -Be "ignore"
+    $action.GetAttribute("ExeCommand") | Should -Be '"[#ImeSwitchExe]"'
+
+    $step = $xml.SelectSingleNode('//w:InstallExecuteSequence/w:Custom[@Action="SwitchAwayFromTip"]', $ns)
+    $step | Should -Not -BeNullOrEmpty
+    $step.GetAttribute("Before") | Should -Be "RegisterTipOnUninstallRollback"
+    $condition = $step.GetAttribute("Condition")
+    # Whole-expression equality: a partial match would let AND become OR.
+    $condition | Should -BeExactly '$TipComponent = 2 AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE'
+
+    $file = $xml.SelectSingleNode('//w:File[@Id="ImeSwitchExe"]', $ns)
+    $file.GetAttribute("Name") | Should -Be "azookey_ime_switch.exe"
+    $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$($file.ParentNode.Id)']", $ns).Count |
+      Should -Be 1
+    $script:project | Should -Match "Condition=`"!Exists\('\`$\(ImeSwitchExePath\)'\)`""
+  }
+
   It "always installs the self-contained settings payload and shortcut" {
     $script:package | Should -Match 'Id="SettingsShortcut"[\s\S]*?Directory="ProgramMenuFolder"[\s\S]*?Advertise="yes"'
     $script:package | Should -Match 'Id="SettingsExe"[\s\S]*?KeyPath="yes"[\s\S]*?Id="SettingsShortcut"'

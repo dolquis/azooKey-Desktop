@@ -36,6 +36,26 @@ $clsid = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
 # older (pre-machine-wide) builds. Done in the original process so a relaunch
 # under a different administrator account cannot target the wrong profile.
 if (-not $ElevatedReentry) {
+  # Move the interactive session off azooKey before the registration goes away
+  # (DEV-1654). Runs here, in the original user's process, because the elevated
+  # regsvr32 cannot switch the user's input method. Best-effort: a missing
+  # helper or a failed switch warns and unregistration continues.
+  $imeSwitchPath = Join-Path (Split-Path -Parent $TipDllPath) "azookey_ime_switch.exe"
+  if (Test-Path -LiteralPath $imeSwitchPath -PathType Leaf) {
+    try {
+      $switchResult = Start-Process -FilePath $imeSwitchPath -Wait -PassThru
+      if ($switchResult.ExitCode -ne 0) {
+        Write-Warning "azookey_ime_switch.exe returned exit code $($switchResult.ExitCode); open apps may keep azooKey selected. See %LOCALAPPDATA%\azooKey\logs."
+      } else {
+        Write-Host "Switched the session off azooKey."
+      }
+    } catch {
+      Write-Warning "Could not run azookey_ime_switch.exe: $_"
+    }
+  } else {
+    Write-Warning "azookey_ime_switch.exe not found next to the TIP DLL, skipping the input method switch: $imeSwitchPath"
+  }
+
   $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   Remove-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" -ErrorAction SilentlyContinue
 

@@ -83,6 +83,8 @@ mock dictionary は `-MockDictionaryPath`、GGUF は `-ModelPath` で追加で�
 生成時に cache の llama.cpp 構成を自動検査する。
 生成スクリプトは同じ build directory の `azookey_zenzai_bench.exe` も収集し、
 VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動検出する。
+展開した zip から `register-dev.ps1` を直接実行する場合、bench は Host exe と同じ
+ディレクトリから自動で見つかる（`-BenchPath` は不要）。
 いずれもローカルファイルだけを収集し、ネットワークには接続しない。
 静的辞書2層と `ThirdPartyNotices.txt` は `-BundledDictionaryDirectory`（既定
 `build/bundled-dictionaries`）から同梱する。既定ディレクトリが存在しない場合だけ

@@ -688,6 +688,12 @@ class TextService final : public ITfTextInputProcessorEx,
   // Open/alphanumeric/keyboard-disabled state last reported by
   // key_passthrough, -1 for none.
   int key_passthrough_logged_state_{-1};
+  // AZOOKEY_LOG_KEYS=1 at construction: key_path records trace how each key
+  // reached the composition (DEV-1637). They never carry the key or text.
+  bool key_path_logging_{false};
+  // Document a passthrough key_path record was written for, so keys typed
+  // while the IME is off are reported once per focus, not counted.
+  std::optional<const void*> key_path_passthrough_document_;
   // Probe summary last reported by input_gate, so the record appears once per
   // change of field rather than once per commit or prediction.
   std::string input_gate_logged_signature_;
@@ -1249,6 +1255,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();
   void LogKeyPassthroughOnce(bool keyboard_disabled = false) noexcept;
+  bool KeyPathLogging() const noexcept;
+  void LogKeyPath(std::string_view sink, ITfContext* context, WPARAM key, BOOL eaten) noexcept;
+  void LogKeyPathContext(std::string_view operation, ITfContext* context) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogPredictionOnce(PredictionLogReason reason) noexcept;
   void ShowPredictionWindow();

@@ -14,7 +14,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -33,6 +36,7 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/TextService.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 namespace {
 
@@ -7687,6 +7691,108 @@ TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
+// DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS
+// set or cleared for the service constructed while this is alive.
+class ScopedKeyPathLog {
+ public:
+  explicit ScopedKeyPathLog(bool keys) {
+    char previous[16] = {};
+    const DWORD length = GetEnvironmentVariableA("AZOOKEY_LOG_KEYS", previous, sizeof(previous));
+    if (length > 0 && length < sizeof(previous)) previous_ = std::string(previous, length);
+    SetEnvironmentVariableA("AZOOKEY_LOG_KEYS", keys ? "1" : nullptr);
+    static std::atomic<unsigned> sequence{0};
+    const auto component = "key-path-test-" + std::to_string(GetCurrentProcessId()) + "-" +
+                           std::to_string(GetTickCount64()) + "-" + std::to_string(sequence++);
+    root_ = std::filesystem::temp_directory_path() / component;
+    azookey::logging::RuntimeLoggerOptions options;
+    options.enabled = true;
+    options.body_opt_in = true;
+    options.component = component;
+    options.logs_directory = root_;
+    options.output_path = root_ / "tip.jsonl";
+    logger_ = std::make_unique<azookey::logging::RuntimeLogger>(options);
+    azookey::tsf::SetTipRuntimeLoggerForTest(logger_.get());
+  }
+  ~ScopedKeyPathLog() {
+    azookey::tsf::SetTipRuntimeLoggerForTest(nullptr);
+    logger_.reset();
+    SetEnvironmentVariableA("AZOOKEY_LOG_KEYS", previous_ ? previous_->c_str() : nullptr);
+    std::error_code error;
+    std::filesystem::remove_all(root_, error);
+  }
+  // Lines whose event starts with key_path.
+  std::vector<std::string> Records() const {
+    std::ifstream input(root_ / "tip.jsonl", std::ios::binary);
+    std::vector<std::string> records;
+    for (std::string line; std::getline(input, line);) {
+      if (line.find("\"event\":\"key_path") != std::string::npos) records.push_back(line);
+    }
+    return records;
+  }
+
+ private:
+  std::optional<std::string> previous_;
+  std::filesystem::path root_;
+  std::unique_ptr<azookey::logging::RuntimeLogger> logger_;
+};
+
+size_t CountContaining(const std::vector<std::string>& records, std::string_view needle) {
+  return static_cast<size_t>(std::count_if(records.begin(), records.end(), [&](const auto& line) {
+    return line.find(needle) != std::string::npos;
+  }));
+}
+
+TEST(TsfTipKeyPathLogTest, NothingIsWrittenWithoutTheOptIn) {
+  ScopedKeyPathLog log(/*keys=*/false);
+  {
+    TextServiceHarness h;
+    EXPECT_TRUE(h.TestPress('K'));
+    EXPECT_TRUE(h.Press('K'));
+    FakeDocumentMgr first;
+    FakeDocumentMgr second;
+    EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
+  }
+  EXPECT_TRUE(log.Records().empty());
+}
+
+TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePerDocument) {
+  ScopedKeyPathLog log(/*keys=*/true);
+  {
+    TextServiceHarness h;
+    EXPECT_TRUE(h.TestPress('K'));
+    EXPECT_TRUE(h.Press('K'));
+    EXPECT_TRUE(h.TestPress('A'));
+    EXPECT_TRUE(h.Press('A'));
+    FakeDocumentMgr first;
+    FakeDocumentMgr second;
+    EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
+    ChromiumCompartmentMgr compartments;
+    compartments.keyboard_disabled.value = 1;
+    h.context.compartment_mgr = &compartments;
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{VK_RETURN}}) {
+      EXPECT_FALSE(h.TestPress(key));
+      EXPECT_FALSE(h.Press(key));
+    }
+    h.context.compartment_mgr = nullptr;
+  }
+  const auto records = log.Records();
+  EXPECT_EQ(CountContaining(records, "\"reason\":\"input\""), 4u);
+  EXPECT_EQ(CountContaining(records, "\"key_class\":\"char\""), 5u);
+  EXPECT_GE(CountContaining(records, "\"event\":\"key_path_preedit\""), 1u);
+  // The switch found the pending "か" and recorded only its length.
+  ASSERT_EQ(CountContaining(records, "\"event\":\"key_path_focus\""), 1u);
+  EXPECT_EQ(CountContaining(records, "\"pending_before\":0,"), 0u);
+  // Six keys typed into the disabled context leave one record.
+  EXPECT_EQ(CountContaining(records, "\"reason\":\"keyboard_disabled\""), 1u);
+  for (const auto& line : records) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(line.find("redacted"), std::string::npos);
+    EXPECT_EQ(line.find("\xE3\x81\x8B"), std::string::npos);  // か
+    EXPECT_EQ(line.find("\"K\""), std::string::npos);
+    EXPECT_EQ(line.find("\"k\""), std::string::npos);
+  }
 }
 
 TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsDisabledContextsSecureAndKeysPassThrough) {

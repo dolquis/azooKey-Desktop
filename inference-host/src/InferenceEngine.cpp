@@ -587,6 +587,42 @@ void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates) {
                    candidates.end());
 }
 
+namespace {
+
+// Whether `utf8` holds an ASCII letter (`ascii`) and/or a kana (`kana`).
+struct ScriptPresence {
+  bool ascii{false};
+  bool kana{false};
+};
+
+ScriptPresence ScanScripts(const std::string& utf8) {
+  ScriptPresence presence;
+  for (size_t offset = 0; offset < utf8.size();) {
+    char32_t codepoint = 0;
+    if (!core::DecodeNextUtf8(utf8, offset, codepoint)) break;
+    presence.ascii = presence.ascii || IsAsciiAlphaCodepoint(codepoint);
+    presence.kana = presence.kana || IsKanaCodepoint(codepoint);
+  }
+  return presence;
+}
+
+}  // namespace
+
+void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
+                                       const std::string& reading) {
+  // Only a reading that still holds raw ASCII letters (romaji the kana table could not spell)
+  // makes the model blend kana and Latin letters into one surface.
+  if (!ScanScripts(reading).ascii) return;
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [](const core::Candidate& candidate) {
+                                    if (candidate.source != core::CandidateSource::Model)
+                                      return false;
+                                    const auto scripts = ScanScripts(candidate.surface);
+                                    return scripts.ascii && scripts.kana;
+                                  }),
+                   candidates.end());
+}
+
 // Lock order for user dictionary edits: user_dict_writer_mutex_, then the
 // user dictionary file lock, then state_mutex_ only to copy and to publish.
 // The other takers of the file lock (forget, reset, import, SetUserDictionary)
@@ -1098,6 +1134,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   auto result = QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel,
                                       max_candidates, live, telemetry, false, tag_boosts);
   DropPrivateUseCandidates(result.candidates);
+  DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana);
   return result;
 }
 

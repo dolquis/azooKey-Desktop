@@ -1171,6 +1171,15 @@ struct ZenzaiModelRuntime {
               GeneratedCandidate{"\xEE\xB8\x81\xE3\x81", -0.15, 2, true},
               GeneratedCandidate{"複数形", -1.0, 3}};
     }
+    if (ToKatakana(kana) == "アッpェ") {
+      // Test fixture: a reading that kept a raw `p`; the model blends kana and Latin letters.
+      return {GeneratedCandidate{"あっpエ", -0.1, 3}, GeneratedCandidate{"アッpえ", -0.2, 3},
+              GeneratedCandidate{"Apple", -0.3, 2}, GeneratedCandidate{"あっぷる", -0.4, 4}};
+    }
+    if (ToKatakana(kana) == "ゴジュウ") {
+      // Test fixture: the same blend for a reading without ASCII is not this filter's business.
+      return {GeneratedCandidate{"あpえ", -0.1, 2}, GeneratedCandidate{"五十", -0.5, 2}};
+    }
     if (ToKatakana(kana) == "ナイブムコウ") {
       return {GeneratedCandidate{std::string("日") + std::string("\xE3X", 2), -0.42, 2, true}};
     }

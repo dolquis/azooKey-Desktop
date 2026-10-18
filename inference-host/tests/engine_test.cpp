@@ -1905,6 +1905,79 @@ TEST(InferenceEngineTest, DropPrivateUseCandidatesKeepsOrderAndTheRest) {
   EXPECT_EQ(candidates[2].surface, "Apple");
 }
 
+TEST(InferenceEngineTest, DropMixedKanaAsciiModelCandidatesOnlyForAnAsciiReading) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const auto make = [](const char* surface, CandidateSource source) {
+    Candidate candidate;
+    candidate.surface = surface;
+    candidate.source = source;
+    return candidate;
+  };
+  const auto surfaces_of = [](const std::vector<Candidate>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  const std::vector<Candidate> input{
+      make("あっpエ", CandidateSource::Model),     make("アッpえ", CandidateSource::Model),
+      make("Apple", CandidateSource::Model),       make("あっぷる", CandidateSource::Model),
+      make("林檎apple", CandidateSource::Model),   make("あっpエ", CandidateSource::UserDictionary),
+      make("アッpえ", CandidateSource::Heuristic),
+  };
+
+  auto with_ascii = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(with_ascii, "あっpぇ");
+  // Kana-only, letters-only and kanji-with-letters model surfaces stay, and so does every
+  // candidate of another source, even one that mixes the scripts.
+  EXPECT_EQ(surfaces_of(with_ascii),
+            (std::vector<std::string>{"Apple", "あっぷる", "林檎apple", "あっpエ", "アッpえ"}));
+
+  auto without_ascii = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(without_ascii, "あっぷる");
+  EXPECT_EQ(surfaces_of(without_ascii), surfaces_of(input));
+}
+
+TEST(InferenceEngineTest, ZenzaiBlendOfKanaAndLettersIsDroppedForAnAsciiReadingOnly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_mixed_script.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_mixed_script_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto model_surfaces = [&](const std::string& reading) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate :
+         engine->QueryCandidates(reading, "", kNowBase, nullptr, 10, false)) {
+      if (candidate.source == azookey::core::CandidateSource::Model)
+        surfaces.push_back(candidate.surface);
+    }
+    std::sort(surfaces.begin(), surfaces.end());
+    return surfaces;
+  };
+  // The reading keeps a raw `p`: the two blends go, whether or not English candidates are on.
+  EXPECT_EQ(model_surfaces("あっpぇ"), (std::vector<std::string>{"Apple", "あっぷる"}));
+  // Without ASCII in the reading nothing is dropped.
+  EXPECT_EQ(model_surfaces("ごじゅう"), (std::vector<std::string>{"あpえ", "五十"}));
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTest, ExtendBeamSurfaceEndsTheBeamAtAControlMarker) {
   using azookey::host::ExtendBeamSurface;
   const auto plain = ExtendBeamSurface("京", "都");

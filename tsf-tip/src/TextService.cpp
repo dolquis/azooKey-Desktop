@@ -3238,6 +3238,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         if (cand_visible) {
           candidate_ui_.EndUI();
           selected_candidate_idx_ = 0;
+          shown_candidates_.clear();
         }
         preedit_kana_.clear();
         romaji_.Reset();

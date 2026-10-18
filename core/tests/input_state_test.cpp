@@ -33,8 +33,8 @@ InputState Composing() { return Feed(InputState{}, U"kana"); }
 InputState Previewing() { return Feed(InputState{}.WithLiveConversion(true), U"kana"); }
 
 InputState Selecting() {
-  const auto cached = Composing().HandleCandidatesArrived(KanaCandidates()).next;
-  return cached.HandleEvent(Ev(UserAction::StartConversion)).next;
+  const auto waiting = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
+  return waiting.HandleCandidatesArrived(KanaCandidates()).next;
 }
 
 InputState ReplaceSuggestion() {
@@ -203,9 +203,10 @@ TEST(InputStateTest, IdleInputStartsCompositionAndQueriesCandidates) {
 }
 
 TEST(InputStateTest, CandidateRoundTripCommitsSelectedCandidateAndObservesIt) {
-  const InputState composing = Composing().HandleCandidatesArrived(KanaCandidates()).next;
+  const HandleResult queried = Composing().HandleEvent(Ev(UserAction::StartConversion));
+  EXPECT_EQ(queried.actions, (Actions{QueryCandidates{"かな", true}}));
 
-  const HandleResult opened = composing.HandleEvent(Ev(UserAction::StartConversion));
+  const HandleResult opened = queried.next.HandleCandidatesArrived(KanaCandidates());
   EXPECT_EQ(opened.next.kind(), K::Selecting);
   EXPECT_EQ(opened.actions,
             (Actions{ShowCandidateWindow{KanaCandidates(), 0}, ReplaceMarkedText{"仮名"}}));
@@ -317,8 +318,8 @@ TEST(InputStateTest, CorrectedReadingPreservesComposingAndPreviewingState) {
 TEST(InputStateTest, CorrectedReadingPreservesSelectingSnapshotAndSelection) {
   const std::vector<Candidate> candidates = {Candidate{"金", "かね"}, Candidate{"鐘", "かね"}};
   const InputState state = Composing()
-                               .HandleCandidatesArrived(candidates)
-                               .next.HandleEvent(Ev(UserAction::StartConversion))
+                               .HandleEvent(Ev(UserAction::StartConversion))
+                               .next.HandleCandidatesArrived(candidates)
                                .next.HandleEvent(Ev(UserAction::NextCandidate))
                                .next.WithLiveConversion(true);
   ASSERT_EQ(state.selected_index(), 1u);
@@ -405,12 +406,29 @@ TEST(InputStateTest, ResetKeepsSettingsButDiscardsLogicalComposition) {
   EXPECT_EQ(reset.WithComposition("かな").kind(), K::Composing);
 }
 
-// Cache miss: StartConversion never enters Selecting without a snapshot.
+// StartConversion never enters Selecting without a snapshot of a window query.
 TEST(InputStateTest, CacheMissQueriesAndStaysComposing) {
   const HandleResult result = Composing().HandleEvent(Ev(UserAction::StartConversion));
   EXPECT_EQ(result.next.kind(), K::Composing);
   EXPECT_TRUE(result.next.awaiting_candidates());
-  EXPECT_EQ(result.actions, (Actions{QueryCandidates{"かな"}}));
+  EXPECT_EQ(result.actions, (Actions{QueryCandidates{"かな", true}}));
+}
+
+// DEV-1653: the per-key live results cached while typing never open the window.
+TEST(InputStateTest, StartConversionIgnoresThePerKeyCacheAndQueriesForTheWindow) {
+  for (const InputState& typed : {Composing(), Previewing()}) {
+    SCOPED_TRACE(static_cast<int>(typed.kind()));
+    const InputState cached = typed.HandleCandidatesArrived(KanaCandidates()).next;
+    ASSERT_EQ(cached.candidates().size(), 3u);
+    for (const UserAction action :
+         {UserAction::StartConversion, UserAction::NextCandidate, UserAction::PrevCandidate}) {
+      const HandleResult result = cached.HandleEvent(Ev(action));
+      EXPECT_EQ(result.next.kind(), typed.kind());
+      EXPECT_TRUE(result.next.awaiting_candidates());
+      EXPECT_TRUE(result.next.candidates().empty());
+      EXPECT_EQ(result.actions, (Actions{QueryCandidates{"かな", true}}));
+    }
+  }
 }
 
 TEST(InputStateTest, CacheMissEnterCommitsAsIsAndDigitsPassThrough) {
@@ -471,7 +489,7 @@ TEST(InputStateTest, StartConversionFlushesPendingRomajiAndRequeries) {
   EXPECT_EQ(pending.Reading(), "かん");
   const HandleResult result = pending.HandleEvent(Ev(UserAction::StartConversion));
   EXPECT_EQ(result.next.Reading(), "かん");
-  EXPECT_EQ(result.actions, (Actions{ReplaceMarkedText{"かん"}, QueryCandidates{"かん"}}));
+  EXPECT_EQ(result.actions, (Actions{ReplaceMarkedText{"かん"}, QueryCandidates{"かん", true}}));
 }
 
 // cursor: Backspace deletes one romaji preview step or one kana.
@@ -571,12 +589,12 @@ TEST(InputStateTest, LiveConversionTurnsComposingIntoPreviewing) {
   EXPECT_EQ(first.HandleEvent(Ev(UserAction::Input, U'a')).next.kind(), K::Previewing);
 }
 
-TEST(InputStateTest, PreviewingStartConversionUsesCacheLikeComposing) {
-  const InputState cached = Previewing().HandleCandidatesArrived(KanaCandidates()).next;
-  EXPECT_EQ(cached.HandleEvent(Ev(UserAction::StartConversion)).next.kind(), K::Selecting);
-  const HandleResult miss = Previewing().HandleEvent(Ev(UserAction::StartConversion));
-  EXPECT_EQ(miss.next.kind(), K::Previewing);
-  EXPECT_TRUE(miss.next.awaiting_candidates());
+TEST(InputStateTest, PreviewingStartConversionWaitsForTheWindowQueryLikeComposing) {
+  const HandleResult waiting = Previewing().HandleEvent(Ev(UserAction::StartConversion));
+  EXPECT_EQ(waiting.next.kind(), K::Previewing);
+  EXPECT_TRUE(waiting.next.awaiting_candidates());
+  EXPECT_EQ(waiting.actions, (Actions{QueryCandidates{"かな", true}}));
+  EXPECT_EQ(waiting.next.HandleCandidatesArrived(KanaCandidates()).next.kind(), K::Selecting);
 }
 
 TEST(InputStateTest, ReplaceSuggestionPromptModesAndExit) {

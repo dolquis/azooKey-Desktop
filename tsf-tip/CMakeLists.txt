@@ -211,6 +211,8 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_prediction_window_tests tests/prediction_window_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_theme_colors_tests tests/theme_colors_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_space_candidate_window_tests tests/space_candidate_window_test.cpp
+    TIMEOUT 60)
   add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_proofread_document_reader_tests
     tests/proofread_document_reader_test.cpp)

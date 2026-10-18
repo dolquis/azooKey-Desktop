@@ -2725,9 +2725,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (supported && input_state_.kind() == core::InputStateKind::Idle && has_preedit)
         input_state_ = input_state_.WithComposition(preedit_kana_, romaji_);
       if (supported && (!cand_visible || input_state_.kind() == core::InputStateKind::Selecting)) {
+        // The per-key live cache never opens the window: Space asks for the
+        // window query instead (DEV-1653).
+        const bool opens_window = event.action == UserAction::StartConversion ||
+                                  event.action == UserAction::NextCandidate ||
+                                  event.action == UserAction::PrevCandidate;
         if ((input_state_.kind() == core::InputStateKind::Composing ||
              input_state_.kind() == core::InputStateKind::Previewing) &&
-            !input_state_.awaiting_candidates()) {
+            !input_state_.awaiting_candidates() && !opens_window) {
           auto cached = CoreCandidatesFromCache();
           if (!cached.empty()) {
             const HRESULT cache_hr = ApplyInputStateResult(
@@ -5133,6 +5138,9 @@ void TextService::ServeConnection() {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
+  // A new connection may be a new Host whose dictionaries or learning differ.
+  live_prefetch_ = {};
+
   uint64_t next_id = 2;
 
   while (true) {
@@ -5474,7 +5482,7 @@ void TextService::ServeConnection() {
     // live QueryCandidates has a request-level deadline; batch conversion can
     // legitimately take longer and keeps the existing unbounded wait.
     const auto query_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(kQueryCandidatesFastTimeoutMs);
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(query_deadline_ms_);
     const std::optional<std::chrono::steady_clock::time_point> query_request_deadline =
         is_batch ? std::nullopt
                  : std::optional<std::chrono::steady_clock::time_point>(query_deadline);
@@ -5595,7 +5603,20 @@ void TextService::ServeConnection() {
                    {{"request_id", req_id}});
       }
 
-      if (emoji_trigger.empty()) response_candidates = BuildLocalFallbackCandidates(reading);
+      // A late window query (live = false) puts the per-key live answer made
+      // with the same reading and context ahead of the TIP-local kana (DEV-1653).
+      if (emoji_trigger.empty()) {
+        if (!live && !secure && live_prefetch_.reading == reading &&
+            live_prefetch_.left_context == left_context &&
+            live_prefetch_.learning_allowed == learning_allowed)
+          response_candidates = live_prefetch_.candidates;
+        for (auto& local : BuildLocalFallbackCandidates(reading)) {
+          const bool shown = std::any_of(
+              response_candidates.begin(), response_candidates.end(),
+              [&](const CandidateField& candidate) { return candidate.surface == local.surface; });
+          if (!shown) response_candidates.push_back(std::move(local));
+        }
+      }
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -5637,6 +5658,14 @@ void TextService::ServeConnection() {
                 ipc_pending_trace_id_ == trace_id) {
               LiveConversionResult live_result{req_id, reading, payload->surface, trace_id,
                                                trace_start};
+              // The surface the preedit shows becomes the window fallback, so a
+              // late window query keeps it instead of reverting to kana. A
+              // surface with inserted punctuation is not a candidate.
+              if (!secure && payload->segments.empty() && !payload->surface.empty())
+                live_prefetch_ = {reading,
+                                  left_context,
+                                  learning_allowed,
+                                  {{payload->surface, reading, 1.0, "live"}}};
               live_result.segments = std::move(payload->segments);
               live_result.auto_punctuation = auto_punctuation;
               live_conversion_result_ = std::move(live_result);
@@ -5658,6 +5687,7 @@ void TextService::ServeConnection() {
     }
 
     std::string corrected_reading;
+    std::optional<std::vector<CandidateField>> prefetch_candidates;
     if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
@@ -5665,6 +5695,12 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
+      // Kept only for an ordinary context: a secure context never reuses
+      // ranking made with its context or learning (privacy spec section 5). An
+      // auto-replaced answer belongs to the corrected reading, not this one.
+      if (live && !is_batch && emoji_trigger.empty() && !secure &&
+          qpayload->corrected_reading.empty())
+        prefetch_candidates = response_candidates;
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
     }
@@ -5707,6 +5743,9 @@ void TextService::ServeConnection() {
                      .count());
     }
 
+    if (is_fresh && prefetch_candidates) {
+      live_prefetch_ = {reading, left_context, learning_allowed, std::move(*prefetch_candidates)};
+    }
     if (is_fresh) {
       if (!tip_candidates.empty()) {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_candidates_received",
@@ -7086,10 +7125,12 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
       candidate_window_show_pending_ = input_state_.awaiting_candidates();
     }
     if (!IsStandalonePunctuation(query->reading)) {
-      if (input_state_.live_conversion() && !input_state_.awaiting_candidates())
+      // The window query asks for the full list (live = false): typo
+      // suggestions, English candidates and the n-best (DEV-1653).
+      if (input_state_.live_conversion() && !query->for_window)
         PostQueryLiveConversion(context, query->reading);
       else
-        PostQueryCandidates(context, query->reading);
+        PostQueryCandidates(context, query->reading, !query->for_window);
     }
   } else if (std::holds_alternative<core::PlayBeep>(action)) {
     PlayBeep();
@@ -7288,6 +7329,13 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       romaji_ = input_state_.pending_romaji();
       selected_candidate_idx_ = static_cast<int>(input_state_.selected_index());
       if (input_state_.kind() != core::InputStateKind::Selecting) shown_candidates_.clear();
+    }
+    // Standalone punctuation never asks the Host: the fixed local candidates the
+    // QueryCandidates action stored answer the window query at once.
+    if (input_state_.awaiting_candidates() && IsStandalonePunctuation(input_state_.Reading())) {
+      core_action_in_progress_ = false;
+      return ApplyInputStateResult(context,
+                                   input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
     }
     if (input_state_.awaiting_candidates() && IpcHostUnavailable()) {
       const std::string reading = input_state_.Reading();
@@ -8278,6 +8326,12 @@ bool TextService::ShowCandidateWindowFromCache() {
       return false;
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
+      // Any candidates-ready notification (prediction, live conversion) lands
+      // here. While the window query is outstanding there is no answer yet, and
+      // treating the empty cache as one would end the wait for good (DEV-1653).
+      if (input_state_.awaiting_candidates() && candidate_window_show_pending_ &&
+          candidates_.empty())
+        return false;
       candidate_window_show_pending_ = false;
     }
     auto result = input_state_.HandleCandidatesArrived(CoreCandidatesFromCache());

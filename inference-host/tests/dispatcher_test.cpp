@@ -827,6 +827,12 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
     if (kana == "おねがい")
       return {
           {"お願いだ", kana, 8.0}, {"お願いします。　", kana, 6.0}, {"お願いだよ！", kana, 5.0}};
+    // U+EE01 and U+EE08 are the Private Use characters a broken Zenzai generation leaves behind.
+    if (kana == "ぷらいべーと")
+      return {{"京\xEE\xB8\x81京", kana, 9.0},
+              {"正常", kana, 8.0},
+              {"狂\xEE\xB8\x88狂", kana, 7.0},
+              {"次点", kana, 6.0}};
     azookey::core::Candidate technical{"技術", kana, 5.0};
     technical.tag = azookey::core::CandidateTag::Technical;
     return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
@@ -920,6 +926,35 @@ constexpr const char* kCodeProfileSettings =
     R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":3.0}}}})";
 
 }  // namespace
+
+TEST_F(AppProfileDispatchTest, PrivateUseCandidatesNeverReachQueryCandidatesOrBatchConversion) {
+  ApplySettings("{}");
+  const auto surfaces_of = [](const auto& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  const std::vector<std::string> expected{"正常", "次点"};
+
+  EXPECT_EQ(surfaces_of(Query(std::nullopt, "ぷらいべーと")), expected);
+
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "ぷらいべーと";
+  batch.mode = "neural";
+  batch.max_candidates = 10;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = ++next_id;
+  env.type = ipc::MessageType::QueryBatchConversion;
+  env.payload_json = ipc::BuildQueryBatchConversionRequest(batch);
+  const auto response = dispatcher->Dispatch(env);
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->segments.size(), 1u);
+  EXPECT_EQ(surfaces_of(parsed->segments.front().candidates), expected);
+  EXPECT_EQ(parsed->full_surface, "正常");
+}
 
 TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatchingApp) {
   ApplySettings(kCodeProfileSettings);

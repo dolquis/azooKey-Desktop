@@ -1870,6 +1870,213 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   RemoveProtectedStoreFile(lpath);
 }
 
+TEST(InferenceEngineTest, PrivateUseAndControlMarkerClassification) {
+  using azookey::host::ContainsPrivateUseCodepoint;
+  using azookey::host::ContainsZenzaiControlMarker;
+  // U+EE01 / U+EE08 are prompt control markers; U+E000, U+F8FF and U+E5CE are other Private Use.
+  EXPECT_TRUE(ContainsZenzaiControlMarker("京\xEE\xB8\x81京"));
+  EXPECT_TRUE(ContainsZenzaiControlMarker("\xEE\xB8\x80"));   // U+EE00
+  EXPECT_TRUE(ContainsZenzaiControlMarker("\xEE\xBB\xBF"));   // U+EEFF
+  EXPECT_FALSE(ContainsZenzaiControlMarker("\xEE\xBC\x80"));  // U+EF00
+  EXPECT_FALSE(ContainsZenzaiControlMarker("\xEE\xB7\xBF"));  // U+EDFF
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEE\x80\x80"));   // U+E000
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEF\xA3\xBF"));   // U+F8FF
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEE\x97\x8E"));   // U+E5CE
+  EXPECT_FALSE(
+      ContainsPrivateUseCodepoint("\xEF\xA4\x80"));  // U+F900, a CJK compatibility ideograph
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("\xEE\x7F\x80"));  // not valid UTF-8: no match
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("日本語 apple 😀"));
+  EXPECT_FALSE(ContainsPrivateUseCodepoint(""));
+  // A cut-off character is not a code point yet: scanning stops without a match.
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("日\xEE\xB8"));
+}
+
+TEST(InferenceEngineTest, DropPrivateUseCandidatesKeepsOrderAndTheRest) {
+  std::vector<azookey::core::Candidate> candidates;
+  for (const char* surface : {"京\xEE\xB8\x81京", "正常", "\xEE\x80\x80", "次点", "Apple"}) {
+    azookey::core::Candidate candidate;
+    candidate.surface = surface;
+    candidates.push_back(std::move(candidate));
+  }
+  azookey::host::DropPrivateUseCandidates(candidates);
+  ASSERT_EQ(candidates.size(), 3u);
+  EXPECT_EQ(candidates[0].surface, "正常");
+  EXPECT_EQ(candidates[1].surface, "次点");
+  EXPECT_EQ(candidates[2].surface, "Apple");
+}
+
+TEST(InferenceEngineTest, DropMixedKanaAsciiModelCandidatesOnlyForAnAsciiReading) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const auto make = [](const char* surface, CandidateSource source) {
+    Candidate candidate;
+    candidate.surface = surface;
+    candidate.source = source;
+    return candidate;
+  };
+  const auto surfaces_of = [](const std::vector<Candidate>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  const std::vector<Candidate> input{
+      make("あっpエ", CandidateSource::Model),     make("アッpえ", CandidateSource::Model),
+      make("Apple", CandidateSource::Model),       make("あっぷる", CandidateSource::Model),
+      make("林檎apple", CandidateSource::Model),   make("あっpエ", CandidateSource::UserDictionary),
+      make("アッpえ", CandidateSource::Heuristic),
+  };
+
+  auto with_ascii = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(with_ascii, "あっpぇ");
+  // Kana-only, letters-only and kanji-with-letters model surfaces stay, and so does every
+  // candidate of another source, even one that mixes the scripts.
+  EXPECT_EQ(surfaces_of(with_ascii),
+            (std::vector<std::string>{"Apple", "あっぷる", "林檎apple", "あっpエ", "アッpえ"}));
+
+  auto without_ascii = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(without_ascii, "あっぷる");
+  EXPECT_EQ(surfaces_of(without_ascii), surfaces_of(input));
+}
+
+TEST(InferenceEngineTest, ZenzaiBlendOfKanaAndLettersIsDroppedForAnAsciiReadingOnly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_mixed_script.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_mixed_script_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto model_surfaces = [&](const std::string& reading) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate :
+         engine->QueryCandidates(reading, "", kNowBase, nullptr, 10, false)) {
+      if (candidate.source == azookey::core::CandidateSource::Model)
+        surfaces.push_back(candidate.surface);
+    }
+    std::sort(surfaces.begin(), surfaces.end());
+    return surfaces;
+  };
+  // The reading keeps a raw `p`: the two blends go, whether or not English candidates are on.
+  EXPECT_EQ(model_surfaces("あっpぇ"), (std::vector<std::string>{"Apple", "あっぷる"}));
+  // Without ASCII in the reading nothing is dropped.
+  EXPECT_EQ(model_surfaces("ごじゅう"), (std::vector<std::string>{"あpえ", "五十"}));
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
+TEST(InferenceEngineTest, ExtendBeamSurfaceEndsTheBeamAtAControlMarker) {
+  using azookey::host::ExtendBeamSurface;
+  const auto plain = ExtendBeamSurface("京", "都");
+  EXPECT_FALSE(plain.control_marker);
+  EXPECT_EQ(plain.surface, "京都");
+
+  // The whole marker in one piece: the parent is the finished surface.
+  const auto whole = ExtendBeamSurface("京", "\xEE\xB8\x81");
+  EXPECT_TRUE(whole.control_marker);
+  EXPECT_EQ(whole.surface, "京");
+
+  // A marker split across tokens leaves the parent inside a character; only the complete
+  // characters before it are kept, so the finished surface is valid UTF-8.
+  const auto split = ExtendBeamSurface("京\xEE\xB8", "\x81");
+  EXPECT_TRUE(split.control_marker);
+  EXPECT_EQ(split.surface, "京");
+
+  // A marker first in the surface leaves nothing to finish.
+  const auto first = ExtendBeamSurface("", "\xEE\xB8\x88");
+  EXPECT_TRUE(first.control_marker);
+  EXPECT_TRUE(first.surface.empty());
+
+  // Private Use outside the control range does not end the beam.
+  const auto other = ExtendBeamSurface("京", "\xEE\x80\x80");
+  EXPECT_FALSE(other.control_marker);
+}
+
+TEST(InferenceEngineTest, ZenzaiConvertRejectsPrivateUseGenerationsDirectly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_private_use_convert.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ZenzaiRuntimeOptions runtime_options;
+  runtime_options.mock_candidates_for_tests = true;
+  auto loaded = azookey::host::LoadZenzaiGgufModel(model_path, runtime_options);
+  ASSERT_TRUE(loaded.ok);
+  azookey::host::ZenzaiModelConverter converter(std::move(loaded), nullptr);
+
+  // The mock generates five surfaces: a complete one with U+EE01 inside, one with U+EE08 that was
+  // cut off, one whose safe prefix is U+EE01, and two clean ones. Only the clean ones remain, and
+  // the converter alone (no engine filter) has to be the one dropping the rest.
+  const auto candidates = converter.Convert("ふくすう", {});
+  std::vector<std::string> surfaces;
+  for (const auto& candidate : candidates) {
+    surfaces.push_back(candidate.surface);
+    EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+  }
+  std::sort(surfaces.begin(), surfaces.end());
+  EXPECT_EQ(surfaces, (std::vector<std::string>{"複数", "複数形"}));
+
+  std::remove(model_path.c_str());
+}
+
+TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidates) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_private_use.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_private_use_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  // The mock generations hold U+EE01 / U+EE08 in three of five surfaces; the engine returns the
+  // rest.
+  const auto candidates = engine->QueryCandidates("ふくすう", "", kNowBase, nullptr, 10, false);
+  ASSERT_FALSE(candidates.empty());
+  for (const auto& candidate : candidates) {
+    EXPECT_FALSE(azookey::host::ContainsPrivateUseCodepoint(candidate.surface))
+        << candidate.surface;
+  }
+  const auto has_model_surface = [&](const std::string& surface) {
+    return std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) {
+      return candidate.surface == surface &&
+             candidate.source == azookey::core::CandidateSource::Model;
+    });
+  };
+  EXPECT_TRUE(has_model_surface("複数"));
+  EXPECT_TRUE(has_model_surface("複数形"));
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTraceTest, ModelExceptionAndFallbackProduceOneInferenceSample) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -2061,6 +2268,69 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   RemoveProtectedStoreFile(lpath);
 }
 
+namespace {
+// Answers every reading with the same ranked list, as a model that produced
+// broken generations above a usable one would.
+class ScriptedConverter final : public azookey::core::IConverter {
+ public:
+  explicit ScriptedConverter(std::vector<azookey::core::Candidate> candidates)
+      : candidates_(std::move(candidates)) {}
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return candidates_;
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  std::vector<azookey::core::Candidate> candidates_;
+};
+}  // namespace
+
+// DEV-1648: live conversion takes the candidate window's final filters, and a
+// dropped top candidate leaves the next one rather than the kana.
+TEST(InferenceEngineTest, LiveConversionDropsPrivateUseAndMixedScriptGenerations) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const std::string private_use = "\xEE\xB8\x81";
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(std::vector<Candidate>{
+            {"京" + private_use + "京", "ふくすう", 2.0, CandidateSource::Model, "model"},
+            {"複数", "ふくすう", 1.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    const auto live = engine.QueryLiveConversion("ふくすう", "", kNowBase, nullptr);
+    ASSERT_TRUE(live);
+    EXPECT_EQ(live->surface, "複数");
+  }
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(
+            std::vector<Candidate>{{"あっpエ", "あっpぇ", 2.0, CandidateSource::Model, "model"},
+                                   {"あっぷる", "あっpぇ", 1.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    const auto live = engine.QueryLiveConversion("あっpぇ", "", kNowBase, nullptr);
+    ASSERT_TRUE(live);
+    EXPECT_EQ(live->surface, "あっぷる");
+  }
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(std::vector<Candidate>{
+            {"京" + private_use, "きょう", 2.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    EXPECT_FALSE(engine.QueryLiveConversion("きょう", "", kNowBase, nullptr));
+  }
+}
+
 TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -2090,10 +2360,11 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   EXPECT_EQ(live.front().surface, "日本語");
   EXPECT_EQ(live.front().source, azookey::core::CandidateSource::Model);
 
-  const auto fast = engine->QueryLiveConversion("にほんご", "", kNowBase + 1, nullptr);
-  ASSERT_TRUE(fast);
-  EXPECT_EQ(fast->surface, "にほんご");
-  EXPECT_EQ(fast->source, azookey::core::CandidateSource::Heuristic);
+  // DEV-1648: live conversion runs the same live beam as the per-key query.
+  const auto live_conversion = engine->QueryLiveConversion("にほんご", "", kNowBase + 1, nullptr);
+  ASSERT_TRUE(live_conversion);
+  EXPECT_EQ(live_conversion->surface, "日本語");
+  EXPECT_EQ(live_conversion->source, azookey::core::CandidateSource::Model);
 
   auto top_one = engine->QueryCandidates("にほんご", "", kNowBase + 2, nullptr, 1, false);
   ASSERT_EQ(top_one.size(), 1u);
@@ -2308,6 +2579,27 @@ TEST(InferenceEngineTest, RealZenzaiNBestKeepsReadingTail) {
                                                   kNowBase, nullptr, 5, false);
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "契約更新の条件を協議する");
+
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1648: a sentence with particles, which no single dictionary entry spells,
+// converts in live conversion instead of coming back as the kana typed.
+TEST(InferenceEngineTest, RealZenzaiLiveConversionConvertsSentence) {
+  const char* lpath = "azookey_host_engine_zenzai_real_live.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::host::ModelLoadOptions options;
+  options.path = AZOOKEY_AI_TEST_MODEL;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const std::string kana = "きょうはいいてんき";
+  const auto live = engine->QueryLiveConversion(kana, "", kNowBase, nullptr);
+  ASSERT_TRUE(live);
+  RecordProperty("live_surface", live->surface);
+  EXPECT_NE(live->surface, kana);
+  EXPECT_EQ(live->source, azookey::core::CandidateSource::Model);
 
   RemoveProtectedStoreFile(lpath);
 }

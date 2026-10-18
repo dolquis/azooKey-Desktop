@@ -69,8 +69,12 @@ struct PlayBeep {
   friend bool operator==(const PlayBeep&, const PlayBeep&) = default;
 };
 // Ask the backend for candidates of the reading. Staleness stays in the TIP.
+// for_window marks the query a candidate window opens from (StartConversion):
+// it asks for the full list (live = false), while a reading edit asks for the
+// per-key live result.
 struct QueryCandidates {
   std::string reading;
+  bool for_window{false};
   friend bool operator==(const QueryCandidates&, const QueryCandidates&) = default;
 };
 // Move only the highlight of the visible candidate window.

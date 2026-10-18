@@ -10,6 +10,12 @@ azookey_discover_tests(host_engine_tests)
 if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
   target_compile_definitions(host_engine_tests PRIVATE
     AZOOKEY_AI_TEST_MODEL="${AZOOKEY_ZENZAI_TEST_MODEL}")
+  # DEV-1648: the pinned-model job runs only this label.
+  add_test(NAME host_engine_real_model_live_conversion
+           COMMAND host_engine_tests
+                   --gtest_filter=InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence)
+  set_tests_properties(host_engine_real_model_live_conversion PROPERTIES
+    LABELS "zenzai-real-model" RUN_SERIAL TRUE TIMEOUT 120)
 endif()
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp ai_backend_test.cpp host_etw_test.cpp

@@ -233,6 +233,24 @@ else:
 - 記号/数字混在は `s_nonkana` に寄与しうるが、英字を 1 文字も含まない純記号/純数字列は
   `inlineEnglishMinLength` と「英字含有」チェックで除外する。
 
+#### 4.3.1 かなと ASCII 英字が混在するモデル候補の除外
+
+`apple` を打つと `ple` は組み立てられず、`p` が ASCII のまま `preedit_kana_` に残る
+（`あっpぇ`。`RomajiKanaConverter` の挙動で、`Flush()` しても読みは変わらない）。この
+読みを Zenzai が変換すると、`あっpエ` / `アッpえ` のような、かなと ASCII 英字が 1 つの表層に
+混ざった候補が出る。Host は、読みに ASCII 英字（`A-Z` / `a-z`）が残っている要求について、
+`source = model` の候補のうち表層にかな（U+3041〜U+30FF）と ASCII 英字の両方を含むものを
+落とす（`DropMixedKanaAsciiModelCandidates`）。
+
+- 対象は `source = model` の候補だけである。辞書・ユーザー辞書・英単語候補・学習・
+  フォールバックの候補は、混在していても残す。
+- かなだけ、ASCII 英字だけ（`Apple`）、漢字と英字（`林檎apple`）の表層は残す。かなと英字の
+  混在だけが、読みの崩れたローマ字をモデルが取り込んだ形であるためである。
+- 読みに ASCII 英字が無い要求では何も落とさない。
+- `english_candidates` の有無に依らず掛ける。Space の候補一覧が `live = false` で作られる
+  経路（`inlineEnglishCandidates` が OFF の場合を含む）でも、同じ読みが Zenzai に渡るためである。
+- `QueryLiveConversion` の経路は対象外とする。
+
 ### 4.4 英単語辞書フォーマット（`inlineEnglishDictionary`）
 
 辞書は品質レイヤ（§4.2 の `s_dict` と順位上乗せ）に使う。非搭載でもベースライン

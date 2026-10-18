@@ -390,17 +390,15 @@ void InputState::StartConversion(std::vector<ClientAction>& actions) {
   const std::string flushed = romaji_.Flush();
   if (!flushed.empty()) {
     kana_ += flushed;
-    candidates_.clear();
     actions.push_back(ReplaceMarkedText{kana_});
   }
   if (kana_.empty()) return;
-  if (!candidates_.empty()) {
-    OpenCandidates(actions);
-    return;
-  }
-  // Cache miss: stay in the current kind until HandleCandidatesArrived so
-  // Enter still commits as-is and digits pass through (§1.5.4).
-  actions.push_back(QueryCandidates{kana_});
+  // The per-key results cached while typing are the live answer (one model
+  // candidate, no typo suggestion or English), so the window always opens from
+  // a fresh full query (DEV-1653). Until HandleCandidatesArrived the current
+  // kind stays, so Enter still commits as-is and digits pass through (§1.5.4).
+  candidates_.clear();
+  actions.push_back(QueryCandidates{kana_, true});
   awaiting_candidates_ = true;
 }
 

@@ -96,11 +96,10 @@ enum class InputStateKind {
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
-| Composing | StartConversion（候補キャッシュ有） | Selecting | Show CandidateWindow（§1.5.4） |
-| Composing | StartConversion（候補キャッシュ無＝cache miss） | Composing | `QueryCandidates` 送信のみ。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
+| Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新 |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新 |
-| Previewing | StartConversion | Selecting | Show CandidateWindow（最良候補にハイライト） |
+| Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
 | Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
@@ -111,11 +110,18 @@ enum class InputStateKind {
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
-> **候補表示の cache hit / miss 分岐**: `StartConversion` での `Selecting` 遷移は候補キャッシュ有の
-> ときのみ即時。キャッシュ無（cache miss）は `QueryCandidates` を送って **`Composing` を維持**し、応答
-> 到着時に `Selecting` へ遷移する。`Previewing | StartConversion` も未キャッシュなら同様に応答到着まで
-> `Selecting` に入らない。候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる
-> 回帰を防ぐためで、詳細は §1.5.4。
+> **候補窓の取得**: `StartConversion` は打鍵中の候補キャッシュの有無によらず、候補窓用の
+> `QueryCandidates`（`live = false`）を送って **`Composing` / `Previewing` を維持**し、応答到着時に
+> `Selecting` へ遷移する。打鍵ごとの `live = true` の応答はモデル候補 1 件で、typo 補正の提案
+> （M35 suggest）、英単語候補（M60）、記号・絵文字の rewriter を含まないため、候補窓には使わない。
+> 応答が TIP の deadline（`dev-infrastructure-spec.md` §8.5.2 の 150ms）に間に合わなかったときは、
+> 打鍵中の応答を先頭に、TIP ローカル候補をその後ろに並べて窓を開く。打鍵中の応答は、ライブ変換 OFF
+> なら `live = true` の `QueryCandidates` の候補、ON なら `QueryLiveConversion` の表層（句読点を
+> 挿入していないもの）である。読み・左文脈・学習許可が Space の要求と一致し、secure でない context の、
+> staleness 判定を通った応答だけを使う。auto_replace で読みを補正した応答は使わず、Host との接続を
+> やり直すと捨てる。
+> 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
+> 詳細は §1.5.4。
 
 > **Esc は 1 回で入力を取り消す（意図した legacy との差）**: legacy（macOS 版）は Selecting の Esc で
 > Composing（ライブ変換 OFF では先頭候補プレビューを経由）へ戻り、さらに Esc で停止する 2〜3 段だった。
@@ -403,9 +409,9 @@ M13 の載せ替え対象は、M3〜M10 の通常入力における reading と�
   **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /
   数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。`Composing`
   （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字は IME 非消費で
-  アプリへパススルー（現行は候補窓表示時のみ消費。§1.5.3）のまま M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: キャッシュヒット時は
-  同期に、cache miss 時は応答到着を TIP が core へ供給するフィードバックイベント
-  （例 `HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
+  アプリへパススルー（現行は候補窓表示時のみ消費。§1.5.3）のまま M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: 候補窓用の要求
+  （`queryCandidates` の `for_window`）の応答到着を TIP が core へ供給するフィードバックイベント
+  （`HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
   （`candidate_window_show_pending_` + request_id staleness）が処理し、staleness を core へ
   移さないことで M10 を保存する。
   - **代替**: 「クエリ送信済み・応答待ち」を明示する pending 状態（M58-A の `BatchConverting`
@@ -547,8 +553,8 @@ karukan は参考になるが、以下 3 点は **karukan に対応概念が無�
 2. **IPC 非同期の cache hit / miss 分岐（karukan に対応概念なし）**: karukan は同期変換前提で
    状態表を組むため、「候補問い合わせを送って応答到着まで `Selecting` に遷移しない」という
    §1.5.4 の非同期契約に相当する概念を持たない。azooKey は候補生成が別プロセス
-   （`inference-host`）への非同期 IPC で、cache hit は同期・cache miss は応答到着イベント
-   （例 `HandleCandidatesArrived(list)`）で `Selecting` へ遷移する（§1.2 の cache hit/miss 行・
+   （`inference-host`）への非同期 IPC で、候補窓用の要求の応答到着イベント
+   （`HandleCandidatesArrived(list)`）で `Selecting` へ遷移する（§1.2 の StartConversion 行・
    §1.5.4）。staleness（`ipc_pending_id_` 等）は TIP 側に残し core を純粋に保つ。この非同期
    境界は azooKey 独自設計であり、karukan の同期状態表を**そのまま持ち込まない**。
 3. **`ClientAction` → `ITfComposition` / `ITfRange` 翻訳層（karukan は preedit を自前 String 保持）**:
@@ -624,7 +630,7 @@ RomajiKanaConverter::Feed (preedit kana 更新)
    ↓
 PostQueryLiveConversion(req_id=N, kana, context)
    ↓
-InferenceEngine: 軽量推論 (SimpleConverter or Zenzai 1-pass)
+InferenceEngine: 軽量推論 (モデルがあれば live = true の Zenzai 1-pass、無ければ SimpleConverter)
    ↓
 QueryLiveConversionResponse(req_id=N, surface, confidence)
    ↓

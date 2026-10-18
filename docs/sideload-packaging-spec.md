@@ -395,6 +395,9 @@ Add-AppxPackage -Path .\azooKey-1.0.0.msix
 Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
 ```
 
+解除前の入力方式の切替（`azookey_ime_switch.exe`）は MSI と開発登録の解除手順に含め、
+MSIX の `Remove-AppxPackage` には含めない。手順は §4.2 に従う。
+
 ### 1.5 受け入れ条件
 
 OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1 経路に確定したら、
@@ -1749,6 +1752,25 @@ FileVersion をメジャーアップグレードで配ると、costing が compo
 
 `RemoveFiles` の前に `msiexec /z [#TipDll]` で `DllUnregisterServer` を呼ぶ。
 TIP DLL を削除した後では解除できないため、この順序を変更しない。
+
+azooKey を選択中のアプリが開いたまま登録だけが消えると、そのアプリの入力状態が壊れる。
+`DllUnregisterServer` は昇格したプロセス（MSI では SYSTEM の deferred CA）で動き、
+対話ユーザーの入力方式を切り替えられない。そのため解除の前に、対話ユーザーの文脈で
+`azookey_ime_switch.exe` を実行する。
+
+- helper は `ITfInputProcessorProfileMgr::ActivateProfile`（`TF_IPPMF_FORSESSION`）で、
+  日本語の別の有効な入力方式（Microsoft IME、他の TIP、キーボードレイアウトの順）へセッションを切り替える。
+  azooKey が既に選択中でなければ何もしない。azooKey のプロファイルは無効化しない。
+  無効化はユーザー単位（HKCU）に残り、再登録後も azooKey が選べない状態になりうるためである。
+- 切替先が無い、または `ActivateProfile` が失敗したときは、何も変えずに終了コード 1 で終わり、
+  失敗の種類を `%LOCALAPPDATA%zooKey\logs` の `ime_switch` ログに残す。解除は止めない。
+- `unregister-dev.ps1` は昇格前のユーザー側の処理で helper を TIP DLL と同じディレクトリから呼ぶ。
+  helper が無いときは警告して解除を続ける。
+- MSI は immediate CA `SwitchAwayFromTip`（`Return="ignore"`）を `RegisterTipOnUninstallRollback` の前に置く。
+  条件は `$TipComponent = 2 AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE` で、修復とメジャーアップグレードでは走らない。
+  deferred / rollback の CA の順序は変えない。
+- 切替の対象は、アンインストールを実行したユーザーのセッションだけである。他のユーザーのセッションと、
+  SYSTEM が実行する配布は対象外とする。
 
 ### 4.3 Inno Setup（代替）
 

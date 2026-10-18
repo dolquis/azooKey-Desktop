@@ -314,6 +314,17 @@ Describe "development registration scripts" {
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Classes\CLSID\$clsid')) "unregister-dev.ps1 should clean legacy HKCU CLSID entries."
     }
 
+    It "switches the session off azooKey before elevating, and continues without the helper" {
+      $switchIndex = $script:unregister.Text.IndexOf('azookey_ime_switch.exe')
+      $runKeyIndex = $script:unregister.Text.IndexOf('Remove-ItemProperty -Path $runKey')
+      $relaunchIndex = $script:unregister.Text.IndexOf('-Verb RunAs')
+      Assert-Condition ($switchIndex -ge 0) "unregister-dev.ps1 should run the input method switch helper."
+      Assert-Condition ($switchIndex -lt $runKeyIndex -and $switchIndex -lt $relaunchIndex) "The switch should run in the non-elevated step, before unregistration."
+      Assert-Condition ($script:unregister.Text -match 'Join-Path \(Split-Path -Parent \$TipDllPath\) "azookey_ime_switch\.exe"') "The helper should be looked up next to the TIP DLL."
+      Assert-Condition ($script:unregister.Text -match 'skipping the input method switch') "A missing helper should warn and continue."
+      Assert-Condition ($script:unregister.Text -match 'catch\s*\{\s*Write-Warning "Could not run azookey_ime_switch\.exe') "A helper launch failure should warn, not stop unregistration."
+    }
+
     It "relaunches machine-wide cleanup with quoted absolute paths" {
       Assert-Condition ($script:unregister.Text -match 'Start-Process\s+-FilePath\s+"powershell\.exe"\s+-Verb\s+RunAs') "unregister-dev.ps1 should relaunch with RunAs."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('-TipDllPath `"$TipDllPath`"')) "unregister-dev.ps1 should forward a quoted TipDllPath."

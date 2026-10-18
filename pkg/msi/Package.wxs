@@ -49,6 +49,14 @@
               KeyPath="yes" />
         </Component>
 
+        <Component Id="ImeSwitchComponent" Guid="*">
+          <File
+              Id="ImeSwitchExe"
+              Source="$(ImeSwitchExePath)"
+              Name="azookey_ime_switch.exe"
+              KeyPath="yes" />
+        </Component>
+
         <Component Id="HostComponent" Guid="086E7A58-AB71-4DEA-8F84-08B25B9A48B6">
           <File
               Id="HostExe"
@@ -151,6 +159,7 @@
       <ComponentRef Id="HostStartupLogComponent" />
       <ComponentRef Id="TipComponent" />
       <ComponentRef Id="HostComponent" />
+      <ComponentRef Id="ImeSwitchComponent" />
       <ComponentRef Id="HostSupervisorComponent" />
       <ComponentRef Id="InstalledHostWaiterComponent" />
       <ComponentRef Id="HostStartupComponent" />
@@ -211,6 +220,22 @@
         Impersonate="no"
         Return="ignore" />
 
+    <!--
+      Moves the installing user's session off azooKey before the registration is
+      removed (DEV-1654). Immediate, so it runs as the interactive user; the
+      deferred UnregisterTip below runs as SYSTEM and cannot switch the user's
+      input method. A failed switch is logged by the helper and never fails the
+      uninstall (Return="ignore"). Only a real uninstall runs it: a repair
+      (REMOVE is empty) and a major upgrade (UPGRADINGPRODUCTCODE) keep the
+      user's input method.
+    -->
+    <CustomAction
+        Id="SwitchAwayFromTip"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[#ImeSwitchExe]&quot;"
+        Execute="immediate"
+        Return="ignore" />
+
     <CustomAction Id="WaitForInstalledHost" Directory="INSTALLFOLDER"
         ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File &quot;[#InstalledHostWaiter]&quot;"
         Execute="deferred" Impersonate="no" Return="check" />
@@ -218,6 +243,10 @@
     <InstallExecuteSequence>
       <Custom Action="WaitForInstalledHost" Before="RemoveFiles"
           Condition="$HostStartupComponent = 2" />
+      <Custom
+          Action="SwitchAwayFromTip"
+          Before="RegisterTipOnUninstallRollback"
+          Condition="$TipComponent = 2 AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom
           Action="RegisterTipOnUninstallRollback"
           Before="UnregisterTip"

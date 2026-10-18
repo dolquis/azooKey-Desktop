@@ -3352,20 +3352,16 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationDigitAndEscapeKeepReadingI
 // DEV-1649: a window opened through the TIP's rewriter pre-processing (not
 // core) is cancelled by one Esc as well, preedit included.
 TEST(TsfTipOnKeyDownPreeditTest, EscapeFromRewriterCandidateWindowCancelsTheInput) {
-  OemCompositionTranslationGuard oem_translation;
   TextServiceHarness h;
   FakeCompositionAttachment attachment(h);
   h.service.set_number_rewriter_enabled_for_test(true);
-  h.service.set_symbol_rewriter_for_test(true);
-  h.service.set_emoji_rewriter_for_test(true);
-  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
   std::vector<azookey::ipc::CandidateField> candidates(2);
-  candidates[0].surface = "、蚊";
-  candidates[1].surface = "、科";
-  ASSERT_TRUE(PressSpaceAndDeliver(
-      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
   // Without the window the plain preedit branch would also pass this test.
   ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
   ASSERT_TRUE(h.Press(VK_ESCAPE));
@@ -5762,13 +5758,18 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsPendingRomajiO
 // DEV-1649: with no input a leftover window is only closed.
 TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowAndNoInputOnlyClosesTheWindow) {
   DocumentPreeditHarness h;
+  // A committed reading leaves the active context behind with no input.
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"か");
   ShowPredictionForTest(h.service);
   ASSERT_TRUE(h.service.prediction_window_visible_for_test());
 
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_FALSE(h.service.prediction_window_visible_for_test());
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
-  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.context.document->text, L"か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMetadata) {

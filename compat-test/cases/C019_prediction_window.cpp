@@ -189,9 +189,9 @@ CaseDefinition MakeC019PredictionWindowCase() {
         const auto after_escape = session.ReadEditorText();
         if (!after_escape) {
           result.reason_code = "prediction-escape-result-unobservable";
-        } else if (*after_escape != *before_escape) {
+        } else if (!after_escape->empty()) {
           result.status = ResultStatus::Fail;
-          result.reason_code = "prediction-escape-changed-preedit";
+          result.reason_code = "prediction-escape-did-not-cancel-input";
         } else {
           result.status = ResultStatus::Pass;
           result.reason_code = "prediction-window-tab-shift-tab-and-escape-observed";

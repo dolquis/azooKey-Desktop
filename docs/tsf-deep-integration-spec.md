@@ -568,8 +568,8 @@ VK だけから区別しない。`VK_DBE_HIRAGANA` / `VK_DBE_KATAKANA` の
 明示句読点 `、` または `。` として preedit へ取り込む。preedit がない場合は
 句読点単独で composition を開始する。句読点単独の変換候補は `、` と `,`、または
 `。` と `.` の順に表示し、Space で選び Enter または候補番号で確定する。
-半角候補は Host と記号リライターの有無に依存しない。Esc は選択を取り消して
-明示句読点の preedit に戻し、Backspace は句読点を削除する。
+半角候補は Host と記号リライターの有無に依存しない。Esc は通常の候補窓と同じく
+入力を取り消し（`docs/legacy-parity-spec.md` §1.2）、Backspace は句読点を削除する。
 `/` と Shift 付きの `<`、`>`、`?` は、その文字を preedit へ取り込む。
 未確定ローマ字が残っている場合は先にかなへ確定し、記号を同じ composition の末尾へ追加する。
 batch 変換の raw 入力には ASCII の `,` と `.` を保持するが、かな preview と raw romaji

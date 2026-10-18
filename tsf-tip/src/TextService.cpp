@@ -1652,23 +1652,40 @@ void TextService::LogKeyPath(std::string_view sink, ITfContext* context, WPARAM 
   if (!KeyPathLogging()) return;
   try {
     std::string_view reason = "input";
+    unsigned quiet_bit = 0;
     if (!eaten) {
       if (azookey::tsf::IsContextKeyboardDisabled(context)) {
         reason = "keyboard_disabled";
+        quiet_bit = 1;
       } else if (!keyboard_open_) {
         reason = "closed";
+        quiet_bit = 2;
       } else if (alnum_mode_) {
         reason = "alnum";
+        quiet_bit = 4;
       } else {
         reason = "not_handled";
       }
-      // Keys typed while the IME is off are not ours to count (as key_passthrough).
-      if (reason != "not_handled") {
-        if (key_path_passthrough_document_ &&
-            *key_path_passthrough_document_ == focused_document_identity_)
-          return;
-        key_path_passthrough_document_ = focused_document_identity_;
+    }
+    // A secure field's keys, like keys typed while the IME is off, are not
+    // ours to count or time: one record per document and reason, no lengths.
+    if (!quiet_bit && secure_input_.load(std::memory_order_relaxed)) {
+      reason = "secure";
+      quiet_bit = 8;
+    }
+    if (quiet_bit) {
+      if (!key_path_quiet_document_ || *key_path_quiet_document_ != focused_document_identity_) {
+        key_path_quiet_document_ = focused_document_identity_;
+        key_path_quiet_reasons_ = 0;
       }
+      if (key_path_quiet_reasons_ & quiet_bit) return;
+      key_path_quiet_reasons_ |= quiet_bit;
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path",
+                 {{"sink", SafeLogText(std::string(sink))},
+                  {"eaten", eaten != FALSE},
+                  {"reason", SafeLogText(std::string(reason))},
+                  {"once_per_document", true}});
+      return;
     }
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path",
                {{"sink", SafeLogText(std::string(sink))},
@@ -1685,6 +1702,13 @@ void TextService::LogKeyPath(std::string_view sink, ITfContext* context, WPARAM 
 void TextService::LogKeyPathContext(std::string_view operation, ITfContext* context) noexcept {
   if (!KeyPathLogging()) return;
   try {
+    if (secure_input_.load(std::memory_order_relaxed)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_context",
+                 {{"operation", SafeLogText(std::string(operation))},
+                  {"active_context", SameComIdentity(context, active_context_)},
+                  {"secure", true}});
+      return;
+    }
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_context",
                {{"operation", SafeLogText(std::string(operation))},
                 {"active_context", SameComIdentity(context, active_context_)},
@@ -3308,7 +3332,13 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     const uint64_t pending_before = KeyPathPendingLength(batch_raw_romaji_, preedit_kana_);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
-    if (log_key_path) {
+    if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
+      try {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
+                   {{"had_active_context", had_active_context}, {"secure", true}});
+      } catch (...) {
+      }
+    } else if (log_key_path) {
       // DEV-1637: what the document switch did to input still pending.
       try {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
@@ -3652,7 +3682,7 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
                                            &hr_session);
   edit->Release();
   if (request_accepted) *request_accepted = SUCCEEDED(hr);
-  if (KeyPathLogging()) {
+  if (KeyPathLogging() && !secure_input_.load(std::memory_order_relaxed)) {
     // DEV-1637: whether the preedit reached the document now or is queued.
     std::string_view mode = "request_failed";
     if (SUCCEEDED(hr)) {

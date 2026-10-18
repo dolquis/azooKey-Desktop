@@ -691,9 +691,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // AZOOKEY_LOG_KEYS=1 at construction: key_path records trace how each key
   // reached the composition (DEV-1637). They never carry the key or text.
   bool key_path_logging_{false};
-  // Document a passthrough key_path record was written for, so keys typed
-  // while the IME is off are reported once per focus, not counted.
-  std::optional<const void*> key_path_passthrough_document_;
+  // Document and reasons (bits) already reported for keys that are not
+  // traced one by one: typed while the IME is off, or into a secure field.
+  std::optional<const void*> key_path_quiet_document_;
+  unsigned key_path_quiet_reasons_{0};
   // Probe summary last reported by input_gate, so the record appears once per
   // change of field rather than once per commit or prediction.
   std::string input_gate_logged_signature_;

@@ -222,9 +222,13 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
   有無と保留中の入力の長さ。
 - `event=key_path_context`: context の push / pop。
 
-打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間や、
-アプリが入力を無効にした context の打鍵は、キーごとではなくフォーカスした文書ごとに
-1 件だけ記録する。収集後は `AZOOKEY_LOG_KEYS` も削除する。
+打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、
+アプリが入力を無効にした context、secure の入力欄（`privacy.secureApps` など）の打鍵は、
+キーごとではなく、フォーカスした文書と理由（`closed` / `alnum` / `keyboard_disabled` /
+`secure`）の組ごとに 1 件だけ、`once_per_document=true` で記録する。この記録と secure 中の
+`key_path_focus` / `key_path_context` は長さを含まず、secure 中は `key_path_preedit` も
+出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
+収集後は `AZOOKEY_LOG_KEYS` も削除する。
 
 ### 候補 UI の `pbShow` を収集する
 

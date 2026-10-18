@@ -1633,8 +1633,9 @@ TIP と Host に導入する。§7.2 以降が定める最終形のうち、相�
 - `AZOOKEY_LOG_LEVEL` は `info`、`warn`、`error` のいずれかを受け付ける。
   未設定または不正値では `info` を使う。
 - TIP は `AZOOKEY_LOG_KEYS` が厳密に `1` のときだけ、キー単位の経路（`key_path` 系の
-  info レコード）を加える。キー・読み・表層は含めず、IME が切れている間や
-  キーボード無効の context の打鍵は、フォーカスした文書ごとに 1 件にまとめる。
+  info レコード）を加える。キー・読み・表層は含めず、IME が切れている間、
+  キーボード無効の context、secure 中の打鍵は、フォーカスした文書と理由の組ごとに
+  長さを含まない 1 件にまとめる。
   項目は `docs/debugging.md` の「キー単位の経路を収集する」が持つ。
 - 出力先とファイル名は §5.2 の
   `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl` と

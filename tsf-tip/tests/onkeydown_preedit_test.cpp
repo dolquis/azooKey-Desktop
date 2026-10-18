@@ -7744,6 +7744,19 @@ size_t CountContaining(const std::vector<std::string>& records, std::string_view
   }));
 }
 
+// The unsigned value of `"name":<digits>` wherever the field sits in the line.
+std::optional<uint64_t> NumberField(const std::string& line, std::string_view name) {
+  const std::string key = "\"" + std::string(name) + "\":";
+  const size_t at = line.find(key);
+  if (at == std::string::npos) return std::nullopt;
+  size_t end = at + key.size();
+  uint64_t value = 0;
+  bool digits = false;
+  for (; end < line.size() && line[end] >= '0' && line[end] <= '9'; ++end, digits = true)
+    value = value * 10 + static_cast<uint64_t>(line[end] - '0');
+  return digits ? std::optional<uint64_t>(value) : std::nullopt;
+}
+
 TEST(TsfTipKeyPathLogTest, NothingIsWrittenWithoutTheOptIn) {
   ScopedKeyPathLog log(/*keys=*/false);
   {
@@ -7761,6 +7774,8 @@ TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePer
   ScopedKeyPathLog log(/*keys=*/true);
   {
     TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
     EXPECT_TRUE(h.TestPress('K'));
     EXPECT_TRUE(h.Press('K'));
     EXPECT_TRUE(h.TestPress('A'));
@@ -7783,7 +7798,12 @@ TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePer
   EXPECT_GE(CountContaining(records, "\"event\":\"key_path_preedit\""), 1u);
   // The switch found the pending "か" and recorded only its length.
   ASSERT_EQ(CountContaining(records, "\"event\":\"key_path_focus\""), 1u);
-  EXPECT_EQ(CountContaining(records, "\"pending_before\":0,"), 0u);
+  for (const auto& line : records) {
+    if (line.find("\"event\":\"key_path_focus\"") == std::string::npos) continue;
+    const auto pending = NumberField(line, "pending_before");
+    ASSERT_TRUE(pending.has_value()) << line;
+    EXPECT_GT(*pending, 0u) << line;
+  }
   // Six keys typed into the disabled context leave one record.
   EXPECT_EQ(CountContaining(records, "\"reason\":\"keyboard_disabled\""), 1u);
   for (const auto& line : records) {
@@ -7793,6 +7813,25 @@ TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePer
     EXPECT_EQ(line.find("\"K\""), std::string::npos);
     EXPECT_EQ(line.find("\"k\""), std::string::npos);
   }
+}
+
+TEST(TsfTipKeyPathLogTest, SecureFieldKeysLeaveOneRecordWithoutLengths) {
+  ScopedKeyPathLog log(/*keys=*/true);
+  {
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+    ASSERT_TRUE(h.service.resolve_secure_for_test(&h.context));
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}}) {
+      EXPECT_TRUE(h.TestPress(key));
+      EXPECT_TRUE(h.Press(key));
+    }
+  }
+  const auto records = log.Records();
+  EXPECT_EQ(CountContaining(records, "\"reason\":\"secure\""), 1u);
+  EXPECT_EQ(CountContaining(records, "\"reason\":\"input\""), 0u);
+  EXPECT_EQ(CountContaining(records, "\"event\":\"key_path_preedit\""), 0u);
+  EXPECT_EQ(CountContaining(records, "pending_length"), 0u);
+  EXPECT_EQ(CountContaining(records, "key_class"), 0u);
 }
 
 TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsDisabledContextsSecureAndKeysPassThrough) {

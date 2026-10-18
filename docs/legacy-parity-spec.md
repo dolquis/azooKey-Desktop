@@ -117,6 +117,9 @@ enum class InputStateKind {
 > （M35 suggest）、英単語候補（M60）、記号・絵文字の rewriter を含まないため、候補窓には使わない。
 > 応答が TIP の deadline（`dev-infrastructure-spec.md` §8.5.2 の 150ms）に間に合わなかったときは、
 > 同じ読みの打鍵中の `live = true` の候補が TIP にあればそれで、無ければ TIP ローカル候補で窓を開く。
+> 打鍵中の候補を持つのは、ライブ変換 OFF（打鍵ごとに `QueryCandidates` を送る）で secure でない
+> context の、staleness 判定を通った応答だけで、Host との接続をやり直すと捨てる。ライブ変換 ON は
+> 打鍵ごとに `QueryLiveConversion` を送るので、間に合わなかったときは TIP ローカル候補になる。
 > 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
 > 詳細は §1.5.4。
 

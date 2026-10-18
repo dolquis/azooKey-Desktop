@@ -5138,6 +5138,10 @@ void TextService::ServeConnection() {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
+  // A new connection may be a new Host whose dictionaries or learning differ.
+  live_prefetch_reading_.clear();
+  live_prefetch_candidates_.clear();
+
   uint64_t next_id = 2;
 
   while (true) {
@@ -5603,10 +5607,10 @@ void TextService::ServeConnection() {
       // A late window query (live = false) falls back to the per-key live answer
       // for the same reading before the TIP-local kana (DEV-1653).
       if (emoji_trigger.empty())
-        response_candidates =
-            !live && live_prefetch_reading_ == reading && !live_prefetch_candidates_.empty()
-                ? live_prefetch_candidates_
-                : BuildLocalFallbackCandidates(reading);
+        response_candidates = !live && !secure && live_prefetch_reading_ == reading &&
+                                      !live_prefetch_candidates_.empty()
+                                  ? live_prefetch_candidates_
+                                  : BuildLocalFallbackCandidates(reading);
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -5669,6 +5673,7 @@ void TextService::ServeConnection() {
     }
 
     std::string corrected_reading;
+    std::optional<std::vector<CandidateField>> prefetch_candidates;
     if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
@@ -5676,10 +5681,10 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
-      if (live && !is_batch && emoji_trigger.empty()) {
-        live_prefetch_reading_ = reading;
-        live_prefetch_candidates_ = response_candidates;
-      }
+      // Kept only for an ordinary context: a secure context never reuses
+      // ranking made with its context or learning (privacy spec section 5).
+      if (live && !is_batch && emoji_trigger.empty() && !secure)
+        prefetch_candidates = response_candidates;
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
     }
@@ -5722,6 +5727,10 @@ void TextService::ServeConnection() {
                      .count());
     }
 
+    if (is_fresh && prefetch_candidates) {
+      live_prefetch_reading_ = reading;
+      live_prefetch_candidates_ = std::move(*prefetch_candidates);
+    }
     if (is_fresh) {
       if (!tip_candidates.empty()) {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_candidates_received",

@@ -438,7 +438,7 @@ class InferenceEngine {
   CandidatesResult QueryCandidatesExImpl(const std::string& kana, const std::string& context,
                                          uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
                                          uint32_t max_candidates, bool live,
-                                         const InferenceTelemetry* telemetry, bool fast_only,
+                                         const InferenceTelemetry* telemetry,
                                          const TagBoosts* tag_boosts = nullptr);
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide

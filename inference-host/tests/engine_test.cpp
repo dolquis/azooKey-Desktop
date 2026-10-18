@@ -2268,6 +2268,69 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   RemoveProtectedStoreFile(lpath);
 }
 
+namespace {
+// Answers every reading with the same ranked list, as a model that produced
+// broken generations above a usable one would.
+class ScriptedConverter final : public azookey::core::IConverter {
+ public:
+  explicit ScriptedConverter(std::vector<azookey::core::Candidate> candidates)
+      : candidates_(std::move(candidates)) {}
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return candidates_;
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  std::vector<azookey::core::Candidate> candidates_;
+};
+}  // namespace
+
+// DEV-1648: live conversion takes the candidate window's final filters, and a
+// dropped top candidate leaves the next one rather than the kana.
+TEST(InferenceEngineTest, LiveConversionDropsPrivateUseAndMixedScriptGenerations) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const std::string private_use = "\xEE\xB8\x81";
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(std::vector<Candidate>{
+            {"京" + private_use + "京", "ふくすう", 2.0, CandidateSource::Model, "model"},
+            {"複数", "ふくすう", 1.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    const auto live = engine.QueryLiveConversion("ふくすう", "", kNowBase, nullptr);
+    ASSERT_TRUE(live);
+    EXPECT_EQ(live->surface, "複数");
+  }
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(
+            std::vector<Candidate>{{"あっpエ", "あっpぇ", 2.0, CandidateSource::Model, "model"},
+                                   {"あっぷる", "あっpぇ", 1.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    const auto live = engine.QueryLiveConversion("あっpぇ", "", kNowBase, nullptr);
+    ASSERT_TRUE(live);
+    EXPECT_EQ(live->surface, "あっぷる");
+  }
+  {
+    azookey::host::InferenceEngine engine(
+        std::make_unique<ScriptedConverter>(std::vector<Candidate>{
+            {"京" + private_use, "きょう", 2.0, CandidateSource::Model, "model"}}),
+        nullptr, {});
+    EXPECT_FALSE(engine.QueryLiveConversion("きょう", "", kNowBase, nullptr));
+  }
+}
+
 TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

@@ -138,8 +138,9 @@ class HandshakeTokenGuard {
   bool installed_{false};
 };
 
+// Generous enough for an instrumented (coverage) run, which is many times slower.
 bool WaitUntil(const std::function<bool()>& done) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < deadline) {
     if (done()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -254,7 +255,8 @@ struct HarnessOptions {
   bool prediction{false};
   bool secure{false};
   // A generous deadline keeps a slow (coverage) run from timing out a query
-  // the test expects to arrive; the late-answer tests shorten it instead.
+  // the test expects to arrive; the late-answer tests shorten it to 1000ms and hold the window
+  // answer for 4000ms, which still leaves the per-key answers room on a slow run.
   uint32_t query_deadline_ms{5000};
 };
 
@@ -366,6 +368,10 @@ TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
     SpaceWindowHarness h(pipe_name, {.prediction = true});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
+    // A prediction answer is delivered and not yet applied, so its
+    // candidates-ready work runs below while the window answer is outstanding.
+    ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+    ASSERT_GT(host.prediction_queries.load(), 0);
 
     EXPECT_TRUE(h.Press(VK_SPACE));
     // The Host holds the window answer while these notifications run.
@@ -374,7 +380,7 @@ TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
       h.service.process_candidates_ready_for_test();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    EXPECT_GT(host.prediction_queries.load(), 0);
+    EXPECT_FALSE(h.service.has_prediction_result_for_test());
     EXPECT_TRUE(h.service.input_state_for_test().awaiting_candidates());
     host.ReleaseWindow();
     EXPECT_EQ(h.WaitForWindow(kWindow.size()), kWindow);
@@ -387,10 +393,10 @@ TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
 // same reading ahead of the TIP-local kana candidates.
 TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst) {
   const auto pipe_name = PipeName("late");
-  FakeHost host(std::chrono::milliseconds(1500));
+  FakeHost host(std::chrono::milliseconds(4000));
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
+    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 1000});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
 
@@ -408,8 +414,6 @@ TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst
 // answer keeps it first instead of reverting the preedit to kana.
 TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryKeepsTheLiveConversionSurface) {
   const auto pipe_name = PipeName("late-live");
-  // The live conversion answers must come back inside the deadline even on a
-  // slow (coverage) run, so this one deadline is longer than the others.
   FakeHost host(std::chrono::milliseconds(4000));
   ASSERT_TRUE(host.Start(pipe_name));
   {
@@ -432,10 +436,10 @@ TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryKeepsTheLiveConversionSurfac
 // A secure context never reuses an answer ranked with its context or learning.
 TEST(TsfTipSpaceCandidateWindowTest, SecureLateWindowQueryUsesOnlyLocalCandidates) {
   const auto pipe_name = PipeName("late-secure");
-  FakeHost host(std::chrono::milliseconds(1500));
+  FakeHost host(std::chrono::milliseconds(4000));
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, {.secure = true, .query_deadline_ms = 300});
+    SpaceWindowHarness h(pipe_name, {.secure = true, .query_deadline_ms = 1000});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
 
@@ -451,10 +455,10 @@ TEST(TsfTipSpaceCandidateWindowTest, SecureLateWindowQueryUsesOnlyLocalCandidate
 // A new connection may be a new Host, so the per-key answer does not survive it.
 TEST(TsfTipSpaceCandidateWindowTest, ReconnectDropsThePerKeyCandidates) {
   const auto pipe_name = PipeName("late-reconnect");
-  FakeHost host(std::chrono::milliseconds(1500));
+  FakeHost host(std::chrono::milliseconds(4000));
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
+    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 1000});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
     h.service.stop_ipc_worker_for_test();

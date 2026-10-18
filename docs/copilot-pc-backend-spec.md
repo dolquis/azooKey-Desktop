@@ -577,7 +577,7 @@ Fast、AC（`performance` と、電源の状態が不明な場合を含む）な
 | バックエンド選択 | §4.5 のフォールバック段位に従う（R2 NPU/GPU → R1 CUDA/Vulkan/CPU） | §4.5 に従う（**R2 は NPU device のみ**、§4.6 のデバイスレベル絞り込み。discrete GPU / CUDA / Vulkan を回避し、NPU 不可なら R1 CPU） | `auto` は Host 起動時の電源の状態で解決し、電源の変化が 5 秒続いたら解決し直す。値が変わり、モデルを使っていれば再ロードする（§4.4） |
 | 推論スレッド数（`inferenceThreads` が 0 のとき） | 8 | 2 | 電源の状態が不明なら 4。いずれも論理コア数を上限とする。電源の変化で設定し直し、次のモデルロードから効く |
 | NLL rerank（Heavy レーン） | 設定 `nll.enabled` に従う | 無効（Fast レーンのみ） | 電源の変化で設定し直し、次の変換から効く |
-| ライブ変換重い推論 | 有効 | 無効（Fast レーンのみ） | ライブ変換は電源によらず fallback converter（`fast_only`）で行う（`docs/zenzai-inference-spec.md` §7.1） |
+| ライブ変換重い推論 | 無効（Fast レーンのみ） | 無効（Fast レーンのみ） | ライブ変換は電源によらず `live = true` の Zenzai 1-pass で行い、NLL rerank などの Heavy の pass は走らせない。モデルが無いときは fallback converter（`docs/zenzai-inference-spec.md` §7.1） |
 | 予測頻度 | 入力ごと | 200ms デバウンス | TIP 側の挙動で、Host は扱わない |
 | Post-Commit Lint | 有効 | 無効 | Host は扱わない |
 | Persona 再計算間隔 | 24h | 7 日 | Host は扱わない |

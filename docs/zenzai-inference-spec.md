@@ -221,9 +221,9 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
   - 表層に私用文字（U+E000〜U+F8FF）を含まないこと。プロンプトの制御用特殊トークン
     （U+EE00〜U+EEFF、§5）は変換結果ではない。生成中にこの範囲の文字が出たら、その beam は
     `[EOS]` と同じく確定し（その文字より前の表層だけが候補になる）、確定前の表層に私用文字が
-    残っていれば候補から外す。候補を返す直前にも、通常変換・一括変換の両方で私用文字を含む
-    表層を落とす最終フィルタを置く。残りの候補の順位と件数は変えない。ライブ変換の経路には
-    DEV-1648 で同じフィルタを掛ける。
+    残っていれば候補から外す。候補を返す直前にも、通常変換・一括変換・ライブ変換で私用文字を
+    含む表層を落とす最終フィルタを置く。残りの候補の順位と件数は変えない。ライブ変換は、
+    候補を 1 件に切る前にこのフィルタと次の混在フィルタを掛け、残った先頭を返す。
   - 読みに ASCII 英字が残っている要求では、`source = model` の候補のうちかなと ASCII 英字が
     混在する表層（`あっpエ`）を落とす。条件と例外は `docs/inline-english-candidate-spec.md`
     §4.3.1 が持つ。
@@ -356,7 +356,9 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 4. **確定 auto-word**: auto-word が有効なら `LookupConfirmed(kana)` の結果を追加する。
    pending / rejected は含めない。正の保存 score があればそれを使い、それ以外は
    `auto_word_default_score` を使う。`source = UserDictionary`、`debug_info = "auto-word"` とする。
-5. **converter**: 通常は `active_converter_`、`fast_only` では `fallback_converter_` を使う。
+5. **converter**: `active_converter_` を使う。ライブ変換（`QueryLiveConversion`）も同じで、
+   モデルがロードされていれば `live = true` の Zenzai 1-pass（beam 1 本）、されていなければ
+   `fallback_converter_` になる。
    `kModelConversionBudget`（§8.2）の deadline、末尾を長さ制限した文脈、候補上限を
    `BuildContext` 経由で渡して `Convert` する。モデル converter から例外が出て
    fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は

@@ -2367,8 +2367,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         ClearPrediction();
         // While typing, Esc also cancels the input in the same press (DEV-1649):
         // fall through to the Cancel handling below. A window left over with no
-        // input is only closed.
-        if (preedit_kana_.empty() && !romaji_.HasPending()) {
+        // input is only closed, and so is one shown while a commit is pending
+        // retry: falling through there would commit instead of cancel.
+        if (committing_ || (preedit_kana_.empty() && !romaji_.HasPending())) {
           *eaten = TRUE;
           return S_OK;
         }
@@ -3210,7 +3211,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
 
     } else if (IsActionKey(key_event, UserAction::Cancel)) {
-      if (cand_visible) {
+      if (cand_visible && BatchRomajiEnabled()) {
+        // Batch conversion keeps its two-step Esc (the window first, then the
+        // accumulated reading); every other window is cancelled in one press.
         const auto rollback_state = capture_preedit_rollback_state();
         candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
@@ -3230,8 +3233,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
         batch_query_in_progress_ = false;
         *eaten = TRUE;
-      } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
+      } else if (cand_visible || !preedit_kana_.empty() || romaji_.HasPending()) {
         const auto rollback_state = capture_preedit_rollback_state();
+        if (cand_visible) {
+          candidate_ui_.EndUI();
+          selected_candidate_idx_ = 0;
+        }
         preedit_kana_.clear();
         romaji_.Reset();
         ClearBatchState();

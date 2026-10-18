@@ -2486,8 +2486,6 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCancelsTheInput) {
   EXPECT_EQ(h.context.document->text, L"");
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
   EXPECT_TRUE(h.service.preedit_kana_.empty());
-  EXPECT_FALSE(h.Press(VK_RETURN));
-  EXPECT_EQ(h.context.document->text, L"");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSettingChangeCommitsDisplayedSurface) {
@@ -2715,9 +2713,9 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionLegacyRewriterPreviewsCandidateRe
   ASSERT_TRUE(h.Press(VK_SPACE));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
   ASSERT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(h.context.document->text, L"か");
-  ASSERT_TRUE(h.Press(VK_RETURN));
-  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
   h.service.stop_ipc_worker_for_test();
   server.Stop();
 }
@@ -3345,11 +3343,29 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationDigitAndEscapeKeepReadingI
   ASSERT_TRUE(h.Press(VK_SPACE));
   EXPECT_EQ(attachment.composition_range.last_text, L",");
   ASSERT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(h.service.preedit_kana_, "、");
-  EXPECT_EQ(attachment.composition_range.last_text, L"、");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(attachment.composition.end_count, 1);
+}
+
+// DEV-1649: a window opened through the TIP's rewriter pre-processing (not
+// core) is cancelled by one Esc as well, preedit included.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeFromRewriterCandidateWindowCancelsTheInput) {
+  OemCompositionTranslationGuard oem_translation;
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  h.service.set_number_rewriter_enabled_for_test(true);
+  h.service.set_symbol_rewriter_for_test(true);
+  h.service.set_emoji_rewriter_for_test(true);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
   ASSERT_TRUE(h.Press(VK_SPACE));
-  ASSERT_TRUE(h.Press('2'));
-  EXPECT_EQ(attachment.composition_range.last_text, L",");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(attachment.composition.end_count, 1);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchStandalonePunctuationKeepsRawAndOffersHalfwidth) {
@@ -5712,6 +5728,42 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsTheInputInOneP
   EXPECT_TRUE(h.service.preedit_kana_.empty());
   h.service.stop_ipc_worker_for_test();
   server.Stop();
+}
+
+static void ShowPredictionForTest(azookey::tsf::TextService& service) {
+  azookey::ipc::CandidateField prediction;
+  prediction.surface = "日本";
+  prediction.reading = "にほん";
+  service.shown_predictions_.push_back(prediction);
+  service.ShowPredictionWindow();
+}
+
+// DEV-1649: pending romaji alone counts as input, so Esc cancels it.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsPendingRomajiOnly) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+  ASSERT_TRUE(h.service.romaji_.HasPending());
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_FALSE(h.service.romaji_.HasPending());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"");
+}
+
+// DEV-1649: with no input a leftover window is only closed.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowAndNoInputOnlyClosesTheWindow) {
+  DocumentPreeditHarness h;
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMetadata) {

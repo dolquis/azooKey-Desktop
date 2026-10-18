@@ -294,6 +294,11 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   size_t shown_prediction_count_for_test() const { return shown_predictions_.size(); }
   bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
+  void show_prediction_for_test(const ipc::CandidateField& prediction) {
+    shown_predictions_.push_back(prediction);
+    ShowPredictionWindow();
+  }
+  bool romaji_pending_for_test() const { return romaji_.HasPending(); }
   void retry_dropped_prediction_for_test() {
     const uint64_t generation = pending_prediction_generation_for_test();
     prediction_last_query_at_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);

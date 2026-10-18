@@ -5740,8 +5740,7 @@ static void ShowPredictionForTest(azookey::tsf::TextService& service) {
   azookey::ipc::CandidateField prediction;
   prediction.surface = "日本";
   prediction.reading = "にほん";
-  service.shown_predictions_.push_back(prediction);
-  service.ShowPredictionWindow();
+  service.show_prediction_for_test(prediction);
 }
 
 // DEV-1649: pending romaji alone counts as input, so Esc cancels it.
@@ -5749,13 +5748,13 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsPendingRomajiO
   DocumentPreeditHarness h;
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.service.preedit_kana_.empty());
-  ASSERT_TRUE(h.service.romaji_.HasPending());
+  ASSERT_TRUE(h.service.romaji_pending_for_test());
   ShowPredictionForTest(h.service);
   ASSERT_TRUE(h.service.prediction_window_visible_for_test());
 
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_FALSE(h.service.prediction_window_visible_for_test());
-  EXPECT_FALSE(h.service.romaji_.HasPending());
+  EXPECT_FALSE(h.service.romaji_pending_for_test());
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
   EXPECT_EQ(h.context.document->text, L"");
 }

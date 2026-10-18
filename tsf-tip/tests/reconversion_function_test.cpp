@@ -32,6 +32,7 @@ class TestContext final : public ITfContext {
   TestContext& operator=(const TestContext&) = delete;
   ~TestContext() {
     if (placed) placed->Release();
+    RunDeferred(false);
   }
   STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
     if (!out) return E_POINTER;
@@ -47,8 +48,29 @@ class TestContext final : public ITfContext {
                                   HRESULT* result) override {
     if (!result) return E_POINTER;
     flags_seen.push_back(flags);
+    // Word outside its own calls: no synchronous lock, the rest queued (DEV-1652).
+    if (refuse_sync && (flags & TF_ES_SYNC)) {
+      *result = TF_E_SYNCHRONOUS;
+      return S_OK;
+    }
+    if (refuse_sync && !(flags & TF_ES_SYNC)) {
+      edit->AddRef();
+      deferred.push_back(edit);
+      *result = TF_S_ASYNC;
+      return S_OK;
+    }
     *result = permit ? edit->DoEditSession(1) : TF_E_LOCKED;
     return S_OK;
+  }
+  // Runs (or, with `run` false, drops) the queued sessions, as the application
+  // does when it grants the lock.
+  void RunDeferred(bool run = true) {
+    auto queued = std::move(deferred);
+    deferred.clear();
+    for (auto* edit : queued) {
+      if (run) (void)edit->DoEditSession(1);
+      edit->Release();
+    }
   }
   STDMETHODIMP InWriteSession(TfClientId, BOOL* out) override {
     if (!out) return E_POINTER;
@@ -93,6 +115,8 @@ class TestContext final : public ITfContext {
   }
 
   bool permit{true};
+  bool refuse_sync{false};
+  std::vector<ITfEditSession*> deferred;
   bool selectable{false};
   ITfRange* selection{nullptr};
   ITfRange* placed{nullptr};
@@ -520,6 +544,84 @@ TEST(ReconversionFunctionTest, SameSurfaceAtDifferentPositionCannotUseCacheOrSta
   list->Release();
   function->Release();
   service.Deactivate();
+}
+
+// DEV-1652: Word grants a synchronous lock while it calls GetReconversion, but
+// not when the Host's answer arrives later. The candidates still open, from a
+// queued session that rereads the range, and only while it is unchanged.
+enum class DeferredShowChange { None, Text, Selection, Deactivate };
+
+void VerifyHostCandidatesShowWithoutSynchronousLock(DeferredShowChange change) {
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日別");
+  TestRange range(&context, text, 0, 2);
+  TestRange moved(&context, text, 3, 3);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"winword.exe", "Word", true});
+  service.set_text_edit_context_for_test(&context);
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  ITfCandidateList* list = nullptr;
+  ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+  ASSERT_NE(list, nullptr);
+  list->Release();
+  function->Release();
+  ASSERT_EQ(service.pending_reconversion_surface_for_test(), "明日");
+
+  context.refuse_sync = true;
+  const size_t requests_before = context.flags_seen.size();
+  service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+  EXPECT_FALSE(service.has_reconversion_ui_for_test());
+  ASSERT_EQ(context.deferred.size(), 1u);
+  // The show path asks for no synchronous lock at all.
+  ASSERT_EQ(context.flags_seen.size(), requests_before + 1);
+  EXPECT_EQ(context.flags_seen.back(), static_cast<DWORD>(TF_ES_ASYNCDONTCARE | TF_ES_READ));
+
+  switch (change) {
+    case DeferredShowChange::None:
+      break;
+    case DeferredShowChange::Text:
+      (*text)[1] = L'晩';
+      break;
+    case DeferredShowChange::Selection: {
+      context.selection = &moved;
+      ChangedSelectionRecord record;
+      ASSERT_EQ(service.OnEndEdit(&context, 1, &record), S_OK);
+      break;
+    }
+    case DeferredShowChange::Deactivate:
+      service.Deactivate();
+      break;
+  }
+  context.RunDeferred();
+  if (change == DeferredShowChange::None) {
+    ASSERT_TRUE(service.has_reconversion_ui_for_test());
+    EXPECT_EQ(service.reconversion_shown_candidates_for_test(),
+              (std::vector<std::wstring>{L"あした", L"明晩"}));
+  } else {
+    EXPECT_FALSE(service.has_reconversion_ui_for_test());
+    EXPECT_TRUE(service.pending_reconversion_surface_for_test().empty());
+  }
+  EXPECT_EQ(range.set_text_calls(), 0);
+  context.refuse_sync = false;
+  service.Deactivate();
+}
+
+TEST(ReconversionFunctionTest, HostCandidatesShowFromQueuedSessionWhenSyncLockIsRefused) {
+  VerifyHostCandidatesShowWithoutSynchronousLock(DeferredShowChange::None);
+}
+
+TEST(ReconversionFunctionTest, QueuedShowSessionDropsCandidatesForChangedRangeOrService) {
+  for (const auto change :
+       {DeferredShowChange::Text, DeferredShowChange::Selection, DeferredShowChange::Deactivate}) {
+    SCOPED_TRACE(static_cast<int>(change));
+    VerifyHostCandidatesShowWithoutSynchronousLock(change);
+  }
 }
 
 TEST(ReconversionFunctionTest, MovingSelectionDismissesDisplayedReconversion) {

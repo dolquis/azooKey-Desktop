@@ -1176,6 +1176,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void OnCandidateClicked(int idx);
   void ClearReconversionState();
   void ShowReconversionResult();
+  // Opens the list for `range` if it is still the open request's.
+  void ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
+                            ITfCandidateList* list, std::vector<std::wstring> values,
+                            std::vector<ReconversionOrigin> origins, std::string reading);
   void PrefetchSelectedReconversion();
   void AdviseTextEditSink(ITfContext* context);
   void UnadviseTextEditSink();

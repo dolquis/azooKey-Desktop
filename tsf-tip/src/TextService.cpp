@@ -8058,9 +8058,39 @@ void TextService::ShowReconversionResult() {
     ClearReconversionState();
     return;
   }
-  ITfCandidateList* list = nullptr;
-  const HRESULT hr = function->GetReconversion(reconversion_range_, &list);
+  // The Host replies outside any application callback, where Word refuses a
+  // synchronous lock (DEV-1652), so the range is reread in a session TSF may
+  // queue. The provider still compares the reread surface with the request's.
+  AddRef();
+  auto owner = std::shared_ptr<TextService>(this, [](TextService* service) { service->Release(); });
+  Microsoft::WRL::ComPtr<ITfRange> range(reconversion_range_);
+  const uint64_t generation = reconversion_generation_;
+  const HRESULT hr = function->RequestReconversion(
+      reconversion_range_,
+      [owner, range, generation, values = std::move(values), origins = std::move(origins),
+       reading = std::move(result->reading)](HRESULT list_hr, ITfCandidateList* list) {
+        owner->ShowReconversionList(generation, range.Get(), list_hr, list, values, origins,
+                                    reading);
+      });
   function->Release();
+  if (hr == TF_S_ASYNC) {
+    LogReconversion("show", "deferred");
+  } else if (FAILED(hr) && generation == reconversion_generation_) {
+    LogReconversion("show", "list_failed", hr);
+    ClearReconversionState();
+  }
+}
+
+void TextService::ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
+                                       ITfCandidateList* list, std::vector<std::wstring> values,
+                                       std::vector<ReconversionOrigin> origins,
+                                       std::string reading) {
+  // A queued session can run after the selection, context or service moved on.
+  if (generation != reconversion_generation_ || range != reconversion_range_ ||
+      reconversion_list_) {
+    LogReconversion("show", "stale_generation", hr);
+    return;
+  }
   if (FAILED(hr) || !list) {
     LogReconversion("show", "list_failed", hr);
     ClearReconversionState();
@@ -8073,12 +8103,12 @@ void TextService::ShowReconversionResult() {
   const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
-    list->Release();
     ClearReconversionState();
     return;
   }
+  list->AddRef();
   reconversion_list_ = list;
-  reconversion_shown_reading_ = std::move(result->reading);
+  reconversion_shown_reading_ = std::move(reading);
   reconversion_shown_origins_ = std::move(origins);
   reconversion_shown_candidates_ = std::move(values);
   LogReconversion("show", "shown", S_OK, items.size());

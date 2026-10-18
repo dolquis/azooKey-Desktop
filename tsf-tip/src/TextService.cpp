@@ -5139,8 +5139,7 @@ void TextService::ServeConnection() {
   using namespace azookey::ipc;
 
   // A new connection may be a new Host whose dictionaries or learning differ.
-  live_prefetch_reading_.clear();
-  live_prefetch_candidates_.clear();
+  live_prefetch_ = {};
 
   uint64_t next_id = 2;
 
@@ -5483,7 +5482,7 @@ void TextService::ServeConnection() {
     // live QueryCandidates has a request-level deadline; batch conversion can
     // legitimately take longer and keeps the existing unbounded wait.
     const auto query_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(kQueryCandidatesFastTimeoutMs);
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(query_deadline_ms_);
     const std::optional<std::chrono::steady_clock::time_point> query_request_deadline =
         is_batch ? std::nullopt
                  : std::optional<std::chrono::steady_clock::time_point>(query_deadline);
@@ -5604,13 +5603,20 @@ void TextService::ServeConnection() {
                    {{"request_id", req_id}});
       }
 
-      // A late window query (live = false) falls back to the per-key live answer
-      // for the same reading before the TIP-local kana (DEV-1653).
-      if (emoji_trigger.empty())
-        response_candidates = !live && !secure && live_prefetch_reading_ == reading &&
-                                      !live_prefetch_candidates_.empty()
-                                  ? live_prefetch_candidates_
-                                  : BuildLocalFallbackCandidates(reading);
+      // A late window query (live = false) puts the per-key live answer made
+      // with the same reading and context ahead of the TIP-local kana (DEV-1653).
+      if (emoji_trigger.empty()) {
+        if (!live && !secure && live_prefetch_.reading == reading &&
+            live_prefetch_.left_context == left_context &&
+            live_prefetch_.learning_allowed == learning_allowed)
+          response_candidates = live_prefetch_.candidates;
+        for (auto& local : BuildLocalFallbackCandidates(reading)) {
+          const bool shown = std::any_of(
+              response_candidates.begin(), response_candidates.end(),
+              [&](const CandidateField& candidate) { return candidate.surface == local.surface; });
+          if (!shown) response_candidates.push_back(std::move(local));
+        }
+      }
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -5652,6 +5658,14 @@ void TextService::ServeConnection() {
                 ipc_pending_trace_id_ == trace_id) {
               LiveConversionResult live_result{req_id, reading, payload->surface, trace_id,
                                                trace_start};
+              // The surface the preedit shows becomes the window fallback, so a
+              // late window query keeps it instead of reverting to kana. A
+              // surface with inserted punctuation is not a candidate.
+              if (!secure && payload->segments.empty() && !payload->surface.empty())
+                live_prefetch_ = {reading,
+                                  left_context,
+                                  learning_allowed,
+                                  {{payload->surface, reading, 1.0, "live"}}};
               live_result.segments = std::move(payload->segments);
               live_result.auto_punctuation = auto_punctuation;
               live_conversion_result_ = std::move(live_result);
@@ -5682,8 +5696,10 @@ void TextService::ServeConnection() {
       }
       response_candidates = std::move(qpayload->candidates);
       // Kept only for an ordinary context: a secure context never reuses
-      // ranking made with its context or learning (privacy spec section 5).
-      if (live && !is_batch && emoji_trigger.empty() && !secure)
+      // ranking made with its context or learning (privacy spec section 5). An
+      // auto-replaced answer belongs to the corrected reading, not this one.
+      if (live && !is_batch && emoji_trigger.empty() && !secure &&
+          qpayload->corrected_reading.empty())
         prefetch_candidates = response_candidates;
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
@@ -5728,8 +5744,7 @@ void TextService::ServeConnection() {
     }
 
     if (is_fresh && prefetch_candidates) {
-      live_prefetch_reading_ = reading;
-      live_prefetch_candidates_ = std::move(*prefetch_candidates);
+      live_prefetch_ = {reading, left_context, learning_allowed, std::move(*prefetch_candidates)};
     }
     if (is_fresh) {
       if (!tip_candidates.empty()) {

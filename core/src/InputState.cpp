@@ -233,7 +233,8 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
       next.CommitCandidate(selected_index_, result.actions);
       break;
     case UserAction::Cancel:
-      // Esc returns to the reading and keeps the cached candidates (M10).
+      // Esc returns to the reading (M10); the next StartConversion queries the
+      // window again rather than reopening this list.
       result.actions.push_back(HideCandidateWindow{});
       next.kind_ = InputStateKind::Composing;
       next.selected_index_ = 0;

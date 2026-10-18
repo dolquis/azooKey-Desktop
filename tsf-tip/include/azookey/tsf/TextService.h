@@ -640,6 +640,9 @@ class TextService final : public ITfTextInputProcessorEx,
     ipc_health_timeout_ms_ = timeout_ms;
     ipc_deadline_miss_threshold_ = failure_threshold;
   }
+  // Call before start_ipc_worker_for_test: the request deadline of a
+  // QueryCandidates / QueryLiveConversion, so tests do not race the 150ms.
+  void set_query_deadline_ms_for_test(uint32_t deadline_ms) { query_deadline_ms_ = deadline_ms; }
   POINT caret_point_for_test() const { return caret_pt_; }
   bool caret_point_valid_for_test() const { return caret_pt_valid_; }
   void set_caret_point_for_test(POINT point, bool valid) {
@@ -899,10 +902,20 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t ipc_health_timeout_ms_{500};
   uint32_t ipc_deadline_miss_threshold_{2};
   uint32_t ipc_consecutive_deadline_misses_{0};  // IPC worker only.
-  // The last per-key live = true answer and its reading, for a window query
-  // that misses its deadline (DEV-1653). IPC worker only.
-  std::string live_prefetch_reading_;
-  std::vector<ipc::CandidateField> live_prefetch_candidates_;
+  // kQueryCandidatesFastTimeoutMs (dev-infrastructure-spec section 8.5.2);
+  // fixed after the worker starts.
+  uint32_t query_deadline_ms_{150};
+  // The last per-key answer (live = true candidates, or the live conversion
+  // surface), for a window query that misses its deadline (DEV-1653). Reused
+  // only for the same reading, left context and learning permission it was
+  // ranked with. IPC worker only.
+  struct LivePrefetch {
+    std::string reading;
+    std::string left_context;
+    bool learning_allowed{false};
+    std::vector<ipc::CandidateField> candidates;
+  };
+  LivePrefetch live_prefetch_;
   // Published by the IPC worker, consumed by OnCandidatesReady on the UI thread.
   std::mutex health_state_mtx_;
   std::optional<CandidateHealthState> health_display_state_;

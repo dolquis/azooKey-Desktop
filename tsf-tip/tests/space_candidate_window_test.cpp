@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -147,7 +148,8 @@ bool WaitUntil(const std::function<bool()>& done) {
 CandidateField Field(std::string surface) { return {std::move(surface), "にほんご", 1.0, "test"}; }
 
 // live = true answers one candidate, as the Host's live beam does; live = false
-// answers the full list.
+// answers the full list after `window_delay`. Predictions always answer, so
+// their candidates-ready notification can reach the UI thread first.
 struct FakeHost {
   explicit FakeHost(std::chrono::milliseconds window_delay = std::chrono::milliseconds(0))
       : window_delay_(window_delay) {}
@@ -179,15 +181,20 @@ struct FakeHost {
           return response;
         }
         case MessageType::QueryLiveConversion: {
+          ++live_conversions;
           QueryLiveConversionResponse result;
           result.surface = "日本語";
           result.confidence = 0.9;
           response.payload_json = BuildQueryLiveConversionResponse(result);
           return response;
         }
-        case MessageType::QueryPredictions:
-          response.payload_json = BuildQueryPredictionsResponse(QueryPredictionsResponse{});
+        case MessageType::QueryPredictions: {
+          ++prediction_queries;
+          QueryPredictionsResponse result;
+          result.predictions.push_back({"日本語入力", "にほんごにゅうりょく", 1.0, "model", ""});
+          response.payload_json = BuildQueryPredictionsResponse(result);
           return response;
+        }
         default:
           return std::nullopt;
       }
@@ -196,7 +203,9 @@ struct FakeHost {
 
   NamedPipeServer server;
   std::atomic<int> live_queries{0};
+  std::atomic<int> live_conversions{0};
   std::atomic<int> window_queries{0};
+  std::atomic<int> prediction_queries{0};
 
  private:
   std::chrono::milliseconds window_delay_;
@@ -207,12 +216,23 @@ std::string PipeName(const char* tag) {
          std::to_string(GetCurrentProcessId());
 }
 
+struct HarnessOptions {
+  bool live_conversion{false};
+  bool prediction{false};
+  bool secure{false};
+  // A generous deadline keeps a slow (coverage) run from timing out a query
+  // the test expects to arrive; the late-answer tests shorten it instead.
+  uint32_t query_deadline_ms{5000};
+};
+
 class SpaceWindowHarness {
  public:
-  SpaceWindowHarness(const std::string& pipe_name, bool live_conversion) {
+  SpaceWindowHarness(const std::string& pipe_name, HarnessOptions options) {
     service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
-    service.set_live_conversion_for_test(live_conversion);
-    service.set_prediction_enabled_for_test(false);
+    if (options.secure) service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    service.set_live_conversion_for_test(options.live_conversion);
+    service.set_prediction_enabled_for_test(options.prediction);
+    service.set_query_deadline_ms_for_test(options.query_deadline_ms);
     service.set_ipc_pipe_name_for_test(pipe_name);
     service.start_ipc_worker_for_test();
   }
@@ -233,11 +253,25 @@ class SpaceWindowHarness {
     ASSERT_EQ(service.input_state_for_test().confirmed_kana(), "にほんご");
   }
 
+  // Runs every candidates-ready notification on the UI thread, as the message
+  // loop would, until the window shows `count` candidates.
   std::vector<std::string> WaitForWindow(size_t count) {
     std::vector<std::string> surfaces;
     WaitUntil([&] {
       service.process_candidates_ready_for_test();
       return service.shown_candidates_for_test().size() == count;
+    });
+    for (const auto& field : service.shown_candidates_for_test()) surfaces.push_back(field.surface);
+    return surfaces;
+  }
+
+  // Waits for any window, for the late-answer tests whose fallback length
+  // depends on the local katakana forms.
+  std::vector<std::string> WaitForAnyWindow() {
+    std::vector<std::string> surfaces;
+    WaitUntil([&] {
+      service.process_candidates_ready_for_test();
+      return !service.shown_candidates_for_test().empty();
     });
     for (const auto& field : service.shown_candidates_for_test()) surfaces.push_back(field.surface);
     return surfaces;
@@ -251,12 +285,16 @@ class SpaceWindowHarness {
 
 const std::vector<std::string> kWindow = {"日本語", "二本後", "ニホンゴ"};
 
+bool Contains(const std::vector<std::string>& surfaces, const std::string& surface) {
+  return std::find(surfaces.begin(), surfaces.end(), surface) != surfaces.end();
+}
+
 TEST(TsfTipSpaceCandidateWindowTest, OpensFromTheWindowQueryEvenWithAPerKeyCache) {
   const auto pipe_name = PipeName("cache");
   FakeHost host;
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, false);
+    SpaceWindowHarness h(pipe_name, {});
     h.TypeNihongo();
     // The per-key live answer has arrived, so the old path would open from it.
     ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
@@ -274,7 +312,7 @@ TEST(TsfTipSpaceCandidateWindowTest, LiveConversionAlsoOpensFromTheWindowQuery) 
   FakeHost host;
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, true);
+    SpaceWindowHarness h(pipe_name, {.live_conversion = true});
     h.TypeNihongo();
     EXPECT_TRUE(h.Press(VK_SPACE));
     EXPECT_EQ(h.WaitForWindow(kWindow.size()), kWindow);
@@ -284,20 +322,110 @@ TEST(TsfTipSpaceCandidateWindowTest, LiveConversionAlsoOpensFromTheWindowQuery) 
   host.server.Stop();
 }
 
-// A window query past the TIP deadline falls back to the per-key live answer
-// for the same reading rather than to the TIP-local kana candidates.
-TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryFallsBackToThePerKeyCandidates) {
-  const auto pipe_name = PipeName("late");
-  FakeHost host(std::chrono::milliseconds(400));
+// 5f25ceb4: a prediction answer (or any other candidates-ready notification)
+// handled before the window answer must not end the wait for it.
+TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
+  const auto pipe_name = PipeName("ready");
+  FakeHost host(std::chrono::milliseconds(300));
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, false);
+    SpaceWindowHarness h(pipe_name, {.prediction = true});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
-    EXPECT_EQ(h.WaitForWindow(1), std::vector<std::string>{"日本語"});
+    // The window answer is still held by the Host while these run.
+    for (int i = 0; i < 10; ++i) {
+      h.service.process_candidates_ready_for_test();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_GT(host.prediction_queries.load(), 0);
+    EXPECT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+    EXPECT_EQ(h.WaitForWindow(kWindow.size()), kWindow);
+  }
+  host.server.Stop();
+}
+
+// A window query past the TIP deadline puts the per-key live answer for the
+// same reading ahead of the TIP-local kana candidates.
+TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst) {
+  const auto pipe_name = PipeName("late");
+  FakeHost host(std::chrono::milliseconds(1500));
+  ASSERT_TRUE(host.Start(pipe_name));
+  {
+    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    const auto window = h.WaitForAnyWindow();
+    ASSERT_FALSE(window.empty());
+    EXPECT_EQ(window.front(), "日本語");
+    EXPECT_TRUE(Contains(window, "にほんご"));
     EXPECT_EQ(host.window_queries.load(), 1);
+  }
+  host.server.Stop();
+}
+
+// With live conversion the preedit shows the live surface; a late window
+// answer keeps it first instead of reverting the preedit to kana.
+TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryKeepsTheLiveConversionSurface) {
+  const auto pipe_name = PipeName("late-live");
+  FakeHost host(std::chrono::milliseconds(1500));
+  ASSERT_TRUE(host.Start(pipe_name));
+  {
+    SpaceWindowHarness h(pipe_name, {.live_conversion = true, .query_deadline_ms = 300});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] {
+      h.service.process_candidates_ready_for_test();
+      return host.live_conversions.load() > 0;
+    }));
+
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    const auto window = h.WaitForAnyWindow();
+    ASSERT_FALSE(window.empty());
+    EXPECT_EQ(window.front(), "日本語");
+    EXPECT_TRUE(Contains(window, "にほんご"));
+  }
+  host.server.Stop();
+}
+
+// A secure context never reuses an answer ranked with its context or learning.
+TEST(TsfTipSpaceCandidateWindowTest, SecureLateWindowQueryUsesOnlyLocalCandidates) {
+  const auto pipe_name = PipeName("late-secure");
+  FakeHost host(std::chrono::milliseconds(1500));
+  ASSERT_TRUE(host.Start(pipe_name));
+  {
+    SpaceWindowHarness h(pipe_name, {.secure = true, .query_deadline_ms = 300});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    const auto window = h.WaitForAnyWindow();
+    ASSERT_FALSE(window.empty());
+    EXPECT_EQ(window.front(), "にほんご");
+    EXPECT_FALSE(Contains(window, "日本語"));
+  }
+  host.server.Stop();
+}
+
+// A new connection may be a new Host, so the per-key answer does not survive it.
+TEST(TsfTipSpaceCandidateWindowTest, ReconnectDropsThePerKeyCandidates) {
+  const auto pipe_name = PipeName("late-reconnect");
+  FakeHost host(std::chrono::milliseconds(1500));
+  ASSERT_TRUE(host.Start(pipe_name));
+  {
+    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    h.service.stop_ipc_worker_for_test();
+    h.service.start_ipc_worker_for_test();
+
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    const auto window = h.WaitForAnyWindow();
+    ASSERT_FALSE(window.empty());
+    EXPECT_EQ(window.front(), "にほんご");
+    EXPECT_FALSE(Contains(window, "日本語"));
   }
   host.server.Stop();
 }

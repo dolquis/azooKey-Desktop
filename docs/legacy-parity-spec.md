@@ -116,10 +116,11 @@ enum class InputStateKind {
 > `Selecting` へ遷移する。打鍵ごとの `live = true` の応答はモデル候補 1 件で、typo 補正の提案
 > （M35 suggest）、英単語候補（M60）、記号・絵文字の rewriter を含まないため、候補窓には使わない。
 > 応答が TIP の deadline（`dev-infrastructure-spec.md` §8.5.2 の 150ms）に間に合わなかったときは、
-> 同じ読みの打鍵中の `live = true` の候補が TIP にあればそれで、無ければ TIP ローカル候補で窓を開く。
-> 打鍵中の候補を持つのは、ライブ変換 OFF（打鍵ごとに `QueryCandidates` を送る）で secure でない
-> context の、staleness 判定を通った応答だけで、Host との接続をやり直すと捨てる。ライブ変換 ON は
-> 打鍵ごとに `QueryLiveConversion` を送るので、間に合わなかったときは TIP ローカル候補になる。
+> 打鍵中の応答を先頭に、TIP ローカル候補をその後ろに並べて窓を開く。打鍵中の応答は、ライブ変換 OFF
+> なら `live = true` の `QueryCandidates` の候補、ON なら `QueryLiveConversion` の表層（句読点を
+> 挿入していないもの）である。読み・左文脈・学習許可が Space の要求と一致し、secure でない context の、
+> staleness 判定を通った応答だけを使う。auto_replace で読みを補正した応答は使わず、Host との接続を
+> やり直すと捨てる。
 > 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
 > 詳細は §1.5.4。
 

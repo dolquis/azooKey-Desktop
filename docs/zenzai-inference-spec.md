@@ -345,7 +345,9 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 4. **確定 auto-word**: auto-word が有効なら `LookupConfirmed(kana)` の結果を追加する。
    pending / rejected は含めない。正の保存 score があればそれを使い、それ以外は
    `auto_word_default_score` を使う。`source = UserDictionary`、`debug_info = "auto-word"` とする。
-5. **converter**: 通常は `active_converter_`、`fast_only` では `fallback_converter_` を使う。
+5. **converter**: `active_converter_` を使う。ライブ変換（`QueryLiveConversion`）も同じで、
+   モデルがロードされていれば `live = true` の Zenzai 1-pass（beam 1 本）、されていなければ
+   `fallback_converter_` になる。
    `kModelConversionBudget`（§8.2）の deadline、末尾を長さ制限した文脈、候補上限を
    `BuildContext` 経由で渡して `Convert` する。モデル converter から例外が出て
    fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は

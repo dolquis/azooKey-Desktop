@@ -48,7 +48,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/character_form_cycle_test.cpp` | ひらがなからカタカナ・半角カタカナ・全角英数・ASCII へ進む文字種循環と非対応入力の判定 |
 | `core_tests` | `core/tests/symbol_rewriter_test.cpp` | 記号 seed の固定順展開と family 非回転、ペア記号と組み込みペアリングの一致、候補マージ時の枠配分と重複除去、記号・絵文字の有効状態 4 通りでの通常候補の件数と順序の不変（`max_candidates` + 予約枠）、読み引き結果への chain 合成と既存候補との重複除去、データ欠損時の chain 動作 |
 | `core_tests` | `core/tests/rewriter_index_test.cpp` | リライターデータの互換かな正規化、読み完全一致の順位付けと上限、BOM/CRLF 受理、不正行の skip と sequence 保持、絵文字検索の順序表（一致クラス・trigger 長・rank・コードポイントの順と上限適用の順序）、1 文字検索の Exact/Prefix 限定、`+` を含む検索語の正規化、32 文字境界、読みのカナ正規化と長音保持 |
-| `core_tests` | `core/tests/input_state_test.cpp` | 入力状態機械の全状態 × 全 `UserAction` の遷移表、候補の往復（表示・巡回・数字選択・確定と学習観測）、cache miss 時に `Selecting` へ入らず応答到着で遷移すること、応答待ち中の Enter の as-is 確定、Backspace の削除単位、モード切替での reading 保持、Unicode 入力の範囲検査と桁数上限、`WithComposition` / `Reset` による状態受け渡し、Selecting 中の通常入力で Composing に戻ること 、単独の明示句読点による composition 開始と Backspace、ライブ変換 ON の `Previewing` 遷移と候補選択からの復帰、`WithCorrectedReading` の読み置換と保留ローマ字消去・状態と候補と選択位置と候補待ちとカスタム表の保持・空読みと非入力状態の no-op、Ctrl+Shift+U → `30A1` → Enter で「ァ」(U+30A1) を確定する M18 受入経路 |
+| `core_tests` | `core/tests/input_state_test.cpp` | 入力状態機械の全状態 × 全 `UserAction` の遷移表、候補の往復（表示・巡回・数字選択・確定と学習観測）、Space が打鍵中の候補キャッシュを使わず候補窓用の `QueryCandidates`（`for_window`）を出し、`Selecting` へ入らず応答到着で遷移すること、応答待ち中の Enter の as-is 確定、Backspace の削除単位、モード切替での reading 保持、Unicode 入力の範囲検査と桁数上限、`WithComposition` / `Reset` による状態受け渡し、Selecting 中の通常入力で Composing に戻ること 、単独の明示句読点による composition 開始と Backspace、ライブ変換 ON の `Previewing` 遷移と候補選択からの復帰、`WithCorrectedReading` の読み置換と保留ローマ字消去・状態と候補と選択位置と候補待ちとカスタム表の保持・空読みと非入力状態の no-op、Ctrl+Shift+U → `30A1` → Enter で「ァ」(U+30A1) を確定する M18 受入経路 |
 | `core_tests` | `core/tests/m59_input_state_test.cpp` | 自動句読点を読みバッファに含めず、Backspace がかなを 1 単位削除すること |
 | `core_tests` | `core/tests/punctuation_rules_test.cpp` | M59 の組み込み句読点規則、TSV 上書き・無効化、不正行スキップ、guard 構文と Unknown の判定 |
 | `core_tests` | `core/tests/bracket_pairing_test.cpp` | 括弧テーブルの上書き・追加・無効化、アプリ別 allow/deny ポリシーの重ね合わせ、挿入・skip・空ペア Backspace 削除、対称引用符の境界判定 |
@@ -177,6 +177,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_reading_tail_smoke` | `azookey_zenzai_bench` | 同じ pin モデルの非ライブ複数候補で `けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在を検証 |
+| `host_engine_real_model_live_conversion` | `host_engine_tests`（`InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence`） | 同じ pin モデルで `QueryLiveConversion` に助詞を含む `きょうはいいてんき` を送ると、読みのままでない Zenzai の表層が返ることを検証（DEV-1648） |
 | `azookey_zenzai_real_model_json_smoke` | `azookey_zenzai_bench` | 同じ pin モデルでの JSON 出力の schema 固定と `passed` 真、`status=ok` 行の非混入 |
 
 ## CTest 以外の自動検査

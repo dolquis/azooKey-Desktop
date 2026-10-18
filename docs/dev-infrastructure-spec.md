@@ -2314,6 +2314,8 @@ request deadline ではない。ローカル Zenzai の変換が 800ms で clien
 同 §8.2 の上限と下限の制約である。
 
 ライブ変換は `QueryCandidates` fast と同じ 150ms を TIP の 1 つの定数で待つ。
+`QueryCandidates` fast には、打鍵ごとの `live = true` の要求と、Space で候補窓を開く
+`live = false` の要求（`legacy-parity-spec.md` §1.2）の両方が入る。
 候補表示レイテンシの性能目標（§10 の p50 < 80ms）は目標値であり、打ち切りの deadline ではない。
 
 Host は `QueryCandidates` fast とライブ変換の値を自分の deadline として持たない。

@@ -54,6 +54,8 @@ target_link_libraries(azookey_tsf_tip
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
+add_subdirectory(tools/ime_switch)
+
 if(AZOOKEY_BUILD_TESTS)
   # Compile the shared implementation once with the test-only hooks enabled.
   add_library(azookey_tsf_tip_test_objects OBJECT
@@ -185,6 +187,15 @@ if(AZOOKEY_BUILD_TESTS)
   target_link_libraries(tsf_tip_keymap_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
   azookey_discover_tests(tsf_tip_keymap_tests TIMEOUT 30)
+  # The switch policy is header-only and independent of the TIP objects.
+  add_executable(tsf_tip_ime_switch_tests tests/ime_switch_test.cpp)
+  target_include_directories(tsf_tip_ime_switch_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/ime_switch)
+  target_compile_definitions(tsf_tip_ime_switch_tests PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(tsf_tip_ime_switch_tests PRIVATE
+    GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_ime_switch_tests TIMEOUT 30)
   add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ipc_connection_state_tests tests/ipc_connection_state_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_handshake_log_tests tests/handshake_log_test.cpp TIMEOUT 60)

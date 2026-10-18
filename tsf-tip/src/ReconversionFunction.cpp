@@ -431,27 +431,81 @@ STDMETHODIMP ReconversionFunction::GetReconversion(ITfRange* range, ITfCandidate
       LogStage("get_reconversion", "read_failed", hr);
       return hr;
     }
-    if (surface.empty() || !provider_) {
-      LogStage("get_reconversion", surface.empty() ? "empty_surface" : "no_provider");
-      return TF_E_NOCONVERSION;
-    }
-    std::vector<std::wstring> values;
-    hr = provider_(range, surface, values);
-    if (FAILED(hr) || values.empty()) {
-      LogStage("get_reconversion", FAILED(hr) ? "provider_failed" : "no_candidates", hr);
-      return FAILED(hr) ? hr : TF_E_NOCONVERSION;
-    }
-    const uint64_t count = values.size();
-    auto snapshot = std::make_shared<const std::vector<std::wstring>>(std::move(values));
-    *candidates = new (std::nothrow)
-        CandidateList(std::move(snapshot), range, client_id_, std::move(surface));
-    LogStage("get_reconversion", *candidates ? "ok" : "out_of_memory", S_OK, count);
-    return *candidates ? S_OK : E_OUTOFMEMORY;
+    return BuildCandidateList(range, std::move(surface), candidates, "get_reconversion");
   } catch (const std::bad_alloc&) {
     LogComBoundaryException("ReconversionFunction::GetReconversion", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
     LogComBoundaryException("ReconversionFunction::GetReconversion", E_FAIL);
+    return E_FAIL;
+  }
+}
+
+HRESULT ReconversionFunction::BuildCandidateList(ITfRange* range, std::wstring surface,
+                                                 ITfCandidateList** candidates, const char* stage) {
+  if (surface.empty() || !provider_) {
+    LogStage(stage, surface.empty() ? "empty_surface" : "no_provider");
+    return TF_E_NOCONVERSION;
+  }
+  std::vector<std::wstring> values;
+  const HRESULT hr = provider_(range, surface, values);
+  if (FAILED(hr) || values.empty()) {
+    LogStage(stage, FAILED(hr) ? "provider_failed" : "no_candidates", hr);
+    return FAILED(hr) ? hr : TF_E_NOCONVERSION;
+  }
+  const uint64_t count = values.size();
+  auto snapshot = std::make_shared<const std::vector<std::wstring>>(std::move(values));
+  *candidates =
+      new (std::nothrow) CandidateList(std::move(snapshot), range, client_id_, std::move(surface));
+  LogStage(stage, *candidates ? "ok" : "out_of_memory", S_OK, count);
+  return *candidates ? S_OK : E_OUTOFMEMORY;
+}
+
+HRESULT ReconversionFunction::RequestReconversion(ITfRange* range, ReconversionListCallback done) {
+  if (!range || !done) return E_INVALIDARG;
+  try {
+    Microsoft::WRL::ComPtr<ITfContext> context;
+    HRESULT hr = range->GetContext(&context);
+    if (FAILED(hr)) return hr;
+    if (!context) return E_FAIL;
+    // A queued session outlives this call, so it owns what it uses.
+    auto ran = std::make_shared<bool>(false);
+    Microsoft::WRL::ComPtr<ReconversionFunction> self(this);
+    Microsoft::WRL::ComPtr<ITfRange> target(range);
+    auto* edit = new (std::nothrow)
+        FunctionEditSession([self, target, ran, done = std::move(done)](TfEditCookie cookie) {
+          *ran = true;
+          std::wstring surface;
+          ITfCandidateList* list = nullptr;
+          HRESULT list_hr = ReadSurface(target.Get(), cookie, surface);
+          if (FAILED(list_hr)) {
+            LogStage("request_reconversion", "read_failed", list_hr);
+          } else {
+            list_hr = self->BuildCandidateList(target.Get(), std::move(surface), &list,
+                                               "request_reconversion");
+          }
+          done(list_hr, list);
+          if (list) list->Release();
+          return S_OK;
+        });
+    if (!edit) return E_OUTOFMEMORY;
+    HRESULT session_hr = E_FAIL;
+    hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READ,
+                                     &session_hr);
+    edit->Release();
+    if (*ran) return S_OK;
+    if (SUCCEEDED(hr) && session_hr == TF_S_ASYNC) {
+      LogStage("request_reconversion", "queued", session_hr);
+      return TF_S_ASYNC;
+    }
+    const HRESULT failure = FAILED(hr) ? hr : (FAILED(session_hr) ? session_hr : E_FAIL);
+    LogStage("request_reconversion", "session_failed", failure);
+    return failure;
+  } catch (const std::bad_alloc&) {
+    LogComBoundaryException("ReconversionFunction::RequestReconversion", E_OUTOFMEMORY);
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    LogComBoundaryException("ReconversionFunction::RequestReconversion", E_FAIL);
     return E_FAIL;
   }
 }

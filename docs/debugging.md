@@ -201,6 +201,35 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 含みうるため記録しない。TIP 登録の失敗を調べる場合は、`regsvr32` を実行する管理者
 プロセスにも `AZOOKEY_LOG=1` を設定する。
 
+### キー単位の経路を収集する
+
+最初の打鍵が composition に入らない、といった症状を切り分けるときは、`AZOOKEY_LOG=1` に
+加えて `AZOOKEY_LOG_KEYS=1` を設定し、検証対象アプリを起動し直す。TIP は値が厳密に `1` の
+ときだけ、`tip-YYYYMMDD.jsonl` に次のレコードを info レベルで書く。
+
+```powershell
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG_KEYS', '1', 'User')
+```
+
+- `event=key_path`: `OnTestKeyDown`（`sink=test`）と `OnKeyDown`（`sink=key`）が返した答え。
+  `key_class`（`char` / `control`）、`eaten`、`reason`（`input` / `keyboard_disabled` /
+  `closed` / `alnum` / `not_handled`）、キーの context が直前に入力した context と同じか
+  （`active_context`）、composition の有無、保留中の入力の長さ（`pending_length`）。
+- `event=key_path_preedit`: preedit の edit session が同期で走ったか、非同期で待たされたか
+  （`mode` = `sync` / `async` / `failed` / `request_failed`）。
+- `event=key_path_focus`: document manager の切り替え時、後始末の前後の composition の
+  有無と保留中の入力の長さ。
+- `event=key_path_context`: context の push / pop。
+
+打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、
+アプリが入力を無効にした context、secure の入力欄（`privacy.secureApps` など）の打鍵は、
+キーごとではなく、フォーカスした文書と理由（`closed` / `alnum` / `keyboard_disabled` /
+`secure`）の組ごとに 1 件だけ、`once_per_document=true` で記録する。この記録と secure 中の
+`key_path_focus` / `key_path_context` は長さを含まず、secure 中は `key_path_preedit` も
+出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
+収集後は `AZOOKEY_LOG_KEYS` も削除する。
+
 ### 候補 UI の `pbShow` を収集する
 
 アプリ互換確認では、前述のユーザー環境変数を設定してから検証対象アプリを新しく起動し、

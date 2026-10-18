@@ -94,6 +94,8 @@ Describe "VM verification package automation" {
       }
       "diag" | Set-Content -LiteralPath (
         Join-Path $Root "build\windows-release\diagnostics\azookey_diag.exe")
+      "switch" | Set-Content -LiteralPath (
+        Join-Path $Root "build\windows-release\tsf-tip\azookey_ime_switch.exe")
       "bench" | Set-Content -LiteralPath (
         Join-Path $Root "build\windows-release\bench\azookey_zenzai_bench.exe")
       foreach ($scriptName in @(
@@ -207,7 +209,7 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 15
+      @($manifest.files).Count | Should -Be 16
       $manifest.bundledDictionaries.selection | Should -BeExactly "default"
       $manifest.bundledDictionaries.sudachiRevision | Should -BeExactly "20260723"
       $manifest.bundledDictionaries.inputFingerprint | Should -Match '^[0-9a-f]{64}$'
@@ -235,6 +237,7 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "learning-data-snapshot.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "azookey_diag.exe") | Should -BeTrue
+      Test-Path -LiteralPath (Join-Path $expanded "azookey_ime_switch.exe") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "compat_test.exe") | Should -BeFalse
       Test-Path -LiteralPath (Join-Path $expanded "targets") | Should -BeFalse
       foreach ($file in $manifest.files) {

@@ -114,6 +114,55 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost[\s\S]{0,160}-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
     }
 
+    It "resolves the default llama.cpp preflight tool for a package or a build tree" {
+      $resolveFunctions = @($script:register.Ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+          $node.Name -in @("Get-DefaultBenchCandidate", "Resolve-DefaultBenchPath")
+      }, $true))
+      Assert-Condition ($resolveFunctions.Count -eq 2) "register-dev.ps1 should define the default bench resolution helpers."
+      foreach ($function in $resolveFunctions) {
+        . ([scriptblock]::Create($function.Extent.Text))
+      }
+
+      # Verification package: the bench sits beside the host.
+      $packageDir = Join-Path $TestDrive "package"
+      New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+      $packageHost = Join-Path $packageDir "azookey_inference_host.exe"
+      $packageBench = Join-Path $packageDir "azookey_zenzai_bench.exe"
+      Set-Content -LiteralPath $packageBench -Value "bench"
+      Assert-Condition ((Resolve-DefaultBenchPath -HostPath $packageHost) -eq $packageBench) "A bench beside the host should be found."
+
+      # Build tree: <build>\inference-host\host.exe, <build>\bench\bench.exe.
+      $buildDir = Join-Path $TestDrive "build\windows-llama-debug"
+      $buildHostDir = Join-Path $buildDir "inference-host"
+      $buildBenchDir = Join-Path $buildDir "bench"
+      New-Item -ItemType Directory -Path $buildHostDir, $buildBenchDir -Force | Out-Null
+      $buildHost = Join-Path $buildHostDir "azookey_inference_host.exe"
+      $buildBench = Join-Path $buildBenchDir "azookey_zenzai_bench.exe"
+      Set-Content -LiteralPath $buildBench -Value "bench"
+      Assert-Condition ((Resolve-DefaultBenchPath -HostPath $buildHost) -eq $buildBench) "The build-tree bench should still be found."
+
+      # The directory beside the host wins when both exist.
+      $sideBench = Join-Path $buildHostDir "azookey_zenzai_bench.exe"
+      Set-Content -LiteralPath $sideBench -Value "bench"
+      Assert-Condition ((Resolve-DefaultBenchPath -HostPath $buildHost) -eq $sideBench) "A bench beside the host should take precedence."
+
+      # Nothing found: the error lists every searched path.
+      $emptyDir = Join-Path $TestDrive "empty\inference-host"
+      New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+      $emptyHost = Join-Path $emptyDir "azookey_inference_host.exe"
+      $message = ""
+      try {
+        Resolve-DefaultBenchPath -HostPath $emptyHost | Out-Null
+      } catch {
+        $message = $_.Exception.Message
+      }
+      foreach ($candidate in (Get-DefaultBenchCandidate -HostPath $emptyHost)) {
+        Assert-Condition ($message.Contains($candidate)) "The error should name the searched path $candidate."
+      }
+    }
+
     It "warns when registration resolves to Debug CRT artifacts" {
       $warningFunction = $script:register.Ast.Find({
         param($node)
@@ -263,6 +312,17 @@ Describe "development registration scripts" {
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run')) "unregister-dev.ps1 should clean the HKCU Run key."
       Assert-Condition ($script:unregister.Text -match 'Global\\azooKeyInferenceHostSupervisorStop-\$mySid') "unregister-dev.ps1 should signal the current-user supervisor across sessions."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Classes\CLSID\$clsid')) "unregister-dev.ps1 should clean legacy HKCU CLSID entries."
+    }
+
+    It "switches the session off azooKey before elevating, and continues without the helper" {
+      $switchIndex = $script:unregister.Text.IndexOf('azookey_ime_switch.exe')
+      $runKeyIndex = $script:unregister.Text.IndexOf('Remove-ItemProperty -Path $runKey')
+      $relaunchIndex = $script:unregister.Text.IndexOf('-Verb RunAs')
+      Assert-Condition ($switchIndex -ge 0) "unregister-dev.ps1 should run the input method switch helper."
+      Assert-Condition ($switchIndex -lt $runKeyIndex -and $switchIndex -lt $relaunchIndex) "The switch should run in the non-elevated step, before unregistration."
+      Assert-Condition ($script:unregister.Text -match 'Join-Path \(Split-Path -Parent \$TipDllPath\) "azookey_ime_switch\.exe"') "The helper should be looked up next to the TIP DLL."
+      Assert-Condition ($script:unregister.Text -match 'skipping the input method switch') "A missing helper should warn and continue."
+      Assert-Condition ($script:unregister.Text -match 'catch\s*\{\s*Write-Warning "Could not run azookey_ime_switch\.exe') "A helper launch failure should warn, not stop unregistration."
     }
 
     It "relaunches machine-wide cleanup with quoted absolute paths" {

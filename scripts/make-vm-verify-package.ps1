@@ -262,7 +262,7 @@ function Assert-VmVerifyBuildReady {
     # message. It also rejects when the dry-run reports no work to do.
     Assert-VmVerifyLocalDependency -BuildDirectory $BuildDirectory -RepositoryRoot (
       Get-VmVerifyCacheValue -CachePath (Join-Path $BuildDirectory "CMakeCache.txt") -Name "CMAKE_HOME_DIRECTORY")
-    $targets = @("azookey_tsf_tip", "azookey_inference_host", "azookey_diag")
+    $targets = @("azookey_tsf_tip", "azookey_inference_host", "azookey_diag", "azookey_ime_switch")
     if ($IncludeBench) {
       $targets += "azookey_zenzai_bench"
     }
@@ -934,11 +934,12 @@ function Export-VmVerifyPackage {
   }
   $hostExe = Join-Path $configuration.BinaryDir "inference-host\azookey_inference_host.exe"
   $diagExe = Join-Path $configuration.BinaryDir "diagnostics\azookey_diag.exe"
+  $imeSwitchExe = Join-Path $configuration.BinaryDir "tsf-tip\azookey_ime_switch.exe"
   $benchExe = Join-Path $configuration.BinaryDir "bench\azookey_zenzai_bench.exe"
   $compatExe = Join-Path $configuration.BinaryDir "compat-test\compat_test.exe"
   $compatWatchdogExe = Join-Path $configuration.BinaryDir "compat-test\compat_host_hang_watchdog.exe"
   $compatTargets = Join-Path $repository "compat-test\targets"
-  $requiredArtifacts = @($tipDll, $hostExe, $diagExe)
+  $requiredArtifacts = @($tipDll, $hostExe, $diagExe, $imeSwitchExe)
   if ($Model) {
     $requiredArtifacts += $benchExe
   }
@@ -1011,6 +1012,7 @@ function Export-VmVerifyPackage {
       @{ Source = $tipDll; Archive = "azookey_tsf_tip.dll"; Role = "tip-dll" }
       @{ Source = $hostExe; Archive = "azookey_inference_host.exe"; Role = "inference-host" }
       @{ Source = $diagExe; Archive = "azookey_diag.exe"; Role = "runtime-diagnostics" }
+      @{ Source = $imeSwitchExe; Archive = "azookey_ime_switch.exe"; Role = "ime-switch-helper" }
       @{ Source = (Join-Path $repository "scripts\register-dev.ps1"); Archive = "register-dev.ps1"; Role = "registration-script" }
       @{ Source = (Join-Path $repository "scripts\unregister-dev.ps1"); Archive = "unregister-dev.ps1"; Role = "unregistration-script" }
       @{ Source = (Join-Path $repository "scripts\host-supervisor.ps1"); Archive = "host-supervisor.ps1"; Role = "host-supervisor-script" }

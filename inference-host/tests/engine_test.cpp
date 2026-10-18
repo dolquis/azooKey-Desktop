@@ -2090,10 +2090,11 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   EXPECT_EQ(live.front().surface, "日本語");
   EXPECT_EQ(live.front().source, azookey::core::CandidateSource::Model);
 
-  const auto fast = engine->QueryLiveConversion("にほんご", "", kNowBase + 1, nullptr);
-  ASSERT_TRUE(fast);
-  EXPECT_EQ(fast->surface, "にほんご");
-  EXPECT_EQ(fast->source, azookey::core::CandidateSource::Heuristic);
+  // DEV-1648: live conversion runs the same live beam as the per-key query.
+  const auto live_conversion = engine->QueryLiveConversion("にほんご", "", kNowBase + 1, nullptr);
+  ASSERT_TRUE(live_conversion);
+  EXPECT_EQ(live_conversion->surface, "日本語");
+  EXPECT_EQ(live_conversion->source, azookey::core::CandidateSource::Model);
 
   auto top_one = engine->QueryCandidates("にほんご", "", kNowBase + 2, nullptr, 1, false);
   ASSERT_EQ(top_one.size(), 1u);
@@ -2308,6 +2309,27 @@ TEST(InferenceEngineTest, RealZenzaiNBestKeepsReadingTail) {
                                                   kNowBase, nullptr, 5, false);
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "契約更新の条件を協議する");
+
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1648: a sentence with particles, which no single dictionary entry spells,
+// converts in live conversion instead of coming back as the kana typed.
+TEST(InferenceEngineTest, RealZenzaiLiveConversionConvertsSentence) {
+  const char* lpath = "azookey_host_engine_zenzai_real_live.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  azookey::host::ModelLoadOptions options;
+  options.path = AZOOKEY_AI_TEST_MODEL;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const std::string kana = "きょうはいいてんき";
+  const auto live = engine->QueryLiveConversion(kana, "", kNowBase, nullptr);
+  ASSERT_TRUE(live);
+  RecordProperty("live_surface", live->surface);
+  EXPECT_NE(live->surface, kana);
+  EXPECT_EQ(live->source, azookey::core::CandidateSource::Model);
 
   RemoveProtectedStoreFile(lpath);
 }

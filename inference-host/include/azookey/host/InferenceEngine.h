@@ -295,8 +295,9 @@ class InferenceEngine {
                                      const InferenceTelemetry* telemetry = nullptr,
                                      const TagBoosts* tag_boosts = nullptr);
 
-  // M14: one best candidate through the lightweight fallback converter. Keeps
-  // dictionary and learning ranking while avoiding multi-step model generation.
+  // M14: one best candidate from the live path (live = true): a loaded model
+  // decodes one beam and skips NLL and the typo suggestion; without a model the
+  // fallback converter answers. Keeps dictionary and learning ranking.
   std::optional<core::Candidate> QueryLiveConversion(const std::string& kana,
                                                      const std::string& context,
                                                      uint64_t now_epoch_sec,

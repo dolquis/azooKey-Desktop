@@ -1092,8 +1092,10 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
     const std::string& kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, const InferenceTelemetry* telemetry) {
   if (kana.empty()) return std::nullopt;
+  // The active converter, as the per-key live query uses: a loaded model gives
+  // its single live beam, without the model it is the fallback converter.
   auto result =
-      QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 1, true, telemetry, true);
+      QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 1, true, telemetry, false);
   if (result.candidates.empty()) return std::nullopt;
   return std::move(result.candidates.front());
 }

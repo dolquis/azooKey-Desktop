@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -175,6 +177,10 @@ struct FakeHost {
           } else {
             ++window_queries;
             std::this_thread::sleep_for(window_delay_);
+            {
+              std::unique_lock lock(hold_mutex_);
+              hold_cv_.wait(lock, [this] { return !hold_window_; });
+            }
             result.candidates = {Field("日本語"), Field("二本後"), Field("ニホンゴ")};
           }
           response.payload_json = BuildQueryCandidatesResponse(result);
@@ -207,8 +213,25 @@ struct FakeHost {
   std::atomic<int> window_queries{0};
   std::atomic<int> prediction_queries{0};
 
+  // Holds every window answer until ReleaseWindow, so a test can run UI work
+  // while the answer is known to be outstanding.
+  void HoldWindow() {
+    std::lock_guard lock(hold_mutex_);
+    hold_window_ = true;
+  }
+  void ReleaseWindow() {
+    {
+      std::lock_guard lock(hold_mutex_);
+      hold_window_ = false;
+    }
+    hold_cv_.notify_all();
+  }
+
  private:
   std::chrono::milliseconds window_delay_;
+  std::mutex hold_mutex_;
+  std::condition_variable hold_cv_;
+  bool hold_window_{false};
 };
 
 std::string PipeName(const char* tag) {
@@ -326,23 +349,27 @@ TEST(TsfTipSpaceCandidateWindowTest, LiveConversionAlsoOpensFromTheWindowQuery) 
 // handled before the window answer must not end the wait for it.
 TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
   const auto pipe_name = PipeName("ready");
-  FakeHost host(std::chrono::milliseconds(300));
+  FakeHost host;
   ASSERT_TRUE(host.Start(pipe_name));
+  host.HoldWindow();
   {
     SpaceWindowHarness h(pipe_name, {.prediction = true});
     h.TypeNihongo();
     ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
-    // The window answer is still held by the Host while these run.
+    // The Host holds the window answer while these notifications run.
+    ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() == 1; }));
     for (int i = 0; i < 10; ++i) {
       h.service.process_candidates_ready_for_test();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     EXPECT_GT(host.prediction_queries.load(), 0);
     EXPECT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+    host.ReleaseWindow();
     EXPECT_EQ(h.WaitForWindow(kWindow.size()), kWindow);
   }
+  host.ReleaseWindow();
   host.server.Stop();
 }
 

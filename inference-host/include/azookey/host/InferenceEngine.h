@@ -42,6 +42,16 @@
 
 namespace azookey::host {
 
+// Removes candidates whose surface holds a Private Use Area character (U+E000..U+F8FF), the
+// last filter before a candidate list is returned. The rest keep their order.
+void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
+
+// For a `reading` that still holds ASCII letters, removes the model candidates whose surface
+// mixes kana with ASCII letters (`あっpエ`). Surfaces with only one of the two, kanji with letters,
+// and candidates from any other source stay. Applies whether or not English candidates are on.
+void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
+                                       const std::string& reading);
+
 struct InferenceTelemetry {
   uint64_t request_id{};
   core::EtwGuid client{};

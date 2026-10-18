@@ -32,6 +32,24 @@ struct ZenzaiRuntimeOptions {
   bool use_mmap{true};
 };
 
+// True when the complete code points of `utf8` include a Private Use Area character
+// (U+E000..U+F8FF). Scanning stops at the first byte that does not decode.
+bool ContainsPrivateUseCodepoint(std::string_view utf8);
+
+// True when `utf8` includes a code point of the range BuildZenzaiPrompt draws its control
+// markers from (U+EE00..U+EEFF). Generation stops there like it does at end-of-sequence.
+bool ContainsZenzaiControlMarker(std::string_view utf8);
+
+// A beam surface extended by one token piece. When the result contains a control marker the beam
+// ends there: `surface` is then the finished candidate, the complete characters of `parent`
+// (a marker split across tokens leaves `parent` ending inside a character). Otherwise `surface`
+// is `parent + piece`.
+struct BeamSurfaceStep {
+  std::string surface;
+  bool control_marker{false};
+};
+BeamSurfaceStep ExtendBeamSurface(const std::string& parent, std::string_view piece);
+
 int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);
 size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs);
 

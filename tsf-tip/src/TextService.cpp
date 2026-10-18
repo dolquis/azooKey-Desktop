@@ -8311,6 +8311,12 @@ bool TextService::ShowCandidateWindowFromCache() {
       return false;
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
+      // Any candidates-ready notification (prediction, live conversion) lands
+      // here. While the window query is outstanding there is no answer yet, and
+      // treating the empty cache as one would end the wait for good (DEV-1653).
+      if (input_state_.awaiting_candidates() && candidate_window_show_pending_ &&
+          candidates_.empty())
+        return false;
       candidate_window_show_pending_ = false;
     }
     auto result = input_state_.HandleCandidatesArrived(CoreCandidatesFromCache());

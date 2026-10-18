@@ -40,6 +40,16 @@ bool ContainsPrivateUseCodepoint(std::string_view utf8);
 // markers from (U+EE00..U+EEFF). Generation stops there like it does at end-of-sequence.
 bool ContainsZenzaiControlMarker(std::string_view utf8);
 
+// A beam surface extended by one token piece. When the result contains a control marker the beam
+// ends there: `surface` is then the finished candidate, the complete characters of `parent`
+// (a marker split across tokens leaves `parent` ending inside a character). Otherwise `surface`
+// is `parent + piece`.
+struct BeamSurfaceStep {
+  std::string surface;
+  bool control_marker{false};
+};
+BeamSurfaceStep ExtendBeamSurface(const std::string& parent, std::string_view piece);
+
 int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);
 size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs);
 

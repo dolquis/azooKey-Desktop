@@ -1905,6 +1905,63 @@ TEST(InferenceEngineTest, DropPrivateUseCandidatesKeepsOrderAndTheRest) {
   EXPECT_EQ(candidates[2].surface, "Apple");
 }
 
+TEST(InferenceEngineTest, ExtendBeamSurfaceEndsTheBeamAtAControlMarker) {
+  using azookey::host::ExtendBeamSurface;
+  const auto plain = ExtendBeamSurface("京", "都");
+  EXPECT_FALSE(plain.control_marker);
+  EXPECT_EQ(plain.surface, "京都");
+
+  // The whole marker in one piece: the parent is the finished surface.
+  const auto whole = ExtendBeamSurface("京", "\xEE\xB8\x81");
+  EXPECT_TRUE(whole.control_marker);
+  EXPECT_EQ(whole.surface, "京");
+
+  // A marker split across tokens leaves the parent inside a character; only the complete
+  // characters before it are kept, so the finished surface is valid UTF-8.
+  const auto split = ExtendBeamSurface("京\xEE\xB8", "\x81");
+  EXPECT_TRUE(split.control_marker);
+  EXPECT_EQ(split.surface, "京");
+
+  // A marker first in the surface leaves nothing to finish.
+  const auto first = ExtendBeamSurface("", "\xEE\xB8\x88");
+  EXPECT_TRUE(first.control_marker);
+  EXPECT_TRUE(first.surface.empty());
+
+  // Private Use outside the control range does not end the beam.
+  const auto other = ExtendBeamSurface("京", "\xEE\x80\x80");
+  EXPECT_FALSE(other.control_marker);
+}
+
+TEST(InferenceEngineTest, ZenzaiConvertRejectsPrivateUseGenerationsDirectly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_private_use_convert.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ZenzaiRuntimeOptions runtime_options;
+  runtime_options.mock_candidates_for_tests = true;
+  auto loaded = azookey::host::LoadZenzaiGgufModel(model_path, runtime_options);
+  ASSERT_TRUE(loaded.ok);
+  azookey::host::ZenzaiModelConverter converter(std::move(loaded), nullptr);
+
+  // The mock generates five surfaces: a complete one with U+EE01 inside, one with U+EE08 that was
+  // cut off, one whose safe prefix is U+EE01, and two clean ones. Only the clean ones remain, and
+  // the converter alone (no engine filter) has to be the one dropping the rest.
+  const auto candidates = converter.Convert("ふくすう", {});
+  std::vector<std::string> surfaces;
+  for (const auto& candidate : candidates) {
+    surfaces.push_back(candidate.surface);
+    EXPECT_EQ(candidate.source, azookey::core::CandidateSource::Model);
+  }
+  std::sort(surfaces.begin(), surfaces.end());
+  EXPECT_EQ(surfaces, (std::vector<std::string>{"複数", "複数形"}));
+
+  std::remove(model_path.c_str());
+}
+
 TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidates) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -1926,7 +1983,8 @@ TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidat
   EnableMockZenzaiCandidatesForTests(options);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
-  // The mock generations hold U+EE01 / U+EE08 in two of four surfaces, one of them unfinished.
+  // The mock generations hold U+EE01 / U+EE08 in three of five surfaces; the engine returns the
+  // rest.
   const auto candidates = engine->QueryCandidates("ふくすう", "", kNowBase, nullptr, 10, false);
   ASSERT_FALSE(candidates.empty());
   for (const auto& candidate : candidates) {

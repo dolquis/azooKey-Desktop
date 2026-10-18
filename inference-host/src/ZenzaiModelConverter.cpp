@@ -1043,13 +1043,16 @@ struct ZenzaiModelRuntime {
           auto next = beam;
           next.parent_sequence_id = beam.sequence_id;
           next.tokens.push_back(choice.token);
-          next.surface += TokenPiece(vocab, choice.token);
           // The model emitted one of the prompt's control markers: it has nothing more to say
           // about the reading, so the beam ends here as it would at end-of-sequence.
-          if (ContainsZenzaiControlMarker(next.surface)) {
-            AppendCompletedBeam(generated, beam, choice.logprob);
+          auto extended = ExtendBeamSurface(beam.surface, TokenPiece(vocab, choice.token));
+          if (extended.control_marker) {
+            auto finished = beam;
+            finished.surface = std::move(extended.surface);
+            AppendCompletedBeam(generated, finished, choice.logprob);
             continue;
           }
+          next.surface = std::move(extended.surface);
           next.total_logprob += choice.logprob;
           ++next.output_tokens;
           if (!next.surface.empty()) {
@@ -1164,6 +1167,8 @@ struct ZenzaiModelRuntime {
       return {GeneratedCandidate{"京\xEE\xB8\x81京", -0.1, 3},
               GeneratedCandidate{"複数", -0.5, 2, true},
               GeneratedCandidate{"狂\xEE\xB8\x88", -0.2, 2, true},
+              // The safe prefix of a cut-off surface is itself a Private Use character.
+              GeneratedCandidate{"\xEE\xB8\x81\xE3\x81", -0.15, 2, true},
               GeneratedCandidate{"複数形", -1.0, 3}};
     }
     if (ToKatakana(kana) == "ナイブムコウ") {
@@ -1275,6 +1280,21 @@ bool ContainsPrivateUseCodepoint(std::string_view utf8) {
 
 bool ContainsZenzaiControlMarker(std::string_view utf8) {
   return ContainsCodepointInRange(utf8, 0xEE00, 0xEEFF);
+}
+
+BeamSurfaceStep ExtendBeamSurface(const std::string& parent, std::string_view piece) {
+  BeamSurfaceStep step;
+  step.surface = parent;
+  step.surface.append(piece);
+  if (!ContainsZenzaiControlMarker(step.surface)) {
+    return step;
+  }
+  step.control_marker = true;
+  // A marker split across tokens leaves the parent ending inside a character. Only the complete
+  // characters before it are a finished candidate.
+  const auto complete = CompleteUtf8PrefixLength(parent);
+  step.surface = complete ? parent.substr(0, *complete) : parent;
+  return step;
 }
 
 double BeamRankScore(double total_logprob, int32_t token_count) {

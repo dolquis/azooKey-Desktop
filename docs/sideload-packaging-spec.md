@@ -1763,7 +1763,7 @@ azooKey を選択中のアプリが開いたまま登録だけが消えると、
   別の TIP が既に選択中なら何もしない。キーボードレイアウトの照会結果は、フォーカスを持たない helper のスレッドからは当てにならないので、切替の要否に使わない。切替先は keyboard カテゴリの TIP とレイアウトに限る。azooKey のプロファイルは無効化しない。
   無効化はユーザー単位（HKCU）に残り、再登録後も azooKey が選べない状態になりうるためである。
 - 切替先が無い、または `ActivateProfile` が失敗したときは、何も変えずに終了コード 1 で終わり、
-  失敗の種類を `%LOCALAPPDATA%zooKey\logs` の `ime_switch` ログに残す。解除は止めない。
+  失敗の種類を `%LOCALAPPDATA%\azooKey\logs` の `ime_switch` ログに残す。解除は止めない。
 - `unregister-dev.ps1` は昇格前のユーザー側の処理で helper を TIP DLL と同じディレクトリから呼ぶ。
   helper が無いときは警告して解除を続ける。
 - MSI は immediate CA `SwitchAwayFromTip`（`Return="ignore"`）を `RegisterTipOnUninstallRollback` の前に置く。

@@ -183,9 +183,8 @@ Describe "WiX MSI package consistency" {
     $step | Should -Not -BeNullOrEmpty
     $step.GetAttribute("Before") | Should -Be "RegisterTipOnUninstallRollback"
     $condition = $step.GetAttribute("Condition")
-    $condition | Should -Match 'REMOVE="ALL"'
-    $condition | Should -Match 'NOT UPGRADINGPRODUCTCODE'
-    $condition | Should -Match '\$TipComponent = 2'
+    # Whole-expression equality: a partial match would let AND become OR.
+    $condition | Should -BeExactly '$TipComponent = 2 AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE'
 
     $file = $xml.SelectSingleNode('//w:File[@Id="ImeSwitchExe"]', $ns)
     $file.GetAttribute("Name") | Should -Be "azookey_ime_switch.exe"

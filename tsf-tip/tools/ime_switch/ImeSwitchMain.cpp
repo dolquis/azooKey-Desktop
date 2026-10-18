@@ -84,7 +84,19 @@ const char* OutcomeName(SwitchOutcome outcome) {
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+// The MSI runs this as a synchronous immediate custom action with no timeout, so
+// a TSF call that never returns would hang the uninstall. Past this bound the
+// process gives up and exits with failure.
+constexpr DWORD kWatchdogMilliseconds = 8000;
+
+static int RunSwitch();
+
+static DWORD WINAPI SwitchThread(void* result) {
+  *static_cast<int*>(result) = RunSwitch();
+  return 0;
+}
+
+static int RunSwitch() {
   // Unlike the opt-in TIP logger this one-shot cleanup always logs: a failed
   // switch is the only trace of why a session kept a dead input method.
   auto options = azookey::logging::RuntimeLoggerOptionsFromEnvironment("ime_switch");
@@ -121,4 +133,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
   if (com_ready) CoUninitialize();
   return exit_code;
+}
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+  int result = 1;
+  HANDLE worker = CreateThread(nullptr, 0, SwitchThread, &result, 0, nullptr);
+  if (!worker) return 1;
+  if (WaitForSingleObject(worker, kWatchdogMilliseconds) != WAIT_OBJECT_0) {
+    auto options = azookey::logging::RuntimeLoggerOptionsFromEnvironment("ime_switch");
+    options.enabled = true;
+    azookey::logging::RuntimeLogger logger(options);
+    logger.Log(azookey::logging::RuntimeLogLevel::Warn, "ime_switch_timeout",
+               {{"timeout_ms", static_cast<int64_t>(kWatchdogMilliseconds)}});
+    // The worker is stuck inside TSF; ExitProcess would wait on it, so end the process directly.
+    TerminateProcess(GetCurrentProcess(), 1);
+  }
+  CloseHandle(worker);
+  return result;
 }

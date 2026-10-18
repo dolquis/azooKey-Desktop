@@ -233,12 +233,11 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
       next.CommitCandidate(selected_index_, result.actions);
       break;
     case UserAction::Cancel:
-      // Esc returns to the reading (M10); the next StartConversion queries the
-      // window again rather than reopening this list.
+      // One Esc cancels the whole input (DEV-1649). Nothing is committed, so no
+      // ObserveCommit is emitted; the candidate cache goes with the reading.
+      next.ResetComposition();
       result.actions.push_back(HideCandidateWindow{});
-      next.kind_ = InputStateKind::Composing;
-      next.selected_index_ = 0;
-      result.actions.push_back(ReplaceMarkedText{next.Reading()});
+      result.actions.push_back(CancelMarkedText{});
       break;
     case UserAction::StartUnicodeInput:
       next.CommitCandidate(selected_index_, result.actions);

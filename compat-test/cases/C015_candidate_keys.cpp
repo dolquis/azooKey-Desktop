@@ -116,32 +116,18 @@ CaseDefinition MakeC015CandidateKeysCase() {
           result.reason_code = session.input_failure_reason();
           return result;
         }
-        const auto after_first_escape = session.ReadEditorText();
-        if (!after_first_escape) {
+        const auto after_escape = session.ReadEditorText();
+        if (!after_escape) {
           result.reason_code = "candidate-preedit-unobservable";
           return result;
         }
-        if (*after_first_escape != L"、" || session.CandidateRect()) {
+        if (!after_escape->empty() || session.CandidateRect()) {
           result.status = ResultStatus::Fail;
-          result.reason_code = "candidate-first-escape-mismatch";
-          return result;
-        }
-        if (!session.SendVirtualKey(VK_ESCAPE)) {
-          result.reason_code = session.input_failure_reason();
-          return result;
-        }
-        const auto after_second_escape = session.ReadEditorText();
-        if (!after_second_escape) {
-          result.reason_code = "candidate-preedit-unobservable";
-          return result;
-        }
-        if (!after_second_escape->empty() || session.CandidateRect()) {
-          result.status = ResultStatus::Fail;
-          result.reason_code = "candidate-second-escape-mismatch";
+          result.reason_code = "candidate-escape-did-not-cancel-input";
           return result;
         }
         result.status = ResultStatus::Pass;
-        result.reason_code = "candidate-keys-and-two-stage-escape-observed";
+        result.reason_code = "candidate-keys-and-single-escape-observed";
         return result;
       },
   };

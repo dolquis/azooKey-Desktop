@@ -129,7 +129,7 @@ const Row kTransitionTable[] = {
      Selecting,
      {K::Composing,    K::Composing, K::Composing, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
-      K::Selecting,    K::Idle,      K::Idle,      K::Composing, K::Selecting, K::Selecting,
+      K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
       K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
     {"ReplaceSuggestion",
      ReplaceSuggestion,
@@ -245,16 +245,16 @@ TEST(InputStateTest, SelectByDigitBeyondCandidateCountKeepsSelecting) {
   EXPECT_TRUE(result.actions.empty());
 }
 
-TEST(InputStateTest, SelectingCancelReturnsToReadingAndReopensFromAFreshQuery) {
-  const HandleResult cancelled = Selecting().HandleEvent(Ev(UserAction::Cancel));
-  EXPECT_EQ(cancelled.next.kind(), K::Composing);
-  EXPECT_EQ(cancelled.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かな"}}));
-
-  const HandleResult reopened = cancelled.next.HandleEvent(Ev(UserAction::StartConversion));
-  EXPECT_EQ(reopened.next.kind(), K::Composing);
-  EXPECT_TRUE(reopened.next.awaiting_candidates());
-  EXPECT_EQ(reopened.actions, (Actions{QueryCandidates{"かな", true}}));
-  EXPECT_EQ(reopened.next.HandleCandidatesArrived(KanaCandidates()).next.kind(), K::Selecting);
+TEST(InputStateTest, SelectingCancelDiscardsInputAndCandidateCacheWithoutObservation) {
+  for (const bool live : {false, true}) {
+    SCOPED_TRACE(live);
+    const HandleResult cancelled =
+        Selecting().WithLiveConversion(live).HandleEvent(Ev(UserAction::Cancel));
+    EXPECT_EQ(cancelled.next.kind(), K::Idle);
+    EXPECT_EQ(cancelled.next.Reading(), "");
+    EXPECT_TRUE(cancelled.next.candidates().empty());
+    EXPECT_EQ(cancelled.actions, (Actions{HideCandidateWindow{}, CancelMarkedText{}}));
+  }
 }
 
 TEST(InputStateTest, TypingWhileSelectingClosesWindowAndContinuesReading) {
@@ -333,7 +333,7 @@ TEST(InputStateTest, CorrectedReadingPreservesSelectingSnapshotAndSelection) {
   EXPECT_EQ(state.Reading(), "かな");
 
   EXPECT_EQ(corrected.HandleEvent(Ev(UserAction::Cancel)).actions,
-            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かね"}}));
+            (Actions{HideCandidateWindow{}, CancelMarkedText{}}));
   EXPECT_EQ(corrected.HandleEvent(Ev(UserAction::Commit)).actions,
             (Actions{HideCandidateWindow{}, ReplaceMarkedText{"鐘"}, CommitMarkedText{},
                      ObserveCommit{"かね", "鐘"}}));

@@ -103,8 +103,7 @@ enum class InputStateKind {
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
 | Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
-| Selecting | Cancel | Composing | 候補窓を閉じて reading を再表示。次の StartConversion で候補窓用の `QueryCandidates` を送り直して再表示する（M10 の Esc 挙動） |
-| Composing / Previewing / UnicodeInput | Cancel | Idle | CancelComposition |
+| Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
 | ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |
 | ReplaceSuggestion | Cancel | Idle | Hide Prompt |
@@ -123,6 +122,14 @@ enum class InputStateKind {
 > やり直すと捨てる。
 > 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
 > 詳細は §1.5.4。
+
+> **Esc は 1 回で入力を取り消す（意図した legacy との差）**: legacy（macOS 版）は Selecting の Esc で
+> Composing（ライブ変換 OFF では先頭候補プレビューを経由）へ戻り、さらに Esc で停止する 2〜3 段だった。
+> Windows 版は 2026-10-17 のユーザー決定により、どの表示状態（候補窓・予測窓・ライブ変換の
+> 候補窓）からでも Esc 1 回で入力中の読みを取り消す。読みへ戻る専用キーは設けない。Backspace と
+> 文字入力が従来どおり候補窓を閉じて読みの編集に戻る。例外は次の 2 つで、段階的に効く:
+> 一括変換（`docs/romaji-batch-conversion-spec.md` §3）と絵文字検索（`docs/candidate-rewriter-spec.md`
+> §11）。Unicode 入力と置換提案プロンプトの Esc は従来から 1 回で閉じる。
 
 各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
 `HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する
@@ -687,7 +694,9 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 - Tab: 第一候補を受理（preedit に追記）
 - Shift+Tab: 第二候補
-- Esc: ウィンドウを閉じる（predictionEnabled=true なら次の入力更新で再表示）
+- Esc: 入力中（preedit か romaji 保留がある）は予測窓を閉じて入力を取り消す（§1.2 の Cancel と同じ。
+  1 回で終わる）。入力中でなく窓だけが残っている場合は窓を閉じるだけ（predictionEnabled=true なら
+  次の入力更新で再表示）
 - マウス左クリック: 該当候補を受理
 
 ### 3.5 IPC

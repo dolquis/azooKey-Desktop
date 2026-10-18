@@ -2464,7 +2464,7 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionCommitsDisplayedSurface) {
   EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCommitsRestoredReading) {
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCancelsTheInput) {
   DocumentPreeditHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_live_conversion_for_test(true);
@@ -2483,9 +2483,9 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCommitsRestoredReadin
   ASSERT_TRUE(
       PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_TRUE(h.Press(VK_ESCAPE));
-  ASSERT_EQ(h.context.document->text, L"か");
-  ASSERT_TRUE(h.Press(VK_RETURN));
-  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSettingChangeCommitsDisplayedSurface) {
@@ -2713,9 +2713,9 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionLegacyRewriterPreviewsCandidateRe
   ASSERT_TRUE(h.Press(VK_SPACE));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
   ASSERT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(h.context.document->text, L"か");
-  ASSERT_TRUE(h.Press(VK_RETURN));
-  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
   h.service.stop_ipc_worker_for_test();
   server.Stop();
 }
@@ -3343,11 +3343,31 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationDigitAndEscapeKeepReadingI
   ASSERT_TRUE(h.Press(VK_SPACE));
   EXPECT_EQ(attachment.composition_range.last_text, L",");
   ASSERT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(h.service.preedit_kana_, "、");
-  EXPECT_EQ(attachment.composition_range.last_text, L"、");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(attachment.composition.end_count, 1);
+}
+
+// DEV-1649: a window opened through the TIP's rewriter pre-processing (not
+// core) is cancelled by one Esc as well, preedit included.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeFromRewriterCandidateWindowCancelsTheInput) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  h.service.set_number_rewriter_enabled_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
   ASSERT_TRUE(h.Press(VK_SPACE));
-  ASSERT_TRUE(h.Press('2'));
-  EXPECT_EQ(attachment.composition_range.last_text, L",");
+  // Without the window the plain preedit branch would also pass this test.
+  ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(attachment.composition.end_count, 1);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchStandalonePunctuationKeepsRawAndOffersHalfwidth) {
@@ -5636,7 +5656,7 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresReading) {
+TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeCancelsTheInput) {
   TextServiceHarness h;
   FakeCompositionAttachment attachment(h);
 
@@ -5655,8 +5675,101 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(attachment.composition_range.last_text, L"か");
-  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_EQ(attachment.composition.end_count, 1);
+}
+
+// DEV-1649: one Esc cancels the input even while the prediction window is open.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsTheInputInOnePress) {
+  using namespace azookey::ipc;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-prediction-escape-test-" + std::to_string(GetCurrentProcessId());
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(WaitUntil([&] {
+    h.service.process_candidates_ready_for_test();
+    return h.service.prediction_window_visible_for_test();
+  }));
+  ASSERT_EQ(h.context.document->text, L"にほ");
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
+static void ShowPredictionForTest(azookey::tsf::TextService& service) {
+  azookey::ipc::CandidateField prediction;
+  prediction.surface = "日本";
+  prediction.reading = "にほん";
+  service.show_prediction_for_test(prediction);
+}
+
+// DEV-1649: pending romaji alone counts as input, so Esc cancels it.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowCancelsPendingRomajiOnly) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+  ASSERT_TRUE(h.service.romaji_pending_for_test());
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_FALSE(h.service.romaji_pending_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"");
+}
+
+// DEV-1649: with no input a leftover window is only closed.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowAndNoInputOnlyClosesTheWindow) {
+  DocumentPreeditHarness h;
+  // A committed reading leaves the active context behind with no input.
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMetadata) {

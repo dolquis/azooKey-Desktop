@@ -1870,6 +1870,82 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   RemoveProtectedStoreFile(lpath);
 }
 
+TEST(InferenceEngineTest, PrivateUseAndControlMarkerClassification) {
+  using azookey::host::ContainsPrivateUseCodepoint;
+  using azookey::host::ContainsZenzaiControlMarker;
+  // U+EE01 / U+EE08 are prompt control markers; U+E000, U+F8FF and U+E5CE are other Private Use.
+  EXPECT_TRUE(ContainsZenzaiControlMarker("京\xEE\xB8\x81京"));
+  EXPECT_TRUE(ContainsZenzaiControlMarker("\xEE\xB8\x80"));   // U+EE00
+  EXPECT_TRUE(ContainsZenzaiControlMarker("\xEE\xBB\xBF"));   // U+EEFF
+  EXPECT_FALSE(ContainsZenzaiControlMarker("\xEE\xBC\x80"));  // U+EF00
+  EXPECT_FALSE(ContainsZenzaiControlMarker("\xEE\xB7\xBF"));  // U+EDFF
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEE\x80\x80"));   // U+E000
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEF\xA3\xBF"));   // U+F8FF
+  EXPECT_TRUE(ContainsPrivateUseCodepoint("\xEE\x97\x8E"));   // U+E5CE
+  EXPECT_FALSE(
+      ContainsPrivateUseCodepoint("\xEF\xA4\x80"));  // U+F900, a CJK compatibility ideograph
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("\xEE\x7F\x80"));  // not valid UTF-8: no match
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("日本語 apple 😀"));
+  EXPECT_FALSE(ContainsPrivateUseCodepoint(""));
+  // A cut-off character is not a code point yet: scanning stops without a match.
+  EXPECT_FALSE(ContainsPrivateUseCodepoint("日\xEE\xB8"));
+}
+
+TEST(InferenceEngineTest, DropPrivateUseCandidatesKeepsOrderAndTheRest) {
+  std::vector<azookey::core::Candidate> candidates;
+  for (const char* surface : {"京\xEE\xB8\x81京", "正常", "\xEE\x80\x80", "次点", "Apple"}) {
+    azookey::core::Candidate candidate;
+    candidate.surface = surface;
+    candidates.push_back(std::move(candidate));
+  }
+  azookey::host::DropPrivateUseCandidates(candidates);
+  ASSERT_EQ(candidates.size(), 3u);
+  EXPECT_EQ(candidates[0].surface, "正常");
+  EXPECT_EQ(candidates[1].surface, "次点");
+  EXPECT_EQ(candidates[2].surface, "Apple");
+}
+
+TEST(InferenceEngineTest, ZenzaiGenerationWithControlMarkersNeverReachesCandidates) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_private_use.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_private_use_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  // The mock generations hold U+EE01 / U+EE08 in two of four surfaces, one of them unfinished.
+  const auto candidates = engine->QueryCandidates("ふくすう", "", kNowBase, nullptr, 10, false);
+  ASSERT_FALSE(candidates.empty());
+  for (const auto& candidate : candidates) {
+    EXPECT_FALSE(azookey::host::ContainsPrivateUseCodepoint(candidate.surface))
+        << candidate.surface;
+  }
+  const auto has_model_surface = [&](const std::string& surface) {
+    return std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) {
+      return candidate.surface == surface &&
+             candidate.source == azookey::core::CandidateSource::Model;
+    });
+  };
+  EXPECT_TRUE(has_model_surface("複数"));
+  EXPECT_TRUE(has_model_surface("複数形"));
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTraceTest, ModelExceptionAndFallbackProduceOneInferenceSample) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

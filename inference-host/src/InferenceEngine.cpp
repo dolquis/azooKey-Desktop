@@ -576,6 +576,17 @@ bool IsFileLockTimeout(const learning::FileLockFailure& failure) {
 
 }  // namespace
 
+// Last line of defence for the candidate window: a surface with a Private Use character is a
+// broken generation (the Zenzai prompt's control markers live there), never a conversion result.
+// Only those candidates go; the order and count of the rest stay as ranked.
+void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates) {
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [](const core::Candidate& candidate) {
+                                    return ContainsPrivateUseCodepoint(candidate.surface);
+                                  }),
+                   candidates.end());
+}
+
 // Lock order for user dictionary edits: user_dict_writer_mutex_, then the
 // user dictionary file lock, then state_mutex_ only to copy and to publish.
 // The other takers of the file lock (forget, reset, import, SetUserDictionary)
@@ -1084,8 +1095,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
-  return QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel, max_candidates, live,
-                               telemetry, false, tag_boosts);
+  auto result = QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel,
+                                      max_candidates, live, telemetry, false, tag_boosts);
+  DropPrivateUseCandidates(result.candidates);
+  return result;
 }
 
 std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(

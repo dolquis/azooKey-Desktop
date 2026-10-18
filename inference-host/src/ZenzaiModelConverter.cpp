@@ -251,6 +251,11 @@ std::optional<std::string> UsableGeneratedSurface(const GeneratedCandidate& cand
     return std::nullopt;
   }
   if (IsValidUtf8String(candidate.surface)) {
+    // A Private Use character is never a conversion result; the prompt's own control markers
+    // live there, so a surface holding one is a broken generation.
+    if (ContainsPrivateUseCodepoint(candidate.surface)) {
+      return std::nullopt;
+    }
     return candidate.surface;
   }
   if (!candidate.unfinished) {
@@ -260,7 +265,11 @@ std::optional<std::string> UsableGeneratedSurface(const GeneratedCandidate& cand
   if (!prefix_length || *prefix_length == 0 || *prefix_length >= candidate.surface.size()) {
     return std::nullopt;
   }
-  return candidate.surface.substr(0, *prefix_length);
+  auto prefix = candidate.surface.substr(0, *prefix_length);
+  if (ContainsPrivateUseCodepoint(prefix)) {
+    return std::nullopt;
+  }
+  return prefix;
 }
 
 bool IsCanceled(const core::ConversionContext& context) {
@@ -1035,6 +1044,12 @@ struct ZenzaiModelRuntime {
           next.parent_sequence_id = beam.sequence_id;
           next.tokens.push_back(choice.token);
           next.surface += TokenPiece(vocab, choice.token);
+          // The model emitted one of the prompt's control markers: it has nothing more to say
+          // about the reading, so the beam ends here as it would at end-of-sequence.
+          if (ContainsZenzaiControlMarker(next.surface)) {
+            AppendCompletedBeam(generated, beam, choice.logprob);
+            continue;
+          }
           next.total_logprob += choice.logprob;
           ++next.output_tokens;
           if (!next.surface.empty()) {
@@ -1144,6 +1159,13 @@ struct ZenzaiModelRuntime {
       return {GeneratedCandidate{"協議す", -0.003, 3, true},
               GeneratedCandidate{"協議する", -0.8, 5}};
     }
+    if (ToKatakana(kana) == "フクスウ") {
+      // Test fixture: generations that ran on into the prompt's control markers (U+EE01, U+EE08).
+      return {GeneratedCandidate{"京\xEE\xB8\x81京", -0.1, 3},
+              GeneratedCandidate{"複数", -0.5, 2, true},
+              GeneratedCandidate{"狂\xEE\xB8\x88", -0.2, 2, true},
+              GeneratedCandidate{"複数形", -1.0, 3}};
+    }
     if (ToKatakana(kana) == "ナイブムコウ") {
       return {GeneratedCandidate{std::string("日") + std::string("\xE3X", 2), -0.42, 2, true}};
     }
@@ -1232,6 +1254,27 @@ BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_
     plan.copies.push_back(BeamSequenceCopy{parent_sequences[i], next_free});
   }
   return plan;
+}
+
+namespace {
+
+bool ContainsCodepointInRange(std::string_view utf8, char32_t first, char32_t last) {
+  for (size_t offset = 0; offset < utf8.size();) {
+    char32_t codepoint = 0;
+    if (!DecodeNextUtf8(utf8, offset, codepoint)) return false;
+    if (codepoint >= first && codepoint <= last) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool ContainsPrivateUseCodepoint(std::string_view utf8) {
+  return ContainsCodepointInRange(utf8, 0xE000, 0xF8FF);
+}
+
+bool ContainsZenzaiControlMarker(std::string_view utf8) {
+  return ContainsCodepointInRange(utf8, 0xEE00, 0xEEFF);
 }
 
 double BeamRankScore(double total_logprob, int32_t token_count) {
@@ -1620,7 +1663,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
     for (const auto& item : generated) {
       const auto surface = UsableGeneratedSurface(item);
       if (!surface) {
-        skipped_reason = "invalid-utf8-surface";
+        skipped_reason = ContainsPrivateUseCodepoint(item.surface) ? "private-use-surface"
+                                                                   : "invalid-utf8-surface";
         continue;
       }
       const bool trimmed_incomplete_utf8_suffix = surface->size() != item.surface.size();

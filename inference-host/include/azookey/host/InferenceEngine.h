@@ -42,6 +42,10 @@
 
 namespace azookey::host {
 
+// Removes candidates whose surface holds a Private Use Area character (U+E000..U+F8FF), the
+// last filter before a candidate list is returned. The rest keep their order.
+void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
+
 struct InferenceTelemetry {
   uint64_t request_id{};
   core::EtwGuid client{};

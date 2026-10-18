@@ -2365,8 +2365,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
       if (wParam == VK_ESCAPE) {
         ClearPrediction();
-        *eaten = TRUE;
-        return S_OK;
+        // While typing, Esc also cancels the input in the same press (DEV-1649):
+        // fall through to the Cancel handling below. A window left over with no
+        // input is only closed.
+        if (preedit_kana_.empty() && !romaji_.HasPending()) {
+          *eaten = TRUE;
+          return S_OK;
+        }
       }
       if (wParam == VK_TAB &&
           (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
@@ -7076,8 +7081,9 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     preedit_update_needed = true;
   } else if (std::holds_alternative<core::HideCandidateWindow>(action)) {
     candidate_ui_.EndUI();
-    // Esc from Selecting restores the reading. A previously displayed live
-    // surface must not override the next Enter commit after that transition.
+    // Leaving Selecting for the reading (typing or Backspace; Esc now cancels
+    // the input). A previously displayed live surface must not override the
+    // next Enter commit after that transition.
     if (input_state_.kind() == core::InputStateKind::Composing && !live_display_surface_.empty()) {
       live_display_reading_.clear();
       live_display_surface_.clear();

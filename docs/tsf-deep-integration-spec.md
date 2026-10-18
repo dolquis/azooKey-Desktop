@@ -259,8 +259,9 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
 Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
 
-Esc、追加入力、Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
-へ戻してから次の編集を反映する。
+追加入力、Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
+へ戻してから次の編集を反映する。Esc は読みへ戻らず入力を取り消す
+（`docs/legacy-parity-spec.md` §1.2）。
 候補の `surface` を reading バッファへ書き戻してはならない。
 
 ### 2.5 受け入れ条件

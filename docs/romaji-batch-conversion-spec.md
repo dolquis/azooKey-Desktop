@@ -144,7 +144,9 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
 - Enter（`Commit`）で全文を確定（`EndComposition` + 確定観測。multi-segment は
   `CommitSegmentsObservation`（§6.4）、単一文節は `CommitObservation`）。
 - Esc（`Cancel`）は Selecting / BatchConverting からは蓄積状態へ戻し（後者は in-flight を
-  `Cancel`）、BatchAccumulating からは破棄。
+  `Cancel`）、BatchAccumulating からは破棄。通常入力の Esc は 1 回で取り消す
+  （`docs/legacy-parity-spec.md` §1.2）が、一括変換は文節移動中の誤操作で蓄積した読みを
+  失わないよう、この 2 段を例外として保つ。
 - M58-B では Selecting 中に ←/→ で文節カーソル移動、Space/数字キーで文節候補切替。
 
 ## 5. 一括変換モード（2 系統）

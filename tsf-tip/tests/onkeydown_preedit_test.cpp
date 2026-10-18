@@ -7794,7 +7794,8 @@ TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePer
   }
   const auto records = log.Records();
   EXPECT_EQ(CountContaining(records, "\"reason\":\"input\""), 4u);
-  EXPECT_EQ(CountContaining(records, "\"key_class\":\"char\""), 5u);
+  // The once-per-document passthrough record carries no key class.
+  EXPECT_EQ(CountContaining(records, "\"key_class\":\"char\""), 4u);
   EXPECT_GE(CountContaining(records, "\"event\":\"key_path_preedit\""), 1u);
   // The switch found the pending "か" and recorded only its length.
   ASSERT_EQ(CountContaining(records, "\"event\":\"key_path_focus\""), 1u);

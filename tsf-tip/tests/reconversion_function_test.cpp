@@ -558,6 +558,11 @@ void VerifyHostCandidatesShowWithoutSynchronousLock(DeferredShowChange change) {
   TestRange moved(&context, text, 3, 3);
   context.selection = &range;
   azookey::tsf::TextService service;
+  // A queued session holds the service: drop it first if an assertion returns early.
+  struct DropQueuedSessions {
+    TestContext& context;
+    ~DropQueuedSessions() { context.RunDeferred(false); }
+  } drop_queued{context};
   service.set_foreground_app_for_test({"winword.exe", "Word", true});
   service.set_text_edit_context_for_test(&context);
   IUnknown* unknown = nullptr;

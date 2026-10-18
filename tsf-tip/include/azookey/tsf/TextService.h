@@ -688,6 +688,13 @@ class TextService final : public ITfTextInputProcessorEx,
   // Open/alphanumeric/keyboard-disabled state last reported by
   // key_passthrough, -1 for none.
   int key_passthrough_logged_state_{-1};
+  // AZOOKEY_LOG_KEYS=1 at construction: key_path records trace how each key
+  // reached the composition (DEV-1637). They never carry the key or text.
+  bool key_path_logging_{false};
+  // Document and reasons (bits) already reported for keys that are not
+  // traced one by one: typed while the IME is off, or into a secure field.
+  std::optional<const void*> key_path_quiet_document_;
+  unsigned key_path_quiet_reasons_{0};
   // Probe summary last reported by input_gate, so the record appears once per
   // change of field rather than once per commit or prediction.
   std::string input_gate_logged_signature_;
@@ -1176,6 +1183,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void OnCandidateClicked(int idx);
   void ClearReconversionState();
   void ShowReconversionResult();
+  // Opens the list for `range` if it is still the open request's.
+  void ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
+                            ITfCandidateList* list, std::vector<std::wstring> values,
+                            std::vector<ReconversionOrigin> origins, std::string reading);
   void PrefetchSelectedReconversion();
   void AdviseTextEditSink(ITfContext* context);
   void UnadviseTextEditSink();
@@ -1245,6 +1256,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();
   void LogKeyPassthroughOnce(bool keyboard_disabled = false) noexcept;
+  bool KeyPathLogging() const noexcept;
+  void LogKeyPath(std::string_view sink, ITfContext* context, WPARAM key, BOOL eaten) noexcept;
+  void LogKeyPathContext(std::string_view operation, ITfContext* context) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogPredictionOnce(PredictionLogReason reason) noexcept;
   void ShowPredictionWindow();

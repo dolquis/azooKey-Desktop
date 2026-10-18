@@ -103,6 +103,24 @@ void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
   azookey::tsf::TipRuntimeLog(TipRuntimeLogger(), level, event, fields, privacy);
 }
 
+// DEV-1637: key_path records need AZOOKEY_LOG_KEYS=1 on top of AZOOKEY_LOG=1.
+bool KeyPathLoggingRequested() noexcept {
+  char value[2] = {};
+  return GetEnvironmentVariableA("AZOOKEY_LOG_KEYS", value, sizeof(value)) == 1 && value[0] == '1';
+}
+
+// A character key or anything else; the key itself is never logged.
+std::string_view KeyPathKeyClass(WPARAM key) noexcept {
+  const bool character = (key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
+                         (key >= VK_OEM_1 && key <= VK_OEM_3) ||
+                         (key >= VK_OEM_4 && key <= VK_OEM_8) || key == VK_OEM_102;
+  return character ? "char" : "control";
+}
+
+uint64_t KeyPathPendingLength(const std::string& romaji, const std::string& preedit) noexcept {
+  return static_cast<uint64_t>(romaji.size() + preedit.size());
+}
+
 // Records why a reconversion step stopped or what it produced. The selected
 // text and the candidates are never logged.
 void LogReconversion(std::string_view stage, std::string_view result, HRESULT hr = S_OK,
@@ -1038,6 +1056,7 @@ TextService::EtwRegistration::EtwRegistration() noexcept { core::EtwLogger::Regi
 TextService::EtwRegistration::~EtwRegistration() noexcept { core::EtwLogger::Unregister(); }
 
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
+  key_path_logging_ = KeyPathLoggingRequested();
   ipc_client_.SetRuntimeLogger(&TipRuntimeLogger());
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
@@ -1624,6 +1643,81 @@ void TextService::LogKeyPassthroughOnce(bool keyboard_disabled) noexcept {
   }
 }
 
+bool TextService::KeyPathLogging() const noexcept {
+  return key_path_logging_ && TipRuntimeLogger().enabled();
+}
+
+void TextService::LogKeyPath(std::string_view sink, ITfContext* context, WPARAM key,
+                             BOOL eaten) noexcept {
+  if (!KeyPathLogging()) return;
+  try {
+    std::string_view reason = "input";
+    unsigned quiet_bit = 0;
+    if (!eaten) {
+      if (azookey::tsf::IsContextKeyboardDisabled(context)) {
+        reason = "keyboard_disabled";
+        quiet_bit = 1;
+      } else if (!keyboard_open_) {
+        reason = "closed";
+        quiet_bit = 2;
+      } else if (alnum_mode_) {
+        reason = "alnum";
+        quiet_bit = 4;
+      } else {
+        reason = "not_handled";
+      }
+    }
+    // A secure field's keys, like keys typed while the IME is off, are not
+    // ours to count or time: one record per document and reason, no lengths.
+    if (!quiet_bit && secure_input_.load(std::memory_order_relaxed)) {
+      reason = "secure";
+      quiet_bit = 8;
+    }
+    if (quiet_bit) {
+      if (!key_path_quiet_document_ || *key_path_quiet_document_ != focused_document_identity_) {
+        key_path_quiet_document_ = focused_document_identity_;
+        key_path_quiet_reasons_ = 0;
+      }
+      if (key_path_quiet_reasons_ & quiet_bit) return;
+      key_path_quiet_reasons_ |= quiet_bit;
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path",
+                 {{"sink", SafeLogText(std::string(sink))},
+                  {"eaten", eaten != FALSE},
+                  {"reason", SafeLogText(std::string(reason))},
+                  {"once_per_document", true}});
+      return;
+    }
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path",
+               {{"sink", SafeLogText(std::string(sink))},
+                {"key_class", SafeLogText(std::string(KeyPathKeyClass(key)))},
+                {"eaten", eaten != FALSE},
+                {"reason", SafeLogText(std::string(reason))},
+                {"active_context", SameComIdentity(context, active_context_)},
+                {"composition", composition_ != nullptr},
+                {"pending_length", KeyPathPendingLength(batch_raw_romaji_, preedit_kana_)}});
+  } catch (...) {
+  }
+}
+
+void TextService::LogKeyPathContext(std::string_view operation, ITfContext* context) noexcept {
+  if (!KeyPathLogging()) return;
+  try {
+    if (secure_input_.load(std::memory_order_relaxed)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_context",
+                 {{"operation", SafeLogText(std::string(operation))},
+                  {"active_context", SameComIdentity(context, active_context_)},
+                  {"secure", true}});
+      return;
+    }
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_context",
+               {{"operation", SafeLogText(std::string(operation))},
+                {"active_context", SameComIdentity(context, active_context_)},
+                {"composition", composition_ != nullptr},
+                {"pending_length", KeyPathPendingLength(batch_raw_romaji_, preedit_kana_)}});
+  } catch (...) {
+  }
+}
+
 void TextService::LogInputGateOnChange(const azookey::tsf::InputGateDecision& gate,
                                        bool secure) noexcept {
   // Scope values are InputScope enum numbers and the classes are fixed words;
@@ -1961,6 +2055,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  // DEV-1637: the answer this key leaves with, on every return path.
+  struct KeyPathRecord {
+    TextService& service;
+    ITfContext* context;
+    WPARAM key;
+    const BOOL* eaten;
+    ~KeyPathRecord() { service.LogKeyPath("test", context, key, *eaten); }
+  } key_path_record{*this, context, wParam, eaten};
   bracket_test_context_ = nullptr;
   try {
     // TSF probes every key before OnKeyDown, and the probe tracks the key for
@@ -2195,6 +2297,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
   } trace_reset{*this, std::move(active_key_trace_id_), active_key_trace_start_,
                 active_key_trace_active_};
+  // DEV-1637: the answer this key leaves with, on every return path.
+  struct KeyPathRecord {
+    TextService& service;
+    ITfContext* context;
+    WPARAM key;
+    const BOOL* eaten;
+    ~KeyPathRecord() { service.LogKeyPath("key", context, key, *eaten); }
+  } key_path_record{*this, context, wParam, eaten};
   active_key_trace_active_ = true;
   active_key_trace_id_ = NewTraceIdNoThrow();
   active_key_trace_start_ = std::chrono::steady_clock::now();
@@ -3216,8 +3326,30 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     ResetTypoTracking();
     last_learned_commit_pairs_.clear();
     UnadviseTextEditSink();
+    const bool log_key_path = KeyPathLogging();
+    const bool had_active_context = active_context_ != nullptr;
+    const bool had_composition = composition_ != nullptr;
+    const uint64_t pending_before = KeyPathPendingLength(batch_raw_romaji_, preedit_kana_);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
+    if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
+      try {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
+                   {{"had_active_context", had_active_context}, {"secure", true}});
+      } catch (...) {
+      }
+    } else if (log_key_path) {
+      // DEV-1637: what the document switch did to input still pending.
+      try {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
+                   {{"had_active_context", had_active_context},
+                    {"composition_before", had_composition},
+                    {"pending_before", pending_before},
+                    {"composition_after", composition_ != nullptr},
+                    {"pending_after", KeyPathPendingLength(batch_raw_romaji_, preedit_kana_)}});
+      } catch (...) {
+      }
+    }
     if (pdimFocus) {
       ITfContext* top = nullptr;
       if (SUCCEEDED(pdimFocus->GetTop(&top)) && top) {
@@ -3239,6 +3371,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
 #ifdef AZOOKEY_TSF_TESTING
   if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
 #endif
+  LogKeyPathContext("push", pic);
   ClearReconversionState();
   last_learned_commit_pairs_.clear();
   AdviseTextEditSink(pic);
@@ -3254,6 +3387,7 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
 }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
   AZOOKEY_ASSERT_UI_THREAD();
+  LogKeyPathContext("pop", pic);
   if (pic && SameComIdentity(pic, text_edit_context_)) {
     UnadviseTextEditSink();
     ITfDocumentMgr* document = nullptr;
@@ -3548,6 +3682,20 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
                                            &hr_session);
   edit->Release();
   if (request_accepted) *request_accepted = SUCCEEDED(hr);
+  if (KeyPathLogging() && !secure_input_.load(std::memory_order_relaxed)) {
+    // DEV-1637: whether the preedit reached the document now or is queued.
+    std::string_view mode = "request_failed";
+    if (SUCCEEDED(hr)) {
+      mode = hr_session == TF_S_ASYNC ? "async" : (SUCCEEDED(hr_session) ? "sync" : "failed");
+    }
+    try {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_preedit",
+                 {{"mode", SafeLogText(std::string(mode))},
+                  {"hr", static_cast<int64_t>(SUCCEEDED(hr) ? hr_session : hr)},
+                  {"composition", composition_ != nullptr}});
+    } catch (...) {
+    }
+  }
   // For synchronous sessions TSF writes DoEditSession's result into hr_session
   // while returning S_OK from RequestEditSession itself. Return hr_session so
   // callers see real failures. An established asynchronous session reports
@@ -8058,9 +8206,39 @@ void TextService::ShowReconversionResult() {
     ClearReconversionState();
     return;
   }
-  ITfCandidateList* list = nullptr;
-  const HRESULT hr = function->GetReconversion(reconversion_range_, &list);
+  // The Host replies outside any application callback, where Word refuses a
+  // synchronous lock (DEV-1652), so the range is reread in a session TSF may
+  // queue. The provider still compares the reread surface with the request's.
+  AddRef();
+  auto owner = std::shared_ptr<TextService>(this, [](TextService* service) { service->Release(); });
+  Microsoft::WRL::ComPtr<ITfRange> range(reconversion_range_);
+  const uint64_t generation = reconversion_generation_;
+  const HRESULT hr = function->RequestReconversion(
+      reconversion_range_,
+      [owner, range, generation, values = std::move(values), origins = std::move(origins),
+       reading = std::move(result->reading)](HRESULT list_hr, ITfCandidateList* list) {
+        owner->ShowReconversionList(generation, range.Get(), list_hr, list, values, origins,
+                                    reading);
+      });
   function->Release();
+  if (hr == TF_S_ASYNC) {
+    LogReconversion("show", "deferred");
+  } else if (FAILED(hr) && generation == reconversion_generation_) {
+    LogReconversion("show", "list_failed", hr);
+    ClearReconversionState();
+  }
+}
+
+void TextService::ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
+                                       ITfCandidateList* list, std::vector<std::wstring> values,
+                                       std::vector<ReconversionOrigin> origins,
+                                       std::string reading) {
+  // A queued session can run after the selection, context or service moved on.
+  if (generation != reconversion_generation_ || range != reconversion_range_ ||
+      reconversion_list_) {
+    LogReconversion("show", "stale_generation", hr);
+    return;
+  }
   if (FAILED(hr) || !list) {
     LogReconversion("show", "list_failed", hr);
     ClearReconversionState();
@@ -8073,12 +8251,12 @@ void TextService::ShowReconversionResult() {
   const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
-    list->Release();
     ClearReconversionState();
     return;
   }
+  list->AddRef();
   reconversion_list_ = list;
-  reconversion_shown_reading_ = std::move(result->reading);
+  reconversion_shown_reading_ = std::move(reading);
   reconversion_shown_origins_ = std::move(origins);
   reconversion_shown_candidates_ = std::move(values);
   LogReconversion("show", "shown", S_OK, items.size());

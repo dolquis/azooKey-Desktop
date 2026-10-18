@@ -129,7 +129,7 @@ const Row kTransitionTable[] = {
      Selecting,
      {K::Composing,    K::Composing, K::Composing, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
-      K::Selecting,    K::Idle,      K::Idle,      K::Composing, K::Selecting, K::Selecting,
+      K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
       K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
     {"ReplaceSuggestion",
      ReplaceSuggestion,

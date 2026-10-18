@@ -147,7 +147,16 @@ bool WaitUntil(const std::function<bool()>& done) {
   return done();
 }
 
-CandidateField Field(std::string surface) { return {std::move(surface), "にほんご", 1.0, "test"}; }
+CandidateField Field(std::string surface, std::string reading = "にほんご") {
+  return {std::move(surface), std::move(reading), 1.0, "test"};
+}
+
+// The per-key answer for the whole reading is cached: Space makes every
+// earlier request stale, so an answer for "に" would not be the one reused.
+bool CachedWholeReading(azookey::tsf::TextService& service) {
+  const auto cached = service.cached_candidates_for_test();
+  return cached.size() == 1u && cached.front().reading == "にほんご";
+}
 
 // live = true answers one candidate, as the Host's live beam does; live = false
 // answers the full list after `window_delay`. Predictions always answer, so
@@ -173,7 +182,8 @@ struct FakeHost {
           QueryCandidatesResponse result;
           if (payload && payload->live) {
             ++live_queries;
-            result.candidates = {Field("日本語")};
+            // Each per-key answer carries the reading it was asked for.
+            result.candidates = {Field("日本語", payload->reading)};
           } else {
             ++window_queries;
             std::this_thread::sleep_for(window_delay_);
@@ -320,7 +330,7 @@ TEST(TsfTipSpaceCandidateWindowTest, OpensFromTheWindowQueryEvenWithAPerKeyCache
     SpaceWindowHarness h(pipe_name, {});
     h.TypeNihongo();
     // The per-key live answer has arrived, so the old path would open from it.
-    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
     ASSERT_GT(host.live_queries.load(), 0);
 
     EXPECT_TRUE(h.Press(VK_SPACE));
@@ -355,7 +365,7 @@ TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
   {
     SpaceWindowHarness h(pipe_name, {.prediction = true});
     h.TypeNihongo();
-    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
     // The Host holds the window answer while these notifications run.
@@ -382,7 +392,7 @@ TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst
   {
     SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
     h.TypeNihongo();
-    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
     const auto window = h.WaitForAnyWindow();
@@ -398,15 +408,17 @@ TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst
 // answer keeps it first instead of reverting the preedit to kana.
 TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryKeepsTheLiveConversionSurface) {
   const auto pipe_name = PipeName("late-live");
-  FakeHost host(std::chrono::milliseconds(1500));
+  // The live conversion answers must come back inside the deadline even on a
+  // slow (coverage) run, so this one deadline is longer than the others.
+  FakeHost host(std::chrono::milliseconds(4000));
   ASSERT_TRUE(host.Start(pipe_name));
   {
-    SpaceWindowHarness h(pipe_name, {.live_conversion = true, .query_deadline_ms = 300});
+    SpaceWindowHarness h(pipe_name, {.live_conversion = true, .query_deadline_ms = 1000});
     h.TypeNihongo();
-    ASSERT_TRUE(WaitUntil([&] {
-      h.service.process_candidates_ready_for_test();
-      return host.live_conversions.load() > 0;
-    }));
+    // The answer for the whole reading has to be in before Space: Space makes
+    // every earlier request stale, and a live answer for "に" does not count.
+    ASSERT_TRUE(WaitUntil(
+        [&] { return h.service.live_conversion_result_reading_for_test() == "にほんご"; }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
     const auto window = h.WaitForAnyWindow();
@@ -425,7 +437,7 @@ TEST(TsfTipSpaceCandidateWindowTest, SecureLateWindowQueryUsesOnlyLocalCandidate
   {
     SpaceWindowHarness h(pipe_name, {.secure = true, .query_deadline_ms = 300});
     h.TypeNihongo();
-    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
 
     EXPECT_TRUE(h.Press(VK_SPACE));
     const auto window = h.WaitForAnyWindow();
@@ -444,7 +456,7 @@ TEST(TsfTipSpaceCandidateWindowTest, ReconnectDropsThePerKeyCandidates) {
   {
     SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 300});
     h.TypeNihongo();
-    ASSERT_TRUE(WaitUntil([&] { return h.service.cached_candidates_for_test().size() == 1u; }));
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
     h.service.stop_ipc_worker_for_test();
     h.service.start_ipc_worker_for_test();
 

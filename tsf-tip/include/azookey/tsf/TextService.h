@@ -573,6 +573,11 @@ class TextService final : public ITfTextInputProcessorEx,
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return live_conversion_result_.has_value();
   }
+  // The reading of the delivered, not yet applied live conversion result.
+  std::string live_conversion_result_reading_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return live_conversion_result_ ? live_conversion_result_->reading : std::string{};
+  }
   void apply_live_conversion_result_for_test() { ApplyLiveConversionResult(); }
   void set_live_conversion_result_with_segments_for_test(uint64_t request_id, std::string reading,
                                                          std::string surface,

@@ -3361,7 +3361,13 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeFromRewriterCandidateWindowCancelsTheInpu
   ASSERT_TRUE(h.Press(VK_OEM_COMMA));
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "、蚊";
+  candidates[1].surface = "、科";
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
+  // Without the window the plain preedit branch would also pass this test.
+  ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_TRUE(h.service.preedit_kana_.empty());
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());

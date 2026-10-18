@@ -3250,13 +3250,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         ResetTypoTracking();
-        if (local_settings_.LiveConversionSnapshot()) {
-          CancelPendingQueriesForLifecycle();
-          live_display_reading_.clear();
-          live_display_surface_.clear();
-          live_display_segments_.clear();
-          live_display_auto_punctuation_ = false;
-        }
+        if (local_settings_.LiveConversionSnapshot()) CancelPendingQueriesForLifecycle();
+        // A window opened from the live surface leaves live_display_* set even
+        // after live conversion was switched off, so always clear it.
+        live_display_reading_.clear();
+        live_display_surface_.clear();
+        live_display_segments_.clear();
+        live_display_auto_punctuation_ = false;
         *eaten = TRUE;
       }
     }

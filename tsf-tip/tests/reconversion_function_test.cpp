@@ -575,6 +575,7 @@ void VerifyHostCandidatesShowWithoutSynchronousLock(DeferredShowChange change) {
 
   context.refuse_sync = true;
   const size_t requests_before = context.flags_seen.size();
+  const uint64_t generation = service.reconversion_generation_for_test();
   service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
   EXPECT_FALSE(service.has_reconversion_ui_for_test());
   ASSERT_EQ(context.deferred.size(), 1u);
@@ -605,7 +606,8 @@ void VerifyHostCandidatesShowWithoutSynchronousLock(DeferredShowChange change) {
               (std::vector<std::wstring>{L"あした", L"明晩"}));
   } else {
     EXPECT_FALSE(service.has_reconversion_ui_for_test());
-    EXPECT_TRUE(service.pending_reconversion_surface_for_test().empty());
+    // The open range was released rather than left waiting for a list.
+    EXPECT_GT(service.reconversion_generation_for_test(), generation);
   }
   EXPECT_EQ(range.set_text_calls(), 0);
   context.refuse_sync = false;

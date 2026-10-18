@@ -16,6 +16,7 @@ struct ProfileEntry {
   LANGID lang{0};
   HKL hkl{nullptr};
   bool is_layout{false};
+  bool keyboard{true};  // A TIP in GUID_TFCAT_TIP_KEYBOARD (always true for layouts).
   bool enabled{false};
 };
 
@@ -45,7 +46,7 @@ inline constexpr CLSID kMicrosoftJapaneseImeClsid = {
 
 // Rank of a candidate (lower is better); nullopt when unusable.
 inline std::optional<int> RankTarget(const ProfileEntry& entry, const CLSID& own_clsid) {
-  if (!entry.enabled) return std::nullopt;
+  if (!entry.enabled || !entry.keyboard) return std::nullopt;
   if (entry.is_layout) return 2;
   if (IsEqualGUID(entry.clsid, own_clsid)) return std::nullopt;
   return IsEqualGUID(entry.clsid, kMicrosoftJapaneseImeClsid) ? 0 : 1;
@@ -71,8 +72,11 @@ inline std::optional<size_t> ChooseTarget(const std::vector<ProfileEntry>& entri
 // an input method, and a per-user "disabled" mark would outlive a re-registration.
 inline SwitchOutcome SwitchAwayFromOwnProfile(ProfileApi& api, const CLSID& own_clsid,
                                               LANGID lang) {
+  // The query runs from a focus-less one-shot thread, so a keyboard layout or a
+  // failure proves nothing about the other apps' sessions; only a different TIP
+  // is positive evidence that the session already left azooKey.
   const auto active = api.ActiveProfile();
-  if (active && (active->is_layout || !IsEqualGUID(active->clsid, own_clsid))) {
+  if (active && !active->is_layout && !IsEqualGUID(active->clsid, own_clsid)) {
     return SwitchOutcome::AlreadyElsewhere;
   }
 

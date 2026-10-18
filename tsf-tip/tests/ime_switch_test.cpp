@@ -66,6 +66,20 @@ TEST(ImeSwitchTest, FallsBackToAnotherTipThenToAKeyboardLayout) {
   EXPECT_EQ(ChooseTarget({Tip(kOwn), Layout()}, kOwn), std::optional<size_t>(1));
 }
 
+TEST(ImeSwitchTest, SkipsTipsOutsideTheKeyboardCategory) {
+  ProfileEntry handwriting = Tip(kOtherTip);
+  handwriting.keyboard = false;
+  EXPECT_EQ(ChooseTarget({handwriting, Layout()}, kOwn), std::optional<size_t>(1));
+}
+
+TEST(ImeSwitchTest, SwitchesWhenTheQueryThreadReportsOnlyAKeyboardLayout) {
+  FakeApi api;
+  api.active = Layout();
+  api.entries = {Tip(kOwn), Tip(kMicrosoftJapaneseImeClsid)};
+  EXPECT_EQ(SwitchAwayFromOwnProfile(api, kOwn, 0x0411), SwitchOutcome::Switched);
+  EXPECT_EQ(api.activate_calls, 1);
+}
+
 TEST(ImeSwitchTest, NeverPicksAzooKeyOrADisabledProfile) {
   EXPECT_FALSE(ChooseTarget({Tip(kOwn)}, kOwn).has_value());
   EXPECT_FALSE(ChooseTarget({Tip(kOtherTip, false), Layout(false)}, kOwn).has_value());

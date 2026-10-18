@@ -28,6 +28,7 @@ ProfileEntry ToEntry(const TF_INPUTPROCESSORPROFILE& profile) {
   entry.profile = profile.guidProfile;
   entry.lang = profile.langid;
   entry.hkl = profile.hkl;
+  entry.keyboard = entry.is_layout || IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD);
   entry.enabled = (profile.dwFlags & TF_IPP_FLAG_ENABLED) != 0;
   return entry;
 }

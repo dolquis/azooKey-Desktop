@@ -58,7 +58,7 @@ VM なら失敗しても復元で済む。
 
 ## 5. 開発機での手順
 
-1. 人が、展開した検証 zip で `register-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll -HostExePath .\azookey_inference_host.exe` を実行する。実モデルを使う課題では `-ModelPath` も渡す。
+1. 人が、展開した検証 zip で `register-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll -HostExePath .\azookey_inference_host.exe` を実行する。実モデルを使う課題では `-ModelPath` も渡す。llama.cpp の preflight に使う `azookey_zenzai_bench.exe` は、Host exe と同じディレクトリ（検証 zip の配置）を先に探し、無ければ build ツリーの `bench\` を探す。どちらにも無ければ探したパスをすべて出して失敗するので、別の場所にあるときは `-BenchPath` で渡す。
 2. 展開した zip の `azookey_diag.exe --json` で D-001〜D-003 を確認する。`error` があれば打鍵に進まない。
 3. 課題の確認手順に従って操作する。ログを採る場合は [`../debugging.md`](../debugging.md)「ログ収集」に従う。打鍵と目視の観点は [`dev32-verification-checklist.md`](./dev32-verification-checklist.md) を使う。
 4. 次のどれかが起きたら直ちに中止し、Microsoft IME に切り替えてから §6 の後始末を行う。

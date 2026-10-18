@@ -60,6 +60,40 @@ function Write-DebugCrtWarning {
     "package for clean-machine testing. Debug artifacts: $($debugBuildPaths -join ', ')")
 }
 
+# Default search order for the llama.cpp preflight tool: next to the host exe
+# (a verification package ships the bench beside the host), then the build-tree
+# layout `<build>\inference-host\host.exe` + `<build>\bench\...`.
+function Get-DefaultBenchCandidate {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$HostPath
+  )
+
+  $benchName = "azookey_zenzai_bench.exe"
+  $hostDir = Split-Path -Parent $HostPath
+  $buildDir = Split-Path -Parent $hostDir
+  return @(
+    (Join-Path $hostDir $benchName),
+    (Join-Path (Join-Path $buildDir "bench") $benchName)
+  )
+}
+
+function Resolve-DefaultBenchPath {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$HostPath
+  )
+
+  $candidates = @(Get-DefaultBenchCandidate -HostPath $HostPath)
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return $candidate
+    }
+  }
+
+  throw "llama.cpp preflight tool not found. Searched: $($candidates -join ', '). Build the windows-llama-debug preset, or pass -BenchPath."
+}
+
 function Assert-LlamaEnabledHost {
   param(
     [Parameter(Mandatory=$true)]
@@ -78,8 +112,7 @@ function Assert-LlamaEnabledHost {
   }
 
   if (-not $BenchPath) {
-    $buildDir = Split-Path -Parent (Split-Path -Parent $Path)
-    $BenchPath = Join-Path $buildDir "bench\azookey_zenzai_bench.exe"
+    $BenchPath = Resolve-DefaultBenchPath -HostPath $Path
   }
   if (-not (Test-Path $BenchPath)) {
     throw "llama.cpp preflight tool not found: $BenchPath. Build the windows-llama-debug preset before registration."

@@ -899,6 +899,10 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t ipc_health_timeout_ms_{500};
   uint32_t ipc_deadline_miss_threshold_{2};
   uint32_t ipc_consecutive_deadline_misses_{0};  // IPC worker only.
+  // The last per-key live = true answer and its reading, for a window query
+  // that misses its deadline (DEV-1653). IPC worker only.
+  std::string live_prefetch_reading_;
+  std::vector<ipc::CandidateField> live_prefetch_candidates_;
   // Published by the IPC worker, consumed by OnCandidatesReady on the UI thread.
   std::mutex health_state_mtx_;
   std::optional<CandidateHealthState> health_display_state_;

@@ -778,6 +778,18 @@ class TextServiceHarness {
   bool installed_handshake_token_{false};
 };
 
+// DEV-1653: Space opens the window from the window query (live = false), never
+// from the per-key cache. `deliver` stands in for that query's answer, which
+// the candidates-ready path then applies.
+template <class Harness, class Deliver>
+BOOL PressSpaceAndDeliver(Harness& h, Deliver&& deliver) {
+  const BOOL eaten = h.Press(VK_SPACE);
+  EXPECT_FALSE(h.service.pending_ipc_live_for_test());
+  deliver();
+  h.service.show_candidate_window_from_cache_for_test();
+  return eaten;
+}
+
 class FakeCompositionAttachment {
  public:
   explicit FakeCompositionAttachment(TextServiceHarness& harness) : harness_(harness) {
@@ -1437,8 +1449,8 @@ TEST(TsfTipEmojiTest, AnnotatedOrdinaryCandidateLearnsButRewriterTailsDoNot) {
   candidates[1].source = "emoji";
   candidates[2].surface = "☺";
   candidates[2].source = "symbol";
-  h.service.set_cached_candidates_for_test(candidates);
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(candidates); }));
   FakeCompositionAttachment attachment(h);
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
   const auto observation = h.service.last_queued_commit_observation_for_test();
@@ -2026,8 +2038,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
   candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
   const int previous_request_count = h.context.request_count;
 
@@ -2468,8 +2480,8 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCommitsRestoredReadin
   candidate.surface = "蚊";
   candidate.reading = "か";
   candidate.source = "test";
-  h.service.set_cached_candidates_for_test({candidate});
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   ASSERT_EQ(h.context.document->text, L"か");
   ASSERT_TRUE(h.Press(VK_RETURN));
@@ -4120,8 +4132,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
   host_candidates[0].surface = "仮名";
   host_candidates[0].reading = "かな";
   host_candidates[0].source = "test";
-  h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
+  }));
   h.service.set_selected_candidate_index_for_test(0);
   {
     FakeCompositionAttachment attachment(h);
@@ -5303,6 +5316,7 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
   ASSERT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.pending_ipc_live_for_test());
   EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 
@@ -5318,23 +5332,34 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
   EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
+// DEV-1653: a per-key (live) cache no longer opens the window; Space asks for
+// the window query and the window opens from its answer.
+TEST(TsfTipOnKeyDownPreeditTest, SpaceRequeriesTheWindowEvenWithAPerKeyCache) {
   TextServiceHarness h;
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
   ASSERT_EQ(h.service.preedit_kana_, "か");
 
-  std::vector<azookey::ipc::CandidateField> candidates;
-  azookey::ipc::CandidateField candidate;
-  candidate.surface = "蚊";
-  candidates.push_back(candidate);
-  h.service.set_cached_candidates_for_test(std::move(candidates));
+  azookey::ipc::CandidateField cached;
+  cached.surface = "蚊";
+  h.service.set_cached_candidates_for_test({cached});
 
   EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_live_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "か");
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+
+  std::vector<azookey::ipc::CandidateField> window(2);
+  window[0].surface = "蚊";
+  window[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(window));
+  h.service.show_candidate_window_from_cache_for_test();
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
-  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
-  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[1].surface, "科");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterIsOffByDefaultAndAddsAnnotatedCandidatesWhenOn) {
@@ -5526,8 +5551,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedQueuesCancelBeforeCommitObservati
   host_candidates[0].surface = "蚊";
   host_candidates[0].reading = "か";
   host_candidates[0].source = "test";
-  h.service.set_rewritten_cached_candidates_for_test("か", std::move(host_candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_rewritten_cached_candidates_for_test("か", std::move(host_candidates));
+  }));
   h.service.set_selected_candidate_index_for_test(0);
 
   FakeCompositionAttachment attachment(h);
@@ -5563,8 +5589,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesKatakanaRewriteCandida
   host_candidates[0].surface = "仮名";
   host_candidates[0].reading = "かな";
   host_candidates[0].source = "test";
-  h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
+  }));
   h.service.set_selected_candidate_index_for_test(0);
 
   FakeCompositionAttachment attachment(h);
@@ -5588,9 +5615,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
   std::vector<azookey::ipc::CandidateField> candidates(2);
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
 
   std::vector<azookey::ipc::CandidateField> late_candidates(2);
@@ -5621,9 +5647,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   std::vector<azookey::ipc::CandidateField> candidates(2);
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
   EXPECT_TRUE(h.Press(VK_DOWN));
   EXPECT_EQ(attachment.composition_range.last_text, L"科");
@@ -5650,8 +5675,8 @@ TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMet
   candidates[1].surface = "科";
   candidates[1].reading = "か";
   candidates[1].source = "dictionary";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
   EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
 
@@ -5673,9 +5698,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ShiftSpaceCyclesCandidatesBackward) {
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
   candidates[2].surface = "課";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
   h.keyboard_state.SetDown(VK_SHIFT, true);
   EXPECT_TRUE(h.TestPress(VK_SPACE));
@@ -5702,8 +5726,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CtrlBindingsEditReadingAndMoveCandidates) {
   std::vector<azookey::ipc::CandidateField> candidates(2);
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
 
   h.keyboard_state.SetDown(VK_CONTROL, true);
   EXPECT_TRUE(h.TestPress('N'));
@@ -5726,9 +5750,8 @@ TEST(TsfTipOnKeyDownPreeditTest, TypingAfterCandidateSelectionRestoresReadingBef
   std::vector<azookey::ipc::CandidateField> candidates(2);
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_TRUE(h.Press(VK_DOWN));
   EXPECT_EQ(attachment.composition_range.last_text, L"科");
   EXPECT_EQ(h.service.preedit_kana_, "か");
@@ -5751,9 +5774,8 @@ TEST(TsfTipOnKeyDownPreeditTest, BackspaceAfterCandidateSelectionEditsReading) {
   std::vector<azookey::ipc::CandidateField> candidates(2);
   candidates[0].surface = "仮名";
   candidates[1].surface = "加奈";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_TRUE(h.Press(VK_DOWN));
   EXPECT_EQ(attachment.composition_range.last_text, L"加奈");
   EXPECT_EQ(h.service.preedit_kana_, "かな");
@@ -5795,9 +5817,8 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberSelectionCommitsCorrespondingCandidate) {
   candidates[0].surface = "蚊";
   candidates[1].surface = "科";
   candidates[2].surface = "課";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   EXPECT_TRUE(h.Press(VK_DOWN));
   const std::wstring highlighted_surface = attachment.composition_range.last_text;
   EXPECT_EQ(highlighted_surface, L"科");
@@ -6395,8 +6416,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ExternalReplacementDropsQueuedCandidateObservat
   candidate.surface = "蚊";
   candidate.reading = "か";
   candidate.source = "test";
-  h.service.set_cached_candidates_for_test({candidate});
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_EQ(h.context.document->text, L"蚊");
 
   h.context.reject_write = true;
@@ -6420,8 +6441,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationPostsQueuedCandidateObservat
   candidate.surface = "蚊";
   candidate.reading = "か";
   candidate.source = "test";
-  h.service.set_cached_candidates_for_test({candidate});
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_EQ(h.context.document->text, L"蚊");
 
   h.context.reject_write = true;
@@ -6447,8 +6468,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusKeepsDisplayedCandi
   azookey::ipc::CandidateField candidate;
   candidate.surface = "蚊";
   candidate.reading = "か";
-  h.service.set_cached_candidates_for_test({candidate});
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_EQ(h.context.document->text, L"蚊");
   const int writes = h.context.document->writes;
 
@@ -6514,8 +6535,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusRestoresClearedCand
   azookey::ipc::CandidateField candidate;
   candidate.surface = "蚊";
   candidate.reading = "か";
-  h.service.set_cached_candidates_for_test({candidate});
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
   ASSERT_EQ(h.context.document->text, L"蚊");
 
   ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
@@ -6770,8 +6791,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSe
   azookey::ipc::CandidateField candidate;
   candidate.surface = "蚊";
   candidates.push_back(candidate);
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
 
   composition.AddRef();
@@ -6804,8 +6825,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
 
   h.context.request_result = TF_E_LOCKED;
@@ -6849,8 +6870,8 @@ TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCom
   candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
 
   composition.AddRef();
@@ -7178,8 +7199,8 @@ void CommitOneCandidate(TextServiceHarness& h) {
   host_candidates[0].reading = "かな";
   host_candidates[0].surface = "仮名";
   host_candidates[0].source = "dictionary";
-  h.service.set_cached_candidates_for_test(std::move(host_candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(host_candidates)); }));
   h.service.set_selected_candidate_index_for_test(0);
   FakeCompositionAttachment attachment(h);
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
@@ -8329,7 +8350,8 @@ TEST(TsfTipTypoCorrectionTest, CorrectedReadingAppliesBeforeSpaceAndKeepsCandida
   ConfigureTypoHarness(h);
   TypeTypoRomaji(h, "KANI");
   h.service.set_corrected_candidates_for_test("かに", "かみ", CorrectedTypoCandidates());
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(CorrectedTypoCandidates()); }));
   EXPECT_EQ(h.service.preedit_kana_, "かみ");
   ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
@@ -8460,7 +8482,8 @@ TEST(TsfTipTypoCorrectionTest, CorrectedReadingAllocationFailureRollsBackAndCanR
   EXPECT_EQ(h.service.preedit_kana_, "かに");
   EXPECT_EQ(h.service.input_state_for_test().Reading(), "かに");
   EXPECT_EQ(h.context.document->text, L"かに");
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(CorrectedTypoCandidates()); }));
   EXPECT_EQ(h.service.preedit_kana_, "かみ");
   EXPECT_EQ(h.service.input_state_for_test().Reading(), "かみ");
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
@@ -8750,8 +8773,8 @@ TEST(TsfTipUnicodeInputTest, CtrlShiftUFromCandidatesCommitsAndObservesTheSelect
   candidates[1].surface = "科";
   candidates[1].reading = "か";
   candidates[1].source = "dictionary";
-  h.service.set_cached_candidates_for_test(std::move(candidates));
-  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
   ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting);
 
   PressCtrlShift(h, 'U');

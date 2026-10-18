@@ -2725,9 +2725,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (supported && input_state_.kind() == core::InputStateKind::Idle && has_preedit)
         input_state_ = input_state_.WithComposition(preedit_kana_, romaji_);
       if (supported && (!cand_visible || input_state_.kind() == core::InputStateKind::Selecting)) {
+        // The per-key live cache never opens the window: Space asks for the
+        // window query instead (DEV-1653).
+        const bool opens_window = event.action == UserAction::StartConversion ||
+                                  event.action == UserAction::NextCandidate ||
+                                  event.action == UserAction::PrevCandidate;
         if ((input_state_.kind() == core::InputStateKind::Composing ||
              input_state_.kind() == core::InputStateKind::Previewing) &&
-            !input_state_.awaiting_candidates()) {
+            !input_state_.awaiting_candidates() && !opens_window) {
           auto cached = CoreCandidatesFromCache();
           if (!cached.empty()) {
             const HRESULT cache_hr = ApplyInputStateResult(
@@ -5595,7 +5600,13 @@ void TextService::ServeConnection() {
                    {{"request_id", req_id}});
       }
 
-      if (emoji_trigger.empty()) response_candidates = BuildLocalFallbackCandidates(reading);
+      // A late window query (live = false) falls back to the per-key live answer
+      // for the same reading before the TIP-local kana (DEV-1653).
+      if (emoji_trigger.empty())
+        response_candidates =
+            !live && live_prefetch_reading_ == reading && !live_prefetch_candidates_.empty()
+                ? live_prefetch_candidates_
+                : BuildLocalFallbackCandidates(reading);
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -5665,6 +5676,10 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
+      if (live && !is_batch && emoji_trigger.empty()) {
+        live_prefetch_reading_ = reading;
+        live_prefetch_candidates_ = response_candidates;
+      }
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
     }
@@ -7086,10 +7101,12 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
       candidate_window_show_pending_ = input_state_.awaiting_candidates();
     }
     if (!IsStandalonePunctuation(query->reading)) {
-      if (input_state_.live_conversion() && !input_state_.awaiting_candidates())
+      // The window query asks for the full list (live = false): typo
+      // suggestions, English candidates and the n-best (DEV-1653).
+      if (input_state_.live_conversion() && !query->for_window)
         PostQueryLiveConversion(context, query->reading);
       else
-        PostQueryCandidates(context, query->reading);
+        PostQueryCandidates(context, query->reading, !query->for_window);
     }
   } else if (std::holds_alternative<core::PlayBeep>(action)) {
     PlayBeep();
@@ -7288,6 +7305,13 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       romaji_ = input_state_.pending_romaji();
       selected_candidate_idx_ = static_cast<int>(input_state_.selected_index());
       if (input_state_.kind() != core::InputStateKind::Selecting) shown_candidates_.clear();
+    }
+    // Standalone punctuation never asks the Host: the fixed local candidates the
+    // QueryCandidates action stored answer the window query at once.
+    if (input_state_.awaiting_candidates() && IsStandalonePunctuation(input_state_.Reading())) {
+      core_action_in_progress_ = false;
+      return ApplyInputStateResult(context,
+                                   input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
     }
     if (input_state_.awaiting_candidates() && IpcHostUnavailable()) {
       const std::string reading = input_state_.Reading();

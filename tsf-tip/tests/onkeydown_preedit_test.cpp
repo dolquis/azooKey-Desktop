@@ -7105,6 +7105,52 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiv
   h.service.composition_ = nullptr;
 }
 
+// DEV-1637: Excel moves focus to the cell editor's document after the first
+// key of a fast `kyou` on an unedited cell. The romaji still pending at the
+// switch must not land in the old document as "k"; the rest of the word
+// continues it in the new one.
+namespace {
+void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji) {
+  DocumentPreeditHarness h;
+  if (batch_romaji) h.service.set_batch_romaji_options_for_test(true);
+  FakeDocumentMgr grid_document;
+  FakeDocumentMgr cell_document;
+  DocumentContext cell;
+  cell.run_edit_session = true;
+  grid_document.context_ = &h.context;
+  h.context.document_mgr_ = &grid_document;
+  cell_document.context_ = &cell;
+  cell.document_mgr_ = &cell_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  EXPECT_EQ(h.service.OnSetFocus(&cell_document, &grid_document), S_OK);
+
+  for (const WPARAM key : {WPARAM{'Y'}, WPARAM{'O'}, WPARAM{'U'}}) {
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    EXPECT_EQ(h.service.OnTestKeyDown(&cell, key, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+    eaten = FALSE;
+    EXPECT_EQ(h.service.OnKeyDown(&cell, key, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+  }
+
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.preedit_kana_, "\xE3\x81\x8D\xE3\x82\x87\xE3\x81\x86");
+  EXPECT_EQ(cell.document->text, L"\x304D\x3087\x3046");
+}
+}  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingBatchRomajiIntoNewDocument) {
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingRomajiIntoNewDocument) {
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActiveContext) {
   FakeDocumentMgr focused_document;
   FakeDocumentMgr background_document;

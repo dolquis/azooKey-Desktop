@@ -1349,6 +1349,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
 | `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
 | `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
+| `punctuationConversion` | enum `off`/`commit` | `off` | 入力 | DEV-1638 | 即時 | `tsf-deep-integration-spec.md` §3.5.1 |
 | `dynamicPunctuation` | bool | `false` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
 | `dynamicPunctuationStyle` | enum `ja`/`fullwidth_latin` | `ja` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
 | `dynamicPunctuationStability` | enum `onPause`/`eager` | `onPause` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |

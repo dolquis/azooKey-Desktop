@@ -773,6 +773,8 @@ post して Enter のキーを保留し、応答の到着・タイムアウト�
 の確定（Ctrl+Shift+U など）のとき、secure な文脈のとき（最終要求の本文を Host へ出さないという
 privacy 上の意図）、候補ウィンドウの表示中・確定処理中・Host 不通・標準句読点のみの preedit のとき、
 タイマーを作れないとき。
+`punctuationConversion = commit` の句読点キー（`docs/tsf-deep-integration-spec.md` §3.5.1）も最終要求を送らない。
+押した句読点が文末を決めるため、表示中の surface の末尾にある自動句読点の文節を外し、押した句読点に置き換えて確定する。
 
 ### 7.4 確定観測の整合（学習分離 / multi-segment commit）
 

@@ -7105,65 +7105,6 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiv
   h.service.composition_ = nullptr;
 }
 
-// DEV-1637: Excel moves focus to the cell editor's document after the first
-// key of a fast `kyou` on an unedited cell. The romaji still pending at the
-// switch must not land in the old document as "k"; the rest of the word
-// continues it in the new one. Without `composition_started`, the
-// asynchronous preedit session for the first key has not run yet when focus
-// moves.
-namespace {
-void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji, bool composition_started) {
-  DocumentPreeditHarness h;
-  if (batch_romaji) h.service.set_batch_romaji_options_for_test(true);
-  FakeDocumentMgr grid_document;
-  FakeDocumentMgr cell_document;
-  DocumentContext cell;
-  cell.run_edit_session = true;
-  grid_document.context_ = &h.context;
-  h.context.document_mgr_ = &grid_document;
-  cell_document.context_ = &cell;
-  cell.document_mgr_ = &cell_document;
-
-  h.context.skip_write_callback = !composition_started;
-  EXPECT_TRUE(h.Press('K'));
-  ASSERT_TRUE(h.service.has_active_context_for_test());
-  ASSERT_EQ(h.service.composition_ != nullptr, composition_started);
-  h.context.skip_write_callback = false;
-
-  EXPECT_EQ(h.service.OnSetFocus(&cell_document, &grid_document), S_OK);
-
-  for (const WPARAM key : {WPARAM{'Y'}, WPARAM{'O'}, WPARAM{'U'}}) {
-    h.keyboard_state.Reapply();
-    BOOL eaten = FALSE;
-    EXPECT_EQ(h.service.OnTestKeyDown(&cell, key, 0, &eaten), S_OK);
-    EXPECT_TRUE(eaten);
-    eaten = FALSE;
-    EXPECT_EQ(h.service.OnKeyDown(&cell, key, 0, &eaten), S_OK);
-    EXPECT_TRUE(eaten);
-  }
-
-  EXPECT_EQ(h.context.document->text, L"");
-  EXPECT_EQ(h.service.preedit_kana_, "\xE3\x81\x8D\xE3\x82\x87\xE3\x81\x86");
-  EXPECT_EQ(cell.document->text, L"\x304D\x3087\x3046");
-}
-}  // namespace
-
-TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingBatchRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true, /*composition_started=*/true);
-}
-
-TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false, /*composition_started=*/true);
-}
-
-TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesUnshownBatchRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true, /*composition_started=*/false);
-}
-
-TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesUnshownRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false, /*composition_started=*/false);
-}
-
 TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActiveContext) {
   FakeDocumentMgr focused_document;
   FakeDocumentMgr background_document;
@@ -7877,6 +7818,197 @@ class PrivateScopeProperty final : public ITfReadOnlyProperty {
   PrivateInputScope scope;
 };
 }  // namespace
+
+// --- DEV-1637: input typed before a document switch ---
+// Excel starts editing an unedited cell on its first key and moves focus to
+// the cell editor's document. A fast `kyou` showed `kよう`: the switch
+// committed the pending "k" to the old document as raw romaji.
+
+namespace {
+const char kKyouKana[] = "\xE3\x81\x8D\xE3\x82\x87\xE3\x81\x86";
+const char kYouKana[] = "\xE3\x82\x88\xE3\x81\x86";
+const wchar_t kKyouText[] = L"\x304D\x3087\x3046";
+const wchar_t kYouText[] = L"\x3088\x3046";
+
+class DocumentSwitch {
+ public:
+  explicit DocumentSwitch(bool batch_romaji) {
+    if (batch_romaji) h.service.set_batch_romaji_options_for_test(true);
+    Bind(grid_document, h.context);
+    Bind(cell_document, cell);
+    Bind(dialog_document, dialog);
+  }
+
+  // Without `shown`, the preedit session for the first key is still queued
+  // when focus moves, so no document has shown the "k".
+  void TypeFirstKey(bool shown) {
+    h.context.skip_write_callback = !shown;
+    EXPECT_TRUE(h.Press('K'));
+    EXPECT_EQ(h.service.composition_ != nullptr, shown);
+    h.context.skip_write_callback = false;
+  }
+
+  void Type(DocumentContext& context, std::initializer_list<WPARAM> keys, bool eaten = true) {
+    for (const WPARAM key : keys) {
+      h.keyboard_state.Reapply();
+      BOOL test_eaten = FALSE;
+      EXPECT_EQ(h.service.OnTestKeyDown(&context, key, 0, &test_eaten), S_OK);
+      EXPECT_EQ(test_eaten != FALSE, eaten) << key;
+      BOOL key_eaten = FALSE;
+      EXPECT_EQ(h.service.OnKeyDown(&context, key, 0, &key_eaten), S_OK);
+      EXPECT_EQ(key_eaten != FALSE, eaten) << key;
+    }
+  }
+
+  // Declared before the harness so they outlive its Deactivate.
+  FakeDocumentMgr grid_document;
+  FakeDocumentMgr cell_document;
+  FakeDocumentMgr dialog_document;
+  DocumentContext cell;
+  DocumentContext dialog;
+  DocumentPreeditHarness h;
+
+ private:
+  static void Bind(FakeDocumentMgr& document, DocumentContext& context) {
+    document.context_ = &context;
+    context.document_mgr_ = &document;
+    context.run_edit_session = true;
+  }
+};
+}  // namespace
+
+TEST(TsfTipDocumentSwitchTest, UnshownInputContinuesInTheFocusedDocument) {
+  for (const bool batch_romaji : {true, false}) {
+    SCOPED_TRACE(batch_romaji);
+    DocumentSwitch s(batch_romaji);
+    s.TypeFirstKey(/*shown=*/false);
+
+    EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+    s.Type(s.cell, {'Y', 'O', 'U'});
+
+    EXPECT_EQ(s.h.context.document->text, L"");
+    EXPECT_EQ(s.h.service.preedit_kana_, kKyouKana);
+    EXPECT_EQ(s.cell.document->text, kKyouText);
+  }
+}
+
+// Spec section 4.3: a composition already on screen commits on focus loss.
+TEST(TsfTipDocumentSwitchTest, ShownCompositionStillCommitsToTheOldDocument) {
+  for (const bool batch_romaji : {true, false}) {
+    SCOPED_TRACE(batch_romaji);
+    DocumentSwitch s(batch_romaji);
+    s.TypeFirstKey(/*shown=*/true);
+
+    EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+    s.Type(s.cell, {'Y', 'O', 'U'});
+
+    EXPECT_EQ(s.h.context.document->text, L"k");
+    EXPECT_EQ(s.h.service.preedit_kana_, kYouKana);
+    EXPECT_EQ(s.cell.document->text, kYouText);
+  }
+}
+
+TEST(TsfTipDocumentSwitchTest, KeyboardDisabledDocumentDropsCarriedInput) {
+  ChromiumCompartmentMgr compartments;
+  compartments.keyboard_disabled.value = 1;
+  compartments.empty_context.value = 1;
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.cell.compartment_mgr = &compartments;
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Type(s.cell, {'Y', 'O', 'U'}, /*eaten=*/false);
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, L"");
+  EXPECT_EQ(s.h.service.preedit_kana_, "");
+
+  // Nothing is left to surface when a normal document is typed into next.
+  s.Type(s.dialog, {'Y', 'O', 'U'});
+  EXPECT_EQ(s.dialog.document->text, kYouText);
+}
+
+TEST(TsfTipDocumentSwitchTest, PasswordDocumentDropsCarriedInput) {
+  PrivateScopeProperty password;
+  password.scope.value = IS_PASSWORD;
+  DocumentSwitch s(/*batch_romaji=*/true);
+  s.cell.input_scope_property = &password;
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Type(s.cell, {'Y', 'O', 'U'});
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.h.service.preedit_kana_, kYouKana);
+  EXPECT_EQ(s.cell.document->text, kYouText);
+}
+
+TEST(TsfTipDocumentSwitchTest, KeyInAnotherDocumentDropsCarriedInput) {
+  DocumentSwitch s(/*batch_romaji=*/true);
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Type(s.dialog, {'Y', 'O', 'U'});
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, L"");
+  EXPECT_EQ(s.dialog.document->text, kYouText);
+}
+
+TEST(TsfTipDocumentSwitchTest, SecondSwitchBeforeAnyKeyDropsCarriedInput) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.dialog_document, &s.cell_document), S_OK);
+  s.Type(s.dialog, {'Y', 'O', 'U'});
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, L"");
+  EXPECT_EQ(s.dialog.document->text, kYouText);
+}
+
+// Focus leaving the thread (another app) carries nothing; the existing commit
+// to the old document stays.
+TEST(TsfTipDocumentSwitchTest, FocusLeavingTheAppDoesNotCarryInput) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(nullptr, &s.grid_document), S_OK);
+
+  EXPECT_EQ(s.h.context.document->text, L"k");
+  s.Type(s.dialog, {'Y', 'O', 'U'});
+  EXPECT_EQ(s.dialog.document->text, kYouText);
+}
+
+// The commit after a carry resolves privacy for the document it lands in: an
+// IS_PRIVATE cell withholds learning although the old document allowed it.
+TEST(TsfTipDocumentSwitchTest, CarriedInputCommitsWithTheNewDocumentsPrivacy) {
+  for (const bool private_cell : {false, true}) {
+    SCOPED_TRACE(private_cell);
+    PrivateScopeProperty private_scope;
+    DocumentSwitch s(/*batch_romaji=*/false);
+    if (private_cell) s.cell.input_scope_property = &private_scope;
+    s.h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    s.TypeFirstKey(/*shown=*/false);
+
+    EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+    s.Type(s.cell, {'Y', 'O', 'U', VK_SPACE});
+    ASSERT_EQ(s.h.service.preedit_kana_, kKyouKana);
+    std::vector<azookey::ipc::CandidateField> candidates(1);
+    candidates[0].reading = kKyouKana;
+    candidates[0].surface = "\xE4\xBB\x8A\xE6\x97\xA5";
+    candidates[0].source = "dictionary";
+    s.h.service.set_cached_candidates_for_test(std::move(candidates));
+    s.h.service.show_candidate_window_from_cache_for_test();
+    s.h.service.set_selected_candidate_index_for_test(0);
+    EXPECT_EQ(s.h.service.commit_selected_for_test(&s.cell), S_OK);
+
+    const auto observation = s.h.service.last_queued_commit_observation_for_test();
+    EXPECT_EQ(observation.has_value(), !private_cell);
+    if (observation) EXPECT_EQ(observation->reading, kKyouKana);
+  }
+}
 
 TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
   TextServiceHarness h;

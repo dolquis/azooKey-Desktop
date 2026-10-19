@@ -2092,6 +2092,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         return S_OK;
       }
     }
+    ResolveCarriedInput(context);
 
     // An app-disabled context (Chromium's password field) is not ours to
     // convert: TSF still calls the key sinks, so leave every key to the app.
@@ -2347,6 +2348,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
       }
     }
+    ResolveCarriedInput(context);
     if (azookey::tsf::IsContextKeyboardDisabled(context)) {
       LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
       return S_OK;
@@ -3348,12 +3350,19 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     const bool had_active_context = active_context_ != nullptr;
     const bool had_composition = composition_ != nullptr;
     const uint64_t pending_before = KeyPathPendingLength(batch_raw_romaji_, preedit_kana_);
+    const bool carry_input = CanCarryUnshownInput(pdimFocus);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
-                            LifecycleCleanupFailurePolicy::PreserveComposition);
+                            LifecycleCleanupFailurePolicy::PreserveComposition, carry_input);
+    if (carry_input) {
+      pdimFocus->AddRef();
+      carried_input_document_ = pdimFocus;
+    }
     if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
       try {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
-                   {{"had_active_context", had_active_context}, {"secure", true}});
+                   {{"had_active_context", had_active_context},
+                    {"secure", true},
+                    {"carried", carry_input}});
       } catch (...) {
       }
     } else if (log_key_path) {
@@ -3364,7 +3373,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
                     {"composition_before", had_composition},
                     {"pending_before", pending_before},
                     {"composition_after", composition_ != nullptr},
-                    {"pending_after", KeyPathPendingLength(batch_raw_romaji_, preedit_kana_)}});
+                    {"pending_after", KeyPathPendingLength(batch_raw_romaji_, preedit_kana_)},
+                    {"carried", carry_input}});
       } catch (...) {
       }
     }
@@ -4101,29 +4111,35 @@ void TextService::ClearTextStateForLifecycle() {
   ClearCommitContext();
 }
 
-bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
-  if (!document_mgr || !active_context_) return false;
+namespace {
+bool ContextBelongsToDocumentMgr(ITfContext* target, ITfDocumentMgr* document_mgr) {
+  if (!document_mgr || !target) return false;
 
-  ITfDocumentMgr* active_document_mgr = nullptr;
-  if (SUCCEEDED(active_context_->GetDocumentMgr(&active_document_mgr)) && active_document_mgr) {
-    const bool owns_active_context = SameComIdentity(active_document_mgr, document_mgr);
-    active_document_mgr->Release();
-    if (owns_active_context) return true;
+  ITfDocumentMgr* target_document_mgr = nullptr;
+  if (SUCCEEDED(target->GetDocumentMgr(&target_document_mgr)) && target_document_mgr) {
+    const bool owns_target = SameComIdentity(target_document_mgr, document_mgr);
+    target_document_mgr->Release();
+    if (owns_target) return true;
   }
 
   ITfContext* context = nullptr;
   if (SUCCEEDED(document_mgr->GetTop(&context)) && context) {
-    const bool is_active_context = SameComIdentity(context, active_context_);
+    const bool is_target = SameComIdentity(context, target);
     context->Release();
-    if (is_active_context) return true;
+    if (is_target) return true;
   }
   context = nullptr;
   if (SUCCEEDED(document_mgr->GetBase(&context)) && context) {
-    const bool is_active_context = SameComIdentity(context, active_context_);
+    const bool is_target = SameComIdentity(context, target);
     context->Release();
-    if (is_active_context) return true;
+    if (is_target) return true;
   }
   return false;
+}
+}  // namespace
+
+bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
+  return ContextBelongsToDocumentMgr(active_context_, document_mgr);
 }
 
 bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
@@ -4196,7 +4212,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
 }
 
 void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
-                                          LifecycleCleanupFailurePolicy failure_policy) {
+                                          LifecycleCleanupFailurePolicy failure_policy,
+                                          bool keep_unshown_input) {
   ResetTypoTracking();
   // A commit finished here, now or by a later edit session, is forced by the
   // focus or lifecycle loss and must not reopen the undo window.
@@ -4217,8 +4234,13 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
   CancelPendingQueriesForLifecycle();
 
   ITfContext* cleanup_context = context ? context : active_context_;
-  const bool lifecycle_text_committed = RequestLifecycleCommitOrEndComposition(cleanup_context);
-  if (lifecycle_text_committed) {
+  if (carried_input_document_) {
+    // Input carried over a document switch was never shown anywhere, so a
+    // second loss before any key arrived drops it instead of committing it.
+    DropCarriedInput();
+  } else if (keep_unshown_input) {
+    // The caller carries the input to the next document (DEV-1637).
+  } else if (RequestLifecycleCommitOrEndComposition(cleanup_context)) {
     ClearTextStateForLifecycle();
   } else {
     if (failure_policy == LifecycleCleanupFailurePolicy::PreserveComposition) {
@@ -4243,6 +4265,48 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
       active_context_ = nullptr;
     }
   }
+}
+
+// DEV-1637: Excel starts editing a cell on its first key and moves focus to
+// the cell editor's document before the preedit session for that key runs.
+// Input no document has shown yet has nothing to commit (spec section 4.2), so
+// it moves to the focused document instead of landing in the old one as raw
+// romaji. A composition already on screen still commits (section 4.3).
+bool TextService::CanCarryUnshownInput(ITfDocumentMgr* focus) const {
+  if (!focus || composition_ || committing_ || bracket_composition_ || carried_input_document_)
+    return false;
+  if (!terminated_composition_surface_.empty() || emoji_mode_ != EmojiMode::Inactive ||
+      batch_query_in_progress_ || !shown_batch_segments_.empty() || candidate_ui_.IsShowing())
+    return false;
+  const auto kind = input_state_.kind();
+  if (kind != core::InputStateKind::Idle && kind != core::InputStateKind::Composing) return false;
+  return !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending();
+}
+
+// The first key after the switch keeps the carried input only in the document
+// it moved to, with the keyboard open there, and never in a field that is
+// itself secure (a password scope or an app-disabled keyboard). Secure mode
+// for the whole app covers both documents alike and does not drop it; the
+// commit resolves privacy for the new context as usual.
+void TextService::ResolveCarriedInput(ITfContext* context) {
+  if (!carried_input_document_) return;
+  const bool keep = ContextBelongsToDocumentMgr(context, carried_input_document_) &&
+                    keyboard_open_ && !alnum_mode_ &&
+                    !EvaluateInputGate(context, client_id_, std::nullopt, true).secure;
+  if (keep) {
+    carried_input_document_->Release();
+    carried_input_document_ = nullptr;
+  } else {
+    DropCarriedInput();
+  }
+}
+
+void TextService::DropCarriedInput() {
+  if (carried_input_document_) {
+    carried_input_document_->Release();
+    carried_input_document_ = nullptr;
+  }
+  ClearTextStateForLifecycle();
 }
 
 // --- Commit helpers (M5) ---

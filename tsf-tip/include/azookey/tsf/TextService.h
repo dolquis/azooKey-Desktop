@@ -250,6 +250,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // TfGuidAtoms for DisplayAttributeKind, registered on first use.
   TfGuidAtom display_attribute_atoms_[kDisplayAttributeKindCount]{};
   bool terminated_focus_cleanup_pending_{false};
+  // DEV-1637: the document that input typed before a document switch, and
+  // never shown in the old one, moved to. The next key decides whether the
+  // input continues there.
+  ITfDocumentMgr* carried_input_document_{nullptr};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
   bool committing_{false};
@@ -1313,7 +1317,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void LogKeyboardOpenState(std::string_view event, std::string_view source,
                             bool open_before) const noexcept;
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
-                               LifecycleCleanupFailurePolicy failure_policy);
+                               LifecycleCleanupFailurePolicy failure_policy,
+                               bool keep_unshown_input = false);
+  bool CanCarryUnshownInput(ITfDocumentMgr* focus) const;
+  void ResolveCarriedInput(ITfContext* context);
+  void DropCarriedInput();
 
   // M6: enqueue a CommitObservation to the IPC worker.
   void PostCommitObservation(const std::string& reading, const ipc::CandidateField& chosen,

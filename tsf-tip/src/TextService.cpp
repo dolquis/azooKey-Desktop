@@ -4876,9 +4876,9 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
       handshake_token_missing_logged_at_ = now;
     } else if (now - handshake_token_missing_logged_at_ >= kMissingTokenSummaryInterval) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable",
-                 {{"attempts_since_last_log", static_cast<uint64_t>(
-                                                  handshake_token_missing_count_ -
-                                                  handshake_token_missing_logged_count_)}});
+                 {{"attempts_since_last_log",
+                   static_cast<uint64_t>(handshake_token_missing_count_ -
+                                         handshake_token_missing_logged_count_)}});
       handshake_token_missing_logged_at_ = now;
     } else {
       return false;

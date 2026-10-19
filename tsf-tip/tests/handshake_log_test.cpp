@@ -5,8 +5,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>

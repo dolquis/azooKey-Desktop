@@ -2107,9 +2107,11 @@ stale 化する。未送信または接続断後に再武装された pending �
   - `Health` の送信失敗や監視中の切断は `ipc_health_send_failed` を記録し、`connection_lost` として
     再接続へ戻す。これにより、idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 - 劣化判定は処理種別ごとの deadline 超過を共通に数える。`Health` の無応答と
-  `QueryCandidates` の deadline 超過（§8.5.2 の fast 150ms）はどちらも 1 回の超過として
-  `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から `Degraded` へ遷移する
-  （`response_deadline_exceeded`）。入力し続けて idle にならない間も、この経路で劣化を判定する。
+  `QueryCandidates` の deadline 超過（§8.5.2 の打鍵ごと・ライブ変換 150ms、候補窓用 750ms）は
+  どちらも 1 回の超過として `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から
+  `Degraded` へ遷移する（`response_deadline_exceeded`）。入力し続けて idle にならない間も、
+  この経路で劣化を判定する。TIP が `Cancel` した候補窓用の要求（新しい要求や確定による。§8.5.2）は、
+  `Cancel` が main pipe 経由になって deadline まで待った場合も、この回数に含めない。
   一括変換の deadline 超過は接続を切って再接続へ戻すため、この回数には含めない。
 - `Health`、`QueryCandidates`、一括変換、設定再読込の Handshake のいずれかに応答が返った時点で、
   連続回数を 0 に戻し、`Degraded` なら `Ready` へ戻す（`response_restored`）。`Health` の
@@ -2178,7 +2180,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 
 | From | To | トリガ | 駆動 timeout / 閾値 |
 |---|---|---|---|
-| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` 150ms の deadline 超過が連続 2 回（§8.3） |
+| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates`（打鍵ごと 150ms、候補窓用 750ms）の deadline 超過が連続 2 回（§8.3） |
 | `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 | Model load 30s |
 | `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake 受理） | exponential backoff（§8.3） |
 | `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` または `UpdateConfig` によるパス付きの再ロード開始（完了ではない） | Model load 30s |

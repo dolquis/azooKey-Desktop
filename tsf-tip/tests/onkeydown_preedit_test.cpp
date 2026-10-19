@@ -7108,9 +7108,11 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiv
 // DEV-1637: Excel moves focus to the cell editor's document after the first
 // key of a fast `kyou` on an unedited cell. The romaji still pending at the
 // switch must not land in the old document as "k"; the rest of the word
-// continues it in the new one.
+// continues it in the new one. Without `composition_started`, the
+// asynchronous preedit session for the first key has not run yet when focus
+// moves.
 namespace {
-void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji) {
+void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji, bool composition_started) {
   DocumentPreeditHarness h;
   if (batch_romaji) h.service.set_batch_romaji_options_for_test(true);
   FakeDocumentMgr grid_document;
@@ -7122,8 +7124,11 @@ void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji) {
   cell_document.context_ = &cell;
   cell.document_mgr_ = &cell_document;
 
+  h.context.skip_write_callback = !composition_started;
   EXPECT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.service.has_active_context_for_test());
+  ASSERT_EQ(h.service.composition_ != nullptr, composition_started);
+  h.context.skip_write_callback = false;
 
   EXPECT_EQ(h.service.OnSetFocus(&cell_document, &grid_document), S_OK);
 
@@ -7144,11 +7149,19 @@ void ExpectDocumentSwitchKeepsPendingRomaji(bool batch_romaji) {
 }  // namespace
 
 TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingBatchRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true);
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true, /*composition_started=*/true);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesPendingRomajiIntoNewDocument) {
-  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false);
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false, /*composition_started=*/true);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesUnshownBatchRomajiIntoNewDocument) {
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/true, /*composition_started=*/false);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchCarriesUnshownRomajiIntoNewDocument) {
+  ExpectDocumentSwitchKeepsPendingRomaji(/*batch_romaji=*/false, /*composition_started=*/false);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActiveContext) {

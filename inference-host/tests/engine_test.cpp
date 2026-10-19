@@ -1949,6 +1949,61 @@ TEST(InferenceEngineTest, DropMixedKanaAsciiModelCandidatesOnlyForAnAsciiReading
   EXPECT_EQ(surfaces_of(without_ascii), surfaces_of(input));
 }
 
+TEST(InferenceEngineTest, DropRepeatedUnitModelCandidatesKeepsWhatTheReadingSupports) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const auto make = [](const char* surface, CandidateSource source = CandidateSource::Model) {
+    Candidate candidate;
+    candidate.surface = surface;
+    candidate.source = source;
+    return candidate;
+  };
+  const auto surfaces_of = [](const std::vector<Candidate>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  const auto filtered = [&](std::vector<Candidate> input, const char* reading) {
+    azookey::host::DropRepeatedUnitModelCandidates(input, reading);
+    return surfaces_of(input);
+  };
+
+  // A run the reading does not hold goes: symbols, emoji, a word and a single kanji, and the
+  // order of the rest stays.
+  EXPECT_EQ(filtered({make("New!!!!!!"), make("入力"), make("病院🏥🏥🏥"), make("製品保証・・・・"),
+                      make("製製製"), make("明日明日明日"), make("ニュウリョク")},
+                     "にゅうりょく"),
+            (std::vector<std::string>{"入力", "ニュウリョク"}));
+  // Ordinary candidates, a doubled word and a word with 々 are not repeats of three.
+  EXPECT_EQ(
+      filtered({make("県級"), make("研修"), make("黄疸"), make("明日明日"), make("明日明々"),
+                make("人々"), make("あはは")},
+               "あしたあした"),
+      (std::vector<std::string>{"県級", "研修", "黄疸", "明日明日", "明日明々", "人々", "あはは"}));
+  // The same run in the reading is kept, and hiragana in the reading match katakana.
+  EXPECT_EQ(filtered({make("わははは!!!"), make("あああ"), make("プルルル"), make("ｗｗｗ")},
+                     "わははは!!!ぷるるるＷＷＷあああ"),
+            (std::vector<std::string>{"わははは!!!", "あああ", "プルルル", "ｗｗｗ"}));
+  // Numbers with separators, an address and an emoji join sequence repeat legitimately.
+  EXPECT_EQ(
+      filtered({make("1,000,000,000"), make("192.0.0.0"), make("10:00:00:00"),
+                make("👨\xE2\x80\x8D👨\xE2\x80\x8D👨\xE2\x80\x8D👦"), make(",,,,"), make("....")},
+               "いちおく"),
+      (std::vector<std::string>{"1,000,000,000", "192.0.0.0", "10:00:00:00",
+                                "👨\xE2\x80\x8D👨\xE2\x80\x8D👨\xE2\x80\x8D👦"}));
+  // Digits alone are a number, and text that is not valid UTF-8 is not judged.
+  EXPECT_EQ(filtered({make("10000"), make("1000"), make("!!!!")}, "いちまん"),
+            (std::vector<std::string>{"10000", "1000"}));
+  EXPECT_EQ(filtered({make("!!!!\xEE\x7F")}, "かんたん"),
+            (std::vector<std::string>{"!!!!\xEE\x7F"}));
+  EXPECT_EQ(filtered({make("!!!!")}, "\xEE\x7F"), (std::vector<std::string>{"!!!!"}));
+  // Candidates of another source are not judged.
+  EXPECT_EQ(filtered({make("!!!!", CandidateSource::UserDictionary),
+                      make("製製製", CandidateSource::SystemDictionary), make("!!!!")},
+                     "かんたん"),
+            (std::vector<std::string>{"!!!!", "製製製"}));
+}
+
 TEST(InferenceEngineTest, ZenzaiBlendOfKanaAndLettersIsDroppedForAnAsciiReadingOnly) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -2340,6 +2395,19 @@ TEST(InferenceEngineTest, LiveConversionDropsPrivateUseAndMixedScriptGenerations
         nullptr, {});
     EXPECT_FALSE(engine.QueryLiveConversion("きょう", "", kNowBase, nullptr));
   }
+}
+
+TEST(InferenceEngineTest, LiveConversionDropsRepeatedUnitGenerations) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  azookey::host::InferenceEngine engine(
+      std::make_unique<ScriptedConverter>(std::vector<Candidate>{
+          {"New!!!!!!", "にゅうりょく", 2.0, CandidateSource::Model, "model"},
+          {"入力", "にゅうりょく", 1.0, CandidateSource::Model, "model"}}),
+      nullptr, {});
+  const auto live = engine.QueryLiveConversion("にゅうりょく", "", kNowBase, nullptr);
+  ASSERT_TRUE(live);
+  EXPECT_EQ(live->surface, "入力");
 }
 
 TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {

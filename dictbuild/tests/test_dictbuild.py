@@ -129,6 +129,34 @@ class SudachiExtractTests(unittest.TestCase):
             ("ヴァイオリン", "ゔぁいおりん", "名詞-普通名詞-一般", 5000, "general"),
         ])
 
+    def test_skips_common_entries_spelled_with_a_variant_glyph(self):
+        def row(surface, normalized, pos, reading):
+            built = sudachi_row(surface, "5139", "5000", surface, pos, reading)
+            built[12] = normalized
+            return built
+
+        rows = [
+            row("硏究", "研究", "名詞,普通名詞,サ変可能", "ケンキュウ"),
+            row("研究", "研究", "名詞,普通名詞,サ変可能", "ケンキュウ"),
+            row("仁俠", "任侠", "名詞,普通名詞,一般", "ニンキョウ"),
+            row("俠", "俠", "名詞,普通名詞,一般", "キョウ"),
+            row("俠田", "侠田", "名詞,固有名詞,人名,姓", "キョウダ"),  # proper noun
+            row("塼", "塼", "名詞,普通名詞,一般", "セン"),  # no normalization evidence
+            row("長い", "長い", "形容詞,一般", "ナガイ"),
+        ]
+        variants = extract_sudachi.variant_characters(rows)
+        self.assertEqual(variants, frozenset("硏俠"))
+        self.assertEqual([entry[0] for entry in extract_sudachi.convert(rows, variants=variants)],
+                         ["研究", "俠田", "塼", "長い"])
+        self.assertEqual(len(list(extract_sudachi.convert(rows))), len(rows))
+
+    def test_variant_characters_need_equal_length_and_a_cp932_standard_form(self):
+        rows = [sudachi_row("硏究", "5139", "5000", "硏究", "名詞,普通名詞,一般", "ケンキュウ")]
+        rows[0][12] = "研究所"  # different length: the positions do not line up
+        self.assertEqual(extract_sudachi.variant_characters(rows), frozenset())
+        rows[0][12] = "硏究"
+        self.assertEqual(extract_sudachi.variant_characters(rows), frozenset())
+
     def test_rejects_unexpected_columns(self):
         with self.assertRaises(ValueError):
             list(extract_sudachi.convert([["東京", "1"]]))

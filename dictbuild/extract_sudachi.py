@@ -34,6 +34,40 @@ def is_reading(text: str) -> bool:
     return bool(text) and all(0x3041 <= ord(c) <= 0x3096 or c == "ー" for c in text)
 
 
+def is_ideograph(char: str) -> bool:
+    code = ord(char)
+    return 0x3400 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF or 0x20000 <= code <= 0x2FFFF
+
+
+def in_cp932(char: str) -> bool:
+    try:
+        char.encode("cp932")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def variant_characters(rows: Iterable[list[str]]) -> frozenset[str]:
+    """Ideographs outside CP932 that Sudachi's own normalized form replaces with a CP932 one.
+
+    Compares the surface and the normalized form of each entry, position by position, when they
+    have the same length: `硏究` -> `研究` gives `硏`, `仁俠` -> `任侠` gives `俠`. The evidence
+    comes from the lexicon itself, so no hand-kept variant table is needed.
+    """
+    found: set[str] = set()
+    for row in rows:
+        if len(row) != COLUMNS:
+            raise ValueError(f"expected {COLUMNS} columns, got {len(row)}")
+        surface, normalized = unescape(row[4]), unescape(row[12])
+        if len(surface) != len(normalized):
+            continue
+        for char, standard in zip(surface, normalized):
+            if (char != standard and is_ideograph(char) and not in_cp932(char)
+                    and is_ideograph(standard) and in_cp932(standard)):
+                found.add(char)
+    return frozenset(found)
+
+
 def category(pos: list[str]) -> str:
     if pos[1] == "固有名詞" and pos[2] == "人名":
         return "person_name"
@@ -42,9 +76,14 @@ def category(pos: list[str]) -> str:
     return "general"
 
 
-def convert(rows: Iterable[list[str]],
-            max_cost: int = DEFAULT_MAX_COST) -> Iterator[tuple[str, str, str, int, str]]:
-    """Yields (surface, reading, pos, cost, category) for rows an IME can look up by reading."""
+def convert(rows: Iterable[list[str]], max_cost: int = DEFAULT_MAX_COST,
+            variants: frozenset[str] = frozenset()) -> Iterator[tuple[str, str, str, int, str]]:
+    """Yields (surface, reading, pos, cost, category) for rows an IME can look up by reading.
+
+    A common noun, verb, or other non-proper-noun entry whose surface holds one of `variants`
+    (a variant glyph such as `硏` or `俠`, see variant_characters) is skipped. Proper nouns
+    keep theirs: `髙島屋` is spelled that way.
+    """
     for row in rows:
         if len(row) != COLUMNS:
             raise ValueError(f"expected {COLUMNS} columns, got {len(row)}")
@@ -60,6 +99,8 @@ def convert(rows: Iterable[list[str]],
                 or any(c in "\t\r\n\0\"" for c in surface)):
             continue
         pos = row[5:9]
+        if "固有名詞" not in pos and any(char in variants for char in surface):
+            continue
         yield surface, reading, "-".join(p for p in pos if p != "*"), int(row[3]), category(pos)
 
 
@@ -79,6 +120,8 @@ def read_lexicon(path: Path) -> Iterator[list[str]]:
 def write_tsv(lexicons: list[Path], revision: str, output: Path,
               max_cost: int = DEFAULT_MAX_COST) -> int:
     """Writes the intermediate TSV with its attribution header; returns the row count."""
+    variants = frozenset().union(*(variant_characters(read_lexicon(lexicon))
+                                   for lexicon in lexicons))
     count = 0
     with output.open("w", encoding="utf-8", newline="\n") as out:
         out.write(f"# Derived from SudachiDict {revision} raw lexicon "
@@ -88,7 +131,7 @@ def write_tsv(lexicons: list[Path], revision: str, output: Path,
                   "# Attribution: see THIRD_PARTY_LICENSES and the generated ThirdPartyNotices.txt.\n"
                   "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n")
         for lexicon in lexicons:
-            for surface, reading, pos, cost, kind in convert(read_lexicon(lexicon), max_cost):
+            for surface, reading, pos, cost, kind in convert(read_lexicon(lexicon), max_cost, variants):
                 out.write(f"{surface}\t{reading}\t{pos}\t{cost}\t\t{kind}\t{SOURCE_ID}\n")
                 count += 1
     return count

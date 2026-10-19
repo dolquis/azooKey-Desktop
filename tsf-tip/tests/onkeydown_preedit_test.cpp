@@ -8065,6 +8065,17 @@ class DocumentSwitch {
     h.context.skip_write_callback = false;
   }
 
+  // With `ungranted`, the preedit session the switch requests there is never
+  // run, as when the app does not grant it before the next event.
+  void Switch(FakeDocumentMgr* to, FakeDocumentMgr* from, DocumentContext* ungranted = nullptr) {
+    if (ungranted) ungranted->defer_write_callback = true;
+    EXPECT_EQ(h.service.OnSetFocus(to, from), S_OK);
+    if (!ungranted) return;
+    ungranted->defer_write_callback = false;
+    for (ITfEditSession* session : std::exchange(ungranted->deferred_writes, {}))
+      session->Release();
+  }
+
   void Type(DocumentContext& context, std::initializer_list<WPARAM> keys, bool eaten = true) {
     for (const WPARAM key : keys) {
       h.keyboard_state.Reapply();
@@ -8100,13 +8111,45 @@ TEST(TsfTipDocumentSwitchTest, UnshownInputContinuesInTheFocusedDocument) {
     DocumentSwitch s(batch_romaji);
     s.TypeFirstKey(/*shown=*/false);
 
-    EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+    s.Switch(&s.cell_document, &s.grid_document);
     s.Type(s.cell, {'Y', 'O', 'U'});
 
     EXPECT_EQ(s.h.context.document->text, L"");
     EXPECT_EQ(s.h.service.preedit_kana_, kKyouKana);
     EXPECT_EQ(s.cell.document->text, kKyouText);
   }
+}
+
+// The switch shows the carried input at once; one key left alone is on screen
+// and a later switch commits it like any composition.
+TEST(TsfTipDocumentSwitchTest, CarriedInputShowsAtTheSwitch) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.TypeFirstKey(/*shown=*/false);
+
+  s.Switch(&s.cell_document, &s.grid_document);
+  EXPECT_NE(s.h.service.composition_, nullptr);
+  EXPECT_EQ(s.cell.document->text, L"k");
+
+  s.Switch(&s.dialog_document, &s.cell_document);
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, L"k");
+  EXPECT_EQ(s.dialog.document->text, L"");
+  EXPECT_EQ(s.h.service.composition_, nullptr);
+}
+
+// Input typed in a password field is not carried out of it.
+TEST(TsfTipDocumentSwitchTest, InputFromAPasswordFieldIsNotCarried) {
+  PrivateScopeProperty password;
+  password.scope.value = IS_PASSWORD;
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.h.context.input_scope_property = &password;
+  s.TypeFirstKey(/*shown=*/false);
+
+  s.Switch(&s.cell_document, &s.grid_document);
+  s.Type(s.cell, {'Y', 'O', 'U'});
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, kYouText);
 }
 
 // Spec section 4.3: a composition already on screen commits on focus loss.
@@ -8166,7 +8209,7 @@ TEST(TsfTipDocumentSwitchTest, KeyInAnotherDocumentDropsCarriedInput) {
   DocumentSwitch s(/*batch_romaji=*/true);
   s.TypeFirstKey(/*shown=*/false);
 
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Switch(&s.cell_document, &s.grid_document, &s.cell);
   s.Type(s.dialog, {'Y', 'O', 'U'});
 
   EXPECT_EQ(s.h.context.document->text, L"");
@@ -8178,9 +8221,9 @@ TEST(TsfTipDocumentSwitchTest, SecondSwitchBeforeAnyKeyDropsCarriedInput) {
   DocumentSwitch s(/*batch_romaji=*/false);
   s.TypeFirstKey(/*shown=*/false);
 
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.dialog_document, &s.cell_document), S_OK);
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.dialog_document), S_OK);
+  s.Switch(&s.cell_document, &s.grid_document, &s.cell);
+  s.Switch(&s.dialog_document, &s.cell_document);
+  s.Switch(&s.cell_document, &s.dialog_document);
   s.Type(s.cell, {'Y', 'O', 'U'});
 
   EXPECT_EQ(s.h.context.document->text, L"");
@@ -8189,22 +8232,45 @@ TEST(TsfTipDocumentSwitchTest, SecondSwitchBeforeAnyKeyDropsCarriedInput) {
 }
 
 // The preedit session queued in the old document for the first key runs
-// after focus has moved; it must not show the carried input there.
-TEST(TsfTipDocumentSwitchTest, LateSessionInTheOldDocumentShowsNothing) {
-  DocumentSwitch s(/*batch_romaji=*/true);
+// after focus has moved, before or after the new document shows the input;
+// it must neither show nor commit the input in the old document.
+TEST(TsfTipDocumentSwitchTest, LateSessionInTheOldDocumentWritesNothing) {
+  for (const bool shown_first : {false, true}) {
+    SCOPED_TRACE(shown_first);
+    DocumentSwitch s(/*batch_romaji=*/true);
+    s.h.context.defer_write_callback = true;
+    EXPECT_TRUE(s.h.Press('K'));
+    s.h.context.defer_write_callback = false;
+    ASSERT_EQ(s.h.service.composition_, nullptr);
+
+    s.Switch(&s.cell_document, &s.grid_document, shown_first ? nullptr : &s.cell);
+    EXPECT_EQ(s.h.context.RunDeferredWrites(), S_OK);
+    EXPECT_EQ(s.h.context.document->text, L"");
+
+    s.Type(s.cell, {'Y', 'O', 'U'});
+    EXPECT_EQ(s.h.context.document->text, L"");
+    EXPECT_EQ(s.cell.document->text, kKyouText);
+  }
+}
+
+// An Enter the new document rejects leaves the commit pending; the old
+// document's late session must not commit it there.
+TEST(TsfTipDocumentSwitchTest, LateSessionInTheOldDocumentDoesNotTakeAPendingCommit) {
+  DocumentSwitch s(/*batch_romaji=*/false);
   s.h.context.defer_write_callback = true;
   EXPECT_TRUE(s.h.Press('K'));
+  EXPECT_TRUE(s.h.Press('A'));
   s.h.context.defer_write_callback = false;
-  ASSERT_EQ(s.h.service.composition_, nullptr);
 
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Switch(&s.cell_document, &s.grid_document, &s.cell);
+  s.cell.reject_write = true;
+  s.Type(s.cell, {VK_RETURN});
+  ASSERT_TRUE(s.h.service.committing_);
   EXPECT_EQ(s.h.context.RunDeferredWrites(), S_OK);
-  EXPECT_EQ(s.h.context.document->text, L"");
-  EXPECT_EQ(s.h.service.composition_, nullptr);
 
-  s.Type(s.cell, {'Y', 'O', 'U'});
   EXPECT_EQ(s.h.context.document->text, L"");
-  EXPECT_EQ(s.cell.document->text, kKyouText);
+  EXPECT_TRUE(s.h.service.committing_);
+  s.cell.reject_write = false;
 }
 
 // A key that composes nothing (Shift) leaves the input carried, so focus
@@ -8213,10 +8279,10 @@ TEST(TsfTipDocumentSwitchTest, CarriedInputStaysDroppableUntilItShows) {
   DocumentSwitch s(/*batch_romaji=*/false);
   s.TypeFirstKey(/*shown=*/false);
 
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Switch(&s.cell_document, &s.grid_document, &s.cell);
   s.Type(s.cell, {VK_SHIFT}, /*eaten=*/false);
-  EXPECT_EQ(s.h.service.OnSetFocus(nullptr, &s.cell_document), S_OK);
-  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, nullptr), S_OK);
+  s.Switch(nullptr, &s.cell_document);
+  s.Switch(&s.cell_document, nullptr);
   s.Type(s.cell, {'A'});
 
   EXPECT_EQ(s.h.context.document->text, L"");

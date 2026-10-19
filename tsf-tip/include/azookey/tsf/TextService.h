@@ -254,6 +254,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // never shown in the old one, moved to. The next key decides whether the
   // input continues there.
   ITfDocumentMgr* carried_input_document_{nullptr};
+  // The context input was last carried away from. Sessions it still has
+  // queued must not write there until the TIP edits it again.
+  const void* carried_from_context_{nullptr};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
   bool committing_{false};
@@ -1345,6 +1348,7 @@ class TextService final : public ITfTextInputProcessorEx,
                                bool keep_unshown_input = false);
   bool CanCarryUnshownInput(ITfDocumentMgr* focus) const;
   void ResolveCarriedInput(ITfContext* context);
+  void ShowCarriedInput(ITfDocumentMgr* focus);
   bool CarriesUnshownInput();
   void DropCarriedInput();
 

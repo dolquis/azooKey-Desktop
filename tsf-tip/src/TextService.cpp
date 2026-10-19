@@ -1395,6 +1395,7 @@ STDMETHODIMP TextService::Deactivate() try {
 
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
+  carried_from_context_ = nullptr;
   // Idempotent: also breaks the tracker <-> sink cycle if cleanup kept a composition.
   UnadviseCompositionMouseSink();
   candidate_ui_.Destroy();
@@ -3351,12 +3352,22 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     const bool had_active_context = active_context_ != nullptr;
     const bool had_composition = composition_ != nullptr;
     const uint64_t pending_before = KeyPathPendingLength(batch_raw_romaji_, preedit_kana_);
-    const bool carry_input = !CarriesUnshownInput() && CanCarryUnshownInput(pdimFocus);
+    bool carry_input = !CarriesUnshownInput() && CanCarryUnshownInput(pdimFocus);
+    // Input typed in a field that is itself secure never leaves it.
+    const bool drop_input =
+        carry_input && active_context_ &&
+        EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure;
+    const void* carried_from = ComIdentity(active_context_);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition, carry_input);
-    if (carry_input) {
+    if (drop_input) {
+      ClearTextStateForLifecycle();
+      carry_input = false;
+    } else if (carry_input) {
       pdimFocus->AddRef();
       carried_input_document_ = pdimFocus;
+      carried_from_context_ = carried_from;
+      ShowCarriedInput(pdimFocus);
     }
     if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
       try {
@@ -3701,6 +3712,7 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
   if (!context) return E_INVALIDARG;
   ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
   if (!edit) return E_OUTOFMEMORY;
+  if (carried_from_context_ == ComIdentity(context)) carried_from_context_ = nullptr;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
     active_context_ = context;
@@ -3735,6 +3747,7 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
 
 HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
   if (!context) return E_INVALIDARG;
+  if (carried_from_context_ == ComIdentity(context)) carried_from_context_ = nullptr;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
     active_context_ = context;
@@ -4185,6 +4198,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     commit_surface_.clear();
   }
 
+  if (carried_from_context_ == ComIdentity(context)) carried_from_context_ = nullptr;
   ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
   if (!edit) {
     preedit_kana_ = saved_preedit;
@@ -4296,6 +4310,18 @@ void TextService::ResolveCarriedInput(ITfContext* context) {
                     keyboard_open_ && !alnum_mode_ &&
                     !EvaluateInputGate(context, client_id_, std::nullopt, true).secure;
   if (!keep) DropCarriedInput();
+}
+
+// Shows the carried input in the focused document right away, so that input
+// typed once and left alone is on screen like any other preedit. When the
+// document has no context yet, or the session is not granted, the next key
+// shows it.
+void TextService::ShowCarriedInput(ITfDocumentMgr* focus) {
+  ITfContext* top = nullptr;
+  if (FAILED(focus->GetTop(&top)) || !top) return;
+  ResolveCarriedInput(top);
+  if (CarriesUnshownInput()) (void)RequestPreeditUpdate(top);
+  top->Release();
 }
 
 // The carry ends once the input shows in a composition, is committed or
@@ -8896,6 +8922,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 #endif
     // A queued normal-preedit callback must not rewrite the fixed bracket pair.
     if (service_->bracket_composition_) return S_OK;
+    // DEV-1637: a session still queued in the context input was carried away
+    // from must neither show nor commit that input there.
+    if (service_->carried_from_context_ && ComIdentity(context_) == service_->carried_from_context_)
+      return S_OK;
 
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
@@ -9032,12 +9062,6 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->pending_commit_observation_.reset();
       return S_OK;
     }
-
-    // DEV-1637: a session queued in the document the input moved away from
-    // must not show the carried input there.
-    if (service_->CarriesUnshownInput() &&
-        !ContextBelongsToDocumentMgr(context_, service_->carried_input_document_))
-      return S_OK;
 
     // Normal preedit update.
     std::string displayed_surface = service_->CurrentDisplayedPreeditSurface();

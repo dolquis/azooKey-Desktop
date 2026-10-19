@@ -656,15 +656,18 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 - 同じアプリ内で document manager が切り替わった時点で composition がまだ無い入力
   （打鍵の preedit の edit session が走る前の保留中の入力）は、どの入力先にも表示されて
   いないので旧入力先へ確定せず、切替先の document で続ける。Excel が未編集のセルへの
-  最初の打鍵でセル編集用の document へフォーカスを移す場合がこれに当たる。持ち越した
-  入力が composition として表示されるまでは、打鍵が切替先の document の context に来て、
-  そこで IME が開いていて英数モードでなく、その入力欄自体が secure（パスワードの入力
-  scope やフォーカス窓、アプリがキーボード入力を無効にした context）でないときだけ続け、
-  それ以外では捨てる。表示される前に再びフォーカスが移った場合、切替先の document が
-  破棄された場合、Deactivate でも捨てる。旧 document に積まれていた preedit の edit
-  session が後から走っても、持ち越した入力を旧 document に表示しない。アプリの外へ
-  フォーカスが移った場合（切替先の document manager が無い）は持ち越さない。確定時の
-  secure・学習の判定は、確定した入力先の context で行う。
+  最初の打鍵でセル編集用の document へフォーカスを移す場合がこれに当たる。
+  - 入力欄自体が secure（パスワードの入力 scope やフォーカス窓、アプリがキーボード入力を
+    無効にした context）なら、旧入力欄でも切替先でも持ち越さずに捨てる。
+  - 持ち越した入力は、切替の時点で切替先の document に表示を要求する。composition として
+    表示されるまでは、切替時と打鍵ごとに、その context が切替先の document のもので、
+    IME が開いていて英数モードでなく、入力欄自体が secure でないときだけ続け、それ以外では
+    捨てる。表示される前に再びフォーカスが移った場合、切替先の document が破棄された場合、
+    Deactivate でも捨てる。
+  - 旧 document に積まれていた edit session が後から走っても、TIP がその context を再び
+    編集するまでは、持ち越した入力を旧 document に表示も確定もしない。
+  - アプリの外へフォーカスが移った場合（切替先の document manager が無い）は持ち越さない。
+  - 確定時の secure・学習の判定は、確定した入力先の context で行う。
 
 ### 4.4 受け入れ条件
 

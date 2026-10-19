@@ -3323,6 +3323,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
   }
+  if (CarriesUnshownInput() && SameComIdentity(pdim, carried_input_document_)) DropCarriedInput();
   if (proofread_context_ && pdim) {
     ITfDocumentMgr* document_mgr = nullptr;
     if (SUCCEEDED(proofread_context_->GetDocumentMgr(&document_mgr)) && document_mgr) {
@@ -3350,7 +3351,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     const bool had_active_context = active_context_ != nullptr;
     const bool had_composition = composition_ != nullptr;
     const uint64_t pending_before = KeyPathPendingLength(batch_raw_romaji_, preedit_kana_);
-    const bool carry_input = CanCarryUnshownInput(pdimFocus);
+    const bool carry_input = !CarriesUnshownInput() && CanCarryUnshownInput(pdimFocus);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition, carry_input);
     if (carry_input) {
@@ -4234,9 +4235,9 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
   CancelPendingQueriesForLifecycle();
 
   ITfContext* cleanup_context = context ? context : active_context_;
-  if (carried_input_document_) {
-    // Input carried over a document switch was never shown anywhere, so a
-    // second loss before any key arrived drops it instead of committing it.
+  if (CarriesUnshownInput()) {
+    // Input carried over a document switch is still not shown anywhere, so a
+    // second loss drops it instead of committing it.
     DropCarriedInput();
   } else if (keep_unshown_input) {
     // The caller carries the input to the next document (DEV-1637).
@@ -4283,22 +4284,29 @@ bool TextService::CanCarryUnshownInput(ITfDocumentMgr* focus) const {
   return !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending();
 }
 
-// The first key after the switch keeps the carried input only in the document
-// it moved to, with the keyboard open there, and never in a field that is
-// itself secure (a password scope or an app-disabled keyboard). Secure mode
-// for the whole app covers both documents alike and does not drop it; the
-// commit resolves privacy for the new context as usual.
+// Until the carried input shows in a composition, each key keeps it only in
+// the document it moved to, with the keyboard open there, and never in a field
+// that is itself secure (a password scope or an app-disabled keyboard). Secure
+// mode for the whole app covers both documents alike and does not drop it;
+// the commit resolves privacy for the new context as usual.
 void TextService::ResolveCarriedInput(ITfContext* context) {
-  if (!carried_input_document_) return;
+  if (!CarriesUnshownInput()) return;
   const bool keep = ContextBelongsToDocumentMgr(context, carried_input_document_) &&
                     keyboard_open_ && !alnum_mode_ &&
                     !EvaluateInputGate(context, client_id_, std::nullopt, true).secure;
-  if (keep) {
-    carried_input_document_->Release();
-    carried_input_document_ = nullptr;
-  } else {
-    DropCarriedInput();
-  }
+  if (!keep) DropCarriedInput();
+}
+
+// The carry ends once the input shows in a composition, is committed or
+// becomes a bracket pair, or is erased; the usual lifecycle rules apply then.
+bool TextService::CarriesUnshownInput() {
+  if (!carried_input_document_) return false;
+  if (!composition_ && !committing_ && !bracket_composition_ &&
+      (!batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending()))
+    return true;
+  carried_input_document_->Release();
+  carried_input_document_ = nullptr;
+  return false;
 }
 
 void TextService::DropCarriedInput() {
@@ -8984,6 +8992,12 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->pending_commit_observation_.reset();
       return S_OK;
     }
+
+    // DEV-1637: a session queued in the document the input moved away from
+    // must not show the carried input there.
+    if (service_->CarriesUnshownInput() &&
+        !ContextBelongsToDocumentMgr(context_, service_->carried_input_document_))
+      return S_OK;
 
     // Normal preedit update.
     std::string displayed_surface = service_->CurrentDisplayedPreeditSurface();

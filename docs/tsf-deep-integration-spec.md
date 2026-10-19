@@ -657,12 +657,14 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
   （打鍵の preedit の edit session が走る前の保留中の入力）は、どの入力先にも表示されて
   いないので旧入力先へ確定せず、切替先の document で続ける。Excel が未編集のセルへの
   最初の打鍵でセル編集用の document へフォーカスを移す場合がこれに当たる。持ち越した
-  入力は、次の打鍵が切替先の document の context に来て、そこで IME が開いていて英数モード
-  でなく、その入力欄自体が secure（パスワードの入力 scope、アプリがキーボード入力を無効に
-  した context）でないときだけ続け、それ以外では捨てる。打鍵の前に再びフォーカスが
-  移った場合や Deactivate でも捨てる。アプリの外へフォーカスが移った場合（切替先の
-  document manager が無い）は持ち越さない。確定時の secure・学習の判定は、確定した
-  入力先の context で行う。
+  入力が composition として表示されるまでは、打鍵が切替先の document の context に来て、
+  そこで IME が開いていて英数モードでなく、その入力欄自体が secure（パスワードの入力
+  scope やフォーカス窓、アプリがキーボード入力を無効にした context）でないときだけ続け、
+  それ以外では捨てる。表示される前に再びフォーカスが移った場合、切替先の document が
+  破棄された場合、Deactivate でも捨てる。旧 document に積まれていた preedit の edit
+  session が後から走っても、持ち越した入力を旧 document に表示しない。アプリの外へ
+  フォーカスが移った場合（切替先の document manager が無い）は持ち越さない。確定時の
+  secure・学習の判定は、確定した入力先の context で行う。
 
 ### 4.4 受け入れ条件
 

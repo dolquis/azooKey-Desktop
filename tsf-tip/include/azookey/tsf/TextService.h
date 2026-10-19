@@ -1321,6 +1321,7 @@ class TextService final : public ITfTextInputProcessorEx,
                                bool keep_unshown_input = false);
   bool CanCarryUnshownInput(ITfDocumentMgr* focus) const;
   void ResolveCarriedInput(ITfContext* context);
+  bool CarriesUnshownInput();
   void DropCarriedInput();
 
   // M6: enqueue a CommitObservation to the IPC worker.

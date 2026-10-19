@@ -973,6 +973,13 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
       *result = TS_E_READONLY;
       return S_OK;
     }
+    if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && defer_write_callback) {
+      // Queued like TF_S_ASYNC; the test runs it later with RunDeferredWrite.
+      session->AddRef();
+      deferred_writes.push_back(session);
+      *result = TF_S_ASYNC;
+      return S_OK;
+    }
     run_edit_session =
         !skip_callback && !((flags & TF_ES_READWRITE) == TF_ES_READWRITE && skip_write_callback);
     if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && before_write) {
@@ -1009,11 +1016,22 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
                              ITfComposition**) override {
     return E_NOTIMPL;
   }
+  HRESULT RunDeferredWrites() {
+    HRESULT hr = S_OK;
+    for (ITfEditSession* session : std::exchange(deferred_writes, {})) {
+      const HRESULT session_hr = session->DoEditSession(edit_cookie);
+      if (FAILED(session_hr)) hr = session_hr;
+      session->Release();
+    }
+    return hr;
+  }
   std::shared_ptr<BracketDocument> document = std::make_shared<BracketDocument>();
   bool reject_read{false};
   bool reject_write{false};
   bool skip_callback{false};
   bool skip_write_callback{false};
+  bool defer_write_callback{false};
+  std::vector<ITfEditSession*> deferred_writes;
   std::function<void()> before_write;
 };
 
@@ -7923,9 +7941,11 @@ TEST(TsfTipDocumentSwitchTest, KeyboardDisabledDocumentDropsCarriedInput) {
   EXPECT_EQ(s.cell.document->text, L"");
   EXPECT_EQ(s.h.service.preedit_kana_, "");
 
-  // Nothing is left to surface when a normal document is typed into next.
-  s.Type(s.dialog, {'Y', 'O', 'U'});
-  EXPECT_EQ(s.dialog.document->text, kYouText);
+  // Once the app enables the keyboard again, no "k" is left to join the next key.
+  compartments.keyboard_disabled.value = 0;
+  compartments.empty_context.value = 0;
+  s.Type(s.cell, {'A'});
+  EXPECT_EQ(s.cell.document->text, L"\x3042");
 }
 
 TEST(TsfTipDocumentSwitchTest, PasswordDocumentDropsCarriedInput) {
@@ -7961,11 +7981,47 @@ TEST(TsfTipDocumentSwitchTest, SecondSwitchBeforeAnyKeyDropsCarriedInput) {
 
   EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
   EXPECT_EQ(s.h.service.OnSetFocus(&s.dialog_document, &s.cell_document), S_OK);
-  s.Type(s.dialog, {'Y', 'O', 'U'});
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.dialog_document), S_OK);
+  s.Type(s.cell, {'Y', 'O', 'U'});
 
   EXPECT_EQ(s.h.context.document->text, L"");
-  EXPECT_EQ(s.cell.document->text, L"");
-  EXPECT_EQ(s.dialog.document->text, kYouText);
+  EXPECT_EQ(s.dialog.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, kYouText);
+}
+
+// The preedit session queued in the old document for the first key runs
+// after focus has moved; it must not show the carried input there.
+TEST(TsfTipDocumentSwitchTest, LateSessionInTheOldDocumentShowsNothing) {
+  DocumentSwitch s(/*batch_romaji=*/true);
+  s.h.context.defer_write_callback = true;
+  EXPECT_TRUE(s.h.Press('K'));
+  s.h.context.defer_write_callback = false;
+  ASSERT_EQ(s.h.service.composition_, nullptr);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  EXPECT_EQ(s.h.context.RunDeferredWrites(), S_OK);
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.h.service.composition_, nullptr);
+
+  s.Type(s.cell, {'Y', 'O', 'U'});
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, kKyouText);
+}
+
+// A key that composes nothing (Shift) leaves the input carried, so focus
+// leaving the app afterwards still drops it rather than keeping it for later.
+TEST(TsfTipDocumentSwitchTest, CarriedInputStaysDroppableUntilItShows) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  s.TypeFirstKey(/*shown=*/false);
+
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, &s.grid_document), S_OK);
+  s.Type(s.cell, {VK_SHIFT}, /*eaten=*/false);
+  EXPECT_EQ(s.h.service.OnSetFocus(nullptr, &s.cell_document), S_OK);
+  EXPECT_EQ(s.h.service.OnSetFocus(&s.cell_document, nullptr), S_OK);
+  s.Type(s.cell, {'A'});
+
+  EXPECT_EQ(s.h.context.document->text, L"");
+  EXPECT_EQ(s.cell.document->text, L"\x3042");
 }
 
 // Focus leaving the thread (another app) carries nothing; the existing commit

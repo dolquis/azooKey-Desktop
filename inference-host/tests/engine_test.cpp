@@ -807,10 +807,11 @@ TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
   cfg.learning_flush_every_n = 1;
   cfg.learning_flush_interval_sec = 1000;
   cfg.learning_min_weight = 0.0;
-  auto engine = MakeEngine(store, cfg);
   // DEV-1639: check the retry budget each save is given rather than the wall
-  // clock, which also counts encryption and disk I/O on a loaded runner.
+  // clock, which also counts encryption and disk I/O on a loaded runner. The
+  // vector outlives the engine, whose destructor may flush through the hook.
   std::vector<std::chrono::milliseconds> save_budgets;
+  auto engine = MakeEngine(store, cfg);
   engine->SetBeforeLearningSaveForTests(
       [&save_budgets](std::chrono::milliseconds budget) { save_budgets.push_back(budget); });
   engine->CommitObservation("first", "saved", kNowBase + 1);

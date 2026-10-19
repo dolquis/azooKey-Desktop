@@ -5441,12 +5441,14 @@ void TextService::ServeConnection() {
       }
     }
 
+    const bool window_query = !live && !is_batch && !is_live_conversion;
     // Mark the request as in-flight so CommitSelected can cancel it even
     // after ipc_has_request_ has been cleared by this thread.
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = req_id;
       ipc_inflight_trace_id_ = trace_id;
+      ipc_inflight_window_query_id_ = window_query ? req_id : 0;
     }
 
     const auto query_sent_at = std::chrono::steady_clock::now();
@@ -5455,6 +5457,7 @@ void TextService::ServeConnection() {
         std::lock_guard<std::mutex> lock(ipc_mtx_);
         ipc_inflight_id_ = 0;
         ipc_inflight_trace_id_.clear();
+        ipc_inflight_window_query_id_ = 0;
       }
       // Pipe died after we cleared ipc_has_request_: re-arm so the reconnected
       // loop re-issues this reading without the user retyping.
@@ -5522,7 +5525,8 @@ void TextService::ServeConnection() {
     // live QueryCandidates has a request-level deadline; batch conversion can
     // legitimately take longer and keeps the existing unbounded wait.
     const auto query_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(query_deadline_ms_);
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(window_query ? window_query_deadline_ms_ : query_deadline_ms_);
     const std::optional<std::chrono::steady_clock::time_point> query_request_deadline =
         is_batch ? std::nullopt
                  : std::optional<std::chrono::steady_clock::time_point>(query_deadline);
@@ -5609,10 +5613,13 @@ void TextService::ServeConnection() {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
       ipc_inflight_trace_id_.clear();
+      ipc_inflight_window_query_id_ = 0;
     }
     if (qres) {
       NoteHostResponded();
-    } else if (query_deadline_exceeded && !is_batch) {
+    } else if (query_deadline_exceeded && !is_batch && !(window_query && cancel_inflight)) {
+      // A window query the TIP itself cancelled is not the Host's miss, even
+      // when the Cancel went in band and the wait ran on (DEV-1665).
       NoteHostDeadlineMissed();
     }
     std::vector<CandidateField> response_candidates;
@@ -5731,6 +5738,13 @@ void TextService::ServeConnection() {
     if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
+        // Like an empty answer: a fresh window query ends its wait, or the
+        // next Space would find it still pending and send nothing (DEV-1660).
+        {
+          std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+          if (window_query && IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id))
+            candidate_window_show_pending_ = false;
+        }
         ++next_id;
         continue;
       }
@@ -6376,7 +6390,20 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_auto_punctuation_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
+  CancelInflightWindowQueryLocked();
   ipc_cv_.notify_one();
+}
+
+// A newer request makes the answer of an in-flight window query stale. Cancel
+// it, so the newer one does not wait out the window deadline (DEV-1665). Other
+// in-flight requests (per-key, prediction, reconversion) are left alone.
+void TextService::CancelInflightWindowQueryLocked() {
+  if (ipc_inflight_window_query_id_ == 0 || ipc_inflight_window_query_id_ != ipc_inflight_id_)
+    return;
+  ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false,
+                             ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+  ipc_inflight_window_query_id_ = 0;
+  TrimIpcSendQueueLocked();
 }
 
 void TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading,
@@ -6424,6 +6451,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_apply_live_preview_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
+  CancelInflightWindowQueryLocked();
   ipc_cv_.notify_one();
 }
 
@@ -8386,9 +8414,16 @@ bool TextService::ShowCandidateWindowFromCache() {
   }
 
   std::vector<TipCandidate> snapshot;
+  const std::string reading = CurrentPreeditSurface();
   {
-    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
     if (!candidate_window_show_pending_) return false;
+    // The legacy Space path (English candidates, rewriters) waits for its
+    // window query the same way: a notification that lands first must not end
+    // the wait (DEV-1660, the core branch's DEV-1653 guard).
+    if (candidates_.empty() && !ipc_pending_live_ && !ipc_pending_is_batch_ &&
+        ipc_pending_emoji_trigger_.empty() && ipc_pending_reading_ == reading)
+      return false;
     candidate_window_show_pending_ = false;
     if (candidates_.empty()) return false;
     shown_candidates_ = candidates_;

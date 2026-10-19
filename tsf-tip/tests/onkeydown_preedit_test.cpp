@@ -3622,9 +3622,21 @@ class HealthProbeHost {
           if (req.type == azookey::ipc::MessageType::QueryCandidates) {
             query_received_at.store(std::chrono::steady_clock::now().time_since_epoch().count());
             queries.fetch_add(1);
+            const auto request = azookey::ipc::ParseQueryCandidatesRequest(req.payload_json);
+            if (request && !request->live) {
+              window_queries.fetch_add(1);
+              if (!answer_window_query.load()) return std::nullopt;
+              std::this_thread::sleep_for(std::chrono::milliseconds(window_query_delay_ms.load()));
+              if (malformed_window_answer.load()) {
+                res.payload_json = "not json";
+                return res;
+              }
+            }
             if (!answer_query.load()) return std::nullopt;
             azookey::ipc::QueryCandidatesResponse payload;
-            payload.candidates.push_back({"下", "か", 1.0, "test"});
+            payload.candidates.push_back(
+                {mark_window_answer.load() && request && !request->live ? "窓" : "下", "か", 1.0,
+                 "test"});
             res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
             return res;
           }
@@ -3637,6 +3649,13 @@ class HealthProbeHost {
   std::atomic<bool> answer_health{true};
   std::atomic<bool> malformed_health{false};
   std::atomic<bool> answer_query{true};
+  // Window queries (live = false): answered at all, after a delay, and with
+  // "窓" instead of "下" so a test can tell the answer from the fallback.
+  std::atomic<bool> answer_window_query{true};
+  std::atomic<int> window_query_delay_ms{0};
+  std::atomic<bool> mark_window_answer{false};
+  std::atomic<bool> malformed_window_answer{false};
+  std::atomic<int> window_queries{0};
   std::atomic<bool> answer_diagnostics{true};
   std::atomic<bool> drop_first_diagnostics{false};
   std::atomic<bool> degrade_after_first_diagnostics{false};
@@ -3907,6 +3926,140 @@ TEST(TsfTipOnKeyDownPreeditTest, QueryDeadlineMissesDegradeWithoutIdleProbeAndAn
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
 
   h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1665: the window query waits for its own deadline, not the per-key one,
+// so a Host slower than the per-key deadline still fills the window.
+TEST(TsfTipOnKeyDownPreeditTest, WindowQueryWaitsPastThePerKeyDeadline) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-window-deadline-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.mark_window_answer.store(true);
+  host.window_query_delay_ms.store(300);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/100);
+  h.service.set_query_deadline_ms_for_test(150);
+  h.service.set_window_query_deadline_ms_for_test(10000);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] {
+    h.service.show_candidate_window_from_cache_for_test();
+    return !h.service.shown_candidates_for_test().empty();
+  }));
+  EXPECT_EQ(h.service.shown_candidates_for_test().front().surface, "窓");
+  EXPECT_EQ(host.window_queries.load(), 1);
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1665: a window query that misses its deadline still counts toward Degraded.
+TEST(TsfTipOnKeyDownPreeditTest, WindowQueryDeadlineMissCountsTowardDegraded) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-window-miss-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_window_query.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/1);
+  // Per-key answers stay well inside their deadline; only the window misses.
+  h.service.set_query_deadline_ms_for_test(5000);
+  h.service.set_window_query_deadline_ms_for_test(50);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1665: a keystroke cancels an in-flight window query once, so the newer
+// request does not wait out the window deadline behind it.
+TEST(TsfTipOnKeyDownPreeditTest, KeystrokeCancelsAnInFlightWindowQueryOnce) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  h.service.set_ipc_inflight_for_test(41, /*window_query=*/true);
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.queued_cancel_targets_for_test(), std::vector<uint64_t>{41});
+  EXPECT_TRUE(h.service.pending_ipc_live_for_test());
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_EQ(h.service.queued_cancel_targets_for_test(), std::vector<uint64_t>{41});
+}
+
+// DEV-1665: the live conversion request cancels an in-flight window query too.
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionKeystrokeCancelsAnInFlightWindowQuery) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  h.service.set_ipc_inflight_for_test(41, /*window_query=*/true);
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_EQ(h.service.queued_cancel_targets_for_test(), std::vector<uint64_t>{41});
+}
+
+// DEV-1660: a malformed window answer ends the wait like an empty one, so the
+// next Space asks again instead of finding the query still pending.
+TEST(TsfTipOnKeyDownPreeditTest, MalformedWindowAnswerLetsTheNextSpaceAskAgain) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-window-malformed-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.malformed_window_answer.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/100);
+  h.service.set_symbol_rewriter_for_test(true);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  h.service.preedit_kana_ = "かっこ";
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.candidate_window_show_pending_for_test(); }));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 2; }));
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1665: per-key, prediction and reconversion requests in flight are not
+// window queries; a keystroke leaves them alone and queues only its request.
+TEST(TsfTipOnKeyDownPreeditTest, KeystrokeLeavesOtherInFlightRequestsAlone) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  h.service.set_ipc_inflight_for_test(41, /*window_query=*/false);
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.service.queued_cancel_targets_for_test().empty());
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_live_for_test());
 }
 
 // DEV-1175: a probe waiting on a silent Host gives way to a keystroke, so the
@@ -9295,6 +9448,55 @@ TEST(TsfTipEnglishCandidatesTest, SpaceRightAfterBackspaceStillSendsTheRomaji) {
   EXPECT_FALSE(h.service.pending_ipc_live_for_test());
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kaki");
   EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+// DEV-1660: the English Space path (legacy branch) waits for its live = false
+// answer like the core branch does since DEV-1653. A ready notification that
+// lands first (a prediction answer, a health update) must not end the wait, or
+// the answer arrives to a closed window.
+TEST(TsfTipEnglishCandidatesTest, SpaceKeepsWaitingForItsAnswerAcrossUnrelatedReadyNotifications) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  h.service.set_english_candidates_for_test(true);
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('O'));
+  ASSERT_EQ(h.service.preedit_kana_, "こ");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_FALSE(h.service.pending_ipc_live_for_test());
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+  // The legacy branch leaves core input; this is what made the report's
+  // prediction_state record no_context.
+  EXPECT_FALSE(h.service.core_input_active_for_test());
+
+  h.service.show_candidate_window_from_cache_for_test();
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  std::vector<azookey::ipc::CandidateField> candidates(12);
+  for (size_t i = 0; i < candidates.size(); ++i) candidates[i].surface = "候補" + std::to_string(i);
+  candidates[0].surface = "子";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_EQ(h.service.shown_candidates_for_test().size(), 12u);
+}
+
+// DEV-1660: the wait lasts only while the window query is for the shown
+// reading; a notification after the reading moved on ends it as before.
+TEST(TsfTipOnKeyDownPreeditTest, RewriterSpaceWaitEndsOnceTheReadingMovedOn) {
+  TextServiceHarness h;
+  h.service.set_symbol_rewriter_for_test(true);
+  h.service.preedit_kana_ = "かっこ";
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+  h.service.show_candidate_window_from_cache_for_test();
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  h.service.preedit_kana_ = "べつ";
+  h.service.show_candidate_window_from_cache_for_test();
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 
 TEST(TsfTipEnglishCandidatesTest, NothingIsSentWithoutTheSettingOrTheHostCapability) {

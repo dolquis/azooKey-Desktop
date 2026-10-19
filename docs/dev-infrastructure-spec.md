@@ -2107,9 +2107,11 @@ stale 化する。未送信または接続断後に再武装された pending �
   - `Health` の送信失敗や監視中の切断は `ipc_health_send_failed` を記録し、`connection_lost` として
     再接続へ戻す。これにより、idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 - 劣化判定は処理種別ごとの deadline 超過を共通に数える。`Health` の無応答と
-  `QueryCandidates` の deadline 超過（§8.5.2 の fast 150ms）はどちらも 1 回の超過として
-  `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から `Degraded` へ遷移する
-  （`response_deadline_exceeded`）。入力し続けて idle にならない間も、この経路で劣化を判定する。
+  `QueryCandidates` の deadline 超過（§8.5.2 の打鍵ごと・ライブ変換 150ms、候補窓用 750ms）は
+  どちらも 1 回の超過として `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から
+  `Degraded` へ遷移する（`response_deadline_exceeded`）。入力し続けて idle にならない間も、
+  この経路で劣化を判定する。TIP が `Cancel` した候補窓用の要求（新しい要求や確定による。§8.5.2）は、
+  `Cancel` が main pipe 経由になって deadline まで待った場合も、この回数に含めない。
   一括変換の deadline 超過は接続を切って再接続へ戻すため、この回数には含めない。
 - `Health`、`QueryCandidates`、一括変換、設定再読込の Handshake のいずれかに応答が返った時点で、
   連続回数を 0 に戻し、`Degraded` なら `Ready` へ戻す（`response_restored`）。`Health` の
@@ -2178,7 +2180,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 
 | From | To | トリガ | 駆動 timeout / 閾値 |
 |---|---|---|---|
-| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` 150ms の deadline 超過が連続 2 回（§8.3） |
+| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates`（打鍵ごと 150ms、候補窓用 750ms）の deadline 超過が連続 2 回（§8.3） |
 | `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 | Model load 30s |
 | `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake 受理） | exponential backoff（§8.3） |
 | `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` または `UpdateConfig` によるパス付きの再ロード開始（完了ではない） | Model load 30s |
@@ -2298,6 +2300,7 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 |---|---:|
 | IPC Ping / `Health`（TIP の監視は `Health` を使う。§8.3）/ TIP の `QueryDiagnostics`（§8.5.1） | 500ms |
 | `QueryCandidates` fast / ライブ変換（`QueryLiveConversion`。M14 以前の Host へは `QueryCandidates` の `live=true` で代替する）/ `QueryPredictions` | 150ms |
+| 候補窓用の `QueryCandidates`（`live = false`。Space の候補窓と絵文字の一覧） | 750ms |
 | 再変換（`live=true` の `QueryCandidates` と読みの逆引き） | 750ms |
 | 一括変換（`QueryBatchConversion`）の neural | 30s |
 | 一括変換の ai-cleanup（外部 AI を使わない経路。`local-zenzai`、または openai でも外部不許可） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
@@ -2315,16 +2318,25 @@ connected-but-silent Host でも、pipe 切断や blocking read の解除を待�
 best-so-far を返す。表の「ローカル Zenzai 1 変換のハード予算の上限」800ms は、この予算の
 上限を決める設計値であり、変換要求（`QueryCandidates` / 一括変換）に対しては実行時に強制される
 request deadline ではない。ローカル Zenzai の変換が 800ms で client から打ち切られるわけではなく、client が待つ時間は要求の種別ごとの上の行
-（fast / ライブ変換 150ms、再変換 750ms、一括変換 30s）が決める。600ms を上限に揃えない根拠は
+（fast / ライブ変換 150ms、候補窓用 750ms、再変換 750ms、一括変換 30s）が決める。600ms を上限に揃えない根拠は
 同 §8.2 の上限と下限の制約である。
 
 ライブ変換は `QueryCandidates` fast と同じ 150ms を TIP の 1 つの定数で待つ。
-`QueryCandidates` fast には、打鍵ごとの `live = true` の要求と、Space で候補窓を開く
-`live = false` の要求（`legacy-parity-spec.md` §1.2）の両方が入る。
+`QueryCandidates` fast は打鍵ごとの `live = true` の要求である。
+Space で候補窓を開く `live = false` の要求（`legacy-parity-spec.md` §1.2）は、Zenzai の複数候補、
+typo 提案、英単語候補、NLL rerank を含み、打鍵ごとの要求より重い。
+150ms で打ち切ると、CPU のみの機械やバッテリ駆動時に窓が fallback 候補になり、超過の連続で
+Host が生きていても `Degraded` に入る。そのため候補窓用の要求は再変換と同じ 750ms で待つ。
+750ms は Host の 1 変換ハード予算（600ms）の外側にあり、正常な Host では超過しない。
+したがって候補窓用の要求の超過も §8.3 の劣化判定に数える。
+候補窓用の要求が in-flight の間に新しい変換要求（打鍵ごとの要求、ライブ変換、別の候補窓用の要求）を
+出すときは、in-flight の候補窓用の要求に `Cancel`（§7.5）を送る。その応答は新しい要求により
+stale になっており、待ち続けると新しい要求が候補窓用の deadline まで遅れるためである。
+in-flight の要求が打鍵ごとの要求、`QueryPredictions`、再変換のときは `Cancel` を送らない。
 候補表示レイテンシの性能目標（§10 の p50 < 80ms）は目標値であり、打ち切りの deadline ではない。
 
-Host は `QueryCandidates` fast とライブ変換の値を自分の deadline として持たない。
-この 2 つは client 側の deadline と Cancel（§7.5）が打ち切る。
+Host は `QueryCandidates` fast、候補窓用の `QueryCandidates`、ライブ変換の値を自分の deadline として持たない。
+これらは client 側の deadline と Cancel（§7.5）が打ち切る。
 Host 側に置かない理由は次のとおり。
 
 - 再変換も `live=true` の `QueryCandidates` を使い、client はそれをライブ変換より長く待つ。

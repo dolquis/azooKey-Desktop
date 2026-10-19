@@ -671,6 +671,22 @@ class TextService final : public ITfTextInputProcessorEx,
   // Call before start_ipc_worker_for_test: the request deadline of a
   // QueryCandidates / QueryLiveConversion, so tests do not race the 150ms.
   void set_query_deadline_ms_for_test(uint32_t deadline_ms) { query_deadline_ms_ = deadline_ms; }
+  void set_window_query_deadline_ms_for_test(uint32_t deadline_ms) {
+    window_query_deadline_ms_ = deadline_ms;
+  }
+  // Stands in for the worker marking a request in flight.
+  void set_ipc_inflight_for_test(uint64_t request_id, bool window_query) {
+    std::lock_guard lock(ipc_mtx_);
+    ipc_inflight_id_ = request_id;
+    ipc_inflight_window_query_id_ = window_query ? request_id : 0;
+  }
+  std::vector<uint64_t> queued_cancel_targets_for_test() {
+    std::lock_guard lock(ipc_mtx_);
+    std::vector<uint64_t> targets;
+    for (const auto& item : ipc_send_queue_)
+      if (item.type == ipc::MessageType::Cancel) targets.push_back(item.cancel_target_id);
+    return targets;
+  }
   POINT caret_point_for_test() const { return caret_pt_; }
   bool caret_point_valid_for_test() const { return caret_pt_valid_; }
   void set_caret_point_for_test(POINT point, bool valid) {
@@ -933,6 +949,13 @@ class TextService final : public ITfTextInputProcessorEx,
   // kQueryCandidatesFastTimeoutMs (dev-infrastructure-spec section 8.5.2);
   // fixed after the worker starts.
   uint32_t query_deadline_ms_{150};
+  // The window query (live = false, Space or the emoji list) waits like
+  // reconversion, so a slow Host still fills the window (DEV-1665); its miss
+  // counts like any other. Fixed after the worker starts.
+  uint32_t window_query_deadline_ms_{750};
+  // ID of the in-flight request when it is a window query (0 = none); a newer
+  // request cancels it. Protected by ipc_mtx_.
+  uint64_t ipc_inflight_window_query_id_{0};
   // The last per-key answer (live = true candidates, or the live conversion
   // surface), for a window query that misses its deadline (DEV-1653). Reused
   // only for the same reading, left context and learning permission it was
@@ -1188,6 +1211,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void RearmPendingQuery(uint64_t req_id);
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();
+  void CancelInflightWindowQueryLocked();
   std::string NextCommitObservationId();
   std::string CurrentActionTraceId() const;
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,

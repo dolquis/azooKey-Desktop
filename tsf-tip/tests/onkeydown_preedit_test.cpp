@@ -10415,3 +10415,30 @@ TEST(TsfTipPunctuationConversionTest, BatchModeKeepsTheMarkInTheRawInput) {
   EXPECT_NE(h.context.document->text.find(L"、"), std::wstring::npos);
   EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
 }
+
+TEST(TsfTipPunctuationConversionTest, WaitingForTheSpaceAnswerJoinsTheMarkWithLiveConversion) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeKaAndShow(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.service.preedit_kana_, "か。");
+}
+
+TEST(TsfTipPunctuationConversionTest, CommitWithTheMarkOffersNoCharacterFormCycle) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  ASSERT_EQ(h.context.document->text, L"天気。");
+  // Cycling the reading's forms would rewrite the typed mark as well.
+  EXPECT_FALSE(h.Press(VK_NONCONVERT));
+  EXPECT_EQ(h.context.document->text, L"天気。");
+}

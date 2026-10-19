@@ -7288,6 +7288,19 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
                                  std::make_move_iterator(result.actions.end()));
       result.actions.erase(split, result.actions.end());
     }
+    // Spec §3.5.1: a 、 or 。 commit writes the mark after the observed
+    // candidate. The character-form cycle of that commit would rewrite the mark
+    // too, so it is not offered.
+    bool commits_typed_mark = false;
+    {
+      const core::ReplaceMarkedText* replaced = nullptr;
+      const core::ObserveCommit* observed = nullptr;
+      for (const auto& action : result.actions) {
+        if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) replaced = replace;
+        if (const auto* observe = std::get_if<core::ObserveCommit>(&action)) observed = observe;
+      }
+      commits_typed_mark = replaced && observed && replaced->text != observed->surface;
+    }
     input_state_ = std::move(result.next);
     core_action_in_progress_ = true;
     bool preedit_update_needed = false;
@@ -7359,8 +7372,10 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       const core::InputState state_after_commit = input_state_;
       hr = RequestCommitEditSession(context);
       if (SUCCEEDED(hr)) {
-        recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
-            context, client_id_, recent_reading, committed_surface);
+        recent_character_form_commit_ =
+            commits_typed_mark ? std::nullopt
+                               : CharacterFormEditSession::CaptureRecentCommit(
+                                     context, client_id_, recent_reading, committed_surface);
         core_marked_surface_.clear();
         live_display_reading_.clear();
         live_display_surface_.clear();
@@ -8001,6 +8016,8 @@ void TextService::AdoptLiveSegmentsObservation(ITfContext* context,
 // when neither is there yet.
 bool TextService::PreparePunctuationConversion(const std::string& reading) {
   punctuation_live_segments_.reset();
+  // Waiting for the Space answer: the mark joins the reading as with off.
+  if (input_state_.awaiting_candidates()) return false;
   if (input_state_.live_conversion() && live_display_reading_ == reading &&
       !live_display_surface_.empty()) {
     auto segments = live_display_segments_;

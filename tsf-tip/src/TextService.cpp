@@ -2677,6 +2677,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
          !(decimal_digit && !key_event && number_rewriter_.load(std::memory_order_relaxed))) ||
         (!has_preedit && !custom_input && composition_symbol &&
          (composition_symbol->raw == ',' || composition_symbol->raw == '.'));
+    // Spec §3.5.1: a 、 or 。 that may convert the reading is decided by core
+    // even while the number rewriter keeps the other keys on the legacy path.
+    const bool punctuation_conversion_key =
+        has_preedit && !cand_visible && !custom_input && composition_symbol &&
+        (composition_symbol->raw == ',' || composition_symbol->raw == '.') &&
+        local_settings_.PunctuationConversionSnapshot();
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
     // and the rewriter Space path keep TIP pre-processing, while standalone
     // punctuation always uses the fixed local candidates in core mode.
@@ -2685,7 +2691,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool legacy_path =
         !unicode_routed &&
         (BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
-         (!standalone_punctuation &&
+         (!standalone_punctuation && !punctuation_conversion_key &&
           ((number_rewriter_.load(std::memory_order_relaxed) && !custom_input) ||
            english_conversion ||
            (IsActionKey(key_event, UserAction::StartConversion) &&
@@ -2696,8 +2702,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       core_marked_surface_.clear();
       core_input_active_ = true;
     }
+    if (!legacy_path && !core_input_active_ && punctuation_conversion_key) {
+      // The legacy preedit is imported below like a reading typed in core.
+      input_state_ = input_state_.Reset();
+      core_marked_surface_ = CurrentPreeditSurface();
+      core_input_active_ = true;
+    }
     if (!legacy_path && core_input_active_ && key_event) {
-      input_state_ = input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot());
+      input_state_ = input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot())
+                         .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot());
       core::UserActionEvent event = *key_event;
       bool supported = true;
       if (event.action == UserAction::Input && unicode_active) {
@@ -2744,6 +2757,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             const HRESULT cache_hr = ApplyInputStateResult(
                 context, input_state_.HandleCandidatesArrived(std::move(cached)));
             if (FAILED(cache_hr)) return cache_hr;
+          }
+        }
+        // Spec §3.5.1: a 、 or 。 waits for the first candidate of the reading.
+        if (input_state_.kind() != core::InputStateKind::Selecting) {
+          if (const auto reading = input_state_.PunctuationConversionReading(event);
+              reading && !PreparePunctuationConversion(*reading) &&
+              BeginPunctuationConversionHold(context, event, *reading)) {
+            *eaten = TRUE;
+            return S_OK;
           }
         }
         if (event.action == UserAction::SelectByDigit && event.digit >= 1 &&
@@ -7206,6 +7228,9 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
                                      privacy.secure,
                                      privacy.learning_allowed && batch_learning_allowed_};
       }
+    } else if (shown_candidates_.empty()) {
+      // Spec §3.5.1: a 、 or 。 committed the first candidate without a window.
+      ObservePunctuationConversion(context, *observe);
     }
   }
   return S_OK;
@@ -7567,6 +7592,7 @@ void TextService::OnCandidatesReady(void* context) {
                             ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
   const bool ui_applied = service->ShowCandidateWindowFromCache();
+  service->ResolvePunctuationConversionHoldIfReady();
   if (ui_applied && ui_start != std::chrono::steady_clock::time_point{}) {
     const auto ui_end = std::chrono::steady_clock::now();
     TracePhase(trace_id, logging::Phase::UiApply,
@@ -7895,6 +7921,19 @@ void TextService::ResolveFinalPunctuationHold() {
   auto hold = std::move(*final_punctuation_hold_);
   final_punctuation_hold_.reset();
   punctuation_timer_.Cancel(DelayedActionTimer::kFinal);
+  if (hold.replay) {
+    // Spec §3.5.1: the held 、 or 。 runs now, with whatever candidate arrived.
+    // Without one it only joins the reading.
+    if (!PreparePunctuationConversion(hold.reading)) {
+      auto cached = CoreCandidatesFromCache();
+      if (!cached.empty() && cached.front().reading == hold.reading &&
+          (input_state_.kind() == core::InputStateKind::Composing ||
+           input_state_.kind() == core::InputStateKind::Previewing) &&
+          !input_state_.awaiting_candidates())
+        input_state_ = input_state_.HandleCandidatesArrived(std::move(cached)).next;
+    }
+    hold.result = input_state_.HandleEvent(*hold.replay);
+  }
   // The commit runs outside the key handler, so its edit session can be refused.
   // The composition then stays (rolled back) and the next Enter commits it.
   if (const HRESULT hr = ApplyInputStateResult(hold.context.get(), std::move(hold.result));
@@ -7914,13 +7953,19 @@ void TextService::AbortFinalPunctuationHold() {
 // never reaches learning. The surface of every segment comes from the Host's
 // own strings, never from slicing the UTF-16 offsets (section 5.1).
 void TextService::AdoptLiveCommitObservation(ITfContext* context) {
-  if (live_display_segments_.empty()) return;
+  AdoptLiveSegmentsObservation(context, live_display_segments_, live_display_surface_);
+}
+
+void TextService::AdoptLiveSegmentsObservation(ITfContext* context,
+                                               const std::vector<ipc::LiveSegment>& segments,
+                                               const std::string& surface) {
+  if (segments.empty()) return;
   std::string joined;
-  for (const auto& segment : live_display_segments_) {
+  for (const auto& segment : segments) {
     if (segment.surface.empty() || (!segment.auto_punctuation && segment.reading.empty())) return;
     joined += segment.surface;
   }
-  if (joined != live_display_surface_) return;
+  if (joined != surface) return;
   const auto privacy = ResolvePrivacy(context, false);
   const bool learning = privacy.learning_allowed && batch_learning_allowed_;
   const auto make = [&](const ipc::LiveSegment& segment) {
@@ -7935,19 +7980,115 @@ void TextService::AdoptLiveCommitObservation(ITfContext* context) {
     observed.is_auto_punctuation = segment.auto_punctuation;
     return observed;
   };
-  if (live_display_segments_.size() == 1 && !live_display_segments_.front().auto_punctuation) {
-    pending_commit_observation_ = make(live_display_segments_.front());
+  if (segments.size() == 1 && !segments.front().auto_punctuation) {
+    pending_commit_observation_ = make(segments.front());
     return;
   }
   PendingCommitObservation batch;
   batch.reading = live_display_reading_;
-  batch.chosen.surface = live_display_surface_;
+  batch.chosen.surface = surface;
   batch.chosen.reading = live_display_reading_;
   batch.chosen.source = "live";
   batch.secure = privacy.secure;
   batch.learning_allowed = learning;
-  for (const auto& segment : live_display_segments_) batch.segments.push_back(make(segment));
+  for (const auto& segment : segments) batch.segments.push_back(make(segment));
   pending_commit_observation_ = std::move(batch);
+}
+
+// Spec §3.5.1: the candidate a 、 or 。 commits. With live conversion it is the
+// displayed surface without a trailing automatic mark, which the typed one
+// replaces; otherwise the cached first candidate of the reading. Returns false
+// when neither is there yet.
+bool TextService::PreparePunctuationConversion(const std::string& reading) {
+  punctuation_live_segments_.reset();
+  if (input_state_.live_conversion() && live_display_reading_ == reading &&
+      !live_display_surface_.empty()) {
+    auto segments = live_display_segments_;
+    std::string surface = live_display_surface_;
+    if (!segments.empty() && segments.back().auto_punctuation) {
+      surface.clear();
+      segments.pop_back();
+      for (const auto& segment : segments) surface += segment.surface;
+    }
+    if (!surface.empty()) {
+      core::Candidate candidate;
+      candidate.surface = surface;
+      candidate.reading = reading;
+      input_state_ = input_state_.HandleCandidatesArrived({std::move(candidate)}).next;
+      punctuation_live_segments_ = std::move(segments);
+      return true;
+    }
+  }
+  const auto& cached = input_state_.candidates();
+  return !cached.empty() && cached.front().reading == reading;
+}
+
+// Spec §3.5.1: waits up to the final request timeout for the first candidate
+// of the reading. The key is consumed and replayed when the candidate arrives,
+// the timer expires or another key comes. Returns false when the key should
+// run at once (it then joins the reading).
+bool TextService::BeginPunctuationConversionHold(ITfContext* context,
+                                                 const core::UserActionEvent& event,
+                                                 const std::string& reading) {
+  if (final_punctuation_hold_ || !context || committing_ || input_state_.awaiting_candidates() ||
+      IpcHostUnavailable())
+    return false;
+  if (!punctuation_timer_.Create(&TextService::PunctuationTimerTrampoline, this) ||
+      !punctuation_timer_.Arm(DelayedActionTimer::kFinal, final_request_timeout_ms_))
+    return false;
+  punctuation_timer_.Cancel(DelayedActionTimer::kIdle);
+  core_cached_metadata_.clear();
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
+  PostQueryCandidates(context, reading, true);
+  FinalPunctuationHold hold;
+  hold.context = context;
+  hold.replay = event;
+  hold.reading = reading;
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    hold.request_id = ipc_pending_id_;
+  }
+  final_punctuation_hold_ = std::move(hold);
+  return true;
+}
+
+void TextService::ResolvePunctuationConversionHoldIfReady() {
+  if (!final_punctuation_hold_ || !final_punctuation_hold_->replay) return;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    if (candidates_.empty() || candidates_.front().field.reading != final_punctuation_hold_->reading)
+      return;
+  }
+  ResolveFinalPunctuationHold();
+}
+
+void TextService::ObservePunctuationConversion(ITfContext* context,
+                                               const core::ObserveCommit& observe) {
+  if (punctuation_live_segments_) {
+    const auto segments = std::move(*punctuation_live_segments_);
+    punctuation_live_segments_.reset();
+    AdoptLiveSegmentsObservation(context, segments, observe.surface);
+    return;
+  }
+  if (core_cached_metadata_.empty()) return;
+  const auto& chosen = core_cached_metadata_.front();
+  if (chosen.field.surface != observe.surface || chosen.field.reading != observe.reading ||
+      chosen.local || chosen.field.source == "symbol" || chosen.field.source == "emoji" ||
+      chosen.field.source == "llm" || chosen.field.source == "privacy-fallback" ||
+      chosen.field.source == "fallback")
+    return;
+  const auto privacy = ResolvePrivacy(context, false);
+  pending_commit_observation_ =
+      PendingCommitObservation{observe.reading,
+                               chosen.field,
+                               HostCandidateFields(core_cached_metadata_),
+                               {},
+                               privacy.secure,
+                               privacy.learning_allowed && batch_learning_allowed_};
 }
 
 // A held commit (section 7.3) resolves on the response to its final request,

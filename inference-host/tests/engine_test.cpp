@@ -1984,10 +1984,18 @@ TEST(InferenceEngineTest, DropRepeatedUnitModelCandidatesKeepsWhatTheReadingSupp
   EXPECT_EQ(filtered({make("わははは!!!"), make("あああ"), make("プルルル"), make("ｗｗｗ")},
                      "わははは!!!ぷるるるＷＷＷあああ"),
             (std::vector<std::string>{"わははは!!!", "あああ", "プルルル", "ｗｗｗ"}));
+  // Numbers with separators, an address and an emoji join sequence repeat legitimately.
+  EXPECT_EQ(
+      filtered({make("1,000,000,000"), make("192.0.0.0"), make("10:00:00:00"),
+                make("👨\xE2\x80\x8D👨\xE2\x80\x8D👨\xE2\x80\x8D👦"), make(",,,,"), make("....")},
+               "いちおく"),
+      (std::vector<std::string>{"1,000,000,000", "192.0.0.0", "10:00:00:00",
+                                "👨\xE2\x80\x8D👨\xE2\x80\x8D👨\xE2\x80\x8D👦"}));
   // Digits alone are a number, and text that is not valid UTF-8 is not judged.
   EXPECT_EQ(filtered({make("10000"), make("1000"), make("!!!!")}, "いちまん"),
             (std::vector<std::string>{"10000", "1000"}));
-  EXPECT_EQ(filtered({make("!!!!\xEE\x7F")}, "かんたん"), (std::vector<std::string>{"!!!!\xEE\x7F"}));
+  EXPECT_EQ(filtered({make("!!!!\xEE\x7F")}, "かんたん"),
+            (std::vector<std::string>{"!!!!\xEE\x7F"}));
   EXPECT_EQ(filtered({make("!!!!")}, "\xEE\x7F"), (std::vector<std::string>{"!!!!"}));
   // Candidates of another source are not judged.
   EXPECT_EQ(filtered({make("!!!!", CandidateSource::UserDictionary),

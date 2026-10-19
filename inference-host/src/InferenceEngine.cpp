@@ -648,12 +648,29 @@ std::optional<std::u32string> FoldedCodepoints(const std::string& utf8) {
   return out;
 }
 
-bool IsAsciiDigits(const std::u32string& text) {
-  return std::all_of(text.begin(), text.end(), [](char32_t c) { return c >= U'0' && c <= U'9'; });
+// Digits with the separators of a number or an address (`10000`, `1,000,000,000`, `192.0.0.0`).
+bool IsNumberLike(const std::u32string& text) {
+  bool has_digit = false;
+  for (const char32_t c : text) {
+    const bool digit = c >= U'0' && c <= U'9';
+    has_digit = has_digit || digit;
+    if (!digit && c != U',' && c != U'.' && c != U':' && c != U'-' && c != U'/') return false;
+  }
+  return has_digit;
+}
+
+constexpr char32_t kZeroWidthJoiner = 0x200D;
+constexpr char32_t kVariationSelector16 = 0xFE0F;
+
+// An emoji sequence joins its parts with a zero width joiner or a variation selector.
+bool IsEmojiJoinSequence(const std::u32string& text) {
+  return text.find(kZeroWidthJoiner) != std::u32string::npos ||
+         text.find(kVariationSelector16) != std::u32string::npos;
 }
 
 // Whether `text` repeats a unit kRepeatCount times in a row where `reading` has no such run.
-// A repeat of digits alone is a number (`10000` for いちまん), not a broken generation.
+// A number or an emoji join sequence repeats legitimately (`10000` for いちまん), so it is not
+// judged.
 bool HasUnsupportedRepeat(const std::u32string& text, const std::u32string& reading) {
   for (size_t unit = 1; unit <= kMaxRepeatedUnit; ++unit) {
     const size_t run = unit * kRepeatCount;
@@ -662,7 +679,10 @@ bool HasUnsupportedRepeat(const std::u32string& text, const std::u32string& read
       for (size_t j = unit; j < run && repeated; ++j) repeated = text[i + j] == text[i + j - unit];
       if (!repeated) continue;
       const auto repeat = text.substr(i, run);
-      if (!IsAsciiDigits(repeat) && reading.find(repeat) == std::u32string::npos) return true;
+      if (!IsNumberLike(repeat) && !IsEmojiJoinSequence(repeat) &&
+          reading.find(repeat) == std::u32string::npos) {
+        return true;
+      }
     }
   }
   return false;

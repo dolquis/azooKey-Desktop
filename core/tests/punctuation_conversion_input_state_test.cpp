@@ -13,12 +13,13 @@ namespace {
 using Actions = std::vector<ClientAction>;
 using K = InputStateKind;
 
-UserActionEvent Ev(UserAction action, char32_t codepoint = 0, int digit = 0) {
+UserActionEvent PunctuationEvent(UserAction action, char32_t codepoint = 0, int digit = 0) {
   return UserActionEvent{action, codepoint, 0, digit};
 }
 
-InputState Feed(InputState state, std::u32string_view text) {
-  for (const char32_t cp : text) state = state.HandleEvent(Ev(UserAction::Input, cp)).next;
+InputState FeedPunctuationState(InputState state, std::u32string_view text) {
+  for (const char32_t cp : text)
+    state = state.HandleEvent(PunctuationEvent(UserAction::Input, cp)).next;
   return state;
 }
 
@@ -28,30 +29,31 @@ std::vector<Candidate> TenkiCandidates() {
 
 // Composing "てんき" with the per-key first candidate cached.
 InputState CachedComposing(bool conversion, bool live = false) {
-  const auto typed =
-      Feed(InputState{}.WithLiveConversion(live).WithPunctuationConversion(conversion), U"tenki");
+  const auto typed = FeedPunctuationState(
+      InputState{}.WithLiveConversion(live).WithPunctuationConversion(conversion), U"tenki");
   return typed.HandleCandidatesArrived(TenkiCandidates()).next;
 }
 
 InputState SelectingSecond(bool conversion) {
-  const auto waiting = CachedComposing(conversion).HandleEvent(Ev(UserAction::StartConversion));
+  const auto waiting =
+      CachedComposing(conversion).HandleEvent(PunctuationEvent(UserAction::StartConversion));
   const auto opened = waiting.next.HandleCandidatesArrived(TenkiCandidates()).next;
-  return opened.HandleEvent(Ev(UserAction::NextCandidate)).next;
+  return opened.HandleEvent(PunctuationEvent(UserAction::NextCandidate)).next;
 }
 
 const UserActionEvent kRepresentativeEvents[] = {
-    Ev(UserAction::Input, U'a'),
-    Ev(UserAction::Input, U'、'),
-    Ev(UserAction::Input, U'。'),
-    Ev(UserAction::Input, U'/'),
-    Ev(UserAction::InputAlnum, U'。'),
-    Ev(UserAction::Backspace),
-    Ev(UserAction::StartConversion),
-    Ev(UserAction::NextCandidate),
-    Ev(UserAction::SelectByDigit, 0, 1),
-    Ev(UserAction::Commit),
-    Ev(UserAction::Cancel),
-    Ev(UserAction::StartUnicodeInput),
+    PunctuationEvent(UserAction::Input, U'a'),
+    PunctuationEvent(UserAction::Input, U'、'),
+    PunctuationEvent(UserAction::Input, U'。'),
+    PunctuationEvent(UserAction::Input, U'/'),
+    PunctuationEvent(UserAction::InputAlnum, U'。'),
+    PunctuationEvent(UserAction::Backspace),
+    PunctuationEvent(UserAction::StartConversion),
+    PunctuationEvent(UserAction::NextCandidate),
+    PunctuationEvent(UserAction::SelectByDigit, 0, 1),
+    PunctuationEvent(UserAction::Commit),
+    PunctuationEvent(UserAction::Cancel),
+    PunctuationEvent(UserAction::StartUnicodeInput),
 };
 
 void ExpectSameResult(const InputState& off, const InputState& on, const UserActionEvent& event,
@@ -68,7 +70,7 @@ TEST(PunctuationConversionInputStateTest, DefaultsOffAndKeepsTheSettingAcrossRes
   EXPECT_FALSE(InputState{}.punctuation_conversion());
   const auto on = InputState{}.WithPunctuationConversion(true);
   EXPECT_TRUE(on.punctuation_conversion());
-  EXPECT_TRUE(Feed(on, U"ka").Reset().punctuation_conversion());
+  EXPECT_TRUE(FeedPunctuationState(on, U"ka").Reset().punctuation_conversion());
 }
 
 TEST(PunctuationConversionInputStateTest, OffLeavesEveryStateAndKeyUnchanged) {
@@ -90,16 +92,18 @@ TEST(PunctuationConversionInputStateTest, OffLeavesEveryStateAndKeyUnchanged) {
   }
   // Off: the marks join the reading as before (spec §3.5, DEV-847 G2).
   for (const char32_t mark : {U'、', U'。'}) {
-    const auto joined = CachedComposing(false).HandleEvent(Ev(UserAction::Input, mark));
+    const auto joined =
+        CachedComposing(false).HandleEvent(PunctuationEvent(UserAction::Input, mark));
     EXPECT_EQ(joined.next.kind(), K::Composing);
     EXPECT_EQ(joined.next.Reading(), mark == U'、' ? "てんき、" : "てんき。");
-    const auto reopened = SelectingSecond(false).HandleEvent(Ev(UserAction::Input, mark));
+    const auto reopened =
+        SelectingSecond(false).HandleEvent(PunctuationEvent(UserAction::Input, mark));
     EXPECT_EQ(reopened.next.kind(), K::Composing);
   }
 }
 
 TEST(PunctuationConversionInputStateTest, ComposingCommitsFirstCandidateWithTheMark) {
-  const auto result = CachedComposing(true).HandleEvent(Ev(UserAction::Input, U'。'));
+  const auto result = CachedComposing(true).HandleEvent(PunctuationEvent(UserAction::Input, U'。'));
   EXPECT_EQ(result.next.kind(), K::Idle);
   EXPECT_EQ(result.next.Reading(), "");
   EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"天気。"},
@@ -107,14 +111,15 @@ TEST(PunctuationConversionInputStateTest, ComposingCommitsFirstCandidateWithTheM
 }
 
 TEST(PunctuationConversionInputStateTest, PreviewingCommitsTheInjectedFirstCandidate) {
-  const auto result = CachedComposing(true, true).HandleEvent(Ev(UserAction::Input, U'、'));
+  const auto result =
+      CachedComposing(true, true).HandleEvent(PunctuationEvent(UserAction::Input, U'、'));
   EXPECT_EQ(result.next.kind(), K::Idle);
   EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"天気、"},
                                      CommitMarkedText{}, ObserveCommit{"てんき", "天気"}}));
 }
 
 TEST(PunctuationConversionInputStateTest, SelectingCommitsTheHighlightWithTheMark) {
-  const auto result = SelectingSecond(true).HandleEvent(Ev(UserAction::Input, U'、'));
+  const auto result = SelectingSecond(true).HandleEvent(PunctuationEvent(UserAction::Input, U'、'));
   EXPECT_EQ(result.next.kind(), K::Idle);
   EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"転機、"},
                                      CommitMarkedText{}, ObserveCommit{"てんき", "転機"}}));
@@ -122,22 +127,25 @@ TEST(PunctuationConversionInputStateTest, SelectingCommitsTheHighlightWithTheMar
 
 TEST(PunctuationConversionInputStateTest, WithoutACandidateForTheReadingTheMarkJoins) {
   // Nothing cached yet.
-  const auto uncached = Feed(InputState{}.WithPunctuationConversion(true), U"tenki");
-  ASSERT_TRUE(uncached.PunctuationConversionReading(Ev(UserAction::Input, U'。')));
-  EXPECT_EQ(uncached.HandleEvent(Ev(UserAction::Input, U'。')).next.Reading(), "てんき。");
+  const auto uncached =
+      FeedPunctuationState(InputState{}.WithPunctuationConversion(true), U"tenki");
+  ASSERT_TRUE(uncached.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'。')));
+  EXPECT_EQ(uncached.HandleEvent(PunctuationEvent(UserAction::Input, U'。')).next.Reading(),
+            "てんき。");
   // A cache of another reading (pending romaji flushes into a new one).
-  const auto pending = Feed(InputState{}.WithPunctuationConversion(true), U"kan")
+  const auto pending = FeedPunctuationState(InputState{}.WithPunctuationConversion(true), U"kan")
                            .HandleCandidatesArrived({Candidate{"かn", "かn"}})
                            .next;
-  EXPECT_EQ(*pending.PunctuationConversionReading(Ev(UserAction::Input, U'、')), "かん");
-  const auto joined = pending.HandleEvent(Ev(UserAction::Input, U'、'));
+  EXPECT_EQ(*pending.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'、')),
+            "かん");
+  const auto joined = pending.HandleEvent(PunctuationEvent(UserAction::Input, U'、'));
   EXPECT_EQ(joined.next.kind(), K::Composing);
   EXPECT_EQ(joined.next.Reading(), "かん、");
   // A cache of the flushed reading commits it.
-  const auto flushed = Feed(InputState{}.WithPunctuationConversion(true), U"kan")
+  const auto flushed = FeedPunctuationState(InputState{}.WithPunctuationConversion(true), U"kan")
                            .HandleCandidatesArrived({Candidate{"缶", "かん"}})
                            .next;
-  EXPECT_EQ(flushed.HandleEvent(Ev(UserAction::Input, U'、')).actions,
+  EXPECT_EQ(flushed.HandleEvent(PunctuationEvent(UserAction::Input, U'、')).actions,
             (Actions{HideCandidateWindow{}, ReplaceMarkedText{"缶、"}, CommitMarkedText{},
                      ObserveCommit{"かん", "缶"}}));
 }
@@ -145,32 +153,35 @@ TEST(PunctuationConversionInputStateTest, WithoutACandidateForTheReadingTheMarkJ
 TEST(PunctuationConversionInputStateTest, PunctuationOnlyDigitsAndOtherKeysDoNotConvert) {
   const auto on = InputState{}.WithPunctuationConversion(true);
   // Idle: the mark starts a standalone composition with half-width candidates.
-  EXPECT_FALSE(on.PunctuationConversionReading(Ev(UserAction::Input, U'、')));
-  const auto standalone = Feed(on, U"、");
-  EXPECT_FALSE(standalone.PunctuationConversionReading(Ev(UserAction::Input, U'。')));
-  EXPECT_EQ(standalone.HandleEvent(Ev(UserAction::Input, U'。')).next.Reading(), "、。");
+  EXPECT_FALSE(on.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'、')));
+  const auto standalone = FeedPunctuationState(on, U"、");
+  EXPECT_FALSE(standalone.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'。')));
+  EXPECT_EQ(standalone.HandleEvent(PunctuationEvent(UserAction::Input, U'。')).next.Reading(),
+            "、。");
   // A mark right after a digit is a decimal point or a separator.
   for (const auto digits : {std::u32string_view{U"3"}, std::u32string_view{U"３"}}) {
-    const auto number =
-        Feed(on, digits).HandleCandidatesArrived({Candidate{"3", "3"}, Candidate{"３", "３"}}).next;
-    EXPECT_FALSE(number.PunctuationConversionReading(Ev(UserAction::Input, U'。')));
+    const auto number = FeedPunctuationState(on, digits)
+                            .HandleCandidatesArrived({Candidate{"3", "3"}, Candidate{"３", "３"}})
+                            .next;
+    EXPECT_FALSE(number.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'。')));
   }
   // Only 、 and 。 typed as Input convert.
   const auto composing = CachedComposing(true);
-  EXPECT_FALSE(composing.PunctuationConversionReading(Ev(UserAction::Input, U'/')));
-  EXPECT_FALSE(composing.PunctuationConversionReading(Ev(UserAction::Input, U'?')));
-  EXPECT_FALSE(composing.PunctuationConversionReading(Ev(UserAction::InputAlnum, U'。')));
-  EXPECT_FALSE(composing.PunctuationConversionReading(Ev(UserAction::Commit)));
+  EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'/')));
+  EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'?')));
+  EXPECT_FALSE(
+      composing.PunctuationConversionReading(PunctuationEvent(UserAction::InputAlnum, U'。')));
+  EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Commit)));
 }
 
 TEST(PunctuationConversionInputStateTest, SelectingStandalonePunctuationDoesNotConvert) {
-  const auto waiting = Feed(InputState{}.WithPunctuationConversion(true), U"、")
-                           .HandleEvent(Ev(UserAction::StartConversion))
+  const auto waiting = FeedPunctuationState(InputState{}.WithPunctuationConversion(true), U"、")
+                           .HandleEvent(PunctuationEvent(UserAction::StartConversion))
                            .next;
   const auto selecting =
       waiting.HandleCandidatesArrived({Candidate{"、", "、"}, Candidate{",", "、"}}).next;
   ASSERT_EQ(selecting.kind(), K::Selecting);
-  const auto typed = selecting.HandleEvent(Ev(UserAction::Input, U'。'));
+  const auto typed = selecting.HandleEvent(PunctuationEvent(UserAction::Input, U'。'));
   EXPECT_EQ(typed.next.kind(), K::Composing);
   EXPECT_EQ(typed.next.Reading(), "、。");
 }

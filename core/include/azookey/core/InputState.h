@@ -87,8 +87,7 @@ class InputState {
   void StartConversion(std::vector<ClientAction>& actions);
   void OpenCandidates(std::vector<ClientAction>& actions);
   // A nonzero punctuation is committed after the candidate but never observed.
-  void CommitCandidate(size_t index, std::vector<ClientAction>& actions,
-                       char32_t punctuation = 0);
+  void CommitCandidate(size_t index, std::vector<ClientAction>& actions, char32_t punctuation = 0);
   void CommitAsIs(std::vector<ClientAction>& actions);
   void AfterReadingChanged(std::vector<ClientAction>& actions);
 

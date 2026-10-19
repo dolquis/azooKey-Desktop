@@ -2709,8 +2709,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       core_input_active_ = true;
     }
     if (!legacy_path && core_input_active_ && key_event) {
-      input_state_ = input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot())
-                         .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot());
+      input_state_ =
+          input_state_.WithLiveConversion(local_settings_.LiveConversionSnapshot())
+              .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot());
       core::UserActionEvent event = *key_event;
       bool supported = true;
       if (event.action == UserAction::Input && unicode_active) {
@@ -7638,8 +7639,9 @@ void TextService::OnCandidatesReady(void* context) {
   const auto ui_start = TipRuntimeLogger().enabled() && !trace_id.empty()
                             ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
-  const bool ui_applied = service->ShowCandidateWindowFromCache();
+  // A held 、 or 。 (spec §3.5.1) commits before the answer refreshes anything else.
   service->ResolvePunctuationConversionHoldIfReady();
+  const bool ui_applied = service->ShowCandidateWindowFromCache();
   if (ui_applied && ui_start != std::chrono::steady_clock::time_point{}) {
     const auto ui_end = std::chrono::steady_clock::now();
     TracePhase(trace_id, logging::Phase::UiApply,
@@ -8051,8 +8053,11 @@ bool TextService::PreparePunctuationConversion(const std::string& reading) {
   punctuation_live_segments_.reset();
   // Waiting for the Space answer: the mark joins the reading as with off.
   if (input_state_.awaiting_candidates()) return false;
+  // A punctuated surface without segments cannot drop its automatic mark, so
+  // it is not used; the first candidate is asked for instead.
   if (input_state_.live_conversion() && live_display_reading_ == reading &&
-      !live_display_surface_.empty()) {
+      !live_display_surface_.empty() &&
+      !(live_display_auto_punctuation_ && live_display_segments_.empty())) {
     auto segments = live_display_segments_;
     std::string surface = live_display_surface_;
     if (!segments.empty() && segments.back().auto_punctuation) {
@@ -8110,7 +8115,8 @@ void TextService::ResolvePunctuationConversionHoldIfReady() {
   if (!final_punctuation_hold_ || !final_punctuation_hold_->replay) return;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
-    if (candidates_.empty() || candidates_.front().field.reading != final_punctuation_hold_->reading)
+    if (candidates_.empty() ||
+        candidates_.front().field.reading != final_punctuation_hold_->reading)
       return;
   }
   ResolveFinalPunctuationHold();

@@ -623,6 +623,68 @@ void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
                    candidates.end());
 }
 
+namespace {
+
+constexpr size_t kMaxRepeatedUnit = 4;
+constexpr size_t kRepeatCount = 3;
+
+// Hiragana and katakana compare equal, full-width ASCII folds to ASCII, and ASCII letters fold to
+// lower case, so a repeat in the reading matches the same repeat in the surface.
+char32_t FoldForRepeatCheck(char32_t c) {
+  if (c >= 0x3041 && c <= 0x3096) return c + 0x60;
+  if (c >= 0xFF01 && c <= 0xFF5E) c -= 0xFEE0;
+  if (c >= U'A' && c <= U'Z') return c + (U'a' - U'A');
+  return c;
+}
+
+// nullopt for text that is not valid UTF-8: such a surface or reading is not judged.
+std::optional<std::u32string> FoldedCodepoints(const std::string& utf8) {
+  std::u32string out;
+  for (size_t offset = 0; offset < utf8.size();) {
+    char32_t codepoint = 0;
+    if (!core::DecodeNextUtf8(utf8, offset, codepoint)) return std::nullopt;
+    out.push_back(FoldForRepeatCheck(codepoint));
+  }
+  return out;
+}
+
+bool IsAsciiDigits(const std::u32string& text) {
+  return std::all_of(text.begin(), text.end(), [](char32_t c) { return c >= U'0' && c <= U'9'; });
+}
+
+// Whether `text` repeats a unit kRepeatCount times in a row where `reading` has no such run.
+// A repeat of digits alone is a number (`10000` for いちまん), not a broken generation.
+bool HasUnsupportedRepeat(const std::u32string& text, const std::u32string& reading) {
+  for (size_t unit = 1; unit <= kMaxRepeatedUnit; ++unit) {
+    const size_t run = unit * kRepeatCount;
+    for (size_t i = 0; i + run <= text.size(); ++i) {
+      bool repeated = true;
+      for (size_t j = unit; j < run && repeated; ++j) repeated = text[i + j] == text[i + j - unit];
+      if (!repeated) continue;
+      const auto repeat = text.substr(i, run);
+      if (!IsAsciiDigits(repeat) && reading.find(repeat) == std::u32string::npos) return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+void DropRepeatedUnitModelCandidates(std::vector<core::Candidate>& candidates,
+                                     const std::string& reading) {
+  const auto folded_reading = FoldedCodepoints(reading);
+  if (!folded_reading) return;
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [&](const core::Candidate& candidate) {
+                                    if (candidate.source != core::CandidateSource::Model)
+                                      return false;
+                                    const auto surface = FoldedCodepoints(candidate.surface);
+                                    return surface &&
+                                           HasUnsupportedRepeat(*surface, *folded_reading);
+                                  }),
+                   candidates.end());
+}
+
 // Lock order for user dictionary edits: user_dict_writer_mutex_, then the
 // user dictionary file lock, then state_mutex_ only to copy and to publish.
 // The other takers of the file lock (forget, reset, import, SetUserDictionary)
@@ -1135,6 +1197,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
                                       max_candidates, live, telemetry, tag_boosts);
   DropPrivateUseCandidates(result.candidates);
   DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana);
+  DropRepeatedUnitModelCandidates(result.candidates, requested_kana);
   return result;
 }
 
@@ -1149,6 +1212,7 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
   auto result = QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 0, true, telemetry);
   DropPrivateUseCandidates(result.candidates);
   DropMixedKanaAsciiModelCandidates(result.candidates, kana);
+  DropRepeatedUnitModelCandidates(result.candidates, kana);
   if (result.candidates.empty()) return std::nullopt;
   return std::move(result.candidates.front());
 }

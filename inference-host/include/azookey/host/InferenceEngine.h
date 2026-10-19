@@ -52,6 +52,13 @@ void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
 void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
                                        const std::string& reading);
 
+// Removes the model candidates whose surface repeats one unit (1 to 4 characters) three times or
+// more in a row where `reading` has no such repeat (`New!!!!!!`, `病院🏥🏥🏥`, `製品保証・・・・`,
+// `明日明日明日` for あした). Kana are compared with hiragana and katakana folded together. Other
+// sources and the order of the rest stay.
+void DropRepeatedUnitModelCandidates(std::vector<core::Candidate>& candidates,
+                                     const std::string& reading);
+
 struct InferenceTelemetry {
   uint64_t request_id{};
   core::EtwGuid client{};

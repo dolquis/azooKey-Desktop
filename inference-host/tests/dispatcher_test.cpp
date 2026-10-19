@@ -833,6 +833,14 @@ class FixedCandidatesConverter final : public azookey::core::IConverter {
               {"正常", kana, 8.0},
               {"狂\xEE\xB8\x88狂", kana, 7.0},
               {"次点", kana, 6.0}};
+    if (kana == "にゅうりょく") {
+      azookey::core::Candidate repeated{"New!!!!!!", kana, 9.0};
+      azookey::core::Candidate normal{"入力", kana, 8.0};
+      azookey::core::Candidate emoji{"入力🏥🏥🏥", kana, 7.0};
+      for (auto* candidate : {&repeated, &normal, &emoji})
+        candidate->source = azookey::core::CandidateSource::Model;
+      return {repeated, normal, emoji};
+    }
     azookey::core::Candidate technical{"技術", kana, 5.0};
     technical.tag = azookey::core::CandidateTag::Technical;
     return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
@@ -954,6 +962,35 @@ TEST_F(AppProfileDispatchTest, PrivateUseCandidatesNeverReachQueryCandidatesOrBa
   ASSERT_EQ(parsed->segments.size(), 1u);
   EXPECT_EQ(surfaces_of(parsed->segments.front().candidates), expected);
   EXPECT_EQ(parsed->full_surface, "正常");
+}
+
+TEST_F(AppProfileDispatchTest,
+       RepeatedUnitModelCandidatesNeverReachQueryCandidatesOrBatchConversion) {
+  ApplySettings("{}");
+  const auto surfaces_of = [](const auto& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  const std::vector<std::string> expected{"入力"};
+
+  EXPECT_EQ(surfaces_of(Query(std::nullopt, "にゅうりょく")), expected);
+
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "にゅうりょく";
+  batch.mode = "neural";
+  batch.max_candidates = 10;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = ++next_id;
+  env.type = ipc::MessageType::QueryBatchConversion;
+  env.payload_json = ipc::BuildQueryBatchConversionRequest(batch);
+  const auto response = dispatcher->Dispatch(env);
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->segments.size(), 1u);
+  EXPECT_EQ(surfaces_of(parsed->segments.front().candidates), expected);
 }
 
 TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatchingApp) {

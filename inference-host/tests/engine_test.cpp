@@ -808,6 +808,11 @@ TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
   cfg.learning_flush_interval_sec = 1000;
   cfg.learning_min_weight = 0.0;
   auto engine = MakeEngine(store, cfg);
+  // DEV-1639: check the retry budget each save is given rather than the wall
+  // clock, which also counts encryption and disk I/O on a loaded runner.
+  std::vector<std::chrono::milliseconds> save_budgets;
+  engine->SetBeforeLearningSaveForTests(
+      [&save_budgets](std::chrono::milliseconds budget) { save_budgets.push_back(budget); });
   engine->CommitObservation("first", "saved", kNowBase + 1);
   ASSERT_FALSE(store.dirty());
   const auto encrypted = StoredLearningPath(path);
@@ -815,17 +820,22 @@ TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   ASSERT_NE(reader, INVALID_HANDLE_VALUE);
   testing::internal::CaptureStderr();
-  const auto start = std::chrono::steady_clock::now();
   engine->CommitObservation("pending", "observation", kNowBase + 2);
-  const auto elapsed = std::chrono::steady_clock::now() - start;
   (void)testing::internal::GetCapturedStderr();
   // The flush runs under the lock queries wait on, so it must not spend the
-  // 500 ms retry budget that shutdown and explicit flushes use.
-  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
+  // 500 ms retry budget that shutdown and explicit flushes use: one attempt,
+  // and the blocked save stays dirty for the next flush.
+  EXPECT_EQ(save_budgets,
+            std::vector<std::chrono::milliseconds>(2, std::chrono::milliseconds::zero()));
   EXPECT_TRUE(store.dirty());
+  EXPECT_TRUE(engine->last_error().has_value());
   CloseHandle(reader);
+  save_budgets.clear();
   EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_EQ(save_budgets,
+            std::vector<std::chrono::milliseconds>{azookey::learning::kTransientFileRetryBudget});
   EXPECT_FALSE(store.dirty());
+  engine->SetBeforeLearningSaveForTests(nullptr);
 }
 #endif
 

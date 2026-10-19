@@ -3628,7 +3628,7 @@ class HealthProbeHost {
               if (!answer_window_query.load()) return std::nullopt;
               std::this_thread::sleep_for(std::chrono::milliseconds(window_query_delay_ms.load()));
               if (malformed_window_answer.load()) {
-                res.payload_json = "not json";
+                res.payload_json = "[]";  // Not an object: the parse fails.
                 return res;
               }
             }

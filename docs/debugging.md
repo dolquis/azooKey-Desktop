@@ -219,7 +219,8 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 - `event=key_path_preedit`: preedit の edit session が同期で走ったか、非同期で待たされたか
   （`mode` = `sync` / `async` / `failed` / `request_failed`）。
 - `event=key_path_focus`: document manager の切り替え時、後始末の前後の composition の
-  有無と保留中の入力の長さ。
+  有無と保留中の入力の長さ、まだどの document にも出ていない入力を切替先へ持ち越したか
+  （`carried`）。
 - `event=key_path_context`: context の push / pop。
 
 打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、

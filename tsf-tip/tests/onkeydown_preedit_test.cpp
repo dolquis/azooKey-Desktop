@@ -10759,3 +10759,347 @@ TEST(TsfTipDynamicPunctuationTest, SecureContextCommitsAtOnceWithoutAHold) {
   EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
   EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
 }
+
+// DEV-1638: punctuationConversion = "commit" (docs/tsf-deep-integration-spec.md
+// §3.5.1). Timers are driven directly; nothing here waits on real time.
+namespace {
+azookey::ipc::CandidateField ModelField(std::string surface, std::string reading) {
+  return {std::move(surface), std::move(reading), 1.0, "model"};
+}
+
+void StartPunctuationConversion(DocumentPreeditHarness& h, bool enabled = true) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_punctuation_conversion_for_test(enabled);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  h.keyboard_state.SetDown(VK_LSHIFT, false);
+  h.keyboard_state.SetDown(VK_RSHIFT, false);
+}
+
+// Types てんき and delivers the per-key answer for it.
+void TypeTenkiWithCache(DocumentPreeditHarness& h) {
+  for (const WPARAM key : {WPARAM{'T'}, WPARAM{'E'}, WPARAM{'N'}, WPARAM{'K'}, WPARAM{'I'}})
+    ASSERT_TRUE(h.Press(key));
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_cached_candidates_for_test({ModelField("天気", "てんき")});
+  h.service.show_candidate_window_from_cache_for_test();
+}
+
+size_t QueuedCount(DocumentPreeditHarness& h, azookey::ipc::MessageType type) {
+  const auto queued = h.service.queued_ipc_types_for_test();
+  return static_cast<size_t>(std::count(queued.begin(), queued.end(), type));
+}
+}  // namespace
+
+TEST(TsfTipPunctuationConversionTest, OffKeepsTheMarkInTheReading) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h, false);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "てんき、");
+  EXPECT_EQ(h.context.document->text, L"てんき、");
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+TEST(TsfTipPunctuationConversionTest, CommitsTheCachedFirstCandidateWithTheMark) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"天気。");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  // The mark is neither in the reading nor in the observed surface.
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "てんき");
+  EXPECT_EQ(observation->chosen.surface, "天気");
+}
+
+TEST(TsfTipPunctuationConversionTest, WaitsForTheFirstCandidateAndReplaysTheKey) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_final_request_timeout_for_test(300);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}}) ASSERT_TRUE(h.Press(key));
+  h.service.mark_pending_ipc_query_sent_for_test();
+  // The pending n flushes into the reading, which has no answer yet.
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_EQ(h.service.punctuation_timer_delay_for_test(DelayedActionTimer::kFinal), 300u);
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かん");
+  EXPECT_TRUE(h.service.pending_ipc_live_for_test());
+  EXPECT_EQ(h.context.document->text, L"かん");
+
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_cached_candidates_for_test({ModelField("缶", "かん")});
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_EQ(h.context.document->text, L"缶、");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+TEST(TsfTipPunctuationConversionTest, TimeoutAndUnavailableHostOnlyJoinTheReading) {
+  {
+    SCOPED_TRACE("timeout");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+    h.service.mark_pending_ipc_query_sent_for_test();
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.service.preedit_kana_, "か。");
+    EXPECT_EQ(h.context.document->text, L"か。");
+    EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  }
+  {
+    SCOPED_TRACE("another key");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    ASSERT_TRUE(h.Press('I'));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.service.preedit_kana_, "か。い");
+  }
+  {
+    SCOPED_TRACE("host unavailable");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+    h.service.set_ipc_host_unavailable_for_test(true);
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.service.preedit_kana_, "か。");
+  }
+}
+
+TEST(TsfTipPunctuationConversionTest, StandaloneMarksKeepTheirHalfwidthPath) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "、");
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "、。");
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+}
+
+TEST(TsfTipPunctuationConversionTest, SelectingCommitsTheHighlightedCandidate) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test(
+        {ModelField("天気", "てんき"), ModelField("転機", "てんき")});
+  }));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.context.document->text, L"転機、");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "転機");
+}
+
+TEST(TsfTipPunctuationConversionTest, LiveSurfaceReplacesItsTrailingAutomaticMark) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartLive(h, DynamicPunctuation(true), /*commit_segments=*/true);
+  StartPunctuationConversion(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊。");
+
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  // Only Enter waits for the final request (dynamic-punctuation-spec §7.3).
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊、");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "か");
+  EXPECT_EQ(observation->chosen.surface, "蚊");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
+}
+
+TEST(TsfTipPunctuationConversionTest, SecureContextCommitsWithoutObserving) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.context.document->text, L"天気。");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
+}
+
+TEST(TsfTipPunctuationConversionTest, NumberRewriterRoutesTheMarkThroughCore) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_number_rewriter_enabled_for_test(true);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.context.document->text, L"天気、");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
+TEST(TsfTipPunctuationConversionTest, BatchModeKeepsTheMarkInTheRawInput) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_NE(h.context.document->text.find(L"、"), std::wstring::npos);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+TEST(TsfTipPunctuationConversionTest, WaitingForTheSpaceAnswerJoinsTheMarkWithLiveConversion) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeKaAndShow(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(h.service.preedit_kana_, "か。");
+}
+
+TEST(TsfTipPunctuationConversionTest, CommitWithTheMarkOffersNoCharacterFormCycle) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  TypeTenkiWithCache(h);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  ASSERT_EQ(h.context.document->text, L"天気。");
+  // Cycling the reading's forms would rewrite the typed mark as well.
+  EXPECT_FALSE(h.Press(VK_NONCONVERT));
+  EXPECT_EQ(h.context.document->text, L"天気。");
+}
+
+TEST(TsfTipPunctuationConversionTest, FocusLossDiscardsTheHeldMarkAndEscapeReplaysItFirst) {
+  {
+    SCOPED_TRACE("focus loss");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+    EXPECT_EQ(h.context.document->text.find(L"。"), std::wstring::npos);
+  }
+  {
+    SCOPED_TRACE("escape");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+    ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+    // The held mark joins the reading first, then Esc cancels the whole input.
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_EQ(h.context.document->text, L"");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  }
+}
+
+TEST(TsfTipPunctuationConversionTest, NumberRewriterJoinsAMarkAfterADigitInCore) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_number_rewriter_enabled_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'3'}}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.preedit_kana_, "か3");
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.preedit_kana_, "か3、");
+  EXPECT_EQ(h.context.document->text, L"か3、");
+}
+
+TEST(TsfTipPunctuationConversionTest, LiveSurfaceOfAnotherReadingWaitsForTheCandidate) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeKaAndShow(h);
+  ASSERT_TRUE(h.Press('N'));
+  h.service.mark_pending_ipc_query_sent_for_test();
+  // The live surface still shows か; the flushed reading is かん.
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かん");
+  EXPECT_FALSE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_cached_candidates_for_test({ModelField("缶", "かん")});
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"缶、");
+}
+
+TEST(TsfTipPunctuationConversionTest, PreviewingWithoutALiveSurfaceUsesTheCachedCandidate) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeTenkiWithCache(h);
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Previewing);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"天気。");
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "天気");
+}
+
+TEST(TsfTipPunctuationConversionTest, PunctuatedLiveSurfaceWithoutSegmentsIsNotCommitted) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartLive(h, DynamicPunctuation(true));
+  StartPunctuationConversion(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊。", {}, true);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊。");
+  // The automatic mark cannot be told apart, so the candidate is asked for.
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_cached_candidates_for_test({ModelField("蚊", "か")});
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.context.document->text, L"蚊、");
+}

@@ -584,6 +584,39 @@ preedit に取り込んだ記号は通常の Backspace と同じ削除対象と�
 テンキーの `VK_DECIMAL` と `VK_DIVIDE` は本節の対象外とし、現段階では composition へ
 取り込まない。
 
+#### 3.5.1 句読点キーで変換して確定する（`punctuationConversion`）
+
+設定 `punctuationConversion`（enum `off` / `commit`、既定 `off`、DEV-1638）が `commit` のとき、
+`、` または `。` のキーは、直前の読みを変換して句読点と一緒に確定する。
+`off` では §3.5 の挙動を変えない。
+
+- 確定する文字列は、読みの第 1 候補に句読点を続けたものとする。
+  第 1 候補は次の順に決める。
+  - ライブ変換 ON で、表示中の surface がその読みのものなら、その surface。
+    末尾が自動句読点（`docs/dynamic-punctuation-spec.md` §5.1）なら、その文節を外して押した句読点に置き換える。
+    末尾以外の自動句読点は表示どおり残す。
+  - それ以外は、その読みに対する打鍵中の応答（`QueryCandidates` の live）の先頭候補。
+- 候補窓の表示中（`Selecting`）は、選択中の候補に句読点を続けて確定する。
+- 押した時点で第 1 候補が無い場合（未確定ローマ字を確定して読みが変わった、応答がまだ届いていない）は、
+  その読みで live の `QueryCandidates` を送り、`docs/dynamic-punctuation-spec.md` §7.3 と同じ上限（既定 200ms）まで待つ。
+  待つ間はキーを消費し、応答の到着、上限の経過、次のキーのいずれかで処理する。
+  上限を過ぎた場合、Host が使えない場合、Space の応答待ちの場合は `off` と同じく句読点を読みに足す。
+  未変換の読みを強制確定することはない。
+  フォーカス喪失、composition の終了、Deactivate では、Enter の保留（`docs/dynamic-punctuation-spec.md` §7.3）と同じく、待っている句読点キーを捨てる。
+- 次の場合は変換せず、`off` と同じく句読点を読みに足す。
+  - 読みが空、または `、` `。` だけ（§3.5 の半角候補を残す）。
+  - `Selecting` 以外で、読みの末尾が数字（`3.14`、`1,000`）。
+  - 一括変換（`docs/romaji-batch-conversion-spec.md`）の蓄積中、絵文字検索中、括弧入力中。
+- 数字リライターが ON でも、`Selecting` 以外の句読点キーは core の状態機械が扱う。
+  数字リライターの候補窓（legacy 経路）の表示中は対象外とする。
+- 学習観測は、句読点を除いた読みと候補だけを送る（`docs/privacy-and-secure-input-spec.md` §5 の抑止に従う）。
+  ライブ変換の文節観測では、外した末尾の自動句読点を含めない。
+  secure と private の文脈でも変換と確定は行い、観測は既存の抑止で送らない。
+- その打鍵では半角の `,` `.` を候補から選べない。
+  確定の直後に無変換キーで字種を切り替える機能（確定文字列を読みの字種へ置き換える）は、押した句読点まで置き換えるため、句読点キーの確定には働かない。
+  `、` `。` 以外（`？` `！` など）は対象外とする（follow-up: DEV-1670）。
+- Enter だけが待つ最終要求（`docs/dynamic-punctuation-spec.md` §7.3）は、句読点キーでは送らない。
+
 ## 4. IME On/Off 状態管理 (M21 と統合)
 
 ### 4.1 ITfKeyboardOpenCloseCompartment 購読

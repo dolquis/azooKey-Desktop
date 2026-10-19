@@ -240,6 +240,7 @@ void TipLocalSettings::Stop() noexcept {
   rewriters_.reset();
   ai_ = {};
   live_conversion_ = false;
+  punctuation_conversion_ = false;
   dynamic_punctuation_ = {};
   max_context_length_ = 30;
   prediction_enabled_ = true;
@@ -265,6 +266,11 @@ TipAiSettings TipLocalSettings::AiSnapshot() const {
 bool TipLocalSettings::LiveConversionSnapshot() const {
   const std::lock_guard lock(mutex_);
   return live_conversion_;
+}
+
+bool TipLocalSettings::PunctuationConversionSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return punctuation_conversion_;
 }
 
 TipDynamicPunctuationSettings TipLocalSettings::DynamicPunctuationSnapshot() const {
@@ -301,6 +307,7 @@ void TipLocalSettings::Reload() noexcept {
   TipAiSettings ai;
   ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
+  bool punctuation_conversion = false;
   TipDynamicPunctuationSettings dynamic_punctuation;
   uint32_t max_context_length = 30;
   bool prediction_enabled = true;
@@ -336,6 +343,7 @@ void TipLocalSettings::Reload() noexcept {
       rewriters.minimum = static_cast<uint32_t>(
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
+      punctuation_conversion = json->GetString("punctuationConversion").value_or("off") == "commit";
       dynamic_punctuation.enabled = json->GetBool("dynamicPunctuation").value_or(false);
       if (const auto style = json->GetString("dynamicPunctuationStyle");
           style && *style == "fullwidth_latin")
@@ -417,6 +425,7 @@ void TipLocalSettings::Reload() noexcept {
     rewriters_ = rewriters;
     ai_ = ai;
     live_conversion_ = live_conversion;
+    punctuation_conversion_ = punctuation_conversion;
     dynamic_punctuation_ = std::move(dynamic_punctuation);
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
@@ -569,6 +578,11 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   live_conversion_ = enabled;
+}
+
+void TipLocalSettings::SetPunctuationConversionForTest(bool enabled) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  punctuation_conversion_ = enabled;
 }
 
 void TipLocalSettings::SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings) {

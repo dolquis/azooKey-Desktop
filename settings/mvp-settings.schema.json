@@ -101,6 +101,10 @@
       "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5,
       "description": "M59: 読点を許す文節境界信頼度の下限"
     },
+    "punctuationConversion": {
+      "type": "string", "enum": ["off", "commit"], "default": "off",
+      "description": "DEV-1638: commit で句読点（、。）キーが直前の読みを第 1 候補へ変換し句読点と一緒に確定"
+    },
     "punctuationRulesPath": {
       "type": "string", "default": "%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv",
       "description": "M59: 句読点規則 TSV ファイルのパス"

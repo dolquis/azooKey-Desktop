@@ -97,12 +97,13 @@ enum class InputStateKind {
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
 | Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
-| Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新 |
-| Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新 |
+| Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` は下の句読点の行が優先） |
+| Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
-| Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
+| Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない）。例外は `punctuationConversion = commit` の `、` `。`（`docs/tsf-deep-integration-spec.md` §3.5.1） |
+| Composing / Previewing / Selecting | Input（`、` `。`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
 | ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |

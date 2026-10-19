@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,10 +47,18 @@ class InputState {
   bool awaiting_candidates() const { return awaiting_candidates_; }
   const std::string& unicode_hex() const { return unicode_hex_; }
   bool live_conversion() const { return live_conversion_; }
+  bool punctuation_conversion() const { return punctuation_conversion_; }
   ReplaceSuggestionMode replace_suggestion_mode() const { return replace_suggestion_mode_; }
 
   // Setting injected by the frontend. Only affects later Input events.
   InputState WithLiveConversion(bool enabled) const;
+  // punctuationConversion = "commit" (docs/tsf-deep-integration-spec.md
+  // §3.5.1). Only affects later Input events.
+  InputState WithPunctuationConversion(bool enabled) const;
+  // The reading a 、 or 。 key converts and commits, before the punctuation is
+  // added; nullopt when the key only joins the reading. In Composing and
+  // Previewing the commit also needs a cached first candidate of this reading.
+  std::optional<std::string> PunctuationConversionReading(const UserActionEvent& event) const;
   // Import composition state when returning from a frontend-owned input path.
   // The frontend owns the corresponding marked-text update; no actions are emitted.
   InputState WithComposition(std::string confirmed_kana,
@@ -77,7 +86,8 @@ class InputState {
   void ResetComposition();
   void StartConversion(std::vector<ClientAction>& actions);
   void OpenCandidates(std::vector<ClientAction>& actions);
-  void CommitCandidate(size_t index, std::vector<ClientAction>& actions);
+  // A nonzero punctuation is committed after the candidate but never observed.
+  void CommitCandidate(size_t index, std::vector<ClientAction>& actions, char32_t punctuation = 0);
   void CommitAsIs(std::vector<ClientAction>& actions);
   void AfterReadingChanged(std::vector<ClientAction>& actions);
 
@@ -89,6 +99,7 @@ class InputState {
   bool awaiting_candidates_{false};
   std::string unicode_hex_;
   bool live_conversion_{false};
+  bool punctuation_conversion_{false};
   ReplaceSuggestionMode replace_suggestion_mode_{ReplaceSuggestionMode::MagicConversion};
 };
 

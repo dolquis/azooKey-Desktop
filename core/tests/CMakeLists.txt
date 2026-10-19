@@ -12,6 +12,7 @@ add_executable(core_tests
   live_conversion_chunker_test.cpp
   m59_input_state_test.cpp
   number_rewriter_test.cpp
+  punctuation_conversion_input_state_test.cpp
   punctuation_rules_test.cpp
   redaction_test.cpp
   rewriter_index_test.cpp

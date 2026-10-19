@@ -34,6 +34,10 @@ bool IsCharacterInput(UserAction action) {
   return action == UserAction::Input || action == UserAction::InputAlnum;
 }
 
+bool IsKutoten(char32_t cp) { return cp == U'、' || cp == U'。'; }
+
+bool IsDigit(char32_t cp) { return (cp >= U'0' && cp <= U'9') || (cp >= U'０' && cp <= U'９'); }
+
 }  // namespace
 
 std::string InputState::Reading() const { return kana_ + romaji_.PreviewPending(); }
@@ -42,6 +46,38 @@ InputState InputState::WithLiveConversion(bool enabled) const {
   InputState next = *this;
   next.live_conversion_ = enabled;
   return next;
+}
+
+InputState InputState::WithPunctuationConversion(bool enabled) const {
+  InputState next = *this;
+  next.punctuation_conversion_ = enabled;
+  return next;
+}
+
+std::optional<std::string> InputState::PunctuationConversionReading(
+    const UserActionEvent& event) const {
+  if (!punctuation_conversion_ || event.action != UserAction::Input ||
+      !IsKutoten(event.codepoint) ||
+      (kind_ != InputStateKind::Composing && kind_ != InputStateKind::Previewing &&
+       kind_ != InputStateKind::Selecting)) {
+    return std::nullopt;
+  }
+  RomajiKanaConverter romaji = romaji_;
+  std::string reading = kana_ + romaji.Flush();
+  // Punctuation alone keeps its half-width candidates (DEV-1279), and a mark
+  // right after a digit is a decimal point or separator, not a sentence end.
+  bool punctuation_only = true;
+  char32_t last = 0;
+  size_t offset = 0;
+  char32_t cp = 0;
+  while (offset < reading.size()) {
+    if (!DecodeNextUtf8(reading, offset, cp)) return std::nullopt;
+    if (!IsKutoten(cp)) punctuation_only = false;
+    last = cp;
+  }
+  if (punctuation_only) return std::nullopt;
+  if (kind_ != InputStateKind::Selecting && IsDigit(last)) return std::nullopt;
+  return reading;
 }
 
 InputState InputState::WithComposition(std::string confirmed_kana,
@@ -156,6 +192,13 @@ HandleResult InputState::HandleComposing(const UserActionEvent& event) const {
   switch (event.action) {
     case UserAction::Input:
     case UserAction::InputAlnum:
+      // The first candidate of the reading is the one Space would show first;
+      // without it the mark only joins the reading.
+      if (const auto reading = PunctuationConversionReading(event);
+          reading && !candidates_.empty() && candidates_.front().reading == *reading) {
+        next.CommitCandidate(0, result.actions, event.codepoint);
+        break;
+      }
       next.AppendInput(event);
       if (next.live_conversion_) next.kind_ = InputStateKind::Previewing;
       next.AfterReadingChanged(result.actions);
@@ -203,6 +246,10 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
     case UserAction::Input:
     case UserAction::InputAlnum:
     case UserAction::Backspace:
+      if (PunctuationConversionReading(event)) {
+        next.CommitCandidate(selected_index_, result.actions, event.codepoint);
+        break;
+      }
       // Resuming edits closes the window without committing the highlight.
       result.actions.push_back(HideCandidateWindow{});
       next.kind_ = InputStateKind::Composing;
@@ -410,11 +457,14 @@ void InputState::OpenCandidates(std::vector<ClientAction>& actions) {
   actions.push_back(ReplaceMarkedText{candidates_.front().surface});
 }
 
-void InputState::CommitCandidate(size_t index, std::vector<ClientAction>& actions) {
+void InputState::CommitCandidate(size_t index, std::vector<ClientAction>& actions,
+                                 char32_t punctuation) {
   const std::string reading = kana_ + romaji_.Flush();
   const std::string surface = candidates_[index].surface;
+  std::string text = surface;
+  if (punctuation != 0) AppendUtf8(text, punctuation);
   actions.push_back(HideCandidateWindow{});
-  actions.push_back(ReplaceMarkedText{surface});
+  actions.push_back(ReplaceMarkedText{std::move(text)});
   actions.push_back(CommitMarkedText{});
   actions.push_back(ObserveCommit{reading, surface});
   ResetComposition();

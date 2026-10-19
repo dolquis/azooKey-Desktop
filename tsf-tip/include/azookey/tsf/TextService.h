@@ -279,6 +279,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_live_conversion_for_test(bool enabled) {
     local_settings_.SetLiveConversionForTest(enabled);
   }
+  void set_punctuation_conversion_for_test(bool enabled) {
+    local_settings_.SetPunctuationConversionForTest(enabled);
+  }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }
@@ -650,6 +653,9 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
   bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
+  void set_ipc_host_unavailable_for_test(bool unavailable) {
+    ipc_host_unavailable_.store(unavailable, std::memory_order_release);
+  }
   // Runs on the IPC worker inside TransitionIpcConnection, after the new state
   // is published and before ipc_host_unavailable_ follows it. Set it before
   // start_ipc_worker_for_test and return from it before stopping the worker.
@@ -1126,12 +1132,18 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t final_request_timeout_ms_{kFinalPunctuationRequestTimeoutMs};
   // Enter that waits for the final request; input_state_ is not advanced until
   // it resolves. UI thread only.
+  // A 、 or 。 that waits for the first candidate of `reading` (spec §3.5.1)
+  // shares the wait: it keeps the key in `replay` and decides when it resolves.
   struct FinalPunctuationHold {
     wil::com_ptr_nothrow<ITfContext> context;
     core::HandleResult result;
     uint64_t request_id{0};
+    std::optional<core::UserActionEvent> replay;
+    std::string reading;
   };
   std::optional<FinalPunctuationHold> final_punctuation_hold_;
+  // The live segments a 、 or 。 commits, for its observation. UI thread only.
+  std::optional<std::vector<ipc::LiveSegment>> punctuation_live_segments_;
   struct ReconversionResult {
     uint64_t generation;
     std::wstring surface;
@@ -1223,6 +1235,14 @@ class TextService final : public ITfTextInputProcessorEx,
   void AbortFinalPunctuationHold();
   void CancelPunctuationTimers();
   void AdoptLiveCommitObservation(ITfContext* context);
+  void AdoptLiveSegmentsObservation(ITfContext* context,
+                                    const std::vector<ipc::LiveSegment>& segments,
+                                    const std::string& surface);
+  bool PreparePunctuationConversion(const std::string& reading);
+  bool BeginPunctuationConversionHold(ITfContext* context, const core::UserActionEvent& event,
+                                      const std::string& reading);
+  void ResolvePunctuationConversionHoldIfReady();
+  void ObservePunctuationConversion(ITfContext* context, const core::ObserveCommit& observe);
   std::optional<uint64_t> ApplyLiveConversionResultImpl();
   std::string CaptureLeftContext(ITfContext* context, bool secure);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,

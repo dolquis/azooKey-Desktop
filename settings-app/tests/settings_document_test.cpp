@@ -501,7 +501,7 @@ TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfigurat
 TEST(SettingsDocumentTest, PreservesValidDynamicPunctuationSettings) {
   const auto dir = TestDir("azookey_settings_dynamic_punctuation_document");
   const auto path = dir / "settings.json";
-  const std::string json = R"({"dynamicPunctuation":true,
+  const std::string json = R"({"dynamicPunctuation":true,"punctuationConversion":"commit",
     "dynamicPunctuationStyle":"fullwidth_latin","dynamicPunctuationStability":"eager",
     "dynamicPunctuationIdleMs":350,"segmentBoundaryConfidence":0.75,
     "punctuationRulesPath":"C:/rules/custom.tsv"})";

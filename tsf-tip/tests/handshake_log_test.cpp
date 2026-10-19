@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -224,6 +225,52 @@ TEST(TsfTipHandshakeLogTest, MissingTokenLogsUnavailableWithoutToken) {
     ExpectNoToken(text);
   }
   ExpectNoToken(log.Read());
+}
+
+size_t CountOccurrences(const std::string& text, const std::string& fragment) {
+  size_t count = 0;
+  for (size_t at = text.find(fragment); at != std::string::npos;
+       at = text.find(fragment, at + fragment.size()))
+    ++count;
+  return count;
+}
+
+bool WaitUntil(const std::function<bool()>& done) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (done()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return done();
+}
+
+// DEV-1658: the reconnect loop retries within seconds, so a token that stays
+// missing is warned about once, and the recovery is reported once.
+TEST(TsfTipHandshakeLogTest, MissingTokenWarnsOnceWhileTheStateIsUnchanged) {
+  ScopedHandshakeToken token(kHostToken);
+  ScopedTipLog log;
+  const auto pipe_name = UniquePipeName("missing-once");
+  std::atomic<int> handshakes{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(StartHost(server, pipe_name, handshakes));
+  azookey::tsf::TextService service;
+  service.set_handshake_token_unavailable_for_test(true);
+  service.set_ipc_pipe_name_for_test(pipe_name);
+  service.start_ipc_worker_for_test();
+  const bool retried =
+      WaitUntil([&] { return service.handshake_token_miss_attempts_for_test() >= 3; });
+  const auto missing_log = log.Read();
+  EXPECT_TRUE(retried);
+  EXPECT_EQ(CountOccurrences(missing_log, "\"event\":\"ipc_handshake_token_unavailable\""), 1u)
+      << missing_log;
+  EXPECT_EQ(missing_log.find("ipc_handshake_token_recovered"), std::string::npos) << missing_log;
+
+  service.set_handshake_token_unavailable_for_test(false);
+  const auto text = log.WaitFor({"\"event\":\"ipc_handshake_token_recovered\""}, &service);
+  service.stop_ipc_worker_for_test();
+  EXPECT_EQ(CountOccurrences(text, "\"event\":\"ipc_handshake_token_recovered\""), 1u) << text;
+  EXPECT_EQ(CountOccurrences(text, "\"event\":\"ipc_handshake_token_unavailable\""), 1u) << text;
+  ExpectNoToken(text);
 }
 
 // DEV-1493: the log tells which batch mode a TIP serves keys with, and whether

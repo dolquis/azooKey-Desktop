@@ -4862,8 +4862,35 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   if (handshake_token_unavailable_for_test_.load()) token.reset();
 #endif
   if (!token) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable");
+    // The reconnect loop and the cancel connection retry within a few seconds,
+    // so repeating the warn each time floods the log (DEV-1658). Log the first
+    // miss, then one summary per interval; the token itself is never logged.
+    constexpr auto kMissingTokenSummaryInterval = std::chrono::minutes(1);
+    const auto now = std::chrono::steady_clock::now();
+#ifdef AZOOKEY_TSF_TESTING
+    handshake_token_miss_attempts_for_test_.fetch_add(1);
+#endif
+    ++handshake_token_missing_count_;
+    if (handshake_token_missing_count_ == 1) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable");
+      handshake_token_missing_logged_at_ = now;
+    } else if (now - handshake_token_missing_logged_at_ >= kMissingTokenSummaryInterval) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable",
+                 {{"attempts_since_last_log", static_cast<uint64_t>(
+                                                  handshake_token_missing_count_ -
+                                                  handshake_token_missing_logged_count_)}});
+      handshake_token_missing_logged_at_ = now;
+    } else {
+      return false;
+    }
+    handshake_token_missing_logged_count_ = handshake_token_missing_count_;
     return false;
+  }
+  if (handshake_token_missing_count_ != 0) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_handshake_token_recovered",
+               {{"missed_attempts", static_cast<uint64_t>(handshake_token_missing_count_)}});
+    handshake_token_missing_count_ = 0;
+    handshake_token_missing_logged_count_ = 0;
   }
   hs.handshake_token = *token;
 

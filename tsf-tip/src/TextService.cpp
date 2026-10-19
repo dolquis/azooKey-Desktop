@@ -3781,6 +3781,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
   if (can_send_cancel && ipc_inflight_id_ != 0) {
     ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
                                false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+    ipc_inflight_window_query_id_ = 0;
     need_notify = true;
   }
   ipc_pending_batch_notice_.clear();
@@ -4312,6 +4313,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     if (ipc_inflight_id_ != 0) {
       ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
                                  false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+      ipc_inflight_window_query_id_ = 0;
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -4420,6 +4422,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     if (ipc_inflight_id_ != 0) {
       ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
                                  false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+      ipc_inflight_window_query_id_ = 0;
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -7339,6 +7342,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         if (ipc_inflight_id_ != 0) {
           ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
                                      false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+          ipc_inflight_window_query_id_ = 0;
           need_notify = true;
         }
         ++ipc_pending_id_;
@@ -7901,6 +7905,7 @@ bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::Inp
     if (ipc_inflight_id_ != 0 && ipc_thread_.joinable() && !ipc_stop_.load()) {
       ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
                                  false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+      ipc_inflight_window_query_id_ = 0;
       TrimIpcSendQueueLocked();
       ipc_cv_.notify_one();
     }

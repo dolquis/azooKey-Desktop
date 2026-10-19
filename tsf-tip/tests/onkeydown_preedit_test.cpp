@@ -3572,10 +3572,11 @@ class HealthProbeHost {
           res.trace_id = req.trace_id;
           res.type = req.type;
           if (req.type == azookey::ipc::MessageType::Handshake) {
-            handshakes.fetch_add(1);
+            const int previous = handshakes.fetch_add(1);
             azookey::ipc::HandshakeResponse payload;
             payload.host_version = "test-host";
-            payload.accepted = true;
+            // Refusing the out-of-band Cancel connection sends Cancel in band.
+            payload.accepted = previous == 0 || !refuse_later_handshakes.load();
             res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
             return res;
           }
@@ -3655,6 +3656,7 @@ class HealthProbeHost {
   std::atomic<int> window_query_delay_ms{0};
   std::atomic<bool> mark_window_answer{false};
   std::atomic<bool> malformed_window_answer{false};
+  std::atomic<bool> refuse_later_handshakes{false};
   std::atomic<int> window_queries{0};
   std::atomic<bool> answer_diagnostics{true};
   std::atomic<bool> drop_first_diagnostics{false};
@@ -4004,6 +4006,50 @@ TEST(TsfTipOnKeyDownPreeditTest, WindowQueryDeadlineMissCountsTowardDegraded) {
   EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
   ASSERT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1665: a window query the TIP cancelled for a keystroke is not the Host's
+// miss, even when the Cancel goes in band (the out-of-band connection is
+// refused) and the wait runs to the window deadline; later per-key misses
+// still reach Degraded.
+TEST(TsfTipOnKeyDownPreeditTest, CancelledWindowQueryIsNotCountedButLaterMissesAre) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-window-cancel-miss-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_window_query.store(false);
+  host.refuse_later_handshakes.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/2);
+  h.service.set_query_deadline_ms_for_test(100);
+  h.service.set_window_query_deadline_ms_for_test(300);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 1; }));
+  const int queries_before = host.queries.load();
+  // From here the Host answers nothing: the cancelled window query, then one
+  // per-key miss, which alone must not reach the threshold of 2.
+  host.answer_query.store(false);
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(WaitUntil([&] { return host.queries.load() > queries_before; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+
+  ASSERT_TRUE(h.Press('U'));
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
 

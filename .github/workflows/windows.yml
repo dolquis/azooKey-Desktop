@@ -439,6 +439,11 @@ jobs:
                 RequireDev876Mitigations = $true
               },
               [pscustomobject]@{
+                Name = 'azookey_ime_switch.exe'
+                Path = 'build/${{ matrix.preset }}/tsf-tip/azookey_ime_switch.exe'
+                RequireDev876Mitigations = $true
+              },
+              [pscustomobject]@{
                 Name = 'azookey_settings.exe'
                 Path = 'build/${{ matrix.preset }}/settings-app/Release/azookey_settings.exe'
                 RequireDev876Mitigations = $false

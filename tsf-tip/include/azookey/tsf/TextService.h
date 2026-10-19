@@ -628,6 +628,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_handshake_token_unavailable_for_test(bool unavailable) {
     handshake_token_unavailable_for_test_.store(unavailable);
   }
+  // Handshakes that found no token so far, logged or not.
+  uint32_t handshake_token_miss_attempts_for_test() const {
+    return handshake_token_miss_attempts_for_test_.load();
+  }
   void retry_model_for_test() { RetryModelFromUi(); }
   bool batch_romaji_conversion_for_test() const {
     return batch_romaji_conversion_.load(std::memory_order_relaxed);
@@ -988,8 +992,15 @@ class TextService final : public ITfTextInputProcessorEx,
   // Handshake capability "commit_correction" (DEV-1529); CommitCorrection is
   // sent only to a Host that advertises it.
   std::atomic<bool> ipc_host_commit_correction_{false};
+  // A handshake that finds no token is retried on every reconnect backoff, so
+  // only the first miss and one summary per interval are logged (DEV-1658).
+  // Touched on the IPC thread only.
+  uint32_t handshake_token_missing_count_{0};
+  uint32_t handshake_token_missing_logged_count_{0};
+  std::chrono::steady_clock::time_point handshake_token_missing_logged_at_{};
 #ifdef AZOOKEY_TSF_TESTING
   std::atomic<bool> handshake_token_unavailable_for_test_{false};
+  std::atomic<uint32_t> handshake_token_miss_attempts_for_test_{0};
 #endif
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
   std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_

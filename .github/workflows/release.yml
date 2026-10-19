@@ -179,6 +179,7 @@ jobs:
             -BinaryPath `
               "${{ github.workspace }}\build\windows-release\tsf-tip\azookey_tsf_tip.dll", `
               "${{ github.workspace }}\build\windows-release\inference-host\azookey_inference_host.exe", `
+              "${{ github.workspace }}\build\windows-release\tsf-tip\azookey_ime_switch.exe", `
               "$settingsPayload\azookey_settings.exe" `
             -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs" `
             -PayloadDirectory "$settingsPayload"

@@ -4530,6 +4530,10 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
     ipc_failed_connect_attempts_ = 0;
   }
   ipc_connection_state_.store(*to, std::memory_order_release);
+#ifdef AZOOKEY_TSF_TESTING
+  if (ipc_state_published_hook_for_test_)
+    ipc_state_published_hook_for_test_(ipc_state_published_hook_context_for_test_, *to);
+#endif
   // Set once the Host has actually failed us (not merely before the first
   // connect) and cleared on Ready, so the TIP thread knows when to stop waiting
   // for Host candidates and offer local ones.

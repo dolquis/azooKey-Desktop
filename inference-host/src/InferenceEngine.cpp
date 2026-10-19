@@ -713,6 +713,11 @@ void InferenceEngine::SetBeforeUserDictionaryFileLockForTests(std::function<void
   before_user_dictionary_file_lock_for_tests_ = std::move(hook);
 }
 
+void InferenceEngine::SetBeforeLearningSaveForTests(
+    std::function<void(std::chrono::milliseconds)> hook) {
+  before_learning_save_for_tests_ = std::move(hook);
+}
+
 bool InferenceEngine::AddUserWord(const learning::UserWord& word,
                                   const UserDictionaryEditOptions& options) {
   return EditUserDictionary(
@@ -1972,6 +1977,7 @@ bool InferenceEngine::FlushLearningStoreLocked(std::chrono::milliseconds retry_b
         first_unsaved_observation_epoch_sec_.value_or(0));
     store_->Prune(config_.learning_max_records, config_.learning_min_weight, prune_epoch_sec);
   }
+  if (before_learning_save_for_tests_) before_learning_save_for_tests_(retry_budget);
   if (!store_->Save(retry_budget)) {
     RecordLearningSaveFailureLocked();
     first_unsaved_observation_steady_ = std::chrono::steady_clock::now();

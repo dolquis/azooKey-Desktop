@@ -279,6 +279,10 @@ class InferenceEngine {
   // and is about to wait for the user dictionary file lock. Set it before
   // any edit starts.
   void SetBeforeUserDictionaryFileLockForTests(std::function<void()> hook);
+  // Test-only: runs under state_mutex_ just before each learning store save,
+  // with the transient-conflict retry budget that save is given. Set it before
+  // any observation is committed.
+  void SetBeforeLearningSaveForTests(std::function<void(std::chrono::milliseconds)> hook);
 
   bool LoadModel();
   AiTransformResult TransformLocal(const AiTransformRequest& request,
@@ -525,6 +529,7 @@ class InferenceEngine {
   // up within its wait budget instead of queueing without bound.
   std::timed_mutex user_dict_writer_mutex_;
   std::function<void()> before_user_dictionary_file_lock_for_tests_;
+  std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   // Written with state_mutex_ and english_mutex_; either protects reads.
   // Background/explicit flushes leave the live snapshot alone during erasure.
   bool learning_erasure_in_progress_{false};

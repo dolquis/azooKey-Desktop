@@ -3873,20 +3873,34 @@ TEST(TsfTipOnKeyDownPreeditTest, SilentHostDegradesAfterHealthTimeoutsAndRecover
   host.answer_health.store(false);
   ASSERT_TRUE(host.Start());
 
+  // Outlives the harness, whose destructor stops the worker that runs the hook.
+  std::atomic<bool> degraded_seen{false};
   TextServiceHarness h;
   h.service.set_ipc_pipe_name_for_test(pipe_name);
   h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
                                            /*failure_threshold=*/3);
+  // DEV-1645: the state and ipc_host_unavailable_ are two separate stores, so
+  // a reader can see the new state before the flag follows it. Hold that window
+  // open on every run; the test must wait for the pair, not the state alone.
+  h.service.set_ipc_state_published_hook_for_test(
+      [](void* context, IpcConnectionState state) {
+        auto& seen = *static_cast<std::atomic<bool>*>(context);
+        if (state == IpcConnectionState::Degraded) seen.store(true);
+        if (seen.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      },
+      &degraded_seen);
   h.service.start_ipc_worker_for_test();
-  ASSERT_TRUE(WaitUntil(
-      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded &&
+           h.service.ipc_host_unavailable_for_test();
+  }));
   EXPECT_GE(host.health_probes.load(), 3);
-  EXPECT_TRUE(h.service.ipc_host_unavailable_for_test());
 
   host.answer_health.store(true);
-  ASSERT_TRUE(WaitUntil(
-      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
-  EXPECT_FALSE(h.service.ipc_host_unavailable_for_test());
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready &&
+           !h.service.ipc_host_unavailable_for_test();
+  }));
 
   h.service.stop_ipc_worker_for_test();
 }

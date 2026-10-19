@@ -643,6 +643,14 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
   bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
+  // Runs on the IPC worker inside TransitionIpcConnection, after the new state
+  // is published and before ipc_host_unavailable_ follows it. Set it before
+  // start_ipc_worker_for_test and return from it before stopping the worker.
+  using IpcStatePublishedHook = void (*)(void* context, IpcConnectionState state);
+  void set_ipc_state_published_hook_for_test(IpcStatePublishedHook hook, void* context) {
+    ipc_state_published_hook_for_test_ = hook;
+    ipc_state_published_hook_context_for_test_ = context;
+  }
   std::optional<CandidateHealthState> health_display_state_for_test() {
     std::lock_guard<std::mutex> lock(health_state_mtx_);
     return health_display_state_;
@@ -970,6 +978,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> retry_finished_{false};
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
+  IpcStatePublishedHook ipc_state_published_hook_for_test_{nullptr};
+  void* ipc_state_published_hook_context_for_test_{nullptr};
 #endif
   std::string ipc_pending_reading_;
   std::string ipc_pending_left_context_;

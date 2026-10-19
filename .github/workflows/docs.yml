@@ -92,5 +92,8 @@ jobs:
           python3 scripts/tests/test_git_push_guard.py
           python3 scripts/tests/test_codex_push.py
 
+      - name: Test the Codex document hook adapter
+        run: python3 scripts/tests/test_codex_docs_lint_hook.py
+
       - name: Check agent definitions against the manifest
         run: python3 scripts/check_agent_definitions.py

@@ -17,6 +17,7 @@
   "dynamicPunctuationStability": "onPause",
   "dynamicPunctuationIdleMs": 400,
   "segmentBoundaryConfidence": 0.5,
+  "punctuationConversion": "off",
   "punctuationRulesPath": "%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv",
   "llmMagicConversion": false,
   "logLevel": "info",

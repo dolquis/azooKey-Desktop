@@ -228,6 +228,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "symbolDataPath" || key == "emojiDataPath" || key == "punctuationRulesPath" ||
                key == "inlineEnglishDictionaryPath") {
       valid = value.IsString();
+    } else if (key == "punctuationConversion") {
+      valid = IsStringEnum(value, {"off", "commit"});
     } else if (key == "dynamicPunctuationStyle") {
       valid = IsStringEnum(value, {"ja", "fullwidth_latin"});
     } else if (key == "dynamicPunctuationStability") {

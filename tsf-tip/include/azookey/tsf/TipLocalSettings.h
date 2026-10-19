@@ -54,6 +54,8 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> RewriterSnapshot() const;
   TipAiSettings AiSnapshot() const;
   bool LiveConversionSnapshot() const;
+  // punctuationConversion == "commit" (DEV-1638). Absent or malformed: off.
+  bool PunctuationConversionSnapshot() const;
   // dynamicPunctuation* (M59). Defaults when absent or malformed: off, "ja", onPause, 400 ms.
   TipDynamicPunctuationSettings DynamicPunctuationSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
@@ -66,6 +68,7 @@ class TipLocalSettings final {
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
   void SetLiveConversionForTest(bool enabled);
+  void SetPunctuationConversionForTest(bool enabled);
   void SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
@@ -108,6 +111,7 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> rewriters_;
   TipAiSettings ai_;
   bool live_conversion_{false};
+  bool punctuation_conversion_{false};
   TipDynamicPunctuationSettings dynamic_punctuation_;
   uint32_t max_context_length_{30};
   bool prediction_enabled_{true};

@@ -638,6 +638,21 @@ TEST_F(LocalSettingsTest, DynamicPunctuationDefaultsOffAndReloads) {
   EXPECT_EQ(settings.idle_ms, 400u);
 }
 
+TEST_F(LocalSettingsTest, PunctuationConversionDefaultsOffAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.PunctuationConversionSnapshot());
+  Write(R"({"punctuationConversion":"commit"})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.PunctuationConversionSnapshot(); }));
+  // An unknown value or a wrong type reads as off.
+  Write(R"({"punctuationConversion":"convert"})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.PunctuationConversionSnapshot(); }));
+  Write(R"({"punctuationConversion":"commit"})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.PunctuationConversionSnapshot(); }));
+  Write(R"({"punctuationConversion":true})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.PunctuationConversionSnapshot(); }));
+}
+
 TEST(LivePunctuationPolicyTest, EncodesTheTimingTableOfSection711) {
   using azookey::tsf::AutoPunctuationFor;
   using azookey::tsf::LiveRequestTiming;

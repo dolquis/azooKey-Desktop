@@ -79,6 +79,8 @@ std::vector<SettingField> BuildFields() {
       Bool("liveConversion", Pane::Input, "InputMethod", false),
       Bool("predictionEnabled", Pane::Input, "InputMethod", true),
 
+      Enum("punctuationConversion", Pane::Input, "Punctuation", "off", {"off", "commit"},
+           std::nullopt, true),
       Bool("dynamicPunctuation", Pane::Input, "Punctuation", false, std::nullopt, true),
       Enum("dynamicPunctuationStyle", Pane::Input, "Punctuation", "ja", {"ja", "fullwidth_latin"},
            punctuation),

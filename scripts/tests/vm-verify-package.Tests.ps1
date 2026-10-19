@@ -176,8 +176,10 @@ Describe "VM verification package automation" {
       if ($parts.Count -ne 11) {
         throw "Unexpected GUID initializer shape for $Name"
       }
-      return ("{{{0:X8}-{1:X4}-{2:X4}-{3:X2}{4:X2}-{5:X2}{6:X2}{7:X2}{8:X2}{9:X2}{10:X2}}}" -f
-        $parts)
+      # Windows PowerShell 5.1 misreads "{{{0:X2}}}" as "{X2}", so the outer
+      # braces are added outside the -f format string.
+      $body = "{0:X8}-{1:X4}-{2:X4}-{3:X2}{4:X2}-{5:X2}{6:X2}{7:X2}{8:X2}{9:X2}{10:X2}" -f $parts
+      return "{$body}"
     }
   }
 

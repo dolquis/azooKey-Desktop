@@ -20,6 +20,10 @@ SKIPPED_POS = frozenset(("補助記号", "空白"))
 # Entries above it are mostly rare inflections and long proper nouns.
 DEFAULT_MAX_COST = 10000
 ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})")
+# Characters that the Joyo Kanji Table (2010) lists as the standard form, although Sudachi
+# normalizes them to a CP932 character (`剝がす` -> `剥がす`, `塡める` -> `填める`). They stay
+# in the lexicon: a word spelled with one of them is an ordinary spelling, not a variant glyph.
+STANDARD_FORM_EXCEPTIONS = frozenset("剝塡頰𠮟")
 
 
 def unescape(text: str) -> str:
@@ -52,7 +56,8 @@ def variant_characters(rows: Iterable[list[str]]) -> frozenset[str]:
 
     Compares the surface and the normalized form of each entry, position by position, when they
     have the same length: `硏究` -> `研究` gives `硏`, `仁俠` -> `任侠` gives `俠`. The evidence
-    comes from the lexicon itself, so no hand-kept variant table is needed.
+    comes from the lexicon itself, so no hand-kept variant table is needed. The characters in
+    STANDARD_FORM_EXCEPTIONS are left out.
     """
     found: set[str] = set()
     for row in rows:
@@ -65,7 +70,7 @@ def variant_characters(rows: Iterable[list[str]]) -> frozenset[str]:
             if (char != standard and is_ideograph(char) and not in_cp932(char)
                     and is_ideograph(standard) and in_cp932(standard)):
                 found.add(char)
-    return frozenset(found)
+    return frozenset(found) - STANDARD_FORM_EXCEPTIONS
 
 
 def category(pos: list[str]) -> str:

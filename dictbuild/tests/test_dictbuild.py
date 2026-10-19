@@ -142,12 +142,17 @@ class SudachiExtractTests(unittest.TestCase):
             row("俠", "俠", "名詞,普通名詞,一般", "キョウ"),
             row("俠田", "侠田", "名詞,固有名詞,人名,姓", "キョウダ"),  # proper noun
             row("塼", "塼", "名詞,普通名詞,一般", "セン"),  # no normalization evidence
+            row("剝がす", "剥がす", "動詞,一般", "ハガス"),  # Joyo standard form: kept
+            row("頰", "頬", "名詞,普通名詞,一般", "ホオ"),
+            row("𠮟る", "叱る", "動詞,一般", "シカル"),
+            row("嚙む", "噛む", "動詞,一般", "カム"),  # in the set: skipped
             row("長い", "長い", "形容詞,一般", "ナガイ"),
         ]
         variants = extract_sudachi.variant_characters(rows)
-        self.assertEqual(variants, frozenset("硏俠"))
+        self.assertEqual(variants, frozenset("硏俠嚙"))
+        self.assertFalse(variants & extract_sudachi.STANDARD_FORM_EXCEPTIONS)
         self.assertEqual([entry[0] for entry in extract_sudachi.convert(rows, variants=variants)],
-                         ["研究", "俠田", "塼", "長い"])
+                         ["研究", "俠田", "塼", "剝がす", "頰", "𠮟る", "長い"])
         self.assertEqual(len(list(extract_sudachi.convert(rows))), len(rows))
 
     def test_variant_characters_need_equal_length_and_a_cp932_standard_form(self):

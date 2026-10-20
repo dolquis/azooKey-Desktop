@@ -2358,6 +2358,10 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
       return response;
     }
     if (request.type == MessageType::QueryCandidates) {
+      // DEV-1676: the conversion query runs before the prediction on the one
+      // IPC worker. Answering past the 150ms request deadline is what a slow CI
+      // run does; the deadline is lifted below so the order holds regardless.
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
       response.payload_json = BuildQueryCandidatesResponse({});
       return response;
     }
@@ -2376,6 +2380,11 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_prediction_enabled_for_test(true);
   h.service.set_ipc_pipe_name_for_test(pipe_name);
+  // A conversion query that misses its deadline is re-armed, and the prediction
+  // queued behind it waits for the retry; the 150ms default makes the window
+  // this test looks at depend on how fast the machine answers.
+  h.service.set_query_deadline_ms_for_test(60000);
+  h.service.set_window_query_deadline_ms_for_test(60000);
   h.service.start_ipc_worker_for_test();
   // The pending 'h' keeps the reading at "に", so its result arrives before
   // 'O' queues "にほ"; this is the ordering that coverage timing produced.

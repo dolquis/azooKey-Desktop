@@ -122,6 +122,39 @@ class NeologdPackSinkGuard {
   std::shared_ptr<NeologdPackSink> sink_;
 };
 
+// DEV-1597 (inline-english-candidate-spec section 4.8): registers the
+// Confirmed AutoWord words the English dictionary lacks on a background
+// thread, so the dictionary load and the writer lock waits never delay the
+// start. Declared after the engine: the destructor stops it between words and
+// joins it before the engine and the stores go away.
+class EnglishBackfillWorker {
+ public:
+  explicit EnglishBackfillWorker(azookey::host::InferenceEngine& engine) : engine_(engine) {}
+  ~EnglishBackfillWorker() {
+    stop_.store(true);
+    if (thread_.joinable()) thread_.join();
+  }
+  EnglishBackfillWorker(const EnglishBackfillWorker&) = delete;
+  EnglishBackfillWorker& operator=(const EnglishBackfillWorker&) = delete;
+
+  void Start() {
+    if (thread_.joinable()) return;
+    thread_ = std::thread([this] {
+      // Nothing it does is worth the Host: an allocation failure ends only
+      // this pass, and the next start tries again.
+      try {
+        engine_.BackfillConfirmedEnglishWords([this] { return stop_.load(); });
+      } catch (const std::exception&) {
+      }
+    });
+  }
+
+ private:
+  azookey::host::InferenceEngine& engine_;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
+
 // Section 15.14: only a pack that passed every check reaches the layer, so a failed pack
 // leaves neologd_lexicon in the missing-pack state.
 void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem::path packs_dir) {
@@ -996,6 +1029,12 @@ int main(int argc, char** argv) {
       StartNeologdPackLoad(neologd_pack_sink, user_paths->packs_dir);
     }
   };
+  // Started where the neologd pack starts, once this Host owns its transport:
+  // a rejected duplicate never contends for the English dictionary's lock.
+  EnglishBackfillWorker english_backfill(engine);
+  const auto start_english_backfill = [&] {
+    if (!safe_mode) english_backfill.Start();
+  };
 #ifdef AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD
   // Test-only executable: exercise the real preload thread and shutdown join
   // without a model or GPU. All diagnostic bytes use the actual llama route.
@@ -1264,6 +1303,7 @@ int main(int argc, char** argv) {
                     {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
     start_neologd_pack();
+    start_english_backfill();
     trending_fetcher.Start();
     auto supervisor_state = supervisor_process.GetState();
     while (!StopRequested() &&
@@ -1296,6 +1336,7 @@ int main(int argc, char** argv) {
   }
 
   start_neologd_pack();
+  start_english_backfill();
   trending_fetcher.Start();
   std::string line;
   while (ReadStdioLine(line)) {

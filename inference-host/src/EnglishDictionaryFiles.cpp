@@ -5,7 +5,9 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <iterator>
 #include <map>
+#include <set>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -849,6 +851,161 @@ EnglishJournalAppendResult AppendEnglishJournalOp(const fs::path& journal,
   return done;
 }
 
+std::optional<EnglishOverlayOp> LatestEnglishJournalOp(const std::vector<EnglishOverlayOp>& ops,
+                                                       std::string_view key,
+                                                       std::string_view surface) {
+  for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
+    if (it->key == key && it->surface == surface) return *it;
+  }
+  return std::nullopt;
+}
+
+EnglishJournalRetractResult RetractEnglishJournalEntry(const fs::path& journal,
+                                                       std::string_view key,
+                                                       std::string_view surface,
+                                                       const EnglishWriteHook& hook) {
+  using Result = EnglishJournalRetractResult;
+  auto load = LoadEnglishJournal(journal);
+  if (load.state == EnglishJournalState::Unavailable) return Result::Failed;
+  if (load.state != EnglishJournalState::Ok) return Result::NotAdded;
+  const auto latest_op = LatestEnglishJournalOp(load.contents.ops, key, surface);
+  if (!latest_op || latest_op->kind != EnglishOverlayOpKind::Upsert) return Result::NotAdded;
+  auto latest = LatestJournalOps(std::move(load.contents.ops));
+  latest.erase(std::remove_if(latest.begin(), latest.end(),
+                              [&](const auto& m) { return m.key == key && m.surface == surface; }),
+               latest.end());
+  return ReplaceFileAtomically(journal, EncodeJournal(latest), std::nullopt, hook,
+                               EnglishWriteStep::JournalRewriteWritten)
+             ? Result::Retracted
+             : Result::Failed;
+}
+
+namespace {
+
+// Section 4.6 merge: the overlay's ops in arrival order over the records; an
+// upsert replaces or adds the entry, a delete hides it.
+std::vector<EnglishWordRecord> MergeOverlayOps(std::vector<EnglishWordRecord> records,
+                                               const std::vector<EnglishOverlayOp>& ops) {
+  std::map<std::pair<std::string, std::string>, size_t> index;
+  for (size_t i = 0; i < records.size(); ++i) index[{records[i].key, records[i].surface}] = i;
+  std::vector<bool> erased(records.size(), false);
+  for (const auto& op : ops) {
+    const auto found = index.find({op.key, op.surface});
+    if (op.kind == EnglishOverlayOpKind::Delete) {
+      if (found != index.end()) erased[found->second] = true;
+      continue;
+    }
+    if (op.surface.empty()) continue;
+    EnglishWordRecord record{op.key, op.surface, op.frequency, op.flags};
+    if (found != index.end()) {
+      records[found->second] = std::move(record);
+      erased[found->second] = false;
+    } else {
+      index[{op.key, op.surface}] = records.size();
+      records.push_back(std::move(record));
+      erased.push_back(false);
+    }
+  }
+  std::vector<EnglishWordRecord> kept;
+  kept.reserve(records.size());
+  for (size_t i = 0; i < records.size(); ++i) {
+    if (!erased[i]) kept.push_back(std::move(records[i]));
+  }
+  return kept;
+}
+
+// Removes path when it is there; false when it is there and stays.
+bool RemoveIfPresent(const fs::path& path) {
+  std::error_code ec;
+  fs::remove(path, ec);
+  if (!ec) return true;
+  return !fs::exists(path, ec) && !ec;
+}
+
+}  // namespace
+
+bool ResetEnglishRuntimeFiles(const EnglishDictionaryPaths& paths,
+                              const std::optional<std::vector<EnglishWordRecord>>& tsv_records,
+                              std::optional<fs::file_time_type> tsv_time,
+                              const EnglishWriteHook& hook) {
+  // The journal is the ledger of the runtime upserts: without a TSV it is the
+  // only record of which base entries they added, and it outlives the steps
+  // below so that a retry after a failure erases the same words.
+  const auto journal = LoadEnglishJournal(paths.journal);
+  if (journal.state == EnglishJournalState::Unavailable) return false;
+  std::optional<std::string> bytes;
+  const auto previous = ReadEnglishBaseHeader(paths.base);
+  const uint32_t generation = previous ? previous->generation + 1 : 1;
+  if (tsv_records) {
+    // Compaction may have merged runtime upserts into the base; the TSV
+    // without the journal is the base they never touched.
+    bytes = EncodeEnglishBase(*tsv_records, generation);
+  } else if (const auto base = EnglishBaseImage::Map(paths.base)) {
+    auto records = base->Records();
+    const auto overlay = ReadEnglishOverlay(paths.overlay);
+    if (overlay && overlay->header.base_fingerprint == base->header().content_hash) {
+      records = MergeOverlayOps(std::move(records), overlay->ops);
+    }
+    if (journal.state == EnglishJournalState::Ok) {
+      // A word the base had before the upsert was never upserted (section
+      // 4.8 writes only absent words), so only runtime additions go.
+      std::set<std::pair<std::string, std::string>> added;
+      for (const auto& op : LatestJournalOps(journal.contents.ops)) {
+        if (op.kind == EnglishOverlayOpKind::Upsert) added.insert({op.key, op.surface});
+      }
+      records.erase(
+          std::remove_if(records.begin(), records.end(),
+                         [&](const auto& r) { return added.count({r.key, r.surface}) > 0; }),
+          records.end());
+    }
+    bytes = EncodeEnglishBase(std::move(records), generation);
+  } else {
+    // A base that is there but cannot be mapped now may still hold compacted
+    // runtime words; the journal that names them must outlive it.
+    std::error_code ec;
+    const auto status = fs::status(paths.base, ec);
+    if (status.type() != fs::file_type::not_found) return false;
+  }
+  if (bytes) {
+    if (!WriteEnglishBase(paths, *bytes, tsv_time, hook)) return false;
+    if (!Step(hook, EnglishWriteStep::ResetBaseReplaced)) return false;
+    if (!ReinitEnglishOverlay(paths.overlay, GetU32(Bytes(*bytes) + 28), hook)) return false;
+  } else if (!RemoveIfPresent(paths.overlay)) {
+    // No base to replay it over: the overlay only holds runtime ops.
+    return false;
+  }
+  if (!RemoveIfPresent(paths.journal)) return false;
+  if (!Step(hook, EnglishWriteStep::ResetJournalRemoved)) return false;
+  // What a moved-aside journal or a crashed rewrite left behind. The writer
+  // lock keeps any live temporary file of another host out of this window.
+  // Native strings: a configured name need not convert to the narrow charset.
+  const auto prefix = [](const fs::path& file, const char* suffix) {
+    auto name = file.filename().native();
+    name += fs::path(suffix).native();
+    return name;
+  };
+  const fs::path::string_type prefixes[] = {prefix(paths.journal, ".corrupt."),
+                                            prefix(paths.journal, ".tmp."),
+                                            prefix(paths.base, ".tmp.")};
+  const auto leftover = [&](const fs::path::string_type& name) {
+    return std::any_of(std::begin(prefixes), std::end(prefixes),
+                       [&](const auto& p) { return name.rfind(p, 0) == 0; });
+  };
+  std::error_code ec;
+  const auto dir = paths.journal.has_parent_path() ? paths.journal.parent_path() : fs::path(".");
+  std::vector<fs::path> found;
+  for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+    if (leftover(it->path().filename().native())) found.push_back(it->path());
+  }
+  if (ec) {
+    std::error_code missing;
+    return !fs::exists(dir, missing) && !missing;
+  }
+  bool removed = true;
+  for (const auto& path : found) removed = RemoveIfPresent(path) && removed;
+  return removed;
+}
+
 bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const EnglishWriteHook& hook) {
   // A base not compiled from the current TSV is about to be recompiled from
   // it; compacting it would stamp the stale content as current.
@@ -869,32 +1026,7 @@ bool CompactEnglishDictionary(const EnglishDictionaryPaths& paths, const English
   }
   // A stale overlay belongs to another base and must not be merged (4.7).
   if (overlay && overlay->header.base_fingerprint == base->header().content_hash) {
-    std::map<std::pair<std::string, std::string>, size_t> index;
-    for (size_t i = 0; i < records.size(); ++i) index[{records[i].key, records[i].surface}] = i;
-    std::vector<bool> erased(records.size(), false);
-    for (const auto& op : overlay->ops) {
-      const auto found = index.find({op.key, op.surface});
-      if (op.kind == EnglishOverlayOpKind::Delete) {
-        if (found != index.end()) erased[found->second] = true;
-        continue;
-      }
-      if (op.surface.empty()) continue;
-      EnglishWordRecord record{op.key, op.surface, op.frequency, op.flags};
-      if (found != index.end()) {
-        records[found->second] = std::move(record);
-        erased[found->second] = false;
-      } else {
-        index[{op.key, op.surface}] = records.size();
-        records.push_back(std::move(record));
-        erased.push_back(false);
-      }
-    }
-    std::vector<EnglishWordRecord> kept;
-    kept.reserve(records.size());
-    for (size_t i = 0; i < records.size(); ++i) {
-      if (!erased[i]) kept.push_back(std::move(records[i]));
-    }
-    records = std::move(kept);
+    records = MergeOverlayOps(std::move(records), overlay->ops);
   }
   // The new generation and content_hash travel inside the new base, so they
   // are durable before the rename makes it live.

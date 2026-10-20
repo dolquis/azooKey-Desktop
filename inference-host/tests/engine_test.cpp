@@ -4498,3 +4498,102 @@ TEST_F(EngineConfirmedEnglishWordTest, TheUpsertIsLoggedWithItsSourceAndResultBu
   EXPECT_NE(records[0].find("\"result\":\"persisted\""), std::string::npos) << records[0];
   EXPECT_EQ(records[0].find("otlin"), std::string::npos) << records[0];
 }
+
+// DEV-1596: forgetting a confirmed word (state rejected) takes back what its
+// confirmation added, and leaves a dictionary word of the same name alone.
+TEST_F(EngineConfirmedEnglishWordTest, ForgettingAConfirmedWordTakesItBackFromTheDictionary) {
+  auto_words_.IngestTrending(
+      {{"Kotlin", "ことりん"}, {"Kotlin", "ことりーん"}, {"apple", "あっぷる"}}, kNowBase, true);
+  ASSERT_TRUE(auto_words_.Save());
+  engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
+  engine_->RegisterConfirmedEnglishWord("apple", "test");
+  ASSERT_EQ(Lookup("kotlin").size(), 1u);
+  const auto page =
+      engine_->ListLearningEntries(azookey::host::LearningDataStore::AutoWord, "", 0, 10);
+  ASSERT_EQ(page.entries.size(), 3u);
+  const auto forget = [&](const std::string& reading) {
+    for (const auto& entry : page.entries) {
+      if (entry.reading != reading) continue;
+      EXPECT_EQ(engine_->ForgetLearningEntry(azookey::host::LearningDataStore::AutoWord, entry.id),
+                azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+    }
+  };
+  // Another reading of the same surface is still Confirmed: the word stays.
+  forget("ことりん");
+  EXPECT_EQ(Lookup("kotlin").size(), 1u);
+  forget("ことりーん");
+  forget("あっぷる");
+  EXPECT_TRUE(Lookup("kotlin").empty());
+  const auto apple = Lookup("apple");
+  ASSERT_EQ(apple.size(), 1u);
+  EXPECT_EQ(apple[0].frequency, 50u);
+}
+
+// DEV-1600: the AutoWord reset erases the dictionary's runtime additions, and
+// an upsert for a word confirmed before the reset is cancelled.
+TEST_F(EngineConfirmedEnglishWordTest, TheAutoWordResetErasesTheRuntimeAdditions) {
+  engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
+  const auto epoch = engine_->EnglishRegistrationEpoch();
+  ASSERT_EQ(Lookup("kotlin").size(), 1u);
+  // Even with the dictionary off, files written while it was on are erased.
+  auto config = engine_->config();
+  config.english.dictionary_enabled = false;
+  engine_->ApplyConfig(config);
+  EXPECT_EQ(engine_->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  EXPECT_TRUE(Lookup("kotlin").empty());
+  EXPECT_EQ(Lookup("apple").size(), 1u);
+  EXPECT_FALSE(std::filesystem::exists(azookey::host::EnglishDictionaryPaths::From(tsv_).journal));
+  EXPECT_NE(engine_->EnglishRegistrationEpoch(), epoch);
+
+  config.english.dictionary_enabled = true;
+  engine_->ApplyConfig(config);
+  // No longer Confirmed by the time of the upsert: cancelled.
+  EXPECT_TRUE(
+      engine_->RegisterConfirmedEnglishWord("Rust", "test", engine_->EnglishRegistrationEpoch()));
+  EXPECT_TRUE(Lookup("rust").empty());
+  auto_words_.IngestTrending({{"Swift", "すいふと"}}, kNowBase, true);
+  // Confirmed before the reset: cancelled. After it: written.
+  EXPECT_TRUE(engine_->RegisterConfirmedEnglishWord("Swift", "test", epoch));
+  EXPECT_TRUE(Lookup("swift").empty());
+  EXPECT_TRUE(
+      engine_->RegisterConfirmedEnglishWord("Swift", "test", engine_->EnglishRegistrationEpoch()));
+  EXPECT_EQ(Lookup("swift").size(), 1u);
+}
+
+TEST_F(EngineConfirmedEnglishWordTest, AResetThatCannotTakeTheWriterLockFails) {
+  engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
+  ASSERT_EQ(Lookup("kotlin").size(), 1u);
+  const auto held = azookey::host::EnglishDictionaryFileLock::Acquire(
+      azookey::host::EnglishDictionaryPaths::From(tsv_).lock);
+  ASSERT_TRUE(held);
+  EXPECT_EQ(engine_->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
+            azookey::host::InferenceEngine::ResetOutcome::SaveFailed);
+  EXPECT_EQ(Lookup("kotlin").size(), 1u);
+}
+
+// DEV-1597: the startup backfill registers the Confirmed words the dictionary
+// lacks, once, within its write bound, and stops when asked.
+TEST_F(EngineConfirmedEnglishWordTest, TheBackfillRegistersOnlyMissingConfirmedWords) {
+  auto_words_.IngestTrending({{"Kotlin", "ことりん"},
+                              {"Swift", "すいふと"},
+                              {"Rust", "らすと"},
+                              {"apple", "あっぷる"},
+                              {"新語", "しんご"}},
+                             kNowBase, true);
+  // Pending words are not registered.
+  auto_words_.IngestTrending({{"Haskell", "はすける"}}, kNowBase, false);
+  ASSERT_EQ(auto_words_.ListByState(azookey::learning::AutoWordState::Confirmed).size(), 5u);
+
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords([] { return true; }), 0u);
+  EXPECT_TRUE(Lookup("kotlin").empty());
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}, 1), 1u);
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}), 2u);
+  EXPECT_EQ(Lookup("kotlin").size(), 1u);
+  EXPECT_EQ(Lookup("swift").size(), 1u);
+  EXPECT_EQ(Lookup("rust").size(), 1u);
+  EXPECT_TRUE(Lookup("haskell").empty());
+  EXPECT_EQ(Lookup("apple")[0].frequency, 50u);
+  // Every word is in the dictionary now: nothing is written again.
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}), 0u);
+}

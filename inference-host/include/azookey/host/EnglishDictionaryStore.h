@@ -31,6 +31,7 @@ enum class EnglishWriteResult {
   JournalFailed,  // In the overlay only: the journal could not be written.
   MemoryOnly,     // Not on disk (no lock, no write access): kept until restart.
   Dropped,        // Not kept: there is no base, or memory ran out.
+  Cancelled,      // Not written: the caller's still_current turned false.
 };
 const char* EnglishWriteResultName(EnglishWriteResult result);
 
@@ -38,9 +39,19 @@ struct EnglishWriteOutcome {
   EnglishWriteResult result{EnglishWriteResult::Dropped};
   // true when the op reached the overlay file.
   explicit operator bool() const {
-    return result != EnglishWriteResult::MemoryOnly && result != EnglishWriteResult::Dropped;
+    return result != EnglishWriteResult::MemoryOnly && result != EnglishWriteResult::Dropped &&
+           result != EnglishWriteResult::Cancelled;
   }
 };
+
+// Where a Retract ended up (section 4.8, DEV-1596).
+enum class EnglishRetractResult {
+  Retracted,   // Out of the journal, and hidden by an overlay tombstone unless the TSV has it.
+  MemoryOnly,  // Hidden only in memory until restart; the journal still has it.
+  NotAdded,    // No runtime upsert of the word to take back: nothing changed.
+  Failed,      // Not taken back (no lock, or a file could not be read or written).
+};
+const char* EnglishRetractResultName(EnglishRetractResult result);
 
 // The English dictionary at a configured path (sections 4.5 to 4.8):
 // - reads the .bin when it is valid and its mtime equals the TSV's (or there
@@ -77,8 +88,24 @@ class EnglishDictionaryStore {
   }
   std::vector<EnglishDictionaryEntry> Lookup(std::string_view lower_key);
 
-  EnglishWriteOutcome Upsert(std::string_view surface, uint32_t frequency, uint8_t flags = 0);
+  // still_current, when set, is asked once this writer holds the update
+  // mutex: false cancels the upsert. ResetRuntimeAdditions takes the same
+  // mutex, so an upsert that passes it lands before a reset that follows.
+  EnglishWriteOutcome Upsert(std::string_view surface, uint32_t frequency, uint8_t flags = 0,
+                             const std::function<bool()>& still_current = {});
   EnglishWriteOutcome Remove(std::string_view surface);
+  // Section 4.8 (DEV-1596): takes back a runtime upsert of surface, under the
+  // writer lock, only when the latest journal op on it is an upsert (or this
+  // host holds one in memory). The overlay gets a tombstone unless the TSV has
+  // the word, and the journal loses the entry, so a later TSV that has the
+  // word shows it again. A word of the TSV or the shipped .bin that no
+  // runtime op added is never hidden.
+  EnglishRetractResult Retract(std::string_view surface);
+  // Section 4.8 (DEV-1600): erases the runtime additions, here and in the
+  // files (ResetEnglishRuntimeFiles), under the writer lock. Runtime deletes
+  // go with a TSV; without one, a delete already in the overlay stays. false
+  // when the lock, the TSV or a file step fails; calling it again is safe.
+  bool ResetRuntimeAdditions();
   bool Compact();
 
   // Test seams: the write protocol steps, a call between sampling the base
@@ -110,6 +137,8 @@ class EnglishDictionaryStore {
                                                            std::filesystem::file_time_type tsv_time,
                                                            bool force, bool file_locked);
   EnglishWriteResult AppendLocked(const EnglishOverlayOp& op);
+  // Under update_mutex_ and the writer lock: the base for the current files.
+  void SettleBaseLocked(bool file_locked);
   void Publish(std::shared_ptr<const EnglishDictionary> snapshot, std::optional<Sample> sample);
   bool IsCurrent(const Sample& sample) const;
   void Invalidate();

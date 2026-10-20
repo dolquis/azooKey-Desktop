@@ -392,6 +392,8 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
 - `debug_info` は識別用の印である。重複除去で他の候補とまとめられると、
   `;dup:` 付きで連結される。
 - Confirmed になった ASCII 英字の語は、M60 の英単語辞書にも入る（`docs/inline-english-candidate-spec.md` §4.8）。
+  Host は起動時に、まだ辞書に無い Confirmed の語も取り込む。Rejected に戻した語（`ResolveNewWord` の reject、
+  学習データの忘却）は、確定で辞書に足した分だけ辞書から取り消す。新語候補の全削除は、確定で辞書に足した語も消す。
 
 ## 7. 承認フロー
 

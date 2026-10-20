@@ -52,7 +52,7 @@ LearningDataPage InferenceEngine::ListLearningEntries(LearningDataStore store,
 
 InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningDataStore store,
                                                                     const std::string& id) {
-  std::lock_guard history_lock(learning_history_mutex_);
+  std::unique_lock history_lock(learning_history_mutex_);
   LearningDataStores stores;
   std::optional<LearningDataEntry> entry;
   {
@@ -88,8 +88,15 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
       const auto outcome = auto_word_store_->SetStateAndSave(entry->surface, entry->reading,
                                                              learning::AutoWordState::Rejected);
       if (outcome == learning::AutoWordSaveOutcome::NotFound) return ForgetOutcome::NotFound;
-      return outcome == learning::AutoWordSaveOutcome::SaveFailed ? ForgetOutcome::SaveFailed
-                                                                  : ForgetOutcome::Forgotten;
+      if (outcome == learning::AutoWordSaveOutcome::SaveFailed) return ForgetOutcome::SaveFailed;
+      // DEV-1596: a word the English dictionary gained from its confirmation
+      // leaves it, outside the history lock as every English write does. The
+      // response does not depend on it; the engine logs the result.
+      if (outcome != learning::AutoWordSaveOutcome::Unchanged) {
+        history_lock.unlock();
+        RetractRejectedEnglishWord(entry->surface, "forget");
+      }
+      return ForgetOutcome::Forgotten;
     }
     case LearningDataStore::UserDictionary:
       break;
@@ -226,9 +233,13 @@ InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(
     const std::vector<learning::AutoWord>& words, uint64_t now_epoch, bool auto_promote,
     const std::function<bool()>& still_current) {
   std::vector<std::string> newly_confirmed;
+  uint64_t english_epoch = 0;
   {
     std::lock_guard history_lock(learning_history_mutex_);
     if (still_current && !still_current()) return TrendingIngestOutcome::Cancelled;
+    // Under the history lock, before the save: an AutoWord reset that follows
+    // cancels the upserts below (DEV-1600).
+    english_epoch = english_registration_epoch_.load();
     if (!auto_word_store_ || auto_word_store_->save_blocked()) {
       return TrendingIngestOutcome::SaveFailed;
     }
@@ -258,12 +269,14 @@ InferenceEngine::TrendingIngestOutcome InferenceEngine::IngestTrendingWords(
   // Outside the history lock: each upsert may wait for the English
   // dictionary's writer lock and flush two files, and commits must not queue
   // behind a whole batch of them.
-  for (const auto& surface : newly_confirmed) RegisterConfirmedEnglishWord(surface, "trending");
+  for (const auto& surface : newly_confirmed) {
+    RegisterConfirmedEnglishWord(surface, "trending", english_epoch);
+  }
   return TrendingIngestOutcome::Saved;
 }
 
 InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataStore store) {
-  std::lock_guard history_lock(learning_history_mutex_);
+  std::unique_lock history_lock(learning_history_mutex_);
   if (store == LearningDataStore::Learning) return ResetLearningChannels();
   switch (store) {
     case LearningDataStore::Learning:
@@ -284,7 +297,17 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
     }
     case LearningDataStore::AutoWord: {
       if (!auto_word_store_) return ResetOutcome::Unavailable;
-      return auto_word_store_->ResetAndSave() ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
+      if (!auto_word_store_->ResetAndSave()) return ResetOutcome::SaveFailed;
+      // DEV-1600: the English dictionary's runtime additions derive from the
+      // rows just erased. Raised after the save, so an upsert for a word
+      // confirmed before the reset is cancelled (RegisterConfirmedEnglishWord).
+      english_registration_epoch_.fetch_add(1);
+      // Outside the history lock, as every English write is: the writer lock
+      // wait and a TSV recompile must not hold commits back. A failure leaves
+      // the AutoWord store empty and is reported; a retry erases the same
+      // words, as the journal survives every failed step.
+      history_lock.unlock();
+      return ResetEnglishRuntimeAdditions() ? ResetOutcome::Reset : ResetOutcome::SaveFailed;
     }
     case LearningDataStore::UserDictionary:
       break;

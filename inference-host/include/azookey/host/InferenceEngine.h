@@ -263,10 +263,28 @@ class InferenceEngine {
   // just become Confirmed enters the English dictionary when inlineEnglishDictionary
   // is on and the surface is ASCII letters only, at least inlineEnglishMinLength
   // long, and not already there. source names the path in the log
-  // ("new_word_resolve", "mining" or "trending"). It takes state_mutex_
-  // briefly, and the upsert may wait for the dictionary's writer lock; call it
-  // without holding state_mutex_ or converter_call_mutex_.
-  void RegisterConfirmedEnglishWord(const std::string& surface, std::string_view source);
+  // ("new_word_resolve", "mining", "trending" or "backfill"). It takes
+  // state_mutex_ briefly, and the upsert may wait for the dictionary's writer
+  // lock; call it without holding any engine mutex.
+  // epoch, when set, is EnglishRegistrationEpoch() read before the word's
+  // Confirmed state was saved: a reset of the AutoWord store since then
+  // cancels the upsert (DEV-1600). true when an upsert was attempted.
+  bool RegisterConfirmedEnglishWord(const std::string& surface, std::string_view source,
+                                    std::optional<uint64_t> epoch = std::nullopt);
+  uint64_t EnglishRegistrationEpoch() const { return english_registration_epoch_.load(); }
+  // DEV-1596 (section 4.8): an M36 word that has just left Confirmed for
+  // Rejected leaves the English dictionary when a runtime upsert added it
+  // (EnglishDictionaryStore::Retract). source names the path in the log
+  // ("new_word_resolve" or "forget"). Call it without holding any engine mutex.
+  void RetractRejectedEnglishWord(const std::string& surface, std::string_view source);
+  // DEV-1597 (section 4.8): registers the Confirmed AutoWord words the English
+  // dictionary lacks, such as those confirmed before the wiring or by
+  // `newwords confirm --offline`. Stops when stop() turns true, or after
+  // max_writes upserts. Returns the number of upserts attempted. Meant for a
+  // background thread at startup.
+  static constexpr size_t kMaxEnglishBackfillWrites = 256;
+  size_t BackfillConfirmedEnglishWords(const std::function<bool()>& stop,
+                                       size_t max_writes = kMaxEnglishBackfillWrites);
   struct DictionaryLoadResult {
     std::string name;
     bool loaded;
@@ -460,6 +478,9 @@ class InferenceEngine {
   bool NoteObservationIdLocked(const std::string& observation_id);
   // The dictionary store for the path; it reloads when its files change.
   std::shared_ptr<EnglishDictionaryStore> EnglishDictionaryFor(const std::string& utf8_path);
+  // DEV-1600: the AutoWord reset's erasure of the English dictionary's
+  // runtime additions. true when there is nothing to erase.
+  bool ResetEnglishRuntimeAdditions();
   // Saves a dirty English store; logs a failure. Holds english_mutex_.
   bool SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
@@ -514,6 +535,9 @@ class InferenceEngine {
   std::mutex english_dictionary_mutex_;
   std::shared_ptr<EnglishDictionaryStore> english_dictionary_;
   std::filesystem::path english_dictionary_path_;
+  // DEV-1600: raised by each successful AutoWord reset; an English upsert for
+  // a word confirmed under an older value is cancelled.
+  std::atomic<uint64_t> english_registration_epoch_{0};
   learning::DictionaryStore dictionaries_;
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};

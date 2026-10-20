@@ -4900,6 +4900,7 @@ TEST_F(DispatcherTest, ForgettingReachesPairsOnlyInTheLegacyFile) {
 
 // DEV-1584: confirming an English new word adds it to the English dictionary;
 // rejecting one does not, and the reply does not depend on the dictionary.
+// DEV-1596: rejecting a confirmed one takes back what its confirmation added.
 TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
   const auto dir = std::filesystem::path(temp_directory.File("azookey_dispatcher_english_m36"));
   RemovePathNoThrow(dir);
@@ -4940,6 +4941,11 @@ TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
   EXPECT_EQ(kotlin[0].surface, "Kotlin");
   EXPECT_EQ(kotlin[0].frequency, 1u);
   EXPECT_TRUE(reread.Lookup("swift").empty());
+
+  // DEV-1596: rejecting the confirmed word takes it back out.
+  resolve(92, "Kotlin", "ことりん", "reject");
+  EXPECT_TRUE(azookey::host::EnglishDictionaryStore(tsv).Lookup("kotlin").empty());
+  EXPECT_EQ(azookey::host::EnglishDictionaryStore(tsv).Lookup("apple").size(), 1u);
 
   config.english.dictionary_enabled = false;
   engine.ApplyConfig(config);

@@ -373,7 +373,9 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
    `kModelConversionBudget`（§8.2）の deadline、末尾を長さ制限した文脈、候補上限を
    `BuildContext` 経由で渡して `Convert` する。`EngineConfig::inference_lane` が Fast
    （`docs/copilot-pc-backend-spec.md` §6.2）なら、モデル converter へ渡す候補上限を 1 にし、
-   `live = false` でも beam 1 本で変換する。fallback converter へ渡す候補上限は変えない。
+   `live = false` でも beam 1 本で変換する。モデルが無いときに `active_converter_` となる
+   fallback converter へ渡す候補上限は変えない。Zenzai が劣化して内部から fallback を呼ぶとき
+   （§7.4）は、上限 1 の文脈をそのまま渡す。
    モデル converter から例外が出て
    fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は
    §7.4 に従う。返された候補を末尾へ連結する。
@@ -822,7 +824,7 @@ KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` �
 記号を次のように置く。
 
 - **B**：この変換の beam 幅。`RequestedCandidateLimit` が返す値（上限 `kMaxModelCandidates` = 4、
-  live 変換は 1）。B は同時に「beam あたりの展開 top-k」でもあり、この兼用は変えない。
+  live 変換と Fast レーン（§6.2）は 1）。B は同時に「beam あたりの展開 top-k」でもあり、この兼用は変えない。
 - **P**：この変換の prompt token 数。
 - **prompt sequence**：`seq_id` 0。現在の変換の prompt token だけを位置 0 から連続して保持する。
   生成 token を入れない。

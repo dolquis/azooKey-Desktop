@@ -330,6 +330,7 @@ Linear が持つ。
   自動導出値は `std::thread::hardware_concurrency()` で上限化し、並列度が 0 の場合は 1 とする。
   `inferenceThreads=1..8` の明示指定は電源状態・並列度より優先する。
   電源状態は起動時と設定再読込時に取得し、決定した実効値をモデル再ロードでも使う。
+  電源の変化でも設定し直し、ロード済みのモデルにも次の変換から効く（`docs/copilot-pc-backend-spec.md` §6.2）。
   `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 30 とする。
   settings.json に明示で書かれた値は既定値より優先し、既定値が変わっても移行しない
   （settings-app は変更したキーだけを保存するので、明示値はユーザーが選んだ値である）。

@@ -1335,7 +1335,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `inlineEnglishCaseVariants` / `fullWidthEnglishCandidate` の ON/OFF で対応する
     バリアント候補が増減する
   - `inlineEnglishMinLength` 未満の生ローマ字では英単語候補を出さない
-  - 弱シグナル（例: `ko`）では英単語候補が第一候補を奪わない／自動選択されない
+  - 弱シグナル（例: `ko`）では英単語候補が第一候補を奪わない／自動選択されない（M63 の設定
+    `mixedEnglishAutoConversion` が OFF のとき。ON のときの順位は M63 が定める）
   - 英単語確定で reading=生ローマ字として学習され、再度同じローマ字で英単語候補が
     再提示される（かな漢字学習と混線しない）
   - `inlineEnglishCandidates=false` で英単語候補が一切出ず、従来の候補生成・rerank・確定が
@@ -1581,7 +1582,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > 非目標とした「自動言語判定」（`docs/inline-english-candidate-spec.md` §1.1）を、文中に英単語が
 > 混ざる入力について扱う。空白を含む複数語の英文（同 §9 の「連続英文タイプ」）は対象外。
 > 既定 OFF・オプトイン。
-> 正典仕様は M63-0 の設計課題が新設する `docs/*-spec.md` とし、本節は定義・依存・受け入れ条件・
+> 正典仕様は `docs/mixed-english-auto-conversion-spec.md` とし、本節は定義・依存・受け入れ条件・
 > リスクだけを持つ。実現可能性と先行事例の調査記録は `docs/mixed-english-input-feasibility-report.md`
 > （特定時点のスナップショット）にある。
 
@@ -1596,29 +1597,29 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
      （`Kite` → 英語）。
   4. 対象アプリを限定しない（設定が ON のとき全アプリで動作する）。アプリ別の重み付けは
      M48 の候補タグ重みへ委ね、M63 の必須範囲にしない。
-  要求 1 の「英字を第 2 候補に置く」対象は、英単語候補の生成条件（M63-0 の spec で定める。
-  英単語辞書の一致などを想定する）を満たす語に限る。すべての日本語入力に英字の候補を足すと、
+  要求 1 の「英字を第 2 候補に置く」対象は、英単語候補の生成条件（M60 §4.2 のゲーティング。
+  spec §8.2）を満たす語に限る。すべての日本語入力に英字の候補を足すと、
   M60 §4.2 が避けている雑音（`ko` で英語を出す等）になるためである。
 - **M60 との関係**: M60 の生ローマ字バッファ、英単語辞書（TSV・`.bin`・overlay）、English
   学習チャネル、`CandidateTag::English`、英語意図シグナル（`docs/inline-english-candidate-spec.md`
   §3〜§5）を再利用する。M60 は第 1 候補を英単語へ置き換えず（同 §4.3）、ライブ変換へ英単語を
   注入しない（同 §4.1）。M63 はこの 2 点を、M63 の設定が ON のときに限って変える。
-  M63-0 の spec は次を決め、M60 の spec（§2・§4.1・§4.3）と M60 の受け入れ条件に「M63 の設定が
-  OFF のとき」の限定を加える。
-  - M63 を M60 の設定（`inlineEnglishCandidates`）が ON のときだけ有効にするか、独立した設定にするか。
-    TIP は M60 の設定が ON のときだけ生ローマ字を保持するため、独立させる場合は保持条件の変更も
-    M63 の範囲に入る。
-  - M63 の設定が ON のときに M60 の弱シグナル（例: Shift 大文字だけ）の扱いをどう変えるか。
+  M60 の spec（§2・§4.1・§4.3）と M60 の受け入れ条件は、M63 の設定が OFF の composition に
+  適用する。
+  - M63 の設定（`mixedEnglishAutoConversion`）は、M60 の設定（`inlineEnglishCandidates`）が ON の
+    ときだけ働く（spec §5・§14）。TIP の生ローマ字の保持条件は変えない。
+  - M63 の設定が ON のとき、Shift 先頭大文字と「ローマ字かな変換の後に英字が残り、辞書に一致する」
+    ことを高確度の信号として扱う（spec §8.1）。
 - **前提**: M60 の実機確認（`gate:human-required`）、M14（ライブ変換）、M8（Zenzai）、
-  `docs/neural-reranker-spec.md` Track B（NllScorer）、M52（変換品質ベンチ）。
-  - `core/` の `LiveConversionChunker`（Convert / Verbatim の分類）を TIP / Host のライブ変換経路へ
-    配線する作業は、M63 の範囲に入る（M14 の前提に含まれない）。
-  - NllScorer はライブ変換（`live=true`）を対象外とし、採点対象を辞書由来の候補に限る
-    （同 §B1・§B5）。M63-B がライブ変換で日英の表層を採点するなら、Track B の適用範囲の拡張が要る。
+  M52（変換品質ベンチ）。
+  - 英語区間は英字のまま Zenzai の入力に入れるため、`core/` の `LiveConversionChunker` の
+    Verbatim 分類は M63 では使わない（spec §7）。
+  - NllScorer は言語判別に使わず、Track B の適用範囲（同 §B1・§B5）は変えない（spec §3）。
 - **段階**:
   - **M63-0（実現性の検証と仕様化）**: 実 pin モデルで、Zenzai が英字を含む入力を英字のまま
     出力できるか、NllScorer で日本語表層と英字表層を文脈込みで比べて判別できるかを、
-    混在文の評価セットで測る。英単語辞書の出典とライセンスを確定する。測定結果を根拠に、
+    混在文の評価セットで測る。英単語辞書の出典とライセンスは Human Gate で確定し、spec は
+    辞書の形式（`docs/inline-english-candidate-spec.md` §4.4）にだけ依存する。測定結果を根拠に、
     分割の担い手（TIP / Host）、IPC の拡張、ライブ変換経路、順位規則、学習、設定を
     spec として確定する。
   - **M63-A（1 語の自動英字化）**: composition 全体が 1 語のとき、英語の可能性が高ければ
@@ -1626,55 +1627,59 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     残る語（M60 §4.2 の `s_nonkana`。例: `github` → `ぎてゅb`）と Shift 先頭大文字は高確度の信号と
     して扱う。`l` / `q` / `v` / `x` は内蔵のローマ字表で正規の入力（`ltu` → っ、`vaiorin` →
     ゔぁいおりん）なので、文字の種類だけでは英語と判定しない。かなには変換できるが不自然な読みに
-    なる語（`love` → ぉゔぇ）の扱いは M63-0 の spec で決める。
-  - **M63-B（文中混在）**: 生ローマ字を日本語区間と英語区間に分割する候補を作り、区間ごとに
-    変換して Zenzai（または NllScorer）で採点し、最良の分割をライブ変換と第 1 候補に使う。
-    英語区間はライブ変換で変換対象から外す（`LiveConversionChunker` の Verbatim 分類を使うかは
-    spec で決める）。確定時は区間ごとに学習する
+    なる語（`love` → ぉゔぇ）は、分割器の「不自然なかな」の項で英語区間の側に寄せる（spec §6.3）。
+    かなに ASCII が残らないので確度は低く、Shift で打たない限り英字は第 2 候補になる（spec §8.1）。
+  - **M63-B（文中混在）**: Host の分割器（spec §6）が、生ローマ字の上の混合ラティスで日本語区間と
+    英語区間を決める。英語区間は英字のまま Zenzai の入力に入れ、日本語区間だけを 1 回の変換で
+    かな漢字にする（spec §7）。確定時は区間ごとに学習する
     （日本語区間はかな漢字学習、英語区間は English チャネル）。
-- **変更対象（見込み。M63-0 の spec で確定する）**: `tsf-tip/src/TextService.cpp`（生ローマ字と
-  かなの対応保持、ライブ変換要求）、`core/`（`RomajiKanaConverter` の打鍵とかなの対応付け、
-  日英分割器）、`ipc/src/Payloads.cpp`（`QueryLiveConversion` / `QueryCandidates` の拡張）、
-  `inference-host/`（`EnglishCandidates`、`Dispatcher`、`InferenceEngine`、
-  `ZenzaiModelConverter` / `NllScorer`）、`settings/mvp-settings.schema.json`、`bench/`。
+- **変更対象**（spec の各章）: `tsf-tip/src/TextService.cpp`（生ローマ字の送信条件、ライブ変換要求、
+  区間ごとの確定）、`core/`（日英分割器）、`ipc/include/azookey/ipc/Payloads.h` と
+  `ipc/src/Payloads.cpp`（`QueryLiveConversion` / `QueryCandidates` / `LiveSegment` の拡張）、
+  `inference-host/`（`EnglishCandidates`、`Dispatcher`、`InferenceEngine`）、
+  `settings/mvp-settings.schema.json`、`bench/`。
 - **受け入れ条件**:
   - 設定 ON で、Japanese モードのまま `kyouhagithubnipushsita` を打つと、ライブ変換と第 1 候補が
     「今日はGitHubにpushした」相当（英語区間が英字、日本語区間がかな漢字）になる
   - ローマ字かな変換の後に英字が残る英単語（例: `github`、`apple`）は、単独でも文中でもライブ変換と
     第 1 候補で英字になる
   - 1 語の composition で、ローマ字として読める英単語（例: `kite`）は既定で日本語が第 1 候補、
-    英字が第 2 候補になり、先頭を Shift で大文字にして打つと英字が第 1 候補になる。文中の区間で
-    同じ選び直しをどう提供するか（区間単位の候補選択）は M63-0 の spec で定め、その spec が
-    文中の受け入れ条件を追加する
+    英字が第 2 候補になり、先頭を Shift で大文字にして打つと英字が第 1 候補になる
+  - 文中のローマ字として読める英単語は、日本語のままライブ変換と第 1 候補に出し、候補一覧に
+    その区間だけを英字にした候補が並ぶ（spec §8.3）
   - 英単語候補の生成条件を満たさない日本語入力（例: `kyouha`）には英字の候補を足さない
   - 英語区間の確定は English チャネルに、日本語区間の確定はかな漢字学習に記録され、互いに混線しない
-  - M63-0 で定めた評価セットで、日本語だけの文の変換精度が設定 OFF のときより劣化しない
-    （許容幅は M63-0 の spec で定める）
+  - spec §15.2 の評価セットで、日本語だけの文の変換結果が設定 OFF のときより 1 件も劣化せず、
+    自動で英字にした区間の適合率が 95% 以上である
   - ライブ変換の打鍵ごとの応答が `docs/dev-infrastructure-spec.md` §8.5.2 のライブ変換の timeout
     （150ms）内に収まる
   - 設定 OFF で、候補生成・ライブ変換・rerank・確定・学習が一切変わらない
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **リスク**:
   - **曖昧語の誤判定**: 英単語の多くはローマ字としても読める。辞書の一致だけでは判別できず、
-    文脈で判別できるかは M63-0 の測定結果に依存する。判別できない場合、M63-B は高確度の語
-    （ローマ字として読めない語と Shift 先頭大文字）に範囲を絞る。
+    M63-0 の測定では NllScorer による文脈判別も成り立たなかった。spec は自動英字化を高確度の語
+    （ローマ字として読めない辞書語と Shift 先頭大文字）に絞り、ほかは英字を第 2 候補に置く
+    （spec §3・§8.1）。
   - **Zenzai の入力分布外**: zenz の入力はカタカナの読みであり、英字を含む入力や英字の出力が
-    学習分布にどれだけ含まれるかは M63-0 で測定する。使えない場合は
-    辞書ラティスと NllScorer による採点、または英語区間を Zenzai の外で確定する方式に切り替える。
+    学習分布にどれだけ含まれるかは M63-0 で測定する。spec は英語区間を Zenzai の外で確定し、
+    英字のまま Zenzai の入力に入れる方式を採る（spec §3・§7）。zenz のモデルを差し替えるときは、
+    英字を写す挙動が保たれるかを spec §15.2 の評価セットで確かめる。
   - **レイテンシ**: 分割の候補ごとに推論が増える。ライブ変換は打鍵ごとに走り、client は 150ms で
-    打ち切る（`docs/dev-infrastructure-spec.md` §8.5.2）。候補数の上限と打ち切りを spec で定める。
+    打ち切る（`docs/dev-infrastructure-spec.md` §8.5.2）。spec §10 は打鍵ごとの推論を 1 回に限り、
+    分割器の上限と打ち切りを定める。
   - **打ち間違い補正との重なり**: ローマ字かな変換の後に英字が残ることは、M35 / M55 の打ち間違い
     補正（`docs/typo-correction-learning-spec.md`）の信号でもある。英単語と打ち間違いのどちらとして
-    扱うかの優先を spec で定める。
+    扱うかは、分割を先に行い英語区間を補正の対象から外す（spec §12）。
   - **カスタムローマ字テーブル**: `inputStyle=custom` の表は TIP にだけあるため、Host が生ローマ字から
-    かなを再計算できない（`docs/inline-english-candidate-spec.md` §4.1.1 と同じ制約）。分割を
-    TIP で行うか、表を Host へ渡すかを spec で決める。
+    かなを再計算できない（`docs/inline-english-candidate-spec.md` §4.1.1 と同じ制約）。カスタム表が
+    有効な composition では M63 は働かない（spec §5）。
   - **Backspace と編集**: 生ローマ字とかなの対応は、Backspace・読みの補正・Unicode 入力で崩れる。
     M60 §4.1 と同じく、対応が崩れたときは自動英字化を止めて通常の変換へ戻す。
   - **辞書のライセンス**: 同梱する英単語辞書は再配布可能な出典に限る（`docs/licensing-policy.md`）。
   - **プライバシー**: 生ローマ字はユーザー入力そのものであり、ログとダンプでは既存の redaction
     （`docs/privacy-and-secure-input-spec.md`）に従う。
-- **参照**: `docs/inline-english-candidate-spec.md`（M60）、`docs/romaji-batch-conversion-spec.md`
+- **参照**: `docs/mixed-english-auto-conversion-spec.md`（M63 の正典仕様）、
+  `docs/inline-english-candidate-spec.md`（M60）、`docs/romaji-batch-conversion-spec.md`
   §4.1・§7（生ローマ字と chunk）、`docs/zenzai-inference-spec.md` §3・§8、
   `docs/dev-infrastructure-spec.md` §8.5.2（ライブ変換の timeout）、
   `docs/neural-reranker-spec.md` Track B、`docs/mixed-english-input-feasibility-report.md`

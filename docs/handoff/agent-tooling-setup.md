@@ -19,7 +19,7 @@
 - PowerShell 7+
 - PowerShell.MCP（machine-wide 操作を共有コンソールへ提示するときだけ必要）
 - `uv` と `uvx`（任意の `windows-mcp` を使う場合に必要）
-- `clangd.exe`（Claude Code の `clangd-lsp` プラグインに必要）
+- `clangd.exe`（Claude Code の `clangd-lsp` プラグインに必要。プラグインは repo 設定では有効化せず、各開発者がユーザー設定で有効にする）
 - Windows CMake / Ninja / MSVC を使う Visual Studio C++ toolchain
 - 任意の補助コマンドとして `just`
 

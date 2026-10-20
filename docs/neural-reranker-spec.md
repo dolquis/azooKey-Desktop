@@ -540,6 +540,9 @@ final_score =
   （`docs/zenzai-inference-spec.md` §6.1）ため、並べ替えの利得が無いまま
   §B7 の予算（既定 20ms）を毎打鍵に上乗せすることになる。NllScorer は
   **候補ウィンドウ要求（`live=false`）にのみ**適用する。
+- **日英の判別には使わない**。NLL は文脈より `[IN]` に書いた形に強く従うため、日本語の表層と
+  英字の表層を比べても判別の根拠にならない。日英混在入力（M63）の分割は Zenzai の外で決め、
+  本トラックの適用範囲は変えない（`docs/mixed-english-auto-conversion-spec.md` §3）。
 
 ### B1.1 Track A（M56）との関係
 

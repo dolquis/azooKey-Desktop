@@ -40,8 +40,9 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 - **非目標: 自動モード切替・自動言語判定。** 英単語を検出して英数 IME へ自動で切り替える
   ことはしない。あくまで「追加候補」をユーザーが明示的に選ぶ方式（azooKey と同じ）。
   文中の英単語をライブ変換と第 1 候補で自動的に英字にする機能は、本書の素材を再利用する
-  別マイルストーン M63 が持つ。本書との関係（§2・§4.1・§4.3 の扱い）の正典は
-  `plans/windows-port-roadmap.md` の M63 節である。
+  別マイルストーン M63 が持つ。M63 の機能仕様の正典は `docs/mixed-english-auto-conversion-spec.md`
+  であり、本書の §2・§4.1・§4.3 の規則は、M63 の設定（`mixedEnglishAutoConversion`）が OFF の
+  composition に適用する。M63 の設定が ON の composition では、同 spec の規則が優先する。
 - **非目標: 英語スペル訂正・補完。** 辞書ゲーティング（§4.2）を超えるスペル補正や
   単語補完は対象外（将来課題）。
 - **既定 OFF。** 既定 OFF で、有効化時のみ候補を注入する。OFF のとき候補生成・確定の
@@ -59,6 +60,8 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
   段階導入方針）。辞書が無くても最低限の英単語入力が成立する。
 - **日本語候補を妨げない。** 英単語候補は**追加候補**であり、明確な英語意図シグナルが
   ない限り日本語候補より上位に出さない。誤って英単語が第一候補を奪わない（§4.3）。
+  この原則は M63 の設定が OFF の composition に適用する。ON の composition で確度の高い英単語を
+  第 1 候補にする規則は `docs/mixed-english-auto-conversion-spec.md` §8 が持つ。
 - **既定 OFF・後方互換。** OFF のとき候補生成・rerank・確定を一切変えない。
 
 ## 3. 候補生成の素材
@@ -105,14 +108,17 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
   （主経路）。
 - **ライブ変換（M14）/ 予測（M15）**: 注入しない。Host は `QueryCandidates` の `live = false`
   の要求にだけ英単語候補を足す。ライブ変換は第 1 候補を使い、英単語は第 1 候補を
-  取らない（§4.3）ため、注入しても表示が変わらない。
+  取らない（§4.3）ため、注入しても表示が変わらない。M63 の設定が ON の composition では、
+  `QueryLiveConversion` に生ローマ字を載せ、確度の高い英単語をライブ変換で英字にする
+  （`docs/mixed-english-auto-conversion-spec.md` §5・§9）。
 
 TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilities に
 `english_candidates` があるときだけ、`raw_romaji` と `english_candidates` を送る。
 
 - 生ローマ字は、通常の（一括変換でない）composition で打鍵した文字を、Shift の大文字のまま
   持つ（`s_case` のため）。小文字で持つ M58 の `batch_raw_romaji` とは別に持つ。
-- 送るのは `live = false` の `QueryCandidates` だけである。生ローマ字をローマ字かな変換した
+- 送るのは `live = false` の `QueryCandidates` だけである（M63 の設定が ON の composition では、
+  `QueryLiveConversion` にも送る。`docs/mixed-english-auto-conversion-spec.md` §9.1）。生ローマ字をローマ字かな変換した
   結果が `reading` と一致しないとき（Backspace で消したかなの打鍵、記号、Unicode 入力、
   読みの補正など）は、どちらのフィールドも送らない。Backspace でかなを消したときは、
   次の打鍵の前に、残りが preedit と一致するまで生ローマ字を末尾から削る。
@@ -196,6 +202,9 @@ else:
 
 ### 4.3 順位（日本語を奪わない）
 
+本節の順位は M63 の設定が OFF の composition に適用する。ON の composition の順位は
+`docs/mixed-english-auto-conversion-spec.md` §8 が持つ。
+
 ```text
 threshold_promote = inlineEnglishPromoteThreshold（既定 0.6）
 if english_intent >= threshold_promote:
@@ -247,9 +256,11 @@ else:
 - かなだけ、ASCII 英字だけ（`Apple`）、漢字と英字（`林檎apple`）の表層は残す。かなと英字の
   混在だけが、読みの崩れたローマ字をモデルが取り込んだ形であるためである。
 - 読みに ASCII 英字が無い要求では何も落とさない。
+- M63 が読みに入れた英語区間の英字は、ASCII 英字の有無の判定から除く
+  （`docs/mixed-english-auto-conversion-spec.md` §7）。
 - `english_candidates` の有無に依らず掛ける。Space の候補一覧が `live = false` で作られる
   経路（`inlineEnglishCandidates` が OFF の場合を含む）でも、同じ読みが Zenzai に渡るためである。
-- `QueryLiveConversion` の経路は対象外とする。
+- `QueryLiveConversion` の経路にも同じ規則で掛ける。
 
 ### 4.4 英単語辞書フォーマット（`inlineEnglishDictionary`）
 
@@ -1009,7 +1020,8 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
 ## 9. 将来課題（本書の対象外）
 
 - **文中の英単語の自動英字化（M63）**: 日本語と英単語が混ざったローマ字の文を、区間ごとに
-  日英へ打ち分けてライブ変換と第 1 候補に反映する。定義・受け入れ条件・リスクは
+  日英へ打ち分けてライブ変換と第 1 候補に反映する。機能仕様は
+  `docs/mixed-english-auto-conversion-spec.md`、定義・受け入れ条件・リスクは
   `plans/windows-port-roadmap.md` の M63 が持ち、本書 §3〜§5 の素材を再利用する。
 - **連続英文タイプ**: スペースを含む複数語の英文を Japanese モードのまま連続入力する
   体験。語間スペース処理・文単位英語予測（`requireEnglishPrediction` 相当）・M58

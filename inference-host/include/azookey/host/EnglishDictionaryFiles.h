@@ -137,6 +137,8 @@ enum class EnglishWriteStep {
   JournalFrameWritten,       // A journal frame is durable; its op_count is not yet raised.
   JournalCountPublished,     // The journal's op_count now covers the frame.
   JournalRewriteWritten,     // A deduplicated journal is written, not yet renamed.
+  ResetBaseReplaced,         // A reset's base is live; the overlay and journal are untouched.
+  ResetJournalRemoved,       // A reset removed the journal; leftovers are not yet removed.
 };
 // Test seam: called after each step; false stops the writer there, as a
 // crash at that point would.
@@ -250,5 +252,44 @@ EnglishJournalAppendResult AppendEnglishJournalOp(const std::filesystem::path& j
                                                   const EnglishOverlayOp& op,
                                                   const EnglishWriteHook& hook = {});
 inline constexpr uint32_t kMinEnglishJournalRewriteOps = 256;
+
+// The latest op on (key, surface) among ops, or nullopt when none.
+std::optional<EnglishOverlayOp> LatestEnglishJournalOp(const std::vector<EnglishOverlayOp>& ops,
+                                                       std::string_view key,
+                                                       std::string_view surface);
+
+enum class EnglishJournalRetractResult {
+  Retracted,  // The entry's ops are gone from the journal.
+  NotAdded,   // The latest op on the entry is not an upsert, or there is none.
+  Failed,
+};
+// Section 4.8 (DEV-1596): when the latest op on (key, surface) is an upsert,
+// rewrites the journal with the latest op per entry minus that entry and
+// replaces it atomically, so a TSV recompile no longer adds the word and a
+// TSV that has it keeps it. Expects the caller to hold EnglishDictionaryFileLock.
+EnglishJournalRetractResult RetractEnglishJournalEntry(const std::filesystem::path& journal,
+                                                       std::string_view key,
+                                                       std::string_view surface,
+                                                       const EnglishWriteHook& hook = {});
+
+// Section 4.8 (DEV-1600): erases what runtime upserts left in the files, for a
+// reset of the AutoWord store. Expects the caller to hold
+// EnglishDictionaryFileLock. In order:
+// 1. a new base: tsv_records (the TSV parsed without the journal) stamped with
+//    tsv_time, or without a TSV the current base with its overlay's deletes
+//    applied (its upserts are dropped) minus each entry whose latest journal
+//    op is an upsert;
+// 2. the overlay reinitialized for it (removed when there is no base);
+// 3. the journal removed;
+// 4. english-words.added.bin.corrupt.*, english-words.added.bin.tmp.* and
+//    english-words.bin.tmp.* removed.
+// false at the first step that fails, leaving the later files as they were;
+// the journal outlives every earlier step, so a retry erases the same words.
+// A journal that is there but cannot be read now, and without a TSV a base
+// that is there but cannot be mapped, fail before step 1.
+bool ResetEnglishRuntimeFiles(const EnglishDictionaryPaths& paths,
+                              const std::optional<std::vector<EnglishWordRecord>>& tsv_records,
+                              std::optional<std::filesystem::file_time_type> tsv_time,
+                              const EnglishWriteHook& hook = {});
 
 }  // namespace azookey::host

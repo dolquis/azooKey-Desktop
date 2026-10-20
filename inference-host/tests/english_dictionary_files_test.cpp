@@ -7,6 +7,7 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -1280,5 +1281,302 @@ TEST(EnglishDictionaryJournalTest, AnUnreadableJournalCostsOneCompilePerTsv) {
   EXPECT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
   EXPECT_EQ(compiles, 3);
   EXPECT_EQ(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  fs::remove_all(dir);
+}
+
+namespace {
+
+// A lock clock whose waits never sleep and whose budget runs out at the first.
+EnglishLockClock ExpiredLockClock() {
+  auto now = std::make_shared<std::chrono::steady_clock::time_point>();
+  return {[now] { return *now; },
+          [now](std::chrono::steady_clock::duration) { *now += std::chrono::hours(1); }};
+}
+
+}  // namespace
+
+// DEV-1596 (section 4.8): a retract takes back only what a runtime upsert
+// added, and a TSV that later has the word shows it again.
+TEST(EnglishDictionaryRetractTest, OnlyARuntimeUpsertIsTakenBack) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  // Compacted into the base: the tombstone still hides it there.
+  ASSERT_TRUE(store.Compact());
+  EXPECT_EQ(store.Retract("Kotlin"), EnglishRetractResult::Retracted);
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_TRUE(EnglishDictionaryStore(tsv).Lookup("kotlin").empty());
+  const auto journal = ReadEnglishJournal(store.paths().journal);
+  ASSERT_TRUE(journal);
+  ASSERT_EQ(journal->ops.size(), 1u);
+  EXPECT_EQ(journal->ops[0].surface, "Swift");
+  // A TSV word no runtime op added is never hidden, nor is a word taken back twice.
+  EXPECT_EQ(store.Retract("apple"), EnglishRetractResult::NotAdded);
+  EXPECT_EQ(store.Retract("Kotlin"), EnglishRetractResult::NotAdded);
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+
+  // The TSV gains the word: the recompile shows the TSV's record.
+  WriteText(tsv, "apple\t50\nKotlin\t9\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  const auto kotlin = store.Lookup("kotlin");
+  ASSERT_EQ(kotlin.size(), 1u);
+  EXPECT_EQ(kotlin[0].frequency, 9u);
+  EXPECT_EQ(Surfaces(store.Lookup("swift")), std::vector<std::string>{"Swift"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, AWordTheTsvHasStaysShownAndLeavesTheJournal) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  // The TSV gains it while the journal still holds the upsert.
+  WriteText(tsv, "apple\t50\nKotlin\t9\n");
+  fs::last_write_time(tsv, fs::last_write_time(store.paths().base) + std::chrono::seconds(5));
+  ASSERT_EQ(store.Lookup("kotlin").size(), 1u);
+  EXPECT_EQ(store.Retract("Kotlin"), EnglishRetractResult::Retracted);
+  const auto kotlin = store.Lookup("kotlin");
+  ASSERT_EQ(kotlin.size(), 1u);
+  EXPECT_EQ(kotlin[0].frequency, 9u);
+  EXPECT_TRUE(ReadEnglishJournal(store.paths().journal)->ops.empty());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, WithoutTheLockOnlyAMemoryUpsertIsDropped) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Lookup("apple").size(), 1u);
+  const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+  ASSERT_TRUE(held);
+  store.SetLockClockForTest(ExpiredLockClock());
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::MemoryOnly);
+  ASSERT_EQ(store.Lookup("kotlin").size(), 1u);
+  EXPECT_EQ(store.Retract("Kotlin"), EnglishRetractResult::MemoryOnly);
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_EQ(store.Retract("Swift"), EnglishRetractResult::Failed);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, ATombstoneThatMissesTheOverlayKeepsTheJournalEntry) {
+  const auto dir = TestDir();
+  const auto bin = dir / "english-words.bin";
+  const auto paths = EnglishDictionaryPaths::From(bin);
+  ASSERT_TRUE(WriteEnglishBase(paths, EncodeEnglishBase(ParseEnglishTsv(kTsv), 1)));
+  EnglishDictionaryStore store(bin);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  store.SetWriteHookForTest(
+      [](EnglishWriteStep step) { return step != EnglishWriteStep::AppendFrameWritten; });
+  EXPECT_EQ(store.Retract("Kotlin"), EnglishRetractResult::MemoryOnly);
+  // Hidden here, but the journal still names it: a restart shows it again,
+  // and a reset still knows to erase it.
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_EQ(Surfaces(EnglishDictionaryStore(bin).Lookup("kotlin")),
+            std::vector<std::string>{"Kotlin"});
+  ASSERT_EQ(ReadEnglishJournal(paths.journal)->ops.size(), 1u);
+  store.SetWriteHookForTest({});
+  ASSERT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(EnglishDictionaryStore(bin).Lookup("kotlin").empty());
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, TheJournalIsRewrittenOnlyWhenTheLatestOpIsAnUpsert) {
+  const auto dir = TestDir();
+  const auto journal = dir / "english-words.added.bin";
+  EXPECT_EQ(RetractEnglishJournalEntry(journal, "kotlin", "Kotlin"),
+            EnglishJournalRetractResult::NotAdded);
+  ASSERT_EQ(AppendEnglishJournalOp(journal, Upsert("Kotlin", 1)),
+            EnglishJournalAppendResult::Appended);
+  ASSERT_EQ(AppendEnglishJournalOp(journal, Delete("Kotlin")),
+            EnglishJournalAppendResult::Appended);
+  EXPECT_EQ(RetractEnglishJournalEntry(journal, "kotlin", "Kotlin"),
+            EnglishJournalRetractResult::NotAdded);
+  ASSERT_EQ(AppendEnglishJournalOp(journal, Upsert("Kotlin", 1)),
+            EnglishJournalAppendResult::Appended);
+  ASSERT_EQ(AppendEnglishJournalOp(journal, Upsert("Swift", 1)),
+            EnglishJournalAppendResult::Appended);
+  // A failed rewrite leaves the journal as it was.
+  EXPECT_EQ(RetractEnglishJournalEntry(journal, "kotlin", "Kotlin",
+                                       [](EnglishWriteStep) { return false; }),
+            EnglishJournalRetractResult::Failed);
+  EXPECT_EQ(ReadEnglishJournal(journal)->ops.size(), 4u);
+  EXPECT_EQ(RetractEnglishJournalEntry(journal, "kotlin", "Kotlin"),
+            EnglishJournalRetractResult::Retracted);
+  const auto left = ReadEnglishJournal(journal);
+  ASSERT_TRUE(left);
+  ASSERT_EQ(left->ops.size(), 1u);
+  EXPECT_EQ(left->ops[0].surface, "Swift");
+  fs::remove_all(dir);
+}
+
+// DEV-1600 (section 4.8): a reset erases the runtime additions from every
+// file, compacted ones included, and leaves the TSV's words.
+TEST(EnglishDictionaryResetTest, TheTsvAloneRemainsAndTheLeftoversGo) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  ASSERT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_EQ(store.Remove("apple").result, EnglishWriteResult::Persisted);
+  auto corrupt = store.paths().journal;
+  corrupt += ".corrupt.1700000000000";
+  WriteText(corrupt, "junk");
+  auto journal_tmp = store.paths().journal;
+  journal_tmp += ".tmp.1.0";
+  WriteText(journal_tmp, "junk");
+  auto base_tmp = store.paths().base;
+  base_tmp += ".tmp.1.0";
+  WriteText(base_tmp, "junk");
+
+  ASSERT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_TRUE(store.Lookup("swift").empty());
+  EXPECT_EQ(Surfaces(store.Lookup("apple")), std::vector<std::string>{"apple"});
+  EnglishDictionaryStore other(tsv);
+  EXPECT_TRUE(other.Lookup("kotlin").empty());
+  EXPECT_EQ(Surfaces(other.Lookup("apple")), std::vector<std::string>{"apple"});
+  EXPECT_FALSE(fs::exists(store.paths().journal));
+  EXPECT_FALSE(fs::exists(corrupt));
+  EXPECT_FALSE(fs::exists(journal_tmp));
+  EXPECT_FALSE(fs::exists(base_tmp));
+  EXPECT_EQ(ReadEnglishOverlayHeader(store.paths().overlay)->op_count, 0u);
+  // The new base is the TSV's: the next read does not recompile it.
+  EXPECT_EQ(fs::last_write_time(store.paths().base), fs::last_write_time(tsv));
+  // A write after the reset starts a new journal.
+  EXPECT_EQ(store.Upsert("Rust", 1).result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(Surfaces(store.Lookup("rust")), std::vector<std::string>{"Rust"});
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryResetTest, WithoutATsvTheJournalNamesTheCompactedWords) {
+  const auto dir = TestDir();
+  const auto bin = dir / "english-words.bin";
+  const auto paths = EnglishDictionaryPaths::From(bin);
+  ASSERT_TRUE(paths.tsv.empty());
+  ASSERT_TRUE(WriteEnglishBase(paths, EncodeEnglishBase(ParseEnglishTsv(kTsv), 1)));
+  EnglishDictionaryStore store(bin);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  ASSERT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+
+  ASSERT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_TRUE(store.Lookup("swift").empty());
+  EXPECT_EQ(Surfaces(store.Lookup("github")), std::vector<std::string>{"GitHub"});
+  EXPECT_EQ(store.Lookup("apple").size(), 2u);
+  EXPECT_FALSE(fs::exists(paths.journal));
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryResetTest, AFailedStepKeepsTheJournalSoARetryErasesTheSameWords) {
+  const auto dir = TestDir();
+  const auto bin = dir / "english-words.bin";
+  const auto paths = EnglishDictionaryPaths::From(bin);
+  ASSERT_TRUE(WriteEnglishBase(paths, EncodeEnglishBase(ParseEnglishTsv(kTsv), 1)));
+  EnglishDictionaryStore store(bin);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  // Before the base is replaced, the word is still there.
+  store.SetWriteHookForTest(
+      [](EnglishWriteStep step) { return step != EnglishWriteStep::BaseStamped; });
+  EXPECT_FALSE(store.ResetRuntimeAdditions());
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  // Each later step: the journal outlives it, so the retry knows the word.
+  for (const auto stop_at :
+       {EnglishWriteStep::ResetBaseReplaced, EnglishWriteStep::ReinitFingerprintWritten}) {
+    store.SetWriteHookForTest([stop_at](EnglishWriteStep step) { return step != stop_at; });
+    EXPECT_FALSE(store.ResetRuntimeAdditions()) << static_cast<int>(stop_at);
+    EXPECT_TRUE(fs::exists(paths.journal)) << static_cast<int>(stop_at);
+  }
+  store.SetWriteHookForTest(
+      [](EnglishWriteStep step) { return step != EnglishWriteStep::ResetJournalRemoved; });
+  EXPECT_FALSE(store.ResetRuntimeAdditions());
+  EXPECT_FALSE(fs::exists(paths.journal));
+  store.SetWriteHookForTest({});
+  EXPECT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_EQ(store.Lookup("apple").size(), 2u);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryResetTest, WithoutATsvAnUpsertTheJournalMissedIsErasedToo) {
+  const auto dir = TestDir();
+  const auto bin = dir / "english-words.bin";
+  const auto paths = EnglishDictionaryPaths::From(bin);
+  ASSERT_TRUE(WriteEnglishBase(paths, EncodeEnglishBase(ParseEnglishTsv(kTsv), 1)));
+  EnglishDictionaryStore store(bin);
+  // A retracted word compacted into the base: only the overlay's delete hides it.
+  ASSERT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  ASSERT_EQ(store.Retract("Swift"), EnglishRetractResult::Retracted);
+  // The journal cannot take the op (as when it is full): it lives in the
+  // overlay only.
+  store.SetWriteHookForTest([](EnglishWriteStep step) {
+    return step != EnglishWriteStep::JournalFrameWritten &&
+           step != EnglishWriteStep::JournalRewriteWritten;
+  });
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::JournalFailed);
+  store.SetWriteHookForTest({});
+  ASSERT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  ASSERT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_TRUE(EnglishDictionaryStore(bin).Lookup("kotlin").empty());
+  // The overlay's delete is kept: the retracted word does not come back.
+  EXPECT_TRUE(store.Lookup("swift").empty());
+  EXPECT_EQ(store.Lookup("apple").size(), 2u);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, AFalseStillCurrentLeavesEverything) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(store.Retract("Kotlin", [] { return false; }), EnglishRetractResult::NotAdded);
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  EXPECT_EQ(ReadEnglishJournal(store.paths().journal)->ops.size(), 1u);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryResetTest, WithoutATsvABaseThatCannotBeMappedKeepsTheJournal) {
+  const auto dir = TestDir();
+  const auto paths = EnglishDictionaryPaths::From(dir / "english-words.bin");
+  ASSERT_EQ(AppendEnglishJournalOp(paths.journal, Upsert("Kotlin", 1)),
+            EnglishJournalAppendResult::Appended);
+  WriteText(paths.base, "not a base");
+  EXPECT_FALSE(ResetEnglishRuntimeFiles(paths, std::nullopt, std::nullopt));
+  EXPECT_TRUE(fs::exists(paths.journal));
+  // With no base at all there is nothing to rebuild, and the rest goes.
+  fs::remove(paths.base);
+  EXPECT_TRUE(ResetEnglishRuntimeFiles(paths, std::nullopt, std::nullopt));
+  EXPECT_FALSE(fs::exists(paths.journal));
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryResetTest, ALockHeldElsewhereFailsTheResetAndChangesNoFile) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  const auto journal_before = ReadBytes(store.paths().journal);
+  {
+    const auto held = EnglishDictionaryFileLock::Acquire(store.paths().lock);
+    ASSERT_TRUE(held);
+    store.SetLockClockForTest(ExpiredLockClock());
+    EXPECT_FALSE(store.ResetRuntimeAdditions());
+  }
+  EXPECT_EQ(ReadBytes(store.paths().journal), journal_before);
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
   fs::remove_all(dir);
 }

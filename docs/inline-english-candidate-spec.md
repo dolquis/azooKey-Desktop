@@ -727,8 +727,38 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
 - journal の書き直しの途中: 元の journal が残る。書き直し用の一時ファイル（`english-words.added.bin.tmp.*`）が残ることがある。
 
 **対象外**: TSV が無く `.bin` だけを差し替えた（再バンドルした）場合、journal は適用しない（TSV から base を
-作るときだけ適用する）。journal は平文で、AutoWord の確定から派生した英字語を持つ。学習データの全削除
-（`docs/learning-data-management-spec.md` §4.6）の対象外とする（follow-up: DEV-1600）。
+作るときだけ適用する）。
+
+**学習データの全削除での消去**: journal は平文で、AutoWord の確定から派生した英字語を持つ。学習データの全削除の
+`auto_word`（`docs/learning-data-management-spec.md` §4.6）は、AutoWord の表を空にして保存した後、
+実行時の追加・削除を英単語辞書のファイルからも消す。`english-words.lock` の下で次の順に行う。
+
+1. 新しい base を作る。TSV があれば、journal を重ねずに TSV だけからコンパイルし、TSV の mtime を付ける。
+   TSV が無く `.bin` だけの構成では、現在の base に一致する overlay の delete だけを重ね（upsert は重ねない）、
+   journal で最新の op が upsert の `(lower_key, surface)` を除く。overlay の upsert はすべて実行時の追加なので捨てる
+   （journal が満杯・書込み失敗で overlay にだけ入った語も消える）。overlay の delete は journal から外した取り消し
+   （下記「却下での取り消し」）なので残す。実行時の upsert は辞書に無かった語だけを書く（下記「M36 の確定語の配線」）ので、
+   この除外は base にもともとあった語を消さない。
+2. base を原子置換し、overlay を新しい base の `content_hash` で再初期化する（base が無ければ overlay を削除する）。
+3. journal を削除する。
+4. `english-words.added.bin.corrupt.*`、`english-words.added.bin.tmp.*`、`english-words.bin.tmp.*` を削除する。
+
+- どの手順で失敗しても、それより後のファイルは変えずに全削除を `save_failed` で返す。journal は手順 3 まで
+  残るので、再試行は同じ語を消す。手順 2 の後の失敗では、辞書からは語がすでに消えている。
+- ロックを 500 ms で取れない、TSV を読めない、存在する journal を読めない、TSV が無い構成で存在する base を読めないときも
+  `save_failed` を返し、ファイルを変えない。
+- この Host のメモリ内差分は捨てる。他の Host のメモリ内差分（§4.7「権限なし / ロック不可」）は、その Host の
+  再起動まで残る。他の Host がファイルから読んでいる base と overlay は、ヘッダの変化で追従する（§4.7）。
+- `.bin` だけの構成で次の語は、追加語として区別できない。journal に記録されないままコンパクションで base に入った語
+  （journal が満杯・書込み失敗のときの追加語）と、解析できない journal にあった語は除けない。再バンドルした `.bin` に
+  もともとあった語は、journal に upsert があれば除かれる。
+- 新しい base の mtime を TSV の mtime に設定して読み返せないファイルシステム（FAT、一部の SMB 共有など）では、
+  TSV がある構成の消去が毎回 `save_failed` になりうる。
+- `inlineEnglishDictionary` が無効でも、`inlineEnglishDictionaryPath` のファイルを消す。
+- 全削除と確定の交差: Host は AutoWord の全削除の保存に成功するたびに世代を 1 進める。確定の 3 経路と backfill は、
+  Confirmed を保存する前に世代を読み、upsert の直前（辞書の更新 mutex の下）で世代が変わっていれば書かない。
+  消去も同じ mutex の下で行うので、全削除より前に確定した語の upsert は、消去の前に着くか取り消される。
+  AutoWord の表を空にした後、英単語辞書の消去の前に新たに確定した語は、消去で辞書から消える。次の起動の backfill で戻る。
 
 **M36 の確定語の配線**:
 
@@ -742,11 +772,50 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
   flags なしで upsert する。同じキーの辞書語より上に来ない（§4.3）。
 - 確定ごとに 1 回書く。`ResolveNewWord` の応答（`ok` / `changed`）は書込みの結果に左右されない。
 - 書くたびに RuntimeLogger のイベント `english_dictionary_upsert` を 1 件残す。項目は `source`
-  （`new_word_resolve` / `mining` / `trending`）と `result`（`persisted` / `journal_reset` / `journal_full` /
-  `journal_failed` / `memory_only` / `dropped`）で、`persisted` 以外は warning とする。語は記録しない。
+  （`new_word_resolve` / `mining` / `trending` / `backfill`）と `result`（`persisted` / `journal_reset` /
+  `journal_full` / `journal_failed` / `memory_only` / `dropped` / `cancelled`）で、`persisted` と `cancelled`
+  以外は warning とする。`cancelled` は全削除との交差で取り消した upsert である。語は記録しない。
 - English 学習チャネル（§5）の確定は対象外とする。§5 が別ファイルに持ち、再提示する。
-- Confirmed から Rejected に戻した語を辞書から外すこと、配線より前に Confirmed になっていた語と
-  `newwords confirm --offline` で確定した語の取り込みは、本節の対象外とする。
+
+**却下での取り消し**: Host の中で AutoWord が Rejected に変わったとき（`ResolveNewWord` の reject、
+`ForgetLearningEntry` の `auto_word`）、状態を保存できて変化があれば、確定で足した語を辞書から取り消す。
+`inlineEnglishDictionary` の有効・無効は問わず、表層が ASCII 英字だけの語を対象とする。辞書は表層だけで引くので、
+同じ表層の別の読みが Confirmed のまま残っていれば取り消さない。この判定は辞書の更新 mutex の下で行い、
+同じ表層の別の読みの確定と交差しても、確定した語を辞書から欠かさない。
+
+- `english-words.lock` の下で、journal の `(lower_key, surface)` の最新の op が upsert のときだけ取り消す。
+  TSV や同梱 `.bin` の語、journal が満杯で overlay にだけ入った語は、実行時の upsert として区別できないので変えない。
+- TSV に同じ語が無ければ、overlay に delete を追記する（コンパクション済みの base の語も隠す）。続けて journal から
+  その `(lower_key, surface)` の op を除いて原子置換する。journal に delete を残さないので、後で TSV にその語が入れば、
+  次の再コンパイルで TSV の語が出る。
+- overlay に書けなければ、メモリ内差分に delete を置いて再起動まで隠し、journal は変えない。journal はその語を実行時に
+  足したことを示す唯一の記録で、全削除と次の TSV 再コンパイルがそれを使う。
+- TSV に同じ語があれば、overlay に書かず journal の op だけを除く。辞書には TSV の語が出続ける。
+- この Host のメモリ内差分にある同じ語の upsert は、ファイルの状態によらず捨てる。
+- ロックを取れない、journal を読めない、journal を書き直せないときは取り消さない。overlay への追記の後に journal の
+  書き直しで止まると、journal に upsert が残り、次の TSV 再コンパイルで語が戻る。同じ語をもう一度却下しても状態は
+  変わらないので、次の起動の backfill が取り消しをやり直す（下記「起動時の取り込み」）。
+- 確定の 3 経路と backfill の upsert は、辞書の更新 mutex の下で、その表層の Confirmed がまだ残っていることを確かめてから
+  書く。取り消しも同じ mutex の下で行うので、却下より前に始まった登録が却下の後に語を足すことはない。
+- 応答は取り消しの結果に左右されない。RuntimeLogger のイベント `english_dictionary_retract` を 1 件残す。項目は
+  `source`（`new_word_resolve` / `forget`）と `result`（`retracted` / `memory_only` / `not_added` / `failed`）で、
+  `memory_only` と `failed` は warning とする。語は記録しない。
+- `newwords reject --offline` は Host を通らないので取り消さない。
+
+**起動時の取り込み（backfill）**: 配線より前に Confirmed になっていた語と、`newwords confirm --offline` で確定した語を
+辞書へ入れる。
+
+- Host は起動のたびに、IPC の transport を所有した後、safe mode でなければバックグラウンドのスレッドで 1 回行う。
+  起動の経路はロックの待ちと辞書のロードを待たない。終了時は語の間で止めてスレッドを待つ。
+- AutoWord の Confirmed の語を複写し、確定の 3 経路と同じ条件（有効・ASCII 英字・長さ・辞書に無い語）で upsert する。
+  辞書にある語は書かないので、取り込み済みの記録は持たない。
+- 続けて、AutoWord の Rejected の語のうち、journal の最新の op が upsert のもの（途中で止まった取り消し）を、
+  「却下での取り消し」と同じ手順で取り消す。候補は journal をロックなしで読んで選び、取り消すかはロックの下で決める。
+- 1 回の起動で行う upsert と取り消しは合わせて 256 件までとし、残りは次の起動で行う。
+- 終えたら RuntimeLogger のイベント `english_dictionary_backfill` を 1 件残す。項目は Confirmed の件数 `confirmed` と
+  upsert と取り消しを試みた件数 `attempted` で、語は記録しない。取り消しは `english_dictionary_retract`（`source` は
+  `backfill`）も残す。
+- 取り込むのは起動時だけである。Host の稼働中に `--offline` で確定した語は、ファイルに残っていれば次の起動で取り込む。
 
 ## 5. 確定と学習
 

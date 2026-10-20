@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
@@ -418,21 +419,39 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
   return true;
 }
 
-void InferenceEngine::RegisterConfirmedEnglishWord(const std::string& surface,
-                                                   std::string_view source) {
+namespace {
+
+// Typed in Japanese mode as raw romaji: ASCII letters only (section 4.8).
+bool IsAsciiLetterWord(const std::string& surface) {
+  return !surface.empty() && std::all_of(surface.begin(), surface.end(), [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+  });
+}
+
+// Whether any reading of surface is Confirmed. Takes only the store's short
+// table lock.
+bool HasConfirmedSurface(const learning::AutoWordStore& store, const std::string& surface) {
+  const auto confirmed = store.ListByState(learning::AutoWordState::Confirmed);
+  return std::any_of(confirmed.begin(), confirmed.end(),
+                     [&](const auto& word) { return word.surface == surface; });
+}
+
+}  // namespace
+
+bool InferenceEngine::RegisterConfirmedEnglishWord(const std::string& surface,
+                                                   std::string_view source,
+                                                   std::optional<uint64_t> epoch) {
   EnglishCandidateConfig english;
+  learning::AutoWordStore* auto_words = nullptr;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     english = config_.english;
+    auto_words = auto_word_store_;
   }
-  if (!english.dictionary_enabled || surface.size() < english.min_length) return;
-  // Typed in Japanese mode as raw romaji: ASCII letters only (section 4.8).
-  const bool letters = std::all_of(surface.begin(), surface.end(), [](char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-  });
-  if (!letters) return;
+  if (!english.dictionary_enabled || surface.size() < english.min_length) return false;
+  if (!IsAsciiLetterWord(surface)) return false;
   const auto dictionary = EnglishDictionaryFor(english.dictionary_path);
-  if (!dictionary) return;
+  if (!dictionary) return false;
   // Already a dictionary word: an upsert with the synthetic frequency would
   // only lower its rank among the surfaces of its key.
   const auto key = EnglishLookupKey(surface);
@@ -442,19 +461,145 @@ void InferenceEngine::RegisterConfirmedEnglishWord(const std::string& surface,
     return std::any_of(entries.begin(), entries.end(),
                        [&](const auto& entry) { return entry.surface == surface; });
   });
-  if (present) return;
+  if (present) return false;
   // The lowest frequency, so the word never outranks a dictionary surface of
   // the same key (section 4.3).
   constexpr uint32_t kConfirmedEnglishFrequency = 1;
-  const auto outcome = dictionary->Upsert(surface, kConfirmedEnglishFrequency);
-  if (!runtime_logger_) return;
+  // Asked under the dictionary's update mutex, which the reset's erasure
+  // takes after raising the epoch and a retract takes after the rejection is
+  // saved: an upsert either lands before them or is cancelled (DEV-1600,
+  // DEV-1596).
+  const auto still_current = [&] {
+    if (!epoch) return true;
+    if (english_registration_epoch_.load() != *epoch) return false;
+    return !auto_words || HasConfirmedSurface(*auto_words, surface);
+  };
+  const auto outcome = dictionary->Upsert(surface, kConfirmedEnglishFrequency, 0, still_current);
+  if (!runtime_logger_) return true;
   // Never the word itself.
   runtime_logger_->Log(
-      outcome.result == EnglishWriteResult::Persisted ? logging::RuntimeLogLevel::Info
-                                                      : logging::RuntimeLogLevel::Warn,
+      outcome.result == EnglishWriteResult::Persisted ||
+              outcome.result == EnglishWriteResult::Cancelled
+          ? logging::RuntimeLogLevel::Info
+          : logging::RuntimeLogLevel::Warn,
       "english_dictionary_upsert",
       {{"source", logging::RuntimeLogSafeText(std::string(source))},
        {"result", logging::RuntimeLogSafeText(EnglishWriteResultName(outcome.result))}});
+  return true;
+}
+
+bool InferenceEngine::RetractRejectedEnglishWord(const std::string& surface,
+                                                 std::string_view source) {
+  // Not gated on inlineEnglishDictionary: a word added while it was on is
+  // taken back even after it was turned off. Only ASCII letter words were
+  // ever added.
+  if (!IsAsciiLetterWord(surface)) return false;
+  std::string path;
+  learning::AutoWordStore* auto_words = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    path = config_.english.dictionary_path;
+    auto_words = auto_word_store_;
+  }
+  if (path.empty()) return false;
+  const auto dictionary = EnglishDictionaryFor(path);
+  if (!dictionary) return false;
+  // The dictionary is keyed by surface alone: another reading still
+  // Confirmed keeps the word. Asked under the update mutex, as the upsert
+  // of a confirmation is, so neither overtakes the other.
+  const auto still_rejected = [&] {
+    return !auto_words || !HasConfirmedSurface(*auto_words, surface);
+  };
+  const auto result = dictionary->Retract(surface, still_rejected);
+  if (runtime_logger_) {
+    // Never the word itself.
+    runtime_logger_->Log(
+        result == EnglishRetractResult::Failed || result == EnglishRetractResult::MemoryOnly
+            ? logging::RuntimeLogLevel::Warn
+            : logging::RuntimeLogLevel::Info,
+        "english_dictionary_retract",
+        {{"source", logging::RuntimeLogSafeText(std::string(source))},
+         {"result", logging::RuntimeLogSafeText(EnglishRetractResultName(result))}});
+  }
+  return result != EnglishRetractResult::NotAdded;
+}
+
+size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()>& stop,
+                                                      size_t max_writes) {
+  // Read before the list: a reset after this point cancels every upsert below.
+  const auto epoch = english_registration_epoch_.load();
+  learning::AutoWordStore* store = nullptr;
+  bool enabled = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    store = auto_word_store_;
+    enabled = config_.english.dictionary_enabled;
+  }
+  if (!store || !enabled) return 0;
+  // The store's own mutex covers the copy; no engine lock is held below, and
+  // RegisterConfirmedEnglishWord skips the words already in the dictionary,
+  // so a start after the first writes only what is still missing.
+  const auto confirmed = store->ListByState(learning::AutoWordState::Confirmed);
+  size_t attempted = 0;
+  for (const auto& word : confirmed) {
+    if (attempted >= max_writes || (stop && stop())) break;
+    if (RegisterConfirmedEnglishWord(word.surface, "backfill", epoch)) ++attempted;
+  }
+  // DEV-1596: a retract whose journal rewrite failed left the upsert in the
+  // journal, and rejecting the word again changes nothing to retry it. The
+  // journal is read here without the lock only to pick candidates; Retract
+  // decides under it.
+  std::set<std::string> rejected;
+  for (const auto& word : store->ListByState(learning::AutoWordState::Rejected)) {
+    rejected.insert(word.surface);
+  }
+  std::string path;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    path = config_.english.dictionary_path;
+  }
+  const auto dictionary = rejected.empty() || path.empty() ? nullptr : EnglishDictionaryFor(path);
+  std::vector<std::string> journaled;
+  if (dictionary) {
+    const auto journal = LoadEnglishJournal(dictionary->paths().journal);
+    std::set<std::pair<std::string, std::string>> seen;
+    for (auto it = journal.contents.ops.rbegin(); it != journal.contents.ops.rend(); ++it) {
+      if (!seen.insert({it->key, it->surface}).second) continue;
+      if (it->kind == EnglishOverlayOpKind::Upsert && rejected.count(it->surface) > 0) {
+        journaled.push_back(it->surface);
+      }
+    }
+  }
+  for (const auto& surface : journaled) {
+    if (attempted >= max_writes || (stop && stop())) break;
+    if (RetractRejectedEnglishWord(surface, "backfill")) ++attempted;
+  }
+  if (runtime_logger_) {
+    runtime_logger_->Log(logging::RuntimeLogLevel::Info, "english_dictionary_backfill",
+                         {{"confirmed", static_cast<uint64_t>(confirmed.size())},
+                          {"attempted", static_cast<uint64_t>(attempted)}});
+  }
+  return attempted;
+}
+
+bool InferenceEngine::ResetEnglishRuntimeAdditions() {
+  std::string path;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    path = config_.english.dictionary_path;
+  }
+  // Without a configured dictionary no runtime op was ever written. Not
+  // gated on inlineEnglishDictionary: files written while it was on remain.
+  if (path.empty()) return true;
+  const auto dictionary = EnglishDictionaryFor(path);
+  if (!dictionary) return true;
+  const bool ok = dictionary->ResetRuntimeAdditions();
+  if (runtime_logger_) {
+    runtime_logger_->Log(ok ? logging::RuntimeLogLevel::Info : logging::RuntimeLogLevel::Warn,
+                         "english_dictionary_reset",
+                         {{"result", logging::RuntimeLogSafeText(ok ? "ok" : "error")}});
+  }
+  return ok;
 }
 
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
@@ -1944,6 +2089,8 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     // converter_call_mutex_ to convert. Holding it across the flush would stall
     // the next candidate query behind this commit's disk write. AutoWordStore
     // has its own mutex, so it needs no help from ours.
+    // Read before the save that may confirm the word (DEV-1600).
+    const auto english_epoch = english_registration_epoch_.load();
     const bool promoted = auto_word_store->Observe(surface, reading, now_epoch_sec,
                                                    auto_word_min_count, auto_word_auto_register);
     const bool saved = auto_word_store->Save();
@@ -1957,7 +2104,7 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     // behind it.
     if (promoted && saved) {
       history_lock.unlock();
-      RegisterConfirmedEnglishWord(surface, "mining");
+      RegisterConfirmedEnglishWord(surface, "mining", english_epoch);
     }
   }
   return true;

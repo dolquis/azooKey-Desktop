@@ -1057,6 +1057,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
   // DEV-1572: the store takes no file lock; its in-process wait and the save
   // are logged together as save_ms.
   const auto save_start = std::chrono::steady_clock::now();
+  // Read before the save that may confirm the word: an AutoWord reset after
+  // it cancels the English upsert below (DEV-1600).
+  const auto english_epoch = engine_->EnglishRegistrationEpoch();
   const auto outcome = auto_word_store_->SetStateAndSave(parsed->surface, parsed->reading, target);
   UserDictionaryEditReport report;
   report.save_ms =
@@ -1080,10 +1083,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
   if (outcome == learning::AutoWordSaveOutcome::SaveFailed) {
     return fail(ipc::kNewWordErrorSaveFailed);
   }
-  // DEV-1584: a newly confirmed English word joins the English dictionary. The
-  // reply does not depend on it; a failure is logged by the engine.
+  // DEV-1584: a newly confirmed English word joins the English dictionary;
+  // DEV-1596: a newly rejected one leaves it when a runtime upsert added it.
+  // The reply does not depend on either; a failure is logged by the engine.
   if (target == learning::AutoWordState::Confirmed) {
-    engine_->RegisterConfirmedEnglishWord(parsed->surface, "new_word_resolve");
+    engine_->RegisterConfirmedEnglishWord(parsed->surface, "new_word_resolve", english_epoch);
+  } else {
+    engine_->RetractRejectedEnglishWord(parsed->surface, "new_word_resolve");
   }
   res.ok = true;
   res.changed = true;

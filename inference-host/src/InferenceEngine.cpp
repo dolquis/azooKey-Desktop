@@ -1190,7 +1190,25 @@ HealthState InferenceEngine::health_state() const {
 }
 
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  std::shared_ptr<core::IConverter> model_converter;
+  bool threads_changed = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    threads_changed = config.inference_threads != config_.inference_threads;
+    ApplyConfigLocked(config);
+    model_converter = model_converter_;
+  }
+  // Spec 6.2: a new thread count reaches the loaded model at once, not at its next load. The
+  // context is the one Convert decodes on, so the change waits for an in-flight conversion;
+  // an unchanged count does not wait.
+  if (!threads_changed || !config.inference_threads || !model_converter) return;
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  if (auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(model_converter.get())) {
+    zenzai->SetThreadCount(*config.inference_threads);
+  }
+}
+
+void InferenceEngine::ApplyConfigLocked(const EngineConfig& config) {
   config_.dictionary = config.dictionary;
   ApplyDictionaryConfigLocked();
   config_.rewriters = config.rewriters;
@@ -1203,6 +1221,7 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.segment_boundary_confidence = config.segment_boundary_confidence;
   config_.punctuation_rules_path = config.punctuation_rules_path;
   config_.inference_threads = config.inference_threads;
+  config_.inference_lane = config.inference_lane;
   config_.max_candidates = config.max_candidates;
   config_.max_context_length = config.max_context_length;
   config_.learning_alpha = config.learning_alpha;
@@ -1298,6 +1317,18 @@ std::optional<ZenzaiDecodeStats> InferenceEngine::last_zenzai_decode_stats() con
   const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
   if (!zenzai) return std::nullopt;
   return zenzai->last_decode_stats();
+}
+
+std::optional<int32_t> InferenceEngine::model_thread_count() const {
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!model_converter_) return std::nullopt;
+    converter = model_converter_;
+  }
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
+  return zenzai ? zenzai->thread_count() : std::nullopt;
 }
 
 void InferenceEngine::MirrorModelRuntimeErrorLocked(
@@ -1451,6 +1482,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                                                 ? config.max_candidates
                                                 : std::min(max_candidates, config.max_candidates);
   const auto limited_context = TakeLastUtf8Codepoints(context, config.max_context_length);
+  // Spec 6.2: the Fast lane converts with a single Zenzai beam, as live conversion does. The
+  // fallback converter and the dictionary candidates keep their own limits.
+  const uint32_t model_max_candidates =
+      config.inference_lane == InferenceLane::Fast ? 1u : effective_max_candidates;
   std::unique_lock<std::mutex> converter_lock(converter_call_mutex_);
   const auto convert = [&](const std::shared_ptr<core::IConverter>& target, bool model,
                            std::optional<std::chrono::steady_clock::time_point> deadline) {
@@ -1472,8 +1507,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                       model ? TraceBackend(config.backend) : "cpu", model);
     };
     try {
-      auto values = target->Convert(kana, BuildContext(kana, limited_context, cancel, deadline,
-                                                       effective_max_candidates, live));
+      auto values = target->Convert(
+          kana, BuildContext(kana, limited_context, cancel, deadline,
+                             model ? model_max_candidates : effective_max_candidates, live));
       auto result = canceled() ? core::EtwResult::Cancelled : core::EtwResult::Success;
       // Zenzai can absorb an exception and return kana fallback candidates.
       // Preserve that backend failure independently of the successful response.

@@ -628,6 +628,8 @@ TEST(SettingsStoreTest, NllRerankFollowsThePowerLane) {
     const auto config = ApplyRuntimeSettingsToEngineConfig(
         {}, settings, BackendKind::Cpu, [&] { return InferenceThreadEnvironment{c.source, 8}; });
     EXPECT_EQ(config.nll.enabled, c.nll_enabled) << c.profile;
+    EXPECT_EQ(config.inference_lane, c.nll_enabled ? InferenceLane::Heavy : InferenceLane::Fast)
+        << c.profile;
   }
 
   // A user who left NLL off keeps it off on AC as well.
@@ -636,6 +638,21 @@ TEST(SettingsStoreTest, NllRerankFollowsThePowerLane) {
     return InferenceThreadEnvironment{PowerSource::Ac, 8};
   });
   EXPECT_FALSE(config.nll.enabled);
+  EXPECT_EQ(config.inference_lane, InferenceLane::Heavy);
+}
+
+// DEV-1599: the lane is resolved whether or not NLL is on, so the Fast lane's single Zenzai beam
+// follows the battery with the default settings.
+TEST(SettingsStoreTest, PowerLaneIsResolvedWithNllOff) {
+  using namespace azookey::host;
+  for (const auto source : {PowerSource::Ac, PowerSource::Battery, PowerSource::Unknown}) {
+    RuntimeSettings settings;
+    ASSERT_FALSE(settings.nll.enabled);
+    const auto config = ApplyRuntimeSettingsToEngineConfig(
+        {}, settings, BackendKind::Cpu, [&] { return InferenceThreadEnvironment{source, 8}; });
+    EXPECT_EQ(config.inference_lane,
+              source == PowerSource::Battery ? InferenceLane::Fast : InferenceLane::Heavy);
+  }
 }
 
 TEST(SettingsStoreTest, PowerProfileDecidesTheLaneWithoutQueryingTheEnvironment) {
@@ -660,10 +677,14 @@ TEST(SettingsStoreTest, ExplicitInferenceThreadsOverrideEnvironmentWithoutQueryi
       RuntimeSettings settings;
       settings.power_profile = profile;
       settings.inference_threads = threads;
-      const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
-        ADD_FAILURE() << "explicit thread count must not query the environment";
-        return InferenceThreadEnvironment{PowerSource::Battery, 1};
-      });
+      // `auto` samples the power source for the lane only; the explicit count still wins.
+      const auto config =
+          ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [&profile] {
+            if (profile != "auto") {
+              ADD_FAILURE() << "an explicit power profile must not query the environment";
+            }
+            return InferenceThreadEnvironment{PowerSource::Battery, 1};
+          });
       EXPECT_EQ(config.inference_threads, threads);
     }
   }

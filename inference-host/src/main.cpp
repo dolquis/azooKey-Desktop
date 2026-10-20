@@ -1160,8 +1160,8 @@ int main(int argc, char** argv) {
 
   // M25 (docs/copilot-pc-backend-spec.md section 6): a power source change
   // re-applies the runtime settings, under the lock UpdateConfig takes, so the
-  // lane and the thread count follow it. The thread count takes effect at the
-  // next model load. Once the change has stood for kPowerSettleQuiet, `auto`
+  // lane and the thread count follow it. Both take effect from the next
+  // conversion. Once the change has stood for kPowerSettleQuiet, `auto`
   // is resolved again and a different backend reloads the model (section 4.4).
   const auto apply_power_change = [&engine, &settings_store, &runtime_log, &current_auto_backend,
                                    update_config_mutex = dconf.update_config_mutex](

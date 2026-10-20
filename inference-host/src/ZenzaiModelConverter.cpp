@@ -626,6 +626,8 @@ std::vector<double> ActiveBeamScores(const std::vector<LlamaBeam>& beams) {
 
 struct ZenzaiModelRuntime {
   std::optional<ZenzaiDecodeStats> last_decode_stats;
+  // Threads the context decodes with; 0 when the load did not choose a count.
+  int32_t n_threads{};
 #if AZOOKEY_WITH_LLAMA_CPP
   ~ZenzaiModelRuntime() {
     if (context) {
@@ -1599,6 +1601,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
     }
     return result;
   }
+  runtime->n_threads = n_threads;
 
   result.runtime = std::move(runtime);
 #else
@@ -1609,6 +1612,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   }
   auto runtime = std::make_unique<ZenzaiModelRuntime>();
   runtime->mock_candidates_for_tests = options.mock_candidates_for_tests;
+  runtime->n_threads = options.n_threads.value_or(0);
   result.runtime = std::move(runtime);
 #endif
   result.ok = true;
@@ -1620,6 +1624,19 @@ ZenzaiModelConverter::ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::ICon
     : info_(std::move(loaded.info)), runtime_(std::move(loaded.runtime)), fallback_(fallback) {}
 
 ZenzaiModelConverter::~ZenzaiModelConverter() = default;
+
+std::optional<int32_t> ZenzaiModelConverter::thread_count() const {
+  if (!runtime_) return std::nullopt;
+  return runtime_->n_threads;
+}
+
+void ZenzaiModelConverter::SetThreadCount(int32_t n_threads) {
+  if (!runtime_ || n_threads <= 0 || runtime_->n_threads == n_threads) return;
+#if AZOOKEY_WITH_LLAMA_CPP
+  if (runtime_->context) llama_set_n_threads(runtime_->context, n_threads, n_threads);
+#endif
+  runtime_->n_threads = n_threads;
+}
 
 NllOutcome ZenzaiModelConverter::RerankNll(const std::string& kana,
                                            std::vector<core::Candidate>& candidates,

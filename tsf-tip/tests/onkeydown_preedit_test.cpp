@@ -2380,9 +2380,11 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_prediction_enabled_for_test(true);
   h.service.set_ipc_pipe_name_for_test(pipe_name);
-  // A conversion query that misses its deadline is re-armed, and the prediction
-  // queued behind it waits for the retry; the 150ms default makes the window
-  // this test looks at depend on how fast the machine answers.
+  // A conversion query that misses its deadline is cancelled, and the
+  // prediction behind it is dropped and only retried by a candidates-ready
+  // notification (PredictionArrivesAfterAConversionMissesItsDeadline covers that
+  // path). This test never runs one before 'O', so the 150ms default would make
+  // it depend on how fast the machine answers.
   h.service.set_query_deadline_ms_for_test(60000);
   h.service.set_window_query_deadline_ms_for_test(60000);
   h.service.start_ipc_worker_for_test();
@@ -2396,6 +2398,60 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
   h.service.process_candidates_ready_for_test();
   EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
+// DEV-1676: a conversion query that misses its 150ms deadline is cancelled and
+// answered with local candidates (dev-infrastructure-spec §7.5); the prediction
+// queued behind it also misses its own deadline here, is reported as dropped,
+// and the candidates-ready notification re-queues it, so it still arrives.
+TEST(TsfTipOnKeyDownPreeditTest, PredictionArrivesAfterAConversionMissesItsDeadline) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-slow-conversion-test-" +
+                                std::to_string(GetCurrentProcessId());
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  for (const WPARAM key : {'N', 'I'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "に");
+  // Each poll runs the notification the dropped prediction posts, which is what
+  // schedules the retry; the bound only has to outlast the retry interval.
+  EXPECT_TRUE(WaitUntil(
+      [&] {
+        h.service.process_candidates_ready_for_test();
+        return h.service.shown_prediction_count_for_test() == 2u;
+      },
+      std::chrono::milliseconds(20000)));
   EXPECT_TRUE(h.service.prediction_window_visible_for_test());
   h.service.stop_ipc_worker_for_test();
   server.Stop();

@@ -191,6 +191,24 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
+// Waits for a prediction result to sit in the slot. A response that misses the
+// 150ms prediction deadline is reported as dropped, and only a candidates-ready
+// notification re-queues it, so the wait runs one while a retry is pending and
+// leaves a delivered result in place for the test to look at.
+template <typename Service>
+bool WaitForPredictionResult(Service& service, bool* retry_seen = nullptr) {
+  return WaitUntil(
+      [&] {
+        if (service.has_prediction_result_for_test()) return true;
+        if (service.prediction_retry_pending_for_test()) {
+          if (retry_seen) *retry_seen = true;
+          service.process_candidates_ready_for_test();
+        }
+        return service.has_prediction_result_for_test();
+      },
+      std::chrono::milliseconds(20000));
+}
+
 class FakeRange : public ITfRange {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
@@ -2376,15 +2394,76 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.service.set_prediction_enabled_for_test(true);
   h.service.set_ipc_pipe_name_for_test(pipe_name);
+  // A conversion query that misses its deadline is cancelled and answered with
+  // local candidates, which this test does not look at; the ordering it checks
+  // should not depend on how fast the machine answers. The prediction deadline
+  // is a separate constant, handled by WaitForPredictionResult.
+  h.service.set_query_deadline_ms_for_test(60000);
+  h.service.set_window_query_deadline_ms_for_test(60000);
   h.service.start_ipc_worker_for_test();
   // The pending 'h' keeps the reading at "に", so its result arrives before
   // 'O' queues "にほ"; this is the ordering that coverage timing produced.
   for (const WPARAM key : {'N', 'I', 'H'}) ASSERT_TRUE(h.Press(key));
-  ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
   ASSERT_TRUE(h.Press('O'));
   ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
 
-  ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
+// DEV-1676: a prediction response that misses the 150ms prediction deadline is
+// dropped, and the candidates-ready notification re-queues it about a second
+// later (the same contract as DroppedPredictionRetriesTheSameReading). The Host
+// here answers the first QueryPredictions late on purpose, so the retry is the
+// only way the result reaches the window.
+TEST(TsfTipOnKeyDownPreeditTest, PredictionArrivesAfterAResponseMissesItsDeadline) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-late-response-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> prediction_queries{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      if (prediction_queries.fetch_add(1) == 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  for (const WPARAM key : {'N', 'I'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "に");
+  bool retry_seen = false;
+  ASSERT_TRUE(WaitForPredictionResult(h.service, &retry_seen));
+  EXPECT_TRUE(retry_seen);
+  EXPECT_GE(prediction_queries.load(), 2u);
   h.service.process_candidates_ready_for_test();
   EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
   EXPECT_TRUE(h.service.prediction_window_visible_for_test());

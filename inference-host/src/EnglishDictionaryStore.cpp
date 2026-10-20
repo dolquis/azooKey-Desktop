@@ -356,11 +356,13 @@ EnglishWriteOutcome EnglishDictionaryStore::Upsert(std::string_view surface, uin
                         std::string(surface), frequency})};
 }
 
-EnglishRetractResult EnglishDictionaryStore::Retract(std::string_view surface) {
+EnglishRetractResult EnglishDictionaryStore::Retract(std::string_view surface,
+                                                    const std::function<bool()>& still_current) {
   using Result = EnglishRetractResult;
   if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface))
     return Result::NotAdded;
   std::lock_guard lock(update_mutex_);
+  if (still_current && !still_current()) return Result::NotAdded;
   const EnglishOverlayOp op{EnglishOverlayOpKind::Delete, 0, EnglishLookupKey(surface),
                             std::string(surface), 0};
   auto result = Result::Failed;

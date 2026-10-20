@@ -99,11 +99,13 @@ class EnglishDictionaryStore {
   // host holds one in memory). The overlay gets a tombstone unless the TSV has
   // the word, and the journal loses the entry, so a later TSV that has the
   // word shows it again. A word of the TSV or the shipped .bin that no
-  // runtime op added is never hidden.
-  EnglishRetractResult Retract(std::string_view surface);
+  // runtime op added is never hidden. still_current, when set, is asked under
+  // the update mutex as for Upsert: false leaves everything (NotAdded).
+  EnglishRetractResult Retract(std::string_view surface,
+                               const std::function<bool()>& still_current = {});
   // Section 4.8 (DEV-1600): erases the runtime additions, here and in the
   // files (ResetEnglishRuntimeFiles), under the writer lock. Runtime deletes
-  // go with a TSV; without one, a delete already in the overlay stays. false
+  // go with a TSV; without one, a delete in the overlay stays. false
   // when the lock, the TSV or a file step fails; calling it again is safe.
   bool ResetRuntimeAdditions();
   bool Compact();

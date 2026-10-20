@@ -944,7 +944,15 @@ bool ResetEnglishRuntimeFiles(const EnglishDictionaryPaths& paths,
     auto records = base->Records();
     const auto overlay = ReadEnglishOverlay(paths.overlay);
     if (overlay && overlay->header.base_fingerprint == base->header().content_hash) {
-      records = MergeOverlayOps(std::move(records), overlay->ops);
+      // Every runtime upsert is an addition to erase, journaled or not (one
+      // that found the journal full or failing lives in the overlay only), so
+      // none is merged. A delete is a retract whose journal entry is already
+      // gone: it is kept, or the retracted word would come back.
+      std::vector<EnglishOverlayOp> deletes;
+      for (const auto& op : overlay->ops) {
+        if (op.kind == EnglishOverlayOpKind::Delete) deletes.push_back(op);
+      }
+      records = MergeOverlayOps(std::move(records), deletes);
     }
     if (journal.state == EnglishJournalState::Ok) {
       // A word the base had before the upsert was never upserted (section

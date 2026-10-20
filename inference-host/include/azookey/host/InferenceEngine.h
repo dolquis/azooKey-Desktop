@@ -281,13 +281,16 @@ class InferenceEngine {
   // DEV-1596 (section 4.8): an M36 word that has just left Confirmed for
   // Rejected leaves the English dictionary when a runtime upsert added it
   // (EnglishDictionaryStore::Retract). source names the path in the log
-  // ("new_word_resolve" or "forget"). Call it without holding any engine mutex.
-  void RetractRejectedEnglishWord(const std::string& surface, std::string_view source);
+  // ("new_word_resolve", "forget" or "backfill"). Nothing is taken back while
+  // another reading of surface is Confirmed. Call it without holding any
+  // engine mutex. true when a retract was attempted (not NotAdded).
+  bool RetractRejectedEnglishWord(const std::string& surface, std::string_view source);
   // DEV-1597 (section 4.8): registers the Confirmed AutoWord words the English
   // dictionary lacks, such as those confirmed before the wiring or by
-  // `newwords confirm --offline`. Stops when stop() turns true, or after
-  // max_writes upserts. Returns the number of upserts attempted. Meant for a
-  // background thread at startup.
+  // `newwords confirm --offline`, then retracts the Rejected words whose
+  // upsert the journal still holds (a retract that failed midway, DEV-1596).
+  // Stops when stop() turns true, or after max_writes upserts and retracts.
+  // Returns the number attempted. Meant for a background thread at startup.
   static constexpr size_t kMaxEnglishBackfillWrites = 256;
   size_t BackfillConfirmedEnglishWords(const std::function<bool()>& stop,
                                        size_t max_writes = kMaxEnglishBackfillWrites);

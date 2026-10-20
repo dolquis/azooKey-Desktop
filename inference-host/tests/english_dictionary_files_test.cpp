@@ -1508,6 +1508,46 @@ TEST(EnglishDictionaryResetTest, AFailedStepKeepsTheJournalSoARetryErasesTheSame
   fs::remove_all(dir);
 }
 
+TEST(EnglishDictionaryResetTest, WithoutATsvAnUpsertTheJournalMissedIsErasedToo) {
+  const auto dir = TestDir();
+  const auto bin = dir / "english-words.bin";
+  const auto paths = EnglishDictionaryPaths::From(bin);
+  ASSERT_TRUE(WriteEnglishBase(paths, EncodeEnglishBase(ParseEnglishTsv(kTsv), 1)));
+  EnglishDictionaryStore store(bin);
+  // A retracted word compacted into the base: only the overlay's delete hides it.
+  ASSERT_EQ(store.Upsert("Swift", 1).result, EnglishWriteResult::Persisted);
+  ASSERT_TRUE(store.Compact());
+  ASSERT_EQ(store.Retract("Swift"), EnglishRetractResult::Retracted);
+  // The journal cannot take the op (as when it is full): it lives in the
+  // overlay only.
+  store.SetWriteHookForTest([](EnglishWriteStep step) {
+    return step != EnglishWriteStep::JournalFrameWritten &&
+           step != EnglishWriteStep::JournalRewriteWritten;
+  });
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::JournalFailed);
+  store.SetWriteHookForTest({});
+  ASSERT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  ASSERT_TRUE(store.ResetRuntimeAdditions());
+  EXPECT_TRUE(store.Lookup("kotlin").empty());
+  EXPECT_TRUE(EnglishDictionaryStore(bin).Lookup("kotlin").empty());
+  // The overlay's delete is kept: the retracted word does not come back.
+  EXPECT_TRUE(store.Lookup("swift").empty());
+  EXPECT_EQ(store.Lookup("apple").size(), 2u);
+  fs::remove_all(dir);
+}
+
+TEST(EnglishDictionaryRetractTest, AFalseStillCurrentLeavesEverything) {
+  const auto dir = TestDir();
+  const auto tsv = dir / "english-words.tsv";
+  WriteText(tsv, "apple\t50\n");
+  EnglishDictionaryStore store(tsv);
+  ASSERT_EQ(store.Upsert("Kotlin", 1).result, EnglishWriteResult::Persisted);
+  EXPECT_EQ(store.Retract("Kotlin", [] { return false; }), EnglishRetractResult::NotAdded);
+  EXPECT_EQ(Surfaces(store.Lookup("kotlin")), std::vector<std::string>{"Kotlin"});
+  EXPECT_EQ(ReadEnglishJournal(store.paths().journal)->ops.size(), 1u);
+  fs::remove_all(dir);
+}
+
 TEST(EnglishDictionaryResetTest, WithoutATsvABaseThatCannotBeMappedKeepsTheJournal) {
   const auto dir = TestDir();
   const auto paths = EnglishDictionaryPaths::From(dir / "english-words.bin");

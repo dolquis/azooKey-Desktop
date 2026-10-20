@@ -4704,3 +4704,29 @@ TEST_F(EngineConfirmedEnglishWordTest, TheBackfillRegistersOnlyMissingConfirmedW
   // Every word is in the dictionary now: nothing is written again.
   EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}), 0u);
 }
+
+// DEV-1596: a retract whose journal rewrite failed is completed by the next
+// backfill, as rejecting the word again changes nothing.
+TEST_F(EngineConfirmedEnglishWordTest, TheBackfillCompletesARetractThatFailedMidway) {
+  auto_words_.IngestTrending({{"Kotlin", "ことりん"}}, kNowBase, true);
+  ASSERT_TRUE(engine_->RegisterConfirmedEnglishWord("Kotlin", "test"));
+  ASSERT_TRUE(auto_words_.Reject("Kotlin", "ことりん"));
+  {
+    azookey::host::EnglishDictionaryStore other(tsv_);
+    other.SetWriteHookForTest([](azookey::host::EnglishWriteStep step) {
+      return step != azookey::host::EnglishWriteStep::JournalRewriteWritten;
+    });
+    ASSERT_EQ(other.Retract("Kotlin"), azookey::host::EnglishRetractResult::Failed);
+  }
+  const auto journal_path = azookey::host::EnglishDictionaryPaths::From(tsv_).journal;
+  const auto latest = [&] {
+    const auto journal = azookey::host::ReadEnglishJournal(journal_path);
+    return journal ? azookey::host::LatestEnglishJournalOp(journal->ops, "kotlin", "Kotlin")
+                   : std::nullopt;
+  };
+  ASSERT_TRUE(latest().has_value());
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}), 1u);
+  EXPECT_FALSE(latest().has_value());
+  EXPECT_TRUE(Lookup("kotlin").empty());
+  EXPECT_EQ(engine_->BackfillConfirmedEnglishWords({}), 0u);
+}

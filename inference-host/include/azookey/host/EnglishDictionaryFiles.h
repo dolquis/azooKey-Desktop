@@ -276,8 +276,9 @@ EnglishJournalRetractResult RetractEnglishJournalEntry(const std::filesystem::pa
 // reset of the AutoWord store. Expects the caller to hold
 // EnglishDictionaryFileLock. In order:
 // 1. a new base: tsv_records (the TSV parsed without the journal) stamped with
-//    tsv_time, or without a TSV the current base merged with its overlay minus
-//    each entry whose latest journal op is an upsert;
+//    tsv_time, or without a TSV the current base with its overlay's deletes
+//    applied (its upserts are dropped) minus each entry whose latest journal
+//    op is an upsert;
 // 2. the overlay reinitialized for it (removed when there is no base);
 // 3. the journal removed;
 // 4. english-words.added.bin.corrupt.*, english-words.added.bin.tmp.* and

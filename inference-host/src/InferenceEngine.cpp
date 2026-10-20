@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
@@ -487,12 +488,12 @@ bool InferenceEngine::RegisterConfirmedEnglishWord(const std::string& surface,
   return true;
 }
 
-void InferenceEngine::RetractRejectedEnglishWord(const std::string& surface,
+bool InferenceEngine::RetractRejectedEnglishWord(const std::string& surface,
                                                  std::string_view source) {
   // Not gated on inlineEnglishDictionary: a word added while it was on is
   // taken back even after it was turned off. Only ASCII letter words were
   // ever added.
-  if (!IsAsciiLetterWord(surface)) return;
+  if (!IsAsciiLetterWord(surface)) return false;
   std::string path;
   learning::AutoWordStore* auto_words = nullptr;
   {
@@ -500,22 +501,27 @@ void InferenceEngine::RetractRejectedEnglishWord(const std::string& surface,
     path = config_.english.dictionary_path;
     auto_words = auto_word_store_;
   }
-  if (path.empty()) return;
-  // The dictionary is keyed by surface alone: another reading still
-  // Confirmed keeps the word.
-  if (auto_words && HasConfirmedSurface(*auto_words, surface)) return;
+  if (path.empty()) return false;
   const auto dictionary = EnglishDictionaryFor(path);
-  if (!dictionary) return;
-  const auto result = dictionary->Retract(surface);
-  if (!runtime_logger_) return;
-  // Never the word itself.
-  runtime_logger_->Log(
-      result == EnglishRetractResult::Failed || result == EnglishRetractResult::MemoryOnly
-          ? logging::RuntimeLogLevel::Warn
-          : logging::RuntimeLogLevel::Info,
-      "english_dictionary_retract",
-      {{"source", logging::RuntimeLogSafeText(std::string(source))},
-       {"result", logging::RuntimeLogSafeText(EnglishRetractResultName(result))}});
+  if (!dictionary) return false;
+  // The dictionary is keyed by surface alone: another reading still
+  // Confirmed keeps the word. Asked under the update mutex, as the upsert
+  // of a confirmation is, so neither overtakes the other.
+  const auto still_rejected = [&] {
+    return !auto_words || !HasConfirmedSurface(*auto_words, surface);
+  };
+  const auto result = dictionary->Retract(surface, still_rejected);
+  if (runtime_logger_) {
+    // Never the word itself.
+    runtime_logger_->Log(
+        result == EnglishRetractResult::Failed || result == EnglishRetractResult::MemoryOnly
+            ? logging::RuntimeLogLevel::Warn
+            : logging::RuntimeLogLevel::Info,
+        "english_dictionary_retract",
+        {{"source", logging::RuntimeLogSafeText(std::string(source))},
+         {"result", logging::RuntimeLogSafeText(EnglishRetractResultName(result))}});
+  }
+  return result != EnglishRetractResult::NotAdded;
 }
 
 size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()>& stop,
@@ -538,6 +544,36 @@ size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()
   for (const auto& word : confirmed) {
     if (attempted >= max_writes || (stop && stop())) break;
     if (RegisterConfirmedEnglishWord(word.surface, "backfill", epoch)) ++attempted;
+  }
+  // DEV-1596: a retract whose journal rewrite failed left the upsert in the
+  // journal, and rejecting the word again changes nothing to retry it. The
+  // journal is read here without the lock only to pick candidates; Retract
+  // decides under it.
+  std::set<std::string> rejected;
+  for (const auto& word : store->ListByState(learning::AutoWordState::Rejected)) {
+    rejected.insert(word.surface);
+  }
+  std::string path;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    path = config_.english.dictionary_path;
+  }
+  const auto dictionary =
+      rejected.empty() || path.empty() ? nullptr : EnglishDictionaryFor(path);
+  std::vector<std::string> journaled;
+  if (dictionary) {
+    const auto journal = LoadEnglishJournal(dictionary->paths().journal);
+    std::set<std::pair<std::string, std::string>> seen;
+    for (auto it = journal.contents.ops.rbegin(); it != journal.contents.ops.rend(); ++it) {
+      if (!seen.insert({it->key, it->surface}).second) continue;
+      if (it->kind == EnglishOverlayOpKind::Upsert && rejected.count(it->surface) > 0) {
+        journaled.push_back(it->surface);
+      }
+    }
+  }
+  for (const auto& surface : journaled) {
+    if (attempted >= max_writes || (stop && stop())) break;
+    if (RetractRejectedEnglishWord(surface, "backfill")) ++attempted;
   }
   if (runtime_logger_) {
     runtime_logger_->Log(logging::RuntimeLogLevel::Info, "english_dictionary_backfill",

@@ -71,7 +71,7 @@ DEV-1592 に記録してある。
 | J 区間のかな | J 区間の生ローマ字を、内蔵のローマ字表（`RomajiKanaConverter::ConvertForCommit`）でかなにしたもの |
 | E 区間の表層 | E 区間の英字の表層。決め方は §6.4 |
 | 高確度の E 区間 | ライブ変換と第 1 候補で英字にする区間（§8.1） |
-| 低確度の E 区間 | 第 1 候補では日本語として扱い、英字を第 2 候補にする区間（§8.1） |
+| 低確度の E 区間 | 第 1 候補では日本語として扱い、英字を後ろの候補（M63-A では第 2 候補、M63-B では §8.3 の 3）に置く区間（§8.1） |
 
 ## 5. 有効化の条件
 
@@ -81,7 +81,9 @@ M63 の設定が OFF のときと同じ挙動になる。
 - 設定 `mixedEnglishAutoConversion`（§14）が true で、かつ M60 の `inlineEnglishCandidates` が
   true である。M63 は M60 の生ローマ字バッファを使うため、M60 の設定が OFF のときは働かない。
   TIP の生ローマ字の保持条件（M60 §4.1）は変えない。
-- Handshake 応答の capabilities に `mixed_english` がある（§9.3）。
+- Handshake 応答の capabilities に `mixed_english` と、M60 の `english_candidates` の両方がある
+  （§9.3）。生ローマ字は M60 の条件（M60 §4.1）で送るため、`english_candidates` が無い Host には
+  生ローマ字を送らない。
 - カスタムローマ字表が有効でない。Host はカスタム表を持たず、J 区間のかなを作れないため
   （M60 §4.1.1 と同じ制約）。
 - 入力欄が secure でない。secure の入力では生ローマ字を送らない。
@@ -104,7 +106,8 @@ Host にあり、分割と変換を 1 か所で行えるためである。
 
 英単語辞書が無いとき（`inlineEnglishDictionary` が false、ファイルが無い・読めない）は、E 区間を
 張れないので文中の分割を行わない。この場合は composition 全体を 1 区間とみなす M63-A の判定（§8.2）
-だけを行う。
+だけを行う。composition の先頭の文字を Shift で大文字にして打ったときは、composition 全体を 1 つの
+E 区間（表層は打鍵どおり。§6.4）とし、それ以外は全体を 1 つの J 区間とする。
 
 ### 6.2 混合ラティス
 
@@ -164,6 +167,12 @@ E 区間は、次のどちらかを満たすときに高確度とし、それ以
 
 ローマ字として読める英単語は (ii) を満たさないので、Shift で打たない限り低確度である。
 
+学習による抑制: (ii) で高確度になる区間でも、English チャネルにその区間のキーの負の観測（§11）が
+あるときは低確度として扱う。このとき、その区間は日本語のまま第 1 候補に入り、英字は M63-A では
+第 2 候補（§8.2）、M63-B では §8.3 の 3（その区間だけを英字にした候補）になる。
+キーは M60 §5 と同じく、区間の生ローマ字を小文字に畳んだもの（`lower`）とする。(i)（Shift 先頭
+大文字）は学習で変えない。
+
 ### 8.2 M63-A（composition 全体が 1 語）
 
 - 分割器の先頭の経路が composition 全体を 1 つの E 区間とし、その区間が高確度なら、ライブ変換と
@@ -222,7 +231,8 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   含むとき、全区間を載せる。M59 の句読点の `segments` と同じ配列に載せ、句読点の印
   （`auto_punctuation`）と区間の印（`tag`）は独立に持つ。
 - `CandidateField` に、省略可能な `segments`（`LiveSegment` の配列。offset はその候補の `surface`
-  の UTF-16 単位）を加える。Host は §8.3 の 1〜3 の候補にだけ載せ、それ以外の候補と、
+  の UTF-16 単位）を加える。Host は、§8.2 で E 区間を英字にした第 1 候補と、§8.3 の 1〜3 の候補に
+  だけ載せ、それ以外の候補と、
   `mixed_english` が false の応答では出さない。`QueryCandidatesResponse.segments`（`candidates[0]`
   の句読点の区間）の意味は変えない。
 - 応答の `surface` / 候補の表層は、区間の表層を連結したものである。
@@ -231,10 +241,33 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 
 - Host は M63 に対応する版で、Handshake 応答の capabilities に `mixed_english` を入れる。
 - TIP は capabilities に `mixed_english` が無い Host へは、§9.1 のフィールドを送らない。
-- 新しい Host と旧 TIP: 旧 TIP はフィールドを送らないので、Host は M63 を行わず今の挙動になる。
+  `mixed_english` があっても M60 の `english_candidates` が無い Host へは、`raw_romaji` を送らない
+  （§5）。
+- 新しい Host と旧 TIP: 旧 TIP はフィールドを送らないので、Host は M63 を行わず、M63 の設定が
+  OFF のときと同じ挙動になる。
 - 新しい TIP と旧 Host: capability が無いので TIP は送らない。送ってしまった場合も、旧 Host の
-  パーサはキーで読んで未知のフィールドを無視するので、今の挙動になる。
+  パーサはキーで読んで未知のフィールドを無視するので、M63 を知らない版の挙動のままになる。
 - `mixed_english` が true でも `raw_romaji` が空なら、Host は M63 を行わない。
+
+### 9.4 プライバシー
+
+生ローマ字はユーザー入力そのものである。secure の扱いの正典は
+`docs/privacy-and-secure-input-spec.md` §5 である。
+
+- TIP は secure の入力では、どの要求にも `raw_romaji` と `mixed_english` を載せない（本書 §5）。
+- Host の防御:
+  - `QueryCandidatesRequest.secure` が true の要求では、`mixed_english` を無視し、`raw_romaji` を
+    M63 の処理に使わない。M60 の英単語候補の扱いは変えない。
+  - `mixed_english` が false の要求では、`raw_romaji` を M63 の処理に使わない。M60 §4 の用途は
+    変えない。
+  - Host は、M63 の処理で受け取った生ローマ字を、その要求の処理のほかの経路（キャッシュの鍵、
+    診断の出力、別の要求）に使わない。
+- `QueryLiveConversionRequest` は `secure` を持たない。ライブ変換の生ローマ字を secure の入力から
+  守るのは、TIP が送らないことだけである。Host 側にも防御を置くなら、M63-A の実装 PR が
+  `QueryLiveConversionRequest` に省略可能な `secure` を足す（足すかどうかは M63-A で決める）。
+- 生ローマ字と区間の表層は、ログとダンプに平文で出さない。`RuntimeLogger` の redaction
+  （`docs/dev-infrastructure-spec.md` §7.6。secure 中は `docs/privacy-and-secure-input-spec.md` §8）で
+  本文系のフィールドとして扱い、出すのは件数と長さだけにする。
 
 ## 10. レイテンシと打ち切り
 
@@ -247,10 +280,14 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   挙動で処理する。
 - 候補一覧（§8.3）で追加の変換（すべて J、低確度の区間を英字にしたもの）を作るのは
   `live = false` の要求だけとし、打鍵ごとの経路には載せない。追加の変換は合計 4 回までとし、
-  Zenzai の予算を超えたものは候補一覧から省く。上限の根拠は、実 pin モデル（CPU、threads 8、warm）で
-  打鍵ごとの変換が p95 19〜37ms、composition 全体の 1 回の変換が中央値 50〜91ms であり、4 回を
-  足しても約 370ms と、1 変換のハード予算 600ms（`docs/zenzai-inference-spec.md` §8.2）に収まる
-  ことである。
+  Zenzai の予算を超えたものは候補一覧から省く。
+- 上限の根拠（実 pin モデル zenz-v3.2-small Q5_K_M、CPU、threads 8、warm。測定値と条件は Linear の
+  DEV-1592 のコメント）:
+  - 打鍵ごとの変換（`live = true`）は p95 19〜37ms。
+  - composition 全体の候補一覧用の変換 1 回は、中央値 50〜91ms、p95 約 95ms（最大 100ms）。
+  - 第 1 候補の変換と追加の 4 回を合わせた 5 回は、中央値で約 460ms、p95 で約 480ms。候補窓用の
+    `QueryCandidates` の timeout 750ms（`docs/dev-infrastructure-spec.md` §8.5.2）に収まり、1 回ずつは
+    Zenzai 1 変換のハード予算 600ms（`docs/zenzai-inference-spec.md` §8.2）に収まる。
 
 ## 11. 学習
 
@@ -259,14 +296,26 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   から作る。composition が 1 区間のときは `CommitObservation` を使う。
 - E 区間は `ObservedSegment` の `chosen.tag` を `English`、`reading` を区間の生ローマ字とし、Host は
   M60 §6.4 の条件で English チャネルへ振り分ける。J 区間はかな漢字学習へ記録する。
-- E 区間をユーザーが日本語へ選び直して確定したときは、English チャネルにその区間の生ローマ字を
-  負の観測として記録し、次に同じ生ローマ字が低確度の E 区間になったときは日本語を第 1 候補のまま
-  とする。高確度の区間の判定（§8.1）は学習で変えない。
-  - TIP は、その区間の `ObservedSegment.shown` に、第 1 候補で英字だった区間の候補（`tag` が
-    `English`、`reading` が区間の生ローマ字）を入れる。payload に新しいフィールドは足さない。
-  - Host は、`chosen.tag` が `English` でなく、`shown` に M60 §6.4 の生ローマ字の条件を満たす
-    `English` の候補がある区間を、その生ローマ字の負の観測として English チャネルへ記録する。
-    English チャネルに負の観測を持たせる形式は、M63 の実装 PR が M60 §5 の形式の上に定める。
+- 第 1 候補で英字だった区間（§8.1 の (ii) で高確度の区間）を、ユーザーが日本語へ選び直して
+  確定したときは、English チャネルにその区間のキー（`lower(区間の生ローマ字)`。§8.1）の負の観測を
+  記録する。次に同じキーの区間が (ii) を満たしても低確度として扱う（§8.1 の学習による抑制）。
+  (i)（Shift 先頭大文字）で高確度だった区間は、選び直しても負の観測にしない。
+  - TIP は、確定した区間の `ObservedSegment.shown`（1 区間の composition では `CommitObservation`
+    の `shown`）に、既存の中身に加えて、第 1 候補で英字だった区間の候補を入れる。この候補は
+    `tag` が `English`、`reading` が区間の生ローマ字で、その区間を表す `segments`（E 区間 1 つ。
+    §9.2）を持つ。payload に新しいフィールドは足さない。
+  - `segments` を持つ候補は M63 の Host だけが作る（§9.2）。M60 の英単語候補は `segments` を
+    持たないので、M63 が OFF の composition の確定（M60 の候補窓で英単語を見て日本語を選んだ確定を
+    含む）は、負の観測にならない。
+  - Host は、次のすべてを満たす区間だけを、そのキーの負の観測として English チャネルへ記録する。
+    - `chosen.tag` が `English` でない。
+    - `shown` に、`segments` を持ち、M60 §6.4 の生ローマ字の条件を満たす `English` の候補がある。
+    - その生ローマ字が大文字を含まず（(i) ではない）、(ii) を満たす。
+  - 抑制された区間の英字（§8.1 の抑制で下げた英字の候補）をユーザーが確定したときは、そのキーの
+    負の観測を消す。
+  - English チャネルに負の観測を持たせる形式は、M63 の実装 PR が M60 §5 の形式の上に定める。
+- `secure` の入力と、`learning_allowed` が false の確定では、English チャネルの記録（負の観測を
+  含む）もかな漢字学習の記録も行わない。判定の正典は `docs/privacy-and-secure-input-spec.md` §5 である。
 - English チャネルの記録は、M60 §5 と同じく、かな漢字の候補・予測・逆変換・未知語マイニングの
   いずれにも入らない。
 
@@ -305,8 +354,8 @@ M63 の実装 PR が `settings/mvp-settings.schema.json` に次のキーを加�
 | 層 | 内容 |
 |---|---|
 | core | 分割器: E の辺の張り方、J の辺の連続の禁止、コストの各項（ASCII 残余、不自然なかな、かなとして読める語の罰）、上位 8 件、64 文字の上限、辞書なしの扱い、表層の大小（§6.4）、確度（§8.1） |
-| host | mock の Zenzai で、Zenzai に渡る読みが §7 の形になること。`DropMixedKanaAsciiModelCandidates` が M63 の E 区間を除いて判定すること。§8.2・§8.3 の順位。§10 の打ち切りで OFF と同じ挙動になること。`mixed_english` が false のときに出力が変わらないこと |
-| ipc | §9 のフィールドの往復。各フィールドを欠いた payload を今の形で読めること。`LiveSegment.tag` が `None` のとき、`CandidateField.segments` が空のとき wire に出ないこと |
+| host | mock の Zenzai で、Zenzai に渡る読みが §7 の形になること。`DropMixedKanaAsciiModelCandidates` が M63 の E 区間を除いて判定すること。§8.2・§8.3 の順位。§10 の打ち切りで OFF と同じ挙動になること。`mixed_english` が false のときに出力が変わらないこと。§11 の負の観測が条件を満たす区間だけに記録され、`segments` を持たない M60 の英単語候補・Shift で打った区間・`secure` / `learning_allowed` が false の確定では記録されないこと。§8.1 の学習による抑制と、英字の確定による解除 |
+| ipc | §9 のフィールドの往復。各フィールドを欠いた payload を、M63 を知らない版の payload と同じ形で読めること。`LiveSegment.tag` が `None` のとき、`CandidateField.segments` が空のとき wire に出ないこと |
 | tip | §5 の送信条件（capability、secure、カスタム表、生ローマ字とかなの不一致、M60 の設定）。`segments` からの確定時の `CommitSegmentsObservation`（E 区間の `reading` が生ローマ字。日本語へ選び直した区間の `shown` に英字の候補が入ること） |
 
 ### 15.2 品質ゲート
@@ -317,8 +366,9 @@ M63 の実装 PR が `settings/mvp-settings.schema.json` に次のキーを加�
 - 合格の基準:
   - 自動で英字にした E 区間の適合率（英字にした区間のうち、正解でも英語区間である割合）が 95% 以上。
   - 日本語だけの文の変換結果が、M63 の設定が OFF のときと比べて 1 件も劣化しない。
-- 基準を満たさない分割器では、文中の区間（M63-B）を英字の第 2 候補（§8.3 の 3）だけで出し、
-  ライブ変換と第 1 候補を英字にしない。
+- 基準を満たさない分割器では、文中の区間（M63-B）の英字を §8.3 の 3 の候補だけで出し、
+  ライブ変換と第 1 候補を英字にしない。このとき、本来は高確度になる区間も低確度として扱い、
+  §8.3 の 3（1 区間だけ英字にした候補）に入れる。
 
 ## 16. 受け入れ条件
 

@@ -7,7 +7,7 @@
 > **作成日**: 2026-10-12
 > **位置づけ**: 本ファイルは時点依存の調査記録であり、正典ではない。
 > - マイルストーン定義・受け入れ条件・リスクの正典 → `plans/windows-port-roadmap.md` の M63
-> - 機能仕様の正典 → M63-0 が新設する `docs/*-spec.md`（1 語の候補注入は `docs/inline-english-candidate-spec.md`）
+> - 機能仕様の正典 → `docs/mixed-english-auto-conversion-spec.md`（1 語の候補注入は `docs/inline-english-candidate-spec.md`）
 > - 進捗・状態・優先度の正典 → Linear（team `Dev`）
 >
 > 調査方法: リポジトリの実ファイル（`core/`、`inference-host/`、`ipc/`、`tsf-tip/`、関連 spec）を

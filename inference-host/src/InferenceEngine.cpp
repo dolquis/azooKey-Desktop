@@ -558,8 +558,7 @@ size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()
     std::lock_guard<std::mutex> lock(state_mutex_);
     path = config_.english.dictionary_path;
   }
-  const auto dictionary =
-      rejected.empty() || path.empty() ? nullptr : EnglishDictionaryFor(path);
+  const auto dictionary = rejected.empty() || path.empty() ? nullptr : EnglishDictionaryFor(path);
   std::vector<std::string> journaled;
   if (dictionary) {
     const auto journal = LoadEnglishJournal(dictionary->paths().journal);

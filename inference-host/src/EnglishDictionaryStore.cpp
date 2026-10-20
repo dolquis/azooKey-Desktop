@@ -357,7 +357,7 @@ EnglishWriteOutcome EnglishDictionaryStore::Upsert(std::string_view surface, uin
 }
 
 EnglishRetractResult EnglishDictionaryStore::Retract(std::string_view surface,
-                                                    const std::function<bool()>& still_current) {
+                                                     const std::function<bool()>& still_current) {
   using Result = EnglishRetractResult;
   if (surface.empty() || surface.size() > 0xFFFF || !core::IsValidUtf8(surface))
     return Result::NotAdded;

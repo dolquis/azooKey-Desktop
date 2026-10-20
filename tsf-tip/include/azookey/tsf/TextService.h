@@ -315,6 +315,12 @@ class TextService final : public ITfTextInputProcessorEx,
     prediction_retry_generation_.store(generation, std::memory_order_release);
     OnCandidatesReady(this);
   }
+  // True from the moment a prediction response is dropped until its retry has
+  // been queued by a candidates-ready notification.
+  bool prediction_retry_pending_for_test() const {
+    return prediction_retry_generation_.load(std::memory_order_acquire) != 0 ||
+           prediction_retry_scheduled_generation_ != 0;
+  }
   void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool resolve_secure_for_test(ITfContext* context) {
     return ResolvePrivacy(context, false).secure;

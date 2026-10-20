@@ -836,7 +836,9 @@ p.english_candidates = v->GetBool("english_candidates").value_or(false);
 
 英単語候補は `QueryCandidatesResponse.candidates[]` に `tag = English(4)` を付けて
 混在させる（§6.1）。M59 の任意 `segments[]` は句読点を伴うライブ変換用であり、
-英単語候補の識別には使わない。
+英単語候補の識別には使わない。M63 の設定が ON の要求では、`segments` の `tag` が日英の区間を
+示す（`docs/mixed-english-auto-conversion-spec.md` §9.2）。1 語の英単語候補の識別は、M63 でも
+候補の `tag` で行う。
 
 ```jsonc
 {

@@ -247,7 +247,10 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   挙動で処理する。
 - 候補一覧（§8.3）で追加の変換（すべて J、低確度の区間を英字にしたもの）を作るのは
   `live = false` の要求だけとし、打鍵ごとの経路には載せない。追加の変換は合計 4 回までとし、
-  Zenzai の予算を超えたものは候補一覧から省く。
+  Zenzai の予算を超えたものは候補一覧から省く。上限の根拠は、実 pin モデル（CPU、threads 8、warm）で
+  打鍵ごとの変換が p95 19〜37ms、composition 全体の 1 回の変換が中央値 50〜91ms であり、4 回を
+  足しても約 370ms と、1 変換のハード予算 600ms（`docs/zenzai-inference-spec.md` §8.2）に収まる
+  ことである。
 
 ## 11. 学習
 

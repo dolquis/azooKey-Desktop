@@ -94,6 +94,10 @@ struct DictionaryLayerConfig {
   bool app_specific_dictionary_enabled{true};
 };
 
+// M25 power-saving lanes (docs/copilot-pc-backend-spec.md section 6.2). Fast: one Zenzai pass with
+// a single beam. Heavy: the full beam and the extra passes on top of it (the NLL rerank).
+enum class InferenceLane { Fast, Heavy };
+
 struct EngineConfig {
   DictionaryLayerConfig dictionary;
   RewriterConfig rewriters;
@@ -108,6 +112,8 @@ struct EngineConfig {
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
   std::optional<int32_t> inference_threads;
+  // Resolved by ApplyRuntimeSettingsToEngineConfig from the power source and powerProfile.
+  InferenceLane inference_lane{InferenceLane::Heavy};
   uint32_t max_candidates{9};
   uint32_t max_context_length{30};
   bool enable_live_conversion{true};
@@ -436,6 +442,8 @@ class InferenceEngine {
   std::optional<std::string> last_error() const;
   std::optional<std::string> effective_last_error() const;
   std::optional<ZenzaiDecodeStats> last_zenzai_decode_stats() const;
+  // Threads the loaded Zenzai model decodes with; nullopt without a loaded model.
+  std::optional<int32_t> model_thread_count() const;
 
   // M47 section 8.5.1. The engine drives the model rows itself from its load
   // outcomes; the Host drives SafeMode. The transport rows describe what the
@@ -466,6 +474,7 @@ class InferenceEngine {
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,
                                                   const std::atomic<bool>* cancel = nullptr);
+  void ApplyConfigLocked(const EngineConfig& config);
   void MirrorModelRuntimeErrorLocked(const std::shared_ptr<core::IConverter>& converter);
   std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
   void NoteModelLoadFailedLocked();

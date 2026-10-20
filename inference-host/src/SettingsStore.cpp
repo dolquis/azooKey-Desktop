@@ -632,13 +632,13 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     if (!sampled_environment) sampled_environment = provider();
     return *sampled_environment;
   };
-  // Spec 6.2: on battery the NLL rerank, the Heavy lane's extra pass, is off.
-  if (config.nll.enabled) {
-    const auto source =
-        settings.power_profile == "auto" ? sample_environment().power_source : PowerSource::Unknown;
-    if (ResolveInferenceLane(source, settings.power_profile) == InferenceLane::Fast) {
-      config.nll.enabled = false;
-    }
+  // Spec 6.2: on battery the Fast lane converts with one Zenzai beam, and the NLL rerank, the
+  // Heavy lane's extra pass, is off.
+  const auto source =
+      settings.power_profile == "auto" ? sample_environment().power_source : PowerSource::Unknown;
+  config.inference_lane = ResolveInferenceLane(source, settings.power_profile);
+  if (config.inference_lane == InferenceLane::Fast) {
+    config.nll.enabled = false;
   }
   if (settings.inference_threads > 0) {
     config.inference_threads = settings.inference_threads;

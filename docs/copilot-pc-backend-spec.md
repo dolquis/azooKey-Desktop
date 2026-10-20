@@ -569,13 +569,16 @@ Host の終了時は、window を閉じてスレッドを join してから engi
 
 `ResolveInferenceLane`（`inference-host/include/azookey/host/PowerLanePolicy.h`）が、電源の状態と
 §6.3 の `powerProfile` から、重い推論を走らせるレーンを決める。バッテリ（`battery_saver` を含む）なら
-Fast、AC（`performance` と、電源の状態が不明な場合を含む）なら Heavy とする。Fast は Zenzai の
-1 pass、Heavy はその上に重ねる追加の pass（NLL rerank、`docs/neural-reranker-spec.md`）を指す。
+Fast、AC（`performance` と、電源の状態が不明な場合を含む）なら Heavy とする。Fast は beam 1 本の
+Zenzai の 1 pass、Heavy は既定の beam 幅の Zenzai と、その上に重ねる追加の pass（NLL rerank、
+`docs/neural-reranker-spec.md`）を指す。解決したレーンは `EngineConfig::inference_lane` が持ち、
+`ApplyRuntimeSettingsToEngineConfig` が設定する。
 
 | 項目 | AC 接続時 | バッテリ駆動時 | Host での扱い |
 |---|---|---|---|
 | バックエンド選択 | §4.5 のフォールバック段位に従う（R2 NPU/GPU → R1 CUDA/Vulkan/CPU） | §4.5 に従う（**R2 は NPU device のみ**、§4.6 のデバイスレベル絞り込み。discrete GPU / CUDA / Vulkan を回避し、NPU 不可なら R1 CPU） | `auto` は Host 起動時の電源の状態で解決し、電源の変化が 5 秒続いたら解決し直す。値が変わり、モデルを使っていれば再ロードする（§4.4） |
-| 推論スレッド数（`inferenceThreads` が 0 のとき） | 8 | 2 | 電源の状態が不明なら 4。いずれも論理コア数を上限とする。電源の変化で設定し直し、次のモデルロードから効く |
+| 推論スレッド数（`inferenceThreads` が 0 のとき） | 8 | 2 | 電源の状態が不明なら 4。いずれも論理コア数を上限とする。電源の変化で設定し直し、ロード済みのモデルにも次の変換から効く（`llama_set_n_threads`。走っている変換の終わりを待って切り替える） |
+| Zenzai の beam 幅（候補ウィンドウ、`live = false`） | 既定の beam 幅（`docs/zenzai-inference-spec.md` §6.2） | 1（Fast レーン） | 電源の変化で設定し直し、次の変換から効く。モデルの候補は 1 件になり、辞書・user_dict の候補と、モデルが無いときの fallback converter の候補上限は変えない（モデルの劣化で Zenzai が内部から呼ぶ fallback には、上限 1 の文脈がそのまま渡る。`docs/zenzai-inference-spec.md` §7.1）。変換のハード予算（`docs/zenzai-inference-spec.md` §8.2）は変えない |
 | NLL rerank（Heavy レーン） | 設定 `nll.enabled` に従う | 無効（Fast レーンのみ） | 電源の変化で設定し直し、次の変換から効く |
 | ライブ変換重い推論 | 無効（Fast レーンのみ） | 無効（Fast レーンのみ） | ライブ変換は電源によらず `live = true` の Zenzai 1-pass で行い、NLL rerank などの Heavy の pass は走らせない。モデルが無いときは fallback converter（`docs/zenzai-inference-spec.md` §7.1） |
 | 予測頻度 | 入力ごと | 200ms デバウンス | TIP 側の挙動で、Host は扱わない |

@@ -156,6 +156,11 @@ class ZenzaiModelConverter final : public core::IConverter {
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
   std::optional<ZenzaiDecodeStats> last_decode_stats() const;
+  // Threads the loaded context decodes with; nullopt without a runtime.
+  std::optional<int32_t> thread_count() const;
+  // Applies a new thread count to the loaded context from the next decode. The caller
+  // serializes this with Convert and RerankNll, which decode on the same context.
+  void SetThreadCount(int32_t n_threads);
   NllOutcome RerankNll(const std::string& kana, std::vector<core::Candidate>& candidates,
                        const core::ConversionContext& context, NllConfig config,
                        uint64_t config_revision = 0);

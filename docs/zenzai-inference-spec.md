@@ -292,7 +292,8 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 
 ### 6.2 探索方針（M8 MVP）
 
-- **ビームサーチ**（beam width = `B`、既定 4）を採用。サンプリング（temperature>0）は
+- **ビームサーチ**（beam width = `B`、既定 4。ライブ変換と、`docs/copilot-pc-backend-spec.md`
+  §6.2 の Fast レーンでは 1）を採用。サンプリング（temperature>0）は
   IME の決定性を損なうため**既定では使わない**（再現性・テスト容易性を優先）。
 - 各ビームは系列 logprob（トークン logprob の総和）を保持。`[EOS]` / トークン上限で確定。
 - `[EOS]` で確定した系列は、`[EOS]` 自身の logprob を系列 logprob に加え、トークン数にも
@@ -370,7 +371,10 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
    モデルがロードされていれば `live = true` の Zenzai 1-pass（beam 1 本）、されていなければ
    `fallback_converter_` になる。
    `kModelConversionBudget`（§8.2）の deadline、末尾を長さ制限した文脈、候補上限を
-   `BuildContext` 経由で渡して `Convert` する。モデル converter から例外が出て
+   `BuildContext` 経由で渡して `Convert` する。`EngineConfig::inference_lane` が Fast
+   （`docs/copilot-pc-backend-spec.md` §6.2）なら、モデル converter へ渡す候補上限を 1 にし、
+   `live = false` でも beam 1 本で変換する。fallback converter へ渡す候補上限は変えない。
+   モデル converter から例外が出て
    fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は
    §7.4 に従う。返された候補を末尾へ連結する。
 6. **表層 dedup**: `DedupMergedCandidates` で全ソースの重複を除く（§7.6）。

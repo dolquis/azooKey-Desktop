@@ -481,6 +481,23 @@ TEST(InferenceEngineTest, ConfiguredCandidateLimitCanExceedLegacyTipLimit) {
   EXPECT_EQ(capture->last_context.max_candidates, 12u);
 }
 
+// DEV-1599: the Fast lane narrows only the Zenzai beam; without a model the fallback converter
+// keeps its candidate limit.
+TEST(InferenceEngineTest, FastLaneKeepsTheFallbackConverterCandidateLimit) {
+  auto converter = std::make_unique<ContextCapturingConverter>();
+  auto* capture = converter.get();
+  azookey::host::EngineConfig config;
+  config.max_candidates = 2;
+  config.inference_lane = azookey::host::InferenceLane::Fast;
+  azookey::host::InferenceEngine engine(std::move(converter), nullptr, config);
+
+  const auto candidates = engine.QueryCandidates("かな", "", kNowBase);
+
+  EXPECT_EQ(capture->last_context.max_candidates, 2u);
+  EXPECT_FALSE(capture->last_context.live);
+  EXPECT_EQ(candidates.size(), 2u);
+}
+
 TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_count.tsv");
   RemoveProtectedStoreFile(path);
@@ -3001,6 +3018,96 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
                                   candidate.source == azookey::core::CandidateSource::Model;
                          }),
             cands.end());
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1599 (docs/copilot-pc-backend-spec.md section 6.2): on the Fast lane Zenzai converts with a
+// single beam and returns one candidate; the Heavy lane keeps the full beam and its result.
+TEST(InferenceEngineTest, FastLaneConvertsWithASingleZenzaiBeam) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_fast_lane_beam.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  const std::string model_path = TempPath("azookey_fast_lane_beam_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto model_surfaces = [](const std::vector<azookey::core::Candidate>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) {
+      if (candidate.source == azookey::core::CandidateSource::Model) {
+        surfaces.push_back(candidate.surface);
+      }
+    }
+    return surfaces;
+  };
+  const auto default_lane = engine->QueryCandidates("にほんご", "", kNowBase);
+
+  auto config = engine->config();
+  config.inference_lane = azookey::host::InferenceLane::Heavy;
+  engine->ApplyConfig(config);
+  const auto heavy = engine->QueryCandidates("にほんご", "", kNowBase);
+  EXPECT_EQ(model_surfaces(heavy), (std::vector<std::string>{"日本語", "日本語入力"}));
+  ASSERT_EQ(heavy.size(), default_lane.size());
+  for (size_t i = 0; i < heavy.size(); ++i) {
+    EXPECT_EQ(heavy[i].surface, default_lane[i].surface);
+    EXPECT_DOUBLE_EQ(heavy[i].score, default_lane[i].score);
+  }
+
+  config.inference_lane = azookey::host::InferenceLane::Fast;
+  engine->ApplyConfig(config);
+  const auto fast = engine->QueryCandidates("にほんご", "", kNowBase);
+  EXPECT_EQ(model_surfaces(fast), (std::vector<std::string>{"日本語"}));
+  ASSERT_FALSE(fast.empty());
+  EXPECT_EQ(fast.front().surface, "日本語");
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1599: a new thread count reaches the loaded model when the config is applied, without
+// waiting for the next model load. A config without a count leaves it as it is.
+TEST(InferenceEngineTest, ApplyConfigSetsTheLoadedModelThreadCount) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_apply_threads.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  EXPECT_FALSE(engine->model_thread_count().has_value());
+  const std::string model_path = TempPath("azookey_apply_threads_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.n_threads = 8;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  EXPECT_EQ(engine->model_thread_count(), 8);
+
+  auto config = engine->config();
+  config.inference_threads = 2;
+  engine->ApplyConfig(config);
+  EXPECT_EQ(engine->model_thread_count(), 2);
+  EXPECT_EQ(engine->config().inference_threads, 2);
+
+  config.inference_threads.reset();
+  engine->ApplyConfig(config);
+  EXPECT_EQ(engine->model_thread_count(), 2);
 
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);

@@ -14,6 +14,7 @@ using azookey::host::LoadWithMmapFallback;
 using azookey::host::MmapFallbackReason;
 using azookey::host::MmapLoadReport;
 using azookey::host::MmapModelLoader;
+using azookey::host::ModelLoadSettingsFor;
 
 std::filesystem::path TempFile(const std::string& name, const std::string& contents) {
   const auto path = std::filesystem::temp_directory_path() / ("azookey_mmap_" + name);
@@ -156,6 +157,20 @@ TEST(MmapFallbackTest, ReadLoadRequestedIsNotAFallback) {
   EXPECT_EQ(calls, std::vector<bool>({false}));
   EXPECT_FALSE(report.used_mmap);
   EXPECT_FALSE(report.fallback.has_value());
+}
+
+TEST(ModelLoadSettingsTest, MappedLoadMapsLazilyWithoutRepackingWeights) {
+  constexpr auto settings = ModelLoadSettingsFor(true);
+  EXPECT_TRUE(settings.map_file);
+  EXPECT_TRUE(settings.lazy_load);
+  EXPECT_FALSE(settings.repack_weights);
+}
+
+TEST(ModelLoadSettingsTest, ReadLoadKeepsRepackingWeights) {
+  constexpr auto settings = ModelLoadSettingsFor(false);
+  EXPECT_FALSE(settings.map_file);
+  EXPECT_FALSE(settings.lazy_load);
+  EXPECT_TRUE(settings.repack_weights);
 }
 
 }  // namespace

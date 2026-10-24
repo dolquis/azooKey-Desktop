@@ -41,6 +41,20 @@ class MmapModelLoader {
 // Maps and unmaps the file; false when the mapping cannot be made.
 bool PreflightModelMapping(const std::filesystem::path& path);
 
+// llama.cpp settings for one load attempt (docs/copilot-pc-backend-spec.md section 5.1).
+struct ModelLoadAttemptSettings {
+  bool map_file{false};       // load_mode AUTO instead of NONE
+  bool lazy_load{false};      // lazy_mode AUTO instead of OFF
+  bool repack_weights{true};  // use_extra_bufts: CPU weight repacking
+};
+
+// A mapped load turns repacking off: repacked weights are copied into private
+// memory, which would undo the page sharing that mmap is for. A read load
+// already holds the weights in private memory, so it keeps repacking.
+constexpr ModelLoadAttemptSettings ModelLoadSettingsFor(bool use_mmap) {
+  return ModelLoadAttemptSettings{use_mmap, use_mmap, !use_mmap};
+}
+
 enum class MmapFallbackReason { Preflight, Load };
 
 std::string_view MmapFallbackReasonName(MmapFallbackReason reason);

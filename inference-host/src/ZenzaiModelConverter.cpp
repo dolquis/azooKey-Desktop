@@ -1548,8 +1548,10 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
     first_attempt = false;
     // AUTO maps the file unless a device cannot use mapped buffers. A read load
     // also turns lazy reading off, since that reads through a mapping as well.
-    model_params.load_mode = use_mmap ? LLAMA_LOAD_MODE_AUTO : LLAMA_LOAD_MODE_NONE;
-    model_params.lazy_mode = use_mmap ? LLAMA_LAZY_MODE_AUTO : LLAMA_LAZY_MODE_OFF;
+    const auto settings = ModelLoadSettingsFor(use_mmap);
+    model_params.load_mode = settings.map_file ? LLAMA_LOAD_MODE_AUTO : LLAMA_LOAD_MODE_NONE;
+    model_params.lazy_mode = settings.lazy_load ? LLAMA_LAZY_MODE_AUTO : LLAMA_LAZY_MODE_OFF;
+    model_params.use_extra_bufts = settings.repack_weights;
     ModelAttempt out;
     // llama.cpp opens model files through ggml_fopen, which decodes the name as UTF-8
     // on Windows, so the UTF-8 bytes are passed through unchanged.

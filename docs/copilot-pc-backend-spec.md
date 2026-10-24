@@ -514,15 +514,21 @@ GGUF は llama.cpp のマップでロードする。マップしたページは�
    `CreateFileMappingW`、`MapViewOfFile`、それ以外の OS は `mmap` を使う。空のファイルは
    マップできないので失敗とする。preflight が失敗したら、手順 2 を省いて手順 3 へ進む。
 2. `llama_model_load_from_file` を `load_mode=LLAMA_LOAD_MODE_AUTO` で呼ぶ。llama.cpp は、マップした
-   バッファを使えないデバイスがあればマップせずに読み込む。
+   バッファを使えないデバイスがあればマップせずに読み込む。この試行では `use_extra_bufts=false` とし、
+   CPU の重み repack を使わない。repack は重みを並べ替えた複製を私有メモリに作るので、マップした
+   重みが §5.2 の共有ページにならず、private bytes と commit charge がモデルのサイズに近い量だけ増える。
+   repack の対象は CPU と量子化形式で決まり、x64 では Q4_0 / Q4_K / IQ4_NL など、ARM64 ではこれに
+   Q5_K / Q6_K / Q8_0 が加わる。対象の形式では CPU 推論が repack ありより遅くなりうる。
 3. 手順 2 が失敗したら、`load_mode=LLAMA_LOAD_MODE_NONE` と `lazy_mode=LLAMA_LAZY_MODE_OFF`
-   （lazy 読み込みもマップを使うため）の読み込みで 1 回だけ再試行する。llama.cpp は
-   マップの失敗を他のロード失敗と区別して返さないため、失敗の理由は問わない。GGUF の破損や
+   （lazy 読み込みもマップを使うため）の読み込みで 1 回だけ再試行する。この試行では repack を
+   使う（`use_extra_bufts=true`）。読み込みでは重みが元から私有メモリに載るので、repack しても増えない。
+   llama.cpp はマップの失敗を他のロード失敗と区別して返さないため、失敗の理由は問わない。GGUF の破損や
    Vulkan の初期化失敗でも再試行するので、`model_mmap_fallback` の `reason=load` はマップが原因で
    あることを意味しない。
    再試行も失敗したら、通常のロード失敗として扱う（§4.4）。
 
-試行の順序は `LoadWithMmapFallback` が持ち、llama.cpp を含まないビルドでもテストできる。
+試行の順序は `LoadWithMmapFallback` が、試行ごとの `load_mode` / `lazy_mode` / `use_extra_bufts` は
+`ModelLoadSettingsFor` が持ち、どちらも llama.cpp を含まないビルドでもテストできる。
 
 手順 1 か手順 3 を通って読み込みでロードできた場合も、ロードは成功として扱い、Health は `ok` の
 まま `last_error` も設定しない。Host の構造化ログに `model_mmap_fallback`（Warn）を 1 件出す。

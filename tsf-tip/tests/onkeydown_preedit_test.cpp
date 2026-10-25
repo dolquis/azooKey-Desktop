@@ -2834,6 +2834,85 @@ TEST(TsfTipOnKeyDownPreeditTest, NonConvertWithoutSelectionPassesThrough) {
   EXPECT_FALSE(h.Press(VK_NONCONVERT));
 }
 
+// The keyboard open/close compartment alone, for harnesses that never activate.
+class OpenCloseCompartment final : public ITfCompartment {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartment) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartment*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP SetValue(TfClientId, const VARIANT* value) override {
+    if (!value || value->vt != VT_I4) return E_INVALIDARG;
+    open = value->lVal != 0;
+    return S_OK;
+  }
+  STDMETHODIMP GetValue(VARIANT* value) override {
+    if (!value) return E_INVALIDARG;
+    VariantInit(value);
+    value->vt = VT_I4;
+    value->lVal = open ? 1 : 0;
+    return S_OK;
+  }
+  bool open{true};
+};
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheReadingBeforeClosing) {
+  DocumentPreeditHarness h;
+  OpenCloseCompartment compartment;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(compartment.open);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  // Typing goes to the app now.
+  EXPECT_FALSE(h.Press('K'));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheShownCandidateBeforeClosing) {
+  OemCompositionTranslationGuard oem_translation;
+  DocumentPreeditHarness h;
+  OpenCloseCompartment compartment;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const std::wstring shown = h.context.document->text;
+  ASSERT_FALSE(shown.empty());
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, shown);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NonConvertUnderImeOnOffClosesInsteadOfCycling) {
+  DocumentPreeditHarness h;
+  OpenCloseCompartment compartment;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_convert_keys_action_for_test(azookey::tsf::ConvertKeysAction::ImeOnOff);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_NONCONVERT));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_TRUE(h.Press(VK_CONVERT));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
 

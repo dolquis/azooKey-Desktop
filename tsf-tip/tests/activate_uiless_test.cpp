@@ -2,11 +2,13 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <ctfutb.h>
 #include <gtest/gtest.h>
 #include <msctf.h>
 
 #include "KeyboardStateGuard.h"
 #include "azookey/tsf/TextService.h"
+#include "azookey/tsf/TextServiceFactory.h"
 
 // Verifies that TextService::ActivateEx derives its UI-less state from
 // ITfThreadMgrEx::GetActiveFlags rather than the dwFlags argument (spec §2.10).
@@ -95,6 +97,132 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
   HRESULT set_result_{S_OK};
 };
 
+// Stands in for the language bar's sink on an item: counts OnUpdate calls.
+class MockLangBarItemSink final : public ITfLangBarItemSink {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfLangBarItemSink) return E_NOINTERFACE;
+    *ppv = static_cast<ITfLangBarItemSink*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+  STDMETHODIMP OnUpdate(DWORD flags) override {
+    ++updates;
+    last_flags = flags;
+    return S_OK;
+  }
+  int updates{0};
+  DWORD last_flags{0};
+
+ private:
+  LONG ref_count_{1};
+};
+
+// Records AddItem / RemoveItem and, like the language bar, advises a sink on
+// the added item. It keeps its own reference to the item until the test drops it.
+class MockLangBarItemMgr final : public ITfLangBarItemMgr {
+ public:
+  ~MockLangBarItemMgr() { DropItem(); }
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfLangBarItemMgr) return E_NOINTERFACE;
+    *ppv = static_cast<ITfLangBarItemMgr*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+  STDMETHODIMP EnumItems(IEnumTfLangBarItems** pp) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetItem(REFGUID, ITfLangBarItem** pp) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP AddItem(ITfLangBarItem* item) override {
+    if (!item) return E_INVALIDARG;
+    ++add_count;
+    if (FAILED(add_result)) return add_result;
+    DropItem();
+    item_ = item;
+    item_->AddRef();
+    ITfSource* source = nullptr;
+    if (SUCCEEDED(item->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source)))) {
+      if (SUCCEEDED(source->AdviseSink(IID_ITfLangBarItemSink, &sink, &sink_cookie_)))
+        sink_advised_ = true;
+      source->Release();
+    }
+    return S_OK;
+  }
+  STDMETHODIMP RemoveItem(ITfLangBarItem* item) override {
+    ++remove_count;
+    if (item != item_) return E_INVALIDARG;
+    Unadvise();
+    return S_OK;
+  }
+  STDMETHODIMP AdviseItemSink(ITfLangBarItemSink*, DWORD*, REFGUID) override { return E_NOTIMPL; }
+  STDMETHODIMP UnadviseItemSink(DWORD) override { return E_NOTIMPL; }
+  STDMETHODIMP GetItemFloatingRect(DWORD, REFGUID, RECT*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetItemsStatus(ULONG, const GUID*, DWORD*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetItemNum(ULONG*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetItems(ULONG, ITfLangBarItem**, TF_LANGBARITEMINFO*, DWORD*, ULONG*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP AdviseItemsSink(ULONG, ITfLangBarItemSink**, const GUID*, DWORD*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP UnadviseItemsSink(ULONG, DWORD*) override { return E_NOTIMPL; }
+
+  ITfLangBarItemButton* button() const {
+    ITfLangBarItemButton* button = nullptr;
+    if (item_) item_->QueryInterface(IID_ITfLangBarItemButton, reinterpret_cast<void**>(&button));
+    if (button) button->Release();  // item_ keeps it alive.
+    return button;
+  }
+  // Drops the mock's reference; returns what is left, 0 once no one holds the item.
+  ULONG DropItem() {
+    if (!item_) return 0;
+    Unadvise();
+    const ULONG left = item_->Release();
+    item_ = nullptr;
+    return left;
+  }
+
+  MockLangBarItemSink sink;
+  int add_count{0};
+  int remove_count{0};
+  HRESULT add_result{S_OK};
+
+ private:
+  void Unadvise() {
+    if (!sink_advised_ || !item_) return;
+    ITfSource* source = nullptr;
+    if (SUCCEEDED(item_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source)))) {
+      source->UnadviseSink(sink_cookie_);
+      source->Release();
+    }
+    sink_advised_ = false;
+  }
+  LONG ref_count_{1};
+  ITfLangBarItem* item_{nullptr};
+  DWORD sink_cookie_{0};
+  bool sink_advised_{false};
+};
+
 // Minimal thread manager mock implementing the interfaces ActivateEx touches:
 // ITfThreadMgrEx (for GetActiveFlags), ITfKeystrokeMgr and ITfSource (so the
 // sink advise succeeds and ActivateEx returns S_OK). GetActiveFlags returns a
@@ -118,6 +246,8 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
       *ppv = static_cast<ITfSource*>(this);
     } else if (riid == IID_ITfCompartmentMgr) {
       *ppv = static_cast<ITfCompartmentMgr*>(this);
+    } else if (riid == IID_ITfLangBarItemMgr && langbar) {
+      return langbar->QueryInterface(riid, ppv);
     } else {
       return E_NOINTERFACE;
     }
@@ -241,6 +371,8 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
 
   TfClientId client_id{7};
   MockKeyboardCompartment keyboard_compartment;
+  // Set to expose ITfLangBarItemMgr; null keeps the host without a language bar.
+  MockLangBarItemMgr* langbar{nullptr};
   // Preserved keys (F10 debug window). E_NOTIMPL by default, as before.
   HRESULT preserve_result{E_NOTIMPL};
   int preserve_calls{0};
@@ -415,6 +547,234 @@ TEST(TsfTipActivateUiLessTest, OemEnlwCanReopenClosedKeyboard) {
   EXPECT_TRUE(eaten);
   EXPECT_TRUE(service.keyboard_open());
   EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+static void PressKey(azookey::tsf::TextService& service, WPARAM key, bool* test_eaten = nullptr,
+                     bool* eaten_out = nullptr) {
+  BOOL eaten = FALSE;
+  ASSERT_EQ(service.OnTestKeyDown(nullptr, key, 0, &eaten), S_OK);
+  if (test_eaten) *test_eaten = eaten != FALSE;
+  eaten = FALSE;
+  ASSERT_EQ(service.OnKeyDown(nullptr, key, 0, &eaten), S_OK);
+  if (eaten_out) *eaten_out = eaten != FALSE;
+}
+
+TEST(TsfTipActivateUiLessTest, ImeOnKeyOpensAndDoesNotToggle) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  mock.keyboard_compartment.SetOpen(false);
+  ASSERT_FALSE(service.keyboard_open());
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  bool test_eaten = false;
+  bool eaten = false;
+  PressKey(service, VK_IME_ON, &test_eaten, &eaten);
+  EXPECT_TRUE(test_eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.keyboard_open());
+  const int writes = mock.keyboard_compartment.set_count();
+  PressKey(service, VK_IME_ON, &test_eaten, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ImeOffKeyClosesAndDoesNotToggle) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  bool eaten = false;
+  PressKey(service, VK_IME_OFF, nullptr, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.last_writer(), mock.client_id);
+  const int writes = mock.keyboard_compartment.set_count();
+  PressKey(service, VK_IME_OFF, nullptr, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ImeOnKeyLeavesAlphanumericMode) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  PressKey(service, VK_OEM_ATTN);
+  ASSERT_TRUE(service.alnum_mode_for_test());
+  const int writes = mock.keyboard_compartment.set_count();
+  bool eaten = false;
+  PressKey(service, VK_IME_ON, nullptr, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_FALSE(service.alnum_mode_for_test());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ImeOffKeyRightAfterFirstFocusIsNotUndone) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  PressKey(service, VK_IME_OFF);
+  EXPECT_FALSE(service.keyboard_open());
+  // A later close within the grace period is not reopened either.
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ShiftedImeOffKeyIsNotAnOffKey) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  keyboard_state.SetDown(VK_SHIFT, true);
+  PressKey(service, VK_IME_OFF);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ConvertKeysOpenAndCloseUnderImeOnOff) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  service.set_convert_keys_action_for_test(azookey::tsf::ConvertKeysAction::ImeOnOff);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  bool eaten = false;
+  PressKey(service, VK_NONCONVERT, nullptr, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_FALSE(service.keyboard_open());
+  PressKey(service, VK_CONVERT, nullptr, &eaten);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ConvertKeysDoNotOpenByDefault) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  mock.keyboard_compartment.SetOpen(false);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  bool test_eaten = true;
+  bool eaten = true;
+  PressKey(service, VK_CONVERT, &test_eaten, &eaten);
+  EXPECT_FALSE(test_eaten);
+  EXPECT_FALSE(eaten);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, HostWithoutLangBarActivatesWithoutItem) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(service.input_mode_langbar_item_for_test(), nullptr);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, LangBarItemIsAddedOnActivateAndReleasedOnDeactivate) {
+  MockLangBarItemMgr langbar;
+  {
+    azookey::tsf::TextService service;
+    MockThreadMgrEx mock(0);
+    mock.langbar = &langbar;
+    ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+    EXPECT_EQ(langbar.add_count, 1);
+    ASSERT_NE(langbar.button(), nullptr);
+    TF_LANGBARITEMINFO info{};
+    ASSERT_EQ(langbar.button()->GetInfo(&info), S_OK);
+    EXPECT_TRUE(IsEqualGUID(info.guidItem, GUID_LBI_INPUTMODE));
+    EXPECT_TRUE(IsEqualGUID(info.clsidService, azookey::tsf::kTextServiceClsid));
+    EXPECT_EQ(service.Deactivate(), S_OK);
+    EXPECT_EQ(langbar.remove_count, 1);
+    EXPECT_EQ(service.input_mode_langbar_item_for_test(), nullptr);
+  }
+  // Only the mock's own reference is left, so no one else leaked one.
+  EXPECT_EQ(langbar.DropItem(), 0u);
+}
+
+TEST(TsfTipActivateUiLessTest, FailedLangBarAddDoesNotFailActivation) {
+  MockLangBarItemMgr langbar;
+  langbar.add_result = E_FAIL;
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.langbar = &langbar;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(service.input_mode_langbar_item_for_test(), nullptr);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_EQ(langbar.remove_count, 0);
+}
+
+TEST(TsfTipActivateUiLessTest, LangBarItemFollowsOpenStateAndAlphanumericMode) {
+  using azookey::tsf::InputModeIndicator;
+  MockLangBarItemMgr langbar;
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  mock.langbar = &langbar;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  auto* item = service.input_mode_langbar_item_for_test();
+  ASSERT_NE(item, nullptr);
+  EXPECT_EQ(item->indicator(), InputModeIndicator::Hiragana);
+
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_EQ(item->indicator(), InputModeIndicator::Direct);
+  EXPECT_EQ(langbar.sink.updates, 1);
+  EXPECT_EQ(langbar.sink.last_flags,
+            static_cast<DWORD>(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP));
+
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  PressKey(service, VK_IME_ON);
+  EXPECT_EQ(item->indicator(), InputModeIndicator::Hiragana);
+  EXPECT_EQ(langbar.sink.updates, 2);
+  PressKey(service, VK_OEM_ATTN);
+  EXPECT_EQ(item->indicator(), InputModeIndicator::Alphanumeric);
+  EXPECT_EQ(langbar.sink.updates, 3);
+  BSTR text = nullptr;
+  ASSERT_EQ(langbar.button()->GetText(&text), S_OK);
+  EXPECT_STREQ(text, L"_A");
+  SysFreeString(text);
+  PressKey(service, VK_IME_ON);
+  EXPECT_EQ(item->indicator(), InputModeIndicator::Hiragana);
+  EXPECT_EQ(langbar.sink.updates, 4);
+  // Focus moves without a state change notify nothing.
+  MockDocumentMgr document;
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  EXPECT_EQ(langbar.sink.updates, 4);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, LangBarLeftClickTogglesAndRightClickDoesNothing) {
+  MockLangBarItemMgr langbar;
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  mock.langbar = &langbar;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  ITfLangBarItemButton* button = langbar.button();
+  ASSERT_NE(button, nullptr);
+
+  ASSERT_EQ(button->OnClick(TF_LBI_CLK_RIGHT, POINT{}, nullptr), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  // A click right after the first focus is the user's choice, not a restore.
+  ASSERT_EQ(button->OnClick(TF_LBI_CLK_LEFT, POINT{}, nullptr), S_OK);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(service.input_mode_langbar_item_for_test()->indicator(),
+            azookey::tsf::InputModeIndicator::Direct);
+  ASSERT_EQ(button->OnClick(TF_LBI_CLK_LEFT, POINT{}, nullptr), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  // After deactivation the item the language bar still holds does nothing.
+  ASSERT_EQ(button->OnClick(TF_LBI_CLK_LEFT, POINT{}, nullptr), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
 }
 
 TEST(TsfTipActivateUiLessTest, FirstFocusOpensKeyboardClosedBeforeFocus) {

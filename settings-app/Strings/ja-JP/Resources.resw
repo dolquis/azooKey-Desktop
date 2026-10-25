@@ -125,6 +125,7 @@
   <data name="Setting_autoUpdate_channel" xml:space="preserve"><value>更新チャネル</value></data>
   <data name="Setting_autoUpdate_checkIntervalHours" xml:space="preserve"><value>更新を確認する間隔（時間）</value></data>
   <data name="Setting_inputMode" xml:space="preserve"><value>起動時の入力モード</value></data>
+  <data name="Setting_convertKeysAction" xml:space="preserve"><value>変換・無変換キー</value></data>
   <data name="Setting_inputStyle" xml:space="preserve"><value>ローマ字テーブル</value></data>
   <data name="Setting_customRomajiTablePath" xml:space="preserve"><value>カスタムローマ字テーブルのパス</value></data>
   <data name="Setting_liveConversion" xml:space="preserve"><value>ライブ変換</value></data>
@@ -217,6 +218,8 @@
   <data name="SettingOption_inputMode_hiragana" xml:space="preserve"><value>ひらがな</value></data>
   <data name="SettingOption_inputMode_alnum_half" xml:space="preserve"><value>半角英数</value></data>
   <data name="SettingOption_inputMode_alnum_full" xml:space="preserve"><value>全角英数</value></data>
+  <data name="SettingOption_convertKeysAction_default" xml:space="preserve"><value>再変換と字種の切り替え</value></data>
+  <data name="SettingOption_convertKeysAction_imeOnOff" xml:space="preserve"><value>変換で IME オン、無変換で IME オフ</value></data>
   <data name="SettingOption_inputStyle_default" xml:space="preserve"><value>標準</value></data>
   <data name="SettingOption_inputStyle_custom" xml:space="preserve"><value>カスタム</value></data>
   <data name="SettingOption_punctuationConversion_off" xml:space="preserve"><value>読みに句読点を足す</value></data>
@@ -249,7 +252,8 @@
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_punctuationConversion" xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
+  <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>
+  <data name="SettingNote_punctuationConversion"xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
   <data name="SettingNote_dynamicPunctuation" xml:space="preserve"><value>ライブ変換が有効なときだけ働きます。</value></data>
   <data name="SettingNote_dynamicPunctuationIdleMs" xml:space="preserve"><value>確定のタイミングが「入力が止まったとき」の場合だけ使います。</value></data>
   <data name="SettingNote_batchConversionMode" xml:space="preserve"><value>「AI で整える」は、AI バックエンドが「使わない」のときニューラル変換になります。</value></data>

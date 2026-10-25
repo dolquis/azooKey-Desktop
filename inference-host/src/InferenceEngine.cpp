@@ -1574,6 +1574,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
           result = deadline && std::chrono::steady_clock::now() >= *deadline
                        ? core::EtwResult::Timeout
                        : core::EtwResult::Failed;
+        } else if (zenzai && zenzai->last_fell_back_at_deadline()) {
+          // No model candidate reached the response, but the cut-off is not a failure (DEV-1700).
+          result = core::EtwResult::Timeout;
         }
       }
       emit(result);

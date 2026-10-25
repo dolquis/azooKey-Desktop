@@ -2584,6 +2584,44 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   RemoveProtectedStoreFile(lpath);
 }
 
+// DEV-1700: a deadline that passes before the first beam step leaves no beam to return. The
+// fallback candidates stand in, and the cut-off is still not a degradation (spec 8.2).
+TEST(InferenceEngineTest, DeadlineBeforeFirstBeamStepFallsBackWithoutDegrading) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_deadline_no_beam.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_deadline_no_beam_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto candidates = engine->QueryCandidates("じかんぎれ", "", kNowBase);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "じかんぎれ");
+  EXPECT_NE(candidates.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_NE(candidates.front().debug_info.find("zenzai-deadline-fallback"), std::string::npos);
+  EXPECT_EQ(candidates.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+  const auto decode_stats = engine->last_zenzai_decode_stats();
+  ASSERT_TRUE(decode_stats.has_value());
+  EXPECT_TRUE(decode_stats->deadline_exceeded);
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTest, DeadlineCutBeamRanksBehindCompletedZenzaiCandidate) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

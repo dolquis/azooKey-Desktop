@@ -1037,6 +1037,15 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   std::lock_guard<std::mutex> load_lock(model_load_mutex_);
   ModelLoadResult result;
   EngineConfig next_config;
+  // The load runs without state_mutex_, and ApplyConfig may change the thread count meanwhile
+  // (DEV-1684). Every write-back below keeps such a count instead of the one this load began with.
+  // ApplyConfig is the only other writer of a model field, so the other fields need no check.
+  std::optional<int32_t> threads_at_start;
+  const auto adopt_applied_threads = [&] {
+    if (config_.inference_threads != threads_at_start) {
+      next_config.inference_threads = config_.inference_threads;
+    }
+  };
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
@@ -1047,6 +1056,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       return result;
     }
     next_config = config_;
+    threads_at_start = config_.inference_threads;
     next_config.model_path = options.path;
     // Section 8.5.1: a reload is accepted once it starts, and only a model the
     // engine can actually load again takes it out of DegradedModel.
@@ -1063,6 +1073,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   if (next_config.model_path.empty()) {
     // No model path means the MVP converter remains active as the fallback.
     std::lock_guard<std::mutex> lock(state_mutex_);
+    adopt_applied_threads();
     ApplyModelConfigFields(config_, next_config);
     model_loaded_ = false;
     model_converter_.reset();
@@ -1082,6 +1093,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = "model file probe failed";
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
+      adopt_applied_threads();
       ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
       active_converter_ = fallback_converter_;
@@ -1141,6 +1153,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = backend_error ? "Vulkan and CPU model load failed" : "model load failed";
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
+      adopt_applied_threads();
       ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
       active_converter_ = fallback_converter_;
@@ -1158,6 +1171,13 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   if (health_.state() == HealthState::SafeMode) {
     result.error = "safe_mode";
     return result;
+  }
+  adopt_applied_threads();
+  // The new converter is not published yet, so nothing else can be decoding on it and setting
+  // its count needs no converter_call_mutex_. An ApplyConfig after the publish below sees this
+  // converter and sets its own count on it, as for any loaded model.
+  if (next_config.inference_threads && next_config.inference_threads != runtime_options.n_threads) {
+    next_converter->SetThreadCount(*next_config.inference_threads);
   }
   ApplyModelConfigFields(config_, next_config);
   model_converter_ = std::move(next_converter);

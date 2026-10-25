@@ -3113,6 +3113,61 @@ TEST(InferenceEngineTest, ApplyConfigSetsTheLoadedModelThreadCount) {
   RemoveProtectedStoreFile(lpath);
 }
 
+// DEV-1684: a thread count applied while a model is loading is the one the loaded model and the
+// config keep; the load does not write back the count it started with.
+TEST(InferenceEngineTest, ApplyConfigDuringModelLoadKeepsTheNewThreadCount) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_apply_threads_during_load.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  const std::string model_path = TempPath("azookey_apply_threads_during_load_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.n_threads = 8;
+  EnableMockZenzaiCandidatesForTests(options);
+
+  // A failed load writes the model fields back too, and keeps the applied count as well.
+  azookey::host::ModelLoadOptions missing = options;
+  missing.path = TempPath("azookey_apply_threads_during_load_missing.gguf");
+  std::remove(missing.path.c_str());
+  missing.before_probe_for_tests = [&] {
+    auto config = engine->config();
+    config.inference_threads = 3;
+    engine->ApplyConfig(config);
+  };
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->config().inference_threads, 3);
+
+  // The first load starts from no model, the second reloads over a loaded one.
+  for (const int32_t applied : {2, 4}) {
+    SCOPED_TRACE(applied);
+    options.before_load_for_tests = [&](azookey::host::BackendKind) {
+      auto config = engine->config();
+      config.inference_threads = applied;
+      engine->ApplyConfig(config);
+    };
+    ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+    EXPECT_EQ(engine->config().inference_threads, applied);
+    EXPECT_EQ(engine->model_thread_count(), applied);
+  }
+
+  // A load that the config did not change mid-way keeps its own count.
+  options.before_load_for_tests = nullptr;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  EXPECT_EQ(engine->config().inference_threads, 8);
+  EXPECT_EQ(engine->model_thread_count(), 8);
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

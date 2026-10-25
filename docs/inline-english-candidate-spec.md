@@ -332,7 +332,8 @@ NASA	8123	acronym
 - 頻度は 1990〜2019 年の出現数の合計 `count` を `1 + floor(4096 * log2(1 + count))` に写す
   （順序を保存し、`2^31` 以下）。Ngram に一致しない語は 1 とする。Ngram は大小文字を区別するので、
   SCOWL の表層と完全一致するものだけを数える。
-- `tech` は linguist の言語名と別名（type が programming・markup・data のもの）と自作の語に付ける。
+- `tech` は linguist の言語名と別名（type が programming・markup・data のもの）と自作の語に付ける。小文字形が SCOWL の一般語である linguist の語（`be`、`make` など）には付けない。
+- `proper` / `acronym` は、同じ小文字キーの小文字形が無いか、その語の Ngram 出現数（元の値）が小文字形の10 倍以上のときだけ付ける。Ngram は大小文字を区別し、文頭の語が大文字形を押し上げるためである。これで `in` / `it` / `or` では小文字形が先頭に出て、`NASA` は大文字形が先頭に出る。
 - 行は頻度の降順、同順位は表層の昇順に並べる。件数は 200,000 以下、サイズは 64 MiB 以下とする。
 - 取得物の URL、サイズ、SHA-256 は porter に固定する。Ngram の集計（約 13.4 GB）は手元で一度だけ
   行い、CI と `cloud-setup.sh` では再生成しない。集計結果の SHA-256 は TSV のヘッダに残す。
@@ -418,7 +419,7 @@ string pool（strings_offset 以降）
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
 - 初期辞書 `english-words.tsv` は MSI が `<インストール先>\data\` に置く。Host が既定パス
-  `%LOCALAPPDATA%zooKey\dict\english-words.tsv` に加えてこの置き場を読む経路は、別 Issue
+  `%LOCALAPPDATA%\azooKey\dict\english-words.tsv` に加えてこの置き場を読む経路は、別 Issue
   （DEV-1740）で扱う。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
 

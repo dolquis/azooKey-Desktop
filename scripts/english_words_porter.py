@@ -17,6 +17,7 @@ import io
 import math
 import re
 import sys
+import tempfile
 import urllib.request
 import zipfile
 import zlib
@@ -42,8 +43,7 @@ NGRAM_VERSION = "20200217"
 NGRAM_SHARDS = 24
 NGRAM_BASE = f"https://storage.googleapis.com/books/ngrams/books/{NGRAM_VERSION}/eng/"
 NGRAM_YEARS = (1990, 2019)  # inclusive
-# Compressed size and SHA-256 of every shard, in shard order. Filled in by `counts` on the
-# first run (printed as a ready-to-paste block); later runs refuse any mismatch.
+# Compressed size and SHA-256 of every shard, in shard order; `counts` refuses any mismatch.
 NGRAM_SHARD_BYTES = (
     265116429, 516407175, 469613220, 433796325, 470860746, 430527082, 479124157, 621693906,
     627251491, 568490258, 601722860, 614673843, 544641231, 611684090, 620141271, 549554806,
@@ -74,11 +74,17 @@ NGRAM_SHARD_SHA256 = (
     "db63aa244891dc2fd00cb996341c7b3268a22fe7bc44d22e2e1805c3e162f85b",
     "76fb6a9a9301d8dc3ef4083602e0dea6f5a5f0457100f224fb6c3867ad98865d",
 )
-# SHA-256 of the intermediate counts file written by `counts` (empty until first run).
+# SHA-256 of the intermediate counts file written by `counts`.
 COUNTS_SHA256 = "4fcfe3acb039668bb7ad97f44628d71f2c6c11ecd1e0d39a4d3a3368a6741779"
 
 SCALE = 4096  # frequency = 1 + floor(SCALE * log2(1 + count)); order preserving, <= 2^31
 FLOOR_FREQUENCY = 1  # surfaces with no Ngram match in the window
+# Ngram is case sensitive and sentence-initial words inflate the capitalized forms. A
+# capitalized or all-caps surface keeps its `proper` / `acronym` flag only when it has no
+# lowercase sibling, or when its raw count is at least this many times the sibling's. The
+# host lets any flagged entry of a key reorder the case variants (spec section 4.4), so this
+# keeps "in" ahead of "IN" and "In" while "NASA" still leads with the uppercase form.
+CASE_FLAG_RATIO = 10
 MAX_ENTRIES = 200_000  # docs/inline-english-candidate-spec.md section 4.4
 MAX_BYTES = 64 * 1024 * 1024
 UINT32_MAX = 2**32 - 1
@@ -92,7 +98,7 @@ CUSTOM_TECH = (
     "GitHub GitLab Git Linux macOS Windows Docker Kubernetes PowerShell WebSocket "
     "Vulkan OpenGL DirectX LLaMA GGUF ChatGPT OpenAI Anthropic Claude Gemini "
     "Azure AWS Nginx Redis Postgres PostgreSQL MySQL SQLite MongoDB GraphQL "
-    "TypeScript JavaScript"
+    "TypeScript JavaScript Python Java Ruby Rust Swift Perl Bash Node"
 ).split()
 
 HEADER = """\
@@ -107,7 +113,9 @@ HEADER = """\
 #   (https://creativecommons.org/licenses/by/3.0/). Modified: match counts of {y0}-{y1} summed per surface,
 #   then rescaled as 1 + floor({scale} * log2(1 + count)); surfaces without a match get {floor}.
 #   Source: https://storage.googleapis.com/books/ngrams/books/datasetsv3.html
-# - Tech terms: GitHub linguist {linguist_tag} languages.yml (MIT) and a hand-written list.
+# - Tech terms: GitHub linguist {linguist_tag} languages.yml (MIT), minus names whose lowercase form is an
+#   ordinary SCOWL word, and a hand-written list.
+# - Flags: proper / acronym only when the lowercase form is absent or {ratio} times rarer (raw counts).
 # Regenerate: python scripts/english_words_porter.py counts && python scripts/english_words_porter.py build
 # counts-sha256: {counts_sha}
 """
@@ -242,11 +250,11 @@ def scale(count):
     return value
 
 
-def flags_for(surface, tech):
+def flags_for(surface, tech, case_flags=True):
     flags = []
-    if len(surface) >= 2 and surface.isupper():
+    if case_flags and len(surface) >= 2 and surface.isupper():
         flags.append("acronym")
-    elif surface[0].isupper():
+    elif case_flags and surface[0].isupper():
         flags.append("proper")
     if tech:
         flags.append("tech")
@@ -256,9 +264,14 @@ def flags_for(surface, tech):
 def build_rows(scowl_words, tech_words, counts):
     """Return the final (surface, frequency, flags) rows, deterministic order."""
     rows = []
-    for surface in set(scowl_words) | set(tech_words):
-        rows.append((surface, scale(counts.get(surface, 0)),
-                     flags_for(surface, surface in tech_words)))
+    surfaces = set(scowl_words) | set(tech_words)
+    for surface in surfaces:
+        count = counts.get(surface, 0)
+        lower = surface.lower()
+        case_flags = (lower == surface or lower not in surfaces
+                      or count >= CASE_FLAG_RATIO * max(counts.get(lower, 0), 1))
+        rows.append((surface, scale(count),
+                     flags_for(surface, surface in tech_words, case_flags)))
     rows.sort(key=lambda r: (-r[1], r[0]))
     if len(rows) > MAX_ENTRIES:
         raise ValueError(f"{len(rows)} entries exceed the {MAX_ENTRIES} limit")
@@ -269,7 +282,8 @@ def render(rows, counts_sha):
     header = HEADER.format(
         version=PORTER_VERSION, scowl_tag=SCOWL_TAG, scowl_commit=SCOWL_COMMIT,
         ngram_version=NGRAM_VERSION, y0=NGRAM_YEARS[0], y1=NGRAM_YEARS[1], scale=SCALE,
-        floor=FLOOR_FREQUENCY, linguist_tag=LINGUIST_TAG, counts_sha=counts_sha)
+        floor=FLOOR_FREQUENCY, linguist_tag=LINGUIST_TAG, counts_sha=counts_sha,
+        ratio=CASE_FLAG_RATIO)
     body = "".join(f"{s}\t{f}\t{fl}\n" if fl else f"{s}\t{f}\n" for s, f, fl in rows)
     text = header + body
     verify(text)
@@ -319,11 +333,18 @@ def fetch(url, expected_sha256, cache):
     else:
         with urllib.request.urlopen(url, timeout=60) as response:
             data = response.read()
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(data)
     if sha256(data) != expected_sha256:
         raise ValueError(f"{url}: SHA-256 {sha256(data)} != pinned {expected_sha256}")
+    if not cache.exists():  # only a verified download is cached
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
     return data
+
+
+def select_tech(linguist_terms, scowl):
+    """Drop linguist names that are ordinary lowercase SCOWL words (be, make, fish, ...)."""
+    ordinary = {w for w in scowl if w == w.lower()}
+    return {t for t in linguist_terms if t.lower() not in ordinary} | set(CUSTOM_TECH)
 
 
 def load_candidates(work):
@@ -333,8 +354,18 @@ def load_candidates(work):
         dic = archive.read("en_US.dic").decode("utf-8")
         aff = archive.read("en_US.aff").decode("utf-8")
     scowl = letters_only(expand_hunspell(dic, aff))
-    tech = parse_linguist(ldata.decode("utf-8")) | set(CUSTOM_TECH)
-    return scowl, tech
+    return scowl, select_tech(parse_linguist(ldata.decode("utf-8")), scowl)
+
+
+def window_total(rest):
+    """Sum the match counts of `year,match,volume` items whose year is in NGRAM_YEARS."""
+    lo, hi = NGRAM_YEARS
+    total = 0
+    for item in rest.split(b"\t"):
+        year, match, _volume = item.split(b",")
+        if lo <= int(year) <= hi:
+            total += int(match)
+    return total
 
 
 def count_shard(args):
@@ -345,7 +376,6 @@ def count_shard(args):
     digest, size = hashlib.sha256(), 0
     inflater = zlib.decompressobj(wbits=31)
     counts, tail = {}, b""
-    lo, hi = NGRAM_YEARS
 
     def consume(chunk):
         nonlocal tail
@@ -357,11 +387,7 @@ def count_shard(args):
             surface = token.decode("utf-8", "replace")
             if surface not in candidates:
                 continue
-            total = 0
-            for item in rest.split(b"\t"):
-                year, match, _volume = item.split(b",")
-                if lo <= int(year) <= hi:
-                    total += int(match)
+            total = window_total(rest)
             if total:
                 counts[surface] = counts.get(surface, 0) + total
 
@@ -381,15 +407,14 @@ def cmd_counts(args):
     candidates = work / "candidates.txt"
     candidates.write_text("\n".join(sorted(scowl | tech)) + "\n", encoding="utf-8")
     shards = range(NGRAM_SHARDS) if args.shard is None else [args.shard]
-    totals, report = {}, []
+    totals = {}
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         for index, size, digest, counts in pool.map(
                 count_shard, [(i, str(candidates)) for i in shards]):
             if size != NGRAM_SHARD_BYTES[index]:
                 raise ValueError(f"shard {index}: {size} bytes != pinned {NGRAM_SHARD_BYTES[index]}")
-            if NGRAM_SHARD_SHA256 and digest != NGRAM_SHARD_SHA256[index]:
+            if digest != NGRAM_SHARD_SHA256[index]:
                 raise ValueError(f"shard {index}: SHA-256 {digest} != pinned")
-            report.append((index, size, digest))
             for surface, count in counts.items():
                 totals[surface] = totals.get(surface, 0) + count
             print(f"shard {index}: {size} bytes sha256 {digest}", file=sys.stderr)
@@ -397,11 +422,6 @@ def cmd_counts(args):
     out = work / "ngram-counts.tsv"
     out.write_text(text, encoding="utf-8", newline="\n")
     print(f"counts: {len(totals)} surfaces, sha256 {sha256(text.encode('utf-8'))}", file=sys.stderr)
-    if not NGRAM_SHARD_SHA256 and args.shard is None:
-        print("NGRAM_SHARD_SHA256 = (", file=sys.stderr)
-        for _i, _s, digest in report:
-            print(f'    "{digest}",', file=sys.stderr)
-        print(")", file=sys.stderr)
 
 
 def cmd_build(args):
@@ -409,7 +429,7 @@ def cmd_build(args):
     scowl, tech = load_candidates(work)
     counts_text = (work / "ngram-counts.tsv").read_text(encoding="utf-8")
     counts_sha = sha256(counts_text.encode("utf-8"))
-    if COUNTS_SHA256 and counts_sha != COUNTS_SHA256:
+    if counts_sha != COUNTS_SHA256:
         raise ValueError(f"counts SHA-256 {counts_sha} != pinned {COUNTS_SHA256}")
     counts = {}
     for line in counts_text.splitlines():
@@ -430,7 +450,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     for name, func in (("counts", cmd_counts), ("build", cmd_build), ("verify", cmd_verify)):
         p = sub.add_parser(name)
-        p.add_argument("--work", default="D:/tmp/dev1691", help="scratch directory")
+        p.add_argument("--work", default=str(Path(tempfile.gettempdir()) / "azookey-english-words"),
+                       help="scratch directory for downloads and the counts file")
         p.add_argument("--output", default=str(DEFAULT_OUTPUT))
         if name == "counts":
             p.add_argument("--shard", type=int, help="run a single shard (trial run)")

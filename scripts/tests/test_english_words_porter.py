@@ -5,8 +5,10 @@ see ../../THIRD_PARTY_LICENSES.
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -110,6 +112,89 @@ class EnglishWordsPorterTests(unittest.TestCase):
         rows = [line.split("\t") for line in text.splitlines() if line and line[0] != "#"]
         frequencies = [int(row[1]) for row in rows]
         self.assertEqual(frequencies, sorted(frequencies, reverse=True))
+
+    # Host rule (EnglishCandidates.cpp): the entries of a lowercase key decide the half-width
+    # order; any acronym entry puts the uppercase form first, otherwise any proper entry the
+    # capitalized one. Dictionary surfaces come out by frequency, highest first.
+    @staticmethod
+    def host_order(rows, key):
+        entries = [r for r in rows if r[0].lower() == key]
+        entries.sort(key=lambda r: -int(r[1]))
+        flags = {f for r in entries for f in (r[2].split(",") if len(r) > 2 else [])}
+        if "acronym" in flags:
+            forms = [key.upper(), key, key.capitalize()]
+        elif "proper" in flags:
+            forms = [key.capitalize(), key, key.upper()]
+        else:
+            forms = [key, key.capitalize(), key.upper()]
+        return [r[0] for r in entries], forms
+
+    def test_common_words_lead_with_lowercase(self):
+        text = (ROOT / "data" / "english-words.tsv").read_text(encoding="utf-8")
+        rows = [line.split("\t") for line in text.splitlines() if line and line[0] != "#"]
+        for key in ("in it or on so who us am act care a he can will may no the is".split()):
+            surfaces, forms = self.host_order(rows, key)
+            self.assertEqual(surfaces[0], key, key)
+            self.assertEqual(forms[0], key, key)
+        _surfaces, forms = self.host_order(rows, "nasa")
+        self.assertEqual(forms[0], "NASA")
+
+    def test_case_flags_depend_on_the_lowercase_sibling(self):
+        counts = {"in": 1000, "In": 50, "IN": 10, "bros": 10, "Bros": 500, "NASA": 7}
+        rows = {r[0]: r for r in porter.build_rows(
+            {"in", "In", "IN", "bros", "Bros", "NASA"}, set(), counts)}
+        self.assertEqual(rows["In"][2] + rows["IN"][2], "")
+        self.assertEqual(rows["Bros"][2], "proper")  # 50 times the lowercase count
+        self.assertEqual(rows["NASA"][2], "acronym")  # no lowercase sibling
+
+    def test_tech_drops_ordinary_words(self):
+        scowl = {"be", "make", "Python", "python"}
+        tech = porter.select_tech({"be", "Make", "cpp", "Python"}, scowl)
+        self.assertNotIn("be", tech)
+        self.assertNotIn("Make", tech)
+        self.assertIn("cpp", tech)
+        self.assertIn("GitHub", tech)  # hand-written terms are always kept
+
+    def test_window_boundaries(self):
+        self.assertEqual(porter.window_total(b"1989,5,1\t1990,7,1\t2019,11,1\t2020,13,1"), 18)
+        self.assertEqual(porter.window_total(b"1989,5,1\t2020,13,1"), 0)
+
+    def test_fetch_refuses_a_mismatching_download(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"tampered"
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "x.zip"
+            with mock.patch.object(porter.urllib.request, "urlopen", return_value=Response()):
+                with self.assertRaises(ValueError):
+                    porter.fetch("https://example.invalid/x", "0" * 64, cache)
+            self.assertFalse(cache.exists())  # an unverified download is not cached
+            cache.write_bytes(b"stale")
+            with self.assertRaises(ValueError):
+                porter.fetch("https://example.invalid/x", "0" * 64, cache)
+
+    def test_entry_limit(self):
+        def word(i):
+            return "".join(chr(97 + i // 26 ** k % 26) for k in range(5))
+
+        words = {word(i) for i in range(porter.MAX_ENTRIES + 1)}
+        with self.assertRaises(ValueError):
+            porter.build_rows(words, set(), {})
+        rows = "".join(f"{word(i)}\t1\n" for i in range(porter.MAX_ENTRIES + 1))
+        with self.assertRaises(ValueError):
+            porter.verify(rows)
+
+    def test_pins_are_complete(self):
+        self.assertEqual(len(porter.NGRAM_SHARD_SHA256), porter.NGRAM_SHARDS)
+        self.assertEqual(len(porter.NGRAM_SHARD_BYTES), porter.NGRAM_SHARDS)
+        self.assertRegex(porter.COUNTS_SHA256, r"^[0-9a-f]{64}$")
 
     def test_license_texts_are_aggregated_verbatim(self):
         aggregate = (ROOT / "THIRD_PARTY_LICENSES").read_text(encoding="utf-8")

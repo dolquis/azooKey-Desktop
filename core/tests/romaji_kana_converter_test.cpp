@@ -184,3 +184,73 @@ TEST(RomajiKanaConverterTest, ConvertForCommit) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("siro"), "しろ");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("syatu"), "しゃつ");
 }
+
+// The built-in table carries the second n of "nn" + vowel/y into the next syllable.
+TEST(RomajiKanaConverterTest, DoubleNBeforeVowelCarriesN) {
+  using azookey::core::RomajiKanaConverter;
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("genninn"), "げんにん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("naibugenninn"), "ないぶげんにん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("konnichiha"), "こんにちは");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kanni"), "かんに");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("sannin"), "さんにん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("tannin"), "たんにん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("onna"), "おんな");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("minna"), "みんな");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kinnyuu"), "きんにゅう");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("konnnichiha"), "こんにちは");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("gennninn"), "げんにん");
+}
+
+TEST(RomajiKanaConverterTest, AmbiguousReadingsListBothDoubleNReadings) {
+  using azookey::core::RomajiKanaConverter;
+  using Readings = std::vector<std::string>;
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("genninn"), (Readings{"げんにん", "げんいん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("naibugenninn"),
+            (Readings{"ないぶげんにん", "ないぶげんいん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("konnichiha"),
+            (Readings{"こんにちは", "こんいちは"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("kanni"), (Readings{"かんに", "かんい"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("sannin"), (Readings{"さんにん", "さんいん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("tannin"), (Readings{"たんにん", "たんいん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onna"), (Readings{"おんな", "おんあ"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("minna"), (Readings{"みんな", "みんあ"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("kinnyuu"),
+            (Readings{"きんにゅう", "きんゆう"}));
+}
+
+TEST(RomajiKanaConverterTest, AmbiguousReadingsSkipsExplicitSpellings) {
+  using azookey::core::RomajiKanaConverter;
+  using Readings = std::vector<std::string>;
+  // "nnn" + vowel spells ん + な行 explicitly; a trailing "nn" has no following syllable.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("konnnichiha"), (Readings{"こんにちは"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("gennninn"), (Readings{"げんにん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("konn"), (Readings{"こん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("nihongo"), (Readings{"にほんご"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings(""), (Readings{""}));
+  // Reading "nnyi" as ん + "yi" leaves romaji the default reading does not have.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("kinnyi"), (Readings{"きんにぃ"}));
+}
+
+TEST(RomajiKanaConverterTest, AmbiguousReadingsCapsAmbiguousPositions) {
+  using azookey::core::RomajiKanaConverter;
+  using Readings = std::vector<std::string>;
+  const Readings four = RomajiKanaConverter::AmbiguousReadings("onnaonnaonnaonna");
+  ASSERT_EQ(four.size(), 8u);
+  EXPECT_EQ(four.front(), "おんなおんなおんなおんな");
+  EXPECT_EQ(four.back(), "おんあおんあおんあおんな");
+  for (const std::string& reading : four) {
+    EXPECT_TRUE(reading.ends_with("おんな")) << reading;
+  }
+
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onnaminna", 1),
+            (Readings{"おんなみんな", "おんあみんな"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onna", 0), (Readings{"おんな"}));
+}
+
+TEST(RomajiKanaConverterTest, AmbiguousReadingsUseOnlyTheCustomTable) {
+  using azookey::core::RomajiKanaConverter;
+  const auto parsed = azookey::core::CustomRomajiLoader::Parse("nn\tん\t2\nna\tな\na\tあ\n");
+  ASSERT_TRUE(parsed.table);
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("nna", parsed.table),
+            (std::vector<std::string>{"んあ"}));
+}

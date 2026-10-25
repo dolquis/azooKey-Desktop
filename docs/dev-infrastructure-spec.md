@@ -1062,6 +1062,15 @@ OpenCppCoverage の計測対象と除外条件を維持する。計測 CTest は
 Release workflow は `SCCACHE_GHA_VERSION=release-v1` でキャッシュを分離する。
 設定アプリの MSBuild はこの compiler cache の対象外とする。
 
+設定アプリの NuGet パッケージは別に扱う。`windows.yml` で `azookey_settings` を
+ビルドするジョブ（`windows-build` の Release、`windows-llama-build`、`windows-no-tests`、
+`windows-arm64-crossbuild`）は、NuGet の global packages folder（`~/.nuget/packages`）を
+`actions/cache` で run 間再利用する。キーは `settings-app/packages.lock.json` の hash で、
+restore-keys は置かない。lock ファイルが変われば新しいキーで取得し直し、古いパッケージを
+持ち越さない。キャッシュが無いときは MSBuild の restore が nuget.org から取得するため、
+ビルドの成否には影響しない。Release workflow はこのキャッシュを使わず、毎回 nuget.org から
+restore する。
+
 `quality` ジョブは actionlint / yamlfmt / taplo の固定版バイナリを、runner の OS image・
 architecture と各ツールのバージョンを含むキーでキャッシュする。
 完全一致するキャッシュが無い場合は固定版ソースから構築し、復元後もツールを実行してから

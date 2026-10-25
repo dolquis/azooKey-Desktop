@@ -359,6 +359,17 @@ jobs:
           path: build/${{ matrix.preset }}/_deps
           key: googletest-v1.18.0-${{ runner.os }}-${{ matrix.config }}
 
+      # settings-app の MSBuild restore は sccache の対象外で、毎回 nuget.org から
+      # 全パッケージを取得する。lock ファイルの hash をキーにして global packages
+      # folder を共有する。キャッシュが無くても restore が取得し直すだけで、
+      # ビルドは失敗しない。
+      - name: Cache settings-app NuGet packages
+        if: matrix.config == 'Release'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: settings-app-nuget-${{ runner.os }}-${{ hashFiles('settings-app/packages.lock.json') }}
+
       - name: Configure
         id: configure
         continue-on-error: true
@@ -676,6 +687,12 @@ jobs:
         with:
           path: build/windows-llama/_deps
           key: llama-cpp-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Cache settings-app NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: settings-app-nuget-${{ runner.os }}-${{ hashFiles('settings-app/packages.lock.json') }}
 
       - name: Cache pinned Zenzai model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1324,6 +1341,12 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
+      - name: Cache settings-app NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: settings-app-nuget-${{ runner.os }}-${{ hashFiles('settings-app/packages.lock.json') }}
+
       - name: Configure without tests or benchmarks
         shell: pwsh
         run: cmake --preset windows-no-tests -DAZOOKEY_FETCH_WIL=ON
@@ -1481,6 +1504,12 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - name: Cache settings-app NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: settings-app-nuget-${{ runner.os }}-${{ hashFiles('settings-app/packages.lock.json') }}
 
       # コンパイラは clang-cl 固定（cl.exe は ggml が ARM で拒否する）。取り違えを
       # 診断可能にするため、解決したパスとバージョンをログへ残す。

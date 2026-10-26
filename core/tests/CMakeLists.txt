@@ -11,6 +11,7 @@ add_executable(core_tests
   katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp
   m59_input_state_test.cpp
+  mixed_romaji_splitter_test.cpp
   number_rewriter_test.cpp
   punctuation_conversion_input_state_test.cpp
   punctuation_rules_test.cpp

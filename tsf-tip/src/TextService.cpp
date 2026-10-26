@@ -605,7 +605,7 @@ std::vector<azookey::ipc::CandidateField> TurnedDownEnglish(
   if (first.surface == chosen.surface) return turned_down;
   for (const auto& segment : first.segments) {
     if (segment.tag != kEnglishCandidateTag || segment.surface.empty() ||
-        !IsRawRomajiReading(segment.reading))
+        segment.end_char <= segment.start_char || !IsRawRomajiReading(segment.reading))
       continue;
     const bool kept =
         std::any_of(chosen.segments.begin(), chosen.segments.end(),

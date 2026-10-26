@@ -444,12 +444,19 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
 
 ### 7.4 劣化モード（degraded）の順位
 
-- Zenzai 推論が例外 / 空生成 / **best-so-far beam の無い**タイムアウトのとき、
+- Zenzai 推論が例外 / 空生成のとき、
   `ZenzaiModelConverter::Convert` は `fallback_->Convert`（SimpleConverter）の結果を返す
   （現行委譲を維持）。この時の候補 source は SimpleConverter 由来（`SystemDictionary`/
   `Heuristic`、0.1〜1.2 帯）。
 - **deadline 超過でも best-so-far beam があれば** Zenzai のその beam を返す（§6.4/§9.2.2）＝
   正常出力であり degraded 扱いしない（fallback も `model_runtime_error_` もセットしない）。
+- 最初の beam step より前（prompt decode 中、または step 0 の展開前）に deadline を超え、
+  トークンを持つ beam が 1 本も無いときも打ち切りであり、degraded 扱いしない。候補は
+  `fallback_->Convert` の結果を返し、`debug_info` には `zenzai-degraded` ではなく
+  `zenzai-deadline-fallback` を付ける。converter の `last_error_` は立てず、`model_runtime_error_`
+  も Health も変えない（直前の劣化も回復の証拠が無いので消さない）。NLL 再ランク
+  （`docs/neural-reranker-spec.md` §B8）は予算を使い切っているので掛けない。decode 統計の
+  `deadline_exceeded` は立つので、§8.2 の打ち切り率には数える。
 - `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
   converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を engine が
   同ロック内で**専用フィールド `model_runtime_error_` にミラー**し `effective_last_error()`
@@ -567,7 +574,8 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 - **経路**: 本予算は `ConversionContext.deadline`（`core/include/azookey/core/IConverter.h`）として
   `InferenceEngine` が 1 変換ごとに設定し、`ZenzaiModelConverter` の beam ループが
   検査して §6.4 の best-so-far 打ち切りを駆動する。予算超過時は最良ビームを返して
-  IME を止めない。打ち切りは劣化ではなく正常出力である（§6.4 / §9.2.2）。
+  IME を止めない（beam が 1 本も無いときは §7.4 の fallback の候補を返す）。打ち切りは
+  劣化ではなく正常出力である（§6.4 / §9.2.2）。
 - **評価**: ハード予算の評価は打ち切り率で行う。分位点目標と異なり、打ち切りが
   発生した計測も評価対象に含む。合否は読み長の帯で分ける。
   - **読み ≤ 8 文字: 打ち切り率 0%**。この帯は p95 目標 300ms がハード予算 600ms の
@@ -619,6 +627,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
     const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana),
                                   deadline_, cancel_);  // §4.2.1 §6.2 §8 ＋ §9.2.2（decode 中も cancel/deadline をポーリング）
     if (Canceled(cancel_)) return {};                 // §9.2.2 キャンセルは fallback せず空（M10。stale 候補を出さない）
+    if (beams.empty() && DeadlineExceeded())          // §7.4 最初の beam step 前の打ち切り。degraded にしない
+      return FallbackTagged(kana, ctx, "zenzai-deadline-fallback");
     if (beams.empty()) return DegradeToFallback(kana, ctx, "empty-generation");
 
     std::vector<core::Candidate> out;
@@ -801,6 +811,7 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
      empty チェックより**先に**判定）。fallback を返すと stale preedit に対する SimpleConverter
      候補が TIP に表示され M10 早期中断に反するため。QueryCandidates 側の `{}` 返却と一致。
    - deadline 超過 → cancel とは別扱い。その時点の best-so-far を返す（§6.4。候補は出す）。
+     best-so-far beam がまだ無いときは fallback の候補を返し、degraded にしない（§7.4）。
 2. `IConverter::Convert` は cancel を引数に持たないため、engine は `Convert` 呼び出し前
    （`state_mutex_` 内）に converter へ **cancel ポインタ + deadline を設定**する
    （converter-local setter。`Convert` 後にクリア）。最小実装として **deadline 強制のみ**でも
@@ -1050,8 +1061,9 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 手順 3）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき**ソース優先で user_dict を保持**（明示 value が低い/負 例 -3.0 でも Zenzai に落とされない）。user_dict を含まない重複は最高 score を残す |
-| unit | 劣化モード（hard failure）: 例外/空生成/**usable beam が無い**ケースで `DegradeToFallback` され候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー＝`degraded`（§9.2.1） |
+| unit | 劣化モード（hard failure）: 例外/空生成/**usable beam が無い**（deadline 超過によるものを除く）ケースで `DegradeToFallback` され候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー＝`degraded`（§9.2.1） |
 | unit | deadline 超過で **best-so-far beam あり**（§6.4/§9.2.2）: Zenzai の best-so-far を返し、`DegradeToFallback` を経由しない・valid な Zenzai 出力を捨てない・`degraded` にしない（normal budget expiry を hard failure と区別） |
+| unit | 最初の beam step より前に deadline 超過（§7.4）: fallback の候補に `zenzai-deadline-fallback` が付き、`zenzai-degraded` は付かない。`effective_last_error` は空で Health は `ok`、decode 統計の `deadline_exceeded` は立つ |
 | unit | モデル lifecycle クリア（§9.2.1）: degraded 変換後に LoadModel 成功/無効化/アンロードすると `model_runtime_error_` がクリアされ、直後の Health が stale な degraded/error を報告しない |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |

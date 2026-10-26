@@ -2527,18 +2527,29 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
   } trace_reset{*this, std::move(active_key_trace_id_), active_key_trace_start_,
                 active_key_trace_active_};
+  // DEV-1735: the same key handled again after committing the selection keeps
+  // the outer press's trace and key_path record.
+  const bool retyped = std::exchange(retyping_after_commit_, false);
   // DEV-1637: the answer this key leaves with, on every return path.
   struct KeyPathRecord {
     TextService& service;
     ITfContext* context;
     WPARAM key;
     const BOOL* eaten;
-    ~KeyPathRecord() { service.LogKeyPath("key", context, key, *eaten); }
-  } key_path_record{*this, context, wParam, eaten};
+    bool skip;
+    ~KeyPathRecord() {
+      if (!skip) service.LogKeyPath("key", context, key, *eaten);
+    }
+  } key_path_record{*this, context, wParam, eaten, retyped};
   active_key_trace_active_ = true;
-  active_key_trace_id_ = NewTraceIdNoThrow();
-  active_key_trace_start_ = std::chrono::steady_clock::now();
-  TraceKeyDown(active_key_trace_id_);
+  if (retyped) {
+    active_key_trace_id_ = trace_reset.previous_id;
+    active_key_trace_start_ = trace_reset.previous_start;
+  } else {
+    active_key_trace_id_ = NewTraceIdNoThrow();
+    active_key_trace_start_ = std::chrono::steady_clock::now();
+    TraceKeyDown(active_key_trace_id_);
+  }
   const bool bracket_claimed =
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
@@ -2844,6 +2855,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       // The key was already tracked for typo and undo above.
       typo_test_key_context_ = context;
       typo_test_key_ = wParam;
+      retyping_after_commit_ = true;
       return OnKeyDown(context, wParam, lParam, eaten);
     };
 
@@ -2890,23 +2902,32 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // nothing for romaji that no longer spells the reading. Turning the
     // setting on mid-composition leaves romaji that spells nothing, so no key
     // pays for the conversions while the feature is off.
+    std::optional<char> english_typed;
     if (is_input && !unicode_active && !BatchRomajiEnabled() && EnglishCandidatesEnabled()) {
-      std::optional<char> typed;
       if (custom_input)
-        typed = *custom_input;
+        english_typed = *custom_input;
       else if (wParam >= 'A' && wParam <= 'Z')
-        typed = (modifiers & core::kModifierShift) != 0
-                    ? static_cast<char>(wParam)
-                    : static_cast<char>(std::tolower(static_cast<unsigned char>(wParam)));
+        english_typed = (modifiers & core::kModifierShift) != 0
+                            ? static_cast<char>(wParam)
+                            : static_cast<char>(std::tolower(static_cast<unsigned char>(wParam)));
       else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT)
-        typed = '-';
+        english_typed = '-';
       else if (composition_symbol)
-        typed = composition_symbol->raw;
-      if (typed) {
+        english_typed = composition_symbol->raw;
+      if (english_typed) {
         SyncEnglishRawRomaji();
-        english_raw_romaji_.push_back(*typed);
+        english_raw_romaji_.push_back(*english_typed);
       }
     }
+    // DEV-1735: when this key committed the selection and starts the next
+    // composition in the same pass, the commit cleared the composition's romaji
+    // table and typed romaji; the key keeps the table and is the only typed
+    // romaji so far (M60).
+    auto resume_after_commit = [&, composition_table = batch_romaji_table_]() {
+      batch_romaji_table_ = composition_table;
+      english_raw_romaji_.clear();
+      if (english_typed) english_raw_romaji_.push_back(*english_typed);
+    };
     // M60 §4.1: Space opens the window from a live = false query that can
     // carry English candidates, like the rewriter Space path, instead of the
     // per-key (live) cache that never holds them.
@@ -3022,6 +3043,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         if (event.action == UserAction::SelectByDigit && event.digit >= 1 &&
             static_cast<size_t>(event.digit) <= input_state_.candidates().size())
           core_commit_selected_index_ = static_cast<size_t>(event.digit - 1);
+        // DEV-1735: a character typed while Selecting commits the selection and
+        // starts the next composition in the same result.
+        const bool continues_after_commit =
+            input_state_.kind() == core::InputStateKind::Selecting &&
+            (event.action == UserAction::Input || event.action == UserAction::InputAlnum) &&
+            !input_state_.PunctuationConversionReading(event);
         auto result = [&] {
           if (event.action != UserAction::Input) return input_state_.HandleEvent(event);
           ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
@@ -3041,6 +3068,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT hr = ApplyInputStateResult(context, std::move(result));
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
+        if (continues_after_commit && !committing_ &&
+            input_state_.kind() != core::InputStateKind::Idle &&
+            input_state_.kind() != core::InputStateKind::Selecting)
+          resume_after_commit();
         if (!before_backspace.empty()) {
           if (CurrentPreeditSurface().empty()) (void)ResolvePrivacy(context, false);
           if (typo_learning_allowed_.load(std::memory_order_relaxed))
@@ -3132,8 +3163,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (cand_visible) {
         const HRESULT commit_hr = commit_selection();
         if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
-        english_raw_romaji_.clear();
-        if (!BatchRomajiEnabled() && EnglishCandidatesEnabled()) english_raw_romaji_.push_back('-');
+        resume_after_commit();
       }
       const auto rollback_state = capture_preedit_rollback_state();
       {
@@ -3185,7 +3215,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (is_input && composition_symbol &&
                (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
-      if (cand_visible) return commit_selection_then_retype();
+      // From Idle only 、 and 。 would start a composition; after the commit
+      // every mark does, as in the core Selecting path.
+      if (cand_visible) {
+        const HRESULT commit_hr = commit_selection();
+        if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
+        resume_after_commit();
+      }
       const auto rollback_state = capture_preedit_rollback_state();
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);

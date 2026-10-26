@@ -820,6 +820,9 @@ class TextService final : public ITfTextInputProcessorEx,
 #endif
   // Set while an off key commits the shown text through the Enter path.
   bool commit_before_close_{false};
+  // Set while OnKeyDown handles the same key again after committing the
+  // shown selection (DEV-1735).
+  bool retyping_after_commit_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 

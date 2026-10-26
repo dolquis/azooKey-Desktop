@@ -11734,7 +11734,9 @@ TEST(TsfTipCommitOnTypeTest, PreprocessedPathsCommitTheHighlightFirst) {
        {Case{"number: letter", Path::NumberRewriter, 'A', L"転機あ"},
         Case{"number: long vowel", Path::NumberRewriter, VK_OEM_MINUS, L"転機ー"},
         Case{"number: mark", Path::NumberRewriter, VK_OEM_COMMA, L"転機、"},
+        Case{"number: slash", Path::NumberRewriter, VK_OEM_2, L"転機/"},
         Case{"symbol rewriter: letter", Path::SymbolRewriter, 'A', L"転機あ"},
+        Case{"symbol rewriter: slash", Path::SymbolRewriter, VK_OEM_2, L"転機/"},
         Case{"english: letter", Path::English, 'A', L"転機あ"}}) {
     SCOPED_TRACE(item.name);
     DocumentPreeditHarness h;
@@ -11749,6 +11751,11 @@ TEST(TsfTipCommitOnTypeTest, PreprocessedPathsCommitTheHighlightFirst) {
     EXPECT_FALSE(h.service.candidate_window_showing_for_test());
     EXPECT_FALSE(h.service.committing_);
     ExpectTenkiSecondCommittedOnce(h);
+    // The key began a composition, so Backspace edits it instead of taking
+    // back the committed word (DEV-1529).
+    ASSERT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.context.document->text, L"転機");
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitCorrection), 0u);
   }
 }
 
@@ -11759,6 +11766,22 @@ TEST(TsfTipCommitOnTypeTest, NextWordSendsOnlyItsOwnTypedRomaji) {
   StartPunctuationConversion(h, false);
   h.service.set_english_candidates_for_test(true);
   SelectTenkiSecond(h, /*from_cache=*/false);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"転機きて");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kite");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+// The core Selecting path commits in the same result: the commit clears the
+// typed romaji, which must then start again from the key (M60).
+TEST(TsfTipCommitOnTypeTest, CoreSelectingKeepsTheFirstKeyOfTheNextWord) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  h.service.set_english_candidates_for_test(true);
   for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
     ASSERT_TRUE(h.Press(key));
   ASSERT_EQ(h.context.document->text, L"転機きて");

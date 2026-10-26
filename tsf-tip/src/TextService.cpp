@@ -23,6 +23,7 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/KatakanaRewriter.h"
+#include "azookey/core/MixedRomajiSplitter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SecureApps.h"
@@ -5191,6 +5192,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "english_candidates") != hpayload->capabilities.end(),
         std::memory_order_relaxed);
+    ipc_host_mixed_english_.store(
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(), "mixed_english") !=
+            hpayload->capabilities.end(),
+        std::memory_order_relaxed);
     ipc_host_commit_correction_.store(
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_correction") != hpayload->capabilities.end(),
@@ -5427,6 +5432,7 @@ void TextService::ServeConnection() {
     std::string left_context;
     std::string raw_romaji;
     bool english_candidates = false;
+    bool mixed_english = false;
     std::string batch_mode;
     std::string trace_id;
     std::chrono::steady_clock::time_point trace_start;
@@ -5480,6 +5486,7 @@ void TextService::ServeConnection() {
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
         english_candidates = ipc_pending_english_candidates_;
+        mixed_english = ipc_pending_mixed_english_;
         batch_mode = ipc_pending_batch_mode_;
         trace_id = ipc_pending_trace_id_;
         trace_start = ipc_pending_trace_start_;
@@ -5637,7 +5644,7 @@ void TextService::ServeConnection() {
       continue;
     }
     if (is_batch) {
-      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id, english_candidates);
+      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id, english_candidates, secure);
       if (!ipc_client_.IsConnected()) return;
       continue;
     }
@@ -5657,8 +5664,14 @@ void TextService::ServeConnection() {
       qenv.trace_id = trace_id;
       if (is_live_conversion) {
         qenv.type = MessageType::QueryLiveConversion;
-        qenv.payload_json = BuildQueryLiveConversionRequest(
-            {reading, left_context, auto_punctuation, punctuation_style});
+        QueryLiveConversionRequest lreq{reading, left_context, auto_punctuation, punctuation_style};
+        // M63 sections 9.1 and 9.4; a secure field sends no live request.
+        lreq.secure = secure;
+        if (mixed_english && !secure) {
+          lreq.raw_romaji = raw_romaji;
+          lreq.mixed_english = true;
+        }
+        qenv.payload_json = BuildQueryLiveConversionRequest(lreq);
       } else {
         QueryCandidatesRequest qreq;
         qreq.reading = reading;
@@ -5668,9 +5681,10 @@ void TextService::ServeConnection() {
         qreq.secure = secure;
         qreq.learning_allowed = learning_allowed;
         qreq.emoji_trigger = emoji_trigger;
-        if (english_candidates) {
+        if (english_candidates && !secure) {
           qreq.raw_romaji = raw_romaji;
           qreq.english_candidates = true;
+          qreq.mixed_english = mixed_english;
         }
         if (!emoji_trigger.empty()) {
           qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
@@ -6299,7 +6313,9 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
 
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
                                const std::string& raw_romaji, const std::string& mode,
-                               const std::string& trace_id, bool english_candidates) {
+                               const std::string& trace_id, bool english_candidates, bool secure) {
+  // DEV-1745: a secure batch never asks for English candidates.
+  english_candidates = english_candidates && !secure;
   using namespace azookey::ipc;
   core::AiPrivacy privacy;
   std::string backend;
@@ -6363,6 +6379,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     request.max_candidates = max_candidates_.load(std::memory_order_relaxed);
     request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
     request.english_candidates = english;
+    request.secure = secure;
     Envelope envelope;
     envelope.request_id = active_id;
     envelope.trace_id = trace_id;
@@ -6607,8 +6624,13 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
                                   !core_input_active_ && local_settings_.LiveConversionSnapshot();
   // M60 §4.1 / §6.2: English candidates join only the candidate window
   // (live = false), and the romaji goes only while it still spells the reading.
-  const bool english = !live && emoji_trigger.empty() && EnglishCandidatesEnabled();
+  // The romaji is the user's input, so a secure field never sends it (DEV-1745).
+  const bool english =
+      !live && emoji_trigger.empty() && !privacy.secure && EnglishCandidatesEnabled();
   std::string raw_romaji = english ? EnglishRawRomajiFor(reading) : std::string{};
+  // M63 section 9.1: mixed_english rides on the M60 fields.
+  const bool mixed_english =
+      !raw_romaji.empty() && !MixedEnglishRawRomajiFor(reading, privacy.secure).empty();
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -6618,6 +6640,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_english_candidates_ = !raw_romaji.empty();
+  ipc_pending_mixed_english_ = mixed_english;
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -6659,6 +6682,8 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     return;
   }
   const std::string left_context = CaptureLeftContext(context, false);
+  // M63 sections 5 and 9.1: the raw romaji, only under every condition.
+  std::string raw_romaji = MixedEnglishRawRomajiFor(reading, privacy.secure);
   // Section 7.1.1: the timing of the insertion is the TIP's decision, carried in
   // this request only.
   const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
@@ -6678,7 +6703,8 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
-  ipc_pending_raw_romaji_.clear();
+  ipc_pending_mixed_english_ = !raw_romaji.empty();
+  ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -6792,8 +6818,12 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
-  // ai-cleanup stays without English even when it falls back to neural.
-  ipc_pending_english_candidates_ = !ai_cleanup && EnglishCandidatesEnabled();
+  // ai-cleanup stays without English even when it falls back to neural, and a
+  // secure field asks for none (DEV-1745). The request says whether it is
+  // secure (M63 section 9.4).
+  ipc_pending_english_candidates_ = !ai_cleanup && !decision.secure && EnglishCandidatesEnabled();
+  ipc_pending_mixed_english_ = false;
+  ipc_pending_secure_ = decision.secure;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -8238,6 +8268,9 @@ void TextService::AdoptLiveSegmentsObservation(ITfContext* context,
     observed.chosen.reading = observed.reading;
     observed.chosen.score = segment.score;
     observed.chosen.source = "live";
+    // M63 section 11: an English segment's reading is its raw romaji, and the
+    // tag routes it to the English channel instead of kana learning.
+    observed.chosen.tag = segment.tag;
     observed.secure = privacy.secure;
     observed.learning_allowed = learning;
     observed.is_auto_punctuation = segment.auto_punctuation;
@@ -8988,6 +9021,20 @@ void TextService::stop_ipc_worker_for_test() { StopIpcWorker(); }
 
 bool TextService::BatchRomajiEnabled() const {
   return batch_romaji_conversion_.load(std::memory_order_relaxed);
+}
+
+std::string TextService::MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const {
+  // M63 section 5: the M60 setting and capability, the M63 setting and
+  // capability, the built-in romaji table (the Host has no custom table), a
+  // field that is not secure, romaji that still spells the reading, and the
+  // section 10 length limit.
+  if (secure || !EnglishCandidatesEnabled() ||
+      !ipc_host_mixed_english_.load(std::memory_order_relaxed) ||
+      !local_settings_.MixedEnglishAutoConversionSnapshot() || romaji_.HasCustomTable())
+    return {};
+  auto raw_romaji = EnglishRawRomajiFor(reading);
+  if (raw_romaji.size() > core::MixedRomajiSplitOptions{}.max_raw_length) return {};
+  return raw_romaji;
 }
 
 bool TextService::EnglishCandidatesEnabled() const {

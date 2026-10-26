@@ -1997,7 +1997,8 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
 TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment) {
   constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
   const auto query = [&](uint64_t id, const std::string& reading, const std::string& mode,
-                         bool english, const std::string& raw_romaji = "nihon") {
+                         bool english, const std::string& raw_romaji = "nihon",
+                         bool secure = false) {
     ipc::QueryBatchConversionRequest q;
     q.reading = reading;
     q.raw_romaji = raw_romaji;
@@ -2005,6 +2006,7 @@ TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment
     q.ai_allowed = true;
     q.max_candidates = 1;
     q.english_candidates = english;
+    q.secure = secure;
     const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
                                                   ipc::BuildQueryBatchConversionRequest(q)));
     EXPECT_TRUE(resp.has_value());
@@ -2049,6 +2051,22 @@ TEST_F(DispatcherTest, QueryBatchConversionAddsEnglishOnlyToASingleNeuralSegment
   const auto no_romaji = query(1105, "にほん", "neural", true, "");
   ASSERT_EQ(no_romaji.size(), 1u);
   EXPECT_TRUE(english_of(no_romaji.front()).empty());
+
+  // M63 section 9.4: a secure batch, or one from a TIP that does not say it
+  // is not secure, never turns the romaji into English candidates.
+  const auto secure = query(1106, "にほん", "neural", true, "nihon", true);
+  ASSERT_EQ(secure.size(), 1u);
+  EXPECT_TRUE(english_of(secure.front()).empty());
+  const auto unmarked = dispatcher.Dispatch(
+      MakeReq(1108, ipc::MessageType::QueryBatchConversion,
+              R"({"reading":"にほん","raw_romaji":"nihon","mode":"neural","max_candidates":1,)"
+              R"("english_candidates":true})"));
+  ASSERT_TRUE(unmarked.has_value());
+  const auto parsed_unmarked = ipc::ParseQueryBatchConversionResponse(unmarked->payload_json);
+  ASSERT_TRUE(parsed_unmarked.has_value());
+  ASSERT_EQ(parsed_unmarked->segments.size(), 1u);
+  EXPECT_TRUE(english_of(parsed_unmarked->segments.front()).empty());
+  EXPECT_EQ(parsed_unmarked->segments.front().candidates.front().surface, "日本");
 }
 
 namespace {
@@ -2083,6 +2101,7 @@ TEST(DispatcherBatchEnglishTest, NoKanaCandidatesMeansNoEnglish) {
   q.raw_romaji = "nihon";
   q.mode = "neural";
   q.english_candidates = true;
+  q.secure = false;
   ipc::Envelope env;
   env.version = 1;
   env.request_id = 1107;

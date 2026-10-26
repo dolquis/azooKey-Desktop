@@ -29,6 +29,7 @@
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/MixedRomajiSplitter.h"
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/ipc/TraceId.h"
 #include "azookey/logging/Phase.h"
@@ -334,28 +335,250 @@ std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& confi
   return PunctuationInserter::Insert({converted}, rules, style, config.segment_boundary_confidence);
 }
 
-// M63-A (docs/mixed-english-auto-conversion-spec.md section 8.2): the whole
-// composition as one English segment, or nullopt to handle the request as with
-// M63 off (a J segment, or no split at all under section 10).
-std::optional<core::MixedRomajiSegment> WholeCompositionEnglish(InferenceEngine& engine,
-                                                                const std::string& raw_romaji) {
-  const auto english = engine.config().english;
+// M63 (docs/mixed-english-auto-conversion-spec.md section 6): the split the
+// Host adopts, or nullopt to handle the request as with M63 off (section 10).
+std::optional<core::MixedRomajiSplit> SplitComposition(InferenceEngine& engine,
+                                                       const std::string& raw_romaji,
+                                                       bool inline_high_confidence) {
   core::MixedRomajiSplitOptions options;
-  options.min_english_length = english.min_length;
-  core::EnglishWordLookup lookup;
-  if (english.dictionary_enabled) {
-    lookup = [&engine](std::string_view lower_key) {
-      std::vector<core::EnglishWordMatch> matches;
-      for (auto& entry : engine.LookupEnglishDictionary(lower_key))
-        matches.push_back({std::move(entry.surface), entry.flags});
-      return matches;
-    };
-  }
-  auto splits = core::SplitMixedRomaji(raw_romaji, lookup, options);
-  if (splits.empty() || splits.front().segments.size() != 1) return std::nullopt;
-  auto& segment = splits.front().segments.front();
+  options.min_english_length = engine.config().english.min_length;
+  options.split_inline = true;
+  options.inline_high_confidence = inline_high_confidence;
+  std::vector<core::MixedRomajiSplit> splits;
+  // One dictionary snapshot for every substring of the lattice. The split is
+  // pure, so a retried snapshot only repeats it; Zenzai runs after it returns.
+  engine.WithEnglishDictionary([&](const EnglishDictionary* dictionary) {
+    core::EnglishWordLookup lookup;
+    if (dictionary) {
+      lookup = [dictionary](std::string_view lower_key) {
+        std::vector<core::EnglishWordMatch> matches;
+        for (auto& entry : dictionary->Lookup(lower_key))
+          matches.push_back({std::move(entry.surface), entry.flags});
+        return matches;
+      };
+    }
+    splits = core::SplitMixedRomaji(raw_romaji, lookup, options);
+  });
+  if (splits.empty()) return std::nullopt;
+  return std::move(splits.front());
+}
+
+// M63-A (section 8.2): the whole composition as one English segment, or
+// nullopt (a J segment, or a split of section 8.3).
+std::optional<core::MixedRomajiSegment> WholeCompositionEnglish(
+    const std::optional<core::MixedRomajiSplit>& split) {
+  if (!split || split->segments.size() != 1) return std::nullopt;
+  const auto& segment = split->segments.front();
   if (segment.kind != core::MixedRomajiSegmentKind::English) return std::nullopt;
-  return std::move(segment);
+  return segment;
+}
+
+// M63-B (section 8.3): a split of the composition into J and E segments.
+bool IsInlineSplit(const std::optional<core::MixedRomajiSplit>& split) {
+  return split && split->segments.size() > 1;
+}
+
+// Section 7: the reading Zenzai converts when the E segments flagged in
+// `english` stay English. The other segments join the J runs around them; a
+// run's kana is the romaji table's kana of the whole run.
+struct MixedReading {
+  struct Part {
+    bool english{};
+    size_t raw_begin{};
+    size_t raw_end{};
+    std::string text;  // The English surface, or the run's kana.
+  };
+  std::vector<Part> parts;
+  std::string reading;
+  std::vector<std::pair<size_t, size_t>> english_ranges;
+};
+
+MixedReading BuildMixedReading(const core::MixedRomajiSplit& split, const std::string& raw_romaji,
+                               const std::vector<bool>& english) {
+  MixedReading mixed;
+  for (size_t i = 0; i < split.segments.size(); ++i) {
+    const auto& segment = split.segments[i];
+    if (english[i]) {
+      mixed.parts.push_back({true, segment.raw_begin, segment.raw_end, segment.surface});
+    } else if (!mixed.parts.empty() && !mixed.parts.back().english) {
+      mixed.parts.back().raw_end = segment.raw_end;
+    } else {
+      mixed.parts.push_back({false, segment.raw_begin, segment.raw_end, {}});
+    }
+  }
+  for (auto& part : mixed.parts) {
+    if (!part.english) {
+      std::string lower = raw_romaji.substr(part.raw_begin, part.raw_end - part.raw_begin);
+      for (auto& c : lower)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+      part.text = core::RomajiKanaConverter::ConvertForCommit(lower);
+    } else {
+      mixed.english_ranges.emplace_back(mixed.reading.size(),
+                                        mixed.reading.size() + part.text.size());
+    }
+    mixed.reading += part.text;
+  }
+  return mixed;
+}
+
+// Section 9.2: the segments of a conversion of a mixed reading, or nullopt
+// when the surface does not hold every English surface in order with
+// non-empty Japanese text between them (the model changed or dropped one).
+std::optional<std::vector<ipc::LiveSegment>> SegmentsOf(const std::string& surface,
+                                                        const MixedReading& mixed,
+                                                        const std::string& raw_romaji,
+                                                        double score) {
+  std::vector<ipc::LiveSegment> segments;
+  uint32_t offset = 0;
+  const auto push = [&](std::string text, std::string reading, bool english) {
+    ipc::LiveSegment segment;
+    segment.start_char = offset;
+    offset += Utf16Length(text);
+    segment.end_char = offset;
+    segment.score = score;
+    segment.surface = std::move(text);
+    segment.reading = std::move(reading);
+    if (english) segment.tag = static_cast<uint8_t>(core::CandidateTag::English);
+    segments.push_back(std::move(segment));
+  };
+  size_t cursor = 0;
+  for (size_t i = 0; i < mixed.parts.size(); ++i) {
+    const auto& part = mixed.parts[i];
+    if (!part.english) {
+      if (i + 1 < mixed.parts.size()) continue;  // Closed by the next E part.
+      if (cursor >= surface.size()) return std::nullopt;
+      push(surface.substr(cursor), part.text, false);
+      cursor = surface.size();
+      continue;
+    }
+    const auto found = surface.find(part.text, cursor);
+    if (found == std::string::npos) return std::nullopt;
+    const bool japanese_before = i > 0 && !mixed.parts[i - 1].english;
+    if (japanese_before != (found > cursor)) return std::nullopt;
+    if (japanese_before)
+      push(surface.substr(cursor, found - cursor), mixed.parts[i - 1].text, false);
+    push(part.text, raw_romaji.substr(part.raw_begin, part.raw_end - part.raw_begin), true);
+    cursor = found + part.text.size();
+  }
+  if (cursor != surface.size()) return std::nullopt;
+  return segments;
+}
+
+// Section 8.3, items 1 to 3, in order; empty when none of them differs from
+// the list M63 off returns. all_japanese is the first candidate of the
+// conversion of the TIP's kana (item 2, or item 1 when no segment is sure).
+std::vector<ipc::CandidateField> MixedCandidates(InferenceEngine& engine,
+                                                 const ipc::QueryCandidatesRequest& request,
+                                                 const core::MixedRomajiSplit& split,
+                                                 const std::optional<core::Candidate>& all_japanese,
+                                                 std::chrono::steady_clock::time_point deadline,
+                                                 const std::atomic<bool>* cancel,
+                                                 const InferenceTelemetry* telemetry) {
+  constexpr size_t kMaxLowConfidenceConversions = 3;
+  std::vector<bool> english(split.segments.size());
+  std::vector<size_t> low;
+  for (size_t i = 0; i < split.segments.size(); ++i) {
+    const auto& segment = split.segments[i];
+    if (segment.kind != core::MixedRomajiSegmentKind::English) continue;
+    if (segment.confidence == core::EnglishSegmentConfidence::High)
+      english[i] = true;
+    else
+      low.push_back(i);
+  }
+  // Section 10: no conversion starts after the deadline, a running one ends by
+  // it, and one it cut short is left out.
+  const auto convert = [&](const std::vector<bool>& flags) -> std::optional<ipc::CandidateField> {
+    if (std::chrono::steady_clock::now() >= deadline ||
+        (cancel && cancel->load(std::memory_order_acquire)))
+      return std::nullopt;
+    const auto mixed = BuildMixedReading(split, request.raw_romaji, flags);
+    MixedConversionOptions options;
+    options.english_ranges = mixed.english_ranges;
+    options.deadline = deadline;
+    options.typo_correction = false;
+    options.nll = false;
+    auto result =
+        engine.QueryCandidatesEx(mixed.reading, request.left_context, NowSec(), cancel,
+                                 request.max_candidates, false, telemetry, nullptr, &options);
+    if (std::chrono::steady_clock::now() >= deadline) return std::nullopt;
+    for (const auto& candidate : result.candidates) {
+      auto segments = SegmentsOf(candidate.surface, mixed, request.raw_romaji, candidate.score);
+      if (!segments) continue;
+      auto field = ToField(candidate);
+      field.reading = request.reading;
+      field.tag = static_cast<uint8_t>(core::CandidateTag::None);
+      field.segments = std::move(*segments);
+      return field;
+    }
+    return std::nullopt;
+  };
+  std::vector<ipc::CandidateField> out;
+  if (std::find(english.begin(), english.end(), true) != english.end())
+    if (auto first = convert(english)) out.push_back(std::move(*first));
+  const bool mixed_first = !out.empty();
+  if (all_japanese) {
+    auto field = ToField(*all_japanese);
+    ipc::LiveSegment whole;
+    whole.end_char = Utf16Length(field.surface);
+    whole.score = field.score;
+    whole.surface = field.surface;
+    whole.reading = request.reading;
+    field.segments = {std::move(whole)};
+    out.push_back(std::move(field));
+  }
+  size_t flipped = 0;
+  for (size_t index : low) {
+    if (flipped++ == kMaxLowConfidenceConversions) break;
+    auto flags = english;
+    flags[index] = true;
+    if (auto candidate = convert(flags)) out.push_back(std::move(*candidate));
+  }
+  std::vector<ipc::CandidateField> unique;
+  for (auto& field : out) {
+    const bool seen = std::any_of(unique.begin(), unique.end(),
+                                  [&](const auto& kept) { return kept.surface == field.surface; });
+    if (!seen) unique.push_back(std::move(field));
+  }
+  if (unique.size() == 1 && !mixed_first && all_japanese) return {};
+  return unique;
+}
+
+// M14 fallback scores are unbounded ranking values. A zero-baseline sigmoid
+// preserves their ordering without pinning ordinary scores >1 to certainty;
+// X-1 will calibrate against the runner-up candidate.
+double LiveConfidence(double score) {
+  const double e = std::exp(-std::abs(score));
+  return score >= 0.0 ? 1.0 / (1.0 + e) : e / (1.0 + e);
+}
+
+// M63-B (sections 8.3 and 10): the live conversion of a split with a sure E
+// segment, or nullopt to convert the TIP's kana as with M63 off: no sure
+// segment, or the generation lost an English surface (the one conversion more
+// that section 10 allows).
+std::optional<ipc::QueryLiveConversionResponse> MixedLiveConversion(
+    InferenceEngine& engine, const ipc::QueryLiveConversionRequest& request,
+    const std::optional<core::MixedRomajiSplit>& split, const std::atomic<bool>* cancel,
+    const InferenceTelemetry* telemetry) {
+  if (!IsInlineSplit(split)) return std::nullopt;
+  std::vector<bool> english(split->segments.size());
+  for (size_t i = 0; i < split->segments.size(); ++i)
+    english[i] = split->segments[i].kind == core::MixedRomajiSegmentKind::English &&
+                 split->segments[i].confidence == core::EnglishSegmentConfidence::High;
+  if (std::find(english.begin(), english.end(), true) == english.end()) return std::nullopt;
+  const auto mixed = BuildMixedReading(*split, request.raw_romaji, english);
+  MixedConversionOptions options;
+  options.english_ranges = mixed.english_ranges;
+  options.typo_correction = false;
+  const auto candidate = engine.QueryLiveConversion(mixed.reading, request.context, NowSec(),
+                                                    cancel, telemetry, &options);
+  if (!candidate) return std::nullopt;
+  ipc::QueryLiveConversionResponse response;
+  if (std::isfinite(candidate->score)) response.confidence = LiveConfidence(candidate->score);
+  auto segments = SegmentsOf(candidate->surface, mixed, request.raw_romaji, response.confidence);
+  if (!segments) return std::nullopt;
+  response.surface = candidate->surface;
+  response.segments = std::move(*segments);
+  return response;
 }
 
 // Section 9.2: the E segment of a candidate or a live conversion whose surface
@@ -836,6 +1059,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelope& req) {
+  // M63-B (mixed-english-auto-conversion-spec section 10): the deadline of the
+  // mixed conversions counts from the receipt.
+  const auto received = std::chrono::steady_clock::now();
   auto parsed = ipc::ParseQueryCandidatesRequest(req.payload_json);
   InferenceTrace trace(req.request_id, client_id_, req.trace_id, core::EtwBackend::Unknown,
                        parsed ? parsed->reading.size() : 0, runtime_logger_);
@@ -865,6 +1091,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   std::vector<core::Candidate> candidates;
   std::string corrected_reading;
   std::optional<core::MixedRomajiSegment> mixed_first;
+  std::vector<ipc::CandidateField> mixed_front;
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
       trace.ProtocolError();
@@ -893,9 +1120,24 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
     const auto tag_boosts = ResolveTagBoosts(engine_config, parsed->app);
-    auto queried =
-        engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
-                                   ordinary_limit, parsed->live, trace.context(), &tag_boosts);
+    // M63 (mixed-english-auto-conversion-spec sections 8 and 9.4): the candidate
+    // window only, and never for a secure request (DEV-1689).
+    const bool mixed_english = !parsed->live && !parsed->secure && parsed->english_candidates &&
+                               !parsed->raw_romaji.empty() && parsed->mixed_english;
+    const auto split = mixed_english
+                           ? SplitComposition(*engine_, parsed->raw_romaji,
+                                              config_.mixed_english_inline_high_confidence)
+                           : std::nullopt;
+    // Section 12: a composition split into J and E segments is converted as
+    // typed, so no corrected reading comes back with its segments.
+    MixedConversionOptions as_typed;
+    as_typed.typo_correction = false;
+    auto queried = engine_->QueryCandidatesEx(
+        parsed->reading, parsed->left_context, NowSec(), cancel.get(), ordinary_limit, parsed->live,
+        trace.context(), &tag_boosts, IsInlineSplit(split) ? &as_typed : nullptr);
+    const auto all_japanese = IsInlineSplit(split) && !queried.candidates.empty()
+                                  ? std::optional{queried.candidates.front()}
+                                  : std::nullopt;
     candidates = std::move(queried.candidates);
     corrected_reading = std::move(queried.corrected_reading);
     // Under auto_replace the conversion ran on the corrected reading, so the
@@ -917,13 +1159,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       // M63-A (mixed-english-auto-conversion-spec sections 8.2 and 9.4): the
       // whole composition as one English word, on top of M60.
       if (parsed->mixed_english) {
-        if (auto word = WholeCompositionEnglish(*engine_, parsed->raw_romaji)) {
+        if (auto word = WholeCompositionEnglish(split)) {
           const bool sure = word->confidence == core::EnglishSegmentConfidence::High;
           PlaceMixedEnglishCandidate(candidates, *word, parsed->raw_romaji, sure);
           // corrected_reading stays: the Japanese candidates were converted
           // from it (M35), and the English one is learned under its own
           // reading, the raw romaji (M60 section 6.4).
           if (sure) mixed_first = std::move(word);
+        } else if (IsInlineSplit(split)) {
+          // M63-B section 8.3, on top of M60.
+          mixed_front = MixedCandidates(*engine_, *parsed, *split, all_japanese,
+                                        received + config_.mixed_english_conversion_deadline,
+                                        cancel.get(), trace.context());
         }
       }
     }
@@ -943,6 +1190,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   if (mixed_first && !res.candidates.empty())
     res.candidates.front().segments = {
         EnglishLiveSegment(*mixed_first, parsed->raw_romaji, res.candidates.front().score)};
+  // Section 8.3: items 1 to 3 lead, and the rest follow without their surfaces.
+  if (!mixed_front.empty()) {
+    std::erase_if(res.candidates, [&](const ipc::CandidateField& c) {
+      return std::any_of(mixed_front.begin(), mixed_front.end(),
+                         [&](const auto& front) { return front.surface == c.surface; });
+    });
+    // Tie with the first of the rest so a score-ordered consumer keeps the order.
+    if (!res.candidates.empty())
+      for (auto& front : mixed_front)
+        front.score = (std::max)(front.score, res.candidates.front().score);
+    res.candidates.insert(res.candidates.begin(), std::make_move_iterator(mixed_front.begin()),
+                          std::make_move_iterator(mixed_front.end()));
+  }
   // The pre-M14 carrier of live conversion; current TIPs use QueryLiveConversion.
   if (parsed->live && !res.candidates.empty()) {
     if (auto inserted = InsertLivePunctuation(
@@ -991,7 +1251,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   // M63-A (mixed-english-auto-conversion-spec sections 8.2, 9.4 and 10): a
   // sure English word is the live conversion as is, without Zenzai.
   if (!parsed->secure && parsed->mixed_english && !parsed->raw_romaji.empty()) {
-    if (auto word = WholeCompositionEnglish(*engine_, parsed->raw_romaji);
+    const auto split = SplitComposition(*engine_, parsed->raw_romaji,
+                                        config_.mixed_english_inline_high_confidence);
+    if (auto word = WholeCompositionEnglish(split);
         word && word->confidence == core::EnglishSegmentConfidence::High) {
       const bool canceled = cancel->load(std::memory_order_acquire);
       completion.Complete();
@@ -1017,6 +1279,38 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
       trace.Finish(core::EtwResult::Success, 1);
       return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
     }
+    // M63-B (sections 8.3 and 10): one Zenzai conversion of the reading with
+    // the sure E segments in English, as typed (section 12).
+    if (auto mixed = MixedLiveConversion(*engine_, *parsed, split, cancel.get(), trace.context())) {
+      const bool canceled = cancel->load(std::memory_order_acquire);
+      completion.Complete();
+      if (canceled) {
+        trace.Finish(core::EtwResult::Cancelled);
+        return std::nullopt;
+      }
+      response = std::move(*mixed);
+      if (punctuation_config) {
+        // M59 as with M63 off, judged on the whole surface; the mark joins the
+        // segments, which keep their tags.
+        if (auto inserted =
+                InsertLivePunctuation(*punctuation_config, true, parsed->punctuation_style,
+                                      response.surface, parsed->kana)) {
+          for (auto& segment : inserted->segments) {
+            if (!segment.auto_punctuation || segment.start_char < Utf16Length(response.surface))
+              continue;
+            response.segments.push_back(std::move(segment));
+          }
+          response.surface = std::move(inserted->surface);
+        }
+      }
+      trace.Finish(core::EtwResult::Success, 1);
+      return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
+    }
+    if (cancel->load(std::memory_order_acquire)) {
+      completion.Complete();
+      trace.Finish(core::EtwResult::Cancelled);
+      return std::nullopt;
+    }
   }
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
                                                       cancel.get(), trace.context());
@@ -1038,13 +1332,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
         response.segments = std::move(inserted->segments);
       }
     }
-    if (std::isfinite(candidate->score)) {
-      // M14 fallback scores are unbounded ranking values. A zero-baseline
-      // sigmoid preserves their ordering without pinning ordinary scores >1
-      // to certainty; X-1 will calibrate against the runner-up candidate.
-      const double e = std::exp(-std::abs(candidate->score));
-      response.confidence = candidate->score >= 0.0 ? 1.0 / (1.0 + e) : e / (1.0 + e);
-    }
+    if (std::isfinite(candidate->score)) response.confidence = LiveConfidence(candidate->score);
   }
   trace.Finish(core::EtwResult::Success, candidate ? 1 : 0);
   return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));

@@ -14,6 +14,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/AppProfileResolver.h"
@@ -49,8 +50,12 @@ void DropPrivateUseCandidates(std::vector<core::Candidate>& candidates);
 // For a `reading` that still holds ASCII letters, removes the model candidates whose surface
 // mixes kana with ASCII letters (`あっpエ`). Surfaces with only one of the two, kanji with letters,
 // and candidates from any other source stay. Applies whether or not English candidates are on.
-void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
-                                       const std::string& reading);
+// english_ranges are the byte ranges of `reading` that M63 English segments occupy
+// (docs/mixed-english-auto-conversion-spec.md section 7): their letters do not count, and the
+// surface is judged without the first occurrence, in order, of each segment's text.
+void DropMixedKanaAsciiModelCandidates(
+    std::vector<core::Candidate>& candidates, const std::string& reading,
+    const std::vector<std::pair<size_t, size_t>>& english_ranges = {});
 
 // Removes the model candidates whose surface repeats one unit (1 to 4 characters) three times or
 // more in a row where `reading` has no such repeat (`New!!!!!!`, `病院🏥🏥🏥`, `製品保証・・・・`,
@@ -58,6 +63,19 @@ void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
 // sources and the order of the rest stay.
 void DropRepeatedUnitModelCandidates(std::vector<core::Candidate>& candidates,
                                      const std::string& reading);
+
+// M63-B (docs/mixed-english-auto-conversion-spec.md sections 7, 10 and 12): how a
+// reading that holds M63 English segments is converted.
+struct MixedConversionOptions {
+  // Byte ranges of the reading that the English segments occupy (section 7).
+  std::vector<std::pair<size_t, size_t>> english_ranges;
+  // Section 10: the conversion ends by the earlier of this and the Zenzai budget.
+  std::optional<std::chrono::steady_clock::time_point> deadline;
+  // Section 12: false converts the reading as given, without M35.
+  bool typo_correction{true};
+  // false skips the NLL rerank (the section 8.3 extra conversions).
+  bool nll{true};
+};
 
 struct InferenceTelemetry {
   uint64_t request_id{};
@@ -265,6 +283,13 @@ class InferenceEngine {
   // current config. Empty when inlineEnglishDictionary is off or the
   // dictionary is missing or unreadable. Never the learned surfaces.
   std::vector<EnglishDictionaryEntry> LookupEnglishDictionary(std::string_view lower_key);
+  // M63-B: runs compute on one snapshot of the same dictionary (nullptr when
+  // LookupEnglishDictionary would find nothing), so the mixed lattice does not
+  // take the locks and stat the files for each substring. compute may run
+  // again when the files change under it, so it must not have side effects
+  // beyond its own result; it must not call back into the engine, and the
+  // Zenzai conversion runs after it returns.
+  void WithEnglishDictionary(const std::function<void(const EnglishDictionary*)>& compute);
   // Records a committed English candidate under its lowercased raw romaji in
   // the English channel only. false for a duplicate observation_id or when no
   // English store is set.
@@ -346,7 +371,8 @@ class InferenceEngine {
                                      uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
                                      uint32_t max_candidates = 0, bool live = false,
                                      const InferenceTelemetry* telemetry = nullptr,
-                                     const TagBoosts* tag_boosts = nullptr);
+                                     const TagBoosts* tag_boosts = nullptr,
+                                     const MixedConversionOptions* mixed = nullptr);
 
   // M14: one best candidate from the live path (live = true): a loaded model
   // decodes one beam and skips NLL and the typo suggestion; without a model the
@@ -355,7 +381,8 @@ class InferenceEngine {
                                                      const std::string& context,
                                                      uint64_t now_epoch_sec,
                                                      const std::atomic<bool>* cancel,
-                                                     const InferenceTelemetry* telemetry = nullptr);
+                                                     const InferenceTelemetry* telemetry = nullptr,
+                                                     const MixedConversionOptions* mixed = nullptr);
 
   // Candidates only; equivalent to QueryCandidatesEx(...).candidates.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
@@ -484,7 +511,8 @@ class InferenceEngine {
                                          uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
                                          uint32_t max_candidates, bool live,
                                          const InferenceTelemetry* telemetry,
-                                         const TagBoosts* tag_boosts = nullptr);
+                                         const TagBoosts* tag_boosts = nullptr,
+                                         const MixedConversionOptions* mixed = nullptr);
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

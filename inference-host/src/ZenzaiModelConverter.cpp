@@ -1142,6 +1142,23 @@ struct ZenzaiModelRuntime {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.1, 1},
               GeneratedCandidate{"正しい", -1.0, 3}};
     }
+    // M63-B fixtures (mixed-english-auto-conversion-spec section 7): a reading with
+    // English segments, and the kana reading of the same keystrokes.
+    if (ToKatakana(kana) == "キョウハGitHubニpushシタ") {
+      return {GeneratedCandidate{"今日はGitHubにpushした", -0.2, 6},
+              GeneratedCandidate{"今日はGithubにpushした", -0.5, 6}};
+    }
+    if (ToKatakana(kana) == "キョウハギテュbニプshシタ") {
+      return {GeneratedCandidate{"今日は擬態にプッシュした", -0.3, 6}};
+    }
+    if (ToKatakana(kana) == "GitHubヲミル") {
+      // The best generation changes the case of the English segment.
+      return {GeneratedCandidate{"Githubを見る", -0.2, 3},
+              GeneratedCandidate{"GitHubを見る", -0.5, 3}};
+    }
+    if (ToKatakana(kana) == "ギテュbヲミル") {
+      return {GeneratedCandidate{"擬態を見る", -0.3, 3}};
+    }
     if (ToKatakana(kana) == "ジュウフク") {
       return {GeneratedCandidate{"重複", -0.2, 2}, GeneratedCandidate{"重複", -0.4, 2},
               GeneratedCandidate{"別候補", -0.8, 3}};

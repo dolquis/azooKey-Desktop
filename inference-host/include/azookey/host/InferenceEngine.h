@@ -308,6 +308,9 @@ class InferenceEngine {
   // number of keys recorded.
   size_t RecordRejectedEnglish(const std::vector<ipc::CandidateField>& shown,
                                const std::string& chosen_surface, uint64_t now_epoch_sec);
+  // Test-only: runs while_held with the English channel lock held, as a
+  // commit's save does. while_held must not take that lock on this thread.
+  void HoldEnglishLockForTests(const std::function<void()>& while_held);
   // DEV-1584 (inline-english-candidate-spec section 4.8): an M36 word that has
   // just become Confirmed enters the English dictionary when inlineEnglishDictionary
   // is on and the surface is ASCII letters only, at least inlineEnglishMinLength
@@ -551,6 +554,10 @@ class InferenceEngine {
                                                std::string_view chosen_surface);
   // Writes the negative observations of `rejected` and lifts those of
   // `released`, then bounds the store. Holds english_mutex_.
+  // Drops what IsEnglishSuppressed answers under contention; called wherever
+  // the English store may lose a negative observation (prune, forget, reset,
+  // import). Takes the cache lock only.
+  void ClearEnglishSuppressedCache();
   void ApplyEnglishNegativesLocked(const std::vector<std::string>& rejected,
                                    const std::vector<std::string>& released, uint64_t now_epoch_sec,
                                    size_t max_records, double min_weight);

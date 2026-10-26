@@ -1454,6 +1454,35 @@ TEST_F(MixedEnglishLearningTest, TurningTheSureWordDownLowersItUntilEnglishLifts
   EXPECT_FALSE(engine.IsEnglishSuppressed("github"));
 }
 
+// The per-key suppression lookup never waits while a commit holds the English
+// channel lock: it answers as the last lookup or record did, and a forget from
+// the learning data management drops that answer.
+TEST_F(MixedEnglishLearningTest, SuppressionUnderContentionFollowsTheLastAnswerAndForget) {
+  const auto contended = [&] {
+    bool suppressed = false;
+    engine.HoldEnglishLockForTests([&] {
+      std::thread lookup([&] { suppressed = engine.IsEnglishSuppressed("github"); });
+      lookup.join();
+    });
+    return suppressed;
+  };
+  const auto before = Query(1541, Request("ぎてゅb", "github", true));
+  ASSERT_GE(before.size(), 2u);
+  ASSERT_TRUE(Commit(1542, "ぎてゅb", before[1], before));
+  EXPECT_TRUE(contended());
+
+  const auto page =
+      engine.ListLearningEntries(azookey::host::LearningDataStore::Learning, "github", 0, 10);
+  const auto entry = std::find_if(page.entries.begin(), page.entries.end(), [](const auto& e) {
+    return e.reading == azookey::host::EnglishNegativeObservationReading("github");
+  });
+  ASSERT_NE(entry, page.entries.end());
+  ASSERT_EQ(engine.ForgetLearningEntry(azookey::host::LearningDataStore::Learning, entry->id),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  EXPECT_FALSE(contended());
+  EXPECT_FALSE(Negative("github"));
+}
+
 TEST_F(MixedEnglishLearningTest, OnlyTheSureM63WordTurnedDownIsRecorded) {
   ipc::CandidateField japanese;
   japanese.surface = "擬態";

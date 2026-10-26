@@ -469,6 +469,8 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
   // observation.
   ApplyEnglishNegativesLocked({}, ReleasedEnglishKeys({raw_romaji}), now_epoch_sec, 0, 0.0);
   english_store_->Prune(max_records, min_weight, now_epoch_sec);
+  // The prune may have dropped negative observations.
+  ClearEnglishSuppressedCache();
   // English commits are rare; save now rather than joining the kana store's
   // burst scheduling. A failed save stays dirty and is retried by the next
   // English commit and at shutdown.
@@ -541,7 +543,11 @@ void InferenceEngine::ApplyEnglishNegativesLocked(const std::vector<std::string>
     english_store_->Set(EnglishNegativeObservationReading(key), key, negative);
   for (const auto& key : released)
     (void)english_store_->Forget(EnglishNegativeObservationReading(key), key);
-  if (!rejected.empty()) english_store_->Prune(max_records, min_weight, now_epoch_sec);
+  if (!rejected.empty()) {
+    english_store_->Prune(max_records, min_weight, now_epoch_sec);
+    // The prune may have dropped other keys' negative observations.
+    ClearEnglishSuppressedCache();
+  }
   // What IsEnglishSuppressed answers while the save that follows holds the lock.
   std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
   for (const auto& key : rejected) {
@@ -549,6 +555,16 @@ void InferenceEngine::ApplyEnglishNegativesLocked(const std::vector<std::string>
     if (rows) english_suppressed_cache_.insert(key);
   }
   for (const auto& key : released) english_suppressed_cache_.erase(key);
+}
+
+void InferenceEngine::ClearEnglishSuppressedCache() {
+  std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
+  english_suppressed_cache_.clear();
+}
+
+void InferenceEngine::HoldEnglishLockForTests(const std::function<void()>& while_held) {
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  while_held();
 }
 
 size_t InferenceEngine::RecordRejectedEnglish(const std::vector<ipc::CandidateField>& shown,

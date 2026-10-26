@@ -34,9 +34,10 @@ class RomajiKanaConverter {
   // Commit readings of `ascii` when each built-in "nn" + vowel/y is read either as
   // ん + な行 (the Feed default, always first) or as ん + あ行/や行. Only the first
   // `max_ambiguous` (at most kMaxAmbiguousDoubleN) such positions vary; later ones keep
-  // the default. A reading that leaves more unconverted ASCII letters than the default
-  // is dropped. A custom table has no ambiguous positions, so it yields its single
-  // commit reading.
+  // the default. A position does not vary when reading it alone that way leaves a
+  // different count of unconverted ASCII letters than the default (e.g. a trailing
+  // "nny" or "nnyi"). A custom table has no ambiguous positions, so it yields its
+  // single commit reading.
   static std::vector<std::string> AmbiguousReadings(const std::string& ascii,
                                                     size_t max_ambiguous = kMaxAmbiguousDoubleN);
   static std::vector<std::string> AmbiguousReadings(const std::string& ascii,

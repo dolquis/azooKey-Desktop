@@ -230,12 +230,18 @@ std::vector<std::string> RomajiKanaConverter::AmbiguousReadings(
   size_t ambiguous = 0;
   std::vector<std::string> readings{convert(0, &ambiguous)};
   const size_t varied = (std::min)({ambiguous, max_ambiguous, kMaxAmbiguousDoubleN});
+  // A position varies only if reading it alone as ん + あ行/や行 converts as many letters
+  // as the default does (a trailing "nny" or "nnyi" leaves romaji behind instead).
   const auto default_letters = ascii_letters(readings.front());
+  unsigned valid = 0;
+  for (size_t position = 0; position < varied; ++position) {
+    const unsigned bit = 1u << position;
+    if (ascii_letters(convert(bit, nullptr)) == default_letters) valid |= bit;
+  }
+  // Each position changes only its own syllable, so distinct masks give distinct readings.
   for (unsigned mask = 1; mask < (1u << varied); ++mask) {
-    std::string reading = convert(mask, nullptr);
-    if (ascii_letters(reading) > default_letters) continue;
-    if (std::find(readings.begin(), readings.end(), reading) != readings.end()) continue;
-    readings.push_back(std::move(reading));
+    if ((mask & ~valid) != 0) continue;
+    readings.push_back(convert(mask, nullptr));
   }
   return readings;
 }

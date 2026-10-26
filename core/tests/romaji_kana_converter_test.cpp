@@ -229,6 +229,24 @@ TEST(RomajiKanaConverterTest, AmbiguousReadingsSkipsExplicitSpellings) {
   EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings(""), (Readings{""}));
   // Reading "nnyi" as ん + "yi" leaves romaji the default reading does not have.
   EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("kinnyi"), (Readings{"きんにぃ"}));
+  // A trailing "nny" is still being typed; ん + "y" would drop the pending n instead.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("konny"), (Readings{"こんny"}));
+  // Only the position that converts cleanly varies.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onnakinnyi"),
+            (Readings{"おんなきんにぃ", "おんあきんにぃ"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onnakonny"),
+            (Readings{"おんなこんny", "おんあこんny"}));
+}
+
+TEST(RomajiKanaConverterTest, AmbiguousReadingsFollowFeedInputHandling) {
+  using azookey::core::RomajiKanaConverter;
+  using Readings = std::vector<std::string>;
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("KONNICHIHA"),
+            (Readings{"こんにちは", "こんいちは"}));
+  // "nn" before a symbol or digit is ん with no following syllable to reinterpret.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("konn1"), (Readings{"こん1"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onn-"), (Readings{"おんー"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onn!a"), (Readings{"おん!あ"}));
 }
 
 TEST(RomajiKanaConverterTest, AmbiguousReadingsCapsAmbiguousPositions) {
@@ -245,6 +263,8 @@ TEST(RomajiKanaConverterTest, AmbiguousReadingsCapsAmbiguousPositions) {
   EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onnaminna", 1),
             (Readings{"おんなみんな", "おんあみんな"}));
   EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onna", 0), (Readings{"おんな"}));
+  // A larger limit is still capped at kMaxAmbiguousDoubleN positions.
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("onnaonnaonnaonna", 5), four);
 }
 
 TEST(RomajiKanaConverterTest, AmbiguousReadingsUseOnlyTheCustomTable) {

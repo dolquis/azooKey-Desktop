@@ -572,6 +572,67 @@ bool IsRawRomajiReading(const std::string& reading) {
          std::all_of(reading.begin(), reading.end(), [](char c) { return c > 0x20 && c < 0x7F; });
 }
 
+constexpr auto kEnglishCandidateTag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+
+// M63-B (docs/mixed-english-auto-conversion-spec.md sections 9.2 and 11):
+// whether a candidate's segments can be observed one by one. Each has a
+// surface and a reading, an English one a raw romaji reading, and their
+// surfaces join to the candidate's: the TIP never cuts the surface at the
+// offsets. One segment is the whole candidate, observed as it is.
+bool UsableCandidateSegments(const azookey::ipc::CandidateField& candidate) {
+  if (candidate.segments.size() < 2) return false;
+  std::string joined;
+  for (const auto& segment : candidate.segments) {
+    if (segment.surface.empty() || segment.reading.empty() || segment.auto_punctuation)
+      return false;
+    if (segment.tag == kEnglishCandidateTag && !IsRawRomajiReading(segment.reading)) return false;
+    joined += segment.surface;
+  }
+  return joined == candidate.surface;
+}
+
+// Section 11: the English segments of the first candidate shown that the
+// chosen one does not keep in English, each as the English candidate of one
+// segment that the Host records as turned down. A segment is kept when the
+// chosen candidate has it as an English segment or, without segments, shows
+// its surface. Only a first candidate of several segments: a one-word first
+// candidate is in `shown` as it is.
+std::vector<azookey::ipc::CandidateField> TurnedDownEnglish(
+    const std::vector<azookey::tsf::TipCandidate>& shown,
+    const azookey::ipc::CandidateField& chosen) {
+  std::vector<azookey::ipc::CandidateField> turned_down;
+  if (shown.empty() || shown.front().local || shown.front().field.segments.size() < 2)
+    return turned_down;
+  const auto& first = shown.front().field;
+  if (first.surface == chosen.surface) return turned_down;
+  for (const auto& segment : first.segments) {
+    if (segment.tag != kEnglishCandidateTag || segment.surface.empty() ||
+        segment.end_char <= segment.start_char || !IsRawRomajiReading(segment.reading))
+      continue;
+    const bool kept =
+        std::any_of(chosen.segments.begin(), chosen.segments.end(),
+                    [&](const azookey::ipc::LiveSegment& other) {
+                      return other.tag == kEnglishCandidateTag && other.reading == segment.reading;
+                    }) ||
+        (chosen.segments.empty() && chosen.surface.find(segment.surface) != std::string::npos);
+    const bool listed = std::any_of(turned_down.begin(), turned_down.end(),
+                                    [&](const auto& c) { return c.reading == segment.reading; });
+    if (kept || listed) continue;
+    azookey::ipc::CandidateField english;
+    english.surface = segment.surface;
+    english.reading = segment.reading;
+    english.score = segment.score;
+    english.source = first.source;
+    english.tag = kEnglishCandidateTag;
+    auto alone = segment;
+    alone.start_char = 0;
+    alone.end_char = segment.end_char - segment.start_char;
+    english.segments = {std::move(alone)};
+    turned_down.push_back(std::move(english));
+  }
+  return turned_down;
+}
+
 std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
   std::string surface;
   for (const char c : text) {
@@ -4731,9 +4792,38 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     pending_commit_observation_ = std::move(batch_observation);
   } else if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
              chosen.field.source != "symbol" && chosen.field.source != "emoji") {
-    pending_commit_observation_ = PendingCommitObservation{
-        reading, chosen.field, HostCandidateFields(shown),
-        {},      secure,       privacy.learning_allowed && batch_learning_allowed_};
+    const bool learning = privacy.learning_allowed && batch_learning_allowed_;
+    auto turned_down = TurnedDownEnglish(shown, chosen.field);
+    if (UsableCandidateSegments(chosen.field)) {
+      // M63-B section 11: one observation per segment, each from the Host's
+      // own strings; an English segment keeps its raw romaji and tag.
+      PendingCommitObservation observed{reading, chosen.field, {}, {}, secure, learning};
+      for (const auto& segment : chosen.field.segments) {
+        PendingCommitObservation part;
+        part.reading = segment.reading;
+        part.chosen.surface = segment.surface;
+        part.chosen.reading = segment.reading;
+        part.chosen.score = segment.score;
+        part.chosen.source = chosen.field.source;
+        part.chosen.tag = segment.tag;
+        part.secure = secure;
+        part.learning_allowed = learning;
+        observed.segments.push_back(std::move(part));
+      }
+      // The turned-down English joins a Japanese segment's shown.
+      for (auto& part : observed.segments) {
+        if (part.chosen.tag == kEnglishCandidateTag) continue;
+        part.shown = std::move(turned_down);
+        break;
+      }
+      pending_commit_observation_ = std::move(observed);
+    } else {
+      auto fields = HostCandidateFields(shown);
+      fields.insert(fields.end(), std::make_move_iterator(turned_down.begin()),
+                    std::make_move_iterator(turned_down.end()));
+      pending_commit_observation_ =
+          PendingCommitObservation{reading, chosen.field, std::move(fields), {}, secure, learning};
+    }
   } else {
     pending_commit_observation_.reset();
   }

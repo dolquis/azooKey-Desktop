@@ -12288,3 +12288,208 @@ TEST(TsfTipMixedEnglishTest, EnglishLiveSegmentIsLearnedAsEnglish) {
   EXPECT_EQ(observation->chosen.surface, "Kite");
   EXPECT_EQ(observation->chosen.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English));
 }
+
+// M63-B (mixed-english-auto-conversion-spec sections 9.2 and 11): a candidate
+// window commit of a candidate with segments.
+namespace {
+
+azookey::ipc::LiveSegment MixedSeg(uint32_t start, std::string surface, std::string reading,
+                                   bool english) {
+  azookey::ipc::LiveSegment segment;
+  segment.start_char = start;
+  // UTF-16 units: every character here is in the BMP, one unit each.
+  segment.end_char =
+      start + static_cast<uint32_t>(std::count_if(surface.begin(), surface.end(), [](char c) {
+        return (static_cast<unsigned char>(c) & 0xC0) != 0x80;
+      }));
+  segment.surface = std::move(surface);
+  segment.reading = std::move(reading);
+  segment.score = 0.5;
+  if (english) segment.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  return segment;
+}
+
+constexpr const char* kMixedKana = "きょうはぎてゅbにぷshした";
+constexpr auto kEnglishTag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+
+// Items 1 to 3 of section 8.3 and an ordinary candidate, as the Host sends them.
+std::vector<azookey::ipc::CandidateField> MixedCandidates() {
+  std::vector<azookey::ipc::CandidateField> candidates(4);
+  for (auto& c : candidates) {
+    c.reading = kMixedKana;
+    c.source = "model";
+  }
+  candidates[0].surface = "今日はGitHubにpushした";
+  candidates[0].segments = {MixedSeg(0, "今日は", "きょうは", false),
+                            MixedSeg(3, "GitHub", "github", true), MixedSeg(9, "に", "に", false),
+                            MixedSeg(10, "push", "push", true),
+                            MixedSeg(14, "した", "した", false)};
+  candidates[1].surface = "今日は擬態にプッシュした";
+  candidates[1].segments = {MixedSeg(0, "今日は擬態にプッシュした", kMixedKana, false)};
+  candidates[2].surface = "今日はGitHubにプッシュした";
+  candidates[2].segments = {MixedSeg(0, "今日は", "きょうは", false),
+                            MixedSeg(3, "GitHub", "github", true),
+                            MixedSeg(9, "にプッシュした", "にぷshした", false)};
+  candidates[3].surface = "京は擬態にプッシュした";
+  return candidates;
+}
+
+void CommitMixedCandidate(
+    TextServiceHarness& h, std::vector<azookey::ipc::CandidateField> shown, int selected,
+    bool commit_segments,
+    const char* privacy = R"({"privacy":{"mode":"normal","autoSecureInput":false}})") {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(privacy);
+  h.service.set_commit_segments_supported_for_test(commit_segments);
+  h.service.preedit_kana_ = kMixedKana;
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(std::move(shown)); }));
+  h.service.set_selected_candidate_index_for_test(selected);
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+}
+
+std::vector<std::string> EnglishReadings(const std::vector<azookey::ipc::CandidateField>& shown) {
+  std::vector<std::string> readings;
+  for (const auto& c : shown) {
+    if (c.tag != kEnglishTag || c.segments.size() != 1) continue;
+    EXPECT_EQ(c.segments[0].tag, kEnglishTag) << c.reading;
+    EXPECT_EQ(c.segments[0].start_char, 0u) << c.reading;
+    EXPECT_EQ(c.segments[0].surface, c.surface) << c.reading;
+    readings.push_back(c.reading);
+  }
+  return readings;
+}
+}  // namespace
+
+// Section 11: the segments of the chosen candidate are observed one by one;
+// an English segment under its raw romaji with the English tag.
+TEST(TsfTipMixedEnglishTest, CandidateWithSegmentsIsObservedPerSegment) {
+  TextServiceHarness h;
+  CommitMixedCandidate(h, MixedCandidates(), 0, /*commit_segments=*/true);
+  const auto observation = h.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  ASSERT_EQ(observation->segments.size(), 5u);
+  EXPECT_EQ(observation->segments[0].reading, "きょうは");
+  EXPECT_EQ(observation->segments[0].chosen.surface, "今日は");
+  EXPECT_EQ(observation->segments[0].chosen.tag, 0);
+  EXPECT_EQ(observation->segments[1].reading, "github");
+  EXPECT_EQ(observation->segments[1].chosen.surface, "GitHub");
+  EXPECT_EQ(observation->segments[1].chosen.tag, kEnglishTag);
+  EXPECT_EQ(observation->segments[3].reading, "push");
+  // The first candidate itself was chosen: no English was turned down.
+  for (const auto& segment : observation->segments)
+    EXPECT_TRUE(EnglishReadings(segment.shown).empty()) << segment.reading;
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+// Without commit_segments the segments go as one CommitObservation each.
+TEST(TsfTipMixedEnglishTest, CandidateSegmentsFallBackToOneObservationEach) {
+  TextServiceHarness h;
+  CommitMixedCandidate(h, MixedCandidates(), 0, /*commit_segments=*/false);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 5u);
+  const auto last = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->reading, "した");
+  const auto first = h.service.first_queued_commit_observation_for_test();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(first->reading, "きょうは");
+  // Each segment is its own observation for the Host's dedupe.
+  EXPECT_FALSE(first->observation_id.empty());
+  EXPECT_NE(first->observation_id, last->observation_id);
+}
+
+// The privacy gates and the sources that carry nothing to learn hold for the
+// per-segment path as for a whole candidate.
+TEST(TsfTipMixedEnglishTest, CandidateSegmentsFollowThePrivacyGatesAndSources) {
+  const auto nothing_queued = [](TextServiceHarness& h) {
+    EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+  };
+  {
+    SCOPED_TRACE("secure");
+    TextServiceHarness h;
+    CommitMixedCandidate(h, MixedCandidates(), 0, true, R"({"privacy":{"mode":"secure"}})");
+    nothing_queued(h);
+  }
+  {
+    SCOPED_TRACE("learning off (private)");
+    TextServiceHarness h;
+    CommitMixedCandidate(h, MixedCandidates(), 0, true, R"({"privacy":{"mode":"private"}})");
+    nothing_queued(h);
+  }
+  for (const char* source : {"llm", "fallback", "privacy-fallback"}) {
+    SCOPED_TRACE(source);
+    auto candidates = MixedCandidates();
+    candidates[0].source = source;
+    TextServiceHarness h;
+    CommitMixedCandidate(h, std::move(candidates), 0, true);
+    nothing_queued(h);
+  }
+}
+
+// Section 11: the Japanese choice over the first candidate's English segments
+// carries each of them in shown as an English candidate of one segment.
+TEST(TsfTipMixedEnglishTest, JapaneseChoiceCarriesTheTurnedDownEnglishInShown) {
+  TextServiceHarness h;
+  CommitMixedCandidate(h, MixedCandidates(), 1, /*commit_segments=*/true);
+  EXPECT_FALSE(h.service.last_queued_segments_observation_for_test().has_value());
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, kMixedKana);
+  EXPECT_EQ(observation->chosen.surface, "今日は擬態にプッシュした");
+  EXPECT_EQ(EnglishReadings(observation->shown), (std::vector<std::string>{"github", "push"}));
+
+  // A choice that keeps GitHub turns down push only, on a Japanese segment.
+  TextServiceHarness kept;
+  CommitMixedCandidate(kept, MixedCandidates(), 2, /*commit_segments=*/true);
+  const auto segments = kept.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(segments.has_value());
+  ASSERT_EQ(segments->segments.size(), 3u);
+  std::vector<std::string> turned_down;
+  for (const auto& segment : segments->segments) {
+    const auto readings = EnglishReadings(segment.shown);
+    if (!readings.empty()) EXPECT_NE(segment.chosen.tag, kEnglishTag);
+    turned_down.insert(turned_down.end(), readings.begin(), readings.end());
+  }
+  EXPECT_EQ(turned_down, std::vector<std::string>{"push"});
+
+  // An ordinary candidate turns both down too.
+  TextServiceHarness ordinary;
+  CommitMixedCandidate(ordinary, MixedCandidates(), 3, /*commit_segments=*/true);
+  const auto plain = ordinary.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(EnglishReadings(plain->shown), (std::vector<std::string>{"github", "push"}));
+
+  // A candidate without segments that still shows GitHub keeps it in English.
+  auto candidates = MixedCandidates();
+  candidates[3].surface = "今日はGitHubに押した";
+  TextServiceHarness spelled;
+  CommitMixedCandidate(spelled, std::move(candidates), 3, /*commit_segments=*/true);
+  const auto spelled_out = spelled.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(spelled_out.has_value());
+  EXPECT_EQ(EnglishReadings(spelled_out->shown), std::vector<std::string>{"push"});
+}
+
+// Section 9.2: segments whose surfaces do not join to the candidate's, or an
+// English segment without a raw romaji reading, are not used: the candidate is
+// observed whole, and the TIP never cuts its surface at the offsets.
+TEST(TsfTipMixedEnglishTest, UnusableSegmentsLeaveTheWholeCandidate) {
+  for (int variant = 0; variant < 2; ++variant) {
+    SCOPED_TRACE(variant);
+    auto candidates = MixedCandidates();
+    if (variant == 0)
+      candidates[0].segments[2].surface = "で";
+    else
+      candidates[0].segments[1].reading = "ぎてゅb";
+    TextServiceHarness h;
+    CommitMixedCandidate(h, std::move(candidates), 0, /*commit_segments=*/true);
+    EXPECT_FALSE(h.service.last_queued_segments_observation_for_test().has_value());
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_EQ(observation->chosen.surface, "今日はGitHubにpushした");
+    EXPECT_EQ(observation->reading, kMixedKana);
+  }
+}

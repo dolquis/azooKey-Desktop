@@ -3565,6 +3565,23 @@ TEST(TsfTipOnKeyDownPreeditTest, CustomRomajiSymbolsAndDigitsReachCoreAndBatch) 
   EXPECT_EQ(h.service.preedit_kana_, "…");
 }
 
+// Batch preview and reading convert , . ? ! wherever they come from, a custom
+// table's output included (spec section 3.5, DEV-1670).
+TEST(TsfTipOnKeyDownPreeditTest, BatchConvertsMarksInCustomRomajiOutput) {
+  TextServiceHarness h;
+  CustomRomajiTranslationGuard custom_translation;
+  h.service.set_romaji_table_for_test(
+      azookey::core::CustomRomajiLoader::Parse("zc\t,\nzx\t!\n").table);
+  h.service.set_batch_romaji_options_for_test(true);
+  EXPECT_TRUE(h.Press('Z'));
+  EXPECT_TRUE(h.Press('C'));
+  EXPECT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_TRUE(h.Press('Z'));
+  EXPECT_TRUE(h.Press('X'));
+  EXPECT_EQ(h.service.preedit_kana_, "！");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationStartsAndClearsDocumentComposition) {
   OemCompositionTranslationGuard oem_translation;
   for (const auto [key, surface] :
@@ -11774,6 +11791,13 @@ TEST(TsfTipPunctuationConversionTest, QuestionAndExclamationMarksConvertToo) {
     ASSERT_TRUE(h.Press('1'));
     EXPECT_EQ(h.context.document->text, L"転機！");
     EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    // One commit: the mark does not also start a composition after it.
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 1u);
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_EQ(observation->reading, "てんき");
+    EXPECT_EQ(observation->chosen.surface, "転機");
   }
   {
     SCOPED_TRACE("standalone");
@@ -11938,6 +11962,29 @@ TEST(TsfTipCommitOnTypeTest, ShiftOneCommitsTheHighlightAndStartsWithTheExclamat
     EXPECT_FALSE(h.service.candidate_window_showing_for_test());
     ExpectTenkiSecondCommittedOnce(h);
   }
+}
+
+// Where Shift+1 is not !, the key goes to the app and the window stays as it was.
+TEST(TsfTipCommitOnTypeTest, ShiftOneOfAnotherLayoutLeavesTheWindow) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+      &TranslateWithoutExclamationForTest);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  BOOL tested = TRUE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, '1', 0, &tested), S_OK);
+  EXPECT_FALSE(tested);
+  EXPECT_FALSE(h.Press('1'));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
+  EXPECT_EQ(h.context.document->text, L"転機");
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"転機");
+  ExpectTenkiSecondCommittedOnce(h);
 }
 
 // The romaji typed for the committed word must not stay in front of the next
@@ -12155,6 +12202,25 @@ TEST(TsfTipPunctuationConversionTest, PreviewingWithoutALiveSurfaceUsesTheCached
   ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_EQ(h.context.document->text, L"天気。");
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "天気");
+}
+
+// DEV-1670: Shift+1 converts from Previewing like 。.
+TEST(TsfTipPunctuationConversionTest, PreviewingShiftOneCommitsTheCachedCandidate) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeTenkiWithCache(h);
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Previewing);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  ASSERT_TRUE(h.Press('1'));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"天気！");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 1u);
   const auto observation = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(observation.has_value());
   EXPECT_EQ(observation->chosen.surface, "天気");

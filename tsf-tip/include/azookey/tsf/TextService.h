@@ -407,6 +407,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   const core::InputState& input_state_for_test() const { return input_state_; }
+  bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
   void set_number_rewriter_enabled_for_test(bool enabled) {

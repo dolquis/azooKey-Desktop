@@ -2829,6 +2829,24 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     };
 
+    // DEV-1735: a key typed while the candidate window is shown commits the
+    // highlight (every segment of a batch) like Enter, then is handled as the
+    // first key of the next composition. A commit left for retry keeps the key.
+    auto commit_selection = [&]() -> HRESULT {
+      const HRESULT commit_hr = CommitSelected(context);
+      if (FAILED(commit_hr)) return commit_hr;
+      *eaten = TRUE;
+      return committing_ ? S_FALSE : S_OK;
+    };
+    auto commit_selection_then_retype = [&]() -> HRESULT {
+      const HRESULT commit_hr = commit_selection();
+      if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
+      // The key was already tracked for typo and undo above.
+      typo_test_key_context_ = context;
+      typo_test_key_ = wParam;
+      return OnKeyDown(context, wParam, lParam, eaten);
+    };
+
     const HRESULT corrected_hr = ApplyPendingCorrectedReading(context);
     if (FAILED(corrected_hr)) return corrected_hr;
     const bool cand_visible = candidate_ui_.IsShowing();
@@ -3076,12 +3094,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
 
     } else if (is_input && wParam >= 'A' && wParam <= 'Z') {
+      if (cand_visible) return commit_selection_then_retype();
       const auto rollback_state = capture_preedit_rollback_state();
-      // Hide candidate window when the user resumes typing.
-      if (cand_visible) {
-        candidate_ui_.EndUI();
-        selected_candidate_idx_ = 0;
-      }
       // Always clear stale candidates when the reading changes, not only when
       // the window is visible — otherwise a Space press before the fresh
       // QueryCandidates response arrives snapshots the old cache.
@@ -3113,12 +3127,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                                       : (!preedit_kana_.empty() || romaji_.HasPending())))) {
       // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
       // preedit に取り込む。composition が無いときは本分岐に入らず、ハイフンはアプリへ
-      // パススルーする。
-      const auto rollback_state = capture_preedit_rollback_state();
+      // パススルーする。候補窓の表示中は選択中の候補を確定し、長音符で次の composition を
+      // 始める（core の Selecting と同じ、DEV-1735）。
       if (cand_visible) {
-        candidate_ui_.EndUI();
-        selected_candidate_idx_ = 0;
+        const HRESULT commit_hr = commit_selection();
+        if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
+        english_raw_romaji_.clear();
+        if (!BatchRomajiEnabled() && EnglishCandidatesEnabled()) english_raw_romaji_.push_back('-');
       }
+      const auto rollback_state = capture_preedit_rollback_state();
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_.clear();
@@ -3143,11 +3160,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     } else if (is_input && custom_input && !composition_symbol &&
                !(wParam >= 'A' && wParam <= 'Z') && wParam != VK_OEM_MINUS &&
                wParam != VK_SUBTRACT) {
+      if (cand_visible) return commit_selection_then_retype();
       const auto rollback_state = capture_preedit_rollback_state();
-      if (cand_visible) {
-        candidate_ui_.EndUI();
-        selected_candidate_idx_ = 0;
-      }
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_.clear();
@@ -3171,11 +3185,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (is_input && composition_symbol &&
                (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
+      if (cand_visible) return commit_selection_then_retype();
       const auto rollback_state = capture_preedit_rollback_state();
-      if (cand_visible) {
-        candidate_ui_.EndUI();
-        selected_candidate_idx_ = 0;
-      }
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_.clear();

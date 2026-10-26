@@ -364,6 +364,12 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 - 確定は `CommitSegmentsObservation`（`docs/romaji-batch-conversion-spec.md` §6.4）で区間ごとに送る。
   区間は、確定した候補の `segments`（ライブ変換の確定は `QueryLiveConversionResponse.segments`）
   から作る。composition が 1 区間のときは `CommitObservation` を使う。
+  - 候補窓の確定: TIP は、選んだ候補の `segments` が 2 区間以上で、次をすべて満たすときに区間ごとに
+    送る。各区間に表層と読みがある。E 区間の読みが生ローマ字（印字可能な ASCII）である。区間の表層を
+    つないだものが候補の表層と一致する。区間の表層と読みは Host の文字列をそのまま使い、offset で
+    候補の表層を切らない。満たさない候補と 1 区間の候補は、候補全体を `CommitObservation` で送る。
+  - Host が `commit_segments` を持たないときは、区間ごとに `CommitObservation` を送る
+    （`docs/romaji-batch-conversion-spec.md` §6.4 と同じ）。
 - E 区間は `ObservedSegment` の `chosen.tag` を `English`、`reading` を区間の生ローマ字とし、Host は
   M60 §6.4 の条件で English チャネルへ振り分ける。J 区間はかな漢字学習へ記録する。
 - 第 1 候補で英字だった区間（§8.1 の (ii) で高確度の区間）を、ユーザーが日本語へ選び直して
@@ -375,6 +381,14 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
     の `shown`）に、既存の中身に加えて、第 1 候補で英字だった区間の候補を入れる。この候補は
     `tag` が `English`、`reading` が区間の生ローマ字で、その区間を表す `segments`（E 区間 1 つ。
     §9.2）を持つ。payload に新しいフィールドは足さない。
+    - 第 1 候補で英字だった区間は、第 1 候補（`segments` が 2 区間以上の候補）の E 区間のうち、選んだ
+      候補が同じ生ローマ字の E 区間として持たないものとする。選んだ候補が `segments` を持たず、その
+      E 区間の表層を表層に含むときは、英字のまま確定したものとして入れない。第 1 候補を選んだときと、
+      1 語の第 1 候補（§8.2。すでに `shown` に入っている）では足さない。
+    - 区間ごとに送るときは、最初の J 区間の `shown` に入れる。この `shown` には、ほかの候補の一覧は
+      入れない（Host が `shown` を使うのは負の観測の判定だけである）。すべての区間が E の候補では、
+      J 区間が無いので入れない。候補全体を `CommitObservation` で送るときは、その `shown`（候補一覧）の
+      末尾に足す。
   - `segments` を持つ候補は M63 の Host だけが作る（§9.2）。M60 の英単語候補は `segments` を
     持たないので、M63 が OFF の composition の確定（M60 の候補窓で英単語を見て日本語を選んだ確定を
     含む）は、負の観測にならない。

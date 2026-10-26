@@ -593,8 +593,10 @@ bool UsableCandidateSegments(const azookey::ipc::CandidateField& candidate) {
 
 // Section 11: the English segments of the first candidate shown that the
 // chosen one does not keep in English, each as the English candidate of one
-// segment that the Host records as turned down. Only a first candidate of
-// several segments: a one-word first candidate is in `shown` as it is.
+// segment that the Host records as turned down. A segment is kept when the
+// chosen candidate has it as an English segment or, without segments, shows
+// its surface. Only a first candidate of several segments: a one-word first
+// candidate is in `shown` as it is.
 std::vector<azookey::ipc::CandidateField> TurnedDownEnglish(
     const std::vector<azookey::tsf::TipCandidate>& shown,
     const azookey::ipc::CandidateField& chosen) {
@@ -611,7 +613,8 @@ std::vector<azookey::ipc::CandidateField> TurnedDownEnglish(
         std::any_of(chosen.segments.begin(), chosen.segments.end(),
                     [&](const azookey::ipc::LiveSegment& other) {
                       return other.tag == kEnglishCandidateTag && other.reading == segment.reading;
-                    });
+                    }) ||
+        (chosen.segments.empty() && chosen.surface.find(segment.surface) != std::string::npos);
     const bool listed = std::any_of(turned_down.begin(), turned_down.end(),
                                     [&](const auto& c) { return c.reading == segment.reading; });
     if (kept || listed) continue;

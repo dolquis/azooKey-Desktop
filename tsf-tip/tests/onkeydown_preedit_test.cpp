@@ -12334,11 +12334,12 @@ std::vector<azookey::ipc::CandidateField> MixedCandidates() {
   return candidates;
 }
 
-void CommitMixedCandidate(TextServiceHarness& h, std::vector<azookey::ipc::CandidateField> shown,
-                          int selected, bool commit_segments) {
+void CommitMixedCandidate(
+    TextServiceHarness& h, std::vector<azookey::ipc::CandidateField> shown, int selected,
+    bool commit_segments,
+    const char* privacy = R"({"privacy":{"mode":"normal","autoSecureInput":false}})") {
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
-  h.service.set_privacy_settings_for_test(
-      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  h.service.set_privacy_settings_for_test(privacy);
   h.service.set_commit_segments_supported_for_test(commit_segments);
   h.service.preedit_kana_ = kMixedKana;
   ASSERT_TRUE(
@@ -12394,6 +12395,39 @@ TEST(TsfTipMixedEnglishTest, CandidateSegmentsFallBackToOneObservationEach) {
   const auto first = h.service.first_queued_commit_observation_for_test();
   ASSERT_TRUE(first.has_value());
   EXPECT_EQ(first->reading, "きょうは");
+  // Each segment is its own observation for the Host's dedupe.
+  EXPECT_FALSE(first->observation_id.empty());
+  EXPECT_NE(first->observation_id, last->observation_id);
+}
+
+// The privacy gates and the sources that carry nothing to learn hold for the
+// per-segment path as for a whole candidate.
+TEST(TsfTipMixedEnglishTest, CandidateSegmentsFollowThePrivacyGatesAndSources) {
+  const auto nothing_queued = [](TextServiceHarness& h) {
+    EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitSegmentsObservation), 0u);
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+  };
+  {
+    SCOPED_TRACE("secure");
+    TextServiceHarness h;
+    CommitMixedCandidate(h, MixedCandidates(), 0, true, R"({"privacy":{"mode":"secure"}})");
+    nothing_queued(h);
+  }
+  {
+    SCOPED_TRACE("learning off (private)");
+    TextServiceHarness h;
+    CommitMixedCandidate(h, MixedCandidates(), 0, true, R"({"privacy":{"mode":"private"}})");
+    nothing_queued(h);
+  }
+  for (const char* source : {"llm", "fallback", "privacy-fallback"}) {
+    SCOPED_TRACE(source);
+    auto candidates = MixedCandidates();
+    candidates[0].source = source;
+    TextServiceHarness h;
+    CommitMixedCandidate(h, std::move(candidates), 0, true);
+    nothing_queued(h);
+  }
 }
 
 // Section 11: the Japanese choice over the first candidate's English segments
@@ -12428,6 +12462,15 @@ TEST(TsfTipMixedEnglishTest, JapaneseChoiceCarriesTheTurnedDownEnglishInShown) {
   const auto plain = ordinary.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(plain.has_value());
   EXPECT_EQ(EnglishReadings(plain->shown), (std::vector<std::string>{"github", "push"}));
+
+  // A candidate without segments that still shows GitHub keeps it in English.
+  auto candidates = MixedCandidates();
+  candidates[3].surface = "今日はGitHubに押した";
+  TextServiceHarness spelled;
+  CommitMixedCandidate(spelled, std::move(candidates), 3, /*commit_segments=*/true);
+  const auto spelled_out = spelled.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(spelled_out.has_value());
+  EXPECT_EQ(EnglishReadings(spelled_out->shown), std::vector<std::string>{"push"});
 }
 
 // Section 9.2: segments whose surfaces do not join to the candidate's, or an

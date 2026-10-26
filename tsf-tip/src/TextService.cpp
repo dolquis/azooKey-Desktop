@@ -6371,7 +6371,9 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     }
     QueryBatchConversionRequest request;
     request.reading = ApplyDefaultCompositionPunctuation(chunk.reading);
-    request.raw_romaji = chunk.raw_romaji;
+    // M63 section 9.4 / DEV-1745: the romaji split the batch above, but a
+    // secure field sends the kana only.
+    if (!secure) request.raw_romaji = chunk.raw_romaji;
     request.mode = mode;
     request.ai_allowed = privacy.ai;
     request.external_ai_allowed = privacy.external;

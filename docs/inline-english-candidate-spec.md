@@ -1021,8 +1021,8 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 |---|---|---|---|
 | `secure` | bool | `true` | 入力欄が secure か。TIP は secure でない入力の要求にだけ false を載せる。true は省略する |
 
-TIP は secure の入力では `english_candidates` を true にせず、secure でない入力の要求に `secure = false`
-を載せる（§4.1）。Host は `secure` が true（省略時と bool 以外の値を含む）の要求に英単語候補を加えない。
+TIP は secure の入力では `english_candidates` を true にせず、`raw_romaji` も載せない（読みの分割には
+生ローマ字を使う）。secure でない入力の要求には `secure = false` を載せる（§4.1）。Host は `secure` が true（省略時と bool 以外の値を含む）の要求に英単語候補を加えない。
 `secure` を送らない旧 TIP と新しい Host の組み合わせでは、一括変換に英単語候補が出ない。
 
 ## 7. 設定スキーマ

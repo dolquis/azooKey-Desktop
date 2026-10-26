@@ -11517,7 +11517,8 @@ TEST(TsfTipEnglishCandidatesTest, SecureInputSendsNoRawRomaji) {
     ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
     EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
     EXPECT_TRUE(h.service.pending_ipc_secure_for_test());
-    // The batch keeps its own romaji (M58), which carries no English request.
+    // The batch keeps its romaji to split the reading (M58); the wire request
+    // drops it (SecureBatchWireCarriesNoRawRomaji).
     if (!batch) EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
   }
 }
@@ -11537,6 +11538,97 @@ TEST(TsfTipEnglishCandidatesTest, BatchFromANormalFieldIsMarkedNotSecure) {
   ASSERT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
   EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
   EXPECT_FALSE(h.service.pending_ipc_secure_for_test());
+}
+
+// The batch takes its own privacy decision: a secure batch after a request
+// from a normal field is still marked secure.
+TEST(TsfTipEnglishCandidatesTest, SecureBatchAfterANormalRequestIsMarkedSecure) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_FALSE(h.service.pending_ipc_secure_for_test());
+  for (int i = 0; i < 3 && !h.service.preedit_kana_.empty(); ++i) h.Press(VK_ESCAPE);
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_secure_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+// DEV-1745 / M63 section 9.4 on the wire: a secure batch is split with its
+// romaji, then sent without it (the Host gets the kana only); a normal batch
+// still sends it and says it is not secure.
+TEST(TsfTipEnglishCandidatesTest, SecureBatchWireCarriesNoRawRomaji) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-batch-secure-test-" + std::to_string(GetCurrentProcessId());
+  std::mutex mutex;
+  std::vector<azookey::ipc::QueryBatchConversionRequest> requests;
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.capabilities = {"oob_cancel", "english_candidates"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request) return std::nullopt;
+        {
+          const std::lock_guard<std::mutex> lock(mutex);
+          requests.push_back(*request);
+        }
+        azookey::ipc::QueryBatchConversionResponse payload;
+        azookey::ipc::CandidateField candidate;
+        candidate.reading = request->reading;
+        candidate.surface = request->reading;
+        candidate.source = "model";
+        payload.full_surface = candidate.surface;
+        payload.segments.push_back({request->reading, {std::move(candidate)}});
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  for (const bool secure : {true, false}) {
+    SCOPED_TRACE(secure ? "secure" : "normal");
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      requests.clear();
+    }
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(
+        secure ? R"({"privacy":{"mode":"secure"}})"
+               : R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.batch_romaji_conversion_for_test(); }));
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+    h.service.stop_ipc_worker_for_test();
+    const std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(requests.size(), 1u);
+    EXPECT_FALSE(requests.front().reading.empty());
+    EXPECT_EQ(requests.front().secure, secure);
+    EXPECT_EQ(requests.front().raw_romaji, secure ? "" : "apple");
+    EXPECT_EQ(requests.front().english_candidates, !secure);
+  }
+  server.Stop();
 }
 
 namespace {

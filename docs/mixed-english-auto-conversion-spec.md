@@ -275,6 +275,8 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 `docs/privacy-and-secure-input-spec.md` §5 である。
 
 - TIP は secure の入力では、どの要求にも `raw_romaji` と `mixed_english` を載せない（本書 §5）。
+  一括変換（`QueryBatchConversionRequest`）も含む。一括変換の TIP は生ローマ字で読みを分割するが、
+  secure の入力では送る要求から `raw_romaji` を除き、かなの `reading` だけを送る。
 - Host の防御:
   - `QueryCandidatesRequest.secure` と `QueryLiveConversionRequest.secure` が true（省略時を含む）の
     要求では、`mixed_english` を無視し、`raw_romaji` を M63 の処理に使わない。`QueryCandidates` では

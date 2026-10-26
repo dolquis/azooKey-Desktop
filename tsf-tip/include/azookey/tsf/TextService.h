@@ -1050,6 +1050,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> retry_stop_{false};
   std::atomic<bool> retry_in_flight_{false};
   std::atomic<bool> retry_finished_{false};
+  // A menu switch wrote liveConversion while a retry was in flight; UI thread only.
+  bool host_config_reload_pending_{false};
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
   IpcStatePublishedHook ipc_state_published_hook_for_test_{nullptr};
@@ -1423,7 +1425,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void UpdateInputModeLangBar();
   void OnInputModeLangBarClick(TfLBIClick click, POINT point, const RECT* area);
   void ShowInputModeLangBarMenu(POINT point, const RECT* area);
-  void RunInputModeMenuCommand(InputModeMenuCommand command);
+  void RunInputModeMenuCommand(InputModeMenuCommand command, const InputModeMenuState& shown);
   void ToggleSettingFromMenu(std::string_view key, bool value);
   HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key, ITfContext* context);
   bool HasInputToCommitBeforeClose() const;

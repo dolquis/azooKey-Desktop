@@ -1868,10 +1868,11 @@ void TextService::ShowInputModeLangBarMenu(POINT point, const RECT* area) {
        command == InputModeMenuCommand::Prediction) &&
       !state.settings_writable)
     return;
-  RunInputModeMenuCommand(command);
+  RunInputModeMenuCommand(command, state);
 }
 
-void TextService::RunInputModeMenuCommand(InputModeMenuCommand command) {
+void TextService::RunInputModeMenuCommand(InputModeMenuCommand command,
+                                          const InputModeMenuState& shown) {
   AZOOKEY_ASSERT_UI_THREAD();
   switch (command) {
     case InputModeMenuCommand::Hiragana:
@@ -1896,11 +1897,13 @@ void TextService::RunInputModeMenuCommand(InputModeMenuCommand command) {
       recent_character_form_commit_.reset();
       if (keyboard_open_) (void)CloseKeyboardCommittingShownText(nullptr, "langbar_menu");
       return;
+    // The opposite of the check the user saw, even if the file changed while
+    // the menu was open.
     case InputModeMenuCommand::LiveConversion:
-      ToggleSettingFromMenu("liveConversion", !local_settings_.LiveConversionSnapshot());
+      ToggleSettingFromMenu("liveConversion", !shown.live_conversion);
       return;
     case InputModeMenuCommand::Prediction:
-      ToggleSettingFromMenu("predictionEnabled", !local_settings_.PredictionEnabledSnapshot());
+      ToggleSettingFromMenu("predictionEnabled", !shown.prediction);
       return;
     case InputModeMenuCommand::OpenSettings: {
       constexpr LANGID langid = 0x0411;  // The profile DllMain registers.
@@ -1936,10 +1939,13 @@ void TextService::ToggleSettingFromMenu(std::string_view key, bool value) {
   // Never the real Host's pipe from a test.
   if (ipc_pipe_name_for_test_.empty()) return;
 #endif
-  // A retry already in flight is not repeated; its UpdateConfig may have read
-  // the file before this write, so say that the Host can lag behind.
-  if (retry_in_flight_.load(std::memory_order_acquire))
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_menu_host_reload_skipped");
+  // The UpdateConfig of a retry in flight may have read the file before this
+  // write; one more goes once it ends (OnCandidatesReady).
+  if (retry_in_flight_.load(std::memory_order_acquire)) {
+    host_config_reload_pending_ = true;
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "langbar_menu_host_reload_deferred");
+    return;
+  }
   RetryModelFromUi();
 }
 
@@ -4828,6 +4834,8 @@ void TextService::StartIpcWorker() {
 void TextService::StopIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
   retry_stop_.store(true, std::memory_order_release);
+  // A stopped retry never finishes, so a deferred reload is not sent either.
+  host_config_reload_pending_ = false;
   retry_control_client_.Disconnect();
   if (retry_thread_.joinable()) retry_thread_.join();
   if (!ipc_thread_.joinable()) return;
@@ -7922,6 +7930,7 @@ void TextService::OnCandidatesReady(void* context) {
   if (service->retry_finished_.exchange(false, std::memory_order_acq_rel)) {
     service->retry_in_flight_.store(false, std::memory_order_release);
     service->candidate_ui_.SetRetryInFlight(false);
+    if (std::exchange(service->host_config_reload_pending_, false)) service->RetryModelFromUi();
   }
   service->RunPendingProofreadReconversion();
   service->PrefetchSelectedReconversion();

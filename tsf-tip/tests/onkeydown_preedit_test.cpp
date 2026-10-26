@@ -3886,6 +3886,8 @@ class HealthProbeHost {
           }
           if (req.type == azookey::ipc::MessageType::UpdateConfig) {
             update_config_requests.fetch_add(1);
+            while (hold_update_config.load())
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
             azookey::ipc::UpdateConfigResponse payload;
             payload.ok = true;
             res.payload_json = azookey::ipc::BuildUpdateConfigResponse(payload);
@@ -3936,6 +3938,8 @@ class HealthProbeHost {
   std::atomic<int> diagnostics_state{0};
   std::atomic<int> diagnostics_queries{0};
   std::atomic<int> update_config_requests{0};
+  // Keeps an UpdateConfig unanswered, as a Host reloading the model does.
+  std::atomic<bool> hold_update_config{false};
   std::atomic<int> handshakes{0};
   std::atomic<int> health_probes{0};
   std::atomic<int> queries{0};
@@ -8996,6 +9000,66 @@ TEST(TsfTipLangBarMenuTest, AChoiceMadeAfterDeactivationDoesNothing) {
   h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
   EXPECT_EQ(menu.opened, 1);
   EXPECT_FALSE(std::filesystem::exists(file.path));
+}
+
+// The UpdateConfig of a model retry in flight may have read settings.json
+// before the switch wrote it, so one more is sent once it ends.
+TEST(TsfTipLangBarMenuTest, LiveConversionDuringARetrySendsUpdateConfigOnceItEnds) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-langbar-reload-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.hold_update_config.store(true);
+  ASSERT_TRUE(host.Start());
+  ScopedSettingsMenuFile file;
+  TextServiceHarness h;
+  h.service.set_settings_path_for_test(file.path);
+  h.service.set_live_conversion_for_test(false);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  h.service.retry_model_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.update_config_requests.load() >= 1; }));
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_EQ(file.Bool("liveConversion"), true);
+  EXPECT_EQ(host.update_config_requests.load(), 1);
+  host.hold_update_config.store(false);
+  EXPECT_TRUE(WaitUntil([&] {
+    h.service.process_candidates_ready_for_test();
+    return host.update_config_requests.load() >= 2;
+  }));
+  // Exactly one more, and the menu works as before once it is answered.
+  for (int i = 0; i < 20; ++i) {
+    h.service.process_candidates_ready_for_test();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(host.update_config_requests.load(), 2);
+  h.service.stop_ipc_worker_for_test();
+}
+
+// The switch flips the value the menu showed, even if the file changed while it was open.
+TEST(TsfTipLangBarMenuTest, SwitchesFlipTheValueTheMenuShowed) {
+  ScopedSettingsMenuFile file;
+  TextServiceHarness h;
+  h.service.set_settings_path_for_test(file.path);
+  h.service.set_live_conversion_for_test(false);
+  h.service.set_prediction_enabled_for_test(true);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion,
+                          [&] { h.service.set_live_conversion_for_test(true); });
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_FALSE(menu.Entry(InputModeMenuCommand::LiveConversion).checked);
+  }
+  EXPECT_EQ(file.Bool("liveConversion"), true);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Prediction,
+                          [&] { h.service.set_prediction_enabled_for_test(false); });
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Prediction).checked);
+  }
+  EXPECT_EQ(file.Bool("predictionEnabled"), false);
 }
 
 TEST(TsfTipLangBarMenuTest, OpenSettingsLaunchesTheSettingsAppForTheProfile) {

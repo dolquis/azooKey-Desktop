@@ -1156,6 +1156,13 @@ struct ZenzaiModelRuntime {
       return {
           GeneratedCandidate{std::string("日本語") + std::string("\xE3\x81", 2), -0.42, 3, true}};
     }
+    if (ToKatakana(kana) == "ジカンギレ") {
+      // Test fixture: the deadline passed before the first beam step, so no beam has a token.
+      ZenzaiDecodeStats decode_stats;
+      decode_stats.deadline_exceeded = true;
+      last_decode_stats = decode_stats;
+      return {};
+    }
     if (ToKatakana(kana) == "ウチキリ") {
       // Test fixture: a beam cut off at the deadline outranks the completed one by raw score.
       ZenzaiDecodeStats decode_stats;
@@ -1691,6 +1698,7 @@ std::vector<int32_t> ZenzaiModelConverter::TokenizePromptForValidation(
 std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& kana,
                                                            const core::ConversionContext& context) {
   last_error_.reset();
+  deadline_fallback_ = false;
   if (IsCanceled(context)) {
     return {};
   }
@@ -1743,6 +1751,18 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   DedupBySurface(candidates);
   if (IsCanceled(context)) {
     return {};
+  }
+  if (candidates.empty() && !skipped_reason && runtime_->last_decode_stats &&
+      runtime_->last_decode_stats->deadline_exceeded) {
+    // Spec 8.2: the deadline came before the first beam step, so there is no best-so-far beam
+    // to return. The fallback answers instead, and the cut-off stays an ordinary result.
+    deadline_fallback_ = true;
+    if (!fallback_) return {};
+    auto fallback = fallback_->Convert(kana, context);
+    for (auto& candidate : fallback) {
+      AppendDebugTag(candidate.debug_info, "zenzai-deadline-fallback");
+    }
+    return fallback;
   }
   if (candidates.empty()) {
     return DegradeToFallback(kana, context, skipped_reason.value_or("empty-generation"));

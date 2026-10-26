@@ -156,6 +156,9 @@ class ZenzaiModelConverter final : public core::IConverter {
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
   std::optional<ZenzaiDecodeStats> last_decode_stats() const;
+  // True when the last Convert hit its deadline before any beam had a token and answered with
+  // the fallback converter. That is a cut-off, not a degradation, so last_error stays unset.
+  bool last_fell_back_at_deadline() const { return deadline_fallback_; }
   // Threads the loaded context decodes with; nullopt without a runtime.
   std::optional<int32_t> thread_count() const;
   // Applies a new thread count to the loaded context from the next decode. The caller
@@ -196,6 +199,7 @@ class ZenzaiModelConverter final : public core::IConverter {
   std::unique_ptr<ZenzaiModelRuntime> runtime_;
   core::IConverter* fallback_;
   std::optional<std::string> last_error_;
+  bool deadline_fallback_{false};
   NllCircuit nll_circuit_;
 };
 

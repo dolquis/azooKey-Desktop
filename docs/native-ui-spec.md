@@ -185,6 +185,9 @@ context->DrawTextLayout(origin, layout.Get(), brush.Get(),
 
 ## 4. 適用範囲
 
+タスクバーの入力インジケーターに出す入力モードのアイコンは本書 §1 の判定を使わず、
+`docs/tsf-deep-integration-spec.md` §4.5 の規則（`SystemUsesLightTheme`）に従う。
+
 ### 4.1 CandidateWindow.cpp
 
 `RenderingEngine`（`SurfaceAlpha::Opaque`）で描き、色は §1.3 の `ThemeColors` を使う。

@@ -198,6 +198,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     bool valid = false;
     if (key == "inputMode") {
       valid = IsStringEnum(value, {"hiragana", "alnum_half", "alnum_full"});
+    } else if (key == "convertKeysAction") {
+      valid = IsStringEnum(value, {"default", "imeOnOff"});
     } else if (key == "liveConversion" || key == "dynamicPunctuation" ||
                key == "llmMagicConversion" || key == "predictionEnabled" ||
                key == "includeContextInAITransform" || key == "contextReselection" ||

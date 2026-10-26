@@ -18,6 +18,7 @@ add_library(azookey_tsf_tip SHARED
   src/ForegroundAppDetector.cpp
   src/IpcConnectionState.cpp
   src/IpcReconnectBackoff.cpp
+  src/LangBarInputModeItem.cpp
   src/LeftContextReader.cpp
   src/ReconversionFunction.cpp
   src/exports.def
@@ -77,6 +78,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
     src/IpcReconnectBackoff.cpp
+    src/LangBarInputModeItem.cpp
     src/LeftContextReader.cpp
     src/ReconversionFunction.cpp
     src/SettingsLauncher.cpp
@@ -183,6 +185,8 @@ if(AZOOKEY_BUILD_TESTS)
   # The keymap is the pure core map; this target only adds <windows.h> to check
   # the core VK constants against VK_* and needs no TIP objects.
   add_executable(tsf_tip_keymap_tests tests/keymap_test.cpp)
+  # The TIP's open/close key classification (OpenCloseKey.h) is header-only.
+  target_include_directories(tsf_tip_keymap_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_definitions(tsf_tip_keymap_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
   target_link_libraries(tsf_tip_keymap_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
@@ -210,6 +214,7 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_prediction_window_tests tests/prediction_window_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_theme_colors_tests tests/theme_colors_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_langbar_input_mode_tests tests/langbar_input_mode_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_space_candidate_window_tests tests/space_candidate_window_test.cpp
     TIMEOUT 60)

@@ -2834,6 +2834,166 @@ TEST(TsfTipOnKeyDownPreeditTest, NonConvertWithoutSelectionPassesThrough) {
   EXPECT_FALSE(h.Press(VK_NONCONVERT));
 }
 
+// The keyboard open/close compartment alone, for harnesses that never activate.
+class OpenCloseCompartment final : public ITfCompartment {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartment) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartment*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP SetValue(TfClientId, const VARIANT* value) override {
+    if (!value || value->vt != VT_I4) return E_INVALIDARG;
+    open = value->lVal != 0;
+    return S_OK;
+  }
+  STDMETHODIMP GetValue(VARIANT* value) override {
+    if (!value) return E_INVALIDARG;
+    VariantInit(value);
+    value->vt = VT_I4;
+    value->lVal = open ? 1 : 0;
+    return S_OK;
+  }
+  bool open{true};
+};
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheReadingBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(compartment.open);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  // Typing goes to the app now.
+  EXPECT_FALSE(h.Press('K'));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheShownCandidateBeforeClosing) {
+  OemCompositionTranslationGuard oem_translation;
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const std::wstring shown = h.context.document->text;
+  ASSERT_FALSE(shown.empty());
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, shown);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheLiveConversionSurfaceBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyStaysOnWhenTheCommitIsRefused) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  // The host refuses the commit edit session: the text stays queued for retry
+  // and is not committed as its reading by the close.
+  h.context.skip_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  h.context.skip_write_callback = false;
+  // The next press retries the commit first and the one after closes.
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, RefusedImeOffCommitKeepsTheLiveSurfaceNotItsReading) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.context.skip_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  h.context.skip_write_callback = false;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ConvertKeysDoNotOpenOrCloseByDefault) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  TextServiceHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  EXPECT_FALSE(h.TestPress(VK_NONCONVERT));
+  EXPECT_FALSE(h.Press(VK_NONCONVERT));
+  EXPECT_TRUE(h.service.keyboard_open());
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  ASSERT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(h.TestPress(VK_CONVERT));
+  EXPECT_FALSE(h.Press(VK_CONVERT));
+  EXPECT_FALSE(h.service.keyboard_open());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NonConvertUnderImeOnOffClosesInsteadOfCycling) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_convert_keys_action_for_test(azookey::tsf::ConvertKeysAction::ImeOnOff);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_NONCONVERT));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_TRUE(h.Press(VK_CONVERT));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
 
@@ -7638,6 +7798,33 @@ TEST(TsfTipSecureInputTest, BundledSecureAppSuppressesCommitObservation) {
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
 
+// DEV-1736: an off key commits the selected candidate through Enter's path, so
+// it is learned like Enter outside a secure app and suppressed inside one.
+TEST(TsfTipSecureInputTest, ImeOffKeyCommitIsObservedOnlyOutsideSecureApps) {
+  for (const bool secure : {false, true}) {
+    SCOPED_TRACE(secure);
+    OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+    TextServiceHarness h;
+    h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+    h.service.set_foreground_app_for_test(
+        secure ? azookey::core::ForegroundApp{"KeePass.exe", "WindowsForms10.Window.8.app.0", true}
+               : azookey::core::ForegroundApp{"notepad.exe", "Notepad", true});
+    h.service.preedit_kana_ = "かな";
+    std::vector<azookey::ipc::CandidateField> host_candidates(1);
+    host_candidates[0].reading = "かな";
+    host_candidates[0].surface = "仮名";
+    host_candidates[0].source = "dictionary";
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(std::move(host_candidates)); }));
+    h.service.set_selected_candidate_index_for_test(0);
+    FakeCompositionAttachment attachment(h);
+    EXPECT_TRUE(h.Press(VK_IME_OFF));
+    EXPECT_FALSE(h.service.keyboard_open());
+    EXPECT_EQ(attachment.composition_range.last_text, L"仮名");
+    EXPECT_EQ(h.service.last_queued_commit_observation_for_test().has_value(), !secure);
+  }
+}
+
 TEST(TsfTipSecureInputTest, UserAddedSecureAppSuppressesCommitObservation) {
   TextServiceHarness h;
   azookey::core::BracketSettings settings;
@@ -8430,6 +8617,70 @@ TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
+// DEV-1737: a left click on the input indicator closes like VK_IME_OFF, from
+// outside any key event, on the context the input lives in.
+namespace {
+void ShowLiveKa(DocumentPreeditHarness& h) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+}
+}  // namespace
+
+TEST(TsfTipLangBarClickTest, LeftClickCommitsTheShownSurfaceBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  // A right click never commits or closes.
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_TRUE(h.service.keyboard_open());
+}
+
+TEST(TsfTipLangBarClickTest, LeftClickStaysOnWhenTheCommitIsRefused) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.context.skip_write_callback = true;
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// An Enter the state does not take (here the app disabled the keyboard of the
+// context the input lives in) must not keep the IME from turning off.
+TEST(TsfTipLangBarClickTest, LeftClickClosesWhenEnterDoesNotTakeTheInput) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  ChromiumCompartmentMgr compartments;
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  compartments.keyboard_disabled.value = 1;
+  h.context.compartment_mgr = &compartments;
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"か");
+  h.context.compartment_mgr = nullptr;
 }
 
 // DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS
@@ -10734,6 +10985,35 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   ASSERT_FALSE(text.empty());
   EXPECT_EQ(text.front(), L'蚊');
   EXPECT_EQ(text.find(L'蚊', 1), std::wstring::npos);
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            1);
+}
+
+// DEV-1736: an off key commits the surface shown now, as Enter does, but never
+// holds for the final request: the IME is off once the key returns.
+TEST(TsfTipDynamicPunctuationTest, ImeOffKeyCommitsTheShownSurfaceWithoutHolding) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  StartLive(h, DynamicPunctuation());
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  // The commit is observed once, as the same Enter would be.
   const auto queued = h.service.queued_ipc_types_for_test();
   EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
             1);

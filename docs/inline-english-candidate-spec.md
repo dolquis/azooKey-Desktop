@@ -149,8 +149,7 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
 - Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
   読みが 1 chunk、`secure` が false（§6.7）、の全部を満たすときだけ、その文節の候補を
-  `max_candidates` で切り詰めた後に英単語候補を §4.3 の規則で加える。`secure` の条件は、TIP が
-  `secure = false` を送る M63-A の TIP の変更と同じ変更で Host に入る（§6.7）。
+  `max_candidates` で切り詰めた後に英単語候補を §4.3 の規則で加える。
 - かなの候補が 1 件も無いときは加えない（英単語が第 1 候補になるため）。`ai-cleanup` は、
   `neural` へ fallback した場合も対象外とする。
 - capabilities に `english_candidates` を持っていても、一括変換に英単語候補を配線していない
@@ -1022,11 +1021,9 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 |---|---|---|---|
 | `secure` | bool | `true` | 入力欄が secure か。TIP は secure でない入力の要求にだけ false を載せる。true は省略する |
 
-TIP は secure の入力では `english_candidates` を true にしない（§4.1）。Host が `secure` が true（省略時と
-bool 以外の値を含む）の要求に英単語候補を加えない規則は、TIP が `secure = false` を送る M63-A の
-TIP の変更と同じ変更で入る。両方を同時に入れるのは、TIP が `secure` を送る前に Host だけが判定すると、
-secure でない入力でも一括変換の英単語候補が出なくなるためである。この規則を持つ Host と、`secure` を
-送らない旧 TIP の組み合わせでは、一括変換に英単語候補が出ない。
+TIP は secure の入力では `english_candidates` を true にせず、secure でない入力の要求に `secure = false`
+を載せる（§4.1）。Host は `secure` が true（省略時と bool 以外の値を含む）の要求に英単語候補を加えない。
+`secure` を送らない旧 TIP と新しい Host の組み合わせでは、一括変換に英単語候補が出ない。
 
 ## 7. 設定スキーマ
 

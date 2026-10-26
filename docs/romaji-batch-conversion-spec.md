@@ -206,8 +206,7 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 - `secure` は入力欄が secure かを表す任意フィールドで、欠落と bool 以外の値は true（secure）とする。
-  TIP は secure でない入力の要求にだけ false を載せる。Host が true の要求に英単語候補を加えない
-  規則は、TIP が false を送る M63-A の TIP の変更と同じ変更で入る。
+  TIP は secure でない入力の要求にだけ false を載せる。Host は true の要求に英単語候補を加えない。
   経緯と旧 TIP との組み合わせの扱いは `docs/mixed-english-auto-conversion-spec.md` §9.1・§9.4 が持つ。
 
 ### 6.2 Response

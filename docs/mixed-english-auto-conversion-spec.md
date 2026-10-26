@@ -278,11 +278,9 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 - Host の防御:
   - `QueryCandidatesRequest.secure` と `QueryLiveConversionRequest.secure` が true（省略時を含む）の
     要求では、`mixed_english` を無視し、`raw_romaji` を M63 の処理に使わない。`QueryCandidates` では
-    M60 の英単語候補も作らない（`docs/inline-english-candidate-spec.md` §4.1）。M63 の処理と
-    `QueryLiveConversionRequest.secure` の判定は、M63-A の Host の変更で入る。
+    M60 の英単語候補も作らない（`docs/inline-english-candidate-spec.md` §4.1）。
   - `QueryBatchConversionRequest.secure` が true（省略時を含む）の要求では、M60 の英単語候補を
-    作らない（同 §4.1.1）。この判定は、TIP が `secure = false` を送る M63-A の TIP の変更と同じ変更で
-    入る（同 §6.7）。
+    作らない（同 §4.1.1・§6.7）。
   - `mixed_english` が false の要求では、`raw_romaji` を M63 の処理に使わない。M60 §4 の用途は
     変えない。
   - Host は、M63 の処理で受け取った生ローマ字を、その要求の処理のほかの経路（キャッシュの鍵、
@@ -370,8 +368,8 @@ M60 §4.1.1 のとおり 1 文節の場合に限る。
 
 ## 14. 設定
 
-M63 の実装 PR が `settings/mvp-settings.schema.json` に次のキーを加える（`additionalProperties:false`
-を維持する）。schema の正典は `settings/mvp-settings.schema.json` である。
+`settings/mvp-settings.schema.json` は次のキーを持つ（`additionalProperties:false` を維持する）。
+schema の正典は `settings/mvp-settings.schema.json` である。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|

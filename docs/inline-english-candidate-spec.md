@@ -148,8 +148,9 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
   入力が secure でない（§4.1）、の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
 - Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
-  読みが 1 chunk、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
-  英単語候補を §4.3 の規則で加える。
+  読みが 1 chunk、`secure` が false（§6.7）、の全部を満たすときだけ、その文節の候補を
+  `max_candidates` で切り詰めた後に英単語候補を §4.3 の規則で加える。`secure` の条件は、TIP が
+  `secure = false` を送る M63-A の TIP の変更と同じ変更で Host に入る（§6.7）。
 - かなの候補が 1 件も無いときは加えない（英単語が第 1 候補になるため）。`ai-cleanup` は、
   `neural` へ fallback した場合も対象外とする。
 - capabilities に `english_candidates` を持っていても、一括変換に英単語候補を配線していない
@@ -1014,8 +1015,18 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 `reading = 生ローマ字`）で加わる。応答の形は変えない。旧 Host はこのフィールドを無視し、
 旧 TIP は送らないので、どちらの組み合わせでも挙動は変わらない。
 
-`QueryBatchConversionRequest` は `secure` を持たない。一括変換の英単語候補を secure の入力から
-守るのは、TIP が secure の入力で `english_candidates` を true にしないことだけである（§4.1）。
+一括変換の英単語候補を secure の入力から守るため、`QueryBatchConversionRequest` は M63 で省略可能な
+`secure` を持つ（`docs/mixed-english-auto-conversion-spec.md` §9.1・§9.4）。
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `secure` | bool | `true` | 入力欄が secure か。TIP は secure でない入力の要求にだけ false を載せる。true は省略する |
+
+TIP は secure の入力では `english_candidates` を true にしない（§4.1）。Host が `secure` が true（省略時と
+bool 以外の値を含む）の要求に英単語候補を加えない規則は、TIP が `secure = false` を送る M63-A の
+TIP の変更と同じ変更で入る。両方を同時に入れるのは、TIP が `secure` を送る前に Host だけが判定すると、
+secure でない入力でも一括変換の英単語候補が出なくなるためである。この規則を持つ Host と、`secure` を
+送らない旧 TIP の組み合わせでは、一括変換に英単語候補が出ない。
 
 ## 7. 設定スキーマ
 
@@ -1103,7 +1114,8 @@ Host は `inlineEnglishCandidates` を要求の `english_candidates` から受�
   語が frequency 1 で辞書に入り、reject・既存の語・英字以外・短い語・辞書無効では入らないこと（§4.8）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。`QueryBatchConversion` の
-  `english_candidates` の往復と欠落時の既定（§6.6）。
+  `english_candidates` の往復と欠落時の既定（§6.6）。`QueryBatchConversion` の `secure` が欠落・型違いで
+  secure になり、false のときだけ wire に出ること（§6.7）。
 - **一括変換の Host** (`inference-host/tests/dispatcher_test.cpp`): 1 文節の `neural` 要求で、
   `max_candidates` で切り詰めた後に英単語候補が加わること。フラグなし、2 文節以上、
   `ai-cleanup` では加わらないこと（§4.1.1）。

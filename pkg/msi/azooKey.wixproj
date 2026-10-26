@@ -86,6 +86,7 @@
     <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
     <Error Condition="!Exists('$(RewriterDataDir)\symbol.tsv')" Text="Symbol data not found" />
     <Error Condition="!Exists('$(RewriterDataDir)\emoji.tsv')" Text="Emoji data not found" />
+    <Error Condition="!Exists('$(RewriterDataDir)\english-words.tsv')" Text="English word dictionary not found" />
     <Error Condition="!Exists('$(BundledDictionaryDir)\dict\sudachi_lexicon.azdic')" Text="Bundled dictionary not found: $(BundledDictionaryDir)\dict\sudachi_lexicon.azdic. Run dictbuild/build_bundled.py." />
     <Error Condition="!Exists('$(BundledDictionaryDir)\ThirdPartyNotices.txt')" Text="Bundled dictionary notices not found: $(BundledDictionaryDir)\ThirdPartyNotices.txt" />
   </Target>

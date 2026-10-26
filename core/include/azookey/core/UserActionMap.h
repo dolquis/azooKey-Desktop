@@ -13,7 +13,9 @@ namespace azookey::core {
 namespace vk {
 inline constexpr uint32_t kBack = 0x08;
 inline constexpr uint32_t kReturn = 0x0D;
+inline constexpr uint32_t kImeOn = 0x16;
 inline constexpr uint32_t kKanji = 0x19;
+inline constexpr uint32_t kImeOff = 0x1A;
 inline constexpr uint32_t kEscape = 0x1B;
 inline constexpr uint32_t kConvert = 0x1C;
 inline constexpr uint32_t kNonConvert = 0x1D;

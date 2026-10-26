@@ -525,8 +525,10 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 | `VK_KANJI` (0x19) | 半角/全角 | IME On/Off トグル |
 | `VK_OEM_AUTO` (0xF3) | 同上（一部 HW） | 同上 |
 | `VK_OEM_ENLW` (0xF4) | 同上（一部 HW） | 同上 |
-| `VK_NONCONVERT` (0x1D) | 無変換 | 確定済み or 選択を平仮名/カタカナ/英字 と巡回変換 |
-| `VK_CONVERT` (0x1C) | 変換 | 確定済み or 選択を再変換 (M20 と同経路) |
+| `VK_IME_ON` (0x16) | IME オン | IME On（トグルしない） |
+| `VK_IME_OFF` (0x1A) | IME オフ | IME Off（トグルしない） |
+| `VK_NONCONVERT` (0x1D) | 無変換 | 確定済み or 選択を平仮名/カタカナ/英字 と巡回変換。`convertKeysAction` が `imeOnOff` なら IME Off |
+| `VK_CONVERT` (0x1C) | 変換 | 確定済み or 選択を再変換 (M20 と同経路)。`convertKeysAction` が `imeOnOff` なら IME On |
 | `VK_OEM_ATTN` / `VK_DBE_ALPHANUMERIC` (0xF0) | Caps / 英数 | alphanumeric モードトグル |
 | `VK_DBE_HIRAGANA` (0xF2) | ひらがな | input mode = hiragana |
 | `VK_DBE_KATAKANA` (0xF1) | カタカナ | input mode = katakana |
@@ -534,6 +536,30 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 `VK_OEM_ATTN` と `VK_DBE_ALPHANUMERIC` は同じ VK 値の別名なので、
 VK だけから区別しない。`VK_DBE_HIRAGANA` / `VK_DBE_KATAKANA` の
 入力モード直接指定は、DEV-1205 の半角/全角・無変換・変換・Caps の4キーとは別の拡張である。
+
+開閉キー（半角/全角、`VK_IME_ON`、`VK_IME_OFF`、`imeOnOff` のときの変換・無変換）は、
+修飾キー（Shift、Ctrl、Alt、Win）が押されていないときだけ働く。IME Off と英数モードでも
+TIP がキーを受け取り、アプリへは渡さない。アプリがキーボード入力を無効にした context
+（§4.3）では他のキーと同じく素通しする。`VK_IME_ON` と `VK_IME_OFF` は Microsoft IME と同じ
+キーで、AutoHotKey（`Send {vk16}` / `Send {vk1A}`）や PowerToys Keyboard Manager から送れる。
+Alt の単独押しを TIP が検出することはしない。
+
+- `VK_IME_ON`: Off なら On にする。On なら compartment を書き換えない。英数モード中なら英数モードを
+  解除し、ひらがな入力に戻す。
+- `VK_IME_OFF`: On なら Off にする。Off なら何もしない。入力途中（読み、ライブ変換の表示、候補の選択中）
+  なら、表示中の文字列を Enter と同じに確定してから Off にする（§4.2）。
+
+### 3.1.1 変換・無変換キーの役割（`convertKeysAction`）
+
+設定 `convertKeysAction`（enum `default` / `imeOnOff`、既定 `default`、DEV-1736）は変換キーと無変換キーの
+役割を決める。
+
+- `default`: §3.2 の巡回と §3.3 の再変換。
+- `imeOnOff`: 変換キーは `VK_IME_ON`、無変換キーは `VK_IME_OFF` と同じに働く。再変換と字種の巡回には使わない。
+  英字キーボードで Google 日本語入力と同じ「Alt → 変換/無変換」の割り当てを使うための設定である。
+
+TIP は `settings.json` の変更を読み直して反映する。キーが無い、または `default` / `imeOnOff` 以外の値は
+`default` とする。Host はこの設定を読まない。
 
 ### 3.2 無変換キーの巡回
 
@@ -651,8 +677,8 @@ Microsoft IME と旧 macOS 版に揃う。`ActivateEx` は sink を購読する�
 フォーカスを受けた `ITfDocumentMgr`（有効化時に既にフォーカスを持つものを含む）にも、
 有効化時と同じ規則で On を適用する。この初回フォーカスから 1 秒以内に同じ document manager の
 compartment が 0 へ変わったときは、入力コンテキストの復元とみなして 1 度だけ On に戻す。
-TIP が処理した開閉キー（半角/全角、英数、ひらがな）でユーザーが開閉したら、その document manager では
-戻さない。言語バーやアプリの `ImmSetOpenStatus` など TIP を経由しない Off は区別できないため、
+TIP が処理した開閉キー（半角/全角、`VK_IME_ON`、`VK_IME_OFF`、`imeOnOff` のときの変換・無変換、英数、ひらがな）と
+入力インジケーターの左クリック（§4.5）でユーザーが開閉したら、その document manager では戻さない。言語バーやアプリの `ImmSetOpenStatus` など TIP を経由しない Off は区別できないため、
 この 1 秒以内に届いたものは 1 度だけ On に戻る。
 一度フォーカスを受けた document manager へ戻ったときは TIP は書き込まず、compartment の値に従う。
 入力先ごとの開閉の復元は IMM32 互換層が行い、TIP は入力先ごとの開閉を記録しない。
@@ -661,7 +687,11 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 開閉の経緯は `AZOOKEY_LOG` の info ログで追える。`keyboard_open_initial`（On にする判定、
 `source` は `activate` / `first_focus` / `reopen_after_restore`）、`keyboard_open_focus_first` と
 `keyboard_open_focus`（フォーカス受信）、`keyboard_open_refresh`（値の反映、`source` は
-`activate` / `compartment_change` / `toggle_key`）を出す。これらの行は compartment の値、
+`activate` / `compartment_change` / `toggle_key`（半角/全角）/ `ime_on_key` / `ime_off_key` /
+`convert_key` / `nonconvert_key`（`imeOnOff` のときの変換・無変換）/ `langbar_click`）を出す。
+開閉キーで状態が変わらなかったとき（On での `VK_IME_ON` など）も、その `source` の `keyboard_open_refresh` を 1 行出す。
+TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` の `compartment_change` の行が先に値の変化を記録し、
+その直後にキーやクリックの `source` の行が続く。どの操作で開閉したかは、後者の行で追う。これらの行は compartment の値、
 反映前後の開閉、英数モード、フォーカスウィンドウの HIMC の開閉（`imm_open`）、
 `GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` の値、スレッド ID を持つ。
 `key_passthrough` は Off または英数モードでキーを素通ししたことを、開閉と英数モードの組が
@@ -673,6 +703,19 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 |---|---|---|
 | Off | On | composition / candidate なし、入力モードを `hiragana` に初期化 |
 | On | Off | composition があれば確定 (auto-commit) し、内部状態をクリア |
+| On（英数モード） | On | `VK_IME_ON` と `imeOnOff` の変換キーだけ。英数モードを解除して `hiragana` にする。compartment は書き換えない |
+
+On → Off で何を確定するかは、Off にした操作で決まる。
+
+- `VK_IME_OFF`、`imeOnOff` の無変換、入力インジケーターの左クリック（§4.5）: 画面に表示中の文字列
+  （ライブ変換の表示、選択中の候補、読み）を Enter と同じ経路で確定してから compartment を 0 にする。
+  Enter と同じく確定を学習観測に送り、secure と学習不可の文脈では送らない。`dynamicPunctuation` の
+  onPause で Enter が行う最終要求の待ち（`docs/dynamic-punctuation-spec.md` §7.3）はせず、表示中の文字列を
+  その場で確定する。確定の edit session が拒否されたとき、または Enter が確定せずに待つとき（一括変換の応答待ち）は
+  Off にせず On のまま残し、キーは消費する。拒否された確定は次のキーで確定し直す。Enter がキーを受け取らない状態
+  （Enter に割り当てのない入力の途中）では、次の項目と同じ経路で確定して Off にする。
+- 半角/全角、言語バーや IMM など TIP の外からの Off: フォーカス喪失と同じ確定の経路で、読み（未確定ローマ字を含む）を
+  確定する。TSF が編集を拒んだときは composition を残し、後の edit session で確定し直す。
 
 ### 4.3 Win+Space / アプリ切替時
 
@@ -708,8 +751,54 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 - 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
 - 開いたことのある入力先へ戻ったとき、TIP は開閉を書き込まない（IMM32 互換層が入力先ごとの状態を戻すアプリでは、Off にした入力先は Off のまま）
 - 半角/全角キーで IME On/Off が切り替わり、Status を反映
+- `VK_IME_ON` で Off から On になり、On のままなら変わらない。英数モード中の `VK_IME_ON` はひらがなに戻る
+- `VK_IME_OFF` で On から Off になり、Off のままなら変わらない。読み入力中・候補表示中は表示中の文字列を確定してから Off になる
+- 初回フォーカスから 1 秒以内でも、開閉キーと入力インジケーターのクリックによる Off は On に戻らない
+- `convertKeysAction` が `default` のとき変換・無変換は §3.2・§3.3 のとおり。`imeOnOff` のとき変換で On、無変換で Off になり、再変換と巡回は起きない
+- 入力インジケーターが On・英数モード・Off を「あ」「_A」「A」で表示し、左クリックで On/Off が切り替わる（§4.5）
 - Win+Space で別言語に切替時、composition が確定される
 - アプリ切替時に composition が確定される
+
+### 4.5 入力インジケーター（言語バー項目 `GUID_LBI_INPUTMODE`）
+
+TIP は有効化のときに言語バー項目（`ITfLangBarItemButton`）を 1 つ追加し、無効化で削除する。
+Windows 8 以降のタスクバーの入力インジケーターは、`TF_LANGBARITEMINFO.guidItem` が `GUID_LBI_INPUTMODE`
+の項目だけを IME のモードアイコンとして表示する（Microsoft Learn「Custom Input Method Editor (IME)
+requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言語バーを使用する」を有効にすると、
+同じ項目が浮動言語バーにも出る。別のツールバーやトレイ常駐アプリは作らない。
+
+- 項目: `clsidService` は TIP の CLSID、`guidItem` は `GUID_LBI_INPUTMODE`、スタイルは
+  `TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY`。本体は `tsf-tip/src/LangBarInputModeItem.cpp`。
+- 追加: `ActivateEx` で compartment を購読した後、thread manager の `ITfLangBarItemMgr::AddItem` に渡す。
+  `ITfLangBarItemMgr` を持たないホストと `AddItem` の失敗では項目を出さず、有効化は失敗させない
+  （失敗は `langbar_item_add_failed` を警告ログに出す）。
+- 削除: `Deactivate` で `RemoveItem` を呼び、TIP の参照を解放する。言語バーが項目を持ち続けても、
+  無効化後のクリックは何もしない。
+- TIP 登録（HKLM のカテゴリ）は変えない。`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` を登録した TIP は、
+  `GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT` なしでもトレイの表示対象になる。`GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT`
+  は登録しないので、OS が conversion mode から別のモード表示を出すことはない。
+
+表示の規則:
+
+| 状態 | アイコンと `GetText` | ツールチップ |
+|---|---|---|
+| On、ひらがな入力 | あ | `azooKey: ひらがな` |
+| On、英数モード | _A（A に下線） | `azooKey: 半角英数` |
+| Off | A | `azooKey: 直接入力` |
+
+英数モードは IME On のままキーを素通しする状態なので、Off と見分けられるよう下線を付ける。
+
+- アイコンはリソースを持たず、`GetIcon` のたびに GDI で文字を描いて作る。大きさは 96 DPI で 16x16 とし、
+  システムの DPI に合わせて拡大する。背景は透明で、文字の色はタスクバーのテーマに合わせる。
+  HKCU `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` の `SystemUsesLightTheme` が
+  0 以外なら黒、0・値が無い・読めないときは白（ダークのタスクバー）とする。
+- 更新の契機: OPENCLOSE compartment の変化、英数モードの切り替え、開閉キー、フォーカスの移動。表示が変わったときだけ
+  `ITfLangBarItemSink::OnUpdate(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP)` で通知する。
+- 左クリック（`TF_LBI_CLK_LEFT`）: 半角/全角と同じく On/Off を切り替える。ユーザーの開閉として扱い、§4.1 の
+  1 秒以内の On への戻しの対象にしない（`source` は `langbar_click`）。Off にするときは `VK_IME_OFF` と同じく表示中の文字列を確定する（§4.2）。
+- 右クリック（`TF_LBI_CLK_RIGHT`）: 項目は TIP へ渡し、TIP は何もしない。右クリックのメニューは DEV-1738 がここに足す。
+
+アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動は実機で確かめる（Human Gate）。
 
 ## 5. 複合 DisplayAttribute (M23)
 
@@ -1002,7 +1091,9 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 |---|---|---|
 | ReconversionFunction | `tsf-tip/tests/reconversion_function_test.cpp` | Windows 限定。QueryRange / GetReconversion / Reconvert |
 | Configure 起動 | `tsf-tip/tests/configure_test.cpp` | Windows 限定。Show が EXE を起動するか |
-| KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
+| KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動。開閉キーの分類（§3.1、§3.1.1） |
+| 開閉キーと入力インジケーター（§3.1、§4.1、§4.5） | `tsf-tip/tests/activate_uiless_test.cpp` | Windows 限定。`VK_IME_ON` / `VK_IME_OFF` と `imeOnOff` の変換・無変換、初回フォーカス直後の Off、言語バー項目の追加・削除・通知・クリック |
+| 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |

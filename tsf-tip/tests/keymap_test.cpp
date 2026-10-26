@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "azookey/core/UserActionMap.h"
+#include "azookey/tsf/OpenCloseKey.h"
 
 namespace {
 
@@ -123,6 +124,8 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kBack, static_cast<uint32_t>(VK_BACK));
   EXPECT_EQ(vk::kReturn, static_cast<uint32_t>(VK_RETURN));
   EXPECT_EQ(vk::kKanji, static_cast<uint32_t>(VK_KANJI));
+  EXPECT_EQ(vk::kImeOn, static_cast<uint32_t>(VK_IME_ON));
+  EXPECT_EQ(vk::kImeOff, static_cast<uint32_t>(VK_IME_OFF));
   EXPECT_EQ(vk::kOemAuto, static_cast<uint32_t>(VK_OEM_AUTO));
   EXPECT_EQ(vk::kOemEnlw, static_cast<uint32_t>(VK_OEM_ENLW));
   EXPECT_EQ(vk::kEscape, static_cast<uint32_t>(VK_ESCAPE));
@@ -201,10 +204,54 @@ TEST(KeymapTest, AltAndWinChordsAlwaysPassThrough) {
 }
 
 TEST(KeymapTest, UnlistedKeysPassThroughInEveryState) {
+  // VK_IME_ON / VK_IME_OFF are decided by the TIP before the core map (OpenCloseKey.h).
   for (const uint32_t key : {static_cast<uint32_t>(VK_TAB), static_cast<uint32_t>(VK_F1),
-                             static_cast<uint32_t>(VK_PRIOR), static_cast<uint32_t>(VK_OEM_4)}) {
+                             static_cast<uint32_t>(VK_PRIOR), static_cast<uint32_t>(VK_OEM_4),
+                             static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF)}) {
     for (const K kind : kAllKinds) {
       EXPECT_FALSE(MapUserAction(key, 0, kind).has_value()) << key;
+    }
+  }
+}
+
+using azookey::tsf::ClassifyOpenCloseKey;
+using azookey::tsf::ConvertKeysAction;
+using azookey::tsf::OpenCloseKeyAction;
+
+TEST(OpenCloseKeyTest, ImeOnAndOffKeysAreFixedOnAndOffWithEitherSetting) {
+  for (const auto setting : {ConvertKeysAction::Default, ConvertKeysAction::ImeOnOff}) {
+    EXPECT_EQ(ClassifyOpenCloseKey(VK_IME_ON, 0, setting), OpenCloseKeyAction::Open);
+    EXPECT_EQ(ClassifyOpenCloseKey(VK_IME_OFF, 0, setting), OpenCloseKeyAction::Close);
+    for (const uint32_t key : {static_cast<uint32_t>(VK_KANJI), static_cast<uint32_t>(VK_OEM_AUTO),
+                               static_cast<uint32_t>(VK_OEM_ENLW)}) {
+      EXPECT_EQ(ClassifyOpenCloseKey(key, 0, setting), OpenCloseKeyAction::Toggle) << key;
+    }
+    for (const uint32_t key : {static_cast<uint32_t>('A'), static_cast<uint32_t>(VK_OEM_ATTN),
+                               static_cast<uint32_t>(VK_SPACE), static_cast<uint32_t>(VK_F10)}) {
+      EXPECT_EQ(ClassifyOpenCloseKey(key, 0, setting), OpenCloseKeyAction::None) << key;
+    }
+  }
+}
+
+TEST(OpenCloseKeyTest, ConvertKeysOpenAndCloseOnlyUnderImeOnOff) {
+  EXPECT_EQ(ClassifyOpenCloseKey(VK_CONVERT, 0, ConvertKeysAction::Default),
+            OpenCloseKeyAction::None);
+  EXPECT_EQ(ClassifyOpenCloseKey(VK_NONCONVERT, 0, ConvertKeysAction::Default),
+            OpenCloseKeyAction::None);
+  EXPECT_EQ(ClassifyOpenCloseKey(VK_CONVERT, 0, ConvertKeysAction::ImeOnOff),
+            OpenCloseKeyAction::Open);
+  EXPECT_EQ(ClassifyOpenCloseKey(VK_NONCONVERT, 0, ConvertKeysAction::ImeOnOff),
+            OpenCloseKeyAction::Close);
+}
+
+TEST(OpenCloseKeyTest, ModifiedKeysAreNotOpenCloseKeys) {
+  for (const uint32_t modifiers : {kShift, kCtrl, kAlt, kWin, kCtrl | kShift}) {
+    for (const uint32_t key : {static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF),
+                               static_cast<uint32_t>(VK_KANJI), static_cast<uint32_t>(VK_CONVERT),
+                               static_cast<uint32_t>(VK_NONCONVERT)}) {
+      EXPECT_EQ(ClassifyOpenCloseKey(key, modifiers, ConvertKeysAction::ImeOnOff),
+                OpenCloseKeyAction::None)
+          << key << " " << modifiers;
     }
   }
 }

@@ -317,9 +317,26 @@ NASA	8123	acronym
   いれば読み直す（進行中の preedit は触らない）。ファイルが無い・読めない・64 MiB を
   超えるときは辞書なしで動く（`s_dict = 0`）。
 
-**配布元・ライセンス**: バンドルする初期辞書は公開された英単語頻度リスト由来とし、
-ライセンスを明記する。上流のデータ生成パイプラインはクライアント実装の範囲外
-（M36-B と同方針）。
+**配布元・ライセンス**: バンドルする初期辞書 `data/english-words.tsv` は、次の 3 出典から
+`scripts/english_words_porter.py` が決定的に生成する。帰属とライセンス全文はルート
+`THIRD_PARTY_LICENSES` の「英単語辞書」節に置く。上流のデータ生成パイプラインはクライアント
+実装の範囲外（M36-B と同方針）。
+
+| 出典 | 用途 | ライセンス |
+|---|---|---|
+| SCOWL / ESDB hunspell `en_US` rel-2026.02.25 size 60 | 語彙。`.dic` / `.aff` を porter が展開する | LicenseRef-SCOWL |
+| Google Books Ngram v3 English 1-grams 20200217 | 頻度 | CC-BY-3.0 |
+| GitHub linguist v9.7.0 `languages.yml` と自作の語 | 技術語（`tech`） | MIT |
+
+- 表層は ASCII 英字だけにし、`NOSUGGEST` の語は除く。ローマ字として読める英単語は除外しない。
+- 頻度は 1990〜2019 年の出現数の合計 `count` を `1 + floor(4096 * log2(1 + count))` に写す
+  （順序を保存し、`2^31` 以下）。Ngram に一致しない語は 1 とする。Ngram は大小文字を区別するので、
+  SCOWL の表層と完全一致するものだけを数える。
+- `tech` は linguist の言語名と別名（type が programming・markup・data のもの）と自作の語に付ける。小文字形が SCOWL の一般語である linguist の語（`be`、`make` など）には付けない。
+- `proper` / `acronym` は、同じ小文字キーの小文字形が無いか、その語の Ngram 出現数（元の値）が小文字形の10 倍以上のときだけ付ける。Ngram は大小文字を区別し、文頭の語が大文字形を押し上げるためである。これで `in` / `it` / `or` では小文字形が先頭に出て、`NASA` は大文字形が先頭に出る。
+- 行は頻度の降順、同順位は表層の昇順に並べる。件数は 200,000 以下、サイズは 64 MiB 以下とする。
+- 取得物の URL、サイズ、SHA-256 は porter に固定する。Ngram の集計（約 13.4 GB）は手元で一度だけ
+  行い、CI と `cloud-setup.sh` では再生成しない。集計結果の SHA-256 は TSV のヘッダに残す。
 
 **M53 辞書層との関係**: M60 は独立した軽量英単語辞書として始め、将来 M53
 （`docs/auto-word-registration-spec.md` の DictionaryStore 再設計）に吸収・統合してよい。
@@ -401,6 +418,9 @@ string pool（strings_offset 以降）
   扱う。コンパクションはこの上限を超えるマージをしない（overlay を保持する）。
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
+- 初期辞書 `english-words.tsv` は MSI が `<インストール先>\data\` に置く。Host が既定パス
+  `%LOCALAPPDATA%\azooKey\dict\english-words.tsv` に加えてこの置き場を読む経路は、別 Issue
+  （DEV-1740）で扱う。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
 
 **バージョニング・堅牢化**:

@@ -1,5 +1,6 @@
 {
   "inputMode": "hiragana",
+  "convertKeysAction": "default",
   "profilesByApp": {},
   "bracketPairing": false,
   "bracketPairsPath": "",

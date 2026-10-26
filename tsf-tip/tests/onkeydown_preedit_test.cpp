@@ -6270,6 +6270,9 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeThenSameReadingQueriesPredictionAgain) {
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   ASSERT_EQ(h.context.document->text, L"");
   ASSERT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+  // Checked directly too: the retype below only falls inside the hold's one
+  // second when the machine is fast enough (not under coverage).
+  EXPECT_FALSE(h.service.prediction_query_hold_set_for_test());
 
   for (const WPARAM key : {'K', 'A', 'N'}) ASSERT_TRUE(h.Press(key));
   ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");

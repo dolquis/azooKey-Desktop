@@ -30,10 +30,6 @@ std::optional<char32_t> ParseUnicodeScalar(const std::string& hex) {
   return static_cast<char32_t>(value);
 }
 
-bool IsCharacterInput(UserAction action) {
-  return action == UserAction::Input || action == UserAction::InputAlnum;
-}
-
 bool IsKutoten(char32_t cp) { return cp == U'、' || cp == U'。'; }
 
 bool IsDigit(char32_t cp) { return (cp >= U'0' && cp <= U'9') || (cp >= U'０' && cp <= U'９'); }
@@ -244,22 +240,25 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
   };
   switch (event.action) {
     case UserAction::Input:
-    case UserAction::InputAlnum:
-    case UserAction::Backspace:
+    case UserAction::InputAlnum: {
       if (PunctuationConversionReading(event)) {
         next.CommitCandidate(selected_index_, result.actions, event.codepoint);
         break;
       }
-      // Resuming edits closes the window without committing the highlight.
+      // Typing commits the highlight like Enter, then the key starts a new
+      // reading as if typed from Idle (DEV-1735, legacy parity).
+      next.CommitCandidate(selected_index_, result.actions);
+      HandleResult resumed = next.HandleIdle(event);
+      for (auto& action : resumed.actions) result.actions.push_back(std::move(action));
+      result.next = std::move(resumed.next);
+      break;
+    }
+    case UserAction::Backspace:
+      // Backspace is the one key that reopens the reading without committing.
       result.actions.push_back(HideCandidateWindow{});
-      next.kind_ = InputStateKind::Composing;
+      next.kind_ = live_conversion_ ? InputStateKind::Previewing : InputStateKind::Composing;
       next.selected_index_ = 0;
-      if (IsCharacterInput(event.action)) {
-        next.AppendInput(event);
-      } else {
-        next.EraseLastUnit();
-      }
-      if (next.live_conversion_) next.kind_ = InputStateKind::Previewing;
+      next.EraseLastUnit();
       next.AfterReadingChanged(result.actions);
       break;
     case UserAction::StartConversion:

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -90,15 +91,22 @@ TEST(PunctuationConversionInputStateTest, OffLeavesEveryStateAndKeyUnchanged) {
       if (!converts) ExpectSameResult(state.off, state.on, event, state.name);
     }
   }
-  // Off: the marks join the reading as before (spec §3.5, DEV-847 G2).
+  // Off: the marks join the reading as before (spec §3.5, DEV-847 G2). While
+  // Selecting they commit the highlight and start a new reading (DEV-1735).
   for (const char32_t mark : {U'、', U'。'}) {
+    const std::string mark_text = mark == U'、' ? "、" : "。";
     const auto joined =
         CachedComposing(false).HandleEvent(PunctuationEvent(UserAction::Input, mark));
     EXPECT_EQ(joined.next.kind(), K::Composing);
-    EXPECT_EQ(joined.next.Reading(), mark == U'、' ? "てんき、" : "てんき。");
-    const auto reopened =
+    EXPECT_EQ(joined.next.Reading(), "てんき" + mark_text);
+    const auto continued =
         SelectingSecond(false).HandleEvent(PunctuationEvent(UserAction::Input, mark));
-    EXPECT_EQ(reopened.next.kind(), K::Composing);
+    EXPECT_EQ(continued.next.kind(), K::Composing);
+    EXPECT_EQ(continued.next.Reading(), mark_text);
+    EXPECT_EQ(continued.actions,
+              (Actions{HideCandidateWindow{}, ReplaceMarkedText{"転機"}, CommitMarkedText{},
+                       ObserveCommit{"てんき", "転機"}, ReplaceMarkedText{mark_text},
+                       QueryCandidates{mark_text}}));
   }
 }
 
@@ -174,16 +182,24 @@ TEST(PunctuationConversionInputStateTest, PunctuationOnlyDigitsAndOtherKeysDoNot
   EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Commit)));
 }
 
-TEST(PunctuationConversionInputStateTest, SelectingStandalonePunctuationDoesNotConvert) {
+// The mark does not convert a punctuation-only reading; like any other key
+// while Selecting it commits the highlight and starts a new reading (DEV-1735).
+TEST(PunctuationConversionInputStateTest, SelectingStandalonePunctuationCommitsAndStartsTheMark) {
   const auto waiting = FeedPunctuationState(InputState{}.WithPunctuationConversion(true), U"、")
                            .HandleEvent(PunctuationEvent(UserAction::StartConversion))
                            .next;
   const auto selecting =
-      waiting.HandleCandidatesArrived({Candidate{"、", "、"}, Candidate{",", "、"}}).next;
+      waiting.HandleCandidatesArrived({Candidate{"、", "、"}, Candidate{"，", "、"}})
+          .next.HandleEvent(PunctuationEvent(UserAction::NextCandidate))
+          .next;
   ASSERT_EQ(selecting.kind(), K::Selecting);
+  EXPECT_FALSE(selecting.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'。')));
   const auto typed = selecting.HandleEvent(PunctuationEvent(UserAction::Input, U'。'));
   EXPECT_EQ(typed.next.kind(), K::Composing);
-  EXPECT_EQ(typed.next.Reading(), "、。");
+  EXPECT_EQ(typed.next.Reading(), "。");
+  EXPECT_EQ(typed.actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"，"}, CommitMarkedText{},
+                     ObserveCommit{"、", "，"}, ReplaceMarkedText{"。"}, QueryCandidates{"。"}}));
 }
 
 }  // namespace

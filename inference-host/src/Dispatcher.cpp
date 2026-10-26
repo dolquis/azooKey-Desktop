@@ -518,6 +518,8 @@ std::vector<ipc::CandidateField> MixedCandidates(InferenceEngine& engine,
   const bool mixed_first = !out.empty();
   if (all_japanese) {
     auto field = ToField(*all_japanese);
+    field.reading = request.reading;
+    field.tag = static_cast<uint8_t>(core::CandidateTag::None);
     ipc::LiveSegment whole;
     whole.end_char = Utf16Length(field.surface);
     whole.score = field.score;
@@ -1196,7 +1198,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       return std::any_of(mixed_front.begin(), mixed_front.end(),
                          [&](const auto& front) { return front.surface == c.surface; });
     });
-    // Tie with the first of the rest so a score-ordered consumer keeps the order.
+    // Never below the first of the rest, so items 1 to 3 stay ahead of it for
+    // a score-ordered consumer; their own order is the position.
     if (!res.candidates.empty())
       for (auto& front : mixed_front)
         front.score = (std::max)(front.score, res.candidates.front().score);

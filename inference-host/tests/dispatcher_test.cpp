@@ -24,7 +24,6 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
-#include "azookey/host/AnomalyDetector.h"
 #include "azookey/host/BackendSelector.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
@@ -1461,6 +1460,8 @@ TEST_F(MixedInlineDispatchTest, MixedConversionLeadsTheCandidatesWithItsSegments
                   Segment(10, 14, "push", "push", kEnglish), Segment(14, 16, "した", "した", 0)});
   // Item 2: everything Japanese, as one J segment.
   EXPECT_EQ(on[1].surface, "今日は擬態にプッシュした");
+  EXPECT_EQ(on[1].tag, 0);
+  EXPECT_EQ(on[1].reading, kSentenceKana);
   ExpectSegments(on[1].segments, {Segment(0, 12, "今日は擬態にプッシュした", kSentenceKana, 0)});
   EXPECT_EQ(Count(on, on[1].surface), 1u);
   // A generation that changed an English segment cannot carry segments.

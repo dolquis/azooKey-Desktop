@@ -321,12 +321,27 @@ std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
   const auto path = ExpandLocalAppDataPrefix(utf8_path);
   if (!path) return nullptr;
   std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
-  if (english_dictionary_ && english_dictionary_path_ == *path) return english_dictionary_;
+  // DEV-1740 (section 4.5): the default path without the user's TSV or .bin
+  // reads the TSV the MSI installed; the user's files win as soon as they
+  // appear.
+  std::optional<EnglishDictionaryPaths> bundled;
+  if (utf8_path == default_english_dictionary_path_ && !bundled_english_dictionary_.empty()) {
+    std::error_code ec;
+    const auto own = EnglishDictionaryPaths::From(*path);
+    if (!std::filesystem::exists(own.tsv, ec) && !std::filesystem::exists(own.base, ec) &&
+        std::filesystem::is_regular_file(bundled_english_dictionary_, ec)) {
+      bundled = EnglishDictionaryPaths::Bundled(*path, bundled_english_dictionary_);
+      // Its .bin is a cache: without the folder the TSV is read into memory.
+      std::filesystem::create_directories(path->parent_path(), ec);
+    }
+  }
+  const auto key = bundled ? bundled->base : *path;
+  if (english_dictionary_ && english_dictionary_path_ == key) return english_dictionary_;
   // A missing, unreadable or unparseable dictionary leaves only the baseline
   // forms (section 4.2: s_dict stays 0). The store reloads on its own when the
   // TSV, the .bin or the overlay changes.
-  english_dictionary_ = std::make_shared<EnglishDictionaryStore>(
-      *path, [this](const EnglishDictionaryLoadReport& report) {
+  auto listener =
+      [this](const EnglishDictionaryLoadReport& report) {
         if (!runtime_logger_) return;
         // Counts only: never the dictionary's words or its path (section 4.4).
         runtime_logger_->Log(report.ok && report.stats.skipped_lines == 0 && !report.stats.truncated
@@ -338,9 +353,20 @@ std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
                               {"entries", static_cast<uint64_t>(report.entries)},
                               {"skipped_lines", static_cast<uint64_t>(report.stats.skipped_lines)},
                               {"truncated", report.stats.truncated}});
-      });
-  english_dictionary_path_ = *path;
+      };
+  english_dictionary_ = bundled ? std::make_shared<EnglishDictionaryStore>(*bundled, listener)
+                                : std::make_shared<EnglishDictionaryStore>(*path, listener);
+  english_dictionary_path_ = key;
   return english_dictionary_;
+}
+
+void InferenceEngine::SetBundledEnglishDictionaryForTests(std::filesystem::path bundled_tsv,
+                                                          std::string default_path) {
+  std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
+  bundled_english_dictionary_ = std::move(bundled_tsv);
+  default_english_dictionary_path_ = std::move(default_path);
+  english_dictionary_.reset();
+  english_dictionary_path_.clear();
 }
 
 bool InferenceEngine::SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget) {

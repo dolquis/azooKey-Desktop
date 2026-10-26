@@ -66,6 +66,9 @@ const char* EnglishRetractResultName(EnglishRetractResult result) {
 EnglishDictionaryStore::EnglishDictionaryStore(const fs::path& configured, LoadListener listener)
     : paths_(EnglishDictionaryPaths::From(configured)), listener_(std::move(listener)) {}
 
+EnglishDictionaryStore::EnglishDictionaryStore(EnglishDictionaryPaths paths, LoadListener listener)
+    : paths_(std::move(paths)), listener_(std::move(listener)) {}
+
 EnglishDictionaryStore::Sample EnglishDictionaryStore::TakeSample() const {
   Sample sample;
   if (!paths_.tsv.empty()) {

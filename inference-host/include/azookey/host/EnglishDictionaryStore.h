@@ -72,6 +72,8 @@ class EnglishDictionaryStore {
 
   explicit EnglishDictionaryStore(const std::filesystem::path& configured,
                                   LoadListener listener = {});
+  // Files laid out apart from one configured path (DEV-1740's bundled TSV).
+  explicit EnglishDictionaryStore(EnglishDictionaryPaths paths, LoadListener listener = {});
 
   const EnglishDictionaryPaths& paths() const { return paths_; }
 

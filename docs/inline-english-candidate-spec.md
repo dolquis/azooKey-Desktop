@@ -305,6 +305,11 @@ NASA	8123	acronym
 
 - 既定パス: `%LOCALAPPDATA%\azooKey\dict\english-words.tsv`。
 - 設定 `inlineEnglishDictionaryPath` で上書き可。
+- 同梱辞書: MSI は初期辞書を `<インストール先>\data\english-words.tsv`（Host の exe と同じフォルダの
+  `data`）に置く。設定が既定パスのままで、既定パスの TSV も `.bin`（§4.5）も無いときは、この TSV を
+  辞書の TSV として読む。ユーザーが既定パスに TSV か `.bin` を置くと、次の照会からそちらを使う。
+  設定で別のパスを指定したときは、そのパスに辞書が無くても同梱辞書は読まない（辞書なし）。
+  同梱辞書が無い・読めないときは辞書なしで動く。
 - `inlineEnglishDictionary == true` のときのみロード。
 
 **ロードと性能**:
@@ -424,9 +429,14 @@ string pool（strings_offset 以降）
   扱う。コンパクションはこの上限を超えるマージをしない（overlay を保持する）。
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
-- 初期辞書 `english-words.tsv` は MSI が `<インストール先>\data\` に置く。Host が既定パス
-  `%LOCALAPPDATA%\azooKey\dict\english-words.tsv` に加えてこの置き場を読む経路は、別 Issue
-  （DEV-1740）で扱う。
+- 同梱辞書（§4.4）を読むときは、その TSV を書き換えず、その隣にも何も書かない（インストール先は
+  書き込めない）。`.bin`・overlay・journal・lock は既定パスのフォルダに
+  `english-words.bundled.bin` / `.bundled.delta.bin` / `.bundled.added.bin` / `.bundled.lock` として置く。
+  名前を分けるのは、ユーザーが既定パスに置いた `.bin`（TSV の無い `.bin` 単体）と取り違えないため
+  である。フォルダが無ければ作り、作れないときは TSV をメモリから使う。上の優先順と mtime の照合は
+  同梱の TSV に対して行うので、MSI の更新で TSV が変わると `.bin` を作り直す。
+- 同梱辞書を使っている間の実行時の追加・削除（§4.6〜§4.8）は `.bundled.*` に残る。ユーザーが既定
+  パスに辞書を置いて切り替わると、それらは新しい辞書には引き継がれない。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
 
 **バージョニング・堅牢化**:

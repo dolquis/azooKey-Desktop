@@ -476,6 +476,30 @@ std::optional<EnglishOverlayContents> ReadEnglishOverlay(const fs::path& path) {
   return contents;
 }
 
+EnglishDictionaryPaths EnglishDictionaryPaths::Bundled(const fs::path& default_path,
+                                                       const fs::path& bundled_tsv) {
+  auto own = default_path.parent_path() / default_path.stem();
+  own += ".bundled.tsv";
+  auto paths = From(own);
+  paths.tsv = bundled_tsv;
+  return paths;
+}
+
+fs::path BundledEnglishDictionaryPath() {
+#ifdef _WIN32
+  std::wstring buffer(32768, L'\0');
+  const auto size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (size == 0 || size == buffer.size()) return {};
+  buffer.resize(size);
+  const fs::path executable(buffer);
+#else
+  std::error_code ec;
+  const auto executable = fs::read_symlink("/proc/self/exe", ec);
+  if (ec) return {};
+#endif
+  return executable.parent_path() / "data" / "english-words.tsv";
+}
+
 EnglishDictionaryPaths EnglishDictionaryPaths::From(const fs::path& configured) {
   EnglishDictionaryPaths paths;
   auto extension = configured.extension().string();

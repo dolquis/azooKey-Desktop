@@ -123,8 +123,7 @@ struct RuntimeSettings {
   // M60 (docs/inline-english-candidate-spec.md section 7). The TIP sends
   // inlineEnglishCandidates per request; the Host keeps it for diagnostics.
   bool inline_english_candidates{false};
-  EnglishCandidateConfig english{true, false, 2,
-                                 0.6,  false, "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv"};
+  EnglishCandidateConfig english{true, false, 2, 0.6, false, kDefaultEnglishDictionaryPath};
   bool number_rewriter{false};
   bool katakana_rewriter{false};
   bool symbol_rewriter{false};

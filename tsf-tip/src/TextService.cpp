@@ -46,6 +46,7 @@
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
 #include "azookey/tsf/TipRuntimeLog.h"
+#include "azookey/tsf/TipSettingsWriter.h"
 
 namespace {
 
@@ -784,6 +785,7 @@ using azookey::tsf::IsUsableTextExtent;
 CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
 std::optional<bool> g_debug_window_key_enabled_for_test;
 std::optional<bool> g_proofread_enabled_for_test;
+std::optional<bool> g_settings_menu_writable_for_test;
 azookey::tsf::ProofreadSessionServer::ClientVerifier g_proofread_client_verifier_for_test = nullptr;
 std::optional<std::chrono::milliseconds> g_proofread_idle_timeout_for_test;
 #endif
@@ -806,6 +808,17 @@ bool DebugWindowKeyEnabled() {
 bool ProofreadEnabled() {
 #ifdef AZOOKEY_TSF_TESTING
   return g_proofread_enabled_for_test.value_or(true);
+#else
+  return azookey::tsf::ProofreadAllowedInCurrentProcess();
+#endif
+}
+
+// Spec §4.5: the input indicator menu writes settings.json only where the
+// batch correction view may open, so never from an elevated, low or
+// AppContainer process.
+bool SettingsMenuWritable() {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_settings_menu_writable_for_test.value_or(true);
 #else
   return azookey::tsf::ProofreadAllowedInCurrentProcess();
 #endif
@@ -888,6 +901,10 @@ void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled) {
 
 void SetProofreadEnabledForTest(std::optional<bool> enabled) {
   g_proofread_enabled_for_test = enabled;
+}
+
+void SetSettingsMenuWritableForTest(std::optional<bool> writable) {
+  g_settings_menu_writable_for_test = writable;
 }
 
 void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier) {
@@ -1307,7 +1324,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   // item manager get none; the TIP works the same without it.
   hr = input_mode_langbar_.Add(thread_mgr_, kTextServiceClsid,
                                ResolveInputModeIndicator(keyboard_open_, alnum_mode_),
-                               [this](TfLBIClick click, POINT, const RECT*) {
+                               [this](TfLBIClick click, POINT point, const RECT* area) {
                                  // The click can commit and close; keep the service alive whatever
                                  // the host does with the TIP meanwhile.
                                  AddRef();
@@ -1315,7 +1332,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
                                    TextService* service;
                                    ~Hold() { service->Release(); }
                                  } hold{this};
-                                 OnInputModeLangBarClick(click);
+                                 OnInputModeLangBarClick(click, point, area);
                                });
   if (FAILED(hr) && hr != E_NOINTERFACE)
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_item_add_failed");
@@ -1363,7 +1380,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
         prediction_settings_changed_.store(true, std::memory_order_release);
         candidate_ui_.PostCandidatesReady();
       });
-      local_settings_.Start(*local / "azooKey" / "config" / "settings.json");
+      settings_path_ = *local / "azooKey" / "config" / "settings.json";
+      local_settings_.Start(settings_path_);
     }
   } catch (...) {
     // Local settings are optional; allocation/path failures leave defaults.
@@ -1384,6 +1402,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
+  ++activation_epoch_;
   ResetTypoTracking();
   // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
   last_learned_commit_pairs_.clear();
@@ -1818,16 +1837,105 @@ void TextService::UpdateInputModeLangBar() {
   input_mode_langbar_.Update(ResolveInputModeIndicator(keyboard_open_, alnum_mode_));
 }
 
-void TextService::OnInputModeLangBarClick(TfLBIClick click) {
+void TextService::OnInputModeLangBarClick(TfLBIClick click, POINT point, const RECT* area) {
   AZOOKEY_ASSERT_UI_THREAD();
-  // A left click flips on/off like Hankaku/Zenkaku. A right click is left for
-  // the menu of DEV-1738.
+  // A left click flips on/off like Hankaku/Zenkaku; a right click opens the menu.
+  if (click == TF_LBI_CLK_RIGHT) {
+    ShowInputModeLangBarMenu(point, area);
+    return;
+  }
   if (click != TF_LBI_CLK_LEFT) return;
   recent_character_form_commit_.reset();
   if (keyboard_open_)
     (void)CloseKeyboardCommittingShownText(nullptr, "langbar_click");
   else
     (void)SetKeyboardOpen(true, "langbar_click");
+}
+
+void TextService::ShowInputModeLangBarMenu(POINT point, const RECT* area) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  InputModeMenuState state;
+  state.indicator = ResolveInputModeIndicator(keyboard_open_, alnum_mode_);
+  state.live_conversion = local_settings_.LiveConversionSnapshot();
+  state.prediction = local_settings_.PredictionEnabledSnapshot();
+  state.settings_writable = !settings_path_.empty() && SettingsMenuWritable();
+  const uint64_t epoch = activation_epoch_;
+  const auto command = ShowInputModeMenu(BuildInputModeMenu(state), point, area);
+  // The menu ran a modal loop; a deactivation meanwhile ends what it chose.
+  if (command == InputModeMenuCommand::None || epoch != activation_epoch_) return;
+  if ((command == InputModeMenuCommand::LiveConversion ||
+       command == InputModeMenuCommand::Prediction) &&
+      !state.settings_writable)
+    return;
+  RunInputModeMenuCommand(command);
+}
+
+void TextService::RunInputModeMenuCommand(InputModeMenuCommand command) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  switch (command) {
+    case InputModeMenuCommand::Hiragana:
+      recent_character_form_commit_.reset();
+      // Opens from off; from alphanumeric returns to hiragana.
+      (void)SetKeyboardOpen(true, "langbar_menu");
+      return;
+    case InputModeMenuCommand::Alphanumeric:
+      if (alnum_mode_ && keyboard_open_) return;
+      if (!keyboard_open_) (void)SetKeyboardOpen(true, "langbar_menu");
+      if (!keyboard_open_) return;
+      // The same commit and guard as the ToggleAlnum key.
+      CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
+                              LifecycleCleanupFailurePolicy::PreserveComposition);
+      if (composition_ || committing_) return;
+      alnum_mode_ = true;
+      character_form_cycle_state_.reset();
+      recent_character_form_commit_.reset();
+      UpdateInputModeLangBar();
+      return;
+    case InputModeMenuCommand::Direct:
+      recent_character_form_commit_.reset();
+      if (keyboard_open_) (void)CloseKeyboardCommittingShownText(nullptr, "langbar_menu");
+      return;
+    case InputModeMenuCommand::LiveConversion:
+      ToggleSettingFromMenu("liveConversion", !local_settings_.LiveConversionSnapshot());
+      return;
+    case InputModeMenuCommand::Prediction:
+      ToggleSettingFromMenu("predictionEnabled", !local_settings_.PredictionEnabledSnapshot());
+      return;
+    case InputModeMenuCommand::OpenSettings: {
+      constexpr LANGID langid = 0x0411;  // The profile DllMain registers.
+      const HRESULT hr = LaunchSettingsApplication(nullptr, langid, kTextServiceProfileGuid);
+      RuntimeLog(FAILED(hr) ? azookey::logging::RuntimeLogLevel::Warn
+                            : azookey::logging::RuntimeLogLevel::Info,
+                 FAILED(hr) ? "settings_launch_failed" : "settings_launch",
+                 {{"hr", static_cast<int64_t>(hr)}, {"langid", static_cast<uint64_t>(langid)}});
+      return;
+    }
+    case InputModeMenuCommand::None:
+      return;
+  }
+}
+
+void TextService::ToggleSettingFromMenu(std::string_view key, bool value) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  // On the UI thread, so a busy file gives up quickly; the settings app and
+  // the Host hold the lock only for one read and replace.
+  constexpr std::chrono::milliseconds kLockTimeout{500};
+  const auto status = WriteTipBoolSetting(settings_path_, key, value, kLockTimeout);
+  RuntimeLog(status == TipSettingWriteStatus::Written ? azookey::logging::RuntimeLogLevel::Info
+                                                      : azookey::logging::RuntimeLogLevel::Warn,
+             "langbar_menu_setting_write",
+             {{"setting", SafeLogText(std::string(key))},
+              {"result", SafeLogText(std::string(TipSettingWriteStatusName(status)))}});
+  // Every TIP follows the file through its watch. Of the two switches the
+  // Host reads only liveConversion (dynamic punctuation), and UpdateConfig
+  // also reloads the model, so it is sent for that one alone.
+  if (status != TipSettingWriteStatus::Written || key != "liveConversion") return;
+#ifdef AZOOKEY_TSF_TESTING
+  ++host_config_reloads_;
+  // Never the real Host's pipe from a test.
+  if (ipc_pipe_name_for_test_.empty()) return;
+#endif
+  RetryModelFromUi();
 }
 
 STDMETHODIMP TextService::OnChange(REFGUID rguid) {

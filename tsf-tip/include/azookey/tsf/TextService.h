@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -128,6 +129,9 @@ void SetDebugWindowKeyEnabledForTest(std::optional<bool> enabled);
 // nullopt restores the test default: the batch correction view is enabled
 // whatever the integrity of the test process.
 void SetProofreadEnabledForTest(std::optional<bool> enabled);
+// nullopt restores the test default: the input indicator menu may write
+// settings.json whatever the integrity of the test process.
+void SetSettingsMenuWritableForTest(std::optional<bool> writable);
 // nullptr restores the settings-app check of the session client.
 void SetProofreadClientVerifierForTest(ProofreadSessionServer::ClientVerifier verifier);
 // nullopt restores the 10-minute idle limit of a session.
@@ -303,7 +307,12 @@ class TextService final : public ITfTextInputProcessorEx,
     return input_mode_langbar_.item_for_test();
   }
   // What the input indicator's click handler runs, for harnesses that never activate.
-  void click_input_mode_langbar_for_test(TfLBIClick click) { OnInputModeLangBarClick(click); }
+  void click_input_mode_langbar_for_test(TfLBIClick click) {
+    OnInputModeLangBarClick(click, POINT{}, nullptr);
+  }
+  // The settings.json the input indicator menu writes; ActivateEx sets the real one.
+  void set_settings_path_for_test(std::filesystem::path path) { settings_path_ = std::move(path); }
+  unsigned host_config_reloads_for_test() const { return host_config_reloads_; }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }
@@ -788,6 +797,13 @@ class TextService final : public ITfTextInputProcessorEx,
   bool alnum_mode_{false};
   // Input indicator button (spec §4.5), present between activation and deactivation.
   InputModeLangBar input_mode_langbar_;
+  // Counts deactivations, so a menu that closes after one does nothing.
+  uint64_t activation_epoch_{0};
+  // settings.json, which the input indicator menu writes; empty when unknown.
+  std::filesystem::path settings_path_;
+#ifdef AZOOKEY_TSF_TESTING
+  unsigned host_config_reloads_{0};
+#endif
   // Set while an off key commits the shown text through the Enter path.
   bool commit_before_close_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
@@ -1383,7 +1399,10 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT UnadviseFunctionProvider();
   void RefreshKeyboardOpen(std::string_view source);
   void UpdateInputModeLangBar();
-  void OnInputModeLangBarClick(TfLBIClick click);
+  void OnInputModeLangBarClick(TfLBIClick click, POINT point, const RECT* area);
+  void ShowInputModeLangBarMenu(POINT point, const RECT* area);
+  void RunInputModeMenuCommand(InputModeMenuCommand command);
+  void ToggleSettingFromMenu(std::string_view key, bool value);
   HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key, ITfContext* context);
   bool HasInputToCommitBeforeClose() const;
   HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);

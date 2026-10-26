@@ -27,6 +27,7 @@ add_library(azookey_tsf_tip SHARED
   src/ThemeColors.cpp
   src/TipLocalSettings.cpp
   src/TipRuntimeLog.cpp
+  src/TipSettingsWriter.cpp
   src/TextServiceFactory.cpp
 )
 
@@ -35,6 +36,7 @@ target_link_libraries(azookey_tsf_tip
   PRIVATE
     azookey_core
     azookey_ipc
+    azookey_learning
     azookey_binary_hardening
     azookey_project_options
     azookey_project_warnings
@@ -86,6 +88,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/ThemeColors.cpp
     src/TipLocalSettings.cpp
     src/TipRuntimeLog.cpp
+    src/TipSettingsWriter.cpp
     src/TextServiceFactory.cpp
   )
   target_include_directories(azookey_tsf_tip_test_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -95,6 +98,7 @@ if(AZOOKEY_BUILD_TESTS)
     PUBLIC
       azookey_core
       azookey_ipc
+      azookey_learning
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings

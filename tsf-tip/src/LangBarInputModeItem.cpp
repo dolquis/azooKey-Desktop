@@ -8,6 +8,7 @@
 #include <cwchar>
 #include <iterator>
 #include <new>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -138,6 +139,101 @@ HICON CreateInputModeIcon(InputModeIndicator indicator, int size, COLORREF color
   if (color_bitmap) DeleteObject(color_bitmap);
   DeleteDC(dc);
   return icon;
+}
+
+std::vector<InputModeMenuEntry> BuildInputModeMenu(const InputModeMenuState& state) {
+  using Command = InputModeMenuCommand;
+  const auto mode = [&](Command command, std::wstring_view label, InputModeIndicator indicator) {
+    InputModeMenuEntry entry;
+    entry.command = command;
+    entry.label = label;
+    entry.radio = true;
+    entry.checked = state.indicator == indicator;
+    return entry;
+  };
+  const auto setting = [&](Command command, std::wstring_view label, bool value) {
+    InputModeMenuEntry entry;
+    entry.command = command;
+    entry.label = label;
+    entry.checked = value;
+    entry.enabled = state.settings_writable;
+    return entry;
+  };
+  std::vector<InputModeMenuEntry> entries;
+  entries.push_back(mode(Command::Hiragana, L"ひらがな", InputModeIndicator::Hiragana));
+  entries.push_back(mode(Command::Alphanumeric, L"半角英数", InputModeIndicator::Alphanumeric));
+  entries.push_back(mode(Command::Direct, L"直接入力", InputModeIndicator::Direct));
+  entries.push_back(setting(Command::LiveConversion, L"ライブ変換", state.live_conversion));
+  entries.back().separator_before = true;
+  entries.push_back(setting(Command::Prediction, L"予測", state.prediction));
+  InputModeMenuEntry open_settings;
+  open_settings.command = Command::OpenSettings;
+  open_settings.label = L"設定を開く";
+  open_settings.separator_before = true;
+  entries.push_back(open_settings);
+  return entries;
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+namespace {
+testing::InputModeMenuPresenter g_menu_presenter_for_test;
+}  // namespace
+
+namespace testing {
+void SetInputModeMenuPresenterForTest(InputModeMenuPresenter presenter) {
+  g_menu_presenter_for_test = std::move(presenter);
+}
+}  // namespace testing
+#endif
+
+InputModeMenuCommand ShowInputModeMenu(const std::vector<InputModeMenuEntry>& entries, POINT point,
+                                       const RECT* area) {
+#ifdef AZOOKEY_TSF_TESTING
+  UNREFERENCED_PARAMETER(point);
+  UNREFERENCED_PARAMETER(area);
+  return g_menu_presenter_for_test ? g_menu_presenter_for_test(entries)
+                                   : InputModeMenuCommand::None;
+#else
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return InputModeMenuCommand::None;
+  UINT position = 0;
+  for (const auto& entry : entries) {
+    if (entry.separator_before && position > 0)
+      InsertMenuW(menu, position++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+    std::wstring label(entry.label);
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_ID | MIIM_FTYPE | MIIM_STATE | MIIM_STRING;
+    item.fType = entry.radio ? MFT_RADIOCHECK : MFT_STRING;
+    item.fState = (entry.checked ? MFS_CHECKED : MFS_UNCHECKED) |
+                  (entry.enabled ? MFS_ENABLED : MFS_DISABLED);
+    item.wID = static_cast<UINT>(entry.command);
+    item.dwTypeData = label.data();
+    InsertMenuItemW(menu, position++, TRUE, &item);
+  }
+  // TrackPopupMenuEx needs a window of this thread to own the menu. Without
+  // the owner in the foreground, a click elsewhere would not close the menu.
+  HWND owner = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"", WS_POPUP, 0, 0, 0, 0, nullptr,
+                               nullptr, nullptr, nullptr);
+  UINT chosen = 0;
+  if (owner) {
+    SetForegroundWindow(owner);
+    TPMPARAMS params{};
+    params.cbSize = sizeof(params);
+    if (area) params.rcExclude = *area;
+    chosen = static_cast<UINT>(TrackPopupMenuEx(menu,
+                                                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON |
+                                                    TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_VERTICAL,
+                                                point.x, point.y, owner, area ? &params : nullptr));
+    PostMessageW(owner, WM_NULL, 0, 0);
+    DestroyWindow(owner);
+  }
+  DestroyMenu(menu);
+  for (const auto& entry : entries) {
+    if (static_cast<UINT>(entry.command) == chosen && entry.enabled) return entry.command;
+  }
+  return InputModeMenuCommand::None;
+#endif
 }
 
 LangBarInputModeItem::LangBarInputModeItem(const CLSID& text_service, InputModeIndicator indicator,

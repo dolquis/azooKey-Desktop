@@ -796,9 +796,47 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   `ITfLangBarItemSink::OnUpdate(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP)` で通知する。
 - 左クリック（`TF_LBI_CLK_LEFT`）: 半角/全角と同じく On/Off を切り替える。ユーザーの開閉として扱い、§4.1 の
   1 秒以内の On への戻しの対象にしない（`source` は `langbar_click`）。Off にするときは `VK_IME_OFF` と同じく表示中の文字列を確定する（§4.2）。
-- 右クリック（`TF_LBI_CLK_RIGHT`）: 項目は TIP へ渡し、TIP は何もしない。右クリックのメニューは DEV-1738 がここに足す。
+- 右クリック（`TF_LBI_CLK_RIGHT`）: TIP がポップアップメニューを出す（下記）。
 
-アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動は実機で確かめる（Human Gate）。
+右クリックのメニュー:
+
+`TF_LBI_STYLE_BTN_MENU` の項目では言語バーが `InitMenu` / `OnMenuSelect` を呼び、`OnClick` を呼ばない
+（Microsoft Learn「Language Bar (Text Services)」）。左クリックの On/Off を残すため、スタイルは
+`TF_LBI_STYLE_BTN_BUTTON` のままとし、`OnClick(TF_LBI_CLK_RIGHT)` で TIP が `TrackPopupMenuEx`
+（`TPM_RETURNCMD`）を呼ぶ。メニューは TIP のスレッドに作った非表示の窓を持ち主とし、クリック位置に、
+項目の矩形を避けて出す。メニューの間は TIP のスレッドでモーダルループが回るので、閉じた後に TIP が
+無効化されていたら選択は捨てる。
+
+| 項目 | 表示 | 選んだとき |
+|---|---|---|
+| ひらがな | ラジオ。今の表示（上の表）が「あ」なら選択 | Off なら On にする。英数モードなら解除する |
+| 半角英数 | ラジオ。「_A」なら選択 | Off なら On にしてから英数モードにする。英数キー（`ToggleAlnum`）と同じく、表示中の入力を確定できなかったら切り替えない |
+| 直接入力 | ラジオ。「A」なら選択 | 左クリックの Off と同じく表示中の文字列を確定して Off にする（`source` は `langbar_menu`） |
+| ライブ変換 | `liveConversion` の今の値でチェック | 値を反転して settings.json に書き、Host に `UpdateConfig` を送る |
+| 予測 | `predictionEnabled` の今の値でチェック | 値を反転して settings.json に書く。`UpdateConfig` は送らない |
+| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイル） |
+
+入力モードの 3 項目は設定ファイルに触れない。
+
+- 今の値: ライブ変換と予測のチェックは、TIP が settings.json から読んでいる値（`TipLocalSettings`）を出す。
+  アプリごとのプロファイル（`profilesByApp`）は表示にも書き込みにも使わない。
+- 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
+  設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に
+  置き換える（`WriteTextFileAtomically`）。ファイルが無ければそのキーだけのファイルを作る。JSON の
+  オブジェクトとして読めないファイルは書き換えず、隔離もしない（設定アプリが開いたときに扱う）。
+  ロックは 500 ms 待って取れなければ書かない。結果は `langbar_menu_setting_write` にキーと結果の名前だけを出す。
+- 反映: どの TIP インスタンスも settings.json の監視で新しい値を読む。Host が読むのは `liveConversion`
+  （動的句読点の入口）だけなので、`UpdateConfig` はライブ変換を切り替えたときだけ、モデル再試行と同じ短命の
+  control 接続で送る（Host は `UpdateConfig` でモデルも読み直す）。
+- 設定アプリとの同時編集: 設定アプリは保存のとき、ユーザーが変えたキーだけをロックの下でディスク上の
+  ファイルへ書く。設定アプリを開いたままメニューで切り替えても、その変更は設定アプリの保存で消えない。
+  ただし開いている設定アプリの画面は古い値のままで、同じキーを設定アプリでも変えて保存すると設定アプリの値が残る。
+- 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、rich-features-spec
+  X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測をグレーアウトする。入力モードと
+  「設定を開く」は使える。
+
+アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動、タスクバーの入力インジケーターが
+右クリックを `OnClick` に渡すことと、メニューの表示位置と閉じ方は実機で確かめる（Human Gate）。
 
 ## 5. 複合 DisplayAttribute (M23)
 

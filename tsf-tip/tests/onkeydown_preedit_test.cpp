@@ -33,8 +33,10 @@
 #include "azookey/core/BodyLogGate.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/tsf/LeftContextReader.h"
+#include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
 #include "azookey/tsf/TipRuntimeLog.h"
 
@@ -8685,6 +8687,265 @@ TEST(TsfTipLangBarClickTest, LeftClickClosesWhenEnterDoesNotTakeTheInput) {
   EXPECT_FALSE(compartment.open);
   EXPECT_EQ(h.context.document->text, L"か");
   h.context.compartment_mgr = nullptr;
+}
+
+// DEV-1738: the input indicator's right-click menu.
+namespace {
+
+using azookey::tsf::InputModeMenuCommand;
+using azookey::tsf::InputModeMenuEntry;
+
+// Picks `command` from the next menu and records what the menu showed.
+class ScopedMenuChoice {
+ public:
+  explicit ScopedMenuChoice(InputModeMenuCommand command, std::function<void()> while_open = {}) {
+    azookey::tsf::testing::SetInputModeMenuPresenterForTest(
+        [this, command, while_open](const std::vector<InputModeMenuEntry>& entries) {
+          shown = entries;
+          ++opened;
+          if (while_open) while_open();
+          return command;
+        });
+  }
+  ~ScopedMenuChoice() { azookey::tsf::testing::SetInputModeMenuPresenterForTest(nullptr); }
+  ScopedMenuChoice(const ScopedMenuChoice&) = delete;
+  ScopedMenuChoice& operator=(const ScopedMenuChoice&) = delete;
+
+  const InputModeMenuEntry& Entry(InputModeMenuCommand command) const {
+    for (const auto& entry : shown) {
+      if (entry.command == command) return entry;
+    }
+    ADD_FAILURE() << "no entry " << static_cast<UINT>(command);
+    return shown.front();
+  }
+
+  std::vector<InputModeMenuEntry> shown;
+  int opened{0};
+};
+
+class ScopedSettingsMenuFile {
+ public:
+  ScopedSettingsMenuFile() {
+    static std::atomic<unsigned> sequence{0};
+    root_ = std::filesystem::temp_directory_path() /
+            (L"azookey-langbar-menu-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+             std::to_wstring(sequence++));
+    std::filesystem::create_directories(root_);
+    path = root_ / L"settings.json";
+  }
+  ~ScopedSettingsMenuFile() {
+    azookey::tsf::testing::SetSettingsMenuWritableForTest(std::nullopt);
+    std::error_code error;
+    std::filesystem::remove_all(root_, error);
+  }
+  ScopedSettingsMenuFile(const ScopedSettingsMenuFile&) = delete;
+  ScopedSettingsMenuFile& operator=(const ScopedSettingsMenuFile&) = delete;
+
+  void Write(const std::string& text) const {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream << text;
+  }
+  std::string Read() const {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+  }
+  std::optional<bool> Bool(std::string_view key) const {
+    const auto parsed = azookey::ipc::json::Parse(Read());
+    if (!parsed || !parsed->IsObject()) return std::nullopt;
+    return parsed->GetBool(key);
+  }
+
+  std::filesystem::path path;
+
+ private:
+  std::filesystem::path root_;
+};
+
+std::wstring g_menu_launch_parameters;
+BOOL WINAPI RecordMenuLaunch(SHELLEXECUTEINFOW* info) {
+  g_menu_launch_parameters = info->lpParameters ? info->lpParameters : L"";
+  info->hProcess = nullptr;
+  return TRUE;
+}
+
+}  // namespace
+
+TEST(TsfTipLangBarMenuTest, RightClickShowsTheCurrentModeAndSwitches) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  ScopedSettingsMenuFile file;
+  TextServiceHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_settings_path_for_test(file.path);
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_prediction_enabled_for_test(false);
+  ScopedMenuChoice menu(InputModeMenuCommand::None);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  ASSERT_EQ(menu.opened, 1);
+  EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Hiragana).checked);
+  EXPECT_FALSE(menu.Entry(InputModeMenuCommand::Direct).checked);
+  EXPECT_TRUE(menu.Entry(InputModeMenuCommand::LiveConversion).checked);
+  EXPECT_TRUE(menu.Entry(InputModeMenuCommand::LiveConversion).enabled);
+  EXPECT_FALSE(menu.Entry(InputModeMenuCommand::Prediction).checked);
+  // Closing it without a choice changes nothing.
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_FALSE(std::filesystem::exists(file.path));
+  // A left click still only turns the IME on and off.
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_EQ(menu.opened, 1);
+  EXPECT_FALSE(h.service.keyboard_open());
+}
+
+TEST(TsfTipLangBarMenuTest, ModeItemsSwitchBetweenHiraganaAlphanumericAndDirect) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  TextServiceHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Alphanumeric);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(h.service.alnum_mode_for_test());
+  // Alphanumeric passes letters through.
+  EXPECT_FALSE(h.Press('K'));
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Hiragana);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Alphanumeric).checked);
+  }
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_FALSE(h.service.alnum_mode_for_test());
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Direct);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(compartment.open);
+  // From off, alphanumeric turns the IME on first.
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Alphanumeric);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Direct).checked);
+  }
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  EXPECT_TRUE(h.service.alnum_mode_for_test());
+  // And from off, hiragana turns it on in hiragana.
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Direct);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Hiragana);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_FALSE(h.service.alnum_mode_for_test());
+}
+
+TEST(TsfTipLangBarMenuTest, DirectCommitsTheShownSurfaceBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  ScopedMenuChoice menu(InputModeMenuCommand::Direct);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipLangBarMenuTest, SwitchesWriteSettingsAndOnlyLiveConversionReloadsTheHost) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  ScopedSettingsMenuFile file;
+  file.Write(R"({"maxCandidates":9,"liveConversion":false})");
+  TextServiceHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_settings_path_for_test(file.path);
+  h.service.set_live_conversion_for_test(false);
+  h.service.set_prediction_enabled_for_test(true);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_EQ(file.Bool("liveConversion"), true);
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 1u);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Prediction);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_EQ(file.Bool("predictionEnabled"), false);
+  EXPECT_EQ(file.Bool("liveConversion"), true);
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 1u);
+  const auto parsed = azookey::ipc::json::Parse(file.Read());
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_EQ(parsed->GetNumber("maxCandidates"), 9.0);
+  // The menu flips what the TIP last read, not what it wrote.
+  h.service.set_live_conversion_for_test(true);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_EQ(file.Bool("liveConversion"), false);
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 2u);
+}
+
+TEST(TsfTipLangBarMenuTest, InvalidSettingsFileIsLeftAloneAndTheHostIsNotReloaded) {
+  ScopedSettingsMenuFile file;
+  const std::string broken = R"({"liveConversion":)";
+  file.Write(broken);
+  TextServiceHarness h;
+  h.service.set_settings_path_for_test(file.path);
+  ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_EQ(file.Read(), broken);
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 0u);
+}
+
+TEST(TsfTipLangBarMenuTest, SwitchesAreGrayedOutAndInertWhereSettingsAreNotWritable) {
+  ScopedSettingsMenuFile file;
+  TextServiceHarness h;
+  h.service.set_settings_path_for_test(file.path);
+  azookey::tsf::testing::SetSettingsMenuWritableForTest(false);
+  {
+    // A choice of a grayed-out item is ignored even if it comes back.
+    ScopedMenuChoice menu(InputModeMenuCommand::LiveConversion);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_FALSE(menu.Entry(InputModeMenuCommand::LiveConversion).enabled);
+    EXPECT_FALSE(menu.Entry(InputModeMenuCommand::Prediction).enabled);
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::OpenSettings).enabled);
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Hiragana).enabled);
+  }
+  EXPECT_FALSE(std::filesystem::exists(file.path));
+  azookey::tsf::testing::SetSettingsMenuWritableForTest(std::nullopt);
+  // Without a known settings.json the switches are grayed out as well.
+  h.service.set_settings_path_for_test({});
+  ScopedMenuChoice menu(InputModeMenuCommand::Prediction);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_FALSE(menu.Entry(InputModeMenuCommand::Prediction).enabled);
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 0u);
+}
+
+TEST(TsfTipLangBarMenuTest, AChoiceMadeAfterDeactivationDoesNothing) {
+  ScopedSettingsMenuFile file;
+  TextServiceHarness h;
+  h.service.set_settings_path_for_test(file.path);
+  ScopedMenuChoice menu(InputModeMenuCommand::Prediction, [&] { h.service.Deactivate(); });
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_EQ(menu.opened, 1);
+  EXPECT_FALSE(std::filesystem::exists(file.path));
+}
+
+TEST(TsfTipLangBarMenuTest, OpenSettingsLaunchesTheSettingsAppForTheProfile) {
+  TextServiceHarness h;
+  g_menu_launch_parameters.clear();
+  azookey::tsf::testing::SetSettingsLauncherForTest(L"C:\\azooKey\\azookey_settings.exe",
+                                                    RecordMenuLaunch);
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::OpenSettings);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  azookey::tsf::testing::ClearSettingsLauncherForTest();
+  EXPECT_EQ(g_menu_launch_parameters.rfind(L"--langid 0x0411 --profile {", 0), 0u);
 }
 
 // DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS

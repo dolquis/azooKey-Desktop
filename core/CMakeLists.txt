@@ -14,6 +14,7 @@ add_library(azookey_core STATIC
   src/InputState.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
+  src/MixedRomajiSplitter.cpp
   src/NumberRewriter.cpp
   src/PlatformPaths.cpp
   src/PunctuationRules.cpp

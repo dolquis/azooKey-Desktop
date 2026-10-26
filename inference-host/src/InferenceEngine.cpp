@@ -386,6 +386,18 @@ EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw
   });
 }
 
+std::vector<EnglishDictionaryEntry> InferenceEngine::LookupEnglishDictionary(
+    std::string_view lower_key) {
+  EnglishCandidateConfig english;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    english = config_.english;
+  }
+  if (!english.dictionary_enabled) return {};
+  const auto dictionary = EnglishDictionaryFor(english.dictionary_path);
+  return dictionary ? dictionary->Lookup(lower_key) : std::vector<EnglishDictionaryEntry>{};
+}
+
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {

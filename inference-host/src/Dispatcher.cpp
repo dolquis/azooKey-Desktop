@@ -27,6 +27,7 @@
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/CrashReporting.h"
 #include "azookey/core/EtwLogger.h"
+#include "azookey/core/MixedRomajiSplitter.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/ipc/TraceId.h"
@@ -333,6 +334,68 @@ std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& confi
   return PunctuationInserter::Insert({converted}, rules, style, config.segment_boundary_confidence);
 }
 
+// M63-A (docs/mixed-english-auto-conversion-spec.md section 8.2): the whole
+// composition as one English segment, or nullopt to handle the request as with
+// M63 off (a J segment, or no split at all under section 10).
+std::optional<core::MixedRomajiSegment> WholeCompositionEnglish(InferenceEngine& engine,
+                                                                const std::string& raw_romaji) {
+  const auto english = engine.config().english;
+  core::MixedRomajiSplitOptions options;
+  options.min_english_length = english.min_length;
+  core::EnglishWordLookup lookup;
+  if (english.dictionary_enabled) {
+    lookup = [&engine](std::string_view lower_key) {
+      std::vector<core::EnglishWordMatch> matches;
+      for (auto& entry : engine.LookupEnglishDictionary(lower_key))
+        matches.push_back({std::move(entry.surface), entry.flags});
+      return matches;
+    };
+  }
+  auto splits = core::SplitMixedRomaji(raw_romaji, lookup, options);
+  if (splits.empty() || splits.front().segments.size() != 1) return std::nullopt;
+  auto& segment = splits.front().segments.front();
+  if (segment.kind != core::MixedRomajiSegmentKind::English) return std::nullopt;
+  return std::move(segment);
+}
+
+// Section 9.2: the E segment of a candidate or a live conversion whose surface
+// is the English word. The surface is printable ASCII, so its UTF-16 length is
+// its byte length.
+ipc::LiveSegment EnglishLiveSegment(const core::MixedRomajiSegment& english,
+                                    const std::string& raw_romaji, double score) {
+  ipc::LiveSegment segment;
+  segment.end_char = static_cast<uint32_t>(english.surface.size());
+  segment.score = score;
+  segment.surface = english.surface;
+  segment.reading = raw_romaji;
+  segment.tag = static_cast<uint8_t>(core::CandidateTag::English);
+  return segment;
+}
+
+// Section 8.2: a sure word becomes the first candidate ahead of the Japanese
+// conversion; otherwise it is the second, right after the first Japanese one.
+// The M60 form with the same surface gives up its place; a Japanese candidate
+// with that surface stays.
+void PlaceMixedEnglishCandidate(std::vector<core::Candidate>& candidates,
+                                const core::MixedRomajiSegment& english,
+                                const std::string& raw_romaji, bool first) {
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [&](const core::Candidate& c) {
+                                    return c.tag == core::CandidateTag::English &&
+                                           c.surface == english.surface;
+                                  }),
+                   candidates.end());
+  core::Candidate candidate;
+  candidate.surface = english.surface;
+  candidate.reading = raw_romaji;  // M60 section 6.3: the raw romaji.
+  candidate.source = core::CandidateSource::Heuristic;
+  candidate.tag = core::CandidateTag::English;
+  const size_t at = first ? 0 : std::min<size_t>(1, candidates.size());
+  // Tie with a neighbour so a score-ordered consumer keeps the slot.
+  if (!candidates.empty()) candidate.score = candidates[at == 0 ? 0 : at - 1].score;
+  candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(at), std::move(candidate));
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
@@ -601,6 +664,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_generation_id = config_.host_generation_id;
   // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
+  // mixed_english = M63 (mixed-english-auto-conversion-spec section 9.3).
   res.capabilities = {"oob_cancel",
                       "commit_segments",
                       "query_live_conversion",
@@ -614,7 +678,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "commit_correction",
                       "learning_reset",
                       "persona",
-                      "detect_anomalies"};
+                      "detect_anomalies",
+                      "mixed_english"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -799,6 +864,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   const auto rewriters = engine_config.rewriters;
   std::vector<core::Candidate> candidates;
   std::string corrected_reading;
+  std::optional<core::MixedRomajiSegment> mixed_first;
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
       trace.ProtocolError();
@@ -848,6 +914,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       auto english = engine_->QueryEnglishCandidates(parsed->raw_romaji, NowSec());
       PlaceEnglishCandidates(candidates, std::move(english.candidates), english.intent,
                              engine_config.english.promote_threshold);
+      // M63-A (mixed-english-auto-conversion-spec sections 8.2 and 9.4): the
+      // whole composition as one English word, on top of M60.
+      if (parsed->mixed_english) {
+        if (auto word = WholeCompositionEnglish(*engine_, parsed->raw_romaji)) {
+          const bool sure = word->confidence == core::EnglishSegmentConfidence::High;
+          PlaceMixedEnglishCandidate(candidates, *word, parsed->raw_romaji, sure);
+          // corrected_reading stays: the Japanese candidates were converted
+          // from it (M35), and the English one is learned under its own
+          // reading, the raw romaji (M60 section 6.4).
+          if (sure) mixed_first = std::move(word);
+        }
+      }
     }
   }
 
@@ -860,6 +938,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   ipc::QueryCandidatesResponse res;
   for (auto& c : candidates) res.candidates.push_back(ToField(c));
+  // Section 9.2: only the English first candidate of section 8.2 carries
+  // segments.
+  if (mixed_first && !res.candidates.empty())
+    res.candidates.front().segments = {
+        EnglishLiveSegment(*mixed_first, parsed->raw_romaji, res.candidates.front().score)};
   // The pre-M14 carrier of live conversion; current TIPs use QueryLiveConversion.
   if (parsed->live && !res.candidates.empty()) {
     if (auto inserted = InsertLivePunctuation(
@@ -905,6 +988,36 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
 
   const auto punctuation_config =
       parsed->auto_punctuation ? std::optional{engine_->config()} : std::nullopt;
+  // M63-A (mixed-english-auto-conversion-spec sections 8.2, 9.4 and 10): a
+  // sure English word is the live conversion as is, without Zenzai.
+  if (!parsed->secure && parsed->mixed_english && !parsed->raw_romaji.empty()) {
+    if (auto word = WholeCompositionEnglish(*engine_, parsed->raw_romaji);
+        word && word->confidence == core::EnglishSegmentConfidence::High) {
+      const bool canceled = cancel->load(std::memory_order_acquire);
+      completion.Complete();
+      if (canceled) {
+        trace.Finish(core::EtwResult::Cancelled);
+        return std::nullopt;
+      }
+      response.surface = word->surface;
+      response.confidence = 1.0;
+      response.segments = {EnglishLiveSegment(*word, parsed->raw_romaji, 1.0)};
+      if (punctuation_config) {
+        // M59 as with M63 off; the word's segments keep the English tag.
+        if (auto inserted =
+                InsertLivePunctuation(*punctuation_config, true, parsed->punctuation_style,
+                                      word->surface, parsed->raw_romaji)) {
+          response.surface = std::move(inserted->surface);
+          response.segments = std::move(inserted->segments);
+          for (auto& segment : response.segments)
+            if (!segment.auto_punctuation)
+              segment.tag = static_cast<uint8_t>(core::CandidateTag::English);
+        }
+      }
+      trace.Finish(core::EtwResult::Success, 1);
+      return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
+    }
+  }
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
                                                       cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);

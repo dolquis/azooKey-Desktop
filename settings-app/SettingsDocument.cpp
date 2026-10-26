@@ -207,9 +207,10 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "sentenceCompletion" || key == "batchRomajiConversion" ||
                key == "batchAutoPunctuation" || key == "numberRewriter" ||
                key == "katakanaRewriter" || key == "symbolRewriter" ||
-               key == "inlineEnglishCandidates" || key == "inlineEnglishCaseVariants" ||
-               key == "fullWidthEnglishCandidate" || key == "inlineEnglishDictionary" ||
-               key == "emojiRewriter" || key == "emojiTriggerSearch" || key == "bracketPairing" ||
+               key == "inlineEnglishCandidates" || key == "mixedEnglishAutoConversion" ||
+               key == "inlineEnglishCaseVariants" || key == "fullWidthEnglishCandidate" ||
+               key == "inlineEnglishDictionary" || key == "emojiRewriter" ||
+               key == "emojiTriggerSearch" || key == "bracketPairing" ||
                key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
                key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
                key == "bracketWrapSelection") {

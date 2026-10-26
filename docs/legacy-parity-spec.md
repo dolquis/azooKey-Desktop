@@ -674,20 +674,33 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 理由：
 - 表示タイミングが異なる（候補=Space 後、予測=入力中常時）
-- 配置位置が異なる（候補=キャレット下、予測=キャレット右）
-- 同時表示するケースがある（ライブ変換中の予測表示）
+- 表示の寿命と操作が異なる。2 つは同時に出さない。変換候補の表示中は予測を出さず、届いた予測の
+  結果も捨てる（ライブ変換のプレビュー中は変換候補を出さないので、予測を出す）
 
 ### 3.2 配置アルゴリズム
 
 `PredictionWindow::Show(candidates, caret_rect_screen)`:
 
-1. anchor = キャレット矩形の右辺
+1. anchor = composition 全体の text extent（`ITfContextView::GetTextExt`）。アプリが返さない
+   ときはキャレット矩形で代える
 2. 候補ウィンドウのサイズを計算（最大 5 件、フォント高 ×6 + padding）
 3. 配置候補:
-   - 右側に配置: `x = caret.right + 4`, `y = caret.top`
-   - 画面外なら左側: `x = caret.left - width - 4`
-   - 下が画面外なら上に: `y = caret.bottom - height`
+   - composition 開始位置の下に配置: `x = anchor.left`, `y = anchor.bottom`
+   - 下が画面外なら上に: `y = anchor.top - height`
+   - 作業領域の外に出る分は内側へ寄せる
 4. `MonitorFromPoint(caret_center, MONITOR_DEFAULTTONEAREST)` で対象モニタを判定し、矩形外チェック
+
+打鍵で動く anchor の辺は、1 行に収まる composition では右辺だけである。左辺と上下辺から位置を
+決めるので、composition の間、窓は打鍵ごとに動かない。Space 後の変換候補ウィンドウと同じ点
+（composition 開始位置の左下）を基準にする。
+
+次の場合、窓は打鍵に合わせて動く。
+
+- アプリが text extent を返さず、キャレット矩形で代えるとき（キャレットに追従する）
+- composition が折り返して複数行になったとき（左辺と下辺が変わった打鍵で 1 回動く）
+
+作業領域が狭く、composition の下にも上にも収まらないときは、作業領域の内側へ寄せる。この
+場合、窓は composition に重なる。縦書きの配置は扱わない。
 
 ### 3.3 キャッシュ
 
@@ -695,6 +708,11 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 （既存レガシーの挙動）。同じ context で連続呼び出しを抑制。
 
 キャッシュキー: `(kana, leftSideContext_hash)`。Phase 5 では単純な hash map。
+
+キャッシュに無い読みでも、直前に問い合わせた読みと同じで 1 秒以内なら問い合わせ直さない。
+この抑止は、その問い合わせの応答か、応答を落としたときの再試行が残っていることを前提とする。
+Esc などで予測を消すと、問い合わせも再試行も捨てるので、抑止も解く。直後に同じ読みを打てば
+問い合わせ直す。
 
 ### 3.4 操作
 
@@ -875,8 +893,23 @@ sha	しゃ
 （`legacy/Core/Package.swift` で固定した revision）と同じ表規則を持つ。小書き（`xtu`、`la` など）、
 `wi`、`ve` などの拡張綴りもこれに含まれる。子音の重ね打ち（`kk` → `っk`）、`nn`、`n` の後に
 子音が続く場合の「ん」は、表ではなく `RomajiKanaConverter::Feed` で処理し、レガシーと同一の
-挙動は求めない。例えば `nn` の後に母音が続くと、`n` を次の音節へ持ち越す（`konnichiha` →
-「こんにちは」）。
+挙動は求めない。例えば `nn` の後に母音か `y` が続くと、`n` を次の音節へ持ち越す（`konnichiha` →
+「こんにちは」）。レガシーの表は `nn` → 「ん」で 2 文字とも消費するので、`genninn` はレガシーでは
+「げんいん」、Windows 版では「げんにん」になる。
+
+この `nn` + 母音の曖昧さは、ローマ字の規則を変えずに変換の段階で解決する方針とする。その素材として、
+`RomajiKanaConverter::AmbiguousReadings` は生ローマ字を受け取り、各 `nn` + 母音・`y` を
+「ん」+ な行（既定）と「ん」+ あ行・や行の両方で読んだ読みの一覧を返す。
+
+- 先頭は既定の読みである。
+- 変える位置は先頭から 3 か所までとし、それより後ろは既定の読みに固定する。
+- `nnn` + 母音（「ん」+ な行を明示した綴り）と末尾の `nn` は、曖昧な位置に数えない。
+- その位置だけを「ん」+ あ行・や行で読むと、未変換の英字の数が既定の読みと変わる位置（末尾の
+  `nny`、`nnyi` など）は変えない。
+- カスタム表は `Feed` の `nn` 処理を通らないので、読みは 1 つだけになる。
+
+曖昧な位置は reading（かな）からは復元できないため、この関数は生ローマ字を入力に取る。
+この一覧を候補生成へ渡す経路（IPC、Host、TIP）は、DEV-1734 の後続の変更で扱う。
 
 カスタム TSV が存在しない、読み込めない、または有効な規則が 0 件のときは
 内蔵テーブルを使う。
@@ -1048,7 +1081,7 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`、`PredictionWindow::ComputePlacement`）とする。
 
 - 候補ウィンドウは anchor の下に開き、下端からはみ出すときはキャレットの上へ反転する。幅は作業領域の幅を上限とする。
-- 予測候補ウィンドウはキャレットの右に開き、はみ出すときは左、下端からはみ出すときは上へずらす（§3.2）。
+- 予測候補ウィンドウは composition 開始位置の下に開き、下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる（§3.2）。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
@@ -1087,7 +1120,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | Unicode 入力 | `core/tests/input_state_test.cpp` | 範囲チェック、桁数上限、`30A1` の確定 |
 | 候補ウィンドウのレイアウト、DPI 換算、配置 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算、作業領域内への配置と上への反転、負座標のモニタ（§9.2） |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3）、モニタ作業領域の解決と仮想スクリーンへの fallback（§9.2） |
-| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |
+| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。composition 開始位置の下への配置と、composition が伸びても位置が変わらないこと、モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |
 
 ## 11. 参照
 

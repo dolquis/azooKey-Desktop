@@ -4669,6 +4669,32 @@ TEST_F(EngineConfirmedEnglishWordTest, NothingIsWrittenWhileTheDictionaryIsOff) 
   EXPECT_TRUE(Lookup("kotlin").empty());
 }
 
+// M63 section 6.1: the dictionary alone, under the current config; the
+// English learning channel never answers it.
+TEST_F(EngineConfirmedEnglishWordTest, LookupEnglishDictionaryReturnsOnlyTheDictionary) {
+  azookey::learning::LearningStore english{temp_.File("english.tsv"),
+                                           &azookey::learning::test::Crypto()};
+  engine_->SetEnglishLearningStore(&english);
+  ASSERT_TRUE(engine_->CommitEnglishObservation("apple", "APPLE", 1));
+  ASSERT_TRUE(engine_->CommitEnglishObservation("kotlin", "Kotlin", 1));
+  const auto apple = engine_->LookupEnglishDictionary("apple");
+  ASSERT_EQ(apple.size(), 1u);
+  EXPECT_EQ(apple[0].surface, "apple");
+  EXPECT_EQ(apple[0].frequency, 50u);
+  EXPECT_TRUE(engine_->LookupEnglishDictionary("kotlin").empty());
+
+  auto config = engine_->config();
+  config.english.dictionary_enabled = false;
+  engine_->ApplyConfig(config);
+  EXPECT_TRUE(engine_->LookupEnglishDictionary("apple").empty());
+
+  config.english.dictionary_enabled = true;
+  config.english.dictionary_path = temp_.File("missing-english-words.tsv");
+  engine_->ApplyConfig(config);
+  EXPECT_TRUE(engine_->LookupEnglishDictionary("apple").empty());
+  engine_->SetEnglishLearningStore(nullptr);
+}
+
 TEST_F(EngineConfirmedEnglishWordTest, TrendingAutoPromotionUpsertsTheNewlyConfirmedWords) {
   const std::vector<azookey::learning::AutoWord> words{
       {"Kotlin", "ことりん"}, {"新語", "しんご"}, {"Swift", "すいふと"}};

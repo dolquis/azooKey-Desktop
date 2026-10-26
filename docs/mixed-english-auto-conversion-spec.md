@@ -151,6 +151,9 @@ M60 §4.2 のゲーティング（`inlineEnglishMinLength` など）を満たさ
 - Host は採用した分割から読みを組み立てる。J 区間はかな、E 区間は表層（§6.4）を、`r` の順に
   連結する（例 `きょうはGitHubにpushした`）。この読みを Zenzai の変換に渡す。プロンプトの形
   （`docs/zenzai-inference-spec.md` §3.2）は変えない。
+- 本節の読みの組み立てと次の `DropMixedKanaAsciiModelCandidates` の例外は、J 区間と E 区間が混在する
+  M63-B から効く。M63-A（§8.2）の 1 語の composition では、英字の候補は表層そのもので、日本語の
+  変換は M63 が OFF のときと同じかなの読みで行うため、Zenzai の読みに E 区間は入らない。
 - `DropMixedKanaAsciiModelCandidates`（M60 §4.3.1）は、ASCII 英字の有無を判定するときに M63 が
   入れた E 区間を除く。M63 が入れた英字を含む読みでは、かなと英字の混在した候補を落とさない。
   読みに残った ASCII（J 区間のかなに残った英字）による落とす規則は変えない。
@@ -170,20 +173,27 @@ E 区間は、次のどちらかを満たすときに高確度とし、それ以
 ローマ字として読める英単語は (ii) を満たさないので、Shift で打たない限り低確度である。
 
 学習による抑制: (ii) で高確度になる区間でも、English チャネルにその区間のキーの負の観測（§11）が
-あるときは低確度として扱う。このとき、その区間は日本語のまま第 1 候補に入り、英字は M63-A では
-第 2 候補（§8.2）、M63-B では §8.3 の 3（その区間だけを英字にした候補）になる。
+あるときは低確度として扱う。このとき、その区間は日本語のまま第 1 候補に入り、英字は §8.3 の 3
+（その区間だけを英字にした候補）になる。抑制は M63-B で入れ、M63-A（§8.2）は学習で確度を変えない。
 キーは M60 §5 と同じく、区間の生ローマ字を小文字に畳んだもの（`lower`）とする。抑制は、区間の
 生ローマ字が大文字を 1 つも含まないときだけ掛ける。(i)（Shift 先頭大文字）を含め、大文字を含む
 打鍵の区間は学習で変えない。
 
 ### 8.2 M63-A（composition 全体が 1 語）
 
-- 分割器の先頭の経路が composition 全体を 1 つの E 区間とし、その区間が高確度なら、ライブ変換と
-  第 1 候補をその表層にする。日本語の変換を第 2 候補以降に置く。
+- M63-A は、composition 全体の生ローマ字が英単語辞書に一致するか、先頭の文字を Shift で大文字にして
+  打ったとき、全体を 1 つの E 区間とし、§8.1 で確度を決める。§6.3 の罰（かなとして読める部分列の
+  E の辺）は掛けない。§6.3 は M63-B の混合ラティスの規則である。そのため `kite` も E 区間になり、
+  低確度として次の規則で英字が第 2 候補に入る。
+- その区間が高確度なら、ライブ変換と第 1 候補をその表層にする。日本語の変換を第 2 候補以降に置く。
+  ライブ変換では Zenzai を呼ばず、表層をそのまま返す（`segments` は E 区間 1 つ。§9.2）。
+  M59 の句読点の規則（`docs/dynamic-punctuation-spec.md`）は M63 が OFF のときと同じく掛ける。
 - 低確度なら、日本語の変換を第 1 候補、英字を第 2 候補にする。
 - 英単語辞書が無いときは (ii) を満たせないので、(i) だけを高確度とする。
 - 英単語候補の生成条件（M60 §4.2 のゲーティング）を満たさない入力（例 `kyouha`）には英字の候補を
   足さない。
+- §8.1 の学習による抑制と §11 の負の観測は M63-B で入れる。M63-A では、英字の確定を M60 §6.4 の
+  English チャネルの学習に流すだけとし、英字の候補の確度を学習で変えない。
 
 ### 8.3 M63-B（文中混在）
 
@@ -210,9 +220,9 @@ ON の composition では、本章の規則が優先する。順位安定化（�
 
 ## 9. IPC
 
-payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.cpp` である。本章の
-フィールドは M63 の実装 PR がそこへ加える。どのフィールドも省略可能で、空・false のときは wire に
-出さない。
+payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.cpp` で、本章の
+フィールドはそこに定義がある。どのフィールドも省略可能で、既定値（空・false・0。
+`secure` は true）のときは wire に出さない。
 
 ### 9.1 Request
 
@@ -220,7 +230,14 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 |---|---|---|
 | `QueryLiveConversionRequest` | `raw_romaji`（string） | 生ローマ字。§5 の条件を満たすときだけ送る |
 | 同上 | `mixed_english`（bool） | TIP の M63 の設定（§5 の条件を満たすとき true） |
+| 同上 | `secure`（bool） | 入力欄が secure か（§9.4）。省略時と bool 以外の値は true（secure）。false のときだけ送る |
 | `QueryCandidatesRequest` | `mixed_english`（bool） | 同上。生ローマ字は M60 の `raw_romaji` を使う |
+| `QueryBatchConversionRequest` | `secure`（bool） | 入力欄が secure か（§9.4）。省略時と bool 以外の値は true（secure）。false のときだけ送る |
+
+`QueryCandidatesRequest` は `secure` を既に持つ（省略時は true）。
+`QueryBatchConversionRequest.secure` は M63 の処理ではなく、M60 の一括変換の英単語候補
+（`docs/inline-english-candidate-spec.md` §4.1.1）を secure の入力から守るために足す。一括変換に
+`mixed_english` は加えない（§13）。
 
 `QueryCandidatesRequest` で `mixed_english` を true にするときは、M60 §4.1 の条件で `raw_romaji` と
 `english_candidates` も送る。`live = true` の `QueryCandidates` には M60 と同じく載せない。
@@ -258,16 +275,21 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 `docs/privacy-and-secure-input-spec.md` §5 である。
 
 - TIP は secure の入力では、どの要求にも `raw_romaji` と `mixed_english` を載せない（本書 §5）。
+  一括変換（`QueryBatchConversionRequest`）も含む。一括変換の TIP は生ローマ字で読みを分割するが、
+  secure の入力では送る要求から `raw_romaji` を除き、かなの `reading` だけを送る。
 - Host の防御:
-  - `QueryCandidatesRequest.secure` が true の要求では、`mixed_english` を無視し、`raw_romaji` を
-    M63 の処理に使わない。M60 の英単語候補の扱いは変えない。
+  - `QueryCandidatesRequest.secure` と `QueryLiveConversionRequest.secure` が true（省略時を含む）の
+    要求では、`mixed_english` を無視し、`raw_romaji` を M63 の処理に使わない。`QueryCandidates` では
+    M60 の英単語候補も作らない（`docs/inline-english-candidate-spec.md` §4.1）。
+  - `QueryBatchConversionRequest.secure` が true（省略時を含む）の要求では、M60 の英単語候補を
+    作らない（同 §4.1.1・§6.7）。
   - `mixed_english` が false の要求では、`raw_romaji` を M63 の処理に使わない。M60 §4 の用途は
     変えない。
   - Host は、M63 の処理で受け取った生ローマ字を、その要求の処理のほかの経路（キャッシュの鍵、
     診断の出力、別の要求）に使わない。
-- `QueryLiveConversionRequest` は `secure` を持たない。ライブ変換の生ローマ字を secure の入力から
-  守るのは、TIP が送らないことだけである。Host 側にも防御を置くなら、M63-A の実装 PR が
-  `QueryLiveConversionRequest` に省略可能な `secure` を足す（足すかどうかは M63-A で決める）。
+- TIP は、secure でない入力の要求に `secure = false` を載せる。`secure` を送らない旧 TIP の要求は
+  secure として扱われる。そのため、一括変換の `secure` を判定する Host と旧 TIP の組み合わせでは、
+  一括変換に M60 の英単語候補が出ない。ライブ変換は、旧 TIP が `raw_romaji` を送らないので影響を受けない。
 - 生ローマ字と区間の表層は、ログとダンプに平文で出さない。`RuntimeLogger` の redaction
   （`docs/dev-infrastructure-spec.md` §7.6。secure 中は `docs/privacy-and-secure-input-spec.md` §8）で
   本文系のフィールドとして扱い、出すのは件数と長さだけにする。
@@ -275,7 +297,8 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 ## 10. レイテンシと打ち切り
 
 - 打鍵ごとのライブ変換では、分割器を 1 回、Zenzai の変換を 1 回だけ行う。分割の候補ごとに
-  Zenzai を回す方式（H3）と、分割に NllScorer を使う方式は採らない。
+  Zenzai を回す方式（H3）と、分割に NllScorer を使う方式は採らない。M63-A で composition 全体が
+  高確度の E 区間のときは、Zenzai の変換を行わない（§8.2）。
 - ライブ変換の応答は `docs/dev-infrastructure-spec.md` §8.5.2 の 150ms に収める。Zenzai の 1 回の
   予算は `docs/zenzai-inference-spec.md` §8 のとおりで、M63 は増やさない。
 - 分割器の上限: 生ローマ字は 64 文字まで、上位の経路は 8 件まで。上限を超えた composition、
@@ -309,7 +332,8 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
 - 第 1 候補で英字だった区間（§8.1 の (ii) で高確度の区間）を、ユーザーが日本語へ選び直して
   確定したときは、English チャネルにその区間のキー（`lower(区間の生ローマ字)`。§8.1）の負の観測を
   記録する。次に同じキーの区間が (ii) を満たしても低確度として扱う（§8.1 の学習による抑制）。
-  (i)（Shift 先頭大文字）で高確度だった区間は、選び直しても負の観測にしない。
+  (i)（Shift 先頭大文字）で高確度だった区間は、選び直しても負の観測にしない。負の観測の記録と
+  抑制は M63-B で入れる（§8.2）。
   - TIP は、確定した区間の `ObservedSegment.shown`（1 区間の composition では `CommitObservation`
     の `shown`）に、既存の中身に加えて、第 1 候補で英字だった区間の候補を入れる。この候補は
     `tag` が `English`、`reading` が区間の生ローマ字で、その区間を表す `segments`（E 区間 1 つ。
@@ -346,8 +370,8 @@ M60 §4.1.1 のとおり 1 文節の場合に限る。
 
 ## 14. 設定
 
-M63 の実装 PR が `settings/mvp-settings.schema.json` に次のキーを加える（`additionalProperties:false`
-を維持する）。schema の正典は `settings/mvp-settings.schema.json` である。
+`settings/mvp-settings.schema.json` は次のキーを持つ（`additionalProperties:false` を維持する）。
+schema の正典は `settings/mvp-settings.schema.json` である。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|

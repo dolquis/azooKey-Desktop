@@ -142,6 +142,7 @@
   <data name="Setting_batchConversionMode" xml:space="preserve"><value>一括変換の方式</value></data>
   <data name="Setting_batchAutoPunctuation" xml:space="preserve"><value>一括変換で句読点を補う</value></data>
   <data name="Setting_inlineEnglishCandidates" xml:space="preserve"><value>ローマ字入力中に英単語を候補に出す</value></data>
+  <data name="Setting_mixedEnglishAutoConversion" xml:space="preserve"><value>英単語を自動で英字にする（日英混在の入力）</value></data>
   <data name="Setting_inlineEnglishCaseVariants" xml:space="preserve"><value>大文字・小文字の候補も出す</value></data>
   <data name="Setting_fullWidthEnglishCandidate" xml:space="preserve"><value>全角英字の候補も出す</value></data>
   <data name="Setting_inlineEnglishMinLength" xml:space="preserve"><value>英単語候補を出す最小文字数</value></data>

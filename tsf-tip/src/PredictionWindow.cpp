@@ -62,7 +62,7 @@ struct PredictionWindow::RenderState {
 PredictionWindow::PredictionWindow() = default;
 PredictionWindow::~PredictionWindow() { Destroy(); }
 
-RECT PredictionWindow::ComputePlacement(RECT caret, RECT work_area, int width, int height) {
+RECT PredictionWindow::ComputePlacement(RECT anchor, RECT work_area, int width, int height) {
   width = std::max(width, 0);
   height = std::max(height, 0);
   const int min_x = work_area.left;
@@ -70,10 +70,11 @@ RECT PredictionWindow::ComputePlacement(RECT caret, RECT work_area, int width, i
   const int min_y = work_area.top;
   const int max_y = std::max(min_y, static_cast<int>(work_area.bottom) - height);
 
-  int x = caret.right + 4;
-  if (x + width > work_area.right) x = caret.left - width - 4;
-  int y = caret.top;
-  if (y + height > work_area.bottom) y = caret.bottom - height;
+  // Only the anchor's right edge moves while a single-line composition grows,
+  // so the window hangs off its start and keeps still (DEV-1732).
+  int x = anchor.left;
+  int y = anchor.bottom;
+  if (y + height > work_area.bottom) y = anchor.top - height;
   x = std::clamp(x, min_x, max_x);
   y = std::clamp(y, min_y, max_y);
   return {x, y, x + width, y + height};

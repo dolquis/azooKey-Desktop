@@ -866,7 +866,8 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - liveConversion OFF との対照と設定切替: ____
 
 ## DEV-1350 M15
-- 予測窓のキャレット右側配置、画面端での反転と欠け: ____
+- 予測窓の composition 開始位置の下への配置（打鍵中に動かない。ライブ変換オンでも同じ）、画面下端での上への反転と右端での欠け: ____
+- kan → Esc → 1 秒以内に kan を 10 回繰り返し、毎回予測窓が出る（DEV-1712）: ____
 - Tab / Shift+Tab / クリック / Esc と読みの残り: ____
 - predictionEnabled OFF との対照: ____
 - `privacy.custom.prediction=false` と secure 入力先（secure 入力欄、app profile の secure）で予測窓が出ない: ____

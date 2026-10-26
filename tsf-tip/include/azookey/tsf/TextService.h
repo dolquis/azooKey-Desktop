@@ -334,6 +334,7 @@ class TextService final : public ITfTextInputProcessorEx,
     return prediction_result_.has_value();
   }
   size_t shown_prediction_count_for_test() const { return shown_predictions_.size(); }
+  bool prediction_query_hold_set_for_test() const { return !prediction_last_query_key_.empty(); }
   bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);
@@ -508,6 +509,18 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_english_candidates_for_test(bool enabled, bool host_supported = true) {
     local_settings_.SetInlineEnglishCandidatesForTest(enabled);
     ipc_host_english_candidates_.store(host_supported);
+  }
+  void set_mixed_english_for_test(bool enabled, bool host_supported = true) {
+    local_settings_.SetMixedEnglishAutoConversionForTest(enabled);
+    ipc_host_mixed_english_.store(host_supported);
+  }
+  bool pending_ipc_mixed_english_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_mixed_english_;
+  }
+  bool pending_ipc_secure_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_secure_;
   }
   bool pending_ipc_english_candidates_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -1046,6 +1059,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_left_context_;
   std::string ipc_pending_raw_romaji_;
   bool ipc_pending_english_candidates_{false};  // ipc_mtx_
+  bool ipc_pending_mixed_english_{false};       // ipc_mtx_
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   std::string ipc_pending_trace_id_;       // protected by ipc_mtx_
@@ -1083,6 +1097,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // Handshake capability "english_candidates" (M60). Without it the TIP sends
   // neither raw_romaji nor english_candidates.
   std::atomic<bool> ipc_host_english_candidates_{false};
+  // Handshake capability "mixed_english" (M63). Without it the TIP sends no
+  // mixed_english and no live-conversion raw_romaji.
+  std::atomic<bool> ipc_host_mixed_english_{false};
   // Handshake capability "commit_correction" (DEV-1529); CommitCorrection is
   // sent only to a Host that advertises it.
   std::atomic<bool> ipc_host_commit_correction_{false};
@@ -1237,7 +1254,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id);
   void QueryPendingPrediction(uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
-                    const std::string& mode, const std::string& trace_id, bool english_candidates);
+                    const std::string& mode, const std::string& trace_id, bool english_candidates,
+                    bool secure);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options,
@@ -1362,6 +1380,10 @@ class TextService final : public ITfTextInputProcessorEx,
   bool EnglishCandidatesEnabled() const;
   // The typed romaji when it still spells `reading`, empty otherwise.
   std::string EnglishRawRomajiFor(const std::string& reading) const;
+  // M63 (docs/mixed-english-auto-conversion-spec.md section 5): the raw romaji
+  // to send with mixed_english for `reading`, or empty when any condition of
+  // section 5 fails. `secure` is the request's privacy decision.
+  std::string MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const;
   // Drops trailing romaji until the rest spells the current preedit, so a
   // Backspace that erased a whole kana also erases the keys that typed it.
   void SyncEnglishRawRomaji();

@@ -59,6 +59,7 @@
   "batchConversionMode": "neural",
   "batchAutoPunctuation": false,
   "inlineEnglishCandidates": false,
+  "mixedEnglishAutoConversion": false,
   "inlineEnglishCaseVariants": true,
   "fullWidthEnglishCandidate": false,
   "inlineEnglishMinLength": 2,

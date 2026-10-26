@@ -658,6 +658,33 @@ TEST(PayloadsTest, QueryBatchConversionEnglishCandidatesIsOptional) {
   EXPECT_FALSE(parsed->english_candidates);
 }
 
+// M63 section 9.4: absent, true and a non-bool are secure; only false is sent.
+TEST(PayloadsTest, QueryBatchConversionSecureDefaultsToSecure) {
+  azookey::ipc::QueryBatchConversionRequest req;
+  req.reading = "あっぷる";
+  req.raw_romaji = "apple";
+  req.english_candidates = true;
+  auto json = azookey::ipc::BuildQueryBatchConversionRequest(req);
+  EXPECT_EQ(json.find("\"secure\""), std::string::npos);
+  auto parsed = azookey::ipc::ParseQueryBatchConversionRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->secure);
+
+  req.secure = false;
+  parsed = azookey::ipc::ParseQueryBatchConversionRequest(
+      azookey::ipc::BuildQueryBatchConversionRequest(req));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_TRUE(parsed->english_candidates);
+
+  for (const char* payload : {R"({"reading":"かな"})", R"({"reading":"かな","secure":true})",
+                              R"({"reading":"かな","secure":"no"})"}) {
+    parsed = azookey::ipc::ParseQueryBatchConversionRequest(payload);
+    ASSERT_TRUE(parsed.has_value()) << payload;
+    EXPECT_TRUE(parsed->secure) << payload;
+  }
+}
+
 TEST(PayloadsTest, QueryBatchConversionErrorClassRoundTrip) {
   azookey::ipc::QueryBatchConversionResponse response;
   response.error_class = "Network";
@@ -1754,6 +1781,135 @@ TEST(PayloadsTest, QueryCandidatesCarriesRawRomajiAndTheEnglishFlag) {
   ASSERT_TRUE(parsed_response && parsed_response->candidates.size() == 2u);
   EXPECT_EQ(parsed_response->candidates[1].tag, 4u);
   EXPECT_EQ(parsed_response->candidates[1].reading, "apple");
+}
+
+// M63 section 9: every field is optional, absent when empty / false / None,
+// and an older peer decodes the defaults.
+TEST(PayloadsTest, MixedEnglishRequestFieldsAreOptional) {
+  using namespace azookey::ipc;
+  QueryLiveConversionRequest live{"ぎてゅぶ", ""};
+  // The pre-M63 wire shape, unchanged.
+  EXPECT_EQ(
+      BuildQueryLiveConversionRequest(live),
+      R"({"auto_punctuation":false,"context":"","kana":"ぎてゅぶ","punctuation_style":"ja"})");
+  live.raw_romaji = "GitHub";
+  live.mixed_english = true;
+  const auto parsed_live = ParseQueryLiveConversionRequest(BuildQueryLiveConversionRequest(live));
+  ASSERT_TRUE(parsed_live);
+  EXPECT_EQ(parsed_live->raw_romaji, "GitHub");
+  EXPECT_TRUE(parsed_live->mixed_english);
+  const auto legacy_live = ParseQueryLiveConversionRequest(R"({"kana":"かな","context":""})");
+  ASSERT_TRUE(legacy_live);
+  EXPECT_TRUE(legacy_live->raw_romaji.empty());
+  EXPECT_FALSE(legacy_live->mixed_english);
+  const auto wrong_type = ParseQueryLiveConversionRequest(
+      R"({"kana":"かな","context":"","raw_romaji":7,"mixed_english":"yes"})");
+  ASSERT_TRUE(wrong_type);
+  EXPECT_TRUE(wrong_type->raw_romaji.empty());
+  EXPECT_FALSE(wrong_type->mixed_english);
+  // secure (section 9.4): absent, true and a non-bool are secure; only false is
+  // sent, so the default keeps the pre-M63 shape pinned above.
+  EXPECT_TRUE(parsed_live->secure);
+  EXPECT_TRUE(legacy_live->secure);
+  EXPECT_TRUE(
+      ParseQueryLiveConversionRequest(R"({"kana":"かな","context":"","secure":"no"})")->secure);
+  live.secure = false;
+  const auto insecure_live = ParseQueryLiveConversionRequest(BuildQueryLiveConversionRequest(live));
+  ASSERT_TRUE(insecure_live);
+  EXPECT_FALSE(insecure_live->secure);
+
+  QueryCandidatesRequest candidates;
+  candidates.reading = "ぎてゅぶ";
+  candidates.raw_romaji = "github";
+  candidates.english_candidates = true;
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(candidates))->Find("mixed_english"));
+  candidates.mixed_english = true;
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(candidates));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->mixed_english);
+  EXPECT_EQ(parsed->raw_romaji, "github");
+  const auto legacy = ParseQueryCandidatesRequest(R"({"reading":"かな"})");
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->mixed_english);
+}
+
+TEST(PayloadsTest, SegmentTagsAndCandidateSegmentsAreOptional) {
+  using namespace azookey::ipc;
+  LiveSegment english;
+  english.end_char = 6;
+  english.score = 1.0;
+  english.surface = "GitHub";
+  english.reading = "github";
+  english.tag = 4;
+  LiveSegment japanese;
+  japanese.start_char = 6;
+  japanese.end_char = 7;
+  japanese.score = 1.0;
+  japanese.surface = "に";
+  japanese.reading = "に";
+
+  // LiveSegment.tag on the live conversion response; None stays off the wire.
+  QueryLiveConversionResponse live{"GitHubに", 0.9};
+  live.segments = {english, japanese};
+  const auto live_json = BuildQueryLiveConversionResponse(live);
+  const auto live_wire = json::Parse(live_json);
+  ASSERT_TRUE(live_wire);
+  const auto* live_segments = live_wire->GetArray("segments");
+  ASSERT_TRUE(live_segments && live_segments->size() == 2u);
+  EXPECT_EQ((*live_segments)[0].GetUInt("tag"), 4u);
+  EXPECT_FALSE((*live_segments)[1].Find("tag"));
+  const auto parsed_live = ParseQueryLiveConversionResponse(live_json);
+  ASSERT_TRUE(parsed_live && parsed_live->segments.size() == 2u);
+  EXPECT_EQ(parsed_live->segments[0].tag, 4u);
+  EXPECT_EQ(parsed_live->segments[0].reading, "github");
+  EXPECT_EQ(parsed_live->segments[1].tag, 0u);
+
+  // CandidateField.segments; a candidate without them keeps its shape.
+  QueryCandidatesResponse response;
+  CandidateField first{"GitHubに", "github", 1.0, "model"};
+  first.segments = {english, japanese};
+  response.candidates = {first, {"ぎてゅぶに", "ぎてゅぶに", 0.5, "system"}};
+  const auto response_json = BuildQueryCandidatesResponse(response);
+  const auto response_wire = json::Parse(response_json);
+  ASSERT_TRUE(response_wire);
+  EXPECT_FALSE(response_wire->Find("segments"));
+  const auto* wire = response_wire->GetArray("candidates");
+  ASSERT_TRUE(wire && wire->size() == 2u);
+  ASSERT_TRUE((*wire)[0].GetArray("segments"));
+  EXPECT_EQ((*wire)[0].GetArray("segments")->size(), 2u);
+  EXPECT_FALSE((*wire)[1].Find("segments"));
+  const auto parsed = ParseQueryCandidatesResponse(response_json);
+  ASSERT_TRUE(parsed && parsed->candidates.size() == 2u);
+  ASSERT_EQ(parsed->candidates[0].segments.size(), 2u);
+  EXPECT_EQ(parsed->candidates[0].segments[0].surface, "GitHub");
+  EXPECT_EQ(parsed->candidates[0].segments[0].tag, 4u);
+  EXPECT_EQ(parsed->candidates[0].segments[1].start_char, 6u);
+  EXPECT_TRUE(parsed->candidates[1].segments.empty());
+  EXPECT_TRUE(parsed->segments.empty());
+
+  // shown[] of a commit carries them too (section 11).
+  CommitObservationRequest commit;
+  commit.reading = "ぎてゅぶに";
+  commit.chosen = response.candidates[1];
+  commit.shown = response.candidates;
+  const auto parsed_commit = ParseCommitObservationRequest(BuildCommitObservationRequest(commit));
+  ASSERT_TRUE(parsed_commit && parsed_commit->shown.size() == 2u);
+  EXPECT_EQ(parsed_commit->shown[0].segments.size(), 2u);
+  EXPECT_TRUE(parsed_commit->chosen.segments.empty());
+
+  // Older peers: no tag, no segments. Unknown tags pass, beyond uint8 is None,
+  // and a malformed segment is skipped without dropping the candidate.
+  const auto other = ParseQueryCandidatesResponse(
+      R"({"candidates":[{"surface":"a","reading":"a"},)"
+      R"({"surface":"ab","reading":"ab","segments":[)"
+      R"({"start_char":0,"end_char":1,"score":0,"surface":"a","tag":9},)"
+      R"({"start_char":1,"end_char":2,"score":0,"surface":"b","tag":256},)"
+      R"({"start_char":2,"end_char":1,"score":0,"surface":"x"}]}]})");
+  ASSERT_TRUE(other && other->candidates.size() == 2u);
+  EXPECT_TRUE(other->candidates[0].segments.empty());
+  ASSERT_EQ(other->candidates[1].segments.size(), 2u);
+  EXPECT_EQ(other->candidates[1].segments[0].tag, 9u);
+  EXPECT_EQ(other->candidates[1].segments[1].tag, 0u);
 }
 
 // -------- M49 learning data management (DEV-1190) --------

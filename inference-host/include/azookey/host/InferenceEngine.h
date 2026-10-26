@@ -260,6 +260,11 @@ class InferenceEngine {
   // dictionary (loaded on first use, reloaded when the file changes) and the
   // English learning channel.
   EnglishCandidates QueryEnglishCandidates(const std::string& raw_romaji, uint64_t now_epoch_sec);
+  // M63 (docs/mixed-english-auto-conversion-spec.md section 6.1): the English
+  // dictionary's surfaces for lower_key, most frequent first, under the
+  // current config. Empty when inlineEnglishDictionary is off or the
+  // dictionary is missing or unreadable. Never the learned surfaces.
+  std::vector<EnglishDictionaryEntry> LookupEnglishDictionary(std::string_view lower_key);
   // Records a committed English candidate under its lowercased raw romaji in
   // the English channel only. false for a duplicate observation_id or when no
   // English store is set.

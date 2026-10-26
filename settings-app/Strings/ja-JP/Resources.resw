@@ -253,7 +253,7 @@
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>
-  <data name="SettingNote_punctuationConversion"xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
+  <data name="SettingNote_punctuationConversion" xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
   <data name="SettingNote_dynamicPunctuation" xml:space="preserve"><value>ライブ変換が有効なときだけ働きます。</value></data>
   <data name="SettingNote_dynamicPunctuationIdleMs" xml:space="preserve"><value>確定のタイミングが「入力が止まったとき」の場合だけ使います。</value></data>
   <data name="SettingNote_batchConversionMode" xml:space="preserve"><value>「AI で整える」は、AI バックエンドが「使わない」のときニューラル変換になります。</value></data>

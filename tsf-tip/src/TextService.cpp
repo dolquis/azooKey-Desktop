@@ -1815,7 +1815,10 @@ void TextService::OnInputModeLangBarClick(TfLBIClick click) {
   // the menu of DEV-1738.
   if (click != TF_LBI_CLK_LEFT) return;
   recent_character_form_commit_.reset();
-  (void)SetKeyboardOpen(!keyboard_open_, "langbar_click");
+  if (keyboard_open_)
+    (void)CloseKeyboardCommittingShownText(nullptr, "langbar_click");
+  else
+    (void)SetKeyboardOpen(true, "langbar_click");
 }
 
 STDMETHODIMP TextService::OnChange(REFGUID rguid) {
@@ -1860,19 +1863,54 @@ HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   value.vt = VT_I4;
   value.lVal = open ? 1 : 0;
   const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
-  // Closing commits the shown text through RefreshKeyboardOpen (spec §4.2).
+  // Closing commits what is left through RefreshKeyboardOpen, the lifecycle
+  // path that commits the reading (spec §4.2).
   if (SUCCEEDED(hr)) RefreshKeyboardOpen(source);
   return hr;
 }
 
-HRESULT TextService::HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key) {
+bool TextService::HasInputToCommitBeforeClose() const {
+  return composition_ || !preedit_kana_.empty() || romaji_.HasPending() ||
+         candidate_ui_.IsShowing() || !batch_raw_romaji_.empty() || !shown_batch_segments_.empty();
+}
+
+HRESULT TextService::CloseKeyboardCommittingShownText(ITfContext* context,
+                                                      std::string_view source) {
+  ITfContext* target = context ? context : active_context_;
+  if (keyboard_open_ && keyboard_open_compartment_ && client_id_ != TF_CLIENTID_NULL && target &&
+      HasInputToCommitBeforeClose()) {
+    // Spec §4.2: an off key commits what is shown (the live conversion, the
+    // selected candidate) the way Enter does, without waiting for a final
+    // punctuation request, before closing.
+    commit_before_close_ = true;
+    BOOL committed = FALSE;
+    HRESULT hr = S_OK;
+    try {
+      hr = OnKeyDown(target, VK_RETURN, 0, &committed);
+    } catch (...) {
+      commit_before_close_ = false;
+      throw;
+    }
+    commit_before_close_ = false;
+    if (FAILED(hr)) return hr;
+    // A refused edit session keeps the text (or a commit queued for retry),
+    // and so does an Enter that waits, such as for a batch conversion: stay on
+    // so the text is neither lost nor committed as its reading. The key is consumed.
+    if (committing_ || HasInputToCommitBeforeClose()) return S_OK;
+  }
+  return SetKeyboardOpen(false, source);
+}
+
+HRESULT TextService::HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key,
+                                        ITfContext* context) {
   recent_character_form_commit_.reset();
   // The source names the key family for keyboard_open_refresh, never the code.
   switch (action) {
     case OpenCloseKeyAction::Open:
       return SetKeyboardOpen(true, key == VK_CONVERT ? "convert_key" : "ime_on_key");
     case OpenCloseKeyAction::Close:
-      return SetKeyboardOpen(false, key == VK_NONCONVERT ? "nonconvert_key" : "ime_off_key");
+      return CloseKeyboardCommittingShownText(
+          context, key == VK_NONCONVERT ? "nonconvert_key" : "ime_off_key");
     case OpenCloseKeyAction::Toggle:
       return ToggleKeyboardOpen();
     case OpenCloseKeyAction::None:
@@ -2502,7 +2540,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Before reconversion and the character-form cycle, which Convert and
     // NonConvert give up under convertKeysAction "imeOnOff" (spec §3.1.1).
     if (open_close != OpenCloseKeyAction::None) {
-      const HRESULT hr = HandleOpenCloseKey(open_close, wParam);
+      const HRESULT hr = HandleOpenCloseKey(open_close, wParam, context);
       if (SUCCEEDED(hr)) *eaten = TRUE;
       return hr == E_UNEXPECTED ? S_OK : hr;
     }
@@ -8077,7 +8115,9 @@ void TextService::OnPunctuationTimer(DelayedActionTimer::Slot slot) {
 // key comes. Returns false when the commit should proceed at once.
 bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::InputState& previous,
                                             core::HandleResult& result) {
-  if (final_punctuation_hold_ || !context || !core_input_active_ || !input_state_.live_conversion())
+  // An off key commits the surface shown now instead of waiting (spec §4.2).
+  if (final_punctuation_hold_ || commit_before_close_ || !context || !core_input_active_ ||
+      !input_state_.live_conversion())
     return false;
   if (previous.kind() != core::InputStateKind::Composing &&
       previous.kind() != core::InputStateKind::Previewing)

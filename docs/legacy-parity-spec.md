@@ -233,6 +233,9 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
   Selecting で `Up` / `Down` になる。
 - Alt または Win を含む組合せは常に `nullopt` とする。
+- 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、`convertKeysAction` が `imeOnOff` のときの変換・無変換）は、
+  TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md` §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` は
+  この写像では `nullopt` である。
 - TIP は `ClientAction` の効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、
   Commit、Cancel、Selecting 中の Forward / Backward）だけを消費する。モード切替・Unicode 入力・
   Forget・デバッグ窓の `UserAction` は、対応するマイルストーン（M16 / M18）が効果を実装するまで

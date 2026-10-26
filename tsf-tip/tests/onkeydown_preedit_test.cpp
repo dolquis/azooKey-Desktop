@@ -2917,6 +2917,28 @@ TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheLiveConversionSurfaceBeforeC
   EXPECT_EQ(h.service.composition_, nullptr);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyStaysOnWhenTheCommitIsRefused) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  // The host refuses the commit edit session: the text stays queued for retry
+  // and is not committed as its reading by the close.
+  h.context.skip_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  h.context.skip_write_callback = false;
+  // The next press retries the commit first and the one after closes.
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, ConvertKeysDoNotOpenOrCloseByDefault) {
   OpenCloseCompartment compartment;  // Outlives the service, which releases it.
   TextServiceHarness h;
@@ -7750,6 +7772,33 @@ TEST(TsfTipSecureInputTest, BundledSecureAppSuppressesCommitObservation) {
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
 
+// DEV-1736: an off key commits the selected candidate through Enter's path, so
+// it is learned like Enter outside a secure app and suppressed inside one.
+TEST(TsfTipSecureInputTest, ImeOffKeyCommitIsObservedOnlyOutsideSecureApps) {
+  for (const bool secure : {false, true}) {
+    SCOPED_TRACE(secure);
+    OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+    TextServiceHarness h;
+    h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+    h.service.set_foreground_app_for_test(
+        secure ? azookey::core::ForegroundApp{"KeePass.exe", "WindowsForms10.Window.8.app.0", true}
+               : azookey::core::ForegroundApp{"notepad.exe", "Notepad", true});
+    h.service.preedit_kana_ = "かな";
+    std::vector<azookey::ipc::CandidateField> host_candidates(1);
+    host_candidates[0].reading = "かな";
+    host_candidates[0].surface = "仮名";
+    host_candidates[0].source = "dictionary";
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(std::move(host_candidates)); }));
+    h.service.set_selected_candidate_index_for_test(0);
+    FakeCompositionAttachment attachment(h);
+    EXPECT_TRUE(h.Press(VK_IME_OFF));
+    EXPECT_FALSE(h.service.keyboard_open());
+    EXPECT_EQ(attachment.composition_range.last_text, L"仮名");
+    EXPECT_EQ(h.service.last_queued_commit_observation_for_test().has_value(), !secure);
+  }
+}
+
 TEST(TsfTipSecureInputTest, UserAddedSecureAppSuppressesCommitObservation) {
   TextServiceHarness h;
   azookey::core::BracketSettings settings;
@@ -10846,6 +10895,35 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   ASSERT_FALSE(text.empty());
   EXPECT_EQ(text.front(), L'蚊');
   EXPECT_EQ(text.find(L'蚊', 1), std::wstring::npos);
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            1);
+}
+
+// DEV-1736: an off key commits the surface shown now, as Enter does, but never
+// holds for the final request: the IME is off once the key returns.
+TEST(TsfTipDynamicPunctuationTest, ImeOffKeyCommitsTheShownSurfaceWithoutHolding) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  StartLive(h, DynamicPunctuation());
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  // The commit is observed once, as the same Enter would be.
   const auto queued = h.service.queued_ipc_types_for_test();
   EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
             1);

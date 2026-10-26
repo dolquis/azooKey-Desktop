@@ -547,7 +547,7 @@ Alt の単独押しを TIP が検出することはしない。
 - `VK_IME_ON`: Off なら On にする。On なら compartment を書き換えない。英数モード中なら英数モードを
   解除し、ひらがな入力に戻す。
 - `VK_IME_OFF`: On なら Off にする。Off なら何もしない。入力途中（読み、ライブ変換の表示、候補の選択中）
-  なら、半角/全角で Off にするときと同じく、表示中の文字列を確定してから Off にする（§4.2）。
+  なら、表示中の文字列を Enter と同じに確定してから Off にする（§4.2）。
 
 ### 3.1.1 変換・無変換キーの役割（`convertKeysAction`）
 
@@ -705,8 +705,16 @@ TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` �
 | On | Off | composition があれば確定 (auto-commit) し、内部状態をクリア |
 | On（英数モード） | On | `VK_IME_ON` と `imeOnOff` の変換キーだけ。英数モードを解除して `hiragana` にする。compartment は書き換えない |
 
-On → Off の確定は、フォーカス喪失と同じ確定の経路を使い、画面に表示中の文字列（ライブ変換の表示、
-選択中の候補）を確定する。TSF が編集を拒んだときは composition を残し、後の edit session で確定し直す。
+On → Off で何を確定するかは、Off にした操作で決まる。
+
+- `VK_IME_OFF`、`imeOnOff` の無変換、入力インジケーターの左クリック（§4.5）: 画面に表示中の文字列
+  （ライブ変換の表示、選択中の候補、読み）を Enter と同じ経路で確定してから compartment を 0 にする。
+  Enter と同じく確定を学習観測に送り、secure と学習不可の文脈では送らない。`dynamicPunctuation` の
+  onPause で Enter が行う最終要求の待ち（`docs/dynamic-punctuation-spec.md` §7.3）はせず、表示中の文字列を
+  その場で確定する。確定の edit session が拒否されたとき、または Enter が確定せずに待つとき（一括変換の応答待ち）は
+  Off にせず On のまま残し、キーは消費する。拒否された確定は次のキーで確定し直す。
+- 半角/全角、言語バーや IMM など TIP の外からの Off: フォーカス喪失と同じ確定の経路で、読み（未確定ローマ字を含む）を
+  確定する。TSF が編集を拒んだときは composition を残し、後の edit session で確定し直す。
 
 ### 4.3 Win+Space / アプリ切替時
 
@@ -786,7 +794,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 - 更新の契機: OPENCLOSE compartment の変化、英数モードの切り替え、開閉キー、フォーカスの移動。表示が変わったときだけ
   `ITfLangBarItemSink::OnUpdate(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP)` で通知する。
 - 左クリック（`TF_LBI_CLK_LEFT`）: 半角/全角と同じく On/Off を切り替える。ユーザーの開閉として扱い、§4.1 の
-  1 秒以内の On への戻しの対象にしない（`source` は `langbar_click`）。Off にするときは表示中の文字列を確定する。
+  1 秒以内の On への戻しの対象にしない（`source` は `langbar_click`）。Off にするときは `VK_IME_OFF` と同じく表示中の文字列を確定する（§4.2）。
 - 右クリック（`TF_LBI_CLK_RIGHT`）: 項目は TIP へ渡し、TIP は何もしない。右クリックのメニューは DEV-1738 がここに足す。
 
 アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動は実機で確かめる（Human Gate）。

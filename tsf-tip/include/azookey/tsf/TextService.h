@@ -786,6 +786,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool alnum_mode_{false};
   // Input indicator button (spec §4.5), present between activation and deactivation.
   InputModeLangBar input_mode_langbar_;
+  // Set while an off key commits the shown text through the Enter path.
+  bool commit_before_close_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 
@@ -1380,7 +1382,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void RefreshKeyboardOpen(std::string_view source);
   void UpdateInputModeLangBar();
   void OnInputModeLangBarClick(TfLBIClick click);
-  HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key);
+  HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key, ITfContext* context);
+  bool HasInputToCommitBeforeClose() const;
+  HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);
   void OpenKeyboardIfClosed(std::string_view source);
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
   void ReopenIfInitialOpenWasUndone();

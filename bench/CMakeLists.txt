@@ -179,7 +179,8 @@ if(AZOOKEY_BUILD_TESTS)
   add_test(NAME azookey_mixed_english_quality_gate
            COMMAND azookey_mixed_english_eval
                    --data "${CMAKE_CURRENT_SOURCE_DIR}/data/mixed_english_eval.jsonl"
-                   --dictionary "${PROJECT_SOURCE_DIR}/data/english-words.tsv")
+                   --dictionary "${PROJECT_SOURCE_DIR}/data/english-words.tsv"
+                   --min-precision 0.95)
   set_tests_properties(azookey_mixed_english_quality_gate PROPERTIES
     PASS_REGULAR_EXPRESSION "\"passed\":true"
     # About 1.5 s in Debug (most of it reading the dictionary); coverage runs

@@ -435,6 +435,9 @@ schema の正典は `settings/mvp-settings.schema.json` である。
 - 前の 2 つは Zenzai に依らない分割器の指標で、CTest `azookey_mixed_english_quality_gate`
   （`azookey_mixed_english_eval`）が CI で確かめる。最後の 1 つは実モデル（Zenzai の実 pin）で
   M63 の ON / OFF の第 1 候補を比べる計測で、CI には載せず、日付つきの計測記録として残す。
+- 評価セットは §6.3 の重みを決めるのに使ったので、この CTest は回帰ゲートであり、汎化の保証では
+  ない。重みの調整に使わない保留セット `bench/data/mixed_english_holdout.jsonl`（評価セットに無い文型）を
+  別に置き、同じ評価器で測った値を重みを変える PR に記録する。保留セットはゲートに入れない。
 - 基準を満たさない分割器では、文中の区間（M63-B）の英字を §8.3 の 3 の候補だけで出し、
   ライブ変換と第 1 候補を英字にしない。このとき、本来は高確度になる区間も低確度として扱い、
   §8.3 の 3（1 区間だけ英字にした候補）に入れる。

@@ -192,6 +192,8 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 - 指標: 分割器の先頭の経路の高確度の E 区間のうち `expected_english` と一致した割合（適合率）、
   `japanese_only` で高確度の E 区間を持つ文の数、`mixed_english` の期待区間に対する再現率（参考値）。
   合格は、不正なケースが 0、適合率が 95% 以上、`japanese_only` の高確度の E が 0。
+- 同じ形式の `mixed_english_holdout.jsonl` は重みの調整に使わない保留セットで、ゲートには入れない。
+  両方とも `scripts/generate_mixed_english_eval.py` が生成する。
 
 ## 5. カテゴリ
 

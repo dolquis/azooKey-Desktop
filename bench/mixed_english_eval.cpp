@@ -116,6 +116,17 @@ int Usage() {
   return 2;
 }
 
+// A run that cannot start says why on stdout too, so the CTest output shows it.
+int Fail(const std::string& reason) {
+  std::cerr << reason << "\n";
+  j::Object summary;
+  summary.emplace("bench", j::Value("azookey_mixed_english_eval"));
+  summary.emplace("error", j::Value(reason));
+  summary.emplace("passed", j::Value(false));
+  std::cout << j::Stringify(j::Value(std::move(summary))) << "\n";
+  return 2;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -145,8 +156,7 @@ int main(int argc, char** argv) {
 
   const auto dictionary = azookey::host::EnglishDictionary::LoadTsv(dictionary_path);
   if (!dictionary || dictionary->size() == 0) {
-    std::cerr << "cannot read the English dictionary: " << dictionary_path << "\n";
-    return 2;
+    return Fail("cannot read the English dictionary: " + dictionary_path);
   }
   const azookey::core::EnglishWordLookup lookup = [&](std::string_view key) {
     std::vector<azookey::core::EnglishWordMatch> matches;
@@ -157,8 +167,7 @@ int main(int argc, char** argv) {
 
   std::ifstream input(data_path, std::ios::binary);
   if (!input) {
-    std::cerr << "cannot read the data: " << data_path << "\n";
-    return 2;
+    return Fail("cannot read the data: " + data_path);
   }
   size_t cases = 0;
   size_t invalid = 0;

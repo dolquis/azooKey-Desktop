@@ -678,7 +678,7 @@ Microsoft IME と旧 macOS 版に揃う。`ActivateEx` は sink を購読する�
 有効化時と同じ規則で On を適用する。この初回フォーカスから 1 秒以内に同じ document manager の
 compartment が 0 へ変わったときは、入力コンテキストの復元とみなして 1 度だけ On に戻す。
 TIP が処理した開閉キー（半角/全角、`VK_IME_ON`、`VK_IME_OFF`、`imeOnOff` のときの変換・無変換、英数、ひらがな）と
-入力インジケーターの左クリック（§4.5）でユーザーが開閉したら、その document manager では戻さない。言語バーやアプリの `ImmSetOpenStatus` など TIP を経由しない Off は区別できないため、
+入力インジケーターの左クリックとメニュー（§4.5）でユーザーが開閉したら、その document manager では戻さない。言語バーやアプリの `ImmSetOpenStatus` など TIP を経由しない Off は区別できないため、
 この 1 秒以内に届いたものは 1 度だけ On に戻る。
 一度フォーカスを受けた document manager へ戻ったときは TIP は書き込まず、compartment の値に従う。
 入力先ごとの開閉の復元は IMM32 互換層が行い、TIP は入力先ごとの開閉を記録しない。
@@ -688,7 +688,8 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 `source` は `activate` / `first_focus` / `reopen_after_restore`）、`keyboard_open_focus_first` と
 `keyboard_open_focus`（フォーカス受信）、`keyboard_open_refresh`（値の反映、`source` は
 `activate` / `compartment_change` / `toggle_key`（半角/全角）/ `ime_on_key` / `ime_off_key` /
-`convert_key` / `nonconvert_key`（`imeOnOff` のときの変換・無変換）/ `langbar_click`）を出す。
+`convert_key` / `nonconvert_key`（`imeOnOff` のときの変換・無変換）/ `langbar_click` / `langbar_menu`
+（入力インジケーターのメニュー））を出す。
 開閉キーで状態が変わらなかったとき（On での `VK_IME_ON` など）も、その `source` の `keyboard_open_refresh` を 1 行出す。
 TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` の `compartment_change` の行が先に値の変化を記録し、
 その直後にキーやクリックの `source` の行が続く。どの操作で開閉したかは、後者の行で追う。これらの行は compartment の値、
@@ -707,7 +708,7 @@ TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` �
 
 On → Off で何を確定するかは、Off にした操作で決まる。
 
-- `VK_IME_OFF`、`imeOnOff` の無変換、入力インジケーターの左クリック（§4.5）: 画面に表示中の文字列
+- `VK_IME_OFF`、`imeOnOff` の無変換、入力インジケーターの左クリックとメニューの「直接入力」（§4.5）: 画面に表示中の文字列
   （ライブ変換の表示、選択中の候補、読み）を Enter と同じ経路で確定してから compartment を 0 にする。
   Enter と同じく確定を学習観測に送り、secure と学習不可の文脈では送らない。`dynamicPunctuation` の
   onPause で Enter が行う最終要求の待ち（`docs/dynamic-punctuation-spec.md` §7.3）はせず、表示中の文字列を
@@ -756,6 +757,7 @@ On → Off で何を確定するかは、Off にした操作で決まる。
 - 初回フォーカスから 1 秒以内でも、開閉キーと入力インジケーターのクリックによる Off は On に戻らない
 - `convertKeysAction` が `default` のとき変換・無変換は §3.2・§3.3 のとおり。`imeOnOff` のとき変換で On、無変換で Off になり、再変換と巡回は起きない
 - 入力インジケーターが On・英数モード・Off を「あ」「_A」「A」で表示し、左クリックで On/Off が切り替わる（§4.5）
+- 入力インジケーターの右クリックのメニューで、ひらがな・半角英数・直接入力を切り替え、ライブ変換と予測を反転して settings.json に残し、設定アプリを開ける。管理者・低 IL・AppContainer のプロセスではライブ変換と予測がグレーアウトする（§4.5）
 - Win+Space で別言語に切替時、composition が確定される
 - アプリ切替時に composition が確定される
 
@@ -796,9 +798,54 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   `ITfLangBarItemSink::OnUpdate(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP)` で通知する。
 - 左クリック（`TF_LBI_CLK_LEFT`）: 半角/全角と同じく On/Off を切り替える。ユーザーの開閉として扱い、§4.1 の
   1 秒以内の On への戻しの対象にしない（`source` は `langbar_click`）。Off にするときは `VK_IME_OFF` と同じく表示中の文字列を確定する（§4.2）。
-- 右クリック（`TF_LBI_CLK_RIGHT`）: 項目は TIP へ渡し、TIP は何もしない。右クリックのメニューは DEV-1738 がここに足す。
+- 右クリック（`TF_LBI_CLK_RIGHT`）: TIP がポップアップメニューを出す（下記）。
 
-アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動は実機で確かめる（Human Gate）。
+右クリックのメニュー:
+
+`TF_LBI_STYLE_BTN_MENU` の項目では言語バーが `InitMenu` / `OnMenuSelect` を呼び、`OnClick` を呼ばない
+（Microsoft Learn「Language Bar (Text Services)」）。左クリックの On/Off を残すため、スタイルは
+`TF_LBI_STYLE_BTN_BUTTON` のままとし、`OnClick(TF_LBI_CLK_RIGHT)` で TIP が `TrackPopupMenuEx`
+（`TPM_RETURNCMD`）を呼ぶ。メニューは TIP のスレッドに作った非表示の窓を持ち主とし、クリック位置に、
+項目の矩形を避けて出す。メニューの間は TIP のスレッドでモーダルループが回るので、閉じた後に TIP が
+無効化されていたら選択は捨てる。
+
+| 項目 | 表示 | 選んだとき |
+|---|---|---|
+| ひらがな | ラジオ。今の表示（上の表）が「あ」なら選択 | Off なら On にする。英数モードなら解除する |
+| 半角英数 | ラジオ。「_A」なら選択 | Off なら On にしてから英数モードにする。英数キー（`ToggleAlnum`）と同じく、表示中の入力を確定できなかったら切り替えない |
+| 直接入力 | ラジオ。「A」なら選択 | 左クリックの Off と同じく表示中の文字列を確定して Off にする（`source` は `langbar_menu`） |
+| ライブ変換 | `liveConversion` の今の値でチェック | 値を反転して settings.json に書き、Host に `UpdateConfig` を送る |
+| 予測 | `predictionEnabled` の今の値でチェック | 値を反転して settings.json に書く。`UpdateConfig` は送らない |
+| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイル） |
+
+入力モードの 3 項目は設定ファイルに触れない。
+
+- 今の値: ライブ変換と予測のチェックは、TIP が settings.json から読んでいる値（`TipLocalSettings`）を出す。
+  アプリごとのプロファイル（`profilesByApp`）は表示にも書き込みにも使わない。
+- 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
+  設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に
+  置き換える（`WriteTextFileAtomically`）。ファイルが無ければそのキーだけのファイルを作る。JSON の
+  オブジェクトとして読めないファイルは書き換えず、隔離もしない（設定アプリが開いたときに扱う）。
+  ロックは 500 ms 待って取れなければ書かない（利用者への表示は無く、ログだけが残る）。置き換えの flush と replace はそれぞれ一時的な共有違反を
+  最大 500 ms まで再試行するので、書き込みは UI スレッドを最悪で約 1.5 秒止める。結果は
+  `langbar_menu_setting_write` にキーと結果の名前だけを出す。
+- 反映: どの TIP インスタンスも settings.json の監視で新しい値を読む。Host が読むのは `liveConversion`
+  （動的句読点の入口）だけなので、`UpdateConfig` はライブ変換を切り替えたときだけ、モデル再試行と同じ短命の
+  control 接続で送る（Host は `UpdateConfig` でモデルも読み直すので、ライブ変換の切り替えのたびにモデルの再ロードが走る）。
+  モデル再試行の送信が進行中なら、進行中の `UpdateConfig` が書き込みより先にファイルを読んだかもしれないので、
+  その送信が終わったときにもう 1 回だけ送る（`langbar_menu_host_reload_deferred` を出す）。進行中に TIP が無効化
+  されたら、もう 1 回は送らない。
+- 切り替える値: メニューを開いたときに見せたチェックの逆を書く。メニューを開いている間にファイルが変わっても、
+  見た表示と逆向きには書かない。
+- 設定アプリとの同時編集: 設定アプリは保存のとき、ライブ変換・予測を含む一般の設定値については、ユーザーが
+  変えたキーだけをロックの下でディスク上のファイルへ書く。設定アプリを開いたままメニューで切り替えても、その変更は設定アプリの保存で消えない。
+  ただし開いている設定アプリの画面は古い値のままで、同じキーを設定アプリでも変えて保存すると設定アプリの値が残る。
+- 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、rich-features-spec
+  X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測をグレーアウトする。入力モードと
+  「設定を開く」は使える。
+
+アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動、タスクバーの入力インジケーターが
+右クリックを `OnClick` に渡すことと、メニューの表示位置と閉じ方は実機で確かめる（Human Gate）。
 
 ## 5. 複合 DisplayAttribute (M23)
 
@@ -1010,7 +1057,8 @@ Windows は `ITfInputProcessorProfiles::Register` に登録された TextService
 `TextService::Show` は起動に成功したとき `settings_launch`（Info）、失敗したとき
 `settings_launch_failed`（Warn）を TIP runtime log に記録する。両イベントは `hr` と `langid`
 を含む。これにより、`Show` が呼ばれていない状態と、パス解決またはプロセス起動に失敗した状態を
-ログ上で区別する。
+ログ上で区別する。§4.5 の入力インジケーターのメニューの「設定を開く」も同じ 2 つのイベントを同じフィールドで出すので、
+`settings_launch` の行だけでは呼び出し元は分からない。
 
 ## 7. ITfMouseSink (M23)
 
@@ -1093,7 +1141,8 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 | Configure 起動 | `tsf-tip/tests/configure_test.cpp` | Windows 限定。Show が EXE を起動するか |
 | KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動。開閉キーの分類（§3.1、§3.1.1） |
 | 開閉キーと入力インジケーター（§3.1、§4.1、§4.5） | `tsf-tip/tests/activate_uiless_test.cpp` | Windows 限定。`VK_IME_ON` / `VK_IME_OFF` と `imeOnOff` の変換・無変換、初回フォーカス直後の Off、言語バー項目の追加・削除・通知・クリック |
-| 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し |
+| 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し、右クリックのメニューの構成、settings.json の 1 キーの書き込み（`TipSettingsWriter`） |
+| 入力インジケーターのメニュー（§4.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipLangBarMenuTest`: 入力モードの切り替え、ライブ変換・予測の書き込みと `UpdateConfig` の有無、グレーアウト、無効化後の選択の破棄、設定アプリの起動 |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |

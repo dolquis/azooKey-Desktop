@@ -183,7 +183,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   "ai_backend": "none",         // アプリ別解決後。欠落時はhostのroot設定を継承
   "max_candidates": 5,           // 文節あたり候補数。1 文節の neural 要求では、この後に
                                  // 英単語候補（tag=4、reading=生ローマ字）が加わりうる
-  "english_candidates": true     // 任意。M60 の英単語候補。false は省略
+  "english_candidates": true,    // 任意。M60 の英単語候補。false は省略
+  "secure": false                // 任意。入力欄が secure か。省略時と bool 以外は true。true は省略
   // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
   // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
 }
@@ -204,6 +205,9 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   false とする。Host は、`mode=neural` で読みが 1 文節になるときだけ、その文節の候補に
   `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
+- `secure` は入力欄が secure かを表す任意フィールドで、欠落と bool 以外の値は true（secure）とする。
+  TIP は secure でない入力の要求にだけ false を載せる。Host は true の要求に英単語候補を加えない。
+  経緯と旧 TIP との組み合わせの扱いは `docs/mixed-english-auto-conversion-spec.md` §9.1・§9.4 が持つ。
 
 ### 6.2 Response
 

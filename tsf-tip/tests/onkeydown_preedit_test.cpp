@@ -38,6 +38,7 @@
 #include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
+#include "azookey/tsf/TextServiceFactory.h"
 #include "azookey/tsf/TipRuntimeLog.h"
 
 namespace {
@@ -8797,8 +8798,10 @@ TEST(TsfTipLangBarMenuTest, RightClickShowsTheCurrentModeAndSwitches) {
 
 TEST(TsfTipLangBarMenuTest, ModeItemsSwitchBetweenHiraganaAlphanumericAndDirect) {
   OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  ScopedSettingsMenuFile file;
   TextServiceHarness h;
   h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_settings_path_for_test(file.path);
   {
     ScopedMenuChoice menu(InputModeMenuCommand::Alphanumeric);
     h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
@@ -8840,6 +8843,33 @@ TEST(TsfTipLangBarMenuTest, ModeItemsSwitchBetweenHiraganaAlphanumericAndDirect)
   }
   EXPECT_TRUE(h.service.keyboard_open());
   EXPECT_FALSE(h.service.alnum_mode_for_test());
+  // The input modes never touch settings.json or the Host.
+  EXPECT_FALSE(std::filesystem::exists(file.path));
+  EXPECT_EQ(h.service.host_config_reloads_for_test(), 0u);
+}
+
+// The guard of the ToggleAlnum key: input that cannot be committed keeps hiragana.
+TEST(TsfTipLangBarMenuTest, AlphanumericWaitsForTheShownInputToCommit) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.context.skip_write_callback = true;
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Alphanumeric);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_FALSE(h.service.alnum_mode_for_test());
+  EXPECT_TRUE(h.service.keyboard_open());
+  h.context.skip_write_callback = false;
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Alphanumeric);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  }
+  EXPECT_TRUE(h.service.alnum_mode_for_test());
+  // Like the key, through the lifecycle path that commits the reading (§4.2).
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
 }
 
 TEST(TsfTipLangBarMenuTest, DirectCommitsTheShownSurfaceBeforeClosing) {
@@ -8945,7 +8975,10 @@ TEST(TsfTipLangBarMenuTest, OpenSettingsLaunchesTheSettingsAppForTheProfile) {
     h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
   }
   azookey::tsf::testing::ClearSettingsLauncherForTest();
-  EXPECT_EQ(g_menu_launch_parameters.rfind(L"--langid 0x0411 --profile {", 0), 0u);
+  // The same arguments as ITfFnConfigure::Show, and no page.
+  wchar_t profile[40] = {};
+  ASSERT_GT(StringFromGUID2(azookey::tsf::kTextServiceProfileGuid, profile, 40), 0);
+  EXPECT_EQ(g_menu_launch_parameters, std::wstring(L"--langid 0x0411 --profile ") + profile);
 }
 
 // DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS

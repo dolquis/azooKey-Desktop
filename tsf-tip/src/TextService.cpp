@@ -1935,6 +1935,10 @@ void TextService::ToggleSettingFromMenu(std::string_view key, bool value) {
   // Never the real Host's pipe from a test.
   if (ipc_pipe_name_for_test_.empty()) return;
 #endif
+  // A retry already in flight is not repeated; its UpdateConfig may have read
+  // the file before this write, so say that the Host can lag behind.
+  if (retry_in_flight_.load(std::memory_order_acquire))
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_menu_host_reload_skipped");
   RetryModelFromUi();
 }
 

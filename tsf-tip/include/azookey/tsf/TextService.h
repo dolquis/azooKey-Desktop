@@ -325,6 +325,7 @@ class TextService final : public ITfTextInputProcessorEx,
     return prediction_result_.has_value();
   }
   size_t shown_prediction_count_for_test() const { return shown_predictions_.size(); }
+  bool prediction_query_hold_set_for_test() const { return !prediction_last_query_key_.empty(); }
   bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);

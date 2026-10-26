@@ -12297,6 +12297,11 @@ azookey::ipc::LiveSegment MixedSeg(uint32_t start, std::string surface, std::str
                                    bool english) {
   azookey::ipc::LiveSegment segment;
   segment.start_char = start;
+  // UTF-16 units: every character here is in the BMP, one unit each.
+  segment.end_char =
+      start + static_cast<uint32_t>(std::count_if(surface.begin(), surface.end(), [](char c) {
+        return (static_cast<unsigned char>(c) & 0xC0) != 0x80;
+      }));
   segment.surface = std::move(surface);
   segment.reading = std::move(reading);
   segment.score = 0.5;

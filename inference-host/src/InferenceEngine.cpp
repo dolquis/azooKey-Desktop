@@ -312,6 +312,8 @@ void InferenceEngine::SetEnglishLearningStore(learning::LearningStore* store) {
   std::lock_guard history_lock(learning_history_mutex_);
   std::lock_guard<std::mutex> lock(english_mutex_);
   english_store_ = store;
+  std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
+  english_suppressed_cache_.clear();
 }
 
 std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
@@ -475,16 +477,30 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
 }
 
 bool InferenceEngine::IsEnglishSuppressed(std::string_view lower_key) {
-  std::lock_guard<std::mutex> lock(english_mutex_);
-  if (!english_store_) return false;
+  const std::string key(lower_key);
+  // A commit may be saving under english_mutex_ (DPAPI and an atomic write);
+  // this runs on every keystroke, so it does not wait for that and answers as
+  // the last lookup or record of the key did.
+  std::unique_lock<std::mutex> lock(english_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
+    return english_suppressed_cache_.count(key) > 0;
+  }
   const auto* rows =
-      english_store_->Rows(EnglishNegativeObservationReading(lower_key), std::string(lower_key));
-  return rows && std::any_of(rows->begin(), rows->end(),
-                             [](const auto& row) { return row.second.reject_count > 0; });
+      english_store_ ? english_store_->Rows(EnglishNegativeObservationReading(key), key) : nullptr;
+  const bool suppressed = rows && std::any_of(rows->begin(), rows->end(), [](const auto& row) {
+                            return row.second.reject_count > 0;
+                          });
+  std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
+  if (suppressed)
+    english_suppressed_cache_.insert(key);
+  else
+    english_suppressed_cache_.erase(key);
+  return suppressed;
 }
 
 std::vector<std::string> InferenceEngine::RejectedEnglishKeys(
-    const std::vector<ipc::CandidateField>& shown) {
+    const std::vector<ipc::CandidateField>& shown, std::string_view chosen_surface) {
   std::vector<std::string> keys;
   for (const auto& candidate : shown) {
     // Section 11: only the Host's M63 candidates carry segments; an M60 English
@@ -494,6 +510,9 @@ std::vector<std::string> InferenceEngine::RejectedEnglishKeys(
       continue;
     const auto key = EnglishLookupKey(candidate.reading);
     if (std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
+    // The same word chosen from another source (a technical term, the user
+    // dictionary) is English all the same.
+    if (EnglishLookupKey(chosen_surface) == key) continue;
     // Section 8.1 (ii): letters left after the romaji table, and a dictionary
     // word. A word that reads as kana was never sure, so passing it over says
     // nothing.
@@ -523,13 +542,23 @@ void InferenceEngine::ApplyEnglishNegativesLocked(const std::vector<std::string>
   for (const auto& key : released)
     (void)english_store_->Forget(EnglishNegativeObservationReading(key), key);
   if (!rejected.empty()) english_store_->Prune(max_records, min_weight, now_epoch_sec);
+  // What IsEnglishSuppressed answers while the save that follows holds the lock.
+  std::lock_guard<std::mutex> cache_lock(english_suppressed_cache_mutex_);
+  for (const auto& key : rejected) {
+    const auto* rows = english_store_->Rows(EnglishNegativeObservationReading(key), key);
+    if (rows) english_suppressed_cache_.insert(key);
+  }
+  for (const auto& key : released) english_suppressed_cache_.erase(key);
 }
 
 size_t InferenceEngine::RecordRejectedEnglish(const std::vector<ipc::CandidateField>& shown,
+                                              const std::string& chosen_surface,
                                               uint64_t now_epoch_sec) {
-  std::lock_guard history_lock(learning_history_mutex_);
-  const auto rejected = RejectedEnglishKeys(shown);
+  // The dictionary lookups run before learning_history_mutex_, as the other
+  // dictionary reads of the commit paths do.
+  const auto rejected = RejectedEnglishKeys(shown, chosen_surface);
   if (rejected.empty()) return 0;
+  std::lock_guard history_lock(learning_history_mutex_);
   size_t max_records = 0;
   double min_weight = 0.0;
   {
@@ -2118,14 +2147,12 @@ AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& requ
 
 bool InferenceEngine::CommitSegmentsObservation(
     const ipc::CommitSegmentsObservationRequest& request, uint64_t now_epoch_sec) {
-  std::lock_guard history_lock(learning_history_mutex_);
-  std::shared_ptr<core::IConverter> converter;
   const auto english = [](const ipc::ObservedSegment& segment) {
     return IsEnglishObservation(segment.reading, segment.chosen.tag);
   };
   // M63-B section 11: a segment committed in Japanese over the English it was
   // shown, and English typed without capitals, before any engine mutex (the
-  // dictionary lookup takes state_mutex_).
+  // dictionary lookup may load the dictionary).
   std::vector<std::string> rejected;
   std::vector<std::string> released;
   for (const auto& segment : request.segments) {
@@ -2133,9 +2160,12 @@ bool InferenceEngine::CommitSegmentsObservation(
     if (english(segment)) {
       for (auto& key : ReleasedEnglishKeys({segment.reading})) released.push_back(std::move(key));
     } else {
-      for (auto& key : RejectedEnglishKeys(segment.shown)) rejected.push_back(std::move(key));
+      for (auto& key : RejectedEnglishKeys(segment.shown, segment.chosen.surface))
+        rejected.push_back(std::move(key));
     }
   }
+  std::lock_guard history_lock(learning_history_mutex_);
+  std::shared_ptr<core::IConverter> converter;
   double alpha = 0.0;
   size_t max_records = 0;
   double min_weight = 0.0;

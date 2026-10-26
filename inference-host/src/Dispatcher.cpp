@@ -1939,7 +1939,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
                    parsed->app ? parsed->app->process_name : std::string(), parsed->left_context)) {
       // M63-B (mixed-english-auto-conversion-spec section 11): the English the
       // composition was shown first, turned down.
-      engine_->RecordRejectedEnglish(parsed->shown, NowSec());
+      engine_->RecordRejectedEnglish(parsed->shown, parsed->chosen.surface, NowSec());
     }
     res.ok = true;
   } else {

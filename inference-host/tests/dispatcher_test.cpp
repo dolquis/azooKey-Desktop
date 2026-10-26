@@ -1370,10 +1370,11 @@ class MixedEnglishLearningTest : public MixedEnglishDispatchTest {
   void TearDown() override { engine.SetEnglishLearningStore(nullptr); }
 
   bool Commit(uint64_t id, const std::string& reading, const ipc::CandidateField& chosen,
-              const std::vector<ipc::CandidateField>& shown, bool allowed = true) {
+              const std::vector<ipc::CandidateField>& shown, bool secure = false,
+              bool learning_allowed = true) {
     ipc::CommitObservationRequest commit;
-    commit.secure = !allowed;
-    commit.learning_allowed = allowed;
+    commit.secure = secure;
+    commit.learning_allowed = learning_allowed;
     commit.reading = reading;
     commit.chosen = chosen;
     commit.shown = shown;
@@ -1470,16 +1471,27 @@ TEST_F(MixedEnglishLearningTest, OnlyTheSureM63WordTurnedDownIsRecorded) {
   EXPECT_FALSE(Negative("kite"));
   EXPECT_FALSE(Negative("gitlab"));
   // Neither a secure commit nor one with learning off records anything.
-  EXPECT_FALSE(Commit(1526, "ぎてゅb", japanese, {English("GitHub", "github", true)}, false));
+  EXPECT_FALSE(Commit(1526, "ぎてゅb", japanese, {English("GitHub", "github", true)}, true, true));
+  EXPECT_FALSE(
+      Commit(1527, "ぎてゅb", japanese, {English("GitHub", "github", true)}, false, false));
+  EXPECT_FALSE(Negative("github"));
+  // The same word from another source (a technical term) is English all the
+  // same: no negative observation.
+  ipc::CandidateField technical;
+  technical.surface = "GitHub";
+  technical.reading = "ぎてゅb";
+  technical.source = "system";
+  ASSERT_TRUE(Commit(1528, "ぎてゅb", technical, {English("GitHub", "github", true)}));
   EXPECT_FALSE(Negative("github"));
   EXPECT_EQ(english_store.Rows("github", "GitHub")->size(), 1u);
 }
 
 TEST_F(MixedEnglishLearningTest, SegmentsRecordAndLiftPerSegment) {
-  const auto commit = [&](uint64_t id, const ipc::ObservedSegment& segment, bool allowed = true) {
+  const auto commit = [&](uint64_t id, const ipc::ObservedSegment& segment, bool secure = false,
+                          bool learning_allowed = true) {
     ipc::CommitSegmentsObservationRequest request;
-    request.secure = !allowed;
-    request.learning_allowed = allowed;
+    request.secure = secure;
+    request.learning_allowed = learning_allowed;
     request.observation_id = "mixed-segments-" + std::to_string(id);
     ipc::ObservedSegment kana;
     kana.reading = "きょう";
@@ -1492,7 +1504,17 @@ TEST_F(MixedEnglishLearningTest, SegmentsRecordAndLiftPerSegment) {
   rejected.reading = "ぎてゅb";
   rejected.chosen = {"擬態", "ぎてゅb", 0.0, "model"};
   rejected.shown = {English("GitHub", "github", true)};
-  commit(1531, rejected, false);
+  commit(1531, rejected, true, true);
+  commit(1534, rejected, false, false);
+  EXPECT_FALSE(Negative("github"));
+  // An M60 candidate (no segments) and a Shift-typed one are no negative
+  // observation here either.
+  ipc::ObservedSegment m60 = rejected;
+  m60.shown = {English("GitHub", "github", false)};
+  commit(1535, m60);
+  ipc::ObservedSegment shifted = rejected;
+  shifted.shown = {English("Github", "Github", true)};
+  commit(1536, shifted);
   EXPECT_FALSE(Negative("github"));
   commit(1532, rejected);
   EXPECT_TRUE(Negative("github"));
@@ -1501,6 +1523,9 @@ TEST_F(MixedEnglishLearningTest, SegmentsRecordAndLiftPerSegment) {
   chosen.reading = "github";
   chosen.chosen = English("GitHub", "github", true);
   commit(1533, chosen);
+  EXPECT_FALSE(Negative("github"));
+  // A resend of an applied observation id changes nothing.
+  commit(1532, rejected);
   EXPECT_FALSE(Negative("github"));
   const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                              std::chrono::system_clock::now().time_since_epoch())

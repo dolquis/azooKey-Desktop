@@ -155,6 +155,19 @@ class HostComparison {
                    ("azookey_mixed_english_eval-" +
                     std::to_string(std::chrono::system_clock::now().time_since_epoch().count()))) {
     std::filesystem::create_directories(directory_);
+    try {
+      Start(model, dictionary, bundled, threads, conversion_deadline);
+    } catch (...) {
+      // The destructor does not run for a constructor that throws.
+      Stop();
+      throw;
+    }
+  }
+
+  ~HostComparison() { Stop(); }
+
+  void Start(const std::string& model, const std::string& dictionary, const std::string& bundled,
+             std::optional<int32_t> threads, std::chrono::milliseconds conversion_deadline) {
     const auto copied = directory_ / "english-words.tsv";
     std::filesystem::copy_file(azookey::core::Utf8Path(dictionary), copied);
     store_ =
@@ -183,7 +196,7 @@ class HostComparison {
                                                               dispatcher_config);
   }
 
-  ~HostComparison() {
+  void Stop() {
     dispatcher_.reset();
     engine_.reset();
     store_.reset();
@@ -282,9 +295,15 @@ int main(int argc, char** argv) {
     } else if (arg == "--bundled-dictionaries" && i + 1 < argc) {
       bundled_path = argv[++i];
     } else if (arg == "--conversion-deadline-ms" && i + 1 < argc) {
-      conversion_deadline = std::chrono::milliseconds(std::strtoll(argv[++i], nullptr, 10));
+      char* end = nullptr;
+      const auto value = std::strtoll(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0' || value < 0) return Usage();
+      conversion_deadline = std::chrono::milliseconds(value);
     } else if (arg == "--threads" && i + 1 < argc) {
-      threads = static_cast<int32_t>(std::strtol(argv[++i], nullptr, 10));
+      char* end = nullptr;
+      const auto value = std::strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0' || value <= 0 || value > 256) return Usage();
+      threads = static_cast<int32_t>(value);
     } else {
       return Usage();
     }

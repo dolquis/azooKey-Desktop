@@ -442,7 +442,7 @@ TEST_F(DispatcherTest, Handshake) {
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
         "learning_data_management", "commit_correction", "learning_reset", "persona",
-        "detect_anomalies"}) {
+        "detect_anomalies", "mixed_english"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -1167,6 +1167,164 @@ TEST_F(DispatcherTest, SecureQueryCandidatesIgnoresRawRomaji) {
     for (const auto& c : candidates) surfaces.push_back(c.surface);
     EXPECT_EQ(surfaces, kana) << id;
   }
+}
+
+// M63-A (docs/mixed-english-auto-conversion-spec.md sections 8.2, 9 and 10).
+class MixedEnglishDispatchTest : public DispatcherTest {
+ protected:
+  void SetUp() override {
+    const auto path = temp_directory.File("azookey_dispatcher_mixed_english_words.tsv");
+    {
+      std::ofstream out(path, std::ios::binary);
+      out << "GitHub\t900\ngithub\t100\nkite\t500\n";
+    }
+    auto config = engine.config();
+    config.english.dictionary_enabled = true;
+    config.english.dictionary_path = path;
+    engine.ApplyConfig(config);
+  }
+
+  ipc::QueryCandidatesRequest Request(const std::string& reading, const std::string& raw,
+                                      bool mixed) {
+    ipc::QueryCandidatesRequest q;
+    q.reading = reading;
+    q.raw_romaji = raw;
+    q.english_candidates = true;
+    q.mixed_english = mixed;
+    q.secure = false;
+    return q;
+  }
+
+  std::vector<ipc::CandidateField> Query(uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  }
+
+  std::optional<ipc::QueryLiveConversionResponse> Live(uint64_t id,
+                                                       const ipc::QueryLiveConversionRequest& q) {
+    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryLiveConversion,
+                                                  ipc::BuildQueryLiveConversionRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    return resp ? ipc::ParseQueryLiveConversionResponse(resp->payload_json) : std::nullopt;
+  }
+
+  static std::vector<std::string> Surfaces(const std::vector<ipc::CandidateField>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& c : candidates) surfaces.push_back(c.surface);
+    return surfaces;
+  }
+
+  static constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+};
+
+TEST_F(MixedEnglishDispatchTest, SureWordTakesTheFirstCandidateWithItsSegment) {
+  const auto candidates = Query(1301, Request("ぎてゅb", "github", true));
+  ASSERT_GE(candidates.size(), 2u);
+  EXPECT_EQ(candidates[0].surface, "GitHub");
+  EXPECT_EQ(candidates[0].tag, kEnglish);
+  EXPECT_EQ(candidates[0].reading, "github");
+  ASSERT_EQ(candidates[0].segments.size(), 1u);
+  const auto& segment = candidates[0].segments.front();
+  EXPECT_EQ(segment.start_char, 0u);
+  EXPECT_EQ(segment.end_char, 6u);
+  EXPECT_EQ(segment.surface, "GitHub");
+  EXPECT_EQ(segment.reading, "github");
+  EXPECT_EQ(segment.tag, kEnglish);
+  // The Japanese conversion follows, and GitHub appears once.
+  EXPECT_NE(candidates[1].tag, kEnglish);
+  const auto surfaces = Surfaces(candidates);
+  EXPECT_EQ(std::count(surfaces.begin(), surfaces.end(), "GitHub"), 1);
+  // Section 9.2: no other candidate carries segments.
+  for (size_t i = 1; i < candidates.size(); ++i)
+    EXPECT_TRUE(candidates[i].segments.empty()) << candidates[i].surface;
+
+  // A Shift capital first is sure too, and keeps the keystrokes.
+  const auto shifted = Query(1302, Request("きて", "Kite", true));
+  ASSERT_FALSE(shifted.empty());
+  EXPECT_EQ(shifted[0].surface, "Kite");
+  EXPECT_EQ(shifted[0].segments.size(), 1u);
+}
+
+TEST_F(MixedEnglishDispatchTest, RomajiReadableWordIsTheSecondCandidate) {
+  const auto candidates = Query(1311, Request("きて", "kite", true));
+  ASSERT_GE(candidates.size(), 2u);
+  EXPECT_NE(candidates[0].tag, kEnglish);
+  EXPECT_EQ(candidates[1].surface, "kite");
+  EXPECT_EQ(candidates[1].tag, kEnglish);
+  for (const auto& c : candidates) EXPECT_TRUE(c.segments.empty()) << c.surface;
+  const auto surfaces = Surfaces(candidates);
+  EXPECT_EQ(std::count(surfaces.begin(), surfaces.end(), "kite"), 1);
+}
+
+// Off, secure, without the M60 flag or out of bounds: exactly the M60 result.
+TEST_F(MixedEnglishDispatchTest, OffSecureAndOutOfBoundsKeepTheM60Order) {
+  const auto off = Query(1321, Request("ぎてゅb", "github", false));
+  ASSERT_FALSE(off.empty());
+  EXPECT_NE(off[0].surface, "GitHub");
+  for (const auto& c : off) EXPECT_TRUE(c.segments.empty()) << c.surface;
+
+  auto secure = Request("ぎてゅb", "github", true);
+  secure.secure = true;
+  const auto secure_result = Query(1322, secure);
+  for (const auto& c : secure_result) EXPECT_NE(c.tag, kEnglish) << c.surface;
+
+  auto without_m60 = Request("ぎてゅb", "github", true);
+  without_m60.english_candidates = false;
+  for (const auto& c : Query(1323, without_m60)) EXPECT_NE(c.tag, kEnglish) << c.surface;
+
+  // Section 10: over 64 characters is handled as M63 off.
+  const std::string long_raw(65, 'q');
+  EXPECT_EQ(Surfaces(Query(1324, Request("q", long_raw, true))),
+            Surfaces(Query(1325, Request("q", long_raw, false))));
+
+  // The live (per-key) query never carries M63.
+  auto live = Request("ぎてゅb", "github", true);
+  live.live = true;
+  auto live_off = live;
+  live_off.mixed_english = false;
+  EXPECT_EQ(Surfaces(Query(1326, live)), Surfaces(Query(1327, live_off)));
+}
+
+TEST_F(MixedEnglishDispatchTest, LiveConversionOfASureWordIsTheWordItself) {
+  ipc::QueryLiveConversionRequest request{"ぎてゅb", ""};
+  const auto off = Live(1331, request);
+  ASSERT_TRUE(off);
+  EXPECT_NE(off->surface, "GitHub");
+  EXPECT_TRUE(off->segments.empty());
+
+  request.raw_romaji = "github";
+  request.mixed_english = true;
+  request.secure = false;
+  const auto sure = Live(1332, request);
+  ASSERT_TRUE(sure);
+  EXPECT_EQ(sure->surface, "GitHub");
+  ASSERT_EQ(sure->segments.size(), 1u);
+  EXPECT_EQ(sure->segments[0].tag, kEnglish);
+  EXPECT_EQ(sure->segments[0].reading, "github");
+  EXPECT_EQ(sure->segments[0].end_char, 6u);
+
+  // Secure (also when absent): as with M63 off.
+  auto secure = request;
+  secure.secure = true;
+  const auto secure_result = Live(1333, secure);
+  ASSERT_TRUE(secure_result);
+  EXPECT_EQ(secure_result->surface, off->surface);
+  EXPECT_TRUE(secure_result->segments.empty());
+
+  // A word that reads as romaji stays Japanese in the live conversion.
+  ipc::QueryLiveConversionRequest kite{"きて", ""};
+  const auto kite_off = Live(1334, kite);
+  kite.raw_romaji = "kite";
+  kite.mixed_english = true;
+  kite.secure = false;
+  const auto kite_on = Live(1335, kite);
+  ASSERT_TRUE(kite_off && kite_on);
+  EXPECT_EQ(kite_on->surface, kite_off->surface);
+  EXPECT_TRUE(kite_on->segments.empty());
 }
 
 TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {

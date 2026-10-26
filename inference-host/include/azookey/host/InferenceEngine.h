@@ -547,6 +547,11 @@ class InferenceEngine {
   bool NoteObservationIdLocked(const std::string& observation_id);
   // The dictionary store for the path; it reloads when its files change.
   std::shared_ptr<EnglishDictionaryStore> EnglishDictionaryFor(const std::string& utf8_path);
+  // DEV-1740: the stores a reset or a retract reaches, the one in use first.
+  // With the default path, also the side not in use (the user's files or
+  // english-words.bundled.*) when it holds runtime additions.
+  std::vector<std::shared_ptr<EnglishDictionaryStore>> EnglishDictionariesToErase(
+      const std::string& utf8_path);
   // DEV-1600: the AutoWord reset's erasure of the English dictionary's
   // runtime additions. true when there is nothing to erase.
   bool ResetEnglishRuntimeAdditions();

@@ -4725,6 +4725,51 @@ TEST(EngineBundledEnglishDictionaryTest, DefaultPathFallsBackToTheBundledTsv) {
   EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
 }
 
+// Runtime additions made while the bundled TSV is in use go to
+// english-words.bundled.*, and a retract or an AutoWord reset reaches them even
+// while the user's own dictionary is in use (section 4.5).
+TEST(EngineBundledEnglishDictionaryTest, RuntimeAdditionsOnTheBundledSideAreErasedFromEither) {
+  ScopedTempDirectory temp;
+  const auto install = std::filesystem::path(temp.File("install"));
+  const auto user = std::filesystem::path(temp.File("user"));
+  std::filesystem::create_directories(install);
+  const auto bundled = install / "english-words.tsv";
+  std::ofstream(bundled, std::ios::binary) << "apple\t50\n";
+  const auto default_path = (user / "english-words.tsv").string();
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
+                                              &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.english.dictionary_enabled = true;
+  cfg.english.dictionary_path = default_path;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+  engine->SetBundledEnglishDictionaryForTests(bundled, default_path);
+
+  ASSERT_EQ(engine->LookupEnglishDictionary("apple").size(), 1u);
+  ASSERT_TRUE(engine->RegisterConfirmedEnglishWord("Kotlin", "test"));
+  EXPECT_EQ(engine->LookupEnglishDictionary("kotlin").size(), 1u);
+  EXPECT_TRUE(std::filesystem::exists(user / "english-words.bundled.added.bin"));
+  EXPECT_FALSE(std::filesystem::exists(user / "english-words.added.bin"));
+  EXPECT_TRUE(engine->RetractRejectedEnglishWord("Kotlin", "test"));
+  EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
+  ASSERT_TRUE(engine->RegisterConfirmedEnglishWord("Kotlin", "test"));
+  ASSERT_EQ(engine->LookupEnglishDictionary("kotlin").size(), 1u);
+
+  // The user's own TSV takes over; the reset still erases the bundled side.
+  std::ofstream(user / "english-words.tsv", std::ios::binary) << "rust\t20\n";
+  ASSERT_EQ(engine->LookupEnglishDictionary("rust").size(), 1u);
+  ASSERT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+
+  // Without the user's TSV and .bin the bundled TSV is back, without Kotlin.
+  std::filesystem::remove(user / "english-words.tsv");
+  std::filesystem::remove(user / "english-words.bin");
+  EXPECT_EQ(engine->LookupEnglishDictionary("apple").size(), 1u);
+  EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
+}
+
 TEST(EngineBundledEnglishDictionaryTest, OnlyTheDefaultPathWithoutUserFilesFallsBack) {
   ScopedTempDirectory temp;
   const auto install = std::filesystem::path(temp.File("install"));

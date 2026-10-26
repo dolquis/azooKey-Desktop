@@ -2863,8 +2863,8 @@ class OpenCloseCompartment final : public ITfCompartment {
 };
 
 TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheReadingBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
   DocumentPreeditHarness h;
-  OpenCloseCompartment compartment;
   h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
@@ -2882,8 +2882,8 @@ TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheReadingBeforeClosing) {
 
 TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheShownCandidateBeforeClosing) {
   OemCompositionTranslationGuard oem_translation;
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
   DocumentPreeditHarness h;
-  OpenCloseCompartment compartment;
   h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
   ASSERT_TRUE(h.Press(VK_OEM_COMMA));
   ASSERT_TRUE(h.Press(VK_SPACE));
@@ -2898,9 +2898,42 @@ TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheShownCandidateBeforeClosing)
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, NonConvertUnderImeOnOffClosesInsteadOfCycling) {
+TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyCommitsTheLiveConversionSurfaceBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
   DocumentPreeditHarness h;
-  OpenCloseCompartment compartment;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ConvertKeysDoNotOpenOrCloseByDefault) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  TextServiceHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  EXPECT_FALSE(h.TestPress(VK_NONCONVERT));
+  EXPECT_FALSE(h.Press(VK_NONCONVERT));
+  EXPECT_TRUE(h.service.keyboard_open());
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  ASSERT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(h.TestPress(VK_CONVERT));
+  EXPECT_FALSE(h.Press(VK_CONVERT));
+  EXPECT_FALSE(h.service.keyboard_open());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NonConvertUnderImeOnOffClosesInsteadOfCycling) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
   h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
   h.service.set_convert_keys_action_for_test(azookey::tsf::ConvertKeysAction::ImeOnOff);
   ASSERT_TRUE(h.Press('K'));

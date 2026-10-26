@@ -630,6 +630,21 @@ TEST(TsfTipActivateUiLessTest, ImeOffKeyRightAfterFirstFocusIsNotUndone) {
   EXPECT_EQ(service.Deactivate(), S_OK);
 }
 
+TEST(TsfTipActivateUiLessTest, ImeOnKeyWhileOpenKeepsTheRestoreUndo) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
+  // Already on: the key changes nothing, so the input context restore that
+  // follows is still undone once.
+  PressKey(service, VK_IME_ON);
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
 TEST(TsfTipActivateUiLessTest, ShiftedImeOffKeyIsNotAnOffKey) {
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(0);
@@ -638,37 +653,6 @@ TEST(TsfTipActivateUiLessTest, ShiftedImeOffKeyIsNotAnOffKey) {
   keyboard_state.SetDown(VK_SHIFT, true);
   PressKey(service, VK_IME_OFF);
   EXPECT_TRUE(service.keyboard_open());
-  EXPECT_EQ(service.Deactivate(), S_OK);
-}
-
-TEST(TsfTipActivateUiLessTest, ConvertKeysOpenAndCloseUnderImeOnOff) {
-  azookey::tsf::TextService service;
-  MockThreadMgrEx mock(0);
-  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  service.set_convert_keys_action_for_test(azookey::tsf::ConvertKeysAction::ImeOnOff);
-  azookey::tsf::test::KeyboardStateGuard keyboard_state;
-  bool eaten = false;
-  PressKey(service, VK_NONCONVERT, nullptr, &eaten);
-  EXPECT_TRUE(eaten);
-  EXPECT_FALSE(service.keyboard_open());
-  PressKey(service, VK_CONVERT, nullptr, &eaten);
-  EXPECT_TRUE(eaten);
-  EXPECT_TRUE(service.keyboard_open());
-  EXPECT_EQ(service.Deactivate(), S_OK);
-}
-
-TEST(TsfTipActivateUiLessTest, ConvertKeysDoNotOpenByDefault) {
-  azookey::tsf::TextService service;
-  MockThreadMgrEx mock(0);
-  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  mock.keyboard_compartment.SetOpen(false);
-  azookey::tsf::test::KeyboardStateGuard keyboard_state;
-  bool test_eaten = true;
-  bool eaten = true;
-  PressKey(service, VK_CONVERT, &test_eaten, &eaten);
-  EXPECT_FALSE(test_eaten);
-  EXPECT_FALSE(eaten);
-  EXPECT_FALSE(service.keyboard_open());
   EXPECT_EQ(service.Deactivate(), S_OK);
 }
 

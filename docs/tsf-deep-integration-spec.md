@@ -689,7 +689,9 @@ document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す�
 `keyboard_open_focus`（フォーカス受信）、`keyboard_open_refresh`（値の反映、`source` は
 `activate` / `compartment_change` / `toggle_key`（半角/全角）/ `ime_on_key` / `ime_off_key` /
 `convert_key` / `nonconvert_key`（`imeOnOff` のときの変換・無変換）/ `langbar_click`）を出す。
-開閉キーで状態が変わらなかったとき（On での `VK_IME_ON` など）も、その `source` の `keyboard_open_refresh` を 1 行出す。これらの行は compartment の値、
+開閉キーで状態が変わらなかったとき（On での `VK_IME_ON` など）も、その `source` の `keyboard_open_refresh` を 1 行出す。
+TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` の `compartment_change` の行が先に値の変化を記録し、
+その直後にキーやクリックの `source` の行が続く。どの操作で開閉したかは、後者の行で追う。これらの行は compartment の値、
 反映前後の開閉、英数モード、フォーカスウィンドウの HIMC の開閉（`imm_open`）、
 `GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` の値、スレッド ID を持つ。
 `key_passthrough` は Off または英数モードでキーを素通ししたことを、開閉と英数モードの組が

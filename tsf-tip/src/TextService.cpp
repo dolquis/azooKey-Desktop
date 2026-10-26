@@ -1839,8 +1839,6 @@ HRESULT TextService::ToggleKeyboardOpen() { return SetKeyboardOpen(!keyboard_ope
 HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return E_UNEXPECTED;
-  // The user chose the state; a pending initial open must not undo it.
-  keyboard_open_pending_document_ = nullptr;
   if (open == keyboard_open_) {
     // On and off keys do not toggle. On while alphanumeric returns to hiragana;
     // alphanumeric mode never holds a composition, so nothing is committed.
@@ -1851,8 +1849,12 @@ HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
     }
     LogKeyboardOpenState("keyboard_open_refresh", source, keyboard_open_);
     UpdateInputModeLangBar();
+    // No change of state: a restore that closes a new document right after
+    // its first focus is still undone once (spec §4.1).
     return S_OK;
   }
+  // The user chose the state; a pending initial open must not undo it.
+  keyboard_open_pending_document_ = nullptr;
   VARIANT value;
   VariantInit(&value);
   value.vt = VT_I4;

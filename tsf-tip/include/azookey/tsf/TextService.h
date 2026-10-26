@@ -32,7 +32,9 @@
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
+#include "azookey/tsf/LangBarInputModeItem.h"
 #include "azookey/tsf/LivePunctuation.h"
+#include "azookey/tsf/OpenCloseKey.h"
 #include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
 #include "azookey/tsf/ProofreadSessionServer.h"
@@ -230,6 +232,9 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ui_less_mode() const { return ui_less_mode_; }
   bool keyboard_open() const { return keyboard_open_; }
   HRESULT ToggleKeyboardOpen();
+  // A user's choice of on or off (spec §4.1): never undone by the initial open
+  // of a new document. `open` while already on only leaves alphanumeric mode.
+  HRESULT SetKeyboardOpen(bool open, std::string_view source);
 
   // Accessed by EditSession.
   std::string preedit_kana_;
@@ -282,6 +287,23 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_punctuation_conversion_for_test(bool enabled) {
     local_settings_.SetPunctuationConversionForTest(enabled);
   }
+  void set_convert_keys_action_for_test(ConvertKeysAction action) {
+    local_settings_.SetConvertKeysActionForTest(action);
+  }
+  bool alnum_mode_for_test() const { return alnum_mode_; }
+  // Gives a harness that never calls ActivateEx an open/close compartment
+  // (no sink); Deactivate releases it.
+  void set_keyboard_open_compartment_for_test(ITfCompartment* compartment, TfClientId client_id) {
+    if (compartment) compartment->AddRef();
+    if (keyboard_open_compartment_) keyboard_open_compartment_->Release();
+    keyboard_open_compartment_ = compartment;
+    client_id_ = client_id;
+  }
+  LangBarInputModeItem* input_mode_langbar_item_for_test() const {
+    return input_mode_langbar_.item_for_test();
+  }
+  // What the input indicator's click handler runs, for harnesses that never activate.
+  void click_input_mode_langbar_for_test(TfLBIClick click) { OnInputModeLangBarClick(click); }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }
@@ -764,6 +786,10 @@ class TextService final : public ITfTextInputProcessorEx,
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
+  // Input indicator button (spec §4.5), present between activation and deactivation.
+  InputModeLangBar input_mode_langbar_;
+  // Set while an off key commits the shown text through the Enter path.
+  bool commit_before_close_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 
@@ -1356,6 +1382,11 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AdviseFunctionProvider();
   HRESULT UnadviseFunctionProvider();
   void RefreshKeyboardOpen(std::string_view source);
+  void UpdateInputModeLangBar();
+  void OnInputModeLangBarClick(TfLBIClick click);
+  HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key, ITfContext* context);
+  bool HasInputToCommitBeforeClose() const;
+  HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);
   void OpenKeyboardIfClosed(std::string_view source);
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
   void ReopenIfInitialOpenWasUndone();

@@ -241,6 +241,7 @@ void TipLocalSettings::Stop() noexcept {
   ai_ = {};
   live_conversion_ = false;
   punctuation_conversion_ = false;
+  convert_keys_action_ = ConvertKeysAction::Default;
   dynamic_punctuation_ = {};
   max_context_length_ = 30;
   prediction_enabled_ = true;
@@ -271,6 +272,11 @@ bool TipLocalSettings::LiveConversionSnapshot() const {
 bool TipLocalSettings::PunctuationConversionSnapshot() const {
   const std::lock_guard lock(mutex_);
   return punctuation_conversion_;
+}
+
+ConvertKeysAction TipLocalSettings::ConvertKeysActionSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return convert_keys_action_;
 }
 
 TipDynamicPunctuationSettings TipLocalSettings::DynamicPunctuationSnapshot() const {
@@ -308,6 +314,7 @@ void TipLocalSettings::Reload() noexcept {
   ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
   bool punctuation_conversion = false;
+  ConvertKeysAction convert_keys_action = ConvertKeysAction::Default;
   TipDynamicPunctuationSettings dynamic_punctuation;
   uint32_t max_context_length = 30;
   bool prediction_enabled = true;
@@ -344,6 +351,8 @@ void TipLocalSettings::Reload() noexcept {
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
       punctuation_conversion = json->GetString("punctuationConversion").value_or("off") == "commit";
+      if (json->GetString("convertKeysAction").value_or("default") == "imeOnOff")
+        convert_keys_action = ConvertKeysAction::ImeOnOff;
       dynamic_punctuation.enabled = json->GetBool("dynamicPunctuation").value_or(false);
       if (const auto style = json->GetString("dynamicPunctuationStyle");
           style && *style == "fullwidth_latin")
@@ -426,6 +435,7 @@ void TipLocalSettings::Reload() noexcept {
     ai_ = ai;
     live_conversion_ = live_conversion;
     punctuation_conversion_ = punctuation_conversion;
+    convert_keys_action_ = convert_keys_action;
     dynamic_punctuation_ = std::move(dynamic_punctuation);
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
@@ -583,6 +593,11 @@ void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
 void TipLocalSettings::SetPunctuationConversionForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   punctuation_conversion_ = enabled;
+}
+
+void TipLocalSettings::SetConvertKeysActionForTest(ConvertKeysAction action) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  convert_keys_action_ = action;
 }
 
 void TipLocalSettings::SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings) {

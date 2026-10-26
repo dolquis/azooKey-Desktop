@@ -76,6 +76,10 @@
       "enum": ["hiragana", "alnum_half", "alnum_full"],
       "default": "hiragana"
     },
+    "convertKeysAction": {
+      "type": "string", "enum": ["default", "imeOnOff"], "default": "default",
+      "description": "DEV-1736: imeOnOff で変換キーを IME オン、無変換キーを IME オフにする（再変換と字種の巡回には使わない）"
+    },
     "liveConversion": {
       "type": "boolean",
       "default": false,

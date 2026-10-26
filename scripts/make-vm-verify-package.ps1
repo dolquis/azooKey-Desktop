@@ -1079,11 +1079,25 @@ function Export-VmVerifyPackage {
     }
 
     # The settings runtime shares the archive root with the other payloads, so a name
-    # that two payloads both claim would silently overwrite one of them.
+    # that two payloads both claim would silently overwrite one of them. manifest.json
+    # is written to the archive root after the payloads, so it is claimed up front. A
+    # file and a directory of the same name collide too (`data` against `data/x`).
     $claimed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $claimedDirectories = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    [void]$claimed.Add("manifest.json")
     foreach ($payload in $payloads) {
-      if (-not $claimed.Add([string]$payload.Archive)) {
-        throw "Two payloads map to the same archive path: $($payload.Archive)"
+      $archivePath = [string]$payload.Archive
+      $parts = $archivePath.Split("/")
+      $directory = ""
+      for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        $directory = if ($directory) { "$directory/$($parts[$i])" } else { $parts[$i] }
+        if ($claimed.Contains($directory)) {
+          throw "Two payloads map to the same archive path: $directory is both a file and a directory"
+        }
+        [void]$claimedDirectories.Add($directory)
+      }
+      if (-not $claimed.Add($archivePath) -or $claimedDirectories.Contains($archivePath)) {
+        throw "Two payloads map to the same archive path: $archivePath"
       }
     }
 

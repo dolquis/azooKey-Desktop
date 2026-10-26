@@ -908,6 +908,26 @@ Describe "VM verification package automation" {
         Should -Be 0
     }
 
+    It "rejects a settings runtime file that collides with manifest.json or with a payload file as a directory" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      Mock Assert-VmVerifySettingsFresh {}
+      $settings = Join-Path $script:testRepository "build\windows-release\settings-app\Release"
+      foreach ($collision in @("manifest.json", "azookey_inference_host.exe\inner.txt")) {
+        Remove-Item -LiteralPath $settings -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $settings -Force | Out-Null
+        "x" | Set-Content -LiteralPath (Join-Path $settings "azookey_settings.exe")
+        $collisionPath = Join-Path $settings $collision
+        New-Item -ItemType Directory -Path (Split-Path -Parent $collisionPath) -Force | Out-Null
+        "x" | Set-Content -LiteralPath $collisionPath
+        {
+          Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+            -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeSettings
+        } | Should -Throw "*same archive path*"
+      }
+    }
+
     It "leaves the settings app out and skips its freshness check without -IncludeSettings" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}

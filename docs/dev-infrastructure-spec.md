@@ -2469,7 +2469,8 @@ M46 の secure 表示と同時に出すときの並びは
   IPC ワーカーとは別のスレッドから、Cancel と同じく Handshake を済ませた短命な control 接続
   （§7.3）で送り、primary 接続の入力処理を待たせない。応答は control 接続で待ってから閉じ、
   待ちの上限は §8.5.2 の Model load とする。送信中は同じ TIP インスタンスから重ねて送らず、
-  [再試行] を押せない状態にする。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
+  [再試行] を押せない状態にする。入力インジケーターのメニューでライブ変換を切り替えたときも同じ経路で送り
+  （`docs/tsf-deep-integration-spec.md` §4.5）、送信中なら重ねて送らない。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
   結果は §8.5.1 の契機で取得する `fallback_state` で観測する
 - `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
   [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する

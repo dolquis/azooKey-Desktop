@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace azookey::tsf {
 
@@ -33,12 +34,61 @@ std::optional<DWORD> ReadSystemUsesLightTheme();
 // on a transparent background. The caller owns the icon (DestroyIcon).
 HICON CreateInputModeIcon(InputModeIndicator indicator, int size, COLORREF color);
 
+// The right-click menu of the indicator (spec §4.5). The values are the menu
+// item ids TrackPopupMenuEx returns; None is a menu closed without a choice.
+enum class InputModeMenuCommand : UINT {
+  None = 0,
+  Hiragana = 1,
+  Alphanumeric = 2,
+  Direct = 3,
+  LiveConversion = 4,
+  Prediction = 5,
+  OpenSettings = 6,
+};
+
+struct InputModeMenuState {
+  InputModeIndicator indicator{InputModeIndicator::Hiragana};
+  bool live_conversion{false};
+  bool prediction{true};
+  // False where the TIP does not write settings.json; the two switches are
+  // then shown grayed out.
+  bool settings_writable{true};
+};
+
+struct InputModeMenuEntry {
+  InputModeMenuCommand command{InputModeMenuCommand::None};
+  std::wstring_view label;
+  bool checked{false};
+  bool radio{false};
+  bool enabled{true};
+  bool separator_before{false};
+};
+
+// The menu in display order: the three input modes as radio items, live
+// conversion and prediction with their current value, then the settings app.
+std::vector<InputModeMenuEntry> BuildInputModeMenu(const InputModeMenuState& state);
+
+// Shows the entries as a popup menu at `point`, keeping clear of `area` (both
+// in screen coordinates), and returns the choice. It runs a modal loop on the
+// calling thread, so the caller must check its own state again afterwards.
+InputModeMenuCommand ShowInputModeMenu(const std::vector<InputModeMenuEntry>& entries, POINT point,
+                                       const RECT* area);
+
+#ifdef AZOOKEY_TSF_TESTING
+namespace testing {
+using InputModeMenuPresenter =
+    std::function<InputModeMenuCommand(const std::vector<InputModeMenuEntry>& entries)>;
+// Test builds never open a real menu; without a presenter the menu closes
+// without a choice.
+void SetInputModeMenuPresenterForTest(InputModeMenuPresenter presenter);
+}  // namespace testing
+#endif
+
 // The language bar button that Windows 8 and later show as the IME mode icon
 // of the input indicator. Only GUID_LBI_INPUTMODE is shown there.
 class LangBarInputModeItem final : public ITfLangBarItemButton, public ITfSource {
  public:
-  // Receives OnClick on the TIP thread. A right click is passed on too, so a
-  // menu can be added there later (DEV-1738); today the owner ignores it.
+  // Receives OnClick on the TIP thread, for the left and the right button.
   using ClickHandler = std::function<void(TfLBIClick click, POINT point, const RECT* area)>;
 
   LangBarInputModeItem(const CLSID& text_service, InputModeIndicator indicator,

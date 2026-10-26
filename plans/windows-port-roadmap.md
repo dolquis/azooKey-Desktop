@@ -811,7 +811,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `inference-host/src/main.cpp`（`WM_POWERBROADCAST` ハンドラ）。
 - **実装範囲**: `docs/copilot-pc-backend-spec.md` §5、§6。
 - **受け入れ条件**:
-  - 7B gguf をロードしても WorkingSet が肥大化しない
+  - 7B gguf をロードしても WorkingSet が肥大化しない（CPU backend のロードが対象。重みを
+    GPU へ載せる backend は GPU の確保が commit に計上されるので対象外。spec §5.2）
   - バッテリ駆動時に Heavy レーンが Fast にデグレ
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §5, §6
 

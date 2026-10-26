@@ -841,8 +841,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       candidates = engine_->QueryRewriters(rewriters, rewriter_reading, {}, std::move(candidates),
                                            merged_limit);
     // M60: the candidate window only (section 4.1); live conversion takes the
-    // first candidate, which English never claims anyway.
-    if (!parsed->live && parsed->english_candidates && !parsed->raw_romaji.empty()) {
+    // first candidate, which English never claims anyway. The romaji is the
+    // user's input, so a secure request never uses it (DEV-1689).
+    if (!parsed->live && !parsed->secure && parsed->english_candidates &&
+        !parsed->raw_romaji.empty()) {
       auto english = engine_->QueryEnglishCandidates(parsed->raw_romaji, NowSec());
       PlaceEnglishCandidates(candidates, std::move(english.candidates), english.intent,
                              engine_config.english.promote_threshold);

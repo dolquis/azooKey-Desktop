@@ -542,6 +542,12 @@ GGUF は llama.cpp のマップでロードする。マップしたページは�
   計上されず、メモリプレッシャ時にカーネルが破棄できる。触れたページは WorkingSet に共有分として
   計上される
 
+これらの利点は、CPU backend がマップした重みをそのまま使う場合に成り立つ。Vulkan など重みを GPU へ
+載せる backend では、GPU 側の確保（WDDM）が Host の commit charge と private bytes に計上されるため、
+マップでロードしても private bytes がモデルのサイズを超えうる。M25 のメモリの判定（private bytes と
+WorkingSet の内訳で、マップした重みが私有メモリに複製されていないことを確かめる）は CPU backend の
+ロードだけを対象とし、GPU backend のロードは private bytes では判定しない。
+
 ## 6. 省電力モード連動
 
 ### 6.1 電源状態の検出

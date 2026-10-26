@@ -17,6 +17,7 @@
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/PrivacyPolicy.h"
 #include "azookey/tsf/LivePunctuation.h"
+#include "azookey/tsf/OpenCloseKey.h"
 
 namespace azookey::tsf {
 
@@ -56,6 +57,8 @@ class TipLocalSettings final {
   bool LiveConversionSnapshot() const;
   // punctuationConversion == "commit" (DEV-1638). Absent or malformed: off.
   bool PunctuationConversionSnapshot() const;
+  // convertKeysAction == "imeOnOff" (DEV-1736). Absent or any other value: Default.
+  ConvertKeysAction ConvertKeysActionSnapshot() const;
   // dynamicPunctuation* (M59). Defaults when absent or malformed: off, "ja", onPause, 400 ms.
   TipDynamicPunctuationSettings DynamicPunctuationSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
@@ -69,6 +72,7 @@ class TipLocalSettings final {
   void SetPrivacyForTest(std::string_view contents);
   void SetLiveConversionForTest(bool enabled);
   void SetPunctuationConversionForTest(bool enabled);
+  void SetConvertKeysActionForTest(ConvertKeysAction action);
   void SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
@@ -112,6 +116,7 @@ class TipLocalSettings final {
   TipAiSettings ai_;
   bool live_conversion_{false};
   bool punctuation_conversion_{false};
+  ConvertKeysAction convert_keys_action_{ConvertKeysAction::Default};
   TipDynamicPunctuationSettings dynamic_punctuation_;
   uint32_t max_context_length_{30};
   bool prediction_enabled_{true};

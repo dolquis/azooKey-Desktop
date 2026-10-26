@@ -73,6 +73,8 @@ std::vector<SettingField> BuildFields() {
 
       Enum("inputMode", Pane::Input, "InputMethod", "hiragana",
            {"hiragana", "alnum_half", "alnum_full"}),
+      Enum("convertKeysAction", Pane::Input, "InputMethod", "default", {"default", "imeOnOff"},
+           std::nullopt, true),
       Enum("inputStyle", Pane::Input, "InputMethod", "default", {"default", "custom"}),
       Text("customRomajiTablePath", Pane::Input, "InputMethod",
            "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv", custom_romaji),

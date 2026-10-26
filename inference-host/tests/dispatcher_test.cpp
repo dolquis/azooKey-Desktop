@@ -1081,6 +1081,7 @@ TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
     q.reading = "にほん";
     q.raw_romaji = "nihon";
     q.english_candidates = english;
+    q.secure = false;
     const auto resp = dispatcher.Dispatch(
         MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
     EXPECT_TRUE(resp.has_value());
@@ -1120,6 +1121,52 @@ TEST_F(DispatcherTest, QueryCandidatesAddsEnglishCandidatesOnlyWhenAsked) {
     if (c.tag == kEnglish) without_dictionary.push_back(c.surface);
   }
   EXPECT_EQ(without_dictionary, english);
+}
+
+// DEV-1689 (M60 spec sections 4.1 and 6.2): the romaji is the user's input, so
+// a secure request never turns it into English candidates, even when the TIP
+// sends it.
+TEST_F(DispatcherTest, SecureQueryCandidatesIgnoresRawRomaji) {
+  const auto query = [&](uint64_t id, std::optional<bool> secure) {
+    std::string payload;
+    if (secure) {
+      ipc::QueryCandidatesRequest q;
+      q.reading = "にほん";
+      q.raw_romaji = "nihon";
+      q.english_candidates = true;
+      q.secure = *secure;
+      payload = ipc::BuildQueryCandidatesRequest(q);
+    } else {
+      // An absent flag parses as secure (Payloads.h).
+      payload = R"({"reading":"にほん","raw_romaji":"nihon","english_candidates":true})";
+    }
+    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryCandidates, payload));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  constexpr auto kEnglish = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  const auto english_count = [&](const std::vector<ipc::CandidateField>& candidates) {
+    return std::count_if(candidates.begin(), candidates.end(),
+                         [&](const auto& c) { return c.tag == kEnglish; });
+  };
+  const auto insecure = query(911, false);
+  EXPECT_EQ(english_count(insecure), 3);
+  for (const auto& [id, secure] :
+       {std::pair{912ull, std::optional<bool>{true}}, std::pair{913ull, std::optional<bool>{}}}) {
+    const auto candidates = query(id, secure);
+    ASSERT_FALSE(candidates.empty()) << id;
+    EXPECT_EQ(candidates.front().surface, "日本") << id;
+    EXPECT_EQ(english_count(candidates), 0) << id;
+    // The kana candidates are what the insecure request got without English.
+    std::vector<std::string> kana;
+    for (const auto& c : insecure)
+      if (c.tag != kEnglish) kana.push_back(c.surface);
+    std::vector<std::string> surfaces;
+    for (const auto& c : candidates) surfaces.push_back(c.surface);
+    EXPECT_EQ(surfaces, kana) << id;
+  }
 }
 
 TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {
@@ -2626,6 +2673,43 @@ TEST_F(DispatcherTest, NoLlamaZenzaiRuntimeStaysFallbackOnly) {
   EXPECT_EQ(degraded_health->status, "degraded");
   ASSERT_TRUE(degraded_health->last_error.has_value());
   EXPECT_NE(degraded_health->last_error->find("empty-generation"), std::string::npos);
+
+  std::remove(model_path.c_str());
+}
+
+// DEV-1700: a conversion cut off before its first beam step answers with fallback candidates
+// and leaves Health ok, as any other deadline cut-off does (spec 8.2).
+TEST_F(DispatcherTest, DeadlineBeforeFirstBeamStepKeepsHealthOk) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = temp_directory.File("azookey_dispatcher_deadline_no_beam.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "じかんぎれ";
+  auto query_resp = dispatcher.Dispatch(
+      MakeReq(79, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
+  ASSERT_TRUE(query_resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(query_resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "じかんぎれ");
+
+  auto health_resp = dispatcher.Dispatch(MakeReq(80, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(health_resp.has_value());
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "ok");
+  EXPECT_FALSE(health->last_error.has_value());
 
   std::remove(model_path.c_str());
 }

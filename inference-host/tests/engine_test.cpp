@@ -2584,6 +2584,51 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   RemoveProtectedStoreFile(lpath);
 }
 
+// DEV-1700: a deadline that passes before the first beam step leaves no beam to return. The
+// fallback candidates stand in, and the cut-off is still not a degradation (spec 8.2).
+TEST(InferenceEngineTest, DeadlineBeforeFirstBeamStepFallsBackWithoutDegrading) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_deadline_no_beam.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_deadline_no_beam_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  const auto candidates = engine->QueryCandidates("じかんぎれ", "", kNowBase);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "じかんぎれ");
+  EXPECT_NE(candidates.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_NE(candidates.front().debug_info.find("zenzai-deadline-fallback"), std::string::npos);
+  EXPECT_EQ(candidates.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+  const auto decode_stats = engine->last_zenzai_decode_stats();
+  ASSERT_TRUE(decode_stats.has_value());
+  EXPECT_TRUE(decode_stats->deadline_exceeded);
+
+  // Nor is such a cut-off evidence of recovery: an earlier degradation stays reported.
+  (void)engine->QueryCandidates("むこう", "", kNowBase + 1);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  (void)engine->QueryCandidates("じかんぎれ", "", kNowBase + 2);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
 TEST(InferenceEngineTest, DeadlineCutBeamRanksBehindCompletedZenzaiCandidate) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -3108,6 +3153,61 @@ TEST(InferenceEngineTest, ApplyConfigSetsTheLoadedModelThreadCount) {
   config.inference_threads.reset();
   engine->ApplyConfig(config);
   EXPECT_EQ(engine->model_thread_count(), 2);
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+}
+
+// DEV-1684: a thread count applied while a model is loading is the one the loaded model and the
+// config keep; the load does not write back the count it started with.
+TEST(InferenceEngineTest, ApplyConfigDuringModelLoadKeepsTheNewThreadCount) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_apply_threads_during_load.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  auto engine = MakeEngine(store);
+  const std::string model_path = TempPath("azookey_apply_threads_during_load_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.n_threads = 8;
+  EnableMockZenzaiCandidatesForTests(options);
+
+  // A failed load writes the model fields back too, and keeps the applied count as well.
+  azookey::host::ModelLoadOptions missing = options;
+  missing.path = TempPath("azookey_apply_threads_during_load_missing.gguf");
+  std::remove(missing.path.c_str());
+  missing.before_probe_for_tests = [&] {
+    auto config = engine->config();
+    config.inference_threads = 3;
+    engine->ApplyConfig(config);
+  };
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->config().inference_threads, 3);
+
+  // The first load starts from no model, the second reloads over a loaded one.
+  for (const int32_t applied : {2, 4}) {
+    SCOPED_TRACE(applied);
+    options.before_load_for_tests = [&](azookey::host::BackendKind) {
+      auto config = engine->config();
+      config.inference_threads = applied;
+      engine->ApplyConfig(config);
+    };
+    ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+    EXPECT_EQ(engine->config().inference_threads, applied);
+    EXPECT_EQ(engine->model_thread_count(), applied);
+  }
+
+  // A load that the config did not change mid-way keeps its own count.
+  options.before_load_for_tests = nullptr;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  EXPECT_EQ(engine->config().inference_threads, 8);
+  EXPECT_EQ(engine->model_thread_count(), 8);
 
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);

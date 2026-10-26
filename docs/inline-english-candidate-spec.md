@@ -115,6 +115,12 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
 TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilities に
 `english_candidates` があるときだけ、`raw_romaji` と `english_candidates` を送る。
 
+- 生ローマ字はユーザー入力そのものである。secure の入力（`docs/privacy-and-secure-input-spec.md`
+  §4・§5 の判定）では、TIP は `raw_romaji` と `english_candidates` を送らない。
+- Host は、`secure` が true の `QueryCandidates` 要求（`secure` の省略を含む）では、`raw_romaji` と
+  `english_candidates` を無視し、英単語候補を作らない。TIP の送信抑止と Host の無視の二重の
+  防御にする。M63 の同じ規則は `docs/mixed-english-auto-conversion-spec.md` §9.4 にある。
+
 - 生ローマ字は、通常の（一括変換でない）composition で打鍵した文字を、Shift の大文字のまま
   持つ（`s_case` のため）。小文字で持つ M58 の `batch_raw_romaji` とは別に持つ。
 - 送るのは `live = false` の `QueryCandidates` だけである（M63 の設定が ON の composition では、
@@ -139,7 +145,7 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
 
 - TIP は、`inlineEnglishCandidates` が true、Handshake 応答の capabilities に
   `english_candidates` がある、解決後の mode が `neural`、論理バッチのサブリクエストが 1 件、
-  の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
+  入力が secure でない（§4.1）、の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
 - Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
   読みが 1 chunk、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
@@ -317,9 +323,26 @@ NASA	8123	acronym
   いれば読み直す（進行中の preedit は触らない）。ファイルが無い・読めない・64 MiB を
   超えるときは辞書なしで動く（`s_dict = 0`）。
 
-**配布元・ライセンス**: バンドルする初期辞書は公開された英単語頻度リスト由来とし、
-ライセンスを明記する。上流のデータ生成パイプラインはクライアント実装の範囲外
-（M36-B と同方針）。
+**配布元・ライセンス**: バンドルする初期辞書 `data/english-words.tsv` は、次の 3 出典から
+`scripts/english_words_porter.py` が決定的に生成する。帰属とライセンス全文はルート
+`THIRD_PARTY_LICENSES` の「英単語辞書」節に置く。上流のデータ生成パイプラインはクライアント
+実装の範囲外（M36-B と同方針）。
+
+| 出典 | 用途 | ライセンス |
+|---|---|---|
+| SCOWL / ESDB hunspell `en_US` rel-2026.02.25 size 60 | 語彙。`.dic` / `.aff` を porter が展開する | LicenseRef-SCOWL |
+| Google Books Ngram v3 English 1-grams 20200217 | 頻度 | CC-BY-3.0 |
+| GitHub linguist v9.7.0 `languages.yml` と自作の語 | 技術語（`tech`） | MIT |
+
+- 表層は ASCII 英字だけにし、`NOSUGGEST` の語は除く。ローマ字として読める英単語は除外しない。
+- 頻度は 1990〜2019 年の出現数の合計 `count` を `1 + floor(4096 * log2(1 + count))` に写す
+  （順序を保存し、`2^31` 以下）。Ngram に一致しない語は 1 とする。Ngram は大小文字を区別するので、
+  SCOWL の表層と完全一致するものだけを数える。
+- `tech` は linguist の言語名と別名（type が programming・markup・data のもの）と自作の語に付ける。小文字形が SCOWL の一般語である linguist の語（`be`、`make` など）には付けない。
+- `proper` / `acronym` は、同じ小文字キーの小文字形が無いか、その語の Ngram 出現数（元の値）が小文字形の10 倍以上のときだけ付ける。Ngram は大小文字を区別し、文頭の語が大文字形を押し上げるためである。これで `in` / `it` / `or` では小文字形が先頭に出て、`NASA` は大文字形が先頭に出る。
+- 行は頻度の降順、同順位は表層の昇順に並べる。件数は 200,000 以下、サイズは 64 MiB 以下とする。
+- 取得物の URL、サイズ、SHA-256 は porter に固定する。Ngram の集計（約 13.4 GB）は手元で一度だけ
+  行い、CI と `cloud-setup.sh` では再生成しない。集計結果の SHA-256 は TSV のヘッダに残す。
 
 **M53 辞書層との関係**: M60 は独立した軽量英単語辞書として始め、将来 M53
 （`docs/auto-word-registration-spec.md` の DictionaryStore 再設計）に吸収・統合してよい。
@@ -401,6 +424,9 @@ string pool（strings_offset 以降）
   扱う。コンパクションはこの上限を超えるマージをしない（overlay を保持する）。
 - **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
   妥当な `.bin` は上記 1 でロードされる。
+- 初期辞書 `english-words.tsv` は MSI が `<インストール先>\data\` に置く。Host が既定パス
+  `%LOCALAPPDATA%\azooKey\dict\english-words.tsv` に加えてこの置き場を読む経路は、別 Issue
+  （DEV-1740）で扱う。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
 
 **バージョニング・堅牢化**:
@@ -901,6 +927,10 @@ p.raw_romaji         = v->GetString("raw_romaji").value_or(std::string());
 p.english_candidates = v->GetBool("english_candidates").value_or(false);
 ```
 
+Host は、同じ要求の `secure` が true（省略時を含む）のとき、`raw_romaji` と `english_candidates` を
+無視する（§4.1）。応答には英単語候補が無く、かなの候補は `english_candidates` が false の要求と
+同じになる。
+
 ### 6.3 Response
 
 英単語候補は `QueryCandidatesResponse.candidates[]` に `tag = English(4)` を付けて
@@ -983,6 +1013,9 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 英単語候補は、応答の唯一の `segments[0].candidates[]` に、§6.3 と同じ形（`tag = English(4)`、
 `reading = 生ローマ字`）で加わる。応答の形は変えない。旧 Host はこのフィールドを無視し、
 旧 TIP は送らないので、どちらの組み合わせでも挙動は変わらない。
+
+`QueryBatchConversionRequest` は `secure` を持たない。一括変換の英単語候補を secure の入力から
+守るのは、TIP が secure の入力で `english_candidates` を true にしないことだけである（§4.1）。
 
 ## 7. 設定スキーマ
 

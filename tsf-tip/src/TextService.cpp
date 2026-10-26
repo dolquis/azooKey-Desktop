@@ -1303,6 +1303,23 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     return hr;
   }
 
+  // The input indicator's mode icon (spec §4.5). Hosts without a language bar
+  // item manager get none; the TIP works the same without it.
+  hr = input_mode_langbar_.Add(thread_mgr_, kTextServiceClsid,
+                               ResolveInputModeIndicator(keyboard_open_, alnum_mode_),
+                               [this](TfLBIClick click, POINT, const RECT*) {
+                                 // The click can commit and close; keep the service alive whatever
+                                 // the host does with the TIP meanwhile.
+                                 AddRef();
+                                 struct Hold {
+                                   TextService* service;
+                                   ~Hold() { service->Release(); }
+                                 } hold{this};
+                                 OnInputModeLangBarClick(click);
+                               });
+  if (FAILED(hr) && hr != E_NOINTERFACE)
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_item_add_failed");
+
   hr = AdviseFunctionProvider();
   if (FAILED(hr)) {
     // The function provider enables the application's reconversion menu.
@@ -1372,6 +1389,8 @@ STDMETHODIMP TextService::Deactivate() try {
   last_learned_commit_pairs_.clear();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
+  if (FAILED(input_mode_langbar_.Remove()))
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_item_remove_failed");
   HRESULT result = UnadviseFunctionProvider();
   const HRESULT keyboard_result = UnadviseKeyboardOpenCompartment();
   if (SUCCEEDED(result)) result = keyboard_result;
@@ -1792,6 +1811,23 @@ void TextService::RefreshKeyboardOpen(std::string_view source) {
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
   LogKeyboardOpenState("keyboard_open_refresh", source, open_before);
+  UpdateInputModeLangBar();
+}
+
+void TextService::UpdateInputModeLangBar() {
+  input_mode_langbar_.Update(ResolveInputModeIndicator(keyboard_open_, alnum_mode_));
+}
+
+void TextService::OnInputModeLangBarClick(TfLBIClick click) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  // A left click flips on/off like Hankaku/Zenkaku. A right click is left for
+  // the menu of DEV-1738.
+  if (click != TF_LBI_CLK_LEFT) return;
+  recent_character_form_commit_.reset();
+  if (keyboard_open_)
+    (void)CloseKeyboardCommittingShownText(nullptr, "langbar_click");
+  else
+    (void)SetKeyboardOpen(true, "langbar_click");
 }
 
 STDMETHODIMP TextService::OnChange(REFGUID rguid) {
@@ -1810,18 +1846,87 @@ STDMETHODIMP TextService::OnChange(REFGUID rguid) {
   }
 }
 
-HRESULT TextService::ToggleKeyboardOpen() {
+HRESULT TextService::ToggleKeyboardOpen() { return SetKeyboardOpen(!keyboard_open_, "toggle_key"); }
+
+HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return E_UNEXPECTED;
+  if (open == keyboard_open_) {
+    // On and off keys do not toggle. On while alphanumeric returns to hiragana;
+    // alphanumeric mode never holds a composition, so nothing is committed.
+    if (open && alnum_mode_) {
+      alnum_mode_ = false;
+      character_form_cycle_state_.reset();
+      recent_character_form_commit_.reset();
+    }
+    LogKeyboardOpenState("keyboard_open_refresh", source, keyboard_open_);
+    UpdateInputModeLangBar();
+    // No change of state: a restore that closes a new document right after
+    // its first focus is still undone once (spec §4.1).
+    return S_OK;
+  }
   // The user chose the state; a pending initial open must not undo it.
   keyboard_open_pending_document_ = nullptr;
   VARIANT value;
   VariantInit(&value);
   value.vt = VT_I4;
-  value.lVal = keyboard_open_ ? 0 : 1;
+  value.lVal = open ? 1 : 0;
   const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
-  if (SUCCEEDED(hr)) RefreshKeyboardOpen("toggle_key");
+  // Closing commits what is left through RefreshKeyboardOpen, the lifecycle
+  // path that commits the reading (spec §4.2).
+  if (SUCCEEDED(hr)) RefreshKeyboardOpen(source);
   return hr;
+}
+
+bool TextService::HasInputToCommitBeforeClose() const {
+  return composition_ || !preedit_kana_.empty() || romaji_.HasPending() ||
+         candidate_ui_.IsShowing() || !batch_raw_romaji_.empty() || !shown_batch_segments_.empty();
+}
+
+HRESULT TextService::CloseKeyboardCommittingShownText(ITfContext* context,
+                                                      std::string_view source) {
+  ITfContext* target = context ? context : active_context_;
+  if (keyboard_open_ && keyboard_open_compartment_ && client_id_ != TF_CLIENTID_NULL && target &&
+      HasInputToCommitBeforeClose()) {
+    // Spec §4.2: an off key commits what is shown (the live conversion, the
+    // selected candidate) the way Enter does, without waiting for a final
+    // punctuation request, before closing.
+    commit_before_close_ = true;
+    BOOL committed = FALSE;
+    HRESULT hr = S_OK;
+    try {
+      hr = OnKeyDown(target, VK_RETURN, 0, &committed);
+    } catch (...) {
+      commit_before_close_ = false;
+      throw;
+    }
+    commit_before_close_ = false;
+    if (FAILED(hr)) return hr;
+    // A refused edit session keeps the text (or a commit queued for retry),
+    // and so does an Enter that waits, such as for a batch conversion: stay on
+    // so the text is neither lost nor committed as its reading. The key is consumed.
+    // An Enter that the state does not take closes as Hankaku/Zenkaku does.
+    if (committing_ || (committed && HasInputToCommitBeforeClose())) return S_OK;
+  }
+  return SetKeyboardOpen(false, source);
+}
+
+HRESULT TextService::HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key,
+                                        ITfContext* context) {
+  recent_character_form_commit_.reset();
+  // The source names the key family for keyboard_open_refresh, never the code.
+  switch (action) {
+    case OpenCloseKeyAction::Open:
+      return SetKeyboardOpen(true, key == VK_CONVERT ? "convert_key" : "ime_on_key");
+    case OpenCloseKeyAction::Close:
+      return CloseKeyboardCommittingShownText(
+          context, key == VK_NONCONVERT ? "nonconvert_key" : "ime_off_key");
+    case OpenCloseKeyAction::Toggle:
+      return ToggleKeyboardOpen();
+    case OpenCloseKeyAction::None:
+      break;
+  }
+  return S_FALSE;
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
@@ -2102,10 +2207,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
     const uint32_t modifiers = CurrentKeyModifiers();
-    const bool toggle_open =
-        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
-        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
-                      core::kModifierShift)) == 0;
+    const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
+        static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
+    const bool toggle_open = open_close != OpenCloseKeyAction::None;
     if ((!keyboard_open_ && !toggle_open) ||
         (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN)) {
       LogKeyPassthroughOnce();
@@ -2132,6 +2236,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
     if (committing_) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+    // On, off and Hankaku/Zenkaku keys are the TIP's in every open state.
+    if (open_close != OpenCloseKeyAction::None) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2355,10 +2464,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
     const uint32_t modifiers = CurrentKeyModifiers();
-    const bool toggle_open =
-        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
-        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
-                      core::kModifierShift)) == 0;
+    const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
+        static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
+    const bool toggle_open = open_close != OpenCloseKeyAction::None;
     if ((!keyboard_open_ && !toggle_open) ||
         (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN)) {
       LogKeyPassthroughOnce();
@@ -2439,6 +2547,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       ClearReconversionState();
     }
+    // Before reconversion and the character-form cycle, which Convert and
+    // NonConvert give up under convertKeysAction "imeOnOff" (spec §3.1.1).
+    if (open_close != OpenCloseKeyAction::None) {
+      const HRESULT hr = HandleOpenCloseKey(open_close, wParam, context);
+      if (SUCCEEDED(hr)) *eaten = TRUE;
+      return hr == E_UNEXPECTED ? S_OK : hr;
+    }
     if (wParam == VK_CONVERT && modifiers == 0 && !composition_ && preedit_kana_.empty() &&
         context) {
       const HRESULT reconversion_hr = StartSelectionReconversion(context);
@@ -2467,12 +2582,6 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
       return S_OK;
     }
-    if (IsActionKey(mode_key, core::UserAction::ToggleHankaku)) {
-      recent_character_form_commit_.reset();
-      const HRESULT hr = ToggleKeyboardOpen();
-      if (SUCCEEDED(hr)) *eaten = TRUE;
-      return hr == E_UNEXPECTED ? S_OK : hr;
-    }
     if (IsActionKey(mode_key, core::UserAction::ToggleAlnum)) {
       CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                               LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -2483,6 +2592,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       alnum_mode_ = !alnum_mode_;
       character_form_cycle_state_.reset();
       recent_character_form_commit_.reset();
+      UpdateInputModeLangBar();
       *eaten = TRUE;
       return S_OK;
     }
@@ -3367,6 +3477,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) try {
   AZOOKEY_ASSERT_UI_THREAD();
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
+  UpdateInputModeLangBar();
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     ResetTypoTracking();
     last_learned_commit_pairs_.clear();
@@ -8014,7 +8125,9 @@ void TextService::OnPunctuationTimer(DelayedActionTimer::Slot slot) {
 // key comes. Returns false when the commit should proceed at once.
 bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::InputState& previous,
                                             core::HandleResult& result) {
-  if (final_punctuation_hold_ || !context || !core_input_active_ || !input_state_.live_conversion())
+  // An off key commits the surface shown now instead of waiting (spec §4.2).
+  if (final_punctuation_hold_ || commit_before_close_ || !context || !core_input_active_ ||
+      !input_state_.live_conversion())
     return false;
   if (previous.kind() != core::InputStateKind::Composing &&
       previous.kind() != core::InputStateKind::Previewing)

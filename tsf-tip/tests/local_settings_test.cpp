@@ -653,6 +653,26 @@ TEST_F(LocalSettingsTest, PunctuationConversionDefaultsOffAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return !reader.PunctuationConversionSnapshot(); }));
 }
 
+TEST_F(LocalSettingsTest, ConvertKeysActionDefaultsAndReloads) {
+  using azookey::tsf::ConvertKeysAction;
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.ConvertKeysActionSnapshot(), ConvertKeysAction::Default);
+  Write(R"({"convertKeysAction":"imeOnOff"})");
+  ASSERT_TRUE(
+      WaitUntil([&] { return reader.ConvertKeysActionSnapshot() == ConvertKeysAction::ImeOnOff; }));
+  // An unknown value or a wrong type keeps the keys' default roles.
+  Write(R"({"convertKeysAction":"toggle"})");
+  ASSERT_TRUE(
+      WaitUntil([&] { return reader.ConvertKeysActionSnapshot() == ConvertKeysAction::Default; }));
+  Write(R"({"convertKeysAction":"imeOnOff"})");
+  ASSERT_TRUE(
+      WaitUntil([&] { return reader.ConvertKeysActionSnapshot() == ConvertKeysAction::ImeOnOff; }));
+  Write(R"({"convertKeysAction":true})");
+  ASSERT_TRUE(
+      WaitUntil([&] { return reader.ConvertKeysActionSnapshot() == ConvertKeysAction::Default; }));
+}
+
 TEST(LivePunctuationPolicyTest, EncodesTheTimingTableOfSection711) {
   using azookey::tsf::AutoPunctuationFor;
   using azookey::tsf::LiveRequestTiming;

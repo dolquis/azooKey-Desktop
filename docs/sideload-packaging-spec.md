@@ -1200,7 +1200,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | ペイン | 内容 |
 |---|---|
 | 一般 | `model.enabled` / `model.selectedPath` / `autoUpdate` / SafeMode の解除 |
-| 入力 | 入力方式（`inputMode` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点 / バッチ変換 / インライン英単語候補 / 候補リライター / 括弧ペアリング |
+| 入力 | 入力方式（`inputMode` / `convertKeysAction` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点 / バッチ変換 / インライン英単語候補 / 候補リライター / 括弧ペアリング |
 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 |
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
@@ -1346,6 +1346,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | キー | 型 / enum | 既定 | UI ペイン | 導入 | 反映 | 正典 |
 |---|---|---|---|---|---|---|
 | `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 入力 | Phase 5（基本） | 即時 | schema |
+| `convertKeysAction` | enum `default`/`imeOnOff` | `default` | 入力 | DEV-1736 | 即時 | `tsf-deep-integration-spec.md` §3.1.1 |
 | `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
 | `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
 | `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
@@ -1561,7 +1562,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `model.*` の残りフィールド（`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（「モデル」ペイン。§3.2） |
 | `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
 | `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（詳細ペイン） |
-| `inputMode` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン） |
+| `inputMode` / `convertKeysAction` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン） |
 | 句読点・バッチ変換・インライン英単語候補・候補リライター・括弧ペアリングの各キー | — | M30（入力ペイン） |
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI ペイン） |
 | `openAiApiKey` | — | M34（AI ペイン。鍵は §9 DPAPI） |

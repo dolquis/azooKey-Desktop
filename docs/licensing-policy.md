@@ -38,7 +38,7 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 ## データ採用ワークフロー
 
 1. 採用可否を判定する（ライセンス互換性・配布条項・来歴の明確さ）。
-   MIT / Apache-2.0 / BSD-3-Clause / CC0 / CC-BY-4.0 / 権利主張なし（PD 相当）は同梱可、
+   MIT / Apache-2.0 / BSD-3-Clause / CC0 / CC-BY-3.0 / CC-BY-4.0 / 権利主張なし（PD 相当）は同梱可、
    コピーレフト・来歴不透明は不可（`plans/windows-port-roadmap.md` の配布ガード方針に整合）。
 2. データを azooKey 形式へ再ポートする（逐語コピーせず、原典準拠で変換）。
 3. 三層 attribution を付す（上記）。
@@ -52,6 +52,16 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 - **BSD-3-Clause（Mozc 由来 `symbol.tsv` / `emoji_data.tsv`、© Google）**: 原著作権表記と
   第 3 条項（名前による推奨・保証の禁止）を含む全文を保持する。派生データにも表記を継承する。
 - **Unicode License v3（CLDR）**: CLDR データ条項に従い、出典バージョンと Unicode 表記を保持する。
+- **CC-BY-3.0（Google Books Ngram の頻度。英単語辞書 `english-words.tsv` の頻度源）**:
+  Creative Commons Attribution 3.0 Unported。CC-BY-4.0 と同じく帰属表示を条件に再配布・改変を
+  認めるが、4.0 と条文が異なる（3.0 §4(b) は帰属の掲示を求め、§5 は保証の否認、§6 は責任の制限を
+  定める）ため、4.0 の全文では代替できない。
+  - 帰属表示: 原著作者（Google）、作品名（Google Books Ngram Viewer / Google Books Ngram Dataset）、
+    入手元 URI、ライセンスへの参照（URI または全文）、改変の旨を `THIRD_PARTY_LICENSES` に記す。
+    派生した頻度値を含むデータファイルのヘッダにも出典とライセンスを記す。
+  - 全文: `dictbuild/notices/CC-BY-3.0.txt` に置き、配布物へ同梱する。
+  - 頻度の集計値は元データの改変（Adaptation）として扱い、元データを逐語では再配布しない。
+  - 採用例: 英単語辞書の出典決定（DEV-1594）。
 - **Apache-2.0（SudachiDict）**: `NOTICE` の継承が必要。内包 UniDic（BSD-3-Clause）の
   ライセンス連鎖も併記する。standalone NEologd は同梱せず別 DL pack とする方針
   （`plans/windows-port-roadmap.md` M53）。

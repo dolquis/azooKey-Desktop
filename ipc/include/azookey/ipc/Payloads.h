@@ -209,6 +209,10 @@ struct QueryLiveConversionRequest {
   // mixedEnglishAutoConversion. Omitted on the wire when empty / false.
   std::string raw_romaji;
   bool mixed_english{false};
+  // M63 section 9.4: the event privacy. Missing is secure, as on
+  // QueryCandidatesRequest; only false goes on the wire, so a secure request
+  // keeps the pre-M63 shape.
+  bool secure{true};
 };
 
 struct QueryLiveConversionResponse {
@@ -251,6 +255,9 @@ struct QueryBatchConversionRequest {
   // M60 (docs/romaji-batch-conversion-spec.md section 6.1): English candidates
   // for a neural batch that stays one segment. Omitted on the wire when false.
   bool english_candidates{false};
+  // M63 section 9.4: the event privacy. Missing is secure, as on
+  // QueryCandidatesRequest; only false goes on the wire.
+  bool secure{true};
 };
 
 struct QueryBatchConversionResponse {

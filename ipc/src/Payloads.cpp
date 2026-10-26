@@ -561,6 +561,7 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   // M63: omitted when empty / false so a request without M63 keeps its shape.
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
+  if (!p.secure) o.emplace("secure", j::Value(false));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -579,6 +580,7 @@ std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const 
   // Absent for TIPs that predate M63: no raw romaji, M63 off.
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.mixed_english = v->GetBool("mixed_english").value_or(false);
+  p.secure = v->GetBool("secure").value_or(true);
   return p;
 }
 
@@ -699,6 +701,7 @@ std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& 
   o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
+  if (!p.secure) o.emplace("secure", j::Value(false));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -721,6 +724,8 @@ std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
   p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
   p.english_candidates = v->GetBool("english_candidates").value_or(false);
+  // Absent for TIPs that predate M63: secure.
+  p.secure = v->GetBool("secure").value_or(true);
   return p;
 }
 

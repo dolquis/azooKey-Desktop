@@ -658,6 +658,33 @@ TEST(PayloadsTest, QueryBatchConversionEnglishCandidatesIsOptional) {
   EXPECT_FALSE(parsed->english_candidates);
 }
 
+// M63 section 9.4: absent, true and a non-bool are secure; only false is sent.
+TEST(PayloadsTest, QueryBatchConversionSecureDefaultsToSecure) {
+  azookey::ipc::QueryBatchConversionRequest req;
+  req.reading = "あっぷる";
+  req.raw_romaji = "apple";
+  req.english_candidates = true;
+  auto json = azookey::ipc::BuildQueryBatchConversionRequest(req);
+  EXPECT_EQ(json.find("\"secure\""), std::string::npos);
+  auto parsed = azookey::ipc::ParseQueryBatchConversionRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->secure);
+
+  req.secure = false;
+  parsed = azookey::ipc::ParseQueryBatchConversionRequest(
+      azookey::ipc::BuildQueryBatchConversionRequest(req));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_TRUE(parsed->english_candidates);
+
+  for (const char* payload : {R"({"reading":"かな"})", R"({"reading":"かな","secure":true})",
+                              R"({"reading":"かな","secure":"no"})"}) {
+    parsed = azookey::ipc::ParseQueryBatchConversionRequest(payload);
+    ASSERT_TRUE(parsed.has_value()) << payload;
+    EXPECT_TRUE(parsed->secure) << payload;
+  }
+}
+
 TEST(PayloadsTest, QueryBatchConversionErrorClassRoundTrip) {
   azookey::ipc::QueryBatchConversionResponse response;
   response.error_class = "Network";
@@ -1780,6 +1807,16 @@ TEST(PayloadsTest, MixedEnglishRequestFieldsAreOptional) {
   ASSERT_TRUE(wrong_type);
   EXPECT_TRUE(wrong_type->raw_romaji.empty());
   EXPECT_FALSE(wrong_type->mixed_english);
+  // secure (section 9.4): absent, true and a non-bool are secure; only false is
+  // sent, so the default keeps the pre-M63 shape pinned above.
+  EXPECT_TRUE(parsed_live->secure);
+  EXPECT_TRUE(legacy_live->secure);
+  EXPECT_TRUE(
+      ParseQueryLiveConversionRequest(R"({"kana":"かな","context":"","secure":"no"})")->secure);
+  live.secure = false;
+  const auto insecure_live = ParseQueryLiveConversionRequest(BuildQueryLiveConversionRequest(live));
+  ASSERT_TRUE(insecure_live);
+  EXPECT_FALSE(insecure_live->secure);
 
   QueryCandidatesRequest candidates;
   candidates.reading = "ぎてゅぶ";

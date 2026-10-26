@@ -246,6 +246,7 @@ void TipLocalSettings::Stop() noexcept {
   max_context_length_ = 30;
   prediction_enabled_ = true;
   inline_english_candidates_ = false;
+  mixed_english_auto_conversion_ = false;
   romaji_table_.reset();
 }
 
@@ -299,6 +300,11 @@ bool TipLocalSettings::InlineEnglishCandidatesSnapshot() const {
   return inline_english_candidates_;
 }
 
+bool TipLocalSettings::MixedEnglishAutoConversionSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return mixed_english_auto_conversion_;
+}
+
 std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot() const {
   const std::lock_guard lock(mutex_);
   return romaji_table_;
@@ -319,6 +325,7 @@ void TipLocalSettings::Reload() noexcept {
   uint32_t max_context_length = 30;
   bool prediction_enabled = true;
   bool inline_english_candidates = false;
+  bool mixed_english_auto_conversion = false;
   bool custom_romaji = false;
   std::string custom_romaji_path;
   std::shared_ptr<const core::CustomRomajiTable> romaji_table;
@@ -367,6 +374,7 @@ void TipLocalSettings::Reload() noexcept {
         max_context_length = static_cast<uint32_t>(*configured);
       prediction_enabled = json->GetBool("predictionEnabled").value_or(true);
       inline_english_candidates = json->GetBool("inlineEnglishCandidates").value_or(false);
+      mixed_english_auto_conversion = json->GetBool("mixedEnglishAutoConversion").value_or(false);
       custom_romaji = json->GetString("inputStyle").value_or("default") == "custom";
       custom_romaji_path = json->GetString("customRomajiTablePath").value_or("");
     }
@@ -440,6 +448,7 @@ void TipLocalSettings::Reload() noexcept {
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
     inline_english_candidates_ = inline_english_candidates;
+    mixed_english_auto_conversion_ = mixed_english_auto_conversion;
     romaji_table_ = std::move(romaji_table);
   }
   changed_.notify_all();
@@ -608,6 +617,11 @@ void TipLocalSettings::SetDynamicPunctuationForTest(const TipDynamicPunctuationS
 void TipLocalSettings::SetInlineEnglishCandidatesForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   inline_english_candidates_ = enabled;
+}
+
+void TipLocalSettings::SetMixedEnglishAutoConversionForTest(bool enabled) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  mixed_english_auto_conversion_ = enabled;
 }
 
 void TipLocalSettings::SetMaxContextLengthForTest(uint32_t length) {

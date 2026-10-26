@@ -344,6 +344,10 @@
       "type": "boolean", "default": false,
       "description": "M60: 日本語ローマ字入力中に英単語候補を候補列へ注入する"
     },
+    "mixedEnglishAutoConversion": {
+      "type": "boolean", "default": false,
+      "description": "M63: 日英混在のローマ字を区間ごとに打ち分け、確度の高い英単語をライブ変換と第 1 候補で英字にする。inlineEnglishCandidates が true のときだけ働く"
+    },
     "inlineEnglishCaseVariants": {
       "type": "boolean", "default": true,
       "description": "M60: 先頭大文字 / 全大文字バリアントも候補に出す"

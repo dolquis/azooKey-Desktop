@@ -11499,3 +11499,270 @@ TEST(TsfTipPunctuationConversionTest, PunctuatedLiveSurfaceWithoutSegmentsIsNotC
   h.service.process_candidates_ready_for_test();
   EXPECT_EQ(h.context.document->text, L"蚊、");
 }
+
+// DEV-1745 (inline-english-candidate-spec section 4.1): the raw romaji is the
+// user's input, so a secure field sends neither raw_romaji nor
+// english_candidates, for the candidate window and for a batch.
+TEST(TsfTipEnglishCandidatesTest, SecureInputSendsNoRawRomaji) {
+  for (const bool batch : {false, true}) {
+    SCOPED_TRACE(batch ? "batch" : "candidate window");
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    if (batch) h.service.set_batch_romaji_options_for_test(true);
+    h.service.set_english_candidates_for_test(true);
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+    EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+    EXPECT_TRUE(h.service.pending_ipc_secure_for_test());
+    // The batch keeps its romaji to split the reading (M58); the wire request
+    // drops it (SecureBatchWireCarriesNoRawRomaji).
+    if (!batch) EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+  }
+}
+
+// M63 section 9.4: a batch from a field that is not secure says so, so the
+// Host's secure check does not take its English candidates away.
+TEST(TsfTipEnglishCandidatesTest, BatchFromANormalFieldIsMarkedNotSecure) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_secure_for_test());
+}
+
+// The batch takes its own privacy decision: a secure batch after a request
+// from a normal field is still marked secure.
+TEST(TsfTipEnglishCandidatesTest, SecureBatchAfterANormalRequestIsMarkedSecure) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}}) ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_FALSE(h.service.pending_ipc_secure_for_test());
+  for (int i = 0; i < 3 && !h.service.preedit_kana_.empty(); ++i) h.Press(VK_ESCAPE);
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_secure_for_test());
+  EXPECT_FALSE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+// DEV-1745 / M63 section 9.4 on the wire: a secure batch is split with its
+// romaji, then sent without it (the Host gets the kana only); a normal batch
+// still sends it and says it is not secure.
+TEST(TsfTipEnglishCandidatesTest, SecureBatchWireCarriesNoRawRomaji) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-batch-secure-test-" + std::to_string(GetCurrentProcessId());
+  std::mutex mutex;
+  std::vector<azookey::ipc::QueryBatchConversionRequest> requests;
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.capabilities = {"oob_cancel", "english_candidates"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request) return std::nullopt;
+        {
+          const std::lock_guard<std::mutex> lock(mutex);
+          requests.push_back(*request);
+        }
+        azookey::ipc::QueryBatchConversionResponse payload;
+        azookey::ipc::CandidateField candidate;
+        candidate.reading = request->reading;
+        candidate.surface = request->reading;
+        candidate.source = "model";
+        payload.full_surface = candidate.surface;
+        payload.segments.push_back({request->reading, {std::move(candidate)}});
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  for (const bool secure : {true, false}) {
+    SCOPED_TRACE(secure ? "secure" : "normal");
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      requests.clear();
+    }
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(
+        secure ? R"({"privacy":{"mode":"secure"}})"
+               : R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.batch_romaji_conversion_for_test(); }));
+    for (const WPARAM key : {WPARAM{'A'}, WPARAM{'P'}, WPARAM{'P'}, WPARAM{'L'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+    h.service.stop_ipc_worker_for_test();
+    const std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(requests.size(), 1u);
+    EXPECT_FALSE(requests.front().reading.empty());
+    EXPECT_EQ(requests.front().secure, secure);
+    EXPECT_EQ(requests.front().raw_romaji, secure ? "" : "apple");
+    EXPECT_EQ(requests.front().english_candidates, !secure);
+  }
+  server.Stop();
+}
+
+namespace {
+// M63 section 5: every condition met, unless a case turns one off.
+struct MixedEnglishCase {
+  const char* name = "";
+  bool inline_english = true;
+  bool english_capability = true;
+  bool mixed_setting = true;
+  bool mixed_capability = true;
+  bool custom_table = false;
+  bool secure = false;
+  size_t extra_keys = 0;  // Presses of A after kite, for the 64 limit.
+  bool expected = true;
+};
+
+void PrepareMixedEnglish(TextServiceHarness& h, const MixedEnglishCase& item) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      item.secure ? R"({"privacy":{"mode":"secure"}})"
+                  : R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  if (item.custom_table)
+    h.service.set_romaji_table_for_test(
+        azookey::core::CustomRomajiLoader::Parse("ki\tき\nte\tて\na\tあ\n").table);
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_english_candidates_for_test(item.inline_english, item.english_capability);
+  h.service.set_mixed_english_for_test(item.mixed_setting, item.mixed_capability);
+}
+
+std::vector<MixedEnglishCase> MixedEnglishCases() {
+  std::vector<MixedEnglishCase> cases(9);
+  cases[0].name = "all conditions";
+  cases[1].name = "setting off";
+  cases[1].mixed_setting = false;
+  cases[1].expected = false;
+  cases[2].name = "no mixed_english capability";
+  cases[2].mixed_capability = false;
+  cases[2].expected = false;
+  cases[3].name = "inlineEnglishCandidates off";
+  cases[3].inline_english = false;
+  cases[3].expected = false;
+  cases[4].name = "no english_candidates capability";
+  cases[4].english_capability = false;
+  cases[4].expected = false;
+  cases[5].name = "custom romaji table";
+  cases[5].custom_table = true;
+  cases[5].expected = false;
+  cases[6].name = "secure";
+  cases[6].secure = true;
+  cases[6].expected = false;
+  cases[7].name = "64 characters";
+  cases[7].extra_keys = 60;
+  cases[8].name = "65 characters";
+  cases[8].extra_keys = 61;
+  cases[8].expected = false;
+  return cases;
+}
+}  // namespace
+
+// Section 5 / 9.1: the live conversion request carries the raw romaji and
+// mixed_english only when every condition holds, and says it is not secure.
+TEST(TsfTipMixedEnglishTest, LiveConversionCarriesTheRawRomajiOnlyUnderSection5) {
+  for (const auto& item : MixedEnglishCases()) {
+    SCOPED_TRACE(item.name);
+    TextServiceHarness h;
+    PrepareMixedEnglish(h, item);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    for (size_t i = 0; i < item.extra_keys; ++i) ASSERT_TRUE(h.Press('A'));
+    if (item.secure) {
+      // A secure field sends no live conversion request at all.
+      EXPECT_FALSE(h.service.pending_ipc_query_is_live_conversion_for_test());
+      EXPECT_FALSE(h.service.pending_ipc_mixed_english_for_test());
+      EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+      continue;
+    }
+    ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+    EXPECT_EQ(h.service.pending_ipc_mixed_english_for_test(), item.expected);
+    if (item.expected) {
+      EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(),
+                "kite" + std::string(item.extra_keys, 'a'));
+      EXPECT_FALSE(h.service.pending_ipc_secure_for_test());
+    } else {
+      EXPECT_TRUE(h.service.pending_ipc_raw_romaji_for_test().empty());
+    }
+  }
+}
+
+// Section 9.1: the candidate window query adds mixed_english to the M60 fields
+// under the same conditions.
+TEST(TsfTipMixedEnglishTest, SpaceQueryCarriesMixedEnglishOnlyUnderSection5) {
+  for (const auto& item : MixedEnglishCases()) {
+    SCOPED_TRACE(item.name);
+    TextServiceHarness h;
+    PrepareMixedEnglish(h, item);
+    h.service.set_live_conversion_for_test(false);
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+      ASSERT_TRUE(h.Press(key));
+    for (size_t i = 0; i < item.extra_keys; ++i) ASSERT_TRUE(h.Press('A'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+    ASSERT_FALSE(h.service.pending_ipc_live_for_test());
+    EXPECT_EQ(h.service.pending_ipc_mixed_english_for_test(), item.expected);
+    if (item.expected) EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+  }
+}
+
+// Section 11 / M60 section 6.4: a live conversion committed as one English
+// segment is learned under its raw romaji with the English tag, never as kana.
+TEST(TsfTipMixedEnglishTest, EnglishLiveSegmentIsLearnedAsEnglish) {
+  DocumentPreeditHarness h;
+  StartLive(h, TipDynamicPunctuationSettings{});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"normal","autoSecureInput":false}})");
+  h.service.set_english_candidates_for_test(true);
+  h.service.set_mixed_english_for_test(true);
+  // A reading without pending romaji, so the live surface replaces it.
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.preedit_kana_, "きて");
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  auto segment = LiveSeg("Kite", "kite", false);
+  segment.end_char = 4;
+  segment.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  h.service.set_live_conversion_result_with_segments_for_test(id, "きて", "Kite", {segment}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"Kite");
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"Kite");
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "kite");
+  EXPECT_EQ(observation->chosen.surface, "Kite");
+  EXPECT_EQ(observation->chosen.tag, static_cast<uint8_t>(azookey::core::CandidateTag::English));
+}

@@ -356,6 +356,7 @@ TEST(SettingsDocumentTest, SavePreservesTheInlineEnglishKeys) {
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "inlineEnglishCandidates": true,
+    "mixedEnglishAutoConversion": true,
     "inlineEnglishCaseVariants": false,
     "fullWidthEnglishCandidate": true,
     "inlineEnglishMinLength": 3,
@@ -370,6 +371,8 @@ TEST(SettingsDocumentTest, SavePreservesTheInlineEnglishKeys) {
   const auto& root = parsed->AsObject();
   ASSERT_TRUE(root.contains("inlineEnglishCandidates"));
   EXPECT_TRUE(root.at("inlineEnglishCandidates").AsBool());
+  ASSERT_TRUE(root.contains("mixedEnglishAutoConversion"));
+  EXPECT_TRUE(root.at("mixedEnglishAutoConversion").AsBool());
   EXPECT_FALSE(root.at("inlineEnglishCaseVariants").AsBool());
   EXPECT_TRUE(root.at("fullWidthEnglishCandidate").AsBool());
   EXPECT_EQ(root.at("inlineEnglishMinLength").AsNumber(), 3.0);
@@ -378,12 +381,14 @@ TEST(SettingsDocumentTest, SavePreservesTheInlineEnglishKeys) {
   EXPECT_EQ(root.at("inlineEnglishDictionaryPath").AsString(), "C:/dict/words.tsv");
 
   WriteText(path, R"({"inlineEnglishMinLength": 0, "inlineEnglishPromoteThreshold": 2,
-                      "inlineEnglishCandidates": "yes", "inlineEnglishDictionaryPath": 7})");
+                      "inlineEnglishCandidates": "yes", "inlineEnglishDictionaryPath": 7,
+                      "mixedEnglishAutoConversion": 1})");
   ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, settings).ok);
   parsed = azookey::ipc::json::Parse(ReadText(path));
   ASSERT_TRUE(parsed && parsed->IsObject());
-  for (const char* key : {"inlineEnglishMinLength", "inlineEnglishPromoteThreshold",
-                          "inlineEnglishCandidates", "inlineEnglishDictionaryPath"}) {
+  for (const char* key :
+       {"inlineEnglishMinLength", "inlineEnglishPromoteThreshold", "inlineEnglishCandidates",
+        "inlineEnglishDictionaryPath", "mixedEnglishAutoConversion"}) {
     EXPECT_FALSE(parsed->AsObject().contains(key)) << key;
   }
 }

@@ -56,6 +56,7 @@ std::vector<SettingField> BuildFields() {
   const SettingCondition punctuation{"dynamicPunctuation", "true"};
   const SettingCondition batch{"batchRomajiConversion", "true"};
   const SettingCondition ai_cleanup{"batchConversionMode", "ai-cleanup"};
+  const SettingCondition inline_english{"inlineEnglishCandidates", "true"};
   const SettingCondition english_dictionary{"inlineEnglishDictionary", "true"};
   const SettingCondition symbols{"symbolRewriter", "true"};
   const SettingCondition emoji{"emojiRewriter", "true"};
@@ -101,6 +102,7 @@ std::vector<SettingField> BuildFields() {
       Bool("batchAutoPunctuation", Pane::Input, "Batch", false, ai_cleanup),
 
       Bool("inlineEnglishCandidates", Pane::Input, "English", false),
+      Bool("mixedEnglishAutoConversion", Pane::Input, "English", false, inline_english),
       Bool("inlineEnglishCaseVariants", Pane::Input, "English", true),
       Bool("fullWidthEnglishCandidate", Pane::Input, "English", false),
       Integer("inlineEnglishMinLength", Pane::Input, "English", 2, 1.0, kInt32Max),

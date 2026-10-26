@@ -797,6 +797,10 @@ OFF のまま）。
   計測・レポート生成の失敗はジョブと `advisory-summary` に表示する。
   `ci-gate` はこのジョブの完了を待たず、結果を合否判定に含めない
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
+- M63 の分割器の品質ゲート — CTest `azookey_mixed_english_quality_gate` が
+  `bench/data/mixed_english_eval.jsonl` と同梱の英単語辞書で、`docs/mixed-english-auto-conversion-spec.md`
+  §15.2 の分割器の指標を確かめる（モデルは使わない）。期待する表層は辞書の最頻の表層に従うので、
+  `data/english-words.tsv` を更新したら評価セットの期待値も見直す
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
   含む非テスト target を `windows-no-tests` preset で継続検証する

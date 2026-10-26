@@ -574,7 +574,8 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 - **経路**: 本予算は `ConversionContext.deadline`（`core/include/azookey/core/IConverter.h`）として
   `InferenceEngine` が 1 変換ごとに設定し、`ZenzaiModelConverter` の beam ループが
   検査して §6.4 の best-so-far 打ち切りを駆動する。予算超過時は最良ビームを返して
-  IME を止めない。打ち切りは劣化ではなく正常出力である（§6.4 / §9.2.2）。
+  IME を止めない（beam が 1 本も無いときは §7.4 の fallback の候補を返す）。打ち切りは
+  劣化ではなく正常出力である（§6.4 / §9.2.2）。
 - **評価**: ハード予算の評価は打ち切り率で行う。分位点目標と異なり、打ち切りが
   発生した計測も評価対象に含む。合否は読み長の帯で分ける。
   - **読み ≤ 8 文字: 打ち切り率 0%**。この帯は p95 目標 300ms がハード予算 600ms の

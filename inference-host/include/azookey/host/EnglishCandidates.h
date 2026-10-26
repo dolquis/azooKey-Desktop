@@ -124,4 +124,11 @@ std::string EnglishLookupKey(std::string_view raw_romaji);
 // words such as iPhone (reading あいふぉん); those stay in the kana channel.
 bool IsEnglishObservation(std::string_view reading, uint8_t tag);
 
+// M63-B (mixed-english-auto-conversion-spec section 11): the English channel
+// row that records a negative observation of lower_key. Its reading is this
+// non-ASCII prefix (U+00AC NOT SIGN) and the key, so no raw romaji, and no
+// prefix lookup of one, ever reaches it; its surface is the key.
+inline constexpr std::string_view kEnglishNegativeObservationPrefix = "\xC2\xAC";
+std::string EnglishNegativeObservationReading(std::string_view lower_key);
+
 }  // namespace azookey::host

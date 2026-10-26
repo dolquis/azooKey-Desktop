@@ -130,7 +130,9 @@ Response（host → settings-app）:
 
 - **並び**: 学習チャネル、読み、表記の昇順。
 - **学習チャネル**: `learning` ストアはかな（`kana`）と英語（`english`、DEV-1196）の
-  2 つの `LearningStore` を列挙し、各 entry にチャネル名を持たせる。
+  2 つの `LearningStore` を列挙し、各 entry にチャネル名を持たせる。英語のチャネルには、M63 の
+  負の観測の行（読みが `¬` で始まり、重みは 0。`docs/mixed-english-auto-conversion-spec.md` §11）も
+  ほかの行と同じく出る。その忘却は英字の抑制を解く。
 - **学習の entry**: 1 つの `(reading, surface)` を 1 entry とし、app 別の行
   （`user-learning-enhancement-spec.md` §3.2）を合算する。`weight` は合計、
   最終使用は最大、`tags` は app 名、`metadata` は `commit_count` / `accept_count` / `reject_count`。

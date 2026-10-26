@@ -1357,6 +1357,211 @@ TEST_F(MixedEnglishDispatchTest, CorrectedReadingStaysWithTheJapaneseCandidates)
   std::remove(typo_path.c_str());
 }
 
+// M63-B (mixed-english-auto-conversion-spec sections 8.1 and 11): turning the
+// sure word down records a negative observation of its key, which lowers the
+// word until English typed without capitals lifts it.
+class MixedEnglishLearningTest : public MixedEnglishDispatchTest {
+ protected:
+  void SetUp() override {
+    MixedEnglishDispatchTest::SetUp();
+    engine.SetEnglishLearningStore(&english_store);
+    EnableEventPrivacy(dispatcher);
+  }
+  void TearDown() override { engine.SetEnglishLearningStore(nullptr); }
+
+  bool Commit(uint64_t id, const std::string& reading, const ipc::CandidateField& chosen,
+              const std::vector<ipc::CandidateField>& shown, bool secure = false,
+              bool learning_allowed = true) {
+    ipc::CommitObservationRequest commit;
+    commit.secure = secure;
+    commit.learning_allowed = learning_allowed;
+    commit.reading = reading;
+    commit.chosen = chosen;
+    commit.shown = shown;
+    commit.observation_id = "mixed-learning-" + std::to_string(id);
+    const auto response = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitObservation,
+                                                      ipc::BuildCommitObservationRequest(commit)));
+    const auto parsed =
+        response ? ipc::ParseCommitObservationResponse(response->payload_json) : std::nullopt;
+    return parsed && parsed->ok;
+  }
+
+  // Forget zeroes the row; Save drops it.
+  bool Negative(const std::string& key) { return engine.IsEnglishSuppressed(key); }
+
+  static ipc::CandidateField English(const std::string& surface, const std::string& reading,
+                                     bool with_segment) {
+    ipc::CandidateField field;
+    field.surface = surface;
+    field.reading = reading;
+    field.source = "heuristic";
+    field.tag = kEnglish;
+    if (with_segment) {
+      ipc::LiveSegment segment;
+      segment.end_char = static_cast<uint32_t>(surface.size());
+      segment.surface = surface;
+      segment.reading = reading;
+      segment.tag = kEnglish;
+      field.segments = {segment};
+    }
+    return field;
+  }
+
+  azookey::learning::LearningStore english_store{temp_directory.File("english_learning.tsv"),
+                                                 &azookey::learning::test::Crypto()};
+};
+
+TEST_F(MixedEnglishLearningTest, TurningTheSureWordDownLowersItUntilEnglishLiftsIt) {
+  const auto before = Query(1501, Request("ぎてゅb", "github", true));
+  ASSERT_GE(before.size(), 2u);
+  ASSERT_EQ(before[0].surface, "GitHub");
+  ASSERT_FALSE(before[0].segments.empty());
+  ASSERT_TRUE(Commit(1502, "ぎてゅb", before[1], before));
+  EXPECT_TRUE(Negative("github"));
+  // One row however often it is turned down.
+  ASSERT_TRUE(Commit(1503, "ぎてゅb", before[1], before));
+  EXPECT_EQ(english_store.size(), 1u);
+
+  // Section 8.1: low confidence now, so the Japanese conversion leads and the
+  // word is the second candidate; the live conversion stays Japanese.
+  const auto lowered = Query(1504, Request("ぎてゅb", "github", true));
+  ASSERT_GE(lowered.size(), 2u);
+  EXPECT_NE(lowered[0].tag, kEnglish);
+  EXPECT_EQ(lowered[1].surface, "GitHub");
+  ipc::QueryLiveConversionRequest live{"ぎてゅb", ""};
+  live.raw_romaji = "github";
+  live.mixed_english = true;
+  live.secure = false;
+  const auto live_lowered = Live(1505, live);
+  ASSERT_TRUE(live_lowered);
+  EXPECT_NE(live_lowered->surface, "GitHub");
+  // A Shift capital is the user's own casing: still sure.
+  EXPECT_EQ(Query(1506, Request("ぎてゅb", "Github", true))[0].surface, "Github");
+
+  // English committed with a capital leaves the observation; without one, it
+  // lifts it.
+  ASSERT_TRUE(Commit(1507, "Github", English("Github", "Github", false), {}));
+  EXPECT_TRUE(Negative("github"));
+  ASSERT_TRUE(Commit(1508, "github", English("GitHub", "github", false), {}));
+  EXPECT_FALSE(Negative("github"));
+  EXPECT_EQ(Query(1509, Request("ぎてゅb", "github", true))[0].surface, "GitHub");
+
+  // The whole store's reset erases it too.
+  ASSERT_TRUE(Commit(1510, "ぎてゅb", before[1], before));
+  ASSERT_TRUE(Negative("github"));
+  ASSERT_EQ(engine.ResetLearningStore(azookey::host::LearningDataStore::Learning),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+  EXPECT_FALSE(engine.IsEnglishSuppressed("github"));
+}
+
+// The per-key suppression lookup never waits while a commit holds the English
+// channel lock: it answers as the last lookup or record did, and a forget from
+// the learning data management drops that answer.
+TEST_F(MixedEnglishLearningTest, SuppressionUnderContentionFollowsTheLastAnswerAndForget) {
+  const auto contended = [&] {
+    bool suppressed = false;
+    engine.HoldEnglishLockForTests([&] {
+      std::thread lookup([&] { suppressed = engine.IsEnglishSuppressed("github"); });
+      lookup.join();
+    });
+    return suppressed;
+  };
+  const auto before = Query(1541, Request("ぎてゅb", "github", true));
+  ASSERT_GE(before.size(), 2u);
+  ASSERT_TRUE(Commit(1542, "ぎてゅb", before[1], before));
+  EXPECT_TRUE(contended());
+
+  const auto page =
+      engine.ListLearningEntries(azookey::host::LearningDataStore::Learning, "github", 0, 10);
+  const auto entry = std::find_if(page.entries.begin(), page.entries.end(), [](const auto& e) {
+    return e.reading == azookey::host::EnglishNegativeObservationReading("github");
+  });
+  ASSERT_NE(entry, page.entries.end());
+  ASSERT_EQ(engine.ForgetLearningEntry(azookey::host::LearningDataStore::Learning, entry->id),
+            azookey::host::InferenceEngine::ForgetOutcome::Forgotten);
+  EXPECT_FALSE(contended());
+  EXPECT_FALSE(Negative("github"));
+}
+
+TEST_F(MixedEnglishLearningTest, OnlyTheSureM63WordTurnedDownIsRecorded) {
+  ipc::CandidateField japanese;
+  japanese.surface = "擬態";
+  japanese.reading = "ぎてゅb";
+  japanese.source = "model";
+  // An M60 candidate (no segments), a Shift-typed word, a word that reads as
+  // kana, a word outside the dictionary, and an English choice.
+  ASSERT_TRUE(Commit(1521, "ぎてゅb", japanese, {English("GitHub", "github", false)}));
+  ASSERT_TRUE(Commit(1522, "ぎてゅb", japanese, {English("Github", "Github", true)}));
+  ASSERT_TRUE(Commit(1523, "きて", japanese, {English("kite", "kite", true)}));
+  ASSERT_TRUE(Commit(1524, "ぎtらb", japanese, {English("gitlab", "gitlab", true)}));
+  ASSERT_TRUE(Commit(1525, "github", English("GitHub", "github", true),
+                     {English("GitHub", "github", true)}));
+  EXPECT_FALSE(Negative("github"));
+  EXPECT_FALSE(Negative("kite"));
+  EXPECT_FALSE(Negative("gitlab"));
+  // Neither a secure commit nor one with learning off records anything.
+  EXPECT_FALSE(Commit(1526, "ぎてゅb", japanese, {English("GitHub", "github", true)}, true, true));
+  EXPECT_FALSE(
+      Commit(1527, "ぎてゅb", japanese, {English("GitHub", "github", true)}, false, false));
+  EXPECT_FALSE(Negative("github"));
+  // The same word from another source (a technical term) is English all the
+  // same: no negative observation.
+  ipc::CandidateField technical;
+  technical.surface = "GitHub";
+  technical.reading = "ぎてゅb";
+  technical.source = "system";
+  ASSERT_TRUE(Commit(1528, "ぎてゅb", technical, {English("GitHub", "github", true)}));
+  EXPECT_FALSE(Negative("github"));
+  EXPECT_EQ(english_store.Rows("github", "GitHub")->size(), 1u);
+}
+
+TEST_F(MixedEnglishLearningTest, SegmentsRecordAndLiftPerSegment) {
+  const auto commit = [&](uint64_t id, const ipc::ObservedSegment& segment, bool secure = false,
+                          bool learning_allowed = true) {
+    ipc::CommitSegmentsObservationRequest request;
+    request.secure = secure;
+    request.learning_allowed = learning_allowed;
+    request.observation_id = "mixed-segments-" + std::to_string(id);
+    ipc::ObservedSegment kana;
+    kana.reading = "きょう";
+    kana.chosen = {"今日", "きょう", 0.0, "system"};
+    request.segments = {kana, segment};
+    dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitSegmentsObservation,
+                                ipc::BuildCommitSegmentsObservationRequest(request)));
+  };
+  ipc::ObservedSegment rejected;
+  rejected.reading = "ぎてゅb";
+  rejected.chosen = {"擬態", "ぎてゅb", 0.0, "model"};
+  rejected.shown = {English("GitHub", "github", true)};
+  commit(1531, rejected, true, true);
+  commit(1534, rejected, false, false);
+  EXPECT_FALSE(Negative("github"));
+  // An M60 candidate (no segments) and a Shift-typed one are no negative
+  // observation here either.
+  ipc::ObservedSegment m60 = rejected;
+  m60.shown = {English("GitHub", "github", false)};
+  commit(1535, m60);
+  ipc::ObservedSegment shifted = rejected;
+  shifted.shown = {English("Github", "Github", true)};
+  commit(1536, shifted);
+  EXPECT_FALSE(Negative("github"));
+  commit(1532, rejected);
+  EXPECT_TRUE(Negative("github"));
+
+  ipc::ObservedSegment chosen;
+  chosen.reading = "github";
+  chosen.chosen = English("GitHub", "github", true);
+  commit(1533, chosen);
+  EXPECT_FALSE(Negative("github"));
+  // A resend of an applied observation id changes nothing.
+  commit(1532, rejected);
+  EXPECT_FALSE(Negative("github"));
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  EXPECT_GT(english_store.Score("github", "GitHub", now), 0.0);
+}
+
 TEST_F(MixedEnglishDispatchTest, LiveConversionOfASureWordIsTheWordItself) {
   ipc::QueryLiveConversionRequest request{"ぎてゅb", ""};
   const auto off = Live(1331, request);
@@ -1545,6 +1750,27 @@ TEST_F(MixedInlineDispatchTest, ConversionCutByTheZenzaiBudgetIsLeftOut) {
   EXPECT_EQ(Count(on, "GitHubを読む"), 0u);
   for (const auto& c : on) EXPECT_TRUE(c.segments.empty()) << c.surface;
   EXPECT_EQ(Surfaces(on), Surfaces(Query(1426, Request("ぎてゅbをよむ", "githubwoyomu", false))));
+}
+
+// Section 8.1: a key the user turned down (section 11) is low confidence in a
+// sentence too, so the first candidate keeps it Japanese and item 3 offers it.
+TEST_F(MixedInlineDispatchTest, TurnedDownKeyStaysJapaneseInASentence) {
+  azookey::learning::LearningStore english{temp_directory.File("mixed_inline_english.tsv"),
+                                           &azookey::learning::test::Crypto()};
+  engine.SetEnglishLearningStore(&english);
+  azookey::learning::LearningRecord negative;
+  negative.reject_count = 1;
+  english.Set(azookey::host::EnglishNegativeObservationReading("github"), "github", negative);
+  const auto on = Query(1428, Request(kSentenceKana, kSentenceRaw, true));
+  engine.SetEnglishLearningStore(nullptr);
+  ASSERT_GE(on.size(), 3u);
+  EXPECT_EQ(on[0].surface, "今日は擬態にpushした");
+  ExpectSegments(on[0].segments,
+                 {Segment(0, 6, "今日は擬態に", "きょうはぎてゅbに", 0),
+                  Segment(6, 10, "push", "push", kEnglish), Segment(10, 12, "した", "した", 0)});
+  EXPECT_EQ(on[1].surface, "今日は擬態にプッシュした");
+  EXPECT_EQ(on[2].surface, "今日はGitHubにpushした");
+  EXPECT_EQ(on[2].segments.size(), 5u);
 }
 
 TEST_F(MixedInlineDispatchTest, PassedDeadlineLeavesTheListAsWithM63Off) {

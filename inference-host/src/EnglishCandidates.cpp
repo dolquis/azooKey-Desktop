@@ -85,6 +85,10 @@ bool IsEnglishObservation(std::string_view reading, uint8_t tag) {
   return tag == static_cast<uint8_t>(core::CandidateTag::English) && IsPrintableAsciiWord(reading);
 }
 
+std::string EnglishNegativeObservationReading(std::string_view lower_key) {
+  return std::string(kEnglishNegativeObservationPrefix) + std::string(lower_key);
+}
+
 std::vector<EnglishWordRecord> ParseEnglishTsv(std::string_view text,
                                                EnglishDictionaryLoadStats* stats,
                                                size_t max_entries) {

@@ -102,7 +102,8 @@ enum class InputStateKind {
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
-| Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない）。例外は `punctuationConversion = commit` の `、` `。`（`docs/tsf-deep-integration-spec.md` §3.5.1） |
+| Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。例外は `punctuationConversion = commit` の `、` `。`（下の句読点の行） |
+| Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
 | Composing / Previewing / Selecting | Input（`、` `。`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
@@ -129,10 +130,19 @@ enum class InputStateKind {
 > **Esc は 1 回で入力を取り消す（意図した legacy との差）**: legacy（macOS 版）は Selecting の Esc で
 > Composing（ライブ変換 OFF では先頭候補プレビューを経由）へ戻り、さらに Esc で停止する 2〜3 段だった。
 > Windows 版は 2026-10-17 のユーザー決定により、どの表示状態（候補窓・予測窓・ライブ変換の
-> 候補窓）からでも Esc 1 回で入力中の読みを取り消す。読みへ戻る専用キーは設けない。Backspace と
-> 文字入力が従来どおり候補窓を閉じて読みの編集に戻る。例外は次の 2 つで、段階的に効く:
+> 候補窓）からでも Esc 1 回で入力中の読みを取り消す。読みへ戻る専用キーは設けない。候補窓から
+> 読みの編集に戻るキーは Backspace だけである（文字入力は選択中の候補を確定して次の入力を始める）。
+> 例外は次の 2 つで、段階的に効く:
 > 一括変換（`docs/romaji-batch-conversion-spec.md` §3）と絵文字検索（`docs/candidate-rewriter-spec.md`
 > §11）。Unicode 入力と置換提案プロンプトの Esc は従来から 1 回で閉じる。
+
+> **候補窓での文字入力は確定して続ける（legacy と同じ、DEV-1735）**: legacy の Selecting は `.input` を
+> `commitMarkedTextAndAppendPieceToMarkedText` として扱い、表示中のテキストを確定してから入力を
+> Composing で続ける（Backspace は `removeLastMarkedText` で読みへ戻る）。Windows 版も同じにする。
+> legacy 自身の注記のとおり、これは macOS 標準の IME（Selecting を Composing に戻して入力を続ける）とは
+> 異なる。数字は候補番号、Space / ↑↓ / Enter / Esc は上の行のまま変えない。Space 後で候補応答が
+> 届く前（§1.5.4、状態は Composing）の入力と、ライブ変換の Previewing（候補窓なし）の入力は読みに
+> 足す。絵文字検索、Unicode 入力、置換提案プロンプトは対象外である。
 
 各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
 `HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する

@@ -13,6 +13,9 @@ namespace {
 
 namespace j = ::azookey::ipc::json;
 
+j::Value LiveSegmentsToJson(const std::vector<LiveSegment>& segments);
+std::vector<LiveSegment> LiveSegmentsFromJson(const j::Value& v);
+
 j::Value CandidateToJson(const CandidateField& c) {
   j::Object o;
   o.emplace("surface", j::Value(c.surface));
@@ -21,6 +24,7 @@ j::Value CandidateToJson(const CandidateField& c) {
   o.emplace("source", j::Value(c.source));
   if (!c.description.empty()) o.emplace("description", j::Value(c.description));
   if (c.tag != 0) o.emplace("tag", j::Value(static_cast<uint64_t>(c.tag)));
+  if (!c.segments.empty()) o.emplace("segments", LiveSegmentsToJson(c.segments));
   return j::Value(std::move(o));
 }
 
@@ -60,6 +64,7 @@ std::optional<CandidateField> CandidateFromJson(const j::Value& v) {
   c.description = v.GetString("description").value_or(std::string());
   const auto tag = v.GetUInt("tag").value_or(0);
   c.tag = tag <= 0xFF ? static_cast<uint8_t>(tag) : 0;
+  c.segments = LiveSegmentsFromJson(v);
   return c;
 }
 
@@ -420,6 +425,7 @@ j::Value LiveSegmentsToJson(const std::vector<LiveSegment>& segments) {
     item.emplace("head_pos", j::Value(static_cast<uint64_t>(segment.head_pos)));
     item.emplace("sem", j::Value(static_cast<uint64_t>(segment.sem)));
     item.emplace("head_sem", j::Value(static_cast<uint64_t>(segment.head_sem)));
+    if (segment.tag != 0) item.emplace("tag", j::Value(static_cast<uint64_t>(segment.tag)));
     array.emplace_back(std::move(item));
   }
   return j::Value(std::move(array));
@@ -455,6 +461,7 @@ std::vector<LiveSegment> LiveSegmentsFromJson(const j::Value& v) {
     segment.head_pos = read_byte("head_pos");
     segment.sem = read_byte("sem");
     segment.head_sem = read_byte("head_sem");
+    segment.tag = read_byte("tag");
     result.push_back(std::move(segment));
   }
   return result;
@@ -476,6 +483,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   AppToJson(p.app, o);
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
+  if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -497,6 +505,7 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.app = AppFromJson(*v);
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.english_candidates = v->GetBool("english_candidates").value_or(false);
+  p.mixed_english = v->GetBool("mixed_english").value_or(false);
   return p;
 }
 
@@ -549,6 +558,9 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   o.emplace("context", j::Value(p.context));
   o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
   o.emplace("punctuation_style", j::Value(p.punctuation_style));
+  // M63: omitted when empty / false so a request without M63 keeps its shape.
+  if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
+  if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -564,6 +576,9 @@ std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const 
   // Absent for TIPs that predate M59 on this message: no punctuation.
   p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
   p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
+  // Absent for TIPs that predate M63: no raw romaji, M63 off.
+  p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
+  p.mixed_english = v->GetBool("mixed_english").value_or(false);
   return p;
 }
 

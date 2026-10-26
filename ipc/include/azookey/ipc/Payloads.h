@@ -116,6 +116,28 @@ struct LoadModelResponse {
   std::optional<std::string> error;
 };
 
+// Offsets count UTF-16 code units in the surface the segments belong to
+// (candidates[0].surface for QueryCandidatesResponse.segments). Surface and
+// reading are carried separately so learning never slices UTF-8 with those
+// offsets.
+struct LiveSegment {
+  uint32_t start_char{};
+  uint32_t end_char{};
+  double score{};
+  bool auto_punctuation{false};
+  std::string surface;
+  std::string reading;
+  uint8_t pos{};
+  uint8_t head_pos{};
+  uint8_t sem{};
+  uint8_t head_sem{};
+  // M63 (docs/mixed-english-auto-conversion-spec.md section 9.2): the
+  // core::CandidateTag of the segment, English (4) for an English segment whose
+  // reading is its raw romaji. Omitted on the wire when 0 (None), as
+  // CandidateField.tag is, and independent of auto_punctuation.
+  uint8_t tag{0};
+};
+
 struct CandidateField {
   std::string surface;
   std::string reading;
@@ -125,6 +147,10 @@ struct CandidateField {
   // core::CandidateTag value (docs/rich-features-spec.md X-2-3). Omitted on the
   // wire when 0 (None); unknown values are carried through unchanged.
   uint8_t tag{0};
+  // M63 section 9.2: the segments of this candidate, offsets in UTF-16 code
+  // units of its own surface. Only M63 candidates carry them; omitted on the
+  // wire when empty.
+  std::vector<LiveSegment> segments;
 };
 
 // Foreground application identity (docs/app-profile-spec.md section 3.1). The
@@ -153,21 +179,9 @@ struct QueryCandidatesRequest {
   // Both are omitted on the wire when empty / false.
   std::string raw_romaji;
   bool english_candidates{false};
-};
-
-// Offsets count UTF-16 code units in candidates[0].surface. Surface and reading
-// are carried separately so learning never slices UTF-8 with those offsets.
-struct LiveSegment {
-  uint32_t start_char{};
-  uint32_t end_char{};
-  double score{};
-  bool auto_punctuation{false};
-  std::string surface;
-  std::string reading;
-  uint8_t pos{};
-  uint8_t head_pos{};
-  uint8_t sem{};
-  uint8_t head_sem{};
+  // M63 section 9.1: the TIP's mixedEnglishAutoConversion, sent with
+  // raw_romaji and english_candidates. Omitted on the wire when false.
+  bool mixed_english{false};
 };
 
 struct QueryCandidatesResponse {
@@ -191,6 +205,10 @@ struct QueryLiveConversionRequest {
   // (no punctuation, "ja").
   bool auto_punctuation{false};
   std::string punctuation_style{"ja"};
+  // M63 section 9.1: the romaji as typed and the TIP's
+  // mixedEnglishAutoConversion. Omitted on the wire when empty / false.
+  std::string raw_romaji;
+  bool mixed_english{false};
 };
 
 struct QueryLiveConversionResponse {

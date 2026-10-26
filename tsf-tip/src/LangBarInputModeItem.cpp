@@ -200,11 +200,17 @@ STDMETHODIMP LangBarInputModeItem::GetTooltipString(BSTR* tooltip) {
 
 STDMETHODIMP LangBarInputModeItem::OnClick(TfLBIClick click, POINT point, const RECT* area) try {
   if (on_click_) {
-    // The handler may Detach this item; keep both alive for the call.
-    AddRef();
+    // The handler may Detach this item; keep both alive for the call, also
+    // when it throws.
+    struct Hold {
+      LangBarInputModeItem* item;
+      explicit Hold(LangBarInputModeItem* held) : item(held) { item->AddRef(); }
+      ~Hold() { item->Release(); }
+      Hold(const Hold&) = delete;
+      Hold& operator=(const Hold&) = delete;
+    } hold(this);
     const ClickHandler handler = on_click_;
     handler(click, point, area);
-    Release();
   }
   return S_OK;
 } catch (const std::bad_alloc&) {

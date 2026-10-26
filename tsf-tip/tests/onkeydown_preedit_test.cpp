@@ -2933,10 +2933,36 @@ TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyStaysOnWhenTheCommitIsRefused) {
   h.context.skip_write_callback = false;
   // The next press retries the commit first and the one after closes.
   EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_TRUE(h.Press(VK_IME_OFF));
   EXPECT_FALSE(h.service.keyboard_open());
   EXPECT_EQ(h.context.document->text, L"か");
   EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, RefusedImeOffCommitKeepsTheLiveSurfaceNotItsReading) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.context.skip_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  h.context.skip_write_callback = false;
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ConvertKeysDoNotOpenOrCloseByDefault) {

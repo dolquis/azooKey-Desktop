@@ -115,6 +115,12 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
 TIP は、`inlineEnglishCandidates` が true で、Handshake 応答の capabilities に
 `english_candidates` があるときだけ、`raw_romaji` と `english_candidates` を送る。
 
+- 生ローマ字はユーザー入力そのものである。secure の入力（`docs/privacy-and-secure-input-spec.md`
+  §4・§5 の判定）では、TIP は `raw_romaji` と `english_candidates` を送らない。
+- Host は、`secure` が true の `QueryCandidates` 要求（`secure` の省略を含む）では、`raw_romaji` と
+  `english_candidates` を無視し、英単語候補を作らない。TIP の送信抑止と Host の無視の二重の
+  防御にする。M63 の同じ規則は `docs/mixed-english-auto-conversion-spec.md` §9.4 にある。
+
 - 生ローマ字は、通常の（一括変換でない）composition で打鍵した文字を、Shift の大文字のまま
   持つ（`s_case` のため）。小文字で持つ M58 の `batch_raw_romaji` とは別に持つ。
 - 送るのは `live = false` の `QueryCandidates` だけである（M63 の設定が ON の composition では、
@@ -139,7 +145,7 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
 
 - TIP は、`inlineEnglishCandidates` が true、Handshake 応答の capabilities に
   `english_candidates` がある、解決後の mode が `neural`、論理バッチのサブリクエストが 1 件、
-  の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
+  入力が secure でない（§4.1）、の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
 - Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
   読みが 1 chunk、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
@@ -921,6 +927,10 @@ p.raw_romaji         = v->GetString("raw_romaji").value_or(std::string());
 p.english_candidates = v->GetBool("english_candidates").value_or(false);
 ```
 
+Host は、同じ要求の `secure` が true（省略時を含む）のとき、`raw_romaji` と `english_candidates` を
+無視する（§4.1）。応答には英単語候補が無く、かなの候補は `english_candidates` が false の要求と
+同じになる。
+
 ### 6.3 Response
 
 英単語候補は `QueryCandidatesResponse.candidates[]` に `tag = English(4)` を付けて
@@ -1003,6 +1013,9 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 英単語候補は、応答の唯一の `segments[0].candidates[]` に、§6.3 と同じ形（`tag = English(4)`、
 `reading = 生ローマ字`）で加わる。応答の形は変えない。旧 Host はこのフィールドを無視し、
 旧 TIP は送らないので、どちらの組み合わせでも挙動は変わらない。
+
+`QueryBatchConversionRequest` は `secure` を持たない。一括変換の英単語候補を secure の入力から
+守るのは、TIP が secure の入力で `english_candidates` を true にしないことだけである（§4.1）。
 
 ## 7. 設定スキーマ
 

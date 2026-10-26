@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/core/Utf8.h"
@@ -419,6 +420,24 @@ void InferenceEngine::WithEnglishDictionary(
   });
 }
 
+namespace {
+
+bool HasAsciiUpper(std::string_view text) {
+  return std::any_of(text.begin(), text.end(), [](char c) { return c >= 'A' && c <= 'Z'; });
+}
+
+// M63-B section 11: English committed under a raw romaji typed without
+// capitals lifts the key's negative observation; one with a capital, which the
+// user cased on purpose, leaves it.
+std::vector<std::string> ReleasedEnglishKeys(const std::vector<std::string>& readings) {
+  std::vector<std::string> keys;
+  for (const auto& reading : readings)
+    if (!reading.empty() && !HasAsciiUpper(reading)) keys.push_back(EnglishLookupKey(reading));
+  return keys;
+}
+
+}  // namespace
+
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {
@@ -444,12 +463,85 @@ bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
   // Section 5: keyed by the lowercased raw romaji, so "Apple" and "apple"
   // typed later find the same record.
   english_store_->Observe(EnglishLookupKey(raw_romaji), surface, alpha, now_epoch_sec);
+  // M63-B section 11: English typed without capitals lifts the key's negative
+  // observation.
+  ApplyEnglishNegativesLocked({}, ReleasedEnglishKeys({raw_romaji}), now_epoch_sec, 0, 0.0);
   english_store_->Prune(max_records, min_weight, now_epoch_sec);
   // English commits are rare; save now rather than joining the kana store's
   // burst scheduling. A failed save stays dirty and is retried by the next
   // English commit and at shutdown.
   (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
   return true;
+}
+
+bool InferenceEngine::IsEnglishSuppressed(std::string_view lower_key) {
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  if (!english_store_) return false;
+  const auto* rows =
+      english_store_->Rows(EnglishNegativeObservationReading(lower_key), std::string(lower_key));
+  return rows && std::any_of(rows->begin(), rows->end(),
+                             [](const auto& row) { return row.second.reject_count > 0; });
+}
+
+std::vector<std::string> InferenceEngine::RejectedEnglishKeys(
+    const std::vector<ipc::CandidateField>& shown) {
+  std::vector<std::string> keys;
+  for (const auto& candidate : shown) {
+    // Section 11: only the Host's M63 candidates carry segments; an M60 English
+    // candidate the user passed over is no negative observation.
+    if (candidate.segments.empty() || !IsEnglishObservation(candidate.reading, candidate.tag) ||
+        HasAsciiUpper(candidate.reading))
+      continue;
+    const auto key = EnglishLookupKey(candidate.reading);
+    if (std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
+    // Section 8.1 (ii): letters left after the romaji table, and a dictionary
+    // word. A word that reads as kana was never sure, so passing it over says
+    // nothing.
+    const auto kana = core::RomajiKanaConverter::ConvertForCommit(key);
+    if (!std::any_of(kana.begin(), kana.end(), [](char c) { return c >= 'a' && c <= 'z'; }))
+      continue;
+    if (LookupEnglishDictionary(key).empty()) continue;
+    keys.push_back(key);
+  }
+  return keys;
+}
+
+void InferenceEngine::ApplyEnglishNegativesLocked(const std::vector<std::string>& rejected,
+                                                  const std::vector<std::string>& released,
+                                                  uint64_t now_epoch_sec, size_t max_records,
+                                                  double min_weight) {
+  if (!english_store_) return;
+  // Section 11: one row per key, overwritten (idempotent): weight 0, so it
+  // never ranks a candidate, and one rejection, so the weight threshold keeps
+  // it. Over max_records it is among the first rows to go.
+  learning::LearningRecord negative;
+  negative.reject_count = 1;
+  negative.last_event = learning::LearningEventType::CorrectionReject;
+  negative.last_updated_epoch_sec = now_epoch_sec;
+  for (const auto& key : rejected)
+    english_store_->Set(EnglishNegativeObservationReading(key), key, negative);
+  for (const auto& key : released)
+    (void)english_store_->Forget(EnglishNegativeObservationReading(key), key);
+  if (!rejected.empty()) english_store_->Prune(max_records, min_weight, now_epoch_sec);
+}
+
+size_t InferenceEngine::RecordRejectedEnglish(const std::vector<ipc::CandidateField>& shown,
+                                              uint64_t now_epoch_sec) {
+  std::lock_guard history_lock(learning_history_mutex_);
+  const auto rejected = RejectedEnglishKeys(shown);
+  if (rejected.empty()) return 0;
+  size_t max_records = 0;
+  double min_weight = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    max_records = config_.learning_max_records;
+    min_weight = config_.learning_min_weight;
+  }
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  if (!english_store_) return 0;
+  ApplyEnglishNegativesLocked(rejected, {}, now_epoch_sec, max_records, min_weight);
+  (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
+  return rejected.size();
 }
 
 namespace {
@@ -2031,13 +2123,30 @@ bool InferenceEngine::CommitSegmentsObservation(
   const auto english = [](const ipc::ObservedSegment& segment) {
     return IsEnglishObservation(segment.reading, segment.chosen.tag);
   };
+  // M63-B section 11: a segment committed in Japanese over the English it was
+  // shown, and English typed without capitals, before any engine mutex (the
+  // dictionary lookup takes state_mutex_).
+  std::vector<std::string> rejected;
+  std::vector<std::string> released;
+  for (const auto& segment : request.segments) {
+    if (segment.is_auto_punctuation) continue;
+    if (english(segment)) {
+      for (auto& key : ReleasedEnglishKeys({segment.reading})) released.push_back(std::move(key));
+    } else {
+      for (auto& key : RejectedEnglishKeys(segment.shown)) rejected.push_back(std::move(key));
+    }
+  }
   double alpha = 0.0;
+  size_t max_records = 0;
+  double min_weight = 0.0;
   {
     std::unique_lock state_lock(state_mutex_, std::defer_lock);
     std::unique_lock converter_lock(converter_call_mutex_, std::defer_lock);
     std::lock(state_lock, converter_lock);
     if (!NoteObservationIdLocked(request.observation_id)) return false;
     alpha = config_.learning_alpha;
+    max_records = config_.learning_max_records;
+    min_weight = config_.learning_min_weight;
     if (store_) {
       // Each segment's left context is the committed text plus the segments
       // before it (user-learning-enhancement-spec section 8.1).
@@ -2079,7 +2188,7 @@ bool InferenceEngine::CommitSegmentsObservation(
     finish_observation();
   }
   // M60 section 6.4: English segments go to the English channel only.
-  if (std::any_of(request.segments.begin(), request.segments.end(), english)) {
+  if (std::any_of(request.segments.begin(), request.segments.end(), english) || !rejected.empty()) {
     std::lock_guard<std::mutex> lock(english_mutex_);
     if (english_store_) {
       for (const auto& segment : request.segments) {
@@ -2087,6 +2196,7 @@ bool InferenceEngine::CommitSegmentsObservation(
           english_store_->Observe(EnglishLookupKey(segment.reading), segment.chosen.surface, alpha,
                                   now_epoch_sec);
       }
+      ApplyEnglishNegativesLocked(rejected, released, now_epoch_sec, max_records, min_weight);
       (void)SaveEnglishStoreLocked(std::chrono::milliseconds::zero());
     }
   }

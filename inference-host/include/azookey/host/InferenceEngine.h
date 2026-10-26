@@ -295,6 +295,17 @@ class InferenceEngine {
   // English store is set.
   bool CommitEnglishObservation(const std::string& raw_romaji, const std::string& surface,
                                 uint64_t now_epoch_sec, const std::string& observation_id = {});
+  // M63-B (mixed-english-auto-conversion-spec sections 8.1 and 11): whether the
+  // English channel holds a negative observation of lower_key. Waits for the
+  // English channel lock (a commit's save), never state_mutex_.
+  bool IsEnglishSuppressed(std::string_view lower_key);
+  // Section 11, for a commit that is not English: records a negative
+  // observation of each candidate of `shown` that has segments, the English
+  // tag and a raw romaji reading without capitals that section 8.1 (ii) makes
+  // sure. The caller has checked that learning is allowed. Call it without
+  // holding any engine mutex. Returns the number of keys recorded.
+  size_t RecordRejectedEnglish(const std::vector<ipc::CandidateField>& shown,
+                               uint64_t now_epoch_sec);
   // DEV-1584 (inline-english-candidate-spec section 4.8): an M36 word that has
   // just become Confirmed enters the English dictionary when inlineEnglishDictionary
   // is on and the surface is ASCII letters only, at least inlineEnglishMinLength
@@ -531,6 +542,14 @@ class InferenceEngine {
   bool ResetEnglishRuntimeAdditions();
   // Saves a dirty English store; logs a failure. Holds english_mutex_.
   bool SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget);
+  // M63-B section 11: the keys of `shown` a non-English commit records as
+  // negative observations. Looks the dictionary up, so it holds no mutex.
+  std::vector<std::string> RejectedEnglishKeys(const std::vector<ipc::CandidateField>& shown);
+  // Writes the negative observations of `rejected` and lifts those of
+  // `released`, then bounds the store. Holds english_mutex_.
+  void ApplyEnglishNegativesLocked(const std::vector<std::string>& rejected,
+                                   const std::vector<std::string>& released, uint64_t now_epoch_sec,
+                                   size_t max_records, double min_weight);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,

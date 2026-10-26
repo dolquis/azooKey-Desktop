@@ -1148,6 +1148,9 @@ struct ZenzaiModelRuntime {
       return {GeneratedCandidate{"今日はGitHubにpushした", -0.2, 6},
               GeneratedCandidate{"今日はGithubにpushした", -0.5, 6}};
     }
+    if (ToKatakana(kana) == "キョウハギテュbニpushシタ") {
+      return {GeneratedCandidate{"今日は擬態にpushした", -0.25, 6}};
+    }
     if (ToKatakana(kana) == "キョウハギテュbニプshシタ") {
       return {GeneratedCandidate{"今日は擬態にプッシュした", -0.3, 6}};
     }

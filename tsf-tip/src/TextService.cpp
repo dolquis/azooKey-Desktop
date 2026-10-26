@@ -1896,7 +1896,8 @@ HRESULT TextService::CloseKeyboardCommittingShownText(ITfContext* context,
     // A refused edit session keeps the text (or a commit queued for retry),
     // and so does an Enter that waits, such as for a batch conversion: stay on
     // so the text is neither lost nor committed as its reading. The key is consumed.
-    if (committing_ || HasInputToCommitBeforeClose()) return S_OK;
+    // An Enter that the state does not take closes as Hankaku/Zenkaku does.
+    if (committing_ || (committed && HasInputToCommitBeforeClose())) return S_OK;
   }
   return SetKeyboardOpen(false, source);
 }

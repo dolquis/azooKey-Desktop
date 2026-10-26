@@ -1159,6 +1159,16 @@ struct ZenzaiModelRuntime {
     if (ToKatakana(kana) == "ギテュbヲミル") {
       return {GeneratedCandidate{"擬態を見る", -0.3, 3}};
     }
+    if (ToKatakana(kana) == "GitHubヲヨム") {
+      // The decode reached its deadline: a best-so-far beam.
+      ZenzaiDecodeStats decode_stats;
+      decode_stats.deadline_exceeded = true;
+      last_decode_stats = decode_stats;
+      return {GeneratedCandidate{"GitHubを読む", -0.2, 3, true}};
+    }
+    if (ToKatakana(kana) == "ギテュbヲヨム") {
+      return {GeneratedCandidate{"擬態を読む", -0.3, 3}};
+    }
     if (ToKatakana(kana) == "ジュウフク") {
       return {GeneratedCandidate{"重複", -0.2, 2}, GeneratedCandidate{"重複", -0.4, 2},
               GeneratedCandidate{"別候補", -0.8, 3}};

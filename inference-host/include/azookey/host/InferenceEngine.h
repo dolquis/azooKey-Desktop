@@ -362,6 +362,10 @@ class InferenceEngine {
     // Non-empty only under typo_correction_mode "auto_replace": the reading the
     // conversion actually ran on, so the TIP can replace its preedit.
     std::string corrected_reading;
+    // The Zenzai conversion stopped at its deadline (the budget or
+    // MixedConversionOptions::deadline): its candidates are best-so-far or the
+    // fallback's (M63-B section 10 leaves such a conversion out).
+    bool model_deadline_exceeded{false};
   };
 
   // QueryCandidates with optional cancel polling, plus the typo-corrected

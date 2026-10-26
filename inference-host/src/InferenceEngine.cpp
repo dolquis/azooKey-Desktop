@@ -1662,6 +1662,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       converted = convert(converter, using_model_converter, conversion_deadline);
       if (canceled()) return {};
       const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
+      if (using_model_converter && zenzai) {
+        // Read under converter_call_mutex_, before another request's decode replaces it.
+        const auto stats = zenzai->last_decode_stats();
+        out.model_deadline_exceeded =
+            zenzai->last_fell_back_at_deadline() || (stats && stats->deadline_exceeded);
+      }
       // A cut-off before the first beam step is no evidence the model recovered, so it leaves an
       // earlier runtime error in place instead of clearing it (DEV-1700).
       if (using_model_converter && !(zenzai && zenzai->last_fell_back_at_deadline())) {

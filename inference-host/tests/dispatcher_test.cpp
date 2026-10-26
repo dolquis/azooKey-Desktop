@@ -1413,6 +1413,23 @@ class MixedInlineDispatchTest : public MixedEnglishDispatchTest {
     ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
   }
 
+  // Section 10's deadline is wall-clock time: an hour keeps a slow run (coverage)
+  // from leaving out the conversions these tests look at.
+  static azookey::host::DispatcherConfig PatientConfig() {
+    auto config = DefaultDispatcherConfig();
+    config.mixed_english_conversion_deadline = std::chrono::hours(1);
+    return config;
+  }
+
+  std::vector<ipc::CandidateField> Query(uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  }
+
   static ipc::LiveSegment Segment(uint32_t start, uint32_t end, const std::string& surface,
                                   const std::string& reading, uint8_t tag) {
     ipc::LiveSegment segment;
@@ -1445,6 +1462,8 @@ class MixedInlineDispatchTest : public MixedEnglishDispatchTest {
 
   static constexpr const char* kSentenceRaw = "kyouhagithubnipushsita";
   static constexpr const char* kSentenceKana = "きょうはぎてゅbにぷshした";
+
+  azookey::host::Dispatcher patient{&engine, &scheduler, &user_dict, PatientConfig()};
 };
 
 TEST_F(MixedInlineDispatchTest, MixedConversionLeadsTheCandidatesWithItsSegments) {
@@ -1487,7 +1506,7 @@ TEST_F(MixedInlineDispatchTest, GenerationThatLosesTheEnglishSegmentIsSkipped) {
 // Section 15.2: with the in-sentence high confidence off, the first candidate
 // stays Japanese and each low confidence segment turns English on its own.
 TEST_F(MixedInlineDispatchTest, LowConfidenceSegmentsTurnEnglishOneAtATime) {
-  auto config = DefaultDispatcherConfig();
+  auto config = PatientConfig();
   config.mixed_english_inline_high_confidence = false;
   azookey::host::Dispatcher low(&engine, &scheduler, &user_dict, config);
   const auto query = [&](uint64_t id, const ipc::QueryCandidatesRequest& q) {
@@ -1515,6 +1534,17 @@ TEST_F(MixedInlineDispatchTest, LowConfidenceSegmentsTurnEnglishOneAtATime) {
   }
   EXPECT_EQ(with_english, 3u);
   EXPECT_EQ(Count(many, "ぎてゅbとぷshとぎてゅbとpush"), 0u);
+}
+
+// Section 10: a conversion the Zenzai budget cut short is left out too, so
+// only item 2 would remain and the list is the one M63 off returns.
+TEST_F(MixedInlineDispatchTest, ConversionCutByTheZenzaiBudgetIsLeftOut) {
+  const auto on = Query(1425, Request("ぎてゅbをよむ", "githubwoyomu", true));
+  ASSERT_FALSE(on.empty());
+  EXPECT_EQ(on[0].surface, "擬態を読む");
+  EXPECT_EQ(Count(on, "GitHubを読む"), 0u);
+  for (const auto& c : on) EXPECT_TRUE(c.segments.empty()) << c.surface;
+  EXPECT_EQ(Surfaces(on), Surfaces(Query(1426, Request("ぎてゅbをよむ", "githubwoyomu", false))));
 }
 
 TEST_F(MixedInlineDispatchTest, PassedDeadlineLeavesTheListAsWithM63Off) {
@@ -1553,7 +1583,7 @@ TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
   ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
   ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
   const auto response = [&](uint64_t id, bool mixed) {
-    const auto resp = dispatcher.Dispatch(
+    const auto resp = patient.Dispatch(
         MakeReq(id, ipc::MessageType::QueryCandidates,
                 ipc::BuildQueryCandidatesRequest(Request(kSentenceKana, kSentenceRaw, mixed))));
     EXPECT_TRUE(resp.has_value());

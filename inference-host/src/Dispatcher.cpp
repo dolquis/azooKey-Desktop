@@ -467,13 +467,11 @@ std::optional<std::vector<ipc::LiveSegment>> SegmentsOf(const std::string& surfa
 // Section 8.3, items 1 to 3, in order; empty when none of them differs from
 // the list M63 off returns. all_japanese is the first candidate of the
 // conversion of the TIP's kana (item 2, or item 1 when no segment is sure).
-std::vector<ipc::CandidateField> MixedCandidates(InferenceEngine& engine,
-                                                 const ipc::QueryCandidatesRequest& request,
-                                                 const core::MixedRomajiSplit& split,
-                                                 const std::optional<core::Candidate>& all_japanese,
-                                                 std::chrono::steady_clock::time_point deadline,
-                                                 const std::atomic<bool>* cancel,
-                                                 const InferenceTelemetry* telemetry) {
+std::vector<ipc::CandidateField> MixedCandidates(
+    InferenceEngine& engine, const ipc::QueryCandidatesRequest& request,
+    const core::MixedRomajiSplit& split, const std::optional<core::Candidate>& all_japanese,
+    std::chrono::steady_clock::time_point deadline, const std::atomic<bool>* cancel,
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
   constexpr size_t kMaxLowConfidenceConversions = 3;
   std::vector<bool> english(split.segments.size());
   std::vector<size_t> low;
@@ -486,7 +484,7 @@ std::vector<ipc::CandidateField> MixedCandidates(InferenceEngine& engine,
       low.push_back(i);
   }
   // Section 10: no conversion starts after the deadline, a running one ends by
-  // it, and one it cut short is left out.
+  // it, and one it or the Zenzai budget cut short is left out.
   const auto convert = [&](const std::vector<bool>& flags) -> std::optional<ipc::CandidateField> {
     if (std::chrono::steady_clock::now() >= deadline ||
         (cancel && cancel->load(std::memory_order_acquire)))
@@ -499,8 +497,9 @@ std::vector<ipc::CandidateField> MixedCandidates(InferenceEngine& engine,
     options.nll = false;
     auto result =
         engine.QueryCandidatesEx(mixed.reading, request.left_context, NowSec(), cancel,
-                                 request.max_candidates, false, telemetry, nullptr, &options);
-    if (std::chrono::steady_clock::now() >= deadline) return std::nullopt;
+                                 request.max_candidates, false, telemetry, tag_boosts, &options);
+    if (result.model_deadline_exceeded || std::chrono::steady_clock::now() >= deadline)
+      return std::nullopt;
     for (const auto& candidate : result.candidates) {
       auto segments = SegmentsOf(candidate.surface, mixed, request.raw_romaji, candidate.score);
       if (!segments) continue;
@@ -1172,7 +1171,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
           // M63-B section 8.3, on top of M60.
           mixed_front = MixedCandidates(*engine_, *parsed, *split, all_japanese,
                                         received + config_.mixed_english_conversion_deadline,
-                                        cancel.get(), trace.context());
+                                        cancel.get(), trace.context(), &tag_boosts);
         }
       }
     }

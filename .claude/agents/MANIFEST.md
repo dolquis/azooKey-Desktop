@@ -19,7 +19,7 @@ Claude 側は両者に `disallowedTools: Edit, Write, NotebookEdit` を要求し
 
 Codex は親ターンの sandbox / approval を継承する。custom agent の `sandbox_mode` や `approval_policy` では上書きできず、本文の制約は独立した OS sandbox を作らない。
 checker はこの無効な指定を検出するが、実効権限や実行時の遵守を保証しない。親が実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親へ戻す。
-`[agents].enabled = false` は有効な設定として認め、親が同じ検査範囲を実施する（parent-only fallback）。
+`[agents].enabled = false` の扱いを含む parent-only fallback は `docs/handoff/agent-orchestration.md`「parent-only fallback」に従う。
 
 | agent | 区分 | origin | 取り込み revision | 権限 | Codex 側 |
 |---|---|---|---|---|---|
@@ -33,4 +33,4 @@ checker はこの無効な指定を検出するが、実効権限や実行時の
 - `repo` の本文は frontmatter / TOML wrapper を除いて byte 一致にする。同期の注記は本文ではなく frontmatter の YAML コメントと TOML コメントに置く。
 - `shared` を再配布したら「取り込み revision」に origin の commit を書く。
 - 分担の規約（分割レベル、route、snapshot 契約、返却形式）は `docs/handoff/agent-orchestration.md` が持つ。本表は所有と権限の記録に限る。
-- agent を追加したら、`docs/handoff/agent-orchestration.md` の route 表に起動条件を足す。route 表に載っていて本表に無い agent は、親が対応 Skill で代替する（parent-only fallback）。
+- agent を追加したら、`docs/handoff/agent-orchestration.md` の route 表に起動条件を足す。route 表に載っていて本表に無い agent の扱いは同じ「parent-only fallback」に従う。

@@ -38,7 +38,9 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 | L3 1 塊内の並列実装 | ファイル所有権を分割でき、契約（IPC payload、schema、関数シグネチャ）が先に固定済み | Agent Teams または独立 worker。writer ごとに非重複領域 |
 | L4 塊間並列 | Linear 上で独立した塊と依存が確定済み | 塊ごとに別 worktree / branch / Draft PR。管制塔セッションの子セッション、または Claude Code の `isolation: worktree` |
 
-分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える。L2 は独立した境界が複数ある場合に選ぶ。L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
+分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える。L2 は独立した境界が複数ある場合に選ぶ。
+L1/L2 の「境界」と specialist は、次の「touched path からの route」の「必須」「条件付き」列で決める。specialist は agent（`spec-drift-checker`、`diff-auditor`、`windows-build-runner`）だけを指し、親が Skill を読んで確認する行は specialist の起動に数えない。route の必須が親の Skill 確認だけの変更（`core/**` 単独の変更など）は L0 のまま、親が Skill を読んで確認する。必須または条件付きの agent が 1 つ当たれば L1、独立した 2 つ以上の agent が当たり編集が停止済みなら L2 とする。
+L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
 L4 の実行形は 2 つある。管制塔セッションがユーザーの指示を受けて、塊ごとに子セッション（Claude Code Remote の `create_session`、各自の worktree）を立てる形と、1 セッションの親が Claude Code の `isolation: worktree` で subagent を分ける形である。どちらも build directory は共有されないが、worktree ごとに configure からやり直すため full rebuild になる。`isolation: worktree` は親が spawn 時に明示し、agent 定義には固定しない。
 worktree をまたいで共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と、並行する PR への `main` の取り込みは `docs/handoff/parallel-worktree-runbook.md` に従う。
 
@@ -67,7 +69,18 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | C++ を含む高リスク差分 | `diff-auditor` による独立レビュー | コード品質の追加観点が必要なら `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 
-`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。C++ という言語だけを理由に二重レビューを課さず、変更リスクと必要な観点で選ぶ。role や plugin が利用不能なら親が同じ観点を確認し、独立レビューを実施できなかった範囲と理由を報告する。必要な build / test と Human Gate は省略しない。
+`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。C++ という言語だけを理由に二重レビューを課さず、変更リスクと必要な観点で選ぶ。必要な build / test と Human Gate は省略しない。
+
+### parent-only fallback
+
+次のどれかに当たるとき、親が対応する Skill を読み、同じ観点と検査範囲を自分で確認する。独立レビューを実施できなかった範囲と理由は最終報告に書く。
+
+- agent の role や plugin が利用不能である。
+- route 表に載っているが `.claude/agents/MANIFEST.md` に無い agent である。
+- Codex の `.codex/config.toml` で `[agents].enabled = false` にしている（有効な縮退設定）。
+- 親が実行前に権限と書込み範囲を確認し、必要な境界を確保できない（不変条件 8）。
+
+本節が parent-only fallback の正典であり、`MANIFEST.md` と「ロールバック」は本節を参照する。
 
 ## background と並列実行
 
@@ -125,7 +138,7 @@ Validation owned by parent: <commands>
 
 問題が出た場合は製品コードを戻さず Execution 層だけを縮退する。
 
-1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`enabled = false` は有効な縮退設定であり、親が同じ検証範囲を担当する。
+1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`enabled = false` は有効な縮退設定で、扱いは「parent-only fallback」に従う。
 2. Claude Code は `.claude/settings.json` の `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` を外し、通常の単一 subagent または親のみへ戻す。
 3. agent が使えない環境では、同じ検証範囲を親が担当する。
 4. Execution 層の縮退だけを理由に製品 Issue を Canceled / Backlog へ戻さない。実行方法の変更と検証への影響をコメントし、製品 Issue の状態は実際の進捗と受入条件に従う。

@@ -1305,9 +1305,18 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
   // The input indicator's mode icon (spec §4.5). Hosts without a language bar
   // item manager get none; the TIP works the same without it.
-  hr = input_mode_langbar_.Add(
-      thread_mgr_, kTextServiceClsid, ResolveInputModeIndicator(keyboard_open_, alnum_mode_),
-      [this](TfLBIClick click, POINT, const RECT*) { OnInputModeLangBarClick(click); });
+  hr = input_mode_langbar_.Add(thread_mgr_, kTextServiceClsid,
+                               ResolveInputModeIndicator(keyboard_open_, alnum_mode_),
+                               [this](TfLBIClick click, POINT, const RECT*) {
+                                 // The click can commit and close; keep the service alive whatever
+                                 // the host does with the TIP meanwhile.
+                                 AddRef();
+                                 struct Hold {
+                                   TextService* service;
+                                   ~Hold() { service->Release(); }
+                                 } hold{this};
+                                 OnInputModeLangBarClick(click);
+                               });
   if (FAILED(hr) && hr != E_NOINTERFACE)
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "langbar_item_add_failed");
 

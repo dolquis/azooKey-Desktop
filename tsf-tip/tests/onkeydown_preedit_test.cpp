@@ -8619,6 +8619,70 @@ TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
+// DEV-1737: a left click on the input indicator closes like VK_IME_OFF, from
+// outside any key event, on the context the input lives in.
+namespace {
+void ShowLiveKa(DocumentPreeditHarness& h) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+}
+}  // namespace
+
+TEST(TsfTipLangBarClickTest, LeftClickCommitsTheShownSurfaceBeforeClosing) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  // A right click never commits or closes.
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_TRUE(h.service.keyboard_open());
+}
+
+TEST(TsfTipLangBarClickTest, LeftClickStaysOnWhenTheCommitIsRefused) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.context.skip_write_callback = true;
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// An Enter the state does not take (here the app disabled the keyboard of the
+// context the input lives in) must not keep the IME from turning off.
+TEST(TsfTipLangBarClickTest, LeftClickClosesWhenEnterDoesNotTakeTheInput) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  ChromiumCompartmentMgr compartments;
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  compartments.keyboard_disabled.value = 1;
+  h.context.compartment_mgr = &compartments;
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"か");
+  h.context.compartment_mgr = nullptr;
+}
+
 // DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS
 // set or cleared for the service constructed while this is alive.
 class ScopedKeyPathLog {

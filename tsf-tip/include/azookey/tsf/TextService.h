@@ -302,6 +302,8 @@ class TextService final : public ITfTextInputProcessorEx,
   LangBarInputModeItem* input_mode_langbar_item_for_test() const {
     return input_mode_langbar_.item_for_test();
   }
+  // What the input indicator's click handler runs, for harnesses that never activate.
+  void click_input_mode_langbar_for_test(TfLBIClick click) { OnInputModeLangBarClick(click); }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }

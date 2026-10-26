@@ -54,7 +54,7 @@ TEST(PredictionWindowTest, FallsBackAboveWhenBottomWouldOverflow) {
   EXPECT_EQ(result.top, 430);
 }
 
-TEST(PredictionWindowTest, ClampsToNonPrimaryMonitorWorkAreaWhenNeitherSideFits) {
+TEST(PredictionWindowTest, ClampsToNonPrimaryMonitorWorkAreaWhenNeitherBelowNorAboveFits) {
   const RECT result = PredictionWindow::ComputePlacement({-1750, 120, -1748, 140},
                                                          {-1920, 40, -1720, 200}, 180, 140);
   EXPECT_EQ(result.left, -1900);

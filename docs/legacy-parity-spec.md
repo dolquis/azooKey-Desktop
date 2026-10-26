@@ -699,7 +699,8 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 - アプリが text extent を返さず、キャレット矩形で代えるとき（キャレットに追従する）
 - composition が折り返して複数行になったとき（左辺と下辺が変わった打鍵で 1 回動く）
 
-縦書きの配置は扱わない。
+作業領域が狭く、composition の下にも上にも収まらないときは、作業領域の内側へ寄せる。この
+場合、窓は composition に重なる。縦書きの配置は扱わない。
 
 ### 3.3 キャッシュ
 
@@ -1065,7 +1066,7 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`、`PredictionWindow::ComputePlacement`）とする。
 
 - 候補ウィンドウは anchor の下に開き、下端からはみ出すときはキャレットの上へ反転する。幅は作業領域の幅を上限とする。
-- 予測候補ウィンドウはキャレットの右に開き、はみ出すときは左、下端からはみ出すときは上へずらす（§3.2）。
+- 予測候補ウィンドウは composition 開始位置の下に開き、下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる（§3.2）。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 

@@ -11709,6 +11709,28 @@ TEST(TsfTipCommitOnTypeTest, MarkWithConversionOffCommitsAndStartsWithTheMark) {
   ExpectTenkiSecondCommittedOnce(h);
 }
 
+// A refused commit waits for its retry like Enter's: the key that asked for it
+// is dropped, and so is the next key, which retries the commit.
+TEST(TsfTipCommitOnTypeTest, KeysWhileTheCommitWaitsForRetryAreDropped) {
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter ? "pre-processing path" : "core path");
+    DocumentPreeditHarness h;
+    StartPunctuationConversion(h, false);
+    h.service.set_number_rewriter_enabled_for_test(number_rewriter);
+    SelectTenkiSecond(h, /*from_cache=*/number_rewriter);
+    h.context.reject_write = true;
+    ASSERT_TRUE(h.Press('H'));
+    EXPECT_TRUE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"転機");
+    h.context.reject_write = false;
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"転機");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
 TEST(TsfTipCommitOnTypeTest, BackspaceStillReturnsToTheReading) {
   DocumentPreeditHarness h;
   StartPunctuationConversion(h, false);

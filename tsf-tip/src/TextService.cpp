@@ -2842,7 +2842,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     // DEV-1735: a key typed while the candidate window is shown commits the
     // highlight (every segment of a batch) like Enter, then is handled as the
-    // first key of the next composition. A commit left for retry keeps the key.
+    // first key of the next composition. While a refused commit waits for its
+    // retry the key is consumed and dropped, as for any key in that state.
     auto commit_selection = [&]() -> HRESULT {
       const HRESULT commit_hr = CommitSelected(context);
       if (FAILED(commit_hr)) return commit_hr;
@@ -2852,6 +2853,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     auto commit_selection_then_retype = [&]() -> HRESULT {
       const HRESULT commit_hr = commit_selection();
       if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
+      // One retype at most: a commit that left the window shown must not loop.
+      if (retyped) return S_OK;
       // The key was already tracked for typo and undo above.
       typo_test_key_context_ = context;
       typo_test_key_ = wParam;

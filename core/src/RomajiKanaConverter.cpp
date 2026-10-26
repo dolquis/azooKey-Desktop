@@ -110,7 +110,9 @@ std::string RomajiKanaConverter::Feed(char ascii) {
   if (pending_ == "nn") {
     pending_.clear();
     if (IsVowelOrY(lower)) {
-      pending_.push_back('n');
+      const size_t position = ambiguous_double_n_seen_++;
+      const bool consume = position < 32 && ((consume_double_n_mask_ >> position) & 1u) != 0;
+      if (!consume) pending_.push_back('n');
     }
     pending_.push_back(lower);
     return "ん" + ConvertPending(false);
@@ -198,6 +200,50 @@ std::string RomajiKanaConverter::ConvertForCommit(const std::string& ascii,
   }
   output += converter.Flush();
   return output;
+}
+
+std::vector<std::string> RomajiKanaConverter::AmbiguousReadings(const std::string& ascii,
+                                                                size_t max_ambiguous) {
+  return AmbiguousReadings(ascii, nullptr, max_ambiguous);
+}
+
+std::vector<std::string> RomajiKanaConverter::AmbiguousReadings(
+    const std::string& ascii, std::shared_ptr<const CustomRomajiTable> table,
+    size_t max_ambiguous) {
+  const auto convert = [&](unsigned mask, size_t* ambiguous) {
+    RomajiKanaConverter converter;
+    converter.SetCustomTable(table);
+    converter.consume_double_n_mask_ = mask;
+    std::string output;
+    for (char raw : ascii) {
+      output += converter.Feed(raw);
+    }
+    output += converter.Flush();
+    if (ambiguous) *ambiguous = converter.ambiguous_double_n_seen_;
+    return output;
+  };
+  const auto ascii_letters = [](const std::string& text) {
+    return std::count_if(text.begin(), text.end(),
+                         [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; });
+  };
+
+  size_t ambiguous = 0;
+  std::vector<std::string> readings{convert(0, &ambiguous)};
+  const size_t varied = (std::min)({ambiguous, max_ambiguous, kMaxAmbiguousDoubleN});
+  // A position varies only if reading it alone as ん + あ行/や行 converts as many letters
+  // as the default does (a trailing "nny" or "nnyi" leaves romaji behind instead).
+  const auto default_letters = ascii_letters(readings.front());
+  unsigned valid = 0;
+  for (size_t position = 0; position < varied; ++position) {
+    const unsigned bit = 1u << position;
+    if (ascii_letters(convert(bit, nullptr)) == default_letters) valid |= bit;
+  }
+  // Each position changes only its own syllable, so distinct masks give distinct readings.
+  for (unsigned mask = 1; mask < (1u << varied); ++mask) {
+    if ((mask & ~valid) != 0) continue;
+    readings.push_back(convert(mask, nullptr));
+  }
+  return readings;
 }
 
 std::string RomajiKanaConverter::ConvertPending(bool force_flush) {

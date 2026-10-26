@@ -960,8 +960,12 @@ class DocumentComposition final : public FakeComposition {
   }
   STDMETHODIMP EndComposition(TfEditCookie cookie) override {
     if (FAILED(end_result)) return end_result;
+    if (!notify_owner_end) return S_OK;
     return sink_->OnCompositionTerminated(cookie, this);
   }
+  // TSF need not call OnCompositionTerminated when the owner ends its own
+  // composition; false models that, so lifecycle cleanup does not run.
+  bool notify_owner_end{true};
 
  private:
   ITfCompositionSink* sink_;
@@ -1023,7 +1027,9 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   }
   STDMETHODIMP StartComposition(TfEditCookie, ITfRange* range, ITfCompositionSink* sink,
                                 ITfComposition** composition) override {
-    *composition = new DocumentComposition(range, sink);
+    auto* started = new DocumentComposition(range, sink);
+    started->notify_owner_end = notify_owner_end;
+    *composition = started;
     return S_OK;
   }
   STDMETHODIMP EnumCompositions(IEnumITfCompositionView**) override { return E_NOTIMPL; }
@@ -1049,6 +1055,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool skip_callback{false};
   bool skip_write_callback{false};
   bool defer_write_callback{false};
+  bool notify_owner_end{true};  // Copied to each started DocumentComposition.
   std::vector<ITfEditSession*> deferred_writes;
   std::function<void()> before_write;
 };
@@ -6244,6 +6251,29 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeWithPredictionWindowAndNoInputOnlyClosesT
   EXPECT_FALSE(h.service.prediction_window_visible_for_test());
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
   EXPECT_EQ(h.context.document->text, L"か");
+}
+
+// DEV-1712: Esc drops the outstanding query (and any armed retry) before an
+// answer is cached, so typing the same reading again within a second must ask
+// again rather than be held back as a duplicate of the dropped query.
+TEST(TsfTipOnKeyDownPreeditTest, EscapeThenSameReadingQueriesPredictionAgain) {
+  DocumentPreeditHarness h;
+  // Lifecycle cleanup on OnCompositionTerminated would clear the query state
+  // and hide the case; TSF need not call it when the TIP ends its own composition.
+  h.context.notify_owner_end = false;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  for (const WPARAM key : {'K', 'A', 'N'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+  ASSERT_NE(h.service.pending_prediction_generation_for_test(), 0u);
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.context.document->text, L"");
+  ASSERT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+
+  for (const WPARAM key : {'K', 'A', 'N'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+  EXPECT_NE(h.service.pending_prediction_generation_for_test(), 0u);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMetadata) {

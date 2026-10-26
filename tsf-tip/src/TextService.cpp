@@ -7912,6 +7912,10 @@ void TextService::ClearPrediction() {
   prediction_retry_generation_.store(0, std::memory_order_release);
   prediction_window_.Hide();
   shown_predictions_.clear();
+  // The duplicate-query hold in RefreshPrediction waits on the outstanding
+  // query or its retry; both are dropped here, so the same reading must ask
+  // again (DEV-1712).
+  prediction_last_query_key_.clear();
   {
     std::lock_guard lock(ipc_mtx_);
     ++prediction_generation_;

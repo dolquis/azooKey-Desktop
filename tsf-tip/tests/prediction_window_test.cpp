@@ -15,36 +15,51 @@ TEST(PredictionWindowTest, CapsVisibleRowsAtFive) {
   EXPECT_EQ(PredictionWindow::VisibleCount(9), 5u);
 }
 
-TEST(PredictionWindowTest, PlacesToRightOfCaretWhenThereIsRoom) {
-  const RECT caret{100, 200, 102, 220};
+TEST(PredictionWindowTest, PlacesBelowTheCompositionStartWhenThereIsRoom) {
+  const RECT composition{100, 200, 160, 220};
   const RECT work{0, 0, 1000, 800};
-  const RECT result = PredictionWindow::ComputePlacement(caret, work, 180, 140);
-  EXPECT_EQ(result.left, 106);
-  EXPECT_EQ(result.top, 200);
-  EXPECT_EQ(result.right, 286);
-  EXPECT_EQ(result.bottom, 340);
+  const RECT result = PredictionWindow::ComputePlacement(composition, work, 180, 140);
+  EXPECT_EQ(result.left, 100);
+  EXPECT_EQ(result.top, 220);
+  EXPECT_EQ(result.right, 280);
+  EXPECT_EQ(result.bottom, 360);
 }
 
-TEST(PredictionWindowTest, FallsBackLeftWhenRightWouldOverflow) {
+// DEV-1732: typing only moves the composition's right edge; the window stays.
+TEST(PredictionWindowTest, StaysPutWhileTheCompositionGrows) {
+  const RECT work{0, 0, 800, 600};
+  const RECT first = PredictionWindow::ComputePlacement({100, 200, 116, 220}, work, 180, 140);
+  for (const LONG right : {132L, 260L, 700L}) {
+    const RECT next = PredictionWindow::ComputePlacement({100, 200, right, 220}, work, 180, 140);
+    EXPECT_EQ(next.left, first.left);
+    EXPECT_EQ(next.top, first.top);
+  }
+  const RECT near_bottom = PredictionWindow::ComputePlacement({100, 570, 116, 590}, work, 180, 140);
+  const RECT grown = PredictionWindow::ComputePlacement({100, 570, 700, 590}, work, 180, 140);
+  EXPECT_EQ(grown.left, near_bottom.left);
+  EXPECT_EQ(grown.top, near_bottom.top);
+}
+
+TEST(PredictionWindowTest, ShiftsLeftToStayInsideTheWorkArea) {
   const RECT result =
-      PredictionWindow::ComputePlacement({780, 200, 782, 220}, {0, 0, 800, 600}, 180, 140);
-  EXPECT_EQ(result.left, 596);
-  EXPECT_EQ(result.top, 200);
+      PredictionWindow::ComputePlacement({780, 200, 790, 220}, {0, 0, 800, 600}, 180, 140);
+  EXPECT_EQ(result.left, 620);
+  EXPECT_EQ(result.top, 220);
 }
 
 TEST(PredictionWindowTest, FallsBackAboveWhenBottomWouldOverflow) {
   const RECT result =
-      PredictionWindow::ComputePlacement({100, 570, 102, 590}, {0, 0, 800, 600}, 180, 140);
-  EXPECT_EQ(result.left, 106);
-  EXPECT_EQ(result.top, 450);
+      PredictionWindow::ComputePlacement({100, 570, 160, 590}, {0, 0, 800, 600}, 180, 140);
+  EXPECT_EQ(result.left, 100);
+  EXPECT_EQ(result.top, 430);
 }
 
 TEST(PredictionWindowTest, ClampsToNonPrimaryMonitorWorkAreaWhenNeitherSideFits) {
   const RECT result = PredictionWindow::ComputePlacement({-1750, 120, -1748, 140},
                                                          {-1920, 40, -1720, 200}, 180, 140);
-  EXPECT_EQ(result.left, -1920);
+  EXPECT_EQ(result.left, -1900);
   EXPECT_EQ(result.top, 40);
-  EXPECT_EQ(result.right, -1740);
+  EXPECT_EQ(result.right, -1720);
   EXPECT_EQ(result.bottom, 180);
 }
 

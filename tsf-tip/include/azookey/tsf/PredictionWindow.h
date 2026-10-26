@@ -36,7 +36,9 @@ class PredictionWindow {
   void SetOnClick(OnClickFn callback) { on_click_ = std::move(callback); }
 
   static constexpr std::size_t VisibleCount(std::size_t count) { return count < 5 ? count : 5; }
-  static RECT ComputePlacement(RECT caret, RECT work_area, int width, int height);
+  // anchor is the composition's text extent, or the caret rect when the app
+  // reports none. The window goes below its start, or above when that overflows.
+  static RECT ComputePlacement(RECT anchor, RECT work_area, int width, int height);
 
 #ifdef AZOOKEY_TSF_TESTING
   HWND hwnd_for_test() const { return hwnd_; }

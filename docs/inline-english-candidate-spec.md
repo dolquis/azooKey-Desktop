@@ -148,7 +148,7 @@ inputStyle=custom の表は TIP にだけあり、読みには句読点が足さ
   入力が secure でない（§4.1）、の全部を満たすときだけ、`QueryBatchConversionRequest.english_candidates` を true にする
   （§6.7）。素材は同じ要求の `raw_romaji`（M58 の `batch_raw_romaji`）である。
 - Host は、`mode` が `neural`、`english_candidates` が true、`raw_romaji` が空でない、
-  読みが 1 chunk、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
+  読みが 1 chunk、`secure` が false（§6.7）、の全部を満たすときだけ、その文節の候補を `max_candidates` で切り詰めた後に
   英単語候補を §4.3 の規則で加える。
 - かなの候補が 1 件も無いときは加えない（英単語が第 1 候補になるため）。`ai-cleanup` は、
   `neural` へ fallback した場合も対象外とする。
@@ -1014,8 +1014,16 @@ TIP は、`chosen.tag == English` で、`chosen.reading` が上の生ローマ�
 `reading = 生ローマ字`）で加わる。応答の形は変えない。旧 Host はこのフィールドを無視し、
 旧 TIP は送らないので、どちらの組み合わせでも挙動は変わらない。
 
-`QueryBatchConversionRequest` は `secure` を持たない。一括変換の英単語候補を secure の入力から
-守るのは、TIP が secure の入力で `english_candidates` を true にしないことだけである（§4.1）。
+一括変換の英単語候補を secure の入力から守るため、`QueryBatchConversionRequest` は M63 で省略可能な
+`secure` を持つ（`docs/mixed-english-auto-conversion-spec.md` §9.1・§9.4）。
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `secure` | bool | `true` | 入力欄が secure か。TIP は secure でない入力の要求にだけ false を載せる。true は省略する |
+
+Host は `secure` が true（省略時と bool 以外の値を含む）の要求に英単語候補を加えない。TIP も
+secure の入力では `english_candidates` を true にしない（§4.1）。`secure` を送らない旧 TIP と
+新しい Host の組み合わせでは、一括変換に英単語候補が出ない。
 
 ## 7. 設定スキーマ
 

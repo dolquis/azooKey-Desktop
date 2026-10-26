@@ -56,7 +56,8 @@ bench/data/
 ├── named_entity_eval.jsonl     # 固有名詞
 ├── neologism_eval.jsonl        # 新語
 ├── user_learning_eval.jsonl    # 学習前後比較
-└── typo_eval.jsonl             # 打ち間違え補正
+├── typo_eval.jsonl             # 打ち間違え補正
+└── mixed_english_eval.jsonl    # M63 の日英混在の分割器（§4.4）
 ```
 
 `*.jsonl` は 1 行 1 ケース。**第一の作成ルートは自前で書き起こす
@@ -164,6 +165,33 @@ bench/data/
 
 クリーン:typo 比率の既定は 1:1。`category = ["typo_clean"]` で
 typo メトリクスの分母にのみ採用し、その他のカテゴリ集計には含めない。
+
+### 4.4 日英混在の分割器ケース形式（M63）
+
+`mixed_english_eval.jsonl` は `docs/mixed-english-auto-conversion-spec.md` §15.2 の品質ゲートの入力で、
+`azookey_bench` ではなく `azookey_mixed_english_eval` が読む。分割器（§6）だけを評価し、モデルは
+使わない。英単語辞書は同梱の `data/english-words.tsv` をパスで参照する（`bench/data/` に写さない）。
+
+```jsonc
+{
+  "id": "mixed_0001",
+  "category": "mixed_english",          // mixed_english / japanese_only / romaji_like_english
+  "raw_romaji": "kyouhagithubwotukatta", // 打鍵どおりの生ローマ字（Shift の大文字を含む）
+  "reading": "きょうは…",                // 任意。mixed_english 以外では必須
+  "expected_english": [                 // 英字にすべき区間。生ローマ字のバイト範囲と表層
+    {"begin": 6, "end": 12, "surface": "GitHub"}
+  ],
+  "provenance": "authored"
+}
+```
+
+- `reading` は TIP が送る読み（内蔵のローマ字表で `raw_romaji` をかなにしたもの）で、評価器が一致を
+  確かめる。日本語の文（`japanese_only`、`romaji_like_english`）では必須で、書き起こしの誤りを検出する。
+- `expected_english` の表層は、Shift で打った区間は打鍵どおり、それ以外は英単語辞書の最頻の表層
+  （spec §6.4）とする。`japanese_only` では空でなければならない。
+- 指標: 分割器の先頭の経路の高確度の E 区間のうち `expected_english` と一致した割合（適合率）、
+  `japanese_only` で高確度の E 区間を持つ文の数、`mixed_english` の期待区間に対する再現率（参考値）。
+  合格は、不正なケースが 0、適合率が 95% 以上、`japanese_only` の高確度の E が 0。
 
 ## 5. カテゴリ
 

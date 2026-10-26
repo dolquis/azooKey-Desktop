@@ -128,4 +128,139 @@ TEST(MixedRomajiSplitterTest, OutOfBoundsInputHasNoSplit) {
   EXPECT_TRUE(SplitMixedRomaji("github", dictionary, none).empty());
 }
 
+// M63-B (sections 6.2 and 6.3): the mixed lattice.
+azookey::core::MixedRomajiSplitOptions Inline() {
+  azookey::core::MixedRomajiSplitOptions options;
+  options.split_inline = true;
+  return options;
+}
+
+std::string Describe(const azookey::core::MixedRomajiSplit& split) {
+  std::string out;
+  for (const auto& s : split.segments) {
+    if (!out.empty()) out += " | ";
+    if (s.kind == MixedRomajiSegmentKind::English) {
+      out +=
+          "E:" + s.surface + (s.confidence == EnglishSegmentConfidence::High ? "(high)" : "(low)");
+    } else {
+      out += "J:" + s.kana;
+    }
+  }
+  return out;
+}
+
+TEST(MixedRomajiSplitterTest, LatticeSplitsASentenceAroundTheEnglishWords) {
+  const auto dictionary =
+      Dictionary({{"github", {"GitHub", "github"}}, {"push", {"push"}}, {"you", {"you"}}});
+  const auto splits = SplitMixedRomaji("kyouhagithubnipushsita", dictionary, Inline());
+  ASSERT_FALSE(splits.empty());
+  EXPECT_EQ(Describe(splits.front()), "J:きょうは | E:GitHub(high) | J:に | E:push(high) | J:した");
+  const auto& segments = splits.front().segments;
+  ASSERT_EQ(segments.size(), 5u);
+  EXPECT_EQ(segments[1].raw_begin, 6u);
+  EXPECT_EQ(segments[1].raw_end, 12u);
+  EXPECT_EQ(segments[4].raw_end, 22u);
+  // Typed capitals keep the keystrokes (section 6.4).
+  const auto typed = SplitMixedRomaji("kyouhaGitHubnipushsita", dictionary, Inline());
+  ASSERT_FALSE(typed.empty());
+  EXPECT_EQ(Describe(typed.front()), "J:きょうは | E:GitHub(high) | J:に | E:push(high) | J:した");
+}
+
+TEST(MixedRomajiSplitterTest, LatticeKeepsAJapaneseSentenceJapanese) {
+  // you inside kyou leaves k alone, and a lone ASCII letter costs far more.
+  const auto dictionary = Dictionary({{"you", {"you"}}, {"wot", {"wot"}}, {"tab", {"tab"}}});
+  for (const char* raw : {"kyouha", "gohannwotaberu"}) {
+    const auto splits = SplitMixedRomaji(raw, dictionary, Inline());
+    ASSERT_FALSE(splits.empty()) << raw;
+    ASSERT_EQ(splits.front().segments.size(), 1u) << Describe(splits.front());
+    EXPECT_EQ(splits.front().segments.front().kind, MixedRomajiSegmentKind::Japanese) << raw;
+    EXPECT_DOUBLE_EQ(splits.front().cost, 0.0) << raw;
+  }
+}
+
+TEST(MixedRomajiSplitterTest, LatticeCostsFollowSection63) {
+  // A word that reads as kana pays the penalty and stays J first, with the
+  // low-confidence English split behind it.
+  const auto kite = SplitMixedRomaji("kitekudasai", Dictionary({{"kite", {"kite"}}}), Inline());
+  ASSERT_GE(kite.size(), 2u);
+  EXPECT_EQ(Describe(kite.front()), "J:きてください");
+  EXPECT_EQ(Describe(kite[1]), "E:kite(low) | J:ください");
+  EXPECT_NEAR(kite[1].cost, 1.0 - 0.05 * 4 + 2.0, 1e-9);
+  // Unnatural kana in the J reading (konoぉゔぇは) make the English split win
+  // even for a word that reads as kana.
+  const auto love = SplitMixedRomaji("konoloveha", Dictionary({{"love", {"love"}}}), Inline());
+  ASSERT_FALSE(love.empty());
+  EXPECT_EQ(Describe(love.front()), "J:この | E:love(low) | J:は");
+  // Splits come cheapest first, at most max_splits of them, and no two J
+  // segments are adjacent.
+  auto options = Inline();
+  options.max_splits = 3;
+  const auto many = SplitMixedRomaji(
+      "pushsitecommitsita",
+      Dictionary({{"push", {"push"}}, {"commit", {"commit"}}, {"site", {"site"}}}), options);
+  ASSERT_EQ(many.size(), 3u);
+  for (size_t i = 1; i < many.size(); ++i) EXPECT_LE(many[i - 1].cost, many[i].cost);
+  for (const auto& split : many) {
+    for (size_t i = 1; i < split.segments.size(); ++i)
+      EXPECT_FALSE(split.segments[i - 1].kind == MixedRomajiSegmentKind::Japanese &&
+                   split.segments[i].kind == MixedRomajiSegmentKind::Japanese)
+          << Describe(split);
+  }
+}
+
+// The boundary and capital costs the quality gate needed on top of section 6.3.
+TEST(MixedRomajiSplitterTest, LatticeBoundaryAndCapitalCosts) {
+  // A J segment that starts with a vowel right after an E segment means the E
+  // edge took the consonant of the kana: pull|sita, not pulls|ita.
+  EXPECT_EQ(
+      Describe(SplitMixedRomaji("kinoupullsita",
+                                Dictionary({{"pull", {"pull"}}, {"pulls", {"pulls"}}}), Inline())
+                   .front()),
+      "J:きのう | E:pull(high) | J:した");
+  // No Japanese word starts with ん: scan|nohanasi, not tosca|nnohanasi.
+  EXPECT_EQ(
+      Describe(SplitMixedRomaji("tomodatitoscannohanasi",
+                                Dictionary({{"scan", {"scan"}}, {"tosca", {"Tosca"}}}), Inline())
+                   .front()),
+      "J:ともだちと | E:scan(high) | J:のはなし");
+  // A Shift capital in a J segment costs, and the readable penalty does not
+  // apply to a word that starts with one.
+  EXPECT_EQ(
+      Describe(SplitMixedRomaji("Sitewomite", Dictionary({{"site", {"site"}}}), Inline()).front()),
+      "E:Site(high) | J:をみて");
+}
+
+// Decision (a): an in-sentence E edge needs 3 characters, 2 when it starts
+// with a Shift capital.
+TEST(MixedRomajiSplitterTest, LatticeMinimumLengths) {
+  const auto dictionary = Dictionary({{"pc", {"PC"}}});
+  const auto lower = SplitMixedRomaji("pcwotukau", dictionary, Inline());
+  ASSERT_EQ(lower.size(), 1u);
+  EXPECT_EQ(lower.front().segments.front().kind, MixedRomajiSegmentKind::Japanese);
+  const auto shifted = SplitMixedRomaji("PCwotukau", dictionary, Inline());
+  ASSERT_FALSE(shifted.empty());
+  EXPECT_EQ(Describe(shifted.front()), "E:PC(high) | J:をつかう");
+}
+
+TEST(MixedRomajiSplitterTest, LatticeIsOptInAndHasAKillSwitch) {
+  const auto dictionary = Dictionary({{"github", {"GitHub"}}});
+  // Off (the default): the M63-A whole-composition judgement only.
+  const auto off = SplitMixedRomaji("kyouhagithubni", dictionary);
+  ASSERT_EQ(off.size(), 1u);
+  EXPECT_EQ(off.front().segments.front().kind, MixedRomajiSegmentKind::Japanese);
+  // Without a dictionary there is no E edge to split on (section 6.1).
+  EXPECT_EQ(Describe(SplitMixedRomaji("kyouhagithubni", EnglishWordLookup{}, Inline()).front()),
+            "J:きょうはぎてゅbに");
+  // Section 15.2: the kill switch leaves every lattice E low.
+  auto options = Inline();
+  options.inline_high_confidence = false;
+  EXPECT_EQ(Describe(SplitMixedRomaji("kyouhagithubni", dictionary, options).front()),
+            "J:きょうは | E:GitHub(low) | J:に");
+  // A whole-composition word keeps the M63-A judgement with the lattice on.
+  EXPECT_EQ(Describe(SplitMixedRomaji("github", dictionary, Inline()).front()), "E:GitHub(high)");
+  // A Shift capital first that the lattice leaves all J is still one E
+  // segment (section 6.1), as with the lattice off.
+  EXPECT_EQ(Describe(SplitMixedRomaji("Kyouha", dictionary, Inline()).front()), "E:Kyouha(high)");
+}
+
 }  // namespace

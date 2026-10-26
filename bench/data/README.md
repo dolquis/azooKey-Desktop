@@ -12,6 +12,17 @@
 [評価仕様 §4・§11](../../docs/conversion-quality-benchmark-spec.md) に従います。
 `conversion_quality_smoke.jsonl` は CTest 用の小さな入力で、フル評価の入力とは別です。
 
+`mixed_english_eval.jsonl` は M63 の日英混在の分割器の品質ゲート
+（[評価仕様 §4.4](../../docs/conversion-quality-benchmark-spec.md#44-日英混在の分割器ケース形式m63)）の入力です。
+混在文と、ローマ字として読める英単語を含む文は本リポジトリで書き起こし、日本語だけの文は
+`kana_kanji_eval.jsonl` の入力をローマ字に書き直したものです。英単語辞書は同梱の
+`data/english-words.tsv` をパスで参照し、このディレクトリには写しません。CTest
+`azookey_mixed_english_quality_gate` が次のように実行します。
+
+```powershell
+./build/windows-debug/bench/azookey_mixed_english_eval.exe --data bench/data/mixed_english_eval.jsonl --dictionary data/english-words.tsv
+```
+
 ## 評価の実行
 
 リポジトリのルートから、ビルド済みの `azookey_bench` を使います。

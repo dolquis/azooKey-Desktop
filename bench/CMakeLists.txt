@@ -61,6 +61,11 @@ add_executable(azookey_reverse_lookup_bench reverse_lookup_bench.cpp)
 target_link_libraries(azookey_reverse_lookup_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
+# M63-B section 15.2: the mixed lattice quality gate (no model).
+add_executable(azookey_mixed_english_eval mixed_english_eval.cpp)
+target_link_libraries(azookey_mixed_english_eval
+  PRIVATE azookey_host azookey_ipc azookey_project_options azookey_project_warnings
+)
 add_dependencies(azookey_zenzai_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_zenzai_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_zenzai_bench
@@ -170,6 +175,17 @@ if(AZOOKEY_BUILD_TESTS)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertConversionQualityOutput.cmake")
     set_tests_properties(azookey_conversion_quality_smoke PROPERTIES TIMEOUT 10)
   endif()
+  # The bundled dictionary is read in place by path, never copied into bench/data.
+  add_test(NAME azookey_mixed_english_quality_gate
+           COMMAND azookey_mixed_english_eval
+                   --data "${CMAKE_CURRENT_SOURCE_DIR}/data/mixed_english_eval.jsonl"
+                   --dictionary "${PROJECT_SOURCE_DIR}/data/english-words.tsv")
+  set_tests_properties(azookey_mixed_english_quality_gate PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"passed\":true"
+    # About 1.5 s in Debug (most of it reading the dictionary); coverage runs
+    # can be 60 times slower. Nothing here depends on time.
+    TIMEOUT 300
+  )
   add_test(NAME azookey_zenzai_bench_missing_model_output
            COMMAND "${CMAKE_COMMAND}"
                    "-DBENCH_EXE=$<TARGET_FILE:azookey_zenzai_bench>"

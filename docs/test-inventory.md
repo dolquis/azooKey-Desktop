@@ -43,7 +43,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/command_line_test.cpp` | wide 引数の UTF-8 変換、非 ASCII パス引数、未対 surrogate と null 引数の reject、パス境界のバイト保持 |
 | `core_tests` | `core/tests/redaction_test.cpp` | ユーザープロファイルパスの区切り・ドライブ差を跨ぐ正規化、既知 credential prefix の伏せ字化 |
 | `core_tests` | `core/tests/live_conversion_chunker_test.cpp` | ライブ変換の日本語スパンと逐語スパンの分割、UTF-8 encoded surrogate のバイト単位扱い、新規/追記/中間挿入/削除のプラン算出 |
-| `core_tests` | `core/tests/mixed_romaji_splitter_test.cpp` | M63-A の分割器が composition 全体を、英単語辞書に一致するか先頭が Shift のとき 1 つの E 区間にし（`kite` も E で低確度）、それ以外は内蔵表のかなの J 区間にすること、§8.1 の確度（Shift 先頭、かなに英字が残り辞書に一致）、§6.4 の表層（打鍵の大文字、辞書の最頻の表層）、辞書を小文字のキーで引くこと、辞書なしでは Shift だけが E になること、最小長と英字なしの入力が J のままになること、空・64 文字超・印字可能 ASCII 以外を分割しないこと（DEV-1686） |
+| `core_tests` | `core/tests/mixed_romaji_splitter_test.cpp` | M63-A の分割器が composition 全体を、英単語辞書に一致するか先頭が Shift のとき 1 つの E 区間にし（`kite` も E で低確度）、それ以外は内蔵表のかなの J 区間にすること、§8.1 の確度（Shift 先頭、かなに英字が残り辞書に一致）、§6.4 の表層（打鍵の大文字、辞書の最頻の表層）、辞書を小文字のキーで引くこと、辞書なしでは Shift だけが E になること、最小長と英字なしの入力が J のままになること、空・64 文字超・印字可能 ASCII 以外を分割しないこと（DEV-1686）。M63-B の混合ラティスが文を英単語の前後で分けること（`kyouhagithubnipushsita`）、日本語の文を J のまま残すこと、§6.3 のコスト（読める語の罰、不自然なかな、E の直後の J の母音と `ん`、Shift の大文字）、上位の経路の件数と順序と J の非連続、文中の E の最小長（3 文字、Shift は 2 文字）、既定で無効なことと高確度を落とすスイッチ（DEV-1687） |
 | `core_tests` | `core/tests/number_rewriter_test.cpp` | 数字読みの漢数字・大字・丸数字・ローマ数字展開と範囲制限、混在・不正読みの非展開、uint64 overflow 時の全候補 skip |
 | `core_tests` | `core/tests/katakana_rewriter_test.cpp` | 全角→半角カタカナの展開順、濁点・半濁点の分解と長音・ヲの写像、非対応かな混在時の半角抑止、不正 UTF-8 の reject |
 | `core_tests` | `core/tests/character_form_cycle_test.cpp` | ひらがなからカタカナ・半角カタカナ・全角英数・ASCII へ進む文字種循環と非対応入力の判定 |
@@ -182,6 +182,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_bench_ipc_smoke` | `azookey_bench` | `--ipc` のフェーズ別レイテンシ出力（serialize / framing / deserialize / pipe round-trip）とサンプル数 |
 | `azookey_trace_viewer_smoke` | `azookey_trace_viewer` | JSONL の phase 別 p50/p95/p99 と、不正行・欠損 phase のスキップ、JSON 出力 schema |
 | `azookey_bench_trace_smoke` | `azookey_bench` と `azookey_trace_viewer` | `--trace` 実行時の JSONL に `total` と Host の `model_inference` が出力され、viewer で集計できること |
+| `azookey_mixed_english_quality_gate` | `azookey_mixed_english_eval` | M63 §15.2 の分割器の品質ゲート: `bench/data/mixed_english_eval.jsonl` の全ケースが妥当（日本語の文の読みが内蔵表のかなと一致）で、同梱の英単語辞書で分割した先頭の経路の高確度の E 区間の適合率が 95% 以上、日本語だけの文に高確度の E 区間が無いこと（DEV-1687） |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
 | `azookey_nll_fixture_smoke` | `bench/BuildNllFixture.cmake` | NLL 実モデルテストが要求する辞書 fixture の生成（fixture setup） |
 | `azookey_nll_comparison_self_test` | `azookey_nll_bench --self-test` | モデルなしで NLL 比較器の行入れ替え、NaN / Inf、件数不一致の拒否、CPU 絶対誤差、同点と重複表層を検証 |

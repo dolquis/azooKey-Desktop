@@ -166,6 +166,8 @@ bool InferenceEngine::SaveLearningSnapshots(LearningSnapshots& snapshots) {
 
 void InferenceEngine::PublishLearningSnapshotsLocked(LearningSnapshots& snapshots) {
   for (auto& [target, snapshot] : snapshots) *target = std::move(snapshot);
+  // A forget or a reset may have removed M63-B negative observations.
+  ClearEnglishSuppressedCache();
   learning_erasure_in_progress_ = false;
   // A successful snapshot save already cleared dirty: this only clears the
   // burst counters, and performs no I/O. A failed save retains its retry state.
@@ -482,6 +484,8 @@ LearningImportResult InferenceEngine::ImportLearningData(
     auto stores = LearningDataStoresLocked();
     if (user_dict_copy) stores.user_dictionary = &*user_dict_copy;
     result = ApplyImportedItems(stores, selected, std::move(*items), policy);
+    // Before any return: a failed item may have left others applied.
+    ClearEnglishSuppressedCache();
     if (result.error != BackupError::None) return result;
     if (detail::LearningStoreSelected(selected, LearningDataStore::Learning)) {
       RefreshPersonaLocked();

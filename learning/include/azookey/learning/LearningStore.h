@@ -152,6 +152,12 @@ class LearningStore {
   // commit starts from scratch; Save leaves zeroed rows out of the file.
   // Returns false when the pair has no row.
   bool Forget(const std::string& reading, const std::string& surface);
+  // Replaces every app row of the pair with one global row holding `record`:
+  // an overwrite, not an event, so setting it again leaves one row. Values are
+  // bounded as a read file's are and the context hash is dropped. An empty
+  // reading or surface is ignored. M63-B's negative English observation
+  // (mixed-english-auto-conversion-spec section 11) is such a row.
+  void Set(const std::string& reading, const std::string& surface, const LearningRecord& record);
   // Removes the M7 rows of the pair from the M7 file, in the M7 format, so an
   // older Host never shows a forgotten pair (learning-data-management-spec
   // section 4.2). Every other line keeps its bytes. True when the file is

@@ -257,21 +257,48 @@ TEST(InputStateTest, SelectingCancelDiscardsInputAndCandidateCacheWithoutObserva
   }
 }
 
-TEST(InputStateTest, TypingWhileSelectingClosesWindowAndContinuesReading) {
-  const HandleResult result = Selecting().HandleEvent(Ev(UserAction::Input, U'k'));
+// DEV-1735: typing while Selecting commits the highlight like Enter (and is
+// observed like it), then the key starts a new reading as if typed from Idle.
+TEST(InputStateTest, TypingWhileSelectingCommitsTheHighlightAndStartsANewReading) {
+  const InputState selecting = Selecting().HandleEvent(Ev(UserAction::Down)).next;
+  const HandleResult result = selecting.HandleEvent(Ev(UserAction::Input, U'k'));
   EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.Reading(), "k");
   EXPECT_TRUE(result.next.candidates().empty());
+  EXPECT_EQ(result.next.selected_index(), 0u);
   EXPECT_EQ(result.actions,
-            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かな"}, CommitMarkedText{},
+                     ObserveCommit{"かな", "かな"}, ReplaceMarkedText{"k"}, QueryCandidates{"k"}}));
 }
 
-TEST(InputStateTest, TypingWhileSelectingWithLiveConversionReturnsToPreviewing) {
+TEST(InputStateTest, TypingWhileSelectingWithLiveConversionStartsPreviewing) {
   const HandleResult result =
       Selecting().WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k'));
   EXPECT_EQ(result.next.kind(), K::Previewing);
-  EXPECT_EQ(result.next.Reading(), "かなk");
+  EXPECT_EQ(result.next.Reading(), "k");
   EXPECT_EQ(result.actions,
-            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"仮名"}, CommitMarkedText{},
+                     ObserveCommit{"かな", "仮名"}, ReplaceMarkedText{"k"}, QueryCandidates{"k"}}));
+}
+
+TEST(InputStateTest, SymbolsLongVowelAndAlnumWhileSelectingAlsoCommitFirst) {
+  const struct {
+    UserActionEvent event;
+    const char* reading;
+  } cases[] = {
+      {Ev(UserAction::Input, U'-'), "ー"},     {Ev(UserAction::Input, U'/'), "/"},
+      {Ev(UserAction::Input, U'、'), "、"},    {Ev(UserAction::Input, U'。'), "。"},
+      {Ev(UserAction::InputAlnum, U'A'), "A"},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(c.reading);
+    const HandleResult result = Selecting().HandleEvent(c.event);
+    EXPECT_EQ(result.next.kind(), K::Composing);
+    EXPECT_EQ(result.next.Reading(), c.reading);
+    EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"仮名"},
+                                       CommitMarkedText{}, ObserveCommit{"かな", "仮名"},
+                                       ReplaceMarkedText{c.reading}, QueryCandidates{c.reading}}));
+  }
 }
 
 TEST(InputStateTest, ImportedCompositionPreservesPendingRomajiAndDiscardsCandidateCache) {

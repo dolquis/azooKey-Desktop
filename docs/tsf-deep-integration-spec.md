@@ -259,8 +259,12 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
 Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
 
-追加入力、Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
-へ戻してから次の編集を反映する。Esc は読みへ戻らず入力を取り消す
+Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
+へ戻してから次の編集を反映する。追加入力（英字・記号・長音・句読点）は、表示中 `surface` を
+Enter と同じく確定（学習観測も Enter と同じ）してから、そのキーで新しい composition を始める。
+一括変換の複数文節では、表示中の全文節を確定する。確定の edit session が拒否されて再試行を待つ間は、
+Enter の確定と同じく、打ったキーを消費して捨てる（次のキーが確定を再試行し、そのキーも消費する）。
+Esc は読みへ戻らず入力を取り消す
 （`docs/legacy-parity-spec.md` §1.2）。
 候補の `surface` を reading バッファへ書き戻してはならない。
 
@@ -615,6 +619,8 @@ preedit に取り込んだ記号は通常の Backspace と同じ削除対象と�
 設定 `punctuationConversion`（enum `off` / `commit`、既定 `off`、DEV-1638）が `commit` のとき、
 `、` または `。` のキーは、直前の読みを変換して句読点と一緒に確定する。
 `off` では §3.5 の挙動を変えない。
+候補窓の表示中に `off` で `、` `。` を押したときは、他の文字入力と同じく選択中の候補を確定し、
+句読点で新しい composition を始める（§2.4.1、`docs/legacy-parity-spec.md` §1.2）。
 
 - 確定する文字列は、読みの第 1 候補に句読点を続けたものとする。
   第 1 候補は次の順に決める。
@@ -631,6 +637,7 @@ preedit に取り込んだ記号は通常の Backspace と同じ削除対象と�
   フォーカス喪失、composition の終了、Deactivate では、Enter の保留（`docs/dynamic-punctuation-spec.md` §7.3）と同じく、待っている句読点キーを捨てる。
 - 次の場合は変換せず、`off` と同じく句読点を読みに足す。
   - 読みが空、または `、` `。` だけ（§3.5 の半角候補を残す）。
+    その候補窓の表示中に押した句読点は、選択中の候補を確定して新しい composition を始める（§2.4.1）。
   - `Selecting` 以外で、読みの末尾が数字（`3.14`、`1,000`）。
   - 一括変換（`docs/romaji-batch-conversion-spec.md`）の蓄積中、絵文字検索中、括弧入力中。
 - 数字リライターが ON でも、`Selecting` 以外の句読点キーは core の状態機械が扱う。

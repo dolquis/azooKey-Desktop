@@ -952,7 +952,7 @@ D-08 はスケールごとに記録し、D-09 は未実施・環境制約とし�
 ## アプリ別の結果（Notepad / Edge / VS Code）
 各行: ☐ Pass ☐ Fail ☐ 未実施
 
-- G1 候補選択と preedit の追従（↑↓ ごとの surface 切り替え、Enter と数字キーの確定一致、Esc / 追加入力 / Backspace での reading 復帰）
+- G1 候補選択と preedit の追従（↑↓ ごとの surface 切り替え、Enter と数字キーの確定一致、Backspace での reading 復帰、追加入力で選択中の候補を確定して次の入力を始める（DEV-1735）、Esc 1 回での取り消し）
   - Notepad: / Edge: / VS Code:
 - G2 明示句読点と `/`（preedit への `、` `。` 挿入、未変換強制確定が起きない、`/` 後の Backspace 整合、preedit 無しでのパススルー）
   - Notepad: / Edge: / VS Code:

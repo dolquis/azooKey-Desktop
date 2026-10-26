@@ -407,6 +407,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   const core::InputState& input_state_for_test() const { return input_state_; }
+  bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
   void set_number_rewriter_enabled_for_test(bool enabled) {
@@ -819,6 +820,9 @@ class TextService final : public ITfTextInputProcessorEx,
 #endif
   // Set while an off key commits the shown text through the Enter path.
   bool commit_before_close_{false};
+  // Set while OnKeyDown handles the same key again after committing the
+  // shown selection (DEV-1735).
+  bool retyping_after_commit_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 

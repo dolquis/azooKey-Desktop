@@ -6366,28 +6366,6 @@ TEST(TsfTipOnKeyDownPreeditTest, CtrlBindingsEditReadingAndMoveCandidates) {
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, TypingAfterCandidateSelectionRestoresReadingBeforeAppending) {
-  TextServiceHarness h;
-  FakeCompositionAttachment attachment(h);
-
-  EXPECT_TRUE(h.Press('K'));
-  EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, "か");
-
-  std::vector<azookey::ipc::CandidateField> candidates(2);
-  candidates[0].surface = "蚊";
-  candidates[1].surface = "科";
-  EXPECT_TRUE(PressSpaceAndDeliver(
-      h, [&] { h.service.set_cached_candidates_for_test(std::move(candidates)); }));
-  EXPECT_TRUE(h.Press(VK_DOWN));
-  EXPECT_EQ(attachment.composition_range.last_text, L"科");
-  EXPECT_EQ(h.service.preedit_kana_, "か");
-
-  EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(attachment.composition_range.last_text, L"かあ");
-  EXPECT_EQ(h.service.preedit_kana_, "かあ");
-}
-
 TEST(TsfTipOnKeyDownPreeditTest, BackspaceAfterCandidateSelectionEditsReading) {
   TextServiceHarness h;
   FakeCompositionAttachment attachment(h);
@@ -11668,6 +11646,192 @@ TEST(TsfTipPunctuationConversionTest, SelectingCommitsTheHighlightedCandidate) {
   const auto observation = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(observation.has_value());
   EXPECT_EQ(observation->chosen.surface, "転機");
+}
+
+// DEV-1735: a key typed while the candidate window is shown commits the
+// highlighted candidate, observed like Enter, and starts the next composition.
+namespace {
+std::vector<azookey::ipc::CandidateField> TenkiWindowCandidates() {
+  return {ModelField("天気", "てんき"), ModelField("転機", "てんき")};
+}
+
+// Opens the window for てんき and highlights 転機. The legacy pre-processing
+// (number rewriter) opens it from the per-key cache; the core and rewriter
+// Space paths open it from the window query's answer.
+void SelectTenkiSecond(DocumentPreeditHarness& h, bool from_cache) {
+  for (const WPARAM key : {WPARAM{'T'}, WPARAM{'E'}, WPARAM{'N'}, WPARAM{'K'}, WPARAM{'I'}})
+    ASSERT_TRUE(h.Press(key));
+  h.service.mark_pending_ipc_query_sent_for_test();
+  if (from_cache) {
+    h.service.set_cached_candidates_for_test(TenkiWindowCandidates());
+    ASSERT_TRUE(h.Press(VK_SPACE));
+  } else {
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(TenkiWindowCandidates()); }));
+  }
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_EQ(h.context.document->text, L"転機");
+}
+
+void ExpectTenkiSecondCommittedOnce(DocumentPreeditHarness& h) {
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 1u);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "てんき");
+  EXPECT_EQ(observation->chosen.surface, "転機");
+}
+}  // namespace
+
+TEST(TsfTipCommitOnTypeTest, LetterCommitsTheHighlightAndStartsTheNextReading) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting);
+  ASSERT_TRUE(h.Press('H'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"転機は");
+  EXPECT_EQ(h.service.preedit_kana_, "は");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  ExpectTenkiSecondCommittedOnce(h);
+}
+
+TEST(TsfTipCommitOnTypeTest, MarkWithConversionOffCommitsAndStartsWithTheMark) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.context.document->text, L"転機、");
+  EXPECT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  ExpectTenkiSecondCommittedOnce(h);
+}
+
+// A refused commit waits for its retry like Enter's: the key that asked for it
+// is dropped, and so is the next key, which retries the commit.
+TEST(TsfTipCommitOnTypeTest, KeysWhileTheCommitWaitsForRetryAreDropped) {
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter ? "pre-processing path" : "core path");
+    DocumentPreeditHarness h;
+    StartPunctuationConversion(h, false);
+    h.service.set_number_rewriter_enabled_for_test(number_rewriter);
+    SelectTenkiSecond(h, /*from_cache=*/number_rewriter);
+    h.context.reject_write = true;
+    ASSERT_TRUE(h.Press('H'));
+    EXPECT_TRUE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"転機");
+    h.context.reject_write = false;
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"転機");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+TEST(TsfTipCommitOnTypeTest, BackspaceStillReturnsToTheReading) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"てん");
+  EXPECT_EQ(h.service.preedit_kana_, "てん");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+// The TIP pre-processing paths (number rewriter, rewriter Space) used to close
+// the window and append to the reading on their own. A custom romaji key only
+// reaches its branch while the window is shown as a digit beyond the count.
+TEST(TsfTipCommitOnTypeTest, PreprocessedPathsCommitTheHighlightFirst) {
+  enum class Path { NumberRewriter, SymbolRewriter, English };
+  struct Case {
+    const char* name;
+    Path path;
+    WPARAM key;
+    const wchar_t* document;
+  };
+  for (const auto& item :
+       {Case{"number: letter", Path::NumberRewriter, 'A', L"転機あ"},
+        Case{"number: long vowel", Path::NumberRewriter, VK_OEM_MINUS, L"転機ー"},
+        Case{"number: mark", Path::NumberRewriter, VK_OEM_COMMA, L"転機、"},
+        Case{"number: slash", Path::NumberRewriter, VK_OEM_2, L"転機/"},
+        Case{"symbol rewriter: letter", Path::SymbolRewriter, 'A', L"転機あ"},
+        Case{"symbol rewriter: slash", Path::SymbolRewriter, VK_OEM_2, L"転機/"},
+        Case{"english: letter", Path::English, 'A', L"転機あ"}}) {
+    SCOPED_TRACE(item.name);
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h, false);
+    h.service.set_number_rewriter_enabled_for_test(item.path == Path::NumberRewriter);
+    h.service.set_symbol_rewriter_for_test(item.path == Path::SymbolRewriter);
+    h.service.set_english_candidates_for_test(item.path == Path::English);
+    SelectTenkiSecond(h, /*from_cache=*/item.path == Path::NumberRewriter);
+    ASSERT_TRUE(h.Press(item.key));
+    EXPECT_EQ(h.context.document->text, item.document);
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    EXPECT_FALSE(h.service.committing_);
+    ExpectTenkiSecondCommittedOnce(h);
+    // The key began a composition, so Backspace edits it instead of taking
+    // back the committed word (DEV-1529).
+    ASSERT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.context.document->text, L"転機");
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitCorrection), 0u);
+  }
+}
+
+// The romaji typed for the committed word must not stay in front of the next
+// one, or the Space query for it loses its English candidates (M60).
+TEST(TsfTipCommitOnTypeTest, NextWordSendsOnlyItsOwnTypedRomaji) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  h.service.set_english_candidates_for_test(true);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"転機きて");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kite");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+// The core Selecting path commits in the same result: the commit clears the
+// typed romaji, which must then start again from the key (M60).
+TEST(TsfTipCommitOnTypeTest, CoreSelectingKeepsTheFirstKeyOfTheNextWord) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  h.service.set_english_candidates_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'I'}, WPARAM{'T'}, WPARAM{'E'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"転機きて");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "kite");
+  EXPECT_TRUE(h.service.pending_ipc_english_candidates_for_test());
+}
+
+TEST(TsfTipCommitOnTypeTest, BatchLetterCommitsEverySegmentAndStartsANewBatch) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'I'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_cached_batch_segments_for_test(
+      {{"か", {ModelField("蚊", "か"), ModelField("科", "か")}}, {"に", {ModelField("二", "に")}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_EQ(h.context.document->text, L"科二");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"科二か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  EXPECT_FALSE(h.service.core_input_active_for_test());
+  // One observation per segment, as Enter sends without the segments capability.
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 2u);
 }
 
 TEST(TsfTipPunctuationConversionTest, LiveSurfaceReplacesItsTrailingAutomaticMark) {

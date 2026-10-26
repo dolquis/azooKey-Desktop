@@ -797,6 +797,11 @@ OFF のまま）。
   計測・レポート生成の失敗はジョブと `advisory-summary` に表示する。
   `ci-gate` はこのジョブの完了を待たず、結果を合否判定に含めない
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
+- M63 の分割器の品質ゲート — CTest `azookey_mixed_english_quality_gate` が
+  `bench/data/mixed_english_eval.jsonl` と同梱の英単語辞書で、`docs/mixed-english-auto-conversion-spec.md`
+  §15.2 の分割器の指標を確かめる（モデルは使わない）。期待する表層は辞書の最頻の表層に従うので、
+  `data/english-words.tsv` を更新したら `python3 scripts/generate_mixed_english_eval.py` で評価セットを
+  作り直す
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
   含む非テスト target を `windows-no-tests` preset で継続検証する
@@ -2464,7 +2469,8 @@ M46 の secure 表示と同時に出すときの並びは
   IPC ワーカーとは別のスレッドから、Cancel と同じく Handshake を済ませた短命な control 接続
   （§7.3）で送り、primary 接続の入力処理を待たせない。応答は control 接続で待ってから閉じ、
   待ちの上限は §8.5.2 の Model load とする。送信中は同じ TIP インスタンスから重ねて送らず、
-  [再試行] を押せない状態にする。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
+  [再試行] を押せない状態にする。入力インジケーターのメニューでライブ変換を切り替えたときも同じ経路で送り
+  （`docs/tsf-deep-integration-spec.md` §4.5）、送信中なら重ねて送らない。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
   結果は §8.5.1 の契機で取得する `fallback_state` で観測する
 - `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
   [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する

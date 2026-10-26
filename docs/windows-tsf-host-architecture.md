@@ -305,7 +305,7 @@ Linear が持つ。
 - 設定の正典スキーマは `settings/mvp-settings.schema.json`。`inference-host` の
   `SettingsStore` は起動時に `%LOCALAPPDATA%\azooKey\config\settings.json` を読み、
   未指定キーを schema default にフォールバックして提供する。
-- `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
+- `settings.json` はファイル正典とし、設定アプリと TIP（モデルの再試行、入力インジケーターのメニュー）からの IPC `UpdateConfig` は payload 空の
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
 - `HandshakeResponse` が載せる TIP 向け設定（batch 変換モード、句読点方針、rewriter、
   `maxCandidates`）は、応答を作る直前に `settings.json` の更新時刻を見て、読み込み済みの
@@ -356,7 +356,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
 | `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
-| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
+| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3）、TIP（入力インジケーターのメニューによる `liveConversion` / `predictionEnabled` の 2 キーだけ。`docs/tsf-deep-integration-spec.md` §4.5） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
@@ -369,7 +369,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json.enc` 自体は変更しない。`user_dict.json.enc` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリと、SafeMode 記録・ベンチマーク履歴追記を行う Host である。Host は同じファイルロックの下でディスク上の内容へ対象キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` と `model.benchmarkHistory` を保つ。履歴の形式・保持規則は `model-management-spec.md` §7.1 に従う。
+- `settings.json` を保存するのは設定アプリと、SafeMode 記録・ベンチマーク履歴追記を行う Host と、入力インジケーターのメニューでライブ変換・予測を切り替える TIP である。TIP も Host と同じく、同じファイルロックの下で対象の 1 キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えず隔離もしない。ロックが取れなければ書かない。Host は同じファイルロックの下でディスク上の内容へ対象キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` と `model.benchmarkHistory` を保つ。履歴の形式・保持規則は `model-management-spec.md` §7.1 に従う。
   どちらも mutator である。
   設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。
   ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。

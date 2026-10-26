@@ -49,6 +49,14 @@ VM なら失敗しても復元で済む。
 エージェントが受け持つのは、ログの整理、結果の照合、検証メモの下書きである。
 エージェントが Computer Use で打鍵するのは、§4.1 の条件を満たす許可制の例外に限る。
 
+始める前に次をそろえる。
+
+1. **Microsoft IME を残す。** azooKey で入力できなくなったときの戻り先になる。
+2. **秘密情報を azooKey で入力しない。** secure 入力の抑止そのものを確かめる課題でも、実在しないダミーの文字列だけを使う。パスワードや API キーは Microsoft IME か直接入力で入れる。
+3. **成果物を Release 構成にそろえる。** [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「ホスト側の準備」と同じ手順で検証 zip を作り、開発機の作業ディレクトリへ展開する。課題が求める commit から作り、検証メモに commit を記録する。
+4. **既存の登録を確かめる。** 普段の開発で `build\` 配下の TIP を登録している場合は、`unregister-dev.ps1` で先に解除する。2 つの登録を重ねると、どちらの DLL が効いているか判別できない（[`parallel-worktree-runbook.md`](./parallel-worktree-runbook.md)）。
+5. **ユーザーデータを退避する。** `%LOCALAPPDATA%\azooKey` があれば、フォルダごと別の場所へコピーする。展開した検証 zip の `learning-data-snapshot.ps1 -Label before` で、開始時の状態も記録しておく。記録は作業ディレクトリの `learning-data-snapshots.json` に追記されるので、§6 でも同じディレクトリから実行する。
+
 ### 4.1 エージェントによる打鍵（許可制）
 
 ユーザーが対象のセッションと時間を明示して許可した場合に限り、エージェントが Computer Use でキーを送ってよい。許可が無いときは V6 と同じく VM で行う。TIP の登録・解除と Host の停止は、この場合も人が行う。
@@ -73,14 +81,6 @@ VM なら失敗しても復元で済む。
 - 合否に使えるのは、TIP のログ（`candidate_ui_begin` など）で TSF 経路への到達が分かり、かつ打鍵の結果を機械で照合できる項目だけである。
 - 目視が要る項目、上の制約に当たる項目は、人が判定する。
 - 検証メモには、エージェントが打鍵した項目に「エージェントの観測」と明記する。
-
-始める前に次をそろえる。
-
-1. **Microsoft IME を残す。** azooKey で入力できなくなったときの戻り先になる。
-2. **秘密情報を azooKey で入力しない。** secure 入力の抑止そのものを確かめる課題でも、実在しないダミーの文字列だけを使う。パスワードや API キーは Microsoft IME か直接入力で入れる。
-3. **成果物を Release 構成にそろえる。** [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「ホスト側の準備」と同じ手順で検証 zip を作り、開発機の作業ディレクトリへ展開する。課題が求める commit から作り、検証メモに commit を記録する。
-4. **既存の登録を確かめる。** 普段の開発で `build\` 配下の TIP を登録している場合は、`unregister-dev.ps1` で先に解除する。2 つの登録を重ねると、どちらの DLL が効いているか判別できない（[`parallel-worktree-runbook.md`](./parallel-worktree-runbook.md)）。
-5. **ユーザーデータを退避する。** `%LOCALAPPDATA%\azooKey` があれば、フォルダごと別の場所へコピーする。展開した検証 zip の `learning-data-snapshot.ps1 -Label before` で、開始時の状態も記録しておく。記録は作業ディレクトリの `learning-data-snapshots.json` に追記されるので、§6 でも同じディレクトリから実行する。
 
 ## 5. 開発機での手順
 

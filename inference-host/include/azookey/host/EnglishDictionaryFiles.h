@@ -123,7 +123,18 @@ struct EnglishDictionaryPaths {
   // english-words.tsv -> english-words.bin / .delta.bin / .added.bin / .lock
   // (4.5 to 4.8).
   static EnglishDictionaryPaths From(const std::filesystem::path& configured);
+  // DEV-1740 (section 4.5): the TSV the MSI installs, read in place, with this
+  // Host's files beside the default path under another name
+  // (english-words.bundled.bin / .delta.bin / .added.bin / .lock), so they are
+  // never taken for files the user put there.
+  static EnglishDictionaryPaths Bundled(const std::filesystem::path& default_path,
+                                        const std::filesystem::path& bundled_tsv);
 };
+
+// DEV-1740: <directory of the running executable>\data\english-words.tsv,
+// where the MSI installs the initial dictionary (section 4.4). Empty when the
+// executable path is unknown.
+std::filesystem::path BundledEnglishDictionaryPath();
 
 // The steps of the section 4.7 write protocols, in the order they happen.
 enum class EnglishWriteStep {

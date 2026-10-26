@@ -4680,6 +4680,136 @@ class EngineConfirmedEnglishWordTest : public ::testing::Test {
   std::unique_ptr<azookey::host::InferenceEngine> engine_;
 };
 
+// DEV-1740 (inline-english-candidate-spec section 4.5): with the default path
+// and neither its TSV nor its .bin in the user folder, the Host reads the TSV
+// the MSI puts in <install>\data and keeps its own files beside the default
+// path under english-words.bundled.*, never beside the bundled TSV.
+TEST(EngineBundledEnglishDictionaryTest, DefaultPathFallsBackToTheBundledTsv) {
+  ScopedTempDirectory temp;
+  const auto install = std::filesystem::path(temp.File("install")) / "data";
+  const auto user = std::filesystem::path(temp.File("user")) / "dict";
+  std::filesystem::create_directories(install);
+  const auto bundled = install / "english-words.tsv";
+  std::ofstream(bundled, std::ios::binary) << "apple\t50\nGitHub\t40\tproper\n";
+  const auto default_path = (user / "english-words.tsv").string();
+
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.english.dictionary_enabled = true;
+  cfg.english.dictionary_path = default_path;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetBundledEnglishDictionaryForTests(bundled, default_path);
+
+  ASSERT_EQ(engine->LookupEnglishDictionary("apple").size(), 1u);
+  EXPECT_EQ(engine->LookupEnglishDictionary("github").front().surface, "GitHub");
+  EXPECT_TRUE(std::filesystem::exists(user / "english-words.bundled.bin"));
+  EXPECT_FALSE(std::filesystem::exists(user / "english-words.bin"));
+  EXPECT_FALSE(std::filesystem::exists(user / "english-words.tsv"));
+  // Nothing is written beside the bundled TSV (Program Files is read-only).
+  size_t install_files = 0;
+  for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator(install))
+    ++install_files;
+  EXPECT_EQ(install_files, 1u);
+
+  // An upgrade replaces the bundled TSV: its new words are read.
+  std::ofstream(bundled, std::ios::binary | std::ios::trunc) << "kotlin\t30\n";
+  std::filesystem::last_write_time(
+      bundled, std::filesystem::last_write_time(bundled) + std::chrono::hours(1));
+  EXPECT_EQ(engine->LookupEnglishDictionary("kotlin").size(), 1u);
+  EXPECT_TRUE(engine->LookupEnglishDictionary("apple").empty());
+
+  // The user's own TSV wins over the bundled one.
+  std::ofstream(user / "english-words.tsv", std::ios::binary) << "rust\t20\n";
+  EXPECT_EQ(engine->LookupEnglishDictionary("rust").size(), 1u);
+  EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
+}
+
+// Runtime additions made while the bundled TSV is in use go to
+// english-words.bundled.*, and a retract or an AutoWord reset reaches them even
+// while the user's own dictionary is in use (section 4.5).
+TEST(EngineBundledEnglishDictionaryTest, RuntimeAdditionsOnTheBundledSideAreErasedFromEither) {
+  ScopedTempDirectory temp;
+  const auto install = std::filesystem::path(temp.File("install"));
+  const auto user = std::filesystem::path(temp.File("user"));
+  std::filesystem::create_directories(install);
+  const auto bundled = install / "english-words.tsv";
+  std::ofstream(bundled, std::ios::binary) << "apple\t50\n";
+  const auto default_path = (user / "english-words.tsv").string();
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
+                                              &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.english.dictionary_enabled = true;
+  cfg.english.dictionary_path = default_path;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+  engine->SetBundledEnglishDictionaryForTests(bundled, default_path);
+
+  ASSERT_EQ(engine->LookupEnglishDictionary("apple").size(), 1u);
+  ASSERT_TRUE(engine->RegisterConfirmedEnglishWord("Kotlin", "test"));
+  EXPECT_EQ(engine->LookupEnglishDictionary("kotlin").size(), 1u);
+  EXPECT_TRUE(std::filesystem::exists(user / "english-words.bundled.added.bin"));
+  EXPECT_FALSE(std::filesystem::exists(user / "english-words.added.bin"));
+  EXPECT_TRUE(engine->RetractRejectedEnglishWord("Kotlin", "test"));
+  EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
+  ASSERT_TRUE(engine->RegisterConfirmedEnglishWord("Kotlin", "test"));
+  ASSERT_EQ(engine->LookupEnglishDictionary("kotlin").size(), 1u);
+
+  // The user's own TSV takes over; the reset still erases the bundled side.
+  std::ofstream(user / "english-words.tsv", std::ios::binary) << "rust\t20\n";
+  ASSERT_EQ(engine->LookupEnglishDictionary("rust").size(), 1u);
+  ASSERT_EQ(engine->ResetLearningStore(azookey::host::LearningDataStore::AutoWord),
+            azookey::host::InferenceEngine::ResetOutcome::Reset);
+
+  // Without the user's TSV and .bin the bundled TSV is back, without Kotlin.
+  std::filesystem::remove(user / "english-words.tsv");
+  std::filesystem::remove(user / "english-words.bin");
+  EXPECT_EQ(engine->LookupEnglishDictionary("apple").size(), 1u);
+  EXPECT_TRUE(engine->LookupEnglishDictionary("kotlin").empty());
+}
+
+TEST(EngineBundledEnglishDictionaryTest, OnlyTheDefaultPathWithoutUserFilesFallsBack) {
+  ScopedTempDirectory temp;
+  const auto install = std::filesystem::path(temp.File("install"));
+  const auto user = std::filesystem::path(temp.File("user"));
+  std::filesystem::create_directories(install);
+  std::filesystem::create_directories(user);
+  const auto bundled = install / "english-words.tsv";
+  std::ofstream(bundled, std::ios::binary) << "apple\t50\n";
+  const auto default_path = (user / "english-words.tsv").string();
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  const auto engine_for = [&](const std::string& configured) {
+    azookey::host::EngineConfig cfg;
+    cfg.english.dictionary_enabled = true;
+    cfg.english.dictionary_path = configured;
+    auto engine = MakeEngine(store, cfg);
+    engine->SetBundledEnglishDictionaryForTests(bundled, default_path);
+    return engine;
+  };
+  // A path the user set that has no file stays without a dictionary.
+  EXPECT_TRUE(engine_for((user / "custom.tsv").string())->LookupEnglishDictionary("apple").empty());
+
+  // A user .bin without a TSV (section 4.5) is the user's dictionary.
+  {
+    const auto user_tsv = user / "english-words.tsv";
+    std::ofstream(user_tsv, std::ios::binary) << "swift\t10\n";
+    ASSERT_EQ(azookey::host::EnglishDictionaryStore(user_tsv).Lookup("swift").size(), 1u);
+    std::filesystem::remove(user_tsv);
+    ASSERT_TRUE(std::filesystem::exists(user / "english-words.bin"));
+  }
+  const auto with_bin = engine_for(default_path);
+  EXPECT_EQ(with_bin->LookupEnglishDictionary("swift").size(), 1u);
+  EXPECT_TRUE(with_bin->LookupEnglishDictionary("apple").empty());
+
+  // Without a bundled TSV either, there is no dictionary.
+  std::filesystem::remove(user / "english-words.bin");
+  std::filesystem::remove(bundled);
+  EXPECT_TRUE(engine_for(default_path)->LookupEnglishDictionary("apple").empty());
+}
+
 TEST_F(EngineConfirmedEnglishWordTest, OnlyNewAsciiLetterWordsAreUpsertedWithTheLowestFrequency) {
   engine_->RegisterConfirmedEnglishWord("Kotlin", "test");
   const auto kotlin = Lookup("kotlin");

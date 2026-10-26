@@ -14,6 +14,10 @@
 
 namespace azookey::host {
 
+// The default of inlineEnglishDictionaryPath (section 4.4).
+inline constexpr const char* kDefaultEnglishDictionaryPath =
+    "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv";
+
 // M60 inline English candidates (docs/inline-english-candidate-spec.md).
 // Settings keys inlineEnglish* / fullWidthEnglishCandidate (section 7).
 struct EnglishCandidateConfig {

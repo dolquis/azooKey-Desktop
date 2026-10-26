@@ -355,6 +355,11 @@ class InferenceEngine {
   bool AddUserWord(const learning::UserWord& word, const UserDictionaryEditOptions& options = {});
   bool RemoveUserWord(const std::string& word, const std::string& ruby,
                       const UserDictionaryEditOptions& options = {});
+  // Test-only (DEV-1740): the bundled TSV and the configured path that counts
+  // as the default, in place of <exe>\data\english-words.tsv and
+  // kDefaultEnglishDictionaryPath. Set it before the first lookup.
+  void SetBundledEnglishDictionaryForTests(std::filesystem::path bundled_tsv,
+                                           std::string default_path);
   // Test-only: runs when an edit or an import holds user_dict_writer_mutex_
   // and is about to wait for the user dictionary file lock. Set it before
   // any edit starts.
@@ -542,6 +547,11 @@ class InferenceEngine {
   bool NoteObservationIdLocked(const std::string& observation_id);
   // The dictionary store for the path; it reloads when its files change.
   std::shared_ptr<EnglishDictionaryStore> EnglishDictionaryFor(const std::string& utf8_path);
+  // DEV-1740: the stores a reset or a retract reaches, the one in use first.
+  // With the default path, also the side not in use (the user's files or
+  // english-words.bundled.*) when it holds runtime additions.
+  std::vector<std::shared_ptr<EnglishDictionaryStore>> EnglishDictionariesToErase(
+      const std::string& utf8_path);
   // DEV-1600: the AutoWord reset's erasure of the English dictionary's
   // runtime additions. true when there is nothing to erase.
   bool ResetEnglishRuntimeAdditions();
@@ -618,7 +628,11 @@ class InferenceEngine {
   // The dictionary cache has its own lock so a reload never blocks learning.
   std::mutex english_dictionary_mutex_;
   std::shared_ptr<EnglishDictionaryStore> english_dictionary_;
+  // The store's key: the configured path, or the bundled base (DEV-1740).
   std::filesystem::path english_dictionary_path_;
+  // DEV-1740: read under english_dictionary_mutex_.
+  std::filesystem::path bundled_english_dictionary_{BundledEnglishDictionaryPath()};
+  std::string default_english_dictionary_path_{kDefaultEnglishDictionaryPath};
   // DEV-1600: raised by each successful AutoWord reset; an English upsert for
   // a word confirmed under an older value is cancelled.
   std::atomic<uint64_t> english_registration_epoch_{0};

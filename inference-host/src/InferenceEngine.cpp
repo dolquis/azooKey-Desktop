@@ -321,12 +321,33 @@ std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
   const auto path = ExpandLocalAppDataPrefix(utf8_path);
   if (!path) return nullptr;
   std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
-  if (english_dictionary_ && english_dictionary_path_ == *path) return english_dictionary_;
+  // DEV-1740 (section 4.5): the default path without the user's TSV or .bin
+  // reads the TSV the MSI installed; the user's files win as soon as they
+  // appear.
+  std::optional<EnglishDictionaryPaths> bundled;
+  if (utf8_path == default_english_dictionary_path_ && !bundled_english_dictionary_.empty()) {
+    // Only files known to be absent count: an error (access denied) keeps the
+    // user's path.
+    const auto absent = [](const std::filesystem::path& file) {
+      std::error_code ec;
+      return !std::filesystem::exists(file, ec) && !ec;
+    };
+    std::error_code ec;
+    const auto own = EnglishDictionaryPaths::From(*path);
+    if (absent(own.tsv) && absent(own.base) &&
+        std::filesystem::is_regular_file(bundled_english_dictionary_, ec)) {
+      bundled = EnglishDictionaryPaths::Bundled(*path, bundled_english_dictionary_);
+      // Its .bin is a cache: without the folder the TSV is read into memory.
+      std::filesystem::create_directories(path->parent_path(), ec);
+    }
+  }
+  const auto key = bundled ? bundled->base : *path;
+  if (english_dictionary_ && english_dictionary_path_ == key) return english_dictionary_;
   // A missing, unreadable or unparseable dictionary leaves only the baseline
   // forms (section 4.2: s_dict stays 0). The store reloads on its own when the
   // TSV, the .bin or the overlay changes.
-  english_dictionary_ = std::make_shared<EnglishDictionaryStore>(
-      *path, [this](const EnglishDictionaryLoadReport& report) {
+  auto listener =
+      [this](const EnglishDictionaryLoadReport& report) {
         if (!runtime_logger_) return;
         // Counts only: never the dictionary's words or its path (section 4.4).
         runtime_logger_->Log(report.ok && report.stats.skipped_lines == 0 && !report.stats.truncated
@@ -338,9 +359,49 @@ std::shared_ptr<EnglishDictionaryStore> InferenceEngine::EnglishDictionaryFor(
                               {"entries", static_cast<uint64_t>(report.entries)},
                               {"skipped_lines", static_cast<uint64_t>(report.stats.skipped_lines)},
                               {"truncated", report.stats.truncated}});
-      });
-  english_dictionary_path_ = *path;
+      };
+  english_dictionary_ = bundled ? std::make_shared<EnglishDictionaryStore>(*bundled, listener)
+                                : std::make_shared<EnglishDictionaryStore>(*path, listener);
+  english_dictionary_path_ = key;
   return english_dictionary_;
+}
+
+void InferenceEngine::SetBundledEnglishDictionaryForTests(std::filesystem::path bundled_tsv,
+                                                          std::string default_path) {
+  std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
+  bundled_english_dictionary_ = std::move(bundled_tsv);
+  default_english_dictionary_path_ = std::move(default_path);
+  english_dictionary_.reset();
+  english_dictionary_path_.clear();
+}
+
+std::vector<std::shared_ptr<EnglishDictionaryStore>> InferenceEngine::EnglishDictionariesToErase(
+    const std::string& utf8_path) {
+  std::vector<std::shared_ptr<EnglishDictionaryStore>> stores;
+  const auto active = EnglishDictionaryFor(utf8_path);
+  if (active) stores.push_back(active);
+  std::filesystem::path bundled_tsv;
+  {
+    std::lock_guard<std::mutex> lock(english_dictionary_mutex_);
+    if (utf8_path != default_english_dictionary_path_) return stores;
+    bundled_tsv = bundled_english_dictionary_;
+  }
+  const auto path = ExpandLocalAppDataPrefix(utf8_path);
+  if (!path || bundled_tsv.empty()) return stores;
+  // DEV-1740 (section 4.5): with the default path, runtime additions may sit
+  // in the user's files and in english-words.bundled.* alike; the side not in
+  // use is reached when it holds any (or cannot be checked).
+  for (auto& paths :
+       {EnglishDictionaryPaths::From(*path), EnglishDictionaryPaths::Bundled(*path, bundled_tsv)}) {
+    if (active && active->paths().base == paths.base) continue;
+    const auto present = [](const std::filesystem::path& file) {
+      std::error_code ec;
+      return std::filesystem::exists(file, ec) || ec;
+    };
+    if (!present(paths.journal) && !present(paths.overlay)) continue;
+    stores.push_back(std::make_shared<EnglishDictionaryStore>(paths));
+  }
+  return stores;
 }
 
 bool InferenceEngine::SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget) {
@@ -672,26 +733,28 @@ bool InferenceEngine::RetractRejectedEnglishWord(const std::string& surface,
     auto_words = auto_word_store_;
   }
   if (path.empty()) return false;
-  const auto dictionary = EnglishDictionaryFor(path);
-  if (!dictionary) return false;
   // The dictionary is keyed by surface alone: another reading still
   // Confirmed keeps the word. Asked under the update mutex, as the upsert
   // of a confirmation is, so neither overtakes the other.
   const auto still_rejected = [&] {
     return !auto_words || !HasConfirmedSurface(*auto_words, surface);
   };
-  const auto result = dictionary->Retract(surface, still_rejected);
-  if (runtime_logger_) {
-    // Never the word itself.
-    runtime_logger_->Log(
-        result == EnglishRetractResult::Failed || result == EnglishRetractResult::MemoryOnly
-            ? logging::RuntimeLogLevel::Warn
-            : logging::RuntimeLogLevel::Info,
-        "english_dictionary_retract",
-        {{"source", logging::RuntimeLogSafeText(std::string(source))},
-         {"result", logging::RuntimeLogSafeText(EnglishRetractResultName(result))}});
+  bool attempted = false;
+  for (const auto& dictionary : EnglishDictionariesToErase(path)) {
+    const auto result = dictionary->Retract(surface, still_rejected);
+    if (runtime_logger_) {
+      // Never the word itself.
+      runtime_logger_->Log(
+          result == EnglishRetractResult::Failed || result == EnglishRetractResult::MemoryOnly
+              ? logging::RuntimeLogLevel::Warn
+              : logging::RuntimeLogLevel::Info,
+          "english_dictionary_retract",
+          {{"source", logging::RuntimeLogSafeText(std::string(source))},
+           {"result", logging::RuntimeLogSafeText(EnglishRetractResultName(result))}});
+    }
+    attempted = attempted || result != EnglishRetractResult::NotAdded;
   }
-  return result != EnglishRetractResult::NotAdded;
+  return attempted;
 }
 
 size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()>& stop,
@@ -728,14 +791,17 @@ size_t InferenceEngine::BackfillConfirmedEnglishWords(const std::function<bool()
     std::lock_guard<std::mutex> lock(state_mutex_);
     path = config_.english.dictionary_path;
   }
-  const auto dictionary = rejected.empty() || path.empty() ? nullptr : EnglishDictionaryFor(path);
   std::vector<std::string> journaled;
-  if (dictionary) {
+  const auto dictionaries = rejected.empty() || path.empty()
+                                ? std::vector<std::shared_ptr<EnglishDictionaryStore>>{}
+                                : EnglishDictionariesToErase(path);
+  for (const auto& dictionary : dictionaries) {
     const auto journal = LoadEnglishJournal(dictionary->paths().journal);
     std::set<std::pair<std::string, std::string>> seen;
     for (auto it = journal.contents.ops.rbegin(); it != journal.contents.ops.rend(); ++it) {
       if (!seen.insert({it->key, it->surface}).second) continue;
-      if (it->kind == EnglishOverlayOpKind::Upsert && rejected.count(it->surface) > 0) {
+      if (it->kind == EnglishOverlayOpKind::Upsert && rejected.count(it->surface) > 0 &&
+          std::find(journaled.begin(), journaled.end(), it->surface) == journaled.end()) {
         journaled.push_back(it->surface);
       }
     }
@@ -761,9 +827,9 @@ bool InferenceEngine::ResetEnglishRuntimeAdditions() {
   // Without a configured dictionary no runtime op was ever written. Not
   // gated on inlineEnglishDictionary: files written while it was on remain.
   if (path.empty()) return true;
-  const auto dictionary = EnglishDictionaryFor(path);
-  if (!dictionary) return true;
-  const bool ok = dictionary->ResetRuntimeAdditions();
+  bool ok = true;
+  for (const auto& dictionary : EnglishDictionariesToErase(path))
+    ok = dictionary->ResetRuntimeAdditions() && ok;
   if (runtime_logger_) {
     runtime_logger_->Log(ok ? logging::RuntimeLogLevel::Info : logging::RuntimeLogLevel::Warn,
                          "english_dictionary_reset",

@@ -360,6 +360,20 @@ std::optional<core::MixedRomajiSplit> SplitComposition(InferenceEngine& engine,
     splits = core::SplitMixedRomaji(raw_romaji, lookup, options);
   });
   if (splits.empty()) return std::nullopt;
+  // Section 8.1: a sure segment typed without capitals (so sure by (ii)) whose
+  // key the user has turned down (section 11) is low confidence, for the whole
+  // composition too. Looked up after the dictionary snapshot is released.
+  for (auto& segment : splits.front().segments) {
+    if (segment.kind != core::MixedRomajiSegmentKind::English ||
+        segment.confidence != core::EnglishSegmentConfidence::High)
+      continue;
+    const auto typed =
+        std::string_view(raw_romaji).substr(segment.raw_begin, segment.raw_end - segment.raw_begin);
+    if (std::any_of(typed.begin(), typed.end(), [](char c) { return c >= 'A' && c <= 'Z'; }))
+      continue;
+    if (engine.IsEnglishSuppressed(EnglishLookupKey(typed)))
+      segment.confidence = core::EnglishSegmentConfidence::Low;
+  }
   return std::move(splits.front());
 }
 
@@ -1920,10 +1934,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
       // M60 section 6.4: never the kana store, auto-word mining or the converter.
       engine_->CommitEnglishObservation(parsed->reading, parsed->chosen.surface, NowSec(),
                                         parsed->observation_id);
-    } else {
-      engine_->CommitObservation(
-          parsed->reading, parsed->chosen.surface, NowSec(), parsed->observation_id,
-          parsed->app ? parsed->app->process_name : std::string(), parsed->left_context);
+    } else if (engine_->CommitObservation(
+                   parsed->reading, parsed->chosen.surface, NowSec(), parsed->observation_id,
+                   parsed->app ? parsed->app->process_name : std::string(), parsed->left_context)) {
+      // M63-B (mixed-english-auto-conversion-spec section 11): the English the
+      // composition was shown first, turned down.
+      engine_->RecordRejectedEnglish(parsed->shown, parsed->chosen.surface, NowSec());
     }
     res.ok = true;
   } else {

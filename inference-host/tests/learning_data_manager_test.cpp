@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "azookey/host/EnglishCandidates.h"
 #include "azookey/host/LearningDataManager.h"
 
 namespace {
@@ -296,6 +297,47 @@ TEST(LearningDataManagerTest, ExportImportRoundTripRestoresEveryStore) {
   EXPECT_EQ(imported.counts.at("learning").imported, 3u);
   EXPECT_EQ(imported.counts.at("user_dictionary").imported, 1u);
   EXPECT_EQ(restored.Texts(), source.Texts());
+}
+
+// M63-B (mixed-english-auto-conversion-spec section 11): the negative
+// observation row of the English channel is an ordinary learning row: listed,
+// forgotten (which lifts it) and carried by export and import as it is.
+TEST(LearningDataManagerTest, EnglishNegativeObservationIsAnOrdinaryRow) {
+  Stores source;
+  source.Fill();
+  learning::LearningRecord negative;
+  negative.reject_count = 1;
+  negative.last_event = learning::LearningEventType::CorrectionReject;
+  negative.last_updated_epoch_sec = kNow;
+  const auto reading = host::EnglishNegativeObservationReading("github");
+  source.english.Set(reading, "github", negative);
+  const auto view = source.View();
+  const auto listed = host::ListLearningEntries(view, LearningDataStore::Learning, "github", 0, 10);
+  ASSERT_EQ(listed.total, 1u);
+  EXPECT_EQ(listed.entries[0].channel, "english");
+  EXPECT_EQ(listed.entries[0].reading,
+            "\xC2\xAC"
+            "github");
+  EXPECT_EQ(listed.entries[0].surface, "github");
+  EXPECT_DOUBLE_EQ(listed.entries[0].weight, 0.0);
+  EXPECT_EQ(listed.entries[0].metadata.at("reject_count"), "1");
+
+  ScopedDirectory directory;
+  const auto archive = directory.File("negative.zip");
+  ASSERT_EQ(host::ExportLearningData(view, {LearningDataStore::Learning}, archive, true, kKeyA,
+                                     host::BackupManifest{})
+                .error,
+            host::BackupError::None);
+  Stores restored;
+  ASSERT_EQ(host::ImportLearningData(restored.View(), {LearningDataStore::Learning}, archive,
+                                     learning::ImportConflictPolicy::Merge, kKeyA)
+                .error,
+            host::BackupError::None);
+  EXPECT_EQ(restored.english.SerializeText(), source.english.SerializeText());
+
+  EXPECT_TRUE(host::ForgetLearningEntry(view, LearningDataStore::Learning, listed.entries[0].id));
+  EXPECT_EQ(host::ListLearningEntries(view, LearningDataStore::Learning, "github", 0, 10).total,
+            0u);
 }
 
 TEST(LearningDataManagerTest, PlaintextExportRoundTrips) {

@@ -823,6 +823,24 @@ bool LearningStore::Forget(const std::string& reading, const std::string& surfac
   return true;
 }
 
+void LearningStore::Set(const std::string& reading, const std::string& surface,
+                        const LearningRecord& record) {
+  // The file format holds neither an empty reading nor an empty surface.
+  if (reading.empty() || surface.empty()) return;
+  LearningRecord bounded = record;
+  bounded.weight =
+      std::isfinite(bounded.weight) ? std::clamp(bounded.weight, 0.0, kMaxLearningWeight) : 0.0;
+  bounded.commit_count = std::min(bounded.commit_count, kMaxLearningCount);
+  bounded.accept_count = std::min(bounded.accept_count, kMaxLearningCount);
+  bounded.reject_count = std::min(bounded.reject_count, kMaxLearningCount);
+  // A global row has no context.
+  bounded.context_hash.clear();
+  auto& apps = table_[reading][surface];
+  apps.clear();
+  apps.emplace("", std::move(bounded));
+  dirty_ = true;
+}
+
 bool LearningStore::RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
                                          bool* removed_rows) const {
   return RewriteLegacyFile(std::make_pair(reading, surface), removed_rows);

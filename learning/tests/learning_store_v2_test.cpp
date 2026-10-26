@@ -678,6 +678,96 @@ TEST(LearningStoreV2Test, PruneJudgesThePairAndKeepsNetRejections) {
   EXPECT_EQ(store.Rows("こうしょう", "高尚"), nullptr);
 }
 
+// M63-B (mixed-english-auto-conversion-spec section 11): Set overwrites the
+// pair with one global row instead of adding an event, so a repeated negative
+// observation stays one row.
+TEST(LearningStoreV2Test, SetReplacesThePairWithOneGlobalRow) {
+  LearningStore store("unused.tsv", &learning::test::Crypto());
+  store.ObserveEvent(Event(LearningEventType::Commit, "交渉", "outlook.exe"), 0.8, kNow);
+  learning::LearningRecord rejected;
+  rejected.reject_count = 1;
+  rejected.last_event = LearningEventType::CorrectionReject;
+  rejected.last_updated_epoch_sec = kNow;
+  store.Set("こうしょう", "交渉", rejected);
+  EXPECT_TRUE(store.dirty());
+  ASSERT_NE(store.Rows("こうしょう", "交渉"), nullptr);
+  ASSERT_EQ(store.Rows("こうしょう", "交渉")->size(), 1u);
+  rejected.last_updated_epoch_sec = kNow + 1;
+  store.Set("こうしょう", "交渉", rejected);
+  auto row = store.Rows("こうしょう", "交渉")->at("");
+  EXPECT_EQ(row.reject_count, 1u);
+  EXPECT_EQ(row.last_updated_epoch_sec, kNow + 1);
+  EXPECT_DOUBLE_EQ(store.Score("こうしょう", "交渉", kNow), 0.0);
+
+  // Out-of-range values are bounded as a read file is; an empty key, which
+  // the file format cannot hold, is ignored.
+  learning::LearningRecord huge;
+  huge.weight = 1e300;
+  huge.reject_count = UINT64_MAX;
+  store.Set("おおきい", "大きい", huge);
+  EXPECT_DOUBLE_EQ(store.Rows("おおきい", "大きい")->at("").weight, learning::kMaxLearningWeight);
+  EXPECT_EQ(store.Rows("おおきい", "大きい")->at("").reject_count, learning::kMaxLearningCount);
+  const auto size = store.size();
+  store.Set("", "空", rejected);
+  store.Set("から", "", rejected);
+  EXPECT_EQ(store.size(), size);
+}
+
+// The rows Set writes with weight 0 and a rejection: the weight threshold
+// keeps them, the file and an older reader keep them, the listing shows them,
+// and the max_records bound drops them first.
+TEST(LearningStoreV2Test, ZeroWeightRejectionRowsSurviveTheThresholdButGoFirst) {
+  LearningStore store("unused.tsv", &learning::test::Crypto());
+  learning::LearningRecord rejected;
+  rejected.reject_count = 1;
+  rejected.last_event = LearningEventType::CorrectionReject;
+  rejected.last_updated_epoch_sec = kNow;
+  store.Set(
+      "\xC2\xAC"
+      "github",
+      "github", rejected);
+  store.Observe("git", "Git", 0.8, kNow);
+  store.Prune(/*max_records=*/0, /*min_weight=*/0.05, kNow);
+  ASSERT_NE(store.Rows("\xC2\xAC"
+                       "github",
+                       "github"),
+            nullptr);
+  EXPECT_EQ(store.Aggregates().size(), 2u);
+  // A prefix lookup of the key never reaches the row.
+  EXPECT_TRUE(store.LookupPrefix("github", 10, 0.0, kNow).matches.empty());
+
+  const auto text = store.SerializeText();
+  EXPECT_EQ(learning::CountValidLearningRows(text), std::optional<size_t>{2});
+  LearningStore reader("unused.tsv", &learning::test::Crypto());
+  ASSERT_TRUE(reader.LoadText(text));
+  ASSERT_NE(reader.Rows("\xC2\xAC"
+                        "github",
+                        "github"),
+            nullptr);
+  EXPECT_EQ(reader
+                .Rows("\xC2\xAC"
+                      "github",
+                      "github")
+                ->at("")
+                .reject_count,
+            1u);
+
+  store.Prune(/*max_records=*/1, /*min_weight=*/0.05, kNow);
+  EXPECT_EQ(store.Rows("\xC2\xAC"
+                       "github",
+                       "github"),
+            nullptr);
+  EXPECT_NE(store.Rows("git", "Git"), nullptr);
+
+  // Forget lifts it: the pair leaves the listing and the file.
+  reader.Forget(
+      "\xC2\xAC"
+      "github",
+      "github");
+  EXPECT_EQ(reader.Aggregates().size(), 1u);
+  EXPECT_EQ(learning::CountValidLearningRows(reader.SerializeText()), std::optional<size_t>{1});
+}
+
 TEST(LearningStoreV2Test, ObserveEventStoresTheNormalizedAppName) {
   LearningStore store("unused.tsv", &learning::test::Crypto());
   store.ObserveEvent(Event(LearningEventType::Commit, "交渉", "C:\\Office\\OUTLOOK.EXE"), 0.8,

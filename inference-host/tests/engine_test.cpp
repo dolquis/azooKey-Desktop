@@ -2618,6 +2618,13 @@ TEST(InferenceEngineTest, DeadlineBeforeFirstBeamStepFallsBackWithoutDegrading) 
   ASSERT_TRUE(decode_stats.has_value());
   EXPECT_TRUE(decode_stats->deadline_exceeded);
 
+  // Nor is such a cut-off evidence of recovery: an earlier degradation stays reported.
+  (void)engine->QueryCandidates("むこう", "", kNowBase + 1);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  (void)engine->QueryCandidates("じかんぎれ", "", kNowBase + 2);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
+
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);
 }

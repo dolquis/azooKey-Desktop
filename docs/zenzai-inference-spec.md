@@ -454,7 +454,9 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
   トークンを持つ beam が 1 本も無いときも打ち切りであり、degraded 扱いしない。候補は
   `fallback_->Convert` の結果を返し、`debug_info` には `zenzai-degraded` ではなく
   `zenzai-deadline-fallback` を付ける。converter の `last_error_` は立てず、`model_runtime_error_`
-  も Health も変えない。decode 統計の `deadline_exceeded` は立つので、§8.2 の打ち切り率には数える。
+  も Health も変えない（直前の劣化も回復の証拠が無いので消さない）。NLL 再ランク
+  （`docs/neural-reranker-spec.md` §B8）は予算を使い切っているので掛けない。decode 統計の
+  `deadline_exceeded` は立つので、§8.2 の打ち切り率には数える。
 - `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
   converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を engine が
   同ロック内で**専用フィールド `model_runtime_error_` にミラー**し `effective_last_error()`

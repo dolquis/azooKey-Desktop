@@ -1596,7 +1596,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     try {
       converted = convert(converter, using_model_converter, conversion_deadline);
       if (canceled()) return {};
-      if (using_model_converter) {
+      const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
+      // A cut-off before the first beam step is no evidence the model recovered, so it leaves an
+      // earlier runtime error in place instead of clearing it (DEV-1700).
+      if (using_model_converter && !(zenzai && zenzai->last_fell_back_at_deadline())) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         MirrorModelRuntimeErrorLocked(converter);
       }
@@ -1641,7 +1644,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (config.nll.enabled && !live) {
     NllOutcome outcome;
     auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
-    if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error()) {
+    // A cut-off before the first beam step has spent the deadline NLL would score under, so it
+    // skips NLL as it did while that cut-off still counted as degraded (DEV-1700).
+    if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error() &&
+        !zenzai->last_fell_back_at_deadline()) {
       outcome = zenzai->RerankNll(kana, merged,
                                   BuildContext(kana, limited_context, cancel, conversion_deadline,
                                                effective_max_candidates, live),

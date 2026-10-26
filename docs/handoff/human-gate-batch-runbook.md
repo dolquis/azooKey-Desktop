@@ -90,9 +90,11 @@ VM 側では `compat_test.exe` と `targets\` を同じディレクトリへ展�
 runner は `--target` に渡したパスから target JSON を読むため、両者の相対関係を崩さない。
 
 **設定アプリの同梱**：`-IncludeSettings` で `azookey_settings.exe` と self-contained ランタイムを
-同じ検証 zip の `settings\` に追加し、各ファイルの SHA-256 を `manifest.json` に記録する。
+同じ検証 zip のルート（`azookey_tsf_tip.dll` の隣）に追加し、各ファイルの SHA-256 を
+`manifest.json` に記録する。TIP は自分の隣の `azookey_settings.exe` だけを起動するので、
+MSI と同じ配置にしている（DEV-1733）。
 レーン 2 の設定系ゲート（DEV-1160、DEV-761）は、展開したパッケージの
-`settings\azookey_settings.exe` から設定を保存する。別の zip を手作業で作って持ち込まない。
+`azookey_settings.exe` から設定を保存する。別の zip を手作業で作って持ち込まない。
 同梱物の範囲は MSI と同じである。
 
 **診断資産の同梱**：`-IncludeDiagnostics` で WPR profile、ETW manifest と resource DLL を

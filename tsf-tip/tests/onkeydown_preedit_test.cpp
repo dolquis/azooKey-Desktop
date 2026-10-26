@@ -2346,11 +2346,15 @@ TEST(TsfTipOnKeyDownPreeditTest, HostPredictionsOpenThePredictionWindowWithAndWi
     for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
     ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
     // Wait for the window itself: a delivered result is only shown once the
-    // candidates-ready notification has run for the current reading.
-    EXPECT_TRUE(WaitUntil([&] {
-      h.service.process_candidates_ready_for_test();
-      return h.service.shown_prediction_count_for_test() == 2u;
-    }));
+    // candidates-ready notification has run for the current reading. A response
+    // that misses the 150ms prediction deadline is re-queued by that same
+    // notification about a second later, so the wait covers a late response too.
+    EXPECT_TRUE(WaitUntil(
+        [&] {
+          h.service.process_candidates_ready_for_test();
+          return h.service.shown_prediction_count_for_test() == 2u;
+        },
+        std::chrono::milliseconds(20000)));
     EXPECT_GT(prediction_queries.load(), 0u);
     EXPECT_TRUE(h.service.prediction_window_visible_for_test());
     h.service.stop_ipc_worker_for_test();

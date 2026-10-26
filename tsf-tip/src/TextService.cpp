@@ -7224,8 +7224,10 @@ void TextService::StartProofreadSession(ITfContext* context) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_session_start_failed");
     return;
   }
-  if (FAILED(LaunchSettingsApplicationForProofread(window, *token))) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_settings_launch_failed");
+  if (const HRESULT launch_hr = LaunchSettingsApplicationForProofread(window, *token);
+      FAILED(launch_hr)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "proofread_settings_launch_failed",
+               {{"hr", static_cast<int64_t>(launch_hr)}});
     return;
   }
   proofread_session_ = std::move(server);

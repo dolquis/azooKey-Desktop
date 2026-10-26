@@ -30,7 +30,10 @@ std::optional<char32_t> ParseUnicodeScalar(const std::string& hex) {
   return static_cast<char32_t>(value);
 }
 
-bool IsKutoten(char32_t cp) { return cp == U'、' || cp == U'。'; }
+// The marks punctuationConversion converts on (spec §3.5.1, DEV-1670).
+bool IsSentenceMark(char32_t cp) {
+  return cp == U'、' || cp == U'。' || cp == U'？' || cp == U'！';
+}
 
 bool IsDigit(char32_t cp) { return (cp >= U'0' && cp <= U'9') || (cp >= U'０' && cp <= U'９'); }
 
@@ -53,7 +56,7 @@ InputState InputState::WithPunctuationConversion(bool enabled) const {
 std::optional<std::string> InputState::PunctuationConversionReading(
     const UserActionEvent& event) const {
   if (!punctuation_conversion_ || event.action != UserAction::Input ||
-      !IsKutoten(event.codepoint) ||
+      !IsSentenceMark(event.codepoint) ||
       (kind_ != InputStateKind::Composing && kind_ != InputStateKind::Previewing &&
        kind_ != InputStateKind::Selecting)) {
     return std::nullopt;
@@ -68,7 +71,7 @@ std::optional<std::string> InputState::PunctuationConversionReading(
   char32_t cp = 0;
   while (offset < reading.size()) {
     if (!DecodeNextUtf8(reading, offset, cp)) return std::nullopt;
-    if (!IsKutoten(cp)) punctuation_only = false;
+    if (!IsSentenceMark(cp)) punctuation_only = false;
     last = cp;
   }
   if (punctuation_only) return std::nullopt;

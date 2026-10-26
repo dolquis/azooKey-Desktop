@@ -1203,7 +1203,7 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t final_request_timeout_ms_{kFinalPunctuationRequestTimeoutMs};
   // Enter that waits for the final request; input_state_ is not advanced until
   // it resolves. UI thread only.
-  // A 、 or 。 that waits for the first candidate of `reading` (spec §3.5.1)
+  // A punctuation mark that waits for the first candidate of `reading` (spec §3.5.1)
   // shares the wait: it keeps the key in `replay` and decides when it resolves.
   struct FinalPunctuationHold {
     wil::com_ptr_nothrow<ITfContext> context;
@@ -1213,7 +1213,7 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string reading;
   };
   std::optional<FinalPunctuationHold> final_punctuation_hold_;
-  // The live segments a 、 or 。 commits, for its observation. UI thread only.
+  // The live segments a punctuation mark commits, for its observation. UI thread only.
   std::optional<std::vector<ipc::LiveSegment>> punctuation_live_segments_;
   struct ReconversionResult {
     uint64_t generation;

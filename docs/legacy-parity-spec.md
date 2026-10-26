@@ -97,14 +97,14 @@ enum class InputStateKind {
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
 | Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
-| Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` は下の句読点の行が優先） |
-| Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` は下の句読点の行が優先） |
+| Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
+| Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
-| Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。例外は `punctuationConversion = commit` の `、` `。`（下の句読点の行） |
+| Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
-| Composing / Previewing / Selecting | Input（`、` `。`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
+| Composing / Previewing / Selecting | Input（`、` `。` `？` `！`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
 | ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |
@@ -216,6 +216,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_RETURN | (none) | Commit |
 | VK_ESCAPE | (none) | Cancel |
 | VK_1〜VK_9 | (none, Selecting時のみ) | SelectByDigit |
+| VK_1 | Shift | Input（`！`。Selecting でも候補番号にしない。他の Shift+数字は割り当てない） |
 | VK_H | Ctrl | Backspace |
 | VK_P | Ctrl | Up |
 | VK_N | Ctrl | Down |

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/InputState.h"
@@ -46,6 +47,8 @@ const UserActionEvent kRepresentativeEvents[] = {
     PunctuationEvent(UserAction::Input, U'a'),
     PunctuationEvent(UserAction::Input, U'、'),
     PunctuationEvent(UserAction::Input, U'。'),
+    PunctuationEvent(UserAction::Input, U'？'),
+    PunctuationEvent(UserAction::Input, U'！'),
     PunctuationEvent(UserAction::Input, U'/'),
     PunctuationEvent(UserAction::InputAlnum, U'。'),
     PunctuationEvent(UserAction::Backspace),
@@ -133,6 +136,39 @@ TEST(PunctuationConversionInputStateTest, SelectingCommitsTheHighlightWithTheMar
                                      CommitMarkedText{}, ObserveCommit{"てんき", "転機"}}));
 }
 
+// DEV-1670: ？ and ！ convert like 、 and 。 under the same setting.
+TEST(PunctuationConversionInputStateTest, QuestionAndExclamationMarksConvertToo) {
+  for (const auto& [mark, mark_text] : {std::pair{U'？', "？"}, std::pair{U'！', "！"}}) {
+    const auto composing =
+        CachedComposing(true).HandleEvent(PunctuationEvent(UserAction::Input, mark));
+    EXPECT_EQ(composing.next.kind(), K::Idle);
+    EXPECT_EQ(composing.actions,
+              (Actions{HideCandidateWindow{}, ReplaceMarkedText{std::string{"天気"} + mark_text},
+                       CommitMarkedText{}, ObserveCommit{"てんき", "天気"}}));
+    const auto selecting =
+        SelectingSecond(true).HandleEvent(PunctuationEvent(UserAction::Input, mark));
+    EXPECT_EQ(selecting.next.kind(), K::Idle);
+    EXPECT_EQ(selecting.actions,
+              (Actions{HideCandidateWindow{}, ReplaceMarkedText{std::string{"転機"} + mark_text},
+                       CommitMarkedText{}, ObserveCommit{"てんき", "転機"}}));
+    // Off: the mark joins the reading.
+    EXPECT_EQ(CachedComposing(false)
+                  .HandleEvent(PunctuationEvent(UserAction::Input, mark))
+                  .next.Reading(),
+              std::string{"てんき"} + mark_text);
+  }
+  const auto on = InputState{}.WithPunctuationConversion(true);
+  // A standalone mark keeps its half-width candidate.
+  const auto standalone = FeedPunctuationState(on, U"？");
+  EXPECT_FALSE(standalone.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'！')));
+  EXPECT_EQ(standalone.HandleEvent(PunctuationEvent(UserAction::Input, U'！')).next.Reading(),
+            "？！");
+  // After a digit the mark joins, like 、 and 。.
+  const auto number =
+      FeedPunctuationState(on, U"3").HandleCandidatesArrived({Candidate{"3", "3"}}).next;
+  EXPECT_FALSE(number.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'！')));
+}
+
 TEST(PunctuationConversionInputStateTest, WithoutACandidateForTheReadingTheMarkJoins) {
   // Nothing cached yet.
   const auto uncached =
@@ -173,7 +209,7 @@ TEST(PunctuationConversionInputStateTest, PunctuationOnlyDigitsAndOtherKeysDoNot
                             .next;
     EXPECT_FALSE(number.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'。')));
   }
-  // Only 、 and 。 typed as Input convert.
+  // Only the full-width marks typed as Input convert.
   const auto composing = CachedComposing(true);
   EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'/')));
   EXPECT_FALSE(composing.PunctuationConversionReading(PunctuationEvent(UserAction::Input, U'?')));

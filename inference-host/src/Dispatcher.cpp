@@ -374,14 +374,17 @@ ipc::LiveSegment EnglishLiveSegment(const core::MixedRomajiSegment& english,
 
 // Section 8.2: a sure word becomes the first candidate ahead of the Japanese
 // conversion; otherwise it is the second, right after the first Japanese one.
-// The M60 form with the same surface gives up its place.
+// The M60 form with the same surface gives up its place; a Japanese candidate
+// with that surface stays.
 void PlaceMixedEnglishCandidate(std::vector<core::Candidate>& candidates,
                                 const core::MixedRomajiSegment& english,
                                 const std::string& raw_romaji, bool first) {
-  candidates.erase(
-      std::remove_if(candidates.begin(), candidates.end(),
-                     [&](const core::Candidate& c) { return c.surface == english.surface; }),
-      candidates.end());
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [&](const core::Candidate& c) {
+                                    return c.tag == core::CandidateTag::English &&
+                                           c.surface == english.surface;
+                                  }),
+                   candidates.end());
   core::Candidate candidate;
   candidate.surface = english.surface;
   candidate.reading = raw_romaji;  // M60 section 6.3: the raw romaji.
@@ -917,11 +920,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
         if (auto word = WholeCompositionEnglish(*engine_, parsed->raw_romaji)) {
           const bool sure = word->confidence == core::EnglishSegmentConfidence::High;
           PlaceMixedEnglishCandidate(candidates, *word, parsed->raw_romaji, sure);
-          if (sure) {
-            // Section 12: the English word is not a typo of the kana reading.
-            corrected_reading.clear();
-            mixed_first = std::move(word);
-          }
+          // corrected_reading stays: the Japanese candidates were converted
+          // from it (M35), and the English one is learned under its own
+          // reading, the raw romaji (M60 section 6.4).
+          if (sure) mixed_first = std::move(word);
         }
       }
     }

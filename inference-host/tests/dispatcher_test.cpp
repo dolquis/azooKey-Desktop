@@ -1176,7 +1176,7 @@ class MixedEnglishDispatchTest : public DispatcherTest {
     const auto path = temp_directory.File("azookey_dispatcher_mixed_english_words.tsv");
     {
       std::ofstream out(path, std::ios::binary);
-      out << "GitHub\t900\ngithub\t100\nkite\t500\n";
+      out << "GitHub\t900\ngithub\t100\nkite\t500\nTensorRT\t300\n";
     }
     auto config = engine.config();
     config.english.dictionary_enabled = true;
@@ -1242,6 +1242,24 @@ TEST_F(MixedEnglishDispatchTest, SureWordTakesTheFirstCandidateWithItsSegment) {
   for (size_t i = 1; i < candidates.size(); ++i)
     EXPECT_TRUE(candidates[i].segments.empty()) << candidates[i].surface;
 
+  // A candidate of another tag with the same surface (a technical term) is not
+  // the M60 form and keeps its place.
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::TechnicalTerms,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "profile" / "technical_terms.azdic", true));
+  const auto technical = Query(1303, Request("てんそるあーるてぃー", "tensorrt", true));
+  ASSERT_FALSE(technical.empty());
+  EXPECT_EQ(technical[0].surface, "TensorRT");
+  EXPECT_EQ(technical[0].tag, kEnglish);
+  size_t english_tensorrt = 0;
+  size_t other_tensorrt = 0;
+  for (const auto& c : technical) {
+    if (c.surface != "TensorRT") continue;
+    ++(c.tag == kEnglish ? english_tensorrt : other_tensorrt);
+  }
+  EXPECT_EQ(english_tensorrt, 1u);
+  EXPECT_EQ(other_tensorrt, 1u);
+
   // A Shift capital first is sure too, and keeps the keystrokes.
   const auto shifted = Query(1302, Request("きて", "Kite", true));
   ASSERT_FALSE(shifted.empty());
@@ -1276,8 +1294,9 @@ TEST_F(MixedEnglishDispatchTest, OffSecureAndOutOfBoundsKeepTheM60Order) {
   without_m60.english_candidates = false;
   for (const auto& c : Query(1323, without_m60)) EXPECT_NE(c.tag, kEnglish) << c.surface;
 
-  // Section 10: over 64 characters is handled as M63 off.
-  const std::string long_raw(65, 'q');
+  // Section 10: over 64 characters is handled as M63 off, even for a Shift
+  // capital first that would otherwise be a sure word.
+  const std::string long_raw = "G" + std::string(64, 'q');
   EXPECT_EQ(Surfaces(Query(1324, Request("q", long_raw, true))),
             Surfaces(Query(1325, Request("q", long_raw, false))));
 
@@ -1287,6 +1306,55 @@ TEST_F(MixedEnglishDispatchTest, OffSecureAndOutOfBoundsKeepTheM60Order) {
   auto live_off = live;
   live_off.mixed_english = false;
   EXPECT_EQ(Surfaces(Query(1326, live)), Surfaces(Query(1327, live_off)));
+}
+
+// M35 auto_replace converts the Japanese candidates from the corrected reading,
+// so the response keeps reporting it with the English first candidate; the
+// TIP pairs those candidates with that reading (M35 contract). The English
+// candidate keeps the raw romaji as its reading (M60 section 6.4).
+TEST_F(MixedEnglishDispatchTest, CorrectedReadingStaysWithTheJapaneseCandidates) {
+  const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_english_typo.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+  auto config = engine.config();
+  config.typo_correction_mode = "auto_replace";
+  config.typo_min_count = 2;
+  engine.ApplyConfig(config);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+
+  const auto response = [&](uint64_t id, bool mixed) {
+    const auto resp = dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates,
+                ipc::BuildQueryCandidatesRequest(Request("こんちには", "Konchiniha", mixed))));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto off = response(1341, false);
+  const auto on = response(1342, true);
+  ASSERT_EQ(off.corrected_reading, "こんにちは");
+  EXPECT_EQ(on.corrected_reading, off.corrected_reading);
+  ASSERT_FALSE(on.candidates.empty());
+  EXPECT_EQ(on.candidates[0].surface, "Konchiniha");
+  EXPECT_EQ(on.candidates[0].reading, "Konchiniha");
+  // The Japanese candidates are the ones M63 off returns for that reading.
+  std::vector<std::string> japanese_on;
+  for (const auto& c : on.candidates)
+    if (c.tag != kEnglish) japanese_on.push_back(c.surface);
+  std::vector<std::string> japanese_off;
+  for (const auto& c : off.candidates)
+    if (c.tag != kEnglish) japanese_off.push_back(c.surface);
+  EXPECT_EQ(japanese_on, japanese_off);
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
 }
 
 TEST_F(MixedEnglishDispatchTest, LiveConversionOfASureWordIsTheWordItself) {

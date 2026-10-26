@@ -843,7 +843,7 @@ Describe "VM verification package automation" {
       }
     }
 
-    It "bundles the settings app with its self-contained runtime under settings/ and the MSI exclusions" {
+    It "bundles the settings app with its self-contained runtime at the archive root and the MSI exclusions" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}
       Mock Assert-VmVerifyBuildReady {}
@@ -863,25 +863,49 @@ Describe "VM verification package automation" {
         -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeSettings
 
       @($result.Manifest.files | Where-Object role -eq "settings-app" | ForEach-Object path) |
-        Should -Be @("settings/azookey_settings.exe")
+        Should -Be @("azookey_settings.exe")
       @($result.Manifest.files | Where-Object role -eq "settings-runtime" | ForEach-Object path | Sort-Object) |
         Should -Be @(
-          "settings/Assets/logo.png",
-          "settings/Assets/nested.pdb",
-          "settings/MainWindow.xbf",
-          "settings/Microsoft.WindowsAppRuntime.Bootstrap.dll",
-          "settings/resources.pri")
+          "Assets/logo.png",
+          "Assets/nested.pdb",
+          "MainWindow.xbf",
+          "Microsoft.WindowsAppRuntime.Bootstrap.dll",
+          "resources.pri")
       $expanded = Join-Path $TestDrive "settings-expanded"
       Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
       foreach ($file in $result.Manifest.files) {
         (Get-FileHash -LiteralPath (Join-Path $expanded $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() |
           Should -BeExactly $file.sha256
       }
-      Test-Path (Join-Path $expanded "settings/obj") | Should -BeFalse
+      Test-Path (Join-Path $expanded "obj") | Should -BeFalse
+      Test-Path (Join-Path $expanded "settings") | Should -BeFalse
+      # The TIP resolves azookey_settings.exe next to itself (DEV-1733).
+      Test-Path (Join-Path $expanded "azookey_settings.exe") | Should -BeTrue
+      Test-Path (Join-Path $expanded "azookey_tsf_tip.dll") | Should -BeTrue
       Should -Invoke Assert-VmVerifySettingsFresh -Times 1 -Exactly -ParameterFilter {
         $ExecutablePath -eq (Join-Path $settings "azookey_settings.exe") -and $Preset -eq "windows-release" -and
         $IntermediateDirectory -eq (Join-Path $script:testRepository "build\windows-release\settings-app\obj\Release")
       }
+    }
+
+    It "rejects a settings runtime file that collides with another payload at the archive root" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      Mock Assert-VmVerifySettingsFresh {}
+      $settings = Join-Path $script:testRepository "build\windows-release\settings-app\Release"
+      foreach ($relative in @("azookey_settings.exe", "AZOOKEY_TSF_TIP.DLL")) {
+        $path = Join-Path $settings $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        $relative | Set-Content -LiteralPath $path
+      }
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeSettings
+      } | Should -Throw "*same archive path*"
+      @(Get-ChildItem -LiteralPath $script:testOutput -Filter "*.zip" -ErrorAction SilentlyContinue).Count |
+        Should -Be 0
     }
 
     It "leaves the settings app out and skips its freshness check without -IncludeSettings" {

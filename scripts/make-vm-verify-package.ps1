@@ -547,7 +547,10 @@ function Assert-VmVerifySettingsFresh {
 
 # Take the same set as the MSI (pkg/msi/Package.wxs). The self-contained Windows App
 # SDK runtime, resources.pri and *.xbf must sit in the same directory as the exe or
-# it does not start, so copy them into settings/ keeping the relative layout.
+# it does not start, so copy them keeping the relative layout. They go to the archive
+# root, next to azookey_tsf_tip.dll, because the TIP looks for azookey_settings.exe
+# only in its own directory (SettingsLauncher.cpp) and the MSI installs it there too
+# (DEV-1733).
 function Get-VmVerifySettingsPayload {
   param(
     [Parameter(Mandatory = $true)]
@@ -570,7 +573,7 @@ function Get-VmVerifySettingsPayload {
     }
     @{
       Source = $file.FullName
-      Archive = "settings/" + $relative.Replace("\", "/")
+      Archive = $relative.Replace("\", "/")
       Role = $role
     }
   }
@@ -1072,6 +1075,15 @@ function Export-VmVerifyPackage {
         Source = $RuntimeInstaller
         Archive = "vc_redist.x64.exe"
         Role = "vc-redist"
+      }
+    }
+
+    # The settings runtime shares the archive root with the other payloads, so a name
+    # that two payloads both claim would silently overwrite one of them.
+    $claimed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($payload in $payloads) {
+      if (-not $claimed.Add([string]$payload.Archive)) {
+        throw "Two payloads map to the same archive path: $($payload.Archive)"
       }
     }
 

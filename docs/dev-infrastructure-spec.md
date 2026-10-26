@@ -287,7 +287,10 @@ compat target も鮮度確認の対象にする。manifest の role はそれぞ
 `compat-runner`、`compat-host-hang-watchdog`、`compat-targets` とし、各ファイルの
 SHA-256 を記録する。
 `-IncludeSettings`（既定は無効）を指定すると、`settings-app/<Debug|Release>/` の
-設定アプリを相対階層を保って `settings/` へ追加する。範囲は MSI（`pkg/msi/Package.wxs`）と
+設定アプリを相対階層を保って zip のルート（`azookey_tsf_tip.dll` の隣）へ追加する。
+TIP は自分の隣の `azookey_settings.exe` だけを起動する（`SettingsLauncher.cpp`）ので、
+MSI と同じ配置にそろえる。ほかの payload と同じ archive path になるファイルがあれば
+zip を作らず失敗する。範囲は MSI（`pkg/msi/Package.wxs`）と
 同じで、`obj/` 以下と直下の `*.exp`、`*.lib`、`*.pdb`、`*.ilk` を除く全ファイルとする。
 self-contained の Windows App SDK ランタイム、`resources.pri`、`*.xbf` は exe と同じ
 ディレクトリに無いと起動しないためである。manifest の role は `azookey_settings.exe` が

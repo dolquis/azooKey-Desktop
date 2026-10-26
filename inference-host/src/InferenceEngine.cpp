@@ -398,6 +398,27 @@ std::vector<EnglishDictionaryEntry> InferenceEngine::LookupEnglishDictionary(
   return dictionary ? dictionary->Lookup(lower_key) : std::vector<EnglishDictionaryEntry>{};
 }
 
+void InferenceEngine::WithEnglishDictionary(
+    const std::function<void(const EnglishDictionary*)>& compute) {
+  // The lock order of LookupEnglishDictionary: the config under state_mutex_,
+  // released before the dictionary cache lock and the store's own read.
+  EnglishCandidateConfig english;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    english = config_.english;
+  }
+  const auto dictionary =
+      english.dictionary_enabled ? EnglishDictionaryFor(english.dictionary_path) : nullptr;
+  if (!dictionary) {
+    compute(nullptr);
+    return;
+  }
+  dictionary->Read([&](const EnglishDictionary* snapshot) {
+    compute(snapshot);
+    return 0;
+  });
+}
+
 bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
                                                const std::string& surface, uint64_t now_epoch_sec,
                                                const std::string& observation_id) {
@@ -763,18 +784,40 @@ ScriptPresence ScanScripts(const std::string& utf8) {
   return presence;
 }
 
+const std::vector<std::pair<size_t, size_t>> kNoEnglishRanges;
+
 }  // namespace
 
-void DropMixedKanaAsciiModelCandidates(std::vector<core::Candidate>& candidates,
-                                       const std::string& reading) {
+void DropMixedKanaAsciiModelCandidates(
+    std::vector<core::Candidate>& candidates, const std::string& reading,
+    const std::vector<std::pair<size_t, size_t>>& english_ranges) {
+  // M63 section 7: the English segments are not leftover romaji.
+  std::string leftover;
+  std::vector<std::string> english;
+  size_t cursor = 0;
+  for (const auto& [begin, end] : english_ranges) {
+    if (begin < cursor || end < begin || end > reading.size()) break;
+    leftover.append(reading, cursor, begin - cursor);
+    english.push_back(reading.substr(begin, end - begin));
+    cursor = end;
+  }
+  leftover.append(reading, cursor, std::string::npos);
   // Only a reading that still holds raw ASCII letters (romaji the kana table could not spell)
   // makes the model blend kana and Latin letters into one surface.
-  if (!ScanScripts(reading).ascii) return;
+  if (!ScanScripts(leftover).ascii) return;
   candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
-                                  [](const core::Candidate& candidate) {
+                                  [&](const core::Candidate& candidate) {
                                     if (candidate.source != core::CandidateSource::Model)
                                       return false;
-                                    const auto scripts = ScanScripts(candidate.surface);
+                                    std::string surface = candidate.surface;
+                                    size_t at = 0;
+                                    for (const auto& word : english) {
+                                      const auto found = surface.find(word, at);
+                                      if (found == std::string::npos) break;
+                                      surface.erase(found, word.size());
+                                      at = found;
+                                    }
+                                    const auto scripts = ScanScripts(surface);
                                     return scripts.ascii && scripts.kana;
                                   }),
                    candidates.end());
@@ -1425,26 +1468,31 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
-    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
+    const MixedConversionOptions* mixed) {
   auto result = QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel,
-                                      max_candidates, live, telemetry, tag_boosts);
+                                      max_candidates, live, telemetry, tag_boosts, mixed);
   DropPrivateUseCandidates(result.candidates);
-  DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana);
+  DropMixedKanaAsciiModelCandidates(result.candidates, requested_kana,
+                                    mixed ? mixed->english_ranges : kNoEnglishRanges);
   DropRepeatedUnitModelCandidates(result.candidates, requested_kana);
   return result;
 }
 
 std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
     const std::string& kana, const std::string& context, uint64_t now_epoch_sec,
-    const std::atomic<bool>* cancel, const InferenceTelemetry* telemetry) {
+    const std::atomic<bool>* cancel, const InferenceTelemetry* telemetry,
+    const MixedConversionOptions* mixed) {
   if (kana.empty()) return std::nullopt;
   // The active converter, as the per-key live query uses: a loaded model gives
   // its single live beam, without the model it is the fallback converter. The
   // list is not cut to one before the same final filters as the candidate
   // window, so a dropped broken generation leaves the next candidate.
-  auto result = QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 0, true, telemetry);
+  auto result = QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 0, true, telemetry,
+                                      nullptr, mixed);
   DropPrivateUseCandidates(result.candidates);
-  DropMixedKanaAsciiModelCandidates(result.candidates, kana);
+  DropMixedKanaAsciiModelCandidates(result.candidates, kana,
+                                    mixed ? mixed->english_ranges : kNoEnglishRanges);
   DropRepeatedUnitModelCandidates(result.candidates, kana);
   if (result.candidates.empty()) return std::nullopt;
   return std::move(result.candidates.front());
@@ -1453,7 +1501,8 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
-    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
+    const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts,
+    const MixedConversionOptions* mixed) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -1475,7 +1524,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     }
     // typo_store_mutex_ alone, never together with state_mutex_ (see the member
     // declaration): the store has no lock of its own and ObserveTypo mutates it.
-    if (store && mode != "off") {
+    // M63-B section 12: a mixed reading is converted as typed.
+    if (store && mode != "off" && (!mixed || mixed->typo_correction)) {
       std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
       auto corrected = store->Lookup(requested_kana, min_count, now_epoch_sec);
       if (corrected && *corrected != requested_kana) {
@@ -1543,7 +1593,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
 
   std::vector<core::Candidate> converted;
   bool convert_failed = false;
-  const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+  auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+  // M63-B section 10: the request's own deadline cuts the budget short.
+  if (mixed && mixed->deadline)
+    conversion_deadline = (std::min)(conversion_deadline, *mixed->deadline);
   const uint32_t effective_max_candidates = config.max_candidates == 0 ? max_candidates
                                             : max_candidates == 0
                                                 ? config.max_candidates
@@ -1609,6 +1662,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       converted = convert(converter, using_model_converter, conversion_deadline);
       if (canceled()) return {};
       const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
+      if (using_model_converter && zenzai) {
+        // Read under converter_call_mutex_, before another request's decode replaces it.
+        const auto stats = zenzai->last_decode_stats();
+        out.model_deadline_exceeded =
+            zenzai->last_fell_back_at_deadline() || (stats && stats->deadline_exceeded);
+      }
       // A cut-off before the first beam step is no evidence the model recovered, so it leaves an
       // earlier runtime error in place instead of clearing it (DEV-1700).
       if (using_model_converter && !(zenzai && zenzai->last_fell_back_at_deadline())) {
@@ -1641,7 +1700,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   }
   // Enabled NLL retains ownership through merge so another request cannot replace
   // the conversion's runtime error or KV state before its scoring step.
-  if (!config.nll.enabled || live) converter_lock.unlock();
+  const bool nll = config.nll.enabled && !live && (!mixed || mixed->nll);
+  if (!nll) converter_lock.unlock();
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
   DedupMergedCandidates(merged);
@@ -1653,7 +1713,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                             ipc::IsValidTraceId(telemetry->trace_id);
   const auto rerank_start =
       trace_rerank ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
-  if (config.nll.enabled && !live) {
+  if (nll) {
     NllOutcome outcome;
     auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
     // A cut-off before the first beam step has spent the deadline NLL would score under, so it

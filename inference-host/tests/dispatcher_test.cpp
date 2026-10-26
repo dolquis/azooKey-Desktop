@@ -1176,7 +1176,7 @@ class MixedEnglishDispatchTest : public DispatcherTest {
     const auto path = temp_directory.File("azookey_dispatcher_mixed_english_words.tsv");
     {
       std::ofstream out(path, std::ios::binary);
-      out << "GitHub\t900\ngithub\t100\nkite\t500\nTensorRT\t300\n";
+      out << "GitHub\t900\ngithub\t100\nkite\t500\nTensorRT\t300\npush\t400\n";
     }
     auto config = engine.config();
     config.english.dictionary_enabled = true;
@@ -1393,6 +1393,248 @@ TEST_F(MixedEnglishDispatchTest, LiveConversionOfASureWordIsTheWordItself) {
   ASSERT_TRUE(kite_off && kite_on);
   EXPECT_EQ(kite_on->surface, kite_off->surface);
   EXPECT_TRUE(kite_on->segments.empty());
+}
+
+// M63-B (mixed-english-auto-conversion-spec sections 7, 8.3, 9.2, 10 and 12),
+// with the mock Zenzai fixtures for these keystrokes.
+class MixedInlineDispatchTest : public MixedEnglishDispatchTest {
+ protected:
+  void SetUp() override {
+    if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+      GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                      "loads require a full model fixture.";
+    }
+    MixedEnglishDispatchTest::SetUp();
+    const std::string model_path = temp_directory.File("azookey_dispatcher_mixed_inline.gguf");
+    WriteMinimalGguf(model_path);
+    azookey::host::ModelLoadOptions options;
+    options.path = model_path;
+    EnableMockZenzaiCandidatesForTests(options);
+    ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+  }
+
+  // Section 10's deadline is wall-clock time: an hour keeps a slow run (coverage)
+  // from leaving out the conversions these tests look at.
+  static azookey::host::DispatcherConfig PatientConfig() {
+    auto config = DefaultDispatcherConfig();
+    config.mixed_english_conversion_deadline = std::chrono::hours(1);
+    return config;
+  }
+
+  std::vector<ipc::CandidateField> Query(uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  }
+
+  static ipc::LiveSegment Segment(uint32_t start, uint32_t end, const std::string& surface,
+                                  const std::string& reading, uint8_t tag) {
+    ipc::LiveSegment segment;
+    segment.start_char = start;
+    segment.end_char = end;
+    segment.surface = surface;
+    segment.reading = reading;
+    segment.tag = tag;
+    return segment;
+  }
+
+  static void ExpectSegments(const std::vector<ipc::LiveSegment>& actual,
+                             const std::vector<ipc::LiveSegment>& expected) {
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+      EXPECT_EQ(actual[i].start_char, expected[i].start_char) << i;
+      EXPECT_EQ(actual[i].end_char, expected[i].end_char) << i;
+      EXPECT_EQ(actual[i].surface, expected[i].surface) << i;
+      EXPECT_EQ(actual[i].reading, expected[i].reading) << i;
+      EXPECT_EQ(actual[i].tag, expected[i].tag) << i;
+      EXPECT_FALSE(actual[i].auto_punctuation) << i;
+    }
+  }
+
+  static size_t Count(const std::vector<ipc::CandidateField>& candidates,
+                      const std::string& surface) {
+    return static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(),
+                                             [&](const auto& c) { return c.surface == surface; }));
+  }
+
+  static constexpr const char* kSentenceRaw = "kyouhagithubnipushsita";
+  static constexpr const char* kSentenceKana = "きょうはぎてゅbにぷshした";
+
+  azookey::host::Dispatcher patient{&engine, &scheduler, &user_dict, PatientConfig()};
+};
+
+TEST_F(MixedInlineDispatchTest, MixedConversionLeadsTheCandidatesWithItsSegments) {
+  const auto on = Query(1401, Request(kSentenceKana, kSentenceRaw, true));
+  ASSERT_GE(on.size(), 2u);
+  // Item 1: the reading きょうはGitHubにpushした, converted by Zenzai.
+  EXPECT_EQ(on[0].surface, "今日はGitHubにpushした");
+  EXPECT_EQ(on[0].tag, 0);
+  EXPECT_EQ(on[0].reading, kSentenceKana);
+  ExpectSegments(on[0].segments,
+                 {Segment(0, 3, "今日は", "きょうは", 0),
+                  Segment(3, 9, "GitHub", "github", kEnglish), Segment(9, 10, "に", "に", 0),
+                  Segment(10, 14, "push", "push", kEnglish), Segment(14, 16, "した", "した", 0)});
+  // Item 2: everything Japanese, as one J segment.
+  EXPECT_EQ(on[1].surface, "今日は擬態にプッシュした");
+  EXPECT_EQ(on[1].tag, 0);
+  EXPECT_EQ(on[1].reading, kSentenceKana);
+  ExpectSegments(on[1].segments, {Segment(0, 12, "今日は擬態にプッシュした", kSentenceKana, 0)});
+  EXPECT_EQ(Count(on, on[1].surface), 1u);
+  // A generation that changed an English segment cannot carry segments.
+  EXPECT_EQ(Count(on, "今日はGithubにpushした"), 0u);
+  for (size_t i = 2; i < on.size(); ++i) EXPECT_TRUE(on[i].segments.empty()) << on[i].surface;
+
+  const auto off = Query(1402, Request(kSentenceKana, kSentenceRaw, false));
+  ASSERT_FALSE(off.empty());
+  EXPECT_EQ(off[0].surface, "今日は擬態にプッシュした");
+  for (const auto& c : off) EXPECT_TRUE(c.segments.empty()) << c.surface;
+}
+
+TEST_F(MixedInlineDispatchTest, GenerationThatLosesTheEnglishSegmentIsSkipped) {
+  const auto on = Query(1411, Request("ぎてゅbをみる", "githubwomiru", true));
+  ASSERT_GE(on.size(), 2u);
+  EXPECT_EQ(on[0].surface, "GitHubを見る");
+  ExpectSegments(on[0].segments, {Segment(0, 6, "GitHub", "github", kEnglish),
+                                  Segment(6, 9, "を見る", "をみる", 0)});
+  EXPECT_EQ(on[1].surface, "擬態を見る");
+  EXPECT_EQ(Count(on, "Githubを見る"), 0u);
+}
+
+// Section 15.2: with the in-sentence high confidence off, the first candidate
+// stays Japanese and each low confidence segment turns English on its own.
+TEST_F(MixedInlineDispatchTest, LowConfidenceSegmentsTurnEnglishOneAtATime) {
+  auto config = PatientConfig();
+  config.mixed_english_inline_high_confidence = false;
+  azookey::host::Dispatcher low(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = low.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  const auto on = query(1421, Request("ぎてゅbをみる", "githubwomiru", true));
+  ASSERT_GE(on.size(), 2u);
+  EXPECT_EQ(on[0].surface, "擬態を見る");
+  ExpectSegments(on[0].segments, {Segment(0, 5, "擬態を見る", "ぎてゅbをみる", 0)});
+  EXPECT_EQ(on[1].surface, "GitHubを見る");
+  EXPECT_EQ(on[1].segments.size(), 2u);
+
+  // At most three of the four segments are tried, in order: the last push
+  // never turns English. (No fixture: the mock falls back to the kana as is.)
+  const auto many =
+      query(1422, Request("ぎてゅbとぷshとぎてゅbとぷsh", "githubtopushtogithubtopush", true));
+  size_t with_english = 0;
+  for (const auto& c : many) {
+    with_english += std::any_of(c.segments.begin(), c.segments.end(),
+                                [](const auto& segment) { return segment.tag == kEnglish; });
+  }
+  EXPECT_EQ(with_english, 3u);
+  EXPECT_EQ(Count(many, "ぎてゅbとぷshとぎてゅbとpush"), 0u);
+}
+
+// Section 10: a conversion the Zenzai budget cut short is left out too, so
+// only item 2 would remain and the list is the one M63 off returns.
+TEST_F(MixedInlineDispatchTest, ConversionCutByTheZenzaiBudgetIsLeftOut) {
+  const auto on = Query(1425, Request("ぎてゅbをよむ", "githubwoyomu", true));
+  ASSERT_FALSE(on.empty());
+  EXPECT_EQ(on[0].surface, "擬態を読む");
+  EXPECT_EQ(Count(on, "GitHubを読む"), 0u);
+  for (const auto& c : on) EXPECT_TRUE(c.segments.empty()) << c.surface;
+  EXPECT_EQ(Surfaces(on), Surfaces(Query(1426, Request("ぎてゅbをよむ", "githubwoyomu", false))));
+}
+
+TEST_F(MixedInlineDispatchTest, PassedDeadlineLeavesTheListAsWithM63Off) {
+  auto config = DefaultDispatcherConfig();
+  config.mixed_english_conversion_deadline = std::chrono::milliseconds(0);
+  azookey::host::Dispatcher late(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, bool mixed) {
+    const auto resp = late.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates,
+                ipc::BuildQueryCandidatesRequest(Request(kSentenceKana, kSentenceRaw, mixed))));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  const auto on = query(1431, true);
+  EXPECT_EQ(Surfaces(on), Surfaces(query(1432, false)));
+  for (const auto& c : on) EXPECT_TRUE(c.segments.empty()) << c.surface;
+}
+
+// Section 12: the composition is converted as typed, so no corrected reading
+// comes back with the mixed candidates.
+TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
+  const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_inline_typo.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+  auto config = engine.config();
+  config.typo_correction_mode = "auto_replace";
+  config.typo_min_count = 2;
+  engine.ApplyConfig(config);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  const std::string corrected = "きょうはぎてゅbにぷsした";
+  ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.Observe(kSentenceKana, corrected, now_epoch_sec));
+  const auto response = [&](uint64_t id, bool mixed) {
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates,
+                ipc::BuildQueryCandidatesRequest(Request(kSentenceKana, kSentenceRaw, mixed))));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  EXPECT_EQ(response(1441, false).corrected_reading, corrected);
+  const auto on = response(1442, true);
+  EXPECT_TRUE(on.corrected_reading.empty());
+  ASSERT_FALSE(on.candidates.empty());
+  EXPECT_EQ(on.candidates[0].surface, "今日はGitHubにpushした");
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+TEST_F(MixedInlineDispatchTest, LiveConversionOfAMixedSentence) {
+  ipc::QueryLiveConversionRequest request{kSentenceKana, ""};
+  const auto off = Live(1451, request);
+  ASSERT_TRUE(off);
+  EXPECT_EQ(off->surface, "今日は擬態にプッシュした");
+  EXPECT_TRUE(off->segments.empty());
+
+  request.raw_romaji = kSentenceRaw;
+  request.mixed_english = true;
+  request.secure = false;
+  const auto on = Live(1452, request);
+  ASSERT_TRUE(on);
+  EXPECT_EQ(on->surface, "今日はGitHubにpushした");
+  ExpectSegments(on->segments,
+                 {Segment(0, 3, "今日は", "きょうは", 0),
+                  Segment(3, 9, "GitHub", "github", kEnglish), Segment(9, 10, "に", "に", 0),
+                  Segment(10, 14, "push", "push", kEnglish), Segment(14, 16, "した", "した", 0)});
+
+  // A generation that loses the English segment: the kana reading is converted
+  // again, as with M63 off.
+  ipc::QueryLiveConversionRequest lost{"ぎてゅbをみる", ""};
+  lost.raw_romaji = "githubwomiru";
+  lost.mixed_english = true;
+  lost.secure = false;
+  const auto fallback = Live(1453, lost);
+  ASSERT_TRUE(fallback);
+  EXPECT_EQ(fallback->surface, "擬態を見る");
+  EXPECT_TRUE(fallback->segments.empty());
+
+  auto secure = request;
+  secure.secure = true;
+  const auto secure_result = Live(1454, secure);
+  ASSERT_TRUE(secure_result);
+  EXPECT_EQ(secure_result->surface, off->surface);
+  EXPECT_TRUE(secure_result->segments.empty());
 }
 
 TEST_F(DispatcherTest, EnglishCommitsNeverReachTheKanaLearningStore) {

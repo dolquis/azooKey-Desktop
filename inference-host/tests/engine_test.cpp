@@ -1966,6 +1966,41 @@ TEST(InferenceEngineTest, DropMixedKanaAsciiModelCandidatesOnlyForAnAsciiReading
   EXPECT_EQ(surfaces_of(without_ascii), surfaces_of(input));
 }
 
+// M63-B (mixed-english-auto-conversion-spec section 7): the English segments M63
+// put into the reading are not letters the kana table left behind.
+TEST(InferenceEngineTest, DropMixedKanaAsciiModelCandidatesSkipsTheEnglishSegments) {
+  using azookey::core::Candidate;
+  using azookey::core::CandidateSource;
+  const auto make = [](const char* surface) {
+    Candidate candidate;
+    candidate.surface = surface;
+    candidate.source = CandidateSource::Model;
+    return candidate;
+  };
+  const auto surfaces_of = [](const std::vector<Candidate>& candidates) {
+    std::vector<std::string> surfaces;
+    for (const auto& candidate : candidates) surfaces.push_back(candidate.surface);
+    return surfaces;
+  };
+  // きょうは|GitHub|に|push|した: the English segments are bytes 12-18 and 21-25.
+  const std::string reading = "きょうはGitHubにpushした";
+  const std::vector<Candidate> input{make("今日はGitHubにpushした"),
+                                     make("今日はgithubにpushした")};
+  auto skipped = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(skipped, reading, {{12, 18}, {21, 25}});
+  EXPECT_EQ(surfaces_of(skipped), surfaces_of(input));
+  auto judged = input;
+  azookey::host::DropMixedKanaAsciiModelCandidates(judged, reading);
+  EXPECT_TRUE(judged.empty());
+
+  // Letters left in a Japanese segment keep the rule, judged on the surface
+  // without the English segments.
+  std::vector<Candidate> leftover{make("GitHubを見て"), make("GitHubを見てk"),
+                                  make("Githubを見て")};
+  azookey::host::DropMixedKanaAsciiModelCandidates(leftover, "GitHubをみてk", {{0, 6}});
+  EXPECT_EQ(surfaces_of(leftover), (std::vector<std::string>{"GitHubを見て"}));
+}
+
 TEST(InferenceEngineTest, DropRepeatedUnitModelCandidatesKeepsWhatTheReadingSupports) {
   using azookey::core::Candidate;
   using azookey::core::CandidateSource;
@@ -3483,6 +3518,16 @@ TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsI
   // for it is present.
   EXPECT_TRUE(std::any_of(result.candidates.begin(), result.candidates.end(),
                           [](const auto& c) { return c.surface == "今日は"; }));
+
+  // M63-B (mixed-english-auto-conversion-spec section 12): a mixed composition
+  // is converted as typed.
+  azookey::host::MixedConversionOptions as_typed;
+  as_typed.typo_correction = false;
+  auto typed = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr, 0, false, nullptr,
+                                         nullptr, &as_typed);
+  EXPECT_TRUE(typed.corrected_reading.empty());
+  EXPECT_FALSE(std::any_of(typed.candidates.begin(), typed.candidates.end(),
+                           [](const auto& c) { return c.surface == "今日は"; }));
 }
 
 TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
@@ -4693,6 +4738,34 @@ TEST_F(EngineConfirmedEnglishWordTest, LookupEnglishDictionaryReturnsOnlyTheDict
   engine_->ApplyConfig(config);
   EXPECT_TRUE(engine_->LookupEnglishDictionary("apple").empty());
   engine_->SetEnglishLearningStore(nullptr);
+}
+
+// M63-B: the lattice looks every substring up in one snapshot, nullptr when
+// the dictionary is off or missing.
+TEST_F(EngineConfirmedEnglishWordTest, WithEnglishDictionaryLooksUpOneSnapshot) {
+  const auto surfaces_of = [this](std::string_view key) {
+    std::vector<std::string> surfaces;
+    bool present = false;
+    engine_->WithEnglishDictionary([&](const azookey::host::EnglishDictionary* dictionary) {
+      surfaces.clear();
+      present = dictionary != nullptr;
+      if (!dictionary) return;
+      for (auto& entry : dictionary->Lookup(key)) surfaces.push_back(entry.surface);
+    });
+    return present ? std::optional{surfaces} : std::nullopt;
+  };
+  EXPECT_EQ(surfaces_of("apple"), std::optional{std::vector<std::string>{"apple"}});
+  EXPECT_EQ(surfaces_of("kotlin"), std::optional{std::vector<std::string>{}});
+
+  auto config = engine_->config();
+  config.english.dictionary_enabled = false;
+  engine_->ApplyConfig(config);
+  EXPECT_EQ(surfaces_of("apple"), std::nullopt);
+
+  config.english.dictionary_enabled = true;
+  config.english.dictionary_path = temp_.File("missing-english-words.tsv");
+  engine_->ApplyConfig(config);
+  EXPECT_EQ(surfaces_of("apple"), std::nullopt);
 }
 
 TEST_F(EngineConfirmedEnglishWordTest, TrendingAutoPromotionUpsertsTheNewlyConfirmedWords) {

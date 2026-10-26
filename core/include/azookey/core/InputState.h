@@ -55,7 +55,7 @@ class InputState {
   // punctuationConversion = "commit" (docs/tsf-deep-integration-spec.md
   // §3.5.1). Only affects later Input events.
   InputState WithPunctuationConversion(bool enabled) const;
-  // The reading a 、 or 。 key converts and commits, before the punctuation is
+  // The reading a 、 。 ？ or ！ key converts and commits, before the mark is
   // added; nullopt when the key only joins the reading. In Composing and
   // Previewing the commit also needs a cached first candidate of this reading.
   std::optional<std::string> PunctuationConversionReading(const UserActionEvent& event) const;

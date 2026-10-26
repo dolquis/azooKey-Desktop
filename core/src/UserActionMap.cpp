@@ -93,6 +93,13 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
     return Make(UserAction::Input, modifiers);
   }
   if (IsDigitRow(virtual_key)) {
+    // Shift+1 types ！ like a punctuation key (DEV-1670, legacy parity); the
+    // TIP checks that the layout produces it. Other Shift+digits pass through.
+    if (shift) {
+      if (virtual_key == vk::k0 + 1 && kind != InputStateKind::ReplaceSuggestion)
+        return Make(UserAction::Input, modifiers);
+      return std::nullopt;
+    }
     // Digits select only while the window is visible; elsewhere they pass
     // through unless the TIP's number rewriter claims them.
     if (kind == InputStateKind::Selecting && virtual_key != vk::k0)
@@ -100,9 +107,11 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
     return std::nullopt;
   }
   if (IsCompositionSymbol(virtual_key)) {
+    // 、 。 and ？ start a standalone composition from Idle (spec §3.5).
     if (IsComposing(kind) || kind == InputStateKind::Selecting ||
         (kind == InputStateKind::Idle && !shift &&
-         (virtual_key == vk::kOemComma || virtual_key == vk::kOemPeriod)))
+         (virtual_key == vk::kOemComma || virtual_key == vk::kOemPeriod)) ||
+        (kind == InputStateKind::Idle && shift && virtual_key == vk::kOem2))
       return Make(UserAction::Input, modifiers);
     return std::nullopt;
   }

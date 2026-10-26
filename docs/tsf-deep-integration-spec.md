@@ -602,8 +602,8 @@ preedit がない場合は句読点単独で composition を開始する。句�
 入力を取り消し（`docs/legacy-parity-spec.md` §1.2）、Backspace は句読点を削除する。
 `/` と Shift 付きの `<`、`>` は、その文字を preedit へ取り込む。
 未確定ローマ字が残っている場合は先にかなへ確定し、記号を同じ composition の末尾へ追加する。
-batch 変換の raw 入力には ASCII の `,` と `.` を保持するが、かな preview と raw romaji
-preview の表示では明示句読点として `、。` へ変換する。
+batch 変換の raw 入力には ASCII の `,`、`.`、`?`、`!` を保持するが、かな preview と raw romaji
+preview の表示と変換の読みでは明示句読点として `、。？！` へ変換する。
 
 preedit がない場合、`/` と Shift 付きの `<`、`>` はアプリへパススルーする。
 Shift 付きの数字キーは、候補窓の表示中も候補番号にしない（Shift なしの `1`〜`9` だけが候補番号）。

@@ -74,9 +74,17 @@ std::optional<WCHAR> TranslateDefaultOemCompositionCharacterForTest(WPARAM virtu
       return shift_down ? L'>' : L'.';
     case VK_OEM_2:
       return shift_down ? L'?' : L'/';
+    case '1':
+      return shift_down ? L'!' : L'1';
     default:
       return std::nullopt;
   }
+}
+
+// A layout whose Shift+1 is not ! (DEV-1670).
+std::optional<WCHAR> TranslateWithoutExclamationForTest(WPARAM virtual_key, LPARAM key_data) {
+  if (virtual_key == '1') return std::nullopt;
+  return TranslateDefaultOemCompositionCharacterForTest(virtual_key, key_data);
 }
 
 class OemCompositionTranslationGuard {
@@ -3161,18 +3169,23 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   h.keyboard_state.SetDown(VK_SHIFT, true);
   EXPECT_TRUE(h.TestPress(VK_OEM_2));
   EXPECT_TRUE(h.Press(VK_OEM_2));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。?");
-  EXPECT_EQ(range.last_text, L"ん、。?");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？");
+  EXPECT_EQ(range.last_text, L"ん、。？");
 
   EXPECT_TRUE(h.TestPress(VK_OEM_COMMA));
   EXPECT_TRUE(h.Press(VK_OEM_COMMA));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。?<");
-  EXPECT_EQ(range.last_text, L"ん、。?<");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<");
+  EXPECT_EQ(range.last_text, L"ん、。？<");
 
   EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
   EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。?<>");
-  EXPECT_EQ(range.last_text, L"ん、。?<>");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<>");
+  EXPECT_EQ(range.last_text, L"ん、。？<>");
+
+  EXPECT_TRUE(h.TestPress('1'));
+  EXPECT_TRUE(h.Press('1'));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<>！");
+  EXPECT_EQ(range.last_text, L"ん、。？<>！");
   h.keyboard_state.SetDown(VK_SHIFT, false);
 
   if (h.service.composition_) {
@@ -3201,6 +3214,24 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchOemPunctuationKeepsAsciiRawAndBackspacesAt
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に、");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni,");
+}
+
+// DEV-1670: the raw input keeps ASCII ? and ! like , and . while the preview
+// and the reading show ？ and ！.
+TEST(TsfTipOnKeyDownPreeditTest, BatchQuestionAndExclamationKeepAsciiRaw) {
+  TextServiceHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  h.service.set_batch_romaji_options_for_test(true);
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.Press(VK_OEM_2));
+  EXPECT_TRUE(h.Press('1'));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(h.service.preedit_kana_, "に？！");
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に？！");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni?!");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiAccumulatesKanaPreviewWithoutQuerying) {
@@ -3567,6 +3598,52 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationHalfwidthCandidateCommitsW
     EXPECT_EQ(attachment.composition_range.last_text, ascii);
     EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
   }
+}
+
+// DEV-1670: Shift+/ and Shift+1 start a standalone ？ or ！ whose half-width
+// form is the second candidate.
+TEST(TsfTipOnKeyDownPreeditTest, StandaloneQuestionAndExclamationOfferHalfwidth) {
+  OemCompositionTranslationGuard oem_translation;
+  for (const auto [key, japanese, ascii, ascii_text] :
+       {std::tuple{WPARAM{VK_OEM_2}, "？", "?", L"?"}, std::tuple{WPARAM{'1'}, "！", "!", L"!"}}) {
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.TestPress(key));
+    ASSERT_TRUE(h.Press(key));
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    EXPECT_EQ(h.service.preedit_kana_, japanese);
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_EQ(shown.size(), 2u);
+    EXPECT_EQ(shown[0].surface, japanese);
+    EXPECT_EQ(shown[1].surface, ascii);
+    EXPECT_EQ(shown[1].source, "fallback");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(attachment.composition_range.last_text, ascii_text);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+  }
+}
+
+// Where Shift+1 is not !, it stays with the app as before.
+TEST(TsfTipOnKeyDownPreeditTest, ShiftOneOfAnotherLayoutPassesThrough) {
+  azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+      &TranslateWithoutExclamationForTest);
+  TextServiceHarness h;
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(h.TestPress('1'));
+  EXPECT_FALSE(h.Press('1'));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(h.TestPress('1'));
+  EXPECT_FALSE(h.Press('1'));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationUsesLocalCandidatesWithRewritersEnabled) {
@@ -5969,15 +6046,31 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterNumpadDigitsBuildNumericPreedit) 
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDoesNotEatShiftedNonDigit) {
-  TextServiceHarness h;
   AsciiDecimalDigitTranslationGuard digit_translation;
-  h.service.set_number_rewriter_enabled_for_test(true);
-  h.keyboard_state.SetDown(VK_SHIFT, true);
-  h.keyboard_state.SetDown(VK_LSHIFT, true);
-
-  EXPECT_FALSE(h.TestPress('1'));
-  EXPECT_FALSE(h.Press('1'));
-  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  {
+    // A layout whose Shift+1 is not ! passes it through.
+    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+        &TranslateWithoutExclamationForTest);
+    TextServiceHarness h;
+    h.service.set_number_rewriter_enabled_for_test(true);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    h.keyboard_state.SetDown(VK_LSHIFT, true);
+    EXPECT_FALSE(h.TestPress('1'));
+    EXPECT_FALSE(h.Press('1'));
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
+  }
+  {
+    // Where Shift+1 is !, it is ！ and never the digit 1 (DEV-1670).
+    OemCompositionTranslationGuard oem_translation;
+    TextServiceHarness h;
+    h.service.set_number_rewriter_enabled_for_test(true);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    h.keyboard_state.SetDown(VK_LSHIFT, true);
+    EXPECT_TRUE(h.TestPress('1'));
+    EXPECT_TRUE(h.Press('1'));
+    EXPECT_EQ(h.service.preedit_kana_, "！");
+  }
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, Win32DigitTranslationMatchesCompatibleKeyboardLayout) {
@@ -11648,6 +11741,53 @@ TEST(TsfTipPunctuationConversionTest, SelectingCommitsTheHighlightedCandidate) {
   EXPECT_EQ(observation->chosen.surface, "転機");
 }
 
+// DEV-1670: ？ and ！ convert like 、 and 。.
+TEST(TsfTipPunctuationConversionTest, QuestionAndExclamationMarksConvertToo) {
+  using azookey::core::InputStateKind;
+  {
+    SCOPED_TRACE("composing");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    TypeTenkiWithCache(h);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.Press(VK_OEM_2));
+    EXPECT_EQ(h.context.document->text, L"天気？");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_EQ(observation->reading, "てんき");
+    EXPECT_EQ(observation->chosen.surface, "天気");
+  }
+  {
+    SCOPED_TRACE("selecting");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    TypeTenkiWithCache(h);
+    ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+      h.service.set_cached_candidates_for_test(
+          {ModelField("天気", "てんき"), ModelField("転機", "てんき")});
+    }));
+    ASSERT_TRUE(h.Press(VK_DOWN));
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.Press('1'));
+    EXPECT_EQ(h.context.document->text, L"転機！");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  }
+  {
+    SCOPED_TRACE("standalone");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.Press(VK_OEM_2));
+    ASSERT_TRUE(h.Press('1'));
+    EXPECT_EQ(h.service.preedit_kana_, "？！");
+    EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  }
+}
+
 // DEV-1735: a key typed while the candidate window is shown commits the
 // highlighted candidate, observed like Enter, and starts the next composition.
 namespace {
@@ -11778,6 +11918,25 @@ TEST(TsfTipCommitOnTypeTest, PreprocessedPathsCommitTheHighlightFirst) {
     ASSERT_TRUE(h.Press(VK_BACK));
     EXPECT_EQ(h.context.document->text, L"転機");
     EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitCorrection), 0u);
+  }
+}
+
+// DEV-1670: Shift+1 types ！ instead of choosing the first candidate.
+TEST(TsfTipCommitOnTypeTest, ShiftOneCommitsTheHighlightAndStartsWithTheExclamation) {
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter ? "pre-processing path" : "core path");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    StartPunctuationConversion(h, false);
+    h.service.set_number_rewriter_enabled_for_test(number_rewriter);
+    SelectTenkiSecond(h, /*from_cache=*/number_rewriter);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.Press('1'));
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    EXPECT_EQ(h.context.document->text, L"転機！");
+    EXPECT_EQ(h.service.preedit_kana_, "！");
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    ExpectTenkiSecondCommittedOnce(h);
   }
 }
 

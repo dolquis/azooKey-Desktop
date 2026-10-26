@@ -254,14 +254,23 @@ std::wstring BatchAiFailureNotice(const std::string& error_class) {
   return {};
 }
 
+// The half-width form of an explicit punctuation mark (spec section 3.5).
+const char* HalfwidthPunctuation(const std::string& reading) {
+  if (reading == "、") return ",";
+  if (reading == "。") return ".";
+  if (reading == "？") return "?";
+  if (reading == "！") return "!";
+  return nullptr;
+}
+
 bool IsStandalonePunctuation(const std::string& reading) {
-  return reading == "、" || reading == "。";
+  return HalfwidthPunctuation(reading) != nullptr;
 }
 
 std::vector<azookey::ipc::CandidateField> StandalonePunctuationCandidates(
     const std::string& reading) {
   return {{reading, reading, 0.0, "fallback"},
-          {reading == "、" ? "," : ".", reading, 0.0, "fallback"}};
+          {HalfwidthPunctuation(reading), reading, 0.0, "fallback"}};
 }
 
 std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
@@ -564,6 +573,13 @@ struct OemCompositionSymbol {
   std::string surface;
 };
 
+// 、 。 ？ ！: they start a composition on their own and keep a half-width
+// candidate (spec section 3.5).
+bool IsExplicitPunctuation(const std::optional<OemCompositionSymbol>& symbol) {
+  return symbol &&
+         (symbol->raw == ',' || symbol->raw == '.' || symbol->raw == '?' || symbol->raw == '!');
+}
+
 // The reading the Host gives an English candidate: raw romaji, printable ASCII
 // without spaces (docs/inline-english-candidate-spec.md §6.4). A kana reading
 // with an English tag (an M48 dictionary word) does not qualify.
@@ -643,6 +659,12 @@ std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
       case '.':
         surface += "。";
         break;
+      case '?':
+        surface += "？";
+        break;
+      case '!':
+        surface += "！";
+        break;
       default:
         surface.push_back(c);
         break;
@@ -672,7 +694,8 @@ std::optional<WCHAR> TranslateKeyboardCharacter(WPARAM virtual_key, LPARAM key_d
 }
 
 std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
-  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2) {
+  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2 &&
+      virtual_key != '1') {
     return std::nullopt;
   }
   return TranslateKeyboardCharacter(virtual_key, key_data);
@@ -743,6 +766,12 @@ std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual
                                                                   LPARAM key_data) {
   const auto translated = CurrentOemCompositionCharacter(virtual_key, key_data);
   if (!translated) return std::nullopt;
+  // Shift+1 is ！ where the layout makes it ! (DEV-1670); its other
+  // characters stay digits and symbols outside the composition marks.
+  if (virtual_key == '1') {
+    if (*translated != L'!') return std::nullopt;
+    return OemCompositionSymbol{'!', "！"};
+  }
 
   switch (*translated) {
     case L',':
@@ -758,7 +787,7 @@ std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual
     case L'>':
       return OemCompositionSymbol{'>', ">"};
     case L'?':
-      return OemCompositionSymbol{'?', "?"};
+      return OemCompositionSymbol{'?', "？"};
     default:
       return std::nullopt;
   }
@@ -2526,8 +2555,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         // composition が無いときは通常のハイフンとしてアプリへ通す。
         *eaten = has_preedit || custom_input ? TRUE : FALSE;
       } else if (composition_symbol) {
-        const bool punctuation = composition_symbol->raw == ',' || composition_symbol->raw == '.';
-        *eaten = has_preedit || punctuation ? TRUE : FALSE;
+        *eaten = has_preedit || IsExplicitPunctuation(composition_symbol) ? TRUE : FALSE;
       }
     } else if (key_event->action == UserAction::Backspace) {
       *eaten = has_preedit ? TRUE : FALSE;
@@ -3010,14 +3038,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool standalone_punctuation =
         (IsStandalonePunctuation(CurrentPreeditSurface()) &&
          !(decimal_digit && !key_event && number_rewriter_.load(std::memory_order_relaxed))) ||
-        (!has_preedit && !custom_input && composition_symbol &&
-         (composition_symbol->raw == ',' || composition_symbol->raw == '.'));
-    // Spec §3.5.1: a 、 or 。 that may convert the reading is decided by core
+        (!has_preedit && !custom_input && IsExplicitPunctuation(composition_symbol));
+    // Spec §3.5.1: a punctuation mark that may convert the reading is decided by core
     // even while the number rewriter keeps the other keys on the legacy path.
-    const bool punctuation_conversion_key =
-        has_preedit && !cand_visible && !custom_input && composition_symbol &&
-        (composition_symbol->raw == ',' || composition_symbol->raw == '.') &&
-        local_settings_.PunctuationConversionSnapshot();
+    const bool punctuation_conversion_key = has_preedit && !cand_visible && !custom_input &&
+                                            IsExplicitPunctuation(composition_symbol) &&
+                                            local_settings_.PunctuationConversionSnapshot();
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
     // and the rewriter Space path keep TIP pre-processing, while standalone
     // punctuation always uses the fixed local candidates in core mode.
@@ -3064,8 +3090,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           event.codepoint = static_cast<char32_t>(wParam);
         } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
           event.codepoint = U'-';
-        } else if (composition_symbol && (has_preedit || composition_symbol->raw == ',' ||
-                                          composition_symbol->raw == '.')) {
+        } else if (composition_symbol &&
+                   (has_preedit || IsExplicitPunctuation(composition_symbol))) {
           size_t offset = 0;
           char32_t cp = 0;
           if (core::DecodeNextUtf8(composition_symbol->surface, offset, cp) &&
@@ -3095,7 +3121,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             if (FAILED(cache_hr)) return cache_hr;
           }
         }
-        // Spec §3.5.1: a 、 or 。 waits for the first candidate of the reading.
+        // Spec §3.5.1: a punctuation mark waits for the first candidate of the reading.
         if (input_state_.kind() != core::InputStateKind::Selecting) {
           if (const auto reading = input_state_.PunctuationConversionReading(event);
               reading && !PreparePunctuationConversion(*reading) &&
@@ -3278,8 +3304,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
 
     } else if (is_input && composition_symbol &&
-               (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
-      // From Idle only 、 and 。 would start a composition; after the commit
+               (has_preedit || IsExplicitPunctuation(composition_symbol))) {
+      // From Idle only 、 。 ？ ！ would start a composition; after the commit
       // every mark does, as in the core Selecting path.
       if (cand_visible) {
         const HRESULT commit_hr = commit_selection();
@@ -7764,7 +7790,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
                                      privacy.learning_allowed && batch_learning_allowed_};
       }
     } else if (shown_candidates_.empty()) {
-      // Spec §3.5.1: a 、 or 。 committed the first candidate without a window.
+      // Spec §3.5.1: a punctuation mark committed the first candidate without a window.
       ObservePunctuationConversion(context, *observe);
     }
   }
@@ -7823,7 +7849,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
                                  std::make_move_iterator(result.actions.end()));
       result.actions.erase(split, result.actions.end());
     }
-    // Spec §3.5.1: a 、 or 。 commit writes the mark after the observed
+    // Spec §3.5.1: a punctuation mark commit writes the mark after the observed
     // candidate. The character-form cycle of that commit would rewrite the mark
     // too, so it is not offered.
     bool commits_typed_mark = false;
@@ -8143,7 +8169,7 @@ void TextService::OnCandidatesReady(void* context) {
   const auto ui_start = TipRuntimeLogger().enabled() && !trace_id.empty()
                             ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
-  // A held 、 or 。 (spec §3.5.1) commits before the answer refreshes anything else.
+  // A held punctuation mark (spec §3.5.1) commits before the answer refreshes anything else.
   service->ResolvePunctuationConversionHoldIfReady();
   const bool ui_applied = service->ShowCandidateWindowFromCache();
   if (ui_applied && ui_start != std::chrono::steady_clock::time_point{}) {
@@ -8482,7 +8508,7 @@ void TextService::ResolveFinalPunctuationHold() {
   final_punctuation_hold_.reset();
   punctuation_timer_.Cancel(DelayedActionTimer::kFinal);
   if (hold.replay) {
-    // Spec §3.5.1: the held 、 or 。 runs now, with whatever candidate arrived.
+    // Spec §3.5.1: the held punctuation mark runs now, with whatever candidate arrived.
     // Without one it only joins the reading.
     if (!PreparePunctuationConversion(hold.reading)) {
       auto cached = CoreCandidatesFromCache();
@@ -8558,7 +8584,7 @@ void TextService::AdoptLiveSegmentsObservation(ITfContext* context,
   pending_commit_observation_ = std::move(batch);
 }
 
-// Spec §3.5.1: the candidate a 、 or 。 commits. With live conversion it is the
+// Spec §3.5.1: the candidate a punctuation mark commits. With live conversion it is the
 // displayed surface without a trailing automatic mark, which the typed one
 // replaces; otherwise the cached first candidate of the reading. Returns false
 // when neither is there yet.

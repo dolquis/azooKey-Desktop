@@ -1698,7 +1698,7 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 | `trace_id` | ユーザー 1 アクション相関 ID（該当時。§7.3 / §7.7.1） |
 | `phase` | 処理フェーズ。正典 enum は `core/include/azookey/logging/Phase.h`（§7.3 / §7.7.2） |
 | `latency_ms` | 当該フェーズの所要時間 ms（計測時）。本フィールド名を全コンポーネント共通の正典とする |
-| `result` | `ok` / `error` / `cancelled` / `blocked`（secure 抑止時。`docs/privacy-and-secure-input-spec.md` §5.1） |
+| `result` | 共通の値は `ok` / `error` / `cancelled` / `blocked`（secure 抑止時。`docs/privacy-and-secure-input-spec.md` §5.1）。結果の種類が多いイベントは、そのイベントを定義する spec が固定の値を列挙したうえで、同じフィールド名に載せてよい（例: `langbar_menu_setting_write` の `written` / `lock_unavailable` / `read_failed` / `invalid_file` / `write_failed`。`docs/tsf-deep-integration-spec.md` §4.5）。値は固定の識別子に限り、入力本文や自由文を載せない |
 | `error_code` | §7.4 のエラーコード（error 時） |
 
 `component` はログファイル（`tip-*.jsonl` / `host-*.jsonl`）と 1:1 に対応する。

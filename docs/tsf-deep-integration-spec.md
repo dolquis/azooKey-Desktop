@@ -838,7 +838,8 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   オブジェクトとして読めないファイルは書き換えず、隔離もしない（設定アプリが開いたときに扱う）。
   ロックは 500 ms 待って取れなければ書かない（利用者への表示は無く、ログだけが残る）。置き換えの flush と replace はそれぞれ一時的な共有違反を
   最大 500 ms まで再試行するので、書き込みは UI スレッドを最悪で約 1.5 秒止める。結果は
-  `langbar_menu_setting_write` にキーと結果の名前だけを出す。
+  `langbar_menu_setting_write` にキー（`setting`）と結果（`result`）の名前だけを出す。`result` は
+  `written` / `lock_unavailable` / `read_failed` / `invalid_file` / `write_failed` の固定値で、共通の値域（`docs/dev-infrastructure-spec.md` §7.2）に加えてこのイベントだけが使う。
 - 反映: どの TIP インスタンスも settings.json の監視で新しい値を読む。Host が読むのは `liveConversion`
   （動的句読点の入口）だけなので、`UpdateConfig` はライブ変換を切り替えたときだけ、モデル再試行と同じ短命の
   control 接続で送る（Host は `UpdateConfig` でモデルも読み直すので、ライブ変換の切り替えのたびにモデルの再ロードが走る）。

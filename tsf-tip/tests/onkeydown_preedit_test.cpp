@@ -30,6 +30,7 @@
 
 #include "../../core/tests/EtwCapture.h"
 #include "KeyboardStateGuard.h"
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/BodyLogGate.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -3583,6 +3584,117 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertsMarksInCustomRomajiOutput) {
   EXPECT_TRUE(h.Press('Z'));
   EXPECT_TRUE(h.Press('X'));
   EXPECT_EQ(h.service.preedit_kana_, "！");
+}
+
+namespace {
+
+// DEV-1748: the US layout types ' with VK_OEM_7, the JIS layout with Shift+7.
+std::optional<WCHAR> TranslateUsApostropheForTest(WPARAM key, LPARAM) {
+  if (key == VK_OEM_7) return L'\'';
+  if (key >= 'A' && key <= 'Z') return static_cast<WCHAR>(key + ('a' - 'A'));
+  return std::nullopt;
+}
+
+std::optional<WCHAR> TranslateJisApostropheForTest(WPARAM key, LPARAM) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (key == '7') return (keyboard_state[VK_SHIFT] & 0x80) != 0 ? L'\'' : L'7';
+  if (key >= 'A' && key <= 'Z') return static_cast<WCHAR>(key + ('a' - 'A'));
+  return std::nullopt;
+}
+
+class ApostropheTranslationGuard {
+ public:
+  explicit ApostropheTranslationGuard(
+      azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest translate) {
+    azookey::tsf::testing::SetTranslateCustomRomajiCharacterForTest(translate);
+  }
+  ~ApostropheTranslationGuard() {
+    azookey::tsf::testing::ClearTranslateCustomRomajiCharacterForTest();
+  }
+};
+
+}  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, ApostropheAfterNSeparatesNOnUsAndJisLayouts) {
+  {
+    TextServiceHarness h;
+    ApostropheTranslationGuard us(&TranslateUsApostropheForTest);
+    for (const WPARAM key : {'G', 'E', 'N'}) ASSERT_TRUE(h.Press(key));
+    EXPECT_TRUE(h.TestPress(VK_OEM_7));
+    EXPECT_EQ(h.service.preedit_kana_, "げ");
+    EXPECT_TRUE(h.Press(VK_OEM_7));
+    for (const WPARAM key : {'I', 'N', 'A'}) ASSERT_TRUE(h.Press(key));
+    EXPECT_EQ(h.service.preedit_kana_, "げんいな");
+  }
+  {
+    TextServiceHarness h;
+    ApostropheTranslationGuard jis(&TranslateJisApostropheForTest);
+    for (const WPARAM key : {'K', 'A', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    EXPECT_TRUE(h.TestPress('7'));
+    EXPECT_TRUE(h.Press('7'));
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_EQ(h.service.preedit_kana_, "かんあ");
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ApostropheWithoutPendingNPassesThrough) {
+  TextServiceHarness h;
+  ApostropheTranslationGuard us(&TranslateUsApostropheForTest);
+  // No composition: the app types the ' itself, as before.
+  EXPECT_FALSE(h.TestPress(VK_OEM_7));
+  EXPECT_FALSE(h.Press(VK_OEM_7));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  // A composition without a pending n leaves the ' to the app too.
+  for (const WPARAM key : {'K', 'A'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_FALSE(h.TestPress(VK_OEM_7));
+  EXPECT_FALSE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  // A custom table keeps its own rules for '.
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  h.service.set_romaji_table_for_test(
+      azookey::core::CustomRomajiLoader::Parse("n\tん\t1\na\tあ\n").table);
+  ASSERT_TRUE(h.Press('N'));
+  EXPECT_FALSE(h.TestPress(VK_OEM_7));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ApostropheAfterNSeparatesNInBatchRomaji) {
+  TextServiceHarness h;
+  ApostropheTranslationGuard us(&TranslateUsApostropheForTest);
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {'G', 'E', 'N'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_TRUE(h.TestPress(VK_OEM_7));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  for (const WPARAM key : {'I', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_EQ(h.service.preedit_kana_, "げんいん");
+  // The raw romaji keeps the ', and the transport chunks read it as the preedit does.
+  const auto chunks = azookey::core::SplitBatchRomaji("gen'inn");
+  ASSERT_EQ(chunks.size(), 1u);
+  EXPECT_EQ(chunks.front().reading, "げんいん");
+}
+
+TEST(TsfTipBracketTest, ApostropheAfterNSeparatesBeforeQuotePairing) {
+  BracketHarness h;
+  h.settings.pairing.symmetric_quote_pairing = true;
+  h.ApplySettings();
+  azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateUsApostropheForTest);
+  ApostropheTranslationGuard us(&TranslateUsApostropheForTest);
+  for (const WPARAM key : {'G', 'E', 'N'}) EXPECT_TRUE(h.Press(key));
+  EXPECT_TRUE(h.Press(VK_OEM_7, true));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.service.preedit_kana_, "げんい");
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  EXPECT_EQ(h.context.document->text.find(L'\''), std::wstring::npos);
+  // Without a pending n the ' is a quote again: the preedit commits first.
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_NE(h.context.document->text.find(L"か"), std::wstring::npos);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationStartsAndClearsDocumentComposition) {

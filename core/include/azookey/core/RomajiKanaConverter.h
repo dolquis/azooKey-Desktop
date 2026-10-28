@@ -19,6 +19,11 @@ class RomajiKanaConverter {
   bool HasCustomTable() const { return static_cast<bool>(custom_table_); }
   // Whether this ASCII character continues a rule or begins one after pending bytes flush.
   bool CanContinueCustomWith(char ascii) const;
+  // Whether Feed('\'') ends a pending built-in "n" / "nn" as ん and consumes the
+  // apostrophe (Mozc's n' convention, DEV-1748). False with a custom table.
+  bool SeparatesNWithApostrophe() const {
+    return !custom_table_ && (pending_ == "n" || pending_ == "nn");
+  }
   bool HasPending() const { return !pending_.empty(); }
   void PopPendingPreview();
   std::string PreviewPending() const;

@@ -101,6 +101,12 @@ std::string RomajiKanaConverter::Feed(char ascii) {
     out += "ー";
     return out;
   }
+  // n' / nn' end the syllable at ん and consume the apostrophe, so "gen'inn" reads
+  // げんいん (Mozc's convention; the legacy table has no such rule).
+  if (ascii == '\'' && SeparatesNWithApostrophe()) {
+    pending_.clear();
+    return "ん";
+  }
   if (!std::isalpha(static_cast<unsigned char>(lower))) {
     std::string out = ConvertPending(true);
     out.push_back(ascii);

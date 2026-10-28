@@ -631,6 +631,14 @@ Shift 付きの `VK_1` は `!` を生む配列でだけ上記の `！` として
 preedit に取り込んだ記号は通常の Backspace と同じ削除対象とし、アプリ本文と IME 内部に
 編集対象を分裂させない。
 
+アポストロフィ `'` は、内蔵ローマ字表で未確定ローマ字が `n` か `nn` のときだけ composition へ取り込み、
+「ん」の区切りとして消費する（`docs/legacy-parity-spec.md` §5.4）。キーは仮想キーではなく、
+現在の keyboard layout と modifier 状態で変換した文字が `'` かどうかで判定する（US 配列は
+`VK_OEM_7`、JIS 配列は Shift 付きの `VK_7`）。この判定は `docs/bracket-pairing-spec.md` の
+対称引用符の対より先に行う。未確定の `n` が無いとき、composition が無いとき、カスタムローマ字表の
+ときは、`'` を従来どおり扱う（カスタム表は自身の規則で、それ以外はアプリへのパススルーか括弧入力）。
+batch 変換では raw 入力に `'` を保持し、表示と変換の読みは同じ規則で「ん」に区切る。
+
 `docs/dynamic-punctuation-spec.md` の自動句読点は、ユーザーが明示的に押したキーの
 字種と状態遷移を扱わないため、本節の契約とは別機能である。
 テンキーの `VK_DECIMAL` と `VK_DIVIDE` は本節の対象外とし、現段階では composition へ

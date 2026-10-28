@@ -731,6 +731,36 @@ std::optional<char> CurrentCustomRomajiCharacter(WPARAM key, LPARAM key_data,
   return romaji.CanContinueCustomWith(ascii) ? std::optional<char>(ascii) : std::nullopt;
 }
 
+// DEV-1748: whether a ' typed now would end a pending built-in n / nn as ん. The
+// batch preedit keeps its romaji raw, so its pending state comes from replaying it.
+bool PendingNTakesApostrophe(const azookey::core::RomajiKanaConverter& romaji,
+                             const std::string& batch_raw_romaji,
+                             const std::shared_ptr<const azookey::core::CustomRomajiTable>& table) {
+  if (batch_raw_romaji.empty()) return romaji.SeparatesNWithApostrophe();
+  azookey::core::RomajiKanaConverter replay;
+  replay.SetCustomTable(table);
+  for (const char raw : batch_raw_romaji) replay.Feed(raw);
+  return replay.SeparatesNWithApostrophe();
+}
+
+// The ' comes from the layout's character, so US (VK_OEM_7) and JIS (Shift+7)
+// both reach it. Without a pending n it stays outside the composition.
+std::optional<char> CurrentNSeparatorCharacter(
+    WPARAM key, LPARAM key_data, const azookey::core::RomajiKanaConverter& romaji,
+    const std::string& batch_raw_romaji,
+    const std::shared_ptr<const azookey::core::CustomRomajiTable>& table) {
+  if (batch_raw_romaji.empty() && !romaji.SeparatesNWithApostrophe()) return std::nullopt;
+#ifdef AZOOKEY_TSF_TESTING
+  const auto character = g_translate_custom_romaji_character(key, key_data);
+#else
+  const auto character = TranslateKeyboardCharacter(key, key_data);
+#endif
+  // Replay the batch romaji only for the ' itself.
+  if (character != L'\'' || !PendingNTakesApostrophe(romaji, batch_raw_romaji, table))
+    return std::nullopt;
+  return '\'';
+}
+
 char32_t BracketCodepoint(WCHAR raw, azookey::core::BracketInputMode mode) {
   if (mode == azookey::core::BracketInputMode::AlnumHalf) return raw;
   if (mode == azookey::core::BracketInputMode::AlnumFull) {
@@ -2188,6 +2218,10 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
     return S_OK;
   const bool enabled = !alnum || settings.pairing.enabled_in_alnum_mode;
   const auto raw = CurrentBracketCharacter(key, key_data);
+  // DEV-1748: after a pending n the ' separates ん before it can open a quote pair.
+  if (raw == L'\'' && !candidate_ui_.IsShowing() &&
+      PendingNTakesApostrophe(romaji_, batch_raw_romaji_, batch_romaji_table_))
+    return S_OK;
   const char32_t codepoint = raw ? BracketCodepoint(*raw, settings.input_mode) : 0;
   const bool bracket =
       enabled &&
@@ -2527,6 +2561,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         custom_input = composition_symbol->raw;
       else
         custom_input = CurrentCustomRomajiCharacter(wParam, lParam, input_romaji);
+      if (!custom_input)
+        custom_input = CurrentNSeparatorCharacter(wParam, lParam, input_romaji, batch_raw_romaji_,
+                                                  batch_romaji_table_);
     }
     if (custom_input && !key_event)
       key_event = core::UserActionEvent{core::UserAction::Input, 0, modifiers, 0};
@@ -2994,6 +3031,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         custom_input = composition_symbol->raw;
       else
         custom_input = CurrentCustomRomajiCharacter(wParam, lParam, input_romaji);
+      if (!custom_input)
+        custom_input = CurrentNSeparatorCharacter(wParam, lParam, input_romaji, batch_raw_romaji_,
+                                                  batch_romaji_table_);
     }
     if (custom_input && !key_event)
       key_event = core::UserActionEvent{UserAction::Input, 0, modifiers, 0};

@@ -39,7 +39,9 @@ target_link_libraries(crash_reporting_tests PRIVATE
 if(WIN32)
   target_link_libraries(crash_reporting_tests PRIVATE dbghelp)
 endif()
-azookey_discover_tests(crash_reporting_tests)
+# Crash probes enforce a one-second report deadline. Keep unrelated parallel
+# CTest work from starving their worker while retaining the production deadline.
+azookey_discover_tests(crash_reporting_tests RUN_SERIAL)
 
 add_executable(runtime_logger_tests
   runtime_logger_test.cpp

@@ -188,6 +188,8 @@ jobs:
     if: needs.changes.outputs.powershell_quality == 'true'
     runs-on: windows-2022
     timeout-minutes: 15
+    env:
+      PESTER_VERSION: '6.2.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -201,15 +203,15 @@ jobs:
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
           $pester = Get-Module -ListAvailable Pester |
-            Sort-Object Version -Descending |
+            Where-Object { $_.Version -eq [version]$env:PESTER_VERSION -and -not $_.PrivateData.PSData.Prerelease } |
             Select-Object -First 1
-          if (-not $pester -or $pester.Version -lt [version]'5.0.0') {
-            Install-Module Pester -RequiredVersion 5.9.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          if (-not $pester) {
+            Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
           }
 
       - name: Run PSScriptAnalyzer and Pester
         shell: pwsh
-        run: ./scripts/test-powershell-quality.ps1
+        run: ./scripts/test-powershell-quality.ps1 -PesterVersion $env:PESTER_VERSION
 
   quality:
     name: Pre-commit
@@ -955,6 +957,12 @@ jobs:
 
       - name: Verify rewriter data and porters
         run: python3 -B -m unittest discover -s scripts/tests -p test_rewriter_porters.py
+
+      - name: Verify bundled English words and porter
+        run: python3 -B -m unittest discover -s scripts/tests -p test_english_words_porter.py
+
+      - name: Verify mixed English evaluation fixtures
+        run: python3 -B -m unittest discover -s scripts/tests -p test_generate_mixed_english_eval.py
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11

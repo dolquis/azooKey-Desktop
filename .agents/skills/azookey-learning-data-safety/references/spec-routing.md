@@ -28,7 +28,7 @@ Windows の実ビルドと CTest はリポジトリ指定の Windows Headless CM
 ## レビュー観点
 
 - 保存先がユーザー単位であり、repo 配下やパッケージ資産へ入らないか。
-- 共有ファイルの直接 writer を増やしていないか（`user_dict.json` は Host と `userdict` CLI、`settings.json` は設定アプリのみ）。
+- 共有ファイルの直接 writer を増やしていないか（`user_dict.json` は Host と `userdict` CLI、`settings.json` は設定アプリ・Host・TIP の対象 1 キーのみ、いずれも同じロックの下）。
 - temp file、rename/replace、flush、lock の順序が失敗時にも一貫するか。
 - 破損、旧形式、部分書込みでデータを黙って失わないか。
 - import/export が入力検証、重複、サイズ上限、文字コード、途中失敗を扱うか。

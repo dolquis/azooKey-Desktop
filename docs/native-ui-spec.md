@@ -251,6 +251,8 @@ DPI の変化で表示をやり直すときのキャレット矩形は、直前�
 Phase 5 では Win32 標準ダイアログ（IDD_*）で実装。
 Phase 7-M30 で設定アプリと統合して WinUI 3 に移行。
 
+入力インジケーターの右クリックのメニュー（`docs/tsf-deep-integration-spec.md` §4.5）は Win32 のポップアップメニュー（`TrackPopupMenuEx`）で、OS 標準の見た目に任せ、`ThemeColors` は使わない。本書の適用外である。
+
 ### 4.5 設定アプリの API キー入力（M34）
 
 設定アプリの OpenAI API キーは `PasswordBox` で伏字表示する。読み込み時は

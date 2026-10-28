@@ -29,6 +29,7 @@ add_library(azookey_tsf_tip SHARED
   src/TipRuntimeLog.cpp
   src/TipSettingsWriter.cpp
   src/TextServiceFactory.cpp
+  resources/azookey_tsf_tip.rc
 )
 
 target_include_directories(azookey_tsf_tip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -157,6 +158,18 @@ if(AZOOKEY_BUILD_TESTS)
     LABEL tsf-com
     RESOURCE_LOCK azookey-tsf-com-registration
     TIMEOUT 30)
+
+  # Reads the brand icon the TSF profile points at (uIconIndex 0) straight from
+  # the built DLL; it neither loads nor registers the TIP.
+  add_executable(tsf_tip_brand_icon_tests tests/brand_icon_test.cpp)
+  target_compile_definitions(tsf_tip_brand_icon_tests PRIVATE
+    AZOOKEY_TSF_TIP_DLL_PATH="$<TARGET_FILE:azookey_tsf_tip>"
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(tsf_tip_brand_icon_tests PRIVATE
+    GTest::gtest_main azookey_project_options azookey_project_warnings shell32 user32 gdi32)
+  target_include_directories(tsf_tip_brand_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/resources)
+  add_dependencies(tsf_tip_brand_icon_tests azookey_tsf_tip)
+  azookey_discover_tests(tsf_tip_brand_icon_tests TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
   add_executable(tsf_tip_typo_correction_tracker_tests tests/typo_correction_tracker_test.cpp)

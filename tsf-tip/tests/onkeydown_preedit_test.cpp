@@ -10261,10 +10261,18 @@ TEST(TsfTipTypoCorrectionTest, AmbiguousReadingChoiceReachesCandidatesButNotTheP
 TEST(TsfTipTypoCorrectionTest, TheOtherReadingsCandidateIsLearnedUnderItsOwnReading) {
   for (const bool other : {true, false}) {
     SCOPED_TRACE(other);
+    // FakeCompositionAttachment needs a TextServiceHarness; it takes the same
+    // settings as ConfigureTypoHarness, and the built-in romaji table.
     TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    h.service.set_number_rewriter_enabled_for_test(false);
+    h.service.set_romaji_table_for_test(nullptr);
     for (const WPARAM key : {'G', 'E', 'N', 'N', 'I', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
     ASSERT_TRUE(h.Press(VK_SPACE));
     ASSERT_EQ(h.service.preedit_kana_, "げんにん");
+    ASSERT_EQ(h.service.alt_readings_for_test("げんにん", 1), std::vector<std::string>{"げんいん"})
+        << "typed romaji: " << h.service.english_raw_romaji_for_test();
     azookey::ipc::CandidateField chosen;
     chosen.surface = other ? "原因" : "現任";
     chosen.reading = other ? "げんいん" : "げんにん";
@@ -10284,8 +10292,14 @@ TEST(TsfTipTypoCorrectionTest, TheOtherReadingsCandidateIsLearnedUnderItsOwnRead
 
 // A reading that is not one of the typed romaji's readings is not adopted.
 TEST(TsfTipTypoCorrectionTest, OnlyAReadingOfTheTypedRomajiIsLearnedInstead) {
-  TextServiceHarness h;
-  for (const WPARAM key : {'G', 'E', 'N', 'N', 'I', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_romaji_table_for_test(nullptr);
+  TypeTypoRomaji(h, "GENNINN");
+  // The trailing nn is still pending; the document shows it as ん.
+  ASSERT_EQ(h.context.document->text, L"げんにん");
+  ASSERT_EQ(h.service.alt_readings_for_test("げんにん", 1), std::vector<std::string>{"げんいん"})
+      << "typed romaji: " << h.service.english_raw_romaji_for_test();
   azookey::ipc::CandidateField unrelated;
   unrelated.reading = "かんい";
   EXPECT_EQ(h.service.observed_reading_for_test("げんにん", unrelated), "げんにん");

@@ -4,6 +4,7 @@
 #include <ctffunc.h>
 #include <msctf.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -827,6 +828,16 @@ class TextService final : public ITfTextInputProcessorEx,
   // Set while OnKeyDown handles the same key again after committing the
   // shown selection (DEV-1735).
   bool retyping_after_commit_{false};
+  // Keys consumed while a refused commit waits for its retry, with the key
+  // state of their press, replayed once a key retries it (DEV-1750).
+  struct RetryWaitingKey {
+    const void* context;
+    WPARAM key;
+    LPARAM key_data;
+    std::array<BYTE, 256> key_state;
+  };
+  static constexpr size_t kMaxRetryWaitingKeys = 16;
+  std::vector<RetryWaitingKey> retry_waiting_keys_;
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 
@@ -1424,7 +1435,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void ClearTextStateForLifecycle();
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   HRESULT RequestCommitEditSession(ITfContext* context);
-  bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
+  bool RequestLifecycleCommitOrEndComposition(ITfContext* context,
+                                              const std::string& shown_surface);
+  std::string LifecycleShownSurface() const;
+  void HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data);
+  HRESULT ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key, LPARAM retry_key_data);
   HRESULT AdviseKeyboardOpenCompartment();
   HRESULT UnadviseKeyboardOpenCompartment();
   HRESULT AdviseFunctionProvider();

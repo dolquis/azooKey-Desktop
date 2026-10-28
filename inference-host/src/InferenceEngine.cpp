@@ -2,13 +2,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <set>
 #include <utility>
 
-#include "azookey/core/AmbiguousReadingChooser.h"
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/core/SymbolRewriter.h"
@@ -1702,16 +1702,49 @@ std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
   return std::move(result.candidates.front());
 }
 
-std::string InferenceEngine::ChooseAmbiguousReading(const std::string& kana,
-                                                    const std::vector<std::string>& alternatives) {
-  std::vector<std::string> readings{kana};
-  for (const auto& alternative : alternatives)
-    if (!alternative.empty() && alternative.size() <= kana.size() && alternative != kana)
-      readings.push_back(alternative);
-  if (readings.size() < 2) return kana;
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  RefreshDictionaryLocked();
-  return readings[core::ChooseAmbiguousReading(readings, StaticReadingWordLookup(dictionaries_))];
+InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
+    const std::string& kana, const std::vector<std::string>& alternatives,
+    const std::string& context, uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+    uint32_t max_candidates, const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
+  auto typed = QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, false,
+                                 telemetry, tag_boosts);
+  const auto alternative =
+      std::find_if(alternatives.begin(), alternatives.end(), [&](const std::string& reading) {
+        return !reading.empty() && reading.size() <= kana.size() && reading != kana;
+      });
+  // An M35 correction replaced the reading the alternatives were made from.
+  if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
+      (cancel && cancel->load(std::memory_order_relaxed)))
+    return typed;
+  auto other = QueryCandidatesEx(*alternative, context, now_epoch_sec, cancel, max_candidates,
+                                 false, telemetry, tag_boosts);
+  const auto best_model_score = [](const CandidatesResult& result) -> std::optional<double> {
+    std::optional<double> best;
+    for (const auto& candidate : result.candidates)
+      if (candidate.source == core::CandidateSource::Model && std::isfinite(candidate.score))
+        best = best ? (std::max)(*best, candidate.score) : candidate.score;
+    return best;
+  };
+  const auto typed_score = best_model_score(typed);
+  const auto other_score = best_model_score(other);
+  if (typed_score && other_score) {
+    // A conversion cut short by its deadline scores a partial generation.
+    if (other.model_deadline_exceeded || typed.model_deadline_exceeded ||
+        *other_score <= *typed_score + kAmbiguousReadingModelMargin)
+      return typed;
+    if (other.corrected_reading.empty()) other.corrected_reading = *alternative;
+    return other;
+  }
+  for (auto& candidate : other.candidates) {
+    if (candidate.source != core::CandidateSource::SystemDictionary &&
+        candidate.source != core::CandidateSource::UserDictionary)
+      continue;
+    const bool shown =
+        std::any_of(typed.candidates.begin(), typed.candidates.end(),
+                    [&](const core::Candidate& c) { return c.surface == candidate.surface; });
+    if (!shown) typed.candidates.push_back(std::move(candidate));
+  }
+  return typed;
 }
 
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(

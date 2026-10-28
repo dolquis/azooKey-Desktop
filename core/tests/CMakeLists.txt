@@ -1,5 +1,4 @@
 add_executable(core_tests
-  ambiguous_reading_chooser_test.cpp
   app_profile_resolver_test.cpp
   body_log_gate_test.cpp
   bracket_pairing_test.cpp

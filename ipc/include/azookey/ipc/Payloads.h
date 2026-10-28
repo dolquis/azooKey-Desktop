@@ -183,9 +183,10 @@ struct QueryCandidatesRequest {
   // raw_romaji and english_candidates. Omitted on the wire when false.
   bool mixed_english{false};
   // DEV-1734 (legacy-parity-spec section 5.4): other readings of the same
-  // romaji, each "nn" + vowel read as ん + あ行/や行. The Host may convert one of
-  // them instead and returns it as corrected_reading. Omitted on the wire when
-  // empty; an older Host ignores it and converts `reading`.
+  // romaji, each "nn" + vowel read as ん + あ行/や行. The candidate window
+  // (live = false) may convert one of them instead and return it as
+  // corrected_reading. Omitted on the wire when empty; an older Host ignores it
+  // and converts `reading`.
   std::vector<std::string> alt_readings;
 };
 
@@ -218,13 +219,10 @@ struct QueryLiveConversionRequest {
   // QueryCandidatesRequest; only false goes on the wire, so a secure request
   // keeps the pre-M63 shape.
   bool secure{true};
-  // DEV-1734: as QueryCandidatesRequest::alt_readings. The response carries
-  // only the surface of the reading the Host chose.
-  std::vector<std::string> alt_readings;
 };
 
 // DEV-1734: alt_readings beyond this many are dropped on decode. Three
-// ambiguous positions give at most seven other readings.
+// ambiguous positions give at most seven other readings; the TIP sends one.
 inline constexpr size_t kMaxAltReadings = 7;
 
 struct QueryLiveConversionResponse {

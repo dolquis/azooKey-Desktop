@@ -449,8 +449,9 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 ### 7.1 候補の合成順（`InferenceEngine::QueryCandidatesExImpl`）
 
 統合は **converter ではなく engine 側**で行う。
-要求に `alt_readings` があるとき、Dispatcher は先に `ChooseAmbiguousReading` で変換する読みを選ぶ
-（`docs/legacy-parity-spec.md` §5.4）。以下の `kana` は選んだ読みである。
+変換窓の要求に `alt_readings` があるとき、Dispatcher は `QueryAmbiguousCandidatesEx` で既定の読みと
+もう一方の読みをそれぞれ以下の手順で変換し、モデルスコアで選ぶか候補を足す
+（`docs/legacy-parity-spec.md` §5.4）。
 `inference-host/src/InferenceEngine.cpp` の `QueryCandidatesExImpl` は次の順で処理する。
 
 1. **typo 補正読みの解決**: `TypoCorrectionStore::Lookup` の結果を、`auto_replace` なら

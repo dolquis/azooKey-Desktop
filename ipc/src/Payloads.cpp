@@ -584,7 +584,6 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
   if (!p.secure) o.emplace("secure", j::Value(false));
-  AltReadingsToJson(p.alt_readings, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -604,7 +603,6 @@ std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const 
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.mixed_english = v->GetBool("mixed_english").value_or(false);
   p.secure = v->GetBool("secure").value_or(true);
-  p.alt_readings = AltReadingsFromJson(*v);
   return p;
 }
 

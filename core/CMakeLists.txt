@@ -1,5 +1,4 @@
 add_library(azookey_core STATIC
-  src/AmbiguousReadingChooser.cpp
   src/AppProfileResolver.cpp
   src/BodyLogGate.cpp
   src/BracketPairing.cpp

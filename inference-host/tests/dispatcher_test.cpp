@@ -10,6 +10,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -5768,58 +5769,113 @@ TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
   RemovePathNoThrow(dir);
 }
 
-// DEV-1734 (legacy-parity-spec section 5.4): alt_readings lets the Host convert
-// the reading of an ambiguous "nn" + vowel that the dictionary supports, and
-// report it as corrected_reading. SimpleConverter answers an unknown reading
-// with itself, so the surface shows which reading was converted.
-TEST_F(DispatcherTest, AltReadingsConvertTheReadingTheDictionarySupports) {
+// DEV-1734 (legacy-parity-spec section 5.4): the candidate window weighs the
+// other reading of an ambiguous "nn" + vowel.
+namespace {
+
+// Model-source candidates whose score depends on the reading, as Zenzai's
+// normalized log probability would; the surface names the reading converted.
+class ScoredReadingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
+    static const std::map<std::string, double> kScores = {
+        {"ないぶげんにん", 0.60}, {"ないぶげんいん", 0.90}, {"さんにん", 0.80}, {"さんいん", 0.83}};
+    const auto found = kScores.find(kana);
+    azookey::core::Candidate candidate{"model:" + kana, kana,
+                                       found == kScores.end() ? 0.5 : found->second};
+    candidate.source = azookey::core::CandidateSource::Model;
+    return {candidate};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+
+ipc::Envelope AmbiguousQuery(uint64_t id, const std::string& reading,
+                             std::vector<std::string> alternatives, bool live = false) {
+  ipc::QueryCandidatesRequest q;
+  q.reading = reading;
+  q.live = live;
+  q.alt_readings = std::move(alternatives);
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = id;
+  env.type = ipc::MessageType::QueryCandidates;
+  env.payload_json = ipc::BuildQueryCandidatesRequest(q);
+  return env;
+}
+
+ipc::QueryCandidatesResponse DispatchAmbiguous(azookey::host::Dispatcher& dispatcher,
+                                               const ipc::Envelope& env) {
+  const auto resp = dispatcher.Dispatch(env);
+  EXPECT_TRUE(resp.has_value());
+  auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+  EXPECT_TRUE(parsed && !parsed->candidates.empty());
+  return parsed.value_or(ipc::QueryCandidatesResponse{});
+}
+
+}  // namespace
+
+TEST(AmbiguousReadingDispatchTest, ModelScoresChooseTheReadingTheWindowConverts) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  // The other reading scores higher by more than the margin: its candidates,
+  // and corrected_reading names it.
+  auto chosen =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"}));
+  EXPECT_EQ(chosen.corrected_reading, "ないぶげんいん");
+  EXPECT_EQ(chosen.candidates.front().surface, "model:ないぶげんいん");
+
+  // Within the margin the typed reading stays.
+  auto near_tie = DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "さんにん", {"さんいん"}));
+  EXPECT_TRUE(near_tie.corrected_reading.empty());
+  EXPECT_EQ(near_tie.candidates.front().surface, "model:さんにん");
+
+  // Per-key (live) queries and an older TIP without alt_readings convert as typed.
+  auto per_key =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "ないぶげんにん", {"ないぶげんいん"}, true));
+  EXPECT_TRUE(per_key.corrected_reading.empty());
+  EXPECT_EQ(per_key.candidates.front().surface, "model:ないぶげんにん");
+  auto older = DispatchAmbiguous(dispatcher, AmbiguousQuery(4, "ないぶげんにん", {}));
+  EXPECT_TRUE(older.corrected_reading.empty());
+  EXPECT_EQ(older.candidates.front().surface, "model:ないぶげんにん");
+
+  // An alternative longer than the reading is not one of its readings.
+  auto longer = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "げんにん", {"ないぶげんいん"}));
+  EXPECT_TRUE(longer.corrected_reading.empty());
+}
+
+TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCandidates) {
   ASSERT_TRUE(engine.LoadDictionaryLayer(
       azookey::learning::LayerId::Sudachi,
       std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
-  const auto query = [&](uint64_t id, const std::string& reading,
-                         std::vector<std::string> alternatives) {
-    ipc::QueryCandidatesRequest q;
-    q.reading = reading;
-    q.alt_readings = std::move(alternatives);
-    const auto resp = dispatcher.Dispatch(
-        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
-    EXPECT_TRUE(resp.has_value());
-    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
-    EXPECT_TRUE(parsed && !parsed->candidates.empty()) << reading;
-    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  const auto surfaces = [](const ipc::QueryCandidatesResponse& response) {
+    std::vector<std::string> out;
+    for (const auto& c : response.candidates) out.push_back(c.surface);
+    return out;
   };
-
-  auto chosen = query(1734, "ないぶげんにん", {"ないぶげんいん"});
-  EXPECT_EQ(chosen.corrected_reading, "ないぶげんいん");
-  ASSERT_FALSE(chosen.candidates.empty());
-  EXPECT_EQ(chosen.candidates.front().reading, "ないぶげんいん");
-
-  // Only the default reading forms a word: it stays, with no corrected reading.
-  auto kept = query(1735, "こんにちは", {"こんいちは"});
-  EXPECT_TRUE(kept.corrected_reading.empty());
-  ASSERT_FALSE(kept.candidates.empty());
-  EXPECT_EQ(kept.candidates.front().reading, "こんにちは");
-
-  // An older TIP sends no alt_readings and gets the reading it asked for.
-  auto older = query(1736, "ないぶげんにん", {});
-  EXPECT_TRUE(older.corrected_reading.empty());
-  ASSERT_FALSE(older.candidates.empty());
-  EXPECT_EQ(older.candidates.front().reading, "ないぶげんにん");
-
-  // An alternative longer than the reading is not one of its readings.
-  auto longer = query(1737, "げんにん", {"ないぶげんいん"});
-  EXPECT_TRUE(longer.corrected_reading.empty());
-
-  const auto live = [&](uint64_t id, std::vector<std::string> alternatives) {
-    ipc::QueryLiveConversionRequest q{"ないぶげんにん", ""};
-    q.alt_readings = std::move(alternatives);
-    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryLiveConversion,
-                                                  ipc::BuildQueryLiveConversionRequest(q)));
-    EXPECT_TRUE(resp.has_value());
-    const auto parsed =
-        resp ? ipc::ParseQueryLiveConversionResponse(resp->payload_json) : std::nullopt;
-    return parsed ? parsed->surface : std::string{};
-  };
-  EXPECT_EQ(live(1738, {"ないぶげんいん"}), "ないぶげんいん");
-  EXPECT_EQ(live(1739, {}), "ないぶげんにん");
+  const auto typed = DispatchAmbiguous(dispatcher, AmbiguousQuery(1734, "げんにん", {}));
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1735, "げんにん", {"げんいん"}));
+  // Nothing is chosen: the typed reading's candidates lead, unchanged, and the
+  // other reading's dictionary word follows with its own reading.
+  EXPECT_TRUE(window.corrected_reading.empty());
+  auto expected = surfaces(typed);
+  expected.push_back("原因");
+  EXPECT_EQ(surfaces(window), expected);
+  EXPECT_EQ(window.candidates.back().reading, "げんいん");
+  // The other reading's non-dictionary candidates (SimpleConverter's identity)
+  // are left out.
+  const auto shown = surfaces(window);
+  EXPECT_EQ(std::count(shown.begin(), shown.end(), "げんいん"), 0);
 }

@@ -1420,8 +1420,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // alt_readings. Empty with a custom table, or when the romaji no longer
   // spells `reading`.
   std::vector<std::string> AltReadingsFor(const std::string& reading, size_t max_ambiguous) const;
-  // Live conversion compares fewer positions than the window, for its budget.
-  static constexpr size_t kLiveAmbiguousPositions = 2;
+  // The window compares two readings at most: the Host converts each with the
+  // model within the window budget.
+  static constexpr size_t kWindowAmbiguousPositions = 1;
   // Drops trailing romaji until the rest spells the current preedit, so a
   // Backspace that erased a whole kana also erases the keys that typed it.
   void SyncEnglishRawRomaji();

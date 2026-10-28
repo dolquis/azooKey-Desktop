@@ -3099,9 +3099,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         return false;
       SyncEnglishRawRomaji();
       auto flushed = romaji_;
-      return !AltReadingsFor(preedit_kana_ + flushed.Flush(),
-                             core::RomajiKanaConverter::kMaxAmbiguousDoubleN)
-                  .empty();
+      return !AltReadingsFor(preedit_kana_ + flushed.Flush(), kWindowAmbiguousPositions).empty();
     }();
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
     // A composing digit not mapped by core belongs to the number rewriter's
@@ -6124,7 +6122,6 @@ void TextService::ServeConnection() {
           lreq.raw_romaji = raw_romaji;
           lreq.mixed_english = true;
         }
-        lreq.alt_readings = alt_readings;
         qenv.payload_json = BuildQueryLiveConversionRequest(lreq);
       } else {
         QueryCandidatesRequest qreq;
@@ -7104,7 +7101,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   // DEV-1734: the window query compares the readings of an ambiguous "nn" +
   // vowel; the per-key query keeps the typed reading.
   auto alt_readings = !live && emoji_trigger.empty()
-                          ? AltReadingsFor(reading, core::RomajiKanaConverter::kMaxAmbiguousDoubleN)
+                          ? AltReadingsFor(reading, kWindowAmbiguousPositions)
                           : std::vector<std::string>{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
@@ -7160,8 +7157,6 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   const std::string left_context = CaptureLeftContext(context, false);
   // M63 sections 5 and 9.1: the raw romaji, only under every condition.
   std::string raw_romaji = MixedEnglishRawRomajiFor(reading, privacy.secure);
-  // DEV-1734: fewer ambiguous positions than the window, for the live budget.
-  auto alt_readings = AltReadingsFor(reading, kLiveAmbiguousPositions);
   // Section 7.1.1: the timing of the insertion is the TIP's decision, carried in
   // this request only.
   const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
@@ -7183,7 +7178,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
   ipc_pending_mixed_english_ = !raw_romaji.empty();
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
-  ipc_pending_alt_readings_ = std::move(alt_readings);
+  ipc_pending_alt_readings_.clear();
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();

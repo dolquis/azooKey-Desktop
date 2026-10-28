@@ -123,13 +123,16 @@ edge は model catalog から選べるモデルとして加える（条件付き
 | U+EE03（`[PROF]`） | 学習済み | 語彙に無く未学習 |
 | 文脈なしのプロンプト | `[CTX]` を省く | `[CTX]` を常に置く |
 | GGUF の補正（§9.2） | pre-tokenizer の上書き、EOS 補正 | どちらの発動条件にも当たらない（pre `gpt-2`、EOS は `</s>`） |
-| BOS | GGUF メタデータに従う | `add_bos_token` キー無し。llama.cpp の既定で付けない（モデルカードの使い方と一致） |
+| BOS | GGUF メタデータに従う | `add_bos_token` キー無し。pin の llama.cpp のソースでは、pre `gpt-2` の既定は付けない側（モデルカードの使い方と一致）。実 GGUF での `llama_vocab_get_add_bos` の値は製品条件の比較（§2.4.3）で確かめる |
 
 edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードでは Q5_K_M で Acc@1 が約 0.04
 低下）ため、R1 では Q8_0 を使う。入力はカタカナ前提で、数字・記号を含む入力と長い文脈
 （学習時の最大 192 トークン）で精度が落ちるとモデルカードにある。
 
 #### 2.4.2 プロンプト形式 `promptFormat`
+
+本節は設計であり、catalog の schema、parser、プロンプトの構築、診断のフィールドは後続の実装
+Issue（promptFormat の導入）で実装する。
 
 モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
@@ -145,7 +148,7 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 - catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 が CONTROL
   型で並び、U+EE03 が語彙に無ければ `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。
   推定した値は診断に出す（QueryDiagnostics のフィールドは `docs/dev-infrastructure-spec.md`
-  §12.6 に定義する）。
+  §12.6 に追加する）。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
 - 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを

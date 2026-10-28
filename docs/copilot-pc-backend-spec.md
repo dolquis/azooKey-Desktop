@@ -416,7 +416,8 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 - `WinMlBackend` は `InferenceEngine::LoadModel` の内側に閉じ、`core::IConverter` の別実装
   （ONNX Runtime GenAI 版の converter）として `ZenzaiModelConverter` と並べる。TIP と IPC の
   契約は変えない。
-- プロンプトの構築（`docs/zenzai-inference-spec.md` §3 と §2.4.2 の `promptFormat`）、
+- プロンプトの構築（`docs/zenzai-inference-spec.md` §3 と §2.4.2 の `promptFormat`。`promptFormat` は
+  設計で、実装は後続 Issue で行う）、
   候補の健全性チェック、logprob の正規化、順位付け、重複除去は decode に依存しない処理として
   `ZenzaiModelConverter` から切り出し、R1 と R2 で共有する。R1 と R2 で同じモデルを使う
   （§4.3 項 2）ので、候補の扱いをエンジンごとに分けない。
@@ -433,8 +434,10 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
      `past_key_values` を自前で管理する。beam ごとに `RewindTo` と `AppendTokens` で再計算する
      (b) は、再計算の量が読み長の 2 乗で増えるため採らない。
 - NLL rerank（`docs/neural-reranker-spec.md` §B2）は候補表層の全位置の logits を要する。
-  `GetLogits` は最後のトークンだけを返すので、R2 で NLL rerank を使うのは (c) を採った場合に
-  限り、(a) では R2 の NLL rerank を無効にする。
+  `GetLogits` は最後のトークンだけを返すので、(a) では R2 で NLL rerank を使えない。(a) を採ると
+  R1 と R2 で候補の順位が変わり、上の「候補の扱いをエンジンごとに分けない」と §4.3 項 2 の
+  理由（閾値の二重化を避ける）に反する。(a) を採って NLL rerank の無効化と順位の差を許すか、
+  (c) を必須にするかは、R2 spike の Issue で順位の差を測ってから決める。
 
 #### R1 / R2 の artifact と model catalog
 

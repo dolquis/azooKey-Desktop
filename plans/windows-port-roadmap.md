@@ -804,6 +804,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Snapdragon X / Intel Core Ultra / NVIDIA GPU の各環境で適切な
     BackendKind が選ばれる
   - `--backend cuda` 指定で失敗時 CPU に自動フォールバック
+  - R2（Windows ML）を有効にするのは、`docs/copilot-pc-backend-spec.md` §4.3 項 2 の再開条件を
+    満たした後に限る
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §1〜§4、
   `docs/rich-features-spec.md` X-1-2, X-2-4, X-3-4
 

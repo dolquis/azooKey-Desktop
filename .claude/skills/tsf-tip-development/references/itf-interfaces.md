@@ -43,6 +43,9 @@
   (`EnumDisplayAttributeInfo`, `GetDisplayAttributeInfo`)。
 - `ITfMouseSink` — preedit 上のマウス操作 (`OnMouseEvent`)。composition range を
   `ITfMouseTracker::AdviseMouseSink` で監視し、composition の終了時に解除する。
+- `ITfLangBarItemButton` — タスクバーの入力インジケーター（`GUID_LBI_INPUTMODE`、`LangBarInputModeItem`）。
+  左クリックは On/Off の切り替え、右クリックのメニューは入力モードの切り替え、ライブ変換・予測の切り替え、設定アプリの起動を出す
+  （`docs/tsf-deep-integration-spec.md` §4.5）。
 - `ITfFnConfigure` — 言語バー / 設定メニューからの設定 UI 起動 (`Show`)。
   `Show` は UI thread で `SettingsLauncher` の `LaunchSettingsApplication` へ委譲し、
   `azookey_settings.exe` を `ShellExecuteExW` で起動する。TIP 自身は設定 UI を描画しない。
@@ -123,8 +126,10 @@ TSF/COM object ではないが、thread 境界と責務境界を持つため変�
   `RewriterSnapshot` の値型だけを UI thread へ渡す。
 - `ForegroundAppDetector` (`ForegroundAppDetector.h`) — アプリ別プロファイル解決のための
   前面プロセス判定。owner thread 専用で、window title を読まず、identity を IPC へ送らない。
-- `SettingsLauncher` (`SettingsLauncher.h`) — `ITfFnConfigure::Show` の実体。テスト用 hook は
-  `AZOOKEY_TSF_TESTING` 時のみ公開する。
+- `SettingsLauncher` (`SettingsLauncher.h`) — `ITfFnConfigure::Show` と、入力インジケーターのメニューの「設定を開く」の実体。
+  テスト用 hook は `AZOOKEY_TSF_TESTING` 時のみ公開する。
+- `TipSettingsWriter` (`TipSettingsWriter.h`) — メニューからの切り替えで settings.json の 1 キーだけを、
+  設定アプリと Host と同じファイルロックの下で atomic に書く。読めないファイルは書き換えない。
 
 ## DllMain (`tsf-tip/src/DllMain.cpp`)
 

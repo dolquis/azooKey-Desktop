@@ -158,6 +158,8 @@ static HRESULT RegisterServerImpl() {
     // immediately after registration (the M2 flow), instead of requiring the
     // user to add it manually in Settings. This makes it available — not the
     // forced active default — so the user's existing IME is not displaced.
+    // uIconIndex 0 is the first icon group in this DLL, the brand icon
+    // IDI_AZOOKEY_BRAND (tsf-tip/resources/resource.h).
     hr = profile_mgr->RegisterProfile(
         azookey::tsf::kTextServiceClsid, kJapaneseLangId,
         azookey::tsf::kTextServiceProfileGuid, kProfileDesc, desc_len, dll_path, path_len,

@@ -471,6 +471,13 @@ best-effort cleanup で COM CLSID、TSF プロファイル、カテゴリを削�
 再試行できなければならない。再登録中に失敗した場合も、以前から存在した登録を復元せず、
 部分状態を残さない完全な未登録状態へ収束させる。
 
+プロファイルのアイコンは、TIP DLL のパスと `uIconIndex = 0`（DLL 内で先頭のアイコン）で登録する。
+TIP DLL は `tsf-tip/resources/azookey_tsf_tip.rc` で、ICON リソースを `IDI_AZOOKEY_BRAND`（ID 1）の 1 つだけ持つ。
+中身は設定アプリと同じブランドアイコン `settings-app/Assets/azookey-settings.ico` で、複製せず相対パスで参照する。
+入力方式の一覧と切替フライアウトは、このアイコンを表示する。§4.5 のモードアイコンとは別物である。
+アイコンを増やすときは、ブランドアイコンを先頭に保つ。保てない場合は `uIconIndex` を変えて再登録する。
+`tsf-tip/tests/brand_icon_test.cpp` は、ビルドした DLL を登録せずに、アイコンが 1 つであることと、index 0 から大小のアイコンを取れることを確かめる。
+
 検証は `tsf-tip/tests/com_smoke_test.cpp` の登録 round-trip smoke で行う。
 通常経路では再登録、`GetProfile`、解除を確認する。Debug ビルドでは
 `AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION` によってプロファイル登録後の失敗を注入し、
@@ -800,7 +807,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 
 英数モードは IME On のままキーを素通しする状態なので、Off と見分けられるよう下線を付ける。
 
-- アイコンはリソースを持たず、`GetIcon` のたびに GDI で文字を描いて作る。大きさは 96 DPI で 16x16 とし、
+- モードアイコンはリソースを持たず、`GetIcon` のたびに GDI で文字を描いて作る（TIP DLL の ICON リソースは、§2.9 で述べるプロファイル用のブランドアイコンだけである）。大きさは 96 DPI で 16x16 とし、
   システムの DPI に合わせて拡大する。背景は透明で、文字の色はタスクバーのテーマに合わせる。
   HKCU `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` の `SystemUsesLightTheme` が
   0 以外なら黒、0・値が無い・読めないときは白（ダークのタスクバー）とする。

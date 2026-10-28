@@ -1,0 +1,7 @@
+#include <winres.h>
+#include "resource.h"
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+// The brand icon shared with the settings app (settings-app/Assets/README.md).
+IDI_AZOOKEY_BRAND ICON "../../settings-app/Assets/azookey-settings.ico"

@@ -1,7 +1,8 @@
 #requires -Version 5.1
 param(
   [switch]$SkipLint,
-  [switch]$SkipTests
+  [switch]$SkipTests,
+  [version]$PesterVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,13 +47,18 @@ $powerShellFiles += $testFiles
 function Get-RequiredModule {
   param(
     [Parameter(Mandatory=$true)]
-    [string]$Name
+    [string]$Name,
+    [version]$RequiredVersion
   )
 
   $module = Get-Module -ListAvailable -Name $Name |
+    Where-Object { -not $RequiredVersion -or $_.Version -eq $RequiredVersion } |
     Sort-Object Version -Descending |
     Select-Object -First 1
   if (-not $module) {
+    if ($RequiredVersion) {
+      throw "Required PowerShell module '$Name' version '$RequiredVersion' is not installed. Install it locally (Install-Module $Name -RequiredVersion $RequiredVersion -Scope CurrentUser) and retry."
+    }
     throw "Required PowerShell module '$Name' is not installed. Install it locally (for example: Install-Module $Name -Scope CurrentUser) and retry."
   }
 
@@ -80,8 +86,9 @@ if (-not $SkipLint) {
 }
 
 if (-not $SkipTests) {
-  $pester = Get-RequiredModule -Name "Pester"
+  $pester = Get-RequiredModule -Name "Pester" -RequiredVersion $PesterVersion
   Import-Module $pester.Path -Force
+  Write-Output "Using Pester $($pester.Version)."
 
   if ($pester.Version.Major -ge 5) {
     $configuration = New-PesterConfiguration

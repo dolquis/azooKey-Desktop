@@ -730,6 +730,8 @@ strategy:
 
 runner は安定性のため `windows-2022` を明示する（`windows-latest` の暗黙
 更新を避ける）。
+Linux runner は `ubuntu-24.04` に固定し、Docs lint と SBOM の matrix でも
+`ubuntu-latest` の暗黙更新を避ける。
 
 ### 4.2 preset 利用
 
@@ -739,6 +741,9 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
+- 英単語辞書 porter — `linux-build` は CTest の前に
+  `scripts/tests/test_english_words_porter.py` を実行し、porter の決定性、
+  同梱 `data/english-words.tsv` の形式と件数、`THIRD_PARTY_LICENSES` の全文集約を検証する。
 - trending アセットの公開前 validator — Build workflow の `quality`（表示名 `Pre-commit`）
   ジョブで `python scripts/tests/test_validate_trending_asset.py` を実行する。
   runtime の入力形式・サイズ・Unicode 制約、元バイト列の SHA256 と checksum 出力の保持を検証する。
@@ -832,8 +837,10 @@ OFF のまま）。
   `PSScriptAnalyzer` と `Pester` を実行し、`scripts/register-dev.ps1` /
   `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実
   HKLM 書き込みを伴わない分岐・引数構築テストを行う。pre-commit は
-  `language: system` でローカル導入済みモジュールを使い、CI は pinned
-  module version を導入して同じ wrapper を呼ぶ
+  `language: system` でローカル導入済みモジュールを使う。CI は Pester `6.2.0` を
+  導入・読み込みし、同じ wrapper に `-PesterVersion 6.2.0` を渡す。
+  wrapper は指定版がなければ停止し、実行する版をログへ出す。
+  版の指定がないローカル実行では、導入済みの最新版を使う。
 
 `settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
 対象ファイルの変更を検出した場合だけ起動する。

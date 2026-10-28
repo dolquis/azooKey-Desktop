@@ -51,8 +51,16 @@ function Get-RequiredModule {
     [version]$RequiredVersion
   )
 
+  if ($RequiredVersion) {
+    $RequiredVersion = [version]::new($RequiredVersion.Major, $RequiredVersion.Minor,
+      [Math]::Max($RequiredVersion.Build, 0))
+  }
   $module = Get-Module -ListAvailable -Name $Name |
-    Where-Object { -not $RequiredVersion -or $_.Version -eq $RequiredVersion } |
+    Where-Object {
+      -not $RequiredVersion -or (
+        [version]::new($_.Version.Major, $_.Version.Minor, [Math]::Max($_.Version.Build, 0)) -eq $RequiredVersion -and
+        -not $_.PrivateData.PSData.Prerelease)
+    } |
     Sort-Object Version -Descending |
     Select-Object -First 1
   if (-not $module) {

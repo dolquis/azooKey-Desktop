@@ -730,8 +730,8 @@ strategy:
 
 runner は安定性のため `windows-2022` を明示する（`windows-latest` の暗黙
 更新を避ける）。
-Linux runner は `ubuntu-24.04` に固定し、Docs lint と SBOM の matrix でも
-`ubuntu-latest` の暗黙更新を避ける。
+Linux runner はすべての workflow で `ubuntu-24.04` を明示し、
+`ubuntu-latest` の暗黙更新を避ける（SBOM は matrix の値として指定する）。
 
 ### 4.2 preset 利用
 
@@ -744,6 +744,8 @@ OFF のまま）。
 - 英単語辞書 porter — `linux-build` は CTest の前に
   `scripts/tests/test_english_words_porter.py` を実行し、porter の決定性、
   同梱 `data/english-words.tsv` の形式と件数、`THIRD_PARTY_LICENSES` の全文集約を検証する。
+  同じジョブで `scripts/tests/test_generate_mixed_english_eval.py` を実行し、
+  評価セット生成の決定性と同梱 fixture の鮮度を検証する。
 - trending アセットの公開前 validator — Build workflow の `quality`（表示名 `Pre-commit`）
   ジョブで `python scripts/tests/test_validate_trending_asset.py` を実行する。
   runtime の入力形式・サイズ・Unicode 制約、元バイト列の SHA256 と checksum 出力の保持を検証する。
@@ -838,9 +840,11 @@ OFF のまま）。
   `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実
   HKLM 書き込みを伴わない分岐・引数構築テストを行う。pre-commit は
   `language: system` でローカル導入済みモジュールを使う。CI は Pester `6.2.0` を
-  導入・読み込みし、同じ wrapper に `-PesterVersion 6.2.0` を渡す。
+  job の `PESTER_VERSION` で指定し、同じ wrapper に `-PesterVersion` で渡す。
+  wrapper は指定版を3要素に正規化して比較し、プレリリース版を除外する。
   wrapper は指定版がなければ停止し、実行する版をログへ出す。
   版の指定がないローカル実行では、導入済みの最新版を使う。
+- クラッシュ収集の期限付き probe は `RUN_SERIAL` で登録し、並列 CTest の負荷と分離する。
 
 `settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
 対象ファイルの変更を検出した場合だけ起動する。

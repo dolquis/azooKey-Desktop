@@ -9740,6 +9740,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       if (FAILED(hr) || !service_->composition_) return hr;
       core::EtwLogger::LogCompositionStart(kana.size());
       service_->etw_composition_length_ = kana.size();
+      // prediction_state is logged once per reason for each input, so the log
+      // shows why this composition's prediction window did or did not appear
+      // (DEV-1747).
+      service_->prediction_logged_reasons_.store(0, std::memory_order_relaxed);
     }
 
     // Update composition text.

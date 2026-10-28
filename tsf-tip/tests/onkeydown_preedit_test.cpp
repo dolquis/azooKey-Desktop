@@ -2432,8 +2432,14 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
 
   ASSERT_TRUE(WaitForPredictionResult(h.service));
   h.service.process_candidates_ready_for_test();
-  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
-  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  // DEV-1754: this still fails now and then on Windows CI after one dropped
+  // response and its retry; the PredictionLogReason bits name the branch that
+  // dropped the result.
+  const uint32_t reasons = h.service.prediction_logged_reasons_for_test();
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u)
+      << "prediction_state reasons 0x" << std::hex << reasons;
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test())
+      << "prediction_state reasons 0x" << std::hex << reasons;
   h.service.stop_ipc_worker_for_test();
   server.Stop();
 }
@@ -6335,6 +6341,28 @@ static void ShowPredictionForTest(azookey::tsf::TextService& service) {
   prediction.surface = "日本";
   prediction.reading = "にほん";
   service.show_prediction_for_test(prediction);
+}
+
+// DEV-1747: prediction_state is logged once per reason for each composition,
+// so a second input still records why its window did or did not appear.
+TEST(TsfTipOnKeyDownPreeditTest, PredictionLogReasonsStartOverWithEachComposition) {
+  constexpr uint32_t kShown = 1U << static_cast<unsigned>(azookey::tsf::PredictionLogReason::Shown);
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_NE(h.service.prediction_logged_reasons_for_test() & kShown, 0u);
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.prediction_logged_reasons_for_test() & kShown, 0u);
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_NE(h.service.prediction_logged_reasons_for_test() & kShown, 0u);
 }
 
 // DEV-1649: pending romaji alone counts as input, so Esc cancels it.

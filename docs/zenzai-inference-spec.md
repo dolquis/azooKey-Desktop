@@ -96,11 +96,102 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 - v1.0 採用モデル: 上流 `Miwa-Keita/zenz-v3.2-small-gguf`（roadmap M8 受け入れ条件の
   配置対象。v1.0 配布での取得・配置の正は `sideload-packaging-spec.md` §1.6.1）。
   プロンプトは **v3 系フォーマット**（§3）を用いる。
+- 選択可能なモデル: `yuuki14202028/kanakanji-edge-33m`（Llama 構造、§2.4）。既定を切り替えるかは
+  §2.4.3 で判断する。
 
 > ⚠️ **実装時検証点（DEV-221）**: 特殊トークンのコードポイント・BOS/EOS の
 > 有無・トークナイザの正規化は、**配置する GGUF の `tokenizer` メタデータと
 > モデルカードで必ず突き合わせる**こと。本書 §3/§5 は upstream ドキュメント
 > 由来の既定値であり、モデル実体が優先する。
+
+### 2.4 既定モデルの候補 `kanakanji-edge-33m` とプロンプト形式（DEV-1719）
+
+`yuuki14202028/kanakanji-edge-33m` は、zenz-v3 のプロンプト形式で学習された Llama 構造の
+かな漢字変換モデル（33.5M パラメータ）である。既定モデルは zenz-v3.2-small のままとし、
+edge は model catalog から選べるモデルとして加える（条件付き採用）。既定を切り替えるかどうかは
+§2.4.3 の判断基準で決める。R2（Windows ML）で使うモデルもこの判断に従う
+（`docs/copilot-pc-backend-spec.md` §4.3 項 2）。
+
+#### 2.4.1 モデルの素性
+
+| 項目 | zenz-v3.2-small | kanakanji-edge-33m |
+|---|---|---|
+| 構造 | GPT-2、約 90M | Llama（GQA、RoPE、SwiGLU）、33.5M |
+| 配布形式 | GGUF Q5_K_M（73.9MB） | GGUF Q8_0（36MB）/ f16（67MB）/ safetensors fp32 |
+| 語彙 | ku-nlp の文字単位 byte-level BPE | 同じ語彙 6,000 + 制御 3（U+EE02 / U+EE00 / U+EE01、id 6000〜6002） |
+| 制御文字の扱い | 語彙に専用トークンが無く、UTF-8 のバイト列としてトークン化される | 専用トークンで、GGUF の token type が CONTROL |
+| U+EE03（`[PROF]`） | 学習済み | 語彙に無く未学習 |
+| 文脈なしのプロンプト | `[CTX]` を省く | `[CTX]` を常に置く |
+| GGUF の補正（§9.2） | pre-tokenizer の上書き、EOS 補正 | どちらの発動条件にも当たらない（pre `gpt-2`、EOS は `</s>`） |
+| BOS | GGUF メタデータに従う | `add_bos_token` キー無し。pin の llama.cpp のソースでは、pre `gpt-2` の既定は付けない側（モデルカードの使い方と一致）。実 GGUF での `llama_vocab_get_add_bos` の値は製品条件の比較（§2.4.3）で確かめる |
+
+edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードでは Q5_K_M で Acc@1 が約 0.04
+低下）ため、R1 では Q8_0 を使う。入力はカタカナ前提で、数字・記号を含む入力と長い文脈
+（学習時の最大 192 トークン）で精度が落ちるとモデルカードにある。
+
+#### 2.4.2 プロンプト形式 `promptFormat`
+
+本節は設計であり、catalog の schema、parser、プロンプトの構築、診断のフィールドは後続の実装
+Issue（promptFormat の導入）で実装する。
+
+モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
+値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
+`zenz-v3` とする（後方互換）。catalog の schema 正典は
+`docs/model-management-spec.md` §3.1.1 と `settings/model-catalog.schema.json` であり、
+`promptFormat` はそこへ追加する。
+
+| `promptFormat` | `[CTX]` | `[PROF]`（instruction profile） | 停止 |
+|---|---|---|---|
+| `zenz-v3` | 左文脈が空なら省く（§3.2） | 使う | EOS、または生成した制御文字（§4.2.1） |
+| `kanakanji-edge-v1` | 左文脈が空でも置く | 使わない | EOS |
+
+- catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 が CONTROL
+  型で並び、U+EE03 が語彙に無ければ `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。
+  推定した値は診断に出す（QueryDiagnostics のフィールドは `docs/dev-infrastructure-spec.md`
+  §12.6 に追加する）。
+- `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
+  （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
+- 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを
+  除くため（§5）、制御文字は生成されない。停止は EOS だけに依存する。
+
+#### 2.4.3 製品条件での評価と既定切替の判断基準
+
+製品の経路（beam / n-best、NLL rerank、§8.2 の deadline）で zenz-v3.2-small Q5_K_M（pin、
+SHA-256 を照合）と edge Q8_0（revision と SHA-256 を固定）を比べる。
+
+- 入力: `bench/data/kana_kanji_eval.jsonl`、`docs/copilot-pc-backend-spec.md` §4.2 の 20 入力、
+  §8.1 の読み長の帯ごとの入力、数字・記号を含む読み。AJIMEE-Bench は外部比較用とし、repo に
+  置かない。
+- 指標: Acc@1、MinCER、大崩れ（CER > 0.3）の件数、生成が EOS に届かずに終わった候補の率、
+  §8.1 の読み帯ごとの分位点、§8.2 による打ち切りの率、配布サイズ。
+
+次をすべて満たせば、既定を edge へ切り替えることを提案する。
+
+1. Acc@1 が zenz −0.02 以内であり、片方だけが正解した問題の McNemar 検定で有意に劣らない。
+2. 大崩れの件数が zenz 以下である。
+3. §8.1 の分位点目標（読み ≤ 8 文字の p50 / p95）を満たし、読み > 8 文字では §8.2 のハード
+   予算による打ち切りの率が zenz 以下である。
+4. 配布サイズが 50MB 未満である（`docs/copilot-pc-backend-spec.md` §4.2 のゲート）。
+
+参考値として、2026-10-25 の sandbox 調査（Linux、CPU 4 コア、llama.cpp `d327bf1f`、貪欲
+デコード、製品の beam と読み制約は使わない）の結果を置く。速度は sandbox での相対値で、
+§8 の予算とは比べられない。
+
+| モデル | AJIMEE Acc@1 | MinCER | 読み 9 文字以上の中央値 | 20 入力の中央値 |
+|---|---|---|---|---|
+| zenz-v3.2-small Q5_K_M | 0.840 | 0.0504 | 169ms | 57ms |
+| kanakanji-edge-33m Q8_0 | 0.805 | 0.0234 | 68ms | 25ms |
+| zenz-v3.2-xsmall Q5_K_M | 0.660 | 0.0875 | 49ms | 17ms |
+
+片方だけが正解した問題は zenz 21 件、edge 14 件で、200 件では有意差と言えない。大崩れは
+zenz 3 件、edge 0 件だった。Qwen3-Next / LFM2 MoE ベースの hourai2 / hourai3 は Acc@1 0.05〜0.12
+で、候補にしない。
+
+#### 2.4.4 配布とライセンス
+
+配布形態は zenz と同じく、MSIX に同梱せず上流の Hugging Face から取得し、再ホストしない
+（`docs/sideload-packaging-spec.md` §1.6）。ライセンスの整理は `docs/zenzai-gpu-route.md`
+「配布ライセンス」に置き、確定は Human Gate（DEV-1721）が行う。
 
 ---
 
@@ -154,7 +245,8 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 [PROF]<profile>[CTX]<context>[IN]<input_katakana>[OUT]<output>[EOS]
 ```
 
-- 文脈・プロフィールが無い場合は対応セグメント（トークン + 値）ごと省略。最小形は
+- 文脈・プロフィールが無い場合は対応セグメント（トークン + 値）ごと省略（`promptFormat`
+  が `zenz-v3` の場合。形式ごとの差は §2.4.2）。最小形は
   `[IN]<input_katakana>[OUT]` を**プロンプトとして与え**、`[OUT]` 以降を生成。
 - プロフィール使用時は `[PROF]<profile>` を文脈の前に置く。通常変換の既定は空で、
   共有AI基盤のローカル整文では生ローマ字と整文・句読点方針を渡す
@@ -269,6 +361,10 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
   トークナイズする。登録が無い場合は UTF-8 バイト列として BPE に通る
   （character/byte-level のためラウンドトリップは保たれる）。**いずれか実装時に確認**
   （§2.3 検証点）。
+- **CONTROL 型の特殊トークン**: beam の各 step で候補を選ぶとき、GGUF の token type が
+  CONTROL で EOG でないトークンは候補から除く。softmax の分母には含めるので、残る候補の
+  logprob はモデルの分布のままである。制御文字を CONTROL 型で持つモデル（§2.4.1）では、
+  制御文字は生成されず、停止は EOS で決まる。
 - **未知語・記号・英数**: byte-level BPE のため未知バイトは生じない。入力カタカナに
   含まれる記号・数字・空白・英字はそのまま渡す（zenz-v2.5 データセットの `input` も
   記号・数字・空白を含む前提）。読みのカタカナ化（§3.1-1）は**かな範囲のみ**に適用し、

@@ -430,7 +430,7 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 
 推論バックエンドの選定は `docs/copilot-pc-backend-spec.md` §4 が正典。配布形態の
 決定のみを以下に固定する（同 §4.5 から参照）。
-R2 向けの行は R2 再開時に適用し、R2 保留中は R1 向け構成だけを配布する。
+R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2）に適用し、再開前は R1 向け構成だけを配布する。
 
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
@@ -440,7 +440,7 @@ R2 向けの行は R2 再開時に適用し、R2 保留中は R1 向け構成だ
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
 | ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。Vulkan loader / ドライバーは同梱しない。構成と起動する Host の決定は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
-| zenz-v3 ONNX 変換モデル（R2） | **R2 保留中は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL） | 現行 builder では変換不可。将来、検証済み変換経路を確立した場合に再評価 |
+| R2 の ONNX 変換モデル（R1 と同じモデル。対象は `kanakanji-edge-33m`） | **R2 の再開前は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL。R2 を使えない機器では取得しない） | zenz-v3（GPT-2）は builder で変換できない。Llama 構造の edge は変換できる（`docs/copilot-pc-backend-spec.md` §4.2.2・§4.2.3） |
 
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
 フォールバックする（同 §4.3 項6）。モデル本体（GGUF / 将来の ONNX）はいずれも MSIX に同梱せず
@@ -1488,7 +1488,7 @@ schema 自体は superset のまま変えない。
   静的な補足文を添える。
 - **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
   v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
-  §4.3 のとおり R2 は保留中である。R1 に属する `vulkan` を保留中の R2 に従属させないため、**露出条件を
+  §4.3 のとおり R2 には再開条件がある。R1 に属する `vulkan` を R2 の再開に従属させないため、**露出条件を
   「ggml-vulkan ビルドを配布に含め、かつ実行時にそれを選ぶ経路が配線された時点」へ改める**（R1 側の
   条件であり、M24 の進捗に依存しない）。実行時の選択は `docs/copilot-pc-backend-spec.md` §4.4 の
   BackendSelector が担い、Vulkan ビルド（`windows-vulkan-release` preset）の `auto` は一次フィルタを

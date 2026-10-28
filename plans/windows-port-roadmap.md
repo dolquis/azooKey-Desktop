@@ -788,8 +788,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `inference-host/src/WinMlBackend.cpp`（新規、ONNX Runtime GenAI + Windows ML。
   DirectML が sustained engineering 化したため旧 `DirectMlBackend.cpp` /
   `QnnBackend.cpp` の個別 SDK 実装は採らず、EP は Windows ML の自動配信に委ねる）。
-- **前提（追加）**: zenz-v3 → ONNX Runtime GenAI 形式の変換可否スパイク
-  （Windows ML 経路 R2 のブロッカー。不可なら Copilot+ も R1 CPU を既定とする）。
+- **前提（追加）**: R2（Windows ML）の再開は、R1 と同じモデルを ONNX Runtime GenAI 形式へ
+  変換できることを条件とする。zenz-v3（GPT-2）は model builder で変換できないため、Llama 構造の
+  `kanakanji-edge-33m` を既定モデルに採ること（`docs/zenzai-inference-spec.md` §2.4.3 の判断基準）が
+  `WinMlBackend` の前提になる。条件を満たすまでは Copilot+ PC も R1 CPU を既定とする
+  （`docs/copilot-pc-backend-spec.md` §4.3）。
+- **リスク**: ORT GenAI の Generator は sequence ごとの KV 分岐を持たず、製品の beam / n-best と
+  NLL rerank をそのまま再現できない。NPU / GPU EP で組み込み beam search が動くかを R2 spike で
+  確かめ、動かなければ ONNX Runtime session で KV を自前管理する（同 §4.4）。
 - **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4（決定は §4.3、enum / 境界
   ポリシーは §4.4、フォールバック段位は §4.5）。
 - **横断**: X-1-2 (TypingTempoTracker)・X-2-4 (PredictWithLLM)・
@@ -798,6 +804,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Snapdragon X / Intel Core Ultra / NVIDIA GPU の各環境で適切な
     BackendKind が選ばれる
   - `--backend cuda` 指定で失敗時 CPU に自動フォールバック
+  - R2（Windows ML）を有効にするのは、`docs/copilot-pc-backend-spec.md` §4.3 項 2 の再開条件を
+    満たした後に限る
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §1〜§4、
   `docs/rich-features-spec.md` X-1-2, X-2-4, X-3-4
 

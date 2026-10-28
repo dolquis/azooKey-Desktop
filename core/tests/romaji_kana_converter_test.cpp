@@ -274,3 +274,49 @@ TEST(RomajiKanaConverterTest, AmbiguousReadingsUseOnlyTheCustomTable) {
   EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("nna", parsed.table),
             (std::vector<std::string>{"んあ"}));
 }
+
+// DEV-1748: n' / nn' end the syllable at ん and consume the apostrophe (Mozc).
+TEST(RomajiKanaConverterTest, ApostropheAfterNSeparatesN) {
+  using azookey::core::RomajiKanaConverter;
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("gen'inn"), "げんいん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan'i"), "かんい");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kann'a"), "かんあ");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kin'yuu"), "きんゆう");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan'"), "かん");
+  EXPECT_EQ(RomajiKanaConverter::Preview("gen'i"), "げんい");
+  // Without a pending n the apostrophe stays a character, as before.
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka'i"), "か'い");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("'"), "'");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("k'a"), "k'あ");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan''a"), "かん'あ");
+
+  RomajiKanaConverter converter;
+  EXPECT_FALSE(converter.SeparatesNWithApostrophe());
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_TRUE(converter.SeparatesNWithApostrophe());
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_TRUE(converter.SeparatesNWithApostrophe());
+  EXPECT_EQ(converter.Feed('\''), "ん");
+  EXPECT_FALSE(converter.HasPending());
+}
+
+// The apostrophe spells the reading explicitly, so it is not an ambiguous position.
+TEST(RomajiKanaConverterTest, AmbiguousReadingsTreatApostropheAsExplicit) {
+  using azookey::core::RomajiKanaConverter;
+  using Readings = std::vector<std::string>;
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("gen'inn"), (Readings{"げんいん"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("kann'a"), (Readings{"かんあ"}));
+  EXPECT_EQ(RomajiKanaConverter::AmbiguousReadings("gen'ninn"), (Readings{"げんにん"}));
+}
+
+TEST(RomajiKanaConverterTest, CustomTableKeepsApostropheAsTyped) {
+  using azookey::core::RomajiKanaConverter;
+  const auto parsed = azookey::core::CustomRomajiLoader::Parse("nn\tん\t2\nn\tん\t1\na\tあ\n");
+  ASSERT_TRUE(parsed.table);
+  RomajiKanaConverter converter;
+  converter.SetCustomTable(parsed.table);
+  converter.Feed('n');
+  EXPECT_FALSE(converter.SeparatesNWithApostrophe());
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("n'a", parsed.table),
+            RomajiKanaConverter::ConvertForCommit("n", parsed.table) + "'あ");
+}

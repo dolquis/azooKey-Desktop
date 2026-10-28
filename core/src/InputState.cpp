@@ -392,7 +392,8 @@ void InputState::AppendInput(const UserActionEvent& event) {
   // Keep ordinary punctuation literal, but allow a custom rule to consume
   // printable ASCII symbols or digits while its prefix is still pending.
   if (event.action == UserAction::Input && cp <= 0x7f &&
-      (IsAsciiLetter(cp) || cp == U'-' || romaji_.CanContinueCustomWith(static_cast<char>(cp)))) {
+      (IsAsciiLetter(cp) || cp == U'-' || (cp == U'\'' && romaji_.SeparatesNWithApostrophe()) ||
+       romaji_.CanContinueCustomWith(static_cast<char>(cp)))) {
     kana_ += romaji_.Feed(static_cast<char>(cp));
     return;
   }

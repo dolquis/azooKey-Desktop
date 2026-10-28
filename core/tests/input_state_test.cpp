@@ -561,6 +561,18 @@ TEST(InputStateTest, HyphenBecomesLongVowelAndPunctuationFlushesRomaji) {
   EXPECT_EQ(Feed(InputState{}, U"ka/").Reading(), "か/");
 }
 
+// DEV-1748: an apostrophe after a pending n / nn ends ん and is consumed.
+TEST(InputStateTest, ApostropheAfterNSeparatesN) {
+  EXPECT_EQ(Feed(InputState{}, U"gen'inn").Reading(), "げんいん");
+  EXPECT_EQ(Feed(InputState{}, U"kann'a").Reading(), "かんあ");
+  EXPECT_EQ(Feed(InputState{}, U"ka'i").Reading(), "か'い");
+
+  RomajiKanaConverter romaji;
+  romaji.SetCustomTable(CustomRomajiLoader::Parse("n\tん\t1\na\tあ\n").table);
+  const auto custom = Feed(InputState{}.WithComposition("", romaji), U"n'a");
+  EXPECT_EQ(custom.Reading(), "ん'あ");
+}
+
 TEST(InputStateTest, CustomAsciiPunctuationUsesPendingRule) {
   RomajiKanaConverter romaji;
   romaji.SetCustomTable(CustomRomajiLoader::Parse("z.\t…\n").table);

@@ -16,7 +16,7 @@
 4. **DirectML 単体 backend は採らない**。ベンダ横断 GPU は R1 = ggml-vulkan、DirectML
    由来の実行は R2 = Windows ML に集約する。
 
-決定 2〜4 の実証結果と、R2（Windows ML）を保留とする理由は
+決定 2〜4 の実証結果と、R2（Windows ML）の再開条件は
 `docs/copilot-pc-backend-spec.md` §4.3 が正典。アクセラレータ要求が降格したときの
 Health の扱いは同 §4.4 を正典とする。
 
@@ -98,8 +98,10 @@ ONNX Runtime GenAI + Windows ML により、ベンダ横断で NPU / GPU / CPU �
 DirectML を直接叩く旧 2 候補（llama.cpp + DirectML backend / ORT + DirectML EP）は、
 前者を不採用、後者を Windows ML へ統合した。
 
-- **前提**: zenz-v3 を ONNX Runtime GenAI 形式へ変換できること。現行 model builder に
-  GPT-2 変換経路が無いため R2 artifact を作れず、R2 は保留である（`docs/copilot-pc-backend-spec.md` §4.2.2 / §4.3）。
+- **前提**: R1 と同じモデルを ONNX Runtime GenAI 形式へ変換できること。zenz-v3（GPT-2）は
+  model builder の対象外で変換できない。Llama 構造の `kanakanji-edge-33m` は変換できるので、
+  このモデルを既定に採ったときに R2 を再開する（`docs/copilot-pc-backend-spec.md` §4.2.2・
+  §4.2.3・§4.3 項 2、`docs/zenzai-inference-spec.md` §2.4）。
 - **アクセラレータ選択**: Windows ML が NPU（QNN / OpenVINO / VitisAI）→ GPU
   （NvTensorRtRtx / OpenVINO）→ CPU の順で自動選択・自動フォールバックする。GenAI 経路の
   ため MIGraphX（AMD GPU）は除外する（`docs/copilot-pc-backend-spec.md` §4.1 注記）。
@@ -123,7 +125,8 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
 
 ### R1 CUDA の位置付け
 
-**R1 CUDA（GGUF/ggml + ggml-cuda）は NVIDIA GPU 環境専用**である。AC 接続デスクトップ
+**R1 CUDA（GGUF/ggml + ggml-cuda）は NVIDIA GPU 環境専用**である。実リンクは起票し直さず、
+再検討の条件は `docs/copilot-pc-backend-spec.md` §4.3 項 7 に従う。AC 接続デスクトップ
 で最速だが、ノート PC のバッテリ消費が激しい。`BackendSelector` の優先順位下位
 （CPU の手前）にフォールバックとして置く。
 
@@ -156,6 +159,12 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
   表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載）。再配布 DLL は
   **アプリ専用ディレクトリに配置**し、共有 `PATH` / システムディレクトリへ入れない
   （EULA のアプリ限定アクセス条件）。
+- **モデル（kanakanji-edge-33m）**: 重みは Apache-2.0（ゼロから学習とモデルカードに記載、
+  GGUF の `general.license` も apache-2.0）。語彙は zenz と同じ `ku-nlp/gpt2-small-japanese-char`
+  由来で CC-BY-SA-4.0、追加の制御トークン 3 つは Apache-2.0、学習データは zenz と同じ
+  `Miwa-Keita/zenz-v2.5-dataset`（CC-BY-SA-4.0 / ODC-BY）。zenz を CC-BY-SA-4.0 として保守側に
+  扱う理由のうち、語彙とデータの系譜は edge にも残るため、同じ扱いを前提にする。確定は
+  Human Gate（DEV-1721）が行う。再ホストせず上流 HF から取得する。
 - **Vulkan（R1 Vulkan）**: `ggml-vulkan` は llama.cpp（MIT）成果物。ローダ / ドライバは
   GPU ベンダ提供で同梱不要のため、固有の再配布義務は無い。
 

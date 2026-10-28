@@ -151,7 +151,7 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 | 軸 | エンジン | モデル形式 | アクセラレータ | NPU | EP 配布 |
 |---|---|---|---|---|---|
 | **R1** | llama.cpp C-API | GGUF（既存 zenz-v3 資産） | CPU（既定）/ CUDA（ggml-cuda, NVIDIA）/ Vulkan（ggml-vulkan, ベンダ横断 GPU） | ✕（実用外） | 自前バンドル |
-| **R2** | ONNX Runtime GenAI + Windows ML | ONNX Runtime GenAI 形式（**要変換**） | Windows ML が自動選択（NPU: QNN/OpenVINO/VitisAI、GPU: NvTensorRtRtx/OpenVINO、CPU: ORT） | ◎（Copilot+ PC） | Windows Update 配信（**非バンドル**） |
+| **R2** | ONNX Runtime GenAI + Windows ML | ONNX Runtime GenAI 形式（**要変換**。R1 と同じモデルの変換物、§4.3） | Windows ML が自動選択（NPU: QNN/OpenVINO/VitisAI、GPU: NvTensorRtRtx/OpenVINO、CPU: ORT） | ◎（Copilot+ PC） | Windows Update 配信（**非バンドル**） |
 
 > **注（GenAI 対応 EP）**: R2 は GenAI（LLM）経路のため、**MIGraphX(AMD GPU) は除外**する。
 > Windows ML の EP 仕様で `MIGraphXExecutionProvider` は現状 *GenAI シナリオ未対応*と
@@ -189,16 +189,20 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
   （§4.2.2）は、本ゲートに対する R1 CPU の成否を出荷判断に用いない。** R1 CPU が
   出荷可能かどうかの正典は `zenzai-inference-spec` §8 の性能予算であり、本ゲートとは
   別系統の数値である（§8 は絶対予算、本ゲートは相対比較）。
-- **R2 変換可否の判定**: R2 は zenz-v3 を **ONNX Runtime GenAI 形式へ
+- **比較の対象**: 相対ゲートは、同じモデルの R1 artifact（GGUF）と R2 artifact
+  （ONNX Runtime GenAI 形式）を比べる。R2 のモデルは §4.3 項 2 のとおり R1 と同じモデル
+  であり、対象は `kanakanji-edge-33m`（§4.2.3）とする。zenz-v3 の R1 baseline（§4.2.1）は
+  R1 CPU の推移を見る記録であり、R2 との比較には使わない。
+- **R2 変換可否の判定**: R2 は対象モデルを **ONNX Runtime GenAI 形式へ
   変換できること**が前提。Foundry Toolkit の変換は Preview かつ対応モデルが限定列挙
   （Phi / Qwen / Llama-3.2-1B / DeepSeek-distill）で、**zenz-v3（独自小型 JP モデル）は
-  turn-key 変換対象外**。ORT GenAI model builder による手動変換の可否は §4.2.2 で
-  判定済みであり、現行 builder では変換できない。出典:
+  turn-key 変換対象外**。ORT GenAI model builder による手動変換は、zenz-v3（GPT-2）では
+  不可（§4.2.2）、Llama 構造の `kanakanji-edge-33m` では可（§4.2.3）と判定した。出典:
   [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
   [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
 - `gate:human-required` の DEV-194 の検証範囲のうち、R1 CPU の実機計測は完了した。
-  Snapdragon X Elite / Intel Core Ultra の NPU 計測は、R2 artifact がないため未実行である。
-  将来 R2 artifact を作成できた場合にだけ、同じ入力セットで実行する。
+  Snapdragon X Elite / Intel Core Ultra の NPU / GPU EP の計測は、§4.3 項 2 の再開条件を
+  満たした R2 artifact で、同じ入力セットを使って Human Gate（DEV-1720）が行う。
 
 #### 4.2.1 R1 CPU 実モデル baseline
 
@@ -283,8 +287,9 @@ model は §4.2.1 と同一である。計測環境（OS build / CPU）は DEV-8
 GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き
 `genai_config.json` を検証する作業は、新しい推論 backend の実装に当たるため本スパイクの
 範囲外とする。
-変換済み artifact がないため、R2 の精度劣化、RSS、実効配布サイズ、QNN / OpenVINO NPU
-レイテンシは計測できない。
+zenz-v3 の変換済み artifact がないため、zenz-v3 での R2 の精度劣化、RSS、実効配布サイズ、
+QNN / OpenVINO NPU レイテンシは計測できない。zenz-v3.1-small / xsmall には safetensors
+（fp32）があるが、GPT-2 構造なので同じ制約を受ける。v3.2 は GGUF だけが公開されている。
 
 根拠:
 
@@ -293,34 +298,79 @@ GPT-2 builder の新規実装、または別 exporter で作った ONNX graph �
 - [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/models/model_type.h)
 - [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/c67e03e07d215c869f591b274c1631170d3e11fe)
 
+#### 4.2.3 Llama 系互換モデルの R2 変換（DEV-1718）
+
+model builder の対応 architecture には Llama と LFM2 MoE が含まれ、GPT-2 と Qwen3-Next は
+含まれない（onnxruntime-genai `6b7ff3ca` の builder）。zenz-v3 のプロンプト形式で学習された
+Llama 構造のかな漢字変換モデル `yuuki14202028/kanakanji-edge-33m`（33.5M パラメータ、
+safetensors fp32）は、この builder で ONNX Runtime GenAI 形式へ変換できる。モデルそのものの
+評価と、zenz-v3 とのプロンプト差の扱いは `docs/zenzai-inference-spec.md` §2.4 が正典である。
+
+2026-10-25 の sandbox 調査（Linux、CPU 4 コア）で、`onnxruntime-genai` 0.18.0 の builder を
+使い、CPU EP で AJIMEE-Bench 200 件を貪欲デコードした結果は次のとおりである。製品の
+beam / n-best と読み制約は使っていない。
+
+| 形式 | サイズ | Acc@1 | 備考 |
+|---|---|---|---|
+| fp32 | 129MB | 0.805 | llama.cpp f16 と 200 / 200 件で同じ出力 |
+| int8 | 49MB | 0.805 | fp32 から劣化なし |
+| int4（builder 既定） | — | 0.235 | 崩れる |
+| int4（LM head 除外、shared embeddings 無効、block 32） | — | 0.755 | 原因は切り分けていない |
+| fp16 | — | — | CPU EP では実行時エラー（GPU EP 向けの形式） |
+
+この結果から、R2 で使う形式は次のとおりとする。
+
+- CPU EP と GPU EP の第一候補は int8 とする。int4 は崩れの原因を切り分けるまで使わない。
+  fp16 は GPU EP の候補として Human Gate の計測項目に残す。
+- NPU EP（QNN / OpenVINO / VitisAI）は、静的 shape や QDQ 量子化など EP ごとの builder 設定を
+  要する可能性がある。NPU で動く形式は Human Gate（DEV-1720）の計測で決める。
+- `genai_config.json` と `tokenizer.json` は builder の出力を使う。ORT GenAI のトークナイザが
+  プロンプトの制御文字（U+EE00〜U+EE02）を 1 トークンずつに解決すること（llama.cpp の
+  `parse_special=true` と同じ結果になること）を、R2 の実装で確かめる。
+
+変換の再現手順は次の形を取る。revision、builder のバージョン、評価スクリプトの固定は
+R2 spike の Issue（follow-up）で repo に置く。
+
+```text
+pip install onnxruntime-genai==0.18.0
+python -m onnxruntime_genai.models.builder \
+  -m yuuki14202028/kanakanji-edge-33m -o <出力ディレクトリ> -p int8 -e cpu
+```
+
 ### 4.3 結論（M24 実証結果の反映）
 
 1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。
    配布中の GGUF を無変換で使え、実モデルでロードと候補生成を確認できた。
-2. **R2（Windows ML）は保留**する。
-   現行 model builder には GPT-2 変換経路がなく、配布中の Q5_K_M GGUF も変換入力の
-   条件を満たさないため、zenz-v3 の R2 artifact を作れない。
-3. R2 artifact がない状態では Snapdragon X Elite / Intel Core Ultra の NPU bench を
-   実行しない。
-   これは Windows ML や各 NPU の非対応を示す結果ではなく、前段のモデル変換が成立しない
-   ためである。
+2. **R2（Windows ML）の前提は「model builder が対応する architecture の互換モデル」とし、
+   R1 と同じモデルを R2 でも使えることを再開の条件とする。**
+   zenz-v3 は GPT-2 構造で builder の対象外（§4.2.2）なので、zenz-v3 を既定とする間は R2 を
+   有効にしない。`kanakanji-edge-33m` は R2 artifact を作れる（§4.2.3）。このモデルを
+   `docs/zenzai-inference-spec.md` §2.4 の判断基準で既定モデルに採ったときに、R2 を再開する。
+   R1 と R2 で別のモデルを使うと、同じ入力でも機器によって候補の質が変わり、学習と
+   NLL rerank の閾値もモデルごとに二重になるため、モデルが異なる構成は採らない。
+3. 再開条件を満たす前は Snapdragon X Elite / Intel Core Ultra の NPU bench を実行しない。
+   これは Windows ML や各 NPU の非対応を示す結果ではなく、R1 と同じモデルの R2 artifact が
+   既定になっていないためである。
 4. Copilot+ PC でも R1 CPU を既定とし、**NPU を必須化しない**。
-   将来 GPT-2 builder または別の検証済み ONNX 変換経路が用意された場合にだけ、同じ
-   20 入力と §4.2 のメトリクスで R2 を再評価する。
+   R2 を再開した後も、R2 の各 EP が §4.5 の降格順で使えないときは R1 CPU で動く。
 5. 単体 DirectML backend（旧 A）は採らない。
    ベンダ横断 GPU を追加する場合は R1=ggml-vulkan、DirectML 由来の実行は
    R2=Windows ML に集約する。
-6. Win11 24H2 (build 26100) 未満では、将来 R2 を有効化する場合も OS 判定で R1 CPU に
+6. Win11 24H2 (build 26100) 未満では、R2 を有効化した後も OS 判定で R1 CPU に
    フォールバックする。
+7. **R1 CUDA（ggml-cuda の実リンク）は起票し直さない。**
+   NVIDIA GPU は R1 Vulkan で使え、R2 の再開後は Windows ML の NvTensorRtRtx EP も候補になる。
+   NVIDIA GPU での R1 Vulkan の実測が `zenzai-inference-spec` §8 の性能予算を満たさないと
+   分かった場合に限り、CUDA を再検討する。
 
-§4.4〜§4.6 は、R2 再開時に適用する設計として保持する。
-R2 の保留中は R1 CPU 経路だけを有効にする。
+§4.4〜§4.6 は、R2 再開時に適用する設計とする。
+再開条件を満たすまでは R1 の経路（CPU と Vulkan）だけを有効にする。
 
 v1.0 設定 UI のデバイス選択は、この結論に合わせて `auto` / `cpu` の 2 値へ縮小する
 （`docs/sideload-packaging-spec.md` §3.7 が正典）。`cuda` は §4.4 の降格が続くあいだ UI に出さず、
 `vulkan` の露出条件は M24 ではなく、実行時選択経路の配線（DEV-944）と
 ggml-vulkan ビルドの配布・起動保証（DEV-1001）とする。
-`vulkan` は R1 に属するため、保留中の R2 のマイルストーンに従属させない。
+`vulkan` は R1 に属するため、再開条件（§4.3 項 2）を満たす前の R2 のマイルストーンに従属させない。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を
 > **CPU / CUDA / Vulkan の 3 プリビルド**で実働実証済み（Vulkan(ggml-vulkan) を含む）。
@@ -360,6 +410,44 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   - Vulkan デバイス不在、モデルまたは context 初期化失敗時は CPU で一度再試行し、成功時も
     降格理由を `last_error` に保持する。後続の成功 LoadModel またはモデル無効化で解除する。
     `auto` から選んだ Vulkan が失敗した場合も同じ扱いとする。
+
+#### `WinMlBackend` の責務境界
+
+- `WinMlBackend` は `InferenceEngine::LoadModel` の内側に閉じ、`core::IConverter` の別実装
+  （ONNX Runtime GenAI 版の converter）として `ZenzaiModelConverter` と並べる。TIP と IPC の
+  契約は変えない。
+- プロンプトの構築（`docs/zenzai-inference-spec.md` §3 と §2.4.2 の `promptFormat`）、
+  候補の健全性チェック、logprob の正規化、順位付け、重複除去は decode に依存しない処理として
+  `ZenzaiModelConverter` から切り出し、R1 と R2 で共有する。R1 と R2 で同じモデルを使う
+  （§4.3 項 2）ので、候補の扱いをエンジンごとに分けない。
+- beam / n-best（`docs/zenzai-inference-spec.md` §9.2.3）の再現が論点である。ORT GenAI の
+  Generator は `GetLogits`（最後のトークンの logits）、`SetLogits`、`AppendTokens`、
+  `RewindTo` を持つが、sequence ごとに KV cache を分岐・共有する仕組みは持たない。次の順に
+  R2 spike で確かめて方式を決める。
+  1. 対象 EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx）で ORT GenAI の組み込み beam search
+     （`num_beams` > 1）が動くか。CPU EP に限られる場合、NPU / GPU EP では貪欲デコードしか
+     取れないので、n-best を R1 に残すか、下の (c) へ進む。
+  2. (a) 組み込み beam search と `num_return_sequences` に、`SetLogits` で制御トークンを
+     除く処理を組み合わせ、R1 の beam と候補がどれだけ一致するか。
+  3. (a) が成り立たなければ (c) Windows ML の ONNX Runtime session を直接使い、
+     `past_key_values` を自前で管理する。beam ごとに `RewindTo` と `AppendTokens` で再計算する
+     (b) は、再計算の量が読み長の 2 乗で増えるため採らない。
+- NLL rerank（`docs/neural-reranker-spec.md` §B2）は候補表層の全位置の logits を要する。
+  `GetLogits` は最後のトークンだけを返すので、R2 で NLL rerank を使うのは (c) を採った場合に
+  限り、(a) では R2 の NLL rerank を無効にする。
+
+#### R1 / R2 の artifact と model catalog
+
+- 同じモデルの R1 artifact（`.gguf`）と R2 artifact（`genai_config.json` を含む ONNX
+  Runtime GenAI ディレクトリ）は、model catalog の 1 entry にエンジン別の artifact として
+  並べ、それぞれに SHA-256 を持たせる。catalog の schema 正典は
+  `docs/model-management-spec.md` §3.1.1 である。
+- 診断 D-007 / D-008（`docs/dev-infrastructure-spec.md` §12.2）は R2 の ONNX ディレクトリを
+  想定済みなので、判定表は変えない。設定の `model.selectedPath` は 1 つの artifact しか
+  指せないため、エンジンごとのパスをどう持つかは catalog の拡張と合わせて決める。settings の
+  schema を変える場合は利用者の判断を先に取る。
+- `kanakanji-edge-33m` で両方を取得すると、GGUF Q8_0 36MB と ONNX int8 49MB の計 85MB になる。
+  R2 を使えない機器（OS build 26100 未満、§4.5 で R1 に降格する構成）では ONNX を取得しない。
 
 #### `auto` の解決（BackendSelector）
 
@@ -401,7 +489,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   どれにも当たらなければ Vulkan を選ぶ。Windows 以外の OS では probe が判定不能を返すため、
   `auto` は常に CPU になる。CUDA は ggml-cuda をリンクするビルドが無いため、
   CUDA runtime があっても選ばない（明示 `cuda` は上記の CPU 降格）。
-- OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の保留中は
+- OS build が §4.3 項 6 の 26100 以上かどうかは `winml_os_eligible` として記録する。R2 の再開前は
   R1 の選択に使わない。
 - 電源の状態が変わったら（§6.1）、変化が 5 秒続いた後に `auto` を解決し直す
   （`PlanAutoBackendForPower`）。アダプタ・ランタイム DLL・OS build は起動時に集めた値を使い、

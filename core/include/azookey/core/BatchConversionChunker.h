@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,10 +25,14 @@ struct BatchRomajiChunk {
 // Repeated consonants may exceed the raw-byte budget by the bounded slack.
 // At that escape boundary, pending kana belongs to the following chunk; raw
 // and reading concatenations stay lossless, but alignment is approximate.
-inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw,
-                                                      size_t max_bytes = kIpcChunkBytes) {
+// A null table uses the built-in romaji mappings; inputStyle=custom passes its
+// table so the reading matches what the preedit shows.
+inline std::vector<BatchRomajiChunk> SplitBatchRomaji(
+    const std::string& raw, size_t max_bytes = kIpcChunkBytes,
+    std::shared_ptr<const CustomRomajiTable> table = nullptr) {
   std::vector<BatchRomajiChunk> chunks;
   RomajiKanaConverter converter;
+  converter.SetCustomTable(std::move(table));
   BatchRomajiChunk current;
   for (size_t i = 0; i < raw.size(); ++i) {
     const char byte = raw[i];

@@ -5767,3 +5767,59 @@ TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
   engine.ApplyConfig(config);
   RemovePathNoThrow(dir);
 }
+
+// DEV-1734 (legacy-parity-spec section 5.4): alt_readings lets the Host convert
+// the reading of an ambiguous "nn" + vowel that the dictionary supports, and
+// report it as corrected_reading. SimpleConverter answers an unknown reading
+// with itself, so the surface shows which reading was converted.
+TEST_F(DispatcherTest, AltReadingsConvertTheReadingTheDictionarySupports) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  const auto query = [&](uint64_t id, const std::string& reading,
+                         std::vector<std::string> alternatives) {
+    ipc::QueryCandidatesRequest q;
+    q.reading = reading;
+    q.alt_readings = std::move(alternatives);
+    const auto resp = dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed && !parsed->candidates.empty()) << reading;
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+
+  auto chosen = query(1734, "ないぶげんにん", {"ないぶげんいん"});
+  EXPECT_EQ(chosen.corrected_reading, "ないぶげんいん");
+  ASSERT_FALSE(chosen.candidates.empty());
+  EXPECT_EQ(chosen.candidates.front().reading, "ないぶげんいん");
+
+  // Only the default reading forms a word: it stays, with no corrected reading.
+  auto kept = query(1735, "こんにちは", {"こんいちは"});
+  EXPECT_TRUE(kept.corrected_reading.empty());
+  ASSERT_FALSE(kept.candidates.empty());
+  EXPECT_EQ(kept.candidates.front().reading, "こんにちは");
+
+  // An older TIP sends no alt_readings and gets the reading it asked for.
+  auto older = query(1736, "ないぶげんにん", {});
+  EXPECT_TRUE(older.corrected_reading.empty());
+  ASSERT_FALSE(older.candidates.empty());
+  EXPECT_EQ(older.candidates.front().reading, "ないぶげんにん");
+
+  // An alternative longer than the reading is not one of its readings.
+  auto longer = query(1737, "げんにん", {"ないぶげんいん"});
+  EXPECT_TRUE(longer.corrected_reading.empty());
+
+  const auto live = [&](uint64_t id, std::vector<std::string> alternatives) {
+    ipc::QueryLiveConversionRequest q{"ないぶげんにん", ""};
+    q.alt_readings = std::move(alternatives);
+    const auto resp = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryLiveConversion,
+                                                  ipc::BuildQueryLiveConversionRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed =
+        resp ? ipc::ParseQueryLiveConversionResponse(resp->payload_json) : std::nullopt;
+    return parsed ? parsed->surface : std::string{};
+  };
+  EXPECT_EQ(live(1738, {"ないぶげんいん"}), "ないぶげんいん");
+  EXPECT_EQ(live(1739, {}), "ないぶげんにん");
+}

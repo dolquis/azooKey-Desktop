@@ -61,6 +61,11 @@ add_executable(azookey_reverse_lookup_bench reverse_lookup_bench.cpp)
 target_link_libraries(azookey_reverse_lookup_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
+# DEV-1734: the reading of an ambiguous "nn" + vowel chosen with a real dictionary.
+add_executable(azookey_ambiguous_reading_bench ambiguous_reading_bench.cpp)
+target_link_libraries(azookey_ambiguous_reading_bench
+  PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
+)
 # M63-B section 15.2: the mixed lattice quality gate (no model).
 add_executable(azookey_mixed_english_eval mixed_english_eval.cpp)
 target_link_libraries(azookey_mixed_english_eval

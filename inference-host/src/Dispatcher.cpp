@@ -1147,14 +1147,22 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // typed, so no corrected reading comes back with its segments.
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
+    // DEV-1734: another reading of an ambiguous "nn" + vowel, when the
+    // dictionary supports it better. An M63 split is converted as typed.
+    const std::string reading = IsInlineSplit(split) ? parsed->reading
+                                                     : engine_->ChooseAmbiguousReading(
+                                                           parsed->reading, parsed->alt_readings);
     auto queried = engine_->QueryCandidatesEx(
-        parsed->reading, parsed->left_context, NowSec(), cancel.get(), ordinary_limit, parsed->live,
+        reading, parsed->left_context, NowSec(), cancel.get(), ordinary_limit, parsed->live,
         trace.context(), &tag_boosts, IsInlineSplit(split) ? &as_typed : nullptr);
     const auto all_japanese = IsInlineSplit(split) && !queried.candidates.empty()
                                   ? std::optional{queried.candidates.front()}
                                   : std::nullopt;
     candidates = std::move(queried.candidates);
+    // M35 corrects the chosen reading in turn; either way the TIP learns the
+    // reading the candidates were converted from.
     corrected_reading = std::move(queried.corrected_reading);
+    if (corrected_reading.empty() && reading != parsed->reading) corrected_reading = reading;
     // Under auto_replace the conversion ran on the corrected reading, so the
     // rewriters have to key off the same reading or they would look up the
     // typo the user is no longer being shown.
@@ -1328,8 +1336,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
       return std::nullopt;
     }
   }
-  const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
-                                                      cancel.get(), trace.context());
+  // DEV-1734: the surface of the reading the dictionary supports best; the
+  // response has no reading, so the TIP keeps its own.
+  const auto candidate = engine_->QueryLiveConversion(
+      engine_->ChooseAmbiguousReading(parsed->kana, parsed->alt_readings), parsed->context,
+      NowSec(), cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();
   if (canceled) {

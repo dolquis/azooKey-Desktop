@@ -420,6 +420,14 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec);
 
+  // DEV-1734 (legacy-parity-spec section 5.4): `kana`, unless one of
+  // `alternatives` (other readings of the same romaji, from the TIP) splits into
+  // the static dictionaries' words more cheaply by core's margin
+  // (ChooseAmbiguousReading). Alternatives that are empty or longer than kana
+  // are ignored; with none left, kana comes back without a lookup.
+  std::string ChooseAmbiguousReading(const std::string& kana,
+                                     const std::vector<std::string>& alternatives);
+
   // Exact dictionary surface lookup. Empty means no known reading.
   std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);
 

@@ -10174,6 +10174,107 @@ TEST(TsfTipTypoCorrectionTest, WireAdvertisesTypoAndSendsObservationWithoutWaiti
   EXPECT_TRUE(observations[0].learning_allowed);
 }
 
+// DEV-1734 (legacy-parity-spec section 5.4): Space on an ambiguous "nn" + vowel
+// asks for the window with the other readings; per-key queries carry none. The
+// reading the Host picks from them goes to the candidates only: unlike an M35
+// correction it neither rewrites the preedit nor counts as a typo.
+TEST(TsfTipTypoCorrectionTest, AmbiguousReadingChoiceReachesCandidatesButNotThePreedit) {
+  using namespace azookey::ipc;
+  TextServiceHarness token_guard;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ambiguous-reading-" + std::to_string(GetCurrentProcessId());
+  std::mutex mutex;
+  std::vector<QueryCandidatesRequest> queries;
+  std::vector<MessageType> received_types;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      received_types.push_back(request.type);
+    }
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake_response;
+      handshake_response.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake_response);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      QueryCandidatesResponse payload;
+      if (auto query = ParseQueryCandidatesRequest(request.payload_json)) {
+        if (std::find(query->alt_readings.begin(), query->alt_readings.end(), "げんいん") !=
+            query->alt_readings.end()) {
+          payload.corrected_reading = "げんいん";
+          payload.candidates.resize(1);
+          payload.candidates[0].surface = "原因";
+          payload.candidates[0].reading = "げんいん";
+          payload.candidates[0].source = "dictionary";
+        }
+        const std::lock_guard<std::mutex> lock(mutex);
+        queries.push_back(std::move(*query));
+      }
+      response.payload_json = BuildQueryCandidatesResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  TypeTypoRomaji(h, "GENNINN");
+  // A per-key query has been answered, so the Host is connected for Space.
+  ASSERT_TRUE(WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !queries.empty();
+  }));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto chosen = [&] {
+    const auto cached = h.service.cached_candidates_for_test();
+    return !cached.empty() && cached.front().surface == "原因";
+  };
+  ASSERT_TRUE(WaitUntil(chosen));
+  EXPECT_EQ(h.service.preedit_kana_, "げんにん");
+  // OnKeyDown applies a pending M35 correction before it maps the key, whether
+  // or not the key is eaten; this choice is not one.
+  h.Press(VK_DOWN);
+  EXPECT_EQ(h.service.preedit_kana_, "げんにん");
+  EXPECT_EQ(h.service.input_state_for_test().Reading(), "げんにん");
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_FALSE(queries.empty());
+  const auto window = std::find_if(queries.begin(), queries.end(),
+                                   [](const QueryCandidatesRequest& q) { return !q.live; });
+  ASSERT_NE(window, queries.end());
+  EXPECT_EQ(window->reading, "げんにん");
+  EXPECT_EQ(window->alt_readings, (std::vector<std::string>{"げんいん"}));
+  for (const auto& query : queries)
+    if (query.live) EXPECT_TRUE(query.alt_readings.empty()) << query.reading;
+  EXPECT_EQ(std::count(received_types.begin(), received_types.end(), MessageType::ObserveTypo), 0);
+}
+
+TEST(TsfTipTypoCorrectionTest, AltReadingsNeedTheTypedRomajiAndTheBuiltInTable) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "GENNINN");
+  // Space flushes the trailing nn; the readings are of the whole romaji.
+  EXPECT_EQ(h.service.alt_readings_for_test("げんにん", 3), (std::vector<std::string>{"げんいん"}));
+  EXPECT_EQ(h.service.alt_readings_for_test("げんにん", 0), std::vector<std::string>{});
+  // Romaji that does not spell the reading sends nothing.
+  EXPECT_TRUE(h.service.alt_readings_for_test("げんいん", 3).empty());
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  TypeTypoRomaji(h, "KONNNICHIHA");
+  EXPECT_TRUE(h.service.alt_readings_for_test("こんにちは", 3).empty());
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  // A custom table has no "nn" rule to read two ways.
+  h.service.set_romaji_table_for_test(
+      azookey::core::CustomRomajiLoader::Parse("nn\tん\t2\nni\tに\nn\tん\t1\ni\tい\n").table);
+  TypeTypoRomaji(h, "NNI");
+  EXPECT_TRUE(h.service.alt_readings_for_test(h.service.preedit_kana_, 3).empty());
+}
+
 // DEV-1201 / legacy-parity-spec §6: Unicode input runs in core even when the
 // number rewriter would send digits to the legacy path.
 namespace {

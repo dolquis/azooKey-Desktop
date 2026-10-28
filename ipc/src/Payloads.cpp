@@ -467,6 +467,26 @@ std::vector<LiveSegment> LiveSegmentsFromJson(const j::Value& v) {
   return result;
 }
 
+void AltReadingsToJson(const std::vector<std::string>& readings, j::Object& o) {
+  if (readings.empty()) return;
+  j::Array arr;
+  for (const auto& reading : readings) arr.emplace_back(reading);
+  o.emplace("alt_readings", j::Value(std::move(arr)));
+}
+
+// Absent for TIPs that predate DEV-1734. Non-string and empty entries are
+// skipped, and the list is cut at kMaxAltReadings.
+std::vector<std::string> AltReadingsFromJson(const j::Value& v) {
+  std::vector<std::string> readings;
+  const auto* arr = v.GetArray("alt_readings");
+  if (!arr) return readings;
+  for (const auto& e : *arr) {
+    if (readings.size() == kMaxAltReadings) break;
+    if (e.IsString() && !e.AsString().empty()) readings.push_back(e.AsString());
+  }
+  return readings;
+}
+
 }  // namespace
 
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
@@ -484,6 +504,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
   if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
+  AltReadingsToJson(p.alt_readings, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -506,6 +527,7 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.english_candidates = v->GetBool("english_candidates").value_or(false);
   p.mixed_english = v->GetBool("mixed_english").value_or(false);
+  p.alt_readings = AltReadingsFromJson(*v);
   return p;
 }
 
@@ -562,6 +584,7 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
   if (!p.secure) o.emplace("secure", j::Value(false));
+  AltReadingsToJson(p.alt_readings, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -581,6 +604,7 @@ std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const 
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.mixed_english = v->GetBool("mixed_english").value_or(false);
   p.secure = v->GetBool("secure").value_or(true);
+  p.alt_readings = AltReadingsFromJson(*v);
   return p;
 }
 

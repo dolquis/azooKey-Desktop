@@ -55,6 +55,21 @@ def generate(directory: Path) -> None:
     profile_directory = directory / "profile"
     profile_directory.mkdir(exist_ok=True)
     (profile_directory / "technical_terms.azdic").write_bytes(profile_image)
+    # DEV-1734: words that tell the readings of an ambiguous "nn" + vowel apart.
+    ambiguous_tsv = directory / "ambiguous.lex.tsv"
+    ambiguous_tsv.write_text(
+        "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+        "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n"
+        "内部\tないぶ\t名詞\t2000\t0.6\tgeneral\tfixture\n"
+        "原因\tげんいん\t名詞\t1000\t0.7\tgeneral\tfixture\n"
+        "現任\tげんにん\t名詞\t6000\t0.2\tgeneral\tfixture\n"
+        "こんにちは\tこんにちは\t感動詞\t0\t0.8\tgeneral\tfixture\n"
+        "懇意\tこんい\t名詞\t5000\t0.3\tgeneral\tfixture\n",
+        encoding="utf-8", newline="\n")
+    ambiguous_image, _ = dictbuild.build([ambiguous_tsv], metadata, 1, directory)
+    ambiguous_directory = directory / "ambiguous"
+    ambiguous_directory.mkdir(exist_ok=True)
+    (ambiguous_directory / "sudachi_lexicon.azdic").write_bytes(ambiguous_image)
     bundled = directory / "bundled"
     bundled.mkdir(exist_ok=True)
     (bundled / "base_lexicon.azdic").write_bytes(image)  # Deliberately wrong layer.

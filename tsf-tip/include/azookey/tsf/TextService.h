@@ -838,6 +838,8 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   static constexpr size_t kMaxRetryWaitingKeys = 16;
   std::vector<RetryWaitingKey> retry_waiting_keys_;
+  // One log record per wait for a key it could not keep.
+  bool retry_waiting_drop_logged_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 

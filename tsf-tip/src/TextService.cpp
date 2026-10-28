@@ -2657,7 +2657,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     typo_test_key_context_ = nullptr;
     // A commit a later edit session finished, without a key, drops the keys
     // that waited for its retry (DEV-1750).
-    if (!committing_) retry_waiting_keys_.clear();
+    if (!committing_) {
+      retry_waiting_keys_.clear();
+      retry_waiting_drop_logged_ = false;
+    }
     // A new key in the same context means the host kept input focus. If the
     // key belongs to another context, finish the old text before using it.
     if (!terminated_composition_surface_.empty() && !committing_) {
@@ -4154,10 +4157,25 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
 }
 
 void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data) {
-  if (retry_waiting_keys_.size() >= kMaxRetryWaitingKeys) return;
+  // Only the reason, once per wait: never a key, its count or its timing.
+  const auto log_drop = [this](const char* reason) noexcept {
+    if (std::exchange(retry_waiting_drop_logged_, true)) return;
+    try {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "retry_waiting_key_dropped",
+                 {{"reason", SafeLogText(reason)}});
+    } catch (...) {
+    }
+  };
+  if (retry_waiting_keys_.size() >= kMaxRetryWaitingKeys) {
+    log_drop("full");
+    return;
+  }
   RetryWaitingKey waiting{ComIdentity(context), key, key_data, {}};
   // The key means what it meant when pressed (Shift, the OEM symbol).
-  if (!GetKeyboardState(waiting.key_state.data())) return;
+  if (!GetKeyboardState(waiting.key_state.data())) {
+    log_drop("key_state_unavailable");
+    return;
+  }
   retry_waiting_keys_.push_back(waiting);
 }
 

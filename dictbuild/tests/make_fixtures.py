@@ -64,7 +64,9 @@ def generate(directory: Path) -> None:
         "原因\tげんいん\t名詞\t1000\t0.7\tgeneral\tfixture\n"
         "現任\tげんにん\t名詞\t6000\t0.2\tgeneral\tfixture\n"
         "こんにちは\tこんにちは\t感動詞\t0\t0.8\tgeneral\tfixture\n"
-        "懇意\tこんい\t名詞\t5000\t0.3\tgeneral\tfixture\n",
+        "懇意\tこんい\t名詞\t5000\t0.3\tgeneral\tfixture\n"
+        "千年\tせんねん\t名詞\t4000\t0.4\tgeneral\tfixture\n"
+        "遷延\tせんえん\t名詞\t6000\t0.2\tgeneral\tfixture\n",
         encoding="utf-8", newline="\n")
     ambiguous_image, _ = dictbuild.build([ambiguous_tsv], metadata, 1, directory)
     ambiguous_directory = directory / "ambiguous"

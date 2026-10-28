@@ -427,7 +427,9 @@ class InferenceEngine {
   // kana as typed.
   // - With model candidates for both readings, the alternative's result comes
   //   back, with corrected_reading set to it, when its best model score beats
-  //   kana's by more than kAmbiguousReadingModelMargin; otherwise kana's.
+  //   kana's by more than kAmbiguousReadingModelMargin, followed by kana's first
+  //   kAmbiguousReadingTypedKept candidates whose surfaces it lacks; otherwise
+  //   kana's.
   // - Otherwise (no model) kana's candidates come back, followed by the
   //   alternative's dictionary candidates whose surfaces kana's lack.
   CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
@@ -440,6 +442,8 @@ class InferenceEngine {
   // The normalized model score (ZenzaiModelConverter's 0.3 to 1.4 band) by which
   // another reading must beat the typed one, so a near tie keeps the typed one.
   static constexpr double kAmbiguousReadingModelMargin = 0.05;
+  // How many of the typed reading's candidates stay in the window after a switch.
+  static constexpr size_t kAmbiguousReadingTypedKept = 3;
 
   // Exact dictionary surface lookup. Empty means no known reading.
   std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);

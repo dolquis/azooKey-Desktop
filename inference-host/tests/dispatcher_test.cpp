@@ -5780,7 +5780,8 @@ class ScoredReadingConverter final : public azookey::core::IConverter {
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
                                                 const azookey::core::ConversionContext&) override {
     static const std::map<std::string, double> kScores = {
-        {"ないぶげんにん", 0.60}, {"ないぶげんいん", 0.90}, {"さんにん", 0.80}, {"さんいん", 0.83}};
+        {"ないぶげんにん", 0.60}, {"ないぶげんいん", 0.90}, {"さんにん", 0.80},
+        {"さんいん", 0.83},       {"せんねん", 1.23},       {"せんえん", 1.34}};
     const auto found = kScores.find(kana);
     azookey::core::Candidate candidate{"model:" + kana, kana,
                                        found == kScores.end() ? 0.5 : found->second};
@@ -5854,6 +5855,40 @@ TEST(AmbiguousReadingDispatchTest, ModelScoresChooseTheReadingTheWindowConverts)
   // An alternative longer than the reading is not one of its readings.
   auto longer = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "げんにん", {"ないぶげんいん"}));
   EXPECT_TRUE(longer.corrected_reading.empty());
+}
+
+// A switch the user did not mean (sennenn to せんえん, as the real model does)
+// still leaves the typed reading's first candidates in the window, after the
+// chosen reading's candidates and with their own reading.
+TEST(AmbiguousReadingDispatchTest, ASwitchKeepsTheTypedReadingsDictionaryWords) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "せんねん", {"せんえん"}));
+  EXPECT_EQ(window.corrected_reading, "せんえん");
+  ASSERT_FALSE(window.candidates.empty());
+  EXPECT_EQ(window.candidates.front().reading, "せんえん");
+  const auto typed_word =
+      std::find_if(window.candidates.begin(), window.candidates.end(),
+                   [](const ipc::CandidateField& c) { return c.surface == "千年"; });
+  ASSERT_NE(typed_word, window.candidates.end());
+  EXPECT_EQ(typed_word->reading, "せんねん");
+  // Every candidate of the chosen reading comes first.
+  EXPECT_TRUE(std::all_of(typed_word, window.candidates.end(),
+                          [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }));
+  // With a model the typed reading's best words are mostly model candidates.
+  EXPECT_TRUE(std::any_of(window.candidates.begin(), window.candidates.end(),
+                          [](const ipc::CandidateField& c) {
+                            return c.surface == "model:せんねん" && c.reading == "せんねん";
+                          }));
+  EXPECT_LE(
+      std::count_if(window.candidates.begin(), window.candidates.end(),
+                    [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }),
+      static_cast<std::ptrdiff_t>(azookey::host::InferenceEngine::kAmbiguousReadingTypedKept));
 }
 
 TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCandidates) {

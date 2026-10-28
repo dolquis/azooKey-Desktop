@@ -119,6 +119,19 @@ int main(int argc, char** argv) {
                 << " first=";
       for (size_t i = 0; i < window.candidates.size() && i < 3; ++i)
         std::cout << (i ? "," : "") << window.candidates[i].surface;
+      // After a switch, the typed reading's words kept in the window and where.
+      if (!window.corrected_reading.empty()) {
+        std::cout << " typed_kept=";
+        bool first_kept = true;
+        for (size_t i = 0; i < window.candidates.size(); ++i) {
+          if (window.candidates[i].reading != typed) continue;
+          std::cout << (first_kept ? "" : ",") << window.candidates[i].surface << '@' << (i + 1);
+          first_kept = false;
+        }
+        std::cout << '/' << window.candidates.size() << " window=";
+        for (size_t i = 0; i < window.candidates.size(); ++i)
+          std::cout << (i ? "," : "") << window.candidates[i].surface;
+      }
       std::cout << '\n';
       if (readings.empty()) continue;
       for (int i = 0; i < iterations; ++i) {

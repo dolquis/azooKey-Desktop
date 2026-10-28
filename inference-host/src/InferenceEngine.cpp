@@ -6,6 +6,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <utility>
 
@@ -1725,25 +1726,41 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
         best = best ? (std::max)(*best, candidate.score) : candidate.score;
     return best;
   };
+  // Appends `from`'s candidates whose surfaces `into` lacks, keeping their own
+  // reading, so the reading not chosen stays in the window: its first `limit`
+  // ones when `dictionary_only` is false, its dictionary words otherwise.
+  const auto append_other = [](CandidatesResult& into, CandidatesResult& from, bool dictionary_only,
+                               size_t limit) {
+    size_t appended = 0;
+    for (auto& candidate : from.candidates) {
+      if (appended == limit) break;
+      if (dictionary_only && candidate.source != core::CandidateSource::SystemDictionary &&
+          candidate.source != core::CandidateSource::UserDictionary)
+        continue;
+      const bool shown =
+          std::any_of(into.candidates.begin(), into.candidates.end(),
+                      [&](const core::Candidate& c) { return c.surface == candidate.surface; });
+      if (shown) continue;
+      into.candidates.push_back(std::move(candidate));
+      ++appended;
+    }
+  };
   const auto typed_score = best_model_score(typed);
   const auto other_score = best_model_score(other);
-  if (typed_score && other_score) {
-    // A conversion cut short by its deadline scores a partial generation.
-    if (other.model_deadline_exceeded || typed.model_deadline_exceeded ||
-        *other_score <= *typed_score + kAmbiguousReadingModelMargin)
-      return typed;
+  // A conversion cut short by its deadline scores a partial generation.
+  if (typed_score && other_score && !other.model_deadline_exceeded &&
+      !typed.model_deadline_exceeded &&
+      *other_score > *typed_score + kAmbiguousReadingModelMargin) {
     if (other.corrected_reading.empty()) other.corrected_reading = *alternative;
+    // A wrong switch (sennenn to 遷延 over 千年) keeps the typed reading's best
+    // words reachable; with a model they are mostly model candidates.
+    append_other(other, typed, false, kAmbiguousReadingTypedKept);
     return other;
   }
-  for (auto& candidate : other.candidates) {
-    if (candidate.source != core::CandidateSource::SystemDictionary &&
-        candidate.source != core::CandidateSource::UserDictionary)
-      continue;
-    const bool shown =
-        std::any_of(typed.candidates.begin(), typed.candidates.end(),
-                    [&](const core::Candidate& c) { return c.surface == candidate.surface; });
-    if (!shown) typed.candidates.push_back(std::move(candidate));
-  }
+  // Without a model the other reading's candidates past its dictionary words are
+  // the fallback's identity and long-vowel guesses.
+  if (!typed_score || !other_score)
+    append_other(typed, other, true, (std::numeric_limits<size_t>::max)());
   return typed;
 }
 

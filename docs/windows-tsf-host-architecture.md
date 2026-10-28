@@ -88,7 +88,8 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
   queued commit (`committing_` / `commit_surface_`) を保持し、確定済み観測も送らない。
 - queued commit が残っている間、後続の通常キー入力は先頭で元の context に対する
   commit を再試行し、成功・再拒否のどちらでもそのキーを消費して stale preedit や
-  確定直後のテキストと新規入力が混ざらないようにする。
+  確定直後のテキストと新規入力が混ざらないようにする。消費したキーは確定の後に残し、
+  再試行が成功したら打った順に処理する（`docs/tsf-deep-integration-spec.md` §2.4.1）。
 
 ## IPC メッセージ
 

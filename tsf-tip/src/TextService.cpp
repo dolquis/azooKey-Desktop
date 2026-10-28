@@ -2082,7 +2082,7 @@ HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   value.lVal = open ? 1 : 0;
   const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
   // Closing commits what is left through RefreshKeyboardOpen, the lifecycle
-  // path that commits the reading (spec §4.2).
+  // path that commits the shown text (spec §4.3).
   if (SUCCEEDED(hr)) RefreshKeyboardOpen(source);
   return hr;
 }
@@ -2114,7 +2114,8 @@ HRESULT TextService::CloseKeyboardCommittingShownText(ITfContext* context,
     // A refused edit session keeps the text (or a commit queued for retry),
     // and so does an Enter that waits, such as for a batch conversion: stay on
     // so the text is neither lost nor committed as its reading. The key is consumed.
-    // An Enter that the state does not take closes as Hankaku/Zenkaku does.
+    // An Enter that the state does not take closes as an off from outside the
+    // TIP does, through the lifecycle path.
     if (committing_ || (committed && HasInputToCommitBeforeClose())) return S_OK;
   }
   return SetKeyboardOpen(false, source);
@@ -2131,7 +2132,9 @@ HRESULT TextService::HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key,
       return CloseKeyboardCommittingShownText(
           context, key == VK_NONCONVERT ? "nonconvert_key" : "ime_off_key");
     case OpenCloseKeyAction::Toggle:
-      return ToggleKeyboardOpen();
+      // Hankaku/Zenkaku closes as VK_IME_OFF does (DEV-1743).
+      return keyboard_open_ ? CloseKeyboardCommittingShownText(context, "toggle_key")
+                            : ToggleKeyboardOpen();
     case OpenCloseKeyAction::None:
       break;
   }
@@ -2652,6 +2655,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       TrackUndoKey(context, wParam);
     }
     typo_test_key_context_ = nullptr;
+    // A commit a later edit session finished, without a key, drops the keys
+    // that waited for its retry (DEV-1750).
+    if (!committing_) {
+      retry_waiting_keys_.clear();
+      retry_waiting_drop_logged_ = false;
+    }
     // A new key in the same context means the host kept input focus. If the
     // key belongs to another context, finish the old text before using it.
     if (!terminated_composition_surface_.empty() && !committing_) {
@@ -2737,9 +2746,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         core_marked_surface_.clear();
         ClearBatchState();
         *eaten = TRUE;
-        return S_OK;
+        // The Enter an off click sends is no key: the waiting keys are dropped.
+        if (commit_before_close_) {
+          retry_waiting_keys_.clear();
+          return S_OK;
+        }
+        return ReplayRetryWaitingKeys(context, wParam, lParam);
       } else {
-        // Keep queued commit and preserved preedit isolated from new input.
+        // Keep queued commit and preserved preedit isolated from new input;
+        // the key waits for the retry instead (DEV-1750).
+        if (!commit_before_close_) HoldRetryWaitingKey(context, wParam, lParam);
         *eaten = TRUE;
         return S_OK;
       }
@@ -2932,12 +2948,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // DEV-1735: a key typed while the candidate window is shown commits the
     // highlight (every segment of a batch) like Enter, then is handled as the
     // first key of the next composition. While a refused commit waits for its
-    // retry the key is consumed and dropped, as for any key in that state.
+    // retry the key waits too and is replayed after it (DEV-1750).
     auto commit_selection = [&]() -> HRESULT {
       const HRESULT commit_hr = CommitSelected(context);
       if (FAILED(commit_hr)) return commit_hr;
       *eaten = TRUE;
-      return committing_ ? S_FALSE : S_OK;
+      if (!committing_) return S_OK;
+      HoldRetryWaitingKey(context, wParam, lParam);
+      return S_FALSE;
     };
     auto commit_selection_then_retype = [&]() -> HRESULT {
       const HRESULT commit_hr = commit_selection();
@@ -3158,6 +3176,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT hr = ApplyInputStateResult(context, std::move(result));
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
+        // A refused commit drops the next composition; the key waits for the
+        // retry and starts it then (DEV-1750).
+        if (continues_after_commit && committing_) HoldRetryWaitingKey(context, wParam, lParam);
         if (continues_after_commit && !committing_ &&
             input_state_.kind() != core::InputStateKind::Idle &&
             input_state_.kind() != core::InputStateKind::Selecting)
@@ -4135,6 +4156,66 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
   return SUCCEEDED(hr) ? hr_session : hr;
 }
 
+void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data) {
+  // Only the reason, once per wait: never a key, its count or its timing.
+  const auto log_drop = [this](const char* reason) noexcept {
+    if (std::exchange(retry_waiting_drop_logged_, true)) return;
+    try {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "retry_waiting_key_dropped",
+                 {{"reason", SafeLogText(reason)}});
+    } catch (...) {
+    }
+  };
+  if (retry_waiting_keys_.size() >= kMaxRetryWaitingKeys) {
+    log_drop("full");
+    return;
+  }
+  RetryWaitingKey waiting{ComIdentity(context), key, key_data, {}};
+  // The key means what it meant when pressed (Shift, the OEM symbol).
+  if (!GetKeyboardState(waiting.key_state.data())) {
+    log_drop("key_state_unavailable");
+    return;
+  }
+  retry_waiting_keys_.push_back(waiting);
+}
+
+// DEV-1750: once a key retries a refused commit, the keys that waited for it
+// and then that key are handled in order, as typed. Each waiting key runs
+// with its own key state, which every key-state reader (GetKeyState, the OEM
+// and digit translation) sees, and is put back right after. A key the TIP
+// does not take then is dropped: the host already gave it to the TIP.
+HRESULT TextService::ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key,
+                                            LPARAM retry_key_data) {
+  auto keys = std::move(retry_waiting_keys_);
+  retry_waiting_keys_.clear();
+  std::array<BYTE, 256> current_state{};
+  const bool restore_state = GetKeyboardState(current_state.data()) != FALSE;
+  for (auto& waiting : keys) {
+    if (!restore_state) break;
+    // A key typed in another context is not shown there either; drop it.
+    if (waiting.context != ComIdentity(context)) continue;
+    BOOL replay_eaten = FALSE;
+    HRESULT hr = S_OK;
+    (void)SetKeyboardState(waiting.key_state.data());
+    try {
+      // The key was tracked for typo and undo when it was pressed.
+      typo_test_key_context_ = context;
+      typo_test_key_ = waiting.key;
+      hr = OnKeyDown(context, waiting.key, waiting.key_data, &replay_eaten);
+    } catch (...) {
+      (void)SetKeyboardState(current_state.data());
+      throw;
+    }
+    (void)SetKeyboardState(current_state.data());
+    if (hr == E_OUTOFMEMORY) return hr;
+  }
+  BOOL retry_eaten = FALSE;
+  typo_test_key_context_ = context;
+  typo_test_key_ = retry_key;
+  const HRESULT hr = OnKeyDown(context, retry_key, retry_key_data, &retry_eaten);
+  return hr == E_OUTOFMEMORY ? hr : S_OK;
+}
+
 HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
   if (!context) return E_INVALIDARG;
   if (carried_from_context_ == ComIdentity(context)) carried_from_context_ = nullptr;
@@ -4547,7 +4628,18 @@ bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr
   return ContextBelongsToDocumentMgr(active_context_, document_mgr);
 }
 
-bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
+// DEV-1743: the converted text a composition shows (the live conversion, the
+// highlighted candidate, the batch segments), or empty when it shows the
+// reading. Input no composition shows yet has nothing else to commit.
+std::string TextService::LifecycleShownSurface() const {
+  if (!composition_ || committing_ || !terminated_composition_surface_.empty()) return {};
+  std::string shown = CurrentDisplayedPreeditSurface();
+  if (shown == CurrentPreeditSurface()) return {};
+  return shown;
+}
+
+bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context,
+                                                         const std::string& shown_surface) {
   if (bracket_composition_) {
     return SUCCEEDED(BracketEditSession::Finish(*this, context, client_id_, false));
   }
@@ -4556,6 +4648,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     pending_surface = commit_surface_;
   } else if (!terminated_composition_surface_.empty()) {
     pending_surface = terminated_composition_surface_;
+  } else if (!shown_surface.empty()) {
+    pending_surface = shown_surface;
   } else if (!batch_raw_romaji_.empty()) {
     pending_surface = BatchReadingForConversion();
   } else {
@@ -4609,8 +4703,17 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
                                                      : (composition_ == nullptr));
   if (!completed) {
     preedit_kana_ = saved_preedit;
-    committing_ = saved_committing;
-    commit_surface_ = saved_commit_surface;
+    if (!saved_committing && pending_surface == shown_surface && !shown_surface.empty()) {
+      // The candidate state is gone, so the retry commits the shown text as a
+      // queued commit, not the reading. It is observed nowhere (DEV-1743).
+      committing_ = true;
+      commit_surface_ = shown_surface;
+      pending_commit_observation_.reset();
+      SetCommitContext(context);
+    } else {
+      committing_ = saved_committing;
+      commit_surface_ = saved_commit_surface;
+    }
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
                "lifecycle_cleanup_edit_session_incomplete");
   }
@@ -4621,6 +4724,12 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
                                           LifecycleCleanupFailurePolicy failure_policy,
                                           bool keep_unshown_input) {
   ResetTypoTracking();
+  // Taken before the candidate state and the final punctuation hold are
+  // cleared below; spec §4.3 commits what the composition shows.
+  const std::string shown_surface = LifecycleShownSurface();
+  // A commit this loss finishes ends without a key, so the keys waiting for
+  // its retry are dropped (DEV-1750).
+  retry_waiting_keys_.clear();
   // A commit finished here, now or by a later edit session, is forced by the
   // focus or lifecycle loss and must not reopen the undo window.
   if (pending_commit_observation_) pending_commit_observation_->arms_undo = false;
@@ -4646,7 +4755,7 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
     DropCarriedInput();
   } else if (keep_unshown_input) {
     // The caller carries the input to the next document (DEV-1637).
-  } else if (RequestLifecycleCommitOrEndComposition(cleanup_context)) {
+  } else if (RequestLifecycleCommitOrEndComposition(cleanup_context, shown_surface)) {
     ClearTextStateForLifecycle();
   } else {
     if (failure_policy == LifecycleCleanupFailurePolicy::PreserveComposition) {

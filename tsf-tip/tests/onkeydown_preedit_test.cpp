@@ -2959,10 +2959,7 @@ TEST(TsfTipOnKeyDownPreeditTest, ImeOffKeyStaysOnWhenTheCommitIsRefused) {
   EXPECT_TRUE(h.service.keyboard_open());
   EXPECT_TRUE(compartment.open);
   h.context.skip_write_callback = false;
-  // The next press retries the commit first and the one after closes.
-  EXPECT_TRUE(h.Press(VK_IME_OFF));
-  EXPECT_TRUE(h.service.keyboard_open());
-  EXPECT_EQ(h.service.composition_, nullptr);
+  // The next press retries the commit and is then handled (DEV-1750): it closes.
   EXPECT_TRUE(h.Press(VK_IME_OFF));
   EXPECT_FALSE(h.service.keyboard_open());
   EXPECT_EQ(h.context.document->text, L"か");
@@ -6812,7 +6809,7 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesBeforeNextInputAndClearsStal
   EXPECT_EQ(h.service.commit_surface_, "");
   EXPECT_FALSE(h.service.committing_);
 
-  EXPECT_TRUE(h.Press('K'));
+  // The retry key then starts the next input (DEV-1750).
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
@@ -9020,8 +9017,8 @@ TEST(TsfTipLangBarMenuTest, AlphanumericWaitsForTheShownInputToCommit) {
     h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
   }
   EXPECT_TRUE(h.service.alnum_mode_for_test());
-  // Like the key, through the lifecycle path that commits the reading (§4.2).
-  EXPECT_EQ(h.context.document->text, L"か");
+  // Like the key, through the lifecycle path that commits the shown text (§4.3).
+  EXPECT_EQ(h.context.document->text, L"蚊");
   EXPECT_EQ(h.service.composition_, nullptr);
 }
 
@@ -9654,7 +9651,8 @@ TEST(TsfTipTypoCorrectionTest, RejectedCommitObservesOnceWhenRetryActuallySuccee
   ASSERT_TRUE(ProbeTypoKey(h, 'K'));
   ASSERT_TRUE(h.Press('K'));
   EXPECT_FALSE(h.service.committing_);
-  EXPECT_EQ(h.context.document->text, L"かみ");
+  // The retry key starts the next input after the commit (DEV-1750).
+  EXPECT_EQ(h.context.document->text, L"かみk");
   EXPECT_EQ(QueuedTypoCount(h), 1u);
   const auto observation = h.service.last_queued_typo_observation_for_test();
   ASSERT_TRUE(observation);
@@ -9687,7 +9685,7 @@ TEST(TsfTipTypoCorrectionTest, RetryRechecksCurrentPrivacyBeforeObservingTypo) {
     h.context.request_session_result = S_OK;
     ASSERT_TRUE(h.Press('K'));
     EXPECT_FALSE(h.service.committing_);
-    EXPECT_EQ(h.context.document->text, L"かみ");
+    EXPECT_EQ(h.context.document->text, L"かみk");
     EXPECT_EQ(h.service.secure_input_for_test(), secure);
     EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
     EXPECT_EQ(QueuedTypoCount(h), 0u);
@@ -11901,9 +11899,10 @@ TEST(TsfTipCommitOnTypeTest, MarkWithConversionOffCommitsAndStartsWithTheMark) {
   ExpectTenkiSecondCommittedOnce(h);
 }
 
-// A refused commit waits for its retry like Enter's: the key that asked for it
-// is dropped, and so is the next key, which retries the commit.
-TEST(TsfTipCommitOnTypeTest, KeysWhileTheCommitWaitsForRetryAreDropped) {
+// DEV-1750: a refused commit waits for its retry like Enter's. The key that
+// asked for it and the next key, which retries the commit, are replayed once
+// the retry succeeds.
+TEST(TsfTipCommitOnTypeTest, KeysWhileTheCommitWaitsForRetryAreReplayed) {
   for (const bool number_rewriter : {false, true}) {
     SCOPED_TRACE(number_rewriter ? "pre-processing path" : "core path");
     DocumentPreeditHarness h;
@@ -11917,10 +11916,193 @@ TEST(TsfTipCommitOnTypeTest, KeysWhileTheCommitWaitsForRetryAreDropped) {
     h.context.reject_write = false;
     ASSERT_TRUE(h.Press('A'));
     EXPECT_FALSE(h.service.committing_);
-    EXPECT_EQ(h.context.document->text, L"転機");
-    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_EQ(h.context.document->text, L"転機は");
+    EXPECT_EQ(h.service.preedit_kana_, "は");
     EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    ExpectTenkiSecondCommittedOnce(h);
   }
+}
+
+// Keys pressed while the retry is still refused wait too, in order, up to 16.
+TEST(TsfTipCommitOnTypeTest, KeysWaitingForTheRetryKeepTheirOrderUpToSixteen) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  h.context.reject_write = true;
+  ASSERT_TRUE(h.Press('H'));
+  for (int i = 0; i < 20; ++i) ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"転機");
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('A'));
+  // H and 15 A wait; the five A after them are dropped; the retry key follows.
+  EXPECT_EQ(h.context.document->text, L"転機は" + std::wstring(15, L'あ'));
+  ExpectTenkiSecondCommittedOnce(h);
+}
+
+// A replayed key means what it meant when it was pressed: Shift+1 stays "!".
+TEST(TsfTipCommitOnTypeTest, ReplayedKeysUseTheKeyStateOfTheirPress) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  h.context.reject_write = true;
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  ASSERT_TRUE(h.Press('1'));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  ASSERT_TRUE(h.service.committing_);
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"転機！あ");
+  EXPECT_EQ(h.service.preedit_kana_, "！あ");
+}
+
+// A commit that ends without a key (here a focus loss) drops the waiting keys:
+// they were never shown, so they do not reach the next input.
+TEST(TsfTipCommitOnTypeTest, CommitEndedByFocusLossDropsTheWaitingKeys) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  h.context.reject_write = true;
+  ASSERT_TRUE(h.Press('H'));
+  ASSERT_TRUE(h.service.committing_);
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"転機あ");
+}
+
+// DEV-1743: Hankaku/Zenkaku closes like VK_IME_OFF, committing what is shown
+// (the live conversion, the highlighted candidate) and observing it as Enter does.
+TEST(TsfTipCommitOnCloseTest, HankakuZenkakuCommitsTheShownTextBeforeClosing) {
+  for (const WPARAM key : {WPARAM{VK_KANJI}, WPARAM{VK_OEM_AUTO}, WPARAM{VK_OEM_ENLW}}) {
+    SCOPED_TRACE(key);
+    {
+      OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+      DocumentPreeditHarness h;
+      h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+      ShowLiveKa(h);
+      EXPECT_TRUE(h.Press(key));
+      EXPECT_FALSE(h.service.keyboard_open());
+      EXPECT_FALSE(compartment.open);
+      EXPECT_EQ(h.context.document->text, L"蚊");
+      EXPECT_EQ(h.service.composition_, nullptr);
+    }
+    {
+      OpenCloseCompartment compartment;
+      DocumentPreeditHarness h;
+      h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+      StartPunctuationConversion(h, false);
+      SelectTenkiSecond(h, /*from_cache=*/false);
+      EXPECT_TRUE(h.Press(key));
+      EXPECT_FALSE(h.service.keyboard_open());
+      EXPECT_EQ(h.context.document->text, L"転機");
+      EXPECT_EQ(h.service.composition_, nullptr);
+      ExpectTenkiSecondCommittedOnce(h);
+    }
+  }
+}
+
+TEST(TsfTipCommitOnCloseTest, HankakuZenkakuStaysOnWhenTheCommitIsRefused) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  h.context.skip_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_KANJI));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(compartment.open);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  h.context.skip_write_callback = false;
+  // The next press retries the commit and is then replayed (DEV-1750): it closes.
+  EXPECT_TRUE(h.Press(VK_KANJI));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+// A loss the user did not type commits what is shown, without observing it.
+TEST(TsfTipCommitOnCloseTest, PassiveLossCommitsTheShownTextWithoutObservingIt) {
+  enum class Loss { ThreadFocus, ExternalOff, ToggleAlnum };
+  for (const Loss loss : {Loss::ThreadFocus, Loss::ExternalOff, Loss::ToggleAlnum}) {
+    SCOPED_TRACE(static_cast<int>(loss));
+    const auto lose = [&](DocumentPreeditHarness& h, OpenCloseCompartment& compartment) {
+      switch (loss) {
+        case Loss::ThreadFocus:
+          EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+          break;
+        case Loss::ExternalOff:
+          compartment.open = false;  // Another language bar or ImmSetOpenStatus.
+          EXPECT_EQ(h.service.OnChange(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE), S_OK);
+          EXPECT_FALSE(h.service.keyboard_open());
+          break;
+        case Loss::ToggleAlnum:
+          EXPECT_TRUE(h.Press(VK_OEM_ATTN));
+          break;
+      }
+    };
+    {
+      OpenCloseCompartment compartment;
+      DocumentPreeditHarness h;
+      h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+      ShowLiveKa(h);
+      lose(h, compartment);
+      EXPECT_EQ(h.context.document->text, L"蚊");
+      EXPECT_EQ(h.service.composition_, nullptr);
+      EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+    }
+    {
+      OpenCloseCompartment compartment;
+      DocumentPreeditHarness h;
+      h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+      StartPunctuationConversion(h, false);
+      SelectTenkiSecond(h, /*from_cache=*/false);
+      lose(h, compartment);
+      EXPECT_EQ(h.context.document->text, L"転機");
+      EXPECT_EQ(h.service.composition_, nullptr);
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+      EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+    }
+  }
+}
+
+// A refused focus-loss commit keeps the shown text for the retry, not the reading.
+TEST(TsfTipCommitOnCloseTest, RefusedFocusLossRetriesTheShownCandidate) {
+  DocumentPreeditHarness h;
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_NE(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  h.context.reject_write = false;
+  // A later lifecycle session, not a key, finishes the commit.
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
+}
+
+// An off click is no key (DEV-1750): its Enter neither waits for a refused
+// retry nor replays the waiting keys, which are dropped once the commit ends.
+TEST(TsfTipCommitOnCloseTest, OffClickDropsTheKeysWaitingForTheRetry) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  StartPunctuationConversion(h, false);
+  SelectTenkiSecond(h, /*from_cache=*/false);
+  h.context.reject_write = true;
+  ASSERT_TRUE(h.Press('H'));
+  ASSERT_TRUE(h.service.committing_);
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_TRUE(h.service.keyboard_open());
+  h.context.reject_write = false;
+  h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  ExpectTenkiSecondCommittedOnce(h);
 }
 
 TEST(TsfTipCommitOnTypeTest, BackspaceStillReturnsToTheReading) {

@@ -120,9 +120,9 @@ HTTP はループバックの自動テストに限って使用する。
 
 - **R1（llama.cpp）**: 拡張子 `.gguf` ファイル。
 - **R2（Windows ML / ONNX Runtime GenAI）**: ORT GenAI モデル**ディレクトリ**
-  （`genai_config.json` を含むフォルダを 1 エントリとして扱う）。zenz-v3 の ONNX 変換
+  （`genai_config.json` を含むフォルダを 1 エントリとして扱う）。R1 と同じモデルの ONNX 変換
   モデルが optional パッケージとして配置された場合に検出する
-  （`docs/copilot-pc-backend-spec.md` §4.3、変換可否は同 §4.2 のスパイク依存）。
+  （`docs/copilot-pc-backend-spec.md` §4.3 項 2、変換可否は同 §4.2.2・§4.2.3）。
 
 R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）を満たす場合のみ `winml`
 経路へ入れる（§5.1）。R2 モデルが無ければ R1（GGUF）のみを一覧する。非対応拡張子の

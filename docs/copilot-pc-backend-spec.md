@@ -918,7 +918,7 @@ endif()
 | ggml-vulkan（R1 ベンダ横断 GPU） | ○ | △ 後続（Adreno）優先度低 | x64 を先行。ARM64 GPU 経路は v1.0 後に評価 |
 | Windows ML bootstrap（R2） | ◎ | ◎ | base MSIX 同梱（薄い）。EP 本体は含めない（§1.6） |
 | R2 EP（Windows Update 配信・非バンドル） | OpenVINO(Intel) / VitisAI(AMD) / NvTensorRtRtx(NVIDIA) / QNN(該当時) | **QNN（Snapdragon NPU）**中心 | EP は silicon 別に Windows ML が自動取得・選択（§4.6）。アーキで同梱物は変わらない（どちらも非バンドル） |
-| zenz-v3 GGUF / ONNX モデル本体 | 非同梱・初回 DL | 非同梱・初回 DL | §1.2 / §1.6 と一貫。アーキ非依存（モデルは共通） |
+| Zenzai GGUF / ONNX モデル本体 | 非同梱・初回 DL | 非同梱・初回 DL | §1.2 / §1.6 と一貫。アーキ非依存（モデルは共通） |
 
 要点:
 

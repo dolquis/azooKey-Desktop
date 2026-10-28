@@ -119,7 +119,7 @@ edge は model catalog から選べるモデルとして加える（条件付き
 | 構造 | GPT-2、約 90M | Llama（GQA、RoPE、SwiGLU）、33.5M |
 | 配布形式 | GGUF Q5_K_M（73.9MB） | GGUF Q8_0（36MB）/ f16（67MB）/ safetensors fp32 |
 | 語彙 | ku-nlp の文字単位 byte-level BPE | 同じ語彙 6,000 + 制御 3（U+EE02 / U+EE00 / U+EE01、id 6000〜6002） |
-| 制御文字の扱い | 通常トークン | GGUF の token type が CONTROL |
+| 制御文字の扱い | 語彙に専用トークンが無く、UTF-8 のバイト列としてトークン化される | 専用トークンで、GGUF の token type が CONTROL |
 | U+EE03（`[PROF]`） | 学習済み | 語彙に無く未学習 |
 | 文脈なしのプロンプト | `[CTX]` を省く | `[CTX]` を常に置く |
 | GGUF の補正（§9.2） | pre-tokenizer の上書き、EOS 補正 | どちらの発動条件にも当たらない（pre `gpt-2`、EOS は `</s>`） |
@@ -144,7 +144,8 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 
 - catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 が CONTROL
   型で並び、U+EE03 が語彙に無ければ `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。
-  推定した値は QueryDiagnostics に出す。
+  推定した値は診断に出す（QueryDiagnostics のフィールドは `docs/dev-infrastructure-spec.md`
+  §12.6 に定義する）。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
 - 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを

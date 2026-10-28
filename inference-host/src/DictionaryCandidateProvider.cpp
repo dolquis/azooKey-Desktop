@@ -1,5 +1,7 @@
 #include "azookey/host/DictionaryCandidateProvider.h"
 
+#include <algorithm>
+
 #include "azookey/learning/DictionaryCategory.h"
 
 namespace azookey::host {
@@ -38,5 +40,28 @@ std::vector<core::Candidate> DictionaryCandidates(const learning::DictionaryStor
     if (result.size() == limit) break;
   }
   return result;
+}
+
+core::ReadingWordLookup StaticReadingWordLookup(const learning::DictionaryStore& store) {
+  learning::LookupContext context;
+  context.mode = learning::LookupMode::CommonPrefix;
+  context.max_results = 64;
+  for (const auto layer :
+       {learning::LayerId::User, learning::LayerId::AutoWords, learning::LayerId::AppSpecific})
+    context.excluded_layers |= 1U << static_cast<unsigned>(layer);
+  return [&store, context](std::string_view suffix) {
+    std::vector<core::ReadingWordMatch> matches;
+    for (const auto& entry : store.Lookup(suffix, context)) {
+      if (entry.reading.empty() || !suffix.starts_with(entry.reading)) continue;
+      const auto same_length = std::find_if(matches.begin(), matches.end(), [&](const auto& m) {
+        return m.length == entry.reading.size();
+      });
+      if (same_length == matches.end())
+        matches.push_back({entry.reading.size(), entry.frequency});
+      else
+        same_length->frequency = (std::max)(same_length->frequency, entry.frequency);
+    }
+    return matches;
+  };
 }
 }  // namespace azookey::host

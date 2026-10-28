@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "BenchmarkCommandLine.h"
+#include "azookey/core/AmbiguousReadingChooser.h"
 #include "azookey/core/DoubleArrayTrie.h"
 #include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/learning/DictionaryStore.h"
 
 namespace {
 
@@ -84,6 +87,12 @@ int main(int argc, char** argv) {
     if (!engine.LoadDictionaryLayer(static_cast<azookey::learning::LayerId>(probe.LayerId()), dict))
       throw std::runtime_error("cannot load " + dict.string());
 
+    // The same lookup on a store of its own, for each reading's split cost.
+    azookey::learning::DictionaryStore store;
+    if (!store.LoadStatic(static_cast<azookey::learning::LayerId>(probe.LayerId()), dict))
+      throw std::runtime_error("cannot load " + dict.string());
+    const auto lookup = azookey::host::StaticReadingWordLookup(store);
+
     std::map<size_t, std::vector<double>> by_count;
     for (const auto& romaji : kRomaji) {
       auto readings = azookey::core::RomajiKanaConverter::AmbiguousReadings(romaji);
@@ -92,7 +101,11 @@ int main(int argc, char** argv) {
       const auto chosen = engine.ChooseAmbiguousReading(first, readings);
       std::cout << "romaji=" << romaji << " default=" << first << " others=";
       for (size_t i = 0; i < readings.size(); ++i) std::cout << (i ? "," : "") << readings[i];
-      std::cout << " chosen=" << chosen << '\n';
+      std::cout << " chosen=" << chosen
+                << " costs=" << azookey::core::ReadingSplitCost(first, lookup);
+      for (const auto& reading : readings)
+        std::cout << ',' << azookey::core::ReadingSplitCost(reading, lookup);
+      std::cout << '\n';
       auto& times = by_count[readings.size() + 1];
       for (int i = 0; i < iterations; ++i) {
         const auto start = Clock::now();

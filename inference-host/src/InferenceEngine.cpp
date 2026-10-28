@@ -1709,31 +1709,9 @@ std::string InferenceEngine::ChooseAmbiguousReading(const std::string& kana,
     if (!alternative.empty() && alternative.size() <= kana.size() && alternative != kana)
       readings.push_back(alternative);
   if (readings.size() < 2) return kana;
-  // The static layers only: user words carry no frequency of their own, and a
-  // secure request must not consult them.
-  learning::LookupContext lookup_context;
-  lookup_context.mode = learning::LookupMode::CommonPrefix;
-  lookup_context.max_results = 64;
-  for (const auto layer :
-       {learning::LayerId::User, learning::LayerId::AutoWords, learning::LayerId::AppSpecific})
-    lookup_context.excluded_layers |= 1U << static_cast<unsigned>(layer);
   std::lock_guard<std::mutex> lock(state_mutex_);
   RefreshDictionaryLocked();
-  const core::ReadingWordLookup lookup = [&](std::string_view suffix) {
-    std::vector<core::ReadingWordMatch> matches;
-    for (const auto& entry : dictionaries_.Lookup(suffix, lookup_context)) {
-      if (entry.reading.empty() || !suffix.starts_with(entry.reading)) continue;
-      const auto same_length = std::find_if(matches.begin(), matches.end(), [&](const auto& m) {
-        return m.length == entry.reading.size();
-      });
-      if (same_length == matches.end())
-        matches.push_back({entry.reading.size(), entry.frequency});
-      else
-        same_length->frequency = (std::max)(same_length->frequency, entry.frequency);
-    }
-    return matches;
-  };
-  return readings[core::ChooseAmbiguousReading(readings, lookup)];
+  return readings[core::ChooseAmbiguousReading(readings, StaticReadingWordLookup(dictionaries_))];
 }
 
 InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(

@@ -1083,6 +1083,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_pending_mixed_english_{false};       // ipc_mtx_
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
+  // ipc_mtx_; custom romaji table of the pending batch, set with its raw romaji.
+  std::shared_ptr<const core::CustomRomajiTable> ipc_pending_batch_table_;
   std::string ipc_pending_trace_id_;       // protected by ipc_mtx_
   std::chrono::steady_clock::time_point ipc_pending_trace_start_{};  // ipc_mtx_
   uint64_t ipc_pending_id_{0};
@@ -1276,7 +1278,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void QueryPendingPrediction(uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
                     const std::string& mode, const std::string& trace_id, bool english_candidates,
-                    bool secure);
+                    bool secure, std::shared_ptr<const core::CustomRomajiTable> romaji_table);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options,

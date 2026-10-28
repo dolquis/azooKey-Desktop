@@ -5808,6 +5808,7 @@ void TextService::ServeConnection() {
     std::string reading;
     std::string left_context;
     std::string raw_romaji;
+    std::shared_ptr<const core::CustomRomajiTable> batch_table;
     bool english_candidates = false;
     bool mixed_english = false;
     std::string batch_mode;
@@ -5862,6 +5863,7 @@ void TextService::ServeConnection() {
         reading = ipc_pending_reading_;
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
+        batch_table = ipc_pending_batch_table_;
         english_candidates = ipc_pending_english_candidates_;
         mixed_english = ipc_pending_mixed_english_;
         batch_mode = ipc_pending_batch_mode_;
@@ -6021,7 +6023,8 @@ void TextService::ServeConnection() {
       continue;
     }
     if (is_batch) {
-      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id, english_candidates, secure);
+      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id, english_candidates, secure,
+                   std::move(batch_table));
       if (!ipc_client_.IsConnected()) return;
       continue;
     }
@@ -6690,7 +6693,8 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
 
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
                                const std::string& raw_romaji, const std::string& mode,
-                               const std::string& trace_id, bool english_candidates, bool secure) {
+                               const std::string& trace_id, bool english_candidates, bool secure,
+                               std::shared_ptr<const core::CustomRomajiTable> romaji_table) {
   // DEV-1745: a secure batch never asks for English candidates.
   english_candidates = english_candidates && !secure;
   using namespace azookey::ipc;
@@ -6706,7 +6710,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   const bool has_raw = !raw_romaji.empty();
   std::vector<core::BatchRomajiChunk> chunks;
   if (has_raw) {
-    chunks = core::SplitBatchRomaji(raw_romaji);
+    chunks = core::SplitBatchRomaji(raw_romaji, core::kIpcChunkBytes, std::move(romaji_table));
   } else {
     for (auto& chunk : core::SplitBatchConversion(reading, core::kIpcChunkBytes))
       chunks.push_back({{}, std::move(chunk)});
@@ -7197,6 +7201,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
+  ipc_pending_batch_table_ = batch_romaji_table_;
   // ai-cleanup stays without English even when it falls back to neural, and a
   // secure field asks for none (DEV-1745). The request says whether it is
   // secure (M63 section 9.4).

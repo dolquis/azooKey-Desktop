@@ -22,6 +22,7 @@
 #include "IpcTestData.h"
 #include "ScopedTempDirectory.h"
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/BackendSelector.h"
@@ -81,6 +82,24 @@ TEST(BatchConversionChunkerTest, RawSplitDoesNotFlushPendingRomaji) {
     }
     EXPECT_EQ(raw, input);
     EXPECT_EQ(reading, azookey::core::RomajiKanaConverter::ConvertForCommit(input));
+  }
+}
+
+TEST(BatchConversionChunkerTest, CustomTableReadingMatchesCommitReadingAcrossChunks) {
+  const auto table = azookey::core::CustomRomajiLoader::Parse("nn\t\xE3\x82\x93\t2\n").table;
+  ASSERT_TRUE(table);
+  const std::string input = "genninn";
+  const auto expected = azookey::core::RomajiKanaConverter::ConvertForCommit(input, table);
+  ASSERT_NE(expected, azookey::core::RomajiKanaConverter::ConvertForCommit(input));
+  for (const size_t max_bytes : {size_t{4}, azookey::core::kIpcChunkBytes}) {
+    std::string raw;
+    std::string reading;
+    for (const auto& chunk : azookey::core::SplitBatchRomaji(input, max_bytes, table)) {
+      raw += chunk.raw_romaji;
+      reading += chunk.reading;
+    }
+    EXPECT_EQ(raw, input);
+    EXPECT_EQ(reading, expected);
   }
 }
 

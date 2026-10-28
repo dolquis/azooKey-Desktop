@@ -5,7 +5,7 @@ description: azooKey Desktop の settings-app/ 配下の WinUI 3 / C++/WinRT 設
 
 # azooKey 設定アプリ UI
 
-`settings.json` を保存する writer は設定アプリだけで、Host は parse 失敗時の quarantine rename だけを同じロック区間で行い、TIP は読むだけである（正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+`settings.json` の writer は設定アプリ（保存）、Host（parse 失敗時の quarantine rename、SafeMode 記録、ベンチマーク履歴）、TIP（入力インジケーターのメニューによるライブ変換・予測の 1 キー）で、いずれも同じロックの下で書く（正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 UI の変更は schema、runtime 既定値、Host の再読込、TIP のローカル監視まで一つの契約として扱う。
 schema と既定値の同期そのものは `azookey-settings-schema-evolution` が持ち、本スキルは
 UI 実装と設定アプリ固有のビルド経路を扱う。
@@ -26,8 +26,8 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
 ## 必須ガードレール
 
 - `settings.json` の保存は `SettingsDocument` の atomic replace
-  （`learning` の `WriteTextFileAtomically`）だけに残す。Host は quarantine rename 以外を書かず、TIP は書かない。
-  「設定アプリだけが書くので競合しない」とは扱わず、`FileLock.h` の排他を保存と quarantine の両方で取る。
+  （`learning` の `WriteTextFileAtomically`）で保存する。Host と TIP の書き込みは対象の 1 キーだけを同じロックの下で合成する。
+  「設定アプリだけが書くので競合しない」とは扱わず、`FileLock.h` の排他を保存・quarantine・TIP の 1 キー書き込みで取る。
 - 不正な `settings.json` は quarantine してから保存する既存契約を、無言の上書きに変えない。
 - UI が持つ既定値を schema、sample、runtime と一致させる。UI だけで既定値を決めない。
 - C++/WinRT と Windows App SDK は `settings-app/` に閉じる。`tsf-tip/` へ持ち込まない。

@@ -1196,6 +1196,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 設定アプリは左側の `NavigationView` でペインを切り替える。起動時は「一般」を表示する。
 保存ボタンと保存結果の InfoBar は全ペインで共通とし、保存は全ペインの値をまとめて書く。
+`liveConversion` / `predictionEnabled` だけは、入力インジケーターの右クリックのメニューからも切り替えられる（TIP が対象の 1 キーを書く。`docs/tsf-deep-integration-spec.md` §4.5）。
 
 | ペイン | 内容 |
 |---|---|
@@ -1251,7 +1252,7 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 ### 3.3 Host との IPC
 
 設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
-payload 空の `UpdateConfig` メッセージを送信して再読込を促す。設定オブジェクトは
+payload 空の `UpdateConfig` メッセージを送信して再読込を促す（入力インジケーターのメニューでライブ変換を切り替えたときは TIP も送る）。設定オブジェクトは
 IPC schema に二重定義しない。設定アプリと Host の保存・quarantine は同一の named mutex 下で
 read-modify-write または read から rename までを直列化する（writer 責務とこの排他の
 正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
@@ -1335,7 +1336,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   （例: `promptPrefixByApp` = `additionalProperties: {type: string}`、予定済みの `profilesByApp` および
   プロファイル内 `candidateTagBoosts` も同様のマップ）。
 - **永続インスタンス**: `%LOCALAPPDATA%\azooKey\config\settings.json`（§3.4）。設定アプリが
-  書き込み、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
+  書き込み（`liveConversion` / `predictionEnabled` の 1 キーずつは入力インジケーターのメニューから TIP も書く）、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
 - **意味論の正典は各機能 spec**: 各キーの挙動・enum 値の意味・閾値は下表「正典」列の spec が
   定義する。本節はそれらを **再定義せず**、設定アプリ統合の観点（UI ペイン / 導入マイルストーン /
   反映方法）を一覧化する。v1.0 出荷時に同梱する**最小サブセット**の選定は DEV-107（M11 schema

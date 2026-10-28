@@ -612,7 +612,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
   `Deactivate` まで復帰しない場合も、最後に読めたスナップショットを保ち続ける。監視の停止を
   理由に設定を既定値へ戻さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
-  TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
+  TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定アプリと、writer 責務の節に挙げた Host・TIP の経路で、正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 - 設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
   host CLI は経由しない。本機能は TIP ローカルで完結する。
 

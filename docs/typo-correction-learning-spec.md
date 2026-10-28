@@ -140,6 +140,8 @@ TIP 自身の確定に伴う composition 終了は、成功後の観測を消さ
 TSF のスレッド制約のため非同期 preedit
 更新は行わず、**次のキー入力時 / VK_SPACE 候補表示時に反映** する
 （候補ウィンドウには既に補正後候補が出ているため体験上の影響は小さい）。
+要求で送った `alt_readings` に含まれる `corrected_reading` は、`nn` + 母音の読みの選択であり、
+補正ではない（`docs/legacy-parity-spec.md` §5.4）。TIP はこれで preedit を置換しない。
 
 通常入力は `InputState::WithCorrectedReading` で読みを置換して保留ローマ字を消す。
 Composing / Previewing / Selecting の状態、候補のスナップショット、選択位置、

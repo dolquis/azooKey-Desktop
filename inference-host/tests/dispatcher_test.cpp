@@ -10,6 +10,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -5766,4 +5767,190 @@ TEST_F(DispatcherTest, ConfirmedEnglishNewWordJoinsTheEnglishDictionary) {
   config.english.dictionary_enabled = false;
   engine.ApplyConfig(config);
   RemovePathNoThrow(dir);
+}
+
+// DEV-1734 (legacy-parity-spec section 5.4): the candidate window weighs the
+// other reading of an ambiguous "nn" + vowel.
+namespace {
+
+// Model-source candidates whose score depends on the reading, as Zenzai's
+// normalized log probability would; the surface names the reading converted.
+class ScoredReadingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
+    static const std::map<std::string, double> kScores = {
+        {"ないぶげんにん", 0.60}, {"ないぶげんいん", 0.90}, {"さんにん", 0.80},
+        {"さんいん", 0.83},       {"せんねん", 1.23},       {"せんえん", 1.34}};
+    const auto found = kScores.find(kana);
+    azookey::core::Candidate candidate{"model:" + kana, kana,
+                                       found == kScores.end() ? 0.5 : found->second};
+    candidate.source = azookey::core::CandidateSource::Model;
+    return {candidate};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+
+ipc::Envelope AmbiguousQuery(uint64_t id, const std::string& reading,
+                             std::vector<std::string> alternatives, bool live = false,
+                             bool secure = false) {
+  ipc::QueryCandidatesRequest q;
+  q.reading = reading;
+  q.live = live;
+  q.secure = secure;
+  q.alt_readings = std::move(alternatives);
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = id;
+  env.type = ipc::MessageType::QueryCandidates;
+  env.payload_json = ipc::BuildQueryCandidatesRequest(q);
+  return env;
+}
+
+ipc::QueryCandidatesResponse DispatchAmbiguous(azookey::host::Dispatcher& dispatcher,
+                                               const ipc::Envelope& env) {
+  const auto resp = dispatcher.Dispatch(env);
+  EXPECT_TRUE(resp.has_value());
+  auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+  EXPECT_TRUE(parsed && !parsed->candidates.empty());
+  return parsed.value_or(ipc::QueryCandidatesResponse{});
+}
+
+}  // namespace
+
+TEST(AmbiguousReadingDispatchTest, ModelScoresChooseTheReadingTheWindowConverts) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  // The other reading scores higher by more than the margin: its candidates,
+  // and corrected_reading names it.
+  auto chosen =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"}));
+  EXPECT_EQ(chosen.corrected_reading, "ないぶげんいん");
+  EXPECT_EQ(chosen.candidates.front().surface, "model:ないぶげんいん");
+
+  // Within the margin the typed reading stays.
+  auto near_tie = DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "さんにん", {"さんいん"}));
+  EXPECT_TRUE(near_tie.corrected_reading.empty());
+  EXPECT_EQ(near_tie.candidates.front().surface, "model:さんにん");
+
+  // Per-key (live) queries and an older TIP without alt_readings convert as typed.
+  auto per_key =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "ないぶげんにん", {"ないぶげんいん"}, true));
+  EXPECT_TRUE(per_key.corrected_reading.empty());
+  EXPECT_EQ(per_key.candidates.front().surface, "model:ないぶげんにん");
+  auto older = DispatchAmbiguous(dispatcher, AmbiguousQuery(4, "ないぶげんにん", {}));
+  EXPECT_TRUE(older.corrected_reading.empty());
+  EXPECT_EQ(older.candidates.front().surface, "model:ないぶげんにん");
+
+  // An alternative longer than the reading is not one of its readings.
+  auto longer = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "げんにん", {"ないぶげんいん"}));
+  EXPECT_TRUE(longer.corrected_reading.empty());
+}
+
+// A switch the user did not mean (sennenn to せんえん, as the real model does)
+// still leaves the typed reading's first candidates in the window, after the
+// chosen reading's candidates and with their own reading.
+TEST(AmbiguousReadingDispatchTest, ASwitchKeepsTheTypedReadingsDictionaryWords) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "せんねん", {"せんえん"}));
+  EXPECT_EQ(window.corrected_reading, "せんえん");
+  ASSERT_FALSE(window.candidates.empty());
+  EXPECT_EQ(window.candidates.front().reading, "せんえん");
+  const auto typed_word =
+      std::find_if(window.candidates.begin(), window.candidates.end(),
+                   [](const ipc::CandidateField& c) { return c.surface == "千年"; });
+  ASSERT_NE(typed_word, window.candidates.end());
+  EXPECT_EQ(typed_word->reading, "せんねん");
+  // Every candidate of the chosen reading comes first.
+  EXPECT_TRUE(std::all_of(typed_word, window.candidates.end(),
+                          [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }));
+  // With a model the typed reading's best words are mostly model candidates.
+  EXPECT_TRUE(std::any_of(window.candidates.begin(), window.candidates.end(),
+                          [](const ipc::CandidateField& c) {
+                            return c.surface == "model:せんねん" && c.reading == "せんねん";
+                          }));
+  EXPECT_LE(
+      std::count_if(window.candidates.begin(), window.candidates.end(),
+                    [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }),
+      static_cast<std::ptrdiff_t>(azookey::host::InferenceEngine::kAmbiguousReadingTypedKept));
+}
+
+// A secure request is converted as typed: its TIP drops corrected_reading, so
+// the window must not hold another reading's candidates.
+TEST(AmbiguousReadingDispatchTest, SecureRequestsAreNotCompared) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  const auto secure = DispatchAmbiguous(
+      dispatcher, AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"}, false, true));
+  EXPECT_TRUE(secure.corrected_reading.empty());
+  ASSERT_EQ(secure.candidates.size(), 1u);
+  EXPECT_EQ(secure.candidates.front().surface, "model:ないぶげんにん");
+}
+
+// A typed conversion that ran out of time leaves no time for a second one: the
+// other reading is not converted, so its dictionary word never joins.
+TEST_F(DispatcherTest, ADeadlineOnTheTypedReadingSkipsTheOtherReading) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  const std::string model_path = temp_directory.File("azookey_dispatcher_ambiguous_deadline.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  // The mock runs out of time on じかんぎれ before its first beam step, which
+  // leaves no model candidate; without the skip the window would append 原因.
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "じかんぎれ", {"げんいん"}));
+  EXPECT_TRUE(window.corrected_reading.empty());
+  for (const auto& candidate : window.candidates) EXPECT_NE(candidate.surface, "原因");
+}
+
+TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCandidates) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  const auto surfaces = [](const ipc::QueryCandidatesResponse& response) {
+    std::vector<std::string> out;
+    for (const auto& c : response.candidates) out.push_back(c.surface);
+    return out;
+  };
+  const auto typed = DispatchAmbiguous(dispatcher, AmbiguousQuery(1734, "げんにん", {}));
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1735, "げんにん", {"げんいん"}));
+  // Nothing is chosen: the typed reading's candidates lead, unchanged, and the
+  // other reading's dictionary word follows with its own reading.
+  EXPECT_TRUE(window.corrected_reading.empty());
+  auto expected = surfaces(typed);
+  expected.push_back("原因");
+  EXPECT_EQ(surfaces(window), expected);
+  EXPECT_EQ(window.candidates.back().reading, "げんいん");
+  // The other reading's non-dictionary candidates (SimpleConverter's identity)
+  // are left out.
+  const auto shown = surfaces(window);
+  EXPECT_EQ(std::count(shown.begin(), shown.end(), "げんいん"), 0);
 }

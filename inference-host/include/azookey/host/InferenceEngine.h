@@ -420,6 +420,31 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec);
 
+  // DEV-1734 (legacy-parity-spec section 5.4): the candidate window
+  // (QueryCandidatesEx with live = false) of `kana` when `alternatives` are other
+  // readings of the same romaji, from the TIP. Only the first usable alternative
+  // (non-empty, not longer than kana) is converted too, and only when M35 left
+  // kana as typed and its conversion did not run out of time.
+  // - With model candidates for both readings, the alternative's result comes
+  //   back, with corrected_reading set to it, when its best model score beats
+  //   kana's by more than kAmbiguousReadingModelMargin, followed by kana's first
+  //   kAmbiguousReadingTypedKept candidates whose surfaces it lacks; otherwise
+  //   kana's.
+  // - Otherwise (no model) kana's candidates come back, followed by the
+  //   alternative's dictionary candidates whose surfaces kana's lack.
+  CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
+                                              const std::vector<std::string>& alternatives,
+                                              const std::string& context, uint64_t now_epoch_sec,
+                                              const std::atomic<bool>* cancel,
+                                              uint32_t max_candidates = 0,
+                                              const InferenceTelemetry* telemetry = nullptr,
+                                              const TagBoosts* tag_boosts = nullptr);
+  // The normalized model score (ZenzaiModelConverter's 0.3 to 1.4 band) by which
+  // another reading must beat the typed one, so a near tie keeps the typed one.
+  static constexpr double kAmbiguousReadingModelMargin = 0.05;
+  // How many of the typed reading's candidates stay in the window after a switch.
+  static constexpr size_t kAmbiguousReadingTypedKept = 3;
+
   // Exact dictionary surface lookup. Empty means no known reading.
   std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);
 

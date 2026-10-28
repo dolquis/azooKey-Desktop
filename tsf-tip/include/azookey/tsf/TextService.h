@@ -412,6 +412,21 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   const core::InputState& input_state_for_test() const { return input_state_; }
+  std::vector<std::string> alt_readings_for_test(const std::string& reading,
+                                                 size_t max_ambiguous) const {
+    return AltReadingsFor(reading, max_ambiguous);
+  }
+  std::string observed_reading_for_test(const std::string& reading,
+                                        const ipc::CandidateField& chosen) const {
+    return ObservedReading(reading, chosen);
+  }
+  void post_window_query_for_test(ITfContext* context, const std::string& reading) {
+    PostQueryCandidates(context, reading, false);
+  }
+  std::vector<std::string> pending_ipc_alt_readings_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_alt_readings_;
+  }
   bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
@@ -1083,6 +1098,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_raw_romaji_;
   bool ipc_pending_english_candidates_{false};  // ipc_mtx_
   bool ipc_pending_mixed_english_{false};       // ipc_mtx_
+  // ipc_mtx_; DEV-1734: other readings of the pending reading's romaji.
+  std::vector<std::string> ipc_pending_alt_readings_;
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   // ipc_mtx_; custom romaji table of the pending batch, set with its raw romaji.
@@ -1409,6 +1426,18 @@ class TextService final : public ITfTextInputProcessorEx,
   // to send with mixed_english for `reading`, or empty when any condition of
   // section 5 fails. `secure` is the request's privacy decision.
   std::string MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const;
+  // DEV-1734 (docs/legacy-parity-spec.md section 5.4): the other readings of the
+  // typed romaji's first `max_ambiguous` "nn" + vowel positions, for
+  // alt_readings. Empty with a custom table, or when the romaji no longer
+  // spells `reading`.
+  std::vector<std::string> AltReadingsFor(const std::string& reading, size_t max_ambiguous) const;
+  // The window compares two readings at most: the Host converts each with the
+  // model within the window budget.
+  static constexpr size_t kWindowAmbiguousPositions = 1;
+  // DEV-1734: the reading a commit is learned under. A candidate of the other
+  // reading of an ambiguous "nn" + vowel keeps its own reading, as an M35
+  // correction is learned under the corrected reading the preedit then holds.
+  std::string ObservedReading(const std::string& reading, const ipc::CandidateField& chosen) const;
   // Drops trailing romaji until the rest spells the current preedit, so a
   // Backspace that erased a whole kana also erases the keys that typed it.
   void SyncEnglishRawRomaji();

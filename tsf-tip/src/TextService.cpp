@@ -3049,11 +3049,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
     // M60 raw_romaji: record the key as typed. A key that does not end up in
     // the preedit is dropped by the next sync, and EnglishRawRomajiFor sends
-    // nothing for romaji that no longer spells the reading. Turning the
-    // setting on mid-composition leaves romaji that spells nothing, so no key
-    // pays for the conversions while the feature is off.
+    // nothing for romaji that no longer spells the reading. DEV-1734 reads the
+    // same romaji for its other readings, so it is recorded whether or not
+    // English candidates are on; each request still checks its own setting.
     std::optional<char> english_typed;
-    if (is_input && !unicode_active && !BatchRomajiEnabled() && EnglishCandidatesEnabled()) {
+    if (is_input && !unicode_active && !BatchRomajiEnabled()) {
       if (custom_input)
         english_typed = *custom_input;
       else if (wParam >= 'A' && wParam <= 'Z')
@@ -3089,6 +3089,17 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       SyncEnglishRawRomaji();
       auto flushed = romaji_;
       return !EnglishRawRomajiFor(preedit_kana_ + flushed.Flush()).empty();
+    }();
+    // DEV-1734: Space on romaji with an ambiguous "nn" + vowel also asks for the
+    // window, so the Host can compare its readings; the per-key cache holds
+    // only the typed one.
+    const bool ambiguous_conversion = [&] {
+      if (english_conversion || !IsActionKey(key_event, UserAction::StartConversion) ||
+          BatchRomajiEnabled() || cand_visible)
+        return false;
+      SyncEnglishRawRomaji();
+      auto flushed = romaji_;
+      return !AltReadingsFor(preedit_kana_ + flushed.Flush(), kWindowAmbiguousPositions).empty();
     }();
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
     // A composing digit not mapped by core belongs to the number rewriter's
@@ -3558,9 +3569,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
             const bool host_unavailable = IpcHostUnavailable();
-            if (!host_unavailable &&
-                (english_conversion || symbol_rewriter_.load(std::memory_order_relaxed) ||
-                 emoji_rewriter_.load(std::memory_order_relaxed))) {
+            if (!host_unavailable && (english_conversion || ambiguous_conversion ||
+                                      symbol_rewriter_.load(std::memory_order_relaxed) ||
+                                      emoji_rewriter_.load(std::memory_order_relaxed))) {
               {
                 std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
                 if (candidate_window_show_pending_ && !ipc_pending_live_ &&
@@ -4996,8 +5007,12 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       auto fields = HostCandidateFields(shown);
       fields.insert(fields.end(), std::make_move_iterator(turned_down.begin()),
                     std::make_move_iterator(turned_down.end()));
-      pending_commit_observation_ =
-          PendingCommitObservation{reading, chosen.field, std::move(fields), {}, secure, learning};
+      pending_commit_observation_ = PendingCommitObservation{ObservedReading(reading, chosen.field),
+                                                             chosen.field,
+                                                             std::move(fields),
+                                                             {},
+                                                             secure,
+                                                             learning};
     }
   } else {
     pending_commit_observation_.reset();
@@ -5866,6 +5881,7 @@ void TextService::ServeConnection() {
     std::string reading;
     std::string left_context;
     std::string raw_romaji;
+    std::vector<std::string> alt_readings;
     std::shared_ptr<const core::CustomRomajiTable> batch_table;
     bool english_candidates = false;
     bool mixed_english = false;
@@ -5921,6 +5937,7 @@ void TextService::ServeConnection() {
         reading = ipc_pending_reading_;
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
+        alt_readings = ipc_pending_alt_readings_;
         batch_table = ipc_pending_batch_table_;
         english_candidates = ipc_pending_english_candidates_;
         mixed_english = ipc_pending_mixed_english_;
@@ -6127,6 +6144,7 @@ void TextService::ServeConnection() {
         if (!emoji_trigger.empty()) {
           qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
         }
+        qreq.alt_readings = alt_readings;
         qenv.type = MessageType::QueryCandidates;
         qenv.payload_json = BuildQueryCandidatesRequest(qreq);
       }
@@ -6425,6 +6443,7 @@ void TextService::ServeConnection() {
     }
 
     std::string corrected_reading;
+    std::string ambiguous_choice;
     std::optional<std::vector<CandidateField>> prefetch_candidates;
     if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
@@ -6448,6 +6467,14 @@ void TextService::ServeConnection() {
         prefetch_candidates = response_candidates;
       if (!is_batch && emoji_trigger.empty() && !secure)
         corrected_reading = std::move(qpayload->corrected_reading);
+      // DEV-1734: a reading the TIP offered as alt_readings is the Host's pick
+      // between readings of the same romaji, not a typo correction (M35): the
+      // candidates take it, and the preedit keeps the typed kana.
+      if (!corrected_reading.empty() && std::find(alt_readings.begin(), alt_readings.end(),
+                                                  corrected_reading) != alt_readings.end()) {
+        ambiguous_choice = std::move(corrected_reading);
+        corrected_reading.clear();
+      }
     }
     DebugIpcLogEntry debug_entry{req_id,
                                  "QueryCandidates",
@@ -6460,12 +6487,15 @@ void TextService::ServeConnection() {
       RecordDebugIpc(std::move(debug_entry), secure, detailed_logging_allowed);
     };
 
-    auto tip_candidates = BuildTipCandidates(
-        corrected_reading.empty() ? reading : corrected_reading, std::move(response_candidates),
-        !is_batch && number_rewriter_.load(std::memory_order_relaxed),
-        !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
-        !is_batch && !live && emoji_trigger.empty() &&
-            symbol_rewriter_.load(std::memory_order_relaxed));
+    auto tip_candidates =
+        BuildTipCandidates(!corrected_reading.empty()  ? corrected_reading
+                           : !ambiguous_choice.empty() ? ambiguous_choice
+                                                       : reading,
+                           std::move(response_candidates),
+                           !is_batch && number_rewriter_.load(std::memory_order_relaxed),
+                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
+                           !is_batch && !live && emoji_trigger.empty() &&
+                               symbol_rewriter_.load(std::memory_order_relaxed));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -7072,6 +7102,12 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   // M63 section 9.1: mixed_english rides on the M60 fields.
   const bool mixed_english =
       !raw_romaji.empty() && !MixedEnglishRawRomajiFor(reading, privacy.secure).empty();
+  // DEV-1734: the window query compares the readings of an ambiguous "nn" +
+  // vowel; the per-key query keeps the typed reading. A secure field drops a
+  // corrected reading (below), so it sends no other reading to convert either.
+  auto alt_readings = !live && emoji_trigger.empty() && !privacy.secure
+                          ? AltReadingsFor(reading, kWindowAmbiguousPositions)
+                          : std::vector<std::string>{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -7083,6 +7119,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_english_candidates_ = !raw_romaji.empty();
   ipc_pending_mixed_english_ = mixed_english;
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
+  ipc_pending_alt_readings_ = std::move(alt_readings);
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -7146,6 +7183,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_detailed_logging_allowed_ = privacy.detailed_logging_allowed;
   ipc_pending_mixed_english_ = !raw_romaji.empty();
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
+  ipc_pending_alt_readings_.clear();
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -7259,6 +7297,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
+  ipc_pending_alt_readings_.clear();
   ipc_pending_batch_table_ = batch_romaji_table_;
   // ai-cleanup stays without English even when it falls back to neural, and a
   // secure field asks for none (DEV-1745). The request says whether it is
@@ -7936,7 +7975,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
           chosen.field.source != "fallback") {
         const auto privacy = ResolvePrivacy(context, false);
         pending_commit_observation_ =
-            PendingCommitObservation{observe->reading,
+            PendingCommitObservation{ObservedReading(observe->reading, chosen.field),
                                      chosen.field,
                                      HostCandidateFields(shown_candidates_),
                                      {},
@@ -9500,6 +9539,29 @@ std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
           core::RomajiKanaConverter::Preview(english_raw_romaji_, table)) == reading)
     return english_raw_romaji_;
   return {};
+}
+
+std::vector<std::string> TextService::AltReadingsFor(const std::string& reading,
+                                                     size_t max_ambiguous) const {
+  // The built-in table only (a custom table has no "nn" rule), and only while
+  // the typed romaji still spells the reading: after an edit or a corrected
+  // reading the romaji may belong to another reading.
+  if (batch_romaji_table_ || EnglishRawRomajiFor(reading).empty()) return {};
+  auto readings = core::RomajiKanaConverter::AmbiguousReadings(english_raw_romaji_, max_ambiguous);
+  if (readings.size() < 2 || ApplyDefaultCompositionPunctuation(readings.front()) != reading)
+    return {};
+  readings.erase(readings.begin());
+  for (auto& alternative : readings) alternative = ApplyDefaultCompositionPunctuation(alternative);
+  return readings;
+}
+
+std::string TextService::ObservedReading(const std::string& reading,
+                                         const ipc::CandidateField& chosen) const {
+  if (chosen.reading.empty() || chosen.reading == reading) return reading;
+  const auto alternatives = AltReadingsFor(reading, kWindowAmbiguousPositions);
+  return std::find(alternatives.begin(), alternatives.end(), chosen.reading) != alternatives.end()
+             ? chosen.reading
+             : reading;
 }
 
 void TextService::SyncEnglishRawRomaji() {

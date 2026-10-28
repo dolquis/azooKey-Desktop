@@ -182,6 +182,12 @@ struct QueryCandidatesRequest {
   // M63 section 9.1: the TIP's mixedEnglishAutoConversion, sent with
   // raw_romaji and english_candidates. Omitted on the wire when false.
   bool mixed_english{false};
+  // DEV-1734 (legacy-parity-spec section 5.4): other readings of the same
+  // romaji, each "nn" + vowel read as ん + あ行/や行. The candidate window
+  // (live = false) may convert one of them instead and return it as
+  // corrected_reading. Omitted on the wire when empty; an older Host ignores it
+  // and converts `reading`.
+  std::vector<std::string> alt_readings;
 };
 
 struct QueryCandidatesResponse {
@@ -214,6 +220,10 @@ struct QueryLiveConversionRequest {
   // keeps the pre-M63 shape.
   bool secure{true};
 };
+
+// DEV-1734: alt_readings beyond this many are dropped on decode. Three
+// ambiguous positions give at most seven other readings; the TIP sends one.
+inline constexpr size_t kMaxAltReadings = 7;
 
 struct QueryLiveConversionResponse {
   std::string surface;

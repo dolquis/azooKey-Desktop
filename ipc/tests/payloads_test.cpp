@@ -1783,6 +1783,28 @@ TEST(PayloadsTest, QueryCandidatesCarriesRawRomajiAndTheEnglishFlag) {
   EXPECT_EQ(parsed_response->candidates[1].reading, "apple");
 }
 
+// DEV-1734: alt_readings is optional, absent when empty, and an older peer
+// decodes an empty list.
+TEST(PayloadsTest, AltReadingsAreOptionalOnQueryCandidates) {
+  using namespace azookey::ipc;
+  using Readings = std::vector<std::string>;
+  QueryCandidatesRequest request;
+  request.reading = "げんにん";
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(request))->Find("alt_readings"));
+  request.alt_readings = {"げんいん"};
+  auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->alt_readings, (Readings{"げんいん"}));
+  EXPECT_TRUE(ParseQueryCandidatesRequest(R"({"reading":"げんにん"})")->alt_readings.empty());
+  // Non-strings and empty strings are dropped; the list is cut at kMaxAltReadings.
+  parsed = ParseQueryCandidatesRequest(
+      R"({"reading":"x","alt_readings":[1,"","a","b","c","d","e","f","g","h"]})");
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->alt_readings, (Readings{"a", "b", "c", "d", "e", "f", "g"}));
+  EXPECT_TRUE(
+      ParseQueryCandidatesRequest(R"({"reading":"x","alt_readings":"a"})")->alt_readings.empty());
+}
+
 // M63 section 9: every field is optional, absent when empty / false / None,
 // and an older peer decodes the defaults.
 TEST(PayloadsTest, MixedEnglishRequestFieldsAreOptional) {

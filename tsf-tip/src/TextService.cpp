@@ -5007,8 +5007,12 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       auto fields = HostCandidateFields(shown);
       fields.insert(fields.end(), std::make_move_iterator(turned_down.begin()),
                     std::make_move_iterator(turned_down.end()));
-      pending_commit_observation_ =
-          PendingCommitObservation{reading, chosen.field, std::move(fields), {}, secure, learning};
+      pending_commit_observation_ = PendingCommitObservation{ObservedReading(reading, chosen.field),
+                                                             chosen.field,
+                                                             std::move(fields),
+                                                             {},
+                                                             secure,
+                                                             learning};
     }
   } else {
     pending_commit_observation_.reset();
@@ -7099,8 +7103,9 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   const bool mixed_english =
       !raw_romaji.empty() && !MixedEnglishRawRomajiFor(reading, privacy.secure).empty();
   // DEV-1734: the window query compares the readings of an ambiguous "nn" +
-  // vowel; the per-key query keeps the typed reading.
-  auto alt_readings = !live && emoji_trigger.empty()
+  // vowel; the per-key query keeps the typed reading. A secure field drops a
+  // corrected reading (below), so it sends no other reading to convert either.
+  auto alt_readings = !live && emoji_trigger.empty() && !privacy.secure
                           ? AltReadingsFor(reading, kWindowAmbiguousPositions)
                           : std::vector<std::string>{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -7970,7 +7975,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
           chosen.field.source != "fallback") {
         const auto privacy = ResolvePrivacy(context, false);
         pending_commit_observation_ =
-            PendingCommitObservation{observe->reading,
+            PendingCommitObservation{ObservedReading(observe->reading, chosen.field),
                                      chosen.field,
                                      HostCandidateFields(shown_candidates_),
                                      {},
@@ -9548,6 +9553,15 @@ std::vector<std::string> TextService::AltReadingsFor(const std::string& reading,
   readings.erase(readings.begin());
   for (auto& alternative : readings) alternative = ApplyDefaultCompositionPunctuation(alternative);
   return readings;
+}
+
+std::string TextService::ObservedReading(const std::string& reading,
+                                         const ipc::CandidateField& chosen) const {
+  if (chosen.reading.empty() || chosen.reading == reading) return reading;
+  const auto alternatives = AltReadingsFor(reading, kWindowAmbiguousPositions);
+  return std::find(alternatives.begin(), alternatives.end(), chosen.reading) != alternatives.end()
+             ? chosen.reading
+             : reading;
 }
 
 void TextService::SyncEnglishRawRomaji() {

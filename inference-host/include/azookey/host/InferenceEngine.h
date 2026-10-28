@@ -424,7 +424,7 @@ class InferenceEngine {
   // (QueryCandidatesEx with live = false) of `kana` when `alternatives` are other
   // readings of the same romaji, from the TIP. Only the first usable alternative
   // (non-empty, not longer than kana) is converted too, and only when M35 left
-  // kana as typed.
+  // kana as typed and its conversion did not run out of time.
   // - With model candidates for both readings, the alternative's result comes
   //   back, with corrected_reading set to it, when its best model score beats
   //   kana's by more than kAmbiguousReadingModelMargin, followed by kana's first

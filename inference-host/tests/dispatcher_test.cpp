@@ -5802,10 +5802,12 @@ class ScoredReadingConverter final : public azookey::core::IConverter {
 };
 
 ipc::Envelope AmbiguousQuery(uint64_t id, const std::string& reading,
-                             std::vector<std::string> alternatives, bool live = false) {
+                             std::vector<std::string> alternatives, bool live = false,
+                             bool secure = false) {
   ipc::QueryCandidatesRequest q;
   q.reading = reading;
   q.live = live;
+  q.secure = secure;
   q.alt_readings = std::move(alternatives);
   ipc::Envelope env;
   env.version = 1;
@@ -5889,6 +5891,44 @@ TEST(AmbiguousReadingDispatchTest, ASwitchKeepsTheTypedReadingsDictionaryWords) 
       std::count_if(window.candidates.begin(), window.candidates.end(),
                     [](const ipc::CandidateField& c) { return c.reading == "せんねん"; }),
       static_cast<std::ptrdiff_t>(azookey::host::InferenceEngine::kAmbiguousReadingTypedKept));
+}
+
+// A secure request is converted as typed: its TIP drops corrected_reading, so
+// the window must not hold another reading's candidates.
+TEST(AmbiguousReadingDispatchTest, SecureRequestsAreNotCompared) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  const auto secure = DispatchAmbiguous(
+      dispatcher, AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"}, false, true));
+  EXPECT_TRUE(secure.corrected_reading.empty());
+  ASSERT_EQ(secure.candidates.size(), 1u);
+  EXPECT_EQ(secure.candidates.front().surface, "model:ないぶげんにん");
+}
+
+// A typed conversion that ran out of time leaves no time for a second one: the
+// other reading is not converted, so its dictionary word never joins.
+TEST_F(DispatcherTest, ADeadlineOnTheTypedReadingSkipsTheOtherReading) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  const std::string model_path = temp_directory.File("azookey_dispatcher_ambiguous_deadline.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  // The mock runs out of time on じかんぎれ before its first beam step, which
+  // leaves no model candidate; without the skip the window would append 原因.
+  const auto window = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "じかんぎれ", {"げんいん"}));
+  EXPECT_TRUE(window.corrected_reading.empty());
+  for (const auto& candidate : window.candidates) EXPECT_NE(candidate.surface, "原因");
 }
 
 TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCandidates) {

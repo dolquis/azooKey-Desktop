@@ -1148,16 +1148,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     MixedConversionOptions as_typed;
     as_typed.typo_correction = false;
     // DEV-1734: the candidate window also weighs the other reading of an
-    // ambiguous "nn" + vowel. Per-key queries and an M63 split are converted as
-    // typed.
-    auto queried = !parsed->live && !parsed->alt_readings.empty() && !IsInlineSplit(split)
-                       ? engine_->QueryAmbiguousCandidatesEx(
-                             parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),
-                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts)
-                       : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
-                                                    cancel.get(), ordinary_limit, parsed->live,
-                                                    trace.context(), &tag_boosts,
-                                                    IsInlineSplit(split) ? &as_typed : nullptr);
+    // ambiguous "nn" + vowel. Per-key queries, a secure request (its TIP drops
+    // corrected_reading) and an M63 split are converted as typed.
+    auto queried =
+        !parsed->live && !parsed->secure && !parsed->alt_readings.empty() && !IsInlineSplit(split)
+            ? engine_->QueryAmbiguousCandidatesEx(parsed->reading, parsed->alt_readings,
+                                                  parsed->left_context, NowSec(), cancel.get(),
+                                                  ordinary_limit, trace.context(), &tag_boosts)
+            : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
+                                         cancel.get(), ordinary_limit, parsed->live,
+                                         trace.context(), &tag_boosts,
+                                         IsInlineSplit(split) ? &as_typed : nullptr);
     const auto all_japanese = IsInlineSplit(split) && !queried.candidates.empty()
                                   ? std::optional{queried.candidates.front()}
                                   : std::nullopt;

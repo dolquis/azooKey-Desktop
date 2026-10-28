@@ -416,6 +416,17 @@ class TextService final : public ITfTextInputProcessorEx,
                                                  size_t max_ambiguous) const {
     return AltReadingsFor(reading, max_ambiguous);
   }
+  std::string observed_reading_for_test(const std::string& reading,
+                                        const ipc::CandidateField& chosen) const {
+    return ObservedReading(reading, chosen);
+  }
+  void post_window_query_for_test(ITfContext* context, const std::string& reading) {
+    PostQueryCandidates(context, reading, false);
+  }
+  std::vector<std::string> pending_ipc_alt_readings_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_alt_readings_;
+  }
   bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
@@ -1423,6 +1434,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // The window compares two readings at most: the Host converts each with the
   // model within the window budget.
   static constexpr size_t kWindowAmbiguousPositions = 1;
+  // DEV-1734: the reading a commit is learned under. A candidate of the other
+  // reading of an ambiguous "nn" + vowel keeps its own reading, as an M35
+  // correction is learned under the corrected reading the preedit then holds.
+  std::string ObservedReading(const std::string& reading, const ipc::CandidateField& chosen) const;
   // Drops trailing romaji until the rest spells the current preedit, so a
   // Backspace that erased a whole kana also erases the keys that typed it.
   void SyncEnglishRawRomaji();

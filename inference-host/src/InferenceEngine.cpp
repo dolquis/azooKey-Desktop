@@ -1713,9 +1713,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
       std::find_if(alternatives.begin(), alternatives.end(), [&](const std::string& reading) {
         return !reading.empty() && reading.size() <= kana.size() && reading != kana;
       });
-  // An M35 correction replaced the reading the alternatives were made from.
+  // An M35 correction replaced the reading the alternatives were made from, and
+  // a conversion that already ran out of time leaves none for a second one.
   if (alternative == alternatives.end() || !typed.corrected_reading.empty() ||
-      (cancel && cancel->load(std::memory_order_relaxed)))
+      typed.model_deadline_exceeded || (cancel && cancel->load(std::memory_order_relaxed)))
     return typed;
   auto other = QueryCandidatesEx(*alternative, context, now_epoch_sec, cancel, max_candidates,
                                  false, telemetry, tag_boosts);

@@ -10255,6 +10255,60 @@ TEST(TsfTipTypoCorrectionTest, AmbiguousReadingChoiceReachesCandidatesButNotTheP
   EXPECT_EQ(std::count(received_types.begin(), received_types.end(), MessageType::ObserveTypo), 0);
 }
 
+// A candidate of the other reading is learned under that reading, as an M35
+// correction is learned under the corrected one: げんいん → 原因, never
+// げんにん → 原因. The undo record names the same pair.
+TEST(TsfTipTypoCorrectionTest, TheOtherReadingsCandidateIsLearnedUnderItsOwnReading) {
+  for (const bool other : {true, false}) {
+    SCOPED_TRACE(other);
+    TextServiceHarness h;
+    for (const WPARAM key : {'G', 'E', 'N', 'N', 'I', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_EQ(h.service.preedit_kana_, "げんにん");
+    azookey::ipc::CandidateField chosen;
+    chosen.surface = other ? "原因" : "現任";
+    chosen.reading = other ? "げんいん" : "げんにん";
+    chosen.source = "dictionary";
+    h.service.set_cached_candidates_for_test({chosen});
+    h.service.show_candidate_window_from_cache_for_test();
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press('1'));
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->reading, chosen.reading);
+    EXPECT_EQ(observation->chosen.surface, chosen.surface);
+    const std::vector<std::pair<std::string, std::string>> pair{{chosen.reading, chosen.surface}};
+    EXPECT_EQ(h.service.learned_pairs_for_test(), pair);
+  }
+}
+
+// A reading that is not one of the typed romaji's readings is not adopted.
+TEST(TsfTipTypoCorrectionTest, OnlyAReadingOfTheTypedRomajiIsLearnedInstead) {
+  TextServiceHarness h;
+  for (const WPARAM key : {'G', 'E', 'N', 'N', 'I', 'N', 'N'}) ASSERT_TRUE(h.Press(key));
+  azookey::ipc::CandidateField unrelated;
+  unrelated.reading = "かんい";
+  EXPECT_EQ(h.service.observed_reading_for_test("げんにん", unrelated), "げんにん");
+  unrelated.reading = "げんいん";
+  EXPECT_EQ(h.service.observed_reading_for_test("げんにん", unrelated), "げんいん");
+  unrelated.reading.clear();
+  EXPECT_EQ(h.service.observed_reading_for_test("げんにん", unrelated), "げんにん");
+}
+
+// A secure field sends no other readings: its TIP drops corrected_reading.
+TEST(TsfTipTypoCorrectionTest, SecureWindowQueriesSendNoAltReadings) {
+  for (const bool secure : {false, true}) {
+    SCOPED_TRACE(secure);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    if (secure) h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    TypeTypoRomaji(h, "GENNINN");
+    h.service.post_window_query_for_test(&h.context, "げんにん");
+    EXPECT_EQ(h.service.pending_ipc_alt_readings_for_test(),
+              secure ? std::vector<std::string>{} : std::vector<std::string>{"げんいん"});
+  }
+}
+
 TEST(TsfTipTypoCorrectionTest, AltReadingsNeedTheTypedRomajiAndTheBuiltInTable) {
   DocumentPreeditHarness h;
   ConfigureTypoHarness(h);

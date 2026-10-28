@@ -765,7 +765,8 @@ OFF のときは `PredictionWindow` を生成しない。
 表示の結果（`no_acceptable_prediction` / `window_create_failed` / `window_show_failed` / `shown`。
 1 秒キャッシュからの表示を含む）のいずれかをとる。
 `window_create_failed` と `window_show_failed` は失敗した初期化・描画の段階 `stage` と `hresult` を持つ。
-各 `reason` は TIP の activation ごとに 1 回だけ出し、打鍵ごとには出さない。
+各 `reason` は composition ごとに 1 回だけ出し、打鍵ごとには出さない。
+composition の開始と TIP の deactivate で記録済みの `reason` を戻すので、次の入力でも同じ `reason` を出す。
 どの行も入力本文、予測候補、打鍵の回数を持たない。
 
 ## 4. Magic Conversion / Replace Suggestion (M16)

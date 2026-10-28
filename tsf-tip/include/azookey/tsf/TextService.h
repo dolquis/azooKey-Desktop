@@ -82,7 +82,7 @@ std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
 std::vector<ipc::CandidateField> FilterAcceptablePredictions(
     std::string_view kana, std::vector<ipc::CandidateField> candidates);
 
-// Where a prediction stopped or ended; logged once per activation each.
+// Where a prediction stopped or ended; logged once per composition each.
 enum class PredictionLogReason : uint8_t {
   Disabled,
   NotAllowed,
@@ -334,6 +334,10 @@ class TextService final : public ITfTextInputProcessorEx,
     return prediction_result_.has_value();
   }
   size_t shown_prediction_count_for_test() const { return shown_predictions_.size(); }
+  // One bit per PredictionLogReason logged since the composition started.
+  uint32_t prediction_logged_reasons_for_test() const {
+    return prediction_logged_reasons_.load(std::memory_order_relaxed);
+  }
   bool prediction_query_hold_set_for_test() const { return !prediction_last_query_key_.empty(); }
   bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {

@@ -12293,6 +12293,30 @@ TEST(TsfTipCommitOnTypeTest, CtrlShiftUWhileTheCommitIsRefusedStartsUnicodeInput
   }
 }
 
+// A key typed while the retry is still refused waits behind the Ctrl+Shift+U:
+// the "U+" comes first, then the waiting keys in the order they were typed.
+TEST(TsfTipCommitOnTypeTest, CtrlShiftUKeepsItsPlaceAheadOfKeysThatWaitedForTheRetry) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_punctuation_conversion_for_test(false);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  h.context.reject_write = true;
+  PressCtrlShift(h, 'U');
+  ASSERT_TRUE(h.service.committing_);
+  // The retry key is refused as well and waits behind the U.
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.committing_) << "the retry must still be refused";
+  EXPECT_EQ(h.context.document->text, L"かな");
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('B'));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"かなU+AB");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+}
+
 // A commit that never succeeds drops the key with the rest: no half-started
 // Unicode input is left, and the next key starts afresh.
 TEST(TsfTipCommitOnTypeTest, CtrlShiftUDroppedWithTheCommitLeavesNoUnicodeInput) {

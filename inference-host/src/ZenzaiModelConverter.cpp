@@ -43,6 +43,7 @@ constexpr std::string_view kGgufPreTokenizerKey = "tokenizer.ggml.pre";
 constexpr std::string_view kGgufEosTokenIdKey = "tokenizer.ggml.eos_token_id";
 #if AZOOKEY_WITH_LLAMA_CPP
 constexpr std::string_view kGgufTokensKey = "tokenizer.ggml.tokens";
+constexpr std::string_view kGgufTokenTypesKey = "tokenizer.ggml.token_type";
 #endif
 constexpr std::string_view kZenzaiPreTokenizer = "gpt2-small-japanese-char";
 constexpr std::string_view kGpt2PreTokenizer = "gpt-2";
@@ -190,6 +191,17 @@ std::optional<ZenzaiTokenizerMetadata> ReadGgufTokenizerMetadata(const std::stri
       metadata.vocabulary.emplace_back(token ? token : "");
     }
   }
+
+  const auto token_types_key = gguf_find_key(context.get(), kGgufTokenTypesKey.data());
+  if (token_types_key >= 0 && gguf_get_kv_type(context.get(), token_types_key) == GGUF_TYPE_ARRAY &&
+      gguf_get_arr_type(context.get(), token_types_key) == GGUF_TYPE_INT32) {
+    const auto type_count = gguf_get_arr_n(context.get(), token_types_key);
+    const auto* types =
+        static_cast<const int32_t*>(gguf_get_arr_data(context.get(), token_types_key));
+    if (types) {
+      metadata.token_types.assign(types, types + type_count);
+    }
+  }
   return metadata;
 }
 #endif
@@ -320,25 +332,6 @@ std::string CleanLeftContext(const std::string& preceding_text) {
   return TakeLastUtf8Codepoints(context, kMaxLeftContextCodepoints);
 }
 
-std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
-                              const std::string& profile = {}) {
-  std::string prompt;
-  const auto& effective_profile = profile.empty() ? context.instruction_profile : profile;
-  if (!effective_profile.empty()) {
-    prompt += Utf8(U'\U0000EE03');
-    prompt += effective_profile;
-  }
-  const auto left_context = CleanLeftContext(context.preceding_text);
-  if (!left_context.empty()) {
-    prompt += Utf8(U'\U0000EE02');
-    prompt += left_context;
-  }
-  prompt += Utf8(U'\U0000EE00');
-  prompt += ToKatakana(kana);
-  prompt += Utf8(U'\U0000EE01');
-  return prompt;
-}
-
 int32_t MaxNewTokensForReading(const std::string& kana) {
   const auto count = CountUtf8Codepoints(kana);
   const auto budget = static_cast<int32_t>(std::min<size_t>(kMaxNewTokens, count * 2 + 8));
@@ -420,44 +413,16 @@ LlamaBackendSession& LlamaBackend() {
   return session;
 }
 
-struct LlamaTokenChoice {
-  llama_token token{LLAMA_TOKEN_NULL};
-  float logit{-std::numeric_limits<float>::infinity()};
-  double logprob{-std::numeric_limits<double>::infinity()};
-};
-
-std::vector<LlamaTokenChoice> CollectTokenChoices(const llama_vocab* vocab, const float* logits,
-                                                  int32_t vocab_size, size_t max_choices) {
-  if (max_choices == 0 || vocab_size <= 0) {
-    return {};
-  }
-  std::vector<LlamaTokenChoice> choices;
-  choices.reserve(max_choices);
-  double max_logit = -std::numeric_limits<double>::infinity();
+// Tokens the beam never selects: control tokens that do not end generation (spec §5).
+std::vector<uint8_t> ExcludedChoiceTokens(const llama_vocab* vocab) {
+  const auto vocab_size = llama_vocab_n_tokens(vocab);
+  std::vector<uint8_t> excluded(static_cast<size_t>(std::max<int32_t>(0, vocab_size)), 0);
   for (int32_t id = 0; id < vocab_size; ++id) {
-    max_logit = std::max(max_logit, static_cast<double>(logits[id]));
     const auto token = static_cast<llama_token>(id);
-    if (llama_vocab_is_control(vocab, token) && !llama_vocab_is_eog(vocab, token)) {
-      continue;
-    }
-    if (choices.size() < max_choices || logits[id] > choices.back().logit) {
-      choices.push_back(LlamaTokenChoice{token, logits[id], 0.0});
-      std::sort(choices.begin(), choices.end(),
-                [](const auto& lhs, const auto& rhs) { return lhs.logit > rhs.logit; });
-      if (choices.size() > max_choices) {
-        choices.resize(max_choices);
-      }
-    }
+    excluded[static_cast<size_t>(id)] =
+        llama_vocab_is_control(vocab, token) && !llama_vocab_is_eog(vocab, token) ? 1 : 0;
   }
-  double denom = 0.0;
-  for (int32_t id = 0; id < vocab_size; ++id) {
-    denom += std::exp(static_cast<double>(logits[id]) - max_logit);
-  }
-  const double log_denom = max_logit + std::log(denom);
-  for (auto& choice : choices) {
-    choice.logprob = static_cast<double>(choice.logit) - log_denom;
-  }
-  return choices;
+  return excluded;
 }
 
 std::string TokenPiece(const llama_vocab* vocab, llama_token token) {
@@ -624,10 +589,83 @@ std::vector<double> ActiveBeamScores(const std::vector<LlamaBeam>& beams) {
 
 }  // namespace
 
+std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
+                              ZenzaiPromptFormat format) {
+  std::string prompt;
+  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !context.instruction_profile.empty()) {
+    prompt += Utf8(U'\U0000EE03');
+    prompt += context.instruction_profile;
+  }
+  const auto left_context = CleanLeftContext(context.preceding_text);
+  // zenz-v3 drops an empty context segment; kanakanji-edge-v1 was trained with it always present.
+  if (!left_context.empty() || format == ZenzaiPromptFormat::KanakanjiEdgeV1) {
+    prompt += Utf8(U'\U0000EE02');
+    prompt += left_context;
+  }
+  prompt += Utf8(U'\U0000EE00');
+  prompt += ToKatakana(kana);
+  prompt += Utf8(U'\U0000EE01');
+  return prompt;
+}
+
+std::vector<ZenzaiTokenChoice> SelectZenzaiTokenChoices(std::span<const float> logits,
+                                                        std::span<const uint8_t> excluded,
+                                                        size_t max_choices) {
+  if (max_choices == 0 || logits.empty()) {
+    return {};
+  }
+  std::vector<ZenzaiTokenChoice> choices;
+  choices.reserve(max_choices);
+  double max_logit = -std::numeric_limits<double>::infinity();
+  for (size_t id = 0; id < logits.size(); ++id) {
+    max_logit = std::max(max_logit, static_cast<double>(logits[id]));
+    if (id < excluded.size() && excluded[id] != 0) {
+      continue;
+    }
+    if (choices.size() < max_choices || logits[id] > choices.back().logit) {
+      choices.push_back(ZenzaiTokenChoice{static_cast<int32_t>(id), logits[id], 0.0});
+      std::sort(choices.begin(), choices.end(),
+                [](const auto& lhs, const auto& rhs) { return lhs.logit > rhs.logit; });
+      if (choices.size() > max_choices) {
+        choices.resize(max_choices);
+      }
+    }
+  }
+  double denom = 0.0;
+  for (const auto logit : logits) {
+    denom += std::exp(static_cast<double>(logit) - max_logit);
+  }
+  const double log_denom = max_logit + std::log(denom);
+  for (auto& choice : choices) {
+    choice.logprob = static_cast<double>(choice.logit) - log_denom;
+  }
+  return choices;
+}
+
+ZenzaiPromptFormat InferZenzaiPromptFormat(const ZenzaiTokenizerMetadata& metadata) {
+  // GGUF token type CONTROL (LLAMA_TOKEN_TYPE_CONTROL in llama.h).
+  constexpr int32_t kControlTokenType = 3;
+  const auto find_piece = [&](char32_t codepoint) {
+    return std::find(metadata.vocabulary.begin(), metadata.vocabulary.end(), Utf8(codepoint));
+  };
+  const auto is_control_piece = [&](char32_t codepoint) {
+    const auto it = find_piece(codepoint);
+    if (it == metadata.vocabulary.end()) return false;
+    const auto index = static_cast<size_t>(std::distance(metadata.vocabulary.begin(), it));
+    return index < metadata.token_types.size() && metadata.token_types[index] == kControlTokenType;
+  };
+  if (is_control_piece(U'\U0000EE00') && is_control_piece(U'\U0000EE01') &&
+      is_control_piece(U'\U0000EE02') && find_piece(U'\U0000EE03') == metadata.vocabulary.end()) {
+    return ZenzaiPromptFormat::KanakanjiEdgeV1;
+  }
+  return ZenzaiPromptFormat::ZenzV3;
+}
+
 struct ZenzaiModelRuntime {
   std::optional<ZenzaiDecodeStats> last_decode_stats;
   // Threads the context decodes with; 0 when the load did not choose a count.
   int32_t n_threads{};
+  ZenzaiPromptFormat prompt_format{ZenzaiPromptFormat::ZenzV3};
 #if AZOOKEY_WITH_LLAMA_CPP
   ~ZenzaiModelRuntime() {
     if (context) {
@@ -647,6 +685,8 @@ struct ZenzaiModelRuntime {
 
   llama_model* model{nullptr};
   llama_context* context{nullptr};
+  // Indexed by token id; non-zero for tokens SelectZenzaiTokenChoices skips.
+  std::vector<uint8_t> excluded_choice_tokens;
   std::vector<llama_token> cached_prompt_tokens;
   // Logits of the final cached prompt token. Non-empty only while it describes
   // cached_prompt_tokens as a whole; written and cleared together with the token cache.
@@ -898,7 +938,7 @@ struct ZenzaiModelRuntime {
       throw std::runtime_error("llama.cpp vocab is not available");
     }
 
-    const auto prompt = BuildZenzaiPrompt(kana, conversion_context);
+    const auto prompt = BuildZenzaiPrompt(kana, conversion_context, prompt_format);
     const bool add_bos = llama_vocab_get_add_bos(vocab);
     std::vector<llama_token> prompt_tokens(std::max<size_t>(8, prompt.size() + 8));
     int32_t token_count = llama_tokenize(vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
@@ -1031,7 +1071,9 @@ struct ZenzaiModelRuntime {
           throw std::runtime_error("llama.cpp logits are not available");
         }
 
-        auto choices = CollectTokenChoices(vocab, logits, vocab_size, candidate_limit);
+        auto choices = SelectZenzaiTokenChoices(
+            std::span<const float>(logits, static_cast<size_t>(vocab_size)), excluded_choice_tokens,
+            candidate_limit);
         if (choices.empty()) {
           throw std::runtime_error("llama.cpp did not select a token");
         }
@@ -1545,6 +1587,9 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   model_params.devices = devices.data();
   model_params.n_gpu_layers = options.use_vulkan ? options.n_gpu_layers : 0;
   const auto tokenizer_metadata = ReadGgufTokenizerMetadata(path);
+  result.info.prompt_format = options.prompt_format.value_or(
+      tokenizer_metadata ? InferZenzaiPromptFormat(*tokenizer_metadata)
+                         : ZenzaiPromptFormat::ZenzV3);
   const auto described_overrides = tokenizer_metadata ? BuildZenzaiKvOverrides(*tokenizer_metadata)
                                                       : std::vector<ZenzaiKvOverride>{};
   // llama.cpp reads the array until it hits an entry with an empty key, so keep a zeroed tail.
@@ -1641,6 +1686,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
     return result;
   }
   runtime->n_threads = n_threads;
+  runtime->prompt_format = result.info.prompt_format;
+  runtime->excluded_choice_tokens = ExcludedChoiceTokens(llama_model_get_vocab(runtime->model));
 
   result.runtime = std::move(runtime);
 #else
@@ -1652,6 +1699,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   auto runtime = std::make_unique<ZenzaiModelRuntime>();
   runtime->mock_candidates_for_tests = options.mock_candidates_for_tests;
   runtime->n_threads = options.n_threads.value_or(0);
+  result.info.prompt_format = options.prompt_format.value_or(ZenzaiPromptFormat::ZenzV3);
+  runtime->prompt_format = result.info.prompt_format;
   result.runtime = std::move(runtime);
 #endif
   result.ok = true;

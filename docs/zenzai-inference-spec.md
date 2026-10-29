@@ -131,8 +131,9 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 
 #### 2.4.2 プロンプト形式 `promptFormat`
 
-本節は設計であり、catalog の schema、parser、プロンプトの構築、診断のフィールドは後続の実装
-Issue（promptFormat の導入）で実装する。
+実装は `inference-host/include/azookey/host/ZenzaiPromptFormat.h`（値と能力）、`ModelCatalog`
+（catalog の parse）、`ZenzaiModelConverter`（推定、プロンプトの構築、beam の候補選択）、
+`InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。
 
 モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
@@ -146,7 +147,10 @@ Issue（promptFormat の導入）で実装する。
 | `kanakanji-edge-v1` | 左文脈が空でも置く | 使わない | EOS |
 
 - catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 が CONTROL
-  型で並び、U+EE03 が語彙に無ければ `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。
+  型（GGUF の `tokenizer.ggml.token_type` が 3）で並び、U+EE03 が語彙に無ければ
+  `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。ロードは GGUF の読み込み時に形式を決め、
+  ロードの要求が形式を宣言していればそれを、無ければ推定値を使う。製品のロードは
+  `model.selectedPath` の GGUF を開き、catalog の entry を経由しないので、形式は推定で決まる。
   推定した値は診断に出す（QueryDiagnostics のフィールドは `docs/dev-infrastructure-spec.md`
   §12.6 に追加する）。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
@@ -274,12 +278,13 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 ```cpp
 std::string BuildZenzaiPrompt(const std::string& kana_input,
                               const std::string& preceding_text,
-                              const std::string& profile /* 既定 "" */) {
+                              const std::string& profile /* 既定 "" */,
+                              PromptFormat format /* §2.4.2 */) {
   const std::string katakana = ToKatakana(kana_input);          // §3.1-1
   const std::string ctx = CleanLeftContext(preceding_text, 30); // §3.1-2
   std::string p;
-  if (!profile.empty()) p += TOK("[PROF]") + profile;  // 将来（M8 既定は空）
-  if (!ctx.empty())     p += TOK("[CTX]")  + ctx;
+  if (format == zenz_v3 && !profile.empty()) p += TOK("[PROF]") + profile;
+  if (!ctx.empty() || format == kanakanji_edge_v1) p += TOK("[CTX]") + ctx;
   p += TOK("[IN]") + katakana + TOK("[OUT]");
   return p;  // 生成は [OUT] の直後から
 }

@@ -30,6 +30,7 @@
 #include "azookey/host/RewriterData.h"
 #include "azookey/host/UserLearningScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
+#include "azookey/host/ZenzaiPromptFormat.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
@@ -177,6 +178,8 @@ struct ModelLoadOptions {
   std::optional<int32_t> n_threads;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_zenzai_candidates_for_tests{false};
+  // Format declared by the model catalog entry. Unset infers it from the GGUF vocabulary.
+  std::optional<ZenzaiPromptFormat> prompt_format;
   // Test-only hook used to prove loading work runs outside state_mutex_.
   std::function<void()> before_probe_for_tests;
   // Test-only fault injection at each backend load attempt.

@@ -99,7 +99,8 @@ bool IsSafeModelFileName(std::string_view value) {
 bool IsAllowedBackendHint(std::string_view value) { return value == "llama.cpp"; }
 
 std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, std::string* error) {
-  if (!HasOnlyKeys(object, {"id", "displayName", "fileName", "sha256", "backendHint"})) {
+  if (!HasOnlyKeys(object,
+                   {"id", "displayName", "fileName", "sha256", "backendHint", "promptFormat"})) {
     *error = "model catalog entry contains an unknown field";
     return std::nullopt;
   }
@@ -144,6 +145,16 @@ std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, std::s
     return std::nullopt;
   }
   entry.backend_hint = std::move(*backend_hint);
+
+  auto prompt_format_name = OptionalString(
+      object, "promptFormat", std::string(ZenzaiPromptFormatName(entry.prompt_format)), error);
+  if (!prompt_format_name) return std::nullopt;
+  const auto prompt_format = ParseZenzaiPromptFormat(*prompt_format_name);
+  if (!prompt_format) {
+    *error = "model catalog entry promptFormat is not supported: " + *prompt_format_name;
+    return std::nullopt;
+  }
+  entry.prompt_format = *prompt_format;
 
   return entry;
 }

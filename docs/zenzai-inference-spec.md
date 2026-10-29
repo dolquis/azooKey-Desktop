@@ -133,7 +133,8 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 
 実装は `inference-host/include/azookey/host/ZenzaiPromptFormat.h`（値と能力）、`ModelCatalog`
 （catalog の parse）、`ZenzaiModelConverter`（推定、プロンプトの構築、beam の候補選択）、
-`InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。
+`InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。推定値の診断への出力（下記）は
+QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に扱う。
 
 モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
@@ -727,7 +728,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   if (!model_ready_) return DegradeToFallback(kana, ctx, "model-not-ready");
 
   try {
-    const std::string prompt = BuildZenzaiPrompt(kana, ctx.preceding_text, profile_); // §3.3
+    const std::string prompt = BuildZenzaiPrompt(kana, ctx.preceding_text, profile_, prompt_format_); // §3.3
     const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana),
                                   deadline_, cancel_);  // §4.2.1 §6.2 §8 ＋ §9.2.2（decode 中も cancel/deadline をポーリング）
     if (Canceled(cancel_)) return {};                 // §9.2.2 キャンセルは fallback せず空（M10。stale 候補を出さない）
@@ -1160,7 +1161,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 
 | 種別 | 内容 |
 |---|---|
-| unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置 |
+| unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置、`promptFormat` ごとの差（§2.4.2） |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 手順 3）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |

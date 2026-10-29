@@ -134,7 +134,7 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 実装は `inference-host/include/azookey/host/ZenzaiPromptFormat.h`（値と能力）、`ModelCatalog`
 （catalog の parse）、`ZenzaiModelConverter`（推定、プロンプトの構築、beam の候補選択）、
 `InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。推定値の診断への出力（下記）は
-QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に扱う。
+QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に扱う（DEV-1787）。
 
 モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は

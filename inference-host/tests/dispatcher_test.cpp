@@ -5954,3 +5954,162 @@ TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCa
   const auto shown = surfaces(window);
   EXPECT_EQ(std::count(shown.begin(), shown.end(), "げんいん"), 0);
 }
+
+namespace {
+
+// Commits `surface` under `reading` as the TIP reports a window pick: the
+// candidate's own reading (legacy-parity-spec section 5.4).
+void CommitAs(azookey::host::Dispatcher& dispatcher, uint64_t id, const std::string& reading,
+              const std::string& surface) {
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = reading;
+  commit.chosen = {surface, reading, 1.0, "dictionary"};
+  commit.timestamp_ms = 1700000000000ULL;
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = id;
+  env.type = ipc::MessageType::CommitObservation;
+  env.payload_json = ipc::BuildCommitObservationRequest(commit);
+  const auto response = dispatcher.Dispatch(env);
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->ok) << reading << " -> " << surface;
+}
+
+std::vector<std::string> SurfacesOf(const ipc::QueryCandidatesResponse& response) {
+  std::vector<std::string> out;
+  for (const auto& c : response.candidates) out.push_back(c.surface);
+  return out;
+}
+
+}  // namespace
+
+// DEV-1773: without a model nothing is chosen until the user commits the other
+// reading's word; then that word leads the window with its own reading, the
+// typed reading's words all stay, and a later commit under the typed reading
+// gives the window back to it.
+TEST_F(DispatcherTest, WithoutAModelALearnedWordOfTheOtherReadingLeadsTheWindow) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  EnableEventPrivacy(dispatcher);
+  const auto typed = SurfacesOf(DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "げんにん", {})));
+  ASSERT_FALSE(typed.empty());
+  ASSERT_NE(typed.front(), "原因");
+
+  CommitAs(dispatcher, 2, "げんいん", "原因");
+  const auto learned = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "げんにん", {"げんいん"}));
+  EXPECT_TRUE(learned.corrected_reading.empty());
+  ASSERT_FALSE(learned.candidates.empty());
+  EXPECT_EQ(learned.candidates.front().surface, "原因");
+  EXPECT_EQ(learned.candidates.front().reading, "げんいん");
+  auto expected = typed;
+  expected.insert(expected.begin(), "原因");
+  EXPECT_EQ(SurfacesOf(learned), expected);
+
+  // The typed reading's word committed after it: the typed reading leads again,
+  // and the other reading's word goes back behind it.
+  CommitAs(dispatcher, 4, "げんにん", "現任");
+  const auto back = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "げんにん", {"げんいん"}));
+  EXPECT_TRUE(back.corrected_reading.empty());
+  ASSERT_FALSE(back.candidates.empty());
+  EXPECT_EQ(back.candidates.front().surface, "現任");
+  EXPECT_EQ(back.candidates.back().surface, "原因");
+  EXPECT_EQ(back.candidates.back().reading, "げんいん");
+}
+
+// DEV-1773: the store keys commits by reading, so 山陰 typed as san'in counts
+// for さんいん as a window pick would. With no さんにん commit, sannin then puts
+// 山陰 first; one pick of 三人 hands the window back to the typed reading.
+TEST_F(DispatcherTest, OnePickOfTheTypedReadingUndoesAnApostropheSpelledCommit) {
+  user_dict.Add({"三人", "さんにん"});
+  user_dict.Add({"山陰", "さんいん"});
+  EnableEventPrivacy(dispatcher);
+  const auto before = DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "さんにん", {"さんいん"}));
+  ASSERT_FALSE(before.candidates.empty());
+  EXPECT_NE(before.candidates.front().surface, "山陰");
+  const auto before_surfaces = SurfacesOf(before);
+  ASSERT_NE(std::find(before_surfaces.begin(), before_surfaces.end(), "三人"),
+            before_surfaces.end());
+
+  CommitAs(dispatcher, 2, "さんいん", "山陰");
+  const auto drawn = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "さんにん", {"さんいん"}));
+  ASSERT_FALSE(drawn.candidates.empty());
+  EXPECT_EQ(drawn.candidates.front().surface, "山陰");
+  const auto drawn_surfaces = SurfacesOf(drawn);
+  EXPECT_NE(std::find(drawn_surfaces.begin(), drawn_surfaces.end(), "三人"), drawn_surfaces.end());
+
+  CommitAs(dispatcher, 4, "さんにん", "三人");
+  const auto back = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "さんにん", {"さんいん"}));
+  ASSERT_FALSE(back.candidates.empty());
+  EXPECT_EQ(back.candidates.front().surface, "三人");
+}
+
+// DEV-1773: learning_allowed gates writes only (privacy-and-secure-input-spec
+// section 5.1.1), as for the reranker, so a window request from a context that
+// may not learn still reads what was learned. A secure request is not compared.
+TEST_F(DispatcherTest, TheLearnedReadingChoiceFollowsTheSecureFlagOnly) {
+  ASSERT_TRUE(engine.LoadDictionaryLayer(
+      azookey::learning::LayerId::Sudachi,
+      std::filesystem::path(AZOOKEY_DICT_FIXTURE) / "ambiguous" / "sudachi_lexicon.azdic", true));
+  EnableEventPrivacy(dispatcher);
+  CommitAs(dispatcher, 1, "げんいん", "原因");
+
+  // AmbiguousQuery leaves learning_allowed false.
+  const auto not_learning =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "げんにん", {"げんいん"}));
+  ASSERT_FALSE(not_learning.candidates.empty());
+  EXPECT_EQ(not_learning.candidates.front().surface, "原因");
+
+  const auto secure =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "げんにん", {"げんいん"}, false, true));
+  EXPECT_TRUE(secure.corrected_reading.empty());
+  for (const auto& candidate : secure.candidates) EXPECT_NE(candidate.surface, "原因");
+}
+
+// DEV-1773: with a model, learning decides before the model scores, both ways;
+// the model scores decide only when neither reading has a commit.
+TEST(AmbiguousReadingDispatchTest, LearningDecidesBeforeTheModelScores) {
+  ScopedTempDirectory temp_directory;
+  azookey::learning::LearningStore store(temp_directory.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), &store, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  const auto learn = [&](const std::string& reading, uint64_t last_updated, double weight = 1.0) {
+    azookey::learning::LearningRecord record;
+    record.weight = weight;
+    record.last_updated_epoch_sec = last_updated;
+    record.commit_count = 1;
+    record.last_event = azookey::learning::LearningEventType::Commit;
+    store.Set(reading, "model:" + reading, record);
+  };
+
+  // The model alone switches ないぶげんにん; a typed-reading commit keeps it.
+  learn("ないぶげんにん", now);
+  const auto kept =
+      DispatchAmbiguous(dispatcher, AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"}));
+  EXPECT_TRUE(kept.corrected_reading.empty());
+  EXPECT_EQ(kept.candidates.front().surface, "model:ないぶげんにん");
+
+  // The model alone keeps さんにん (within the margin); an other-reading commit
+  // switches it the way a model switch does.
+  learn("さんいん", now);
+  const auto switched = DispatchAmbiguous(dispatcher, AmbiguousQuery(2, "さんにん", {"さんいん"}));
+  EXPECT_EQ(switched.corrected_reading, "さんいん");
+  EXPECT_EQ(switched.candidates.front().surface, "model:さんいん");
+
+  // A heavier but older commit of the other reading loses to a newer one of the
+  // typed: 1.5 decays over two 30-day half-lives to 0.375, below 1.0. Without
+  // the decay it would win, so this does not pass on a tie.
+  learn("せんえん", now - 60ULL * 24 * 60 * 60, 1.5);
+  learn("せんねん", now);
+  const auto newer = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "せんねん", {"せんえん"}));
+  EXPECT_TRUE(newer.corrected_reading.empty());
+  EXPECT_EQ(newer.candidates.front().surface, "model:せんねん");
+}

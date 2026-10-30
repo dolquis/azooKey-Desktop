@@ -38,8 +38,8 @@ std::string SingleModelCatalogJson(std::string file_name = "zenzai-small-q4.gguf
   })";
 }
 
-// Pinned values from docs/sideload-packaging-spec.md section 1.6.2: zenz stays the default and
-// kanakanji-edge-33m Q8_0 is a selectable entry.
+// Pinned values: edge from docs/sideload-packaging-spec.md section 1.6.2, zenz from the pin in
+// .github/workflows/windows.yml. zenz stays the default and edge Q8_0 is a selectable entry.
 constexpr char kZenzSha256[] = "29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673";
 constexpr char kEdgeSha256[] = "924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146";
 

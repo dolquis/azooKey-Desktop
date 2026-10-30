@@ -6081,9 +6081,9 @@ TEST(AmbiguousReadingDispatchTest, LearningDecidesBeforeTheModelScores) {
   const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
                                              std::chrono::system_clock::now().time_since_epoch())
                                              .count());
-  const auto learn = [&](const std::string& reading, uint64_t last_updated) {
+  const auto learn = [&](const std::string& reading, uint64_t last_updated, double weight = 1.0) {
     azookey::learning::LearningRecord record;
-    record.weight = 1.0;
+    record.weight = weight;
     record.last_updated_epoch_sec = last_updated;
     record.commit_count = 1;
     record.last_event = azookey::learning::LearningEventType::Commit;
@@ -6104,8 +6104,10 @@ TEST(AmbiguousReadingDispatchTest, LearningDecidesBeforeTheModelScores) {
   EXPECT_EQ(switched.corrected_reading, "さんいん");
   EXPECT_EQ(switched.candidates.front().surface, "model:さんいん");
 
-  // An older commit of the other reading loses to a newer one of the typed.
-  learn("せんえん", now - 60ULL * 24 * 60 * 60);
+  // A heavier but older commit of the other reading loses to a newer one of the
+  // typed: 1.5 decays over two 30-day half-lives to 0.375, below 1.0. Without
+  // the decay it would win, so this does not pass on a tie.
+  learn("せんえん", now - 60ULL * 24 * 60 * 60, 1.5);
   learn("せんねん", now);
   const auto newer = DispatchAmbiguous(dispatcher, AmbiguousQuery(3, "せんねん", {"せんえん"}));
   EXPECT_TRUE(newer.corrected_reading.empty());

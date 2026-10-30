@@ -152,9 +152,8 @@ QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に
   `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。ロードは GGUF の読み込み時に形式を決め、
   ロードの要求が形式を宣言していればそれを、無ければ推定値を使う。製品のロードは
   `model.selectedPath` の GGUF を開き、catalog の entry を経由しないので、形式は推定で決まる。
-  使っている形式（宣言値または推定値）を診断へ出すフィールドは QueryDiagnostics
-  （`docs/dev-infrastructure-spec.md` §12.6）にまだ無く、DEV-1787 で追加する。それまでは
-  形式を外から確かめられない。
+  QueryDiagnostics（`docs/dev-infrastructure-spec.md` §12.6）は、使っている形式（宣言値または
+  推定値）を返さない。形式を返すフィールドは DEV-1787 が追加する。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
 - 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを

@@ -120,7 +120,8 @@ R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごと
   （絶対パス、control 文字、`..`、drive prefix は不可）を掛ける。
 - parser は v1 と v2 の両方を読む。v1 の `fileName` / `sha256` / `backendHint` は、v2 の
   `artifacts["llama.cpp"]` と同じ意味として扱う。v1 の parser は未知のキーを reject するので、
-  v1 のまま R2 のキーを足すと旧 Host が catalog を読めなくなる。このため version を上げる。
+  v1 のまま R2 のキーを足しても旧 Host は catalog を読めない。version を上げ、旧 Host には
+  未対応の `schemaVersion` として拒否させる（拒否の理由がエラーで分かる）。
 - 設定の `model.selectedPath` は R1 artifact（GGUF）のパスのまま使い、settings の schema は
   変えない。`selectedPath` から entry と R2 artifact を解決する規則と、R2 artifact を取得する
   条件は `docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」が持つ。
@@ -131,8 +132,6 @@ R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごと
     R2 の検証規則。Windows ML の ONNX Runtime session を直接使う方式を採ると、artifact は
     ORT GenAI のディレクトリでなく ONNX と `past_key_values` の構成になり、キー名と検証規則が
     変わる。
-  - `settings/model-catalog.schema.json` の v2 化、parser と resolver の実装は、DEV-1767 の判断の
-    後に起票する Issue で行う。
 
 ### 3.1.2 GGUF 取得基盤（DEV-439）
 

@@ -163,8 +163,9 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
   GGUF の `general.license` も apache-2.0）。語彙は zenz と同じ `ku-nlp/gpt2-small-japanese-char`
   由来で CC-BY-SA-4.0、追加の制御トークン 3 つは Apache-2.0、学習データは zenz と同じ
   `Miwa-Keita/zenz-v2.5-dataset`（CC-BY-SA-4.0 / ODC-BY）。zenz を CC-BY-SA-4.0 として保守側に
-  扱う理由のうち、語彙とデータの系譜は edge にも残るため、同じ扱いを前提にする。確定は
-  Human Gate（DEV-1721）が行う。再ホストせず上流 HF から取得する。
+  扱う理由のうち、語彙とデータの系譜は edge にも残る。DEV-1721 で、重みは Apache-2.0、語彙と
+  学習データには CC-BY-SA-4.0 の帰属表記を置くと確定した（`docs/sideload-packaging-spec.md`
+  §1.6.2）。再ホストせず上流 HF から取得する。
 - **Vulkan（R1 Vulkan）**: `ggml-vulkan` は llama.cpp（MIT）成果物。ローダ / ドライバは
   GPU ベンダ提供で同梱不要のため、固有の再配布義務は無い。
 

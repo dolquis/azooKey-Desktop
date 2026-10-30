@@ -685,6 +685,9 @@ SOFTWARE.
 
 > zenz GGUF モデル本体の配布可否・CUDA ランタイム再配布条項は
 > [`docs/sideload-packaging-spec.md`](docs/sideload-packaging-spec.md) §1.6.2 を正典とする。
+> 選べるモデル kanakanji-edge-33m（`yuuki14202028/kanakanji-edge-33m`）の GGUF も同節を
+> 正典とする（重みは Apache-2.0、語彙 `ku-nlp/gpt2-small-japanese-char` と学習データには
+> CC-BY-SA-4.0 の帰属表記を置き、上流 HF から取得して再ホストしない）。
 
 ## 配布物へ同梱する MSVC runtime
 

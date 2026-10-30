@@ -249,8 +249,8 @@ zenz 3 件、edge 0 件だった。Qwen3-Next / LFM2 MoE ベースの hourai2 / 
 #### 2.4.4 配布とライセンス
 
 配布形態は zenz と同じく、MSIX に同梱せず上流の Hugging Face から取得し、再ホストしない
-（`docs/sideload-packaging-spec.md` §1.6）。ライセンスの整理は `docs/zenzai-gpu-route.md`
-「配布ライセンス」に置き、確定は Human Gate（DEV-1721）が行う。
+（`docs/sideload-packaging-spec.md` §1.6）。revision、SHA-256、ライセンスの結論（DEV-1721）は
+同 §1.6.2 が持つ。
 
 ---
 

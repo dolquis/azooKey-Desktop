@@ -80,6 +80,60 @@ resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 `is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
 このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
 
+#### R2 再開時の catalog（DEV-1770）
+
+catalog v1 の entry は R1 の GGUF だけを持つ。R2（Windows ML）を再開するとき
+（`docs/copilot-pc-backend-spec.md` §4.3 項 2）は `schemaVersion` を 2 にし、同じモデルの
+R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごとに entry を分けると、R1 と R2 で
+同じモデルを使う前提（同 §4.3 項 2）と、学習・NLL 閾値のモデル単位の管理が崩れるため採らない。
+
+```json
+{
+  "schemaVersion": 2,
+  "defaultModelId": "kanakanji-edge-33m",
+  "models": [
+    {
+      "id": "kanakanji-edge-33m",
+      "displayName": "kanakanji-edge 33M",
+      "promptFormat": "kanakanji-edge-v1",
+      "artifacts": {
+        "llama.cpp": {"fileName": "<GGUF のファイル名>", "sha256": "<64 hex>"},
+        "onnxruntime-genai": {
+          "directoryName": "<ディレクトリ名>",
+          "files": [
+            {"path": "genai_config.json", "sha256": "<64 hex>", "sizeBytes": 0}
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+- `promptFormat` はモデル単位で、R1 と R2 に共通なので entry に置く。
+- `artifacts["llama.cpp"]` は必須とする（`docs/copilot-pc-backend-spec.md` §4.5 の終端の
+  R1 CPU を常に持たせるため）。キーと値の制約は v1 の `fileName` / `sha256` と同じ。
+- R2 artifact はディレクトリなので 1 つのハッシュにまとめず、構成ファイルごとに
+  `path`（ディレクトリからの相対パス）、`sha256`、`sizeBytes` を持つ。ファイル単位にすると
+  §3.1.2 の `HttpDownloader` の 1 ファイルごとの取得と検証をそのまま使える。ディレクトリは
+  `zenzai\<directoryName>\` に置き、`directoryName` と `path` には `fileName` と同じ制約
+  （絶対パス、control 文字、`..`、drive prefix は不可）を掛ける。
+- parser は v1 と v2 の両方を読む。v1 の `fileName` / `sha256` / `backendHint` は、v2 の
+  `artifacts["llama.cpp"]` と同じ意味として扱う。v1 の parser は未知のキーを reject するので、
+  v1 のまま R2 のキーを足すと旧 Host が catalog を読めなくなる。このため version を上げる。
+- 設定の `model.selectedPath` は R1 artifact（GGUF）のパスのまま使い、settings の schema は
+  変えない。`selectedPath` から entry と R2 artifact を解決する規則と、R2 artifact を取得する
+  条件は `docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」が持つ。
+- 未決（DEV-1767 / DEV-1768 の結果で決める）:
+  - DEV-1767: `kanakanji-edge-33m` を既定モデルに採るか。採らなければ R2 を再開せず、v2 の
+    catalog も R2 artifact を持つ entry も置かない。
+  - DEV-1768: R2 artifact のキー名（上の `onnxruntime-genai`）、構成ファイルの一覧、§3.3 の
+    R2 の検証規則。Windows ML の ONNX Runtime session を直接使う方式を採ると、artifact は
+    ORT GenAI のディレクトリでなく ONNX と `past_key_values` の構成になり、キー名と検証規則が
+    変わる。
+  - `settings/model-catalog.schema.json` の v2 化、parser と resolver の実装は、DEV-1767 の判断の
+    後に起票する Issue で行う。
+
 ### 3.1.2 GGUF 取得基盤（DEV-439）
 
 DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、

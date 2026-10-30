@@ -3228,8 +3228,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
         // A refused commit drops the next composition; the key waits for the
-        // retry and starts it then (DEV-1750).
-        if (continues_after_commit && committing_) HoldRetryWaitingKey(context, wParam, lParam);
+        // retry and starts it then (DEV-1750). Ctrl+Shift+U's "U+" is dropped
+        // the same way; replayed from Idle with its own Ctrl and Shift it starts
+        // Unicode input (DEV-1771).
+        if ((continues_after_commit || event.action == UserAction::StartUnicodeInput) &&
+            committing_)
+          HoldRetryWaitingKey(context, wParam, lParam);
         if (continues_after_commit && !committing_ &&
             input_state_.kind() != core::InputStateKind::Idle &&
             input_state_.kind() != core::InputStateKind::Selecting)

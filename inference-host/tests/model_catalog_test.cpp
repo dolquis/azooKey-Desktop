@@ -52,6 +52,39 @@ TEST(ModelCatalogTest, ParsesCatalogAndFillsDefaults) {
   EXPECT_EQ(parsed.catalog.models[0].file_name, "zenzai-small-q4.gguf");
   EXPECT_EQ(parsed.catalog.models[0].sha256, kSha256);
   EXPECT_EQ(parsed.catalog.models[0].backend_hint, "llama.cpp");
+  EXPECT_EQ(parsed.catalog.models[0].prompt_format, azookey::host::ZenzaiPromptFormat::ZenzV3);
+}
+
+TEST(ModelCatalogTest, ParsesPromptFormatAndRejectsUnknownValues) {
+  const auto catalog_with = [](const std::string& prompt_format_json) {
+    return std::string(R"({
+    "schemaVersion": 1,
+    "models": [
+      {
+        "id": "edge",
+        "fileName": "edge.gguf",
+        "sha256": ")") +
+           kSha256 + R"(",
+        "promptFormat": )" +
+           prompt_format_json + R"(
+      }
+    ]
+  })";
+  };
+
+  const auto edge = azookey::host::ParseModelCatalogJson(catalog_with(R"("kanakanji-edge-v1")"));
+  ASSERT_TRUE(edge.ok) << edge.error.value_or("");
+  EXPECT_EQ(edge.catalog.models[0].prompt_format,
+            azookey::host::ZenzaiPromptFormat::KanakanjiEdgeV1);
+
+  const auto zenz = azookey::host::ParseModelCatalogJson(catalog_with(R"("zenz-v3")"));
+  ASSERT_TRUE(zenz.ok) << zenz.error.value_or("");
+  EXPECT_EQ(zenz.catalog.models[0].prompt_format, azookey::host::ZenzaiPromptFormat::ZenzV3);
+
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(catalog_with(R"("zenz-v4")")).ok);
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(catalog_with(R"("")")).ok);
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(catalog_with(R"("ZENZ-V3")")).ok);
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(catalog_with("1")).ok);
 }
 
 TEST(ModelCatalogTest, UsesExplicitDefaultModelId) {

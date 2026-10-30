@@ -1375,6 +1375,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   runtime_options.n_gpu_layers = runtime_options.use_vulkan ? options.n_gpu_layers.value_or(-1) : 0;
   runtime_options.n_threads = next_config.inference_threads;
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
+  runtime_options.prompt_format = options.prompt_format;
   const auto load = [&]() {
     try {
       if (options.before_load_for_tests) {
@@ -2256,6 +2257,10 @@ AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& requ
     std::lock_guard lock(state_mutex_);
     // The dictionary fallback is not a local AI backend.
     if (!model_loaded_ || request.task == AiTask::Lint) return {false, {}, AiErrorClass::Disabled};
+    // Every local task sends an instruction profile, which a format without [PROF] cannot carry.
+    const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(model_converter_.get());
+    if (zenzai && !ZenzaiPromptFormatUsesInstructionProfile(zenzai->info().prompt_format))
+      return {false, {}, AiErrorClass::Disabled};
     converter = active_converter_;
   }
   core::ConversionContext context;

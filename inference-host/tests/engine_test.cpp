@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -1760,6 +1762,13 @@ TEST(InferenceEngineTest, RealModelLoadsThroughTheMapping) {
   EXPECT_TRUE(loaded.mmap.used_mmap);
   EXPECT_FALSE(loaded.mmap.fallback.has_value());
 }
+
+TEST(InferenceEngineTest, RealZenzModelInfersZenzV3PromptFormat) {
+  const auto loaded = azookey::host::LoadZenzaiGgufModel(AZOOKEY_AI_TEST_MODEL,
+                                                         azookey::host::ZenzaiRuntimeOptions{});
+  ASSERT_TRUE(loaded.ok) << loaded.error;
+  EXPECT_EQ(loaded.info.prompt_format, azookey::host::ZenzaiPromptFormat::ZenzV3);
+}
 #endif
 #endif
 
@@ -1852,6 +1861,161 @@ TEST(InferenceEngineTest, BuildsNoKvOverrideWhenEosIsDeclaredCorrectly) {
   metadata.vocabulary = {"[PAD]", "unused", "<s>", "unused-2", "</s>"};
 
   EXPECT_TRUE(azookey::host::BuildZenzaiKvOverrides(metadata).empty());
+}
+
+namespace {
+// GGUF token types (llama.h llama_token_type).
+constexpr int32_t kNormalTokenType = 1;
+constexpr int32_t kControlTokenType = 3;
+constexpr int32_t kUserDefinedTokenType = 4;
+constexpr char kCtxMarker[] = "\xEE\xB8\x82";   // U+EE02
+constexpr char kInMarker[] = "\xEE\xB8\x80";    // U+EE00
+constexpr char kOutMarker[] = "\xEE\xB8\x81";   // U+EE01
+constexpr char kProfMarker[] = "\xEE\xB8\x83";  // U+EE03
+
+// The kanakanji-edge-33m layout: ordinary tokens, then U+EE02 / U+EE00 / U+EE01 as CONTROL.
+azookey::host::ZenzaiTokenizerMetadata EdgeLikeTokenizerMetadata() {
+  azookey::host::ZenzaiTokenizerMetadata metadata;
+  metadata.vocabulary = {"<s>", "</s>", "ア", "日本", kCtxMarker, kInMarker, kOutMarker};
+  metadata.token_types = {kControlTokenType, kControlTokenType, kNormalTokenType, kNormalTokenType,
+                          kControlTokenType, kControlTokenType, kControlTokenType};
+  return metadata;
+}
+}  // namespace
+
+TEST(InferenceEngineTest, InfersPromptFormatFromControlTokens) {
+  using azookey::host::InferZenzaiPromptFormat;
+  using azookey::host::ZenzaiPromptFormat;
+
+  EXPECT_EQ(InferZenzaiPromptFormat(EdgeLikeTokenizerMetadata()),
+            ZenzaiPromptFormat::KanakanjiEdgeV1);
+
+  // zenz: the markers have no tokens of their own and go through byte-level BPE.
+  azookey::host::ZenzaiTokenizerMetadata zenz;
+  zenz.vocabulary = {"<s>", "</s>", "ア", "日本"};
+  zenz.token_types = {kControlTokenType, kControlTokenType, kNormalTokenType, kNormalTokenType};
+  EXPECT_EQ(InferZenzaiPromptFormat(zenz), ZenzaiPromptFormat::ZenzV3);
+  EXPECT_EQ(InferZenzaiPromptFormat({}), ZenzaiPromptFormat::ZenzV3);
+
+  // A vocabulary that also knows [PROF] was trained with instruction profiles.
+  auto with_profile = EdgeLikeTokenizerMetadata();
+  with_profile.vocabulary.push_back(kProfMarker);
+  with_profile.token_types.push_back(kControlTokenType);
+  EXPECT_EQ(InferZenzaiPromptFormat(with_profile), ZenzaiPromptFormat::ZenzV3);
+
+  // Every marker must be a CONTROL token; a user-defined one is tokenized as text.
+  auto user_defined = EdgeLikeTokenizerMetadata();
+  user_defined.token_types[5] = kUserDefinedTokenType;
+  EXPECT_EQ(InferZenzaiPromptFormat(user_defined), ZenzaiPromptFormat::ZenzV3);
+
+  auto missing_marker = EdgeLikeTokenizerMetadata();
+  missing_marker.vocabulary[6] = "語";
+  EXPECT_EQ(InferZenzaiPromptFormat(missing_marker), ZenzaiPromptFormat::ZenzV3);
+
+  auto without_types = EdgeLikeTokenizerMetadata();
+  without_types.token_types.clear();
+  EXPECT_EQ(InferZenzaiPromptFormat(without_types), ZenzaiPromptFormat::ZenzV3);
+}
+
+TEST(InferenceEngineTest, BuildsPromptInEachFormat) {
+  using azookey::host::BuildZenzaiPrompt;
+  using azookey::host::ZenzaiPromptFormat;
+  const auto in_out = std::string(kInMarker) + "ニホンゴ" + kOutMarker;
+
+  azookey::core::ConversionContext no_context;
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", no_context, ZenzaiPromptFormat::ZenzV3), in_out);
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", no_context, ZenzaiPromptFormat::KanakanjiEdgeV1),
+            std::string(kCtxMarker) + in_out);
+
+  azookey::core::ConversionContext with_context;
+  with_context.preceding_text = "私は";
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", with_context, ZenzaiPromptFormat::ZenzV3),
+            std::string(kCtxMarker) + "私は" + in_out);
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", with_context, ZenzaiPromptFormat::KanakanjiEdgeV1),
+            std::string(kCtxMarker) + "私は" + in_out);
+
+  // Only zenz-v3 carries the instruction profile.
+  azookey::core::ConversionContext with_profile = with_context;
+  with_profile.instruction_profile = "整える";
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", with_profile, ZenzaiPromptFormat::ZenzV3),
+            std::string(kProfMarker) + "整える" + kCtxMarker + "私は" + in_out);
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", with_profile, ZenzaiPromptFormat::KanakanjiEdgeV1),
+            std::string(kCtxMarker) + "私は" + in_out);
+}
+
+TEST(InferenceEngineTest, BeamTokenChoicesSkipExcludedControlTokens) {
+  using azookey::host::SelectZenzaiTokenChoices;
+  // Token 1 has the highest logit but is a control token that does not end generation.
+  const std::vector<float> logits{1.0f, 5.0f, 3.0f, 4.0f, 2.0f};
+  const std::vector<uint8_t> excluded{0, 1, 0, 0, 0};
+
+  const auto choices = SelectZenzaiTokenChoices(logits, excluded, 2);
+  ASSERT_EQ(choices.size(), 2u);
+  EXPECT_EQ(choices[0].token, 3);
+  EXPECT_EQ(choices[1].token, 2);
+  // The excluded token still counts in the softmax denominator.
+  double denom = 0.0;
+  for (const auto logit : logits) denom += std::exp(static_cast<double>(logit) - 5.0);
+  const double log_denom = 5.0 + std::log(denom);
+  EXPECT_DOUBLE_EQ(choices[0].logprob, 4.0 - log_denom);
+  EXPECT_DOUBLE_EQ(choices[1].logprob, 3.0 - log_denom);
+
+  // Without exclusions the order is the plain top-k.
+  const auto unfiltered = SelectZenzaiTokenChoices(logits, {}, 3);
+  ASSERT_EQ(unfiltered.size(), 3u);
+  EXPECT_EQ(unfiltered[0].token, 1);
+  EXPECT_EQ(unfiltered[1].token, 3);
+  EXPECT_EQ(unfiltered[2].token, 2);
+  EXPECT_DOUBLE_EQ(unfiltered[0].logprob, 5.0 - log_denom);
+
+  EXPECT_TRUE(SelectZenzaiTokenChoices(logits, excluded, 0).empty());
+  EXPECT_TRUE(SelectZenzaiTokenChoices({}, {}, 2).empty());
+}
+
+TEST(InferenceEngineTest, LocalAiIsDisabledForPromptFormatWithoutProfile) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_prompt_format_ai.tsv";
+  RemoveProtectedStoreFile(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
+  const std::string model_path = TempPath("azookey_prompt_format_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  const auto transform = [&](std::optional<azookey::host::ZenzaiPromptFormat> format) {
+    auto engine = MakeEngine(store);
+    azookey::host::ModelLoadOptions options;
+    options.path = model_path;
+    options.backend = azookey::host::BackendKind::Cpu;
+    options.prompt_format = format;
+    EnableMockZenzaiCandidatesForTests(options);
+    EXPECT_TRUE(engine->LoadModelWithResult(options).ok);
+    EXPECT_TRUE(engine->model_loaded());
+    azookey::host::AiTransformRequest request;
+    request.task = azookey::host::AiTask::Cleanup;
+    request.text = "にほんご";
+    request.raw_romaji = "nihongo";
+    return engine->TransformLocal(request, nullptr,
+                                  std::chrono::steady_clock::now() + std::chrono::seconds(30));
+  };
+
+  const auto edge = transform(azookey::host::ZenzaiPromptFormat::KanakanjiEdgeV1);
+  EXPECT_FALSE(edge.ok);
+  EXPECT_EQ(edge.error_class, azookey::host::AiErrorClass::Disabled);
+
+  // zenz-v3, declared or inferred, still runs the local task.
+  for (const auto format : {std::optional<azookey::host::ZenzaiPromptFormat>{},
+                            std::optional(azookey::host::ZenzaiPromptFormat::ZenzV3)}) {
+    const auto zenz = transform(format);
+    EXPECT_TRUE(zenz.ok) << static_cast<int>(zenz.error_class);
+    EXPECT_EQ(zenz.result, "日本語");
+  }
+
+  std::remove(model_path.c_str());
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {

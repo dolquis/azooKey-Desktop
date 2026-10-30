@@ -73,6 +73,7 @@ DEV-438 では、ダウンロード・検証・プリフェッチを行わず、
 | `models[].fileName` | string | 必須 | `zenzai\` 配下の GGUF ファイル名。絶対パス、サブディレクトリ、control 文字、`..`、drive prefix は不可 |
 | `models[].sha256` | string | 必須 | 期待 SHA-256（64 hex）。DEV-438 では保持のみで、検証は後続 B が行う |
 | `models[].backendHint` | enum | `"llama.cpp"` | 現行 v1 は GGUF / llama.cpp のみ |
+| `models[].promptFormat` | enum | `"zenz-v3"` | プロンプト形式。`"zenz-v3"` / `"kanakanji-edge-v1"`。未知の値は reject。値ごとの振る舞いは `docs/zenzai-inference-spec.md` §2.4.2 |
 
 resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 （`modelsDir\zenzai`）と `fileName` を結合してローカルパスを返す。存在確認は

@@ -12254,6 +12254,90 @@ TEST(TsfTipCommitOnTypeTest, CommitEndedByFocusLossDropsTheWaitingKeys) {
   EXPECT_EQ(h.context.document->text, L"転機あ");
 }
 
+// DEV-1771: Ctrl+Shift+U over a reading or the window commits first and then
+// shows "U+". A refused commit drops the "U+", so the key waits for the retry
+// like the keys above and starts Unicode input after it, ahead of the keys
+// typed after it.
+TEST(TsfTipCommitOnTypeTest, CtrlShiftUWhileTheCommitIsRefusedStartsUnicodeInputAfterTheRetry) {
+  using azookey::core::InputStateKind;
+  for (const bool from_window : {false, true}) {
+    SCOPED_TRACE(from_window ? "candidate window" : "reading");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_punctuation_conversion_for_test(false);
+    std::wstring committed;
+    if (from_window) {
+      SelectTenkiSecond(h, /*from_cache=*/false);
+      ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting);
+      committed = L"転機";
+    } else {
+      for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+        ASSERT_TRUE(h.Press(key));
+      ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+      committed = L"かな";
+    }
+    ASSERT_EQ(h.context.document->text, committed);
+    h.context.reject_write = true;
+    PressCtrlShift(h, 'U');
+    ASSERT_TRUE(h.service.committing_) << "the refused commit must still wait for its retry";
+    EXPECT_NE(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+    EXPECT_EQ(h.context.document->text, committed);
+    // Typed while the commit still waits: it follows the "U+".
+    h.context.reject_write = false;
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, committed + L"U+A");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    if (from_window) ExpectTenkiSecondCommittedOnce(h);
+  }
+}
+
+// A key typed while the retry is still refused waits behind the Ctrl+Shift+U:
+// the "U+" comes first, then the waiting keys in the order they were typed.
+TEST(TsfTipCommitOnTypeTest, CtrlShiftUKeepsItsPlaceAheadOfKeysThatWaitedForTheRetry) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_punctuation_conversion_for_test(false);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  h.context.reject_write = true;
+  PressCtrlShift(h, 'U');
+  ASSERT_TRUE(h.service.committing_);
+  // The retry key is refused as well and waits behind the U.
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.committing_) << "the retry must still be refused";
+  EXPECT_EQ(h.context.document->text, L"かな");
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('B'));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"かなU+AB");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+}
+
+// A commit that never succeeds drops the key with the rest: no half-started
+// Unicode input is left, and the next key starts afresh.
+TEST(TsfTipCommitOnTypeTest, CtrlShiftUDroppedWithTheCommitLeavesNoUnicodeInput) {
+  using azookey::core::InputStateKind;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_punctuation_conversion_for_test(false);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'A'}})
+    ASSERT_TRUE(h.Press(key));
+  h.context.reject_write = true;
+  PressCtrlShift(h, 'U');
+  ASSERT_TRUE(h.service.committing_);
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text.find(L"U+"), std::wstring::npos);
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text.find(L"U+"), std::wstring::npos);
+  EXPECT_NE(h.service.input_state_for_test().kind(), InputStateKind::UnicodeInput);
+}
+
 // DEV-1743: Hankaku/Zenkaku closes like VK_IME_OFF, committing what is shown
 // (the live conversion, the highlighted candidate) and observing it as Enter does.
 TEST(TsfTipCommitOnCloseTest, HankakuZenkakuCommitsTheShownTextBeforeClosing) {

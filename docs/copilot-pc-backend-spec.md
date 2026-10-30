@@ -346,6 +346,8 @@ python -m onnxruntime_genai.models.builder \
    zenz-v3 は GPT-2 構造で builder の対象外（§4.2.2）なので、zenz-v3 を既定とする間は R2 を
    有効にしない。`kanakanji-edge-33m` は R2 artifact を作れる（§4.2.3）。このモデルを
    `docs/zenzai-inference-spec.md` §2.4 の判断基準で既定モデルに採ったときに、R2 を再開する。
+   2026-10-30 の製品条件での評価（同 §2.4.3、DEV-1767）では edge が品質の基準 1・2 を満たさず、
+   既定は zenz-v3 のままとした。したがって R2 の再開条件は満たされていない。
    R1 と R2 で別のモデルを使うと、同じ入力でも機器によって候補の質が変わり、学習と
    NLL rerank の閾値もモデルごとに二重になるため、モデルが異なる構成は採らない。
 3. 再開条件を満たす前は Snapdragon X Elite / Intel Core Ultra の NPU bench を実行しない。

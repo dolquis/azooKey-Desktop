@@ -178,6 +178,47 @@ SHA-256 を照合）と edge Q8_0（revision と SHA-256 を固定）を比べ�
    予算による打ち切りの率が zenz 以下である。
 4. 配布サイズが 50MB 未満である（`docs/copilot-pc-backend-spec.md` §4.2 のゲート）。
 
+**2026-10-30 の評価と判断（DEV-1767）**: 既定は zenz-v3.2-small のままとする。edge は
+`promptFormat=kanakanji-edge-v1` でも基準 1・2 を満たさなかった。edge は model catalog から
+選べるモデルとして加える（§2.4 冒頭）。
+
+- 条件: Intel Core i7-12700KF、CPU（threads 8、§8.1.1）、llama.cpp の pin、Release ビルド、
+  `azookey_bench --eval`（`InferenceEngine::QueryCandidates`、beam 4、§8.2 の 600ms deadline、
+  候補上限 5）、NLL rerank off（製品の既定）。計測中にビルドのプロセスが無いことを毎分確かめた。
+- モデル: zenz-v3.2-small Q5_K_M（SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）、
+  edge Q8_0（revision `da588df2db17e5ab69316986823806ec5f911450`、35,806,592 バイト、SHA-256
+  `924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146`）。
+- 入力: `bench/data/kana_kanji_eval.jsonl`（200 件、文脈あり 100 / なし 100）と
+  `bench/data/model_comparison_supplement_eval.jsonl`（§4.2 の 20 入力と、数字・記号を含む読み 16 件）。
+  品質は 1 回、速度は 20 回の反復で採った。
+- edge の実 GGUF では、語彙からの推定が `kanakanji-edge-v1` になり、pre-tokenizer の上書きと EOS
+  補正はどちらも掛からず、`llama_vocab_get_add_bos` は false だった（`にほんご` の prompt は
+  `6000,6001,444,677,259,796,6002`）。
+
+| 指標 | zenz-v3.2-small | edge（`kanakanji-edge-v1`） |
+|---|---|---|
+| Acc@1（`kana_kanji_eval`） | 0.875 | 0.830 |
+| Acc@1 文脈あり / なし | 0.85 / 0.90 | 0.80 / 0.86 |
+| 片方だけが正解した問題 | 14 件 | 5 件（McNemar 両側 p=0.064、片側 p=0.032） |
+| 大崩れ（CER > 0.3） | 15 件 | 22 件 |
+| 補足 36 件の Acc@1 / 大崩れ | 0.972 / 0 件 | 0.917 / 2 件 |
+| EOS に届かずに終わった候補 | 0 | 0 |
+| 読み ≤ 8 文字 p50 / p95（全反復） | 10.6 / 47.3ms | 4.8 / 13.3ms |
+| 読み ≤ 8 文字 p50 / p95（各入力の初回） | 24.4 / 52.2ms | 11.3 / 18.9ms |
+| 読み > 8 文字 p50 / p95 | 39.7 / 66.0ms | 21.4 / 34.6ms |
+| §8.2 による打ち切りの率（両帯） | 0% | 0% |
+| 配布サイズ | 73.9MB | 35.8MB |
+
+- 基準 1（Acc@1 差 −0.045、片側検定で有意に劣る）と基準 2 を満たさず、基準 3・4 は満たした。
+- `[CTX]` を省いた zenz-v3 形式で edge を動かした下限では、Acc@1 0.835、大崩れ 20 件だった。
+  文脈なしの入力に `[CTX]` を置いても Acc@1 と大崩れは改善しなかった。
+- edge だけが大崩れした問題は、文脈付きの同音異義語（交信→更新、芳香→方向、陰→影など）、
+  平仮名のまま残す読み（うすべにいろのくもがたなびく、30ぷんまつ）、区切りの誤り
+  （境界値→強化位置、3じにあう→3耳に合う）だった。
+- 速度は同じ入力を続けて流すため prompt の KV 再利用が効く。各入力の初回の値を併記した。
+- NLL rerank on は、bench がモデル使用時の辞書候補（neologd 層）を読まないため候補が変わらず、
+  判断には使っていない。
+
 参考値として、2026-10-25 の sandbox 調査（Linux、CPU 4 コア、llama.cpp `d327bf1f`、貪欲
 デコード、製品の beam と読み制約は使わない）の結果を置く。速度は sandbox での相対値で、
 §8 の予算とは比べられない。

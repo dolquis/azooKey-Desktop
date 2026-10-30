@@ -13549,3 +13549,19 @@ TEST(TsfTipLiveCarryTest, SwitchingLiveConversionOffStillCommitsTheShownText) {
   ASSERT_TRUE(h.Press(VK_RETURN));
   EXPECT_EQ(h.context.document->text, L"蚊き");
 }
+
+TEST(TsfTipLiveCarryTest, BackspaceToTheCarriedReadingCommitsItsSurfaceWithoutObservingIt) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}

@@ -456,7 +456,7 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 
 統合は **converter ではなく engine 側**で行う。
 変換窓の要求に `alt_readings` があるとき、Dispatcher は `QueryAmbiguousCandidatesEx` で既定の読みと
-もう一方の読みをそれぞれ以下の手順で変換し、モデルスコアで選ぶか候補を足す
+もう一方の読みをそれぞれ以下の手順で変換し、学習ストアの確定かモデルスコアで選ぶか候補を足す
 （`docs/legacy-parity-spec.md` §5.4）。
 `inference-host/src/InferenceEngine.cpp` の `QueryCandidatesExImpl` は次の順で処理する。
 

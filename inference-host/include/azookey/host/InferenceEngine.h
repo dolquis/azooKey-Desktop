@@ -428,6 +428,13 @@ class InferenceEngine {
   // readings of the same romaji, from the TIP. Only the first usable alternative
   // (non-empty, not longer than kana) is converted too, and only when M35 left
   // kana as typed and its conversion did not run out of time.
+  // - DEV-1773: when the learning store has a commit of a shown candidate under
+  //   either reading, the reading with the higher best decayed weight
+  //   (LearningStore::Score) wins and a tie keeps kana. Winning, the alternative
+  //   switches as below with comparable model scores; otherwise its learned
+  //   candidates move to the front of kana's, keeping their own reading, with
+  //   no corrected_reading. The model scores are compared only when neither
+  //   reading has such a commit.
   // - With model candidates for both readings, the alternative's result comes
   //   back, with corrected_reading set to it, when its best model score beats
   //   kana's by more than kAmbiguousReadingModelMargin, followed by kana's first

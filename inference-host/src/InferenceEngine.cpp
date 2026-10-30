@@ -1749,16 +1749,64 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryAmbiguousCandidatesEx(
   };
   const auto typed_score = best_model_score(typed);
   const auto other_score = best_model_score(other);
-  // A conversion cut short by its deadline scores a partial generation.
-  if (typed_score && other_score && !other.model_deadline_exceeded &&
-      !typed.model_deadline_exceeded &&
-      *other_score > *typed_score + kAmbiguousReadingModelMargin) {
+  // Returns the other reading's whole result; only with model scores for both
+  // readings, neither cut short by its deadline (a partial generation).
+  const auto model_switch = [&]() {
     if (other.corrected_reading.empty()) other.corrected_reading = *alternative;
     // A wrong switch (sennenn to 遷延 over 千年) keeps the typed reading's best
     // words reachable; with a model they are mostly model candidates.
     append_other(other, typed, false, kAmbiguousReadingTypedKept);
-    return other;
+    return std::move(other);
+  };
+  const bool models_comparable = typed_score && other_score && !other.model_deadline_exceeded &&
+                                 !typed.model_deadline_exceeded;
+  // DEV-1773: what the user committed decides first. Each reading's evidence is
+  // the best decayed learning weight among its shown candidates, under that
+  // reading, as the reranker reads the store. A secure request never gets here
+  // (the Dispatcher converts it as typed); learning_allowed only gates writes
+  // (privacy-and-secure-input-spec section 5.1.1), as for the reranker.
+  double typed_learned = 0.0;
+  double other_learned = 0.0;
+  std::vector<bool> other_is_learned(other.candidates.size(), false);
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (store_) {
+      for (const auto& candidate : typed.candidates)
+        typed_learned =
+            (std::max)(typed_learned, store_->Score(kana, candidate.surface, now_epoch_sec));
+      for (size_t i = 0; i < other.candidates.size(); ++i) {
+        const double weight =
+            store_->Score(*alternative, other.candidates[i].surface, now_epoch_sec);
+        other_is_learned[i] = weight > 0.0;
+        other_learned = (std::max)(other_learned, weight);
+      }
+    }
   }
+  if (typed_learned > 0.0 || other_learned > 0.0) {
+    // A tie keeps the typed reading (sannin stays 三人).
+    if (other_learned > typed_learned) {
+      if (models_comparable) return model_switch();
+      // Without a usable model the typed reading's words all stay: only the
+      // other reading's learned words move to the front, with their own reading.
+      std::vector<core::Candidate> learned_front;
+      for (size_t i = 0; i < other.candidates.size(); ++i)
+        if (other_is_learned[i]) learned_front.push_back(other.candidates[i]);
+      const auto is_learned_surface = [&](const core::Candidate& c) {
+        return std::any_of(learned_front.begin(), learned_front.end(),
+                           [&](const core::Candidate& l) { return l.surface == c.surface; });
+      };
+      for (auto* list : {&typed.candidates, &other.candidates})
+        list->erase(std::remove_if(list->begin(), list->end(), is_learned_surface), list->end());
+      typed.candidates.insert(typed.candidates.begin(),
+                              std::make_move_iterator(learned_front.begin()),
+                              std::make_move_iterator(learned_front.end()));
+    }
+    if (!typed_score || !other_score)
+      append_other(typed, other, true, (std::numeric_limits<size_t>::max)());
+    return typed;
+  }
+  if (models_comparable && *other_score > *typed_score + kAmbiguousReadingModelMargin)
+    return model_switch();
   // Without a model the other reading's candidates past its dictionary words are
   // the fallback's identity and long-vowel guesses.
   if (!typed_score || !other_score)

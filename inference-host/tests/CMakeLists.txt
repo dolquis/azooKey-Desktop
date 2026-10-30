@@ -13,7 +13,7 @@ if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
   # DEV-1648: the pinned-model job runs only this label.
   add_test(NAME host_engine_real_model_live_conversion
            COMMAND host_engine_tests
-                   --gtest_filter=InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence)
+                   --gtest_filter=InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence:InferenceEngineTest.RealZenzModelInfersZenzV3PromptFormat)
   set_tests_properties(host_engine_real_model_live_conversion PROPERTIES
     LABELS "zenzai-real-model" RUN_SERIAL TRUE TIMEOUT 120)
 endif()

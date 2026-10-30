@@ -418,6 +418,14 @@ int main(int argc, char** argv) {
       std::cerr << error << std::endl;
       return 2;
     }
+    if (decode_stats.is_open()) {
+      decode_stats.flush();
+      decode_stats.close();
+      if (!decode_stats) {
+        std::cerr << "cannot write decode stats output" << std::endl;
+        return 2;
+      }
+    }
     return 0;
   }
 

@@ -185,15 +185,24 @@ SHA-256 を照合）と edge Q8_0（revision と SHA-256 を固定）を比べ�
 `promptFormat=kanakanji-edge-v1` でも基準 1・2 を満たさなかった。edge は model catalog から
 選べるモデルとして加える（§2.4 冒頭）。
 
-- 条件: Intel Core i7-12700KF、CPU（threads 8、§8.1.1）、llama.cpp の pin、Release ビルド、
-  `azookey_bench --eval`（`InferenceEngine::QueryCandidates`、beam 4、§8.2 の 600ms deadline、
-  候補上限 5）、NLL rerank off（製品の既定）。計測中にビルドのプロセスが無いことを毎分確かめた。
-- モデル: zenz-v3.2-small Q5_K_M（SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）、
-  edge Q8_0（revision `da588df2db17e5ab69316986823806ec5f911450`、35,806,592 バイト、SHA-256
+- 条件: Intel Core i7-12700KF、CPU（threads 8、§8.1.1）、llama.cpp は `AZOOKEY_LLAMA_CPP_GIT_TAG`
+  の `7fe450e19305b828c199d602c23a8337aaa1f03b`（pin の所在は `docs/dev-infrastructure-spec.md` §3.4）、
+  Release ビルド、`azookey_bench --eval`（`InferenceEngine::QueryCandidates`、beam 4、§8.2 の
+  600ms deadline、候補上限 5）、NLL rerank off（製品の既定）。他のビルドを止めた状態で計測した。
+- 辞書層（neologd pack）を読まない構成で比べた。Acc@1 と大崩れはモデルの候補だけの値である。
+- モデル: zenz-v3.2-small Q5_K_M（HF revision `c67e03e07d215c869f591b274c1631170d3e11fe`、SHA-256
+  `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）、edge Q8_0（revision
+  `da588df2db17e5ab69316986823806ec5f911450`、35,806,592 バイト、SHA-256
   `924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146`）。
 - 入力: `bench/data/kana_kanji_eval.jsonl`（200 件、文脈あり 100 / なし 100）と
   `bench/data/model_comparison_supplement_eval.jsonl`（§4.2 の 20 入力と、数字・記号を含む読み 16 件）。
-  品質は 1 回、速度は 20 回の反復で採った。
+- 実行: データセットとモデルごとに `azookey_bench --eval <jsonl> --model <gguf> --nll off
+  --iterations <n> --per-case <jsonl> --decode-stats <jsonl>` を流した。品質は `--iterations 1`、
+  速度は `--iterations 20` である。
+- 読み帯: 速度の帯は `kana_kanji_eval` の 200 件だけから採り（≤ 8 文字 118 件、> 8 文字 82 件）、
+  補足 36 件は品質だけに使った。文字数は読み（`input`）の Unicode コードポイント数で、数字と
+  記号も 1 文字と数える。`--decode-stats` の行を call 連番の順に読み、同じ（読み、左文脈）の
+  最初の行を「各入力の初回」、すべての行を「全反復」とした。
 - edge の実 GGUF では、語彙からの推定が `kanakanji-edge-v1` になり、pre-tokenizer の上書きと EOS
   補正はどちらも掛からず、`llama_vocab_get_add_bos` は false だった（`にほんご` の prompt は
   `6000,6001,444,677,259,796,6002`）。
@@ -212,7 +221,8 @@ SHA-256 を照合）と edge Q8_0（revision と SHA-256 を固定）を比べ�
 | §8.2 による打ち切りの率（両帯） | 0% | 0% |
 | 配布サイズ | 73.9MB | 35.8MB |
 
-- 基準 1（Acc@1 差 −0.045、片側検定で有意に劣る）と基準 2 を満たさず、基準 3・4 は満たした。
+- Acc@1 差 −0.045 が許容幅 −0.02 を超えるので、それだけで基準 1 を満たさない。McNemar は片側 p=0.032、両側
+  p=0.064 である。基準 2 も満たさず、基準 3・4 は満たした。
 - `[CTX]` を省いた zenz-v3 形式で edge を動かした下限では、Acc@1 0.835、大崩れ 20 件だった。
   文脈なしの入力に `[CTX]` を置いても Acc@1 と大崩れは改善しなかった。
 - edge だけが大崩れした問題は、文脈付きの同音異義語（交信→更新、芳香→方向、陰→影など）、

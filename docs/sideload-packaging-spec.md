@@ -436,6 +436,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
 | zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 の結論＝暫定 CC-BY-SA 保守・上流 HF から取得。§1.6.2） |
+| kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（上流 HF の固定した revision から取得し、再ホストしない。ピンは §1.6.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
@@ -637,6 +638,21 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 | 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
 | 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
 | 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
+
+##### モデル（kanakanji-edge-33m GGUF、DEV-1721）
+
+選べるモデルとして catalog に載せる edge の扱いを、人間 lead の判断（DEV-1721）で次のとおり
+固定する。
+
+| 項目 | 内容 |
+|---|---|
+| ピン対象 | `yuuki14202028/kanakanji-edge-33m` の revision `da588df2db17e5ab69316986823806ec5f911450`、`kanakanji-edge-33m-Q8_0.gguf`（35,806,592 バイト、SHA-256 `924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146`）。Q5_K_M 以下は精度が落ちるので使わない |
+| 一次情報 | 同じ revision のモデルカード（`README.md`「ライセンス」節）と `LICENSE`（Apache License 2.0） |
+| 重み | Apache-2.0。モデルカードは、ゼロから学習し他モデルの重みを含まないと記載する。Q8_0 は上流が配布する GGUF をそのまま使い、こちらで量子化しない |
+| 語彙 | `ku-nlp/gpt2-small-japanese-char`（京都大学 黒橋研究室）の byte-level BPE 語彙をそのまま使い、CC-BY-SA-4.0。GGUF に埋め込まれている。上流が追加した制御トークン 3 つ（id 6000〜6002）は Apache-2.0 |
+| 学習データ | `Miwa-Keita/zenz-v2.5-dataset`（CC-BY-SA-4.0 の Wikipedia 由来部分と ODC-BY の llm-jp-corpus-v3 由来部分） |
+| **扱い（確定）** | 重みは Apache-2.0 として扱う。語彙と学習データには CC-BY-SA-4.0 の帰属表記を置く（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `yuuki14202028`・出所 URL・ライセンス、語彙の帰属先 ku-nlp） |
+| 配信 | 再ホストせず、上流 HuggingFace の固定した revision から取得する |
 
 ##### CUDA ランタイム（optional add-on として同梱・再配布する）
 

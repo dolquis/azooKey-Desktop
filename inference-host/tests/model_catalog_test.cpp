@@ -38,6 +38,36 @@ std::string SingleModelCatalogJson(std::string file_name = "zenzai-small-q4.gguf
   })";
 }
 
+// Pinned values from docs/sideload-packaging-spec.md section 1.6.2: zenz stays the default and
+// kanakanji-edge-33m Q8_0 is a selectable entry.
+constexpr char kZenzSha256[] = "29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673";
+constexpr char kEdgeSha256[] = "924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146";
+
+std::string ZenzWithEdgeCatalogJson() {
+  return std::string(R"({
+    "schemaVersion": 1,
+    "defaultModelId": "zenz-v3.2-small",
+    "models": [
+      {
+        "id": "zenz-v3.2-small",
+        "displayName": "zenz-v3.2-small",
+        "fileName": "ggml-model-Q5_K_M.gguf",
+        "sha256": ")") +
+         kZenzSha256 + R"("
+      },
+      {
+        "id": "kanakanji-edge-33m",
+        "displayName": "kanakanji-edge 33M",
+        "fileName": "kanakanji-edge-33m-Q8_0.gguf",
+        "sha256": ")" +
+         kEdgeSha256 + R"(",
+        "backendHint": "llama.cpp",
+        "promptFormat": "kanakanji-edge-v1"
+      }
+    ]
+  })";
+}
+
 }  // namespace
 
 TEST(ModelCatalogTest, ParsesCatalogAndFillsDefaults) {
@@ -216,4 +246,51 @@ TEST(ModelCatalogTest, ReportsUnknownRequestedModelId) {
   EXPECT_FALSE(resolved.model.has_value());
   ASSERT_TRUE(resolved.error.has_value());
   EXPECT_NE(resolved.error->find("missing"), std::string::npos);
+}
+
+TEST(ModelCatalogTest, ParsesEdgeEntryWithoutChangingZenzDefault) {
+  const auto parsed = azookey::host::ParseModelCatalogJson(ZenzWithEdgeCatalogJson());
+
+  ASSERT_TRUE(parsed.ok) << parsed.error.value_or("");
+  EXPECT_EQ(parsed.catalog.default_model_id, "zenz-v3.2-small");
+  ASSERT_EQ(parsed.catalog.models.size(), 2u);
+
+  const auto& zenz = parsed.catalog.models[0];
+  EXPECT_EQ(zenz.sha256, kZenzSha256);
+  EXPECT_EQ(zenz.backend_hint, "llama.cpp");
+  EXPECT_EQ(zenz.prompt_format, azookey::host::ZenzaiPromptFormat::ZenzV3);
+
+  const auto& edge = parsed.catalog.models[1];
+  EXPECT_EQ(edge.id, "kanakanji-edge-33m");
+  EXPECT_EQ(edge.display_name, "kanakanji-edge 33M");
+  EXPECT_EQ(edge.file_name, "kanakanji-edge-33m-Q8_0.gguf");
+  EXPECT_EQ(edge.sha256, kEdgeSha256);
+  EXPECT_EQ(edge.backend_hint, "llama.cpp");
+  EXPECT_EQ(edge.prompt_format, azookey::host::ZenzaiPromptFormat::KanakanjiEdgeV1);
+}
+
+TEST(ModelCatalogTest, ResolvesRequestedEdgeEntryAndKeepsZenzAsDefault) {
+  const auto parsed = azookey::host::ParseModelCatalogJson(ZenzWithEdgeCatalogJson());
+  ASSERT_TRUE(parsed.ok) << parsed.error.value_or("");
+
+  const auto root = TestDir("azookey_model_catalog_edge");
+  const auto zenzai_dir = azookey::host::DefaultZenzaiModelDirectory(root / "models");
+  const auto edge_path = zenzai_dir / "kanakanji-edge-33m-Q8_0.gguf";
+  Touch(edge_path);
+
+  const auto edge =
+      azookey::host::ResolveModelCatalogModel(parsed.catalog, zenzai_dir, "kanakanji-edge-33m");
+  EXPECT_TRUE(edge.ok()) << edge.error.value_or("");
+  ASSERT_TRUE(edge.model.has_value());
+  EXPECT_EQ(edge.model->path, edge_path);
+  EXPECT_EQ(edge.model->entry.sha256, kEdgeSha256);
+  EXPECT_EQ(edge.model->entry.prompt_format, azookey::host::ZenzaiPromptFormat::KanakanjiEdgeV1);
+
+  const auto fallback = azookey::host::ResolveModelCatalogModel(parsed.catalog, zenzai_dir);
+  EXPECT_EQ(fallback.status, azookey::host::ModelCatalogResolveStatus::MissingLocalFile);
+  ASSERT_TRUE(fallback.model.has_value());
+  EXPECT_EQ(fallback.model->entry.id, "zenz-v3.2-small");
+  EXPECT_EQ(fallback.model->path, zenzai_dir / "ggml-model-Q5_K_M.gguf");
+
+  std::filesystem::remove_all(root);
 }

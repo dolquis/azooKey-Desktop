@@ -441,40 +441,45 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 #### R1 / R2 の artifact と model catalog
 
 - 同じモデルの R1 artifact（`.gguf`）と R2 artifact（ONNX のディレクトリ）は、model catalog の
-  1 entry にエンジン別の artifact として並べ、ファイルごとに SHA-256 を持たせる。プロンプト形式
-  （`promptFormat`）はモデル単位で R1 と R2 に共通なので entry に置く。R1 artifact は必須とする
-  （§4.5 の終端の R1 CPU を常に持たせるため）。catalog の形は `docs/model-management-spec.md`
+  1 entry にエンジン別の artifact として並べ、ファイルごとに SHA-256 を持たせる。catalog の形
+  （必須の artifact、`promptFormat` の置き場所を含む）は `docs/model-management-spec.md`
   §3.1.1「R2 再開時の catalog」が持つ。
 - 設定の `model.selectedPath` は R1 artifact（GGUF）の絶対パスのまま使い、settings の schema は
   変えない。Host は `selectedPath` の GGUF を catalog の entry に照合し（`zenzai\` 配下にあり、
   ファイル名と SHA-256 が R1 artifact と一致する）、一致した entry の R2 artifact を解決する。
-  照合できない GGUF（利用者が置いた GGUF）は R1 だけで使う。R2 だけの構成は持たない（§4.5 で
-  R1 CPU が終端のため）。設定の移行、設定アプリのモデル選択、D-007 / D-008 は変わらない。
+  一致した entry の `promptFormat` は R1 と R2 の両方に使う。照合できない GGUF（利用者が置いた
+  GGUF）は R1 だけで使い、形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。
+  R2 だけの構成は持たない（§4.5 で R1 CPU が終端のため）。設定の移行、設定アプリのモデル選択、
+  D-007 / D-008 は変わらない。
+- 照合に使う GGUF の SHA-256 は、`docs/model-management-spec.md` §3.2 の `LocalModelEntry.sha256`
+  と同じく初回に計算して保持し、ロードのたびには計算しない。ファイルのサイズか更新時刻が
+  変わったときは計算し直す。
 - 診断 D-007 / D-008（`docs/dev-infrastructure-spec.md` §12.2）の判定表は変えない。
   `selectedPath` は GGUF を指すので R1 の判定がそのまま通る。R2 artifact の欠落や SHA-256 の
   不一致は、R1 で動くので D-007 / D-008 の error にせず、§4.5 の降格理由（`last_error` と
   構造化ログ）で示す。表の R2 の判定（`selectedPath` が ONNX ディレクトリを指す場合）は、手で
   編集した設定の判定として残す。
 - `kanakanji-edge-33m` で両方を取得すると、GGUF Q8_0 36MB と ONNX int8 49MB の計 85MB になる。
-  R1 artifact は常に先に取得する。R2 artifact（ONNX）は次をすべて満たすときだけ取得し、
-  上から順に、ネットワーク I/O の前に判定する。
+  R1 artifact は常に先に取得する。R2 artifact（ONNX）は、照合できた entry が R2 artifact を持ち、
+  次をすべて満たすときだけ取得する。項 1〜5 は EP と ONNX の取得の前に、上から順に判定する
+  （ネットワーク I/O を伴わない）。項 6 の EP の取得と登録は項 1〜5 を満たした後に行い、
+  その成功を ONNX の取得の条件にする。
   1. R2 の再開条件（§4.3 項 2）を満たした build と設定である。R2 を有効にするかの判定は 1 か所に
      置く。
   2. SafeMode でない。
   3. `privacy.mode` が `offline` でない。
   4. OS build が 26100 以上である（BackendSelector が記録する `winml_os_eligible`）。
   5. 実効の `backendPreference`（`docs/model-management-spec.md` §5.2）が `auto` か `winml` である。
-  6. §4.6 の EP の取得と登録が成功し、使える EP device がある。ONNX の取得は EP の
-     `EnsureReadyAsync()` の成功後に行い、EP を使えない機器では ONNX を取得しない。バッテリ
-     駆動時は §4.6 のとおり NPU EP だけを試し、NPU device が無ければ取得しない。
-- 未決（DEV-1767 / DEV-1768 の結果で決める）:
-  - DEV-1767: `kanakanji-edge-33m` を既定モデルに採るか。採らなければ R2 の再開条件（§4.3 項 2）を
-    満たさず、R2 artifact を持つ entry は置かない。
-  - DEV-1768: R2 artifact の中身（量子化、`genai_config.json` の構成、ファイルの一覧）と、上の
-    `WinMlBackend` の方式（(a) ORT GenAI の組み込み beam か、(c) Windows ML の ONNX Runtime
-    session を直接使うか）。(c) では artifact が ORT GenAI のディレクトリでなく ONNX と
-    `past_key_values` の構成になるため、catalog の R2 artifact のキー名と検証規則
-    （`docs/model-management-spec.md` §3.3 の R2 の検証）もこの結果で決める。
+     `winml` へ写される値（`directml` / `npu`、同 §5.1 末尾）も `winml` として扱う。
+  6. §4.6 の EP の取得と登録が成功し、使える EP device がある。EP を使えない機器では ONNX を
+     取得しない。バッテリ駆動時は §4.6 のとおり NPU EP だけを試し、NPU device が無ければ
+     取得しない。
+- R2 を再開するかどうか（DEV-1767）は §4.3 項 2 が持つ。
+- 未決（DEV-1768 の結果で決める）: R2 artifact の中身（量子化、`genai_config.json` の構成、
+  ファイルの一覧）と、上の `WinMlBackend` の方式（(a) ORT GenAI の組み込み beam か、(c) Windows ML
+  の ONNX Runtime session を直接使うか）。(c) では artifact が ORT GenAI のディレクトリでなく
+  ONNX と `past_key_values` の構成になるため、catalog の R2 artifact のキー名と検証規則
+  （`docs/model-management-spec.md` §3.3 の R2 の検証）もこの結果で決める。
 
 #### `auto` の解決（BackendSelector）
 

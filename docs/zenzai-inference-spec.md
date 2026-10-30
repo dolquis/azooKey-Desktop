@@ -152,6 +152,9 @@ QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に
   `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。ロードは GGUF の読み込み時に形式を決め、
   ロードの要求が形式を宣言していればそれを、無ければ推定値を使う。製品のロードは
   `model.selectedPath` の GGUF を開き、catalog の entry を経由しないので、形式は推定で決まる。
+  R2 を再開した構成では、`selectedPath` の GGUF を catalog の entry に照合し、一致した entry の
+  `promptFormat` を R1 と R2 の両方に使う。照合できない GGUF は R1 だけで動き、推定値を使う
+  （`docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」）。
   QueryDiagnostics（`docs/dev-infrastructure-spec.md` §12.6）は、使っている形式（宣言値または
   推定値）を返さない。形式を返すフィールドは DEV-1787 が追加する。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行

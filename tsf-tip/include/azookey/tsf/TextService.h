@@ -1231,6 +1231,17 @@ class TextService final : public ITfTextInputProcessorEx,
   // punctuation (an idle, final or eager request). UI thread only.
   std::vector<ipc::LiveSegment> live_display_segments_;
   bool live_display_auto_punctuation_{false};
+  // DEV-1806: the last live answer shown for a reading with no pending romaji.
+  // It outlives a change of the reading, so the preedit keeps its converted
+  // start while the answer for the longer reading is on its way. Cleared with
+  // live_display_* everywhere except on that change. UI thread only.
+  struct LiveCarry {
+    std::string reading;
+    std::string surface;
+    std::vector<ipc::LiveSegment> segments;
+    bool auto_punctuation{false};
+  };
+  std::optional<LiveCarry> live_carry_;
   // Reading of the last live request, for the idle timer. UI thread only.
   std::string live_query_reading_;
   // Idle timer (section 4.3.1) and the bounded wait of the final request
@@ -1404,6 +1415,8 @@ class TextService final : public ITfTextInputProcessorEx,
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
   std::string CurrentDisplayedPreeditSurface() const;
+  std::optional<std::string> LiveShownSurface(const std::string& reading,
+                                              bool require_setting = true) const;
   // Batch segments as the preedit shows them, in order; empty when the preedit
   // is not a batch conversion with the candidate window open.
   std::vector<DisplayedSegment> DisplayedBatchSegments() const;

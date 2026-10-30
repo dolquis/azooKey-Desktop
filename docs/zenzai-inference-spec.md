@@ -140,20 +140,23 @@ QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
 `zenz-v3` とする（後方互換）。catalog の schema 正典は
 `docs/model-management-spec.md` §3.1.1 と `settings/model-catalog.schema.json` であり、
-`promptFormat` はそこへ追加する。
+`promptFormat` のキーと値の集合はそこで定義している。
 
 | `promptFormat` | `[CTX]` | `[PROF]`（instruction profile） | 停止 |
 |---|---|---|---|
 | `zenz-v3` | 左文脈が空なら省く（§3.2） | 使う | EOS、または生成した制御文字（§4.2.1） |
 | `kanakanji-edge-v1` | 左文脈が空でも置く | 使わない | EOS |
 
-- catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 が CONTROL
-  型（GGUF の `tokenizer.ggml.token_type` が 3）で並び、U+EE03 が語彙に無ければ
+- catalog に無いモデル（利用者が置いた GGUF）は語彙から推定する。U+EE00〜U+EE02 がすべて
+  CONTROL 型（GGUF の `tokenizer.ggml.token_type` が 3）で、U+EE03 が語彙に無ければ
   `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。ロードは GGUF の読み込み時に形式を決め、
   ロードの要求が形式を宣言していればそれを、無ければ推定値を使う。製品のロードは
   `model.selectedPath` の GGUF を開き、catalog の entry を経由しないので、形式は推定で決まる。
-  推定した値は診断に出す（QueryDiagnostics のフィールドは `docs/dev-infrastructure-spec.md`
-  §12.6 に追加する）。
+  R2 を再開した構成では、`selectedPath` の GGUF を catalog の entry に照合し、一致した entry の
+  `promptFormat` を R1 と R2 の両方に使う。照合できない GGUF は R1 だけで動き、推定値を使う
+  （`docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」）。
+  QueryDiagnostics（`docs/dev-infrastructure-spec.md` §12.6）は、使っている形式（宣言値または
+  推定値）を返さない。形式を返すフィールドは DEV-1787 が追加する。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
 - 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを
@@ -318,15 +321,16 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 `TOK(x)` はショートハンド `x` のコードポイント（§3.2 表）を表す。
 
 ```cpp
-std::string BuildZenzaiPrompt(const std::string& kana_input,
-                              const std::string& preceding_text,
-                              const std::string& profile /* 既定 "" */,
-                              PromptFormat format /* §2.4.2 */) {
-  const std::string katakana = ToKatakana(kana_input);          // §3.1-1
-  const std::string ctx = CleanLeftContext(preceding_text, 30); // §3.1-2
+std::string BuildZenzaiPrompt(const std::string& kana,
+                              const core::ConversionContext& context,
+                              ZenzaiPromptFormat format /* §2.4.2 */) {
+  const std::string katakana = ToKatakana(kana);                       // §3.1-1
+  const std::string ctx = CleanLeftContext(context.preceding_text);    // §3.1-2（末尾 30 文字）
+  const std::string& profile = context.instruction_profile;            // 既定 ""
   std::string p;
-  if (format == zenz_v3 && !profile.empty()) p += TOK("[PROF]") + profile;
-  if (!ctx.empty() || format == kanakanji_edge_v1) p += TOK("[CTX]") + ctx;
+  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !profile.empty())
+    p += TOK("[PROF]") + profile;                                      // zenz-v3 だけ
+  if (!ctx.empty() || format == ZenzaiPromptFormat::KanakanjiEdgeV1) p += TOK("[CTX]") + ctx;
   p += TOK("[IN]") + katakana + TOK("[OUT]");
   return p;  // 生成は [OUT] の直後から
 }
@@ -769,7 +773,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   if (!model_ready_) return DegradeToFallback(kana, ctx, "model-not-ready");
 
   try {
-    const std::string prompt = BuildZenzaiPrompt(kana, ctx.preceding_text, profile_, prompt_format_); // §3.3
+    const std::string prompt = BuildZenzaiPrompt(kana, ctx, prompt_format_); // §3.3
     const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana),
                                   deadline_, cancel_);  // §4.2.1 §6.2 §8 ＋ §9.2.2（decode 中も cancel/deadline をポーリング）
     if (Canceled(cancel_)) return {};                 // §9.2.2 キャンセルは fallback せず空（M10。stale 候補を出さない）

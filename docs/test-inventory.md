@@ -204,7 +204,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_reading_tail_smoke` | `azookey_zenzai_bench` | 同じ pin モデルの非ライブ複数候補で `けいやくこうしんのじょうけんをきょうぎする` → `契約更新の条件を協議する` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在を検証 |
-| `host_engine_real_model_live_conversion` | `host_engine_tests`（`InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence`） | 同じ pin モデルで `QueryLiveConversion` に助詞を含む `きょうはいいてんき` を送ると、読みのままでない Zenzai の表層が返ることを検証（DEV-1648） |
+| `host_engine_real_model_live_conversion` | `host_engine_tests`（`InferenceEngineTest.RealZenzaiLiveConversionConvertsSentence`、`InferenceEngineTest.RealZenzModelInfersZenzV3PromptFormat`） | 同じ pin モデルで `QueryLiveConversion` に助詞を含む `きょうはいいてんき` を送ると、読みのままでない Zenzai の表層が返ること（DEV-1648）と、語彙からの推定で `promptFormat` が `zenz-v3` になること（`docs/zenzai-inference-spec.md` §2.4.2）を検証 |
 | `azookey_zenzai_real_model_json_smoke` | `azookey_zenzai_bench` | 同じ pin モデルでの JSON 出力の schema 固定と `passed` 真、`status=ok` 行の非混入 |
 
 ## CTest 以外の自動検査

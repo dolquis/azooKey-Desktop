@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2427,20 +2428,26 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   // The pending 'h' keeps the reading at "に", so its result arrives before
   // 'O' queues "にほ"; this is the ordering that coverage timing produced.
   for (const WPARAM key : {'N', 'I', 'H'}) ASSERT_TRUE(h.Press(key));
-  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  bool first_retry_seen = false;
+  ASSERT_TRUE(WaitForPredictionResult(h.service, &first_retry_seen));
   ASSERT_TRUE(h.Press('O'));
   ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
 
-  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  bool second_retry_seen = false;
+  ASSERT_TRUE(WaitForPredictionResult(h.service, &second_retry_seen));
+  const uint32_t reasons_before = h.service.prediction_logged_reasons_for_test();
   h.service.process_candidates_ready_for_test();
-  // DEV-1754: this still fails now and then on Windows CI after one dropped
-  // response and its retry; the PredictionLogReason bits name the branch that
-  // dropped the result.
+  // DEV-1754: this still fails now and then on Windows CI. The reason bits
+  // accumulate, so the bits added by the final process name the branch that
+  // dropped the result, and the retry flags show which wait saw a dropped
+  // response.
   const uint32_t reasons = h.service.prediction_logged_reasons_for_test();
-  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u)
-      << "prediction_state reasons 0x" << std::hex << reasons;
-  EXPECT_TRUE(h.service.prediction_window_visible_for_test())
-      << "prediction_state reasons 0x" << std::hex << reasons;
+  std::ostringstream diagnostics;
+  diagnostics << "prediction_state reasons before process 0x" << std::hex << reasons_before
+              << " after 0x" << reasons << std::boolalpha << ", retry in first wait "
+              << first_retry_seen << ", in second wait " << second_retry_seen;
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u) << diagnostics.str();
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test()) << diagnostics.str();
   h.service.stop_ipc_worker_for_test();
   server.Stop();
 }

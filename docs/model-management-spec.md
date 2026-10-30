@@ -80,6 +80,57 @@ resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 `is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
 このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
 
+#### R2 再開時の catalog（DEV-1770）
+
+catalog v1 の entry は R1 の GGUF だけを持つ。R2（Windows ML）を再開するとき
+（`docs/copilot-pc-backend-spec.md` §4.3 項 2）は `schemaVersion` を 2 にし、同じモデルの
+R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごとに entry を分けると、R1 と R2 で
+同じモデルを使う前提（同 §4.3 項 2）と、学習・NLL 閾値のモデル単位の管理が崩れるため採らない。
+
+```json
+{
+  "schemaVersion": 2,
+  "defaultModelId": "kanakanji-edge-33m",
+  "models": [
+    {
+      "id": "kanakanji-edge-33m",
+      "displayName": "kanakanji-edge 33M",
+      "promptFormat": "kanakanji-edge-v1",
+      "artifacts": {
+        "llama.cpp": {"fileName": "<GGUF のファイル名>", "sha256": "<64 hex>"},
+        "onnxruntime-genai": {
+          "directoryName": "<ディレクトリ名>",
+          "files": [
+            {"path": "genai_config.json", "sha256": "<64 hex>", "sizeBytes": 1650}
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+- `promptFormat` はモデル単位で、R1 と R2 に共通なので entry に置く（v1 と同じ値と既定値）。
+- `artifacts["llama.cpp"]` は必須とする（`docs/copilot-pc-backend-spec.md` §4.5 の終端の
+  R1 CPU を常に持たせるため）。持つキーは `fileName` と `sha256` で、制約は v1 の同名キーと同じ。
+- v2 の entry は `backendHint` を持たない。エンジンは `artifacts` のキーで表す。
+- R2 artifact はディレクトリなので 1 つのハッシュにまとめず、構成ファイルごとに
+  `path`（ディレクトリからの相対パス）、`sha256`、`sizeBytes` を持つ。`sizeBytes` は正の整数
+  （バイト数）で、取得したファイルはサイズと SHA-256 の両方が一致したときだけ有効とする。
+  ファイル単位にすると §3.1.2 の `HttpDownloader` の 1 ファイルごとの取得と検証をそのまま
+  使える。ディレクトリは `zenzai\<directoryName>\` に置き、`directoryName` と `path` には
+  `fileName` と同じ制約（絶対パス、control 文字、`..`、drive prefix は不可）を掛ける。`path` は
+  ディレクトリ内に限り、同じ entry の中で重複させない。
+- parser は v1 と v2 の両方を読む。v1 の entry は、`fileName` / `sha256` を
+  `artifacts["llama.cpp"]` の `fileName` / `sha256` に写した v2 の entry と同じ意味として扱う
+  （v1 の `backendHint` は `"llama.cpp"` だけで、`artifacts` のキーに当たる）。v1 の parser は
+  未知のキーを reject するので、v1 のまま R2 のキーを足しても旧 Host は catalog を読めない。
+  version を上げ、旧 Host には未対応の `schemaVersion` として拒否させる（拒否の理由がエラーで
+  分かる）。
+- v2 の schema 正典も `settings/model-catalog.schema.json` とし、v1 と v2 の両方を定義する。
+- `model.selectedPath` からの entry の解決、R2 artifact を取得する条件、未決の事項は
+  `docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」が持つ。
+
 ### 3.1.2 GGUF 取得基盤（DEV-439）
 
 DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
@@ -125,8 +176,10 @@ HTTP はループバックの自動テストに限って使用する。
   モデルが optional パッケージとして配置された場合に検出する
   （`docs/copilot-pc-backend-spec.md` §4.3 項 2、変換可否は同 §4.2.2・§4.2.3）。
 
-R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）を満たす場合のみ `winml`
-経路へ入れる（§5.1）。R2 モデルが無ければ R1（GGUF）のみを一覧する。非対応拡張子の
+選択したモデルが R2 artifact を持つ catalog entry に照合でき（§3.1.1）、前提（Win11 24H2+ /
+EP 取得・登録可、`docs/copilot-pc-backend-spec.md` §4.6）を満たす場合のみ `winml` 経路へ入れる
+（§5.1）。ONNX のディレクトリは EP の取得・登録が成功した後に取得する（同 §4.4「R1 / R2 の
+artifact と model catalog」）。R2 のディレクトリが無ければ R1（GGUF）のみを一覧する。非対応拡張子の
 ファイルは無視する。
 
 ### 3.2 検出情報
@@ -392,10 +445,13 @@ client はそれを見て対応版を判別する。
 `backendPreference = auto` のとき、`docs/copilot-pc-backend-spec.md` §4.3 / §4.5 の
 M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
 
-1. **engine の選択**: ONNX 変換モデルがあり Win11 24H2+ かつ対応 HW なら、まず §4.6 の
-   EP 取得・登録フローを試行する（EP が `NotPresent` でも `EnsureReadyAsync()` で取得を
-   試みる。**「未取得」を理由に即 R1 へ落とさない**）。取得・登録に成功したら
-   **R2（`winml`）**。取得失敗（`Failure`）/ ONNX モデル無し / 非対応 OS のときに **R1**。
+1. **engine の選択**: 選択したモデルが R2 artifact を持つ catalog entry に照合でき（§3.1.1）、
+   Win11 24H2+ かつ対応 HW なら、まず §4.6 の EP 取得・登録フローを試行する（EP が
+   `NotPresent` でも `EnsureReadyAsync()` で取得を試みる。**「未取得」を理由に即 R1 へ
+   落とさない**）。ONNX のディレクトリが未取得なら、EP の取得・登録の成功後に取得する
+   （取得の条件は `docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model
+   catalog」）。EP と ONNX がそろったら **R2（`winml`）**。取得失敗（`Failure`）/ R2 artifact を
+   持つ entry に照合できない / 非対応 OS のときに **R1**。
    R1 の `auto` の解決は `docs/copilot-pc-backend-spec.md` §4.4「`auto` の解決
    （BackendSelector）」が正典で、ggml-vulkan ビルドで一次フィルタを通れば `vulkan`、それ以外は
    `cpu` とする。ggml-cuda をリンクするビルドが無いため、NVIDIA 機でも `auto` は `cuda` を選ばない。

@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "TemporaryLearningFile.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/ipc/TraceId.h"
 #include "azookey/logging/Phase.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -45,12 +47,79 @@ void PrintUsage(const char* exe) {
             << "       " << exe
             << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
                " [--backend cpu|cuda] [--model PATH] [--category NAME]"
-               " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]\n"
+               " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
+               " [--nll on|off] [--decode-stats JSONL]\n"
             << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
                "failure gate. --json selects JSON stdout; --output writes the same JSON "
                "schema to a file. --ipc adds codec and Windows pipe echo timings. "
                "--eval selects the conversion-quality evaluator. --trace writes phase JSONL "
-               "to trace.jsonl by default.\n";
+               "to trace.jsonl by default. --nll sets NLL rerank (default off, the shipped "
+               "setting). --decode-stats writes one line per query with its latency, deadline "
+               "cut-off and candidate sources.\n";
+}
+
+const char* CandidateSourceName(azookey::core::CandidateSource source) {
+  using azookey::core::CandidateSource;
+  switch (source) {
+    case CandidateSource::SystemDictionary:
+      return "system_dictionary";
+    case CandidateSource::UserDictionary:
+      return "user_dictionary";
+    case CandidateSource::Model:
+      return "model";
+    case CandidateSource::Llm:
+      return "llm";
+    case CandidateSource::Heuristic:
+      return "heuristic";
+    case CandidateSource::Learning:
+      return "learning";
+    case CandidateSource::Symbol:
+      return "symbol";
+    case CandidateSource::Emoji:
+      return "emoji";
+  }
+  return "unknown";
+}
+
+bool HasDebugTag(const std::string& debug_info, std::string_view tag) {
+  size_t start = 0;
+  while (start <= debug_info.size()) {
+    const auto end = debug_info.find(';', start);
+    const auto length = (end == std::string::npos ? debug_info.size() : end) - start;
+    if (std::string_view(debug_info).substr(start, length) == tag) return true;
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return false;
+}
+
+// One line per query, so latency quantiles can exclude deadline cut-offs
+// (docs/zenzai-inference-spec.md section 8.1) and unfinished generations can be counted.
+std::string DecodeStatsLine(uint64_t call, const std::string& input, const std::string& context,
+                            double latency_ms, azookey::host::InferenceEngine& engine,
+                            const std::vector<azookey::core::Candidate>& candidates) {
+  namespace j = azookey::ipc::json;
+  j::Object line;
+  line.emplace("call", j::Value(call));
+  line.emplace("input", j::Value(input));
+  line.emplace("left_context", j::Value(context));
+  line.emplace("latency_ms", j::Value(latency_ms));
+  const auto stats = engine.last_zenzai_decode_stats();
+  line.emplace("deadline_exceeded", stats ? j::Value(stats->deadline_exceeded) : j::Value());
+  line.emplace("beam_tokens", stats ? j::Value(stats->beam_tokens) : j::Value());
+  const auto error = engine.effective_last_error();
+  line.emplace("last_error", error ? j::Value(*error) : j::Value());
+  j::Array values;
+  values.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    j::Object value;
+    value.emplace("surface", j::Value(candidate.surface));
+    value.emplace("source", j::Value(CandidateSourceName(candidate.source)));
+    value.emplace("unfinished", j::Value(HasDebugTag(candidate.debug_info, "unfinished")));
+    values.emplace_back(std::move(value));
+  }
+  line.emplace("candidates", j::Value(std::move(values)));
+  return j::Stringify(j::Value(std::move(line)));
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -151,6 +220,8 @@ int main(int argc, char** argv) {
   std::filesystem::path output_path;
   std::filesystem::path baseline_path;
   std::filesystem::path trace_output_path;
+  std::filesystem::path decode_stats_path;
+  std::optional<bool> nll_enabled;
   azookey::bench::ConversionQualityOptions quality_options;
   try {
     for (int i = 1; i < argc; ++i) {
@@ -194,6 +265,14 @@ int main(int argc, char** argv) {
         const auto value = RequireValue(argc, argv, i, "--trace-output");
         if (value.empty()) throw std::invalid_argument("--trace-output requires a non-empty path");
         trace_output_path = azookey::bench::Utf8Path(value);
+      } else if (arg == "--nll") {
+        const auto value = RequireValue(argc, argv, i, "--nll");
+        if (value != "on" && value != "off") throw std::invalid_argument("--nll must be on or off");
+        nll_enabled = value == "on";
+      } else if (arg == "--decode-stats") {
+        const auto value = RequireValue(argc, argv, i, "--decode-stats");
+        if (value.empty()) throw std::invalid_argument("--decode-stats requires a non-empty path");
+        decode_stats_path = azookey::bench::Utf8Path(value);
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
@@ -205,6 +284,21 @@ int main(int argc, char** argv) {
         (!quality_options.per_case_path.empty() || quality_options.category != "all" ||
          quality_options.typo_mode != "off")) {
       throw std::invalid_argument("conversion-quality options require --eval");
+    }
+    if (quality_options.eval_path.empty() && (nll_enabled || !decode_stats_path.empty())) {
+      throw std::invalid_argument("--nll and --decode-stats require --eval");
+    }
+    if (nll_enabled && quality_options.model.empty()) {
+      throw std::invalid_argument("--nll requires --model");
+    }
+    if (!decode_stats_path.empty() &&
+        (SamePath(decode_stats_path, output_path) ||
+         SamePath(decode_stats_path, quality_options.per_case_path) ||
+         SamePath(decode_stats_path, quality_options.eval_path) ||
+         SamePath(decode_stats_path, baseline_path) ||
+         SamePath(decode_stats_path, trace_output_path) ||
+         SamePath(decode_stats_path, azookey::bench::Utf8Path(quality_options.model)))) {
+      throw std::invalid_argument("--decode-stats must differ from input and result paths");
     }
     if (!trace_output_path.empty() && !quality_options.trace) {
       throw std::invalid_argument("--trace-output requires --trace");
@@ -261,6 +355,7 @@ int main(int argc, char** argv) {
   engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda
                                                             : azookey::host::BackendKind::Cpu;
   engine_config.model_path = quality_options.model;
+  if (nll_enabled) engine_config.nll.enabled = *nll_enabled;
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config, trace_logger ? &*trace_logger : nullptr);
   if (!quality_options.model.empty() && !engine.LoadModel()) {
@@ -282,23 +377,54 @@ int main(int argc, char** argv) {
       quality_options.thread_count = 0;
       quality_options.batch_size = kCurrentZenzaiContextBatchSize;
     }
+    std::ofstream decode_stats;
+    if (!decode_stats_path.empty()) {
+      const auto directory = decode_stats_path.parent_path();
+      std::error_code ec;
+      if (!directory.empty()) std::filesystem::create_directories(directory, ec);
+      decode_stats.open(decode_stats_path, std::ios::binary | std::ios::trunc);
+      if (!decode_stats) {
+        std::cerr << "cannot create decode stats output" << std::endl;
+        return 2;
+      }
+    }
     std::string error;
     uint64_t request_id = 0;
+    uint64_t decode_stats_call = 0;
     const bool ok = azookey::bench::RunConversionQualityEvaluation(
         quality_options,
-        [&engine, &request_id, &trace_logger, &quality_options](const std::string& input,
-                                                                const std::string& context) {
+        [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call](
+            const std::string& input, const std::string& context) {
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-          return QueryCandidates(
+          const auto start = std::chrono::steady_clock::now();
+          auto candidates = QueryCandidates(
               engine, input, context, now,
               static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit),
               trace_logger ? &*trace_logger : nullptr, request_id, quality_options.backend);
+          if (decode_stats.is_open()) {
+            const auto latency_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                    .count();
+            decode_stats << DecodeStatsLine(++decode_stats_call, input, context, latency_ms, engine,
+                                            candidates)
+                         << '\n';
+            if (!decode_stats) throw std::runtime_error("cannot write decode stats output");
+          }
+          return candidates;
         },
         &error);
     if (!ok) {
       std::cerr << error << std::endl;
       return 2;
+    }
+    if (decode_stats.is_open()) {
+      decode_stats.flush();
+      decode_stats.close();
+      if (!decode_stats) {
+        std::cerr << "cannot write decode stats output" << std::endl;
+        return 2;
+      }
     }
     return 0;
   }

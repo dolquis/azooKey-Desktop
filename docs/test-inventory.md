@@ -26,7 +26,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 下表は CMake が登録するテストと 1 行ずつ対応し、`scripts/check_test_inventory.py` が
 `CMakeLists.txt` 側の登録との差分を検査する（テストを追加・削除する PR は同じ PR で
 本表を更新する）。登録の一部は構成に依存し、`tsf-tip` / `settings-app` / `diagnostics` /
-`compat-test` と `host_http_downloader_tests` / `host_trending_word_fetcher_tests` / `azookey_conversion_quality_smoke` は
+`compat-test` と `host_http_downloader_tests` / `host_trending_word_fetcher_tests` / `azookey_conversion_quality_smoke` / `azookey_conversion_quality_decode_stats` は
 `WIN32` のとき、`azookey_nll_real_model_*` と `azookey_zenzai_real_model_*` は
 `AZOOKEY_WITH_LLAMA_CPP` かつ `AZOOKEY_ZENZAI_TEST_MODEL` を与えたとき、
 `azookey_zenzai_bench_smoke` / `azookey_zenzai_bench_json_smoke` /
@@ -192,6 +192,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_bench_trace_smoke` | `azookey_bench` と `azookey_trace_viewer` | `--trace` 実行時の JSONL に `total` と Host の `model_inference` が出力され、viewer で集計できること |
 | `azookey_mixed_english_quality_gate` | `azookey_mixed_english_eval` | M63 §15.2 の分割器の品質ゲート: `bench/data/mixed_english_eval.jsonl` の全ケースが妥当（日本語の文の読みが内蔵表のかなと一致）で、同梱の英単語辞書で分割した先頭の経路の高確度の E 区間の適合率が 95% 以上、日本語だけの文に高確度の E 区間が無いこと（DEV-1687） |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
+| `azookey_conversion_quality_decode_stats` | `azookey_bench` | 変換品質評価の `--decode-stats` が 1 回の問い合わせごとに 1 行（連番、latency、打ち切りの有無、候補の source と未完の印）を出し、モデルが無いときは打ち切りを null とすること。`--eval` の無い `--decode-stats` と `--model` の無い `--nll` を exit 2 で拒否すること（DEV-1767） |
 | `azookey_nll_fixture_smoke` | `bench/BuildNllFixture.cmake` | NLL 実モデルテストが要求する辞書 fixture の生成（fixture setup） |
 | `azookey_nll_comparison_self_test` | `azookey_nll_bench --self-test` | モデルなしで NLL 比較器の行入れ替え、NaN / Inf、件数不一致の拒否、CPU 絶対誤差、同点と重複表層を検証 |
 | `azookey_zenzai_bench_missing_model_output` | `azookey_zenzai_bench` | モデル未指定時に degraded を JSON へ記録し、実行自体は落ちないこと |

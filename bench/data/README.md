@@ -12,6 +12,11 @@
 [評価仕様 §4・§11](../../docs/conversion-quality-benchmark-spec.md) に従います。
 `conversion_quality_smoke.jsonl` は CTest 用の小さな入力で、フル評価の入力とは別です。
 
+`model_comparison_supplement_eval.jsonl` は、モデルを比べる評価
+（[推論仕様 §2.4.3](../../docs/zenzai-inference-spec.md)）で `kana_kanji_eval.jsonl` に足す入力です。
+`docs/copilot-pc-backend-spec.md` §4.2 の 20 入力（`p42_*`）と、数字・記号を含む読み（`numsym_*`）を
+本リポジトリで書き起こしました。品質ゲートと baseline には入れません。
+
 `mixed_english_eval.jsonl` は M63 の日英混在の分割器の品質ゲート
 （[評価仕様 §4.4](../../docs/conversion-quality-benchmark-spec.md#44-日英混在の分割器ケース形式m63)）の入力です。
 混在文と、ローマ字として読める英単語を含む文は本リポジトリで書き起こし、日本語だけの文は

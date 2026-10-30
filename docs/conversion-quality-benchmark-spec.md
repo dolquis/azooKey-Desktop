@@ -378,6 +378,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--baseline <json>` | 比較 baseline |
 | `--backend <name>` | backend 強制 |
 | `--model <path>` | モデル強制 |
+| `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る |
+| `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |
 | `--trace` | M51 trace ログを出す |
 | `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/dev-infrastructure-spec.md` §7.7.4） |
 | `--category <name>` | カテゴリ絞込 |

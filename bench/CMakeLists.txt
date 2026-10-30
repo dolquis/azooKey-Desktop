@@ -179,6 +179,14 @@ if(AZOOKEY_BUILD_TESTS)
                      "-DINCOMPATIBLE_BASELINE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-incompatible-baseline.json"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertConversionQualityOutput.cmake")
     set_tests_properties(azookey_conversion_quality_smoke PROPERTIES TIMEOUT 10)
+    add_test(NAME azookey_conversion_quality_decode_stats
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                     "-DEVAL_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data/conversion_quality_smoke.jsonl"
+                     "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-decode-stats.json"
+                     "-DDECODE_STATS_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-decode-stats.jsonl"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDecodeStatsOutput.cmake")
+    set_tests_properties(azookey_conversion_quality_decode_stats PROPERTIES TIMEOUT 10)
   endif()
   # The bundled dictionary is read in place by path, never copied into bench/data.
   add_test(NAME azookey_mixed_english_quality_gate

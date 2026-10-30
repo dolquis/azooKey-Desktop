@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "azookey/host/MmapModelLoader.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
+#include "azookey/host/ZenzaiPromptFormat.h"
 
 namespace azookey::host {
 
@@ -19,6 +21,8 @@ struct ZenzaiModelInfo {
   std::string path;
   uint32_t gguf_version{};
   uint64_t file_size_bytes{};
+  // The declared format when the load named one, otherwise the one inferred from the vocabulary.
+  ZenzaiPromptFormat prompt_format{ZenzaiPromptFormat::ZenzV3};
 };
 
 struct ZenzaiRuntimeOptions {
@@ -30,6 +34,8 @@ struct ZenzaiRuntimeOptions {
   bool use_vulkan{false};
   // Spec 5: map the GGUF, falling back to a read load once when mapping fails.
   bool use_mmap{true};
+  // Format declared by the model catalog entry. Unset infers it from the GGUF vocabulary.
+  std::optional<ZenzaiPromptFormat> prompt_format;
 };
 
 // True when the complete code points of `utf8` include a Private Use Area character
@@ -39,6 +45,23 @@ bool ContainsPrivateUseCodepoint(std::string_view utf8);
 // True when `utf8` includes a code point of the range BuildZenzaiPrompt draws its control
 // markers from (U+EE00..U+EEFF). Generation stops there like it does at end-of-sequence.
 bool ContainsZenzaiControlMarker(std::string_view utf8);
+
+// The prompt for `kana` in `format` (docs/zenzai-inference-spec.md §2.4.2 and §3.2).
+std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
+                              ZenzaiPromptFormat format);
+
+struct ZenzaiTokenChoice {
+  int32_t token{-1};
+  float logit{};
+  double logprob{};
+};
+
+// The `max_choices` tokens with the highest logits, highest first, skipping every token whose
+// `excluded` entry is non-zero (control tokens that do not end generation, spec §5). The
+// log-softmax denominator still covers the whole vocabulary, so the logprobs stay the model's.
+std::vector<ZenzaiTokenChoice> SelectZenzaiTokenChoices(std::span<const float> logits,
+                                                        std::span<const uint8_t> excluded,
+                                                        size_t max_choices);
 
 // A beam surface extended by one token piece. When the result contains a control marker the beam
 // ends there: `surface` is then the finished candidate, the complete characters of `parent`
@@ -124,7 +147,13 @@ struct ZenzaiTokenizerMetadata {
   std::optional<std::string> pre_tokenizer;
   std::optional<uint32_t> eos_token_id;
   std::vector<std::string> vocabulary;
+  // `tokenizer.ggml.token_type`, parallel to `vocabulary` when present.
+  std::vector<int32_t> token_types;
 };
+
+// Prompt format of a GGUF without a catalog entry (spec §2.4.2): kanakanji-edge-v1 when U+EE00,
+// U+EE01 and U+EE02 are CONTROL tokens and U+EE03 is not in the vocabulary, otherwise zenz-v3.
+ZenzaiPromptFormat InferZenzaiPromptFormat(const ZenzaiTokenizerMetadata& metadata);
 
 // One llama.cpp `kv_overrides` entry, described without depending on llama.h.
 struct ZenzaiKvOverride {

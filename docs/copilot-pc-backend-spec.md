@@ -416,8 +416,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 - `WinMlBackend` は `InferenceEngine::LoadModel` の内側に閉じ、`core::IConverter` の別実装
   （ONNX Runtime GenAI 版の converter）として `ZenzaiModelConverter` と並べる。TIP と IPC の
   契約は変えない。
-- プロンプトの構築（`docs/zenzai-inference-spec.md` §3 と §2.4.2 の `promptFormat`。`promptFormat` は
-  設計で、実装は後続 Issue で行う）、
+- プロンプトの構築（`docs/zenzai-inference-spec.md` §3 と §2.4.2 の `promptFormat`）、
   候補の健全性チェック、logprob の正規化、順位付け、重複除去は decode に依存しない処理として
   `ZenzaiModelConverter` から切り出し、R1 と R2 で共有する。R1 と R2 で同じモデルを使う
   （§4.3 項 2）ので、候補の扱いをエンジンごとに分けない。

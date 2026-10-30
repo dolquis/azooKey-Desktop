@@ -59,6 +59,12 @@
           "type": "string",
           "default": "llama.cpp",
           "enum": ["llama.cpp"]
+        },
+        "promptFormat": {
+          "type": "string",
+          "default": "zenz-v3",
+          "enum": ["zenz-v3", "kanakanji-edge-v1"],
+          "description": "Prompt format of the model (docs/zenzai-inference-spec.md section 2.4.2). An entry without the key is zenz-v3."
         }
       }
     }

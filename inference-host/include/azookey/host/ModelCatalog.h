@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "azookey/host/ZenzaiPromptFormat.h"
+
 namespace azookey::host {
 
 struct ModelCatalogEntry {
@@ -15,6 +17,8 @@ struct ModelCatalogEntry {
   std::string file_name;
   std::string sha256;
   std::string backend_hint{"llama.cpp"};
+  // `promptFormat`; an entry without the key is zenz-v3.
+  ZenzaiPromptFormat prompt_format{ZenzaiPromptFormat::ZenzV3};
 };
 
 struct ModelCatalog {

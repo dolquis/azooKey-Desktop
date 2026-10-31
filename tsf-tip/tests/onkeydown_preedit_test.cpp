@@ -15137,36 +15137,111 @@ TEST(TsfTipFullWidthSpaceTest, KeyboardDisabledContextGetsTheSpace) {
   h.context.compartment_mgr = nullptr;
 }
 
-// Spec §3.7 and §2.4.1: a refused insertion is inserted again by the next key,
-// which is then handled after it.
-TEST(TsfTipFullWidthSpaceTest, RefusedSpaceIsInsertedBeforeTheNextKey) {
+// Spec §3.7: a space whose edit session lock was not granted is inserted
+// again once by the next key, which is then handled as usual.
+TEST(TsfTipFullWidthSpaceTest, SpaceWithoutTheLockIsInsertedBeforeTheNextKey) {
   DocumentPreeditHarness h;
   ConfigureFullWidthSpaceHarness(h);
-  h.context.reject_write = true;
+  h.context.skip_callback = true;  // The sync session does not run: no lock.
   EXPECT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test())
-      << "the refused space must wait for the next key";
+      << "a space without the lock must wait for the next key";
   EXPECT_EQ(h.context.document->text, L"");
-  EXPECT_TRUE(h.Press('K')) << "a key while the retry is refused waits";
-  EXPECT_EQ(h.context.document->text, L"");
-  h.context.reject_write = false;
-  EXPECT_TRUE(h.Press('A'));
+  h.context.skip_callback = false;
+  EXPECT_TRUE(h.Press('K'));
   EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.context.document->text, L"\x3000\x304b");
 }
 
-TEST(TsfTipFullWidthSpaceTest, RefusedSpaceIsDroppedOnFocusLoss) {
+TEST(TsfTipFullWidthSpaceTest, SpaceWithoutTheLockIsRetriedOnlyOnce) {
   DocumentPreeditHarness h;
   ConfigureFullWidthSpaceHarness(h);
-  h.context.reject_write = true;
+  h.context.skip_callback = true;
   EXPECT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
-  h.context.reject_write = false;
+  EXPECT_TRUE(h.Press('K')) << "the retry key is handled as usual";
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test())
+      << "a failed retry drops the space";
+  h.context.skip_callback = false;
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"\x304b");
+}
+
+// A context that cannot write the space drops it at once: the keys after it
+// are not held, and a pass-through key still reaches the app.
+TEST(TsfTipFullWidthSpaceTest, UnwritableContextDropsTheSpaceAndPassesTheNextKeys) {
+  for (const bool read_only : {true, false}) {
+    SCOPED_TRACE(read_only ? "read-only session" : "SetText refused");
+    DocumentPreeditHarness h;
+    ConfigureFullWidthSpaceHarness(h);
+    (read_only ? h.context.reject_write : h.context.document->fail_write) = true;
+    for (int i = 0; i < 3; ++i) {
+      EXPECT_TRUE(h.Press(VK_SPACE));
+      EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+      EXPECT_FALSE(ProbeTypoKey(h, VK_LEFT));
+      EXPECT_FALSE(h.Press(VK_LEFT));
+    }
+    EXPECT_EQ(h.context.document->text, L"");
+  }
+}
+
+// The probe inserts the waiting space, so a key the app takes lands after it.
+TEST(TsfTipFullWidthSpaceTest, ProbeInsertsTheWaitingSpaceBeforeAPassThroughKey) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.skip_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.skip_callback = false;
+  EXPECT_FALSE(ProbeTypoKey(h, VK_LEFT));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+  EXPECT_FALSE(h.Press(VK_LEFT));
+  EXPECT_EQ(h.context.document->text, L"\x3000") << "the space is inserted once";
+}
+
+TEST(TsfTipFullWidthSpaceTest, WaitingSpaceIsDroppedForAKeyFromAnotherContext) {
+  DocumentContext other;  // Outlives the service, which may keep it active.
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.skip_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.skip_callback = false;
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&other, 'A', 0, &eaten), S_OK);
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(other.document->text.find(L'\x3000'), std::wstring::npos);
+}
+
+TEST(TsfTipFullWidthSpaceTest, WaitingSpaceIsDroppedOnFocusLoss) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.skip_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.skip_callback = false;
   EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
   EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
   ASSERT_TRUE(h.Press('A'));
   EXPECT_EQ(h.context.document->text, L"\x3042");
+}
+
+// Spec §6.1 and §3.7: the Space that ends Unicode input then acts as from Idle,
+// so with the default it commits the character and inserts a full-width space.
+TEST(TsfTipFullWidthSpaceTest, SpaceEndingUnicodeInputInsertsAFullWidthSpaceByDefault) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM hex : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}})
+    ASSERT_TRUE(h.Press(hex));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"\x3042\x3000");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
 }
 
 // Spec §3.1: the hiragana key turns the IME on like VK_IME_ON and leaves

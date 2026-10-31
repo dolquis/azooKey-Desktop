@@ -888,10 +888,9 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<RetryWaitingKey> window_waiting_keys_;
   // One log record per wait for a key it could not keep.
   bool retry_waiting_drop_logged_{false};
-  // The context of a full-width space whose edit session was refused. The
-  // next key inserts it again before it is handled, with the keys in
-  // retry_waiting_keys_ in between; focus and lifecycle loss drop it
-  // (docs/tsf-deep-integration-spec.md §3.7).
+  // The context of a full-width space whose edit session lock was not
+  // granted. The next key inserts it again once, before it is handled; focus
+  // and lifecycle loss drop it (docs/tsf-deep-integration-spec.md §3.7).
   Microsoft::WRL::ComPtr<ITfContext> full_width_space_context_;
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
@@ -1552,10 +1551,14 @@ class TextService final : public ITfTextInputProcessorEx,
   bool HasInputToCommitBeforeClose() const;
   // Spec §3.7: whether this Space, with no reading in hiragana mode, inserts
   // U+3000 instead of reaching the app.
-  bool InsertsFullWidthSpace(WPARAM key, uint32_t modifiers) const;
-  // Inserts U+3000 at the selection without a composition. On a refused edit
-  // session the context waits in full_width_space_context_ for the retry.
-  HRESULT InsertFullWidthSpace(ITfContext* context);
+  bool InsertsFullWidthSpace(ITfContext* context, WPARAM key, uint32_t modifiers) const;
+  // Inserts U+3000 at the selection without a composition. Unless this is the
+  // retry, a lock not granted keeps the context in full_width_space_context_;
+  // any other failure drops the space.
+  HRESULT InsertFullWidthSpace(ITfContext* context, bool retry);
+  // Inserts a waiting space once before the key from `context`, or drops it
+  // when the key comes from another context.
+  HRESULT ResolvePendingFullWidthSpace(ITfContext* context);
   HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);
   void OpenKeyboardIfClosed(std::string_view source);
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);

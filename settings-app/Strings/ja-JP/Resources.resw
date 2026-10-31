@@ -254,7 +254,7 @@
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがな「」、半角英数 ()、全角英数（））。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
+  <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>
   <data name="SettingNote_punctuationConversion" xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>

@@ -2280,6 +2280,7 @@ class FullWidthSpaceEditSession final : public ITfEditSession {
     return refs;
   }
   STDMETHODIMP DoEditSession(TfEditCookie cookie) override {
+    ran_ = true;
     TF_SELECTION selection{};
     ULONG fetched = 0;
     HRESULT hr = context_->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
@@ -2296,6 +2297,9 @@ class FullWidthSpaceEditSession final : public ITfEditSession {
     return S_OK;
   }
 
+  // A session that ran and could not write (no selection, a refused SetText)
+  // differs from one TSF never ran because the lock was not granted.
+  bool ran() const { return ran_; }
   bool inserted() const { return inserted_; }
 
  private:
@@ -2303,12 +2307,13 @@ class FullWidthSpaceEditSession final : public ITfEditSession {
 
   LONG refs_{1};
   ITfContext* context_;
+  bool ran_{false};
   bool inserted_{false};
 };
 }  // namespace
 
-bool TextService::InsertsFullWidthSpace(WPARAM key, uint32_t modifiers) const {
-  if (key != VK_SPACE || (modifiers & ~core::kModifierShift) != 0) return false;
+bool TextService::InsertsFullWidthSpace(ITfContext* context, WPARAM key, uint32_t modifiers) const {
+  if (!context || key != VK_SPACE || (modifiers & ~core::kModifierShift) != 0) return false;
   if (!keyboard_open_ || alnum_mode_ || committing_ || bracket_composition_ || reconversion_list_ ||
       UnicodeInputActive() || HasInputToCommitBeforeClose())
     return false;
@@ -2316,7 +2321,8 @@ bool TextService::InsertsFullWidthSpace(WPARAM key, uint32_t modifiers) const {
   return local_settings_.FullWidthSpaceSnapshot() != shift;
 }
 
-HRESULT TextService::InsertFullWidthSpace(ITfContext* context) {
+HRESULT TextService::InsertFullWidthSpace(ITfContext* context, bool retry) {
+  full_width_space_context_.Reset();
   if (!context) return E_INVALIDARG;
   recent_character_form_commit_.reset();
   auto* session = new (std::nothrow) FullWidthSpaceEditSession(context);
@@ -2326,20 +2332,44 @@ HRESULT TextService::InsertFullWidthSpace(ITfContext* context) {
       context->RequestEditSession(client_id_, session, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
   // RequestEditSession can report S_OK for a sync session that did not run.
   const bool inserted = SUCCEEDED(hr) && SUCCEEDED(hr_session) && session->inserted();
+  const bool ran = session->ran();
   session->Release();
-  if (inserted) {
-    full_width_space_context_.Reset();
-    return S_OK;
+  if (inserted) return S_OK;
+  // Spec §3.7: only a lock not granted waits, and only for one retry. A
+  // context that cannot write the space (read-only, no selection, a refused
+  // SetText) drops it, so the keys after it are not held.
+  const bool read_only = hr == TS_E_READONLY || hr_session == TS_E_READONLY;
+  const bool waits = !retry && !ran && !read_only;
+  if (waits) full_width_space_context_ = context;
+  // The reason only: never the key, the text or the timing.
+  const char* reason = waits       ? "lock"
+                       : retry     ? "retry_failed"
+                       : read_only ? "read_only"
+                                   : "write_failed";
+  try {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+               waits ? "full_width_space_waits_for_lock" : "full_width_space_dropped",
+               {{"reason", SafeLogText(reason)}});
+  } catch (...) {
   }
-  // One record per wait, as for the waiting keys: never the key or its timing.
-  if (!full_width_space_context_) {
+  return E_FAIL;
+}
+
+HRESULT TextService::ResolvePendingFullWidthSpace(ITfContext* context) {
+  if (!full_width_space_context_) return S_OK;
+  Microsoft::WRL::ComPtr<ITfContext> pending = std::move(full_width_space_context_);
+  full_width_space_context_.Reset();
+  // A key from another context is not where the space was typed: drop it.
+  if (!SameComIdentity(context, pending.Get())) {
     try {
-      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "full_width_space_edit_session_refused");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "full_width_space_dropped",
+                 {{"reason", SafeLogText("context_changed")}});
     } catch (...) {
     }
+    return S_OK;
   }
-  full_width_space_context_ = context;
-  return E_FAIL;
+  const HRESULT hr = InsertFullWidthSpace(pending.Get(), /*retry=*/true);
+  return hr == E_OUTOFMEMORY ? hr : S_OK;
 }
 
 HRESULT TextService::HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key,
@@ -2648,6 +2678,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
       return S_OK;
     }
+    // Spec §3.7: a space whose lock was not granted is inserted again once,
+    // before this key, which is then handled as usual. The probe does it, as
+    // it finishes Unicode input, so a key the app takes lands after the space.
+    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
+      return space_hr;
     const uint32_t modifiers = CurrentKeyModifiers();
     const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
         static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
@@ -2683,7 +2718,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
                    candidate_ui_.IsShowing(), UnicodeInputActive()) &&
         !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
-    if (committing_ || full_width_space_context_) {
+    if (committing_) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2702,7 +2737,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       ClearReconversionState();
     }
     // Spec §3.7: decided before the map, where Idle's Space is a pass-through.
-    if (InsertsFullWidthSpace(wParam, modifiers)) {
+    if (InsertsFullWidthSpace(context, wParam, modifiers)) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2912,7 +2947,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     typo_test_key_context_ = nullptr;
     // A commit a later edit session finished, without a key, drops the keys
     // that waited for its retry (DEV-1750).
-    if (!committing_ && !full_width_space_context_) {
+    if (!committing_) {
       retry_waiting_keys_.clear();
       retry_waiting_drop_logged_ = false;
     }
@@ -2946,6 +2981,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
       return S_OK;
     }
+    // Spec §3.7: a space whose lock was not granted is inserted again once,
+    // before this key, which is then handled as usual. The probe does it, as
+    // it finishes Unicode input, so a key the app takes lands after the space.
+    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
+      return space_hr;
     const uint32_t modifiers = CurrentKeyModifiers();
     const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
         static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
@@ -3047,16 +3087,6 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         return S_OK;
       }
     }
-    // A refused full-width space is inserted again before this key, which
-    // waits like a key after a refused commit (spec §3.7, §2.4.1).
-    if (full_width_space_context_) {
-      const HRESULT retry_hr = InsertFullWidthSpace(full_width_space_context_.Get());
-      if (retry_hr == E_OUTOFMEMORY) return retry_hr;
-      *eaten = TRUE;
-      if (SUCCEEDED(retry_hr)) return ReplayRetryWaitingKeys(context, wParam, lParam);
-      HoldRetryWaitingKey(context, wParam, lParam);
-      return S_OK;
-    }
 
     if (reconversion_list_) {
       if (wParam == VK_ESCAPE) {
@@ -3087,9 +3117,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return hr == E_UNEXPECTED ? S_OK : hr;
     }
     // Spec §3.7: decided before the map, where Idle's Space is a pass-through.
-    // A refused insertion waits for the next key, so the key is consumed either way.
-    if (InsertsFullWidthSpace(wParam, modifiers)) {
-      const HRESULT space_hr = InsertFullWidthSpace(context);
+    // The Space is consumed whether the space is inserted, waits or is dropped.
+    if (InsertsFullWidthSpace(context, wParam, modifiers)) {
+      const HRESULT space_hr = InsertFullWidthSpace(context, /*retry=*/false);
       *eaten = TRUE;
       return space_hr == E_OUTOFMEMORY ? space_hr : S_OK;
     }
@@ -4931,7 +4961,9 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
 #ifdef AZOOKEY_TSF_TESTING
   ++typo_tracked_keys_;
 #endif
-  if (committing_) return;  // A retry key is consumed before the next input.
+  // A retry key is consumed before the next input; a space waiting for its
+  // lock is no input the tracker saw either.
+  if (committing_ || full_width_space_context_) return;
   if ((active_context_ && !SameComIdentity(context, active_context_)) || !keyboard_open_ ||
       alnum_mode_ || IsContextKeyboardDisabled(context)) {
     ResetTypoTracking();
@@ -4950,7 +4982,8 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
 // plain Backspace there sends "undo". Ctrl+Shift+Backspace is the Forget key
 // and only forgets; a system modifier closes the window without an undo.
 void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
-  if (committing_ || !undo_target_) return;  // A retry key is consumed before the next input.
+  // A retry key is consumed before the next input, and so is a waiting space.
+  if (committing_ || full_width_space_context_ || !undo_target_) return;
   auto target = std::move(*undo_target_);
   undo_target_.reset();
   // The Backspace must land in the context that was committed to: a focus

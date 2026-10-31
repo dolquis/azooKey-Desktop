@@ -331,7 +331,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す |
 | 英数キー | 英語への絶対指定。読み入力中は読みを残したまま英字を足し、候補選択中は確定してから英語に切り替える | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
 | 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す（§7.1） |
-| Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定したうえでアプリへ渡す。hex 以外は確定して通常入力に移る（§6.1） |
+| Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定した後、`fullWidthSpace` に従う（既定では全角空白を入れ、アプリへは渡さない。`docs/tsf-deep-integration-spec.md` §3.7）。hex 以外は確定して通常入力に移る（§6.1） |
 
 素通しにしたキーについて、TIP は composition を確定も取り消しもしない。キーを受けたアプリが
 composition の内側と外側のどちらへ作用させるかはアプリ次第である。legacy は読み入力中にこれらを
@@ -960,7 +960,9 @@ Ctrl+S（AI の提案）から入る状態であり、このダブルタップ�
 英数ダブルタップの「読みを半角英字で確定する」枝と、英数キーが英数モードのトグルであること
 （`docs/tsf-deep-integration-spec.md` §3.1）の関係は未決である。読みがあるとき 1 回目の押下で
 読みを確定して英数モードになり、2 回目の押下でひらがなに戻るので、このままでは読みを確定する枝に届かない。
-1 回目の押下の効果との関係は M16 で決める。
+1 回目の押下の効果との関係は M16 で決める。かなダブルタップも同じく、ひらがなキーの 1 回目の押下が
+`VK_IME_ON` と同じ効果（Off なら On、英数モードならひらがなへ。`docs/tsf-deep-integration-spec.md` §3.1）を持つので、
+その効果との関係は M16 で決める。
 
 ### 4.2 選択テキスト取得
 
@@ -1183,7 +1185,8 @@ sha	しゃ
 
 legacy との差: legacy は Space を確定として扱いアプリへ渡さず、hex 以外のキーは消費して Unicode 入力を
 続ける。範囲外のコードポイントは何も入力せずに閉じる（beep しない）。Windows 版は Space も非 hex キーの
-一つとして確定してからアプリへ渡し、範囲外は beep して取り消す（§6.3）。
+一つとして確定し、その後は Idle の Space と同じく `fullWidthSpace` に従う（既定では全角空白を入れ、アプリへは
+渡さない。`docs/tsf-deep-integration-spec.md` §3.7）。範囲外は beep して取り消す（§6.3）。
 
 ### 6.2 表示
 

@@ -116,10 +116,11 @@ legacy もカッコを全角にして読みに足すので、この挙動は leg
   ```
 - **順序**: TIP は `OnKeyDown` で、開きカッコ / 閉じカッコ / Backspace（`bracketPairing` ON ＆
   有効モード）について、まず §5.3 の同期読取で `char_before` / `char_after` /
-  `selection_collapsed` を埋め、**その hint を付けて純粋 core `HandleEvent` を呼ぶ**。core が
-  返した ClientAction 列を TIP が適用する。読取が拒否されたら hint は空（`nullopt`）で渡し、
-  core は安全側（リテラル挿入 / 通常 Backspace）の ClientAction を返す（§4.8）。
-- これにより core 遷移テスト（`input_state_test.cpp`）は hint を注入して
+  `selection_collapsed` を埋め、**その hint を付けて純粋 core の `EvaluateBracketInput`（カッコ）/
+  `EvaluateBracketBackspace`（Backspace）を呼ぶ**。core が返した `BracketPairingAction` を TIP が
+  `BracketEditSession::Apply` で適用する。読取が拒否されたら hint は空（`nullopt`）で渡し、
+  core は安全側（リテラル挿入 / 通常 Backspace）の action を返す（§4.8）。
+- これにより core のテスト（`core/tests/bracket_pairing_test.cpp`）は hint を注入して
   `skipOverClosing` / リテラル挿入 / `deleteBracketPair` / 通常 Backspace の分岐を**文書なしで
   網羅**できる。§3.3 の遷移表の「カーソル直後 / 左右」は、実装上は**この hint フィールド**を
   指す（文書アクセスではない）。
@@ -156,7 +157,8 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | UnicodeInput / ReplaceSuggestion | Input(カッコ) | （変更なし） | これらの特殊モード中はペアリングしない（§4.6） |
 
 > 上表の「`hint.*`」は §3.1.1 の `EditContextHint`（TIP が §5.3 で読んで渡す隣接文字）を指す。
-> core の `HandleEvent` は文書を直接読まず、hint のみから決定するため純粋関数を保つ。hint が
+> core の `EvaluateBracketInput` / `EvaluateBracketBackspace` は文書を直接読まず、hint のみから決定するため
+> 純粋関数を保つ。hint が
 > 空（読取失敗）なら安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
 
 `composition` トリガ（`bracketPairingTrigger == "composition"`）の遷移は §4.0.1。
@@ -524,10 +526,10 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 - 左 1 文字: 同様に `Collapse(TF_ANCHOR_START)` → `ShiftStart(ec, -1, &shifted)` → `GetText`。
 - 範囲選択か否か（`selection_collapsed`）も同セッションで確認する。
 
-読み取り結果を **§3.1.1 の `EditContextHint`** に詰め、**純粋 core の `HandleEvent(event, hint)`**
-を呼ぶ。分岐（`skipOverClosing` / `deleteBracketPair` / リテラル挿入 / 通常 Backspace）の決定は
-core が hint から行い（文書を直接見ない）、TIP は返った ClientAction を続く読み書き
-EditSession（または同一 RW セッション）で適用する。同期セッションが拒否されたら hint を空で
+読み取り結果を **§3.1.1 の `EditContextHint`** に詰め、**純粋 core の `EvaluateBracketInput` /
+`EvaluateBracketBackspace`** を呼ぶ。分岐（`skipOverClosing` / `deleteBracketPair` / リテラル挿入 / 通常 Backspace）の決定は
+core が hint から行い（文書を直接見ない）、TIP は返った action を `BracketEditSession::Apply` で続く読み書き
+EditSession（または同一 RW セッション）に適用する。同期セッションが拒否されたら hint を空で
 渡し、core は安全側へフォールバック（§4.8）。
 
 > **OnTestKeyDown の eaten 判定**: `bracketPairing == true` かつ現モードで有効なときの eaten は

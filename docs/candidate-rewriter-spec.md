@@ -435,9 +435,10 @@ UI-less モードとアプリ描画ホストでは、候補は `ITfCandidateList
 ### 11.1 入口の条件と記号横取りの例外
 
 状態は `Inactive`、`Collecting`、`Listing` の 3 つとする。`Inactive` 以外へ入るのは、次の
-3 条件がすべて成り立つときに限る。
+4 条件がすべて成り立つときに限る。
 
 - `emojiRewriter == true` かつ `emojiTriggerSearch == true`。
+- ひらがなモードである（英数モードと IME Off では TIP が記号をアプリへ渡す）。
 - `inputMode == "hiragana"`。
 - composition が空である。
 
@@ -500,7 +501,7 @@ Esc は段階的に効く。候補窓が開いているとき（`Listing`）は�
 文字列として残す。以降の Esc は通常の composition 取り消しとして働く。1 打で composition ごと
 消さないのは、打った検索語を直して引き直す動線を残すためである。
 
-`emojiTriggerSearch == false` のとき、`:` は常に従来どおりに扱う。
+`emojiTriggerSearch == false` のとき、`:` は常に `docs/tsf-deep-integration-spec.md` §3.5 の記号として扱う。
 
 ## 12. 確定時の学習データの扱い
 

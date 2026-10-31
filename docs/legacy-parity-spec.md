@@ -130,13 +130,14 @@ enum class InputStateKind {
 > 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
 > 詳細は §1.5.4。
 
-> **応答を待つ間のキーは保留して再生する（DEV-1813）**: `StartConversion` の応答を待つ間に来たキー
-> （Enter、Space、Shift+Space、↑↓、変換、数字、文字、記号、Backspace のほか、F6〜F10、Tab、←→、
-> Ctrl+P/N/H、Ctrl+Shift+U など、TIP がこの状態で受け取るキーすべて）は、TIP が消費して保留し、
-> 窓が開いた時点（応答の到着、上記の 750ms の deadline、Host 不通のローカル候補）で打った順に
-> `Selecting` へ再生する。再生したキーが `Selecting` で割り当てを持たなければ、そのときアプリへ渡す。
-> 例外として、Esc と、IME を Off にするキー（`VK_IME_OFF`、半角/全角、`imeOnOff` の無変換）と英数モードへの
-> 切替（英数キー、入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
+> **応答を待つ間のキーは保留して再生する（DEV-1813）**: `StartConversion` の応答を待つ間に来たキーのうち、
+> `MapUserAction(VK, modifiers, Selecting)`（§1.5.3）が `nullopt` でないキー（Enter、Space、Shift+Space、↑↓、
+> 変換、数字、Backspace、Ctrl+P/N/H、Ctrl+Shift+U など）、F6〜F10、`docs/tsf-deep-integration-spec.md` §3.5 で
+> 取り込む文字・記号・数字は、TIP が消費して保留し、窓が開いた時点（応答の到着、上記の 750ms の deadline、
+> Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（Tab、`Selecting` で割り当ての
+> 無い ←→、Home など）は保留せず、その場でアプリへ渡す（保留中のキーはそのまま残す）。
+> Esc と、IME を Off にするキー（`VK_IME_OFF`、半角/全角、`imeOnOff` の無変換）と英数モードへの切替（英数キー、
+> 入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
 > Space→Space→Enter は第 2 候補を確定し、Space→`2` は 2 番目の候補を確定し、Space→文字は選択中の
 > 候補を確定して次の入力を始める。2 回目以降の Space で候補窓用の要求を出し直さない。
 > 保留は `docs/tsf-deep-integration-spec.md` §2.4.1 の確定の再試行を待つキーと同じキューを共有し、
@@ -406,12 +407,13 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   VK から決定）を埋める（`codepoint` は第 2 層で TIP が解決した値を載せる）。これにより数字キーは
   index 付きで一意に識別でき、TIP が VK から digit を再導出する二重マッピングを不要にする。状態依存の解決
   （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
-  `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、Composing / Previewing で
-  `Input`、**Idle では `nullopt`＝パススルー**）は、**現在状態を引数として明示的に受け取って**決める。
+  `Shift+Space` で `PrevCandidate` / 数字は Selecting の `1`〜`9` で `SelectByDigit`、Selecting の `0` と
+  Composing / Previewing で `Input`、**Idle では `nullopt`＝パススルー**）は、**現在状態を引数として明示的に受け取って**決める。
   ある状態でその IME が扱わないキーは `nullopt` を返す（例: Idle の数字）。**hint 依存の例外**: Idle の Backspace は既定 `nullopt`
   （パススルー）だが、M61-A（`bracketPairing` ON）では TIP が §5.3 の同期読取で空ペアを確認した
-  ときだけ Backspace を core へ回し（`HandleEvent(Backspace, hint)` → `deleteBracketPair`）eaten=TRUE
-  にする（`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
+  ときだけ Backspace を core の純粋関数 `EvaluateBracketBackspace(…, hint, …)` へ回し、返った
+  `deleteBracketPair` を `BracketEditSession::Apply` で適用して eaten=TRUE にする
+  （`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
   （VK, mod, kind）ではなく OnKeyDown / OnTestKeyDown 層で hint を用いて上書き**する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
   注入して `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
   （codepoint は解決しない＝第 2 層の責務）。
@@ -420,20 +422,23 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   読みがあるときの取り込みの可否を変えない。Selecting では `1`〜`9`（テンキーを含む）が `SelectByDigit`、
   `0`（テンキーを含む）が `Input` である（§1.4）。Idle の数字は `nullopt` とし、`numberRewriter` が OFF のときは
   表計算などへ数字を直接入れる操作を変えない（legacy は Idle の数字でも入力を始めるので、意図した legacy
-  との差である）。`numberRewriter` が ON のときは、従来どおり TIP の前処理が Idle の数字を取り込んで
-  composition を始める。Space の応答待ちの数字は §1.2 の保留で窓が開いた後に `SelectByDigit` として効く。
+  との差である）。`numberRewriter` が ON で一括変換ではないときは、従来どおり TIP の前処理が Idle の数字を
+  取り込んで composition を始める。Space の応答待ちの数字は §1.2 の保留で窓が開いた後に `SelectByDigit` として効く。
 - **記号キー（DEV-1811）**: 記号を生む OEM キー（`VK_OEM_1`〜`VK_OEM_8`、`VK_OEM_102`、`VK_OEM_MINUS`、
   `VK_OEM_PLUS`、`VK_OEM_COMMA`、`VK_OEM_PERIOD`）と Shift 付きの数字キーは、Idle / Composing / Previewing /
   Selecting で `Input` とする。どの文字を生むか、全角化の表に載るかは第 2 層が `ToUnicodeEx` の結果で決め、
   表に無い文字ならキーをアプリへ渡す。表と取り込み方は `docs/tsf-deep-integration-spec.md` §3.5。
   core が `InputState` を所有するため本写像も **core 側**に置き、TIP は `(VK, modifiers, 解決済み codepoint)`
   を core へ渡す。`docs/bracket-pairing-spec.md` §3.1 のカッコ補完は、このキーを TIP が写像より前に処理する。
+  テンキーの記号キー（`VK_ADD`、`VK_SUBTRACT`、`VK_MULTIPLY`、`VK_DECIMAL`、`VK_DIVIDE`）は Composing /
+  Previewing / Selecting で `Input`、Idle で `nullopt` とする（§1.4）。文字は全角化の表ではなく VK で決める
+  （同 §3.5）。legacy はテンキーの記号でも Idle から入力を始めるので、Idle の素通しは意図した legacy との差である。
 - **第 2 層 — TIP `TextService.cpp::OnKeyDown`（プラットフォーム・モード依存）**:
   `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
   （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、
   `UserActionEvent.codepoint` に載せる。キーボードレイアウト・IME モードの関心を所有する。
 - **状態を翻訳境界に含める根拠（無状態 map にしない）**: `Space` は Selecting で次候補・他で変換
-  開始、数字は Selecting で候補選択・読み入力中で文字入力・Idle でパススルーと、**同一キーの意味が現在状態に依存する**。
+  開始、数字は Selecting の `1`〜`9` で候補選択・Selecting の `0` と読み入力中で文字入力・Idle でパススルーと、**同一キーの意味が現在状態に依存する**。
   無状態 `(VK, modifiers)` 写像ではこれを表現できず、§1.1 に raw `Space` / `Digit` 変種を増やすと
   状態解決を状態機械の外へ二重化してしまう。そこで **`InputStateKind` を写像の引数に含める**
   （round-2 レビュー提示の選択肢「状態を翻訳境界に含める」）。これは状態の二重保持ではない:

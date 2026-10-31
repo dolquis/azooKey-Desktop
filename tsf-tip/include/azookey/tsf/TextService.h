@@ -296,6 +296,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_convert_keys_action_for_test(ConvertKeysAction action) {
     local_settings_.SetConvertKeysActionForTest(action);
   }
+  void set_full_width_space_for_test(bool enabled) {
+    local_settings_.SetFullWidthSpaceForTest(enabled);
+  }
+  bool full_width_space_waits_for_retry_for_test() const {
+    return full_width_space_context_ != nullptr;
+  }
   bool alnum_mode_for_test() const { return alnum_mode_; }
   void set_alnum_mode_for_test(bool alnum) { alnum_mode_ = alnum; }
   const std::string& batch_raw_romaji_for_test() const { return batch_raw_romaji_; }
@@ -882,6 +888,10 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<RetryWaitingKey> window_waiting_keys_;
   // One log record per wait for a key it could not keep.
   bool retry_waiting_drop_logged_{false};
+  // The context of a full-width space whose edit session lock was not
+  // granted. The next key inserts it again once, before it is handled; focus
+  // and lifecycle loss drop it (docs/tsf-deep-integration-spec.md §3.7).
+  Microsoft::WRL::ComPtr<ITfContext> full_width_space_context_;
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
   std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 
@@ -1539,6 +1549,16 @@ class TextService final : public ITfTextInputProcessorEx,
   void ToggleSettingFromMenu(std::string_view key, bool value);
   HRESULT HandleOpenCloseKey(OpenCloseKeyAction action, WPARAM key, ITfContext* context);
   bool HasInputToCommitBeforeClose() const;
+  // Spec §3.7: whether this Space, with no reading in hiragana mode, inserts
+  // U+3000 instead of reaching the app.
+  bool InsertsFullWidthSpace(ITfContext* context, WPARAM key, uint32_t modifiers) const;
+  // Inserts U+3000 at the selection without a composition. Unless this is the
+  // retry, a lock not granted keeps the context in full_width_space_context_;
+  // any other failure drops the space.
+  HRESULT InsertFullWidthSpace(ITfContext* context, bool retry);
+  // Inserts a waiting space once before the key from `context`, or drops it
+  // when the key comes from another context.
+  HRESULT ResolvePendingFullWidthSpace(ITfContext* context);
   HRESULT CloseKeyboardCommittingShownText(ITfContext* context, std::string_view source);
   void OpenKeyboardIfClosed(std::string_view source);
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);

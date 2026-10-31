@@ -59,6 +59,9 @@ class TipLocalSettings final {
   bool PunctuationConversionSnapshot() const;
   // convertKeysAction == "imeOnOff" (DEV-1736). Absent or any other value: Default.
   ConvertKeysAction ConvertKeysActionSnapshot() const;
+  // fullWidthSpace (DEV-1814): Space without Shift inserts U+3000 when true.
+  // Absent or not a bool: true.
+  bool FullWidthSpaceSnapshot() const;
   // dynamicPunctuation* (M59). Defaults when absent or malformed: off, "ja", onPause, 400 ms.
   TipDynamicPunctuationSettings DynamicPunctuationSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
@@ -75,6 +78,7 @@ class TipLocalSettings final {
   void SetLiveConversionForTest(bool enabled);
   void SetPunctuationConversionForTest(bool enabled);
   void SetConvertKeysActionForTest(ConvertKeysAction action);
+  void SetFullWidthSpaceForTest(bool enabled);
   void SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
@@ -120,6 +124,7 @@ class TipLocalSettings final {
   bool live_conversion_{false};
   bool punctuation_conversion_{false};
   ConvertKeysAction convert_keys_action_{ConvertKeysAction::Default};
+  bool full_width_space_{true};
   TipDynamicPunctuationSettings dynamic_punctuation_;
   uint32_t max_context_length_{30};
   bool prediction_enabled_{true};

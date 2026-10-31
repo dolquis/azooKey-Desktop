@@ -242,6 +242,7 @@ void TipLocalSettings::Stop() noexcept {
   live_conversion_ = false;
   punctuation_conversion_ = false;
   convert_keys_action_ = ConvertKeysAction::Default;
+  full_width_space_ = true;
   dynamic_punctuation_ = {};
   max_context_length_ = 30;
   prediction_enabled_ = true;
@@ -278,6 +279,11 @@ bool TipLocalSettings::PunctuationConversionSnapshot() const {
 ConvertKeysAction TipLocalSettings::ConvertKeysActionSnapshot() const {
   const std::lock_guard lock(mutex_);
   return convert_keys_action_;
+}
+
+bool TipLocalSettings::FullWidthSpaceSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return full_width_space_;
 }
 
 TipDynamicPunctuationSettings TipLocalSettings::DynamicPunctuationSnapshot() const {
@@ -321,6 +327,7 @@ void TipLocalSettings::Reload() noexcept {
   bool live_conversion = false;
   bool punctuation_conversion = false;
   ConvertKeysAction convert_keys_action = ConvertKeysAction::Default;
+  bool full_width_space = true;
   TipDynamicPunctuationSettings dynamic_punctuation;
   uint32_t max_context_length = 30;
   bool prediction_enabled = true;
@@ -360,6 +367,7 @@ void TipLocalSettings::Reload() noexcept {
       punctuation_conversion = json->GetString("punctuationConversion").value_or("off") == "commit";
       if (json->GetString("convertKeysAction").value_or("default") == "imeOnOff")
         convert_keys_action = ConvertKeysAction::ImeOnOff;
+      full_width_space = json->GetBool("fullWidthSpace").value_or(true);
       dynamic_punctuation.enabled = json->GetBool("dynamicPunctuation").value_or(false);
       if (const auto style = json->GetString("dynamicPunctuationStyle");
           style && *style == "fullwidth_latin")
@@ -444,6 +452,7 @@ void TipLocalSettings::Reload() noexcept {
     live_conversion_ = live_conversion;
     punctuation_conversion_ = punctuation_conversion;
     convert_keys_action_ = convert_keys_action;
+    full_width_space_ = full_width_space;
     dynamic_punctuation_ = std::move(dynamic_punctuation);
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
@@ -607,6 +616,11 @@ void TipLocalSettings::SetPunctuationConversionForTest(bool enabled) {
 void TipLocalSettings::SetConvertKeysActionForTest(ConvertKeysAction action) {
   const std::lock_guard<std::mutex> lock(mutex_);
   convert_keys_action_ = action;
+}
+
+void TipLocalSettings::SetFullWidthSpaceForTest(bool enabled) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  full_width_space_ = enabled;
 }
 
 void TipLocalSettings::SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings) {

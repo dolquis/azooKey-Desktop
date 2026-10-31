@@ -673,6 +673,21 @@ TEST_F(LocalSettingsTest, ConvertKeysActionDefaultsAndReloads) {
       WaitUntil([&] { return reader.ConvertKeysActionSnapshot() == ConvertKeysAction::Default; }));
 }
 
+TEST_F(LocalSettingsTest, FullWidthSpaceDefaultsToTrueAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.FullWidthSpaceSnapshot());
+  Write(R"({"fullWidthSpace":false})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.FullWidthSpaceSnapshot(); }));
+  // A value that is not a bool keeps the full-width default (spec §3.7).
+  Write(R"({"fullWidthSpace":"no"})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.FullWidthSpaceSnapshot(); }));
+  Write(R"({"fullWidthSpace":false})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.FullWidthSpaceSnapshot(); }));
+  Write(R"({"fullWidthSpace":0})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.FullWidthSpaceSnapshot(); }));
+}
+
 TEST(LivePunctuationPolicyTest, EncodesTheTimingTableOfSection711) {
   using azookey::tsf::AutoPunctuationFor;
   using azookey::tsf::LiveRequestTiming;

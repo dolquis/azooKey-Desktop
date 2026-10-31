@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <windows.h>
+// windows.h does not pull in the VK_DBE_* keys.
+#include <ime.h>
 
 #include <iterator>
 #include <optional>
@@ -175,6 +177,7 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kConvert, static_cast<uint32_t>(VK_CONVERT));
   EXPECT_EQ(vk::kNonConvert, static_cast<uint32_t>(VK_NONCONVERT));
   EXPECT_EQ(vk::kOemAttn, static_cast<uint32_t>(VK_OEM_ATTN));
+  EXPECT_EQ(vk::kDbeHiragana, static_cast<uint32_t>(VK_DBE_HIRAGANA));
   EXPECT_EQ(vk::kSpace, static_cast<uint32_t>(VK_SPACE));
   EXPECT_EQ(vk::kEnd, static_cast<uint32_t>(VK_END));
   EXPECT_EQ(vk::kHome, static_cast<uint32_t>(VK_HOME));
@@ -307,11 +310,25 @@ TEST(OpenCloseKeyTest, ConvertKeysOpenAndCloseOnlyUnderImeOnOff) {
             OpenCloseKeyAction::Close);
 }
 
+TEST(OpenCloseKeyTest, HiraganaKeyOpensLikeImeOnAndKatakanaKeyIsNotHandled) {
+  for (const auto setting : {ConvertKeysAction::Default, ConvertKeysAction::ImeOnOff}) {
+    EXPECT_EQ(ClassifyOpenCloseKey(VK_DBE_HIRAGANA, 0, setting), OpenCloseKeyAction::Open);
+    // No katakana input mode exists, so the Shift-ed kana key reaches the app (spec §3.1).
+    EXPECT_EQ(ClassifyOpenCloseKey(VK_DBE_KATAKANA, 0, setting), OpenCloseKeyAction::None);
+  }
+  // The open/close keys are classified before the map, which leaves both kana keys unmapped.
+  for (const auto kind : kAllKinds) {
+    EXPECT_FALSE(MapUserAction(VK_DBE_HIRAGANA, 0, kind).has_value());
+    EXPECT_FALSE(MapUserAction(VK_DBE_KATAKANA, 0, kind).has_value());
+  }
+}
+
 TEST(OpenCloseKeyTest, ModifiedKeysAreNotOpenCloseKeys) {
   for (const uint32_t modifiers : {kShift, kCtrl, kAlt, kWin, kCtrl | kShift}) {
-    for (const uint32_t key : {static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF),
-                               static_cast<uint32_t>(VK_KANJI), static_cast<uint32_t>(VK_CONVERT),
-                               static_cast<uint32_t>(VK_NONCONVERT)}) {
+    for (const uint32_t key :
+         {static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF),
+          static_cast<uint32_t>(VK_DBE_HIRAGANA), static_cast<uint32_t>(VK_KANJI),
+          static_cast<uint32_t>(VK_CONVERT), static_cast<uint32_t>(VK_NONCONVERT)}) {
       EXPECT_EQ(ClassifyOpenCloseKey(key, modifiers, ConvertKeysAction::ImeOnOff),
                 OpenCloseKeyAction::None)
           << key << " " << modifiers;

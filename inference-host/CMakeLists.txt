@@ -36,6 +36,7 @@ add_library(azookey_host STATIC
   src/ModelsCli.cpp
   src/NewWordsCli.cpp
   src/ModelCatalog.cpp
+  src/ModelFetch.cpp
   src/NeologdPack.cpp
   src/PunctuationInserter.cpp
   src/NllScorer.cpp
@@ -74,6 +75,17 @@ add_custom_command(OUTPUT "${AZOOKEY_NEOLOGD_PIN_CPP}"
   DEPENDS "${AZOOKEY_NEOLOGD_PIN}" "${CMAKE_CURRENT_SOURCE_DIR}/EmbedNeologdPin.cmake"
   VERBATIM)
 target_sources(azookey_host PRIVATE "${AZOOKEY_NEOLOGD_PIN_CPP}")
+
+set(AZOOKEY_DEFAULT_MODEL_CATALOG "${PROJECT_SOURCE_DIR}/settings/default-model-catalog.json")
+set(AZOOKEY_DEFAULT_MODEL_CATALOG_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/DefaultModelCatalog.cpp")
+add_custom_command(OUTPUT "${AZOOKEY_DEFAULT_MODEL_CATALOG_CPP}"
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${AZOOKEY_DEFAULT_MODEL_CATALOG}
+    -DOUTPUT=${AZOOKEY_DEFAULT_MODEL_CATALOG_CPP}
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/EmbedDefaultModelCatalog.cmake"
+  DEPENDS "${AZOOKEY_DEFAULT_MODEL_CATALOG}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/EmbedDefaultModelCatalog.cmake"
+  VERBATIM)
+target_sources(azookey_host PRIVATE "${AZOOKEY_DEFAULT_MODEL_CATALOG_CPP}")
 
 target_include_directories(azookey_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_host

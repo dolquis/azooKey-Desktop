@@ -7,7 +7,7 @@
 | Zenzai の変換、ロード、推論 | `docs/zenzai-inference-spec.md`, `docs/zenzai-gpu-route.md` | `inference-host/src/ZenzaiModelConverter.cpp`, `inference-host/src/InferenceEngine.cpp` | `host_engine_tests` |
 | request dispatch と degraded mode | `docs/windows-tsf-host-architecture.md`, `tsf-ipc-protocol` skill | `inference-host/src/Dispatcher.cpp` | `host_dispatcher_tests` |
 | scheduler、cancel、timeout | `docs/dev-infrastructure-spec.md`, `docs/rich-features-spec.md` | `inference-host/src/RequestScheduler.cpp` | `host_scheduler_tests` |
-| ModelCatalog とモデル選択 | `docs/model-management-spec.md`, `settings/model-catalog.schema.json` | `inference-host/src/ModelCatalog.cpp` | `host_model_catalog_tests` |
+| ModelCatalog とモデル選択 | `docs/model-management-spec.md`, `settings/model-catalog.schema.json` | `inference-host/src/ModelCatalog.cpp`, `inference-host/src/ModelFetch.cpp`, `inference-host/src/ModelsCli.cpp`, `settings/default-model-catalog.json` | `host_model_catalog_tests` |
 | ユーザーデータパス | `docs/learning-data-management-spec.md` | `inference-host/src/UserDataPaths.cpp` | `host_user_data_paths_tests` |
 | runtime 設定 | `docs/zenzai-gpu-route.md`, `docs/ai-backend-spec.md` | `inference-host/src/SettingsStore.cpp` | `host_settings_store_tests` |
 | privacy と入力ログ | `docs/privacy-and-secure-input-spec.md` | engine / dispatcher のログ境界 | `host_engine_tests`, `host_dispatcher_tests` |

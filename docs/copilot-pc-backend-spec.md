@@ -445,7 +445,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 - 同じモデルの R1 artifact（`.gguf`）と R2 artifact（ONNX のディレクトリ）は、model catalog の
   1 entry にエンジン別の artifact として並べ、ファイルごとに SHA-256 を持たせる。catalog の形
   （必須の artifact、`promptFormat` の置き場所を含む）は `docs/model-management-spec.md`
-  §3.1.1「R2 再開時の catalog」が持つ。
+  §3.1.1「catalog v2」が持つ。
 - 設定の `model.selectedPath` は R1 artifact（GGUF）の絶対パスのまま使い、settings の schema は
   変えない。Host は `selectedPath` の GGUF を catalog の entry に照合し（`zenzai\` 配下にあり、
   ファイル名と SHA-256 が R1 artifact と一致する）、一致した entry の R2 artifact を解決する。

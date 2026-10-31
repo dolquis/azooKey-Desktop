@@ -436,7 +436,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
 | zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 の結論＝暫定 CC-BY-SA 保守・上流 HF から取得。§1.6.2） |
-| kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。製品からの取得と catalog への配線は follow-up DEV-1789。それまでは手動で配置して `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
+| kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。既定の catalog（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m` で取得できる。取得後は `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
@@ -452,10 +452,12 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 §1.6 はモデルを「MSIX 非同梱・初回取得」と定める。本節はその **v1.0 最小実装**を
 確定する。対象は **zenz-v3 系 GGUF 1 種**（既定配置
 `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`）。**v1.0 が対象とする
-モデル（repo / ファイル / version / 量子化 / SHA256）は Windows 側が所有する
-ピン定義 `models\zenzai\expected.json`（または同等のビルド定数）を唯一の正とし、
-(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
-アーティファクトを指す**。
+モデル（repo / revision / ファイル / サイズ / SHA256）は Windows 側が所有するピン定義を
+唯一の正とし、(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
+アーティファクトを指す**。ピン定義は、ビルド時に Host へ埋め込む既定の model catalog
+（`settings/default-model-catalog.json`、`docs/model-management-spec.md` §3.1.1「既定の
+catalog」）の `defaultModelId` の entry である。他の文書が「`expected.json` ピン」と呼ぶ
+ものも、この entry を指す。
 
 > **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
 > HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
@@ -463,11 +465,10 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 > だが、`legacy/` は保全された参照資産であり Windows 版の source of truth では
 > ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
 > 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
-> `expected.json` に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
+> 既定の catalog に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
 > §3.4 のモデルパス例や roadmap M8 受け入れの版表記も、本ピン（上流
 > `Miwa-Keita/zenz-v3.2-small-gguf` = v3.2）を正として揃える。版番号は各 doc に
-> 直書きせず本ピンを参照し、版の更新は版の決定権を持つ DEV-219〔M8 統合〕が
-> `expected.json` で行う。
+> 直書きせず本ピンを参照し、版の更新は既定の catalog の entry を書き換えて行う。
 
 M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、二重実装を
 避けて先に敷くことを目的とする。
@@ -508,8 +509,8 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 | DEV-202 結論 | (b) の配信元 | (a) 同梱 |
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
-| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**`expected.json` が定める repo / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
-| 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（`expected.json` ピンが定める repo / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
+| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**既定の catalog が定める repo / revision / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
+| 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
 （モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。結論は §1.6.2 参照。
@@ -545,12 +546,12 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
         - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
           **`model.enabled` かつ `model.autoLoadOnHostStart=true`
           （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の
-          場合に限り、`models\zenzai\` の中から **SHA256 が `expected.json` の
+          場合に限り、`models\zenzai\` の中から **SHA256 が既定の catalog の
           ピンと一致するファイル**を選び（単に format-valid な GGUF では不可。
           **ピン一致を*前提条件*とし**、licensing / 版ゲートを迂回しない。
           `model-management-spec.md` §3.1/§3.3 の形式検証も併せて満たすこと）、
           プローブロード成功時に `selectedPath` へコミットする。**ピン一致
-          ファイルが無い / ピン未投入の場合は autoselect しない**（任意の有効
+          ファイルが無い場合は autoselect しない**（任意の有効
           GGUF を勝手に選ばない）＝ (c1) 適用外で、(c2) か劣化モード（下記）に
           委ねる。次も autoselect の対象外: (i) `autoLoadOnHostStart=false`
           （起動時ロードを抑止する設定を尊重し、何もしない）、(ii) `selectedPath`
@@ -561,36 +562,20 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
         - **(c2) ユーザーによる明示選択（ピン非依存）**: ユーザー / 管理者が
           `model.selectedPath` を直接設定する経路（`settings.json` 手編集、または
           設定 UI / M45 の「モデルを追加」「選択モデルをロード」）。設定された
-          実在パスを probe-load して使う。**`expected.json` ピンが未投入でも成立
-          する唯一の手動経路**であり、autoselect が無効な状況（ピン未投入等）の
+          実在パスを probe-load して使う。**ピンと一致しないファイルでも成立
+          する唯一の手動経路**であり、autoselect が無効な状況（ピン一致ファイルが無い等）の
           受け皿になる。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
           `selectedPath` を明示設定する（空のままでは degraded）。
-- **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
-  Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
-  独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記
-  注記参照）。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一
-  アーティファクトを指す。SHA256 の値域は M45 の `ModelCatalogEntry.sha256`
-  （`model-management-spec.md` §3.2）と同一。本書はこのピンの**契約（schema）を
-  定義**し、**具体値（正確なファイル名と SHA256）は M8/M28 実装時に版の決定権を
-  持つ DEV-219 が投入する**（docs は値ファイルを未コミット。値の確定 = DEV-219）:
-
-  ```jsonc
-  // models\zenzai\expected.json（Windows 所有のピン。値は M8/M28 で投入）
-  {
-    "repo": "Miwa-Keita/zenz-v3.2-small-gguf",   // 出所（上流）。再ホスト時も artifact は同一
-    "file": "<exact-file-name>.gguf",             // 例: ggml-model-Q5_K_M.gguf（DEV-219 で確定）
-    "version": "v3.2-small",
-    "quantization": "Q5_K_M",
-    "sha256": "<64-hex>",                          // 検証の基準。DEV-219 で実値投入
-    "size_bytes": 0                                // 任意（部分 DL 早期検出用）
-  }
-  ```
-
-  **ピン未投入時の挙動（明示）**: `expected.json`（または定数）が未投入の間は、
-  照合すべき正確な artifact / SHA256 が無いため **(b) DL は発火させない**（誤った
-  v3.1/v3.2 を引いたり検証不能になるのを防ぐ）。この期間の operative path は
-  (c) 手動配置のみで、未配置なら M8/M47 の劣化モード（下記）に従う。これにより
-  「ピンが正、未投入なら DL せず degraded」が決定的になる。
+- **期待版のピン**: 対象の Hugging Face repo / revision / ファイル名 / サイズ / SHA256 は、
+  既定の catalog（`settings/default-model-catalog.json`）の `defaultModelId` の entry の
+  `artifacts["llama.cpp"]` に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照
+  しない。上記注記参照）。形式（`fileName`・`sha256`・`sizeBytes`・`source`）は
+  `docs/model-management-spec.md` §3.1.1 の catalog v2 が定め、値は §1.6.2 の固定値と
+  同じである。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一アーティファクトを
+  指す。catalog はビルド時に Host へ埋め込み、MSI と検証用 zip には catalog のファイルを
+  置かない。版を変えるときは既定の catalog の entry を書き換える。revision はコミット ID に
+  固定するので、上流がブランチを更新しても取得物は変わらない。(b) の取得機構は
+  `docs/model-management-spec.md` §3.1.2「catalog の entry の取得」が持つ。
 - **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
   **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
   `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →
@@ -631,7 +616,7 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 
 | 項目 | 内容 |
 |---|---|
-| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf`（§1.6.1 の `expected.json` が正） |
+| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf` の revision `c67e03e07d215c869f591b274c1631170d3e11fe`、`ggml-model-Q5_K_M.gguf`（73,871,936 バイト、SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。既定の catalog の既定 entry（§1.6.1） |
 | HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
 | 矛盾兆候 | zenz 一族（v1 / v2 / v2.5 / v3 / v3.1、safetensors 版含む）とベース `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0`（`zenz-v2.5-small` は `base_model: ku-nlp/gpt2-small-japanese-char` を明示。HF API 確認 2026-07）。apache-2.0 は一族で v3.2-small-gguf のみ。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性（README 空・ベース未記載・照合できる safetensors 版なし） |
 | **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
@@ -642,10 +627,11 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 ##### モデル（kanakanji-edge-33m GGUF、DEV-1721）
 
 上の zenz 節の保守運用（全体を CC-BY-SA-4.0 として扱う）は zenz に限る。選べるモデルとする
-edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定する。製品からの取得と catalog への
-配線は follow-up DEV-1789 で、それまでは手動で配置して `model.selectedPath` で選び、プロンプト
-形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。zenz のピンは §1.6.1 の
-`expected.json` を正とし、edge のピンは本節に置く。DEV-1789 で §1.6.1 の契約へ寄せ、1 か所にする。
+edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定する。edge は既定の catalog
+（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m`
+で取得できる（`docs/model-management-spec.md` §3.1.2）。取得したファイルは `model.selectedPath`
+で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。下表の
+固定値は既定の catalog の entry と同じ値である。
 
 | 項目 | 内容 |
 |---|---|
@@ -1299,7 +1285,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
 | 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv.enc`（DPAPI 暗号化、M34） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 の `expected.json` ピンが定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
+| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
 
 拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
@@ -1532,12 +1518,12 @@ schema 自体は superset のまま変えない。
   「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
   `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
   `selectedPath` 確定の規律は §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
-    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（`models\zenzai\expected.json`）の
+    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、§1.6.1）の
       モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
-      へ commit する（commit 後に「既定モデル使用中」と表示）。ピン未投入 / 不一致なら autoselect しない。
+      へ commit する（commit 後に「既定モデル使用中」と表示）。ピンと一致しなければ autoselect しない。
     - **ユーザー / 管理者の明示選択（ピン非依存、§1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
       `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
-      **ピン未投入でも成立し、ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
+      **ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
       非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
   いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を
   表示する。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン

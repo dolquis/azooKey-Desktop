@@ -6188,6 +6188,8 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeClearsPreeditAndPendingRomaji) {
 
 TEST(TsfTipOnKeyDownPreeditTest, SpaceFlushesPendingRomajiAndIsEatenDuringPreedit) {
   TextServiceHarness h;
+  // With fullWidthSpace off the Space without a reading is the app's (spec §3.7).
+  h.service.set_full_width_space_for_test(false);
 
   EXPECT_FALSE(h.TestPress(VK_SPACE));
   EXPECT_FALSE(h.Press(VK_SPACE));
@@ -7414,6 +7416,8 @@ TEST(TsfTipOnKeyDownPreeditTest, FailedRangeCloneReplacesPreviousCachedRange) {
 
 TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitAfterExternalTerminationDoesNotInsertTwice) {
   DocumentPreeditHarness h;
+  // A Space without a reading is the app's only with fullWidthSpace off (spec §3.7).
+  h.service.set_full_width_space_for_test(false);
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
   ASSERT_EQ(h.context.document->text, L"か");
@@ -7683,6 +7687,8 @@ TEST(TsfTipOnKeyDownPreeditTest, NewInputBeforeFocusRestoresHostClearedText) {
 
 TEST(TsfTipOnKeyDownPreeditTest, PassThroughKeyRestoresHostClearedTextBeforeApplicationEdit) {
   DocumentPreeditHarness h;
+  // A Space without a reading is the app's only with fullWidthSpace off (spec §3.7).
+  h.service.set_full_width_space_for_test(false);
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
   ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
@@ -10828,6 +10834,8 @@ TEST(TsfTipUnicodeInputTest, UnmappedKeysFinishTheBufferAndPassThrough) {
   for (const WPARAM key : {WPARAM{VK_SPACE}, WPARAM{VK_RIGHT}}) {
     SCOPED_TRACE(key);
     TextServiceHarness h;
+    // A Space without a reading is the app's only with fullWidthSpace off (spec §3.7).
+    h.service.set_full_width_space_for_test(false);
     FakeCompositionAttachment attachment(h);
     PressCtrlShift(h, 'U');
     for (const WPARAM hex : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}}) PressBoth(h, hex);
@@ -10842,6 +10850,8 @@ TEST(TsfTipUnicodeInputTest, UnmappedKeysFinishTheBufferAndPassThrough) {
 
 TEST(TsfTipUnicodeInputTest, UnmappedKeyWithInvalidValueBeepsAndCancels) {
   TextServiceHarness h;
+  // A Space without a reading is the app's only with fullWidthSpace off (spec §3.7).
+  h.service.set_full_width_space_for_test(false);
   FakeCompositionAttachment attachment(h);
   PressCtrlShift(h, 'U');
   for (const WPARAM hex : {WPARAM{'D'}, WPARAM{'8'}, WPARAM{'0'}, WPARAM{'0'}}) PressBoth(h, hex);
@@ -15028,4 +15038,167 @@ TEST(TsfTipCommitFormTest, AlphanumericModeAndClosedImePassTheKeys) {
     EXPECT_FALSE(h.Press(key)) << key;
   }
   EXPECT_FALSE(h.service.debug_window_visible_for_test());
+}
+
+namespace {
+// Spec §3.7: the fixed harness, with the reading cleared before the Space.
+void ConfigureFullWidthSpaceHarness(DocumentPreeditHarness& h, bool full_width = true) {
+  ConfigureTypoHarness(h);
+  h.service.set_full_width_space_for_test(full_width);
+  ASSERT_TRUE(h.service.preedit_kana_.empty()) << "the Space must find no reading";
+  ASSERT_FALSE(h.service.composition_) << "the Space must find no composition";
+}
+
+size_t QueuedCommitObservationCount(DocumentPreeditHarness& h) {
+  const auto types = h.service.queued_ipc_types_for_test();
+  return static_cast<size_t>(
+      std::count(types.begin(), types.end(), azookey::ipc::MessageType::CommitObservation));
+}
+}  // namespace
+
+TEST(TsfTipFullWidthSpaceTest, SpaceInsertsFullWidthAndShiftSpaceReachesTheApp) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  EXPECT_TRUE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+  EXPECT_FALSE(h.service.composition_) << "the space is inserted without a composition";
+  EXPECT_EQ(QueuedCommitObservationCount(h), 0u) << "the space is not learned";
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+}
+
+TEST(TsfTipFullWidthSpaceTest, FalseSwapsTheWidthsOfSpaceAndShiftSpace) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h, /*full_width=*/false);
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"");
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+}
+
+TEST(TsfTipFullWidthSpaceTest, SpaceAfterAReadingConvertsInsteadOfInsertingASpace) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text.find(L'\x3000'), std::wstring::npos);
+}
+
+TEST(TsfTipFullWidthSpaceTest, AlphanumericModeOffAndSystemModifiersLeaveTheSpaceToTheApp) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ConfigureFullWidthSpaceHarness(h);
+  for (const int modifier : {VK_CONTROL, VK_MENU, VK_LWIN}) {
+    h.keyboard_state.SetDown(modifier, true);
+    (void)h.Press(VK_SPACE);
+    h.keyboard_state.SetDown(modifier, false);
+    EXPECT_EQ(h.context.document->text, L"") << modifier;
+  }
+  h.service.set_alnum_mode_for_test(true);
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  h.service.set_alnum_mode_for_test(false);
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  ASSERT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"");
+}
+
+TEST(TsfTipFullWidthSpaceTest, SecureContextInsertsTheSpaceWithoutObserving) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+  EXPECT_EQ(QueuedCommitObservationCount(h), 0u);
+}
+
+TEST(TsfTipFullWidthSpaceTest, KeyboardDisabledContextGetsTheSpace) {
+  ChromiumCompartmentMgr compartments;
+  compartments.keyboard_disabled.value = 1;
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.compartment_mgr = &compartments;
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.context.document->text, L"");
+  h.context.compartment_mgr = nullptr;
+}
+
+// Spec §3.7 and §2.4.1: a refused insertion is inserted again by the next key,
+// which is then handled after it.
+TEST(TsfTipFullWidthSpaceTest, RefusedSpaceIsInsertedBeforeTheNextKey) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.reject_write = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test())
+      << "the refused space must wait for the next key";
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_TRUE(h.Press('K')) << "a key while the retry is refused waits";
+  EXPECT_EQ(h.context.document->text, L"");
+  h.context.reject_write = false;
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.context.document->text, L"\x3000\x304b");
+}
+
+TEST(TsfTipFullWidthSpaceTest, RefusedSpaceIsDroppedOnFocusLoss) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.reject_write = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"\x3042");
+}
+
+// Spec §3.1: the hiragana key turns the IME on like VK_IME_ON and leaves
+// alphanumeric mode; with a modifier, and the katakana key, reach the app.
+TEST(TsfTipHiraganaKeyTest, OpensAndLeavesAlphanumericModeLikeImeOn) {
+  constexpr WPARAM kHiragana = 0xF2;  // VK_DBE_HIRAGANA
+  constexpr WPARAM kKatakana = 0xF1;  // VK_DBE_KATAKANA
+  OpenCloseCompartment compartment;   // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ConfigureTypoHarness(h);
+  h.service.set_alnum_mode_for_test(true);
+  EXPECT_FALSE(ProbeTypoKey(h, kKatakana));
+  EXPECT_FALSE(h.Press(kKatakana));
+  ASSERT_TRUE(h.service.alnum_mode_for_test());
+  for (const int modifier : {VK_SHIFT, VK_MENU, VK_CONTROL}) {
+    h.keyboard_state.SetDown(modifier, true);
+    EXPECT_FALSE(h.Press(kHiragana)) << modifier;
+    h.keyboard_state.SetDown(modifier, false);
+    ASSERT_TRUE(h.service.alnum_mode_for_test()) << modifier;
+  }
+  EXPECT_TRUE(ProbeTypoKey(h, kHiragana));
+  EXPECT_TRUE(h.Press(kHiragana));
+  EXPECT_FALSE(h.service.alnum_mode_for_test());
+  EXPECT_TRUE(h.service.keyboard_open());
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  ASSERT_FALSE(h.service.keyboard_open());
+  EXPECT_FALSE(h.Press(kKatakana));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_TRUE(ProbeTypoKey(h, kHiragana));
+  EXPECT_TRUE(h.Press(kHiragana));
+  EXPECT_TRUE(h.service.keyboard_open());
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, "あ");
 }

@@ -29,6 +29,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md) | TSF TIP + Inference Host 分離設計、IPC メッセージ、実装ルール（スレッドモデル・例外耐性・互換性）の正典 |
 | [`windows-port-asset-audit.md`](windows-port-asset-audit.md) | M0 以前の初回調査。現行設計の正典ではない参考資料。参照先 macOS ソースは `legacy/` に保全 |
 | [`karukan-comparison-report.md`](karukan-comparison-report.md) | karukan（`togatoga/karukan`）との比較調査。更新しない参考スナップショットであり正典ではない。開発計画は roadmap、取り込み状態は Linear を参照 |
+| [`macos-input-parity-audit-report.md`](macos-input-parity-audit-report.md) | 入力体験（キー操作・状態遷移・表示）を macOS 版（`legacy/`）と比べた監査。更新しない参考スナップショットであり正典ではない。仕様は各 spec、対応の状態は Linear（DEV-1810 と子課題）を参照 |
 | [`nll-release-measurement.md`](nll-release-measurement.md) | NLL の Release 測定と負荷条件の参考記録。正典ではない |
 | [`mixed-english-input-feasibility-report.md`](mixed-english-input-feasibility-report.md) | 日英混在ローマ字入力の自動変換（M63）の実現可能性と先行事例の調査。更新しない参考スナップショットであり正典ではない。定義と受け入れ条件は roadmap の M63、機能仕様は [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) を参照 |
 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md) | Zenzai 推論形式の特定と GPU 化ルート決定 |

@@ -118,6 +118,10 @@ Describe "VM verification package automation" {
         '. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")'
       ) | Set-Content -LiteralPath (Join-Path $Root "scripts\register-dev.ps1")
       "# checklist" | Set-Content -LiteralPath (Join-Path $Root "docs\handoff\dev32-verification-checklist.md")
+      New-Item -ItemType Directory -Path (Join-Path $Root "data") -Force | Out-Null
+      foreach ($dataFile in @("english-words.tsv", "symbol.tsv", "emoji.tsv")) {
+        "# $dataFile" | Set-Content -LiteralPath (Join-Path $Root "data\$dataFile")
+      }
     }
 
     function Initialize-TestPackageRoot {
@@ -211,7 +215,7 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 16
+      @($manifest.files).Count | Should -Be 19
       $manifest.bundledDictionaries.selection | Should -BeExactly "default"
       $manifest.bundledDictionaries.sudachiRevision | Should -BeExactly "20260723"
       $manifest.bundledDictionaries.inputFingerprint | Should -Match '^[0-9a-f]{64}$'
@@ -226,6 +230,8 @@ Describe "VM verification package automation" {
         Should -Be @("ThirdPartyNotices.txt")
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
+      @($manifest.files | Where-Object { $_.role -eq "rewriter-data" }).path |
+        Should -Be @("data/emoji.tsv", "data/english-words.tsv", "data/symbol.tsv")
       foreach ($file in $manifest.files) {
         $file.sha256 | Should -Match "^[0-9a-f]{64}$"
         $file.size | Should -BeGreaterThan 0

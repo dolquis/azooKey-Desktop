@@ -942,7 +942,12 @@ function Export-VmVerifyPackage {
   $compatExe = Join-Path $configuration.BinaryDir "compat-test\compat_test.exe"
   $compatWatchdogExe = Join-Path $configuration.BinaryDir "compat-test\compat_host_hang_watchdog.exe"
   $compatTargets = Join-Path $repository "compat-test\targets"
+  # The same three files the MSI installs under data\ (RewriterDataDir in pkg/msi/Package.wxs).
+  $rewriterDataFiles = @("english-words.tsv", "symbol.tsv", "emoji.tsv")
   $requiredArtifacts = @($tipDll, $hostExe, $diagExe, $imeSwitchExe)
+  foreach ($dataFile in $rewriterDataFiles) {
+    $requiredArtifacts += Join-Path $repository "data\$dataFile"
+  }
   if ($Model) {
     $requiredArtifacts += $benchExe
   }
@@ -1026,6 +1031,9 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
     )
     $payloads += $dictionaryPayloads
+    foreach ($dataFile in $rewriterDataFiles) {
+      $payloads += @{ Source = (Join-Path $repository "data\$dataFile"); Archive = "data/$dataFile"; Role = "rewriter-data" }
+    }
     if ($IncludeCompat) {
       $payloads += @{ Source = $compatExe; Archive = "compat_test.exe"; Role = "compat-runner" }
       $payloads += @{
@@ -1128,7 +1136,7 @@ function Export-VmVerifyPackage {
       buildPrerequisites = $buildPrerequisites
       bundledDictionaries = $dictionaryMetadata
       generatedAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
-      files = @($files | Sort-Object path)
+      files = @($files | Sort-Object { $_.path })
     }
     $manifestJson = $manifest | ConvertTo-Json -Depth 6
     $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)

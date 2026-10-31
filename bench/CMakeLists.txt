@@ -122,6 +122,7 @@ if(AZOOKEY_BUILD_TESTS)
     azookey_zenzai_bench
     azookey_nll_bench
     azookey_reverse_lookup_bench
+    azookey_mixed_english_eval
   )
   # The dictbuild fixture is generated at build time, so the smoke needs no
   # CTest fixture that a coverage shard would pull in from another shard.

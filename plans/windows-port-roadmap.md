@@ -637,8 +637,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ### M16: Magic Conversion / Replace Suggestion
 
-- **目的**: 英数キーダブルタップで AI 自由テキスト変換、かなキーダブルタップで
-  AI 言い換え。
+- **目的**: 英数キーダブルタップで選択テキストの英訳または読みの半角英字確定、かなキーダブルタップで
+  選択テキストの和訳（同じプロンプト窓を初期プロンプトだけ変えて開く。`docs/legacy-parity-spec.md` §4.1）。
 - **前提**: M13 完了。
 - **推奨**: M46（プライバシーゲート / セーフ入力モード）が同時期 or 先行で
   実装されていることが望ましい（hard prerequisite ではない）。M16 が単独
@@ -771,8 +771,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （文節ごとに `SetValue`、`ITfMouseSink` 接続）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §5、§7。
 - **受け入れ条件**:
-  - 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
-  - preedit クリックで該当文節が注目に切替
+  - 一括変換（`batchRomajiConversion`）で「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
+  - 一括変換の preedit クリックで該当文節が注目に切替
+  - 一括変換でない preedit（core 経由）は文節を持たず、`docs/tsf-deep-integration-spec.md` §5.6 の
+    fallback 属性で表示する
 - **参照仕様**: `docs/tsf-deep-integration-spec.md` §5, §7
 
 ### M24: DirectML / NPU バックエンド

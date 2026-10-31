@@ -436,8 +436,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
 - **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）、予測
-  候補の UIElement 化（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測窓
+  は UIElement 化せず自前の窓で出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。
 
@@ -1091,11 +1091,18 @@ segment は区間を持たないので、各文節が表示している文字列
 
 ### 5.5 受け入れ条件
 
+一括変換（`batchRomajiConversion` が true）で文節を候補窓に表示しているとき（§5.4）:
+
 - 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
 - 矢印キー（Left/Right）で文節を移動できる（カーソル位置によって色が動く）
 
 provider は色を指定しないため、「青背景」はアプリが `TF_ATTR_TARGET_CONVERTED` を描く配色である。
 アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
+
+一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たないので
+§5.6 の fallback 属性（入力中と同じ細い実線）になる。注目文節の強調は付かず、変換中であることは
+候補窓の表示で分かる。legacy は選択中の候補を `kTSMHiliteSelectedConvertedText`、残りの読みを
+`kTSMHiliteConvertedText` で描くので、この強調は legacy との差である。
 
 ### 5.6 M3 の単一 DisplayAttribute との対応関係
 
@@ -1293,36 +1300,29 @@ composition の末尾より後ろは最後の文節とする。
 
 ### 7.3 受け入れ条件
 
+一括変換の文節を表示しているとき（§5.4）:
+
 - 変換中 preedit の途中をマウスでクリック → 該当文節が注目に切り替わる
 - 候補ウィンドウが該当文節の候補を表示し直す
 
-## 8. TSF Suggestion UIElement（Windows 11 標準 Suggestion UI 統合）
+文節を表示していないときは、クリックを食わずアプリへ渡す（`OnMouseEvent` の `SegmentIndexAtMouseEdge`）。
 
-UI-less Mode (M21) と同じ仕組みで、Windows 11 OS の Suggestion UI に
-予測候補を渡す。
+## 8. 予測窓と UI-less Mode の関係
 
-### 8.1 実装
+UI-less Mode（M21）の環境でも、読み入力中の予測は TIP 自前の `PredictionWindow`
+（`docs/legacy-parity-spec.md` §3）で表示する。候補窓（`CandidateWindow` または OS 側の候補 UI）の
+表示中は予測窓を出さない。OS の Suggestion UI へ予測候補を渡す統合
+（`ITfReadingInformationUIElement` による公開）はこの仕様の範囲に含めない。
 
-`tsf-tip/src/PredictionListUIElement.h` / `.cpp`（新規）：
+アプリが候補を描く環境では、アプリの UI と TIP の予測窓が重なりうる。legacy の macOS 版は
+候補の描画をすべて自前の窓で行うので、この重なりは Windows 固有である。
 
-```cpp
-class PredictionListUIElement
-    : public IUnknown
-    , public ITfUIElement
-    , public ITfReadingInformationUIElement {
-public:
-    STDMETHODIMP GetReadingInformation(...) override;
-    // ...
-};
-```
+Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイルストーンを置いてから本節に定義を書く。
 
-Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前ウィンドウ
-ではなく OS 側 Suggestion UI に渡す。
+### 8.1 受け入れ条件
 
-### 8.2 受け入れ条件
-
-- Windows 11 / Office で予測候補が OS 標準の Suggestion UI に表示される
-- それ以外のアプリでは自前 `PredictionWindow` が出る
+- UI-less の環境でも、読み入力中は自前 `PredictionWindow` が出る
+- 候補窓の表示中は予測窓が出ない
 
 ## 9. テスト
 

@@ -568,16 +568,25 @@ std::optional<char> CurrentAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data
 #endif
 }
 
+// A digit typed into the reading: the unshifted digit row and the numpad. A
+// Shift+digit is a symbol even on a layout whose Shift makes the digit
+// (spec section 3.5).
+std::optional<char> TypedDecimalDigit(WPARAM virtual_key, LPARAM key_data, uint32_t modifiers) {
+  if ((modifiers & azookey::core::kModifierShift) != 0 && virtual_key >= '0' && virtual_key <= '9')
+    return std::nullopt;
+  return CurrentAsciiDecimalDigit(virtual_key, key_data);
+}
+
 struct OemCompositionSymbol {
   char raw;
   std::string surface;
 };
 
 // 、 。 ？ ！: they start a composition on their own and keep a half-width
-// candidate (spec section 3.5).
+// candidate (spec section 3.5). The numpad's half-width . is not one.
 bool IsExplicitPunctuation(const std::optional<OemCompositionSymbol>& symbol) {
-  return symbol &&
-         (symbol->raw == ',' || symbol->raw == '.' || symbol->raw == '?' || symbol->raw == '!');
+  return symbol && (symbol->surface == "、" || symbol->surface == "。" || symbol->surface == "？" ||
+                    symbol->surface == "！");
 }
 
 // The reading the Host gives an English candidate: raw romaji, printable ASCII
@@ -693,11 +702,14 @@ std::optional<WCHAR> TranslateKeyboardCharacter(WPARAM virtual_key, LPARAM key_d
   return translated[0];
 }
 
+// The keys whose character the reading may take as a full-width symbol
+// (spec section 3.5): the OEM keys and the digit row, whose Shift state makes
+// a symbol on most layouts.
 std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
-  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2 &&
-      virtual_key != '1') {
-    return std::nullopt;
-  }
+  const bool oem = (virtual_key >= VK_OEM_1 && virtual_key <= VK_OEM_3) ||
+                   (virtual_key >= VK_OEM_4 && virtual_key <= VK_OEM_8) ||
+                   virtual_key == VK_OEM_102;
+  if (!oem && (virtual_key < '0' || virtual_key > '9')) return std::nullopt;
   return TranslateKeyboardCharacter(virtual_key, key_data);
 }
 
@@ -792,35 +804,102 @@ std::optional<WCHAR> CurrentOemCompositionCharacter(WPARAM virtual_key, LPARAM k
 #endif
 }
 
+// The full-width form the reading takes for a typed symbol, the table of
+// tsf-deep-integration-spec section 3.5 (legacy KeyMap+hankaku2zenkaku.swift).
+// `-` keeps its romaji role as ー. ¥ has no ASCII form for the batch romaji.
+std::optional<OemCompositionSymbol> CompositionSymbolFor(WCHAR typed) {
+  static constexpr struct {
+    WCHAR typed;
+    char raw;
+    const char* surface;
+  } kTable[] = {
+      {L',', ',', "、"},  {L'、', ',', "、"}, {L'.', '.', "。"}, {L'。', '.', "。"},
+      {L'?', '?', "？"},  {L'!', '!', "！"},  {L'"', '"', "”"},  {L'#', '#', "＃"},
+      {L'$', '$', "＄"},  {L'%', '%', "％"},  {L'&', '&', "＆"}, {L'\'', '\'', "’"},
+      {L'(', '(', "（"},  {L')', ')', "）"},  {L'=', '=', "＝"}, {L'~', '~', "〜"},
+      {L'|', '|', "｜"},  {L'`', '`', "｀"},  {L'{', '{', "『"}, {L'}', '}', "』"},
+      {L'+', '+', "＋"},  {L'*', '*', "＊"},  {L'<', '<', "＜"}, {L'>', '>', "＞"},
+      {L'_', '_', "＿"},  {L'-', '-', "ー"},  {L'^', '^', "＾"}, {L'\\', '\\', "＼"},
+      {L'¥', '\0', "￥"}, {L'@', '@', "＠"},  {L'[', '[', "「"}, {L']', ']', "」"},
+      {L';', ';', "；"},  {L':', ':', "："},  {L'/', '/', "・"},
+  };
+  for (const auto& entry : kTable) {
+    if (entry.typed == typed) return OemCompositionSymbol{entry.raw, entry.surface};
+  }
+  return std::nullopt;
+}
+
+// Whether VK_OEM_5 is the JIS ¥ key, by its scan code from the key message
+// or, when a host sends none, from the current layout.
+bool IsJisYenKey(LPARAM key_data) {
+  constexpr UINT kJisYenScanCode = 0x7D;
+  UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code == 0) scan_code = MapVirtualKeyExW(VK_OEM_5, MAPVK_VK_TO_VSC, GetKeyboardLayout(0));
+  return scan_code == kJisYenScanCode;
+}
+
 std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual_key,
                                                                   LPARAM key_data) {
-  const auto translated = CurrentOemCompositionCharacter(virtual_key, key_data);
-  if (!translated) return std::nullopt;
-  // Shift+1 is ！ where the layout makes it ! (DEV-1670); its other
-  // characters stay digits and symbols outside the composition marks.
-  if (virtual_key == '1') {
-    if (*translated != L'!') return std::nullopt;
-    return OemCompositionSymbol{'!', "！"};
-  }
-
-  switch (*translated) {
-    case L',':
-    case L'、':
-      return OemCompositionSymbol{',', "、"};
-    case L'.':
-    case L'。':
-      return OemCompositionSymbol{'.', "。"};
-    case L'/':
+  // Numpad symbols are decided by the key; . and / stay half-width for numbers
+  // like 3.14 (spec section 3.5).
+  switch (virtual_key) {
+    case VK_ADD:
+      return OemCompositionSymbol{'+', "＋"};
+    case VK_SUBTRACT:
+      return OemCompositionSymbol{'-', "ー"};
+    case VK_MULTIPLY:
+      return OemCompositionSymbol{'*', "＊"};
+    case VK_DECIMAL:
+      return OemCompositionSymbol{'.', "."};
+    case VK_DIVIDE:
       return OemCompositionSymbol{'/', "/"};
-    case L'<':
-      return OemCompositionSymbol{'<', "<"};
-    case L'>':
-      return OemCompositionSymbol{'>', ">"};
-    case L'?':
-      return OemCompositionSymbol{'?', "？"};
     default:
-      return std::nullopt;
+      break;
   }
+  const auto translated = CurrentOemCompositionCharacter(virtual_key, key_data);
+  // A layout the TIP cannot read still types the long vowel mark with the
+  // unshifted key; a Shift or dead key without a character goes to the app.
+  if (!translated) {
+    if (virtual_key == VK_OEM_MINUS && (GetKeyState(VK_SHIFT) & 0x8000) == 0)
+      return OemCompositionSymbol{'-', "ー"};
+    return std::nullopt;
+  }
+  // The JIS ¥ key makes U+005C like the ろ key (VK_OEM_102) and the US \ key;
+  // its own scan code (0x7D) marks it, and it types ￥ as in legacy.
+  if (*translated == L'\\' && virtual_key == VK_OEM_5 && IsJisYenKey(key_data))
+    return CompositionSymbolFor(L'¥');
+  return CompositionSymbolFor(*translated);
+}
+
+// A typed `-` is fed to the romaji converter, which writes ー or continues a
+// custom rule.
+bool IsLongVowelSymbol(const std::optional<OemCompositionSymbol>& symbol) {
+  return symbol && symbol->raw == '-';
+}
+
+// The symbol a key types into the reading; the batch romaji, which keeps
+// ASCII, leaves a symbol without an ASCII form to the app.
+std::optional<OemCompositionSymbol> TypedCompositionSymbol(WPARAM key, LPARAM key_data,
+                                                           bool batch) {
+  auto symbol = TranslateOemCompositionSymbol(key, key_data);
+  if (symbol && batch && symbol->raw == '\0') return std::nullopt;
+  return symbol;
+}
+
+// The batch romaji keeps the ASCII typed (spec section 3.5); the preview and
+// the reading show each symbol of the table in its full-width form.
+std::string ApplyCompositionSymbols(const std::string& text) {
+  std::string surface;
+  for (const char c : text) {
+    const auto symbol = c > 0x20 && c < 0x7F && c != '-'
+                            ? CompositionSymbolFor(static_cast<WCHAR>(c))
+                            : std::nullopt;
+    if (symbol)
+      surface += symbol->surface;
+    else
+      surface.push_back(c);
+  }
+  return surface;
 }
 
 bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
@@ -2558,8 +2637,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool unicode_active = UnicodeInputActive();
     auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
-    const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
+    const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
+    const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
     core::RomajiKanaConverter input_romaji = romaji_;
     if (!has_preedit && batch_raw_romaji_.empty()) {
       input_romaji = {};
@@ -2599,15 +2678,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     } else if (!key_event) {
       // Not consumed in this state.
     } else if (key_event->action == UserAction::Input) {
-      if (custom_input || (wParam >= 'A' && wParam <= 'Z')) {
+      // The map decides the states a digit or symbol key is typed in (numpad
+      // keys only with a reading); the layout's character decides whether the
+      // reading takes it (spec section 3.5).
+      if (custom_input || (wParam >= 'A' && wParam <= 'Z') || composition_symbol || decimal_digit)
         *eaten = TRUE;
-      } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
-        // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
-        // composition が無いときは通常のハイフンとしてアプリへ通す。
-        *eaten = has_preedit || custom_input ? TRUE : FALSE;
-      } else if (composition_symbol) {
-        *eaten = has_preedit || IsExplicitPunctuation(composition_symbol) ? TRUE : FALSE;
-      }
     } else if (key_event->action == UserAction::Backspace) {
       *eaten = has_preedit ? TRUE : FALSE;
     } else if (key_event->action == UserAction::Forward ||
@@ -3067,8 +3142,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool unicode_active = UnicodeInputActive();
     auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible, unicode_active);
     const bool unicode_routed = UnicodeInputRouted(key_event, has_preedit, cand_visible);
-    const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
+    const auto composition_symbol = TypedCompositionSymbol(wParam, lParam, BatchRomajiEnabled());
+    const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
     using core::UserAction;
     if (IsActionKey(key_event, UserAction::StartUnicodeInput) && !unicode_routed) return S_OK;
     core::RomajiKanaConverter input_romaji = romaji_;
@@ -3114,9 +3189,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         english_typed = (modifiers & core::kModifierShift) != 0
                             ? static_cast<char>(wParam)
                             : static_cast<char>(std::tolower(static_cast<unsigned char>(wParam)));
-      else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT)
-        english_typed = '-';
-      else if (composition_symbol)
+      // Only `-` and 、。？！ of the symbols are romaji (M60 §4.1): a digit or
+      // another symbol taken into the reading is not recorded, so the romaji
+      // no longer spells the reading and none is sent (DEV-1811).
+      else if (IsLongVowelSymbol(composition_symbol) || IsExplicitPunctuation(composition_symbol))
         english_typed = composition_symbol->raw;
       if (english_typed) {
         SyncEnglishRawRomaji();
@@ -3156,11 +3232,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return !AltReadingsFor(preedit_kana_ + flushed.Flush(), kWindowAmbiguousPositions).empty();
     }();
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
-    // A composing digit not mapped by core belongs to the number rewriter's
-    // legacy path; a digit selecting a visible punctuation candidate stays in core.
+    // A reading of punctuation alone stays in core with its local candidates;
+    // core maps the digits typed into it (DEV-1811).
     const bool standalone_punctuation =
-        (IsStandalonePunctuation(CurrentPreeditSurface()) &&
-         !(decimal_digit && !key_event && number_rewriter_.load(std::memory_order_relaxed))) ||
+        IsStandalonePunctuation(CurrentPreeditSurface()) ||
         (!has_preedit && !custom_input && IsExplicitPunctuation(composition_symbol));
     // Spec §3.5.1: a punctuation mark that may convert the reading is decided by core
     // even while the number rewriter keeps the other keys on the legacy path.
@@ -3211,10 +3286,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           event.codepoint = static_cast<unsigned char>(*custom_input);
         } else if (wParam >= 'A' && wParam <= 'Z') {
           event.codepoint = static_cast<char32_t>(wParam);
-        } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
+        } else if (IsLongVowelSymbol(composition_symbol)) {
           event.codepoint = U'-';
-        } else if (composition_symbol &&
-                   (has_preedit || IsExplicitPunctuation(composition_symbol))) {
+        } else if (decimal_digit) {
+          event.codepoint = static_cast<char32_t>(*decimal_digit);
+        } else if (composition_symbol) {
           size_t offset = 0;
           char32_t cp = 0;
           if (core::DecodeNextUtf8(composition_symbol->surface, offset, cp) &&
@@ -3372,14 +3448,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (is_input && (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
-               (custom_input ||
-                (BatchRomajiEnabled() ? !batch_raw_romaji_.empty()
-                                      : (!preedit_kana_.empty() || romaji_.HasPending())))) {
-      // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
-      // preedit に取り込む。composition が無いときは本分岐に入らず、ハイフンはアプリへ
-      // パススルーする。候補窓の表示中は選択中の候補を確定し、長音符で次の composition を
-      // 始める（core の Selecting と同じ、DEV-1735）。
+    } else if (is_input && IsLongVowelSymbol(composition_symbol)) {
+      // 長音: `-`（主キー・テンキー）を長音符「ー」として preedit に取り込む。主キーは
+      // composition が無いときも「ー」で始め、テンキーは写像が composition 中だけ Input にする
+      // （spec §3.5、DEV-1811）。候補窓の表示中は選択中の候補を確定し、長音符で次の
+      // composition を始める（core の Selecting と同じ、DEV-1735）。
       if (cand_visible) {
         const HRESULT commit_hr = commit_selection();
         if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
@@ -3433,10 +3506,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (is_input && composition_symbol &&
-               (has_preedit || IsExplicitPunctuation(composition_symbol))) {
-      // From Idle only 、 。 ？ ！ would start a composition; after the commit
-      // every mark does, as in the core Selecting path.
+    } else if (is_input && (composition_symbol || decimal_digit)) {
+      // The map leaves Idle digits and numpad symbols to the app; a digit joins
+      // the reading half-width (spec section 3.5).
+      const OemCompositionSymbol typed =
+          composition_symbol ? *composition_symbol
+                             : OemCompositionSymbol{*decimal_digit, std::string(1, *decimal_digit)};
       if (cand_visible) {
         const HRESULT commit_hr = commit_selection();
         if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
@@ -3449,7 +3524,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidate_window_show_pending_ = false;
       }
       if (BatchRomajiEnabled()) {
-        batch_raw_romaji_.push_back(composition_symbol->raw);
+        batch_raw_romaji_.push_back(typed.raw);
         RefreshBatchPreeditSurface();
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
@@ -3462,7 +3537,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
             preedit_kana_ += romaji_.Flush();
           }
-          preedit_kana_ += composition_symbol->surface;
+          preedit_kana_ += typed.surface;
         }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
@@ -4349,6 +4424,12 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
       case UserAction::ToggleDebugWindow:
       case UserAction::Forget:
         return WindowWaitKey::Pass;
+      case UserAction::Input:
+        // A symbol key whose character the reading does not take goes to the
+        // app (spec §3.5 of tsf-deep-integration-spec); the window takes the rest.
+        if ((key >= 'A' && key <= 'Z') || TypedDecimalDigit(key, key_data, modifiers))
+          return WindowWaitKey::Hold;
+        break;
       default:
         return WindowWaitKey::Hold;
     }
@@ -4358,7 +4439,7 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   if (TranslateOemCompositionSymbol(key, key_data) ||
       CurrentCustomRomajiCharacter(key, key_data, romaji_))
     return WindowWaitKey::Hold;
-  if (CurrentAsciiDecimalDigit(key, key_data) && !BatchRomajiEnabled() &&
+  if (TypedDecimalDigit(key, key_data, modifiers) && !BatchRomajiEnabled() &&
       number_rewriter_.load(std::memory_order_relaxed))
     return WindowWaitKey::Hold;
   return WindowWaitKey::Pass;
@@ -7081,7 +7162,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       ipc_inflight_trace_id_ = trace_id;
     }
     QueryBatchConversionRequest request;
-    request.reading = ApplyDefaultCompositionPunctuation(chunk.reading);
+    request.reading = ApplyCompositionSymbols(chunk.reading);
     // M63 section 9.4 / DEV-1745: the romaji split the batch above, but a
     // secure field sends the kana only.
     if (!secure) request.raw_romaji = chunk.raw_romaji;
@@ -9943,12 +10024,12 @@ std::string TextService::BatchPreviewSurface() const {
   if (batch_romaji_preview_romaji_.load(std::memory_order_relaxed)) {
     return ApplyDefaultCompositionPunctuation(batch_raw_romaji_);
   }
-  return ApplyDefaultCompositionPunctuation(
+  return ApplyCompositionSymbols(
       core::RomajiKanaConverter::Preview(batch_raw_romaji_, batch_romaji_table_));
 }
 
 std::string TextService::BatchReadingForConversion() const {
-  return ApplyDefaultCompositionPunctuation(
+  return ApplyCompositionSymbols(
       core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_, batch_romaji_table_));
 }
 

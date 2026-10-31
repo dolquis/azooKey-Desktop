@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -89,11 +90,54 @@ std::optional<WCHAR> TranslateWithoutExclamationForTest(WPARAM virtual_key, LPAR
   return TranslateDefaultOemCompositionCharacterForTest(virtual_key, key_data);
 }
 
+// The characters of the US and JIS layouts for the digit row and the OEM
+// keys, unshifted and shifted (DEV-1811). 0 is a key without a character.
+std::optional<WCHAR> TranslateLayoutForTest(WPARAM key, bool jis) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  const bool shift = (keyboard_state[VK_SHIFT] & 0x80) != 0;
+  static constexpr struct {
+    WPARAM key;
+    WCHAR us;
+    WCHAR us_shift;
+    WCHAR jis;
+    WCHAR jis_shift;
+  } kRows[] = {
+      {'1', L'1', L'!', L'1', L'!'},          {'2', L'2', L'@', L'2', L'"'},
+      {'3', L'3', L'#', L'3', L'#'},          {'4', L'4', L'$', L'4', L'$'},
+      {'5', L'5', L'%', L'5', L'%'},          {'6', L'6', L'^', L'6', L'&'},
+      {'7', L'7', L'&', L'7', L'\''},         {'8', L'8', L'*', L'8', L'('},
+      {'9', L'9', L'(', L'9', L')'},          {'0', L'0', L')', L'0', 0},
+      {VK_OEM_MINUS, L'-', L'_', L'-', L'='}, {VK_OEM_PLUS, L'=', L'+', L';', L'+'},
+      {VK_OEM_1, L';', L':', L':', L'*'},     {VK_OEM_2, L'/', L'?', L'/', L'?'},
+      {VK_OEM_3, L'`', L'~', L'@', L'`'},     {VK_OEM_4, L'[', L'{', L'[', L'{'},
+      {VK_OEM_5, L'\\', L'|', L'\\', L'|'},   {VK_OEM_6, L']', L'}', L']', L'}'},
+      {VK_OEM_7, L'\'', L'"', L'^', L'~'},    {VK_OEM_102, 0, 0, L'\\', L'_'},
+      {VK_OEM_COMMA, L',', L'<', L',', L'<'}, {VK_OEM_PERIOD, L'.', L'>', L'.', L'>'},
+  };
+  for (const auto& row : kRows) {
+    if (row.key != key) continue;
+    const WCHAR c = jis ? (shift ? row.jis_shift : row.jis) : (shift ? row.us_shift : row.us);
+    if (c == 0) return std::nullopt;
+    return c;
+  }
+  return std::nullopt;
+}
+
+std::optional<WCHAR> TranslateUsLayoutForTest(WPARAM key, LPARAM) {
+  return TranslateLayoutForTest(key, false);
+}
+
+std::optional<WCHAR> TranslateJisLayoutForTest(WPARAM key, LPARAM) {
+  return TranslateLayoutForTest(key, true);
+}
+
 class OemCompositionTranslationGuard {
  public:
-  OemCompositionTranslationGuard() {
-    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
-        &TranslateDefaultOemCompositionCharacterForTest);
+  explicit OemCompositionTranslationGuard(
+      azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest translate =
+          &TranslateDefaultOemCompositionCharacterForTest) {
+    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(translate);
   }
 
   ~OemCompositionTranslationGuard() {
@@ -142,9 +186,10 @@ std::optional<char> TranslateDefaultAsciiDecimalDigitForTest(WPARAM virtual_key,
 
 class AsciiDecimalDigitTranslationGuard {
  public:
-  AsciiDecimalDigitTranslationGuard() {
-    azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(
-        &TranslateDefaultAsciiDecimalDigitForTest);
+  explicit AsciiDecimalDigitTranslationGuard(
+      azookey::tsf::testing::TranslateAsciiDecimalDigitFnForTest translate =
+          &TranslateDefaultAsciiDecimalDigitForTest) {
+    azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(translate);
   }
 
   ~AsciiDecimalDigitTranslationGuard() {
@@ -1430,10 +1475,17 @@ class BracketHarness {
     service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
     service.set_bracket_settings_for_test(settings);
     azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
+    // A bracket the feature leaves alone is a symbol of the same layout (DEV-1811).
+    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+        [](WPARAM key, LPARAM key_data) -> std::optional<WCHAR> {
+          if (const auto bracket = TranslateBracketForTest(key, key_data)) return bracket;
+          return TranslateUsLayoutForTest(key, key_data);
+        });
   }
   ~BracketHarness() {
     service.Deactivate();
     azookey::tsf::testing::ClearTranslateBracketCharacterForTest();
+    azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
   }
   void Set(const std::wstring& text, LONG caret, LONG end = -1) {
     context.document->text = text;
@@ -1515,8 +1567,13 @@ TEST(TsfTipEmojiTest, MinimumLengthAndDisabledTriggerAreRespected) {
   ASSERT_TRUE(h.Press(VK_BACK));
   ASSERT_TRUE(h.Press(VK_BACK));
   EXPECT_TRUE(h.service.preedit_kana_.empty());
+  // Without the trigger the key is an ordinary symbol, full-width in the
+  // reading (tsf-deep-integration-spec §3.5, DEV-1811).
   h.service.set_emoji_rewriter_for_test(true, false);
-  EXPECT_FALSE(h.TestPress(VK_OEM_1));
+  OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+  EXPECT_TRUE(h.TestPress(VK_OEM_1));
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  EXPECT_EQ(h.service.preedit_kana_, "：");
 }
 
 TEST(TsfTipEmojiTest, AnnotatedOrdinaryCandidateLearnsButRewriterTailsDoNot) {
@@ -1867,14 +1924,23 @@ TEST(TsfTipBracketTest, AlnumModesAndMasterOffRespectSettings) {
   h.ApplySettings();
   EXPECT_TRUE(h.Press(VK_OEM_4));
   EXPECT_EQ(h.context.document->text, L"［］");
+  // Without pairing the hiragana mode takes the bracket into the reading
+  // full-width, as any symbol (spec §3.1, DEV-1811).
+  h.Set(L"", 0);
   h.settings.pairing.enabled_in_alnum_mode = false;
   h.ApplySettings();
-  EXPECT_FALSE(h.Press(VK_OEM_4, true));
-  EXPECT_FALSE(h.Press(VK_OEM_4));
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  h.Set(L"", 0);
   h.settings.pairing.enabled = false;
   h.ApplySettings();
-  EXPECT_FALSE(h.Press(VK_OEM_4, true));
-  EXPECT_FALSE(h.Press(VK_OEM_4));
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
 }
 
 TEST(TsfTipBracketTest, PreeditCommitsBeforePairAndCompositionPairsNest) {
@@ -1904,14 +1970,17 @@ TEST(TsfTipBracketTest, BatchAccumulationKeepsLiteralBracketsAndNoAutomaticPair)
     EXPECT_TRUE(h.Press('A'));
     EXPECT_TRUE(h.Press(VK_OEM_4, true));
     EXPECT_TRUE(h.Press(VK_OEM_4));
-    EXPECT_EQ(h.context.document->text, L"あ[");
+    // The romaji keeps the ASCII bracket; the preview shows it full-width
+    // (tsf-deep-integration-spec §3.5, DEV-1811).
+    EXPECT_EQ(h.service.batch_raw_romaji_for_test(), "a[");
+    EXPECT_EQ(h.context.document->text, L"あ「");
     EXPECT_FALSE(h.service.bracket_composition_for_test());
     EXPECT_TRUE(h.Press(VK_RETURN));
-    EXPECT_EQ(h.context.document->text, L"あ[");
+    EXPECT_EQ(h.context.document->text, L"あ「");
     EXPECT_TRUE(h.Press(VK_OEM_4, true));
     EXPECT_TRUE(h.Press(VK_OEM_4));
     EXPECT_EQ(h.context.document->text,
-              mode == azookey::core::BracketInputMode::Hiragana ? L"あ[「」" : L"あ[［］");
+              mode == azookey::core::BracketInputMode::Hiragana ? L"あ「「」" : L"あ「［］");
   }
 }
 
@@ -3238,8 +3307,12 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   EXPECT_EQ(h.service.preedit_kana_, "。");
   EXPECT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_EQ(h.service.preedit_kana_, "");
-  EXPECT_FALSE(h.TestPress(VK_OEM_2));
-  EXPECT_FALSE(h.Press(VK_OEM_2));
+  // Every symbol of the table starts a reading (spec section 3.5, DEV-1811).
+  EXPECT_TRUE(h.TestPress(VK_OEM_2));
+  EXPECT_TRUE(h.Press(VK_OEM_2));
+  EXPECT_EQ(h.service.preedit_kana_, "・");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, "");
 
   FakeComposition composition;
   FakeRange range;
@@ -3261,8 +3334,8 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
 
   EXPECT_TRUE(h.TestPress(VK_OEM_2));
   EXPECT_TRUE(h.Press(VK_OEM_2));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。/");
-  EXPECT_EQ(range.last_text, L"ん、。/");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。・");
+  EXPECT_EQ(range.last_text, L"ん、。・");
 
   EXPECT_TRUE(h.Press(VK_BACK));
   EXPECT_EQ(h.service.preedit_kana_, "ん、。");
@@ -3276,18 +3349,18 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
 
   EXPECT_TRUE(h.TestPress(VK_OEM_COMMA));
   EXPECT_TRUE(h.Press(VK_OEM_COMMA));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<");
-  EXPECT_EQ(range.last_text, L"ん、。？<");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？＜");
+  EXPECT_EQ(range.last_text, L"ん、。？＜");
 
   EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
   EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<>");
-  EXPECT_EQ(range.last_text, L"ん、。？<>");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？＜＞");
+  EXPECT_EQ(range.last_text, L"ん、。？＜＞");
 
   EXPECT_TRUE(h.TestPress('1'));
   EXPECT_TRUE(h.Press('1'));
-  EXPECT_EQ(h.service.preedit_kana_, "ん、。？<>！");
-  EXPECT_EQ(range.last_text, L"ん、。？<>！");
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。？＜＞！");
+  EXPECT_EQ(range.last_text, L"ん、。？＜＞！");
   h.keyboard_state.SetDown(VK_SHIFT, false);
 
   if (h.service.composition_) {
@@ -3738,24 +3811,28 @@ TEST(TsfTipOnKeyDownPreeditTest, ApostropheAfterNSeparatesNOnUsAndJisLayouts) {
   }
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, ApostropheWithoutPendingNPassesThrough) {
+// DEV-1811: without a pending n the ' is the full-width symbol of spec section
+// 3.5, from Idle as well.
+TEST(TsfTipOnKeyDownPreeditTest, ApostropheWithoutPendingNIsAFullWidthSymbol) {
   TextServiceHarness h;
   ApostropheTranslationGuard us(&TranslateUsApostropheForTest);
-  // No composition: the app types the ' itself, as before.
-  EXPECT_FALSE(h.TestPress(VK_OEM_7));
-  EXPECT_FALSE(h.Press(VK_OEM_7));
-  EXPECT_TRUE(h.service.preedit_kana_.empty());
-  // A composition without a pending n leaves the ' to the app too.
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  EXPECT_TRUE(h.TestPress(VK_OEM_7));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.service.preedit_kana_, "’");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
   for (const WPARAM key : {'K', 'A'}) ASSERT_TRUE(h.Press(key));
-  EXPECT_FALSE(h.TestPress(VK_OEM_7));
-  EXPECT_FALSE(h.Press(VK_OEM_7));
-  EXPECT_EQ(h.service.preedit_kana_, "か");
-  // A custom table keeps its own rules for '.
+  EXPECT_TRUE(h.TestPress(VK_OEM_7));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.service.preedit_kana_, "か’");
+  // A custom table without a rule for ' does not separate the n with it.
   EXPECT_TRUE(h.Press(VK_ESCAPE));
   h.service.set_romaji_table_for_test(
       azookey::core::CustomRomajiLoader::Parse("n\tん\t1\na\tあ\n").table);
   ASSERT_TRUE(h.Press('N'));
-  EXPECT_FALSE(h.TestPress(VK_OEM_7));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.service.preedit_kana_, "ん’");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ApostropheAfterNSeparatesNInBatchRomaji) {
@@ -12704,9 +12781,9 @@ TEST(TsfTipCommitOnTypeTest, PreprocessedPathsCommitTheHighlightFirst) {
        {Case{"number: letter", Path::NumberRewriter, 'A', L"転機あ"},
         Case{"number: long vowel", Path::NumberRewriter, VK_OEM_MINUS, L"転機ー"},
         Case{"number: mark", Path::NumberRewriter, VK_OEM_COMMA, L"転機、"},
-        Case{"number: slash", Path::NumberRewriter, VK_OEM_2, L"転機/"},
+        Case{"number: slash", Path::NumberRewriter, VK_OEM_2, L"転機・"},
         Case{"symbol rewriter: letter", Path::SymbolRewriter, 'A', L"転機あ"},
-        Case{"symbol rewriter: slash", Path::SymbolRewriter, VK_OEM_2, L"転機/"},
+        Case{"symbol rewriter: slash", Path::SymbolRewriter, VK_OEM_2, L"転機・"},
         Case{"english: letter", Path::English, 'A', L"転機あ"}}) {
     SCOPED_TRACE(item.name);
     DocumentPreeditHarness h;
@@ -13895,6 +13972,84 @@ TEST(TsfTipWindowWaitTest, DigitCommitsThatCandidate) {
   EXPECT_TRUE(h.service.preedit_kana_.empty());
 }
 
+// DEV-1811 (legacy-parity-spec §1.4): a numpad digit is a candidate number
+// too, on the core path and the number rewriter's legacy path.
+TEST(TsfTipWindowWaitTest, NumpadDigitCommitsThatCandidate) {
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_NUMPAD3);
+    AnswerWindow(h);
+    EXPECT_EQ(h.context.document->text, L"課");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+  }
+}
+
+// DEV-1811: 0 is held like a character; replayed in the window it commits the
+// highlight and starts the next reading with 0. The number rewriter's window
+// closes and takes the 0 into its reading instead (legacy-parity-spec §1.2).
+TEST(TsfTipWindowWaitTest, ZeroCommitsTheSelectionAndStartsTheNextReading) {
+  AsciiDecimalDigitTranslationGuard digits;
+  for (const bool legacy : {false, true}) {
+    for (const WPARAM zero : {WPARAM{'0'}, WPARAM{VK_NUMPAD0}}) {
+      SCOPED_TRACE(::testing::Message() << "legacy " << legacy << " key " << zero);
+      DocumentPreeditHarness h;
+      StartWindowWait(h, legacy);
+      PressWhileWaiting(h, zero);
+      ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+      AnswerWindow(h);
+      EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+      EXPECT_EQ(h.context.document->text, legacy ? L"か0" : L"蚊0");
+      EXPECT_EQ(h.service.preedit_kana_, legacy ? "か0" : "0");
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    }
+  }
+}
+
+// DEV-1811: a symbol of the full-width table waits like a character; a symbol
+// key the reading does not take goes on to the app without waiting.
+TEST(TsfTipWindowWaitTest, TableSymbolWaitsAndOtherSymbolKeysPass) {
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    // VK_OEM_102 makes no character on the US layout.
+    EXPECT_FALSE(ProbeTypoKey(h, VK_OEM_102));
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    PressWhileWaiting(h, VK_OEM_4);
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    AnswerWindow(h);
+    EXPECT_EQ(h.context.document->text, L"蚊「");
+    EXPECT_EQ(h.service.preedit_kana_, "「");
+  }
+}
+
+// DEV-1811: with bracket pairing on, a [ typed while the window waits is held
+// too; replayed in the window it commits the first candidate and inserts the
+// pair, as it does while Selecting.
+TEST(TsfTipWindowWaitTest, BracketPairingKeyWaitsAndPairsAfterTheCommit) {
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  struct BracketTranslationGuard {
+    BracketTranslationGuard() {
+      azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
+    }
+    ~BracketTranslationGuard() { azookey::tsf::testing::ClearTranslateBracketCharacterForTest(); }
+  } bracket_translation;
+  DocumentPreeditHarness h;
+  azookey::core::BracketSettings settings;
+  settings.pairing.enabled = true;
+  h.service.set_bracket_settings_for_test(settings);
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_OEM_4);
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"蚊「」");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
 TEST(TsfTipWindowWaitTest, CharacterCommitsTheSelectionAndStartsTheNextInput) {
   DocumentPreeditHarness h;
   StartWindowWait(h);
@@ -14193,4 +14348,300 @@ TEST(TsfTipWindowWaitTest, KeyReplayedIntoTheHeldEnterIsTrackedOnce) {
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_EQ(h.context.document->text, L"蚊あ");
   EXPECT_EQ(h.service.typo_tracked_keys_for_test(), tracked);
+}
+
+// DEV-1811 (tsf-deep-integration-spec §3.4 and §3.5): digits and the symbols of
+// the full-width table join the reading on the core path (number rewriter
+// off) and the legacy path (on).
+namespace {
+
+// A layout whose Shift makes the digit (AZERTY).
+std::optional<char> TranslateShiftedDigitForTest(WPARAM key, LPARAM) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (key < '0' || key > '9' || (keyboard_state[VK_SHIFT] & 0x80) == 0) return std::nullopt;
+  return static_cast<char>(key);
+}
+
+struct TypedKey {
+  WPARAM key;
+  bool shift;
+};
+
+// Types the keys into a fresh document and returns its preedit; each key must
+// be taken by the TIP.
+std::wstring TypeReading(std::initializer_list<TypedKey> keys, bool number_rewriter = false) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h, number_rewriter);
+  for (const TypedKey& typed : keys) {
+    h.keyboard_state.SetDown(VK_SHIFT, typed.shift);
+    EXPECT_TRUE(h.Press(typed.key)) << "key " << typed.key << " shift " << typed.shift;
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+  }
+  return h.context.document->text;
+}
+
+}  // namespace
+
+TEST(TsfTipReadingSymbolTest, DigitsAndSymbolsJoinTheReadingWithEitherRewriterSetting) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter);
+    EXPECT_EQ(TypeReading({{'D', false},
+                           {'A', false},
+                           {'I', false},
+                           {'3', false},
+                           {'K', false},
+                           {'A', false},
+                           {'I', false}},
+                          number_rewriter),
+              L"だい3かい");
+    EXPECT_EQ(TypeReading({{'J', false},
+                           {'I', false},
+                           {VK_OEM_1, true},
+                           {'K', false},
+                           {'A', false},
+                           {'N', false}},
+                          number_rewriter),
+              L"じ：かん");
+    // bracketPairing is off: the bracket is a symbol of the reading.
+    EXPECT_EQ(TypeReading({{'K', false},
+                           {'A', false},
+                           {'K', false},
+                           {'K', false},
+                           {'O', false},
+                           {VK_OEM_4, false}},
+                          number_rewriter),
+              L"かっこ「");
+    // A pending romaji is flushed first; the numpad keeps . and / half-width.
+    EXPECT_EQ(TypeReading({{'K', false},
+                           {VK_NUMPAD3, false},
+                           {VK_DECIMAL, false},
+                           {VK_NUMPAD1, false},
+                           {VK_ADD, false},
+                           {VK_MULTIPLY, false},
+                           {VK_DIVIDE, false},
+                           {VK_SUBTRACT, false}},
+                          number_rewriter),
+              L"k3.1＋＊/ー");
+  }
+}
+
+// The JIS ¥ key types ￥ as in legacy; the ろ key and the US \ key, which make
+// the same U+005C, type ＼. The scan code tells them apart.
+TEST(TsfTipReadingSymbolTest, JisYenKeyTypesYenAndOtherBackslashKeysTypeBackslash) {
+  const auto press = [](DocumentPreeditHarness& h, WPARAM key, bool shift, UINT scan_code) {
+    h.keyboard_state.SetDown(VK_SHIFT, shift);
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    EXPECT_EQ(h.service.OnKeyDown(&h.context, key, static_cast<LPARAM>(scan_code) << 16, &eaten),
+              S_OK);
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    return eaten;
+  };
+  const struct {
+    const char* name;
+    azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest translate;
+    WPARAM key;
+    bool shift;
+    UINT scan_code;
+    const wchar_t* reading;
+  } cases[] = {
+      {"jis yen", &TranslateJisLayoutForTest, VK_OEM_5, false, 0x7D, L"あ￥"},
+      {"jis ro", &TranslateJisLayoutForTest, VK_OEM_102, false, 0x73, L"あ＼"},
+      {"us backslash", &TranslateUsLayoutForTest, VK_OEM_5, false, 0x2B, L"あ＼"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    OemCompositionTranslationGuard oem_translation(item.translate);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(press(h, 'A', false, 0x1E));
+    EXPECT_TRUE(press(h, item.key, item.shift, item.scan_code));
+    EXPECT_EQ(h.context.document->text, item.reading);
+  }
+}
+
+TEST(TsfTipReadingSymbolTest, UsAndJisLayoutsTypeTheirOwnSymbols) {
+  AsciiDecimalDigitTranslationGuard digits;
+  {
+    OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+    EXPECT_EQ(TypeReading({{'A', false},
+                           {'2', true},
+                           {VK_OEM_1, true},
+                           {'9', true},
+                           {VK_OEM_PLUS, false},
+                           {VK_OEM_MINUS, true},
+                           {VK_OEM_2, false}}),
+              L"あ＠：（＝＿・");
+  }
+  {
+    OemCompositionTranslationGuard oem_translation(&TranslateJisLayoutForTest);
+    EXPECT_EQ(TypeReading({{'A', false},
+                           {VK_OEM_3, false},
+                           {VK_OEM_1, false},
+                           {'8', true},
+                           {VK_OEM_MINUS, true},
+                           {VK_OEM_102, true},
+                           {VK_OEM_2, false}}),
+              L"あ＠：（＝＿・");
+  }
+}
+
+TEST(TsfTipReadingSymbolTest, IdleDigitsAndNumpadSymbolsGoToTheAppAndSymbolsStartAReading) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  for (const bool number_rewriter : {false, true}) {
+    SCOPED_TRACE(number_rewriter);
+    {
+      DocumentPreeditHarness h;
+      ConfigureTypoHarness(h, number_rewriter);
+      for (const WPARAM key : {WPARAM{VK_ADD}, WPARAM{VK_DECIMAL}, WPARAM{VK_SUBTRACT}}) {
+        EXPECT_FALSE(ProbeTypoKey(h, key)) << key;
+        EXPECT_FALSE(h.Press(key)) << key;
+      }
+      // Without the number rewriter an Idle digit is the app's (spec §3.5).
+      EXPECT_EQ(ProbeTypoKey(h, '5') != FALSE, number_rewriter);
+      EXPECT_EQ(h.Press('5') != FALSE, number_rewriter);
+      EXPECT_EQ(h.context.document->text, number_rewriter ? L"5" : L"");
+    }
+    // A symbol starts a reading; `-` starts it with ー.
+    EXPECT_EQ(TypeReading({{VK_OEM_MINUS, false}}, number_rewriter), L"ー");
+    EXPECT_EQ(TypeReading({{VK_OEM_6, false}}, number_rewriter), L"」");
+  }
+}
+
+// Shift+digit is no digit on such a layout: it starts nothing from Idle and
+// selects nothing (spec §3.5).
+TEST(TsfTipReadingSymbolTest, ShiftedDigitRowIsNoDigitOnALayoutWhoseShiftMakesDigits) {
+  AsciiDecimalDigitTranslationGuard digits(&TranslateShiftedDigitForTest);
+  OemCompositionTranslationGuard oem_translation([](WPARAM key, LPARAM) -> std::optional<WCHAR> {
+    if (key >= '0' && key <= '9') return static_cast<WCHAR>(key);
+    return std::nullopt;
+  });
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(ProbeTypoKey(h, '1'));
+  EXPECT_FALSE(h.Press('1'));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_TRUE(h.context.document->text.empty());
+}
+
+TEST(TsfTipReadingSymbolTest, AlnumModeLeavesDigitsAndSymbolsToTheApp) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_alnum_mode_for_test(true);
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{VK_OEM_4}, WPARAM{VK_OEM_MINUS}, WPARAM{VK_ADD}}) {
+    EXPECT_FALSE(ProbeTypoKey(h, key)) << key;
+    EXPECT_FALSE(h.Press(key)) << key;
+  }
+  EXPECT_TRUE(h.context.document->text.empty());
+}
+
+// The batch romaji keeps the ASCII typed; its preview shows the table's
+// full-width symbols and the digits as typed (spec §3.5).
+TEST(TsfTipReadingSymbolTest, BatchRomajiKeepsAsciiAndPreviewsFullWidthSymbols) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'D'}, WPARAM{'A'}, WPARAM{'I'}, WPARAM{'3'}, WPARAM{'K'},
+                           WPARAM{'A'}, WPARAM{'I'}, WPARAM{VK_OEM_4}})
+    ASSERT_TRUE(h.Press(key)) << key;
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(h.service.batch_raw_romaji_for_test(), "dai3kai[:");
+  EXPECT_EQ(h.context.document->text, L"だい3かい「：");
+}
+
+// DEV-1811: a table symbol that the emoji search does not take ends the
+// search; the typed :smile stays and the symbol joins it full-width.
+TEST(TsfTipReadingSymbolTest, TableSymbolAfterAnEmojiSearchJoinsTheTypedText) {
+  EmojiHarness h;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  for (const WPARAM key : {'S', 'M', 'I', 'L', 'E'}) ASSERT_TRUE(h.Press(key)) << key;
+  ASSERT_EQ(h.service.preedit_kana_, ":smile");
+  EXPECT_TRUE(h.TestPress(VK_OEM_4));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.service.preedit_kana_, ":smile「");
+}
+
+// DEV-1811 (legacy-parity-spec §6.1): a table symbol ends Unicode input like
+// any other non-hex key: the codepoint commits and the symbol starts the next
+// reading.
+TEST(TsfTipReadingSymbolTest, TableSymbolEndsUnicodeInputAndStartsAReading) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}})
+    ASSERT_TRUE(h.Press(key)) << key;
+  ASSERT_EQ(h.context.document->text, L"U+3042");
+  EXPECT_TRUE(ProbeTypoKey(h, VK_OEM_MINUS));
+  EXPECT_TRUE(h.Press(VK_OEM_MINUS));
+  EXPECT_EQ(h.context.document->text, L"あー");
+  EXPECT_EQ(h.service.preedit_kana_, "ー");
+}
+
+// DEV-1811 (inline-english-candidate-spec §4.1): a digit or table symbol in the
+// reading is no romaji, so Space sends no raw_romaji for it, while - and
+// the sentence marks still do.
+TEST(TsfTipEnglishCandidatesTest, ReadingWithTakenDigitsOrSymbolsSendsNoRawRomaji) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  const struct {
+    const char* name;
+    bool number_rewriter;
+    std::vector<std::pair<WPARAM, bool>> keys;
+    const char* raw_romaji;
+  } cases[] = {
+      {"kakko[",
+       false,
+       {{'K', false}, {'A', false}, {'K', false}, {'K', false}, {'O', false}, {VK_OEM_4, false}},
+       ""},
+      {"ji:kan",
+       false,
+       {{'J', false}, {'I', false}, {VK_OEM_1, true}, {'K', false}, {'A', false}, {'N', false}},
+       ""},
+      {"dai3kai",
+       true,
+       {{'D', false},
+        {'A', false},
+        {'I', false},
+        {'3', false},
+        {'K', false},
+        {'A', false},
+        {'I', false}},
+       ""},
+      {"ra-men",
+       false,
+       {{'R', false},
+        {'A', false},
+        {VK_OEM_MINUS, false},
+        {'M', false},
+        {'E', false},
+        {'N', false}},
+       "ra-men"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_number_rewriter_enabled_for_test(item.number_rewriter);
+    for (const auto& [key, shift] : item.keys) {
+      h.keyboard_state.SetDown(VK_SHIFT, shift);
+      EXPECT_TRUE(h.Press(key)) << key;
+      h.keyboard_state.SetDown(VK_SHIFT, false);
+    }
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), item.raw_romaji);
+  }
 }

@@ -829,6 +829,15 @@ std::optional<OemCompositionSymbol> CompositionSymbolFor(WCHAR typed) {
   return std::nullopt;
 }
 
+// Whether VK_OEM_5 is the JIS ¥ key, by its scan code from the key message
+// or, when a host sends none, from the current layout.
+bool IsJisYenKey(LPARAM key_data) {
+  constexpr UINT kJisYenScanCode = 0x7D;
+  UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code == 0) scan_code = MapVirtualKeyExW(VK_OEM_5, MAPVK_VK_TO_VSC, GetKeyboardLayout(0));
+  return scan_code == kJisYenScanCode;
+}
+
 std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual_key,
                                                                   LPARAM key_data) {
   // Numpad symbols are decided by the key; . and / stay half-width for numbers
@@ -855,6 +864,10 @@ std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual
       return OemCompositionSymbol{'-', "ー"};
     return std::nullopt;
   }
+  // The JIS ¥ key makes U+005C like the ろ key (VK_OEM_102) and the US \ key;
+  // its own scan code (0x7D) marks it, and it types ￥ as in legacy.
+  if (*translated == L'\\' && virtual_key == VK_OEM_5 && IsJisYenKey(key_data))
+    return CompositionSymbolFor(L'¥');
   return CompositionSymbolFor(*translated);
 }
 

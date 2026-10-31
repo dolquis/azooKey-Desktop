@@ -14385,6 +14385,41 @@ TEST(TsfTipReadingSymbolTest, DigitsAndSymbolsJoinTheReadingWithEitherRewriterSe
   }
 }
 
+// The JIS ¥ key types ￥ as in legacy; the ろ key and the US \ key, which make
+// the same U+005C, type ＼. The scan code tells them apart.
+TEST(TsfTipReadingSymbolTest, JisYenKeyTypesYenAndOtherBackslashKeysTypeBackslash) {
+  const auto press = [](DocumentPreeditHarness& h, WPARAM key, bool shift, UINT scan_code) {
+    h.keyboard_state.SetDown(VK_SHIFT, shift);
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    EXPECT_EQ(h.service.OnKeyDown(&h.context, key, static_cast<LPARAM>(scan_code) << 16, &eaten),
+              S_OK);
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    return eaten;
+  };
+  const struct {
+    const char* name;
+    azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest translate;
+    WPARAM key;
+    bool shift;
+    UINT scan_code;
+    const wchar_t* reading;
+  } cases[] = {
+      {"jis yen", &TranslateJisLayoutForTest, VK_OEM_5, false, 0x7D, L"あ￥"},
+      {"jis ro", &TranslateJisLayoutForTest, VK_OEM_102, false, 0x73, L"あ＼"},
+      {"us backslash", &TranslateUsLayoutForTest, VK_OEM_5, false, 0x2B, L"あ＼"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    OemCompositionTranslationGuard oem_translation(item.translate);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(press(h, 'A', false, 0x1E));
+    EXPECT_TRUE(press(h, item.key, item.shift, item.scan_code));
+    EXPECT_EQ(h.context.document->text, item.reading);
+  }
+}
+
 TEST(TsfTipReadingSymbolTest, UsAndJisLayoutsTypeTheirOwnSymbols) {
   AsciiDecimalDigitTranslationGuard digits;
   {

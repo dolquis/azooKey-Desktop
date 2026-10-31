@@ -4626,6 +4626,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CancelledWindowQueryIsNotCountedButLaterMissesA
   // From here the Host answers nothing: the cancelled window query, then one
   // per-key miss, which alone must not reach the threshold of 2.
   host.answer_query.store(false);
+  // A character would wait for the window (DEV-1813); Esc cancels the window
+  // query, and the next character starts a new reading.
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
   ASSERT_TRUE(h.Press('I'));
   ASSERT_TRUE(WaitUntil([&] { return host.queries.load() > queries_before; }));
   std::this_thread::sleep_for(std::chrono::milliseconds(400));
@@ -6807,7 +6810,9 @@ TEST(TsfTipOnKeyDownPreeditTest, OutOfRangeSelectionCommitsPreeditAsIs) {
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) {
+// DEV-1813: a key typed while the window waits does not change the reading
+// (which would end the wait); it waits for the window instead.
+TEST(TsfTipOnKeyDownPreeditTest, KeysDuringTheWindowWaitKeepTheReadingAndThePendingShow) {
   TextServiceHarness h;
 
   EXPECT_TRUE(h.Press('K'));
@@ -6816,7 +6821,9 @@ TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) 
   ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
 
   EXPECT_TRUE(h.Press('N'));
-  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DeactivateReleasesCompositionWhenSyncCleanupIsRejected) {
@@ -10242,6 +10249,11 @@ TEST(TsfTipTypoCorrectionTest, WireAdvertisesTypoAndSendsObservationWithoutWaiti
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
   ASSERT_TRUE(h.Press(VK_SPACE));
+  // Keys typed before the window opens would wait for it (DEV-1813).
+  ASSERT_TRUE(WaitUntil([&] {
+    h.service.process_candidates_ready_for_test();
+    return !h.service.input_state_for_test().awaiting_candidates();
+  }));
   EXPECT_EQ(h.service.preedit_kana_, "かみ");
   ASSERT_TRUE(h.Press(VK_RETURN));
   // The second phase observes the user's backspace correction. A fake Host
@@ -11865,10 +11877,12 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   ASSERT_TRUE(h.Press(VK_RETURN));
   ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
 
-  ASSERT_TRUE(h.Press('K'));
+  // A key that belongs to the app after the commit (here Space) cannot wait
+  // with Enter: the held commit runs first (DEV-1794 keeps this for them).
+  (void)h.Press(VK_SPACE);
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_FALSE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
-  // The held commit happened exactly once and the new key starts a composition.
+  // The held commit happened exactly once.
   const std::wstring text = h.context.document->text;
   ASSERT_FALSE(text.empty());
   EXPECT_EQ(text.front(), L'蚊');
@@ -11876,6 +11890,103 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
   const auto queued = h.service.queued_ipc_types_for_test();
   EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
             1);
+}
+
+namespace {
+// Types かき with an answer only for か: the answer for かき is in flight when
+// Enter comes, and the preedit keeps the converted start (DEV-1806).
+void TypeKakiBeforeItsAnswerAndHoldEnter(DocumentPreeditHarness& h) {
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  const uint64_t last_typed = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_TRUE(h.service.pending_ipc_auto_punctuation_for_test());
+  // The cancelled answer still comes back, and is stale.
+  h.service.set_live_conversion_result_with_segments_for_test(
+      last_typed, "かき", "柿", {LiveSeg("柿", "かき", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+}
+}  // namespace
+
+// DEV-1794: Enter before the answer to the last typed key, then a character
+// before the final answer. The character waits with Enter, so the commit gets
+// the final answer, as the synchronous legacy evaluation does.
+TEST(TsfTipDynamicPunctuationTest, CharacterDuringTheHeldEnterWaitsForTheFinalAnswer) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKakiBeforeItsAnswerAndHoldEnter(h);
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  EXPECT_TRUE(ProbeTypoKey(h, 'A'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "かき", "柿。", {LiveSeg("柿", "かき", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text, L"柿。あ");
+  EXPECT_EQ(h.service.preedit_kana_, "あ");
+}
+
+// Without a final answer the wait ends at its timeout with the text shown
+// then: the converted start and the typed end, never the bare reading.
+TEST(TsfTipDynamicPunctuationTest, CharacterDuringTheHeldEnterRunsAfterTheTimeoutCommit) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKakiBeforeItsAnswerAndHoldEnter(h);
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 2u);
+
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊きあい");
+  EXPECT_EQ(h.service.preedit_kana_, "あい");
+}
+
+// Esc and the off keys keep ending the wait at once (DEV-1794), after the
+// characters that waited before them.
+TEST(TsfTipDynamicPunctuationTest, EscapeDuringTheHeldEnterCommitsAndReplaysFirst) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKakiBeforeItsAnswerAndHoldEnter(h);
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  // The held あ started an input, which Esc then cancelled.
+  EXPECT_EQ(h.context.document->text, L"蚊き");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
+TEST(TsfTipDynamicPunctuationTest, FocusLossDropsTheCharactersHeldWithEnter) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKakiBeforeItsAnswerAndHoldEnter(h);
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text.find(L"あ"), std::wstring::npos);
 }
 
 // DEV-1736: an off key commits the surface shown now, as Enter does, but never
@@ -12774,7 +12885,9 @@ TEST(TsfTipPunctuationConversionTest, BatchModeKeepsTheMarkInTheRawInput) {
   EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), 0u);
 }
 
-TEST(TsfTipPunctuationConversionTest, WaitingForTheSpaceAnswerJoinsTheMarkWithLiveConversion) {
+// DEV-1813 (dynamic-punctuation-spec §7.3): a mark typed while the Space answer
+// is awaited waits with the window, then commits its selection with the mark.
+TEST(TsfTipPunctuationConversionTest, WaitingForTheSpaceAnswerHoldsTheMarkForTheWindow) {
   DocumentPreeditHarness h;
   OemCompositionTranslationGuard oem_translation;
   StartPunctuationConversion(h);
@@ -12785,8 +12898,17 @@ TEST(TsfTipPunctuationConversionTest, WaitingForTheSpaceAnswerJoinsTheMarkWithLi
   ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
   ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
-  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
-  EXPECT_EQ(h.service.preedit_kana_, "か。");
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0] = {"蚊", "か", 1.0, "dictionary"};
+  candidates[1] = {"下", "か", 0.5, "dictionary"};
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text, L"蚊。");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
 }
 
 TEST(TsfTipPunctuationConversionTest, CommitWithTheMarkOffersNoCharacterFormCycle) {
@@ -13695,4 +13817,182 @@ TEST(TsfTipLiveCarryTest, KeepsTheEightLatestAnswers) {
   EXPECT_EQ(h.context.document->text, L"蚊蚊");
   ASSERT_TRUE(h.Press(VK_BACK));
   EXPECT_EQ(h.context.document->text, L"か");
+}
+
+// DEV-1813 (legacy-parity-spec §1.2): the keys typed while the window that
+// Space asked for is still unanswered wait for it and replay in order once it
+// opens, so the result matches the synchronous legacy conversion.
+namespace {
+
+void StartWindowWait(DocumentPreeditHarness& h, bool legacy = false) {
+  ConfigureTypoHarness(h, legacy);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_FALSE(h.service.candidate_window_showing_for_test());
+  if (legacy)
+    ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+  else
+    ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+  ASSERT_EQ(h.context.document->text, L"か");
+}
+
+// The window answer arrives and its candidates-ready notification runs.
+void AnswerWindow(DocumentPreeditHarness& h) {
+  std::vector<azookey::ipc::CandidateField> candidates(3);
+  candidates[0] = {"蚊", "か", 1.0, "dictionary"};
+  candidates[1] = {"下", "か", 0.9, "dictionary"};
+  candidates[2] = {"課", "か", 0.8, "dictionary"};
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.process_candidates_ready_for_test();
+}
+
+// The probe answers for the window, so TSF delivers the key to OnKeyDown.
+void PressWhileWaiting(DocumentPreeditHarness& h, WPARAM key) {
+  ASSERT_TRUE(ProbeTypoKey(h, key)) << "key " << key;
+  ASSERT_TRUE(h.Press(key)) << "key " << key;
+  ASSERT_EQ(h.context.document->text, L"か") << "key " << key;
+}
+
+}  // namespace
+
+TEST(TsfTipWindowWaitTest, EnterCommitsTheFirstCandidate) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_RETURN);
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    AnswerWindow(h);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+TEST(TsfTipWindowWaitTest, SecondSpaceMovesToTheNextCandidateWithoutAskingAgain) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    const auto queued_before = h.service.queued_ipc_types_for_test().size();
+    PressWhileWaiting(h, VK_SPACE);
+    // The second Space sends no second window query.
+    EXPECT_EQ(h.service.queued_ipc_types_for_test().size(), queued_before);
+    PressWhileWaiting(h, VK_RETURN);
+    AnswerWindow(h);
+    EXPECT_EQ(h.context.document->text, L"下");
+  }
+}
+
+TEST(TsfTipWindowWaitTest, DigitCommitsThatCandidate) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, '3');
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"課");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
+TEST(TsfTipWindowWaitTest, CharacterCommitsTheSelectionAndStartsTheNextInput) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_DOWN);
+  PressWhileWaiting(h, 'K');
+  PressWhileWaiting(h, 'I');
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 3u);
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"下き");
+  EXPECT_EQ(h.service.preedit_kana_, "き");
+}
+
+// No candidate opens no window: the keys run against the reading, and Enter
+// commits it as typed.
+TEST(TsfTipWindowWaitTest, EmptyAnswerReplaysAgainstTheReading) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_RETURN);
+  h.service.answer_window_query_empty_for_test();
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+// Without a Host the TIP-local candidates open the window at once: nothing waits.
+TEST(TsfTipWindowWaitTest, HostUnavailableOpensAtOnceAndEnterIsNotHeld) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_ipc_host_unavailable_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_FALSE(h.context.document->text.empty());
+}
+
+TEST(TsfTipWindowWaitTest, EscapeCancelsTheInputAndDropsTheWaitingKeys) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, 'K');
+  PressWhileWaiting(h, VK_RETURN);
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+}
+
+TEST(TsfTipWindowWaitTest, FocusLossCompositionEndAndDeactivateDropTheWaitingKeys) {
+  for (int variant = 0; variant < 3; ++variant) {
+    SCOPED_TRACE(variant);
+    DocumentPreeditHarness h;
+    StartWindowWait(h);
+    PressWhileWaiting(h, 'K');
+    PressWhileWaiting(h, 'I');
+    if (variant == 0)
+      EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    else if (variant == 1)
+      EXPECT_EQ(h.ExternallyTerminate(), S_OK);
+    else
+      h.service.Deactivate();
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text.find(L"き"), std::wstring::npos);
+  }
+}
+
+// A key the window does not take (Tab, ←→) goes to the app at once and leaves
+// the waiting keys as they are.
+TEST(TsfTipWindowWaitTest, KeysTheWindowDoesNotTakeAreNotHeld) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_RETURN);
+  for (const WPARAM key : {WPARAM{VK_TAB}, WPARAM{VK_LEFT}, WPARAM{VK_HOME}}) {
+    EXPECT_FALSE(ProbeTypoKey(h, key)) << "key " << key;
+  }
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+}
+
+// The wait keeps 16 keys, shared with the commit retry (tsf-deep-integration-spec
+// §2.4.1); the 17th and later are dropped.
+TEST(TsfTipWindowWaitTest, KeepsSixteenKeysAndDropsTheRest) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  for (int i = 0; i < 17; ++i) PressWhileWaiting(h, 'A');
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 16u);
+  AnswerWindow(h);
+  std::wstring expected = L"蚊";
+  std::string kana;
+  for (int i = 0; i < 16; ++i) {
+    expected += L"あ";
+    kana += "あ";
+  }
+  EXPECT_EQ(h.context.document->text, expected);
+  EXPECT_EQ(h.service.preedit_kana_, kana);
 }

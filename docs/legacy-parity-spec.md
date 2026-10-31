@@ -148,8 +148,8 @@ enum class InputStateKind {
 > §4.2・§4.3）。フォーカス喪失、composition の終了、Deactivate も保留中のキーを捨てる。TIP の前処理を通る Space の経路
 > （英単語候補、記号・絵文字の rewriter）も同じ規則に従う。一括変換の応答待ちは
 > `docs/romaji-batch-conversion-spec.md` §3 に従い、この保留を当てる場合は同 spec に書く。
-> `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来たキーも同じ保留に載せる案があり、
-> DEV-1794 の調査で決める。
+> `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来た文字キーも同じ保留に積み、確定の後に
+> 再生する（DEV-1794）。
 
 > **ライブ変換の既定は OFF（意図した legacy との差）**: legacy の `LiveConversion` は既定 true だが、
 > Windows 版の `liveConversion` は既定 false とする。Windows 版の利用者の多くはライブ変換の無い

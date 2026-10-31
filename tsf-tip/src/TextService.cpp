@@ -2420,6 +2420,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     // TSF probes every key before OnKeyDown, and the probe tracks the key for
     // typo and undo learning. A held Enter commits first so that tracking, and
     // the eaten answer below, see the state after the commit (section 7.3).
+    // A character key waits with the held Enter instead (DEV-1794).
+    if (HoldsKeyForFinalPunctuation(context, wParam, lParam)) {
+      *eaten = TRUE;
+      return S_OK;
+    }
     if (final_punctuation_hold_) ResolveFinalPunctuationHold();
     TrackTypoKey(context, wParam);
     TrackUndoKey(context, wParam);
@@ -2475,6 +2480,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     if (const HRESULT finish_hr = FinishUnicodeInputBeforeKey(context, wParam, modifiers);
         FAILED(finish_hr))
       return finish_hr;
+    // DEV-1813: OnKeyDown holds this key for the candidate window.
+    if (AwaitingCandidateWindow() && SameComIdentity(context, active_context_) &&
+        ClassifyWindowWaitKey(wParam, lParam, modifiers, toggle_open) == WindowWaitKey::Hold) {
+      *eaten = TRUE;
+      return S_OK;
+    }
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -2686,6 +2697,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Section 7.3: another key ends the wait for the final request; the held
     // Enter commits the surface shown now, before this key is tracked (so a
     // Backspace right after it still finds the commit's undo window) and handled.
+    // A character key waits with it and runs after the commit (DEV-1794).
+    if (HoldsKeyForFinalPunctuation(context, wParam, lParam)) {
+      HoldWindowWaitingKey(context, wParam, lParam, /*tracked=*/false);
+      *eaten = TRUE;
+      return S_OK;
+    }
     if (final_punctuation_hold_) ResolveFinalPunctuationHold();
     if (typo_test_key_context_ != context || typo_test_key_ != wParam) {
       TrackTypoKey(context, wParam);
@@ -2765,6 +2782,27 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (const HRESULT finish_hr = FinishUnicodeInputBeforeKey(context, wParam, modifiers);
         FAILED(finish_hr))
       return finish_hr;
+    // DEV-1813 (legacy-parity-spec §1.2): while the window query Space sent is
+    // unanswered, the keys the window would take wait for it and replay in
+    // order once it opens. A wait that ended without a key replays first.
+    if (!window_waiting_keys_.empty() && !AwaitingCandidateWindow()) {
+      if (const HRESULT replay_hr = ReplayWindowWaitingKeys(active_context_);
+          replay_hr == E_OUTOFMEMORY)
+        return replay_hr;
+    }
+    if (AwaitingCandidateWindow() && SameComIdentity(context, active_context_)) {
+      switch (ClassifyWindowWaitKey(wParam, lParam, modifiers, toggle_open)) {
+        case WindowWaitKey::Hold:
+          HoldWindowWaitingKey(context, wParam, lParam);
+          *eaten = TRUE;
+          return S_OK;
+        case WindowWaitKey::Drop:
+          window_waiting_keys_.clear();
+          break;
+        case WindowWaitKey::Pass:
+          break;
+      }
+    }
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -3940,7 +3978,11 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
   AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ != pComposition) return S_OK;
   const bool external_termination = !etw_composition_end_in_progress_;
-  if (external_termination) ResetTypoTracking();
+  if (external_termination) {
+    ResetTypoTracking();
+    // The keys waiting for the window or the held Enter go with the input (DEV-1813).
+    window_waiting_keys_.clear();
+  }
   std::string terminated_surface =
       external_termination ? (committing_ ? commit_surface_ : CurrentDisplayedPreeditSurface())
                            : std::string{};
@@ -4224,7 +4266,8 @@ void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM ke
     } catch (...) {
     }
   };
-  if (retry_waiting_keys_.size() >= kMaxRetryWaitingKeys) {
+  // The window wait (DEV-1813) shares the 16.
+  if (retry_waiting_keys_.size() + window_waiting_keys_.size() >= kMaxRetryWaitingKeys) {
     log_drop("full");
     return;
   }
@@ -4235,6 +4278,139 @@ void TextService::HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM ke
     return;
   }
   retry_waiting_keys_.push_back(waiting);
+}
+
+// DEV-1813: the window query that Space sent is still unanswered, in core
+// (InputState waits for its candidates) or on the TIP's Space path (English
+// candidates and the rewriters), which keeps candidate_window_show_pending_.
+// Batch conversion and the emoji search keep their own waits.
+bool TextService::AwaitingCandidateWindow() {
+  if (committing_ || candidate_ui_.IsShowing()) return false;
+  if (core_input_active_)
+    return input_state_.awaiting_candidates() &&
+           (input_state_.kind() == core::InputStateKind::Composing ||
+            input_state_.kind() == core::InputStateKind::Previewing);
+  if (BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
+      preedit_kana_.empty())
+    return false;
+  std::lock_guard<std::mutex> lock(candidates_mtx_);
+  return candidate_window_show_pending_;
+}
+
+// legacy-parity-spec §1.2: a key the window would take is held; Esc, the off
+// keys and the switch to alphanumeric mode end the wait; any other key (Tab,
+// ←→, Home) goes on as if there were no wait.
+TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM key_data,
+                                                              uint32_t modifiers, bool open_close) {
+  using core::UserAction;
+  if (open_close) return WindowWaitKey::Drop;
+  if (const auto selecting = MapTipKey(key, modifiers, /*has_preedit=*/true,
+                                       /*cand_visible=*/true, /*unicode_active=*/false)) {
+    switch (selecting->action) {
+      case UserAction::Cancel:
+      case UserAction::ToggleHankaku:
+      case UserAction::ToggleAlnum:
+        return WindowWaitKey::Drop;
+      case UserAction::Forward:
+      case UserAction::Backward:
+      case UserAction::ToggleDebugWindow:
+      case UserAction::Forget:
+        return WindowWaitKey::Pass;
+      default:
+        return WindowWaitKey::Hold;
+    }
+  }
+  if (HasSystemModifier(modifiers)) return WindowWaitKey::Pass;
+  // The characters the reading takes in (spec §3.5 of tsf-deep-integration-spec).
+  if (TranslateOemCompositionSymbol(key, key_data) ||
+      CurrentCustomRomajiCharacter(key, key_data, romaji_))
+    return WindowWaitKey::Hold;
+  if (CurrentAsciiDecimalDigit(key, key_data) && !BatchRomajiEnabled() &&
+      number_rewriter_.load(std::memory_order_relaxed))
+    return WindowWaitKey::Hold;
+  return WindowWaitKey::Pass;
+}
+
+// DEV-1794 (dynamic-punctuation-spec §7.3): while Enter waits for the final
+// request, a key that starts the next input from Idle waits with it and runs
+// after the commit, so fast typing never cuts the final answer short. Other
+// keys (Esc, the off keys, Enter, Space, Backspace, navigation) end the wait
+// at once with the surface shown, since after the commit they belong to the
+// app and a held key could not be handed back to it.
+bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, LPARAM key_data) {
+  if (!final_punctuation_hold_ || final_punctuation_hold_->replay ||
+      !SameComIdentity(context, final_punctuation_hold_->context.get()))
+    return false;
+  const uint32_t modifiers = CurrentKeyModifiers();
+  if (HasSystemModifier(modifiers) ||
+      ClassifyOpenCloseKey(static_cast<uint32_t>(key), modifiers,
+                           local_settings_.ConvertKeysActionSnapshot()) != OpenCloseKeyAction::None)
+    return false;
+  const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
+                              /*unicode_active=*/false);
+  return idle && idle->action == core::UserAction::Input &&
+         ((key >= 'A' && key <= 'Z') || TranslateOemCompositionSymbol(key, key_data));
+}
+
+void TextService::HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data,
+                                       bool tracked) {
+  const auto log_drop = [this](const char* reason) noexcept {
+    if (std::exchange(retry_waiting_drop_logged_, true)) return;
+    try {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "window_waiting_key_dropped",
+                 {{"reason", SafeLogText(reason)}});
+    } catch (...) {
+    }
+  };
+  if (window_waiting_keys_.empty()) retry_waiting_drop_logged_ = false;
+  if (retry_waiting_keys_.size() + window_waiting_keys_.size() >= kMaxRetryWaitingKeys) {
+    log_drop("full");
+    return;
+  }
+  RetryWaitingKey waiting{ComIdentity(context), key, key_data, {}, tracked};
+  if (!GetKeyboardState(waiting.key_state.data())) {
+    log_drop("key_state_unavailable");
+    return;
+  }
+  window_waiting_keys_.push_back(waiting);
+}
+
+// DEV-1813: the keys held while the window waited run in order, as typed,
+// each with the key state of its press, now that the window is open (or the
+// wait ended without one). A key that waits again (a replayed Space after a
+// replayed Backspace) is held again by OnKeyDown itself.
+HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
+  auto keys = std::move(window_waiting_keys_);
+  window_waiting_keys_.clear();
+  if (!context) return S_OK;
+  std::array<BYTE, 256> current_state{};
+  if (!GetKeyboardState(current_state.data())) return S_OK;
+  for (auto& waiting : keys) {
+    if (waiting.context != ComIdentity(context)) continue;
+    BOOL replay_eaten = FALSE;
+    HRESULT hr = S_OK;
+    (void)SetKeyboardState(waiting.key_state.data());
+    try {
+      // A window key was tracked for typo and undo when it was pressed; a key
+      // held with Enter is tracked now, after the commit it waited for.
+      if (waiting.tracked) {
+        typo_test_key_context_ = context;
+        typo_test_key_ = waiting.key;
+      }
+      hr = OnKeyDown(context, waiting.key, waiting.key_data, &replay_eaten);
+    } catch (...) {
+      (void)SetKeyboardState(current_state.data());
+      throw;
+    }
+    (void)SetKeyboardState(current_state.data());
+    if (hr == E_OUTOFMEMORY) return hr;
+  }
+  return S_OK;
+}
+
+void TextService::ReplayWindowWaitingKeysIfReady() {
+  if (window_waiting_keys_.empty() || AwaitingCandidateWindow()) return;
+  (void)ReplayWindowWaitingKeys(active_context_);
 }
 
 // DEV-1750: once a key retries a refused commit, the keys that waited for it
@@ -4787,8 +4963,10 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
   // cleared below; spec §4.3 commits what the composition shows.
   const std::string shown_surface = LifecycleShownSurface();
   // A commit this loss finishes ends without a key, so the keys waiting for
-  // its retry are dropped (DEV-1750).
+  // its retry are dropped (DEV-1750), and so are the keys the candidate window
+  // waited with (DEV-1813).
   retry_waiting_keys_.clear();
+  window_waiting_keys_.clear();
   // A commit finished here, now or by a later edit session, is forced by the
   // focus or lifecycle loss and must not reopen the undo window.
   if (pending_commit_observation_) pending_commit_observation_->arms_undo = false;
@@ -8467,6 +8645,8 @@ void TextService::OnCandidatesReady(void* context) {
   // A held punctuation mark (spec §3.5.1) commits before the answer refreshes anything else.
   service->ResolvePunctuationConversionHoldIfReady();
   const bool ui_applied = service->ShowCandidateWindowFromCache();
+  // DEV-1813: the keys typed while the window waited run in it now.
+  service->ReplayWindowWaitingKeysIfReady();
   if (ui_applied && ui_start != std::chrono::steady_clock::time_point{}) {
     const auto ui_end = std::chrono::steady_clock::now();
     TracePhase(trace_id, logging::Phase::UiApply,
@@ -8842,6 +9022,8 @@ void TextService::ResolveFinalPunctuationHold() {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "final_punctuation_commit_failed",
                {{"hresult", static_cast<uint64_t>(static_cast<uint32_t>(hr))}});
   }
+  // DEV-1794: the keys typed during the wait run now, in order, after the commit.
+  if (!window_waiting_keys_.empty()) (void)ReplayWindowWaitingKeys(hold.context.get());
 }
 
 void TextService::AbortFinalPunctuationHold() {

@@ -1515,7 +1515,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool AwaitingCandidateWindow();
   HRESULT OpenLocalCandidateWindow(ITfContext* context);
   WindowWaitKey ClassifyWindowWaitKey(WPARAM key, LPARAM key_data, uint32_t modifiers,
-                                      bool open_close);
+                                      OpenCloseKeyAction open_close);
   void HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data, bool tracked = true);
   // DEV-1794: a character key that waits with the held Enter (section 7.3).
   bool HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, LPARAM key_data);

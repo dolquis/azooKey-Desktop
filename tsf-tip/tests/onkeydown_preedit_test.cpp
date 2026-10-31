@@ -14012,3 +14012,115 @@ TEST(TsfTipWindowWaitTest, KeepsSixteenKeysAndDropsTheRest) {
   EXPECT_EQ(h.context.document->text, expected);
   EXPECT_EQ(h.service.preedit_kana_, kana);
 }
+
+// Spec §4.2 of tsf-deep-integration-spec: an off key (VK_IME_OFF, Hankaku/
+// Zenkaku, the input indicator's left click) closes at once, committing what is
+// shown. Its Enter is no typed key: it neither waits for the window nor is
+// replayed, and the waiting keys are dropped.
+TEST(TsfTipWindowWaitTest, OffKeysCommitTheReadingAndCloseWhileWaiting) {
+  for (const bool legacy : {false, true}) {
+    for (int variant = 0; variant < 3; ++variant) {
+      SCOPED_TRACE(std::string(legacy ? "pre-processing path " : "core path ") +
+                   std::to_string(variant));
+      OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+      DocumentPreeditHarness h;
+      h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+      StartWindowWait(h, legacy);
+      PressWhileWaiting(h, VK_DOWN);
+      PressWhileWaiting(h, VK_RETURN);
+      if (variant == 0)
+        EXPECT_TRUE(h.Press(VK_IME_OFF));
+      else if (variant == 1)
+        EXPECT_TRUE(h.Press(VK_KANJI));
+      else
+        h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+      EXPECT_FALSE(h.service.keyboard_open());
+      EXPECT_FALSE(compartment.open);
+      EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+      EXPECT_EQ(h.context.document->text, L"か");
+      EXPECT_EQ(h.service.composition_, nullptr);
+      // A late answer changes nothing.
+      AnswerWindow(h);
+      EXPECT_EQ(h.context.document->text, L"か");
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    }
+  }
+}
+
+// Esc after the Host is lost cancels the input; it neither opens the local
+// window nor lets the waiting Enter commit first.
+TEST(TsfTipWindowWaitTest, EscapeAfterTheHostIsLostCancelsWithoutReplaying) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_RETURN);
+    h.service.set_ipc_host_unavailable_for_test(true);
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text, L"");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+// An off key after the Host is lost commits the reading and closes, without
+// the waiting Enter committing a candidate first.
+TEST(TsfTipWindowWaitTest, OffKeyAfterTheHostIsLostCommitsTheReadingAndCloses) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_RETURN);
+  h.service.set_ipc_host_unavailable_for_test(true);
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
+// An on key while the IME is on changes nothing and keeps the waiting keys.
+TEST(TsfTipWindowWaitTest, OnKeyKeepsTheWaitingKeys) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_RETURN);
+  (void)h.Press(VK_IME_ON);
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// A replayed key means what it meant when pressed: Shift+Space goes back,
+// Shift+1 stays "！".
+TEST(TsfTipWindowWaitTest, ReplayedKeysKeepTheShiftOfTheirPress) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartWindowWait(h);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  PressWhileWaiting(h, VK_SPACE);
+  PressWhileWaiting(h, '1');
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  AnswerWindow(h);
+  EXPECT_EQ(h.context.document->text, L"課！");
+  EXPECT_EQ(h.service.preedit_kana_, "！");
+}
+
+// A commit a replayed key asks for can be refused: the rest of the replay then
+// waits for its retry (DEV-1750), in the same 16, and runs after it.
+TEST(TsfTipWindowWaitTest, RefusedCommitDuringTheReplayMovesTheKeysToTheRetry) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, 'K');
+  for (int i = 0; i < 16; ++i) PressWhileWaiting(h, 'A');
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 16u);
+  h.context.reject_write = true;
+  AnswerWindow(h);
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_FALSE(h.service.committing_);
+  // K and 15 A waited (the 17th key was dropped while the window waited); the
+  // retry key comes last.
+  EXPECT_EQ(h.context.document->text, L"蚊か" + std::wstring(14, L'あ') + L"い");
+}

@@ -2482,7 +2482,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return finish_hr;
     // DEV-1813: OnKeyDown holds this key for the candidate window.
     if (AwaitingCandidateWindow() && SameComIdentity(context, active_context_) &&
-        ClassifyWindowWaitKey(wParam, lParam, modifiers, toggle_open) == WindowWaitKey::Hold) {
+        ClassifyWindowWaitKey(wParam, lParam, modifiers, open_close) == WindowWaitKey::Hold) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2699,7 +2699,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Backspace right after it still finds the commit's undo window) and handled.
     // A character key waits with it and runs after the commit (DEV-1794).
     if (HoldsKeyForFinalPunctuation(context, wParam, lParam)) {
-      HoldWindowWaitingKey(context, wParam, lParam, /*tracked=*/false);
+      // A key replayed from the window wait was tracked when pressed; it keeps
+      // that, and the marker its replay set does not outlive this return.
+      const bool tracked = typo_test_key_context_ == context && typo_test_key_ == wParam;
+      typo_test_key_context_ = nullptr;
+      HoldWindowWaitingKey(context, wParam, lParam, tracked);
       *eaten = TRUE;
       return S_OK;
     }
@@ -2785,11 +2789,21 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // DEV-1813 (legacy-parity-spec §1.2): while the window query Space sent is
     // unanswered, the keys the window would take wait for it and replay in
     // order once it opens. A wait that ended without a key replays first.
+    // The Enter an off key sends commits what is shown (spec §4.2) and is no
+    // typed key: it neither waits nor replays, and the waiting keys are
+    // dropped. Esc and the off keys drop them before anything replays them.
+    const bool waiting_for_window = AwaitingCandidateWindow();
+    const WindowWaitKey wait_key =
+        !commit_before_close_ && SameComIdentity(context, active_context_) &&
+                (waiting_for_window || !window_waiting_keys_.empty())
+            ? ClassifyWindowWaitKey(wParam, lParam, modifiers, open_close)
+            : WindowWaitKey::Pass;
+    if (commit_before_close_ || wait_key == WindowWaitKey::Drop) window_waiting_keys_.clear();
     // A Host lost after the query was sent leaves no answer and no deadline
     // (the query waits for the reconnect): the local candidates open the
     // window instead, as any key did before the keys were held.
-    if (core_input_active_ && AwaitingCandidateWindow() && IpcHostUnavailable() &&
-        active_context_) {
+    if (wait_key != WindowWaitKey::Drop && !commit_before_close_ && core_input_active_ &&
+        waiting_for_window && IpcHostUnavailable() && active_context_) {
       if (const HRESULT open_hr = OpenLocalCandidateWindow(active_context_);
           open_hr == E_OUTOFMEMORY)
         return open_hr;
@@ -2799,18 +2813,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           replay_hr == E_OUTOFMEMORY)
         return replay_hr;
     }
-    if (AwaitingCandidateWindow() && SameComIdentity(context, active_context_)) {
-      switch (ClassifyWindowWaitKey(wParam, lParam, modifiers, toggle_open)) {
-        case WindowWaitKey::Hold:
-          HoldWindowWaitingKey(context, wParam, lParam);
-          *eaten = TRUE;
-          return S_OK;
-        case WindowWaitKey::Drop:
-          window_waiting_keys_.clear();
-          break;
-        case WindowWaitKey::Pass:
-          break;
-      }
+    if (wait_key == WindowWaitKey::Hold && AwaitingCandidateWindow()) {
+      HoldWindowWaitingKey(context, wParam, lParam);
+      *eaten = TRUE;
+      return S_OK;
     }
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
@@ -4325,9 +4331,12 @@ HRESULT TextService::OpenLocalCandidateWindow(ITfContext* context) {
 // keys and the switch to alphanumeric mode end the wait; any other key (Tab,
 // ←→, Home) goes on as if there were no wait.
 TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM key_data,
-                                                              uint32_t modifiers, bool open_close) {
+                                                              uint32_t modifiers,
+                                                              OpenCloseKeyAction open_close) {
   using core::UserAction;
-  if (open_close) return WindowWaitKey::Drop;
+  // An on key changes nothing while the IME is on; the off keys end the wait.
+  if (open_close == OpenCloseKeyAction::Open) return WindowWaitKey::Pass;
+  if (open_close != OpenCloseKeyAction::None) return WindowWaitKey::Drop;
   if (const auto selecting = MapTipKey(key, modifiers, /*has_preedit=*/true,
                                        /*cand_visible=*/true, /*unicode_active=*/false)) {
     switch (selecting->action) {
@@ -4372,8 +4381,13 @@ bool TextService::HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, L
     return false;
   const auto idle = MapTipKey(key, modifiers, /*has_preedit=*/false, /*cand_visible=*/false,
                               /*unicode_active=*/false);
-  return idle && idle->action == core::UserAction::Input &&
-         ((key >= 'A' && key <= 'Z') || TranslateOemCompositionSymbol(key, key_data));
+  if (idle && idle->action == core::UserAction::Input &&
+      ((key >= 'A' && key <= 'Z') || TranslateOemCompositionSymbol(key, key_data)))
+    return true;
+  // A character of the custom romaji table starts the next input as well.
+  core::RomajiKanaConverter idle_romaji;
+  idle_romaji.SetCustomTable(local_settings_.RomajiSnapshot());
+  return CurrentCustomRomajiCharacter(key, key_data, idle_romaji).has_value();
 }
 
 void TextService::HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data,

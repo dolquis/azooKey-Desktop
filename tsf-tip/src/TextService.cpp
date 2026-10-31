@@ -2318,7 +2318,10 @@ bool TextService::InsertsFullWidthSpace(ITfContext* context, WPARAM key, uint32_
       UnicodeInputActive() || HasInputToCommitBeforeClose())
     return false;
   const bool shift = (modifiers & core::kModifierShift) != 0;
-  return local_settings_.FullWidthSpaceSnapshot() != shift;
+  if (local_settings_.FullWidthSpaceSnapshot() == shift) return false;
+  // A read-only document keeps the app's own Space (spec §3.7).
+  TF_STATUS status{};
+  return !(SUCCEEDED(context->GetStatus(&status)) && (status.dwDynamicFlags & TF_SD_READONLY));
 }
 
 HRESULT TextService::InsertFullWidthSpace(ITfContext* context, bool retry) {
@@ -2335,11 +2338,15 @@ HRESULT TextService::InsertFullWidthSpace(ITfContext* context, bool retry) {
   const bool ran = session->ran();
   session->Release();
   if (inserted) return S_OK;
-  // Spec §3.7: only a lock not granted waits, and only for one retry. A
-  // context that cannot write the space (read-only, no selection, a refused
-  // SetText) drops it, so the keys after it are not held.
+  // Spec §3.7: only a lock not granted (TF_E_SYNCHRONOUS, or S_OK from a
+  // session that never ran) waits, and only for one retry. Anything else
+  // drops the space: a context that cannot write it (read-only, no selection,
+  // a refused SetText), and a session that may still run later
+  // (TF_S_ASYNC), which a retry would insert twice.
   const bool read_only = hr == TS_E_READONLY || hr_session == TS_E_READONLY;
-  const bool waits = !retry && !ran && !read_only;
+  const bool lock_refused =
+      SUCCEEDED(hr) && !ran && (hr_session == TF_E_SYNCHRONOUS || hr_session == S_OK);
+  const bool waits = !retry && lock_refused;
   if (waits) full_width_space_context_ = context;
   // The reason only: never the key, the text or the timing.
   const char* reason = waits       ? "lock"
@@ -2359,11 +2366,13 @@ HRESULT TextService::ResolvePendingFullWidthSpace(ITfContext* context) {
   if (!full_width_space_context_) return S_OK;
   Microsoft::WRL::ComPtr<ITfContext> pending = std::move(full_width_space_context_);
   full_width_space_context_.Reset();
-  // A key from another context is not where the space was typed: drop it.
-  if (!SameComIdentity(context, pending.Get())) {
+  // A key from another context is not where the space was typed, and a
+  // context that disabled the keyboard takes no input: drop it.
+  const bool same_context = SameComIdentity(context, pending.Get());
+  if (!same_context || azookey::tsf::IsContextKeyboardDisabled(context)) {
     try {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "full_width_space_dropped",
-                 {{"reason", SafeLogText("context_changed")}});
+                 {{"reason", SafeLogText(same_context ? "keyboard_disabled" : "context_changed")}});
     } catch (...) {
     }
     return S_OK;
@@ -2674,15 +2683,16 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     // An app-disabled context (Chromium's password field) is not ours to
     // convert: TSF still calls the key sinks, so leave every key to the app.
+    // Spec §3.7: a space whose lock was not granted is inserted again once,
+    // before this key, which is then handled as usual. The probe does it, as
+    // it finishes Unicode input, so a key the app takes lands after the space.
+    // A disabled context drops it, so it never lands after a later key.
+    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
+      return space_hr;
     if (azookey::tsf::IsContextKeyboardDisabled(context)) {
       LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
       return S_OK;
     }
-    // Spec §3.7: a space whose lock was not granted is inserted again once,
-    // before this key, which is then handled as usual. The probe does it, as
-    // it finishes Unicode input, so a key the app takes lands after the space.
-    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
-      return space_hr;
     const uint32_t modifiers = CurrentKeyModifiers();
     const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
         static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
@@ -2977,15 +2987,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
     ResolveCarriedInput(context);
+    // Spec §3.7: a space whose lock was not granted is inserted again once,
+    // before this key, which is then handled as usual. The probe does it, as
+    // it finishes Unicode input, so a key the app takes lands after the space.
+    // A disabled context drops it, so it never lands after a later key.
+    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
+      return space_hr;
     if (azookey::tsf::IsContextKeyboardDisabled(context)) {
       LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
       return S_OK;
     }
-    // Spec §3.7: a space whose lock was not granted is inserted again once,
-    // before this key, which is then handled as usual. The probe does it, as
-    // it finishes Unicode input, so a key the app takes lands after the space.
-    if (const HRESULT space_hr = ResolvePendingFullWidthSpace(context); FAILED(space_hr))
-      return space_hr;
     const uint32_t modifiers = CurrentKeyModifiers();
     const OpenCloseKeyAction open_close = ClassifyOpenCloseKey(
         static_cast<uint32_t>(wParam), modifiers, local_settings_.ConvertKeysActionSnapshot());
@@ -4961,9 +4972,7 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
 #ifdef AZOOKEY_TSF_TESTING
   ++typo_tracked_keys_;
 #endif
-  // A retry key is consumed before the next input; a space waiting for its
-  // lock is no input the tracker saw either.
-  if (committing_ || full_width_space_context_) return;
+  if (committing_) return;  // A retry key is consumed before the next input.
   if ((active_context_ && !SameComIdentity(context, active_context_)) || !keyboard_open_ ||
       alnum_mode_ || IsContextKeyboardDisabled(context)) {
     ResetTypoTracking();
@@ -4982,8 +4991,7 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
 // plain Backspace there sends "undo". Ctrl+Shift+Backspace is the Forget key
 // and only forgets; a system modifier closes the window without an undo.
 void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
-  // A retry key is consumed before the next input, and so is a waiting space.
-  if (committing_ || full_width_space_context_ || !undo_target_) return;
+  if (committing_ || !undo_target_) return;  // A retry key is consumed before the next input.
   auto target = std::move(*undo_target_);
   undo_target_.reset();
   // The Backspace must land in the context that was committed to: a focus

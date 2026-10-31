@@ -581,8 +581,10 @@ class NoopContext : public ITfContext {
   STDMETHODIMP GetStatus(TF_STATUS* status) override {
     if (!status) return E_POINTER;
     *status = {};
+    status->dwDynamicFlags = status_dynamic_flags;
     return S_OK;
   }
+  DWORD status_dynamic_flags{0};
 
   STDMETHODIMP GetProperty(REFGUID, ITfProperty** property) override {
     if (property) *property = nullptr;
@@ -1079,6 +1081,10 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
       *result = TS_E_READONLY;
       return S_OK;
     }
+    if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && lock_write) {
+      *result = TF_E_SYNCHRONOUS;
+      return S_OK;
+    }
     if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && defer_write_callback) {
       // Queued like TF_S_ASYNC; the test runs it later with RunDeferredWrite.
       session->AddRef();
@@ -1136,6 +1142,8 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   std::shared_ptr<BracketDocument> document = std::make_shared<BracketDocument>();
   bool reject_read{false};
   bool reject_write{false};
+  // A sync write lock the document cannot grant now (TF_E_SYNCHRONOUS).
+  bool lock_write{false};
   bool skip_callback{false};
   bool skip_write_callback{false};
   bool defer_write_callback{false};
@@ -15185,6 +15193,78 @@ TEST(TsfTipFullWidthSpaceTest, UnwritableContextDropsTheSpaceAndPassesTheNextKey
     }
     EXPECT_EQ(h.context.document->text, L"");
   }
+}
+
+// Spec §3.7: a document whose status is read-only keeps the app's Space.
+TEST(TsfTipFullWidthSpaceTest, ReadOnlyDocumentGetsTheSpace) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.status_dynamic_flags = TF_SD_READONLY;
+  EXPECT_FALSE(ProbeTypoKey(h, VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_EQ(h.context.document->text, L"");
+}
+
+// TF_E_SYNCHRONOUS is a lock not granted: the space waits for the next key.
+TEST(TsfTipFullWidthSpaceTest, SynchronousLockRefusalWaitsForTheNextKey) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.lock_write = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.lock_write = false;
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  EXPECT_EQ(h.context.document->text, L"\x3000\x3042");
+}
+
+// A session the context only queues (TF_S_ASYNC) may still run: no retry, so
+// it never inserts the space twice.
+TEST(TsfTipFullWidthSpaceTest, AsyncSessionIsNotRetried) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.defer_write_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.defer_write_callback = false;
+  for (auto* session : h.context.deferred_writes) session->Release();
+  h.context.deferred_writes.clear();
+}
+
+// A key the TIP takes, probed and then pressed, finds the space inserted once.
+TEST(TsfTipFullWidthSpaceTest, ProbedKeyAfterTheWaitInsertsTheSpaceOnce) {
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.skip_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.skip_callback = false;
+  EXPECT_TRUE(ProbeTypoKey(h, 'K'));
+  EXPECT_EQ(h.context.document->text, L"\x3000");
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"\x3000\x304b");
+}
+
+// A key from a context that disabled the keyboard drops the waiting space, so
+// it does not land before a later key once the keyboard is enabled again.
+TEST(TsfTipFullWidthSpaceTest, KeyFromAKeyboardDisabledContextDropsTheWaitingSpace) {
+  ChromiumCompartmentMgr compartments;
+  DocumentPreeditHarness h;
+  ConfigureFullWidthSpaceHarness(h);
+  h.context.skip_callback = true;
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.full_width_space_waits_for_retry_for_test());
+  h.context.skip_callback = false;
+  compartments.keyboard_disabled.value = 1;
+  h.context.compartment_mgr = &compartments;
+  EXPECT_FALSE(h.Press('A'));
+  EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
+  compartments.keyboard_disabled.value = 0;
+  h.context.compartment_mgr = nullptr;
+  EXPECT_TRUE(h.Press('B'));
+  EXPECT_EQ(h.context.document->text.find(L'\x3000'), std::wstring::npos);
 }
 
 // The probe inserts the waiting space, so a key the app takes lands after it.

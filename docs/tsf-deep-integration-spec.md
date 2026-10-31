@@ -820,16 +820,20 @@ legacy との差。Windows 版の通常変換は読み全体を確定するた�
   （`docs/legacy-parity-spec.md` §1.5.3。Idle の Space は `nullopt`）より前に判定する。
 - 次の Space は対象外とする: 読みがあるとき（変換と次候補）、英数モード、IME Off、Ctrl・Alt・Win 付き、
   Unicode 入力中（`docs/legacy-parity-spec.md` §6.1）、再変換の候補一覧の表示中、カッコ補完の composition 中、
-  確定の再試行を待つ入力があるとき（§2.4.1）。Unicode 入力を終えた Space は、終えた後に Idle と同じに扱うので、
+  確定の再試行を待つ入力があるとき（§2.4.1）、文書が読み取り専用のとき（`ITfContext::GetStatus` の `TF_SD_READONLY`。
+  Space はアプリの動作に任せる）。Unicode 入力を終えた Space は、終えた後に Idle と同じに扱うので、
   既定では文字を確定してから全角空白を入れる。
 - アプリがキーボード入力を無効にした context（§4.3）では、他のキーと同じくキーを食わずに渡す。
 - secure の文脈でも全角空白を入れる。学習観測は、どの文脈でも送らない。
 - 全角空白を挿入する edit session の失敗は 2 種類に分ける。
   - 読み取り専用（`TS_E_READONLY`）、選択位置が取れない、`SetText` の失敗など、session が書けなかったときは、
     全角空白を捨てる。後のキーは待たせず、通常どおり処理する。
-  - ロックが得られず session が実行されなかったときは、全角空白を残す。次のキー（`OnTestKeyDown` が先に呼ばれれば
-    そこ）で 1 回だけ挿入し直してから、そのキーを通常どおり処理する。入れ直しも失敗したら全角空白を捨てる。
-    次のキーが別の context のものなら、入れ直さずに捨てる。フォーカス喪失と Deactivate でも捨てる。
+  - ロックが得られず session が実行されなかったとき（`TF_E_SYNCHRONOUS`、または `S_OK` で実行されなかったとき）だけ、
+    全角空白を残す。次のキー（`OnTestKeyDown` が先に呼ばれればそこ）で 1 回だけ挿入し直してから、そのキーを
+    通常どおり処理する。入れ直しも失敗したら全角空白を捨てる。次のキーが別の context のもの、またはキーボード入力が
+    無効な context のものなら、入れ直さずに捨てる。フォーカス喪失と Deactivate でも捨てる。
+  - `TF_S_ASYNC` など、後から実行されうる結果のときは、入れ直すと 2 つ入るので入れ直さない（後から実行されれば
+    1 つ入る）。`TF_E_DISCONNECTED` などのその他の失敗では捨てる。
   - 捨てたときと待つときは、理由名だけを警告ログに 1 行残す（`full_width_space_dropped` /
     `full_width_space_waits_for_lock`）。キーの内容と時刻は残さない。
 - legacy の `TypeHalfSpace`（既定 false＝全角）と Microsoft IME の既定（入力モードに従って全角）に揃える。

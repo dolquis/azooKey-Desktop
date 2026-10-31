@@ -185,6 +185,7 @@ zip を生成する。
 `bundled-dictionary`、帰属表示が `dictionary-notices`、生成入力の記録が `dictionary-provenance` であり、SHA-256 を他の同梱物と
 同様に manifest へ記録する。配布可否と帰属の正典は
 `auto-word-registration-spec.md` §14.9 / §14.10 とする。
+MSI の `RewriterDataDir` と同じ `data/english-words.tsv`、`data/symbol.tsv`、`data/emoji.tsv` も role `rewriter-data` として同梱する。
 既定ディレクトリが存在しない場合だけ、`-AllowNoDictionary` の明示で辞書省略を許可し、
 警告を出す。明示したディレクトリの不存在、2層の欠落・空ファイル、帰属表示の欠落・白紙は
 このスイッチでも許可しない。辞書省略時は辞書層を前提とする Human Gate の証跡に使わない。

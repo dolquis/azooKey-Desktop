@@ -96,7 +96,7 @@ enum class InputStateKind {
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
-| Idle | Space（ひらがなモード） | Idle | 全角空白を composition を作らずに挿入する（`fullWidthSpace`。`docs/tsf-deep-integration-spec.md` §3.7） |
+| Idle | Space（ひらがなモード） | Idle | 全角空白を composition を作らずに挿入する（`fullWidthSpace`。core を通さず TIP が判定する。`docs/tsf-deep-integration-spec.md` §3.7） |
 | Composing (liveConv OFF) | Input（文字・数字・記号。§1.5.3） | Composing | 読みに足して Preedit 更新、打鍵ごとの `QueryCandidates` |
 | Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。応答を待つ間のキーは TIP が保留し、窓が開いた後に再生する） |
 | Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6）。F7・F8 だけ ObserveCommit を送る |
@@ -141,7 +141,8 @@ enum class InputStateKind {
 > 新しいタイマーは作らない。候補が 0 件で窓が開かずに待ちが終わったときは、`Composing`（`Previewing`）の
 > まま再生する（Enter は読みの確定になる）。Esc は保留せず、その場で入力を取り消して保留中のキーを捨てる。
 > フォーカス喪失、composition の終了、Deactivate も保留中のキーを捨てる。TIP の前処理を通る Space の経路
-> （英単語候補、記号・絵文字の rewriter、一括変換）も同じ規則に従う。
+> （英単語候補、記号・絵文字の rewriter）も同じ規則に従う。一括変換の応答待ちは
+> `docs/romaji-batch-conversion-spec.md` §3 に従い、この保留を当てる場合は同 spec に書く。
 > `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来たキーも同じ保留に載せる案があり、
 > DEV-1794 の調査で決める。
 

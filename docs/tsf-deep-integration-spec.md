@@ -706,8 +706,11 @@ batch 変換では raw 入力に `'` を保持し、表示と変換の読みは�
 - 押した時点で第 1 候補が無い場合（未確定ローマ字を確定して読みが変わった、応答がまだ届いていない）は、
   その読みで live の `QueryCandidates` を送り、`docs/dynamic-punctuation-spec.md` §7.3 と同じ上限（既定 200ms）まで待つ。
   待つ間はキーを消費し、応答の到着、上限の経過、次のキーのいずれかで処理する。
-  上限を過ぎた場合、Host が使えない場合、Space の応答待ちの場合は `off` と同じく句読点を読みに足す。
+  上限を過ぎた場合と Host が使えない場合は `off` と同じく句読点を読みに足す。
   未変換の読みを強制確定することはない。
+- Space の応答待ち（`docs/legacy-parity-spec.md` §1.2）に押した句読点は、この待ちに入らず、Space の応答待ちの
+  保留に積む。窓が開いた後に `Selecting` へ再生され、上の候補窓の表示中の規則で確定する。候補が 0 件で窓が
+  開かなかったときは、再生した時点の規則で扱う。
   フォーカス喪失、composition の終了、Deactivate では、Enter の保留（`docs/dynamic-punctuation-spec.md` §7.3）と同じく、待っている句読点キーを捨てる。
 - 次の場合は変換せず、`off` と同じく句読点を読みに足す。
   - 読みが空、または上記の句読点だけ（§3.5 の半角候補を残す）。
@@ -760,6 +763,8 @@ batch 変換では raw 入力に `'` を保持し、表示と変換の読みは�
 - `true`: Space は全角空白 `　`、Shift+Space は半角空白を入れる。
 - `false`: Space は半角空白、Shift+Space は全角空白を入れる。
 - 全角空白は composition を作らずに挿入し、学習観測には送らない。半角空白はキーをアプリへ渡して入れる。
+  キーを食うかはこの設定と Shift で決まるので、TIP が `UserActionMap` の写像
+  （`docs/legacy-parity-spec.md` §1.5.3。Idle の Space は `nullopt`）より前に判定する。
 - 読みがあるときの Space（変換と次候補）、英数モード、IME Off、Ctrl・Alt・Win 付きの Space は対象外とする。
 - legacy の `TypeHalfSpace`（既定 false＝全角）と Microsoft IME の既定（入力モードに従って全角）に揃える。
 

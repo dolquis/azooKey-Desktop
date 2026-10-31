@@ -41,11 +41,13 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 
 ### 3.1.1 宣言的モデルカタログ（DEV-438）
 
-DEV-438 では、ダウンロード・検証・プリフェッチを行わず、Zenzai GGUF の
-宣言的カタログとローカルパス解決だけを実装する。カタログ v1 の schema 正典は
-`settings/model-catalog.schema.json` とする。
+カタログは Zenzai GGUF の宣言と、`zenzai\` 配下のローカルパス解決を持つ。取得元を持つ
+entry は §3.1.2 の取得に使う。schema の正典は `settings/model-catalog.schema.json` とし、
+v1 と v2 の両方を定義する。parser（`ParseModelCatalogJson`）は v1 と v2 を読み、それ以外の
+`schemaVersion` を拒否する。未知のキーを拒否するときは、エラーにキー名と `schemaVersion` を
+入れる。
 
-カタログは、`%LOCALAPPDATA%\azooKey\models\zenzai\` 配下に置かれる GGUF ファイルを
+カタログ v1 は、`%LOCALAPPDATA%\azooKey\models\zenzai\` 配下に置かれる GGUF ファイルを
 次の形で宣言する:
 
 ```json
@@ -71,7 +73,7 @@ DEV-438 では、ダウンロード・検証・プリフェッチを行わず、
 | `models[].id` | string | 必須 | モデル識別子。ASCII 英数字・`.`・`_`・`-` のみ |
 | `models[].displayName` | string | `id` | UI / ログ表示名。指定する場合は非空 |
 | `models[].fileName` | string | 必須 | `zenzai\` 配下の GGUF ファイル名。絶対パス、サブディレクトリ、control 文字、`..`、drive prefix は不可 |
-| `models[].sha256` | string | 必須 | 期待 SHA-256（64 hex）。DEV-438 では保持のみで、検証は後続 B が行う |
+| `models[].sha256` | string | 必須 | 期待 SHA-256（64 hex）。§3.1.2 の取得で照合する |
 | `models[].backendHint` | enum | `"llama.cpp"` | 現行 v1 は GGUF / llama.cpp のみ |
 | `models[].promptFormat` | enum | `"zenz-v3"` | プロンプト形式。`"zenz-v3"` / `"kanakanji-edge-v1"`。未知の値は reject。値ごとの振る舞いは `docs/zenzai-inference-spec.md` §2.4.2 |
 
@@ -80,12 +82,15 @@ resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 `is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
 このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
 
-#### R2 再開時の catalog（DEV-1770）
+#### catalog v2（DEV-1770・DEV-1789）
 
-catalog v1 の entry は R1 の GGUF だけを持つ。R2（Windows ML）を再開するとき
-（`docs/copilot-pc-backend-spec.md` §4.3 項 2）は `schemaVersion` を 2 にし、同じモデルの
-R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごとに entry を分けると、R1 と R2 で
-同じモデルを使う前提（同 §4.3 項 2）と、学習・NLL 閾値のモデル単位の管理が崩れるため採らない。
+catalog v2 は、同じモデルの artifact を 1 entry にエンジン別に並べ、R1 の GGUF には取得元を
+持たせる。エンジンごとに entry を分けると、R1 と R2 で同じモデルを使う前提
+（`docs/copilot-pc-backend-spec.md` §4.3 項 2）と、学習・NLL 閾値のモデル単位の管理が崩れる
+ため採らない。R2 artifact（`onnxruntime-genai`）のキーと検証規則は DEV-1768 の結果で決める
+（同 §4.4 の未決）。それまで schema と parser は `artifacts` のキーに `llama.cpp` だけを
+認め、ほかのキーは名前を示して拒否する。下の例の `onnxruntime-genai` は、R2 を再開するときに
+足す形を示す。
 
 ```json
 {
@@ -97,7 +102,12 @@ R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごと
       "displayName": "kanakanji-edge 33M",
       "promptFormat": "kanakanji-edge-v1",
       "artifacts": {
-        "llama.cpp": {"fileName": "<GGUF のファイル名>", "sha256": "<64 hex>"},
+        "llama.cpp": {
+          "fileName": "<GGUF のファイル名>",
+          "sha256": "<64 hex>",
+          "sizeBytes": 35806592,
+          "source": {"huggingFaceRepo": "<owner>/<name>", "revision": "<40 hex のコミット>"}
+        },
         "onnxruntime-genai": {
           "directoryName": "<ディレクトリ名>",
           "files": [
@@ -112,7 +122,17 @@ R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごと
 
 - `promptFormat` はモデル単位で、R1 と R2 に共通なので entry に置く（v1 と同じ値と既定値）。
 - `artifacts["llama.cpp"]` は必須とする（`docs/copilot-pc-backend-spec.md` §4.5 の終端の
-  R1 CPU を常に持たせるため）。持つキーは `fileName` と `sha256` で、制約は v1 の同名キーと同じ。
+  R1 CPU を常に持たせるため）。`fileName` と `sha256` は必須で、制約は v1 の同名キーと同じ。
+  任意のキーは次の 2 つ。
+  - `sizeBytes`: ファイルの正確なバイト数（正の整数、2^53 − 1 以下）。§3.1.2 の取得で
+    `max_bytes` に使う。
+  - `source`: 上流 Hugging Face の取得元。`huggingFaceRepo`（`owner/name`。各部は英数字で
+    始まり英数字・`.`・`_`・`-` だけ、`..` を含まない）と `revision`（小文字 40 hex の
+    コミット ID）の 2 つを必須とする。ブランチ名やタグは成果物が pin の下で変わり得るため
+    認めない。URL は `https://huggingface.co/<huggingFaceRepo>/resolve/<revision>/<fileName>`
+    （`fileName` は percent-encode）で組み立てる。任意の URL や別のホストは書けない
+    （`docs/sideload-packaging-spec.md` §1.6.2 の再ホストしない方針を構造で守る）。
+    `source` を持つ artifact は `sizeBytes` を必須とする。
 - v2 の entry は `backendHint` を持たない。エンジンは `artifacts` のキーで表す。
 - R2 artifact はディレクトリなので 1 つのハッシュにまとめず、構成ファイルごとに
   `path`（ディレクトリからの相対パス）、`sha256`、`sizeBytes` を持つ。`sizeBytes` は正の整数
@@ -123,20 +143,37 @@ R1 / R2 artifact を 1 entry にエンジン別に並べる。エンジンごと
   ディレクトリ内に限り、同じ entry の中で重複させない。
 - parser は v1 と v2 の両方を読む。v1 の entry は、`fileName` / `sha256` を
   `artifacts["llama.cpp"]` の `fileName` / `sha256` に写した v2 の entry と同じ意味として扱う
-  （v1 の `backendHint` は `"llama.cpp"` だけで、`artifacts` のキーに当たる）。v1 の parser は
-  未知のキーを reject するので、v1 のまま R2 のキーを足しても旧 Host は catalog を読めない。
-  version を上げ、旧 Host には未対応の `schemaVersion` として拒否させる（拒否の理由がエラーで
-  分かる）。
-- v2 の schema 正典も `settings/model-catalog.schema.json` とし、v1 と v2 の両方を定義する。
+  （v1 の `backendHint` は `"llama.cpp"` だけで、`artifacts` のキーに当たる）。v1 の entry は
+  `sizeBytes` と `source` を持たないので、§3.1.2 の取得の対象にならない。v1 の parser は
+  未知のキーを reject するので、v1 のまま新しいキーを足すと v1 だけを読む Host は catalog を
+  読めない。version を上げ、v1 だけを読む Host には未対応の `schemaVersion` として拒否させる
+  （拒否の理由がエラーで分かる）。
 - `model.selectedPath` からの entry の解決、R2 artifact を取得する条件、未決の事項は
   `docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」が持つ。
+
+#### 既定の catalog
+
+製品の既定の catalog は `settings/default-model-catalog.json`（v2）とし、ビルド時に
+`azookey_inference_host` へバイト列として埋め込む（`DefaultModelCatalogJson`）。MSI と検証用
+zip には catalog のファイルを置かない。インストール先のファイルを書き換えて pin を外す
+経路を作らないためである。中身は `docs/sideload-packaging-spec.md` §1.6.2 の固定値で、
+`zenz-v3.2-small`（`promptFormat` は `zenz-v3`）を `defaultModelId`、`kanakanji-edge-33m`
+（`kanakanji-edge-v1`）を選べる entry とする。ファイルは schema に通ることを pre-commit の
+`check-jsonschema` で、parser に通り既定が zenz であることを単体テストで確かめる。
+
+既定の catalog を読むのは `azookey_inference_host models catalog` と `models fetch`（§3.1.2）
+である。Host の常駐経路は catalog を読まず、`model.selectedPath` の GGUF をそのまま使う。
+`selectedPath` の GGUF を catalog の entry に照合して `promptFormat` を使う処理
+（`docs/copilot-pc-backend-spec.md` §4.4）、設定アプリと IPC からの取得、Host 起動時の
+自動取得は、後続の Issue が定める。
 
 ### 3.1.2 GGUF 取得基盤（DEV-439）
 
 DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
 `%LOCALAPPDATA%\azooKey\models\zenzai\` 配下の確定パスへ配置する共通 GET 基盤である。
-カタログから URL を選ぶ処理、Host 起動時のプリフェッチ、`selectedPath` の更新は
-後続処理の責務とし、ダウンローダはネットワーク取得と整合検証だけを担当する。
+ダウンローダはネットワーク取得と整合検証だけを担当する。catalog の entry から取得する
+処理は `FetchCatalogModel`（下記「catalog の entry の取得」）が持つ。Host 起動時の
+プリフェッチと `selectedPath` の更新は後続の Issue の責務とする。
 
 取得手順は次のとおり。
 
@@ -153,8 +190,7 @@ DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGU
    Range なしの GET を一度だけ再試行する。
    呼び出し元は非ゼロの `max_bytes` を指定し、既存 `.part` と受信後の合計サイズが
    この上限を超える場合は、次のチャンクをディスクへ書く前に取得を中断する。
-   `expected.json` の `size_bytes` が未設定の場合も、呼び出し元がポリシー上の上限を
-   指定し、無制限の取得を許可しない。
+   catalog の取得では artifact の `sizeBytes` を上限にする（§3.1.1）。
 3. 受信完了後に Windows CNG（BCrypt）で `.part` の SHA256 を計算する。
    期待値と一致した場合だけ、同じディレクトリ内で `MoveFileExW` の replace +
    write-through により確定パスへ昇格する。
@@ -167,6 +203,36 @@ HTTP はループバックの自動テストに限って使用する。
 本番 URL のプロキシは WinHTTP の automatic proxy を使用する。
 自動テスト用のループバック URL は proxy を経由せず、resolve / connect / send / receive の
 タイムアウトを呼び出しごとに設定する。
+
+#### catalog の entry の取得（DEV-1789）
+
+`FetchCatalogModel`（`inference-host/include/azookey/host/ModelFetch.h`）は、§3.1.1 の
+`source` と `sizeBytes` を持つ entry の GGUF を、固定 revision の上流 URL から
+`zenzai\<fileName>` へ取得する。再ホストした URL は使わない。
+
+1. `source` か `sizeBytes` が無い entry は `not_fetchable` とし、接続しない。
+2. 上の取得手順で、期待 SHA-256 を entry の `sha256`、`max_bytes` を `sizeBytes` として
+   `HttpDownloader` を呼ぶ。SHA-256 が一致しない取得は確定パスを変えない。
+3. `privacy.mode=offline` では `network_allowed` が偽を返す。SHA-256 が一致する確定ファイルが
+   あればそれを使い、無ければ `offline` として何も取得しない。
+4. 確定パスのファイルに §3.3 の R1 の検証を掛ける。今回取得したファイルが検証に落ちたら
+   削除し、`format:<§3.3 のカテゴリ>` で失敗する。取得前から SHA-256 が一致していた
+   ファイルは削除しない。
+5. `model.selectedPath` は変えない。
+
+失敗の理由は固定カテゴリ（`directory_unavailable`、`download_failed`、`format:<カテゴリ>`）
+で返し、ログに出してよいのは entry の id、状態、カテゴリ、受信バイト数だけとする。
+ダウンローダのメッセージは URL やパスを含み得るので、CLI の標準エラーにだけ出す。
+
+入口は CLI の `azookey_inference_host models fetch [--id <id>]` である（`--id` を省くと
+`defaultModelId`）。CLI は `settings.json` の `privacy.mode` を読み、`offline` なら取得しない。
+`settings.json` が無ければ既定値（`normal`）とし、読めない・JSON として解析できない場合は
+`privacy.mode` が分からないので取得しない。結果は
+`status=<downloaded|already_valid|offline|not_fetchable|failed> id=<id> bytes=<受信バイト数>`
+の 1 行で出し、成功時は `path=<確定パス>` を足す。`models catalog` は既定の catalog の entry を
+1 行ずつ、id、既定かどうか、`promptFormat`、`sizeBytes`、`zenzai\` に置かれているか、パスを
+タブ区切りで出す。どちらもローカル利用者が自分で起動する CLI であり、Host の常駐経路からは
+呼ばない。
 
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
 
@@ -649,8 +715,13 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - integration: 戻らない load / query / unload を模擬する子プロセスで、timeout、
   完了 iteration の部分結果、終了確認後の再実行、同時実行拒否、process / handle 回収、
   起動失敗後の枠回復、親の deadline 超過を検証する
-- unit: `ModelCatalog` の宣言的 catalog parse / default 補完 / 不正 entry reject /
-  `zenzai\` パス resolver、および一覧検出 / 検証 / 履歴更新
+- unit: `ModelCatalog` の宣言的 catalog parse（v1 / v2）/ default 補完 / 不正 entry reject
+  （拒否理由にキー名と version が出ること、固定されていない revision と任意の URL の拒否）/
+  `zenzai\` パス resolver / 埋め込んだ既定の catalog の値、および一覧検出 / 検証 / 履歴更新
+- unit: `FetchCatalogModel` と `models catalog` / `models fetch` を偽のダウンローダで検証する
+  （要求の URL・SHA-256・上限、SHA-256 不一致で確定ファイルを変えないこと、形式検証に落ちた
+  取得ファイルの削除、offline と読めない `settings.json` で接続しないこと）。実ネットワークへの
+  取得は Human Gate で確かめる
 - integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、
   Range レジューム、Range 無視時と `416` 後の全量再取得、サイズ上限超過時の書き込み中断、
   ネットワーク不通時の既存ファイル保持を検証する

@@ -71,9 +71,9 @@ target_link_libraries(host_user_data_paths_tests
 azookey_discover_tests(host_user_data_paths_tests)
 
 add_executable(host_model_catalog_tests model_catalog_test.cpp model_scanner_test.cpp
-  model_benchmark_process_test.cpp benchmark_worker_test_main.cpp)
-# The scanner and process tests define the same GGUF fixture helpers.
-set_source_files_properties(model_benchmark_process_test.cpp
+  model_benchmark_process_test.cpp model_fetch_test.cpp benchmark_worker_test_main.cpp)
+# The scanner, process and fetch tests define the same GGUF fixture helpers.
+set_source_files_properties(model_benchmark_process_test.cpp model_fetch_test.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_link_libraries(host_model_catalog_tests
   PRIVATE azookey_host GTest::gtest azookey_project_options azookey_project_warnings

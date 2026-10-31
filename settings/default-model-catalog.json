@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "defaultModelId": "zenz-v3.2-small",
+  "models": [
+    {
+      "id": "zenz-v3.2-small",
+      "displayName": "zenz-v3.2-small Q5_K_M",
+      "promptFormat": "zenz-v3",
+      "artifacts": {
+        "llama.cpp": {
+          "fileName": "ggml-model-Q5_K_M.gguf",
+          "sha256": "29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673",
+          "sizeBytes": 73871936,
+          "source": {
+            "huggingFaceRepo": "Miwa-Keita/zenz-v3.2-small-gguf",
+            "revision": "c67e03e07d215c869f591b274c1631170d3e11fe"
+          }
+        }
+      }
+    },
+    {
+      "id": "kanakanji-edge-33m",
+      "displayName": "kanakanji-edge 33M Q8_0",
+      "promptFormat": "kanakanji-edge-v1",
+      "artifacts": {
+        "llama.cpp": {
+          "fileName": "kanakanji-edge-33m-Q8_0.gguf",
+          "sha256": "924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146",
+          "sizeBytes": 35806592,
+          "source": {
+            "huggingFaceRepo": "yuuki14202028/kanakanji-edge-33m",
+            "revision": "da588df2db17e5ab69316986823806ec5f911450"
+          }
+        }
+      }
+    }
+  ]
+}

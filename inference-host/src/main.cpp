@@ -637,6 +637,7 @@ int main(int argc, char** argv) {
     }
     azookey::host::ModelsCliRunOptions run_options;
     run_options.models_dir = user_paths->models_dir;
+    run_options.settings_path = user_paths->settings_path;
     auto result = azookey::host::RunModelsCli(*cli_options, run_options);
     for (const auto& line : result.output_lines) {
       std::cout << line << std::endl;

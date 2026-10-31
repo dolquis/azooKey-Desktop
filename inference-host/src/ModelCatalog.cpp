@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <set>
 #include <system_error>
 
@@ -25,12 +26,14 @@ const j::Value* FindValue(const j::Object& object, std::string_view key) {
   return &it->second;
 }
 
-bool HasOnlyKeys(const j::Object& object, std::initializer_list<std::string_view> allowed) {
+// The first key outside allowed, so an error can name the field a reader does not know.
+std::optional<std::string> FindUnknownKey(const j::Object& object,
+                                          std::initializer_list<std::string_view> allowed) {
   for (const auto& [key, _] : object) {
     const auto found = std::find(allowed.begin(), allowed.end(), key);
-    if (found == allowed.end()) return false;
+    if (found == allowed.end()) return key;
   }
-  return true;
+  return std::nullopt;
 }
 
 std::optional<std::string> RequiredString(const j::Object& object, std::string_view key,
@@ -98,10 +101,136 @@ bool IsSafeModelFileName(std::string_view value) {
 
 bool IsAllowedBackendHint(std::string_view value) { return value == "llama.cpp"; }
 
-std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, std::string* error) {
-  if (!HasOnlyKeys(object,
-                   {"id", "displayName", "fileName", "sha256", "backendHint", "promptFormat"})) {
-    *error = "model catalog entry contains an unknown field";
+// fileName and sha256 of a v1 entry or of a v2 artifacts["llama.cpp"].
+bool ParseGgufArtifact(const j::Object& object, ModelCatalogEntry& entry, std::string* error) {
+  auto file_name = RequiredString(object, "fileName", error);
+  if (!file_name) return false;
+  if (!IsSafeModelFileName(*file_name)) {
+    *error = "model catalog entry fileName must be a safe GGUF file name: " + *file_name;
+    return false;
+  }
+  entry.file_name = std::move(*file_name);
+
+  auto sha256 = RequiredString(object, "sha256", error);
+  if (!sha256) return false;
+  if (!IsValidSha256(*sha256)) {
+    *error = "model catalog entry sha256 must be 64 hex characters";
+    return false;
+  }
+  entry.sha256 = LowerAscii(std::move(*sha256));
+  return true;
+}
+
+bool IsHuggingFaceName(std::string_view value) {
+  if (value.empty() || !std::isalnum(static_cast<unsigned char>(value.front()))) return false;
+  return IsValidIdentifier(value) && value.find("..") == std::string_view::npos;
+}
+
+// owner/name, each part [A-Za-z0-9][A-Za-z0-9._-]* without "..".
+bool IsValidHuggingFaceRepo(std::string_view value) {
+  const auto slash = value.find('/');
+  if (slash == std::string_view::npos) return false;
+  return IsHuggingFaceName(value.substr(0, slash)) && IsHuggingFaceName(value.substr(slash + 1));
+}
+
+bool IsFullCommitId(std::string_view value) {
+  if (value.size() != 40) return false;
+  return std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+  });
+}
+
+std::optional<ModelCatalogSource> ParseSource(const j::Value& value, std::string* error) {
+  if (!value.IsObject()) {
+    *error = "model catalog artifact source must be an object";
+    return std::nullopt;
+  }
+  const auto& object = value.AsObject();
+  if (const auto unknown = FindUnknownKey(object, {"huggingFaceRepo", "revision"})) {
+    *error = "model catalog artifact source contains an unknown field: " + *unknown;
+    return std::nullopt;
+  }
+  ModelCatalogSource source;
+  auto repo = RequiredString(object, "huggingFaceRepo", error);
+  if (!repo) return std::nullopt;
+  if (!IsValidHuggingFaceRepo(*repo)) {
+    *error = "model catalog artifact source huggingFaceRepo must be owner/name: " + *repo;
+    return std::nullopt;
+  }
+  source.hugging_face_repo = std::move(*repo);
+  auto revision = RequiredString(object, "revision", error);
+  if (!revision) return std::nullopt;
+  if (!IsFullCommitId(*revision)) {
+    *error = "model catalog artifact source revision must be a 40-character lowercase commit id";
+    return std::nullopt;
+  }
+  source.revision = std::move(*revision);
+  return source;
+}
+
+// JSON numbers are doubles; 2^53 - 1 keeps every accepted size exact.
+constexpr double kMaxExactSizeBytes = 9007199254740991.0;
+
+bool ParseLlamaCppArtifact(const j::Value& value, ModelCatalogEntry& entry, std::string* error) {
+  if (!value.IsObject()) {
+    *error = "model catalog artifact llama.cpp must be an object";
+    return false;
+  }
+  const auto& object = value.AsObject();
+  if (const auto unknown = FindUnknownKey(object, {"fileName", "sha256", "sizeBytes", "source"})) {
+    *error = "model catalog artifact llama.cpp contains an unknown field: " + *unknown;
+    return false;
+  }
+  if (!ParseGgufArtifact(object, entry, error)) return false;
+
+  if (const auto* size = FindValue(object, "sizeBytes")) {
+    const double bytes = size->IsNumber() ? size->AsNumber() : 0.0;
+    if (!(bytes >= 1.0 && bytes <= kMaxExactSizeBytes) || bytes != std::floor(bytes)) {
+      *error = "model catalog artifact sizeBytes must be a positive integer";
+      return false;
+    }
+    entry.size_bytes = static_cast<uint64_t>(bytes);
+  }
+  if (const auto* source = FindValue(object, "source")) {
+    auto parsed = ParseSource(*source, error);
+    if (!parsed) return false;
+    if (entry.size_bytes == 0) {
+      *error = "model catalog artifact with a source requires sizeBytes";
+      return false;
+    }
+    entry.source = std::move(*parsed);
+  }
+  return true;
+}
+
+bool ParseArtifacts(const j::Value& value, ModelCatalogEntry& entry, std::string* error) {
+  if (!value.IsObject()) {
+    *error = "model catalog entry artifacts must be an object";
+    return false;
+  }
+  const auto& object = value.AsObject();
+  // onnxruntime-genai (R2) stays undefined until DEV-1768 settles the artifact's contents.
+  if (const auto unknown = FindUnknownKey(object, {"llama.cpp"})) {
+    *error = "model catalog artifacts engine is not supported: " + *unknown;
+    return false;
+  }
+  const auto* llama = FindValue(object, "llama.cpp");
+  if (!llama) {
+    *error = "model catalog entry artifacts requires llama.cpp";
+    return false;
+  }
+  return ParseLlamaCppArtifact(*llama, entry, error);
+}
+
+std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, uint32_t version,
+                                                 std::string* error) {
+  const auto unknown =
+      version == 1 ? FindUnknownKey(object, {"id", "displayName", "fileName", "sha256",
+                                             "backendHint", "promptFormat"})
+                   : FindUnknownKey(object, {"id", "displayName", "promptFormat", "artifacts"});
+  if (unknown) {
+    *error = "model catalog entry contains an unknown field for schemaVersion " +
+             std::to_string(version) + ": " + *unknown;
     return std::nullopt;
   }
 
@@ -122,29 +251,23 @@ std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, std::s
   }
   entry.display_name = std::move(*display_name);
 
-  auto file_name = RequiredString(object, "fileName", error);
-  if (!file_name) return std::nullopt;
-  if (!IsSafeModelFileName(*file_name)) {
-    *error = "model catalog entry fileName must be a safe GGUF file name: " + *file_name;
-    return std::nullopt;
+  if (version == 1) {
+    if (!ParseGgufArtifact(object, entry, error)) return std::nullopt;
+    auto backend_hint = OptionalString(object, "backendHint", entry.backend_hint, error);
+    if (!backend_hint) return std::nullopt;
+    if (!IsAllowedBackendHint(*backend_hint)) {
+      *error = "model catalog entry backendHint is not supported: " + *backend_hint;
+      return std::nullopt;
+    }
+    entry.backend_hint = std::move(*backend_hint);
+  } else {
+    const auto* artifacts = FindValue(object, "artifacts");
+    if (!artifacts) {
+      *error = "model catalog entry requires artifacts";
+      return std::nullopt;
+    }
+    if (!ParseArtifacts(*artifacts, entry, error)) return std::nullopt;
   }
-  entry.file_name = std::move(*file_name);
-
-  auto sha256 = RequiredString(object, "sha256", error);
-  if (!sha256) return std::nullopt;
-  if (!IsValidSha256(*sha256)) {
-    *error = "model catalog entry sha256 must be 64 hex characters";
-    return std::nullopt;
-  }
-  entry.sha256 = LowerAscii(std::move(*sha256));
-
-  auto backend_hint = OptionalString(object, "backendHint", entry.backend_hint, error);
-  if (!backend_hint) return std::nullopt;
-  if (!IsAllowedBackendHint(*backend_hint)) {
-    *error = "model catalog entry backendHint is not supported: " + *backend_hint;
-    return std::nullopt;
-  }
-  entry.backend_hint = std::move(*backend_hint);
 
   auto prompt_format_name = OptionalString(
       object, "promptFormat", std::string(ZenzaiPromptFormatName(entry.prompt_format)), error);
@@ -189,14 +312,16 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   }
 
   const auto& root = parsed->AsObject();
-  if (!HasOnlyKeys(root, {"schemaVersion", "defaultModelId", "models"})) {
-    return CatalogParseError("model catalog contains an unknown top-level field");
+  if (const auto unknown = FindUnknownKey(root, {"schemaVersion", "defaultModelId", "models"})) {
+    return CatalogParseError("model catalog contains an unknown top-level field: " + *unknown);
   }
 
   const auto* schema_version = FindValue(root, "schemaVersion");
-  if (!schema_version || !schema_version->IsNumber() || schema_version->AsNumber() != 1.0) {
-    return CatalogParseError("model catalog schemaVersion must be 1");
+  if (!schema_version || !schema_version->IsNumber() ||
+      (schema_version->AsNumber() != 1.0 && schema_version->AsNumber() != 2.0)) {
+    return CatalogParseError("model catalog schemaVersion must be 1 or 2");
   }
+  const uint32_t version = schema_version->AsNumber() == 1.0 ? 1 : 2;
 
   const auto* models = FindValue(root, "models");
   if (!models || !models->IsArray() || models->AsArray().empty()) {
@@ -204,14 +329,14 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   }
 
   ModelCatalog catalog;
-  catalog.schema_version = 1;
+  catalog.schema_version = version;
   std::set<std::string> seen_ids;
   for (const auto& item : models->AsArray()) {
     if (!item.IsObject()) {
       return CatalogParseError("model catalog models items must be objects");
     }
     std::string error;
-    auto entry = ParseModelEntry(item.AsObject(), &error);
+    auto entry = ParseModelEntry(item.AsObject(), version, &error);
     if (!entry) return CatalogParseError(std::move(error));
     if (!seen_ids.insert(entry->id).second) {
       return CatalogParseError("model catalog contains duplicate model id: " + entry->id);
@@ -232,6 +357,23 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   result.ok = true;
   result.catalog = std::move(catalog);
   return result;
+}
+
+std::optional<std::string> ModelCatalogDownloadUrl(const ModelCatalogEntry& entry) {
+  if (!entry.source) return std::nullopt;
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string url = "https://huggingface.co/" + entry.source->hugging_face_repo + "/resolve/" +
+                    entry.source->revision + "/";
+  for (const unsigned char ch : entry.file_name) {
+    if (std::isalnum(ch) || ch == '-' || ch == '.' || ch == '_' || ch == '~') {
+      url.push_back(static_cast<char>(ch));
+    } else {
+      url.push_back('%');
+      url.push_back(kHex[ch >> 4]);
+      url.push_back(kHex[ch & 0x0f]);
+    }
+  }
+  return url;
 }
 
 std::filesystem::path DefaultZenzaiModelDirectory(const std::filesystem::path& models_dir) {

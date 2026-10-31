@@ -2,11 +2,16 @@
 
 #include <charconv>
 #include <exception>
+#include <fstream>
 #include <sstream>
 #include <system_error>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/host/ModelBenchmark.h"
+#include "azookey/host/ModelCatalog.h"
+#include "azookey/host/ModelFetch.h"
 #include "azookey/host/ModelScanner.h"
+#include "azookey/ipc/Json.h"
 
 namespace azookey::host {
 
@@ -37,8 +42,21 @@ std::optional<ModelsCliOptions> ParseModelsCliArgs(const std::vector<std::string
                                                    std::string* error) {
   std::string ignored;
   if (!error) error = &ignored;
+  if (!args.empty() && (args[0] == "catalog" || args[0] == "fetch")) {
+    ModelsCliOptions options;
+    options.command = args[0] == "catalog" ? ModelsCliCommand::Catalog : ModelsCliCommand::Fetch;
+    for (size_t i = 1; i < args.size(); ++i) {
+      if (options.command == ModelsCliCommand::Fetch && args[i] == "--id") {
+        if (!TakeArg(args, i, options.fetch_model_id, error)) return std::nullopt;
+      } else {
+        *error = "unknown models argument: " + args[i];
+        return std::nullopt;
+      }
+    }
+    return options;
+  }
   if (args.empty() || (args[0] != "list" && args[0] != "bench")) {
-    *error = "models requires 'list' or 'bench'";
+    *error = "models requires 'list', 'bench', 'catalog' or 'fetch'";
     return std::nullopt;
   }
   ModelsCliOptions options;
@@ -93,8 +111,85 @@ ModelsCliResult RunModelsCli(const ModelsCliOptions& options,
 
 namespace {
 
+// privacy.mode=offline forbids the fetch. A missing settings.json is the defaults (normal);
+// one that cannot be read or parsed also forbids it, since its mode is unknown.
+bool SettingsAllowNetwork(const std::filesystem::path& settings_path) {
+  std::error_code ec;
+  if (settings_path.empty() || !std::filesystem::exists(settings_path, ec)) return !ec;
+  std::ifstream in(settings_path, std::ios::binary);
+  if (!in) return false;
+  std::ostringstream content;
+  content << in.rdbuf();
+  if (!in && !in.eof()) return false;
+  const auto parsed = ipc::json::Parse(content.str());
+  if (!parsed || !parsed->IsObject()) return false;
+  const auto& root = parsed->AsObject();
+  const auto privacy = root.find("privacy");
+  if (privacy == root.end() || !privacy->second.IsObject()) return true;
+  return privacy->second.GetString("mode").value_or("normal") != "offline";
+}
+
+ModelsCliResult RunCatalogCommand(const ModelsCliOptions& options,
+                                  const ModelsCliRunOptions& run_options) {
+  ModelsCliResult result;
+  const auto parsed = ParseModelCatalogJson(DefaultModelCatalogJson());
+  if (!parsed.ok) {
+    result.exit_code = 2;
+    result.error = "embedded model catalog is invalid: " + parsed.error.value_or("");
+    return result;
+  }
+  const auto& catalog = parsed.catalog;
+  const auto zenzai_dir = DefaultZenzaiModelDirectory(run_options.models_dir);
+
+  if (options.command == ModelsCliCommand::Catalog) {
+    for (const auto& entry : catalog.models) {
+      const auto resolved = ResolveModelCatalogModel(catalog, zenzai_dir, entry.id);
+      const bool present = resolved.model && resolved.model->exists;
+      result.output_lines.push_back(
+          entry.id + "\t" + (entry.id == catalog.default_model_id ? "default" : "-") + "\t" +
+          std::string(ZenzaiPromptFormatName(entry.prompt_format)) + "\t" +
+          std::to_string(entry.size_bytes) + "\t" + (present ? "present" : "missing") + "\t" +
+          core::PathToUtf8(zenzai_dir / entry.file_name));
+    }
+    return result;
+  }
+
+  const auto& id =
+      options.fetch_model_id.empty() ? catalog.default_model_id : options.fetch_model_id;
+  const auto resolved = ResolveModelCatalogModel(catalog, zenzai_dir, id);
+  if (!resolved.model) {
+    result.exit_code = 2;
+    result.error = resolved.error.value_or("unknown model id");
+    return result;
+  }
+  const auto network_allowed = SettingsAllowNetwork(run_options.settings_path);
+  HttpPackDownloader http;
+  IPackDownloader& downloader = run_options.downloader ? *run_options.downloader : http;
+  const auto fetched = FetchCatalogModel(resolved.model->entry, zenzai_dir, downloader,
+                                         [network_allowed] { return network_allowed; });
+  std::ostringstream line;
+  line << "status=" << ModelFetchStatusName(fetched.status) << " id=" << id
+       << " bytes=" << fetched.bytes_received;
+  if (fetched.ok()) line << " path=" << core::PathToUtf8(fetched.path);
+  result.output_lines.push_back(line.str());
+  if (!fetched.ok()) {
+    result.exit_code = 1;
+    if (fetched.status == ModelFetchStatus::Offline) {
+      result.error = "privacy.mode=offline (or an unreadable settings.json) forbids the fetch";
+    } else if (fetched.status == ModelFetchStatus::NotFetchable) {
+      result.error = "the catalog entry has no source";
+    } else {
+      result.error = fetched.error + (fetched.detail.empty() ? "" : ": " + fetched.detail);
+    }
+  }
+  return result;
+}
+
 ModelsCliResult RunModelsCliUnchecked(const ModelsCliOptions& options,
                                       const ModelsCliRunOptions& run_options) {
+  if (options.command == ModelsCliCommand::Catalog || options.command == ModelsCliCommand::Fetch) {
+    return RunCatalogCommand(options, run_options);
+  }
   ModelsCliResult result;
   if (options.command == ModelsCliCommand::Bench) {
     const auto response = RunModelBenchmark(options.bench, ModelBenchmarkOptions{});

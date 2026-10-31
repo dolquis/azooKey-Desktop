@@ -62,7 +62,9 @@ repos:
         pass_filenames: false
         files: '^settings/(mvp-settings\.schema\.json|default-settings\.sample\.json)$'
 
-      - id: model-catalog-json-schema-default
+      # Shares the sample hook's id, so the CI SKIP list covers it like the sample (the
+      # settings-schema job installs check-jsonschema; the pre-commit job does not).
+      - id: settings-json-schema-sample
         name: default model catalog JSON Schema
         entry: check-jsonschema
         args:

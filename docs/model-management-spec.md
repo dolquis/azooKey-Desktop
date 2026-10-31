@@ -158,8 +158,8 @@ catalog v2 は、同じモデルの artifact を 1 entry にエンジン別に�
 zip には catalog のファイルを置かない。インストール先のファイルを書き換えて pin を外す
 経路を作らないためである。中身は `docs/sideload-packaging-spec.md` §1.6.2 の固定値で、
 `zenz-v3.2-small`（`promptFormat` は `zenz-v3`）を `defaultModelId`、`kanakanji-edge-33m`
-（`kanakanji-edge-v1`）を選べる entry とする。ファイルは schema に通ることを pre-commit の
-`check-jsonschema` で、parser に通り既定が zenz であることを単体テストで確かめる。
+（`kanakanji-edge-v1`）を選べる entry とする。ファイルが schema に通ることは手元の pre-commit の
+`check-jsonschema` で、parser に通り既定が zenz であることは CI でも走る単体テストで確かめる。
 
 既定の catalog を読むのは `azookey_inference_host models catalog` と `models fetch`（§3.1.2）
 である。Host の常駐経路は catalog を読まず、`model.selectedPath` の GGUF をそのまま使う。

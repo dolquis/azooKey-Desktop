@@ -56,6 +56,10 @@ std::optional<ModelsCliOptions> ParseModelsCliArgs(const std::vector<std::string
       }
       if (named) {
         if (!TakeArg(args, i, options.fetch_model_id, error)) return std::nullopt;
+        if (options.fetch_model_id.empty()) {
+          *error = "--id requires a non-empty model id";
+          return std::nullopt;
+        }
       } else if (positional) {
         options.fetch_model_id = args[i];
       } else {
@@ -197,7 +201,7 @@ ModelsCliResult RunCatalogCommand(const ModelsCliOptions& options,
     if (fetched.status == ModelFetchStatus::Offline) {
       result.error = "privacy.mode=offline (or an unreadable settings.json) forbids the fetch";
     } else if (fetched.status == ModelFetchStatus::NotFetchable) {
-      result.error = "the catalog entry has no source";
+      result.error = "the catalog entry has no source, or its sizeBytes exceeds the limit";
     } else {
       result.error = fetched.error + (fetched.detail.empty() ? "" : ": " + fetched.detail);
     }

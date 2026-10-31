@@ -51,8 +51,10 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
   request.max_bytes = entry.size_bytes;
 
   // A file of the same name with another SHA-256 is the user's (a manual placement or another
-  // version); the fetch never replaces it. The probe forbids the network, so the downloader
-  // either reuses a matching file or fails before connecting and leaves the file alone.
+  // version); the fetch does not replace it. The probe forbids the network, so the downloader
+  // either reuses a matching file or fails before connecting and leaves the file alone. The
+  // check is made once, at the start: HttpDownloader (shared with NeologdPack) promotes with
+  // replace, so a file placed while the download runs can still be replaced.
   std::optional<HttpDownloadResult> existing;
   // MSVC reports a missing file through ec as well, so only not_found means "absent"; a
   // status that cannot be read (none) is treated as occupied.
@@ -62,7 +64,10 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
     probe.network_allowed = [] { return false; };
     existing = downloader.Download(probe);
     if (!existing->ok()) {
+      // Usually another SHA-256; the detail tells a file that could not be read (a sharing
+      // violation, for one) apart from it.
       result.error = "destination_occupied";
+      result.detail = existing->error.value_or("");
       return result;
     }
   }

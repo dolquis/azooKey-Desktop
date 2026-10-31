@@ -171,6 +171,8 @@ TEST(ModelFetchTest, SameNamedFileWithAnotherShaIsKeptAndNothingIsFetched) {
 
   EXPECT_EQ(result.status, ModelFetchStatus::Failed);
   EXPECT_EQ(result.error, "destination_occupied");
+  // The downloader's reason, so an unreadable file is told apart from another SHA-256.
+  EXPECT_EQ(result.detail, "network disabled");
   EXPECT_TRUE(result.path.empty());
   // Only the probe ran, and it forbade the network.
   ASSERT_EQ(downloader.requests.size(), 1u);
@@ -220,6 +222,8 @@ TEST(ModelFetchTest, AlreadyValidFileIsReusedAndNeverRemoved) {
   EXPECT_EQ(reused.status, ModelFetchStatus::AlreadyValid) << reused.error;
   EXPECT_EQ(reused.path, destination);
   EXPECT_FALSE(reuse.network_used);
+  // The network-free probe already verified the file; it is not hashed a second time.
+  EXPECT_EQ(reuse.requests.size(), 1u);
 
   // The SHA-256 matched, so the file is the pinned one even when it fails the checks.
   WriteBytes(destination, "pinned but not loadable");
@@ -288,6 +292,9 @@ TEST(ModelsCliTest, ParsesCatalogAndFetchArguments) {
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id", "a", "b"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"catalog", "x"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id"}, &error));
+  // An empty id is not "no id": it never lets a later argument become the id.
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id", "", "x"}, &error));
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id", ""}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"catalog", "--id", "x"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--url", "x"}, &error));
 }

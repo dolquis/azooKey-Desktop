@@ -219,7 +219,10 @@ HTTP はループバックの自動テストに限って使用する。
 2. 確定パスに同じ名前のファイルがあれば、ネットワークを禁じた要求で先に照合する。SHA-256 が
    一致すればそれを使う（`already_valid`）。一致しなければ、利用者が置いたファイルか別の版
    なので置き換えず、接続せずに `destination_occupied` で失敗する（新版は別のファイル名で
-   取得する。`docs/sideload-packaging-spec.md` §1.6.1「更新時の置換」）。
+   取得する。`docs/sideload-packaging-spec.md` §1.6.1「更新時の置換」）。共有違反などで
+   読めなかった場合も同じ扱いとし、ダウンローダのメッセージを CLI に出す。この判定は取得の
+   開始時点のもので、取得中に同じ名前のファイルが置かれると、手順 3 の昇格（replace）で
+   置き換わりうる。
 3. 上の取得手順で、期待 SHA-256 を entry の `sha256`、`max_bytes` を `sizeBytes` として
    `HttpDownloader` を呼ぶ。SHA-256 が一致しない取得は確定パスを変えない。
 4. `privacy.mode=offline` では `network_allowed` が偽を返す。SHA-256 が一致する確定ファイルが

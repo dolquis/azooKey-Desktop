@@ -30,8 +30,8 @@ struct ModelFetchResult {
   // the same name with another SHA-256 is there and is kept), "download_failed", or
   // "format:<section 3.3 category>". Empty unless the status is Failed.
   std::string error;
-  // The downloader's own message for a download_failed, for the CLI only. May name the URL
-  // or a path, so it is never logged.
+  // The downloader's own message for a download_failed or a destination_occupied, for the CLI
+  // only. May name the URL or a path, so it is never logged.
   std::string detail;
 
   bool ok() const {
@@ -44,9 +44,10 @@ std::string_view ModelFetchStatusName(ModelFetchStatus status);
 // Fetches entry's GGUF from its pinned Hugging Face revision into zenzai_dir/<fileName>. The
 // downloader verifies the SHA-256 before the file takes the final name; the GGUF checks of
 // section 3.3 run after, and a freshly downloaded file that fails them is removed. A file that
-// already matched the SHA-256 is never removed, and one that does not match is never
-// replaced (destination_occupied, before any network operation). model.selectedPath is not
-// changed.
+// already matched the SHA-256 is never removed. One that does not match when the fetch starts
+// is not replaced (destination_occupied, before any network operation); the check is made
+// only then, so a file placed while the download runs can still be replaced when the
+// downloader promotes its result. model.selectedPath is not changed.
 // network_allowed is passed to the downloader as HttpDownloadRequest::network_allowed.
 ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
                                    const std::filesystem::path& zenzai_dir,

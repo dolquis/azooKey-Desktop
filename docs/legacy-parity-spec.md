@@ -46,7 +46,7 @@ enum class UserAction : uint16_t {
     ToggleHiraKata,     // 無変換 (Hira ⇄ Kata)
     StartUnicodeInput,  // Ctrl+Shift+U
     StartAlnumDouble,   // 英数キーダブルタップ → Magic Conversion
-    StartKanaDouble,    // かなキーダブルタップ → Replace Suggestion
+    StartKanaDouble,    // かなキーダブルタップ → 選択テキストの和訳（§4.1）
 
     // 学習
     Forget,             // Ctrl+Shift+Backspace で直近確定を忘却
@@ -299,9 +299,32 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 > 伸縮）と Ctrl+S（AI の提案）も割り当てない。Microsoft IME の F6〜F10 は確定せずに字種を巡回し、Enter で
 > 確定するが、Windows 版は legacy と同じく 1 打で確定する。
 
+**キー割当の legacy との差**: 上の表と補足は Windows 版の割当であり、legacy の
+`UserAction.getUserAction` と `InputState` の写像そのものではない。legacy と違う割当は次のとおりで、
+どれも意図した差である。F6〜F10 と Ctrl+I / O / S は上の引用が決めている。
+
+| キー・場面 | legacy | Windows |
+|---|---|---|
+| Ctrl+P / Ctrl+N | 読み入力中と候補選択中に ↑ / ↓ にする。読み入力中の Ctrl+N は候補選択を開き、Ctrl+P は何もしない | Selecting でだけ `Up` / `Down`。それ以外はアプリへ渡す |
+| Ctrl+F | → にする。読み入力中は何もせず、候補選択中は選択中の候補が覆う部分だけを確定して残りを続ける | Selecting でだけ `Forward`。TIP は一括変換の文節移動にだけ使い、文節が無いときはアプリへ渡す |
+| Ctrl+B / Ctrl+A / Ctrl+E | 割当なし（未定義の Ctrl 組合せ） | Ctrl+B は Ctrl+F と対にして Selecting の `Backward` とする。Ctrl+A / Ctrl+E は割り当てない。表の `LineHead` / `LineEnd` は `UserAction` の名前で、この版は割り当てない |
+| Ctrl+M | Enter と同じ | 割り当てない。アプリへ渡す |
+| Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する。それ以外はアプリへ渡す |
+| ↓ | 読み入力中に候補選択を開く | Space で開く。Selecting 以外の ↓ はアプリへ渡す |
+| ← / → / ↑ | 読み入力中は消費する。候補選択中の → は選択中の候補が覆う部分の確定、↑ は前の候補 | Selecting 以外はアプリへ渡す。Selecting の ← / → は Ctrl+B / F と同じ、↑ は前の候補 |
+| 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す |
+| 英数キー | 英語への絶対指定。読みを残したまま英字を足す | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
+| 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す（§7.1） |
+| Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定したうえでアプリへ渡す。hex 以外は確定して通常入力に移る（§6.1） |
+
+素通しにしたキーについて、TIP は composition を確定も取り消しもしない。キーを受けたアプリが
+composition の内側と外側のどちらへ作用させるかはアプリ次第である。legacy は読み入力中にこれらを
+消費するので、composition の扱いがアプリに左右されない。
+
 ### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
 
-§1.1〜§1.4 はレガシー（macOS）の UserAction / InputState / ClientAction / VK 表を定義する。
+§1.1〜§1.3 はレガシー（macOS）の UserAction / InputState / ClientAction を定義する。§1.4 は Windows 版の
+VK 表であり、レガシーと違う割当は §1.4 の「キー割当の legacy との差」が持つ。
 本節は、それを C++ へ移植する際の **境界判断**（実装着手前に固定すべき責務分界・拡張点・
 純粋性契約・非回帰戦略）を確定する。M13 の状態機械の上には後続マイルストーン
 （M14 / M15 / M16 / M17 / M58-A / M59 / M61-A）がすべて載るため、各自が `InputState` /
@@ -760,6 +783,10 @@ DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
   候補の表記を確定し、この表示を使わない。
 - 引き継ぎは確定・Esc・secure 入力・フォーカスの移動で破棄し、次の入力へ持ち越さない。
   候補窓から Backspace で読みに戻ったときは同じ入力が続くので残す。ライブ変換 OFF では使わない。
+- **legacy との差**: legacy は、Backspace の後のライブ変換の表示を必ず読み（ひらがな）に戻す
+  （`SegmentsManager` のライブ変換の表示は、削除の後は常にひらがなを示す）。Windows 版は、上の規則で
+  引き継いだ応答のうち現在の読みの先頭と一致する区切りを残し、現在の読みへの応答が届いたら差し替える。
+  削除のたびに「変換済みの表記 → ひらがな → 新しい表記」と往復させないための差である。
 
 ### 2.4 キャンセル経路
 
@@ -889,14 +916,29 @@ composition の開始と TIP の deactivate で記録済みの `reason` を戻�
 
 ### 4.1 トリガ検出（ダブルタップ）
 
-英数キー（VK_OEM_AUTO もしくは VK_DBE_ALPHANUMERIC）または
-かなキー（VK_DBE_HIRAGANA）を **300ms 以内に 2 回押下** で起動。
+英数キーまたはかなキーを **0.5 秒（500ms）以内に 2 回押下** で起動する。間隔は legacy の
+`doubleTapInterval`（0.5 秒）に合わせる。
+
+- 英数キー: `VK_OEM_ATTN`（`VK_DBE_ALPHANUMERIC` と同じ 0xF0。`docs/tsf-deep-integration-spec.md` §3.1）。
+  `VK_OEM_AUTO`（0xF3）は半角/全角キーの別名であり、英数キーではない。
+- かなキー: ひらがなキー `VK_DBE_HIRAGANA`（0xF2）。
 
 実装：`TextService::OnKeyDown` で各キーの最終押下時刻を保持し、
-`GetTickCount64() - last_press_ms < 300` で判定。
+`GetTickCount64() - last_press_ms < 500` で判定する。
 
-- 英数ダブルタップ → Magic Conversion （AI が自由テキスト変換）
-- かなダブルタップ → Replace Suggestion （AI が選択テキストを言い換え）
+legacy の割当（`azooKeyMacInputController`）に合わせて、2 回目の押下で次のように動く。
+
+- 英数ダブルタップ
+  - 選択テキストがあれば、Magic Conversion のプロンプト窓を初期プロンプト `english`（英訳）で開く。
+  - 選択が無く、入力中の読みがあれば、読みを半角英字で確定して英数モードにする。
+- かなダブルタップ
+  - 選択テキストがあれば、同じ窓を初期プロンプト `japanese`（和訳）で開く。
+  - 選択が無ければ何もしない。
+
+どちらも同じプロンプト窓（§4.3）を開き、初期プロンプトだけが違う。かなダブルタップを
+「言い換え」の別機能（Replace Suggestion）にはしない。Replace Suggestion は、legacy では
+Ctrl+S（AI の提案）から入る状態であり、このダブルタップとは別である。Windows 版は Ctrl+S を
+割り当てない（§1.4）。
 
 ### 4.2 選択テキスト取得
 
@@ -917,6 +959,11 @@ sel.range->GetText(read_cookie, 0, buf, ARRAYSIZE(buf), &cch);
 
 Phase 5 は簡易 Win32 ダイアログ（`DialogBox` + EDIT control）。
 WinUI 3 への移行は Phase 7-M30。
+
+legacy のプロンプト窓は 2 段である。プロンプトを入力して変換結果のプレビューを取得し
+（`getTransformationPreview`、選択テキストへは触れない）、利用者が結果を確かめてから適用する。
+以下の 1 段のダイアログは、プレビューと適用を分けない簡易形であり、これが legacy との差である。
+プレビューを挟む 2 段にするかは、M16 の UI の段階として `docs/ai-backend-spec.md` で決める。
 
 レイアウト：
 ```
@@ -1088,6 +1135,15 @@ sha	しゃ
 カスタム TSV が存在しない、読み込めない、または有効な規則が 0 件のときは
 内蔵テーブルを使う。
 
+カスタム表（`inputStyle == "custom"`）は、`RomajiKanaConverter::Feed` が内蔵表に対して行う処理を
+通らない（`Feed` は `custom_table_` があると `ConvertCustomPending` だけで返す）。
+
+- 打鍵した英字は小文字にして表を引く。表の規則は大文字と小文字を書き分けられず、Shift の有無を
+  区別できない。legacy のカスタム表が大文字小文字を区別するかは、`legacy/` の実装（表の定義は
+  外部パッケージ）から確かめられない。
+- 子音の重ね打ちによる促音、`nn` と `n` の処理、`-` の長音符への変換、`n'` の処理は適用しない。
+  これらが要るときは、規則を表に書く。
+
 レガシー macOS 版が「差し替え」方式なのでそれを踏襲。マージ方式は混乱しやすい。
 ユーザーが既定 + α を望む場合は内蔵テーブルを書き出して編集するスクリプトを
 別途用意する（Phase 7 設定アプリで実装）。
@@ -1102,6 +1158,10 @@ sha	しゃ
   - Enter: hex → コードポイント → UTF-16 サロゲートペアで commit
   - Esc: キャンセル
   - 非 hex キー: 直前の hex を確定して通常入力へ移行
+
+legacy との差: legacy は Space を確定として扱いアプリへ渡さず、hex 以外のキーは消費して Unicode 入力を
+続ける。範囲外のコードポイントは何も入力せずに閉じる（beep しない）。Windows 版は Space も非 hex キーの
+一つとして確定してからアプリへ渡し、範囲外は beep して取り消す（§6.3）。
 
 ### 6.2 表示
 
@@ -1144,6 +1204,11 @@ core の 1 回の結果が確定（`CommitMarkedText` と続く `ObserveCommit`�
 
 - Ctrl+Shift+Backspace: 直前の commit を忘却
 - 設定アプリ（Phase 7）から指定エントリを削除
+
+legacy との差: legacy の忘却は Ctrl+Delete（Backspace）で、候補選択中に選択中の候補の記憶を消す
+（`SegmentsManager.forgetMemory`）。読み入力中の忘却は何もしない。Windows 版は、キーを
+Ctrl+Shift+Backspace とし、入力していないときだけ働いて直近に確定した組を消す（§7.2）。
+確定前の候補を忘れさせるキーは無い。
 
 ### 7.2 API
 

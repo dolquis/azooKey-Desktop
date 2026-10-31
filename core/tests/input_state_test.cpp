@@ -458,9 +458,13 @@ TEST(InputStateTest, StartConversionIgnoresThePerKeyCacheAndQueriesForTheWindow)
   }
 }
 
-TEST(InputStateTest, CacheMissEnterCommitsAsIsAndDigitsPassThrough) {
+// While the window is awaited a digit is typed into the reading by the map;
+// the TIP holds it for the window instead (legacy-parity-spec §1.2).
+TEST(InputStateTest, CacheMissEnterCommitsAsIsAndDigitsAreInput) {
   const InputState waiting = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
-  EXPECT_FALSE(MapUserAction('1', 0, waiting.kind()).has_value());
+  const auto digit = MapUserAction('1', 0, waiting.kind());
+  ASSERT_TRUE(digit.has_value());
+  EXPECT_EQ(digit->action, UserAction::Input);
 
   const HandleResult committed = waiting.HandleEvent(Ev(UserAction::Commit));
   EXPECT_EQ(committed.next.kind(), K::Idle);
@@ -629,9 +633,43 @@ TEST(InputStateTest, ExplicitPunctuationStartsCompositionAndBackspaceClearsIt) {
     EXPECT_EQ(inserted.next.Reading(), surface);
     EXPECT_EQ(inserted.next.kind(), K::Composing);
     EXPECT_EQ(inserted.next.HandleEvent(Ev(UserAction::Backspace)).next.kind(), K::Idle);
-    EXPECT_FALSE(MapUserAction(key, kModifierShift, K::Idle));
   }
-  EXPECT_FALSE(MapUserAction(vk::kOem2, 0, K::Idle));
+}
+
+// DEV-1811 (tsf-deep-integration-spec §3.5): digits and the full-width symbols
+// the TIP resolves join the reading as typed; a pending romaji is flushed first.
+TEST(InputStateTest, DigitsAndFullWidthSymbolsJoinTheReading) {
+  InputState state;
+  for (const char32_t cp : {U'd', U'a', U'i', U'3', U'k', U'a', U'i'})
+    state = state.HandleEvent(Ev(UserAction::Input, cp)).next;
+  EXPECT_EQ(state.Reading(), "だい3かい");
+
+  state = InputState{};
+  for (const char32_t cp : {U'j', U'i', U'：', U'k', U'a', U'n'})
+    state = state.HandleEvent(Ev(UserAction::Input, cp)).next;
+  EXPECT_EQ(state.Reading(), "じ：かん");
+
+  // A symbol starts a reading from Idle; `-` is the long vowel mark.
+  const HandleResult bracket = InputState{}.HandleEvent(Ev(UserAction::Input, U'「'));
+  EXPECT_EQ(bracket.next.kind(), K::Composing);
+  EXPECT_EQ(bracket.next.Reading(), "「");
+  EXPECT_EQ(InputState{}.HandleEvent(Ev(UserAction::Input, U'-')).next.Reading(), "ー");
+  // A pending "k" is flushed before the symbol.
+  state = InputState{}.HandleEvent(Ev(UserAction::Input, U'k')).next;
+  EXPECT_EQ(state.HandleEvent(Ev(UserAction::Input, U'＠')).next.Reading(), "k＠");
+}
+
+// Selecting: 0 commits the highlight like Enter and starts the next reading.
+TEST(InputStateTest, ZeroWhileSelectingCommitsAndStartsTheNextReading) {
+  const auto zero = MapUserAction('0', 0, K::Selecting);
+  ASSERT_TRUE(zero.has_value());
+  ASSERT_EQ(zero->action, UserAction::Input);
+  const HandleResult result = Selecting().HandleEvent(Ev(UserAction::Input, U'0'));
+  EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.Reading(), "0");
+  EXPECT_EQ(result.actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"仮名"}, CommitMarkedText{},
+                     ObserveCommit{"かな", "仮名"}, ReplaceMarkedText{"0"}, QueryCandidates{"0"}}));
 }
 
 TEST(InputStateTest, InputAlnumAppendsLiterally) {

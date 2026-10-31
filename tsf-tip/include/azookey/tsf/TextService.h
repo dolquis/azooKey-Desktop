@@ -297,6 +297,8 @@ class TextService final : public ITfTextInputProcessorEx,
     local_settings_.SetConvertKeysActionForTest(action);
   }
   bool alnum_mode_for_test() const { return alnum_mode_; }
+  void set_alnum_mode_for_test(bool alnum) { alnum_mode_ = alnum; }
+  const std::string& batch_raw_romaji_for_test() const { return batch_raw_romaji_; }
   // Gives a harness that never calls ActivateEx an open/close compartment
   // (no sink); Deactivate releases it.
   void set_keyboard_open_compartment_for_test(ITfCompartment* compartment, TfClientId client_id) {

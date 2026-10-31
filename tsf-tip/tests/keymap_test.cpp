@@ -60,18 +60,40 @@ const Entry kEntries[] = {
      {kNone, A::StartConversion, A::StartConversion, A::PrevCandidate, kNone, kNone}},
     {VK_RETURN, 0, {kNone, A::Commit, A::Commit, A::Commit, A::Commit, A::Commit}},
     {VK_ESCAPE, 0, {kNone, A::Cancel, A::Cancel, A::Cancel, A::Cancel, A::Cancel}},
-    {'1', 0, {kNone, kNone, kNone, A::SelectByDigit, kNone, A::Input}},
-    // Shift+1 types ！ (DEV-1670); other Shift+digits neither select nor type.
+    // Digits (DEV-1811): the reading takes them, Selecting 1-9 select and 0
+    // commits, Idle leaves them to the app (the number rewriter may claim them).
+    {'1', 0, {kNone, A::Input, A::Input, A::SelectByDigit, kNone, A::Input}},
+    {'0', 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_NUMPAD5, 0, {kNone, A::Input, A::Input, A::SelectByDigit, kNone, A::Input}},
+    {VK_NUMPAD0, 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
+    // Shift+digits type the layout's symbol (Shift+1 is ！, DEV-1670) and
+    // never select.
     {'1', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
-    {'9', kShift, {kNone, kNone, kNone, kNone, kNone, A::Input}},
-    {'0', 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
-    {VK_NUMPAD5, 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
-    {VK_OEM_MINUS, 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
-    {VK_SUBTRACT, 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {'9', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {'0', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
+    // Symbol keys start a reading from Idle; the TIP passes through a
+    // character outside the full-width table (spec §1.5.3).
+    {VK_OEM_MINUS, 0, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_OEM_MINUS, kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
     {VK_OEM_COMMA, 0, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
     {VK_OEM_PERIOD, 0, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
-    {VK_OEM_2, 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_OEM_2, 0, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
     {VK_OEM_2, kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_OEM_1, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_PLUS, kShift, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_3, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_4, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_5, kShift, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_6, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_7, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_8, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_OEM_102, 0, {A::Input, A::Input, A::Input, A::Input, kNone, kNone}},
+    // Numpad symbols join a reading but never start one.
+    {VK_SUBTRACT, 0, {kNone, A::Input, A::Input, A::Input, kNone, A::Input}},
+    {VK_ADD, 0, {kNone, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_MULTIPLY, 0, {kNone, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_DECIMAL, 0, {kNone, A::Input, A::Input, A::Input, kNone, kNone}},
+    {VK_DIVIDE, 0, {kNone, A::Input, A::Input, A::Input, kNone, kNone}},
     {'H', kCtrl, {kNone, A::Backspace, A::Backspace, A::Backspace, kNone, A::Backspace}},
     {'P', kCtrl, {kNone, kNone, kNone, A::Up, kNone, kNone}},
     {'N', kCtrl, {kNone, kNone, kNone, A::Down, kNone, kNone}},
@@ -89,8 +111,7 @@ const Entry kEntries[] = {
     {'U', kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
     // The TIP's Unicode mode (spec §6) relies on these reaching the hex buffer.
     {'U', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
-    {VK_NUMPAD0, 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
-    {VK_NUMPAD9, 0, {kNone, kNone, kNone, kNone, kNone, A::Input}},
+    {VK_NUMPAD9, 0, {kNone, A::Input, A::Input, A::SelectByDigit, kNone, A::Input}},
     {VK_BACK, kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_F10, kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_BACK, kCtrl | kShift, {A::Forget, kNone, kNone, kNone, kNone, kNone}},
@@ -155,6 +176,16 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kOemMinus, static_cast<uint32_t>(VK_OEM_MINUS));
   EXPECT_EQ(vk::kOemPeriod, static_cast<uint32_t>(VK_OEM_PERIOD));
   EXPECT_EQ(vk::kOem2, static_cast<uint32_t>(VK_OEM_2));
+  EXPECT_EQ(vk::kOem1, static_cast<uint32_t>(VK_OEM_1));
+  EXPECT_EQ(vk::kOemPlus, static_cast<uint32_t>(VK_OEM_PLUS));
+  EXPECT_EQ(vk::kOem3, static_cast<uint32_t>(VK_OEM_3));
+  EXPECT_EQ(vk::kOem4, static_cast<uint32_t>(VK_OEM_4));
+  EXPECT_EQ(vk::kOem8, static_cast<uint32_t>(VK_OEM_8));
+  EXPECT_EQ(vk::kOem102, static_cast<uint32_t>(VK_OEM_102));
+  EXPECT_EQ(vk::kMultiply, static_cast<uint32_t>(VK_MULTIPLY));
+  EXPECT_EQ(vk::kAdd, static_cast<uint32_t>(VK_ADD));
+  EXPECT_EQ(vk::kDecimal, static_cast<uint32_t>(VK_DECIMAL));
+  EXPECT_EQ(vk::kDivide, static_cast<uint32_t>(VK_DIVIDE));
 }
 
 TEST(KeymapTest, EveryTableEntryMapsPerState) {
@@ -184,7 +215,12 @@ TEST(KeymapTest, DigitsCarryTheirIndexWhileSelecting) {
     EXPECT_EQ(event->action, A::SelectByDigit);
     EXPECT_EQ(event->digit, static_cast<int>(key - '0'));
     EXPECT_EQ(event->codepoint, U'\0');
-    EXPECT_FALSE(MapUserAction(key, 0, K::Composing).has_value());
+    // The numpad digits are candidate numbers too (spec §1.4).
+    const auto numpad = MapUserAction(VK_NUMPAD0 + (key - '0'), 0, K::Selecting);
+    ASSERT_TRUE(numpad.has_value());
+    EXPECT_EQ(numpad->action, A::SelectByDigit);
+    EXPECT_EQ(numpad->digit, static_cast<int>(key - '0'));
+    EXPECT_EQ(Action(key, 0, K::Composing), A::Input);
     EXPECT_FALSE(MapUserAction(key, 0, K::Idle).has_value());
   }
 }
@@ -209,7 +245,7 @@ TEST(KeymapTest, AltAndWinChordsAlwaysPassThrough) {
 TEST(KeymapTest, UnlistedKeysPassThroughInEveryState) {
   // VK_IME_ON / VK_IME_OFF are decided by the TIP before the core map (OpenCloseKey.h).
   for (const uint32_t key : {static_cast<uint32_t>(VK_TAB), static_cast<uint32_t>(VK_F1),
-                             static_cast<uint32_t>(VK_PRIOR), static_cast<uint32_t>(VK_OEM_4),
+                             static_cast<uint32_t>(VK_PRIOR), static_cast<uint32_t>(VK_OEM_CLEAR),
                              static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF)}) {
     for (const K kind : kAllKinds) {
       EXPECT_FALSE(MapUserAction(key, 0, kind).has_value()) << key;

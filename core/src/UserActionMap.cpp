@@ -16,9 +16,25 @@ bool AcceptsEditing(InputStateKind kind) {
 bool IsLetter(uint32_t key) { return key >= vk::kA && key <= vk::kZ; }
 bool IsDigitRow(uint32_t key) { return key >= vk::k0 && key <= vk::k9; }
 bool IsNumpadDigit(uint32_t key) { return key >= vk::kNumpad0 && key <= vk::kNumpad9; }
-bool IsCompositionSymbol(uint32_t key) {
+// The keys the Unicode input buffer has always received; FinishUnicodeInput
+// ends the buffer on them before they are typed.
+bool IsUnicodeInputSymbol(uint32_t key) {
   return key == vk::kOemMinus || key == vk::kSubtract || key == vk::kOemComma ||
          key == vk::kOemPeriod || key == vk::kOem2;
+}
+// Keys that make a symbol through the layout (spec §1.5.3: VK_OEM_1 to
+// VK_OEM_3 include plus, comma, minus and period); the TIP decides from the
+// character whether the reading takes it.
+bool IsCompositionSymbol(uint32_t key) {
+  return (key >= vk::kOem1 && key <= vk::kOem3) || (key >= vk::kOem4 && key <= vk::kOem8) ||
+         key == vk::kOem102;
+}
+bool IsNumpadSymbol(uint32_t key) {
+  return key == vk::kMultiply || key == vk::kAdd || key == vk::kSubtract || key == vk::kDecimal ||
+         key == vk::kDivide;
+}
+bool TakesSymbol(InputStateKind kind) {
+  return IsComposing(kind) || kind == InputStateKind::Selecting || kind == InputStateKind::Idle;
 }
 
 std::optional<UserActionEvent> Make(UserAction action, uint32_t modifiers, int digit = 0) {
@@ -85,36 +101,36 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
 
   if (kind == InputStateKind::UnicodeInput &&
       (IsLetter(virtual_key) || IsDigitRow(virtual_key) || IsNumpadDigit(virtual_key) ||
-       IsCompositionSymbol(virtual_key)))
+       IsUnicodeInputSymbol(virtual_key)))
     return Make(UserAction::Input, modifiers);
 
   if (IsLetter(virtual_key)) {
     if (kind == InputStateKind::ReplaceSuggestion) return std::nullopt;
     return Make(UserAction::Input, modifiers);
   }
-  if (IsDigitRow(virtual_key)) {
-    // Shift+1 types ！ like a punctuation key (DEV-1670, legacy parity); the
-    // TIP checks that the layout produces it. Other Shift+digits pass through.
-    if (shift) {
-      if (virtual_key == vk::k0 + 1 && kind != InputStateKind::ReplaceSuggestion)
-        return Make(UserAction::Input, modifiers);
-      return std::nullopt;
-    }
-    // Digits select only while the window is visible; elsewhere they pass
-    // through unless the TIP's number rewriter claims them.
-    if (kind == InputStateKind::Selecting && virtual_key != vk::k0)
-      return Make(UserAction::SelectByDigit, modifiers, static_cast<int>(virtual_key - vk::k0));
-    return std::nullopt;
-  }
-  if (IsCompositionSymbol(virtual_key)) {
-    // 、 。 and ？ start a standalone composition from Idle (spec §3.5).
-    if (IsComposing(kind) || kind == InputStateKind::Selecting ||
-        (kind == InputStateKind::Idle && !shift &&
-         (virtual_key == vk::kOemComma || virtual_key == vk::kOemPeriod)) ||
-        (kind == InputStateKind::Idle && shift && virtual_key == vk::kOem2))
+  if (IsDigitRow(virtual_key) || IsNumpadDigit(virtual_key)) {
+    const bool numpad = IsNumpadDigit(virtual_key);
+    // Shift+digit types the symbol the layout makes (Shift+1 is ！, DEV-1670);
+    // the TIP passes it through when the symbol is not one the reading takes.
+    if (shift && !numpad)
+      return TakesSymbol(kind) ? Make(UserAction::Input, modifiers) : std::nullopt;
+    const int digit = static_cast<int>(virtual_key - (numpad ? vk::kNumpad0 : vk::k0));
+    // 1-9 select while the window is visible and 0 commits it to start the next
+    // reading; the reading takes digits, and Idle leaves them to the app
+    // unless the TIP's number rewriter claims them (DEV-1811).
+    if (kind == InputStateKind::Selecting && digit != 0)
+      return Make(UserAction::SelectByDigit, modifiers, digit);
+    if (kind == InputStateKind::Selecting || IsComposing(kind))
       return Make(UserAction::Input, modifiers);
     return std::nullopt;
   }
+  if (IsCompositionSymbol(virtual_key))
+    return TakesSymbol(kind) ? Make(UserAction::Input, modifiers) : std::nullopt;
+  // Numpad symbols join a reading but never start one (spec §1.5.3).
+  if (IsNumpadSymbol(virtual_key))
+    return IsComposing(kind) || kind == InputStateKind::Selecting
+               ? Make(UserAction::Input, modifiers)
+               : std::nullopt;
 
   switch (virtual_key) {
     case vk::kBack:

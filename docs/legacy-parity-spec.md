@@ -45,7 +45,7 @@ enum class UserAction : uint16_t {
     ToggleHankaku,      // 半角/全角キー
     ToggleHiraKata,     // 無変換 (Hira ⇄ Kata)
     StartUnicodeInput,  // Ctrl+Shift+U
-    StartAlnumDouble,   // 英数キーダブルタップ → Magic Conversion
+    StartAlnumDouble,   // 英数キーダブルタップ → 選択テキストの英訳、または読みの半角英字確定（§4.1）
     StartKanaDouble,    // かなキーダブルタップ → 選択テキストの和訳（§4.1）
 
     // 学習
@@ -309,11 +309,11 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | Ctrl+F | → にする。読み入力中は何もせず、候補選択中は選択中の候補が覆う部分だけを確定して残りを続ける | Selecting でだけ `Forward`。TIP は一括変換の文節移動にだけ使い、文節が無いときはアプリへ渡す |
 | Ctrl+B / Ctrl+A / Ctrl+E | 割当なし（未定義の Ctrl 組合せ） | Ctrl+B は Ctrl+F と対にして Selecting の `Backward` とする。Ctrl+A / Ctrl+E は割り当てない。表の `LineHead` / `LineEnd` は `UserAction` の名前で、この版は割り当てない |
 | Ctrl+M | Enter と同じ | 割り当てない。アプリへ渡す |
-| Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する。それ以外はアプリへ渡す |
+| Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する（Shift+Tab は第 2 候補。第 2 候補が無ければ素通し）。それ以外はアプリへ渡す |
 | ↓ | 読み入力中に候補選択を開く | Space で開く。Selecting 以外の ↓ はアプリへ渡す |
 | ← / → / ↑ | 読み入力中は消費する。候補選択中の → は選択中の候補が覆う部分の確定、↑ は前の候補 | Selecting 以外はアプリへ渡す。Selecting の ← / → は Ctrl+B / F と同じ、↑ は前の候補 |
 | 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す |
-| 英数キー | 英語への絶対指定。読みを残したまま英字を足す | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
+| 英数キー | 英語への絶対指定。読み入力中は読みを残したまま英字を足し、候補選択中は確定してから英語に切り替える | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
 | 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す（§7.1） |
 | Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定したうえでアプリへ渡す。hex 以外は確定して通常入力に移る（§6.1） |
 
@@ -784,7 +784,8 @@ DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
 - 引き継ぎは確定・Esc・secure 入力・フォーカスの移動で破棄し、次の入力へ持ち越さない。
   候補窓から Backspace で読みに戻ったときは同じ入力が続くので残す。ライブ変換 OFF では使わない。
 - **legacy との差**: legacy は、Backspace の後のライブ変換の表示を必ず読み（ひらがな）に戻す
-  （`SegmentsManager` のライブ変換の表示は、削除の後は常にひらがなを示す）。Windows 版は、上の規則で
+  （`SegmentsManager` のライブ変換の表示は、削除の後は常にひらがなを示す。次の挿入までの間、
+  `lastOperation` が削除である間続く）。Windows 版は、上の規則で
   引き継いだ応答のうち現在の読みの先頭と一致する区切りを残し、現在の読みへの応答が届いたら差し替える。
   削除のたびに「変換済みの表記 → ひらがな → 新しい表記」と往復させないための差である。
 
@@ -939,6 +940,11 @@ legacy の割当（`azooKeyMacInputController`）に合わせて、2 回目の�
 「言い換え」の別機能（Replace Suggestion）にはしない。Replace Suggestion は、legacy では
 Ctrl+S（AI の提案）から入る状態であり、このダブルタップとは別である。Windows 版は Ctrl+S を
 割り当てない（§1.4）。
+
+英数ダブルタップの「読みを半角英字で確定する」枝と、英数キーが英数モードのトグルであること
+（`docs/tsf-deep-integration-spec.md` §3.1）の関係は未決である。読みがあるとき 1 回目の押下で
+読みを確定して英数モードになり、2 回目の押下でひらがなに戻るので、このままでは読みを確定する枝に届かない。
+1 回目の押下の効果との関係は M16 で決める。
 
 ### 4.2 選択テキスト取得
 

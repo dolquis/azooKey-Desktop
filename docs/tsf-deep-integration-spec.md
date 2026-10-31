@@ -436,8 +436,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
 - **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）、予測
-  候補の UIElement 化（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測窓
+  は UIElement 化せず自前の窓で出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。
 

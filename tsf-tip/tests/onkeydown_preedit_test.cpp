@@ -2478,6 +2478,68 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionForAnEarlierReadingIsDroppedWhenTheNe
   server.Stop();
 }
 
+// DEV-1754: the one-second prediction cache must not take down the window that
+// shows the current reading. A candidates-ready notification that runs after
+// the cached result has aged out (the UI thread stalled while the window was
+// first created, or any later notification) re-evaluates the same reading; the
+// window stays and the Host is not asked again.
+TEST(TsfTipOnKeyDownPreeditTest, PredictionWindowSurvivesTheCacheAgingOutForTheSameReading) {
+  using namespace azookey::ipc;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-prediction-cache-age-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> prediction_queries{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      ++prediction_queries;
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_query_deadline_ms_for_test(60000);
+  h.service.set_window_query_deadline_ms_for_test(60000);
+  h.service.start_ipc_worker_for_test();
+  for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  h.service.process_candidates_ready_for_test();
+  ASSERT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  ASSERT_GT(prediction_queries.load(), 0u);
+  // With the worker stopped, a query asked again stays queued where the test can see it.
+  h.service.stop_ipc_worker_for_test();
+  ASSERT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+
+  h.service.age_prediction_state_for_test(std::chrono::milliseconds(1100));
+  h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
+  server.Stop();
+}
+
 // DEV-1676: a prediction response that misses the 150ms prediction deadline is
 // dropped, and the candidates-ready notification re-queues it about a second
 // later (the same contract as DroppedPredictionRetriesTheSameReading). The Host

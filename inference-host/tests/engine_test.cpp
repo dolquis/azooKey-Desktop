@@ -1943,6 +1943,48 @@ TEST(InferenceEngineTest, BuildsPromptInEachFormat) {
             std::string(kCtxMarker) + "私は" + in_out);
 }
 
+TEST(InferenceEngineTest, PromptDropsControlMarkersFromUserText) {
+  using azookey::host::BuildZenzaiPrompt;
+  using azookey::host::ContainsZenzaiControlMarker;
+  using azookey::host::ZenzaiPromptFormat;
+  const std::string markers = std::string("\xEE\xB8\x80") + "\xEE\xB8\x81" + "\xEE\xB8\x82" +
+                              "\xEE\xB8\x83" + "\xEE\xBB\xBF";
+  azookey::core::ConversionContext context;
+  context.preceding_text = "私" + markers + "は";
+  context.instruction_profile = markers + "整える";
+  const auto kana = markers + "にほんご";
+
+  for (const auto format : {ZenzaiPromptFormat::ZenzV3, ZenzaiPromptFormat::KanakanjiEdgeV1}) {
+    azookey::core::ConversionContext clean = context;
+    clean.preceding_text = "私は";
+    clean.instruction_profile = "整える";
+    const auto prompt = BuildZenzaiPrompt(kana, context, format);
+    EXPECT_EQ(prompt, BuildZenzaiPrompt("にほんご", clean, format));
+    // Only the separators the builder itself writes remain.
+    const auto expected_markers = format == ZenzaiPromptFormat::ZenzV3 ? 4 : 3;
+    int count = 0;
+    for (size_t i = 0; i + 2 < prompt.size(); ++i) {
+      if (ContainsZenzaiControlMarker(prompt.substr(i, 3))) ++count;
+    }
+    EXPECT_EQ(count, expected_markers);
+  }
+
+  // A profile made only of markers is empty once they are dropped, so no empty [PROF] is written.
+  azookey::core::ConversionContext marker_only_profile;
+  marker_only_profile.instruction_profile = markers;
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", marker_only_profile, ZenzaiPromptFormat::ZenzV3),
+            BuildZenzaiPrompt("にほんご", azookey::core::ConversionContext{},
+                              ZenzaiPromptFormat::ZenzV3));
+
+  // The 30 characters are counted after the markers are dropped.
+  azookey::core::ConversionContext long_context;
+  long_context.preceding_text = "b" + markers + std::string(29, 'a');
+  azookey::core::ConversionContext plain;
+  plain.preceding_text = "b" + std::string(29, 'a');
+  EXPECT_EQ(BuildZenzaiPrompt("あ", long_context, ZenzaiPromptFormat::ZenzV3),
+            BuildZenzaiPrompt("あ", plain, ZenzaiPromptFormat::ZenzV3));
+}
+
 TEST(InferenceEngineTest, BeamTokenChoicesSkipExcludedControlTokens) {
   using azookey::host::SelectZenzaiTokenChoices;
   // Token 1 has the highest logit but is a control token that does not end generation.

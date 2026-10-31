@@ -1018,6 +1018,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   p.learning_entries = static_cast<uint64_t>(engine_health.learning_entries);
   p.user_dict_entries = static_cast<uint64_t>(engine_health.user_dict_entries);
   p.last_error = engine_health.last_error;
+  if (effective_model_loaded && engine_health.prompt_format) {
+    p.prompt_format = std::string(ZenzaiPromptFormatName(*engine_health.prompt_format));
+  }
 
   const bool model_enabled = !settings_store_ || settings_store_->settings().model.enabled;
   // Section 12.6 / D-009: SafeMode outranks everything, model.enabled=false

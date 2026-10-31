@@ -8403,7 +8403,9 @@ void TextService::OnCandidatesReady(void* context) {
           (void)service->ResolvePrivacy(service->active_context_, false);
         service->prediction_settings_refreshing_.store(false, std::memory_order_release);
         refreshing_settings = false;
+        // Changed settings re-evaluate the reading on screen as if nothing were shown.
         service->prediction_last_query_key_.clear();
+        service->shown_prediction_key_.clear();
         service->RefreshPrediction(service->active_context_);
       }
       service->prediction_settings_refreshing_.store(false, std::memory_order_release);
@@ -8437,7 +8439,9 @@ void TextService::OnCandidatesReady(void* context) {
         }
         service->prediction_retry_scheduled_generation_ = 0;
         if (still_current) {
+          // A retry re-evaluates the reading on screen as if nothing were shown.
           service->prediction_last_query_key_.clear();
+          service->shown_prediction_key_.clear();
           service->RefreshPrediction(service->active_context_);
         }
       }
@@ -8522,6 +8526,7 @@ void TextService::ClearPrediction() {
   prediction_retry_generation_.store(0, std::memory_order_release);
   prediction_window_.Hide();
   shown_predictions_.clear();
+  shown_prediction_key_.clear();
   // The duplicate-query hold in RefreshPrediction waits on the outstanding
   // query or its retry; both are dropped here, so the same reading must ask
   // again (DEV-1712).
@@ -8587,15 +8592,30 @@ void TextService::RefreshPrediction(ITfContext* context) {
     else
       ++it;
   }
+  // The window already answers this reading: the cache entry it came from may
+  // have aged out since (a stalled UI thread, a later notification), but the
+  // result is still current, so the window stays and nothing is asked again
+  // (DEV-1754).
+  if (!shown_predictions_.empty() && shown_prediction_key_ == cache_key) {
+    candidate_ui_.CancelScheduledCandidatesReady();
+    prediction_retry_scheduled_generation_ = 0;
+    ShowPredictionWindow();
+    return;
+  }
   if (const auto cached = prediction_cache_.find(cache_key); cached != prediction_cache_.end()) {
     candidate_ui_.CancelScheduledCandidatesReady();
     prediction_retry_scheduled_generation_ = 0;
     shown_predictions_ = cached->second.predictions;
+    if (shown_predictions_.empty())
+      shown_prediction_key_.clear();
+    else
+      shown_prediction_key_ = cache_key;
     ShowPredictionWindow();
     return;
   }
   prediction_window_.Hide();
   shown_predictions_.clear();
+  shown_prediction_key_.clear();
   if (prediction_last_query_key_ == cache_key &&
       now - prediction_last_query_at_ < std::chrono::seconds(1))
     return;
@@ -8671,6 +8691,10 @@ void TextService::ApplyPredictionResult() {
   prediction_cache_[cache_key] =
       PredictionCacheEntry{result->predictions, std::chrono::steady_clock::now()};
   shown_predictions_ = std::move(result->predictions);
+  if (shown_predictions_.empty())
+    shown_prediction_key_.clear();
+  else
+    shown_prediction_key_ = cache_key;
   ShowPredictionWindow();
 }
 

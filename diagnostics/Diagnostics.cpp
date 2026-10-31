@@ -1463,6 +1463,10 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
   j::Object validation_details{{"valid", j::Value(snapshot.selected_model_valid)},
                                {"loaded", j::Value(loaded)},
                                {"engine", j::Value(engine)}};
+  if (snapshot.host_diagnostics && snapshot.host_diagnostics->prompt_format) {
+    validation_details.emplace("prompt_format",
+                               j::Value(*snapshot.host_diagnostics->prompt_format));
+  }
   if (snapshot.host_diagnostics && snapshot.host_diagnostics->backend_selection) {
     const auto& selection = *snapshot.host_diagnostics->backend_selection;
     validation_details.emplace(

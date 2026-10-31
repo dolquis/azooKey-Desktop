@@ -3162,6 +3162,7 @@ Response:
         "vulkan_loader": bool, "cuda_runtime": bool,
         "os_build": uint32, "winml_os_eligible": bool, "on_battery": bool
       },
+      "prompt_format": "zenz-v3" | "kanakanji-edge-v1"   (optional, ロード中モデルの値),
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
       "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),
@@ -3193,6 +3194,13 @@ v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落�
 OS build 不明を表す。SafeMode の probe 省略時は件数と bool も 0 / false になる。
 アダプタ名・識別子・パス・自由文は含めず、分類名と非識別の事実のみを返す。
 診断 CLI の JSON は `D-008` の `details.backend_selection` に同じ値を載せる。
+
+`prompt_format` は protocol v1 への省略可能な追加フィールドで、ロード中モデルが使う
+プロンプト形式（catalog の宣言、または語彙からの推定。`docs/zenzai-inference-spec.md`
+§2.4.2）を返す。モデル未ロード、Zenzai 以外の変換器、mock runtime（`runtime_tier` が `mock`）、古い Host では省略する。
+reader は欠落と未知の値を「無し」として扱い、payload 全体は不正にしない。値は
+2 つの固定名だけで、パスや利用者の入力を含まない。診断 CLI の JSON は `D-008` の
+`details.prompt_format` に同じ値を載せる（省略時は載せない）。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 `last_error` / `ep_last_error` は失敗時にユーザーパスを含みうるため、保存前に

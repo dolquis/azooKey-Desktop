@@ -286,6 +286,7 @@ std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p) {
     selection.emplace("on_battery", j::Value(s.on_battery));
     o.emplace("backend_selection", j::Value(std::move(selection)));
   }
+  if (p.prompt_format) o.emplace("prompt_format", j::Value(*p.prompt_format));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -363,6 +364,10 @@ std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& 
   p.last_error = v->GetString("last_error");
   p.neologd_layer = NeologdLayerFromJson(*v);
   p.backend_selection = BackendSelectionFromJson(*v);
+  if (auto format = v->GetString("prompt_format");
+      format && (*format == "zenz-v3" || *format == "kanakanji-edge-v1")) {
+    p.prompt_format = std::move(format);
+  }
   return p;
 }
 

@@ -260,7 +260,7 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
 
 Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
-へ戻してから次の編集を反映する。追加入力（英字・記号・長音・句読点）は、表示中 `surface` を
+へ戻してから次の編集を反映する（ライブ変換 ON で応答を引き継いでいれば、`docs/legacy-parity-spec.md` §2.3.1 の表示にする）。追加入力（英字・記号・長音・句読点）は、表示中 `surface` を
 Enter と同じく確定（学習観測も Enter と同じ）してから、そのキーで新しい composition を始める。
 一括変換の複数文節では、表示中の全文節を確定する。確定の edit session が拒否されて再試行を待つ間は、
 Enter の確定と同じく、打ったキーを消費して確定の後に残す。再試行を待つキーは次の規則で扱う。
@@ -749,8 +749,8 @@ TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` �
 On → Off で何を確定するかは、Off にした操作で決まる。
 
 - 半角/全角、`VK_IME_OFF`、`imeOnOff` の無変換、入力インジケーターの左クリックとメニューの「直接入力」（§4.5）:
-  画面に表示中の文字列（ライブ変換の表示、選択中の候補、読み）を Enter と同じ経路で確定してから compartment を 0 にする。
-  Enter と同じく確定を学習観測に送り、secure と学習不可の文脈では送らない。`dynamicPunctuation` の
+  画面に表示中の文字列（ライブ変換の表示、応答待ちに引き継いだ表示、選択中の候補、読み）を Enter と同じ経路で確定してから compartment を 0 にする。
+  Enter と同じく確定を学習観測に送り（引き継いだ表示は送らない。`docs/legacy-parity-spec.md` §2.3.1）、secure と学習不可の文脈では送らない。`dynamicPunctuation` の
   onPause で Enter が行う最終要求の待ち（`docs/dynamic-punctuation-spec.md` §7.3）はせず、表示中の文字列を
   その場で確定する。確定の edit session が拒否されたとき、または Enter が確定せずに待つとき（一括変換の応答待ち）は
   Off にせず On のまま残し、キーは消費する。拒否された確定は次のキーで確定し直し、そのキーは確定の後に処理する
@@ -765,7 +765,8 @@ On → Off で何を確定するかは、Off にした操作で決まる。
 - アプリ切替 (`OnSetFocus`) では現在の composition を **確定** してから前面アプリへ
   フォーカスを譲る（MS-IME 互換）
 - フォーカス喪失、Deactivate、TIP の外からの Off（§4.2）、英数モードへの切替（英数キー、入力インジケーターの
-  メニューの半角英数）の確定は同じ経路を通り、composition が表示中の文字列を確定する。ライブ変換の表示、
+  メニューの半角英数）の確定は同じ経路を通り、composition が表示中の文字列を確定する。ライブ変換の表示
+  （応答待ちに引き継いだ表示を含む。`docs/legacy-parity-spec.md` §2.3.1）、
   選択中の候補、一括変換の各文節が表示中ならそれを、そうでなければ読み（未確定ローマ字を含む）を確定する。
   - 表示中の文字列は、候補の状態と `dynamicPunctuation` の最終要求の待ちを片付ける前に取る。待っていた
     句読点は確定に含めない。
@@ -982,8 +983,17 @@ EditSession が composition 全体へ `GUID_PROP_ATTRIBUTE` を 1 回 `SetValue`
 | `crText` / `crBk` / `crLine` | いずれも `TF_CT_NONE`（アプリ既定の描画に委ねる） |
 | 適用単位 | composition 全体（文節を区別しない） |
 
-通常の preedit 更新では、composition 全体へ `SetText` と `GUID_PROP_ATTRIBUTE` の
-`SetValue` を適用した後、その range を `Clone` する。
+通常の preedit 更新では、composition の文字列を書き換え、composition 全体へ
+`GUID_PROP_ATTRIBUTE` の `SetValue` を適用した後、その range を `Clone` する。
+文字列は、composition が前回書いた文字列をそのまま保っているときに限り、前回と異なる最初の文字から
+末尾までだけを `SetText` で書き換え、同じ文字列なら書き込まない（DEV-1806。ライブ変換で
+変換結果が変わらない文字を描き直さない）。書き換える区間は空にせず、composition の末尾まで含める。
+区間の先頭が surrogate pair を割るときは 1 文字前から書き換える。末尾への純粋な挿入は anchor の
+gravity 次第で composition に入らないことがあるため、文字を置き換える形にする。それでも composition が
+書き込みに追随するかはアプリの text store に依るので、書き込み後に composition の文字列を読み直す。
+一致しないときは composition の末尾を書き換えた区間の末尾まで `ITfComposition::ShiftEnd` で広げ
+（広げられなければ書き換えた区間を空にし）、composition 全体を `SetText` で書き直す。前回の文字列を
+読み取れないときも composition 全体を書き直す。
 clone した selection 用 range を `TF_ANCHOR_END` へ collapse し、`SetSelection` で
 キャレットを末尾へ移す。
 表示属性用 range 自体を collapse すると下線の適用範囲が失われるため、selection 用 range

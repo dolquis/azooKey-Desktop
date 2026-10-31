@@ -20,6 +20,7 @@ add_library(azookey_tsf_tip SHARED
   src/IpcReconnectBackoff.cpp
   src/LangBarInputModeItem.cpp
   src/LeftContextReader.cpp
+  src/LiveCarry.cpp
   src/ReconversionFunction.cpp
   src/exports.def
   src/SettingsLauncher.cpp
@@ -83,6 +84,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/IpcReconnectBackoff.cpp
     src/LangBarInputModeItem.cpp
     src/LeftContextReader.cpp
+    src/LiveCarry.cpp
     src/ReconversionFunction.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp
@@ -177,6 +179,7 @@ if(AZOOKEY_BUILD_TESTS)
   target_link_libraries(tsf_tip_typo_correction_tracker_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
   azookey_discover_tests(tsf_tip_typo_correction_tracker_tests)
+  add_tsf_tip_unit_test(tsf_tip_live_carry_tests tests/live_carry_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_bracket_edit_session_tests tests/bracket_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_character_form_edit_session_tests tests/character_form_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ai_input_guard_tests tests/ai_input_guard_test.cpp)

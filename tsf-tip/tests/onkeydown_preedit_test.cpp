@@ -859,11 +859,19 @@ class FakeCompositionAttachment {
 }  // namespace
 
 namespace {
+class DocumentRange;
 struct BracketDocument {
   std::wstring text;
   LONG start{0};
   LONG end{0};
   int writes{0};
+  // The range of the started composition: like TSF's, it follows a write
+  // through another range that replaces text up to its end (DEV-1806).
+  DocumentRange* composition_range{nullptr};
+  bool composition_follows_writes{true};  // false models a store whose anchor stays put.
+  int composition_shift_ends{0};
+  LONG last_write_start{-1};
+  std::wstring last_write_text;
   bool fail_read{false};
   bool fail_write{false};
   bool short_shift{false};
@@ -896,8 +904,14 @@ class DocumentRange final : public FakeRange {
   STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
     if (document->fail_write) return E_FAIL;
     ++document->writes;
+    document->last_write_start = start;
+    document->last_write_text.assign(text, static_cast<size_t>(length));
     document->text.replace(static_cast<size_t>(start), static_cast<size_t>(end - start), text,
                            static_cast<size_t>(length));
+    DocumentRange* composition = document->composition_range;
+    if (document->composition_follows_writes && composition && composition != this && start < end &&
+        composition->start <= start && composition->end == end)
+      composition->end = start + length;
     end = start + length;
     return S_OK;
   }
@@ -960,8 +974,13 @@ class DocumentComposition final : public FakeComposition {
     range_ = range;
     range_->AddRef();
     sink_->AddRef();
+    auto* document_range = static_cast<DocumentRange*>(range);
+    document_ = document_range->document;
+    document_->composition_range = document_range;
   }
   ~DocumentComposition() {
+    if (document_->composition_range == static_cast<DocumentRange*>(range_))
+      document_->composition_range = nullptr;
     range_->Release();
     sink_->Release();
   }
@@ -976,12 +995,19 @@ class DocumentComposition final : public FakeComposition {
     if (!notify_owner_end) return S_OK;
     return sink_->OnCompositionTerminated(cookie, this);
   }
+  STDMETHODIMP ShiftEnd(TfEditCookie, ITfRange* range) override {
+    if (!range) return E_INVALIDARG;
+    ++document_->composition_shift_ends;
+    static_cast<DocumentRange*>(range_)->end = static_cast<DocumentRange*>(range)->end;
+    return S_OK;
+  }
   // TSF need not call OnCompositionTerminated when the owner ends its own
   // composition; false models that, so lifecycle cleanup does not run.
   bool notify_owner_end{true};
 
  private:
   ITfCompositionSink* sink_;
+  std::shared_ptr<BracketDocument> document_;
   ULONG references_{1};
 };
 
@@ -2520,7 +2546,8 @@ TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBefore
   ASSERT_EQ(h.context.document->text, L"蚊");
 
   ASSERT_EQ(h.service.apply_prediction_reading_for_test(&h.context, "かん"), S_OK);
-  EXPECT_EQ(h.context.document->text, L"かん");
+  // DEV-1806: the answer for "か" stays shown until the one for "かん" arrives.
+  EXPECT_EQ(h.context.document->text, L"蚊ん");
   EXPECT_EQ(h.service.input_state_for_test().confirmed_kana(), "かん");
   ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
   EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かん");
@@ -2529,7 +2556,7 @@ TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBefore
 
   h.service.set_live_conversion_result_for_test(old_request, "か", "古");
   h.service.apply_live_conversion_result_for_test();
-  EXPECT_EQ(h.context.document->text, L"かん");
+  EXPECT_EQ(h.context.document->text, L"蚊ん");
   h.service.mark_pending_ipc_query_sent_for_test();
   h.service.set_live_conversion_result_for_test(new_request, "かん", "缶");
   h.service.apply_live_conversion_result_for_test();
@@ -2565,16 +2592,18 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUpdatesPreeditAndRejectsStaleResp
   h.service.apply_live_conversion_result_for_test();
   EXPECT_EQ(h.context.document->text, L"蚊");
 
+  // DEV-1806: the answer for "か" stays shown while the reading grows and
+  // returns when Backspace restores its reading; a stale answer changes nothing.
   ASSERT_TRUE(h.Press('N'));
-  EXPECT_EQ(h.context.document->text, L"かん");
+  EXPECT_EQ(h.context.document->text, L"蚊ん");
   h.service.set_live_conversion_result_for_test(first_id, "か", "古");
   h.service.apply_live_conversion_result_for_test();
-  EXPECT_EQ(h.context.document->text, L"かん");
+  EXPECT_EQ(h.context.document->text, L"蚊ん");
   ASSERT_TRUE(h.Press(VK_BACK));
-  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->text, L"蚊");
   h.service.set_live_conversion_result_for_test(first_id, "か", "古");
   h.service.apply_live_conversion_result_for_test();
-  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->text, L"蚊");
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_EQ(h.context.document->text, L"");
   EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
@@ -13299,4 +13328,309 @@ TEST(TsfTipMixedEnglishTest, UnusableSegmentsLeaveTheWholeCandidate) {
     EXPECT_EQ(observation->chosen.surface, "今日はGitHubにpushした");
     EXPECT_EQ(observation->reading, kMixedKana);
   }
+}
+
+namespace {
+
+void StartPlainLive(DocumentPreeditHarness& h) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+}
+
+void DeliverLiveAnswer(DocumentPreeditHarness& h, std::string reading, std::string surface,
+                       std::vector<azookey::ipc::LiveSegment> segments = {},
+                       bool auto_punctuation = false) {
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      id, std::move(reading), std::move(surface), std::move(segments), auto_punctuation);
+  h.service.apply_live_conversion_result_for_test();
+}
+
+}  // namespace
+
+// DEV-1806: while the answer for a longer reading is on its way, the converted
+// start stays and only the characters after it are written.
+TEST(TsfTipLiveCarryTest, KeepsTheConvertedStartWhileTheNextAnswerIsPending) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_EQ(h.context.document->text, L"蚊k");
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.context.document->text, L"蚊き");
+  EXPECT_EQ(h.context.document->last_write_start, 1);
+  EXPECT_EQ(h.context.document->last_write_text, L"き");
+
+  DeliverLiveAnswer(h, "かき", "柿");
+  EXPECT_EQ(h.context.document->text, L"柿");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"柿");
+}
+
+TEST(TsfTipLiveCarryTest, EnterCommitsTheShownTextWithoutObservingIt) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊き");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipLiveCarryTest, AnswerForAReadingWithPendingRomajiIsNotCarried) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_EQ(h.context.document->text, L"蚊k");
+  const int writes = h.context.document->writes;
+  DeliverLiveAnswer(h, "かk", "蚊k");
+  EXPECT_EQ(h.context.document->text, L"蚊k");
+  EXPECT_EQ(h.context.document->writes, writes);  // The same text is not written again.
+
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"蚊か");
+}
+
+TEST(TsfTipLiveCarryTest, SegmentsKeepTheirConvertedTextAfterBackspace) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  DeliverLiveAnswer(h, "かき", "蚊木", {LiveSeg("蚊", "か", false), LiveSeg("木", "き", false)});
+  ASSERT_EQ(h.context.document->text, L"蚊木");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('O'));
+  EXPECT_EQ(h.context.document->text, L"蚊の");
+}
+
+TEST(TsfTipLiveCarryTest, TrailingAutomaticMarkIsDecidedAgain) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  ASSERT_EQ(h.context.document->text, L"蚊。");
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.context.document->text, L"蚊き");
+}
+
+TEST(TsfTipLiveCarryTest, PunctuatedAnswerWithoutSegmentsIsNotCarried) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊。", {}, true);
+  ASSERT_EQ(h.context.document->text, L"蚊。");
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.context.document->text, L"かき");
+}
+
+TEST(TsfTipLiveCarryTest, CommittedAnswerIsNotCarriedIntoTheNextInput) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_EQ(h.context.document->text, L"蚊かき");
+}
+
+TEST(TsfTipLiveCarryTest, CancelledAnswerIsNotCarriedIntoTheNextInput) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.context.document->text, L"");
+  // The fake document keeps the old caret when the composition is emptied.
+  h.context.document->start = h.context.document->end = 0;
+
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_EQ(h.context.document->text, L"かき");
+}
+
+// DEV-1806: a write that changes only the end of the preedit rewrites only
+// that end, and the composition still covers the whole text.
+TEST(TsfTipLiveCarryTest, PreeditWritesOnlyTheChangedEnd) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.context.document->text = L"前";
+  h.context.document->start = h.context.document->end = 1;
+  for (const WPARAM key : {'K', 'A', 'K'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"前かk");
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.context.document->text, L"前かき");
+  EXPECT_EQ(h.context.document->last_write_start, 2);
+  EXPECT_EQ(h.context.document->last_write_text, L"き");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"前か");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"前か");
+}
+
+// DEV-1806: a host whose composition does not grow with a write through
+// another range gets the whole preedit rewritten, with no copy left outside.
+TEST(TsfTipLiveCarryTest, PartialWriteTheCompositionDoesNotFollowIsRewrittenWhole) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.context.document->text = L"前";
+  h.context.document->start = h.context.document->end = 1;
+  h.context.document->composition_follows_writes = false;
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.context.document->text, L"前かき");
+  ASSERT_EQ(h.context.document->composition_shift_ends, 0);
+
+  ASSERT_TRUE(h.Press('T'));
+  EXPECT_EQ(h.context.document->text, L"前かきt");
+  EXPECT_EQ(h.context.document->composition_shift_ends, 1);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"前かきt");
+}
+
+TEST(TsfTipLiveCarryTest, PunctuationCommitsTheCandidateRatherThanTheCarriedText) {
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  StartPunctuationConversion(h);
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_final_request_timeout_for_test(300);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"蚊な");
+  h.service.mark_pending_ipc_query_sent_for_test();
+
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_cached_candidates_for_test({ModelField("かな", "かな")});
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"かな、");
+}
+
+TEST(TsfTipLiveCarryTest, SwitchingLiveConversionOffStillCommitsTheShownText) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.context.document->text, L"蚊き");
+
+  h.service.set_live_conversion_for_test(false);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊き");
+}
+
+TEST(TsfTipLiveCarryTest, BackspaceToTheCarriedReadingCommitsItsSurfaceWithoutObservingIt) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+// DEV-1806: an earlier answer of the same input still serves a reading that
+// Backspace made shorter than the latest answer's.
+TEST(TsfTipLiveCarryTest, EarlierAnswerServesTheReadingBackspaceRestores) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  DeliverLiveAnswer(h, "かき", "柿");
+  ASSERT_EQ(h.context.document->text, L"柿");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// DEV-1806: with no earlier answer, the latest one keeps its start up to a kana
+// it shares with the reading.
+TEST(TsfTipLiveCarryTest, BackspaceKeepsTheConvertedStartUpToASharedKana) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  for (const WPARAM key : {'H', 'A', 'N', 'A', 'W', 'O', 'M', 'I', 'R', 'U'})
+    ASSERT_TRUE(h.Press(key));
+  DeliverLiveAnswer(h, "はなをみる", "花を見る");
+  ASSERT_EQ(h.context.document->text, L"花を見る");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"花をみ");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"花をみ");
+}
+
+// DEV-1806: the answer for the reading Backspace restores wins over a later
+// answer that can be cut at the same place.
+TEST(TsfTipLiveCarryTest, AnswerForTheRestoredReadingWinsOverALaterCut) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  DeliverLiveAnswer(h, "かき", "蚊木", {LiveSeg("蚊", "か", false), LiveSeg("木", "き", false)});
+  ASSERT_TRUE(h.Press('W'));
+  ASSERT_TRUE(h.Press('O'));
+  DeliverLiveAnswer(h, "かきを", "柿を",
+                    {LiveSeg("柿", "かき", false), LiveSeg("を", "を", false)});
+  ASSERT_EQ(h.context.document->text, L"柿を");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊木");
+}
+
+// DEV-1806: the eight latest answers are kept; an older one is gone.
+TEST(TsfTipLiveCarryTest, KeepsTheEightLatestAnswers) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  std::string reading;
+  std::string surface;
+  for (int i = 0; i < 9; ++i) {
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    reading += "か";
+    surface += "蚊";
+    DeliverLiveAnswer(h, reading, surface);
+  }
+  for (int i = 0; i < 7; ++i) ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊蚊");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"か");
 }

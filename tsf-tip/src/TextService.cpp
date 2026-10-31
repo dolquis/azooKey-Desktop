@@ -2958,6 +2958,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       batch_segment_cursor_ = state.segment_cursor;
       live_display_reading_ = state.live_display_reading;
       live_display_surface_ = state.live_display_surface;
+      live_carries_.clear();
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_ = state.cached_candidates;
@@ -3689,6 +3690,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
+        live_carries_.clear();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
@@ -3726,6 +3728,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
+        live_carries_.clear();
         *eaten = TRUE;
       }
     }
@@ -4644,6 +4647,7 @@ void TextService::ClearTextStateForLifecycle() {
   live_display_surface_.clear();
   live_display_segments_.clear();
   live_display_auto_punctuation_ = false;
+  live_carries_.clear();
   core_input_active_ = true;
   ClearBatchState();
   committing_ = false;
@@ -5055,6 +5059,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
+    live_carries_.clear();
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -5133,6 +5138,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
+    live_carries_.clear();
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -7161,6 +7167,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
+    live_carries_.clear();
     return;
   }
   const std::string left_context = CaptureLeftContext(context, false);
@@ -7896,6 +7903,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
+    live_carries_.clear();
     CancelPendingQueriesForLifecycle();
     preedit_update_needed = true;
   } else if (std::holds_alternative<core::HideCandidateWindow>(action)) {
@@ -8001,6 +8009,9 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
   auto previous_marked = core_marked_surface_;
   auto previous_live_reading = live_display_reading_;
   auto previous_live_surface = live_display_surface_;
+  auto previous_live_segments = live_display_segments_;
+  const bool previous_live_auto_punctuation = live_display_auto_punctuation_;
+  auto previous_carries = live_carries_;
   auto previous_metadata = core_cached_metadata_;
   auto previous_shown = shown_candidates_;
   const int previous_selected = selected_candidate_idx_;
@@ -8013,6 +8024,9 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     core_marked_surface_ = std::move(previous_marked);
     live_display_reading_ = std::move(previous_live_reading);
     live_display_surface_ = std::move(previous_live_surface);
+    live_display_segments_ = std::move(previous_live_segments);
+    live_display_auto_punctuation_ = previous_live_auto_punctuation;
+    live_carries_ = std::move(previous_carries);
     core_cached_metadata_ = std::move(previous_metadata);
     shown_candidates_ = std::move(previous_shown);
     selected_candidate_idx_ = previous_selected;
@@ -8061,6 +8075,16 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     }
     input_state_ = std::move(result.next);
     core_action_in_progress_ = true;
+    // DEV-1806: a new input has no live answer yet. Whatever an earlier input
+    // left behind (a path that ended it without clearing) is not shown for it.
+    if (previous_state.kind() == core::InputStateKind::Idle &&
+        input_state_.kind() != core::InputStateKind::Idle) {
+      live_display_reading_.clear();
+      live_display_surface_.clear();
+      live_display_segments_.clear();
+      live_display_auto_punctuation_ = false;
+      live_carries_.clear();
+    }
     bool preedit_update_needed = false;
     bool commit_pending = false;
     HRESULT hr = S_OK;
@@ -8084,12 +8108,43 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       }
     }
     if (SUCCEEDED(hr) && commit_pending) {
-      if ((previous_state.kind() == core::InputStateKind::Composing ||
-           previous_state.kind() == core::InputStateKind::Previewing) &&
-          live_display_reading_ == core_marked_surface_ && !live_display_surface_.empty() &&
-          previous_marked == live_display_surface_) {
+      const bool was_composing = previous_state.kind() == core::InputStateKind::Composing ||
+                                 previous_state.kind() == core::InputStateKind::Previewing;
+      if (was_composing && live_display_reading_ == core_marked_surface_ &&
+          !live_display_surface_.empty() && previous_marked == live_display_surface_) {
         core_marked_surface_ = live_display_surface_;
         AdoptLiveCommitObservation(context);
+      } else if (was_composing && previous_marked == previous_state.Reading() &&
+                 std::none_of(result.actions.begin(), result.actions.end(), [](const auto& a) {
+                   return std::holds_alternative<core::ObserveCommit>(a);
+                 })) {
+        // DEV-1806: the reading is committed as is (a candidate commit
+        // observes its own surface) while the preedit showed it through
+        // LiveShownSurface; that shown text is what gets committed. A setting
+        // switched off since then has not redrawn the preedit, so the text
+        // last written decides. Only the answer for this very reading is a
+        // conversion the Host returned, so a carried one is not observed.
+        // The shown text comes from the reading as displayed; the flush of
+        // pending romaji replaces only the end the preedit showed as typed.
+        auto shown = LiveShownSurface(previous_marked, /*require_setting=*/false);
+        if (shown &&
+            (local_settings_.LiveConversionSnapshot() || *shown == composition_range_surface_)) {
+          const bool answered =
+              live_display_reading_ == previous_marked && core_marked_surface_ == previous_marked;
+          size_t same = 0;
+          while (same < previous_marked.size() && same < core_marked_surface_.size() &&
+                 previous_marked[same] == core_marked_surface_[same])
+            ++same;
+          while (same > 0 && (static_cast<unsigned char>(previous_marked[same]) & 0xC0) == 0x80)
+            --same;
+          const std::string_view typed_end = std::string_view(previous_marked).substr(same);
+          if (shown->ends_with(typed_end)) {
+            shown->resize(shown->size() - typed_end.size());
+            *shown += core_marked_surface_.substr(same);
+          }
+          core_marked_surface_ = *std::move(shown);
+          if (answered) AdoptLiveCommitObservation(context);
+        }
       }
       // A queued or in-flight query must be cancelled even when no worker has
       // started yet (the existing M10 commit contract). The text is final, so
@@ -8140,6 +8195,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
+        live_carries_.clear();
         shown_candidates_.clear();
         selected_candidate_idx_ = 0;
         preedit_kana_.clear();
@@ -8260,8 +8316,18 @@ std::vector<DisplayedSegment> TextService::DisplayedBatchSegments() const {
 
 std::string TextService::CurrentDisplayedPreeditSurface() const {
   if (core_input_active_ && (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
-                             !core_marked_surface_.empty() || core_action_in_progress_))
+                             !core_marked_surface_.empty() || core_action_in_progress_)) {
+    // DEV-1806: the marked text is still the reading, so the live answer for
+    // it has not arrived. input_state_ is current here even when this runs
+    // inside the key's own edit session, before preedit_kana_ follows it.
+    if (!committing_ && !candidate_ui_.IsShowing() &&
+        (input_state_.kind() == core::InputStateKind::Composing ||
+         input_state_.kind() == core::InputStateKind::Previewing) &&
+        core_marked_surface_ == input_state_.Reading()) {
+      if (auto shown = LiveShownSurface(core_marked_surface_)) return *std::move(shown);
+    }
     return core_marked_surface_;
+  }
   if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
   if (ShowsBatchSegments()) {
     std::string surface;
@@ -8277,6 +8343,34 @@ std::string TextService::CurrentDisplayedPreeditSurface() const {
       live_display_reading_ == CurrentPreeditSurface() && !live_display_surface_.empty())
     return live_display_surface_;
   return CurrentPreeditSurface();
+}
+
+// DEV-1806 (docs/legacy-parity-spec.md section 2.3.1): the live conversion text
+// a preedit showing `reading` displays, or nothing when it shows the reading.
+// The answer for this very reading comes first, shown or carried. Otherwise
+// the carried answer that keeps the longest converted start of `reading` (the
+// latest on a tie) gives it, and the rest of the reading follows as typed, so
+// the next answer only redraws the characters it changes.
+std::optional<std::string> TextService::LiveShownSurface(const std::string& reading,
+                                                         bool require_setting) const {
+  if (reading.empty() || (require_setting && !local_settings_.LiveConversionSnapshot()) ||
+      secure_input_.load(std::memory_order_relaxed))
+    return std::nullopt;
+  if (live_display_reading_ == reading && !live_display_surface_.empty())
+    return live_display_surface_;
+  CarriedLiveText best;
+  bool best_exact = false;
+  for (const auto& carry : live_carries_) {
+    auto carried = CarryLiveText(carry.pieces, reading);
+    const bool exact = carry.reading == reading;
+    if (carried.reading_bytes == 0 || carried.reading_bytes < best.reading_bytes ||
+        (carried.reading_bytes == best.reading_bytes && best_exact && !exact))
+      continue;
+    best = std::move(carried);
+    best_exact = exact;
+  }
+  if (best.reading_bytes == 0) return std::nullopt;
+  return best.surface + reading.substr(best.reading_bytes);
 }
 
 void TextService::OnCandidatesReady(void* context) {
@@ -8914,11 +9008,27 @@ std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
   const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
                             ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
+  // DEV-1806: a reading that ends in pending romaji is no start of the next
+  // one ("かk" before "かき"), so only a reading without it is carried. The
+  // new list is built before any state changes, so a failed allocation leaves
+  // everything as it was.
+  auto carries = live_carries_;
+  if (!romaji_.HasPending()) {
+    auto pieces = BuildLivePieces(result->reading, result->surface, result->segments,
+                                  result->auto_punctuation);
+    std::erase_if(carries,
+                  [&](const LiveCarry& carry) { return carry.reading == result->reading; });
+    if (!pieces.empty()) {
+      carries.push_back({result->reading, std::move(pieces)});
+      if (carries.size() > kMaxLiveCarries) carries.erase(carries.begin());
+    }
+  }
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
   auto previous_segments = std::move(live_display_segments_);
   const bool previous_auto_punctuation = live_display_auto_punctuation_;
+  auto previous_carries = std::exchange(live_carries_, std::move(carries));
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
   live_display_segments_ = std::move(result->segments);
@@ -8931,6 +9041,7 @@ std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
     live_display_surface_ = previous_surface;
     live_display_segments_ = std::move(previous_segments);
     live_display_auto_punctuation_ = previous_auto_punctuation;
+    live_carries_ = std::move(previous_carries);
     return consumed;
   }
   if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {
@@ -9725,6 +9836,90 @@ void TextService::TrimIpcSendQueueLocked() {
 
 // --- EditSession ---
 
+namespace {
+
+// The text of `range` when it holds exactly `expected_length` characters.
+std::optional<std::wstring> ReadRangeText(TfEditCookie ec, ITfRange* range,
+                                          size_t expected_length) {
+  std::wstring text(expected_length + 1, L'\0');
+  ULONG length = 0;
+  if (FAILED(range->GetText(ec, 0, text.data(), static_cast<ULONG>(text.size()), &length)) ||
+      length != expected_length)
+    return std::nullopt;
+  text.resize(length);
+  return text;
+}
+
+// DEV-1806 (docs/tsf-deep-integration-spec.md section 5.6): writes `text` over
+// the composition, from the first character that differs from `previous`, the
+// text last written there. Text the user already sees is not rewritten, and
+// equal text is not written at all. The rewritten span is never empty and
+// always reaches the composition end: an insertion at an anchor follows the
+// anchor's gravity, while replacing text keeps it inside the composition as a
+// full rewrite does. The composition is read before and after, and anything
+// unexpected rewrites it whole. *range receives the composition range.
+HRESULT WriteCompositionText(TfEditCookie ec, ITfComposition* composition, const std::wstring& text,
+                             const std::wstring& previous, ITfRange** range) {
+  *range = nullptr;
+  ITfRange* whole = nullptr;
+  if (FAILED(composition->GetRange(&whole)) || !whole) return E_FAIL;
+  HRESULT hr = S_OK;
+  size_t keep = 0;
+  if (!previous.empty() && ReadRangeText(ec, whole, previous.size()) == previous) {
+    if (previous == text) {
+      *range = whole;
+      return S_OK;
+    }
+    const size_t limit = std::min(previous.size(), text.size());
+    while (keep < limit && previous[keep] == text[keep]) ++keep;
+    if (keep == previous.size()) --keep;
+    if (keep > 0 && IS_HIGH_SURROGATE(text[keep - 1])) --keep;
+  }
+  if (keep > 0) {
+    ITfRange* tail = nullptr;
+    LONG shifted = 0;
+    HRESULT tail_hr = whole->Clone(&tail);
+    if (SUCCEEDED(tail_hr) && !tail) tail_hr = E_UNEXPECTED;
+    if (SUCCEEDED(tail_hr))
+      tail_hr = tail->ShiftStart(ec, static_cast<LONG>(keep), &shifted, nullptr);
+    if (SUCCEEDED(tail_hr) && shifted != static_cast<LONG>(keep)) tail_hr = E_FAIL;
+    if (SUCCEEDED(tail_hr))
+      tail_hr = tail->SetText(ec, 0, text.c_str() + keep, static_cast<LONG>(text.size() - keep));
+    if (SUCCEEDED(tail_hr)) {
+      // Take the composition's own range again rather than relying on how
+      // the anchors of the copy taken before the write moved.
+      whole->Release();
+      whole = nullptr;
+      hr = composition->GetRange(&whole);
+      if (SUCCEEDED(hr) && whole && ReadRangeText(ec, whole, text.size()) == text) {
+        tail->Release();
+        *range = whole;
+        return S_OK;
+      }
+      // The composition did not follow the write. Stretch it over the written
+      // tail (or else empty that tail), so the full rewrite below replaces
+      // the text instead of leaving a copy outside the composition.
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preedit_partial_write_mismatch");
+      if (whole) whole->Release();
+      whole = nullptr;
+      if (FAILED(composition->ShiftEnd(ec, tail))) (void)tail->SetText(ec, 0, L"", 0);
+      tail->Release();
+      if (FAILED(composition->GetRange(&whole)) || !whole) return E_FAIL;
+    } else if (tail) {
+      tail->Release();
+    }
+  }
+  hr = whole->SetText(ec, 0, text.c_str(), static_cast<LONG>(text.size()));
+  if (FAILED(hr)) {
+    whole->Release();
+    return hr;
+  }
+  *range = whole;
+  return S_OK;
+}
+
+}  // namespace
+
 EditSession::EditSession(TextService* service, ITfContext* context)
     : service_(service), context_(context) {
   if (context_) context_->AddRef();
@@ -9968,14 +10163,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 
     // Update composition text.
     ITfRange* pRange = nullptr;
-    if (FAILED(service_->composition_->GetRange(&pRange)) || !pRange) return E_FAIL;
-
     const HRESULT set_text_hr =
-        pRange->SetText(ec, 0, kana.c_str(), static_cast<LONG>(kana.size()));
-    if (FAILED(set_text_hr)) {
-      pRange->Release();
-      return set_text_hr;
-    }
+        WriteCompositionText(ec, service_->composition_, kana,
+                             Utf8ToWide(service_->composition_range_surface_), &pRange);
+    if (FAILED(set_text_hr)) return set_text_hr;
     ITfRange* saved_range = nullptr;
     if (FAILED(pRange->Clone(&saved_range)) || !saved_range) {
       if (saved_range) saved_range->Release();
@@ -10032,7 +10223,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       }
       pProp->Release();
     }
-    // Re-advise on every update: SetText replaces the whole composition, and a
+    // Re-advise on every update: the text of the composition changes, and a
     // tracked range is not guaranteed to grow with text inserted at its end
     // (it depends on the range's gravity), so a sink advised once at
     // StartComposition could miss clicks on later characters.

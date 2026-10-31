@@ -69,7 +69,7 @@ surface へ自動句読点を含めて表示する。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Composing/Previewing | Input | Previewing | ライブ変換要求（`QueryLiveConversion`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
+| Composing/Previewing | Input | Previewing | ライブ変換要求（`QueryLiveConversion`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface を Preedit にする（書き込みは `docs/tsf-deep-integration-spec.md` §5.6、応答までの表示は `docs/legacy-parity-spec.md` §2.3.1） |
 | Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求（Backspace も編集イベント。`auto_punctuation` は §7.1.1 の timing 規則に従い `onPause` 編集中は `false`、idle タイマー再アーム） |
 | Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
 | Previewing | Commit (Enter) | Idle | **`onPause` で句読点未反映なら最終 `auto_punctuation=true` 要求を発行・待機**してから確定（§7.3。in-flight 打鍵要求は Cancel、タイムアウト時は現 surface 確定）。`CommitSegmentsObservation` は自動句読点を分離して観測（§5・§7） |

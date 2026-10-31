@@ -158,7 +158,7 @@ TSF 操作に対応付ける。
 | ClientAction | TSF 操作 |
 |---|---|
 | `appendToMarkedText(s)` | `ITfRange::SetText(s)` + `kInputAttributeGuid` Property |
-| `replaceMarkedText(s)` | composition range 全体に `SetText(s)` |
+| `replaceMarkedText(s)` | composition を `s` にする（前回と異なる末尾だけ `SetText`。`docs/tsf-deep-integration-spec.md` §5.6） |
 | `commitMarkedText()` | `ITfComposition::EndComposition` |
 | `cancelMarkedText()` | composition range を空文字に SetText → EndComposition |
 | `showCandidateWindow(list)` | `CandidateWindow::Show(list, anchor)` |
@@ -654,16 +654,55 @@ QueryLiveConversionResponse(req_id=N, surface, confidence)
    ↓
 [TIP] req_id staleness check
    ↓
-EditSession: Preedit 全体を surface で差し替え
+EditSession: Preedit を surface にする（前回の表示と異なる末尾だけ書き換える。
+             docs/tsf-deep-integration-spec.md §5.6）
    ↓
 DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
                   → Phase 5 末尾で 4 段階に拡張 (rich-features-spec X-1)
 ```
 
+#### 2.3.1 応答待ちの表示（DEV-1806）
+
+打鍵で読みが変わってから、その読みへの応答が届くまでの preedit は、読みをそのまま見せずに
+同じ入力の間に表示した応答を引き継いで表示する。応答は別プロセスへの非同期 IPC で返るため、読み全体を見せると
+打鍵ごとに「変換済みの表記 → ひらがな → 新しい表記」と表示が往復する。
+
+- 引き継ぐのは、同じ入力の間に表示した応答のうち、未確定ローマ字を含まない読みへのものである。
+  読みごとに最新の 1 件を、新しいものから 8 件まで持つ。`かk` への応答は `かき` の先頭にならないので
+  引き継がない。
+- 各応答は区切り（piece）に分けておく。`segments[]` の各文節（持たないときは表層全体を 1 文節とする）を、
+  読みと共通するかな（ひらがな、ひらがなとして比べるカタカナ、長音符）とその間の他の文字の並びに分け、
+  他の文字の並びにはそれぞれ 1 文字以上の読みを当てる。この当て方が 1 通りに決まるときだけ分け、
+  決まらない文節や 64 文字を超える文節は分けない。`ヵ` と `ヶ` は読みが一つに決まらないので、かなとして
+  扱わない。
+- 表示は、引き継いだ応答のうち、現在の読みの先頭と一致する区切りを最も長く残せるもの（同じ長さなら
+  新しいもの）を使う。残すのは、かなで終わる区切りか文節の末尾までとし、残りの読みはかなのまま続ける。
+  漢字の並びの直後で切ると、送り仮名を落とした語（`書く` から `書`）になるので切らない。
+  - 例: `か` → `蚊` の後に `き` を打つと、`かき` への応答が届くまで `蚊き` と表示する。
+  - 例: `はなをみる` → `花を見る` から Backspace で `る` を消すと、応答が届くまで `花をみ` と表示する。
+  - 例: `か` → `蚊`、`かき` → `柿` の後に Backspace で `き` を消すと、`蚊` と表示する。
+- 残せる区切りがなければ読みをそのまま表示する。
+- 残した部分の末尾に来る自動句読点（`docs/dynamic-punctuation-spec.md` §5.1）は外し、間にあるものは残す。
+  末尾の句読点は次の応答が決め直す。句読点の挿入を求めた要求への応答で、読みと表層に一致する
+  `segments[]` を持たないものは、末尾が自動句読点か区別できないので引き継がない。
+- 現在の読みそのものへの応答（Backspace で読みが戻った場合を含む）は、ほかの応答より優先してその表層を
+  表示する（引き継いだ応答では末尾の自動句読点を外す）。
+- 未確定ローマ字は、表示ではそのままの文字で、Enter の確定では確定時の変換（`CommitAsIs` の flush）で
+  並べる。表示で入力どおりに見せていた末尾だけを置き換え、変換済みとして見せていた部分は変えない。
+- この表示中の Enter（`CommitAsIs`）とフォーカス喪失時の確定（`docs/tsf-deep-integration-spec.md`
+  §4.3）は、表示している文字列を確定する。学習観測を送るのは、確定した文字列が現在の読みへの応答の
+  表層であるときだけとする。引き継いだ応答から組み立てた表示は Host が返した変換ではないので、
+  Backspace で読みが引き継いだ応答の読みに戻った場合も観測しない。表示中にライブ変換を OFF にしても、
+  preedit を描き直すまでは表示している文字列を確定する。
+- 句読点キーで第 1 候補と句読点を確定する経路（`docs/tsf-deep-integration-spec.md` §3.5.1）は、
+  候補の表記を確定し、この表示を使わない。
+- 引き継ぎは確定・Esc・secure 入力・フォーカスの移動で破棄し、次の入力へ持ち越さない。
+  候補窓から Backspace で読みに戻ったときは同じ入力が続くので残す。ライブ変換 OFF では使わない。
+
 ### 2.4 キャンセル経路
 
 - Esc: `ITfComposition::EndComposition` で composition 消去 + InputState=Idle
-- Backspace: kana を 1 文字戻し、再度 `PostQueryLiveConversion`
+- Backspace: kana を 1 文字戻し、再度 `PostQueryLiveConversion`。応答までの表示は §2.3.1
 - Secure 入力: M14 の Payload には secure フラグがないため、TIP は Host へ
   `QueryLiveConversion` を送らず、ローカルの kana を Preedit に保つ。
 - 別のアプリへフォーカス移動: `OnEndEdit` で commit (現状の挙動を維持)

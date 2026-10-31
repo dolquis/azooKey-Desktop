@@ -315,6 +315,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // The settings.json the input indicator menu writes; ActivateEx sets the real one.
   void set_settings_path_for_test(std::filesystem::path path) { settings_path_ = std::move(path); }
   unsigned host_config_reloads_for_test() const { return host_config_reloads_; }
+  unsigned typo_tracked_keys_for_test() const { return typo_tracked_keys_; }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }
@@ -852,6 +853,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::filesystem::path settings_path_;
 #ifdef AZOOKEY_TSF_TESTING
   unsigned host_config_reloads_{0};
+  // Keys tracked for typo learning, so a test can see a replay is not tracked twice.
+  unsigned typo_tracked_keys_{0};
 #endif
   // Set while an off key commits the shown text through the Enter path.
   bool commit_before_close_{false};

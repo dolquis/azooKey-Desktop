@@ -4690,6 +4690,9 @@ bool TextService::CanSendQueuedItem(const IpcSendItem& item) const {
 }
 
 void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
+#ifdef AZOOKEY_TSF_TESTING
+  ++typo_tracked_keys_;
+#endif
   if (committing_) return;  // A retry key is consumed before the next input.
   if ((active_context_ && !SameComIdentity(context, active_context_)) || !keyboard_open_ ||
       alnum_mode_ || IsContextKeyboardDisabled(context)) {

@@ -14124,3 +14124,73 @@ TEST(TsfTipWindowWaitTest, RefusedCommitDuringTheReplayMovesTheKeysToTheRetry) {
   // retry key comes last.
   EXPECT_EQ(h.context.document->text, L"蚊か" + std::wstring(14, L'あ') + L"い");
 }
+
+// With live conversion the shown text is the live surface: an off key while
+// the window waits commits that, not the reading.
+TEST(TsfTipWindowWaitTest, OffKeyWhileWaitingCommitsTheShownLiveSurface) {
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ShowLiveKa(h);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  EXPECT_TRUE(h.Press(VK_IME_OFF));
+  EXPECT_FALSE(h.service.keyboard_open());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+// dynamic-punctuation-spec §7.3: a character of the custom romaji table waits
+// with the held Enter like a letter, and starts the next input after the commit.
+TEST(TsfTipDynamicPunctuationTest, CustomTableCharacterWaitsWithTheHeldEnter) {
+  DocumentPreeditHarness h;
+  CustomRomajiTranslationGuard custom_translation;
+  StartLive(h, DynamicPunctuation());
+  h.service.set_romaji_table_for_test(
+      azookey::core::CustomRomajiLoader::Parse("ka\tか\n12\t十二\n").table);
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_TRUE(ProbeTypoKey(h, '1'));
+  ASSERT_TRUE(h.Press('1'));
+  EXPECT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(h.context.document->text, L"蚊十二");
+  EXPECT_EQ(h.service.preedit_kana_, "十二");
+}
+
+// A window wait that ends without candidates replays Enter against the live
+// reading, which holds it for the final request (§7.3); the character replayed
+// after it waits again and is tracked for typo learning only once, at its press.
+TEST(TsfTipWindowWaitTest, KeyReplayedIntoTheHeldEnterIsTrackedOnce) {
+  DocumentPreeditHarness h;
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+  for (const WPARAM key : {WPARAM{VK_RETURN}, WPARAM{'A'}}) {
+    ASSERT_TRUE(ProbeTypoKey(h, key));
+    ASSERT_TRUE(h.Press(key));
+  }
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 2u);
+  const unsigned tracked = h.service.typo_tracked_keys_for_test();
+
+  h.service.answer_window_query_empty_for_test();
+  h.service.process_candidates_ready_for_test();
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊あ");
+  EXPECT_EQ(h.service.typo_tracked_keys_for_test(), tracked);
+}

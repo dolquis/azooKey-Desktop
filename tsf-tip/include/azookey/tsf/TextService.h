@@ -315,6 +315,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // The settings.json the input indicator menu writes; ActivateEx sets the real one.
   void set_settings_path_for_test(std::filesystem::path path) { settings_path_ = std::move(path); }
   unsigned host_config_reloads_for_test() const { return host_config_reloads_; }
+  unsigned typo_tracked_keys_for_test() const { return typo_tracked_keys_; }
   void set_max_context_length_for_test(uint32_t length) {
     local_settings_.SetMaxContextLengthForTest(length);
   }
@@ -436,6 +437,13 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_pending_alt_readings_;
   }
   bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
+  size_t window_waiting_key_count_for_test() const { return window_waiting_keys_.size(); }
+  // What the IPC worker does with an empty answer to the window query.
+  void answer_window_query_empty_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
   void set_number_rewriter_enabled_for_test(bool enabled) {
@@ -845,6 +853,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::filesystem::path settings_path_;
 #ifdef AZOOKEY_TSF_TESTING
   unsigned host_config_reloads_{0};
+  // Keys tracked for typo learning, so a test can see a replay is not tracked twice.
+  unsigned typo_tracked_keys_{0};
 #endif
   // Set while an off key commits the shown text through the Enter path.
   bool commit_before_close_{false};
@@ -858,9 +868,16 @@ class TextService final : public ITfTextInputProcessorEx,
     WPARAM key;
     LPARAM key_data;
     std::array<BYTE, 256> key_state;
+    // False for a key held before typo and undo tracking (the held Enter of
+    // dynamic-punctuation-spec §7.3), which its replay then tracks.
+    bool tracked{true};
   };
   static constexpr size_t kMaxRetryWaitingKeys = 16;
   std::vector<RetryWaitingKey> retry_waiting_keys_;
+  // Keys typed while the candidate window waits for its answer after Space,
+  // replayed into it once the wait ends (DEV-1813). They count toward the same
+  // 16 as retry_waiting_keys_.
+  std::vector<RetryWaitingKey> window_waiting_keys_;
   // One log record per wait for a key it could not keep.
   bool retry_waiting_drop_logged_{false};
   std::optional<CharacterFormCycleState> character_form_cycle_state_;
@@ -1495,6 +1512,18 @@ class TextService final : public ITfTextInputProcessorEx,
                                               const std::string& shown_surface);
   std::string LifecycleShownSurface() const;
   void HoldRetryWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data);
+  // DEV-1813 (legacy-parity-spec §1.2): what a key does while the candidate
+  // window waits for its answer after Space.
+  enum class WindowWaitKey { Hold, Drop, Pass };
+  bool AwaitingCandidateWindow();
+  HRESULT OpenLocalCandidateWindow(ITfContext* context);
+  WindowWaitKey ClassifyWindowWaitKey(WPARAM key, LPARAM key_data, uint32_t modifiers,
+                                      OpenCloseKeyAction open_close);
+  void HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data, bool tracked = true);
+  // DEV-1794: a character key that waits with the held Enter (section 7.3).
+  bool HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, LPARAM key_data);
+  HRESULT ReplayWindowWaitingKeys(ITfContext* context);
+  void ReplayWindowWaitingKeysIfReady();
   HRESULT ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key, LPARAM retry_key_data);
   HRESULT AdviseKeyboardOpenCompartment();
   HRESULT UnadviseKeyboardOpenCompartment();

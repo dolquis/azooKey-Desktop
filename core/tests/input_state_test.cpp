@@ -484,6 +484,44 @@ TEST(InputStateTest, EmptyResponseAfterCacheMissStopsWaiting) {
   EXPECT_TRUE(arrived.actions.empty());
 }
 
+// DEV-1813 (legacy-parity-spec §1.2): the TIP holds the keys typed while the
+// window is awaited and replays them once the candidates arrive, so core sees
+// them in Selecting and the result is the synchronous legacy one.
+TEST(InputStateTest, KeysReplayedAfterTheAnswerActInSelecting) {
+  const InputState waiting = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
+  ASSERT_TRUE(waiting.awaiting_candidates());
+  const InputState opened = waiting.HandleCandidatesArrived(KanaCandidates()).next;
+  ASSERT_EQ(opened.kind(), K::Selecting);
+
+  // Space, Space, Enter: the second Space is NextCandidate in Selecting.
+  const auto space = MapUserAction(vk::kSpace, 0, opened.kind());
+  ASSERT_TRUE(space.has_value());
+  const InputState second = opened.HandleEvent(*space).next;
+  const HandleResult enter = second.HandleEvent(Ev(UserAction::Commit));
+  EXPECT_EQ(enter.next.kind(), K::Idle);
+  EXPECT_EQ(enter.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かな"},
+                                    CommitMarkedText{}, ObserveCommit{"かな", "かな"}}));
+
+  // Space, 3: the digit selects in Selecting.
+  const auto digit = MapUserAction(vk::k0 + 3, 0, opened.kind());
+  ASSERT_TRUE(digit.has_value());
+  const HandleResult selected = opened.HandleEvent(*digit);
+  EXPECT_EQ(selected.next.kind(), K::Idle);
+  EXPECT_EQ(selected.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"カナ"},
+                                       CommitMarkedText{}, ObserveCommit{"かな", "カナ"}}));
+}
+
+// With no candidate the window never opens: the replayed Enter commits the
+// reading as typed.
+TEST(InputStateTest, EnterReplayedAfterAnEmptyAnswerCommitsTheReading) {
+  const InputState waiting = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
+  const InputState stopped = waiting.HandleCandidatesArrived({}).next;
+  ASSERT_EQ(stopped.kind(), K::Composing);
+  const HandleResult committed = stopped.HandleEvent(Ev(UserAction::Commit));
+  EXPECT_EQ(committed.next.kind(), K::Idle);
+  EXPECT_EQ(committed.actions, (Actions{ReplaceMarkedText{"かな"}, CommitMarkedText{}}));
+}
+
 TEST(InputStateTest, CandidatesArrivingWithoutRequestOnlyFillCache) {
   const HandleResult arrived = Composing().HandleCandidatesArrived(KanaCandidates());
   EXPECT_EQ(arrived.next.kind(), K::Composing);

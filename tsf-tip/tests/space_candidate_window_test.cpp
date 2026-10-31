@@ -389,6 +389,55 @@ TEST(TsfTipSpaceCandidateWindowTest, EarlierReadyNotificationsDoNotEndTheWait) {
   host.server.Stop();
 }
 
+// DEV-1813: a second Space while the answer is outstanding waits for the
+// window and moves to the second candidate; the query is not sent again.
+TEST(TsfTipSpaceCandidateWindowTest, SecondSpaceDuringTheWaitSelectsTheSecondCandidate) {
+  const auto pipe_name = PipeName("second-space");
+  FakeHost host;
+  ASSERT_TRUE(host.Start(pipe_name));
+  host.HoldWindow();
+  {
+    SpaceWindowHarness h(pipe_name, {});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() == 1; }));
+    ASSERT_TRUE(h.service.input_state_for_test().awaiting_candidates());
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    host.ReleaseWindow();
+    EXPECT_EQ(h.WaitForWindow(kWindow.size()), kWindow);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+    EXPECT_EQ(host.window_queries.load(), 1);
+  }
+  host.ReleaseWindow();
+  host.server.Stop();
+}
+
+// DEV-1813: past the TIP deadline the window opens from the per-key and local
+// candidates, and the keys that waited run in it.
+TEST(TsfTipSpaceCandidateWindowTest, KeysWaitingPastTheDeadlineRunInTheLateWindow) {
+  const auto pipe_name = PipeName("late-replay");
+  FakeHost host(std::chrono::milliseconds(4000));
+  ASSERT_TRUE(host.Start(pipe_name));
+  {
+    SpaceWindowHarness h(pipe_name, {.query_deadline_ms = 1000});
+    h.TypeNihongo();
+    ASSERT_TRUE(WaitUntil([&] { return CachedWholeReading(h.service); }));
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    const auto window = h.WaitForAnyWindow();
+    ASSERT_GT(window.size(), 1u);
+    EXPECT_EQ(window.front(), "日本語");
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+    EXPECT_EQ(host.window_queries.load(), 1);
+  }
+  host.server.Stop();
+}
+
 // A window query past the TIP deadline puts the per-key live answer for the
 // same reading ahead of the TIP-local kana candidates.
 TEST(TsfTipSpaceCandidateWindowTest, LateWindowQueryPutsThePerKeyCandidatesFirst) {

@@ -137,9 +137,13 @@ enum class InputStateKind {
 > Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（Tab、`Selecting` で割り当ての
 > 無い ←→、Home など）は保留せず、その場でアプリへ渡す（保留中のキーはそのまま残す）。
 > Esc と、IME を Off にするキー（`VK_IME_OFF`、半角/全角、`imeOnOff` の無変換）と英数モードへの切替（英数キー、
-> 入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
+> 入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。IME を On にするキー（`VK_IME_ON`、
+> `imeOnOff` の変換）は保留せず、保留中のキーも捨てない（Tab などと同じくその場で処理する）。応答を待つ間に
+> Host を失ったときは、Esc とオフのキー以外の次のキーが来た時点でローカル候補の窓を開き、保留中のキーを
+> 再生してからそのキーを処理する。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
 > Space→Space→Enter は第 2 候補を確定し、Space→`2` は 2 番目の候補を確定し、Space→文字は選択中の
-> 候補を確定して次の入力を始める。2 回目以降の Space で候補窓用の要求を出し直さない。
+> 候補を確定して次の入力を始める。待つ間の 2 回目以降の Space で候補窓用の要求を出し直さない（候補が 0 件で
+> 窓が開かずに待ちが終わった後に再生した Space は、`Composing` の Space として要求を出し直す）。
 > 保留は `docs/tsf-deep-integration-spec.md` §2.4.1 の確定の再試行を待つキーと同じキューを共有し、
 > 打鍵時の Shift 状態を保って、両方の待ちを合わせて最大 16 個とする（17 個目以降は捨てる）。保留の上限は
 > 750ms の deadline で、新しいタイマーは作らない。候補が 0 件で窓が開かずに待ちが終わったときは、
@@ -148,8 +152,8 @@ enum class InputStateKind {
 > §4.2・§4.3）。フォーカス喪失、composition の終了、Deactivate も保留中のキーを捨てる。TIP の前処理を通る Space の経路
 > （英単語候補、記号・絵文字の rewriter）も同じ規則に従う。一括変換の応答待ちは
 > `docs/romaji-batch-conversion-spec.md` §3 に従い、この保留を当てる場合は同 spec に書く。
-> `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来たキーも同じ保留に載せる案があり、
-> DEV-1794 の調査で決める。
+> `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来た文字キーも同じ保留に積み、確定の後に
+> 再生する（DEV-1794）。
 
 > **ライブ変換の既定は OFF（意図した legacy との差）**: legacy の `LiveConversion` は既定 true だが、
 > Windows 版の `liveConversion` は既定 false とする。Windows 版の利用者の多くはライブ変換の無い

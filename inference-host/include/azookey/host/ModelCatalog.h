@@ -11,6 +11,10 @@
 
 namespace azookey::host {
 
+// Upper limit of a v2 artifact's sizeBytes, so a catalog can never ask for an unbounded
+// download. Leaves room for models well beyond the shipped ones (tens of MB).
+inline constexpr uint64_t kMaxModelCatalogBytes = uint64_t{4} << 30;  // 4 GiB
+
 // v2 artifacts["llama.cpp"].source: the upstream Hugging Face location of the GGUF.
 struct ModelCatalogSource {
   std::string hugging_face_repo;
@@ -73,6 +77,14 @@ std::string_view DefaultModelCatalogJson();
 // https://huggingface.co/<repo>/resolve/<revision>/<fileName>, with the file name
 // percent-encoded. nullopt when the entry has no source.
 std::optional<std::string> ModelCatalogDownloadUrl(const ModelCatalogEntry& entry);
+// docs/copilot-pc-backend-spec.md section 4.4: the entry whose GGUF model.selectedPath names,
+// when the file is directly in zenzai_dir and both its name (without case) and its SHA-256
+// match. The caller computes selected_sha256 (the spec keeps it across loads); nullptr when
+// nothing matches.
+const ModelCatalogEntry* MatchSelectedPathToCatalog(const ModelCatalog& catalog,
+                                                    const std::filesystem::path& zenzai_dir,
+                                                    const std::filesystem::path& selected_path,
+                                                    std::string_view selected_sha256);
 std::filesystem::path DefaultZenzaiModelDirectory(const std::filesystem::path& models_dir);
 ModelCatalogResolveResult ResolveModelCatalogModel(const ModelCatalog& catalog,
                                                    const std::filesystem::path& zenzai_model_dir,

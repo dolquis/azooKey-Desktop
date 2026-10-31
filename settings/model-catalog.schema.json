@@ -61,8 +61,8 @@
     },
     "modelFileName": {
       "type": "string",
-      "pattern": "^(?!\\.\\.?$)[^\\u0000-\\u001F\\u007F\\\\/:]+\\.[Gg][Gg][Uu][Ff]$",
-      "description": "A GGUF file name only. Absolute paths, subdirectories, drive prefixes, control characters, and traversal segments are not allowed."
+      "pattern": "^(?!\\.\\.?$)(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Nn][Ii][Nn]\\$|[Cc][Oo][Nn][Oo][Uu][Tt]\\$|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9]) *(?:\\.|$))[\\u0020-\\u002E\\u0030-\\u0039\\u003B-\\u005B\\u005D-\\u007E]+\\.[Gg][Gg][Uu][Ff]$",
+      "description": "A GGUF file name only, in printable ASCII. Absolute paths, subdirectories, drive prefixes, control and non-ASCII characters, traversal segments, and Windows reserved device names (CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM0-9, LPT0-9, with any extension and in any case) are not allowed."
     },
     "displayName": {
       "type": "string",
@@ -145,8 +145,8 @@
         "sizeBytes": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991,
-          "description": "Exact size in bytes. The download limit; a fetched file must also match sha256."
+          "maximum": 4294967296,
+          "description": "Exact size in bytes, at most 4 GiB (the product's fixed limit). The download limit; a fetched file must also match sha256."
         },
         "source": {
           "$ref": "#/$defs/huggingFaceSource"

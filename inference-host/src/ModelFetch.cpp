@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -31,7 +32,7 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
                                    std::function<bool()> network_allowed) {
   ModelFetchResult result;
   const auto url = ModelCatalogDownloadUrl(entry);
-  if (!url || entry.size_bytes == 0) {
+  if (!url || entry.size_bytes == 0 || entry.size_bytes > kMaxModelCatalogBytes) {
     result.status = ModelFetchStatus::NotFetchable;
     return result;
   }
@@ -48,6 +49,23 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
   request.destination = zenzai_dir / entry.file_name;
   request.expected_sha256 = entry.sha256;
   request.max_bytes = entry.size_bytes;
+
+  // A file of the same name with another SHA-256 is the user's (a manual placement or another
+  // version); the fetch never replaces it. The probe forbids the network, so the downloader
+  // either reuses a matching file or fails before connecting and leaves the file alone.
+  std::optional<HttpDownloadResult> existing;
+  // MSVC reports a missing file through ec as well, so only not_found means "absent"; a
+  // status that cannot be read (none) is treated as occupied.
+  if (std::filesystem::symlink_status(request.destination, ec).type() !=
+      std::filesystem::file_type::not_found) {
+    HttpDownloadRequest probe = request;
+    probe.network_allowed = [] { return false; };
+    existing = downloader.Download(probe);
+    if (!existing->ok()) {
+      result.error = "destination_occupied";
+      return result;
+    }
+  }
   // Records a refusal when it happens, so a later return to normal mode does not turn an
   // offline cancellation into a download failure.
   const auto refused = std::make_shared<std::atomic<bool>>(false);
@@ -59,7 +77,8 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
     };
   }
 
-  const auto downloaded = downloader.Download(request);
+  // A matching file found by the probe is already verified; it is not hashed again.
+  const auto downloaded = existing ? *existing : downloader.Download(request);
   result.bytes_received = downloaded.bytes_received;
   if (!downloaded.ok()) {
     if (*refused) {

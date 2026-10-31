@@ -33,7 +33,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp`。モデルロード境界は M8 で扱う |
 | `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel（M1〜M10 の範囲） |
 | `bench/`            | パフォーマンス計測                                       | `azookey_bench` / `azookey_zenzai_bench` / `azookey_nll_bench` と変換品質評価 |
-| `settings/`         | 設定の JSON Schema と既定値サンプル                      | `mvp-settings.schema.json` / `model-catalog.schema.json`（TIP・Host・設定アプリの共通正典） |
+| `settings/`         | 設定の JSON Schema と既定値サンプル                      | `mvp-settings.schema.json` / `model-catalog.schema.json`（TIP・Host・設定アプリの共通正典）/ `default-model-catalog.json`（Host にビルド時に埋め込む既定の model catalog） |
 | `settings-app/`     | WinUI 3 設定アプリ（MSBuild ビルド）                     | `SettingsDocument` / `SettingsIpcClient` / `LaunchArguments`（tests あり） |
 | `diagnostics/`      | 登録・pipe・ログの診断ツール                             | `azookey_diagnostics` ライブラリと `azookey_diag` CLI（tests あり） |
 | `compat-test/`      | アプリ互換性テストハーネス                               | `compat_test` ランナーと C001〜C012 のケース（tests あり） |

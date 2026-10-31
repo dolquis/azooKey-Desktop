@@ -62,8 +62,9 @@ repos:
         pass_filenames: false
         files: '^settings/(mvp-settings\.schema\.json|default-settings\.sample\.json)$'
 
-      # Shares the sample hook's id, so the CI SKIP list covers it like the sample (the
-      # settings-schema job installs check-jsonschema; the pre-commit job does not).
+      # Shares the sample hook's id so the CI pre-commit job, which does not install
+      # check-jsonschema, skips it like the sample. It runs only locally; CI does not yet
+      # validate this file against the schema (the embedded-catalog unit test parses it).
       - id: settings-json-schema-sample
         name: default model catalog JSON Schema
         entry: check-jsonschema

@@ -86,15 +86,33 @@ bool EndsWithGgufExtension(std::string_view value) {
   return true;
 }
 
-bool HasControlCharacter(std::string_view value) {
-  return std::any_of(value.begin(), value.end(),
-                     [](unsigned char ch) { return ch < 0x20 || ch == 0x7f; });
+// Printable ASCII only: the name becomes both a URL path segment and a Windows file name, and
+// a non-ASCII name would convert differently on the two sides.
+bool IsPrintableAsciiModelFileName(std::string_view value) {
+  return std::all_of(value.begin(), value.end(),
+                     [](unsigned char ch) { return ch >= 0x20 && ch < 0x7f; });
+}
+
+// Windows maps these names to devices in every directory, extension or not ("NUL.gguf" is the
+// null device). Same rule as BackupArchive's IsReservedDeviceName.
+bool IsReservedModelFileDeviceName(std::string_view value) {
+  std::string base;
+  for (const unsigned char ch : value) {
+    if (ch == '.') break;
+    base.push_back(static_cast<char>(std::toupper(ch)));
+  }
+  while (!base.empty() && base.back() == ' ') base.pop_back();
+  for (const char* reserved : {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}) {
+    if (base == reserved) return true;
+  }
+  return base.size() == 4 && (base.starts_with("COM") || base.starts_with("LPT")) &&
+         base[3] >= '0' && base[3] <= '9';
 }
 
 bool IsSafeModelFileName(std::string_view value) {
   if (value.empty() || value == "." || value == "..") return false;
   if (!EndsWithGgufExtension(value)) return false;
-  if (HasControlCharacter(value)) return false;
+  if (!IsPrintableAsciiModelFileName(value) || IsReservedModelFileDeviceName(value)) return false;
   return value.find('/') == std::string_view::npos && value.find('\\') == std::string_view::npos &&
          value.find(':') == std::string_view::npos;
 }
@@ -147,7 +165,8 @@ std::optional<ModelCatalogSource> ParseSource(const j::Value& value, std::string
   }
   const auto& object = value.AsObject();
   if (const auto unknown = FindUnknownKey(object, {"huggingFaceRepo", "revision"})) {
-    *error = "model catalog artifact source contains an unknown field: " + *unknown;
+    *error =
+        "model catalog artifact source contains an unknown field for schemaVersion 2: " + *unknown;
     return std::nullopt;
   }
   ModelCatalogSource source;
@@ -168,9 +187,6 @@ std::optional<ModelCatalogSource> ParseSource(const j::Value& value, std::string
   return source;
 }
 
-// JSON numbers are doubles; 2^53 - 1 keeps every accepted size exact.
-constexpr double kMaxExactSizeBytes = 9007199254740991.0;
-
 bool ParseLlamaCppArtifact(const j::Value& value, ModelCatalogEntry& entry, std::string* error) {
   if (!value.IsObject()) {
     *error = "model catalog artifact llama.cpp must be an object";
@@ -178,15 +194,22 @@ bool ParseLlamaCppArtifact(const j::Value& value, ModelCatalogEntry& entry, std:
   }
   const auto& object = value.AsObject();
   if (const auto unknown = FindUnknownKey(object, {"fileName", "sha256", "sizeBytes", "source"})) {
-    *error = "model catalog artifact llama.cpp contains an unknown field: " + *unknown;
+    *error = "model catalog artifact llama.cpp contains an unknown field for schemaVersion 2: " +
+             *unknown;
     return false;
   }
   if (!ParseGgufArtifact(object, entry, error)) return false;
 
   if (const auto* size = FindValue(object, "sizeBytes")) {
+    // The limit is far below 2^53, so every accepted double is an exact integer.
     const double bytes = size->IsNumber() ? size->AsNumber() : 0.0;
-    if (!(bytes >= 1.0 && bytes <= kMaxExactSizeBytes) || bytes != std::floor(bytes)) {
+    if (!(bytes >= 1.0) || bytes != std::floor(bytes)) {
       *error = "model catalog artifact sizeBytes must be a positive integer";
+      return false;
+    }
+    if (bytes > static_cast<double>(kMaxModelCatalogBytes)) {
+      *error = "model catalog artifact sizeBytes exceeds the limit of " +
+               std::to_string(kMaxModelCatalogBytes) + " bytes";
       return false;
     }
     entry.size_bytes = static_cast<uint64_t>(bytes);
@@ -211,7 +234,7 @@ bool ParseArtifacts(const j::Value& value, ModelCatalogEntry& entry, std::string
   const auto& object = value.AsObject();
   // onnxruntime-genai (R2) stays undefined until DEV-1768 settles the artifact's contents.
   if (const auto unknown = FindUnknownKey(object, {"llama.cpp"})) {
-    *error = "model catalog artifacts engine is not supported: " + *unknown;
+    *error = "model catalog artifacts engine is not supported for schemaVersion 2: " + *unknown;
     return false;
   }
   const auto* llama = FindValue(object, "llama.cpp");
@@ -312,16 +335,20 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   }
 
   const auto& root = parsed->AsObject();
-  if (const auto unknown = FindUnknownKey(root, {"schemaVersion", "defaultModelId", "models"})) {
-    return CatalogParseError("model catalog contains an unknown top-level field: " + *unknown);
-  }
-
+  // The version comes first, so an unknown field is reported against the version that
+  // does not define it.
   const auto* schema_version = FindValue(root, "schemaVersion");
   if (!schema_version || !schema_version->IsNumber() ||
       (schema_version->AsNumber() != 1.0 && schema_version->AsNumber() != 2.0)) {
     return CatalogParseError("model catalog schemaVersion must be 1 or 2");
   }
   const uint32_t version = schema_version->AsNumber() == 1.0 ? 1 : 2;
+
+  if (const auto unknown = FindUnknownKey(root, {"schemaVersion", "defaultModelId", "models"})) {
+    return CatalogParseError(
+        "model catalog contains an unknown top-level field for schemaVersion " +
+        std::to_string(version) + ": " + *unknown);
+  }
 
   const auto* models = FindValue(root, "models");
   if (!models || !models->IsArray() || models->AsArray().empty()) {
@@ -357,6 +384,37 @@ ModelCatalogParseResult ParseModelCatalogJson(std::string_view text) {
   result.ok = true;
   result.catalog = std::move(catalog);
   return result;
+}
+
+const ModelCatalogEntry* MatchSelectedPathToCatalog(const ModelCatalog& catalog,
+                                                    const std::filesystem::path& zenzai_dir,
+                                                    const std::filesystem::path& selected_path,
+                                                    std::string_view selected_sha256) {
+  if (!IsValidSha256(selected_sha256)) return nullptr;
+  const auto sha256 = LowerAscii(std::string(selected_sha256));
+  const auto selected = selected_path.lexically_normal();
+  // Windows file names compare without case; the catalog file names are ASCII.
+  const auto same_ignoring_ascii_case = [](const std::filesystem::path& a,
+                                           const std::filesystem::path& b) {
+    const auto& x = a.native();
+    const auto& y = b.native();
+    if (x.size() != y.size()) return false;
+    for (size_t i = 0; i < x.size(); ++i) {
+      const auto lower = [](auto ch) { return ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch; };
+      if (lower(x[i]) != lower(y[i])) return false;
+    }
+    return true;
+  };
+  if (!same_ignoring_ascii_case(selected.parent_path(), zenzai_dir.lexically_normal())) {
+    return nullptr;
+  }
+  for (const auto& entry : catalog.models) {
+    if (entry.sha256 == sha256 &&
+        same_ignoring_ascii_case(selected.filename(), std::filesystem::path(entry.file_name))) {
+      return &entry;
+    }
+  }
+  return nullptr;
 }
 
 std::optional<std::string> ModelCatalogDownloadUrl(const ModelCatalogEntry& entry) {

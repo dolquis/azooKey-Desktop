@@ -26,7 +26,8 @@ struct ModelFetchResult {
   ModelFetchStatus status{ModelFetchStatus::Failed};
   std::filesystem::path path;
   uint64_t bytes_received{0};
-  // Fixed category, safe to log: "directory_unavailable", "download_failed", or
+  // Fixed category, safe to log: "directory_unavailable", "destination_occupied" (a file of
+  // the same name with another SHA-256 is there and is kept), "download_failed", or
   // "format:<section 3.3 category>". Empty unless the status is Failed.
   std::string error;
   // The downloader's own message for a download_failed, for the CLI only. May name the URL
@@ -43,7 +44,9 @@ std::string_view ModelFetchStatusName(ModelFetchStatus status);
 // Fetches entry's GGUF from its pinned Hugging Face revision into zenzai_dir/<fileName>. The
 // downloader verifies the SHA-256 before the file takes the final name; the GGUF checks of
 // section 3.3 run after, and a freshly downloaded file that fails them is removed. A file that
-// already matched the SHA-256 is never removed. model.selectedPath is not changed.
+// already matched the SHA-256 is never removed, and one that does not match is never
+// replaced (destination_occupied, before any network operation). model.selectedPath is not
+// changed.
 // network_allowed is passed to the downloader as HttpDownloadRequest::network_allowed.
 ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
                                    const std::filesystem::path& zenzai_dir,

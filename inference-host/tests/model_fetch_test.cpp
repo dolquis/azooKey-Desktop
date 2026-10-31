@@ -141,11 +141,9 @@ TEST(ModelFetchTest, FetchesThePinnedRevisionAndVerifiesTheGguf) {
   fs::remove_all(dir);
 }
 
-TEST(ModelFetchTest, ShaMismatchFailsAndKeepsTheExistingFile) {
+TEST(ModelFetchTest, ShaMismatchFailsWithoutPlacingAFile) {
   const auto dir = FetchTestDir();
   const auto catalog = DefaultCatalog();
-  const auto destination = dir / "zenzai" / "ggml-model-Q5_K_M.gguf";
-  WriteBytes(destination, "manually placed");
   FakeDownloader downloader(FakeDownloader::Outcome::ShaMismatch);
 
   const auto result = azookey::host::FetchCatalogModel(Entry(catalog, "zenz-v3.2-small"),
@@ -156,7 +154,43 @@ TEST(ModelFetchTest, ShaMismatchFailsAndKeepsTheExistingFile) {
   EXPECT_EQ(result.error, "download_failed");
   EXPECT_NE(result.detail.find("SHA256"), std::string::npos);
   EXPECT_TRUE(result.path.empty());
+  EXPECT_TRUE(downloader.network_used);
+  EXPECT_FALSE(fs::exists(dir / "zenzai" / "ggml-model-Q5_K_M.gguf"));
+  fs::remove_all(dir);
+}
+
+TEST(ModelFetchTest, SameNamedFileWithAnotherShaIsKeptAndNothingIsFetched) {
+  const auto dir = FetchTestDir();
+  const auto catalog = DefaultCatalog();
+  const auto destination = dir / "zenzai" / "ggml-model-Q5_K_M.gguf";
+  WriteBytes(destination, "manually placed");
+  FakeDownloader downloader(FakeDownloader::Outcome::Serve);
+
+  const auto result = azookey::host::FetchCatalogModel(Entry(catalog, "zenz-v3.2-small"),
+                                                       dir / "zenzai", downloader);
+
+  EXPECT_EQ(result.status, ModelFetchStatus::Failed);
+  EXPECT_EQ(result.error, "destination_occupied");
+  EXPECT_TRUE(result.path.empty());
+  // Only the probe ran, and it forbade the network.
+  ASSERT_EQ(downloader.requests.size(), 1u);
+  ASSERT_TRUE(downloader.requests[0].network_allowed);
+  EXPECT_FALSE(downloader.requests[0].network_allowed());
+  EXPECT_FALSE(downloader.network_used);
   EXPECT_EQ(ReadBytes(destination), "manually placed");
+  fs::remove_all(dir);
+}
+
+TEST(ModelFetchTest, EntryAboveTheSizeLimitIsNotFetchable) {
+  const auto dir = FetchTestDir();
+  auto entry = Entry(DefaultCatalog(), "kanakanji-edge-33m");
+  entry.size_bytes = azookey::host::kMaxModelCatalogBytes + 1;
+  FakeDownloader downloader(FakeDownloader::Outcome::Serve);
+
+  const auto result = azookey::host::FetchCatalogModel(entry, dir / "zenzai", downloader);
+
+  EXPECT_EQ(result.status, ModelFetchStatus::NotFetchable);
+  EXPECT_TRUE(downloader.requests.empty());
   fs::remove_all(dir);
 }
 
@@ -238,10 +272,21 @@ TEST(ModelsCliTest, ParsesCatalogAndFetchArguments) {
   EXPECT_EQ(fetch->command, azookey::host::ModelsCliCommand::Fetch);
   EXPECT_EQ(fetch->fetch_model_id, "kanakanji-edge-33m");
 
+  const auto positional =
+      azookey::host::ParseModelsCliArgs({"fetch", "kanakanji-edge-33m"}, &error);
+  ASSERT_TRUE(positional) << error;
+  EXPECT_EQ(positional->command, azookey::host::ModelsCliCommand::Fetch);
+  EXPECT_EQ(positional->fetch_model_id, "kanakanji-edge-33m");
+
   const auto fetch_default = azookey::host::ParseModelsCliArgs({"fetch"}, &error);
   ASSERT_TRUE(fetch_default) << error;
   EXPECT_TRUE(fetch_default->fetch_model_id.empty());
 
+  // One id only, however it is given.
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "a", "b"}, &error));
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "a", "--id", "b"}, &error));
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id", "a", "b"}, &error));
+  EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"catalog", "x"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--id"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"catalog", "--id", "x"}, &error));
   EXPECT_FALSE(azookey::host::ParseModelsCliArgs({"fetch", "--url", "x"}, &error));
@@ -338,6 +383,7 @@ TEST(ModelsCliTest, FetchRejectsAnIdOutsideTheCatalog) {
   options.fetch_model_id = "missing";
   azookey::host::ModelsCliRunOptions run;
   run.models_dir = dir / "models";
+  run.settings_path = dir / "config" / "settings.json";
   run.downloader = &downloader;
 
   const auto result = azookey::host::RunModelsCli(options, run);
@@ -345,5 +391,27 @@ TEST(ModelsCliTest, FetchRejectsAnIdOutsideTheCatalog) {
   EXPECT_EQ(result.exit_code, 2);
   EXPECT_NE(result.error.find("missing"), std::string::npos);
   EXPECT_TRUE(downloader.requests.empty());
+  fs::remove_all(dir);
+}
+
+TEST(ModelsCliTest, FetchIsRefusedWithoutTheModelsDirectoryOrSettingsPath) {
+  const auto dir = FetchTestDir();
+  for (int missing = 0; missing < 3; ++missing) {
+    FakeDownloader downloader(FakeDownloader::Outcome::Serve);
+    azookey::host::ModelsCliOptions options;
+    options.command = azookey::host::ModelsCliCommand::Fetch;
+    // 0: nothing set, 1: no settings path, 2: no models directory.
+    azookey::host::ModelsCliRunOptions run;
+    if (missing == 1) run.models_dir = dir / "models";
+    if (missing == 2) run.settings_path = dir / "config" / "settings.json";
+    run.downloader = &downloader;
+
+    const auto result = azookey::host::RunModelsCli(options, run);
+
+    EXPECT_EQ(result.exit_code, 2) << missing;
+    EXPECT_NE(result.error.find("paths_unavailable"), std::string::npos) << result.error;
+    EXPECT_TRUE(downloader.requests.empty()) << missing;
+    EXPECT_FALSE(downloader.network_used) << missing;
+  }
   fs::remove_all(dir);
 }

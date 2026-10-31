@@ -44,9 +44,10 @@ struct ModelsCliResult {
 //              [--warmup N] [--case <reading>]... [--json]
 // models catalog
 //   Lists the embedded default catalog (model-management-spec section 3.1.1).
-// models fetch [--id <model id>]
+// models fetch [<model id> | --id <model id>]
 //   Fetches the entry from its pinned upstream revision (section 3.1.2). Refused under
-//   privacy.mode=offline, and when settings.json cannot be read. Never sets model.selectedPath.
+//   privacy.mode=offline, when settings.json cannot be read, and when the models directory or
+//   the settings path is unknown. Never sets model.selectedPath.
 std::optional<ModelsCliOptions> ParseModelsCliArgs(const std::vector<std::string>& args,
                                                    std::string* error);
 ModelsCliResult RunModelsCli(const ModelsCliOptions& options,

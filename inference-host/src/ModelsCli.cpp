@@ -45,9 +45,19 @@ std::optional<ModelsCliOptions> ParseModelsCliArgs(const std::vector<std::string
   if (!args.empty() && (args[0] == "catalog" || args[0] == "fetch")) {
     ModelsCliOptions options;
     options.command = args[0] == "catalog" ? ModelsCliCommand::Catalog : ModelsCliCommand::Fetch;
+    const bool fetch = options.command == ModelsCliCommand::Fetch;
     for (size_t i = 1; i < args.size(); ++i) {
-      if (options.command == ModelsCliCommand::Fetch && args[i] == "--id") {
+      // fetch <id> and fetch --id <id> are the same; the id may be given once.
+      const bool named = fetch && args[i] == "--id";
+      const bool positional = fetch && !args[i].empty() && args[i][0] != '-';
+      if ((named || positional) && !options.fetch_model_id.empty()) {
+        *error = "models fetch takes one model id";
+        return std::nullopt;
+      }
+      if (named) {
         if (!TakeArg(args, i, options.fetch_model_id, error)) return std::nullopt;
+      } else if (positional) {
+        options.fetch_model_id = args[i];
       } else {
         *error = "unknown models argument: " + args[i];
         return std::nullopt;
@@ -113,9 +123,11 @@ namespace {
 
 // privacy.mode=offline forbids the fetch. A missing settings.json is the defaults (normal);
 // one that cannot be read or parsed also forbids it, since its mode is unknown.
+// Read once when the fetch starts; the CLI is short-lived and does not follow a later change.
 bool SettingsAllowNetwork(const std::filesystem::path& settings_path) {
+  if (settings_path.empty()) return false;
   std::error_code ec;
-  if (settings_path.empty() || !std::filesystem::exists(settings_path, ec)) return !ec;
+  if (!std::filesystem::exists(settings_path, ec)) return !ec;
   std::ifstream in(settings_path, std::ios::binary);
   if (!in) return false;
   std::ostringstream content;
@@ -154,6 +166,14 @@ ModelsCliResult RunCatalogCommand(const ModelsCliOptions& options,
     return result;
   }
 
+  // Without a resolved data root the models directory would be relative to the current
+  // directory and privacy.mode could not be read.
+  if (run_options.models_dir.empty() || run_options.settings_path.empty()) {
+    result.exit_code = 2;
+    result.error =
+        "paths_unavailable: models fetch requires the models directory and settings.json";
+    return result;
+  }
   const auto& id =
       options.fetch_model_id.empty() ? catalog.default_model_id : options.fetch_model_id;
   const auto resolved = ResolveModelCatalogModel(catalog, zenzai_dir, id);

@@ -68,11 +68,13 @@ Host は runtime settings の値を Handshake 応答へ載せ、TIP は通常の
 数字候補をローカルで追加する。
 Handshake 応答に設定値がない旧 Host は `false` として扱う。
 
-`numberRewriter == true` かつ一括変換ではないとき、TIP は ASCII 数字を生成する主キーと
-テンキーを composition へ取り込み、通常の候補要求へ読みとして渡す。
-Shift などによって数字以外を生成する主キーは取り込まない。
-候補窓が開いているときの `1` から `9` は、従来どおり候補の直接選択を優先する。
-`numberRewriter == false` のとき、数字キーは従来どおりアプリへ渡す。
+読みがあるときの数字キー（主キーとテンキー）は、`numberRewriter` の値によらず読みに半角数字として足す
+（`docs/legacy-parity-spec.md` §1.5.3、DEV-1811）。`numberRewriter` は、その読みの候補に数字候補を足すかだけを決める。
+`numberRewriter == true` かつ一括変換ではないとき、TIP は読みが無いときの数字キーも composition へ取り込み、
+通常の候補要求へ読みとして渡す。`numberRewriter == false` のとき、読みが無いときの数字キーはアプリへ渡す。
+Shift などによって数字以外を生成する主キーは数字として取り込まない（記号としての扱いは
+`docs/tsf-deep-integration-spec.md` §3.5）。
+候補窓が開いているときの `1` から `9` は、候補の直接選択を優先する。
 
 TIP は Host 候補を先に保ち、その末尾へ数字候補を追加する。
 同じ表層形がすでに Host 候補または先行する数字候補にある場合は追加しない。

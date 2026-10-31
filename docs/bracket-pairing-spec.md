@@ -75,26 +75,17 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 持つ。本機能は **codepoint を分類する層**を InputState に足すだけでよく、新しい
 `UserAction` enum 値は**追加しない**（`Input` / `InputAlnum` を再利用する）。
 
-ただし **VK→UserAction マッピング（§1.4）は拡張が必要**である。M13 §1.4 の表は現状
-`VK_A〜VK_Z` のみを `Input` に写し、カッコ・記号を生む OEM キー（`VK_OEM_4`=`[`、
-`VK_OEM_6`=`]`、`VK_OEM_1` 等、および JIS 配列で `「」` 等を生むキー）は写していない。
-このままだとブラケットキーが `UserActionEvent.codepoint` を生まず、InputState が開き/
-閉じカッコを分類できないため**本機能が発火しない**。したがって M61-A は次を行う:
+カッコを生む OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、`VK_OEM_1` 等、JIS 配列で `「」` 等を生むキー、
+丸括弧を生む Shift+8/9 等）は、`core/src/UserActionMap.cpp` の写像で `Input` になる
+（`docs/legacy-parity-spec.md` §1.5.3）。本機能が有効なとき（`bracketPairing == true` かつ前面アプリと
+入力モードで有効。§4.4・§4.5）は、TIP がこれらのキーを写像より前に処理し、ペアの挿入・スキップ・削除を行う。
+codepoint は `ToUnicode`（キーボードレイアウト + シフト状態）で得た文字から、`inputMode` の字形
+（§4.4）で決める。
 
-- **ブラケット/記号を生む VK を `Input` / `InputAlnum` へ写すエントリを M13 §1.4 の
-  VK→UserAction 表（`tsf-tip/src/TextService.cpp::OnKeyDown` 内テーブル /
-  `core/src/UserActionMap.cpp`）へ追加する。** codepoint は**入力モード依存**で、
-  `ToUnicode`（キーボードレイアウト + シフト状態）または IME の現在モード
-  （`hiragana` で `[`→`「` 等）から解決し、`UserActionEvent.codepoint` に載せる（§4.4）。
-- 分類自体は codepoint ベース（下記）なので、表に載せる VK 集合は §4.1 の対応表を包含
-  すれば十分（OEM_4/6/1/7/さらに丸括弧を生む Shift+8/9 等。実装時に対象 VK を確定）。
-- `bracketPairing == false` のときは、これら VK は従来どおりアプリへパススルー（あるいは
-  IME の通常文字処理）であり、新マッピングが既存挙動を変えないようガードする（§5.3 の
-  `OnTestKeyDown` eaten 判定も `bracketPairing` ＆有効モードでのみ TRUE）。
-
-> このマッピング拡張は M13（入力パイプライン）の VK 表を「不変」とはしないが、`UserAction`
-> 列挙・InputState 種別・ClientAction 枠組みには破壊的変更を加えない（純粋追加）。M13 が
-> 既に OEM キーを `Input` へ写すよう実装済みなら、本機能は分類層の追加のみで足りる。
+本機能が無効なとき（`bracketPairing == false`、または前面アプリや入力モードで無効）は、カッコキーは
+他の記号と同じく、ひらがなモードでは全角にして読みに取り込み（`[`→`「`、`(`→`（`、`{`→`『`。
+`docs/tsf-deep-integration-spec.md` §3.5）、英数モードでは半角のままアプリへ渡す。ペアは作らない。
+legacy もカッコを全角にして読みに足すので、この挙動は legacy と同じである。
 
 分類（`bracketPairing == true` かつ現在の入力モードで有効なとき。§4.4）:
 
@@ -287,9 +278,12 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
 
 ### 4.4 入力モード別の挙動
 
-`docs/legacy-parity-spec.md` の入力モード（`inputMode`: `hiragana` / `alnum_half` /
-`alnum_full`）に応じて、打鍵キーが生む文字は IME の既存文字入力ロジックで決まる。本機能は
-**生じた codepoint を §4.1 表で分類するだけ**なので、モード対応は自然に従う。
+設定 `inputMode`（enum `hiragana` / `alnum_half` / `alnum_full`、既定 `hiragana`）は、本機能が挿入する
+カッコの字形と、絵文字検索の `:` トリガ（`docs/candidate-rewriter-spec.md` §11）の可否を決める。
+起動時や On にしたときの入力モードではなく（On にしたときは常にひらがな。`docs/tsf-deep-integration-spec.md`
+§4.2）、カッコ以外の文字の字種も変えない。設定アプリはこの設定を「カッコ補完の字形」として表示する。
+キー名と値は互換のため変えない（DEV-1816）。Host は値を読むが使わない。本機能は
+**生じた codepoint を §4.1 表で分類するだけ**なので、字形は次のとおり決まる。
 
 - `hiragana`: JIS 配列で `[`/`]` キー等が `「`/`」` を生む等、全角カッコが対象。
 - `alnum_half`（`bracketPairingInAlnumMode == true`、既定 ON）: `(` `[` `{` 等の半角
@@ -408,8 +402,11 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
   通常どおり働く。これにより蓄積中にカッコ対が割り込んでバッファ意味論を崩さない。
   蓄積時の判定・保存は全角化前の生の入力文字を使い、`alnum_full` でも ASCII の `[` 等を保持する。
   一括確定時に既存バッファのカッコを遡ってペア化せず、確定後の新しい打鍵から通常判定に戻る。
-- **通常の英字入力**: `inputMode` は本機能ではカッコ字形とペアリング可否にだけ使う。
+- **通常の英字入力**: `inputMode`（§4.4）はカッコ字形とペアリング可否にだけ使う。
   カッコ以外のローマ字変換をマスター設定やアプリリストの判定で切り替えない。
+- **記号の全角化（DEV-1811）**: 本機能が無効なときのカッコキーと、カッコ以外の記号は、
+  `docs/tsf-deep-integration-spec.md` §3.5 の表で全角にして読みに取り込む。本機能が有効なときの
+  カッコキーは読みに取り込まず、読みを確定してからペアを入れる。
 - **再変換（M20）**: 自動挿入されたカッコは読みを持たない確定済みリテラルであり、
   再変換時は文節境界 / リテラルとして扱い読みへ逆変換しない（`docs/dynamic-punctuation-spec.md`
   §5 のカッコ版。詳細は M20 統合時に `docs/tsf-deep-integration-spec.md` 側で確定）。

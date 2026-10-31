@@ -74,11 +74,16 @@
     "inputMode": {
       "type": "string",
       "enum": ["hiragana", "alnum_half", "alnum_full"],
-      "default": "hiragana"
+      "default": "hiragana",
+      "description": "DEV-1816: カッコ補完が入れるカッコの字形と、絵文字検索の : トリガの可否（hiragana のときだけ）。起動時の入力モードではなく、カッコ以外の文字の字種も変えない。設定アプリの表示名は「カッコ補完の字形」"
     },
     "convertKeysAction": {
       "type": "string", "enum": ["default", "imeOnOff"], "default": "default",
       "description": "DEV-1736: imeOnOff で変換キーを IME オン、無変換キーを IME オフにする（再変換と字種の巡回には使わない）"
+    },
+    "fullWidthSpace": {
+      "type": "boolean", "default": true,
+      "description": "DEV-1814: ひらがなモードで読みが無いとき、true なら Space で全角空白・Shift+Space で半角空白、false なら逆。TIP だけが読む"
     },
     "liveConversion": {
       "type": "boolean",

@@ -200,7 +200,7 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"hiragana", "alnum_half", "alnum_full"});
     } else if (key == "convertKeysAction") {
       valid = IsStringEnum(value, {"default", "imeOnOff"});
-    } else if (key == "liveConversion" || key == "dynamicPunctuation" ||
+    } else if (key == "liveConversion" || key == "fullWidthSpace" || key == "dynamicPunctuation" ||
                key == "llmMagicConversion" || key == "predictionEnabled" ||
                key == "includeContextInAITransform" || key == "contextReselection" ||
                key == "postCommitLint" || key == "retroactiveRecompute" ||

@@ -52,7 +52,14 @@ enum class UserAction : uint16_t {
     Forget,             // Ctrl+Shift+Backspace で直近確定を忘却
 
     // デバッグ
-    ToggleDebugWindow,  // F10
+    ToggleDebugWindow,  // F10（読みが無いとき）
+
+    // 字種指定確定（docs/tsf-deep-integration-spec.md §3.6、DEV-1812）
+    CommitHiragana,           // F6
+    CommitKatakana,           // F7
+    CommitHalfwidthKatakana,  // F8
+    CommitFullwidthRoman,     // F9
+    CommitHalfwidthRoman,     // F10（読みがあるとき）
 };
 
 struct UserActionEvent {
@@ -99,7 +106,7 @@ enum class InputStateKind {
 | Idle | Space / Shift+Space（ひらがなモード） | Idle | `fullWidthSpace = true` なら Space、false なら Shift+Space で全角空白を composition を作らずに挿入する。もう一方は半角空白としてアプリへ渡す（core を通さず TIP が判定する。`docs/tsf-deep-integration-spec.md` §3.7） |
 | Composing (liveConv OFF) | Input（文字・数字・記号。§1.5.3） | Composing | 読みに足して Preedit 更新、打鍵ごとの `QueryCandidates` |
 | Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。応答を待つ間のキーは TIP が保留し、窓が開いた後に再生する） |
-| Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6）。F7・F8 だけ ObserveCommit を送る |
+| Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6）。F7・F8 だけ ObserveCommit を送る。確定は TIP が行い、`InputState` は Idle に戻される |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
@@ -297,7 +304,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`
   §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` / `VK_DBE_HIRAGANA` はこの写像では `nullopt` である。
 - TIP は `ClientAction` の効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、
-  Commit、Cancel、Selecting 中の Forward / Backward）だけを消費する。モード切替・Unicode 入力・
+  Commit、Cancel、Selecting 中の Forward / Backward、TIP が確定する字種指定確定）だけを消費する。モード切替・Unicode 入力・
   Forget・デバッグ窓の `UserAction` は、対応するマイルストーン（M16 / M18）が効果を実装するまで
   TIP でパススルーする。
 
@@ -536,7 +543,7 @@ M13 の載せ替え対象は、M3〜M10 の通常入力における reading と�
   - **意図的追加**（§1.4 は規定するが現行 OnKeyDown に未実装または部分的。M13 で新規・新テストで
     担保。M3〜M10 の回帰ではない）: Shift+Space の後退巡回（`PrevCandidate`）、
     Ctrl+H/P/N/F/B/A/E バインド、`VK_KANJI` / `VK_NONCONVERT` のモード切替、
-    Ctrl+Shift+U（Unicode 入力）、Ctrl+Shift+Backspace（Forget）、F10（デバッグ窓）。
+    Ctrl+Shift+U（Unicode 入力）、Ctrl+Shift+Backspace（Forget）、F10（読みが無いときのデバッグ窓）。
 - **削除単位の契約（M59 連携）**: Backspace は **かな / 生ローマ字バッファの 1 単位**を削除し、
   自動句読点（M59）は削除単位に数えない（`docs/dynamic-punctuation-spec.md` §5.2）。reading
   バッファを core が所有することで、この「削除単位」を core 内部で定義でき、M59 は状態追加なしで
@@ -1266,10 +1273,12 @@ public:
 
 - 起動: F10（トグル）。**Debug ビルド（`_DEBUG`）だけ**で有効にする。F10 は多くのアプリでメニューバーを
   開くキーであり、製品ビルドが取るとアプリの F10 が使えなくなるためである。製品ビルドでは preserved key を
-  登録せず、`OnKeyDown` でも F10 を食わずにアプリへ渡す。
+  登録せず、読みが無いときは `OnKeyDown` でも F10 を食わずにアプリへ渡す。
   F10 は `WM_SYSKEYDOWN` として届き、キーイベントシンクに来ないホストがあるため、
   TIP は F10 を TSF の preserved key としても登録する。登録できたときは preserved key の通知だけで切り替え、
-  `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない。IME が閉じているとき、英数モード、
+  `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない。読みがある間の F10 は、どちらのビルドでも
+  デバッグ窓に使わず字種指定確定にする（preserved key の通知は食わずにキーイベントシンクへ渡す。
+  `docs/tsf-deep-integration-spec.md` §3.6）。IME が閉じているとき、英数モード、
   アプリがキーボード入力を無効にした文脈では、どちらの経路でも F10 をアプリへ渡す
 - ウィンドウ: `WS_POPUP`（枠は描画で付ける）、半透明、サイズ 600×400。初回の表示で UI スレッドに作る
 - 内容:

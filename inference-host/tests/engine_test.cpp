@@ -1969,6 +1969,13 @@ TEST(InferenceEngineTest, PromptDropsControlMarkersFromUserText) {
     EXPECT_EQ(count, expected_markers);
   }
 
+  // A profile made only of markers is empty once they are dropped, so no empty [PROF] is written.
+  azookey::core::ConversionContext marker_only_profile;
+  marker_only_profile.instruction_profile = markers;
+  EXPECT_EQ(BuildZenzaiPrompt("にほんご", marker_only_profile, ZenzaiPromptFormat::ZenzV3),
+            BuildZenzaiPrompt("にほんご", azookey::core::ConversionContext{},
+                              ZenzaiPromptFormat::ZenzV3));
+
   // The 30 characters are counted after the markers are dropped.
   azookey::core::ConversionContext long_context;
   long_context.preceding_text = "b" + markers + std::string(29, 'a');

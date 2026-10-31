@@ -3197,7 +3197,7 @@ OS build 不明を表す。SafeMode の probe 省略時は件数と bool も 0 /
 
 `prompt_format` は protocol v1 への省略可能な追加フィールドで、ロード中モデルが使う
 プロンプト形式（catalog の宣言、または語彙からの推定。`docs/zenzai-inference-spec.md`
-§2.4.2）を返す。モデル未ロード、Zenzai 以外の変換器、古い Host では省略する。
+§2.4.2）を返す。モデル未ロード、Zenzai 以外の変換器、mock runtime（`runtime_tier` が `mock`）、古い Host では省略する。
 reader は欠落と未知の値を「無し」として扱い、payload 全体は不正にしない。値は
 2 つの固定名だけで、パスや利用者の入力を含まない。診断 CLI の JSON は `D-008` の
 `details.prompt_format` に同じ値を載せる（省略時は載せない）。

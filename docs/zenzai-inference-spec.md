@@ -133,8 +133,8 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
 
 実装は `inference-host/include/azookey/host/ZenzaiPromptFormat.h`（値と能力）、`ModelCatalog`
 （catalog の parse）、`ZenzaiModelConverter`（推定、プロンプトの構築、beam の候補選択）、
-`InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。推定値の診断への出力（下記）は
-QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に扱う（DEV-1787）。
+`InferenceEngine::TransformLocal`（AI backend の分岐）が持つ。使っている形式（宣言値または
+推定値）の診断への出力は下記のとおり。
 
 モデルごとのプロンプト差は、model catalog の entry が持つ `promptFormat` で吸収する。
 値ごとの振る舞いは下表で固定し、個々の能力フラグを catalog に並べない。キーの無い entry は
@@ -155,8 +155,8 @@ QueryDiagnostics の wire 定義の変更を伴うため、これらとは別に
   R2 を再開した構成では、`selectedPath` の GGUF を catalog の entry に照合し、一致した entry の
   `promptFormat` を R1 と R2 の両方に使う。照合できない GGUF は R1 だけで動き、推定値を使う
   （`docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」）。
-  QueryDiagnostics（`docs/dev-infrastructure-spec.md` §12.6）は、使っている形式（宣言値または
-  推定値）を返さない。形式を返すフィールドは DEV-1787 が追加する。
+  QueryDiagnostics の `prompt_format`（`docs/dev-infrastructure-spec.md` §12.6）が宣言値または
+  推定値を返し、診断 CLI は D-008 の `details.prompt_format` に載せる。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
 - 制御文字が CONTROL 型のモデルでは、beam の候補選択が CONTROL かつ EOG でないトークンを
@@ -275,7 +275,10 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
    整形の前に、`preceding_text` から U+EE00〜U+EEFF（プロンプトの制御マーカーに使う私用文字。
    `ContainsZenzaiControlMarker` と同じ範囲）を除く。文書やコピーした文字列に含まれる
    これらの文字が、`parse_special=true` のトークン化で区切りとして読まれるのを防ぐ。
-   30 文字は除いた後に数える。読みと instruction profile にも同じ除去を掛ける。
+   30 文字は除いた後に数える。ただし `InferenceEngine::QueryCandidates` が `maxContextLength` で
+   先に切り詰める（そのときは私用文字も数に入る）ので、実際に残る文脈は 30 文字より短く
+   なりうる。読みと instruction profile にも同じ除去を掛け、除いて空になった profile には
+   `[PROF]` を置かない。
    これらを含まない入力のプロンプトのバイト列は変わらない。除いた文字はログに出さない。
    `preceding_text` は、Convert へ渡る前に `InferenceEngine::QueryCandidates` が設定
    `maxContextLength`（既定 30、範囲 0〜30、`windows-tsf-host-architecture.md`）の
@@ -339,9 +342,11 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 std::string BuildZenzaiPrompt(const std::string& kana,
                               const core::ConversionContext& context,
                               ZenzaiPromptFormat format /* §2.4.2 */) {
-  const std::string katakana = ToKatakana(kana);                       // §3.1-1
-  const std::string ctx = CleanLeftContext(context.preceding_text);    // §3.1-2（末尾 30 文字）
-  const std::string& profile = context.instruction_profile;            // 既定 ""
+  const std::string katakana =
+      ToKatakana(StripZenzaiControlMarkers(kana));                     // §3.1-1、制御マーカー除去
+  const std::string ctx = CleanLeftContext(context.preceding_text);    // §3.1-2（除去後に末尾 30 文字）
+  const std::string profile =
+      StripZenzaiControlMarkers(context.instruction_profile);          // 既定 ""、制御マーカー除去
   std::string p;
   if (ZenzaiPromptFormatUsesInstructionProfile(format) && !profile.empty())
     p += TOK("[PROF]") + profile;                                      // zenz-v3 だけ
@@ -1221,7 +1226,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 
 | 種別 | 内容 |
 |---|---|
-| unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置、`promptFormat` ごとの差（§2.4.2） |
+| unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、制御マーカー（U+EE00〜U+EEFF）の除去と「30 文字は除去後に数える」こと（除くと空になる profile を含む）、特殊トークン配置、`promptFormat` ごとの差（§2.4.2） |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 手順 3）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |

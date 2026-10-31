@@ -613,9 +613,10 @@ std::vector<double> ActiveBeamScores(const std::vector<LlamaBeam>& beams) {
 std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
                               ZenzaiPromptFormat format) {
   std::string prompt;
-  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !context.instruction_profile.empty()) {
+  const auto profile = StripZenzaiControlMarkers(context.instruction_profile);
+  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !profile.empty()) {
     prompt += Utf8(U'\U0000EE03');
-    prompt += StripZenzaiControlMarkers(context.instruction_profile);
+    prompt += profile;
   }
   const auto left_context = CleanLeftContext(context.preceding_text);
   // zenz-v3 drops an empty context segment; kanakanji-edge-v1 was trained with it always present.

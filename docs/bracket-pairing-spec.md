@@ -68,7 +68,7 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 
 ## 3. InputState への統合（M13）
 
-### 3.1 UserAction（新 enum 値なし・VK マッピングは拡張が必要）
+### 3.1 UserAction（新 enum 値なし・カッコキーは TIP が写像より前に処理する）
 
 `docs/legacy-parity-spec.md` §1.1 の `UserAction::Input`（および英数モードの
 `InputAlnum`）は `UserActionEvent.codepoint` に打鍵由来の Unicode コードポイントを
@@ -139,8 +139,11 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 
 ### 3.3 状態遷移（追加分）
 
-`docs/legacy-parity-spec.md` §1.2 の遷移表に、`bracketPairing == true` のときの分岐を
-加える（既定 immediate トリガ。§4.0）。新しい InputState 種別は**追加しない**。
+`bracketPairing == true` のときのカッコキーの分岐を次の表で定める（既定 immediate トリガ。§4.0）。
+この分岐は `docs/legacy-parity-spec.md` §1.2 の `InputState::HandleEvent` の遷移表には加えない。TIP が
+`UserActionMap` の写像より前にカッコキーを受け取り（§3.1）、core の純粋関数 `EvaluateBracketInput` が hint から
+下表の分岐を決め、TIP がその結果に従って composition の確定と下表の副作用を行う。新しい InputState 種別は
+**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|

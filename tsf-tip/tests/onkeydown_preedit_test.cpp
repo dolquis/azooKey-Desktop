@@ -14766,14 +14766,16 @@ TEST(TsfTipCommitFormTest, LiveConversionCommitsTheReadingNotTheConversion) {
     DocumentPreeditHarness h;
     ConfigureTypoHarness(h);
     h.service.set_live_conversion_for_test(true);
-    TypeTypoRomaji(h, "KA");
+    // Shift+K tells the typed romaji from a Hepburn respelling.
+    PressShifted(h, 'K');
+    TypeTypoRomaji(h, "A");
     const uint64_t request = h.service.pending_ipc_request_id_for_test();
     h.service.mark_pending_ipc_query_sent_for_test();
     h.service.set_live_conversion_result_for_test(request, "か", "蚊");
     h.service.apply_live_conversion_result_for_test();
     ASSERT_EQ(h.context.document->text, L"蚊");
     PressForm(h, key);
-    ExpectCommitted(h, key == VK_F6 ? L"か" : L"ka");
+    ExpectCommitted(h, key == VK_F6 ? L"か" : L"Ka");
   }
 }
 
@@ -14915,4 +14917,115 @@ TEST(TsfTipCommitFormTest, UnicodeInputAndEmojiQueryTakeTheKeysWithoutChange) {
   EXPECT_TRUE(h.Press(VK_F10));
   EXPECT_EQ(h.service.preedit_kana_, ":sm");
   EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+}
+
+// The predictions of the committed reading close with it, so the next Tab and
+// Esc reach the app.
+TEST(TsfTipCommitFormTest, CommitClosesThePredictionWindow) {
+  DocumentPreeditHarness h;
+  // TSF does not report the TIP's own EndComposition back to it, so no
+  // termination cleanup closes the window here.
+  h.context.notify_owner_end = false;
+  TypeKanji(h);
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  PressForm(h, VK_F7);
+  ExpectCommitted(h, L"カンジ");
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_FALSE(ProbeTypoKey(h, VK_TAB));
+  EXPECT_FALSE(h.Press(VK_TAB));
+  EXPECT_FALSE(ProbeTypoKey(h, VK_ESCAPE));
+  EXPECT_FALSE(h.Press(VK_ESCAPE));
+}
+
+// The segments a batch conversion shows commit as the reading of them all.
+TEST(TsfTipCommitFormTest, BatchSegmentsCommitTheirJoinedReading) {
+  for (const WPARAM key : {WPARAM{VK_F7}, WPARAM{VK_F10}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    TypeTypoRomaji(h, "KANI");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    azookey::ipc::CandidateField first;
+    first.reading = "か";
+    first.surface = "蚊";
+    first.source = "dictionary";
+    auto second = first;
+    second.reading = "に";
+    second.surface = "二";
+    h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
+    h.service.show_candidate_window_from_cache_for_test();
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    PressForm(h, key);
+    ExpectCommitted(h, key == VK_F7 ? L"カニ" : L"kani");
+  }
+}
+
+// DEV-1750: a refused commit waits for its retry; the next key retries it and
+// is then handled.
+TEST(TsfTipCommitFormTest, RefusedCommitIsRetriedByTheNextKey) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    TypeKanji(h, legacy);
+    h.context.reject_write = true;
+    PressForm(h, VK_F7);
+    EXPECT_TRUE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"かんじ");
+    h.context.reject_write = false;
+    ASSERT_TRUE(h.Press('A'));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"カンジあ");
+    EXPECT_EQ(h.service.preedit_kana_, "あ");
+  }
+}
+
+// A custom romaji table never lends its keys to the roman forms: they are
+// respelled in Hepburn (spec §3.6).
+TEST(TsfTipCommitFormTest, CustomRomajiTableRespellsInHepburn) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  CustomRomajiTranslationGuard custom_translation;
+  h.service.set_romaji_table_for_test(azookey::core::CustomRomajiLoader::Parse("si\tし\n").table);
+  TypeTypoRomaji(h, "SI");
+  ASSERT_EQ(h.service.preedit_kana_, "し");
+  PressForm(h, VK_F10);
+  ExpectCommitted(h, L"shi");
+}
+
+// A context that does not allow learning commits without an observation.
+TEST(TsfTipCommitFormTest, PrivateContextSendsNoObservation) {
+  DocumentPreeditHarness h;
+  TypeKanji(h);
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+  PressForm(h, VK_F8);
+  ExpectCommitted(h, L"ｶﾝｼﾞ");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+// Alphanumeric mode and a closed IME leave F6-F10 to the app.
+TEST(TsfTipCommitFormTest, AlphanumericModeAndClosedImePassTheKeys) {
+  DebugWindowKeyGuard debug_build(true);
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press(VK_OEM_ATTN));
+    for (const WPARAM key : {WPARAM{VK_F7}, WPARAM{VK_F10}}) {
+      EXPECT_FALSE(ProbeTypoKey(h, key)) << key;
+      EXPECT_FALSE(h.Press(key)) << key;
+    }
+    EXPECT_FALSE(h.service.debug_window_visible_for_test());
+  }
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  ASSERT_TRUE(h.Press(VK_IME_OFF));
+  ASSERT_FALSE(h.service.keyboard_open());
+  for (const WPARAM key : {WPARAM{VK_F7}, WPARAM{VK_F10}}) {
+    EXPECT_FALSE(ProbeTypoKey(h, key)) << key;
+    EXPECT_FALSE(h.Press(key)) << key;
+  }
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
 }

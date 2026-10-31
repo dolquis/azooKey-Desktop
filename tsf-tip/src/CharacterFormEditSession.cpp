@@ -265,7 +265,7 @@ CharacterFormCycleResult CharacterFormEditSession::CycleSelection(
 
 std::optional<CharacterFormRecentCommit> CharacterFormEditSession::CaptureRecentCommit(
     ITfContext* context, TfClientId client_id, std::string_view reading,
-    std::string_view committed_surface) {
+    std::string_view committed_surface, std::optional<size_t> committed_form) {
   if (!context || committed_surface.empty()) return std::nullopt;
   try {
     const auto cycle = core::BuildCharacterFormCycle(reading);
@@ -299,16 +299,12 @@ std::optional<CharacterFormRecentCommit> CharacterFormEditSession::CaptureRecent
       captured->caret = caret;
       captured->cycle = *cycle;
       captured->surface = *surface;
-      // A commit equal to one of the forms (F6-F8, spec §3.6) cycles on from
-      // it. A converted surface, and roman text in the typed case rather than
-      // the cycle's capitals, starts over from hiragana.
-      captured->next_index = core::CharacterFormCycle::kHiragana;
-      for (size_t i = 0; i < cycle->forms.size(); ++i) {
-        if (committed_surface == std::string_view(cycle->forms[i])) {
-          captured->next_index = (i + 1) % cycle->forms.size();
-          break;
-        }
-      }
+      // An F6-F10 commit (spec §3.6) cycles on from the form it committed.
+      captured->next_index =
+          committed_form ? (*committed_form + 1) % cycle->forms.size()
+          : committed_surface == std::string_view(cycle->forms[core::CharacterFormCycle::kHiragana])
+              ? core::CharacterFormCycle::kKatakana
+              : core::CharacterFormCycle::kHiragana;
       return S_OK;
     });
     return hr == S_OK ? captured : std::nullopt;

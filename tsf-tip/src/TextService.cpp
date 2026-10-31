@@ -5534,6 +5534,9 @@ HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm f
   const std::string surface =
       core::BuildCommitForm(reading, form, roman ? typed_romaji : std::string{});
 
+  // The predictions belong to the reading being committed; a window left over
+  // would take the next Tab or Esc.
+  ClearPrediction();
   candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
   shown_candidates_.clear();
@@ -5584,8 +5587,9 @@ HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm f
   PrepareTypoCommit(reading);
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
+    // CommitForm follows the order of the NonConvert cycle (spec §3.2).
     recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
-        context, client_id_, reading, committed_surface);
+        context, client_id_, reading, committed_surface, static_cast<size_t>(form));
     preedit_kana_.clear();
     romaji_.Reset();
     live_display_reading_.clear();

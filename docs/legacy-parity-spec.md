@@ -294,7 +294,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 - F6〜F10 は Composing / Previewing / Selecting（Space の応答待ちを含む）で字種指定確定になり、
   Idle では `nullopt` とする（F7 は Edge・Chrome のキャレットブラウズ、F10 は Win32 のメニューバーへ渡る）。
   例外として、Idle の F10 は `ToggleDebugWindow` とし、TIP が食うのはデバッグ窓を持つ Debug ビルドだけ
-  である（§8.1）。字種と確定の規則は `docs/tsf-deep-integration-spec.md` §3.6。
+  である（§8.1）。字種と確定の規則は `docs/tsf-deep-integration-spec.md` §3.6。UnicodeInput でも F6〜F10 を
+  字種指定確定の 5 値に写像し、TIP は消費して何もしない（16 進バッファを終えない）。
 - `VK_LEFT` / `VK_RIGHT` / Ctrl+B / Ctrl+F は Selecting でだけ `Backward` / `Forward` になる。
   TIP は batch 変換の文節移動にだけ使い、文節が無いときはパススルーする。
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は

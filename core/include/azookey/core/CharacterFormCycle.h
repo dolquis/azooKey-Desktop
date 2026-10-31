@@ -32,6 +32,14 @@ enum class CommitForm : uint8_t {
   FullwidthRoman,
   HalfwidthRoman,
 };
+// Each form is the CharacterFormCycle index of the same form.
+static_assert(static_cast<size_t>(CommitForm::Hiragana) == CharacterFormCycle::kHiragana &&
+              static_cast<size_t>(CommitForm::Katakana) == CharacterFormCycle::kKatakana &&
+              static_cast<size_t>(CommitForm::HalfwidthKatakana) ==
+                  CharacterFormCycle::kHalfwidthKatakana &&
+              static_cast<size_t>(CommitForm::FullwidthRoman) ==
+                  CharacterFormCycle::kFullwidthAlphanumeric &&
+              static_cast<size_t>(CommitForm::HalfwidthRoman) == CharacterFormCycle::kAscii);
 
 // The text F6-F10 commit for a reading, which may hold the digits and symbols
 // of spec §3.5. The roman forms spell `typed_romaji` when it is non-empty (the

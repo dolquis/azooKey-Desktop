@@ -479,7 +479,14 @@ TEST(CharacterFormEditSession, RecentCommitInOneFormCyclesOnFromThatForm) {
   doc.text = L"カンジ";
   doc.start = doc.end = 3;
   Context context(doc);
-  auto recent = CharacterFormEditSession::CaptureRecentCommit(&context, 7, "かんじ", "カンジ");
+  {
+    // Any other commit of the same text (a katakana candidate) starts over.
+    auto other = CharacterFormEditSession::CaptureRecentCommit(&context, 7, "かんじ", "カンジ");
+    ASSERT_TRUE(other);
+    EXPECT_EQ(other->next_index, azookey::core::CharacterFormCycle::kHiragana);
+  }
+  auto recent = CharacterFormEditSession::CaptureRecentCommit(
+      &context, 7, "かんじ", "カンジ", azookey::core::CharacterFormCycle::kKatakana);
   ASSERT_TRUE(recent);
   for (const wchar_t* expected : {L"ｶﾝｼﾞ", L"ＫＡＮＪＩ", L"KANJI", L"かんじ"}) {
     auto result = CharacterFormEditSession::CycleRecentCommit(&context, 7, *recent);

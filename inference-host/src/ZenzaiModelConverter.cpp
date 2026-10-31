@@ -322,7 +322,28 @@ size_t CountUtf8Codepoints(const std::string& input) {
   return count;
 }
 
-std::string CleanLeftContext(const std::string& preceding_text) {
+// Drops U+EE00..U+EEFF (UTF-8 EE B8 80 .. EE BB BF), the range the prompt draws its control
+// markers from, so user text cannot be read as a marker. Other bytes are kept as they are.
+std::string StripZenzaiControlMarkers(const std::string& text) {
+  std::string output;
+  output.reserve(text.size());
+  for (size_t i = 0; i < text.size();) {
+    if (static_cast<unsigned char>(text[i]) == 0xEE && i + 2 < text.size()) {
+      const auto b1 = static_cast<unsigned char>(text[i + 1]);
+      const auto b2 = static_cast<unsigned char>(text[i + 2]);
+      if (b1 >= 0xB8 && b1 <= 0xBB && b2 >= 0x80 && b2 <= 0xBF) {
+        i += 3;
+        continue;
+      }
+    }
+    output.push_back(text[i]);
+    ++i;
+  }
+  return output;
+}
+
+std::string CleanLeftContext(const std::string& raw_preceding_text) {
+  const auto preceding_text = StripZenzaiControlMarkers(raw_preceding_text);
   const auto last_break = preceding_text.find_last_of("\r\n");
   std::string context =
       last_break == std::string::npos ? preceding_text : preceding_text.substr(last_break + 1);
@@ -592,9 +613,10 @@ std::vector<double> ActiveBeamScores(const std::vector<LlamaBeam>& beams) {
 std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
                               ZenzaiPromptFormat format) {
   std::string prompt;
-  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !context.instruction_profile.empty()) {
+  const auto profile = StripZenzaiControlMarkers(context.instruction_profile);
+  if (ZenzaiPromptFormatUsesInstructionProfile(format) && !profile.empty()) {
     prompt += Utf8(U'\U0000EE03');
-    prompt += context.instruction_profile;
+    prompt += profile;
   }
   const auto left_context = CleanLeftContext(context.preceding_text);
   // zenz-v3 drops an empty context segment; kanakanji-edge-v1 was trained with it always present.
@@ -603,7 +625,7 @@ std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionCon
     prompt += left_context;
   }
   prompt += Utf8(U'\U0000EE00');
-  prompt += ToKatakana(kana);
+  prompt += ToKatakana(StripZenzaiControlMarkers(kana));
   prompt += Utf8(U'\U0000EE01');
   return prompt;
 }

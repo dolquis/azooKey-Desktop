@@ -1599,6 +1599,11 @@ EngineHealthSnapshot InferenceEngine::health_snapshot() const {
   snapshot.learning_entries = store_ ? store_->size() : 0;
   snapshot.user_dict_entries = user_dict_ ? user_dict_->Size() : 0;
   snapshot.health_state = health_.state();
+  if (model_loaded_) {
+    if (const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(model_converter_.get())) {
+      snapshot.prompt_format = zenzai->info().prompt_format;
+    }
+  }
   return snapshot;
 }
 

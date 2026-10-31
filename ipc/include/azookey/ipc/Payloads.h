@@ -103,6 +103,10 @@ struct QueryDiagnosticsPayload {
   std::optional<NeologdLayerStatus> neologd_layer;
   // Protocol v1 additive field. Absent from Hosts that predate it.
   std::optional<BackendSelectionDiagnostics> backend_selection;
+  // Protocol v1 additive field (DEV-1787). "zenz-v3" or "kanakanji-edge-v1", the prompt format
+  // of the loaded model (declared or inferred). Absent when no model is loaded and from Hosts
+  // that predate it.
+  std::optional<std::string> prompt_format;
 };
 
 struct LoadModelRequest {

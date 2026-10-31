@@ -697,6 +697,23 @@ TEST(InputStateTest, ForgetAndDebugWindowKeepState) {
   EXPECT_EQ(debug.actions, (Actions{ToggleDebugWindow{}}));
 }
 
+// tsf-deep-integration-spec §3.6 (DEV-1812): the TIP commits F6-F10 itself
+// (core::BuildCommitForm) on every input path and then resets this state, so
+// the state machine leaves the reading untouched and emits nothing for them.
+TEST(InputStateTest, CommitFormActionsAreLeftToTheFrontend) {
+  for (const UserAction action :
+       {UserAction::CommitHiragana, UserAction::CommitKatakana, UserAction::CommitHalfwidthKatakana,
+        UserAction::CommitFullwidthRoman, UserAction::CommitHalfwidthRoman}) {
+    for (InputState (*make)() : {&Composing, &Previewing, &Selecting, &UnicodeInput}) {
+      const InputState state = make();
+      const HandleResult result = state.HandleEvent(Ev(action));
+      EXPECT_TRUE(result.actions.empty());
+      EXPECT_EQ(result.next.kind(), state.kind());
+      EXPECT_EQ(result.next.Reading(), state.Reading());
+    }
+  }
+}
+
 TEST(InputStateTest, LiveConversionTurnsComposingIntoPreviewing) {
   const InputState first =
       InputState{}.WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k')).next;

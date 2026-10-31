@@ -68,7 +68,7 @@ std::optional<UserActionEvent> MapCtrl(uint32_t key, uint32_t modifiers, InputSt
       break;
     default:
       // Ctrl+A / Ctrl+E (LineHead / LineEnd) wait for a cursor inside the
-      // composition; Ctrl+I / O / S are reserved for script conversions.
+      // composition; Ctrl+I / O / S are not assigned (legacy-parity-spec §1.4).
       break;
   }
   return std::nullopt;
@@ -92,10 +92,22 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
         return Make(UserAction::ToggleHiraKata, modifiers);
       case vk::kOemAttn:
         return Make(UserAction::ToggleAlnum, modifiers);
-      case vk::kF10:
-        return Make(UserAction::ToggleDebugWindow, modifiers);
       default:
         break;
+    }
+    // F6-F10 commit a reading in one form (tsf-deep-integration-spec §3.6); the
+    // Unicode buffer takes them without ending. Without a reading F6-F9 go to
+    // the app and F10 to the debug window.
+    if (virtual_key >= vk::kF6 && virtual_key <= vk::kF10) {
+      if (AcceptsEditing(kind)) {
+        static constexpr UserAction kForms[] = {
+            UserAction::CommitHiragana, UserAction::CommitKatakana,
+            UserAction::CommitHalfwidthKatakana, UserAction::CommitFullwidthRoman,
+            UserAction::CommitHalfwidthRoman};
+        return Make(kForms[virtual_key - vk::kF6], modifiers);
+      }
+      if (virtual_key == vk::kF10) return Make(UserAction::ToggleDebugWindow, modifiers);
+      return std::nullopt;
     }
   }
 

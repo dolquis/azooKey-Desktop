@@ -140,10 +140,29 @@ const Entry kEntries[] = {
      0,
      {A::ToggleAlnum, A::ToggleAlnum, A::ToggleAlnum, A::ToggleAlnum, A::ToggleAlnum,
       A::ToggleAlnum}},
+    // F6-F10 commit a reading in one form (tsf-deep-integration-spec §3.6, DEV-1812).
+    {VK_F6,
+     0,
+     {kNone, A::CommitHiragana, A::CommitHiragana, A::CommitHiragana, kNone, A::CommitHiragana}},
+    {VK_F7,
+     0,
+     {kNone, A::CommitKatakana, A::CommitKatakana, A::CommitKatakana, kNone, A::CommitKatakana}},
+    {VK_F8,
+     0,
+     {kNone, A::CommitHalfwidthKatakana, A::CommitHalfwidthKatakana, A::CommitHalfwidthKatakana,
+      kNone, A::CommitHalfwidthKatakana}},
+    {VK_F9,
+     0,
+     {kNone, A::CommitFullwidthRoman, A::CommitFullwidthRoman, A::CommitFullwidthRoman, kNone,
+      A::CommitFullwidthRoman}},
     {VK_F10,
      0,
-     {A::ToggleDebugWindow, A::ToggleDebugWindow, A::ToggleDebugWindow, A::ToggleDebugWindow,
-      A::ToggleDebugWindow, A::ToggleDebugWindow}},
+     {A::ToggleDebugWindow, A::CommitHalfwidthRoman, A::CommitHalfwidthRoman,
+      A::CommitHalfwidthRoman, A::ToggleDebugWindow, A::CommitHalfwidthRoman}},
+    {VK_F6, kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_F7, kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_F9, kCtrl | kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_F11, 0, {kNone, kNone, kNone, kNone, kNone, kNone}},
 };
 
 TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
@@ -174,6 +193,10 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kNumpad0, static_cast<uint32_t>(VK_NUMPAD0));
   EXPECT_EQ(vk::kNumpad9, static_cast<uint32_t>(VK_NUMPAD9));
   EXPECT_EQ(vk::kSubtract, static_cast<uint32_t>(VK_SUBTRACT));
+  EXPECT_EQ(vk::kF6, static_cast<uint32_t>(VK_F6));
+  EXPECT_EQ(vk::kF7, static_cast<uint32_t>(VK_F7));
+  EXPECT_EQ(vk::kF8, static_cast<uint32_t>(VK_F8));
+  EXPECT_EQ(vk::kF9, static_cast<uint32_t>(VK_F9));
   EXPECT_EQ(vk::kF10, static_cast<uint32_t>(VK_F10));
   EXPECT_EQ(vk::kOemComma, static_cast<uint32_t>(VK_OEM_COMMA));
   EXPECT_EQ(vk::kOemMinus, static_cast<uint32_t>(VK_OEM_MINUS));
@@ -238,7 +261,8 @@ TEST(KeymapTest, AltAndWinChordsAlwaysPassThrough) {
   for (const uint32_t modifiers : {kAlt, kWin, kCtrl | kAlt, kShift | kWin}) {
     for (const K kind : kAllKinds) {
       for (const uint32_t key : {static_cast<uint32_t>('A'), static_cast<uint32_t>(VK_SPACE),
-                                 static_cast<uint32_t>(VK_RETURN), static_cast<uint32_t>('U')}) {
+                                 static_cast<uint32_t>(VK_RETURN), static_cast<uint32_t>('U'),
+                                 static_cast<uint32_t>(VK_F7), static_cast<uint32_t>(VK_F10)}) {
         EXPECT_FALSE(MapUserAction(key, modifiers, kind).has_value());
       }
     }

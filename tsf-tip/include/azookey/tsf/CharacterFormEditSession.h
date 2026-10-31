@@ -63,10 +63,12 @@ class CharacterFormEditSession {
 
   // Call only after a commit edit session actually completed. The returned
   // anchor is absent unless the caret is collapsed immediately after exactly
-  // committed_surface and reading supports the five-form cycle.
+  // committed_surface and reading supports the five-form cycle. An F6-F10
+  // commit passes the CharacterFormCycle index of the form it committed, and
+  // the cycle goes on from the next form.
   static std::optional<CharacterFormRecentCommit> CaptureRecentCommit(
       ITfContext* context, TfClientId client_id, std::string_view reading,
-      std::string_view committed_surface);
+      std::string_view committed_surface, std::optional<size_t> committed_form = std::nullopt);
 
   // Safely rewrites the last committed surface when there is no selection and
   // the caret/context/text still match the captured commit.

@@ -353,6 +353,13 @@ class TextService final : public ITfTextInputProcessorEx,
     prediction_retry_generation_.store(generation, std::memory_order_release);
     OnCandidatesReady(this);
   }
+  // Makes every cached prediction and the last prediction query look `age`
+  // older, as if the UI thread had stalled that long since the result arrived
+  // (DEV-1754).
+  void age_prediction_state_for_test(std::chrono::milliseconds age) {
+    for (auto& [key, entry] : prediction_cache_) entry.stored_at -= age;
+    prediction_last_query_at_ -= age;
+  }
   // True from the moment a prediction response is dropped until its retry has
   // been queued by a candidates-ready notification.
   bool prediction_retry_pending_for_test() const {
@@ -935,6 +942,8 @@ class TextService final : public ITfTextInputProcessorEx,
   CandidateUiCoordinator candidate_ui_;
   PredictionWindow prediction_window_;
   std::vector<ipc::CandidateField> shown_predictions_;  // UI thread only.
+  // The cache key of the reading shown_predictions_ answers; empty when nothing is shown.
+  std::string shown_prediction_key_;  // UI thread only.
   struct PredictionCacheEntry {
     std::vector<ipc::CandidateField> predictions;
     std::chrono::steady_clock::time_point stored_at;

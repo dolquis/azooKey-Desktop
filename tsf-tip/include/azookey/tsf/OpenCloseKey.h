@@ -20,7 +20,8 @@ enum class OpenCloseKeyAction : uint8_t {
   None,
   // Hankaku/Zenkaku: flips the state.
   Toggle,
-  // VK_IME_ON, or Convert under ImeOnOff: on, and hiragana when alphanumeric.
+  // VK_IME_ON, the hiragana key (VK_DBE_HIRAGANA), or Convert under ImeOnOff:
+  // on, and hiragana when alphanumeric.
   Open,
   // VK_IME_OFF, or NonConvert under ImeOnOff: off, committing what is shown.
   Close,
@@ -38,6 +39,7 @@ constexpr OpenCloseKeyAction ClassifyOpenCloseKey(uint32_t virtual_key, uint32_t
     case core::vk::kOemEnlw:
       return OpenCloseKeyAction::Toggle;
     case core::vk::kImeOn:
+    case core::vk::kDbeHiragana:
       return OpenCloseKeyAction::Open;
     case core::vk::kImeOff:
       return OpenCloseKeyAction::Close;

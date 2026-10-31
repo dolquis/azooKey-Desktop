@@ -50,6 +50,7 @@ inline constexpr uint32_t kOem4 = 0xDB;
 inline constexpr uint32_t kOem8 = 0xDF;
 inline constexpr uint32_t kOem102 = 0xE2;
 inline constexpr uint32_t kOemAttn = 0xF0;
+inline constexpr uint32_t kDbeHiragana = 0xF2;
 inline constexpr uint32_t kOemAuto = 0xF3;
 inline constexpr uint32_t kOemEnlw = 0xF4;
 }  // namespace vk

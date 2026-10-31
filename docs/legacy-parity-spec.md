@@ -242,7 +242,9 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_RETURN | (none) | Commit |
 | VK_ESCAPE | (none) | Cancel |
 | VK_1〜VK_9 | (none, Selecting時のみ) | SelectByDigit |
-| VK_1 | Shift | Input（`！`。Selecting でも候補番号にしない。他の Shift+数字は割り当てない） |
+| VK_0〜VK_9、VK_NUMPAD0〜VK_NUMPAD9 | (none, Composing / Previewing) | Input（半角数字を読みに足す。Idle はパススルー。§1.5.3） |
+| VK_1 | Shift | Input（`！`。Selecting でも候補番号にしない） |
+| VK_0〜VK_9 | Shift | Input（生む文字が `docs/tsf-deep-integration-spec.md` §3.5 の表にあれば全角で取り込む。無ければパススルー） |
 | VK_H | Ctrl | Backspace |
 | VK_P | Ctrl | Up |
 | VK_N | Ctrl | Down |

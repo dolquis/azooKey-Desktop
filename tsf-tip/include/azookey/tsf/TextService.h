@@ -1613,6 +1613,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // M5 commit helpers.
   HRESULT CommitSelected(ITfContext* context);
   HRESULT CommitPreeditAsIs(ITfContext* context);
+  // F6-F10 (tsf-deep-integration-spec §3.6): commit the whole reading in one form.
+  HRESULT CommitReadingInForm(ITfContext* context, core::CommitForm form);
 };
 
 class EditSession final : public ITfEditSession {

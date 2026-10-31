@@ -299,10 +299,16 @@ std::optional<CharacterFormRecentCommit> CharacterFormEditSession::CaptureRecent
       captured->caret = caret;
       captured->cycle = *cycle;
       captured->surface = *surface;
-      captured->next_index =
-          committed_surface == std::string_view(cycle->forms[core::CharacterFormCycle::kHiragana])
-              ? core::CharacterFormCycle::kKatakana
-              : core::CharacterFormCycle::kHiragana;
+      // A commit equal to one of the forms (F6-F8, spec §3.6) cycles on from
+      // it. A converted surface, and roman text in the typed case rather than
+      // the cycle's capitals, starts over from hiragana.
+      captured->next_index = core::CharacterFormCycle::kHiragana;
+      for (size_t i = 0; i < cycle->forms.size(); ++i) {
+        if (committed_surface == std::string_view(cycle->forms[i])) {
+          captured->next_index = (i + 1) % cycle->forms.size();
+          break;
+        }
+      }
       return S_OK;
     });
     return hr == S_OK ? captured : std::nullopt;

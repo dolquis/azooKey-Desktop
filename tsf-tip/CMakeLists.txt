@@ -174,6 +174,11 @@ if(AZOOKEY_BUILD_TESTS)
   azookey_discover_tests(tsf_tip_brand_icon_tests TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  # The Release object of this one large test source exceeds the default COFF
+  # section limit (C1128).
+  if(MSVC)
+    target_compile_options(tsf_tip_onkeydown_preedit_tests PRIVATE /bigobj)
+  endif()
   add_executable(tsf_tip_typo_correction_tracker_tests tests/typo_correction_tracker_test.cpp)
   target_include_directories(tsf_tip_typo_correction_tracker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(tsf_tip_typo_correction_tracker_tests PRIVATE

@@ -426,6 +426,11 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     case UserAction::StartUnicodeInput:
     case UserAction::Forget:
     case UserAction::ToggleDebugWindow:
+    case UserAction::CommitHiragana:
+    case UserAction::CommitKatakana:
+    case UserAction::CommitHalfwidthKatakana:
+    case UserAction::CommitFullwidthRoman:
+    case UserAction::CommitHalfwidthRoman:
       return event;
     default:
       return std::nullopt;
@@ -527,6 +532,28 @@ uint32_t ElapsedMs(std::chrono::steady_clock::time_point since) {
 bool IsActionKey(const std::optional<azookey::core::UserActionEvent>& event,
                  azookey::core::UserAction action) {
   return event && event->action == action;
+}
+
+// The form an F6-F10 key commits (tsf-deep-integration-spec §3.6).
+std::optional<azookey::core::CommitForm> CommitFormFor(
+    const std::optional<azookey::core::UserActionEvent>& event) {
+  using azookey::core::CommitForm;
+  using azookey::core::UserAction;
+  if (!event) return std::nullopt;
+  switch (event->action) {
+    case UserAction::CommitHiragana:
+      return CommitForm::Hiragana;
+    case UserAction::CommitKatakana:
+      return CommitForm::Katakana;
+    case UserAction::CommitHalfwidthKatakana:
+      return CommitForm::HalfwidthKatakana;
+    case UserAction::CommitFullwidthRoman:
+      return CommitForm::FullwidthRoman;
+    case UserAction::CommitHalfwidthRoman:
+      return CommitForm::HalfwidthRoman;
+    default:
+      return std::nullopt;
+  }
 }
 
 std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data) {
@@ -2616,6 +2643,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = ClaimsForgetKey(context) ? TRUE : FALSE;
       return S_OK;
     }
+    // F6-F10 with a reading, the Unicode buffer or the emoji query (spec §3.6).
+    if (CommitFormFor(m18_key)) {
+      *eaten = TRUE;
+      return S_OK;
+    }
 
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
@@ -3018,6 +3050,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     recent_character_form_commit_.reset();
 
+    // Spec §3.6: Unicode input and the emoji query take F6-F10 and do nothing.
+    if (CommitFormFor(mode_key) && (UnicodeInputActive() || emoji_mode_ != EmojiMode::Inactive)) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+
     if (!HasSystemModifier(modifiers) && !UnicodeInputActive()) {
       bool emoji_handled = false;
       const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
@@ -3146,6 +3184,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const auto decimal_digit = TypedDecimalDigit(wParam, lParam, modifiers);
     using core::UserAction;
     if (IsActionKey(key_event, UserAction::StartUnicodeInput) && !unicode_routed) return S_OK;
+    // Spec §3.6 (DEV-1812): F6-F10 commit the reading in one form from every
+    // path that holds one (core, batch, number rewriter, the rewriter window).
+    if (const auto form = CommitFormFor(key_event)) {
+      *eaten = TRUE;
+      const HRESULT form_hr = CommitReadingInForm(context, *form);
+      return form_hr == E_OUTOFMEMORY ? form_hr : S_OK;
+    }
     core::RomajiKanaConverter input_romaji = romaji_;
     auto input_table = batch_romaji_table_;
     if (!has_preedit && batch_raw_romaji_.empty()) {
@@ -3890,8 +3935,13 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
   *eaten = FALSE;
   if (final_punctuation_hold_) ResolveFinalPunctuationHold();
   // With the IME closed, in alphanumeric mode or in an app-disabled context,
-  // F10 belongs to the application (menu activation).
-  if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) && ClaimsDebugWindowKey(context)) {
+  // F10 belongs to the application (menu activation). With a reading it goes on
+  // to the key sinks, which commit the reading in half-width roman (spec §3.6).
+  if (IsEqualGUID(rguid, kDebugWindowPreservedKeyGuid) &&
+      IsActionKey(MapTipKey(VK_F10, 0, !preedit_kana_.empty() || romaji_.HasPending(),
+                            candidate_ui_.IsShowing(), UnicodeInputActive()),
+                  core::UserAction::ToggleDebugWindow) &&
+      ClaimsDebugWindowKey(context)) {
     ToggleDebugWindow();
     *eaten = TRUE;
   } else if (IsEqualGUID(rguid, kProofreadPreservedKeyGuid) && ClaimsProofreadKey(context)) {
@@ -5454,6 +5504,101 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     ClearBatchState();
   } else if (!committing_) {
     commit_surface_.clear();
+  }
+  return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
+}
+
+// Spec §3.6 (DEV-1812): the whole reading, not the candidate or the live
+// conversion shown, in the form of the key. Batch input commits the kana of its
+// raw input, or the raw input itself for the roman forms. Otherwise the roman
+// forms spell the romaji typed while it still spells the reading by the M60
+// rule (inline-english-candidate-spec §4.1) on the built-in table, and core
+// respells the kana in Hepburn when it does not.
+HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm form) {
+  if (!context) return S_OK;
+  std::string reading;
+  std::string typed_romaji;
+  if (!batch_raw_romaji_.empty()) {
+    reading = BatchReadingForConversion();
+    typed_romaji = batch_raw_romaji_;
+  } else {
+    // Romaji typed before a Backspace is trimmed as Space trims it.
+    if (!candidate_ui_.IsShowing()) SyncEnglishRawRomaji();
+    preedit_kana_ += romaji_.Flush();
+    reading = preedit_kana_;
+    if (!romaji_.HasCustomTable()) typed_romaji = EnglishRawRomajiFor(reading);
+  }
+  if (reading.empty()) return S_OK;
+  const bool roman =
+      form == core::CommitForm::FullwidthRoman || form == core::CommitForm::HalfwidthRoman;
+  const std::string surface =
+      core::BuildCommitForm(reading, form, roman ? typed_romaji : std::string{});
+
+  candidate_ui_.EndUI();
+  selected_candidate_idx_ = 0;
+  shown_candidates_.clear();
+  {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
+  // M10: cancel queued and in-flight queries like the other commits.
+  {
+    std::lock_guard<std::mutex> lk(ipc_mtx_);
+    bool need_notify = false;
+    if (ipc_has_request_) {
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
+                                 false, ipc_pending_id_, 0, ipc_pending_trace_id_});
+      ipc_has_request_ = false;
+      need_notify = true;
+    }
+    if (ipc_inflight_id_ != 0) {
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                                 false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
+      ipc_inflight_window_query_id_ = 0;
+      need_notify = true;
+    }
+    ++ipc_pending_id_;
+    TrimIpcSendQueueLocked();
+    if (need_notify) ipc_cv_.notify_one();
+  }
+
+  commit_surface_ = surface;
+  committing_ = true;
+  SetCommitContext(context);
+  pending_commit_observation_.reset();
+  // Only the katakana forms are learned: hiragana is the reading as is, and
+  // roman text must not join the candidates of a kana reading.
+  if (form == core::CommitForm::Katakana || form == core::CommitForm::HalfwidthKatakana) {
+    const auto privacy = ResolvePrivacy(context, false);
+    if (privacy.learning_allowed && batch_learning_allowed_) {
+      ipc::CandidateField chosen;
+      chosen.surface = surface;
+      chosen.reading = reading;
+      chosen.source = "heuristic";
+      pending_commit_observation_ =
+          PendingCommitObservation{reading, std::move(chosen), {}, {}, privacy.secure, true};
+    }
+  }
+  const std::string committed_surface = commit_surface_;
+  PrepareTypoCommit(reading);
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (SUCCEEDED(commit_hr)) {
+    recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
+        context, client_id_, reading, committed_surface);
+    preedit_kana_.clear();
+    romaji_.Reset();
+    live_display_reading_.clear();
+    live_display_surface_.clear();
+    live_display_segments_.clear();
+    live_display_auto_punctuation_ = false;
+    live_carries_.clear();
+    input_state_ = input_state_.Reset();
+    core_marked_surface_.clear();
+    ClearBatchState();
+  } else if (!committing_) {
+    commit_surface_.clear();
+    pending_commit_observation_.reset();
   }
   return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
 }

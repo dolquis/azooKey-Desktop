@@ -14645,3 +14645,274 @@ TEST(TsfTipEnglishCandidatesTest, ReadingWithTakenDigitsOrSymbolsSendsNoRawRomaj
     EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), item.raw_romaji);
   }
 }
+
+// DEV-1812 (tsf-deep-integration-spec §3.6): F6-F10 commit the whole reading
+// in one form with one key, from the core path and the legacy path alike.
+namespace {
+
+void TypeKanji(DocumentPreeditHarness& h, bool legacy = false) {
+  ConfigureTypoHarness(h, legacy);
+  TypeTypoRomaji(h, "KANJI");
+  ASSERT_EQ(h.service.preedit_kana_, "かんじ");
+  ASSERT_EQ(h.context.document->text, L"かんじ");
+}
+
+void PressForm(DocumentPreeditHarness& h, WPARAM key) {
+  ASSERT_TRUE(ProbeTypoKey(h, key)) << "key " << key;
+  ASSERT_TRUE(h.Press(key)) << "key " << key;
+}
+
+void ExpectCommitted(DocumentPreeditHarness& h, std::wstring_view text) {
+  EXPECT_EQ(h.context.document->text, text);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+void PressShifted(DocumentPreeditHarness& h, WPARAM key) {
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  ASSERT_TRUE(h.Press(key));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+}
+
+}  // namespace
+
+TEST(TsfTipCommitFormTest, FunctionKeysCommitTheReadingInEachForm) {
+  const struct {
+    WPARAM key;
+    const wchar_t* text;
+  } kCases[] = {{VK_F6, L"かんじ"},
+                {VK_F7, L"カンジ"},
+                {VK_F8, L"ｶﾝｼﾞ"},
+                {VK_F9, L"ｋａｎｊｉ"},
+                {VK_F10, L"kanji"}};
+  for (const bool legacy : {false, true}) {
+    for (const auto& item : kCases) {
+      SCOPED_TRACE(::testing::Message() << "legacy " << legacy << " key " << item.key);
+      DocumentPreeditHarness h;
+      TypeKanji(h, legacy);
+      PressForm(h, item.key);
+      ExpectCommitted(h, item.text);
+    }
+  }
+}
+
+// The roman forms spell the romaji as typed, Shift included, while it still
+// spells the reading (inline-english-candidate-spec §4.1).
+TEST(TsfTipCommitFormTest, RomanFormsKeepTheTypedCase) {
+  for (const WPARAM key : {WPARAM{VK_F9}, WPARAM{VK_F10}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    PressShifted(h, 'K');
+    TypeTypoRomaji(h, "ANJI");
+    ASSERT_EQ(h.service.preedit_kana_, "かんじ");
+    PressForm(h, key);
+    ExpectCommitted(h, key == VK_F9 ? L"Ｋａｎｊｉ" : L"Kanji");
+  }
+}
+
+// A digit or a symbol taken into the reading leaves the typed romaji unable to
+// spell it: the roman forms respell the kana in lowercase Hepburn and map the
+// symbol back to the ASCII typed. The kana forms keep them as they are.
+TEST(TsfTipCommitFormTest, DigitsAndSymbolsOfTheReading) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  const struct {
+    WPARAM key;
+    const wchar_t* text;
+  } kDigitCases[] = {{VK_F6, L"だい3かい"},
+                     {VK_F7, L"ダイ3カイ"},
+                     {VK_F8, L"ﾀﾞｲ3ｶｲ"},
+                     {VK_F9, L"ｄａｉ３ｋａｉ"},
+                     {VK_F10, L"dai3kai"}};
+  for (const auto& item : kDigitCases) {
+    SCOPED_TRACE(item.key);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    TypeTypoRomaji(h, "DAI3KAI");
+    ASSERT_EQ(h.service.preedit_kana_, "だい3かい");
+    PressForm(h, item.key);
+    ExpectCommitted(h, item.text);
+  }
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  PressShifted(h, 'K');
+  TypeTypoRomaji(h, "AKKO");
+  ASSERT_TRUE(h.Press(VK_OEM_4));
+  ASSERT_EQ(h.service.preedit_kana_, "かっこ「");
+  PressForm(h, VK_F10);
+  ExpectCommitted(h, L"kakko[");
+}
+
+// Selecting and live conversion commit the reading, not the candidate or the
+// conversion shown.
+TEST(TsfTipCommitFormTest, SelectingCommitsTheReadingNotTheCandidate) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    AnswerWindow(h);
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    ASSERT_EQ(h.context.document->text, L"蚊");
+    PressForm(h, VK_F7);
+    ExpectCommitted(h, L"カ");
+  }
+}
+
+TEST(TsfTipCommitFormTest, LiveConversionCommitsTheReadingNotTheConversion) {
+  for (const WPARAM key : {WPARAM{VK_F6}, WPARAM{VK_F10}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_live_conversion_for_test(true);
+    TypeTypoRomaji(h, "KA");
+    const uint64_t request = h.service.pending_ipc_request_id_for_test();
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_live_conversion_result_for_test(request, "か", "蚊");
+    h.service.apply_live_conversion_result_for_test();
+    ASSERT_EQ(h.context.document->text, L"蚊");
+    PressForm(h, key);
+    ExpectCommitted(h, key == VK_F6 ? L"か" : L"ka");
+  }
+}
+
+// legacy-parity-spec §1.2: F7 typed while the window Space asked for is
+// unanswered waits for it and commits the whole reading once it opens.
+TEST(TsfTipCommitFormTest, KeyTypedWhileTheWindowWaitsReplaysAfterItOpens) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_F7);
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    AnswerWindow(h);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    ExpectCommitted(h, L"カ");
+  }
+}
+
+// Only the katakana forms are learned, as the pair of the reading and the text.
+TEST(TsfTipCommitFormTest, OnlyKatakanaFormsAreObserved) {
+  for (const WPARAM key :
+       {WPARAM{VK_F6}, WPARAM{VK_F7}, WPARAM{VK_F8}, WPARAM{VK_F9}, WPARAM{VK_F10}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    TypeKanji(h);
+    PressForm(h, key);
+    const auto observed = h.service.last_queued_commit_observation_for_test();
+    if (key == VK_F7 || key == VK_F8) {
+      ASSERT_TRUE(observed);
+      EXPECT_EQ(observed->reading, "かんじ");
+      EXPECT_EQ(observed->chosen.surface, key == VK_F7 ? "カンジ" : "ｶﾝｼﾞ");
+    } else {
+      EXPECT_FALSE(observed);
+    }
+  }
+  DocumentPreeditHarness h;
+  TypeKanji(h);
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  PressForm(h, VK_F7);
+  ExpectCommitted(h, L"カンジ");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+// Without a reading F6-F9 go to the app (F7 is caret browsing in Edge); with
+// one, a modifier still leaves the key to the app and the reading as it is.
+TEST(TsfTipCommitFormTest, KeysWithoutAReadingOrWithModifiersPassThrough) {
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    for (const WPARAM key : {WPARAM{VK_F6}, WPARAM{VK_F7}, WPARAM{VK_F8}, WPARAM{VK_F9}}) {
+      EXPECT_FALSE(ProbeTypoKey(h, key)) << key;
+      EXPECT_FALSE(h.Press(key)) << key;
+    }
+  }
+  for (const int modifier : {VK_SHIFT, VK_CONTROL}) {
+    SCOPED_TRACE(modifier);
+    DocumentPreeditHarness h;
+    TypeKanji(h);
+    h.keyboard_state.SetDown(modifier, true);
+    EXPECT_FALSE(ProbeTypoKey(h, VK_F7));
+    EXPECT_FALSE(h.Press(VK_F7));
+    h.keyboard_state.SetDown(modifier, false);
+    EXPECT_EQ(h.service.preedit_kana_, "かんじ");
+    EXPECT_EQ(h.context.document->text, L"かんじ");
+  }
+}
+
+// legacy-parity-spec §8.1: the debug window keeps F10 only without a reading.
+// With one, the preserved key passes F10 on to the key sinks.
+TEST(TsfTipCommitFormTest, F10WithAReadingNeverOpensTheDebugWindow) {
+  DebugWindowKeyGuard debug_build(true);
+  DocumentPreeditHarness h;
+  TypeKanji(h);
+  BOOL eaten = TRUE;
+  EXPECT_EQ(
+      h.service.OnPreservedKey(&h.context, azookey::tsf::kDebugWindowPreservedKeyGuid, &eaten),
+      S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.preedit_kana_, "かんじ");
+  PressForm(h, VK_F10);
+  ExpectCommitted(h, L"kanji");
+  EXPECT_FALSE(h.service.debug_window_visible_for_test());
+  // Without a reading F10 is the debug window's again.
+  EXPECT_TRUE(ProbeTypoKey(h, VK_F10));
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_TRUE(h.service.debug_window_visible_for_test());
+  EXPECT_EQ(h.context.document->text, L"kanji");
+}
+
+// A release build leaves F10 without a reading to the app (the menu bar).
+TEST(TsfTipCommitFormTest, ReleaseBuildCommitsWithF10AndLeavesIdleF10ToTheApp) {
+  DebugWindowKeyGuard release_build(false);
+  DocumentPreeditHarness h;
+  TypeKanji(h);
+  PressForm(h, VK_F10);
+  ExpectCommitted(h, L"kanji");
+  EXPECT_FALSE(ProbeTypoKey(h, VK_F10));
+  EXPECT_FALSE(h.Press(VK_F10));
+}
+
+// Batch input commits the kana of its raw input, or the raw input itself for
+// the roman forms.
+TEST(TsfTipCommitFormTest, BatchInputCommitsItsRawInput) {
+  for (const WPARAM key : {WPARAM{VK_F7}, WPARAM{VK_F10}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    TypeTypoRomaji(h, "KANJI");
+    ASSERT_EQ(h.service.batch_raw_romaji_for_test(), "kanji");
+    PressForm(h, key);
+    ExpectCommitted(h, key == VK_F7 ? L"カンジ" : L"kanji");
+    EXPECT_TRUE(h.service.batch_raw_romaji_for_test().empty());
+  }
+}
+
+// Unicode input and the emoji query take F6-F10 and change nothing.
+TEST(TsfTipCommitFormTest, UnicodeInputAndEmojiQueryTakeTheKeysWithoutChange) {
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    PressCtrlShift(h, 'U');
+    ASSERT_TRUE(h.Press('3'));
+    ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
+    PressForm(h, VK_F7);
+    EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::UnicodeInput);
+    EXPECT_EQ(h.service.input_state_for_test().unicode_hex(), "3");
+  }
+  EmojiHarness h;
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  for (const auto key : {'S', 'M'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.preedit_kana_, ":sm");
+  EXPECT_TRUE(h.TestPress(VK_F7));
+  EXPECT_TRUE(h.Press(VK_F7));
+  EXPECT_EQ(h.service.preedit_kana_, ":sm");
+  h.List();
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  EXPECT_TRUE(h.TestPress(VK_F10));
+  EXPECT_TRUE(h.Press(VK_F10));
+  EXPECT_EQ(h.service.preedit_kana_, ":sm");
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+}

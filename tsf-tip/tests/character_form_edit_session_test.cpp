@@ -472,6 +472,24 @@ TEST(CharacterFormEditSession, CyclesRecentCommitWithoutSelection) {
   EXPECT_EQ(context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
 }
 
+TEST(CharacterFormEditSession, RecentCommitInOneFormCyclesOnFromThatForm) {
+  // F7 commits katakana (tsf-deep-integration-spec §3.6); NonConvert goes on
+  // to the next form of §3.2 instead of starting over from hiragana.
+  Document doc;
+  doc.text = L"カンジ";
+  doc.start = doc.end = 3;
+  Context context(doc);
+  auto recent = CharacterFormEditSession::CaptureRecentCommit(&context, 7, "かんじ", "カンジ");
+  ASSERT_TRUE(recent);
+  for (const wchar_t* expected : {L"ｶﾝｼﾞ", L"ＫＡＮＪＩ", L"KANJI", L"かんじ"}) {
+    auto result = CharacterFormEditSession::CycleRecentCommit(&context, 7, *recent);
+    ASSERT_TRUE(result.replaced);
+    ASSERT_TRUE(result.state);
+    EXPECT_EQ(doc.text, expected);
+    recent = std::move(result.state);
+  }
+}
+
 TEST(CharacterFormEditSession, RecentCommitMustStillMatchCaretAndText) {
   Document doc;
   doc.text = L"明日";

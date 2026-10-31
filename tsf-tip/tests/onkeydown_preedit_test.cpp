@@ -186,9 +186,10 @@ std::optional<char> TranslateDefaultAsciiDecimalDigitForTest(WPARAM virtual_key,
 
 class AsciiDecimalDigitTranslationGuard {
  public:
-  AsciiDecimalDigitTranslationGuard() {
-    azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(
-        &TranslateDefaultAsciiDecimalDigitForTest);
+  explicit AsciiDecimalDigitTranslationGuard(
+      azookey::tsf::testing::TranslateAsciiDecimalDigitFnForTest translate =
+          &TranslateDefaultAsciiDecimalDigitForTest) {
+    azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(translate);
   }
 
   ~AsciiDecimalDigitTranslationGuard() {
@@ -13971,31 +13972,39 @@ TEST(TsfTipWindowWaitTest, DigitCommitsThatCandidate) {
   EXPECT_TRUE(h.service.preedit_kana_.empty());
 }
 
-// DEV-1811 (legacy-parity-spec §1.4): a numpad digit is a candidate number too.
+// DEV-1811 (legacy-parity-spec §1.4): a numpad digit is a candidate number
+// too, on the core path and the number rewriter's legacy path.
 TEST(TsfTipWindowWaitTest, NumpadDigitCommitsThatCandidate) {
   AsciiDecimalDigitTranslationGuard digits;
-  DocumentPreeditHarness h;
-  StartWindowWait(h);
-  PressWhileWaiting(h, VK_NUMPAD3);
-  AnswerWindow(h);
-  EXPECT_EQ(h.context.document->text, L"課");
-  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_NUMPAD3);
+    AnswerWindow(h);
+    EXPECT_EQ(h.context.document->text, L"課");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+  }
 }
 
 // DEV-1811: 0 is held like a character; replayed in the window it commits the
-// highlight and starts the next reading with 0.
+// highlight and starts the next reading with 0. The number rewriter's window
+// closes and takes the 0 into its reading instead (legacy-parity-spec §1.2).
 TEST(TsfTipWindowWaitTest, ZeroCommitsTheSelectionAndStartsTheNextReading) {
   AsciiDecimalDigitTranslationGuard digits;
-  for (const WPARAM zero : {WPARAM{'0'}, WPARAM{VK_NUMPAD0}}) {
-    SCOPED_TRACE(zero);
-    DocumentPreeditHarness h;
-    StartWindowWait(h);
-    PressWhileWaiting(h, zero);
-    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
-    AnswerWindow(h);
-    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
-    EXPECT_EQ(h.context.document->text, L"蚊0");
-    EXPECT_EQ(h.service.preedit_kana_, "0");
+  for (const bool legacy : {false, true}) {
+    for (const WPARAM zero : {WPARAM{'0'}, WPARAM{VK_NUMPAD0}}) {
+      SCOPED_TRACE(::testing::Message() << "legacy " << legacy << " key " << zero);
+      DocumentPreeditHarness h;
+      StartWindowWait(h, legacy);
+      PressWhileWaiting(h, zero);
+      ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+      AnswerWindow(h);
+      EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+      EXPECT_EQ(h.context.document->text, legacy ? L"か0" : L"蚊0");
+      EXPECT_EQ(h.service.preedit_kana_, legacy ? "か0" : "0");
+      EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+    }
   }
 }
 
@@ -14003,16 +14012,42 @@ TEST(TsfTipWindowWaitTest, ZeroCommitsTheSelectionAndStartsTheNextReading) {
 // key the reading does not take goes on to the app without waiting.
 TEST(TsfTipWindowWaitTest, TableSymbolWaitsAndOtherSymbolKeysPass) {
   OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    // VK_OEM_102 makes no character on the US layout.
+    EXPECT_FALSE(ProbeTypoKey(h, VK_OEM_102));
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    PressWhileWaiting(h, VK_OEM_4);
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+    AnswerWindow(h);
+    EXPECT_EQ(h.context.document->text, L"蚊「");
+    EXPECT_EQ(h.service.preedit_kana_, "「");
+  }
+}
+
+// DEV-1811: with bracket pairing on, a [ typed while the window waits is held
+// too; replayed in the window it commits the first candidate and inserts the
+// pair, as it does while Selecting.
+TEST(TsfTipWindowWaitTest, BracketPairingKeyWaitsAndPairsAfterTheCommit) {
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  struct BracketTranslationGuard {
+    BracketTranslationGuard() {
+      azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
+    }
+    ~BracketTranslationGuard() { azookey::tsf::testing::ClearTranslateBracketCharacterForTest(); }
+  } bracket_translation;
   DocumentPreeditHarness h;
+  azookey::core::BracketSettings settings;
+  settings.pairing.enabled = true;
+  h.service.set_bracket_settings_for_test(settings);
   StartWindowWait(h);
-  // VK_OEM_102 makes no character on the US layout.
-  EXPECT_FALSE(ProbeTypoKey(h, VK_OEM_102));
-  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
   PressWhileWaiting(h, VK_OEM_4);
   ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
   AnswerWindow(h);
-  EXPECT_EQ(h.context.document->text, L"蚊「");
-  EXPECT_EQ(h.service.preedit_kana_, "「");
+  EXPECT_EQ(h.context.document->text, L"蚊「」");
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
 }
 
 TEST(TsfTipWindowWaitTest, CharacterCommitsTheSelectionAndStartsTheNextInput) {
@@ -14320,6 +14355,14 @@ TEST(TsfTipWindowWaitTest, KeyReplayedIntoTheHeldEnterIsTrackedOnce) {
 // off) and the legacy path (on).
 namespace {
 
+// A layout whose Shift makes the digit (AZERTY).
+std::optional<char> TranslateShiftedDigitForTest(WPARAM key, LPARAM) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (key < '0' || key > '9' || (keyboard_state[VK_SHIFT] & 0x80) == 0) return std::nullopt;
+  return static_cast<char>(key);
+}
+
 struct TypedKey {
   WPARAM key;
   bool shift;
@@ -14469,17 +14512,10 @@ TEST(TsfTipReadingSymbolTest, IdleDigitsAndNumpadSymbolsGoToTheAppAndSymbolsStar
   }
 }
 
-// A layout whose Shift makes the digit (AZERTY): Shift+digit is no digit, so
-// it starts nothing from Idle and selects nothing (spec §3.5).
-std::optional<char> TranslateShiftedDigitForTest(WPARAM key, LPARAM) {
-  std::array<BYTE, 256> keyboard_state{};
-  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
-  if (key < '0' || key > '9' || (keyboard_state[VK_SHIFT] & 0x80) == 0) return std::nullopt;
-  return static_cast<char>(key);
-}
-
+// Shift+digit is no digit on such a layout: it starts nothing from Idle and
+// selects nothing (spec §3.5).
 TEST(TsfTipReadingSymbolTest, ShiftedDigitRowIsNoDigitOnALayoutWhoseShiftMakesDigits) {
-  azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(&TranslateShiftedDigitForTest);
+  AsciiDecimalDigitTranslationGuard digits(&TranslateShiftedDigitForTest);
   OemCompositionTranslationGuard oem_translation([](WPARAM key, LPARAM) -> std::optional<WCHAR> {
     if (key >= '0' && key <= '9') return static_cast<WCHAR>(key);
     return std::nullopt;
@@ -14491,7 +14527,6 @@ TEST(TsfTipReadingSymbolTest, ShiftedDigitRowIsNoDigitOnALayoutWhoseShiftMakesDi
   EXPECT_FALSE(h.Press('1'));
   h.keyboard_state.SetDown(VK_SHIFT, false);
   EXPECT_TRUE(h.context.document->text.empty());
-  azookey::tsf::testing::ClearTranslateAsciiDecimalDigitForTest();
 }
 
 TEST(TsfTipReadingSymbolTest, AlnumModeLeavesDigitsAndSymbolsToTheApp) {
@@ -14523,4 +14558,90 @@ TEST(TsfTipReadingSymbolTest, BatchRomajiKeepsAsciiAndPreviewsFullWidthSymbols) 
   h.keyboard_state.SetDown(VK_SHIFT, false);
   EXPECT_EQ(h.service.batch_raw_romaji_for_test(), "dai3kai[:");
   EXPECT_EQ(h.context.document->text, L"だい3かい「：");
+}
+
+// DEV-1811: a table symbol that the emoji search does not take ends the
+// search; the typed :smile stays and the symbol joins it full-width.
+TEST(TsfTipReadingSymbolTest, TableSymbolAfterAnEmojiSearchJoinsTheTypedText) {
+  EmojiHarness h;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  for (const WPARAM key : {'S', 'M', 'I', 'L', 'E'}) ASSERT_TRUE(h.Press(key)) << key;
+  ASSERT_EQ(h.service.preedit_kana_, ":smile");
+  EXPECT_TRUE(h.TestPress(VK_OEM_4));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.service.preedit_kana_, ":smile「");
+}
+
+// DEV-1811 (legacy-parity-spec §6.1): a table symbol ends Unicode input like
+// any other non-hex key: the codepoint commits and the symbol starts the next
+// reading.
+TEST(TsfTipReadingSymbolTest, TableSymbolEndsUnicodeInputAndStartsAReading) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  PressCtrlShift(h, 'U');
+  for (const WPARAM key : {WPARAM{'3'}, WPARAM{'0'}, WPARAM{'4'}, WPARAM{'2'}})
+    ASSERT_TRUE(h.Press(key)) << key;
+  ASSERT_EQ(h.context.document->text, L"U+3042");
+  EXPECT_TRUE(ProbeTypoKey(h, VK_OEM_MINUS));
+  EXPECT_TRUE(h.Press(VK_OEM_MINUS));
+  EXPECT_EQ(h.context.document->text, L"あー");
+  EXPECT_EQ(h.service.preedit_kana_, "ー");
+}
+
+// DEV-1811 (inline-english-candidate-spec §4.1): a digit or table symbol in the
+// reading is no romaji, so Space sends no raw_romaji for it, while - and
+// the sentence marks still do.
+TEST(TsfTipEnglishCandidatesTest, ReadingWithTakenDigitsOrSymbolsSendsNoRawRomaji) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  const struct {
+    const char* name;
+    bool number_rewriter;
+    std::vector<std::pair<WPARAM, bool>> keys;
+    const char* raw_romaji;
+  } cases[] = {
+      {"kakko[",
+       false,
+       {{'K', false}, {'A', false}, {'K', false}, {'K', false}, {'O', false}, {VK_OEM_4, false}},
+       ""},
+      {"ji:kan",
+       false,
+       {{'J', false}, {'I', false}, {VK_OEM_1, true}, {'K', false}, {'A', false}, {'N', false}},
+       ""},
+      {"dai3kai",
+       true,
+       {{'D', false},
+        {'A', false},
+        {'I', false},
+        {'3', false},
+        {'K', false},
+        {'A', false},
+        {'I', false}},
+       ""},
+      {"ra-men",
+       false,
+       {{'R', false},
+        {'A', false},
+        {VK_OEM_MINUS, false},
+        {'M', false},
+        {'E', false},
+        {'N', false}},
+       "ra-men"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    TextServiceHarness h;
+    h.service.set_english_candidates_for_test(true);
+    h.service.set_number_rewriter_enabled_for_test(item.number_rewriter);
+    for (const auto& [key, shift] : item.keys) {
+      h.keyboard_state.SetDown(VK_SHIFT, shift);
+      EXPECT_TRUE(h.Press(key)) << key;
+      h.keyboard_state.SetDown(VK_SHIFT, false);
+    }
+    EXPECT_TRUE(h.Press(VK_SPACE));
+    EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), item.raw_romaji);
+  }
 }

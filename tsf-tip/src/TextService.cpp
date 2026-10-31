@@ -3189,11 +3189,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         english_typed = (modifiers & core::kModifierShift) != 0
                             ? static_cast<char>(wParam)
                             : static_cast<char>(std::tolower(static_cast<unsigned char>(wParam)));
-      else if (decimal_digit)
-        english_typed = *decimal_digit;
-      // The numpad's half-width . and / do not spell the reading back through
-      // ApplyCompositionSymbols, so a reading with them sends no raw romaji.
-      else if (composition_symbol && composition_symbol->raw != '\0')
+      // Only `-` and 、。？！ of the symbols are romaji (M60 §4.1): a digit or
+      // another symbol taken into the reading is not recorded, so the romaji
+      // no longer spells the reading and none is sent (DEV-1811).
+      else if (IsLongVowelSymbol(composition_symbol) || IsExplicitPunctuation(composition_symbol))
         english_typed = composition_symbol->raw;
       if (english_typed) {
         SyncEnglishRawRomaji();
@@ -9984,10 +9983,10 @@ std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
   const auto& table = batch_romaji_table_;
   // The reading is either the preview (pending romaji shown as typed) or, once
   // Space flushed it, the committed conversion; the romaji must spell one.
-  if (ApplyCompositionSymbols(
+  if (ApplyDefaultCompositionPunctuation(
           core::RomajiKanaConverter::ConvertForCommit(english_raw_romaji_, table)) == reading ||
-      ApplyCompositionSymbols(core::RomajiKanaConverter::Preview(english_raw_romaji_, table)) ==
-          reading)
+      ApplyDefaultCompositionPunctuation(
+          core::RomajiKanaConverter::Preview(english_raw_romaji_, table)) == reading)
     return english_raw_romaji_;
   return {};
 }
@@ -9999,9 +9998,10 @@ std::vector<std::string> TextService::AltReadingsFor(const std::string& reading,
   // reading the romaji may belong to another reading.
   if (batch_romaji_table_ || EnglishRawRomajiFor(reading).empty()) return {};
   auto readings = core::RomajiKanaConverter::AmbiguousReadings(english_raw_romaji_, max_ambiguous);
-  if (readings.size() < 2 || ApplyCompositionSymbols(readings.front()) != reading) return {};
+  if (readings.size() < 2 || ApplyDefaultCompositionPunctuation(readings.front()) != reading)
+    return {};
   readings.erase(readings.begin());
-  for (auto& alternative : readings) alternative = ApplyCompositionSymbols(alternative);
+  for (auto& alternative : readings) alternative = ApplyDefaultCompositionPunctuation(alternative);
   return readings;
 }
 

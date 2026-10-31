@@ -68,33 +68,24 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 
 ## 3. InputState への統合（M13）
 
-### 3.1 UserAction（新 enum 値なし・VK マッピングは拡張が必要）
+### 3.1 UserAction（新 enum 値なし・カッコキーは TIP が写像より前に処理する）
 
 `docs/legacy-parity-spec.md` §1.1 の `UserAction::Input`（および英数モードの
 `InputAlnum`）は `UserActionEvent.codepoint` に打鍵由来の Unicode コードポイントを
 持つ。本機能は **codepoint を分類する層**を InputState に足すだけでよく、新しい
 `UserAction` enum 値は**追加しない**（`Input` / `InputAlnum` を再利用する）。
 
-ただし **VK→UserAction マッピング（§1.4）は拡張が必要**である。M13 §1.4 の表は現状
-`VK_A〜VK_Z` のみを `Input` に写し、カッコ・記号を生む OEM キー（`VK_OEM_4`=`[`、
-`VK_OEM_6`=`]`、`VK_OEM_1` 等、および JIS 配列で `「」` 等を生むキー）は写していない。
-このままだとブラケットキーが `UserActionEvent.codepoint` を生まず、InputState が開き/
-閉じカッコを分類できないため**本機能が発火しない**。したがって M61-A は次を行う:
+カッコを生む OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、`VK_OEM_1` 等、JIS 配列で `「」` 等を生むキー、
+丸括弧を生む Shift+8/9 等）は、`core/src/UserActionMap.cpp` の写像で `Input` になる
+（`docs/legacy-parity-spec.md` §1.5.3）。本機能が有効なとき（`bracketPairing == true` かつ前面アプリと
+入力モードで有効。§4.4・§4.5）は、TIP がこれらのキーを写像より前に処理し、ペアの挿入・スキップ・削除を行う。
+codepoint は `ToUnicode`（キーボードレイアウト + シフト状態）で得た文字から、`inputMode` の字形
+（§4.4）で決める。
 
-- **ブラケット/記号を生む VK を `Input` / `InputAlnum` へ写すエントリを M13 §1.4 の
-  VK→UserAction 表（`tsf-tip/src/TextService.cpp::OnKeyDown` 内テーブル /
-  `core/src/UserActionMap.cpp`）へ追加する。** codepoint は**入力モード依存**で、
-  `ToUnicode`（キーボードレイアウト + シフト状態）または IME の現在モード
-  （`hiragana` で `[`→`「` 等）から解決し、`UserActionEvent.codepoint` に載せる（§4.4）。
-- 分類自体は codepoint ベース（下記）なので、表に載せる VK 集合は §4.1 の対応表を包含
-  すれば十分（OEM_4/6/1/7/さらに丸括弧を生む Shift+8/9 等。実装時に対象 VK を確定）。
-- `bracketPairing == false` のときは、これら VK は従来どおりアプリへパススルー（あるいは
-  IME の通常文字処理）であり、新マッピングが既存挙動を変えないようガードする（§5.3 の
-  `OnTestKeyDown` eaten 判定も `bracketPairing` ＆有効モードでのみ TRUE）。
-
-> このマッピング拡張は M13（入力パイプライン）の VK 表を「不変」とはしないが、`UserAction`
-> 列挙・InputState 種別・ClientAction 枠組みには破壊的変更を加えない（純粋追加）。M13 が
-> 既に OEM キーを `Input` へ写すよう実装済みなら、本機能は分類層の追加のみで足りる。
+本機能が無効なとき（`bracketPairing == false`、または前面アプリや入力モードで無効）は、カッコキーは
+他の記号と同じく、ひらがなモードでは全角にして読みに取り込み（`[`→`「`、`(`→`（`、`{`→`『`。
+`docs/tsf-deep-integration-spec.md` §3.5）、英数モードでは半角のままアプリへ渡す。ペアは作らない。
+legacy もカッコを全角にして読みに足すので、この挙動は legacy と同じである。
 
 分類（`bracketPairing == true` かつ現在の入力モードで有効なとき。§4.4）:
 
@@ -125,10 +116,11 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
   ```
 - **順序**: TIP は `OnKeyDown` で、開きカッコ / 閉じカッコ / Backspace（`bracketPairing` ON ＆
   有効モード）について、まず §5.3 の同期読取で `char_before` / `char_after` /
-  `selection_collapsed` を埋め、**その hint を付けて純粋 core `HandleEvent` を呼ぶ**。core が
-  返した ClientAction 列を TIP が適用する。読取が拒否されたら hint は空（`nullopt`）で渡し、
-  core は安全側（リテラル挿入 / 通常 Backspace）の ClientAction を返す（§4.8）。
-- これにより core 遷移テスト（`input_state_test.cpp`）は hint を注入して
+  `selection_collapsed` を埋め、**その hint を付けて純粋 core の `EvaluateBracketInput`（カッコ）/
+  `EvaluateBracketBackspace`（Backspace）を呼ぶ**。core が返した `BracketPairingAction` を TIP が
+  `BracketEditSession::Apply` で適用する。読取が拒否されたら hint は空（`nullopt`）で渡し、
+  core は安全側（リテラル挿入 / 通常 Backspace）の action を返す（§4.8）。
+- これにより core のテスト（`core/tests/bracket_pairing_test.cpp`）は hint を注入して
   `skipOverClosing` / リテラル挿入 / `deleteBracketPair` / 通常 Backspace の分岐を**文書なしで
   網羅**できる。§3.3 の遷移表の「カーソル直後 / 左右」は、実装上は**この hint フィールド**を
   指す（文書アクセスではない）。
@@ -148,8 +140,11 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 
 ### 3.3 状態遷移（追加分）
 
-`docs/legacy-parity-spec.md` §1.2 の遷移表に、`bracketPairing == true` のときの分岐を
-加える（既定 immediate トリガ。§4.0）。新しい InputState 種別は**追加しない**。
+`bracketPairing == true` のときのカッコキーの分岐を次の表で定める（既定 immediate トリガ。§4.0）。
+この分岐は `docs/legacy-parity-spec.md` §1.2 の `InputState::HandleEvent` の遷移表には加えない。TIP が
+`UserActionMap` の写像より前にカッコキーを受け取り（§3.1）、core の純粋関数 `EvaluateBracketInput` が hint から
+下表の分岐を決め、TIP がその結果に従って composition の確定と下表の副作用を行う。新しい InputState 種別は
+**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
@@ -162,7 +157,8 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | UnicodeInput / ReplaceSuggestion | Input(カッコ) | （変更なし） | これらの特殊モード中はペアリングしない（§4.6） |
 
 > 上表の「`hint.*`」は §3.1.1 の `EditContextHint`（TIP が §5.3 で読んで渡す隣接文字）を指す。
-> core の `HandleEvent` は文書を直接読まず、hint のみから決定するため純粋関数を保つ。hint が
+> core の `EvaluateBracketInput` / `EvaluateBracketBackspace` は文書を直接読まず、hint のみから決定するため
+> 純粋関数を保つ。hint が
 > 空（読取失敗）なら安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
 
 `composition` トリガ（`bracketPairingTrigger == "composition"`）の遷移は §4.0.1。
@@ -287,9 +283,12 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
 
 ### 4.4 入力モード別の挙動
 
-`docs/legacy-parity-spec.md` の入力モード（`inputMode`: `hiragana` / `alnum_half` /
-`alnum_full`）に応じて、打鍵キーが生む文字は IME の既存文字入力ロジックで決まる。本機能は
-**生じた codepoint を §4.1 表で分類するだけ**なので、モード対応は自然に従う。
+設定 `inputMode`（enum `hiragana` / `alnum_half` / `alnum_full`、既定 `hiragana`）は、本機能が挿入する
+カッコの字形と、絵文字検索の `:` トリガ（`docs/candidate-rewriter-spec.md` §11）の可否を決める。
+起動時や On にしたときの入力モードではなく（On にしたときは常にひらがな。`docs/tsf-deep-integration-spec.md`
+§4.2）、カッコ以外の文字の字種も変えない。設定アプリはこの設定を「カッコ補完の字形」として表示する。
+キー名と値は互換のため変えない（DEV-1816）。Host は値を読むが使わない。本機能は
+**生じた codepoint を §4.1 表で分類するだけ**なので、字形は次のとおり決まる。
 
 - `hiragana`: JIS 配列で `[`/`]` キー等が `「`/`」` を生む等、全角カッコが対象。
 - `alnum_half`（`bracketPairingInAlnumMode == true`、既定 ON）: `(` `[` `{` 等の半角
@@ -408,8 +407,11 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
   通常どおり働く。これにより蓄積中にカッコ対が割り込んでバッファ意味論を崩さない。
   蓄積時の判定・保存は全角化前の生の入力文字を使い、`alnum_full` でも ASCII の `[` 等を保持する。
   一括確定時に既存バッファのカッコを遡ってペア化せず、確定後の新しい打鍵から通常判定に戻る。
-- **通常の英字入力**: `inputMode` は本機能ではカッコ字形とペアリング可否にだけ使う。
+- **通常の英字入力**: `inputMode`（§4.4）はカッコ字形とペアリング可否にだけ使う。
   カッコ以外のローマ字変換をマスター設定やアプリリストの判定で切り替えない。
+- **記号の全角化（DEV-1811）**: 本機能が無効なときのカッコキーと、カッコ以外の記号は、
+  `docs/tsf-deep-integration-spec.md` §3.5 の表で全角にして読みに取り込む。本機能が有効なときの
+  カッコキーは読みに取り込まず、読みを確定してからペアを入れる。
 - **再変換（M20）**: 自動挿入されたカッコは読みを持たない確定済みリテラルであり、
   再変換時は文節境界 / リテラルとして扱い読みへ逆変換しない（`docs/dynamic-punctuation-spec.md`
   §5 のカッコ版。詳細は M20 統合時に `docs/tsf-deep-integration-spec.md` 側で確定）。
@@ -524,10 +526,10 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 - 左 1 文字: 同様に `Collapse(TF_ANCHOR_START)` → `ShiftStart(ec, -1, &shifted)` → `GetText`。
 - 範囲選択か否か（`selection_collapsed`）も同セッションで確認する。
 
-読み取り結果を **§3.1.1 の `EditContextHint`** に詰め、**純粋 core の `HandleEvent(event, hint)`**
-を呼ぶ。分岐（`skipOverClosing` / `deleteBracketPair` / リテラル挿入 / 通常 Backspace）の決定は
-core が hint から行い（文書を直接見ない）、TIP は返った ClientAction を続く読み書き
-EditSession（または同一 RW セッション）で適用する。同期セッションが拒否されたら hint を空で
+読み取り結果を **§3.1.1 の `EditContextHint`** に詰め、**純粋 core の `EvaluateBracketInput` /
+`EvaluateBracketBackspace`** を呼ぶ。分岐（`skipOverClosing` / `deleteBracketPair` / リテラル挿入 / 通常 Backspace）の決定は
+core が hint から行い（文書を直接見ない）、TIP は返った action を `BracketEditSession::Apply` で続く読み書き
+EditSession（または同一 RW セッション）に適用する。同期セッションが拒否されたら hint を空で
 渡し、core は安全側へフォールバック（§4.8）。
 
 > **OnTestKeyDown の eaten 判定**: `bracketPairing == true` かつ現モードで有効なときの eaten は

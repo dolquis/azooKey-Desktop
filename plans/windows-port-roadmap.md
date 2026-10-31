@@ -1693,6 +1693,44 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `docs/dev-infrastructure-spec.md` §8.5.2（ライブ変換の timeout）、
   `docs/neural-reranker-spec.md` Track B、`docs/mixed-english-input-feasibility-report.md`
 
+### M64: 字種指定確定（F6〜F10）
+
+> 読み入力中と候補選択中に F6〜F10 で、読みを字種を変えて 1 打で確定する。legacy（macOS 版）と
+> Microsoft IME に共通の操作で、Windows 版には確定後の無変換キーの巡回（M22、
+> `docs/tsf-deep-integration-spec.md` §3.2）しか字種を指定する手段が無い。正典仕様は
+> `docs/tsf-deep-integration-spec.md` §3.6 と `docs/legacy-parity-spec.md` §1.2・§1.4 とし、本節は定義・依存・
+> 受け入れ条件・リスクだけを持つ。
+
+- **目的**: 「アイパッド」「ID」のように字種を指定した語を、候補を探さずに 1 打で確定できるようにする。
+- **前提**: M13（`UserActionMap` と `InputState`）、M22（字種の変換 `CharacterFormCycle`）、
+  M60（打鍵どおりの生ローマ字）。
+- **変更対象**: `core/src/UserActionMap.cpp`、`core/src/InputState.cpp`、`core/src/CharacterFormCycle.cpp`、
+  `tsf-tip/src/TextService.cpp`（確定経路、F10 の preserved key とデバッグ窓）、
+  `tsf-tip/src/CharacterFormEditSession.cpp`。
+- **受け入れ条件**:
+  - `kanji` → F6 / F7 / F8 / F9 / F10 で「かんじ」「カンジ」「ｶﾝｼﾞ」「ｋａｎｊｉ」「kanji」が確定する
+  - 数字を含む `dai3kai` → F6 / F7 / F8 / F9 / F10 で「だい3かい」「ダイ3カイ」「ﾀﾞｲ3ｶｲ」「ｄａｉ３ｋａｉ」「dai3kai」が
+    確定する（記号を含む読みも spec §3.6 の表のとおり）
+  - 候補選択中、ライブ変換の表示中、Space の応答待ちでも、表示中の候補ではなく読み全体が対象になる
+  - `Kanji` と打った読みの F10 は「Kanji」（打鍵どおりの大小）、カスタムローマ字表の読みと、記号を含む
+    `Kakko[` の F10 は、かなから作ったヘボン式の小文字（「kakko[」）になる
+  - F7・F8 の確定だけが学習観測を 1 回送り、F6・F9・F10 と secure・学習不可の文脈では送らない
+  - 読みが無いときの F6〜F10 はアプリへ渡り、Debug ビルドの Idle の F10 だけがデバッグ窓を開閉する。
+    読みがある間は preserved key でもデバッグ窓を開かない
+  - 英数モード・IME Off・修飾キー付きの F6〜F10 はアプリへ渡る
+  - `keymap_test`・`input_state_test`・`character_form_edit_session_test`・`onkeydown_preedit_test` に上記の検証がある
+  - 実機での確認（Notepad・Word・Edge・VS Code、`gate:human-required`）
+- **リスク**:
+  - **アプリのキーとの衝突**: F7 は Edge・Chrome のキャレットブラウズ、F10 は Win32 のメニューバーに使われる。
+    読みがある間だけ食い、読みが無いときは必ずアプリへ渡す。
+  - **preserved key**: F10 は Debug ビルドでデバッグ窓の preserved key を登録するため、`OnKeyDown` より先に
+    `OnPreservedKey` へ届く。読みがある間は preserved key 側で字種指定確定へ回す。
+  - **生ローマ字との対応**: 数字・記号の取り込み、Backspace、読みの補正で生ローマ字とかなの対応が崩れる。
+    M60 のバッファと判定（`docs/inline-english-candidate-spec.md` §4.1）は変えず、崩れたときはヘボン式の小文字に
+    戻して数字・記号は打鍵した ASCII に戻す。このとき大小と綴りが legacy と変わる（spec §3.6）。
+- **参照**: `docs/tsf-deep-integration-spec.md` §3.2・§3.6、`docs/legacy-parity-spec.md` §1.4・§8.1、
+  `docs/inline-english-candidate-spec.md` §4.1（生ローマ字）
+
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。

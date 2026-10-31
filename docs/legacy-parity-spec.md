@@ -96,7 +96,10 @@ enum class InputStateKind {
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
-| Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
+| Idle | Space / Shift+Space（ひらがなモード） | Idle | `fullWidthSpace = true` なら Space、false なら Shift+Space で全角空白を composition を作らずに挿入する。もう一方は半角空白としてアプリへ渡す（core を通さず TIP が判定する。`docs/tsf-deep-integration-spec.md` §3.7） |
+| Composing (liveConv OFF) | Input（文字・数字・記号。§1.5.3） | Composing | 読みに足して Preedit 更新、打鍵ごとの `QueryCandidates` |
+| Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。応答を待つ間のキーは TIP が保留し、窓が開いた後に再生する） |
+| Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6）。F7・F8 だけ ObserveCommit を送る |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
@@ -127,6 +130,33 @@ enum class InputStateKind {
 > 候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる回帰を防ぐためで、
 > 詳細は §1.5.4。
 
+> **応答を待つ間のキーは保留して再生する（DEV-1813）**: `StartConversion` の応答を待つ間に来たキーのうち、
+> `MapUserAction(VK, modifiers, Selecting)`（§1.5.3）が `nullopt` でないキー（Enter、Space、Shift+Space、↑↓、
+> 変換、数字、Backspace、Ctrl+P/N/H、Ctrl+Shift+U など）、F6〜F10、`docs/tsf-deep-integration-spec.md` §3.5 で
+> 取り込む文字・記号・数字は、TIP が消費して保留し、窓が開いた時点（応答の到着、上記の 750ms の deadline、
+> Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（Tab、`Selecting` で割り当ての
+> 無い ←→、Home など）は保留せず、その場でアプリへ渡す（保留中のキーはそのまま残す）。
+> Esc と、IME を Off にするキー（`VK_IME_OFF`、半角/全角、`imeOnOff` の無変換）と英数モードへの切替（英数キー、
+> 入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
+> Space→Space→Enter は第 2 候補を確定し、Space→`2` は 2 番目の候補を確定し、Space→文字は選択中の
+> 候補を確定して次の入力を始める。2 回目以降の Space で候補窓用の要求を出し直さない。
+> 保留は `docs/tsf-deep-integration-spec.md` §2.4.1 の確定の再試行を待つキーと同じキューを共有し、
+> 打鍵時の Shift 状態を保って、両方の待ちを合わせて最大 16 個とする（17 個目以降は捨てる）。保留の上限は
+> 750ms の deadline で、新しいタイマーは作らない。候補が 0 件で窓が開かずに待ちが終わったときは、
+> `Composing`（`Previewing`）のまま再生する（Enter は読みの確定になる）。Esc はその場で入力を取り消し、
+> IME を Off にするキーと英数モードへの切替はその場で表示中の文字列を確定する（`docs/tsf-deep-integration-spec.md`
+> §4.2・§4.3）。フォーカス喪失、composition の終了、Deactivate も保留中のキーを捨てる。TIP の前処理を通る Space の経路
+> （英単語候補、記号・絵文字の rewriter）も同じ規則に従う。一括変換の応答待ちは
+> `docs/romaji-batch-conversion-spec.md` §3 に従い、この保留を当てる場合は同 spec に書く。
+> `docs/dynamic-punctuation-spec.md` §7.3 の Enter の保留中に来たキーも同じ保留に載せる案があり、
+> DEV-1794 の調査で決める。
+
+> **ライブ変換の既定は OFF（意図した legacy との差）**: legacy の `LiveConversion` は既定 true だが、
+> Windows 版の `liveConversion` は既定 false とする。Windows 版の利用者の多くはライブ変換の無い
+> Microsoft IME から移ってくることと、打鍵ごとの推論が CPU だけの機械に負荷をかけることによる。
+> ライブ変換 OFF の Space の段数も legacy と違う。legacy は 1 回目の Space で窓を出さずに先頭候補を
+> 表示し、2 回目で窓を開く。Windows 版は 1 回目で窓を開くので、次候補へ進むのが 1 打早い。
+
 > **Esc は 1 回で入力を取り消す（意図した legacy との差）**: legacy（macOS 版）は Selecting の Esc で
 > Composing（ライブ変換 OFF では先頭候補プレビューを経由）へ戻り、さらに Esc で停止する 2〜3 段だった。
 > Windows 版は 2026-10-17 のユーザー決定により、どの表示状態（候補窓・予測窓・ライブ変換の
@@ -142,8 +172,9 @@ enum class InputStateKind {
 > Composing で続ける（Backspace は `removeLastMarkedText` で読みへ戻る）。Windows 版も同じにする。
 > legacy 自身の注記のとおり、これは macOS 標準の IME（Selecting を Composing に戻して入力を続ける）とは
 > 異なる。数字は候補番号、Space / ↑↓ / Enter / Esc は上の行のまま変えない。Space 後で候補応答が
-> 届く前（§1.5.4、状態は Composing）の入力と、ライブ変換の Previewing（候補窓なし）の入力は読みに
-> 足す。絵文字検索、Unicode 入力、置換提案プロンプトは対象外である。
+> 届く前（§1.5.4、状態は Composing）の入力は、上の保留により窓が開いた後に同じ規則で扱う。
+> ライブ変換の Previewing（候補窓なし）の入力は読みに足す。絵文字検索、Unicode 入力、
+> 置換提案プロンプトは対象外である。
 
 各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
 `HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する
@@ -215,8 +246,12 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_SPACE | Shift | PrevCandidate |
 | VK_RETURN | (none) | Commit |
 | VK_ESCAPE | (none) | Cancel |
-| VK_1〜VK_9 | (none, Selecting時のみ) | SelectByDigit |
-| VK_1 | Shift | Input（`！`。Selecting でも候補番号にしない。他の Shift+数字は割り当てない） |
+| VK_1〜VK_9、VK_NUMPAD1〜VK_NUMPAD9 | (none, Selecting) | SelectByDigit（テンキーも候補番号。legacy はテンキーの数字を文字入力として扱うので、テンキーだけ legacy との差） |
+| VK_0、VK_NUMPAD0 | (none, Selecting) | Input（選択中の候補を確定して `0` で次の composition を始める。legacy と同じ。数字リライターの候補窓の例外は §1.2） |
+| VK_0〜VK_9、VK_NUMPAD0〜VK_NUMPAD9 | (none, Composing / Previewing) | Input（半角数字を読みに足す。Idle は `numberRewriter` が OFF ならパススルー。§1.5.3） |
+| VK_ADD / VK_SUBTRACT / VK_MULTIPLY / VK_DECIMAL / VK_DIVIDE | (none, Composing / Previewing / Selecting) | Input（`＋` `ー` `＊` と半角の `.` `/`。Idle はパススルー。`docs/tsf-deep-integration-spec.md` §3.5） |
+| VK_1 | Shift | Input（`！`。Selecting でも候補番号にしない） |
+| VK_0〜VK_9 | Shift | Input（生む文字が `docs/tsf-deep-integration-spec.md` §3.5 の表にあれば全角で取り込む。無ければパススルー） |
 | VK_H | Ctrl | Backspace |
 | VK_P | Ctrl | Up |
 | VK_N | Ctrl | Down |
@@ -224,14 +259,15 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_B | Ctrl | Backward |
 | VK_A | Ctrl | LineHead |
 | VK_E | Ctrl | LineEnd |
-| VK_I | Ctrl | (将来：カタカナ変換) |
-| VK_O | Ctrl | (将来：英字変換) |
-| VK_S | Ctrl | (将来：半角変換) |
 | VK_U | Ctrl+Shift | StartUnicodeInput |
 | VK_BACK | Ctrl+Shift | Forget |
 | VK_KANJI | (none) | ToggleHankaku |
 | VK_NONCONVERT | (none) | ToggleHiraKata |
-| VK_F10 | (none) | ToggleDebugWindow |
+| VK_F6 | (none) | 字種指定確定（ひらがな）。読みがある状態だけ |
+| VK_F7 | (none) | 字種指定確定（全角カタカナ）。読みがある状態だけ |
+| VK_F8 | (none) | 字種指定確定（半角カタカナ）。読みがある状態だけ |
+| VK_F9 | (none) | 字種指定確定（全角英字）。読みがある状態だけ |
+| VK_F10 | (none) | 読みがある状態は字種指定確定（半角英字）、Idle は ToggleDebugWindow |
 
 「英数キー」「かな」のダブルタップは独自検出ロジック → §4.1（トリガ検出）参照。
 
@@ -239,19 +275,29 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 `MapUserAction(VK, modifiers, InputStateKind)` が持ち、表の補足として次を定める。
 
 - composition 内カーソルを持たないため、`VK_DELETE` / `VK_HOME` / `VK_END` / Ctrl+A / Ctrl+E は
-  どの状態でも `nullopt`（パススルー）とする。Ctrl+I / O / S も予約のまま `nullopt` とする。
+  どの状態でも `nullopt`（パススルー）とする。Ctrl+I / O / S は割り当てず `nullopt` とする。
+- F6〜F10 は Composing / Previewing / Selecting（Space の応答待ちを含む）で字種指定確定になり、
+  Idle では `nullopt` とする（F7 は Edge・Chrome のキャレットブラウズ、F10 は Win32 のメニューバーへ渡る）。
+  例外として、Idle の F10 は `ToggleDebugWindow` とし、TIP が食うのはデバッグ窓を持つ Debug ビルドだけ
+  である（§8.1）。字種と確定の規則は `docs/tsf-deep-integration-spec.md` §3.6。
 - `VK_LEFT` / `VK_RIGHT` / Ctrl+B / Ctrl+F は Selecting でだけ `Backward` / `Forward` になる。
   TIP は batch 変換の文節移動にだけ使い、文節が無いときはパススルーする。
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
   Selecting で `Up` / `Down` になる。
 - Alt または Win を含む組合せは常に `nullopt` とする。
-- 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、`convertKeysAction` が `imeOnOff` のときの変換・無変換）は、
-  TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md` §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` は
-  この写像では `nullopt` である。
+- 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、ひらがなキー `VK_DBE_HIRAGANA`、`convertKeysAction` が
+  `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`
+  §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` / `VK_DBE_HIRAGANA` はこの写像では `nullopt` である。
 - TIP は `ClientAction` の効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、
   Commit、Cancel、Selecting 中の Forward / Backward）だけを消費する。モード切替・Unicode 入力・
   Forget・デバッグ窓の `UserAction` は、対応するマイルストーン（M16 / M18）が効果を実装するまで
   TIP でパススルーする。
+
+> **字種指定のキーと legacy との差（DEV-1812）**: F6〜F10 は legacy と Microsoft IME に共通の操作として
+> 割り当てる（roadmap M64）。legacy で F6〜F10 と同じ働きをする Ctrl+J / K / ; / L / : と、Microsoft IME の
+> Ctrl+U / I / O / P / T は割り当てない（Ctrl+P は Selecting の `Up` に使う）。legacy の Ctrl+I / O（文節の
+> 伸縮）と Ctrl+S（AI の提案）も割り当てない。Microsoft IME の F6〜F10 は確定せずに字種を巡回し、Enter で
+> 確定するが、Windows 版は legacy と同じく 1 打で確定する。
 
 ### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
 
@@ -361,25 +407,38 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   VK から決定）を埋める（`codepoint` は第 2 層で TIP が解決した値を載せる）。これにより数字キーは
   index 付きで一意に識別でき、TIP が VK から digit を再導出する二重マッピングを不要にする。状態依存の解決
   （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
-  `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、**それ以外は `nullopt`＝
-  パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態でその IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の
-  数字）。これは現行 `OnTestKeyDown`/`OnKeyDown` の eaten 判定（数字は `candidate_ui_.IsShowing()`
-  時のみ消費）と一致し、M10 を保存する。**hint 依存の例外**: Idle の Backspace は既定 `nullopt`
+  `Shift+Space` で `PrevCandidate` / 数字は Selecting の `1`〜`9` で `SelectByDigit`、Selecting の `0` と
+  Composing / Previewing で `Input`、**Idle では `nullopt`＝パススルー**）は、**現在状態を引数として明示的に受け取って**決める。
+  ある状態でその IME が扱わないキーは `nullopt` を返す（例: Idle の数字）。**hint 依存の例外**: Idle の Backspace は既定 `nullopt`
   （パススルー）だが、M61-A（`bracketPairing` ON）では TIP が §5.3 の同期読取で空ペアを確認した
-  ときだけ Backspace を core へ回し（`HandleEvent(Backspace, hint)` → `deleteBracketPair`）eaten=TRUE
-  にする（`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
+  ときだけ Backspace を core の純粋関数 `EvaluateBracketBackspace(…, hint, …)` へ回し、返った
+  `deleteBracketPair` を `BracketEditSession::Apply` で適用して eaten=TRUE にする
+  （`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
   （VK, mod, kind）ではなく OnKeyDown / OnTestKeyDown 層で hint を用いて上書き**する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
   注入して `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
-  （codepoint は解決しない＝第 2 層の責務）。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、
-  `VK_OEM_1` 等、および JIS 配列で `「」` を生むキー）は **本表へ `Input` として追加**する
-  （`docs/bracket-pairing-spec.md` §3.1）。core が `InputState` を所有するため本写像も **core 側**に
-  置き、TIP は `(VK, modifiers, 解決済み codepoint)` を core へ渡す。
+  （codepoint は解決しない＝第 2 層の責務）。
+- **数字キー（DEV-1811）**: 主キーの `0`〜`9` とテンキーの `0`〜`9` は、Composing / Previewing で `Input`
+  とし、読みに半角数字として足す。`numberRewriter`（`docs/candidate-rewriter-spec.md` §3）は候補を足すだけで、
+  読みがあるときの取り込みの可否を変えない。Selecting では `1`〜`9`（テンキーを含む）が `SelectByDigit`、
+  `0`（テンキーを含む）が `Input` である（§1.4）。Idle の数字は `nullopt` とし、`numberRewriter` が OFF のときは
+  表計算などへ数字を直接入れる操作を変えない（legacy は Idle の数字でも入力を始めるので、意図した legacy
+  との差である）。`numberRewriter` が ON で一括変換ではないときは、従来どおり TIP の前処理が Idle の数字を
+  取り込んで composition を始める。Space の応答待ちの数字は §1.2 の保留で窓が開いた後に `SelectByDigit` として効く。
+- **記号キー（DEV-1811）**: 記号を生む OEM キー（`VK_OEM_1`〜`VK_OEM_8`、`VK_OEM_102`、`VK_OEM_MINUS`、
+  `VK_OEM_PLUS`、`VK_OEM_COMMA`、`VK_OEM_PERIOD`）と Shift 付きの数字キーは、Idle / Composing / Previewing /
+  Selecting で `Input` とする。どの文字を生むか、全角化の表に載るかは第 2 層が `ToUnicodeEx` の結果で決め、
+  表に無い文字ならキーをアプリへ渡す。表と取り込み方は `docs/tsf-deep-integration-spec.md` §3.5。
+  core が `InputState` を所有するため本写像も **core 側**に置き、TIP は `(VK, modifiers, 解決済み codepoint)`
+  を core へ渡す。`docs/bracket-pairing-spec.md` §3.1 のカッコ補完は、このキーを TIP が写像より前に処理する。
+  テンキーの記号キー（`VK_ADD`、`VK_SUBTRACT`、`VK_MULTIPLY`、`VK_DECIMAL`、`VK_DIVIDE`）は Composing /
+  Previewing / Selecting で `Input`、Idle で `nullopt` とする（§1.4）。文字は全角化の表ではなく VK で決める
+  （同 §3.5）。legacy はテンキーの記号でも Idle から入力を始めるので、Idle の素通しは意図した legacy との差である。
 - **第 2 層 — TIP `TextService.cpp::OnKeyDown`（プラットフォーム・モード依存）**:
   `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
   （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、
   `UserActionEvent.codepoint` に載せる。キーボードレイアウト・IME モードの関心を所有する。
 - **状態を翻訳境界に含める根拠（無状態 map にしない）**: `Space` は Selecting で次候補・他で変換
-  開始、数字は Selecting で候補選択・他で文字入力と、**同一キーの意味が現在状態に依存する**。
+  開始、数字は Selecting の `1`〜`9` で候補選択・Selecting の `0` と読み入力中で文字入力・Idle でパススルーと、**同一キーの意味が現在状態に依存する**。
   無状態 `(VK, modifiers)` 写像ではこれを表現できず、§1.1 に raw `Space` / `Digit` 変種を増やすと
   状態解決を状態機械の外へ二重化してしまう。そこで **`InputStateKind` を写像の引数に含める**
   （round-2 レビュー提示の選択肢「状態を翻訳境界に含める」）。これは状態の二重保持ではない:
@@ -389,7 +448,7 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   `NextCandidate` / `PrevCandidate` / `SelectByDigit` は本写像が返す値であり、別途の raw 変種を
   §1.1 へ追加しない（append-only 方針を維持）。
 - **分界規則**: **core は「キー（＋現在状態）がどの `UserAction`（種別・`digit` 等。消費しないなら `nullopt`）か」を決め、TIP は「どの文字を
-  生むか（codepoint）」を決める**。これにより M61-A の OEM 追加は「core 表への `Input` 追加」＋
+  生むか（codepoint）」を決める**。これにより OEM キーの取り込みは「core 表への `Input` 追加」＋
   「TIP の codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
 - **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は
   `UserActionMap(VK, modifiers, kind)` → `std::optional<UserActionEvent>` の全エントリ（状態依存解決・`digit` ペイロード・`nullopt` パススルーを含む）を各 `kind`
@@ -425,16 +484,18 @@ M13 の載せ替え対象は、M3〜M10 の通常入力における reading と�
 - **非同期候補と staleness の保存**: 候補問い合わせは非同期のため、純粋 core は待てない。
   `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading)]` を出すが、
   **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /
-  数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。`Composing`
-  （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字は IME 非消費で
-  アプリへパススルー（現行は候補窓表示時のみ消費。§1.5.3）のまま M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: 候補窓用の要求
+  数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。core は `Composing`
+  （または下記の pending 状態）に留まる。待つ間のキーは TIP が保留して core へ渡さず、`Selecting` へ
+  遷移した後に打った順に渡す（§1.2「応答を待つ間のキーは保留して再生する」）。core の `Composing` が
+  Enter を `CommitPreeditAsIs` として扱うのは、候補が 0 件で窓が開かなかった後の再生と、保留を通らない
+  経路に限られる。`Selecting` への遷移は **候補が適用された時点**で起きる: 候補窓用の要求
   （`queryCandidates` の `for_window`）の応答到着を TIP が core へ供給するフィードバックイベント
   （`HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
   （`candidate_window_show_pending_` + request_id staleness）が処理し、staleness を core へ
   移さないことで M10 を保存する。
   - **代替**: 「クエリ送信済み・応答待ち」を明示する pending 状態（M58-A の `BatchConverting`
     `docs/romaji-batch-conversion-spec.md` §3 と同型）を `InputStateKind` へ append しても良い。
-    その場合も確定可否・キー挙動は上記（Enter=as-is 確定・候補選択操作は不可）に一致させる。
+    その場合も、待つ間のキーは TIP の保留を通し、pending 状態でキーを解釈しない。
 - **挙動デルタの明示**（silent regression を避けるため、現行に無い挙動は「意図的追加」として
   区別する。下記は現行 OnKeyDown の inline 分岐に基づく区分であり、実装時に現行コードと
   突き合わせて確定する）:
@@ -598,8 +659,9 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 起動せず、`EditContextHint` を注入して文書なしに網羅できる。(b) 各ケースは
 `(現在状態, UserActionEvent, hint) → (期待 ClientAction 列, 期待 next)` の表明に落とす。
 (c) cache miss 経路は `HandleCandidatesArrived` 相当のフィードバックイベント注入で
-`Composing→Selecting` 遷移を検証し、応答未到着中の Enter=as-is 確定・数字パススルー（§1.5.4）を
-回帰ガードとして固定する。
+`Composing→Selecting` 遷移を検証する。応答未到着中のキーは TIP が保留して core へ渡さない（§1.2・§1.5.4）
+ので、core のテストは「待ちの間に `Selecting` 挙動にならないこと」と「候補 0 件で `Composing` のまま
+再生されたときの Enter=as-is 確定」を固定し、保留と再生の順序は TIP のテストで固定する。
 
 #### 1.6.5 取り込まない範囲（明示）
 
@@ -798,6 +860,10 @@ QueryPredictionsResponse:  predictions[], ok?, error?
 
 `settings.predictionEnabled`（bool、default=true）。
 OFF のときは `PredictionWindow` を生成しない。
+
+既定 ON は意図した legacy との差である。legacy の予測（`DebugPredictiveTyping`）は開発中の機能として既定
+OFF で、Tab は予測を受理しない。Windows 版は既定 ON で、予測窓があるときの Tab で第 1 候補を受理する
+（§3.4）。Microsoft IME も予測入力が既定 ON で、Tab で予測を選ぶ操作が近い。
 
 ### 3.7 診断ログ
 

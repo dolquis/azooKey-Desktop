@@ -68,11 +68,15 @@ Host は runtime settings の値を Handshake 応答へ載せ、TIP は通常の
 数字候補をローカルで追加する。
 Handshake 応答に設定値がない旧 Host は `false` として扱う。
 
-`numberRewriter == true` かつ一括変換ではないとき、TIP は ASCII 数字を生成する主キーと
-テンキーを composition へ取り込み、通常の候補要求へ読みとして渡す。
-Shift などによって数字以外を生成する主キーは取り込まない。
-候補窓が開いているときの `1` から `9` は、従来どおり候補の直接選択を優先する。
-`numberRewriter == false` のとき、数字キーは従来どおりアプリへ渡す。
+読みがあるときの数字キー（主キーとテンキー）は、`numberRewriter` の値によらず読みに半角数字として足す
+（`docs/legacy-parity-spec.md` §1.5.3、DEV-1811）。`numberRewriter` が決めるのは、読みの候補に数字候補を
+足すかと、読みが無いときの数字キーを取り込むかの 2 つである。
+`numberRewriter == true` かつ一括変換ではないとき、TIP は読みが無いときの数字キーも composition へ取り込み、
+通常の候補要求へ読みとして渡す（M62-A の既存の挙動）。`numberRewriter == false` のとき、読みが無いときの
+数字キーはアプリへ渡す。
+Shift などによって数字以外を生成する主キーは数字として取り込まない（記号としての扱いは
+`docs/tsf-deep-integration-spec.md` §3.5）。
+候補窓が開いているときの `1` から `9` は、候補の直接選択を優先する。
 
 TIP は Host 候補を先に保ち、その末尾へ数字候補を追加する。
 同じ表層形がすでに Host 候補または先行する数字候補にある場合は追加しない。
@@ -127,7 +131,8 @@ M62-D は、次の 2 つの入力経路から絵文字候補を生成する。
 - **タイポ許容**。`:trigger` 検索は編集距離による補正を行わない（§9.3）。
 - **肌色修飾子の展開**。修飾子付きシーケンスをビルド時に自動生成しない（§7.3）。
 - **ライブ変換と予測候補への注入**。絵文字候補はどちらの経路にも載せない（§10.3）。
-- **英数モードでの `:trigger`**。`:` の取り込みは `inputMode == "hiragana"` に限る（§11.1）。
+- **英数モードでの `:trigger`**。`:trigger` の入口は、ひらがなモードで、かつ `inputMode == "hiragana"` のときに
+  限る（§11.1）。
 
 ## 7. 絵文字データの形式と再ポート
 
@@ -430,9 +435,10 @@ UI-less モードとアプリ描画ホストでは、候補は `ITfCandidateList
 ### 11.1 入口の条件と記号横取りの例外
 
 状態は `Inactive`、`Collecting`、`Listing` の 3 つとする。`Inactive` 以外へ入るのは、次の
-3 条件がすべて成り立つときに限る。
+4 条件がすべて成り立つときに限る。
 
 - `emojiRewriter == true` かつ `emojiTriggerSearch == true`。
+- ひらがなモードである（英数モードと IME Off では TIP が記号をアプリへ渡す）。
 - `inputMode == "hiragana"`。
 - composition が空である。
 
@@ -440,24 +446,25 @@ UI-less モードとアプリ描画ホストでは、候補は `ITfCandidateList
 生成文字へ写してから ASCII の `:` かどうかを判定する（`TranslateOemCompositionSymbol` と同じ
 手法）。
 
-ここには記号キーの例外がある。TIP は明示句読点の `,` / `.` を composition が無い状態でも
-`、` / `。` として取り込み、それ以外の OEM 記号キーは composition 中だけ取り込む
-（`docs/tsf-deep-integration-spec.md` §3.5）。`:trigger` は composition が無い状態から
-`:` を取り込んで composition を始める別の入口となる。`:smile` にはかな読みが無く、
-composition を先に開くには `:` の打鍵が必要なためである。
+ひらがなモードの記号キーは、composition が無い状態でも全角にして読みに取り込む
+（`docs/tsf-deep-integration-spec.md` §3.5。`:` は `：`）。`:trigger` はその取り込みより先に `:` を受け取り、
+全角にせずに打鍵した `:` で composition を始める別の入口となる（同 §3.5 の処理順の 1）。`:smile` には
+かな読みが無く、composition を先に開くには `:` の打鍵が必要なためである。
 
-例外の影響は 3 つの条件で抑える。第一に、既定 OFF の `emojiRewriter` と `inputMode == "hiragana"`
-の二重ゲートにより、英数モードのパススルーは一切変わらない。`http://` のように英数モードで打つ
-文字列は影響を受けない。第二に、検索語の文字集合に当たらない打鍵で即座に `Inactive` へ戻り、
-打った文字はそのまま残る（§11.2）。第三に、preedit には打鍵したとおりの文字列しか出さないため、
-モードに入ったこと自体がテキストを変えない。
+この入口の影響は 3 つの条件で抑える。第一に、既定 OFF の `emojiRewriter` と `inputMode == "hiragana"`
+の二重ゲートを満たさなければ、`:` は §3.5 の規則（ひらがなモードでは `：` で読みに取り込み、英数モードでは
+アプリへ渡す）のまま変わらない。英数モードは `inputMode` の値によらず TIP が記号をアプリへ渡すので、
+`http://` のように英数モードで打つ文字列は影響を受けない。`inputMode` はカッコ補完の字形の設定
+（`docs/bracket-pairing-spec.md` §4.4）で、`hiragana` 以外の値では `:trigger` を使わない。第二に、検索語の
+文字集合に当たらない打鍵で即座に `Inactive` へ戻り、打った文字はそのまま残る（§11.2）。第三に、preedit には
+打鍵したとおりの文字列しか出さないため、モードに入ったこと自体がテキストを変えない。
 
 ### 11.2 遷移表
 
 | 現状態 | 入力 | 次状態 | 動作 |
 |---|---|---|---|
 | Inactive | `:` の打鍵、かつ §11.1 の条件を満たす | Collecting | `:` を composing 文字列として表示する |
-| Inactive | `:` の打鍵、かつ §11.1 の条件を満たさない | Inactive | 従来どおりに扱う（composition が無ければアプリへ通す） |
+| Inactive | `:` の打鍵、かつ §11.1 の条件を満たさない | Inactive | `docs/tsf-deep-integration-spec.md` §3.5 の記号として扱う（ひらがなモードでは `：` で読みに取り込み、英数モードではアプリへ通す） |
 | Collecting | `[A-Za-z0-9_+-]` の打鍵 | Collecting または Listing | 検索語へ 1 文字追加し、`emojiTriggerMinQueryLength` に達したら Host へ問い合わせる |
 | Collecting | 上記以外の文字（`:` と空白を含む） | Inactive | `:` と検索語を composing 文字列として残したままモードを抜け、打鍵文字を通常入力として処理する |
 | Collecting | Backspace | Collecting または Inactive | 検索語を 1 文字削る。`:` まで消えたら composition が空になり Inactive へ戻る |
@@ -494,7 +501,7 @@ Esc は段階的に効く。候補窓が開いているとき（`Listing`）は�
 文字列として残す。以降の Esc は通常の composition 取り消しとして働く。1 打で composition ごと
 消さないのは、打った検索語を直して引き直す動線を残すためである。
 
-`emojiTriggerSearch == false` のとき、`:` は常に従来どおりに扱う。
+`emojiTriggerSearch == false` のとき、`:` は常に `docs/tsf-deep-integration-spec.md` §3.5 の記号として扱う。
 
 ## 12. 確定時の学習データの扱い
 
@@ -534,8 +541,8 @@ Esc は段階的に効く。候補窓が開いているとき（`Listing`）は�
 
 - Host は絵文字 TSV を読まず、索引を構築しない。
 - `QueryCandidates` の応答に `source == "emoji"` の候補が現れない。
-- TIP は `:trigger` モードへ入らず、`:` の打鍵は従来どおり（composition が無ければアプリへ
-  パススルー）に扱われる。
+- TIP は `:trigger` モードへ入らず、`:` の打鍵は `docs/tsf-deep-integration-spec.md` §3.5 の記号として
+  扱われる。
 - 候補列、確定文字列、学習データが `emojiRewriter` 導入前と一致する。
 
 データの読み込みに失敗したとき（ファイル不在、パーミッション、パース不能）、機能だけを無効化
@@ -838,10 +845,9 @@ M62-C は次の 2 つの経路で記号候補を生成する。
 
 2 つは合成して働く。読み引きが族の代表を候補列へ置き、chain がその族を広げる。
 
-chain の入口を候補の表層形に置くのは、記号だけからなる読みが通常の打鍵では発生しないためである。
-TIP は明示句読点を除く記号キーを composition 中だけ取り込み、composition が無いときは
-アプリへ通す（§11.1 の `:` も例外）。
-読みを入口にすると、chain は `「` を単独で読みへ入れる手段がないまま、事実上発火しない。
+chain の入口を候補の表層形に置くのは、記号だけからなる読みが、記号キーを単独で打ったとき
+（`docs/tsf-deep-integration-spec.md` §3.5。`[` だけを打つと読みは `「`）に限られるためである。
+読みを入口にすると、かな読み引きで記号を出したとき（`かぎかっこ` → `「」`）に chain が発火しない。
 
 責務の分担は次のとおりとする。
 

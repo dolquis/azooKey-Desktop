@@ -1513,6 +1513,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // window waits for its answer after Space.
   enum class WindowWaitKey { Hold, Drop, Pass };
   bool AwaitingCandidateWindow();
+  HRESULT OpenLocalCandidateWindow(ITfContext* context);
   WindowWaitKey ClassifyWindowWaitKey(WPARAM key, LPARAM key_data, uint32_t modifiers,
                                       bool open_close);
   void HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data, bool tracked = true);

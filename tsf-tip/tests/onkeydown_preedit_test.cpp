@@ -13936,6 +13936,22 @@ TEST(TsfTipWindowWaitTest, HostUnavailableOpensAtOnceAndEnterIsNotHeld) {
   EXPECT_FALSE(h.context.document->text.empty());
 }
 
+// A Host lost after the query was sent leaves no answer and no deadline: the
+// next key opens the window from the local candidates, and the waiting keys
+// run in it before that key.
+TEST(TsfTipWindowWaitTest, HostLostDuringTheWaitOpensTheLocalWindowOnTheNextKey) {
+  DocumentPreeditHarness h;
+  StartWindowWait(h);
+  PressWhileWaiting(h, VK_RETURN);
+  h.service.set_ipc_host_unavailable_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  ASSERT_FALSE(h.context.document->text.empty());
+  EXPECT_EQ(h.context.document->text.front(), L'か');
+  EXPECT_EQ(h.context.document->text.back(), L'k');
+  EXPECT_NE(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
 TEST(TsfTipWindowWaitTest, EscapeCancelsTheInputAndDropsTheWaitingKeys) {
   DocumentPreeditHarness h;
   StartWindowWait(h);

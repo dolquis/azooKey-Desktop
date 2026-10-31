@@ -2785,7 +2785,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // DEV-1813 (legacy-parity-spec §1.2): while the window query Space sent is
     // unanswered, the keys the window would take wait for it and replay in
     // order once it opens. A wait that ended without a key replays first.
-    if (!window_waiting_keys_.empty() && !AwaitingCandidateWindow()) {
+    // A Host lost after the query was sent leaves no answer and no deadline
+    // (the query waits for the reconnect): the local candidates open the
+    // window instead, as any key did before the keys were held.
+    if (core_input_active_ && AwaitingCandidateWindow() && IpcHostUnavailable() &&
+        active_context_) {
+      if (const HRESULT open_hr = OpenLocalCandidateWindow(active_context_);
+          open_hr == E_OUTOFMEMORY)
+        return open_hr;
+    }
+    if (!window_waiting_keys_.empty() && !final_punctuation_hold_ && !AwaitingCandidateWindow()) {
       if (const HRESULT replay_hr = ReplayWindowWaitingKeys(active_context_);
           replay_hr == E_OUTOFMEMORY)
         return replay_hr;
@@ -4290,11 +4299,26 @@ bool TextService::AwaitingCandidateWindow() {
     return input_state_.awaiting_candidates() &&
            (input_state_.kind() == core::InputStateKind::Composing ||
             input_state_.kind() == core::InputStateKind::Previewing);
+  // Without a Host this path offers the local candidates on the next Space.
   if (BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
-      preedit_kana_.empty())
+      preedit_kana_.empty() || IpcHostUnavailable())
     return false;
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   return candidate_window_show_pending_;
+}
+
+// Without a Host the TIP-local candidates answer the window query that core
+// waits for.
+HRESULT TextService::OpenLocalCandidateWindow(ITfContext* context) {
+  const std::string reading = input_state_.Reading();
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    candidates_ = BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
+                                     number_rewriter_.load(std::memory_order_relaxed),
+                                     katakana_rewriter_.load(std::memory_order_relaxed));
+  }
+  return ApplyInputStateResult(context,
+                               input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
 }
 
 // legacy-parity-spec §1.2: a key the window would take is held; Esc, the off
@@ -4384,7 +4408,14 @@ HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
   window_waiting_keys_.clear();
   if (!context) return S_OK;
   std::array<BYTE, 256> current_state{};
-  if (!GetKeyboardState(current_state.data())) return S_OK;
+  if (!GetKeyboardState(current_state.data())) {
+    try {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "window_waiting_key_dropped",
+                 {{"reason", SafeLogText("key_state_unavailable")}});
+    } catch (...) {
+    }
+    return S_OK;
+  }
   for (auto& waiting : keys) {
     if (waiting.context != ComIdentity(context)) continue;
     BOOL replay_eaten = FALSE;
@@ -4409,7 +4440,8 @@ HRESULT TextService::ReplayWindowWaitingKeys(ITfContext* context) {
 }
 
 void TextService::ReplayWindowWaitingKeysIfReady() {
-  if (window_waiting_keys_.empty() || AwaitingCandidateWindow()) return;
+  // The keys held with Enter run when its commit resolves, not on a notification.
+  if (window_waiting_keys_.empty() || final_punctuation_hold_ || AwaitingCandidateWindow()) return;
   (void)ReplayWindowWaitingKeys(active_context_);
 }
 
@@ -6638,11 +6670,16 @@ void TextService::ServeConnection() {
       if (!qpayload) {
         // Like an empty answer: a fresh window query ends its wait, or the
         // next Space would find it still pending and send nothing (DEV-1660).
+        bool end_wait = false;
         {
           std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
-          if (window_query && IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id))
+          if (window_query && IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
             candidate_window_show_pending_ = false;
+            end_wait = true;
+          }
         }
+        // The UI thread ends the wait there and runs the keys held for it (DEV-1813).
+        if (end_wait) candidate_ui_.PostCandidatesReady();
         ++next_id;
         continue;
       }
@@ -8416,16 +8453,8 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
                                    input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
     }
     if (input_state_.awaiting_candidates() && IpcHostUnavailable()) {
-      const std::string reading = input_state_.Reading();
-      {
-        std::lock_guard<std::mutex> lock(candidates_mtx_);
-        candidates_ = BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
-                                         number_rewriter_.load(std::memory_order_relaxed),
-                                         katakana_rewriter_.load(std::memory_order_relaxed));
-      }
       core_action_in_progress_ = false;
-      return ApplyInputStateResult(context,
-                                   input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
+      return OpenLocalCandidateWindow(context);
     }
     core_action_in_progress_ = false;
     try {
@@ -9027,6 +9056,8 @@ void TextService::ResolveFinalPunctuationHold() {
 }
 
 void TextService::AbortFinalPunctuationHold() {
+  // The keys that waited for the dropped commit go with it (DEV-1794).
+  if (final_punctuation_hold_ && !final_punctuation_hold_->replay) window_waiting_keys_.clear();
   final_punctuation_hold_.reset();
   punctuation_timer_.Cancel(DelayedActionTimer::kFinal);
 }

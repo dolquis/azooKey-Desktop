@@ -8606,7 +8606,10 @@ void TextService::RefreshPrediction(ITfContext* context) {
     candidate_ui_.CancelScheduledCandidatesReady();
     prediction_retry_scheduled_generation_ = 0;
     shown_predictions_ = cached->second.predictions;
-    shown_prediction_key_ = cache_key;
+    if (shown_predictions_.empty())
+      shown_prediction_key_.clear();
+    else
+      shown_prediction_key_ = cache_key;
     ShowPredictionWindow();
     return;
   }
@@ -8688,7 +8691,10 @@ void TextService::ApplyPredictionResult() {
   prediction_cache_[cache_key] =
       PredictionCacheEntry{result->predictions, std::chrono::steady_clock::now()};
   shown_predictions_ = std::move(result->predictions);
-  shown_prediction_key_ = cache_key;
+  if (shown_predictions_.empty())
+    shown_prediction_key_.clear();
+  else
+    shown_prediction_key_ = cache_key;
   ShowPredictionWindow();
 }
 

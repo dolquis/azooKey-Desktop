@@ -2527,15 +2527,16 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionWindowSurvivesTheCacheAgingOutForTheS
   h.service.process_candidates_ready_for_test();
   ASSERT_EQ(h.service.shown_prediction_count_for_test(), 2u);
   ASSERT_TRUE(h.service.prediction_window_visible_for_test());
-  const unsigned queries_before = prediction_queries.load();
+  ASSERT_GT(prediction_queries.load(), 0u);
+  // With the worker stopped, a query asked again stays queued where the test can see it.
+  h.service.stop_ipc_worker_for_test();
+  ASSERT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
 
-  h.service.age_prediction_cache_for_test(std::chrono::milliseconds(1100));
+  h.service.age_prediction_state_for_test(std::chrono::milliseconds(1100));
   h.service.process_candidates_ready_for_test();
   EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
   EXPECT_TRUE(h.service.prediction_window_visible_for_test());
   EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u);
-  EXPECT_EQ(prediction_queries.load(), queries_before);
-  h.service.stop_ipc_worker_for_test();
   server.Stop();
 }
 

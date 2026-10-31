@@ -35,6 +35,7 @@
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
 #include "azookey/tsf/LangBarInputModeItem.h"
+#include "azookey/tsf/LiveCarry.h"
 #include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/OpenCloseKey.h"
 #include "azookey/tsf/PredictionWindow.h"
@@ -1231,17 +1232,17 @@ class TextService final : public ITfTextInputProcessorEx,
   // punctuation (an idle, final or eager request). UI thread only.
   std::vector<ipc::LiveSegment> live_display_segments_;
   bool live_display_auto_punctuation_{false};
-  // DEV-1806: the last live answer shown for a reading with no pending romaji.
-  // It outlives a change of the reading, so the preedit keeps its converted
-  // start while the answer for the longer reading is on its way. Cleared with
+  // DEV-1806: the live answers this input showed for readings with no pending
+  // romaji, oldest first and one per reading, split as LiveCarry.h describes.
+  // They outlive a change of the reading, so the preedit keeps a converted
+  // start while the answer for the changed reading is on its way. Cleared with
   // live_display_* everywhere except on that change. UI thread only.
   struct LiveCarry {
     std::string reading;
-    std::string surface;
-    std::vector<ipc::LiveSegment> segments;
-    bool auto_punctuation{false};
+    std::vector<LivePiece> pieces;
   };
-  std::optional<LiveCarry> live_carry_;
+  static constexpr size_t kMaxLiveCarries = 8;
+  std::vector<LiveCarry> live_carries_;
   // Reading of the last live request, for the idle timer. UI thread only.
   std::string live_query_reading_;
   // Idle timer (section 4.3.1) and the bounded wait of the final request

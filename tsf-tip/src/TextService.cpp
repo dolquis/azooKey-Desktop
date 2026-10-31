@@ -2958,7 +2958,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       batch_segment_cursor_ = state.segment_cursor;
       live_display_reading_ = state.live_display_reading;
       live_display_surface_ = state.live_display_surface;
-      live_carry_.reset();
+      live_carries_.clear();
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_ = state.cached_candidates;
@@ -3690,7 +3690,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
-        live_carry_.reset();
+        live_carries_.clear();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
@@ -3728,7 +3728,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
-        live_carry_.reset();
+        live_carries_.clear();
         *eaten = TRUE;
       }
     }
@@ -4647,7 +4647,7 @@ void TextService::ClearTextStateForLifecycle() {
   live_display_surface_.clear();
   live_display_segments_.clear();
   live_display_auto_punctuation_ = false;
-  live_carry_.reset();
+  live_carries_.clear();
   core_input_active_ = true;
   ClearBatchState();
   committing_ = false;
@@ -5059,7 +5059,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
-    live_carry_.reset();
+    live_carries_.clear();
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -5138,7 +5138,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
-    live_carry_.reset();
+    live_carries_.clear();
     if (!core_action_in_progress_) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -7167,7 +7167,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
-    live_carry_.reset();
+    live_carries_.clear();
     return;
   }
   const std::string left_context = CaptureLeftContext(context, false);
@@ -7903,7 +7903,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     live_display_surface_.clear();
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
-    live_carry_.reset();
+    live_carries_.clear();
     CancelPendingQueriesForLifecycle();
     preedit_update_needed = true;
   } else if (std::holds_alternative<core::HideCandidateWindow>(action)) {
@@ -8011,7 +8011,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
   auto previous_live_surface = live_display_surface_;
   auto previous_live_segments = live_display_segments_;
   const bool previous_live_auto_punctuation = live_display_auto_punctuation_;
-  auto previous_carry = live_carry_;
+  auto previous_carries = live_carries_;
   auto previous_metadata = core_cached_metadata_;
   auto previous_shown = shown_candidates_;
   const int previous_selected = selected_candidate_idx_;
@@ -8026,7 +8026,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     live_display_surface_ = std::move(previous_live_surface);
     live_display_segments_ = std::move(previous_live_segments);
     live_display_auto_punctuation_ = previous_live_auto_punctuation;
-    live_carry_ = std::move(previous_carry);
+    live_carries_ = std::move(previous_carries);
     core_cached_metadata_ = std::move(previous_metadata);
     shown_candidates_ = std::move(previous_shown);
     selected_candidate_idx_ = previous_selected;
@@ -8083,7 +8083,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       live_display_surface_.clear();
       live_display_segments_.clear();
       live_display_auto_punctuation_ = false;
-      live_carry_.reset();
+      live_carries_.clear();
     }
     bool preedit_update_needed = false;
     bool commit_pending = false;
@@ -8124,12 +8124,24 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         // switched off since then has not redrawn the preedit, so the text
         // last written decides. Only the answer for this very reading is a
         // conversion the Host returned, so a carried one is not observed.
-        const bool shown_now = local_settings_.LiveConversionSnapshot() ||
-                               LiveShownSurface(previous_marked, /*require_setting=*/false) ==
-                                   composition_range_surface_;
-        if (auto shown = LiveShownSurface(core_marked_surface_, /*require_setting=*/false);
-            shown && shown_now) {
-          const bool answered = live_display_reading_ == core_marked_surface_;
+        // The shown text comes from the reading as displayed; the flush of
+        // pending romaji replaces only the end the preedit showed as typed.
+        auto shown = LiveShownSurface(previous_marked, /*require_setting=*/false);
+        if (shown &&
+            (local_settings_.LiveConversionSnapshot() || *shown == composition_range_surface_)) {
+          const bool answered =
+              live_display_reading_ == previous_marked && core_marked_surface_ == previous_marked;
+          size_t same = 0;
+          while (same < previous_marked.size() && same < core_marked_surface_.size() &&
+                 previous_marked[same] == core_marked_surface_[same])
+            ++same;
+          while (same > 0 && (static_cast<unsigned char>(previous_marked[same]) & 0xC0) == 0x80)
+            --same;
+          const std::string_view typed_end = std::string_view(previous_marked).substr(same);
+          if (shown->ends_with(typed_end)) {
+            shown->resize(shown->size() - typed_end.size());
+            *shown += core_marked_surface_.substr(same);
+          }
           core_marked_surface_ = *std::move(shown);
           if (answered) AdoptLiveCommitObservation(context);
         }
@@ -8183,7 +8195,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         live_display_surface_.clear();
         live_display_segments_.clear();
         live_display_auto_punctuation_ = false;
-        live_carry_.reset();
+        live_carries_.clear();
         shown_candidates_.clear();
         selected_candidate_idx_ = 0;
         preedit_kana_.clear();
@@ -8333,15 +8345,12 @@ std::string TextService::CurrentDisplayedPreeditSurface() const {
   return CurrentPreeditSurface();
 }
 
-// DEV-1806 (docs/legacy-parity-spec.md section 2.3): the live conversion text a
-// preedit showing `reading` displays, or nothing when it shows the reading.
-// The answer for this very reading comes first. Otherwise the segments of the
-// carried answer whose readings start `reading` keep their converted text and
-// the rest of the reading follows as typed, so the next answer only redraws
-// the characters it changes. An automatic mark left at the end of the kept
-// part is dropped: the next answer decides it again. Without segments the
-// carried surface is one segment, unless its request asked for punctuation
-// (it may end in an automatic mark that cannot be told apart).
+// DEV-1806 (docs/legacy-parity-spec.md section 2.3.1): the live conversion text
+// a preedit showing `reading` displays, or nothing when it shows the reading.
+// The answer for this very reading comes first, shown or carried. Otherwise
+// the carried answer that keeps the longest converted start of `reading` (the
+// latest on a tie) gives it, and the rest of the reading follows as typed, so
+// the next answer only redraws the characters it changes.
 std::optional<std::string> TextService::LiveShownSurface(const std::string& reading,
                                                          bool require_setting) const {
   if (reading.empty() || (require_setting && !local_settings_.LiveConversionSnapshot()) ||
@@ -8349,44 +8358,19 @@ std::optional<std::string> TextService::LiveShownSurface(const std::string& read
     return std::nullopt;
   if (live_display_reading_ == reading && !live_display_surface_.empty())
     return live_display_surface_;
-  if (!live_carry_ || live_carry_->surface.empty()) return std::nullopt;
-  const LiveCarry& carry = *live_carry_;
-  bool segments_usable = !carry.segments.empty();
-  if (segments_usable) {
-    std::string segment_reading;
-    std::string segment_surface;
-    for (const auto& segment : carry.segments) {
-      if (!segment.auto_punctuation) segment_reading += segment.reading;
-      segment_surface += segment.surface;
-    }
-    segments_usable = segment_reading == carry.reading && segment_surface == carry.surface;
-  }
-  if (!segments_usable && carry.auto_punctuation) return std::nullopt;
-  std::vector<ipc::LiveSegment> whole;
-  if (!segments_usable) {
-    ipc::LiveSegment segment;
-    segment.reading = carry.reading;
-    segment.surface = carry.surface;
-    whole.push_back(std::move(segment));
-  }
-  std::string kept;
-  std::string marks;
-  size_t consumed = 0;
-  for (const auto& segment : segments_usable ? carry.segments : whole) {
-    if (segment.auto_punctuation) {
-      marks += segment.surface;
+  CarriedLiveText best;
+  bool best_exact = false;
+  for (const auto& carry : live_carries_) {
+    auto carried = CarryLiveText(carry.pieces, reading);
+    const bool exact = carry.reading == reading;
+    if (carried.reading_bytes == 0 || carried.reading_bytes < best.reading_bytes ||
+        (carried.reading_bytes == best.reading_bytes && best_exact && !exact))
       continue;
-    }
-    if (segment.reading.empty() ||
-        reading.compare(consumed, segment.reading.size(), segment.reading) != 0)
-      break;
-    kept += marks;
-    marks.clear();
-    kept += segment.surface;
-    consumed += segment.reading.size();
+    best = std::move(carried);
+    best_exact = exact;
   }
-  if (consumed == 0) return std::nullopt;
-  return kept + reading.substr(consumed);
+  if (best.reading_bytes == 0) return std::nullopt;
+  return best.surface + reading.substr(best.reading_bytes);
 }
 
 void TextService::OnCandidatesReady(void* context) {
@@ -9024,21 +9008,31 @@ std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
   const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
                             ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
+  // DEV-1806: a reading that ends in pending romaji is no start of the next
+  // one ("かk" before "かき"), so only a reading without it is carried. The
+  // new list is built before any state changes, so a failed allocation leaves
+  // everything as it was.
+  auto carries = live_carries_;
+  if (!romaji_.HasPending()) {
+    auto pieces = BuildLivePieces(result->reading, result->surface, result->segments,
+                                  result->auto_punctuation);
+    std::erase_if(carries,
+                  [&](const LiveCarry& carry) { return carry.reading == result->reading; });
+    if (!pieces.empty()) {
+      carries.push_back({result->reading, std::move(pieces)});
+      if (carries.size() > kMaxLiveCarries) carries.erase(carries.begin());
+    }
+  }
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
   auto previous_segments = std::move(live_display_segments_);
   const bool previous_auto_punctuation = live_display_auto_punctuation_;
-  std::optional<LiveCarry> previous_carry = live_carry_;
+  auto previous_carries = std::exchange(live_carries_, std::move(carries));
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
   live_display_segments_ = std::move(result->segments);
   live_display_auto_punctuation_ = result->auto_punctuation;
-  // DEV-1806: a reading that ends in pending romaji is no start of the next
-  // one ("かk" before "かき"), so only a reading without it is carried.
-  if (!romaji_.HasPending())
-    live_carry_ = LiveCarry{live_display_reading_, live_display_surface_, live_display_segments_,
-                            live_display_auto_punctuation_};
   if (core_input_active_) core_marked_surface_ = result->surface;
   const HRESULT update_hr = RequestPreeditUpdate(active_context_);
   if (update_hr == E_OUTOFMEMORY) {
@@ -9047,7 +9041,7 @@ std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
     live_display_surface_ = previous_surface;
     live_display_segments_ = std::move(previous_segments);
     live_display_auto_punctuation_ = previous_auto_punctuation;
-    live_carry_ = std::move(previous_carry);
+    live_carries_ = std::move(previous_carries);
     return consumed;
   }
   if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {

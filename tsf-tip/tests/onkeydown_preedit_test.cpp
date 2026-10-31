@@ -13565,3 +13565,72 @@ TEST(TsfTipLiveCarryTest, BackspaceToTheCarriedReadingCommitsItsSurfaceWithoutOb
   EXPECT_EQ(h.context.document->text, L"蚊");
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
+
+// DEV-1806: an earlier answer of the same input still serves a reading that
+// Backspace made shorter than the latest answer's.
+TEST(TsfTipLiveCarryTest, EarlierAnswerServesTheReadingBackspaceRestores) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  DeliverLiveAnswer(h, "か", "蚊");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  DeliverLiveAnswer(h, "かき", "柿");
+  ASSERT_EQ(h.context.document->text, L"柿");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// DEV-1806: with no earlier answer, the latest one keeps its start up to a kana
+// it shares with the reading.
+TEST(TsfTipLiveCarryTest, BackspaceKeepsTheConvertedStartUpToASharedKana) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  for (const WPARAM key : {'H', 'A', 'N', 'A', 'W', 'O', 'M', 'I', 'R', 'U'})
+    ASSERT_TRUE(h.Press(key));
+  DeliverLiveAnswer(h, "はなをみる", "花を見る");
+  ASSERT_EQ(h.context.document->text, L"花を見る");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"花をみ");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"花をみ");
+}
+
+// DEV-1806: the answer for the reading Backspace restores wins over a later
+// answer that can be cut at the same place.
+TEST(TsfTipLiveCarryTest, AnswerForTheRestoredReadingWinsOverALaterCut) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  for (const WPARAM key : {'K', 'A', 'K', 'I'}) ASSERT_TRUE(h.Press(key));
+  DeliverLiveAnswer(h, "かき", "蚊木", {LiveSeg("蚊", "か", false), LiveSeg("木", "き", false)});
+  ASSERT_TRUE(h.Press('W'));
+  ASSERT_TRUE(h.Press('O'));
+  DeliverLiveAnswer(h, "かきを", "柿を",
+                    {LiveSeg("柿", "かき", false), LiveSeg("を", "を", false)});
+  ASSERT_EQ(h.context.document->text, L"柿を");
+
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊木");
+}
+
+// DEV-1806: the eight latest answers are kept; an older one is gone.
+TEST(TsfTipLiveCarryTest, KeepsTheEightLatestAnswers) {
+  DocumentPreeditHarness h;
+  StartPlainLive(h);
+  std::string reading;
+  std::string surface;
+  for (int i = 0; i < 9; ++i) {
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    reading += "か";
+    surface += "蚊";
+    DeliverLiveAnswer(h, reading, surface);
+  }
+  for (int i = 0; i < 7; ++i) ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊蚊");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"か");
+}

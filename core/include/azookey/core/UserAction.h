@@ -42,6 +42,15 @@ enum class UserAction : uint16_t {
   // Debugging.
   ToggleDebugWindow,
   ToggleAlnum,
+
+  // F6-F10 commit the reading in one character form
+  // (docs/tsf-deep-integration-spec.md §3.6). The TIP commits them on every
+  // input path with BuildCommitForm; InputState leaves them unhandled.
+  CommitHiragana,
+  CommitKatakana,
+  CommitHalfwidthKatakana,
+  CommitFullwidthRoman,
+  CommitHalfwidthRoman,
 };
 
 inline constexpr uint32_t kModifierShift = 1u << 0;

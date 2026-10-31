@@ -42,3 +42,56 @@ TEST(CharacterFormCycleTest, RejectsIncompleteOrInvalidInput) {
     EXPECT_FALSE(BuildCharacterFormCycle(input)) << input;
   }
 }
+
+namespace {
+using azookey::core::BuildCommitForm;
+using azookey::core::CommitForm;
+}  // namespace
+
+TEST(CommitFormTest, CommitsTheReadingInEachForm) {
+  EXPECT_EQ(BuildCommitForm("かんじ", CommitForm::Hiragana), "かんじ");
+  EXPECT_EQ(BuildCommitForm("かんじ", CommitForm::Katakana), "カンジ");
+  EXPECT_EQ(BuildCommitForm("かんじ", CommitForm::HalfwidthKatakana), "ｶﾝｼﾞ");
+  EXPECT_EQ(BuildCommitForm("かんじ", CommitForm::FullwidthRoman, "kanji"), "ｋａｎｊｉ");
+  EXPECT_EQ(BuildCommitForm("かんじ", CommitForm::HalfwidthRoman, "kanji"), "kanji");
+}
+
+TEST(CommitFormTest, RomanFormsSpellTheTypedRomajiWithItsCase) {
+  EXPECT_EQ(BuildCommitForm("ぴっつぁ", CommitForm::HalfwidthRoman, "PIzza"), "PIzza");
+  EXPECT_EQ(BuildCommitForm("ぴっつぁ", CommitForm::FullwidthRoman, "PIzza"), "ＰＩｚｚａ");
+  EXPECT_EQ(BuildCommitForm("らーめん、", CommitForm::HalfwidthRoman, "ra-men,"), "ra-men,");
+}
+
+TEST(CommitFormTest, KanaFormsKeepDigitsAndSymbolsOfTheReading) {
+  EXPECT_EQ(BuildCommitForm("だい3かい", CommitForm::Hiragana), "だい3かい");
+  EXPECT_EQ(BuildCommitForm("だい3かい", CommitForm::Katakana), "ダイ3カイ");
+  EXPECT_EQ(BuildCommitForm("だい3かい", CommitForm::HalfwidthKatakana), "ﾀﾞｲ3ｶｲ");
+  EXPECT_EQ(BuildCommitForm("かっこ「", CommitForm::Katakana), "カッコ「");
+}
+
+TEST(CommitFormTest, HalfwidthKatakanaNarrowsOnlyCharactersWithAHalfwidthForm) {
+  EXPECT_EQ(BuildCommitForm("＠：＊￥「」、。・ー", CommitForm::HalfwidthKatakana), "@:*¥｢｣､｡･ｰ");
+  EXPECT_EQ(BuildCommitForm("’”〜『』", CommitForm::HalfwidthKatakana), "’”〜『』");
+  EXPECT_EQ(BuildCommitForm("ぱーてぃー", CommitForm::HalfwidthKatakana), "ﾊﾟｰﾃｨｰ");
+}
+
+TEST(CommitFormTest, RomanFormsRespellInLowercaseHepburnWithoutTypedRomaji) {
+  EXPECT_EQ(BuildCommitForm("だい3かい", CommitForm::HalfwidthRoman), "dai3kai");
+  EXPECT_EQ(BuildCommitForm("だい3かい", CommitForm::FullwidthRoman), "ｄａｉ３ｋａｉ");
+  EXPECT_EQ(BuildCommitForm("かっこ「", CommitForm::HalfwidthRoman), "kakko[");
+  EXPECT_EQ(BuildCommitForm("かっこ「", CommitForm::FullwidthRoman), "ｋａｋｋｏ［");
+  EXPECT_EQ(BuildCommitForm("すし", CommitForm::HalfwidthRoman), "sushi");
+  EXPECT_EQ(BuildCommitForm("じ：かん", CommitForm::HalfwidthRoman), "ji:kan");
+  EXPECT_EQ(BuildCommitForm("”＃＄％＆’（）＝〜｜｀『』＋＊＜＞＿＾＼￥＠；・？！",
+                            CommitForm::HalfwidthRoman),
+            "\"#$%&'()=~|`{}+*<>_^\\¥@;/?!");
+  EXPECT_EQ(BuildCommitForm("￥", CommitForm::FullwidthRoman), "￥");
+}
+
+TEST(CommitFormTest, RespellsKanaRomanizeCannotSpellKanaByKana) {
+  EXPECT_EQ(BuildCommitForm("ふぁ", CommitForm::HalfwidthRoman), "fuxa");
+  EXPECT_EQ(BuildCommitForm("がっこうふぁん", CommitForm::HalfwidthRoman), "gaxtukoufuxan");
+  EXPECT_EQ(BuildCommitForm("ふぁ3がっこう", CommitForm::HalfwidthRoman), "fuxa3gakkou");
+  EXPECT_EQ(BuildCommitForm("あっ", CommitForm::HalfwidthRoman), "axtu");
+  EXPECT_EQ(BuildCommitForm("ーあ", CommitForm::HalfwidthRoman), "-a");
+}

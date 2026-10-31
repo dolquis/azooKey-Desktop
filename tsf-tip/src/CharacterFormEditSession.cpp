@@ -265,7 +265,7 @@ CharacterFormCycleResult CharacterFormEditSession::CycleSelection(
 
 std::optional<CharacterFormRecentCommit> CharacterFormEditSession::CaptureRecentCommit(
     ITfContext* context, TfClientId client_id, std::string_view reading,
-    std::string_view committed_surface) {
+    std::string_view committed_surface, std::optional<size_t> committed_form) {
   if (!context || committed_surface.empty()) return std::nullopt;
   try {
     const auto cycle = core::BuildCharacterFormCycle(reading);
@@ -299,8 +299,10 @@ std::optional<CharacterFormRecentCommit> CharacterFormEditSession::CaptureRecent
       captured->caret = caret;
       captured->cycle = *cycle;
       captured->surface = *surface;
+      // An F6-F10 commit (spec §3.6) cycles on from the form it committed.
       captured->next_index =
-          committed_surface == std::string_view(cycle->forms[core::CharacterFormCycle::kHiragana])
+          committed_form ? (*committed_form + 1) % cycle->forms.size()
+          : committed_surface == std::string_view(cycle->forms[core::CharacterFormCycle::kHiragana])
               ? core::CharacterFormCycle::kKatakana
               : core::CharacterFormCycle::kHiragana;
       return S_OK;

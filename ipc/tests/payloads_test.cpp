@@ -906,6 +906,23 @@ TEST(PayloadsTest, QueryDiagnosticsDefaultsMissingCounters) {
   EXPECT_FALSE(parsed->backend_selection);
 }
 
+TEST(PayloadsTest, QueryDiagnosticsPromptFormatIsOptionalAndIgnoresUnknownValues) {
+  using namespace azookey::ipc;
+  QueryDiagnosticsPayload payload;
+  payload.engine = "llama_cpp";
+  payload.backend = "cpu";
+  payload.fallback_state = "healthy";
+  EXPECT_FALSE(json::Parse(BuildQueryDiagnostics(payload))->Find("prompt_format"));
+  EXPECT_FALSE(ParseQueryDiagnostics(BuildQueryDiagnostics(payload))->prompt_format);
+  payload.prompt_format = "kanakanji-edge-v1";
+  EXPECT_EQ(ParseQueryDiagnostics(BuildQueryDiagnostics(payload))->prompt_format,
+            "kanakanji-edge-v1");
+  payload.prompt_format = "unknown-format";
+  const auto parsed = ParseQueryDiagnostics(BuildQueryDiagnostics(payload));
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->prompt_format);
+}
+
 TEST(PayloadsTest, QueryDiagnosticsBackendSelectionRoundTripsWithoutChangingLoadedBackend) {
   using namespace azookey::ipc;
   QueryDiagnosticsPayload payload;

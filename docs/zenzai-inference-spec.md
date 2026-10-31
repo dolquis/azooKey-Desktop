@@ -272,6 +272,11 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 2. **左文脈の整形**: `preceding_text` を**末尾 30 文字**に切り詰め、改行で分割して
    最後の行を採用、先頭空白を除去（legacy `getCleanLeftSideContext` と同義）。
    空なら context フィールドを省く。
+   整形の前に、`preceding_text` から U+EE00〜U+EEFF（プロンプトの制御マーカーに使う私用文字。
+   `ContainsZenzaiControlMarker` と同じ範囲）を除く。文書やコピーした文字列に含まれる
+   これらの文字が、`parse_special=true` のトークン化で区切りとして読まれるのを防ぐ。
+   30 文字は除いた後に数える。読みと instruction profile にも同じ除去を掛ける。
+   これらを含まない入力のプロンプトのバイト列は変わらない。除いた文字はログに出さない。
    `preceding_text` は、Convert へ渡る前に `InferenceEngine::QueryCandidates` が設定
    `maxContextLength`（既定 30、範囲 0〜30、`windows-tsf-host-architecture.md`）の
    末尾コードポイント数へ切り詰めている。TIP も送信前に同じ値で短縮する

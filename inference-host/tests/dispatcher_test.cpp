@@ -3584,6 +3584,46 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_FALSE(parsed->backend_selection.has_value());
 }
 
+TEST_F(DispatcherTest, QueryDiagnosticsReportsPromptFormatOnlyForLoadedZenzaiModel) {
+  auto config = DefaultDispatcherConfig();
+  config.runtime_tier = "llama_cpp";
+  azookey::host::Dispatcher llama_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto query = [&] {
+    const auto response =
+        llama_dispatcher.Dispatch(MakeReq(703, ipc::MessageType::QueryDiagnostics, "{}"));
+    EXPECT_TRUE(response.has_value());
+    return ipc::ParseQueryDiagnostics(response->payload_json);
+  };
+
+  // No model is loaded yet.
+  auto before = query();
+  ASSERT_TRUE(before.has_value());
+  EXPECT_FALSE(before->prompt_format.has_value());
+
+  const std::string model_path = temp_directory.File("azookey_dispatcher_prompt_format.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.prompt_format = azookey::host::ZenzaiPromptFormat::KanakanjiEdgeV1;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  auto after = query();
+  ASSERT_TRUE(after.has_value());
+  EXPECT_TRUE(after->model_loaded);
+  EXPECT_EQ(after->prompt_format, "kanakanji-edge-v1");
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsOmitsPromptFormatWhenRuntimeIsMock) {
+  const auto response = dispatcher.Dispatch(MakeReq(704, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->prompt_format.has_value());
+  EXPECT_EQ(response->payload_json.find("prompt_format"), std::string::npos);
+}
+
 TEST_F(DispatcherTest, QueryDiagnosticsPreservesStartupBackendSelectionAcrossConnections) {
   auto config = DefaultDispatcherConfig();
   config.backend_selection = ipc::BackendSelectionDiagnostics{

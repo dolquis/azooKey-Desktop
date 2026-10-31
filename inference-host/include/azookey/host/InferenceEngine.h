@@ -259,6 +259,8 @@ struct EngineHealthSnapshot {
   size_t learning_entries{};
   size_t user_dict_entries{};
   HealthState health_state{HealthState::Healthy};
+  // The prompt format the loaded Zenzai model runs with; nullopt when no Zenzai model is loaded.
+  std::optional<ZenzaiPromptFormat> prompt_format;
 };
 
 class InferenceEngine {

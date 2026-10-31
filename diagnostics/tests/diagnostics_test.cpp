@@ -279,6 +279,28 @@ TEST(DiagnosticsTest, LegacyHostResponseOmitsBackendSelectionDetails) {
   EXPECT_NE(json.find(R"("engine":"llama_cpp")"), std::string::npos);
 }
 
+TEST(DiagnosticsTest, PromptFormatDetailAppearsOnlyWhenHostReportsIt) {
+  const auto details_of = [](const std::string& host_json) {
+    diag::Snapshot snapshot;
+    snapshot.host_diagnostics = azookey::ipc::ParseQueryDiagnostics(host_json);
+    EXPECT_TRUE(snapshot.host_diagnostics.has_value());
+    const auto report = diag::EvaluateSnapshot(snapshot, 1);
+    const auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                                    [](const auto& item) { return item.id == "D-008"; });
+    EXPECT_NE(check, report.checks.end());
+    return j::Parse(check->details_json);
+  };
+  const auto with_format = details_of(
+      R"({"engine":"llama_cpp","backend":"cpu","fallback_state":"healthy",
+          "prompt_format":"kanakanji-edge-v1"})");
+  ASSERT_TRUE(with_format.has_value());
+  EXPECT_EQ(with_format->GetString("prompt_format"), "kanakanji-edge-v1");
+  const auto without_format =
+      details_of(R"({"engine":"llama_cpp","backend":"cpu","fallback_state":"healthy"})");
+  ASSERT_TRUE(without_format.has_value());
+  EXPECT_EQ(without_format->Find("prompt_format"), nullptr);
+}
+
 TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
   MockDpapiCrypto crypto;
   const auto probe = [&](std::string_view json) {

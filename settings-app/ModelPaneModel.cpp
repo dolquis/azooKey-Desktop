@@ -117,8 +117,8 @@ uint32_t ProgressPercent(uint64_t received, uint64_t total) {
   if (received >= total) return 100;
   // received < total, so the product of received and 100 is computed without overflow by
   // dividing first when needed.
-  const uint64_t percent = received > UINT64_MAX / 100 ? received / (total / 100)
-                                                       : received * 100 / total;
+  const uint64_t percent =
+      received > UINT64_MAX / 100 ? received / (total / 100) : received * 100 / total;
   return static_cast<uint32_t>(std::min<uint64_t>(percent, 99));
 }
 

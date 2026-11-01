@@ -386,8 +386,8 @@ void ModelPane::RenderCatalog() {
       row.Children().Append(bar);
       std::string progress = FormatByteSize(fetch_received_);
       if (fetch_total_ != 0) {
-        progress = std::to_string(percent) + "% (" + progress + " / " +
-                   FormatByteSize(fetch_total_) + ")";
+        progress =
+            std::to_string(percent) + "% (" + progress + " / " + FormatByteSize(fetch_total_) + ")";
       }
       row.Children().Append(Block(
           resources.GetString(L"Models_Catalog_Fetching") + L" " + winrt::to_hstring(progress),

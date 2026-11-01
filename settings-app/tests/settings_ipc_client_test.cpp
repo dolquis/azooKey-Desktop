@@ -241,24 +241,24 @@ TEST(SettingsIpcClientTest, AHostWithoutTheCapabilityIsNeverSentTheRequest) {
 TEST(SettingsIpcClientTest, CatalogFetchStartsThenPollsAndNeedsItsCapability) {
   std::vector<azookey::ipc::MessageType> seen_types;
   std::string seen_start;
-  FakeHost host({"fetch_catalog_model"}, [&](azookey::ipc::MessageType type,
-                                             const std::string& payload) {
-    seen_types.push_back(type);
-    azookey::ipc::CatalogFetchResponse response;
-    response.model_id = "zenz-v3.2-small";
-    response.total_bytes = 73871936;
-    if (type == azookey::ipc::MessageType::FetchCatalogModel) {
-      seen_start = payload;
-      response.state = "running";
-    } else {
-      EXPECT_EQ(payload, "{}");
-      response.state = "done";
-      response.received_bytes = response.total_bytes;
-      response.status = "downloaded";
-      response.path = "C:\\models\\zenzai\\ggml-model-Q5_K_M.gguf";
-    }
-    return std::optional<std::string>(azookey::ipc::BuildCatalogFetchResponse(response));
-  });
+  FakeHost host(
+      {"fetch_catalog_model"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+        seen_types.push_back(type);
+        azookey::ipc::CatalogFetchResponse response;
+        response.model_id = "zenz-v3.2-small";
+        response.total_bytes = 73871936;
+        if (type == azookey::ipc::MessageType::FetchCatalogModel) {
+          seen_start = payload;
+          response.state = "running";
+        } else {
+          EXPECT_EQ(payload, "{}");
+          response.state = "done";
+          response.received_bytes = response.total_bytes;
+          response.status = "downloaded";
+          response.path = "C:\\models\\zenzai\\ggml-model-Q5_K_M.gguf";
+        }
+        return std::optional<std::string>(azookey::ipc::BuildCatalogFetchResponse(response));
+      });
   ASSERT_TRUE(host.started());
 
   const auto started =

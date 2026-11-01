@@ -56,10 +56,16 @@ std::string HostCallStatusResource(HostCallStatus status);
 // FetchCatalogModel / QueryCatalogFetch response can carry, as the request's error or the
 // fetch's result_error. Each has a "CatalogFetchError_<code>" string; "format:<category>" uses
 // "CatalogFetchError_format", and any other category "CatalogFetchError_other".
-inline constexpr std::array<std::string_view, 10> kCatalogFetchErrorCodes{
-    "invalid_request",       "busy",           "unknown_model_id",     "catalog_unavailable",
-    "not authenticated",     "directory_unavailable", "destination_occupied", "download_failed",
-    "cancelled",             "format"};
+inline constexpr std::array<std::string_view, 10> kCatalogFetchErrorCodes{"invalid_request",
+                                                                          "busy",
+                                                                          "unknown_model_id",
+                                                                          "catalog_unavailable",
+                                                                          "not authenticated",
+                                                                          "directory_unavailable",
+                                                                          "destination_occupied",
+                                                                          "download_failed",
+                                                                          "cancelled",
+                                                                          "format"};
 
 std::string CatalogFetchErrorResource(std::string_view error);
 

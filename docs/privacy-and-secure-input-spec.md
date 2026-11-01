@@ -332,7 +332,9 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 既存の `maxContextLength`（既定 30、範囲 0〜30）でも短縮し、0 のときは空にする。
 読取失敗、選択状態が不明、secure 入力のいずれかでは空文字列を使う。
 
-左文脈はローカルの TIP → Host IPC の候補要求に限って渡す。外部 AI への送信、
+左文脈はローカルの TIP → Host IPC の候補要求に限って渡す。候補要求には、候補照会・
+ライブ変換に加え、予測の照会（`QueryPredictions`。`docs/legacy-parity-spec.md` §3.5）を含む。
+private の入力でも送る。外部 AI への送信、
 ログ本文への記録、別用途への再利用はしない。再変換の選択範囲と候補キャッシュにも
 同じ secure 判定を適用する（`docs/tsf-deep-integration-spec.md` §1.2）。
 

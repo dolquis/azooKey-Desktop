@@ -282,7 +282,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **実装範囲**:
   - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
     `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
-    と「ユーザー辞書を編集」「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
+    と、学習ペインでのユーザー辞書の追加・削除、「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
     `docs/sideload-packaging-spec.md` §3.7 を正典とする
   - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
     `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/sideload-packaging-spec.md` §3.3）と

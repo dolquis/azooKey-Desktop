@@ -49,6 +49,13 @@ class RenderingEngine {
   // Ends drawing and commits the composition.
   bool EndDraw();
 
+  // Animates the root visual's opacity from 0 to 1 over `seconds` with a cubic
+  // ease-out (native-ui-spec §6.1), or sets it to 1 at once when `seconds` is not
+  // positive, and commits. The composition engine runs the animation, so no timer
+  // is involved. On failure the opacity keeps its last value, or is 1 when only
+  // the commit failed, so a later frame's commit never starts a stale fade.
+  bool FadeIn(double seconds);
+
   IDWriteFactory* write_factory() const;
 
   // Stage and HRESULT of the most recent failure; never drawn content.

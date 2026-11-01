@@ -116,6 +116,45 @@ void LearningPane::Build(controls::StackPanel panel,
   // Entries of one store.
   entries_section_ = controls::StackPanel();
   entries_section_.Spacing(8);
+
+  // Adding a word, on the user dictionary tab only. The settings app never opens the dictionary
+  // file; the Host adds the word (AddUserWord) and the listing is read again.
+  add_section_ = controls::StackPanel();
+  add_section_.Spacing(8);
+  add_section_.Visibility(xaml::Visibility::Collapsed);
+  SetId(add_section_, L"LearningUserDictAddSection");
+  controls::StackPanel add_row;
+  add_row.Orientation(controls::Orientation::Horizontal);
+  add_row.Spacing(8);
+  add_reading_box_ = controls::TextBox();
+  add_reading_box_.Width(180);
+  add_reading_box_.Header(winrt::box_value(resources.GetString(L"Learning_UserDictAddReading")));
+  add_reading_box_.PlaceholderText(resources.GetString(L"Learning_UserDictAddReadingPlaceholder"));
+  SetId(add_reading_box_, L"LearningUserDictAddReadingBox");
+  add_row.Children().Append(add_reading_box_);
+  add_word_box_ = controls::TextBox();
+  add_word_box_.Width(220);
+  add_word_box_.Header(winrt::box_value(resources.GetString(L"Learning_UserDictAddWord")));
+  add_word_box_.PlaceholderText(resources.GetString(L"Learning_UserDictAddWordPlaceholder"));
+  SetId(add_word_box_, L"LearningUserDictAddWordBox");
+  add_word_box_.KeyDown(
+      [weak = weak_from_this()](auto const&, xaml::Input::KeyRoutedEventArgs const& args) {
+        if (args.Key() != winrt::Windows::System::VirtualKey::Enter) return;
+        if (const auto self = weak.lock()) self->AddUserWord();
+      });
+  add_row.Children().Append(add_word_box_);
+  add_button_ = controls::Button();
+  add_button_.Content(winrt::box_value(resources.GetString(L"Learning_UserDictAddButton")));
+  add_button_.VerticalAlignment(xaml::VerticalAlignment::Bottom);
+  SetId(add_button_, L"LearningUserDictAddButton");
+  add_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->AddUserWord();
+  });
+  add_row.Children().Append(add_button_);
+  add_section_.Children().Append(add_row);
+  add_section_.Children().Append(Block(resources.GetString(L"Learning_UserDictAddNote"), true));
+  entries_section_.Children().Append(add_section_);
+
   controls::StackPanel search_row;
   search_row.Orientation(controls::Orientation::Horizontal);
   search_row.Spacing(8);
@@ -272,6 +311,9 @@ void LearningPane::SelectTab(int index) {
     SetBusy(false);
     return;
   }
+  add_section_.Visibility(kLearningStoreTabs[static_cast<size_t>(index)].id == "user_dict"
+                              ? xaml::Visibility::Visible
+                              : xaml::Visibility::Collapsed);
   query_.clear();
   search_box_.Text(L"");
   offset_ = 0;
@@ -295,8 +337,11 @@ void LearningPane::RecoverFromFailure() {
 
 void LearningPane::SetBusy(bool busy) {
   busy_ = busy;
+  // A tab switch while a request is in flight would apply its result to the other tab.
+  tabs_.IsEnabled(!busy);
   search_button_.IsEnabled(!busy);
   reset_button_.IsEnabled(!busy);
+  add_button_.IsEnabled(!busy);
   export_button_.IsEnabled(!busy);
   import_button_.IsEnabled(!busy);
   if (busy) {
@@ -338,7 +383,7 @@ void LearningPane::UpdatePager() {
                                     " / " + std::to_string(total_)));
 }
 
-winrt::fire_and_forget LearningPane::LoadPage() {
+winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
   const auto self = shared_from_this();
   if (tab_index_ >= static_cast<int>(kLearningStoreTabs.size())) co_return;
   const auto generation = ++generation_;
@@ -348,7 +393,7 @@ winrt::fire_and_forget LearningPane::LoadPage() {
   request.limit = kLearningPageSize;
   request.offset = offset_;
   SetBusy(true);
-  status_bar_.IsOpen(false);
+  if (!keep_status) status_bar_.IsOpen(false);
   const auto dispatcher = dispatcher_;
   try {
     co_await winrt::resume_background();
@@ -458,7 +503,63 @@ winrt::fire_and_forget LearningPane::Forget(azookey::ipc::LearningEntryField ent
     if (entries_.size() == 1 && offset_ > 0) {
       offset_ = offset_ > kLearningPageSize ? offset_ - kLearningPageSize : 0;
     }
-    LoadPage();
+    LoadPage(/*keep_status=*/true);
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+winrt::fire_and_forget LearningPane::AddUserWord() {
+  const auto self = shared_from_this();
+  if (busy_ || tab_index_ >= static_cast<int>(kLearningStoreTabs.size()) ||
+      kLearningStoreTabs[static_cast<size_t>(tab_index_)].id != "user_dict") {
+    co_return;
+  }
+  const auto dispatcher = dispatcher_;
+  try {
+    ResourceLoader resources;
+    const auto input = NormalizeUserWordInput(winrt::to_string(add_reading_box_.Text()),
+                                              winrt::to_string(add_word_box_.Text()));
+    if (input.error != UserWordInputError::None) {
+      ShowStatus(controls::InfoBarSeverity::Warning,
+                 resources.GetString(L"Learning_UserDictAddProblemTitle"),
+                 resources.GetString(input.error == UserWordInputError::EmptyReading
+                                         ? L"Learning_UserDictAddEmptyReading"
+                                         : L"Learning_UserDictAddEmptyWord"));
+      co_return;
+    }
+    SetBusy(true);
+    status_bar_.IsOpen(false);
+    azookey::ipc::AddUserWordRequest request;
+    request.ruby = input.reading;
+    request.word = input.word;
+    co_await winrt::resume_background();
+    const auto result = RequestAddUserWord(DefaultSettingsIpcOptions(), request);
+    co_await ResumeForeground(dispatcher);
+
+    SetBusy(false);
+    ResourceLoader after;
+    if (result.status != HostCallStatus::Ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 after.GetString(L"Learning_UserDictAddProblemTitle"),
+                 Str(after, HostCallStatusResource(result.status)));
+      co_return;
+    }
+    if (!result.response->ok) {
+      ShowStatus(controls::InfoBarSeverity::Error,
+                 after.GetString(L"Learning_UserDictAddProblemTitle"),
+                 Str(after, UserDictErrorResource(result.response->error.value_or(""))));
+      co_return;
+    }
+    ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_UserDictAddedTitle"),
+               winrt::to_hstring(input.reading) + L" / " + winrt::to_hstring(input.word));
+    add_reading_box_.Text(L"");
+    add_word_box_.Text(L"");
+    // Show the word: list what matches its reading from the first page.
+    query_ = input.reading;
+    search_box_.Text(winrt::to_hstring(input.reading));
+    offset_ = 0;
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }
@@ -513,7 +614,7 @@ winrt::fire_and_forget LearningPane::Reset() {
     ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ResetDoneTitle"),
                after.GetString(L"Learning_ResetDoneMessage"));
     offset_ = 0;
-    LoadPage();
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }

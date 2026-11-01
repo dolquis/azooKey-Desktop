@@ -276,7 +276,10 @@ class TextService final : public ITfTextInputProcessorEx,
   bool caret_pt_valid_{false};
   RECT caret_rect_{0, 0, 0, 0};
   bool caret_rect_valid_{false};
-  // Context extraction is deferred to DEV-1349; the M15 wire field stays empty.
+  // UI-thread copy of the left context the candidate or live query of the
+  // latest reading change captured (DEV-1818). Idle and final re-queries do not
+  // replace it. Empty in a secure context and after a commit, a cancel or a focus
+  // loss, so the next composition never asks with the old one.
   std::string prediction_left_context_;
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -350,6 +353,10 @@ class TextService final : public ITfTextInputProcessorEx,
     return prediction_logged_reasons_.load(std::memory_order_relaxed);
   }
   bool prediction_query_hold_set_for_test() const { return !prediction_last_query_key_.empty(); }
+  const std::string& prediction_left_context_for_test() const { return prediction_left_context_; }
+  void set_prediction_left_context_for_test(std::string context) {
+    prediction_left_context_ = std::move(context);
+  }
   bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);
@@ -1399,10 +1406,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void CancelInflightWindowQueryLocked();
   std::string NextCommitObservationId();
   std::string CurrentActionTraceId() const;
-  void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
-                           const std::string& emoji_trigger = {});
-  void PostQueryLiveConversion(ITfContext* context, const std::string& reading,
-                               LiveRequestTiming timing = LiveRequestTiming::Edit);
+  // Both return the left context the query carries (empty when secure).
+  std::string PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
+                                  const std::string& emoji_trigger = {});
+  std::string PostQueryLiveConversion(ITfContext* context, const std::string& reading,
+                                      LiveRequestTiming timing = LiveRequestTiming::Edit);
   // M59 dynamic punctuation (docs/dynamic-punctuation-spec.md sections 4.3.1, 7.3, 7.4).
   void ArmIdlePunctuationTimer();
   void OnPunctuationTimer(DelayedActionTimer::Slot slot);

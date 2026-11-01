@@ -1212,7 +1212,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
 | モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
-| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4） |
+| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7） |
 | Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
 | 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
@@ -1547,11 +1547,13 @@ schema 自体は superset のまま変えない。
 
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 
-- **「ユーザー辞書を編集」** → ユーザー辞書（M9、`user_dict.json`）の追加 / 削除を行う CLI / デバッグ
-  probe を起動する（D-09 と接続。`AddUserWord` / `RemoveUserWord` 経路は roadmap M9）。v1.0 は専用 GUI を
-  作らず、最小の編集導線のみを提供する。フル辞書管理 GUI は v1.x（M30）。設定アプリは v1.0 / v1.x とも
-  `user_dict.json` を直接開かず、CLI probe または Host への IPC を経由する
-  （`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+- **ユーザー辞書の追加・削除** → 「学習」ペイン（§3.2）のユーザー辞書タブに置く。タブは一覧と検索、
+  「読み」「語」の 2 欄と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
+  削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
+  （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
+  既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json` を直接開かず、Host への IPC を
+  経由する（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。開発者向けの
+  CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
 
 #### v1.0 / v1.x 境界表
@@ -1579,6 +1581,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `privacy.*` | — | M30（プライバシーペイン。`crashReportConsent` はバージョンペイン） |
 | `safeMode.*` | — | M30（一般ペインで解除だけを操作する） |
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §B9） |
+| ユーザー辞書の内容（設定キーではない。`user_dict.json`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
 > 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。

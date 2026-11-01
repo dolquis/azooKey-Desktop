@@ -137,6 +137,39 @@ TEST(LearningPaneModelTest, EveryErrorStoreAndConflictOptionHasAString) {
   }
 }
 
+TEST(LearningPaneModelTest, EveryUserDictErrorHasAString) {
+  const auto names = ResourceNames();
+  for (const auto code : azookey::settings::kUserDictErrorCodes) {
+    const auto name = azookey::settings::UserDictErrorResource(code);
+    EXPECT_TRUE(names.contains(name)) << name;
+  }
+  EXPECT_TRUE(names.contains("LearningUserDictError_other"));
+  EXPECT_EQ(azookey::settings::UserDictErrorResource("brand_new"), "LearningUserDictError_other");
+  EXPECT_EQ(azookey::settings::UserDictErrorResource(""), "LearningUserDictError_other");
+}
+
+TEST(LearningPaneModelTest, UserWordInputIsTrimmedAndTheReadingFoldedToHiragana) {
+  using azookey::settings::NormalizeUserWordInput;
+  using azookey::settings::UserWordInputError;
+  // "\xE3\x80\x80" is U+3000; "\xE3\x82\xA2\xE3\x83\xB6" is katakana A and KE (U+30A2, U+30F6);
+  // "\xE3\x81\x82\xE3\x82\x96" is hiragana a and small ke (U+3042, U+3096).
+  const auto input = NormalizeUserWordInput(" \xE3\x80\x80\xE3\x82\xA2\xE3\x83\xB6\t",
+                                            "\xE3\x80\x80 azooKey \xE3\x80\x80");
+  EXPECT_EQ(input.error, UserWordInputError::None);
+  EXPECT_EQ(input.reading, "\xE3\x81\x82\xE3\x82\x96");
+  EXPECT_EQ(input.word, "azooKey");
+
+  // The long vowel mark (U+30FC) and the middle dot (U+30FB) are outside the fold.
+  EXPECT_EQ(NormalizeUserWordInput("\xE3\x83\xBC\xE3\x83\xBB", "x").reading,
+            "\xE3\x83\xBC\xE3\x83\xBB");
+  // The word keeps its katakana.
+  EXPECT_EQ(NormalizeUserWordInput("a", "\xE3\x82\xA2").word, "\xE3\x82\xA2");
+
+  EXPECT_EQ(NormalizeUserWordInput(" \xE3\x80\x80", "azooKey").error,
+            UserWordInputError::EmptyReading);
+  EXPECT_EQ(NormalizeUserWordInput("azuki", "\t").error, UserWordInputError::EmptyWord);
+}
+
 TEST(LearningPaneModelTest, StoresMatchTheWireNames) {
   const auto& tabs = azookey::settings::kLearningStoreTabs;
   EXPECT_EQ(tabs[0].id, "learning");

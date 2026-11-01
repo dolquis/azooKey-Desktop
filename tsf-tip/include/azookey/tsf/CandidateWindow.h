@@ -175,6 +175,15 @@ class CandidateWindow {
   bool ShowDetailsForTest() { return ShowDetails(); }
   bool RenderDetailsForTest() { return RenderDetails(); }
   bool details_visible_for_test() const { return details_hwnd_ && IsWindowVisible(details_hwnd_); }
+  // How the last Show that made the window appear set its opacity (native-ui-spec
+  // §6.1 / §6.3); None until then. A Show of a visible window leaves it as is.
+  enum class AppearanceForTest { None, Faded, Immediate };
+  AppearanceForTest last_appearance_for_test() const { return last_appearance_; }
+  int appearances_for_test() const { return appearances_; }
+  // Whether the last appearance's RenderingEngine::FadeIn succeeded.
+  bool last_appearance_set_for_test() const { return last_appearance_set_; }
+  // Stands in for SPI_GETCLIENTAREAANIMATION: -1 reads the system, 0 off, 1 on.
+  static void SetClientAreaAnimationForTest(int enabled);
 #endif
 
  private:
@@ -245,6 +254,11 @@ class CandidateWindow {
   void* on_candidates_ready_context_{nullptr};
   OnRenderResultFn on_render_result_{nullptr};
   void* on_render_result_context_{nullptr};
+#ifdef AZOOKEY_TSF_TESTING
+  AppearanceForTest last_appearance_{AppearanceForTest::None};
+  int appearances_{0};
+  bool last_appearance_set_{false};
+#endif
 
   static int ScaleForDpi(int value, UINT dpi);
   static LayoutMetrics ComputeLayoutMetrics(UINT dpi);
@@ -264,6 +278,9 @@ class CandidateWindow {
   int MeasureText(const std::wstring& text) const;
   // Draws the window at this client size and commits it (native-ui-spec §4.1).
   bool Render(int width, int height);
+  // Fades a window that is about to appear in, or shows it at full opacity when
+  // the system turns client area animations off (native-ui-spec §6.1 / §6.3).
+  void StartAppearance();
   using DrawFn = void (CandidateWindow::*)(ID2D1DeviceContext*, int, int) const;
   // init_failures counts failed Initialize calls in a row; at the limit the
   // device stack is not created again.

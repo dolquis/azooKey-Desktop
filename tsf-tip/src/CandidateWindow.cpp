@@ -91,7 +91,22 @@ HMODULE GetTipModuleHandle() {
 UINT g_monitor_dpi_for_test = 0;
 CandidateWindow::RenderFailureForTest g_render_failure_for_test =
     CandidateWindow::RenderFailureForTest::None;
+int g_client_area_animation_for_test = -1;
 #endif
+
+// The candidate window fades in over this long when it appears (native-ui-spec §6.1).
+constexpr double kFadeInSeconds = 0.15;
+
+// "Show animations in Windows" off turns the fade into an immediate full opacity
+// (native-ui-spec §6.3). Read on each appearance, so a change applies at once.
+bool ClientAreaAnimationEnabled() {
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_client_area_animation_for_test >= 0) return g_client_area_animation_for_test != 0;
+#endif
+  BOOL enabled = TRUE;
+  if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0)) return true;
+  return enabled != FALSE;
+}
 
 // A device stack that failed to initialize this many times in a row is not
 // retried until the next Create (native-ui-spec §4.1).
@@ -301,6 +316,11 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 
 // static
+void CandidateWindow::SetClientAreaAnimationForTest(int enabled) {
+  g_client_area_animation_for_test = enabled;
+}
+
+// static
 void CandidateWindow::SetRenderFailureForTest(RenderFailureForTest failure) {
   g_render_failure_for_test = failure;
 }
@@ -455,11 +475,13 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   const RECT placement = ComputePlacement(pt, monitor.work_area, width, height, metrics_.caret_gap);
   const int placed_width = placement.right - placement.left;
   const int placed_height = placement.bottom - placement.top;
+  const bool appearing = !IsWindowVisible(hwnd_);
   showing_ = true;
   // Without a committed frame the window would be invisible yet still take
   // clicks, so it stays hidden until a later Show or state change draws one.
   if (Render(placed_width, placed_height)) {
     render_failed_ = false;
+    if (appearing) StartAppearance();
     SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
                  SWP_SHOWWINDOW | SWP_NOACTIVATE);
   } else {
@@ -762,6 +784,21 @@ bool CandidateWindow::Fail(const char* stage, HRESULT hr) {
 bool CandidateWindow::Render(int width, int height) {
   return RenderTo(render_, render_init_failures_, hwnd_, width, height,
                   &CandidateWindow::DrawContent);
+}
+
+void CandidateWindow::StartAppearance() {
+  const bool animate = ClientAreaAnimationEnabled();
+  // A failure leaves the visual at its last opacity, which every earlier fade
+  // ended at 1 and a new visual starts at, so the window still appears and only
+  // the fade is lost. The drawing failure state is not touched.
+  const bool set = render_ && render_->engine.FadeIn(animate ? kFadeInSeconds : 0.0);
+#ifdef AZOOKEY_TSF_TESTING
+  last_appearance_ = animate ? AppearanceForTest::Faded : AppearanceForTest::Immediate;
+  last_appearance_set_ = set;
+  ++appearances_;
+#else
+  (void)set;
+#endif
 }
 
 bool CandidateWindow::RenderTo(std::unique_ptr<RenderState>& state, int& init_failures, HWND hwnd,

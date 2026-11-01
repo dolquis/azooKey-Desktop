@@ -74,6 +74,11 @@ HostCallResult<azookey::ipc::ImportLearningDataResponse> RequestImportLearningDa
     const SettingsIpcOptions& options, const azookey::ipc::ImportLearningDataRequest& request);
 HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningStore(
     const SettingsIpcOptions& options, const azookey::ipc::ResetLearningStoreRequest& request);
+// AddUserWord has no capability of its own (every Host since M9 answers it), so a Host without a
+// user dictionary replies ok=false with kUserDictErrorUnavailable. The edit may wait for the
+// cross-process file lock, so the call waits as long as a reset.
+HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
+    const SettingsIpcOptions& options, const azookey::ipc::AddUserWordRequest& request);
 // Persona ratios (rich-features-spec X-2-7); the request payload is an empty object.
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
     const SettingsIpcOptions& options);

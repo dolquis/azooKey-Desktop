@@ -405,6 +405,24 @@
   <data name="Learning_Imported" xml:space="preserve"><value>取り込み</value></data>
   <data name="Learning_Skipped" xml:space="preserve"><value>スキップ</value></data>
   <data name="Learning_Conflicts" xml:space="preserve"><value>重複</value></data>
+  <data name="Learning_UserDictAddReading" xml:space="preserve"><value>読み</value></data>
+  <data name="Learning_UserDictAddReadingPlaceholder" xml:space="preserve"><value>例: あずーきー</value></data>
+  <data name="Learning_UserDictAddWord" xml:space="preserve"><value>語</value></data>
+  <data name="Learning_UserDictAddWordPlaceholder" xml:space="preserve"><value>例: azooKey</value></data>
+  <data name="Learning_UserDictAddButton" xml:space="preserve"><value>追加</value></data>
+  <data name="Learning_UserDictAddNote" xml:space="preserve"><value>読みのカタカナはひらがなとして登録します。単語を消すときは一覧の「忘却」を使います。一般の設定で「ユーザー辞書」を OFF にしていても追加と忘却はできますが、変換に使われるのは ON のときだけです。</value></data>
+  <data name="Learning_UserDictAddProblemTitle" xml:space="preserve"><value>単語を追加できませんでした</value></data>
+  <data name="Learning_UserDictAddEmptyReading" xml:space="preserve"><value>読みを入力してください。</value></data>
+  <data name="Learning_UserDictAddEmptyWord" xml:space="preserve"><value>語を入力してください。</value></data>
+  <data name="Learning_UserDictAddedTitle" xml:space="preserve"><value>ユーザー辞書に追加しました</value></data>
+  <data name="LearningUserDictError_busy" xml:space="preserve"><value>ユーザー辞書を別の操作が使っています。少し待ってからもう一度試してください。</value></data>
+  <data name="LearningUserDictError_lock_failed" xml:space="preserve"><value>ユーザー辞書のファイルをロックできませんでした。少し待ってからもう一度試してください。</value></data>
+  <data name="LearningUserDictError_load_failed" xml:space="preserve"><value>ユーザー辞書のファイルを読み込めませんでした。</value></data>
+  <data name="LearningUserDictError_save_failed" xml:space="preserve"><value>ユーザー辞書を保存できませんでした。</value></data>
+  <data name="LearningUserDictError_unavailable" xml:space="preserve"><value>Host がユーザー辞書を開いていません。</value></data>
+  <data name="LearningUserDictError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
+  <data name="LearningUserDictError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
+  <data name="LearningUserDictError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
   <data name="ProfilesNavigationItem.Content" xml:space="preserve"><value>アプリ別</value></data>
   <data name="Setting_profilesByApp" xml:space="preserve"><value>アプリ別のプロファイル</value></data>
   <data name="Profiles_Title" xml:space="preserve"><value>アプリ別の設定</value></data>

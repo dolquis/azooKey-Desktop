@@ -366,7 +366,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。
 
-- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
+- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の学習ペインのユーザー辞書タブ（`docs/sideload-packaging-spec.md` §3.7）も M30 / M49 の辞書 GUI も、Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
   この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json.enc` の直接 writer にはならない。
 - したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。

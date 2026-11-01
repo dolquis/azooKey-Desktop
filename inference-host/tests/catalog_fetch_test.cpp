@@ -161,11 +161,15 @@ TEST(CatalogModelMatcherTest, ShortAndLongSpellingsOfTheDirectoryMatch) {
   short_dir.resize(length);
   if (fs::path(short_dir) == long_dir) GTEST_SKIP() << "8.3 names are off on this volume";
 
+  CountingSha256 sha;
   azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), fs::path(short_dir) / "zenzai",
-                                             CountingSha256{}.Function());
+                                             sha.Function());
+  EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified);
   EXPECT_EQ(matcher.PromptFormatFor(Utf8(zenzai / "zenz.gguf")), ZenzaiPromptFormat::ZenzV3);
   EXPECT_EQ(matcher.PromptFormatFor(Utf8(fs::path(short_dir) / "zenzai" / "zenz.gguf")),
             ZenzaiPromptFormat::ZenzV3);
+  // Every spelling shares one kept hash.
+  EXPECT_EQ(*sha.calls, 1);
   fs::remove_all(dir);
 }
 #endif

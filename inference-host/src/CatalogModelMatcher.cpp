@@ -7,6 +7,18 @@
 #include "azookey/host/HttpDownloader.h"
 
 namespace azookey::host {
+namespace {
+
+// The long, resolved form of a path: ListModels lists weakly_canonical paths, and a models_dir
+// or selectedPath may be spelled with 8.3 short names (a TEMP under RUNNER~1, for one). A path
+// that cannot be resolved is used as written.
+std::filesystem::path ResolvedPath(const std::filesystem::path& path) {
+  std::error_code ec;
+  auto canonical = std::filesystem::weakly_canonical(path, ec);
+  return ec ? path : canonical.lexically_normal();
+}
+
+}  // namespace
 
 std::filesystem::path NormalizeSelectedModelPath(std::string_view selected_path_utf8) {
   std::string text(selected_path_utf8);
@@ -42,7 +54,9 @@ CatalogModelMatcher::CatalogModelMatcher(ModelCatalog catalog, std::filesystem::
   }
 }
 
-std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::path& path) {
+std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::path& file) {
+  // Keyed by the resolved form, so a short and a long spelling of one file share the hash.
+  const auto path = ResolvedPath(file);
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
   const auto size = std::filesystem::file_size(path, ec);
@@ -67,16 +81,9 @@ std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::
 
 std::optional<ModelCatalogEntry> CatalogModelMatcher::Match(std::string_view selected_path_utf8) {
   if (selected_path_utf8.empty()) return std::nullopt;
-  // Both sides in the long, resolved form: ListModels lists weakly_canonical paths, and a
-  // models_dir or selectedPath may be spelled with 8.3 short names (a TEMP under RUNNER~1, for
-  // one). A path that cannot be resolved is compared as written.
-  const auto resolved = [](const std::filesystem::path& path) {
-    std::error_code ec;
-    auto canonical = std::filesystem::weakly_canonical(path, ec);
-    return ec ? path : canonical.lexically_normal();
-  };
-  const auto selected = resolved(NormalizeSelectedModelPath(selected_path_utf8));
-  const auto zenzai_dir = resolved(zenzai_dir_);
+  // Both sides in the resolved form, so short and long spellings compare equal.
+  const auto selected = ResolvedPath(NormalizeSelectedModelPath(selected_path_utf8));
+  const auto zenzai_dir = ResolvedPath(zenzai_dir_);
   // Only a file whose place and name match an entry is hashed: passing each entry's own
   // SHA-256 checks everything but the content.
   bool named = false;

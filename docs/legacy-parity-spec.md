@@ -900,7 +900,8 @@ QueryPredictionsResponse:  predictions[], ok?, error?
 `ok` の省略時は `true` とみなし、`false` の場合は `error` に失敗理由を載せる。
 `mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 5 では `word` のみ。
 
-`leftSideContext` には、読みが変わったときの候補照会またはライブ変換の照会が取得した左文脈
+`leftSideContext` には、読みが変わったときの候補照会（Space の候補窓用の照会を含む）
+またはライブ変換の照会が取得した左文脈
 （`docs/privacy-and-secure-input-spec.md` §5.3 の行境界・上限・空文字列の規則）をそのまま使い、
 予測のために文書を読み直さない。動的句読点の idle や確定前の照会し直しでは置き換えない。
 確定・取消・フォーカス喪失で空に戻す。

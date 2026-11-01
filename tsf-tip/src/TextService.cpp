@@ -4847,6 +4847,9 @@ void TextService::CancelPendingQueriesForLifecycle() {
 }
 
 void TextService::SetCommitContext(ITfContext* context) {
+  // Every commit path comes here: the next composition asks for predictions
+  // with the context its own query captures, never this one's (DEV-1818).
+  prediction_left_context_.clear();
   if (commit_context_ == context) return;
   ClearCommitContext();
   commit_context_ = context;
@@ -8791,7 +8794,6 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       }
       commit_surface_ = core_marked_surface_;
       committing_ = true;
-      prediction_left_context_.clear();
       SetCommitContext(context);
       auto final_romaji = previous_state.pending_romaji();
       const std::string recent_reading = previous_state.confirmed_kana() + final_romaji.Flush();

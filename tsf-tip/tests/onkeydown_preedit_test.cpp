@@ -12484,6 +12484,56 @@ TEST(TsfTipCommitOnTypeTest, MarkWithConversionOffCommitsAndStartsWithTheMark) {
   ExpectTenkiSecondCommittedOnce(h);
 }
 
+// DEV-1818: a commit drops the prediction's left context. A lone mark starts
+// the next reading without a candidate query, so it must not ask with the
+// context of the committed one; a letter captures the new context.
+TEST(TsfTipCommitOnTypeTest, CommitsDropThePredictionLeftContext) {
+  enum class Commit { WindowThenMark, WindowThenLetter, F7ThenMark };
+  for (const Commit commit :
+       {Commit::WindowThenMark, Commit::WindowThenLetter, Commit::F7ThenMark}) {
+    SCOPED_TRACE(static_cast<int>(commit));
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    ConfigureTypoHarness(h);
+    StartPunctuationConversion(h, false);
+    // Like a real document, ending our own composition sends no termination
+    // notice, whose lifecycle cleanup would drop the context on its own.
+    h.context.notify_owner_end = false;
+    h.context.document->text = L"東京";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    for (const WPARAM key : {WPARAM{'T'}, WPARAM{'E'}, WPARAM{'N'}, WPARAM{'K'}, WPARAM{'I'}})
+      ASSERT_TRUE(h.Press(key));
+    ASSERT_EQ(h.service.prediction_left_context_for_test(), "東京");
+    if (commit == Commit::F7ThenMark) {
+      // F6-F10 commit through their own path, not the core commit (DEV-1812).
+      ASSERT_TRUE(h.Press(VK_F7));
+      ASSERT_EQ(h.context.document->text, L"東京テンキ");
+      ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+      ASSERT_EQ(h.context.document->text, L"東京テンキ、");
+      ASSERT_EQ(h.service.preedit_kana_, "、");
+      EXPECT_TRUE(h.service.prediction_left_context_for_test().empty());
+      continue;
+    }
+    h.service.mark_pending_ipc_query_sent_for_test();
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(TenkiWindowCandidates()); }));
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    if (commit == Commit::WindowThenMark) {
+      ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+      ASSERT_EQ(h.context.document->text, L"東京天気、");
+      ASSERT_EQ(h.service.preedit_kana_, "、");
+      EXPECT_TRUE(h.service.prediction_left_context_for_test().empty());
+    } else {
+      ASSERT_TRUE(h.Press('H'));
+      ASSERT_TRUE(h.Press('A'));
+      ASSERT_EQ(h.context.document->text, L"東京天気は");
+      ASSERT_EQ(h.service.preedit_kana_, "は");
+      EXPECT_EQ(h.service.prediction_left_context_for_test(), "東京天気");
+    }
+  }
+}
+
 // DEV-1750: a refused commit waits for its retry like Enter's. The key that
 // asked for it and the next key, which retries the commit, are replayed once
 // the retry succeeds.
@@ -15404,11 +15454,11 @@ TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecur
     const std::lock_guard<std::mutex> lock(mutex);
     return predictions.size();
   };
-  const auto type_ka = [&](std::string_view privacy, const std::string& expected_context,
-                           bool expect_query) {
+  const auto type_ka = [&](std::string_view privacy, std::wstring_view text,
+                           const std::string& expected_context, bool expect_query) {
     DocumentPreeditHarness h;
     ConfigureTypoHarness(h);
-    h.context.document->text = L"旧行\r\n明日🙂東京";
+    h.context.document->text = text;
     h.context.document->start = static_cast<LONG>(h.context.document->text.size());
     h.context.document->end = h.context.document->start;
     h.service.set_privacy_settings_for_test(privacy);
@@ -15422,7 +15472,9 @@ TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecur
     ASSERT_EQ(h.service.preedit_kana_, "か") << privacy;
     ASSERT_EQ(h.service.prediction_left_context_for_test(), expected_context) << privacy;
     if (expect_query) {
-      EXPECT_TRUE(WaitUntil([&] { return prediction_count() > before; })) << privacy;
+      ASSERT_TRUE(WaitUntil([&] { return prediction_count() > before; })) << privacy;
+      const std::lock_guard<std::mutex> lock(mutex);
+      EXPECT_EQ(predictions[before].left_side_context, expected_context) << privacy;
     } else {
       // Nothing is queued for the worker to send, and the reason is recorded.
       EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u) << privacy;
@@ -15432,18 +15484,16 @@ TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecur
     h.service.stop_ipc_worker_for_test();
   };
 
-  type_ka(R"({"privacy":{"mode":"normal"}})", "🙂東京", true);
-  type_ka(R"({"privacy":{"mode":"private"}})", "🙂東京", true);
+  // The limit of three code points cuts the first; the line break the second.
+  type_ka(R"({"privacy":{"mode":"normal"}})", L"旧行\r\n明日🙂東京", "🙂東京", true);
+  type_ka(R"({"privacy":{"mode":"private"}})", L"旧行\r\n東京", "東京", true);
   const size_t before_secure = prediction_count();
-  type_ka(R"({"privacy":{"mode":"secure"}})", "", false);
+  type_ka(R"({"privacy":{"mode":"secure"}})", L"旧行\r\n明日🙂東京", "", false);
   server.Stop();
   const std::lock_guard<std::mutex> lock(mutex);
   EXPECT_EQ(predictions.size(), before_secure) << "a secure context must not ask for predictions";
   ASSERT_GE(predictions.size(), 2u);
-  for (const auto& query : predictions) {
-    EXPECT_EQ(query.kana, "か");
-    EXPECT_EQ(query.left_side_context, "🙂東京");
-  }
+  for (const auto& query : predictions) EXPECT_EQ(query.kana, "か");
 }
 
 // DEV-1818: the prediction cache is keyed by the left context, and a result

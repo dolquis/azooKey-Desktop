@@ -4821,6 +4821,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
   // Focus loss, composition end and deactivation leave no held commit and no timer.
   AbortFinalPunctuationHold();
   punctuation_timer_.CancelAll();
+  prediction_left_context_.clear();
   std::lock_guard<std::mutex> lk(ipc_mtx_);
   const bool can_send_cancel = ipc_thread_.joinable() && !ipc_stop_.load();
   bool need_notify = false;
@@ -7708,8 +7709,8 @@ std::string TextService::CurrentActionTraceId() const {
   return active_key_trace_active_ ? active_key_trace_id_ : NewTraceIdNoThrow();
 }
 
-void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
-                                      const std::string& emoji_trigger) {
+std::string TextService::PostQueryCandidates(ITfContext* context, const std::string& reading,
+                                             bool live, const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
   const std::string left_context = CaptureLeftContext(context, privacy.secure);
   const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
@@ -7753,6 +7754,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_has_request_ = true;
   CancelInflightWindowQueryLocked();
   ipc_cv_.notify_one();
+  return left_context;
 }
 
 // A newer request makes the answer of an in-flight window query stale. Cancel
@@ -7767,8 +7769,8 @@ void TextService::CancelInflightWindowQueryLocked() {
   TrimIpcSendQueueLocked();
 }
 
-void TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading,
-                                          LiveRequestTiming timing) {
+std::string TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading,
+                                                 LiveRequestTiming timing) {
   const auto privacy = ResolvePrivacy(context, false);
   if (privacy.secure) {
     // The M14 wire request has no privacy bit. Keep the local reading instead
@@ -7779,7 +7781,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     live_display_segments_.clear();
     live_display_auto_punctuation_ = false;
     live_carries_.clear();
-    return;
+    return {};
   }
   const std::string left_context = CaptureLeftContext(context, false);
   // M63 sections 5 and 9.1: the raw romaji, only under every condition.
@@ -7819,6 +7821,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_has_request_ = true;
   CancelInflightWindowQueryLocked();
   ipc_cv_.notify_one();
+  return left_context;
 }
 
 // One evaluation for every outbound route. The M46 secure axis and the AI
@@ -8571,10 +8574,11 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     if (!IsStandalonePunctuation(query->reading)) {
       // The window query asks for the full list (live = false): typo
       // suggestions, English candidates and the n-best (DEV-1653).
+      // The prediction of this reading asks with the same context (DEV-1818).
       if (input_state_.live_conversion() && !query->for_window)
-        PostQueryLiveConversion(context, query->reading);
+        prediction_left_context_ = PostQueryLiveConversion(context, query->reading);
       else
-        PostQueryCandidates(context, query->reading, !query->for_window);
+        prediction_left_context_ = PostQueryCandidates(context, query->reading, !query->for_window);
     }
   } else if (std::holds_alternative<core::PlayBeep>(action)) {
     PlayBeep();
@@ -8787,6 +8791,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       }
       commit_surface_ = core_marked_surface_;
       committing_ = true;
+      prediction_left_context_.clear();
       SetCommitContext(context);
       auto final_romaji = previous_state.pending_romaji();
       const std::string recent_reading = previous_state.confirmed_kana() + final_romaji.Flush();

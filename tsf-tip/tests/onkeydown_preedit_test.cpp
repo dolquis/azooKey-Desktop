@@ -15357,3 +15357,179 @@ TEST(TsfTipHiraganaKeyTest, OpensAndLeavesAlphanumericModeLikeImeOn) {
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "あ");
 }
+
+// DEV-1818: the prediction query carries the left context the same keystroke
+// captured for the candidate or live query: bounded, cut at the line break, sent
+// under private (privacy spec section 5.3), and no prediction query at all under
+// secure.
+TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecureSendsNone) {
+  using namespace azookey::ipc;
+  constexpr uint32_t kNotAllowed =
+      1U << static_cast<unsigned>(azookey::tsf::PredictionLogReason::NotAllowed);
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-prediction-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryPredictionsRequest> predictions;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryLiveConversion) {
+      response.payload_json = BuildQueryLiveConversionResponse({"蚊", 0.8});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      if (const auto query = ParseQueryPredictionsRequest(request.payload_json)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        predictions.push_back(*query);
+      }
+      response.payload_json = BuildQueryPredictionsResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  const auto prediction_count = [&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return predictions.size();
+  };
+  const auto type_ka = [&](std::string_view privacy, const std::string& expected_context,
+                           bool expect_query) {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.context.document->text = L"旧行\r\n明日🙂東京";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    h.service.set_privacy_settings_for_test(privacy);
+    h.service.set_max_context_length_for_test(3);
+    h.service.set_prediction_enabled_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    const size_t before = prediction_count();
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.service.preedit_kana_, "か") << privacy;
+    ASSERT_EQ(h.service.prediction_left_context_for_test(), expected_context) << privacy;
+    if (expect_query) {
+      EXPECT_TRUE(WaitUntil([&] { return prediction_count() > before; })) << privacy;
+    } else {
+      // Nothing is queued for the worker to send, and the reason is recorded.
+      EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u) << privacy;
+      EXPECT_FALSE(h.service.prediction_query_hold_set_for_test()) << privacy;
+      EXPECT_NE(h.service.prediction_logged_reasons_for_test() & kNotAllowed, 0u) << privacy;
+    }
+    h.service.stop_ipc_worker_for_test();
+  };
+
+  type_ka(R"({"privacy":{"mode":"normal"}})", "🙂東京", true);
+  type_ka(R"({"privacy":{"mode":"private"}})", "🙂東京", true);
+  const size_t before_secure = prediction_count();
+  type_ka(R"({"privacy":{"mode":"secure"}})", "", false);
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  EXPECT_EQ(predictions.size(), before_secure) << "a secure context must not ask for predictions";
+  ASSERT_GE(predictions.size(), 2u);
+  for (const auto& query : predictions) {
+    EXPECT_EQ(query.kana, "か");
+    EXPECT_EQ(query.left_side_context, "🙂東京");
+  }
+}
+
+// DEV-1818: the prediction cache is keyed by the left context, and a result
+// asked with another context than the current one is dropped (StaleContext).
+TEST(TsfTipLeftContextTest, PredictionCacheAndStaleCheckFollowTheLeftContext) {
+  using namespace azookey::ipc;
+  constexpr uint32_t kStaleContext =
+      1U << static_cast<unsigned>(azookey::tsf::PredictionLogReason::StaleContext);
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-prediction-cache-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<std::string> contexts;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryLiveConversion) {
+      response.payload_json = BuildQueryLiveConversionResponse({"蚊", 0.8});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      if (const auto query = ParseQueryPredictionsRequest(request.payload_json)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        contexts.push_back(query->left_side_context);
+      }
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"課長", "かちょう", 1.0, "model", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  // Like a real document, ending our own composition sends no termination
+  // notice, so the cached prediction outlives the commit.
+  h.context.notify_owner_end = false;
+  h.context.document->text = L"東京";
+  h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+  h.context.document->end = h.context.document->start;
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  const auto context_count = [&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return contexts.size();
+  };
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.prediction_left_context_for_test(), "東京");
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  h.service.process_candidates_ready_for_test();
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"東京か");
+  ASSERT_TRUE(h.service.prediction_left_context_for_test().empty());
+  const size_t first_composition = context_count();
+  ASSERT_GE(first_composition, 1u);
+
+  // The cached answer for "か" after "東京" does not answer "か" after "東京か".
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.prediction_left_context_for_test(), "東京か");
+  ASSERT_TRUE(WaitUntil([&] { return context_count() > first_composition; }));
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  // The context changes before the answer is applied: it is dropped as stale.
+  h.service.set_prediction_left_context_for_test("大阪");
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_NE(h.service.prediction_logged_reasons_for_test() & kStaleContext, 0u);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  for (size_t i = 0; i < contexts.size(); ++i)
+    EXPECT_EQ(contexts[i], i < first_composition ? "東京" : "東京か") << i;
+}

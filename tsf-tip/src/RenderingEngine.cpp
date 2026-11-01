@@ -187,4 +187,31 @@ bool RenderingEngine::EndDraw() {
   return true;
 }
 
+bool RenderingEngine::FadeIn(double seconds) {
+  if (!state_) return Fail("no_render", E_FAIL);
+  ComPtr<IDCompositionVisual3> visual;
+  HRESULT hr = state_->visual.As(&visual);
+  if (FAILED(hr)) return Fail("opacity", hr);
+  if (seconds > 0.0) {
+    // 1 - (1 - t/T)^3 = 3t/T - 3t^2/T^2 + t^3/T^3 for t in [0, T].
+    const double t = seconds;
+    ComPtr<IDCompositionAnimation> animation;
+    if (FAILED(hr = state_->composition_device->CreateAnimation(&animation)) ||
+        FAILED(hr = animation->AddCubic(0.0, 0.0f, static_cast<float>(3.0 / t),
+                                        static_cast<float>(-3.0 / (t * t)),
+                                        static_cast<float>(1.0 / (t * t * t)))) ||
+        FAILED(hr = animation->End(t, 1.0f)) || FAILED(hr = visual->SetOpacity(animation.Get())))
+      return Fail("opacity", hr);
+  } else if (FAILED(hr = visual->SetOpacity(1.0f))) {
+    return Fail("opacity", hr);
+  }
+  if (FAILED(hr = state_->composition_device->Commit())) {
+    // The uncommitted animation would otherwise go out with the next frame's
+    // Commit and fade a window that is already shown back from 0.
+    visual->SetOpacity(1.0f);
+    return Fail("commit", hr);
+  }
+  return true;
+}
+
 }  // namespace azookey::tsf

@@ -128,6 +128,24 @@ TEST(RenderingEngineTest, DrawsAndCommitsToACompositionSurface) {
   DestroyWindow(hwnd);
 }
 
+TEST(RenderingEngineTest, FadeInAnimatesOrSetsTheRootOpacityAndCommits) {
+  HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
+                              L"STATIC", nullptr, WS_POPUP, 0, 0, 64, 32, nullptr, nullptr,
+                              GetModuleHandleW(nullptr), nullptr);
+  ASSERT_NE(hwnd, nullptr);
+  RenderingEngine engine;
+  EXPECT_FALSE(engine.FadeIn(0.15));
+  EXPECT_STREQ(engine.failure_stage(), "no_render");
+
+  ASSERT_TRUE(engine.Initialize(hwnd, SurfaceAlpha::Opaque)) << engine.failure_stage();
+  EXPECT_TRUE(engine.FadeIn(0.15)) << engine.failure_stage() << " hr=0x" << std::hex
+                                   << static_cast<unsigned long>(engine.failure_hr());
+  // A second fade replaces the first; zero seconds sets full opacity at once.
+  EXPECT_TRUE(engine.FadeIn(0.15)) << engine.failure_stage();
+  EXPECT_TRUE(engine.FadeIn(0.0)) << engine.failure_stage();
+  DestroyWindow(hwnd);
+}
+
 TEST(DebugWindowRenderTest, DrawsThroughDirectCompositionWithoutALayeredWindow) {
   DebugWindow window;
   ASSERT_TRUE(window.Create());

@@ -1043,7 +1043,8 @@ int main(int argc, char** argv) {
   // DEV-1821: the default catalog matches model.selectedPath at each load (the format of the
   // matched entry) and backs the settings app's fetch. The fetch shares the neologd pack's
   // offline switch; the service is shut down here, before the engine and the log go away.
-  const auto catalog_matcher = azookey::host::MakeDefaultCatalogModelMatcher(user_paths->models_dir);
+  const auto catalog_matcher =
+      azookey::host::MakeDefaultCatalogModelMatcher(user_paths->models_dir);
   const auto catalog_fetch =
       catalog_matcher
           ? std::make_shared<azookey::host::CatalogFetchService>(
@@ -1095,8 +1096,8 @@ int main(int argc, char** argv) {
                 << " (falling back to SimpleConverter)" << std::endl;
     }
   } else if (settings_store.settings().model.auto_load_on_host_start) {
-    azookey::host::ModelLoadOptions preload{config.model_path, config.backend,
-                                            config.n_gpu_layers, config.inference_threads};
+    azookey::host::ModelLoadOptions preload{config.model_path, config.backend, config.n_gpu_layers,
+                                            config.inference_threads};
     preload.resolve_prompt_format =
         azookey::host::CatalogPromptFormatResolver(catalog_matcher, config.model_path);
     const bool preload_started = engine.StartModelPreload(std::move(preload));

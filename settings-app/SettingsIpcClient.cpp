@@ -210,7 +210,8 @@ HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
     const SettingsIpcOptions& options, const azookey::ipc::ListModelsRequest& request) {
   return Call<azookey::ipc::ListModelsResponse>(
       options, kCapabilityListModels, MessageType::ListModels,
-      azookey::ipc::BuildListModelsRequest(request), options.response_timeout_ms,
+      azookey::ipc::BuildListModelsRequest(request),
+      request.include_catalog ? options.long_response_timeout_ms : options.response_timeout_ms,
       azookey::ipc::ParseListModelsResponse);
 }
 
@@ -220,6 +221,21 @@ HostCallResult<azookey::ipc::BenchmarkModelResponse> RequestBenchmarkModel(
       options, kCapabilityBenchmarkModel, MessageType::BenchmarkModel,
       azookey::ipc::BuildBenchmarkModelRequest(request), options.long_response_timeout_ms,
       azookey::ipc::ParseBenchmarkModelResponse);
+}
+
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestFetchCatalogModel(
+    const SettingsIpcOptions& options, const azookey::ipc::FetchCatalogModelRequest& request) {
+  return Call<azookey::ipc::CatalogFetchResponse>(
+      options, kCapabilityFetchCatalogModel, MessageType::FetchCatalogModel,
+      azookey::ipc::BuildFetchCatalogModelRequest(request), options.response_timeout_ms,
+      azookey::ipc::ParseCatalogFetchResponse);
+}
+
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestQueryCatalogFetch(
+    const SettingsIpcOptions& options) {
+  return Call<azookey::ipc::CatalogFetchResponse>(
+      options, kCapabilityFetchCatalogModel, MessageType::QueryCatalogFetch, "{}",
+      options.response_timeout_ms, azookey::ipc::ParseCatalogFetchResponse);
 }
 
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(

@@ -117,6 +117,77 @@ TEST(ModelPaneModelTest, EveryErrorAndCallStatusHasAString) {
   }
 }
 
+// DEV-1821 catalog fetch.
+TEST(ModelPaneModelTest, EveryCatalogFetchErrorResultAndStateHasAString) {
+  using azookey::settings::CatalogFetchErrorResource;
+  const auto names = ResourceNames();
+  for (const auto code : azookey::settings::kCatalogFetchErrorCodes) {
+    const auto name = CatalogFetchErrorResource(code);
+    EXPECT_TRUE(names.contains(name)) << name;
+  }
+  EXPECT_TRUE(names.contains("CatalogFetchError_other"));
+  EXPECT_EQ(CatalogFetchErrorResource("format:magic_mismatch"), "CatalogFetchError_format");
+  EXPECT_EQ(CatalogFetchErrorResource("not authenticated"), "CatalogFetchError_not_authenticated");
+  EXPECT_EQ(CatalogFetchErrorResource("brand_new"), "CatalogFetchError_other");
+  azookey::ipc::CatalogFetchResponse response;
+  response.state = "done";
+  for (const auto* status : {"downloaded", "already_valid", "offline", "not_fetchable"}) {
+    response.status = status;
+    EXPECT_TRUE(names.contains(azookey::settings::CatalogFetchResultResource(response))) << status;
+  }
+  response.status = "failed";
+  response.result_error = "destination_occupied";
+  EXPECT_EQ(azookey::settings::CatalogFetchResultResource(response),
+            "CatalogFetchError_destination_occupied");
+  for (const auto* state : {"missing", "verified", "mismatch"}) {
+    EXPECT_TRUE(names.contains(azookey::settings::CatalogEntryStateResource(state))) << state;
+  }
+}
+
+TEST(ModelPaneModelTest, OnlyADoneFetchWithAVerifiedFileCanBeSelected) {
+  using azookey::settings::CatalogFetchSucceeded;
+  azookey::ipc::CatalogFetchResponse response;
+  response.state = "done";
+  response.status = "downloaded";
+  response.path = "C:\\models\\zenzai\\zenz.gguf";
+  EXPECT_TRUE(CatalogFetchSucceeded(response));
+  response.status = "already_valid";
+  EXPECT_TRUE(CatalogFetchSucceeded(response));
+  response.status = "offline";
+  EXPECT_FALSE(CatalogFetchSucceeded(response));
+  response.status = "downloaded";
+  response.state = "running";
+  EXPECT_FALSE(CatalogFetchSucceeded(response));
+  response.state = "done";
+  response.path.clear();
+  EXPECT_FALSE(CatalogFetchSucceeded(response));
+}
+
+TEST(ModelPaneModelTest, ProgressPercentIsCappedAndZeroWithoutATotal) {
+  using azookey::settings::ProgressPercent;
+  EXPECT_EQ(ProgressPercent(0, 0), 0U);
+  EXPECT_EQ(ProgressPercent(50, 0), 0U);
+  EXPECT_EQ(ProgressPercent(1, 200), 0U);
+  EXPECT_EQ(ProgressPercent(100, 200), 50U);
+  // Not 100 until every byte is in: the Host still checks the file after the last one.
+  EXPECT_EQ(ProgressPercent(199, 200), 99U);
+  EXPECT_EQ(ProgressPercent(200, 200), 100U);
+  EXPECT_EQ(ProgressPercent(300, 200), 100U);
+  EXPECT_EQ(ProgressPercent(UINT64_MAX - 1, UINT64_MAX), 99U);
+}
+
+TEST(ModelPaneModelTest, OnlyTimeWithoutNewBytesCountsAsAStall) {
+  using Clock = azookey::settings::CatalogFetchStallWatch::Clock;
+  const auto start = Clock::time_point{};
+  azookey::settings::CatalogFetchStallWatch watch(start, std::chrono::seconds(10));
+  EXPECT_FALSE(watch.Stalled(0, start + std::chrono::seconds(9)));
+  // Bytes keep arriving, so a long download is never a stall.
+  EXPECT_FALSE(watch.Stalled(100, start + std::chrono::seconds(30)));
+  EXPECT_FALSE(watch.Stalled(200, start + std::chrono::seconds(60)));
+  EXPECT_FALSE(watch.Stalled(200, start + std::chrono::seconds(70)));
+  EXPECT_TRUE(watch.Stalled(200, start + std::chrono::seconds(71)));
+}
+
 TEST(LearningPaneModelTest, EveryErrorStoreAndConflictOptionHasAString) {
   const auto names = ResourceNames();
   for (const auto code : azookey::settings::kLearningErrorCodes) {

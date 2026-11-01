@@ -91,8 +91,8 @@ void CatalogFetchService::Run(ModelCatalogEntry entry) {
       snapshot_.total_bytes = total;
     };
     if (downloader) {
-      result = FetchCatalogModel(entry, matcher_->zenzai_dir(), *downloader, network_allowed_,
-                                 hooks);
+      result =
+          FetchCatalogModel(entry, matcher_->zenzai_dir(), *downloader, network_allowed_, hooks);
     } else {
       result.error = "download_failed";
     }

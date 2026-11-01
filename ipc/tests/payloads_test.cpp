@@ -1724,8 +1724,7 @@ TEST(PayloadsTest, ListModelsCatalogIsOptionalOnBothSides) {
   ListModelsRequest request;
   EXPECT_EQ(BuildListModelsRequest(request), R"({"compute_sha256":false})");
   request.include_catalog = true;
-  EXPECT_EQ(BuildListModelsRequest(request),
-            R"({"compute_sha256":false,"include_catalog":true})");
+  EXPECT_EQ(BuildListModelsRequest(request), R"({"compute_sha256":false,"include_catalog":true})");
   const auto parsed_request = ParseListModelsRequest(BuildListModelsRequest(request));
   ASSERT_TRUE(parsed_request);
   EXPECT_TRUE(parsed_request->include_catalog);

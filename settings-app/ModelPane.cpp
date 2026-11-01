@@ -9,7 +9,9 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
+#include <chrono>
 #include <cstdio>
+#include <optional>
 #include <string>
 
 #include "ModelPaneModel.h"
@@ -120,6 +122,15 @@ void ModelPane::Build(controls::StackPanel panel,
   SetId(models_panel_, L"ModelsList");
   panel.Children().Append(models_panel_);
 
+  // Filled from the ListModels catalog; stays hidden for a Host that sends none.
+  catalog_heading_ = Heading(resources.GetString(L"Models_Catalog_Heading"));
+  catalog_heading_.Visibility(xaml::Visibility::Collapsed);
+  panel.Children().Append(catalog_heading_);
+  catalog_panel_ = controls::StackPanel();
+  catalog_panel_.Spacing(12);
+  SetId(catalog_panel_, L"ModelsCatalog");
+  panel.Children().Append(catalog_panel_);
+
   panel.Children().Append(Heading(resources.GetString(L"Models_BenchmarkHeading")));
   benchmark_text_ = Block(resources.GetString(L"Models_BenchmarkNone"), true);
   SetId(benchmark_text_, L"ModelsBenchmarkResult");
@@ -148,18 +159,26 @@ void ModelPane::RecoverFromFailure() {
   dispatcher_.TryEnqueue([self = shared_from_this()] {
     self->listing_ = false;
     self->benchmarking_ = false;
+    self->fetching_ = false;
+    self->fetching_id_.clear();
     self->refresh_button_.IsEnabled(true);
     ResourceLoader resources;
     self->benchmark_text_.Text(resources.GetString(L"Models_BenchmarkNone"));
     self->RenderModels();
+    self->RenderCatalog();
     self->ShowProblem(resources.GetString(L"Models_UnexpectedError"));
   });
 }
 
 void ModelPane::ShowProblem(const winrt::hstring& message) {
   ResourceLoader resources;
-  problem_bar_.Severity(controls::InfoBarSeverity::Error);
-  problem_bar_.Title(resources.GetString(L"Models_ProblemTitle"));
+  ShowBar(controls::InfoBarSeverity::Error, resources.GetString(L"Models_ProblemTitle"), message);
+}
+
+void ModelPane::ShowBar(controls::InfoBarSeverity severity, const winrt::hstring& title,
+                        const winrt::hstring& message) {
+  problem_bar_.Severity(severity);
+  problem_bar_.Title(title);
   problem_bar_.Message(message);
   problem_bar_.IsOpen(true);
 }
@@ -173,7 +192,9 @@ winrt::fire_and_forget ModelPane::Refresh() {
   const auto dispatcher = dispatcher_;
   try {
     co_await winrt::resume_background();
-    const auto result = RequestListModels(DefaultSettingsIpcOptions(), {});
+    azookey::ipc::ListModelsRequest request;
+    request.include_catalog = true;
+    const auto result = RequestListModels(DefaultSettingsIpcOptions(), request);
     co_await ResumeForeground(dispatcher);
 
     listing_ = false;
@@ -186,7 +207,9 @@ winrt::fire_and_forget ModelPane::Refresh() {
     } else {
       listed_once_ = true;
       models_ = result.response->models;
+      catalog_ = result.response->catalog.value_or(std::vector<azookey::ipc::CatalogModelEntry>{});
       RenderModels();
+      RenderCatalog();
     }
   } catch (...) {
     RecoverFromFailure();
@@ -326,6 +349,172 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
   } catch (...) {
     RecoverFromFailure();
   }
+}
+
+void ModelPane::RenderCatalog() {
+  ResourceLoader resources;
+  catalog_panel_.Children().Clear();
+  catalog_heading_.Visibility(catalog_.empty() ? xaml::Visibility::Collapsed
+                                               : xaml::Visibility::Visible);
+  const auto selected = host_.selected_path ? host_.selected_path() : std::string();
+  for (const auto& entry : catalog_) {
+    const bool verified = entry.state == "verified";
+    const bool is_selected = verified && SameModelPath(entry.path, selected);
+    const auto id = std::wstring(winrt::to_hstring(entry.id));
+
+    controls::StackPanel row;
+    row.Spacing(4);
+    auto name = winrt::to_hstring(entry.display_name.empty() ? entry.id : entry.display_name);
+    if (entry.is_default) name = name + resources.GetString(L"Models_Catalog_DefaultSuffix");
+    if (is_selected) name = name + resources.GetString(L"Models_SelectedSuffix");
+    auto name_block = Block(name);
+    name_block.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    row.Children().Append(name_block);
+    std::string detail = entry.file_name;
+    if (entry.size_bytes != 0) detail += " / " + FormatByteSize(entry.size_bytes);
+    if (!entry.prompt_format.empty()) detail += " / " + entry.prompt_format;
+    row.Children().Append(Block(winrt::to_hstring(detail), true));
+    row.Children().Append(Block(Str(resources, CatalogEntryStateResource(entry.state)), true));
+
+    if (fetching_ && fetching_id_ == entry.id) {
+      controls::ProgressBar bar;
+      SetId(bar, L"CatalogFetchProgress_" + id);
+      bar.Maximum(100);
+      bar.IsIndeterminate(fetch_total_ == 0);
+      const auto percent = ProgressPercent(fetch_received_, fetch_total_);
+      bar.Value(percent);
+      row.Children().Append(bar);
+      std::string progress = FormatByteSize(fetch_received_);
+      if (fetch_total_ != 0) {
+        progress = std::to_string(percent) + "% (" + progress + " / " +
+                   FormatByteSize(fetch_total_) + ")";
+      }
+      row.Children().Append(Block(
+          resources.GetString(L"Models_Catalog_Fetching") + L" " + winrt::to_hstring(progress),
+          true));
+    }
+
+    controls::StackPanel buttons;
+    buttons.Orientation(controls::Orientation::Horizontal);
+    buttons.Spacing(8);
+    controls::Button fetch_button;
+    fetch_button.Content(winrt::box_value(resources.GetString(L"Models_Catalog_FetchButton")));
+    // A same-named file with another SHA-256 is never replaced, so it is not offered.
+    fetch_button.IsEnabled(entry.fetchable && entry.state == "missing" && !fetching_);
+    SetId(fetch_button, L"CatalogFetchButton_" + id);
+    fetch_button.Click([weak = weak_from_this(), model_id = entry.id](auto const&, auto const&) {
+      if (const auto self = weak.lock()) self->FetchCatalog(model_id);
+    });
+    buttons.Children().Append(fetch_button);
+
+    controls::Button select_button;
+    select_button.Content(winrt::box_value(resources.GetString(L"Models_SelectButton")));
+    select_button.IsEnabled(verified && !is_selected);
+    SetId(select_button, L"CatalogSelectButton_" + id);
+    select_button.Click([weak = weak_from_this(), path = entry.path](auto const&, auto const&) {
+      const auto self = weak.lock();
+      if (!self) return;
+      self->host_.select_path(path);
+      ResourceLoader strings;
+      self->ShowBar(controls::InfoBarSeverity::Informational,
+                    strings.GetString(L"Models_SelectedTitle"),
+                    strings.GetString(L"Models_SelectedMessage"));
+      self->RenderModels();
+      self->RenderCatalog();
+    });
+    buttons.Children().Append(select_button);
+    row.Children().Append(buttons);
+    if (!entry.fetchable && entry.state == "missing") {
+      row.Children().Append(Block(resources.GetString(L"Models_Catalog_NotFetchableNote"), true));
+    }
+    catalog_panel_.Children().Append(row);
+  }
+}
+
+// DEV-1821 (model-management-spec section 4.4): starts the fetch, then asks for its progress
+// until it is done. Only a stall ends the wait early: a large model may take long.
+winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
+  const auto self = shared_from_this();
+  if (fetching_) co_return;
+  fetching_ = true;
+  fetching_id_ = model_id;
+  fetch_received_ = 0;
+  fetch_total_ = 0;
+  problem_bar_.IsOpen(false);
+  RenderCatalog();
+  const auto dispatcher = dispatcher_;
+  try {
+    co_await winrt::resume_background();
+    const auto options = DefaultSettingsIpcOptions();
+    azookey::ipc::FetchCatalogModelRequest request;
+    request.model_id = model_id;
+    const auto started = RequestFetchCatalogModel(options, request);
+    HostCallStatus call_status = started.status;
+    std::optional<azookey::ipc::CatalogFetchResponse> last = started.response;
+    // A fetch of the same entry the Host is already running (from another window) is followed
+    // as if this one had started it.
+    const bool follow = call_status == HostCallStatus::Ok &&
+                        (last->ok || (last->error == "busy" && last->model_id == model_id));
+    bool stalled = false;
+    CatalogFetchStallWatch watch(CatalogFetchStallWatch::Clock::now());
+    while (follow && last->state == "running" && last->model_id == model_id) {
+      co_await ResumeForeground(dispatcher);
+      fetch_received_ = last->received_bytes;
+      fetch_total_ = last->total_bytes;
+      RenderCatalog();
+      if (watch.Stalled(last->received_bytes, CatalogFetchStallWatch::Clock::now())) {
+        stalled = true;
+        break;
+      }
+      co_await winrt::resume_after(std::chrono::milliseconds(500));
+      auto poll = RequestQueryCatalogFetch(options);
+      call_status = poll.status;
+      if (call_status != HostCallStatus::Ok) break;
+      last = std::move(poll.response);
+    }
+    co_await ResumeForeground(dispatcher);
+
+    fetching_ = false;
+    fetching_id_.clear();
+    ResourceLoader resources;
+    const auto failed_title = resources.GetString(L"Models_Catalog_FailedTitle");
+    if (call_status != HostCallStatus::Ok) {
+      ShowBar(controls::InfoBarSeverity::Error, failed_title,
+              Str(resources, HostCallStatusResource(call_status)));
+    } else if (!follow) {
+      ShowBar(controls::InfoBarSeverity::Error, failed_title,
+              Str(resources, CatalogFetchErrorResource(last->error.value_or(""))));
+    } else if (stalled) {
+      ShowBar(controls::InfoBarSeverity::Warning, failed_title,
+              resources.GetString(L"Models_Catalog_Stalled"));
+    } else if (last->state == "done" && last->model_id == model_id) {
+      ShowFetchResult(*last);
+    } else {
+      // The Host ran another entry's fetch meanwhile; this one's outcome is not known.
+      ShowBar(controls::InfoBarSeverity::Warning, failed_title,
+              Str(resources, CatalogFetchErrorResource("busy")));
+    }
+    RenderCatalog();
+    Refresh();
+  } catch (...) {
+    RecoverFromFailure();
+  }
+}
+
+// sideload-packaging-spec section 1.6.1: the fetch's SHA-256 match and GGUF checks are the
+// probe, and the path box plus the common save button are the commit.
+void ModelPane::ShowFetchResult(const azookey::ipc::CatalogFetchResponse& response) {
+  ResourceLoader resources;
+  const auto result = Str(resources, CatalogFetchResultResource(response));
+  if (CatalogFetchSucceeded(response)) {
+    host_.select_path(response.path);
+    ShowBar(controls::InfoBarSeverity::Success, resources.GetString(L"Models_Catalog_FetchedTitle"),
+            result + L"\n" + resources.GetString(L"Models_SelectedMessage"));
+    return;
+  }
+  const bool failed = response.status == "failed";
+  ShowBar(failed ? controls::InfoBarSeverity::Error : controls::InfoBarSeverity::Warning,
+          resources.GetString(L"Models_Catalog_FailedTitle"), result);
 }
 
 void ModelPane::RenderHistory() {

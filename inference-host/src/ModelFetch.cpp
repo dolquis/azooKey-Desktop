@@ -53,7 +53,7 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
   request.cancelled = hooks.cancelled;
   if (hooks.progress) {
     request.progress = [progress = hooks.progress, size = entry.size_bytes](uint64_t received,
-                                                                             uint64_t total) {
+                                                                            uint64_t total) {
       progress(received, total != 0 ? total : size);
     };
   }

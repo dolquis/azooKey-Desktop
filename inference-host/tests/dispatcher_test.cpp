@@ -2173,8 +2173,8 @@ azookey::host::ModelCatalog CatalogTestCatalog() {
   entry.file_name = "zenz.gguf";
   entry.sha256 = std::string(kCatalogTestSha);
   entry.size_bytes = 4096;
-  entry.source = azookey::host::ModelCatalogSource{"owner/repo",
-                                                   "0123456789abcdef0123456789abcdef01234567"};
+  entry.source =
+      azookey::host::ModelCatalogSource{"owner/repo", "0123456789abcdef0123456789abcdef01234567"};
   azookey::host::ModelCatalog catalog;
   catalog.schema_version = 2;
   catalog.default_model_id = "zenz";
@@ -2285,8 +2285,8 @@ TEST_F(DispatcherTest, FetchCatalogModelStartsAFetchThatQueryCatalogFetchFollows
   ASSERT_TRUE(handshake);
   const auto parsed_handshake = ipc::ParseHandshakeResponse(handshake->payload_json);
   ASSERT_TRUE(parsed_handshake);
-  EXPECT_NE(std::find(parsed_handshake->capabilities.begin(),
-                      parsed_handshake->capabilities.end(), "fetch_catalog_model"),
+  EXPECT_NE(std::find(parsed_handshake->capabilities.begin(), parsed_handshake->capabilities.end(),
+                      "fetch_catalog_model"),
             parsed_handshake->capabilities.end());
 
   const auto fetch = [&](uint64_t id, ipc::MessageType type, const std::string& payload) {
@@ -2295,8 +2295,8 @@ TEST_F(DispatcherTest, FetchCatalogModelStartsAFetchThatQueryCatalogFetchFollows
     if (response) EXPECT_EQ(response->type, type);
     return response ? ipc::ParseCatalogFetchResponse(response->payload_json) : std::nullopt;
   };
-  const auto unknown = fetch(821, ipc::MessageType::FetchCatalogModel,
-                             ipc::BuildFetchCatalogModelRequest({"nope"}));
+  const auto unknown =
+      fetch(821, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({"nope"}));
   ASSERT_TRUE(unknown);
   EXPECT_FALSE(unknown->ok);
   EXPECT_EQ(unknown->error, "unknown_model_id");
@@ -2344,8 +2344,8 @@ TEST_F(DispatcherTest, CatalogFetchWithoutAServiceOrBeforeTheHandshakeIsRefused)
   auto config = DefaultDispatcherConfig();
   config.handshake_token = "expected-token";
   azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
-  const auto before = token_dispatcher.Dispatch(MakeReq(
-      832, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({})));
+  const auto before = token_dispatcher.Dispatch(
+      MakeReq(832, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({})));
   ASSERT_TRUE(before);
   parsed = ipc::ParseCatalogFetchResponse(before->payload_json);
   ASSERT_TRUE(parsed);

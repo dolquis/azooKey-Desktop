@@ -30,14 +30,16 @@ using azookey::host::HttpDownloadStatus;
 using azookey::host::ModelFetchStatus;
 using azookey::host::ZenzaiPromptFormat;
 
-constexpr std::string_view kShaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-constexpr std::string_view kShaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+constexpr std::string_view kShaA =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+constexpr std::string_view kShaB =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 // Per-test directory: CTest runs each test in its own process, possibly in parallel.
 fs::path TestDir() {
   const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-  auto path = fs::temp_directory_path() /
-              (std::string("azookey_catalog_fetch_") + info->test_suite_name() + "_" + info->name());
+  auto path = fs::temp_directory_path() / (std::string("azookey_catalog_fetch_") +
+                                           info->test_suite_name() + "_" + info->name());
   fs::remove_all(path);
   fs::create_directories(path);
   return path;
@@ -78,8 +80,8 @@ azookey::host::ModelCatalogEntry MakeEntry(std::string id, std::string file_name
   entry.sha256 = std::string(sha256);
   entry.prompt_format = format;
   entry.size_bytes = 4096;
-  entry.source = azookey::host::ModelCatalogSource{"owner/repo",
-                                                   "0123456789abcdef0123456789abcdef01234567"};
+  entry.source =
+      azookey::host::ModelCatalogSource{"owner/repo", "0123456789abcdef0123456789abcdef01234567"};
   return entry;
 }
 

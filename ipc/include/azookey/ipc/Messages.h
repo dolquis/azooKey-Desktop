@@ -44,6 +44,9 @@ enum class MessageType {
   QueryPersona,
   // DEV-1532 batch correction view (rich-features-spec X-3-6).
   DetectAnomalies,
+  // DEV-1821 catalog model fetch (model-management-spec section 4.4): start, then poll.
+  FetchCatalogModel,
+  QueryCatalogFetch,
   Unknown,
 };
 

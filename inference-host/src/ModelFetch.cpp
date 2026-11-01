@@ -29,7 +29,8 @@ std::string_view ModelFetchStatusName(ModelFetchStatus status) {
 ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
                                    const std::filesystem::path& zenzai_dir,
                                    IPackDownloader& downloader,
-                                   std::function<bool()> network_allowed) {
+                                   std::function<bool()> network_allowed,
+                                   const ModelFetchHooks& hooks) {
   ModelFetchResult result;
   const auto url = ModelCatalogDownloadUrl(entry);
   if (!url || entry.size_bytes == 0 || entry.size_bytes > kMaxModelCatalogBytes) {
@@ -49,6 +50,13 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
   request.destination = zenzai_dir / entry.file_name;
   request.expected_sha256 = entry.sha256;
   request.max_bytes = entry.size_bytes;
+  request.cancelled = hooks.cancelled;
+  if (hooks.progress) {
+    request.progress = [progress = hooks.progress, size = entry.size_bytes](uint64_t received,
+                                                                             uint64_t total) {
+      progress(received, total != 0 ? total : size);
+    };
+  }
 
   // A file of the same name with another SHA-256 is the user's (a manual placement or another
   // version); the fetch does not replace it. The probe forbids the network, so the downloader
@@ -62,6 +70,7 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
       std::filesystem::file_type::not_found) {
     HttpDownloadRequest probe = request;
     probe.network_allowed = [] { return false; };
+    probe.progress = {};
     existing = downloader.Download(probe);
     if (!existing->ok()) {
       // Usually another SHA-256; the detail tells a file that could not be read (a sharing
@@ -88,6 +97,10 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
   if (!downloaded.ok()) {
     if (*refused) {
       result.status = ModelFetchStatus::Offline;
+      return result;
+    }
+    if (hooks.cancelled && hooks.cancelled()) {
+      result.error = "cancelled";
       return result;
     }
     result.error = "download_failed";

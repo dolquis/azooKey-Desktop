@@ -1279,6 +1279,7 @@ j::Value ListedModelToJson(const ListedModel& m) {
   if (!m.sha256.empty()) o.emplace("sha256", j::Value(m.sha256));
   o.emplace("last_load_status", j::Value(m.last_load_status));
   if (!m.last_error.empty()) o.emplace("last_error", j::Value(m.last_error));
+  if (!m.catalog_id.empty()) o.emplace("catalog_id", j::Value(m.catalog_id));
   return j::Value(std::move(o));
 }
 
@@ -1302,7 +1303,39 @@ std::optional<ListedModel> ListedModelFromJson(const j::Value& v) {
   m.sha256 = v.GetString("sha256").value_or(std::string());
   m.last_load_status = v.GetString("last_load_status").value_or("not_loaded");
   m.last_error = v.GetString("last_error").value_or(std::string());
+  m.catalog_id = v.GetString("catalog_id").value_or(std::string());
   return m;
+}
+
+j::Value CatalogModelEntryToJson(const CatalogModelEntry& e) {
+  j::Object o;
+  o.emplace("id", j::Value(e.id));
+  o.emplace("display_name", j::Value(e.display_name));
+  o.emplace("file_name", j::Value(e.file_name));
+  o.emplace("is_default", j::Value(e.is_default));
+  o.emplace("size_bytes", j::Value(e.size_bytes));
+  o.emplace("prompt_format", j::Value(e.prompt_format));
+  o.emplace("fetchable", j::Value(e.fetchable));
+  o.emplace("state", j::Value(e.state));
+  o.emplace("path", j::Value(e.path));
+  return j::Value(std::move(o));
+}
+
+std::optional<CatalogModelEntry> CatalogModelEntryFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  auto id = v.GetString("id");
+  if (!id || id->empty()) return std::nullopt;
+  CatalogModelEntry e;
+  e.id = std::move(*id);
+  e.display_name = v.GetString("display_name").value_or(std::string());
+  e.file_name = v.GetString("file_name").value_or(std::string());
+  e.is_default = v.GetBool("is_default").value_or(false);
+  e.size_bytes = v.GetUInt("size_bytes").value_or(0);
+  e.prompt_format = v.GetString("prompt_format").value_or(std::string());
+  e.fetchable = v.GetBool("fetchable").value_or(false);
+  e.state = v.GetString("state").value_or("missing");
+  e.path = v.GetString("path").value_or(std::string());
+  return e;
 }
 
 }  // namespace
@@ -1311,6 +1344,7 @@ std::string BuildListModelsRequest(const ListModelsRequest& p) {
   j::Object o;
   if (!p.directory.empty()) o.emplace("directory", j::Value(p.directory));
   o.emplace("compute_sha256", j::Value(p.compute_sha256));
+  if (p.include_catalog) o.emplace("include_catalog", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -1323,6 +1357,7 @@ std::optional<ListModelsRequest> ParseListModelsRequest(const std::string& json)
     p.directory = directory->AsString();
   }
   p.compute_sha256 = v->GetBool("compute_sha256").value_or(false);
+  p.include_catalog = v->GetBool("include_catalog").value_or(false);
   return p;
 }
 
@@ -1333,6 +1368,11 @@ std::string BuildListModelsResponse(const ListModelsResponse& p) {
   j::Array models;
   for (const auto& m : p.models) models.push_back(ListedModelToJson(m));
   o.emplace("models", j::Value(std::move(models)));
+  if (p.catalog) {
+    j::Array catalog;
+    for (const auto& e : *p.catalog) catalog.push_back(CatalogModelEntryToJson(e));
+    o.emplace("catalog", j::Value(std::move(catalog)));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -1346,6 +1386,12 @@ std::optional<ListModelsResponse> ParseListModelsResponse(const std::string& jso
   if (auto error = v->GetString("error")) p.error = std::move(*error);
   for (const auto& entry : *models) {
     if (auto m = ListedModelFromJson(entry)) p.models.push_back(std::move(*m));
+  }
+  if (const auto* catalog = v->GetArray("catalog")) {
+    p.catalog.emplace();
+    for (const auto& entry : *catalog) {
+      if (auto e = CatalogModelEntryFromJson(entry)) p.catalog->push_back(std::move(*e));
+    }
   }
   return p;
 }
@@ -1417,6 +1463,57 @@ std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::str
   const auto completed = v->GetUInt("iterations_completed").value_or(0);
   p.iterations_completed = completed > UINT32_MAX ? 0 : static_cast<uint32_t>(completed);
   p.error = v->GetString("error");
+  return p;
+}
+
+// -------- DEV-1821 catalog model fetch --------
+
+std::string BuildFetchCatalogModelRequest(const FetchCatalogModelRequest& p) {
+  j::Object o;
+  if (!p.model_id.empty()) o.emplace("model_id", j::Value(p.model_id));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<FetchCatalogModelRequest> ParseFetchCatalogModelRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  FetchCatalogModelRequest p;
+  if (const auto* model_id = v->Find("model_id")) {
+    if (!model_id->IsString()) return std::nullopt;
+    p.model_id = model_id->AsString();
+  }
+  return p;
+}
+
+std::string BuildCatalogFetchResponse(const CatalogFetchResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("state", j::Value(p.state));
+  if (!p.model_id.empty()) o.emplace("model_id", j::Value(p.model_id));
+  o.emplace("received_bytes", j::Value(p.received_bytes));
+  o.emplace("total_bytes", j::Value(p.total_bytes));
+  if (!p.status.empty()) o.emplace("status", j::Value(p.status));
+  if (!p.path.empty()) o.emplace("path", j::Value(p.path));
+  if (!p.result_error.empty()) o.emplace("result_error", j::Value(p.result_error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<CatalogFetchResponse> ParseCatalogFetchResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto state = v->GetString("state");
+  if (!state) return std::nullopt;
+  CatalogFetchResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.error = v->GetString("error");
+  p.state = std::move(*state);
+  p.model_id = v->GetString("model_id").value_or(std::string());
+  p.received_bytes = v->GetUInt("received_bytes").value_or(0);
+  p.total_bytes = v->GetUInt("total_bytes").value_or(0);
+  p.status = v->GetString("status").value_or(std::string());
+  p.path = v->GetString("path").value_or(std::string());
+  p.result_error = v->GetString("result_error").value_or(std::string());
   return p;
 }
 

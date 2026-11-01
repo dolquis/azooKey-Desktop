@@ -27,8 +27,9 @@ struct ModelFetchResult {
   std::filesystem::path path;
   uint64_t bytes_received{0};
   // Fixed category, safe to log: "directory_unavailable", "destination_occupied" (a file of
-  // the same name with another SHA-256 is there and is kept), "download_failed", or
-  // "format:<section 3.3 category>". Empty unless the status is Failed.
+  // the same name with another SHA-256 is there and is kept), "download_failed", "cancelled"
+  // (hooks.cancelled stopped the download), or "format:<section 3.3 category>". Empty unless
+  // the status is Failed.
   std::string error;
   // The downloader's own message for a download_failed or a destination_occupied, for the CLI
   // only. May name the URL or a path, so it is never logged.
@@ -41,6 +42,14 @@ struct ModelFetchResult {
 
 std::string_view ModelFetchStatusName(ModelFetchStatus status);
 
+struct ModelFetchHooks {
+  // Cooperative cancellation, passed to the downloader as HttpDownloadRequest::cancelled.
+  std::function<bool()> cancelled;
+  // Bytes received so far and the full size, on the calling thread while the download runs.
+  // The full size is the response's Content-Length, or the entry's sizeBytes without one.
+  std::function<void(uint64_t received, uint64_t total)> progress;
+};
+
 // Fetches entry's GGUF from its pinned Hugging Face revision into zenzai_dir/<fileName>. The
 // downloader verifies the SHA-256 before the file takes the final name; the GGUF checks of
 // section 3.3 run after, and a freshly downloaded file that fails them is removed. A file that
@@ -52,6 +61,7 @@ std::string_view ModelFetchStatusName(ModelFetchStatus status);
 ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
                                    const std::filesystem::path& zenzai_dir,
                                    IPackDownloader& downloader,
-                                   std::function<bool()> network_allowed = {});
+                                   std::function<bool()> network_allowed = {},
+                                   const ModelFetchHooks& hooks = {});
 
 }  // namespace azookey::host

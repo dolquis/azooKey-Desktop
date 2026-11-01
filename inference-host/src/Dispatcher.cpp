@@ -709,6 +709,10 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleListModels(req);
     case ipc::MessageType::BenchmarkModel:
       return HandleBenchmarkModel(req);
+    case ipc::MessageType::FetchCatalogModel:
+      return HandleFetchCatalogModel(req);
+    case ipc::MessageType::QueryCatalogFetch:
+      return HandleQueryCatalogFetch(req);
     case ipc::MessageType::Cancel:
       HandleCancel(req);
       return std::nullopt;
@@ -892,6 +896,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = "not authenticated";
       return MakeResponse(req, ipc::BuildBenchmarkModelResponse(r));
     }
+    case ipc::MessageType::FetchCatalogModel:
+    case ipc::MessageType::QueryCatalogFetch: {
+      ipc::CatalogFetchResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildCatalogFetchResponse(r));
+    }
     case ipc::MessageType::Ping: {
       ipc::PingPayload p;
       p.nonce = 0;
@@ -944,6 +955,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "persona",
                       "detect_anomalies",
                       "mixed_english"};
+  // DEV-1821 (model-management-spec section 4.4).
+  if (config_.catalog_fetch) res.capabilities.push_back("fetch_catalog_model");
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -1093,6 +1106,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
       options.path = parsed->path;
       options.backend = *backend;
       options.n_gpu_layers = parsed->n_gpu_layers;
+      options.resolve_prompt_format =
+          CatalogPromptFormatResolver(config_.catalog_matcher, options.path);
       const auto load_result = engine_->LoadModelWithResult(options);
       res.ok = load_result.ok;
       res.error = load_result.error;
@@ -2136,9 +2151,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   if (config_.on_network_policy_applied) {
     config_.on_network_policy_applied(!load_result.settings.offline_mode);
   }
-  const auto model_result = engine_->LoadModelWithResult(
-      ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers,
-                       next_config.inference_threads});
+  ModelLoadOptions load_options{next_config.model_path, next_config.backend,
+                                next_config.n_gpu_layers, next_config.inference_threads};
+  load_options.resolve_prompt_format =
+      CatalogPromptFormatResolver(config_.catalog_matcher, next_config.model_path);
+  const auto model_result = engine_->LoadModelWithResult(load_options);
 
   res.ok = model_result.ok;
   if (load_result.error) {
@@ -2182,12 +2199,66 @@ std::optional<ipc::Envelope> Dispatcher::HandleListModels(const ipc::Envelope& r
       }
       res.models.push_back(ToListedModel(entry, std::move(status), std::move(error)));
     }
+    if (parsed->include_catalog && config_.catalog_matcher) {
+      res.catalog = CatalogEntries(*config_.catalog_matcher);
+      for (auto& model : res.models) {
+        if (model.format != "gguf" || !model.valid) continue;
+        if (const auto entry = config_.catalog_matcher->Match(model.path)) {
+          model.catalog_id = entry->id;
+        }
+      }
+    }
   } catch (...) {
     res.models.clear();
+    res.catalog.reset();
     res.ok = false;
     res.error = "scan_failed";
   }
   return MakeResponse(req, ipc::BuildListModelsResponse(res));
+}
+
+// DEV-1821 (model-management-spec section 4.4): starts the fetch on the shared service and
+// answers at once with its state; QueryCatalogFetch follows its progress.
+std::optional<ipc::Envelope> Dispatcher::HandleFetchCatalogModel(const ipc::Envelope& req) {
+  ipc::CatalogFetchResponse res;
+  const auto parsed = ipc::ParseFetchCatalogModelRequest(req.payload_json);
+  if (!parsed) {
+    res.ok = false;
+    res.error = "invalid_request";
+  } else if (!config_.catalog_fetch) {
+    res.ok = false;
+    res.error = "catalog_unavailable";
+  } else {
+    switch (config_.catalog_fetch->Start(parsed->model_id)) {
+      case CatalogFetchStartResult::Started:
+        break;
+      case CatalogFetchStartResult::Busy:
+        res.ok = false;
+        res.error = "busy";
+        break;
+      case CatalogFetchStartResult::UnknownModelId:
+        res.ok = false;
+        res.error = "unknown_model_id";
+        break;
+      case CatalogFetchStartResult::Unavailable:
+        res.ok = false;
+        res.error = "catalog_unavailable";
+        break;
+    }
+  }
+  if (config_.catalog_fetch) FillCatalogFetchResponse(config_.catalog_fetch->Snapshot(), res);
+  return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryCatalogFetch(const ipc::Envelope& req) {
+  ipc::CatalogFetchResponse res;
+  if (!config_.catalog_fetch) {
+    res.ok = false;
+    res.error = "catalog_unavailable";
+  } else {
+    FillCatalogFetchResponse(config_.catalog_fetch->Snapshot(), res);
+  }
+  return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
 }
 
 // M45 section 4.2: a separate engine, synchronous on this connection, bounded

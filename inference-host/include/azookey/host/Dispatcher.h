@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 
+#include "azookey/host/CatalogFetchService.h"
+#include "azookey/host/CatalogModelMatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/NeologdLayerState.h"
 #include "azookey/host/RequestScheduler.h"
@@ -43,6 +45,14 @@ struct DispatcherConfig {
   // Runs right after on_config_applied on every valid reload, with false under
   // privacy.mode=offline. Not called for an invalid reload, so the policy in effect stays.
   std::function<void(bool network_allowed)> on_network_policy_applied;
+  // DEV-1821 (copilot-pc-backend-spec 4.4): the default catalog over models_dir\zenzai, shared
+  // by every connection. Model loads take the prompt format of the entry model.selectedPath
+  // matches, and ListModels returns the catalog on request. nullptr leaves the format to the
+  // GGUF vocabulary and sends no catalog.
+  std::shared_ptr<CatalogModelMatcher> catalog_matcher;
+  // FetchCatalogModel / QueryCatalogFetch (model-management-spec 4.4), shared by every
+  // connection. nullptr leaves the fetch_catalog_model capability out.
+  std::shared_ptr<CatalogFetchService> catalog_fetch;
   // Shared with the startup pack worker. nullptr omits neologd_layer from
   // QueryDiagnostics.
   std::shared_ptr<NeologdLayerState> neologd_layer;
@@ -110,6 +120,8 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListModels(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleFetchCatalogModel(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryCatalogFetch(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
   bool LearningAllowed(bool secure, bool learning_allowed, bool host_learning_blocked) const;

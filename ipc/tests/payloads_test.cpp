@@ -1717,6 +1717,125 @@ TEST(PayloadsTest, ListModelsRoundTripAndStableSchema) {
   EXPECT_FALSE(empty->error.has_value());
 }
 
+// DEV-1821: the catalog additions are optional both ways, so an old settings app and an old
+// Host keep reading what they read before.
+TEST(PayloadsTest, ListModelsCatalogIsOptionalOnBothSides) {
+  using namespace azookey::ipc;
+  ListModelsRequest request;
+  EXPECT_EQ(BuildListModelsRequest(request), R"({"compute_sha256":false})");
+  request.include_catalog = true;
+  EXPECT_EQ(BuildListModelsRequest(request),
+            R"({"compute_sha256":false,"include_catalog":true})");
+  const auto parsed_request = ParseListModelsRequest(BuildListModelsRequest(request));
+  ASSERT_TRUE(parsed_request);
+  EXPECT_TRUE(parsed_request->include_catalog);
+  EXPECT_FALSE(ParseListModelsRequest("{}")->include_catalog);
+
+  ListModelsResponse response;
+  ListedModel gguf;
+  gguf.path = "C:/m/zenzai/edge.gguf";
+  gguf.format = "gguf";
+  gguf.valid = true;
+  gguf.last_load_status = "not_loaded";
+  gguf.catalog_id = "kanakanji-edge-33m";
+  response.models = {gguf};
+  CatalogModelEntry entry;
+  entry.id = "kanakanji-edge-33m";
+  entry.display_name = "kanakanji-edge 33M";
+  entry.file_name = "edge.gguf";
+  entry.size_bytes = 35806592;
+  entry.prompt_format = "kanakanji-edge-v1";
+  entry.fetchable = true;
+  entry.state = "verified";
+  entry.path = "C:/m/zenzai/edge.gguf";
+  response.catalog = std::vector<CatalogModelEntry>{entry};
+  const auto json_text = BuildListModelsResponse(response);
+  EXPECT_NE(json_text.find(R"("catalog_id":"kanakanji-edge-33m")"), std::string::npos);
+  EXPECT_NE(json_text.find(R"("catalog":[{"display_name":"kanakanji-edge 33M",)"),
+            std::string::npos)
+      << json_text;
+  const auto parsed = ParseListModelsResponse(json_text);
+  ASSERT_TRUE(parsed);
+  ASSERT_EQ(parsed->models.size(), 1u);
+  EXPECT_EQ(parsed->models[0].catalog_id, "kanakanji-edge-33m");
+  ASSERT_TRUE(parsed->catalog.has_value());
+  ASSERT_EQ(parsed->catalog->size(), 1u);
+  const auto& got = parsed->catalog->front();
+  EXPECT_EQ(got.id, entry.id);
+  EXPECT_EQ(got.display_name, entry.display_name);
+  EXPECT_EQ(got.file_name, entry.file_name);
+  EXPECT_FALSE(got.is_default);
+  EXPECT_EQ(got.size_bytes, entry.size_bytes);
+  EXPECT_EQ(got.prompt_format, entry.prompt_format);
+  EXPECT_TRUE(got.fetchable);
+  EXPECT_EQ(got.state, "verified");
+  EXPECT_EQ(got.path, entry.path);
+
+  // A Host that sends no catalog leaves it absent, not empty.
+  const auto old_host = ParseListModelsResponse(R"({"models":[]})");
+  ASSERT_TRUE(old_host);
+  EXPECT_FALSE(old_host->catalog.has_value());
+  // An entry without an id is dropped; the rest of the catalog stays.
+  const auto partial = ParseListModelsResponse(R"({"models":[],"catalog":[{},{"id":"a"}]})");
+  ASSERT_TRUE(partial && partial->catalog);
+  ASSERT_EQ(partial->catalog->size(), 1u);
+  EXPECT_EQ(partial->catalog->front().state, "missing");
+}
+
+TEST(PayloadsTest, CatalogFetchRoundTripAndStableSchema) {
+  using namespace azookey::ipc;
+  EXPECT_EQ(BuildFetchCatalogModelRequest({}), "{}");
+  EXPECT_EQ(BuildFetchCatalogModelRequest({"zenz-v3.2-small"}),
+            R"({"model_id":"zenz-v3.2-small"})");
+  const auto request = ParseFetchCatalogModelRequest(R"({"model_id":"zenz-v3.2-small"})");
+  ASSERT_TRUE(request);
+  EXPECT_EQ(request->model_id, "zenz-v3.2-small");
+  EXPECT_EQ(ParseFetchCatalogModelRequest("{}")->model_id, "");
+  EXPECT_FALSE(ParseFetchCatalogModelRequest(R"({"model_id":7})"));
+  EXPECT_FALSE(ParseFetchCatalogModelRequest("[]"));
+
+  CatalogFetchResponse running;
+  running.state = "running";
+  running.model_id = "zenz-v3.2-small";
+  running.received_bytes = 1024;
+  running.total_bytes = 73871936;
+  EXPECT_EQ(BuildCatalogFetchResponse(running),
+            R"({"model_id":"zenz-v3.2-small","received_bytes":1024,"state":"running",)"
+            R"("total_bytes":73871936})");
+
+  CatalogFetchResponse done = running;
+  done.state = "done";
+  done.received_bytes = done.total_bytes;
+  done.status = "downloaded";
+  done.path = "C:/m/zenzai/ggml-model-Q5_K_M.gguf";
+  const auto parsed_done = ParseCatalogFetchResponse(BuildCatalogFetchResponse(done));
+  ASSERT_TRUE(parsed_done);
+  EXPECT_TRUE(parsed_done->ok);
+  EXPECT_EQ(parsed_done->state, "done");
+  EXPECT_EQ(parsed_done->status, "downloaded");
+  EXPECT_EQ(parsed_done->path, done.path);
+  EXPECT_EQ(parsed_done->received_bytes, done.total_bytes);
+  EXPECT_TRUE(parsed_done->result_error.empty());
+
+  CatalogFetchResponse refused;
+  refused.ok = false;
+  refused.error = "busy";
+  refused.state = "running";
+  const auto parsed_refused = ParseCatalogFetchResponse(BuildCatalogFetchResponse(refused));
+  ASSERT_TRUE(parsed_refused);
+  EXPECT_FALSE(parsed_refused->ok);
+  EXPECT_EQ(parsed_refused->error, "busy");
+
+  CatalogFetchResponse failed;
+  failed.state = "done";
+  failed.status = "failed";
+  failed.result_error = "destination_occupied";
+  EXPECT_EQ(ParseCatalogFetchResponse(BuildCatalogFetchResponse(failed))->result_error,
+            "destination_occupied");
+  // The state is what a client polls on, so a response without it is malformed.
+  EXPECT_FALSE(ParseCatalogFetchResponse(R"({"ok":false,"error":"unsupported_message_type"})"));
+}
+
 TEST(PayloadsTest, BenchmarkModelRoundTripAndStableSchema) {
   using namespace azookey::ipc;
   BenchmarkModelRequest request;

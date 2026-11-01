@@ -558,6 +558,9 @@ struct ListModelsRequest {
   // it; "%LOCALAPPDATA%" at the start is expanded.
   std::string directory;
   bool compute_sha256{false};
+  // DEV-1821: also return the entries of the Host's default model catalog. Omitted on the wire
+  // when false; a Host without the catalog ignores it and sends no "catalog".
+  bool include_catalog{false};
 };
 
 struct ListedModelMetadata {
@@ -576,12 +579,30 @@ struct ListedModel {
   std::string sha256;            // Lowercase hex, only when computed.
   std::string last_load_status;  // "success" | "failed" | "not_loaded".
   std::string last_error;        // Fixed validation/load category; omitted when empty.
+  // The id of the default catalog entry this file is (directly in zenzai\, same name, same
+  // SHA-256). Only with include_catalog; omitted when empty.
+  std::string catalog_id;
+};
+
+// One entry of the Host's default model catalog (model-management-spec section 4.1).
+struct CatalogModelEntry {
+  std::string id;
+  std::string display_name;
+  std::string file_name;
+  bool is_default{false};
+  uint64_t size_bytes{};      // 0 for an entry without a source.
+  std::string prompt_format;  // "zenz-v3" | "kanakanji-edge-v1".
+  bool fetchable{false};      // Has a source; FetchCatalogModel can fetch it.
+  std::string state;          // "missing" | "verified" | "mismatch".
+  std::string path;           // UTF-8 absolute path in zenzai\, whether or not it exists.
 };
 
 struct ListModelsResponse {
   std::vector<ListedModel> models;
   bool ok{true};
   std::optional<std::string> error;
+  // Present only when the request asked for it and the Host has the catalog.
+  std::optional<std::vector<CatalogModelEntry>> catalog;
 };
 
 struct BenchmarkModelRequest {
@@ -613,6 +634,37 @@ std::optional<ListModelsRequest> ParseListModelsRequest(const std::string& json)
 std::optional<ListModelsResponse> ParseListModelsResponse(const std::string& json);
 std::optional<BenchmarkModelRequest> ParseBenchmarkModelRequest(const std::string& json);
 std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::string& json);
+
+// ---------------------------------------------------------------------------
+// DEV-1821 catalog model fetch: FetchCatalogModel starts one fetch on the Host
+// and returns at once; QueryCatalogFetch (payload {}) reports its progress and
+// result. Both answer with CatalogFetchResponse (model-management-spec
+// section 4.4). The Host advertises the "fetch_catalog_model" capability.
+
+struct FetchCatalogModelRequest {
+  std::string model_id;  // Empty means the catalog's defaultModelId.
+};
+
+struct CatalogFetchResponse {
+  // false when the request itself was refused: "invalid_request", "busy",
+  // "unknown_model_id", "catalog_unavailable" or "not authenticated". The
+  // fetch fields still describe the Host's current fetch.
+  bool ok{true};
+  std::optional<std::string> error;
+  std::string state{"idle"};  // "idle" | "running" | "done".
+  std::string model_id;
+  uint64_t received_bytes{};
+  uint64_t total_bytes{};
+  // When done: "downloaded" | "already_valid" | "offline" | "not_fetchable" | "failed".
+  std::string status;
+  std::string path;          // When done with downloaded or already_valid.
+  std::string result_error;  // When done with failed: a fixed category (section 3.1.2).
+};
+
+std::string BuildFetchCatalogModelRequest(const FetchCatalogModelRequest& p);
+std::optional<FetchCatalogModelRequest> ParseFetchCatalogModelRequest(const std::string& json);
+std::string BuildCatalogFetchResponse(const CatalogFetchResponse& p);
+std::optional<CatalogFetchResponse> ParseCatalogFetchResponse(const std::string& json);
 
 // ---------------------------------------------------------------------------
 // M49 learning data management: ListLearningEntries / ForgetLearningEntry /

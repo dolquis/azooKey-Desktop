@@ -15522,6 +15522,9 @@ TEST(TsfTipLeftContextTest, PredictionCacheAndStaleCheckFollowTheLeftContext) {
   ASSERT_EQ(h.service.prediction_left_context_for_test(), "東京か");
   ASSERT_TRUE(WaitUntil([&] { return context_count() > first_composition; }));
   ASSERT_TRUE(WaitForPredictionResult(h.service));
+  // A pending retry may ask again with the new context below; only the queries
+  // made before it are checked.
+  const size_t asked = context_count();
   // The context changes before the answer is applied: it is dropped as stale.
   h.service.set_prediction_left_context_for_test("大阪");
   h.service.process_candidates_ready_for_test();
@@ -15530,6 +15533,6 @@ TEST(TsfTipLeftContextTest, PredictionCacheAndStaleCheckFollowTheLeftContext) {
   h.service.stop_ipc_worker_for_test();
   server.Stop();
   const std::lock_guard<std::mutex> lock(mutex);
-  for (size_t i = 0; i < contexts.size(); ++i)
+  for (size_t i = 0; i < asked; ++i)
     EXPECT_EQ(contexts[i], i < first_composition ? "東京" : "東京か") << i;
 }

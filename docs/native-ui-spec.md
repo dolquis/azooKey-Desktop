@@ -286,41 +286,55 @@ bool high_contrast = (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
 `high_contrast == true` のとき：
 - 背景効果を使わない（不透明背景。§2.1 により常に不透明）
 - システムテーマ色を `GetSysColor` で取得（§1.3 のハイコントラスト列）
-- フォントを `GetThemeSysFont(SPI_GETICONTITLELOGFONT)` から
+- フォントはハイコントラストでも切り替えず、§2.2 の `CreateMessageTextFormat`（システムのメッセージフォント
+  `lfMessageFont`）を使う。このフォントは利用者が選んだシステムのフォントと文字サイズに従うため、
+  ハイコントラスト専用のフォントを別に読まない
 
-### 5.2 UI Automation
+### 5.2 支援技術への候補の提供
 
-候補ウィンドウは `WS_EX_NOACTIVATE` のため、UIA Provider は不要（フォーカスを
-取らない）。ただし候補内容を読み上げソフトに通知するため、
-`UiaRaiseAutomationEvent` で `UIA_AsyncContentLoadedEventId` を発火。
+候補を読み上げソフトへ渡す経路は、TSF の UIElement（`ITfCandidateListUIElement`、
+`docs/tsf-deep-integration-spec.md`）とする。候補ウィンドウは `WS_EX_NOACTIVATE` でフォーカスを取らず、
+UI Automation の Provider を持たない。`UiaRaiseAutomationEvent` などの UIA イベントも発火しない
+（このイベントは Provider を要し、Provider は TIP の DLL を読み込む全アプリのウィンドウ手続きに
+`WM_GETOBJECT` の応答と COM の寿命管理を持ち込むため）。
 
-Phase 6-C 末尾で追加実装。
+Narrator / NVDA が候補と選択の移動を読み上げるかは実機で確認する（Human Gate）。読み上げられない場合は、
+Provider を置くかどうかを改めて判断する。
 
 ## 6. アニメーション
 
 ### 6.1 候補ウィンドウのフェードイン
 
+候補ウィンドウが非表示から表示に移るときだけ、root visual の不透明度を 0 から 1 へ 150ms で上げる。
+表示中の候補の更新や選択の移動では掛け直さない。曲線は cubic の ease-out
+（`1 - (1 - t/T)^3`、T = 0.15 秒）とし、`RenderingEngine::FadeIn` が次のように設定して commit する。
+
 ```cpp
+ComPtr<IDCompositionVisual3> visual;   // root visual（IDCompositionVisual2 から QueryInterface）
 ComPtr<IDCompositionAnimation> opacity_anim;
 device->CreateAnimation(&opacity_anim);
-opacity_anim->AddCubic(0.0,  0.0f, 0.0f, 0.0f, 0.0f);
-opacity_anim->AddCubic(0.15, 1.0f, 0.0f, 0.0f, 0.0f);
-opacity_anim->End(0.15, 1.0f);
-content_visual->SetOpacity(opacity_anim.Get());
+const double T = 0.15;
+opacity_anim->AddCubic(0.0, 0.0f, 3.0 / T, -3.0 / (T * T), 1.0 / (T * T * T));
+opacity_anim->End(T, 1.0f);
+visual->SetOpacity(opacity_anim.Get());
 device->Commit();
 ```
 
-150ms でフェードイン。
+アニメーションは合成エンジンが進めるので、タイマーは使わない。設定に失敗しても窓は表示する
+（不透明度は直前の値、つまり前回のフェードの終値 1 か、新しい visual の既定値 1 のまま）。
 
-### 6.2 候補移動のアニメーション
+### 6.2 選択の移動
 
-選択ハイライト矩形の移動を 100ms cubic easing。Visual の Offset を
-`SetOffsetX/Y` で animate。
+選択ハイライトは移動のアニメーションを持たず、選択が変わったら次のフレームで新しい位置に描く。
+ハイライトは本文と同じ 1 枚の surface に描いているため、`SetOffsetX/Y` で動かすには
+ハイライトを別の visual に分け、本文の surface を透過にする構造変更が要る。移動のアニメーションは
+v1.x で扱う。
 
 ### 6.3 配慮
 
-`SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, ...)` で「アニメーション無効」
-設定をチェックし、無効なら即座に最終状態へ。
+表示に移るたびに `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, ...)` を読み、
+「Windows のアニメーション効果」が無効ならフェードせず、不透明度 1 を即座に置く。
+読めなかったときは有効として扱う。
 
 ## 7. テスト
 
@@ -328,7 +342,8 @@ device->Commit();
 |---|---|---|
 | テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
 | DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
-| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
+| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。`FadeIn` が不透明度のアニメーションと即時の 1 を設定して commit できること。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
+| フェードイン | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。`SPI_GETCLIENTAREAANIMATION` の結果を注入し、非表示から表示に移るときだけフェード（有効時）か即時の不透明度 1（無効時）を設定すること、表示中の再表示と選択の移動では設定しないこと、描画に失敗した表示では設定しないことを確かめる。150ms の見た目は実機で確認する |
 | 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる。初期化と描画の失敗を注入し、窓が表示されずクリックで候補が選ばれないこと、状態の変化で描き直して表示すること、初期化の再試行が 3 回で止まることを確かめる |
 
 実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。

@@ -30,6 +30,7 @@ class ScopedTestInputs {
   ~ScopedTestInputs() {
     CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
     CandidateWindow::SetMonitorDpiForTest(0);
+    CandidateWindow::SetClientAreaAnimationForTest(-1);
     tsf::testing::ClearThemeInputsForTest();
   }
   ScopedTestInputs(const ScopedTestInputs&) = delete;
@@ -454,6 +455,45 @@ TEST(CandidateWindowRenderTest, InitFailureKeepsTheWindowHiddenAndClicksDoNotSel
   window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
   EXPECT_TRUE(window.IsVisible());
   EXPECT_STREQ(window.failure_stage(), "");
+  window.Destroy();
+}
+
+TEST(CandidateWindowRenderTest, AppearingFadesInOnceAndHonorsTheAnimationSetting) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Appearance = CandidateWindow::AppearanceForTest;
+  CandidateWindow::SetMonitorDpiForTest(96);
+  CandidateWindow::SetClientAreaAnimationForTest(1);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  EXPECT_EQ(window.last_appearance_for_test(), Appearance::None);
+
+  window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}}, 0);
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+  EXPECT_EQ(window.last_appearance_for_test(), Appearance::Faded);
+  EXPECT_EQ(window.appearances_for_test(), 1);
+
+  // A Show or a selection move of the visible window does not fade it again.
+  window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}, {L"三", L""}}, 1);
+  window.MoveSelection(1);
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+  EXPECT_EQ(window.appearances_for_test(), 1);
+
+  // With client area animations off, the next appearance is at full opacity at once.
+  window.Hide();
+  CandidateWindow::SetClientAreaAnimationForTest(0);
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+  EXPECT_EQ(window.last_appearance_for_test(), Appearance::Immediate);
+  EXPECT_EQ(window.appearances_for_test(), 2);
+
+  // A frame that fails to draw keeps the window hidden and sets no opacity.
+  window.Hide();
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Draw);
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(window.appearances_for_test(), 2);
   window.Destroy();
 }
 

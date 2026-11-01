@@ -27,6 +27,8 @@
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/BackendSelector.h"
+#include "azookey/host/CatalogFetchService.h"
+#include "azookey/host/CatalogModelMatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/PunctuationInserter.h"
@@ -2132,6 +2134,223 @@ TEST_F(DispatcherTest, ListModelsScansOnlyTheModelsDirectory) {
   EXPECT_FALSE(unconfigured_parsed->ok);
   EXPECT_EQ(unconfigured_parsed->error, "models_dir_unavailable");
   RemovePathNoThrow(root);
+}
+
+namespace {
+
+// A valid GGUF v3 header with general.architecture = "gpt2".
+std::string CatalogTestGgufBytes() {
+  std::string bytes = "GGUF";
+  const auto le = [&](uint64_t v, int n) {
+    for (int i = 0; i < n; ++i) bytes.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+  };
+  le(3, 4);
+  le(1, 8);
+  le(1, 8);
+  const std::string key = "general.architecture";
+  le(key.size(), 8);
+  bytes += key;
+  le(8, 4);
+  le(4, 8);
+  bytes += "gpt2";
+  return bytes;
+}
+
+ipc::HandshakeRequest CatalogTestHandshake() {
+  ipc::HandshakeRequest request;
+  request.tip_version = "0.1.0";
+  request.protocol_version = kProtocolVersion;
+  return request;
+}
+
+constexpr std::string_view kCatalogTestSha =
+    "1111111111111111111111111111111111111111111111111111111111111111";
+
+azookey::host::ModelCatalog CatalogTestCatalog() {
+  azookey::host::ModelCatalogEntry entry;
+  entry.id = "zenz";
+  entry.display_name = "zenz";
+  entry.file_name = "zenz.gguf";
+  entry.sha256 = std::string(kCatalogTestSha);
+  entry.size_bytes = 4096;
+  entry.source =
+      azookey::host::ModelCatalogSource{"owner/repo", "0123456789abcdef0123456789abcdef01234567"};
+  azookey::host::ModelCatalog catalog;
+  catalog.schema_version = 2;
+  catalog.default_model_id = "zenz";
+  catalog.models = {entry};
+  return catalog;
+}
+
+// zenz.gguf hashes to the catalog's SHA-256, anything else to nothing.
+std::shared_ptr<azookey::host::CatalogModelMatcher> CatalogTestMatcher(
+    const std::filesystem::path& models_dir) {
+  return std::make_shared<azookey::host::CatalogModelMatcher>(
+      CatalogTestCatalog(), azookey::host::DefaultZenzaiModelDirectory(models_dir),
+      [](const std::filesystem::path& path) -> std::optional<std::string> {
+        if (path.filename() == "zenz.gguf") return std::string(kCatalogTestSha);
+        return std::nullopt;
+      });
+}
+
+// Serves the GGUF at once, so a fetch finishes without a network.
+class ImmediateDownloader final : public azookey::host::IPackDownloader {
+ public:
+  azookey::host::HttpDownloadResult Download(
+      const azookey::host::HttpDownloadRequest& request) override {
+    azookey::host::HttpDownloadResult result;
+    if (request.network_allowed && !request.network_allowed()) {
+      result.error = "network disabled";
+      return result;
+    }
+    if (request.progress) request.progress(4096, 4096);
+    std::ofstream out(request.destination, std::ios::binary);
+    out << CatalogTestGgufBytes();
+    result.bytes_received = 4096;
+    result.status = azookey::host::HttpDownloadStatus::Downloaded;
+    return result;
+  }
+};
+
+}  // namespace
+
+// DEV-1821 (model-management-spec section 4.1): the catalog comes only on request.
+TEST_F(DispatcherTest, ListModelsReturnsTheCatalogOnRequest) {
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_catalog"));
+  RemovePathNoThrow(root);
+  const auto models = root / "models";
+  std::filesystem::create_directories(models / "zenzai");
+  {
+    std::ofstream out(models / "zenzai" / "zenz.gguf", std::ios::binary);
+    out << CatalogTestGgufBytes();
+  }
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = models;
+  config.catalog_matcher = CatalogTestMatcher(models);
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto list = [&](uint64_t id, const ipc::ListModelsRequest& request) {
+    const auto response = models_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::ListModels, ipc::BuildListModelsRequest(request)));
+    return response ? ipc::ParseListModelsResponse(response->payload_json) : std::nullopt;
+  };
+
+  const auto plain = list(811, {});
+  ASSERT_TRUE(plain && plain->ok);
+  EXPECT_FALSE(plain->catalog.has_value());
+  ASSERT_EQ(plain->models.size(), 1u);
+  EXPECT_TRUE(plain->models[0].catalog_id.empty());
+
+  ipc::ListModelsRequest with_catalog;
+  with_catalog.include_catalog = true;
+  const auto listed = list(812, with_catalog);
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_TRUE(listed->catalog.has_value());
+  ASSERT_EQ(listed->catalog->size(), 1u);
+  EXPECT_EQ(listed->catalog->front().id, "zenz");
+  EXPECT_EQ(listed->catalog->front().state, "verified");
+  EXPECT_TRUE(listed->catalog->front().is_default);
+  ASSERT_EQ(listed->models.size(), 1u);
+  EXPECT_EQ(listed->models[0].catalog_id, "zenz");
+
+  // A Host without the catalog sends none even when asked.
+  auto no_catalog_config = DefaultDispatcherConfig();
+  no_catalog_config.models_dir = models;
+  azookey::host::Dispatcher no_catalog(&engine, &scheduler, &user_dict, no_catalog_config);
+  const auto response = no_catalog.Dispatch(
+      MakeReq(813, ipc::MessageType::ListModels, ipc::BuildListModelsRequest(with_catalog)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseListModelsResponse(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->ok);
+  EXPECT_FALSE(parsed->catalog.has_value());
+  RemovePathNoThrow(root);
+}
+
+// DEV-1821 (model-management-spec section 4.4): FetchCatalogModel starts the fetch and
+// QueryCatalogFetch follows it to its result.
+TEST_F(DispatcherTest, FetchCatalogModelStartsAFetchThatQueryCatalogFetchFollows) {
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_fetch"));
+  RemovePathNoThrow(root);
+  const auto models = root / "models";
+  std::filesystem::create_directories(models);
+  const auto matcher = CatalogTestMatcher(models);
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = models;
+  config.catalog_matcher = matcher;
+  config.catalog_fetch = std::make_shared<azookey::host::CatalogFetchService>(
+      matcher, [] { return std::make_unique<ImmediateDownloader>(); }, [] { return true; });
+  azookey::host::Dispatcher fetch_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  const auto handshake = fetch_dispatcher.Dispatch(MakeReq(
+      820, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(CatalogTestHandshake())));
+  ASSERT_TRUE(handshake);
+  const auto parsed_handshake = ipc::ParseHandshakeResponse(handshake->payload_json);
+  ASSERT_TRUE(parsed_handshake);
+  EXPECT_NE(std::find(parsed_handshake->capabilities.begin(), parsed_handshake->capabilities.end(),
+                      "fetch_catalog_model"),
+            parsed_handshake->capabilities.end());
+
+  const auto fetch = [&](uint64_t id, ipc::MessageType type, const std::string& payload) {
+    const auto response = fetch_dispatcher.Dispatch(MakeReq(id, type, payload));
+    EXPECT_TRUE(response.has_value());
+    if (response) EXPECT_EQ(response->type, type);
+    return response ? ipc::ParseCatalogFetchResponse(response->payload_json) : std::nullopt;
+  };
+  const auto unknown =
+      fetch(821, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({"nope"}));
+  ASSERT_TRUE(unknown);
+  EXPECT_FALSE(unknown->ok);
+  EXPECT_EQ(unknown->error, "unknown_model_id");
+  EXPECT_EQ(unknown->state, "idle");
+  const auto invalid = fetch(822, ipc::MessageType::FetchCatalogModel, R"({"model_id":1})");
+  ASSERT_TRUE(invalid);
+  EXPECT_EQ(invalid->error, "invalid_request");
+
+  const auto started =
+      fetch(823, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({}));
+  ASSERT_TRUE(started);
+  EXPECT_TRUE(started->ok) << started->error.value_or("");
+  EXPECT_EQ(started->model_id, "zenz");
+  std::optional<ipc::CatalogFetchResponse> done;
+  for (int i = 0; i < 1000; ++i) {
+    done = fetch(824, ipc::MessageType::QueryCatalogFetch, "{}");
+    if (!done || done->state == "done") break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(done);
+  ASSERT_EQ(done->state, "done");
+  EXPECT_EQ(done->status, "downloaded") << done->result_error;
+  EXPECT_EQ(done->received_bytes, 4096u);
+  EXPECT_EQ(done->total_bytes, 4096u);
+  EXPECT_EQ(azookey::core::Utf8Path(done->path),
+            azookey::host::DefaultZenzaiModelDirectory(models) / "zenz.gguf");
+  config.catalog_fetch->Shutdown();
+  RemovePathNoThrow(root);
+}
+
+TEST_F(DispatcherTest, CatalogFetchWithoutAServiceOrBeforeTheHandshakeIsRefused) {
+  auto without = dispatcher.Dispatch(MakeReq(830, ipc::MessageType::QueryCatalogFetch, "{}"));
+  ASSERT_TRUE(without);
+  auto parsed = ipc::ParseCatalogFetchResponse(without->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, "catalog_unavailable");
+  const auto handshake = dispatcher.Dispatch(MakeReq(
+      831, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(CatalogTestHandshake())));
+  ASSERT_TRUE(handshake);
+  const auto capabilities = ipc::ParseHandshakeResponse(handshake->payload_json)->capabilities;
+  EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(), "fetch_catalog_model"),
+            capabilities.end());
+
+  auto config = DefaultDispatcherConfig();
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto before = token_dispatcher.Dispatch(
+      MakeReq(832, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({})));
+  ASSERT_TRUE(before);
+  parsed = ipc::ParseCatalogFetchResponse(before->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, "not authenticated");
 }
 
 #if !AZOOKEY_WITH_LLAMA_CPP

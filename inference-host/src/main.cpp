@@ -43,6 +43,8 @@
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/BackendSelector.h"
+#include "azookey/host/CatalogFetchService.h"
+#include "azookey/host/CatalogModelMatcher.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
 #include "azookey/host/HostStartup.h"
@@ -120,6 +122,22 @@ class NeologdPackSinkGuard {
 
  private:
   std::shared_ptr<NeologdPackSink> sink_;
+};
+
+// Stops a catalog fetch in progress and joins its thread when main leaves scope, before the
+// engine and the log the fetch reports to go away; Dispatcher copies may still hold the service.
+class CatalogFetchShutdownGuard {
+ public:
+  explicit CatalogFetchShutdownGuard(std::shared_ptr<azookey::host::CatalogFetchService> service)
+      : service_(std::move(service)) {}
+  ~CatalogFetchShutdownGuard() {
+    if (service_) service_->Shutdown();
+  }
+  CatalogFetchShutdownGuard(const CatalogFetchShutdownGuard&) = delete;
+  CatalogFetchShutdownGuard& operator=(const CatalogFetchShutdownGuard&) = delete;
+
+ private:
+  std::shared_ptr<azookey::host::CatalogFetchService> service_;
 };
 
 // DEV-1597 (inline-english-candidate-spec section 4.8): registers the
@@ -1022,6 +1040,19 @@ int main(int argc, char** argv) {
   neologd_pack_sink->layer = std::make_shared<azookey::host::NeologdLayerState>();
   neologd_pack_sink->network_allowed = !settings_store.settings().offline_mode;
   NeologdPackSinkGuard neologd_pack_guard(neologd_pack_sink);
+  // DEV-1821: the default catalog matches model.selectedPath at each load (the format of the
+  // matched entry) and backs the settings app's fetch. The fetch shares the neologd pack's
+  // offline switch; the service is shut down here, before the engine and the log go away.
+  const auto catalog_matcher =
+      azookey::host::MakeDefaultCatalogModelMatcher(user_paths->models_dir);
+  const auto catalog_fetch =
+      catalog_matcher
+          ? std::make_shared<azookey::host::CatalogFetchService>(
+                catalog_matcher,
+                [] { return std::make_unique<azookey::host::HttpPackDownloader>(); },
+                [sink = neologd_pack_sink] { return sink->network_allowed.load(); }, &runtime_log)
+          : nullptr;
+  CatalogFetchShutdownGuard catalog_fetch_guard(catalog_fetch);
   // Settings reach the pack only at startup (auto-word-registration-spec section 15.14),
   // except that offline mode keeps blocking its network access during the session.
   // Called once this Host owns its transport, so a rejected duplicate never downloads.
@@ -1065,8 +1096,11 @@ int main(int argc, char** argv) {
                 << " (falling back to SimpleConverter)" << std::endl;
     }
   } else if (settings_store.settings().model.auto_load_on_host_start) {
-    const bool preload_started = engine.StartModelPreload(azookey::host::ModelLoadOptions{
-        config.model_path, config.backend, config.n_gpu_layers, config.inference_threads});
+    azookey::host::ModelLoadOptions preload{config.model_path, config.backend, config.n_gpu_layers,
+                                            config.inference_threads};
+    preload.resolve_prompt_format =
+        azookey::host::CatalogPromptFormatResolver(catalog_matcher, config.model_path);
+    const bool preload_started = engine.StartModelPreload(std::move(preload));
     LogBusinessOutcome(runtime_log,
                        preload_started ? azookey::logging::RuntimeLogLevel::Info
                                        : azookey::logging::RuntimeLogLevel::Warn,
@@ -1114,6 +1148,8 @@ int main(int argc, char** argv) {
   dconf.on_network_policy_applied = [sink = neologd_pack_sink](bool network_allowed) {
     sink->network_allowed = network_allowed;
   };
+  dconf.catalog_matcher = catalog_matcher;
+  dconf.catalog_fetch = catalog_fetch;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }
@@ -1183,7 +1219,7 @@ int main(int argc, char** argv) {
   };
   const auto reselect_backend =
       [&engine, &settings_store, &runtime_log, &current_auto_backend, &auto_backend,
-       explicit_backend, explicit_model_path, cli_model_path,
+       explicit_backend, explicit_model_path, cli_model_path, catalog_matcher,
        update_config_mutex = dconf.update_config_mutex](azookey::host::PowerSource source) {
         std::lock_guard<std::mutex> lock(*update_config_mutex);
         const auto& settings = settings_store.settings();
@@ -1211,8 +1247,14 @@ int main(int argc, char** argv) {
         if (explicit_model_path) next.model_path = cli_model_path;
         engine.ApplyConfig(next);
         if (next.model_path.empty()) return;
-        const auto loaded = engine.LoadModelWithResult(azookey::host::ModelLoadOptions{
-            next.model_path, next.backend, next.n_gpu_layers, next.inference_threads});
+        azookey::host::ModelLoadOptions reload{next.model_path, next.backend, next.n_gpu_layers,
+                                               next.inference_threads};
+        // A --model path is not model.selectedPath, so it is not matched (as at startup).
+        if (!explicit_model_path) {
+          reload.resolve_prompt_format =
+              azookey::host::CatalogPromptFormatResolver(catalog_matcher, next.model_path);
+        }
+        const auto loaded = engine.LoadModelWithResult(reload);
         LogBusinessOutcome(runtime_log,
                            loaded.ok ? azookey::logging::RuntimeLogLevel::Info
                                      : azookey::logging::RuntimeLogLevel::Warn,

@@ -83,4 +83,52 @@ std::string HostCallStatusResource(HostCallStatus status) {
   return "HostCall_Failed";
 }
 
+std::string CatalogFetchErrorResource(std::string_view error) {
+  if (error.starts_with("format:")) error = "format";
+  const bool known = std::find(kCatalogFetchErrorCodes.begin(), kCatalogFetchErrorCodes.end(),
+                               error) != kCatalogFetchErrorCodes.end();
+  if (!known) return "CatalogFetchError_other";
+  std::string name = "CatalogFetchError_";
+  for (const char ch : error) name.push_back(ch == ' ' ? '_' : ch);
+  return name;
+}
+
+std::string CatalogFetchResultResource(const azookey::ipc::CatalogFetchResponse& response) {
+  if (response.status == "downloaded") return "Models_Catalog_Result_downloaded";
+  if (response.status == "already_valid") return "Models_Catalog_Result_already_valid";
+  if (response.status == "offline") return "Models_Catalog_Result_offline";
+  if (response.status == "not_fetchable") return "Models_Catalog_Result_not_fetchable";
+  return CatalogFetchErrorResource(response.result_error);
+}
+
+bool CatalogFetchSucceeded(const azookey::ipc::CatalogFetchResponse& response) {
+  return response.state == "done" && !response.path.empty() &&
+         (response.status == "downloaded" || response.status == "already_valid");
+}
+
+std::string CatalogEntryStateResource(std::string_view state) {
+  if (state == "verified") return "Models_Catalog_State_verified";
+  if (state == "mismatch") return "Models_Catalog_State_mismatch";
+  return "Models_Catalog_State_missing";
+}
+
+uint32_t ProgressPercent(uint64_t received, uint64_t total) {
+  if (total == 0) return 0;
+  if (received >= total) return 100;
+  // received < total, so the product of received and 100 is computed without overflow by
+  // dividing first when needed.
+  const uint64_t percent =
+      received > UINT64_MAX / 100 ? received / (total / 100) : received * 100 / total;
+  return static_cast<uint32_t>(std::min<uint64_t>(percent, 99));
+}
+
+bool CatalogFetchStallWatch::Stalled(uint64_t received, Clock::time_point now) {
+  if (received != received_) {
+    received_ = received;
+    last_change_ = now;
+    return false;
+  }
+  return now - last_change_ > limit_;
+}
+
 }  // namespace azookey::settings

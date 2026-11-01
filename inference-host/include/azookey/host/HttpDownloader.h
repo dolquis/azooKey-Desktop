@@ -30,6 +30,10 @@ struct HttpDownloadRequest {
   // already matches is still reused; otherwise false fails before any network
   // operation, and a change to false is cooperative cancellation like the above.
   std::function<bool()> network_allowed;
+  // Called on the calling thread after each chunk is written to <destination>.part, with the
+  // bytes the part file now holds (a resumed prefix included) and the full size the response
+  // announces (0 when it sends no Content-Length).
+  std::function<void(uint64_t received, uint64_t total)> progress;
 };
 
 struct HttpTextRequest {

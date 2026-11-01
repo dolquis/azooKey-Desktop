@@ -56,6 +56,10 @@ std::string TypeToString(MessageType type) {
       return "QueryPersona";
     case MessageType::DetectAnomalies:
       return "DetectAnomalies";
+    case MessageType::FetchCatalogModel:
+      return "FetchCatalogModel";
+    case MessageType::QueryCatalogFetch:
+      return "QueryCatalogFetch";
     default: return "Unknown";
   }
 }
@@ -92,6 +96,8 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ResetLearningStore") return MessageType::ResetLearningStore;
   if (value == "QueryPersona") return MessageType::QueryPersona;
   if (value == "DetectAnomalies") return MessageType::DetectAnomalies;
+  if (value == "FetchCatalogModel") return MessageType::FetchCatalogModel;
+  if (value == "QueryCatalogFetch") return MessageType::QueryCatalogFetch;
   return MessageType::Unknown;
 }
 

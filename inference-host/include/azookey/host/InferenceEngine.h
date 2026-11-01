@@ -180,6 +180,9 @@ struct ModelLoadOptions {
   bool mock_zenzai_candidates_for_tests{false};
   // Format declared by the model catalog entry. Unset infers it from the GGUF vocabulary.
   std::optional<ZenzaiPromptFormat> prompt_format;
+  // When prompt_format is unset, asked for it on the loading thread once the file passed the
+  // probe (DEV-1821: the catalog match hashes the file, which must not hold up the caller).
+  std::function<std::optional<ZenzaiPromptFormat>()> resolve_prompt_format;
   // Test-only hook used to prove loading work runs outside state_mutex_.
   std::function<void()> before_probe_for_tests;
   // Test-only fault injection at each backend load attempt.

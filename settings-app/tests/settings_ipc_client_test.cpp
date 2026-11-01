@@ -237,6 +237,59 @@ TEST(SettingsIpcClientTest, AHostWithoutTheCapabilityIsNeverSentTheRequest) {
   EXPECT_EQ(host.requests(), 0);
 }
 
+// DEV-1821: the start and each poll are separate one-request calls, both behind the capability.
+TEST(SettingsIpcClientTest, CatalogFetchStartsThenPollsAndNeedsItsCapability) {
+  std::vector<azookey::ipc::MessageType> seen_types;
+  std::string seen_start;
+  FakeHost host(
+      {"fetch_catalog_model"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+        seen_types.push_back(type);
+        azookey::ipc::CatalogFetchResponse response;
+        response.model_id = "zenz-v3.2-small";
+        response.total_bytes = 73871936;
+        if (type == azookey::ipc::MessageType::FetchCatalogModel) {
+          seen_start = payload;
+          response.state = "running";
+        } else {
+          EXPECT_EQ(payload, "{}");
+          response.state = "done";
+          response.received_bytes = response.total_bytes;
+          response.status = "downloaded";
+          response.path = "C:\\models\\zenzai\\ggml-model-Q5_K_M.gguf";
+        }
+        return std::optional<std::string>(azookey::ipc::BuildCatalogFetchResponse(response));
+      });
+  ASSERT_TRUE(host.started());
+
+  const auto started =
+      azookey::settings::RequestFetchCatalogModel(host.Options(), {"zenz-v3.2-small"});
+  ASSERT_EQ(started.status, HostCallStatus::Ok);
+  ASSERT_TRUE(started.response);
+  EXPECT_EQ(started.response->state, "running");
+  const auto parsed_start = azookey::ipc::ParseFetchCatalogModelRequest(seen_start);
+  ASSERT_TRUE(parsed_start);
+  EXPECT_EQ(parsed_start->model_id, "zenz-v3.2-small");
+
+  const auto polled = azookey::settings::RequestQueryCatalogFetch(host.Options());
+  ASSERT_EQ(polled.status, HostCallStatus::Ok);
+  ASSERT_TRUE(polled.response);
+  EXPECT_EQ(polled.response->status, "downloaded");
+  EXPECT_EQ(polled.response->path, "C:\\models\\zenzai\\ggml-model-Q5_K_M.gguf");
+  ASSERT_EQ(seen_types.size(), 2U);
+  EXPECT_EQ(seen_types[0], azookey::ipc::MessageType::FetchCatalogModel);
+  EXPECT_EQ(seen_types[1], azookey::ipc::MessageType::QueryCatalogFetch);
+
+  FakeHost older({"list_models"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(older.started());
+  EXPECT_EQ(azookey::settings::RequestFetchCatalogModel(older.Options(), {}).status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(azookey::settings::RequestQueryCatalogFetch(older.Options()).status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(older.requests(), 0);
+}
+
 TEST(SettingsIpcClientTest, LearningDataMessagesRoundTrip) {
   std::vector<azookey::ipc::MessageType> seen;
   FakeHost host({"learning_data_management"}, [&](azookey::ipc::MessageType type,

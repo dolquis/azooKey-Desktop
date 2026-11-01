@@ -53,6 +53,7 @@ inline constexpr const char* kCapabilityLearningData = "learning_data_management
 inline constexpr const char* kCapabilityLearningReset = "learning_reset";
 inline constexpr const char* kCapabilityPersona = "persona";
 inline constexpr const char* kCapabilityDetectAnomalies = "detect_anomalies";
+inline constexpr const char* kCapabilityFetchCatalogModel = "fetch_catalog_model";
 
 // Connects and completes the Handshake only, to learn whether the Host advertises `capability`
 // before the user is asked to confirm an operation. Ok means it does; Unsupported means it does
@@ -60,10 +61,18 @@ inline constexpr const char* kCapabilityDetectAnomalies = "detect_anomalies";
 HostCallStatus ProbeHostCapability(const SettingsIpcOptions& options, const char* capability);
 
 // Each call connects, completes the Handshake, sends one request and waits for its response.
+// With include_catalog the Host may hash the catalog's files first, so the call waits as long as
+// a benchmark.
 HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
     const SettingsIpcOptions& options, const azookey::ipc::ListModelsRequest& request);
 HostCallResult<azookey::ipc::BenchmarkModelResponse> RequestBenchmarkModel(
     const SettingsIpcOptions& options, const azookey::ipc::BenchmarkModelRequest& request);
+// DEV-1821 (model-management-spec section 4.4): starts a catalog fetch on the Host, which
+// answers at once; QueryCatalogFetch then reports its progress and result.
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestFetchCatalogModel(
+    const SettingsIpcOptions& options, const azookey::ipc::FetchCatalogModelRequest& request);
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestQueryCatalogFetch(
+    const SettingsIpcOptions& options);
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(
     const SettingsIpcOptions& options, const azookey::ipc::ListLearningEntriesRequest& request);
 HostCallResult<azookey::ipc::ForgetLearningEntryResponse> RequestForgetLearningEntry(

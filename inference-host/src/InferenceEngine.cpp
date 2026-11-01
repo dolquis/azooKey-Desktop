@@ -1376,6 +1376,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   runtime_options.n_threads = next_config.inference_threads;
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   runtime_options.prompt_format = options.prompt_format;
+  if (!runtime_options.prompt_format && options.resolve_prompt_format) {
+    runtime_options.prompt_format = options.resolve_prompt_format();
+  }
   const auto load = [&]() {
     try {
       if (options.before_load_for_tests) {

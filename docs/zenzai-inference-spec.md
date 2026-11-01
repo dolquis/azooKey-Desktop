@@ -151,9 +151,10 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
   CONTROL 型（GGUF の `tokenizer.ggml.token_type` が 3）で、U+EE03 が語彙に無ければ
   `kanakanji-edge-v1`、それ以外は `zenz-v3` とする。ロードは GGUF の読み込み時に形式を決め、
   ロードの要求が形式を宣言していればそれを、無ければ推定値を使う。製品のロードは
-  `model.selectedPath` の GGUF を開き、catalog の entry を経由しないので、形式は推定で決まる。
-  R2 を再開した構成では、`selectedPath` の GGUF を catalog の entry に照合し、一致した entry の
-  `promptFormat` を R1 と R2 の両方に使う。照合できない GGUF は R1 だけで動き、推定値を使う
+  `model.selectedPath` の GGUF を Host に埋め込んだ既定の catalog の entry に照合し、照合できた
+  GGUF は entry の `promptFormat` を宣言値として使う。照合できない GGUF（利用者が置いた GGUF、
+  CLI の `--model` で指定した GGUF）は推定値を使う。R2 を再開した構成では、一致した entry の
+  `promptFormat` を R1 と R2 の両方に使い、照合できない GGUF は R1 だけで動く
   （`docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」）。
   QueryDiagnostics の `prompt_format`（`docs/dev-infrastructure-spec.md` §12.6）が宣言値または
   推定値を返し、診断 CLI は D-008 の `details.prompt_format` に載せる。

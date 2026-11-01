@@ -85,7 +85,8 @@ TEST(MessagesTest, TypeStringMapping) {
         azookey::ipc::MessageType::ExportLearningData,
         azookey::ipc::MessageType::ImportLearningData,
         azookey::ipc::MessageType::ResetLearningStore, azookey::ipc::MessageType::QueryPersona,
-        azookey::ipc::MessageType::DetectAnomalies}) {
+        azookey::ipc::MessageType::DetectAnomalies, azookey::ipc::MessageType::FetchCatalogModel,
+        azookey::ipc::MessageType::QueryCatalogFetch}) {
     EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
   }
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ListModels), "ListModels");

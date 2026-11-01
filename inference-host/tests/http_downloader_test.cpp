@@ -528,6 +528,33 @@ TEST(HttpDownloaderTest, ResumesPartFileWithRangeAndPromotesOnlyAfterVerificatio
   EXPECT_NE(server.request().find("Range: bytes=7-"), std::string::npos);
 }
 
+// DEV-1821: progress counts the resumed prefix, and the full size is the prefix plus the 206
+// response's Content-Length.
+TEST(HttpDownloaderTest, ProgressCountsTheResumedPrefixAndTheAnnouncedSize) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), true);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  constexpr size_t kPrefixSize = 7;
+  WriteFile(destination.wstring() + L".part", kFixture.substr(0, kPrefixSize));
+
+  std::vector<std::pair<uint64_t, uint64_t>> progress;
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.progress = [&progress](uint64_t received, uint64_t total) {
+    progress.emplace_back(received, total);
+  };
+  azookey::host::HttpDownloader downloader;
+  const auto result = downloader.Download(request);
+
+  ASSERT_EQ(result.status, azookey::host::HttpDownloadStatus::Downloaded);
+  ASSERT_FALSE(progress.empty());
+  EXPECT_GT(progress.front().first, kPrefixSize);
+  EXPECT_EQ(progress.back().first, kFixture.size());
+  for (const auto& [received, total] : progress) EXPECT_EQ(total, kFixture.size());
+}
+
 TEST(HttpDownloaderTest, RestartsFromBeginningWhenServerIgnoresRange) {
   WinsockScope winsock;
   ASSERT_TRUE(winsock.ok());

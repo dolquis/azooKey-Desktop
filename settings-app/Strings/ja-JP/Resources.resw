@@ -340,6 +340,33 @@
   <data name="Models_Bench_Iterations" xml:space="preserve"><value>完了した回数</value></data>
   <data name="Models_HistoryHeading" xml:space="preserve"><value>ベンチマーク履歴（Host が記録）</value></data>
   <data name="Models_HistoryEmpty" xml:space="preserve"><value>履歴はありません。</value></data>
+  <data name="Models_Catalog_Heading" xml:space="preserve"><value>取得できるモデル（既定の catalog）</value></data>
+  <data name="Models_Catalog_DefaultSuffix" xml:space="preserve"><value>（既定）</value></data>
+  <data name="Models_Catalog_State_missing" xml:space="preserve"><value>未取得</value></data>
+  <data name="Models_Catalog_State_verified" xml:space="preserve"><value>✅ 取得済み（SHA-256 が一致）</value></data>
+  <data name="Models_Catalog_State_mismatch" xml:space="preserve"><value>⚠️ 同じ名前の別のファイルがあります。置き換えないので、取得するには先にそのファイルを移してください。</value></data>
+  <data name="Models_Catalog_FetchButton" xml:space="preserve"><value>取得</value></data>
+  <data name="Models_Catalog_Fetching" xml:space="preserve"><value>🔄 取得中</value></data>
+  <data name="Models_Catalog_NotFetchableNote" xml:space="preserve"><value>このモデルには取得元がありません。手で models\zenzai に置いてください。</value></data>
+  <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
+  <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
+  <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。Host は取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
+  <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で Host が再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>
+  <data name="Models_Catalog_Result_downloaded" xml:space="preserve"><value>取得し、SHA-256 と形式を確かめました。</value></data>
+  <data name="Models_Catalog_Result_already_valid" xml:space="preserve"><value>SHA-256 が一致するファイルが既にあったので、それを使います。</value></data>
+  <data name="Models_Catalog_Result_offline" xml:space="preserve"><value>privacy.mode が offline のため取得しませんでした。</value></data>
+  <data name="Models_Catalog_Result_not_fetchable" xml:space="preserve"><value>このモデルには取得元がありません。</value></data>
+  <data name="CatalogFetchError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
+  <data name="CatalogFetchError_busy" xml:space="preserve"><value>別のモデルを取得中です。終わってからやり直してください。</value></data>
+  <data name="CatalogFetchError_unknown_model_id" xml:space="preserve"><value>Host の catalog にないモデルです。</value></data>
+  <data name="CatalogFetchError_catalog_unavailable" xml:space="preserve"><value>Host の catalog を使えません。</value></data>
+  <data name="CatalogFetchError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
+  <data name="CatalogFetchError_directory_unavailable" xml:space="preserve"><value>models\zenzai フォルダを作れませんでした。</value></data>
+  <data name="CatalogFetchError_destination_occupied" xml:space="preserve"><value>同じ名前の別のファイルがあるので、置き換えずに止めました。</value></data>
+  <data name="CatalogFetchError_download_failed" xml:space="preserve"><value>ダウンロードに失敗しました（接続、SHA-256 の不一致など）。</value></data>
+  <data name="CatalogFetchError_cancelled" xml:space="preserve"><value>Host が停止したため取得を中断しました。次に取得すると続きから再開します。</value></data>
+  <data name="CatalogFetchError_format" xml:space="preserve"><value>取得したファイルが GGUF の検証に通らなかったため削除しました。</value></data>
+  <data name="CatalogFetchError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
   <data name="LearningStore_learning" xml:space="preserve"><value>学習候補</value></data>
   <data name="LearningStore_user_dict" xml:space="preserve"><value>ユーザー辞書</value></data>
   <data name="LearningStore_typo" xml:space="preserve"><value>タイプミス補正</value></data>

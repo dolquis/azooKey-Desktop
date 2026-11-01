@@ -379,9 +379,26 @@ bool ReadResponse(HINTERNET request, uint64_t initial_size, uint64_t max_bytes,
   return !CheckCancelled(cancelled, error);
 }
 
+// The full size the response announces: Content-Length, plus the resumed prefix for a 206.
+// 0 when there is no usable Content-Length.
+uint64_t AnnouncedTotalSize(HINTERNET request, uint64_t initial_size) {
+  const auto value = QueryHeader(request, WINHTTP_QUERY_CONTENT_LENGTH);
+  if (!value || value->empty()) return 0;
+  uint64_t length = 0;
+  for (const auto ch : *value) {
+    if (ch < L'0' || ch > L'9') return 0;
+    const auto digit = static_cast<uint64_t>(ch - L'0');
+    if (length > (std::numeric_limits<uint64_t>::max() - digit) / 10) return 0;
+    length = length * 10 + digit;
+  }
+  return length > std::numeric_limits<uint64_t>::max() - initial_size ? 0 : initial_size + length;
+}
+
 bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, uint64_t max_bytes,
                         uint64_t* bytes_received, const std::function<bool()>& cancelled,
+                        const std::function<void(uint64_t, uint64_t)>& progress,
                         std::string* error) {
+  const uint64_t total = progress ? AnnouncedTotalSize(request, initial_size) : 0;
   if (!ReadResponse(
           request, initial_size, max_bytes, bytes_received, cancelled,
           [&](const unsigned char* data, DWORD size) {
@@ -390,6 +407,8 @@ bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, u
               *error = WindowsError("writing partial download");
               return false;
             }
+            // ReadResponse adds size to *bytes_received only after the sink returns.
+            if (progress) progress(initial_size + *bytes_received + size, total);
             return true;
           },
           error)) {
@@ -608,7 +627,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
     if (!file) return Failure(std::move(error));
     const uint64_t initial_size = partial ? resume_offset : 0;
     if (!ReadResponseToFile(http_request.get(), file.get(), initial_size, request.max_bytes,
-                            &result.bytes_received, cancelled, &error)) {
+                            &result.bytes_received, cancelled, request.progress, &error)) {
       return Failure(std::move(error));
     }
     file.reset();

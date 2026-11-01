@@ -456,8 +456,7 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 唯一の正とし、(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
 アーティファクトを指す**。ピン定義は、ビルド時に Host へ埋め込む既定の model catalog
 （`settings/default-model-catalog.json`、`docs/model-management-spec.md` §3.1.1「既定の
-catalog」）の `defaultModelId` の entry である。他の文書が「`expected.json` ピン」と呼ぶ
-ものも、この entry を指す。
+catalog」）の `defaultModelId` の entry である。
 
 > **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
 > HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
@@ -478,23 +477,22 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 | 方式 | v1.0 採否 | 理由 |
 |---|---|---|
 | (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、暫定確定（保守・CC-BY-SA、§1.6.2）でも不採用を維持する |
-| (b) 初回起動時オンデマンド DL | ✅ **v1.0 目標既定（M32 後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。M32 前（M28 時点）は (c) が operative |
+| (b) 初回起動時オンデマンド DL | **将来の判断（auto-DL の承認後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用する。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。起動時に利用者の操作なしでネットワークへ出る挙動なので、入れるかは別に判断する（下記「初回取得後の `selectedPath` コミット」）。それまでの取得は、利用者の操作による取得（設定アプリの取得ボタンと CLI の `models fetch`）が担う |
 | (c) 手動配置 | ✅ **常時併存（M28 の operative default 兼 恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
 
-**確定**: v1.0 の取得方式は **(b) 初回起動時 DL を目標既定、(c) 手動配置を常時
-フォールバック**とし、(a) は採らない。(b) と (c) は同一の配置レイアウト（後述）に
-収束するため、Host / M45 から見た「モデルがそこに在る」状態は取得方式に依存しない。
+**確定**: v1.0 の取得方式は **利用者の操作による取得と (c) 手動配置**とし、(a) は採らない。
+(b) 初回起動時 DL は auto-DL の承認後に入れるかを判断する。取得のどの経路も同一の配置
+レイアウト（後述）に収束するため、Host / M45 から見た「モデルがそこに在る」状態は取得方式に
+依存しない。
 
 **マイルストーン順序の制約（初回パッケージングを M32 の DL 基盤に依存させない）**: (b) は共有
 ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。MVP 直接配布は
 **M11/M12（MVP MSI 構築・公開）→ M32** の順（延期した M29 は前提でない。§0 / roadmap 依存グラフ）で、初回
 パッケージング時点では `HttpDownloader` が未だ存在しない。したがって **初回出荷時の operative
-default は (c) 手動配置**とし、(b) は **M32 の共有 `HttpDownloader` が揃った時点で既定化する fast-follow** として扱う
-（初回パッケージングで one-off の重複ダウンローダを書かない＝二重実装回避）。この (b) の実装は
-**roadmap M32 のスコープに計上**し（`plans/windows-port-roadmap.md` M32 実装範囲の注記）、
-宙に浮かせない。(b) を v1.0 ローンチまでに既定化したい場合は、ダウンローダ基盤の切り出しを
-初回パッケージング（M11/M12）の前提として前倒しする（roadmap 側で M32 の該当スコープを M11/M12 前へ移す）
-必要があり、これは roadmap 更新を伴う別判断とする。
+default は (c) 手動配置**とする（初回パッケージングで one-off の重複ダウンローダを書かない＝二重
+実装回避）。M32 の共有 `HttpDownloader` の上には、利用者の操作による取得を載せる。(b) を既定に
+するかは auto-DL の承認後の将来の判断とし、入れる場合は **roadmap M32 のスコープ**
+（`plans/windows-port-roadmap.md` M32 の受け入れ条件の auto-DL 承認の分岐）で扱う。
 
 ##### ライセンス分岐（DEV-202 連動。暫定確定＝配信元は上流 HF に固定。§1.6.2）
 
@@ -542,6 +540,16 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       autoselect / (c2) 明示選択は network なしで成立）。ガードを満たす場合、
       ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
       `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
+      起動時に利用者の操作なしでネットワークへ出る挙動の変更なので、(b) を Host に
+      入れるかは将来の判断とし、入れるときに本項の前提ガードを適用する。それまでの
+      取得の入口は、次の利用者の操作による取得と CLI の `models fetch` だけである。
+    - **利用者の操作による取得（設定アプリ）**: 設定アプリのモデル ペインは既定の
+      catalog の entry を一覧し、利用者が押した取得ボタンから Host に取得させる
+      （IPC は `model-management-spec.md` §4.4、取得機構は同 §3.1.2）。`privacy.mode=offline`
+      では接続しない。取得時の SHA-256 のピン一致と §3.3 の R1 検証を probe とみなし、
+      成功したら確定パスを「一般」のモデルのパス欄へ入れる。commit は (c2) と同じく共通の
+      保存ボタンが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
+      行う。取得しただけでは `selectedPath` を変えない。
     - **(c) 手動配置**: 2 経路を持つ。
         - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
           **`model.enabled` かつ `model.autoLoadOnHostStart=true`
@@ -601,8 +609,9 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
   ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
   と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
-- **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
-  配信元分岐を引き継ぐ。
+- **モデル DL の UI**: 設定アプリのモデル ペインの取得ボタン（上記「利用者の操作による
+  取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
+  配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
 
 #### 1.6.2 配布ライセンス結論（DEV-202・v1.0 確定）
 
@@ -1211,7 +1220,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
-| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示（`model-management-spec.md` §4 / §6） |
+| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）（`model-management-spec.md` §4 / §6） |
 | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7） |
 | Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |

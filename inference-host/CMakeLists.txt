@@ -35,6 +35,8 @@ add_library(azookey_host STATIC
   src/MmapModelLoader.cpp
   src/ModelsCli.cpp
   src/NewWordsCli.cpp
+  src/CatalogFetchService.cpp
+  src/CatalogModelMatcher.cpp
   src/ModelCatalog.cpp
   src/ModelFetch.cpp
   src/NeologdPack.cpp

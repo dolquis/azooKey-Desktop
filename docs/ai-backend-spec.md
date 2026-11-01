@@ -313,7 +313,7 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 | 経路 | 担当 M | メソッド | 追加要件 |
 |---|---|---|---|
 | chat/completions 呼び出し | **M16**（本書） | POST + JSON | Bearer 認証、`response_format`、（Phase 6）SSE ストリーミング |
-| モデル DL（GGUF 等） | **M32** | GET | `.part`→SHA256 検証→rename、レジューム、`expected.json` ピン照合 |
+| モデル DL（GGUF 等） | **M32** | GET | `.part`→SHA256 検証→rename、レジューム、既定の catalog（`docs/model-management-spec.md` §3.1.1）の entry との照合 |
 
 - モデル DL は既存の確定ファイルが期待 SHA256 と一致する場合、ネットワーク I/O を
   行わない。

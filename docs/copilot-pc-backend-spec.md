@@ -447,15 +447,22 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   （必須の artifact、`promptFormat` の置き場所を含む）は `docs/model-management-spec.md`
   §3.1.1「catalog v2」が持つ。
 - 設定の `model.selectedPath` は R1 artifact（GGUF）の絶対パスのまま使い、settings の schema は
-  変えない。Host は `selectedPath` の GGUF を catalog の entry に照合し（`zenzai\` 配下にあり、
+  変えない。Host は `selectedPath` の GGUF を catalog の entry に照合し（`zenzai\` の直下にあり、
   ファイル名と SHA-256 が R1 artifact と一致する）、一致した entry の R2 artifact を解決する。
+  照合はモデルをロードするたび（起動時、`UpdateConfig`、`LoadModel`、電源の変化での再ロード）に
+  ロードするスレッドで行い、照合には Host に埋め込んだ既定の catalog を使う。`selectedPath` を
+  経由しないロード（CLI の `--model` で起動したときのロードと、`BenchmarkModel` の別エンジン）は
+  照合せず、形式を語彙から推定する。`selectedPath` の
+  `\\?\` 接頭辞と末尾の区切りは除き、`selectedPath` と `zenzai\` の両方を解決した長い形（8.3
+  短縮名やリンクを展開した形）にそろえてから比べる。解決できないパスは書かれたまま比べる。
   一致した entry の `promptFormat` は R1 と R2 の両方に使う。照合できない GGUF（利用者が置いた
   GGUF）は R1 だけで使い、形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。
   R2 だけの構成は持たない（§4.5 で R1 CPU が終端のため）。設定の移行、設定アプリのモデル選択、
   D-007 / D-008 は変わらない。
 - 照合に使う GGUF の SHA-256 は、`docs/model-management-spec.md` §3.2 の `LocalModelEntry.sha256`
   と同じく初回に計算して保持し、ロードのたびには計算しない。ファイルのサイズか更新時刻が
-  変わったときは計算し直す。
+  変わったときは計算し直す。保持するのは Host のプロセスのメモリだけで、Host を起動し直すと
+  最初のロードで計算し直す。名前と置き場所が entry に合わないファイルは計算しない。
 - 診断 D-007 / D-008（`docs/dev-infrastructure-spec.md` §12.2）の判定表は変えない。
   `selectedPath` は GGUF を指すので R1 の判定がそのまま通る。R2 artifact の欠落や SHA-256 の
   不一致は、R1 で動くので D-007 / D-008 の error にせず、§4.5 の降格理由（`last_error` と

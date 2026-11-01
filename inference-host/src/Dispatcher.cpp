@@ -337,9 +337,11 @@ std::optional<PunctuationResult> InsertLivePunctuation(const EngineConfig& confi
 
 // M63 (docs/mixed-english-auto-conversion-spec.md section 6): the split the
 // Host adopts, or nullopt to handle the request as with M63 off (section 10).
-std::optional<core::MixedRomajiSplit> SplitComposition(InferenceEngine& engine,
-                                                       const std::string& raw_romaji,
-                                                       bool inline_high_confidence) {
+// With `alternatives`, also the readable words of its J segments that section
+// 8.3 item 3 turns English one at a time, from the same dictionary snapshot.
+std::optional<core::MixedRomajiSplit> SplitComposition(
+    InferenceEngine& engine, const std::string& raw_romaji, bool inline_high_confidence,
+    std::vector<core::MixedRomajiAlternative>* alternatives = nullptr) {
   core::MixedRomajiSplitOptions options;
   options.min_english_length = engine.config().english.min_length;
   options.split_inline = true;
@@ -358,22 +360,30 @@ std::optional<core::MixedRomajiSplit> SplitComposition(InferenceEngine& engine,
       };
     }
     splits = core::SplitMixedRomaji(raw_romaji, lookup, options);
+    if (alternatives && !splits.empty())
+      *alternatives =
+          core::ReadableEnglishAlternatives(raw_romaji, splits.front(), lookup, options);
   });
   if (splits.empty()) return std::nullopt;
   // Section 8.1: a sure segment typed without capitals (so sure by (ii)) whose
   // key the user has turned down (section 11) is low confidence, for the whole
   // composition too. Looked up after the dictionary snapshot is released.
-  for (auto& segment : splits.front().segments) {
-    if (segment.kind != core::MixedRomajiSegmentKind::English ||
-        segment.confidence != core::EnglishSegmentConfidence::High)
-      continue;
-    const auto typed =
-        std::string_view(raw_romaji).substr(segment.raw_begin, segment.raw_end - segment.raw_begin);
-    if (std::any_of(typed.begin(), typed.end(), [](char c) { return c >= 'A' && c <= 'Z'; }))
-      continue;
-    if (engine.IsEnglishSuppressed(EnglishLookupKey(typed)))
-      segment.confidence = core::EnglishSegmentConfidence::Low;
-  }
+  const auto suppress = [&](core::MixedRomajiSplit& split) {
+    for (auto& segment : split.segments) {
+      if (segment.kind != core::MixedRomajiSegmentKind::English ||
+          segment.confidence != core::EnglishSegmentConfidence::High)
+        continue;
+      const auto typed = std::string_view(raw_romaji)
+                             .substr(segment.raw_begin, segment.raw_end - segment.raw_begin);
+      if (std::any_of(typed.begin(), typed.end(), [](char c) { return c >= 'A' && c <= 'Z'; }))
+        continue;
+      if (engine.IsEnglishSuppressed(EnglishLookupKey(typed)))
+        segment.confidence = core::EnglishSegmentConfidence::Low;
+    }
+  };
+  suppress(splits.front());
+  if (alternatives)
+    for (auto& alternative : *alternatives) suppress(alternative.split);
   return std::move(splits.front());
 }
 
@@ -480,10 +490,15 @@ std::optional<std::vector<ipc::LiveSegment>> SegmentsOf(const std::string& surfa
 
 // Section 8.3, items 1 to 3, in order; empty when none of them differs from
 // the list M63 off returns. all_japanese is the first candidate of the
-// conversion of the TIP's kana (item 2, or item 1 when no segment is sure).
+// conversion of the TIP's kana (item 2, or item 1 when no segment is sure);
+// nullopt leaves it out, for a split of one J segment whose list keeps the
+// first candidate of M63 off. Item 3 turns the low-confidence E segments
+// English first, then the readable words of `alternatives`.
 std::vector<ipc::CandidateField> MixedCandidates(
     InferenceEngine& engine, const ipc::QueryCandidatesRequest& request,
-    const core::MixedRomajiSplit& split, const std::optional<core::Candidate>& all_japanese,
+    const core::MixedRomajiSplit& split,
+    const std::vector<core::MixedRomajiAlternative>& alternatives,
+    const std::optional<core::Candidate>& all_japanese,
     std::chrono::steady_clock::time_point deadline, const std::atomic<bool>* cancel,
     const InferenceTelemetry* telemetry, const TagBoosts* tag_boosts) {
   constexpr size_t kMaxLowConfidenceConversions = 3;
@@ -499,11 +514,12 @@ std::vector<ipc::CandidateField> MixedCandidates(
   }
   // Section 10: no conversion starts after the deadline, a running one ends by
   // it, and one it or the Zenzai budget cut short is left out.
-  const auto convert = [&](const std::vector<bool>& flags) -> std::optional<ipc::CandidateField> {
+  const auto convert = [&](const core::MixedRomajiSplit& from,
+                           const std::vector<bool>& flags) -> std::optional<ipc::CandidateField> {
     if (std::chrono::steady_clock::now() >= deadline ||
         (cancel && cancel->load(std::memory_order_acquire)))
       return std::nullopt;
-    const auto mixed = BuildMixedReading(split, request.raw_romaji, flags);
+    const auto mixed = BuildMixedReading(from, request.raw_romaji, flags);
     MixedConversionOptions options;
     options.english_ranges = mixed.english_ranges;
     options.deadline = deadline;
@@ -527,7 +543,7 @@ std::vector<ipc::CandidateField> MixedCandidates(
   };
   std::vector<ipc::CandidateField> out;
   if (std::find(english.begin(), english.end(), true) != english.end())
-    if (auto first = convert(english)) out.push_back(std::move(*first));
+    if (auto first = convert(split, english)) out.push_back(std::move(*first));
   const bool mixed_first = !out.empty();
   if (all_japanese) {
     auto field = ToField(*all_japanese);
@@ -546,7 +562,17 @@ std::vector<ipc::CandidateField> MixedCandidates(
     if (flipped++ == kMaxLowConfidenceConversions) break;
     auto flags = english;
     flags[index] = true;
-    if (auto candidate = convert(flags)) out.push_back(std::move(*candidate));
+    if (auto candidate = convert(split, flags)) out.push_back(std::move(*candidate));
+  }
+  for (const auto& alternative : alternatives) {
+    if (flipped++ >= kMaxLowConfidenceConversions) break;
+    const auto& segments = alternative.split.segments;
+    std::vector<bool> flags(segments.size());
+    for (size_t i = 0; i < segments.size(); ++i)
+      flags[i] = i == alternative.english_segment ||
+                 (segments[i].kind == core::MixedRomajiSegmentKind::English &&
+                  segments[i].confidence == core::EnglishSegmentConfidence::High);
+    if (auto candidate = convert(alternative.split, flags)) out.push_back(std::move(*candidate));
   }
   std::vector<ipc::CandidateField> unique;
   for (auto& field : out) {
@@ -1110,6 +1136,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   std::string corrected_reading;
   std::optional<core::MixedRomajiSegment> mixed_first;
   std::vector<ipc::CandidateField> mixed_front;
+  bool mixed_after_first = false;  // Section 8.3 item 3 behind the first of M63 off.
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
       trace.ProtocolError();
@@ -1142,10 +1169,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // window only, and never for a secure request (DEV-1689).
     const bool mixed_english = !parsed->live && !parsed->secure && parsed->english_candidates &&
                                !parsed->raw_romaji.empty() && parsed->mixed_english;
-    const auto split = mixed_english
-                           ? SplitComposition(*engine_, parsed->raw_romaji,
-                                              config_.mixed_english_inline_high_confidence)
-                           : std::nullopt;
+    std::vector<core::MixedRomajiAlternative> alternatives;
+    const auto split =
+        mixed_english
+            ? SplitComposition(*engine_, parsed->raw_romaji,
+                               config_.mixed_english_inline_high_confidence, &alternatives)
+            : std::nullopt;
     // Section 12: a composition split into J and E segments is converted as
     // typed, so no corrected reading comes back with its segments.
     MixedConversionOptions as_typed;
@@ -1195,9 +1224,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
           if (sure) mixed_first = std::move(word);
         } else if (IsInlineSplit(split)) {
           // M63-B section 8.3, on top of M60.
-          mixed_front = MixedCandidates(*engine_, *parsed, *split, all_japanese,
+          mixed_front = MixedCandidates(*engine_, *parsed, *split, alternatives, all_japanese,
                                         received + config_.mixed_english_conversion_deadline,
                                         cancel.get(), trace.context(), &tag_boosts);
+        } else if (split && !alternatives.empty() && corrected_reading.empty()) {
+          // Section 8.3 item 3 for a split of one J segment: the list of M63
+          // off, typo correction and the DEV-1734 reading included, with the
+          // readable words turned English right after its first candidate. A
+          // corrected reading is not the typed one the words come from.
+          mixed_front = MixedCandidates(*engine_, *parsed, *split, alternatives, std::nullopt,
+                                        received + config_.mixed_english_conversion_deadline,
+                                        cancel.get(), trace.context(), &tag_boosts);
+          mixed_after_first = true;
         }
       }
     }
@@ -1217,8 +1255,31 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   if (mixed_first && !res.candidates.empty())
     res.candidates.front().segments = {
         EnglishLiveSegment(*mixed_first, parsed->raw_romaji, res.candidates.front().score)};
+  // Section 8.3 for a split of one J segment: the first candidate of M63 off
+  // stays as it is, item 3 follows it, and the rest follow without their
+  // surfaces. Between the two by score, so a score-ordered consumer keeps it.
+  if (!mixed_front.empty() && mixed_after_first && !res.candidates.empty()) {
+    const auto& first = res.candidates.front();
+    std::erase_if(mixed_front, [&](const auto& front) { return front.surface == first.surface; });
+    res.candidates.erase(std::remove_if(res.candidates.begin() + 1, res.candidates.end(),
+                                        [&](const ipc::CandidateField& c) {
+                                          return std::any_of(mixed_front.begin(), mixed_front.end(),
+                                                             [&](const auto& front) {
+                                                               return front.surface == c.surface;
+                                                             });
+                                        }),
+                         res.candidates.end());
+    const double top = res.candidates.front().score;
+    for (auto& front : mixed_front) {
+      if (res.candidates.size() > 1) front.score = (std::max)(front.score, res.candidates[1].score);
+      front.score = (std::min)(front.score, top);
+    }
+    res.candidates.insert(res.candidates.begin() + 1, std::make_move_iterator(mixed_front.begin()),
+                          std::make_move_iterator(mixed_front.end()));
+    mixed_front.clear();
+  }
   // Section 8.3: items 1 to 3 lead, and the rest follow without their surfaces.
-  if (!mixed_front.empty()) {
+  if (!mixed_front.empty() && !mixed_after_first) {
     std::erase_if(res.candidates, [&](const ipc::CandidateField& c) {
       return std::any_of(mixed_front.begin(), mixed_front.end(),
                          [&](const auto& front) { return front.surface == c.surface; });

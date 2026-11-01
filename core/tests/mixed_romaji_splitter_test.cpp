@@ -263,4 +263,78 @@ TEST(MixedRomajiSplitterTest, LatticeIsOptInAndHasAKillSwitch) {
   EXPECT_EQ(Describe(SplitMixedRomaji("Kyouha", dictionary, Inline()).front()), "E:Kyouha(high)");
 }
 
+// Section 8.3 item 3 (DEV-1820): a readable word inside a J segment of the
+// adopted split, turned English with everything else as adopted.
+std::vector<std::string> Alternatives(std::string_view raw, const EnglishWordLookup& lookup,
+                                      const azookey::core::MixedRomajiSplitOptions& options) {
+  const auto splits = SplitMixedRomaji(raw, lookup, options);
+  std::vector<std::string> out;
+  if (splits.empty()) return out;
+  for (const auto& alternative :
+       azookey::core::ReadableEnglishAlternatives(raw, splits.front(), lookup, options)) {
+    const auto& english = alternative.split.segments[alternative.english_segment];
+    EXPECT_EQ(english.kind, MixedRomajiSegmentKind::English) << raw;
+    EXPECT_EQ(english.confidence, EnglishSegmentConfidence::Low) << raw;
+    out.push_back(Describe(alternative.split));
+  }
+  return out;
+}
+
+TEST(MixedRomajiSplitterTest, ReadableWordInAJapaneseSegmentTurnsEnglishOnItsOwn) {
+  const auto dictionary = Dictionary({{"sit", {"sit"}}, {"kit", {"kit"}}, {"kite", {"kite"}}});
+  const auto splits = SplitMixedRomaji("asitakitekudasai", dictionary, Inline());
+  ASSERT_FALSE(splits.empty());
+  EXPECT_EQ(Describe(splits.front()), "J:あしたきてください");
+  // Trap 1: the cheaper paths through sit and kit (a|sit|akitekudasai) leave
+  // ASCII in their kana, so only kite, with the J segment cut at its kana.
+  const auto alternatives = azookey::core::ReadableEnglishAlternatives(
+      "asitakitekudasai", splits.front(), dictionary, Inline());
+  ASSERT_EQ(alternatives.size(), 1u);
+  EXPECT_EQ(Describe(alternatives[0].split), "J:あした | E:kite(low) | J:ください");
+  EXPECT_EQ(alternatives[0].english_segment, 1u);
+  EXPECT_EQ(alternatives[0].split.segments[1].raw_begin, 5u);
+  EXPECT_EQ(alternatives[0].split.segments[1].raw_end, 9u);
+  // The path costs the E edge alone more than the adopted one.
+  EXPECT_NEAR(alternatives[0].split.cost, splits.front().cost + 1.0 - 0.05 * 4 + 2.0, 1e-9);
+  // In a sentence with E segments too, the other segments stay as adopted.
+  EXPECT_EQ(Alternatives("githubmadeni", Dictionary({{"github", {"GitHub"}}, {"made", {"made"}}}),
+                         Inline()),
+            std::vector<std::string>{"E:GitHub(high) | E:made(low) | J:に"});
+  EXPECT_EQ(Alternatives("asitamadeni", Dictionary({{"made", {"made"}}}), Inline()),
+            std::vector<std::string>{"J:あした | E:made(low) | J:に"});
+}
+
+// Trap 2: most Japanese sentences hold a readable word, so only a common word
+// of 4 letters or more whose kana and costs cut the J segment cleanly.
+TEST(MixedRomajiSplitterTest, ReadableWordsNeedAClean4LetterCommonWord) {
+  const auto none = std::vector<std::string>{};
+  // you inside kyou leaves k alone in the kana.
+  EXPECT_EQ(Alternatives("kyouhaamegahuru", Dictionary({{"you", {"you"}}}), Inline()), none);
+  // A J piece starting with a vowel right after the word pays the boundary
+  // cost (eki|made|aruita).
+  EXPECT_EQ(Alternatives("ekimadearuita", Dictionary({{"made", {"made"}}}), Inline()), none);
+  // Three letters are too short; a proper noun or acronym only is no common
+  // word; a Shift capital first is the lattice's own call.
+  EXPECT_EQ(Alternatives("kenwomiru", Dictionary({{"ken", {"ken"}}}), Inline()), none);
+  EXPECT_EQ(Alternatives("kimononiau", Dictionary({{"mono", {"Mono"}}}), Inline()), none);
+  const auto flagged = [](std::string_view key) {
+    return key == "mono" ? std::vector<EnglishWordMatch>{{"mono", 1}}
+                         : std::vector<EnglishWordMatch>{};
+  };
+  EXPECT_EQ(Alternatives("kimononiau", flagged, Inline()), none);
+  EXPECT_EQ(Alternatives("hayakuKitekudasai", Dictionary({{"kite", {"kite"}}}), Inline()).size(),
+            0u);
+  // The whole composition is M63-A, and the lattice off or no dictionary has
+  // none.
+  EXPECT_EQ(Alternatives("kite", Dictionary({{"kite", {"kite"}}}), Inline()), none);
+  const auto splits = SplitMixedRomaji("asitakitekudasai", Dictionary({{"kite", {"kite"}}}));
+  ASSERT_FALSE(splits.empty());
+  EXPECT_TRUE(azookey::core::ReadableEnglishAlternatives("asitakitekudasai", splits.front(),
+                                                         Dictionary({{"kite", {"kite"}}}))
+                  .empty());
+  EXPECT_TRUE(azookey::core::ReadableEnglishAlternatives("asitakitekudasai", splits.front(),
+                                                         EnglishWordLookup{}, Inline())
+                  .empty());
+}
+
 }  // namespace

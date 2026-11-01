@@ -83,6 +83,38 @@ size_t CountUnnaturalKana(std::string_view kana) {
   return count;
 }
 
+// Section 6.3: an E edge of `length` characters.
+double EnglishEdgeCost(size_t length, bool readable, bool shift) {
+  // A Shift capital says the English is meant, so the readable penalty does
+  // not apply to it.
+  return std::max(kEMinCost, kEBaseCost - kELengthBonus * static_cast<double>(length)) +
+         (readable && !shift ? kEReadablePenalty : 0.0);
+}
+
+// A J segment that starts right after an E segment: a leading vowel letter
+// (the E edge took its consonant), or a leading ん (no Japanese word starts
+// with it; tosca|nnohanasi against toscan|nohanasi).
+double BoundaryCost(const std::string& lower, size_t begin) {
+  const char c = lower[begin];
+  if (c == 'a' || c == 'i' || c == 'u' || c == 'e' || c == 'o') return kJVowelAfterEnglishPenalty;
+  if (c == 'n') {
+    const char next = begin + 1 < lower.size() ? lower[begin + 1] : '\0';
+    const bool vowel_or_y =
+        next == 'a' || next == 'i' || next == 'u' || next == 'e' || next == 'o' || next == 'y';
+    if (!vowel_or_y) return kJUnnaturalPenalty;
+  }
+  return 0.0;
+}
+
+double JapaneseEdgeCost(std::string_view raw, const std::string& lower, size_t begin, size_t end) {
+  const auto kana = RomajiKanaConverter::ConvertForCommit(lower.substr(begin, end - begin));
+  const auto typed = raw.substr(begin, end - begin);
+  const auto capitals = std::count_if(typed.begin(), typed.end(), IsAsciiUpper);
+  return kJAsciiPenalty * static_cast<double>(CountAsciiLetters(kana)) +
+         kJUnnaturalPenalty * static_cast<double>(CountUnnaturalKana(kana)) +
+         kJCapitalPenalty * static_cast<double>(capitals);
+}
+
 struct EnglishEdge {
   size_t end{};
   double cost{};
@@ -122,11 +154,7 @@ class Lattice {
         const bool readable = !HasAsciiLetter(kana);
         EnglishEdge edge;
         edge.end = end;
-        const double length = static_cast<double>(end - begin);
-        // A Shift capital says the English is meant, so the readable penalty
-        // does not apply to it.
-        edge.cost = std::max(kEMinCost, kEBaseCost - kELengthBonus * length) +
-                    (readable && !shift ? kEReadablePenalty : 0.0);
+        edge.cost = EnglishEdgeCost(end - begin, readable, shift);
         const auto typed = raw_.substr(begin, end - begin);
         const bool has_upper = std::any_of(typed.begin(), typed.end(), IsAsciiUpper);
         edge.surface = has_upper ? std::string(typed) : matches.front().surface;
@@ -161,7 +189,7 @@ class Lattice {
           }
           // Section 6.2: J edges never follow one another.
           if (state == kAfterJapanese) continue;
-          const double boundary = begin > 0 ? BoundaryCost(begin) : 0.0;
+          const double boundary = begin > 0 ? BoundaryCost(lower_, begin) : 0.0;
           for (size_t end = begin + 1; end <= n; ++end)
             Offer(end, kAfterJapanese,
                   {cost + boundary + JapaneseCost(begin, end), begin, state, rank});
@@ -181,31 +209,9 @@ class Lattice {
   }
 
  private:
-  // A J segment that starts right after an E segment: a leading vowel letter
-  // (the E edge took its consonant), or a leading ん (no Japanese word starts
-  // with it; tosca|nnohanasi against toscan|nohanasi).
-  double BoundaryCost(size_t begin) const {
-    const char c = lower_[begin];
-    if (c == 'a' || c == 'i' || c == 'u' || c == 'e' || c == 'o') return kJVowelAfterEnglishPenalty;
-    if (c == 'n') {
-      const char next = begin + 1 < lower_.size() ? lower_[begin + 1] : '\0';
-      const bool vowel_or_y =
-          next == 'a' || next == 'i' || next == 'u' || next == 'e' || next == 'o' || next == 'y';
-      if (!vowel_or_y) return kJUnnaturalPenalty;
-    }
-    return 0.0;
-  }
-
   double JapaneseCost(size_t begin, size_t end) {
     auto& cached = japanese_costs_[begin * (lower_.size() + 1) + end];
-    if (!cached) {
-      const auto kana = RomajiKanaConverter::ConvertForCommit(lower_.substr(begin, end - begin));
-      const auto typed = raw_.substr(begin, end - begin);
-      const auto capitals = std::count_if(typed.begin(), typed.end(), IsAsciiUpper);
-      cached = kJAsciiPenalty * static_cast<double>(CountAsciiLetters(kana)) +
-               kJUnnaturalPenalty * static_cast<double>(CountUnnaturalKana(kana)) +
-               kJCapitalPenalty * static_cast<double>(capitals);
-    }
+    if (!cached) cached = JapaneseEdgeCost(raw_, lower_, begin, end);
     return *cached;
   }
 
@@ -305,6 +311,100 @@ std::vector<MixedRomajiSplit> SplitMixedRomaji(std::string_view raw_romaji,
     segment.kana = kana;
   }
   return {MixedRomajiSplit{{std::move(segment)}, 0.0}};
+}
+
+std::vector<MixedRomajiAlternative> ReadableEnglishAlternatives(
+    std::string_view raw_romaji, const MixedRomajiSplit& adopted, const EnglishWordLookup& lookup,
+    const MixedRomajiSplitOptions& options) {
+  std::vector<MixedRomajiAlternative> alternatives;
+  if (!options.split_inline || !lookup || raw_romaji.empty() ||
+      raw_romaji.size() > options.max_raw_length ||
+      !std::all_of(raw_romaji.begin(), raw_romaji.end(), IsPrintableAscii))
+    return alternatives;
+  const auto lower = Lower(raw_romaji);
+  const size_t min_length =
+      std::max(options.min_readable_english_length, options.min_inline_english_length);
+  for (size_t index = 0; index < adopted.segments.size(); ++index) {
+    const auto& segment = adopted.segments[index];
+    if (segment.kind != MixedRomajiSegmentKind::Japanese || segment.raw_end > lower.size() ||
+        segment.raw_begin >= segment.raw_end)
+      continue;
+    const size_t s = segment.raw_begin;
+    const size_t t = segment.raw_end;
+    // A J segment of the lattice follows an E one unless it starts the
+    // composition (section 6.2: J edges never follow one another).
+    const double before = s > 0 ? BoundaryCost(lower, s) : 0.0;
+    const double adopted_cost = before + JapaneseEdgeCost(raw_romaji, lower, s, t);
+    const auto whole_kana = RomajiKanaConverter::ConvertForCommit(lower.substr(s, t - s));
+    for (size_t begin = s; begin < t; ++begin) {
+      // A Shift capital first makes the edge sure (section 8.1 (i)), never one
+      // of these.
+      if (IsAsciiUpper(raw_romaji[begin])) continue;
+      const size_t max_end = std::min(t, begin + options.max_inline_english_length);
+      for (size_t end = begin + min_length; end <= max_end; ++end) {
+        // The whole composition as one word is M63-A (section 8.2).
+        if (begin == 0 && end == lower.size()) continue;
+        const std::string key = lower.substr(begin, end - begin);
+        const auto kana = RomajiKanaConverter::ConvertForCommit(key);
+        if (HasAsciiLetter(kana)) continue;  // Not readable: the lattice's own call.
+        // Section 8.3 item 3: the kana around the word are the J segment's
+        // kana cut at the word.
+        const auto head = RomajiKanaConverter::ConvertForCommit(lower.substr(s, begin - s));
+        const auto tail = RomajiKanaConverter::ConvertForCommit(lower.substr(end, t - end));
+        if (head + kana + tail != whole_kana) continue;
+        // Trap 1 of DEV-1820: the J pieces cost no more than the J segment, so
+        // the path differs from the adopted one by the E edge alone.
+        const double head_cost =
+            begin > s ? before + JapaneseEdgeCost(raw_romaji, lower, s, begin) : 0.0;
+        const double tail_cost =
+            end < t ? BoundaryCost(lower, end) + JapaneseEdgeCost(raw_romaji, lower, end, t) : 0.0;
+        constexpr double kEpsilon = 1e-9;
+        if (head_cost + tail_cost > adopted_cost + kEpsilon) continue;
+        const auto matches = lookup(key);
+        // A common word: a lowercase surface without the proper / acronym flags.
+        const bool common = std::any_of(matches.begin(), matches.end(), [&](const auto& match) {
+          return match.flags == 0 && match.surface == key;
+        });
+        if (!common) continue;
+        MixedRomajiAlternative alternative;
+        auto& split = alternative.split;
+        split.segments.insert(split.segments.end(), adopted.segments.begin(),
+                              adopted.segments.begin() + static_cast<std::ptrdiff_t>(index));
+        if (begin > s) {
+          MixedRomajiSegment piece;
+          piece.raw_begin = s;
+          piece.raw_end = begin;
+          piece.kana = head;
+          split.segments.push_back(std::move(piece));
+        }
+        MixedRomajiSegment english;
+        english.kind = MixedRomajiSegmentKind::English;
+        english.raw_begin = begin;
+        english.raw_end = end;
+        const auto typed = raw_romaji.substr(begin, end - begin);
+        const bool has_upper = std::any_of(typed.begin(), typed.end(), IsAsciiUpper);
+        english.surface = has_upper ? std::string(typed) : matches.front().surface;
+        english.confidence = EnglishSegmentConfidence::Low;
+        alternative.english_segment = split.segments.size();
+        split.segments.push_back(std::move(english));
+        if (end < t) {
+          MixedRomajiSegment piece;
+          piece.raw_begin = end;
+          piece.raw_end = t;
+          piece.kana = tail;
+          split.segments.push_back(std::move(piece));
+        }
+        split.segments.insert(split.segments.end(),
+                              adopted.segments.begin() + static_cast<std::ptrdiff_t>(index) + 1,
+                              adopted.segments.end());
+        split.cost = adopted.cost - adopted_cost + head_cost + tail_cost +
+                     EnglishEdgeCost(end - begin, true, false);
+        alternatives.push_back(std::move(alternative));
+        if (alternatives.size() == options.max_splits) return alternatives;
+      }
+    }
+  }
+  return alternatives;
 }
 
 }  // namespace azookey::core

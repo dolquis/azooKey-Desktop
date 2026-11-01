@@ -1,5 +1,12 @@
 #include <gtest/gtest.h>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -138,6 +145,30 @@ TEST(CatalogModelMatcherTest, MatchesByPlaceNameAndShaAndTakesTheEntryFormat) {
   EXPECT_EQ(*sha.calls, 1);
   fs::remove_all(dir);
 }
+
+#ifdef _WIN32
+// ListModels lists resolved long paths; a models_dir spelled with an 8.3 short name (a TEMP
+// under RUNNER~1 on CI) must still match them.
+TEST(CatalogModelMatcherTest, ShortAndLongSpellingsOfTheDirectoryMatch) {
+  const auto dir = TestDir();
+  const auto long_dir = dir / "catalog_long_directory_name";
+  const auto zenzai = long_dir / "zenzai";
+  WriteBytes(zenzai / "zenz.gguf", std::string(kShaA) + "\n");
+  std::wstring short_dir(MAX_PATH, L'\0');
+  const auto length =
+      GetShortPathNameW(long_dir.c_str(), short_dir.data(), static_cast<DWORD>(short_dir.size()));
+  if (length == 0 || length >= short_dir.size()) GTEST_SKIP() << "no short name";
+  short_dir.resize(length);
+  if (fs::path(short_dir) == long_dir) GTEST_SKIP() << "8.3 names are off on this volume";
+
+  azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), fs::path(short_dir) / "zenzai",
+                                             CountingSha256{}.Function());
+  EXPECT_EQ(matcher.PromptFormatFor(Utf8(zenzai / "zenz.gguf")), ZenzaiPromptFormat::ZenzV3);
+  EXPECT_EQ(matcher.PromptFormatFor(Utf8(fs::path(short_dir) / "zenzai" / "zenz.gguf")),
+            ZenzaiPromptFormat::ZenzV3);
+  fs::remove_all(dir);
+}
+#endif
 
 TEST(CatalogModelMatcherTest, NeverHashesAFileNoEntryNames) {
   const auto dir = TestDir();

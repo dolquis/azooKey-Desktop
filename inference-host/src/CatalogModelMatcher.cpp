@@ -67,12 +67,21 @@ std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::
 
 std::optional<ModelCatalogEntry> CatalogModelMatcher::Match(std::string_view selected_path_utf8) {
   if (selected_path_utf8.empty()) return std::nullopt;
-  const auto selected = NormalizeSelectedModelPath(selected_path_utf8);
+  // Both sides in the long, resolved form: ListModels lists weakly_canonical paths, and a
+  // models_dir or selectedPath may be spelled with 8.3 short names (a TEMP under RUNNER~1, for
+  // one). A path that cannot be resolved is compared as written.
+  const auto resolved = [](const std::filesystem::path& path) {
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(path, ec);
+    return ec ? path : canonical.lexically_normal();
+  };
+  const auto selected = resolved(NormalizeSelectedModelPath(selected_path_utf8));
+  const auto zenzai_dir = resolved(zenzai_dir_);
   // Only a file whose place and name match an entry is hashed: passing each entry's own
   // SHA-256 checks everything but the content.
   bool named = false;
   for (const auto& entry : catalog_.models) {
-    if (MatchSelectedPathToCatalog(catalog_, zenzai_dir_, selected, entry.sha256)) {
+    if (MatchSelectedPathToCatalog(catalog_, zenzai_dir, selected, entry.sha256)) {
       named = true;
       break;
     }
@@ -80,7 +89,7 @@ std::optional<ModelCatalogEntry> CatalogModelMatcher::Match(std::string_view sel
   if (!named) return std::nullopt;
   const auto sha256 = Sha256Of(selected);
   if (!sha256) return std::nullopt;
-  const auto* entry = MatchSelectedPathToCatalog(catalog_, zenzai_dir_, selected, *sha256);
+  const auto* entry = MatchSelectedPathToCatalog(catalog_, zenzai_dir, selected, *sha256);
   if (!entry) return std::nullopt;
   return *entry;
 }

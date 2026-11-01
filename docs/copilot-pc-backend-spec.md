@@ -453,8 +453,8 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   ロードするスレッドで行い、照合には Host に埋め込んだ既定の catalog を使う。`selectedPath` を
   経由しないロード（CLI の `--model` で起動したときのロードと、`BenchmarkModel` の別エンジン）は
   照合せず、形式を語彙から推定する。`selectedPath` の
-  `\\?\` 接頭辞と末尾の区切りは除いてから比べる。8.3 短縮名などほかの書き方は一致しないものとし、
-  R1 だけで使う。
+  `\\?\` 接頭辞と末尾の区切りは除き、`selectedPath` と `zenzai\` の両方を解決した長い形（8.3
+  短縮名やリンクを展開した形）にそろえてから比べる。解決できないパスは書かれたまま比べる。
   一致した entry の `promptFormat` は R1 と R2 の両方に使う。照合できない GGUF（利用者が置いた
   GGUF）は R1 だけで使い、形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。
   R2 だけの構成は持たない（§4.5 で R1 CPU が終端のため）。設定の移行、設定アプリのモデル選択、

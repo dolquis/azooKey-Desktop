@@ -11,7 +11,8 @@
 namespace azookey::settings {
 
 // The "学習" pane (learning-data-management-spec section 3): the entries of each store with
-// search, per-entry forgetting, and export / import of a backup archive. Every operation is an
+// search, per-entry forgetting, adding a word to the user dictionary (sideload-packaging-spec
+// section 3.7), and export / import of a backup archive. Every operation is an
 // IPC request to the Host, which is the only writer of the data files. Forgetting and importing
 // ask for confirmation first.
 class LearningPane : public std::enable_shared_from_this<LearningPane> {
@@ -30,6 +31,7 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   void SelectTab(int index);
   winrt::fire_and_forget LoadPage();
   winrt::fire_and_forget Forget(azookey::ipc::LearningEntryField entry);
+  winrt::fire_and_forget AddUserWord();
   winrt::fire_and_forget Reset();
   winrt::fire_and_forget Export();
   winrt::fire_and_forget Import();
@@ -49,6 +51,11 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::RadioButtons tabs_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::InfoBar status_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel entries_section_{nullptr};
+  // The user dictionary tab's add form; hidden on the other tabs.
+  winrt::Microsoft::UI::Xaml::Controls::StackPanel add_section_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBox add_reading_box_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBox add_word_box_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button add_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel backup_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox search_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button search_button_{nullptr};

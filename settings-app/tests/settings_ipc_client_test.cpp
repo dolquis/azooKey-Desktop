@@ -338,6 +338,38 @@ TEST(SettingsIpcClientTest, ResetLearningStoreSendsTheStoreAndNeedsItsCapability
   EXPECT_EQ(older.requests(), 0);
 }
 
+TEST(SettingsIpcClientTest, AddUserWordNeedsNoCapabilityAndCarriesTheHostError) {
+  std::vector<azookey::ipc::AddUserWordRequest> seen;
+  std::atomic<bool> fail{false};
+  FakeHost host({"settings"}, [&](azookey::ipc::MessageType type, const std::string& payload) {
+    EXPECT_EQ(type, azookey::ipc::MessageType::AddUserWord);
+    if (auto parsed = azookey::ipc::ParseAddUserWordRequest(payload)) seen.push_back(*parsed);
+    azookey::ipc::AddUserWordResponse response;
+    response.ok = !fail;
+    if (fail) response.error = "busy";
+    return std::optional<std::string>(azookey::ipc::BuildAddUserWordResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+  azookey::ipc::AddUserWordRequest request;
+  request.ruby = "azuki";
+  request.word = "azooKey";
+
+  const auto added = azookey::settings::RequestAddUserWord(host.Options(), request);
+  ASSERT_EQ(added.status, HostCallStatus::Ok);
+  EXPECT_TRUE(added.response->ok);
+  ASSERT_EQ(seen.size(), 1U);
+  EXPECT_EQ(seen[0].ruby, "azuki");
+  EXPECT_EQ(seen[0].word, "azooKey");
+  EXPECT_FALSE(seen[0].cid.has_value());
+
+  fail = true;
+  const auto busy = azookey::settings::RequestAddUserWord(host.Options(), request);
+  ASSERT_EQ(busy.status, HostCallStatus::Ok);
+  EXPECT_FALSE(busy.response->ok);
+  EXPECT_EQ(busy.response->error, "busy");
+  EXPECT_EQ(seen.size(), 2U);
+}
+
 TEST(SettingsIpcClientTest, ProbingACapabilitySendsNoRequest) {
   FakeHost host({"learning_reset"}, [](azookey::ipc::MessageType, const std::string&) {
     return std::optional<std::string>("{}");

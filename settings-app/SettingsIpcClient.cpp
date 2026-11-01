@@ -262,6 +262,13 @@ HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningSto
       azookey::ipc::ParseResetLearningStoreResponse);
 }
 
+HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
+    const SettingsIpcOptions& options, const azookey::ipc::AddUserWordRequest& request) {
+  return Call<azookey::ipc::AddUserWordResponse>(
+      options, nullptr, MessageType::AddUserWord, azookey::ipc::BuildAddUserWordRequest(request),
+      options.long_response_timeout_ms, azookey::ipc::ParseAddUserWordResponse);
+}
+
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
     const SettingsIpcOptions& options) {
   return Call<azookey::ipc::QueryPersonaResponse>(

@@ -59,6 +59,13 @@
 - ストアのタブ: 検索（`ListLearningEntries` の `query`）、100 件ずつのページ送り、
   読み・候補・重み（小数 1 桁）・最終使用（ローカル日付）・タグの表示、個別の忘却を持つ。
   忘却は確認ダイアログを経てから `ForgetLearningEntry` を `id` で送る。
+- ユーザー辞書のタブだけは、上の操作に加えて「読み」「語」の 2 欄と「追加」ボタンを持つ
+  （`sideload-packaging-spec.md` §3.7）。両欄の前後の空白（全角を含む）を除き、読みのカタカナを
+  ひらがなに直してから `AddUserWord` を送る。どちらかが空なら送らない。成功したら追加した読みで
+  一覧を検索し直す。失敗は応答の `error`（`busy` / `lock_failed` / `load_failed` / `save_failed` /
+  `unavailable` / `invalid_request` / `not_authenticated`）ごとの文言で示す。利用者が明示的に行う編集なので、
+  確定観測の secure・学習可否の判定は掛けない。設定の `dictionary.userDictionaryEnabled` が偽でも
+  追加と忘却はでき、変換に使うかどうかだけがその設定に従う。
 - 「バックアップ」タブ: 対象ストアの選択、暗号化の切替、エクスポート、取り込み時の衝突解決
   （`merge` / `overwrite` / `keep_both`）の選択、インポートを持つ。暗号化をオフにしたときは警告を出し、
   書き出す前に確認する。インポートは確認ダイアログを経てから送る。
@@ -67,8 +74,8 @@
 
 ## 4. IPC
 
-設定アプリは学習データファイルを直接開かず、一覧、忘却、エクスポート、インポート、全削除を
-すべて Host への IPC として発行する（writer 責務の正典は
+設定アプリは学習データファイルを直接開かず、一覧、忘却、エクスポート、インポート、全削除、
+ユーザー辞書への追加（`AddUserWord`）をすべて Host への IPC として発行する（writer 責務の正典は
 `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 `user_dict.json` を含む本節の対象ストアはすべてこの経路に従う。
 

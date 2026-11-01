@@ -62,4 +62,23 @@ LearningPageRange ComputeLearningPage(uint64_t offset, uint64_t shown, uint64_t 
 // A backup archive path ExportLearningData accepts: absolute and ending in ".zip".
 bool IsBackupArchivePath(std::string_view utf8_path);
 
+// The add form of the user dictionary tab (sideload-packaging-spec section 3.7). Both fields are
+// trimmed of ASCII and ideographic spaces, and the reading's katakana is folded to hiragana,
+// the form the user dictionary keys on. Nothing else is rejected; the Host has the last word.
+enum class UserWordInputError { None, EmptyReading, EmptyWord };
+struct UserWordInput {
+  UserWordInputError error{UserWordInputError::None};
+  std::string reading;
+  std::string word;
+};
+UserWordInput NormalizeUserWordInput(std::string_view reading, std::string_view word);
+
+// The `error` codes of AddUserWordResponse (ipc/Payloads.h kUserDictError*). Each has a
+// "LearningUserDictError_<code>" string; any other falls back to "LearningUserDictError_other".
+inline constexpr std::array<std::string_view, 7> kUserDictErrorCodes{
+    "busy",        "lock_failed",     "load_failed",      "save_failed",
+    "unavailable", "invalid_request", "not_authenticated"};
+
+std::string UserDictErrorResource(std::string_view error);
+
 }  // namespace azookey::settings

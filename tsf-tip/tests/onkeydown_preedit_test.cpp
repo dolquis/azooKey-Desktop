@@ -812,6 +812,52 @@ class FakeMouseTracker final : public ITfMouseTracker {
   std::vector<std::pair<DWORD, ITfMouseSink*>> sinks_;
 };
 
+// DEV-1828: a key the harness sees not eaten leaves the state behind it here,
+// and a failed test prints the latest ones. Many tests expect a key not to be
+// eaten, so this never fails a test by itself.
+class NotEatenKeyLog final : public ::testing::EmptyTestEventListener {
+ public:
+  static void Record(const azookey::tsf::TextService& service, ITfContext* context, WPARAM key,
+                     std::string_view via, std::chrono::steady_clock::time_point since) {
+    const auto down = [](int vk) { return (GetKeyState(vk) & 0x8000) != 0 ? '1' : '0'; };
+    std::string entry = std::string(via) + " key=0x";
+    char hex[16];
+    std::snprintf(hex, sizeof(hex), "%02X", static_cast<unsigned>(key));
+    entry += hex;
+    const auto elapsed = std::chrono::steady_clock::now() - since;
+    entry += " after_ms=" +
+             std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    entry += " disabled=" + std::to_string(azookey::tsf::IsContextKeyboardDisabled(context));
+    entry += " shift/ctrl/alt/win=";
+    entry += {down(VK_SHIFT), down(VK_CONTROL), down(VK_MENU), down(VK_LWIN)};
+    entry += " " + service.key_state_snapshot_for_test(context);
+    auto& entries = Entries();
+    if (entries.size() == kMaxEntries) entries.erase(entries.begin());
+    entries.push_back(std::move(entry));
+  }
+
+  void OnTestStart(const ::testing::TestInfo&) override { Entries().clear(); }
+  void OnTestEnd(const ::testing::TestInfo& info) override {
+    if (!info.result()->Failed() || Entries().empty()) return;
+    std::printf("[ NOT EATEN ] last %zu keys the harness saw not eaten (oldest first)\n",
+                Entries().size());
+    for (const auto& entry : Entries()) std::printf("  %s\n", entry.c_str());
+    std::fflush(stdout);
+  }
+
+ private:
+  static constexpr size_t kMaxEntries = 8;
+  static std::vector<std::string>& Entries() {
+    static std::vector<std::string> entries;
+    return entries;
+  }
+};
+
+const bool kNotEatenKeyLogInstalled = [] {
+  ::testing::UnitTest::GetInstance()->listeners().Append(new NotEatenKeyLog);
+  return true;
+}();
+
 class TextServiceHarness {
  public:
   TextServiceHarness() {
@@ -837,6 +883,7 @@ class TextServiceHarness {
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
+    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "Press", created);
     return eaten;
   }
 
@@ -845,12 +892,14 @@ class TextServiceHarness {
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnTestKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnTestKeyDown failed for key " << key;
+    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "TestPress", created);
     return eaten;
   }
 
   KeyboardStateGuard keyboard_state;
   NoopContext context;
   azookey::tsf::TextService service;
+  const std::chrono::steady_clock::time_point created{std::chrono::steady_clock::now()};
 
  private:
   bool installed_handshake_token_{false};
@@ -1162,6 +1211,7 @@ class DocumentPreeditHarness {
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
+    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "Press", created);
     return eaten;
   }
 
@@ -1186,6 +1236,7 @@ class DocumentPreeditHarness {
   KeyboardStateGuard keyboard_state;
   DocumentContext context;
   azookey::tsf::TextService service;
+  const std::chrono::steady_clock::time_point created{std::chrono::steady_clock::now()};
 };
 
 TEST(TsfTipLeftContextTest, UsesCompositionStartAndBoundsUnicodeCodepoints) {
@@ -1506,6 +1557,8 @@ class BracketHarness {
     const HRESULT hr = test ? service.OnTestKeyDown(&context, key, 0, &eaten)
                             : service.OnKeyDown(&context, key, 0, &eaten);
     if (expect_success) EXPECT_TRUE(SUCCEEDED(hr)) << std::hex << hr;
+    if (!eaten)
+      NotEatenKeyLog::Record(service, &context, key, test ? "TestPress" : "Press", created);
     return eaten;
   }
   void ApplySettings() { service.set_bracket_settings_for_test(settings); }
@@ -1513,6 +1566,7 @@ class BracketHarness {
   DocumentContext context;
   azookey::tsf::TextService service;
   azookey::core::BracketSettings settings;
+  const std::chrono::steady_clock::time_point created{std::chrono::steady_clock::now()};
 };
 }  // namespace
 

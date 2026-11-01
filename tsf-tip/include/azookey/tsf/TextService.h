@@ -461,6 +461,26 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
+  // DEV-1828: the state that decides whether a key is eaten, one line for a
+  // failed test to print after a key the harness saw not eaten.
+  std::string key_state_snapshot_for_test(ITfContext* context) const {
+    std::string s;
+    s += "open=" + std::to_string(keyboard_open_);
+    s += " alnum=" + std::to_string(alnum_mode_);
+    s += " core=" + std::to_string(core_input_active_);
+    s += " state=" + std::to_string(static_cast<int>(input_state_.kind()));
+    s += " awaiting=" + std::to_string(input_state_.awaiting_candidates());
+    s += " composition=" + std::to_string(composition_ != nullptr);
+    s += " same_context=" + std::to_string(active_context_ == context);
+    s += " committing=" + std::to_string(committing_);
+    s += " terminated_surface=" + std::to_string(!terminated_composition_surface_.empty());
+    s += " final_hold=" + std::to_string(final_punctuation_hold_.has_value());
+    s += " retry_keys=" + std::to_string(retry_waiting_keys_.size());
+    s += " window_keys=" + std::to_string(window_waiting_keys_.size());
+    s += " secure=" + std::to_string(secure_input_.load(std::memory_order_relaxed));
+    s += " pending_open=" + std::to_string(keyboard_open_pending_document_ != nullptr);
+    return s;
+  }
   void set_number_rewriter_enabled_for_test(bool enabled) {
     number_rewriter_.store(enabled, std::memory_order_relaxed);
   }

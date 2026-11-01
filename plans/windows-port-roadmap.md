@@ -971,7 +971,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
   M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に
   GET+SHA256 ダウンロード経路を追加する（Phase 5 への前倒しは不要）**、初回モデル取得
-  ロジック（`expected.json` ピン照合 →
+  ロジック（既定の catalog の entry との照合 →
   `.part`→検証→rename → probe-load → `selectedPath` コミット）、設定アプリ UI。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b)
   （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）。
@@ -980,18 +980,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 起動時 + 24h 周期で新版検出、ユーザー承認で MSI 適用（`msiexec /i /qn /norestart`、
     要再起動時は通知。spec §6.3）
   - **DEV-202 の auto-DL が承認済み（暫定確定＝上流 HF から、または著者確認後の
-    GitHub 再ホスト）かつ `expected.json` ピン投入済みのとき**: 既定
+    GitHub 再ホスト）のとき**（ピンは既定の catalog として常に Host に埋め込まれる）: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ
     非 `offline`）で初回起動時に ピンと一致する GGUF を DL → SHA256 検証 →
     probe-load 成功 → `selectedPath` コミット。`offline` / `autoLoadOnHostStart=false`
     時は DL せず (c2) 明示選択に委ねる。
-  - **DEV-202 が暫定確定どまりで auto-DL 未承認、または ピン未投入のとき**: (b) DL を
+  - **DEV-202 が暫定確定どまりで auto-DL 未承認のとき**: (b) DL を
     有効化せず、**(c2) ユーザー明示選択（`model.selectedPath` を `settings.json` /
     設定 UI で設定）で Zenzai がロードできること**を受け入れ条件とする（暫定確定でも
     配信元は上流 HF に固定済み・§1.6.1 だが、auto-DL の有効化は別途承認を要する）。
-    ピン未投入では
-    (c1) autoselect が無効なため、ファイルを置くだけ（空 `selectedPath`）では
-    不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認 + ピン投入後に適用。
+    設定アプリのモデル ペインの取得ボタンは利用者の操作による取得であり、(b) ではない
+    （§1.6.1「利用者の操作による取得」）。ファイルを置くだけ（空 `selectedPath`）では
+    不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
     いずれの分岐でも DL 失敗 / 不一致時は手動配置へフォールバックし Host は
     落ちない（§1.6.1 / M8 / M47 と整合）
 - **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1

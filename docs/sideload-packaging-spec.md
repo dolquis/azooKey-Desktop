@@ -456,8 +456,7 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 唯一の正とし、(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
 アーティファクトを指す**。ピン定義は、ビルド時に Host へ埋め込む既定の model catalog
 （`settings/default-model-catalog.json`、`docs/model-management-spec.md` §3.1.1「既定の
-catalog」）の `defaultModelId` の entry である。他の文書が「`expected.json` ピン」と呼ぶ
-ものも、この entry を指す。
+catalog」）の `defaultModelId` の entry である。
 
 > **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
 > HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
@@ -542,6 +541,16 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       autoselect / (c2) 明示選択は network なしで成立）。ガードを満たす場合、
       ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
       `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
+      起動時に利用者の操作なしでネットワークへ出る挙動の変更なので、(b) を Host に
+      入れるかは将来の判断とし、入れるときに本項の前提ガードを適用する。それまでの
+      取得の入口は、次の利用者の操作による取得と CLI の `models fetch` だけである。
+    - **利用者の操作による取得（設定アプリ）**: 設定アプリのモデル ペインは既定の
+      catalog の entry を一覧し、利用者が押した取得ボタンから Host に取得させる
+      （IPC は `model-management-spec.md` §4.4、取得機構は同 §3.1.2）。`privacy.mode=offline`
+      では接続しない。取得時の SHA-256 のピン一致と §3.3 の R1 検証を probe とみなし、
+      成功したら確定パスを「一般」のモデルのパス欄へ入れる。commit は (c2) と同じく共通の
+      保存ボタンが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
+      行う。取得しただけでは `selectedPath` を変えない。
     - **(c) 手動配置**: 2 経路を持つ。
         - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
           **`model.enabled` かつ `model.autoLoadOnHostStart=true`
@@ -601,8 +610,9 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
   ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
   と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
-- **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
-  配信元分岐を引き継ぐ。
+- **モデル DL の UI**: 設定アプリのモデル ペインの取得ボタン（上記「利用者の操作による
+  取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
+  配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
 
 #### 1.6.2 配布ライセンス結論（DEV-202・v1.0 確定）
 

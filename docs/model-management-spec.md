@@ -249,6 +249,13 @@ id を省くと `defaultModelId`）。CLI は `settings.json` の `privacy.mode`
 タブ区切りで出す。どちらもローカル利用者が自分で起動する CLI であり、Host の常駐経路からは
 呼ばない。
 
+もう 1 つの入口は、設定アプリのモデル ペインの取得ボタンから送る `FetchCatalogModel`（§4.4）
+である。常駐 Host が同じ `FetchCatalogModel` をバックグラウンドのスレッドで呼び、
+`privacy.mode=offline` の判定には Host の実行中の設定（`UpdateConfig` で切り替わる値）を使う。
+取得中に `offline` へ切り替わるか Host が止まると、ダウンローダの読み取りの合間で取得をやめる。
+Host の停止で止まった取得は `cancelled` で失敗し、`.part` が残るので次の取得で続きから再開する。
+Host が起動時に利用者の操作なしで取得することはない（`docs/sideload-packaging-spec.md` §1.6.1 (b)）。
+
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
 
 - **R1（llama.cpp）**: 拡張子 `.gguf` ファイル。
@@ -418,6 +425,16 @@ Response（host → client、同一 `request_id` / `trace_id` を返す）:
 - `ok: false` のときの `error` は `invalid_request`（payload 不正）、
   `models_dir_unavailable`（Host に models ディレクトリが無い）、`directory_outside_models_root`、
   `scan_failed`、`not authenticated`（Handshake 前）のいずれか。
+- 要求の `include_catalog` は任意で、既定は `false`（wire では省く）。`true` のとき、Host は応答に
+  既定の catalog（§3.1.1）の `catalog` 配列を足す。各要素は `id`、`display_name`、`file_name`、
+  `is_default`、`size_bytes`、`prompt_format`、`fetchable`（`source` と上限内の `sizeBytes` を
+  持つ）、`state`、`path`（`zenzai\` の直下の確定パス）を持つ。`state` は `missing`（その名前の
+  ファイルが無い）、`verified`（SHA-256 が entry と一致）、`mismatch`（同じ名前で別の内容、または
+  読めない）のいずれか。あわせて、有効な GGUF のうち catalog の entry に照合できたもの
+  （`docs/copilot-pc-backend-spec.md` §4.4）に `catalog_id` を付ける。`include_catalog` を
+  読まない Host と catalog を持たない Host は `catalog` を送らず、client は `catalog` の有無で
+  表示を分ける。照合の SHA-256 の計算には時間がかかることがあるので、設定アプリは
+  `include_catalog` の要求に `BenchmarkModel` と同じ長い応答待ちを使う。
 
 ### 4.2 BenchmarkModel
 
@@ -517,7 +534,38 @@ load/unload とライブクエリの race を構造的に排除する。
 を追加する（末尾の `Unknown` の後ろに追加しない）。これにより M40 の互換性ルールを満たす。
 wire 上の型は文字列なので、enum の数値位置は互換性に影響しない。
 Host は `Handshake` 応答の capabilities で `list_models` / `benchmark_model` を広告し、
-client はそれを見て対応版を判別する。
+client はそれを見て対応版を判別する。§4.4 の `FetchCatalogModel` / `QueryCatalogFetch` も同じく
+`Unknown` の前に置き、capability `fetch_catalog_model` で判別する。
+
+### 4.4 FetchCatalogModel / QueryCatalogFetch
+
+既定の catalog の entry の取得（§3.1.2）を、設定アプリから Host に行わせる。取得は大きな
+ファイルになり得るので、1 要求に 1 応答を返す IPC の前提を保ったまま、開始と進捗の問い合わせを
+別のメッセージに分ける。
+
+- `FetchCatalogModel` の要求は `{model_id}`（省略すると `defaultModelId`）。Host は取得を
+  バックグラウンドのスレッドで始め、終わりを待たずに応答する。
+- `QueryCatalogFetch` の要求は空のオブジェクトで、Host の取得の現在の状態を返す。
+- 両者の応答は同じ形で、`state`（`idle` / `running` / `done`）、`model_id`、`received_bytes`、
+  `total_bytes`、`done` のときの `status`（§3.1.2 の `downloaded` / `already_valid` / `offline` /
+  `not_fetchable` / `failed`）と、成功時の `path`、`failed` のときの `result_error`（§3.1.2 の
+  固定カテゴリ、または Host の停止による `cancelled`）を持つ。`received_bytes` は `.part` に
+  書いたバイト数（再開した分を含む）、`total_bytes` は応答の `Content-Length`（無ければ
+  entry の `sizeBytes`）である。ダウンローダのメッセージ（URL やパスを含み得る）は送らない。
+- 取得は Host 全体で同時に 1 件とする。実行中に `FetchCatalogModel` を受けると `ok: false` /
+  `error: "busy"` を返し、応答には実行中の取得の状態を載せる。`done` の結果は次の取得が
+  始まるまで残る。
+- 要求そのものを断るときの `error` は `invalid_request`、`busy`、`unknown_model_id`、
+  `catalog_unavailable`（catalog か取得の機能を持たない Host）、`not authenticated` の
+  いずれか。
+- 利用者による取り消しのメッセージは持たない。取得は `offline` への切り替えと Host の停止で
+  止まる（§3.1.2）。
+- 設定アプリは `running` のあいだ約 0.5 秒ごとに `QueryCatalogFetch` を送り、進捗を表示する。
+  待つのをやめるのは、`received_bytes` が一定時間（Host の受信 timeout とファイル検証の時間より
+  長い）増えないときだけで、取得全体の時間では区切らない。待つのをやめても Host は取得を
+  続けることがあり、結果は次の `ListModels` の `catalog` に表れる。
+- ログに出すのは、Host が取得を終えたときの entry の id、`status`、固定カテゴリ、受信バイト数
+  だけである（§3.1.2）。要求は入力文字列を含まず、学習や AI 送信とも関係しない。
 
 ## 5. Backend 自動選択
 
@@ -623,6 +671,14 @@ Backend: auto → CPU
 表示である。モデルの選択は「一般」のモデルのパス欄へ入れるだけで、`model.selectedPath` は共通の保存ボタンが
 書く。選択と測定の対象は、`valid` な `gguf` に限る（`onnx_genai` は一覧に出すが選べない）。
 「モデルを追加」「フォルダを開く」「選択モデルをロード」は、このペインに置かない。
+
+Host が `ListModels` の `catalog`（§4.1）を返すとき、ペインは既定の catalog の entry を別の節に
+並べ、`state` と、`missing` で取得元を持つ entry の「取得」ボタン、`verified` の entry の選択
+ボタンを出す。取得ボタンは `FetchCatalogModel`（§4.4）を送り、進捗を受信バイト数と割合で
+表示する。取得が成功したら（`downloaded` / `already_valid`）、その確定パスを「一般」のモデルの
+パス欄へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく共通の保存ボタンである
+（`docs/sideload-packaging-spec.md` §1.6.1「利用者の操作による取得」）。`mismatch` の entry は、
+同じ名前の別のファイルを置き換えないので取得ボタンを出さない。
 
 ### 6.2 状態表示
 

@@ -29,7 +29,9 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
 
  private:
   void SelectTab(int index);
-  winrt::fire_and_forget LoadPage();
+  // keep_status leaves the status bar open, so the result of the operation that asked for the
+  // listing stays visible.
+  winrt::fire_and_forget LoadPage(bool keep_status = false);
   winrt::fire_and_forget Forget(azookey::ipc::LearningEntryField entry);
   winrt::fire_and_forget AddUserWord();
   winrt::fire_and_forget Reset();

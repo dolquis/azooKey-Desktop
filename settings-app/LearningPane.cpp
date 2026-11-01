@@ -337,6 +337,8 @@ void LearningPane::RecoverFromFailure() {
 
 void LearningPane::SetBusy(bool busy) {
   busy_ = busy;
+  // A tab switch while a request is in flight would apply its result to the other tab.
+  tabs_.IsEnabled(!busy);
   search_button_.IsEnabled(!busy);
   reset_button_.IsEnabled(!busy);
   add_button_.IsEnabled(!busy);
@@ -381,7 +383,7 @@ void LearningPane::UpdatePager() {
                                     " / " + std::to_string(total_)));
 }
 
-winrt::fire_and_forget LearningPane::LoadPage() {
+winrt::fire_and_forget LearningPane::LoadPage(bool keep_status) {
   const auto self = shared_from_this();
   if (tab_index_ >= static_cast<int>(kLearningStoreTabs.size())) co_return;
   const auto generation = ++generation_;
@@ -391,7 +393,7 @@ winrt::fire_and_forget LearningPane::LoadPage() {
   request.limit = kLearningPageSize;
   request.offset = offset_;
   SetBusy(true);
-  status_bar_.IsOpen(false);
+  if (!keep_status) status_bar_.IsOpen(false);
   const auto dispatcher = dispatcher_;
   try {
     co_await winrt::resume_background();
@@ -501,7 +503,7 @@ winrt::fire_and_forget LearningPane::Forget(azookey::ipc::LearningEntryField ent
     if (entries_.size() == 1 && offset_ > 0) {
       offset_ = offset_ > kLearningPageSize ? offset_ - kLearningPageSize : 0;
     }
-    LoadPage();
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }
@@ -557,7 +559,7 @@ winrt::fire_and_forget LearningPane::AddUserWord() {
     query_ = input.reading;
     search_box_.Text(winrt::to_hstring(input.reading));
     offset_ = 0;
-    LoadPage();
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }
@@ -612,7 +614,7 @@ winrt::fire_and_forget LearningPane::Reset() {
     ShowStatus(controls::InfoBarSeverity::Success, after.GetString(L"Learning_ResetDoneTitle"),
                after.GetString(L"Learning_ResetDoneMessage"));
     offset_ = 0;
-    LoadPage();
+    LoadPage(/*keep_status=*/true);
   } catch (...) {
     RecoverFromFailure();
   }

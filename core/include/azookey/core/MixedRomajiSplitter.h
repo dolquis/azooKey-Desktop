@@ -69,6 +69,16 @@ struct MixedRomajiSplitOptions {
   // Section 15.2: false treats every E segment of the lattice as low
   // confidence, so no in-sentence word turns English on its own.
   bool inline_high_confidence{true};
+  // Section 8.3 item 3: the shortest readable word inside a J segment that
+  // gets a candidate of its own.
+  size_t min_readable_english_length{4};
+};
+
+// Section 8.3 item 3: the adopted split with one readable word inside a J
+// segment turned into a low-confidence E segment.
+struct MixedRomajiAlternative {
+  MixedRomajiSplit split;
+  size_t english_segment{};  // Index of that E segment in split.segments.
 };
 
 // The splits, best first. Empty when the raw romaji is empty, longer than
@@ -83,5 +93,17 @@ struct MixedRomajiSplitOptions {
 std::vector<MixedRomajiSplit> SplitMixedRomaji(std::string_view raw_romaji,
                                                const EnglishWordLookup& lookup,
                                                const MixedRomajiSplitOptions& options = {});
+
+// Section 8.3 item 3 for the J segments of `adopted` (the first split of
+// SplitMixedRomaji): each common dictionary word (a lowercase surface without
+// flags) of min_readable_english_length or more that reads as kana without an
+// unnatural kana, typed without capitals, whose kana cut the J segment's kana,
+// with no boundary cost on either side and J pieces that cost no more than the
+// J segment, so the path differs from the adopted one by the E edge alone.
+// Every other segment is as adopted. In raw romaji order, at most max_splits;
+// empty without split_inline or a dictionary.
+std::vector<MixedRomajiAlternative> ReadableEnglishAlternatives(
+    std::string_view raw_romaji, const MixedRomajiSplit& adopted, const EnglishWordLookup& lookup,
+    const MixedRomajiSplitOptions& options = {});
 
 }  // namespace azookey::core

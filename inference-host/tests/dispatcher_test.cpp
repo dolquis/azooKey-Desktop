@@ -1846,6 +1846,127 @@ TEST_F(MixedInlineDispatchTest, TypoCorrectionStaysOffForAMixedComposition) {
   std::remove(typo_path.c_str());
 }
 
+// Section 8.3 item 3 for a split of one J segment (DEV-1820): the list of M63
+// off with the readable word turned English right after its first candidate.
+// (No fixture: the mock falls back to the kana as is.)
+TEST_F(MixedInlineDispatchTest, ReadableWordInAJapaneseSentenceFollowsTheFirstCandidate) {
+  const std::string kana = "あしたきてください";
+  const auto off = Query(1461, Request(kana, "asitakitekudasai", false));
+  const auto on = Query(1462, Request(kana, "asitakitekudasai", true));
+  ASSERT_FALSE(off.empty());
+  ASSERT_GE(on.size(), 2u);
+  // The first candidate is the one of M63 off, without segments.
+  EXPECT_EQ(on[0].surface, off[0].surface);
+  EXPECT_EQ(on[0].reading, off[0].reading);
+  EXPECT_TRUE(on[0].segments.empty());
+  EXPECT_EQ(on[1].surface, "あしたkiteください");
+  EXPECT_EQ(on[1].tag, 0);
+  EXPECT_EQ(on[1].reading, kana);
+  EXPECT_LE(on[1].score, on[0].score);
+  ExpectSegments(on[1].segments,
+                 {Segment(0, 3, "あした", "あした", 0), Segment(3, 7, "kite", "kite", kEnglish),
+                  Segment(7, 11, "ください", "ください", 0)});
+  EXPECT_EQ(Count(on, on[1].surface), 1u);
+  for (size_t i = 2; i < on.size(); ++i) EXPECT_TRUE(on[i].segments.empty()) << on[i].surface;
+  // The rest is the list of M63 off.
+  std::vector<std::string> rest;
+  for (size_t i = 2; i < on.size(); ++i) rest.push_back(on[i].surface);
+  std::vector<std::string> off_rest;
+  for (size_t i = 1; i < off.size(); ++i)
+    if (off[i].surface != on[1].surface) off_rest.push_back(off[i].surface);
+  EXPECT_EQ(rest, off_rest);
+
+  // The live conversion stays as with M63 off.
+  ipc::QueryLiveConversionRequest live{kana, ""};
+  const auto live_off = Live(1463, live);
+  live.raw_romaji = "asitakitekudasai";
+  live.mixed_english = true;
+  live.secure = false;
+  const auto live_on = Live(1464, live);
+  ASSERT_TRUE(live_off && live_on);
+  EXPECT_EQ(live_on->surface, live_off->surface);
+  EXPECT_TRUE(live_on->segments.empty());
+
+  // A passed deadline leaves the list of M63 off.
+  auto config = DefaultDispatcherConfig();
+  config.mixed_english_conversion_deadline = std::chrono::milliseconds(0);
+  azookey::host::Dispatcher late(&engine, &scheduler, &user_dict, config);
+  const auto resp = late.Dispatch(
+      MakeReq(1465, ipc::MessageType::QueryCandidates,
+              ipc::BuildQueryCandidatesRequest(Request(kana, "asitakitekudasai", true))));
+  ASSERT_TRUE(resp);
+  const auto parsed = ipc::ParseQueryCandidatesResponse(resp->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(Surfaces(parsed->candidates), Surfaces(off));
+}
+
+// Section 8.3 item 3 in a sentence with E segments: the low-confidence segments
+// come first and the readable words share the three conversions with them.
+TEST_F(MixedInlineDispatchTest, ReadableWordsShareTheThreeConversionsWithLowSegments) {
+  auto config = PatientConfig();
+  config.mixed_english_inline_high_confidence = false;
+  azookey::host::Dispatcher low(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = low.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  const auto english_readings = [](const std::vector<ipc::CandidateField>& candidates) {
+    std::vector<std::string> out;
+    for (const auto& c : candidates)
+      for (const auto& segment : c.segments)
+        if (segment.tag == kEnglish) out.push_back(segment.reading);
+    return out;
+  };
+  // One low segment and one readable word: both, the segment first.
+  const auto one = query(1481, Request("ぎてゅbきてください", "githubkitekudasai", true));
+  EXPECT_EQ(english_readings(one), (std::vector<std::string>{"github", "kite"}));
+  // Three low segments use all three: the readable word is not tried.
+  const auto three = query(
+      1482, Request("ぎてゅbとぷshとぎてゅbきてください", "githubtopushtogithubkitekudasai", true));
+  EXPECT_EQ(english_readings(three), (std::vector<std::string>{"github", "push", "github"}));
+}
+
+// Section 12 for a split of one J segment: typo correction stays on, and a
+// corrected reading is not the typed one the readable words come from.
+TEST_F(MixedInlineDispatchTest, CorrectedReadingHasNoReadableWordCandidate) {
+  const auto typo_path = temp_directory.File("azookey_dispatcher_mixed_readable_typo.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+  auto config = engine.config();
+  config.typo_correction_mode = "auto_replace";
+  config.typo_min_count = 2;
+  engine.ApplyConfig(config);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  const std::string kana = "あしたきてくだしあ";
+  const std::string corrected = "あしたきてください";
+  ASSERT_TRUE(typo.Observe(kana, corrected, now_epoch_sec));
+  ASSERT_TRUE(typo.Observe(kana, corrected, now_epoch_sec));
+  const auto response = [&](uint64_t id, bool mixed) {
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates,
+                ipc::BuildQueryCandidatesRequest(Request(kana, "asitakitekudasia", mixed))));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto off = response(1471, false);
+  ASSERT_EQ(off.corrected_reading, corrected);
+  const auto on = response(1472, true);
+  EXPECT_EQ(on.corrected_reading, corrected);
+  EXPECT_EQ(Surfaces(on.candidates), Surfaces(off.candidates));
+  for (const auto& c : on.candidates) EXPECT_TRUE(c.segments.empty()) << c.surface;
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
 TEST_F(MixedInlineDispatchTest, LiveConversionOfAMixedSentence) {
   ipc::QueryLiveConversionRequest request{kSentenceKana, ""};
   const auto off = Live(1451, request);
@@ -5993,6 +6114,51 @@ TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCa
   // are left out.
   const auto shown = surfaces(window);
   EXPECT_EQ(std::count(shown.begin(), shown.end(), "げんいん"), 0);
+}
+
+// M63 section 8.3 for a split of one J segment (DEV-1820): the DEV-1734 window
+// stays as it is, the other reading's candidates included, and the readable
+// word turned English follows its first candidate.
+TEST_F(MixedEnglishDispatchTest, ReadableWordKeepsTheAmbiguousReadingsWindow) {
+  // Without a model the window appends the other reading's dictionary words.
+  ASSERT_TRUE(user_dict.Add({"来て原因", "きてげんいん"}));
+  // Section 10's deadline is wall-clock time; an hour keeps a slow run's
+  // conversion in.
+  auto config = DefaultDispatcherConfig();
+  config.mixed_english_conversion_deadline = std::chrono::hours(1);
+  azookey::host::Dispatcher patient(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, bool mixed) {
+    auto q = Request("きてげんにん", "kitegennin", mixed);
+    q.alt_readings = {"きてげんいん"};
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto off = query(1491, false);
+  const auto on = query(1492, true);
+  EXPECT_TRUE(off.corrected_reading.empty());
+  EXPECT_TRUE(on.corrected_reading.empty());
+  ASSERT_FALSE(off.candidates.empty());
+  // The other reading's candidates are in the window of M63 off.
+  ASSERT_TRUE(std::any_of(off.candidates.begin(), off.candidates.end(),
+                          [](const auto& c) { return c.reading == "きてげんいん"; }));
+  ASSERT_GE(on.candidates.size(), off.candidates.size() + 1);
+  EXPECT_EQ(on.candidates[0].surface, off.candidates[0].surface);
+  EXPECT_TRUE(on.candidates[0].segments.empty());
+  ASSERT_EQ(on.candidates[1].segments.size(), 2u);
+  EXPECT_EQ(on.candidates[1].segments[0].reading, "kite");
+  EXPECT_EQ(on.candidates[1].segments[0].tag, 4);
+  // After it, the window of M63 off with its readings.
+  std::vector<std::pair<std::string, std::string>> rest;
+  for (size_t i = 2; i < on.candidates.size(); ++i)
+    rest.emplace_back(on.candidates[i].surface, on.candidates[i].reading);
+  std::vector<std::pair<std::string, std::string>> off_rest;
+  for (size_t i = 1; i < off.candidates.size(); ++i)
+    if (off.candidates[i].surface != on.candidates[1].surface)
+      off_rest.emplace_back(off.candidates[i].surface, off.candidates[i].reading);
+  EXPECT_EQ(rest, off_rest);
 }
 
 namespace {

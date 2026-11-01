@@ -39,12 +39,17 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::fire_and_forget FetchCatalog(std::string model_id);
   void RenderModels();
   void RenderCatalog();
+  // Updates only the running fetch's progress bar and text, so a poll does not rebuild the rows
+  // (and move the keyboard focus or Narrator off another row's button).
+  void UpdateFetchProgress();
   void ShowFetchResult(const azookey::ipc::CatalogFetchResponse& response);
   void ShowBar(winrt::Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                const winrt::hstring& title, const winrt::hstring& message);
   void RenderHistory();
   void ShowProblem(const winrt::hstring& message);
-  void RecoverFromFailure();
+  // fetch_failed: the failure is the catalog fetch's own. Other failures leave a running fetch
+  // and its poller alone.
+  void RecoverFromFailure(bool fetch_failed = false);
 
   winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
   Host host_;
@@ -53,6 +58,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel models_panel_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock catalog_heading_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel catalog_panel_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::ProgressBar fetch_bar_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBlock fetch_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock benchmark_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel history_panel_{nullptr};
   std::vector<azookey::ipc::ListedModel> models_;
@@ -65,6 +72,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   std::string fetching_id_;
   uint64_t fetch_received_{0};
   uint64_t fetch_total_{0};
+  // A fetch finished while a listing was running; list again once it ends.
+  bool refresh_again_{false};
 };
 
 }  // namespace azookey::settings

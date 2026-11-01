@@ -153,14 +153,16 @@ void ModelPane::SetHistory(std::vector<BenchmarkHistoryEntry> history) {
   if (history_panel_) RenderHistory();
 }
 
-void ModelPane::RecoverFromFailure() {
+void ModelPane::RecoverFromFailure(bool fetch_failed) {
   // Reached from catch blocks that may run on a background thread, so the flags and controls
   // are only touched from the UI thread.
-  dispatcher_.TryEnqueue([self = shared_from_this()] {
+  dispatcher_.TryEnqueue([self = shared_from_this(), fetch_failed] {
     self->listing_ = false;
     self->benchmarking_ = false;
-    self->fetching_ = false;
-    self->fetching_id_.clear();
+    if (fetch_failed) {
+      self->fetching_ = false;
+      self->fetching_id_.clear();
+    }
     self->refresh_button_.IsEnabled(true);
     ResourceLoader resources;
     self->benchmark_text_.Text(resources.GetString(L"Models_BenchmarkNone"));
@@ -210,6 +212,10 @@ winrt::fire_and_forget ModelPane::Refresh(bool keep_message) {
       catalog_ = result.response->catalog.value_or(std::vector<azookey::ipc::CatalogModelEntry>{});
       RenderModels();
       RenderCatalog();
+    }
+    if (refresh_again_) {
+      refresh_again_ = false;
+      Refresh(/*keep_message=*/true);
     }
   } catch (...) {
     RecoverFromFailure();
@@ -351,9 +357,26 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
   }
 }
 
+void ModelPane::UpdateFetchProgress() {
+  if (!fetch_bar_ || !fetch_text_) return;
+  ResourceLoader resources;
+  const auto percent = ProgressPercent(fetch_received_, fetch_total_);
+  fetch_bar_.IsIndeterminate(fetch_total_ == 0);
+  fetch_bar_.Value(percent);
+  std::string progress = FormatByteSize(fetch_received_);
+  if (fetch_total_ != 0) {
+    progress =
+        std::to_string(percent) + "% (" + progress + " / " + FormatByteSize(fetch_total_) + ")";
+  }
+  fetch_text_.Text(resources.GetString(L"Models_Catalog_Fetching") + L" " +
+                   winrt::to_hstring(progress));
+}
+
 void ModelPane::RenderCatalog() {
   ResourceLoader resources;
   catalog_panel_.Children().Clear();
+  fetch_bar_ = nullptr;
+  fetch_text_ = nullptr;
   catalog_heading_.Visibility(catalog_.empty() ? xaml::Visibility::Collapsed
                                                : xaml::Visibility::Visible);
   const auto selected = host_.selected_path ? host_.selected_path() : std::string();
@@ -377,21 +400,13 @@ void ModelPane::RenderCatalog() {
     row.Children().Append(Block(Str(resources, CatalogEntryStateResource(entry.state)), true));
 
     if (fetching_ && fetching_id_ == entry.id) {
-      controls::ProgressBar bar;
-      SetId(bar, L"CatalogFetchProgress_" + id);
-      bar.Maximum(100);
-      bar.IsIndeterminate(fetch_total_ == 0);
-      const auto percent = ProgressPercent(fetch_received_, fetch_total_);
-      bar.Value(percent);
-      row.Children().Append(bar);
-      std::string progress = FormatByteSize(fetch_received_);
-      if (fetch_total_ != 0) {
-        progress =
-            std::to_string(percent) + "% (" + progress + " / " + FormatByteSize(fetch_total_) + ")";
-      }
-      row.Children().Append(Block(
-          resources.GetString(L"Models_Catalog_Fetching") + L" " + winrt::to_hstring(progress),
-          true));
+      fetch_bar_ = controls::ProgressBar();
+      SetId(fetch_bar_, L"CatalogFetchProgress_" + id);
+      fetch_bar_.Maximum(100);
+      row.Children().Append(fetch_bar_);
+      fetch_text_ = Block(L"", true);
+      row.Children().Append(fetch_text_);
+      UpdateFetchProgress();
     }
 
     controls::StackPanel buttons;
@@ -464,7 +479,7 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
       co_await ResumeForeground(dispatcher);
       fetch_received_ = last->received_bytes;
       fetch_total_ = last->total_bytes;
-      RenderCatalog();
+      UpdateFetchProgress();
       if (watch.Stalled(last->received_bytes, CatalogFetchStallWatch::Clock::now())) {
         stalled = true;
         break;
@@ -504,9 +519,14 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
               Str(resources, CatalogFetchErrorResource("busy")));
     }
     RenderCatalog();
-    Refresh(/*keep_message=*/true);
+    // A listing already running may have read the catalog before the fetch ended.
+    if (listing_) {
+      refresh_again_ = true;
+    } else {
+      Refresh(/*keep_message=*/true);
+    }
   } catch (...) {
-    RecoverFromFailure();
+    RecoverFromFailure(/*fetch_failed=*/true);
   }
 }
 

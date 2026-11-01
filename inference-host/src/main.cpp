@@ -1249,8 +1249,11 @@ int main(int argc, char** argv) {
         if (next.model_path.empty()) return;
         azookey::host::ModelLoadOptions reload{next.model_path, next.backend, next.n_gpu_layers,
                                                next.inference_threads};
-        reload.resolve_prompt_format =
-            azookey::host::CatalogPromptFormatResolver(catalog_matcher, next.model_path);
+        // A --model path is not model.selectedPath, so it is not matched (as at startup).
+        if (!explicit_model_path) {
+          reload.resolve_prompt_format =
+              azookey::host::CatalogPromptFormatResolver(catalog_matcher, next.model_path);
+        }
         const auto loaded = engine.LoadModelWithResult(reload);
         LogBusinessOutcome(runtime_log,
                            loaded.ok ? azookey::logging::RuntimeLogLevel::Info

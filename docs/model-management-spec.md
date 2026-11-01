@@ -161,21 +161,23 @@ zip には catalog のファイルを置かない。インストール先のフ�
 （`kanakanji-edge-v1`）を選べる entry とする。ファイルが schema に通ることは手元の pre-commit の
 `check-jsonschema` で、parser に通り既定が zenz であることは CI でも走る単体テストで確かめる。
 
-既定の catalog を読むのは `azookey_inference_host models catalog` と `models fetch`（§3.1.2）
-である。Host の常駐経路は catalog を読まず、`model.selectedPath` の GGUF をそのまま使う。
-`selectedPath` の GGUF と catalog の entry の照合（`docs/copilot-pc-backend-spec.md` §4.4）は
-`MatchSelectedPathToCatalog` が持つ。GGUF が `zenzai\` の直下にあり、ファイル名（大文字小文字を
-区別しない）と SHA-256 が R1 artifact と一致した entry を返す。SHA-256 は呼び出し側が計算して
-渡す。Host 起動時にこれを呼んで `promptFormat` を使う配線と SHA-256 の保持、設定アプリと IPC
-からの取得、Host 起動時の自動取得は、後続の Issue（DEV-1821）が定める。
+既定の catalog を読むのは、CLI の `azookey_inference_host models catalog` と `models fetch`
+（§3.1.2）、常駐 Host の照合と取得である。`selectedPath` の GGUF と catalog の entry の照合
+（`docs/copilot-pc-backend-spec.md` §4.4）は `MatchSelectedPathToCatalog` が持つ。GGUF が
+`zenzai\` の直下にあり、ファイル名（大文字小文字を区別しない）と SHA-256 が R1 artifact と一致
+した entry を返す。SHA-256 は呼び出し側が計算して渡す。常駐 Host では `CatalogModelMatcher` が
+SHA-256 を計算・保持してこれを呼び、一致した entry の `promptFormat` をロードに使う（同 §4.4）。
+設定アプリからの取得は §4.4 の IPC が持つ。Host 起動時の自動取得は行わず、入れるかは
+`docs/sideload-packaging-spec.md` §1.6.1 (b) の将来の判断とする。
 
 ### 3.1.2 GGUF 取得基盤（DEV-439）
 
 DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
 `%LOCALAPPDATA%\azooKey\models\zenzai\` 配下の確定パスへ配置する共通 GET 基盤である。
 ダウンローダはネットワーク取得と整合検証だけを担当する。catalog の entry から取得する
-処理は `FetchCatalogModel`（下記「catalog の entry の取得」）が持つ。Host 起動時の
-プリフェッチと `selectedPath` の更新は後続の Issue の責務とする。
+処理は `FetchCatalogModel`（下記「catalog の entry の取得」）が持つ。Host は起動時に
+プリフェッチしない。取得は `selectedPath` を変えず、`selectedPath` は設定アプリの共通の保存が
+書く（§6.1）。
 
 取得手順は次のとおり。
 
@@ -233,7 +235,7 @@ HTTP はループバックの自動テストに限って使用する。
 6. `model.selectedPath` は変えない。
 
 失敗の理由は固定カテゴリ（`directory_unavailable`、`destination_occupied`、`download_failed`、
-`format:<カテゴリ>`）で返し、ログに出してよいのは entry の id、状態、カテゴリ、受信バイト数だけとする。
+`cancelled`（呼び出し側の取り消し。常駐 Host の停止）、`format:<カテゴリ>`）で返し、ログに出してよいのは entry の id、状態、カテゴリ、受信バイト数だけとする。
 ダウンローダのメッセージは URL やパスを含み得るので、CLI の標準エラーにだけ出す。
 
 入口は CLI の `azookey_inference_host models fetch [<id>]` である（`--id <id>` とも書ける。
@@ -246,14 +248,17 @@ id を省くと `defaultModelId`）。CLI は `settings.json` の `privacy.mode`
 `status=<downloaded|already_valid|offline|not_fetchable|failed> id=<id> bytes=<受信バイト数>`
 の 1 行で出し、成功時は `path=<確定パス>` を足す。`models catalog` は既定の catalog の entry を
 1 行ずつ、id、既定かどうか、`promptFormat`、`sizeBytes`、`zenzai\` に置かれているか、パスを
-タブ区切りで出す。どちらもローカル利用者が自分で起動する CLI であり、Host の常駐経路からは
-呼ばない。
+タブ区切りで出す。CLI の `models catalog` と `models fetch` は、ローカル利用者が自分で起動する
+コマンドであり、Host の常駐経路からは呼ばない。
 
 もう 1 つの入口は、設定アプリのモデル ペインの取得ボタンから送る `FetchCatalogModel`（§4.4）
 である。常駐 Host が同じ `FetchCatalogModel` をバックグラウンドのスレッドで呼び、
 `privacy.mode=offline` の判定には Host の実行中の設定（`UpdateConfig` で切り替わる値）を使う。
 取得中に `offline` へ切り替わるか Host が止まると、ダウンローダの読み取りの合間で取得をやめる。
 Host の停止で止まった取得は `cancelled` で失敗し、`.part` が残るので次の取得で続きから再開する。
+WinHTTP の接続や受信で待っている間は、その timeout（接続 15 秒、受信 30 秒）が過ぎるまで
+止まらない。Host は停止時に取得のスレッドの終わりを待つので、取得中の Host の停止は数十秒
+遅れることがある。
 Host が起動時に利用者の操作なしで取得することはない（`docs/sideload-packaging-spec.md` §1.6.1 (b)）。
 
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
@@ -358,7 +363,8 @@ Request（client → host）:
   "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2",
   "payload": {
     "directory": "%LOCALAPPDATA%\\azooKey\\models",
-    "compute_sha256": false
+    "compute_sha256": false,
+    "include_catalog": true
   }
 }
 ```
@@ -400,6 +406,29 @@ Response（host → client、同一 `request_id` / `trace_id` を返す）:
         },
         "recommended_backend": "winml",
         "last_load_status": "not_loaded"
+      },
+      {
+        "path": "C:\\Users\\me\\AppData\\Local\\azooKey\\models\\zenzai\\ggml-model-Q5_K_M.gguf",
+        "file_name": "ggml-model-Q5_K_M.gguf",
+        "format": "gguf",
+        "size_bytes": 73871936,
+        "valid": true,
+        "metadata": {"model_family": "gpt2", "quantization": "Q5_K_M"},
+        "last_load_status": "success",
+        "catalog_id": "zenz-v3.2-small"
+      }
+    ],
+    "catalog": [
+      {
+        "id": "zenz-v3.2-small",
+        "display_name": "zenz-v3.2-small Q5_K_M",
+        "file_name": "ggml-model-Q5_K_M.gguf",
+        "is_default": true,
+        "size_bytes": 73871936,
+        "prompt_format": "zenz-v3",
+        "fetchable": true,
+        "state": "verified",
+        "path": "C:\\Users\\me\\AppData\\Local\\azooKey\\models\\zenzai\\ggml-model-Q5_K_M.gguf"
       }
     ]
   }
@@ -797,6 +826,14 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
   ファイルを置き換えず接続しないこと、形式検証に落ちた取得ファイルの削除、offline と読めない
   `settings.json` とパスが決まらない場合に接続しないこと）。実ネットワークへの取得は Human Gate
   で確かめる
+- unit: `CatalogModelMatcher` の照合（`\\?\` 接頭辞と末尾の区切りの除去、名前の合わないファイルを
+  計算しないこと、サイズの変化での再計算）と、`CatalogFetchService` の同時 1 件・進捗・offline・
+  停止による `cancelled`・開始と同じロックで取った状態を、偽のダウンローダで検証する
+- unit: §4.1 の `include_catalog` / `catalog` / `catalog_id` と §4.4 の要求・応答の往復、旧 Host と旧
+  client の組み合わせで省略できること、Dispatcher の capability・未認証・開始から完了までの追跡、
+  設定アプリの IPC client が capability の無い Host に送らないこと、進捗の割合と停滞の判定
+- integration: ループバック HTTP で、ダウンローダの進捗が再開した分を含む受信バイト数と、
+  `Content-Length` に再開分を足した全体のサイズを返すこと
 - integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、
   Range レジューム、Range 無視時と `416` 後の全量再取得、サイズ上限超過時の書き込み中断、
   ネットワーク不通時の既存ファイル保持を検証する

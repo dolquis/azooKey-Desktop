@@ -507,7 +507,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
-| `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model` | model-management §4 |
+| `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model`。`ListModels` の要求の `include_catalog` で、応答に既定の catalog の `catalog[]` と各 GGUF の `catalog_id` が付く（DEV-1821） | model-management §4.1 / §4.2 |
+| `FetchCatalogModel` / `QueryCatalogFetch` | 設定アプリ → Host | DEV-1821。capability `fetch_catalog_model`。開始はすぐ応答し、進捗と結果は問い合わせで得る | model-management §4.4 |
 | `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` / `ImportLearningData` | 設定アプリ → Host（`ForgetLearningEntry` の `reading` + `surface` 形は TIP → Host） | M49、capability `learning_data_management`。payload codec は `Payloads.h` の M49 節 | learning-data-management §4 |
 | `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
 | `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |

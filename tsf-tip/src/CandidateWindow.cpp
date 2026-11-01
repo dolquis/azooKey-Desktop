@@ -791,10 +791,13 @@ void CandidateWindow::StartAppearance() {
   // A failure leaves the visual at its last opacity, which every earlier fade
   // ended at 1 and a new visual starts at, so the window still appears and only
   // the fade is lost. The drawing failure state is not touched.
-  if (render_) render_->engine.FadeIn(animate ? kFadeInSeconds : 0.0);
+  const bool set = render_ && render_->engine.FadeIn(animate ? kFadeInSeconds : 0.0);
 #ifdef AZOOKEY_TSF_TESTING
   last_appearance_ = animate ? AppearanceForTest::Faded : AppearanceForTest::Immediate;
+  last_appearance_set_ = set;
   ++appearances_;
+#else
+  (void)set;
 #endif
 }
 

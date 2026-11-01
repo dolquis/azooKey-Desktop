@@ -205,7 +205,12 @@ bool RenderingEngine::FadeIn(double seconds) {
   } else if (FAILED(hr = visual->SetOpacity(1.0f))) {
     return Fail("opacity", hr);
   }
-  if (FAILED(hr = state_->composition_device->Commit())) return Fail("commit", hr);
+  if (FAILED(hr = state_->composition_device->Commit())) {
+    // The uncommitted animation would otherwise go out with the next frame's
+    // Commit and fade a window that is already shown back from 0.
+    visual->SetOpacity(1.0f);
+    return Fail("commit", hr);
+  }
   return true;
 }
 

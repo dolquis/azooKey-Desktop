@@ -472,6 +472,7 @@ TEST(CandidateWindowRenderTest, AppearingFadesInOnceAndHonorsTheAnimationSetting
   window.Show(POINT{20, 20}, {{L"候補", L""}, {L"二", L""}}, 0);
   ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
   EXPECT_EQ(window.last_appearance_for_test(), Appearance::Faded);
+  EXPECT_TRUE(window.last_appearance_set_for_test());
   EXPECT_EQ(window.appearances_for_test(), 1);
 
   // A Show or a selection move of the visible window does not fade it again.
@@ -486,6 +487,7 @@ TEST(CandidateWindowRenderTest, AppearingFadesInOnceAndHonorsTheAnimationSetting
   window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
   ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
   EXPECT_EQ(window.last_appearance_for_test(), Appearance::Immediate);
+  EXPECT_TRUE(window.last_appearance_set_for_test());
   EXPECT_EQ(window.appearances_for_test(), 2);
 
   // A frame that fails to draw keeps the window hidden and sets no opacity.

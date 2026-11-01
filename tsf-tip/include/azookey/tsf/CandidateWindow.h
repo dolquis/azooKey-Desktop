@@ -180,6 +180,8 @@ class CandidateWindow {
   enum class AppearanceForTest { None, Faded, Immediate };
   AppearanceForTest last_appearance_for_test() const { return last_appearance_; }
   int appearances_for_test() const { return appearances_; }
+  // Whether the last appearance's RenderingEngine::FadeIn succeeded.
+  bool last_appearance_set_for_test() const { return last_appearance_set_; }
   // Stands in for SPI_GETCLIENTAREAANIMATION: -1 reads the system, 0 off, 1 on.
   static void SetClientAreaAnimationForTest(int enabled);
 #endif
@@ -255,6 +257,7 @@ class CandidateWindow {
 #ifdef AZOOKEY_TSF_TESTING
   AppearanceForTest last_appearance_{AppearanceForTest::None};
   int appearances_{0};
+  bool last_appearance_set_{false};
 #endif
 
   static int ScaleForDpi(int value, UINT dpi);

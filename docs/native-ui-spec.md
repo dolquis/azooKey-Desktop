@@ -314,7 +314,8 @@ ComPtr<IDCompositionVisual3> visual;   // root visual（IDCompositionVisual2 か
 ComPtr<IDCompositionAnimation> opacity_anim;
 device->CreateAnimation(&opacity_anim);
 const double T = 0.15;
-opacity_anim->AddCubic(0.0, 0.0f, 3.0 / T, -3.0 / (T * T), 1.0 / (T * T * T));
+opacity_anim->AddCubic(0.0, 0.0f, static_cast<float>(3.0 / T), static_cast<float>(-3.0 / (T * T)),
+                       static_cast<float>(1.0 / (T * T * T)));
 opacity_anim->End(T, 1.0f);
 visual->SetOpacity(opacity_anim.Get());
 device->Commit();
@@ -322,6 +323,8 @@ device->Commit();
 
 アニメーションは合成エンジンが進めるので、タイマーは使わない。設定に失敗しても窓は表示する
 （不透明度は直前の値、つまり前回のフェードの終値 1 か、新しい visual の既定値 1 のまま）。
+アニメーションの設定後に commit だけが失敗したときは、不透明度 1 を置き直してから失敗を返す。
+未 commit のアニメーションが次のフレームの commit で確定し、表示中の窓が 0 からフェードし直すのを防ぐため。
 
 ### 6.2 選択の移動
 

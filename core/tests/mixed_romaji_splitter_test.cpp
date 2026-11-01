@@ -313,6 +313,29 @@ TEST(MixedRomajiSplitterTest, ReadableWordsNeedAClean4LetterCommonWord) {
   // A J piece starting with a vowel right after the word pays the boundary
   // cost (eki|made|aruita).
   EXPECT_EQ(Alternatives("ekimadearuita", Dictionary({{"made", {"made"}}}), Inline()), none);
+  // Costs that would only offset one another: each of these passes every other
+  // check, and the J pieces cost no more than the J segment.
+  // - A word that starts a J segment paying the vowel cost after excel would
+  //   drop that cost (excel|area|niiku).
+  EXPECT_EQ(
+      Describe(SplitMixedRomaji("excelareaniiku",
+                                Dictionary({{"excel", {"Excel"}}, {"area", {"area"}}}), Inline())
+                   .front()),
+      "E:Excel(high) | J:あれあにいく");
+  EXPECT_EQ(Alternatives("excelareaniiku", Dictionary({{"excel", {"Excel"}}, {"area", {"area"}}}),
+                         Inline()),
+            none);
+  // - A typed capital costs in the J segment (asita|kiTe|kudasai).
+  EXPECT_EQ(
+      Describe(
+          SplitMixedRomaji("asitakiTekudasai", Dictionary({{"kite", {"kite"}}}), Inline()).front()),
+      "J:あしたきてください");
+  EXPECT_EQ(Alternatives("asitakiTekudasai", Dictionary({{"kite", {"kite"}}}), Inline()), none);
+  // - An unnatural kana (ゔ) costs in the J segment (ano|vane|ga).
+  EXPECT_EQ(
+      Describe(SplitMixedRomaji("anovanega", Dictionary({{"vane", {"vane"}}}), Inline()).front()),
+      "J:あのゔぁねが");
+  EXPECT_EQ(Alternatives("anovanega", Dictionary({{"vane", {"vane"}}}), Inline()), none);
   // Three letters are too short; a proper noun or acronym only is no common
   // word; a Shift capital first is the lattice's own call.
   EXPECT_EQ(Alternatives("kenwomiru", Dictionary({{"ken", {"ken"}}}), Inline()), none);

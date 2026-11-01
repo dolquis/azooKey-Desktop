@@ -1900,6 +1900,35 @@ TEST_F(MixedInlineDispatchTest, ReadableWordInAJapaneseSentenceFollowsTheFirstCa
   EXPECT_EQ(Surfaces(parsed->candidates), Surfaces(off));
 }
 
+// Section 8.3 item 3 in a sentence with E segments: the low-confidence segments
+// come first and the readable words share the three conversions with them.
+TEST_F(MixedInlineDispatchTest, ReadableWordsShareTheThreeConversionsWithLowSegments) {
+  auto config = PatientConfig();
+  config.mixed_english_inline_high_confidence = false;
+  azookey::host::Dispatcher low(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, const ipc::QueryCandidatesRequest& q) {
+    const auto resp = low.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    const auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  };
+  const auto english_readings = [](const std::vector<ipc::CandidateField>& candidates) {
+    std::vector<std::string> out;
+    for (const auto& c : candidates)
+      for (const auto& segment : c.segments)
+        if (segment.tag == kEnglish) out.push_back(segment.reading);
+    return out;
+  };
+  // One low segment and one readable word: both, the segment first.
+  const auto one = query(1481, Request("ぎてゅbきてください", "githubkitekudasai", true));
+  EXPECT_EQ(english_readings(one), (std::vector<std::string>{"github", "kite"}));
+  // Three low segments use all three: the readable word is not tried.
+  const auto three = query(
+      1482, Request("ぎてゅbとぷshとぎてゅbきてください", "githubtopushtogithubkitekudasai", true));
+  EXPECT_EQ(english_readings(three), (std::vector<std::string>{"github", "push", "github"}));
+}
+
 // Section 12 for a split of one J segment: typo correction stays on, and a
 // corrected reading is not the typed one the readable words come from.
 TEST_F(MixedInlineDispatchTest, CorrectedReadingHasNoReadableWordCandidate) {
@@ -6085,6 +6114,51 @@ TEST_F(DispatcherTest, WithoutAModelTheWindowAppendsTheOtherReadingsDictionaryCa
   // are left out.
   const auto shown = surfaces(window);
   EXPECT_EQ(std::count(shown.begin(), shown.end(), "げんいん"), 0);
+}
+
+// M63 section 8.3 for a split of one J segment (DEV-1820): the DEV-1734 window
+// stays as it is, the other reading's candidates included, and the readable
+// word turned English follows its first candidate.
+TEST_F(MixedEnglishDispatchTest, ReadableWordKeepsTheAmbiguousReadingsWindow) {
+  // Without a model the window appends the other reading's dictionary words.
+  ASSERT_TRUE(user_dict.Add({"来て原因", "きてげんいん"}));
+  // Section 10's deadline is wall-clock time; an hour keeps a slow run's
+  // conversion in.
+  auto config = DefaultDispatcherConfig();
+  config.mixed_english_conversion_deadline = std::chrono::hours(1);
+  azookey::host::Dispatcher patient(&engine, &scheduler, &user_dict, config);
+  const auto query = [&](uint64_t id, bool mixed) {
+    auto q = Request("きてげんにん", "kitegennin", mixed);
+    q.alt_readings = {"きてげんいん"};
+    const auto resp = patient.Dispatch(
+        MakeReq(id, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q)));
+    EXPECT_TRUE(resp.has_value());
+    auto parsed = resp ? ipc::ParseQueryCandidatesResponse(resp->payload_json) : std::nullopt;
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto off = query(1491, false);
+  const auto on = query(1492, true);
+  EXPECT_TRUE(off.corrected_reading.empty());
+  EXPECT_TRUE(on.corrected_reading.empty());
+  ASSERT_FALSE(off.candidates.empty());
+  // The other reading's candidates are in the window of M63 off.
+  ASSERT_TRUE(std::any_of(off.candidates.begin(), off.candidates.end(),
+                          [](const auto& c) { return c.reading == "きてげんいん"; }));
+  ASSERT_GE(on.candidates.size(), off.candidates.size() + 1);
+  EXPECT_EQ(on.candidates[0].surface, off.candidates[0].surface);
+  EXPECT_TRUE(on.candidates[0].segments.empty());
+  ASSERT_EQ(on.candidates[1].segments.size(), 2u);
+  EXPECT_EQ(on.candidates[1].segments[0].reading, "kite");
+  EXPECT_EQ(on.candidates[1].segments[0].tag, 4);
+  // After it, the window of M63 off with its readings.
+  std::vector<std::pair<std::string, std::string>> rest;
+  for (size_t i = 2; i < on.candidates.size(); ++i)
+    rest.emplace_back(on.candidates[i].surface, on.candidates[i].reading);
+  std::vector<std::pair<std::string, std::string>> off_rest;
+  for (size_t i = 1; i < off.candidates.size(); ++i)
+    if (off.candidates[i].surface != on.candidates[1].surface)
+      off_rest.emplace_back(off.candidates[i].surface, off.candidates[i].reading);
+  EXPECT_EQ(rest, off_rest);
 }
 
 namespace {

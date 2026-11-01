@@ -337,27 +337,33 @@ std::vector<MixedRomajiAlternative> ReadableEnglishAlternatives(
     const double adopted_cost = before + JapaneseEdgeCost(raw_romaji, lower, s, t);
     const auto whole_kana = RomajiKanaConverter::ConvertForCommit(lower.substr(s, t - s));
     for (size_t begin = s; begin < t; ++begin) {
-      // A Shift capital first makes the edge sure (section 8.1 (i)), never one
-      // of these.
-      if (IsAsciiUpper(raw_romaji[begin])) continue;
+      // No boundary cost on either side of the word: a word that starts a J
+      // segment paying one would drop that cost instead of adding none.
+      if (begin == s && before != 0.0) continue;
+      const auto head = RomajiKanaConverter::ConvertForCommit(lower.substr(s, begin - s));
+      const double head_cost =
+          begin > s ? before + JapaneseEdgeCost(raw_romaji, lower, s, begin) : 0.0;
       const size_t max_end = std::min(t, begin + options.max_inline_english_length);
       for (size_t end = begin + min_length; end <= max_end; ++end) {
         // The whole composition as one word is M63-A (section 8.2).
         if (begin == 0 && end == lower.size()) continue;
+        if (end < t && BoundaryCost(lower, end) != 0.0) continue;
+        // A typed capital (a Shift capital first is sure by section 8.1 (i)) or
+        // an unnatural kana would cost in the J segment, so the J pieces could
+        // cost less than it while adding a cost of their own.
+        const auto typed = raw_romaji.substr(begin, end - begin);
+        if (std::any_of(typed.begin(), typed.end(), IsAsciiUpper)) break;
         const std::string key = lower.substr(begin, end - begin);
         const auto kana = RomajiKanaConverter::ConvertForCommit(key);
         if (HasAsciiLetter(kana)) continue;  // Not readable: the lattice's own call.
+        if (CountUnnaturalKana(kana) != 0) continue;
         // Section 8.3 item 3: the kana around the word are the J segment's
         // kana cut at the word.
-        const auto head = RomajiKanaConverter::ConvertForCommit(lower.substr(s, begin - s));
         const auto tail = RomajiKanaConverter::ConvertForCommit(lower.substr(end, t - end));
         if (head + kana + tail != whole_kana) continue;
         // Trap 1 of DEV-1820: the J pieces cost no more than the J segment, so
         // the path differs from the adopted one by the E edge alone.
-        const double head_cost =
-            begin > s ? before + JapaneseEdgeCost(raw_romaji, lower, s, begin) : 0.0;
-        const double tail_cost =
-            end < t ? BoundaryCost(lower, end) + JapaneseEdgeCost(raw_romaji, lower, end, t) : 0.0;
+        const double tail_cost = end < t ? JapaneseEdgeCost(raw_romaji, lower, end, t) : 0.0;
         constexpr double kEpsilon = 1e-9;
         if (head_cost + tail_cost > adopted_cost + kEpsilon) continue;
         const auto matches = lookup(key);
@@ -381,9 +387,8 @@ std::vector<MixedRomajiAlternative> ReadableEnglishAlternatives(
         english.kind = MixedRomajiSegmentKind::English;
         english.raw_begin = begin;
         english.raw_end = end;
-        const auto typed = raw_romaji.substr(begin, end - begin);
-        const bool has_upper = std::any_of(typed.begin(), typed.end(), IsAsciiUpper);
-        english.surface = has_upper ? std::string(typed) : matches.front().surface;
+        // Section 6.4 without typed capitals: the most frequent surface.
+        english.surface = matches.front().surface;
         english.confidence = EnglishSegmentConfidence::Low;
         alternative.english_segment = split.segments.size();
         split.segments.push_back(std::move(english));

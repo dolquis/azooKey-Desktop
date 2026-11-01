@@ -96,11 +96,12 @@ std::vector<MixedRomajiSplit> SplitMixedRomaji(std::string_view raw_romaji,
 
 // Section 8.3 item 3 for the J segments of `adopted` (the first split of
 // SplitMixedRomaji): each common dictionary word (a lowercase surface without
-// flags) of min_readable_english_length or more that reads as kana, not typed
-// with a Shift capital first, whose kana cut the J segment's kana and whose J
-// pieces cost no more than the J segment, so the path differs from the adopted
-// one by the E edge alone. Every other segment is as adopted. In raw romaji
-// order, at most max_splits; empty without split_inline or a dictionary.
+// flags) of min_readable_english_length or more that reads as kana without an
+// unnatural kana, typed without capitals, whose kana cut the J segment's kana,
+// with no boundary cost on either side and J pieces that cost no more than the
+// J segment, so the path differs from the adopted one by the E edge alone.
+// Every other segment is as adopted. In raw romaji order, at most max_splits;
+// empty without split_inline or a dictionary.
 std::vector<MixedRomajiAlternative> ReadableEnglishAlternatives(
     std::string_view raw_romaji, const MixedRomajiSplit& adopted, const EnglishWordLookup& lookup,
     const MixedRomajiSplitOptions& options = {});

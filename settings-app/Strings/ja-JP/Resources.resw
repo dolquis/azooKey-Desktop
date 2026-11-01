@@ -351,6 +351,7 @@
   <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
   <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
   <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。Host は取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
+  <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で Host が再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>
   <data name="Models_Catalog_Result_downloaded" xml:space="preserve"><value>取得し、SHA-256 と形式を確かめました。</value></data>
   <data name="Models_Catalog_Result_already_valid" xml:space="preserve"><value>SHA-256 が一致するファイルが既にあったので、それを使います。</value></data>
   <data name="Models_Catalog_Result_offline" xml:space="preserve"><value>privacy.mode が offline のため取得しませんでした。</value></data>

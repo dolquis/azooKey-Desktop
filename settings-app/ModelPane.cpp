@@ -183,12 +183,12 @@ void ModelPane::ShowBar(controls::InfoBarSeverity severity, const winrt::hstring
   problem_bar_.IsOpen(true);
 }
 
-winrt::fire_and_forget ModelPane::Refresh() {
+winrt::fire_and_forget ModelPane::Refresh(bool keep_message) {
   const auto self = shared_from_this();
   if (listing_) co_return;
   listing_ = true;
   refresh_button_.IsEnabled(false);
-  problem_bar_.IsOpen(false);
+  if (!keep_message) problem_bar_.IsOpen(false);
   const auto dispatcher = dispatcher_;
   try {
     co_await winrt::resume_background();
@@ -456,6 +456,9 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
     const bool follow = call_status == HostCallStatus::Ok &&
                         (last->ok || (last->error == "busy" && last->model_id == model_id));
     bool stalled = false;
+    // A poll that gets no answer is retried: only a stall (no new bytes, including polls that
+    // fail for that long) ends the wait.
+    HostCallStatus poll_status = HostCallStatus::Ok;
     CatalogFetchStallWatch watch(CatalogFetchStallWatch::Clock::now());
     while (follow && last->state == "running" && last->model_id == model_id) {
       co_await ResumeForeground(dispatcher);
@@ -468,9 +471,8 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
       }
       co_await winrt::resume_after(std::chrono::milliseconds(500));
       auto poll = RequestQueryCatalogFetch(options);
-      call_status = poll.status;
-      if (call_status != HostCallStatus::Ok) break;
-      last = std::move(poll.response);
+      poll_status = poll.status;
+      if (poll_status == HostCallStatus::Ok) last = std::move(poll.response);
     }
     co_await ResumeForeground(dispatcher);
 
@@ -485,17 +487,24 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
       ShowBar(controls::InfoBarSeverity::Error, failed_title,
               Str(resources, CatalogFetchErrorResource(last->error.value_or(""))));
     } else if (stalled) {
+      // The last poll's own failure says more than the stall when the Host stopped answering.
       ShowBar(controls::InfoBarSeverity::Warning, failed_title,
-              resources.GetString(L"Models_Catalog_Stalled"));
+              poll_status == HostCallStatus::Ok
+                  ? resources.GetString(L"Models_Catalog_Stalled")
+                  : Str(resources, HostCallStatusResource(poll_status)));
     } else if (last->state == "done" && last->model_id == model_id) {
       ShowFetchResult(*last);
+    } else if (last->state == "idle") {
+      // The Host restarted while fetching; the .part it left lets the next fetch resume.
+      ShowBar(controls::InfoBarSeverity::Warning, failed_title,
+              resources.GetString(L"Models_Catalog_Interrupted"));
     } else {
       // The Host ran another entry's fetch meanwhile; this one's outcome is not known.
       ShowBar(controls::InfoBarSeverity::Warning, failed_title,
               Str(resources, CatalogFetchErrorResource("busy")));
     }
     RenderCatalog();
-    Refresh();
+    Refresh(/*keep_message=*/true);
   } catch (...) {
     RecoverFromFailure();
   }

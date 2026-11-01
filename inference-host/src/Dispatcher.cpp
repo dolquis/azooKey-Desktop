@@ -2221,6 +2221,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleListModels(const ipc::Envelope& r
 // answers at once with its state; QueryCatalogFetch follows its progress.
 std::optional<ipc::Envelope> Dispatcher::HandleFetchCatalogModel(const ipc::Envelope& req) {
   ipc::CatalogFetchResponse res;
+  std::optional<CatalogFetchSnapshot> state;
   const auto parsed = ipc::ParseFetchCatalogModelRequest(req.payload_json);
   if (!parsed) {
     res.ok = false;
@@ -2229,7 +2230,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleFetchCatalogModel(const ipc::Enve
     res.ok = false;
     res.error = "catalog_unavailable";
   } else {
-    switch (config_.catalog_fetch->Start(parsed->model_id)) {
+    // The state comes from the start itself: a fetch another connection starts right after
+    // must not be reported as this one.
+    state.emplace();
+    switch (config_.catalog_fetch->Start(parsed->model_id, &*state)) {
       case CatalogFetchStartResult::Started:
         break;
       case CatalogFetchStartResult::Busy:
@@ -2246,7 +2250,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleFetchCatalogModel(const ipc::Enve
         break;
     }
   }
-  if (config_.catalog_fetch) FillCatalogFetchResponse(config_.catalog_fetch->Snapshot(), res);
+  if (!state && config_.catalog_fetch) state = config_.catalog_fetch->Snapshot();
+  if (state) FillCatalogFetchResponse(*state, res);
   return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
 }
 

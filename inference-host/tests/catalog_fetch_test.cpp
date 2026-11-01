@@ -330,6 +330,41 @@ TEST(CatalogFetchServiceTest, RunsOneFetchAtATimeAndReportsProgressAndResult) {
   EXPECT_EQ(f.service->Start("nope"), CatalogFetchStartResult::UnknownModelId);
 }
 
+// The start reports its own fetch, taken under the same lock, and a refused start the fetch
+// that refused it.
+TEST(CatalogFetchServiceTest, StartReportsTheFetchItStartedOrTheOneThatRefusedIt) {
+  ServiceFixture f;
+  CatalogFetchSnapshot started;
+  ASSERT_EQ(f.service->Start("edge", &started), CatalogFetchStartResult::Started);
+  EXPECT_EQ(started.state, CatalogFetchSnapshot::State::Running);
+  EXPECT_EQ(started.model_id, "edge");
+  WaitEntered(*f.gate);
+  CatalogFetchSnapshot refused;
+  EXPECT_EQ(f.service->Start("zenz", &refused), CatalogFetchStartResult::Busy);
+  EXPECT_EQ(refused.state, CatalogFetchSnapshot::State::Running);
+  EXPECT_EQ(refused.model_id, "edge");
+  Release(*f.gate);
+  EXPECT_EQ(WaitDone(*f.service).status, ModelFetchStatus::Downloaded);
+}
+
+// Stopping while the existing file is hashed is a cancellation, not another file's content.
+TEST(CatalogFetchServiceTest, StopDuringTheExistingFileCheckIsCancelledNotOccupied) {
+  const auto dir = TestDir();
+  const auto entry = MakeEntry("zenz", "zenz.gguf", kShaA, ZenzaiPromptFormat::ZenzV3);
+  WriteBytes(dir / "zenzai" / "zenz.gguf", "placed");
+  auto gate = std::make_shared<GatedDownloader::Gate>();
+  GatedDownloader downloader(gate);
+  azookey::host::ModelFetchHooks hooks;
+  hooks.cancelled = [] { return true; };
+
+  const auto result =
+      azookey::host::FetchCatalogModel(entry, dir / "zenzai", downloader, {}, hooks);
+
+  EXPECT_EQ(result.status, ModelFetchStatus::Failed);
+  EXPECT_EQ(result.error, "cancelled");
+  fs::remove_all(dir);
+}
+
 TEST(CatalogFetchServiceTest, OfflineFetchesNothing) {
   ServiceFixture f;
   *f.network = false;

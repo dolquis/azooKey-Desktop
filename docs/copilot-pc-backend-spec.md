@@ -450,7 +450,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   変えない。Host は `selectedPath` の GGUF を catalog の entry に照合し（`zenzai\` の直下にあり、
   ファイル名と SHA-256 が R1 artifact と一致する）、一致した entry の R2 artifact を解決する。
   照合はモデルをロードするたび（起動時、`UpdateConfig`、`LoadModel`、電源の変化での再ロード）に
-  ロードするスレッドで行い、照合には Host に埋め込んだ既定の catalog を使う。`selectedPath` の
+  ロードするスレッドで行い、照合には Host に埋め込んだ既定の catalog を使う。`selectedPath` を
+  経由しないロード（CLI の `--model` で起動したときのロードと、`BenchmarkModel` の別エンジン）は
+  照合せず、形式を語彙から推定する。`selectedPath` の
   `\\?\` 接頭辞と末尾の区切りは除いてから比べる。8.3 短縮名などほかの書き方は一致しないものとし、
   R1 だけで使う。
   一致した entry の `promptFormat` は R1 と R2 の両方に使う。照合できない GGUF（利用者が置いた

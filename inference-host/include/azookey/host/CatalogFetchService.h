@@ -60,8 +60,9 @@ class CatalogFetchService {
   CatalogFetchService(const CatalogFetchService&) = delete;
   CatalogFetchService& operator=(const CatalogFetchService&) = delete;
 
-  // An empty id is the catalog's defaultModelId.
-  CatalogFetchStartResult Start(std::string_view model_id);
+  // An empty id is the catalog's defaultModelId. state, when given, receives the fetch state
+  // under the same lock: the fetch just started, or the one that made it Busy.
+  CatalogFetchStartResult Start(std::string_view model_id, CatalogFetchSnapshot* state = nullptr);
   CatalogFetchSnapshot Snapshot() const;
   // Stops a running download between blocking operations and waits for the thread. Later
   // Start calls return Unavailable. Also run by the destructor.

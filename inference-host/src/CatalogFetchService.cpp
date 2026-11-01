@@ -30,7 +30,8 @@ CatalogFetchService::CatalogFetchService(std::shared_ptr<CatalogModelMatcher> ma
 
 CatalogFetchService::~CatalogFetchService() { Shutdown(); }
 
-CatalogFetchStartResult CatalogFetchService::Start(std::string_view model_id) {
+CatalogFetchStartResult CatalogFetchService::Start(std::string_view model_id,
+                                                   CatalogFetchSnapshot* state) {
   if (!matcher_ || !downloader_) return CatalogFetchStartResult::Unavailable;
   const auto& catalog = matcher_->catalog();
   const std::string id(model_id.empty() ? std::string_view(catalog.default_model_id) : model_id);
@@ -42,23 +43,39 @@ CatalogFetchStartResult CatalogFetchService::Start(std::string_view model_id) {
     }
   }
   std::thread finished;
+  CatalogFetchStartResult result = CatalogFetchStartResult::Started;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (stopping_) return CatalogFetchStartResult::Unavailable;
-    if (snapshot_.state == CatalogFetchSnapshot::State::Running) {
-      return CatalogFetchStartResult::Busy;
+    if (stopping_) {
+      result = CatalogFetchStartResult::Unavailable;
+    } else if (snapshot_.state == CatalogFetchSnapshot::State::Running) {
+      result = CatalogFetchStartResult::Busy;
+    } else if (!entry) {
+      result = CatalogFetchStartResult::UnknownModelId;
+    } else {
+      const auto previous = snapshot_;
+      snapshot_ = CatalogFetchSnapshot{};
+      snapshot_.state = CatalogFetchSnapshot::State::Running;
+      snapshot_.model_id = entry->id;
+      snapshot_.total_bytes = entry->size_bytes;
+      try {
+        // The new worker waits for this lock before it touches the snapshot.
+        std::thread next([this, copy = *entry] { Run(copy); });
+        // The previous worker has published Done and is only returning; join it outside.
+        finished = std::move(worker_);
+        worker_ = std::move(next);
+      } catch (...) {
+        // No thread: the previous worker and result stay as they were.
+        snapshot_ = previous;
+        result = CatalogFetchStartResult::Unavailable;
+      }
     }
-    if (!entry) return CatalogFetchStartResult::UnknownModelId;
-    // The previous worker has published Done and is only returning; join it outside the lock.
-    finished = std::move(worker_);
-    snapshot_ = CatalogFetchSnapshot{};
-    snapshot_.state = CatalogFetchSnapshot::State::Running;
-    snapshot_.model_id = entry->id;
-    snapshot_.total_bytes = entry->size_bytes;
-    worker_ = std::thread([this, copy = *entry] { Run(copy); });
+    // Taken under the same lock as the start, so the caller describes the fetch it started (or
+    // the one that refused it), not a later one another connection began.
+    if (state) *state = snapshot_;
   }
   if (finished.joinable()) finished.join();
-  return CatalogFetchStartResult::Started;
+  return result;
 }
 
 CatalogFetchSnapshot CatalogFetchService::Snapshot() const {

@@ -33,7 +33,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   void SetHistory(std::vector<BenchmarkHistoryEntry> history);
 
  private:
-  winrt::fire_and_forget Refresh();
+  // keep_message leaves the info bar as it is, so a fetch result shown just before stays.
+  winrt::fire_and_forget Refresh(bool keep_message = false);
   winrt::fire_and_forget Benchmark(std::string path, std::string file_name);
   winrt::fire_and_forget FetchCatalog(std::string model_id);
   void RenderModels();

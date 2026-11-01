@@ -72,6 +72,11 @@ ModelFetchResult FetchCatalogModel(const ModelCatalogEntry& entry,
     probe.network_allowed = [] { return false; };
     probe.progress = {};
     existing = downloader.Download(probe);
+    if (!existing->ok() && hooks.cancelled && hooks.cancelled()) {
+      // Stopped while hashing the file, which says nothing about its content.
+      result.error = "cancelled";
+      return result;
+    }
     if (!existing->ok()) {
       // Usually another SHA-256; the detail tells a file that could not be read (a sharing
       // violation, for one) apart from it.

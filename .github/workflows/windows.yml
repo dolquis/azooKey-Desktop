@@ -182,6 +182,9 @@ jobs:
       - name: Validate default settings sample
         run: check-jsonschema --schemafile settings/mvp-settings.schema.json settings/default-settings.sample.json
 
+      - name: Validate default model catalog
+        run: check-jsonschema --schemafile settings/model-catalog.schema.json settings/default-model-catalog.json
+
   powershell-quality:
     name: PowerShell lint/test
     needs: changes

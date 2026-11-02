@@ -834,8 +834,8 @@ OFF のまま）。
   固定し、対応するリリースタグを行末コメントに残す。Dependabot の
   `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
 - settings JSON Schema — `check-jsonschema==0.38.2` で
-  `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
-  `settings/default-settings.sample.json` の schema 適合性を確認する
+  `settings/mvp-settings.schema.json` と `settings/model-catalog.schema.json` の meta-schema 妥当性と、
+  `settings/default-settings.sample.json` と `settings/default-model-catalog.json` の schema 適合性を確認する
 - PowerShell quality gate — `scripts/test-powershell-quality.ps1` から
   `PSScriptAnalyzer` と `Pester` を実行し、`scripts/register-dev.ps1` /
   `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実

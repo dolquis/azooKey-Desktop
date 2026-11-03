@@ -163,6 +163,24 @@ TEST(ModelPaneModelTest, OnlyADoneFetchWithAVerifiedFileCanBeSelected) {
   EXPECT_FALSE(CatalogFetchSucceeded(response));
 }
 
+// DEV-1840: no fetch starts while a stop this window sent is unanswered, since the Host
+// matches the stop by model id and could apply it to that new fetch.
+TEST(ModelPaneModelTest, AFetchStartsOnlyForAMissingEntryWhileNothingRunsOrIsBeingStopped) {
+  using azookey::settings::CanStartCatalogFetch;
+  azookey::ipc::CatalogModelEntry entry;
+  entry.id = "zenz";
+  entry.fetchable = true;
+  entry.state = "missing";
+  EXPECT_TRUE(CanStartCatalogFetch(entry, false, false));
+  EXPECT_FALSE(CanStartCatalogFetch(entry, true, false));
+  EXPECT_FALSE(CanStartCatalogFetch(entry, false, true));
+  entry.state = "mismatch";
+  EXPECT_FALSE(CanStartCatalogFetch(entry, false, false));
+  entry.state = "missing";
+  entry.fetchable = false;
+  EXPECT_FALSE(CanStartCatalogFetch(entry, false, false));
+}
+
 TEST(ModelPaneModelTest, ProgressPercentIsCappedAndZeroWithoutATotal) {
   using azookey::settings::ProgressPercent;
   EXPECT_EQ(ProgressPercent(0, 0), 0U);

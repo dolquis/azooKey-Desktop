@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "ModelPaneModel.h"
 #include "SettingsIpcClient.h"
@@ -162,6 +163,8 @@ void ModelPane::RecoverFromFailure(bool fetch_failed) {
     if (fetch_failed) {
       self->fetching_ = false;
       self->fetching_id_.clear();
+      self->fetch_can_cancel_ = false;
+      self->cancel_requested_ = false;
     }
     self->refresh_button_.IsEnabled(true);
     ResourceLoader resources;
@@ -368,8 +371,16 @@ void ModelPane::UpdateFetchProgress() {
     progress =
         std::to_string(percent) + "% (" + progress + " / " + FormatByteSize(fetch_total_) + ")";
   }
-  fetch_text_.Text(resources.GetString(L"Models_Catalog_Fetching") + L" " +
-                   winrt::to_hstring(progress));
+  fetch_text_.Text(resources.GetString(cancel_requested_ ? L"Models_Catalog_Cancelling"
+                                                         : L"Models_Catalog_Fetching") +
+                   L" " + winrt::to_hstring(progress));
+  if (fetch_cancel_button_) {
+    fetch_cancel_button_.Visibility(fetch_can_cancel_ ? xaml::Visibility::Visible
+                                                      : xaml::Visibility::Collapsed);
+    fetch_cancel_button_.IsEnabled(!cancel_requested_);
+    fetch_cancel_button_.Content(winrt::box_value(resources.GetString(
+        cancel_requested_ ? L"Models_Catalog_Cancelling" : L"Models_Catalog_CancelButton")));
+  }
 }
 
 void ModelPane::RenderCatalog() {
@@ -377,6 +388,7 @@ void ModelPane::RenderCatalog() {
   catalog_panel_.Children().Clear();
   fetch_bar_ = nullptr;
   fetch_text_ = nullptr;
+  fetch_cancel_button_ = nullptr;
   catalog_heading_.Visibility(catalog_.empty() ? xaml::Visibility::Collapsed
                                                : xaml::Visibility::Visible);
   const auto selected = host_.selected_path ? host_.selected_path() : std::string();
@@ -399,14 +411,14 @@ void ModelPane::RenderCatalog() {
     row.Children().Append(Block(winrt::to_hstring(detail), true));
     row.Children().Append(Block(Str(resources, CatalogEntryStateResource(entry.state)), true));
 
-    if (fetching_ && fetching_id_ == entry.id) {
+    const bool fetching_this = fetching_ && fetching_id_ == entry.id;
+    if (fetching_this) {
       fetch_bar_ = controls::ProgressBar();
       SetId(fetch_bar_, L"CatalogFetchProgress_" + id);
       fetch_bar_.Maximum(100);
       row.Children().Append(fetch_bar_);
       fetch_text_ = Block(L"", true);
       row.Children().Append(fetch_text_);
-      UpdateFetchProgress();
     }
 
     controls::StackPanel buttons;
@@ -414,13 +426,21 @@ void ModelPane::RenderCatalog() {
     buttons.Spacing(8);
     controls::Button fetch_button;
     fetch_button.Content(winrt::box_value(resources.GetString(L"Models_Catalog_FetchButton")));
-    // A same-named file with another SHA-256 is never replaced, so it is not offered.
-    fetch_button.IsEnabled(entry.fetchable && entry.state == "missing" && !fetching_);
+    fetch_button.IsEnabled(CanStartCatalogFetch(entry, fetching_, cancel_in_flight_));
     SetId(fetch_button, L"CatalogFetchButton_" + id);
     fetch_button.Click([weak = weak_from_this(), model_id = entry.id](auto const&, auto const&) {
       if (const auto self = weak.lock()) self->FetchCatalog(model_id);
     });
     buttons.Children().Append(fetch_button);
+    if (fetching_this) {
+      // DEV-1840: shown once the Host is known to accept the stop (UpdateFetchProgress).
+      fetch_cancel_button_ = controls::Button();
+      SetId(fetch_cancel_button_, L"CatalogFetchCancelButton_" + id);
+      fetch_cancel_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+        if (const auto self = weak.lock()) self->CancelCatalogFetch();
+      });
+      buttons.Children().Append(fetch_cancel_button_);
+    }
 
     controls::Button select_button;
     select_button.Content(winrt::box_value(resources.GetString(L"Models_SelectButton")));
@@ -439,6 +459,7 @@ void ModelPane::RenderCatalog() {
     });
     buttons.Children().Append(select_button);
     row.Children().Append(buttons);
+    if (fetching_this) UpdateFetchProgress();
     if (!entry.fetchable && entry.state == "missing") {
       row.Children().Append(Block(resources.GetString(L"Models_Catalog_NotFetchableNote"), true));
     }
@@ -450,11 +471,13 @@ void ModelPane::RenderCatalog() {
 // until it is done. Only a stall ends the wait early: a large model may take long.
 winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
   const auto self = shared_from_this();
-  if (fetching_) co_return;
+  if (fetching_ || cancel_in_flight_) co_return;
   fetching_ = true;
   fetching_id_ = model_id;
   fetch_received_ = 0;
   fetch_total_ = 0;
+  fetch_can_cancel_ = false;
+  cancel_requested_ = false;
   problem_bar_.IsOpen(false);
   RenderCatalog();
   const auto dispatcher = dispatcher_;
@@ -470,6 +493,9 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
     // as if this one had started it.
     const bool follow = call_status == HostCallStatus::Ok &&
                         (last->ok || (last->error == "busy" && last->model_id == model_id));
+    // DEV-1840: a Host from before the stop (DEV-1821) gets no stop button.
+    const bool can_cancel =
+        follow && ProbeHostCapability(options, kCapabilityCancelCatalogFetch) == HostCallStatus::Ok;
     bool stalled = false;
     // A poll that gets no answer is retried: only a stall (no new bytes, including polls that
     // fail for that long) ends the wait.
@@ -479,6 +505,7 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
       co_await ResumeForeground(dispatcher);
       fetch_received_ = last->received_bytes;
       fetch_total_ = last->total_bytes;
+      fetch_can_cancel_ = can_cancel;
       UpdateFetchProgress();
       if (watch.Stalled(last->received_bytes, CatalogFetchStallWatch::Clock::now())) {
         stalled = true;
@@ -493,6 +520,8 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
 
     fetching_ = false;
     fetching_id_.clear();
+    fetch_can_cancel_ = false;
+    const bool cancel_requested = std::exchange(cancel_requested_, false);
     ResourceLoader resources;
     const auto failed_title = resources.GetString(L"Models_Catalog_FailedTitle");
     if (call_status != HostCallStatus::Ok) {
@@ -507,6 +536,12 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
               poll_status == HostCallStatus::Ok
                   ? resources.GetString(L"Models_Catalog_Stalled")
                   : Str(resources, HostCallStatusResource(poll_status)));
+    } else if (last->state == "done" && last->model_id == model_id && cancel_requested &&
+               last->status == "failed" && last->result_error == "cancelled") {
+      // DEV-1840: the stop this window sent; the .part stays for the next fetch to resume.
+      ShowBar(controls::InfoBarSeverity::Informational,
+              resources.GetString(L"Models_Catalog_CancelledTitle"),
+              resources.GetString(L"Models_Catalog_Cancelled"));
     } else if (last->state == "done" && last->model_id == model_id) {
       ShowFetchResult(*last);
     } else if (last->state == "idle") {
@@ -527,6 +562,49 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
     }
   } catch (...) {
     RecoverFromFailure(/*fetch_failed=*/true);
+  }
+}
+
+// DEV-1840 (model-management-spec section 4.4): the Host stops the fetch between blocking
+// operations, which can take up to its receive timeout, so the button stays disabled and
+// FetchCatalog keeps polling until the Host reports the end.
+winrt::fire_and_forget ModelPane::CancelCatalogFetch() {
+  const auto self = shared_from_this();
+  if (!fetching_ || !fetch_can_cancel_ || cancel_requested_) co_return;
+  cancel_requested_ = true;
+  cancel_in_flight_ = true;
+  const auto model_id = fetching_id_;
+  UpdateFetchProgress();
+  const auto dispatcher = dispatcher_;
+  try {
+    co_await winrt::resume_background();
+    azookey::ipc::CancelCatalogFetchRequest request;
+    request.model_id = model_id;
+    const auto result = RequestCancelCatalogFetch(DefaultSettingsIpcOptions(), request);
+    co_await ResumeForeground(dispatcher);
+    // Answered: the Host has handled the stop, so a fetch started from now on is not its target.
+    cancel_in_flight_ = false;
+    if (!fetching_) RenderCatalog();
+    // not_running: the fetch ended first, and FetchCatalog shows how it ended.
+    const bool accepted =
+        result.status == HostCallStatus::Ok &&
+        (result.response->ok || result.response->error.value_or("") == "not_running");
+    if (accepted || !fetching_ || fetching_id_ != model_id) co_return;
+    cancel_requested_ = false;
+    UpdateFetchProgress();
+    ResourceLoader resources;
+    ShowBar(controls::InfoBarSeverity::Warning,
+            resources.GetString(L"Models_Catalog_CancelFailedTitle"),
+            result.status != HostCallStatus::Ok
+                ? Str(resources, HostCallStatusResource(result.status))
+                : Str(resources, CatalogFetchErrorResource(result.response->error.value_or(""))));
+  } catch (...) {
+    // May run on a background thread: the flag and the rows are touched on the UI thread.
+    dispatcher.TryEnqueue([self] {
+      self->cancel_in_flight_ = false;
+      if (!self->fetching_) self->RenderCatalog();
+    });
+    RecoverFromFailure();
   }
 }
 

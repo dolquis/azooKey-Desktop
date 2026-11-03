@@ -713,6 +713,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleFetchCatalogModel(req);
     case ipc::MessageType::QueryCatalogFetch:
       return HandleQueryCatalogFetch(req);
+    case ipc::MessageType::CancelCatalogFetch:
+      return HandleCancelCatalogFetch(req);
     case ipc::MessageType::Cancel:
       HandleCancel(req);
       return std::nullopt;
@@ -897,7 +899,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       return MakeResponse(req, ipc::BuildBenchmarkModelResponse(r));
     }
     case ipc::MessageType::FetchCatalogModel:
-    case ipc::MessageType::QueryCatalogFetch: {
+    case ipc::MessageType::QueryCatalogFetch:
+    case ipc::MessageType::CancelCatalogFetch: {
       ipc::CatalogFetchResponse r;
       r.ok = false;
       r.error = "not authenticated";
@@ -956,7 +959,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "detect_anomalies",
                       "mixed_english"};
   // DEV-1821 (model-management-spec section 4.4).
-  if (config_.catalog_fetch) res.capabilities.push_back("fetch_catalog_model");
+  if (config_.catalog_fetch) {
+    res.capabilities.push_back("fetch_catalog_model");
+    // DEV-1840: the user's stop of that fetch.
+    res.capabilities.push_back("cancel_catalog_fetch");
+  }
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -2271,6 +2278,30 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCatalogFetch(const ipc::Enve
   } else {
     FillCatalogFetchResponse(config_.catalog_fetch->Snapshot(), res);
   }
+  return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
+}
+
+// DEV-1840 (model-management-spec section 4.4): asks the running fetch of the named entry to
+// stop and answers at once; QueryCatalogFetch reports its end as failed / "cancelled".
+std::optional<ipc::Envelope> Dispatcher::HandleCancelCatalogFetch(const ipc::Envelope& req) {
+  ipc::CatalogFetchResponse res;
+  const auto parsed = ipc::ParseCancelCatalogFetchRequest(req.payload_json);
+  if (!config_.catalog_fetch) {
+    res.ok = false;
+    res.error = "catalog_unavailable";
+    return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
+  }
+  CatalogFetchSnapshot state;
+  if (!parsed) {
+    res.ok = false;
+    res.error = "invalid_request";
+    state = config_.catalog_fetch->Snapshot();
+  } else if (config_.catalog_fetch->Cancel(parsed->model_id, &state) ==
+             CatalogFetchCancelResult::NotRunning) {
+    res.ok = false;
+    res.error = "not_running";
+  }
+  FillCatalogFetchResponse(state, res);
   return MakeResponse(req, ipc::BuildCatalogFetchResponse(res));
 }
 

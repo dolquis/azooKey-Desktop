@@ -122,6 +122,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleFetchCatalogModel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryCatalogFetch(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleCancelCatalogFetch(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
   bool LearningAllowed(bool secure, bool learning_allowed, bool host_learning_blocked) const;

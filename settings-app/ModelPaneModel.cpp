@@ -106,6 +106,12 @@ bool CatalogFetchSucceeded(const azookey::ipc::CatalogFetchResponse& response) {
          (response.status == "downloaded" || response.status == "already_valid");
 }
 
+bool CanStartCatalogFetch(const azookey::ipc::CatalogModelEntry& entry, bool fetching,
+                          bool cancel_in_flight) {
+  // A same-named file with another SHA-256 is never replaced, so it is not offered.
+  return entry.fetchable && entry.state == "missing" && !fetching && !cancel_in_flight;
+}
+
 std::string CatalogEntryStateResource(std::string_view state) {
   if (state == "verified") return "Models_Catalog_State_verified";
   if (state == "mismatch") return "Models_Catalog_State_mismatch";

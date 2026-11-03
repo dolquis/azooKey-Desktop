@@ -651,8 +651,9 @@ struct FetchCatalogModelRequest {
 
 struct CatalogFetchResponse {
   // false when the request itself was refused: "invalid_request", "busy",
-  // "unknown_model_id", "catalog_unavailable" or "not authenticated". The
-  // fetch fields still describe the Host's current fetch.
+  // "unknown_model_id", "catalog_unavailable", "not_running" (CancelCatalogFetch)
+  // or "not authenticated". The fetch fields still describe the Host's current
+  // fetch.
   bool ok{true};
   std::optional<std::string> error;
   std::string state{"idle"};  // "idle" | "running" | "done".
@@ -669,6 +670,17 @@ std::string BuildFetchCatalogModelRequest(const FetchCatalogModelRequest& p);
 std::optional<FetchCatalogModelRequest> ParseFetchCatalogModelRequest(const std::string& json);
 std::string BuildCatalogFetchResponse(const CatalogFetchResponse& p);
 std::optional<CatalogFetchResponse> ParseCatalogFetchResponse(const std::string& json);
+
+// DEV-1840: CancelCatalogFetch stops the running fetch of model_id and answers with
+// CatalogFetchResponse at once; the fetch ends as done / failed / "cancelled", which
+// QueryCatalogFetch reports. Refused with "not_running" when no fetch of that id runs. The
+// Host advertises the "cancel_catalog_fetch" capability.
+struct CancelCatalogFetchRequest {
+  std::string model_id;  // Required: the fetch the sender means, never another one.
+};
+
+std::string BuildCancelCatalogFetchRequest(const CancelCatalogFetchRequest& p);
+std::optional<CancelCatalogFetchRequest> ParseCancelCatalogFetchRequest(const std::string& json);
 
 // ---------------------------------------------------------------------------
 // M49 learning data management: ListLearningEntries / ForgetLearningEntry /

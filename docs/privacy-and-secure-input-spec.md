@@ -210,6 +210,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` / `CommitCorrection` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
+| 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
@@ -275,6 +276,13 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。
 `QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担う。
 これらに学習観測用フラグの欠落判定を流用しない。
+`QueryPredictions` は Host でも secure を検査する。要求は `learning_allowed` を運ばず、
+イベントごとの `secure` だけを運ぶ（予測は学習と別の許可軸のため）。
+`secure` の欠落・型不正は `true` として扱い、wire には `false` だけを載せる。
+Host は、要求の `secure == true` か Host 設定が secure のとき、照会を変換器へ渡さず、
+`ok = true` で予測 0 件を返す。TIP はこの応答を予測なしとして扱い、再送しない。
+古い TIP と新しい Host の組合せでは予測が出ず、新しい TIP と古い Host の組合せでは
+TIP の送信抑止を維持する。
 
 ### 5.2 `custom` モードの per-axis 解決
 

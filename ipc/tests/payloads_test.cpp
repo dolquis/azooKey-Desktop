@@ -425,6 +425,38 @@ TEST(PayloadsTest, QueryPredictionsRoundTripUsesSpecifiedWireFields) {
   EXPECT_DOUBLE_EQ(parsed_response->predictions[1].score, 0.5);
 }
 
+// DEV-1829: only secure = false goes on the wire; absent or invalid is secure.
+TEST(PayloadsTest, QueryPredictionsSecureIsOmittedWhenSecureAndDefaultsToSecure) {
+  using namespace azookey::ipc;
+  QueryPredictionsRequest request{"にほん", "私は", "word"};
+  EXPECT_TRUE(request.secure);
+  const auto secure_wire = json::Parse(BuildQueryPredictionsRequest(request));
+  ASSERT_TRUE(secure_wire);
+  EXPECT_EQ(secure_wire->Find("secure"), nullptr);
+  const auto secure_parsed = ParseQueryPredictionsRequest(BuildQueryPredictionsRequest(request));
+  ASSERT_TRUE(secure_parsed);
+  EXPECT_TRUE(secure_parsed->secure);
+
+  request.secure = false;
+  const auto open_wire = json::Parse(BuildQueryPredictionsRequest(request));
+  ASSERT_TRUE(open_wire);
+  EXPECT_EQ(open_wire->GetBool("secure"), false);
+  const auto open_parsed = ParseQueryPredictionsRequest(BuildQueryPredictionsRequest(request));
+  ASSERT_TRUE(open_parsed);
+  EXPECT_FALSE(open_parsed->secure);
+
+  for (const auto* payload : {
+           R"({"kana":"かな","leftSideContext":"","mode":"word"})",
+           R"({"kana":"かな","leftSideContext":"","mode":"word","secure":"false"})",
+           R"({"kana":"かな","leftSideContext":"","mode":"word","secure":0})",
+           R"({"kana":"かな","leftSideContext":"","mode":"word","secure":true})",
+       }) {
+    const auto parsed = ParseQueryPredictionsRequest(payload);
+    ASSERT_TRUE(parsed) << payload;
+    EXPECT_TRUE(parsed->secure) << payload;
+  }
+}
+
 TEST(PayloadsTest, QueryPredictionsRejectsMalformedPayloads) {
   using namespace azookey::ipc;
   EXPECT_FALSE(ParseQueryPredictionsRequest("{}").has_value());

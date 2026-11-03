@@ -1459,6 +1459,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envel
     response.error = "unsupported_prediction_mode";
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
+  // The TIP does not send a secure query; the Host still refuses one, and any
+  // query under a secure Host setting, before the reading or left context
+  // reaches the converter (DEV-1829). An empty ok reply, so the TIP neither
+  // shows nor retries a prediction.
+  if (parsed->secure || (settings_store_ && settings_store_->LockPrivacyPolicy().policy.secure)) {
+    trace.Finish(core::EtwResult::Success, 0);
+    return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
+  }
 
   const auto queue_start =
       runtime_logger_ && runtime_logger_->enabled() && ipc::IsValidTraceId(req.trace_id)

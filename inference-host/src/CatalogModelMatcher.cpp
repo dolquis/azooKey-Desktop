@@ -31,10 +31,17 @@ int64_t WriteTimeTicks(std::filesystem::file_time_type time) {
   return static_cast<int64_t>(time.time_since_epoch().count());
 }
 
-// A bare file name: the sidecar never names a file outside zenzai_dir.
+// A bare file name: the sidecar never names a file outside zenzai_dir. A name Win32 would trim
+// or read otherwise (a trailing dot or space, a control character, a stream after ':') is
+// refused too, so an entry never stands for another file.
 bool IsPlainFileName(std::string_view name) {
-  return !name.empty() && name != "." && name != ".." &&
-         name.find_first_of("/\\:") == std::string_view::npos;
+  if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ') {
+    return false;
+  }
+  for (const char c : name) {
+    if (static_cast<unsigned char>(c) < 0x20 || c == '/' || c == '\\' || c == ':') return false;
+  }
+  return true;
 }
 
 bool IsSha256Hex(std::string_view text) {

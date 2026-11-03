@@ -284,13 +284,10 @@ TEST(CatalogModelMatcherTest, TheSidecarKeepsTheHashForTheNextProcess) {
 }
 
 // A sidecar that is broken or of another schemaVersion is ignored, and the next save rewrites
-// it; an entry naming a path outside zenzai\ is never used.
+// it.
 TEST(CatalogModelMatcherTest, AnUnreadableSidecarIsIgnoredAndRewritten) {
   for (const std::string broken :
-       {std::string("{not json"), std::string(R"({"schemaVersion":2,"entries":[]})"),
-        std::string(R"({"schemaVersion":1,"entries":[{"path":"../zenzai/zenz.gguf","size":1,)"
-                    R"("mtime":1,"sha256":")") +
-            std::string(kShaA) + "\"}]}"}) {
+       {std::string("{not json"), std::string(R"({"schemaVersion":2,"entries":[]})")}) {
     const auto dir = TestDir();
     const auto zenzai = dir / "zenzai";
     WriteBytes(zenzai / "zenz.gguf", std::string(kShaA) + "\n");
@@ -307,6 +304,38 @@ TEST(CatalogModelMatcherTest, AnUnreadableSidecarIsIgnoredAndRewritten) {
     EXPECT_EQ((*rewritten->GetArray("entries"))[0].GetString("path"), "zenz.gguf");
     fs::remove_all(dir);
   }
+}
+
+// An entry whose name is not a bare file name is dropped even when its size, write time and
+// SHA-256 are the real file's: it is neither used (the file is hashed) nor written back.
+TEST(CatalogModelMatcherTest, AnEntryThatIsNotABareFileNameIsDropped) {
+  const auto dir = TestDir();
+  const auto zenzai = dir / "zenzai";
+  const auto path = zenzai / "zenz.gguf";
+  // JSON string contents, escaped as they would appear in the file.
+  const std::string absolute = azookey::ipc::json::EscapeString(Utf8(path));
+  for (const std::string name :
+       {std::string("../zenzai/zenz.gguf"), std::string("..\\\\zenzai\\\\zenz.gguf"), absolute,
+        std::string("zenz.gguf:ads"), std::string("zenz.gguf."), std::string("zenz.gguf "),
+        // A control character, escaped by the JSON writer.
+        std::string("zenz.gguf") + azookey::ipc::json::EscapeString(std::string(1, '\x01'))}) {
+    fs::remove_all(dir);
+    WriteBytes(path, std::string(kShaA) + "\n");
+    WriteBytes(SidecarOf(zenzai), R"({"schemaVersion":1,"entries":[{"path":")" + name +
+                                      R"(","size":)" + std::to_string(fs::file_size(path)) +
+                                      R"(,"mtime":)" + std::to_string(WriteTicks(path)) +
+                                      R"(,"sha256":")" + std::string(kShaA) + R"("}]})");
+    CountingSha256 sha;
+    azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), zenzai, sha.Function());
+    EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified)
+        << name;
+    EXPECT_EQ(*sha.calls, 1) << name;
+    const auto rewritten = ReadSidecarJson(zenzai);
+    ASSERT_TRUE(rewritten.has_value()) << name;
+    ASSERT_EQ(rewritten->GetArray("entries")->size(), 1u) << name;
+    EXPECT_EQ((*rewritten->GetArray("entries"))[0].GetString("path"), "zenz.gguf") << name;
+  }
+  fs::remove_all(dir);
 }
 
 // What another process wrote stays in the sidecar, and an entry whose file is gone is dropped.

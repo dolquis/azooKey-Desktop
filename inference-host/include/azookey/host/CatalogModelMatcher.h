@@ -30,9 +30,16 @@ enum class CatalogEntryFileState : uint8_t {
 
 std::string_view CatalogEntryFileStateName(CatalogEntryFileState state);
 
+// The sidecar in zenzai_dir that keeps the matcher's SHA-256 across Host restarts (DEV-1841):
+// {"schemaVersion":1,"entries":[{"path":<file name>,"size":N,"mtime":<write time ticks>,
+// "sha256":"..."}]}.
+inline constexpr std::string_view kCatalogSha256SidecarName = ".catalog-sha256.json";
+
 // docs/copilot-pc-backend-spec.md section 4.4: matches model.selectedPath against a catalog.
-// The SHA-256 of each file is kept in memory for the life of the process and computed again
-// only when the file's size or last write time changes. A file whose name matches no entry is
+// The SHA-256 of each file is kept for the file's size and last write time and computed again
+// only when either changes. The kept values of files directly in zenzai_dir are also written to
+// the sidecar and read back by the next process; a sidecar that cannot be read or parsed, or
+// of another schemaVersion, is ignored and rewritten. A file whose name matches no entry is
 // never hashed. Thread-safe.
 class CatalogModelMatcher {
  public:
@@ -58,12 +65,18 @@ class CatalogModelMatcher {
   };
 
   std::optional<std::string> Sha256Of(const std::filesystem::path& path);
+  // Reads the sidecar once, on the first hash asked for; mutex_ is held.
+  void LoadSidecarLocked();
+  // Writes the kept hashes of zenzai_dir's files, merged with what the sidecar holds now (another
+  // process may have written it), keeping only files still of that size and write time.
+  void SaveSidecar();
 
   const ModelCatalog catalog_;
   const std::filesystem::path zenzai_dir_;
   FileSha256Function sha256_;
   std::mutex mutex_;
   std::map<std::filesystem::path, CachedHash> hashes_;
+  bool sidecar_loaded_{false};
 };
 
 // For ModelLoadOptions::resolve_prompt_format: the promptFormat of the entry model_path

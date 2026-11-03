@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,7 @@
 #include "azookey/host/CatalogFetchService.h"
 #include "azookey/host/CatalogModelMatcher.h"
 #include "azookey/host/ModelCatalog.h"
+#include "azookey/ipc/Json.h"
 
 namespace {
 
@@ -218,6 +220,153 @@ TEST(CatalogModelMatcherTest, HashesAgainWhenTheFileSizeChanges) {
   EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified);
   EXPECT_EQ(matcher.PromptFormatFor(Utf8(path)), ZenzaiPromptFormat::ZenzV3);
   EXPECT_EQ(*sha.calls, 2);
+  fs::remove_all(dir);
+}
+
+namespace {
+
+fs::path SidecarOf(const fs::path& zenzai) {
+  return zenzai / azookey::host::kCatalogSha256SidecarName;
+}
+
+std::optional<azookey::ipc::json::Value> ReadSidecarJson(const fs::path& zenzai) {
+  std::ifstream in(SidecarOf(zenzai), std::ios::binary);
+  if (!in) return std::nullopt;
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return azookey::ipc::json::Parse(text);
+}
+
+int64_t WriteTicks(const fs::path& path) {
+  return static_cast<int64_t>(fs::last_write_time(path).time_since_epoch().count());
+}
+
+}  // namespace
+
+// DEV-1841: the next process (a new matcher) reads the kept hash instead of hashing again.
+TEST(CatalogModelMatcherTest, TheSidecarKeepsTheHashForTheNextProcess) {
+  const auto dir = TestDir();
+  const auto zenzai = dir / "zenzai";
+  const auto path = zenzai / "zenz.gguf";
+  WriteBytes(path, std::string(kShaA) + "\n");
+  CountingSha256 first_sha;
+  azookey::host::CatalogModelMatcher first(TwoEntryCatalog(), zenzai, first_sha.Function());
+  EXPECT_EQ(first.StateOf(first.catalog().models[0]), CatalogEntryFileState::Verified);
+  EXPECT_EQ(*first_sha.calls, 1);
+
+  const auto sidecar = ReadSidecarJson(zenzai);
+  ASSERT_TRUE(sidecar.has_value());
+  EXPECT_EQ(sidecar->GetInt("schemaVersion"), 1);
+  const auto* entries = sidecar->GetArray("entries");
+  ASSERT_NE(entries, nullptr);
+  ASSERT_EQ(entries->size(), 1u);
+  // The file name only, never the user's path.
+  EXPECT_EQ((*entries)[0].GetString("path"), "zenz.gguf");
+  EXPECT_EQ((*entries)[0].GetString("sha256"), std::string(kShaA));
+  EXPECT_EQ((*entries)[0].GetUInt("size"), fs::file_size(path));
+  EXPECT_EQ((*entries)[0].GetInt("mtime"), WriteTicks(path));
+
+  CountingSha256 next_sha;
+  azookey::host::CatalogModelMatcher next(TwoEntryCatalog(), zenzai, next_sha.Function());
+  EXPECT_EQ(next.PromptFormatFor(Utf8(path)), ZenzaiPromptFormat::ZenzV3);
+  EXPECT_EQ(next.StateOf(next.catalog().models[0]), CatalogEntryFileState::Verified);
+  EXPECT_EQ(*next_sha.calls, 0);
+
+  // A file of another size is hashed again, and the sidecar follows it.
+  WriteBytes(path, std::string(kShaB) + "\nmore bytes");
+  CountingSha256 changed_sha;
+  azookey::host::CatalogModelMatcher changed(TwoEntryCatalog(), zenzai, changed_sha.Function());
+  EXPECT_EQ(changed.StateOf(changed.catalog().models[0]), CatalogEntryFileState::Mismatch);
+  EXPECT_EQ(*changed_sha.calls, 1);
+  const auto rewritten = ReadSidecarJson(zenzai);
+  ASSERT_TRUE(rewritten.has_value());
+  ASSERT_EQ(rewritten->GetArray("entries")->size(), 1u);
+  EXPECT_EQ((*rewritten->GetArray("entries"))[0].GetString("sha256"), std::string(kShaB));
+  fs::remove_all(dir);
+}
+
+// A sidecar that is broken or of another schemaVersion is ignored, and the next save rewrites
+// it.
+TEST(CatalogModelMatcherTest, AnUnreadableSidecarIsIgnoredAndRewritten) {
+  for (const std::string broken :
+       {std::string("{not json"), std::string(R"({"schemaVersion":2,"entries":[]})")}) {
+    const auto dir = TestDir();
+    const auto zenzai = dir / "zenzai";
+    WriteBytes(zenzai / "zenz.gguf", std::string(kShaA) + "\n");
+    WriteBytes(SidecarOf(zenzai), broken);
+    CountingSha256 sha;
+    azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), zenzai, sha.Function());
+    EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified)
+        << broken;
+    EXPECT_EQ(*sha.calls, 1) << broken;
+    const auto rewritten = ReadSidecarJson(zenzai);
+    ASSERT_TRUE(rewritten.has_value()) << broken;
+    EXPECT_EQ(rewritten->GetInt("schemaVersion"), 1);
+    ASSERT_EQ(rewritten->GetArray("entries")->size(), 1u) << broken;
+    EXPECT_EQ((*rewritten->GetArray("entries"))[0].GetString("path"), "zenz.gguf");
+    fs::remove_all(dir);
+  }
+}
+
+// An entry whose name is not a bare file name is dropped even when its size, write time and
+// SHA-256 are the real file's: it is neither used (the file is hashed) nor written back.
+TEST(CatalogModelMatcherTest, AnEntryThatIsNotABareFileNameIsDropped) {
+  const auto dir = TestDir();
+  const auto zenzai = dir / "zenzai";
+  const auto path = zenzai / "zenz.gguf";
+  // JSON string contents, escaped as they would appear in the file.
+  const std::string absolute = azookey::ipc::json::EscapeString(Utf8(path));
+  for (const std::string name :
+       {std::string("../zenzai/zenz.gguf"), std::string("..\\\\zenzai\\\\zenz.gguf"), absolute,
+        std::string("zenz.gguf:ads"), std::string("zenz.gguf."), std::string("zenz.gguf "),
+        // A control character, escaped by the JSON writer.
+        std::string("zenz.gguf") + azookey::ipc::json::EscapeString(std::string(1, '\x01'))}) {
+    fs::remove_all(dir);
+    WriteBytes(path, std::string(kShaA) + "\n");
+    WriteBytes(SidecarOf(zenzai), R"({"schemaVersion":1,"entries":[{"path":")" + name +
+                                      R"(","size":)" + std::to_string(fs::file_size(path)) +
+                                      R"(,"mtime":)" + std::to_string(WriteTicks(path)) +
+                                      R"(,"sha256":")" + std::string(kShaA) + R"("}]})");
+    CountingSha256 sha;
+    azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), zenzai, sha.Function());
+    EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified)
+        << name;
+    EXPECT_EQ(*sha.calls, 1) << name;
+    const auto rewritten = ReadSidecarJson(zenzai);
+    ASSERT_TRUE(rewritten.has_value()) << name;
+    ASSERT_EQ(rewritten->GetArray("entries")->size(), 1u) << name;
+    EXPECT_EQ((*rewritten->GetArray("entries"))[0].GetString("path"), "zenz.gguf") << name;
+  }
+  fs::remove_all(dir);
+}
+
+// What another process wrote stays in the sidecar, and an entry whose file is gone is dropped.
+TEST(CatalogModelMatcherTest, TheSidecarKeepsOtherEntriesAndDropsRemovedFiles) {
+  const auto dir = TestDir();
+  const auto zenzai = dir / "zenzai";
+  const auto edge = zenzai / "edge.gguf";
+  WriteBytes(edge, std::string(kShaB) + "\n");
+  WriteBytes(zenzai / "zenz.gguf", std::string(kShaA) + "\n");
+  // Written by another process: the edge file's hash, and a file that is no longer there.
+  WriteBytes(SidecarOf(zenzai), R"({"schemaVersion":1,"entries":[{"path":"edge.gguf","size":)" +
+                                    std::to_string(fs::file_size(edge)) + R"(,"mtime":)" +
+                                    std::to_string(WriteTicks(edge)) + R"(,"sha256":")" +
+                                    std::string(kShaB) +
+                                    R"("},{"path":"gone.gguf","size":1,"mtime":1,"sha256":")" +
+                                    std::string(kShaA) + R"("}]})");
+  CountingSha256 sha;
+  azookey::host::CatalogModelMatcher matcher(TwoEntryCatalog(), zenzai, sha.Function());
+  EXPECT_EQ(matcher.StateOf(matcher.catalog().models[1]), CatalogEntryFileState::Verified);
+  EXPECT_EQ(*sha.calls, 0);
+  EXPECT_EQ(matcher.StateOf(matcher.catalog().models[0]), CatalogEntryFileState::Verified);
+  EXPECT_EQ(*sha.calls, 1);
+
+  const auto sidecar = ReadSidecarJson(zenzai);
+  ASSERT_TRUE(sidecar.has_value());
+  const auto* entries = sidecar->GetArray("entries");
+  ASSERT_NE(entries, nullptr);
+  std::vector<std::string> names;
+  for (const auto& entry : *entries) names.push_back(entry.GetString("path").value_or(""));
+  EXPECT_EQ(names, (std::vector<std::string>{"edge.gguf", "zenz.gguf"}));
   fs::remove_all(dir);
 }
 

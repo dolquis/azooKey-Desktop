@@ -274,13 +274,17 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 
 これは protocol v1 の加算的拡張である。古い TIP と新しい Host の組合せでは
 学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。
-`QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担う。
+`QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担い、
+`QueryPredictions` は次のとおり Host も二重に検査する。
 これらに学習観測用フラグの欠落判定を流用しない。
-`QueryPredictions` は Host でも secure を検査する。要求は `learning_allowed` を運ばず、
+`QueryPredictions` の要求は `learning_allowed` を運ばず、
 イベントごとの `secure` だけを運ぶ（予測は学習と別の許可軸のため）。
 `secure` の欠落・型不正は `true` として扱い、wire には `false` だけを載せる。
 Host は、要求の `secure == true` か Host 設定が secure のとき、照会を変換器へ渡さず、
 `ok = true` で予測 0 件を返す。TIP はこの応答を予測なしとして扱い、再送しない。
+ここでの Host 設定の secure は、`privacy.mode = secure` と、§5.1 で secure 相当とする
+設定の読取失敗・不正・未知のモードを指す。SafeMode（`docs/dev-infrastructure-spec.md` §8.5.3）は
+学習を止めるが、予測は止めない。
 古い TIP と新しい Host の組合せでは予測が出ず、新しい TIP と古い Host の組合せでは
 TIP の送信抑止を維持する。
 

@@ -1467,10 +1467,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envel
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
   // The TIP does not send a secure query; the Host still refuses one, and any
-  // query under a secure Host setting, before the reading or left context
-  // reaches the converter (DEV-1829). An empty ok reply, so the TIP neither
-  // shows nor retries a prediction.
-  if (parsed->secure || (settings_store_ && settings_store_->LockPrivacyPolicy().policy.secure)) {
+  // query under a secure privacy setting, before the reading or left context
+  // reaches the converter (DEV-1829). SafeMode's learning stop does not apply:
+  // it keeps predictions. An empty ok reply, so the TIP neither shows nor
+  // retries a prediction.
+  if (parsed->secure ||
+      (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure)) {
     trace.Finish(core::EtwResult::Success, 0);
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }

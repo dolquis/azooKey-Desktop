@@ -181,8 +181,10 @@ enum class PredictionMode : uint8_t {
 
 ```
 QueryPredictionsRequest:
-  request_id, kana, paragraph_context, mode, app
+  request_id, kana, paragraph_context, mode, app, secure?
 ```
+
+`secure` の欠落は secure とみなす（`docs/privacy-and-secure-input-spec.md` §5.1.1）。
 
 `app` は `{process_name, window_class}`（`docs/app-profile-spec.md` §3.1）。値は
 ForegroundAppDetector が返す `process_name` / `window_class`（X-4-2）。

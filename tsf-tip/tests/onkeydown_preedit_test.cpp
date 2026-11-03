@@ -4701,6 +4701,15 @@ TEST(TsfTipOnKeyDownPreeditTest, WindowQueryWaitsPastThePerKeyDeadline) {
   h.service.stop_ipc_worker_for_test();
 }
 
+// DEV-1830: the test-only "no deadline" and expire hooks leave the product
+// deadlines (150ms per key, 750ms for the window) untouched by default.
+TEST(TsfTipOnKeyDownPreeditTest, QueryDeadlinesDefaultToThePerKeyAndWindowValues) {
+  azookey::tsf::TextService service;
+  EXPECT_EQ(service.query_deadline_ms_for_test(), 150u);
+  EXPECT_EQ(service.window_query_deadline_ms_for_test(), 750u);
+  EXPECT_FALSE(service.query_deadline_expire_pending_for_test());
+}
+
 // DEV-1665: a window query that misses its deadline still counts toward Degraded.
 TEST(TsfTipOnKeyDownPreeditTest, WindowQueryDeadlineMissCountsTowardDegraded) {
   using azookey::tsf::IpcConnectionState;
@@ -4714,9 +4723,10 @@ TEST(TsfTipOnKeyDownPreeditTest, WindowQueryDeadlineMissCountsTowardDegraded) {
   h.service.set_ipc_pipe_name_for_test(pipe_name);
   h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
                                            /*failure_threshold=*/1);
-  // Per-key answers stay well inside their deadline; only the window misses.
-  h.service.set_query_deadline_ms_for_test(5000);
-  h.service.set_window_query_deadline_ms_for_test(50);
+  // No wall-clock deadline (DEV-1830): only the window query misses, when the
+  // test expires it.
+  h.service.set_query_deadline_ms_for_test(0);
+  h.service.set_window_query_deadline_ms_for_test(0);
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
@@ -4727,6 +4737,7 @@ TEST(TsfTipOnKeyDownPreeditTest, WindowQueryDeadlineMissCountsTowardDegraded) {
   EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
   ASSERT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(WaitUntil([&] { return host.window_queries.load() >= 1; }));
+  h.service.expire_query_deadline_for_test();
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
 
@@ -4750,8 +4761,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CancelledWindowQueryIsNotCountedButLaterMissesA
   h.service.set_ipc_pipe_name_for_test(pipe_name);
   h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
                                            /*failure_threshold=*/2);
-  h.service.set_query_deadline_ms_for_test(100);
-  h.service.set_window_query_deadline_ms_for_test(300);
+  // No wall-clock deadline (DEV-1830): each miss below is expired by the test.
+  h.service.set_query_deadline_ms_for_test(0);
+  h.service.set_window_query_deadline_ms_for_test(0);
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
@@ -4769,11 +4781,20 @@ TEST(TsfTipOnKeyDownPreeditTest, CancelledWindowQueryIsNotCountedButLaterMissesA
   // query, and the next character starts a new reading.
   ASSERT_TRUE(h.Press(VK_ESCAPE));
   ASSERT_TRUE(h.Press('I'));
+  // The cancelled window query waits until its deadline; expire it. The
+  // worker sends the per-key query for "い" only after that wait ends. The
+  // Cancel has to reach the worker first, or the expired wait counts as a miss.
+  ASSERT_TRUE(WaitUntil([&] { return h.service.queued_cancel_targets_for_test().empty(); }));
+  h.service.expire_query_deadline_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.query_deadline_expire_pending_for_test(); }));
   ASSERT_TRUE(WaitUntil([&] { return host.queries.load() > queries_before; }));
-  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  h.service.expire_query_deadline_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.query_deadline_expire_pending_for_test(); }));
   EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
 
   ASSERT_TRUE(h.Press('U'));
+  ASSERT_TRUE(WaitUntil([&] { return host.queries.load() > queries_before + 1; }));
+  h.service.expire_query_deadline_for_test();
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
 

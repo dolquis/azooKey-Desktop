@@ -6852,29 +6852,41 @@ void TextService::ServeConnection() {
     // Poll in 50ms slices so cancels enqueued while the host processes the
     // query can be forwarded without waiting for the full response. Normal
     // live QueryCandidates has a request-level deadline; batch conversion can
-    // legitimately take longer and keeps the existing unbounded wait.
-    const auto query_deadline =
-        std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(window_query ? window_query_deadline_ms_ : query_deadline_ms_);
+    // legitimately take longer and keeps the existing unbounded wait. A test
+    // may set the deadline to 0 (none) and end the wait with
+    // expire_query_deadline_for_test instead (DEV-1830).
+    const uint32_t query_deadline_ms =
+        window_query ? window_query_deadline_ms_ : query_deadline_ms_;
     const std::optional<std::chrono::steady_clock::time_point> query_request_deadline =
-        is_batch ? std::nullopt
-                 : std::optional<std::chrono::steady_clock::time_point>(query_deadline);
+        is_batch || query_deadline_ms == 0
+            ? std::nullopt
+            : std::optional<std::chrono::steady_clock::time_point>(
+                  std::chrono::steady_clock::now() + std::chrono::milliseconds(query_deadline_ms));
     bool query_deadline_exceeded = false;
+    bool query_deadline_expired_for_test = false;
     std::optional<ipc::Envelope> qres;
     while (!cancel_inflight_out_of_band && !ipc_stop_.load() && ipc_client_.IsConnected()) {
       uint32_t wait_ms = 50;
       if (!is_batch) {
         const auto now = std::chrono::steady_clock::now();
-        if (now >= query_deadline) {
+        if (query_deadline_expire_for_test_.load()) {
+          query_deadline_expired_for_test = true;
           query_deadline_exceeded = true;
           break;
         }
-        const auto remaining_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(query_deadline - now).count();
-        if (remaining_ms > 0 && remaining_ms < static_cast<long long>(wait_ms)) {
-          wait_ms = static_cast<uint32_t>(remaining_ms);
+        if (query_request_deadline) {
+          if (now >= *query_request_deadline) {
+            query_deadline_exceeded = true;
+            break;
+          }
+          const auto remaining_ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(*query_request_deadline - now)
+                  .count();
+          if (remaining_ms > 0 && remaining_ms < static_cast<long long>(wait_ms)) {
+            wait_ms = static_cast<uint32_t>(remaining_ms);
+          }
+          if (wait_ms == 0) wait_ms = 1;
         }
-        if (wait_ms == 0) wait_ms = 1;
       }
 
       qres = ipc_client_.ReceiveWithTimeout(wait_ms, query_request_deadline);
@@ -6951,6 +6963,7 @@ void TextService::ServeConnection() {
       // when the Cancel went in band and the wait ran on (DEV-1665).
       NoteHostDeadlineMissed();
     }
+    if (query_deadline_expired_for_test) query_deadline_expire_for_test_.store(false);
     std::vector<CandidateField> response_candidates;
     if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_query_cancelled_out_of_band",

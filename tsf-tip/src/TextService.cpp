@@ -7639,6 +7639,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
   payload.kana = request->kana;
   payload.left_side_context = request->left_side_context;
   payload.mode = "word";
+  // The Host also refuses a secure query (DEV-1829); unmarked is secure.
+  payload.secure = request->secure || secure_input_.load(std::memory_order_relaxed);
   ipc::Envelope envelope;
   envelope.version = 1;
   envelope.request_id = next_id++;

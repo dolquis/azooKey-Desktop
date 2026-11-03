@@ -2212,6 +2212,21 @@ class ImmediateDownloader final : public azookey::host::IPackDownloader {
   }
 };
 
+// Runs until the fetch is cancelled, polling like HttpDownloader does between reads.
+class UntilCancelledDownloader final : public azookey::host::IPackDownloader {
+ public:
+  azookey::host::HttpDownloadResult Download(
+      const azookey::host::HttpDownloadRequest& request) override {
+    azookey::host::HttpDownloadResult result;
+    if (request.progress) request.progress(1024, 4096);
+    for (int i = 0; i < 2000 && !(request.cancelled && request.cancelled()); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    result.error = "HTTP request cancelled";
+    return result;
+  }
+};
+
 }  // namespace
 
 // DEV-1821 (model-management-spec section 4.1): the catalog comes only on request.
@@ -2327,6 +2342,68 @@ TEST_F(DispatcherTest, FetchCatalogModelStartsAFetchThatQueryCatalogFetchFollows
   RemovePathNoThrow(root);
 }
 
+// DEV-1840 (model-management-spec section 4.4): CancelCatalogFetch stops the running fetch of
+// the id it names, which QueryCatalogFetch then reports as failed / "cancelled".
+TEST_F(DispatcherTest, CancelCatalogFetchStopsTheRunningFetchOfThatId) {
+  const auto root = std::filesystem::path(temp_directory.File("azookey_dispatcher_cancel"));
+  RemovePathNoThrow(root);
+  const auto models = root / "models";
+  std::filesystem::create_directories(models);
+  const auto matcher = CatalogTestMatcher(models);
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = models;
+  config.catalog_matcher = matcher;
+  config.catalog_fetch = std::make_shared<azookey::host::CatalogFetchService>(
+      matcher, [] { return std::make_unique<UntilCancelledDownloader>(); }, [] { return true; });
+  azookey::host::Dispatcher fetch_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  const auto handshake = fetch_dispatcher.Dispatch(MakeReq(
+      840, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(CatalogTestHandshake())));
+  ASSERT_TRUE(handshake);
+  const auto capabilities = ipc::ParseHandshakeResponse(handshake->payload_json)->capabilities;
+  EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "cancel_catalog_fetch"),
+            capabilities.end());
+
+  const auto send = [&](uint64_t id, ipc::MessageType type, const std::string& payload) {
+    const auto response = fetch_dispatcher.Dispatch(MakeReq(id, type, payload));
+    EXPECT_TRUE(response.has_value());
+    if (response) EXPECT_EQ(response->type, type);
+    return response ? ipc::ParseCatalogFetchResponse(response->payload_json) : std::nullopt;
+  };
+  const auto idle = send(841, ipc::MessageType::CancelCatalogFetch,
+                         ipc::BuildCancelCatalogFetchRequest({"zenz"}));
+  ASSERT_TRUE(idle);
+  EXPECT_FALSE(idle->ok);
+  EXPECT_EQ(idle->error, "not_running");
+  EXPECT_EQ(idle->state, "idle");
+  const auto invalid = send(842, ipc::MessageType::CancelCatalogFetch, "{}");
+  ASSERT_TRUE(invalid);
+  EXPECT_EQ(invalid->error, "invalid_request");
+
+  const auto started =
+      send(843, ipc::MessageType::FetchCatalogModel, ipc::BuildFetchCatalogModelRequest({}));
+  ASSERT_TRUE(started);
+  ASSERT_TRUE(started->ok) << started->error.value_or("");
+  const auto cancelled = send(844, ipc::MessageType::CancelCatalogFetch,
+                              ipc::BuildCancelCatalogFetchRequest({"zenz"}));
+  ASSERT_TRUE(cancelled);
+  EXPECT_TRUE(cancelled->ok) << cancelled->error.value_or("");
+  EXPECT_EQ(cancelled->model_id, "zenz");
+  std::optional<ipc::CatalogFetchResponse> done;
+  for (int i = 0; i < 1000; ++i) {
+    done = send(845, ipc::MessageType::QueryCatalogFetch, "{}");
+    if (!done || done->state == "done") break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(done);
+  ASSERT_EQ(done->state, "done");
+  EXPECT_EQ(done->status, "failed");
+  EXPECT_EQ(done->result_error, "cancelled");
+  EXPECT_TRUE(done->path.empty());
+  config.catalog_fetch->Shutdown();
+  RemovePathNoThrow(root);
+}
+
 TEST_F(DispatcherTest, CatalogFetchWithoutAServiceOrBeforeTheHandshakeIsRefused) {
   auto without = dispatcher.Dispatch(MakeReq(830, ipc::MessageType::QueryCatalogFetch, "{}"));
   ASSERT_TRUE(without);
@@ -2340,6 +2417,14 @@ TEST_F(DispatcherTest, CatalogFetchWithoutAServiceOrBeforeTheHandshakeIsRefused)
   const auto capabilities = ipc::ParseHandshakeResponse(handshake->payload_json)->capabilities;
   EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(), "fetch_catalog_model"),
             capabilities.end());
+  EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(), "cancel_catalog_fetch"),
+            capabilities.end());
+  const auto cancel_without = dispatcher.Dispatch(MakeReq(
+      833, ipc::MessageType::CancelCatalogFetch, ipc::BuildCancelCatalogFetchRequest({"zenz"})));
+  ASSERT_TRUE(cancel_without);
+  parsed = ipc::ParseCatalogFetchResponse(cancel_without->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->error, "catalog_unavailable");
 
   auto config = DefaultDispatcherConfig();
   config.handshake_token = "expected-token";
@@ -2350,6 +2435,12 @@ TEST_F(DispatcherTest, CatalogFetchWithoutAServiceOrBeforeTheHandshakeIsRefused)
   parsed = ipc::ParseCatalogFetchResponse(before->payload_json);
   ASSERT_TRUE(parsed);
   EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, "not authenticated");
+  const auto cancel_before = token_dispatcher.Dispatch(MakeReq(
+      834, ipc::MessageType::CancelCatalogFetch, ipc::BuildCancelCatalogFetchRequest({"zenz"})));
+  ASSERT_TRUE(cancel_before);
+  parsed = ipc::ParseCatalogFetchResponse(cancel_before->payload_json);
+  ASSERT_TRUE(parsed);
   EXPECT_EQ(parsed->error, "not authenticated");
 }
 

@@ -31,6 +31,7 @@ namespace {
 
 namespace fs = std::filesystem;
 using azookey::host::CatalogEntryFileState;
+using azookey::host::CatalogFetchCancelResult;
 using azookey::host::CatalogFetchSnapshot;
 using azookey::host::CatalogFetchStartResult;
 using azookey::host::HttpDownloadRequest;
@@ -570,6 +571,37 @@ TEST(CatalogFetchServiceTest, ShutdownStopsARunningFetchAndRefusesNewOnes) {
   EXPECT_EQ(done.error, "cancelled");
   EXPECT_FALSE(fs::exists(f.dir / "zenzai" / "edge.gguf"));
   EXPECT_EQ(f.service->Start("edge"), CatalogFetchStartResult::Unavailable);
+}
+
+// DEV-1840: the user's stop reaches only the fetch of the id it names that runs when it is
+// handled, ends it as cancelled with its .part left for the next fetch, and a stop handled
+// after that fetch ended reaches no later fetch.
+TEST(CatalogFetchServiceTest, CancelStopsOnlyTheRunningFetchOfThatId) {
+  ServiceFixture f;
+  CatalogFetchSnapshot state;
+  EXPECT_EQ(f.service->Cancel("edge", &state), CatalogFetchCancelResult::NotRunning);
+  EXPECT_EQ(state.state, CatalogFetchSnapshot::State::Idle);
+
+  WriteBytes(f.dir / "zenzai" / "edge.gguf.part", "prefix");
+  ASSERT_EQ(f.service->Start("edge"), CatalogFetchStartResult::Started);
+  WaitEntered(*f.gate);
+  EXPECT_EQ(f.service->Cancel("zenz", &state), CatalogFetchCancelResult::NotRunning);
+  EXPECT_EQ(state.state, CatalogFetchSnapshot::State::Running);
+  EXPECT_EQ(state.model_id, "edge");
+  EXPECT_EQ(f.service->Cancel("edge", &state), CatalogFetchCancelResult::Cancelling);
+  EXPECT_EQ(state.model_id, "edge");
+
+  const auto cancelled = WaitDone(*f.service);
+  EXPECT_EQ(cancelled.status, ModelFetchStatus::Failed);
+  EXPECT_EQ(cancelled.error, "cancelled");
+  EXPECT_FALSE(fs::exists(f.dir / "zenzai" / "edge.gguf"));
+  EXPECT_TRUE(fs::exists(f.dir / "zenzai" / "edge.gguf.part"));
+  EXPECT_EQ(f.service->Cancel("edge"), CatalogFetchCancelResult::NotRunning);
+
+  // The next fetch of the same entry runs to its end.
+  Release(*f.gate);
+  ASSERT_EQ(f.service->Start("edge"), CatalogFetchStartResult::Started);
+  EXPECT_EQ(WaitDone(*f.service).status, ModelFetchStatus::Downloaded);
 }
 
 TEST(CatalogFetchServiceTest, CatalogEntriesReportEachFileState) {

@@ -60,6 +60,8 @@ std::string TypeToString(MessageType type) {
       return "FetchCatalogModel";
     case MessageType::QueryCatalogFetch:
       return "QueryCatalogFetch";
+    case MessageType::CancelCatalogFetch:
+      return "CancelCatalogFetch";
     default: return "Unknown";
   }
 }
@@ -98,6 +100,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "DetectAnomalies") return MessageType::DetectAnomalies;
   if (value == "FetchCatalogModel") return MessageType::FetchCatalogModel;
   if (value == "QueryCatalogFetch") return MessageType::QueryCatalogFetch;
+  if (value == "CancelCatalogFetch") return MessageType::CancelCatalogFetch;
   return MessageType::Unknown;
 }
 

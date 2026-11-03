@@ -799,9 +799,20 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // Call before start_ipc_worker_for_test: the request deadline of a
   // QueryCandidates / QueryLiveConversion, so tests do not race the 150ms.
+  // 0 means no deadline: the query waits for its answer or for
+  // expire_query_deadline_for_test (DEV-1830).
   void set_query_deadline_ms_for_test(uint32_t deadline_ms) { query_deadline_ms_ = deadline_ms; }
   void set_window_query_deadline_ms_for_test(uint32_t deadline_ms) {
     window_query_deadline_ms_ = deadline_ms;
+  }
+  uint32_t query_deadline_ms_for_test() const { return query_deadline_ms_; }
+  uint32_t window_query_deadline_ms_for_test() const { return window_query_deadline_ms_; }
+  // Ends the wait of the in-flight (or the next) non-batch query as if its
+  // deadline had passed, so a test drives the miss without the wall clock.
+  // Pending until the worker has counted that miss.
+  void expire_query_deadline_for_test() { query_deadline_expire_for_test_.store(true); }
+  bool query_deadline_expire_pending_for_test() const {
+    return query_deadline_expire_for_test_.load();
   }
   // Stands in for the worker marking a request in flight.
   void set_ipc_inflight_for_test(uint64_t request_id, bool window_query) {
@@ -1123,6 +1134,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // reconversion, so a slow Host still fills the window (DEV-1665); its miss
   // counts like any other. Fixed after the worker starts.
   uint32_t window_query_deadline_ms_{750};
+  // Set by expire_query_deadline_for_test; the IPC worker clears it once the
+  // expired query's miss has been counted (DEV-1830).
+  std::atomic<bool> query_deadline_expire_for_test_{false};
   // ID of the in-flight request when it is a window query (0 = none); a newer
   // request cancels it. Protected by ipc_mtx_.
   uint64_t ipc_inflight_window_query_id_{0};

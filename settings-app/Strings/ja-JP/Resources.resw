@@ -347,6 +347,11 @@
   <data name="Models_Catalog_State_mismatch" xml:space="preserve"><value>⚠️ 同じ名前の別のファイルがあります。置き換えないので、取得するには先にそのファイルを移してください。</value></data>
   <data name="Models_Catalog_FetchButton" xml:space="preserve"><value>取得</value></data>
   <data name="Models_Catalog_Fetching" xml:space="preserve"><value>🔄 取得中</value></data>
+  <data name="Models_Catalog_CancelButton" xml:space="preserve"><value>中止</value></data>
+  <data name="Models_Catalog_Cancelling" xml:space="preserve"><value>中止しています…</value></data>
+  <data name="Models_Catalog_CancelledTitle" xml:space="preserve"><value>取得を中止しました</value></data>
+  <data name="Models_Catalog_Cancelled" xml:space="preserve"><value>受信した分は残してあります。もう一度「取得」を押すと続きから再開します。</value></data>
+  <data name="Models_Catalog_CancelFailedTitle" xml:space="preserve"><value>取得を中止できませんでした</value></data>
   <data name="Models_Catalog_NotFetchableNote" xml:space="preserve"><value>このモデルには取得元がありません。手で models\zenzai に置いてください。</value></data>
   <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
   <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
@@ -364,8 +369,9 @@
   <data name="CatalogFetchError_directory_unavailable" xml:space="preserve"><value>models\zenzai フォルダを作れませんでした。</value></data>
   <data name="CatalogFetchError_destination_occupied" xml:space="preserve"><value>同じ名前の別のファイルがあるので、置き換えずに止めました。</value></data>
   <data name="CatalogFetchError_download_failed" xml:space="preserve"><value>ダウンロードに失敗しました（接続、SHA-256 の不一致など）。</value></data>
-  <data name="CatalogFetchError_cancelled" xml:space="preserve"><value>Host が停止したため取得を中断しました。次に取得すると続きから再開します。</value></data>
+  <data name="CatalogFetchError_cancelled" xml:space="preserve"><value>中止の操作か Host の停止で取得を中断しました。次に取得すると続きから再開します。</value></data>
   <data name="CatalogFetchError_format" xml:space="preserve"><value>取得したファイルが GGUF の検証に通らなかったため削除しました。</value></data>
+  <data name="CatalogFetchError_not_running" xml:space="preserve"><value>その取得は既に終わっています。</value></data>
   <data name="CatalogFetchError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
   <data name="LearningStore_learning" xml:space="preserve"><value>学習候補</value></data>
   <data name="LearningStore_user_dict" xml:space="preserve"><value>ユーザー辞書</value></data>

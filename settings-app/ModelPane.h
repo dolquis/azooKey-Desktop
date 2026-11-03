@@ -79,6 +79,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   bool fetch_can_cancel_{false};
   // The stop was sent and the Host has not reported the fetch's end yet.
   bool cancel_requested_{false};
+  // The stop was sent and the Host has not answered it yet; no fetch starts meanwhile.
+  bool cancel_in_flight_{false};
   // A fetch finished while a listing was running; list again once it ends.
   bool refresh_again_{false};
 };

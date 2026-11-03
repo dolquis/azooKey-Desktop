@@ -424,8 +424,9 @@ TEST(CatalogFetchServiceTest, ShutdownStopsARunningFetchAndRefusesNewOnes) {
   EXPECT_EQ(f.service->Start("edge"), CatalogFetchStartResult::Unavailable);
 }
 
-// DEV-1840: the user's stop reaches only the running fetch of the id it names, ends it as
-// cancelled with its .part left for the next fetch, and never reaches a later fetch.
+// DEV-1840: the user's stop reaches only the fetch of the id it names that runs when it is
+// handled, ends it as cancelled with its .part left for the next fetch, and a stop handled
+// after that fetch ended reaches no later fetch.
 TEST(CatalogFetchServiceTest, CancelStopsOnlyTheRunningFetchOfThatId) {
   ServiceFixture f;
   CatalogFetchSnapshot state;

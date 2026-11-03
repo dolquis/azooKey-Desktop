@@ -78,6 +78,13 @@ std::string CatalogFetchResultResource(const azookey::ipc::CatalogFetchResponse&
 // the GGUF passed the R1 checks (sideload-packaging-spec section 1.6.1, the probe).
 bool CatalogFetchSucceeded(const azookey::ipc::CatalogFetchResponse& response);
 
+// Whether the entry's fetch button can start a fetch: a missing entry with a source, while no
+// fetch runs and no stop this window sent is still unanswered (DEV-1840). The Host matches a
+// stop by model id, so a fetch of the same entry started before the answer could be the one
+// the stop reaches.
+bool CanStartCatalogFetch(const azookey::ipc::CatalogModelEntry& entry, bool fetching,
+                          bool cancel_in_flight);
+
 // The string for a catalog entry's file state ("missing", "verified", "mismatch").
 std::string CatalogEntryStateResource(std::string_view state);
 

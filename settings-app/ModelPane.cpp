@@ -426,8 +426,7 @@ void ModelPane::RenderCatalog() {
     buttons.Spacing(8);
     controls::Button fetch_button;
     fetch_button.Content(winrt::box_value(resources.GetString(L"Models_Catalog_FetchButton")));
-    // A same-named file with another SHA-256 is never replaced, so it is not offered.
-    fetch_button.IsEnabled(entry.fetchable && entry.state == "missing" && !fetching_);
+    fetch_button.IsEnabled(CanStartCatalogFetch(entry, fetching_, cancel_in_flight_));
     SetId(fetch_button, L"CatalogFetchButton_" + id);
     fetch_button.Click([weak = weak_from_this(), model_id = entry.id](auto const&, auto const&) {
       if (const auto self = weak.lock()) self->FetchCatalog(model_id);
@@ -472,7 +471,7 @@ void ModelPane::RenderCatalog() {
 // until it is done. Only a stall ends the wait early: a large model may take long.
 winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
   const auto self = shared_from_this();
-  if (fetching_) co_return;
+  if (fetching_ || cancel_in_flight_) co_return;
   fetching_ = true;
   fetching_id_ = model_id;
   fetch_received_ = 0;
@@ -573,6 +572,7 @@ winrt::fire_and_forget ModelPane::CancelCatalogFetch() {
   const auto self = shared_from_this();
   if (!fetching_ || !fetch_can_cancel_ || cancel_requested_) co_return;
   cancel_requested_ = true;
+  cancel_in_flight_ = true;
   const auto model_id = fetching_id_;
   UpdateFetchProgress();
   const auto dispatcher = dispatcher_;
@@ -582,6 +582,9 @@ winrt::fire_and_forget ModelPane::CancelCatalogFetch() {
     request.model_id = model_id;
     const auto result = RequestCancelCatalogFetch(DefaultSettingsIpcOptions(), request);
     co_await ResumeForeground(dispatcher);
+    // Answered: the Host has handled the stop, so a fetch started from now on is not its target.
+    cancel_in_flight_ = false;
+    if (!fetching_) RenderCatalog();
     // not_running: the fetch ended first, and FetchCatalog shows how it ended.
     const bool accepted =
         result.status == HostCallStatus::Ok &&
@@ -596,6 +599,11 @@ winrt::fire_and_forget ModelPane::CancelCatalogFetch() {
                 ? Str(resources, HostCallStatusResource(result.status))
                 : Str(resources, CatalogFetchErrorResource(result.response->error.value_or(""))));
   } catch (...) {
+    // May run on a background thread: the flag and the rows are touched on the UI thread.
+    dispatcher.TryEnqueue([self] {
+      self->cancel_in_flight_ = false;
+      if (!self->fetching_) self->RenderCatalog();
+    });
     RecoverFromFailure();
   }
 }

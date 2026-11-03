@@ -70,9 +70,11 @@ class CatalogFetchService {
   CatalogFetchStartResult Start(std::string_view model_id, CatalogFetchSnapshot* state = nullptr);
   CatalogFetchSnapshot Snapshot() const;
   // DEV-1840: asks the running fetch of model_id to stop between blocking operations; it then
-  // ends as failed / "cancelled" and leaves its .part for the next fetch to resume. Only that
-  // fetch: a stop that arrives after it ended never reaches a later one. state, when given,
-  // receives the fetch state under the same lock.
+  // ends as failed / "cancelled" and leaves its .part for the next fetch to resume. The stop
+  // names the fetch by model id only: it reaches whichever fetch of that id runs when it is
+  // handled, so a stop handled after a new fetch of the same id started (from another window or
+  // process) stops that one. A stop handled while nothing of that id runs reaches nothing, and
+  // no later fetch. state, when given, receives the fetch state under the same lock.
   CatalogFetchCancelResult Cancel(std::string_view model_id, CatalogFetchSnapshot* state = nullptr);
   // Stops a running download between blocking operations and waits for the thread. Later
   // Start calls return Unavailable. Also run by the destructor.

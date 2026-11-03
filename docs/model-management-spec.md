@@ -592,8 +592,12 @@ client はそれを見て対応版を判別する。§4.4 の `FetchCatalogModel
   `error: "not_running"` を返し、ほかの取得は止めない。止めるよう求めた取得は、§3.1.2 の
   とおりダウンローダの読み取りの合間で止まり（受信の待ちの間は最大で受信 timeout の 30 秒
   かかる）、`done` / `failed` / `cancelled` になる。`.part` は残し、次の取得で続きから再開する。
-  中止は終わった取得や次に始まる取得には効かない。capability `cancel_catalog_fetch` を広告しない
-  Host（`fetch_catalog_model` だけの Host）には送らない。
+  中止は取得を `model_id` だけで指し、Host が中止を処理したときに走っているその entry の取得に
+  効く。取得が無い間に処理された中止は、後から始まる取得に効かない。一方、同じ entry の取得が
+  新しく始まった後に処理された中止（別のウィンドウや別のプロセスからの取得と重なった場合）は、
+  その新しい取得を止めうる。その場合も `.part` は残り、もう一度取得すれば続きから再開する。
+  capability `cancel_catalog_fetch` を広告しない Host（`fetch_catalog_model` だけの Host）には
+  送らない。
 - 要求そのものを断るときの `error` は `invalid_request`、`busy`、`unknown_model_id`、
   `catalog_unavailable`（catalog か取得の機能を持たない Host）、`not_running`
   （`CancelCatalogFetch`）、`not authenticated` のいずれか。
@@ -720,7 +724,11 @@ Host が `ListModels` の `catalog`（§4.1）を返すとき、ペインは既�
 表示する。Host が capability `cancel_catalog_fetch` を広告するとき、取得中の entry には「中止」
 ボタンを出し、`CancelCatalogFetch`（§4.4）を送る。送った後はボタンを「中止しています…」として
 無効にし、Host が取得の終わりを返すまで問い合わせを続ける。その取得が `cancelled` で終わったら、
-受信した分を残したことと、もう一度取得すると続きから再開することを表示する。
+受信した分を残したことと、もう一度取得すると続きから再開することを表示する。中止の要求が
+通らなければ（Host の応答が無い、または `not_running` 以外の拒否）、理由を表示してボタンを
+戻す。`not_running` は取得が先に終わったものとみなし、その終わり方を表示する。中止の要求に
+Host が応答するまでは、同じウィンドウから新しい取得を始めない（中止が `model_id` で取得を
+指すため、応答前に始めた取得を止めないようにする）。
 取得が成功したら（`downloaded` / `already_valid`）、その確定パスを「一般」のモデルの
 パス欄へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく共通の保存ボタンである
 （`docs/sideload-packaging-spec.md` §1.6.1「利用者の操作による取得」）。`mismatch` の entry は、

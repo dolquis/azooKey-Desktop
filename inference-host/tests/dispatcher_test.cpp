@@ -365,9 +365,9 @@ TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingReques
   EXPECT_TRUE(parsed_batch->canceled);
   EXPECT_TRUE(scheduler.IsLatest(1));
   EXPECT_EQ(scheduler.TrackCancellation(limit + 1), nullptr);
-  const auto predictions =
-      dispatcher.Dispatch(MakeReq(limit + 2, ipc::MessageType::QueryPredictions,
-                                  ipc::BuildQueryPredictionsRequest({"にほん", "", "word"})));
+  const auto predictions = dispatcher.Dispatch(
+      MakeReq(limit + 2, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"にほん", "", "word", std::nullopt, false})));
   ASSERT_TRUE(predictions);
   const auto parsed_predictions = ipc::ParseQueryPredictionsResponse(predictions->payload_json);
   ASSERT_TRUE(parsed_predictions);
@@ -725,7 +725,7 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
 
   const auto predictions_request =
       MakeReq(85, ipc::MessageType::QueryPredictions,
-              ipc::BuildQueryPredictionsRequest({"にほん", "", "word"}));
+              ipc::BuildQueryPredictionsRequest({"にほん", "", "word", std::nullopt, false}));
   const auto predictions_before = token_dispatcher.Dispatch(predictions_request);
   ASSERT_TRUE(predictions_before);
   EXPECT_EQ(predictions_before->request_id, predictions_request.request_id);
@@ -2839,7 +2839,7 @@ TEST_F(DispatcherTest, QueryLiveConversionSuppressesPreCanceledReply) {
 }
 
 TEST_F(DispatcherTest, QueryPredictionsReturnsWordCandidatesAndCorrelatesEnvelope) {
-  const ipc::QueryPredictionsRequest query{"にほん", "私は", "word"};
+  const ipc::QueryPredictionsRequest query{"にほん", "私は", "word", std::nullopt, false};
   const auto request =
       MakeReq(24, ipc::MessageType::QueryPredictions, ipc::BuildQueryPredictionsRequest(query));
   const auto response = dispatcher.Dispatch(request);
@@ -2856,7 +2856,7 @@ TEST_F(DispatcherTest, QueryPredictionsReturnsWordCandidatesAndCorrelatesEnvelop
 }
 
 TEST_F(DispatcherTest, QueryPredictionsRejectsUnsupportedModeAndMalformedRequest) {
-  ipc::QueryPredictionsRequest query{"にほん", "", "phrase"};
+  ipc::QueryPredictionsRequest query{"にほん", "", "phrase", std::nullopt, false};
   const auto unsupported = dispatcher.Dispatch(
       MakeReq(25, ipc::MessageType::QueryPredictions, ipc::BuildQueryPredictionsRequest(query)));
   ASSERT_TRUE(unsupported);
@@ -2885,9 +2885,9 @@ TEST_F(DispatcherTest, QueryPredictionsRejectsUnsupportedModeAndMalformedRequest
 
 TEST_F(DispatcherTest, QueryPredictionsSuppressesPreCanceledReply) {
   scheduler.Cancel(27);
-  const auto response =
-      dispatcher.Dispatch(MakeReq(27, ipc::MessageType::QueryPredictions,
-                                  ipc::BuildQueryPredictionsRequest({"にほん", "", "word"})));
+  const auto response = dispatcher.Dispatch(
+      MakeReq(27, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"にほん", "", "word", std::nullopt, false})));
   EXPECT_FALSE(response);
   EXPECT_FALSE(scheduler.IsCanceled(27));
 }
@@ -5249,6 +5249,32 @@ class BlockingPredictionConverter final : public azookey::core::IConverter {
   std::shared_future<void> release_;
 };
 
+// Counts PredictNext, so a test can tell a refused query from an empty result.
+class CountingPredictionConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext&) override {
+    calls_.fetch_add(1, std::memory_order_relaxed);
+    return {{"予測", kana, 1.0, azookey::core::CandidateSource::Heuristic, "test"}};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+  int calls() const { return calls_.load(std::memory_order_relaxed); }
+
+ private:
+  std::atomic<int> calls_{0};
+};
+
 }  // namespace
 
 TEST_F(DispatcherTest, QueryPredictionsDropsStaleResultAfterNewerRequest) {
@@ -5259,8 +5285,9 @@ TEST_F(DispatcherTest, QueryPredictionsDropsStaleResultAfterNewerRequest) {
   azookey::host::RequestScheduler local_scheduler;
   azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, &user_dict,
                                              DefaultDispatcherConfig());
-  const auto request = MakeReq(300, ipc::MessageType::QueryPredictions,
-                               ipc::BuildQueryPredictionsRequest({"にほん", "", "word"}));
+  const auto request =
+      MakeReq(300, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"にほん", "", "word", std::nullopt, false}));
   auto pending = std::async(std::launch::async, [&] { return local_dispatcher.Dispatch(request); });
   const bool started = entered.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
   if (started) local_scheduler.MarkLatest(301);
@@ -5269,6 +5296,79 @@ TEST_F(DispatcherTest, QueryPredictionsDropsStaleResultAfterNewerRequest) {
   ASSERT_TRUE(started);
   EXPECT_FALSE(response);
   EXPECT_FALSE(local_scheduler.IsCanceled(300));
+}
+
+// DEV-1829: a secure or unmarked query gets an empty ok reply and never reaches
+// the converter.
+TEST_F(DispatcherTest, QueryPredictionsAnswersSecureOrUnmarkedQueryWithNoPredictions) {
+  auto converter = std::make_unique<CountingPredictionConverter>();
+  const auto* counted = converter.get();
+  azookey::host::InferenceEngine local_engine(std::move(converter), &store, {});
+  azookey::host::RequestScheduler local_scheduler;
+  azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, &user_dict,
+                                             DefaultDispatcherConfig());
+  for (const auto& payload : {
+           ipc::BuildQueryPredictionsRequest({"にほん", "私は", "word"}),
+           std::string(R"({"kana":"にほん","leftSideContext":"私は","mode":"word"})"),
+           std::string(R"({"kana":"にほん","leftSideContext":"私は","mode":"word","secure":"no"})"),
+       }) {
+    SCOPED_TRACE(payload);
+    const auto response =
+        local_dispatcher.Dispatch(MakeReq(29, ipc::MessageType::QueryPredictions, payload));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseQueryPredictionsResponse(response->payload_json);
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(parsed->ok);
+    EXPECT_FALSE(parsed->error);
+    EXPECT_TRUE(parsed->predictions.empty());
+  }
+  EXPECT_EQ(counted->calls(), 0);
+  const auto open = local_dispatcher.Dispatch(
+      MakeReq(31, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"にほん", "私は", "word", std::nullopt, false})));
+  ASSERT_TRUE(open);
+  const auto parsed_open = ipc::ParseQueryPredictionsResponse(open->payload_json);
+  ASSERT_TRUE(parsed_open);
+  EXPECT_FALSE(parsed_open->predictions.empty());
+  EXPECT_EQ(counted->calls(), 1);
+}
+
+// DEV-1829: a secure privacy setting, or one that cannot be trusted, refuses a
+// query the TIP marked non-secure. SafeMode stops learning but keeps predictions
+// (dev-infrastructure-spec section 8.5.3).
+TEST_F(DispatcherTest, QueryPredictionsFollowsThePrivacySettingButNotSafeMode) {
+  const auto settings_path = temp_directory.File("azookey_prediction_privacy_settings.json");
+  for (const auto& [policy, expect_predictions] : {
+           std::pair{R"({"privacy":{"mode":"secure"}})", false},
+           std::pair{R"({"privacy":{"mode":"unknown"}})", false},
+           std::pair{"{ invalid json", false},
+           std::pair{R"({"privacy":{"mode":"secure"},"safeMode":{"enabled":true}})", false},
+           std::pair{R"({"privacy":{"mode":"normal"},"safeMode":{"enabled":true}})", true},
+           std::pair{R"({"privacy":{"mode":"normal"}})", true},
+       }) {
+    SCOPED_TRACE(policy);
+    {
+      std::ofstream out(settings_path);
+      out << policy;
+    }
+    azookey::host::SettingsStore settings(settings_path);
+    settings.Load();
+    auto converter = std::make_unique<CountingPredictionConverter>();
+    const auto* counted = converter.get();
+    azookey::host::InferenceEngine local_engine(std::move(converter), &store, {});
+    azookey::host::RequestScheduler local_scheduler;
+    azookey::host::Dispatcher target(&local_engine, &local_scheduler, &user_dict,
+                                     DefaultDispatcherConfig(), &settings);
+    const auto response = target.Dispatch(MakeReq(
+        30, ipc::MessageType::QueryPredictions,
+        ipc::BuildQueryPredictionsRequest({"にほん", "私は", "word", std::nullopt, false})));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseQueryPredictionsResponse(response->payload_json);
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(parsed->ok);
+    EXPECT_EQ(parsed->predictions.empty(), !expect_predictions);
+    EXPECT_EQ(counted->calls(), expect_predictions ? 1 : 0);
+  }
 }
 
 // M47 section 8.5.2: an out-of-band Cancel stops the conversion itself, not
@@ -5351,8 +5451,9 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
   ASSERT_TRUE(handshake(primary, 1));
   ASSERT_TRUE(handshake(control, 2));
 
-  auto prediction = MakeReq(91, ipc::MessageType::QueryPredictions,
-                            ipc::BuildQueryPredictionsRequest({"わたし", "", "word"}));
+  auto prediction =
+      MakeReq(91, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"わたし", "", "word", std::nullopt, false}));
   prediction.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
   auto pending = std::async(std::launch::async, [&] { return primary.Dispatch(prediction); });
   const auto entered_by = std::chrono::steady_clock::now() + std::chrono::seconds(5);

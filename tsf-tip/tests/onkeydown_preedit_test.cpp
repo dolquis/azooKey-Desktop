@@ -15485,8 +15485,8 @@ TEST(TsfTipHiraganaKeyTest, OpensAndLeavesAlphanumericModeLikeImeOn) {
 
 // DEV-1818: the prediction query carries the left context the same keystroke
 // captured for the candidate or live query: bounded, cut at the line break, sent
-// under private (privacy spec section 5.3), and no prediction query at all under
-// secure.
+// under private (privacy spec section 5.3), marked non-secure on the wire, and no
+// prediction query at all under secure.
 TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecureSendsNone) {
   using namespace azookey::ipc;
   constexpr uint32_t kNotAllowed =
@@ -15550,6 +15550,8 @@ TEST(TsfTipLeftContextTest, PredictionWireCarriesTheKeystrokeLeftContextAndSecur
       ASSERT_TRUE(WaitUntil([&] { return prediction_count() > before; })) << privacy;
       const std::lock_guard<std::mutex> lock(mutex);
       EXPECT_EQ(predictions[before].left_side_context, expected_context) << privacy;
+      // DEV-1829: the Host answers an unmarked query with no predictions.
+      EXPECT_FALSE(predictions[before].secure) << privacy;
     } else {
       // Nothing is queued for the worker to send, and the reason is recorded.
       EXPECT_EQ(h.service.pending_prediction_generation_for_test(), 0u) << privacy;

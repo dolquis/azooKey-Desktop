@@ -643,6 +643,7 @@ std::string BuildQueryPredictionsRequest(const QueryPredictionsRequest& p) {
   o.emplace("leftSideContext", j::Value(p.left_side_context));
   o.emplace("mode", j::Value(p.mode));
   AppToJson(p.app, o);
+  if (!p.secure) o.emplace("secure", j::Value(false));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -653,8 +654,9 @@ std::optional<QueryPredictionsRequest> ParseQueryPredictionsRequest(const std::s
   auto left_side_context = v->GetString("leftSideContext");
   auto mode = v->GetString("mode");
   if (!kana || !left_side_context || !mode) return std::nullopt;
+  // Absent for TIPs that predate DEV-1829: secure.
   return QueryPredictionsRequest{std::move(*kana), std::move(*left_side_context), std::move(*mode),
-                                 AppFromJson(*v)};
+                                 AppFromJson(*v), v->GetBool("secure").value_or(true)};
 }
 
 std::string BuildQueryPredictionsResponse(const QueryPredictionsResponse& p) {

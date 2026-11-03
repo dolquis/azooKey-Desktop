@@ -725,9 +725,9 @@ M54 本体が入ると、減衰は §5 の `recency_score`（category 別 half_l
 （`reading` は既存の欄である）。
 M15 payload に replacement や delete count を導入する必要もない。
 
-セーフ入力中の抑止は、M46 が TIP 側で `QueryPredictions` を送らないことで成立する
-（`privacy-and-secure-input-spec.md` §5）。
-本節では新しいゲートを設けない。
+セーフ入力中の抑止は、M46 が TIP 側で `QueryPredictions` を送らないことで成立し、
+Host も secure の照会を拒否する（`privacy-and-secure-input-spec.md` §5.1.1）。
+本節では、これらとは別のゲートを設けない。
 
 ### 14.7 既存 API と設定への影響
 

@@ -97,6 +97,10 @@ struct RuntimeSettings {
   // Unlike AI external access, offline mode also forbids public asset downloads.
   bool offline_mode{false};
   core::PrivacyPolicy privacy_policy{false, false, true};
+  // The user's privacy setting resolves to secure (mode secure, or an unreadable,
+  // invalid or unknown setting), before SafeMode forces privacy_policy secure to
+  // stop learning. SafeMode keeps predictions (section 8.5.3); this does not.
+  bool privacy_mode_secure{false};
   int32_t open_ai_timeout_ms{30000};
   std::string open_ai_api_key;
   std::string open_ai_api_endpoint{"https://api.openai.com/v1"};
@@ -163,6 +167,7 @@ class SettingsStore {
   struct PrivacyGuard {
     std::unique_lock<std::mutex> lock;
     core::PrivacyPolicy policy;
+    bool privacy_mode_secure{true};  // As RuntimeSettings::privacy_mode_secure.
   };
   // Hold through the learning operation. Reload publishes under this same lock,
   // independently of model loading and the caller's config serialization lock.
@@ -203,6 +208,7 @@ class SettingsStore {
   std::atomic<int64_t> loaded_write_time_{kNoWriteTime};
   mutable std::mutex privacy_mutex_;
   core::PrivacyPolicy privacy_policy_{false, false, true};
+  bool privacy_mode_secure_{false};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
   std::mutex peeked_mutex_;

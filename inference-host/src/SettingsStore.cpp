@@ -235,6 +235,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
   settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
   settings.privacy_policy = core::ParsePrivacyPolicy(ipc::json::Value(object));
+  settings.privacy_mode_secure = settings.privacy_policy.secure;
   settings.secure_apps = core::ParseSecureApps(ipc::json::Value(object));
   if (const auto privacy = object.find("privacy");
       privacy != object.end() && privacy->second.IsObject()) {
@@ -394,12 +395,13 @@ SettingsStore::SettingsStore(std::filesystem::path settings_path,
 
 SettingsStore::PrivacyGuard SettingsStore::LockPrivacyPolicy() const {
   std::unique_lock lock(privacy_mutex_);
-  return {std::move(lock), privacy_policy_};
+  return {std::move(lock), privacy_policy_, privacy_mode_secure_};
 }
 
 void SettingsStore::PublishPrivacyPolicy() {
   std::lock_guard lock(privacy_mutex_);
   privacy_policy_ = settings_.privacy_policy;
+  privacy_mode_secure_ = settings_.privacy_mode_secure;
 }
 
 SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
@@ -430,6 +432,8 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
     // Retaining unrelated last-good options must not retain privacy consent.
     result.settings.privacy_policy = {};
     settings_.privacy_policy = {};
+    result.settings.privacy_mode_secure = true;
+    settings_.privacy_mode_secure = true;
     result.settings.auto_secure_input = true;
     settings_.auto_secure_input = true;
     PublishPrivacyPolicy();

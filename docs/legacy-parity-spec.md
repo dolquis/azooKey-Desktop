@@ -891,9 +891,12 @@ Esc などで予測を消すと、問い合わせも再試行も捨てるので�
 
 ```
 Envelope:                  request_id
-QueryPredictionsRequest:   kana, leftSideContext, mode, app?
+QueryPredictionsRequest:   kana, leftSideContext, mode, app?, secure?
 QueryPredictionsResponse:  predictions[], ok?, error?
 ```
+
+`secure` の欠落は secure とみなし、wire には `false` だけを載せる。Host は secure の要求に
+予測 0 件の成功応答を返す（`docs/privacy-and-secure-input-spec.md` §5.1.1）。
 
 `predictions[]` の各要素は既存の `CandidateField`（`tag` を含む）とする。`app` は
 `docs/app-profile-spec.md` §3.1 の前面アプリ識別で、予測には boost を掛けない（同 §7）。

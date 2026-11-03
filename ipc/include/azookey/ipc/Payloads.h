@@ -244,6 +244,10 @@ struct QueryPredictionsRequest {
   std::string left_side_context;
   std::string mode{"word"};
   std::optional<AppIdentity> app;  // As QueryCandidatesRequest::app.
+  // DEV-1829: the event privacy. Missing is secure, as on
+  // QueryLiveConversionRequest; only false goes on the wire. The Host answers a
+  // secure query with no predictions.
+  bool secure{true};
 };
 
 struct QueryPredictionsResponse {

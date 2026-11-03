@@ -119,6 +119,7 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
     azookey::host::SettingsStore store(path);
     const auto loaded = store.Load();
     EXPECT_EQ(loaded.settings.privacy_policy.secure, item.secure);
+    EXPECT_EQ(store.LockPrivacyPolicy().privacy_mode_secure, item.secure);
     EXPECT_EQ(loaded.settings.privacy_policy.detailed_logging_allowed, item.detailed);
     EXPECT_EQ(loaded.settings.privacy_policy.learning_allowed, item.learning);
   }
@@ -898,10 +899,12 @@ TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
   EXPECT_FALSE(result.settings.privacy_policy.detailed_logging_allowed);
   EXPECT_TRUE(store.settings().privacy_policy.secure);
   EXPECT_FALSE(store.settings().privacy_policy.detailed_logging_allowed);
+  EXPECT_TRUE(store.LockPrivacyPolicy().privacy_mode_secure);
 
   WriteText(path, R"({"privacy":{"mode":"normal","redactLogs":false}})");
   const auto restored = store.Reload();
   EXPECT_FALSE(restored.settings.privacy_policy.secure);
+  EXPECT_FALSE(store.LockPrivacyPolicy().privacy_mode_secure);
   EXPECT_TRUE(restored.settings.privacy_policy.detailed_logging_allowed);
 }
 
@@ -1158,6 +1161,9 @@ TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
   EXPECT_FALSE(settings.ai_privacy.external);
   EXPECT_TRUE(settings.privacy_policy.secure);
   EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  // DEV-1829: learning stops, predictions do not.
+  EXPECT_FALSE(settings.privacy_mode_secure);
+  EXPECT_FALSE(store.LockPrivacyPolicy().privacy_mode_secure);
   EXPECT_EQ(settings.typo_correction_mode, "off");
   EXPECT_FALSE(settings.auto_word.mining_enabled);
   EXPECT_FALSE(settings.auto_word.trending_enabled);

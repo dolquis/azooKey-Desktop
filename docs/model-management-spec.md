@@ -850,7 +850,9 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
   `settings.json` とパスが決まらない場合に接続しないこと）。実ネットワークへの取得は Human Gate
   で確かめる
 - unit: `CatalogModelMatcher` の照合（`\\?\` 接頭辞と末尾の区切りの除去、名前の合わないファイルを
-  計算しないこと、サイズの変化での再計算）と、`CatalogFetchService` の同時 1 件・進捗・offline・
+  計算しないこと、サイズの変化での再計算、sidecar による次のプロセスでの再利用と、壊れた sidecar の
+  無視と上書き、ほかのプロセスの entry を残し無くなったファイルの entry を捨てること）と、
+  `CatalogFetchService` の同時 1 件・進捗・offline・
   停止による `cancelled`・開始と同じロックで取った状態・利用者の中止（その id の実行中の取得だけを
   止め、`.part` を残し、次の取得に効かないこと）を、偽のダウンローダで検証する
 - unit: §4.1 の `include_catalog` / `catalog` / `catalog_id` と §4.4 の要求・応答の往復、旧 Host と旧

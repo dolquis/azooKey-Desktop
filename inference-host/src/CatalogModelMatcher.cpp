@@ -1,13 +1,82 @@
 #include "azookey/host/CatalogModelMatcher.h"
 
+#include <fstream>
+#include <iterator>
 #include <system_error>
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/HttpDownloader.h"
+#include "azookey/ipc/Json.h"
+#include "azookey/learning/AtomicFile.h"
 
 namespace azookey::host {
 namespace {
+
+namespace j = ::azookey::ipc::json;
+
+constexpr int64_t kSidecarSchemaVersion = 1;
+// The sidecar holds one entry per catalog file; anything larger is not one this Host wrote.
+constexpr uintmax_t kMaxSidecarBytes = 1024 * 1024;
+constexpr size_t kMaxSidecarEntries = 256;
+
+struct SidecarEntry {
+  uintmax_t size{0};
+  int64_t mtime{0};
+  std::string sha256;
+};
+
+// The write time as the sidecar stores it: the clock's own ticks, for this machine only.
+int64_t WriteTimeTicks(std::filesystem::file_time_type time) {
+  return static_cast<int64_t>(time.time_since_epoch().count());
+}
+
+// A bare file name: the sidecar never names a file outside zenzai_dir.
+bool IsPlainFileName(std::string_view name) {
+  return !name.empty() && name != "." && name != ".." &&
+         name.find_first_of("/\\:") == std::string_view::npos;
+}
+
+bool IsSha256Hex(std::string_view text) {
+  if (text.size() != 64) return false;
+  for (const char c : text) {
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  return true;
+}
+
+// The sidecar's entries by file name. A missing, unreadable, oversized or unparsable file, or
+// one of another schemaVersion, gives none (the hashes are computed again); a malformed entry
+// is skipped.
+std::map<std::string, SidecarEntry> ReadSidecar(const std::filesystem::path& file) {
+  std::map<std::string, SidecarEntry> out;
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(file, ec);
+  if (ec || size > kMaxSidecarBytes) return out;
+  std::ifstream in(file, std::ios::binary);
+  if (!in) return out;
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (in.bad()) return out;
+  const auto root = j::Parse(text);
+  if (!root || !root->IsObject() || root->GetInt("schemaVersion") != kSidecarSchemaVersion) {
+    return out;
+  }
+  const auto* entries = root->GetArray("entries");
+  if (!entries) return out;
+  for (const auto& entry : *entries) {
+    if (out.size() >= kMaxSidecarEntries) break;
+    if (!entry.IsObject()) continue;
+    auto name = entry.GetString("path");
+    const auto bytes = entry.GetUInt("size");
+    const auto mtime = entry.GetInt("mtime");
+    auto sha256 = entry.GetString("sha256");
+    if (!name || !bytes || !mtime || !sha256 || !IsPlainFileName(*name) || !IsSha256Hex(*sha256)) {
+      continue;
+    }
+    out[std::move(*name)] = SidecarEntry{*bytes, *mtime, std::move(*sha256)};
+  }
+  return out;
+}
 
 // The long, resolved form of a path: ListModels lists weakly_canonical paths, and a models_dir
 // or selectedPath may be spelled with 8.3 short names (a TEMP under RUNNER~1, for one). A path
@@ -65,6 +134,7 @@ std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::
   if (ec) return std::nullopt;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    LoadSidecarLocked();
     const auto it = hashes_.find(path);
     if (it != hashes_.end() && it->second.size == size && it->second.write_time == write_time) {
       return it->second.sha256;
@@ -74,9 +144,64 @@ std::optional<std::string> CatalogModelMatcher::Sha256Of(const std::filesystem::
   // file. Two callers hashing the same file at once both store the same value.
   auto sha256 = sha256_(path);
   if (!sha256) return std::nullopt;
-  std::lock_guard<std::mutex> lock(mutex_);
-  hashes_[path] = CachedHash{size, write_time, *sha256};
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hashes_[path] = CachedHash{size, write_time, *sha256};
+  }
+  if (path.parent_path() == ResolvedPath(zenzai_dir_)) SaveSidecar();
   return sha256;
+}
+
+void CatalogModelMatcher::LoadSidecarLocked() {
+  if (sidecar_loaded_) return;
+  sidecar_loaded_ = true;
+  const auto zenzai_dir = ResolvedPath(zenzai_dir_);
+  for (auto& [name, entry] : ReadSidecar(zenzai_dir / kCatalogSha256SidecarName)) {
+    const auto path = (zenzai_dir / core::Utf8Path(name)).lexically_normal();
+    // A hash this process computed is newer than the sidecar's.
+    hashes_.emplace(path, CachedHash{entry.size,
+                                     std::filesystem::file_time_type(
+                                         std::filesystem::file_time_type::duration(entry.mtime)),
+                                     std::move(entry.sha256)});
+  }
+}
+
+void CatalogModelMatcher::SaveSidecar() {
+  const auto zenzai_dir = ResolvedPath(zenzai_dir_);
+  const auto file = zenzai_dir / kCatalogSha256SidecarName;
+  // What another process wrote meanwhile stays, unless this process knows newer.
+  auto merged = ReadSidecar(file);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& [path, hash] : hashes_) {
+      if (path.parent_path() != zenzai_dir) continue;
+      merged[core::PathToUtf8(path.filename())] =
+          SidecarEntry{hash.size, WriteTimeTicks(hash.write_time), hash.sha256};
+    }
+  }
+  j::Array entries;
+  for (const auto& [name, entry] : merged) {
+    if (entries.size() >= kMaxSidecarEntries) break;
+    // Only files still there with that size and write time: a removed or replaced file's
+    // entry would never be used again.
+    const auto path = zenzai_dir / core::Utf8Path(name);
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size != entry.size) continue;
+    const auto write_time = std::filesystem::last_write_time(path, ec);
+    if (ec || WriteTimeTicks(write_time) != entry.mtime) continue;
+    j::Object out;
+    out.emplace("path", j::Value(name));
+    out.emplace("size", j::Value(static_cast<uint64_t>(entry.size)));
+    out.emplace("mtime", j::Value(entry.mtime));
+    out.emplace("sha256", j::Value(entry.sha256));
+    entries.emplace_back(std::move(out));
+  }
+  j::Object root;
+  root.emplace("schemaVersion", j::Value(kSidecarSchemaVersion));
+  root.emplace("entries", j::Value(std::move(entries)));
+  // A failure (a read-only folder, for one) only means the next process hashes again.
+  learning::WriteTextFileAtomically(file, j::Stringify(j::Value(std::move(root))));
 }
 
 std::optional<ModelCatalogEntry> CatalogModelMatcher::Match(std::string_view selected_path_utf8) {

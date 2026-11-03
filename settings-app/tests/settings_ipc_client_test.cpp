@@ -290,6 +290,41 @@ TEST(SettingsIpcClientTest, CatalogFetchStartsThenPollsAndNeedsItsCapability) {
   EXPECT_EQ(older.requests(), 0);
 }
 
+// DEV-1840: the stop names the fetch and needs its own capability, so a Host that can fetch but
+// not stop (DEV-1821) is never sent one.
+TEST(SettingsIpcClientTest, CatalogFetchCancelNamesTheFetchAndNeedsItsCapability) {
+  std::string seen;
+  FakeHost host({"fetch_catalog_model", "cancel_catalog_fetch"}, [&](azookey::ipc::MessageType type,
+                                                                     const std::string& payload) {
+    EXPECT_EQ(type, azookey::ipc::MessageType::CancelCatalogFetch);
+    seen = payload;
+    azookey::ipc::CatalogFetchResponse response;
+    response.state = "running";
+    response.model_id = "zenz-v3.2-small";
+    return std::optional<std::string>(azookey::ipc::BuildCatalogFetchResponse(response));
+  });
+  ASSERT_TRUE(host.started());
+  const auto cancelled =
+      azookey::settings::RequestCancelCatalogFetch(host.Options(), {"zenz-v3.2-small"});
+  ASSERT_EQ(cancelled.status, HostCallStatus::Ok);
+  ASSERT_TRUE(cancelled.response);
+  EXPECT_TRUE(cancelled.response->ok);
+  const auto parsed = azookey::ipc::ParseCancelCatalogFetchRequest(seen);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->model_id, "zenz-v3.2-small");
+
+  FakeHost fetch_only({"fetch_catalog_model"}, [](azookey::ipc::MessageType, const std::string&) {
+    return std::optional<std::string>("{}");
+  });
+  ASSERT_TRUE(fetch_only.started());
+  EXPECT_EQ(azookey::settings::RequestCancelCatalogFetch(fetch_only.Options(), {"zenz"}).status,
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(azookey::settings::ProbeHostCapability(
+                fetch_only.Options(), azookey::settings::kCapabilityCancelCatalogFetch),
+            HostCallStatus::Unsupported);
+  EXPECT_EQ(fetch_only.requests(), 0);
+}
+
 TEST(SettingsIpcClientTest, LearningDataMessagesRoundTrip) {
   std::vector<azookey::ipc::MessageType> seen;
   FakeHost host({"learning_data_management"}, [&](azookey::ipc::MessageType type,

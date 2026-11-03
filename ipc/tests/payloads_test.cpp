@@ -1835,6 +1835,20 @@ TEST(PayloadsTest, CatalogFetchRoundTripAndStableSchema) {
   EXPECT_FALSE(ParseCatalogFetchResponse(R"({"ok":false,"error":"unsupported_message_type"})"));
 }
 
+// DEV-1840: the stop names the fetch it means, so a request without an id is malformed.
+TEST(PayloadsTest, CancelCatalogFetchRequestNeedsTheModelId) {
+  using namespace azookey::ipc;
+  EXPECT_EQ(BuildCancelCatalogFetchRequest({"zenz-v3.2-small"}),
+            R"({"model_id":"zenz-v3.2-small"})");
+  const auto request = ParseCancelCatalogFetchRequest(R"({"model_id":"zenz-v3.2-small"})");
+  ASSERT_TRUE(request);
+  EXPECT_EQ(request->model_id, "zenz-v3.2-small");
+  EXPECT_FALSE(ParseCancelCatalogFetchRequest("{}"));
+  EXPECT_FALSE(ParseCancelCatalogFetchRequest(R"({"model_id":""})"));
+  EXPECT_FALSE(ParseCancelCatalogFetchRequest(R"({"model_id":7})"));
+  EXPECT_FALSE(ParseCancelCatalogFetchRequest("[]"));
+}
+
 TEST(PayloadsTest, BenchmarkModelRoundTripAndStableSchema) {
   using namespace azookey::ipc;
   BenchmarkModelRequest request;

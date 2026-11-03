@@ -37,6 +37,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::fire_and_forget Refresh(bool keep_message = false);
   winrt::fire_and_forget Benchmark(std::string path, std::string file_name);
   winrt::fire_and_forget FetchCatalog(std::string model_id);
+  // DEV-1840: asks the Host to stop the running fetch; FetchCatalog keeps polling until it ends.
+  winrt::fire_and_forget CancelCatalogFetch();
   void RenderModels();
   void RenderCatalog();
   // Updates only the running fetch's progress bar and text, so a poll does not rebuild the rows
@@ -60,6 +62,7 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel catalog_panel_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::ProgressBar fetch_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock fetch_text_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button fetch_cancel_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock benchmark_text_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel history_panel_{nullptr};
   std::vector<azookey::ipc::ListedModel> models_;
@@ -72,6 +75,10 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   std::string fetching_id_;
   uint64_t fetch_received_{0};
   uint64_t fetch_total_{0};
+  // The Host advertises cancel_catalog_fetch, so the running fetch has a stop button.
+  bool fetch_can_cancel_{false};
+  // The stop was sent and the Host has not reported the fetch's end yet.
+  bool cancel_requested_{false};
   // A fetch finished while a listing was running; list again once it ends.
   bool refresh_again_{false};
 };

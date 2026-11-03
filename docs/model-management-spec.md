@@ -235,7 +235,7 @@ HTTP はループバックの自動テストに限って使用する。
 6. `model.selectedPath` は変えない。
 
 失敗の理由は固定カテゴリ（`directory_unavailable`、`destination_occupied`、`download_failed`、
-`cancelled`（呼び出し側の取り消し。常駐 Host の停止）、`format:<カテゴリ>`）で返し、ログに出してよいのは entry の id、状態、カテゴリ、受信バイト数だけとする。
+`cancelled`（呼び出し側の取り消し。常駐 Host の停止と利用者の中止）、`format:<カテゴリ>`）で返し、ログに出してよいのは entry の id、状態、カテゴリ、受信バイト数だけとする。
 ダウンローダのメッセージは URL やパスを含み得るので、CLI の標準エラーにだけ出す。
 
 入口は CLI の `azookey_inference_host models fetch [<id>]` である（`--id <id>` とも書ける。
@@ -254,8 +254,9 @@ id を省くと `defaultModelId`）。CLI は `settings.json` の `privacy.mode`
 もう 1 つの入口は、設定アプリのモデル ペインの取得ボタンから送る `FetchCatalogModel`（§4.4）
 である。常駐 Host が同じ `FetchCatalogModel` をバックグラウンドのスレッドで呼び、
 `privacy.mode=offline` の判定には Host の実行中の設定（`UpdateConfig` で切り替わる値）を使う。
-取得中に `offline` へ切り替わるか Host が止まると、ダウンローダの読み取りの合間で取得をやめる。
-Host の停止で止まった取得は `cancelled` で失敗し、`.part` が残るので次の取得で続きから再開する。
+取得中に `offline` へ切り替わるか、Host が止まるか、利用者が中止する（`CancelCatalogFetch`、
+§4.4）と、ダウンローダの読み取りの合間で取得をやめる。Host の停止か利用者の中止で止まった取得は
+`cancelled` で失敗し、`.part` が残るので次の取得で続きから再開する。
 WinHTTP の接続や受信で待っている間は、その timeout（接続 15 秒、受信 30 秒）が過ぎるまで
 止まらない。Host は停止時に取得のスレッドの終わりを待つので、取得中の Host の停止は数十秒
 遅れることがある。
@@ -564,9 +565,10 @@ load/unload とライブクエリの race を構造的に排除する。
 wire 上の型は文字列なので、enum の数値位置は互換性に影響しない。
 Host は `Handshake` 応答の capabilities で `list_models` / `benchmark_model` を広告し、
 client はそれを見て対応版を判別する。§4.4 の `FetchCatalogModel` / `QueryCatalogFetch` も同じく
-`Unknown` の前に置き、capability `fetch_catalog_model` で判別する。
+`Unknown` の前に置き、capability `fetch_catalog_model` で判別する。§4.4 の `CancelCatalogFetch`
+も `Unknown` の前に置き、別の capability `cancel_catalog_fetch` で判別する。
 
-### 4.4 FetchCatalogModel / QueryCatalogFetch
+### 4.4 FetchCatalogModel / QueryCatalogFetch / CancelCatalogFetch
 
 既定の catalog の entry の取得（§3.1.2）を、設定アプリから Host に行わせる。取得は大きな
 ファイルになり得るので、1 要求に 1 応答を返す IPC の前提を保ったまま、開始と進捗の問い合わせを
@@ -578,17 +580,24 @@ client はそれを見て対応版を判別する。§4.4 の `FetchCatalogModel
 - 両者の応答は同じ形で、`state`（`idle` / `running` / `done`）、`model_id`、`received_bytes`、
   `total_bytes`、`done` のときの `status`（§3.1.2 の `downloaded` / `already_valid` / `offline` /
   `not_fetchable` / `failed`）と、成功時の `path`、`failed` のときの `result_error`（§3.1.2 の
-  固定カテゴリ、または Host の停止による `cancelled`）を持つ。`received_bytes` は `.part` に
+  固定カテゴリ、または Host の停止か利用者の中止による `cancelled`）を持つ。`received_bytes` は `.part` に
   書いたバイト数（再開した分を含む）、`total_bytes` は応答の `Content-Length`（無ければ
   entry の `sizeBytes`）である。ダウンローダのメッセージ（URL やパスを含み得る）は送らない。
 - 取得は Host 全体で同時に 1 件とする。実行中に `FetchCatalogModel` を受けると `ok: false` /
   `error: "busy"` を返し、応答には実行中の取得の状態を載せる。`done` の結果は次の取得が
   始まるまで残る。
+- `CancelCatalogFetch` の要求は `{model_id}`（必須。空文字列は `invalid_request`）で、実行中の
+  その entry の取得に止まるよう求め、止まるのを待たずに応答する。応答は §4.4 の同じ形で、
+  そのときの取得の状態を載せる。実行中の取得が無いか、別の entry の取得のときは `ok: false` /
+  `error: "not_running"` を返し、ほかの取得は止めない。止めるよう求めた取得は、§3.1.2 の
+  とおりダウンローダの読み取りの合間で止まり（受信の待ちの間は最大で受信 timeout の 30 秒
+  かかる）、`done` / `failed` / `cancelled` になる。`.part` は残し、次の取得で続きから再開する。
+  中止は終わった取得や次に始まる取得には効かない。capability `cancel_catalog_fetch` を広告しない
+  Host（`fetch_catalog_model` だけの Host）には送らない。
 - 要求そのものを断るときの `error` は `invalid_request`、`busy`、`unknown_model_id`、
-  `catalog_unavailable`（catalog か取得の機能を持たない Host）、`not authenticated` の
-  いずれか。
-- 利用者による取り消しのメッセージは持たない。取得は `offline` への切り替えと Host の停止で
-  止まる（§3.1.2）。
+  `catalog_unavailable`（catalog か取得の機能を持たない Host）、`not_running`
+  （`CancelCatalogFetch`）、`not authenticated` のいずれか。
+- 取得は `offline` への切り替え、Host の停止、`CancelCatalogFetch` で止まる（§3.1.2）。
 - 設定アプリは `running` のあいだ約 0.5 秒ごとに `QueryCatalogFetch` を送り、進捗を表示する。
   待つのをやめるのは、`received_bytes` が一定時間（Host の受信 timeout とファイル検証の時間より
   長い）増えないときだけで、取得全体の時間では区切らない。問い合わせが応答を得られないときは
@@ -596,7 +605,9 @@ client はそれを見て対応版を判別する。§4.4 の `FetchCatalogModel
   戻ったら、Host が取得の途中で再起動したとみなし、中断として表示する。待つのをやめても Host は取得を
   続けることがあり、結果は次の `ListModels` の `catalog` に表れる。
 - ログに出すのは、Host が取得を終えたときの entry の id、`status`、固定カテゴリ、受信バイト数
-  だけである（§3.1.2）。要求は入力文字列を含まず、学習や AI 送信とも関係しない。
+  だけである（§3.1.2）。`CancelCatalogFetch` は独自のログを出さず、中止した取得は終わりの
+  ログに `cancelled` として表れる。要求は catalog の entry の id だけで入力文字列を含まず、
+  学習や AI 送信とも関係しない。`offline` のときも中止は受け付ける（止めるだけで通信しない）。
 
 ## 5. Backend 自動選択
 
@@ -706,7 +717,11 @@ Backend: auto → CPU
 Host が `ListModels` の `catalog`（§4.1）を返すとき、ペインは既定の catalog の entry を別の節に
 並べ、`state` と、`missing` で取得元を持つ entry の「取得」ボタン、`verified` の entry の選択
 ボタンを出す。取得ボタンは `FetchCatalogModel`（§4.4）を送り、進捗を受信バイト数と割合で
-表示する。取得が成功したら（`downloaded` / `already_valid`）、その確定パスを「一般」のモデルの
+表示する。Host が capability `cancel_catalog_fetch` を広告するとき、取得中の entry には「中止」
+ボタンを出し、`CancelCatalogFetch`（§4.4）を送る。送った後はボタンを「中止しています…」として
+無効にし、Host が取得の終わりを返すまで問い合わせを続ける。その取得が `cancelled` で終わったら、
+受信した分を残したことと、もう一度取得すると続きから再開することを表示する。
+取得が成功したら（`downloaded` / `already_valid`）、その確定パスを「一般」のモデルの
 パス欄へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく共通の保存ボタンである
 （`docs/sideload-packaging-spec.md` §1.6.1「利用者の操作による取得」）。`mismatch` の entry は、
 同じ名前の別のファイルを置き換えないので取得ボタンを出さない。
@@ -828,10 +843,12 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
   で確かめる
 - unit: `CatalogModelMatcher` の照合（`\\?\` 接頭辞と末尾の区切りの除去、名前の合わないファイルを
   計算しないこと、サイズの変化での再計算）と、`CatalogFetchService` の同時 1 件・進捗・offline・
-  停止による `cancelled`・開始と同じロックで取った状態を、偽のダウンローダで検証する
+  停止による `cancelled`・開始と同じロックで取った状態・利用者の中止（その id の実行中の取得だけを
+  止め、`.part` を残し、次の取得に効かないこと）を、偽のダウンローダで検証する
 - unit: §4.1 の `include_catalog` / `catalog` / `catalog_id` と §4.4 の要求・応答の往復、旧 Host と旧
-  client の組み合わせで省略できること、Dispatcher の capability・未認証・開始から完了までの追跡、
-  設定アプリの IPC client が capability の無い Host に送らないこと、進捗の割合と停滞の判定
+  client の組み合わせで省略できること、Dispatcher の capability・未認証・開始から完了までの追跡と
+  `CancelCatalogFetch` による中止、設定アプリの IPC client が capability の無い Host に送らない
+  こと（`fetch_catalog_model` だけの Host に中止を送らないことを含む）、進捗の割合と停滞の判定
 - integration: ループバック HTTP で、ダウンローダの進捗が再開した分を含む受信バイト数と、
   `Content-Length` に再開分を足した全体のサイズを返すこと
 - integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、

@@ -1517,6 +1517,22 @@ std::optional<CatalogFetchResponse> ParseCatalogFetchResponse(const std::string&
   return p;
 }
 
+std::string BuildCancelCatalogFetchRequest(const CancelCatalogFetchRequest& p) {
+  j::Object o;
+  o.emplace("model_id", j::Value(p.model_id));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<CancelCatalogFetchRequest> ParseCancelCatalogFetchRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  const auto* model_id = v->Find("model_id");
+  if (!model_id || !model_id->IsString() || model_id->AsString().empty()) return std::nullopt;
+  CancelCatalogFetchRequest p;
+  p.model_id = model_id->AsString();
+  return p;
+}
+
 // -------- M49 learning data management (DEV-1190) --------
 
 namespace {

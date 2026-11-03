@@ -54,6 +54,7 @@ inline constexpr const char* kCapabilityLearningReset = "learning_reset";
 inline constexpr const char* kCapabilityPersona = "persona";
 inline constexpr const char* kCapabilityDetectAnomalies = "detect_anomalies";
 inline constexpr const char* kCapabilityFetchCatalogModel = "fetch_catalog_model";
+inline constexpr const char* kCapabilityCancelCatalogFetch = "cancel_catalog_fetch";
 
 // Connects and completes the Handshake only, to learn whether the Host advertises `capability`
 // before the user is asked to confirm an operation. Ok means it does; Unsupported means it does
@@ -73,6 +74,10 @@ HostCallResult<azookey::ipc::CatalogFetchResponse> RequestFetchCatalogModel(
     const SettingsIpcOptions& options, const azookey::ipc::FetchCatalogModelRequest& request);
 HostCallResult<azookey::ipc::CatalogFetchResponse> RequestQueryCatalogFetch(
     const SettingsIpcOptions& options);
+// DEV-1840: asks the Host to stop its running fetch of request.model_id. The fetch then ends as
+// failed / "cancelled", which RequestQueryCatalogFetch reports.
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestCancelCatalogFetch(
+    const SettingsIpcOptions& options, const azookey::ipc::CancelCatalogFetchRequest& request);
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(
     const SettingsIpcOptions& options, const azookey::ipc::ListLearningEntriesRequest& request);
 HostCallResult<azookey::ipc::ForgetLearningEntryResponse> RequestForgetLearningEntry(

@@ -1220,7 +1220,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
-| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）（`model-management-spec.md` §4 / §6） |
+| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6） |
 | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7） |
 | Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |

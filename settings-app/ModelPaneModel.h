@@ -53,10 +53,11 @@ std::string ModelErrorResource(std::string_view error);
 std::string HostCallStatusResource(HostCallStatus status);
 
 // DEV-1821 catalog fetch (model-management-spec sections 3.1.2 and 4.4). Error categories a
-// FetchCatalogModel / QueryCatalogFetch response can carry, as the request's error or the
-// fetch's result_error. Each has a "CatalogFetchError_<code>" string; "format:<category>" uses
-// "CatalogFetchError_format", and any other category "CatalogFetchError_other".
-inline constexpr std::array<std::string_view, 10> kCatalogFetchErrorCodes{"invalid_request",
+// FetchCatalogModel / QueryCatalogFetch / CancelCatalogFetch (DEV-1840) response can carry, as
+// the request's error or the fetch's result_error. Each has a "CatalogFetchError_<code>"
+// string; "format:<category>" uses "CatalogFetchError_format", and any other category
+// "CatalogFetchError_other".
+inline constexpr std::array<std::string_view, 11> kCatalogFetchErrorCodes{"invalid_request",
                                                                           "busy",
                                                                           "unknown_model_id",
                                                                           "catalog_unavailable",
@@ -65,7 +66,8 @@ inline constexpr std::array<std::string_view, 10> kCatalogFetchErrorCodes{"inval
                                                                           "destination_occupied",
                                                                           "download_failed",
                                                                           "cancelled",
-                                                                          "format"};
+                                                                          "format",
+                                                                          "not_running"};
 
 std::string CatalogFetchErrorResource(std::string_view error);
 
@@ -75,6 +77,13 @@ std::string CatalogFetchResultResource(const azookey::ipc::CatalogFetchResponse&
 // A finished fetch whose file can go into model.selectedPath: the SHA-256 matched the pin and
 // the GGUF passed the R1 checks (sideload-packaging-spec section 1.6.1, the probe).
 bool CatalogFetchSucceeded(const azookey::ipc::CatalogFetchResponse& response);
+
+// Whether the entry's fetch button can start a fetch: a missing entry with a source, while no
+// fetch runs and no stop this window sent is still unanswered (DEV-1840). The Host matches a
+// stop by model id, so a fetch of the same entry started before the answer could be the one
+// the stop reaches.
+bool CanStartCatalogFetch(const azookey::ipc::CatalogModelEntry& entry, bool fetching,
+                          bool cancel_in_flight);
 
 // The string for a catalog entry's file state ("missing", "verified", "mismatch").
 std::string CatalogEntryStateResource(std::string_view state);

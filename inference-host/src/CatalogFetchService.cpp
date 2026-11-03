@@ -59,11 +59,13 @@ CatalogFetchStartResult CatalogFetchService::Start(std::string_view model_id,
       snapshot_.model_id = entry->id;
       snapshot_.total_bytes = entry->size_bytes;
       try {
+        auto stop = std::make_shared<std::atomic<bool>>(false);
         // The new worker waits for this lock before it touches the snapshot.
-        std::thread next([this, copy = *entry] { Run(copy); });
+        std::thread next([this, copy = *entry, stop] { Run(copy, stop); });
         // The previous worker has published Done and is only returning; join it outside.
         finished = std::move(worker_);
         worker_ = std::move(next);
+        stop_running_ = std::move(stop);
       } catch (...) {
         // No thread: the previous worker and result stay as they were.
         snapshot_ = previous;
@@ -83,6 +85,19 @@ CatalogFetchSnapshot CatalogFetchService::Snapshot() const {
   return snapshot_;
 }
 
+CatalogFetchCancelResult CatalogFetchService::Cancel(std::string_view model_id,
+                                                     CatalogFetchSnapshot* state) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto result = CatalogFetchCancelResult::NotRunning;
+  if (snapshot_.state == CatalogFetchSnapshot::State::Running && snapshot_.model_id == model_id &&
+      stop_running_) {
+    *stop_running_ = true;
+    result = CatalogFetchCancelResult::Cancelling;
+  }
+  if (state) *state = snapshot_;
+  return result;
+}
+
 void CatalogFetchService::Shutdown() {
   std::thread worker;
   {
@@ -96,12 +111,12 @@ void CatalogFetchService::Shutdown() {
   runtime_logger_ = nullptr;
 }
 
-void CatalogFetchService::Run(ModelCatalogEntry entry) {
+void CatalogFetchService::Run(ModelCatalogEntry entry, std::shared_ptr<std::atomic<bool>> stop) {
   ModelFetchResult result;
   try {
     const auto downloader = downloader_();
     ModelFetchHooks hooks;
-    hooks.cancelled = [this] { return cancel_.load(); };
+    hooks.cancelled = [this, stop] { return cancel_.load() || stop->load(); };
     hooks.progress = [this](uint64_t received, uint64_t total) {
       std::lock_guard<std::mutex> lock(mutex_);
       snapshot_.received_bytes = received;

@@ -47,6 +47,11 @@ enum class CatalogFetchStartResult : uint8_t {
   Unavailable,     // No catalog, or the service is shutting down.
 };
 
+enum class CatalogFetchCancelResult : uint8_t {
+  Cancelling,  // The running fetch of that id was asked to stop.
+  NotRunning,  // No fetch runs, or the running one is of another id.
+};
+
 class CatalogFetchService {
  public:
   using DownloaderFactory = std::function<std::unique_ptr<IPackDownloader>()>;
@@ -64,6 +69,13 @@ class CatalogFetchService {
   // under the same lock: the fetch just started, or the one that made it Busy.
   CatalogFetchStartResult Start(std::string_view model_id, CatalogFetchSnapshot* state = nullptr);
   CatalogFetchSnapshot Snapshot() const;
+  // DEV-1840: asks the running fetch of model_id to stop between blocking operations; it then
+  // ends as failed / "cancelled" and leaves its .part for the next fetch to resume. The stop
+  // names the fetch by model id only: it reaches whichever fetch of that id runs when it is
+  // handled, so a stop handled after a new fetch of the same id started (from another window or
+  // process) stops that one. A stop handled while nothing of that id runs reaches nothing, and
+  // no later fetch. state, when given, receives the fetch state under the same lock.
+  CatalogFetchCancelResult Cancel(std::string_view model_id, CatalogFetchSnapshot* state = nullptr);
   // Stops a running download between blocking operations and waits for the thread. Later
   // Start calls return Unavailable. Also run by the destructor.
   void Shutdown();
@@ -71,7 +83,7 @@ class CatalogFetchService {
   const std::shared_ptr<CatalogModelMatcher>& matcher() const { return matcher_; }
 
  private:
-  void Run(ModelCatalogEntry entry);
+  void Run(ModelCatalogEntry entry, std::shared_ptr<std::atomic<bool>> stop);
 
   const std::shared_ptr<CatalogModelMatcher> matcher_;
   const DownloaderFactory downloader_;
@@ -80,7 +92,10 @@ class CatalogFetchService {
   logging::RuntimeLogger* runtime_logger_;
   CatalogFetchSnapshot snapshot_;
   bool stopping_{false};
+  // The Host's stop (Shutdown), for every fetch.
   std::atomic<bool> cancel_{false};
+  // The user's stop of the running fetch; a new one for each fetch.
+  std::shared_ptr<std::atomic<bool>> stop_running_;
   std::thread worker_;
 };
 

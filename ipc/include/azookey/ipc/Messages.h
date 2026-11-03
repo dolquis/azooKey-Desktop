@@ -47,6 +47,8 @@ enum class MessageType {
   // DEV-1821 catalog model fetch (model-management-spec section 4.4): start, then poll.
   FetchCatalogModel,
   QueryCatalogFetch,
+  // DEV-1840: the user's stop of the running catalog fetch.
+  CancelCatalogFetch,
   Unknown,
 };
 

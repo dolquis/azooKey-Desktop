@@ -238,6 +238,14 @@ HostCallResult<azookey::ipc::CatalogFetchResponse> RequestQueryCatalogFetch(
       options.response_timeout_ms, azookey::ipc::ParseCatalogFetchResponse);
 }
 
+HostCallResult<azookey::ipc::CatalogFetchResponse> RequestCancelCatalogFetch(
+    const SettingsIpcOptions& options, const azookey::ipc::CancelCatalogFetchRequest& request) {
+  return Call<azookey::ipc::CatalogFetchResponse>(
+      options, kCapabilityCancelCatalogFetch, MessageType::CancelCatalogFetch,
+      azookey::ipc::BuildCancelCatalogFetchRequest(request), options.response_timeout_ms,
+      azookey::ipc::ParseCatalogFetchResponse);
+}
+
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(
     const SettingsIpcOptions& options, const azookey::ipc::ListLearningEntriesRequest& request) {
   return Call<azookey::ipc::ListLearningEntriesResponse>(

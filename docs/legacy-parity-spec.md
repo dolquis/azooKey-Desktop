@@ -70,9 +70,9 @@ struct UserActionEvent {
 };
 ```
 
-VK → UserAction マッピングは `tsf-tip/src/TextService.cpp::OnKeyDown` 内の
-テーブルで実装する。テーブルは `core/src/UserActionMap.cpp` に切り出し、
-TIP と将来の Linux ポート両方で再利用できる形にする。
+VK → UserAction マッピングは `core/src/UserActionMap.cpp` のテーブル（`MapUserAction`）で
+実装し、TIP（`tsf-tip/src/TextService.cpp` の `OnTestKeyDown` / `OnKeyDown`）と将来の
+Linux ポート両方で再利用できる形にする。層の分界は §1.5.3 に従う。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装も独立に
 > **UserAction（物理キー→意味）→ process_key（状態機械で ClientAction 列を生成）→
@@ -244,7 +244,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 
 ### 1.4 キーバインドマッピング
 
-`tsf-tip/src/TextService.cpp::OnKeyDown` 内の table で実装：
+`core/src/UserActionMap.cpp` の table で実装し、TIP は `tsf-tip/src/TextService.cpp` の
+`OnTestKeyDown` / `OnKeyDown` から引く（§1.5.3）：
 
 | VK | Modifier | UserAction |
 |---|---|---|
@@ -304,10 +305,12 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 - 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、ひらがなキー `VK_DBE_HIRAGANA`、`convertKeysAction` が
   `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`
   §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` / `VK_DBE_HIRAGANA` はこの写像では `nullopt` である。
-- TIP は `ClientAction` の効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、
-  Commit、Cancel、Selecting 中の Forward / Backward、TIP が確定する字種指定確定）だけを消費する。モード切替・Unicode 入力・
-  Forget・デバッグ窓の `UserAction` は、対応するマイルストーン（M16 / M18）が効果を実装するまで
-  TIP でパススルーする。
+- TIP は効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、Commit、Cancel、
+  Selecting 中の Forward / Backward、TIP が確定する字種指定確定、モード切替（`ToggleHiraKata` /
+  `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8））を
+  消費する。`Forget` と `ToggleDebugWindow` を食う条件はそれぞれの節が定める。
+  Magic Conversion のダブルタップ（`StartAlnumDouble` / `StartKanaDouble`）は M16 が効果を実装するまで
+  TIP が落とし、キーをパススルーする（§4.1）。
 
 > **字種指定のキーと legacy との差（DEV-1812）**: F6〜F10 は legacy と Microsoft IME に共通の操作として
 > 割り当てる（roadmap M64）。legacy で F6〜F10 と同じ働きをする Ctrl+J / K / ; / L / : と、Microsoft IME の

@@ -210,12 +210,12 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` / `CommitCorrection` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
-| 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
-| Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
+| 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure（§5.1.1 の定義。SafeMode は含まない）のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
+| Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担う（§5.1.1） |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
-| M55 補正候補の学習・適用を停止 | `correction/TypoCorrectionEngine.cpp` |
+| M55 補正候補の学習・適用を停止 | 学習: TIP の `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` による検出を学習許可で止め、`PostIpcSend` が `ObserveTypo` を落とす。Host は `inference-host/src/Dispatcher.cpp::HandleObserveTypo` の学習ゲートで `learning/src/TypoCorrectionStore.cpp` への蓄積を拒否する。適用の停止は `docs/typo-correction-learning-spec.md` §12.12.2 の設計契約に従う |
 
 ### 5.1 判定の責務と許可軸
 

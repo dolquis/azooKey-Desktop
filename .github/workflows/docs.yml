@@ -1,37 +1,13 @@
 name: Docs lint
 
 on:
+  # paths で絞らない。コードだけの変更（rename・削除）でも文書の参照の実在検査と
+  # 実体との突合を走らせ、docs が偽になった PR をその時点で止めるためである。
   push:
     branches: [main]
-    paths:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.codex/**'
-      # scripts/ and the workflows are also what check_test_inventory.py
-      # compares the "CTest 以外の自動検査" table against.
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - '**/CMakeLists.txt'
-      - '.docs-lint.toml'
-      - '.docs-lint-baseline.json'
   pull_request:
-    paths:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.codex/**'
-      # scripts/ and the workflows are also what check_test_inventory.py
-      # compares the "CTest 以外の自動検査" table against.
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - '**/CMakeLists.txt'
-      - '.docs-lint.toml'
-      - '.docs-lint-baseline.json'
+    # edited は PR 本文の Documentation impact を書き直したときに docs-impact を再評価するため。
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read

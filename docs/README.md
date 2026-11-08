@@ -86,7 +86,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/dev-machine-verification.md`](handoff/dev-machine-verification.md) | 実機検証を VM と開発機のどちらで行うかの判定基準（Linear の `env:vm` / `env:dev-machine`）と、開発機での前提・手順・後始末 |
 | [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
 | [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |
-| [`handoff/dev32-verification-checklist.md`](handoff/dev32-verification-checklist.md) | VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する汎用チェックリスト |
+| [`handoff/tip-manual-verification-checklist.md`](handoff/tip-manual-verification-checklist.md) | TIP の打鍵確認（コア A1〜A8、拡張 B1〜B7）と compat runner との分担。VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する |
 | [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順、Claude Code on the web の SessionStart hook |
 | [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック、分担の例と、管制塔セッションと子セッションの役割分担 |
 | [`handoff/parallel-worktree-runbook.md`](handoff/parallel-worktree-runbook.md) | 複数 worktree で同時に build / test / PR 作業をするときに共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と回避策、main の取り込み |

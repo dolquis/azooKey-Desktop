@@ -5,7 +5,7 @@ VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文�
 
 - VM 構成と 3 層フローと補助範囲：[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md)
 - 登録、bootstrap、ログ取得、後始末の手順：[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)
-- 打鍵チェック項目 A1〜A8 と B1〜B7：[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
+- 打鍵チェック項目 A1〜A8 と B1〜B7：[`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)
 - compat runner の実行：[`../../compat-test/README.md`](../../compat-test/README.md)。出力レイアウトは [`../dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.5
 - dump、ETW、Process Monitor の採取：[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)
 - VM と開発機の振り分け基準、開発機での手順：[`dev-machine-verification.md`](./dev-machine-verification.md)
@@ -503,7 +503,7 @@ C-013 の直接実行前には `hyper-v-tip-verification.md` に従い、対象�
 `--cases` と `-CompatCases` は必要な C-001 を自動で追加する。選択と除外の詳細は
 `compat-test/README.md` と `hyper-v-tip-verification.md` に従う。
 各回の `report.json` と `case_selection` を保存し、未実行ケースを Pass と数えない。
-追加された C-014 / C-016 はライブ変換 OFF、C-018 は ON の report で判定する。設定を切り替える場合は `dev32-verification-checklist.md` の compat 分担に従い、別の出力先で実行して設定と `case_selection` を記録する。反対の設定での `failing-skip` を Pass に読み替えない。C-015 / C-017 / C-018 / C-019 の自動判定は M13〜M15 の人の表示・操作判断を代替しない。
+追加された C-014 / C-016 はライブ変換 OFF、C-018 は ON の report で判定する。設定を切り替える場合は `tip-manual-verification-checklist.md` の compat 分担に従い、別の出力先で実行して設定と `case_selection` を記録する。反対の設定での `failing-skip` を Pass に読み替えない。C-015 / C-017 / C-018 / C-019 の自動判定は M13〜M15 の人の表示・操作判断を代替しない。
 ゲスト内で直接実行した C-006 の出力は `-Run` と違って自動回収されない。150% と 200% の実走ごとに異なる出力ディレクトリを指定し、PowerShell Direct の `Copy-Item -FromSession` で `report.json` を含むディレクトリをホストの別々の回収先へコピーする。DEV-365 のスケール別目視記録・画像もホストへ保存し、ファイルの存在と対象スケールを確認してから checkpoint を復元する。回収方法の前提と資格情報の扱いは `hyper-v-tip-verification.md` の手順 3 に従う。
 
 終了コードは、全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2` である。
@@ -649,7 +649,7 @@ Linear への記録様式を揃えておく。
 各ゲートの完了条件は「検証メモを当該課題へコメントする」ことであり、記録が揃わないと Done へ遷移できない。
 
 全ゲート共通で先頭に置く環境ブロック。
-環境記入欄は本節が正典であり、`dev32-verification-checklist.md`「検証環境（記入）」から参照される。
+環境記入欄は本節が正典であり、`tip-manual-verification-checklist.md`「検証環境（記入）」から参照される。
 
 環境ブロックの機械で埋まる欄と自動観測の件数は、VM から回収した出力からホスト側で生成できる。
 `vm-verify-session.ps1 -Run` は、対話セッションで採取した `verify-bootstrap.ps1 -Json` の出力、`azookey_diag.exe --json` の出力、compat の `report.json` を 1 つの実行ディレクトリへ回収する。
@@ -929,7 +929,7 @@ DEV-1092 は課題の 4 項目に分けて書く。項目 4 はレーン 1 の�
 ## DEV-905 Application Verifier
 - 対象イメージ / 有効にした検査（Heaps / Handles / Locks）: ____
 - 開始 checkpoint 名: ____
-- 打鍵した動線（`dev32-verification-checklist.md` の A1〜A8）と結果: ____
+- 打鍵した動線（`tip-manual-verification-checklist.md` の A1〜A8）と結果: ____
 - verifier の停止: ☐ なし ☐ あり（停止コード / stack の保存先 / 起票した課題: ____）
 - デバッガの接続: ☐ 接続した ☐ 接続していない（停止時に情報が残らない）
 - `appverif.exe -disable '*' -for notepad.exe` の実行: ☐ 済

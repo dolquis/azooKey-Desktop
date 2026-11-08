@@ -278,7 +278,7 @@ zip のルートには次を置く。
 - `AppContainerAcl.ps1`
 - `verify-bootstrap.ps1`
 - `learning-data-snapshot.ps1`
-- `dev32-verification-checklist.md`
+- `tip-manual-verification-checklist.md`
 - `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`。辞書省略時は含めない）
 - `ThirdPartyNotices.txt`（辞書省略時は含めない）
 - `bundle-provenance.json`（辞書省略時は含めない）

@@ -77,6 +77,7 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 したがって 32 bit プロセスからは TIP が解決されず、azooKey を選べない。
 古い Office や一部のレガシーアプリ、組み込みアプリがこれに該当する。
 64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けず、この制限は v1.0 のリリースゲートを塞がない。
+`docs/handoff/tip-manual-verification-checklist.md` の B7 が 32 bit アプリを `☐ 既知` として扱うのも、この境界に沿う。
 
 将来 32 bit 対応を入れる場合に必要になる作業は次のとおりである。
 

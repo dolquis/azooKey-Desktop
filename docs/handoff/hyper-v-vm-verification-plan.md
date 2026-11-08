@@ -4,7 +4,7 @@ Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨�
 および Claude Code / Codex CLI が VM 操作を補助できる範囲の評価をまとめる。
 
 - 登録と bootstrap の個別手順の正典は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)、
-  チェック項目の正典は [`dev32-verification-checklist.md`](./dev32-verification-checklist.md) と
+  チェック項目の正典は [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md) と
   `compat-test/` であり、本書はそれらを重複記述しない。
 - 進捗と状態の正典は Linear で、本書は状態を持たない。
   導入作業を進める場合は Linear に起票して追跡する。
@@ -100,7 +100,7 @@ DEV-732 と DEV-733 の前提は、層 2 の打鍵をゲストの外から送り
 この前提は次の 2 点で成り立たなくなった。
 
 - L1 のゲスト内自動検証（`scripts/vm-verify-session.ps1 -Run`）により、`compat_test.exe` がゲストの対話セッションで UI Automation と SendInput を使って compat ケースを実行する。打鍵結果を UI Automation でテキストとして読むため、スクリーンショットの画像読解より観測が確実である。
-- [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)「compat runner との分担」が、A 系・B 系の各行を機械判定、人間判定、補助に分けている。
+- [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)「compat runner との分担」が、A 系・B 系の各行を機械判定、人間判定、補助に分けている。
 
 ホスト側の打鍵手段（windows-mcp、computer-use MCP、`Msvm_Keyboard`）は、§4.2 が両スパイクの前提として挙げたものと同じであり、判断を変える差分にならない。
 

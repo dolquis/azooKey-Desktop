@@ -248,7 +248,7 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 
 VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で打鍵する。
 
-確認項目そのものは [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
+確認項目そのものは [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)
 の A（コア動線 A1〜A8）と B（拡張・回帰確認 B1〜B7）が正典であり、本書には再掲しない。
 チェックリストを開いて上から実施し、記入したものを対象の課題へコメントする。
 
@@ -272,13 +272,13 @@ TIP のログを取るときは、User 環境変数として設定する。設�
 > Host が読み込み、候補へ合流する。`static_dictionary_load` の両層のロード結果を記録する。
 > `-AllowNoDictionary` で辞書も省略した場合は、`SimpleConverter` の組込辞書
 > （わたし / にほん / とうきょう 等＋学習語）へのフォールバックとなり、辞書外の語は漢字に変換されない。
-> 判定の扱いは dev32-verification-checklist.md の同じ注記
+> 判定の扱いは tip-manual-verification-checklist.md の同じ注記
 > （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルの登録手順は
 > `README.md`、計測ゲートは `docs/zenzai-gpu-route.md`「計測ゲート」を参照。
 
 ### 5. 記録と後始末
 
-本節は検証 VM の後始末の正典であり、[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)「後始末」、
+本節は検証 VM の後始末の正典であり、[`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)「後始末」、
 [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「中止条件と後始末」、本書の付録から参照される。
 
 - **記録**: `winver` で OS ビルドを控え、手順・結果・スクショを**対象の課題にコメント**する。
@@ -360,7 +360,7 @@ TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
    - VM に [DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) を入れ、**管理者で起動 → Capture → "Capture Global Win32"**（TIP は各アプリのプロセス内で動くため Global 推奨）。
    - フィルタに `[azooKey TIP]`。
 
-6. 検証（★基本セッション）: [`dev32-verification-checklist.md`](./dev32-verification-checklist.md) を実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
+6. 検証（★基本セッション）: [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md) を実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
 
 7. 後始末: 本編の手順 5「記録と後始末」に従う。スクリプトで解除する場合、Debug 方式では `.\scripts\unregister-dev.ps1` を `-TipDllPath` なしで実行する。
 

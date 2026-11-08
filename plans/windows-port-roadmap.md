@@ -8,7 +8,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - `docs/windows-port-asset-audit.md`: 既存 macOS 資産の流用可否棚卸し
 - `docs/windows-tsf-host-architecture.md`: TSF TIP + Inference Host 分離設計
 
-本書はそれらを前提に、「いつ何をどの順で」「何をもって完了とするか」を定める。
+本書はそれらを前提に、「何をどの順で」「何をもって完了とするか」を定める。
 
 > **状態・進捗の正典は Linear。** 各マイルストーンの進捗・状態・優先度・担当は Linear
 > （team `Dev` / project「azooKey Desktop / Windows IME MVP」）を正典とする。本書は構造・
@@ -337,7 +337,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **テスト**: 各マイルストーンで `*/tests/` 配下に最低 1 件の単体テストを
   追加する。Windows 依存のないものは Linux/macOS CI でも回す。
-  現存テストの一覧は `docs/test-inventory.md`（「テスト体系」章）、テストの欠落は Linear で追跡する。
+  現存テストの一覧は `docs/test-inventory.md`（正典の宣言は本書「テスト体系」章）、テストの欠落は Linear で追跡する。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。実体は `core/src/RuntimeLogger.cpp` で、環境変数 `AZOOKEY_LOG=1` のとき
   コンポーネント別の `.jsonl` へ書く（M41 構造化ログと可観測性）。
@@ -1187,7 +1187,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   `CancellationRegistry`）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI・
   Cancel 専用 control 接続）。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。設計判断
-  （out-of-band Cancel 方式、ストリーミング拡張の採否）は同 spec で確定済み。
+  （out-of-band Cancel 方式、ストリーミング拡張の採否）は同 spec が定める。
   - out-of-band Cancel 経路: Cancel 専用 control 接続 + 共有キャンセルレジストリ +
     チャンク境界での協調キャンセル。host は `capabilities` に `"oob_cancel"` を広告し、
     非対応 host へは best-effort Cancel + 結果破棄へ fallback（§6.3.2）
@@ -1269,8 +1269,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `liveConversion=true` のときのみ動作（§3・§4.1〜§4.2）
   - full-preedit 再計算による挿入・削除・再配置と `onPause` 安定化（§4.3）
   - 読み↔surface 非対称の扱い（Backspace 削除単位・確定時の学習分離）（§5）
-  - 字種切替と `CommitSegmentsObservation` による確定（§6・§7.4）。M58-B 未着手時は
-    単発 `CommitObservation` フォールバック経路で先行できる
+  - 字種切替と `CommitSegmentsObservation` による確定（§6・§7.4）。M58-B の
+    `CommitSegmentsObservation` が無い構成では単発 `CommitObservation` フォールバック経路で動く
   - 品詞フィールド `segments[].pos` / `head_pos` の導出と曖昧性ガードの品詞駆動化（§7.2）
   - 句読点ルールの TSV 外部化と guard ミニ言語（§4.1.4・§4.1.5）
   - 設定キー 6 種（§8）

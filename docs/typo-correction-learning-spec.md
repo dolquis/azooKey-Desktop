@@ -5,18 +5,23 @@
 （C++ 移植: `core/` `learning/` `ipc/` `inference-host/` `tsf-tip/`）** のみ。
 macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M35（v1: 基本タイプ
-ミス学習）+ M55（v2: 統合補正エンジン）。
 関連: `docs/rich-features-spec.md` X-3（誤変換訂正）、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/privacy-and-secure-input-spec.md`（M46）。
 
-> **本仕様の段差**: §1〜§11 は M35（v1: 基本タイプミス学習）の正典。
-> §12 以降は M55（v2: 統合補正エンジン）の追補章で、v1 の機能を発展
-> させ、ReadingHypothesis 経由で CandidateGenerator 前段に補正を組み
-> 込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
-> ペア学習は v2 でも下位互換として維持する。
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§11 | M35（v1: 基本タイプミス学習） |
+| §12 | M55（v2: 統合補正エンジン） |
+
+§12 は M55 の追補章で、v1 の機能を発展させ、ReadingHypothesis 経由で CandidateGenerator 前段に
+補正を組み込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
+ペア学習は v2 でも下位互換として維持する。
 
 ## 1. 背景と目的
 
@@ -96,7 +101,7 @@ TIP 自身の確定に伴う composition 終了は、成功後の観測を消さ
 
 ## 5. 蓄積と適用（host: `learning/` + `inference-host/`）
 
-### 5-1. `TypoCorrectionStore`（新規・`learning/`）
+### 5-1. `TypoCorrectionStore`（`learning/`）
 
 - 永続化: TSV `wrong_reading\tcorrect_reading\tcount last_updated_epoch`
   （`LearningStore` の `weight epoch` 区切り規約に合わせる）。
@@ -168,35 +173,35 @@ TIP の読みを変更しない。モードの判定は §3 のとおり Host �
 
 ## 7. IPC プロトコル変更（`ipc/`）
 
-- `MessageType` に `ObserveTypo` を追加（fire-and-forget）。
-- 新ペイロード:
-  - `ObserveTypoRequest { std::string wrong_reading, correct_reading;
-    uint64_t timestamp_ms; bool secure; bool learning_allowed; }`
-    — `secure` / `learning_allowed` の省略値は `true` / `false`（fail-closed）。
-  - `ObserveTypoResponse { bool ok; }`（対称性のため定義。応答は送らない）
-- `QueryCandidatesResponse` に `std::string corrected_reading` を追加
-  （空 = 補正なし。フィールド欠如時は空文字で後方互換）。
-- TIP の handshake `capabilities` に `"observe_typo"` を追加。
+payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `ObserveTypoRequest` /
+`ObserveTypoResponse` と `QueryCandidatesResponse` である（wire key は C++ のメンバ名と同じ）。
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、
+M35 が使うフィールドの意味を定める。
+
+- `ObserveTypo` は fire-and-forget であり、Host は応答を返さない。`ObserveTypoResponse` は
+  対称性のためだけに定義する。
+- TIP は Handshake の `capabilities` に `observe_typo` を載せる。
+
+| payload | フィールド | 意味 | 欠落時 |
+|---|---|---|---|
+| `ObserveTypoRequest` | `wrong_reading` | 打ち間違えた読み | — |
+| 同上 | `correct_reading` | 打ち直した正しい読み | — |
+| 同上 | `timestamp_ms` | 観測時刻（epoch ミリ秒） | — |
+| 同上 | `secure` / `learning_allowed` | そのイベントの privacy（§12.13） | `true` / `false`（fail-closed） |
+| `QueryCandidatesResponse` | `corrected_reading` | Host が要求の読みの代わりに使った補正後の読み（§5-3）。空は補正なし | 空（補正なし。古い Host との後方互換） |
 
 ## 8. 設定（`settings/`）
 
-`settings/mvp-settings.schema.json` が定義を持ち、`SettingsStore` が読む。
+型・既定値・範囲の正典は `settings/mvp-settings.schema.json` の root キー `typoCorrectionMode` /
+`typoMinCount` である（`typoCorrectionMode` の schema の `description` が本節を指す）。
+`SettingsStore` が読み、本節は各キーの意味と反映先を定める。
 
-```json
-"typoCorrectionMode": {
-  "type": "string",
-  "enum": ["off", "suggest", "auto_replace"],
-  "default": "suggest",
-  "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。docs/typo-correction-learning-spec.md section 8"
-},
-"typoMinCount": {
-  "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
-  "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
-}
-```
+| キー | 意味 | `EngineConfig` の反映先 |
+|---|---|---|
+| `typoCorrectionMode` | 動作モード（`off` / `suggest` / `auto_replace`。値の意味は §3） | `typo_correction_mode` |
+| `typoMinCount` | 同じ打ち間違えペアをこの回数観測してから補正候補に使う | `typo_min_count` |
 
-`typoMinCount` は `EngineConfig::typo_min_count` の設定キーである。`settings.json`
-に無いときは既定 3 を使う。範囲外の値は既定へ戻す。
+`settings.json` に無いキーは schema の既定を使う。`typoMinCount` の範囲外の値は既定へ戻す。
 
 ## 9. テスト計画
 
@@ -207,7 +212,7 @@ TIP の読みを変更しない。モードの判定は §3 のとおり Host �
 - `core/tests/input_state_test.cpp`: 補正読みの置換で状態、固定候補、選択位置、
   候補待ち、カスタムローマ字表を保持し、空読みと非入力状態では変更しない。
 
-- 新規 `learning/tests/typo_correction_store_test.cpp`:
+- `learning/tests/typo_correction_store_test.cpp`:
   Observe/Lookup、しきい値未満で `nullopt`、編集距離超過ペアの拒否、
   UTF-8 編集距離（かな）、Save→Load ラウンドトリップ、Reset。
   `learning/tests/CMakeLists.txt` に登録。
@@ -221,41 +226,11 @@ TIP の読みを変更しない。モードの判定は §3 のとおり Host �
 
 ## 10. 変更対象ファイル一覧
 
-| 区分 | ファイル |
-|---|---|
-| 新規 | `learning/include/azookey/learning/TypoCorrectionStore.h` |
-| 新規 | `learning/src/TypoCorrectionStore.cpp` |
-| 新規 | `learning/tests/typo_correction_store_test.cpp` |
-| 新規 | `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` |
-| 新規 | `tsf-tip/tests/typo_correction_tracker_test.cpp` |
-| 編集 | `core/include/azookey/core/InputState.h`, `core/src/InputState.cpp`, `core/tests/input_state_test.cpp` |
-| 編集 | `tsf-tip/CMakeLists.txt`, `tsf-tip/tests/onkeydown_preedit_test.cpp` |
-| 編集 | `tsf-tip/include/azookey/tsf/AiInputGuard.h`, `tsf-tip/src/AiInputGuard.cpp` |
-| 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` |
-| 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` |
-| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` |
-| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` |
-| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` |
-| 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` |
-| 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` |
-| 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` |
-| 編集 | `inference-host/src/main.cpp` |
-| 編集 | `tsf-tip/include/azookey/tsf/TextService.h`, `src/TextService.cpp` |
-| 編集 | `settings/mvp-settings.schema.json` |
+本節は削除した（変更対象は roadmap の M 節、テストは `docs/test-inventory.md` が持つ）。
 
 ## 11. 検証手順（実装後）
 
-1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
-2. テスト: `ctest --preset windows-debug --output-on-failure`
-   （`typo_correction_store_tests` / `payloads_test` / `engine_test` /
-   `dispatcher_test` が green であること）
-3. `settings.json` に `typoCorrectionMode` を `suggest` / `auto_replace` で書いて
-   host を stdio 起動し、同一 `wrong_reading` の `ObserveTypo` を `typoMinCount`
-   回送ってから `QueryCandidates` を投げ、suggest で `typo-correction` 候補が
-   注入され、auto_replace で `corrected_reading` が返ることを確認。
-4. Windows 実機があれば TIP を導入し、未確定中 backspace 訂正・確定直後打ち直しを
-   実操作で確認。実機が無い場合はその旨を明示し、自動テストとプロトコルレベル
-   確認で代替する。
+本節は削除した（ビルドとテストの手順は `README.md`、テスト一覧は `docs/test-inventory.md` が持つ）。
 
 ---
 
@@ -367,6 +342,9 @@ cost =
 
 個人がよく行う誤りは `personalized_pattern_cost` を下げる。
 
+本節と §12.4.2 は重み付き編集距離のコストモデルの正典であり、`docs/rich-features-spec.md` X-3-1 の
+コスト表から初期値として参照される。
+
 例:
 
 ```
@@ -385,7 +363,7 @@ s の隣に a / d / w / x がある
 ```
 
 `settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`。§12.14 の nested v2 キーで、
-schema 未登録（予定））で切替。
+M55 が schema へ追加する予定）で切替。
 
 #### 12.4.3 Romaji Variant Normalizer
 
@@ -480,8 +458,8 @@ v1 の 3 モード（off / suggest / auto_replace）を **4 モード** に拡�
 |---|---|
 | `off` | 打ち間違え補正を無効（v1 と互換） |
 | `suggest` | 「もしかして」候補として提示（v1 互換、既定） |
-| `rank` | 通常候補に混ぜるが控えめに加点（新規） |
-| `aggressive` | 高信頼時のみ第一候補まで上げる（新規） |
+| `rank` | 通常候補に混ぜるが控えめに加点（v2 で追加） |
+| `aggressive` | 高信頼時のみ第一候補まで上げる（v2 で追加） |
 
 初期設定は `suggest` または `rank` を推奨。`aggressive` は誤爆リスクが
 あるため設定アプリで明示的に有効化する。
@@ -817,17 +795,7 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 同じイベント単位の契約を `CommitObservationRequest` と
 `CommitSegmentsObservationRequest` にも適用する。protocol version は 1 を維持する。
 古い TIP と新しい Host では学習を拒否し、新しい TIP と古い Host では TIP の抑止を維持する。
-
-```json
-{ "type": "ObserveTypo",
-  "payload": {
-    "wrong_reading": "こんちには",
-    "correct_reading": "こんにちは",
-    "timestamp_ms": 1780000000000,
-    "secure": false,
-    "learning_allowed": true
-  } }
-```
+`ObserveTypoRequest` のフィールドと欠落時の既定は §7 の表のとおりである。
 
 - `secure` / `learning_allowed` は当該イベントで判定した値であり、
   TIP は `!secure`、private / custom の学習許可、学習経路の条件を使う。
@@ -838,8 +806,8 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 
 ### 12.14 設定スキーマ拡張
 
-v2 は nested `typoCorrection.*` に集約する。このブロックは `settings/mvp-settings.schema.json`
-に未登録の予定定義であり、schema が持つのは v1 root の `typoCorrectionMode` / `typoMinCount`（§8）:
+v2 は nested `typoCorrection.*` に集約する。このブロックは M55 が `settings/mvp-settings.schema.json`
+へ追加する予定の定義であり、v1 の schema が持つのは root の `typoCorrectionMode` / `typoMinCount`（§8）:
 
 ```json
 {
@@ -856,9 +824,8 @@ v2 は nested `typoCorrection.*` に集約する。このブロックは `settin
 }
 ```
 
-**v1 互換性**: M55 リリース時点で v1 設定 `typoCorrectionMode`（root レベル、
-3 値 enum）を保持しているユーザーが存在する。`SettingsStore` は読み込み時に
-以下の migration を実行する:
+**v1 互換性**: v1 設定 `typoCorrectionMode`（root レベル、3 値 enum）を持つ
+設定ファイルを読む。`SettingsStore` は読み込み時に以下の migration を実行する:
 
 1. v2 の `typoCorrection.mode` が存在すればそれを採用
 2. v2 が未設定 / 空で、v1 root `typoCorrectionMode` が存在すれば値を読み、
@@ -866,10 +833,10 @@ v2 は nested `typoCorrection.*` に集約する。このブロックは `settin
    `typoCorrection.mode` へコピー
 3. 両方未設定なら既定値 `suggest`
 
-migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出し、
-将来 3 マイナーバージョン後に v1 root key を削除予定（deprecation
-warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
-段階的廃止ポリシー。
+migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出す。
+v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
+その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
+M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 
 ### 12.15 M55 受け入れ条件
 

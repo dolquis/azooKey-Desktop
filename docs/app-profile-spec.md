@@ -6,8 +6,6 @@
       `docs/privacy-and-secure-input-spec.md`（M46）、
       `docs/rich-features-spec.md`（X-2-6 promptPrefixByApp UI、X-2-7
       Persona）
-作成日: 2026-05-27
-位置づけ: 追加機能トラック（M35 / M36 と並列、M46 完了後）
 
 ## 1. 目的
 
@@ -189,7 +187,7 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 下位の `on` / `off` を解除し、`bracketPairingApps` / `bracketPairingAppPolicy` の判定に戻す。
 TIP は共通 resolver の不変スナップショットからこのフィールドを解決し、Host への接続なしで適用する。
 
-### 4.2 フィールド制約と backend 優先順位（確定）
+### 4.2 フィールド制約と backend 優先順位
 
 **`candidateTagBoosts` の値域**: 各倍率は `[1.0, 3.0]`（schema で `minimum: 1.0` /
 `maximum: 3.0`）。schema の min/max は宣言であり、設定ローダが手動パースである以上、
@@ -270,6 +268,8 @@ window_class → default）に限り、下記の **グローバル floor** を�
 
 ## 6. 既存 `promptPrefixByApp` との統合
 
+本節は `promptPrefixByApp` の解決と移行の正典であり、`docs/rich-features-spec.md` X-2-6 から参照される。
+
 既存設定キー `promptPrefixByApp` は値 `{"<process>": "<prefix>"}` の
 map（M30 横断テーマ X-2-6）で、key は大文字小文字混在の実プロセス名
 （例: `Code.exe`, `OUTLOOK.EXE`）で書かれている既存ユーザー設定がある。
@@ -288,8 +288,8 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
    先食いで適用しない（大文字混在キーも同じ照合規約で扱う）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
-4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
-   （deprecation warning を CHANGELOG に記載）
+4. `promptPrefixByApp` は M48 を含むリリースから 3 マイナーバージョンの間は読み込み、
+   その後のリリースで削除する（deprecation warning を CHANGELOG に記載）
 
 共通 resolver の読み込み・解決処理に統合する。照合で衝突した既存キー（例: `Code.exe` と `code.exe` の
 両方）は、**JSON のキー列挙順に依存しない決定的規則**として、衝突元キーを Unicode
@@ -301,7 +301,9 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
 
 `candidateTagBoosts` は M52 ベンチで定義する候補タグ（`Technical` /
 `English` / `Polite` / `Casual` / `NamedEntity` 等）への倍率。各候補の
-`final_score` に以下を掛ける:
+score（rerank 後の `core::Candidate::score`。以下の式では `final_score` と書く。Track A の導入後は
+`docs/neural-reranker-spec.md` §9 の `final_score`）に以下を掛ける（`inference-host/src/CandidateTags.cpp`
+の `ApplyTagBoosts`）:
 
 ```
 raw   = profile.candidateTagBoosts.get(tag, 1.0)
@@ -347,6 +349,9 @@ else:
   - タグは `core::Candidate::tag` と IPC の `CandidateField.tag` で運ぶ。
 - **タグ名の照合**: ASCII の大文字小文字を区別しない（`Technical` と `technical`
   を同一視する）。
+
+本節はタグ boost の clamp 式と適用位置の正典であり、`docs/auto-word-registration-spec.md`
+§14.5・§14.11・§14.12 から参照される。
 
 ## 8. UI（設定アプリ）
 

@@ -13,6 +13,22 @@ Linear。運用規約は `docs/linear-conventions.md` を参照）。
 - `docs/rich-features-spec.md` … AI 変換・文単位予測。M58-C の AI 整文と接続。
 - `docs/tsf-deep-integration-spec.md` … 再変換・multi-segment。M58-B の文節再変換と接続。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2 | M58 共通 |
+| §3〜§4 | M58-A |
+| §5 | M58-A（`neural`）・M58-C（`ai-cleanup`） |
+| §6.1 | M58-A・M58-C |
+| §6.2〜§6.3 | M58-A・M58-B（文節・長文・キャンセル） |
+| §6.4 | M58-B（M59・M60 と共有） |
+| §7 | M58-B（長文）・M58-C（AI 整文の失敗時） |
+| §8 | M58-A |
+| §9〜§10 | M58 共通 |
+
 ## 1. 目的（と背景）
 
 「かな漢字変換のたびに思考と視線が中断される」問題を解消する。ユーザーは
@@ -64,6 +80,7 @@ enum class InputStateKind {
 
 遷移表（`batchRomajiConversion == true` のとき。主要遷移のみ）:
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | BatchAccumulating | StartComposition / ローカルでかなバッファ更新 / Preedit 更新 |
@@ -253,7 +270,7 @@ fallback を維持し、分類別案内は出さない。未知の分類名も�
 `BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
 `Cancel` して結果を破棄し、`BatchAccumulating` へ戻す（§3）。
 
-#### 6.3.2 out-of-band Cancel 経路の確定（決定）
+#### 6.3.2 out-of-band Cancel 経路
 
 Cancel専用の制御接続、host共有`RequestScheduler`、チャンク境界での協調キャンセルを組み合わせる。
 `NamedPipeServer`は接続ごとに同期ハンドラを実行するため、primary接続が変換中でも

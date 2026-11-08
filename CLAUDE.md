@@ -20,7 +20,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 
 ## サブエージェントの使い分け
 
-本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の共通規約は `docs/linear-conventions.md` §2.1、分割レベル（L0〜L4）、touched path からの route、background の可否、spawn 時に渡す snapshot 契約、統一返却形式、ロールバックは `docs/handoff/agent-orchestration.md` に従う。agent の所有（shared / repo）と権限は `.claude/agents/MANIFEST.md` が持ち、`scripts/check_agent_definitions.py` が Claude / Codex の対称性を検査する。同じ head への push と PR 作成は `create-draft-pr` のとおり親が直列に行い、返された結論は親が実ファイルと最新 diff で検証する。
+本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の規約は `AGENTS.md`「ローカルサブエージェント」から辿る。本節は、どの場面でどの agent を使うかだけを持つ。
 
 | 場面 | 使うもの |
 |---|---|
@@ -32,7 +32,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 | Windows の configure / build / CTest / bench を回し、失敗した target・CTest 名・warning・ログ位置だけが要る | `windows-build-runner`（`.claude/agents/`）。ソース編集と git 操作はしない |
 | 実装 PR で spec・schema・テスト一覧のどこが失効したかを網羅列挙する | `spec-drift-checker`（`.claude/agents/`、read-only）。`azookey-doc-governance` の失効チェックと併用する |
 
-各 agent の役割分担、read-only の担保（`disallowedTools` と frontmatter `hooks.PreToolUse`）、reviewer は spawn しないという不変条件は `docs/handoff/agent-orchestration.md` が持つ。repo 固有の agent は `.claude/agents/` と `.codex/agents/` で本文を byte 一致させる。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。
+agent の不変条件（親による push と PR の直列化、read-only の担保、spawn の禁止、結論を入力として扱うこと、Human Gate と Codex Cloud 起動を代替しないこと）は `docs/handoff/agent-orchestration.md` が持つ。
 
 ### Agent Teams
 

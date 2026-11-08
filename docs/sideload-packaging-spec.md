@@ -14,43 +14,38 @@
 - **コード署名**: §2。
 - **リリース後の運用（更新・観測・学習データ保護）**: §6〜§9。
 
-| 節 | 内容 |
-|---|---|
-| §0 | 配布方針（チャネルと署名要否の確定） |
-| §1 | MSIX パッケージング（MS Store 向け） |
-| §2 | EV/OV コード署名 |
-| §3 | 設定アプリ |
-| §4 | WiX / MSI インストーラ（MVP 既定） |
-| §5 | WinGet マニフェスト |
-| §6 | 自動更新 |
-| §7 | ETW |
-| §8 | WER |
-| §9 | DPAPI 学習データ暗号化 |
-| §10 | テスト |
-| §11 | リリース手順チェックリスト |
-| §12 | 参照 |
+次の表は、各節の内容と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンを示す。
 
-## 0. 配布方針（v1.0 MVP 確定 / 2026-06）
+| 節 | 内容 | マイルストーン |
+|---|---|---|
+| §0 | 配布方針（チャネルと署名要否の確定） | M11・M12 |
+| §1 | MSIX パッケージング（MS Store 向け） | M28（§1.6 は M24 と連動） |
+| §2 | EV/OV コード署名 | M29 |
+| §3 | 設定アプリ | M11（最小）・M30（フル） |
+| §4 | WiX / MSI インストーラ（MVP 既定） | M11・M12（§4.4 は M38） |
+| §5 | WinGet マニフェスト | M32 |
+| §6 | 自動更新 | M32 |
+| §7 | ETW | M33 |
+| §8 | WER | M33 |
+| §9 | DPAPI 学習データ暗号化 | M34 |
+| §10 | テスト | 共通 |
+| §11 | リリース手順チェックリスト | 共通 |
+| §12 | 参照 | 共通 |
 
-配布チャネルと署名要否を次のとおり確定する（Linear DEV-415 / DEV-416 / DEV-255）。
+## 0. 配布方針
+
+配布チャネルと署名要否を次のとおりとする。
 
 | チャネル | 形式 | 自前コード署名 | 位置づけ |
 |---|---|---|---|
 | **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | MVP（評価配布）と v1.0 の既定形式。§4 が正典。GitHub Release で配布。TIP バイナリ署名は §0.1 |
-| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成（DEV-416） |
-| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | **当面延期**。§2 の署名ルート（経路 B 確定済み）は本チャネル着手時に実施（DEV-255） |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成 |
+| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | 延期。§2 の署名ルート（§2.0 の経路 B）は本チャネルの着手時に実施する |
 
-判断根拠:
-
-- MSIX は署名がインストールの前提条件だが、MSI/EXE は署名が任意である。未署名 MSI も
-  インストール可能で、SmartScreen 警告 + UAC「不明な発行元」は出るが reputation building で
-  許容する（出典: [Create an unsigned MSIX package](https://learn.microsoft.com/windows/msix/package/unsigned-package) /
-  [Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
-- Microsoft Store 提出 MSIX は Microsoft が再署名するため、開発者側の有料証明書が不要
-  （出典: [Publish your first Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app)）。
-- 有料コード署名証明書を要するのはスタンドアロン MSIX サイドロードのみ。MVP では不要のため延期する。
-- 先行実装（fkunn1326/azooKey-Windows = Inno Setup EXE、CorvusSKK = WiX/Inno EXE）も MSIX では
-  なく MSI/EXE インストーラで配布している。
+MSIX は署名がインストールの前提条件だが、MSI は署名が任意である。未署名 MSI では
+SmartScreen 警告と UAC「不明な発行元」が出るが、reputation building で許容する。
+判断根拠と、比べた先行実装は
+[`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) にある。
 
 上表の「自前コード署名」欄は**インストーラの署名要否**を示す。第三者 IME として TIP バイナリに
 求められる署名要件は別の境界であり、§0.1 で扱う。
@@ -58,16 +53,19 @@
 以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
-### 0.1 MVP の入力対象スコープと署名ゲート（DEV-783 で確定 / 2026-08）
+### 0.1 MVP の入力対象スコープと署名ゲート
 
 MVP が入力先として保証するのは **Win32 デスクトップアプリに限る**。
 **パッケージ化された UWP / Microsoft Store アプリ**での入力は MVP の対象外とし、v1.0 以降へ送る。
 
 除外の境界は「AppContainer を使うか」ではなく「パッケージ化された UWP / Store アプリか」で引く。
-Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスであり、2026-08-14 の実機検証でも入力が成立している。
+Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスである。
 したがって Edge は対象内とする。
 
-#### 32 bit (x86) プロセスを MVP 対象外とする理由（DEV-160 で確定 / 2026-08）
+決定の経緯と、根拠にした実機検証は
+[`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) にある。
+
+#### 32 bit (x86) プロセスを MVP 対象外とする理由
 
 入力対象にはもう一つ、対象プロセスの bitness という境界がある。
 Win32 か UWP かという上記の軸とは独立しており、MVP が保証するのは **Win32 デスクトップアプリであり、かつ x64 プロセス**である。
@@ -78,30 +76,27 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 `scripts/register-dev.ps1` が呼ぶのも 64 bit の `regsvr32` である。
 したがって 32 bit プロセスからは TIP が解決されず、azooKey を選べない。
 古い Office や一部のレガシーアプリ、組み込みアプリがこれに該当する。
-
-64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けない。
-DEV-32 の実機検証動線も 64 bit アプリで成立するため、この制限は v1.0 のリリースゲートを塞がない。
-`docs/handoff/dev32-verification-checklist.md` の B7 が 32 bit アプリを「既知(DEV-160)」として扱うのも、この境界に沿う。
+64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けず、この制限は v1.0 のリリースゲートを塞がない。
+`docs/handoff/tip-manual-verification-checklist.md` の B7 が 32 bit アプリを `☐ 既知` として扱うのも、この境界に沿う。
 
 将来 32 bit 対応を入れる場合に必要になる作業は次のとおりである。
 
 * `tsf-tip/` に x86 ターゲットを追加し、x86 TIP DLL をビルドする
 * 32 bit の `regsvr32` から `DllRegisterServer` を呼び、レジストリの 32 bit ビュー（`WOW6432Node`）へ CLSID と `CTF\TIP` を登録する
-* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は現時点で x64 TIP DLL 1 個を前提としている）
+* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
 * MSIX（§1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
 
 再評価のトリガは 2 つある。
 実利用者から 32 bit プロセスでの入力要望が挙がること、または M27（ARM64 ビルド）で複数アーキテクチャのビルドと登録の経路が整備され、x86 追加の限界コストが下がることである。
 それまでは本節を既知の制限の正典とする。
+決定の経緯と、実機検証の動線との関係は
+[`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) にある。
 
 #### 署名は入力対象と独立した v1.0 リリースゲート
 
 第三者 IME へのデジタル署名要件は第三者 IME 全般を対象とし、Win32 向けの例外は文書化されていない。
 [Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors#requirements-for-imes) は要件を満たさない第三者 IME を "blocked from running" と定めており、この記述に配布形態や入力先による限定はない。
-
-2026-08-14 の実機検証では、未署名 MSI でも Notepad と Edge で打鍵から確定まで成立した。
-ただしこれは 1 環境で観測された挙動であり、**未署名の Win32 配布がサポートされることの根拠にはならない**。
-観測された動作と、文書化されたサポート条件は別のものである。
+未署名の TIP が動く環境があっても、それは観測された挙動であり、文書化されたサポート条件ではない。
 
 したがって次の 2 点を分けて扱う。
 
@@ -114,27 +109,24 @@ DEV-32 の実機検証動線も 64 bit アプリで成立するため、この�
 
 プロセスが Code Integrity Guard を有効化している場合、`PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY` の `MicrosoftSignedOnly` または `StoreSignedOnly` により、Microsoft 署名でも Store 署名でもない DLL は memory manager が `STATUS_INVALID_IMAGE_HASH` を返して map 自体を拒否する（[Code integrity guard](https://learn.microsoft.com/defender-endpoint/exploit-protection-reference#code-integrity-guard)）。
 この経路が働いているなら、OV 証明書を取得しても Store 入力は成立しない。
-DEV-765 のスパイクは Store 検索欄での失敗段階を「DLL 未ロード」と判定したが、それが IME 署名要件によるものか CIG によるものかは未切り分けであり、切り分けは同課題の追加 probe に残っている。
+Store 入力の失敗が IME 署名要件と CIG のどちらによるものかは切り分けておらず、MVP の期間内に決着させる見込みが立たない。
+そのため入力対象から外して v1.0 以降のトラックへ送り、切り分けもそのトラックで行う。
 
-つまり Store 入力は、署名を調達しても解決しない可能性を抱えたままである。
-MVP の期間内に決着させる見込みが立たないため、入力対象から外して v1.0 以降のトラックへ送る。
-
-この決定により、DEV-673 の受け入れ条件からパッケージ化された UWP / Microsoft Store アプリでの入力成立を外す。
 TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（§1.7）は、将来の対応に備えた回帰防止として残す。
 
 ## 1. MSIX パッケージング（MS Store 向け・M28）
 
 > **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
 > Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
-> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
+> スタンドアロン MSIX サイドロードは延期する（§0。DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
 
 > **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
-> Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
+> Microsoft 公式仕様上**機能制限あり**の領域である。`com4:InProcessServer`
 > は「外部位置（external location / sparse package）向け」と明記されており、
 > 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
 > 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 構成は
-> 暫定参考であり、M28 着手前に下表のいずれかへ確定する必要がある。Linear
-> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡。
+> 参考であり、M28 は下表のいずれかを選ぶ。選定は Linear
+> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡する。
 
 ### 1.0 TIP 配布経路 3 候補
 
@@ -175,7 +167,7 @@ validation の観点でまとめる。**この構成だけではアクティベ�
 `com4:Class@Id`（CLSID）と Profile GUID は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid` /
 `kTextServiceProfileGuid` と一致させる。
 
-> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の暫定値
+> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の値
 > （`Publisher="CN=dolquis"`）のままだと、OV/EV cert で署名した場合に
 > `Identity@Publisher` が署名証明書の Subject DN と一致せず `Add-AppxPackage` が
 > `0x8007000B` で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
@@ -226,8 +218,8 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   hook が存在しない**（`Remove-AppxPackage` / 設定アプリのアンインストールは
   package を atomic に削除し、host プロセスを kill するだけ）。したがって
   `Remove-AppxPackage` だけでは `ITfInputProcessorProfiles::Unregister` を呼ぶ
-  契機が無く、§1.5 受け入れ条件「言語バーから死んだエントリが消える」を
-  自動で満たせない。M28 PoC で次のいずれかを確定する:
+  契機が無く、roadmap M28 の受け入れ条件（アンインストールで登録の残骸が消え、言語バーに
+  死んだエントリが残らないこと）を自動で満たせない。M28 PoC で次のいずれかを確定する:
     1. **Companion uninstall script を README で案内**: `Remove-AppxPackage` の
        前にユーザーに `azookey-host.exe userdict unregister-profile` を実行させ、
        明示的に `Unregister` を呼ぶ。
@@ -297,7 +289,7 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。リンカへ `/MANIFEST:EMBED` を直接渡す方法は
   使えない（CMake が続けて呼ぶ `mt.exe` の入力が 0 になり `c10100a7` でビルドが落ちる）。
   埋め込みが無いと `-ExternalLocation` 付きで登録しても `Package.Current` が null になり、
-  §1.5 の受け入れ条件を満たせない。identity
+  roadmap M28 の受け入れ条件を満たせない。identity
   package 未登録の環境では `<msix>` 要素は無視されるため、開発ビルドの挙動は変わらない。
 * `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
   （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with
@@ -328,7 +320,7 @@ external location（§4 WiX/MSI の install ディレクトリ）に置き、COM
 > location へ置くため、`pkg/msix/AppxManifest.xml`（identity のみ）+ `build-identity-package.ps1`
 > を使う（§1.1.2）。`pkg/msix/Package.wapproj` は Option A では identity のみをパッケージ化する。
 
-`pkg/msix/Package.wapproj`（新規、WAP プロジェクト）：
+`pkg/msix/Package.wapproj`（WAP プロジェクト）：
 
 - ターゲット: x64 / arm64
 - 同梱物:
@@ -400,8 +392,11 @@ MSIX の `Remove-AppxPackage` には含めない。手順は §4.2 に従う。
 
 ### 1.5 受け入れ条件
 
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M28 節とする。本節は受け入れで検証する OS を経路ごとに定義し、受け入れ条件を複製しない。
+
 OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1 経路に確定したら、
-当該経路の受け入れ条件を満たす。
+当該経路の行の OS で roadmap M28 の受け入れ条件を満たす。
 
 | 経路 | Win11 23H2 | Win10 22H2 (build 19045) | Win Server 2022 (build 20348+) |
 |---|---|---|---|
@@ -409,22 +404,8 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 | B. 通常 MSIX + `com4:InProcessServer` | ✅ 必須 | ✗ schema reject（com4 が build 20348+ を要求） | ✅ |
 | C. 通常 MSIX + `com4:SurrogateServer` | ✅ 必須 | ✗ 同上 | ✅ |
 
-共通の受け入れ条件:
-
-- クリーン VM で `Add-AppxPackage`（A は sparse 登録）成功
-- 言語バーから azooKey が選べる
-- アンインストールで `HKLM\Software\Classes\CLSID\...`（A: `regsvr32` 経路、machine-wide）/
-  package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
-- 同梱辞書アセットの第三者ライセンス（Apache-2.0 / BSD-3-Clause / CC0 /
-  CC-BY-4.0 / 権利主張なし（日本郵便 郵便番号データ等のパブリックドメイン
-  相当））の `ThirdPartyNotices.txt` 同梱と帰属表示（GeoNames=CC-BY-4.0 は
-  帰属必須。BSD-3-Clause は SudachiDict 内包の UniDic 由来で著作権表示必須）は
-  `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体
-  パックは同梱しない（同 §14.9。ただし SudachiDict 内包の NEologd 由来データの
-  帰属は §14.10 に従い ThirdPartyNotices に含める）
-
 > Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
-> は本受け入れ条件から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
+> は上表から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
 
 ### 1.6 推論バックエンド / EP / モデルの配布方針（M24 連動）
 
@@ -435,7 +416,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 の結論＝暫定 CC-BY-SA 保守・上流 HF から取得。§1.6.2） |
+| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路は §1.6.1（CC-BY-SA-4.0 として扱う保守運用・上流 HF から取得。§1.6.2） |
 | kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。既定の catalog（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m` で取得できる。取得後は `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
@@ -476,7 +457,7 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 
 | 方式 | v1.0 採否 | 理由 |
 |---|---|---|
-| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、暫定確定（保守・CC-BY-SA、§1.6.2）でも不採用を維持する |
+| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、CC-BY-SA-4.0 として扱う保守運用（§1.6.2）でも不採用とする |
 | (b) 初回起動時オンデマンド DL | **将来の判断（auto-DL の承認後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用する。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。起動時に利用者の操作なしでネットワークへ出る挙動なので、入れるかは別に判断する（下記「初回取得後の `selectedPath` コミット」）。それまでの取得は、利用者の操作による取得（設定アプリの取得ボタンと CLI の `models fetch`）が担う |
 | (c) 手動配置 | ✅ **常時併存（M28 の operative default 兼 恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
 
@@ -494,21 +475,21 @@ default は (c) 手動配置**とする（初回パッケージングで one-off
 するかは auto-DL の承認後の将来の判断とし、入れる場合は **roadmap M32 のスコープ**
 （`plans/windows-port-roadmap.md` M32 の受け入れ条件の auto-DL 承認の分岐）で扱う。
 
-##### ライセンス分岐（DEV-202 連動。暫定確定＝配信元は上流 HF に固定。§1.6.2）
+##### ライセンス分岐（配信元は上流 HF に固定。§1.6.2）
 
-再配布可否は DEV-202（`gate:human-required`）の結論に従う。**現時点は暫定確定
-（保守・CC-BY-SA、§1.6.2）であり、配信元は上流 HuggingFace に固定（再ホストしない）。
-GitHub Release への再ホスト最適化のみ著者確認後に解禁する。** ここで重要な
+再配布可否は §1.6.2 の配布ライセンス結論に従う。**zenz GGUF は CC-BY-SA-4.0 として扱い
+（保守側。§1.6.2）、配信元は上流 HuggingFace に固定する（再ホストしない）。
+GitHub Release への再ホスト最適化だけを著者確認後に解禁する。** ここで重要な
 のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
 同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
 GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
 (b) の配信元選択も律する。
 
-| DEV-202 結論 | (b) の配信元 | (a) 同梱 |
+| 配布ライセンスの結論 | (b) の配信元 | (a) 同梱 |
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
 | 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**既定の catalog が定める repo / revision / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
-| 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
+| CC-BY-SA-4.0 として扱う（保守側。§1.6.2 の採用値） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
 （モデルではなくランタイム。§1.6 の ggml-cuda 行で扱う）。採否の正典は
@@ -518,13 +499,9 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 
 - **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
   `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
-- **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
-  rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
-  ファイルをロード対象に入れない。
-- **中断と再試行**: `.part` があれば Range GET で続きから再開する。
-  サーバーが Range を無視した場合は `.part` を切り詰めて全量取得へ戻す。
-  ネットワーク失敗または SHA256 不一致では既存の最終名を変更せず、手動配置済みの
-  モデルを継続利用できる状態に保つ。
+- **取得の原子性・中断と再試行**: `.part` への書き込み、Range による再開、SHA256 検証、
+  確定パスへの原子置換は `docs/model-management-spec.md` §3.1.2 が正典。検証前のファイルは
+  確定パスに置かれないので、ロード対象に入らない。
 - **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
   ディレクトリを自動スキャン**しない** —
   `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は
@@ -596,10 +573,10 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   が次回起動で参照するのはコミット済みの値のみ）。いずれかの段で失敗したら
   `selectedPath` は旧版のまま据え置き、新版ファイルは破棄して切替しない。これに
   より「失敗時は旧版を残す」を原子的に保証する。
-- **未配置 / 破損時の劣化モード**: ロード境界は M8 のとおり Host を落とさず
-  `SimpleConverter` にフォールバックし、M47 の状態機械（`DegradedModel` /
-  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。破損 / 部分 DL
-  （`.part` 残骸）は破棄し、直前の有効モデルか SimpleConverter を維持する。
+- **未配置 / 破損時の劣化モード**: ロード失敗時の fallback と Health は
+  `docs/zenzai-inference-spec.md` §7.4 が正典で、M47 の状態機械（`DegradedModel` /
+  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。部分 DL の `.part` は確定パスに
+  昇格しないのでロード対象にならず、次の取得の再開に使う（`docs/model-management-spec.md` §3.1.2）。
 
 ##### M45（フル管理 UI）への橋渡し
 
@@ -617,13 +594,14 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
   配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
 
-#### 1.6.2 配布ライセンス結論（DEV-202・v1.0 確定）
+#### 1.6.2 配布ライセンス結論
 
-DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
+配布ライセンスの調査結論（DEV-202、`gate:human-required`）を固定する。**本節は法的助言ではなく、
 一次情報の整理と運用方針である**。**v1.0 の zenz GGUF は下記の zenz 節の保守運用（CC-BY-SA-4.0 として扱い、
-上流 HuggingFace から取得・再ホストしない）で確定**する（DEV-202 は Done）。著者確認を
+上流 HuggingFace から取得・再ホストしない）とする**。著者確認を
 要するのは「再ホスト解禁」の任意最適化のみで、その進捗・状態は Linear DEV-497 が正典
 （本 spec には書かない）。
+本節は `docs/zenzai-gpu-route.md`「配布ライセンス」から参照される。
 
 ##### モデル（zenz GGUF）
 
@@ -632,12 +610,12 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 | ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf` の revision `c67e03e07d215c869f591b274c1631170d3e11fe`、`ggml-model-Q5_K_M.gguf`（73,871,936 バイト、SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。既定の catalog の既定 entry（§1.6.1） |
 | HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
 | 矛盾兆候 | zenz 一族（v1 / v2 / v2.5 / v3 / v3.1、safetensors 版含む）とベース `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0`（`zenz-v2.5-small` は `base_model: ku-nlp/gpt2-small-japanese-char` を明示。HF API 確認 2026-07）。apache-2.0 は一族で v3.2-small-gguf のみ。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性（README 空・ベース未記載・照合できる safetensors 版なし） |
-| **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
+| **扱い** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
 | 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
-| 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
+| 配信 | **再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
 | 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
 
-##### モデル（kanakanji-edge-33m GGUF、DEV-1721）
+##### モデル（kanakanji-edge-33m GGUF）
 
 上の zenz 節の保守運用（全体を CC-BY-SA-4.0 として扱う）は zenz に限る。選べるモデルとする
 edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定する。edge は既定の catalog
@@ -669,7 +647,7 @@ edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定�
 
 - `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
 - **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
-- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/zenzai-gpu-route.md` 参考節）。
+- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/decisions/2026-05-20-zenzai-engine-route.md`「参考: 先行 Windows 実装」）。
 
 ##### 再ホスト解禁の条件（恒久ルール）
 
@@ -709,7 +687,7 @@ ggml のバックエンドレジストリは Vulkan を有効にしたビルド�
 Host 1 つなので、この経路で add-on を配る場合は **add-on の実行体にも `Application` 宣言と、
 `Application@Id` に一致する app 側 side-by-side manifest（`<msix>` の 3 属性）、および両者の
 静的整合検証を用意する**。用意しなければ add-on 側の Host は `-ExternalLocation` 付きで登録しても
-`Package.Current` が null になり、§1.5 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
+`Package.Current` が null になり、roadmap M28 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
 package identity を使わないため、この要求は MSIX 経路にだけ掛かる。
 
 add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
@@ -742,7 +720,7 @@ Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-ar
 
 | 起動した実行体 | `auto` | 明示 `cpu` | Vulkan 初期化失敗時 |
 |---|---|---|---|
-| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/copilot-pc-backend-spec.md` §4.4 / §4.5） |
+| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/zenzai-inference-spec.md` §7.4、段位は `docs/copilot-pc-backend-spec.md` §4.5） |
 | CPU 版 Host | CPU | CPU | — |
 
 ##### ライセンス表示と SBOM
@@ -799,7 +777,7 @@ Microsoft Learn の署名要件は第三者 IME 全般を対象とする。本�
 ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードするため、この ACE が無いと
 当該アプリで日本語入力ができない。
 
-#### 付与対象・タイミング・権限（DEV-204 確定）
+#### 付与対象・タイミング・権限
 
 | 配布経路 | 付与主体 | 付与対象 | タイミング |
 |---|---|---|---|
@@ -815,7 +793,7 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
   fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与するが、本リポジトリは
   継承 ACE が再ビルドを吸収するため二重化しない。
 * **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
-  現時点の対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
+  対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
   将来 x86 TIP DLL を追加する場合は、同じ規則を当該 DLL にも適用する
   （`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
 * **既存 ACE の判定**: ディレクトリでは「実効 RX があるか」ではなく「`ObjectInherit` を持つ
@@ -933,24 +911,22 @@ DEV-673 では稼働中の削除・repair・同一版再インストールにつ
 | B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
 | C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 旧証明書のみ | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | reputation building（EV の即時信頼は 2024 年に廃止） | **新規取得では PFX 不可**（2023-06-01 の HSM 必須化）。2023-06-01 以前に発行され PFX を保持している証明書に限り成立する。PFX 漏えいリスク、CI でのキー回転が煩雑 |
 
-**判定（DEV-255 で確定）**: 署名主体は日本の個人開発者であり、経路 A（Azure Artifact
-Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
-不採用。新規 OV は HSM 必須化で PFX を入手できないため、CI 署名を保てる **経路 B（Azure Key
-Vault + AzureSignTool）/ B'（CA クラウド署名: SSL.com eSigner / DigiCert KeyLocker 等）** を
-採用する。ただし本署名はスタンドアロン MSIX サイドロードと Windows アプリ入力対応の 2 用途に
-限られ、§0 / §0.1 のとおりいずれも MVP の対象外である
-（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。
+**採用経路**: 経路 B（Azure Key Vault + AzureSignTool）、または B'（CA クラウド署名:
+SSL.com eSigner / DigiCert KeyLocker 等）とする。署名主体は日本の個人開発者であり、経路 A は
+地域制限で使えない（個人 = 米/加のみ）。EV（経路 C）は即時信頼が廃止され OV と同じ
+reputation building になったため、SmartScreen 対策として選ぶ理由が無い。新規 OV は HSM 必須化で
+PFX を入手できないため、CI 署名を保てる B / B' を採る。
 
-上記の経路判定（2026-06 時点）は調達ルートの比較として有効だが、費用対効果の前提は
-2026-08 に更新されている。EV 証明書の「即時信頼」は 2024 年に廃止され、EV も OV と同じ
-reputation building になった（[Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
-経路 C の EV を選ぶ理由は SmartScreen 対策としては残っていない。
-また §0.1 のとおり、署名を調達しても Code Integrity Guard により Store 入力が成立しない
-可能性がある。着手前にその切り分け（DEV-765）を済ませる。
+本署名の用途は、スタンドアロン MSIX サイドロードと、第三者 IME としての TIP バイナリ署名である。
+前者は §0 のとおり延期し、後者は §0.1 のとおり v1.0 のリリースゲートとして残る
+（MVP の MSI と MS Store の MSIX はいずれも自前署名を要しない）。
+§0.1 のとおり、署名を調達しても Code Integrity Guard により Store 入力が成立しない可能性がある。
+本節に着手する前に、その切り分けを済ませる。
 
-証明書調達・申請手順は所在地と組織化状況に依存する人間判断であり、再開時に
-`gate:human-required` 課題を新規に立てて扱う（従来の DEV-255 は Canceled、スコープ判断は
-[Linear DEV-783](https://linear.app/dolquis/issue/DEV-783) で確定済み）。
+証明書の調達と申請は所在地と組織化状況に依存する人間判断であり、再開時に
+`gate:human-required` 課題を新規に立てて扱う。
+経路判定の経緯と、費用対効果の前提の更新は
+[`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) にある。
 
 ### 2.1 signtool 引数
 
@@ -1142,65 +1118,39 @@ $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 
 ### 3.0 UI フレームワーク選定（採用: WinUI 3 / C++/WinRT）
 
-設定アプリの UI フレームワークは、**WinUI 3（Windows App SDK, C++/WinRT）を第一候補と
-して確定する**。対象は **v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、
-それを **post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
-（モデル管理 UI = M45、学習データ可視化 UI = M49）。同一フレームワークに揃えて後続の
+設定アプリの UI フレームワークは **WinUI 3（Windows App SDK, C++/WinRT）** とする。対象は
+**v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、それを
+**post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
+（モデル管理 UI = M45、学習データ可視化 UI = M49）である。同一フレームワークに揃えて後続の
 作り直しを避ける（v1.0 では M11 の最小機能セットのみを出荷し、M30 のフル UI / 横断機能は
-v1.0 に引き込まない）。根拠は次の 3 点:
+v1.0 に引き込まない）。
 
-1. **C++/WinRT 親和性** — TIP（`tsf-tip/`）・Inference Host（`inference-host/`）が
-   すでに C++ / C++/WinRT スタックであり、IPC クライアント（Named Pipe + 4-byte
-   length-prefix + JSON、§3.3）の型・実装・ビルド系を設定アプリと共有できる。別言語
-   ランタイム（.NET / Rust）を追加で持ち込まずに済む。
-2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
-   `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
-   アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
-3. **配布形態との整合** — MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
-   `azookey_settings.exe` を **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロード同梱できる。
-   MS Store 用 MSIX（§1）では packaged EXE として同梱する。いずれも WinUI 3 の unpackaged /
-   packaged 両対応（下記事実更新）で成立し、単一 UI スタックのまま両チャネルに載る。
+TIP と Inference Host と同じ C++/WinRT スタックで IPC クライアント（§3.3）を共有でき、
+Fluent Design（Mica / Acrylic、Light/Dark、PerMonitorV2 DPI）を追加実装なしで得られ、
+unpackaged / packaged の両配布に載る。WPF (.NET 9+) と Tauri との比較、および選定時に確かめた
+Microsoft Learn の事実は
+[`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) にある。
 
-> **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
-> - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
-> - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**。
->   ただしこれは**設定アプリ（WinUI 3）単体の下限**であり、配布パッケージ全体の最小 OS では
->   ない（下記）。
-> - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
->   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。本プロジェクトは §0 の
->   とおり **MVP を未署名 MSI（設定アプリは unpackaged / self-contained 同梱）**で配布し、
->   **MS Store 向けには packaged（MSIX）**を用いる。WinUI 3 は両形態に対応するため単一 UI スタックで両立する。
-> - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
->   §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
->   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
->   §1.1）。設定アプリの WinUI 3（1809+）はこのパッケージ下限に内包されるため、MSIX の
->   `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
+配布形態と OS 下限は次のとおりとする。
 
-#### フレームワーク比較
+- MVP の未署名 MSI（§0 / §4）では、`azookey_settings.exe` を unpackaged の
+  **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロードに同梱する。
+  MS Store 用 MSIX（§1）では packaged EXE として同梱する。
+- WinUI 3 がサポートする言語は C# と C++/WinRT である（C++/CX は使わない）。
+- WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**である。
+  これは設定アプリ単体の下限であり、配布パッケージ全体の最小 OS ではない。
+- **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
+  §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
+  （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
+  §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
 
-| 軸 | **WinUI 3 (C++/WinRT) ★採用** | WPF (.NET 9+) | Tauri (Rust + WebView2) |
-|---|---|---|---|
-| 言語 | C++/WinRT（既存スタックと同一） | C#（.NET ランタイム追加） | Rust + JS/TS |
-| Fluent / Mica | 標準（`SystemBackdrop`） | .NET 9 で Fluent テーマ標準化（Mica は DWM API 併用） | WebView2 任せ（CSS 自前実装） |
-| DPI / Dark | 標準（PerMonitorV2） | 対応（Fluent テーマ・`ThemeMode`） | WebView2 / 自前 |
-| 配布 | packaged / unpackaged 両対応 | unpackaged 可・MSIX 可 | 最小バイナリ・WebView2 ランタイム前提 |
-| C++ IPC 連携 | 同一言語で interop 不要 | C#↔C++ interop 層が必要 | Rust↔C++ FFI（または既存 Named Pipe を再利用） |
-| MS サポート | first-party | first-party | 非サポート（OSS） |
-| MSIX 整合 | ◎ | ○ | △（WebView2 依存） |
+再評価の条件は次のとおりとする。
 
-**代替案メモ**:
-- **WPF (.NET 9+)** — .NET 9 で Fluent テーマ（Light/Dark/アクセント、`ThemeMode`、
-  `PresentationFramework.Fluent`）が標準化され UI 体験差は縮小した（旧記述「Fluent /
-  Mica は非標準」は .NET 9 以降では不正確）。ただし設定アプリに .NET ランタイム依存が
-  増え、C++ IPC クライアントとの interop 層が必要になる。**v1.0 では非採用**。
-- **Tauri** — 配布サイズ最小だが Microsoft 非サポートで、C++/WinRT との境界が増える
-  （既存 Named Pipe IPC を再利用すれば緩和可能）。**v1.x の差別化リッチ UI（M30 拡張）で
-  WebView ベースへ切り替える余地を残す**が、v1.0 では非採用。
-
-**仮決定の確証（v1.0 着手前、`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の
-最小サンプル（チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
-(a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標を
-計測してこの選定を確証する（実測値は Linear 課題に記録し、本 spec には決定と設計のみ残す）。
+- **確証（`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の最小サンプル
+  （チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
+  (a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標で
+  この選定を確かめる。実測値は Linear 課題に記録する。
+- v1.x の差別化リッチ UI（M30 拡張）では、WebView ベース（Tauri）へ切り替える余地を残す。
 
 ### 3.1 構成
 
@@ -1274,7 +1224,7 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 payload 空の `UpdateConfig` メッセージを送信して再読込を促す（入力インジケーターのメニューでライブ変換を切り替えたときは TIP も送る）。設定オブジェクトは
 IPC schema に二重定義しない。設定アプリと Host の保存・quarantine は同一の named mutex 下で
 read-modify-write または read から rename までを直列化する（writer 責務とこの排他の
-正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+正典は `docs/learning-data-management-spec.md` §14）。
 
 ```
 UpdateConfigRequest:
@@ -1567,7 +1517,7 @@ schema 自体は superset のまま変えない。
   削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
-  経由する（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。開発者向けの
+  経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
   CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
 
@@ -1577,7 +1527,7 @@ schema 自体は superset のまま変えない。
 debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイルストーン）で UI 露出する。下表は
 §3.6 の全キーに対する v1.0 / v1.x の UI 露出区分である（意味論の正典は §3.6「正典」列に従う）。
 
-| キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
+| キー | v1.0 UI | v1.x で UI 化（v1.0 では schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
 | `model.backendPreference` | ◯（詳細、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
@@ -2306,8 +2256,8 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX install/update/rollback/uninstall | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。旧版 install → CLSID / TSF プロファイル登録の存在確認 → 新版 update → deployment 中に失敗する update 後の直前バージョン保持 → uninstall → 残骸 0 を半自動検証（DEV-101 / DEV-586 / M28） |
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
-| 署名検証 | `pkg/tests/signature_test.ps1`（新設予定。M29 の署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
-| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（新設予定。M32 の `UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
+| 署名検証 | `pkg/tests/signature_test.ps1`（M29 で新設する予定。署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
+| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（M32 で新設する予定。`UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |
@@ -2318,7 +2268,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 2. バージョンタグを打つ (`git tag v1.0.0`)
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
-5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2、当面延期）
+5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2。延期は §0）
 6. SBOM（`azooKey.spdx.json`）が Release 資産に添付され、`gh attestation verify <msi> --repo dolquis/azooKey-Desktop` が成功することを確認（§4.4）
 7. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
 8. Draft → Publish

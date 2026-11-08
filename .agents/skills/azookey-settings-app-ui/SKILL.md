@@ -5,7 +5,7 @@ description: azooKey Desktop の settings-app/ 配下の WinUI 3 / C++/WinRT 設
 
 # azooKey 設定アプリ UI
 
-`settings.json` の writer は設定アプリ（保存）、Host（parse 失敗時の quarantine rename、SafeMode 記録、ベンチマーク履歴）、TIP（入力インジケーターのメニューによるライブ変換・予測の 1 キー）で、いずれも同じロックの下で書く（正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+`settings.json` の writer は設定アプリ（保存）、Host（parse 失敗時の quarantine rename、SafeMode 記録、ベンチマーク履歴）、TIP（入力インジケーターのメニューによるライブ変換・予測の 1 キー）で、いずれも同じロックの下で書く（正典は `docs/learning-data-management-spec.md` §14）。
 UI の変更は schema、runtime 既定値、Host の再読込、TIP のローカル監視まで一つの契約として扱う。
 schema と既定値の同期そのものは `azookey-settings-schema-evolution` が持ち、本スキルは
 UI 実装と設定アプリ固有のビルド経路を扱う。

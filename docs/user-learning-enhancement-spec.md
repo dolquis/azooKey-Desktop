@@ -1,15 +1,22 @@
 # ユーザー学習強化 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M54（変換品質トラック）、M15（§14 の予測供給）
 関連: `plans/windows-port-roadmap.md` M7 / M15 / M34 / M48 / M52 / M53 / M55、
       既存 `learning/src/LearningStore.cpp`、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/typo-correction-learning-spec.md`（M55）、
       `docs/app-profile-spec.md`（M48）、
       `docs/legacy-parity-spec.md` §3（M15 予測候補ウィンドウ）
-作成日: 2026-05-27
-位置づけ: 変換品質トラック（M52 完了後、M53 / M55 と並行可能）
+
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§11、§13 | M54 |
+| §12 | M54 の範囲外（将来拡張） |
+| §14 | M15（予測候補への供給）・M54 |
 
 ## 1. 目的
 
@@ -96,9 +103,9 @@ v2 は同じディレクトリの別ファイルに保存し、保存の検証�
 始める。この削除方針は、旧版への rollback に備えて M7 を残す保護を廃止する。
 保存先を分けることで、旧版が v2 の行を読み飛ばして次の保存で v2 を空にすることは防ぐ。
 
-### 3.1.1 M7 現行 LearningStore の永続化運用（DEV-11）
+### 3.1.1 M7 LearningStore の永続化運用
 
-M7 の現行 `LearningStore` は TSV 全体を書き出すため、Host は確定ごとに
+M7 の `LearningStore` は TSV 全体を書き出すため、Host は確定ごとに
 同期 `Save()` を呼ばない。`InferenceEngine` は以下の設定で dirty な学習変更を
 バッチ化し、上限と GC を適用する:
 
@@ -113,14 +120,11 @@ Interval flush は次の observation を待たずに background timer で実行�
 境界で呼ぶ。`Save()` 失敗時は Host stderr に error ログを出し、dirty と
 未保存件数を維持して次回 observation または明示 flush で再試行する。
 
-上記 2 つの契機に加えて、未保存 observation が 0 件の状態で新しい
-observation を受け、かつ直近の保存成功から `learning_flush_interval_sec`
-秒以上が経過している場合は、その observation を含めて同期 `Save()` を実行する
-（burst 先頭の同期 flush）。直近の保存から同秒数未満の場合は即時保存せず、
-件数契機と時間契機に委ねる。このレート制限により、追加の書き込みは 1 つの
-burst につき最大 1 回に収まり、確定ごとの同期保存にはならない。狙いは、
-保存を保証しない終了経路で失われる量を抑えることであり、区分と損失上限の正典は
-`docs/learning-data-management-spec.md` §11 に置く。
+上記 2 つの契機に加えて、静止後の最初の observation を同期保存する（burst 先頭の同期 flush）。
+条件とレート制限、終了経路の区分と損失上限は `docs/learning-data-management-spec.md` §11 が正典。
+
+本節は学習の永続化パラメータ（flush、GC）の正典であり、`docs/windows-tsf-host-architecture.md`「学習」と
+`docs/learning-data-management-spec.md` §11 から参照される。時間減衰の正典は §5 である。
 
 ### 3.2 TSV スキーマ（拡張）
 
@@ -219,7 +223,8 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 ### 4.1 訂正の IPC（`CommitCorrection`）
 
 即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と、TIP の検出・送信と、
-Host 側の処理を定める。Host は Handshake の capability に `commit_correction` を載せ、
+Host 側の処理を定める。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `CommitCorrectionRequest` で、
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照される。Host は Handshake の capability に `commit_correction` を載せ、
 TIP は Host がそれを告知したときだけ送る。応答は `CommitObservation` と同じ `{ "ok": bool }` である。
 
 TIP は次のときに送る。
@@ -324,8 +329,11 @@ category は現在の M53 の表に無く、値だけを予約する。
 （§14.4）。§5 の half_life による減衰は `UserLearningScorer` の
 `LearningDecayMode::CategoryHalfLife` で有効になり、既定は `LearningDecayMode::Legacy` である（§7）。
 
+本節は時間減衰の式と half_life の正典であり、`docs/windows-tsf-host-architecture.md`「学習」から
+参照される。
+
 これらの half_life は初期値であり、M52 `user_adapt` カテゴリの学習前後比較
-（§11・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
+（roadmap M54・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
 ただし「一般語 < 固有名詞・打ち間違え < 技術語」「一時話題が最短」という
 **大小関係（順序）は設計上の不変条件**として固定し、校正で順序を反転させない。
 
@@ -351,7 +359,7 @@ user_score =
 
 `user_score` は乗算合成であり、各因子は **1.0 を中立（影響なし）** とする。
 これにより M48（app）/ M46（context）/ M55（typo）いずれかが未完了の段階でも、
-該当因子を 1.0 にすれば残りの因子だけで成立する（§11 受け入れ条件と整合）。
+該当因子を 1.0 にすれば残りの因子だけで成立する（roadmap M54 の受け入れ条件と整合）。
 
 ### 6.1 `app_profile_weight` の算出式
 
@@ -425,9 +433,9 @@ class UserLearningScorer {
   内部の切り替え `EngineConfig::user_learning_scorer_enabled`（既定 false、`settings.json` のキーにはしない）が
   true のときだけ `UserLearningScorer` で並べ、false のときは M7 の `Reranker` のまま並べる。
   既定では順位も M52 の baseline も変わらない。M52 の校正の後に既定を切り替える。
-  切り替えをオンにしても、現時点の rerank は `UserLearningContext` の app と文脈を空にして呼ぶ。
-  変換要求の経路はまだ前面アプリを rerank まで運ばないためで、app 行は §6.1 の規則どおり重み 1.0 で合算される。
-  context 因子は v1 では使わない（§8.1）。app を運ぶのは、既定を切り替える前の M52 校正の作業で行う。
+  切り替えをオンにしても、rerank は `UserLearningContext` の app と文脈を空にして呼ぶ。
+  変換要求の経路は前面アプリを rerank まで運ばないためで、app 行は §6.1 の規則どおり重み 1.0 で合算される。
+  context 因子は v1 では使わない（§8.1）。前面アプリを rerank まで運ぶ経路は、既定を切り替える前の M52 校正で足す。
   `store_` が無いときは user_score を 0 として元の順で返す。
 - 失敗時（store が無い、category の参照で例外が出た、値が非有限になった）は
   その候補の user_score を 0 として続行する。score が非有限の候補は並びの末尾に置く。
@@ -490,21 +498,9 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 
 ## 11. M54 受け入れ条件
 
-- 同じ入力を複数回確定すると、次回以降候補順位が上がる
-- M52 ベンチで `user_adapt` カテゴリが学習前後で +3% 以上改善
-- 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
-- secure 中に `Observe` が呼ばれない。TIP と Host の判定責務は
-  `privacy-and-secure-input-spec.md` §5.1.1 に従う。
-- `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
-  実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
-  は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可
-- 即 Backspace と再変換が `CommitCorrection`（§4.1）で Host に届き、`correction_reject` /
-  `correction_accept` が app 行と `context_hash` 付きで記録される。privacy で拒否された訂正と
-  再送は記録しない
-- `event_type` 列が拡張可能な enum として実装され、`commit` /
-  `correction_accept` / `correction_reject` を記録できる。M55 完了後は
-  同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は
-  enum 値を予約しておくだけで可）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M54 節とする。本書は TSV スキーマ・学習イベント・時間減衰・`user_score` を定義し、
+受け入れ条件を複製しない。
 
 ## 12. 将来拡張（M54 範囲外）
 
@@ -528,15 +524,13 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 | `K`（§8.1, context_hash 長） | 8 コードポイント | 復元不能な短さを保つ（プライバシー） | 文脈弁別性とのバランス |
 | `W_ctx_match`（§8.1, v1 では未使用） | 1.0（中立） | `W_ctx_match ≥ 1.0` | 将来 context バケット導入時に校正 |
 
-- **受け入れ判定（§11）に用いる指標**: `user_adapt` カテゴリが学習前後で
-  +3% 以上改善（`conversion-quality-benchmark-spec.md` の閾値表と整合）。
+- **受け入れ判定（roadmap M54）に用いる指標**: `user_adapt` カテゴリの `top1_accuracy` が
+  学習前比 +3% 以上改善（閾値の正典は `conversion-quality-benchmark-spec.md` §9）。
 - 校正は係数の数値のみを動かし、本表の「不変条件」列と §6 の 4 因子構成
   （乗算合成・各因子の中立 1.0）は固定する。スキーマ（§3.2 の TSV 列）を
   変える校正結果が出た場合は M54 範囲外とし、別 M（§12）で扱う。
 
 ## 14. 学習ストアの reading-keyed 二層化と前方一致予測（M15 供給）
-
-対応マイルストーン: M15（予測候補ウィンドウ）/ M54。
 
 M7 の `LearningStore` は `reading<TAB>surface` を 1 本の文字列キーへ連結し、
 `std::unordered_map` で保持する。
@@ -598,19 +592,17 @@ M53 の system 辞書はビルド時に構築して以後変更しない静的�
 
 ### 14.3 前方一致 lookup の契約
 
+結果の型の正典は `learning/include/azookey/learning/LearningStore.h` の `PrefixMatch` /
+`PrefixLookupResult` である。
+
+| 型 | フィールド | 意味 |
+|---|---|---|
+| `PrefixMatch` | `reading` / `surface` | 一致したレコードの読みと表層 |
+| 同上 | `score` | §14.4 の減衰後スコア |
+| `PrefixLookupResult` | `matches` | 一致したレコード。§14.5 の順序規則で並べる |
+| 同上 | `visited_readings` / `scanned_records` | 走査範囲の検証用の数（下表） |
+
 ```cpp
-struct PrefixMatch {
-  std::string reading;
-  std::string surface;
-  double score;   // §14.4 の減衰後スコア
-};
-
-struct PrefixLookupResult {
-  std::vector<PrefixMatch> matches;   // §14.5 の順序規則
-  size_t visited_readings{};          // 外側 map で訪問した読みの数（走査範囲の検証用）
-  size_t scanned_records{};           // 範囲内で見たレコード数（min_score 除外分を含む）
-};
-
 PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit,
                                 double min_score, uint64_t now_epoch_sec) const;
 ```
@@ -766,9 +758,6 @@ Host も secure の照会を拒否する（`privacy-and-secure-input-spec.md` §
 
 ### 14.9 受け入れ条件
 
-- 読みの前方一致で学習履歴を引け、結果が §14.5 の順序で返る。
-- 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）。
-- 二層化だけを理由に永続化形式が変わらない（形式の版は §3 が決める）。
-- 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給され、
-  受理が §14.6.1 の追記動作で成立する。
-- 減衰後スコアが `exp(-0.15 * days)` のまま維持されている。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M54 節とする。§14 は索引構造の契約と計算量要件を定義し、
+受け入れ条件を複製しない。

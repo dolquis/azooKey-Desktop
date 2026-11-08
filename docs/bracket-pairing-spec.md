@@ -18,6 +18,22 @@
 - `docs/romaji-batch-conversion-spec.md` … ローマ字一括変換（M58）。蓄積中のカッコ
   入力の扱いを定める（§4.7）。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2 | M61-A・M61-B 共通 |
+| §3 | M61-A |
+| §4（下の行を除く） | M61-A |
+| §4.1.1、§4.5（§4.5.0・§4.5.1）、§4.9 | M61-B |
+| §5 | M61-A |
+| §6 | M61-A・M61-B（キーごとの M は §6 の表） |
+| §7 | M61-A・M61-B 共通 |
+| §8 | M61-A |
+| §9〜§10 | M61-A・M61-B 共通 |
+
 ## 1. 目的（と背景）
 
 iPhone の日本語入力キーボードのように、`（）` `「」` `[]` `{}` `""` などの開きカッコを
@@ -125,7 +141,7 @@ legacy もカッコを全角にして読みに足すので、この挙動は leg
   網羅**できる。§3.3 の遷移表の「カーソル直後 / 左右」は、実装上は**この hint フィールド**を
   指す（文書アクセスではない）。
 
-### 3.2 ClientAction（新規 3 種）
+### 3.2 ClientAction（追加 3 種）
 
 `docs/legacy-parity-spec.md` §1.3 の ClientAction に以下を追加する。
 
@@ -144,8 +160,9 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 この分岐は `docs/legacy-parity-spec.md` §1.2 の `InputState::HandleEvent` の遷移表には加えない。TIP が
 `UserActionMap` の写像より前にカッコキーを受け取り（§3.1）、core の純粋関数 `EvaluateBracketInput` が hint から
 下表の分岐を決め、TIP がその結果に従って composition の確定と下表の副作用を行う。新しい InputState 種別は
-**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。
+**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。<!-- lint:allow status -->
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input(開きカッコ)・`hint.selection_collapsed==true` | Idle | `insertBracketPair`（commit OC + カーソル内側）。composition は残らない |
@@ -452,8 +469,8 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
 直接参照せず、通常のローマ字入力・候補確定は既存 `TextService` の経路で処理する。
 
 `docs/legacy-parity-spec.md` §1.3 の表に以下を追加する。実装は既存の commit 経路
-（`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`、現状
-`committed_range->SetText` → `Collapse(TF_ANCHOR_END)` → `SetSelection`）の変形で足りる。
+（`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`。
+`committed_range->SetText` → `Collapse(TF_ANCHOR_END)` → `SetSelection` の順に行う）の変形で足りる。
 
 | ClientAction | TSF 操作 |
 |---|---|
@@ -614,7 +631,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
   `Deactivate` まで復帰しない場合も、最後に読めたスナップショットを保ち続ける。監視の停止を
   理由に設定を既定値へ戻さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
-  TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定アプリと、writer 責務の節に挙げた Host・TIP の経路で、正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+  TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定アプリと、writer 責務の節に挙げた Host・TIP の経路で、正典は `docs/learning-data-management-spec.md` §14）。
 - 設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
   host CLI は経由しない。本機能は TIP ローカルで完結する。
 

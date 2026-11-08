@@ -1,10 +1,8 @@
 # AiBackend（AI 変換バックエンド）契約 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M16（Magic Conversion / Replace Suggestion。本書の主対象）。
-  共有消費者として M58-C（AI 整文 `ai-cleanup`）/ X-3-3（Post-Commit Lint）。
 関連:
-- `docs/legacy-parity-spec.md` §4（Magic Conversion。本書が §4.4〜§4.6 を拡充する）
+- `docs/legacy-parity-spec.md` §4（Magic Conversion の TIP 側の挙動。同 §4.4・§4.5 は本書へのリンク）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
 - `docs/rich-features-spec.md` X-3-3（Post-Commit Lint）/ X-3-5（訂正の学習）
 - `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、プライバシー判定）
@@ -12,17 +10,24 @@
 - `docs/sideload-packaging-spec.md` §9（M34 DPAPI）
 - `plans/windows-port-roadmap.md` M16 / M32 / M34 / M46 / M47 / M48 / M58-C
 - `legacy/Core/Sources/Core/MagicConversion/{AIBackend,OpenAIClient}.swift`（参照のみ）
-作成日: 2026-06-24
-位置づけ: Phase 5（M16）正典仕様。`AiBackend` は M16 単独でなく M58-C / X-3-3 が
-  同一経路を流用する**共有コンポーネント**であり、その契約を本書が定める。
 
 > 本書は `inference-host/include/azookey/host/AiBackend.h` と
 > `inference-host/src/AiBackend.cpp` の契約を定める正典仕様である。実装と差異が出た場合は
 > 本書を先に更新する。
-> 進捗・状態の正典は Linear（M16 tracking 課題 DEV-938。本書の契約確定は DEV-346）
-> であり、本書は状態を持たない。
+> 進捗・状態の正典は Linear であり、本書は状態を持たない。
 
 ---
+
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3、§5〜§14 | M16（M58-C と X-3-3 も同じ契約を使う） |
+| §4.1 | M16 |
+| §4.2 | M58-C |
+| §4.3 | X-3-3（roadmap M16 の横断項目） |
 
 ## 1. 目的とスコープ
 
@@ -32,14 +37,14 @@
 またはローカル Zenzai）に委譲して変換・整文・校正するための Host 側共有
 コンポーネントである。本書は次を契約として確定する。
 
-1. 3 消費者（M16 / M58-C / X-3-3）が再利用できる **IPC payload と Host 側
+1. 4 消費者（M16 / M58-C / X-3-3 / X-3-6）が再利用できる **IPC payload と Host 側
    インターフェイスの抽象度**（§3, §4）。
 2. **OpenAI 互換 API 呼び出し契約**（エンドポイント・認証・モデル・`mode`→
    system-prompt マッピング・`response_format`）（§5）。
 3. **HTTP 実装経路**（共通 WinHTTP 基盤の契約。M32 `HttpDownloader` との分担）（§6）。
 4. **エラー / リトライ / レート制限 / タイムアウト**ポリシー（M47 と整合）（§7）。
 5. **secure ゲート連携**（M46 プライバシー判定。外部 AI へ渡さない保証）（§8）。
-6. **API キーの at-rest 保存**（M34 DPAPI 前の暫定平文と `dpapi:` prefix 規約）（§9）。
+6. **API キーの at-rest 保存**（平文と `dpapi:` prefix 規約）（§9）。
 7. **ストリーミング境界**（MVP `stream=false` と Phase 6 `stream=true`）（§10）。
 
 ### 1.2 スコープ外
@@ -55,10 +60,10 @@
 
 ## 2. 設計原則
 
-- **契約先行**: 3 消費者が個別実装で分岐しないよう、IPC・backend 抽象・fallback・
+- **契約先行**: 各消費者が個別実装で分岐しないよう、IPC・backend 抽象・fallback・
   secure ガード・タイムアウトを本書で先に固定する。
 - **消費者は別 IPC メッセージ、Host は単一 backend 抽象**: トリガと payload 形が
-  異なる 3 消費者はそれぞれ専用 IPC メッセージを持つが、Host 側は共有の
+  異なる各消費者はそれぞれ専用 IPC メッセージを持つが、Host 側は共有の
   `AiBackend` インターフェイス（単一 `Transform` コア）へ集約する（§3）。
 - **入口で secure ガード**: 外部 AI へ渡らない保証は `AiBackend` の入口（Host 側）で
   プライバシー判定を強制チェックして担保する。TIP 側の抑止（§8）は多層防御の一層で
@@ -75,7 +80,7 @@
 
 ## 3. 消費者と共有インターフェイス（多消費者契約）
 
-### 3.1 3 消費者の特性
+### 3.1 消費者の特性
 
 | 消費者 | トリガ | 送信単位 | 既定 backend 方針 | 同期/非同期 |
 |---|---|---|---|---|
@@ -164,8 +169,8 @@ public:
      禁止、`AI 候補生成許可==false` なら AI 自体を禁止 → 実効 backend を
      `None` に強制（§8）。`privacy-and-secure-input-spec.md` §5 / §5.2 が正典。
   2. **アプリ別プロファイル**（M48）: `app-profile-spec.md` §4.2 の backend 解決。
-     **M48 未実装時はこの段を飛ばし、3 のグローバル設定へフォールバックする**
-     （M16 は M48 に依存しない。§13）。
+     **M48 のプロファイル解決が無い構成ではこの段を飛ばし、3 のグローバル設定へフォールバックする**
+     （M16 は M48 に依存しない）。
   3. **グローバル設定** `aiBackend`（`settings/mvp-settings.schema.json`）。
 - **X-3-3 の既定寄せ**: X-3-3（自動・毎 commit）は、`aiBackend=openai` でも
   Post-Commit Lint の送信先を `local-zenzai` へ寄せる。`local-zenzai` 不在時は
@@ -190,11 +195,10 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 `MessageType` に追加するメッセージの定義であり、`task=Transform` / `task=Lint` の IPC 上の
 入口はこの 2 メッセージが担う。
 
-### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張・確定）
+### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張）
 
-> `legacy-parity-spec.md` §4.4 の骨子に対し、本節は `max_results` / `results` /
-> `error_class` を追加する。本節が当該 payload の正典であり、§4.4 の旧定義は骨子参照に
-> 留める（`legacy-parity-spec.md` §4 冒頭の委譲注記参照）。
+> 本節が当該 payload の正典であり、`legacy-parity-spec.md` §4.4 は本節へのリンクだけを持つ
+> （同 §4 冒頭の委譲注記）。
 
 ```
 TransformSelectedTextRequest:
@@ -221,15 +225,15 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 （`reading` / `raw_romaji` / `mode="ai-cleanup"` / `auto_punctuation`）を使い、Host の
 `Dispatcher` が `mode=="ai-cleanup"` のとき payload を `AiTransformRequest`（`task=Cleanup`、
 `text=reading`、`raw_romaji`、`auto_punctuation`）へ正規化して `AiBackend::Transform` を
-呼ぶ（`left_context` は `QueryBatchConversionRequest` に未実装。M58-C で直近確定文が
-必要になった場合に両 spec で同時に追加する）。`romaji-batch-conversion-spec.md`
+呼ぶ（`QueryBatchConversionRequest` は `left_context` を持たない。M58-C で直近確定文が
+必要になった場合は両 spec で同時に追加する）。`romaji-batch-conversion-spec.md`
 §6.1 の必須フィールド（`mode=ai-cleanup` のとき `raw_romaji` 必須）と本書 §3.2 の
 `AiTransformRequest` を相互に一致させる。`QueryBatchConversion` の `max_candidates`
 （文節あたり候補数）は Cleanup task では使わず、Host 正規化時に `max_results=1` 固定とする
 （文節候補数は M58-C 側の変換経路で扱う）。
 
 > 共有点: M58-C と M16 は**別 IPC メッセージ**だが、Host 側で同じ
-> `AiBackend::Transform` に集約される。これが「3 消費者の共有」の実体である。
+> `AiBackend::Transform` に集約される。これが「消費者の共有」の実体である。
 
 ### 4.3 X-3-3: `RequestPostCommitLint`（`rich-features-spec.md` §X-3-3 が正典）
 
@@ -274,7 +278,7 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
   `raw_romaji`（生ローマ字）の打鍵誤りパターンを補正に使う。`auto_punctuation` が
   true のとき句読点を挿入する」を要旨とする。詳細は `romaji-batch-conversion-spec.md`
   §5。X-3-3（`task=Lint`）は「確定テキストの不自然箇所（同音異義語・敬語不一致等）を
-  検出し、位置・現状・提案・理由・確信度の配列で返す」を要旨とする。
+  検出し、位置・現状・提案・理由・確信度の配列で返す」を要旨とする。<!-- lint:allow status -->
 
 ### 5.3 リクエストボディ（chat/completions）
 
@@ -326,17 +330,12 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | 経路 | 担当 M | メソッド | 追加要件 |
 |---|---|---|---|
 | chat/completions 呼び出し | **M16**（本書） | POST + JSON | Bearer 認証、`response_format`、（Phase 6）SSE ストリーミング |
-| モデル DL（GGUF 等） | **M32** | GET | `.part`→SHA256 検証→rename、レジューム、既定の catalog（`docs/model-management-spec.md` §3.1.1）の entry との照合 |
+| モデル DL（GGUF 等） | **M32** | GET | 取得手順（`.part`、Range、SHA256、原子置換）は `docs/model-management-spec.md` §3.1.2、照合する entry は同 §3.1.1 |
 
-- モデル DL は既存の確定ファイルが期待 SHA256 と一致する場合、ネットワーク I/O を
-  行わない。
-  `.part` のレジュームでは `206` の `Content-Range` 始点を検証し、Range を無視した
-  `200` は全量取得として `.part` を切り詰める。
-  HTTP 失敗または SHA256 不一致では既存の確定ファイルを置換しない。
 - AI の POST 経路と M32 の GET + SHA256 経路は、いずれも §6.1 の共通基盤の上に載せる
   （重複スタックを作らない）。
 - M32 を Phase 5 へ前倒ししない（Phase 5 を自己完結に保つ）。roadmap の M16 / M32 /
-  M34 依存関係に本契約を反映する（§13）。
+  M34 の依存関係は roadmap が持つ（§13）。
 
 ---
 
@@ -461,9 +460,8 @@ M48 のモード通知 API を前提としない。
 
 ## 9. API キーの at-rest 保存
 
-> 判断（DEV-346）: **暫定平文 + M34 前倒し**。`dpapi:` prefix 規約を本書で確定し、
-> M34（DPAPI 暗号化）を Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite に
-> しない（M16 が M34 にブロックされない）。
+> `dpapi:` prefix 規約は本書が定める。M16 は M34（DPAPI 暗号化）を hard prerequisite に
+> しない（M16 が M34 にブロックされない）。Host は平文と `dpapi:` 付きの値の両方を受け付ける。
 
 - 設定キー `openAiApiKey`（`settings/mvp-settings.schema.json`）に保存する。
 - **`dpapi:` prefix 規約**: 値が `dpapi:` で始まる場合、続く Base64 を DPAPI
@@ -533,21 +531,16 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
 
 ## 12. 受け入れ条件 / テスト観点
 
-本書を満たす M16（および共有経路）の受け入れ条件:
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M16 節とする。本書は `AiBackend` の IPC・Host 側抽象・エラー分類・secure ガード・
+キー保存を定義し、受け入れ条件を複製しない。
 
-- **M16**: 英数/かなダブルタップで `TransformSelectedText` が発火し、`gpt-4o-mini`
-  応答（`mode` 別 system プロンプト）が選択へ置換される（`legacy-parity-spec.md` §4）。
-- **共有抽象**: M16 / M58-C / X-3-3 が Host 側で同一 `AiBackend::Transform` を通る
-  （別 backend 実装に分岐しない）。ユニットテストで 3 `AiTask` の正規化を検証する。
-- **secure ガード**: プライバシー判定が `AI 候補生成許可==false`（secure）を返すとき、
-  `AiBackend::Transform` が外部送信せず `BlockedBySecure` で早期 return する
-  （Host 側ガード単体テスト。TIP 抑止に依存しない）。
-- **エラー分類**: 401/403/429/5xx/timeout/parse が §7.2 の `AiErrorClass` に分類され、
-  再試行対象（429/5xx/一時 Network）のみバックオフ再試行される（モック HTTP で検証）。
-- **fallback**: `aiBackend=none` で M58-C が `neural` へ、X-3-3 が Lint 不実行へ落ちる。
-- **キー保存**: `dpapi:` prefix の有無で復号/平文を分岐し、平文でも動作する（§9）。
-- **HTTP 基盤共有**: AI の POST 経路が §6.1 の WinHTTP 基盤を使う（M32 の GET+SHA256 と
-  同じ基盤を共有する構造であることをレビューで確認）。
+roadmap M16 の条件は次の方法で検証する。
+
+- 4 つの `AiTask` の正規化と secure ガードは、Host 側の単体テスト（`inference-host/tests/ai_backend_test.cpp`）で
+  検証する。secure ガードの検証は TIP 側の抑止に依存しない。
+- エラー分類と再試行は、モック HTTP で検証する。
+- AI の POST 経路と M32 の GET + SHA256 が同じ WinHTTP 基盤を使う構造は、レビューで確認する。
 
 > 既知のテストギャップ・実機検証（OpenAI 実 API への結合テスト、secure 実機確認）は
 > Linear に課題として起票し追跡する（roadmap には状態を書かない）。
@@ -556,21 +549,9 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
 
 ## 13. 依存関係（roadmap への反映）
 
-本契約に伴う `plans/windows-port-roadmap.md` の依存関係明確化:
-
-- **M16 ↔ M32**: M16 の POST 経路と M32 の GET + SHA256 ダウンロードは §6.1 の共通
-  WinHTTP 基盤（`HttpSession.h`）を共有する。**M32 を Phase 5 へ前倒ししない**。M16 は
-  M32 に依存しない（基盤の共有点のみ契約で固定）。
-- **M16 ↔ M34**: API キーは §9 の `dpapi:` prefix 規約で保存し、M34（DPAPI）を
-  Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite にしない（Host は平文の
-  値も受理し、README で注意喚起する。§9）。
-- **M16 ↔ M46**: secure ガードは §8 で `AiBackend` 入口に強制。M46 同時期/先行が
-  望ましい（roadmap M16 既述）。プライバシー判定 不在時は外部 AI を有効化しない安全側に
-  倒す（実装上の暫定は M16 PR でレビュー）。
-- **M16 ↔ M48**: backend 解決順（§3.3）の第 2 段がアプリ別プロファイル
-  （`app-profile-spec.md` §4.2）。M16 は M48 に依存せず、M48 未実装時はこの段を
-  飛ばしてグローバル `aiBackend` へフォールバックする。
-- **M58-C / X-3-3**: 本書の `AiBackend` 抽象・fallback・secure 契約を前提に積む。
+M16 と M32 / M34 / M46 との依存関係は `plans/windows-port-roadmap.md` の M16・M32・M34 が
+正典である。本書が持つ契約側は、backend 解決順（§3.3。M16 は M48 に依存しない）、共通 WinHTTP 基盤の共有（§6）、
+secure ガード（§8）、API キーの `dpapi:` prefix 規約（§9）である。
 
 ---
 

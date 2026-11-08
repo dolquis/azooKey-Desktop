@@ -22,7 +22,7 @@ Hyper-V VM で人間ゲートをまとめて消化するときに、ゲストへ
 | `gate-map.json` | 全体 | `scripts/vm-verify-linear-drafts.ps1 -GateMapPath` に渡す対応表 |
 
 DEV-758 は専用のデータを持たない。
-runbook「DEV-758 の 2 writer 実走」の合成 entry をそのまま使い、前後の状態は `learning-data-snapshot.ps1` で記録する。
+runbook「user_dict の 2 writer 実走」の合成 entry をそのまま使い、前後の状態は `learning-data-snapshot.ps1` で記録する。
 
 GGUF モデルは収録しない。
 `new-non-ascii-path-fixture.ps1 -ModelPath` が、検証 zip に入れたモデルをゲスト内で複製する。
@@ -336,7 +336,7 @@ bootstrap の行は、セッション開始時の開始条件の観測として�
 compat の行は、`compat-test/README.md` のケースと、各課題が挙げる C-xxx に対応する。
 C-005 は DEV-782 が扱うので載せない。
 C-013 は DEV-1263 と DEV-1395 に記録し、DEV-716 には載せない。
-runbook が、C-013 の結果を DEV-716 の合否と分けると定めているためである。
+C-013 の結果を DEV-716 の合否と分ける規則は、課題の割当を持つ Linear の tracking Issue にある（runbook はレーンの設計と記録様式だけを持つ）。
 
 対象の課題を入れ替えたときは、この表と `gate-map.json` を同じ変更で直す。
 

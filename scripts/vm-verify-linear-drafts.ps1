@@ -166,7 +166,7 @@ function ConvertTo-VmVerifyLinearDraft {
       }
     }
   }
-  $lines.Add("- Part C の当該課題の確認項目と結果:")
+  $lines.Add("- 課題本文の確認項目と結果:")
   $lines.Add("- 実機の観測・証跡:")
   $lines.Add("- 人間ゲートの合否:")
   return ($lines -join "`n") + "`n"

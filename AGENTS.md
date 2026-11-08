@@ -10,7 +10,7 @@
 - `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
 - フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
 - 実機確認、管理者権限、署名などの Human Gate を CI の成功で代替しない。
-- TIP 登録は人間が実行する。例外として、checkpoint で復元できる検証専用の Hyper-V VM 内に限り、エージェントが開発登録を実行してよい。条件と範囲は `docs/handoff/hyper-v-vm-verification-plan.md` §4.5 に従い、その結果を Human Gate の合格とみなさない。
+- TIP 登録は人間が実行する。例外として、checkpoint で復元できる検証専用の Hyper-V VM 内に限り、エージェントが開発登録を実行してよい。条件と範囲は `docs/handoff/hyper-v-tip-verification.md`「エージェントへの委任」に従い、その結果を Human Gate の合格とみなさない。
 
 ## 対象と正典
 
@@ -39,12 +39,12 @@
 
 ## ローカルサブエージェント
 
-ローカル分担の規約は `docs/linear-conventions.md` §2.1、azooKey 固有の分担例は `docs/handoff/agent-tooling-setup.md`「ローカル分担の例」を参照する。Claude Code のサブエージェント（Explore、Plan、`diff-auditor`、プラグイン agent）の使い分けは `CLAUDE.md`「サブエージェントの使い分け」が持つ。分割レベル、touched path からの route、snapshot 契約、返却形式は `docs/handoff/agent-orchestration.md`、agent の所有と権限は `.claude/agents/MANIFEST.md` が持つ。
+ローカル分担の共通規約は `docs/linear-conventions.md` §2.1 が正典である。azooKey の agent 定義への対応（分割レベル、touched path からの route、snapshot 契約、返却形式、分担例）は `docs/handoff/agent-orchestration.md` が持ち、agent の所有と権限はそこから `.claude/agents/MANIFEST.md` へ辿る。Claude Code 固有の使い分けは `CLAUDE.md`「サブエージェントの使い分け」が持つ。
 
 ## セルフレビューと PR
 
 - リポジトリ内ファイルを変更したら、利用可能な場合は、最終報告、stage、commit、push、PR 作成または更新の前に `pre-pr-self-review` を使う。
-- 同一の差分・base・検証条件に対するレビューとテスト結果は再利用し、編集や条件変更があれば影響範囲を再確認する。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テスト、高リスク変更は独立レビューを加える。判断基準と利用不能時の代替は `docs/handoff/agent-orchestration.md` に従う。
+- 同一の差分・base・検証条件に対するレビューとテスト結果は再利用し、編集や条件変更があれば影響範囲を再確認する。レビューの深さは変更のリスクに合わせ、判断基準と利用不能時の代替は `docs/handoff/agent-orchestration.md`「分割レベル」と「parent-only fallback」に従う。
 - Skill の利用可否にかかわらず、レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまでとし、未追跡ファイルも確認する。既存 PR やユーザーが別 base を指定した場合はそれに従う。
 - push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。
 - 変更起因または変更範囲内の問題は修正して検証を再実行する。無関係な既存問題は勝手に直さず、必要なら Linear へ記録する。
@@ -63,5 +63,6 @@
 
 - Claude Code は `.claude/skills/`、Codex は `.agents/skills/` を読む。同名 Skill は repo 内を優先し、無い場合に global 配置へフォールバックする。共有 Skill は `dolquis/agent-ops` を正典とし、product repo では直接改訂せずベンダリングする。
 - 両ツリーは本文と `references/` を同期し、ハーネス固有 frontmatter だけ差異を許す。`doc-coauthoring` などの Claude 専用 Skill は `.claude/skills/` のみに置く。
+- Claude Code 専用の path 別規則は `.claude/rules/` に置く。Codex 側に同等は無く、Codex は各ディレクトリの `AGENTS.md` を読む。rules は `AGENTS.md` と各ディレクトリの規則への入口に留め、本文を再掲しない。
 - Skill の区分、origin、取り込み revision は `.claude/skills/MANIFEST.md` が正典。repo 固有 Skill の routing 表は `scripts/check_skill_references.py` が実体と突合する。
-- ベンダリングした共有 Skill の本文・`references/` と、`scripts/docs-lint.py`、`scripts/check_agent_instruction_size.py`、そのテスト、`.claude/hooks/post-edit-docs-lint.py` をこの repo で編集しない。repo 側の編集は silent fork になる。変更は origin で行い配布し直す。`.docs-lint.toml` と `.docs-lint-baseline.json` はこの repo が持つ。
+- ベンダリングした共有 Skill の本文・`references/` と、`scripts/docs-lint.py`、`scripts/check_agent_instruction_size.py`、`.claude/hooks/git-push-guard.py`、それらのテスト、`.claude/hooks/post-edit-docs-lint.py` をこの repo で編集しない。repo 側の編集は silent fork になる。変更は origin で行い配布し直す。`.docs-lint.toml` と `.docs-lint-baseline.json` はこの repo が持つ。

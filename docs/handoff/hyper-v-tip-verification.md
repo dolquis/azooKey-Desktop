@@ -1,11 +1,12 @@
-# Hyper-V Win11 VM での TIP 実機検証 runbook（DEV-32）
+# Hyper-V Win11 VM での TIP 実機検証 runbook
 
 azooKey TIP（`tsf-tip`）と inference-host を Hyper-V の Windows 11 VM 上で実機検証するための手順。
-最初の対象は **DEV-32「M2–M4 実機 Win11 動線検証（打鍵→preedit→候補→確定）」** だが、以後の TIP 実機検証にも再利用できる。
+打鍵 → preedit → 候補 → 確定の動線をはじめ、TIP の実機検証全般に使う。
 
 - 進捗・状態の正典は Linear（team `Dev` / Project `azooKey Desktop / Windows IME MVP`）。本 runbook は手順のみを扱い、達成状態は持たない。
 - ビルド/登録の標準手順は `README.md`、登録の責務境界は `docs/sideload-packaging-spec.md` を参照。
-- 検証サイクル全体の推奨構成と、エージェント（Claude Code / Codex）による VM 操作補助の評価は
+- VM 構成、3 層の検証フロー、エージェントへの委任の条件と範囲は本書の各節が定める。
+  検証資産の一覧と、エージェント（Claude Code / Codex）が VM を操作する前提とリスクは
   [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) を参照。
 
 ## なぜ VM で検証するか
@@ -38,6 +39,65 @@ Hyper-V の基本セッションは単一ディスプレイしか持てず、複
 3. preedit が現れない場合は C-005 を `failing-skip` として記録し、実施しない。候補ウィンドウが出ないことを Fail として記録しない。
 
 preedit が出ない状態で得た観測は候補ウィンドウの位置を示さないため、C-005 の合否を表さない。
+
+## VM 構成
+
+本節は検証 VM の構成の正典であり、[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)、[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md)、`scripts/vm-verify-msi.ps1` から参照される。
+
+- **OS**: 配布対象に合わせた Windows 11 の最新 GA ビルド。検証記録に `winver` のビルド番号を残す。
+- **世代とリソース**: 第 2 世代、4 vCPU、メモリ 8 GB を起点にする。GGUF を検証する場合はモデルサイズ分を加算する。
+- **統合サービス**: PowerShell Direct（`vmicvmsession`）は既定で有効。Guest Service Interface は既定無効だが、`vm-verify-session.ps1 -Prepare` が検証 zip を `Copy-VMFile` で転送するため有効化する。無効のままでは `-Prepare` が非ゼロ終了する。表示名はローカライズされるので、有効化はコンポーネント ID（`6C09BB55-D683-4DA0-8931-C9BF705F6480`）で選ぶ。
+- **アカウント**: ローカル管理者を 1 つ用意する。ゲスト内自動化（`vm-verify-session.ps1 -Run` と compat runner）を使う VM に限り、自動サインインを設定し、画面ロックとスクリーンセーバーを無効にする（SendInput と UI Automation は対話セッションがロックされていると失敗する）。
+- **ランタイム**: `vc_redist.x64.exe`（VC++ 2015-2022 Redistributable x64）を導入したベースラインを作る。
+- **checkpoint 運用**: 「クリーン + Redistributable + 上記設定」のベースライン checkpoint を 1 つ維持し、各検証はその上に検証用 checkpoint を取ってから始める。検証後は復元して残骸を持ち越さない。MSI 配布形態を検証する VM では、これとは別に Redistributable 未導入のクリーン checkpoint を維持する（[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 1」）。ベースラインから始めると、MSI の app-local ランタイム同梱を確かめられない。
+- **セッション種別**: ファイル転送は拡張セッション、IME 検証と打鍵は基本セッション（上記「安全装置」に従う）。C-005 に限る例外は上記「拡張セッションの限定例外（C-005）」が定める。
+- **保険**: Microsoft IME を削除しない。
+
+## 検証フロー（3 層）
+
+本節は `scripts/vm-verify-session.ps1` と [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) から参照される。
+
+1 回の検証サイクルを、自動化できる層から人間にしか判断できない層へ 3 層に分ける。
+
+| 層 | 内容 | 実行者 |
+|---|---|---|
+| **層 1: 自動先行検証** | Release ビルド → `make-vm-verify-package.ps1` → 検証用 checkpoint 取得 → zip 転送 → `verify-bootstrap.ps1 -Json` → `compat_test.exe`（3 target）→ `report.json` とログの回収 → 判定サマリ作成 | エージェント補助可（「エージェントへの委任」） |
+| **層 2: 半自動打鍵確認** | 基本セッションでチェックリスト A1〜A8 と B 系を打鍵。ログとスクリーンショットの整理、チェックリスト下書きはエージェントが補助 | 人間 + エージェント |
+| **層 3: 人間ゲート** | 候補ウィンドウの見え方、DPI、切替の体感などの視覚判断。チェックリスト確定、Linear への検証メモ、`gate:human-required` の Done 判定。最後に checkpoint 復元 | 人間 |
+
+層 1 で `overallStatus=fail` または `compat_test` の新規 fail が出た場合は、層 2 に進まず修正へ戻る。
+層 1 の pass は層 2 と層 3 の合格を意味しない（前段の検証成功を後段の成功に読み替えない）。
+
+## エージェントへの委任
+
+本節は `AGENTS.md`「最優先の安全規則」、[`agent-tooling-setup.md`](./agent-tooling-setup.md)、[`dev-machine-verification.md`](./dev-machine-verification.md)、[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)、repo 固有 Skill（`azookey-packaging-release-workflow`、`tsf-tip-development`）、`scripts/vm-verify-session.ps1`、`scripts/vm-verify-msi.ps1` から参照される。
+
+| 任せられる（エージェント） | 人間に残す |
+|---|---|
+| 検証 zip の生成と鮮度確認 | 委任の対象とする検証 VM の指定と、ゲスト資格情報の用意（[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §6） |
+| checkpoint の取得、存在確認、復元 | 候補ウィンドウの見え方、DPI、体感などの視覚判断 |
+| zip 転送、ログと `report.json` の回収 | チェックリストの確定と合否判定 |
+| 検証 VM 内での開発登録（下記の条件を満たす場合） | 検証 VM の外での TIP 登録と、下記の範囲外の操作 |
+| `-Json` 結果と report の判定サマリ作成 | `gate:human-required` の Done 判定と Linear への検証メモ |
+| チェックリスト下書き、Linear 起票の下書き | 規約改訂の判断 |
+
+`AGENTS.md` は TIP 登録を人間の操作とし、検証専用の Hyper-V VM 内に限ってエージェントへの委任を認める。
+VM 内の machine-wide 登録は checkpoint の復元で巻き戻せるためである。
+本節は委任の条件と範囲の正典である。
+
+委任の条件は次のとおり。
+
+- 対象は、人間が検証用として指定した、本書「VM 構成」の構成の VM に限る。Hyper-V ホスト、開発機、物理機は対象にしない。開発機で行う実機検証の範囲と手順は [`dev-machine-verification.md`](./dev-machine-verification.md) が定める。
+- 登録の前に、復元先の checkpoint（`vm-verify-session.ps1 -Prepare` が取るもの、または本書「VM 構成」のベースライン）が対象 VM にあることを確認する。無ければ登録しない。
+- 復元（`-Restore`）は層 3 の人間ゲートが終わってから行い、登録を次の検証へ持ち越さない（本書「検証フロー（3 層）」、[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §6）。層 1 の完了時点では復元しない。人間が確認する登録状態が消えるためである。エージェントが復元するのは、人間が層 3 の完了を伝えた後に限る。
+
+委任の範囲は、開発登録の経路と、MSI の導入を挟まない MSI レーンの前後の操作に限る。
+
+- 範囲内: 検証 zip を対象とする `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。MSI を渡す `vm-verify-session.ps1` の `-Prepare`（checkpoint の取得と MSI の転送）、`-Collect`（ログの回収）、`-Restore` の実行。MSI の `-Restore` も、人間がレーン 1 の完了を伝えた後に限る。
+- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入（`msiexec`）とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。
+
+エージェントの実行結果は先行検証であり、人間ゲートの合格にはならない。
+視覚判断、合否判定、Done 判定は、委任の有無にかかわらず人間に残す。
 
 ## 成果物の持ち込み方式
 
@@ -241,14 +301,14 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   表示スケールを変えずに回す場合は、先行実行の `-CompatSkip C-013,C-010` に C-006 も加える。
 
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
-  [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。
+  本書「エージェントへの委任」の委任条件を満たす検証 VM に対してだけである。
   結果は層 1 の先行検証であり、手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
 
 ### 4. 実機検証（★基本セッションに切替えて）
 
 VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で打鍵する。
 
-確認項目そのものは [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
+確認項目そのものは [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)
 の A（コア動線 A1〜A8）と B（拡張・回帰確認 B1〜B7）が正典であり、本書には再掲しない。
 チェックリストを開いて上から実施し、記入したものを対象の課題へコメントする。
 
@@ -272,13 +332,13 @@ TIP のログを取るときは、User 環境変数として設定する。設�
 > Host が読み込み、候補へ合流する。`static_dictionary_load` の両層のロード結果を記録する。
 > `-AllowNoDictionary` で辞書も省略した場合は、`SimpleConverter` の組込辞書
 > （わたし / にほん / とうきょう 等＋学習語）へのフォールバックとなり、辞書外の語は漢字に変換されない。
-> 判定の扱いは dev32-verification-checklist.md の同じ注記
+> 判定の扱いは tip-manual-verification-checklist.md の同じ注記
 > （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルの登録手順は
 > `README.md`、計測ゲートは `docs/zenzai-gpu-route.md`「計測ゲート」を参照。
 
 ### 5. 記録と後始末
 
-本節は検証 VM の後始末の正典であり、[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)「後始末」、
+本節は検証 VM の後始末の正典であり、[`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)「後始末」、
 [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「中止条件と後始末」、本書の付録から参照される。
 
 - **記録**: `winver` で OS ビルドを控え、手順・結果・スクショを**対象の課題にコメント**する。
@@ -360,7 +420,7 @@ TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
    - VM に [DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) を入れ、**管理者で起動 → Capture → "Capture Global Win32"**（TIP は各アプリのプロセス内で動くため Global 推奨）。
    - フィルタに `[azooKey TIP]`。
 
-6. 検証（★基本セッション）: [`dev32-verification-checklist.md`](./dev32-verification-checklist.md) を実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
+6. 検証（★基本セッション）: [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md) を実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
 
 7. 後始末: 本編の手順 5「記録と後始末」に従う。スクリプトで解除する場合、Debug 方式では `.\scripts\unregister-dev.ps1` を `-TipDllPath` なしで実行する。
 

@@ -3,6 +3,19 @@
 本書は候補/予測ウィンドウ等のネイティブ UI をモダン化する仕様を定める。
 `plans/windows-port-roadmap.md` の Phase 6 の M26 が本書を参照する。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3、§4.1、§5〜§8 | M26 |
+| §4.2 | M26（対象は M15 の予測窓） |
+| §4.3 | M26（対象は M18-3 のデバッグウィンドウ） |
+| §4.4 | M16 |
+| §4.5 | M34 |
+| §4.6 | M53 |
+
 ## 1. Dark/Light テーマ自動追従
 
 ### 1.1 検出
@@ -227,7 +240,7 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、
 キャレット追従の配置計算（`ComputePlacement`、`docs/legacy-parity-spec.md` §9.2）とともに描画方式の影響を受けない。
 
-### 4.2 PredictionWindow.cpp（M15 新規）
+### 4.2 PredictionWindow.cpp（M15）
 
 `RenderingEngine` で描き、色は §1.3 の `ThemeColors` を使う。
 `WM_DPICHANGED` で行高・余白・フォントを作り直し、表示中なら最後のキャレット矩形で表示をやり直す

@@ -7,15 +7,11 @@
       `docs/copilot-pc-backend-spec.md` §4（推論エンジン × アクセラレータ選定）、
       `docs/neural-reranker-spec.md`（M56 最終 score 統合）、
       `docs/model-management-spec.md`（M45 モデル配置）
-作成日: 2026-06-15
-位置づけ: M8 Zenzai 実推論（DEV-219、特に M8-2 = DEV-221）の **設計前提**。
-          「どの実行系か」（backend 方針 = DEV-98、実証 = DEV-194）に対し、
-          本書は「**どう推論して候補を作るか**」（推論コントラクト）を確定する。
 
 > **正典範囲**: 本書は Zenzai 推論の入出力コントラクト（プロンプト整形・制約・
 > トークナイズ・n-best・多ソース統合・性能予算）の正典。バックエンド経路は
 > `docs/zenzai-gpu-route.md` / `docs/copilot-pc-backend-spec.md` が正典であり、
-> 本書はそれらを前提とする。状態・進捗は Linear（DEV-228 ほか）が正典。
+> 本書はそれらを前提とする。状態・進捗は Linear が正典。
 
 ---
 
@@ -23,16 +19,10 @@
 
 ### 1.1 解決する空白
 
-実機検証（DEV-32）の **A5**: メモ帳で「にほんご」+Space すると候補窓は出るが
-漢字「日本語」が出ず、かな「にほんご」のみが返る。直接原因は
-`inference-host/src/ZenzaiModelConverter.cpp` の `Convert` が `fallback_`
-（`SimpleConverter`）へ素通しで、**実推論が一切無い**こと
-（現状コードは候補に `zenzai-gguf-loaded;fallback-converter` を付与するのみ）。
-
-backend 方針（DEV-98）は「llama.cpp C-API + CPU」を確定し、DEV-194 はその実機性能と
-Windows ML 用 model への変換可否を検証する。
-その上で **GGUF をどう叩いて候補列を作るか** を定義した spec が存在しない。
-本書がそれを埋める。
+「どの実行系で推論するか」（backend 方針。llama.cpp C-API + CPU）は
+`docs/zenzai-gpu-route.md` と `docs/copilot-pc-backend-spec.md` §4 が定める。
+本書はその上で、「**GGUF をどう叩いて候補列を作るか**」（推論コントラクト）を定める。
+`inference-host/src/ZenzaiModelConverter.cpp` の `Convert` が本書の契約の実装先である。
 
 ### 1.2 本書が確定する 6 項目
 
@@ -104,7 +94,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 > モデルカードで必ず突き合わせる**こと。本書 §3/§5 は upstream ドキュメント
 > 由来の既定値であり、モデル実体が優先する。
 
-### 2.4 既定モデルの候補 `kanakanji-edge-33m` とプロンプト形式（DEV-1719）
+### 2.4 既定モデルの候補 `kanakanji-edge-33m` とプロンプト形式
 
 `yuuki14202028/kanakanji-edge-33m` は、zenz-v3 のプロンプト形式で学習された Llama 構造の
 かな漢字変換モデル（33.5M パラメータ）である。既定モデルは zenz-v3.2-small のままとし、
@@ -374,7 +364,7 @@ upstream Zenzai は `enableAlignmentSeparator: true` の v3 モードと
 Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`SimpleConverter` は
 固定小テーブル、辞書層全体は M53）。よって 2 段で定義する。
 
-#### 4.2.1 M8 MVP（DEV-221 が実装）— 生成 + 健全性チェック + 劣化フォールバック
+#### 4.2.1 M8 MVP — 生成 + 健全性チェック + 劣化フォールバック
 
 - zenz は読み一貫の変換を行うよう**学習済み**。MVP では自由生成（greedy / 小ビーム）に
   zenz の学習を信頼し、**事後健全性チェック**のみを課す:
@@ -615,6 +605,9 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
 
 ### 7.4 劣化モード（degraded）の順位
 
+CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する形にした経緯は
+[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
+
 - Zenzai 推論が例外 / 空生成のとき、
   `ZenzaiModelConverter::Convert` は `fallback_->Convert`（SimpleConverter）の結果を返す
   （現行委譲を維持）。この時の候補 source は SimpleConverter 由来（`SystemDictionary`/
@@ -635,12 +628,34 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
   クリアできる）。
 - user_dict は degraded でも §7.1 手順 3 で得た候補を保つ（既定 score は §7.2）。
 
+ロード時の降格と fallback（`InferenceEngine::LoadModelWithResult`）は次のとおりである。
+
+- **CUDA 要求**: ggml-cuda をリンクしないビルドでは CPU でロードし、成功した LoadModel とする。
+  降格は `ModelLoadResult.error` の警告として返すだけで、engine の `last_error` は空のまま
+  Health は `ok` を保つ（`LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`）。
+  CUDA の採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典。
+- **Vulkan 要求**: デバイス不在、モデルまたは context の初期化に失敗したら CPU で 1 回だけ
+  再試行する。CPU で成功しても降格理由を `last_error` に保持し、Health は `degraded` になる
+  （`LoadModelVulkanFallbackReportsDegradedCpu`）。`auto` から選んだ Vulkan も同じ扱いとする。
+  R2 再開後に要求 EP が実エラーで失敗して降格した場合も同じ扱いとする。
+- **ロード失敗**: CPU でもロードできなければ LoadModel は失敗を返す。モデルがロードされて
+  いなかった場合は active converter を `SimpleConverter` に戻し、`last_error` に理由を設定する。
+  直前のモデルがロード済みなら、そのモデルを使い続ける。Host は落ちない。
+- **解除**: 後続の成功した LoadModel、またはモデルの無効化 / アンロードで `last_error` と
+  `model_runtime_error_` を解除する（§9.2.1 項 6）。
+- **Health の status**: `effective_last_error()` から決める（§9.2.1 項 5）。対応表は
+  `docs/dev-infrastructure-spec.md` §8.5.1 が正典。
+
+本節は degraded / fallback の規則の正典であり、`docs/copilot-pc-backend-spec.md` §4.4・§4.5、
+`docs/model-management-spec.md` §5.3、`docs/sideload-packaging-spec.md` §1.6.1、
+`docs/zenzai-gpu-route.md`「フォールバック」、`plans/windows-port-roadmap.md` M8 から参照される。
+
 ### 7.5 将来の score 統合（参照）
 
 M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 （`normalize(zenzai_score)*0.35 + …`）へ移行する。その際 Zenzai は**生 logprob**を
-供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**それまでの
-暫定加算統合**であり、M56 で学習重みへ置換される。`Candidate` 構造体に raw score 用の
+供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**M56 の学習重みが無い
+構成での加算統合**であり、M56 が学習重みへ置換する。`Candidate` 構造体に raw score 用の
 数値フィールドを足すかは M56 で判断（M8 では `debug_info` 文字列で前方互換）。
 
 ### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
@@ -689,7 +704,7 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 | 指標 | 目標 | 根拠 / 計測 |
 |---|---|---|
 | CPU fallback（SimpleConverter）p95 | < 50ms | 既存ゲート（`zenzai-gpu-route` §計測ゲート、roadmap §テスト） |
-| Zenzai CPU 1 変換 p50（読み ≤ 8 文字） | ≤ 150ms（small/Q5_K_M） | `copilot-pc-backend-spec` §4.2.1.1 の実測 |
+| Zenzai CPU 1 変換 p50（読み ≤ 8 文字） | ≤ 150ms（small/Q5_K_M） | `copilot-pc-backend-spec` §4.2.1.1 の再計測（`docs/decisions/2026-08-23-r1-cpu-baseline.md`） |
 | Zenzai CPU 1 変換 p95（読み ≤ 8 文字） | ≤ 300ms | 同上 |
 | Zenzai CPU 1 変換（読み > 8 文字） | 分位点目標を置かない | 読み長に対する所要時間の増加率を裏付ける入力別計測が無いため |
 
@@ -704,7 +719,7 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
   打ち切りが発生した計測は分位点評価に用いず、打ち切り率を §8.2 の評価として記録
   する。したがって計測系は 1 変換ごとの打ち切り発生を観測できなければならない。
 - **混在集合の扱い**: 読み長の異なる入力を混ぜた集合の中央値（例
-  `copilot-pc-backend-spec` §4.2.1.1 の 20 入力中央値）は参考値であり、本表の
+  `docs/decisions/2026-08-23-r1-cpu-baseline.md` の 20 入力中央値）は参考値であり、本表の
   評価には用いない。分位点目標は読み長の帯ごとに適用する。
 
 #### 8.1.1 CPU スレッド数
@@ -784,7 +799,7 @@ R2 artifact が存在しない間は継続判断の根拠にしない。
 
 ---
 
-## 9. 実装契約（DEV-221 が即着手できる粒度）
+## 9. 実装契約
 
 ### 9.1 `ZenzaiModelConverter::Convert` の擬似コード
 
@@ -869,7 +884,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   別途評価する。
 - llama.cpp の `llama_model` / `llama_context` ハンドルは M8-1（DEV-220）が保持。
   本 converter はそれを**非所有参照**で受け取り、推論ごとに `llama_decode` を回す。
-- C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
+- C 文字列の所有権・解放規約に注意（`docs/decisions/2026-05-20-zenzai-engine-route.md` の先行実装
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
 - llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と
@@ -907,13 +922,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 ### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
 
-**問題**: `ZenzaiModelConverter` は現状 `(ZenzaiModelInfo, IConverter* fallback)` だけで
-構築され、`InferenceEngine::last_error_`（private）への経路を持たない。一方 `Health`
+**問題**: `ZenzaiModelConverter` が `(ZenzaiModelInfo, IConverter* fallback)` だけで
+構築され、`InferenceEngine::last_error_`（private）への経路を持たないとする。`Health`
 （`Dispatcher::HandleHealth`）は `engine_->last_error()` のみで `ok` / `degraded` / `error`
-を決める。`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
+を決めるので、`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
 **実推論が劣化しているのに `/Health` が `ok` を返す**（サイレント劣化）。
 
-**契約**（DEV-221 が満たす）— *poll-after-call*（engine ロック内で吸い上げ）方式:
+**契約** — *poll-after-call*（engine ロック内で吸い上げ）方式:
 
 1. `ZenzaiModelConverter` に**直近 `Convert` の結果を反映する**エラー状態を持たせる:
    `std::optional<std::string> last_error_` + `bool degraded_`、非消費アクセサ
@@ -932,28 +947,25 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
    （`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が万一再 throw した
    場合は engine 側で捕捉して `model_runtime_error_` を設定し、fallback または空を返す
    （Host は落とさない）。
-5. `Health` の status は**既存の `model_loaded` 3 値分岐を保つ**。engine は `last_error_`
+5. `Health` の status は `model_loaded` とモデルのパスで 3 値に分ける。engine は `last_error_`
    （load/learning）と `model_runtime_error_`（runtime 変換）を畳んだ `effective_last_error()`
-   を公開し、`Dispatcher::HandleHealth` はそれを使う（現行の `engine_->last_error()` 単独参照を
-   置換）。status マッピング:
+   を公開し、`Dispatcher::HandleHealth` はそれを使う（`engine_->last_error()` 単独では見ない）。
+   status マッピング（`docs/dev-infrastructure-spec.md` §8.5.1 と同じ規則）:
    - `effective_last_error()` 空 → **`ok`**。
    - 設定あり **かつ `model_loaded()`** → **`degraded`**（recoverable: runtime 変換劣化や
      loaded-model 警告）。
-   - 設定あり **かつ `!model_loaded()`** → **`error`**（GGUF 欠落/不正等の hard load 失敗。
-     既存 `HandleHealth` の error 分類を維持し、**degraded へ格下げしない**。`model_runtime_error_`
-     は model loaded 時のみ立つので、この枝に来るのは load 失敗の `last_error_` のみ）。
+   - 設定あり **かつ `!model_loaded()` で、モデルのパスが設定済み** → **`degraded`**
+     （GGUF 欠落/不正等のロード失敗。`SimpleConverter` で変換を続ける。§7.4）。
+   - 設定あり **かつ `!model_loaded()` で、モデルのパスが空** → **`error`**。`model_runtime_error_`
+     は model loaded 時のみ立つので、この枝に来るのは load/learning 由来の `last_error_` のみ。
    これにより:
    - runtime 劣化 → `model_runtime_error_` 立つ → `degraded`。
    - **その後の成功変換** → `model_runtime_error_` が nullopt に上書き → （他要因が無ければ）
      `ok` に**復帰**（§10 の Health テストと整合。stuck degraded を回避）。
    - 成功変換は `model_runtime_error_` のみクリアし、**load/learning 由来の `last_error_` は
      消さない**（別フィールドのため誤って健全化しない）。
-   - **既存 API セマンティクスを壊さない**: CUDA 要求→CPU フォールバックは**成功 LoadModel**
-     であり、警告は `ModelLoadResult.error` に返すのみ。`engine->last_error()` は空＝`Health=ok`
-     のまま（既存テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
-     が assert）。`model_runtime_error_` は **runtime 変換劣化専用**であり、backend フォールバック
-     警告を degraded に**再分類しない**（`docs/zenzai-gpu-route.md` の旧「degraded」表現は
-     engine テストの実挙動が優先）。
+   - `model_runtime_error_` は **runtime 変換劣化専用**であり、backend の降格（CUDA 要求の
+     CPU ロードなど）を degraded に**再分類しない**。降格の規則は §7.4。
 6. **モデル lifecycle で `model_runtime_error_` をクリアする**: `LoadModelWithResult` の
    **成功**（リロード含む）・モデルの**無効化 / アンロード**時、既存の `last_error_.reset()` と
    **同じ箇所で `model_runtime_error_.reset()` も行う**。これを怠ると、直近 `Convert` が degraded を
@@ -990,15 +1002,14 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
 3. これにより long decode が `state_mutex_` を保持して後続クエリを待たせる時間を、§8 の
    p95 予算で上限化する。
 
-### 9.2.3 beam 探索のマルチシーケンス契約（DEV-857 が実装）
+### 9.2.3 beam 探索のマルチシーケンス契約
 
-現行実装は step ごとに beam の生成 token 列を先頭から decode し直す。本節は、beam ごとに
-KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` にまとめる方式の契約を定める。
-§9.2 の「beam ごとに生成 token を再 decode する」記述を置き換えるのは本節である。
+本節は、beam ごとに KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` に
+まとめる方式の契約を定める。§9.2 の「beam ごとに生成 token を再 decode する」記述を置き換えるのは本節である。
 
-**DEV-857 本文のスケッチとの差分**: 本契約は sequence を 1 本多く取り、`seq_id` 0 を prompt
-専用に固定する。DEV-857 本文は `n_seq_max = kMaxModelCandidates` として `seq_id` 0 を beam 0 と
-共用するスケッチを載せているが、それでは DEV-859 の接頭辞キャッシュと同じ sequence を奪い合う
+本契約は sequence を `kMaxModelCandidates` より 1 本多く取り、`seq_id` 0 を prompt 専用に固定する。
+`n_seq_max = kMaxModelCandidates` として `seq_id` 0 を beam 0 と共用する割り当ては採らない。
+その割り当てでは、変換をまたぐ prompt 接頭辞 KV キャッシュと同じ sequence を奪い合う
 （§9.2.3.6）。実装は本節の割り当てに従う。
 
 #### 9.2.3.1 sequence の役割と不変条件
@@ -1101,8 +1112,8 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
 - 観測点は step 境界（§9.2.3.2 の手順 1）と decode 中の abort callback の 2 つで、現行と同じ。
   1 step が 1 decode になるため、cancel 観測から停止までの上限は 1 バッチ decode になる。
 - deadline 超過時、live beam は全て同じ長さであり（不変条件 1）、その全てが best-so-far
-  として候補化される。UTF-8 の不完全な接尾を許容する扱いも現行のままとする。beam ごとに
-  中断していた現行実装と、契約として出る候補集合は変わらない。
+  として候補化される。UTF-8 の不完全な接尾は許容する。beam ごとに中断する方式と比べても、
+  契約として出る候補集合は変わらない。
 - 中断された decode が KV へ反映されたかを問い合わせる手段は無い。abort された decode が
   触れた sequence の内容は不定として扱い、次の変換で再利用しない。
 - `Generate` は開始時に working sequence を全て消去する。前の変換が cancel、deadline、例外の
@@ -1111,7 +1122,7 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   生成・評価が失敗または cancel したとき）は、`seq_id` 0 の常駐記録も無効化する
   （§9.2.3.6）。
 
-#### 9.2.3.6 DEV-859（変換をまたぐ prompt 接頭辞 KV キャッシュ）との境界
+#### 9.2.3.6 変換をまたぐ prompt 接頭辞 KV キャッシュとの境界
 
 `seq_id` 0 の所有権と無効化条件は本節が規定する。DEV-859 が規定するのは「常駐する接頭辞を
 どこまで再利用し、どこから decode し直すか」の差分計算だけである。本節が課す制約は次の 4 つ。
@@ -1237,8 +1248,8 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | 最初の beam step より前に deadline 超過（§7.4）: fallback の候補に `zenzai-deadline-fallback` が付き、`zenzai-degraded` は付かない。`effective_last_error` は空で Health は `ok`、decode 統計の `deadline_exceeded` は立つ |
 | unit | モデル lifecycle クリア（§9.2.1）: degraded 変換後に LoadModel 成功/無効化/アンロードすると `model_runtime_error_` がクリアされ、直後の Health が stale な degraded/error を報告しない |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
-| unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
-| unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
+| unit | CUDA→CPU フォールバック（§7.4）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
+| unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`＋パス設定済み（GGUF 欠落・不正のロード失敗）→`degraded` / 設定あり＋`!model_loaded`＋パス空→`error` |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | beam の seq 付け替え（§9.2.3.3）: 親の `seq_id` と使用中集合から、削除一覧・複製一覧・新しい割り当てを決める純ロジックを llama.cpp 無効ビルドで検証する。親を引き継ぐ生存 beam は複製を要求しない、生存 beam を持たない親の `seq_id` は削除一覧に入りかつ複製元にならない、削除は複製より前に並ぶ、複製先が使用中の `seq_id` にならない、割り当てが `kMaxModelCandidates` 本を超えない、同じ入力に対して同じ割り当てを返す（決定性）。一覧を実際の seq 操作へ写す境界は本 unit の対象外（real-model smoke が担保する） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |

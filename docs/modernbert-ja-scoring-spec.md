@@ -6,10 +6,6 @@
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/neural-reranker-spec.md`（M56）、
       `docs/copilot-pc-backend-spec.md`（M24 backend）
-作成日: 2026-05-27
-更新日: 2026-06-18（DEV-113: RSS 上限ロードゲート・ambiguity 重み正規化・
-        context window・cache 整合・timeout 予算を確定）
-位置づけ: 変換品質トラックの最終段（M56 完了後、v1.0 後の品質向上 phase）
 
 ## 1. 目的
 
@@ -62,7 +58,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
 | 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
-| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、§11 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
+| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、roadmap M57 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
 | 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
 | 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
 | 7 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 7 をスキップ |
@@ -319,7 +315,8 @@ loop:
 
 ## 7. 設定スキーマ
 
-M56 で予約した `reranker.modernbert*` を本 M57 で使う:
+M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `reranker.modernbert*` キーの正典であり、
+`docs/neural-reranker-spec.md` §8 から参照される:
 
 ```json
 {
@@ -338,9 +335,9 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う:
 }
 ```
 
-> 本ブロックは M57 spec 上の予約定義であり、v1.0 の
-> `settings/mvp-settings.schema.json` には未登録（M56/M57 は v1.0 後トラック）。
-> schema への正式登録は M56/M57 実装着手時に行う。
+> 本ブロックは M57 spec 上の予約定義であり、M56/M57 が
+> `settings/mvp-settings.schema.json` へ追加する予定のキーである。v1.0 の schema には無い
+> （M56/M57 は v1.0 後トラック）。
 
 - `modernbertEnabled`:
   - `auto`（既定）: ambiguity_score とリソース可用性に応じて自動 ON/OFF
@@ -351,21 +348,17 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う:
   §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。
 - `modernbertRssCapMb`: §6.1 のハード上限（既定 200）。設計上は `always` でも
   この上限を緩めない。`0` 指定は無効化ではなく**上限緩和禁止**のため最小値で
-  clamp する（下限は実機検証で決定。暫定 100）。
+  clamp する（下限の既定は 100。実機検証で校正する）。
 - `modernbertTimeoutMs`: 範囲 30〜50（§5.4）。範囲外は clamp。
 
 ## 8. スコア統合
 
-M56 の `final_score` 式の `modernbert_score` weight = 0.05（初期）。
-M52 ベンチで校正する。
-
-```
-final_score = ... + normalize(modernbert_score) * W_BERT + ...
-```
+`modernbert_score` は `final_score` の 1 項である。式と初期重み（`W_BERT`）は
+`docs/neural-reranker-spec.md` §9 が正典。
 
 `W_BERT` を高くすると homophone 精度が上がるが latency 悪化が大きい。
-balanced mode（既定）では W_BERT = 0.05、quality mode では 0.10 など
-で調整する（`settings.conversionQuality` キー。schema 未登録（予定））。
+balanced mode（既定）では neural §9 の初期値、quality mode では 0.10 など
+で調整する（`settings.conversionQuality` キー。M57 が schema へ追加する予定）。
 
 ## 9. secure 判定との連携
 
@@ -387,20 +380,9 @@ M46 secure 中は ModernBERT を **完全 OFF** にする:
 
 ## 11. M57 受け入れ条件
 
-- M52 ベンチで `homophone.top1_accuracy` が baseline 比 +5% 以上
-- 通常入力 p95 latency 悪化が +20ms 以内
-- ModernBERT がロードできない環境（CPU only / モデル未配置）でも
-  fallback で動作する（IME が止まらない）
-- M46 secure 中は完全 OFF（cache 読み書きも行わない）
-- ambiguity_score < threshold のリクエストでは ModernBERT が呼ばれない
-  （`reason=low_ambiguity` がログに残る）
-- RSS 増分が §6.1 の許容上限内（200 MB 以下）。上限超過環境では
-  `reason=rss_cap` で**ロードせず** fallback し、IME が継続動作する
-- `modernbertEnabled=always` でも RSS / backend / secure の安全ゲートを
-  逸脱しない（上限超過時はロードしない）
-- timeout 予算切れ時は評価済み候補のみ適用し、未評価候補は
-  ModernBERT 抜きの順位で確定する（§5.4）
-- 同一確定文脈の再変換で cache がヒットする（§5.2.1）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M57 節とする。本書は起動条件・timeout 予算・cache・RSS 上限・fallback を定義し、
+受け入れ条件を複製しない。
 
 ## 12. 将来拡張（M57 範囲外）
 

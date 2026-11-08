@@ -5,21 +5,39 @@
 Windows 版（C++ 移植: `core/` `ipc/` `learning/` `inference-host/` `tsf-tip/`
 `bench/`）のみ。macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M37〜M43（開発基盤・品質
-強化トラック） + M44/M47/M50/M51（同トラックの自然な延長）。
-
 本書は 2 通の第三者レビュー（開発環境・ライブラリ改善レビュー / プロジェクト
-レビュー 2026-05-22）の指摘を評価・取捨選択した結果を仕様化したものである。
+レビュー）の指摘を評価・取捨選択した結果を仕様化したものである。
 レビュー指摘のうち既存マイルストーン（M8/M11/M12/M28〜M34）と重複するもの、
 本プロジェクトの方針と整合しないものは「§11 不採用とした提案」に理由とともに
 記録する。
+
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1 | 共通 |
+| §2〜§3 | M37 |
+| §4 | M38 |
+| §5 | M39 |
+| §6 | M40 |
+| §7（§7.7 を除く） | M41 |
+| §7.7 | M51 |
+| §8（§8.5・§8.6 を除く） | M42 |
+| §8.5 | M47 |
+| §8.6 | M に属さない設計案（roadmap「リスクと不確実性」） |
+| §9 | M43 |
+| §10〜§11 | 共通 |
+| §12 | M44 |
+| §13 | M50 |
 
 ## 1. 目的と非目標
 
 ### 目的
 
-MVP（Phase 1〜2 完了）から「実運用に耐える IME」へ進むにあたり、Phase 3
-（Zenzai 統合）/ Phase 4（配布）着手前に開発基盤・品質の負債を解消する。
+MVP（Phase 1〜2）から「実運用に耐える IME」へ進むにあたり、開発基盤・品質の
+負債を解消する。
 具体的には次の 4 点をボトルネックとみなし、マイルストーン化する。
 
 1. ビルド再現性（手元・CI・AI エージェントでビルド入口が統一されていない）
@@ -51,15 +69,22 @@ MVP（Phase 1〜2 完了）から「実運用に耐える IME」へ進むにあ�
 ### 2.1 CMakePresets.json
 
 ルートに `CMakePresets.json` を追加し、configure /
-build / test の入口を統一する。最低限のプリセット:
+build / test の入口を統一する。configure preset の用途は次のとおり。generator、build type、
+cache 変数、`binaryDir`、継承関係など各 preset の値は `CMakePresets.json` が正典であり、本表には写さない。
 
-| プリセット | generator | `CMAKE_BUILD_TYPE` | 用途 |
-|---|---|---|---|
-| `windows-debug` | Ninja | Debug | 手元・CI Debug |
-| `windows-clangd` | Ninja | Debug | clangd / Serena 用 compilation database 生成 |
-| `windows-release` | Ninja | Release | 手元・CI Release |
-| `windows-asan` | Ninja | Debug | Windows ASan 手動・定期実行 |
-| `linux-asan-ubsan` | Ninja | Debug | Linux ASan + UBSan 手動・定期実行 |
+| プリセット | 用途 |
+|---|---|
+| `windows-debug` | 手元・CI の Debug。no-egress の mock テスト |
+| `windows-llama-debug` | pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める開発用成果物 |
+| `windows-clangd` | clangd / Serena 用 compilation database の生成（configure 専用） |
+| `windows-release` | 手元・CI の Release。VM 検証パッケージと Release workflow |
+| `windows-vulkan-release` | ggml-vulkan を有効にした Release ビルド（`docs/zenzai-gpu-route.md`）。CI は Host のコンパイル・リンク検証に使う |
+| `windows-release-arm64` | x64 ホストから Windows on Arm へのクロスビルド（`docs/copilot-pc-backend-spec.md` §8.1） |
+| `windows-no-tests` | `AZOOKEY_BUILD_TESTS=OFF` の非テスト target が壊れていないことの検証（§4.3） |
+| `linux-debug` | Linux の portable subset の手元・CI ビルドとテスト |
+| `linux-coverage` | Linux の portable subset のカバレッジ計測（§4.3） |
+| `windows-asan` | Windows ASan 手動・定期実行（§4.6） |
+| `linux-asan-ubsan` | Linux ASan + UBSan 手動・定期実行（§4.6） |
 
 基本の configure preset（`windows-debug`、`windows-release`、`linux-debug`）の
 `cacheVariables` は `AZOOKEY_BUILD_TESTS=ON`, `AZOOKEY_BUILD_BENCH=ON` を既定とする。
@@ -250,7 +275,7 @@ zip のルートには次を置く。
 - `AppContainerAcl.ps1`
 - `verify-bootstrap.ps1`
 - `learning-data-snapshot.ps1`
-- `dev32-verification-checklist.md`
+- `tip-manual-verification-checklist.md`
 - `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`。辞書省略時は含めない）
 - `ThirdPartyNotices.txt`（辞書省略時は含めない）
 - `bundle-provenance.json`（辞書省略時は含めない）
@@ -465,115 +490,21 @@ bootstrap の package commit が manifest と不一致の場合、その行の s
 
 ### 2.7 ビルド時間の内訳（実測）
 
-本節は M37 の受け入れ条件ではなく、ビルド時間短縮策の当てどころを決めるための計測
-記録である。短縮策としては §4.7 の sccache のみが入っており、コンパイル 1 回あたりの
-コストがどこに出ているかは未計測だった。
+本節は M37 の受け入れ条件ではなく、ビルド時間短縮策の当てどころを決めるための計測の結論である。
 
-#### 測定条件
+clang-cl の `-ftime-trace` で本体ターゲットの Debug ビルドを測ると、コンパイル時間の大半は
+frontend にあり、なかでも TU ごとに繰り返すヘッダ展開が支配的である。backend（最適化・コード生成）は
+1 割に満たない。重いヘッダ展開は `tsf-tip` に限らず、`ipc`、`diagnostics`、`compat-test` にも出る。
+この内訳から当てどころを PCH と unity build に絞り、MSVC での実測で採否を決めた（§11.8）。
+clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の見積もりには使わない。
 
-| 項目 | 値 |
-|---|---|
-| コンパイラ | clang-cl（LLVM 23.1.0、`/clang:-ftime-trace`） |
-| 構成 | Debug、Ninja、`-j 4` |
-| 対象 | 本体ターゲットのみ（`AZOOKEY_BUILD_TESTS=OFF` / `AZOOKEY_BUILD_BENCH=OFF`）、55 TU |
-| キャッシュ | `AZOOKEY_USE_COMPILER_CACHE=OFF`（実コンパイルを測るため） |
-
-再現手順は、MSVC 環境を初期化したうえで次を実行し、生成される TU ごとの
-`*.cpp.json` を集計する。
-
-```powershell
-cmake -S . -B build/timetrace -G Ninja -DCMAKE_BUILD_TYPE=Debug `
-  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
-  "-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /clang:-ftime-trace" `
-  -DAZOOKEY_USE_COMPILER_CACHE=OFF -DAZOOKEY_BUILD_TESTS=OFF `
-  -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_WIL=ON
-cmake --build build/timetrace
-```
-
-`CMAKE_CXX_FLAGS` を指定すると CMake の MSVC 既定フラグを上書きするため、
-`/DWIN32 /D_WINDOWS /GR /EHsc` を明示的に含める。省くと例外が無効化され
-`cannot use 'try' with exceptions disabled` でビルドが落ちる。
-
-集計には clang が出力する `Total Source`（`.cpp` の直接 include をルートとする解析
-時間。TU あたり 0〜15 件）と `Total InstantiateFunction` / `Total InstantiateClass` を
-使う。個別の `Source` イベントは `-ftime-trace-granularity` の既定 500us で出力から
-落ちるため、`Total` 側を読む。
-
-**この 2 つは排他ではなく、重なる累積タイマーである。** テンプレート実体化は
-ヘッダの解析中に起きるため、実体化の時間はヘッダ展開の時間にも含まれる。したがって
-以下の「ヘッダ展開」「テンプレート実体化」はいずれも **inclusive** な値であり、
-足しても total にならない（下表の `C011_shortcut_routing.cpp` は 84.8% + 26.2% =
-111.0%）。内訳の分割ではなく、それぞれ独立に「どれだけの時間がそこを通ったか」を
-表す指標として読むこと。
-
-`Source` 同士の入れ子による二重計上は無い。55 TU すべてで `Total Source` が
-`Total Frontend` を超えないこと（最大比 0.990）、`Total Source` の count が TU あたり
-0〜15 件（`.cpp` の直接 include 数）に留まることを確認している。
-
-#### 上位 10 TU
-
-| TU | total (ms) | frontend | backend | ヘッダ展開 (incl.) | テンプレート実体化 (incl.) | ヘッダ% | テンプレート% |
-|---|---|---|---|---|---|---|---|
-| `NamedPipeTransport.cpp` | 5315 | 5128 | 112 | 4479 | 533 | 84.3% | 10.0% |
-| `Diagnostics.cpp` | 2711 | 2213 | 310 | 1236 | 630 | 45.6% | 23.2% |
-| `TextService.cpp` | 2360 | 2140 | 138 | 1651 | 530 | 69.9% | 22.5% |
-| `main.cpp` | 1961 | 1702 | 155 | 1255 | 516 | 64.0% | 26.3% |
-| `CompatRunner.cpp` | 1960 | 1710 | 158 | 1310 | 496 | 66.8% | 25.3% |
-| `ReportWriter.cpp` | 1812 | 1540 | 164 | 1377 | 446 | 76.0% | 24.6% |
-| `Dispatcher.cpp` | 1811 | 1700 | 66 | 1170 | 424 | 64.6% | 23.4% |
-| `UserDictCli.cpp` | 1790 | 1517 | 153 | 1299 | 474 | 72.5% | 26.5% |
-| `C011_shortcut_routing.cpp` | 1763 | 1676 | 44 | 1494 | 462 | 84.8% | 26.2% |
-| `TargetConfigLoader.cpp` | 1756 | 1577 | 102 | 1375 | 445 | 78.3% | 25.3% |
-
-TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-clock とは異なる）。
-上位 10 TU が総和の 31.3% を占める。
-
-#### 全体の内訳と読み取り
-
-ビルド全体（55 TU）では **frontend 91.2%、ヘッダ展開 76.4%（inclusive）、
-テンプレート実体化 22.2%（inclusive）**。後の 2 つは重なるため、合計は内訳にならない。
-排他な分割は frontend と backend の間にだけ成り立つ。
-
-* **コストはヘッダ展開に偏っている。** backend（最適化・コード生成）は 1 割に満たず、
-  frontend の中でもヘッダの解析が支配的である。`NamedPipeTransport.cpp` は単一 TU で
-  最も重く、その 84.3% がヘッダ展開である。
-* したがって**当てどころは PCH** である。PCH はまさにヘッダ展開の繰り返しを削る手段で、
-  この分布と一致する。
-* **unity build もこの内訳だけでは決まらない。** unity build が削るのは TU 数に比例する
-  固定費だけではない。複数の `.cpp` を同じ TU へまとめると、include guard や
-  `#pragma once` の効く共通ヘッダは unity batch 内で 1 度しか解析されない。つまり
-  ここで支配項と測った「TU ごとに繰り返すヘッダ展開」そのものが削減対象になる。
-  内訳から不採用を導くことはできないため、unity on/off も実測の対象とした。
-  結論は §11.8 にある。
-* 重量 TU は `tsf-tip` に限らない。`ipc` / `diagnostics` / `compat-test` にも同程度の
-  ヘッダ展開コストが出ており、PCH の適用対象を `tsf-tip` と `settings-app` に限定する
-  前提は、実測では支持されない。
-
-#### この計測が示さないこと
-
-* **絶対値を MSVC へ一般化できない。** 実際の CI と開発ループが使うのは `cl.exe` で
-  あり、本計測は clang-cl のもの。内訳の傾向（ヘッダ展開が支配的）は構造的なもので
-  移りやすいが、短縮幅の見積もりには使えない。
-* **PCH の採否もこの計測だけでは決まらない。** §4.7 の sccache と PCH は相互作用し、
-  MSVC の PCH（`/Yc` `/Yu`）を挟むとキャッシュのヒット率が落ちて正味で悪化しうる。
-  そのため採否は「PCH 有無 × sccache hit/miss」の 4 条件を MSVC で実測して決めた。
-  結論は §11.8 にある。
-* **ヘッダ展開のうち「純粋な解析」と「実体化」の比率は出せない。** 上記のとおり
-  両者は重なる指標であり、exclusive time は取っていない（個別イベントが粒度で
-  落ちているため、算出には粒度を下げた再計測が要る）。「ヘッダ展開が支配的」と
-  いう結論はこの制約の影響を受けないが、内訳をさらに割る用途には使えない。
-* テスト・bench ターゲットと `settings-app` は対象外。Debug 構成のみ。
+測定条件、再現手順、上位 TU の表、計測が示さないことは
+[`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) にある。
 
 ### M37 受け入れ条件
 
-- `cmake --preset windows-debug` / `windows-release` の configure→build→test
-  が成功する
-- 既存全 target が `azookey_project_options` / `azookey_project_warnings`
-  をリンクした状態でビルドできる
-- `.clang-format` がルートに存在し、`clang-format --dry-run` が新規追加
-  コードに対して差分ゼロ
-- `.gitignore` に Windows/CMake エントリが追加され、ビルド生成物が
-  `git status` に現れない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M37 節とする。本書は §2・§3 でビルド入口・共通オプション・依存更新手順を定義し、受け入れ条件を複製しない。
 
 ## 3. 依存管理方針（M37 / 横断）
 
@@ -593,11 +524,11 @@ TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-cl
 
 ### 3.2 依存ごとの導入手段
 
-| 依存 | 種別 | 導入手段 | 状態 |
+| 依存 | 種別 | 導入手段 | 採否 |
 |---|---|---|---|
-| GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 導入済み（現行方式を維持） |
-| llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | M8 で導入（本トラック対象外） |
-| WIL | header-only | submodule または `FetchContent`（オプトイン） | M43 で導入（§9） |
+| GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 採用（本トラックで変更しない） |
+| llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | 採用（M8 の範囲。本トラック対象外） |
+| WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | §6・§11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | §7・§11 参照（自前ロガーを優先評価） |
 | miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
@@ -721,9 +652,10 @@ revert 対象を一意に決められるようにするためで、複数依存�
 
 ## 4. CI 品質ゲート拡張（M38）
 
-M38 着手前の `.github/workflows/windows.yml`（windows-latest + msvc-dev-cmd +
-Ninja + Debug 単一構成、失敗時 PR コメント + test_report artifact）を基盤に、
-以下を追加する。
+本節は CI の品質ゲートの方針（何をどの経路で検査し、何を必須、何を advisory にするか）を持つ。
+ジョブの一覧と起動条件は `docs/test-inventory.md`「CTest 以外の自動検査」が正典で、
+`scripts/check_test_inventory.py` が workflow と突き合わせる。runner image、action とツールの版、
+artifact の保持期間、schedule の値は `.github/workflows/` が正典であり、本書には写さない。
 
 ### 4.1 Debug/Release マトリクス
 
@@ -733,10 +665,8 @@ strategy:
     config: [Debug, Release]
 ```
 
-runner は安定性のため `windows-2022` を明示する（`windows-latest` の暗黙
-更新を避ける）。
-Linux runner はすべての workflow で `ubuntu-24.04` を明示し、
-`ubuntu-latest` の暗黙更新を避ける（SBOM は matrix の値として指定する）。
+runner は安定性のため、Windows と Linux のどちらもすべての workflow で版を明示した image を使い、
+`windows-latest` / `ubuntu-latest` の暗黙更新を避ける（SBOM は matrix の値として指定する）。
 
 ### 4.2 preset 利用
 
@@ -783,26 +713,26 @@ OFF のまま）。
   `docs-lint` ジョブで `scripts/tests/test_codex_push.py` を実行し、保護対象や曖昧な送信先の拒否、
   送信範囲の固定を外部 push なしで検査する。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
-  PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
+  PR の**変更行のみ**を必須チェックする。roadmap M37 の受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
   既存行）では PR を止めない。全体整形 PR とツリー全体の
   `clang-format --dry-run --Werror` 必須化は、既存差分が大きいため別作業として
   分離する（§2.3）
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
-- Linux coverage ジョブ — Clang 18 の source-based coverage で portable subset
+- Linux coverage ジョブ — Clang の source-based coverage で portable subset
   （`core` / `ipc` / `learning` / `inference-host`）の行・分岐カバレッジを測る。
   tests / `third_party` / `build` は集計から除外し、HTML・LCOV・JSON summary を
-  `linux-llvm-coverage` artifact として 14 日保持する。初期段階では数値を可視化する
+  `linux-llvm-coverage` artifact として残す。初期段階では数値を可視化する
   だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
   またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
-- Windows coverage ジョブ — OpenCppCoverage 0.9.9.0 の SHA256 検証済み installer を使い、
+- Windows coverage ジョブ — 版を固定し SHA256 を検証した OpenCppCoverage の installer を使い、
   Windows Debug の CTest 子プロセスを 2 台の runner に分割して計測する。
   除外適用後の一覧を名前順に交互配分し、manifest と JUnit で各 shard の実行集合と
   全 shard の重複・欠落がないことを検証する。各 shard の native coverage を統合してから
   HTML と Cobertura を生成する。tests / `third_party` / `build` を
   集計から除き、HTML と Cobertura を `windows-opencppcoverage` artifact として
-  14 日保持する。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
+  残す。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
   デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
   大量ログ境界テストは計測 CTest から除く。通常の Windows Debug ジョブでは実行する。
   Linux の portable subset とは別系列で可視化する。数値閾値は設けない。
@@ -837,30 +767,24 @@ OFF のまま）。
 - GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ
   固定し、対応するリリースタグを行末コメントに残す。Dependabot の
   `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
-- settings JSON Schema — `check-jsonschema==0.38.2` で
+- settings JSON Schema — 版を固定した `check-jsonschema` で
   `settings/mvp-settings.schema.json` と `settings/model-catalog.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` と `settings/default-model-catalog.json` の schema 適合性を確認する
 - PowerShell quality gate — `scripts/test-powershell-quality.ps1` から
   `PSScriptAnalyzer` と `Pester` を実行し、`scripts/register-dev.ps1` /
   `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実
   HKLM 書き込みを伴わない分岐・引数構築テストを行う。pre-commit は
-  `language: system` でローカル導入済みモジュールを使う。CI は Pester `6.2.0` を
+  `language: system` でローカル導入済みモジュールを使う。CI は Pester の版を
   job の `PESTER_VERSION` で指定し、同じ wrapper に `-PesterVersion` で渡す。
   wrapper は指定版を3要素に正規化して比較し、プレリリース版を除外する。
   wrapper は指定版がなければ停止し、実行する版をログへ出す。
   版の指定がないローカル実行では、導入済みの最新版を使う。
 - クラッシュ収集の期限付き probe は `RUN_SERIAL` で登録し、並列 CTest の負荷と分離する。
 
-`settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
-対象ファイルの変更を検出した場合だけ起動する。
-`settings-schema` は `settings/`、`powershell-quality` は PowerShell の script / module /
-manifest、パッケージ定義、`scripts/vm-verify-fixtures/` と Pester が読む製品・診断定義を扱う。
-後者は CMake 定義・preset、設定アプリの vcxproj、TIP 登録ソース、Release workflow・SBOM
-スクリプト・ライセンス、doctor の入力（`.clangd`・`justfile`・WPR profile）、診断マーカー・
-互換性ケースである。入力の対応は `windows.yml` の `powershell_quality` 分類コメントに記す。
-Markdown・`docs/`・`plans/` だけの変更では PowerShell quality を起動しない。
-`cpp-tidy` は portable subset の C++ source と runner / 契約テストの変更、
-`windows-coverage` は build 対象を扱う。
+専門ジョブ（`settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` など）は、先行する
+`changes` ジョブが検査対象の入力の変更を検出した場合だけ起動する。各ジョブの起動条件は
+`docs/test-inventory.md` の「実行系統」列、入力の分類は `windows.yml` の `changes` ジョブの分類コメントが持つ。
+Markdown・`docs/`・`plans/` だけの変更ではこれらを起動しない。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
 これらの専門ジョブをすべて起動する。
 
@@ -888,7 +812,7 @@ configure / build / test の各ログ、Release ビルドの `.pdb`、Release bi
 SARIF・`dumpbin` 出力・要約、Linux coverage の HTML・LCOV・JSON summary、
 Windows coverage の HTML・Cobertura を
 artifact として保存する。PR diagnostic コメントは
-マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
+マトリクスの config ごとの結果を反映する。保持期間は workflow の `retention-days` が定める。
 
 ### 4.5 bench smoke と回帰監視
 
@@ -978,7 +902,7 @@ model 未指定の出力要求がファイルを生成せず失敗すること�
 コンパイルには §4.7 の sccache を使い、bench の計測条件は変更しない。
 workflow は直前の成功 run から `benchmark-results` artifact を取得できる場合だけ baseline
 比較を行い、悪化を GitHub Actions warning として表示する。
-今回の結果は両 bench の JSON を含む `benchmark-results` artifact として 90 日保持する。
+今回の結果は両 bench の JSON を含む `benchmark-results` artifact として保存する。
 bench が閾値超過などで非ゼロ終了した場合も、生成済みの JSON を先に artifact として保存し、
 その後で job を失敗させる。
 初回実行、artifact 期限切れ、run 一覧取得または download の失敗は regression と判定せず、
@@ -995,7 +919,7 @@ baseline 不在、破損、version / config 不一致、指標欠落は比較ス
 top1_accuracy / exact_match_rate の低下と CER の増加は、カテゴリ別を含め warning として通知する。
 top5_accuracy、NFKC 系とレイテンシはこの品質 warning の対象にしない。
 品質 JSON と比較状態・理由・差分を含む `comparison.json` は
-`conversion-quality-results` artifact として 90 日保持する。
+`conversion-quality-results` artifact として保存する。
 品質悪化だけでは終了コードを変更せず、CLI の非ゼロ終了は artifact 保存後に job を失敗させる。
 定期 workflow は PR で起動せず、通常 PR の required check に追加しない。
 reporting の Python テストは `windows.yml` の `quality` ジョブで実行し、
@@ -1025,8 +949,8 @@ Linux preset の対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc
 Windows preset はこれに `tsf-tip` を加えた全体を対象とする（適用範囲は §4.6.1）。PR
 では通常 Build のみを required とし、sanitizer は schedule / manual dispatch で
 段階導入する。各ジョブは configure / build / CTest のログと
-`Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として 14 日間
-保持する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
+`Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として
+保存する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
 incremental link を sanitizer 設定内で無効化する。
 GoogleTest は同じ ASan オプションでソースからビルドし、テスト検出前に ASan runtime
 DLL を各実行ファイルのディレクトリへ配置する。Linux preset は Clang を使い、leak
@@ -1068,10 +992,8 @@ VM 上の人間ゲートセッションに限り、対象アプリと解除手�
 
 ### 4.7 コンパイラキャッシュ（sccache）
 
-CI のコンパイルジョブ（`windows-build` Debug/Release、`windows-llama-build`、
-`windows-vulkan-compile`、`windows-arm64-crossbuild`、`windows-no-tests`、
-`windows-coverage-shard`、`linux-build`、Release と Benchmark workflow）は
-`mozilla-actions/sccache-action` で sccache を導入し、GitHub
+CI のコンパイルジョブは `mozilla-actions/sccache-action` で sccache を導入し（導入するジョブは各 workflow の
+step が正典。`AZOOKEY_USE_COMPILER_CACHE=OFF` の preset を使う sanitizer と Linux coverage は使わない）、GitHub
 Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェクトを run 間再利用
 する。ルート `CMakeLists.txt` が sccache を PATH 上で自動検出して compiler launcher
 に設定するため（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）、ワークフロー側の追加設定は
@@ -1087,8 +1009,7 @@ Release workflow は `SCCACHE_GHA_VERSION=release-v1` でキャッシュを分�
 設定アプリの MSBuild はこの compiler cache の対象外とする。
 
 設定アプリの NuGet パッケージは別に扱う。`windows.yml` で `azookey_settings` を
-ビルドするジョブ（`windows-build` の Release、`windows-llama-build`、`windows-no-tests`、
-`windows-arm64-crossbuild`）は、NuGet の global packages folder（`~/.nuget/packages`）を
+ビルドするジョブは、NuGet の global packages folder（`~/.nuget/packages`）を
 `actions/cache` で run 間再利用する。キーは `settings-app/packages.lock.json` の hash で、
 restore-keys は置かない。lock ファイルが変われば新しいキーで取得し直し、古いパッケージを
 持ち越さない。キャッシュが無いときは MSBuild の restore が nuget.org から取得するため、
@@ -1107,17 +1028,13 @@ header dependency を記録できるようにするためである。
 この環境指定は compiler cache の有効・無効にかかわらず適用し、sccache などの既存
 launcher は環境指定の後段へ保持する。
 
-**action のバージョンに注意（過去の失敗の教訓）。** 初回導入時に
-`sccache-action@v0.0.6` を pin したところ、全ビルドジョブが失敗した（2026-07）。
-このタグは旧 (v1) Actions Cache API 用の env（`ACTIONS_CACHE_URL`）しか渡さないが、
-GitHub は v1 を **2025-04-15 に完全停止**しており、廃止済みエンドポイントが HTTP 400
-（`Our services aren't available right now`）を返して sccache サーバ起動が失敗、
-compiler launcher に設定された sccache が全コンパイルを道連れにした。現行 sccache は
-v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求するため、**action は v2 を繋ぐ
-`v0.0.9` 以降を pin する**こと。あわせて
+**sccache-action は v2 Cache API に対応する `v0.0.9` 以降を pin する。** 現行 sccache は
+v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求し、旧 (v1) API の env だけを渡すタグでは
+sccache サーバの起動が失敗して、compiler launcher 経由で全コンパイルが失敗する。あわせて
 `SCCACHE_IGNORE_SERVER_IO_ERROR=1` を設定し、実行時にキャッシュ backend が失敗しても
-ローカルコンパイルへ fallback してビルドを緑に保つ（キャッシュはビルドを壊しては
-ならない）。
+ローカルコンパイルへ fallback してビルドを緑に保つ（キャッシュはビルドを壊してはならない）。
+この規則を決めた失敗の経緯は
+[`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) にある。
 
 ### 4.8 CTest の並列実行
 
@@ -1206,19 +1123,16 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 
 ### M38 受け入れ条件
 
-- Debug / Release 両構成が CI で緑
-- CI が preset 経由で configure/build/test を実行する
-- Linux 補助ジョブが非 Windows 部分のテストを実行する
-- bench smoke が CTest 経由で実行され exit=0
-- PR コメントが config ごとの結果に対応する
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M38 節とする。本書は §4 で CI のジョブ構成と品質ゲートを定義し、受け入れ条件を複製しない。
 
 ## 5. ユーザーデータ永続化の堅牢化（M39）
 
 ### 5.1 解決する問題
 
-M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの既定パスを相対パス
-（`azookey_learning.tsv` / `azookey_user_dict.json`）で持つため、Host の
-起動元ディレクトリによって保存先が変わり、ユーザーデータが迷子になりやすい。
+学習・辞書ファイルの既定パスを相対パス（`azookey_learning.tsv` /
+`azookey_user_dict.json`）で持つと、Host の起動元ディレクトリによって保存先が
+変わり、ユーザーデータが迷子になりやすい。
 
 ### 5.2 標準ディレクトリレイアウト
 
@@ -1285,13 +1199,8 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 
 ### M39 受け入れ条件
 
-- 明示指定なしで `%LOCALAPPDATA%\azooKey\data\learning.tsv` /
-  `user_dict.json` が使われる
-- `--learning` / `--user-dict` 指定時は指定パスが優先される
-- 必要なディレクトリが自動作成される
-- 保存が原子的（書き込み中クラッシュで既存ファイルが壊れない）
-- 保存先決定ロジックの unit test が追加され緑
-- 既存テストが回帰しない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M39 節とする。本書は §5 で保存先の決定規約と原子的書き込みを定義し、受け入れ条件を複製しない。
 
 ## 6. IPC/JSON 堅牢化（M40）
 
@@ -1382,9 +1291,8 @@ JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame
 - 最大フレーム超過の length-prefix を `Decode/EncodeLengthPrefixed` が拒否する
 - `Payloads.cpp` 側で必須キー欠損・型不一致を安全に拒否する
 
-**enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
-`UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
-⚠️ 項）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
+**Dispatcher のハンドラを持たない MessageType**（`QueryCorrections` / `UpdateUserWord`。
+`docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
 応答待ちの blocking client をハングさせないため、既存ワイヤ形式の envelope に
 「未対応 type」を表す `{"ok":false,"error":"unsupported_message_type"}` を載せ、
 request の `type`、`request_id`、`trace_id` を応答 envelope に維持する。
@@ -1507,8 +1415,8 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   を送らず接続を失敗として扱う。per-logon pipe ACL だけへの縮退は行わない。
   トークンが設定されている場合の比較は、値の一致位置を処理時間へ反映しない
   定数時間比較を使う。
-- **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
-  見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
+- **6.4.5 client cleanup** — 切断済み client を Stop まで保持せず、
+  切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は
   `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT` を使う。server は
   `FILE_FLAG_OVERLAPPED` 付きで instance を作成し、`ConnectNamedPipe` の
@@ -1542,8 +1450,8 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   回復する手段がないため）。他のクライアントには波及しない。
 
   **ソフト超過時**: フレームは破棄せず、遅い接続として計上するだけに留める
-  （`NamedPipeServer::SoftDeadlineExceededCount()`）。M41 の構造化ログへ配線するまでの
-  暫定形であり、閾値に観測可能な効果を持たせて回帰テスト可能にすることが目的。
+  （`NamedPipeServer::SoftDeadlineExceededCount()`）。計上の目的は、閾値に観測可能な
+  効果を持たせて回帰テスト可能にすることである。
 
   **§8.5.2 の timeout 表との関係**: 別レイヤであり、値を一致させない。
   §8.5.2 は「要求を出してから応答が返るまで」（推論時間を含む）を縛る request
@@ -1623,31 +1531,9 @@ deadline 超過のうち、フレームが転送途中だった場合だけは�
 
 ### M40 受け入れ条件
 
-- 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
-- malformed JSON・ランダムバイト列でクラッシュしない
-- ネスト深度・最大長超過を拒否する
-- サロゲートペアを正しく結合し、単独サロゲートを拒否する
-- Release ビルドで SID 取得失敗時に Host 起動が失敗する
-- 複数接続・切断テストが追加され緑
-- 切断済み client が解放される
-- 64KiB を超える length-prefix フレームが往復できる
-- ヘッダだけを送って沈黙する peer に対し、`ReceiveWithTimeout(N)` が概ね N ms で
-  `nullopt` を返し、当該接続を切断する。request deadline を渡す呼び出しでは、
-  受信が `min(request の残デッドライン, read ハード)` を超えて戻らない（§6.4.8。
-  相 A のタイムアウトでは接続を維持し、応答を消費しない）
-- 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
-  MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
-- 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）
-- uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
-  `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する（DEV-163）
-- 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する（DEV-163 / DEV-188）
-- Handshake トークンが per-user ファイルチャネルで配布され、取得・発行に
-  失敗した場合は接続または Host 起動を拒否する（§6.4.4）
-
-> 注: 本節は受け入れ条件の「定義」のみを持ち、各項目の達成状態は持たない
-> （正典は Linear）。協定外メッセージ（DEV-162）・数値 codec の locale 非依存
-> （DEV-163）・直接パーサ単体テスト拡充（DEV-188）・トークン配布チャネル
-> （§6.4.4）の進捗は対応する Linear 課題で追跡する。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M40 節とする。本書は §6 で JSON パーサと Named Pipe transport の境界値・タイムアウトを定義し、
+受け入れ条件を複製しない。
 
 ## 7. 構造化ログと可観測性（M41）
 
@@ -1909,11 +1795,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 
 ### M41 受け入れ条件
 
-- `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを `%LOCALAPPDATA%\azooKey\logs\` に出力
-- 各行に `ts` / `component` / `level` / `event` が含まれ、IPC 要求に関する行は `request_id` を持つ
-- エラーを記録する行の `error_code` が §7.4 の 3 カテゴリのいずれかになる
-- タイムアウト規約（§7.5）の deadline 超過がログに記録される
-- Release ビルドで入力本文・候補語がログに出力されない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M41 節とする。本書は §7.1〜§7.6 でログ形式・エラーコード体系・タイムアウト規約・redaction を定義し、
+受け入れ条件を複製しない。
 
 ### 7.7 M51 拡張: レイテンシ内訳トレーサ
 
@@ -2024,12 +1908,9 @@ QueryCandidates latency summary (N=10000, skipped=0)
 
 ### M51 受け入れ条件
 
-- 既存の全 IPC envelope の `trace_id` フィールドに UUIDv7 を入れ、JSON parse 後も伝播する
-- 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に
-  出力できる
-- `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
-- Zenzai backend 比較（R1: cpu / cuda / vulkan、R2: winml〔EP 自動選択〕）に使える
-- 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M51 節とする。本書は §7.7 で `trace_id`・計測フェーズ・`azookey_trace_viewer`・オーバーヘッド制御を定義し、
+受け入れ条件を複製しない。
 
 ## 8. Host 可用性・再接続（M42）
 
@@ -2159,14 +2040,9 @@ stale 化する。未送信または接続断後に再武装された pending �
 
 ### M42 受け入れ条件
 
-- TIP 側 IPC ワーカーが接続状態機械に基づいて動作する
-- Host 停止 → 再起動で TIP が exponential backoff + jitter により自動
-  再接続する
-- Host 無応答時に TIP が劣化モードへ移行し、入力が止まらない
-- 状態遷移がログに記録される
-- Host 復帰後に `Ready` へ復帰する
-- Host 再起動をまたぐ再接続で `host_generation_id` の変化を検知・記録し、
-  旧世代の in-flight 応答を破棄し、pending 要求を新しい request ID で再送する
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M42 節とする。本書は §8.2〜§8.4 で接続状態機械・再接続・劣化モード・Host 世代 IDを定義し、
+受け入れ条件を複製しない。
 
 ### 8.5 M47 拡張: ユーザー可視復旧 UX
 
@@ -2305,6 +2181,7 @@ TIP は Host の状態を primary 接続の `QueryDiagnostics`（§12.6）で取
 `HealthPayload.status` は Host が `last_error` から決める粗い値である。`last_error` が無ければ
 `ok`、あってモデルがロード済みまたはパスが設定済みなら `degraded`、それ以外は `error` とする。
 TIP はこの値を状態の取得契機にだけ使い、表示する状態を直接決めない。
+この規則は `docs/zenzai-inference-spec.md` §7.4・§9.2.1 から参照される。
 
 ##### `fallback_state` の導出（Host）
 
@@ -2492,7 +2369,7 @@ M46 の secure 表示と同時に出すときの並びは
 - `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
   [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する
 
-#### 8.5.5 適応モデル切替の再解釈（DEV-411 で確定 / 2026-08）
+#### 8.5.5 適応モデル切替の再解釈
 
 karukan は `max_latency_ms` を超えたら main（90M）から light（26M）へ切り替える適応
 モデル切替を持つ（`docs/karukan-comparison-report.md` §6）。azooKey はこれを
@@ -2515,15 +2392,13 @@ CPU backend へ再試行し、それも失敗したら SimpleConverter へ落と
 
 ### M47 受け入れ条件
 
-- Host を手動 kill しても入力中のアプリが固まらない（M42 と同じ）
-- Host 再起動後に自動復帰する（M42 と同じ）
-- Zenzai モデルロード失敗時に `DegradedModel` 状態が UI に明示される
-- 連続クラッシュ時は `SafeMode` に入り、次回起動時に通知する
-- 各処理の timeout が §8.5.2 の表通りに動作する（request deadline の行が対象。「設計値」の行は含まない）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M47 節とする。本書は §8.5 で復旧 UX の状態機械と timeout 表を定義し、
+受け入れ条件を複製しない。
 
 ### 8.6 推論 Worker プロセス分離（Broker/Worker, MVP後）
 
-現状の inference-host は TIP から見て out-of-proc だが、`Dispatcher` /
+inference-host は TIP から見て out-of-proc だが、`Dispatcher` /
 `InferenceEngine` / `SettingsStore` / `UserDataPaths` を同一プロセス・同一
 ユニットに同居させている。この構成では、モデル runtime（llama.cpp / ggml /
 将来の NPU runtime / driver）起因のメモリ破損・例外が、設定・辞書・IPC 認証まで
@@ -2561,10 +2436,8 @@ WIL は header-only のため、vcpkg ではなく submodule または `FetchCon
 
 ### M43 受け入れ条件
 
-- WIL が header-only 依存として取り込まれ、オフラインビルドを壊さない
-- 新規コードが WIL の RAII 型を使用する
-- `tsf-tip` の COM / HANDLE / レジストリ処理の RAII 化が進む
-- 既存テストが回帰しない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M43 節とする。本書は §9 で WIL の取り込み方と適用範囲を定義し、受け入れ条件を複製しない。
 
 ## 10. 成果測定 KPI
 
@@ -2589,40 +2462,30 @@ Windows 専用コードを含む値は OpenCppCoverage の Cobertura と HTML �
 
 ## 11. 不採用とした提案
 
-レビュー指摘のうち、本トラックで採用しない / 修正して採用するものを理由と
-ともに記録する。
+レビューと外部リサーチの提案のうち、本トラックで採用しない / 修正して採用するものの結論と
+再評価の条件を置く。§11.1〜§11.7 の提案ごとの理由は
+[`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) にある。
+§11.2.1 と §11.8 の経緯は各節のリンク先にある。
 
 ### 11.1 vcpkg.json の一括導入 — 修正採用
 
-レビューは `vcpkg.json` でビルド依存基盤を作ることを提案する。本プロジェクト
-は**オフラインビルド原則**（§1）を持ち、`AZOOKEY_FETCH_GOOGLETEST` が意図的に
-オプトインである。vcpkg の必須化はこの原則と衝突するため、必須化はしない。
-依存ごとに header-only 優先・`FetchContent`/submodule オプトインで導入する
-（§3）。`vcpkg.json` は任意の利便ファイルとしてのみ許容する。
+vcpkg を必須にしない。オフラインビルド原則（§1）と衝突するためである。依存ごとに
+header-only 優先・`FetchContent`/submodule オプトインで導入し（§3）、`vcpkg.json` は
+任意の利便ファイルとしてのみ許容する。
 
 ### 11.2 自前 JSON パーサの即時全置換 — 修正採用
 
-レビュー提案 A（`nlohmann-json` への即時全置換）は採らない。自前パーサは
-軽量・低依存という利点があり、IPC の JSON は大きくない。提案 B（堅牢化 +
-fuzz/malformed テスト）を主とする（§6）。先送りしていた置換の判断は §11.2.1 で確定した。
+`nlohmann-json` への即時全置換は採らず、自前パーサの堅牢化と fuzz/malformed テストを主とする（§6）。
+外部ライブラリへの移行の方針は §11.2.1 が持つ。
 
-#### 11.2.1 外部ライブラリ移行の方針（DEV-390 で確定 / 2026-08）
+#### 11.2.1 外部ライブラリ移行の方針
 
-「将来判断」として残していた RapidJSON / nlohmann-json への移行方針を、次のとおり確定
-する。**v1.0 の範囲では自前パーサを維持し、外部ライブラリへは移行しない。**
-
-移行を推す論拠は、自前実装に起因するバグクラスを構造的に解消できることにあった。その
-バグクラスは §6.2 のパーサ強化で既に解消済みである。数値 codec の locale 依存
-（DEV-163）は `std::from_chars` / `std::to_chars` への置換で閉じ、int64/uint64 精度・
-深度上限・unicode escape・round-trip の直接単体テスト（DEV-188）は `json_test.cpp` に
-入った。残る DEV-211 は IPC メッセージ毎の冗長な JSON 往復を減らす性能課題であり、
-パーサ実装の出自とは独立している。したがって移行の主たる動機は既に失われている。
-
-対して移行のコストは残ったままである。自前パーサは §6.2 の上限値と wire contract を
-spec と `static_assert` で結び付けており、置換すればこの対応関係を作り直すことになる。
-TIP は任意アプリへ in-proc ロードされる DLL であり、依存追加はコンパイル時間と
-バイナリサイズに直接効く。no-egress 方針のもとでは FetchContent のピン留めと
-`AZOOKEY_FETCH_*=OFF` 既定も前提として維持しなければならない。
+**v1.0 の範囲では自前パーサを維持し、外部ライブラリへは移行しない。** 移行の動機だった
+自前実装に起因するバグクラスは、§6.2 のパーサ強化で閉じている。一方で移行のコストは残る。
+自前パーサは §6.2 の上限値と wire contract を spec と `static_assert` で結び付けており、
+置換すればこの対応関係を作り直すことになる。TIP は任意アプリへ in-proc ロードされる DLL であり、
+依存追加はコンパイル時間とバイナリサイズに直接効く。no-egress 方針のもとでは FetchContent の
+ピン留めと `AZOOKEY_FETCH_*=OFF` 既定も前提として維持しなければならない。
 
 再評価は次のいずれかが起きたときに行う。
 
@@ -2636,143 +2499,59 @@ TIP は任意アプリへ in-proc ロードされる DLL であり、依存追�
 
 いずれも v1.0 のリリースゲートではない。設定ファイル側（`SettingsStore` /
 `UserDictionary`）はホットパスでないため、部分導入を試すなら先行させる候補になる。
+決定の経緯は
+[`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) にある。
 
 ### 11.3 Zenzai runtime 抽象 `IModelRuntime` の新設 — 不採用
 
-レビューは `IModelRuntime` インターフェース（`SimpleRuntime` /
-`LlamaCpuRuntime` / `LlamaCudaRuntime` …）の新設を提案する。しかし
-`core::IConverter` が既に同じ役割（変換バックエンドの差し替え可能境界）を
-担い、M8 も Zenzai を `IConverter` 実装として `SimpleConverter` と差し替え
-る方針が確定している。`IModelRuntime` 新設は二重抽象になるため不採用。
-バックエンド別実装の内部構造は M8 / M24 の範囲で `IConverter` 実装として
-整理する。
+`IModelRuntime` を新設しない。`core::IConverter` が変換バックエンドの差し替え可能境界を既に担い、
+M8 も Zenzai を `IConverter` 実装として `SimpleConverter` と差し替えるため、二重抽象になる。
+バックエンド別実装の内部構造は M8 / M24 の範囲で `IConverter` 実装として整理する。
 
 ### 11.4 packaging / signing 足場の新設 — 不採用（重複）
 
-レビューは packaging / signing の足場作りを提案するが、MSIX・WiX・署名 CI・
-DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー済みである。
-重複するため本トラックでは新設しない。開発用 `regsvr32` スクリプトは
-`scripts/register-dev.ps1` / `unregister-dev.ps1` へ命名分離済み（DEV-101 / M28）。
+本トラックでは packaging / signing の足場を新設しない。MSIX・WiX・署名 CI・DPAPI 暗号化は
+M11 / M12 / M28〜M34 が扱う。開発用の登録スクリプトは `scripts/register-dev.ps1` /
+`scripts/unregister-dev.ps1` である。
 
 ### 11.5 clang-tidy / CodeQL の必須化 — 見送り
 
-CI への clang-tidy / CodeQL の**必須化**は導入・調整コストが高い。本トラックでは
-`clang-format`（変更行ゲート）までを必須とし、clang-tidy / CodeQL は必須ゲートに
-しない（§4.3）。変更 TU 全体の clang-tidy 解析は、既存負債で
-PR が止まるのを避けつつ変更コード品質を上げる中間策として、`cpp-tidy` ジョブに
-**advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
-（全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
-ツール導入 第2弾）。
+clang-tidy / CodeQL は必須ゲートにしない。必須とするのは `clang-format`（変更行ゲート）までである
+（§4.3）。変更 TU 全体の clang-tidy 解析は、既存負債で PR が止まるのを避けつつ変更コードの品質を
+上げる中間策として、`cpp-tidy` ジョブで **advisory（非ブロッキング）**として走らせ、所見の可視化に
+留める。必須ゲート化・全体化（全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する。
 
-同じ段階導入方針を Release バイナリの BinSkim にも適用する。現時点では
-`continue-on-error` の advisory とし、SARIF・job summary・artifact に所見を残す。
-未署名に由来する `BA2022` だけを抑止し、他のルール結果を隠さない。必須ゲート化は
-所見の基準線を整理し、ツール取得と解析の安定性を確認した後の将来判断とする。
+同じ段階導入方針を Release バイナリの BinSkim にも適用する。`continue-on-error` の advisory とし、
+SARIF・job summary・artifact に所見を残す。未署名に由来する `BA2022` だけを抑止し、他のルール結果を
+隠さない。必須ゲート化は、所見の基準線を整理し、ツール取得と解析の安定性を確認した後に判断する。
 
 ### 11.6 IPC payload の Protobuf 即時移行 — 不採用
 
-外部リサーチ提案（2026-07）は Named Pipe transport を維持したまま payload を
-versioned Protobuf へ移行する案を挙げる。しかし本プロジェクトの IPC は同一
-マシン内・単一実装・少数メッセージであり、schema 進化の恩恵よりも、コード生成
-ツールチェーン追加がオフラインビルド原則（§1）へ与える影響と移行コストが上回る。
-自前 JSON パーサを §6 の境界コーパス + 有界スモークで堅牢化する路線（§11.2 と整合）を
-主とし、Protobuf 化は将来判断とする。設定アプリ実装・fuzz 整備の後に再評価する。
+Named Pipe の payload は JSON のまま維持し、§6 の境界コーパスと有界スモークで自前パーサを
+堅牢化する（§11.2 と整合）。同一マシン内・単一実装・少数メッセージの IPC では、schema 進化の
+恩恵よりも、コード生成ツールチェーンの追加がオフラインビルド原則（§1）へ与える影響と移行コストが
+上回る。Protobuf 化は将来判断とし、設定アプリの実装と fuzz の整備の後に再評価する。
 
 ### 11.7 設定アプリの C#/.NET 9 化 — 不採用
 
-外部リサーチ提案（2026-07）は設定アプリを C#/.NET 9 + WinUI 3 にする案を挙げる。
-しかし設定アプリの UI フレームワークは **DEV-99 / D-03 で WinUI 3（C++/WinRT）に
-確定済み**（`plans/windows-port-roadmap.md`「リスクと不確実性」/
-`docs/sideload-packaging-spec.md` §3.0）であり、既存 C++/WinRT スタックとの親和性・
-配布形態整合を根拠とする。TIP/Host と別プロセスで IPC 連携する点は C# でも成立するが、
-確定済みの決定を覆すだけの決定的な差は現時点で無いため、C++/WinRT を維持する。
+設定アプリは WinUI 3（C++/WinRT）を維持する。UI フレームワークの選定と再評価の条件は
+`docs/sideload-packaging-spec.md` §3.0 が正典である。
 
-### 11.8 PCH — 不採用 / unity build — 見送り（DEV-910 で確定 / 2026-09）
+### 11.8 PCH — 不採用 / unity build — 見送り
 
-§2.7 は、ビルド時間の支配項が「TU ごとに繰り返すヘッダ展開」であることを clang-cl の
-`-ftime-trace` で示した。その削減手段として PCH と unity build を MSVC で実測し、
-**PCH は不採用、unity build は見送りとする。**
+§2.7 の内訳を受けて、PCH と unity build を MSVC で「有無 × sccache の cold / warm」の 4 条件で
+実測した。**PCH は不採用、unity build は見送りとする。**
 
-#### 測定条件
-
-| 項目 | 値 |
-|---|---|
-| コンパイラ | MSVC（`cl.exe`、CI と開発ループが実際に使うもの） |
-| 構成 | Debug、Ninja、`-j 20`、20 論理プロセッサ |
-| 対象 | `AZOOKEY_BUILD_TESTS=ON` / `AZOOKEY_BUILD_BENCH=ON`、241 TU |
-| キャッシュ | `AZOOKEY_USE_COMPILER_CACHE=ON`（`/Z7` Embedded が効く条件） |
-| 計測範囲 | `cmake --build` のみ。configure は含めない |
-| 試行 | 各条件 3 回、中央値（最小-最大） |
-
-`SCCACHE_DIR` は計測専用ディレクトリへ向け、cold 条件はキャッシュディレクトリの
-作り直しで作る。GoogleTest は事前取得した v1.17.0 のソースツリーを指定し、
-configure ごとのダウンロードを計測から排除する。
-
-**configure 時に `VSLANG=1033` を与えること。** これが無いと日本語 UI ホストでは ninja が
-header dependency を 1 件も記録せず、さらに PCH の有無で `/showIncludes` の未消費出力量が
-変わるため、計測にバイアスが乗る。この不具合そのものは DEV-1002 で扱う。
-
-#### 4 条件の結果
-
-| 条件 | PCH | sccache | 中央値 | 最小-最大 |
-|---|---|---|---|---|
-| 1 | 無 | cold | 130.3 s | 93.2-137.8 |
-| 2 | 無 | warm | 29.4 s | 21.9-30.4 |
-| 3 | 有 | cold | 70.3 s | 62.4-73.7 |
-| 4 | 有 | warm | 42.1 s | 32.9-252.6 |
-
-PCH は cold を 46.1% 短縮し、warm を 43.0% 悪化させる。
-
-条件 4 の最大値 252.6 s は他の 2 回（42.1 s / 32.9 s）で再現しなかった単発の外れ値だが、
-除外せず範囲に残す。cold 条件は同一セル内でも 93-138 s とばらつくため、
-この幅を超える差だけを有意と読む。
-
-#### sccache のヒット率がどう変わるか
-
-`sccache --show-stats` の実測値。warm 条件、ninja がコンパイルしたオブジェクト数を分母とする。
-
-| | コンパイル対象 | cache hit | hit 率 |
-|---|---|---|---|
-| PCH 無 | 241 | 241 | 100% |
-| PCH 有 | 254 | 73 | 28.7% |
-
-**残る 71.3% は cache miss ではなく、構造的にキャッシュ不能である。** sccache が挙げる
-non-cacheable の理由は `/Fp` が 168 件、`/Yc` が 13 件で、PCH を使う全 TU と PCH 生成
-そのものに一致する。sccache は PCH 関連フラグを持つコンパイルをキャッシュ対象から外すため、
-これらは cache が warm でも毎回コンパイルされる。PCH がヘッダ解析を削る利得と、
-キャッシュを失う損失が相殺し、warm では損失が上回る。
-
-#### 不採用の根拠
-
-CI と日常の開発ループでは cache が warm な条件が支配的である。CI は sccache を GitHub
-Actions のキャッシュサービスで run 間再利用し（§4.7）、ローカルでも初回ビルド以降は warm
-になる。**PCH が改善するのは、頻度の低い cold 条件だけである。**
-
-ローカルの増分ビルドでは PCH に利得がある（ヘッダ 1 本の変更で 42.7 s → 17.5 s、
-単一 `.cpp` の変更で 10.0 s → 7.5 s）。これを取りに行く案として、PCH をローカル専用
-preset に限る構成も検討したが採らない。ビルド構成が二重化し、CI が通らない経路が
-できるうえ、ローカルでもブランチ切り替え後のフルビルドは warm 条件に当たって
-43% の悪化を受けるためである。PCH の適用には DEV-1086 の解消も前提となる。
-
-#### unity build を見送る理由
-
-unity build は性能だけを見れば採用に足る。cold 71.5 s（-45.1%）、warm 16.5 s（-43.9%）で
-**PCH と違い warm でも改善し、全 TU がキャッシュ可能なまま**である（hit 率 100%）。
-unity ビルドの成果物で CTest は全件成功する。
-
-それでも見送るのは、性能ではなく順序の問題による。
-
-* 241 から 76 へ減った edge のうち 80、**削減量の 48% は `tsf_tip_*_tests` 8 target が
-  同じ 11 ソースを重複コンパイルしている分**である（DEV-1087）。この重複は unity build の
-  意味論的リスクを負わずに構造的に除去でき、Issue が挙げる「テストターゲット限定の適用」も
-  そちらで実現される。
-* 重複を除いた後に unity build がどれだけ上積みするかは測っていない。
-* DEV-910 の計測時には除外が 2 件必要だった（`inference-host/src/UserDictCli.cpp` の無名 namespace 衝突、
-  `bench/BenchmarkResult.cpp` の `GetObject` マクロ衝突）。加えて unity batch は
-  ソースの並び順で決まるため、ソースを 1 本足すと無関係な batch の内容が変わり、
-  それまで通っていた組み合わせが壊れうる。
-* 単一 `.cpp` の変更に対する増分ビルドは 10.0 s → 12.4 s と 24% 悪化する。
-  batch 全体が再コンパイルされるためで、最も頻度の高い操作が遅くなる。
+- **PCH**: cold は短縮するが warm は悪化する。sccache は PCH 関連フラグ（`/Fp`、`/Yc`）を持つ
+  コンパイルをキャッシュ対象から外すため、PCH を使う TU は cache が warm でも毎回コンパイルされる。
+  CI（§4.7）と日常の開発ループでは warm 条件が支配的である。PCH をローカル専用 preset に限る構成も、
+  ビルド構成が二重化して CI が通らない経路ができ、ブランチ切り替え後のフルビルドでは warm 条件の
+  悪化を受けるため採らない。PCH の適用には DEV-1086 の解消も前提となる。
+- **unity build**: warm でも改善し、全 TU がキャッシュ可能なまま（hit 率 100%）である。それでも
+  見送るのは順序の問題による。削減量のおよそ半分はテスト target が同じソースを重複コンパイルしている
+  分であり、unity build の意味論的リスクを負わずに構造的に除ける（DEV-1087）。また unity batch は
+  ソースの並び順で決まるため、ソースを 1 本足すと無関係な batch の内容が変わり、通っていた組み合わせが
+  壊れうる。単一 `.cpp` の変更に対する増分ビルドは batch 全体の再コンパイルで遅くなる。
 
 再評価は本節と同じ 4 条件で行う。CMake の再評価用対策として、Win32 `max` マクロとの
 衝突を core target の `NOMINMAX` で防ぐ。無名 namespace の同名 helper を持つ
@@ -2785,40 +2564,13 @@ unity ビルドの成果物で CTest は全件成功する。
 意味しない。
 `UNITY_BUILD_BATCH_SIZE` は既定値のまま測っており、調整の余地を残している。
 
-#### この判断が対象としないもの
-
 `settings-app` は 4 条件の対象外である。MSBuild が `azookey_settings.vcxproj` を
 ビルドする独立経路にあり、CMake の compiler launcher が及ばないため sccache とは
-相互作用しない。PCH は `pch.h` と `/Yu` で既に使っている。Issue が当初挙げた
-「対象は `tsf-tip/` と `settings-app/`」という前提は、この 2 点で成り立たない。
+相互作用しない。PCH は `pch.h` と `/Yu` で既に使っている。
 `tsf-tip` 以外にも重いヘッダ展開が出ている点は §2.7 のとおりである。
 
-#### 再現手順
-
-計測に使った CMake 側の足場は commit `a52527a` にある。`AZOOKEY_USE_PCH`（既定 OFF、
-TU 数が 8 以上の repo target 13 個 / 168 TU へ `target_precompile_headers` を適用）、
-`cmake/azookey_pch.h`（過半の TU が使う標準ヘッダと `<windows.h>`、および
-`GetObject` の `#undef`）、`CMAKE_UNITY_BUILD` 時の除外 2 件からなる。
-結論を反映した次の commit で取り除いてあるため、再現するときはこの commit の
-CMake 変更を復元する。
-
-```powershell
-$env:VSLANG = "1033"
-$env:SCCACHE_DIR = "<計測専用ディレクトリ>"
-cmake -S . -B build/pch -G Ninja -DCMAKE_BUILD_TYPE=Debug `
-  -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON `
-  -DAZOOKEY_USE_COMPILER_CACHE=ON -DAZOOKEY_USE_PCH=ON `
-  -DAZOOKEY_FETCH_GOOGLETEST=ON `
-  -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="<取得済み googletest>"
-sccache --zero-stats
-cmake --build build/pch -j 20
-sccache --show-stats
-```
-
-cold は `SCCACHE_DIR` を作り直してから、warm は同じキャッシュのまま build ディレクトリを
-作り直してから測る。unity build は `-DCMAKE_UNITY_BUILD=ON` を渡す。
-衝突を洗い出すときは ninja の `-k 0` を使う。既定の `-k 1` は最初の失敗で
-スケジューリングを止めるため、衝突件数を過小に見積もる。
+測定条件、4 条件の結果、sccache のヒット率、再現手順（計測用の CMake 足場の commit を含む）は
+[`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) にある。
 
 ## 12. IME 診断・修復ウィザード（M44）
 
@@ -2882,7 +2634,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 
 各項目の `status`（§12.3 の `ok` / `warning` / `error`）は以下の閾値で確定する。
 閾値は §8.5.2 timeout 表・§12.6 `fallback_state` enum・§13.2 自動化レベルと
-同一値を参照し、二重定義しない。`--repair` 列は「M44 受け入れ条件」の
+同一値を参照し、二重定義しない。`--repair` 列は roadmap M44 の受け入れ条件の
 自動修復対象（D-001 / D-002 / D-003 / D-013）と一致する。
 
 **評価順序（重複時の優先）**: 各行の `ok` / `warning` / `error` 述語が重複し
@@ -3240,23 +2992,19 @@ D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 
 ### M44 受け入れ条件
 
-- クリーン環境で全項目チェックが実行できる
-- Host 未起動でも診断アプリがクラッシュしない
-- Zenzai 有効でモデル未選択（`model.selectedPath` 空）時に `warning`、
-  設定済みパスが不在の場合は `error` として fallback 状態を表示する（§12.2.1 D-007 / D-008）
-- 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）。各 ZIP メンバが
-  §12.5 の redaction ルール表どおりに処理される
-- `--json` 出力が stable schema としてテストされる
-- 各診断項目が §12.2.1 の判定基準どおりに `ok` / `warning` / `error` を返す
-- `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M44 節とする。本書は §12 で診断項目・判定基準・診断 ZIP の redaction を定義し、
+受け入れ条件を複製しない。
+
+診断 ZIP に秘密情報が含まれないことは snapshot テストで検証する。
 
 ## 13. アプリ互換性テストハーネス（M50）
 
 ### 13.1 目的
 
 主要アプリで TSF composition / 候補ウィンドウ位置 / 確定 / キャンセル /
-Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で検証する。
-M28（MSIX サイドロード）着手前にアプリ互換性のベースラインを確保する。
+Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で検証し、
+アプリ互換性のベースラインを確保する。
 
 ### 13.2 対象アプリ
 
@@ -3332,6 +3080,8 @@ C-013 は DEV-1364 の追加ケースであり、M50 の C-001〜C-012 受け入
 Windows Settings 等）は実行可能な範囲で自動判定する best-effort 対象とする。
 `best-effort` / `recorder` アプリでは自動化できないケースを §13.3.1 の
 手動チェックリストで補完する。
+TSF の描画責務を見る実機の手動チェックリスト（M3 の表示属性、M5 の `pbShow`）は `compat-test/` に置き、
+一覧は `compat-test/README.md`「手動チェックリスト」が持つ。
 
 ### 13.3.1 Office 手動チェックリスト（recorder 補完）
 
@@ -3375,42 +3125,8 @@ recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対�
 
 ### 13.4 実装
 
-`compat-test/` ディレクトリを新設:
-
-```
-compat-test/
-├── CMakeLists.txt
-├── runner/
-│   ├── CompatRunner.cpp        # UI Automation + SendInput
-│   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
-│   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
-│   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
-│   └── ReportWriter.cpp
-├── cases/
-│   ├── C001_basic_input.cpp
-│   ├── C002_backspace.cpp
-│   ├── C003_escape.cpp
-│   ├── C004_candidate_position.cpp
-│   ├── C005_monitor_clamp.cpp
-│   ├── C006_dpi_scaling.cpp
-│   ├── C007_surrogate_pair.cpp
-│   ├── C008_undo_redo.cpp
-│   ├── C009_focus_transition.cpp
-│   ├── C010_host_recovery.cpp
-│   ├── C011_shortcut_routing.cpp
-│   ├── C012_romanization.cpp
-│   ├── C013_host_hang.cpp
-│   ├── HostHangWatchdogClient.cpp
-│   ├── HostHangWatchdogClient.h
-│   ├── HostHangWatchdogMain.cpp
-│   ├── HostHangWatchdog.h
-│   └── HostProcessSupport.h
-└── targets/
-    ├── notepad.json
-    ├── edge.json
-    ├── vscode.json
-    └── ...
-```
+ハーネスは `compat-test/` に置く。ディレクトリ構成とファイルの役割は
+`compat-test/README.md`「ディレクトリ構成」が正典である。
 
 各 target JSON は AppId / window class / 自動化レベルを定義する。
 
@@ -3559,9 +3275,5 @@ target の非 0 終了だけではジョブを失敗させない。
 
 ### M50 受け入れ条件
 
-- Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
-- Office（Word / Excel / Outlook）が §13.3.1 の手動チェックリストで検証され、
-  結果が `report.md` の Office セクションに記録される
-- 失敗時にスクリーンショットとログが `failures/` に保存される
-- `report.json` が CI artifact としてアップロードできる
-- `report.md` が PR コメント用に整形されている
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M50 節とする。本書は §13 で対象アプリ・テストケース・レポート形式を定義し、受け入れ条件を複製しない。

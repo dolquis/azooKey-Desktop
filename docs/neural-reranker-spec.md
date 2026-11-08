@@ -1,17 +1,11 @@
 # ニューラルリランカー仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M56（変換品質トラック）+ NllScorer トラック（DEV-413）
 関連: `plans/windows-port-roadmap.md` M52 / M53 / M54 / M55 / M57、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/modernbert-ja-scoring-spec.md`（M57）、
       `docs/zenzai-inference-spec.md`（Track B の推論基盤）
-作成日: 2026-05-27
-更新日: 2026-08-09（DEV-556: Track B〈NllScorer 型ニューラルリランク〉の NLL 定義・
-        コンテキスト再利用・責務境界・合成・fallback・有効化フラグを確定）
-位置づけ: 変換品質トラック（M53 / M54 / M55 のすべてが完了し、M52 ベンチで
-baseline 固定後）
 
 ## 0. 本書が扱う 2 トラック
 
@@ -204,10 +198,10 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
 - **v0（LightGBM）を feature importance の基準器とする**: v0 baseline で
   gain / split ベースの feature importance を算出し、低寄与特徴の除外候補・
   正規化方針の根拠とする。importance は M52 ベンチ成果物として残す
-  （§12 の v0 / v1 比較レポートに含める）。
+  （roadmap M56 の v0 / v1 比較レポートに含める）。
 - **v1（MLP）の重みは学習で決定する**: 隠れ 2 層 × 64 unit の重みは学習データ
   （§6）から学習し、手動調整しない。特徴の寄与は学習後の ablation（特徴を
-  1 つ落として再評価）で確認し、§12 レポートに記す。
+  1 つ落として再評価）で確認し、roadmap M56 の比較レポートに記す。
 - **特徴量の正規化を ONNX に焼き込む**: scalar 特徴（`zenzai_score` /
   `dictionary_score` / `user_frequency` / `recency_score` / `typo_confidence` /
   `app_profile_score`）は学習データ統計から推定した per-feature 標準化
@@ -374,7 +368,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - **timeout 既定値**: `tinyNeuralTimeoutMs` = **15ms**（範囲 10〜20ms、範囲外は
   clamp）。v1 MLP（12 次元・隠れ 64×2）の 30 候補一括 forward は CPU でも通常
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
-  に対する安全弁**であり、通常 path の p95 を支配しない。これにより §12 の
+  に対する安全弁**であり、通常 path の p95 を支配しない。これにより roadmap M56 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
 - **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
   とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で
@@ -421,7 +415,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 ```
 
 - `tinyNeuralEnabled`: 既定は **OFF**。Track B の `nllRerankEnabled`（§B9）と同じく、
-  リランク層は §12 の受け入れ条件（M52 ベンチで top1 +3% 以上 / p95 悪化 +10ms 以内）を
+  リランク層は roadmap M56 の受け入れ条件（M52 ベンチの top1 と p95 の閾値）を
   満たしたことを確認したうえで、既定 ON への切替を別途判断する。**既定 OFF のとき
   ONNX セッションを生成せず**、候補列・`final_score`・`debug_info`・レイテンシは Track A
   導入前と等価であること（§11 の回帰対象）。ユーザー設定 OFF による非適用は
@@ -433,13 +427,13 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - §6.2 の学習パイプラインパラメータ（`trainNegativesPerSample` /
   `correctionWindowMs` / `minDwellMs` 等）はオフライン用であり、本 runtime schema
   には登録しない。
-- 本ブロックの `tinyNeural*` は schema 未登録（予定）。M56 実装着手時に
-  `settings/mvp-settings.schema.json` の `reranker` へ正式登録する（M56 / M57 は v1.0 後トラック）。
+- 本ブロックの `tinyNeural*` は、M56 が `settings/mvp-settings.schema.json` の `reranker` へ
+  追加する予定のキーであり、v1.0 の schema には無い（M56 / M57 は v1.0 後トラック）。
 
 ## 9. スコア統合
 
-M56 の rerank_score は M52 ベンチで定義する `final_score` の構成要素
-の 1 つ。初期重みは以下を提案するが、最終的に M52 ベンチで校正する:
+`final_score` の式は本節が定義する。M56 の rerank_score（`tiny_score`）はその構成要素の 1 つで、
+初期重みは以下とし、M52 ベンチ（`docs/conversion-quality-benchmark-spec.md`）の評価で校正する:
 
 ```
 final_score =
@@ -455,6 +449,9 @@ final_score =
 
 これらの重みは **手動値ではなく LightGBM / logistic regression で
 学習**することを推奨する（評価は M52 で実施）。
+
+本節は `final_score` 式の正典であり、`docs/modernbert-ja-scoring-spec.md` §8、
+`docs/zenzai-inference-spec.md` §7.5、`docs/app-profile-spec.md` §7、本書 §B6.3 から参照される。
 
 ## 10. モデル変遷（段階導入）
 
@@ -483,15 +480,9 @@ final_score =
 
 ## 12. M56 受け入れ条件
 
-- M52 ベンチで `top1_accuracy` が baseline 比 +3% 以上
-- M52 ベンチで `latency_p95_ms` 悪化が +10ms 以内
-- timeout / load 失敗時に reranker なしで候補が返る（IME が止まらない）
-- 連続失敗（既定 3 回）で circuit breaker が開き fallback する（§7.2）
-- v0（LightGBM baseline）と v1（MLP）の比較レポート（feature importance /
-  ablation を含む、§5.4）が残る
-- embedding 供給方針（§4.1）が**決定**され spec に明記されている
-  （v1=Option C / v2 以降=Option A、ModernBERT 共用は不採用）
-- 学習データが §6.2 のラベリングプロトコルに従って生成されている
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M56 節とする。本書は特徴量・モデル構造・学習データ・timeout と fallback を定義し、
+受け入れ条件を複製しない。
 
 ## 13. プライバシー
 
@@ -1037,7 +1028,7 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   prefix 再計算も測定に含める。
   全件破棄は候補統合による生成スコア差と混同せず、`RerankNll` の入力境界で検証する。
 
-## B12. 校正と性能検証（追跡先: DEV-1012、DEV-1055）
+## B12. 校正と性能検証
 
 - prefix を生成と共有した NllScorer の評価が §B7 の予算（既定 20ms）に収まるか。
   共有は §B3.4 のとおり実装内部で完結し、本章の契約は変えない。
@@ -1048,3 +1039,5 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
 - 構造化ログのフィールドは §B4.2、ログ形式の正典は
   `docs/dev-infrastructure-spec.md` §7 に従う。
+- CPU / Vulkan の Release 測定の条件と結果は
+  [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) にある。

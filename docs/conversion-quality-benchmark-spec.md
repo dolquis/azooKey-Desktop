@@ -7,11 +7,6 @@
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）
-作成日: 2026-05-27
-更新日: 2026-07-15（DEV-559: CER / NFKC 二重評価の厳密定義と per-case 出力 schema を確定）
-位置づけ: 変換品質トラックの最初に実装（M53〜M57 の前提）
-spec-first ゲート: 本仕様の §6.1.1 / §6.1.2 / §8.1 が確定するまで DEV-408
-（評価 CLI 実装）を In Progress にしない
 
 ## 1. 目的
 
@@ -241,7 +236,7 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 > `n_best` を 5 以上に上書き**して採取する（§8 config 例は 5）。4 のまま採ると
 > top5 が実質 top4 になり §9 合格基準と不整合になる。
 
-### 6.1.1 Exact Match と NFKC 二重評価（確定）
+### 6.1.1 Exact Match と NFKC 二重評価
 
 **文字列比較の単位**: すべての一致判定・編集距離は **Unicode スカラー値
 （コードポイント）** を 1 文字として行う（karukan 参考実装 `ajimee_bench.rs`
@@ -296,7 +291,7 @@ NFKC は次を畳み込む:
   `nfkc_*` の値が動きうるため、正規化器を差し替えた場合は §8 出力 `version`
   を +1 する（§14.1）。
 
-### 6.1.2 CER（Wagner-Fischer）（確定）
+### 6.1.2 CER（Wagner-Fischer）
 
 **定義**: 第一候補 `top1` を仮説、`expected` を参照とし、両者の
 **Levenshtein 編集距離**（挿入・削除・置換のコスト各 1、一致 0、
@@ -391,11 +386,11 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 
 **typo 評価のモード指定（マイルストーン別運用）**: §6.2 の typo 補正指標は
 補正が有効なモードでのみ意味を持つ。ただし**補正有効モード `suggest` /
-`rank` / `aggressive` は M55（打ち間違え統合）の機能**で、M52 時点では未実装。
+`rank` / `aggressive` は M55（打ち間違え統合）が提供する**。
 そのため:
 
-- **M52 受け入れ**: typo 補正は未実装のため `--typo-mode off`（既定、M55 前の
-  唯一のモード）で走らせ、typo 指標の**算出・schema 出力**を確認する（実測値
+- **M52 受け入れ**: typo 補正は M55 が提供するため `--typo-mode off`（既定。M55 の
+  補正が無い構成で使える唯一のモード）で走らせ、typo 指標の**算出・schema 出力**を確認する（実測値
   の良否は問わない。off では `typo_correction_top*` は自明な値になる）。
 - **M55 受け入れ**: 補正有効モードでの**実測値**を検証する。
   `typo_correction_top1/5_accuracy` は評価対象モード（M55 既定の `rank` 等）で、
@@ -556,6 +551,7 @@ M53〜M57 完了時点で達成する目標:
 | `top1_accuracy` | baseline 比 +3% 以上 |
 | `top5_accuracy` | 95% 以上 |
 | `homophone.top1_accuracy` | baseline 比 +5% 以上 |
+| `user_adapt.top1_accuracy` | 学習前比 +3% 以上（M54） |
 | `named_entity.recall_at_5` | 90% 以上 |
 | `typo_correction_top5_accuracy` | 85% 以上 |
 | `typo_false_positive_rate` | 1% 未満 |
@@ -611,9 +607,9 @@ PR 向け回帰ゲートは、PR コメントに diff_vs_baseline サマリを�
 
 ### 11.2 カテゴリ別件数（代表性）
 
-段階導入する。**M52 初期版**は受け入れ条件（§12）に必要な 4 カテゴリ
+段階導入する。**M52 初期版**は受け入れ条件（roadmap M52）に必要な 4 カテゴリ
 （general / homophone / typo / typo_clean）の最小セットで、**M52 の gating
-受け入れ条件**（§12）はこの初期版のみ。**v1 完全版**列（合格基準 §9 を測る
+受け入れ条件**（roadmap M52）はこの初期版のみ。**v1 完全版**列（合格基準 §9 を測る
 規模）は **gating ではなく目標規模**で、変換品質トラック（M53〜M57）の効果
 測定までに整える**推奨スケジュール**である（roadmap に hard 依存として
 追加しない。M53 着手は roadmap の前提に従う）。
@@ -654,34 +650,11 @@ PR 向け回帰ゲートは、PR コメントに diff_vs_baseline サマリを�
 
 ## 12. M52 受け入れ条件
 
-- `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
-  result.json` で全指標を計算できる
-- `azookey_bench --eval bench/data/typo_eval.jsonl --output
-  typo_result.json` で typo 指標が**算出・schema 出力**される（M52 時点では
-  typo 補正は未実装＝M55 のため既定 `off` で走る。補正有効モード `rank` /
-  `aggressive` での**実測値**検証は M55 受け入れで行う。§7「typo 評価のモード
-  指定」参照）
-- 出力 JSON が §8 の stable schema に従い、`summary` に `exact_match_rate` /
-  `nfkc_exact_match_rate` / `cer` / `nfkc_cer`（§6.1.1 / §6.1.2）が含まれる
-- `--per-case` 指定時に §8.1 の per-case JSONL が出力され、`summary.cer` が
-  per-case `cer` の micro 平均と一致する
-- CER 単体テスト（既知ペアの編集距離）・Exact/NFKC 境界テスト（全半角差で
-  `exact_match=false` かつ `nfkc_exact_match=true` になること）が CTest で通る
-  （DEV-408 テスト方針）
-- baseline 比較レポート（diff_vs_baseline）が生成される
-- `--trace` 指定時は phase JSONL を生成し、`azookey_trace_viewer --json` の
-  schema と phase 別 p50 / p95 / p99 を検証する（M51、
-  `docs/dev-infrastructure-spec.md` §7.7.3）
-- 初期版の評価データが §11.2「M52 初期」列を満たす
-  （general / homophone / typo / **typo_clean** の 4 カテゴリ各 100、計 ≥400）。
-  `typo_clean` は §4.3.1 のとおり `typo_false_positive_rate` /
-  `typo_overcorrection_rate` の分母であり、欠くと typo 指標を正しく計算
-  できないため初期版から必須とする
-- すべての評価ケースが §13 の USABLE 出典・ライセンス方針に適合し、
-  `provenance` を持つ。`authored` 以外を含む場合は §13.3 manifest が存在する
-- baseline が §14 の安定性基準（決定的設定で再実行差 ≤ 0.2pp）を満たす
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M52 節とする。本書は CLI・指標・出力 schema・評価データの件数と出典・baseline 安定性を
+定義し、受け入れ条件を複製しない。
 
-## 13. 評価データの出典・ライセンス（確定）
+## 13. 評価データの出典・ライセンス
 
 ### 13.1 方針
 

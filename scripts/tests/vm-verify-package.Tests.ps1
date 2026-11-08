@@ -117,7 +117,7 @@ Describe "VM verification package automation" {
         "# register-dev.ps1",
         '. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")'
       ) | Set-Content -LiteralPath (Join-Path $Root "scripts\register-dev.ps1")
-      "# checklist" | Set-Content -LiteralPath (Join-Path $Root "docs\handoff\dev32-verification-checklist.md")
+      "# checklist" | Set-Content -LiteralPath (Join-Path $Root "docs\handoff\tip-manual-verification-checklist.md")
       New-Item -ItemType Directory -Path (Join-Path $Root "data") -Force | Out-Null
       foreach ($dataFile in @("english-words.tsv", "symbol.tsv", "emoji.tsv")) {
         "# $dataFile" | Set-Content -LiteralPath (Join-Path $Root "data\$dataFile")

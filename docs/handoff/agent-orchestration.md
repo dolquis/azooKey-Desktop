@@ -38,11 +38,11 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 | L3 1 塊内の並列実装 | ファイル所有権を分割でき、契約（IPC payload、schema、関数シグネチャ）が先に固定済み | Agent Teams または独立 worker。writer ごとに非重複領域 |
 | L4 塊間並列 | Linear 上で独立した塊と依存が確定済み | 塊ごとに別 worktree / branch / Draft PR。管制塔セッションの子セッション、または Claude Code の `isolation: worktree` |
 
-分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える。L2 は独立した境界が複数ある場合に選ぶ。
+分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える（`AGENTS.md`「セルフレビューと PR」は本段落を参照する）。L2 は独立した境界が複数ある場合に選ぶ。
 L1/L2 の「境界」と specialist は、次の「touched path からの route」の「必須」「条件付き」列で決める。specialist は agent（`spec-drift-checker`、`diff-auditor`、`windows-build-runner`）だけを指し、親が Skill を読んで確認する行は specialist の起動に数えない。route の必須が親の Skill 確認だけの変更（`core/**` 単独の変更など）は L0 のまま、親が Skill を読んで確認する。必須または条件付きの agent が 1 つ当たれば L1、独立した 2 つ以上の agent が当たり編集が停止済みなら L2 とする。
 L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
-L4 の実行形は 2 つある。管制塔セッションがユーザーの指示を受けて、塊ごとに子セッション（Claude Code Remote の `create_session`、各自の worktree）を立てる形と、1 セッションの親が Claude Code の `isolation: worktree` で subagent を分ける形である。どちらも build directory は共有されないが、worktree ごとに configure からやり直すため full rebuild になる。`isolation: worktree` は親が spawn 時に明示し、agent 定義には固定しない。
-worktree をまたいで共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と、並行する PR への `main` の取り込みは `docs/handoff/parallel-worktree-runbook.md` に従う。
+L4 の実行形は 2 つある。管制塔セッションがユーザーの指示を受けて、塊ごとに子セッション（同じマシンの worktree、または Claude Code Remote の `create_session` による別コンテナ）を立てる形と、1 セッションの親が Claude Code の `isolation: worktree` で subagent を分ける形である。どちらも build directory は共有されないが、checkout ごとに configure からやり直すため full rebuild になる。`isolation: worktree` は親が spawn 時に明示し、agent 定義には固定しない。
+同じマシンの worktree をまたいで共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と、並行する PR への `main` の取り込みは `docs/handoff/parallel-worktree-runbook.md` に従う。
 
 ### 管制塔セッションと子セッション
 
@@ -54,6 +54,8 @@ worktree をまたいで共有される資源（sccache、`%TEMP%`、ミュー�
 子セッションは push の前に `git remote get-url --push origin` が `dolquis/` 配下の repository であることを確かめる。
 子セッションは PR のマージ、Ready 化、他の branch や worktree の操作を行わない。規約の解釈が分かれるとき、他の子が持つファイルを変える必要が出たとき、権限で拒否された操作があったときは、管制塔へ報告し該当操作を保留する。拒否された操作を別経路で迂回せず、承認済み範囲の独立した調査・実装・検証は継続する。
 子セッションの起動は、ユーザーが指示した範囲で管制塔が行う。Codex Cloud の起動、新しいユーザー所有タスクの作成、Human Gate の承認は、子セッションの起動によって代行されない（`docs/linear-conventions.md` §2.1）。
+
+`.claude/settings*.json`、`.claude/hooks/`、権限設定の変更は、子セッションにも subagent にも任せない。ハーネスがエージェント自身による権限の書き換えを拒否することがあり、迂回すると安全境界が崩れる。必要になったら作業を止め、ユーザー（管制塔経由の場合は管制塔）に判断を返す。
 
 specialist の同時起動は通常 2 体、横断変更でも 3 体までとし、4 枠目は Explore か build runner に残す。Codex の `.codex/config.toml` は `max_concurrent_threads_per_session = 4`（親を除く spawn 済み thread の上限）で、この配分に合わせてある。
 
@@ -132,7 +134,12 @@ Validation owned by parent: <commands>
 5. 親が次に実行すべき検証。
 6. 該当が無い場合も「該当なし」と書き、確認した範囲と確認できなかった範囲を明記する。
 
-通常の返却量は 4〜8 KiB を目安にし、追加の証拠は親の求めに応じて段階的に返す（`docs/handoff/agent-tooling-setup.md`「長い出力の扱い」）。
+返却量の目安と、追加の証拠の返し方は `docs/handoff/agent-tooling-setup.md`「長い出力の扱い」に従う。
+
+## 分担の例
+
+Host 実装と TIP / IPC 利用側の影響確認、学習処理と復旧テストの検討、独立した差分レビューを分担候補にする。
+azooKey 固有の引継ぎ対象には、実機入力や管理者操作の承認条件を含める。
 
 ## ロールバック
 

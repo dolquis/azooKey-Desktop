@@ -3,6 +3,25 @@
 本書は Microsoft IME（MS-IME）と同等の TSF 統合を実現するための仕様を定める。
 `plans/windows-port-roadmap.md` の Phase 6 の M20〜M23 が本書を参照する。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1 | M20 |
+| §2（§2.0・§2.8〜§2.11 を除く） | M21 |
+| §2.0、§2.8〜§2.11 | M5（UI-less の最小契約）。M21 がこれを拡張する |
+| §3（§3.6 を除く） | M22 |
+| §3.6 | M64 |
+| §4 | M21 |
+| §5（§5.6・§5.7 を除く） | M23 |
+| §5.6・§5.7 | M3（単一 DisplayAttribute）。§5.6 は M23 との対応も定める |
+| §6 | M11（設定アプリの起動）・M30 |
+| §7 | M23 |
+| §8 | M15・M21 |
+| §9〜§10 | 共通 |
+
 ## 1. ITfReconversion / ITfFnReconversion (M20)
 
 ### 1.1 目的
@@ -16,29 +35,13 @@
 > 実装）。再変換時の周辺文字列取得や、Zenzai への前方文脈供給（`SetContext`）に流用できる。
 > 原典は mozc（C++）であり、実装時は原典に当たること。
 
-### 1.2 インターフェース実装スケルトン
+### 1.2 インターフェース実装
 
-`tsf-tip/include/azookey/tsf/ReconversionFunction.h` と
-`tsf-tip/src/ReconversionFunction.cpp`：
-
-```cpp
-class ReconversionFunction : public IUnknown
-                           , public ITfFnReconversion {
-public:
-    // ITfFunction
-    STDMETHODIMP GetDisplayName(BSTR* pbstrName) override;
-
-    // ITfFnReconversion
-    STDMETHODIMP QueryRange(ITfRange* pRange,
-                            ITfRange** ppNewRange,
-                            BOOL* pfConvertable) override;
-    STDMETHODIMP GetReconversion(ITfRange* pRange,
-                                 ITfCandidateList** ppCandidateList) override;
-    STDMETHODIMP Reconvert(ITfRange* pRange) override;
-
-    // IUnknown (略)
-};
-```
+`ReconversionFunction`（`tsf-tip/include/azookey/tsf/ReconversionFunction.h` /
+`tsf-tip/src/ReconversionFunction.cpp`）が `ITfFnReconversion` を実装する。宣言の正典はヘッダで、
+本書はコードを写さない。`ITfFunction::GetDisplayName` と、`ITfFnReconversion` の `QueryRange` /
+`GetReconversion` / `Reconvert` を持ち、変換キーの入口と、アプリのコールバックの外から候補を
+非同期に作る入口（下記 `GetReconversion` の edit session）を TIP 向けに加える。
 
 #### QueryRange
 
@@ -80,16 +83,15 @@ TIP は選択変更を `ITfTextEditSink::OnEndEdit` で検知し、UI メッセ�
 context が変わった後の応答は破棄し、元の選択範囲へ適用しない。
 変換キーも選択範囲を保持して非同期取得し、候補 UI に表示する。
 
-新規 IPC：
+IPC は `ReverseConvert` を使う。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の
+`ReverseConvertRequest` / `ReverseConvertResponse` である。本節は
+`docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、次の意味を定める。
 
-```
-ReverseConvertRequest:
-  surface: string
-
-ReverseConvertResponse:
-  reading: string         // 最尤読み
-  confidence: float
-```
+| フィールド | 意味 |
+|---|---|
+| 要求 `surface` | 逆引きする表層（再変換の範囲のテキスト） |
+| 応答 `reading` | 上の順序で得た最尤の読み。どこにも当たらなければ空 |
+| 応答 `confidence` | 読みの信頼度。`reading` が空のときは 0 |
 
 #### Reconvert
 
@@ -107,9 +109,8 @@ ReverseConvertResponse:
 
 ### 1.4 受け入れ条件
 
-- メモ帳で「明日」を選択 → 右クリック「再変換」（or 変換キー押下）→ 「あした」
-  「アシタ」「Ashita」等の候補が出る
-- 候補選択で範囲が置換される
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M20 節とする。本節は受け入れ条件を複製しない。
 
 ## 2. UI-less Mode (M21・基本契約は M5 で必須)
 
@@ -136,7 +137,7 @@ UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に
 表示される）は、UI-less mode に加えて検索統合 API（`ITfFnSearchCandidateProvider`
 + `ITfIntegratableCandidateListUIElement`）の実装を要し（[IME search integration
 requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#ime-search-integration)）、これは §2.7 のとおり **M21 スコープ**。
-未実装でもスタート検索で活性化・入力は可能だが、統合表示は得られず composition 完了
+検索統合 API が無くてもスタート検索で活性化・入力は可能だが、統合表示は得られず composition 完了
 後にのみクエリが渡る劣化モードになる。したがって **M5 の受け入れに「スタート検索の
 統合表示」を含めない**（活性化・入力のみを範囲とする）。
 
@@ -192,41 +193,15 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 
 ### 2.3 CandidateListUIElement 実装
 
-`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` / `tsf-tip/src/CandidateListUIElement.cpp`：
+`CandidateListUIElement`（`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` /
+`tsf-tip/src/CandidateListUIElement.cpp`）が `ITfCandidateListUIElement`（`ITfUIElement` を継承する）を
+実装する。宣言の正典はヘッダで、本書はコードを写さない。
 
-```cpp
-class CandidateListUIElement
-    : public IUnknown
-    , public ITfUIElement
-    , public ITfCandidateListUIElement
-    , public ITfCandidateListUIElementBehavior {
-public:
-    // ITfUIElement
-    STDMETHODIMP GetDescription(BSTR*) override;
-    STDMETHODIMP GetGUID(GUID*) override;
-    STDMETHODIMP Show(BOOL) override;
-    STDMETHODIMP IsShown(BOOL*) override;
-
-    // ITfCandidateListUIElement
-    STDMETHODIMP GetUpdatedFlags(DWORD*) override;
-    STDMETHODIMP GetDocumentMgr(ITfDocumentMgr**) override;
-    STDMETHODIMP GetCount(UINT*) override;
-    STDMETHODIMP GetSelection(UINT*) override;
-    STDMETHODIMP GetString(UINT index, BSTR*) override;
-    STDMETHODIMP GetPageIndex(UINT* pIndex, UINT uSize, UINT* puPageCnt) override;
-    STDMETHODIMP SetPageIndex(UINT*, UINT) override;
-    STDMETHODIMP GetCurrentPage(UINT*) override;
-
-    // ITfCandidateListUIElementBehavior
-    STDMETHODIMP SetSelection(UINT) override;
-    STDMETHODIMP Finalize() override;
-    STDMETHODIMP Abort() override;
-
-private:
-    std::vector<std::wstring> candidates_;
-    UINT                      selection_  = 0;
-};
-```
+- `ITfUIElement`: `GetDescription` / `GetGUID` / `Show` / `IsShown`。
+- `ITfCandidateListUIElement`: `GetUpdatedFlags` / `GetDocumentMgr` / `GetCount` / `GetSelection` /
+  `GetString` / `GetPageIndex` / `SetPageIndex` / `GetCurrentPage`。
+- `ITfCandidateListUIElementBehavior`（`SetSelection` / `Finalize` / `Abort`）は M21 の full 実装で
+  加える（§2.8「M5 と M21 の役割分担」）。
 
 ### 2.4 動作分岐
 
@@ -287,10 +262,8 @@ Esc は読みへ戻らず入力を取り消す
 
 ### 2.5 受け入れ条件
 
-- Windows 11 / Office (TF_TMF_UIELEMENTENABLEDONLY) で TIP の自前ウィンドウが
-  出ず、Windows 11 標準の候補 UI に候補が表示される
-- `pbShow == TRUE` を返すアプリ（UI element sink を持たない大多数のレガシー Win32
-  等）では従来通り `CandidateWindow` が出る
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ### 2.6 `pbShow` の per-call 切替
 
@@ -335,9 +308,11 @@ UIElement`（[ctffunc.h](https://learn.microsoft.com/windows/win32/api/ctffunc/n
 
 任意であり、v1.0 では実装しない方針。M21 着手時に検索統合スコープ判断を行う。
 
-### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5・DEV-97 確定）
+### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5）
 
-**設計判断（確定）**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
+両立方式を選んだ経緯は [`decisions/2026-06-11-candidate-ui-coexistence.md`](decisions/2026-06-11-candidate-ui-coexistence.md) に残す。
+
+**設計判断**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
 か自前 `WS_POPUP` HWND か」の二者択一ではなく、**両方を常に実装し `BeginUIElement`
 の戻り値 `pbShow` で per-call に描画責務を切り替える「両立 (coexistence)」方式**を
 v1.0 方針として確定する。
@@ -356,60 +331,22 @@ v1.0 方針として確定する。
 集約**し、`pbShow` で振り分ける。`TextService` は `CandidateWindow` /
 `ITfCandidateListUIElement` を直接操作せず、本 coordinator のみを呼ぶ。
 
-#### API: `tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`（新規）
+#### API: `tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`
 
-> 注: DEV-97 起票時の表記 `azookey/tip/CandidateUiCoordinator.h` は、既存 include
-> 規約 `azookey/tsf/`（`CandidateWindow.h` 等と同階層）に合わせ
-> **`azookey/tsf/CandidateUiCoordinator.h`** に統一する。
+宣言の正典はヘッダで、本書はコードを写さない。描画責務に関わる入口の契約は次のとおり。
 
-```cpp
-namespace azookey::tsf {
-
-// 候補 UI の単一統合点。pbShow に応じて自前 HWND と TSF UI element を振り分ける。
-class CandidateUiCoordinator {
- public:
-  // ActivateEx で受け取った UI-less フラグを保持（§2.10）。
-  void SetUiLessMode(bool ui_less);
-
-  // 候補表示を開始する。内部で:
-  //   1) ITfCandidateListUIElement インスタンスを生成（候補を保持）
-  //   2) ITfUIElementMgr::BeginUIElement(elem, &pbShow, &ui_element_id_)
-  //   3) OnPbShown(pbShow) で描画責務を確定
-  //   4) pbShow==FALSE のときは続けて UpdateUIElement(ui_element_id_) を即時に
-  //      呼び初回候補内容をアプリへ通知する。アプリは BeginUIElement では内容を
-  //      読まず最初の UpdateUIElement（全 update フラグ立ち）で読み始めるため、
-  //      これを省くと初回候補が描画されない（§2.6 フローチャート）。
-  // pt は自前 HWND を出す場合のキャレット直下スクリーン座標。
-  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
-                  const std::vector<CandidateViewItem>& items, int selected_idx);
-
-  // 候補リスト or 選択変更時。
-  //   pbShow==TRUE 経路: 自前 HWND を再描画（UpdateUIElement は呼ばない）
-  //   pbShow==FALSE 経路: ITfUIElementMgr::UpdateUIElement(ui_element_id_) のみ
-  HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
-
-  // 終了。pbShow の値に関わらず HWND を Hide し EndUIElement を必ず呼ぶ。
-  HRESULT EndUI();
-
-  bool IsShowing() const;
-
- private:
-  // BeginUIElement の戻り値を受けて描画経路を確定:
-  //   true  → 自前 HWND を Show（OS/アプリは描画しない）
-  //   false → 自前 HWND は出さず、即時 UpdateUIElement で初回内容をアプリへ委譲
-  void OnPbShown(bool tip_draws);
-
-  CandidateWindow own_window_;                  // pbShow==TRUE 経路
-  wil::com_ptr_nothrow<CandidateListUIElement> ui_element_;  // pbShow==FALSE / UI-less 経路
-  wil::com_ptr_nothrow<ITfUIElementMgr> ui_element_mgr_;
-  DWORD ui_element_id_{0xFFFFFFFF};             // BeginUIElement が返す ID
-  bool ui_less_mode_{false};                    // TF_TMF_UIELEMENTENABLEDONLY
-  bool tip_draws_{true};                        // 直近 BeginUI の pbShow 結果
-  bool showing_{false};
-};
-
-}  // namespace azookey::tsf
-```
+- `SetUiLessMode(bool)`: `ActivateEx` で得た UI-less フラグを保持する（§2.10）。
+- `BeginUI(thread_mgr, pt, items, selected_idx, …)`: 候補表示を始める。内部で
+  1) `ITfCandidateListUIElement` を生成して候補を持たせ、2) `ITfUIElementMgr::BeginUIElement(elem,
+  &pbShow, &ui_element_id)` を呼び、3) `pbShow` で描画責務を確定する。4) `pbShow==FALSE` のときは
+  続けて `UpdateUIElement(ui_element_id)` を即時に呼び、初回の候補内容をアプリへ通知する。アプリは
+  `BeginUIElement` では内容を読まず、最初の `UpdateUIElement`（全 update フラグ立ち）で読み始めるため、
+  これを省くと初回の候補が描画されない（§2.6 フローチャート）。`pt` は自前 HWND を出す場合の
+  キャレット直下のスクリーン座標である。
+- `UpdateUI(items, selected_idx)`: 候補リストか選択の変更。`pbShow==TRUE` 経路は自前 HWND を再描画し
+  `UpdateUIElement` は呼ばない。`pbShow==FALSE` 経路は `UpdateUIElement(ui_element_id)` だけを呼ぶ。
+- `EndUI()`: `pbShow` の値に関わらず HWND を隠し、`EndUIElement` を必ず呼ぶ。
+- `IsShowing()`: 表示中かどうか。
 
 `ITfUIElementMgr::BeginUIElement(ITfUIElement* pElement, BOOL* pbShow,
 DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の各
@@ -428,7 +365,7 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 受けた場合は Showing(TIP) → Showing(App) へ遷移し、以後 `UpdateUIElement` 経路に
 切り替える（[UILess Mode Overview「Show/Hide status of UIElement」](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview)）。
 
-#### M5 と M21 の役割分担（改訂）
+#### M5 と M21 の役割分担
 
 - **M5（v1.0）**: 上記 coordinator の骨格 + `pbShow==TRUE` 経路（自前 HWND）+
   `BeginUIElement`/`EndUIElement` 動線 + `ActivateEx` フラグ検出（§2.10）+
@@ -502,18 +439,17 @@ TIP DLL は `tsf-tip/resources/azookey_tsf_tip.rc` で、ICON リソースを `I
 対話的 TSF セッションを要するため、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE`
 + 昇格時のみ実行で、CI（headless）では走らない。
 
-### 2.10 `ActivateEx` の最小実装と契約ギャップ
+### 2.10 `ActivateEx` の最小実装
 
-**実装済み（DEV-157 / DEV-154）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を
+`TextService::ActivateEx` は `ITfThreadMgrEx` を
 QI して `GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を
 `ui_less_mode_` に保持する（`tsf-tip/src/TextService.cpp`）。`dwFlags` は UIElement
 ビットを公式に列挙しないため一次情報にしない。`ui_less_mode_` は
 `CandidateUiCoordinator` に伝播し、§2.8 の `pbShow` 分岐で自前 HWND と
 app-drawn UIElement 経路を切り替える。
 
-**v1.0 で必要な最小実装（M5）**: UI-less 判定は §2.2 のとおり
-`ITfThreadMgrEx::GetActiveFlags` を一次情報とする（`ActivateEx` の `dwFlags` は
-UIElement ビットを公式に列挙しないため）。
+v1.0（M5）の最小実装は次のとおりである（UI-less 判定の一次情報は §2.2 のとおり
+`ITfThreadMgrEx::GetActiveFlags`）。
 
 ```cpp
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
@@ -531,16 +467,16 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 ```
 
 `TF_TMF_SECUREMODE`（パスワード欄等のセキュア入力）等の他フラグも同じ
-`GetActiveFlags` 経由で取得でき、M46 プライバシー / セーフ入力で扱う。本変更は
+`GetActiveFlags` 経由で取得でき、M46 プライバシー / セーフ入力で扱う。この判定は
 COM smoke テスト（モック `ITfThreadMgrEx::GetActiveFlags` が
 `TF_TMF_UIELEMENTENABLEDONLY` を返すとき `ui_less_mode_` が true になる）で
-covered。
+検証する。
 
 ### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
 
 `pbShow` の戻り値とアプリの描画責務はアプリ実装に依存するため、代表アプリでの実測が
-必要。**計測手順・対象アプリ・合格条件（安定仕様）は `docs/legacy-parity-spec.md`
-§12** に定める。実機 Win11 が必要なため DEV-97 の子課題 DEV-153
+必要。**計測手順・対象アプリ・合格条件（安定仕様）は
+`compat-test/m5_uiless_pbshow_checklist.md`** に定める。実機 Win11 が必要なため DEV-97 の子課題 DEV-153
 （`gate:human-required`）で M5 着手時に実施し、**アプリ別の実測結果（可変ログ）は
 docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
 
@@ -562,6 +498,10 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 
 `VK_OEM_ATTN` と `VK_DBE_ALPHANUMERIC` は同じ VK 値の別名なので、
 VK だけから区別しない。
+
+本表は TIP の最終挙動である。core の `UserActionMap` が返す値（`VK_KANJI` → `ToggleHankaku`、
+`VK_NONCONVERT` → `ToggleHiraKata` など）は `docs/legacy-parity-spec.md` §1.4 が定め、開閉キーは
+TIP がその写像より前に処理する。
 
 `VK_DBE_KATAKANA`（0xF1、Shift 付きのカタカナひらがなキー）は扱わず、アプリへ渡す。Windows 版には
 カタカナ入力モードが無いためで、legacy にもカタカナキーは無い。Alt 付きのカタカナひらがなキー
@@ -616,16 +556,10 @@ TIP は `settings.json` の変更を読み直して反映する。キーが無�
 
 ### 3.4 受け入れ条件
 
-- メモ帳で半角/全角キー → IME のオン/オフがトグル
-- 「あした」を選択して無変換キー → 「アシタ」→「ｱｼﾀ」→「ＡＳＨＩＴＡ」→「ASHITA」と巡回
-- 「あした」を選択して変換キー → 「明日」候補が出る
-- 英数モードと IME Off でカタカナひらがなキー（修飾なし）→ ひらがな入力になり、キーはアプリへ渡らない。
-  Shift 付き・Alt 付きはアプリへ渡る
-- `kanji` → F7 で「カンジ」、F8 で「ｶﾝｼﾞ」、F9 で「ｋａｎｊｉ」、F10 で「kanji」、F6 で「かんじ」が確定する（§3.6）。
-  `dai3kai` → F7 で「ダイ3カイ」、F10 で「dai3kai」
-- 読みが無いときの F7・F10 はアプリへ渡る（Debug ビルドの F10 はデバッグ窓）
-- ひらがなモードで読みが無いときの Space → 全角空白、Shift+Space → 半角空白（`fullWidthSpace = true`、§3.7）
-- `dai3kai` → 読み「だい3かい」、`ji:kan` → 読み「じ：かん」、`kakko[` → 読み「かっこ「」（`bracketPairing = false`、§3.5）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M22 節とする。本節は受け入れ条件を複製しない。
+
+F6〜F10 の字種指定確定（§3.6）の受け入れ条件は roadmap の M64 節が持つ。
 
 ### 3.5 OEM 記号キーと明示句読点
 
@@ -959,20 +893,8 @@ On → Off で何を確定するかは、Off にした操作で決まる。
 
 ### 4.4 受け入れ条件
 
-- azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
-- 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
-- 開いたことのある入力先へ戻ったとき、TIP は開閉を書き込まない（IMM32 互換層が入力先ごとの状態を戻すアプリでは、Off にした入力先は Off のまま）
-- 半角/全角キーで IME On/Off が切り替わり、Status を反映。ライブ変換・候補の表示中に Off にすると、表示中の文字列を確定してから Off になる
-- フォーカス喪失、TIP の外からの Off、英数モードへの切替では、ライブ変換・候補の表示中なら表示中の文字列が確定し、学習観測は送られない（§4.3）
-- 確定の edit session が拒否されて再試行を待つ間に打ったキーは、次のキーで確定し直した後に打った順で入力される（§2.4.1）
-- `VK_IME_ON` で Off から On になり、On のままなら変わらない。英数モード中の `VK_IME_ON` はひらがなに戻る
-- `VK_IME_OFF` で On から Off になり、Off のままなら変わらない。読み入力中・候補表示中は表示中の文字列を確定してから Off になる
-- 初回フォーカスから 1 秒以内でも、開閉キーと入力インジケーターのクリックによる Off は On に戻らない
-- `convertKeysAction` が `default` のとき変換・無変換は §3.2・§3.3 のとおり。`imeOnOff` のとき変換で On、無変換で Off になり、再変換と巡回は起きない
-- 入力インジケーターが On・英数モード・Off を「あ」「_A」「A」で表示し、左クリックで On/Off が切り替わる（§4.5）
-- 入力インジケーターの右クリックのメニューで、ひらがな・半角英数・直接入力を切り替え、ライブ変換と予測を反転して settings.json に残し、設定アプリを開ける。管理者・低 IL・AppContainer のプロセスではライブ変換と予測がグレーアウトする（§4.5）
-- Win+Space で別言語に切替時、composition が確定される
-- アプリ切替時に composition が確定される
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ### 4.5 入力インジケーター（言語バー項目 `GUID_LBI_INPUTMODE`）
 
@@ -1123,13 +1045,11 @@ segment は区間を持たないので、各文節が表示している文字列
 
 ### 5.5 受け入れ条件
 
-一括変換（`batchRomajiConversion` が true）で文節を候補窓に表示しているとき（§5.4）:
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M23 節とする。本節は受け入れ条件を複製しない。
 
-- 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
-- 矢印キー（Left/Right）で文節を移動できる（カーソル位置によって色が動く）
-
-provider は色を指定しないため、「青背景」はアプリが `TF_ATTR_TARGET_CONVERTED` を描く配色である。
-アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
+roadmap M23 の「青背景」は、provider が色を指定しないため、アプリが `TF_ATTR_TARGET_CONVERTED` を
+描く配色である。アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
 
 一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たないので
 §5.6 の fallback 属性（入力中と同じ細い実線）になる。注目文節の強調は付かず、変換中であることは
@@ -1332,12 +1252,8 @@ composition の末尾より後ろは最後の文節とする。
 
 ### 7.3 受け入れ条件
 
-一括変換の文節を表示しているとき（§5.4）:
-
-- 変換中 preedit の途中をマウスでクリック → 該当文節が注目に切り替わる
-- 候補ウィンドウが該当文節の候補を表示し直す
-
-文節を表示していないときは、クリックを食わずアプリへ渡す（`OnMouseEvent` の `SegmentIndexAtMouseEdge`）。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M23 節とする。本節は受け入れ条件を複製しない。
 
 ## 8. 予測窓と UI-less Mode の関係
 
@@ -1353,8 +1269,8 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 
 ### 8.1 受け入れ条件
 
-- UI-less の環境でも、読み入力中は自前 `PredictionWindow` が出る
-- 候補窓の表示中は予測窓が出ない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ## 9. テスト
 

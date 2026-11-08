@@ -4,22 +4,31 @@
 機能の仕様を定める。対象は **Windows 版（C++ 移植: `core/` `learning/` `ipc/`
 `inference-host/` `tsf-tip/`）** のみ。macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M36-A（マイニング） /
-M36-B（トレンド）+ M53（辞書層全体再設計）。
 姉妹機能: `docs/typo-correction-learning-spec.md`（M35 + M55 統合補正）、
 `docs/conversion-quality-benchmark-spec.md`（M52）。
 
-> **本仕様の段差**: §1〜§13 は M36-A / M36-B の正典。
-> §14 以降は M53 の追補章で、`AutoWordStore` を **多層 DictionaryStore**
-> の 1 レイヤとして統合し、辞書層全体（base / sudachi / neologd /
-> named_entity / technical_terms / user / app_specific）を再設計する。
-> M36-A / M36-B の挙動は M53 でも下位互換として維持する。
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2、§10〜§13 | M36-A・M36-B 共通 |
+| §3〜§4、§6〜§9 | M36-A |
+| §5 | M36-B |
+| §14 | M53（辞書層の論理層） |
+| §15 | M53（system 辞書の物理層） |
+
+§14 以降は M53 の追補章で、`AutoWordStore` を **多層 DictionaryStore**
+の 1 レイヤとして統合し、辞書層全体（base / sudachi / neologd /
+named_entity / technical_terms / user / app_specific）を再設計する。
+M36-A / M36-B の挙動は M53 でも下位互換として維持する。
 
 ## 1. 背景と目的
 
-- 現状の辞書は 3 層: `SimpleConverter`（内蔵辞書 + `LoadFromTsv`）/
+- `SimpleConverter`（内蔵辞書 + `LoadFromTsv`）/
   `learning::UserDictionary`（**手動登録**の JSON 辞書）/ `learning::LearningStore`
-  （確定履歴の重み付け再ランキング）。いずれも「新語を能動的に取り込む」機構を
+  （確定履歴の重み付け再ランキング）の 3 層は、いずれも「新語を能動的に取り込む」機構を
   持たない。
 - 本機能は、ユーザーがよく使うのに辞書に無い語（未知語＝OOV）や、世間で新しく
   使われ始めた語（トレンド語）を自動的に収集し、変換候補に反映する。
@@ -37,26 +46,18 @@ M36-B（トレンド）+ M53（辞書層全体再設計）。
 
 ### 3-1. データモデル
 
-```cpp
-namespace azookey::learning {
+型の正典は `learning/include/azookey/learning/AutoWordStore.h` の `AutoWord`（と `AutoWordSource` /
+`AutoWordState`）である。1 語は `(surface, reading)` で一意とし、各フィールドは次の意味を持つ。
 
-enum class AutoWordSource { Mining, Trending };
-enum class AutoWordState  { Pending, Confirmed, Rejected };
-
-struct AutoWord {
-  std::string     surface;            // 表面形
-  std::string     reading;            // かな読み（マイニングは確定時の読み）
-  AutoWordSource  source{AutoWordSource::Mining};
-  AutoWordState   state{AutoWordState::Pending};
-  uint32_t        count{0};           // 観測頻度（mining）/ rank 由来初期値（trending）
-  uint64_t        first_seen_epoch{0};
-  uint64_t        last_seen_epoch{0};
-  double          score{0.0};         // 候補注入時スコア
-};
-// (surface, reading) で一意。
-
-}  // namespace azookey::learning
-```
+| フィールド | 意味 | 既定 |
+|---|---|---|
+| `surface` | 表面形 | — |
+| `reading` | かな読み。マイニングでは確定時の読み | — |
+| `source` | 取得元。`Mining`（§4）または `Trending`（§5） | `Mining` |
+| `state` | 承認状態。`Pending` / `Confirmed` / `Rejected`（§7） | `Pending` |
+| `count` | マイニングでは観測頻度、トレンドでは rank 由来の初期値 | 0 |
+| `first_seen_epoch` / `last_seen_epoch` | 初回・最終の観測時刻（epoch 秒） | 0 |
+| `score` | 候補へ注入するときのスコア。0 なら §6 の既定スコアを使う | 0.0 |
 
 ### 3-2. 永続化形式
 
@@ -402,28 +403,23 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
 - `ipc/include/azookey/ipc/Messages.h`: `MessageType` に
   `ListNewWordCandidates`、`ResolveNewWord` を追加。
 - `ipc/src/Messages.cpp`: `TypeToString` / `TypeFromString` に対応追加。
-- `ipc/include/azookey/ipc/Payloads.h` / `src/Payloads.cpp`:
+- payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `ListNewWordCandidatesRequest` /
+  `NewWordField` / `ListNewWordCandidatesResponse` / `ResolveNewWordRequest` /
+  `ResolveNewWordResponse` と、`ipc/src/Payloads.cpp` の codec である。wire key は C++ のメンバ名と同じ。
 
-```cpp
-struct ListNewWordCandidatesRequest { std::string state_filter{"pending"}; uint32_t max_items{50}; };
-struct NewWordField {
-  std::string surface, reading, source, state;
-  uint32_t count{0};
-  uint64_t last_seen_epoch{0};
-};
-struct ListNewWordCandidatesResponse {
-  bool ok{true};
-  std::optional<std::string> error;
-  std::vector<NewWordField> items;
-};
+本節と §7-2 は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、
+フィールドの意味を次のとおり定める。
 
-struct ResolveNewWordRequest { std::string surface, reading, action; }; // action: confirm|reject
-struct ResolveNewWordResponse {
-  bool ok{false};
-  bool changed{false};
-  std::optional<std::string> error;
-};
-```
+| payload | フィールド | 意味 | 欠落時 |
+|---|---|---|---|
+| `ListNewWordCandidatesRequest` | `state_filter` | 一覧する状態（下記の受理条件） | `pending` |
+| 同上 | `max_items` | 返す件数の上限（下記の受理条件） | 50 |
+| `NewWordField` | `surface` / `reading` / `count` / `last_seen_epoch` | §3-1 の同名フィールド | — |
+| 同上 | `source` / `state` | §3-2 の TSV と同じ小文字の名前（`mining` / `trending`、`pending` / `confirmed` / `rejected`） | — |
+| `ListNewWordCandidatesResponse` | `ok` / `error` / `items` | 下記「応答の意味」 | `ok=true` |
+| `ResolveNewWordRequest` | `surface` / `reading` | 対象の語 | — |
+| 同上 | `action` | `confirm` または `reject` | — |
+| `ResolveNewWordResponse` | `ok` / `changed` / `error` | 下記「応答の意味」 | `changed=false` |
 
 parser の受理条件:
 
@@ -472,14 +468,14 @@ parser の受理条件:
   `save_failed` を返す。保存中は writer の mutex で別の接続の承認・却下を待たせ、
   成功時だけ表を公開する。失敗時の表は操作前のままである。
 
-### 7-3. UI と MVP 暫定
+### 7-3. 承認 UI と代替経路
 
-- **本命 UI**: M30 WinUI3 設定アプリの辞書ペインに「新語候補」リストを追加。
+- **承認 UI**: M30 WinUI3 設定アプリの辞書ペインに「新語候補」リストを置く。
   pending を `ListNewWordCandidates` で取得、各行に登録/却下ボタン →
   `ResolveNewWord`。M36 の承認 UI は M30 に依存する。
-- **M30 完成前の MVP 暫定**（いずれか／併用）:
-  1. **auto モード限定運用** — 承認 UI が無い間は `registrationMode=auto` を
-     推奨設定とし、pending を経ず即 confirmed。
+- **承認 UI を使わない経路**（いずれか／併用）:
+  1. **auto モード** — `registrationMode=auto` では pending を経ず即 confirmed
+     になる。承認 UI を使えない環境の推奨設定とする。
   2. **host の `newwords` サブコマンド** — 検証・dogfooding 用のワンショット
      CLI。`userdict` / `lookup` と同じく host の引数に `newwords` を置き、
      それ以降をサブコマンドの引数として読む。
@@ -500,7 +496,7 @@ parser の受理条件:
        Handshake の後に `ResolveNewWord` を送る。host はストアをメモリ上に持ち、
        次の保存でファイル全体を書き直す。稼働中の host の裏でファイルを編集すると
        変更が失われるため、接続できない場合は失敗とする（接続の待ち時間は
-       `docs/windows-tsf-host-architecture.md` の CLI の項に従う）。`--offline` を付けた
+       `docs/learning-data-management-spec.md` §13 に従う）。`--offline` を付けた
        ときだけファイルを直接編集する。直接編集は host と同じ `Load` / `Save`
        を使うので、読めなかった破損行は書き直しで失われる（§3-2 のスキップ規則）。
      - JSON 出力は 1 行 1 オブジェクトとする。`list` は語ごとに `op` / `ok` /
@@ -515,31 +511,21 @@ parser の受理条件:
 
 ## 8. 設定
 
-`settings/mvp-settings.schema.json` の `autoWordRegistration` として定義する。
+型・既定値・範囲の正典は `settings/mvp-settings.schema.json` の `autoWordRegistration` である
+（schema の `description` が本節を指す）。本節は各キーの意味と反映先を定める。
 
-```json
-"autoWordRegistration": {
-  "type": "object",
-  "description": "M36: 新語の自動取得・辞書追加",
-  "properties": {
-    "miningEnabled":   { "type": "boolean", "default": true },
-    "trendingEnabled": { "type": "boolean", "default": false },
-    "registrationMode": { "type": "string", "enum": ["confirm", "auto"], "default": "confirm" },
-    "miningMinCount":  { "type": "integer", "default": 3, "minimum": 1, "maximum": 100 },
-    "trendingIntervalHours": { "type": "integer", "default": 24, "minimum": 1, "maximum": 8760 }
-  },
-  "additionalProperties": false
-}
-```
+| キー | 意味 | `EngineConfig` の反映先 |
+|---|---|---|
+| `miningEnabled` | ユーザー入力マイニング（§4）を行う | `auto_word_mining_enabled` |
+| `trendingEnabled` | トレンド語の取得（§5）を行う | `auto_word_trending_enabled` |
+| `registrationMode` | `confirm` は pending を経て承認（§7）、`auto` はしきい値到達で即 confirmed | `auto_word_auto_register`（`auto` のとき true） |
+| `miningMinCount` | マイニングで昇格に要る観測回数 | `auto_word_min_count` |
+| `trendingIntervalHours` | トレンド語を取得する間隔（時間） | `auto_word_trending_interval_hours` |
 
 実効値の経路は `settings.json` の `autoWordRegistration.*` とする。host の
-`SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が `EngineConfig` の
-`auto_word_mining_enabled` / `auto_word_auto_register`（`registrationMode == "auto"`）/
-`auto_word_min_count` へ反映する。
+`SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が上表の `EngineConfig` へ反映する。
 
-`trendingIntervalHours` の上限は 8760（1 年）とする。`EngineConfig` の
-`auto_word_trending_enabled` / `auto_word_trending_interval_hours` へも反映し、
-`Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
+`trendingIntervalHours` の上限は 8760（1 年）とする。`Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
 SafeMode または `privacy.mode=offline` では `trendingEnabled` の実効値を false とする。
 offline による抑止は保存された `trendingEnabled` を変更せず、通常モードへ戻ると元の設定を使う。
 `auto_word_default_score` は §6 の注入が使う `EngineConfig` の内部値であり、
@@ -563,41 +549,15 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 
 ## 10. マイルストーン分割
 
-| MS | 内容 | 前提 |
-|---|---|---|
-| M36-A | ユーザー入力マイニングによる新語自動登録 | M6 のみ。HTTP 非依存で独立着手可 |
-| M36-B | リモートトレンド語取得 | M36-A 完了 + M32 の WinHTTP 基盤（`HttpDownloader`） |
+本節は削除した（M36-A と M36-B の範囲と前提は roadmap の M36-A・M36-B 節が持つ）。
 
 ## 11. 変更対象ファイル一覧
 
-| 区分 | ファイル | MS |
-|---|---|---|
-| 新規 | `learning/include/azookey/learning/AutoWordStore.h` / `src/AutoWordStore.cpp` | A |
-| 新規 | `learning/tests/auto_word_store_test.cpp` | A |
-| 編集 | `core/include/azookey/core/IConverter.h`（`Contains`） | A |
-| 編集 | `core/include/azookey/core/SimpleConverter.h`, `core/src/SimpleConverter.cpp` | A |
-| 編集 | `core/tests/simple_converter_test.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` | A |
-| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` | A |
-| 新規 | `inference-host/include/azookey/host/TrendingWordFetcher.h` / `src/TrendingWordFetcher.cpp` | B |
-| 再利用 | `inference-host/include/azookey/host/HttpDownloader.h` / `src/HttpDownloader.cpp`（M32 で新設。§5-4） | B |
-| 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` | A |
-| 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/ZenzaiModelConverter.h`, `src/ZenzaiModelConverter.cpp`（`Contains`） | A |
-| 新規 | `inference-host/include/azookey/host/NewWordsCli.h` / `src/NewWordsCli.cpp`（§7-3） | A |
-| 編集 | `inference-host/include/azookey/host/HostArgs.h`, `src/HostArgs.cpp` | A |
-| 新規 | `inference-host/tests/newwords_cli_test.cpp` | A |
-| 編集 | `inference-host/src/main.cpp` | A / B |
-| 編集 | `settings/mvp-settings.schema.json` | A |
-| 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` | A |
-| 編集 | `inference-host/CMakeLists.txt`, `inference-host/tests/CMakeLists.txt` | B |
+本節は削除した（変更対象は roadmap の M 節、テストは `docs/test-inventory.md` が持つ）。
 
 ## 12. テスト計画
 
-- 新規 `learning/tests/auto_word_store_test.cpp`:
+- `learning/tests/auto_word_store_test.cpp`:
   `Observe` の pending 追加 → count++ → しきい値で Confirmed 昇格 /
   `auto_promote` 即昇格 / Reject 後の再 `Observe` が無視される /
   `LookupConfirmed` が pending を返さない / `IngestTrending` の rejected skip・
@@ -633,19 +593,7 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 
 ## 13. 検証手順（実装後）
 
-1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
-2. テスト: `ctest --preset windows-debug --output-on-failure`
-   （`auto_word_store_tests` / `payloads_test` / `engine_test` /
-   `dispatcher_test`、M36-B では `host_trending_word_fetcher_tests` が green）。
-3. `settings.json` に `autoWordRegistration.miningEnabled: true` と
-   `registrationMode: "auto"` を書いて host を stdio 起動し、辞書に無い
-   `(reading, surface)` の `CommitObservation` を `miningMinCount` 回送ってから
-   同じ reading の `QueryCandidates` を投げ、`auto-word` マーク付き候補が
-   注入されることを確認。`confirm` モードでは `azookey_inference_host newwords list` で
-   pending を確認し、`azookey_inference_host newwords confirm --reading <reading>
-   --surface <surface>` で承認した後に注入されることを確認。
-4. M36-B: 正規アセットとハッシュ不一致アセットの両方で `FetchOnce` を実行し、
-   検証通過時のみ取り込まれることを確認。
+本節は削除した（ビルドとテストの手順は `README.md`、テスト一覧は `docs/test-inventory.md` が持つ）。
 
 ---
 
@@ -789,7 +737,7 @@ key・別 namespace の辞書層内因子であり、二重適用しない。
 
 ### 14.7 DictionaryStore 実装
 
-`learning/src/DictionaryStore.cpp`（新規）として実装:
+`learning/src/DictionaryStore.cpp` として実装:
 
 ```cpp
 class DictionaryStore {
@@ -976,7 +924,7 @@ pack のファイル名、マニフェスト、生成ツール、検証順序は
   としての** notices は ThirdPartyNotices に不要（別 pack DL 時に上流ライセンス/
   帰属を DL 画面で提示する）。ただし上記のとおり SudachiDict 内包の NEologd 由来
   データの帰属は同梱物の一部として含める。
-- **配布ガード**（受け入れ条件 §14.13）: MSI 構築前に同梱アセットへ
+- **配布ガード**（roadmap M53 の受け入れ条件）: MSI 構築前に同梱アセットへ
   **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
   が混入しないことを release workflow の `dictbuild/check_bundle.py` でチェックする。ガードの対象は NEologd 単体パックで
   あり、**SudachiDict(core) が Apache-2.0 で内包する NEologd 由来データは対象外**
@@ -1025,11 +973,9 @@ named_entity 系（`person_name` / `place_name` / `station_name` / `product_name
 （§14.11 worked example と整合）。
 
 M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
-**ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の
-`final_score` に対し §7 正準の clamp 式
-`final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]）を **1 回
-だけ**適用する（DictionaryStore 由来候補にも §14.12 で付与した単一タグに基づき
-同経路で作用。二重適用を避けるため `dictionary_score` には入れない）。
+**ない**（§14.5）。M48 タグ boost は候補の score に **1 回だけ**掛ける（clamp 式と適用位置は
+`docs/app-profile-spec.md` §7 が正典）。DictionaryStore 由来候補にも §14.12 で付与した単一タグに
+基づき同経路で作用し、二重適用を避けるため `dictionary_score` には入れない。
 
 worked example（`code.exe` 前面・`candidateTagBoosts.Technical = 1.5`、エントリ
 "TensorRT" / `technical_terms` / frequency 0.72 / 完全一致 / `categoryBoosts.technical = 1.0`）:
@@ -1044,9 +990,8 @@ dictionary_score
   = 1.32
 ```
 
-その後、M48 タグ boost は app-profile-spec §7 が `final_score` に対して別途
-適用する（"TensorRT" は §14.12 で `Technical` タグが付くため
-`final_score *= min(3.0, max(1.0, 1.5))`（= 1.5）。`dictionary_score` 内では二重適用しない）。
+その後、M48 タグ boost は app-profile-spec §7 の式で候補の score に別途掛かる
+（"TensorRT" は §14.12 で `Technical` タグが付くので倍率 1.5。`dictionary_score` 内では二重適用しない）。
 `dictionary_score` の正規化は不要（DictionaryStore 内の相対ランク + merge
 ブースト量として使用）。本例（`dictionary_score = 1.32`）は単体テストの
 期待値とする（§14.13）。
@@ -1085,8 +1030,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   両タグの同時保持・
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
-- 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
-  §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]。負の `final_score` は同じ倍率で割る）として 1 回適用する
+- 付与された単一タグに対する M48 boost は **app-profile-spec §7** の clamp 式で 1 回適用する
   （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
   含めない（二重適用回避）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。辞書 category からの
@@ -1115,7 +1059,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   内包する NEologd 由来データは対象外。
 - `app_specific_dictionary` layer は M48 未完了時に空（無効）として扱う。
 
-## 15. M53 追補（DEV-412）: system 辞書の物理層
+## 15. M53 追補: system 辞書の物理層
 
 §14 は辞書層の**論理設計**（層構成・エントリ意味・スコア・ライセンス判定）を定める。
 本章はその下にある**物理層**、すなわち読みの索引構造・ディスク上の直列化形式・
@@ -1137,7 +1081,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   この配置なら層の向きを崩さずに `DictionaryStore` から使える。
 - **`learning/`**: `DictionaryStore`（§14.7）と各 `IDictionaryLayer` 実装。層の有効化・
   dedup・スコアは §14 の責務。
-- **`dictbuild/`**（新規のホストツール）: 上流データから `.azdic` を生成するオフライン
+- **`dictbuild/`**（ホストツール）: 上流データから `.azdic` を生成するオフライン
   ビルダ。IME 実行時には存在しない。
 
 ランタイムは `.azdic` を**読むだけ**であり、書かない。書き込みが要る層は §15.7 の
@@ -1203,17 +1147,18 @@ mutable 層が別の結果を返すことになる。
   「とうきょう」「とうきょうと」が返る。入力途中の読みを補完する向きであり、M15 予測候補
   ウィンドウが要求するのはこちら。
 
+型の正典は `core/include/azookey/core/DoubleArrayTrie.h` の `PrefixMatch` と `MatchKind` である。
+
+| 型 | 要素 | 意味 |
+|---|---|---|
+| `PrefixMatch` | `key_length` | マッチしたキーのバイト長（UTF-8 の文字境界で終わる） |
+| 同上 | `key_id` | KEYS セクションの index（§15.5） |
+| 同上 | `entry_ref_off` | EIDX セクション内のオフセット（§15.5） |
+| 同上 | `entry_count` | このキーに紐づくエントリ数 |
+| `MatchKind`（`uint8_t`） | `Exact` = 0 / `Alias` = 1 / `LongVowelRelaxed` = 2 | エントリへの参照の一致種別（§15.3）。数値は §15.5 の `EIDX` に書く値 |
+
 ```cpp
 namespace azookey::core {
-
-enum class MatchKind : uint8_t { Exact = 0, Alias = 1, LongVowelRelaxed = 2 };
-
-struct PrefixMatch {
-  uint32_t key_length;      // マッチしたキーのバイト長（UTF-8 の文字境界で終わる）
-  uint32_t key_id;          // KEYS セクションの index（§15.5）
-  uint32_t entry_ref_off;   // EIDX セクション内のオフセット（§15.5）
-  uint32_t entry_count;     // このキーに紐づくエントリ数
-};
 
 class DoubleArrayTrie {
  public:
@@ -1604,7 +1549,7 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 | 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
 | 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |
 
-### 15.11 DEV-412 受け入れ条件
+### 15.11 物理層の受け入れ条件
 
 物理層（`.azdic`）の受け入れ条件の定義も、論理層と同じく
 [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) の M53 節を正典とする

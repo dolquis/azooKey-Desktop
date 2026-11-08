@@ -16,8 +16,8 @@
                logs to the host.
     -Restore : restores the MSI-specific checkpoint (MSI copied, not installed).
 
-  A person runs msiexec (hyper-v-vm-verification-plan.md section 4.5 keeps MSI
-  install and uninstall out of agent scope), so -Run does not accept an MSI.
+  A person runs msiexec (the agent delegation section of hyper-v-tip-verification.md
+  keeps MSI install and uninstall out of agent scope), so -Run does not accept an MSI.
 
   Keep this file ASCII-only. vm-verify-session.ps1 supports Windows PowerShell 5.1,
   which reads a UTF-8 file without BOM in the ANSI code page; multibyte comments
@@ -143,11 +143,11 @@ function Invoke-VmVerifyMsiPrepare {
     [string]$ResultsDirectory = ""
   )
 
-  # Lane 1 starts from the clean checkpoint without vc_redist. The plan section 2
-  # baseline already has vc_redist, so there is no default; the caller names it.
+  # Lane 1 starts from the clean checkpoint without vc_redist. The VM configuration
+  # baseline in hyper-v-tip-verification.md already has vc_redist, so there is no default; the caller names it.
   if (-not $CleanCheckpointName) {
     throw ("-CleanCheckpointName is required for an MSI. Lane 1 starts from the clean checkpoint " +
-      "without the VC++ Redistributable, which differs from the plan section 2 baseline.")
+      "without the VC++ Redistributable, which differs from the VM configuration baseline.")
   }
   $identity = Get-VmVerifyMsiIdentity -PackagePath $PackagePath
   $checkpoint = $CheckpointName

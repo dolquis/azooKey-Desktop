@@ -67,6 +67,7 @@ surface へ自動句読点を含めて表示する。
 
 遷移への影響（`dynamicPunctuation == true` かつ `liveConversion == true` のとき）:
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Composing/Previewing | Input | Previewing | ライブ変換要求（`QueryLiveConversion`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface を Preedit にする（書き込みは `docs/tsf-deep-integration-spec.md` §5.6、応答までの表示は `docs/legacy-parity-spec.md` §2.3.1） |
@@ -86,7 +87,7 @@ host 側（`inference-host`）で判定する。**host はリクエストの `au
 （§7.1.1）のときだけ**句読点を挿入し、`false` のときは句読点なしの surface を返す
 （タイピング中の抑制は TIP がこのフラグで制御する）。挿入位置の判定は二層構成:
 
-- **決定的レイヤ（既定・M59 コア）**: `PunctuationInserter`（新規）が、変換後 surface と
+- **決定的レイヤ（既定・M59 コア）**: `PunctuationInserter` が、変換後 surface と
   **文節境界（live 変換応答の `segments[]`、§7.2）**を入力に、文節境界での読点 `、` と
   文末の句点 `。` を挿入する。形態素解析器を持たないため、各文節末尾の**表層サフィックス
   一致**で節境界を判定する。規則表（既定。bench M52・実機で調整。本表が決定的レイヤの
@@ -596,7 +597,7 @@ TIP の `ITfRange` 範囲操作専用、学習スライスは `surface` 文字�
 §4.1.2 の曖昧性ガードを品詞で駆動するため、各 segment に**任意の品詞フィールド**を追加する。
 
 ```cpp
-// core/include/azookey/core/SegmentPos.h（新規・core で converter と host が共有）
+// core/include/azookey/core/SegmentPos.h（core で converter と host が共有）
 enum class SegmentPos : uint8_t {
   Unknown    = 0,   // 品詞不明（既定。フォールバックで表層ヒューリスティック）
   Taigen     = 1,   // 体言（名詞・代名詞・数詞）
@@ -832,7 +833,7 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   なること（§7.2.2）。`id.def` 欠落・パース不能時に全 cid が `Unknown` へ縮退すること（§7.2.4）。
 - **mid → SegmentSemantic 補助判定** (host テスト): 地名連鎖（`prev_sem=next_head_sem=PlaceName`）
   で読点抑制、日付連なりの内部抑制、mid 欠落時に `Unknown`（補助無効）になること（§7.2.3）。
-- **TSV ルール外部化** (`core/tests/punctuation_rules_test.cpp` 新規): TSV のパース、`(kind,match)`
+- **TSV ルール外部化** (`core/tests/punctuation_rules_test.cpp`): TSV のパース、`(kind,match)`
   上書き・新規追加・`base_score=0` 無効化、不正行スキップ、字を含めない（字種は
   `dynamicPunctuationStyle` 由来）こと。
 - **guard EBNF 評価** (同上): `=`/`!=`/`;`(AND)・空 guard 常真・`sentence_final`・`prev_sem` /

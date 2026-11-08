@@ -13,7 +13,7 @@
     -Run     : runs bootstrap inside the guest over PowerShell Direct, runs
                azookey_diag.exe --json and compat_test.exe through a scheduled
                task of the interactive user, and collects the artifacts on the host
-               (L1 in docs/handoff/hyper-v-vm-verification-plan.md section 5).
+               (layer 1 of the verification flow in docs/handoff/hyper-v-tip-verification.md).
                The diag output is azookey-diag.json in the run directory and can
                be passed as-is to vm-verify-summary.ps1 -DiagJsonPath.
     -Restore : restores the given checkpoint.
@@ -632,7 +632,8 @@ function Invoke-VmVerifySessionGuestRun {
     -Description ("verify-bootstrap.ps1 -Json over PowerShell Direct (exit $directExitCode; " +
       "see bootstrap-direct.error.log in the artifacts)")
   Write-Host "Bootstrap over PowerShell Direct: $($direct.overallStatus)"
-  # Do not proceed to compat when the layer 1 bootstrap fails (plan section 3).
+  # Do not proceed to compat when the layer 1 bootstrap fails (verification flow in
+  # hyper-v-tip-verification.md).
   if ($direct.overallStatus -eq "fail") {
     $failed = @($direct.checks | Where-Object { $_.status -eq "fail" } |
         ForEach-Object { "$($_.id): $($_.message)" })
@@ -854,7 +855,7 @@ if ($MyInvocation.InvocationName -ne ".") {
   $isMsi = Test-VmVerifyMsiPackagePath -PackagePath $PackagePath
   if ($isMsi -and $Run) {
     throw ("-Run does not accept an MSI: a person runs msiexec in lane 1 " +
-      "(hyper-v-vm-verification-plan.md section 4.5). Use -Prepare, install it, then -Collect.")
+      "(agent delegation section of hyper-v-tip-verification.md). Use -Prepare, install it, then -Collect.")
   }
   if ($Collect -and -not $isMsi) {
     throw "-Collect applies only to an MSI. Pass -PackagePath <file>.msi."

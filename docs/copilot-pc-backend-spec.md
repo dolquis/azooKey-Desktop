@@ -4,6 +4,19 @@
 バックエンドの選定と実装方針を定める。`plans/windows-port-roadmap.md` の
 Phase 6 の M24〜M27 が本書を参照する。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3 | M24 |
+| §4 | M8・M24 |
+| §5〜§6 | M25 |
+| §7 | M26 |
+| §8 | M27 |
+| §9〜§10 | M24〜M27 共通 |
+
 ## 1. BackendKind enum 拡張
 
 `inference-host/include/azookey/host/InferenceEngine.h`：
@@ -154,8 +167,8 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 | **R2** | ONNX Runtime GenAI + Windows ML | ONNX Runtime GenAI 形式（**要変換**。R1 と同じモデルの変換物、§4.3） | Windows ML が自動選択（NPU: QNN/OpenVINO/VitisAI、GPU: NvTensorRtRtx/OpenVINO、CPU: ORT） | ◎（Copilot+ PC） | Windows Update 配信（**非バンドル**） |
 
 > **注（GenAI 対応 EP）**: R2 は GenAI（LLM）経路のため、**MIGraphX(AMD GPU) は除外**する。
-> Windows ML の EP 仕様で `MIGraphXExecutionProvider` は現状 *GenAI シナリオ未対応*と
-> 明記されている（[Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers)）。
+> Windows ML の EP 仕様は `MIGraphXExecutionProvider` を *GenAI シナリオ未対応*と
+> 明記している（[Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers)）。
 > AMD は NPU=VitisAI（Ryzen AI）で扱い、GPU GenAI は Microsoft が MIGraphX の GenAI 対応を
 > 有効化した時点で再評価する。それまで AMD GPU 環境は R1（ggml-cuda は NVIDIA 専用のため
 > 実質 ggml-vulkan）または R1 CPU にフォールバックする。
@@ -200,24 +213,14 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
   不可（§4.2.2）、Llama 構造の `kanakanji-edge-33m` では可（§4.2.3）と判定した。出典:
   [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
   [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
-- `gate:human-required` の DEV-194 の検証範囲のうち、R1 CPU の実機計測は完了した。
-  Snapdragon X Elite / Intel Core Ultra の NPU / GPU EP の計測は、§4.3 項 2 の再開条件を
+- Snapdragon X Elite / Intel Core Ultra の NPU / GPU EP の計測は、§4.3 項 2 の再開条件を
   満たした R2 artifact で、同じ入力セットを使って Human Gate（DEV-1720）が行う。
 
 #### 4.2.1 R1 CPU 実モデル baseline
 
-DEV-194 では、次の固定条件で R1 CPU を計測した。
-
-- リポジトリ: commit `6abce8d2595a05c4358dacf459b691b3cc946d04`
-- OS / CPU: Windows build 26200.9168 / Intel Core i7-12700KF / x64 / NPU なし
-- build: `windows-release`、`llama_cpp=1`、`requested_backend=cpu`、
-  `effective_backend=cpu`
-- model: `Miwa-Keita/zenz-v3.2-small-gguf` の `ggml-model-Q5_K_M.gguf`、
-  73,871,936 bytes（70.45MiB）、SHA-256
-  `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`
-- 各入力を別プロセスで実行し、warm-up 3 回、計測 20 回とした。
-
-入力セットは次の 20 件である。
+R1 CPU の baseline は、`windows-release`（`llama_cpp=1`、`requested_backend=cpu`）と
+`Miwa-Keita/zenz-v3.2-small-gguf` の `ggml-model-Q5_K_M.gguf` で、各入力を別プロセスで
+実行して計測する。入力セットは次の 20 件である。
 
 ```text
 こんにちは / にほんご / きょうはいいてんきです / わたしはがくせいです
@@ -228,97 +231,50 @@ DEV-194 では、次の固定条件で R1 CPU を計測した。
 せっていをひらく / ぱそこんをさいきどうする
 ```
 
-| 指標 | 結果 |
-|---|---|
-| 初回 `LoadModel` | 中央値 22.80ms |
-| 入力別 p50 | 中央値 501.38ms、範囲 196.02–810.19ms |
-| p50 < 30ms | 0 / 20 入力 |
-| `にほんご` 50 回 | p50 197.03ms / p95 210.73ms / p99 215.37ms |
-| peak RSS | 122.52MiB（`にほんご`、warm-up 3 回 + 計測 50 回の代表値） |
-| 実推論 | 20 / 20 入力で exit 0、`zenzai_candidates=4` |
+baseline の計測では、R1 CPU は初回 `LoadModel` の 3 秒ゲートを満たし、推論 p50 の 30ms ゲートと、モデル単体が
+50MB を超えるため配布サイズの 50MB ゲートを満たさない。いずれも §4.2 の相対ゲートに対する
+値であり、R1 CPU の出荷可否を示すものではなく、R2 の性能を推定する根拠にもしない。
+R1 CPU の絶対予算に対する評価は `zenzai-inference-spec` §8 による。
 
-この計測時点では、ロード時間は 3 秒ゲートを満たし、推論 p50 は 20 入力すべてで
-30ms を上回った。また、モデル単体が 50MB を超えるため、R1 の配布サイズは 50MB
-ゲートを満たさない。いずれも §4.2 の通り相対ゲートに対する値であり、R1 CPU の
-出荷可否を示すものではない。この結果は R1 CPU baseline であり、R2 の性能を
-推定する根拠にはしない。R1 CPU の絶対予算に対する評価は
-`zenzai-inference-spec` §8 による。
-
-なお本節の値は計測時点（commit `6abce8d2`）の記録であり、その後の最適化を
-反映しない。以降の実測は §4.2.1.1 に追記する。
+計測の固定条件、結果の表、計測時点の commit は
+[`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) にある。
+以降の再計測は、同じ入力セットと計測プロトコルで行い、結果は decisions に新しい記録として足す。
 
 ##### 4.2.1.1 prompt KV 再利用後の再計測
 
-DEV-853 の prompt KV cache 再利用（PR #295）後に、§4.2.1 と同じ入力セット・
-同じ計測プロトコル（別プロセス実行、warm-up 3 回）で再計測した。build 構成と
-model は §4.2.1 と同一である。計測環境（OS build / CPU）は DEV-853 の報告に
-従い、本節では §4.2.1 との同一性を主張しない。
-
-| 計測 | commit | 条件 | 結果 |
-|---|---|---|---|
-| `にほんご` 単体 | `36740c54` | 計測 50 回 | p50 79.11ms / p95 92.68ms / p99 106.87ms |
-| decode phase 内訳 | `36740c54` | 同上 | prompt p50 10.22ms（samples 50）/ beam p50 66.84ms（samples 50、evaluations 850） |
-| 20 入力 | `e594a420` | 各 計測 20 回 | 入力別 p50 中央値 209.24ms、範囲 97.92–436.01ms |
-
-- `36740c54` は PR #295 のマージ対象 head（merge commit `9198f427`）である。
-- 20 入力の系列は `e594a420`（PR head 初版）でのみ取得しており、レビュー反映後の
-  `36740c54` では再取得していない。両者の差分はレビュー指摘対応であり、
-  同一 commit 同士の比較ではない点に注意する。
-- 20 入力セットは読み ≤ 8 文字と 8 文字超が混在する。混在集合の中央値は
-  `zenzai-inference-spec` §8 の読み長別予算に直接対応しない（§8 参照）。
+prompt KV cache 再利用後の再計測の条件と結果も
+[`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) にある。
+20 入力セットは読み ≤ 8 文字と 8 文字超が混在するため、混在集合の中央値は
+`zenzai-inference-spec` §8 の読み長別予算に直接対応しない（§8 参照）。
 
 #### 4.2.2 zenz-v3 の R2 変換可否
 
-2026-08-23 時点の ONNX Runtime GenAI model builder を、配布対象の
-`Miwa-Keita/zenz-v3.2-small-gguf` に適用する経路はない。
+ONNX Runtime GenAI model builder では、配布対象の `Miwa-Keita/zenz-v3.2-small-gguf` を
+ONNX Runtime GenAI 形式へ変換できない。配布モデルは GPT-2 architecture の Q5_K_M GGUF であり、
+model builder は GPT-2 を対応 architecture に持たず、入力に受け付ける GGUF も float16 / float32 に
+限られる。zenz-v3.1-small / xsmall の safetensors（fp32）も GPT-2 構造なので同じ制約を受ける。
 
-1. 配布モデルは GPT-2 architecture の Q5_K_M GGUF であり、公開リポジトリにあるモデル
-   本体は 73.9MB の当該ファイルだけである。
-2. model builder の対応 architecture 一覧に GPT-2 はなく、`builder.py` に
-   `GPT2LMHeadModel` の分岐もない。
-   通常の変換要求は未対応モデルとして `NotImplementedError` になる。
-3. model builder が入力として受け付ける GGUF は float16 / float32 に限られるため、
-   Q5_K_M を変換元にはできない。
-4. ONNX Runtime GenAI runtime 自体は `gpt2` model type を認識する。
-   これは適合する ONNX graph と `genai_config.json` を実行できるという意味であり、
-   model builder が zenz-v3 を出力できることは意味しない。
+GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き `genai_config.json` を
+検証する作業は、新しい推論 backend の実装に当たる。zenz-v3 の変換済み artifact が無いため、
+zenz-v3 での R2 の精度劣化、RSS、実効配布サイズ、NPU レイテンシは計測できない。
+R2 の再開条件は §4.3 項 2 が持つ。
 
-したがって、現行 model builder をそのまま使う手動変換は不可と判定する。
-GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き
-`genai_config.json` を検証する作業は、新しい推論 backend の実装に当たるため本スパイクの
-範囲外とする。
-zenz-v3 の変換済み artifact がないため、zenz-v3 での R2 の精度劣化、RSS、実効配布サイズ、
-QNN / OpenVINO NPU レイテンシは計測できない。zenz-v3.1-small / xsmall には safetensors
-（fp32）があるが、GPT-2 構造なので同じ制約を受ける。v3.2 は GGUF だけが公開されている。
+判定の根拠と、確認した builder と model の revision は
+[`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) にある。
 
-根拠:
-
-- [ONNX Runtime GenAI Model Builder: Current Support / GGUF Model](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/README.md)
-- [model builder の architecture 分岐](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/builder.py)
-- [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/models/model_type.h)
-- [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/c67e03e07d215c869f591b274c1631170d3e11fe)
-
-#### 4.2.3 Llama 系互換モデルの R2 変換（DEV-1718）
+#### 4.2.3 Llama 系互換モデルの R2 変換
 
 model builder の対応 architecture には Llama と LFM2 MoE が含まれ、GPT-2 と Qwen3-Next は
-含まれない（onnxruntime-genai `6b7ff3ca` の builder）。zenz-v3 のプロンプト形式で学習された
-Llama 構造のかな漢字変換モデル `yuuki14202028/kanakanji-edge-33m`（33.5M パラメータ、
-safetensors fp32）は、この builder で ONNX Runtime GenAI 形式へ変換できる。モデルそのものの
-評価と、zenz-v3 とのプロンプト差の扱いは `docs/zenzai-inference-spec.md` §2.4 が正典である。
+含まれない。zenz-v3 のプロンプト形式で学習された Llama 構造のかな漢字変換モデル
+`yuuki14202028/kanakanji-edge-33m`（33.5M パラメータ、safetensors fp32）は、この builder で
+ONNX Runtime GenAI 形式へ変換できる。モデルそのものの評価と、zenz-v3 とのプロンプト差の扱いは
+`docs/zenzai-inference-spec.md` §2.4 が正典である。
 
-2026-10-25 の sandbox 調査（Linux、CPU 4 コア）で、`onnxruntime-genai` 0.18.0 の builder を
-使い、CPU EP で AJIMEE-Bench 200 件を貪欲デコードした結果は次のとおりである。製品の
-beam / n-best と読み制約は使っていない。
+CPU EP で形式ごとに精度を比べた測定の条件と結果は
+[`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) にある。
+int8 は fp32 から精度が落ちず、builder 既定の int4 は崩れ、fp16 は CPU EP で実行できなかった。
 
-| 形式 | サイズ | Acc@1 | 備考 |
-|---|---|---|---|
-| fp32 | 129MB | 0.805 | llama.cpp f16 と 200 / 200 件で同じ出力 |
-| int8 | 49MB | 0.805 | fp32 から劣化なし |
-| int4（builder 既定） | — | 0.235 | 崩れる |
-| int4（LM head 除外、shared embeddings 無効、block 32） | — | 0.755 | 原因は切り分けていない |
-| fp16 | — | — | CPU EP では実行時エラー（GPU EP 向けの形式） |
-
-この結果から、R2 で使う形式は次のとおりとする。
+この測定から、R2 で使う形式は次のとおりとする。
 
 - CPU EP と GPU EP の第一候補は int8 とする。int4 は崩れの原因を切り分けるまで使わない。
   fp16 は GPU EP の候補として Human Gate の計測項目に残す。
@@ -338,6 +294,9 @@ python -m onnxruntime_genai.models.builder \
 ```
 
 ### 4.3 結論（M24 実証結果の反映）
+
+CUDA backend の実リンクを中止した経緯は
+[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
 
 1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。
    配布中の GGUF を無変換で使え、実モデルでロードと候補生成を確認できた。
@@ -401,17 +360,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   - `engine`: `"llama_cpp" | "winml"`（既定 `llama_cpp`、後方互換）
   - `ep_preference`: `"auto" | "npu" | "gpu" | "cpu"`（R2 のみ、既定 `auto`）
   - 既存 `n_gpu_layers` は R1（llama.cpp）専用として維持。
-- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**する。Health 反映は
-  **ロード成否と error 有無で決める**（`docs/zenzai-inference-spec.md` §9.2.1 と一致）:
-  - **R1 CUDA 要求 → R1 CPU 降格**（CUDA 未配線の "for now"、§4.5）は**成功 LoadModel**。降格は
-    `ModelLoadResult.error`（警告）で返すのみで `engine->last_error()` は空＝**`Health=ok`** を維持
-    する（engine テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
-    が回帰防止に assert）。
-  - 要求 EP が**実エラーで失敗**して降格した場合（例 §4.6 step5 の WinML `Failure`）は
-    `last_error` に理由を設定。CPU でロードできれば `Health=degraded`、ロード不可なら `error`。
-  - Vulkan デバイス不在、モデルまたは context 初期化失敗時は CPU で一度再試行し、成功時も
-    降格理由を `last_error` に保持する。後続の成功 LoadModel またはモデル無効化で解除する。
-    `auto` から選んだ Vulkan が失敗した場合も同じ扱いとする。
+- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**する。CUDA 要求、Vulkan の失敗、
+  要求 EP の実エラー（例 §4.6 step5 の WinML `Failure`）による降格での `last_error` と Health の
+  扱いは `docs/zenzai-inference-spec.md` §7.4 が正典。
 
 #### `WinMlBackend` の責務境界
 
@@ -584,6 +535,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 | AC | R1 Vulkan（非 NVIDIA / R2 不可の GPU） | Vulkan(ggml-vulkan) → R1 CPU |
 | バッテリ | auto | **NPU EP のみ取得・選択**（§4.6 でバッテリ時は GPU EP を登録しない）→ NPU EP ready なら R2(NPU) / 不可なら R1 CPU。**GPU EP / CUDA / Vulkan を回避** |
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
+
+降格時の Health と、終端の R1 CPU でもロードできないときの `SimpleConverter` への fallback は
+`docs/zenzai-inference-spec.md` §7.4 に従う。
 
 > バッテリ時に R2(auto) を Windows ML の全 EP 自動選択（NPU→GPU→CPU）に委ねると、NPU
 > 非 ready の GPU ラップトップで GPU が選ばれ得る。これを防ぐため、バッテリ時は §4.6 の
@@ -848,7 +802,7 @@ ARM64 用に**明示クロス toolchain（または同等の preset 変数）**�
 なる（§8.2 のフラグ分岐の前提。設定しないとホスト値 `AMD64` のまま＝§8.2 注を参照）:
 
 ```cmake
-# cmake/toolchains/win-arm64-clang.cmake（新規）
+# cmake/toolchains/win-arm64-clang.cmake
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR ARM64)          # ← クロスモードを有効化し、分岐を確定させる
 set(CMAKE_C_COMPILER   clang-cl)
@@ -1023,16 +977,9 @@ ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM
 | **self-hosted ARM64 / Azure ARM64 VM**（Ampere Altra） | 課金回避 / 反復テスト最適化 | インフラ用意・運用コストが要る。ARM64 VM は x64 ハードでは作成不可（クラウドホスト必須） |
 | **Snapdragon X Elite 実機** | NPU 含む統合検証 | `gate:human-required`（実装フェーズで付与）。CI 化しない |
 
-**M27 受け入れ条件の確定（roadmap M27 を補足）**:
-
-1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルド（clang-cl / ARM64 toolchain）が
-   既存 x64 ランナーで成功すること。ARM64 バイナリの生成と §8.1 の成果物検査を CI の最小ゲートとする
-   （新インフラ不要）。
-2. **ARM64 単体テスト実行** = `windows-11-arm` ランナーで `ctest` を緑にする。**public /
-   private いずれでも label は有効**（private は従量課金）なので、リポジトリ可視性に
-   依らず CI 化できる。課金やキュー待ちを避けたい場合のみ self-hosted ARM64 を選ぶ。
-3. **実機（NPU 含む）動作確認** = Snapdragon X 実機で人手検証（`gate:human-required`）。
-   §4.3（NPU 必須化はしない）と整合し、CI のブロッカーにはしない。
+M27 の受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M27 節とする。本節は上表の実行経路を定義し、受け入れ条件を複製しない。ARM64 単体テストは
+`windows-11-arm` ランナーで実行し、課金やキュー待ちを避けたい場合だけ self-hosted ARM64 を選ぶ。
 
 > 以前の「private では label 失敗」という制約は撤回する。現行の GitHub hosted-runner
 > リファレンスは `windows-11-arm` を public / private 双方の標準ランナーとして掲載して
@@ -1054,7 +1001,7 @@ QNN SDK を直接使う場合（非既定・fallback）：
 - バイナリ配布時は QNN ランタイム DLL を MSIX に同梱（§8.3 の「非バンドル」方針の例外と
   なるため、この fallback 採用時は §1.6 の配布表も更新する）
 
-`inference-host/src/QnnBackend.cpp`（非既定・fallback 時のみ新規）：
+`inference-host/src/QnnBackend.cpp`（非既定。M27 が QNN SDK 直叩きの fallback を採るときに新設する予定）：
 
 ```cpp
 class QnnBackend : public IBackend {

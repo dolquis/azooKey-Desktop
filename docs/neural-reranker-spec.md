@@ -1045,3 +1045,5 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
 - 構造化ログのフィールドは §B4.2、ログ形式の正典は
   `docs/dev-infrastructure-spec.md` §7 に従う。
+- CPU / Vulkan の Release 測定の条件と結果は
+  [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) にある。

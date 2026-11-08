@@ -9,6 +9,7 @@
 | 恒常 runbook | 実機検証・診断・VM 構築など、繰り返し使う手順。対応する spec から正典として参照される | `docs/handoff/` | `docs/README.md`「運用」表に必須 |
 | 一回限りの引き継ぎ | 特定のセットアップ・移行作業の一度きりの指示書。DoD（完了基準）を持つ | 作業中は `docs/handoff/`、DoD 達成後は `docs/archive/` へ移動 | archive 後は索引不要（テンプレートとしての位置づけのみ AGENTS.md 等から参照可） |
 | 参考資料・調査記録 | 特定時点のスナップショット。更新しない前提で書かれる（例: 初回調査、他実装との比較） | `docs/`（`docs/README.md` に「参考資料。正典ではない」と明記） | 索引に載せるが「正典ではない」を明記 |
+| 決定記録・測定記録 | 日付つきの決定の経緯・根拠・不採用理由と、固定条件での実測値。凍結し、追記のみで書き換えない | `docs/decisions/YYYY-MM-DD-<slug>.md`（命名と書式は `docs/decisions/README.md`） | `docs/README.md`「決定記録と測定記録」表に必須。状態語を含んでよい（docs-lint の prose 検査の対象外） |
 | 運用規約 | Linear 運用・ラベル規約など、リポジトリ横断の作業ルール | `docs/linear-conventions.md`（共有コア部分は origin 側で編集）、`AGENTS.md`（要約） | `docs/README.md`「運用」表 |
 
 ## 一回限り文書を archive するタイミング

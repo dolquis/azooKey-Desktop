@@ -12,6 +12,7 @@
 | Linear 運用のルール本文 | `docs/linear-conventions.md`（§1〜§12 は `dolquis/agent-ops` origin。本 repo では直接編集しない） | `AGENTS.md`「Linear とレビュー指摘」は要約。詳細は追わずリンクする |
 | Linear 運用の repo 固有差分（ラベル・状態マップ等） | `docs/linear-conventions.md` §13 Project Delta | 本 repo で編集してよい唯一の Linear 運用節 |
 | ドキュメント一覧・索引 | `docs/README.md` | 新規 `docs/*.md` を追加したら必ずここに載せる |
+| 決定の経緯・根拠・実測値（日付、DEV 番号、PR、commit を含む） | `docs/decisions/`（規則は `docs/decisions/README.md`） | spec と roadmap は結論と条件（再評価の条件を含む）だけを持ち、経緯と実測は該当ファイルへ 1 行でリンクする |
 | 第三者資産の attribution | ルート `THIRD_PARTY_LICENSES` | 運用規約は `docs/licensing-policy.md`。配布経路の spec 側からはリンクのみで、attribution 一覧を重複させない |
 
 ## 正典宣言は双方向にする

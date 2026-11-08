@@ -9,7 +9,7 @@
 | 結果 JSON と baseline 比較 | `docs/conversion-quality-benchmark-spec.md` §8、§14、`docs/dev-infrastructure-spec.md` §4.5 | `bench/BenchmarkResult.cpp`、`bench/BenchmarkCommandLine.cpp` | `benchmark_result_tests` |
 | bench 用一時学習ファイル | `docs/conversion-quality-benchmark-spec.md` §3 | `bench/TemporaryLearningFile.cpp` | `temporary_learning_file_tests` |
 | Zenzai 推論ベンチ | `docs/zenzai-inference-spec.md`、`azookey-inference-model-workflow` skill | `bench/zenzai_bench.cpp`（target `azookey_zenzai_bench`） | 実モデル label 付き CTest（pin モデルが要る） |
-| NLL 計測 | `docs/nll-release-measurement.md`（計測記録。正典ではない）、`docs/modernbert-ja-scoring-spec.md` | `bench/nll_bench.cpp`（target `azookey_nll_bench`）、`bench/data/nll_fixture.*` | 実モデル label 付き CTest |
+| NLL 計測 | `docs/decisions/2026-09-08-nll-release-measurement.md`（計測記録。正典ではない）、`docs/modernbert-ja-scoring-spec.md` | `bench/nll_bench.cpp`（target `azookey_nll_bench`）、`bench/data/nll_fixture.*` | 実モデル label 付き CTest |
 | 評価データの出典 | `docs/conversion-quality-benchmark-spec.md` §11、§13 | `bench/data/DATA-LICENSE.md` | なし（レビューで確認） |
 | アプリ互換性ハーネス | `docs/dev-infrastructure-spec.md` §13、`compat-test/README.md` | `compat-test/runner/`、`compat-test/cases/`、`compat-test/targets/`（target `compat_test`） | `compat_test_unit_tests`、対話セッションでの `compat_test.exe` 実行 |
 | MSIX の install / uninstall シナリオ | `docs/sideload-packaging-spec.md`、`azookey-packaging-release-workflow` skill | `compat-test/msix_install_uninstall.ps1` | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` |
@@ -30,5 +30,5 @@ target の追加・削除はそちらと `scripts/check_test_inventory.py` が�
 
 指標や case を追加したら、`docs/conversion-quality-benchmark-spec.md` と
 `docs/dev-infrastructure-spec.md` §13.3 の一覧を同じ変更で更新する。
-測定値そのものは spec に書かず、`docs/nll-release-measurement.md` のような日付つき記録か
+測定値そのものは spec に書かず、`docs/decisions/`（規則は `docs/decisions/README.md`）の日付つき記録か
 Linear の検証メモに残す（詳細は `azookey-doc-governance` スキル）。

@@ -1,7 +1,13 @@
 # NLL リランクの Release 測定記録
 
+- 種別: 測定記録
+- 日付: 2026-09-08
+- 関連 Issue: DEV-1012、DEV-1055
+- 結論の正典: [`neural-reranker-spec.md`](../neural-reranker-spec.md) Track B §B12
+- 移設元: `docs/nll-release-measurement.md`（commit `c8d9a5b` 時点）。ファイルごと移設し、本文は変えていない（リンクの相対パスだけ直した）
+
 2026-09-08 に [DEV-1012](https://linear.app/dolquis/issue/DEV-1012) で行った固定入力の測定記録である。
-更新しない参考資料であり、仕様の正典は [neural-reranker-spec.md](neural-reranker-spec.md) Track B とする。
+更新しない参考資料であり、仕様の正典は [neural-reranker-spec.md](../neural-reranker-spec.md) Track B とする。
 
 ## 判断
 

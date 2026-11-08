@@ -73,7 +73,7 @@ QueryLiveConversionResponse:
 
 ### X-1-2. TypingTempoTracker
 
-`tsf-tip/src/TypingTempoTracker.h`（予定ファイル）：
+`tsf-tip/src/TypingTempoTracker.h`（M24 の横断 X-1-2 で新設する予定）：
 
 ```cpp
 class TypingTempoTracker {
@@ -131,7 +131,7 @@ Host 側スケジューラ：
 1. `TypingTempoTracker::IdleMs() >= 800` を検知
 2. 直近 commit を含む文（句点 `。` or 改行までの範囲）を抽出
 3. `PostQueryFullRecompute(request_id, paragraph)` を送信
-4. Host が再評価した結果と現状の差分があれば、
+4. Host が再評価した結果と表示中の内容に差分があれば、
    - 既存 commit 範囲は **読み取り専用波線**（X-3 Post-Commit Lint と統合）
    - composition 範囲は EditSession で差し替え
 
@@ -336,7 +336,7 @@ RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k) const;
 insertion / deletion / substitution / transposition と隣接キーの初期値として扱う。
 
 QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
-`core/src/QwertyAdjacency.cpp`（予定ファイル）に静的テーブルとして持つ。
+`core/src/QwertyAdjacency.cpp`（M17 の横断 X-3-1 で新設する予定）に静的テーブルとして持つ。
 
 #### 適用順序
 
@@ -673,7 +673,7 @@ QueryCandidates / QueryPredictions / QueryLiveConversion で `context` フィー
 
 ### X-4-5. bench 拡張
 
-`bench/rich_features_bench.cpp`（新規）に以下のメトリクスを追加：
+`bench/rich_features_bench.cpp` に以下のメトリクスを持つ：
 
 | メトリクス | 単位 | 対象 |
 |---|---|---|

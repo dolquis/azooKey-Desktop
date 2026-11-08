@@ -332,8 +332,8 @@ TIP の送信抑止を維持する。
 
 **既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
 detailedLogging OFF）は §2「fail closed」に沿った private 相当の安全側であり、軸を 1 つも
-指定しない `custom` は private と同じ実効挙動になる。これにより DEV-121 の暫定 fallback
-（`custom` → `private`）が後方互換に置換される。
+指定しない `custom` は private と同じ実効挙動になる。この挙動は `custom` を `private` へ
+fallback する扱いと後方互換である。
 
 **他設定との関係**: `disableLearningInPrivateMode` / `disableExternalAIInPrivateMode`（§7）は
 `private` モード専用のトグルであり、`custom` には適用しない（`custom` では `privacy.custom.*`

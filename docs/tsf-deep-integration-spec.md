@@ -137,7 +137,7 @@ UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に
 表示される）は、UI-less mode に加えて検索統合 API（`ITfFnSearchCandidateProvider`
 + `ITfIntegratableCandidateListUIElement`）の実装を要し（[IME search integration
 requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#ime-search-integration)）、これは §2.7 のとおり **M21 スコープ**。
-未実装でもスタート検索で活性化・入力は可能だが、統合表示は得られず composition 完了
+検索統合 API が無くてもスタート検索で活性化・入力は可能だが、統合表示は得られず composition 完了
 後にのみクエリが渡る劣化モードになる。したがって **M5 の受け入れに「スタート検索の
 統合表示」を含めない**（活性化・入力のみを範囲とする）。
 

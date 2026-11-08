@@ -335,9 +335,9 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
 }
 ```
 
-> 本ブロックは M57 spec 上の予約定義であり、v1.0 の
-> `settings/mvp-settings.schema.json` には未登録（M56/M57 は v1.0 後トラック）。
-> schema への正式登録は M56/M57 実装着手時に行う。
+> 本ブロックは M57 spec 上の予約定義であり、M56/M57 が
+> `settings/mvp-settings.schema.json` へ追加する予定のキーである。v1.0 の schema には無い
+> （M56/M57 は v1.0 後トラック）。
 
 - `modernbertEnabled`:
   - `auto`（既定）: ambiguity_score とリソース可用性に応じて自動 ON/OFF
@@ -348,7 +348,7 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
   §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。
 - `modernbertRssCapMb`: §6.1 のハード上限（既定 200）。設計上は `always` でも
   この上限を緩めない。`0` 指定は無効化ではなく**上限緩和禁止**のため最小値で
-  clamp する（下限は実機検証で決定。暫定 100）。
+  clamp する（下限の既定は 100。実機検証で校正する）。
 - `modernbertTimeoutMs`: 範囲 30〜50（§5.4）。範囲外は clamp。
 
 ## 8. スコア統合
@@ -358,7 +358,7 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
 
 `W_BERT` を高くすると homophone 精度が上がるが latency 悪化が大きい。
 balanced mode（既定）では neural §9 の初期値、quality mode では 0.10 など
-で調整する（`settings.conversionQuality` キー。schema 未登録（予定））。
+で調整する（`settings.conversionQuality` キー。M57 が schema へ追加する予定）。
 
 ## 9. secure 判定との連携
 

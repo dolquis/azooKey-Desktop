@@ -651,8 +651,8 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
 
 M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 （`normalize(zenzai_score)*0.35 + …`）へ移行する。その際 Zenzai は**生 logprob**を
-供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**それまでの
-暫定加算統合**であり、M56 で学習重みへ置換される。`Candidate` 構造体に raw score 用の
+供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**M56 の学習重みが無い
+構成での加算統合**であり、M56 が学習重みへ置換する。`Candidate` 構造体に raw score 用の
 数値フィールドを足すかは M56 で判断（M8 では `debug_info` 文字列で前方互換）。
 
 ### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
@@ -919,13 +919,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 ### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
 
-**問題**: `ZenzaiModelConverter` は現状 `(ZenzaiModelInfo, IConverter* fallback)` だけで
-構築され、`InferenceEngine::last_error_`（private）への経路を持たない。一方 `Health`
+**問題**: `ZenzaiModelConverter` が `(ZenzaiModelInfo, IConverter* fallback)` だけで
+構築され、`InferenceEngine::last_error_`（private）への経路を持たない構成を考える。一方 `Health`
 （`Dispatcher::HandleHealth`）は `engine_->last_error()` のみで `ok` / `degraded` / `error`
 を決める。`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
 **実推論が劣化しているのに `/Health` が `ok` を返す**（サイレント劣化）。
 
-**契約**（DEV-221 が満たす）— *poll-after-call*（engine ロック内で吸い上げ）方式:
+**契約** — *poll-after-call*（engine ロック内で吸い上げ）方式:
 
 1. `ZenzaiModelConverter` に**直近 `Convert` の結果を反映する**エラー状態を持たせる:
    `std::optional<std::string> last_error_` + `bool degraded_`、非消費アクセサ
@@ -1109,8 +1109,8 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
 - 観測点は step 境界（§9.2.3.2 の手順 1）と decode 中の abort callback の 2 つで、現行と同じ。
   1 step が 1 decode になるため、cancel 観測から停止までの上限は 1 バッチ decode になる。
 - deadline 超過時、live beam は全て同じ長さであり（不変条件 1）、その全てが best-so-far
-  として候補化される。UTF-8 の不完全な接尾を許容する扱いも現行のままとする。beam ごとに
-  中断していた現行実装と、契約として出る候補集合は変わらない。
+  として候補化される。UTF-8 の不完全な接尾は許容する。beam ごとに中断する方式と比べても、
+  契約として出る候補集合は変わらない。
 - 中断された decode が KV へ反映されたかを問い合わせる手段は無い。abort された decode が
   触れた sequence の内容は不定として扱い、次の変換で再利用しない。
 - `Generate` は開始時に working sequence を全て消去する。前の変換が cancel、deadline、例外の

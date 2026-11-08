@@ -167,8 +167,8 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 | **R2** | ONNX Runtime GenAI + Windows ML | ONNX Runtime GenAI 形式（**要変換**。R1 と同じモデルの変換物、§4.3） | Windows ML が自動選択（NPU: QNN/OpenVINO/VitisAI、GPU: NvTensorRtRtx/OpenVINO、CPU: ORT） | ◎（Copilot+ PC） | Windows Update 配信（**非バンドル**） |
 
 > **注（GenAI 対応 EP）**: R2 は GenAI（LLM）経路のため、**MIGraphX(AMD GPU) は除外**する。
-> Windows ML の EP 仕様で `MIGraphXExecutionProvider` は現状 *GenAI シナリオ未対応*と
-> 明記されている（[Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers)）。
+> Windows ML の EP 仕様は `MIGraphXExecutionProvider` を *GenAI シナリオ未対応*と
+> 明記している（[Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers)）。
 > AMD は NPU=VitisAI（Ryzen AI）で扱い、GPU GenAI は Microsoft が MIGraphX の GenAI 対応を
 > 有効化した時点で再評価する。それまで AMD GPU 環境は R1（ggml-cuda は NVIDIA 専用のため
 > 実質 ggml-vulkan）または R1 CPU にフォールバックする。
@@ -799,7 +799,7 @@ ARM64 用に**明示クロス toolchain（または同等の preset 変数）**�
 なる（§8.2 のフラグ分岐の前提。設定しないとホスト値 `AMD64` のまま＝§8.2 注を参照）:
 
 ```cmake
-# cmake/toolchains/win-arm64-clang.cmake（新規）
+# cmake/toolchains/win-arm64-clang.cmake
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR ARM64)          # ← クロスモードを有効化し、分岐を確定させる
 set(CMAKE_C_COMPILER   clang-cl)
@@ -998,7 +998,7 @@ QNN SDK を直接使う場合（非既定・fallback）：
 - バイナリ配布時は QNN ランタイム DLL を MSIX に同梱（§8.3 の「非バンドル」方針の例外と
   なるため、この fallback 採用時は §1.6 の配布表も更新する）
 
-`inference-host/src/QnnBackend.cpp`（非既定・fallback 時のみ新規）：
+`inference-host/src/QnnBackend.cpp`（非既定。M27 が QNN SDK 直叩きの fallback を採るときに新設する予定）：
 
 ```cpp
 class QnnBackend : public IBackend {

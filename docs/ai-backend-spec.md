@@ -44,7 +44,7 @@
 3. **HTTP 実装経路**（共通 WinHTTP 基盤の契約。M32 `HttpDownloader` との分担）（§6）。
 4. **エラー / リトライ / レート制限 / タイムアウト**ポリシー（M47 と整合）（§7）。
 5. **secure ゲート連携**（M46 プライバシー判定。外部 AI へ渡さない保証）（§8）。
-6. **API キーの at-rest 保存**（M34 DPAPI 前の暫定平文と `dpapi:` prefix 規約）（§9）。
+6. **API キーの at-rest 保存**（平文と `dpapi:` prefix 規約）（§9）。
 7. **ストリーミング境界**（MVP `stream=false` と Phase 6 `stream=true`）（§10）。
 
 ### 1.2 スコープ外
@@ -169,7 +169,7 @@ public:
      禁止、`AI 候補生成許可==false` なら AI 自体を禁止 → 実効 backend を
      `None` に強制（§8）。`privacy-and-secure-input-spec.md` §5 / §5.2 が正典。
   2. **アプリ別プロファイル**（M48）: `app-profile-spec.md` §4.2 の backend 解決。
-     **M48 未実装時はこの段を飛ばし、3 のグローバル設定へフォールバックする**
+     **M48 のプロファイル解決が無い構成ではこの段を飛ばし、3 のグローバル設定へフォールバックする**
      （M16 は M48 に依存しない）。
   3. **グローバル設定** `aiBackend`（`settings/mvp-settings.schema.json`）。
 - **X-3-3 の既定寄せ**: X-3-3（自動・毎 commit）は、`aiBackend=openai` でも
@@ -225,8 +225,8 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 （`reading` / `raw_romaji` / `mode="ai-cleanup"` / `auto_punctuation`）を使い、Host の
 `Dispatcher` が `mode=="ai-cleanup"` のとき payload を `AiTransformRequest`（`task=Cleanup`、
 `text=reading`、`raw_romaji`、`auto_punctuation`）へ正規化して `AiBackend::Transform` を
-呼ぶ（`left_context` は `QueryBatchConversionRequest` に未実装。M58-C で直近確定文が
-必要になった場合に両 spec で同時に追加する）。`romaji-batch-conversion-spec.md`
+呼ぶ（`QueryBatchConversionRequest` は `left_context` を持たない。M58-C で直近確定文が
+必要になった場合は両 spec で同時に追加する）。`romaji-batch-conversion-spec.md`
 §6.1 の必須フィールド（`mode=ai-cleanup` のとき `raw_romaji` 必須）と本書 §3.2 の
 `AiTransformRequest` を相互に一致させる。`QueryBatchConversion` の `max_candidates`
 （文節あたり候補数）は Cleanup task では使わず、Host 正規化時に `max_results=1` 固定とする
@@ -278,7 +278,7 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
   `raw_romaji`（生ローマ字）の打鍵誤りパターンを補正に使う。`auto_punctuation` が
   true のとき句読点を挿入する」を要旨とする。詳細は `romaji-batch-conversion-spec.md`
   §5。X-3-3（`task=Lint`）は「確定テキストの不自然箇所（同音異義語・敬語不一致等）を
-  検出し、位置・現状・提案・理由・確信度の配列で返す」を要旨とする。
+  検出し、位置・現状・提案・理由・確信度の配列で返す」を要旨とする。<!-- lint:allow status -->
 
 ### 5.3 リクエストボディ（chat/completions）
 
@@ -460,9 +460,8 @@ M48 のモード通知 API を前提としない。
 
 ## 9. API キーの at-rest 保存
 
-> 判断（DEV-346）: **暫定平文 + M34 前倒し**。`dpapi:` prefix 規約を本書で確定し、
-> M34（DPAPI 暗号化）を Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite に
-> しない（M16 が M34 にブロックされない）。
+> `dpapi:` prefix 規約は本書が定める。M16 は M34（DPAPI 暗号化）を hard prerequisite に
+> しない（M16 が M34 にブロックされない）。Host は平文と `dpapi:` 付きの値の両方を受け付ける。
 
 - 設定キー `openAiApiKey`（`settings/mvp-settings.schema.json`）に保存する。
 - **`dpapi:` prefix 規約**: 値が `dpapi:` で始まる場合、続く Base64 を DPAPI

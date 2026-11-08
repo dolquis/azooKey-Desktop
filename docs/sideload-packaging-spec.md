@@ -118,15 +118,15 @@ TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確�
 
 > **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
 > Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
-> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
+> スタンドアロン MSIX サイドロードは延期する（§0。DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
 
 > **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
-> Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
+> Microsoft 公式仕様上**機能制限あり**の領域である。`com4:InProcessServer`
 > は「外部位置（external location / sparse package）向け」と明記されており、
 > 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
 > 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 構成は
-> 暫定参考であり、M28 着手前に下表のいずれかへ確定する必要がある。Linear
-> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡。
+> 参考であり、M28 は下表のいずれかを選ぶ。選定は Linear
+> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡する。
 
 ### 1.0 TIP 配布経路 3 候補
 
@@ -167,7 +167,7 @@ validation の観点でまとめる。**この構成だけではアクティベ�
 `com4:Class@Id`（CLSID）と Profile GUID は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid` /
 `kTextServiceProfileGuid` と一致させる。
 
-> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の暫定値
+> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の値
 > （`Publisher="CN=dolquis"`）のままだと、OV/EV cert で署名した場合に
 > `Identity@Publisher` が署名証明書の Subject DN と一致せず `Add-AppxPackage` が
 > `0x8007000B` で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
@@ -320,7 +320,7 @@ external location（§4 WiX/MSI の install ディレクトリ）に置き、COM
 > location へ置くため、`pkg/msix/AppxManifest.xml`（identity のみ）+ `build-identity-package.ps1`
 > を使う（§1.1.2）。`pkg/msix/Package.wapproj` は Option A では identity のみをパッケージ化する。
 
-`pkg/msix/Package.wapproj`（新規、WAP プロジェクト）：
+`pkg/msix/Package.wapproj`（WAP プロジェクト）：
 
 - ターゲット: x64 / arm64
 - 同梱物:
@@ -416,7 +416,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 の結論＝暫定 CC-BY-SA 保守・上流 HF から取得。§1.6.2） |
+| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路は §1.6.1（CC-BY-SA-4.0 として扱う保守運用・上流 HF から取得。§1.6.2） |
 | kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。既定の catalog（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m` で取得できる。取得後は `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
@@ -457,7 +457,7 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 
 | 方式 | v1.0 採否 | 理由 |
 |---|---|---|
-| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、暫定確定（保守・CC-BY-SA、§1.6.2）でも不採用を維持する |
+| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、CC-BY-SA-4.0 として扱う保守運用（§1.6.2）でも不採用とする |
 | (b) 初回起動時オンデマンド DL | **将来の判断（auto-DL の承認後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用する。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。起動時に利用者の操作なしでネットワークへ出る挙動なので、入れるかは別に判断する（下記「初回取得後の `selectedPath` コミット」）。それまでの取得は、利用者の操作による取得（設定アプリの取得ボタンと CLI の `models fetch`）が担う |
 | (c) 手動配置 | ✅ **常時併存（M28 の operative default 兼 恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
 
@@ -793,7 +793,7 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
   fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与するが、本リポジトリは
   継承 ACE が再ビルドを吸収するため二重化しない。
 * **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
-  現時点の対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
+  対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
   将来 x86 TIP DLL を追加する場合は、同じ規則を当該 DLL にも適用する
   （`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
 * **既存 ACE の判定**: ディレクトリでは「実効 RX があるか」ではなく「`ObjectInherit` を持つ
@@ -1527,7 +1527,7 @@ schema 自体は superset のまま変えない。
 debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイルストーン）で UI 露出する。下表は
 §3.6 の全キーに対する v1.0 / v1.x の UI 露出区分である（意味論の正典は §3.6「正典」列に従う）。
 
-| キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
+| キー | v1.0 UI | v1.x で UI 化（v1.0 では schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
 | `model.backendPreference` | ◯（詳細、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
@@ -2256,8 +2256,8 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX install/update/rollback/uninstall | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。旧版 install → CLSID / TSF プロファイル登録の存在確認 → 新版 update → deployment 中に失敗する update 後の直前バージョン保持 → uninstall → 残骸 0 を半自動検証（DEV-101 / DEV-586 / M28） |
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
-| 署名検証 | `pkg/tests/signature_test.ps1`（新設予定。M29 の署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
-| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（新設予定。M32 の `UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
+| 署名検証 | `pkg/tests/signature_test.ps1`（M29 で新設する予定。署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
+| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（M32 で新設する予定。`UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |
@@ -2268,7 +2268,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 2. バージョンタグを打つ (`git tag v1.0.0`)
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
-5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2、当面延期）
+5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2。延期は §0）
 6. SBOM（`azooKey.spdx.json`）が Release 資産に添付され、`gh attestation verify <msi> --repo dolquis/azooKey-Desktop` が成功することを確認（§4.4）
 7. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
 8. Draft → Publish

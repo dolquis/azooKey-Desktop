@@ -160,8 +160,9 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 この分岐は `docs/legacy-parity-spec.md` §1.2 の `InputState::HandleEvent` の遷移表には加えない。TIP が
 `UserActionMap` の写像より前にカッコキーを受け取り（§3.1）、core の純粋関数 `EvaluateBracketInput` が hint から
 下表の分岐を決め、TIP がその結果に従って composition の確定と下表の副作用を行う。新しい InputState 種別は
-**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。
+**追加しない**。表の「現状」は `InputState` の種別、「副作用」は TIP が行う操作を指す。<!-- lint:allow status -->
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input(開きカッコ)・`hint.selection_collapsed==true` | Idle | `insertBracketPair`（commit OC + カーソル内側）。composition は残らない |
@@ -468,8 +469,8 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
 直接参照せず、通常のローマ字入力・候補確定は既存 `TextService` の経路で処理する。
 
 `docs/legacy-parity-spec.md` §1.3 の表に以下を追加する。実装は既存の commit 経路
-（`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`、現状
-`committed_range->SetText` → `Collapse(TF_ANCHOR_END)` → `SetSelection`）の変形で足りる。
+（`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`。
+`committed_range->SetText` → `Collapse(TF_ANCHOR_END)` → `SetSelection` の順に行う）の変形で足りる。
 
 | ClientAction | TSF 操作 |
 |---|---|

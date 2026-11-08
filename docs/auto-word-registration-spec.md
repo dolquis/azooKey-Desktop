@@ -26,9 +26,9 @@ M36-A / M36-B の挙動は M53 でも下位互換として維持する。
 
 ## 1. 背景と目的
 
-- 現状の辞書は 3 層: `SimpleConverter`（内蔵辞書 + `LoadFromTsv`）/
+- `SimpleConverter`（内蔵辞書 + `LoadFromTsv`）/
   `learning::UserDictionary`（**手動登録**の JSON 辞書）/ `learning::LearningStore`
-  （確定履歴の重み付け再ランキング）。いずれも「新語を能動的に取り込む」機構を
+  （確定履歴の重み付け再ランキング）の 3 層は、いずれも「新語を能動的に取り込む」機構を
   持たない。
 - 本機能は、ユーザーがよく使うのに辞書に無い語（未知語＝OOV）や、世間で新しく
   使われ始めた語（トレンド語）を自動的に収集し、変換候補に反映する。
@@ -583,7 +583,7 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 
 ## 12. テスト計画
 
-- 新規 `learning/tests/auto_word_store_test.cpp`:
+- `learning/tests/auto_word_store_test.cpp`:
   `Observe` の pending 追加 → count++ → しきい値で Confirmed 昇格 /
   `auto_promote` 即昇格 / Reject 後の再 `Observe` が無視される /
   `LookupConfirmed` が pending を返さない / `IngestTrending` の rejected skip・
@@ -775,7 +775,7 @@ key・別 namespace の辞書層内因子であり、二重適用しない。
 
 ### 14.7 DictionaryStore 実装
 
-`learning/src/DictionaryStore.cpp`（新規）として実装:
+`learning/src/DictionaryStore.cpp` として実装:
 
 ```cpp
 class DictionaryStore {
@@ -1119,7 +1119,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   この配置なら層の向きを崩さずに `DictionaryStore` から使える。
 - **`learning/`**: `DictionaryStore`（§14.7）と各 `IDictionaryLayer` 実装。層の有効化・
   dedup・スコアは §14 の責務。
-- **`dictbuild/`**（新規のホストツール）: 上流データから `.azdic` を生成するオフライン
+- **`dictbuild/`**（ホストツール）: 上流データから `.azdic` を生成するオフライン
   ビルダ。IME 実行時には存在しない。
 
 ランタイムは `.azdic` を**読むだけ**であり、書かない。書き込みが要る層は §15.7 の

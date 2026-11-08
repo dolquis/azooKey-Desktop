@@ -36,8 +36,8 @@ Windows 版（C++ 移植: `core/` `ipc/` `learning/` `inference-host/` `tsf-tip/
 
 ### 目的
 
-MVP（Phase 1〜2 完了）から「実運用に耐える IME」へ進むにあたり、Phase 3
-（Zenzai 統合）/ Phase 4（配布）着手前に開発基盤・品質の負債を解消する。
+MVP（Phase 1〜2）から「実運用に耐える IME」へ進むにあたり、開発基盤・品質の
+負債を解消する。
 具体的には次の 4 点をボトルネックとみなし、マイルストーン化する。
 
 1. ビルド再現性（手元・CI・AI エージェントでビルド入口が統一されていない）
@@ -524,11 +524,11 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 
 ### 3.2 依存ごとの導入手段
 
-| 依存 | 種別 | 導入手段 | 状態 |
+| 依存 | 種別 | 導入手段 | 採否 |
 |---|---|---|---|
-| GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 導入済み（現行方式を維持） |
-| llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | M8 で導入（本トラック対象外） |
-| WIL | header-only | submodule または `FetchContent`（オプトイン） | M43 で導入（§9） |
+| GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 採用（本トラックで変更しない） |
+| llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | 採用（M8 の範囲。本トラック対象外） |
+| WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
 | nlohmann-json | header-only | 任意・保留 | §6・§11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | §7・§11 参照（自前ロガーを優先評価） |
 | miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
@@ -1130,9 +1130,9 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 
 ### 5.1 解決する問題
 
-M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの既定パスを相対パス
-（`azookey_learning.tsv` / `azookey_user_dict.json`）で持つため、Host の
-起動元ディレクトリによって保存先が変わり、ユーザーデータが迷子になりやすい。
+学習・辞書ファイルの既定パスを相対パス（`azookey_learning.tsv` /
+`azookey_user_dict.json`）で持つと、Host の起動元ディレクトリによって保存先が
+変わり、ユーザーデータが迷子になりやすい。
 
 ### 5.2 標準ディレクトリレイアウト
 
@@ -1415,8 +1415,8 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   を送らず接続を失敗として扱う。per-logon pipe ACL だけへの縮退は行わない。
   トークンが設定されている場合の比較は、値の一致位置を処理時間へ反映しない
   定数時間比較を使う。
-- **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
-  見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
+- **6.4.5 client cleanup** — 切断済み client を Stop まで保持せず、
+  切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は
   `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT` を使う。server は
   `FILE_FLAG_OVERLAPPED` 付きで instance を作成し、`ConnectNamedPipe` の
@@ -1450,8 +1450,8 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   回復する手段がないため）。他のクライアントには波及しない。
 
   **ソフト超過時**: フレームは破棄せず、遅い接続として計上するだけに留める
-  （`NamedPipeServer::SoftDeadlineExceededCount()`）。M41 の構造化ログへ配線するまでの
-  暫定形であり、閾値に観測可能な効果を持たせて回帰テスト可能にすることが目的。
+  （`NamedPipeServer::SoftDeadlineExceededCount()`）。計上の目的は、閾値に観測可能な
+  効果を持たせて回帰テスト可能にすることである。
 
   **§8.5.2 の timeout 表との関係**: 別レイヤであり、値を一致させない。
   §8.5.2 は「要求を出してから応答が返るまで」（推論時間を含む）を縛る request
@@ -2398,7 +2398,7 @@ CPU backend へ再試行し、それも失敗したら SimpleConverter へ落と
 
 ### 8.6 推論 Worker プロセス分離（Broker/Worker, MVP後）
 
-現状の inference-host は TIP から見て out-of-proc だが、`Dispatcher` /
+inference-host は TIP から見て out-of-proc だが、`Dispatcher` /
 `InferenceEngine` / `SettingsStore` / `UserDataPaths` を同一プロセス・同一
 ユニットに同居させている。この構成では、モデル runtime（llama.cpp / ggml /
 将来の NPU runtime / driver）起因のメモリ破損・例外が、設定・辞書・IPC 認証まで
@@ -3003,8 +3003,8 @@ D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 ### 13.1 目的
 
 主要アプリで TSF composition / 候補ウィンドウ位置 / 確定 / キャンセル /
-Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で検証する。
-M28（MSIX サイドロード）着手前にアプリ互換性のベースラインを確保する。
+Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で検証し、
+アプリ互換性のベースラインを確保する。
 
 ### 13.2 対象アプリ
 

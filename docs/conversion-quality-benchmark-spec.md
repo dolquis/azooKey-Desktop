@@ -386,11 +386,11 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 
 **typo 評価のモード指定（マイルストーン別運用）**: §6.2 の typo 補正指標は
 補正が有効なモードでのみ意味を持つ。ただし**補正有効モード `suggest` /
-`rank` / `aggressive` は M55（打ち間違え統合）の機能**で、M52 時点では未実装。
+`rank` / `aggressive` は M55（打ち間違え統合）が提供する**。
 そのため:
 
-- **M52 受け入れ**: typo 補正は未実装のため `--typo-mode off`（既定、M55 前の
-  唯一のモード）で走らせ、typo 指標の**算出・schema 出力**を確認する（実測値
+- **M52 受け入れ**: typo 補正は M55 が提供するため `--typo-mode off`（既定。M55 の
+  補正が無い構成で使える唯一のモード）で走らせ、typo 指標の**算出・schema 出力**を確認する（実測値
   の良否は問わない。off では `typo_correction_top*` は自明な値になる）。
 - **M55 受け入れ**: 補正有効モードでの**実測値**を検証する。
   `typo_correction_top1/5_accuracy` は評価対象モード（M55 既定の `rank` 等）で、

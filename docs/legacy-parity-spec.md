@@ -1,6 +1,6 @@
 # Legacy Parity 仕様（Phase 5）
 
-本書は macOS 版 (`legacy/azooKeyMac/`) で実装済みだった機能を Windows 版へ
+本書は macOS 版 (`legacy/azooKeyMac/`) が持つ機能を Windows 版へ
 復元する際の **正典仕様** である。`plans/windows-port-roadmap.md` の Phase 5
 （M13〜M19）が本書を参照する。
 
@@ -118,6 +118,7 @@ enum class InputStateKind {
 
 遷移表（主要遷移のみ）：
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
@@ -362,8 +363,8 @@ composition の内側と外側のどちらへ作用させるかはアプリ次�
 
 §1.1〜§1.3 はレガシー（macOS）の UserAction / InputState / ClientAction を定義する。§1.4 は Windows 版の
 VK 表であり、レガシーと違う割当は §1.4 の「キー割当の legacy との差」が持つ。
-本節は、それを C++ へ移植する際の **境界判断**（実装着手前に固定すべき責務分界・拡張点・
-純粋性契約・非回帰戦略）を確定する。M13 の状態機械の上には後続マイルストーン
+本節は、それを C++ へ移植する際の **境界判断**（責務分界・拡張点・
+純粋性契約・非回帰戦略）を定める。M13 の状態機械の上には後続マイルストーン
 （M14 / M15 / M16 / M17 / M58-A / M59 / M61-A）がすべて載るため、各自が `InputState` /
 `ClientAction` / `UserAction` を場当たり拡張すると enum 破壊・二重実装・回帰を招く。
 後続はいずれも本節を正典として拡張すること。
@@ -733,7 +734,7 @@ DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
 - Backspace: kana を 1 文字戻し、再度 `PostQueryLiveConversion`。応答までの表示は §2.3.1
 - Secure 入力: M14 の Payload には secure フラグがないため、TIP は Host へ
   `QueryLiveConversion` を送らず、ローカルの kana を Preedit に保つ。
-- 別のアプリへフォーカス移動: `OnEndEdit` で commit (現状の挙動を維持)
+- 別のアプリへフォーカス移動: `OnEndEdit` で commit する
 
 ### 2.5 staleness check との併用
 

@@ -288,8 +288,8 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
    先食いで適用しない（大文字混在キーも同じ照合規約で扱う）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
-4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
-   （deprecation warning を CHANGELOG に記載）
+4. `promptPrefixByApp` は M48 を含むリリースから 3 マイナーバージョンの間は読み込み、
+   その後のリリースで削除する（deprecation warning を CHANGELOG に記載）
 
 共通 resolver の読み込み・解決処理に統合する。照合で衝突した既存キー（例: `Code.exe` と `code.exe` の
 両方）は、**JSON のキー列挙順に依存しない決定的規則**として、衝突元キーを Unicode

@@ -80,6 +80,7 @@ enum class InputStateKind {
 
 遷移表（`batchRomajiConversion == true` のとき。主要遷移のみ）:
 
+<!-- lint:allow status -->
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | BatchAccumulating | StartComposition / ローカルでかなバッファ更新 / Preedit 更新 |

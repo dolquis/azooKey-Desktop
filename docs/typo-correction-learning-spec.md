@@ -212,7 +212,7 @@ M35 が使うフィールドの意味を定める。
 - `core/tests/input_state_test.cpp`: 補正読みの置換で状態、固定候補、選択位置、
   候補待ち、カスタムローマ字表を保持し、空読みと非入力状態では変更しない。
 
-- 新規 `learning/tests/typo_correction_store_test.cpp`:
+- `learning/tests/typo_correction_store_test.cpp`:
   Observe/Lookup、しきい値未満で `nullopt`、編集距離超過ペアの拒否、
   UTF-8 編集距離（かな）、Save→Load ラウンドトリップ、Reset。
   `learning/tests/CMakeLists.txt` に登録。
@@ -393,7 +393,7 @@ s の隣に a / d / w / x がある
 ```
 
 `settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`。§12.14 の nested v2 キーで、
-schema 未登録（予定））で切替。
+M55 が schema へ追加する予定）で切替。
 
 #### 12.4.3 Romaji Variant Normalizer
 
@@ -488,8 +488,8 @@ v1 の 3 モード（off / suggest / auto_replace）を **4 モード** に拡�
 |---|---|
 | `off` | 打ち間違え補正を無効（v1 と互換） |
 | `suggest` | 「もしかして」候補として提示（v1 互換、既定） |
-| `rank` | 通常候補に混ぜるが控えめに加点（新規） |
-| `aggressive` | 高信頼時のみ第一候補まで上げる（新規） |
+| `rank` | 通常候補に混ぜるが控えめに加点（v2 で追加） |
+| `aggressive` | 高信頼時のみ第一候補まで上げる（v2 で追加） |
 
 初期設定は `suggest` または `rank` を推奨。`aggressive` は誤爆リスクが
 あるため設定アプリで明示的に有効化する。
@@ -836,8 +836,8 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 
 ### 12.14 設定スキーマ拡張
 
-v2 は nested `typoCorrection.*` に集約する。このブロックは `settings/mvp-settings.schema.json`
-に未登録の予定定義であり、schema が持つのは v1 root の `typoCorrectionMode` / `typoMinCount`（§8）:
+v2 は nested `typoCorrection.*` に集約する。このブロックは M55 が `settings/mvp-settings.schema.json`
+へ追加する予定の定義であり、v1 の schema が持つのは root の `typoCorrectionMode` / `typoMinCount`（§8）:
 
 ```json
 {
@@ -854,9 +854,8 @@ v2 は nested `typoCorrection.*` に集約する。このブロックは `settin
 }
 ```
 
-**v1 互換性**: M55 リリース時点で v1 設定 `typoCorrectionMode`（root レベル、
-3 値 enum）を保持しているユーザーが存在する。`SettingsStore` は読み込み時に
-以下の migration を実行する:
+**v1 互換性**: v1 設定 `typoCorrectionMode`（root レベル、3 値 enum）を持つ
+設定ファイルを読む。`SettingsStore` は読み込み時に以下の migration を実行する:
 
 1. v2 の `typoCorrection.mode` が存在すればそれを採用
 2. v2 が未設定 / 空で、v1 root `typoCorrectionMode` が存在すれば値を読み、
@@ -864,10 +863,10 @@ v2 は nested `typoCorrection.*` に集約する。このブロックは `settin
    `typoCorrection.mode` へコピー
 3. 両方未設定なら既定値 `suggest`
 
-migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出し、
-将来 3 マイナーバージョン後に v1 root key を削除予定（deprecation
-warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
-段階的廃止ポリシー。
+migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出す。
+v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
+その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
+M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。
 
 ### 12.15 M55 受け入れ条件
 

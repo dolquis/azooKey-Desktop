@@ -372,25 +372,19 @@ control接続からCancelを処理できる。1リクエスト1応答を維持�
 
 #### 6.4.1 Payload
 
-```cpp
-struct ObservedSegment {
-  std::string reading;                 // 文節読み（is_auto_punctuation=true は空）
-  CandidateField chosen;               // 確定候補（surface はテキストに含む。tag/source 付き）
-  std::vector<CandidateField> shown;   // その文節で提示した候補（任意・学習文脈）
-  bool is_auto_punctuation{false};     // true: テキストには含むが Observe しない（M59）
-};
+型の正典は `ipc/include/azookey/ipc/Payloads.h` の `ObservedSegment` と
+`CommitSegmentsObservationRequest`。応答は単発確定と同じ `CommitObservationResponse`（`ok`）を使う。
+本 spec が定めるフィールドの意味は次のとおり。
 
-struct CommitSegmentsObservationRequest {
-  std::vector<ObservedSegment> segments;  // 送信順 = テキスト連結順
-  std::string left_context;               // 文全体の直前確定文脈（文頭のみ）
-  uint64_t timestamp_ms{};
-  std::string observation_id;             // 再送時も同じ ID。空は旧版互換
-};
-
-struct CommitSegmentsObservationResponse {
-  bool ok{false};
-};
-```
+- `ObservedSegment.reading`: 文節読み。`is_auto_punctuation=true` の文節は空。
+- `ObservedSegment.chosen`: 確定候補（`surface` はテキストに含む。`tag` / `source` 付き）。
+- `ObservedSegment.shown`: その文節で提示した候補（任意・学習文脈）。
+- `ObservedSegment.is_auto_punctuation`: true の文節はテキストには含むが Observe しない（M59）。
+- `segments`: 送信順 = テキスト連結順。
+- `left_context`: 文全体の直前確定文脈（文頭のみ）。
+- `observation_id`: 再送時も同じ ID。空は旧版互換。
+- `secure` / `learning_allowed` / `app`: 単発 `CommitObservation` と同じプライバシー判定と
+  アプリ別記録に使う。`secure` / `learning_allowed` が欠落した payload は学習を拒否する側に倒す。
 
 ```jsonc
 {
@@ -400,7 +394,10 @@ struct CommitSegmentsObservationResponse {
     { "reading": "",               "chosen": { "surface": "。",        "reading": "",               "score": 0.0,  "source": "punct", "tag": 0 }, "shown": [], "is_auto_punctuation": true }
   ],
   "left_context": "",
-  "timestamp_ms": 0
+  "timestamp_ms": 0,
+  "observation_id": "",
+  "secure": false,
+  "learning_allowed": true
 }
 ```
 
@@ -433,20 +430,9 @@ return { ok: true }
 - 単一文節確定（通常確定 / M58-A 単一）は既存 `CommitObservation`（単発）を継続使用。
   本 payload は廃止・置換しない。
 - 旧 host は新 `MessageType` を解せない。**TIP は host が `CommitSegmentsObservation` を
-  解せると確認できたときだけ送る**。確認は Handshake で行うが、**現行スキーマでは
-  `capabilities` は `HandshakeRequest` 側にしか無く**（`ipc/include/azookey/ipc/Payloads.h`。
-  これは TIP→host の広告）、host→TIP の広告フィールドが存在しない。そこで M58-B は
-  **`HandshakeResponse` に host 側 `capabilities` を追加**する:
-
-  ```cpp
-  struct HandshakeResponse {
-    std::string host_version;
-    int protocol_version{1};
-    bool accepted{false};
-    bool model_loaded{false};
-    std::vector<std::string> capabilities;   // 追加: host が解せる拡張機能の広告
-  };
-  ```
+  解せると確認できたときだけ送る**。確認は Handshake で行う。`HandshakeRequest.capabilities`
+  は TIP→host の広告であり、host→TIP の広告は **`HandshakeResponse.capabilities`** が担う
+  （型の正典は `ipc/include/azookey/ipc/Payloads.h` の `HandshakeResponse`）。
 
   このフィールドは複数の host 拡張機能を広告する共通枠であり、M58-B では少なくとも
   **`"commit_segments"`**（本節）と **`"oob_cancel"`**（§6.3.2 の out-of-band Cancel

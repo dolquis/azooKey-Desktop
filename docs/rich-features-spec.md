@@ -73,7 +73,7 @@ QueryLiveConversionResponse:
 
 ### X-1-2. TypingTempoTracker
 
-`tsf-tip/src/TypingTempoTracker.h`（新規）：
+`tsf-tip/src/TypingTempoTracker.h`（予定ファイル）：
 
 ```cpp
 class TypingTempoTracker {
@@ -350,7 +350,7 @@ RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k) const;
 | 同一指 substitution | 0.6（−0.4 ボーナス） |
 
 QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
-`core/src/QwertyAdjacency.cpp` に静的テーブルとして持つ。
+`core/src/QwertyAdjacency.cpp`（予定ファイル）に静的テーブルとして持つ。
 
 #### 適用順序
 
@@ -656,7 +656,7 @@ lookup し、該当ハンドラを呼ぶ。
 
 TIP プロセス内で段落 / 直前文 / アプリ別履歴を保持する。
 
-新規: `tsf-tip/src/ContextTracker.h` / `.cpp`
+予定ファイル: `tsf-tip/src/ContextTracker.h` / `.cpp`
 
 ```cpp
 class ContextTracker {

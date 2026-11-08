@@ -384,8 +384,8 @@ u の隣に i / y / j がある
 s の隣に a / d / w / x がある
 ```
 
-`settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`）で
-切替。
+`settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`。§12.14 の nested v2 キーで、
+schema 未登録（予定））で切替。
 
 #### 12.4.3 Romaji Variant Normalizer
 
@@ -838,7 +838,8 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 
 ### 12.14 設定スキーマ拡張
 
-v2 は nested `typoCorrection.*` に集約する:
+v2 は nested `typoCorrection.*` に集約する。このブロックは `settings/mvp-settings.schema.json`
+に未登録の予定定義であり、schema が持つのは v1 root の `typoCorrectionMode` / `typoMinCount`（§8）:
 
 ```json
 {
@@ -856,7 +857,7 @@ v2 は nested `typoCorrection.*` に集約する:
 ```
 
 **v1 互換性**: M55 リリース時点で v1 設定 `typoCorrectionMode`（root レベル、
-3 値 enum）を保持しているユーザーが存在する。SettingsManager は読み込み時に
+3 値 enum）を保持しているユーザーが存在する。`SettingsStore` は読み込み時に
 以下の migration を実行する:
 
 1. v2 の `typoCorrection.mode` が存在すればそれを採用

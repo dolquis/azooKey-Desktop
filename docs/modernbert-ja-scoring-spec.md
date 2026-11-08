@@ -365,7 +365,7 @@ final_score = ... + normalize(modernbert_score) * W_BERT + ...
 
 `W_BERT` を高くすると homophone 精度が上がるが latency 悪化が大きい。
 balanced mode（既定）では W_BERT = 0.05、quality mode では 0.10 など
-で調整する（`settings.conversionQuality` キー）。
+で調整する（`settings.conversionQuality` キー。schema 未登録（予定））。
 
 ## 9. secure 判定との連携
 

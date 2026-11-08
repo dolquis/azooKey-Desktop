@@ -16,29 +16,13 @@
 > 実装）。再変換時の周辺文字列取得や、Zenzai への前方文脈供給（`SetContext`）に流用できる。
 > 原典は mozc（C++）であり、実装時は原典に当たること。
 
-### 1.2 インターフェース実装スケルトン
+### 1.2 インターフェース実装
 
-`tsf-tip/include/azookey/tsf/ReconversionFunction.h` と
-`tsf-tip/src/ReconversionFunction.cpp`：
-
-```cpp
-class ReconversionFunction : public IUnknown
-                           , public ITfFnReconversion {
-public:
-    // ITfFunction
-    STDMETHODIMP GetDisplayName(BSTR* pbstrName) override;
-
-    // ITfFnReconversion
-    STDMETHODIMP QueryRange(ITfRange* pRange,
-                            ITfRange** ppNewRange,
-                            BOOL* pfConvertable) override;
-    STDMETHODIMP GetReconversion(ITfRange* pRange,
-                                 ITfCandidateList** ppCandidateList) override;
-    STDMETHODIMP Reconvert(ITfRange* pRange) override;
-
-    // IUnknown (略)
-};
-```
+`ReconversionFunction`（`tsf-tip/include/azookey/tsf/ReconversionFunction.h` /
+`tsf-tip/src/ReconversionFunction.cpp`）が `ITfFnReconversion` を実装する。宣言の正典はヘッダで、
+本書はコードを写さない。`ITfFunction::GetDisplayName` と、`ITfFnReconversion` の `QueryRange` /
+`GetReconversion` / `Reconvert` を持ち、変換キーの入口と、アプリのコールバックの外から候補を
+非同期に作る入口（下記 `GetReconversion` の edit session）を TIP 向けに加える。
 
 #### QueryRange
 
@@ -191,41 +175,15 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 
 ### 2.3 CandidateListUIElement 実装
 
-`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` / `tsf-tip/src/CandidateListUIElement.cpp`：
+`CandidateListUIElement`（`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` /
+`tsf-tip/src/CandidateListUIElement.cpp`）が `ITfCandidateListUIElement`（`ITfUIElement` を継承する）を
+実装する。宣言の正典はヘッダで、本書はコードを写さない。
 
-```cpp
-class CandidateListUIElement
-    : public IUnknown
-    , public ITfUIElement
-    , public ITfCandidateListUIElement
-    , public ITfCandidateListUIElementBehavior {
-public:
-    // ITfUIElement
-    STDMETHODIMP GetDescription(BSTR*) override;
-    STDMETHODIMP GetGUID(GUID*) override;
-    STDMETHODIMP Show(BOOL) override;
-    STDMETHODIMP IsShown(BOOL*) override;
-
-    // ITfCandidateListUIElement
-    STDMETHODIMP GetUpdatedFlags(DWORD*) override;
-    STDMETHODIMP GetDocumentMgr(ITfDocumentMgr**) override;
-    STDMETHODIMP GetCount(UINT*) override;
-    STDMETHODIMP GetSelection(UINT*) override;
-    STDMETHODIMP GetString(UINT index, BSTR*) override;
-    STDMETHODIMP GetPageIndex(UINT* pIndex, UINT uSize, UINT* puPageCnt) override;
-    STDMETHODIMP SetPageIndex(UINT*, UINT) override;
-    STDMETHODIMP GetCurrentPage(UINT*) override;
-
-    // ITfCandidateListUIElementBehavior
-    STDMETHODIMP SetSelection(UINT) override;
-    STDMETHODIMP Finalize() override;
-    STDMETHODIMP Abort() override;
-
-private:
-    std::vector<std::wstring> candidates_;
-    UINT                      selection_  = 0;
-};
-```
+- `ITfUIElement`: `GetDescription` / `GetGUID` / `Show` / `IsShown`。
+- `ITfCandidateListUIElement`: `GetUpdatedFlags` / `GetDocumentMgr` / `GetCount` / `GetSelection` /
+  `GetString` / `GetPageIndex` / `SetPageIndex` / `GetCurrentPage`。
+- `ITfCandidateListUIElementBehavior`（`SetSelection` / `Finalize` / `Abort`）は M21 の full 実装で
+  加える（§2.8「M5 と M21 の役割分担」）。
 
 ### 2.4 動作分岐
 
@@ -359,54 +317,20 @@ v1.0 方針として確定する。
 > 規約 `azookey/tsf/`（`CandidateWindow.h` 等と同階層）に合わせ
 > **`azookey/tsf/CandidateUiCoordinator.h`** に統一する。
 
-```cpp
-namespace azookey::tsf {
+宣言の正典はヘッダで、本書はコードを写さない。描画責務に関わる入口の契約は次のとおり。
 
-// 候補 UI の単一統合点。pbShow に応じて自前 HWND と TSF UI element を振り分ける。
-class CandidateUiCoordinator {
- public:
-  // ActivateEx で受け取った UI-less フラグを保持（§2.10）。
-  void SetUiLessMode(bool ui_less);
-
-  // 候補表示を開始する。内部で:
-  //   1) ITfCandidateListUIElement インスタンスを生成（候補を保持）
-  //   2) ITfUIElementMgr::BeginUIElement(elem, &pbShow, &ui_element_id_)
-  //   3) OnPbShown(pbShow) で描画責務を確定
-  //   4) pbShow==FALSE のときは続けて UpdateUIElement(ui_element_id_) を即時に
-  //      呼び初回候補内容をアプリへ通知する。アプリは BeginUIElement では内容を
-  //      読まず最初の UpdateUIElement（全 update フラグ立ち）で読み始めるため、
-  //      これを省くと初回候補が描画されない（§2.6 フローチャート）。
-  // pt は自前 HWND を出す場合のキャレット直下スクリーン座標。
-  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
-                  const std::vector<CandidateViewItem>& items, int selected_idx);
-
-  // 候補リスト or 選択変更時。
-  //   pbShow==TRUE 経路: 自前 HWND を再描画（UpdateUIElement は呼ばない）
-  //   pbShow==FALSE 経路: ITfUIElementMgr::UpdateUIElement(ui_element_id_) のみ
-  HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
-
-  // 終了。pbShow の値に関わらず HWND を Hide し EndUIElement を必ず呼ぶ。
-  HRESULT EndUI();
-
-  bool IsShowing() const;
-
- private:
-  // BeginUIElement の戻り値を受けて描画経路を確定:
-  //   true  → 自前 HWND を Show（OS/アプリは描画しない）
-  //   false → 自前 HWND は出さず、即時 UpdateUIElement で初回内容をアプリへ委譲
-  void OnPbShown(bool tip_draws);
-
-  CandidateWindow own_window_;                  // pbShow==TRUE 経路
-  wil::com_ptr_nothrow<CandidateListUIElement> ui_element_;  // pbShow==FALSE / UI-less 経路
-  wil::com_ptr_nothrow<ITfUIElementMgr> ui_element_mgr_;
-  DWORD ui_element_id_{0xFFFFFFFF};             // BeginUIElement が返す ID
-  bool ui_less_mode_{false};                    // TF_TMF_UIELEMENTENABLEDONLY
-  bool tip_draws_{true};                        // 直近 BeginUI の pbShow 結果
-  bool showing_{false};
-};
-
-}  // namespace azookey::tsf
-```
+- `SetUiLessMode(bool)`: `ActivateEx` で得た UI-less フラグを保持する（§2.10）。
+- `BeginUI(thread_mgr, pt, items, selected_idx, …)`: 候補表示を始める。内部で
+  1) `ITfCandidateListUIElement` を生成して候補を持たせ、2) `ITfUIElementMgr::BeginUIElement(elem,
+  &pbShow, &ui_element_id)` を呼び、3) `pbShow` で描画責務を確定する。4) `pbShow==FALSE` のときは
+  続けて `UpdateUIElement(ui_element_id)` を即時に呼び、初回の候補内容をアプリへ通知する。アプリは
+  `BeginUIElement` では内容を読まず、最初の `UpdateUIElement`（全 update フラグ立ち）で読み始めるため、
+  これを省くと初回の候補が描画されない（§2.6 フローチャート）。`pt` は自前 HWND を出す場合の
+  キャレット直下のスクリーン座標である。
+- `UpdateUI(items, selected_idx)`: 候補リストか選択の変更。`pbShow==TRUE` 経路は自前 HWND を再描画し
+  `UpdateUIElement` は呼ばない。`pbShow==FALSE` 経路は `UpdateUIElement(ui_element_id)` だけを呼ぶ。
+- `EndUI()`: `pbShow` の値に関わらず HWND を隠し、`EndUIElement` を必ず呼ぶ。
+- `IsShowing()`: 表示中かどうか。
 
 `ITfUIElementMgr::BeginUIElement(ITfUIElement* pElement, BOOL* pbShow,
 DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の各
@@ -536,8 +460,8 @@ covered。
 ### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
 
 `pbShow` の戻り値とアプリの描画責務はアプリ実装に依存するため、代表アプリでの実測が
-必要。**計測手順・対象アプリ・合格条件（安定仕様）は `docs/legacy-parity-spec.md`
-§12** に定める。実機 Win11 が必要なため DEV-97 の子課題 DEV-153
+必要。**計測手順・対象アプリ・合格条件（安定仕様）は
+`compat-test/m5_uiless_pbshow_checklist.md`** に定める。実機 Win11 が必要なため DEV-97 の子課題 DEV-153
 （`gate:human-required`）で M5 着手時に実施し、**アプリ別の実測結果（可変ログ）は
 docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
 
@@ -559,6 +483,10 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 
 `VK_OEM_ATTN` と `VK_DBE_ALPHANUMERIC` は同じ VK 値の別名なので、
 VK だけから区別しない。
+
+本表は TIP の最終挙動である。core の `UserActionMap` が返す値（`VK_KANJI` → `ToggleHankaku`、
+`VK_NONCONVERT` → `ToggleHiraKata` など）は `docs/legacy-parity-spec.md` §1.4 が定め、開閉キーは
+TIP がその写像より前に処理する。
 
 `VK_DBE_KATAKANA`（0xF1、Shift 付きのカタカナひらがなキー）は扱わず、アプリへ渡す。Windows 版には
 カタカナ入力モードが無いためで、legacy にもカタカナキーは無い。Alt 付きのカタカナひらがなキー

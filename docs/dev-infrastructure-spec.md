@@ -3279,6 +3279,8 @@ C-013 は DEV-1364 の追加ケースであり、M50 の C-001〜C-012 受け入
 Windows Settings 等）は実行可能な範囲で自動判定する best-effort 対象とする。
 `best-effort` / `recorder` アプリでは自動化できないケースを §13.3.1 の
 手動チェックリストで補完する。
+TSF の描画責務を見る実機の手動チェックリスト（M3 の表示属性、M5 の `pbShow`）は `compat-test/` に置き、
+一覧は `compat-test/README.md`「手動チェックリスト」が持つ。
 
 ### 13.3.1 Office 手動チェックリスト（recorder 補完）
 

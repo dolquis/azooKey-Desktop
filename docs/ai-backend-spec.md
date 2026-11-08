@@ -4,7 +4,7 @@
 対応マイルストーン: M16（Magic Conversion / Replace Suggestion。本書の主対象）。
   共有消費者として M58-C（AI 整文 `ai-cleanup`）/ X-3-3（Post-Commit Lint）/ X-3-6（バッチ訂正ビュー）。
 関連:
-- `docs/legacy-parity-spec.md` §4（Magic Conversion。本書が §4.4〜§4.6 を拡充する）
+- `docs/legacy-parity-spec.md` §4（Magic Conversion の TIP 側の挙動。同 §4.4・§4.5 は本書へのリンク）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
 - `docs/rich-features-spec.md` X-3-3（Post-Commit Lint）/ X-3-5（訂正の学習）
 - `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、プライバシー判定）
@@ -192,9 +192,8 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 
 ### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張・確定）
 
-> `legacy-parity-spec.md` §4.4 の骨子に対し、本節は `max_results` / `results` /
-> `error_class` を追加する。本節が当該 payload の正典であり、§4.4 の旧定義は骨子参照に
-> 留める（`legacy-parity-spec.md` §4 冒頭の委譲注記参照）。
+> 本節が当該 payload の正典であり、`legacy-parity-spec.md` §4.4 は本節へのリンクだけを持つ
+> （同 §4 冒頭の委譲注記）。
 
 ```
 TransformSelectedTextRequest:

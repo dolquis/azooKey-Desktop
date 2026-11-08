@@ -982,7 +982,7 @@ D-08 はスケールごとに記録し、D-09 は未実施・環境制約とし�
 
 ## 未導入で測れなかったアプリ
 
-## `docs/legacy-parity-spec.md` §12 の合格条件を満たすか
+## `compat-test/m5_uiless_pbshow_checklist.md` §4 の合格条件を満たすか
 ☐ 満たす ☐ 満たさない（対象アプリと差分を記載）
 ```
 

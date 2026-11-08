@@ -174,6 +174,8 @@ runner 実装前でも実機で確認できる手動チェックリストを同�
 - [`m3_display_attribute_checklist.md`](m3_display_attribute_checklist.md) —
   M3 の DisplayAttribute / CompositionSink のアプリ別描画差（D-01〜D-12。M23 の文節ごとの属性と preedit クリックを含む）。
   M50 のハーネス実装後は追加ケースとして取り込む。
+- [`m5_uiless_pbshow_checklist.md`](m5_uiless_pbshow_checklist.md) —
+  M5 の候補 UI の両立方式（`BeginUIElement` の `pbShow` による描画責務の切替）のアプリ別確認。
 
 ## 観測性との整合
 

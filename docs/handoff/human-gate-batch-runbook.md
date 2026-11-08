@@ -6,7 +6,7 @@ VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文�
 - VM 構成と 3 層フローと補助範囲：[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md)
 - 登録、bootstrap、ログ取得、後始末の手順：[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)
 - 打鍵チェック項目 A1〜A8 と B1〜B7：[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
-- compat runner の実行と出力レイアウト：[`../../compat-test/README.md`](../../compat-test/README.md)
+- compat runner の実行：[`../../compat-test/README.md`](../../compat-test/README.md)。出力レイアウトは [`../dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.5
 - dump、ETW、Process Monitor の採取：[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)
 - VM と開発機の振り分け基準、開発機での手順：[`dev-machine-verification.md`](./dev-machine-verification.md)
 

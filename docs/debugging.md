@@ -105,6 +105,16 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 5. 候補確定後、同じ reading を再変換し、確定済み候補が上位に来る（学習効果）。
 6. Chrome / VSCode / Office でも基本操作確認。
 
+### 開発用登録で読み込むモデル
+
+README の「TIP の登録 / 解除」で `register-dev.ps1` を使う場合、読み込むモデルは `settings.json` の
+`model.selectedPath`（[`model-management-spec.md`](model-management-spec.md) §7）または
+`register-dev.ps1 -ModelPath` に渡した絶対パスで決まり、`models\zenzai\` 配下の走査に
+よる自動選択は行わない。`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、
+mock ホストの誤登録を拒否する。`-AllowMockHost` は fallback-only の TIP テスト専用で
+`-ModelPath` とは併用できない。実モデルの計測ゲートとバックエンド経路の決定は
+[`zenzai-gpu-route.md`](zenzai-gpu-route.md) を参照する。
+
 ### ユーザー辞書 CLI ラウンドトリップ
 
 `inference-host` の `userdict` サブコマンドで、ユーザー辞書の追加・一覧・
@@ -157,10 +167,8 @@ $env:AZOOKEY_LOG_LEVEL = 'info' # info / warn / error
 - `%LOCALAPPDATA%\azooKey\logs\tip-YYYYMMDD.jsonl`
 - `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl`
 
-ログは 5 MiB でローテーションし、`.1` から `.3` まで 3 世代を保持する。
-UTC 日付単位で当日を含む直近 7 日分だけを保持し、それより古い日次ファイルと
-ローテーション世代は次回の書き込み時に削除する。
-Release ビルドでは入力本文、候補本文、`prompt`、`window_title` の生値を出力しない。
+ローテーションと保持の規則、必須フィールド、Release ビルドで出力しない値は
+`dev-infrastructure-spec.md` §7.1.1 が正典である。ファイル名の日付は UTC である。
 要求を追うときは `trace_id`、`request_id`、記録時刻を使い、MessageType が
 記録された行ではその値も照合する。現行の `trace_phase` と `query_latency` には
 MessageType がないため、同じ ID の組が複数系統に現れた場合、その行を一意の要求へ
@@ -206,6 +214,8 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 最初の打鍵が composition に入らない、といった症状を切り分けるときは、`AZOOKEY_LOG=1` に
 加えて `AZOOKEY_LOG_KEYS=1` を設定し、検証対象アプリを起動し直す。TIP は値が厳密に `1` の
 ときだけ、`tip-YYYYMMDD.jsonl` に次のレコードを info レベルで書く。
+有効化の条件と記録しない値の契約は `dev-infrastructure-spec.md` §7.1.1 が持ち、`key_path` 系の
+項目は本節が正典として持つ（同節から参照される）。
 
 ```powershell
 [Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')

@@ -45,6 +45,8 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - `third_party/` — header-only submodule（WIL）
 - `legacy/` — 旧 macOS 実装（参照用、未保守）
 
+## 外部送信
+
 AI整文は明示的に`aiBackend=openai`を選ぶと外部APIへ入力を送ります。
 APIキー設定は平文も受け付けるため、共有しないでください。`dpapi:`形式の暗号化キーも
 読み込めます。設定と送信制御は[共有AI基盤仕様](docs/ai-backend-spec.md)を参照してください。
@@ -93,6 +95,8 @@ Windows 以外のビルドには ICU の開発パッケージも必要です。U
 
 Release / Linux preset での実行と CI 再現手順の差分は
 [`docs/debugging.md`](./docs/debugging.md) を参照してください。
+preset の一覧と用途は [`docs/dev-infrastructure-spec.md`](./docs/dev-infrastructure-spec.md) §2.1、
+各 preset の値は [`CMakePresets.json`](./CMakePresets.json) にあります。
 configure・build・CTest を順に流す簡易レシピとして `just ci` もあります（[`justfile`](./justfile)）。
 `just ci` は GoogleTest を取得しない（`AZOOKEY_FETCH_GOOGLETEST=OFF`）ため、GoogleTest が未導入の環境では
 テストが 0 件のまま成功します。`azookey_check`、bench、PowerShell 検査も含まないため、上の手順の代わりにはなりません。
@@ -112,7 +116,7 @@ MSI のビルド手順と同梱範囲は [`pkg/msi/README.md`](./pkg/msi/README.
 ## TIP の登録 / 解除（Windows、管理者権限）
 
 ```powershell
-cmake --preset windows-llama-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
+cmake --preset windows-llama-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-llama-debug
 ./scripts/register-dev.ps1
 # 実 Zenzai モデルを使う場合（GGUF の絶対パスを指定する）
@@ -134,14 +138,9 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 実機検証には
 [`docs/handoff/hyper-v-tip-verification.md`](./docs/handoff/hyper-v-tip-verification.md) の
 `windows-release` VM 検証パッケージを使用してください。
-
-読み込むモデルは `settings.json` の `model.selectedPath`
-（[`docs/model-management-spec.md`](./docs/model-management-spec.md) §7）または
-`register-dev.ps1 -ModelPath` に渡した絶対パスで決まり、`models\zenzai\` 配下の走査に
-よる自動選択は行いません。`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、
-mock ホストの誤登録を拒否します。`-AllowMockHost` は fallback-only の TIP テスト専用で
-`-ModelPath` とは併用できません。実モデルの計測ゲートとバックエンド経路の決定は
-[`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
+WIL は「ビルド & テスト」の submodule を使います。
+読み込むモデルの決まり方と `register-dev.ps1` の `-AllowMockHost` は
+[`docs/debugging.md`](./docs/debugging.md)「開発用登録で読み込むモデル」を参照してください。
 
 ## ロードマップ
 

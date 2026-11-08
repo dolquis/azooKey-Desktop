@@ -53,16 +53,26 @@ azooKey TIP の登録と選択は machine-wide 設定を含むため、runner �
 実行前に利用者が登録・選択を完了する。対話セッション、対象アプリ、UI Automation
 のいずれかを利用できない場合は、silent skip せず `failing-skip` として報告する。
 
-## ディレクトリ構成（§13.4）
+## ディレクトリ構成
+
+本節はディレクトリ構成の正典で、§13.4 から参照される。
 
 ```
 compat-test/
 ├── CMakeLists.txt              # runner / cases を配線する compat_test ターゲット
-├── runner/
+├── m3_display_attribute_checklist.md  # 手動チェックリスト（下記）
+├── m5_uiless_pbshow_checklist.md      # 手動チェックリスト（下記）
+├── msix_install_uninstall.ps1  # MSIX の install / update / rollback / uninstall smoke
+├── runner/                     # 各 .cpp に同名の .h を持つ
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
+│   ├── CaseSelection.cpp       # --cases / --skip の選択と C-001 前提の追加
 │   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
 │   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
+│   ├── ReadObservation.cpp     # 本文を持たない UIA 読み取り診断
 │   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
+│   ├── TargetConfigLoader.cpp  # target JSON の読込と実行ファイルの解決
+│   ├── WindowOwnership.cpp     # runner が所有するウィンドウ・tab の判定
+│   ├── CompatTypes.h
 │   └── ReportWriter.cpp
 ├── cases/
 │   ├── C001_basic_input.cpp
@@ -89,28 +99,21 @@ compat-test/
 │   ├── HostHangWatchdogMain.cpp
 │   ├── HostHangWatchdog.h
 │   └── HostProcessSupport.h
-└── targets/
-    ├── notepad.json
-    ├── edge.json
-    └── vscode.json
+├── targets/
+│   ├── notepad.json
+│   ├── edge.json
+│   └── vscode.json
+└── tests/
+    └── compat_test_unit_tests.cpp  # ハーネスの単体テスト（内容は docs/test-inventory.md）
 ```
 
 各 `targets/*.json` は AppId / window class / 自動化レベル
 （`full` / `best-effort` / `recorder`）を定義する（§13.2）。
 
-## 出力レイアウト（§13.5）
+## 出力
 
-```
-compat-report-YYYYMMDD-HHMMSS/
-├── report.md         # 人間向けサマリ（PR コメント用）
-├── report.json       # CI artifact 用
-├── screenshots/
-│   └── notepad_C-001_fail.png
-└── failures/
-    └── notepad_C-001_fail/
-        ├── failure.log
-        └── screenshot.png
-```
+出力ディレクトリのレイアウト、`report.md` / `report.json` の形式、スクリーンショットの扱いは
+§13.5 が正典である。
 
 テストケース一覧と CI 連携は §13.3 / §13.6 を参照。
 Notepad、VS Code、Edge では target 定義に登録されたケースを実行する。環境条件を満たせず自動判定できないケースも
@@ -153,19 +156,8 @@ Host に fault injection 用の起動引数は追加しない。
 
 ## Optional CI
 
-`.github/workflows/compat.yml` は `compat-test` ラベル付き PR と手動 dispatch でだけ
-Notepad、VS Code、Edge を実行する。
-通常の PR ではジョブを skip する。
-各 target の `report.md` / `report.json` と失敗 artifact、実行ログ、全 target の終了コードを
-まとめた `compat-summary.json` は `compat-report-<run-id>-<run-attempt>` artifact に
-7 日間保存する。
-`report.md` は target 固有の marker と全体結果を含むため、そのまま PR コメントへ転記できる。
-
-GitHub-hosted runner は azooKey TIP を登録・選択しないため、target の非 0 終了はジョブを
-失敗させず、step summary と artifact に記録する。
-このジョブの成功は build、アプリ起動、report 収集経路の成功を表し、M50 の互換性 pass を
-表さない。
-M50 ゲートは azooKey TIP を登録・選択した対話環境のレポートで判定する。
+`.github/workflows/compat.yml` の起動条件、artifact の構成、ジョブの成功が表す範囲（M50 の互換性 pass を
+表さないこと）は §13.6 が正典である。
 
 ## 手動チェックリスト
 

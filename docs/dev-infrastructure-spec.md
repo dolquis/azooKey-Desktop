@@ -51,15 +51,22 @@ MVP（Phase 1〜2 完了）から「実運用に耐える IME」へ進むにあ�
 ### 2.1 CMakePresets.json
 
 ルートに `CMakePresets.json` を追加し、configure /
-build / test の入口を統一する。最低限のプリセット:
+build / test の入口を統一する。configure preset の用途は次のとおり。generator、build type、
+cache 変数、`binaryDir`、継承関係など各 preset の値は `CMakePresets.json` が正典であり、本表には写さない。
 
-| プリセット | generator | `CMAKE_BUILD_TYPE` | 用途 |
-|---|---|---|---|
-| `windows-debug` | Ninja | Debug | 手元・CI Debug |
-| `windows-clangd` | Ninja | Debug | clangd / Serena 用 compilation database 生成 |
-| `windows-release` | Ninja | Release | 手元・CI Release |
-| `windows-asan` | Ninja | Debug | Windows ASan 手動・定期実行 |
-| `linux-asan-ubsan` | Ninja | Debug | Linux ASan + UBSan 手動・定期実行 |
+| プリセット | 用途 |
+|---|---|
+| `windows-debug` | 手元・CI の Debug。no-egress の mock テスト |
+| `windows-llama-debug` | pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める開発用成果物 |
+| `windows-clangd` | clangd / Serena 用 compilation database の生成（configure 専用） |
+| `windows-release` | 手元・CI の Release。VM 検証パッケージと Release workflow |
+| `windows-vulkan-release` | ggml-vulkan を有効にした Release ビルド（`docs/zenzai-gpu-route.md`）。CI は Host のコンパイル・リンク検証に使う |
+| `windows-release-arm64` | x64 ホストから Windows on Arm へのクロスビルド（`docs/copilot-pc-backend-spec.md` §8.1） |
+| `windows-no-tests` | `AZOOKEY_BUILD_TESTS=OFF` の非テスト target が壊れていないことの検証（§4.3） |
+| `linux-debug` | Linux の portable subset の手元・CI ビルドとテスト |
+| `linux-coverage` | Linux の portable subset のカバレッジ計測（§4.3） |
+| `windows-asan` | Windows ASan 手動・定期実行（§4.6） |
+| `linux-asan-ubsan` | Linux ASan + UBSan 手動・定期実行（§4.6） |
 
 基本の configure preset（`windows-debug`、`windows-release`、`linux-debug`）の
 `cacheVariables` は `AZOOKEY_BUILD_TESTS=ON`, `AZOOKEY_BUILD_BENCH=ON` を既定とする。
@@ -715,9 +722,10 @@ revert 対象を一意に決められるようにするためで、複数依存�
 
 ## 4. CI 品質ゲート拡張（M38）
 
-M38 着手前の `.github/workflows/windows.yml`（windows-latest + msvc-dev-cmd +
-Ninja + Debug 単一構成、失敗時 PR コメント + test_report artifact）を基盤に、
-以下を追加する。
+本節は CI の品質ゲートの方針（何をどの経路で検査し、何を必須、何を advisory にするか）を持つ。
+ジョブの一覧と起動条件は `docs/test-inventory.md`「CTest 以外の自動検査」が正典で、
+`scripts/check_test_inventory.py` が workflow と突き合わせる。runner image、action とツールの版、
+artifact の保持期間、schedule の値は `.github/workflows/` が正典であり、本書には写さない。
 
 ### 4.1 Debug/Release マトリクス
 
@@ -727,10 +735,8 @@ strategy:
     config: [Debug, Release]
 ```
 
-runner は安定性のため `windows-2022` を明示する（`windows-latest` の暗黙
-更新を避ける）。
-Linux runner はすべての workflow で `ubuntu-24.04` を明示し、
-`ubuntu-latest` の暗黙更新を避ける（SBOM は matrix の値として指定する）。
+runner は安定性のため、Windows と Linux のどちらもすべての workflow で版を明示した image を使い、
+`windows-latest` / `ubuntu-latest` の暗黙更新を避ける（SBOM は matrix の値として指定する）。
 
 ### 4.2 preset 利用
 
@@ -784,19 +790,19 @@ OFF のまま）。
   分離する（§2.3）
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
-- Linux coverage ジョブ — Clang 18 の source-based coverage で portable subset
+- Linux coverage ジョブ — Clang の source-based coverage で portable subset
   （`core` / `ipc` / `learning` / `inference-host`）の行・分岐カバレッジを測る。
   tests / `third_party` / `build` は集計から除外し、HTML・LCOV・JSON summary を
-  `linux-llvm-coverage` artifact として 14 日保持する。初期段階では数値を可視化する
+  `linux-llvm-coverage` artifact として残す。初期段階では数値を可視化する
   だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
   またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
-- Windows coverage ジョブ — OpenCppCoverage 0.9.9.0 の SHA256 検証済み installer を使い、
+- Windows coverage ジョブ — 版を固定し SHA256 を検証した OpenCppCoverage の installer を使い、
   Windows Debug の CTest 子プロセスを 2 台の runner に分割して計測する。
   除外適用後の一覧を名前順に交互配分し、manifest と JUnit で各 shard の実行集合と
   全 shard の重複・欠落がないことを検証する。各 shard の native coverage を統合してから
   HTML と Cobertura を生成する。tests / `third_party` / `build` を
   集計から除き、HTML と Cobertura を `windows-opencppcoverage` artifact として
-  14 日保持する。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
+  残す。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
   デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
   大量ログ境界テストは計測 CTest から除く。通常の Windows Debug ジョブでは実行する。
   Linux の portable subset とは別系列で可視化する。数値閾値は設けない。
@@ -831,30 +837,24 @@ OFF のまま）。
 - GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ
   固定し、対応するリリースタグを行末コメントに残す。Dependabot の
   `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
-- settings JSON Schema — `check-jsonschema==0.38.2` で
+- settings JSON Schema — 版を固定した `check-jsonschema` で
   `settings/mvp-settings.schema.json` と `settings/model-catalog.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` と `settings/default-model-catalog.json` の schema 適合性を確認する
 - PowerShell quality gate — `scripts/test-powershell-quality.ps1` から
   `PSScriptAnalyzer` と `Pester` を実行し、`scripts/register-dev.ps1` /
   `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実
   HKLM 書き込みを伴わない分岐・引数構築テストを行う。pre-commit は
-  `language: system` でローカル導入済みモジュールを使う。CI は Pester `6.2.0` を
+  `language: system` でローカル導入済みモジュールを使う。CI は Pester の版を
   job の `PESTER_VERSION` で指定し、同じ wrapper に `-PesterVersion` で渡す。
   wrapper は指定版を3要素に正規化して比較し、プレリリース版を除外する。
   wrapper は指定版がなければ停止し、実行する版をログへ出す。
   版の指定がないローカル実行では、導入済みの最新版を使う。
 - クラッシュ収集の期限付き probe は `RUN_SERIAL` で登録し、並列 CTest の負荷と分離する。
 
-`settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
-対象ファイルの変更を検出した場合だけ起動する。
-`settings-schema` は `settings/`、`powershell-quality` は PowerShell の script / module /
-manifest、パッケージ定義、`scripts/vm-verify-fixtures/` と Pester が読む製品・診断定義を扱う。
-後者は CMake 定義・preset、設定アプリの vcxproj、TIP 登録ソース、Release workflow・SBOM
-スクリプト・ライセンス、doctor の入力（`.clangd`・`justfile`・WPR profile）、診断マーカー・
-互換性ケースである。入力の対応は `windows.yml` の `powershell_quality` 分類コメントに記す。
-Markdown・`docs/`・`plans/` だけの変更では PowerShell quality を起動しない。
-`cpp-tidy` は portable subset の C++ source と runner / 契約テストの変更、
-`windows-coverage` は build 対象を扱う。
+専門ジョブ（`settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` など）は、先行する
+`changes` ジョブが検査対象の入力の変更を検出した場合だけ起動する。各ジョブの起動条件は
+`docs/test-inventory.md` の「実行系統」列、入力の分類は `windows.yml` の `changes` ジョブの分類コメントが持つ。
+Markdown・`docs/`・`plans/` だけの変更ではこれらを起動しない。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
 これらの専門ジョブをすべて起動する。
 
@@ -882,7 +882,7 @@ configure / build / test の各ログ、Release ビルドの `.pdb`、Release bi
 SARIF・`dumpbin` 出力・要約、Linux coverage の HTML・LCOV・JSON summary、
 Windows coverage の HTML・Cobertura を
 artifact として保存する。PR diagnostic コメントは
-マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
+マトリクスの config ごとの結果を反映する。保持期間は workflow の `retention-days` が定める。
 
 ### 4.5 bench smoke と回帰監視
 
@@ -972,7 +972,7 @@ model 未指定の出力要求がファイルを生成せず失敗すること�
 コンパイルには §4.7 の sccache を使い、bench の計測条件は変更しない。
 workflow は直前の成功 run から `benchmark-results` artifact を取得できる場合だけ baseline
 比較を行い、悪化を GitHub Actions warning として表示する。
-今回の結果は両 bench の JSON を含む `benchmark-results` artifact として 90 日保持する。
+今回の結果は両 bench の JSON を含む `benchmark-results` artifact として保存する。
 bench が閾値超過などで非ゼロ終了した場合も、生成済みの JSON を先に artifact として保存し、
 その後で job を失敗させる。
 初回実行、artifact 期限切れ、run 一覧取得または download の失敗は regression と判定せず、
@@ -989,7 +989,7 @@ baseline 不在、破損、version / config 不一致、指標欠落は比較ス
 top1_accuracy / exact_match_rate の低下と CER の増加は、カテゴリ別を含め warning として通知する。
 top5_accuracy、NFKC 系とレイテンシはこの品質 warning の対象にしない。
 品質 JSON と比較状態・理由・差分を含む `comparison.json` は
-`conversion-quality-results` artifact として 90 日保持する。
+`conversion-quality-results` artifact として保存する。
 品質悪化だけでは終了コードを変更せず、CLI の非ゼロ終了は artifact 保存後に job を失敗させる。
 定期 workflow は PR で起動せず、通常 PR の required check に追加しない。
 reporting の Python テストは `windows.yml` の `quality` ジョブで実行し、
@@ -1019,8 +1019,8 @@ Linux preset の対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc
 Windows preset はこれに `tsf-tip` を加えた全体を対象とする（適用範囲は §4.6.1）。PR
 では通常 Build のみを required とし、sanitizer は schedule / manual dispatch で
 段階導入する。各ジョブは configure / build / CTest のログと
-`Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として 14 日間
-保持する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
+`Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として
+保存する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
 incremental link を sanitizer 設定内で無効化する。
 GoogleTest は同じ ASan オプションでソースからビルドし、テスト検出前に ASan runtime
 DLL を各実行ファイルのディレクトリへ配置する。Linux preset は Clang を使い、leak
@@ -1062,10 +1062,8 @@ VM 上の人間ゲートセッションに限り、対象アプリと解除手�
 
 ### 4.7 コンパイラキャッシュ（sccache）
 
-CI のコンパイルジョブ（`windows-build` Debug/Release、`windows-llama-build`、
-`windows-vulkan-compile`、`windows-arm64-crossbuild`、`windows-no-tests`、
-`windows-coverage-shard`、`linux-build`、Release と Benchmark workflow）は
-`mozilla-actions/sccache-action` で sccache を導入し、GitHub
+CI のコンパイルジョブは `mozilla-actions/sccache-action` で sccache を導入し（導入するジョブは各 workflow の
+step が正典。`AZOOKEY_USE_COMPILER_CACHE=OFF` の preset を使う sanitizer と Linux coverage は使わない）、GitHub
 Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェクトを run 間再利用
 する。ルート `CMakeLists.txt` が sccache を PATH 上で自動検出して compiler launcher
 に設定するため（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）、ワークフロー側の追加設定は
@@ -1081,8 +1079,7 @@ Release workflow は `SCCACHE_GHA_VERSION=release-v1` でキャッシュを分�
 設定アプリの MSBuild はこの compiler cache の対象外とする。
 
 設定アプリの NuGet パッケージは別に扱う。`windows.yml` で `azookey_settings` を
-ビルドするジョブ（`windows-build` の Release、`windows-llama-build`、`windows-no-tests`、
-`windows-arm64-crossbuild`）は、NuGet の global packages folder（`~/.nuget/packages`）を
+ビルドするジョブは、NuGet の global packages folder（`~/.nuget/packages`）を
 `actions/cache` で run 間再利用する。キーは `settings-app/packages.lock.json` の hash で、
 restore-keys は置かない。lock ファイルが変われば新しいキーで取得し直し、古いパッケージを
 持ち越さない。キャッシュが無いときは MSBuild の restore が nuget.org から取得するため、
@@ -3324,42 +3321,8 @@ recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対�
 
 ### 13.4 実装
 
-`compat-test/` ディレクトリを新設:
-
-```
-compat-test/
-├── CMakeLists.txt
-├── runner/
-│   ├── CompatRunner.cpp        # UI Automation + SendInput
-│   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
-│   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
-│   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
-│   └── ReportWriter.cpp
-├── cases/
-│   ├── C001_basic_input.cpp
-│   ├── C002_backspace.cpp
-│   ├── C003_escape.cpp
-│   ├── C004_candidate_position.cpp
-│   ├── C005_monitor_clamp.cpp
-│   ├── C006_dpi_scaling.cpp
-│   ├── C007_surrogate_pair.cpp
-│   ├── C008_undo_redo.cpp
-│   ├── C009_focus_transition.cpp
-│   ├── C010_host_recovery.cpp
-│   ├── C011_shortcut_routing.cpp
-│   ├── C012_romanization.cpp
-│   ├── C013_host_hang.cpp
-│   ├── HostHangWatchdogClient.cpp
-│   ├── HostHangWatchdogClient.h
-│   ├── HostHangWatchdogMain.cpp
-│   ├── HostHangWatchdog.h
-│   └── HostProcessSupport.h
-└── targets/
-    ├── notepad.json
-    ├── edge.json
-    ├── vscode.json
-    └── ...
-```
+ハーネスは `compat-test/` に置く。ディレクトリ構成とファイルの役割は
+`compat-test/README.md`「ディレクトリ構成」が正典である。
 
 各 target JSON は AppId / window class / 自動化レベルを定義する。
 

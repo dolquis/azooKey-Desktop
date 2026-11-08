@@ -74,6 +74,14 @@ jobs:
       - name: Check agent definitions against the manifest
         run: python3 scripts/check_agent_definitions.py
 
+      # IPC の型の表（architecture の索引と tsf-ipc-protocol Skill）、spec の設定キー表、文書中の
+      # preset 名を、MessageType・Dispatcher・schema・CMakePresets と突き合わせる。
+      - name: Test the document contract checker
+        run: python3 scripts/tests/test_check_doc_contracts.py
+
+      - name: Check documents against IPC types, settings schema, and presets
+        run: python3 scripts/check_doc_contracts.py
+
       # 契約ファイル（一覧は scripts/check_docs_impact.py の CONTRACT_PATHS）を変えて docs を
       # 変えない PR に、本文の Documentation impact で影響なしの理由を求める。
       - name: Test the docs impact gate

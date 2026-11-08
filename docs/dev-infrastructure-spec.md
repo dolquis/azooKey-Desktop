@@ -2259,6 +2259,7 @@ TIP は Host の状態を primary 接続の `QueryDiagnostics`（§12.6）で取
 `HealthPayload.status` は Host が `last_error` から決める粗い値である。`last_error` が無ければ
 `ok`、あってモデルがロード済みまたはパスが設定済みなら `degraded`、それ以外は `error` とする。
 TIP はこの値を状態の取得契機にだけ使い、表示する状態を直接決めない。
+この規則は `docs/zenzai-inference-spec.md` §7.4・§9.2.1 から参照される。
 
 ##### `fallback_state` の導出（Host）
 

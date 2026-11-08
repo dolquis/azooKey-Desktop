@@ -202,7 +202,8 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     GGUF path は `ZenzaiModelConverter` で magic/version 検証 → `model_loaded`）
   - llama.cpp C-API を `ZenzaiModelConverter` に接続し GGUF から実候補を生成
   - `AZOOKEY_BACKEND=cpu|cuda` CMake オプション（M37 の `CMakePresets.json` の
-    `cacheVariables` 化を含む）。CUDA 初期化失敗時は CPU fallback、`Health(status=degraded)` で観測
+    `cacheVariables` 化を含む）。CUDA 要求の CPU への降格と Health の扱いは
+    `docs/zenzai-inference-spec.md` §7.4 に従う
   - モデル未配置時はモックにフォールバック
   - Zenzai ロード時間・推論 p50/p95 を `bench/` で計測
 - **設計メモ**: バックエンド別実装（CPU/CUDA 等）は `core::IConverter` 実装

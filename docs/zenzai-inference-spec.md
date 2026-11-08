@@ -635,6 +635,28 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
   クリアできる）。
 - user_dict は degraded でも §7.1 手順 3 で得た候補を保つ（既定 score は §7.2）。
 
+ロード時の降格と fallback（`InferenceEngine::LoadModelWithResult`）は次のとおりである。
+
+- **CUDA 要求**: ggml-cuda をリンクしないビルドでは CPU でロードし、成功した LoadModel とする。
+  降格は `ModelLoadResult.error` の警告として返すだけで、engine の `last_error` は空のまま
+  Health は `ok` を保つ（`LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`）。
+  CUDA の採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典。
+- **Vulkan 要求**: デバイス不在、モデルまたは context の初期化に失敗したら CPU で 1 回だけ
+  再試行する。CPU で成功しても降格理由を `last_error` に保持し、Health は `degraded` になる
+  （`LoadModelVulkanFallbackReportsDegradedCpu`）。`auto` から選んだ Vulkan も同じ扱いとする。
+  R2 再開後に要求 EP が実エラーで失敗して降格した場合も同じ扱いとする。
+- **ロード失敗**: CPU でもロードできなければ LoadModel は失敗を返す。モデルがロードされて
+  いなかった場合は active converter を `SimpleConverter` に戻し、`last_error` に理由を設定する。
+  直前のモデルがロード済みなら、そのモデルを使い続ける。Host は落ちない。
+- **解除**: 後続の成功した LoadModel、またはモデルの無効化 / アンロードで `last_error` と
+  `model_runtime_error_` を解除する（§9.2.1 項 6）。
+- **Health の status**: `effective_last_error()` から決める（§9.2.1 項 5）。対応表は
+  `docs/dev-infrastructure-spec.md` §8.5.1 が正典。
+
+本節は degraded / fallback の規則の正典であり、`docs/copilot-pc-backend-spec.md` §4.4・§4.5、
+`docs/model-management-spec.md` §5.3、`docs/sideload-packaging-spec.md` §1.6.1、
+`docs/zenzai-gpu-route.md`「フォールバック」、`plans/windows-port-roadmap.md` M8 から参照される。
+
 ### 7.5 将来の score 統合（参照）
 
 M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
@@ -932,28 +954,25 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
    （`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が万一再 throw した
    場合は engine 側で捕捉して `model_runtime_error_` を設定し、fallback または空を返す
    （Host は落とさない）。
-5. `Health` の status は**既存の `model_loaded` 3 値分岐を保つ**。engine は `last_error_`
+5. `Health` の status は `model_loaded` とモデルのパスで 3 値に分ける。engine は `last_error_`
    （load/learning）と `model_runtime_error_`（runtime 変換）を畳んだ `effective_last_error()`
-   を公開し、`Dispatcher::HandleHealth` はそれを使う（現行の `engine_->last_error()` 単独参照を
-   置換）。status マッピング:
+   を公開し、`Dispatcher::HandleHealth` はそれを使う（`engine_->last_error()` 単独では見ない）。
+   status マッピング（`docs/dev-infrastructure-spec.md` §8.5.1 と同じ規則）:
    - `effective_last_error()` 空 → **`ok`**。
    - 設定あり **かつ `model_loaded()`** → **`degraded`**（recoverable: runtime 変換劣化や
      loaded-model 警告）。
-   - 設定あり **かつ `!model_loaded()`** → **`error`**（GGUF 欠落/不正等の hard load 失敗。
-     既存 `HandleHealth` の error 分類を維持し、**degraded へ格下げしない**。`model_runtime_error_`
-     は model loaded 時のみ立つので、この枝に来るのは load 失敗の `last_error_` のみ）。
+   - 設定あり **かつ `!model_loaded()` で、モデルのパスが設定済み** → **`degraded`**
+     （GGUF 欠落/不正等のロード失敗。`SimpleConverter` で変換を続ける。§7.4）。
+   - 設定あり **かつ `!model_loaded()` で、モデルのパスが空** → **`error`**。`model_runtime_error_`
+     は model loaded 時のみ立つので、この枝に来るのは load/learning 由来の `last_error_` のみ。
    これにより:
    - runtime 劣化 → `model_runtime_error_` 立つ → `degraded`。
    - **その後の成功変換** → `model_runtime_error_` が nullopt に上書き → （他要因が無ければ）
      `ok` に**復帰**（§10 の Health テストと整合。stuck degraded を回避）。
    - 成功変換は `model_runtime_error_` のみクリアし、**load/learning 由来の `last_error_` は
      消さない**（別フィールドのため誤って健全化しない）。
-   - **既存 API セマンティクスを壊さない**: CUDA 要求→CPU フォールバックは**成功 LoadModel**
-     であり、警告は `ModelLoadResult.error` に返すのみ。`engine->last_error()` は空＝`Health=ok`
-     のまま（既存テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
-     が assert）。`model_runtime_error_` は **runtime 変換劣化専用**であり、backend フォールバック
-     警告を degraded に**再分類しない**（`docs/zenzai-gpu-route.md` の旧「degraded」表現は
-     engine テストの実挙動が優先）。
+   - `model_runtime_error_` は **runtime 変換劣化専用**であり、backend の降格（CUDA 要求の
+     CPU ロードなど）を degraded に**再分類しない**。降格の規則は §7.4。
 6. **モデル lifecycle で `model_runtime_error_` をクリアする**: `LoadModelWithResult` の
    **成功**（リロード含む）・モデルの**無効化 / アンロード**時、既存の `last_error_.reset()` と
    **同じ箇所で `model_runtime_error_.reset()` も行う**。これを怠ると、直近 `Convert` が degraded を
@@ -1237,8 +1256,8 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | 最初の beam step より前に deadline 超過（§7.4）: fallback の候補に `zenzai-deadline-fallback` が付き、`zenzai-degraded` は付かない。`effective_last_error` は空で Health は `ok`、decode 統計の `deadline_exceeded` は立つ |
 | unit | モデル lifecycle クリア（§9.2.1）: degraded 変換後に LoadModel 成功/無効化/アンロードすると `model_runtime_error_` がクリアされ、直後の Health が stale な degraded/error を報告しない |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
-| unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
-| unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
+| unit | CUDA→CPU フォールバック（§7.4）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
+| unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`＋パス設定済み（GGUF 欠落・不正のロード失敗）→`degraded` / 設定あり＋`!model_loaded`＋パス空→`error` |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | beam の seq 付け替え（§9.2.3.3）: 親の `seq_id` と使用中集合から、削除一覧・複製一覧・新しい割り当てを決める純ロジックを llama.cpp 無効ビルドで検証する。親を引き継ぐ生存 beam は複製を要求しない、生存 beam を持たない親の `seq_id` は削除一覧に入りかつ複製元にならない、削除は複製より前に並ぶ、複製先が使用中の `seq_id` にならない、割り当てが `kMaxModelCandidates` 本を超えない、同じ入力に対して同じ割り当てを返す（決定性）。一覧を実際の seq 操作へ写す境界は本 unit の対象外（real-model smoke が担保する） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |

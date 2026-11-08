@@ -18,7 +18,7 @@
 
 決定 2〜4 の実証結果と、R2（Windows ML）の再開条件は
 `docs/copilot-pc-backend-spec.md` §4.3 が正典。アクセラレータ要求が降格したときの
-Health の扱いは同 §4.4 を正典とする。
+Health の扱いは `docs/zenzai-inference-spec.md` §7.4 を正典とする。
 
 ## 判断根拠
 
@@ -34,11 +34,10 @@ Health の扱いは同 §4.4 を正典とする。
 
 ## フォールバック
 
-- Vulkan 初期化・モデルロード失敗時は同一 Host API で CPU ロードを一度だけ再試行する。
-  両方のロードに失敗した場合は、Vulkan と CPU の両方の失敗理由を保持する。
+- 降格（CUDA 要求の CPU ロード、Vulkan 失敗時の CPU 再試行）、ロード失敗時の
+  `SimpleConverter` への劣化、そのときの Health は `docs/zenzai-inference-spec.md` §7.4 が正典。
+  段位表は `docs/copilot-pc-backend-spec.md` §4.5。
 - TIP はバックエンド差を意識せず、IPC レスポンスのみで処理する。
-- 終端は常に R1 CPU（GGUF）であり、入力をブロックしない。段位表は
-  `docs/copilot-pc-backend-spec.md` §4.5。
 
 ## 実装構成
 
@@ -55,13 +54,9 @@ Health の扱いは同 §4.4 を正典とする。
 - llama.cpp 接続時は `llama_model_load_from_file` / `llama_init_from_model` で GGUF を
   ロードし、`Convert` のモデル生成候補を `CandidateSource::Model` と
   `debug_info=zenzai;lp=...;avg=...` に写像する。
-- モデル未配置・破損・推論例外・空生成時は既存 converter に劣化し、候補に
-  `zenzai-degraded:<reason>` を付与する。
-- CUDA 指定時は valid GGUF を CPU fallback としてロードし、降格理由は
-  `ModelLoadResult.error` の警告として返す。CPU ロード自体が成功した場合、`Health` は
-  ok を保つ。
-- Vulkan から CPU への降格では、CPU ロード成功後も失敗理由を保持し、`Health` を
-  degraded とする。配布への組み込みと UI 露出条件は DEV-1001 で扱う。
+- モデル未配置・破損・推論例外・空生成時の劣化と、CUDA / Vulkan 指定時の CPU への降格は
+  「フォールバック」節のとおり `docs/zenzai-inference-spec.md` §7.4 に従う。Vulkan 版の
+  配布への組み込みと UI 露出条件は DEV-1001 で扱う。
 
 実モデルを使う開発登録の手順（`windows-llama-debug` preset、`register-dev.ps1` の
 `-ModelPath`、GGUF の配置先）は `README.md` を正典とする。GGUF を配置しただけでは
@@ -147,29 +142,10 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
 
 ## 配布ライセンス
 
-配布形態とライセンス結論の正典は `docs/sideload-packaging-spec.md` §1.6 / §1.6.2。
-本節は GPU ルート視点の要約を置く（**法的助言ではなく一次情報の整理**）。
-
-- **モデル（zenz GGUF）**: ピンは `Miwa-Keita/zenz-v3.2-small-gguf`。HF タグは
-  `apache-2.0` だが、zenz 一族（v1〜v3.1、safetensors 版含む）とベース
-  `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0` で、CC-BY-SA-4.0 の
-  ShareAlike と Apache-2.0 の非互換により apache タグは誤りの可能性がある。**保守側に
-  倒し CC-BY-SA-4.0 として扱う**（帰属＋量子化改変の明示。再ホストせず上流 HF から取得）。
-- **CUDA（R1 CUDA）**: 採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典で、
-  R1 CUDA を実リンクしない間は CUDA の add-on を配らない。`cudart64_*` / `cublas64_*` は
-  CUDA Toolkit EULA Attachment A で再配布可であり、再検討の結果 optional add-on として配る
-  場合は、NVIDIA 著作権表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載し、
-  再配布 DLL を**アプリ専用ディレクトリに配置**して共有 `PATH` / システムディレクトリへ
-  入れない（EULA のアプリ限定アクセス条件）。
-- **モデル（kanakanji-edge-33m）**: 重みは Apache-2.0（ゼロから学習とモデルカードに記載、
-  GGUF の `general.license` も apache-2.0）。語彙は zenz と同じ `ku-nlp/gpt2-small-japanese-char`
-  由来で CC-BY-SA-4.0、追加の制御トークン 3 つは Apache-2.0、学習データは zenz と同じ
-  `Miwa-Keita/zenz-v2.5-dataset`（CC-BY-SA-4.0 / ODC-BY）。zenz を CC-BY-SA-4.0 として保守側に
-  扱う理由のうち、語彙とデータの系譜は edge にも残る。DEV-1721 で、重みは Apache-2.0、語彙と
-  学習データには CC-BY-SA-4.0 の帰属表記を置くと確定した（`docs/sideload-packaging-spec.md`
-  §1.6.2）。再ホストせず上流 HF から取得する。
-- **Vulkan（R1 Vulkan）**: `ggml-vulkan` は llama.cpp（MIT）成果物。ローダ / ドライバは
-  GPU ベンダ提供で同梱不要のため、固有の再配布義務は無い。
+モデル（zenz GGUF、kanakanji-edge-33m）・CUDA ランタイム・Vulkan の配布形態とライセンスの結論は
+`docs/sideload-packaging-spec.md` §1.6 / §1.6.2 が正典。CUDA の採否は
+`docs/copilot-pc-backend-spec.md` §4.3 項 7 に従う。第三者資産の attribution の集約はルートの
+`THIRD_PARTY_LICENSES`、運用規約は `docs/licensing-policy.md` が持つ。
 
 ## 参照
 

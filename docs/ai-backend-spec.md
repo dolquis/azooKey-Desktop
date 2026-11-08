@@ -165,7 +165,7 @@ public:
      `None` に強制（§8）。`privacy-and-secure-input-spec.md` §5 / §5.2 が正典。
   2. **アプリ別プロファイル**（M48）: `app-profile-spec.md` §4.2 の backend 解決。
      **M48 未実装時はこの段を飛ばし、3 のグローバル設定へフォールバックする**
-     （M16 は M48 に依存しない。§13）。
+     （M16 は M48 に依存しない）。
   3. **グローバル設定** `aiBackend`（`settings/mvp-settings.schema.json`）。
 - **X-3-3 の既定寄せ**: X-3-3（自動・毎 commit）は、`aiBackend=openai` でも
   Post-Commit Lint の送信先を `local-zenzai` へ寄せる。`local-zenzai` 不在時は
@@ -326,17 +326,12 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | 経路 | 担当 M | メソッド | 追加要件 |
 |---|---|---|---|
 | chat/completions 呼び出し | **M16**（本書） | POST + JSON | Bearer 認証、`response_format`、（Phase 6）SSE ストリーミング |
-| モデル DL（GGUF 等） | **M32** | GET | `.part`→SHA256 検証→rename、レジューム、既定の catalog（`docs/model-management-spec.md` §3.1.1）の entry との照合 |
+| モデル DL（GGUF 等） | **M32** | GET | 取得手順（`.part`、Range、SHA256、原子置換）は `docs/model-management-spec.md` §3.1.2、照合する entry は同 §3.1.1 |
 
-- モデル DL は既存の確定ファイルが期待 SHA256 と一致する場合、ネットワーク I/O を
-  行わない。
-  `.part` のレジュームでは `206` の `Content-Range` 始点を検証し、Range を無視した
-  `200` は全量取得として `.part` を切り詰める。
-  HTTP 失敗または SHA256 不一致では既存の確定ファイルを置換しない。
 - AI の POST 経路と M32 の GET + SHA256 経路は、いずれも §6.1 の共通基盤の上に載せる
   （重複スタックを作らない）。
 - M32 を Phase 5 へ前倒ししない（Phase 5 を自己完結に保つ）。roadmap の M16 / M32 /
-  M34 依存関係に本契約を反映する（§13）。
+  M34 の依存関係は roadmap が持つ（§13）。
 
 ---
 
@@ -551,21 +546,9 @@ roadmap M16 の条件は次の方法で検証する。
 
 ## 13. 依存関係（roadmap への反映）
 
-本契約に伴う `plans/windows-port-roadmap.md` の依存関係明確化:
-
-- **M16 ↔ M32**: M16 の POST 経路と M32 の GET + SHA256 ダウンロードは §6.1 の共通
-  WinHTTP 基盤（`HttpSession.h`）を共有する。**M32 を Phase 5 へ前倒ししない**。M16 は
-  M32 に依存しない（基盤の共有点のみ契約で固定）。
-- **M16 ↔ M34**: API キーは §9 の `dpapi:` prefix 規約で保存し、M34（DPAPI）を
-  Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite にしない（Host は平文の
-  値も受理し、README で注意喚起する。§9）。
-- **M16 ↔ M46**: secure ガードは §8 で `AiBackend` 入口に強制。M46 同時期/先行が
-  望ましい（roadmap M16 既述）。プライバシー判定 不在時は外部 AI を有効化しない安全側に
-  倒す（実装上の暫定は M16 PR でレビュー）。
-- **M16 ↔ M48**: backend 解決順（§3.3）の第 2 段がアプリ別プロファイル
-  （`app-profile-spec.md` §4.2）。M16 は M48 に依存せず、M48 未実装時はこの段を
-  飛ばしてグローバル `aiBackend` へフォールバックする。
-- **M58-C / X-3-3**: 本書の `AiBackend` 抽象・fallback・secure 契約を前提に積む。
+M16 と M32 / M34 / M46 との依存関係は `plans/windows-port-roadmap.md` の M16・M32・M34 が
+正典である。本書が持つ契約側は、backend 解決順（§3.3。M16 は M48 に依存しない）、共通 WinHTTP 基盤の共有（§6）、
+secure ガード（§8）、API キーの `dpapi:` prefix 規約（§9）である。
 
 ---
 

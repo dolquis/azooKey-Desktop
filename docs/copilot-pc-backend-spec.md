@@ -401,17 +401,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   - `engine`: `"llama_cpp" | "winml"`（既定 `llama_cpp`、後方互換）
   - `ep_preference`: `"auto" | "npu" | "gpu" | "cpu"`（R2 のみ、既定 `auto`）
   - 既存 `n_gpu_layers` は R1（llama.cpp）専用として維持。
-- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**する。Health 反映は
-  **ロード成否と error 有無で決める**（`docs/zenzai-inference-spec.md` §9.2.1 と一致）:
-  - **R1 CUDA 要求 → R1 CPU 降格**（CUDA 未配線の "for now"、§4.5）は**成功 LoadModel**。降格は
-    `ModelLoadResult.error`（警告）で返すのみで `engine->last_error()` は空＝**`Health=ok`** を維持
-    する（engine テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
-    が回帰防止に assert）。
-  - 要求 EP が**実エラーで失敗**して降格した場合（例 §4.6 step5 の WinML `Failure`）は
-    `last_error` に理由を設定。CPU でロードできれば `Health=degraded`、ロード不可なら `error`。
-  - Vulkan デバイス不在、モデルまたは context 初期化失敗時は CPU で一度再試行し、成功時も
-    降格理由を `last_error` に保持する。後続の成功 LoadModel またはモデル無効化で解除する。
-    `auto` から選んだ Vulkan が失敗した場合も同じ扱いとする。
+- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**する。CUDA 要求、Vulkan の失敗、
+  要求 EP の実エラー（例 §4.6 step5 の WinML `Failure`）による降格での `last_error` と Health の
+  扱いは `docs/zenzai-inference-spec.md` §7.4 が正典。
 
 #### `WinMlBackend` の責務境界
 
@@ -584,6 +576,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 | AC | R1 Vulkan（非 NVIDIA / R2 不可の GPU） | Vulkan(ggml-vulkan) → R1 CPU |
 | バッテリ | auto | **NPU EP のみ取得・選択**（§4.6 でバッテリ時は GPU EP を登録しない）→ NPU EP ready なら R2(NPU) / 不可なら R1 CPU。**GPU EP / CUDA / Vulkan を回避** |
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
+
+降格時の Health と、終端の R1 CPU でもロードできないときの `SimpleConverter` への fallback は
+`docs/zenzai-inference-spec.md` §7.4 に従う。
 
 > バッテリ時に R2(auto) を Windows ML の全 EP 自動選択（NPU→GPU→CPU）に委ねると、NPU
 > 非 ready の GPU ラップトップで GPU が選ばれ得る。これを防ぐため、バッテリ時は §4.6 の

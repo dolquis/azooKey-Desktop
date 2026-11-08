@@ -507,13 +507,9 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 
 - **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
   `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
-- **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
-  rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
-  ファイルをロード対象に入れない。
-- **中断と再試行**: `.part` があれば Range GET で続きから再開する。
-  サーバーが Range を無視した場合は `.part` を切り詰めて全量取得へ戻す。
-  ネットワーク失敗または SHA256 不一致では既存の最終名を変更せず、手動配置済みの
-  モデルを継続利用できる状態に保つ。
+- **取得の原子性・中断と再試行**: `.part` への書き込み、Range による再開、SHA256 検証、
+  確定パスへの原子置換は `docs/model-management-spec.md` §3.1.2 が正典。検証前のファイルは
+  確定パスに置かれないので、ロード対象に入らない。
 - **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
   ディレクトリを自動スキャン**しない** —
   `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は
@@ -585,10 +581,10 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   が次回起動で参照するのはコミット済みの値のみ）。いずれかの段で失敗したら
   `selectedPath` は旧版のまま据え置き、新版ファイルは破棄して切替しない。これに
   より「失敗時は旧版を残す」を原子的に保証する。
-- **未配置 / 破損時の劣化モード**: ロード境界は M8 のとおり Host を落とさず
-  `SimpleConverter` にフォールバックし、M47 の状態機械（`DegradedModel` /
-  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。破損 / 部分 DL
-  （`.part` 残骸）は破棄し、直前の有効モデルか SimpleConverter を維持する。
+- **未配置 / 破損時の劣化モード**: ロード失敗時の fallback と Health は
+  `docs/zenzai-inference-spec.md` §7.4 が正典で、M47 の状態機械（`DegradedModel` /
+  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。部分 DL の `.part` は確定パスに
+  昇格しないのでロード対象にならず、次の取得の再開に使う（`docs/model-management-spec.md` §3.1.2）。
 
 ##### M45（フル管理 UI）への橋渡し
 
@@ -613,6 +609,7 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 上流 HuggingFace から取得・再ホストしない）で確定**する（DEV-202 は Done）。著者確認を
 要するのは「再ホスト解禁」の任意最適化のみで、その進捗・状態は Linear DEV-497 が正典
 （本 spec には書かない）。
+本節は `docs/zenzai-gpu-route.md`「配布ライセンス」から参照される。
 
 ##### モデル（zenz GGUF）
 
@@ -731,7 +728,7 @@ Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-ar
 
 | 起動した実行体 | `auto` | 明示 `cpu` | Vulkan 初期化失敗時 |
 |---|---|---|---|
-| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/copilot-pc-backend-spec.md` §4.4 / §4.5） |
+| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/zenzai-inference-spec.md` §7.4、段位は `docs/copilot-pc-backend-spec.md` §4.5） |
 | CPU 版 Host | CPU | CPU | — |
 
 ##### ライセンス表示と SBOM

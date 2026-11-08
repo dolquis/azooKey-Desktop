@@ -211,6 +211,10 @@ HTTP はループバックの自動テストに限って使用する。
 自動テスト用のループバック URL は proxy を経由せず、resolve / connect / send / receive の
 タイムアウトを呼び出しごとに設定する。
 
+本節の取得手順（`.part`、Range、SHA256、原子置換）はモデル取得の正典であり、
+`docs/sideload-packaging-spec.md` §1.6.1「配置パスとバージョニング」と
+`docs/ai-backend-spec.md` §6.2 から参照される。
+
 #### catalog の entry の取得（DEV-1789）
 
 `FetchCatalogModel`（`inference-host/include/azookey/host/ModelFetch.h`）は、§3.1.1 の
@@ -678,9 +682,8 @@ R2 では device 名表示などの補助に留め、R1 の `auto` 解決では�
 1. ログに `result=error`、`error_code=business`、`reason=backend_load_failed` を記録
    （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）
 2. `last_error` を `LocalModelEntry` に保存
-3. CPU backend で再試行
-4. CPU も失敗した場合は `SimpleConverter` fallback（M47
-   `DegradedModel` 状態）
+3. backend の降格（CPU での再試行）と、CPU でもロードできないときの `SimpleConverter` への
+   fallback、そのときの Health は `docs/zenzai-inference-spec.md` §7.4 に従う。
 
 ここで Host が落ちないことが必須要件（M47 受け入れ条件と整合）。
 

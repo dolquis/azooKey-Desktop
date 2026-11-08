@@ -21,4 +21,6 @@
 - [ ] docs-lint run (`python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`); no growth over the baseline
 - [ ] Stale spec text removed (status words, superseded "現状" notes made true by this change)
 
-Reason:
+<!-- 契約ファイル（`python3 scripts/check_docs_impact.py --print-contract-paths`）を変更し、docs/・plans/・README.md を変更しない PR では、No documentation impact にチェックを入れ、Reason: の後に文書が変わらない理由を必ず書いてください。空欄、このコメントだけ、「なし」「N/A」だけの記入では CI の docs impact 検査が落ちます。 -->
+
+Reason: <!-- 例: 内部の整理だけで wire 形式と設定の既定値は変わらない -->

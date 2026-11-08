@@ -636,7 +636,7 @@ Receive-Job $viaPipe, $viaFile
 
 `Receive-Job` で両ジョブが実際に実行されたことを確かめてから、`list` に両 entry が残るかを見る。
 同じ操作を数回繰り返す。片方だけなら編集消失として記録する。
-`settings.json` はこの userdict ゲートの対象外である。設定アプリ・Host の保存責務と共有ロックの契約は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」に従う。
+`settings.json` はこの userdict ゲートの対象外である。設定アプリ・Host の保存責務と共有ロックの契約は `docs/learning-data-management-spec.md` §14に従う。
 
 ### 別環境・前提が必要なゲート
 

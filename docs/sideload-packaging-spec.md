@@ -228,8 +228,8 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   hook が存在しない**（`Remove-AppxPackage` / 設定アプリのアンインストールは
   package を atomic に削除し、host プロセスを kill するだけ）。したがって
   `Remove-AppxPackage` だけでは `ITfInputProcessorProfiles::Unregister` を呼ぶ
-  契機が無く、§1.5 受け入れ条件「言語バーから死んだエントリが消える」を
-  自動で満たせない。M28 PoC で次のいずれかを確定する:
+  契機が無く、roadmap M28 の受け入れ条件（アンインストールで登録の残骸が消え、言語バーに
+  死んだエントリが残らないこと）を自動で満たせない。M28 PoC で次のいずれかを確定する:
     1. **Companion uninstall script を README で案内**: `Remove-AppxPackage` の
        前にユーザーに `azookey-host.exe userdict unregister-profile` を実行させ、
        明示的に `Unregister` を呼ぶ。
@@ -299,7 +299,7 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。リンカへ `/MANIFEST:EMBED` を直接渡す方法は
   使えない（CMake が続けて呼ぶ `mt.exe` の入力が 0 になり `c10100a7` でビルドが落ちる）。
   埋め込みが無いと `-ExternalLocation` 付きで登録しても `Package.Current` が null になり、
-  §1.5 の受け入れ条件を満たせない。identity
+  roadmap M28 の受け入れ条件を満たせない。identity
   package 未登録の環境では `<msix>` 要素は無視されるため、開発ビルドの挙動は変わらない。
 * `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
   （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with
@@ -697,7 +697,7 @@ ggml のバックエンドレジストリは Vulkan を有効にしたビルド�
 Host 1 つなので、この経路で add-on を配る場合は **add-on の実行体にも `Application` 宣言と、
 `Application@Id` に一致する app 側 side-by-side manifest（`<msix>` の 3 属性）、および両者の
 静的整合検証を用意する**。用意しなければ add-on 側の Host は `-ExternalLocation` 付きで登録しても
-`Package.Current` が null になり、§1.5 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
+`Package.Current` が null になり、roadmap M28 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
 package identity を使わないため、この要求は MSIX 経路にだけ掛かる。
 
 add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
@@ -1262,7 +1262,7 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 payload 空の `UpdateConfig` メッセージを送信して再読込を促す（入力インジケーターのメニューでライブ変換を切り替えたときは TIP も送る）。設定オブジェクトは
 IPC schema に二重定義しない。設定アプリと Host の保存・quarantine は同一の named mutex 下で
 read-modify-write または read から rename までを直列化する（writer 責務とこの排他の
-正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+正典は `docs/learning-data-management-spec.md` §14）。
 
 ```
 UpdateConfigRequest:
@@ -1555,7 +1555,7 @@ schema 自体は superset のまま変えない。
   削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
-  経由する（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。開発者向けの
+  経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
   CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
 

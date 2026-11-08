@@ -556,6 +556,7 @@ M53〜M57 完了時点で達成する目標:
 | `top1_accuracy` | baseline 比 +3% 以上 |
 | `top5_accuracy` | 95% 以上 |
 | `homophone.top1_accuracy` | baseline 比 +5% 以上 |
+| `user_adapt.top1_accuracy` | 学習前比 +3% 以上（M54） |
 | `named_entity.recall_at_5` | 90% 以上 |
 | `typo_correction_top5_accuracy` | 85% 以上 |
 | `typo_false_positive_rate` | 1% 未満 |

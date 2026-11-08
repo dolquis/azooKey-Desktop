@@ -298,7 +298,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     DEV-203）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
     スコープとする（M30 はこの最小層の上に UI を本格化する）。
   - 共有ユーザーデータの writer 責務は
-    `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」を正典とする。
+    `docs/learning-data-management-spec.md` §14 を正典とする。
     設定アプリの保存経路は atomic replace と共有ファイルロックの契約を満たし、`user_dict.json` は
     直接開かず CLI probe または Host への IPC を経由する。Host 側の quarantine rename との
     競合解消は保存 UI の前提となる。
@@ -2320,7 +2320,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     （`exact_match_rate` / `nfkc_exact_match_rate` / `cer` / `nfkc_cer`）を含み、
     `--per-case` で per-case 内訳 JSONL が出力される（`summary.cer` は per-case の
     micro 平均に一致）。CER 単体・Exact/NFKC 境界（全半角差）テストが CTest で通る
-    （spec §6.1.1 / §6.1.2 / §8.1 / §12。DEV-408 テスト方針）
+    （spec §6.1.1 / §6.1.2 / §8.1。DEV-408 テスト方針）
   - `azookey_bench --eval bench/data/typo_eval.jsonl --output
     typo_result.json` で typo 指標が算出・schema 出力される（M52 時点では
     typo 補正は未実装＝M55 のため既定 `off`。補正有効モード `rank`/`aggressive`
@@ -2462,7 +2462,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     M15 予測窓への区分連結供給
 - **受け入れ条件**:
   - 同じ入力を複数回確定すると、次回以降候補順位が上がる
-  - M52 ベンチで user_adapt カテゴリが学習前後で改善する
+  - M52 ベンチで `user_adapt` カテゴリの `top1_accuracy` が学習前比 +3% 以上改善する
+    （`docs/conversion-quality-benchmark-spec.md` §9）
   - 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
   - secure 中に `Observe` が呼ばれない。TIP と Host の判定責務は
     `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う

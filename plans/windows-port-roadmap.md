@@ -18,7 +18,10 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 ## 全体目標
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
-  最小フローが動作する IME。
+  最小フローが動作する IME。未署名 MSI の評価配布であり、一般利用者向けの正式リリースではない
+  （`docs/sideload-packaging-spec.md` §0.1）。
+- **v1.0**: MVP に TIP バイナリ署名（M29）を加えた正式リリース。署名は入力対象にかかわらず
+  v1.0 のリリースゲートである（同 §0.1）。
 - **配布形態**: MVP は未署名 MSI（**per-machine・要昇格**。TIP 登録が HKLM `DllRegisterServer` のため）、MS Store は MSIX（ユーザースコープ・MS 再署名）。配布方針は `docs/sideload-packaging-spec.md` §0。
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
@@ -445,8 +448,9 @@ v1.0 リリースに向けたリスクと対応:
 
 ## v1.0 までの実行計画（Phase 1〜4）
 
-ロードマップの依存図とは別に、v1.0（未署名 MSI で配布できる最小 IME）リリースまでの
-実行順を 4 フェーズで管理する。本章は Phase と対象マイルストーン・検証ゲートの索引で
+ロードマップの依存図とは別に、MVP（未署名 MSI の評価配布）までの実行順を 4 フェーズで管理する。
+v1.0（正式リリース）のリリースゲートは、Phase 4 の検証ゲートに M29 の TIP バイナリ署名の
+受け入れ条件を加えたものとする（`docs/sideload-packaging-spec.md` §0.1）。本章は Phase と対象マイルストーン・検証ゲートの索引で
 あり、目的・変更対象・実装範囲・受け入れ条件の定義は各 M 節が持つ。各マイルストーンの
 進捗・状態の正典は **Linear**（project「azooKey Desktop / Windows IME MVP」）。
 macOS 版は本計画の対象外（「スコープ外」参照）。
@@ -456,7 +460,7 @@ macOS 版は本計画の対象外（「スコープ外」参照）。
 | Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する |
 | Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2 の受け入れ条件（`ITfKeyEventSink::OnKeyDown` 到達）を前提とする |
 | Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み（3〜5 週） | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md`（GGUF 配置と `-ModelPath` 登録）、`docs/debugging.md`（ビルド・手動確認・ユーザー辞書 CLI）、`docs/zenzai-gpu-route.md`（Zenzai ベンチと計測ゲート） |
-| Phase 4 | 配布可能化 — v1.0 リリースゲート（4〜6 週） | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
+| Phase 4 | 配布可能化 — MVP（評価配布）のゲート（4〜6 週） | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が評価配布として自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
 
 ## Phase 5〜7 の依存関係と実行順
 
@@ -481,7 +485,8 @@ M8 完了 ─→ M24 ─┬─→ M25
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
 Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
-Phase 4（M11/M12 = MVP 未署名 MSI 構築・公開）─→ M32（WinGet + 自動更新 + 初回モデル取得）
+Phase 4（M11/M12 = MVP 未署名 MSI 構築・公開）─→ M32（自動更新 + 初回モデル取得）
+Phase 4 ＋ M29（TIP バイナリ署名）─→ v1.0 正式リリース ─→ M32 の WinGet 公開
 Phase 6 完了 ─→ M28（Store MSIX。並行準備。MVP 直接配布の前提ではない）
 Phase 6 完了 ─→ M33
 （M29 = 自前コード署名。TIP バイナリ署名は v1.0 のリリースゲート（spec §0.1）。スタンドアロン MSIX 署名部分は延期し、M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0）
@@ -922,8 +927,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `.github/workflows/release.yml`、GitHub Secrets 設定。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §2。
 - **受け入れ条件**:
-  - タグ push で署名済み MSIX が Draft Release に添付される
-  - `signtool /verify` が成功
+  - タグ push で、Release の MSI に同梱する TIP DLL（`azookey_tsf_tip.dll`）が署名され、
+    `signtool verify /pa` が成功する（v1.0 のリリースゲート）
+  - スタンドアロン MSIX サイドロードに着手する場合: タグ push で署名済み MSIX が Draft Release に
+    添付され、`signtool verify /pa` が成功する
 - **参照仕様**: `docs/sideload-packaging-spec.md` §2
 
 ### M30: WinUI 3 設定アプリ
@@ -958,9 +965,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet は出荷アーティファクト
-  （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、M29 のうち延期した
-  スタンドアロン MSIX 署名部分は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+- **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet で配るのは v1.0 の
+  正式リリースだけであり、MVP の未署名 MSI（評価配布）は載せない。したがって WinGet（§5）の
+  公開は M29 の TIP バイナリ署名を前提とする（spec §0.1）。自動更新（§6）とモデル DL は署名に
+  依存しない。M29 のうち延期したスタンドアロン MSIX 署名部分は、どれの前提でもない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
   再配布可否。`gate:human-required`）の auto-DL 承認を追加前提とする。暫定確定
   （保守・CC-BY-SA、§1.6.2）で配信元は上流 HF に固定済みだが、auto-DL の有効化は
   別途承認を要し、GitHub 再ホスト最適化は著者確認後に解禁する（§1.6.1 ライセンス
@@ -1049,7 +1057,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   タイプミスをしたときに正しい入力へ補正・提示する。汎用 LM 補正
   （`DebugTypoCorrection`）とは独立した、個人の打鍵の癖を学習する機能。
 - **前提**: M6（Commit / Observation）完了。M7（学習）と独立に着手可能。
-- **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックと
+- **推奨実装時期**: Phase 4 完了直後、Phase 5 と並行する独立トラックと
   して前倒し可能。Zenzai・TSF 深耕・パッケージングのいずれにも依存しない
   小規模機能（3〜4 週）で、差別化価値を早期に提供できる。設定は設定アプリの
   「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
@@ -1323,7 +1331,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   送る M58 の原則（`docs/romaji-batch-conversion-spec.md` §4.1）を再利用する（バッファは別に持つ）。English タグ
   描画は X-2-3（`CandidateTag`）を再利用。辞書ゲーティング（品質レイヤ）は任意で、
   ベースライン（生ローマ字 + 大文字化）は辞書なしで動作する。
-- **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックとして
+- **推奨実装時期**: Phase 4 完了直後、Phase 5 と並行する独立トラックとして
   前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定は設定アプリの
   「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持・候補注入経路・
@@ -1940,7 +1948,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   切り分けられるようにし、配布前のサポートコストを下げる。GitHub Issue /
   Discord 報告用の診断 ZIP 生成も含む。
 - **前提**: M40（IPC/JSON 堅牢化）完了、M41（構造化ログ）完了。
-- **推奨実装時期**: Phase 4（v1.0 配布）ゲート前に投入。M11/M12 と並行可能。
+- **推奨実装時期**: Phase 4 ゲート前に投入。M11/M12 と並行可能。
   クラッシュ・登録不整合・モデル未配置などの「即詰み」シナリオを早期に
   ユーザーが自己解決できるようにする。
 - **変更対象**: `diagnostics/`（`azookey_diag.cpp` CLI）、

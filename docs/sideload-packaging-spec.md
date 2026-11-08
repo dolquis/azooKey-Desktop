@@ -36,7 +36,7 @@
 
 | チャネル | 形式 | 自前コード署名 | 位置づけ |
 |---|---|---|---|
-| **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | v1.0 の既定。§4 が正典。GitHub Release で配布 |
+| **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | MVP（評価配布）と v1.0 の既定形式。§4 が正典。GitHub Release で配布。TIP バイナリ署名は §0.1 |
 | **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成（DEV-416） |
 | **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | **当面延期**。§2 の署名ルート（経路 B 確定済み）は本チャネル着手時に実施（DEV-255） |
 
@@ -1156,7 +1156,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
    `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
    アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
-3. **配布形態との整合** — v1.0 MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
+3. **配布形態との整合** — MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
    `azookey_settings.exe` を **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロード同梱できる。
    MS Store 用 MSIX（§1）では packaged EXE として同梱する。いずれも WinUI 3 の unpackaged /
    packaged 両対応（下記事実更新）で成立し、単一 UI スタックのまま両チャネルに載る。
@@ -1631,7 +1631,8 @@ Host が静的リンクする [OS 付属 ICU](https://learn.microsoft.com/en-us/
 の下限に合わせ、MSI はレジストリの `CurrentBuildNumber` を検査して旧 OS への新規インストールを拒否する。
 既存インストールの削除はこの条件で妨げない。リライターが既定 OFF でも ICU のロード要件は変わらない。
 
-> **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が v1.0 MVP の既定配布形態**（未署名、DEV-415）。
+> **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が MVP と v1.0 の既定配布形態**である。MVP の MSI は未署名の評価配布（DEV-415）、
+> v1.0 の MSI は TIP バイナリ署名を含む正式リリースとする（§0.1）。
 > 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
 > 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、
 > 未署名でもインストール可能（SmartScreen 警告 + UAC「不明な発行元」は出る）。
@@ -1891,8 +1892,9 @@ branch dry-run の成功は、タグ時の attestation・draft 作成・asset �
 
 ## 5. WinGet マニフェスト（M32）
 
-> **スコープ注記（§0 配布方針）**: WinGet が配布するのは **MVP の未署名 MSI**（DEV-415）。
-> Release に MSIX は含まれないため `InstallerType` は `msi`。MS Store 配布（DEV-416）は Store が
+> **スコープ注記（§0 配布方針 / §0.1）**: WinGet が配布するのは **v1.0 の正式リリースの MSI**
+> （TIP バイナリ署名済み。M29 が前提）である。MVP の未署名 MSI は評価配布に限るため（§0.1）、
+> WinGet には載せない。Release に MSIX は含まれないため `InstallerType` は `msi`。MS Store 配布（DEV-416）は Store が
 > 更新を担うため、本節の WinGet / §6 自動更新は Store チャネルには適用しない。
 
 ### 5.1 構成

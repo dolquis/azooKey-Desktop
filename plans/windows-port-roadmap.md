@@ -15,6 +15,10 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 > マイルストーン定義・依存関係・受け入れ条件の「定義」・リスクの正典であり、
 > 完了状態（✅/🚧/⚠️）や「現状」「残作業」は持たない。運用は `docs/linear-conventions.md` を参照。
 
+各マイルストーンの受け入れ条件の文言は本書が正典である。各 spec の受け入れ条件節は本書の該当 M を
+指すリンクだけを持つ。測定方法とテスト名は、各 M の「参照仕様」に挙げた spec と
+`docs/test-inventory.md` が持つ。
+
 ## 全体目標
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
@@ -1776,9 +1780,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - `cmake --preset windows-debug` / `windows-release` の
     configure→build→test が成功する
-  - 既存全 target が共通オプション/警告 target をリンクしてビルドできる
-  - `.clang-format` がルートに存在し新規コードに差分が出ない
-  - ビルド生成物が `git status` に現れない
+  - 既存全 target が `azookey_project_options` / `azookey_project_warnings` をリンクした
+    状態でビルドできる
+  - `.clang-format` がルートに存在し、`clang-format --dry-run` が新規追加コードに対して
+    差分ゼロ
+  - `.gitignore` に Windows/CMake エントリが追加され、ビルド生成物が `git status` に現れない
   - 依存更新手順が `docs/dev-infrastructure-spec.md` に記載され、次回の依存
     更新 PR がそれに従える
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
@@ -1802,6 +1808,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     provenance 生成（`release.yml` の `actions/attest`）
 - **受け入れ条件**:
   - Debug / Release 両構成が CI で緑
+  - CI が preset 経由で configure / build / test を実行する
   - Linux 補助ジョブが非 Windows 部分のテストを実行する
   - bench smoke が CTest 経由で exit=0
   - PR コメントが config ごとの結果に対応する
@@ -1824,10 +1831,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 一時ファイル → rename による原子的書き込み
   - 保存先決定ロジックの unit test
 - **受け入れ条件**:
-  - 明示指定なしで `%LOCALAPPDATA%\azooKey\data\` 配下が使われる
+  - 明示指定なしで `%LOCALAPPDATA%\azooKey\data\learning.tsv` / `user_dict.json` が使われる
   - `--learning` / `--user-dict` 指定時は指定パスが優先される
   - 必要なディレクトリが自動作成される
-  - 書き込み中クラッシュで既存ファイルが壊れない
+  - 保存が原子的で、書き込み中クラッシュで既存ファイルが壊れない
   - 保存先決定ロジックの unit test が緑、既存テストが回帰しない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §5
 
@@ -1861,14 +1868,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 複数接続・切断テストが追加され緑
   - pending accept 中の `Stop()` が無期限に待たない
   - 切断済み client が解放される
-  - 未配線 MessageType に明示エラー応答が返り blocking client がハングしない
-  - 数値 codec が locale 非依存で round-trip する
+  - 64KiB を超える length-prefix フレームが往復できる
+  - 未配線 MessageType に明示エラー応答が返り blocking client がハングしない。MessageType 列挙と
+    `Payloads` codec の網羅整合が検査される
+  - 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する
   - uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
     `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する
   - 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する
-  - Handshake トークンが per-user ファイルチャネルで配布される
-  - ヘッダ受信後に本文を送らない peer に対し、規定時間で当該接続のみ切断し
-    他クライアントの処理へ影響しない
+  - Handshake トークンが per-user ファイルチャネルで配布され、取得・発行に失敗した場合は
+    接続または Host 起動を拒否する（spec §6.4.4）
+  - ヘッダ受信後に本文を送らない peer に対し、`ReceiveWithTimeout(N)` が概ね N ms で
+    `nullopt` を返して当該接続のみ切断し、他クライアントの処理へ影響しない。request deadline を
+    渡す呼び出しでは、受信が `min(request の残デッドライン, read ハード)` を超えて戻らない
+    （spec §6.4.8。相 A のタイムアウトでは接続を維持し、応答を消費しない）
   - per-client 未完了要求が上限を超えて無制限に積み上がらない
   - `ipc/testdata/` fixture が TIP / Host 双方のテストから参照され、
     transport 層の truncated / 0-byte frame ケースが緑
@@ -1893,9 +1905,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ policy.detailed_logging_allowed` のときのみ
     （`privacy.redactLogs` 既定 `true`。単に Debug というだけでは出さない）
 - **受け入れ条件**:
-  - `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを所定ディレクトリに出力する
+  - `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを `%LOCALAPPDATA%\azooKey\logs\` に出力する
   - 各行に `ts` / `component` / `level` / `event` が含まれ、IPC 要求に関する行は `request_id` を持つ
-  - エラーを記録する行の `error_code` が 3 カテゴリのいずれかになる
+  - エラーを記録する行の `error_code` が spec §7.4 の 3 カテゴリのいずれかになる
+  - タイムアウト規約（spec §7.5）の deadline 超過がログに記録される
   - Release ビルドで入力本文・候補語がログに出力されない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §7
 
@@ -1917,11 +1930,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `TextService::ObserveHostGeneration` による検知と破棄は実装済み。
     本項は Handshaking→Ready 遷移全体への組み込みを完了させる）
 - **受け入れ条件**:
-  - Host 停止 → 再起動で TIP が自動再接続する
+  - TIP 側 IPC ワーカーが接続状態機械に基づいて動作する
+  - Host 停止 → 再起動で TIP が exponential backoff + jitter により自動再接続する
   - Host 無応答時に TIP が劣化モードへ移行し入力が止まらない
   - 状態遷移がログに記録され、Host 復帰後に `Ready` へ復帰する
-  - Host 再起動をまたぐ再接続で世代変化を検知・記録し、旧世代宛の遅延応答を
-    破棄する
+  - Host 再起動をまたぐ再接続で `host_generation_id` の変化を検知・記録し、旧世代宛の
+    遅延応答を破棄し、pending 要求を新しい request ID で再送する
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §8
 
 ### M43: WIL 段階導入
@@ -1937,7 +1951,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 新規コードは WIL の RAII 型を使用
   - `tsf-tip` の COM / HANDLE / レジストリ処理を段階的に RAII 化
 - **受け入れ条件**:
-  - WIL の取り込みがオフラインビルドを壊さない
+  - WIL が header-only 依存として取り込まれ、オフラインビルドを壊さない
   - 新規コードが WIL の RAII 型を使用する
   - 既存テストが回帰しない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §9
@@ -1972,8 +1986,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - クリーン環境で全項目チェックが実行できる
   - Host 未起動でも診断アプリがクラッシュしない
-  - Zenzai 有効でモデル未選択時に `warning` として fallback 状態を表示する
-    （設定済みパスが不在の場合は `error`。spec §12.2.1）
+  - Zenzai 有効でモデル未選択（`model.selectedPath` 空）時に `warning`、設定済みパスが
+    不在の場合は `error` として fallback 状態を表示する（spec §12.2.1 D-007 / D-008）
   - 各診断項目が判定基準（spec §12.2.1）どおりに ok / warning / error を返す
     （空ストア・未設定 optional 機密は誤検知させない）
   - 診断 ZIP から秘密情報が除去され、各メンバが redaction ルール
@@ -2011,8 +2025,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Host が接続済みのまま `QueryCandidates` に応答しない場合でも、
     `QueryCandidates fast` timeout 後に簡易変換へ劣化し、次の入力を処理できる
   - Host 再起動後に自動復帰する
-  - Zenzai ロード失敗時に fallback 状態が UI に明示される
+  - Zenzai モデルロード失敗時に `DegradedModel` 状態が UI に明示される
   - 連続クラッシュ時は SafeMode に入り、次回起動時に通知する
+  - 各処理の timeout が spec §8.5.2 の表どおりに動作する（request deadline の行が対象。
+    「設計値」の行は含まない）
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §8
 
 ### M50: アプリ互換性テストハーネス
@@ -2042,9 +2058,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
   - Office（Word / Excel / Outlook）が手動チェックリスト（spec §13.3.1）で
-    検証され、結果が `report.md` に記録される
-  - 失敗時にスクリーンショットとログが保存される
-  - report.json が CI artifact としてアップロードできる
+    検証され、結果が `report.md` の Office セクションに記録される
+  - 失敗時にスクリーンショットとログが `failures/` に保存される
+  - `report.json` が CI artifact としてアップロードできる
+  - `report.md` が PR コメント用に整形されている
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §13
 
 ### M51: レイテンシ内訳トレーサ
@@ -2070,10 +2087,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 通常利用時の overhead を抑えるため、詳細出力は `--trace` 明示有効化
     時のみ
 - **受け入れ条件**:
-  - 1 リクエスト単位で TIP / IPC / Host / UI の時間を追跡できる
-  - p50 / p95 / p99 を出力できる
-  - Zenzai backend 比較（cpu / cuda / directml / npu）に使える
-  - 通常利用時の overhead が小さい
+  - 既存の全 IPC envelope の `trace_id` フィールドに UUIDv7 を入れ、JSON parse 後も伝播する
+  - 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に出力できる
+  - `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
+  - Zenzai backend 比較（R1: cpu / cuda / vulkan、R2: winml〔EP 自動選択〕）に使える
+  - 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §7
 
 ## プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）

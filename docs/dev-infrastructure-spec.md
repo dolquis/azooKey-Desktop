@@ -566,14 +566,8 @@ TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-cl
 
 ### M37 受け入れ条件
 
-- `cmake --preset windows-debug` / `windows-release` の configure→build→test
-  が成功する
-- 既存全 target が `azookey_project_options` / `azookey_project_warnings`
-  をリンクした状態でビルドできる
-- `.clang-format` がルートに存在し、`clang-format --dry-run` が新規追加
-  コードに対して差分ゼロ
-- `.gitignore` に Windows/CMake エントリが追加され、ビルド生成物が
-  `git status` に現れない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M37 節とする。本書は §2・§3 でビルド入口・共通オプション・依存更新手順を定義し、受け入れ条件を複製しない。
 
 ## 3. 依存管理方針（M37 / 横断）
 
@@ -783,7 +777,7 @@ OFF のまま）。
   `docs-lint` ジョブで `scripts/tests/test_codex_push.py` を実行し、保護対象や曖昧な送信先の拒否、
   送信範囲の固定を外部 push なしで検査する。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
-  PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
+  PR の**変更行のみ**を必須チェックする。roadmap M37 の受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
   既存行）では PR を止めない。全体整形 PR とツリー全体の
   `clang-format --dry-run --Werror` 必須化は、既存差分が大きいため別作業として
@@ -1206,11 +1200,8 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 
 ### M38 受け入れ条件
 
-- Debug / Release 両構成が CI で緑
-- CI が preset 経由で configure/build/test を実行する
-- Linux 補助ジョブが非 Windows 部分のテストを実行する
-- bench smoke が CTest 経由で実行され exit=0
-- PR コメントが config ごとの結果に対応する
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M38 節とする。本書は §4 で CI のジョブ構成と品質ゲートを定義し、受け入れ条件を複製しない。
 
 ## 5. ユーザーデータ永続化の堅牢化（M39）
 
@@ -1285,13 +1276,8 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 
 ### M39 受け入れ条件
 
-- 明示指定なしで `%LOCALAPPDATA%\azooKey\data\learning.tsv` /
-  `user_dict.json` が使われる
-- `--learning` / `--user-dict` 指定時は指定パスが優先される
-- 必要なディレクトリが自動作成される
-- 保存が原子的（書き込み中クラッシュで既存ファイルが壊れない）
-- 保存先決定ロジックの unit test が追加され緑
-- 既存テストが回帰しない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M39 節とする。本書は §5 で保存先の決定規約と原子的書き込みを定義し、受け入れ条件を複製しない。
 
 ## 6. IPC/JSON 堅牢化（M40）
 
@@ -1623,31 +1609,9 @@ deadline 超過のうち、フレームが転送途中だった場合だけは�
 
 ### M40 受け入れ条件
 
-- 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
-- malformed JSON・ランダムバイト列でクラッシュしない
-- ネスト深度・最大長超過を拒否する
-- サロゲートペアを正しく結合し、単独サロゲートを拒否する
-- Release ビルドで SID 取得失敗時に Host 起動が失敗する
-- 複数接続・切断テストが追加され緑
-- 切断済み client が解放される
-- 64KiB を超える length-prefix フレームが往復できる
-- ヘッダだけを送って沈黙する peer に対し、`ReceiveWithTimeout(N)` が概ね N ms で
-  `nullopt` を返し、当該接続を切断する。request deadline を渡す呼び出しでは、
-  受信が `min(request の残デッドライン, read ハード)` を超えて戻らない（§6.4.8。
-  相 A のタイムアウトでは接続を維持し、応答を消費しない）
-- 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
-  MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
-- 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）
-- uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
-  `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する（DEV-163）
-- 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する（DEV-163 / DEV-188）
-- Handshake トークンが per-user ファイルチャネルで配布され、取得・発行に
-  失敗した場合は接続または Host 起動を拒否する（§6.4.4）
-
-> 注: 本節は受け入れ条件の「定義」のみを持ち、各項目の達成状態は持たない
-> （正典は Linear）。協定外メッセージ（DEV-162）・数値 codec の locale 非依存
-> （DEV-163）・直接パーサ単体テスト拡充（DEV-188）・トークン配布チャネル
-> （§6.4.4）の進捗は対応する Linear 課題で追跡する。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M40 節とする。本書は §6 で JSON パーサと Named Pipe transport の境界値・タイムアウトを定義し、
+受け入れ条件を複製しない。
 
 ## 7. 構造化ログと可観測性（M41）
 
@@ -1909,11 +1873,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 
 ### M41 受け入れ条件
 
-- `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを `%LOCALAPPDATA%\azooKey\logs\` に出力
-- 各行に `ts` / `component` / `level` / `event` が含まれ、IPC 要求に関する行は `request_id` を持つ
-- エラーを記録する行の `error_code` が §7.4 の 3 カテゴリのいずれかになる
-- タイムアウト規約（§7.5）の deadline 超過がログに記録される
-- Release ビルドで入力本文・候補語がログに出力されない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M41 節とする。本書は §7.1〜§7.6 でログ形式・エラーコード体系・タイムアウト規約・redaction を定義し、
+受け入れ条件を複製しない。
 
 ### 7.7 M51 拡張: レイテンシ内訳トレーサ
 
@@ -2024,12 +1986,9 @@ QueryCandidates latency summary (N=10000, skipped=0)
 
 ### M51 受け入れ条件
 
-- 既存の全 IPC envelope の `trace_id` フィールドに UUIDv7 を入れ、JSON parse 後も伝播する
-- 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に
-  出力できる
-- `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
-- Zenzai backend 比較（R1: cpu / cuda / vulkan、R2: winml〔EP 自動選択〕）に使える
-- 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M51 節とする。本書は §7.7 で `trace_id`・計測フェーズ・`azookey_trace_viewer`・オーバーヘッド制御を定義し、
+受け入れ条件を複製しない。
 
 ## 8. Host 可用性・再接続（M42）
 
@@ -2159,14 +2118,9 @@ stale 化する。未送信または接続断後に再武装された pending �
 
 ### M42 受け入れ条件
 
-- TIP 側 IPC ワーカーが接続状態機械に基づいて動作する
-- Host 停止 → 再起動で TIP が exponential backoff + jitter により自動
-  再接続する
-- Host 無応答時に TIP が劣化モードへ移行し、入力が止まらない
-- 状態遷移がログに記録される
-- Host 復帰後に `Ready` へ復帰する
-- Host 再起動をまたぐ再接続で `host_generation_id` の変化を検知・記録し、
-  旧世代の in-flight 応答を破棄し、pending 要求を新しい request ID で再送する
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M42 節とする。本書は §8.2〜§8.4 で接続状態機械・再接続・劣化モード・Host 世代 IDを定義し、
+受け入れ条件を複製しない。
 
 ### 8.5 M47 拡張: ユーザー可視復旧 UX
 
@@ -2515,11 +2469,9 @@ CPU backend へ再試行し、それも失敗したら SimpleConverter へ落と
 
 ### M47 受け入れ条件
 
-- Host を手動 kill しても入力中のアプリが固まらない（M42 と同じ）
-- Host 再起動後に自動復帰する（M42 と同じ）
-- Zenzai モデルロード失敗時に `DegradedModel` 状態が UI に明示される
-- 連続クラッシュ時は `SafeMode` に入り、次回起動時に通知する
-- 各処理の timeout が §8.5.2 の表通りに動作する（request deadline の行が対象。「設計値」の行は含まない）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M47 節とする。本書は §8.5 で復旧 UX の状態機械と timeout 表を定義し、
+受け入れ条件を複製しない。
 
 ### 8.6 推論 Worker プロセス分離（Broker/Worker, MVP後）
 
@@ -2561,10 +2513,8 @@ WIL は header-only のため、vcpkg ではなく submodule または `FetchCon
 
 ### M43 受け入れ条件
 
-- WIL が header-only 依存として取り込まれ、オフラインビルドを壊さない
-- 新規コードが WIL の RAII 型を使用する
-- `tsf-tip` の COM / HANDLE / レジストリ処理の RAII 化が進む
-- 既存テストが回帰しない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M43 節とする。本書は §9 で WIL の取り込み方と適用範囲を定義し、受け入れ条件を複製しない。
 
 ## 10. 成果測定 KPI
 
@@ -2882,7 +2832,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 
 各項目の `status`（§12.3 の `ok` / `warning` / `error`）は以下の閾値で確定する。
 閾値は §8.5.2 timeout 表・§12.6 `fallback_state` enum・§13.2 自動化レベルと
-同一値を参照し、二重定義しない。`--repair` 列は「M44 受け入れ条件」の
+同一値を参照し、二重定義しない。`--repair` 列は roadmap M44 の受け入れ条件の
 自動修復対象（D-001 / D-002 / D-003 / D-013）と一致する。
 
 **評価順序（重複時の優先）**: 各行の `ok` / `warning` / `error` 述語が重複し
@@ -3240,15 +3190,11 @@ D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 
 ### M44 受け入れ条件
 
-- クリーン環境で全項目チェックが実行できる
-- Host 未起動でも診断アプリがクラッシュしない
-- Zenzai 有効でモデル未選択（`model.selectedPath` 空）時に `warning`、
-  設定済みパスが不在の場合は `error` として fallback 状態を表示する（§12.2.1 D-007 / D-008）
-- 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）。各 ZIP メンバが
-  §12.5 の redaction ルール表どおりに処理される
-- `--json` 出力が stable schema としてテストされる
-- 各診断項目が §12.2.1 の判定基準どおりに `ok` / `warning` / `error` を返す
-- `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M44 節とする。本書は §12 で診断項目・判定基準・診断 ZIP の redaction を定義し、
+受け入れ条件を複製しない。
+
+診断 ZIP に秘密情報が含まれないことは snapshot テストで検証する。
 
 ## 13. アプリ互換性テストハーネス（M50）
 
@@ -3559,9 +3505,5 @@ target の非 0 終了だけではジョブを失敗させない。
 
 ### M50 受け入れ条件
 
-- Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
-- Office（Word / Excel / Outlook）が §13.3.1 の手動チェックリストで検証され、
-  結果が `report.md` の Office セクションに記録される
-- 失敗時にスクリーンショットとログが `failures/` に保存される
-- `report.json` が CI artifact としてアップロードできる
-- `report.md` が PR コメント用に整形されている
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M50 節とする。本書は §13 で対象アプリ・テストケース・レポート形式を定義し、受け入れ条件を複製しない。

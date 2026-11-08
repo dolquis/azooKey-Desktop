@@ -261,19 +261,18 @@ Get-Content "$env:LOCALAPPDATA\azooKey\logs\tip-$utcDate.jsonl" |
 
 ## CI
 
-`.github/workflows/windows.yml` で `windows-2022` + msvc-dev-cmd + Ninja:
+CI のジョブ一覧は [`test-inventory.md`](./test-inventory.md) の「CTest 以外の自動検査」、
+品質ゲートの方針は [`dev-infrastructure-spec.md`](./dev-infrastructure-spec.md) §4 を参照する。
 
-1. Debug / Release matrix を `windows-debug` / `windows-release` preset で実行。
-2. configure / build / CTest のログを config ごとに artifact 化。
-3. Release の `.pdb` を artifact 化。
-4. PR には config ごとの configure / build / test tail を github-script で自動コメント。
-5. Linux Debug 補助ジョブで非 Windows target を `linux-debug` preset で検証。
-
-ローカルで CI と同じ流れを再現:
+`.github/workflows/windows.yml` の `windows-build` ジョブの configure / build / CTest を手元で
+再現するときは、README の手順と次の点が異なる。WIL を submodule ではなく
+`-DAZOOKEY_FETCH_WIL=ON` で取得し、既定 target をビルドしてから `ctest` を直接実行する
+（`azookey_check` は使わない）。Release では `--target azookey_settings` も追加でビルドする。
 
 ```powershell
-cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build --preset windows-debug --target azookey_check
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --no-tests=error
 ```
 
 ## 典型トラブル
@@ -346,8 +345,10 @@ cmake --build --preset windows-debug --target azookey_check
 - **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: 多くは **非管理者実行**が原因。
   machine-wide 登録は HKLM と CTF\TIP プロファイルに書くため昇格が必須。管理者
   PowerShell（または自動昇格した `register-dev.ps1`）で再実行する。
-- **学習が反映されない**: 未指定時は
-  `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パスを確認。
+- **学習が反映されない**: 学習の保存先は基準パス（未指定時は
+  `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パス）の横の
+  `<stem>.v2<ext>` で、DPAPI で暗号化して `.enc` を付ける（既定なら `learning.v2.tsv.enc`）。
+  Host は v2 ファイルが無いときだけ基準パスの M7 ファイル（`learning.tsv.enc`）を読む。
   CommitObservation 受信は Host stderr / Dispatcher テストで確認。
 - **学習・ユーザー辞書の保存が失敗する**: Host / CLI の stderr に出る
   `persistence error: stage=... category=... code=...` を確認する。
@@ -359,8 +360,12 @@ cmake --build --preset windows-debug --target azookey_check
   再試行・終了時 flush の境界は `docs/learning-data-management-spec.md` §11.1 を参照する。
   `HostProcessTest` は失敗時に子 CLI ごとの経路・stderr と Host ログを出力する。
   テストには一時ディレクトリ内の合成データだけを使い、実ユーザーデータを渡さない。
-- **学習暴走**: `learning_alpha` を下げる（既定 0.8）。`LearningStore::Reset` または
-  `%LOCALAPPDATA%\azooKey\data\learning.tsv` を削除して再起動。
+- **学習暴走**: `learning_alpha` を下げる（既定 0.8）。学習を消すときは設定アプリの「全削除」
+  （`ResetLearningStore`、`store=learning`。`docs/learning-data-management-spec.md` §4.6）を使う。
+  かなと英語の学習チャネルと M7 ファイルの全行が消える。ファイルを手で消す場合は、Host を終了してから
+  `%LOCALAPPDATA%\azooKey\data\` の `learning.v2.tsv.enc`、`english_learning.v2.tsv.enc` と、
+  残っていれば M7 ファイル（`learning.tsv.enc`、`english_learning.tsv.enc`）を削除して再起動する。
+  Host の実行中に消すと、メモリ上の学習が次の flush で書き戻される。
 - **D-010 の legacy cleanup 待ち**: `details.legacy_retained=true` は v2 と
   `learning.tsv.enc` の併存を表す。v2 が読める場合は warning、読めない場合は error を優先する。
   Host は次の成功した学習保存で cleanup を再試行する。保存時の lock 競合、復号失敗、

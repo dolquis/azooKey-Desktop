@@ -541,9 +541,9 @@ Todo へ差し戻し、経緯を当該 Issue へ記録した。
 
 方向 A は 2026-08-21 の洗い出しで 3 件見つかっており、単発の事故ではない。
 DEV-471（`CI: pre-commit 一式の独立品質ゲート（quality.yml）`、Priority High）は 2026-07-05 の作成から約 2 時間後に Done となり、`startedAt` は null のままだった。
-`.github/workflows/quality.yml` は存在せず、CI に pre-commit / gitleaks の実行も 1 件も無い。
-High 優先度の CI 秘密走査が約 1 か月半のあいだ誰にも所有されないまま放置され、DEV-827 として再起票して初めて追跡対象へ戻った。
-DEV-473（`bench: --json 出力と p95/p99 回帰検知`）は Done かつ archived だが `bench/live_bench.cpp` / `bench/zenzai_bench.cpp` に `--json` / `--output` が無く、DEV-829 として再起票した。
+洗い出しの時点で `.github/workflows/quality.yml` は存在せず、CI に pre-commit / gitleaks の実行も 1 件も無かった。
+High 優先度の CI 秘密走査が約 1 か月半のあいだ誰にも所有されないまま放置され、DEV-827 として再起票して初めて追跡対象へ戻った（その後、pre-commit は `windows.yml` の `quality` ジョブ、gitleaks は `secret-scan.yml` として入った）。
+DEV-473（`bench: --json 出力と p95/p99 回帰検知`）は Done かつ archived だったが、洗い出しの時点で `bench/live_bench.cpp` / `bench/zenzai_bench.cpp` に `--json` / `--output` が無く、DEV-829 として再起票した。
 このずれ自体は DEV-604 が 2026-07-20 の時点で本文に記録していたが、監査の定型点検に無いため tracking Issue の本文に留まっていた。
 DEV-469（`CI: sanitizer プリセット（ASan/UBSan）と nightly 実行`）も同様に Done / archived で成果物が無く、DEV-606 が follow-up として起票し直してから実装が入っている（PR #233）。
 

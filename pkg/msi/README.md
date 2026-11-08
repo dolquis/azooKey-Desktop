@@ -101,10 +101,14 @@ Host はインストール後の再ログオンで通常権限の supervisor か
 通常の Windows 11 では `%ProgramFiles%` から
 `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り・実行 ACL を継承するため、
 MSI は独自の ACL を追加しません。DEV-673 の実機ゲートでは、インストール先の継承 ACL と、
-Microsoft Store / Edge など AppContainer アプリでの日本語入力を確認します。
+Edge のように AppContainer を使うが入力欄を Win32 プロセスがホストするアプリでの日本語入力を確認します。
+パッケージ化された UWP / Microsoft Store アプリでの入力は MVP の対象外です
+（[`docs/sideload-packaging-spec.md` §0.1](../../docs/sideload-packaging-spec.md)）。
 
 GGUF モデルと CUDA ランタイムは base MSI に同梱しません。
-モデルは初回取得経路、CUDA は optional add-on で扱います。
+モデルは設定アプリの取得ボタンや CLI の `models fetch` による取得と手動配置で扱います
+（[`docs/sideload-packaging-spec.md` §1.6.1](../../docs/sideload-packaging-spec.md)）。
+CUDA の扱いは [`docs/copilot-pc-backend-spec.md` §4.3](../../docs/copilot-pc-backend-spec.md) を正典とします。
 
 この MSI はコード署名しません。
 インストール時には Windows Defender SmartScreen と UAC に「不明な発行元」と表示されます。

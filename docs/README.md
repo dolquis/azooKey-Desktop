@@ -93,6 +93,14 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバックと、管制塔セッションと子セッションの役割分担 |
 | [`handoff/parallel-worktree-runbook.md`](handoff/parallel-worktree-runbook.md) | 複数 worktree で同時に build / test / PR 作業をするときに共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と回避策、main の取り込み |
 
+### 一回限りの引き継ぎ（`docs/handoff/`）
+
+完了基準を満たしたら [`docs/archive/`](archive/) へ移し、本表から外す。
+
+| ドキュメント | 役割 |
+|---|---|
+| [`handoff/docs-refactoring-plan.md`](handoff/docs-refactoring-plan.md) | repo docs の陳腐化・矛盾・重複を解消し、再発を防ぐ仕組みを入れる整理計画。方針の決定、段階、再発防止策、完了基準 |
+
 ## Phase 一覧
 
 Phase の構成（Phase 1〜7 + 追加機能 + 開発基盤 + プライバシー / モデル管理 /

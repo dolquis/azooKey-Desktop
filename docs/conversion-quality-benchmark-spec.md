@@ -3,7 +3,7 @@
 対象リポジトリ: dolquis/azooKey-Desktop
 対応マイルストーン: M52（変換品質トラック）
 関連: `plans/windows-port-roadmap.md` M7 / M9 / M53 / M54 / M55 / M56 / M57、
-      `bench/azookey_bench`、
+      `bench/` の target `azookey_bench`、
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）
@@ -51,14 +51,17 @@ CTest として動作する（M38）。本 M52 は **同一ターゲット `azoo
 
 ```
 bench/data/
-├── kana_kanji_eval.jsonl       # 通常変換
-├── homophone_eval.jsonl        # 同音異義語（kana_kanji の subset としても可）
-├── named_entity_eval.jsonl     # 固有名詞
-├── neologism_eval.jsonl        # 新語
-├── user_learning_eval.jsonl    # 学習前後比較
-├── typo_eval.jsonl             # 打ち間違え補正
-└── mixed_english_eval.jsonl    # M63 の日英混在の分割器（§4.4）
+├── kana_kanji_eval.jsonl                  # 通常変換（general / homophone）
+├── typo_eval.jsonl                        # 打ち間違え補正（typo / typo_clean）
+├── conversion_quality_smoke.jsonl         # CTest 専用の小さな入力（§11.2 の件数に含めない）
+├── model_comparison_supplement_eval.jsonl # モデル比較で kana_kanji_eval に足す入力（品質ゲート・baseline 外）
+├── mixed_english_eval.jsonl               # M63 の日英混在の分割器（§4.4）
+└── mixed_english_holdout.jsonl            # M63 の保留セット（ゲート外）
 ```
+
+各ファイルの使い分けは [bench/data/README.md](../bench/data/README.md) を参照する。
+§11.2 の v1 完全版で加わるカテゴリ（`named_entity` / `neologism` / `user_adapt` など）の
+入力ファイルは本節の一覧にない。ケースを足す PR で本節にファイルを加える。
 
 `*.jsonl` は 1 行 1 ケース。**第一の作成ルートは自前で書き起こす
 オリジナルケース**（読み → 表層 → 文脈を本リポジトリ著者が新規作成）で、
@@ -541,8 +544,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 - per-case JSONL は集計を持たない（集計は §8 の `--output` 側の正典）。
   両者は同一 run で整合する（`summary.cer` は per-case `cer` の micro 平均に一致）。
 - per-case ファイルは大きくなる（v1 完全版で ≥1350 行）ため既定では出力しない。
-  baseline 用途では固定 config（§14.1）で採取したものを `bench/baselines/` 配下に
-  保存する。行順は入力 `*.jsonl` の出現順を保つ（diff 安定のため）。
+  baseline と内訳を比べる用途では、baseline と同じ固定 config（§14.1）で採取する。
+  行順は入力 `*.jsonl` の出現順を保つ（diff 安定のため）。
 
 ## 9. 合格基準 v1
 
@@ -572,29 +575,23 @@ warning と終了コードの契約は `dev-infrastructure-spec.md` §4.5 を参
 この定期採取はモデルなし CPU 経路の schema / artifact 接続 smoke とする。
 当該データセットでは top1 / top5 / exact が 0 となり、精度低下の検知を実証できない。
 実品質の回帰検証には実辞書または固定モデルが必要であり、PR 向け回帰ゲートを別途構成する。
-以下は CLI 配線の概略例である。実モデルで検証する場合は `--model` でモデルを指定し、
+実モデルで検証する場合は `--model` でモデルを指定し、
 §14.1 の config と互換な baseline を用意する必要がある。
 
-既存 GitHub Actions に optional な `quality-bench` ジョブを追加（M52
-完了時）:
+定期採取の CLI 配線は `scripts/run-quality-bench.py` が持つ。`kana_kanji_eval` と `typo_eval` の
+それぞれについて次の形で CLI を呼ぶ。baseline は品質 workflow の直前の `main` 成功 run の
+`conversion-quality-results` artifact にある同名の結果 JSON で、§14.1 の互換キーが一致するときだけ
+`--baseline` を付けて評価し直す。
 
-```yaml
-- name: Run conversion quality bench
-  if: contains(github.event.pull_request.labels.*.name, 'quality-bench')
-  run: |
-    .\build\windows-release\bench\azookey_bench.exe \
-      --eval bench\data\kana_kanji_eval.jsonl \
-      --output quality-result.json \
-      --baseline bench\baselines\main.json
-- name: Upload quality report
-  uses: actions/upload-artifact@v4
-  with:
-    name: quality-bench
-    path: quality-result.json
+```bash
+azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
+  --output quality-results/kana_kanji_eval.json \
+  --backend cpu --iterations 30 --typo-mode off \
+  --baseline quality-baseline/kana_kanji_eval.json   # 互換な baseline があるときだけ
 ```
 
-PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが品質改善を
-数値で確認できるように）。
+PR 向け回帰ゲートは、PR コメントに diff_vs_baseline サマリを投稿し、PR レビューアが品質改善を
+数値で確認できるようにする。判定は §14.3 に従う。
 
 ## 11. 評価データの整備方針（件数・代表性）
 
@@ -841,7 +838,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
-  （=通常の commit 差）では無効化しない。よって `bench/baselines/main.json` に
+  （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に
   対する commit 間の回帰判定（roadmap M52 の「前 commit との diff」）が成立する。
   互換キーが変わる比較（モデル・デコード設定・プロンプト改訂、**および評価
   データセット自体の変更**）のみ「baseline 再採取が必要」と明示し、データ差を
@@ -849,7 +846,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 
 ### 14.3 回帰ゲート（CI §10）
 
-- `quality-bench` ジョブの回帰判定は精度系のみを fail 条件にする
+- PR 向け回帰ゲート（§10）の回帰判定は精度系のみを fail 条件にする
   （latency は警告レポートに留める）。
 - 既定の fail 閾値: `top1_accuracy` が baseline 比 **−0.5pp 超**の悪化。
   flaky 誤検出を避けるため、悪化検出時は同一 config で 1 回再実行して確認した

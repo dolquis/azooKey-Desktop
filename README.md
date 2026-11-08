@@ -17,7 +17,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
    tsf-tip/         …… Text Services Framework TIP（in-proc DLL）
         │
         ▼  (ipc/: JSON + length-prefix Named Pipe)
-   inference-host/  …… 推論ホストプロセス（CPU。GPU/NPU バックエンドの経路決定は
+   inference-host/  …… 推論ホストプロセス（既定は CPU。GPU 経路（Vulkan など）は
                         `docs/zenzai-gpu-route.md`）
         │
         ▼
@@ -28,7 +28,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 ## リポジトリ構成
 
 - `tsf-tip/` — TSF Text Service DLL
-- `inference-host/` — 推論ホスト（CPU。GPU/NPU は検討中）
+- `inference-host/` — 推論ホスト（既定は CPU。GPU 経路（Vulkan など）は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md)）
 - `core/` — OS 非依存の変換コア
 - `ipc/` — JSON + length-prefix IPC 定義
 - `learning/` — 学習・再ランキング
@@ -93,7 +93,9 @@ Windows 以外のビルドには ICU の開発パッケージも必要です。U
 
 Release / Linux preset での実行と CI 再現手順の差分は
 [`docs/debugging.md`](./docs/debugging.md) を参照してください。
-同等の流れは `just ci` でも実行できます（[`justfile`](./justfile)）。
+configure・build・CTest を順に流す簡易レシピとして `just ci` もあります（[`justfile`](./justfile)）。
+`just ci` は GoogleTest を取得しない（`AZOOKEY_FETCH_GOOGLETEST=OFF`）ため、GoogleTest が未導入の環境では
+テストが 0 件のまま成功します。`azookey_check`、bench、PowerShell 検査も含まないため、上の手順の代わりにはなりません。
 
 ## 配布パッケージ
 

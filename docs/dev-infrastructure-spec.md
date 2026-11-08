@@ -50,7 +50,7 @@ MVP（Phase 1〜2 完了）から「実運用に耐える IME」へ進むにあ�
 
 ### 2.1 CMakePresets.json
 
-ルートに `CMakePresets.json`（schema version 6）を追加し、configure /
+ルートに `CMakePresets.json` を追加し、configure /
 build / test の入口を統一する。最低限のプリセット:
 
 | プリセット | generator | `CMAKE_BUILD_TYPE` | 用途 |
@@ -61,10 +61,14 @@ build / test の入口を統一する。最低限のプリセット:
 | `windows-asan` | Ninja | Debug | Windows ASan 手動・定期実行 |
 | `linux-asan-ubsan` | Ninja | Debug | Linux ASan + UBSan 手動・定期実行 |
 
-各 configure preset の `cacheVariables` は `AZOOKEY_BUILD_TESTS=ON`,
-`AZOOKEY_BUILD_BENCH=ON` を既定とする。`AZOOKEY_FETCH_GOOGLETEST` は
-**プリセット既定で ON にしない**（オフラインビルド原則。CI ジョブ側で
-明示的に上書きする）。`binaryDir` は `${sourceDir}/build/<preset>`。
+基本の configure preset（`windows-debug`、`windows-release`、`linux-debug`）の
+`cacheVariables` は `AZOOKEY_BUILD_TESTS=ON`, `AZOOKEY_BUILD_BENCH=ON` を既定とする。
+`AZOOKEY_FETCH_GOOGLETEST` は基本 preset の
+**既定で ON にしない**（オフラインビルド原則。CI ジョブ側で
+明示的に上書きする）。`binaryDir` は `${sourceDir}/build/<preset>` を原則とする。
+目的別の preset はこれらを上書きしてよい（bench を OFF にする sanitizer・coverage、tests と bench を
+OFF にする ARM64・`windows-no-tests`、GoogleTest を取得し ggml-vulkan の shader compiler のパス長のために
+`build/vk` を使う `windows-vulkan-release` など）。各 preset の値は `CMakePresets.json` を正典とする。
 
 `windows-clangd` は configure 専用の例外とする。
 コミット済みの `.clangd` が参照するパスに合わせて `binaryDir` を `build/clangd` とし、
@@ -211,7 +215,7 @@ bench の commit ヘッダーは Git の HEAD・参照先と override の変更�
 branch 切替、detached HEAD、linked worktree、packed ref からの更新でも、
 次のビルドで記録する commit を更新する。
 bench を含む場合に限り、出力が `[1/1] Refreshing benchmark commit header` の
-1 行だけで、既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
+1 行だけで、build directory の既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
 有効な `AZOOKEY_BENCH_GIT_COMMIT` override と一致する場合も許可する。
 ヘッダーの欠落・不一致や、コンパイル・リンクなどの追加作業があれば拒否する。
 dry-run の前に `ninja -t deps` の依存ログを走査し、この checkout と build directory の
@@ -888,7 +892,7 @@ artifact として保存する。PR diagnostic コメントは
 
 ### 4.5 bench smoke と回帰監視
 
-`bench/azookey_bench` を CTest 登録し、CI で exit=0 と CPU `SimpleConverter`
+target `azookey_bench` を CTest（`azookey_bench_smoke`）に登録し、CI で exit=0 と CPU `SimpleConverter`
 経路の p95 < 50ms を確認する。
 `azookey_zenzai_bench` は llama.cpp 無効構成の mock smoke と、pin 済み実モデルを使う
 llama.cpp 構成の smoke を CTest へ登録する。
@@ -1110,7 +1114,7 @@ GitHub は v1 を **2025-04-15 に完全停止**しており、廃止済みエ�
 （`Our services aren't available right now`）を返して sccache サーバ起動が失敗、
 compiler launcher に設定された sccache が全コンパイルを道連れにした。現行 sccache は
 v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求するため、**action は v2 を繋ぐ
-`v0.0.9` 以降（本 repo は `v0.0.10`）を pin する**こと。あわせて
+`v0.0.9` 以降を pin する**こと。あわせて
 `SCCACHE_IGNORE_SERVER_IO_ERROR=1` を設定し、実行時にキャッシュ backend が失敗しても
 ローカルコンパイルへ fallback してビルドを緑に保つ（キャッシュはビルドを壊しては
 ならない）。
@@ -1223,16 +1227,17 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 ```
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
-  data\     learning.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
-            auto_words.tsv.enc（M36-A）/ english_learning.tsv.enc（M60）/
+  data\     learning.v2.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
+            auto_words.tsv.enc（M36-A）/ english_learning.v2.tsv.enc（M60）/
             host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
 ```
 
-注: `typo_corrections.tsv.enc`（M35）、`auto_words.tsv.enc`（M36-A）、`english_learning.tsv.enc`（M60）は
-`learning.tsv.enc` / `user_dict.json.enc` と同じ `data\` 配下に置く（`UserDataPaths`
-の `data_dir` 規約に合わせる）。M49 backup（`docs/learning-data-management-spec.md`
+注: `typo_corrections.tsv.enc`（M35）、`auto_words.tsv.enc`（M36-A）、`english_learning.v2.tsv.enc`（M60）は
+`learning.v2.tsv.enc` / `user_dict.json.enc` と同じ `data\` 配下に置く（`UserDataPaths`
+の `data_dir` 規約に合わせる）。学習の 2 チャネルは、M7 形式の `learning.tsv.enc` /
+`english_learning.tsv.enc` を移行元として同じ配下に残しうる。M49 backup（`docs/learning-data-management-spec.md`
 §2）の対象範囲は本レイアウトを正典とする。ただし `host_run_state.txt`（§8.5.3 の
 クラッシュ検知用の印）はユーザーデータではなく、backup の対象に含めない。
 拡張子 `.enc` のない旧ファイルは移行元で、移行時の `.bak` は保全する。
@@ -1747,7 +1752,7 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 | ID | 型 | 粒度 | 発番元 |
 |---|---|---|---|
-| `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、送信キュー（`CommitObservation` / `Cancel`）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
+| `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、送信キュー（`CommitObservation` / `Cancel`）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`inference-host/src/Dispatcher.cpp` の `MakeResponse`） |
 | `trace_id` | string（UUIDv7。**全 envelope 必須**） | 1 論理操作（キー押下 → UI 更新、または 1 lifecycle / settings IPC） | 操作の発行側が採番（キー駆動は TIP の `OnKeyDown`、§7.7.1） |
 
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
@@ -2036,7 +2041,7 @@ Host が停止した際の TIP 側再接続戦略が限定的で、入力中に�
 
 ### 8.2 接続状態機械
 
-TIP 側 IPC ワーカー（`tsf-tip/src/TextService.cpp::IpcWorkerThread`）に
+TIP 側 IPC ワーカー（`TextService::IpcWorkerThread`）に
 明示的な接続状態機械を導入する:
 
 ```
@@ -2636,7 +2641,7 @@ TIP は任意アプリへ in-proc ロードされる DLL であり、依存追�
 
 レビューは `IModelRuntime` インターフェース（`SimpleRuntime` /
 `LlamaCpuRuntime` / `LlamaCudaRuntime` …）の新設を提案する。しかし
-`core/IConverter` が既に同じ役割（変換バックエンドの差し替え可能境界）を
+`core::IConverter` が既に同じ役割（変換バックエンドの差し替え可能境界）を
 担い、M8 も Zenzai を `IConverter` 実装として `SimpleConverter` と差し替え
 る方針が確定している。`IModelRuntime` 新設は二重抽象になるため不採用。
 バックエンド別実装の内部構造は M8 / M24 の範囲で `IConverter` 実装として

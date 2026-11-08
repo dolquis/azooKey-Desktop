@@ -1361,12 +1361,12 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | テスト | 場所 | 内容 |
 |---|---|---|
 | ReconversionFunction | `tsf-tip/tests/reconversion_function_test.cpp` | Windows 限定。QueryRange / GetReconversion / Reconvert |
-| Configure 起動 | `tsf-tip/tests/configure_test.cpp` | Windows 限定。Show が EXE を起動するか |
+| Configure 起動 | `tsf-tip/tests/query_interface_contract_test.cpp` | Windows 限定。`ITfFnConfigure` / `ITfFunction` の公開、`Show` がプロファイル付きで設定アプリを起動するか、起動失敗時の HRESULT |
 | KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動。開閉キーの分類（§3.1、§3.1.1） |
 | 開閉キーと入力インジケーター（§3.1、§4.1、§4.5） | `tsf-tip/tests/activate_uiless_test.cpp` | Windows 限定。`VK_IME_ON` / `VK_IME_OFF` と `imeOnOff` の変換・無変換、初回フォーカス直後の Off、言語バー項目の追加・削除・通知・クリック |
 | 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し、右クリックのメニューの構成、settings.json の 1 キーの書き込み（`TipSettingsWriter`） |
 | 入力インジケーターのメニュー（§4.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipLangBarMenuTest`: 入力モードの切り替え、ライブ変換・予測の書き込みと `UpdateConfig` の有無、グレーアウト、無効化後の選択の破棄、設定アプリの起動 |
-| CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
+| CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
 | Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |

@@ -525,8 +525,8 @@ parser の受理条件:
     "miningEnabled":   { "type": "boolean", "default": true },
     "trendingEnabled": { "type": "boolean", "default": false },
     "registrationMode": { "type": "string", "enum": ["confirm", "auto"], "default": "confirm" },
-    "miningMinCount":  { "type": "integer", "default": 3, "minimum": 1 },
-    "trendingIntervalHours": { "type": "integer", "default": 24, "minimum": 1 }
+    "miningMinCount":  { "type": "integer", "default": 3, "minimum": 1, "maximum": 100 },
+    "trendingIntervalHours": { "type": "integer", "default": 24, "minimum": 1, "maximum": 8760 }
   },
   "additionalProperties": false
 }

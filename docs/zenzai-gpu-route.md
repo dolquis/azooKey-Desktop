@@ -73,8 +73,8 @@ fallback-only の TIP テスト専用で llama.cpp preflight を迂回する経�
 
 | 経路 | 実行 | ゲート |
 |---|---|---|
-| CPU fallback | `bench/azookey_bench.exe` | exit=0、p95 < 50ms |
-| Zenzai CPU | `bench/azookey_zenzai_bench.exe --model <gguf> --require-model --require-zenzai`（または `AZOOKEY_ZENZAI_MODEL=<gguf>`） | `LoadModel` 成功 |
+| CPU fallback | `build/<preset>/bench/azookey_bench.exe` | exit=0、p95 < 50ms |
+| Zenzai CPU | `build/<preset>/bench/azookey_zenzai_bench.exe --model <gguf> --require-model --require-zenzai`（または `AZOOKEY_ZENZAI_MODEL=<gguf>`） | `LoadModel` 成功 |
 | Zenzai CUDA | 同上（`--backend cuda`） | 初期化失敗時に CPU または `SimpleConverter` へ降格 |
 | Zenzai Vulkan | 同上（`--backend vulkan`） | GPU offload、失敗時の CPU 再試行と Health degraded を確認 |
 
@@ -127,8 +127,9 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
 
 **R1 CUDA（GGUF/ggml + ggml-cuda）は NVIDIA GPU 環境専用**である。実リンクは起票し直さず、
 再検討の条件は `docs/copilot-pc-backend-spec.md` §4.3 項 7 に従う。AC 接続デスクトップ
-で最速だが、ノート PC のバッテリ消費が激しい。`BackendSelector` の優先順位下位
-（CPU の手前）にフォールバックとして置く。
+で最速だが、ノート PC のバッテリ消費が激しい。`BackendSelector` の `auto` は `cuda` を選ばない
+（`docs/copilot-pc-backend-spec.md` §4.4「`auto` の解決（BackendSelector）」）。再検討の結果
+実リンクする場合は、優先順位下位（CPU の手前）にフォールバックとして置く。
 
 ## 参考: 先行 Windows 実装（fkunn1326/azooKey-Windows, MIT）による R1 実証
 
@@ -154,11 +155,12 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。現状は GGUF 重視
   `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0` で、CC-BY-SA-4.0 の
   ShareAlike と Apache-2.0 の非互換により apache タグは誤りの可能性がある。**保守側に
   倒し CC-BY-SA-4.0 として扱う**（帰属＋量子化改変の明示。再ホストせず上流 HF から取得）。
-- **CUDA（R1 CUDA）**: `cudart64_*` / `cublas64_*` は CUDA Toolkit EULA
-  Attachment A で再配布可。**optional add-on として同梱・再配布する**（NVIDIA 著作権
-  表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載）。再配布 DLL は
-  **アプリ専用ディレクトリに配置**し、共有 `PATH` / システムディレクトリへ入れない
-  （EULA のアプリ限定アクセス条件）。
+- **CUDA（R1 CUDA）**: 採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典で、
+  R1 CUDA を実リンクしない間は CUDA の add-on を配らない。`cudart64_*` / `cublas64_*` は
+  CUDA Toolkit EULA Attachment A で再配布可であり、再検討の結果 optional add-on として配る
+  場合は、NVIDIA 著作権表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載し、
+  再配布 DLL を**アプリ専用ディレクトリに配置**して共有 `PATH` / システムディレクトリへ
+  入れない（EULA のアプリ限定アクセス条件）。
 - **モデル（kanakanji-edge-33m）**: 重みは Apache-2.0（ゼロから学習とモデルカードに記載、
   GGUF の `general.license` も apache-2.0）。語彙は zenz と同じ `ku-nlp/gpt2-small-japanese-char`
   由来で CC-BY-SA-4.0、追加の制御トークン 3 つは Apache-2.0、学習データは zenz と同じ

@@ -415,9 +415,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
     "tinyNeuralEnabled": false,
     "tinyNeuralModelPath": "",
     "tinyNeuralTimeoutMs": 15,
-    "tinyNeuralFailureThreshold": 3,
-    "modernbertEnabled": "auto",
-    "modernbertTimeoutMs": 30
+    "tinyNeuralFailureThreshold": 3
   }
 }
 ```
@@ -430,13 +428,13 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
   `reason=disabled` で記録する（§7.2）。
 - `tinyNeuralTimeoutMs`: 範囲 10〜20（§7.2）。範囲外は clamp。
 - `tinyNeuralFailureThreshold`: §7.2 の circuit breaker 閾値（既定 3）。
-- `modernbertEnabled` / `modernbertTimeoutMs` は M57 が使う（本 spec では枠のみ
-  予約）。M57 側の正典は `docs/modernbert-ja-scoring-spec.md` §7。
+- `reranker.modernbert*`（`modernbertEnabled` / `modernbertTimeoutMs` 等）は M57 が使う。
+  キー・既定値・範囲の正典は `docs/modernbert-ja-scoring-spec.md` §7。
 - §6.2 の学習パイプラインパラメータ（`trainNegativesPerSample` /
   `correctionWindowMs` / `minDwellMs` 等）はオフライン用であり、本 runtime schema
   には登録しない。
-- 本ブロックは M56 実装着手時に `settings/mvp-settings.schema.json` へ正式登録する
-  （M56 / M57 は v1.0 後トラックのため現状未登録）。
+- 本ブロックの `tinyNeural*` は schema 未登録（予定）。M56 実装着手時に
+  `settings/mvp-settings.schema.json` の `reranker` へ正式登録する（M56 / M57 は v1.0 後トラック）。
 
 ## 9. スコア統合
 

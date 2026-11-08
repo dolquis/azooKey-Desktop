@@ -2,8 +2,8 @@
 
 `.claude/agents/*.md` と `.codex/agents/*.toml` に置くカスタム agent の区分、origin、取り込み時点の記録。
 この manifest は `.claude/agents/MANIFEST.md` の 1 ファイルだけを持ち、`.codex/agents/` には複製しない。`scripts/check_agent_definitions.py` は本表を読み、
-区分 `repo` の agent について Claude / Codex ペアの存在、`name` の一致、本文の byte 一致、
-Claude 側の guard 宣言、Codex 設定の限定的な型・無効な上書き指定、参照する repo path と Skill の実在を検査する。
+区分 `repo` の agent を検査する。検査項目の正典は
+[`docs/handoff/agent-orchestration.md`](../../docs/handoff/agent-orchestration.md)「機械検査」である。
 
 区分の意味:
 

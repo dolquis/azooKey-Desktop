@@ -94,10 +94,12 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 ## IPC メッセージ
 
 各メッセージの payload フィールドの正典スキーマは `ipc/include/azookey/ipc/Payloads.h`
-（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下は配線済み
-フィールドの要約であり、`✅` は Payload と Dispatcher まで配線してあること、`⚠️` は
-enum だけを定義してあることを示す。配線の正典は `ipc/` の実装であり、作業の状態は
-Linear が持つ。
+（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下のフィールド列挙は
+要約であり、全フィールドを網羅しない。`✅` は Payload codec と Dispatcher のハンドラまで
+配線してある型、`⚠️` は `MessageType` の enum（`ipc/include/azookey/ipc/Messages.h`）にだけ
+定義してあり、Dispatcher が `unsupported_message_type` を返す型を示す。設定アプリ向けの型と
+M45 以降に足した型は「新規 IPC メッセージ」の表に載せる。配線の正典は `ipc/` と
+`inference-host/src/Dispatcher.cpp` の実装であり、作業の状態は Linear が持つ。
 
 - ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
   応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,
@@ -126,6 +128,15 @@ Linear が持つ。
   `raw_romaji` と `english_candidates` は `docs/inline-english-candidate-spec.md` §6.2 に従う。
   変換候補は `max_candidates` で切り詰める。応答にはその後で、rewriter（記号・絵文字）の
   追加分と M60 の英単語候補（辞書語 5 件・学習語 8 件・生ローマ字・6 形まで）が加わりうる。
+- ✅ `QueryLiveConversion` — 要求 `(kana, context, auto_punctuation?, punctuation_style?,
+  raw_romaji?, mixed_english?, secure?)` / 応答 `(surface, confidence, segments[]?)`。
+  要求 ID は Envelope の `request_id`。`auto_punctuation`・`punctuation_style` と応答の
+  `segments[]` は `docs/dynamic-punctuation-spec.md` §7 に従う。動作は
+  `docs/legacy-parity-spec.md` §2 が定める。
+- ✅ `QueryPredictions` — 要求 `(kana, leftSideContext, mode, app?, secure?)` /
+  応答 `(predictions[], ok?, error?)`。要求 ID は Envelope の `request_id`。`secure` の
+  欠落は secure として扱い、wire には `false` だけを載せる（`docs/privacy-and-secure-input-spec.md`
+  §5.1.1）。動作は `docs/legacy-parity-spec.md` §3 と `docs/rich-features-spec.md` X-2 が定める。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
   逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
 - ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates,
@@ -137,6 +148,8 @@ Linear が持つ。
   `full_surface` は各 segment の先頭候補の surface を連結したものである。
   任意の `english_candidates` は `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 に従う。
   segments が 1 要素のときは、`max_candidates` で切り詰めた後に M60 の英単語候補が加わりうる。
+  `ai-cleanup` は共有 `AiBackend::Transform` へ委譲する。入力と許可の契約は
+  `docs/romaji-batch-conversion-spec.md` §6 を参照する。
 - ✅ `Cancel(target_request_id)`
 - ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms, observation_id)` /
   応答 `CommitObservationResponse(ok)`。配送保証は at-least-once で、TIP は応答を受け取れ
@@ -144,11 +157,15 @@ Linear が持つ。
   捨てる。`observation_id` を省略する旧 TIP は空文字として受理し、冪等化の対象外とする。
   キーの生成規則、両側の上限、失われうる範囲は `docs/learning-data-management-spec.md` §12
   が正典。
-- `QueryBatchConversion`は長文を逐次変換し、再選択用segmentsを返す。
-  `ai-cleanup`は共有`AiBackend::Transform`へ委譲する。入力と許可の契約は
-  `docs/romaji-batch-conversion-spec.md` §6を参照する。
-- `CommitSegmentsObservation`は全文節を検証し、観測ID単位で再送を抑止する。
-  payloadと旧hostへのfallbackは同仕様 §6.4を正典とする。
+- ✅ `CommitSegmentsObservation` — 応答は `CommitObservationResponse(ok)`。全文節を検証し、
+  観測 ID 単位で再送を抑止する。payload と旧 Host への fallback は
+  `docs/romaji-batch-conversion-spec.md` §6.4 を正典とする。
+- ✅ `ObserveTypo(wrong_reading, correct_reading, timestamp_ms, secure, learning_allowed)` —
+  fire-and-forget で、Host は応答を返さない。学習ゲートは `docs/privacy-and-secure-input-spec.md`
+  §5.1.1、payload の契約は `docs/typo-correction-learning-spec.md` §7 / §12.13 に従う。
+- ✅ `ListNewWordCandidates(state_filter, max_items)` / 応答 `(ok, error?, items[])`、
+  `ResolveNewWord(surface, reading, action)` / 応答 `(ok, changed, error?)` — 新語候補（M36-A）の
+  一覧と確定・却下。契約は `docs/auto-word-registration-spec.md` §7-1 / §7-2 に従う。
 - ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
   `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
   永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
@@ -173,9 +190,11 @@ Linear が持つ。
   `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
   して診断スナップショットへ格納する。TIP が送る契機と、応答のうち `fallback_state` だけを
   使う規則は `docs/dev-infrastructure-spec.md` §8.5.1 が定める。
+- ⚠️ `UpdateUserWord` / `QueryCorrections` — enum にだけ定義し、Payload codec も Dispatcher の
+  ハンドラも持たない。受信時は次項の `unsupported_message_type` 応答になる。
 - 認証済み Dispatcher がハンドラ未対応の型または `Unknown` を受け取った場合は、
   request の型と相関 ID を保った `{"ok":false,"error":"unsupported_message_type"}`
-  応答を返す。無応答は fire-and-forget の `Cancel` に限る。
+  応答を返す。無応答は fire-and-forget の `Cancel` と `ObserveTypo` に限る。
 
 ### Handshake 認証ゲート
 
@@ -196,15 +215,24 @@ Linear が持つ。
 
 - モデル重みは更新しない（安全性優先）。
 - `learning.db` 相当の永続層へ観測を保存し、再ランキングで反映。
-- 永続フォーマットは TSV。未指定時は `%LOCALAPPDATA%\azooKey\data\learning.tsv` を
-  M7 形式の位置とし、M54 の v2 形式を同じディレクトリの `learning.v2.tsv` に保存する
-  （`docs/user-learning-enhancement-spec.md` §3.1）。
+- 永続フォーマットは TSV で、DPAPI で暗号化して拡張子 `.enc` を付けたファイルに保存する
+  （`learning/include/azookey/learning/LearningStore.h`）。未指定時は
+  `%LOCALAPPDATA%\azooKey\data\learning.tsv` を M7 形式の基準パスとし
+  （`inference-host/src/UserDataPaths.cpp`）、保存先は M54 の v2 形式の
+  `learning.v2.tsv.enc` である。M7 形式の `learning.tsv.enc` と旧平文の `learning.tsv` は
+  保存先ではない。v2 ファイルが無い間は M7 形式が読み込み元であり、保存の前に中断した移行を
+  片付ける。v2 の保存を検証した後に M7 形式のファイルを削除する
+  （`learning/src/LearningStore.cpp` の `Save`、`docs/user-learning-enhancement-spec.md` §3.1、
+  「共有ユーザーデータの writer 責務」）。
 - TSV の `reading` / `surface` は保存時に
   `# azookey-learning-tsv escaped=1` ヘッダーを付け、`\` → `\\`、
   tab → `\t`、LF → `\n`、CR → `\r` としてエスケープする。ヘッダーのない
   旧ファイルは backslash を literal として扱い、既存データを壊さない。
-- ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` に保存する。
-  `--learning` / `--user-dict` 指定時は明示パスを優先する。
+- ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` を基準パスとし、
+  JSON を DPAPI で暗号化した `user_dict.json.enc` に保存する
+  （`learning/include/azookey/learning/UserDictionary.h`）。拡張子 `.enc` の無い
+  `user_dict.json` は旧平文の移行元である。`--learning` / `--user-dict` 指定時は
+  明示パスを基準パスとして優先する。
 - Debug CLI（M9 移行措置）として
   `azookey_inference_host.exe [--user-dict <path>] userdict ...` を提供する。
   `add` / `remove` は既定で起動中 Host へ IPC 送信し、未起動時や検証用の直接編集では
@@ -425,9 +453,10 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
   OS ショートカットへ pass-through する。Shift 単独は通常のローマ字入力として扱う。
 - composition 状態の不整合時は安全側（キャンセル）で復帰する。
 
-## 新規モジュール（Phase 5/6 で追加予定）
+## 新規モジュール（Phase 5〜7）
 
-下記モジュールは v1.0 以降の Phase で追加予定。正典仕様は各 spec を参照。
+下記は v1.0 以降の Phase が追加するモジュールの配置である。正典仕様は各 spec を参照。
+「予定」と付けたファイルはリポジトリにまだ無く、括弧内の roadmap / spec が定義を持つ。
 
 ### Phase 5（レガシー parity、`docs/legacy-parity-spec.md`）
 
@@ -438,7 +467,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `core/src/InputState.cpp` — Ctrl+Shift+U hex バッファ（Unicode 入力状態）
 - `tsf-tip/src/DebugLogBuffer.cpp` — F10 デバッグウィンドウのログ保持と本文ゲート
 - `tsf-tip/src/PredictionWindow.cpp` — 予測候補 HWND
-- `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト
+- `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト（予定。roadmap M16、`docs/legacy-parity-spec.md` §4.3）
 - `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
 - `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
   フォールバックとモニタ作業領域の解決（`docs/legacy-parity-spec.md` §9）
@@ -446,17 +475,16 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ### Phase 5〜6 横断（`docs/rich-features-spec.md`）
 
-- `tsf-tip/src/ContextTracker.cpp` — 段落 / 直前文 / アプリ別履歴
+- `tsf-tip/src/ContextTracker.cpp` — 段落 / 直前文 / アプリ別履歴（予定。`docs/rich-features-spec.md` X-4-3）
 - `tsf-tip/src/ForegroundAppDetector.cpp` — 前面アプリ実行ファイル名取得
-- `tsf-tip/src/TypingTempoTracker.h` — タイピング速度推定
-- `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表
+- `tsf-tip/src/TypingTempoTracker.h` — タイピング速度推定（予定。roadmap M24 の横断、`docs/rich-features-spec.md` X-1-2）
+- `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表（予定。roadmap M17 の横断、`docs/rich-features-spec.md` X-3-1）
 - `bench/rich_features_bench.cpp` — リッチ化機能のレイテンシ計測
 
 ### Phase 6-A（TSF 深部、`docs/tsf-deep-integration-spec.md`）
 
 - `tsf-tip/src/ReconversionFunction.cpp` — `ITfFnReconversion`
 - `tsf-tip/src/CandidateListUIElement.cpp` — UI-less Mode 用
-- `tsf-tip/src/PredictionListUIElement.cpp` — Suggestion UI 用
 - `tsf-tip/src/TextService.cpp` — `ITfFnConfigure` / `ITfFunction`
 - `tsf-tip/src/SettingsLauncher.cpp` — 設定アプリ EXE 解決・起動
 
@@ -465,8 +493,6 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `inference-host/include/azookey/host/BackendSelector.h` / `src/BackendSelector.cpp` — DXCore 列挙・ランタイム DLL 判定による `auto` の解決（優先順位の適用は `src/main.cpp`）
 - `inference-host/src/MmapModelLoader.cpp` — `CreateFileMapping` + `MapViewOfFile`
 - `inference-host/src/PowerStatusWatcher.cpp` — AC/バッテリ検知
-- `inference-host/src/DirectMlBackend.cpp` — DirectML EP 経路
-- `inference-host/src/QnnBackend.cpp` — Snapdragon X NPU 経路（M27 と合流）
 
 ### Phase 6-C（UI モダン化、`docs/native-ui-spec.md`）
 
@@ -480,19 +506,17 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
   settings.json 書き込み + `UpdateConfig` 再読込まで含む。フル UI は M30。roadmap M11 / M30、
   `docs/sideload-packaging-spec.md` §3.0）
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
-- `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認
-- `inference-host/src/CrashHandler.cpp` — `SetUnhandledExceptionFilter`
+- `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認（予定。roadmap M32、`docs/sideload-packaging-spec.md` §6）
+- `core/src/CrashReporting.cpp` — `SetUnhandledExceptionFilter` による同意制の例外メタデータ収集（Host と設定アプリ。TIP DLL には入れない）
 - `learning/src/DpapiCrypto.cpp` — DPAPI ラッパ
 - `pkg/msix/AppxManifest.xml` — MSIX マニフェスト
 - `pkg/msi/Package.wxs` — WiX インストーラ
 
-### 長期
-
-- `learning/EmbeddingIndex.h` — 文脈ベクトルベース再ランキング（仮）
-
 ## 新規 IPC メッセージ
 
-以下は Phase 5〜6 に対応する IPC メッセージの一覧。
+以下は「IPC メッセージ」の一覧に載せない、設定アプリ向けの型と M45 以降に足した型の一覧である。
+表の型はどれも Payload codec と Dispatcher のハンドラまで配線してある。フィールドの正典は
+`ipc/include/azookey/ipc/Payloads.h` である。
 
 > 注: 利用可能な型は `Messages.h`、`Payloads.h`/`.cpp`、`Dispatcher.cpp` の
 > 3 点で確認する。enum に存在するだけの型を利用可能とみなさない。
@@ -500,13 +524,6 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
-| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答に `segments[]` を持つ（dynamic-punctuation §7）。要求 ID は Envelope の `request_id` | legacy-parity §2 |
-| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15)。Envelope に要求 ID、要求 payload に `kana`・`leftSideContext`・`mode`・`app`（任意）・`secure`（任意。欠落は secure、wire には `false` だけ載せる。privacy-and-secure-input §5.1.1）、応答 payload に `predictions[]` | legacy-parity §3 + rich X-2 |
-| `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
-| `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |
-| `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
-| `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
-| `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
 | `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model`。`ListModels` の要求の `include_catalog` で、応答に既定の catalog の `catalog[]` と各 GGUF の `catalog_id` が付く（DEV-1821） | model-management §4.1 / §4.2 |
 | `FetchCatalogModel` / `QueryCatalogFetch` | 設定アプリ → Host | DEV-1821。capability `fetch_catalog_model`。開始はすぐ応答し、進捗と結果は問い合わせで得る | model-management §4.4 |
 | `CancelCatalogFetch` | 設定アプリ → Host | DEV-1840。capability `cancel_catalog_fetch`。実行中のその entry の取得に止まるよう求め、すぐ応答する | model-management §4.4 |
@@ -514,10 +531,15 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
 | `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |
 | `DetectAnomalies` | 設定アプリ → Host | M30、capability `detect_anomalies` | rich X-3-6 |
-| `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
-| `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
-| `QueryCorrections` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 | `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
+
+`MessageType` の enum にまだ無く、spec が定義を持つ予定の型は次のとおり。enum へ足すまで
+上の一覧にも表にも載せない。
+
+| メッセージ | 方向 | 予定 | 参照 |
+|---|---|---|---|
+| `TransformSelectedText` / `Response` | TIP → Host | 予定（M16 Magic Conversion / Replace Suggestion） | legacy-parity §4.4、ai-backend §4.1 |
+| `RequestPostCommitLint` / `Response` | TIP → Host | 予定（roadmap M16 の横断 X-3-3） | rich X-3-3、ai-backend §4.3 |
 
 校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session（`ipc/include/azookey/ipc/ProofreadSession.h`）は
 Host の IPC ではなく、TIP が押下ごとに作る使い捨ての pipe で、本表の `MessageType` には含めない（rich X-3-6）。
@@ -532,10 +554,7 @@ M30 で完了するわけではない。M11 最小（v1.0）相当の settings.j
 | 区分 | 内容 |
 |---|---|
 | 実装済み（M11 相当） | 要求 payload 空オブジェクト、`SettingsStore::Reload()` による settings.json 再読込、engine config 適用とモデル再ロード、応答 `(ok, error?)` |
-| M30 に残る | 要求 payload の拡張（横断項目・バッチ訂正等をフル設定 UI から渡すためのフィールド追加）と、対応する `SettingsManager` 側の拡張 |
-
-Envelope に `push: bool` フラグを追加し、`server → client` 一方向通知に
-対応する（`docs/rich-features-spec.md` X-4-2）。
+| M30 に残る | 要求 payload の拡張（横断項目・バッチ訂正等をフル設定 UI から渡すためのフィールド追加）と、対応する `SettingsStore`（`inference-host/src/SettingsStore.cpp`）側の拡張 |
 
 ## TIP プロセス HWND 構成
 
@@ -543,9 +562,9 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 
 | HWND | 用途 | 親 | 生存期間 |
 |---|---|---|---|
-| `CandidateWindow` | 変換候補（M5 で実装済） | デスクトップ | composition 中のみ表示 |
+| `CandidateWindow` | 変換候補 | デスクトップ | composition 中のみ表示 |
 | `PredictionWindow` | 予測候補（M15 で追加） | デスクトップ | composition 中常時表示（設定 ON 時） |
-| `PromptDialog` | Magic Conversion / Replace Suggestion（M16） | フォアグラウンド | モーダル表示中のみ |
+| `PromptDialog` | Magic Conversion / Replace Suggestion（予定。M16 が追加する。`docs/legacy-parity-spec.md` §4.3） | フォアグラウンド | モーダル表示中のみ |
 | `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
 
 設定アプリは **別プロセス**（`azookey_settings.exe`）で、IPC 経由で Host 設定を変更する。

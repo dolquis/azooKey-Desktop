@@ -623,11 +623,11 @@ Host の破棄時に flush が失敗した場合は 50 ms 間隔で最大 2 回�
 
 ユーザーへ見せる表現としては「保存を保証しない終了では、直前 5 秒以内に連続して行った確定のうち最大 7 件ぶんの学習が失われうる」と書ける。
 
-### 11.4 DEV-791 が実装する範囲
+### 11.4 実装の範囲
 
-- §11.2 の burst 先頭の同期 flush を `InferenceEngine::NoteLearningMutationLocked` に実装する。設定キーは追加しない。
-- `CTRL_CLOSE_EVENT` の経路は現行のまま best-effort として維持する。ConPTY で最終 flush が成立しないことは、本節のもとでは欠陥ではない。原因切り分けのための診断ログ追加は任意とする。
-- `host_engine_tests` に次の 2 件を追加する。静止後の 1 件が明示 flush なしで永続化されること。`learning_flush_interval_sec` 未満の間隔で続く観測が即時保存を繰り返さないこと。
+- §11.2 の burst 先頭の同期 flush は `InferenceEngine::NoteLearningMutationLocked` が行う。設定キーは持たない。
+- `CTRL_CLOSE_EVENT` の経路は best-effort とする。ConPTY で最終 flush が成立しないことは、本節のもとでは欠陥ではない。原因切り分けのための診断ログは任意とする。
+- `host_engine_tests` は次の 2 点を検証する。静止後の 1 件が明示 flush なしで永続化されること。`learning_flush_interval_sec` 未満の間隔で続く観測が即時保存を繰り返さないこと。
 
 ### 11.5 実機検証との対応
 

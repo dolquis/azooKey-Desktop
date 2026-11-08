@@ -2369,7 +2369,7 @@ M46 の secure 表示と同時に出すときの並びは
 - `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
   [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する
 
-#### 8.5.5 適応モデル切替の再解釈（DEV-411 で確定 / 2026-08）
+#### 8.5.5 適応モデル切替の再解釈
 
 karukan は `max_latency_ms` を超えたら main（90M）から light（26M）へ切り替える適応
 モデル切替を持つ（`docs/karukan-comparison-report.md` §6）。azooKey はこれを

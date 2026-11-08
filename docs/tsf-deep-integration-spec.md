@@ -308,9 +308,9 @@ UIElement`（[ctffunc.h](https://learn.microsoft.com/windows/win32/api/ctffunc/n
 
 任意であり、v1.0 では実装しない方針。M21 着手時に検索統合スコープ判断を行う。
 
-### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5・DEV-97 確定）
+### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5）
 
-**設計判断（確定）**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
+**設計判断**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
 か自前 `WS_POPUP` HWND か」の二者択一ではなく、**両方を常に実装し `BeginUIElement`
 の戻り値 `pbShow` で per-call に描画責務を切り替える「両立 (coexistence)」方式**を
 v1.0 方針として確定する。
@@ -329,11 +329,7 @@ v1.0 方針として確定する。
 集約**し、`pbShow` で振り分ける。`TextService` は `CandidateWindow` /
 `ITfCandidateListUIElement` を直接操作せず、本 coordinator のみを呼ぶ。
 
-#### API: `tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`（新規）
-
-> 注: DEV-97 起票時の表記 `azookey/tip/CandidateUiCoordinator.h` は、既存 include
-> 規約 `azookey/tsf/`（`CandidateWindow.h` 等と同階層）に合わせ
-> **`azookey/tsf/CandidateUiCoordinator.h`** に統一する。
+#### API: `tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`
 
 宣言の正典はヘッダで、本書はコードを写さない。描画責務に関わる入口の契約は次のとおり。
 
@@ -367,7 +363,7 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 受けた場合は Showing(TIP) → Showing(App) へ遷移し、以後 `UpdateUIElement` 経路に
 切り替える（[UILess Mode Overview「Show/Hide status of UIElement」](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview)）。
 
-#### M5 と M21 の役割分担（改訂）
+#### M5 と M21 の役割分担
 
 - **M5（v1.0）**: 上記 coordinator の骨格 + `pbShow==TRUE` 経路（自前 HWND）+
   `BeginUIElement`/`EndUIElement` 動線 + `ActivateEx` フラグ検出（§2.10）+
@@ -441,9 +437,9 @@ TIP DLL は `tsf-tip/resources/azookey_tsf_tip.rc` で、ICON リソースを `I
 対話的 TSF セッションを要するため、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE`
 + 昇格時のみ実行で、CI（headless）では走らない。
 
-### 2.10 `ActivateEx` の最小実装と契約ギャップ
+### 2.10 `ActivateEx` の最小実装
 
-**実装済み（DEV-157 / DEV-154）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を
+`TextService::ActivateEx` は `ITfThreadMgrEx` を
 QI して `GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を
 `ui_less_mode_` に保持する（`tsf-tip/src/TextService.cpp`）。`dwFlags` は UIElement
 ビットを公式に列挙しないため一次情報にしない。`ui_less_mode_` は

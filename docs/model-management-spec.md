@@ -38,7 +38,7 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 %LOCALAPPDATA%\azooKey\models\
 ```
 
-### 3.1.1 宣言的モデルカタログ（DEV-438）
+### 3.1.1 宣言的モデルカタログ
 
 カタログは Zenzai GGUF の宣言と、`zenzai\` 配下のローカルパス解決を持つ。取得元を持つ
 entry は §3.1.2 の取得に使う。schema の正典は `settings/model-catalog.schema.json` とし、
@@ -81,7 +81,7 @@ resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 `is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
 このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
 
-#### catalog v2（DEV-1770・DEV-1789）
+#### catalog v2
 
 catalog v2 は、同じモデルの artifact を 1 entry にエンジン別に並べ、R1 の GGUF には取得元を
 持たせる。エンジンごとに entry を分けると、R1 と R2 で同じモデルを使う前提
@@ -169,9 +169,9 @@ SHA-256 を計算・保持してこれを呼び、一致した entry の `prompt
 設定アプリからの取得は §4.4 の IPC が持つ。Host 起動時の自動取得は行わず、入れるかは
 `docs/sideload-packaging-spec.md` §1.6.1 (b) の将来の判断とする。
 
-### 3.1.2 GGUF 取得基盤（DEV-439）
+### 3.1.2 GGUF 取得基盤
 
-DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
+`HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
 `%LOCALAPPDATA%\azooKey\models\zenzai\` 配下の確定パスへ配置する共通 GET 基盤である。
 ダウンローダはネットワーク取得と整合検証だけを担当する。catalog の entry から取得する
 処理は `FetchCatalogModel`（下記「catalog の entry の取得」）が持つ。Host は起動時に
@@ -213,7 +213,7 @@ HTTP はループバックの自動テストに限って使用する。
 `docs/sideload-packaging-spec.md` §1.6.1「配置パスとバージョニング」と
 `docs/ai-backend-spec.md` §6.2 から参照される。
 
-#### catalog の entry の取得（DEV-1789）
+#### catalog の entry の取得
 
 `FetchCatalogModel`（`inference-host/include/azookey/host/ModelFetch.h`）は、§3.1.1 の
 `source` と `sizeBytes` を持つ entry の GGUF を、固定 revision の上流 URL から

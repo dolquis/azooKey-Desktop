@@ -475,21 +475,21 @@ default は (c) 手動配置**とする（初回パッケージングで one-off
 するかは auto-DL の承認後の将来の判断とし、入れる場合は **roadmap M32 のスコープ**
 （`plans/windows-port-roadmap.md` M32 の受け入れ条件の auto-DL 承認の分岐）で扱う。
 
-##### ライセンス分岐（DEV-202 連動。暫定確定＝配信元は上流 HF に固定。§1.6.2）
+##### ライセンス分岐（配信元は上流 HF に固定。§1.6.2）
 
-再配布可否は DEV-202（`gate:human-required`）の結論に従う。**現時点は暫定確定
-（保守・CC-BY-SA、§1.6.2）であり、配信元は上流 HuggingFace に固定（再ホストしない）。
-GitHub Release への再ホスト最適化のみ著者確認後に解禁する。** ここで重要な
+再配布可否は §1.6.2 の配布ライセンス結論に従う。**zenz GGUF は CC-BY-SA-4.0 として扱い
+（保守側。§1.6.2）、配信元は上流 HuggingFace に固定する（再ホストしない）。
+GitHub Release への再ホスト最適化だけを著者確認後に解禁する。** ここで重要な
 のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
 同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
 GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
 (b) の配信元選択も律する。
 
-| DEV-202 結論 | (b) の配信元 | (a) 同梱 |
+| 配布ライセンスの結論 | (b) の配信元 | (a) 同梱 |
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
 | 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**既定の catalog が定める repo / revision / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
-| 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
+| CC-BY-SA-4.0 として扱う（保守側。§1.6.2 の採用値） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
 （モデルではなくランタイム。§1.6 の ggml-cuda 行で扱う）。採否の正典は
@@ -594,11 +594,11 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
   配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
 
-#### 1.6.2 配布ライセンス結論（DEV-202・v1.0 確定）
+#### 1.6.2 配布ライセンス結論
 
-DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
+配布ライセンスの調査結論（DEV-202、`gate:human-required`）を固定する。**本節は法的助言ではなく、
 一次情報の整理と運用方針である**。**v1.0 の zenz GGUF は下記の zenz 節の保守運用（CC-BY-SA-4.0 として扱い、
-上流 HuggingFace から取得・再ホストしない）で確定**する（DEV-202 は Done）。著者確認を
+上流 HuggingFace から取得・再ホストしない）とする**。著者確認を
 要するのは「再ホスト解禁」の任意最適化のみで、その進捗・状態は Linear DEV-497 が正典
 （本 spec には書かない）。
 本節は `docs/zenzai-gpu-route.md`「配布ライセンス」から参照される。
@@ -610,12 +610,12 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 | ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf` の revision `c67e03e07d215c869f591b274c1631170d3e11fe`、`ggml-model-Q5_K_M.gguf`（73,871,936 バイト、SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。既定の catalog の既定 entry（§1.6.1） |
 | HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
 | 矛盾兆候 | zenz 一族（v1 / v2 / v2.5 / v3 / v3.1、safetensors 版含む）とベース `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0`（`zenz-v2.5-small` は `base_model: ku-nlp/gpt2-small-japanese-char` を明示。HF API 確認 2026-07）。apache-2.0 は一族で v3.2-small-gguf のみ。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性（README 空・ベース未記載・照合できる safetensors 版なし） |
-| **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
+| **扱い** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
 | 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
-| 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
+| 配信 | **再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
 | 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
 
-##### モデル（kanakanji-edge-33m GGUF、DEV-1721）
+##### モデル（kanakanji-edge-33m GGUF）
 
 上の zenz 節の保守運用（全体を CC-BY-SA-4.0 として扱う）は zenz に限る。選べるモデルとする
 edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定する。edge は既定の catalog
@@ -777,7 +777,7 @@ Microsoft Learn の署名要件は第三者 IME 全般を対象とする。本�
 ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードするため、この ACE が無いと
 当該アプリで日本語入力ができない。
 
-#### 付与対象・タイミング・権限（DEV-204 確定）
+#### 付与対象・タイミング・権限
 
 | 配布経路 | 付与主体 | 付与対象 | タイミング |
 |---|---|---|---|

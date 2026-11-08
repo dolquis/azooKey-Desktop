@@ -101,7 +101,7 @@ TIP 自身の確定に伴う composition 終了は、成功後の観測を消さ
 
 ## 5. 蓄積と適用（host: `learning/` + `inference-host/`）
 
-### 5-1. `TypoCorrectionStore`（新規・`learning/`）
+### 5-1. `TypoCorrectionStore`（`learning/`）
 
 - 永続化: TSV `wrong_reading\tcorrect_reading\tcount last_updated_epoch`
   （`LearningStore` の `weight epoch` 区切り規約に合わせる）。

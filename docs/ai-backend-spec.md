@@ -195,7 +195,7 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 `MessageType` に追加するメッセージの定義であり、`task=Transform` / `task=Lint` の IPC 上の
 入口はこの 2 メッセージが担う。
 
-### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張・確定）
+### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張）
 
 > 本節が当該 payload の正典であり、`legacy-parity-spec.md` §4.4 は本節へのリンクだけを持つ
 > （同 §4 冒頭の委譲注記）。

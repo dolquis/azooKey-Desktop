@@ -103,9 +103,9 @@ v2 は同じディレクトリの別ファイルに保存し、保存の検証�
 始める。この削除方針は、旧版への rollback に備えて M7 を残す保護を廃止する。
 保存先を分けることで、旧版が v2 の行を読み飛ばして次の保存で v2 を空にすることは防ぐ。
 
-### 3.1.1 M7 現行 LearningStore の永続化運用（DEV-11）
+### 3.1.1 M7 LearningStore の永続化運用
 
-M7 の現行 `LearningStore` は TSV 全体を書き出すため、Host は確定ごとに
+M7 の `LearningStore` は TSV 全体を書き出すため、Host は確定ごとに
 同期 `Save()` を呼ばない。`InferenceEngine` は以下の設定で dirty な学習変更を
 バッチ化し、上限と GC を適用する:
 

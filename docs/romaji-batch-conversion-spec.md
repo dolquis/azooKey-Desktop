@@ -269,7 +269,7 @@ fallback を維持し、分類別案内は出さない。未知の分類名も�
 `BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
 `Cancel` して結果を破棄し、`BatchAccumulating` へ戻す（§3）。
 
-#### 6.3.2 out-of-band Cancel 経路の確定（決定）
+#### 6.3.2 out-of-band Cancel 経路
 
 Cancel専用の制御接続、host共有`RequestScheduler`、チャンク境界での協調キャンセルを組み合わせる。
 `NamedPipeServer`は接続ごとに同期ハンドラを実行するため、primary接続が変換中でも

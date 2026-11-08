@@ -468,14 +468,14 @@ parser の受理条件:
   `save_failed` を返す。保存中は writer の mutex で別の接続の承認・却下を待たせ、
   成功時だけ表を公開する。失敗時の表は操作前のままである。
 
-### 7-3. UI と MVP 暫定
+### 7-3. 承認 UI と代替経路
 
-- **本命 UI**: M30 WinUI3 設定アプリの辞書ペインに「新語候補」リストを追加。
+- **承認 UI**: M30 WinUI3 設定アプリの辞書ペインに「新語候補」リストを置く。
   pending を `ListNewWordCandidates` で取得、各行に登録/却下ボタン →
   `ResolveNewWord`。M36 の承認 UI は M30 に依存する。
-- **M30 完成前の MVP 暫定**（いずれか／併用）:
-  1. **auto モード限定運用** — 承認 UI が無い間は `registrationMode=auto` を
-     推奨設定とし、pending を経ず即 confirmed。
+- **承認 UI を使わない経路**（いずれか／併用）:
+  1. **auto モード** — `registrationMode=auto` では pending を経ず即 confirmed
+     になる。承認 UI を使えない環境の推奨設定とする。
   2. **host の `newwords` サブコマンド** — 検証・dogfooding 用のワンショット
      CLI。`userdict` / `lookup` と同じく host の引数に `newwords` を置き、
      それ以降をサブコマンドの引数として読む。
@@ -1097,7 +1097,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   内包する NEologd 由来データは対象外。
 - `app_specific_dictionary` layer は M48 未完了時に空（無効）として扱う。
 
-## 15. M53 追補（DEV-412）: system 辞書の物理層
+## 15. M53 追補: system 辞書の物理層
 
 §14 は辞書層の**論理設計**（層構成・エントリ意味・スコア・ライセンス判定）を定める。
 本章はその下にある**物理層**、すなわち読みの索引構造・ディスク上の直列化形式・
@@ -1587,7 +1587,7 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 | 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
 | 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |
 
-### 15.11 DEV-412 受け入れ条件
+### 15.11 物理層の受け入れ条件
 
 物理層（`.azdic`）の受け入れ条件の定義も、論理層と同じく
 [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) の M53 節を正典とする

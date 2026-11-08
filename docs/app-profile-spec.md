@@ -187,7 +187,7 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 下位の `on` / `off` を解除し、`bracketPairingApps` / `bracketPairingAppPolicy` の判定に戻す。
 TIP は共通 resolver の不変スナップショットからこのフィールドを解決し、Host への接続なしで適用する。
 
-### 4.2 フィールド制約と backend 優先順位（確定）
+### 4.2 フィールド制約と backend 優先順位
 
 **`candidateTagBoosts` の値域**: 各倍率は `[1.0, 3.0]`（schema で `minimum: 1.0` /
 `maximum: 3.0`）。schema の min/max は宣言であり、設定ローダが手動パースである以上、

@@ -141,7 +141,7 @@ legacy もカッコを全角にして読みに足すので、この挙動は leg
   網羅**できる。§3.3 の遷移表の「カーソル直後 / 左右」は、実装上は**この hint フィールド**を
   指す（文書アクセスではない）。
 
-### 3.2 ClientAction（新規 3 種）
+### 3.2 ClientAction（追加 3 種）
 
 `docs/legacy-parity-spec.md` §1.3 の ClientAction に以下を追加する。
 

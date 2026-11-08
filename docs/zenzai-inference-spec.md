@@ -94,7 +94,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 > モデルカードで必ず突き合わせる**こと。本書 §3/§5 は upstream ドキュメント
 > 由来の既定値であり、モデル実体が優先する。
 
-### 2.4 既定モデルの候補 `kanakanji-edge-33m` とプロンプト形式（DEV-1719）
+### 2.4 既定モデルの候補 `kanakanji-edge-33m` とプロンプト形式
 
 `yuuki14202028/kanakanji-edge-33m` は、zenz-v3 のプロンプト形式で学習された Llama 構造の
 かな漢字変換モデル（33.5M パラメータ）である。既定モデルは zenz-v3.2-small のままとし、
@@ -364,7 +364,7 @@ upstream Zenzai は `enableAlignmentSeparator: true` の v3 モードと
 Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`SimpleConverter` は
 固定小テーブル、辞書層全体は M53）。よって 2 段で定義する。
 
-#### 4.2.1 M8 MVP（DEV-221 が実装）— 生成 + 健全性チェック + 劣化フォールバック
+#### 4.2.1 M8 MVP — 生成 + 健全性チェック + 劣化フォールバック
 
 - zenz は読み一貫の変換を行うよう**学習済み**。MVP では自由生成（greedy / 小ビーム）に
   zenz の学習を信頼し、**事後健全性チェック**のみを課す:
@@ -796,7 +796,7 @@ R2 artifact が存在しない間は継続判断の根拠にしない。
 
 ---
 
-## 9. 実装契約（DEV-221 が即着手できる粒度）
+## 9. 実装契約
 
 ### 9.1 `ZenzaiModelConverter::Convert` の擬似コード
 
@@ -999,15 +999,14 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
 3. これにより long decode が `state_mutex_` を保持して後続クエリを待たせる時間を、§8 の
    p95 予算で上限化する。
 
-### 9.2.3 beam 探索のマルチシーケンス契約（DEV-857 が実装）
+### 9.2.3 beam 探索のマルチシーケンス契約
 
-現行実装は step ごとに beam の生成 token 列を先頭から decode し直す。本節は、beam ごとに
-KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` にまとめる方式の契約を定める。
-§9.2 の「beam ごとに生成 token を再 decode する」記述を置き換えるのは本節である。
+本節は、beam ごとに KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` に
+まとめる方式の契約を定める。§9.2 の「beam ごとに生成 token を再 decode する」記述を置き換えるのは本節である。
 
-**DEV-857 本文のスケッチとの差分**: 本契約は sequence を 1 本多く取り、`seq_id` 0 を prompt
-専用に固定する。DEV-857 本文は `n_seq_max = kMaxModelCandidates` として `seq_id` 0 を beam 0 と
-共用するスケッチを載せているが、それでは DEV-859 の接頭辞キャッシュと同じ sequence を奪い合う
+本契約は sequence を `kMaxModelCandidates` より 1 本多く取り、`seq_id` 0 を prompt 専用に固定する。
+`n_seq_max = kMaxModelCandidates` として `seq_id` 0 を beam 0 と共用する割り当ては採らない。
+その割り当てでは、変換をまたぐ prompt 接頭辞 KV キャッシュと同じ sequence を奪い合う
 （§9.2.3.6）。実装は本節の割り当てに従う。
 
 #### 9.2.3.1 sequence の役割と不変条件
@@ -1120,7 +1119,7 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   生成・評価が失敗または cancel したとき）は、`seq_id` 0 の常駐記録も無効化する
   （§9.2.3.6）。
 
-#### 9.2.3.6 DEV-859（変換をまたぐ prompt 接頭辞 KV キャッシュ）との境界
+#### 9.2.3.6 変換をまたぐ prompt 接頭辞 KV キャッシュとの境界
 
 `seq_id` 0 の所有権と無効化条件は本節が規定する。DEV-859 が規定するのは「常駐する接頭辞を
 どこまで再利用し、どこから decode し直すか」の差分計算だけである。本節が課す制約は次の 4 つ。

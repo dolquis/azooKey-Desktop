@@ -920,9 +920,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 ### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
 
 **問題**: `ZenzaiModelConverter` が `(ZenzaiModelInfo, IConverter* fallback)` だけで
-構築され、`InferenceEngine::last_error_`（private）への経路を持たない構成を考える。一方 `Health`
+構築され、`InferenceEngine::last_error_`（private）への経路を持たないとする。`Health`
 （`Dispatcher::HandleHealth`）は `engine_->last_error()` のみで `ok` / `degraded` / `error`
-を決める。`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
+を決めるので、`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
 **実推論が劣化しているのに `/Health` が `ok` を返す**（サイレント劣化）。
 
 **契約** — *poll-after-call*（engine ロック内で吸い上げ）方式:

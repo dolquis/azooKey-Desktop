@@ -226,41 +226,11 @@ M35 が使うフィールドの意味を定める。
 
 ## 10. 変更対象ファイル一覧
 
-| 区分 | ファイル |
-|---|---|
-| 新規 | `learning/include/azookey/learning/TypoCorrectionStore.h` |
-| 新規 | `learning/src/TypoCorrectionStore.cpp` |
-| 新規 | `learning/tests/typo_correction_store_test.cpp` |
-| 新規 | `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` |
-| 新規 | `tsf-tip/tests/typo_correction_tracker_test.cpp` |
-| 編集 | `core/include/azookey/core/InputState.h`, `core/src/InputState.cpp`, `core/tests/input_state_test.cpp` |
-| 編集 | `tsf-tip/CMakeLists.txt`, `tsf-tip/tests/onkeydown_preedit_test.cpp` |
-| 編集 | `tsf-tip/include/azookey/tsf/AiInputGuard.h`, `tsf-tip/src/AiInputGuard.cpp` |
-| 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` |
-| 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` |
-| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` |
-| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` |
-| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` |
-| 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` |
-| 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` |
-| 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` |
-| 編集 | `inference-host/src/main.cpp` |
-| 編集 | `tsf-tip/include/azookey/tsf/TextService.h`, `src/TextService.cpp` |
-| 編集 | `settings/mvp-settings.schema.json` |
+本節は削除した（変更対象は roadmap の M 節、テストは `docs/test-inventory.md` が持つ）。
 
 ## 11. 検証手順（実装後）
 
-1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
-2. テスト: `ctest --preset windows-debug --output-on-failure`
-   （`typo_correction_store_tests` / `payloads_test` / `engine_test` /
-   `dispatcher_test` が green であること）
-3. `settings.json` に `typoCorrectionMode` を `suggest` / `auto_replace` で書いて
-   host を stdio 起動し、同一 `wrong_reading` の `ObserveTypo` を `typoMinCount`
-   回送ってから `QueryCandidates` を投げ、suggest で `typo-correction` 候補が
-   注入され、auto_replace で `corrected_reading` が返ることを確認。
-4. Windows 実機があれば TIP を導入し、未確定中 backspace 訂正・確定直後打ち直しを
-   実操作で確認。実機が無い場合はその旨を明示し、自動テストとプロトコルレベル
-   確認で代替する。
+本節は削除した（ビルドとテストの手順は `README.md`、テスト一覧は `docs/test-inventory.md` が持つ）。
 
 ---
 

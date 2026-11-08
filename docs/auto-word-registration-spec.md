@@ -549,37 +549,11 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 
 ## 10. マイルストーン分割
 
-| MS | 内容 | 前提 |
-|---|---|---|
-| M36-A | ユーザー入力マイニングによる新語自動登録 | M6 のみ。HTTP 非依存で独立着手可 |
-| M36-B | リモートトレンド語取得 | M36-A 完了 + M32 の WinHTTP 基盤（`HttpDownloader`） |
+本節は削除した（M36-A と M36-B の範囲と前提は roadmap の M36-A・M36-B 節が持つ）。
 
 ## 11. 変更対象ファイル一覧
 
-| 区分 | ファイル | MS |
-|---|---|---|
-| 新規 | `learning/include/azookey/learning/AutoWordStore.h` / `src/AutoWordStore.cpp` | A |
-| 新規 | `learning/tests/auto_word_store_test.cpp` | A |
-| 編集 | `core/include/azookey/core/IConverter.h`（`Contains`） | A |
-| 編集 | `core/include/azookey/core/SimpleConverter.h`, `core/src/SimpleConverter.cpp` | A |
-| 編集 | `core/tests/simple_converter_test.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` | A |
-| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` | A |
-| 新規 | `inference-host/include/azookey/host/TrendingWordFetcher.h` / `src/TrendingWordFetcher.cpp` | B |
-| 再利用 | `inference-host/include/azookey/host/HttpDownloader.h` / `src/HttpDownloader.cpp`（M32 で新設。§5-4） | B |
-| 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` | A |
-| 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` | A |
-| 編集 | `inference-host/include/azookey/host/ZenzaiModelConverter.h`, `src/ZenzaiModelConverter.cpp`（`Contains`） | A |
-| 新規 | `inference-host/include/azookey/host/NewWordsCli.h` / `src/NewWordsCli.cpp`（§7-3） | A |
-| 編集 | `inference-host/include/azookey/host/HostArgs.h`, `src/HostArgs.cpp` | A |
-| 新規 | `inference-host/tests/newwords_cli_test.cpp` | A |
-| 編集 | `inference-host/src/main.cpp` | A / B |
-| 編集 | `settings/mvp-settings.schema.json` | A |
-| 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` | A |
-| 編集 | `inference-host/CMakeLists.txt`, `inference-host/tests/CMakeLists.txt` | B |
+本節は削除した（変更対象は roadmap の M 節、テストは `docs/test-inventory.md` が持つ）。
 
 ## 12. テスト計画
 
@@ -619,19 +593,7 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
 
 ## 13. 検証手順（実装後）
 
-1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
-2. テスト: `ctest --preset windows-debug --output-on-failure`
-   （`auto_word_store_tests` / `payloads_test` / `engine_test` /
-   `dispatcher_test`、M36-B では `host_trending_word_fetcher_tests` が green）。
-3. `settings.json` に `autoWordRegistration.miningEnabled: true` と
-   `registrationMode: "auto"` を書いて host を stdio 起動し、辞書に無い
-   `(reading, surface)` の `CommitObservation` を `miningMinCount` 回送ってから
-   同じ reading の `QueryCandidates` を投げ、`auto-word` マーク付き候補が
-   注入されることを確認。`confirm` モードでは `azookey_inference_host newwords list` で
-   pending を確認し、`azookey_inference_host newwords confirm --reading <reading>
-   --surface <surface>` で承認した後に注入されることを確認。
-4. M36-B: 正規アセットとハッシュ不一致アセットの両方で `FetchOnce` を実行し、
-   検証通過時のみ取り込まれることを確認。
+本節は削除した（ビルドとテストの手順は `README.md`、テスト一覧は `docs/test-inventory.md` が持つ）。
 
 ---
 

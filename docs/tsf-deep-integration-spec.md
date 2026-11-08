@@ -446,9 +446,8 @@ QI して `GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無�
 `CandidateUiCoordinator` に伝播し、§2.8 の `pbShow` 分岐で自前 HWND と
 app-drawn UIElement 経路を切り替える。
 
-**v1.0 で必要な最小実装（M5）**: UI-less 判定は §2.2 のとおり
-`ITfThreadMgrEx::GetActiveFlags` を一次情報とする（`ActivateEx` の `dwFlags` は
-UIElement ビットを公式に列挙しないため）。
+v1.0（M5）の最小実装は次のとおりである（UI-less 判定の一次情報は §2.2 のとおり
+`ITfThreadMgrEx::GetActiveFlags`）。
 
 ```cpp
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
@@ -466,10 +465,10 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 ```
 
 `TF_TMF_SECUREMODE`（パスワード欄等のセキュア入力）等の他フラグも同じ
-`GetActiveFlags` 経由で取得でき、M46 プライバシー / セーフ入力で扱う。本変更は
+`GetActiveFlags` 経由で取得でき、M46 プライバシー / セーフ入力で扱う。この判定は
 COM smoke テスト（モック `ITfThreadMgrEx::GetActiveFlags` が
 `TF_TMF_UIELEMENTENABLEDONLY` を返すとき `ui_less_mode_` が true になる）で
-covered。
+検証する。
 
 ### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
 

@@ -28,7 +28,7 @@ description: azooKey Desktop の構造化ログ（RuntimeLogger、AZOOKEY_LOG）
   redaction ポリシーの正典は `docs/dev-infrastructure-spec.md` §7.6 と
   `docs/privacy-and-secure-input-spec.md` §8 である。
 - ログは環境変数 `AZOOKEY_LOG` の明示 opt-in でだけ出力し、既定ではファイルを作らない。
-  出力先、ローテーション（5 MiB・3 世代・7 日）は `docs/debugging.md`「ログ収集」が定義する。
+  ローテーションは `docs/dev-infrastructure-spec.md` §7.1.1、出力先と収集手順は `docs/debugging.md`「ログ収集」が定義する。
 - `CrashReporting` を TIP DLL に組み込まない。同意（`CrashConsent`）が Off なら何も書かない。
 - `PruneCrashDumps` は命名規則に合う dmp だけを管理し、symlink を辿らず、ディレクトリを作らない。
 - secure input 中はログ・ETW・診断 zip に入力の痕跡を残さない。

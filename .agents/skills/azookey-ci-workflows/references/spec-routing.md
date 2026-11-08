@@ -12,7 +12,7 @@
 | `.github/workflows/release.yml` | MSI、settings app、SBOM、attestation | `docs/sideload-packaging-spec.md`、`azookey-packaging-release-workflow` skill | `python scripts/tests/test_release_sbom.py` |
 | `.github/workflows/sbom.yml` | SBOM 補完スクリプトのテスト | `scripts/complete-release-sbom.py` の docstring | `python scripts/tests/test_release_sbom.py` |
 | `.github/workflows/secret-scan.yml` | gitleaks による PR range / 作業ツリーの走査 | `docs/dev-infrastructure-spec.md` §4.3 | pre-commit の `gitleaks` hook |
-| `CMakePresets.json` | preset の定義 | `docs/dev-infrastructure-spec.md` §4.2、`README.md` | `cmake --list-presets` |
+| `CMakePresets.json` | preset の定義 | `docs/dev-infrastructure-spec.md` §2.1・§4.2、`README.md` | `cmake --list-presets` |
 | `.pre-commit-config.yaml` | clang-format、gitleaks、actionlint、PowerShell 品質、settings schema、yamlfmt、taplo | `docs/dev-infrastructure-spec.md` §4.3 | `pre-commit run --all-files` |
 | `justfile` | preset を束ねる開発者向けレシピ（`ci`、`doctor`、`register` など） | `README.md`、`docs/handoff/agent-tooling-setup.md` | `just --list` |
 | `.github/dependabot.yml`、`.github/CODEOWNERS` | Actions の週次更新、レビュー担当 | `docs/dev-infrastructure-spec.md` §3.4（pin 済み依存の更新手順）。CODEOWNERS の正典はファイル自身 | なし |

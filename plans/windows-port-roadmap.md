@@ -155,7 +155,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 矢印キーで選択移動、Enter で確定、ESC でキャンセル
   - UI-less / アプリ描画ホスト（Office 等、`pbShow==FALSE` を返すアプリ）で TIP が
     activate され、自前 HWND が出ず OS/アプリ UI に候補が乗る（実機確認は
-    `docs/legacy-parity-spec.md` §12 の `gate:human-required` チェックリスト）
+    `compat-test/m5_uiless_pbshow_checklist.md` の `gate:human-required` チェックリスト）
   - Win11 スタート検索では TIP が activate され入力できること（統合インライン検索の
     **統合表示は M21 スコープ**。検索統合 API `ITfIntegratableCandidateListUIElement`
     + `ITfFnSearchCandidateProvider` を要するため M5 は統合表示なしの劣化モードまで。

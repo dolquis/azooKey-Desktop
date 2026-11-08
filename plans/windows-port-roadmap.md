@@ -423,7 +423,7 @@ v1.0 リリースに向けたリスクと対応:
 | リスク | 影響 | 対応 |
 |---|---|---|
 | llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
-| CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
+| CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討（CUDA の採否の正典は `docs/copilot-pc-backend-spec.md` §4.3） |
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）に確定（DEV-99）。決定内容と残るスパイクは M11「UI フレームワーク決定」 |
 | 署名証明書の調達 (M29) | TIP バイナリ署名は入力対象と独立した v1.0 のリリースゲート（spec §0.1）。MVP の未署名 MSI は評価配布に限る | 調達経路は spec §2.0（経路 B）。MS Store は MS 再署名（DEV-416）で有料証明書不要。スタンドアロン MSIX サイドロードの署名は延期（spec §0） |
@@ -947,7 +947,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
   X-2-6, X-2-7, X-3-6
 
-### M31: WiX MSI インストーラ拡張（post-v1.0）
+### M31: WiX MSI インストーラ拡張（廃止）
 
 - **位置づけ**: 廃止。M 番号は欠番として残す。LTSC / AppX 無効環境を含む配布は
   `docs/sideload-packaging-spec.md` §4 の MSI 経路（M11/M12 で構築・公開）で扱い、
@@ -959,8 +959,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
 - **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet は出荷アーティファクト
-  （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、延期した M29
-  （スタンドアロン MSIX 署名）は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+  （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、M29 のうち延期した
+  スタンドアロン MSIX 署名部分は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
   再配布可否。`gate:human-required`）の auto-DL 承認を追加前提とする。暫定確定
   （保守・CC-BY-SA、§1.6.2）で配信元は上流 HF に固定済みだが、auto-DL の有効化は
   別途承認を要し、GitHub 再ホスト最適化は著者確認後に解禁する（§1.6.1 ライセンス

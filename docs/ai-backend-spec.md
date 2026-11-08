@@ -95,7 +95,7 @@
 
 ### 3.2 Host 側 `AiBackend` の概念モデル
 
-3 消費者の IPC ハンドラ（`Dispatcher`）は payload を `AiTransformRequest` に
+各消費者の IPC ハンドラ（`Dispatcher`）は payload を `AiTransformRequest` に
 正規化して呼ぶ。以下は拡張対象も含む概念モデルであり、実際の C++ 宣言と許可・
 キャンセル引数の正典は `inference-host/include/azookey/host/AiBackend.h` とする。
 

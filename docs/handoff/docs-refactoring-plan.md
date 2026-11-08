@@ -35,7 +35,8 @@
 
 ## 3. 作業の原則
 
-- § 番号と見出しを維持する。spec の § はコードコメント、schema、justfile からも参照されている。中身を移すときは、元の見出しに移設先への 1 行を残す。
+- § 番号を維持する。spec の § はコードコメント、schema、justfile からも参照されている。中身を移すときは、元の見出しに移設先への 1 行を残す。
+- 見出しの文言は、本文と食い違うときに限り直してよい。直す前に、見出し文字列とアンカーへの参照が repo に無いことを `rg` で確かめる。
 - 編集しない領域: `legacy/`、`docs/linear-conventions.md` §1〜§12、ベンダリングした共有 Skill、`scripts/docs-lint.py`。直したい点は origin（`dolquis/agent-ops`）への提案にする。
 - コードの不具合は docs の PR に混ぜず、Linear へ起票する。
 - docs-lint のベースラインは下げる方向にだけ更新する。誤検知には `lint:allow` を付ける。

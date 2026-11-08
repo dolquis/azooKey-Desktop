@@ -220,7 +220,9 @@ M45 以降に足した型は「新規 IPC メッセージ」の表に載せる�
   `%LOCALAPPDATA%\azooKey\data\learning.tsv` を M7 形式の基準パスとし
   （`inference-host/src/UserDataPaths.cpp`）、保存先は M54 の v2 形式の
   `learning.v2.tsv.enc` である。M7 形式の `learning.tsv.enc` と旧平文の `learning.tsv` は
-  移行元として読むだけである（`docs/user-learning-enhancement-spec.md` §3.1、
+  保存先ではない。v2 ファイルが無い間は M7 形式が読み込み元であり、保存の前に中断した移行を
+  片付ける。v2 の保存を検証した後に M7 形式のファイルを削除する
+  （`learning/src/LearningStore.cpp` の `Save`、`docs/user-learning-enhancement-spec.md` §3.1、
   「共有ユーザーデータの writer 責務」）。
 - TSV の `reading` / `surface` は保存時に
   `# azookey-learning-tsv escaped=1` ヘッダーを付け、`\` → `\\`、

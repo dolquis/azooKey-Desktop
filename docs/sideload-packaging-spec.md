@@ -487,7 +487,7 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 
 **マイルストーン順序の制約（初回パッケージングを M32 の DL 基盤に依存させない）**: (b) は共有
 ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。MVP 直接配布は
-**M11/M12（MVP MSI 構築・公開）→ M32** の順（延期した M29 は前提でない。§0 / roadmap 依存グラフ）で、初回
+**M11/M12（MVP MSI 構築・公開）→ M32** の順（M29 のうち延期したスタンドアロン MSIX 署名部分は前提でない。§0 / roadmap 依存グラフ）で、初回
 パッケージング時点では `HttpDownloader` が未だ存在しない。したがって **初回出荷時の operative
 default は (c) 手動配置**とする（初回パッケージングで one-off の重複ダウンローダを書かない＝二重
 実装回避）。M32 の共有 `HttpDownloader` の上には、利用者の操作による取得を載せる。(b) を既定に
@@ -1297,7 +1297,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 |---|---|
 | 設定 | `%LOCALAPPDATA%\azooKey\config\settings.json` |
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
-| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv.enc`（DPAPI 暗号化、M34） |
+| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv.enc`（M54 の v2 形式。DPAPI 暗号化、M34。M7 形式の `learning.tsv.enc` は移行元） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
 | モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |

@@ -976,7 +976,7 @@ pack のファイル名、マニフェスト、生成ツール、検証順序は
   としての** notices は ThirdPartyNotices に不要（別 pack DL 時に上流ライセンス/
   帰属を DL 画面で提示する）。ただし上記のとおり SudachiDict 内包の NEologd 由来
   データの帰属は同梱物の一部として含める。
-- **配布ガード**（受け入れ条件 §14.13）: MSI 構築前に同梱アセットへ
+- **配布ガード**（roadmap M53 の受け入れ条件）: MSI 構築前に同梱アセットへ
   **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
   が混入しないことを release workflow の `dictbuild/check_bundle.py` でチェックする。ガードの対象は NEologd 単体パックで
   あり、**SudachiDict(core) が Apache-2.0 で内包する NEologd 由来データは対象外**

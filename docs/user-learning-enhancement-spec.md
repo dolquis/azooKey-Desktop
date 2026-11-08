@@ -325,7 +325,7 @@ category は現在の M53 の表に無く、値だけを予約する。
 `LearningDecayMode::CategoryHalfLife` で有効になり、既定は `LearningDecayMode::Legacy` である（§7）。
 
 これらの half_life は初期値であり、M52 `user_adapt` カテゴリの学習前後比較
-（§11・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
+（roadmap M54・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
 ただし「一般語 < 固有名詞・打ち間違え < 技術語」「一時話題が最短」という
 **大小関係（順序）は設計上の不変条件**として固定し、校正で順序を反転させない。
 
@@ -351,7 +351,7 @@ user_score =
 
 `user_score` は乗算合成であり、各因子は **1.0 を中立（影響なし）** とする。
 これにより M48（app）/ M46（context）/ M55（typo）いずれかが未完了の段階でも、
-該当因子を 1.0 にすれば残りの因子だけで成立する（§11 受け入れ条件と整合）。
+該当因子を 1.0 にすれば残りの因子だけで成立する（roadmap M54 の受け入れ条件と整合）。
 
 ### 6.1 `app_profile_weight` の算出式
 
@@ -490,21 +490,9 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 
 ## 11. M54 受け入れ条件
 
-- 同じ入力を複数回確定すると、次回以降候補順位が上がる
-- M52 ベンチで `user_adapt` カテゴリが学習前後で +3% 以上改善
-- 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
-- secure 中に `Observe` が呼ばれない。TIP と Host の判定責務は
-  `privacy-and-secure-input-spec.md` §5.1.1 に従う。
-- `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
-  実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
-  は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可
-- 即 Backspace と再変換が `CommitCorrection`（§4.1）で Host に届き、`correction_reject` /
-  `correction_accept` が app 行と `context_hash` 付きで記録される。privacy で拒否された訂正と
-  再送は記録しない
-- `event_type` 列が拡張可能な enum として実装され、`commit` /
-  `correction_accept` / `correction_reject` を記録できる。M55 完了後は
-  同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は
-  enum 値を予約しておくだけで可）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M54 節とする。本書は TSV スキーマ・学習イベント・時間減衰・`user_score` を定義し、
+受け入れ条件を複製しない。
 
 ## 12. 将来拡張（M54 範囲外）
 
@@ -766,9 +754,6 @@ Host も secure の照会を拒否する（`privacy-and-secure-input-spec.md` §
 
 ### 14.9 受け入れ条件
 
-- 読みの前方一致で学習履歴を引け、結果が §14.5 の順序で返る。
-- 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）。
-- 二層化だけを理由に永続化形式が変わらない（形式の版は §3 が決める）。
-- 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給され、
-  受理が §14.6.1 の追記動作で成立する。
-- 減衰後スコアが `exp(-0.15 * days)` のまま維持されている。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M54 節とする。§14 は索引構造の契約と計算量要件を定義し、
+受け入れ条件を複製しない。

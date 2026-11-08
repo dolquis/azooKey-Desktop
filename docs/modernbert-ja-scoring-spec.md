@@ -62,7 +62,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
 | 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
-| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、§11 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
+| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、roadmap M57 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
 | 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
 | 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
 | 7 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 7 をスキップ |
@@ -387,20 +387,9 @@ M46 secure 中は ModernBERT を **完全 OFF** にする:
 
 ## 11. M57 受け入れ条件
 
-- M52 ベンチで `homophone.top1_accuracy` が baseline 比 +5% 以上
-- 通常入力 p95 latency 悪化が +20ms 以内
-- ModernBERT がロードできない環境（CPU only / モデル未配置）でも
-  fallback で動作する（IME が止まらない）
-- M46 secure 中は完全 OFF（cache 読み書きも行わない）
-- ambiguity_score < threshold のリクエストでは ModernBERT が呼ばれない
-  （`reason=low_ambiguity` がログに残る）
-- RSS 増分が §6.1 の許容上限内（200 MB 以下）。上限超過環境では
-  `reason=rss_cap` で**ロードせず** fallback し、IME が継続動作する
-- `modernbertEnabled=always` でも RSS / backend / secure の安全ゲートを
-  逸脱しない（上限超過時はロードしない）
-- timeout 予算切れ時は評価済み候補のみ適用し、未評価候補は
-  ModernBERT 抜きの順位で確定する（§5.4）
-- 同一確定文脈の再変換で cache がヒットする（§5.2.1）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M57 節とする。本書は起動条件・timeout 予算・cache・RSS 上限・fallback を定義し、
+受け入れ条件を複製しない。
 
 ## 12. 将来拡張（M57 範囲外）
 

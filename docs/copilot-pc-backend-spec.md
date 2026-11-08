@@ -1023,16 +1023,9 @@ ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM
 | **self-hosted ARM64 / Azure ARM64 VM**（Ampere Altra） | 課金回避 / 反復テスト最適化 | インフラ用意・運用コストが要る。ARM64 VM は x64 ハードでは作成不可（クラウドホスト必須） |
 | **Snapdragon X Elite 実機** | NPU 含む統合検証 | `gate:human-required`（実装フェーズで付与）。CI 化しない |
 
-**M27 受け入れ条件の確定（roadmap M27 を補足）**:
-
-1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルド（clang-cl / ARM64 toolchain）が
-   既存 x64 ランナーで成功すること。ARM64 バイナリの生成と §8.1 の成果物検査を CI の最小ゲートとする
-   （新インフラ不要）。
-2. **ARM64 単体テスト実行** = `windows-11-arm` ランナーで `ctest` を緑にする。**public /
-   private いずれでも label は有効**（private は従量課金）なので、リポジトリ可視性に
-   依らず CI 化できる。課金やキュー待ちを避けたい場合のみ self-hosted ARM64 を選ぶ。
-3. **実機（NPU 含む）動作確認** = Snapdragon X 実機で人手検証（`gate:human-required`）。
-   §4.3（NPU 必須化はしない）と整合し、CI のブロッカーにはしない。
+M27 の受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M27 節とする。本節は上表の実行経路を定義し、受け入れ条件を複製しない。ARM64 単体テストは
+`windows-11-arm` ランナーで実行し、課金やキュー待ちを避けたい場合だけ self-hosted ARM64 を選ぶ。
 
 > 以前の「private では label 失敗」という制約は撤回する。現行の GitHub hosted-runner
 > リファレンスは `windows-11-arm` を public / private 双方の標準ランナーとして掲載して

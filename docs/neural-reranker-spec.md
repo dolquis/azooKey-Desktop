@@ -204,10 +204,10 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
 - **v0（LightGBM）を feature importance の基準器とする**: v0 baseline で
   gain / split ベースの feature importance を算出し、低寄与特徴の除外候補・
   正規化方針の根拠とする。importance は M52 ベンチ成果物として残す
-  （§12 の v0 / v1 比較レポートに含める）。
+  （roadmap M56 の v0 / v1 比較レポートに含める）。
 - **v1（MLP）の重みは学習で決定する**: 隠れ 2 層 × 64 unit の重みは学習データ
   （§6）から学習し、手動調整しない。特徴の寄与は学習後の ablation（特徴を
-  1 つ落として再評価）で確認し、§12 レポートに記す。
+  1 つ落として再評価）で確認し、roadmap M56 の比較レポートに記す。
 - **特徴量の正規化を ONNX に焼き込む**: scalar 特徴（`zenzai_score` /
   `dictionary_score` / `user_frequency` / `recency_score` / `typo_confidence` /
   `app_profile_score`）は学習データ統計から推定した per-feature 標準化
@@ -374,7 +374,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - **timeout 既定値**: `tinyNeuralTimeoutMs` = **15ms**（範囲 10〜20ms、範囲外は
   clamp）。v1 MLP（12 次元・隠れ 64×2）の 30 候補一括 forward は CPU でも通常
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
-  に対する安全弁**であり、通常 path の p95 を支配しない。これにより §12 の
+  に対する安全弁**であり、通常 path の p95 を支配しない。これにより roadmap M56 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
 - **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
   とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で
@@ -421,7 +421,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 ```
 
 - `tinyNeuralEnabled`: 既定は **OFF**。Track B の `nllRerankEnabled`（§B9）と同じく、
-  リランク層は §12 の受け入れ条件（M52 ベンチで top1 +3% 以上 / p95 悪化 +10ms 以内）を
+  リランク層は roadmap M56 の受け入れ条件（M52 ベンチの top1 と p95 の閾値）を
   満たしたことを確認したうえで、既定 ON への切替を別途判断する。**既定 OFF のとき
   ONNX セッションを生成せず**、候補列・`final_score`・`debug_info`・レイテンシは Track A
   導入前と等価であること（§11 の回帰対象）。ユーザー設定 OFF による非適用は
@@ -483,15 +483,9 @@ final_score =
 
 ## 12. M56 受け入れ条件
 
-- M52 ベンチで `top1_accuracy` が baseline 比 +3% 以上
-- M52 ベンチで `latency_p95_ms` 悪化が +10ms 以内
-- timeout / load 失敗時に reranker なしで候補が返る（IME が止まらない）
-- 連続失敗（既定 3 回）で circuit breaker が開き fallback する（§7.2）
-- v0（LightGBM baseline）と v1（MLP）の比較レポート（feature importance /
-  ablation を含む、§5.4）が残る
-- embedding 供給方針（§4.1）が**決定**され spec に明記されている
-  （v1=Option C / v2 以降=Option A、ModernBERT 共用は不採用）
-- 学習データが §6.2 のラベリングプロトコルに従って生成されている
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M56 節とする。本書は特徴量・モデル構造・学習データ・timeout と fallback を定義し、
+受け入れ条件を複製しない。
 
 ## 13. プライバシー
 

@@ -671,8 +671,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - **secure ゲート**: `AiBackend` 入口で プライバシー判定を強制チェック（§8、M46 連携）。
 - **受け入れ条件**:
   - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
-  - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答が表示される
+  - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答（`mode` 別 system プロンプト）が表示される
   - 結果が selection range に置換される
+  - M16 / M58-C / X-3-3 / X-3-6 が Host 側で同一の `AiBackend::Transform` を通り、別 backend 実装に
+    分岐しない（4 つの `AiTask` の正規化）
+  - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず
+    `BlockedBySecure` で早期 return する。TIP 側の抑止に依存しない
+  - 401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に
+    分類され、再試行対象（429 / 5xx / 一時的な Network）だけがバックオフ再試行される
+  - `aiBackend=none` で M58-C が `neural` へ落ち、X-3-3 が Lint を実行しない
+  - API キーは `dpapi:` prefix の有無で復号と平文を分け、平文でも動作する（同 §9）
+  - AI の POST 経路が共通 WinHTTP 基盤（同 §6.1）を使い、M32 の GET + SHA256 と基盤を共有する
 - **参照仕様**: `docs/ai-backend-spec.md`（AiBackend 契約・正典）、
   `docs/legacy-parity-spec.md` §4、`docs/rich-features-spec.md` X-3-3
 
@@ -911,9 +920,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `cmake/toolchains/win-arm64-clang.cmake`、各 `CMakeLists.txt`（ARM 最適化
   フラグ。クロス時 `GGML_NATIVE=OFF` 強制。§8.2）。
 - **実装範囲**: `docs/copilot-pc-backend-spec.md` §8。
-- **受け入れ条件**（§8.4 で詳細確定）:
+- **受け入れ条件**（実行経路と課金の比較は spec §8.4）:
   - **CI 緑ゲート（必須・自動）**: 既存 x64 ランナー上の ARM64 **クロスビルド**（clang-cl
-    必須＝ggml が MSVC ARM を拒否）が成功（ARM64 バイナリ生成まで。新インフラ不要）。
+    必須＝ggml が MSVC ARM を拒否）が成功し、spec §8.1 の成果物検査を通る（ARM64 バイナリ
+    生成まで。新インフラ不要）。
   - **ARM64 単体テスト実行**: `windows-11-arm` ランナーで ctest 緑。**public / private
     いずれでも label は有効**（private は従量課金）なので可視性に依らず CI 化できる。
   - **実機検証**: Snapdragon X 実機での動作確認（`gate:human-required`。CI ブロッカーに
@@ -942,14 +952,20 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**（Store 提出パッケージは Partner Center 提出後に Microsoft が署名するため、
   ローカル検証は**開発用自己署名テスト証明書**で行う。配布方針は spec §0）:
   - ローカル検証: 自己署名テスト証明書で署名した MSIX を、証明書を信頼させたクリーン VM で
-    `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）。**対象 OS は
+    `Add-AppxPackage`（A は sparse 登録）成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）。**対象 OS は
     §1.0 で確定する TIP 配布経路に従う**（Option A = external-location は Win10 2004/build 19041+ / Win11、
     Option B/C = `com4` により build 20348+ = Win11 21H2+。Win10 22H2 client(19045) は B/C では対象外。spec §1.1）
   - clean install / uninstall に加え、**新旧バージョン間の update（上書き）と
     失敗時 rollback** シナリオを `compat-test/msix_install_uninstall.ps1` で検証
     （現状は clean install / uninstall の残骸チェックのみ。実機実行部分は
     `gate:human-required`）
-  - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
+  - 経路ごとの対象 OS は spec §1.5 の表に従う
+  - 言語バーから azooKey が選べる
+  - アンインストールで `HKLM\Software\Classes\CLSID\...`（A: `regsvr32` 経路、machine-wide）/
+    package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
+  - 同梱辞書アセットの `ThirdPartyNotices.txt` 同梱と帰属表示が
+    `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体パックは同梱しない
+    （同 §14.9）
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
   `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
@@ -2308,7 +2324,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     typo_result.json` で typo 指標が算出・schema 出力される（M52 時点では
     typo 補正は未実装＝M55 のため既定 `off`。補正有効モード `rank`/`aggressive`
     での実測値検証は M55 受け入れで行う。spec §7 参照）
-  - baseline 比較レポートが CI artifact 化される
+  - baseline 比較レポート（`diff_vs_baseline`）が生成され、CI artifact 化される
+  - `--trace` 指定時は phase JSONL を生成し、`azookey_trace_viewer --json` の schema と phase 別
+    p50 / p95 / p99 を検証できる（M51、`docs/dev-infrastructure-spec.md` §7.7.3）
   - 初期評価データが spec §11.2「M52 初期」を満たす（general / homophone /
     typo / typo_clean 各 100・計 ≥400。typo_clean は false-positive /
     overcorrection の分母のため必須）
@@ -2444,7 +2462,23 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - 同じ入力を複数回確定すると、次回以降候補順位が上がる
   - M52 ベンチで user_adapt カテゴリが学習前後で改善する
-  - 既存 `learning.tsv` から自動マイグレートできる
+  - 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
+  - secure 中に `Observe` が呼ばれない。TIP と Host の判定責務は
+    `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う
+  - `app_name` 列がイベントに記録され、`app_profile_weight` の計算経路がある。M48 のプロファイルが
+    無い構成では `app_profile_weight = 1.0`（中立）を返す。実 boost は M48 との統合で確認する
+  - 即 Backspace と再変換が `CommitCorrection`（spec §4.1）で Host に届き、`correction_reject` /
+    `correction_accept` が app 行と `context_hash` 付きで記録される。privacy で拒否された訂正と
+    再送は記録しない
+  - `event_type` 列が拡張可能な enum で、`commit` / `correction_accept` / `correction_reject` を
+    記録できる。`typo_accept` / `typo_reject` は同じ列の enum 値として予約し、M55 が記録する
+  - 索引構造（spec §14。M15 と共有）:
+    - 読みの前方一致で学習履歴を引け、結果が spec §14.5 の順序で返る
+    - 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）
+    - 二層化だけを理由に永続化形式が変わらない（形式の版は spec §3 が決める）
+    - 予測候補ウィンドウへ学習由来の候補が spec §14.6 の区分連結で供給され、受理が §14.6.1 の
+      追記動作で成立する
+    - 減衰後スコアが `exp(-0.15 * days)` のまま維持される
 - **参照仕様**: `docs/user-learning-enhancement-spec.md`
 
 ### M55: 打ち間違え学習統合（M35 発展）
@@ -2524,8 +2558,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     M57 ModernBERT 共用は不採用）に従う
 - **受け入れ条件**:
   - M52 ベンチで top1 が baseline 比 +3% 以上
-  - p95 latency 悪化が +10ms 以内
-  - timeout 時に reranker なしで候補が返る（fallback 動作）
+  - M52 ベンチで p95 latency 悪化が +10ms 以内
+  - timeout / load 失敗時に reranker なしで候補が返る（IME が止まらない）
+  - 連続失敗（既定 3 回）で circuit breaker が開き fallback する（spec §7.2）
+  - v0（LightGBM baseline）と v1（MLP）の比較レポート（feature importance / ablation を含む、
+    spec §5.4）が残る
+  - 学習データが spec §6.2 のラベリングプロトコルに従って生成されている
 - **参照仕様**: `docs/neural-reranker-spec.md`
 
 ### M57: ModernBERT-Ja 候補スコアリング
@@ -2553,7 +2591,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - M52 ベンチで homophone top1 が baseline 比 +5% 以上
   - 通常入力の p95 latency 悪化が +20ms 以内
-  - ModernBERT がロードできない環境でも fallback で動作する
+  - ModernBERT がロードできない環境（CPU only / モデル未配置）でも fallback で動作する
+    （IME が止まらない）
+  - M46 secure 中は完全 OFF（cache 読み書きも行わない）
+  - `ambiguity_score < threshold` のリクエストでは ModernBERT が呼ばれない
+    （`reason=low_ambiguity` がログに残る）
+  - RSS 増分が spec §6.1 の許容上限内（200 MB 以下）。上限超過環境では `reason=rss_cap` で
+    ロードせず fallback し、IME が継続動作する
+  - `modernbertEnabled=always` でも RSS / backend / secure の安全ゲートを逸脱しない
+    （上限超過時はロードしない）
+  - timeout 予算切れ時は評価済み候補のみ適用し、未評価候補は ModernBERT 抜きの順位で確定する
+    （spec §5.4）
+  - 同一確定文脈の再変換で cache がヒットする（spec §5.2.1）
 - **参照仕様**: `docs/modernbert-ja-scoring-spec.md`
 
 ## 横断テーマと Phase の対応

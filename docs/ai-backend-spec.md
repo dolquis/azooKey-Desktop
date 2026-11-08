@@ -2,7 +2,7 @@
 
 対象リポジトリ: dolquis/azooKey-Desktop
 対応マイルストーン: M16（Magic Conversion / Replace Suggestion。本書の主対象）。
-  共有消費者として M58-C（AI 整文 `ai-cleanup`）/ X-3-3（Post-Commit Lint）。
+  共有消費者として M58-C（AI 整文 `ai-cleanup`）/ X-3-3（Post-Commit Lint）/ X-3-6（バッチ訂正ビュー）。
 関連:
 - `docs/legacy-parity-spec.md` §4（Magic Conversion。本書が §4.4〜§4.6 を拡充する）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
@@ -32,7 +32,7 @@
 またはローカル Zenzai）に委譲して変換・整文・校正するための Host 側共有
 コンポーネントである。本書は次を契約として確定する。
 
-1. 3 消費者（M16 / M58-C / X-3-3）が再利用できる **IPC payload と Host 側
+1. 4 消費者（M16 / M58-C / X-3-3 / X-3-6）が再利用できる **IPC payload と Host 側
    インターフェイスの抽象度**（§3, §4）。
 2. **OpenAI 互換 API 呼び出し契約**（エンドポイント・認証・モデル・`mode`→
    system-prompt マッピング・`response_format`）（§5）。
@@ -55,10 +55,10 @@
 
 ## 2. 設計原則
 
-- **契約先行**: 3 消費者が個別実装で分岐しないよう、IPC・backend 抽象・fallback・
+- **契約先行**: 各消費者が個別実装で分岐しないよう、IPC・backend 抽象・fallback・
   secure ガード・タイムアウトを本書で先に固定する。
 - **消費者は別 IPC メッセージ、Host は単一 backend 抽象**: トリガと payload 形が
-  異なる 3 消費者はそれぞれ専用 IPC メッセージを持つが、Host 側は共有の
+  異なる各消費者はそれぞれ専用 IPC メッセージを持つが、Host 側は共有の
   `AiBackend` インターフェイス（単一 `Transform` コア）へ集約する（§3）。
 - **入口で secure ガード**: 外部 AI へ渡らない保証は `AiBackend` の入口（Host 側）で
   プライバシー判定を強制チェックして担保する。TIP 側の抑止（§8）は多層防御の一層で
@@ -75,7 +75,7 @@
 
 ## 3. 消費者と共有インターフェイス（多消費者契約）
 
-### 3.1 3 消費者の特性
+### 3.1 消費者の特性
 
 | 消費者 | トリガ | 送信単位 | 既定 backend 方針 | 同期/非同期 |
 |---|---|---|---|---|
@@ -229,7 +229,7 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 （文節候補数は M58-C 側の変換経路で扱う）。
 
 > 共有点: M58-C と M16 は**別 IPC メッセージ**だが、Host 側で同じ
-> `AiBackend::Transform` に集約される。これが「3 消費者の共有」の実体である。
+> `AiBackend::Transform` に集約される。これが「消費者の共有」の実体である。
 
 ### 4.3 X-3-3: `RequestPostCommitLint`（`rich-features-spec.md` §X-3-3 が正典）
 
@@ -533,21 +533,16 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
 
 ## 12. 受け入れ条件 / テスト観点
 
-本書を満たす M16（および共有経路）の受け入れ条件:
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M16 節とする。本書は `AiBackend` の IPC・Host 側抽象・エラー分類・secure ガード・
+キー保存を定義し、受け入れ条件を複製しない。
 
-- **M16**: 英数/かなダブルタップで `TransformSelectedText` が発火し、`gpt-4o-mini`
-  応答（`mode` 別 system プロンプト）が選択へ置換される（`legacy-parity-spec.md` §4）。
-- **共有抽象**: M16 / M58-C / X-3-3 が Host 側で同一 `AiBackend::Transform` を通る
-  （別 backend 実装に分岐しない）。ユニットテストで 3 `AiTask` の正規化を検証する。
-- **secure ガード**: プライバシー判定が `AI 候補生成許可==false`（secure）を返すとき、
-  `AiBackend::Transform` が外部送信せず `BlockedBySecure` で早期 return する
-  （Host 側ガード単体テスト。TIP 抑止に依存しない）。
-- **エラー分類**: 401/403/429/5xx/timeout/parse が §7.2 の `AiErrorClass` に分類され、
-  再試行対象（429/5xx/一時 Network）のみバックオフ再試行される（モック HTTP で検証）。
-- **fallback**: `aiBackend=none` で M58-C が `neural` へ、X-3-3 が Lint 不実行へ落ちる。
-- **キー保存**: `dpapi:` prefix の有無で復号/平文を分岐し、平文でも動作する（§9）。
-- **HTTP 基盤共有**: AI の POST 経路が §6.1 の WinHTTP 基盤を使う（M32 の GET+SHA256 と
-  同じ基盤を共有する構造であることをレビューで確認）。
+roadmap M16 の条件は次の方法で検証する。
+
+- 4 つの `AiTask` の正規化と secure ガードは、Host 側の単体テスト（`inference-host/tests/ai_backend_test.cpp`）で
+  検証する。secure ガードの検証は TIP 側の抑止に依存しない。
+- エラー分類と再試行は、モック HTTP で検証する。
+- AI の POST 経路と M32 の GET + SHA256 が同じ WinHTTP 基盤を使う構造は、レビューで確認する。
 
 > 既知のテストギャップ・実機検証（OpenAI 実 API への結合テスト、secure 実機確認）は
 > Linear に課題として起票し追跡する（roadmap には状態を書かない）。

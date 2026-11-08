@@ -8,8 +8,9 @@
   新版への update → 失敗する更新後の rollback → Remove-AppxPackage → 残骸 0
   確認まで半自動でチェックする「雛形」スクリプト。
 
-  本スクリプトは `docs/sideload-packaging-spec.md` §1（MSIX サイドロード）と
-  同 §1.5（受け入れ条件）を検証対象とし、`plans/windows-port-roadmap.md`
+  本スクリプトは `docs/sideload-packaging-spec.md` §1（MSIX サイドロード）・
+  同 §1.5（経路別の対象 OS）と `plans/windows-port-roadmap.md` M28 の受け入れ条件を
+  検証対象とし、`plans/windows-port-roadmap.md`
   「既知のテストギャップ」#5（MSIX manifest と DllRegisterServer の整合）を
   解消するためのハーネスである。状態・進捗の正典は Linear（DEV-101）。
 
@@ -528,7 +529,7 @@ try {
   $clsidAfter = Test-ClsidRegistered
   if ($clsidAfter) {
     Add-Check -Name "アンインストール後に CLSID 残骸が無い" -Status "FAIL" `
-      -Detail "残存キー: $clsidAfter（spec §1.5『残骸なく消える』違反 / リリース blocker）"
+      -Detail "残存キー: $clsidAfter（roadmap M28『残骸なく消える』違反 / リリース blocker）"
   } else {
     Add-Check -Name "アンインストール後に CLSID 残骸が無い" -Status "PASS"
   }

@@ -635,7 +635,7 @@ Host の破棄時に flush が失敗した場合は 50 ms 間隔で最大 2 回�
 
 DEV-759（人間ゲート）の検証項目は本節の区分に従う。
 保証の経路は保持を必須とし、best-effort と対象外の経路は §11.3 の上限内であれば未達として記録しない。
-チェックリストの本体は `docs/handoff/human-gate-batch-runbook.md` に置く。
+実行手順と判定の区分は `docs/handoff/human-gate-batch-runbook.md`「Windows CLI / コンソールの別枠」に置き、記録項目は人間ゲートの課題本文が持つ。
 
 ## 12. CommitObservation の配送保証
 

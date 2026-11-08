@@ -6,8 +6,8 @@
 
 > **アプリ別の実測結果（pass / fail・スクリーンショット・所見）は本ファイルに書かない。**
 > 実走は Linear の `gate:human-required` の課題で行い、結果は当該課題のコメントに記録する
-> （`AGENTS.md`「進捗・状態は Linear に一本化」）。記録のひな形は
-> `docs/handoff/human-gate-batch-runbook.md` にある。
+> （`AGENTS.md`「進捗・状態は Linear に一本化」）。記録の環境ブロックは
+> `docs/handoff/human-gate-batch-runbook.md`「Part C：検証メモのひな形」にあり、アプリ別の記録項目は課題本文が持つ。
 
 ## 1. 位置づけ
 

@@ -82,7 +82,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `dev-infrastructure-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook |
 | [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) | trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック |
-| [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証をまとめる runbook |
+| [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証を 1 回の VM セッションでまとめるときのレーン設計、ゲート種別ごとの実行条件、検証メモの記録様式。課題の割当と課題別の確認項目は Linear が持つ |
 | [`handoff/dev-machine-verification.md`](handoff/dev-machine-verification.md) | 実機検証を VM と開発機のどちらで行うかの判定基準（Linear の `env:vm` / `env:dev-machine`）と、開発機での前提・手順・後始末 |
 | [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順。VM 構成、3 層の検証フロー、VM 内の TIP 登録をエージェントへ委任する条件と範囲の正典 |
 | [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | VM 検証資産の一覧と、エージェントが Hyper-V VM 操作を補助する前提（ホスト側の権限）とリスク |

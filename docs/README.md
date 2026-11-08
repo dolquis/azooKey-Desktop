@@ -84,8 +84,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) | trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック |
 | [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証をまとめる runbook |
 | [`handoff/dev-machine-verification.md`](handoff/dev-machine-verification.md) | 実機検証を VM と開発機のどちらで行うかの判定基準（Linear の `env:vm` / `env:dev-machine`）と、開発機での前提・手順・後始末 |
-| [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
-| [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |
+| [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順。VM 構成、3 層の検証フロー、VM 内の TIP 登録をエージェントへ委任する条件と範囲の正典 |
+| [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | VM 検証資産の一覧と、エージェントが Hyper-V VM 操作を補助する前提（ホスト側の権限）とリスク |
 | [`handoff/tip-manual-verification-checklist.md`](handoff/tip-manual-verification-checklist.md) | TIP の打鍵確認（コア A1〜A8、拡張 B1〜B7）と compat runner との分担。VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する |
 | [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順、Claude Code on the web の SessionStart hook |
 | [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック、分担の例と、管制塔セッションと子セッションの役割分担 |

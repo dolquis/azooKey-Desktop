@@ -44,7 +44,7 @@ VM なら失敗しても復元で済む。
 
 ## 4. 開発機での前提
 
-`AGENTS.md`「最優先の安全規則」のとおり、エージェントが TIP を登録してよいのは検証専用の VM 内だけである（[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5）。
+`AGENTS.md`「最優先の安全規則」のとおり、エージェントが TIP を登録してよいのは検証専用の VM 内だけである（[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「エージェントへの委任」）。
 開発機では、登録、解除、Host の停止などの操作はすべて人が実行する。
 エージェントが受け持つのは、ログの整理、結果の照合、検証メモの下書きである。
 エージェントが Computer Use で打鍵するのは、§4.1 の条件を満たす許可制の例外に限る。

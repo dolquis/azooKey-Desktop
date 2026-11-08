@@ -598,7 +598,7 @@ function ConvertTo-VmVerifySummaryMarkdown {
     "$($package.commit) / preset ``$($package.preset)`` / $($package.buildType)")
   $lines.Add("- VM: Hyper-V / セッション種別 = 基本セッション")
   $lines.Add("- 開始 checkpoint 名: ☐ vc_redist 未導入のクリーン（レーン 1） " +
-    "☐ plan §2 のベースライン（レーン 2）/ 名前:")
+    "☐ 「VM 構成」のベースライン（レーン 2）/ 名前:")
   $lines.Add("- バックエンド: ☐ CPU (SimpleConverter) ☐ zenz GGUF (ファイル名)（$modelNote）")
   $lines.Add("")
   $lines.Add("## 自動観測サマリ")

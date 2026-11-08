@@ -1,15 +1,17 @@
-# Hyper-V VM 実機確認の推奨プランとエージェント補助の評価
+# Hyper-V VM 実機確認の検証資産とエージェント補助の前提
 
-Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨構成と検証フロー、
-および Claude Code / Codex CLI が VM 操作を補助できる範囲の評価をまとめる。
+Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの検証資産と、
+Claude Code / Codex CLI が VM 操作を補助するときの前提とリスクをまとめる。
 
-- 登録と bootstrap の個別手順の正典は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)、
+- VM 構成、3 層の検証フロー、エージェントへの委任の条件と範囲、登録と bootstrap の個別手順の正典は
+  [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)、
   チェック項目の正典は [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md) と
   `compat-test/` であり、本書はそれらを重複記述しない。
+- 操作チャネル別の評価、スパイクの未確認点、ハーネスの比較、運用レベル（L0〜L2）の定義は、
+  評価時点の記録として [`../archive/hyper-v-vm-agent-assist-evaluation.md`](../archive/hyper-v-vm-agent-assist-evaluation.md) にある。
 - 進捗と状態の正典は Linear で、本書は状態を持たない。
-  導入作業を進める場合は Linear に起票して追跡する。
 
-## 1. 現在の検証資産
+## 1. 検証資産
 
 コードベースには、VM 実機確認を支える資産が 4 系統ある。
 
@@ -20,34 +22,18 @@ Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨�
 | `compat_test.exe` と `compat_host_hang_watchdog.exe`（`compat-test/`） | Notepad、VS Code、Edge の compat ケース（範囲は `docs/dev-infrastructure-spec.md` §13.3）を UI Automation + SendInput で自動実行し、`report.json` を出す。watchdog は C-013 の Host 再開を担当する | `docs/dev-infrastructure-spec.md` §13 |
 | `azookey_diag.exe` | 登録、pipe、ログディレクトリの診断と `--repair` | `docs/handoff/windows-diagnostics-playbook.md` |
 
-手動確認の動線はチェックリスト（コア A1〜A8、拡張 B1〜B7）が定義済みである。
-本プランは、これらの資産を後述の 3 層に組み合わせる。
+手動確認の動線はチェックリスト（コア A1〜A8、拡張 B1〜B7）が定める。
+これらの資産を組み合わせる 3 層の検証フローは [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「検証フロー（3 層）」が定める。
 
 ## 2. 推奨 VM 構成
 
-- **OS**: 配布対象に合わせた Windows 11 の最新 GA ビルド。検証記録に `winver` のビルド番号を残す。
-- **世代とリソース**: 第 2 世代、4 vCPU、メモリ 8 GB を起点にする。GGUF を検証する場合はモデルサイズ分を加算する。
-- **統合サービス**: PowerShell Direct（`vmicvmsession`）は既定で有効。Guest Service Interface は既定無効だが、`vm-verify-session.ps1 -Prepare` が検証 zip を `Copy-VMFile` で転送するため有効化する。無効のままでは `-Prepare` が非ゼロ終了する。表示名はローカライズされるので、有効化はコンポーネント ID（`6C09BB55-D683-4DA0-8931-C9BF705F6480`）で選ぶ。
-- **アカウント**: ローカル管理者を 1 つ用意する。ゲスト内自動化（§4）を使う VM に限り、自動サインインを設定し、画面ロックとスクリーンセーバーを無効にする（SendInput と UI Automation は対話セッションがロックされていると失敗する）。
-- **ランタイム**: `vc_redist.x64.exe`（VC++ 2015-2022 Redistributable x64）を導入したベースラインを作る。
-- **checkpoint 運用**: 「クリーン + Redistributable + 上記設定」のベースライン checkpoint を 1 つ維持し、各検証はその上に検証用 checkpoint を取ってから始める。検証後は復元して残骸を持ち越さない。MSI 配布形態を検証する VM では、これとは別に Redistributable 未導入のクリーン checkpoint を維持する（[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 1」）。ベースラインから始めると、MSI の app-local ランタイム同梱を確かめられない。
-- **セッション種別**: ファイル転送は拡張セッション、IME 検証と打鍵は基本セッション（runbook の安全装置に従う）。C-005 に限る例外は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「拡張セッションの限定例外（C-005）」が定める。
-- **保険**: Microsoft IME を削除しない。
+[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「VM 構成」へ移した。
 
 ## 3. 推奨検証フロー（1 サイクル 3 層）
 
-1 回の検証サイクルを、自動化できる層から人間にしか判断できない層へ 3 層に分ける。
+[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「検証フロー（3 層）」へ移した。
 
-| 層 | 内容 | 実行者 |
-|---|---|---|
-| **層 1: 自動先行検証** | Release ビルド → `make-vm-verify-package.ps1` → 検証用 checkpoint 取得 → zip 転送 → `verify-bootstrap.ps1 -Json` → `compat_test.exe`（3 target）→ `report.json` とログの回収 → 判定サマリ作成 | エージェント補助可（§4） |
-| **層 2: 半自動打鍵確認** | 基本セッションでチェックリスト A1〜A8 と B 系を打鍵。ログとスクリーンショットの整理、チェックリスト下書きはエージェントが補助 | 人間 + エージェント |
-| **層 3: 人間ゲート** | 候補ウィンドウの見え方、DPI、切替の体感などの視覚判断。チェックリスト確定、Linear への検証メモ、`gate:human-required` の Done 判定。最後に checkpoint 復元 | 人間 |
-
-層 1 で `overallStatus=fail` または `compat_test` の新規 fail が出た場合は、層 2 に進まず修正へ戻る。
-層 1 の pass は層 2 と層 3 の合格を意味しない（前段の検証成功を後段の成功に読み替えない）。
-
-## 4. エージェント補助の評価
+## 4. エージェント補助
 
 ### 4.1 前提: エージェントは Hyper-V ホストで動かす
 
@@ -65,113 +51,27 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 
 ### 4.2 操作チャネル別の評価
 
-| チャネル | できること | 評価 | 制約 |
-|---|---|---|---|
-| Hyper-V cmdlet（`Get-VM`、`Checkpoint-VM`、`Restore-VMSnapshot`） | checkpoint の取得、復元、VM 状態確認 | ◎ 実用 | ホスト側で Hyper-V 管理者権限が要る |
-| PowerShell Direct（`Invoke-Command -VMName`、`New-PSSession -VMName` + `Copy-Item -ToSession/-FromSession`） | ネットワーク設定に依存しないゲスト内コマンド実行と双方向ファイル転送 | ◎ 実用 | ホストで管理者権限、ゲスト資格情報が要る。セッションは非対話（§4.3） |
-| `Copy-VMFile` | ホスト→ゲストの片方向ファイル転送 | ◎ 実用 | Guest Service Interface が要る（既定無効、§2）。`vm-verify-session.ps1 -Prepare` の転送経路 |
-| `Msvm_Keyboard` WMI（`TypeText`、`TypeKey`、`TypeScancodes`） | 仮想キーボードデバイスへの打鍵注入。基本セッションの物理打鍵と同じ入力経路を通る | △ 実験 | `TypeText` は ASCII 512 文字上限。観察手段（下記）とペアでないと判定できない |
-| VMConnect 基本セッション + ホスト UI 自動化（windows-mcp または computer-use MCP） | ホスト UI 越しの打鍵と、VM 画面のスクリーンショット取得。エージェントは画像を直接読める | △ 実験 | 入力が VMConnect ウィンドウへ期待どおり届くか未確認。windows-mcp が接続できない環境では、Claude Code の computer-use MCP が同経路の代替になる |
-| ゲスト内 `compat_test.exe` | compat ケースの UI Automation 自動実行と機械可読レポート | ◎ 実用 | 対話セッション必須。PowerShell Direct のセッションは対話セッションではないため、対話ユーザーのスケジュールタスク経由で起動する |
-
-結論として、補助は可能である。
-実用度が高い順に、(1) ホスト側オーケストレーション（パッケージ生成、checkpoint 管理、転送、回収）、(2) PowerShell Direct + スケジュールタスクによる `verify-bootstrap.ps1` と `compat_test.exe` の実行、(3) スクリーンショット読解を組み合わせた半自動打鍵確認、の 3 段になる。
-打鍵注入（`Msvm_Keyboard`）は PoC の価値はあるが、判定の信頼性が観察手段に依存するため、人間ゲートの代替にはしない。
+§4.2〜§4.4 は評価時点の記録として [`../archive/hyper-v-vm-agent-assist-evaluation.md`](../archive/hyper-v-vm-agent-assist-evaluation.md) へ移した。
 
 ### 4.3 スパイクで確認する未確認点
 
-次の 4 点は文書と API 仕様から確定できないため、スパイクで確認する対象として定義した。
-各項目は Linear の個別課題であり、実施結果と判断は各課題側に残す。
-L1 の成立可否を決めるのは DEV-730 と DEV-731 である。
-層 2 の補助範囲を決める DEV-732 と DEV-733 は、後述「L2 スパイクを再実施しない理由と再評価の条件」の条件が成立するまで実施しない。
-
-- 管理者資格の PowerShell Direct セッションで `verify-bootstrap.ps1` の管理者判定が真になるか（DEV-730）。
-  bootstrap は非管理者のとき `Start-Process -Verb RunAs`（UAC ダイアログ）で昇格するが、非対話セッションでは同意ダイアログを表示できない。
-  判定が真ならこの分岐を踏まず、そのまま実行できる。
-- PowerShell Direct セッションで構成した per-user host pipe に、対話セッション側の TIP が接続できるか（DEV-731）。
-  named pipe の名前空間はセッションをまたぐが、HKCU の自動起動設定が効くのは次回の対話ログオンからである。
-- windows-mcp の入力送出が VMConnect 基本セッションウィンドウへ届くか（DEV-732）。
-  ホスト UI 自動化の実装は windows-mcp に限らず、Claude Code の computer-use MCP でも同じ問いを検証できる。
-- `Msvm_Keyboard` 注入時の候補ウィンドウ挙動を、スクリーンショットと画像読解だけで判定できるか（DEV-733）。
-
-#### L2 スパイクを再実施しない理由と再評価の条件
-
-DEV-732 と DEV-733 の前提は、層 2 の打鍵をゲストの外から送り、結果を VM 画面のスクリーンショットで判定するしかない、というものである。
-この前提は次の 2 点で成り立たなくなった。
-
-- L1 のゲスト内自動検証（`scripts/vm-verify-session.ps1 -Run`）により、`compat_test.exe` がゲストの対話セッションで UI Automation と SendInput を使って compat ケースを実行する。打鍵結果を UI Automation でテキストとして読むため、スクリーンショットの画像読解より観測が確実である。
-- [`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)「compat runner との分担」が、A 系・B 系の各行を機械判定、人間判定、補助に分けている。
-
-ホスト側の打鍵手段（windows-mcp、computer-use MCP、`Msvm_Keyboard`）は、§4.2 が両スパイクの前提として挙げたものと同じであり、判断を変える差分にならない。
-
-L2 の打鍵注入が代替しうるのは、分担表で人間判定または補助に残る行のうち、視覚や体感を要さず打鍵で駆動できる部分に限られる（A3 の追加の綴り、A6 の選択移動、A7 の数字キー確定、B2 の早打ちなど）。
-これらはゲスト内の compat ケースとして追加すれば UI Automation で判定でき、ゲスト外の打鍵とスクリーンショットによる判定より信頼性が高い。
-候補ウィンドウの見え方、下線、DPI、体感は、どちらの経路でも人間が判断する。
-したがって L2 のスパイクは効率化の手段としてゲスト内 compat ケースの追加に劣り、再実施しない。
-
-次のいずれかが成立したら、この判断を再評価する。
-
-- 打鍵で駆動でき、かつゲスト内の UI Automation では観測できない行が、分担表の人間判定または補助に見つかった。
-- SendInput の合成入力と、仮想キーボードデバイス経由の入力とで、TIP の挙動が異なる回帰が見つかった。この場合は `Msvm_Keyboard` 経由の打鍵に固有の価値が生じる。
-- ゲスト内のスケジュールタスクから compat を実行できない VM 構成（コンソールの対話サインインを用意できない VM など）が検証の標準になった。
-
-再評価で実施すると決めた場合も、判定基準は DEV-732 と DEV-733 の記述を土台にし、結果は参考情報にとどめて人間ゲートを置き換えない（§4.2 の結論）。
+§4.2 と同じく archive へ移した。
 
 ### 4.4 Claude Code と Codex CLI の比較
 
-操作チャネルの実体はどちらも PowerShell であり、`.mcp.json` と `.codex/config.toml` は同じ `powershell` / `windows-mcp` MCP サーバーを定義している。
-したがって層 1 の自動化はどちらのハーネスでも成立し、能力差は小さい。
-
-検証補助に限れば Claude Code を推奨する。
-理由は 2 つで、スクリーンショット画像を直接読解できること（層 2 の補助で効く）、および UAC や管理者 PowerShell を挟む往復を PowerShell.MCP の共有コンソールで人間と分担する運用が本リポジトリで整備済みであることによる。
-役割分担の規約（Claude = 設計とレビュー、Codex = 実装）とも整合する。
+§4.2 と同じく archive へ移した。
 
 ### 4.5 任せる作業と人間に残す作業
 
-| 任せられる（エージェント） | 人間に残す |
-|---|---|
-| 検証 zip の生成と鮮度確認 | 委任の対象とする検証 VM の指定と、ゲスト資格情報の用意（§6） |
-| checkpoint の取得、存在確認、復元 | 候補ウィンドウの見え方、DPI、体感などの視覚判断 |
-| zip 転送、ログと `report.json` の回収 | チェックリストの確定と合否判定 |
-| 検証 VM 内での開発登録（下記の条件を満たす場合） | 検証 VM の外での TIP 登録と、下記の範囲外の操作 |
-| `-Json` 結果と report の判定サマリ作成 | `gate:human-required` の Done 判定と Linear への検証メモ |
-| チェックリスト下書き、Linear 起票の下書き | 規約改訂の判断 |
-
-`AGENTS.md` は TIP 登録を人間の操作とし、検証専用の Hyper-V VM 内に限ってエージェントへの委任を認める。
-VM 内の machine-wide 登録は checkpoint の復元で巻き戻せるためである。
-本節は委任の条件と範囲の正典である。
-
-委任の条件は次のとおり。
-
-- 対象は、人間が検証用として指定した §2 構成の VM に限る。Hyper-V ホスト、開発機、物理機は対象にしない。開発機で行う実機検証の範囲と手順は [`dev-machine-verification.md`](./dev-machine-verification.md) が定める。
-- 登録の前に、復元先の checkpoint（`vm-verify-session.ps1 -Prepare` が取るもの、または §2 のベースライン）が対象 VM にあることを確認する。無ければ登録しない。
-- 復元（`-Restore`）は層 3 の人間ゲートが終わってから行い、登録を次の検証へ持ち越さない（§3、§6）。層 1 の完了時点では復元しない。人間が確認する登録状態が消えるためである。エージェントが復元するのは、人間が層 3 の完了を伝えた後に限る。
-
-委任の範囲は、開発登録の経路と、MSI の導入を挟まない MSI レーンの前後の操作に限る。
-
-- 範囲内: 検証 zip を対象とする `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。MSI を渡す `vm-verify-session.ps1` の `-Prepare`（checkpoint の取得と MSI の転送）、`-Collect`（ログの回収）、`-Restore` の実行。MSI の `-Restore` も、人間がレーン 1 の完了を伝えた後に限る。
-- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入（`msiexec`）とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。
-
-エージェントの実行結果は先行検証であり、人間ゲートの合格にはならない。
-視覚判断、合否判定、Done 判定は、委任の有無にかかわらず人間に残す。
+[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「エージェントへの委任」へ移した。VM 内の TIP 登録委任の条件と範囲の正典は同節である。
 
 ## 5. 運用レベルの定義
 
-導入は次の 3 レベルで段階化する。
-レベルは運用形態の定義であり、達成状態は Linear で追跡する。
-
-どのレベルでも、初回に次のホスト側セットアップを済ませる（人間の一回作業）。
-
-1. 実行ユーザーの `Hyper-V Administrators` への追加と再ログオン（§4.1）。
-2. §2 の構成での VM 作成と、ベースライン checkpoint の取得。
-3. ゲスト資格情報の準備（`Get-Credential` での対話取得、または SecretManagement。§6）。
-4. エージェント側 MCP（`powershell` / `windows-mcp`）の接続確認。環境起因の失敗は `just doctor --fix-hints` で切り分ける。
-
-- **L0 ホスト側支援**: 追加実装なしで今すぐ使える。層 1 のうちゲスト内実行を除く全部（パッケージ生成、checkpoint 管理、転送、回収、サマリ作成）と、層 2 のログ整理、起票支援。
-- **L1 ゲスト内自動検証**: §4.3 のスパイクを先に潰した上で、PowerShell Direct 経由の bootstrap 実行と、対話セッションのスケジュールタスク経由の `compat_test.exe` 実行を自動化する。
-- **L2 打鍵注入の実験**: `Msvm_Keyboard` または VMConnect + ホスト UI 自動化（windows-mcp / computer-use MCP）で A 系チェックの一部を半自動化する PoC。結果は参考情報にとどめ、人間ゲートを置き換えない。着手の可否は §4.3「L2 スパイクを再実施しない理由と再評価の条件」に従う。
+評価時点の記録として [`../archive/hyper-v-vm-agent-assist-evaluation.md`](../archive/hyper-v-vm-agent-assist-evaluation.md) へ移した。
 
 ## 6. リスクと制約
+
+本節は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「エージェントへの委任」から参照される。
 
 - ゲスト資格情報をスクリプト、ログ、リポジトリ、コマンド履歴に残さない。`Get-Credential` で対話取得するか、SecretManagement モジュールで保管する。
 - エージェントのシェルに Hyper-V 管理者権限を与えることになる。`Remove-VM` や `Remove-VMSnapshot` などの破壊的 cmdlet は許可リストに入れず、都度確認にする。

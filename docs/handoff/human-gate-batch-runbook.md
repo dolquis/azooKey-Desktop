@@ -3,8 +3,7 @@
 複数の `gate:human-required` 課題を 1 回の Hyper-V VM セッションでまとめて消化するための実行計画と記録様式を定める。
 VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文書が正典であり、本書はそれらを再掲しない。
 
-- VM 構成と 3 層フローと補助範囲：[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md)
-- 登録、bootstrap、ログ取得、後始末の手順：[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)
+- VM 構成、3 層フロー、エージェントへの委任の範囲、登録、bootstrap、ログ取得、後始末の手順：[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)
 - 打鍵チェック項目 A1〜A8 と B1〜B7：[`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)
 - compat runner の実行：[`../../compat-test/README.md`](../../compat-test/README.md)。出力レイアウトは [`../dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.5
 - dump、ETW、Process Monitor の採取：[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)
@@ -305,7 +304,7 @@ MSI 配布形態そのものを対象とするゲートを置く。
 このレーンでは開発登録を一切行わない。
 
 開始状態は **vc_redist 未導入のクリーン checkpoint** とする。
-`hyper-v-vm-verification-plan.md` §2 のベースライン checkpoint は「クリーン + Redistributable + 設定」で vc_redist を導入済みであり、これとは別物である。
+`hyper-v-tip-verification.md`「VM 構成」のベースライン checkpoint は「クリーン + Redistributable + 設定」で vc_redist を導入済みであり、これとは別物である。
 DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がインストールできること（CRT の app-local 同梱が効いていること）を見るものなので、ベースライン checkpoint から始めると前提が崩れたまま Pass になり、証跡の意味が失われる。
 どちらの checkpoint を使ったかは、検証メモの環境ブロックの checkpoint 名で残す。
 
@@ -315,8 +314,8 @@ MSI の転送とログの回収は、検証 zip と同じ `vm-verify-session.ps1
 決まる checkpoint（`pre-azookey-msi-<12桁>`）を取って、ホストの結果ディレクトリへ
 `msi-record.json` を書く。この checkpoint は MSI を置いただけで導入していない状態なので、
 復元すればそのまま再導入でき、`-Prepare` をやり直す必要はない。
-`msiexec` は実行しない。導入は人が行う（plan §4.5）。
-`-Prepare`、`-Collect`、`-Restore` は、plan §4.5 の条件のもとでエージェントに任せられる。
+`msiexec` は実行しない。導入は人が行う（`hyper-v-tip-verification.md`「エージェントへの委任」）。
+`-Prepare`、`-Collect`、`-Restore` は、同節の条件のもとでエージェントに任せられる。
 
 ```powershell
 # ホスト側。VM をクリーン checkpoint へ復元し、起動した状態で実行する。
@@ -402,7 +401,7 @@ Direct でのファイル取得経路が失われる。その場合は VM を停
 再現は保護 checkpoint から分離して行う。
 
 MSI を入れる前の状態へ戻すときは、`-Restore -PackagePath <msi>` で MSI の checkpoint へ復元する。
-レーン 1 が終わったら、レーン 2 の開始状態（plan §2 のベースライン checkpoint）へ復元する。
+レーン 1 が終わったら、レーン 2 の開始状態（「VM 構成」のベースライン checkpoint）へ復元する。
 MSI の machine-wide 登録を残したままレーン 2 の開発登録を重ねると、どちらの登録が効いているか判別できなくなる。
 
 ### レーン 2：開発登録と検証 zip を入れた状態
@@ -722,7 +721,7 @@ pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
 - source: branch / commit:
 - 成果物: ☐ MSI (ファイル名 / SHA-256) ☐ 検証 zip (`manifest.json` の commit)
 - VM: Hyper-V / セッション種別 = 基本セッション
-- 開始 checkpoint 名: ☐ vc_redist 未導入のクリーン（レーン 1） ☐ plan §2 のベースライン（レーン 2）/ 名前:
+- 開始 checkpoint 名: ☐ vc_redist 未導入のクリーン（レーン 1） ☐ 「VM 構成」のベースライン（レーン 2）/ 名前:
 - バックエンド: ☐ CPU (SimpleConverter) ☐ zenz GGUF (ファイル名)
 ```
 

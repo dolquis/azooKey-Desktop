@@ -223,112 +223,23 @@ M45 以降に足した型は「新規 IPC メッセージ」の表に載せる�
   保存先ではない。v2 ファイルが無い間は M7 形式が読み込み元であり、保存の前に中断した移行を
   片付ける。v2 の保存を検証した後に M7 形式のファイルを削除する
   （`learning/src/LearningStore.cpp` の `Save`、`docs/user-learning-enhancement-spec.md` §3.1、
-  「共有ユーザーデータの writer 責務」）。
-- TSV の `reading` / `surface` は保存時に
-  `# azookey-learning-tsv escaped=1` ヘッダーを付け、`\` → `\\`、
-  tab → `\t`、LF → `\n`、CR → `\r` としてエスケープする。ヘッダーのない
-  旧ファイルは backslash を literal として扱い、既存データを壊さない。
+  `docs/learning-data-management-spec.md` §14）。
+- `reading` / `surface` の TSV エスケープとヘッダー、M7 形式から v2 への移行は
+  `docs/user-learning-enhancement-spec.md` §3.1 が正典。
 - ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` を基準パスとし、
   JSON を DPAPI で暗号化した `user_dict.json.enc` に保存する
   （`learning/include/azookey/learning/UserDictionary.h`）。拡張子 `.enc` の無い
   `user_dict.json` は旧平文の移行元である。`--learning` / `--user-dict` 指定時は
   明示パスを基準パスとして優先する。
-- Debug CLI（M9 移行措置）として
-  `azookey_inference_host.exe [--user-dict <path>] userdict ...` を提供する。
-  `add` / `remove` は既定で起動中 Host へ IPC 送信し、未起動時や検証用の直接編集では
-  `--offline` を付ける。`list` / `import <path-to-tsv>` / `export <path-to-json>` は
-  永続ファイルを直接読み書きする。`list` / `export` は読み取り専用で読み込み、平文の
-  `user_dict.json` の移行（`.bak` / `.enc` の作成）も、解釈できない JSON の隔離
-  （`.corrupt.<stamp>`）も行わない。解釈できないファイルは `lookup` と同じく読み込み失敗
-  として終了コード 1 を返す。`--dry-run` を付けた add / remove / import / export も
-  読み取り専用で読み込み、辞書や export 先を変更せず、移行・隔離を行わない。
-  通常の直接 writer（`--offline` の add / remove、`import`）は旧平文を `.bak` に保全して
-  `.enc` へ移行する。解釈できない平文は `.corrupt.<stamp>` へ隔離し、終了コード 1 を返す。
-- `userdict import` の TSV は
-  `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` の 5 列（後ろ 3 列は空可）を受け付ける。
-  不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
-  置換する。`userdict export` は既存 JSON schema
-  `{ "version": 1, "entries": [...] }` で書き出す。
-- 新語候補（M36-A）の承認には
-  `azookey_inference_host.exe [--learning <path>] newwords <list|confirm|reject> ...` を使う。
-  `confirm` / `reject` は `userdict add` と同じく既定で起動中 Host へ IPC 送信し、
-  直接編集は `--offline` を付けたときだけ行う。構文と出力は
-  `docs/auto-word-registration-spec.md` §7-3 に従う。
-- `userdict` / `newwords` の IPC 送信は、Host の pipe が無ければ約 100 ms で接続失敗とする。
-  pipe はあるが空いた待ち受けが無い（Host が 1 本ずつ受け付けている途中の）ときは、
-  呼び出しから合計 2 秒まで接続を待つ。待っている間に pipe が無くなれば、そこから約 100 ms で
-  失敗する。複数の CLI を同時に起動しても、Host が稼働していれば順に接続できる。
-- 接続後、handshake の応答は 2 秒まで待つ。Host の handshake は状態のロックを取らないので、
-  ユーザー辞書の保存がファイルロックを待っていても遅れない。`userdict add` / `remove` と `newwords confirm` / `reject` の
-  応答は、Host がその保存に使う上限（待ちの予算 5 秒と、flush・置換それぞれの一時競合の再試行予算）に
-  1 秒を足した時間（7 秒）まで待つ。busy 接続と handshake の待ちを合わせると、失敗を表示するまで最悪約 11 秒かかる。
-- Host の `AddUserWord` / `RemoveUserWord` は、要求の受信から数えて 5 秒を待ちの予算とする。予算は、同じ Host の
-  他のユーザー辞書の編集の終わりを待つ時間と、ユーザー辞書のファイルロックを待つ時間を合わせて数える。
-  予算を使い切ったとき、またはロックを取り読み直して保存を始める前の時点で予算を過ぎていたときは、保存せずに `ok=false` を返し、
-  Health の `last_error` に `user dictionary busy` を残し、応答の `error` を `busy` にする。保存を始めた後は打ち切らない。
-- CLI は Host の拒否を `running host rejected add: <error> (<説明>)`（`remove`）と表示する。
-  `busy` の説明は、何も保存していないことと再試行を促す。`lock_failed` / `load_failed` は何も保存していないこと、`save_failed` は
-  辞書を変えていないこと、`not_found` は語が辞書に無いこと、`unavailable` は Host がユーザー辞書を持たないことを示す。
-  `invalid_request` と `not_authenticated` にも説明を添える。CLI の知らないコードは表示せず、
-  `running host rejected add (unrecognized reason)` とする。`error` を持たない古い Host の応答では
-  `running host rejected add`（`remove`）とだけ表示する。
-  JSON 行の `error` はこの表示文で、`reason` に Host のコードを入れる（空白・制御文字・非 ASCII を除き 64 バイトまで。旧 Host の応答では省く）。
-  `newwords confirm` / `reject` は、稼働中 Host が拒否したとき `ResolveNewWordResponse` の `error` のコードを
-  JSON 行の `error` にそのまま載せる。`userdict` では同じ役割を `reason` が持つ。
-- Host はファイルロックを取った後、ディスクのユーザー辞書を読み直してから編集する。暗号化ファイルの大きさ・最終書込み時刻・ファイル識別子（Windows では 128bit のファイル ID とボリュームのシリアル番号、Linux では inode）が、この Host が前回読み書きしたときから変わらず、
-  その後メモリ上の辞書を変えていなければ、読み直しを省く（`load_skipped`）。他の writer は一時ファイルからの置換で書くので、識別子が変わる。
-- したがって `userdict add` / `remove` で CLI が応答待ちを諦めた後に Host の編集が成功するのは、要求が Host に届くまでの時間と、
-  読み直しと保存（DPAPI と flush・置換）に合わせて 2 秒より長くかかったときだけである。新語の確定・却下には待ちの予算が無い。保存の中では暗号化ファイル自体のロックも最大 5 秒待つ。待たされるのは外側のロックを取らない古いプロセスと競合したときだけだが、この待ちは CLI の 7 秒の計算に入っていない。
-  CLI の時間切れの表示は、変更が後から成功しうることと、`userdict list`（`newwords list`）で確かめることを示す。
-- Host は、ユーザー辞書の追加・削除と新語の確定・却下を 1 件ずつ RuntimeLogger のイベント `persistent_edit` に記録する。
-  項目は `trace_id`、`request_id`、`op`（`user_dict_add` / `user_dict_remove` / `new_word_resolve`）、`result`、
-  同じ Host の編集を待った時間 `writer_wait_ms`、ファイルロックを待った時間 `lock_wait_ms`、`load_ms`、`load_skipped`、
-  `save_ms` と、受信からの経過時間 `total_ms` である。受信時刻はレコードの時刻から `total_ms` を引いて求める。
-  単語と読みは記録しない。新語の確定・却下はファイルロックを取らないので、待ちと保存を合わせて `save_ms` に入れる。
-- M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
-  CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
-  低レベル操作面として削除しない。
-- 辞書と学習履歴の診断には、Host を起動しない読み取り専用 CLI を使う。
-  構文は `azookey_inference_host.exe [--learning <path>] [--user-dict <path>] lookup`
-  `--mode <exact|prefix|surface> --query <text> [--format <json|tsv>]` とする。
-  `exact` と `prefix` は reading を、`surface` は表層形を比較する。
-  比較は UTF-8 バイト列の完全一致または前方一致とし、正規化しない。
-  `--query` は空文字列を許可しない。
-  CLI 引数の文字コードは「Host CLI 引数」節の契約に従う。
-  JSON は一致ごとに `op`、`ok`、`mode`、`query`、`source`、`reading`、`surface` と
-  source 固有の値を 1 オブジェクトずつ出力する。
-  JSON オブジェクトのキー順は規定しない。
-  `user_dict` は存在する `cid`、`mid`、`weight` を、`learning` は `weight` と
-  `last_updated_epoch_sec` を source 固有の値として出力する。
-  該当なしの場合は `count: 0` の JSON を 1 行出力し、TSV では何も出力しない。
-  TSV の列は `source`、`reading`、`surface`、`cid`、`mid`、`weight`、
-  `last_updated_epoch_sec` の順とする。
-  結果は reading、surface、source の昇順で固定する。
-  この CLI はディレクトリ作成、legacy file migration、quarantine、保存を行わない。
-  `user_dict.json` の読み取りは `AcquireExclusiveFileLockForPath` の保持中に行い、
-  ロックを取得できない場合は exit code 1 とする。
-  どちらかの入力ファイルを読み込めない場合は部分結果を返さず、exit code 1 とする。
-  したがって破損ファイルの調査でも入力ファイルを変更しない。
-- `user_dict.json` の直接編集経路は、共有ファイル単位の排他ロック
-  (`learning/include/azookey/learning/FileLock.h`) を取得してから
-  read-modify-write を行う。Host の `AddUserWord` / `RemoveUserWord` も同じロック下で、
-  ディスク上の辞書ファイルが存在する場合は再読込してから更新し、Host メモリ上の stale な辞書で
-  CLI / Settings 側の変更を上書きしない。
-- 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる
-  既存ファイル破損を避ける（`learning/src/AtomicFile.h`）。一時ファイルは
-  `FlushFileBuffers` / `fsync` で flush 後、`MoveFileExW(MOVEFILE_REPLACE_EXISTING |
-  MOVEFILE_WRITE_THROUGH)` で原子的に置換し、置換途中のクラッシュでも既存ファイルを
-  無傷に保つ。
-- 確定・訂正ごとの観測はメモリ上で即時反映し、TSV への永続化は
-  `learning_flush_every_n`（既定 8 件）または `learning_flush_interval_sec`
-  （既定 5 秒）の background timer でデバウンスする。Host 破棄時と `LoadModel` 境界では
-  `FlushLearningStore()` で明示 flush する。
-- `Save()` 失敗時は Host stderr に error を出し、dirty 状態を維持して
-  次回 observation または明示 flush で再試行する。
-- `learning_max_records`（既定 10000）と `learning_min_weight`（既定 0.05）で
-  低スコア・減衰済みレコードを GC し、TSV の無制限増大を防ぐ。
-- 破損時はリセット可能（`LearningStore::Reset` or ファイル削除）。
-- 時間減衰: `exp(-0.15 * days)` で `LearningStore::Score` 内で適用。
+- `userdict` / `newwords` / `lookup` の CLI 契約（IPC 送信の待ち時間、Host の待ちの予算、拒否コードの表示、
+  `persistent_edit` の記録）と、`user_dict.json` の排他・原子的な保存は
+  `docs/learning-data-management-spec.md` §13 が正典。
+- 観測の永続化の契機（`learning_flush_every_n` / `learning_flush_interval_sec`）、`Save()` 失敗時の
+  再試行、GC（`learning_max_records` / `learning_min_weight`）は
+  `docs/user-learning-enhancement-spec.md` §3.1.1、時間減衰は同 §5 が正典。
+  終了経路ごとの flush の保証と失われうる量は `docs/learning-data-management-spec.md` §11 が持つ。
+- 破損時はリセット可能（`LearningStore::Reset` or ファイル削除。IPC は
+  `docs/learning-data-management-spec.md` §4.6）。
 
 ## 設定（SettingsStore）
 
@@ -372,54 +283,15 @@ M45 以降に足した型は「新規 IPC メッセージ」の表に載せる�
   `docs/privacy-and-secure-input-spec.md` §5.3 に従う。
 - parse に失敗した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
   `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。隔離の条件と、設定アプリの
-  保存との排他は下記「共有ユーザーデータの writer 責務」を正典とする（`FileLock.h` の共有ファイル
+  保存との排他は `docs/learning-data-management-spec.md` §14「共有ユーザーデータの writer 責務」を正典とする（`FileLock.h` の共有ファイル
   単位ロックで read から rename までを直列化する）。
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 
 ## 共有ユーザーデータの writer 責務
 
-`%LOCALAPPDATA%\azooKey\` 配下の共有ファイルは、直接書き込めるプロセスをファイルごとに固定する。
-`FileLock.h` の排他は、書き手全員がロックを取ることを前提にしているため、誰が writer になり得るかを決めていないと、取り忘れた側の上書きが last-writer-wins で通ってしまう。
-writer には内容を書き換える操作だけでなく、対象ファイルを rename / 削除する操作も含める。
-
-| ファイル | 直接書き込むプロセス | 読み取り | 排他 |
-|---|---|---|---|
-| `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
-| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3）、TIP（入力インジケーターのメニューによる `liveConversion` / `predictionEnabled` の 2 キーだけ。`docs/tsf-deep-integration-spec.md` §4.5） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
-| `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
-| `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |
-| `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
-| `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
-
-拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。
-
-- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の学習ペインのユーザー辞書タブ（`docs/sideload-packaging-spec.md` §3.7）も M30 / M49 の辞書 GUI も、Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
-  この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json.enc` の直接 writer にはならない。
-- したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
-  プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
-- `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json.enc` 自体は変更しない。`user_dict.json.enc` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリと、SafeMode 記録・ベンチマーク履歴追記を行う Host と、入力インジケーターのメニューでライブ変換・予測を切り替える TIP である。TIP も Host と同じく、同じファイルロックの下で対象の 1 キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えず隔離もしない。ロックが取れなければ書かない。Host は同じファイルロックの下でディスク上の内容へ対象キーだけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` と `model.benchmarkHistory` を保つ。履歴の形式・保持規則は `model-management-spec.md` §7.1 に従う。
-  どちらも mutator である。
-  設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。
-  ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。
-  したがって「設定アプリだけが書くので競合しない」とは扱わない。この競合は、保存と Host の read から quarantine までを同一の named mutex 下で直列化し、quarantine の条件を内容の不正だけに絞ることで解消する（DEV-806 で確定。実装は DEV-808、GitHub Issue #278 はその mirror）。契約は次の 4 点である。
-
-  1. **単一ロック区間** — Host は `settings.json` の存在確認・読み取り・parse・quarantine rename を、`AcquireExclusiveFileLockForPath`（`FileLock.h`）で取得した一つのロック保持区間の中で行う。設定アプリの保存が取るのと同じ named mutex（`MutexNameForPath` が正規化した絶対パスから導出）である。
-     読み取りと rename を別々のロック区間に分けたり、ロック外で読んでから再検証して rename する（double-check）形は採らない。ロック保持区間は数 KB の JSON の読み取りと parse で閉じるため、保存側が待たされる時間は問題にならない。
-  2. **quarantine は parse 失敗時だけ** — 設定アプリと Host は、ファイルを開けなかったときや読み取りに失敗したときは rename しない。
-     open の失敗は破損を意味しない（他プロセスの共有違反、ウイルス対策ソフトやバックアップによる一時的なロックでも起きる）。読み取り失敗で rename すると、破損していない `settings.json` を退避してしまう。
-  3. **ロックを取れなければ rename しない** — timeout までにロックを取得できなかったときは quarantine を行わない。ロックを持たない rename は禁止する。
-  4. **fallback の意味** — quarantine の有無によらず、`Load`（Host 起動時）は既定値で継続し、`Reload`（`UpdateConfig`）は error を返して現在の runtime 設定を維持する。「維持する」は `SettingsStore::settings()` の値を含む（`EngineConfig` だけではない）。
-- quarantine を廃して破損した `settings.json` をそのまま残す案は採らない。rename には、次回の保存で正常なファイルが復帰し、破損した内容は `.invalid*` として残り、ユーザーが手で消さなくてよいという利点がある。
-  残す案でも `azookey_diag` の D-012 は不正を検出できるが、破損したファイルが残る限り Host は既定値で動き続け、復帰には設定アプリでの保存か手動削除が要る。上の 4 点は、この利点を保ったまま、正常なファイルを消す 2 つの経路（読み取り失敗での rename と、read から rename までの競合）だけを塞ぐ。
-- 設定アプリの保存経路が満たす契約は次の 3 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
-  `WriteTextFileAtomically` は `learning/include/azookey/learning/AtomicFile.h` の公開 header とし、設定アプリと Host 側コンポーネントが同じ atomic replace 実装を使う。設定アプリは公開 include path を参照し、`settings.json` の実パスに対する共有ロックを取得してから helper を呼ぶ。
-  保存前の parse に失敗した場合は、同じロック区間内で破損ファイルを `.invalid*` へ退避してから新しい設定を書き、退避したことを設定 UI に警告として表示する。退避に失敗した場合は保存せず、元のファイルを残す。
-- `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。
-  ファイル単位ロックを取らないため、同一ユーザーで Host を二重に起動した状態は writer が二つある状態であり、想定しない。
-- named mutex 名は正規化した絶対パスから導出する（`FileLock.h` の `MutexNameForPath`）。
-  二つの writer が排他されるのは同じ実パスを解決したときに限るため、`--user-dict` で別パスを与えた検証はロックの確認にならない。
+`%LOCALAPPDATA%\azooKey\` 配下の共有ファイルを直接書き込めるプロセスの固定、`settings.json` の
+quarantine と保存の排他の契約は `docs/learning-data-management-spec.md` §14 が正典。
 
 ## 実装ルール
 

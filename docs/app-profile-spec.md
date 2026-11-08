@@ -270,6 +270,8 @@ window_class → default）に限り、下記の **グローバル floor** を�
 
 ## 6. 既存 `promptPrefixByApp` との統合
 
+本節は `promptPrefixByApp` の解決と移行の正典であり、`docs/rich-features-spec.md` X-2-6 から参照される。
+
 既存設定キー `promptPrefixByApp` は値 `{"<process>": "<prefix>"}` の
 map（M30 横断テーマ X-2-6）で、key は大文字小文字混在の実プロセス名
 （例: `Code.exe`, `OUTLOOK.EXE`）で書かれている既存ユーザー設定がある。
@@ -301,7 +303,9 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
 
 `candidateTagBoosts` は M52 ベンチで定義する候補タグ（`Technical` /
 `English` / `Polite` / `Casual` / `NamedEntity` 等）への倍率。各候補の
-`final_score` に以下を掛ける:
+score（rerank 後の `core::Candidate::score`。以下の式では `final_score` と書く。Track A の導入後は
+`docs/neural-reranker-spec.md` §9 の `final_score`）に以下を掛ける（`inference-host/src/CandidateTags.cpp`
+の `ApplyTagBoosts`）:
 
 ```
 raw   = profile.candidateTagBoosts.get(tag, 1.0)
@@ -347,6 +351,9 @@ else:
   - タグは `core::Candidate::tag` と IPC の `CandidateField.tag` で運ぶ。
 - **タグ名の照合**: ASCII の大文字小文字を区別しない（`Technical` と `technical`
   を同一視する）。
+
+本節はタグ boost の clamp 式と適用位置の正典であり、`docs/auto-word-registration-spec.md`
+§14.5・§14.11・§14.12 から参照される。
 
 ## 8. UI（設定アプリ）
 

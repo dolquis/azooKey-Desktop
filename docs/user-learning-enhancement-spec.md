@@ -113,14 +113,11 @@ Interval flush は次の observation を待たずに background timer で実行�
 境界で呼ぶ。`Save()` 失敗時は Host stderr に error ログを出し、dirty と
 未保存件数を維持して次回 observation または明示 flush で再試行する。
 
-上記 2 つの契機に加えて、未保存 observation が 0 件の状態で新しい
-observation を受け、かつ直近の保存成功から `learning_flush_interval_sec`
-秒以上が経過している場合は、その observation を含めて同期 `Save()` を実行する
-（burst 先頭の同期 flush）。直近の保存から同秒数未満の場合は即時保存せず、
-件数契機と時間契機に委ねる。このレート制限により、追加の書き込みは 1 つの
-burst につき最大 1 回に収まり、確定ごとの同期保存にはならない。狙いは、
-保存を保証しない終了経路で失われる量を抑えることであり、区分と損失上限の正典は
-`docs/learning-data-management-spec.md` §11 に置く。
+上記 2 つの契機に加えて、静止後の最初の observation を同期保存する（burst 先頭の同期 flush）。
+条件とレート制限、終了経路の区分と損失上限は `docs/learning-data-management-spec.md` §11 が正典。
+
+本節は学習の永続化パラメータ（flush、GC）の正典であり、`docs/windows-tsf-host-architecture.md`「学習」と
+`docs/learning-data-management-spec.md` §11 から参照される。時間減衰の正典は §5 である。
 
 ### 3.2 TSV スキーマ（拡張）
 
@@ -323,6 +320,9 @@ category は現在の M53 の表に無く、値だけを予約する。
 本番の減衰は M52 の校正が済むまで M7 の `exp(-0.15 × days)` のままとする
 （§14.4）。§5 の half_life による減衰は `UserLearningScorer` の
 `LearningDecayMode::CategoryHalfLife` で有効になり、既定は `LearningDecayMode::Legacy` である（§7）。
+
+本節は時間減衰の式と half_life の正典であり、`docs/windows-tsf-host-architecture.md`「学習」から
+参照される。
 
 これらの half_life は初期値であり、M52 `user_adapt` カテゴリの学習前後比較
 （roadmap M54・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。

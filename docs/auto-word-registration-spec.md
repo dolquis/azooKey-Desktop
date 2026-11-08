@@ -500,7 +500,7 @@ parser の受理条件:
        Handshake の後に `ResolveNewWord` を送る。host はストアをメモリ上に持ち、
        次の保存でファイル全体を書き直す。稼働中の host の裏でファイルを編集すると
        変更が失われるため、接続できない場合は失敗とする（接続の待ち時間は
-       `docs/windows-tsf-host-architecture.md` の CLI の項に従う）。`--offline` を付けた
+       `docs/learning-data-management-spec.md` §13 に従う）。`--offline` を付けた
        ときだけファイルを直接編集する。直接編集は host と同じ `Load` / `Save`
        を使うので、読めなかった破損行は書き直しで失われる（§3-2 のスキップ規則）。
      - JSON 出力は 1 行 1 オブジェクトとする。`list` は語ごとに `op` / `ok` /
@@ -1025,11 +1025,9 @@ named_entity 系（`person_name` / `place_name` / `station_name` / `product_name
 （§14.11 worked example と整合）。
 
 M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
-**ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の
-`final_score` に対し §7 正準の clamp 式
-`final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]）を **1 回
-だけ**適用する（DictionaryStore 由来候補にも §14.12 で付与した単一タグに基づき
-同経路で作用。二重適用を避けるため `dictionary_score` には入れない）。
+**ない**（§14.5）。M48 タグ boost は候補の score に **1 回だけ**掛ける（clamp 式と適用位置は
+`docs/app-profile-spec.md` §7 が正典）。DictionaryStore 由来候補にも §14.12 で付与した単一タグに
+基づき同経路で作用し、二重適用を避けるため `dictionary_score` には入れない。
 
 worked example（`code.exe` 前面・`candidateTagBoosts.Technical = 1.5`、エントリ
 "TensorRT" / `technical_terms` / frequency 0.72 / 完全一致 / `categoryBoosts.technical = 1.0`）:
@@ -1044,9 +1042,8 @@ dictionary_score
   = 1.32
 ```
 
-その後、M48 タグ boost は app-profile-spec §7 が `final_score` に対して別途
-適用する（"TensorRT" は §14.12 で `Technical` タグが付くため
-`final_score *= min(3.0, max(1.0, 1.5))`（= 1.5）。`dictionary_score` 内では二重適用しない）。
+その後、M48 タグ boost は app-profile-spec §7 の式で候補の score に別途掛かる
+（"TensorRT" は §14.12 で `Technical` タグが付くので倍率 1.5。`dictionary_score` 内では二重適用しない）。
 `dictionary_score` の正規化は不要（DictionaryStore 内の相対ランク + merge
 ブースト量として使用）。本例（`dictionary_score = 1.32`）は単体テストの
 期待値とする（§14.13）。
@@ -1085,8 +1082,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   両タグの同時保持・
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
-- 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
-  §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]。負の `final_score` は同じ倍率で割る）として 1 回適用する
+- 付与された単一タグに対する M48 boost は **app-profile-spec §7** の clamp 式で 1 回適用する
   （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
   含めない（二重適用回避）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。辞書 category からの

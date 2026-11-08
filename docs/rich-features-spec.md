@@ -246,28 +246,10 @@ TIP 側は受信ごとに predict ウィンドウの候補テキストを末尾�
 
 ### X-2-6. アプリ別 prompt prefix
 
-設定ファイルでアプリ実行ファイル名 → prompt prefix のマップを定義：
-
-```json
-{
-  "promptPrefixByApp": {
-    "Code.exe":       "コードエディタ。識別子（CamelCase/snake_case）と日本語コメントを優先。",
-    "OUTLOOK.EXE":    "ビジネスメール。敬語・挨拶・締めの定型句を優先。",
-    "Teams.exe":      "チャット。短いカジュアル文と絵文字を優先。",
-    "WINWORD.EXE":    "文書作成。丁寧体・接続詞を多めに。",
-    "powershell.exe": "シェル。コマンドと識別子を優先、日本語は最小限。"
-  }
-}
-```
-
-`ForegroundAppDetector` が返す `process_name` で lookup。
-マッチしない場合は prefix なし（generic prompt）。
-
-> **M48 統合**: 本機能は M48（アプリ別入力プロファイル）で
-> `profilesByApp[].promptPrefix` に統合される。設定スキーマ上は
-> `promptPrefixByApp` を後方互換として 1〜3 マイナーバージョンの間
-> 読み続けるが、新規編集は `profilesByApp` 側で行う。詳細は
-> `docs/app-profile-spec.md`（M48）を参照。
+設定キー `promptPrefixByApp` は、アプリ実行ファイル名から prompt prefix への map である
+（`settings/mvp-settings.schema.json`）。`ForegroundAppDetector` が返す `process_name` で引き、
+一致しなければ prefix を付けない（generic prompt）。M48 の `profilesByApp[].promptPrefix` との
+解決順、照合規約、移行と廃止の期間は `docs/app-profile-spec.md` §6 が正典。
 
 ### X-2-7. ペルソナ自動推定
 
@@ -348,6 +330,10 @@ RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k) const;
 | transposition (隣接 2 文字入れ替え) | 0.5 |
 | QWERTY 隣接キー substitution | 0.7（−0.3 ボーナス） |
 | 同一指 substitution | 0.6（−0.4 ボーナス） |
+
+重み付き編集距離のコストモデル（個人化の項、JIS / US 配列の隣接）は
+`docs/typo-correction-learning-spec.md` §12.4.1・§12.4.2 が正典であり、本表はその
+insertion / deletion / substitution / transposition と隣接キーの初期値として扱う。
 
 QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
 `core/src/QwertyAdjacency.cpp`（予定ファイル）に静的テーブルとして持つ。
@@ -703,12 +689,7 @@ QueryCandidates / QueryPredictions / QueryLiveConversion で `context` フィー
 
 ## マイルストーン対応表
 
-| テーマ | 短期 | 中期 | 長期 |
-|---|---|---|---|
-| X-1 ライブ変換 | M14 + 信頼度 4 段階 (M14-末) | M24 (Zenzai 重い推論) | — |
-| X-2 AI 予測 | M15 + paragraph_context + Word/Phrase | M24 + Sentence + Streaming | M30 設定アプリで prompt prefix UI |
-| X-3 誤変換訂正 | M17 末 FuzzyMatch + M16 末 Post-Commit Lint | M24 後 DetectAnomalies | M30 バッチ訂正ビュー |
-| X-4 基盤 | M14〜M19 で各実装 | M24 後にスケジューラ統合 | — |
+各テーマの実装タイミングは `plans/windows-port-roadmap.md`「横断テーマと Phase の対応」が正典。
 
 ## 参照
 

@@ -438,8 +438,8 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 
 ## 9. スコア統合
 
-M56 の rerank_score は M52 ベンチで定義する `final_score` の構成要素
-の 1 つ。初期重みは以下を提案するが、最終的に M52 ベンチで校正する:
+`final_score` の式は本節が定義する。M56 の rerank_score（`tiny_score`）はその構成要素の 1 つで、
+初期重みは以下とし、M52 ベンチ（`docs/conversion-quality-benchmark-spec.md`）の評価で校正する:
 
 ```
 final_score =
@@ -455,6 +455,9 @@ final_score =
 
 これらの重みは **手動値ではなく LightGBM / logistic regression で
 学習**することを推奨する（評価は M52 で実施）。
+
+本節は `final_score` 式の正典であり、`docs/modernbert-ja-scoring-spec.md` §8、
+`docs/zenzai-inference-spec.md` §7.5、`docs/app-profile-spec.md` §7、本書 §B6.3 から参照される。
 
 ## 10. モデル変遷（段階導入）
 

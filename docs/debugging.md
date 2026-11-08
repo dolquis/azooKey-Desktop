@@ -109,8 +109,8 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 
 `inference-host` の `userdict` サブコマンドで、ユーザー辞書の追加・一覧・
 インポート・エクスポート・削除を Host / TIP なしで確認できる（M9 の検証手順。
-永続化フォーマットと import の重複解決は
-[`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md)）。
+CLI の契約と import の重複解決は
+[`learning-data-management-spec.md`](learning-data-management-spec.md) §13）。
 
 ```powershell
 $exe = 'build\windows-debug\inference-host\azookey_inference_host.exe'

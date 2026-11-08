@@ -367,6 +367,9 @@ cost =
 
 個人がよく行う誤りは `personalized_pattern_cost` を下げる。
 
+本節と §12.4.2 は重み付き編集距離のコストモデルの正典であり、`docs/rich-features-spec.md` X-3-1 の
+コスト表から初期値として参照される。
+
 例:
 
 ```

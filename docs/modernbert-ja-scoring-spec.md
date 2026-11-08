@@ -319,7 +319,8 @@ loop:
 
 ## 7. 設定スキーマ
 
-M56 で予約した `reranker.modernbert*` を本 M57 で使う:
+M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `reranker.modernbert*` キーの正典であり、
+`docs/neural-reranker-spec.md` §8 から参照される:
 
 ```json
 {
@@ -356,15 +357,11 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う:
 
 ## 8. スコア統合
 
-M56 の `final_score` 式の `modernbert_score` weight = 0.05（初期）。
-M52 ベンチで校正する。
-
-```
-final_score = ... + normalize(modernbert_score) * W_BERT + ...
-```
+`modernbert_score` は `final_score` の 1 項である。式と初期重み（`W_BERT`）は
+`docs/neural-reranker-spec.md` §9 が正典。
 
 `W_BERT` を高くすると homophone 精度が上がるが latency 悪化が大きい。
-balanced mode（既定）では W_BERT = 0.05、quality mode では 0.10 など
+balanced mode（既定）では neural §9 の初期値、quality mode では 0.10 など
 で調整する（`settings.conversionQuality` キー。schema 未登録（予定））。
 
 ## 9. secure 判定との連携

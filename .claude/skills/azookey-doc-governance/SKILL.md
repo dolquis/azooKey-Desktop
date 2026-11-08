@@ -48,6 +48,15 @@ python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json
 
 DECISIVE は全ファイル 0 件で凍結してあるので、1 件でも出れば増加として落ちる。HEURISTIC は既存の件数を凍結してあり、止めるのは増加だけである。警告を消すためにベースラインを書き直さない。
 
+docs-lint が見ない文書とコードの対応は、次の 2 本が CI（`docs-lint` ジョブ）で検査する。
+
+```
+python3 scripts/check_doc_refs.py
+python3 scripts/check_doc_contracts.py
+```
+
+`check_doc_refs.py` は、文書が名指しするパス・`file::symbol`・spec の § 参照の実在を確かめる。予定ファイルなど、不在でも正しい参照は `scripts/doc-refs-allowlist.toml` に種別と理由（予定なら M 番号と正典 spec）を書いて登録する。登録した参照が実在したら、登録を消す。`check_doc_contracts.py` は、IPC の型の表、spec の設定キー表、文書中の preset 名を、`MessageType`・Dispatcher・schema・`CMakePresets.json` と突き合わせる。
+
 ## 参考資料
 
 - `references/canonical-matrix.md` — azooKey の正典マトリクス。

@@ -103,9 +103,10 @@ ALLOWED_KINDS = {
     "external": (),
     "historical": (),
     "runtime": (),
-    "unowned": (),
-    "pending-review": (),
+    # 所有する M が無い予定は、判断を追う Linear の課題を必ず持たせる（放置の逃げ道にしない）。
+    "unowned": ("issue",),
 }
+ISSUE_PATTERN = re.compile(r"^DEV-[0-9]+$")
 
 FENCE_PATTERN = re.compile(r"^\s*(```|~~~)")
 INLINE_CODE_PATTERN = re.compile(r"(`+)(.+?)\1")
@@ -355,6 +356,9 @@ def unique_basename(repo: Repository, name: str) -> str | None:
     if not SOURCE_NAME_PATTERN.match(name):
         return None
     matches = repo.basenames.get(name, [])
+    if not matches:
+        # 一致 0 件は rename・削除された可能性が高いので、不在として報告させる。
+        return name
     return matches[0] if len(matches) == 1 else None
 
 
@@ -529,6 +533,9 @@ def load_allowlist(path: Path) -> tuple[dict[str, AllowEntry], list[str]]:
         for required in ALLOWED_KINDS.get(kind, ()):
             if not str(raw.get(required, "")).strip():
                 problems.append(f"{where} `{ref}`: kind = \"{kind}\" には `{required}` が要る")
+        issue = str(raw.get("issue", "")).strip()
+        if issue and not ISSUE_PATTERN.match(issue):
+            problems.append(f"{where} `{ref}`: `issue` は Linear の課題 ID（DEV-番号）")
         files = raw.get("files", [])
         if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
             problems.append(f"{where} `{ref}`: `files` は文書パスの配列")

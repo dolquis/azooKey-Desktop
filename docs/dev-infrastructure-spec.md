@@ -1118,7 +1118,7 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 `advisory-summary` 自体も `ci-gate` の判定対象にしない。
 
 `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
-`.github/workflows/docs.yml` は `paths` を持たずすべての PR で発火するので、`docs-lint` は本節の基準を満たす。required に加えるかは ruleset の変更として別に判断する。
+`.github/workflows/docs.yml` は `paths` を持たずすべての PR で発火するので、`docs-lint` と `docs-impact`（push と Dependabot の PR では `if:` で skipped になる）は本節の基準を満たす。required に加えるかは ruleset の変更として別に判断する。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
 対話ジョブであり、required にしても判定に寄与しない。
 

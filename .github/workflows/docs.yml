@@ -107,15 +107,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
-          # base...head の three-dot 差分に merge-base が要る。
-          fetch-depth: 0
+          # pull_request の checkout は base へ PR を merge した commit になる。その第 1 親との差分が、
+          # main に入る変更そのものである（event の base.sha が古くても main 側の変更が混ざらない）。
+          fetch-depth: 2
 
-      # 本文は env 経由でファイルへ書き出し、run の中に式で直接埋め込まない（injection 対策）。
+      # 本文は event の JSON から読み、run の中に式で埋め込まない（injection 対策）。環境変数で
+      # 渡さないのは、長い本文が 1 変数あたりの上限を超えて exec に失敗しうるためである。
       - name: Check the documentation impact of contract changes
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
-          python3 scripts/check_docs_impact.py --base "$BASE_SHA" --head "$HEAD_SHA" --body-file "$RUNNER_TEMP/pr-body.md"
+          python3 -c 'import json, os, sys; body = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))["pull_request"].get("body") or ""; open(sys.argv[1], "w", encoding="utf-8").write(body)' "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/check_docs_impact.py --base HEAD^1 --head HEAD --body-file "$RUNNER_TEMP/pr-body.md"

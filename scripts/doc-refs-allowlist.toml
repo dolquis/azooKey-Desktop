@@ -11,8 +11,7 @@
 #             external       他リポジトリのパス（参考資料の中の比較対象）
 #             historical     ある時点の記録として書かれたパス
 #             runtime        build directory やユーザーデータディレクトリを基準にした相対パス
-#             unowned        予定だが所有する M が無いもの
-#             pending-review 分類を人間が判断するもの
+#             unowned        予定だが所有する M が無いもの。判断を追う Linear の課題を issue に書く
 #   reason    登録の理由
 #   files     （任意）この例外を使ってよい文書。省略するとどの文書でも使える
 
@@ -123,22 +122,16 @@ files = ["plans/windows-port-roadmap.md"]
 [[allow]]
 ref = "tsf-tip/src/ContextTracker.h"
 kind = "unowned"
+issue = "DEV-1912"
 reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
 files = ["docs/rich-features-spec.md"]
 
 [[allow]]
 ref = "tsf-tip/src/ContextTracker.cpp"
 kind = "unowned"
+issue = "DEV-1912"
 reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
 files = ["docs/windows-tsf-host-architecture.md"]
-
-# --- pending-review ----------------------------------------------------------
-
-[[allow]]
-ref = "tsf-tip/src/TextService.cpp::OnDoubleTap"
-kind = "pending-review"
-reason = "Magic Conversion（M16）の TIP 側抑止点として書かれた関数名。正典の legacy-parity-spec §4.1 はダブルタップを StartAlnumDouble / StartKanaDouble の UserAction として定義しており、この関数名を持たない。予定名として残すか、正典の名前へ直すかを判断する"
-files = ["docs/ai-backend-spec.md"]
 
 # --- origin ------------------------------------------------------------------
 

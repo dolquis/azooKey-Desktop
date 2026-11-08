@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,8 @@ def write(path: Path, text: str) -> None:
 
 
 def make_repo(root: Path, files: dict[str, str]) -> None:
+    if shutil.which("git") is None:
+        raise unittest.SkipTest("git が無い環境では一時 repo を作れない")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     base = {
         "README.md": "",
@@ -161,11 +164,12 @@ class SymbolReferenceTest(unittest.TestCase):
             {
                 "docs/guide.md": (
                     "`tsf-tip/src/TextService.cpp::OnKeyUp` `TextService.cpp::OnTap` "
-                    "`core/src/Gone.cpp::Run`\n"
+                    "`core/src/Gone.cpp::Run` `Nowhere.cpp::Run`\n"
                 )
             }
         )
-        self.assertEqual(len(problems), 3, problems)
+        self.assertEqual(len(problems), 4, problems)
+        self.assertTrue(any("`Nowhere.cpp::Run`" in p for p in problems))
         self.assertTrue(any("`OnKeyUp`" in p for p in problems))
         self.assertTrue(any("`tsf-tip/src/TextService.cpp::OnTap`" in p for p in problems))
         self.assertTrue(any("`core/src/Gone.cpp::Run`" in p for p in problems))
@@ -293,14 +297,18 @@ class AllowlistTest(unittest.TestCase):
             '[[allow]]\nref = "core/src/B.cpp"\nkind = "someday"\nreason = ""\n'
             'files = ["docs/nowhere.md"]\n'
             '[[allow]]\nkind = "origin"\nreason = "x"\n'
+            '[[allow]]\nref = "core/src/C.cpp"\nkind = "unowned"\nreason = "x"\n'
+            '[[allow]]\nref = "core/src/D.cpp"\nkind = "unowned"\nreason = "x"\nissue = "1912"\n'
         )
         problems = problems_for(
             {
                 MODULE.ALLOWLIST_RELATIVE_PATH: allowlist,
-                "docs/guide.md": "`core/src/A.cpp` `core/src/B.cpp`\n",
+                "docs/guide.md": "`core/src/A.cpp` `core/src/B.cpp` `core/src/C.cpp` `core/src/D.cpp`\n",
             }
         )
         joined = "\n".join(problems)
+        self.assertIn("`issue` が要る", joined)
+        self.assertIn("Linear の課題 ID", joined)
         self.assertIn("`milestone` が要る", joined)
         self.assertIn("`spec` が要る", joined)
         self.assertIn("`kind` は", joined)

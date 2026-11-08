@@ -6,8 +6,6 @@
       `docs/typo-correction-learning-spec.md`、
       `docs/auto-word-registration-spec.md`、
       `docs/privacy-and-secure-input-spec.md`
-作成日: 2026-05-27
-位置づけ: Phase 7 末尾（M30 / M34 完了後）
 
 ## 1. 目的
 

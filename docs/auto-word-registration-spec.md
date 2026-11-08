@@ -4,8 +4,6 @@
 機能の仕様を定める。対象は **Windows 版（C++ 移植: `core/` `learning/` `ipc/`
 `inference-host/` `tsf-tip/`）** のみ。macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M36-A（マイニング） /
-M36-B（トレンド）+ M53（辞書層全体再設計）。
 姉妹機能: `docs/typo-correction-learning-spec.md`（M35 + M55 統合補正）、
 `docs/conversion-quality-benchmark-spec.md`（M52）。
 

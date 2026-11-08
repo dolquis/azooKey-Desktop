@@ -1,17 +1,11 @@
 # ニューラルリランカー仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M56（変換品質トラック）+ NllScorer トラック（DEV-413）
 関連: `plans/windows-port-roadmap.md` M52 / M53 / M54 / M55 / M57、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/modernbert-ja-scoring-spec.md`（M57）、
       `docs/zenzai-inference-spec.md`（Track B の推論基盤）
-作成日: 2026-05-27
-更新日: 2026-08-09（DEV-556: Track B〈NllScorer 型ニューラルリランク〉の NLL 定義・
-        コンテキスト再利用・責務境界・合成・fallback・有効化フラグを確定）
-位置づけ: 変換品質トラック（M53 / M54 / M55 のすべてが完了し、M52 ベンチで
-baseline 固定後）
 
 ## 0. 本書が扱う 2 トラック
 

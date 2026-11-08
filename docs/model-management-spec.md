@@ -6,8 +6,6 @@
       `docs/zenzai-gpu-route.md`、
       `docs/copilot-pc-backend-spec.md`、
       `docs/dev-infrastructure-spec.md` §12 (M44 診断)
-作成日: 2026-05-27
-位置づけ: Phase 6-C 拡張（M30 設定アプリのモデル管理タブ）
 
 ## 1. 目的
 

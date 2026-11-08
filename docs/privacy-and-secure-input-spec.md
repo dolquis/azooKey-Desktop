@@ -1,13 +1,10 @@
 # プライバシー / セーフ入力モード 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M46（プライバシー / モデル管理 / 学習データ UI トラック）
 関連: `plans/windows-port-roadmap.md` M7 / M16 / M34 / M48、
       `docs/dev-infrastructure-spec.md` §7 (M41 ログ)、
       `docs/typo-correction-learning-spec.md`、
       `docs/app-profile-spec.md`（M48）
-作成日: 2026-05-27
-位置づけ: Phase 5 直後の前倒し（M34 と並行）
 
 ## 0. 節とマイルストーンの対応
 
@@ -24,11 +21,8 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 し、パスワード欄や機密入力時に自動で安全側に倒す。IME は機密入力を扱う
 ため、本機能は M16（Magic Conversion / OpenAI API）と M34（DPAPI 暗号化）
 の **設計前提条件** として「ユーザーが AI / 学習を停止できる」契約を
-確立する。実装順としては M16 着手前または同時期の投入を **推奨** する
-（hard prerequisite ではない。`plans/windows-port-roadmap.md` の M46
-「推奨実装時期」記述と整合）。M16 が単独で先行する場合は secure アプリ
-向けの初期プライバシーギャップが生じるため、その期間の暫定的な抑止
-方針を別途定める必要がある。
+確立する。M46 は M16 の hard prerequisite ではない。M46 の判定が無い
+構成で M16 を動かすと、secure アプリ向けのプライバシー保護に欠落が生じる。
 
 ## 2. 設計原則
 

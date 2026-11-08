@@ -7,11 +7,6 @@
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）
-作成日: 2026-05-27
-更新日: 2026-07-15（DEV-559: CER / NFKC 二重評価の厳密定義と per-case 出力 schema を確定）
-位置づけ: 変換品質トラックの最初に実装（M53〜M57 の前提）
-spec-first ゲート: 本仕様の §6.1.1 / §6.1.2 / §8.1 が確定するまで DEV-408
-（評価 CLI 実装）を In Progress にしない
 
 ## 1. 目的
 

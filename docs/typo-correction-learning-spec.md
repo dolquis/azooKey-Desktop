@@ -5,8 +5,6 @@
 （C++ 移植: `core/` `learning/` `ipc/` `inference-host/` `tsf-tip/`）** のみ。
 macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M35（v1: 基本タイプ
-ミス学習）+ M55（v2: 統合補正エンジン）。
 関連: `docs/rich-features-spec.md` X-3（誤変換訂正）、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/user-learning-enhancement-spec.md`（M54）、

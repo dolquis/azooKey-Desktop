@@ -1,15 +1,12 @@
 # ユーザー学習強化 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M54（変換品質トラック）、M15（§14 の予測供給）
 関連: `plans/windows-port-roadmap.md` M7 / M15 / M34 / M48 / M52 / M53 / M55、
       既存 `learning/src/LearningStore.cpp`、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/typo-correction-learning-spec.md`（M55）、
       `docs/app-profile-spec.md`（M48）、
       `docs/legacy-parity-spec.md` §3（M15 予測候補ウィンドウ）
-作成日: 2026-05-27
-位置づけ: 変換品質トラック（M52 完了後、M53 / M55 と並行可能）
 
 ## 0. 節とマイルストーンの対応
 

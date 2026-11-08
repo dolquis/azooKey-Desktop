@@ -6,10 +6,6 @@
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/neural-reranker-spec.md`（M56）、
       `docs/copilot-pc-backend-spec.md`（M24 backend）
-作成日: 2026-05-27
-更新日: 2026-06-18（DEV-113: RSS 上限ロードゲート・ambiguity 重み正規化・
-        context window・cache 整合・timeout 予算を確定）
-位置づけ: 変換品質トラックの最終段（M56 完了後、v1.0 後の品質向上 phase）
 
 ## 1. 目的
 

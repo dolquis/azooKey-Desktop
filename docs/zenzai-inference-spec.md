@@ -7,15 +7,11 @@
       `docs/copilot-pc-backend-spec.md` §4（推論エンジン × アクセラレータ選定）、
       `docs/neural-reranker-spec.md`（M56 最終 score 統合）、
       `docs/model-management-spec.md`（M45 モデル配置）
-作成日: 2026-06-15
-位置づけ: M8 Zenzai 実推論（DEV-219、特に M8-2 = DEV-221）の **設計前提**。
-          「どの実行系か」（backend 方針 = DEV-98、実証 = DEV-194）に対し、
-          本書は「**どう推論して候補を作るか**」（推論コントラクト）を確定する。
 
 > **正典範囲**: 本書は Zenzai 推論の入出力コントラクト（プロンプト整形・制約・
 > トークナイズ・n-best・多ソース統合・性能予算）の正典。バックエンド経路は
 > `docs/zenzai-gpu-route.md` / `docs/copilot-pc-backend-spec.md` が正典であり、
-> 本書はそれらを前提とする。状態・進捗は Linear（DEV-228 ほか）が正典。
+> 本書はそれらを前提とする。状態・進捗は Linear が正典。
 
 ---
 
@@ -23,16 +19,10 @@
 
 ### 1.1 解決する空白
 
-実機検証（DEV-32）の **A5**: メモ帳で「にほんご」+Space すると候補窓は出るが
-漢字「日本語」が出ず、かな「にほんご」のみが返る。直接原因は
-`inference-host/src/ZenzaiModelConverter.cpp` の `Convert` が `fallback_`
-（`SimpleConverter`）へ素通しで、**実推論が一切無い**こと
-（現状コードは候補に `zenzai-gguf-loaded;fallback-converter` を付与するのみ）。
-
-backend 方針（DEV-98）は「llama.cpp C-API + CPU」を確定し、DEV-194 はその実機性能と
-Windows ML 用 model への変換可否を検証する。
-その上で **GGUF をどう叩いて候補列を作るか** を定義した spec が存在しない。
-本書がそれを埋める。
+「どの実行系で推論するか」（backend 方針。llama.cpp C-API + CPU）は
+`docs/zenzai-gpu-route.md` と `docs/copilot-pc-backend-spec.md` §4 が定める。
+本書はその上で、「**GGUF をどう叩いて候補列を作るか**」（推論コントラクト）を定める。
+`inference-host/src/ZenzaiModelConverter.cpp` の `Convert` が本書の契約の実装先である。
 
 ### 1.2 本書が確定する 6 項目
 

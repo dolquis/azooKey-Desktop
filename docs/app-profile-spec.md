@@ -6,8 +6,6 @@
       `docs/privacy-and-secure-input-spec.md`（M46）、
       `docs/rich-features-spec.md`（X-2-6 promptPrefixByApp UI、X-2-7
       Persona）
-作成日: 2026-05-27
-位置づけ: 追加機能トラック（M35 / M36 と並列、M46 完了後）
 
 ## 1. 目的
 

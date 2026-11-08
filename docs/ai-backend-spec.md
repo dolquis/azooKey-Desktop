@@ -1,8 +1,6 @@
 # AiBackend（AI 変換バックエンド）契約 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M16（Magic Conversion / Replace Suggestion。本書の主対象）。
-  共有消費者として M58-C（AI 整文 `ai-cleanup`）/ X-3-3（Post-Commit Lint）/ X-3-6（バッチ訂正ビュー）。
 関連:
 - `docs/legacy-parity-spec.md` §4（Magic Conversion の TIP 側の挙動。同 §4.4・§4.5 は本書へのリンク）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
@@ -12,15 +10,11 @@
 - `docs/sideload-packaging-spec.md` §9（M34 DPAPI）
 - `plans/windows-port-roadmap.md` M16 / M32 / M34 / M46 / M47 / M48 / M58-C
 - `legacy/Core/Sources/Core/MagicConversion/{AIBackend,OpenAIClient}.swift`（参照のみ）
-作成日: 2026-06-24
-位置づけ: Phase 5（M16）正典仕様。`AiBackend` は M16 単独でなく M58-C / X-3-3 が
-  同一経路を流用する**共有コンポーネント**であり、その契約を本書が定める。
 
 > 本書は `inference-host/include/azookey/host/AiBackend.h` と
 > `inference-host/src/AiBackend.cpp` の契約を定める正典仕様である。実装と差異が出た場合は
 > 本書を先に更新する。
-> 進捗・状態の正典は Linear（M16 tracking 課題 DEV-938。本書の契約確定は DEV-346）
-> であり、本書は状態を持たない。
+> 進捗・状態の正典は Linear であり、本書は状態を持たない。
 
 ---
 

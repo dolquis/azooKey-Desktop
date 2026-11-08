@@ -1,7 +1,8 @@
 # 複数 worktree での並行作業 runbook
 
 本書は、同じマシン上の複数の git worktree で同時に build、test、PR 作業を進めるときの恒常 runbook である。
-対象は、管制塔セッションが子セッションを立てる形と、Claude Code の `isolation: worktree` で subagent を分ける形の両方である（`docs/handoff/agent-orchestration.md` の L4）。
+対象は、同じマシンで管制塔セッションが子セッションを立てる形と、Claude Code の `isolation: worktree` で subagent を分ける形の両方である（`docs/handoff/agent-orchestration.md` の L4）。
+Claude Code Remote の `create_session` で立てた子セッションは別のコンテナで動き、build ディレクトリ、`%TEMP%`、sccache、Host のパイプ、TIP 登録を共有しない。その形に当てはまるのは「マージ衝突と main の取り込み」だけである。
 誰が何を担当するかは `agent-orchestration.md` が持ち、本書は worktree をまたいで共有されてしまう資源と、その回避策だけを持つ。
 ビルドとテストの標準手順は `README.md`、停止時の切り分けは `docs/debugging.md` が正典である。
 
@@ -57,6 +58,4 @@ push 済みの branch は rebase しない。rebase すると force push が要�
 
 ## 権限まわりの変更
 
-`.claude/settings*.json`、`.claude/hooks/`、権限設定の変更は、子セッションや subagent に任せない。
-ハーネスがエージェント自身による権限の書き換えを拒否することがあり、迂回すると安全境界が崩れる。
-必要になったら作業を止め、ユーザー（管制塔経由の場合は管制塔）に判断を返す。
+権限設定を子セッションや subagent に任せない規則は `docs/handoff/agent-orchestration.md`「管制塔セッションと子セッション」が持つ。

@@ -1,7 +1,7 @@
 # エージェント用ツールのセットアップと診断
 
 本書は、Claude Code と Codex が azooKey-Desktop の調査、Windows ビルド、実機確認で使うホスト側ツールの恒常 runbook である。
-本書は `AGENTS.md`「調査と実装」「ローカルサブエージェント」から参照される。
+本書は `AGENTS.md`「調査と実装」と `docs/handoff/agent-orchestration.md` から参照される。
 標準のビルド、CTest、bench、TIP 登録コマンドは `README.md`、失敗時の切り分けは `docs/debugging.md` に置き、本書ではエージェント固有の接続条件と調査手順を扱う。
 
 ## 設定の正典
@@ -114,7 +114,9 @@ py -3.13 scripts/codex_push.py --branch dolquis/dev-123-example --publish
 
 ルール変更時は `codex execpolicy check --rules .codex/rules/azookey.rules -- <command>` で確認する。prefix 判定だけでは全引数を検査できないため、未一致を許可済みと解釈しない。新 branch 作成は一律 prompt から外すが、後続の破棄オプションまで許可する広い allow は設けない。通常の承認判定と sandbox 境界に従う。
 
-## ローカル分担の例
+## Claude Code on the web
 
-Host 実装と TIP / IPC 利用側の影響確認、学習処理と復旧テストの検討、独立した差分レビューを分担候補にする。
-分担時の共通規約は `docs/linear-conventions.md` §2.1 に従う。azooKey 固有の引継ぎ対象には、実機入力や管理者操作の承認条件を含める。
+Claude Code on the web（claude.ai/code の Linux サンドボックス）では、`.claude/settings.json` の `SessionStart` hook が `scripts/cloud-setup.sh` を呼び、Linux のツールチェーンを入れ、`linux-debug` preset でビルドできる OS 非依存の部分を configure、build、CTest まで流す。
+hook の起動条件（`CLAUDE_CODE_REMOTE` の判定を `bash` の起動前に置く理由）、ビルドの範囲、必要なネットワークの許可先は、`scripts/cloud-setup.sh` の冒頭コメントが正典である。
+`tsf-tip/` と MSI / MSIX、TIP 登録は Linux では検証できないため、Windows ホストと Human Gate に引き継ぐ。
+ネットワークの許可は repo ではなく、claude.ai/code の Environment 設定で行う。

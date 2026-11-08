@@ -17,9 +17,7 @@
 Claude 側は両者に `disallowedTools: Edit, Write, NotebookEdit` を要求し、`read-only` には
 `hooks.PreToolUse`（`agent-readonly-guard.py`）も要求する。build runner に read-only guard は付けない。
 
-Codex は親ターンの sandbox / approval を継承する。custom agent の `sandbox_mode` や `approval_policy` では上書きできず、本文の制約は独立した OS sandbox を作らない。
-checker はこの無効な指定を検出するが、実効権限や実行時の遵守を保証しない。親が実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親へ戻す。
-`[agents].enabled = false` の扱いを含む parent-only fallback は `docs/handoff/agent-orchestration.md`「parent-only fallback」に従う。
+権限の強制方法（Codex の sandbox 継承、Claude 側の guard の限界）は `docs/handoff/agent-orchestration.md` の不変条件 8、`[agents].enabled = false` の扱いを含む縮退は同「parent-only fallback」が持つ。
 
 | agent | 区分 | origin | 取り込み revision | 権限 | Codex 側 |
 |---|---|---|---|---|---|

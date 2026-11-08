@@ -89,7 +89,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
 | `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答は挿入が有効な要求のときだけ `segments[]` を持つ（`docs/dynamic-punctuation-spec.md` §7） |
 | `QueryBatchConversion` | codec + Host + TIP | batch romajiの一括変換要求 |
-| `QueryPredictions` | codec + Host + TIP | 予測変換候補の要求。`kana`・`left_side_context`・`mode` を送り、`predictions` を受け取る |
+| `QueryPredictions` | codec + Host + TIP | 予測変換候補の要求。`kana`・`leftSideContext`・`mode` と任意の `app`・`secure` を送り、`predictions[]` と `ok` / `error` を受け取る。`secure` は欠落・型不正なら secure として扱い、wire には `false` のときだけ載せる。Host は要求の `secure` か利用者の privacy 設定の secure のとき、変換器へ渡さず予測 0 件の成功応答を返す（`docs/privacy-and-secure-input-spec.md` §5.1.1） |
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
 | `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
 | `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |
@@ -106,6 +106,8 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
 | `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
 | `ReverseConvert` | codec + Host + TIP | M20 の再変換で、確定済み表層（`surface`）から読み（`reading`）を引く |
+| `ListModels` | codec + Host | M45 の models ディレクトリの GGUF 一覧。送信元は設定アプリで、TIP からは送らない。capability `list_models`。`directory`・`compute_sha256`・`include_catalog` を送り、`models[]` と `ok` / `error`、`include_catalog` を求めたときだけ既定の catalog の `catalog[]` を受け取る（`docs/model-management-spec.md` §4.1） |
+| `BenchmarkModel` | codec + Host | M45 のモデルのベンチマーク。送信元は設定アプリ。capability `benchmark_model`。`path`（models ディレクトリ配下に限る）・`backend`（既定 `cpu`）・`cases`・`iterations`・`warmup` を送り、レイテンシの分位を受け取る（`docs/model-management-spec.md` §4.2） |
 | `ListLearningEntries` | codec + Host | M49 の学習データ一覧（4 メッセージとも capability `learning_data_management`）。`store`・`query`・`limit`（上限 `kMaxLearningEntries` で頭打ち）・`offset` を送り、`total`・`entries[]` を受け取る。応答は `ok` / `error` を持つ（`docs/learning-data-management-spec.md` §4.1） |
 | `ForgetLearningEntry` | codec + Host | M49 の 1 エントリ忘却。`store` に加え `id` か、`learning` ストアに限り `reading` + `surface` のどちらか一方の形だけを受け付ける。応答は `removed` / `ok` / `error`（§4.2） |
 | `ExportLearningData` | codec + Host | M49 のバックアップ書き出し。`stores`・`destination_path`・`encrypt`（既定 `true`）・`include_settings`（既定 `false`）を送り、`status`・`file_size_bytes`・`encrypted`・`items[]` を受け取る（§4.3） |
@@ -113,6 +115,9 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ResetLearningStore` | codec + Host | 設定アプリの全削除。`store` を送り、`ok` / `error` を受け取る。capability `learning_reset`。途中で失敗しても半端に消さない（`docs/learning-data-management-spec.md` §4.6） |
 | `QueryPersona` | codec + Host | 学習ストアから算出した Persona の 4 比率と `sample_count`・`computed_at_epoch_sec` の取得。要求 payload は空オブジェクト。capability `persona`（`docs/rich-features-spec.md` X-2-7） |
 | `DetectAnomalies` | codec + Host | 校正ビューの検出。`text`・`max_findings`・`secure`・`learning_allowed` を送り、`findings[]`（UTF-16 の `start`・`length`、`reason`、`suggestions[]`、`confidence`）を受け取る。capability `detect_anomalies`。AI 整文と同じ設定・同意の外部バックエンドだけを使い、使えなければ `unsupported`。所見の範囲は重なりうる（同じ範囲は 1 件）（`docs/rich-features-spec.md` X-3-6） |
+| `FetchCatalogModel` | codec + Host | 既定の catalog の entry の取得開始。送信元は設定アプリ。capability `fetch_catalog_model`。`model_id`（省略すると `defaultModelId`）を送る。Host は取得をバックグラウンドで始めて終わりを待たずに応答し、実行中なら `ok: false` / `error: "busy"` を返す。応答は `QueryCatalogFetch` と同じ形（`docs/model-management-spec.md` §4.4） |
+| `QueryCatalogFetch` | codec + Host | catalog の取得の状態の問い合わせ。要求 payload は空オブジェクト。`state`（`idle` / `running` / `done`）、`model_id`、`received_bytes`、`total_bytes`、`done` のときの `status`・`path`・`result_error` を受け取る（§4.4） |
+| `CancelCatalogFetch` | codec + Host | 実行中の catalog の取得の中止要求。送信元は設定アプリ。capability `cancel_catalog_fetch`。`model_id`（必須）を送り、止まるのを待たずに `QueryCatalogFetch` と同じ形で応答する。その entry の取得が実行中でなければ `ok: false` / `error: "not_running"`（§4.4） |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

@@ -310,6 +310,8 @@ UIElement`（[ctffunc.h](https://learn.microsoft.com/windows/win32/api/ctffunc/n
 
 ### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5）
 
+両立方式を選んだ経緯は [`decisions/2026-06-11-candidate-ui-coexistence.md`](decisions/2026-06-11-candidate-ui-coexistence.md) に残す。
+
 **設計判断**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
 か自前 `WS_POPUP` HWND か」の二者択一ではなく、**両方を常に実装し `BeginUIElement`
 の戻り値 `pbShow` で per-call に描画責務を切り替える「両立 (coexistence)」方式**を

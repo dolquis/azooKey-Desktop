@@ -295,6 +295,9 @@ python -m onnxruntime_genai.models.builder \
 
 ### 4.3 結論（M24 実証結果の反映）
 
+CUDA backend の実リンクを中止した経緯は
+[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
+
 1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。
    配布中の GGUF を無変換で使え、実モデルでロードと候補生成を確認できた。
 2. **R2（Windows ML）の前提は「model builder が対応する architecture の互換モデル」とし、

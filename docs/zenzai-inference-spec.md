@@ -605,6 +605,9 @@ weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合
 
 ### 7.4 劣化モード（degraded）の順位
 
+CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する形にした経緯は
+[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
+
 - Zenzai 推論が例外 / 空生成のとき、
   `ZenzaiModelConverter::Convert` は `fallback_->Convert`（SimpleConverter）の結果を返す
   （現行委譲を維持）。この時の候補 source は SimpleConverter 由来（`SystemDictionary`/

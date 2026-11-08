@@ -13,7 +13,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 > **状態・進捗の正典は Linear。** 各マイルストーンの進捗・状態・優先度・担当は Linear
 > （team `Dev` / project「azooKey Desktop / Windows IME MVP」）を正典とする。本書は構造・
 > マイルストーン定義・依存関係・受け入れ条件の「定義」・リスクの正典であり、
-> 完了状態（✅/🚧/⚠️）や「現状」「残作業」は持たない。運用は `docs/linear-conventions.md` を参照。
+> 完了状態（✅/🚧/⚠️）・進捗・残りの作業は持たない。運用は `docs/linear-conventions.md` を参照。
 
 各マイルストーンの受け入れ条件の文言は本書が正典である。各 spec の受け入れ条件節は本書の該当 M を
 指すリンクだけを持つ。測定方法とテスト名は、各 M の「参照仕様」に挙げた spec と
@@ -65,7 +65,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: 旧 `ime-tsf/` ディレクトリを削除し、現行の `tsf-tip/` のみが
   ビルド対象になっている状態を明示化。
-- **変更**: `ime-tsf/` 8 ファイルを削除（コミット `3938f49`）。
+- **変更**: `ime-tsf/` 8 ファイルを削除。
 - **受け入れ条件**:
   - `ime-tsf` への参照がリポジトリ全体に残らない
   - ルート `CMakeLists.txt` のサブディレクトリが現行構成と一致
@@ -213,23 +213,21 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   `InferenceEngine` の reranker・user_dict 経由パイプラインと
   `ipc/src/Payloads.cpp` の `LoadModelRequest`/`LoadModelResponse`（`--backend cuda|cpu`
   をリクエストで指定する設計）は既存実装をそのまま再利用する。
-- **決定記録（2026-05-20）**:
-  - llama.cpp バインディング選定: 初期実装は llama.cpp C API + CPU backend から
-    開始し、CUDA は optional backend として追加する。DirectML / NPU は M24 まで
-    予約値扱い。判断理由は `docs/decisions/2026-05-20-zenzai-engine-route.md`、計測ゲートは `docs/zenzai-gpu-route.md`。
-  - `LoadModel` 境界: `LoadModelRequest(path, backend, n_gpu_layers)` を
-    `InferenceEngine::LoadModel` に渡し、`model_loaded` / `last_error` を
-    `Handshake` / `Health` で観測できる状態とする。
+- **llama.cpp 連携**: 推論エンジンは llama.cpp C API（R1）とし、CPU backend を既定とする。
+  アクセラレータの採否は `docs/copilot-pc-backend-spec.md` §4.3、計測ゲートは
+  `docs/zenzai-gpu-route.md` が持つ。選定の経緯は
+  [`docs/decisions/2026-05-20-zenzai-engine-route.md`](../docs/decisions/2026-05-20-zenzai-engine-route.md) と
+  [`docs/decisions/2026-05-20-model-load-and-userdict-cli.md`](../docs/decisions/2026-05-20-model-load-and-userdict-cli.md)。
+- **`LoadModel` 境界**: `LoadModelRequest(path, backend, n_gpu_layers)` を
+  `InferenceEngine::LoadModel` に渡し、`model_loaded` / `last_error` を
+  `Handshake` / `Health` で観測できる状態とする。
 - **受け入れ条件**:
   - Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
-  - GPU/CPU 切替が設定で効く
-- **受け入れ条件の前提に関する注記**: 「GPU/CPU 切替が設定で効く」は CUDA backend の実リンクを
-  前提としていたが、その実リンク（DEV-223）は中止され、`cuda` 要求は
-  `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel のまま CPU へ降格する。
-  実リンク済みビルドを配布するまで、この条件を満たす GPU 経路は存在しない。v1.0 設定 UI は
-  この状況に合わせてデバイス選択を `auto` / `cpu` の 2 値へ再確定した
-  （`docs/sideload-packaging-spec.md` §3.7、DEV-854）。
+  - `cpu` を要求したロードは CPU で動く。ggml-cuda をリンクしないビルドで `cuda` を要求したロードは
+    CPU へ降格して成功する（降格と Health の扱いは `docs/zenzai-inference-spec.md` §7.4）。
+    GPU/CPU 切替の条件をこの形にした経緯は
+    [`docs/decisions/2026-08-04-cuda-real-link-cancellation.md`](../docs/decisions/2026-08-04-cuda-real-link-cancellation.md)
 
 ### M9: ユーザー辞書
 
@@ -241,10 +239,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     `InferenceEngine` 経由で同期・永続化まで）
   - 永続化フォーマット定義（`UserDictionary`: JSON `{version, entries: [{word, ruby, cid, mid, value}]}`）
   - `InferenceEngine::QueryCandidates` が `user_dict_->Lookup` を最優先で返す統合
-  - 設定 UI（M11）または暫定 CLI/デバッグ UI から呼べる経路
-- **決定記録（2026-05-20）**: 本格設定 UI を待たず、`inference-host` の IPC 経由で
-  `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug probe を先に用意する。
-  設定アプリ統合は M11 へ送る。
+  - 設定 UI（M11）と、`inference-host` の IPC 経由で `AddUserWord` / `RemoveUserWord` を呼ぶ
+    ユーザー辞書 CLI から呼べる経路。設定アプリへの統合は M11 が持つ（経緯は
+    [`docs/decisions/2026-05-20-model-load-and-userdict-cli.md`](../docs/decisions/2026-05-20-model-load-and-userdict-cli.md)）
 - **受け入れ条件**:
   - 設定 UI（M11 で繋ぐ）から語を追加し、即座に候補に出る
 - **検証手順**: ユーザー辞書 CLI のラウンドトリップ（`userdict add` / `list` /
@@ -281,11 +278,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   最小設定アプリと、配布可能なインストーラ。
 - **前提**: M6
 - **変更対象**: `settings-app/`、`pkg/` 配下
-- **UI フレームワーク決定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は
+- **UI フレームワーク決定**: **WinUI 3（C++/WinRT）**。根拠は
   既存 C++/WinRT スタックとの親和性・Fluent / Mica 標準対応・配布形態
   （MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は
-  代替案へ縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイク（1〜2 日）は
-  `gate:human-required` として残る。詳細は `docs/sideload-packaging-spec.md` §3.0。
+  代替案とする。実機での配布サイズ・初回起動・IPC 連携行数の確証は
+  `gate:human-required` とする。詳細は `docs/sideload-packaging-spec.md` §3.0、選定の経緯は
+  [`docs/decisions/2026-06-settings-app-ui-framework.md`](../docs/decisions/2026-06-settings-app-ui-framework.md)。
   本ロードマップ内で WinUI 3 採用に言及する箇所（リスク章・M30）は本節を参照する。
 - **実装範囲**:
   - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
@@ -294,16 +292,15 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     `docs/sideload-packaging-spec.md` §3.7 を正典とする
   - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
     `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/sideload-packaging-spec.md` §3.3）と
-    `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映、
-    DEV-203）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
+    `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
     スコープとする（M30 はこの最小層の上に UI を本格化する）。
   - 共有ユーザーデータの writer 責務は
     `docs/learning-data-management-spec.md` §14 を正典とする。
     設定アプリの保存経路は atomic replace と共有ファイルロックの契約を満たし、`user_dict.json` は
     直接開かず CLI probe または Host への IPC を経由する。Host 側の quarantine rename との
     競合解消は保存 UI の前提となる。
-  - 配布は未署名 WiX MSI（MVP 既定、`docs/sideload-packaging-spec.md` §0 / DEV-415）。
-    MSIX は MS Store 経由の別チャネル（M28 / DEV-416）
+  - 配布は未署名 WiX MSI（MVP 既定、`docs/sideload-packaging-spec.md` §0）。
+    MSIX は MS Store 経由の別チャネル（M28）
   - TIP 登録はインストーラのカスタムアクションで HKLM `DllRegisterServer` を呼ぶ
     **per-machine・要昇格**の経路とし、アンインストール時に自動解除する
   - `ITfFnConfigure` からの設定アプリ起動は別プロセス EXE の非同期起動
@@ -319,7 +316,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 ### M12: 配布リリースと CI
 
-- **目的**: GitHub Release から MVP リリースを提供。MVP は **未署名 MSI**（配布方針は spec §0 / DEV-415）。
+- **目的**: GitHub Release から MVP リリースを提供。MVP は **未署名 MSI**（配布方針は spec §0）。
 - **変更対象**: `.github/workflows/`, `pkg/`
 - **実装範囲**:
   - Windows ランナーでのビルド + 単体テスト（windows-2022 + msvc-dev-cmd + Ninja、
@@ -402,44 +399,34 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 未決の設計判断:
 
-- llama.cpp バインディング選択（M8）はビルド時間と配布サイズに影響大。
-  M4 → M8 の間で技術調査が必要。
-- ~~候補 UI（M5）を `ITfCandidateListUIElement` で実装するか自前 HWND にするか~~
-  → **確定（DEV-97 / D-01）**: 二者択一ではなく「両立 (coexistence)」。
-  `ITfCandidateListUIElement`（3-interface 契約）と自前 `WS_POPUP` HWND を両方
-  実装し、`ITfUIElementMgr::BeginUIElement` の `pbShow` で per-call に切り替える。
-  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・最小 UIElement 候補公開と
-  それに伴う `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）
-  まで実装し、M21 で full 実装。カテゴリ登録は候補公開実装と必ず一体で行う（公開が
-  無いまま登録すると UI-less-only ホストで候補が消える）。この制約は
-  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` のみに適用し、Windows アプリ互換宣言の
-  `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` には適用しない。詳細は
-  `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
-- ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
-  → **確定（DEV-99 / D-03）**: WinUI 3（C++/WinRT）。根拠・代替案・残る
-  `gate:human-required` スパイクは M11「UI フレームワーク決定」を正典とする。
-- 推論 Worker プロセス分離（Broker/Worker, **MVP後**）: 現状の inference-host は
-  `Dispatcher`/`InferenceEngine`/`SettingsStore` を同一プロセスに同居させており、
+- 推論 Worker プロセス分離（Broker/Worker, **MVP後**）: inference-host は
+  `Dispatcher`/`InferenceEngine`/`SettingsStore` を同一プロセスに同居させるため、
   モデル runtime（llama.cpp/ggml/将来 NPU）起因のクラッシュ blast radius が大きい。
   Broker（設定・辞書・IPC 認証・Worker 監視）/ Worker（モデル runtime）へ分離する
-  方向を将来投資として定義する。v1.0 の必須範囲外。着手時は `request_id` を軸とした
-  Cancel/staleness/sequencing の E2E を最優先。詳細は
+  方向を将来投資として定義する。v1.0 の必須範囲外。分離の設計は `request_id` を軸とした
+  Cancel/staleness/sequencing の E2E を前提とする。詳細は
   `docs/dev-infrastructure-spec.md` §8.6、設計スパイクは Linear で追跡。
+
+候補 UI（M5）の実装方式（`ITfCandidateListUIElement` と自前 HWND の両立）と設定アプリ（M11）の
+UI フレームワークは決まっている。前者は M5 と `docs/tsf-deep-integration-spec.md` §2.8〜§2.11、
+後者は M11「UI フレームワーク決定」が持つ。選定の経緯は
+[`docs/decisions/2026-06-11-candidate-ui-coexistence.md`](../docs/decisions/2026-06-11-candidate-ui-coexistence.md) と
+[`docs/decisions/2026-06-settings-app-ui-framework.md`](../docs/decisions/2026-06-settings-app-ui-framework.md)。
 
 v1.0 リリースに向けたリスクと対応:
 
 | リスク | 影響 | 対応 |
 |---|---|---|
-| llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
-| CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討（CUDA の採否の正典は `docs/copilot-pc-backend-spec.md` §4.3） |
-| MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
-| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）に確定（DEV-99）。決定内容と残るスパイクは M11「UI フレームワーク決定」 |
-| 署名証明書の調達 (M29) | TIP バイナリ署名は入力対象と独立した v1.0 のリリースゲート（spec §0.1）。MVP の未署名 MSI は評価配布に限る | 調達経路は spec §2.0（経路 B）。MS Store は MS 再署名（DEV-416）で有料証明書不要。スタンドアロン MSIX サイドロードの署名は延期（spec §0） |
+| llama.cpp 連携 (M8) | 配布サイズ・初回起動時間に直結 | llama.cpp C API + CPU backend を既定とする（M8）。`bench/` で計測し、計測ゲートは `docs/zenzai-gpu-route.md` |
+| CUDA SDK の配布制約 | 配布物のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload とし、CPU を既定にする（CUDA の採否の正典は `docs/copilot-pc-backend-spec.md` §4.3） |
+| TIP の machine-wide 登録 (M11 / M28) | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録とする。MSI はアンインストール時に自動解除し（M11）、MSIX は経路ごとの登録が残骸なく消えることを VM テストで確認する（M28） |
+| 設定 UI フレームワーク (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）。決定内容と実機確証の Human Gate は M11「UI フレームワーク決定」 |
+| 署名証明書の調達 (M29) | TIP バイナリ署名は入力対象と独立した v1.0 のリリースゲート（spec §0.1）。MVP の未署名 MSI は評価配布に限る | 調達経路は spec §2.0（経路 B）。MS Store は Microsoft の再署名で有料証明書不要（spec §0） |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は TIP 内のかな・カタカナ候補による劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。外部ライブラリ移行は v1.0 の範囲では行わず自前パーサを維持する（同 §6.2, §11.2.1。再評価条件も同節） |
 | 学習永続化の書き込み増幅・無制限増大 | 確定時レイテンシ増加、SSD 書き込み増、学習 TSV 肥大化 | `LearningStore` は N 件/T 秒デバウンス、明示 flush、保存失敗ログ、上限件数 + weight 閾値 GC で抑制。burst 先頭の同期 flush は T 秒のレート制限を課し、追加書き込みを 1 burst あたり最大 1 回に抑える（`docs/learning-data-management-spec.md` §11.2） |
-| 品質 KPI 未設定 | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を設定（同 §10） |
+| 品質 KPI | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を `docs/dev-infrastructure-spec.md` §10 で定める |
 
 ## スコープ外
 
@@ -663,12 +650,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   結果反映）。
 - **横断**: 仕様完了後に X-3-3（Post-Commit Lint）を本マイルストーン末尾に
   追加実装する（同じ AiBackend 経路を流用）。
-- **AiBackend 契約（DEV-346 で確定。`docs/ai-backend-spec.md` 正典）**:
+- **AiBackend 契約（正典は `docs/ai-backend-spec.md`）**:
   - M16 / M58-C / X-3-3 は別 IPC メッセージだが Host 側 `AiBackend::Transform` に集約。
   - **HTTP 経路**: M16 は共通 WinHTTP 基盤を最小導入し、M32 はその基盤上に
-    GET+SHA256 ダウンロードを後から実装（**M32 を Phase 5 へ前倒ししない**。§6 / §13）。
-  - **API キー**: `dpapi:` prefix 規約で保存（§9）。M34 を Phase 5 直後へ前倒し、ただし
-    M16 は M34 を hard prerequisite にしない（暫定平文 + README 注意喚起）。
+    GET+SHA256 ダウンロードを実装する（M16 は M32 に依存しない。§6 / §13）。
+  - **API キー**: `dpapi:` prefix 規約で保存（§9）。M16 は M34 を前提にしない。M34 の暗号化が
+    無い構成ではキーを平文で保存し、README で注意喚起する。
   - **secure ゲート**: `AiBackend` 入口で プライバシー判定を強制チェック（§8、M46 連携）。
 - **受け入れ条件**:
   - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
@@ -908,14 +895,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ### M27: ARM64 ビルド
 
-> **着手条件（2026-09 確定）**: ARM64 Windows 実機の入手を本マイルストーンの着手条件に加える。
-> クロスビルドジョブ（DEV-908）だけを先行させても、生成した ARM64 バイナリを検証する実機ゲート
-> （DEV-909）が着手できず、検証されない成果物が増えるだけになる。再開は DEV-908 → DEV-909 の順
-> とする。`windows-11-arm` ランナーでの ctest 実行（下記受け入れ条件）は従量課金を伴うため、
-> 再開時に別途判断する。
-
 - **目的**: Snapdragon X Elite / 他 ARM64 Windows をネイティブサポート。
-- **前提**: M24 完了。
+- **前提**: M24 完了。ARM64 Windows 実機の入手（生成した ARM64 バイナリを検証する実機ゲートの前提）。
+  この条件を足した経緯は
+  [`docs/decisions/2026-09-arm64-hardware-start-condition.md`](../docs/decisions/2026-09-arm64-hardware-start-condition.md)。
 - **変更対象**: `.github/workflows/windows.yml`（ARM64 クロスビルドジョブ追加。
   `amd64_arm64` SDK/リンカ環境 + **clang-cl** + Ninja + ARM64 toolchain。§8.1）、
   `cmake/toolchains/win-arm64-clang.cmake`、各 `CMakeLists.txt`（ARM 最適化
@@ -958,8 +941,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     Option B/C = `com4` により build 20348+ = Win11 21H2+。Win10 22H2 client(19045) は B/C では対象外。spec §1.1）
   - clean install / uninstall に加え、**新旧バージョン間の update（上書き）と
     失敗時 rollback** シナリオを `compat-test/msix_install_uninstall.ps1` で検証
-    （現状は clean install / uninstall の残骸チェックのみ。実機実行部分は
-    `gate:human-required`）
+    （実機実行は `gate:human-required`）
   - 経路ごとの対象 OS は spec §1.5 の表に従う
   - 言語バーから azooKey が選べる
   - アンインストールで `HKLM\Software\Classes\CLSID\...`（A: `regsvr32` 経路、machine-wide）/
@@ -1910,8 +1892,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 未配線 MessageType への明示エラー応答と、列挙↔codec 整合検査（client ハング防止）
   - Named Pipe の fail-closed SID 取得・接続インスタンス上限・最大フレームサイズ・
     Handshake トークン配布・client cleanup・pending accept cancel（§6.4）
-  - transport 読み書きの壁時計デッドライン（§6.4.7・§6.4.8）。現状は回数制限のみで
-    デッドラインがなく、ヘッダ送信後に本文を止める peer がクライアントスレッドを占有し得る
+  - transport 読み書きの壁時計デッドライン（§6.4.7・§6.4.8）。回数制限だけでは、ヘッダ送信後に
+    本文を止める peer がクライアントスレッドを占有し得る
   - per-client 未完了要求の上限（`RequestScheduler` の per-client cancel-state を上限
     〔例 64〕で固定し、超過時は最古の完了 or 接続拒否）。接続インスタンス上限だけでは
     per-client の未完了要求数に歯止めがない
@@ -1984,9 +1966,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 無応答時の劣化モード（TIP 内のかな・カタカナ候補によるローカルフォールバック。spec §8.3）
   - Host 世代 ID: Host 起動ごとにランダムな世代 ID（インスタンス UUID）を
     発行し `HandshakeResponse` に載せる。TIP は世代変化を検知したら
-    pending / in-flight を破棄する（`host_generation_id` の生成・伝播・
-    `TextService::ObserveHostGeneration` による検知と破棄は実装済み。
-    本項は Handshaking→Ready 遷移全体への組み込みを完了させる）
+    pending / in-flight を破棄する。`TextService::ObserveHostGeneration` による検知と破棄は
+    Handshaking→Ready 遷移に組み込む
 - **受け入れ条件**:
   - TIP 側 IPC ワーカーが接続状態機械に基づいて動作する
   - Host 停止 → 再起動で TIP が exponential backoff + jitter により自動再接続する
@@ -2320,11 +2301,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     （`exact_match_rate` / `nfkc_exact_match_rate` / `cer` / `nfkc_cer`）を含み、
     `--per-case` で per-case 内訳 JSONL が出力される（`summary.cer` は per-case の
     micro 平均に一致）。CER 単体・Exact/NFKC 境界（全半角差）テストが CTest で通る
-    （spec §6.1.1 / §6.1.2 / §8.1。DEV-408 テスト方針）
+    （spec §6.1.1 / §6.1.2 / §8.1）
   - `azookey_bench --eval bench/data/typo_eval.jsonl --output
-    typo_result.json` で typo 指標が算出・schema 出力される（M52 時点では
-    typo 補正は未実装＝M55 のため既定 `off`。補正有効モード `rank`/`aggressive`
-    での実測値検証は M55 受け入れで行う。spec §7 参照）
+    typo_result.json` で typo 指標が算出・schema 出力される（typo 補正は M55 が
+    実装するため既定は `off` とし、補正有効モード `rank`/`aggressive` での実測値検証は
+    M55 の受け入れ条件で行う。spec §7 参照）
   - baseline 比較レポート（`diff_vs_baseline`）が生成され、CI artifact 化される
   - `--trace` 指定時は phase JSONL を生成し、`azookey_trace_viewer --json` の schema と phase 別
     p50 / p95 / p99 を検証できる（M51、`docs/dev-infrastructure-spec.md` §7.7.3）
@@ -2389,7 +2370,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     に 1 回適用。spec §14.5/§14.11）
   - 辞書更新パイプライン（bundled / neologism pack / technical pack /
     user / app-specific）
-  - 物理層（spec §15。DEV-412 と同時）: double-array trie と
+  - 物理層（spec §15）: double-array trie と
     2 方向の前方一致検索（common-prefix / predictive）の契約、`.azdic` v1 直列化形式、
     マルチソースビルド
     （層内 dedup / cost→frequency 写像 / 再現性）、mutable 層の
@@ -2419,7 +2400,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `dictionary_score` の確定係数（spec §14.11）が実装の既定値と一致し、worked example
     が単体テストで再現される（M48 タグ boost は `final_score` へ 1 回だけ適用し、
     `dictionary_score` へ二重適用しない）
-  - 物理層（`.azdic`。DEV-412）:
+  - 物理層（`.azdic`）:
     - `.azdic` v1 のリーダとビルダが往復し、同一入力から 2 回ビルドしたアーティファクトが
       バイト単位で一致する
     - `CommonPrefixSearch` / `PredictiveSearch` が spec §15.4 の契約（探索の向き・順序・

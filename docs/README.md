@@ -106,18 +106,22 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 種別 | 結論の正典 |
 |---|---|---|
+| [`decisions/2026-05-20-model-load-and-userdict-cli.md`](decisions/2026-05-20-model-load-and-userdict-cli.md) | 決定記録 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8・M9 |
 | [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md) | 決定記録 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md)「決定（ADR 要旨）」、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3 |
+| [`decisions/2026-06-11-candidate-ui-coexistence.md`](decisions/2026-06-11-candidate-ui-coexistence.md) | 決定記録 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) §2.8〜§2.11、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M5 |
 | [`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0 |
 | [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.0 |
 | [`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §2.0 |
 | [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11 |
 | [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §4.7 |
+| [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
 | [`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.1・§4.2.1.1 |
 | [`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) | 決定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.2 |
 | [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11.2.1 |
 | [`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) | 測定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) §B12 |
+| [`decisions/2026-09-arm64-hardware-start-condition.md`](decisions/2026-09-arm64-hardware-start-condition.md) | 決定記録 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M27 |
 | [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §2.7・§11.8 |
 | [`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.3 |
 

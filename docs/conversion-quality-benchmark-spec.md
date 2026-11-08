@@ -3,7 +3,7 @@
 対象リポジトリ: dolquis/azooKey-Desktop
 対応マイルストーン: M52（変換品質トラック）
 関連: `plans/windows-port-roadmap.md` M7 / M9 / M53 / M54 / M55 / M56 / M57、
-      `bench/azookey_bench`、
+      `bench/` の target `azookey_bench`、
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）

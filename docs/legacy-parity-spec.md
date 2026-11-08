@@ -493,7 +493,7 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   を core へ渡す。`docs/bracket-pairing-spec.md` §3.1 のカッコ補完は、このキーを TIP が写像より前に処理する。
   テンキーの記号キー（`VK_ADD`、`VK_SUBTRACT`、`VK_MULTIPLY`、`VK_DECIMAL`、`VK_DIVIDE`）は Composing /
   Previewing / Selecting で `Input`、Idle で `nullopt` とする（§1.4）。文字は全角化の表ではなく VK で決める
-  （同 §3.5）。legacy はテンキーの記号でも Idle から入力を始めるので、Idle の素通しは意図した legacy との差である。
+  （`docs/tsf-deep-integration-spec.md` §3.5）。legacy はテンキーの記号でも Idle から入力を始めるので、Idle の素通しは意図した legacy との差である。
 - **第 2 層 — TIP `TextService.cpp::OnKeyDown`（プラットフォーム・モード依存）**:
   `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
   （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、

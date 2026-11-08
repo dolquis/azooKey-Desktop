@@ -84,7 +84,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 
 | 種別 | 現在の配線 | 役割 |
 |---|---|---|
-| `Handshake` | codec + Host | version、capability、client ID、tokenの交換 |
+| `Handshake` | codec + Host + TIP | version、capability、client ID、tokenの交換 |
 | `LoadModel` | codec + Host | モデル読込指示 |
 | `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
 | `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る。M59 の任意フィールドとして要求に `auto_punctuation`・`punctuation_style`、応答は挿入が有効な要求のときだけ `segments[]` を持つ（`docs/dynamic-punctuation-spec.md` §7） |
@@ -93,23 +93,23 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
 | `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
 | `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |
-| `CommitCorrection` | codec + Host | 即 Backspace（`kind="undo"`）と再変換（`kind="reconvert"`）の学習フィードバック。Host は capability `commit_correction` を告知し、応答は `CommitObservation` と同じ `ok` |
+| `CommitCorrection` | codec + Host + TIP | 即 Backspace（`kind="undo"`）と再変換（`kind="reconvert"`）の学習フィードバック。Host は capability `commit_correction` を告知し、応答は `CommitObservation` と同じ `ok` |
 | `AddUserWord` | codec + Host | ユーザ辞書追加 |
 | `UpdateUserWord` | enumのみ | 将来のユーザ辞書更新用予約 |
 | `RemoveUserWord` | codec + Host | ユーザ辞書削除 |
-| `UpdateConfig` | Host + response codec | settings再読込。要求payloadは空オブジェクト |
+| `UpdateConfig` | Host + response codec + TIP | settings再読込。要求payloadは空オブジェクト |
 | `Ping` | codec + Host | 疎通確認 |
-| `Health` | codec + Host | Host状態取得 |
-| `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback state、任意の`neologd_layer`（`state`と失敗時の固定の分類名`reason`。`docs/dev-infrastructure-spec.md` §12.6）と`prompt_format`（ロード中モデルのプロンプト形式名）の取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
+| `Health` | codec + Host + TIP | Host状態取得 |
+| `QueryDiagnostics` | codec + Host + TIP + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback state、任意の`neologd_layer`（`state`と失敗時の固定の分類名`reason`。`docs/dev-infrastructure-spec.md` §12.6）と`prompt_format`（ロード中モデルのプロンプト形式名）の取得。要求payloadは空オブジェクト。TIPはHostの状態の取得に送り（`docs/dev-infrastructure-spec.md` §8.5.1）、`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）も送る |
 | `CommitSegmentsObservation` | codec + Host + TIP | 一括変換で確定した文節列（`ObservedSegment` の配列、左文脈、`observation_id`）の学習フィードバック。TIP は確定文節が非空で、かつ Handshake で Host が対応を告知した場合だけ送り、それ以外は `CommitObservation` へ落とす |
-| `ObserveTypo` | codec + Host | M35 の打ち間違えペアの観測。Host は応答を返さない。TIP は secure 時の遮断対象に含めるが送信元ではない |
+| `ObserveTypo` | codec + Host + TIP | M35 の打ち間違えペアの観測。TIP が確定の後に送り、secure の文脈では送らない。Host は応答を返さない（`docs/typo-correction-learning-spec.md` §7） |
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
 | `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
 | `ReverseConvert` | codec + Host + TIP | M20 の再変換で、確定済み表層（`surface`）から読み（`reading`）を引く |
 | `ListModels` | codec + Host | M45 の models ディレクトリの GGUF 一覧。送信元は設定アプリで、TIP からは送らない。capability `list_models`。`directory`・`compute_sha256`・`include_catalog` を送り、`models[]` と `ok` / `error`、`include_catalog` を求めたときだけ既定の catalog の `catalog[]` を受け取る（`docs/model-management-spec.md` §4.1） |
 | `BenchmarkModel` | codec + Host | M45 のモデルのベンチマーク。送信元は設定アプリ。capability `benchmark_model`。`path`（models ディレクトリ配下に限る）・`backend`（既定 `cpu`）・`cases`・`iterations`・`warmup` を送り、レイテンシの分位を受け取る（`docs/model-management-spec.md` §4.2） |
 | `ListLearningEntries` | codec + Host | M49 の学習データ一覧（4 メッセージとも capability `learning_data_management`）。`store`・`query`・`limit`（上限 `kMaxLearningEntries` で頭打ち）・`offset` を送り、`total`・`entries[]` を受け取る。応答は `ok` / `error` を持つ（`docs/learning-data-management-spec.md` §4.1） |
-| `ForgetLearningEntry` | codec + Host | M49 の 1 エントリ忘却。`store` に加え `id` か、`learning` ストアに限り `reading` + `surface` のどちらか一方の形だけを受け付ける。応答は `removed` / `ok` / `error`（§4.2） |
+| `ForgetLearningEntry` | codec + Host + TIP | M49 の 1 エントリ忘却。`store` に加え `id` か、`learning` ストアに限り `reading` + `surface` のどちらか一方の形だけを受け付ける。応答は `removed` / `ok` / `error`（§4.2）。TIP は直近の確定の忘却（Ctrl+Shift+Backspace、`docs/legacy-parity-spec.md` §7）で `reading` + `surface` の形を送る |
 | `ExportLearningData` | codec + Host | M49 のバックアップ書き出し。`stores`・`destination_path`・`encrypt`（既定 `true`）・`include_settings`（既定 `false`）を送り、`status`・`file_size_bytes`・`encrypted`・`items[]` を受け取る（§4.3） |
 | `ImportLearningData` | codec + Host | M49 のバックアップ取り込み。`source_path`・`stores`・`conflict_resolution`（`merge` / `overwrite` / `keep_both`、既定 `merge`）を送り、`status` とストア別の `imported_counts` / `skipped_counts` / `conflict_counts` を受け取る（§4.4） |
 | `ResetLearningStore` | codec + Host | 設定アプリの全削除。`store` を送り、`ok` / `error` を受け取る。capability `learning_reset`。途中で失敗しても半端に消さない（`docs/learning-data-management-spec.md` §4.6） |

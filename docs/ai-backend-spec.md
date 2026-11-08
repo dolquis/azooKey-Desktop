@@ -447,10 +447,10 @@ M48 のモード通知 API を前提としない。
     消費者の fallback（§7.4）へ。`local-zenzai` が許可されていればそちらへ寄せる。
   - `privacy-and-secure-input-spec.md` §5 の抑止表は `aiBackend=none` 強制の実装
     ポイントを `inference-host/src/AiBackend.cpp` と明記しており、本契約はそれを満たす。
-- **多層防御**: TIP 側でも secure 中は Magic Conversion を無効化する（同 §5 表、
-  `TextService.cpp::OnDoubleTap`）。Host 側入口ガードは TIP 側抑止に依存せず**独立に**
+- **多層防御**: TIP 側でも secure 中は Magic Conversion を無効化する（同 §5 表。ダブルタップを検出する
+  `StartAlnumDouble` / `StartKanaDouble` は `docs/legacy-parity-spec.md` §4.1 が定める）。Host 側入口ガードは TIP 側抑止に依存せず**独立に**
   保証する（呼び出し経路の取りこぼし・将来の新消費者に対する安全側）。この二重化は
-  同 §5.1.1 の二段ゲートの一部であり、TIP 側抑止だけでは本契約を満たさない。
+  `privacy-and-secure-input-spec.md` §5.1.1 の二段ゲートの一部であり、TIP 側抑止だけでは本契約を満たさない。
 - **不変条件**: `外部 AI 許可 ⇒ AI 候補生成許可`（同 §5.1）。`secure` では
   両方 false。`private` / `offline` は AI 候補可・外部不可（ローカルのみ）。
 - **ログ**: secure 中は `reading` / `surface` / 本文を redact（同 §5、

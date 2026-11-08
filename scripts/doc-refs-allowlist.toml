@@ -1,0 +1,236 @@
+# scripts/check_doc_refs.py の例外リスト。
+#
+# 文書が名指しする参照のうち、いま実在しないが正しいものだけを登録する。
+# 検査は登録の陳腐化も落とす。参照先が実在したら、またはどの文書も参照しなく
+# なったら、そのエントリを削除する。
+#
+# 各エントリ:
+#   ref       検査が報告する参照文字列（repo パス、`path::Symbol`、`docs/x.md §N`）
+#   kind      planned        M で作る予定のもの。milestone と spec（正典の節）が要る
+#             origin         origin（dolquis/agent-ops）にだけ在るもの。この repo では直さない
+#             external       他リポジトリのパス（参考資料の中の比較対象）
+#             historical     ある時点の記録として書かれたパス
+#             runtime        build directory やユーザーデータディレクトリを基準にした相対パス
+#             unowned        予定だが所有する M が無いもの。判断を追う Linear の課題を issue に書く
+#   reason    登録の理由
+#   files     （任意）この例外を使ってよい文書。省略するとどの文書でも使える
+
+# --- planned -----------------------------------------------------------------
+
+[[allow]]
+ref = "tsf-tip/src/PromptDialog.cpp"
+kind = "planned"
+milestone = "M16"
+spec = "docs/legacy-parity-spec.md §4.3"
+reason = "Magic Conversion のプロンプト UI。M16 で新設する"
+files = [
+  "plans/windows-port-roadmap.md",
+  "docs/windows-tsf-host-architecture.md",
+]
+
+[[allow]]
+ref = "core/src/QwertyAdjacency.cpp"
+kind = "planned"
+milestone = "M17"
+spec = "docs/rich-features-spec.md X-3-1"
+reason = "FuzzyMatch の QWERTY 隣接表。M17 の横断 X-3-1 で新設する"
+files = ["docs/rich-features-spec.md", "docs/windows-tsf-host-architecture.md"]
+
+[[allow]]
+ref = "tsf-tip/src/TypingTempoTracker.h"
+kind = "planned"
+milestone = "M24"
+spec = "docs/rich-features-spec.md X-1-2"
+reason = "タイピング速度推定。M24 の横断 X-1-2 で新設する"
+files = ["docs/rich-features-spec.md", "docs/windows-tsf-host-architecture.md"]
+
+[[allow]]
+ref = "inference-host/src/WinMlBackend.cpp"
+kind = "planned"
+milestone = "M24"
+spec = "docs/copilot-pc-backend-spec.md §4.4"
+reason = "R2（ONNX Runtime GenAI + Windows ML）の backend。M24 で新設する"
+files = ["plans/windows-port-roadmap.md"]
+
+[[allow]]
+ref = "inference-host/src/QnnBackend.cpp"
+kind = "planned"
+milestone = "M27"
+spec = "docs/copilot-pc-backend-spec.md §8.5"
+reason = "QNN SDK 直叩きの非既定 fallback。M27 がこの fallback を採る場合に限り新設する"
+files = ["docs/copilot-pc-backend-spec.md"]
+
+[[allow]]
+ref = "pkg/msix/Assets/*.png"
+kind = "planned"
+milestone = "M28"
+spec = "docs/sideload-packaging-spec.md §1"
+reason = "MSIX のロゴ画像。M28 で追加する"
+files = ["plans/windows-port-roadmap.md"]
+
+[[allow]]
+ref = "pkg/tests/signature_test.ps1"
+kind = "planned"
+milestone = "M29"
+spec = "docs/sideload-packaging-spec.md §2"
+reason = "署名検証のテスト。M29 で署名経路と同時に追加する"
+files = ["docs/sideload-packaging-spec.md"]
+
+[[allow]]
+ref = "inference-host/src/UpdateChecker.cpp"
+kind = "planned"
+milestone = "M32"
+spec = "docs/sideload-packaging-spec.md §6.1"
+reason = "GitHub Releases ベースの更新確認。M32 で新設する"
+files = [
+  "docs/sideload-packaging-spec.md",
+  "docs/windows-tsf-host-architecture.md",
+  "plans/windows-port-roadmap.md",
+]
+
+[[allow]]
+ref = "inference-host/tests/update_checker_test.cpp"
+kind = "planned"
+milestone = "M32"
+spec = "docs/sideload-packaging-spec.md §10"
+reason = "UpdateChecker のテスト。M32 で UpdateChecker と同時に追加する"
+files = ["docs/sideload-packaging-spec.md"]
+
+[[allow]]
+ref = "bench/data/PROVENANCE.json"
+kind = "planned"
+milestone = "M52"
+spec = "docs/conversion-quality-benchmark-spec.md §13.3"
+reason = "評価データの出典 manifest。authored 以外の provenance を持つケースを入れるときに置く条件付きのファイル"
+files = [
+  "docs/conversion-quality-benchmark-spec.md",
+  "plans/windows-port-roadmap.md",
+]
+
+[[allow]]
+ref = "learning/src/DictionaryImporter.cpp"
+kind = "planned"
+milestone = "M53"
+spec = "docs/auto-word-registration-spec.md §14"
+reason = "辞書層の再設計で追加するインポータ。M53 で新設する"
+files = ["plans/windows-port-roadmap.md"]
+
+[[allow]]
+ref = "learning/src/TypoLearningStore.cpp"
+kind = "planned"
+milestone = "M55"
+spec = "docs/typo-correction-learning-spec.md §12.8"
+reason = "TypoCorrectionStore を改名・拡張した v2 の学習ストア。M55 で作る"
+files = ["plans/windows-port-roadmap.md"]
+
+# --- unowned -----------------------------------------------------------------
+
+[[allow]]
+ref = "tsf-tip/src/ContextTracker.h"
+kind = "unowned"
+issue = "DEV-1912"
+reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
+files = ["docs/rich-features-spec.md"]
+
+[[allow]]
+ref = "tsf-tip/src/ContextTracker.cpp"
+kind = "unowned"
+issue = "DEV-1912"
+reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
+files = ["docs/windows-tsf-host-architecture.md"]
+
+# --- origin ------------------------------------------------------------------
+
+[[allow]]
+ref = "scripts/linear-audit.py"
+kind = "origin"
+reason = "linear-conventions §1〜§12 は origin のベンダリングコピーで、監査スクリプトは origin にだけ在る"
+files = ["docs/linear-conventions.md"]
+
+[[allow]]
+ref = "docs/GITHUB_LINEAR_MAPPING.md"
+kind = "origin"
+reason = "linear-conventions §7.1 の共有コアが他 repo の文書を例示している。この repo では直さない"
+files = ["docs/linear-conventions.md"]
+
+[[allow]]
+ref = "docs/WORKFLOW.md"
+kind = "origin"
+reason = "linear-conventions §7.1 の共有コアが他 repo の文書を例示している。この repo では直さない"
+files = ["docs/linear-conventions.md"]
+
+# --- historical / external ---------------------------------------------------
+
+[[allow]]
+ref = ".github/workflows/quality.yml"
+kind = "historical"
+reason = "linear-conventions §13 の、洗い出しの時点でこの workflow が無かったという記録"
+files = ["docs/linear-conventions.md"]
+
+[[allow]]
+ref = "core/InputState.cpp"
+kind = "historical"
+reason = "karukan 比較レポートは調査時点のスナップショットで、当時の新設予定のファイル名を残している"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "core/tsf-tip/inference-host"
+kind = "historical"
+reason = "karukan 比較レポートで、grep した 3 ディレクトリをまとめて書いたもの"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "core/engine/*"
+kind = "external"
+reason = "karukan（togatoga/karukan）の karukan-im 配下のパス"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "core/engine"
+kind = "external"
+reason = "karukan（togatoga/karukan）の karukan-im 配下のパス"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "core/state.rs"
+kind = "external"
+reason = "karukan（togatoga/karukan）の karukan-im 配下のパス"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "core/keycode.rs"
+kind = "external"
+reason = "karukan（togatoga/karukan）の karukan-im 配下のパス"
+files = ["docs/karukan-comparison-report.md"]
+
+[[allow]]
+ref = "data/symbols.yml"
+kind = "external"
+reason = "karukan（togatoga/karukan）の karukan-engine 配下のパス"
+files = ["docs/karukan-comparison-report.md"]
+
+# --- runtime -----------------------------------------------------------------
+
+[[allow]]
+ref = "bench/generated/BenchmarkCommit.h"
+kind = "runtime"
+reason = "build directory の中の生成ヘッダ。repo の bench/ ではない"
+files = ["docs/dev-infrastructure-spec.md"]
+
+[[allow]]
+ref = "diagnostics/etw/azookey_etw_manifest.dll"
+kind = "runtime"
+reason = "build directory の中の ETW resource DLL。zip へ同じ相対パスで入れることを述べている"
+files = ["docs/dev-infrastructure-spec.md"]
+
+[[allow]]
+ref = "data/trending-words.json"
+kind = "runtime"
+reason = "解決済みユーザーデータディレクトリを基準にしたキャッシュのパス。repo の data/ ではない"
+files = ["docs/auto-word-registration-spec.md"]
+
+[[allow]]
+ref = "data/host_run_state.txt"
+kind = "runtime"
+reason = "%LOCALAPPDATA%\\azooKey\\ を基準にした表の中のパス。repo の data/ ではない"
+files = ["docs/learning-data-management-spec.md"]

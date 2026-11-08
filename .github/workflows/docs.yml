@@ -1,37 +1,13 @@
 name: Docs lint
 
 on:
+  # paths で絞らない。コードだけの変更（rename・削除）でも文書の参照の実在検査と
+  # 実体との突合を走らせ、docs が偽になった PR をその時点で止めるためである。
   push:
     branches: [main]
-    paths:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.codex/**'
-      # scripts/ and the workflows are also what check_test_inventory.py
-      # compares the "CTest 以外の自動検査" table against.
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - '**/CMakeLists.txt'
-      - '.docs-lint.toml'
-      - '.docs-lint-baseline.json'
   pull_request:
-    paths:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.codex/**'
-      # scripts/ and the workflows are also what check_test_inventory.py
-      # compares the "CTest 以外の自動検査" table against.
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - '**/CMakeLists.txt'
-      - '.docs-lint.toml'
-      - '.docs-lint-baseline.json'
+    # edited は PR 本文の Documentation impact を書き直したときに docs-impact を再評価するため。
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -97,3 +73,47 @@ jobs:
 
       - name: Check agent definitions against the manifest
         run: python3 scripts/check_agent_definitions.py
+
+      # 文書が名指しするパス、file::symbol、spec の § 参照の実在を確かめる。不在でも正しい参照は
+      # scripts/doc-refs-allowlist.toml に登録したものだけを許し、実在したら登録の削除を求める。
+      - name: Test the document reference checker
+        run: python3 scripts/tests/test_check_doc_refs.py
+
+      - name: Check that document references resolve
+        run: python3 scripts/check_doc_refs.py
+
+      # IPC の型の表（architecture の索引と tsf-ipc-protocol Skill）、spec の設定キー表、文書中の
+      # preset 名を、MessageType・Dispatcher・schema・CMakePresets と突き合わせる。
+      - name: Test the document contract checker
+        run: python3 scripts/tests/test_check_doc_contracts.py
+
+      - name: Check documents against IPC types, settings schema, and presets
+        run: python3 scripts/check_doc_contracts.py
+
+      # 契約ファイル（一覧は scripts/check_docs_impact.py の CONTRACT_PATHS）を変えて docs を
+      # 変えない PR に、本文の Documentation impact で影響なしの理由を求める。
+      - name: Test the docs impact gate
+        run: python3 scripts/tests/test_check_docs_impact.py
+
+  docs-impact:
+    name: docs-impact
+    # PR 本文を読むので pull_request だけで走らせる。Dependabot の PR は本文がテンプレートに
+    # 従わないため除外する（skip は required check を満たす）。作成者で判定するのは、人間が
+    # Dependabot の PR を編集しても github.actor が変わるだけで作成者は変わらないため。
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          # pull_request の checkout は base へ PR を merge した commit になる。その第 1 親との差分が、
+          # main に入る変更そのものである（event の base.sha が古くても main 側の変更が混ざらない）。
+          fetch-depth: 2
+
+      # 本文は event の JSON から読み、run の中に式で埋め込まない（injection 対策）。環境変数で
+      # 渡さないのは、長い本文が 1 変数あたりの上限を超えて exec に失敗しうるためである。
+      - name: Check the documentation impact of contract changes
+        run: |
+          python3 -c 'import json, os, sys; body = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))["pull_request"].get("body") or ""; open(sys.argv[1], "w", encoding="utf-8").write(body)' "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/check_docs_impact.py --base HEAD^1 --head HEAD --body-file "$RUNNER_TEMP/pr-body.md"

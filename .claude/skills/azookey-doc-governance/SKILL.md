@@ -32,6 +32,14 @@ description: azooKey Desktop の README.md、AGENTS.md、CLAUDE.md、docs/、pla
 
 機能を実装したら、対応する spec の「未実装」「暫定」「TODO」を消すところまでが実装 PR の一部である。spec が実装に追いつかないまま放置されるのは、たいてい「実装 PR は docs を更新しなくてもマージできる」からで、そこを止めるのがこの Skill の役目。`azookey-inference-model-workflow` 等の機能別 Skill を使うときも、対応する spec の失効チェックはこちらを併用する。
 
+### 契約ファイルと docs impact ゲート
+
+IPC の wire schema、設定 schema、CMake preset、workflow のように、変えると spec・roadmap・README の定義が変わりうるファイルを契約ファイルと呼ぶ。一覧の正典は `scripts/check_docs_impact.py` の定数 `CONTRACT_PATHS` であり、`python3 scripts/check_docs_impact.py --print-contract-paths` で得る。本 Skill や他の文書に一覧を写さない。
+
+同スクリプトは、契約ファイルを変更して `docs/`・`plans/`・ルートの `README.md` のどれも変更しない PR に対し、PR 本文の「Documentation impact」節で「No documentation impact」へのチェックと、`Reason:` の後の空でない理由を求め、なければ `docs.yml` の `docs-impact` ジョブが失敗する（merge を止める required check かどうかは `docs/dev-infrastructure-spec.md` §4.9 の ruleset が決める）。コメントだけ、「なし」「N/A」だけの理由は空とみなす。照合する見出しとチェックボックスの文言は `.github/PULL_REQUEST_TEMPLATE.md` と揃えてあるので、片方だけを変えない。
+
+契約ファイルに触れる実装 PR では、`spec-drift-checker` を必ず使い、どの spec・schema・テスト一覧が失効したかを列挙させてから、docs を更新するか影響なしの理由を書くかを決める。ゲートが求めるのは理由の記入だけで、理由の正しさは確かめないため、この確認を省かない。
+
 ## 検証
 
 ```
@@ -39,6 +47,15 @@ python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json
 ```
 
 DECISIVE は全ファイル 0 件で凍結してあるので、1 件でも出れば増加として落ちる。HEURISTIC は既存の件数を凍結してあり、止めるのは増加だけである。警告を消すためにベースラインを書き直さない。
+
+docs-lint が見ない文書とコードの対応は、次の 2 本が CI（`docs-lint` ジョブ）で検査する。
+
+```
+python3 scripts/check_doc_refs.py
+python3 scripts/check_doc_contracts.py
+```
+
+`check_doc_refs.py` は、文書が名指しするパス・`file::symbol`・spec の § 参照の実在を確かめる。予定ファイルなど、不在でも正しい参照は `scripts/doc-refs-allowlist.toml` に種別と理由（予定なら M 番号と正典 spec）を書いて登録する。登録した参照が実在したら、登録を消す。`check_doc_contracts.py` は、IPC の型の表、spec の設定キー表、文書中の preset 名を、`MessageType`・Dispatcher・schema・`CMakePresets.json` と突き合わせる。
 
 ## 参考資料
 

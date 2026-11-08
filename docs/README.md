@@ -31,7 +31,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`karukan-comparison-report.md`](karukan-comparison-report.md) | karukan（`togatoga/karukan`）との比較調査。更新しない参考スナップショットであり正典ではない。開発計画は roadmap、取り込み状態は Linear を参照 |
 | [`macos-input-parity-audit-report.md`](macos-input-parity-audit-report.md) | 入力体験（キー操作・状態遷移・表示）を macOS 版（`legacy/`）と比べた監査。更新しない参考スナップショットであり正典ではない。仕様は各 spec、対応の状態は Linear（DEV-1810 と子課題）を参照 |
 | [`mixed-english-input-feasibility-report.md`](mixed-english-input-feasibility-report.md) | 日英混在ローマ字入力の自動変換（M63）の実現可能性と先行事例の調査。更新しない参考スナップショットであり正典ではない。定義と受け入れ条件は roadmap の M63、機能仕様は [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) を参照 |
-| [`zenzai-gpu-route.md`](zenzai-gpu-route.md) | Zenzai 推論形式の特定と GPU 化ルート決定 |
+| [`zenzai-gpu-route.md`](zenzai-gpu-route.md) | Zenzai の重み形式と推論エンジン経路の結論、実装構成（`AZOOKEY_BACKEND`、llama.cpp 接続）、計測ゲートの正典。決定の根拠は [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md) |
 
 ## 機能仕様（`*-spec.md`）
 
@@ -106,7 +106,20 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 種別 | 結論の正典 |
 |---|---|---|
+| [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md) | 決定記録 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md)「決定（ADR 要旨）」、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3 |
+| [`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0 |
+| [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.0 |
+| [`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §2.0 |
+| [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11 |
+| [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §4.7 |
+| [`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.1・§4.2.1.1 |
+| [`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) | 決定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.2 |
+| [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11.2.1 |
+| [`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
+| [`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) | 測定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) §B12 |
+| [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §2.7・§11.8 |
+| [`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.3 |
 
 ## Phase 一覧
 

@@ -32,27 +32,20 @@
 | §11 | リリース手順チェックリスト | 共通 |
 | §12 | 参照 | 共通 |
 
-## 0. 配布方針（v1.0 MVP 確定 / 2026-06）
+## 0. 配布方針
 
-配布チャネルと署名要否を次のとおり確定する（Linear DEV-415 / DEV-416 / DEV-255）。
+配布チャネルと署名要否を次のとおりとする。
 
 | チャネル | 形式 | 自前コード署名 | 位置づけ |
 |---|---|---|---|
 | **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | MVP（評価配布）と v1.0 の既定形式。§4 が正典。GitHub Release で配布。TIP バイナリ署名は §0.1 |
-| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成（DEV-416） |
-| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | **当面延期**。§2 の署名ルート（経路 B 確定済み）は本チャネル着手時に実施（DEV-255） |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成 |
+| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | 延期。§2 の署名ルート（§2.0 の経路 B）は本チャネルの着手時に実施する |
 
-判断根拠:
-
-- MSIX は署名がインストールの前提条件だが、MSI/EXE は署名が任意である。未署名 MSI も
-  インストール可能で、SmartScreen 警告 + UAC「不明な発行元」は出るが reputation building で
-  許容する（出典: [Create an unsigned MSIX package](https://learn.microsoft.com/windows/msix/package/unsigned-package) /
-  [Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
-- Microsoft Store 提出 MSIX は Microsoft が再署名するため、開発者側の有料証明書が不要
-  （出典: [Publish your first Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app)）。
-- 有料コード署名証明書を要するのはスタンドアロン MSIX サイドロードのみ。MVP では不要のため延期する。
-- 先行実装（fkunn1326/azooKey-Windows = Inno Setup EXE、CorvusSKK = WiX/Inno EXE）も MSIX では
-  なく MSI/EXE インストーラで配布している。
+MSIX は署名がインストールの前提条件だが、MSI は署名が任意である。未署名 MSI では
+SmartScreen 警告と UAC「不明な発行元」が出るが、reputation building で許容する。
+判断根拠と、比べた先行実装は
+[`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) にある。
 
 上表の「自前コード署名」欄は**インストーラの署名要否**を示す。第三者 IME として TIP バイナリに
 求められる署名要件は別の境界であり、§0.1 で扱う。
@@ -60,16 +53,19 @@
 以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
-### 0.1 MVP の入力対象スコープと署名ゲート（DEV-783 で確定 / 2026-08）
+### 0.1 MVP の入力対象スコープと署名ゲート
 
 MVP が入力先として保証するのは **Win32 デスクトップアプリに限る**。
 **パッケージ化された UWP / Microsoft Store アプリ**での入力は MVP の対象外とし、v1.0 以降へ送る。
 
 除外の境界は「AppContainer を使うか」ではなく「パッケージ化された UWP / Store アプリか」で引く。
-Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスであり、2026-08-14 の実機検証でも入力が成立している。
+Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスである。
 したがって Edge は対象内とする。
 
-#### 32 bit (x86) プロセスを MVP 対象外とする理由（DEV-160 で確定 / 2026-08）
+決定の経緯と、根拠にした実機検証は
+[`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) にある。
+
+#### 32 bit (x86) プロセスを MVP 対象外とする理由
 
 入力対象にはもう一つ、対象プロセスの bitness という境界がある。
 Win32 か UWP かという上記の軸とは独立しており、MVP が保証するのは **Win32 デスクトップアプリであり、かつ x64 プロセス**である。
@@ -80,30 +76,26 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 `scripts/register-dev.ps1` が呼ぶのも 64 bit の `regsvr32` である。
 したがって 32 bit プロセスからは TIP が解決されず、azooKey を選べない。
 古い Office や一部のレガシーアプリ、組み込みアプリがこれに該当する。
-
-64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けない。
-DEV-32 の実機検証動線も 64 bit アプリで成立するため、この制限は v1.0 のリリースゲートを塞がない。
-`docs/handoff/dev32-verification-checklist.md` の B7 が 32 bit アプリを「既知(DEV-160)」として扱うのも、この境界に沿う。
+64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けず、この制限は v1.0 のリリースゲートを塞がない。
 
 将来 32 bit 対応を入れる場合に必要になる作業は次のとおりである。
 
 * `tsf-tip/` に x86 ターゲットを追加し、x86 TIP DLL をビルドする
 * 32 bit の `regsvr32` から `DllRegisterServer` を呼び、レジストリの 32 bit ビュー（`WOW6432Node`）へ CLSID と `CTF\TIP` を登録する
-* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は現時点で x64 TIP DLL 1 個を前提としている）
+* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
 * MSIX（§1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
 
 再評価のトリガは 2 つある。
 実利用者から 32 bit プロセスでの入力要望が挙がること、または M27（ARM64 ビルド）で複数アーキテクチャのビルドと登録の経路が整備され、x86 追加の限界コストが下がることである。
 それまでは本節を既知の制限の正典とする。
+決定の経緯と、実機検証の動線との関係は
+[`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) にある。
 
 #### 署名は入力対象と独立した v1.0 リリースゲート
 
 第三者 IME へのデジタル署名要件は第三者 IME 全般を対象とし、Win32 向けの例外は文書化されていない。
 [Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors#requirements-for-imes) は要件を満たさない第三者 IME を "blocked from running" と定めており、この記述に配布形態や入力先による限定はない。
-
-2026-08-14 の実機検証では、未署名 MSI でも Notepad と Edge で打鍵から確定まで成立した。
-ただしこれは 1 環境で観測された挙動であり、**未署名の Win32 配布がサポートされることの根拠にはならない**。
-観測された動作と、文書化されたサポート条件は別のものである。
+未署名の TIP が動く環境があっても、それは観測された挙動であり、文書化されたサポート条件ではない。
 
 したがって次の 2 点を分けて扱う。
 
@@ -116,12 +108,9 @@ DEV-32 の実機検証動線も 64 bit アプリで成立するため、この�
 
 プロセスが Code Integrity Guard を有効化している場合、`PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY` の `MicrosoftSignedOnly` または `StoreSignedOnly` により、Microsoft 署名でも Store 署名でもない DLL は memory manager が `STATUS_INVALID_IMAGE_HASH` を返して map 自体を拒否する（[Code integrity guard](https://learn.microsoft.com/defender-endpoint/exploit-protection-reference#code-integrity-guard)）。
 この経路が働いているなら、OV 証明書を取得しても Store 入力は成立しない。
-DEV-765 のスパイクは Store 検索欄での失敗段階を「DLL 未ロード」と判定したが、それが IME 署名要件によるものか CIG によるものかは未切り分けであり、切り分けは同課題の追加 probe に残っている。
+Store 入力の失敗が IME 署名要件と CIG のどちらによるものかは切り分けておらず、MVP の期間内に決着させる見込みが立たない。
+そのため入力対象から外して v1.0 以降のトラックへ送り、切り分けもそのトラックで行う。
 
-つまり Store 入力は、署名を調達しても解決しない可能性を抱えたままである。
-MVP の期間内に決着させる見込みが立たないため、入力対象から外して v1.0 以降のトラックへ送る。
-
-この決定により、DEV-673 の受け入れ条件からパッケージ化された UWP / Microsoft Store アプリでの入力成立を外す。
 TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（§1.7）は、将来の対応に備えた回帰防止として残す。
 
 ## 1. MSIX パッケージング（MS Store 向け・M28）
@@ -657,7 +646,7 @@ edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定�
 
 - `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
 - **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
-- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/zenzai-gpu-route.md` 参考節）。
+- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/decisions/2026-05-20-zenzai-engine-route.md`「参考: 先行 Windows 実装」）。
 
 ##### 再ホスト解禁の条件（恒久ルール）
 
@@ -921,24 +910,22 @@ DEV-673 では稼働中の削除・repair・同一版再インストールにつ
 | B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
 | C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 旧証明書のみ | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | reputation building（EV の即時信頼は 2024 年に廃止） | **新規取得では PFX 不可**（2023-06-01 の HSM 必須化）。2023-06-01 以前に発行され PFX を保持している証明書に限り成立する。PFX 漏えいリスク、CI でのキー回転が煩雑 |
 
-**判定（DEV-255 で確定）**: 署名主体は日本の個人開発者であり、経路 A（Azure Artifact
-Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
-不採用。新規 OV は HSM 必須化で PFX を入手できないため、CI 署名を保てる **経路 B（Azure Key
-Vault + AzureSignTool）/ B'（CA クラウド署名: SSL.com eSigner / DigiCert KeyLocker 等）** を
-採用する。ただし本署名はスタンドアロン MSIX サイドロードと Windows アプリ入力対応の 2 用途に
-限られ、§0 / §0.1 のとおりいずれも MVP の対象外である
-（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。
+**採用経路**: 経路 B（Azure Key Vault + AzureSignTool）、または B'（CA クラウド署名:
+SSL.com eSigner / DigiCert KeyLocker 等）とする。署名主体は日本の個人開発者であり、経路 A は
+地域制限で使えない（個人 = 米/加のみ）。EV（経路 C）は即時信頼が廃止され OV と同じ
+reputation building になったため、SmartScreen 対策として選ぶ理由が無い。新規 OV は HSM 必須化で
+PFX を入手できないため、CI 署名を保てる B / B' を採る。
 
-上記の経路判定（2026-06 時点）は調達ルートの比較として有効だが、費用対効果の前提は
-2026-08 に更新されている。EV 証明書の「即時信頼」は 2024 年に廃止され、EV も OV と同じ
-reputation building になった（[Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
-経路 C の EV を選ぶ理由は SmartScreen 対策としては残っていない。
-また §0.1 のとおり、署名を調達しても Code Integrity Guard により Store 入力が成立しない
-可能性がある。着手前にその切り分け（DEV-765）を済ませる。
+本署名の用途は、スタンドアロン MSIX サイドロードと、第三者 IME としての TIP バイナリ署名である。
+前者は §0 のとおり延期し、後者は §0.1 のとおり v1.0 のリリースゲートとして残る
+（MVP の MSI と MS Store の MSIX はいずれも自前署名を要しない）。
+§0.1 のとおり、署名を調達しても Code Integrity Guard により Store 入力が成立しない可能性がある。
+本節に着手する前に、その切り分けを済ませる。
 
-証明書調達・申請手順は所在地と組織化状況に依存する人間判断であり、再開時に
-`gate:human-required` 課題を新規に立てて扱う（従来の DEV-255 は Canceled、スコープ判断は
-[Linear DEV-783](https://linear.app/dolquis/issue/DEV-783) で確定済み）。
+証明書の調達と申請は所在地と組織化状況に依存する人間判断であり、再開時に
+`gate:human-required` 課題を新規に立てて扱う。
+経路判定の経緯と、費用対効果の前提の更新は
+[`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) にある。
 
 ### 2.1 signtool 引数
 
@@ -1130,65 +1117,39 @@ $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 
 ### 3.0 UI フレームワーク選定（採用: WinUI 3 / C++/WinRT）
 
-設定アプリの UI フレームワークは、**WinUI 3（Windows App SDK, C++/WinRT）を第一候補と
-して確定する**。対象は **v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、
-それを **post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
-（モデル管理 UI = M45、学習データ可視化 UI = M49）。同一フレームワークに揃えて後続の
+設定アプリの UI フレームワークは **WinUI 3（Windows App SDK, C++/WinRT）** とする。対象は
+**v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、それを
+**post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
+（モデル管理 UI = M45、学習データ可視化 UI = M49）である。同一フレームワークに揃えて後続の
 作り直しを避ける（v1.0 では M11 の最小機能セットのみを出荷し、M30 のフル UI / 横断機能は
-v1.0 に引き込まない）。根拠は次の 3 点:
+v1.0 に引き込まない）。
 
-1. **C++/WinRT 親和性** — TIP（`tsf-tip/`）・Inference Host（`inference-host/`）が
-   すでに C++ / C++/WinRT スタックであり、IPC クライアント（Named Pipe + 4-byte
-   length-prefix + JSON、§3.3）の型・実装・ビルド系を設定アプリと共有できる。別言語
-   ランタイム（.NET / Rust）を追加で持ち込まずに済む。
-2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
-   `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
-   アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
-3. **配布形態との整合** — MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
-   `azookey_settings.exe` を **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロード同梱できる。
-   MS Store 用 MSIX（§1）では packaged EXE として同梱する。いずれも WinUI 3 の unpackaged /
-   packaged 両対応（下記事実更新）で成立し、単一 UI スタックのまま両チャネルに載る。
+TIP と Inference Host と同じ C++/WinRT スタックで IPC クライアント（§3.3）を共有でき、
+Fluent Design（Mica / Acrylic、Light/Dark、PerMonitorV2 DPI）を追加実装なしで得られ、
+unpackaged / packaged の両配布に載る。WPF (.NET 9+) と Tauri との比較、および選定時に確かめた
+Microsoft Learn の事実は
+[`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) にある。
 
-> **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
-> - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
-> - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**。
->   ただしこれは**設定アプリ（WinUI 3）単体の下限**であり、配布パッケージ全体の最小 OS では
->   ない（下記）。
-> - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
->   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。本プロジェクトは §0 の
->   とおり **MVP を未署名 MSI（設定アプリは unpackaged / self-contained 同梱）**で配布し、
->   **MS Store 向けには packaged（MSIX）**を用いる。WinUI 3 は両形態に対応するため単一 UI スタックで両立する。
-> - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
->   §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
->   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
->   §1.1）。設定アプリの WinUI 3（1809+）はこのパッケージ下限に内包されるため、MSIX の
->   `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
+配布形態と OS 下限は次のとおりとする。
 
-#### フレームワーク比較
+- MVP の未署名 MSI（§0 / §4）では、`azookey_settings.exe` を unpackaged の
+  **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロードに同梱する。
+  MS Store 用 MSIX（§1）では packaged EXE として同梱する。
+- WinUI 3 がサポートする言語は C# と C++/WinRT である（C++/CX は使わない）。
+- WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**である。
+  これは設定アプリ単体の下限であり、配布パッケージ全体の最小 OS ではない。
+- **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
+  §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
+  （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
+  §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
 
-| 軸 | **WinUI 3 (C++/WinRT) ★採用** | WPF (.NET 9+) | Tauri (Rust + WebView2) |
-|---|---|---|---|
-| 言語 | C++/WinRT（既存スタックと同一） | C#（.NET ランタイム追加） | Rust + JS/TS |
-| Fluent / Mica | 標準（`SystemBackdrop`） | .NET 9 で Fluent テーマ標準化（Mica は DWM API 併用） | WebView2 任せ（CSS 自前実装） |
-| DPI / Dark | 標準（PerMonitorV2） | 対応（Fluent テーマ・`ThemeMode`） | WebView2 / 自前 |
-| 配布 | packaged / unpackaged 両対応 | unpackaged 可・MSIX 可 | 最小バイナリ・WebView2 ランタイム前提 |
-| C++ IPC 連携 | 同一言語で interop 不要 | C#↔C++ interop 層が必要 | Rust↔C++ FFI（または既存 Named Pipe を再利用） |
-| MS サポート | first-party | first-party | 非サポート（OSS） |
-| MSIX 整合 | ◎ | ○ | △（WebView2 依存） |
+再評価の条件は次のとおりとする。
 
-**代替案メモ**:
-- **WPF (.NET 9+)** — .NET 9 で Fluent テーマ（Light/Dark/アクセント、`ThemeMode`、
-  `PresentationFramework.Fluent`）が標準化され UI 体験差は縮小した（旧記述「Fluent /
-  Mica は非標準」は .NET 9 以降では不正確）。ただし設定アプリに .NET ランタイム依存が
-  増え、C++ IPC クライアントとの interop 層が必要になる。**v1.0 では非採用**。
-- **Tauri** — 配布サイズ最小だが Microsoft 非サポートで、C++/WinRT との境界が増える
-  （既存 Named Pipe IPC を再利用すれば緩和可能）。**v1.x の差別化リッチ UI（M30 拡張）で
-  WebView ベースへ切り替える余地を残す**が、v1.0 では非採用。
-
-**仮決定の確証（v1.0 着手前、`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の
-最小サンプル（チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
-(a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標を
-計測してこの選定を確証する（実測値は Linear 課題に記録し、本 spec には決定と設計のみ残す）。
+- **確証（`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の最小サンプル
+  （チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
+  (a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標で
+  この選定を確かめる。実測値は Linear 課題に記録する。
+- v1.x の差別化リッチ UI（M30 拡張）では、WebView ベース（Tauri）へ切り替える余地を残す。
 
 ### 3.1 構成
 

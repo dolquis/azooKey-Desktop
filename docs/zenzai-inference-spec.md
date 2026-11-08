@@ -711,7 +711,7 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 | 指標 | 目標 | 根拠 / 計測 |
 |---|---|---|
 | CPU fallback（SimpleConverter）p95 | < 50ms | 既存ゲート（`zenzai-gpu-route` §計測ゲート、roadmap §テスト） |
-| Zenzai CPU 1 変換 p50（読み ≤ 8 文字） | ≤ 150ms（small/Q5_K_M） | `copilot-pc-backend-spec` §4.2.1.1 の実測 |
+| Zenzai CPU 1 変換 p50（読み ≤ 8 文字） | ≤ 150ms（small/Q5_K_M） | `copilot-pc-backend-spec` §4.2.1.1 の再計測（`docs/decisions/2026-08-23-r1-cpu-baseline.md`） |
 | Zenzai CPU 1 変換 p95（読み ≤ 8 文字） | ≤ 300ms | 同上 |
 | Zenzai CPU 1 変換（読み > 8 文字） | 分位点目標を置かない | 読み長に対する所要時間の増加率を裏付ける入力別計測が無いため |
 
@@ -726,7 +726,7 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
   打ち切りが発生した計測は分位点評価に用いず、打ち切り率を §8.2 の評価として記録
   する。したがって計測系は 1 変換ごとの打ち切り発生を観測できなければならない。
 - **混在集合の扱い**: 読み長の異なる入力を混ぜた集合の中央値（例
-  `copilot-pc-backend-spec` §4.2.1.1 の 20 入力中央値）は参考値であり、本表の
+  `docs/decisions/2026-08-23-r1-cpu-baseline.md` の 20 入力中央値）は参考値であり、本表の
   評価には用いない。分位点目標は読み長の帯ごとに適用する。
 
 #### 8.1.1 CPU スレッド数
@@ -891,7 +891,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   別途評価する。
 - llama.cpp の `llama_model` / `llama_context` ハンドルは M8-1（DEV-220）が保持。
   本 converter はそれを**非所有参照**で受け取り、推論ごとに `llama_decode` を回す。
-- C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
+- C 文字列の所有権・解放規約に注意（`docs/decisions/2026-05-20-zenzai-engine-route.md` の先行実装
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
 - llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と

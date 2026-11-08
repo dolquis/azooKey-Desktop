@@ -216,7 +216,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **決定記録（2026-05-20）**:
   - llama.cpp バインディング選定: 初期実装は llama.cpp C API + CPU backend から
     開始し、CUDA は optional backend として追加する。DirectML / NPU は M24 まで
-    予約値扱い。判断理由と計測ゲートは `docs/zenzai-gpu-route.md`。
+    予約値扱い。判断理由は `docs/decisions/2026-05-20-zenzai-engine-route.md`、計測ゲートは `docs/zenzai-gpu-route.md`。
   - `LoadModel` 境界: `LoadModelRequest(path, backend, n_gpu_layers)` を
     `InferenceEngine::LoadModel` に渡し、`model_loaded` / `last_error` を
     `Handshake` / `Health` で観測できる状態とする。

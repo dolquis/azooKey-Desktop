@@ -213,24 +213,14 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
   不可（§4.2.2）、Llama 構造の `kanakanji-edge-33m` では可（§4.2.3）と判定した。出典:
   [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
   [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
-- `gate:human-required` の DEV-194 の検証範囲のうち、R1 CPU の実機計測は完了した。
-  Snapdragon X Elite / Intel Core Ultra の NPU / GPU EP の計測は、§4.3 項 2 の再開条件を
+- Snapdragon X Elite / Intel Core Ultra の NPU / GPU EP の計測は、§4.3 項 2 の再開条件を
   満たした R2 artifact で、同じ入力セットを使って Human Gate（DEV-1720）が行う。
 
 #### 4.2.1 R1 CPU 実モデル baseline
 
-DEV-194 では、次の固定条件で R1 CPU を計測した。
-
-- リポジトリ: commit `6abce8d2595a05c4358dacf459b691b3cc946d04`
-- OS / CPU: Windows build 26200.9168 / Intel Core i7-12700KF / x64 / NPU なし
-- build: `windows-release`、`llama_cpp=1`、`requested_backend=cpu`、
-  `effective_backend=cpu`
-- model: `Miwa-Keita/zenz-v3.2-small-gguf` の `ggml-model-Q5_K_M.gguf`、
-  73,871,936 bytes（70.45MiB）、SHA-256
-  `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`
-- 各入力を別プロセスで実行し、warm-up 3 回、計測 20 回とした。
-
-入力セットは次の 20 件である。
+R1 CPU の baseline は、`windows-release`（`llama_cpp=1`、`requested_backend=cpu`）と
+`Miwa-Keita/zenz-v3.2-small-gguf` の `ggml-model-Q5_K_M.gguf` で、各入力を別プロセスで
+実行して計測する。入力セットは次の 20 件である。
 
 ```text
 こんにちは / にほんご / きょうはいいてんきです / わたしはがくせいです
@@ -241,97 +231,50 @@ DEV-194 では、次の固定条件で R1 CPU を計測した。
 せっていをひらく / ぱそこんをさいきどうする
 ```
 
-| 指標 | 結果 |
-|---|---|
-| 初回 `LoadModel` | 中央値 22.80ms |
-| 入力別 p50 | 中央値 501.38ms、範囲 196.02–810.19ms |
-| p50 < 30ms | 0 / 20 入力 |
-| `にほんご` 50 回 | p50 197.03ms / p95 210.73ms / p99 215.37ms |
-| peak RSS | 122.52MiB（`にほんご`、warm-up 3 回 + 計測 50 回の代表値） |
-| 実推論 | 20 / 20 入力で exit 0、`zenzai_candidates=4` |
+baseline の計測では、R1 CPU は初回 `LoadModel` の 3 秒ゲートを満たし、推論 p50 の 30ms ゲートと、モデル単体が
+50MB を超えるため配布サイズの 50MB ゲートを満たさない。いずれも §4.2 の相対ゲートに対する
+値であり、R1 CPU の出荷可否を示すものではなく、R2 の性能を推定する根拠にもしない。
+R1 CPU の絶対予算に対する評価は `zenzai-inference-spec` §8 による。
 
-この計測時点では、ロード時間は 3 秒ゲートを満たし、推論 p50 は 20 入力すべてで
-30ms を上回った。また、モデル単体が 50MB を超えるため、R1 の配布サイズは 50MB
-ゲートを満たさない。いずれも §4.2 の通り相対ゲートに対する値であり、R1 CPU の
-出荷可否を示すものではない。この結果は R1 CPU baseline であり、R2 の性能を
-推定する根拠にはしない。R1 CPU の絶対予算に対する評価は
-`zenzai-inference-spec` §8 による。
-
-なお本節の値は計測時点（commit `6abce8d2`）の記録であり、その後の最適化を
-反映しない。以降の実測は §4.2.1.1 に追記する。
+計測の固定条件、結果の表、計測時点の commit は
+[`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) にある。
+以降の再計測は、同じ入力セットと計測プロトコルで行い、結果は decisions に新しい記録として足す。
 
 ##### 4.2.1.1 prompt KV 再利用後の再計測
 
-DEV-853 の prompt KV cache 再利用（PR #295）後に、§4.2.1 と同じ入力セット・
-同じ計測プロトコル（別プロセス実行、warm-up 3 回）で再計測した。build 構成と
-model は §4.2.1 と同一である。計測環境（OS build / CPU）は DEV-853 の報告に
-従い、本節では §4.2.1 との同一性を主張しない。
-
-| 計測 | commit | 条件 | 結果 |
-|---|---|---|---|
-| `にほんご` 単体 | `36740c54` | 計測 50 回 | p50 79.11ms / p95 92.68ms / p99 106.87ms |
-| decode phase 内訳 | `36740c54` | 同上 | prompt p50 10.22ms（samples 50）/ beam p50 66.84ms（samples 50、evaluations 850） |
-| 20 入力 | `e594a420` | 各 計測 20 回 | 入力別 p50 中央値 209.24ms、範囲 97.92–436.01ms |
-
-- `36740c54` は PR #295 のマージ対象 head（merge commit `9198f427`）である。
-- 20 入力の系列は `e594a420`（PR head 初版）でのみ取得しており、レビュー反映後の
-  `36740c54` では再取得していない。両者の差分はレビュー指摘対応であり、
-  同一 commit 同士の比較ではない点に注意する。
-- 20 入力セットは読み ≤ 8 文字と 8 文字超が混在する。混在集合の中央値は
-  `zenzai-inference-spec` §8 の読み長別予算に直接対応しない（§8 参照）。
+prompt KV cache 再利用後の再計測の条件と結果も
+[`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) にある。
+20 入力セットは読み ≤ 8 文字と 8 文字超が混在するため、混在集合の中央値は
+`zenzai-inference-spec` §8 の読み長別予算に直接対応しない（§8 参照）。
 
 #### 4.2.2 zenz-v3 の R2 変換可否
 
-2026-08-23 時点の ONNX Runtime GenAI model builder を、配布対象の
-`Miwa-Keita/zenz-v3.2-small-gguf` に適用する経路はない。
+ONNX Runtime GenAI model builder では、配布対象の `Miwa-Keita/zenz-v3.2-small-gguf` を
+ONNX Runtime GenAI 形式へ変換できない。配布モデルは GPT-2 architecture の Q5_K_M GGUF であり、
+model builder は GPT-2 を対応 architecture に持たず、入力に受け付ける GGUF も float16 / float32 に
+限られる。zenz-v3.1-small / xsmall の safetensors（fp32）も GPT-2 構造なので同じ制約を受ける。
 
-1. 配布モデルは GPT-2 architecture の Q5_K_M GGUF であり、公開リポジトリにあるモデル
-   本体は 73.9MB の当該ファイルだけである。
-2. model builder の対応 architecture 一覧に GPT-2 はなく、`builder.py` に
-   `GPT2LMHeadModel` の分岐もない。
-   通常の変換要求は未対応モデルとして `NotImplementedError` になる。
-3. model builder が入力として受け付ける GGUF は float16 / float32 に限られるため、
-   Q5_K_M を変換元にはできない。
-4. ONNX Runtime GenAI runtime 自体は `gpt2` model type を認識する。
-   これは適合する ONNX graph と `genai_config.json` を実行できるという意味であり、
-   model builder が zenz-v3 を出力できることは意味しない。
+GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き `genai_config.json` を
+検証する作業は、新しい推論 backend の実装に当たる。zenz-v3 の変換済み artifact が無いため、
+zenz-v3 での R2 の精度劣化、RSS、実効配布サイズ、NPU レイテンシは計測できない。
+R2 の再開条件は §4.3 項 2 が持つ。
 
-したがって、現行 model builder をそのまま使う手動変換は不可と判定する。
-GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き
-`genai_config.json` を検証する作業は、新しい推論 backend の実装に当たるため本スパイクの
-範囲外とする。
-zenz-v3 の変換済み artifact がないため、zenz-v3 での R2 の精度劣化、RSS、実効配布サイズ、
-QNN / OpenVINO NPU レイテンシは計測できない。zenz-v3.1-small / xsmall には safetensors
-（fp32）があるが、GPT-2 構造なので同じ制約を受ける。v3.2 は GGUF だけが公開されている。
+判定の根拠と、確認した builder と model の revision は
+[`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) にある。
 
-根拠:
-
-- [ONNX Runtime GenAI Model Builder: Current Support / GGUF Model](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/README.md)
-- [model builder の architecture 分岐](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/builder.py)
-- [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/models/model_type.h)
-- [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/c67e03e07d215c869f591b274c1631170d3e11fe)
-
-#### 4.2.3 Llama 系互換モデルの R2 変換（DEV-1718）
+#### 4.2.3 Llama 系互換モデルの R2 変換
 
 model builder の対応 architecture には Llama と LFM2 MoE が含まれ、GPT-2 と Qwen3-Next は
-含まれない（onnxruntime-genai `6b7ff3ca` の builder）。zenz-v3 のプロンプト形式で学習された
-Llama 構造のかな漢字変換モデル `yuuki14202028/kanakanji-edge-33m`（33.5M パラメータ、
-safetensors fp32）は、この builder で ONNX Runtime GenAI 形式へ変換できる。モデルそのものの
-評価と、zenz-v3 とのプロンプト差の扱いは `docs/zenzai-inference-spec.md` §2.4 が正典である。
+含まれない。zenz-v3 のプロンプト形式で学習された Llama 構造のかな漢字変換モデル
+`yuuki14202028/kanakanji-edge-33m`（33.5M パラメータ、safetensors fp32）は、この builder で
+ONNX Runtime GenAI 形式へ変換できる。モデルそのものの評価と、zenz-v3 とのプロンプト差の扱いは
+`docs/zenzai-inference-spec.md` §2.4 が正典である。
 
-2026-10-25 の sandbox 調査（Linux、CPU 4 コア）で、`onnxruntime-genai` 0.18.0 の builder を
-使い、CPU EP で AJIMEE-Bench 200 件を貪欲デコードした結果は次のとおりである。製品の
-beam / n-best と読み制約は使っていない。
+CPU EP で形式ごとに精度を比べた測定の条件と結果は
+[`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) にある。
+int8 は fp32 から精度が落ちず、builder 既定の int4 は崩れ、fp16 は CPU EP で実行できなかった。
 
-| 形式 | サイズ | Acc@1 | 備考 |
-|---|---|---|---|
-| fp32 | 129MB | 0.805 | llama.cpp f16 と 200 / 200 件で同じ出力 |
-| int8 | 49MB | 0.805 | fp32 から劣化なし |
-| int4（builder 既定） | — | 0.235 | 崩れる |
-| int4（LM head 除外、shared embeddings 無効、block 32） | — | 0.755 | 原因は切り分けていない |
-| fp16 | — | — | CPU EP では実行時エラー（GPU EP 向けの形式） |
-
-この結果から、R2 で使う形式は次のとおりとする。
+この測定から、R2 で使う形式は次のとおりとする。
 
 - CPU EP と GPU EP の第一候補は int8 とする。int4 は崩れの原因を切り分けるまで使わない。
   fp16 は GPU EP の候補として Human Gate の計測項目に残す。

@@ -439,7 +439,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 | kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。既定の catalog（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m` で取得できる。取得後は `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
-| ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
+| ggml-cuda（R1 CUDA, NVIDIA） | **base に含めない**。採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典で、同項の再検討の条件を満たして配る場合に限り optional add-on / 別パッケージとし、cudart/cublas を同梱する | CUDA ランタイムが大きく NVIDIA 環境限定。配る場合の再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
 | ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。Vulkan loader / ドライバーは同梱しない。構成と起動する Host の決定は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
 | R2 の ONNX 変換モデル（R1 と同じモデル。対象は `kanakanji-edge-33m`） | **R2 の再開前は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL。R2 を使えない機器では取得しない） | zenz-v3（GPT-2）は builder で変換できない。Llama 構造の edge は変換できる（`docs/copilot-pc-backend-spec.md` §4.2.2・§4.2.3） |
 
@@ -511,7 +511,8 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 | 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
-（モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。結論は §1.6.2 参照。
+（モデルではなくランタイム。§1.6 の ggml-cuda 行で扱う）。採否の正典は
+`docs/copilot-pc-backend-spec.md` §4.3 項 7、配る場合の再配布条件は §1.6.2 参照。
 
 ##### 配置パスとバージョニング
 
@@ -536,8 +537,8 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       **`model.enabled` かつ `model.autoLoadOnHostStart=true`
       （`model-management-spec.md` §7）かつ `privacy.mode` がネットワーク禁止
       （`offline`。M46 / `privacy-and-secure-input-spec.md`）でない**こと。
-      いずれか不成立なら DL せず手動配置に委ねる（offline でも (c1) ローカル
-      autoselect / (c2) 明示選択は network なしで成立）。ガードを満たす場合、
+      いずれか不成立なら DL せず手動配置に委ねる（offline でも (c2) 明示選択は
+      network なしで成立）。ガードを満たす場合、
       ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
       `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
       起動時に利用者の操作なしでネットワークへ出る挙動の変更なので、(b) を Host に
@@ -550,8 +551,11 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       成功したら確定パスを「一般」のモデルのパス欄へ入れる。commit は (c2) と同じく共通の
       保存ボタンが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
       行う。取得しただけでは `selectedPath` を変えない。
-    - **(c) 手動配置**: 2 経路を持つ。
-        - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
+    - **(c) 手動配置**: 次の 2 経路を定める。
+        - **(c1) Host 起動時の default-path autoselect（ピン依存。将来の判断）**:
+          上記のとおり Host は起動時に既定ディレクトリを自動スキャンしないので、(c1) は
+          採っていない。(b) と同じく利用者の操作なしに起動時の挙動を変えるため、入れるかは
+          将来の判断とし、入れる場合は次の条件を適用する。
           **`model.enabled` かつ `model.autoLoadOnHostStart=true`
           （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の
           場合に限り、`models\zenzai\` の中から **SHA256 が既定の catalog の
@@ -571,8 +575,8 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
           `model.selectedPath` を直接設定する経路（`settings.json` 手編集、または
           設定 UI / M45 の「モデルを追加」「選択モデルをロード」）。設定された
           実在パスを probe-load して使う。**ピンと一致しないファイルでも成立
-          する唯一の手動経路**であり、autoselect が無効な状況（ピン一致ファイルが無い等）の
-          受け皿になる。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
+          する唯一の手動経路**であり、(c1) を採らない間は手動配置したファイルを使う唯一の
+          経路である。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
           `selectedPath` を明示設定する（空のままでは degraded）。
 - **期待版のピン**: 対象の Hugging Face repo / revision / ファイル名 / サイズ / SHA256 は、
   既定の catalog（`settings/default-model-catalog.json`）の `defaultModelId` の entry の
@@ -599,8 +603,8 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 
 ##### M45（フル管理 UI）への橋渡し
 
-`docs/model-management-spec.md` §2 はモデル DL を M45 の非目標（将来 M へ分離）と
-する。本 v1.0 最小取得経路がその「将来 M」の最小サブセットであり、次の責務分担で
+`docs/model-management-spec.md` §2 は任意の URL から取得する汎用ダウンロード機能を M45 の
+非目標とする。本 v1.0 最小取得経路は既定の catalog の entry に限った取得であり、次の責務分担で
 二重実装を避ける:
 
 - **v1.0（本節）が敷く土台**: 配置レイアウト（`models\zenzai\`）・取得機構
@@ -652,9 +656,10 @@ edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定�
 | **扱い（確定）** | 重みは Apache-2.0 として扱う。語彙と学習データには CC-BY-SA-4.0 の帰属表記を置く（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About）。帰属表記に載せるのは、モデル名、著者 `yuuki14202028`、出所 URL（`https://huggingface.co/yuuki14202028/kanakanji-edge-33m`）、ライセンスと URL（Apache-2.0 `https://www.apache.org/licenses/LICENSE-2.0`、CC-BY-SA-4.0 `https://creativecommons.org/licenses/by-sa/4.0/`）、語彙の帰属先 ku-nlp（`https://huggingface.co/ku-nlp/gpt2-small-japanese-char`）、改変の有無である。改変の有無は「上流の GGUF をそのまま使い、こちらでは改変しない。語彙の制御トークン 6000〜6002 は上流が追加したもの」と書く |
 | 配信 | 再ホストせず、上流 HuggingFace の固定した revision から取得する |
 
-##### CUDA ランタイム（optional add-on として同梱・再配布する）
+##### CUDA ランタイム（add-on として配る場合の再配布条件）
 
-- `ggml-cuda`（R1 CUDA, NVIDIA）は §1.6 のとおり base 非同梱の optional add-on。**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
+- CUDA の扱いは `docs/copilot-pc-backend-spec.md` §4.3 項 7 を正典とする。R1 CUDA（ggml-cuda の実リンク）は同項の再検討の条件を満たすまで行わないので、CUDA の add-on は配らない。本節は、再検討の結果 add-on を配る場合の再配布条件を定める。
+- `ggml-cuda`（R1 CUDA, NVIDIA）を配る場合は §1.6 のとおり base 非同梱の optional add-on とし、**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
 - 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
 - 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
 - **配置制約（app-only）**: 再配布する DLL は**アプリ専用（private）ディレクトリに配置し、本アプリからのみアクセスされる**ようにする。CUDA Toolkit EULA は redistributable な SDK 部分を「アプリからのみアクセスされる」ことを条件とするため（§2.6 が cudart/cublas を redistributable と定める一方、§1.1.2 がアクセス主体をアプリに限定）、共有 `PATH` / システムディレクトリ（`System32` 等）へ設置して他アプリから参照可能にしない。DLL 探索は app-local ディレクトリに限定する（例: add-on の配置フォルダを `SetDllDirectory` / manifest で明示し、グローバル `PATH` へ注入しない）。
@@ -1347,7 +1352,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   **固定形オブジェクト**（root、および `model` / `autoUpdate` のように既知フィールド集合を持つもの）は
   `additionalProperties: false` を維持し、未知キーを拒否する。一方、**マップ形オブジェクト**は値の型を
   制約した `additionalProperties`（`false` ではない）で任意キーを許容する設計であり、本規則の対象外とする
-  （例: `promptPrefixByApp` = `additionalProperties: {type: string}`、予定済みの `profilesByApp` および
+  （例: `promptPrefixByApp` = `additionalProperties: {type: string}`、`profilesByApp` および
   プロファイル内 `candidateTagBoosts` も同様のマップ）。
 - **永続インスタンス**: `%LOCALAPPDATA%\azooKey\config\settings.json`（§3.4）。設定アプリが
   書き込み（`liveConversion` / `predictionEnabled` の 1 キーずつは入力インジケーターのメニューから TIP も書く）、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
@@ -1400,6 +1405,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | 詳細 | — | 即時 | `windows-tsf-host-architecture.md` |
 | `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 入力 | M61 | 即時 | `bracket-pairing-spec.md` |
 | `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 入力 | M60 | 即時 | `inline-english-candidate-spec.md` |
+| `mixedEnglishAutoConversion` | bool | `false` | 入力 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
 | `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 入力 | M62 | 即時 | `candidate-rewriter-spec.md` |
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
@@ -1472,7 +1478,7 @@ schema 自体は superset のまま変えない。
 > （`plans/windows-port-roadmap.md` M11「Zenzai ON/OFF・辞書管理・デバイス選択」）を**既存の正典
 > キーへ写像**して実現する: Zenzai ON/OFF → `model.enabled`、デバイス選択 → `model.backendPreference`
 > （v1.0 は enum を縮小）、モデル選択 → `model.selectedPath`。ユーザー辞書は設定 `settings.json` の
-> キーではなく `%LOCALAPPDATA%\azooKey\data\user_dict.json`（§3.4）の内容であり、v1.0 はキーではなく
+> キーではなく `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（§3.4）の内容であり、v1.0 はキーではなく
 > 「編集」アクション（下記ボタン）で扱う。
 
 #### v1.0（M11）で UI 化するキー（最小サブセット）
@@ -1560,7 +1566,7 @@ schema 自体は superset のまま変えない。
   「読み」「語」の 2 欄と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
   削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
-  既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json` を直接開かず、Host への IPC を
+  既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
   経由する（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。開発者向けの
   CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
@@ -1590,7 +1596,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `privacy.*` | — | M30（プライバシーペイン。`crashReportConsent` はバージョンペイン） |
 | `safeMode.*` | — | M30（一般ペインで解除だけを操作する） |
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §B9） |
-| ユーザー辞書の内容（設定キーではない。`user_dict.json`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
+| ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
 > 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。
@@ -1950,7 +1956,7 @@ wingetcreate update --urls `
 
 ### 6.1 チェック経路
 
-`inference-host/src/UpdateChecker.cpp`（新規）：
+`inference-host/src/UpdateChecker.cpp`（M32 で新設する予定のファイル。下記は設計案）：
 
 ```cpp
 class UpdateChecker {
@@ -2298,15 +2304,15 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX install/update/rollback/uninstall | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。旧版 install → CLSID / TSF プロファイル登録の存在確認 → 新版 update → deployment 中に失敗する update 後の直前バージョン保持 → uninstall → 残骸 0 を半自動検証（DEV-101 / DEV-586 / M28） |
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
-| 署名検証 | `pkg/tests/signature_test.ps1` | signtool /verify で成功するか |
-| UpdateChecker | `inference-host/tests/update_checker_test.cpp` | GitHub API モック、バージョン比較 |
+| 署名検証 | `pkg/tests/signature_test.ps1`（新設予定。M29 の署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
+| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（新設予定。M32 の `UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |
 
 ## 11. リリース手順チェックリスト
 
-1. `CHANGELOG.md` を更新
+1. 変更点をまとめる（repo は `CHANGELOG.md` を持たない。`release.yml` は Release の本文を生成しないので、手順 5 の Draft Release の本文にリリースノートを書く）
 2. バージョンタグを打つ (`git tag v1.0.0`)
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
@@ -2322,7 +2328,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 - signtool: <https://learn.microsoft.com/windows/win32/seccrypto/signtool>
 - DPAPI: <https://learn.microsoft.com/windows/win32/api/dpapi/>
 - ETW: <https://learn.microsoft.com/windows/win32/etw/>
-- WiX v4: <https://wixtoolset.org/docs/intro/>
+- WiX Toolset: <https://wixtoolset.org/docs/intro/>（版は `pkg/msi/azooKey.wixproj` の `WixToolset.Sdk` が定める）
 - WinGet manifest: <https://github.com/microsoft/winget-cli/blob/master/doc/ManifestSpecv1.5.md>
 - 既存：`scripts/register-dev.ps1` / `scripts/unregister-dev.ps1`（`regsvr32` 開発用経路）
 - ベース：`docs/windows-tsf-host-architecture.md`

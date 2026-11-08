@@ -68,7 +68,7 @@ NPU は省電力なので最優先のまま。GPU はバッテリを激しく消
 > **注**: 下のスケッチは初期案である。R1 の `auto` 解決の実装と interface は §4.4
 > 「`auto` の解決（BackendSelector）」が正典。
 
-`inference-host/src/BackendSelector.h` / `.cpp`（新規）：
+`inference-host/include/azookey/host/BackendSelector.h` / `inference-host/src/BackendSelector.cpp`：
 
 ```cpp
 class BackendSelector {

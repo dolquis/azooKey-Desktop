@@ -14,10 +14,11 @@
 - `legacy/Core/Sources/Core/MagicConversion/{AIBackend,OpenAIClient}.swift`（参照のみ）
 作成日: 2026-06-24
 位置づけ: Phase 5（M16）正典仕様。`AiBackend` は M16 単独でなく M58-C / X-3-3 が
-  同一経路を流用する**共有コンポーネント**であり、実装着手前に本書で契約を確定する。
+  同一経路を流用する**共有コンポーネント**であり、その契約を本書が定める。
 
-> 本書は `inference-host/src/AiBackend.cpp`（新規・未実装）の契約を、実装着手前に
-> 確定するための正典仕様である。実装と差異が出た場合は本書を先に更新する。
+> 本書は `inference-host/include/azookey/host/AiBackend.h` と
+> `inference-host/src/AiBackend.cpp` の契約を定める正典仕様である。実装と差異が出た場合は
+> 本書を先に更新する。
 > 進捗・状態の正典は Linear（M16 tracking 課題 DEV-938。本書の契約確定は DEV-346）
 > であり、本書は状態を持たない。
 
@@ -88,6 +89,10 @@
 へ寄せる既定とする（§3.3）。`rich-features-spec.md` §X-3-3 が「Zenzai に渡す」と記すのと
 本書の「同じ `AiBackend` 経路を流用」（roadmap M16 横断）は、この既定で整合する。
 
+このほか X-3-6 バッチ訂正ビューの `DetectAnomalies`（設定アプリ → Host）も、Host が
+`AiTransformRequest`（`task=Anomalies`）へ正規化して同じ `AiBackend` を呼ぶ。payload と
+送信条件の正典は `rich-features-spec.md` X-3-6 である。
+
 ### 3.2 Host 側 `AiBackend` の概念モデル
 
 3 消費者の IPC ハンドラ（`Dispatcher`）は payload を `AiTransformRequest` に
@@ -101,6 +106,7 @@ enum class AiTask {
   Transform,    // M16: 選択テキストの言い換え/翻訳/要約/自由変換
   Cleanup,      // M58-C: 全文整文（誤字補正・句読点・整文）
   Lint,         // X-3-3: 確定テキストの誤変換検出（複数 finding を返す）
+  Anomalies,    // X-3-6: 貼り付けた文章の誤りの疑いの検出（§3.1 末尾）
 };
 
 enum class AiBackendKind { None, OpenAi, LocalZenzai };
@@ -177,6 +183,12 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 ビルダ/パーサは `Build*Request/Response` / `Parse*Request/Response` 命名で
 `ipc/src/Payloads.cpp` に追加する。各メッセージ名を `MessageType` enum と
 `TypeToString` / `TypeFromString` に追加する。
+
+`ipc` の `MessageType` に定義があり Host で `AiBackend` を呼ぶのは、`QueryBatchConversion`
+（§4.2、`task=Cleanup`）と `DetectAnomalies`（§3.1 末尾、`task=Anomalies`）である。
+§4.1 の `TransformSelectedText` と §4.3 の `RequestPostCommitLint` は、M16 / X-3-3 で
+`MessageType` に追加するメッセージの定義であり、`task=Transform` / `task=Lint` の IPC 上の
+入口はこの 2 メッセージが担う。
 
 ### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張・確定）
 
@@ -297,9 +309,10 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 
 次の関心を共通ヘルパとして切り出し、M16（API 呼び出し）と M32（モデル DL）が
 共有する。
-M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16 の POST 経路を
-追加するときは別の WinHTTP スタックを作らず、同じセッション初期化とポリシーを
-共通部へ抽出する。
+共通部は `inference-host/include/azookey/host/HttpSession.h`（`OpenHttpSession`）であり、
+モデル DL の GET 経路（`inference-host/src/HttpDownloader.cpp`）と AI の POST 経路
+（`inference-host/src/AiHttp.cpp`）が同じセッション初期化とプロキシ・TLS の方針を使う。
+用途ごとに別の WinHTTP スタックを作らない。
 
 - WinHTTP セッション初期化（`WinHttpOpen`、User-Agent、HTTP/2 可否）。
 - **プロキシ解決**（システムプロキシ / WPAD / 明示設定の尊重）。
@@ -320,8 +333,8 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
   `.part` のレジュームでは `206` の `Content-Range` 始点を検証し、Range を無視した
   `200` は全量取得として `.part` を切り詰める。
   HTTP 失敗または SHA256 不一致では既存の確定ファイルを置換しない。
-- M16 実装時に §6.1 の基盤を最小で導入し、M32 は同じ基盤上に GET + SHA256 経路を
-  追加する（重複スタックを作らない）。
+- AI の POST 経路と M32 の GET + SHA256 経路は、いずれも §6.1 の共通基盤の上に載せる
+  （重複スタックを作らない）。
 - M32 を Phase 5 へ前倒ししない（Phase 5 を自己完結に保つ）。roadmap の M16 / M32 /
   M34 依存関係に本契約を反映する（§13）。
 
@@ -455,11 +468,12 @@ M48 のモード通知 API を前提としない。
 - 設定キー `openAiApiKey`（`settings/mvp-settings.schema.json`）に保存する。
 - **`dpapi:` prefix 規約**: 値が `dpapi:` で始まる場合、続く Base64 を DPAPI
   （`CryptUnprotectData`、ユーザースコープ）で復号して実キーとする。prefix が無ければ
-  **平文**とみなす。M34 以降は設定アプリがキー入力時に DPAPI で暗号化し `dpapi:` 付きで
+  **平文**とみなす。設定アプリはキー入力時に DPAPI で暗号化し `dpapi:` 付きで
   保存する（`roadmap` M34 / `sideload-packaging-spec.md` §9）。
-- **暫定（M34 前）**: M16 着手時点では平文保存を許容する。README で平文保存を注意喚起
-  する（roadmap M34）。`AiBackend` は読み取り時に prefix を見て平文/復号を分岐するため、
-  M34 投入後も設定値の移行のみで `AiBackend` の変更を要しない。
+- **平文値の受理**: Host は `inference-host/src/AiHttp.cpp` で
+  `learning/include/azookey/learning/DpapiCrypto.h` の `UnprotectSecret` を通し、`dpapi:` 付きの
+  値と平文の値の両方を受け付ける。README は平文も受け付ける旨を注意喚起する。`dpapi:` 付きの
+  値を復号できないときは `KeyReentry` に分類する（§7.2）。
 - キーをログ・エラーメッセージ・クラッシュダンプに出さない
   （redaction ポリシーの正典は `docs/dev-infrastructure-spec.md` §7.6）。
 - 設定アプリでは鍵を伏字で読み込み、変更時はユーザースコープ DPAPI で保護してから
@@ -532,8 +546,8 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
   再試行対象（429/5xx/一時 Network）のみバックオフ再試行される（モック HTTP で検証）。
 - **fallback**: `aiBackend=none` で M58-C が `neural` へ、X-3-3 が Lint 不実行へ落ちる。
 - **キー保存**: `dpapi:` prefix の有無で復号/平文を分岐し、平文でも動作する（§9）。
-- **HTTP 基盤共有**: M16 の POST 経路が §6.1 の WinHTTP 基盤を使う（M32 が後から同
-  基盤に GET+SHA256 を載せられる構造であることをレビューで確認）。
+- **HTTP 基盤共有**: AI の POST 経路が §6.1 の WinHTTP 基盤を使う（M32 の GET+SHA256 と
+  同じ基盤を共有する構造であることをレビューで確認）。
 
 > 既知のテストギャップ・実機検証（OpenAI 実 API への結合テスト、secure 実機確認）は
 > Linear に課題として起票し追跡する（roadmap には状態を書かない）。
@@ -544,12 +558,12 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
 
 本契約に伴う `plans/windows-port-roadmap.md` の依存関係明確化:
 
-- **M16 ↔ M32**: M16 は §6.1 の共通 WinHTTP 基盤を最小導入し、M32 はその基盤上に
-  GET + SHA256 ダウンロードを実装する。**M32 を Phase 5 へ前倒ししない**。M16 は
+- **M16 ↔ M32**: M16 の POST 経路と M32 の GET + SHA256 ダウンロードは §6.1 の共通
+  WinHTTP 基盤（`HttpSession.h`）を共有する。**M32 を Phase 5 へ前倒ししない**。M16 は
   M32 に依存しない（基盤の共有点のみ契約で固定）。
 - **M16 ↔ M34**: API キーは §9 の `dpapi:` prefix 規約で保存し、M34（DPAPI）を
-  Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite にしない（暫定平文 +
-  README 注意喚起）。
+  Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite にしない（Host は平文の
+  値も受理し、README で注意喚起する。§9）。
 - **M16 ↔ M46**: secure ガードは §8 で `AiBackend` 入口に強制。M46 同時期/先行が
   望ましい（roadmap M16 既述）。プライバシー判定 不在時は外部 AI を有効化しない安全側に
   倒す（実装上の暫定は M16 PR でレビュー）。

@@ -451,8 +451,8 @@ macOS 版は本計画の対象外（「スコープ外」参照）。
 |---|---|---|---|
 | Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する |
 | Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2 の受け入れ条件（`ITfKeyEventSink::OnKeyDown` 到達）を前提とする |
-| Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み（3〜5 週） | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md`（GGUF 配置と `-ModelPath` 登録）、`docs/debugging.md`（ビルド・手動確認・ユーザー辞書 CLI）、`docs/zenzai-gpu-route.md`（Zenzai ベンチと計測ゲート） |
-| Phase 4 | 配布可能化 — MVP（評価配布）のゲート（4〜6 週） | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が評価配布として自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
+| Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md`（GGUF 配置と `-ModelPath` 登録）、`docs/debugging.md`（ビルド・手動確認・ユーザー辞書 CLI）、`docs/zenzai-gpu-route.md`（Zenzai ベンチと計測ゲート） |
+| Phase 4 | 配布可能化 — MVP（評価配布）のゲート | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が評価配布として自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
 
 ## Phase 5〜7 の依存関係と実行順
 
@@ -476,12 +476,12 @@ M8 完了 ─→ M24 ─┬─→ M25
 
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
-Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
+Phase 5 完了 ─→ M34（Phase 6 と並行可）
 Phase 4（M11/M12 = MVP 未署名 MSI 構築・公開）─→ M32（自動更新 + 初回モデル取得）
 Phase 4 ＋ M29（TIP バイナリ署名）─→ v1.0 正式リリース ─→ M32 の WinGet 公開
 Phase 6 完了 ─→ M28（Store MSIX。並行準備。MVP 直接配布の前提ではない）
 Phase 6 完了 ─→ M33
-（M29 = 自前コード署名。TIP バイナリ署名は v1.0 のリリースゲート（spec §0.1）。スタンドアロン MSIX 署名部分は延期し、M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0）
+（M29 = 自前コード署名。TIP バイナリ署名は v1.0 のリリースゲート（spec §0.1）。スタンドアロン MSIX 署名の扱いは M29 節）
 （M31 = 廃止。LTSC を含む配布は spec §4 の MSI 経路で扱う）
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
@@ -522,50 +522,37 @@ M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 
 ### 推奨実行順（依存関係に基づく最適化）
 
-M 番号は通し連番だが、依存上は以下の前倒し・並行化が可能。spec から参照される
+M 番号は通し連番だが、各 M の「前提」から決まる順序では以下を並行できる。spec から参照される
 ため M 番号・Phase グルーピングは変更しない。
 
-- **推論バックエンド トラック（M24 / M25 / M27）を Phase 5 と並行** —
-  M24 の前提は「M8 完了」のみで、Phase 5（レガシー parity）に依存しない。
-  TIP 側 parity 作業と独立した「推論バックエンド トラック」として、M8 完了後
-  すぐ Phase 5 と並行で着手できる。Phase 6 への配置は主題分類であり、Phase 5
-  完了を待つ必要はない。
-- **M30（WinUI 3 設定アプリ）を Phase 6 と並行** — M30 の前提は「Phase 5 完了
-  （設定キー確定）」のみで、M28/M29 に依存しない。Phase 7 ではなく Phase 6 と
-  並行で着手でき、M36-A の承認 UI 前倒しにも効く。
-- **M34（DPAPI 暗号化）を Phase 5 直後へ前倒し（セキュリティ優先）** —
-  M34 の前提は「Phase 5 完了」のみ。Phase 5 の M16（Magic Conversion）が
-  OpenAI API キーの平文保存を持ち込むため、M34 を Phase 7 末尾に置くと平文
-  保存期間が長期化する。Phase 5 直後に前倒しして暗号化ギャップを早期に塞ぐ。
-- **M35 / M36-A は Phase 4 完了後に並行可能な独立トラック** — 詳細は
+- **推論バックエンド トラック（M24 / M25 / M27）** — M24 の前提は M8 だけで、
+  Phase 5（レガシー parity）に依存しない。Phase 6 への配置は主題分類であり、
+  Phase 5 と並行できる。
+- **M30（WinUI 3 設定アプリ）と M34（DPAPI 暗号化）** — 前提は Phase 5 の完了だけで、
+  M28 / M29 にも Phase 6 にも依存しない。M36-A の承認 UI は M30 に、M49 は M30 / M34 に依存する。
+- **M35 / M36-A** — 前提は M6 だけで、Phase 5〜7 と並行できる。詳細は
   「追加機能マイルストーン」章。
-- **開発基盤・品質強化トラック（M37〜M43）は Phase 5〜7 に依存しない独立
-  トラック** — 第三者レビューの改善指摘をマイルストーン化したもの。M37
-  （ビルド再現性）・M38（CI 拡張）・M39（永続化）は Phase 3 着手前の実施を
-  推奨し、M40（IPC/JSON 堅牢化）・M41（ログ）・M42（Host 再接続）・M43
-  （WIL）は Phase 3/4 と並行可能。**M44（診断）・M47（復旧 UX）・M50（互換性
-  テスト）・M51（trace）は本トラックの自然な延長**として M41/M42/M38 完了後に
-  順次着手する。詳細は「開発基盤・品質強化トラック」章と
-  `docs/dev-infrastructure-spec.md`。
+- **開発基盤・品質強化トラック（M37〜M43）** — Phase 5〜7 に依存しない。M37（ビルド再現性）・
+  M39（永続化）・M40（IPC/JSON 堅牢化）は前提を持たず、M38（CI 拡張）・M43（WIL）は M37 を、
+  M41（ログ）は M39 を、M42（Host 再接続）は M41 を前提とする。M44（診断）・M47（復旧 UX）・
+  M50（互換性テスト）・M51（trace）はそれぞれ M40 と M41 / M42 / M38 / M41 を前提とする延長である。
+  詳細は「開発基盤・品質強化トラック」章と `docs/dev-infrastructure-spec.md`。
 - **プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）** —
-  Phase 5/6/7 の既存 M に依存する付加機能。M46（セーフ入力）は M7 完了後に
-  Phase 5 直後の前倒し対象（M16 Magic Conversion を擁護する契約なので
-  M16 着手と同時期または前を推奨）。M45（モデル管理 UI）は M8/M30 完了後
-  の Phase 6-C 併合トラック。M49（学習データ可視化）は M30/M34 完了後、
-  Phase 7 末尾。
+  Phase 5/6/7 の既存 M に依存する付加機能。M46（セーフ入力）は M7、M45（モデル管理 UI）は
+  M8 / M30、M49（学習データ可視化）は M30 / M34 を前提とする。M16 と M46 の順序のリスクは M16 節。
 - **追加機能トラック（M35/M36/M48）** — M48（アプリ別プロファイル）は
-  既存 `promptPrefixByApp` の発展として M46 完了後に着手し、本トラック
+  既存 `promptPrefixByApp` の発展として M46 を前提とし、本トラック
   に属する。詳細は「追加機能マイルストーン」章および
   `docs/app-profile-spec.md`。
 - **自動カッコペアリング（M61）は M13 のみに依存する無 IPC・Host 非依存の独立
-  トラック** — M61-A（コア）は M13（InputState）完了後、Phase 5 と並行で前倒し
-  可能。M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
-  バックエンド・TSF 深耕・パッケージングに依存しない小規模機能。詳細は
+  トラック** — M61-A（コア）は M13（InputState）を前提とし、Phase 5 の他の M と並行できる。
+  M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
+  バックエンド・TSF 深耕・パッケージングに依存しない。詳細は
   `docs/bracket-pairing-spec.md`。
 - **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
   → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
-  Reranker） → M57（ModernBERT スコアリング）の順で進める。M55 は M35 を、
+  Reranker） → M57（ModernBERT スコアリング）の順に依存する。M55 は M35 を、
   M53 は **M36-A** を必須前提として `AutoWordStore` を多層
   DictionaryStore に統合する。**`neologd_lexicon` 任意 pack の取り込みは
   M53 v1 の必須前提ではなく別 follow-up**（M36-B/M32 の `HttpDownloader`+SHA256
@@ -638,10 +625,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 英数キーダブルタップで選択テキストの英訳または読みの半角英字確定、かなキーダブルタップで
   選択テキストの和訳（同じプロンプト窓を初期プロンプトだけ変えて開く。`docs/legacy-parity-spec.md` §4.1）。
 - **前提**: M13 完了。
-- **推奨**: M46（プライバシーゲート / セーフ入力モード）が同時期 or 先行で
-  実装されていることが望ましい（hard prerequisite ではない）。M16 が単独
-  で先行すると、M46 の secure 抑止契約が無いまま OpenAI 呼び出しが走り、
-  secure アプリ向けの初期プライバシーギャップが発生する。詳細は
+- **リスク**: M46（プライバシーゲート / セーフ入力モード）は M16 の hard prerequisite では
+  ない。M46 より先に M16 を入れると、M46 の secure 抑止契約が無いまま OpenAI 呼び出しが走り、
+  secure アプリでもテキストが外部へ送られる。詳細は
   `docs/privacy-and-secure-input-spec.md` §1 を参照。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（ダブルタップ検出）、
   `tsf-tip/src/PromptDialog.cpp`（新規）、`ipc/src/Payloads.cpp`
@@ -725,9 +711,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 ## Phase 6: Windows 特化（M20〜M27）
 
 > Phase 5 完了後に着手。Phase 6-A（TSF 深耕）、6-B（Copilot+ PC / NPU）、
-> 6-C（ネイティブ UI）の 3 サブフェーズを並列に進められる。
-> なお推論バックエンド トラック（M24/M25/M27）は M8 のみに依存するため、
-> Phase 5 と並行で先行着手できる（「Phase 5〜7 の依存関係と実行順」参照）。
+> 6-C（ネイティブ UI）の 3 サブフェーズを並列に進められる。推論バックエンド トラック
+> （M24/M25/M27）の前提は「Phase 5〜7 の依存関係と実行順」を参照。
 
 ### M20: ITfReconversion / ITfFnReconversion
 
@@ -829,9 +814,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: Copilot+ PC（NPU）/ DirectML / CUDA / CPU の自動選択と切替。
 - **前提**: M8 完了（llama.cpp バインディング選定）。
-- **推奨実装時期**: M8 完了後、Phase 5 と並行する「推論バックエンド トラック」
-  として着手可能（M25/M27 がこの先に連なる）。Phase 6 への配置は主題分類で
-  あり、Phase 5 完了を待つ必要はない。
 - **変更対象**: `inference-host/include/azookey/host/BackendSelector.h` と
   `inference-host/src/BackendSelector.cpp`（`auto` の解決。優先順位の適用は
   `inference-host/src/main.cpp`）、`inference-host/src/InferenceEngine.cpp`（エンジン分岐）、
@@ -916,17 +898,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ## Phase 7: 配布・パッケージング（M28〜M34）
 
-> Phase 6 完了後に着手。**配布方針（2026-06 確定）**: MVP は未署名 MSI 直接配布（DEV-415）、
-> MSIX は Microsoft Store 経由で並行準備（MS 再署名のため自前署名不要、DEV-416）、有料署名を要する
-> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。**正典仕様**は `docs/sideload-packaging-spec.md` §0。
-> なお M30（設定アプリ）・M34（DPAPI 暗号化）は Phase 5 完了のみが前提で、
-> Phase 6 と並行・Phase 5 直後への前倒しが可能（依存関係の節を参照）。
+> 配布チャネルと署名要否の**正典仕様**は `docs/sideload-packaging-spec.md` §0。MVP の直接配布は
+> 未署名 MSI（M11 / M12）、Microsoft Store は MSIX（M28。Microsoft が再署名する）、自前コード署名は
+> M29 が扱う。前提は各節が持ち、Phase 6 の完了を前提としない M もある（「Phase 5〜7 の依存関係と
+> 実行順」）。配布方針を決めた経緯は
+> [`docs/decisions/2026-06-distribution-channels.md`](../docs/decisions/2026-06-distribution-channels.md)。
 
 ### M28: MSIX パッケージング（MS Store 向け）
 
-- **目的**: MSIX パッケージを構成し、MS Store 配布（DEV-416）の基盤とする。Store は Microsoft が
-  再署名するため自前署名不要。MVP の直接配布は未署名 MSI（DEV-415、spec §4）であり、本マイルストーンは
-  Store チャネル準備として位置づける（配布方針は spec §0）。
+- **目的**: MSIX パッケージを構成し、MS Store 配布の基盤とする。Store は Microsoft が
+  再署名するため自前署名不要。MVP の直接配布は未署名 MSI（M11 / M12、spec §4）であり、
+  本マイルストーンはその前提ではない（配布方針は spec §0）。
 - **前提**: Phase 6 完了。
 - **変更対象**: `pkg/msix/AppxManifest.xml`、`pkg/msix/Package.wapproj`、
   `pkg/msix/Assets/*.png`（新規）。
@@ -981,9 +963,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: TIP / Host とは別プロセスの GUI 設定アプリ。
 - **前提**: Phase 5 完了（設定キーが確定）。
-- **推奨実装時期**: Phase 5 完了後、Phase 6 と並行で着手可能（M28/M29 に
-  依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
-  早期着手が望ましい。UI フレームワークは M11「UI フレームワーク決定」に揃える。
+- **UI フレームワーク**: M11「UI フレームワーク決定」に揃える。
 - **変更対象**: `settings-app/`（M11 の設定アプリを本格化）、
   `ipc/src/Payloads.cpp`（M11 の最小 `UpdateConfig` を拡張）、
   `inference-host/src/SettingsStore.cpp`（M11 の最小実装を拡張）。
@@ -1009,20 +989,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet で配るのは v1.0 の
+- **前提**: M12（MVP の未署名 MSI の公開経路）。WinGet で配るのは v1.0 の
   正式リリースだけであり、MVP の未署名 MSI（評価配布）は載せない。したがって WinGet（§5）の
   公開は M29 の TIP バイナリ署名を前提とする（spec §0.1）。自動更新（§6）とモデル DL は署名に
-  依存しない。M29 のうち延期したスタンドアロン MSIX 署名部分は、どれの前提でもない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
-  再配布可否。`gate:human-required`）の auto-DL 承認を追加前提とする。暫定確定
-  （保守・CC-BY-SA、§1.6.2）で配信元は上流 HF に固定済みだが、auto-DL の有効化は
-  別途承認を要し、GitHub 再ホスト最適化は著者確認後に解禁する（§1.6.1 ライセンス
-  分岐 / §1.6.2）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。
+  依存しない。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+  再配布可否。`gate:human-required`）での auto-DL の承認を追加前提とする。配信元は上流 HF とし
+  （CC-BY-SA、§1.6.2）、GitHub 再ホストは著者確認を条件とする（§1.6.1 ライセンス
+  分岐 / §1.6.2）。WinGet（§5）/ 自動更新（§6）は DEV-202 に依存しない。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
   `inference-host/src/HttpDownloader.cpp`（WinHTTP + SHA256 共通ヘルパの
   切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
   M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に
-  GET+SHA256 ダウンロード経路を追加する（Phase 5 への前倒しは不要）**、初回モデル取得
+  GET+SHA256 ダウンロード経路を追加する**、初回モデル取得
   ロジック（既定の catalog の entry との照合 →
   `.part`→検証→rename → probe-load → `selectedPath` コミット）、設定アプリ UI。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b)
@@ -1031,16 +1010,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - winget-pkgs に PR が merge され `winget install` で導入可能
   - 起動時 + 24h 周期で新版検出、ユーザー承認で MSI 適用（`msiexec /i /qn /norestart`、
     要再起動時は通知。spec §6.3）
-  - **DEV-202 の auto-DL が承認済み（暫定確定＝上流 HF から、または著者確認後の
-    GitHub 再ホスト）のとき**（ピンは既定の catalog として常に Host に埋め込まれる）: 既定
+  - **DEV-202 で auto-DL が承認されているとき**（上流 HF から、または著者確認後の
+    GitHub 再ホストから。ピンは既定の catalog として常に Host に埋め込まれる）: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ
     非 `offline`）で初回起動時に ピンと一致する GGUF を DL → SHA256 検証 →
     probe-load 成功 → `selectedPath` コミット。`offline` / `autoLoadOnHostStart=false`
     時は DL せず (c2) 明示選択に委ねる。
-  - **DEV-202 が暫定確定どまりで auto-DL 未承認のとき**: (b) DL を
+  - **auto-DL が承認されていないとき**: (b) DL を
     有効化せず、**(c2) ユーザー明示選択（`model.selectedPath` を `settings.json` /
-    設定 UI で設定）で Zenzai がロードできること**を受け入れ条件とする（暫定確定でも
-    配信元は上流 HF に固定済み・§1.6.1 だが、auto-DL の有効化は別途承認を要する）。
+    設定 UI で設定）で Zenzai がロードできること**を受け入れ条件とする。
     設定アプリのモデル ペインの取得ボタンは利用者の操作による取得であり、(b) ではない
     （§1.6.1「利用者の操作による取得」）。ファイルを置くだけ（空 `selectedPath`）では
     不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
@@ -1076,15 +1054,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   で暗号化。M35 / M36 で追加される学習データ（`typo_corrections.tsv` /
   `auto_words.tsv`）も同等の機微情報として対象に含める。
 - **前提**: Phase 5 完了。
-- **推奨実装時期**: Phase 5 直後へ前倒し推奨（セキュリティ優先）。Phase 5 の
-  M16（Magic Conversion）が OpenAI API キーの平文保存を持ち込むため、M34 を
-  Phase 7 末尾に置くと平文保存期間が長期化する。Phase 5 直後に前倒しして
-  暗号化ギャップを早期に塞ぐ。M16 着手時点では README で平文保存を注意喚起する。
+- **リスク**: M16（Magic Conversion）は M34 を前提にしないため、M34 が無い構成では
+  OpenAI API キーが平文で保存される（README で注意喚起する）。
   API キーの at-rest 保存は `dpapi:` prefix 規約（`docs/ai-backend-spec.md` §9）で行い、
-  prefix の有無で復号/平文を分岐する。M34 投入後は設定値の移行のみで AiBackend は不変。
+  prefix の有無で復号/平文を分岐する。M34 の導入は設定値の移行だけで、AiBackend を変えない。
 - **変更対象**: `learning/src/DpapiCrypto.cpp`、`learning/src/LearningStore.cpp`
-  （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。M35 / M36 着手
-  済みの場合は `TypoCorrectionStore` / `AutoWordStore` の Load/Save も同様にラップ。
+  （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。M35 / M36 のストアがある
+  構成では `TypoCorrectionStore` / `AutoWordStore` の Load/Save も同様にラップ。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §9。
 - **受け入れ条件**:
   - `learning.tsv.enc` が暗号化済みで、他ユーザでは復号失敗
@@ -1101,10 +1077,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   タイプミスをしたときに正しい入力へ補正・提示する。汎用 LM 補正
   （`DebugTypoCorrection`）とは独立した、個人の打鍵の癖を学習する機能。
 - **前提**: M6（Commit / Observation）完了。M7（学習）と独立に着手可能。
-- **推奨実装時期**: Phase 4 完了直後、Phase 5 と並行する独立トラックと
-  して前倒し可能。Zenzai・TSF 深耕・パッケージングのいずれにも依存しない
-  小規模機能（3〜4 週）で、差別化価値を早期に提供できる。設定は設定アプリの
-  「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  Zenzai・TSF 深耕・パッケージングのいずれにも依存しない。
+- **設定**: 設定アプリの「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `learning/src/TypoCorrectionStore.cpp`、`ipc/src/Payloads.cpp`
   ・`ipc/src/Messages.cpp`（`ObserveTypo` 追加）、`inference-host/src/InferenceEngine.cpp`
   ・`Dispatcher.cpp`・`main.cpp`、`tsf-tip/src/TextService.cpp`、
@@ -1128,10 +1102,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   ストアに蓄積。承認済み（confirmed）の語を変換候補へ注入する。手動登録の
   `UserDictionary` とは独立した自動取得機能。
 - **前提**: M6（Commit / Observation）完了のみ。M7・M32 と独立に着手可能。
-  HTTP に依存しない（オフライン完結）。
-- **推奨実装時期**: 既定の `confirm` モードの承認フローが M30（WinUI 3 設定
-  アプリ）に依存するため、Phase 7 内で M30 の直後に配置する。M30 より前に
-  着手する場合は `auto` モード / デバッグ CLI 限定運用になる。
+  HTTP に依存しない（オフライン完結）。既定の `confirm` モードの承認 UI は M30（WinUI 3
+  設定アプリ）に依存する。M30 が無い構成では `auto` モードと承認用 `newwords` CLI に限られる。
 - **変更対象**: `learning/src/AutoWordStore.cpp`、`ipc/src/Messages.cpp`
   ・`ipc/src/Payloads.cpp`（`ListNewWordCandidates` / `ResolveNewWord` 追加）、
   `inference-host/src/InferenceEngine.cpp`・`Dispatcher.cpp`・`main.cpp`・
@@ -1159,7 +1131,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   定期ダウンロード・検証し、新語ストアにマージする。
 - **前提**: M36-A 完了 + M32 の WinHTTP 基盤（共通ヘルパ `HttpDownloader` の
   切り出し）。
-- **推奨実装時期**: M32 の WinHTTP 基盤にハード依存するため、M32 以降に配置する。
 - **変更対象**: `inference-host/src/TrendingWordFetcher.cpp`・
   `inference-host/src/HttpDownloader.cpp`（M32 で新規作成・共有する WinHTTP +
   SHA256 ヘルパを再利用）、`inference-host/src/main.cpp`、
@@ -1182,8 +1153,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   発展統合として位置づける。
 - **前提**: M46 完了（セーフ入力モード）。`ForegroundAppDetector` を M46 と
   共用する。
-- **推奨実装時期**: M46 完了直後、Phase 6 と並行する独立トラック。M30（設定
-  アプリ）完成後に UI が揃う。
+- **UI**: アプリ別設定タブは M30（設定アプリ）に載る。
 - **変更対象**: `settings/mvp-settings.schema.json`（`profilesByApp` ブロック
   追加、`promptPrefixByApp` を後方互換で読み続ける）、
   `core/src/AppProfileResolver.cpp`、
@@ -1222,7 +1192,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: ローマ字蓄積中は推論クエリを発火せず、トリガ（Space）で全文かなを
   Zenzai でかな漢字変換し、全体確定する最小フローを実現する。
 - **前提**: M6（Commit / Observation）、M13（InputState 状態機械）、M14（ライブ変換の
-  状態基盤）完了。**推奨**: M8/M9（実 Zenzai）完了後に品質が揃う。
+  状態基盤）完了。変換品質は M8 / M9（実 Zenzai とユーザー辞書）に依存する。
 - **変更対象**: `core/include/azookey/core/InputState.h`（`BatchAccumulating` /
   `BatchConverting` 追加）、
   `tsf-tip/src/TextService.cpp`（`OnKeyDown` の蓄積分岐・Preedit 表示切替）、
@@ -1328,10 +1298,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   IME が節境界・文末へ句読点を補い、入力変化に応じて再配置・削除する。
 - **前提**: M13（InputState 状態機械）、**M14（ライブ変換）完了**。決定的ベースライン
   （`PunctuationInserter`）は M14 後に着手可能。ニューラル句読点（zenz 出力）品質レイヤは
-  M8（Zenzai）に依存。X-1-2（`TypingTempoTracker`）を安定化に再利用するため M14 末の
-  リッチ化と前後して実装すると効率がよい。
-- **推奨実装時期**: M14（ライブ変換）完了直後、X-1 リッチ化と並行する独立トラック。
-  設定は設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  M8（Zenzai）に依存。安定化に X-1-2（`TypingTempoTracker`）を再利用する。
+- **設定**: 設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `inference-host/`（`PunctuationInserter` 新規、`Dispatcher` /
   `InferenceEngine` の `auto_punctuation` / `punctuation_style` 処理と segments 返却）、
   `ipc/`（`QueryLiveConversion` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
@@ -1375,9 +1343,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   送る M58 の原則（`docs/romaji-batch-conversion-spec.md` §4.1）を再利用する（バッファは別に持つ）。English タグ
   描画は X-2-3（`CandidateTag`）を再利用。辞書ゲーティング（品質レイヤ）は任意で、
   ベースライン（生ローマ字 + 大文字化）は辞書なしで動作する。
-- **推奨実装時期**: Phase 4 完了直後、Phase 5 と並行する独立トラックとして
-  前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定は設定アプリの
-  「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+- **設定**: Zenzai・TSF 深耕・パッケージングに依存しない。設定は設定アプリの「入力」ペインで
+  編集する（`docs/sideload-packaging-spec.md` §3.2）。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持・候補注入経路・
   英単語確定時の Observe）、`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・候補 `tag`）、
   `inference-host/`（`EnglishCandidateProvider` / `EnglishDictionary` 新規、`Dispatcher` /
@@ -1422,8 +1389,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   空ペアの Backspace 一括削除を、英数モードを含めて実現する最小フローを作る。
 - **前提**: M13（InputState 状態機械）完了。確定 + カーソル配置は既存 M5/M6 の commit
   経路（`SetText` → `Collapse` → `SetSelection`）を再利用するため追加の前提なし。
-- **推奨実装時期**: M13 完了直後、Phase 5 と並行可能な独立トラック。Zenzai・TSF 深耕・
-  パッケージングに依存しない小規模・無 IPC 機能。設定は
+- **設定**: Zenzai・TSF 深耕・パッケージングに依存しない無 IPC 機能。設定は
   `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読みし、設定アプリの「入力」ペインで
   編集する（host CLI 経由にしない。§6.1）。
 - **変更対象**: `core/`（`InputState` へ新 `ClientAction` 3 種と `EditContextHint`、
@@ -1789,21 +1755,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。
 > **正典仕様**は `docs/dev-infrastructure-spec.md`。
-> 第三者レビュー 2 通の指摘を評価・取捨選択した結果をマイルストーン化した
-> もので、Phase 3（Zenzai 統合）/ Phase 4（配布）着手前の基盤固めにあたる。
-> M 番号は通し連番（既存最終 M36-B の続き）。spec から参照されるため
-> M 番号・Phase グルーピングは変更しない。
+> spec から参照されるため M 番号・Phase グルーピングは変更しない。
 >
 > M44（診断ウィザード）・M47（復旧 UX）・M50（互換性テスト）・M51（trace
-> 内訳）は本トラックの自然な延長として、M41（構造化ログ）・M42（Host 再接続）
-> ・M38（CI）の完了後に追加で取り組む。M44/M50 は配布前（Phase 4 ゲート）に
-> 投入することでサポートコストを大きく下げられる。
+> 内訳）は本トラックの延長であり、M41（構造化ログ）・M42（Host 再接続）
+> ・M38（CI）を前提とする（各節の「前提」）。
 
 ### M37: ビルド再現性
 
 - **目的**: 手元・CI・AI エージェントでビルド入口を統一し、コンパイル
   オプションを一元管理する。
-- **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
+- **前提**: なし（独立トラック）。
 - **変更対象**: `CMakePresets.json`、ルート `CMakeLists.txt`、
   各 `*/CMakeLists.txt`、`.clang-format`、`.gitignore`。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §2。
@@ -1860,7 +1822,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 学習・辞書ファイルの保存先を実行ディレクトリ依存から脱却させ、
   原子的書き込みで破損を防ぐ。
-- **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
+- **前提**: なし（独立トラック）。
 - **変更対象**: `inference-host/src/main.cpp`、
   `inference-host/src/`（パス解決ロジック新規）、
   `learning/src/LearningStore.cpp`・`UserDictionary.cpp`（原子的書き込み）。
@@ -1981,8 +1943,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: HANDLE / COM / レジストリ / `HRESULT` の管理を WIL の RAII で
   安全化する。
-- **前提**: M37 完了（依存導入手段）。M40 / M39 と並行で対象ファイルを
-  WIL 化すると効率的。
+- **前提**: M37 完了（依存導入手段）。
 - **変更対象**: 依存取り込み（submodule または `FetchContent`）、
   `tsf-tip/src/`、`ipc/src/NamedPipeTransport.cpp`。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §9。
@@ -2001,15 +1962,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   切り分けられるようにし、配布前のサポートコストを下げる。GitHub Issue /
   Discord 報告用の診断 ZIP 生成も含む。
 - **前提**: M40（IPC/JSON 堅牢化）完了、M41（構造化ログ）完了。
-- **推奨実装時期**: Phase 4 ゲート前に投入。M11/M12 と並行可能。
-  クラッシュ・登録不整合・モデル未配置などの「即詰み」シナリオを早期に
-  ユーザーが自己解決できるようにする。
 - **変更対象**: `diagnostics/`（`azookey_diag.cpp` CLI）、
   `ipc/src/Payloads.cpp`（`QueryDiagnostics` 追加）、
   `inference-host/src/Dispatcher.cpp` と `inference-host/src/HealthStateMachine.cpp`
-  （状態詳細化）。Phase 4 ゲートでは
-  CLI + 診断 ZIP までを範囲とし、`settings-app/` 診断タブは M30 完了後の
-  follow-up タスクとして切り出す（M30 を M44 v1 の前提にはしない）。
+  （状態詳細化）。M44 は
+  CLI + 診断 ZIP までを範囲とし、`settings-app/` 診断タブは M30 に載る別作業として
+  切り出す（M30 を M44 の前提にはしない）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで
   追加）。
   - 診断項目 D-001〜D-015（TIP DLL 存在 / COM 登録 / 言語プロファイル /
@@ -2043,7 +2001,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   体験レイヤ**として位置づける。
 - **前提**: **M42 完了**（再接続・劣化モードの基盤）。M41 の構造化ログを
   状態遷移のトレースに使う。
-- **推奨実装時期**: M42 完了直後。Phase 5/6/7 と並行可能。
 - **変更対象**: `inference-host/src/HealthStateMachine.cpp`、
   `tsf-tip/src/TextService.cpp`（候補ウィンドウ下部の控えめ UI 通知、
   および SafeMode 入り時の TIP 内通知バナー）。`settings-app/` への
@@ -2076,8 +2033,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   キャンセル / Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で
   検証する。
 - **前提**: M38（CI 品質ゲート拡張）完了。
-- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX パッケージング）
-  着手前に最低限のアプリ互換性ベースラインを確保する。
 - **変更対象**: `compat-test/`、`.github/workflows/`
   （compat ジョブ追加、optional）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §13（本マイルストーンで
@@ -2108,8 +2063,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: キー押下から候補表示までのどこに遅延があるかを 1 リクエスト
   単位で可視化し、Zenzai 最適化 / 回帰検出の基盤にする。
 - **前提**: M41（構造化ログ）完了。
-- **推奨実装時期**: M41 完了後、Zenzai 最適化（M24 / M25 / M57）着手前。
-  M56（Tiny Reranker） / M57（ModernBERT）の効果測定の前提でもある。
 - **変更対象**: `ipc/src/Messages.cpp`（envelope の既存 `trace_id` フィールドへ
   UUIDv7 を生成・伝播。wire format 変更ではない）、
   `tsf-tip/src/TextService.cpp` / `inference-host/src/Dispatcher.cpp` /
@@ -2136,8 +2089,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 ## プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）
 
 > Phase 5/6/7 の既存 M に依存する付加機能トラック。Phase 連番に対し
-> M45/M46/M49 は依存先の都合で番号が前後する（M46 は Phase 5 直後、M45 は
-> M30 完了後、M49 は M34 完了後）。**正典仕様**は本トラック専用の
+> M45/M46/M49 は依存先の都合で番号が前後する（M46 は M7、M45 は
+> M8 / M30、M49 は M30 / M34 を前提とする）。**正典仕様**は本トラック専用の
 > `docs/model-management-spec.md` / `docs/privacy-and-secure-input-spec.md` /
 > `docs/learning-data-management-spec.md` に分割する。
 >
@@ -2152,8 +2105,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   する。M8（モデルロード境界）と M30（WinUI 3 設定アプリ）の上に乗る
   Phase 6-C 拡張。
 - **前提**: M8 完了（`LoadModel` 境界）、M30 完了（設定アプリ）。
-- **推奨実装時期**: M30 完了直後。M24（推論バックエンド選定 = R1 llama.cpp /
-  R2 Windows ML）と並行着手すると backend 推奨ロジックの実装が捗る。
 - **変更対象**: `settings-app/`（Model タブ追加）、`ipc/src/Payloads.cpp`
   （`ListModels` / `BenchmarkModel` 追加）、
   `inference-host/src/ModelCatalog.cpp`（宣言的カタログ）、
@@ -2187,11 +2138,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 学習・予測・外部 AI・ログをユーザーが制御し、パスワード欄や
   機密入力時に自動で安全側に倒す。M16（Magic Conversion / OpenAI API）と
   M34（DPAPI）の前提として「ユーザーが AI/学習を停止できる」契約を確立する。
-- **前提**: M7（学習）完了。M34 と並行・前倒し可能。M46 は M48 の前提でもある。
-- **推奨実装時期**: Phase 5 内で **M16 着手前または同時期** に投入する
-  （M16 Magic Conversion / OpenAI API は M46 の secure 抑止契約に依存する
-  ため、M16 が先行すると secure アプリ向けの初期プライバシーギャップが
-  発生する）。M34（DPAPI）とは並行で進められる。
+- **前提**: M7（学習）完了。M34 とは独立。M46 は M48 の前提でもある。M16 との順序の
+  リスクは M16 節。
 - **変更対象**: `settings/mvp-settings.schema.json`（`privacy.*` ブロック
   追加）、`tsf-tip/src/TextService.cpp`（secure 判定と送信抑止）、
   `inference-host/src/Dispatcher.cpp`（CommitObservation /
@@ -2227,8 +2175,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: ユーザーが学習内容を確認・削除・バックアップ・復元できるように
   し、透明性を担保する。M34（DPAPI）と M30（設定アプリ）の自然な拡張。
 - **前提**: M30 完了（設定アプリ）、M34 完了（DPAPI 暗号化）。
-- **推奨実装時期**: Phase 7 末尾、M34 完了直後。M35 / M36-A / M55 の学習
-  データも対象に含めるため、これらが実装済みの場合は範囲を拡張する。
 - **変更対象**: `settings-app/`（学習データタブ）、`ipc/src/Payloads.cpp`
   （`ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` /
   `ImportLearningData` 追加）、`learning/src/LearningStore.cpp`（列挙 API 追加）、
@@ -2279,7 +2225,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   latency・メモリを数値で比較できるベンチを整備し、以降の M53〜M57 の
   効果を baseline 比で測定可能にする。
 - **前提**: M7（学習）完了、M9（ユーザー辞書）完了、既存 `bench/`。
-- **推奨実装時期**: Phase 4 完了直後。M53〜M57 のいずれよりも先に着手する。
 - **変更対象**: 既存 `bench/live_bench.cpp`（`azookey_bench` ターゲットの
   ソース。spec §3 の方針に従い拡張する。新規 `azookey_bench.cpp` は
   作らない）、`bench/data/*.jsonl`（評価データ）、
@@ -2346,7 +2291,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
   M36-B の trending→AutoWordStore とは別経路。`docs/auto-word-registration-spec.md`
   §14.10）。未完了時は当該 layer を無効化して受け入れる。
-- **推奨実装時期**: M52 完了後。M54 / M55 と並行可能。
 - **変更対象**: `learning/src/DictionaryStore.cpp`、
   `learning/src/DictionaryImporter.cpp`（新規）、
   `inference-host/src/DictionaryCandidateProvider.cpp`、
@@ -2425,7 +2369,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 確定履歴・訂正履歴・アプリ別傾向・打ち間違え採否を細粒度に
   学習し、個人適応を強化する。M7（既存 LearningStore）の発展。
 - **前提**: M7、M34（DPAPI）、M52（ベンチ）。
-- **推奨実装時期**: M52 完了後。M53 / M55 と並行可能。
 - **変更対象**: `learning/src/LearningStore.cpp`（既存 TSV を後方互換で
   拡張、SQLite 化は M54-B 以降の別 M に分離）、
   `inference-host/src/UserLearningScorer.cpp`、
@@ -2470,8 +2413,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   CandidateGenerator 前段に補正を組み込む統合エンジンに昇格する。
 - **前提**: **M35 を改訂統合**、M46（secure mode で補正・学習無効化）、
   M52（ベンチ）、M53（辞書）。
-- **推奨実装時期**: M52 / M53 完了後。M35 を v1（基本タイプミス学習）として
-  残し、M55 を v2（統合補正エンジン）として spec 内に段差をつける。
+- **版**: M35 を v1（基本タイプミス学習）、M55 を v2（統合補正エンジン）とし、
+  spec 内に段差をつける。
 - **変更対象**: `correction/`（新規ディレクトリ）、
   `correction/TypoCorrectionEngine.cpp`、
   `correction/KeyboardAdjacencyModel.cpp`、
@@ -2522,9 +2465,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   の **全 4 つが完了**。reranker の入力特徴量は `dictionary_score`（M53）/
   `user_frequency`（M54）/ `typo_confidence`（M55）を含むため、いずれかが
   欠けると acceptance を満たせない。
-- **推奨実装時期**: M53 / M54 / M55 がすべて完了し、M52 ベンチで baseline を
-  固定した時点。学習データ収集（§6）は M54 / M55 の出力に依存するため、
-  早期着手しても本実装フェーズは前提完了後に行う。
+  学習データ収集（§6）は M54 / M55 の出力を使い、効果は M52 ベンチで固定した baseline と比べる。
 - **変更対象**: `reranker/`（新規ディレクトリ）、
   `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
   `models/tiny_reranker.onnx`（新規アセット）、
@@ -2554,7 +2495,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 同音異義語など難しい候補のみ ModernBERT-Ja で文脈自然度を
   評価し、品質を底上げする。**生成には使わない**。
 - **前提**: M56（Tiny Reranker）、M24（DirectML / NPU バックエンド）。
-- **推奨実装時期**: M56 完了後。v1.0 後の品質向上フェーズに位置づける。
 - **変更対象**: `reranker/ModernBertScorer.h`、
   `reranker/ModernBertScorerOnnx.cpp`、
   `models/modernbert-ja-70m.onnx`（新規アセット）、

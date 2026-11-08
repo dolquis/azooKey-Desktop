@@ -64,16 +64,15 @@ TIP は選択変更を `ITfTextEditSink::OnEndEdit` で検知し、UI メッセ�
 context が変わった後の応答は破棄し、元の選択範囲へ適用しない。
 変換キーも選択範囲を保持して非同期取得し、候補 UI に表示する。
 
-新規 IPC：
+IPC は `ReverseConvert` を使う。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の
+`ReverseConvertRequest` / `ReverseConvertResponse` である。本節は
+`docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、次の意味を定める。
 
-```
-ReverseConvertRequest:
-  surface: string
-
-ReverseConvertResponse:
-  reading: string         // 最尤読み
-  confidence: float
-```
+| フィールド | 意味 |
+|---|---|
+| 要求 `surface` | 逆引きする表層（再変換の範囲のテキスト） |
+| 応答 `reading` | 上の順序で得た最尤の読み。どこにも当たらなければ空 |
+| 応答 `confidence` | 読みの信頼度。`reading` が空のときは 0 |
 
 #### Reconvert
 

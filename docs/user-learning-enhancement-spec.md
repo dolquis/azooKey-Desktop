@@ -216,7 +216,8 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 ### 4.1 訂正の IPC（`CommitCorrection`）
 
 即 Backspace と再変換は `CommitCorrection` で Host へ送る。本節は IPC 契約と、TIP の検出・送信と、
-Host 側の処理を定める。Host は Handshake の capability に `commit_correction` を載せ、
+Host 側の処理を定める。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `CommitCorrectionRequest` で、
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照される。Host は Handshake の capability に `commit_correction` を載せ、
 TIP は Host がそれを告知したときだけ送る。応答は `CommitObservation` と同じ `{ "ok": bool }` である。
 
 TIP は次のときに送る。
@@ -586,19 +587,17 @@ M53 の system 辞書はビルド時に構築して以後変更しない静的�
 
 ### 14.3 前方一致 lookup の契約
 
+結果の型の正典は `learning/include/azookey/learning/LearningStore.h` の `PrefixMatch` /
+`PrefixLookupResult` である。
+
+| 型 | フィールド | 意味 |
+|---|---|---|
+| `PrefixMatch` | `reading` / `surface` | 一致したレコードの読みと表層 |
+| 同上 | `score` | §14.4 の減衰後スコア |
+| `PrefixLookupResult` | `matches` | 一致したレコード。§14.5 の順序規則で並べる |
+| 同上 | `visited_readings` / `scanned_records` | 走査範囲の検証用の数（下表） |
+
 ```cpp
-struct PrefixMatch {
-  std::string reading;
-  std::string surface;
-  double score;   // §14.4 の減衰後スコア
-};
-
-struct PrefixLookupResult {
-  std::vector<PrefixMatch> matches;   // §14.5 の順序規則
-  size_t visited_readings{};          // 外側 map で訪問した読みの数（走査範囲の検証用）
-  size_t scanned_records{};           // 範囲内で見たレコード数（min_score 除外分を含む）
-};
-
 PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit,
                                 double min_score, uint64_t now_epoch_sec) const;
 ```

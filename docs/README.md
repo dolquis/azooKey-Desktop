@@ -26,7 +26,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 |
 |---|---|
-| [`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md) | TSF TIP + Inference Host 分離設計、IPC メッセージ、実装ルール（スレッドモデル・例外耐性・互換性）の正典 |
+| [`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md) | TSF TIP + Inference Host 分離設計、実装ルール（スレッドモデル・例外耐性・互換性）の正典。IPC の型から正典 spec の節への索引を持つ（payload の正典は `ipc/include/azookey/ipc/Payloads.h`） |
 | [`windows-port-asset-audit.md`](windows-port-asset-audit.md) | M0 以前の初回調査。現行設計の正典ではない参考資料。参照先 macOS ソースは `legacy/` に保全 |
 | [`karukan-comparison-report.md`](karukan-comparison-report.md) | karukan（`togatoga/karukan`）との比較調査。更新しない参考スナップショットであり正典ではない。開発計画は roadmap、取り込み状態は Linear を参照 |
 | [`macos-input-parity-audit-report.md`](macos-input-parity-audit-report.md) | 入力体験（キー操作・状態遷移・表示）を macOS 版（`legacy/`）と比べた監査。更新しない参考スナップショットであり正典ではない。仕様は各 spec、対応の状態は Linear（DEV-1810 と子課題）を参照 |

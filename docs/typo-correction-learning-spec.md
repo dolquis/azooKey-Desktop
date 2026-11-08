@@ -168,35 +168,35 @@ TIP の読みを変更しない。モードの判定は §3 のとおり Host �
 
 ## 7. IPC プロトコル変更（`ipc/`）
 
-- `MessageType` に `ObserveTypo` を追加（fire-and-forget）。
-- 新ペイロード:
-  - `ObserveTypoRequest { std::string wrong_reading, correct_reading;
-    uint64_t timestamp_ms; bool secure; bool learning_allowed; }`
-    — `secure` / `learning_allowed` の省略値は `true` / `false`（fail-closed）。
-  - `ObserveTypoResponse { bool ok; }`（対称性のため定義。応答は送らない）
-- `QueryCandidatesResponse` に `std::string corrected_reading` を追加
-  （空 = 補正なし。フィールド欠如時は空文字で後方互換）。
-- TIP の handshake `capabilities` に `"observe_typo"` を追加。
+payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `ObserveTypoRequest` /
+`ObserveTypoResponse` と `QueryCandidatesResponse` である（wire key は C++ のメンバ名と同じ）。
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、
+M35 が使うフィールドの意味を定める。
+
+- `ObserveTypo` は fire-and-forget であり、Host は応答を返さない。`ObserveTypoResponse` は
+  対称性のためだけに定義する。
+- TIP は Handshake の `capabilities` に `observe_typo` を載せる。
+
+| payload | フィールド | 意味 | 欠落時 |
+|---|---|---|---|
+| `ObserveTypoRequest` | `wrong_reading` | 打ち間違えた読み | — |
+| 同上 | `correct_reading` | 打ち直した正しい読み | — |
+| 同上 | `timestamp_ms` | 観測時刻（epoch ミリ秒） | — |
+| 同上 | `secure` / `learning_allowed` | そのイベントの privacy（§12.13） | `true` / `false`（fail-closed） |
+| `QueryCandidatesResponse` | `corrected_reading` | Host が要求の読みの代わりに使った補正後の読み（§5-3）。空は補正なし | 空（補正なし。古い Host との後方互換） |
 
 ## 8. 設定（`settings/`）
 
-`settings/mvp-settings.schema.json` が定義を持ち、`SettingsStore` が読む。
+型・既定値・範囲の正典は `settings/mvp-settings.schema.json` の root キー `typoCorrectionMode` /
+`typoMinCount` である（`typoCorrectionMode` の schema の `description` が本節を指す）。
+`SettingsStore` が読み、本節は各キーの意味と反映先を定める。
 
-```json
-"typoCorrectionMode": {
-  "type": "string",
-  "enum": ["off", "suggest", "auto_replace"],
-  "default": "suggest",
-  "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。docs/typo-correction-learning-spec.md section 8"
-},
-"typoMinCount": {
-  "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
-  "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
-}
-```
+| キー | 意味 | `EngineConfig` の反映先 |
+|---|---|---|
+| `typoCorrectionMode` | 動作モード（`off` / `suggest` / `auto_replace`。値の意味は §3） | `typo_correction_mode` |
+| `typoMinCount` | 同じ打ち間違えペアをこの回数観測してから補正候補に使う | `typo_min_count` |
 
-`typoMinCount` は `EngineConfig::typo_min_count` の設定キーである。`settings.json`
-に無いときは既定 3 を使う。範囲外の値は既定へ戻す。
+`settings.json` に無いキーは schema の既定を使う。`typoMinCount` の範囲外の値は既定へ戻す。
 
 ## 9. テスト計画
 
@@ -820,17 +820,7 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 同じイベント単位の契約を `CommitObservationRequest` と
 `CommitSegmentsObservationRequest` にも適用する。protocol version は 1 を維持する。
 古い TIP と新しい Host では学習を拒否し、新しい TIP と古い Host では TIP の抑止を維持する。
-
-```json
-{ "type": "ObserveTypo",
-  "payload": {
-    "wrong_reading": "こんちには",
-    "correct_reading": "こんにちは",
-    "timestamp_ms": 1780000000000,
-    "secure": false,
-    "learning_allowed": true
-  } }
-```
+`ObserveTypoRequest` のフィールドと欠落時の既定は §7 の表のとおりである。
 
 - `secure` / `learning_allowed` は当該イベントで判定した値であり、
   TIP は `!secure`、private / custom の学習許可、学習経路の条件を使う。

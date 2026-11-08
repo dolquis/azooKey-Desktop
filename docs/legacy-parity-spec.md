@@ -618,11 +618,22 @@ azooKey は共有 per-user `inference-host` + Named Pipe + クラッシュ隔離
 
 ### 2.2 IPC
 
-新規 Payload: `QueryLiveConversion(request_id, kana, context)` →
-`QueryLiveConversionResponse(request_id, surface, confidence)`
-`request_id` は既存の IPC `Envelope` に置き、Payload は `kana/context` と
-`surface/confidence` をそれぞれ持つ。M59 の動的句読点の任意フィールド（要求の
-`auto_punctuation` / `punctuation_style`、応答の `segments[]`）は `docs/dynamic-punctuation-spec.md` §7 が定める。`confidence` は有限の 0.0..1.0 とする。
+ライブ変換は `QueryLiveConversion` を使う。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の
+`QueryLiveConversionRequest` / `QueryLiveConversionResponse`（wire key は `ipc/src/Payloads.cpp`）である。
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、フィールドの意味を定める。
+要求 ID は Envelope の `request_id` に置き、payload には持たない。
+
+| フィールド | 意味 | 欠落時 |
+|---|---|---|
+| 要求 `kana` | preedit のかな読み | 必須 |
+| 要求 `context` | 左文脈 | 必須 |
+| 要求 `auto_punctuation` / `punctuation_style` | M59 の動的句読点（`docs/dynamic-punctuation-spec.md` §7.1） | `false` / `"ja"` |
+| 要求 `raw_romaji` / `mixed_english` | M63 の生ローマ字と設定（`docs/mixed-english-auto-conversion-spec.md` §9.1） | 空 / `false`。値があるときだけ wire に載せる |
+| 要求 `secure` | 入力欄が secure か（同 §9.4） | secure とみなす。wire には `false` だけを載せる |
+| 応答 `surface` | 最良 1 件の表層 | 必須 |
+| 応答 `confidence` | 最良候補の信頼度。有限の 0.0..1.0 で、範囲外の応答は不正とする | 必須 |
+| 応答 `segments[]` | 句読点を挿入した要求での `surface` の分節（`docs/dynamic-punctuation-spec.md` §7.2）と M63 の区間（`docs/mixed-english-auto-conversion-spec.md` §9.2） | 空 |
+
 M14 の軽量経路では候補の順位スコアをゼロ基準の sigmoid で単調に写像する。
 X-1 の多 pass 推論では上位 2 候補の差を使って信頼度を較正する。
 Host は Handshake 応答で `query_live_conversion` capability を広告する。
@@ -780,21 +791,21 @@ Esc などで予測を消すと、問い合わせも再試行も捨てるので�
 
 ### 3.5 IPC
 
-`QueryPredictions` の Payload 契約は次のとおり。
+予測は `QueryPredictions` を使う。payload の正典は `ipc/include/azookey/ipc/Payloads.h` の
+`QueryPredictionsRequest` / `QueryPredictionsResponse`（wire key は `ipc/src/Payloads.cpp`）である。
+本節は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、フィールドの意味を定める。
+要求 ID は Envelope の `request_id` に置く。wire key と C++ のメンバ名は、左文脈だけが異なる
+（wire `leftSideContext`、C++ `left_side_context`）。
 
-```
-Envelope:                  request_id
-QueryPredictionsRequest:   kana, leftSideContext, mode, app?, secure?
-QueryPredictionsResponse:  predictions[], ok?, error?
-```
-
-`secure` の欠落は secure とみなし、wire には `false` だけを載せる。Host は secure の要求に
-予測 0 件の成功応答を返す（`docs/privacy-and-secure-input-spec.md` §5.1.1）。
-
-`predictions[]` の各要素は既存の `CandidateField`（`tag` を含む）とする。`app` は
-`docs/app-profile-spec.md` §3.1 の前面アプリ識別で、予測には boost を掛けない（同 §7）。
-`ok` の省略時は `true` とみなし、`false` の場合は `error` に失敗理由を載せる。
-`mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 5 では `word` のみ。
+| フィールド | 意味 | 欠落時 |
+|---|---|---|
+| 要求 `kana` | 予測の起点にする読み | 必須 |
+| 要求 `leftSideContext` | 左文脈（下記） | 必須 |
+| 要求 `mode` | 予測の単位。X-2 で `word \| phrase \| sentence` へ拡張する。Phase 5 では `word` のみ | 必須 |
+| 要求 `app` | `docs/app-profile-spec.md` §3.1 の前面アプリ識別。予測には boost を掛けない（同 §7） | 識別なし |
+| 要求 `secure` | 入力欄が secure か。Host は secure の要求に予測 0 件の成功応答を返す（`docs/privacy-and-secure-input-spec.md` §5.1.1） | secure とみなす。wire には `false` だけを載せる |
+| 応答 `predictions[]` | 予測候補。各要素は既存の `CandidateField`（`tag` を含む） | 必須 |
+| 応答 `ok` / `error` | `ok=false` のとき `error` に失敗理由を載せる | `ok=true` |
 
 `leftSideContext` には、読みが変わったときの候補照会（Space の候補窓用の照会を含む）
 またはライブ変換の照会が取得した左文脈

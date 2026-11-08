@@ -1365,9 +1365,8 @@ JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame
 - 最大フレーム超過の length-prefix を `Decode/EncodeLengthPrefixed` が拒否する
 - `Payloads.cpp` 側で必須キー欠損・型不一致を安全に拒否する
 
-**enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
-`UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
-⚠️ 項）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
+**Dispatcher のハンドラを持たない MessageType**（`QueryCorrections` / `UpdateUserWord`。
+`docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
 応答待ちの blocking client をハングさせないため、既存ワイヤ形式の envelope に
 「未対応 type」を表す `{"ok":false,"error":"unsupported_message_type"}` を載せ、
 request の `type`、`request_id`、`trace_id` を応答 envelope に維持する。

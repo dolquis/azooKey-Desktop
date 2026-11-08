@@ -37,26 +37,18 @@ M36-B（トレンド）+ M53（辞書層全体再設計）。
 
 ### 3-1. データモデル
 
-```cpp
-namespace azookey::learning {
+型の正典は `learning/include/azookey/learning/AutoWordStore.h` の `AutoWord`（と `AutoWordSource` /
+`AutoWordState`）である。1 語は `(surface, reading)` で一意とし、各フィールドは次の意味を持つ。
 
-enum class AutoWordSource { Mining, Trending };
-enum class AutoWordState  { Pending, Confirmed, Rejected };
-
-struct AutoWord {
-  std::string     surface;            // 表面形
-  std::string     reading;            // かな読み（マイニングは確定時の読み）
-  AutoWordSource  source{AutoWordSource::Mining};
-  AutoWordState   state{AutoWordState::Pending};
-  uint32_t        count{0};           // 観測頻度（mining）/ rank 由来初期値（trending）
-  uint64_t        first_seen_epoch{0};
-  uint64_t        last_seen_epoch{0};
-  double          score{0.0};         // 候補注入時スコア
-};
-// (surface, reading) で一意。
-
-}  // namespace azookey::learning
-```
+| フィールド | 意味 | 既定 |
+|---|---|---|
+| `surface` | 表面形 | — |
+| `reading` | かな読み。マイニングでは確定時の読み | — |
+| `source` | 取得元。`Mining`（§4）または `Trending`（§5） | `Mining` |
+| `state` | 承認状態。`Pending` / `Confirmed` / `Rejected`（§7） | `Pending` |
+| `count` | マイニングでは観測頻度、トレンドでは rank 由来の初期値 | 0 |
+| `first_seen_epoch` / `last_seen_epoch` | 初回・最終の観測時刻（epoch 秒） | 0 |
+| `score` | 候補へ注入するときのスコア。0 なら §6 の既定スコアを使う | 0.0 |
 
 ### 3-2. 永続化形式
 
@@ -402,28 +394,23 @@ if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写した�
 - `ipc/include/azookey/ipc/Messages.h`: `MessageType` に
   `ListNewWordCandidates`、`ResolveNewWord` を追加。
 - `ipc/src/Messages.cpp`: `TypeToString` / `TypeFromString` に対応追加。
-- `ipc/include/azookey/ipc/Payloads.h` / `src/Payloads.cpp`:
+- payload の正典は `ipc/include/azookey/ipc/Payloads.h` の `ListNewWordCandidatesRequest` /
+  `NewWordField` / `ListNewWordCandidatesResponse` / `ResolveNewWordRequest` /
+  `ResolveNewWordResponse` と、`ipc/src/Payloads.cpp` の codec である。wire key は C++ のメンバ名と同じ。
 
-```cpp
-struct ListNewWordCandidatesRequest { std::string state_filter{"pending"}; uint32_t max_items{50}; };
-struct NewWordField {
-  std::string surface, reading, source, state;
-  uint32_t count{0};
-  uint64_t last_seen_epoch{0};
-};
-struct ListNewWordCandidatesResponse {
-  bool ok{true};
-  std::optional<std::string> error;
-  std::vector<NewWordField> items;
-};
+本節と §7-2 は `docs/windows-tsf-host-architecture.md`「IPC メッセージ」の索引から参照され、
+フィールドの意味を次のとおり定める。
 
-struct ResolveNewWordRequest { std::string surface, reading, action; }; // action: confirm|reject
-struct ResolveNewWordResponse {
-  bool ok{false};
-  bool changed{false};
-  std::optional<std::string> error;
-};
-```
+| payload | フィールド | 意味 | 欠落時 |
+|---|---|---|---|
+| `ListNewWordCandidatesRequest` | `state_filter` | 一覧する状態（下記の受理条件） | `pending` |
+| 同上 | `max_items` | 返す件数の上限（下記の受理条件） | 50 |
+| `NewWordField` | `surface` / `reading` / `count` / `last_seen_epoch` | §3-1 の同名フィールド | — |
+| 同上 | `source` / `state` | §3-2 の TSV と同じ小文字の名前（`mining` / `trending`、`pending` / `confirmed` / `rejected`） | — |
+| `ListNewWordCandidatesResponse` | `ok` / `error` / `items` | 下記「応答の意味」 | `ok=true` |
+| `ResolveNewWordRequest` | `surface` / `reading` | 対象の語 | — |
+| 同上 | `action` | `confirm` または `reject` | — |
+| `ResolveNewWordResponse` | `ok` / `changed` / `error` | 下記「応答の意味」 | `changed=false` |
 
 parser の受理条件:
 
@@ -515,31 +502,21 @@ parser の受理条件:
 
 ## 8. 設定
 
-`settings/mvp-settings.schema.json` の `autoWordRegistration` として定義する。
+型・既定値・範囲の正典は `settings/mvp-settings.schema.json` の `autoWordRegistration` である
+（schema の `description` が本節を指す）。本節は各キーの意味と反映先を定める。
 
-```json
-"autoWordRegistration": {
-  "type": "object",
-  "description": "M36: 新語の自動取得・辞書追加",
-  "properties": {
-    "miningEnabled":   { "type": "boolean", "default": true },
-    "trendingEnabled": { "type": "boolean", "default": false },
-    "registrationMode": { "type": "string", "enum": ["confirm", "auto"], "default": "confirm" },
-    "miningMinCount":  { "type": "integer", "default": 3, "minimum": 1, "maximum": 100 },
-    "trendingIntervalHours": { "type": "integer", "default": 24, "minimum": 1, "maximum": 8760 }
-  },
-  "additionalProperties": false
-}
-```
+| キー | 意味 | `EngineConfig` の反映先 |
+|---|---|---|
+| `miningEnabled` | ユーザー入力マイニング（§4）を行う | `auto_word_mining_enabled` |
+| `trendingEnabled` | トレンド語の取得（§5）を行う | `auto_word_trending_enabled` |
+| `registrationMode` | `confirm` は pending を経て承認（§7）、`auto` はしきい値到達で即 confirmed | `auto_word_auto_register`（`auto` のとき true） |
+| `miningMinCount` | マイニングで昇格に要る観測回数 | `auto_word_min_count` |
+| `trendingIntervalHours` | トレンド語を取得する間隔（時間） | `auto_word_trending_interval_hours` |
 
 実効値の経路は `settings.json` の `autoWordRegistration.*` とする。host の
-`SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が `EngineConfig` の
-`auto_word_mining_enabled` / `auto_word_auto_register`（`registrationMode == "auto"`）/
-`auto_word_min_count` へ反映する。
+`SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が上表の `EngineConfig` へ反映する。
 
-`trendingIntervalHours` の上限は 8760（1 年）とする。`EngineConfig` の
-`auto_word_trending_enabled` / `auto_word_trending_interval_hours` へも反映し、
-`Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
+`trendingIntervalHours` の上限は 8760（1 年）とする。`Dispatcher::HandleUpdateConfig` はモデルの再ロード前に Fetcher へ設定を通知する。
 SafeMode または `privacy.mode=offline` では `trendingEnabled` の実効値を false とする。
 offline による抑止は保存された `trendingEnabled` を変更せず、通常モードへ戻ると元の設定を使う。
 `auto_word_default_score` は §6 の注入が使う `EngineConfig` の内部値であり、
@@ -1199,17 +1176,18 @@ mutable 層が別の結果を返すことになる。
   「とうきょう」「とうきょうと」が返る。入力途中の読みを補完する向きであり、M15 予測候補
   ウィンドウが要求するのはこちら。
 
+型の正典は `core/include/azookey/core/DoubleArrayTrie.h` の `PrefixMatch` と `MatchKind` である。
+
+| 型 | 要素 | 意味 |
+|---|---|---|
+| `PrefixMatch` | `key_length` | マッチしたキーのバイト長（UTF-8 の文字境界で終わる） |
+| 同上 | `key_id` | KEYS セクションの index（§15.5） |
+| 同上 | `entry_ref_off` | EIDX セクション内のオフセット（§15.5） |
+| 同上 | `entry_count` | このキーに紐づくエントリ数 |
+| `MatchKind`（`uint8_t`） | `Exact` = 0 / `Alias` = 1 / `LongVowelRelaxed` = 2 | エントリへの参照の一致種別（§15.3）。数値は §15.5 の `EIDX` に書く値 |
+
 ```cpp
 namespace azookey::core {
-
-enum class MatchKind : uint8_t { Exact = 0, Alias = 1, LongVowelRelaxed = 2 };
-
-struct PrefixMatch {
-  uint32_t key_length;      // マッチしたキーのバイト長（UTF-8 の文字境界で終わる）
-  uint32_t key_id;          // KEYS セクションの index（§15.5）
-  uint32_t entry_ref_off;   // EIDX セクション内のオフセット（§15.5）
-  uint32_t entry_count;     // このキーに紐づくエントリ数
-};
 
 class DoubleArrayTrie {
  public:

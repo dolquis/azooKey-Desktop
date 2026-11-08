@@ -93,108 +93,83 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 
 ## IPC メッセージ
 
-各メッセージの payload フィールドの正典スキーマは `ipc/include/azookey/ipc/Payloads.h`
-（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下のフィールド列挙は
-要約であり、全フィールドを網羅しない。`✅` は Payload codec と Dispatcher のハンドラまで
-配線してある型、`⚠️` は `MessageType` の enum（`ipc/include/azookey/ipc/Messages.h`）にだけ
-定義してあり、Dispatcher が `unsupported_message_type` を返す型を示す。設定アプリ向けの型と
-M45 以降に足した型は「新規 IPC メッセージ」の表に載せる。配線の正典は `ipc/` と
-`inference-host/src/Dispatcher.cpp` の実装であり、作業の状態は Linear が持つ。
+本節は IPC の型から、その payload と挙動を定める正典の節への索引である。フィールドを列挙しない。
 
-- ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
-  応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,
-  host_generation_id?, capabilities[])`。欠落するcapabilitiesは空配列として受理し、
-  `oob_cancel`と`commit_segments`の広告をもとに長文の制御と学習通知を選ぶ。
-  `app_profile` と `candidate_tag` の広告は `docs/app-profile-spec.md` §3.1 に従う。
-  `host_generation_id` は Host 起動ごとに生成し、同一プロセスの
-  全接続で共有する UUID。省略する旧 Host は空文字として受理する。応答は TIP 向け runtime
-  設定（下記「設定（SettingsStore）」）も載せる。
-  `client_id` は primary / control 接続間で Cancel 名前空間を共有するための TIP インスタンス ID、
-  `handshake_token` は per-connection 認証ゲートに使う（後述）。
-- ✅ `Ping` / `Health`
-- ✅ `LoadModel(path, backend, n_gpu_layers?)` / `LoadModelResponse(ok, error?)`。
-  Host は `ProbeZenzaiGgufModel` で GGUF を実プローブし、成功時は `ZenzaiModelConverter`
-  を構築する（`InferenceEngine::LoadModelWithResult`）。CUDA backend は未リンクのため
-  CPU に fallback し、`error` にその旨を入れて `ok=true` を返す。`path` 空文字時は MVP
-  fallback converter を active にする。probe 失敗時は、まだモデル未ロードの初回ロードなら
-  MVP fallback converter へ切り替える一方、既にモデルロード済みの再ロードでは直前にロード
-  済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
-  SafeMode 中はロードせず `ok=false` / `error: "safe_mode"` を返す
-  （`docs/dev-infrastructure-spec.md` §8.5.3）。
-- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?, raw_romaji?,
-  english_candidates?)` /
-  応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source,
-  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7、
-  `raw_romaji` と `english_candidates` は `docs/inline-english-candidate-spec.md` §6.2 に従う。
-  変換候補は `max_candidates` で切り詰める。応答にはその後で、rewriter（記号・絵文字）の
-  追加分と M60 の英単語候補（辞書語 5 件・学習語 8 件・生ローマ字・6 形まで）が加わりうる。
-- ✅ `QueryLiveConversion` — 要求 `(kana, context, auto_punctuation?, punctuation_style?,
-  raw_romaji?, mixed_english?, secure?)` / 応答 `(surface, confidence, segments[]?)`。
-  要求 ID は Envelope の `request_id`。`auto_punctuation`・`punctuation_style` と応答の
-  `segments[]` は `docs/dynamic-punctuation-spec.md` §7 に従う。動作は
-  `docs/legacy-parity-spec.md` §2 が定める。
-- ✅ `QueryPredictions` — 要求 `(kana, leftSideContext, mode, app?, secure?)` /
-  応答 `(predictions[], ok?, error?)`。要求 ID は Envelope の `request_id`。`secure` の
-  欠落は secure として扱い、wire には `false` だけを載せる（`docs/privacy-and-secure-input-spec.md`
-  §5.1.1）。動作は `docs/legacy-parity-spec.md` §3 と `docs/rich-features-spec.md` X-2 が定める。
-- ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
-  逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
-- ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates,
-  english_candidates?)` /
-  応答 `(segments[], full_surface, partial, canceled)`。各 segment は
-  `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で
-  cancel / latest を追跡し、キャンセル時は `canceled=true` と空の segments を返す。
-  Host は読みを chunk に分けて segments を返し（`docs/romaji-batch-conversion-spec.md` §7）、
-  `full_surface` は各 segment の先頭候補の surface を連結したものである。
-  任意の `english_candidates` は `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 に従う。
-  segments が 1 要素のときは、`max_candidates` で切り詰めた後に M60 の英単語候補が加わりうる。
-  `ai-cleanup` は共有 `AiBackend::Transform` へ委譲する。入力と許可の契約は
-  `docs/romaji-batch-conversion-spec.md` §6 を参照する。
-- ✅ `Cancel(target_request_id)`
-- ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms, observation_id)` /
-  応答 `CommitObservationResponse(ok)`。配送保証は at-least-once で、TIP は応答を受け取れ
-  なかった観測を確定の順序を保ったまま再接続後に再送し、Host は `observation_id` で重複を
-  捨てる。`observation_id` を省略する旧 TIP は空文字として受理し、冪等化の対象外とする。
-  キーの生成規則、両側の上限、失われうる範囲は `docs/learning-data-management-spec.md` §12
-  が正典。
-- ✅ `CommitSegmentsObservation` — 応答は `CommitObservationResponse(ok)`。全文節を検証し、
-  観測 ID 単位で再送を抑止する。payload と旧 Host への fallback は
-  `docs/romaji-batch-conversion-spec.md` §6.4 を正典とする。
-- ✅ `ObserveTypo(wrong_reading, correct_reading, timestamp_ms, secure, learning_allowed)` —
-  fire-and-forget で、Host は応答を返さない。学習ゲートは `docs/privacy-and-secure-input-spec.md`
-  §5.1.1、payload の契約は `docs/typo-correction-learning-spec.md` §7 / §12.13 に従う。
-- ✅ `ListNewWordCandidates(state_filter, max_items)` / 応答 `(ok, error?, items[])`、
-  `ResolveNewWord(surface, reading, action)` / 応答 `(ok, changed, error?)` — 新語候補（M36-A）の
-  一覧と確定・却下。契約は `docs/auto-word-registration-spec.md` §7-1 / §7-2 に従う。
-- ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
-  `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
-  永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
-  応答は `(ok, generated_id?, error?)`（`RemoveUserWord` は `(ok, error?)`）。`ok=false` のとき `error` に
-  `busy` / `lock_failed` / `load_failed` / `save_failed` / `not_found` / `unavailable` /
-  `invalid_request` / `not_authenticated` のいずれかを載せる（前の 6 つは `UserDictionaryEditResultName` と同じ語）。
-  `error` を持たない古い Host の応答も読める。
-- ✅ `UpdateConfig` — 要求 payload は空オブジェクト（設定内容は wire に載せない。Host が
-  `SettingsStore::Reload()` で settings.json を読み直す） / 応答 `(ok, error?)`。
-  再読込は `update_config_mutex` で直列化し、runtime settings を engine config へ適用してから
-  モデルを再ロードする。settings.json が invalid な場合は engine を触らず `ok=false` を返す。
-- ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
-  `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
-  learning_entries, user_dict_entries, fallback_state, last_error?, neologd_layer?, backend_selection?,
-  prompt_format?)`。
-  `neologd_layer` は `neologd_lexicon` 層の状態で、値の意味は `docs/auto-word-registration-spec.md` §15.14、
-  wire の形は `docs/dev-infrastructure-spec.md` §12.6 が定める。
-  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` / `safe_mode` のいずれかで、
-  `safe_mode`（`docs/dev-infrastructure-spec.md` §8.5.3）は他のどの判定より優先する。
-  送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
-  `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
-  `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
-  して診断スナップショットへ格納する。TIP が送る契機と、応答のうち `fallback_state` だけを
-  使う規則は `docs/dev-infrastructure-spec.md` §8.5.1 が定める。
-- ⚠️ `UpdateUserWord` / `QueryCorrections` — enum にだけ定義し、Payload codec も Dispatcher の
-  ハンドラも持たない。受信時は次項の `unsupported_message_type` 応答になる。
-- 認証済み Dispatcher がハンドラ未対応の型または `Unknown` を受け取った場合は、
-  request の型と相関 ID を保った `{"ok":false,"error":"unsupported_message_type"}`
-  応答を返す。無応答は fire-and-forget の `Cancel` と `ObserveTypo` に限る。
+- 型の一覧の正典は `ipc/include/azookey/ipc/Messages.h` の `MessageType` である。新しい型は
+  `Unknown` の前に足し、本節の表にも 1 行を足す。
+- payload のフィールド、wire key、欠落時の既定値の正典は `ipc/include/azookey/ipc/Payloads.h` と
+  `ipc/src/Payloads.cpp` である。各 spec はフィールドの意味と挙動を定め、struct を写さない。
+- 型を利用できるのは、Payload codec と `inference-host/src/Dispatcher.cpp` のハンドラの両方を
+  持つときに限る。enum に存在するだけの型を利用可能とみなさない。
+- 認証済み Dispatcher がハンドラを持たない型または `Unknown` を受け取ったときの応答は
+  `docs/dev-infrastructure-spec.md` §6.3 が定める。応答を返さない fire-and-forget の型は
+  `Cancel` と `ObserveTypo` である。
+
+| 型 | 正典の節 |
+|---|---|
+| `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/dev-infrastructure-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`） |
+| `LoadModel` | 本書「型ごとの処理規則」、`docs/copilot-pc-backend-spec.md` §4.4（backend の指定と降格）、`docs/dev-infrastructure-spec.md` §8.5.3（SafeMode での拒否） |
+| `QueryCandidates` | `docs/app-profile-spec.md` §3.1・§7（`app` と `tag`）、`docs/inline-english-candidate-spec.md` §6.2（`raw_romaji` / `english_candidates`）、`docs/mixed-english-auto-conversion-spec.md` §9.1（`mixed_english`）、`docs/dynamic-punctuation-spec.md` §7.1・§7.2（`auto_punctuation` / `punctuation_style` / `segments`）、`docs/candidate-rewriter-spec.md` §8.4（`emoji_trigger`）・§9.5（`max_candidates` との適用順）、`docs/typo-correction-learning-spec.md` §7（`corrected_reading`）、`docs/legacy-parity-spec.md` §5.4（`alt_readings`）、`docs/privacy-and-secure-input-spec.md` §5.1.1（`secure` / `learning_allowed`） |
+| `QueryLiveConversion` | `docs/legacy-parity-spec.md` §2.2 |
+| `QueryBatchConversion` | `docs/romaji-batch-conversion-spec.md` §6・§7、`docs/inline-english-candidate-spec.md` §6.7、`docs/ai-backend-spec.md` §4.2（`ai-cleanup`） |
+| `QueryPredictions` | `docs/legacy-parity-spec.md` §3.5 |
+| `QueryCorrections` | ハンドラを持たない。応答は `docs/dev-infrastructure-spec.md` §6.3 |
+| `Cancel` | 本書「Handshake 認証ゲート」（`client_id` ごとの名前空間）、`docs/romaji-batch-conversion-spec.md` §6.3.1・§6.3.2 |
+| `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4 |
+| `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1 |
+| `AddUserWord` | 本書「型ごとの処理規則」、`docs/learning-data-management-spec.md` §4.5（ロックと保存の順序） |
+| `UpdateUserWord` | ハンドラを持たない。応答は `docs/dev-infrastructure-spec.md` §6.3 |
+| `RemoveUserWord` | `AddUserWord` と同じ |
+| `UpdateConfig` | 本書「設定（SettingsStore）」、`docs/sideload-packaging-spec.md` §3.3 |
+| `Ping` | `docs/dev-infrastructure-spec.md` §8.5.2（timeout） |
+| `Health` | `docs/dev-infrastructure-spec.md` §8.3・§8.5.1 |
+| `QueryDiagnostics` | `docs/dev-infrastructure-spec.md` §12.6（payload）・§8.5.1（TIP の利用と `fallback_state` の導出） |
+| `CommitSegmentsObservation` | `docs/romaji-batch-conversion-spec.md` §6.4 |
+| `ObserveTypo` | `docs/typo-correction-learning-spec.md` §7・§12.13、`docs/privacy-and-secure-input-spec.md` §5.1.1 |
+| `ListNewWordCandidates` | `docs/auto-word-registration-spec.md` §7-1・§7-2 |
+| `ResolveNewWord` | `docs/auto-word-registration-spec.md` §7-1・§7-2 |
+| `ReverseConvert` | `docs/tsf-deep-integration-spec.md` §1.2 |
+| `ListModels` | `docs/model-management-spec.md` §4.1 |
+| `BenchmarkModel` | `docs/model-management-spec.md` §4.2 |
+| `ListLearningEntries` | `docs/learning-data-management-spec.md` §4.1 |
+| `ForgetLearningEntry` | `docs/learning-data-management-spec.md` §4.2 |
+| `ExportLearningData` | `docs/learning-data-management-spec.md` §4.3 |
+| `ImportLearningData` | `docs/learning-data-management-spec.md` §4.4 |
+| `ResetLearningStore` | `docs/learning-data-management-spec.md` §4.6 |
+| `QueryPersona` | `docs/rich-features-spec.md` X-2-7 |
+| `DetectAnomalies` | `docs/rich-features-spec.md` X-3-6 |
+| `FetchCatalogModel` | `docs/model-management-spec.md` §4.4 |
+| `QueryCatalogFetch` | `docs/model-management-spec.md` §4.4 |
+| `CancelCatalogFetch` | `docs/model-management-spec.md` §4.4 |
+| `Unknown` | `docs/dev-infrastructure-spec.md` §6.3 |
+
+`MessageType` に無く、spec が定義を持つ予定の型は次の 2 つである。enum へ足すときに上の表へ移す。
+
+- `TransformSelectedText`（予定。M16）: `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4
+- `RequestPostCommitLint`（予定。横断 X-3-3）: `docs/rich-features-spec.md` X-3-3、`docs/ai-backend-spec.md` §4.3
+
+校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session
+（`ipc/include/azookey/ipc/ProofreadSession.h`）は Host の IPC ではなく、TIP が押下ごとに作る
+使い捨ての pipe であり、`MessageType` に含めない（`docs/rich-features-spec.md` X-3-6）。
+
+### 型ごとの処理規則
+
+他の spec に正典の節を持たない Host 側の処理規則を、型ごとに定める。
+
+- `Handshake`: 欠落した `capabilities` は空配列として受理する。TIP は Host が広告する
+  `oob_cancel` と `commit_segments` をもとに、長文の制御と学習通知の経路を選ぶ。
+  `client_id` は primary 接続と control 接続で Cancel の名前空間を共有するための TIP インスタンス ID、
+  `handshake_token` は接続ごとの認証ゲートに使う（「Handshake 認証ゲート」）。
+- `LoadModel`: Host は GGUF を `ProbeZenzaiGgufModel` で実プローブし、成功時は
+  `ZenzaiModelConverter` を構築する（`InferenceEngine::LoadModelWithResult`）。`path` が空なら
+  MVP fallback converter を active にする。プローブに失敗したとき、モデル未ロードの初回ロードなら
+  MVP fallback converter へ切り替え、ロード済みの再ロードなら直前のモデルを active のまま維持する
+  （`LoadModelFailureKeepsPreviouslyLoadedModel`）。
+- `AddUserWord` / `RemoveUserWord`: Host は `UserDictionary` を更新し、永続化に成功した場合だけ
+  `ok=true` を返す。永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
+  `ok=false` のときの `error` は `Payloads.h` の `kUserDictError*` のいずれかで、`invalid_request` と
+  `not_authenticated` を除く語は `UserDictionaryEditResultName` と同じである。`error` を持たない
+  古い Host の応答も読める。
 
 ### Handshake 認証ゲート
 
@@ -386,47 +361,8 @@ quarantine と保存の排他の契約は `docs/learning-data-management-spec.md
 
 ## 新規 IPC メッセージ
 
-以下は「IPC メッセージ」の一覧に載せない、設定アプリ向けの型と M45 以降に足した型の一覧である。
-表の型はどれも Payload codec と Dispatcher のハンドラまで配線してある。フィールドの正典は
-`ipc/include/azookey/ipc/Payloads.h` である。
-
-> 注: 利用可能な型は `Messages.h`、`Payloads.h`/`.cpp`、`Dispatcher.cpp` の
-> 3 点で確認する。enum に存在するだけの型を利用可能とみなさない。
-> 新メッセージ型は **`Unknown` sentinel の前に挿入**する。
-
-| メッセージ | 方向 | 導入 Phase | 参照 |
-|---|---|---|---|
-| `ListModels` / `BenchmarkModel` | 設定アプリ → Host | M45、配線済み。capabilities `list_models` / `benchmark_model`。`ListModels` の要求の `include_catalog` で、応答に既定の catalog の `catalog[]` と各 GGUF の `catalog_id` が付く（DEV-1821） | model-management §4.1 / §4.2 |
-| `FetchCatalogModel` / `QueryCatalogFetch` | 設定アプリ → Host | DEV-1821。capability `fetch_catalog_model`。開始はすぐ応答し、進捗と結果は問い合わせで得る | model-management §4.4 |
-| `CancelCatalogFetch` | 設定アプリ → Host | DEV-1840。capability `cancel_catalog_fetch`。実行中のその entry の取得に止まるよう求め、すぐ応答する | model-management §4.4 |
-| `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` / `ImportLearningData` | 設定アプリ → Host（`ForgetLearningEntry` の `reading` + `surface` 形は TIP → Host） | M49、capability `learning_data_management`。payload codec は `Payloads.h` の M49 節 | learning-data-management §4 |
-| `ResetLearningStore` | 設定アプリ → Host | M30、capability `learning_reset` | learning-data-management §4.6 |
-| `QueryPersona` | 設定アプリ → Host | M30、capability `persona` | rich X-2-7 |
-| `DetectAnomalies` | 設定アプリ → Host | M30、capability `detect_anomalies` | rich X-3-6 |
-| `CommitCorrection` Payload | TIP → Host | M54。TIP は確定直後の Backspace（`undo`）と azooKey UI での再変換（`reconvert`）で送る。capability `commit_correction` | user-learning-enhancement §4.1 |
-
-`MessageType` の enum にまだ無く、spec が定義を持つ予定の型は次のとおり。enum へ足すまで
-上の一覧にも表にも載せない。
-
-| メッセージ | 方向 | 予定 | 参照 |
-|---|---|---|---|
-| `TransformSelectedText` / `Response` | TIP → Host | 予定（M16 Magic Conversion / Replace Suggestion） | legacy-parity §4.4、ai-backend §4.1 |
-| `RequestPostCommitLint` / `Response` | TIP → Host | 予定（roadmap M16 の横断 X-3-3） | rich X-3-3、ai-backend §4.3 |
-
-校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session（`ipc/include/azookey/ipc/ProofreadSession.h`）は
-Host の IPC ではなく、TIP が押下ごとに作る使い捨ての pipe で、本表の `MessageType` には含めない（rich X-3-6）。
-
-`UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
-M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、
-現行の要求 payload は空オブジェクトである。roadmap M30 は変更対象に `ipc/src/Payloads.cpp`
-を挙げて「M11 の最小 `UpdateConfig` を拡張」と定めており、payload 側の拡張が M30 に残る
-（`docs/sideload-packaging-spec.md` §3 + roadmap M11 / M30）。実装済みの範囲と M30 で残る
-範囲は次のとおり。
-
-| 区分 | 内容 |
-|---|---|
-| 実装済み（M11 相当） | 要求 payload 空オブジェクト、`SettingsStore::Reload()` による settings.json 再読込、engine config 適用とモデル再ロード、応答 `(ok, error?)` |
-| M30 に残る | 要求 payload の拡張（横断項目・バッチ訂正等をフル設定 UI から渡すためのフィールド追加）と、対応する `SettingsStore`（`inference-host/src/SettingsStore.cpp`）側の拡張 |
+設定アプリ向けの型と M45 以降に足した型も、「IPC メッセージ」の索引表に `MessageType` の順で載せる。
+`UpdateConfig` の payload を拡張する範囲は roadmap M30 と `docs/sideload-packaging-spec.md` §3 が定める。
 
 ## TIP プロセス HWND 構成
 

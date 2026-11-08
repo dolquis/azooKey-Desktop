@@ -4,6 +4,19 @@
 バックエンドの選定と実装方針を定める。`plans/windows-port-roadmap.md` の
 Phase 6 の M24〜M27 が本書を参照する。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3 | M24 |
+| §4 | M8・M24 |
+| §5〜§6 | M25 |
+| §7 | M26 |
+| §8 | M27 |
+| §9〜§10 | M24〜M27 共通 |
+
 ## 1. BackendKind enum 拡張
 
 `inference-host/include/azookey/host/InferenceEngine.h`：

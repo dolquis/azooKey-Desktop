@@ -12,11 +12,18 @@ macOS 版 `legacy/` は対象外。
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/privacy-and-secure-input-spec.md`（M46）。
 
-> **本仕様の段差**: §1〜§11 は M35（v1: 基本タイプミス学習）の正典。
-> §12 以降は M55（v2: 統合補正エンジン）の追補章で、v1 の機能を発展
-> させ、ReadingHypothesis 経由で CandidateGenerator 前段に補正を組み
-> 込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
-> ペア学習は v2 でも下位互換として維持する。
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§11 | M35（v1: 基本タイプミス学習） |
+| §12 | M55（v2: 統合補正エンジン） |
+
+§12 は M55 の追補章で、v1 の機能を発展させ、ReadingHypothesis 経由で CandidateGenerator 前段に
+補正を組み込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
+ペア学習は v2 でも下位互換として維持する。
 
 ## 1. 背景と目的
 

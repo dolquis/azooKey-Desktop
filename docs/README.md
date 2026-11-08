@@ -40,17 +40,17 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
-| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M64 の字種指定確定（F6〜F10）と読みが無いときの Space の幅（`fullWidthSpace`） |
-| [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
-| [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。M53: 設定アプリの辞書ライセンス導線（§4.6） |
-| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
-| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M51 のビルド、CI、IPC、診断基盤。§12 は診断ウィザード |
+| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7 |
+| [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド。§4 の推論エンジン選定は M8 と共有 |
+| [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。§4.4 は M16 の Magic Conversion プロンプト、§4.5 は M34 の API キー入力、§4.6 は M53 の設定アプリの辞書ライセンス導線 |
+| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI・設定アプリ（M11 / M12）、Phase 7（M28〜M30、M32〜M34）の配布・署名・更新・観測 |
+| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、IPC、観測性、Host 可用性、診断基盤。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
 | [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層、§15 物理層） |
 | [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
-| [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
+| [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
@@ -59,7 +59,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
-| [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入） |
+| [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入）。§3・§4.3 は M62-B の英字分の正典 |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61-A 自動カッコペアリングと M61-B 外部化・アプリ互換 |
 | [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) | 追加機能 M63（日英混在ローマ字入力の自動変換：M63-A 1 語 / M63-B 文中混在。分割器・IPC・順位・学習・設定） |
 | [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |

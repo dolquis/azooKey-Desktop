@@ -16,6 +16,18 @@ IPC payload、データ形式、TIP と Host の責務境界、候補窓 UX、�
 - `docs/windows-tsf-host-architecture.md` … IPC メッセージと互換性優先の実装ルール。
   §8 の payload 追加はこの規約に従う。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2 | M62 共通 |
+| §3〜§5 | M62-A |
+| §6〜§17 | M62-D |
+| §18 | M62-B（カタカナ分。英字分の正典は `docs/inline-english-candidate-spec.md`） |
+| §19 | M62-C |
+
 ## 1. 目的
 
 候補リライターは、既存の変換候補または入力中の読みから派生候補を生成する層である。

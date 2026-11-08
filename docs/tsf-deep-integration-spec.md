@@ -107,9 +107,8 @@ ReverseConvertResponse:
 
 ### 1.4 受け入れ条件
 
-- メモ帳で「明日」を選択 → 右クリック「再変換」（or 変換キー押下）→ 「あした」
-  「アシタ」「Ashita」等の候補が出る
-- 候補選択で範囲が置換される
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M20 節とする。本節は受け入れ条件を複製しない。
 
 ## 2. UI-less Mode (M21・基本契約は M5 で必須)
 
@@ -287,10 +286,8 @@ Esc は読みへ戻らず入力を取り消す
 
 ### 2.5 受け入れ条件
 
-- Windows 11 / Office (TF_TMF_UIELEMENTENABLEDONLY) で TIP の自前ウィンドウが
-  出ず、Windows 11 標準の候補 UI に候補が表示される
-- `pbShow == TRUE` を返すアプリ（UI element sink を持たない大多数のレガシー Win32
-  等）では従来通り `CandidateWindow` が出る
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ### 2.6 `pbShow` の per-call 切替
 
@@ -616,16 +613,10 @@ TIP は `settings.json` の変更を読み直して反映する。キーが無�
 
 ### 3.4 受け入れ条件
 
-- メモ帳で半角/全角キー → IME のオン/オフがトグル
-- 「あした」を選択して無変換キー → 「アシタ」→「ｱｼﾀ」→「ＡＳＨＩＴＡ」→「ASHITA」と巡回
-- 「あした」を選択して変換キー → 「明日」候補が出る
-- 英数モードと IME Off でカタカナひらがなキー（修飾なし）→ ひらがな入力になり、キーはアプリへ渡らない。
-  Shift 付き・Alt 付きはアプリへ渡る
-- `kanji` → F7 で「カンジ」、F8 で「ｶﾝｼﾞ」、F9 で「ｋａｎｊｉ」、F10 で「kanji」、F6 で「かんじ」が確定する（§3.6）。
-  `dai3kai` → F7 で「ダイ3カイ」、F10 で「dai3kai」
-- 読みが無いときの F7・F10 はアプリへ渡る（Debug ビルドの F10 はデバッグ窓）
-- ひらがなモードで読みが無いときの Space → 全角空白、Shift+Space → 半角空白（`fullWidthSpace = true`、§3.7）
-- `dai3kai` → 読み「だい3かい」、`ji:kan` → 読み「じ：かん」、`kakko[` → 読み「かっこ「」（`bracketPairing = false`、§3.5）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M22 節とする。本節は受け入れ条件を複製しない。
+
+F6〜F10 の字種指定確定（§3.6）の受け入れ条件は roadmap の M64 節が持つ。
 
 ### 3.5 OEM 記号キーと明示句読点
 
@@ -959,20 +950,8 @@ On → Off で何を確定するかは、Off にした操作で決まる。
 
 ### 4.4 受け入れ条件
 
-- azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
-- 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
-- 開いたことのある入力先へ戻ったとき、TIP は開閉を書き込まない（IMM32 互換層が入力先ごとの状態を戻すアプリでは、Off にした入力先は Off のまま）
-- 半角/全角キーで IME On/Off が切り替わり、Status を反映。ライブ変換・候補の表示中に Off にすると、表示中の文字列を確定してから Off になる
-- フォーカス喪失、TIP の外からの Off、英数モードへの切替では、ライブ変換・候補の表示中なら表示中の文字列が確定し、学習観測は送られない（§4.3）
-- 確定の edit session が拒否されて再試行を待つ間に打ったキーは、次のキーで確定し直した後に打った順で入力される（§2.4.1）
-- `VK_IME_ON` で Off から On になり、On のままなら変わらない。英数モード中の `VK_IME_ON` はひらがなに戻る
-- `VK_IME_OFF` で On から Off になり、Off のままなら変わらない。読み入力中・候補表示中は表示中の文字列を確定してから Off になる
-- 初回フォーカスから 1 秒以内でも、開閉キーと入力インジケーターのクリックによる Off は On に戻らない
-- `convertKeysAction` が `default` のとき変換・無変換は §3.2・§3.3 のとおり。`imeOnOff` のとき変換で On、無変換で Off になり、再変換と巡回は起きない
-- 入力インジケーターが On・英数モード・Off を「あ」「_A」「A」で表示し、左クリックで On/Off が切り替わる（§4.5）
-- 入力インジケーターの右クリックのメニューで、ひらがな・半角英数・直接入力を切り替え、ライブ変換と予測を反転して settings.json に残し、設定アプリを開ける。管理者・低 IL・AppContainer のプロセスではライブ変換と予測がグレーアウトする（§4.5）
-- Win+Space で別言語に切替時、composition が確定される
-- アプリ切替時に composition が確定される
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ### 4.5 入力インジケーター（言語バー項目 `GUID_LBI_INPUTMODE`）
 
@@ -1123,13 +1102,11 @@ segment は区間を持たないので、各文節が表示している文字列
 
 ### 5.5 受け入れ条件
 
-一括変換（`batchRomajiConversion` が true）で文節を候補窓に表示しているとき（§5.4）:
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M23 節とする。本節は受け入れ条件を複製しない。
 
-- 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
-- 矢印キー（Left/Right）で文節を移動できる（カーソル位置によって色が動く）
-
-provider は色を指定しないため、「青背景」はアプリが `TF_ATTR_TARGET_CONVERTED` を描く配色である。
-アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
+roadmap M23 の「青背景」は、provider が色を指定しないため、アプリが `TF_ATTR_TARGET_CONVERTED` を
+描く配色である。アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
 
 一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たないので
 §5.6 の fallback 属性（入力中と同じ細い実線）になる。注目文節の強調は付かず、変換中であることは
@@ -1332,12 +1309,8 @@ composition の末尾より後ろは最後の文節とする。
 
 ### 7.3 受け入れ条件
 
-一括変換の文節を表示しているとき（§5.4）:
-
-- 変換中 preedit の途中をマウスでクリック → 該当文節が注目に切り替わる
-- 候補ウィンドウが該当文節の候補を表示し直す
-
-文節を表示していないときは、クリックを食わずアプリへ渡す（`OnMouseEvent` の `SegmentIndexAtMouseEdge`）。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M23 節とする。本節は受け入れ条件を複製しない。
 
 ## 8. 予測窓と UI-less Mode の関係
 
@@ -1353,8 +1326,8 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 
 ### 8.1 受け入れ条件
 
-- UI-less の環境でも、読み入力中は自前 `PredictionWindow` が出る
-- 候補窓の表示中は予測窓が出ない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M21 節とする。本節は受け入れ条件を複製しない。
 
 ## 9. テスト
 

@@ -741,7 +741,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `ipc/src/Payloads.cpp`（`ReverseConvert` 追加）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §1。
 - **受け入れ条件**:
-  - メモ帳で「明日」選択 → 変換キーで「あした」候補が出る
+  - メモ帳で「明日」を選択し、右クリックの「再変換」または変換キーで「あした」「アシタ」「Ashita」
+    等の候補が出る
   - 候補選択で範囲が置換される
 - **参照仕様**: `docs/tsf-deep-integration-spec.md` §1
 
@@ -754,9 +755,39 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `ITfKeyboardOpenCloseCompartment` 購読）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §2、§4。
 - **受け入れ条件**:
-  - Office 2021/365 で自前候補ウィンドウが出ず OS 標準 UI に乗る
-  - Win+Space / アプリ切替時に composition が確定される
-- **参照仕様**: `docs/tsf-deep-integration-spec.md` §2, §4
+  - UI-less Mode（spec §2）:
+    - Windows 11 の Office 2021/365（`TF_TMF_UIELEMENTENABLEDONLY`）で TIP の自前ウィンドウが出ず、
+      Windows 11 標準の候補 UI に候補が表示される
+    - `pbShow == TRUE` を返すアプリ（UI element sink を持たない大多数のレガシー Win32 等）では
+      `CandidateWindow` が出る
+    - UI-less の環境でも、読み入力中は自前 `PredictionWindow` が出る。候補窓の表示中は予測窓が
+      出ない（spec §8）
+  - IME On/Off 状態管理（spec §4）:
+    - azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
+    - 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
+    - 開いたことのある入力先へ戻ったとき、TIP は開閉を書き込まない（IMM32 互換層が入力先ごとの
+      状態を戻すアプリでは、Off にした入力先は Off のまま）
+    - 半角/全角キーで IME On/Off が切り替わり、Status を反映する。ライブ変換・候補の表示中に Off に
+      すると、表示中の文字列を確定してから Off になる
+    - フォーカス喪失、TIP の外からの Off、英数モードへの切替では、ライブ変換・候補の表示中なら
+      表示中の文字列が確定し、学習観測は送られない（spec §4.3）
+    - 確定の edit session が拒否されて再試行を待つ間に打ったキーは、次のキーで確定し直した後に
+      打った順で入力される（spec §2.4.1）
+    - `VK_IME_ON` で Off から On になり、On のままなら変わらない。英数モード中の `VK_IME_ON` は
+      ひらがなに戻る
+    - `VK_IME_OFF` で On から Off になり、Off のままなら変わらない。読み入力中・候補表示中は
+      表示中の文字列を確定してから Off になる
+    - 初回フォーカスから 1 秒以内でも、開閉キーと入力インジケーターのクリックによる Off は On に
+      戻らない
+    - `convertKeysAction` が `default` のとき変換・無変換は spec §3.2・§3.3 のとおり。`imeOnOff` の
+      とき変換で On、無変換で Off になり、再変換と巡回は起きない
+    - 入力インジケーターが On・英数モード・Off を「あ」「_A」「A」で表示し、左クリックで On/Off が
+      切り替わる（spec §4.5）
+    - 入力インジケーターの右クリックのメニューで、ひらがな・半角英数・直接入力を切り替え、
+      ライブ変換と予測を反転して settings.json に残し、設定アプリを開ける。管理者・低 IL・
+      AppContainer のプロセスではライブ変換と予測がグレーアウトする（spec §4.5）
+    - Win+Space で別言語に切替時、およびアプリ切替時に composition が確定される
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §2, §4, §8
 
 ### M22: 半角全角 / 無変換 / 変換 / Caps
 
@@ -765,10 +796,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `tsf-tip/src/TextService.cpp::OnKeyDown` のテーブル拡張、
   `core/src/CharacterFormCycle.cpp`（無変換キーの巡回ロジック）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §3。
-- **受け入れ条件**:
-  - 「あした」選択 → 無変換キーで巡回（カナ → 半角カナ → 全角英数 → ASCII →
-    元）
-  - 変換キーで composition 中は候補表示、なしなら再変換
+- **受け入れ条件**（F6〜F10 の字種指定確定は M64 が持つ）:
+  - メモ帳で半角/全角キーを押すと IME のオン/オフがトグルする
+  - 「あした」を選択して無変換キーを押すと「アシタ」→「ｱｼﾀ」→「ＡＳＨＩＴＡ」→「ASHITA」→
+    「あした」と巡回する
+  - 変換キーで composition 中は候補表示、なしなら再変換（「あした」を選択して変換キーで「明日」
+    候補が出る）
+  - 英数モードと IME Off でカタカナひらがなキー（修飾なし）を押すとひらがな入力になり、キーは
+    アプリへ渡らない。Shift 付き・Alt 付きはアプリへ渡る
+  - ひらがなモードで読みが無いときの Space は全角空白、Shift+Space は半角空白を入れる
+    （`fullWidthSpace = true`。spec §3.7）
+  - `dai3kai` → 読み「だい3かい」、`ji:kan` → 読み「じ：かん」、`kakko[` → 読み「かっこ「」になる
+    （`bracketPairing = false`。spec §3.5）
 - **参照仕様**: `docs/tsf-deep-integration-spec.md` §3
 
 ### M23: 複合 DisplayAttribute / ITfMouseSink
@@ -782,7 +821,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §5、§7。
 - **受け入れ条件**:
   - 一括変換（`batchRomajiConversion`）で「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
-  - 一括変換の preedit クリックで該当文節が注目に切替
+  - 一括変換の文節表示中に矢印キー（Left/Right）で文節を移動でき、注目文節の色が移る
+  - 一括変換の preedit クリックで該当文節が注目に切り替わり、候補ウィンドウが該当文節の候補を
+    表示し直す。文節を表示していないときは、クリックを食わずアプリへ渡す
   - 一括変換でない preedit（core 経由）は文節を持たず、`docs/tsf-deep-integration-spec.md` §5.6 の
     fallback 属性で表示する
 - **参照仕様**: `docs/tsf-deep-integration-spec.md` §5, §7

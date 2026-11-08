@@ -73,3 +73,33 @@ jobs:
 
       - name: Check agent definitions against the manifest
         run: python3 scripts/check_agent_definitions.py
+
+      # 契約ファイル（一覧は scripts/check_docs_impact.py の CONTRACT_PATHS）を変えて docs を
+      # 変えない PR に、本文の Documentation impact で影響なしの理由を求める。
+      - name: Test the docs impact gate
+        run: python3 scripts/tests/test_check_docs_impact.py
+
+  docs-impact:
+    name: docs-impact
+    # PR 本文を読むので pull_request だけで走らせる。Dependabot の PR は本文がテンプレートに
+    # 従わないため除外する（skip は required check を満たす）。作成者で判定するのは、人間が
+    # Dependabot の PR を編集しても github.actor が変わるだけで作成者は変わらないため。
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          # base...head の three-dot 差分に merge-base が要る。
+          fetch-depth: 0
+
+      # 本文は env 経由でファイルへ書き出し、run の中に式で直接埋め込まない（injection 対策）。
+      - name: Check the documentation impact of contract changes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/check_docs_impact.py --base "$BASE_SHA" --head "$HEAD_SHA" --body-file "$RUNNER_TEMP/pr-body.md"

@@ -68,6 +68,7 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | `core/**`、候補生成 | 親が `azookey-core-conversion` Skill を読んで確認する | spec 変更なら `spec-drift-checker` |
 | `learning/**`、privacy 設定 | 親が `azookey-learning-data-safety` Skill を読んで確認する | IPC 経由なら親が `tsf-ipc-protocol` Skill を読んで確認する |
 | `docs/*-spec.md`、schema、`docs/test-inventory.md` | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する |
+| 契約ファイル（一覧は `python3 scripts/check_docs_impact.py --print-contract-paths`） | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する。docs impact ゲートは理由の記入だけを見るので、spec の失効はこの確認で補う（`azookey-doc-governance`） |
 | C++ を含む高リスク差分 | `diff-auditor` による独立レビュー | コード品質の追加観点が必要なら `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 

@@ -10,9 +10,7 @@
 
   本スクリプトは `docs/sideload-packaging-spec.md` §1（MSIX サイドロード）・
   同 §1.5（経路別の対象 OS）と `plans/windows-port-roadmap.md` M28 の受け入れ条件を
-  検証対象とし、`plans/windows-port-roadmap.md`
-  「既知のテストギャップ」#5（MSIX manifest と DllRegisterServer の整合）を
-  解消するためのハーネスである。状態・進捗の正典は Linear（DEV-101）。
+  検証対象とするハーネスである。状態・進捗の正典は Linear（DEV-101）。
 
   TIP DLL の COM 登録ラウンドトリップ（DllRegisterServer →
   InprocServer32 / TSF プロファイル → DllUnregisterServer 消滅）自体は CTest

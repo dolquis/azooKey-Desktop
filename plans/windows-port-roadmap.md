@@ -337,7 +337,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **テスト**: 各マイルストーンで `*/tests/` 配下に最低 1 件の単体テストを
   追加する。Windows 依存のないものは Linux/macOS CI でも回す。
-  現存テストの一覧は `docs/test-inventory.md`、未解消のギャップは `## テスト体系` 章を参照。
+  現存テストの一覧は `docs/test-inventory.md`（「テスト体系」章）、テストの欠落は Linear で追跡する。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。実体は `core/src/RuntimeLogger.cpp` で、環境変数 `AZOOKEY_LOG=1` のとき
   コンポーネント別の `.jsonl` へ書く（M41 構造化ログと可観測性）。
@@ -349,52 +349,10 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 ## テスト体系
 
 テストフレームワーク、CTest に登録されているテストの一覧、CTest 以外の自動検査は
-[`docs/test-inventory.md`](../docs/test-inventory.md) を正典とする。本章は、そこに載る
-検査だけでは足りない部分、すなわち Phase 3/4 着手前に解消したいカバレッジの目標を持つ。
+[`docs/test-inventory.md`](../docs/test-inventory.md) を正典とする。各 M の受け入れ条件を
+確かめる測定方法とテスト名は、各 M の「参照仕様」と同文書が持つ。自動検査で確かめられない
+部分（テストの欠落）は Linear の課題として追跡し、本書には書かない。
 
-### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
-
-> 解消済みのギャップは本リストに残さず [`docs/test-inventory.md`](../docs/test-inventory.md) の
-> `現存テスト一覧` 表（および `CTest 以外の自動検査` 表）へ反映する（達成状態の正典は Linear）。
-> 以下は未解消の目標カバレッジの定義のみを並べる。一部だけ実装済みの項目は、実装済み部分を
-> 同文書の 2 表へ移し、本リストには残ギャップだけを書く。
-
-中期（Phase 3 / Zenzai 統合と並行）:
-1. **`tsf-tip` レジストリ round-trip の CI カバレッジ** — `DllRegisterServer` 後に HKLM の COM
-   in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が
-   `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する
-   round-trip。テスト本体は `com_smoke_test.cpp` に実装済みだが、対話的 TSF セッションを要するため
-   opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**
-   （headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
-   残ギャップは、この round-trip を自動実行できる実行環境（対話セッションを持つ self-hosted ランナー
-   または VM ジョブ）の用意。
-
-長期（Phase 4 / 配布前に必須）:
-2. **MSIX 登録・残骸 round-trip の実機検証** — `Add-AppxPackage` → 登録確認 → `Remove-AppxPackage`
-   → 残骸 0 を実機 VM で確認する（`compat-test/msix_install_uninstall.ps1`）。対話セッションと
-   パッケージ登録権限を要するため CI では走らない。宣言値の静的整合は
-   `scripts/tests/msix-identity-consistency.Tests.ps1` が CI でカバー済みのため、本項目の対象外。
-   配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
-3. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で
-   `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
-4. **`QueryCorrections` payload** — `InferenceEngine::QueryCorrections` に対応する
-   Payload と Dispatcher ハンドラを追加し、IPC 経由で叩けるようにする。
-
-開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
-5. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、
-   TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械
-   テストで扱う。単純な再接続成立は `ClientReconnectsAfterHostRestart`、状態遷移と劣化モードへの出入りは
-   `tsf_tip_ipc_connection_state_tests` と `tsf_tip_onkeydown_preedit_tests` の fake Host 結合テストが
-   カバー済みで、残ギャップは別 process の実 Host を停止・再起動する経路（実機確認は Human Gate。
-   複数接続・切断時の client cleanup 単体テストは M40 で対応）。
-6. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・
-   確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認
-   （手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink
-   部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
-7. **bench IPC 内訳メトリクス** — serialize / framing / deserialize と pipe round-trip の
-   フェーズ別レイテンシは `azookey_bench_ipc_smoke` がカバー済み。残ギャップは pipe round-trip の
-   内訳（送信 / Host 計算 / 受信）と UI 反映フェーズの分離で、遅延要因を最後まで切り分けられる
-   ようにする（M41 の相関 ID・フェーズ設計と整合）。
 ## リスクと不確実性
 
 未決の設計判断:
@@ -435,7 +393,7 @@ v1.0 リリースに向けたリスクと対応:
 - macOS 版 v1.0（`legacy/` 配下に保全）
 - `legacy/segment-edit-upstream.md` の文節エディット機能（macOS 向けの上流
   計画、Windows MVP 後）
-- `legacy/Core/Sources/Core/InputUtils/InputState.swift` の FIXME（macOS 側）
+- `legacy/Core/Sources/Core/InputUtils/InputState.swift` の FIXME（macOS 側）<!-- lint:allow status -->
 - Linux 版（コミュニティフォーク `fcitx5-hazkey` で対応）
 
 ## v1.0 までの実行計画（Phase 1〜4）
@@ -1585,7 +1543,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・学習の扱い・設定・フォールバック・
   ライセンス・テスト観点）
 
-#### M62 横断依存・既知のテストギャップ
+#### M62 横断依存・テスト範囲
 
 - **横断依存**: ルート `THIRD_PARTY_LICENSES`（M62-C/D と M53 辞書強化の共通の追記先。
   attribution 運用規約の正典は `docs/licensing-policy.md`。Mozc 由来データ取り込み時は
@@ -2566,16 +2524,3 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 順で効果を測定しながら進める。例外は `docs/neural-reranker-spec.md` Track B
 （NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
 （前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。
-
-karukan（`togatoga/karukan`、MIT OR Apache-2.0、Linux/macOS 向け日本語 IME）は、azooKey が
-計画済みのいくつかのマイルストーンに対する**設計参照実装**として扱う。コードは逐語移植せず
-設計思想のみ参照する。主な対応: M13（TSF 非依存 IM 状態機械 = `karukan-im` の InputState /
-EngineAction / 純粋関数。`docs/legacy-parity-spec.md` §1.1 が既に引用済み）、M14（ライブ変換の
-増分再チャンク・非日本語チャンク verbatim 通過）、M32 / M45（モデル DL・宣言的レジストリ・
-プリフェッチ・pre-tokenizer 上書き。ブロッカー: zenz GGUF 配布ライセンス DEV-202）、M52（Exact
-Match / CER 評価 CLI。評価データは品質ベンチ spec §13 準拠で自前作成）、M15 / M54（学習の
-reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）、NllScorer 型ニューラル
-リランク（コンテキスト再利用で辞書由来候補を Zenzai の文字あたり NLL でリランク。M 番号を
-持たない独立トラックで、正典は `docs/neural-reranker-spec.md` Track B〈§B1〜§B12〉）。詳細な比較・優先度・最小
-導入案・テスト方針・ライセンス注記は調査レポート `docs/karukan-comparison-report.md`
-（特定時点のスナップショット）を参照する。

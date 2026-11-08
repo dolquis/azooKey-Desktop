@@ -7,7 +7,7 @@
 > **作成日**: 2026-06-30
 > **対象**: 自リポジトリ `azooKey-Desktop`（Windows TSF / C++）と参考実装 `togatoga/karukan`（Rust / Linux + macOS）
 > **位置づけ**: 本ファイルは時点依存の**調査レポート**であり、状態の正典ではない。
-> - マイルストーン定義・受け入れ条件の正典 → `plans/windows-port-roadmap.md`（候補リライターは **M62**、karukan 参照対応は末尾「横断テーマ」節）
+> - マイルストーン定義・受け入れ条件の正典 → `plans/windows-port-roadmap.md`（候補リライターは **M62**）。roadmap の M と karukan の対応は本書「付録 3」
 > - 進捗・状態・優先度の正典 → Linear（team `Dev`）
 > - 機能仕様の正典 → `docs/*-spec.md`
 > - karukan は**読み取り専用の参考実装**。コードは逐語移植せず設計思想のみ参照する。
@@ -553,6 +553,28 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 - **preedit 自前 String 保持 + 毎キー UpdatePreedit**（§1.6.3-3 参照）。
 - **XKB keysym キー抽象 / 一方向モードトグル**（§1.6.3-1 参照）。VK / MS-IME 互換が正典。
 - **同期変換前提の状態表**（§1.6.3-2 参照）。IPC 非同期・staleness 契約が正典。
+
+---
+
+## 付録 3: roadmap のマイルストーンと karukan の対応
+
+本付録は `plans/windows-port-roadmap.md`「横断テーマと Phase の対応」の末尾にあった段落を、
+commit `32cf626` 時点の原文のまま移したものである。原文の「上記」は roadmap の M62 節を、
+「調査レポート」は本書を指す。M の定義と受け入れ条件の正典は roadmap、
+NllScorer 型ニューラルリランクの正典は `docs/neural-reranker-spec.md` Track B である。
+
+karukan（`togatoga/karukan`、MIT OR Apache-2.0、Linux/macOS 向け日本語 IME）は、azooKey が
+計画済みのいくつかのマイルストーンに対する**設計参照実装**として扱う。コードは逐語移植せず
+設計思想のみ参照する。主な対応: M13（TSF 非依存 IM 状態機械 = `karukan-im` の InputState /
+EngineAction / 純粋関数。`docs/legacy-parity-spec.md` §1.1 が既に引用済み）、M14（ライブ変換の
+増分再チャンク・非日本語チャンク verbatim 通過）、M32 / M45（モデル DL・宣言的レジストリ・
+プリフェッチ・pre-tokenizer 上書き。ブロッカー: zenz GGUF 配布ライセンス DEV-202）、M52（Exact
+Match / CER 評価 CLI。評価データは品質ベンチ spec §13 準拠で自前作成）、M15 / M54（学習の
+reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）、NllScorer 型ニューラル
+リランク（コンテキスト再利用で辞書由来候補を Zenzai の文字あたり NLL でリランク。M 番号を
+持たない独立トラックで、正典は `docs/neural-reranker-spec.md` Track B〈§B1〜§B12〉）。詳細な比較・優先度・最小
+導入案・テスト方針・ライセンス注記は調査レポート `docs/karukan-comparison-report.md`
+（特定時点のスナップショット）を参照する。
 
 ---
 

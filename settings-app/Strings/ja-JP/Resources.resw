@@ -443,7 +443,7 @@
   <data name="Learning_UserDictAddWord" xml:space="preserve"><value>語</value></data>
   <data name="Learning_UserDictAddWordPlaceholder" xml:space="preserve"><value>例: azooKey</value></data>
   <data name="Learning_UserDictAddButton" xml:space="preserve"><value>追加</value></data>
-  <data name="Learning_UserDictAddNote" xml:space="preserve"><value>読みのカタカナはひらがなとして登録します。単語を消すときは一覧の「忘却」を使います。一般の設定で「ユーザー辞書」を OFF にしていても追加と忘却はできますが、変換に使われるのは ON のときだけです。</value></data>
+  <data name="Learning_UserDictAddNote" xml:space="preserve"><value>読みのカタカナはひらがなとして登録します。単語を消すときは一覧の「忘却」を使います。「辞書」の設定で「ユーザー辞書」を OFF にしていても追加と忘却はできますが、変換に使われるのは ON のときだけです。</value></data>
   <data name="Learning_UserDictAddProblemTitle" xml:space="preserve"><value>単語を追加できませんでした</value></data>
   <data name="Learning_UserDictAddEmptyReading" xml:space="preserve"><value>読みを入力してください。</value></data>
   <data name="Learning_UserDictAddEmptyWord" xml:space="preserve"><value>語を入力してください。</value></data>

@@ -24,6 +24,7 @@ Claude 側は両者に `disallowedTools: Edit, Write, NotebookEdit` を要求し
 | `diff-auditor` | shared | `dolquis/agent-ops` | 未記録（repo 側 `b2d2cce`、`39af1e9` で更新） | read-only（origin の定義に従う。Claude 側の hook も origin から取り込む） | なし（origin が配布したときに取り込み、本表の revision を更新する） |
 | `spec-drift-checker` | repo | この repo | 本 repo で作成 | read-only | あり |
 | `windows-build-runner` | repo | この repo | 本 repo で作成 | build-write | あり |
+| `quality-gate-runner` | repo | この repo | 本 repo で作成 | read-only | あり |
 
 ## 更新の規則
 

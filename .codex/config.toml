@@ -38,7 +38,8 @@ network_access = true
 # ─────────────────────────────────────────────
 
 # 書式と継承規則: https://learn.chatgpt.com/docs/agent-configuration/subagents
-# 各 agent の model / reasoning effort は未指定なら親から継承する。
+# 各 agent の model は指定せず親から継承する。repo 所有 agent は model_reasoning_effort だけを
+# 役割に合わせて下げている（.codex/agents/*.toml）。
 [agents]
 enabled = true
 # 共有 build directory と Serena の対象変更を直列管理するため、同時実行は控えめにする。

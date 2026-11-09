@@ -60,11 +60,13 @@ jobs:
       # .claude/agents/MANIFEST.md が区分 repo とした agent は、Claude 側 .md と Codex 側
       # .toml の本文・description・役割境界を揃える契約を持つ。片側だけ直した PR を
       # ここで止める。read-only guard hook の allow / deny 表と、git push guard hook の
-      # allow / deny / ask 表も同じジョブで固定する。
+      # allow / deny / ask 表、specialist の SubagentStart / SubagentStop hook の振る舞いも
+      # 同じジョブで固定する。
       - name: Test the agent definition checker and the guard hooks
         run: |
           python3 scripts/tests/test_check_agent_definitions.py
           python3 scripts/tests/test_agent_readonly_guard.py
+          python3 scripts/tests/test_subagent_snapshot.py
           python3 scripts/tests/test_git_push_guard.py
           python3 scripts/tests/test_codex_push.py
 

@@ -31,7 +31,8 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 | 互いに独立した調査・実装を同時に進める | Agent tool を同一メッセージで複数起動する |
 | Windows の configure / build / CTest / bench を回し、失敗した target・CTest 名・warning・ログ位置だけが要る | `windows-build-runner`（`.claude/agents/`）。ソース編集と git 操作はしない |
 | 実装 PR で spec・schema・テスト一覧のどこが失効したかを網羅列挙する | `spec-drift-checker`（`.claude/agents/`、read-only）。`azookey-doc-governance` の失効チェックと併用する |
-| 分割レベル L2・L3 に当たる作業や、複数の保守領域をまたぐ調査を一括で進める | Workflow ツール。明示の依頼なしに起動せず、目的と agent 数の見込みを添えて提案し、承認後に起動する |
+| docs-lint、`scripts/` の check 系、clang-format 18 の diff など build を伴わないゲートを複数回し、合否と失敗箇所だけが要る | `quality-gate-runner`（`.claude/agents/`、read-only）。formatter による書き換えはしない |
+| 分割レベル L2・L3 に当たる作業や、複数の保守領域をまたぐ調査を一括で進める | Workflow ツール。明示の依頼なしに起動せず、目的と agent 数の見込みを添えて提案し、承認後に起動する。PR 前の L2 レビューとゲートは、同じ手順で保存済みの `pre-pr-gate`（`.claude/workflows/`）を提案できる |
 
 agent の不変条件（親による push と PR の直列化、read-only の担保、spawn の禁止、結論を入力として扱うこと、Human Gate と Codex Cloud 起動を代替しないこと）は `docs/handoff/agent-orchestration.md` が持つ。
 

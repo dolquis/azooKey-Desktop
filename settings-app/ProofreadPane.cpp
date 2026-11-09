@@ -301,6 +301,8 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
     checked_text_.clear();
     input_.Text(winrt::hstring(session_text_));
     session_input_text_ = std::wstring(input_.Text());
+    // TextChanged is not relied on for programmatic changes: refresh the count here.
+    UpdateCounter();
     ShowStatus(controls::InfoBarSeverity::Informational, message, L"Proofread_SessionTitle");
   } catch (...) {
     RecoverFromFailure();

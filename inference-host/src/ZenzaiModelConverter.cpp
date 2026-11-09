@@ -1586,6 +1586,7 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntimeOptions& options) {
   auto result = ProbeZenzaiGgufModel(path);
   if (!result.ok) {
+    result.failure = ZenzaiLoadFailure::ModelInitFailed;
     return result;
   }
 

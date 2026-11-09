@@ -3234,6 +3234,8 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
 
 // docs/model-management-spec.md section 5.3: a failed backend load logs
 // reason=backend_load_failed with fixed words only (dev-infrastructure-spec 7.6).
+namespace {
+
 std::vector<std::string> LoadFailureLogLines(const std::string& log_path,
                                              azookey::host::BackendKind requested) {
   const auto model_path = TempPath("azookey_backend_load_failure_log.gguf");
@@ -3277,6 +3279,8 @@ void ExpectNoLoadFailureLeak(const std::string& line) {
   EXPECT_EQ(line.find("azookey_backend_load_failure_log"), std::string::npos);
   EXPECT_EQ(line.find("model initialization failed"), std::string::npos);
 }
+
+}  // namespace
 
 TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsLogBackendLoadFailed) {
   const auto log_path = TempPath("azookey_backend_load_failure_both.jsonl");

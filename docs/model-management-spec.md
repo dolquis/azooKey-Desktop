@@ -681,9 +681,11 @@ R2 では device 名表示などの補助に留め、R1 の `auto` 解決では�
    （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）。
    あわせて最後に試した `backend`（`cpu` / `vulkan`）と、降格の有無 `fallback`
    （`vulkan_then_cpu` / `none`）を固定語彙で記録する。モデルの path、ローダの生のエラー文、
-   例外メッセージは出さない（同 §7.6）。出力は `InferenceEngine::LoadModelWithResult` の
-   ロード失敗確定の 1 箇所で行い、Dispatcher の LoadModel、起動時のプリロード、設定更新の
-   再ロードのいずれの経路でも同じ 1 件になる
+   例外メッセージは出さない（同 §7.6）。`reason=backend_load_failed` 付きの行は
+   `InferenceEngine::LoadModelWithResult` のロード失敗確定の 1 箇所だけが出し、Dispatcher の
+   LoadModel、起動時のプリロード、設定更新の再ロードのいずれの経路でも 1 件になる。
+   モデルパスを明示した起動では、Host の `main.cpp` が `reason` 無しの `model_load` 結果行
+   （`result=error`）を別に 1 件出す
 2. `last_error` を `LocalModelEntry` に保存
 3. backend の降格（CPU での再試行）と、CPU でもロードできないときの `SimpleConverter` への
    fallback、そのときの Health は `docs/zenzai-inference-spec.md` §7.4 に従う。

@@ -39,7 +39,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 | L4 塊間並列 | Linear 上で独立した塊と依存が確定済み | 塊ごとに別 worktree / branch / Draft PR。管制塔セッションの子セッション、または Claude Code の `isolation: worktree` |
 
 分割は変更のリスクと独立性に合わせる。軽微な変更は親の確認と関連 lint、通常変更は親のレビューと関連テストを基本とし、安全境界・公開契約・永続化・並行処理に影響する高リスク変更では独立レビューを加える（`AGENTS.md`「セルフレビューと PR」は本段落を参照する）。L2 は独立した境界が複数ある場合に選ぶ。
-L1/L2 の「境界」と specialist は、次の「touched path からの route」の「必須」「条件付き」列で決める。specialist は agent（`spec-drift-checker`、`diff-auditor`、`windows-build-runner`）だけを指し、親が Skill を読んで確認する行は specialist の起動に数えない。route の必須が親の Skill 確認だけの変更（`core/**` 単独の変更など）は L0 のまま、親が Skill を読んで確認する。必須または条件付きの agent が 1 つ当たれば L1、独立した 2 つ以上の agent が当たり編集が停止済みなら L2 とする。
+L1/L2 の「境界」と specialist は、次の「touched path からの route」の「必須」「条件付き」列で決める。specialist は agent（`spec-drift-checker`、`diff-auditor`、`windows-build-runner`、`quality-gate-runner`）だけを指し、親が Skill を読んで確認する行は specialist の起動に数えない。route の必須が親の Skill 確認だけの変更（`core/**` 単独の変更など）は L0 のまま、親が Skill を読んで確認する。必須または条件付きの agent が 1 つ当たれば L1、独立した 2 つ以上の agent が当たり編集が停止済みなら L2 とする。`quality-gate-runner` は親が直接回せるゲートの代行なので、分割レベルの判定には数えない。
 L3 は例外運用で、TSF、IPC、settings、build 定義が交差しやすい azooKey では同一の塊の中の複数 writer は read-only 分担より衝突コストが高い。
 L4 の実行形は 2 つある。管制塔セッションがユーザーの指示を受けて、塊ごとに子セッション（同じマシンの worktree、または Claude Code Remote の `create_session` による別コンテナ）を立てる形と、1 セッションの親が Claude Code の `isolation: worktree` で subagent を分ける形である。どちらも build directory は共有されないが、checkout ごとに configure からやり直すため full rebuild になる。`isolation: worktree` は親が spawn 時に明示し、agent 定義には固定しない。
 同じマシンの worktree をまたいで共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と、並行する PR への `main` の取り込みは `docs/handoff/parallel-worktree-runbook.md` に従う。
@@ -71,8 +71,9 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | 契約ファイル（一覧は `python3 scripts/check_docs_impact.py --print-contract-paths`） | `spec-drift-checker` | 親が対応する境界の Skill を読んで確認する。docs impact ゲートは理由の記入だけを見るので、spec の失効はこの確認で補う（`azookey-doc-governance`） |
 | C++ を含む高リスク差分 | `diff-auditor` による独立レビュー | コード品質の追加観点が必要なら `pr-review-toolkit`、親が対応する境界の Skill を読んで確認する |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
+| build を伴わないゲート（docs-lint、`scripts/` の check 系とそのテスト、clang-format 18 の diff、settings の schema 検査） | 親が直接実行してよい | ゲートが 3 本以上あるか、出力を親の文脈から隔離したいなら `quality-gate-runner` |
 
-`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。C++ という言語だけを理由に二重レビューを課さず、変更リスクと必要な観点で選ぶ。必要な build / test と Human Gate は省略しない。
+`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は build / test の実行と抽出、`quality-gate-runner` は軽量ゲートの実行と抽出だけを担う。C++ という言語だけを理由に二重レビューを課さず、変更リスクと必要な観点で選ぶ。必要な build / test と Human Gate は省略しない。
 
 ### parent-only fallback
 
@@ -102,6 +103,8 @@ background へ回さないもの:
 - 管理者権限、TIP 登録、署名、実機アプリ互換性確認。
 - 出力先を分離できない生成処理。
 
+repo 所有 agent は役割に合う model を定義に固定する。Claude 側は frontmatter の `model`（判断を含む build と spec 照合は `sonnet`、コマンドを回して合否を抜き出すだけのゲートは `haiku`）、Codex 側は model を親から継承したまま `model_reasoning_effort` だけを下げる。`model` は teammate として起動しても適用される。
+Claude Code では、L2 の read-only レビューとゲートの並列起動を保存済み Workflow `pre-pr-gate`（`.claude/workflows/pre-pr-gate.js`）で行える。route の判定は Workflow の中ではできないため、親が touched path と base を `args` で渡す。Workflow から起動した agent の read-only 境界は、teammate と同じく本文と `tools` の allowlist が持つものとし、frontmatter の hook の適用を前提にしない。Workflow の起動条件は `CLAUDE.md`「サブエージェントの使い分け」に従う。
 agent 定義には `background: true` と `isolation: worktree` を固定しない。同じ定義を Agent Teams の teammate と通常 subagent の双方に使うため、実行形は親が spawn 時に選ぶ。read-only reviewer を teammate にすると frontmatter の hook が外れる点は不変条件 8 のとおり。
 
 ## snapshot 契約
@@ -122,6 +125,7 @@ Expected return: 本書「統一返却形式」
 Validation owned by parent: <commands>
 ```
 
+Claude Code では `.claude/hooks/subagent-snapshot.py` が、repo の specialist の起動時に実行時点の branch、HEAD、`origin/main` との merge-base、未 commit の変更の有無を注入し、終了時に返却から snapshot と確認できなかった範囲が抜けていれば 1 回だけ追記を求める。hook は prompt の snapshot の代わりではなく、食い違いを見つけるための照合材料である。
 親が checkpoint 後に対象差分・base・検証条件を変更した場合、影響する報告を stale として再確認する。同一 snapshot と条件のレビュー・テスト結果は、stage、commit、最終報告の各段階で内容の一致を確かめて再利用する。build / test runner は実行対象の commit SHA と使用した preset / build directory を返す。
 
 ## 統一返却形式

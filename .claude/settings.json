@@ -39,7 +39,29 @@
       "Bash(ctest --preset:*)",
       "Bash(pre-commit run:*)",
       "Bash(python3 scripts/tests/test_git_push_guard.py)",
-      "Bash(python3 scripts/tests/test_agent_instruction_size.py)"
+      "Bash(python3 scripts/tests/test_agent_instruction_size.py)",
+      "Bash(git rev-parse:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git remote get-url:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(python3 scripts/check_docs_impact.py:*)",
+      "Bash(python3 scripts/check_doc_refs.py:*)",
+      "Bash(python3 scripts/check_doc_contracts.py:*)",
+      "Bash(python3 scripts/tests/test_check_agent_definitions.py)",
+      "Bash(python3 scripts/tests/test_agent_readonly_guard.py)",
+      "Bash(python3 scripts/tests/test_subagent_snapshot.py)",
+      "Bash(python3 scripts/tests/test_check_test_inventory.py)",
+      "Bash(python3 scripts/tests/test_check_skill_references.py)",
+      "Bash(python3 scripts/tests/test_check_docs_impact.py)",
+      "Bash(python3 scripts/tests/test_check_doc_refs.py)",
+      "Bash(python3 scripts/tests/test_check_doc_contracts.py)",
+      "Bash(uvx --from clang-format==18.1.8 git-clang-format --binary clang-format --diff:*)",
+      "Bash(check-jsonschema:*)"
     ],
     "ask": [
       "Edit(legacy/**)"
@@ -75,6 +97,32 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/git-push-guard.py",
             "timeout": 60,
             "statusMessage": "git-push-guard (push destination)"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "diff-auditor|spec-drift-checker|windows-build-runner|quality-gate-runner",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\"",
+            "timeout": 30,
+            "statusMessage": "subagent-snapshot (checkout snapshot)"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "diff-auditor|spec-drift-checker|windows-build-runner|quality-gate-runner",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\"",
+            "timeout": 30,
+            "statusMessage": "subagent-snapshot (return format)"
           }
         ]
       }

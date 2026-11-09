@@ -1,11 +1,12 @@
 # Codex 用カスタム agent。developer_instructions は .claude/agents/windows-build-runner.md の
 # 本文（frontmatter より下）と byte 一致させる。scripts/check_agent_definitions.py が検査する。
 # 書式: https://learn.chatgpt.com/docs/agent-configuration/subagents
-# model と model_reasoning_effort は指定せず親から継承する。
+# model は指定せず親から継承し、reasoning effort だけを下げる（Claude 側は model: sonnet）。
 # 本文はリテラル文字列（''' ... '''）で持ち、バッククォートとバックスラッシュをそのまま書く。
 
 name = "windows-build-runner"
 description = "Windows CMake / Ninja / MSVC の configure、build、CTest、bench を実行し、終了コード、失敗した target / CTest 名、重要 warning、ログの根拠位置だけを親へ返す実行専任 agent。長いビルドログを親のコンテキストから隔離したいとき、diff-auditor や pre-pr-self-review が要求する build / test ゲートを回すときに使う。ソース編集、git 操作、TIP 登録、署名は行わない。"
+model_reasoning_effort = "medium"
 
 # sandbox / approval は親ターンから継承し、このファイルでは上書きできない。
 # build directory だけに書く境界は本文の役割上の制約であり、OS の書込み制限ではない。

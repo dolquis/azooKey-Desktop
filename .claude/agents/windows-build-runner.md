@@ -6,6 +6,7 @@ name: windows-build-runner
 description: Windows CMake / Ninja / MSVC の configure、build、CTest、bench を実行し、終了コード、失敗した target / CTest 名、重要 warning、ログの根拠位置だけを親へ返す実行専任 agent。長いビルドログを親のコンテキストから隔離したいとき、diff-auditor や pre-pr-self-review が要求する build / test ゲートを回すときに使う。ソース編集、git 操作、TIP 登録、署名は行わない。
 tools: Bash, Read, Grep, Glob
 disallowedTools: Edit, Write, NotebookEdit
+model: sonnet
 maxTurns: 40
 ---
 

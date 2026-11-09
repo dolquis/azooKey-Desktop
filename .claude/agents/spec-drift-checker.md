@@ -5,6 +5,7 @@ name: spec-drift-checker
 description: 変更した C++ シンボル、IPC payload フィールド、設定キー、テスト名を docs/*-spec.md、ipc/include/azookey/ipc/Payloads.h、settings/*.schema.json、docs/test-inventory.md と突き合わせ、spec 側で失効した記述と更新漏れを列挙する read-only agent。実装 PR の Draft 作成前、spec を伴う機能変更の最終報告前に使う。修正は行わず親へ返す。typo や 1 行の可逆な修正、docs だけの変更には使わない。
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
+model: sonnet
 maxTurns: 30
 hooks:
   PreToolUse:

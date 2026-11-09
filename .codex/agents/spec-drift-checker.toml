@@ -1,11 +1,12 @@
 # Codex 用カスタム agent。developer_instructions は .claude/agents/spec-drift-checker.md の
 # 本文（frontmatter より下）と byte 一致させる。scripts/check_agent_definitions.py が検査する。
 # 書式: https://learn.chatgpt.com/docs/agent-configuration/subagents
-# model と model_reasoning_effort は指定せず親から継承する。
+# model は指定せず親から継承し、reasoning effort だけを下げる（Claude 側は model: sonnet）。
 # 本文はリテラル文字列（''' ... '''）で持ち、バッククォートとバックスラッシュをそのまま書く。
 
 name = "spec-drift-checker"
 description = "変更した C++ シンボル、IPC payload フィールド、設定キー、テスト名を docs/*-spec.md、ipc/include/azookey/ipc/Payloads.h、settings/*.schema.json、docs/test-inventory.md と突き合わせ、spec 側で失効した記述と更新漏れを列挙する read-only agent。実装 PR の Draft 作成前、spec を伴う機能変更の最終報告前に使う。修正は行わず親へ返す。typo や 1 行の可逆な修正、docs だけの変更には使わない。"
+model_reasoning_effort = "medium"
 
 # sandbox / approval は親ターンから継承し、このファイルでは上書きできない。
 # read-only は本文の役割上の制約であり、独立した OS sandbox ではない。

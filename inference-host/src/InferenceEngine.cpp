@@ -1415,6 +1415,17 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   }
   if (!loaded.ok) {
     result.error = backend_error ? "Vulkan and CPU model load failed" : "model load failed";
+    // docs/model-management-spec.md section 5.3. Only fixed words are logged: the loader's
+    // error text can carry the model path or llama.cpp output (dev-infrastructure-spec 7.6).
+    if (runtime_logger_) {
+      runtime_logger_->Log(
+          logging::RuntimeLogLevel::Error, "model_load",
+          {{"result", logging::RuntimeLogSafeText("error")},
+           {"error_code", logging::RuntimeLogSafeText("business")},
+           {"reason", logging::RuntimeLogSafeText("backend_load_failed")},
+           {"backend", logging::RuntimeLogSafeText(std::string(BackendName(next_config.backend)))},
+           {"fallback", logging::RuntimeLogSafeText(backend_error ? "vulkan_then_cpu" : "none")}});
+    }
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       adopt_applied_threads();

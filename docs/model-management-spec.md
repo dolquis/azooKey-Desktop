@@ -678,7 +678,12 @@ R2 では device 名表示などの補助に留め、R1 の `auto` 解決では�
 選択した backend で `LoadModel` が失敗した場合:
 
 1. ログに `result=error`、`error_code=business`、`reason=backend_load_failed` を記録
-   （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）
+   （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）。
+   あわせて最後に試した `backend`（`cpu` / `vulkan`）と、降格の有無 `fallback`
+   （`vulkan_then_cpu` / `none`）を固定語彙で記録する。モデルの path、ローダの生のエラー文、
+   例外メッセージは出さない（同 §7.6）。出力は `InferenceEngine::LoadModelWithResult` の
+   ロード失敗確定の 1 箇所で行い、Dispatcher の LoadModel、起動時のプリロード、設定更新の
+   再ロードのいずれの経路でも同じ 1 件になる
 2. `last_error` を `LocalModelEntry` に保存
 3. backend の降格（CPU での再試行）と、CPU でもロードできないときの `SimpleConverter` への
    fallback、そのときの Health は `docs/zenzai-inference-spec.md` §7.4 に従う。

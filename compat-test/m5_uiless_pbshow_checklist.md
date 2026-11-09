@@ -40,7 +40,7 @@ pass 基準の定義である。実測値は Linear に記録する。
 | VS Code | Electron | activate（`pbShow` はホスト依存） |
 | Windows ターミナル | Win32 | activate / 自前 HWND |
 | Win11 スタート検索 | UI-less | activate + 入力（統合インライン検索表示は M21） |
-| Office 365（Word） | UI-less / アプリ描画 | activate / `pbShow==FALSE` / OS・アプリ UI に候補 |
+| Office 365（Word） | Office | activate（`pbShow` はホスト依存） |
 
 Win11 スタート検索の**統合インライン検索**体験（候補が検索ボックス直下に統合表示
 される）は検索統合 API（`ITfIntegratableCandidateListUIElement` +
@@ -51,7 +51,7 @@ M5 ではスタート検索で TIP が activate され入力できること（�
 
 ## 4. 合格条件
 
-- UI-less / アプリ描画ホスト（Office 等、`pbShow == FALSE` を返すアプリ）で TIP が
+- UI-less / アプリ描画ホスト（`pbShow == FALSE` を返すアプリ）で TIP が
   activate され、自前 HWND が出ず OS/アプリ UI に候補が乗る。
 - レガシー Win32（メモ帳等）で従来通り自前 HWND が出る（`pbShow == TRUE` 経路）。
 - Win11 スタート検索で TIP が activate され入力できる（統合インライン検索表示は M21

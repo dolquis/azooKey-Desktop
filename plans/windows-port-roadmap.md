@@ -153,7 +153,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **受け入れ条件**:
   - 「nihongo」入力 → Space で「日本語」等の候補が出る
   - 矢印キーで選択移動、Enter で確定、ESC でキャンセル
-  - UI-less / アプリ描画ホスト（Office 等、`pbShow==FALSE` を返すアプリ）で TIP が
+  - UI-less / アプリ描画ホスト（`pbShow==FALSE` を返すアプリ）で TIP が
     activate され、自前 HWND が出ず OS/アプリ UI に候補が乗る（実機確認は
     `compat-test/m5_uiless_pbshow_checklist.md` の `gate:human-required` チェックリスト）
   - Win11 スタート検索では TIP が activate され入力できること（統合インライン検索の

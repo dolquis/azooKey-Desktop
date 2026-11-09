@@ -1638,6 +1638,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool CanCarryUnshownInput(ITfDocumentMgr* focus) const;
   bool HasCarryableInput() const;
   bool CanCarryShownFirstKey(ITfDocumentMgr* focus) const;
+  bool FocusedDocumentKeepsCarriedInput(ITfDocumentMgr* focus);
   bool DiscardShownFirstKey(ITfContext* context);
   void TrackFirstKeyCarry(bool had_input, BOOL eaten);
   void ResolveCarriedInput(ITfContext* context);

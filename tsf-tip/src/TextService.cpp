@@ -4164,7 +4164,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     // too, once the old document has taken it back without committing it.
     // When it cannot, the composition commits there as before.
     if (!carry_input && CanCarryShownFirstKey(pdimFocus) &&
-        !EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure)
+        !EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure &&
+        FocusedDocumentKeepsCarriedInput(pdimFocus))
       carry_input = DiscardShownFirstKey(active_context_);
     first_key_carry_deadline_.reset();
     const void* carried_from = ComIdentity(active_context_);
@@ -5415,6 +5416,18 @@ bool TextService::CanCarryShownFirstKey(ITfDocumentMgr* focus) const {
       !LifecycleShownSurface().empty())
     return false;
   return HasCarryableInput();
+}
+
+// Shown input is taken back from the old document only when the focused one
+// would keep it (ResolveCarriedInput), so it is never lost on both sides. A
+// document without a context yet is decided by its next key, as for DEV-1637.
+bool TextService::FocusedDocumentKeepsCarriedInput(ITfDocumentMgr* focus) {
+  if (!keyboard_open_ || alnum_mode_) return false;
+  ITfContext* top = nullptr;
+  if (FAILED(focus->GetTop(&top)) || !top) return true;
+  const bool secure = EvaluateInputGate(top, client_id_, std::nullopt, true).secure;
+  top->Release();
+  return !secure;
 }
 
 // Ends the composition in the old document with its text removed, keeping the

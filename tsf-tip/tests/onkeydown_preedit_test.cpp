@@ -8919,6 +8919,14 @@ void FixDocumentSwitchHarness(DocumentSwitch& s) {
   s.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   s.h.service.set_number_rewriter_enabled_for_test(false);
 }
+
+// Types the first key with its preedit shown, and keeps the window open however
+// long the test then takes to switch (coverage builds run far slower).
+void TypeShownFirstKey(DocumentSwitch& s) {
+  s.TypeFirstKey(/*shown=*/true);
+  EXPECT_TRUE(s.h.service.first_key_carry_open_for_test()) << "the first key opens it";
+  s.h.service.age_first_key_carry_window_for_test(-std::chrono::hours(1));
+}
 }  // namespace
 
 TEST(TsfTipDocumentSwitchTest, UnshownInputContinuesInTheFocusedDocument) {
@@ -8997,9 +9005,8 @@ TEST(TsfTipDocumentSwitchTest, ShownFirstKeyContinuesInTheFocusedDocument) {
     SCOPED_TRACE(batch_romaji);
     DocumentSwitch s(batch_romaji);
     FixDocumentSwitchHarness(s);
-    s.TypeFirstKey(/*shown=*/true);
+    TypeShownFirstKey(s);
     ASSERT_EQ(s.h.context.document->text, L"k") << "the first key's preedit must show";
-    ASSERT_TRUE(s.h.service.first_key_carry_open_for_test()) << "the first key opens it";
 
     s.Switch(&s.cell_document, &s.grid_document);
     EXPECT_EQ(s.h.context.document->text, L"");
@@ -9017,7 +9024,7 @@ TEST(TsfTipDocumentSwitchTest, ShownFirstKeyContinuesInTheFocusedDocument) {
 TEST(TsfTipDocumentSwitchTest, ShownFirstKeyIsCarriedOnlyOnce) {
   DocumentSwitch s(/*batch_romaji=*/false);
   FixDocumentSwitchHarness(s);
-  s.TypeFirstKey(/*shown=*/true);
+  TypeShownFirstKey(s);
 
   s.Switch(&s.cell_document, &s.grid_document);
   ASSERT_EQ(s.cell.document->text, L"k") << "the first switch must carry the key";
@@ -9080,6 +9087,7 @@ TEST(TsfTipDocumentSwitchTest, LiveConversionOfTheFirstKeyCommitsToTheOldDocumen
   ASSERT_EQ(s.h.service.lifecycle_shown_surface_for_test(), "\xE4\xBA\x9C")
       << "the composition must show the live conversion";
   ASSERT_TRUE(s.h.service.first_key_carry_open_for_test()) << "the first key opens it";
+  s.h.service.age_first_key_carry_window_for_test(-std::chrono::hours(1));
 
   s.Switch(&s.cell_document, &s.grid_document);
 
@@ -9093,7 +9101,7 @@ TEST(TsfTipDocumentSwitchTest, LiveConversionOfTheFirstKeyCommitsToTheOldDocumen
 TEST(TsfTipDocumentSwitchTest, ShownFirstKeyStaysWhenTheOldDocumentRefuses) {
   DocumentSwitch s(/*batch_romaji=*/false);
   FixDocumentSwitchHarness(s);
-  s.TypeFirstKey(/*shown=*/true);
+  TypeShownFirstKey(s);
   s.h.context.lock_write = true;
 
   s.Switch(&s.cell_document, &s.grid_document);
@@ -9104,6 +9112,44 @@ TEST(TsfTipDocumentSwitchTest, ShownFirstKeyStaysWhenTheOldDocumentRefuses) {
   EXPECT_TRUE(s.h.service.romaji_pending_for_test());
   EXPECT_EQ(s.cell.document->text, L"");
   s.h.context.lock_write = false;
+}
+
+// When only the session that takes the key back fails, the switch commits the
+// key to the old document as before.
+TEST(TsfTipDocumentSwitchTest, ShownFirstKeyCommitsWhenTakingItBackFails) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  FixDocumentSwitchHarness(s);
+  TypeShownFirstKey(s);
+  s.h.context.before_write = [&s] {
+    s.h.context.document->fail_write = true;
+    s.h.context.before_write = [&s] { s.h.context.document->fail_write = false; };
+  };
+
+  s.Switch(&s.cell_document, &s.grid_document);
+  ASSERT_FALSE(s.h.context.before_write) << "the commit must request a session after the failure";
+  s.Type(s.cell, {'Y', 'O', 'U'});
+
+  EXPECT_EQ(s.h.service.carried_input_document_, nullptr);
+  EXPECT_EQ(s.h.context.document->text, L"k");
+  EXPECT_EQ(s.cell.document->text, kYouText);
+}
+
+// A focused document that would drop carried input (a password field) never
+// takes the shown key from the old one, which commits it as before.
+TEST(TsfTipDocumentSwitchTest, ShownFirstKeyCommitsWhenTheFocusedDocumentWouldDropIt) {
+  PrivateScopeProperty password;
+  password.scope.value = IS_PASSWORD;
+  DocumentSwitch s(/*batch_romaji=*/false);
+  FixDocumentSwitchHarness(s);
+  s.cell.input_scope_property = &password;
+  TypeShownFirstKey(s);
+
+  s.Switch(&s.cell_document, &s.grid_document);
+
+  EXPECT_EQ(s.h.context.document->text, L"k");
+  EXPECT_EQ(s.cell.document->text, L"");
+  EXPECT_EQ(s.h.service.carried_input_document_, nullptr);
+  EXPECT_EQ(s.h.service.composition_, nullptr);
 }
 
 TEST(TsfTipDocumentSwitchTest, KeyboardDisabledDocumentDropsCarriedInput) {

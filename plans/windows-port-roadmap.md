@@ -1251,7 +1251,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     取り残されたサブリクエストが走り続けない
   - 変換結果の特定文節だけ候補を選び直して確定できる
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`
-  - 実装範囲の正典: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。設計判断 （out-of-band Cancel 方式、ストリーミング拡張の採否）は同 spec が定める
+  - 実装範囲の正典: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§6.4（multi-segment commit の `CommitSegmentsObservation`）・§7。設計判断（out-of-band Cancel 方式、ストリーミング拡張の採否）は同 spec が定める
 
 #### M58-C: AI 整文モード
 
@@ -1812,6 +1812,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     transport 層の truncated / 0-byte frame ケースが緑
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
   - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §6。上限値・タイムアウト値は同節が正典
+- **補足**:
+  - プロトコル fixture: 固定 JSON / バイナリ fixture を `ipc/testdata/` に置き、TIP 側と Host 側のデコードを同一データで検査する。transport 層の 0-byte / truncated frame ケースを追加する（spec §6.3 は `ipc/testdata/` を fuzz の seed corpus としてだけ記述する）。
 
 ### M41: 構造化ログと可観測性
 
@@ -1895,7 +1897,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - `--json` 出力が stable schema としてテストされる
   - `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く（spec §12.2.1）
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §12
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで 追加）
+  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで追加）
 
 ### M47: Host / Zenzai 障害時の自動復旧 UX
 

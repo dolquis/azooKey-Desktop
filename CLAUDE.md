@@ -42,4 +42,4 @@ Agent Teams は `.claude/settings.json` の `env` で有効にしてある（exp
 
 ## push・PR・マージ
 
-作業 branch を `dolquis/azooKey-Desktop` へ push し、`main` 向けの Draft PR を作るのは、依頼された作業の一部として承認なしで行う通常の手順である。push は `cd`、パイプ、commit との連結を付けず、`git push -u origin <branch>` を単独のコマンドで実行し、`.claude/hooks/git-push-guard.py` と allow ルールに判定させる。`main` への push、force push、upstream（`azooKey/`）への push はしない。マージは、人間 lead が PR を名指しで許可したときに限り、CI green を確かめてノーマルマージで行う。
+作業 branch を `dolquis/azooKey-Desktop` へ push し、`main` 向けの Draft PR を作るのは、依頼された作業の一部として承認なしで行う通常の手順である。push は `cd`、パイプ、commit との連結を付けず、`git push -u origin <branch>` を単独のコマンドで実行し、`.claude/hooks/git-push-guard.py` と allow ルールに判定させる。`main` への push、force push、upstream（`azooKey/`）への push はしない。マージは、人間 lead が PR を名指しで許可したときに限り、CI green を確かめてノーマルマージで行う。例外として、人間 lead が自分で起動した管制塔セッション（ユーザー配置の `session-control-tower` Skill）は、その起動をマージの委任として扱い、同 Skill の条件で、自分が起動した子セッションと台帳で引き継いだ前任の子セッションの PR をマージしてよい。

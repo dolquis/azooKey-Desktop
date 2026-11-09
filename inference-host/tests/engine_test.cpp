@@ -1725,7 +1725,7 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
 
   EXPECT_FALSE(result.ok);
   ASSERT_TRUE(result.error.has_value());
-  EXPECT_EQ(*result.error, "model load failed");
+  EXPECT_EQ(*result.error, "CPU: model_init_failed");
   const auto health = engine->health_snapshot();
   ASSERT_TRUE(health.last_error.has_value());
   EXPECT_EQ(health.last_error, result.error);
@@ -3218,9 +3218,10 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
     const auto result = engine->LoadModelWithResult(options);
     EXPECT_FALSE(result.ok);
     ASSERT_TRUE(result.error);
-    EXPECT_EQ(*result.error, "Vulkan and CPU model load failed");
+    EXPECT_EQ(*result.error, "Vulkan: exception; CPU: exception");
     EXPECT_EQ(result.error->find("Vulkan test failure"), std::string::npos);
     EXPECT_EQ(result.error->find("CPU test failure"), std::string::npos);
+    EXPECT_EQ(result.error->find(model_path), std::string::npos);
     EXPECT_EQ(attempts, (std::vector<azookey::host::BackendKind>{azookey::host::BackendKind::Vulkan,
                                                                  azookey::host::BackendKind::Cpu}));
     EXPECT_FALSE(engine->model_loaded());

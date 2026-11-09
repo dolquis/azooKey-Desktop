@@ -125,6 +125,32 @@ std::vector<core::Candidate> RankUnfinishedBehindCompleted(std::vector<core::Can
 
 struct ZenzaiModelRuntime;
 
+// Why one backend's load failed, as a fixed vocabulary. `error` below can carry the model path or
+// llama.cpp output, so only this code may reach last_error and the logs
+// (docs/zenzai-inference-spec.md section 7.4).
+enum class ZenzaiLoadFailure {
+  None,
+  NoDevice,
+  ModelInitFailed,
+  ContextInitFailed,
+  Exception,
+};
+
+constexpr const char* ZenzaiLoadFailureName(ZenzaiLoadFailure failure) {
+  switch (failure) {
+    case ZenzaiLoadFailure::NoDevice:
+      return "no_device";
+    case ZenzaiLoadFailure::ContextInitFailed:
+      return "context_init_failed";
+    case ZenzaiLoadFailure::Exception:
+      return "exception";
+    case ZenzaiLoadFailure::ModelInitFailed:
+    case ZenzaiLoadFailure::None:
+      break;
+  }
+  return "model_init_failed";
+}
+
 struct ZenzaiLoadResult {
   ZenzaiLoadResult();
   ~ZenzaiLoadResult();
@@ -136,6 +162,7 @@ struct ZenzaiLoadResult {
   bool ok{false};
   ZenzaiModelInfo info;
   std::string error;
+  ZenzaiLoadFailure failure{ZenzaiLoadFailure::None};  // Set whenever ok is false.
   std::unique_ptr<ZenzaiModelRuntime> runtime;
   MmapLoadReport mmap;
 };

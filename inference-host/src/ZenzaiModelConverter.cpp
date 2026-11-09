@@ -1602,6 +1602,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
     if (!registry || ggml_backend_reg_dev_count(registry) == 0) {
       result.ok = false;
       result.error = "Vulkan backend has no available device";
+      result.failure = ZenzaiLoadFailure::NoDevice;
       return result;
     }
     devices[0] = ggml_backend_reg_dev_get(registry, 0);
@@ -1678,6 +1679,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!runtime->model) {
     result.ok = false;
     result.error = "llama.cpp model load failed";
+    result.failure = ZenzaiLoadFailure::ModelInitFailed;
     if (!model_attempt.error.empty()) {
       result.error += ": " + model_attempt.error;
     }
@@ -1701,6 +1703,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!runtime->context) {
     result.ok = false;
     result.error = "llama.cpp context creation failed";
+    result.failure = ZenzaiLoadFailure::ContextInitFailed;
     const auto detail = log_capture->error();
     if (!detail.empty()) {
       result.error += ": " + detail;
@@ -1716,6 +1719,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (options.use_vulkan) {
     result.ok = false;
     result.error = "Vulkan backend requires a llama.cpp build with ggml-vulkan";
+    result.failure = ZenzaiLoadFailure::NoDevice;
     return result;
   }
   auto runtime = std::make_unique<ZenzaiModelRuntime>();

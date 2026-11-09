@@ -301,10 +301,8 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
     checked_text_.clear();
     input_.Text(winrt::hstring(session_text_));
     session_input_text_ = std::wstring(input_.Text());
-    // TextChanged is not relied on for programmatic changes: refresh the count here, and drop any
-    // local foreground so the text uses the normal body colour, not the placeholder's.
+    // TextChanged is not relied on for programmatic changes: refresh the count here.
     UpdateCounter();
-    input_.ClearValue(controls::Control::ForegroundProperty());
     ShowStatus(controls::InfoBarSeverity::Informational, message, L"Proofread_SessionTitle");
   } catch (...) {
     RecoverFromFailure();

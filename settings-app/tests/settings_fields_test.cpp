@@ -187,6 +187,27 @@ TEST(SettingsFieldsTest, PrivacyAxesAreActiveOnlyInCustomMode) {
   EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*axis, values));
 }
 
+TEST(SettingsFieldsTest, AutoUpdateFieldsAreUnsupportedAndNeverEditable) {
+  // No UpdateChecker reads autoUpdate.* until M32, so all three controls stay disabled with a
+  // note, whatever is stored.
+  const auto names = ResourceNames();
+  for (const auto path :
+       {"autoUpdate.enabled", "autoUpdate.channel", "autoUpdate.checkIntervalHours"}) {
+    SCOPED_TRACE(path);
+    const auto* field = azookey::settings::FindSettingField(path);
+    ASSERT_NE(field, nullptr);
+    EXPECT_TRUE(field->unsupported);
+    EXPECT_TRUE(field->described);
+    EXPECT_TRUE(names.contains(azookey::settings::SettingDescriptionResource(path)));
+    azookey::settings::SettingValues values;
+    EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
+    values["autoUpdate.enabled"] = true;
+    EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
+    values["autoUpdate.enabled"] = false;
+    EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
+  }
+}
+
 TEST(SettingsFieldsTest, ValuesAreCheckedAgainstTypeRangeAndOptions) {
   using azookey::settings::FindSettingField;
   using azookey::settings::ValidateSettingValue;

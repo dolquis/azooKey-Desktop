@@ -49,9 +49,15 @@ SettingField List(std::string_view path, Pane pane, std::string_view section,
           std::nullopt, std::nullopt,     {},   when,    true};
 }
 
+// Marks a field whose value no component reads yet (shown disabled with a note).
+SettingField Unsupported(SettingField field) {
+  field.described = true;
+  field.unsupported = true;
+  return field;
+}
+
 std::vector<SettingField> BuildFields() {
   // Conditions follow the feature specs: a field is disabled where the spec says it has no effect.
-  const SettingCondition update{"autoUpdate.enabled", "true"};
   const SettingCondition custom_romaji{"inputStyle", "custom"};
   const SettingCondition punctuation{"dynamicPunctuation", "true"};
   const SettingCondition batch{"batchRomajiConversion", "true"};
@@ -67,10 +73,13 @@ std::vector<SettingField> BuildFields() {
   const SettingCondition custom_privacy{"privacy.mode", "custom"};
 
   return {
-      Bool("autoUpdate.enabled", Pane::General, "AutoUpdate", true),
-      Enum("autoUpdate.channel", Pane::General, "AutoUpdate", "stable", {"stable", "beta"}, update),
-      Integer("autoUpdate.checkIntervalHours", Pane::General, "AutoUpdate", 24, 1.0, kInt32Max,
-              update),
+      // No UpdateChecker exists until M32 (sideload-packaging-spec section 6), so the three
+      // keys are kept as they are but cannot be edited.
+      Unsupported(Bool("autoUpdate.enabled", Pane::General, "AutoUpdate", true)),
+      Unsupported(
+          Enum("autoUpdate.channel", Pane::General, "AutoUpdate", "stable", {"stable", "beta"})),
+      Unsupported(Integer("autoUpdate.checkIntervalHours", Pane::General, "AutoUpdate", 24, 1.0,
+                          kInt32Max)),
 
       Enum("inputMode", Pane::Input, "InputMethod", "hiragana",
            {"hiragana", "alnum_half", "alnum_full"}, std::nullopt, true),
@@ -299,6 +308,7 @@ std::optional<std::string> ValidateSettingValue(const SettingField& field,
 }
 
 bool IsSettingFieldActive(const SettingField& field, const SettingValues& values) {
+  if (field.unsupported) return false;
   if (!field.active_when) return true;
   const auto* condition = FindSettingField(field.active_when->path);
   if (!condition) return true;

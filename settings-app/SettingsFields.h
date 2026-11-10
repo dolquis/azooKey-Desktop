@@ -40,6 +40,9 @@ struct SettingField {
   std::optional<SettingCondition> active_when;
   // Whether a note (SettingDescriptionResource) is shown under the control.
   bool described{false};
+  // The setting is stored and validated, but nothing reads it yet, so the control is shown
+  // disabled with a note. Stored values are neither changed nor dropped.
+  bool unsupported{false};
 };
 
 // A schema key the settings app does not edit, and why (sideload-packaging-spec section 3.6).
@@ -67,6 +70,7 @@ SettingValue SettingValueOrDefault(const SettingField& field, const SettingValue
 std::optional<std::string> ValidateSettingValue(const SettingField& field,
                                                 const SettingValue& value);
 
+// False for an unsupported field and while its `active_when` condition does not hold.
 bool IsSettingFieldActive(const SettingField& field, const SettingValues& values);
 
 // The entries of `edited` that differ from what was loaded (or the default when nothing valid

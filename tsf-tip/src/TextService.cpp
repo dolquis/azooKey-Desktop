@@ -2714,8 +2714,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
   } key_path_record{*this, context, wParam, eaten};
   // DEV-1845: an edit key left to the app marks only the termination before
-  // the next key.
+  // the next key. A session that ran without an OnEndEdit is forgotten too.
   app_edit_key_passed_ = false;
+  tip_edit_session_ran_ = false;
   bracket_test_context_ = nullptr;
   try {
     // TSF probes every key before OnKeyDown, and the probe tracks the key for
@@ -3007,7 +3008,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       service.LogKeyPath("key", context, key, *eaten);
     }
   } key_path_record{*this, context, wParam, eaten, retyped};
-  if (!retyped) app_edit_key_passed_ = false;
+  if (!retyped) {
+    app_edit_key_passed_ = false;
+    tip_edit_session_ran_ = false;
+  }
   // DEV-1928: whether this key starts the input, on every return path.
   struct FirstKeyCarryRecord {
     TextService& service;
@@ -7599,11 +7603,14 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   AZOOKEY_ASSERT_UI_THREAD();
   if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
   const bool composition_unchanged = CheckLiveCompositionText(context, cookie);
+  const bool after_tip_session = std::exchange(tip_edit_session_ran_, false);
   BOOL changed = FALSE;
   const bool selection_status_read = SUCCEEDED(record->GetSelectionStatus(&changed));
   // DEV-1845: a click or caret move that left the composition alone means a
-  // later termination is not the app's edit for the last edit key.
-  if (composition_unchanged && selection_status_read && changed) app_edit_key_passed_ = false;
+  // later termination is not the app's edit for the last edit key. The TIP's
+  // own session (a write the app ran after that key) moves the caret too.
+  if (composition_unchanged && selection_status_read && changed && !after_tip_session)
+    app_edit_key_passed_ = false;
   // The first edit after a commit opened the undo window is the commit's own
   // (TSF reports an edit session when it ends). Any later selection change,
   // a mouse click or an application edit, means the next Backspace no longer
@@ -11053,6 +11060,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       throw std::bad_alloc();
     }
 #endif
+    // DEV-1845: the OnEndEdit that follows reports this session's own caret
+    // move, which must not end the mark of an edit key.
+    service_->tip_edit_session_ran_ = true;
     // A queued normal-preedit callback must not rewrite the fixed bracket pair.
     if (service_->bracket_composition_) return S_OK;
     // DEV-1637: a session still queued in the context input was carried away
@@ -11078,6 +11088,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       const bool had_range = cleared_range != nullptr;
       if (cleared_range) cleared_range->Release();
       if (FAILED(clear_hr) || !had_range) {
+        // The composition stays with text no longer known (DEV-1845).
+        service_->composition_range_readback_.reset();
         return FAILED(clear_hr) ? clear_hr : E_FAIL;
       }
 
@@ -11092,7 +11104,12 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         comp->Release();
       }
       comp->Release();
-      if (FAILED(end_hr)) return end_hr;
+      if (FAILED(end_hr)) {
+        // The composition stays emptied; the old basis would read as an
+        // app edit in OnEndEdit (DEV-1845).
+        service_->composition_range_readback_.reset();
+        return end_hr;
+      }
       core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
       return S_OK;
     };
@@ -11112,6 +11129,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         const HRESULT end_hr = comp->EndComposition(ec);
         if (FAILED(end_hr)) {
           service_->composition_ = comp;
+          service_->composition_range_readback_.reset();
           return end_hr;
         }
         comp->Release();

@@ -264,6 +264,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // DEV-1845: the composition's text read back right after the TIP wrote it.
   // A document may cut or normalize the write; OnEndEdit compares with this.
   std::optional<std::wstring> composition_range_readback_;
+  // DEV-1845: an EditSession ran since the last OnEndEdit or key.
+  bool tip_edit_session_ran_{false};
   // Mouse sink over the composition while it exists (ITfMouseTracker).
   ITfMouseTracker* mouse_tracker_{nullptr};
   ITfContext* mouse_tracker_context_{nullptr};

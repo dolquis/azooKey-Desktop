@@ -16809,3 +16809,45 @@ TEST(TsfTipDocumentSwitchTest, EndEditAfterTheCarriedInputKeepsTheComposition) {
   EXPECT_EQ(s.h.service.preedit_kana_, kKyouKana);
   EXPECT_FALSE(s.h.service.external_edit_end_pending_);
 }
+
+// DEV-1845 (M-1): a write the app runs late (Word, Chrome) moves the caret
+// after the edit key; that OnEndEdit is the TIP's own and keeps the mark, so
+// the emptied range is still not written back.
+TEST(TsfTipOnKeyDownPreeditTest, DeferredTipWriteAfterAnEditKeyKeepsTheMark) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  h.context.defer_write_callback = true;
+  ASSERT_TRUE(h.Press('I'));
+  h.context.defer_write_callback = false;
+  ASSERT_EQ(h.context.document->text, L"か") << "the write must wait";
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+  ASSERT_TRUE(h.service.app_edit_key_passed_);
+  ASSERT_EQ(h.context.RunDeferredWrites(), S_OK);
+  ASSERT_EQ(h.context.document->text, L"かい");
+  EndEditAfterAppEdit(h);
+  EXPECT_TRUE(h.service.app_edit_key_passed_);
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_TRUE(h.service.terminated_composition_after_app_edit_);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"");
+}
+
+// DEV-1845 (L-c): a composition the TIP failed to end keeps no basis, so
+// OnEndEdit does not take its emptied text for an app edit.
+TEST(TsfTipOnKeyDownPreeditTest, FailedEndOfAnEmptiedCompositionDropsTheBasis) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.composition_range_readback_.has_value());
+  static_cast<DocumentComposition*>(h.service.composition_)->end_result = E_FAIL;
+  (void)h.Press(VK_BACK);
+  ASSERT_NE(h.service.composition_, nullptr) << "the failed end keeps the composition";
+  EXPECT_FALSE(h.service.composition_range_readback_.has_value());
+  ScopedKeyPathLog log(/*keys=*/true);
+  EndEditAfterAppEdit(h);
+  EXPECT_EQ(CountContaining(log.Records(), "\"trigger\":\"live_text_changed\""), 0u);
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+}

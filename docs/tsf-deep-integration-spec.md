@@ -273,7 +273,8 @@ Enter の確定と同じく、打ったキーを消費して確定の後に残�
 - 例外として、TIP が composition を表示したまま修飾付きの編集のキー（Shift+Delete、Shift+Insert、Ctrl+X /
   Ctrl+V / Ctrl+Shift+Z / Ctrl+Shift+Y / Ctrl+Backspace / Ctrl+Delete / Ctrl+Enter。Ctrl のキーは Shift を足した
   組合せを含む）をアプリへ渡し、次のキー、フォーカスの切り替え、composition の文字列を変えない選択の変化
-  （クリックなど）のどれよりも前にアプリが composition を終了したときは、range が空でも書き戻さない。アプリが
+  （クリックなど。TIP 自身の edit session が動かした caret は含めない）のどれよりも前にアプリが composition を
+  終了したときは、range が空でも書き戻さない。アプリが
   そのキーで文字列を消したとみなし、入力を捨てる（DEV-1845）。修飾の無い Delete は、読みの末尾ではたいてい
   何もしないので含めない。range の直後に TIP が最後に書いた文字列が残っているときは、前項のとおり置き換える。
   確定を待つ間の終了は、直前のキーにかかわらず前項のとおり確定する。編集のキーがアプリで何もしなかった後に、

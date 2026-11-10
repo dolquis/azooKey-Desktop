@@ -1012,7 +1012,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   （CC-BY-SA、§1.6.2）、GitHub 再ホストは著者確認を条件とする（§1.6.1 ライセンス
   分岐 / §1.6.2）。WinGet（§5）/ 自動更新（§6）は DEV-202 に依存しない。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
-  外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
+  外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規。更新チェックは DEV-1934）、
   `inference-host/src/HttpDownloader.cpp`（WinHTTP + SHA256 共通ヘルパの
   切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
   M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に

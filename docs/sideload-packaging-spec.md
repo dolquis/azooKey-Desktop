@@ -1908,7 +1908,7 @@ wingetcreate update --urls `
 
 ### 6.1 チェック経路
 
-`inference-host/src/UpdateChecker.cpp`（M32 で新設する予定のファイル。下記は設計案）：
+`inference-host/src/UpdateChecker.cpp`（M32 で新設する予定のファイル。実装は DEV-1934。下記は設計案）：
 
 ```cpp
 class UpdateChecker {

@@ -250,6 +250,22 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfRange* terminated_composition_range_{nullptr};
   std::string terminated_composition_surface_;
   std::string terminated_composition_previous_surface_;
+  // DEV-1845: the app ended the composition right after the TIP left it an
+  // edit key (Ctrl+X, Delete...), so an emptied range was the app's edit and
+  // is not written back.
+  bool terminated_composition_after_app_edit_{false};
+  // DEV-1845: the edit key the TIP last left to the app while a composition
+  // was shown, until the next key or focus change.
+  bool app_edit_key_passed_{false};
+  // DEV-1845: the app changed the text of the live composition. The TIP's
+  // input is gone; the next edit session ends the composition without
+  // touching the text the app left.
+  bool external_edit_end_pending_{false};
+  // DEV-1845: the composition's text read back right after the TIP wrote it.
+  // A document may cut or normalize the write; OnEndEdit compares with this.
+  std::optional<std::wstring> composition_range_readback_;
+  // DEV-1845: an EditSession ran since the last OnEndEdit or key.
+  bool tip_edit_session_ran_{false};
   // Mouse sink over the composition while it exists (ITfMouseTracker).
   ITfMouseTracker* mouse_tracker_{nullptr};
   ITfContext* mouse_tracker_context_{nullptr};
@@ -1623,6 +1639,14 @@ class TextService final : public ITfTextInputProcessorEx,
   bool HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, LPARAM key_data);
   // DEV-1927: a modifier pressed alone neither waits with nor ends the held Enter.
   bool LeavesFinalPunctuationHold(ITfContext* context, WPARAM key) const;
+  // DEV-1845 (legacy-parity-spec §1.4): Ctrl+Z / Ctrl+Y / Ctrl+Shift+Backspace
+  // are eaten, doing nothing, while input is shown.
+  bool ConsumesCompositionEditChord(ITfContext* context, WPARAM key, uint32_t modifiers) const;
+  // DEV-1845: records a key the TIP left to the app over a shown composition.
+  void NoteKeyLeftToApp(ITfContext* context, WPARAM key, BOOL eaten) noexcept;
+  // DEV-1845: the app changed the live composition's text (OnEndEdit).
+  // Returns true when the composition's text is read back unchanged.
+  bool CheckLiveCompositionText(ITfContext* context, TfEditCookie cookie);
   HRESULT ReplayWindowWaitingKeys(ITfContext* context);
   void ReplayWindowWaitingKeysIfReady();
   HRESULT ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key, LPARAM retry_key_data);
@@ -1661,6 +1685,8 @@ class TextService final : public ITfTextInputProcessorEx,
                       std::string_view commit = {}) noexcept;
   void LogKeyPathCommitSession(HRESULT hr, HRESULT hr_session, bool completed) noexcept;
   void LogKeyPathTerminatedCommit(std::string_view action, std::string_view match) noexcept;
+  void LogKeyPathExternalEdit(std::string_view trigger, bool range_empty,
+                              std::string_view action) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogPredictionOnce(PredictionLogReason reason) noexcept;
   void ShowPredictionWindow();

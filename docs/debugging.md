@@ -241,17 +241,23 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
   `not_run` / `request_failed`、`hr`、`completed`）。
 - `event=key_path_terminated_commit`: アプリが終了した composition の range が空のときの確定
   （`range_empty` は常に `true`）。`action` = `restored`（書き戻した）/ `replaced_kept_text`（range の
-  直後に残っていた文字列を置き換えた）。`match` は TIP が最後に書いた文字列と range の前後の比較で、
+  直後に残っていた文字列を置き換えた）/ `discarded`（編集のキーをアプリへ渡した直後の終了で、書き戻さなかった）。`match` は TIP が最後に書いた文字列と range の前後の比較で、
   `after`（直後が一致して置き換えた）/ `before_only`（直前だけが一致した。range が文字列の後端に潰れており、
   書き戻したので二重になりうる）/ `none`（どちらも不一致）/ `probe_failed`（直後を読めなかったか、
   文書の末尾で文字数が足りなかった）/ `no_previous`（最後に書いた文字列が無い）。
+- `event=key_path_external_edit`: アプリが composition の文字列を変えたときの扱い
+  （`docs/tsf-deep-integration-spec.md` §2.4）。`trigger` = `passthrough_termination`（編集のキーをアプリへ
+  渡した直後にアプリが composition を終了した）/ `live_text_changed`（composition が続いたまま文字列が
+  変わった）、`range_empty`（そのときの range が空か）、`action` = `discarded`（入力を捨てた）/
+  `replaced_kept_text` / `replaced`（残っていた文字列を確定の文字列に置き換えた）/ `kept_app_text`
+  （アプリが書いた文字列を残した）。
 
 打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、
 アプリが入力を無効にした context、secure の入力欄（`privacy.secureApps` など）の打鍵は、
 キーごとではなく、フォーカスした文書と理由（`closed` / `alnum` / `keyboard_disabled` /
 `secure`）の組ごとに 1 件だけ、`once_per_document=true` で記録する。この記録と secure 中の
 `key_path_focus` / `key_path_context` は長さを含まず、secure 中は `key_path_preedit`・
-`key_path_hold`・`key_path_commit`・`key_path_terminated_commit` も出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
+`key_path_hold`・`key_path_commit`・`key_path_terminated_commit`・`key_path_external_edit` も出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
 収集後は `AZOOKEY_LOG_KEYS` も削除する。
 
 ### 再変換の候補の確定を収集する

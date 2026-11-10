@@ -2035,6 +2035,20 @@ void TextService::LogKeyPathTerminatedCommit(std::string_view action,
   }
 }
 
+// DEV-1845: what the TIP did when the app edited the composition. Only fixed
+// words: never a key, the text or the reading.
+void TextService::LogKeyPathExternalEdit(std::string_view trigger, bool range_empty,
+                                         std::string_view action) noexcept {
+  if (!KeyPathLogging() || secure_input_.load(std::memory_order_relaxed)) return;
+  try {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_external_edit",
+               {{"trigger", SafeLogText(std::string(trigger))},
+                {"range_empty", range_empty},
+                {"action", SafeLogText(std::string(action))}});
+  } catch (...) {
+  }
+}
+
 void TextService::LogInputGateOnChange(const azookey::tsf::InputGateDecision& gate,
                                        bool secure) noexcept {
   // Scope values are InputScope enum numbers and the classes are fixed words;
@@ -2694,8 +2708,15 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     ITfContext* context;
     WPARAM key;
     const BOOL* eaten;
-    ~KeyPathRecord() { service.LogKeyPath("test", context, key, *eaten); }
+    ~KeyPathRecord() {
+      service.NoteKeyLeftToApp(context, key, *eaten);
+      service.LogKeyPath("test", context, key, *eaten);
+    }
   } key_path_record{*this, context, wParam, eaten};
+  // DEV-1845: an edit key left to the app marks only the termination before
+  // the next key. A session that ran without an OnEndEdit is forgotten too.
+  app_edit_key_passed_ = false;
+  tip_edit_session_ran_ = false;
   bracket_test_context_ = nullptr;
   try {
     // TSF probes every key before OnKeyDown, and the probe tracks the key for
@@ -2777,6 +2798,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     // DEV-1813: OnKeyDown holds this key for the candidate window.
     if (AwaitingCandidateWindow() && SameComIdentity(context, active_context_) &&
         ClassifyWindowWaitKey(wParam, lParam, modifiers, open_close) == WindowWaitKey::Hold) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+    if (ConsumesCompositionEditChord(context, wParam, modifiers)) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2978,9 +3003,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const BOOL* eaten;
     bool skip;
     ~KeyPathRecord() {
-      if (!skip) service.LogKeyPath("key", context, key, *eaten);
+      if (skip) return;
+      service.NoteKeyLeftToApp(context, key, *eaten);
+      service.LogKeyPath("key", context, key, *eaten);
     }
   } key_path_record{*this, context, wParam, eaten, retyped};
+  if (!retyped) {
+    app_edit_key_passed_ = false;
+    tip_edit_session_ran_ = false;
+  }
   // DEV-1928: whether this key starts the input, on every return path.
   struct FirstKeyCarryRecord {
     TextService& service;
@@ -3133,6 +3164,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
     if (wait_key == WindowWaitKey::Hold && AwaitingCandidateWindow()) {
       HoldWindowWaitingKey(context, wParam, lParam);
+      *eaten = TRUE;
+      return S_OK;
+    }
+    // DEV-1845: eaten, doing nothing, as the probe answered.
+    if (ConsumesCompositionEditChord(context, wParam, modifiers)) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -4213,6 +4249,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   UpdateInputModeLangBar();
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
+    // DEV-1845: a termination after the switch is the focus loss's, not an edit.
+    app_edit_key_passed_ = false;
     ResetTypoTracking();
     last_learned_commit_pairs_.clear();
     UnadviseTextEditSink();
@@ -4354,6 +4392,8 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                                   ITfComposition* pComposition) try {
   AZOOKEY_ASSERT_UI_THREAD();
+  // DEV-1845: the mark of the last edit key belongs to this termination only.
+  const bool edit_key_passed = std::exchange(app_edit_key_passed_, false);
   if (composition_ != pComposition) return S_OK;
   if (discarding_first_key_composition_) {
     // DEV-1928: the input leaves with the TIP for the focused document.
@@ -4389,6 +4429,9 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   const bool preserve_pending_commit = committing_;
+  // DEV-1845: a commit waiting for its session (DEV-1927) is the user's and
+  // is finished as before, whatever key came last.
+  const bool after_app_edit = external_termination && !preserve_pending_commit && edit_key_passed;
   const std::string pending_commit_surface = commit_surface_;
   const auto pending_commit_observation = pending_commit_observation_;
   ITfContext* pending_commit_context = commit_context_;
@@ -4398,6 +4441,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
     terminated_composition_surface_ = std::move(terminated_surface);
     terminated_composition_previous_surface_ = std::move(previous_surface);
     terminated_composition_range_ = terminated_range;
+    terminated_composition_after_app_edit_ = after_app_edit;
   } else if (!terminated_surface.empty()) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "external_composition_range_unavailable");
   }
@@ -4743,6 +4787,109 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
 bool TextService::LeavesFinalPunctuationHold(ITfContext* context, WPARAM key) const {
   return final_punctuation_hold_ && !final_punctuation_hold_->replay && IsModifierOnlyKey(key) &&
          SameComIdentity(context, final_punctuation_hold_->context.get());
+}
+
+// DEV-1845 (legacy-parity-spec §1.4): the app's undo and redo, and the forget
+// key that works only without input (§7.1), would act on the composition the
+// TIP still holds. While input is shown they are eaten and do nothing. Unicode
+// input (§6) and a commit waiting for its session keep their own handling.
+bool TextService::ConsumesCompositionEditChord(ITfContext* context, WPARAM key,
+                                               uint32_t modifiers) const {
+  if ((modifiers & core::kModifierCtrl) == 0 ||
+      (modifiers & (core::kModifierAlt | core::kModifierWin)) != 0)
+    return false;
+  const bool shift = (modifiers & core::kModifierShift) != 0;
+  if (shift ? key != VK_BACK : (key != 'Z' && key != 'Y')) return false;
+  if (committing_ || bracket_composition_ || external_edit_end_pending_ || UnicodeInputActive())
+    return false;
+  // The candidate list of a reconversion is a candidate selection too.
+  if (reconversion_list_) return true;
+  if (!SameComIdentity(context, active_context_)) return false;
+  return composition_ != nullptr || !preedit_kana_.empty() || romaji_.HasPending() ||
+         !batch_raw_romaji_.empty() || candidate_ui_.IsShowing();
+}
+
+// DEV-1845: the edit keys the TIP leaves to the app while a composition is
+// shown. When the app ends the composition after one of them, an emptied range
+// is the app's edit (tsf-deep-integration-spec §2.4) and is not written back.
+void TextService::NoteKeyLeftToApp(ITfContext* context, WPARAM key, BOOL eaten) noexcept {
+  if (eaten || !composition_ || committing_ || bracket_composition_ ||
+      !SameComIdentity(context, active_context_))
+    return;
+  uint32_t modifiers = 0;
+  try {
+    modifiers = CurrentKeyModifiers();
+  } catch (...) {
+    return;
+  }
+  if ((modifiers & (core::kModifierAlt | core::kModifierWin)) != 0) return;
+  const bool ctrl = (modifiers & core::kModifierCtrl) != 0;
+  const bool shift = (modifiers & core::kModifierShift) != 0;
+  bool edit = false;
+  switch (key) {
+    case VK_DELETE:
+      // Delete alone usually does nothing at the end of the reading; Shift
+      // cuts and Ctrl deletes a word.
+      edit = ctrl || shift;
+      break;
+    case VK_INSERT:
+      edit = shift && !ctrl;
+      break;
+    case 'X':
+    case 'V':
+    case 'Z':  // Ctrl+Shift+Z, the redo the TIP does not eat.
+    case 'Y':
+    case VK_BACK:
+    case VK_RETURN:
+      edit = ctrl;
+      break;
+    default:
+      break;
+  }
+  if (edit) app_edit_key_passed_ = true;
+}
+
+// DEV-1845: the app changed the text of the live composition (Ctrl+Backspace,
+// a paste or a cut over it). The TIP's input is no longer what the document
+// shows, so it is dropped with the candidate and prediction windows, and the
+// next edit session ends the composition, leaving the app's text as it is.
+bool TextService::CheckLiveCompositionText(ITfContext* context, TfEditCookie cookie) {
+  if (!composition_ || committing_ || bracket_composition_ || external_edit_end_pending_ ||
+      !composition_range_readback_ || !SameComIdentity(context, active_context_))
+    return false;
+  // The text the document kept of the TIP's last write, which it may have cut
+  // or normalized; a store whose anchor stays put (DEV-1806) keeps less.
+  const std::wstring& expected = *composition_range_readback_;
+  ITfRange* composition_range = nullptr;
+  if (FAILED(composition_->GetRange(&composition_range)) || !composition_range) {
+    if (composition_range) composition_range->Release();
+    return false;
+  }
+  std::wstring text(expected.size() + 1, L' ');
+  ULONG length = 0;
+  const HRESULT read_hr =
+      composition_range->GetText(cookie, 0, text.data(), static_cast<ULONG>(text.size()), &length);
+  composition_range->Release();
+  // Unread text counts as unchanged: only text read back proves an edit.
+  if (FAILED(read_hr)) return false;
+  text.resize(length);
+  if (text == expected) return true;
+  LogKeyPathExternalEdit("live_text_changed", text.empty(), "discarded");
+  ResetTypoTracking();
+  retry_waiting_keys_.clear();
+  window_waiting_keys_.clear();
+  ClearReconversionState();
+  ClearCandidateStateForLifecycle();
+  CancelPendingQueriesForLifecycle();
+  ClearTextStateForLifecycle();
+  external_edit_end_pending_ = true;
+  // OnEndEdit holds the document's lock, so the session runs once it is free.
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) return false;
+  HRESULT session_hr = E_FAIL;
+  (void)context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+  edit->Release();
+  return false;
 }
 
 // DEV-1794 (dynamic-punctuation-spec §7.3): while Enter waits for the final
@@ -5248,7 +5395,10 @@ void TextService::ClearTextStateForLifecycle() {
   }
   terminated_composition_surface_.clear();
   terminated_composition_previous_surface_.clear();
+  terminated_composition_after_app_edit_ = false;
+  external_edit_end_pending_ = false;
   composition_range_surface_.clear();
+  composition_range_readback_.reset();
   terminated_focus_cleanup_pending_ = false;
   bracket_test_context_ = nullptr;
   bracket_composition_ = false;
@@ -5534,6 +5684,7 @@ bool TextService::DiscardShownFirstKey(ITfContext* context) {
     composition_range_ = nullptr;
   }
   composition_range_surface_.clear();
+  composition_range_readback_.reset();
   return true;
 }
 
@@ -7451,8 +7602,15 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
                                     ITfEditRecord* record) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
+  const bool composition_unchanged = CheckLiveCompositionText(context, cookie);
+  const bool after_tip_session = std::exchange(tip_edit_session_ran_, false);
   BOOL changed = FALSE;
   const bool selection_status_read = SUCCEEDED(record->GetSelectionStatus(&changed));
+  // DEV-1845: a click or caret move that left the composition alone means a
+  // later termination is not the app's edit for the last edit key. The TIP's
+  // own session (a write the app ran after that key) moves the caret too.
+  if (composition_unchanged && selection_status_read && changed && !after_tip_session)
+    app_edit_key_passed_ = false;
   // The first edit after a commit opened the undo window is the commit's own
   // (TSF reports an edit session when it ends). Any later selection change,
   // a mouse click or an application edit, means the next Backspace no longer
@@ -10902,6 +11060,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       throw std::bad_alloc();
     }
 #endif
+    // DEV-1845: the OnEndEdit that follows reports this session's own caret
+    // move, which must not end the mark of an edit key.
+    service_->tip_edit_session_ran_ = true;
     // A queued normal-preedit callback must not rewrite the fixed bracket pair.
     if (service_->bracket_composition_) return S_OK;
     // DEV-1637: a session still queued in the context input was carried away
@@ -10927,6 +11088,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       const bool had_range = cleared_range != nullptr;
       if (cleared_range) cleared_range->Release();
       if (FAILED(clear_hr) || !had_range) {
+        // The composition stays with text no longer known (DEV-1845).
+        service_->composition_range_readback_.reset();
         return FAILED(clear_hr) ? clear_hr : E_FAIL;
       }
 
@@ -10941,7 +11104,12 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         comp->Release();
       }
       comp->Release();
-      if (FAILED(end_hr)) return end_hr;
+      if (FAILED(end_hr)) {
+        // The composition stays emptied; the old basis would read as an
+        // app edit in OnEndEdit (DEV-1845).
+        service_->composition_range_readback_.reset();
+        return end_hr;
+      }
       core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
       return S_OK;
     };
@@ -10949,6 +11117,26 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     // caret stays where it was, so a return of the key lands there.
     if (service_->discarding_first_key_composition_)
       return end_composition_without_text(/*place_caret=*/true);
+    // DEV-1845: the app changed the composition's text after the TIP last
+    // wrote it. The composition ends with the app's text, before this session
+    // shows any input typed since.
+    if (service_->external_edit_end_pending_) {
+      if (ITfComposition* comp = service_->composition_) {
+        // Detached first: the input typed since belongs to the next
+        // composition, so the termination callback must not clear it.
+        service_->composition_ = nullptr;
+        service_->UnadviseCompositionMouseSink();
+        const HRESULT end_hr = comp->EndComposition(ec);
+        if (FAILED(end_hr)) {
+          service_->composition_ = comp;
+          service_->composition_range_readback_.reset();
+          return end_hr;
+        }
+        comp->Release();
+        core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
+      }
+      service_->external_edit_end_pending_ = false;
+    }
 
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
@@ -11035,12 +11223,27 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
                     : after == Beside::Failed                          ? "probe_failed"
                                                                        : "none";
           }
-          service_->LogKeyPathTerminatedCommit(kept_range ? "replaced_kept_text" : "restored",
+          service_->LogKeyPathTerminatedCommit(kept_range ? "replaced_kept_text"
+                                               : service_->terminated_composition_after_app_edit_
+                                                   ? "discarded"
+                                                   : "restored",
                                                match);
         }
-        if (terminated_text.empty() ||
-            (!previous_surface.empty() && terminated_text == previous_surface &&
-             terminated_text != surface)) {
+        // DEV-1845: right after an edit key the TIP left to the app, an empty
+        // range with no kept text after it is the app's edit, not a gap.
+        const bool after_app_edit = service_->terminated_composition_after_app_edit_;
+        const auto log_app_edit = [&](std::string_view action) {
+          if (after_app_edit)
+            service_->LogKeyPathExternalEdit("passthrough_termination", terminated_text.empty(),
+                                             action);
+        };
+        if (after_app_edit && terminated_text.empty() && !kept_range) {
+          committed_surface_in_document = false;
+          log_app_edit("discarded");
+        } else if (terminated_text.empty() ||
+                   (!previous_surface.empty() && terminated_text == previous_surface &&
+                    terminated_text != surface)) {
+          log_app_edit(kept_range ? "replaced_kept_text" : "replaced");
           ITfRange* target = kept_range ? kept_range.Get() : range;
           const HRESULT write_hr =
               target->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
@@ -11059,6 +11262,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           // Respect that edit instead of putting the old reading back.
           committed_surface_in_document = false;
           RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "external_composition_text_changed");
+          log_app_edit("kept_app_text");
         }
       } else if (service_->composition_) {
         ITfRange* committed_range = nullptr;
@@ -11171,7 +11375,13 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     const HRESULT set_text_hr =
         WriteCompositionText(ec, service_->composition_, kana,
                              Utf8ToWide(service_->composition_range_surface_), &pRange);
-    if (FAILED(set_text_hr)) return set_text_hr;
+    if (FAILED(set_text_hr)) {
+      // The range may hold part of the write; its text is no longer known, so
+      // OnEndEdit does not take it for the app's edit (DEV-1845).
+      service_->composition_range_surface_.clear();
+      service_->composition_range_readback_.reset();
+      return set_text_hr;
+    }
     ITfRange* saved_range = nullptr;
     if (FAILED(pRange->Clone(&saved_range)) || !saved_range) {
       if (saved_range) saved_range->Release();
@@ -11181,6 +11391,24 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     if (service_->composition_range_) service_->composition_range_->Release();
     service_->composition_range_ = saved_range;
     service_->composition_range_surface_ = std::move(displayed_surface);
+    // DEV-1845: what the document kept of this write is what OnEndEdit checks.
+    {
+      service_->composition_range_readback_.reset();
+      ITfRange* written = nullptr;
+      if (SUCCEEDED(service_->composition_->GetRange(&written)) && written) {
+        // Room for a document that lengthens the write; a full buffer may
+        // hold only part of the text, so it is no basis.
+        std::wstring kept(kana.size() * 2 + 16, L' ');
+        ULONG kept_length = 0;
+        if (SUCCEEDED(written->GetText(ec, 0, kept.data(), static_cast<ULONG>(kept.size()),
+                                       &kept_length)) &&
+            kept_length < kept.size()) {
+          kept.resize(kept_length);
+          service_->composition_range_readback_ = std::move(kept);
+        }
+      }
+      if (written) written->Release();
+    }
     service_->etw_composition_length_ = kana.size();
 
     // Cache the caret screen position for the candidate window anchor (M5/M19).

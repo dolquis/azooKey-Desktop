@@ -1113,6 +1113,45 @@ class DocumentComposition final : public FakeComposition {
   ULONG references_{1};
 };
 
+// GUID_PROP_ATTRIBUTE as each preedit update sets it, in document offsets
+// (tsf-deep-integration-spec §5.3).
+struct PreeditAttributeWrite {
+  LONG start;
+  LONG end;
+  TfGuidAtom atom;
+  friend bool operator==(const PreeditAttributeWrite&, const PreeditAttributeWrite&) = default;
+};
+
+class PreeditAttributeRecorder final : public ITfProperty {
+ public:
+  STDMETHODIMP QueryInterface(REFIID, void** object) override {
+    if (object) *object = nullptr;
+    return E_NOINTERFACE;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetType(GUID*) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumRanges(TfEditCookie, IEnumTfRanges**, ITfRange*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetValue(TfEditCookie, ITfRange*, VARIANT*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetContext(ITfContext**) override { return E_NOTIMPL; }
+  STDMETHODIMP FindRange(TfEditCookie, ITfRange*, ITfRange**, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetValueStore(TfEditCookie, ITfRange*, ITfPropertyStore*) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP SetValue(TfEditCookie, ITfRange* range, const VARIANT* value) override {
+    if (!range || !value || value->vt != VT_I4) return E_INVALIDARG;
+    const auto* document_range = static_cast<const DocumentRange*>(range);
+    writes.push_back(
+        {document_range->start, document_range->end, static_cast<TfGuidAtom>(value->lVal)});
+    return S_OK;
+  }
+  STDMETHODIMP Clear(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+
+  std::vector<PreeditAttributeWrite> writes;
+};
+
 class DocumentContext final : public NoopContext, public ITfContextComposition {
  public:
   STDMETHODIMP QueryInterface(REFIID iid, void** object) override {
@@ -1185,6 +1224,14 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
                              ITfComposition**) override {
     return E_NOTIMPL;
   }
+  STDMETHODIMP GetProperty(REFGUID guid, ITfProperty** property) override {
+    if (!property) return E_INVALIDARG;
+    *property = nullptr;
+    if (guid != GUID_PROP_ATTRIBUTE || !attribute_property) return E_NOTIMPL;
+    attribute_property->AddRef();
+    *property = attribute_property;
+    return S_OK;
+  }
   HRESULT RunDeferredWrites() {
     HRESULT hr = S_OK;
     for (ITfEditSession* session : std::exchange(deferred_writes, {})) {
@@ -1205,6 +1252,8 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool notify_owner_end{true};  // Copied to each started DocumentComposition.
   std::vector<ITfEditSession*> deferred_writes;
   std::function<void()> before_write;
+  // GUID_PROP_ATTRIBUTE; without it GetProperty fails as before.
+  ITfProperty* attribute_property{nullptr};
 };
 
 class DocumentPreeditHarness {
@@ -16912,4 +16961,124 @@ TEST(TsfTipOnKeyDownPreeditTest, FailedEndOfAnEmptiedCompositionDropsTheBasis) {
   EndEditAfterAppEdit(h);
   EXPECT_EQ(CountContaining(log.Records(), "\"trigger\":\"live_text_changed\""), 0u);
   EXPECT_FALSE(h.service.external_edit_end_pending_);
+}
+
+// DEV-1952: without batch conversion, the candidate selected after Space shows
+// the focused attribute over the whole preedit, and the reading shows the input
+// attribute (tsf-deep-integration-spec §5.3, §5.5).
+namespace {
+using azookey::core::InputStateKind;
+using azookey::tsf::DisplayAttributeKind;
+
+constexpr TfGuidAtom kPreeditAtoms[azookey::tsf::kDisplayAttributeKindCount] = {21, 22, 23, 24};
+
+TfGuidAtom PreeditAtom(DisplayAttributeKind kind) {
+  return kPreeditAtoms[static_cast<size_t>(kind)];
+}
+
+void AttachPreeditAttributeRecorder(DocumentPreeditHarness& h, PreeditAttributeRecorder& recorder) {
+  h.context.attribute_property = &recorder;
+  h.service.set_display_attribute_atoms_for_test(kPreeditAtoms);
+}
+
+void OpenTenkiCandidates(DocumentPreeditHarness& h) {
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test(
+        {ModelField("天気", "てんき"), ModelField("転機", "てんき")});
+  }));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting)
+      << "Space did not open the candidates";
+  ASSERT_EQ(h.context.document->text, L"天気");
+}
+}  // namespace
+
+TEST(TsfTipSelectingDisplayAttributeTest, ReadingShowsTheInputAttribute) {
+  PreeditAttributeRecorder recorder;  // Outlives the service.
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  ASSERT_FALSE(recorder.writes.empty());
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{0, 3, PreeditAtom(DisplayAttributeKind::Input)}));
+}
+
+TEST(TsfTipSelectingDisplayAttributeTest, SelectedCandidateShowsTheFocusedAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  ASSERT_FALSE(recorder.writes.empty());
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{0, 2, PreeditAtom(DisplayAttributeKind::FocusedSegment)}));
+
+  recorder.writes.clear();
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+  ASSERT_EQ(h.context.document->text, L"転機");
+  ASSERT_EQ(recorder.writes.size(), 1u);
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{0, 2, PreeditAtom(DisplayAttributeKind::FocusedSegment)}));
+}
+
+TEST(TsfTipSelectingDisplayAttributeTest, BackspaceToTheReadingRestoresTheInputAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  recorder.writes.clear();
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Composing);
+  ASSERT_EQ(h.context.document->text, L"てん");
+  ASSERT_FALSE(recorder.writes.empty());
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{0, 2, PreeditAtom(DisplayAttributeKind::Input)}));
+}
+
+TEST(TsfTipSelectingDisplayAttributeTest, ClickOnTheSelectedCandidatePassesToTheApplication) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  BOOL eaten = TRUE;
+  EXPECT_EQ(h.service.OnMouseEvent(1, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Selecting);
+}
+
+TEST(TsfTipSelectingDisplayAttributeTest, BatchSegmentsKeepTheirOwnAttributes) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  azookey::ipc::CandidateField second = first;
+  second.reading = "に";
+  second.surface = "二";
+  h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
+  recorder.writes.clear();
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊二") << "the batch segments are not shown";
+  ASSERT_EQ(recorder.writes.size(), 2u);
+  EXPECT_EQ(recorder.writes[0],
+            (PreeditAttributeWrite{0, 1, PreeditAtom(DisplayAttributeKind::FocusedSegment)}));
+  EXPECT_EQ(recorder.writes[1],
+            (PreeditAttributeWrite{1, 2, PreeditAtom(DisplayAttributeKind::ConvertedSegment)}));
 }

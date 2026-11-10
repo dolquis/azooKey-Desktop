@@ -820,8 +820,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 一括変換の文節表示中に矢印キー（Left/Right）で文節を移動でき、注目文節の色が移る
   - 一括変換の preedit クリックで該当文節が注目に切り替わり、候補ウィンドウが該当文節の候補を
     表示し直す。文節を表示していないときは、クリックを食わずアプリへ渡す
-  - 一括変換でない preedit（core 経由）は文節を持たず、`docs/tsf-deep-integration-spec.md` §5.6 の
-    fallback 属性で表示する
+  - 一括変換でない preedit（core 経由）は文節を持たない。入力中は `docs/tsf-deep-integration-spec.md`
+    §5.6 の fallback 属性、候補選択中は composition 全体を注目の属性（§5.3）で表示する
 - **参照仕様**: `docs/tsf-deep-integration-spec.md` §5, §7
   - 実装範囲の正典: `docs/tsf-deep-integration-spec.md` §5、§7
 

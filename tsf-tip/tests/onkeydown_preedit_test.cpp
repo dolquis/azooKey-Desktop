@@ -16346,3 +16346,333 @@ TEST(TsfTipLeftContextTest, PredictionCacheAndStaleCheckFollowTheLeftContext) {
   for (size_t i = 0; i < asked; ++i)
     EXPECT_EQ(contexts[i], i < first_composition ? "東京" : "東京か") << i;
 }
+
+namespace {
+// DEV-1845: a key the probe leaves to the app (TSF then never calls OnKeyDown).
+BOOL ProbeWith(DocumentPreeditHarness& h, std::initializer_list<int> modifiers, WPARAM key) {
+  for (const int modifier : modifiers) h.keyboard_state.SetDown(modifier, true);
+  const BOOL eaten = ProbeTypoKey(h, key);
+  for (const int modifier : modifiers) h.keyboard_state.SetDown(modifier, false);
+  return eaten;
+}
+
+BOOL PressWith(DocumentPreeditHarness& h, std::initializer_list<int> modifiers, WPARAM key) {
+  for (const int modifier : modifiers) h.keyboard_state.SetDown(modifier, true);
+  const BOOL eaten = h.Press(key);
+  for (const int modifier : modifiers) h.keyboard_state.SetDown(modifier, false);
+  return eaten;
+}
+
+void ShowKaCandidate(DocumentPreeditHarness& h) {
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test({candidate}); }));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  ASSERT_FALSE(h.service.shown_candidates_for_test().empty())
+      << "the candidate window did not open";
+}
+
+// The app writes `text` over the live composition, as its own edit would, and
+// puts the caret after it.
+void AppWritesOverComposition(DocumentPreeditHarness& h, std::wstring_view text) {
+  ASSERT_NE(h.service.composition_, nullptr);
+  ITfRange* range = nullptr;
+  ASSERT_EQ(h.service.composition_->GetRange(&range), S_OK);
+  ASSERT_EQ(range->SetText(1, 0, text.data(), static_cast<LONG>(text.size())), S_OK);
+  h.context.document->start = h.context.document->end = static_cast<DocumentRange*>(range)->end;
+  range->Release();
+}
+
+void EndEditAfterAppEdit(DocumentPreeditHarness& h) {
+  h.service.set_text_edit_context_for_test(&h.context);
+  SelectionChangedRecord record;
+  EXPECT_EQ(h.service.OnEndEdit(&h.context, 1, &record), S_OK);
+}
+}  // namespace
+
+// DEV-1845 (legacy-parity-spec §1.4): the app's undo and redo would act on the
+// composition, so while input is shown they are eaten and the reading stays.
+TEST(TsfTipOnKeyDownPreeditTest, UndoAndRedoChordsAreEatenWhileInputIsShown) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  const int writes = h.context.document->writes;
+  for (const WPARAM key : {WPARAM{'Z'}, WPARAM{'Y'}}) {
+    SCOPED_TRACE(static_cast<int>(key));
+    EXPECT_TRUE(ProbeWith(h, {VK_CONTROL}, key));
+    EXPECT_TRUE(PressWith(h, {VK_CONTROL}, key));
+  }
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes);
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_NE(h.service.composition_, nullptr);
+  // The commit and the next key go on as before.
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"か");
+  // Negative control: with no input, undo and redo stay the app's.
+  EXPECT_FALSE(ProbeWith(h, {VK_CONTROL}, 'Z'));
+  EXPECT_FALSE(ProbeWith(h, {VK_CONTROL}, 'Y'));
+}
+
+// DEV-1845 (§7.1): the forget key works only without input; over the candidate
+// window it is eaten and the window and the composition stay.
+TEST(TsfTipOnKeyDownPreeditTest, ForgetChordIsEatenOverTheCandidateWindow) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ShowKaCandidate(h);
+  EXPECT_TRUE(ProbeWith(h, {VK_CONTROL, VK_SHIFT}, VK_BACK));
+  EXPECT_TRUE(PressWith(h, {VK_CONTROL, VK_SHIFT}, VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.shown_candidates_for_test().empty());
+  EXPECT_NE(h.service.composition_, nullptr);
+  // Negative control: other edit chords still reach the app.
+  EXPECT_FALSE(ProbeWith(h, {VK_CONTROL}, VK_BACK));
+  EXPECT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+}
+
+// DEV-1845: the app empties and ends the composition on an edit key the TIP
+// left to it (Notepad's cut or word delete). The next key must not write the
+// reading back (tsf-deep-integration-spec §2.4).
+TEST(TsfTipOnKeyDownPreeditTest, EmptiedRangeAfterAnEditKeyLeftToTheAppIsNotWrittenBack) {
+  for (const bool focus_loss : {false, true}) {
+    SCOPED_TRACE(focus_loss ? "focus loss" : "next key");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.context.document->text, L"か");
+    ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+    ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+    ASSERT_TRUE(h.service.terminated_composition_after_app_edit_);
+    const int writes = h.context.document->writes;
+    if (focus_loss) {
+      EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    } else {
+      // Issue's Ctrl+A: still the app's, after the cleanup.
+      EXPECT_FALSE(ProbeWith(h, {VK_CONTROL}, 'A'));
+    }
+    EXPECT_EQ(h.context.document->text, L"");
+    EXPECT_EQ(h.context.document->writes, writes);
+    EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.service.composition_, nullptr);
+  }
+}
+
+// DEV-1845 negative controls: an emptied range is written back as before when
+// no edit key was left to the app right before the termination (DEV-1637, the
+// host emptying it on a focus change), or when a later key came first.
+TEST(TsfTipOnKeyDownPreeditTest, EmptiedRangeIsWrittenBackWithoutAnEditKeyRightBefore) {
+  enum class Before { NavigationKey, EditKeyThenModifier };
+  for (const Before before : {Before::NavigationKey, Before::EditKeyThenModifier}) {
+    SCOPED_TRACE(static_cast<int>(before));
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    if (before == Before::NavigationKey) {
+      ASSERT_FALSE(ProbeTypoKey(h, VK_DOWN));
+    } else {
+      ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+      ASSERT_FALSE(ProbeTypoKey(h, VK_SHIFT));
+    }
+    ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+    ASSERT_FALSE(h.service.terminated_composition_after_app_edit_);
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    EXPECT_EQ(h.context.document->text, L"か");
+  }
+}
+
+// DEV-1845 with DEV-1927: after an edit key, a range the app only collapsed in
+// front of the text it kept is still told apart by the text after it, which is
+// replaced once, not doubled and not dropped.
+TEST(TsfTipOnKeyDownPreeditTest, CollapsedRangeKeepingTheTextAfterAnEditKeyIsReplacedOnce) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'V'));
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_TRUE(h.service.terminated_composition_after_app_edit_);
+  auto* range = static_cast<DocumentRange*>(h.service.terminated_composition_range_);
+  ASSERT_NE(range, nullptr);
+  range->end = range->start;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
+}
+
+// DEV-1845: the app deletes the live composition's text (Ctrl+Backspace over
+// the candidate window). The candidate window closes, the composition ends
+// without writing, and Enter no longer commits the deleted text.
+TEST(TsfTipOnKeyDownPreeditTest, AppDeletingTheLiveCompositionDropsTheInput) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ShowKaCandidate(h);
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, VK_BACK));
+  AppWritesOverComposition(h, L"");
+  const int writes = h.context.document->writes;
+  EndEditAfterAppEdit(h);
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+  EXPECT_EQ(h.context.document->writes, writes);
+  EXPECT_FALSE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"");
+  // Input starts afresh.
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
+// DEV-1845: text the app wrote over the composition (a paste) is the app's and
+// stays as it is; the TIP's reading does not come back.
+TEST(TsfTipOnKeyDownPreeditTest, AppReplacingTheLiveCompositionKeepsTheAppText) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  AppWritesOverComposition(h, L"xy");
+  EndEditAfterAppEdit(h);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"xy");
+}
+
+// DEV-1845: when the document queues the session that ends the composition,
+// the next key's own session ends it first, then shows the new input after the
+// app's text, and the queued session changes nothing.
+TEST(TsfTipOnKeyDownPreeditTest, KeyBeforeTheQueuedEndShowsNewInputAfterTheAppText) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  AppWritesOverComposition(h, L"x");
+  h.context.defer_write_callback = true;
+  EndEditAfterAppEdit(h);
+  h.context.defer_write_callback = false;
+  ASSERT_TRUE(h.service.external_edit_end_pending_);
+  ASSERT_NE(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+  EXPECT_EQ(h.context.document->text, L"xい");
+  EXPECT_EQ(h.context.RunDeferredWrites(), S_OK);
+  EXPECT_EQ(h.context.document->text, L"xい");
+  EXPECT_EQ(h.service.preedit_kana_, "い");
+}
+
+// DEV-1845 negative control: an edit that leaves the composition as the TIP
+// wrote it (its own preedit update, a caret move) changes nothing.
+TEST(TsfTipOnKeyDownPreeditTest, EndEditWithTheTipsOwnTextKeepsTheComposition) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ShowKaCandidate(h);
+  EndEditAfterAppEdit(h);
+  EXPECT_NE(h.service.composition_, nullptr);
+  EXPECT_FALSE(h.service.shown_candidates_for_test().empty());
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// DEV-1845: the log says which app edit the TIP saw and what it did, with no
+// text, reading or key.
+TEST(TsfTipKeyPathLogTest, AppEditsOfTheCompositionAreRecordedWithoutText) {
+  ScopedKeyPathLog log(/*keys=*/true);
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+    ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    ASSERT_EQ(h.context.document->text, L"");
+  }
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ShowKaCandidate(h);
+    AppWritesOverComposition(h, L"");
+    EndEditAfterAppEdit(h);
+    ASSERT_EQ(h.service.composition_, nullptr);
+  }
+  const auto records = log.Records();
+  EXPECT_EQ(CountContaining(records, "\"event\":\"key_path_external_edit\""), 2u);
+  EXPECT_EQ(CountContaining(records, "\"trigger\":\"passthrough_termination\""), 1u);
+  EXPECT_EQ(CountContaining(records, "\"trigger\":\"live_text_changed\""), 1u);
+  EXPECT_EQ(CountContaining(records, "\"action\":\"discarded\""), 3u);  // and terminated_commit
+  for (const auto& line : records) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(line.find("\xE3\x81\x8B"), std::string::npos);  // か
+    EXPECT_EQ(line.find("\xE8\x9A\x8A"), std::string::npos);  // 蚊
+  }
+}
+
+// DEV-1845 negative control with DEV-1806: in a store whose composition anchor
+// stays put, the TIP's own text is not taken for the app's edit.
+TEST(TsfTipOnKeyDownPreeditTest, EndEditInAStoreWithAFixedAnchorKeepsTheComposition) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.context.document->composition_follows_writes = false;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.context.document->text, L"かき");
+  EndEditAfterAppEdit(h);
+  EXPECT_NE(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "かき");
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+}
+
+// DEV-1845 negative control with DEV-1927: a commit waiting for its session is
+// the user's, so an edit key and an emptied range do not drop it.
+TEST(TsfTipOnKeyDownPreeditTest, PendingCommitIsWrittenBackAfterAnEditKey) {
+  DocumentPreeditHarness h;
+  (void)HoldEnterAfterShowingKa(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.context.lock_write = true;
+  ASSERT_TRUE(ProbeTypoKey(h, VK_BACK));
+  ASSERT_TRUE(h.service.committing_) << "the held commit did not wait for its session";
+  h.context.lock_write = false;
+  (void)ProbeWith(h, {VK_CONTROL}, 'X');
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_FALSE(h.service.terminated_composition_after_app_edit_);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// DEV-1845: a document switch ends what an edit key marked.
+TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchClearsTheEditKeyMark) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+  ASSERT_TRUE(h.service.app_edit_key_passed_);
+  FakeDocumentMgr focused;
+  FakeDocumentMgr previous;
+  EXPECT_EQ(h.service.OnSetFocus(&focused, &previous), S_OK);
+  EXPECT_FALSE(h.service.app_edit_key_passed_);
+}
+
+// DEV-1845: redo on Ctrl+Shift+Z is not eaten, but marks an app edit as the
+// other edit keys do.
+TEST(TsfTipOnKeyDownPreeditTest, ShiftedRedoReachesTheAppAndMarksAnEdit) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL, VK_SHIFT}, 'Z'));
+  EXPECT_TRUE(h.service.app_edit_key_passed_);
+}

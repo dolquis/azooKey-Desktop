@@ -350,14 +350,22 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する（Shift+Tab は第 2 候補。第 2 候補が無ければ素通し）。それ以外はアプリへ渡す |
 | ↓ | 読み入力中に候補選択を開く | Space で開く。Selecting 以外の ↓ はアプリへ渡す |
 | ← / → / ↑ | 読み入力中は消費する。候補選択中の → は選択中の候補が覆う部分の確定、↑ は前の候補 | Selecting 以外はアプリへ渡す。Selecting の ← / → は Ctrl+B / F と同じ、↑ は前の候補 |
-| 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す |
+| 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す。ただし Ctrl+Z / Ctrl+Y は読み入力中・候補選択中に消費して何もしない（下の段落） |
 | 英数キー | 英語への絶対指定。読み入力中は読みを残したまま英字を足し、候補選択中は確定してから英語に切り替える | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
-| 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す（§7.1） |
+| 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す。読み入力中・候補選択中は消費して何もしない（§7.1） |
 | Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定した後、`fullWidthSpace` に従う（既定では全角空白を入れ、アプリへは渡さない。`docs/tsf-deep-integration-spec.md` §3.7）。hex 以外は確定して通常入力に移る（§6.1） |
 
 素通しにしたキーについて、TIP は composition を確定も取り消しもしない。キーを受けたアプリが
 composition の内側と外側のどちらへ作用させるかはアプリ次第である。legacy は読み入力中にこれらを
 消費するので、composition の扱いがアプリに左右されない。
+
+例外として、アプリの元に戻す・やり直し（Ctrl+Z / Ctrl+Y）と忘却キー（Ctrl+Shift+Backspace）は、
+読み入力中と候補選択中に TIP が消費して何もしない。読みと候補窓はそのまま残る。アプリの元に戻すが
+composition を書き換え、TIP の持つ読みと画面が食い違うのを防ぐためである（DEV-1845）。Unicode 入力中（§6）と、
+確定を待つ間（`docs/tsf-deep-integration-spec.md` §2.4）、カッコ補完の composition（`docs/bracket-pairing-spec.md`）は、
+この例外に含めない。Ctrl+X / Ctrl+V /
+Ctrl+Backspace / Delete など、ほかの編集のキーはアプリへ渡す。そのキーでアプリが composition の文字列を
+変えたときの扱いは `docs/tsf-deep-integration-spec.md` §2.4 が定める。
 
 ### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
 
@@ -1144,6 +1152,7 @@ core の 1 回の結果が確定（`CommitMarkedText` と続く `ObserveCommit`�
 legacy との差: legacy の忘却は Ctrl+Delete（Backspace）で、候補選択中に選択中の候補の記憶を消す
 （`SegmentsManager.forgetMemory`）。読み入力中の忘却は何もしない。Windows 版は、キーを
 Ctrl+Shift+Backspace とし、入力していないときだけ働いて直近に確定した組を消す（§7.2）。
+読み入力中と候補選択中は、TIP がこのキーを消費して何もしない（アプリの単語削除へ渡さない。§1.4）。
 確定前の候補を忘れさせるキーは無い。
 
 ### 7.2 API

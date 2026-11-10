@@ -757,25 +757,40 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 ## 3. 予測候補ウィンドウ (M15)
 
-### 3.1 候補ウィンドウとの分離
+### 3.1 候補窓との関係
 
-`tsf-tip/src/CandidateWindow.cpp` は **変換候補** 専用に保ち、新規
-`tsf-tip/src/PredictionWindow.cpp` を追加する。両者は別 HWND
-（`WS_POPUP | WS_CLIPSIBLINGS`）。
+予測は、変換候補と同じ 1 枚の窓（`tsf-tip/src/CandidateWindow.cpp`）の **予測モード** で出す。
+窓は一度に予測モードか候補モードのどちらか一方だけを出し、予測と変換候補は同時に出さない。
+描き方と予測モードの行の構成は `docs/native-ui-spec.md` §4.1・§4.2 が定める。
 
-理由：
-- 表示タイミングが異なる（候補=Space 後、予測=入力中常時）
-- 表示の寿命と操作が異なる。2 つは同時に出さない。変換候補の表示中は予測を出さず、届いた予測の
-  結果も捨てる（ライブ変換のプレビュー中は変換候補を出さないので、予測を出す）。Space などで候補窓を
-  求めた時点で予測窓を閉じ、応答を待つ間に届いた予測も出さない（DEV-1938）
+2 つのモードは、表示の時機、寿命、操作が異なる。
+
+- 時機: 予測モードは読み入力中（`Composing`）とライブ変換のプレビュー中（`Previewing`）、
+  候補モードは Space などの後の `Selecting` に出す
+- 寿命: 変換候補の表示中は予測を出さず、届いた予測の結果も捨てる（ライブ変換のプレビュー中は
+  変換候補を出さないので、予測を出す）。Space などで候補窓を求めた時点で予測を消し、応答を待つ間は
+  窓を出さない。応答を待つ間に届いた予測も出さない（DEV-1938）。Backspace などで候補選択から
+  読み入力へ戻るときは、いったん窓を隠し、§3.3 の規則で予測を選び直す。予測を出せる時点で、
+  窓は非表示から予測モードで現れる（フェードは `docs/native-ui-spec.md` §6.1 の規則どおり掛かる）
+- 操作: 予測はキーで選択を動かさず、Tab・Shift+Tab とクリックで受理する（§3.4）。キーの判定に使う
+  「予測を出している」は、予測モードの行を実際に表示していることを指す。予測モードの描画に失敗して
+  窓を出せない間は、予測を持たないものとして扱い、Tab・Esc は予測窓が無いときと同じに処理する。
+  候補は §1.2・§1.4 の選択と確定に従う
+
+legacy（macOS）は予測と変換候補を別々の窓に描く。ライブ変換が OFF の打鍵中は、変換候補の窓に
+先頭候補 1 件を番号なしで出す 1 行のプレビュー窓を開き、予測の窓をその右に並べる
+（`azooKeyMacInputController.refreshPredictionWindow` の `positionPredictionWindowRightOfCandidateWindow`、
+`SegmentsManager.getCurrentCandidateWindow` の `.composing`）。Windows 版はこのプレビュー窓を持たず
+（`docs/macos-input-parity-audit-report.md` の P-14）、予測と変換候補を 1 枚の窓に統合して 2 つを並べない。
+これらが legacy との差である。
 
 ### 3.2 配置アルゴリズム
 
-`PredictionWindow::Show(candidates, caret_rect_screen)`:
+予測モードの窓は次のように置く。窓は候補モードと共有するが、置き方は予測モードの規則に従う。
 
 1. anchor = composition 全体の text extent（`ITfContextView::GetTextExt`）。アプリが返さない
    ときはキャレット矩形で代える
-2. 候補ウィンドウのサイズを計算（最大 5 件、フォント高 ×6 + padding）
+2. 窓の大きさを計算する（最大 5 件。行の寸法は候補モードと同じ。`docs/native-ui-spec.md` §4.2）
 3. 配置候補:
    - composition 開始位置の下に配置: `x = anchor.left`, `y = anchor.bottom`
    - 下が画面外なら上に: `y = anchor.top - height`
@@ -783,8 +798,9 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 4. `MonitorFromPoint(caret_center, MONITOR_DEFAULTTONEAREST)` で対象モニタを判定し、矩形外チェック
 
 打鍵で動く anchor の辺は、1 行に収まる composition では右辺だけである。左辺と上下辺から位置を
-決めるので、composition の間、窓は打鍵ごとに動かない。Space 後の変換候補ウィンドウと同じ点
-（composition 開始位置の左下）を基準にする。
+決めるので、composition の間、窓は打鍵ごとに動かない。候補モードと同じ点
+（composition 開始位置の左下）を基準にする。Space の後に候補モードで出し直しても、基準の点は変わらない
+（窓の大きさが変わるので、下に収まらず上へ置くときの位置は変わりうる）。
 
 次の場合、窓は打鍵に合わせて動く。
 
@@ -813,13 +829,21 @@ Esc などで予測を消すと、問い合わせも再試行も捨てるので�
 
 ### 3.4 操作
 
+本節と §1.4 のキー対応表、§3.6 の「予測窓」は、候補窓を予測モードで表示している状態を指す
+（§3.1。描画に失敗して表示できていない間は含めない）。候補モードで表示している窓は含めない。
+
 - Tab: 第一候補を受理（preedit に追記）
 - Shift+Tab: 第二候補
 - 候補窓の応答を待つ間（§1.2）の Tab・Shift+Tab は、TIP が消費して何もしない（予測を受理せず、アプリへも渡さず、窓が開いた後に再生もしない。DEV-1938）
 - Esc: 入力中（preedit か romaji 保留がある）は予測窓を閉じて入力を取り消す（§1.2 の Cancel と同じ。
   1 回で終わる）。入力中でなく窓だけが残っている場合は窓を閉じるだけ（predictionEnabled=true なら
   次の入力更新で再表示）
-- マウス左クリック: 該当候補を受理
+- マウス左クリック: 該当候補を受理。5 件のどれでも受理できる
+
+予測モードの 1 件目の行には Tab、2 件目の行には Shift+Tab の手掛かりを出す。3〜5 件目には
+手掛かりを出さず、クリックだけで受理する。予測の行には番号も選択の強調も付けない。
+読み入力中の数字キーは読みに入り、矢印キーはアプリへ渡るので（§1.4）、行の見た目がこれらの
+キーで選べるように見えてはならない。手掛かりは表示だけであり、キーの意味は上の一覧から変えない。
 
 ### 3.5 IPC
 
@@ -1260,19 +1284,19 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 // GetMonitorInfo が失敗したときは仮想スクリーン全体を使う。
 ```
 
-候補ウィンドウ、その詳細ポップアップ、予測候補ウィンドウはすべてこの解決を通す。
+候補ウィンドウ（予測モードと候補モードの 1 枚の窓。§3.1）と、その詳細ポップアップはこの解決を通す。
 
-モニタを選ぶ点はウィンドウごとに異なる。
+モニタを選ぶ点は次のとおりである。
 
-- 候補ウィンドウ: キャレット左下の anchor 点。
+- 候補ウィンドウ: anchor 点。両モードで同じ点を使う。anchor 点は composition 全体の text extent
+  （`ITfContextView::GetTextExt`）の左下で、アプリが返さないときはキャレット矩形の左下で代える。
 - 詳細ポップアップ: 候補ウィンドウの矩形の中心。
-- 予測候補ウィンドウ: キャレット矩形の中心。
 
-候補/予測ウィンドウは作業領域内に収まるよう配置する。
+候補ウィンドウは作業領域内に収まるよう配置する。
 配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`、`PredictionWindow::ComputePlacement`）とする。
 
-- 候補ウィンドウは anchor の下に開き、下端からはみ出すときはキャレットの上へ反転する。幅は作業領域の幅を上限とする。
-- 予測候補ウィンドウは composition 開始位置の下に開き、下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる（§3.2）。
+- 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
+  下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 

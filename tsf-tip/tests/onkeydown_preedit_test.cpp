@@ -12422,6 +12422,330 @@ TEST(TsfTipDynamicPunctuationTest, AnotherKeyCommitsTheHeldEnterFirst) {
 }
 
 namespace {
+// Types か, shows 蚊 for it and holds Enter for the final request (DEV-1927).
+// Returns the final request id.
+uint64_t HoldEnterAfterShowingKa(DocumentPreeditHarness& h, bool defer_shown = false) {
+  ConfigureTypoHarness(h);
+  StartLive(h, DynamicPunctuation());
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  const uint64_t id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  // An app that queues the preedit update still shows the reading (Word).
+  h.context.defer_write_callback = defer_shown;
+  h.service.set_live_conversion_result_with_segments_for_test(id, "か", "蚊",
+                                                              {LiveSeg("蚊", "か", false)}, false);
+  h.service.apply_live_conversion_result_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  EXPECT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  return h.service.pending_ipc_request_id_for_test();
+}
+
+void AnswerTheFinalRequest(DocumentPreeditHarness& h, uint64_t final_id) {
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+}
+}  // namespace
+
+// DEV-1927: a modifier pressed alone during the held Enter neither commits nor
+// waits; the wait goes on and the final answer commits with its punctuation,
+// as Enter alone does. No commit session is asked for inside the probe.
+TEST(TsfTipDynamicPunctuationTest, ModifierAloneLeavesTheHeldEnterToItsFinalAnswer) {
+  for (const WPARAM modifier : {WPARAM{VK_SHIFT}, WPARAM{VK_CONTROL}, WPARAM{VK_MENU},
+                                WPARAM{VK_LWIN}, WPARAM{VK_CAPITAL}}) {
+    for (const bool refuses_lock : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "key " << modifier << " refuses_lock " << refuses_lock);
+      DocumentPreeditHarness h;
+      const uint64_t final_id = HoldEnterAfterShowingKa(h);
+      ASSERT_EQ(h.context.document->text, L"蚊");
+      const int writes = h.context.document->writes;
+      h.context.lock_write = refuses_lock;
+      h.keyboard_state.SetDown(static_cast<int>(modifier), true);
+      h.keyboard_state.Reapply();
+      BOOL eaten = TRUE;
+      ASSERT_EQ(h.service.OnTestKeyDown(&h.context, modifier, 0, &eaten), S_OK);
+      EXPECT_FALSE(eaten);
+      eaten = TRUE;
+      ASSERT_EQ(h.service.OnKeyDown(&h.context, modifier, 0, &eaten), S_OK);
+      EXPECT_FALSE(eaten);
+      ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test())
+          << "the modifier ended the wait";
+      EXPECT_TRUE(h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+      EXPECT_FALSE(h.service.committing_);
+      EXPECT_EQ(h.context.document->writes, writes);
+      EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+
+      h.keyboard_state.SetDown(static_cast<int>(modifier), false);
+      h.context.lock_write = false;
+      AnswerTheFinalRequest(h, final_id);
+      EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+      EXPECT_EQ(h.context.document->text, L"蚊。");
+      EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+    }
+  }
+}
+
+// Without an answer the timer commits the surface shown, once.
+TEST(TsfTipDynamicPunctuationTest, ModifierAloneLeavesTheHeldEnterToItsTimeout) {
+  DocumentPreeditHarness h;
+  (void)HoldEnterAfterShowingKa(h);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.keyboard_state.Reapply();
+  BOOL eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// Shift then a letter: the modifier leaves the wait, and the letter still
+// waits with Enter and runs after the commit (DEV-1794).
+TEST(TsfTipDynamicPunctuationTest, ShiftThenLetterStillWaitsWithTheHeldEnter) {
+  DocumentPreeditHarness h;
+  const uint64_t final_id = HoldEnterAfterShowingKa(h);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.keyboard_state.Reapply();
+  BOOL eaten = TRUE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+  ASSERT_FALSE(eaten);
+  EXPECT_TRUE(ProbeTypoKey(h, 'A'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  AnswerTheFinalRequest(h, final_id);
+  EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
+  EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+  const std::wstring text = h.context.document->text;
+  ASSERT_GT(text.size(), 2u) << "the letter was not replayed";
+  EXPECT_EQ(text.substr(0, 2), L"蚊。");
+  EXPECT_EQ(text.find(L'蚊', 1), std::wstring::npos);
+}
+
+// DEV-1927: a key that ends the wait inside its probe can find the commit
+// refused; if the app then ends the composition and keeps the text while the
+// saved range collapses before it, the retried commit replaces that kept text
+// instead of inserting the surface beside it (Word showed 今日はいい天気です
+// followed by the reading). Whether the app showed the reading or the
+// converted text, the input lands once.
+TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationReplacesTheKeptTextOnce) {
+  for (const bool reading_shown : {true, false}) {
+    SCOPED_TRACE(reading_shown);
+    DocumentPreeditHarness h;
+    (void)HoldEnterAfterShowingKa(h, /*defer_shown=*/reading_shown);
+    ASSERT_EQ(h.context.document->text, reading_shown ? L"か" : L"蚊");
+    h.context.defer_write_callback = false;
+
+    h.context.lock_write = true;
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_TRUE(eaten);
+    ASSERT_TRUE(h.service.committing_) << "the refused commit is no longer pending";
+    h.context.lock_write = false;
+
+    ASSERT_NE(h.service.composition_range_, nullptr);
+    auto* range = static_cast<DocumentRange*>(h.service.composition_range_);
+    range->end = range->start;
+    ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+    ASSERT_EQ(h.context.document->text, reading_shown ? L"か" : L"蚊");
+
+    h.keyboard_state.Reapply();
+    eaten = FALSE;
+    ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    (void)h.context.RunDeferredWrites();
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    // The lifecycle pass over the terminated range finds the commit there.
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    EXPECT_EQ(h.context.document->text, L"蚊");
+    EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
+  }
+}
+
+// The same with a commit the app queues (TF_S_ASYNC) and runs only after it
+// ended the composition: the queued session replaces the kept text, and the
+// retry the next key queued and the later lifecycle pass add nothing.
+TEST(TsfTipDynamicPunctuationTest, QueuedCommitAfterACollapsedTerminationReplacesTheKeptTextOnce) {
+  DocumentPreeditHarness h;
+  (void)HoldEnterAfterShowingKa(h, /*defer_shown=*/true);
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_TRUE(eaten);
+  ASSERT_TRUE(h.service.committing_) << "the queued commit is no longer pending";
+  h.keyboard_state.Reapply();
+  ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_GE(h.context.deferred_writes.size(), 2u);
+  h.context.defer_write_callback = false;
+
+  ASSERT_NE(h.service.composition_range_, nullptr);
+  auto* range = static_cast<DocumentRange*>(h.service.composition_range_);
+  range->end = range->start;
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  EXPECT_EQ(h.context.RunDeferredWrites(), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// A collapsed range with other text after it is still an emptied one: the
+// surface is written back there, as before.
+TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationRestoresBesideOtherText) {
+  DocumentPreeditHarness h;
+  (void)HoldEnterAfterShowingKa(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  h.context.lock_write = true;
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  h.context.lock_write = false;
+
+  // The host replaced the composition with other text and left the range
+  // collapsed before it.
+  ASSERT_EQ(h.ExternallyTerminate(L"x"), S_OK);
+  auto* range = static_cast<DocumentRange*>(h.service.terminated_composition_range_);
+  ASSERT_NE(range, nullptr);
+  range->end = range->start;
+
+  h.keyboard_state.Reapply();
+  eaten = FALSE;
+  ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"蚊x");
+}
+
+// DEV-1927: the key_path log names how the held Enter began and ended, what
+// its commit session did, and the collapsed-range decision; never the text.
+TEST(TsfTipKeyPathLogTest, HeldEnterRecordsItsRouteAndCommitWithoutText) {
+  ScopedKeyPathLog log(/*keys=*/true);
+  {
+    DocumentPreeditHarness h;
+    const uint64_t final_id = HoldEnterAfterShowingKa(h);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    h.keyboard_state.Reapply();
+    BOOL eaten = TRUE;
+    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    AnswerTheFinalRequest(h, final_id);
+    ASSERT_EQ(h.context.document->text, L"蚊。");
+  }
+  {
+    DocumentPreeditHarness h;
+    (void)HoldEnterAfterShowingKa(h);
+    h.context.lock_write = true;
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    h.context.lock_write = false;
+    auto* range = static_cast<DocumentRange*>(h.service.composition_range_);
+    ASSERT_NE(range, nullptr);
+    range->end = range->start;
+    ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+    h.keyboard_state.Reapply();
+    ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_EQ(h.context.document->text, L"蚊");
+  }
+  const auto records = log.Records();
+  const auto hold = [&](std::string_view operation, std::string_view route) {
+    return CountContaining(records, "\"operation\":\"" + std::string(operation) +
+                                        "\",\"route\":\"" + std::string(route) + "\"");
+  };
+  EXPECT_EQ(hold("begin", "enter"), 2u);
+  EXPECT_EQ(hold("kept", "test_key"), 1u);
+  EXPECT_EQ(hold("resolve", "response"), 1u);
+  EXPECT_EQ(hold("resolve", "test_key"), 1u);
+  EXPECT_EQ(CountContaining(records, "\"commit\":\"completed\""), 1u);
+  EXPECT_EQ(CountContaining(records, "\"commit\":\"pending\""), 1u);
+  EXPECT_GE(CountContaining(records, "\"mode\":\"refused\""), 1u);
+  EXPECT_GE(CountContaining(records, "\"mode\":\"ran\""), 2u);
+  EXPECT_EQ(CountContaining(records, "\"action\":\"replaced_kept_text\""), 1u);
+  for (const auto& line : records) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(line.find("\xE3\x81\x8B"), std::string::npos);  // か
+    EXPECT_EQ(line.find("\xE8\x9A\x8A"), std::string::npos);  // 蚊
+  }
+}
+
+// DEV-1927: with an empty terminated range, the log says where the text the
+// TIP last wrote was found. Only the text after the range is replaced; a range
+// collapsed after the kept text (before_only) is the known limit and still
+// writes the commit back beside it.
+TEST(TsfTipKeyPathLogTest, CollapsedTerminationRecordsWhereTheKeptTextIs) {
+  enum class Collapse { Start, End, StartBesideOther, StartUnreadable };
+  struct Case {
+    Collapse collapse;
+    const char* match;
+    const wchar_t* text;
+  };
+  const Case cases[] = {
+      {Collapse::Start, "after", L"蚊"},
+      {Collapse::End, "before_only", L"蚊蚊"},
+      {Collapse::StartBesideOther, "none", L"蚊x"},
+      {Collapse::StartUnreadable, "probe_failed", L"蚊蚊"},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(c.match);
+    ScopedKeyPathLog log(/*keys=*/true);
+    {
+      DocumentPreeditHarness h;
+      (void)HoldEnterAfterShowingKa(h);
+      ASSERT_EQ(h.context.document->text, L"蚊");
+      h.context.lock_write = true;
+      h.keyboard_state.Reapply();
+      BOOL eaten = FALSE;
+      ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      ASSERT_TRUE(h.service.committing_);
+      h.context.lock_write = false;
+      if (c.collapse == Collapse::StartBesideOther) {
+        ASSERT_EQ(h.ExternallyTerminate(L"x"), S_OK);
+      } else {
+        ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+      }
+      auto* range = static_cast<DocumentRange*>(h.service.terminated_composition_range_);
+      ASSERT_NE(range, nullptr);
+      if (c.collapse == Collapse::End) {
+        range->start = range->end;
+      } else {
+        range->end = range->start;
+      }
+      // A store that cannot move the probe's anchors.
+      h.context.document->short_shift = c.collapse == Collapse::StartUnreadable;
+      h.keyboard_state.Reapply();
+      ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      h.context.document->short_shift = false;
+      EXPECT_FALSE(h.service.committing_);
+      EXPECT_EQ(h.context.document->text, c.text);
+    }
+    const auto records = log.Records();
+    ASSERT_EQ(CountContaining(records, "\"event\":\"key_path_terminated_commit\""), 1u);
+    EXPECT_EQ(CountContaining(records, "\"match\":\"" + std::string(c.match) + "\""), 1u);
+    EXPECT_EQ(CountContaining(records, "\"range_empty\":true"), 1u);
+    EXPECT_EQ(
+        CountContaining(
+            records,
+            std::string("\"action\":\"") +
+                (std::string_view(c.match) == "after" ? "replaced_kept_text" : "restored") + "\""),
+        1u);
+  }
+}
+
+namespace {
 // Types かき with an answer only for か: the answer for かき is in flight when
 // Enter comes, and the preedit keeps the converted start (DEV-1806).
 void TypeKakiBeforeItsAnswerAndHoldEnter(DocumentPreeditHarness& h) {

@@ -17042,12 +17042,28 @@ TEST(TsfTipSelectingDisplayAttributeTest, BackspaceToTheReadingRestoresTheInputA
             (PreeditAttributeWrite{0, 2, PreeditAtom(DisplayAttributeKind::Input)}));
 }
 
+TEST(TsfTipSelectingDisplayAttributeTest, EscapeEndsTheCompositionWithoutAnAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  recorder.writes.clear();
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(recorder.writes.empty());
+}
+
 TEST(TsfTipSelectingDisplayAttributeTest, ClickOnTheSelectedCandidatePassesToTheApplication) {
   PreeditAttributeRecorder recorder;
   DocumentPreeditHarness h;
   ConfigureTypoHarness(h);
   AttachPreeditAttributeRecorder(h, recorder);
   OpenTenkiCandidates(h);
+  ASSERT_TRUE(h.service.attributed_segments_.empty())
+      << "the selected candidate must not be taken for batch segments";
   BOOL eaten = TRUE;
   EXPECT_EQ(h.service.OnMouseEvent(1, 2, MK_LBUTTON, &eaten), S_OK);
   EXPECT_FALSE(eaten);

@@ -1104,7 +1104,8 @@ roadmap M23 の「青背景」は、provider が色を指定しないため、�
 一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たない。
 選択中の候補が preedit 全体を占めるので、候補選択中（core の `Selecting`）は composition 全体を
 Focused で表示し、入力中（`Composing`）の fallback 属性（§5.6）と見分けられるようにする。
-候補を移っても Focused のままで、候補選択を取り消して読みへ戻ると fallback 属性に戻る。
+候補を移っても Focused のままである。Backspace で読みへ戻ると fallback 属性に戻る。
+Esc は入力ごと取り消して composition を終えるので、属性を付ける文字列が残らない。
 legacy が選択中の候補を `kTSMHiliteSelectedConvertedText` で描くのと同じ扱いである。
 legacy は残りの読みを `kTSMHiliteConvertedText` で描く。候補が読みの前方だけを覆う形になったときは、
 残りの読みを Converted にする。
@@ -1182,7 +1183,7 @@ Dark テーマやハイコントラストでの配色はアプリの描画に任
 enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー、文節の区間と属性の割り当て、
 文節ごとの `SetValue` と失敗時の fallback）が担う。
 enumerator の境界テストは属性数（`kDisplayAttributeKindCount`）を基準に書く。
-打鍵から `GUID_PROP_ATTRIBUTE` に設定される範囲と属性（読み、候補選択中、読みへの戻り、一括変換の文節）は
+打鍵から `GUID_PROP_ATTRIBUTE` に設定される範囲と属性（読み、候補選択中、Backspace での読みへの戻り、Esc での取り消し、一括変換の文節）は
 `tsf-tip/tests/onkeydown_preedit_test.cpp` の `TsfTipSelectingDisplayAttributeTest` が担う。
 
 ### 5.7 アプリ互換チェックリスト（M3・実機 Win11）
@@ -1340,7 +1341,7 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
-| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、読みへ戻ると入力属性、一括変換の文節属性 |
+| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性 |
 | Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |
 
 ## 10. 参照

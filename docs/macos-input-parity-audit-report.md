@@ -145,7 +145,7 @@ Mac 版のローマ字表、AZIK 表、かな表、`firstClauseResults`、`forge
 
 | ID | 指摘 | 分類 |
 |---|---|---|
-| P-13 | 既定設定で Space を押して候補窓が出ている間も、入力中の文字の下線が入力中と同じ（細い実線）である。Mac は選択中の候補を `kTSMHiliteSelectedConvertedText` で強調し、残りの読みを `kTSMHiliteConvertedText` で描く。Windows で文節の属性が付くのは一括変換の文節があるときだけで（`TextService::ShowsBatchSegments`）、core 経路には Focused 属性を付ける経路が無い。preedit は候補の文字列に置き換わり候補窓も出るので、変換中であることは分かる。差は下線の強調だけ | spec と実装の不一致（`tsf-deep-integration-spec.md` §5.5 と roadmap M23 の受け入れ条件「nihongo → Space → 注目文節が青背景」が、core 経路を fallback とする §5.4・§5.6 に追随していない） |
+| P-13 | 既定設定で Space を押して候補窓が出ている間も、入力中の文字の下線が入力中と同じ（細い実線）である。Mac は選択中の候補を `kTSMHiliteSelectedConvertedText` で強調し、残りの読みを `kTSMHiliteConvertedText` で描く。Windows で文節の属性が付くのは一括変換の文節があるときだけで（`TextService::ShowsBatchSegments`）、core 経路には Focused 属性を付ける経路が無い。preedit は候補の文字列に置き換わり候補窓も出るので、変換中であることは分かる。差は下線の強調だけ | spec と実装の不一致（`tsf-deep-integration-spec.md` §5.5 と roadmap M23 の受け入れ条件「nihongo → Space → 注目文節が青背景」が、core 経路を fallback とする §5.4・§5.6 に追随していない）。注記: DEV-1952 で解消（候補選択中は composition 全体を Focused で描く。§5.5・§5.6 と M23 も改訂） |
 | P-17 | UI-less の環境（アプリが候補を描く）でも、読み入力中の予測窓は TIP 自前の窓として出る（候補窓の表示中は出ない）。アプリの UI と重なりうる | 記録のない予定（`tsf-deep-integration-spec.md` §8 は Suggestion UI へ渡す予定を書くが、§8 を実装範囲に含む milestone が roadmap に無い） |
 | P-26 | Ctrl+P/N が Windows では候補選択中だけ ↑↓ になる（Mac は入力中も）。Ctrl+F は文節移動だけ。Ctrl+M（Enter）は割当が無い | 意図した差（legacy 差は未記載）／Ctrl+M は記録のない差 |
 | P-27 | Ctrl+S（AI の提案・続き）が無い。spec は Ctrl+S を半角変換に予約していて legacy と食い違う。`TransformShortcut` とピン留めプロンプトのショートカットも無い | 記録のない差 |

@@ -631,6 +631,176 @@ TEST(ReconversionFunctionTest, QueuedShowSessionDropsCandidatesForChangedRangeOr
   }
 }
 
+// DEV-1926: a click on the candidate window arrives outside any application
+// callback, where Word refuses a synchronous lock, so the choice replaces the
+// range from a queued session, as a key does where the lock is granted.
+class WordReconversionChoice {
+ public:
+  WordReconversionChoice()
+      : text(std::make_shared<std::wstring>(L"明日別")),
+        range(&context, text, 0, 2),
+        moved(&context, text, 3, 3) {
+    context.selection = &range;
+    service.set_foreground_app_for_test({"winword.exe", "Word", true});
+    service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    service.set_commit_correction_supported_for_test(true);
+    service.set_text_edit_context_for_test(&context);
+  }
+  ~WordReconversionChoice() {
+    // A queued session holds the service: drop it before the service goes.
+    context.RunDeferred(false);
+    service.Deactivate();
+  }
+  // Opens the Host's candidates {あした, 明晩} the way Word shows them.
+  void Open() {
+    IUnknown* unknown = nullptr;
+    ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+    ITfFnReconversion* function = nullptr;
+    ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+              S_OK);
+    unknown->Release();
+    ITfCandidateList* list = nullptr;
+    ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+    ASSERT_NE(list, nullptr);
+    list->Release();
+    function->Release();
+    context.refuse_sync = true;
+    service.deliver_reconversion_result_for_test({L"あした", L"明晩"}, "あした");
+    context.RunDeferred();
+    ASSERT_TRUE(service.has_reconversion_ui_for_test());
+    ASSERT_EQ(service.candidate_selected_for_test(), 0);
+    ASSERT_TRUE(context.deferred.empty());
+  }
+  // Clicks row `idx` and expects the choice to wait for the application.
+  void ClickQueued(int idx) {
+    const size_t requests_before = context.flags_seen.size();
+    service.click_candidate_for_test(idx);
+    ASSERT_EQ(context.flags_seen.size(), requests_before + 1);
+    EXPECT_EQ(context.flags_seen.back(), static_cast<DWORD>(TF_ES_ASYNCDONTCARE | TF_ES_READWRITE));
+    ASSERT_EQ(context.deferred.size(), 1u) << "the click must queue its replacement";
+    ASSERT_TRUE(service.reconversion_select_pending_for_test());
+    EXPECT_EQ(*text, L"明日別");
+    EXPECT_TRUE(service.has_reconversion_ui_for_test());
+  }
+
+  TestContext context;
+  std::shared_ptr<std::wstring> text;
+  TestRange range;
+  TestRange moved;
+  azookey::tsf::TextService service;
+};
+
+TEST(ReconversionFunctionTest, ClickInWordReplacesFromQueuedSession) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open());
+  ASSERT_NO_FATAL_FAILURE(test.ClickQueued(1));
+  // Enter would choose what the window highlights.
+  EXPECT_EQ(test.service.candidate_selected_for_test(), 1);
+
+  const size_t requests_before_run = test.context.flags_seen.size();
+  test.context.RunDeferred();
+  EXPECT_EQ(*test.text, L"明晩別");
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  EXPECT_FALSE(test.service.reconversion_select_pending_for_test());
+  // No nested lock is requested from inside the session (Word would refuse it).
+  EXPECT_EQ(test.context.flags_seen.size(), requests_before_run);
+  const auto corrections = test.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].kind, "reconvert");
+  EXPECT_EQ(corrections[0].rejected_surface, "明日");
+  ASSERT_TRUE(corrections[0].selected_surface.has_value());
+  EXPECT_EQ(*corrections[0].selected_surface, "明晩");
+}
+
+TEST(ReconversionFunctionTest, QueuedChoiceIgnoresEnterAndAnotherClick) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open());
+  ASSERT_NO_FATAL_FAILURE(test.ClickQueued(1));
+
+  KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  test.service.click_candidate_for_test(0);
+  EXPECT_EQ(test.context.deferred.size(), 1u);
+  EXPECT_EQ(test.service.candidate_selected_for_test(), 1);
+  EXPECT_TRUE(test.service.has_reconversion_ui_for_test());
+
+  test.context.RunDeferred();
+  EXPECT_EQ(*test.text, L"明晩別");
+  EXPECT_EQ(test.range.set_text_calls(), 1);
+  EXPECT_EQ(test.service.queued_corrections_for_test().size(), 1u);
+}
+
+TEST(ReconversionFunctionTest, QueuedChoiceLeavesTextAfterSelectionChangeOrEscape) {
+  for (const bool escape : {false, true}) {
+    SCOPED_TRACE(escape ? "escape" : "selection change");
+    WordReconversionChoice test;
+    ASSERT_NO_FATAL_FAILURE(test.Open());
+    ASSERT_NO_FATAL_FAILURE(test.ClickQueued(1));
+    if (escape) {
+      KeyboardStateGuard keyboard_state;
+      BOOL eaten = FALSE;
+      ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_ESCAPE, 0, &eaten), S_OK);
+      EXPECT_TRUE(eaten);
+    } else {
+      test.context.selection = &test.moved;
+      ChangedSelectionRecord record;
+      ASSERT_EQ(test.service.OnEndEdit(&test.context, 1, &record), S_OK);
+    }
+    EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+
+    test.context.RunDeferred();
+    EXPECT_EQ(*test.text, L"明日別");
+    EXPECT_EQ(test.range.set_text_calls(), 0);
+    EXPECT_TRUE(test.service.queued_corrections_for_test().empty());
+  }
+}
+
+TEST(ReconversionFunctionTest, FailedChoiceReturnsHighlightAndKeepsCandidates) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open());
+  ASSERT_NO_FATAL_FAILURE(test.ClickQueued(1));
+  // The application changed the range before it granted the lock.
+  (*test.text)[1] = L'晩';
+  test.context.RunDeferred();
+  EXPECT_EQ(*test.text, L"明晩別");
+  EXPECT_EQ(test.range.set_text_calls(), 0);
+  ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_FALSE(test.service.reconversion_select_pending_for_test());
+  EXPECT_EQ(test.service.candidate_selected_for_test(), 0);
+  EXPECT_TRUE(test.service.queued_corrections_for_test().empty());
+
+  // Enter now chooses the highlighted candidate; a key event gets the lock.
+  (*test.text)[1] = L'日';
+  test.context.refuse_sync = false;
+  KeyboardStateGuard keyboard_state;
+  BOOL eaten = FALSE;
+  ASSERT_EQ(test.service.OnKeyDown(&test.context, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_EQ(*test.text, L"あした別");
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+}
+
+TEST(ReconversionFunctionTest, ClickWhereTheLockIsGrantedReplacesAtOnce) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open());
+  // Notepad grants the lock even outside its own calls.
+  test.context.refuse_sync = false;
+  const size_t requests_before = test.context.flags_seen.size();
+  test.service.click_candidate_for_test(1);
+  // The replacement is the only request: the correction's privacy check reads
+  // with the session's cookie instead of asking for a nested lock.
+  ASSERT_EQ(test.context.flags_seen.size(), requests_before + 1);
+  EXPECT_EQ(test.context.flags_seen.back(),
+            static_cast<DWORD>(TF_ES_ASYNCDONTCARE | TF_ES_READWRITE));
+  EXPECT_TRUE(test.context.deferred.empty());
+  EXPECT_EQ(*test.text, L"明晩別");
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  EXPECT_FALSE(test.service.reconversion_select_pending_for_test());
+  EXPECT_EQ(test.service.queued_corrections_for_test().size(), 1u);
+}
+
 TEST(ReconversionFunctionTest, MovingSelectionDismissesDisplayedReconversion) {
   TestContext context;
   auto text = std::make_shared<std::wstring>(L"明日別");

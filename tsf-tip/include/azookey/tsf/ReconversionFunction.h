@@ -19,6 +19,24 @@ using ReconversionCandidateProvider = std::function<HRESULT(
 // borrowed: the receiver AddRefs it to keep it.
 using ReconversionListCallback = std::function<void(HRESULT hr, ITfCandidateList* list)>;
 
+// Receives the outcome of a RequestCandidateReplacement session, inside it:
+// further reads use `cookie` rather than request a nested lock.
+using CandidateReplacementCallback = std::function<void(HRESULT hr, TfEditCookie cookie)>;
+// Asked first inside the session: false when the request went stale.
+using CandidateReplacementGuard = std::function<bool()>;
+
+// Replaces `original` in `range` with `replacement` for the TIP's own candidate
+// UI (Enter, digit or click). A click arrives outside any application callback,
+// where Word refuses a synchronous lock (DEV-1926), so the session is
+// TF_ES_ASYNCDONTCARE. Inside it, a false `still_wanted` leaves the text alone
+// and `done` gets E_ABORT; a range that no longer reads `original` gets
+// TF_E_NOCONVERSION. `done` runs inside the session. Returns S_OK when the
+// session ran now and TF_S_ASYNC while it is queued; on failure `done` never runs.
+HRESULT RequestCandidateReplacement(ITfRange* range, TfClientId client_id, std::wstring original,
+                                    std::wstring replacement,
+                                    CandidateReplacementGuard still_wanted,
+                                    CandidateReplacementCallback done);
+
 class ReconversionFunction final : public ITfFnReconversion {
  public:
   ReconversionFunction(TfClientId client_id, ReconversionCandidateProvider provider);

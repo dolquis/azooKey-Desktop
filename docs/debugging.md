@@ -254,6 +254,23 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 `key_path_hold`・`key_path_commit`・`key_path_terminated_commit` も出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
 収集後は `AZOOKEY_LOG_KEYS` も削除する。
 
+### 再変換の候補の確定を収集する
+
+`AZOOKEY_LOG=1` のとき、TIP は再変換の各段階を `event=reconversion` として `stage` と `result`、
+`hr`、`count` で記録する。候補 UI での確定はトリガごとに `stage=select_key`（Enter・数字キー）/
+`select_click`（候補窓のクリック）となり、`count` は選んだ候補の番号（0 始まり）である。
+`result` は次のどれかで、置換の session が待たされた場合は `queued` の後に結果がもう 1 件出る。
+
+- `replaced` / `unchanged`: 置換した / 元と同じ候補で文字列を変えなかった。
+- `queued`: アプリが同期ロックを拒み（Word のクリックなど）、置換の session が後に回った。
+- `busy`: 待たされた確定の実行前に来た次の確定を無視した。
+- `stale_generation`: 待たされた session の実行前に、選択・context の変更や Esc で候補 UI が閉じていた。
+  文字列は変えない。
+- `failed`: 置換できなかった（`hr` が理由。表層が変わっていれば `TF_E_NOCONVERSION`）。
+  候補 UI は開いたまま、強調を Enter が確定する候補へ戻す。
+
+本文・読み・候補の文字列は出力しない。
+
 ### 候補 UI の `pbShow` を収集する
 
 アプリ互換確認では、前述のユーザー環境変数を設定してから検証対象アプリを新しく起動し、

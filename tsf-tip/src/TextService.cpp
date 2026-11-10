@@ -5118,14 +5118,15 @@ void TextService::TrackUndoKey(ITfContext* context, WPARAM key) {
 
 void TextService::PostCommitCorrection(ITfContext* context, std::string_view kind,
                                        std::string reading, std::string rejected_surface,
-                                       std::optional<std::string> selected_surface) {
+                                       std::optional<std::string> selected_surface,
+                                       std::optional<TfEditCookie> edit_cookie) {
   if (!ipc_host_commit_correction_.load(std::memory_order_relaxed) || !context || reading.empty() ||
       rejected_surface.empty())
     return;
   try {
     // The same event privacy as CommitObservation, decided now: a secure or
     // learning-denied context sends nothing (PostIpcSend also drops it).
-    const auto privacy = ResolvePrivacy(context, false);
+    const auto privacy = ResolvePrivacy(context, false, edit_cookie);
     if (privacy.secure || !privacy.learning_allowed) return;
     ipc::CommitCorrectionRequest request;
     request.kind = std::string(kind);
@@ -9920,6 +9921,7 @@ std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
 
 void TextService::ClearReconversionState() {
   const bool had_reconversion_ui = reconversion_list_ != nullptr;
+  reconversion_select_pending_ = false;
   if (reconversion_list_) {
     reconversion_list_->Release();
     reconversion_list_ = nullptr;
@@ -10070,7 +10072,13 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
 
 void TextService::OnCandidateClicked(int idx) {
   if (reconversion_list_) {
-    (void)CompleteReconversionSelection(static_cast<size_t>(idx));
+    if (idx < 0) return;
+    // The window highlights the clicked row by itself; the TIP's selection,
+    // which Enter uses, follows here and returns if the replacement fails.
+    // While a choice is queued, the click is ignored and the highlight returns.
+    const int before = candidate_ui_.GetSelected();
+    (void)candidate_ui_.SetSelection(reconversion_select_pending_ ? before : idx);
+    (void)CompleteReconversionSelection(static_cast<size_t>(idx), /*click=*/true, before);
     return;
   }
   if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
@@ -10092,51 +10100,129 @@ void TextService::OnCandidateClicked(int idx) {
   if (active_context_) CommitSelected(active_context_);
 }
 
-HRESULT TextService::CompleteReconversionSelection(size_t index) {
+HRESULT TextService::CompleteReconversionSelection(size_t index, bool click,
+                                                   int restore_selection) {
   if (!reconversion_list_) return S_FALSE;
-  // SetResult can synchronously notify OnEndEdit, which clears the
-  // reconversion state, so what the correction needs is copied first. The
-  // copy is best effort: an allocation failure loses only the correction.
-  struct Correction {
-    std::string reading;
-    std::string rejected;
-    std::string selected;
+  const std::string_view stage = click ? "select_click" : "select_key";
+  // One replacement per list: a second choice while the first is queued
+  // would replace the range again once the application runs both.
+  if (reconversion_select_pending_) {
+    LogReconversion(stage, "busy", S_OK, index);
+    return S_FALSE;
+  }
+  const auto restore = [this, restore_selection] {
+    if (restore_selection >= 0) (void)candidate_ui_.SetSelection(restore_selection);
   };
-  std::optional<Correction> correction;
-  ITfContext* context = nullptr;  // The reconverted range's, AddRef'd.
+  if (!reconversion_range_ || index >= reconversion_shown_candidates_.size()) {
+    LogReconversion(stage, "failed", E_INVALIDARG, index);
+    restore();
+    return E_INVALIDARG;
+  }
+  // The session may run later, after the state below has changed, so what
+  // the replacement and the correction need is copied first. The correction
+  // copy is best effort: an allocation failure loses only the correction.
+  std::optional<ReconversionCorrection> correction;
+  Microsoft::WRL::ComPtr<ITfContext> context;  // The reconverted range's.
   // A batch correction suggestion is model text: it replaces the range and is
-  // not learned. Read before SetResult, which may clear the state.
+  // not learned.
   const bool learnable = index < reconversion_shown_origins_.size() &&
                          reconversion_shown_origins_[index] == ReconversionOrigin::Host;
+  std::wstring original;
+  std::wstring replacement;
   try {
-    if (learnable && index < reconversion_shown_candidates_.size() &&
-        !reconversion_shown_candidates_[index].empty() &&
-        reconversion_shown_candidates_[index] != reconversion_surface_) {
-      correction = Correction{reconversion_shown_reading_, WideToUtf8(reconversion_surface_),
-                              WideToUtf8(reconversion_shown_candidates_[index])};
-      if (reconversion_range_) (void)reconversion_range_->GetContext(&context);
+    original = reconversion_surface_;
+    replacement = reconversion_shown_candidates_[index];
+  } catch (...) {
+    LogReconversion(stage, "failed", E_OUTOFMEMORY, index);
+    restore();
+    return E_OUTOFMEMORY;
+  }
+  try {
+    if (learnable && !replacement.empty() && replacement != original) {
+      correction = ReconversionCorrection{reconversion_shown_reading_, WideToUtf8(original),
+                                          WideToUtf8(replacement)};
+      (void)reconversion_range_->GetContext(&context);
     }
   } catch (...) {
     correction.reset();
   }
-  ITfCandidateList* list = reconversion_list_;
-  list->AddRef();
-  const HRESULT hr = list->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
-  list->Release();
+  const bool unchanged = replacement == original;
+  const uint64_t generation = reconversion_generation_;
+  Microsoft::WRL::ComPtr<ITfRange> range(reconversion_range_);
+  // Built before the choice is marked pending: an allocation failure here
+  // leaves no pending state that would turn every later choice into busy.
+  CandidateReplacementGuard still_wanted;
+  CandidateReplacementCallback done;
+  try {
+    // A queued session holds the service until it runs or is dropped.
+    AddRef();
+    std::shared_ptr<TextService> owner(this, [](TextService* service) { service->Release(); });
+    still_wanted = [owner, generation, range] {
+      return owner->reconversion_select_pending_ && generation == owner->reconversion_generation_ &&
+             range.Get() == owner->reconversion_range_;
+    };
+    done = [owner, generation, range, click, index, restore_selection, unchanged, correction,
+            context](HRESULT replace_hr, TfEditCookie cookie) {
+      owner->FinishReconversionSelection(generation, range.Get(), click, index, restore_selection,
+                                         unchanged, replace_hr, correction, context.Get(), cookie);
+    };
+  } catch (...) {
+    LogReconversion(stage, "failed", E_OUTOFMEMORY, index);
+    restore();
+    return E_OUTOFMEMORY;
+  }
+  reconversion_select_pending_ = true;
+  const HRESULT hr =
+      RequestCandidateReplacement(range.Get(), client_id_, std::move(original),
+                                  std::move(replacement), std::move(still_wanted), std::move(done));
+  if (hr == TF_S_ASYNC) {
+    // Still pending unless the state was cleared meanwhile.
+    if (reconversion_select_pending_) LogReconversion(stage, "queued", hr, index);
+    return hr;
+  }
+  if (FAILED(hr)) {
+    reconversion_select_pending_ = false;
+    LogReconversion(stage, "failed", hr, index);
+    restore();
+  }
+  return hr;
+}
+
+void TextService::FinishReconversionSelection(
+    uint64_t generation, ITfRange* range, bool click, size_t index, int restore_selection,
+    bool unchanged, HRESULT hr, const std::optional<ReconversionCorrection>& correction,
+    ITfContext* correction_context, TfEditCookie cookie) {
+  const std::string_view stage = click ? "select_click" : "select_key";
+  // A queued session can run after Esc, another key, a selection change or
+  // Deactivate closed this list; the text was left alone then.
+  if (!reconversion_select_pending_ || generation != reconversion_generation_ ||
+      range != reconversion_range_ || !reconversion_list_) {
+    LogReconversion(stage, "stale_generation", hr, index);
+    return;
+  }
+  reconversion_select_pending_ = false;
+  if (FAILED(hr)) {
+    LogReconversion(stage, "failed", hr, index);
+    // The list stays open, highlighting the candidate Enter would choose.
+    if (restore_selection >= 0) (void)candidate_ui_.SetSelection(restore_selection);
+    return;
+  }
+  LogReconversion(stage, unchanged ? "unchanged" : "replaced", hr, index);
   // Choosing another candidate corrects the earlier commit (user-learning-
   // enhancement-spec §4.1). The correction is its learning event, so the pair
   // is not Forget's to name, and Ctrl+Shift+Backspace must not reach an older
   // pair past it either (spec §7.2).
-  if (SUCCEEDED(hr)) {
-    last_learned_commit_pairs_.clear();
-    undo_target_.reset();
-    if (correction && context)
-      PostCommitCorrection(context, ipc::kCorrectionKindReconvert, std::move(correction->reading),
-                           std::move(correction->rejected), std::move(correction->selected));
+  last_learned_commit_pairs_.clear();
+  undo_target_.reset();
+  if (correction && correction_context) {
+    try {
+      // This runs inside the replacement session: privacy is read with its cookie.
+      PostCommitCorrection(correction_context, ipc::kCorrectionKindReconvert, correction->reading,
+                           correction->rejected, correction->selected, cookie);
+    } catch (...) {
+    }
   }
-  if (context) context->Release();
-  if (SUCCEEDED(hr) && reconversion_list_) ClearReconversionState();
-  return hr;
+  ClearReconversionState();
 }
 
 void TextService::ShowReconversionResult() {

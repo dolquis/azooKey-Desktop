@@ -1396,16 +1396,20 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     } catch (const std::exception&) {
       ZenzaiLoadResult failed;
       failed.error = "model initialization failed";
+      failed.failure = ZenzaiLoadFailure::Exception;
       return failed;
     } catch (...) {
       ZenzaiLoadResult failed;
       failed.error = "model initialization failed: unknown exception";
+      failed.failure = ZenzaiLoadFailure::Exception;
       return failed;
     }
   };
   auto loaded = load();
   std::optional<std::string> backend_error;
+  std::string vulkan_failure;
   if (!loaded.ok && runtime_options.use_vulkan) {
+    vulkan_failure = ZenzaiLoadFailureName(loaded.failure);
     backend_error = "Vulkan initialization failed; using CPU fallback";
     next_config.backend = BackendKind::Cpu;
     runtime_options.use_vulkan = false;
@@ -1414,7 +1418,21 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = backend_error;
   }
   if (!loaded.ok) {
-    result.error = backend_error ? "Vulkan and CPU model load failed" : "model load failed";
+    // Each backend's reason is a fixed word (docs/zenzai-inference-spec.md section 7.4); the
+    // loader's error text can carry the model path or llama.cpp output, so it is never kept.
+    const std::string cpu_failure = ZenzaiLoadFailureName(loaded.failure);
+    result.error = backend_error ? "Vulkan: " + vulkan_failure + "; CPU: " + cpu_failure
+                                 : "CPU: " + cpu_failure;
+    // docs/model-management-spec.md section 5.3 (fixed words only, dev-infrastructure-spec 7.6).
+    if (runtime_logger_) {
+      runtime_logger_->Log(
+          logging::RuntimeLogLevel::Error, "model_load",
+          {{"result", logging::RuntimeLogSafeText("error")},
+           {"error_code", logging::RuntimeLogSafeText("business")},
+           {"reason", logging::RuntimeLogSafeText("backend_load_failed")},
+           {"backend", logging::RuntimeLogSafeText(std::string(BackendName(next_config.backend)))},
+           {"fallback", logging::RuntimeLogSafeText(backend_error ? "vulkan_then_cpu" : "none")}});
+    }
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       adopt_applied_threads();

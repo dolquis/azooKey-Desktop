@@ -635,12 +635,20 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   Health は `ok` を保つ（`LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`）。
   CUDA の採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典。
 - **Vulkan 要求**: デバイス不在、モデルまたは context の初期化に失敗したら CPU で 1 回だけ
-  再試行する。CPU で成功しても降格理由を `last_error` に保持し、Health は `degraded` になる
+  再試行する。CPU で成功しても降格理由（`Vulkan initialization failed; using CPU fallback`）を
+  `last_error` に保持し、Health は `degraded` になる
   （`LoadModelVulkanFallbackReportsDegradedCpu`）。`auto` から選んだ Vulkan も同じ扱いとする。
   R2 再開後に要求 EP が実エラーで失敗して降格した場合も同じ扱いとする。
 - **ロード失敗**: CPU でもロードできなければ LoadModel は失敗を返す。モデルがロードされて
   いなかった場合は active converter を `SimpleConverter` に戻し、`last_error` に理由を設定する。
   直前のモデルがロード済みなら、そのモデルを使い続ける。Host は落ちない。
+- **失敗理由の保持**: `last_error`（と `ModelLoadResult.error`）は、試した backend ごとの理由を
+  `Vulkan: <理由>; CPU: <理由>` の形で持つ。Vulkan を試さなかったときは `CPU: <理由>` だけにする。
+  `<理由>` は次の固定語彙に限る: `no_device`（Vulkan のデバイスが無い、または ggml-vulkan を
+  リンクしないビルド）、`model_init_failed`（モデルの読み込みに失敗）、`context_init_failed`
+  （context の生成に失敗）、`exception`（ロード中の例外）。llama.cpp の生のエラー文、モデルの
+  path、例外メッセージは `last_error` にもログにも入れない（`docs/dev-infrastructure-spec.md` §7.6）。
+  設定アプリのモデルペインは `last_error` をそのまま表示するので、この形が利用者に見える。
 - **解除**: 後続の成功した LoadModel、またはモデルの無効化 / アンロードで `last_error` と
   `model_runtime_error_` を解除する（§9.2.1 項 6）。
 - **Health の status**: `effective_last_error()` から決める（§9.2.1 項 5）。対応表は

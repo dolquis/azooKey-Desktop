@@ -1725,7 +1725,7 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
 
   EXPECT_FALSE(result.ok);
   ASSERT_TRUE(result.error.has_value());
-  EXPECT_EQ(*result.error, "model load failed");
+  EXPECT_EQ(*result.error, "CPU: model_init_failed");
   const auto health = engine->health_snapshot();
   ASSERT_TRUE(health.last_error.has_value());
   EXPECT_EQ(health.last_error, result.error);
@@ -3218,9 +3218,10 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
     const auto result = engine->LoadModelWithResult(options);
     EXPECT_FALSE(result.ok);
     ASSERT_TRUE(result.error);
-    EXPECT_EQ(*result.error, "Vulkan and CPU model load failed");
+    EXPECT_EQ(*result.error, "Vulkan: exception; CPU: exception");
     EXPECT_EQ(result.error->find("Vulkan test failure"), std::string::npos);
     EXPECT_EQ(result.error->find("CPU test failure"), std::string::npos);
+    EXPECT_EQ(result.error->find(model_path), std::string::npos);
     EXPECT_EQ(attempts, (std::vector<azookey::host::BackendKind>{azookey::host::BackendKind::Vulkan,
                                                                  azookey::host::BackendKind::Cpu}));
     EXPECT_FALSE(engine->model_loaded());
@@ -3229,6 +3230,90 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
   }
   std::remove(model_path.c_str());
   std::remove(learning_path);
+}
+
+// docs/model-management-spec.md section 5.3: a failed backend load logs
+// reason=backend_load_failed with fixed words only (dev-infrastructure-spec 7.6).
+namespace {
+
+// Every file name carries `tag`: CTest runs each test in its own process, in parallel, so two
+// tests sharing a name would delete each other's model file.
+std::vector<std::string> LoadFailureLogLines(const std::string& tag,
+                                             azookey::host::BackendKind requested) {
+  const auto model_path = TempPath(("azookey_backend_load_failure_" + tag + ".gguf").c_str());
+  const auto log_path = TempPath(("azookey_backend_load_failure_" + tag + ".jsonl").c_str());
+  const auto learning_path = TempPath(("azookey_backend_load_failure_" + tag + ".tsv").c_str());
+  std::remove(model_path.c_str());
+  std::remove(log_path.c_str());
+  WriteMinimalGguf(model_path);
+  std::remove(learning_path.c_str());
+  azookey::learning::LearningStore store(learning_path, &azookey::learning::test::Crypto());
+  azookey::logging::RuntimeLoggerOptions log_options;
+  log_options.enabled = true;
+  log_options.component = "host";
+  log_options.output_path = log_path;
+  azookey::logging::RuntimeLogger logger(log_options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
+                                        {}, &logger);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = requested;
+  options.before_load_for_tests = [&](azookey::host::BackendKind backend) {
+    if (backend == azookey::host::BackendKind::Vulkan) {
+      throw std::runtime_error("Vulkan test failure");
+    }
+    throw std::runtime_error("CPU test failure");
+  };
+  EXPECT_FALSE(engine.LoadModelWithResult(options).ok);
+
+  std::vector<std::string> lines;
+  std::ifstream stream(log_path);
+  for (std::string line; std::getline(stream, line);) {
+    lines.push_back(line);
+  }
+  std::remove(model_path.c_str());
+  std::remove(learning_path.c_str());
+  std::remove(log_path.c_str());
+  return lines;
+}
+
+void ExpectNoLoadFailureLeak(const std::string& line) {
+  EXPECT_EQ(line.find("Vulkan test failure"), std::string::npos);
+  EXPECT_EQ(line.find("CPU test failure"), std::string::npos);
+  EXPECT_EQ(line.find("azookey_backend_load_failure_"), std::string::npos);
+  EXPECT_EQ(line.find("model initialization failed"), std::string::npos);
+}
+
+}  // namespace
+
+TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsLogBackendLoadFailed) {
+  const auto lines = LoadFailureLogLines("both", azookey::host::BackendKind::Vulkan);
+  int matched = 0;
+  for (const auto& line : lines) {
+    if (line.find("\"reason\":\"backend_load_failed\"") == std::string::npos) continue;
+    ++matched;
+    EXPECT_NE(line.find("\"result\":\"error\""), std::string::npos);
+    EXPECT_NE(line.find("\"error_code\":\"business\""), std::string::npos);
+    EXPECT_NE(line.find("\"backend\":\"cpu\""), std::string::npos);
+    EXPECT_NE(line.find("\"fallback\":\"vulkan_then_cpu\""), std::string::npos);
+    ExpectNoLoadFailureLeak(line);
+  }
+  EXPECT_EQ(matched, 1);
+}
+
+TEST(InferenceEngineTest, FailedCpuLoadLogsBackendLoadFailed) {
+  const auto lines = LoadFailureLogLines("cpu", azookey::host::BackendKind::Cpu);
+  int matched = 0;
+  for (const auto& line : lines) {
+    if (line.find("\"reason\":\"backend_load_failed\"") == std::string::npos) continue;
+    ++matched;
+    EXPECT_NE(line.find("\"result\":\"error\""), std::string::npos);
+    EXPECT_NE(line.find("\"error_code\":\"business\""), std::string::npos);
+    EXPECT_NE(line.find("\"backend\":\"cpu\""), std::string::npos);
+    EXPECT_NE(line.find("\"fallback\":\"none\""), std::string::npos);
+    ExpectNoLoadFailureLeak(line);
+  }
+  EXPECT_EQ(matched, 1);
 }
 
 TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {

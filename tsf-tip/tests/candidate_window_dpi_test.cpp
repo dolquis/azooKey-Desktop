@@ -164,7 +164,10 @@ TEST(CandidateWindowDpiTest, NoticeSurvivesHealthBannerResizeAndKeepsClickRegion
 
   window.ShowHealthBanner(CandidateHealthState::DegradedModel);
   ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
-  EXPECT_EQ(bounds.bottom - bounds.top, 5 * metrics.item_height);
+  // The candidate row, the notice row, then the banner below them.
+  EXPECT_EQ(bounds.bottom - bounds.top,
+            2 * metrics.item_height + window.health_banner_height_for_test());
+  EXPECT_EQ(window.health_banner_top_for_test(), 2 * metrics.item_height);
   EXPECT_EQ(window.notice_for_test(), L"AI 整文の案内");
   const int width = bounds.right - bounds.left;
   const int click_x = width - metrics.horizontal_padding - 10;
@@ -172,8 +175,9 @@ TEST(CandidateWindowDpiTest, NoticeSurvivesHealthBannerResizeAndKeepsClickRegion
                MAKELPARAM(click_x, metrics.item_height + metrics.item_height / 2));
   EXPECT_EQ(candidate_clicks, 0);
   EXPECT_EQ(retries, 0);
+  const RECT retry = window.health_retry_button_for_test(width);
   SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
-               MAKELPARAM(click_x, 4 * metrics.item_height + metrics.item_height / 2));
+               MAKELPARAM((retry.left + retry.right) / 2, (retry.top + retry.bottom) / 2));
   EXPECT_EQ(retries, 1);
 
   window.HideHealthBanner();
@@ -212,15 +216,20 @@ TEST(CandidateWindowDpiTest, SecureToastShiftsHealthButtonsAndLockIsNotACandidat
   window.ShowSecureToast();
   window.ShowHealthBanner(CandidateHealthState::DegradedModel);
   ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
-  EXPECT_EQ(bounds.bottom - bounds.top, 5 * metrics.item_height);
+  EXPECT_EQ(bounds.bottom - bounds.top,
+            2 * metrics.item_height + window.health_banner_height_for_test());
+  // The toast row pushes the banner, and so its buttons, down by one row.
+  EXPECT_EQ(window.health_banner_top_for_test(), 2 * metrics.item_height);
   ASSERT_TRUE(GetClientRect(hwnd, &client));
-  const int click_x = client.right - metrics.horizontal_padding - 10;
-  // Without the toast row this would be the [再試行] row; now it is banner text.
+  const RECT retry = window.health_retry_button_for_test(client.right);
+  EXPECT_GT(retry.top, window.health_banner_top_for_test());
+  const int click_x = (retry.left + retry.right) / 2;
+  // One row above the button is banner text, not the button.
   SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
-               MAKELPARAM(click_x, 3 * metrics.item_height + metrics.item_height / 2));
+               MAKELPARAM(click_x, retry.top - metrics.item_height / 2));
   EXPECT_EQ(retries, 0);
   SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
-               MAKELPARAM(click_x, 4 * metrics.item_height + metrics.item_height / 2));
+               MAKELPARAM(click_x, (retry.top + retry.bottom) / 2));
   EXPECT_EQ(retries, 1);
   EXPECT_EQ(candidate_clicks, 1);
 
@@ -268,18 +277,25 @@ TEST(CandidateWindowHitTest, ClickRegionsScaleAt96And144And192Dpi) {
     // The notice row and the toast row are not clickable.
     expect({0, 2 * row}, Target::None);
     expect({0, 4 * row - 1}, Target::None);
-    // The banner starts below the toast; its buttons sit on its third row.
+    // The banner starts below the toast; its buttons sit on its last row, inset
+    // from the row's top and bottom, the retry button at the right padding.
     expect({0, 4 * row}, Target::HealthBanner);
-    const int button_top = 6 * row;
+    const int lines = window.health_banner_lines_for_test();
+    ASSERT_GE(lines, 1);
+    ASSERT_LE(lines, 3);
+    EXPECT_EQ(window.health_banner_height_for_test(), (lines + 1) * row);
+    const int button_top = 4 * row + lines * row + scale(2);
+    const int button_bottom = 4 * row + (lines + 1) * row - scale(2);
     const int retry_right = width - scale(8);
-    expect({retry_right - scale(60), button_top}, Target::HealthRetryButton);
-    expect({retry_right - 1, button_top + row - 1}, Target::HealthRetryButton);
+    expect({retry_right - scale(108), button_top}, Target::HealthRetryButton);
+    expect({retry_right - 1, button_bottom - 1}, Target::HealthRetryButton);
     expect({retry_right, button_top}, Target::HealthBanner);
     expect({retry_right - 1, button_top - 1}, Target::HealthBanner);
-    const int details_right = retry_right - scale(68);
-    expect({details_right - scale(52), button_top}, Target::HealthDetailsButton);
-    expect({details_right - 1, button_top + row - 1}, Target::HealthDetailsButton);
-    expect({details_right - scale(52) - 1, button_top}, Target::HealthBanner);
+    expect({retry_right - 1, button_bottom}, Target::HealthBanner);
+    const int details_right = retry_right - scale(108) - scale(8);
+    expect({details_right - scale(108), button_top}, Target::HealthDetailsButton);
+    expect({details_right - 1, button_bottom - 1}, Target::HealthDetailsButton);
+    expect({details_right - scale(108) - 1, button_top}, Target::HealthBanner);
     expect({details_right, button_top}, Target::HealthBanner);
     window.Destroy();
   }
@@ -328,7 +344,7 @@ TEST(CandidateWindowRenderTest, FillsEachRegionWithTheThemeAt96And144And192Dpi) 
       int height = 0;
       ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
       const int row = MulDiv(24, static_cast<int>(dpi), 96);
-      ASSERT_EQ(height, 7 * row);
+      ASSERT_EQ(height, 4 * row + window.health_banner_height_for_test());
       const auto at = [&](int x, int y) { return pixels[static_cast<size_t>(y * width + x)]; };
       const ThemeColors& colors = window.theme_for_test();
       // Inside the right padding no text reaches, so each row shows its fill.
@@ -337,9 +353,18 @@ TEST(CandidateWindowRenderTest, FillsEachRegionWithTheThemeAt96And144And192Dpi) 
       EXPECT_EQ(at(x, row + row / 2), colors.selection);
       EXPECT_EQ(at(x, 2 * row + row / 2), colors.panel_background);
       EXPECT_EQ(at(x, 3 * row + row / 2), colors.info_background);
-      EXPECT_EQ(at(x, 5 * row), colors.banner_background);
+      EXPECT_EQ(at(x, 4 * row + row / 2), colors.banner_background);
       EXPECT_EQ(at(0, row / 2), colors.border);
-      EXPECT_EQ(at(width - 1, 6 * row), colors.border);
+      EXPECT_EQ(at(width - 1, height - row / 2), colors.border);
+      // Both buttons have a frame; inside it, between the label and the frame, the banner shows.
+      for (const RECT button : {window.health_details_button_for_test(width),
+                                window.health_retry_button_for_test(width)}) {
+        EXPECT_EQ(at(button.left, (button.top + button.bottom) / 2), colors.border);
+        EXPECT_EQ(at(button.right - 1, (button.top + button.bottom) / 2), colors.border);
+        EXPECT_EQ(at(button.left + 2, button.top), colors.border);
+        EXPECT_EQ(at(button.left + 2, button.bottom - 1), colors.border);
+        EXPECT_EQ(at(button.left + 2, (button.top + button.bottom) / 2), colors.banner_background);
+      }
       window.Destroy();
     }
   }
@@ -964,6 +989,121 @@ TEST(CandidateWindowScrollTest, FewCandidatesHaveNoPositionRow) {
   // Rows, then the notice row; nothing in between.
   EXPECT_EQ(window.footer_top_for_test(), 4 * 24);
   window.Destroy();
+}
+
+TEST(CandidateWindowHealthBannerTest, SizesScaleAt96And144And192Dpi) {
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    // The details popup takes the candidate window's width within 320..480.
+    EXPECT_EQ(CandidateWindow::ComputeDetailsWidth(scale(100), dpi), scale(320));
+    EXPECT_EQ(CandidateWindow::ComputeDetailsWidth(scale(400), dpi), scale(400));
+    EXPECT_EQ(CandidateWindow::ComputeDetailsWidth(scale(900), dpi), scale(480));
+  }
+  // The banner: its text lines, at most three, and one row of buttons.
+  EXPECT_EQ(CandidateWindow::ComputeHealthBannerHeight(1, 24), 48);
+  EXPECT_EQ(CandidateWindow::ComputeHealthBannerHeight(3, 36), 144);
+  EXPECT_EQ(CandidateWindow::ComputeHealthBannerHeight(7, 24), 96);
+  EXPECT_EQ(CandidateWindow::ComputeHealthBannerHeight(0, 24), 48);
+  // Only the two buttons take the hand cursor.
+  using Target = CandidateWindow::HitTarget;
+  EXPECT_TRUE(CandidateWindow::UsesHandCursor(Target::HealthDetailsButton));
+  EXPECT_TRUE(CandidateWindow::UsesHandCursor(Target::HealthRetryButton));
+  for (const Target target : {Target::None, Target::Candidate, Target::Prediction,
+                              Target::SecureIndicator, Target::HealthBanner})
+    EXPECT_FALSE(CandidateWindow::UsesHandCursor(target));
+}
+
+TEST(CandidateWindowHealthBannerTest, WrapsAtTheWindowWidthWithoutWideningIt) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    const int row = scale(24);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    const HWND hwnd = window.hwnd_for_test();
+    RECT bounds{};
+
+    // A narrow window widens only to the width of the two buttons.
+    window.Show(POINT{20, 20}, {{L"字", L""}}, 0);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    ASSERT_LT(bounds.right - bounds.left, scale(240));
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.right - bounds.left, scale(240));
+    const int narrow_lines = window.health_banner_lines_for_test();
+    EXPECT_GE(narrow_lines, 2);
+    EXPECT_LE(narrow_lines, 3);
+    EXPECT_EQ(bounds.bottom - bounds.top, row + (narrow_lines + 1) * row);
+    window.HideHealthBanner();
+
+    // A wide window keeps its width, and the same text takes fewer lines.
+    const std::vector<CandidateViewItem> wide = {
+        {L"とても長い候補の文字列をここに並べる", L"とても長い説明の文字列をここに並べる"}};
+    window.Show(POINT{20, 20}, wide, 0);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    const int wide_width = bounds.right - bounds.left;
+    ASSERT_GT(wide_width, scale(300));
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.right - bounds.left, wide_width);
+    const int wide_lines = window.health_banner_lines_for_test();
+    EXPECT_LT(wide_lines, narrow_lines);
+    EXPECT_EQ(bounds.bottom - bounds.top, row + window.health_banner_height_for_test());
+
+    // A longer text takes at least as many lines at the same width, never more than three.
+    window.ShowHealthBanner(CandidateHealthState::SafeMode);
+    EXPECT_GE(window.health_banner_lines_for_test(), wide_lines);
+    EXPECT_LE(window.health_banner_lines_for_test(), 3);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.right - bounds.left, wide_width);
+    // Without [再試行], [詳細] moves to the right padding.
+    const RECT details = window.health_details_button_for_test(wide_width);
+    EXPECT_EQ(details.right, wide_width - scale(8));
+    EXPECT_EQ(details.right - details.left, scale(108));
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowHealthBannerTest, DetailsTakeTheWindowWidthAndTheMeasuredHeight) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    int heights[2] = {0, 0};
+    int index = 0;
+    for (const CandidateHealthState state :
+         {CandidateHealthState::DegradedModel, CandidateHealthState::SafeMode}) {
+      window.Show(POINT{20, 20}, {{L"字", L""}}, 0);
+      window.ShowHealthBanner(state);
+      ASSERT_TRUE(window.ShowDetailsForTest()) << window.failure_stage();
+      RECT candidate{};
+      RECT details{};
+      ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &candidate));
+      ASSERT_TRUE(GetWindowRect(window.details_hwnd_for_test(), &details));
+      // The window is 240 wide here, so the popup takes its lower bound of 320.
+      EXPECT_EQ(details.right - details.left, scale(320));
+      RECT work{};
+      ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
+      EXPECT_LE(details.bottom - details.top, work.bottom - work.top);
+      // Padding above and below, the text, and the close row.
+      EXPECT_GT(details.bottom - details.top, scale(16) + scale(24) + scale(24));
+      heights[index++] = details.bottom - details.top;
+      window.Hide();
+    }
+    // The longer safe mode text makes the taller popup.
+    EXPECT_GT(heights[1], heights[0]);
+    window.Destroy();
+  }
 }
 
 }  // namespace

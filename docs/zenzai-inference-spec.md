@@ -648,7 +648,7 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   リンクしないビルド）、`model_init_failed`（モデルの読み込みに失敗）、`context_init_failed`
   （context の生成に失敗）、`exception`（ロード中の例外）。llama.cpp の生のエラー文、モデルの
   path、例外メッセージは `last_error` にもログにも入れない（`docs/dev-infrastructure-spec.md` §7.6）。
-  設定アプリのモデルペインは `last_error` をそのまま表示するので、この形が利用者に見える。
+  設定アプリの「AI 変換」ペインは `last_error` をそのまま表示するので、この形が利用者に見える。
 - **解除**: 後続の成功した LoadModel、またはモデルの無効化 / アンロードで `last_error` と
   `model_runtime_error_` を解除する（§9.2.1 項 6）。
 - **Health の status**: `effective_last_error()` から決める（§9.2.1 項 5）。対応表は

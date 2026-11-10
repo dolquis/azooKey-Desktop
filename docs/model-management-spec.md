@@ -254,7 +254,7 @@ id を省くと `defaultModelId`）。CLI は `settings.json` の `privacy.mode`
 タブ区切りで出す。CLI の `models catalog` と `models fetch` は、ローカル利用者が自分で起動する
 コマンドであり、Host の常駐経路からは呼ばない。
 
-もう 1 つの入口は、設定アプリのモデル ペインの取得ボタンから送る `FetchCatalogModel`（§4.4）
+もう 1 つの入口は、設定アプリの「AI 変換」ペインの取得ボタンから送る `FetchCatalogModel`（§4.4）
 である。常駐 Host が同じ `FetchCatalogModel` をバックグラウンドのスレッドで呼び、
 `privacy.mode=offline` の判定には Host の実行中の設定（`UpdateConfig` で切り替わる値）を使う。
 取得中に `offline` へ切り替わるか、Host が止まるか、利用者が中止する（`CancelCatalogFetch`、

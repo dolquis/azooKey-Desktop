@@ -590,7 +590,7 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
   ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
   と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
-- **モデル DL の UI**: 設定アプリのモデル ペインの取得ボタン（上記「利用者の操作による
+- **モデル DL の UI**: 設定アプリの「AI 変換」ペインの取得ボタン（上記「利用者の操作による
   取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
   配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
 
@@ -1180,7 +1180,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 群 | ペイン | 内容 |
 |---|---|---|
 | 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
-| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ 括弧ペアリング（括弧の字形を決める `inputMode` を含む）/ `maxCandidates` |
+| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
 | 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
 | 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
 | 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
@@ -1189,7 +1189,14 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| フッター | バージョン | 製品のバージョン / `autoUpdate`（§6 の更新確認が入るまでは、3 キーを無効で表示し、未対応である旨の注記を 1 つだけ置く）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+| フッター | バージョン | 製品のバージョン / `autoUpdate` の表示（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+
+「バージョン」の `autoUpdate` は表示専用とする。3 キーを操作できない状態で表示し、未対応である旨の注記を 1 つだけ置く
+（バージョンは保存バーを出さないので、値は保存時に書き戻すだけで変わらない）。M32 の更新確認（§6、DEV-1934）で
+編集できるようにするときに、置くペインと保存の扱いを決め直す。
+
+「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
+「ログ出力先を開く」（§3.7）のボタンを置く（`docs/dev-infrastructure-spec.md` §8.5.4・§12.1.1 が設定アプリの診断として指す先は、この節である）。
 
 「AI 変換」は「設定」群に置くが、モデル一覧の更新・ベンチマーク・取得・中止は Host への IPC でその場で行い、
 保存バーを経ない。保存バーが書くのは、このペインの設定キー（`model.selectedPath` を含む）だけである。
@@ -1197,7 +1204,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 保存バー:
 
 - 「設定」群のペインで、スクロール領域の外のウィンドウ下端に固定して表示する。保存結果の InfoBar も保存バーに出す。
-- 保存は「設定」群の全ペインの値をまとめて書く（書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
+- 保存は「設定」群の全ペインの値をまとめて書く（モデルの取得などの IPC 操作は含まない。書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
 - 読み込んだ値から変えたキーの数を示し、変えたキーが無い間は保存ボタンを無効にする。
 - 変えたキーが残ったままウィンドウを閉じようとしたときは、保存する・破棄する・閉じるのをやめる、を選ぶ確認を出す。
 
@@ -1226,7 +1233,7 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 
 専用コントロールを持たないキーの UI は、`settings-app/SettingsFields.cpp` の記述子表から生成する。
 記述子は各キーの型・既定・範囲・選択肢・ペインと、機能別 spec が「効果を持たない」と定める条件
-（例: `privacy.custom.*` は `privacy.mode` が `custom` のときだけ、括弧の各キーは `bracketPairing` が
+（例: `privacy.custom.*` は `privacy.mode` が `custom` のときだけ、カッコ補完の各キーは `bracketPairing` が
 真のときだけ）を持ち、条件を満たさない間はコントロールを無効にする。記述子と schema の型・既定・範囲・
 選択肢の一致、schema の全キーが「生成する / 専用コントロール / 編集しない（理由付き）」のいずれかに
 属すること、表示文字列の有無は `azookey_settings_persistence_tests` が検査する。
@@ -1235,6 +1242,8 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 
 設定アプリの表示文字列（`settings-app/Strings/ja-JP/Resources.resw`）と、入力インジケーターのメニュー
 （`docs/tsf-deep-integration-spec.md` §4.5）は次の規則に従う。保存する値（schema の enum 値）は変えない。
+規則が拘束するのは表示文字列とメニューであり、spec の地の文は、画面の語を指す箇所（ペイン名・項目名・機能名）を
+これに揃える。
 
 - 利用者向けの文に内部の語を出さない。置き換えは次の表に従う。
 
@@ -1330,7 +1339,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   single-instance の扱いは `docs/tsf-deep-integration-spec.md` §6.2 が正典。設定値の反映は
   §3.3 の `UpdateConfig` IPC で行う。
 - **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
-  `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。設定アプリは
+  `azookey_settings.exe` に渡し、「バージョン」の起動コンテキストに表示する（§3.2）。設定アプリは
   `AppInstance::FindOrRegisterForKey` で単一インスタンスを登録し、後続起動は
   `RedirectActivationToAsync` で新しい引数を既存インスタンスへ転送する。既存ウィンドウは転送後に
   前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
@@ -1338,6 +1347,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **校正ビューの引数**: TIP の校正ビュー（`rich-features-spec.md` X-3-6）は
   `--proofread-session <token>` だけを渡す。token は小文字 16 進 32 桁で、重複・値なし・それ以外の値は
   parse error とする。後続起動の転送でも同じく既存インスタンスへ渡り、「校正」ペインがその session を開く。
+- **開くペインの引数**: `--pane <名前>`（§3.2）は開くペインだけを指定する。`--proofread-session` と同時に
+  受けたときは `--proofread-session` を優先して「校正」を開く。`langid` / `rguidProfile` は開くペインを
+  変えず、どちらも受けたときも `--pane` が無ければ「入力」を開く（言語プロファイルごとの設定ページは持たない）。
 - **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
   インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
@@ -1589,7 +1601,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
 | `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（`powerProfile` / `inferenceThreads` / `maxContextLength` は AI 変換ペイン、`maxCandidates` は候補ペイン、実験フラグは詳細ペイン） |
 | `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
-| 句読点・バッチ変換・インライン英単語候補・候補リライター・括弧ペアリングの各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・括弧ペアリングは候補ペイン） |
+| 句読点・バッチ変換・インライン英単語候補・候補リライター・カッコ補完の各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・カッコ補完は候補ペイン） |
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |

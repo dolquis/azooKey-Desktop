@@ -721,9 +721,9 @@ Backend: auto → CPU
 - **選択モデルをロード**: `LoadModel` IPC を送信、進捗バー表示
 - **ベンチマーク**: `BenchmarkModel` IPC を送信、結果を表示・保存
 
-設定アプリの「モデル」ペイン（`sideload-packaging-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
+設定アプリの「AI 変換」ペイン（`sideload-packaging-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
 検証結果の表示、ベンチマーク（`BenchmarkModel`。backend は `cpu`）、モデルの選択、`model.benchmarkHistory` の
-表示である。モデルの選択は「一般」のモデルのパス欄へ入れるだけで、`model.selectedPath` は共通の保存ボタンが
+表示である。モデルを選ぶと同じペインの「使うモデル」の表示が変わり、`model.selectedPath` は保存バーが
 書く。選択と測定の対象は、`valid` な `gguf` に限る（`onnx_genai` は一覧に出すが選べない）。
 「モデルを追加」「フォルダを開く」「選択モデルをロード」は、このペインに置かない。
 
@@ -738,8 +738,8 @@ Host が `ListModels` の `catalog`（§4.1）を返すとき、ペインは既�
 戻す。`not_running` は取得が先に終わったものとみなし、その終わり方を表示する。中止の要求に
 Host が応答するまでは、同じウィンドウから新しい取得を始めない（中止が `model_id` で取得を
 指すため、応答前に始めた取得を止めないようにする）。
-取得が成功したら（`downloaded` / `already_valid`）、その確定パスを「一般」のモデルの
-パス欄へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく共通の保存ボタンである
+取得が成功したら（`downloaded` / `already_valid`）、その確定パスを同じペインの
+「使うモデル」へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく保存バーである
 （`docs/sideload-packaging-spec.md` §1.6.1「利用者の操作による取得」）。`mismatch` の entry は、
 同じ名前の別のファイルを置き換えないので取得ボタンを出さない。
 

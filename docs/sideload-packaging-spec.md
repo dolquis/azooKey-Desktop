@@ -521,12 +521,12 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       起動時に利用者の操作なしでネットワークへ出る挙動の変更なので、(b) を Host に
       入れるかは将来の判断とし、入れるときに本項の前提ガードを適用する。それまでの
       取得の入口は、次の利用者の操作による取得と CLI の `models fetch` だけである。
-    - **利用者の操作による取得（設定アプリ）**: 設定アプリのモデル ペインは既定の
+    - **利用者の操作による取得（設定アプリ）**: 設定アプリの「AI 変換」ペインは既定の
       catalog の entry を一覧し、利用者が押した取得ボタンから Host に取得させる
       （IPC は `model-management-spec.md` §4.4、取得機構は同 §3.1.2）。`privacy.mode=offline`
       では接続しない。取得時の SHA-256 のピン一致と §3.3 の R1 検証を probe とみなし、
-      成功したら確定パスを「一般」のモデルのパス欄へ入れる。commit は (c2) と同じく共通の
-      保存ボタンが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
+      成功したら確定パスを同じペインの「使うモデル」へ入れる。commit は (c2) と同じく
+      保存バーが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
       行う。取得しただけでは `selectedPath` を変えない。
     - **(c) 手動配置**: 次の 2 経路を定める。
         - **(c1) Host 起動時の default-path autoselect（ピン依存。将来の判断）**:
@@ -1163,30 +1163,53 @@ Microsoft Learn の事実は
 
 ### 3.2 ナビゲーション
 
-設定アプリは左側の `NavigationView` でペインを切り替える。起動時は「一般」を表示する。
-保存ボタンと保存結果の InfoBar は全ペインで共通とし、保存は全ペインの値をまとめて書く。
+設定アプリは左側の `NavigationView` でペインを切り替える。ペインは 2 つの群（`NavigationViewItemHeader`
+で見出しを付ける）と、フッターの 1 つに分ける。
+
+- 「設定」群: `settings.json` のキーを編集するペイン。変えた値は保存バーで保存するまで書かない。
+- 「データとツール」群: Host への IPC で操作し、その場で反映するペイン。保存の対象を持たず、保存バーを出さない。
+- フッター（`NavigationView.FooterMenuItems`）: 「バージョン」。保存バーを出さない。
+
+起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`rich-features-spec.md`
+X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
+`dictionary` / `ai-conversion` / `ai-service` / `privacy` / `profiles` / `advanced` / `learning` / `proofread` /
+`version`。知らない名前は無視して「入力」を表示する）。`--pane` は入力インジケーターの「設定を開く」が渡す
+（`docs/tsf-deep-integration-spec.md` §4.5）。`ITfFnConfigure::Show`（§3.5）は渡さない。
 `liveConversion` / `predictionEnabled` だけは、入力インジケーターの右クリックのメニューからも切り替えられる（TIP が対象の 1 キーを書く。`docs/tsf-deep-integration-spec.md` §4.5）。
 
-| ペイン | 内容 |
-|---|---|
-| 一般 | `model.enabled` / `model.selectedPath` / `autoUpdate` / SafeMode の解除 |
-| 入力 | 入力方式（`inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点 / バッチ変換 / インライン英単語候補 / 候補リライター / 括弧ペアリング |
-| 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 |
-| AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
-| プライバシー | `privacy`（`crashReportConsent` を除く） |
-| アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
-| モデル | `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6） |
-| 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7） |
-| Persona | Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
-| 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
-| バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
+| 群 | ペイン | 内容 |
+|---|---|---|
+| 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
+| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ 括弧ペアリング（括弧の字形を決める `inputMode` を含む）/ `maxCandidates` |
+| 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
+| 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
+| 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
+| 設定 | プライバシー | `privacy`（`crashReportConsent` を含む） |
+| 設定 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
+| 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
+| データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
+| データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
+| フッター | バージョン | 製品のバージョン / `autoUpdate`（§6 の更新確認が入るまでは、3 キーを無効で表示し、未対応である旨の注記を 1 つだけ置く）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
-モデル / 学習 / Persona / 校正のペインは、Host の IPC を呼ぶ設定アプリ側の client（`SettingsIpcClient`）と同じ変更で
-ナビゲーションに置く。「モデル」の選択は「一般」のモデルのパス欄へ入れるだけで、保存は共通の
-保存ボタンが `model.selectedPath` を書く。選べるのは検証に通った GGUF だけである。
+「AI 変換」は「設定」群に置くが、モデル一覧の更新・ベンチマーク・取得・中止は Host への IPC でその場で行い、
+保存バーを経ない。保存バーが書くのは、このペインの設定キー（`model.selectedPath` を含む）だけである。
+
+保存バー:
+
+- 「設定」群のペインで、スクロール領域の外のウィンドウ下端に固定して表示する。保存結果の InfoBar も保存バーに出す。
+- 保存は「設定」群の全ペインの値をまとめて書く（書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
+- 読み込んだ値から変えたキーの数を示し、変えたキーが無い間は保存ボタンを無効にする。
+- 変えたキーが残ったままウィンドウを閉じようとしたときは、保存する・破棄する・閉じるのをやめる、を選ぶ確認を出す。
+
+各ペインの見出しはペイン名とし、その下にペインごとの 1 行の説明を置く。アプリ名の見出しと、全ペインに共通の説明文は置かない。
+
+「データとツール」群の各ペインと、「AI 変換」のモデル一覧・ベンチマーク・取得は、Host の IPC を呼ぶ設定アプリ側の
+client（`SettingsIpcClient`）と同じ変更でナビゲーションに置く。「AI 変換」でモデルを選ぶと、同じペインの
+「使うモデル」の表示が変わり、保存バーが `model.selectedPath` を書く。一覧から選べるのは検証に通った GGUF だけである。
+一覧に無いローカルの GGUF は、同じペインの「参照…」ボタン（ファイルピッカー）で選ぶ（§3.7「モデルパスの
+probe-then-commit」の明示選択）。モデルのパスを手で入力する欄は置かない。
 Host が capability（`learning_reset` / `persona` など）を告知しないときは、その操作を送らず、
-ペインに「この Host は未対応」と示す。
+ペインに「この変換エンジンは未対応です」と示す。
 `ListModels` が返す `onnx_genai` は一覧に出すが選択と測定の対象にしない。学習データは
 設定アプリが直接開かず、一覧・忘却・エクスポート・インポートをすべて Host への IPC で行う。
 忘却・全削除・インポートは確認ダイアログを経る。暗号化しないエクスポートは警告を出して確認する。
@@ -1208,7 +1231,36 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 選択肢の一致、schema の全キーが「生成する / 専用コントロール / 編集しない（理由付き）」のいずれかに
 属すること、表示文字列の有無は `azookey_settings_persistence_tests` が検査する。
 
-> **参考（fkunn1326/azooKey-Windows, MIT）**: 「詳細」ペインの `backendPreference` 選択は、
+#### 表記規則
+
+設定アプリの表示文字列（`settings-app/Strings/ja-JP/Resources.resw`）と、入力インジケーターのメニュー
+（`docs/tsf-deep-integration-spec.md` §4.5）は次の規則に従う。保存する値（schema の enum 値）は変えない。
+
+- 利用者向けの文に内部の語を出さない。置き換えは次の表に従う。
+
+  | 内部の語 | 表示 |
+  |---|---|
+  | Host | 変換エンジン（例「変換エンジンが起動していません」「この変換エンジンは未対応です」） |
+  | backend（推論） | 推論デバイス |
+  | backend（AI サービス） | AI サービス |
+  | catalog | 取得できるモデル |
+  | pack | 追加辞書 |
+  | prompt prefix | AI への指示文 |
+  | Persona | 入力の傾向 |
+  | Settings アプリ | 設定アプリ |
+  | merge / overwrite / keep_both | 統合する / 上書きする / 両方残す（英語の併記をしない） |
+  | bytes | KiB（校正の文字数の上限は「0 / 60 KiB」の形） |
+
+- 1 つの概念に 1 つの語を使う。「カッコ」（機能名「カッコ補完」と `inputMode` の表示名「カッコ補完の字形」は
+  `bracket-pairing-spec.md` に合わせる。「括弧」と書かない）、「予測変換」（「予測」だけにしない）。
+  「セーフモード」は Host が繰り返し異常終了したときの安全な構成だけを指し、パスワード欄などの保護は
+  「セーフ入力」と書く。`privacy.mode` の `secure` は「常にセーフ入力」と表示する。
+- 列挙値は日本語で表示する。`logLevel` は `error` / `warn` / `info` / `debug` を「エラー」/「警告」/「情報」/「デバッグ」と表示する。
+- 状態は絵文字で示さず、文と InfoBar・InfoBadge で示す。
+- 注記は 1 項目につき 1 文を目安にし、同じ注記を複数の項目に繰り返さない。版の番号（「v1.0 の」など）を注記に書かない。
+- 画面に無い語で操作の手順を書かない。手順は、ペイン名と項目の表示名をかぎ括弧で示す（例「『プライバシー』の『外部 AI を使う』」）。
+
+> **参考（fkunn1326/azooKey-Windows, MIT）**: 「AI 変換」ペインの `backendPreference` 選択は、
 > 各バックエンドのランタイム DLL 存在判定（`cudart64_12.dll`+`cublas64_12.dll` / `vulkan-1.dll`）
 > で**未対応バックエンドを disable + 理由 Tooltip 表示**する能力検出 UX を採れる（先行実装の
 > `check_capability` 相当）。一次フィルタ扱いとし、実 EP 選択は `docs/copilot-pc-backend-spec.md`
@@ -1315,7 +1367,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 
 | キー | 型 / enum | 既定 | UI ペイン | 導入 | 反映 | 正典 |
 |---|---|---|---|---|---|---|
-| `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 入力 | Phase 5（基本） | 即時 | `bracket-pairing-spec.md` §4.4（表示名「カッコ補完の字形」） |
+| `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 候補 | Phase 5（基本） | 即時 | `bracket-pairing-spec.md` §4.4（表示名「カッコ補完の字形」） |
 | `convertKeysAction` | enum `default`/`imeOnOff` | `default` | 入力 | DEV-1736 | 即時 | `tsf-deep-integration-spec.md` §3.1.1 |
 | `fullWidthSpace` | bool | `true` | 入力 | DEV-1814 | 即時 | `tsf-deep-integration-spec.md` §3.7 |
 | `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
@@ -1333,36 +1385,36 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
 | `batchConversionMode` | enum `neural`/`ai-cleanup` | `neural` | 入力 | M58-A/C | 即時 | `romaji-batch-conversion-spec.md` |
 | `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `romaji-batch-conversion-spec.md` |
-| `llmMagicConversion` | bool | `false` | AI | M16 | 即時 | roadmap M16 |
-| `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI | M16 | 即時 | roadmap M16 |
-| `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI | M16 / M34 | 即時 | roadmap M16 / §9 |
-| `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI | M16 | 即時 | roadmap M16 |
-| `openAiModel` | string | `gpt-4o-mini` | AI | M16 | 即時 | roadmap M16 |
-| `includeContextInAITransform` | bool | `true` | AI | M16 | 即時 | roadmap M16 |
+| `llmMagicConversion` | bool | `false` | AI サービス | M16 | 即時 | roadmap M16 |
+| `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI サービス | M16 | 即時 | roadmap M16 |
+| `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI サービス | M16 / M34 | 即時 | roadmap M16 / §9 |
+| `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI サービス | M16 | 即時 | roadmap M16 |
+| `openAiModel` | string | `gpt-4o-mini` | AI サービス | M16 | 即時 | roadmap M16 |
+| `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | roadmap M16 |
 | `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
 | `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
-| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
-| `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | AI 変換※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | AI 変換※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
+| `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | 一般（`enabled` / `selectedPath`）/ 詳細（`backendPreference`。`epPreference` は §3.7 の解禁条件まで UI に出さない）/ モデル（§3.2） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
-| `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI | M16 | 即時 | `ai-backend-spec.md` |
-| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | 詳細 | — | 即時 | `windows-tsf-host-architecture.md` |
-| `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 入力 | M61 | 即時 | `bracket-pairing-spec.md` |
-| `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 入力 | M60 | 即時 | `inline-english-candidate-spec.md` |
-| `mixedEnglishAutoConversion` | bool | `false` | 入力 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
-| `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 入力 | M62 | 即時 | `candidate-rewriter-spec.md` |
+| `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
+| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |
+| `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 候補 | M61 | 即時 | `bracket-pairing-spec.md` |
+| `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 候補 | M60 | 即時 | `inline-english-candidate-spec.md` |
+| `mixedEnglishAutoConversion` | bool | `false` | 候補 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
+| `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 候補 | M62 | 即時 | `candidate-rewriter-spec.md` |
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §B9 |
-| `privacy` | object | 下位キーの既定に従う | プライバシー（`crashReportConsent` はバージョン） | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
+| `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
-| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
+| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
 
 > オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
 > `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
@@ -1370,7 +1422,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 >
 > 「—（保存時保持）」のキーは設定アプリに編集 UI を持たないが、保存時に有効な値を書き戻す
 > （§3.7 の write-back 規則）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
-> `model.benchmarkHistory`）は、設定アプリから編集しない。`model.benchmarkHistory` は「モデル」ペインが
+> `model.benchmarkHistory`）は、設定アプリから編集しない。`model.benchmarkHistory` は「AI 変換」ペインが
 > 表示だけし、保存は既存の値を書き戻す。
 
 > **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
@@ -1435,9 +1487,9 @@ schema 自体は superset のまま変えない。
 
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
-| `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 詳細 | M8 | `auto` は Host 起動時に BackendSelector が解決する backend（`copilot-pc-backend-spec.md` §4.4、`--backend` 明示時はその値）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
-| `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
+| `model.enabled` | bool（「Zenzai を使う」トグル） | AI 変換 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | AI 変換 | M8 | `auto` は Host 起動時に BackendSelector が解決する backend（`copilot-pc-backend-spec.md` §4.4、`--backend` 明示時はその値）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
+| `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | AI 変換 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
 - **デバイス選択の enum 縮小（DEV-854 再確定）**: v1.0 UI は `model.backendPreference` を
@@ -1455,7 +1507,7 @@ schema 自体は superset のまま変えない。
   ビルドを配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。`auto` が選ぶのは、ビルドに
   リンクされ、かつ同 §4.4 の一次フィルタ（ハードウェア GPU、loader、電源状態）を通ったアクセラレータに
   限られ、選んだ backend もロードに失敗すれば CPU へ降格する。M11 の目的「デバイス選択」はこの 2 値で満たし、
-  UI にはアクセラレーションの有無を誤解させないため「v1.0 の配布ビルドは CPU 推論のみを含む」という
+  UI にはアクセラレーションの有無を誤解させないため「この配布ビルドは CPU 推論のみを含む」という
   静的な補足文を添える。
 - **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
   v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
@@ -1529,22 +1581,22 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 
 | キー | v1.0 UI | v1.x で UI 化（v1.0 では schema 直書き / probe） |
 |---|---|---|
-| `model.enabled` | ◯（一般） | — |
-| `model.backendPreference` | ◯（詳細、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
-| `model.selectedPath` | ◯（一般） | — |
+| `model.enabled` | ◯（AI 変換） | — |
+| `model.backendPreference` | ◯（AI 変換、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
+| `model.selectedPath` | ◯（AI 変換） | — |
 | `logLevel` | ◯（詳細） | — |
-| `model.*` の残りフィールド（`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（「モデル」ペイン。§3.2） |
+| `model.*` の残りフィールド（`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（「AI 変換」ペイン。§3.2） |
 | `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
-| `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（詳細ペイン） |
-| `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン） |
-| 句読点・バッチ変換・インライン英単語候補・候補リライター・括弧ペアリングの各キー | — | M30（入力ペイン） |
-| `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI ペイン） |
-| `openAiApiKey` | — | M34（AI ペイン。鍵は §9 DPAPI） |
+| `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（`powerProfile` / `inferenceThreads` / `maxContextLength` は AI 変換ペイン、`maxCandidates` は候補ペイン、実験フラグは詳細ペイン） |
+| `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
+| 句読点・バッチ変換・インライン英単語候補・候補リライター・括弧ペアリングの各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・括弧ペアリングは候補ペイン） |
+| `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
+| `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M30（一般ペイン。更新処理は M32） |
+| `autoUpdate.*` | — | M30（バージョンペイン。更新処理は M32） |
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
-| `privacy.*` | — | M30（プライバシーペイン。`crashReportConsent` はバージョンペイン） |
-| `safeMode.*` | — | M30（一般ペインで解除だけを操作する） |
+| `privacy.*` | — | M30（プライバシーペイン） |
+| `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §B9） |
 | ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
 

@@ -993,13 +993,16 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 | 半角英数 | ラジオ。「_A」なら選択 | Off なら On にしてから英数モードにする。英数キー（`ToggleAlnum`）と同じく、表示中の入力を確定できなかったら切り替えない |
 | 直接入力 | ラジオ。「A」なら選択 | 左クリックの Off と同じく表示中の文字列を確定して Off にする（`source` は `langbar_menu`） |
 | ライブ変換 | `liveConversion` の今の値でチェック | 値を反転して settings.json に書き、Host に `UpdateConfig` を送る |
-| 予測 | `predictionEnabled` の今の値でチェック | 値を反転して settings.json に書く。`UpdateConfig` は送らない |
-| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイル） |
+| 予測変換 | `predictionEnabled` の今の値でチェック | 値を反転して settings.json に書く。`UpdateConfig` は送らない |
+| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイルに加え、`--pane input` で「入力」ペインを開く。`docs/sideload-packaging-spec.md` §3.2） |
 
 入力モードの 3 項目は設定ファイルに触れない。
 
-- 今の値: ライブ変換と予測のチェックは、TIP が settings.json から読んでいる値（`TipLocalSettings`）を出す。
-  アプリごとのプロファイル（`profilesByApp`）は表示にも書き込みにも使わない。
+- 今の値: ライブ変換と予測変換のチェックは、TIP が settings.json から読んでいる全体設定の値（`TipLocalSettings`）を出す。
+  アプリごとのプロファイル（`profilesByApp`）はチェックにも書き込みにも使わない。フォーカス中のアプリのプロファイルが
+  予測変換を指定している（`app-profile-spec.md` §4）ときは、チェックは全体設定のままにし、ラベルを
+  「予測変換（このアプリはアプリ別の設定）」とする。選んだときに書くのは全体設定の `predictionEnabled` である。
+- 表記: 項目の名前は設定アプリと同じ語にする（`docs/sideload-packaging-spec.md` §3.2「表記規則」）。
 - 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
   設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に
   置き換える（`WriteTextFileAtomically`）。ファイルが無ければそのキーだけのファイルを作る。JSON の
@@ -1016,12 +1019,12 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   されたら、もう 1 回は送らない。
 - 切り替える値: メニューを開いたときに見せたチェックの逆を書く。メニューを開いている間にファイルが変わっても、
   見た表示と逆向きには書かない。
-- 設定アプリとの同時編集: 設定アプリは保存のとき、ライブ変換・予測を含む一般の設定値については、ユーザーが
+- 設定アプリとの同時編集: 設定アプリは保存のとき、ライブ変換・予測変換を含む一般の設定値については、ユーザーが
   変えたキーだけをロックの下でディスク上のファイルへ書く。設定アプリを開いたままメニューで切り替えても、その変更は設定アプリの保存で消えない。
   ただし開いている設定アプリの画面は古い値のままで、同じキーを設定アプリでも変えて保存すると設定アプリの値が残る。
 - 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、rich-features-spec
-  X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測をグレーアウトする。入力モードと
-  「設定を開く」は使える。
+  X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測変換をグレーアウトし、ラベルに
+  「（このアプリでは変更できません）」を添える。入力モードと「設定を開く」は使える。
 
 アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動、タスクバーの入力インジケーターが
 右クリックを `OnClick` に渡すことと、メニューの表示位置と閉じ方は実機で確かめる（Human Gate）。

@@ -1343,7 +1343,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **参照仕様**: `docs/inline-english-candidate-spec.md`
   - 実装範囲の正典: `docs/inline-english-candidate-spec.md` §3〜§8
 - **補足**:
-  - **設定**: Zenzai・TSF 深耕・パッケージングに依存しない。設定は設定アプリの「入力」ペインで
+  - **設定**: Zenzai・TSF 深耕・パッケージングに依存しない。設定は設定アプリの「候補」ペインで
     編集する（`docs/sideload-packaging-spec.md` §3.2）。
 
 ### M61: 自動カッコペアリング（Bracket Auto-Pairing）
@@ -1388,7 +1388,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 実装範囲の正典: `docs/bracket-pairing-spec.md` §3〜§6・§8
 - **補足**:
   - **設定**: Zenzai・TSF 深耕・パッケージングに依存しない無 IPC 機能。設定は
-    `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読みし、設定アプリの「入力」ペインで
+    `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読みし、設定アプリの「候補」ペインで
     編集する（host CLI 経由にしない。§6.1）。
 
 #### M61-B: 外部化・アプリ互換・拡張

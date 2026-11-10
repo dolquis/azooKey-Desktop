@@ -4772,8 +4772,8 @@ HRESULT TextService::OpenLocalCandidateWindow(ITfContext* context) {
 }
 
 // legacy-parity-spec §1.2: a key the window would take is held; Esc, the off
-// keys and the switch to alphanumeric mode end the wait; any other key (Tab,
-// ←→, Home) goes on as if there were no wait.
+// keys and the switch to alphanumeric mode end the wait; any other key (←→,
+// Home) goes on as if there were no wait. Tab is eaten before this (§3.4).
 TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM key_data,
                                                               uint32_t modifiers,
                                                               OpenCloseKeyAction open_close) {

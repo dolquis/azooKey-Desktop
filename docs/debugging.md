@@ -240,8 +240,11 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 - `event=key_path_commit`: 確定の edit session の結果（`mode` = `ran` / `refused` / `queued` /
   `not_run` / `request_failed`、`hr`、`completed`）。
 - `event=key_path_terminated_commit`: アプリが終了した composition の range が空のときの確定
-  （`action` = `restored`（書き戻した）/ `replaced_kept_text`（range の直後に残っていた文字列を
-  置き換えた））。
+  （`range_empty` は常に `true`）。`action` = `restored`（書き戻した）/ `replaced_kept_text`（range の
+  直後に残っていた文字列を置き換えた）。`match` は TIP が最後に書いた文字列と range の前後の比較で、
+  `after`（直後が一致して置き換えた）/ `before_only`（直前だけが一致した。range が文字列の後端に潰れており、
+  書き戻したので二重になりうる）/ `none`（どちらも不一致）/ `probe_failed`（直後を読めなかったか、
+  文書の末尾で文字数が足りなかった）/ `no_previous`（最後に書いた文字列が無い）。
 
 打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、
 アプリが入力を無効にした context、secure の入力欄（`privacy.secureApps` など）の打鍵は、

@@ -12454,7 +12454,8 @@ void AnswerTheFinalRequest(DocumentPreeditHarness& h, uint64_t final_id) {
 // waits; the wait goes on and the final answer commits with its punctuation,
 // as Enter alone does. No commit session is asked for inside the probe.
 TEST(TsfTipDynamicPunctuationTest, ModifierAloneLeavesTheHeldEnterToItsFinalAnswer) {
-  for (const WPARAM modifier : {WPARAM{VK_SHIFT}, WPARAM{VK_CONTROL}, WPARAM{VK_MENU}}) {
+  for (const WPARAM modifier : {WPARAM{VK_SHIFT}, WPARAM{VK_CONTROL}, WPARAM{VK_MENU},
+                                WPARAM{VK_LWIN}, WPARAM{VK_CAPITAL}}) {
     for (const bool refuses_lock : {false, true}) {
       SCOPED_TRACE(testing::Message() << "key " << modifier << " refuses_lock " << refuses_lock);
       DocumentPreeditHarness h;
@@ -12570,6 +12571,38 @@ TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationReplacesTheKe
   }
 }
 
+// The same with a commit the app queues (TF_S_ASYNC) and runs only after it
+// ended the composition: the queued session replaces the kept text, and the
+// retry the next key queued and the later lifecycle pass add nothing.
+TEST(TsfTipDynamicPunctuationTest, QueuedCommitAfterACollapsedTerminationReplacesTheKeptTextOnce) {
+  DocumentPreeditHarness h;
+  (void)HoldEnterAfterShowingKa(h, /*defer_shown=*/true);
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_TRUE(eaten);
+  ASSERT_TRUE(h.service.committing_) << "the queued commit is no longer pending";
+  h.keyboard_state.Reapply();
+  ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_GE(h.context.deferred_writes.size(), 2u);
+  h.context.defer_write_callback = false;
+
+  ASSERT_NE(h.service.composition_range_, nullptr);
+  auto* range = static_cast<DocumentRange*>(h.service.composition_range_);
+  range->end = range->start;
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  EXPECT_EQ(h.context.RunDeferredWrites(), S_OK);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
 // A collapsed range with other text after it is still an emptied one: the
 // surface is written back there, as before.
 TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationRestoresBesideOtherText) {
@@ -12646,6 +12679,69 @@ TEST(TsfTipKeyPathLogTest, HeldEnterRecordsItsRouteAndCommitWithoutText) {
     SCOPED_TRACE(line);
     EXPECT_EQ(line.find("\xE3\x81\x8B"), std::string::npos);  // か
     EXPECT_EQ(line.find("\xE8\x9A\x8A"), std::string::npos);  // 蚊
+  }
+}
+
+// DEV-1927: with an empty terminated range, the log says where the text the
+// TIP last wrote was found. Only the text after the range is replaced; a range
+// collapsed after the kept text (before_only) is the known limit and still
+// writes the commit back beside it.
+TEST(TsfTipKeyPathLogTest, CollapsedTerminationRecordsWhereTheKeptTextIs) {
+  enum class Collapse { Start, End, StartBesideOther, StartUnreadable };
+  struct Case {
+    Collapse collapse;
+    const char* match;
+    const wchar_t* text;
+  };
+  const Case cases[] = {
+      {Collapse::Start, "after", L"蚊"},
+      {Collapse::End, "before_only", L"蚊蚊"},
+      {Collapse::StartBesideOther, "none", L"蚊x"},
+      {Collapse::StartUnreadable, "probe_failed", L"蚊蚊"},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(c.match);
+    ScopedKeyPathLog log(/*keys=*/true);
+    {
+      DocumentPreeditHarness h;
+      (void)HoldEnterAfterShowingKa(h);
+      ASSERT_EQ(h.context.document->text, L"蚊");
+      h.context.lock_write = true;
+      h.keyboard_state.Reapply();
+      BOOL eaten = FALSE;
+      ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      ASSERT_TRUE(h.service.committing_);
+      h.context.lock_write = false;
+      if (c.collapse == Collapse::StartBesideOther) {
+        ASSERT_EQ(h.ExternallyTerminate(L"x"), S_OK);
+      } else {
+        ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+      }
+      auto* range = static_cast<DocumentRange*>(h.service.terminated_composition_range_);
+      ASSERT_NE(range, nullptr);
+      if (c.collapse == Collapse::End) {
+        range->start = range->end;
+      } else {
+        range->end = range->start;
+      }
+      // A store that cannot move the probe's anchors.
+      h.context.document->short_shift = c.collapse == Collapse::StartUnreadable;
+      h.keyboard_state.Reapply();
+      ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      h.context.document->short_shift = false;
+      EXPECT_FALSE(h.service.committing_);
+      EXPECT_EQ(h.context.document->text, c.text);
+    }
+    const auto records = log.Records();
+    ASSERT_EQ(CountContaining(records, "\"event\":\"key_path_terminated_commit\""), 1u);
+    EXPECT_EQ(CountContaining(records, "\"match\":\"" + std::string(c.match) + "\""), 1u);
+    EXPECT_EQ(CountContaining(records, "\"range_empty\":true"), 1u);
+    EXPECT_EQ(
+        CountContaining(
+            records,
+            std::string("\"action\":\"") +
+                (std::string_view(c.match) == "after" ? "replaced_kept_text" : "restored") + "\""),
+        1u);
   }
 }
 

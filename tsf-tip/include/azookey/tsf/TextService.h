@@ -1637,7 +1637,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void LogKeyPathHold(std::string_view operation, std::string_view route,
                       std::string_view commit = {}) noexcept;
   void LogKeyPathCommitSession(HRESULT hr, HRESULT hr_session, bool completed) noexcept;
-  void LogKeyPathTerminatedCommit(std::string_view action) noexcept;
+  void LogKeyPathTerminatedCommit(std::string_view action, std::string_view match) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogPredictionOnce(PredictionLogReason reason) noexcept;
   void ShowPredictionWindow();

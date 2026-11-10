@@ -2023,11 +2023,14 @@ void TextService::LogKeyPathCommitSession(HRESULT hr, HRESULT hr_session, bool c
   }
 }
 
-void TextService::LogKeyPathTerminatedCommit(std::string_view action) noexcept {
+void TextService::LogKeyPathTerminatedCommit(std::string_view action,
+                                             std::string_view match) noexcept {
   if (!KeyPathLogging() || secure_input_.load(std::memory_order_relaxed)) return;
   try {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_terminated_commit",
-               {{"range_empty", true}, {"action", SafeLogText(std::string(action))}});
+               {{"range_empty", true},
+                {"action", SafeLogText(std::string(action))},
+                {"match", SafeLogText(std::string(match))}});
   } catch (...) {
   }
 }
@@ -10916,22 +10919,38 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         // the text we last wrote right after it. That text is the input, not a
         // gap to fill: it is replaced, as a retained range is, never doubled.
         Microsoft::WRL::ComPtr<ITfRange> kept_range;
-        if (terminated_text.empty() && !previous_surface.empty()) {
-          ITfRange* beside = nullptr;
-          LONG shifted = 0;
-          std::wstring beside_text(previous_surface.size() + 1, L'\0');
-          ULONG beside_length = 0;
-          if (SUCCEEDED(range->Clone(&beside)) && beside &&
-              SUCCEEDED(beside->ShiftEnd(ec, static_cast<LONG>(previous_surface.size()), &shifted,
-                                         nullptr)) &&
-              shifted == static_cast<LONG>(previous_surface.size()) &&
-              SUCCEEDED(beside->GetText(ec, 0, beside_text.data(),
-                                        static_cast<ULONG>(beside_text.size()), &beside_length))) {
-            beside_text.resize(beside_length);
-            if (beside_text == previous_surface) kept_range.Attach(std::exchange(beside, nullptr));
+        if (terminated_text.empty()) {
+          // Only the text after the range is replaced. The text before it is
+          // read for the log alone, to show how an app collapses the range.
+          enum class Beside { Match, Mismatch, Failed };
+          const auto probe = [&](bool after, Microsoft::WRL::ComPtr<ITfRange>* matched) {
+            Microsoft::WRL::ComPtr<ITfRange> beside;
+            const LONG wanted = static_cast<LONG>(previous_surface.size());
+            LONG shifted = 0;
+            std::wstring text(previous_surface.size() + 1, L'\0');
+            ULONG text_length = 0;
+            if (FAILED(range->Clone(beside.GetAddressOf())) || !beside ||
+                FAILED(after ? beside->ShiftEnd(ec, wanted, &shifted, nullptr)
+                             : beside->ShiftStart(ec, -wanted, &shifted, nullptr)) ||
+                shifted != (after ? wanted : -wanted) ||
+                FAILED(beside->GetText(ec, 0, text.data(), static_cast<ULONG>(text.size()),
+                                       &text_length)))
+              return Beside::Failed;
+            text.resize(text_length);
+            if (text != previous_surface) return Beside::Mismatch;
+            if (matched) *matched = std::move(beside);
+            return Beside::Match;
+          };
+          std::string_view match = "no_previous";
+          if (!previous_surface.empty()) {
+            const Beside after = probe(/*after=*/true, &kept_range);
+            match = after == Beside::Match                             ? "after"
+                    : probe(/*after=*/false, nullptr) == Beside::Match ? "before_only"
+                    : after == Beside::Failed                          ? "probe_failed"
+                                                                       : "none";
           }
-          if (beside) beside->Release();
-          service_->LogKeyPathTerminatedCommit(kept_range ? "replaced_kept_text" : "restored");
+          service_->LogKeyPathTerminatedCommit(kept_range ? "replaced_kept_text" : "restored",
+                                               match);
         }
         if (terminated_text.empty() ||
             (!previous_surface.empty() && terminated_text == previous_surface &&

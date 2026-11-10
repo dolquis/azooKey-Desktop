@@ -268,6 +268,16 @@ class TextService final : public ITfTextInputProcessorEx,
   // The context input was last carried away from. Sessions it still has
   // queued must not write there until the TIP edits it again.
   const void* carried_from_context_{nullptr};
+  // DEV-1928: until when a switch may still carry input that the first key
+  // typed and already showed. Set by a key that starts the input, cleared by
+  // the next key, an input that ends and any document switch.
+  std::optional<std::chrono::steady_clock::time_point> first_key_carry_deadline_;
+  // Set while the edit session that removes that input from the old document
+  // runs, so the session ends the composition without committing its text.
+  bool discarding_first_key_composition_{false};
+  // The context a shown first key was taken back from (owned). Until the
+  // carried input shows, it goes back there instead of being dropped.
+  ITfContext* carried_origin_context_{nullptr};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
   bool committing_{false};
@@ -523,6 +533,17 @@ class TextService final : public ITfTextInputProcessorEx,
   bool undo_window_open_for_test() const { return undo_target_.has_value(); }
   void age_undo_window_for_test(std::chrono::steady_clock::duration age) {
     if (undo_target_) undo_target_->armed_at -= age;
+  }
+  bool first_key_carry_open_for_test() const { return first_key_carry_deadline_.has_value(); }
+  // A live conversion answer for `reading`, as the IPC worker leaves it.
+  void set_live_display_for_test(std::string reading, std::string surface) {
+    live_display_reading_ = std::move(reading);
+    live_display_surface_ = std::move(surface);
+  }
+  std::string lifecycle_shown_surface_for_test() const { return LifecycleShownSurface(); }
+  void set_keyboard_open_for_test(bool open) { keyboard_open_ = open; }
+  void age_first_key_carry_window_for_test(std::chrono::steady_clock::duration age) {
+    if (first_key_carry_deadline_) *first_key_carry_deadline_ -= age;
   }
   std::vector<ipc::CommitCorrectionRequest> queued_corrections_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -1619,6 +1640,14 @@ class TextService final : public ITfTextInputProcessorEx,
                                LifecycleCleanupFailurePolicy failure_policy,
                                bool keep_unshown_input = false);
   bool CanCarryUnshownInput(ITfDocumentMgr* focus) const;
+  bool HasCarryableInput() const;
+  bool CanCarryShownFirstKey(ITfDocumentMgr* focus) const;
+  bool FocusedDocumentKeepsCarriedInput(ITfDocumentMgr* focus);
+  bool DiscardShownFirstKey(ITfContext* context);
+  void TrackFirstKeyCarry(bool had_input, BOOL eaten);
+  bool ReturnCarriedInputToOrigin();
+  void ReleaseCarriedOrigin();
+  bool CarriedOriginBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   void ResolveCarriedInput(ITfContext* context);
   void ShowCarriedInput(ITfDocumentMgr* focus);
   bool CarriesUnshownInput();

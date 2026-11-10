@@ -1661,6 +1661,7 @@ STDMETHODIMP TextService::Deactivate() try {
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
   carried_from_context_ = nullptr;
+  ReleaseCarriedOrigin();
   // Idempotent: also breaks the tracker <-> sink cycle if cleanup kept a composition.
   UnadviseCompositionMouseSink();
   candidate_ui_.Destroy();
@@ -2923,6 +2924,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!skip) service.LogKeyPath("key", context, key, *eaten);
     }
   } key_path_record{*this, context, wParam, eaten, retyped};
+  // DEV-1928: whether this key starts the input, on every return path.
+  struct FirstKeyCarryRecord {
+    TextService& service;
+    bool had_input;
+    const BOOL* eaten;
+    ~FirstKeyCarryRecord() { service.TrackFirstKeyCarry(had_input, *eaten); }
+  } first_key_carry_record{
+      *this, !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending(), eaten};
   active_key_trace_active_ = true;
   if (retyped) {
     active_key_trace_id_ = trace_reset.previous_id;
@@ -4114,6 +4123,9 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
     if (focused_document_identity_ == identity) focused_document_identity_ = nullptr;
     if (keyboard_open_pending_document_ == identity) keyboard_open_pending_document_ = nullptr;
   }
+  // DEV-1928: input taken back from a document that is going away has nowhere
+  // to return; until it shows, it is dropped like other carried input.
+  if (CarriedOriginBelongsToDocumentMgr(pdim)) ReleaseCarriedOrigin();
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
@@ -4152,6 +4164,20 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     const bool drop_input =
         carry_input && active_context_ &&
         EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure;
+    // DEV-1928: the first key's preedit shown just before the switch moves
+    // too, once the old document has taken it back without committing it.
+    // When it cannot, the composition commits there as before.
+    ITfContext* shown_origin = nullptr;
+    if (!carry_input && CanCarryShownFirstKey(pdimFocus) &&
+        !EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure &&
+        FocusedDocumentKeepsCarriedInput(pdimFocus)) {
+      carry_input = DiscardShownFirstKey(active_context_);
+      if (carry_input) {
+        shown_origin = active_context_;
+        shown_origin->AddRef();
+      }
+    }
+    first_key_carry_deadline_.reset();
     const void* carried_from = ComIdentity(active_context_);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition, carry_input);
@@ -4162,8 +4188,11 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
       pdimFocus->AddRef();
       carried_input_document_ = pdimFocus;
       carried_from_context_ = carried_from;
+      ReleaseCarriedOrigin();
+      carried_origin_context_ = std::exchange(shown_origin, nullptr);
       ShowCarriedInput(pdimFocus);
     }
+    if (shown_origin) shown_origin->Release();
     if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
       try {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
@@ -4265,6 +4294,13 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                                   ITfComposition* pComposition) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ != pComposition) return S_OK;
+  if (discarding_first_key_composition_) {
+    // DEV-1928: the input leaves with the TIP for the focused document.
+    composition_->Release();
+    composition_ = nullptr;
+    UnadviseCompositionMouseSink();
+    return S_OK;
+  }
   const bool external_termination = !etw_composition_end_in_progress_;
   if (external_termination) {
     ResetTypoTracking();
@@ -5189,10 +5225,19 @@ bool ContextBelongsToDocumentMgr(ITfContext* target, ITfDocumentMgr* document_mg
   }
   return false;
 }
+
+// DEV-1928: how long after the first key a document switch still carries it.
+// Excel switched 10 to 200 ms after the key; a focus move a person makes is
+// expected to come later.
+constexpr std::chrono::milliseconds kFirstKeyCarryWindow{500};
 }  // namespace
 
 bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
   return ContextBelongsToDocumentMgr(active_context_, document_mgr);
+}
+
+bool TextService::CarriedOriginBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
+  return ContextBelongsToDocumentMgr(carried_origin_context_, document_mgr);
 }
 
 // DEV-1743: the converted text a composition shows (the live conversion, the
@@ -5360,12 +5405,79 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
 bool TextService::CanCarryUnshownInput(ITfDocumentMgr* focus) const {
   if (!focus || composition_ || committing_ || bracket_composition_ || carried_input_document_)
     return false;
+  return HasCarryableInput();
+}
+
+// Plain input only: no commit, conversion, candidate or emoji state.
+bool TextService::HasCarryableInput() const {
   if (!terminated_composition_surface_.empty() || emoji_mode_ != EmojiMode::Inactive ||
       batch_query_in_progress_ || !shown_batch_segments_.empty() || candidate_ui_.IsShowing())
     return false;
   const auto kind = input_state_.kind();
   if (kind != core::InputStateKind::Idle && kind != core::InputStateKind::Composing) return false;
   return !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending();
+}
+
+// DEV-1928: Excel may also switch after the first key's preedit session ran,
+// so its composition shows that one key in the old document. A switch that
+// soon after the key that started the input carries it too, as long as the
+// composition shows only the reading. Anything typed or shown after it, and a
+// focus move a person makes later, commits as section 4.3 describes.
+bool TextService::CanCarryShownFirstKey(ITfDocumentMgr* focus) const {
+  if (!focus || !composition_ || !active_context_ || committing_ || bracket_composition_ ||
+      carried_input_document_)
+    return false;
+  if (!first_key_carry_deadline_ || std::chrono::steady_clock::now() > *first_key_carry_deadline_)
+    return false;
+  if (ContextBelongsToDocumentMgr(active_context_, focus) || prediction_window_.IsVisible() ||
+      !LifecycleShownSurface().empty())
+    return false;
+  return HasCarryableInput();
+}
+
+// Shown input is taken back from the old document only when the focused one
+// would keep it (ResolveCarriedInput), so it is never lost on both sides. A
+// document without a context yet is decided by its next key, as for DEV-1637.
+bool TextService::FocusedDocumentKeepsCarriedInput(ITfDocumentMgr* focus) {
+  if (!keyboard_open_ || alnum_mode_) return false;
+  ITfContext* top = nullptr;
+  if (FAILED(focus->GetTop(&top)) || !top) return true;
+  const bool secure = EvaluateInputGate(top, client_id_, std::nullopt, true).secure;
+  top->Release();
+  return !secure;
+}
+
+// Ends the composition in the old document with its text removed, keeping the
+// input. Only a session run synchronously counts; otherwise the caller commits.
+bool TextService::DiscardShownFirstKey(ITfContext* context) {
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) return false;
+  discarding_first_key_composition_ = true;
+  HRESULT hr_session = E_FAIL;
+  const HRESULT hr =
+      context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
+  discarding_first_key_composition_ = false;
+  edit->Release();
+  if (FAILED(hr) || hr_session != S_OK || composition_) return false;
+  // The range belongs to the old document; the next composition starts afresh.
+  if (composition_range_) {
+    composition_range_->Release();
+    composition_range_ = nullptr;
+  }
+  composition_range_surface_.clear();
+  return true;
+}
+
+// The window opens with the key that starts the input and closes with the
+// next key or once the input is gone.
+void TextService::TrackFirstKeyCarry(bool had_input, BOOL eaten) {
+  const bool has_input =
+      !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending();
+  if (had_input || !has_input) {
+    first_key_carry_deadline_.reset();
+  } else if (eaten) {
+    first_key_carry_deadline_ = std::chrono::steady_clock::now() + kFirstKeyCarryWindow;
+  }
 }
 
 // Until the carried input shows in a composition, each key keeps it only in
@@ -5402,15 +5514,38 @@ bool TextService::CarriesUnshownInput() {
     return true;
   carried_input_document_->Release();
   carried_input_document_ = nullptr;
+  ReleaseCarriedOrigin();
   return false;
 }
 
+// Ends a carry that never showed. Input taken back from the document it was
+// shown in (DEV-1928) is committed there, as it was before the switch, when
+// that document still takes input; otherwise, and for input never shown, it is
+// dropped.
 void TextService::DropCarriedInput() {
   if (carried_input_document_) {
     carried_input_document_->Release();
     carried_input_document_ = nullptr;
   }
-  ClearTextStateForLifecycle();
+  if (!ReturnCarriedInputToOrigin()) ClearTextStateForLifecycle();
+}
+
+bool TextService::ReturnCarriedInputToOrigin() {
+  ITfContext* origin = std::exchange(carried_origin_context_, nullptr);
+  if (!origin) return false;
+  const bool committed = keyboard_open_ && !alnum_mode_ &&
+                         !EvaluateInputGate(origin, client_id_, std::nullopt, true).secure &&
+                         RequestLifecycleCommitOrEndComposition(origin, {});
+  origin->Release();
+  if (committed) ClearTextStateForLifecycle();
+  return committed;
+}
+
+void TextService::ReleaseCarriedOrigin() {
+  if (carried_origin_context_) {
+    carried_origin_context_->Release();
+    carried_origin_context_ = nullptr;
+  }
 }
 
 // --- Commit helpers (M5) ---
@@ -10616,6 +10751,47 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     if (service_->carried_from_context_ && ComIdentity(context_) == service_->carried_from_context_)
       return S_OK;
 
+    // Ends the composition with its text removed, so nothing is committed.
+    // With `place_caret`, the caret moves to where the text was.
+    const auto end_composition_without_text = [&](bool place_caret = false) -> HRESULT {
+      if (!service_->composition_) return S_OK;
+      ITfRange* cleared_range = nullptr;
+      HRESULT clear_hr = service_->composition_->GetRange(&cleared_range);
+      if (SUCCEEDED(clear_hr) && cleared_range) {
+        clear_hr = cleared_range->SetText(ec, 0, L"", 0);
+      }
+      if (SUCCEEDED(clear_hr) && cleared_range && place_caret &&
+          SUCCEEDED(cleared_range->Collapse(ec, TF_ANCHOR_START))) {
+        TF_SELECTION sel{};
+        sel.range = cleared_range;
+        (void)context_->SetSelection(ec, 1, &sel);
+      }
+      const bool had_range = cleared_range != nullptr;
+      if (cleared_range) cleared_range->Release();
+      if (FAILED(clear_hr) || !had_range) {
+        return FAILED(clear_hr) ? clear_hr : E_FAIL;
+      }
+
+      ITfComposition* comp = service_->composition_;
+      comp->AddRef();
+      service_->etw_composition_end_in_progress_ = true;
+      const HRESULT end_hr = comp->EndComposition(ec);
+      service_->etw_composition_end_in_progress_ = false;
+      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+        service_->composition_ = nullptr;
+        service_->UnadviseCompositionMouseSink();
+        comp->Release();
+      }
+      comp->Release();
+      if (FAILED(end_hr)) return end_hr;
+      core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
+      return S_OK;
+    };
+    // DEV-1928: the first key moves to the focused document (OnSetFocus). The
+    // caret stays where it was, so a return of the key lands there.
+    if (service_->discarding_first_key_composition_)
+      return end_composition_without_text(/*place_caret=*/true);
+
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
       // Recheck the original context on every successful callback, including
@@ -10757,35 +10933,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     const std::wstring kana = Utf8ToWide(displayed_surface);
     const std::vector<DisplayedSegment> displayed_segments = service_->DisplayedBatchSegments();
 
-    if (kana.empty()) {
-      if (service_->composition_) {
-        ITfRange* cleared_range = nullptr;
-        HRESULT clear_hr = service_->composition_->GetRange(&cleared_range);
-        if (SUCCEEDED(clear_hr) && cleared_range) {
-          clear_hr = cleared_range->SetText(ec, 0, L"", 0);
-        }
-        const bool had_range = cleared_range != nullptr;
-        if (cleared_range) cleared_range->Release();
-        if (FAILED(clear_hr) || !had_range) {
-          return FAILED(clear_hr) ? clear_hr : E_FAIL;
-        }
-
-        ITfComposition* comp = service_->composition_;
-        comp->AddRef();
-        service_->etw_composition_end_in_progress_ = true;
-        const HRESULT end_hr = comp->EndComposition(ec);
-        service_->etw_composition_end_in_progress_ = false;
-        if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
-          service_->composition_ = nullptr;
-          service_->UnadviseCompositionMouseSink();
-          comp->Release();
-        }
-        comp->Release();
-        if (FAILED(end_hr)) return end_hr;
-        core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
-      }
-      return S_OK;
-    }
+    if (kana.empty()) return end_composition_without_text();
 
     // Create composition if not active.
     if (!service_->composition_) {

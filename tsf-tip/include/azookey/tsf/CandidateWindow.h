@@ -125,14 +125,27 @@ class CandidateWindow {
     RECT retry_button;
     // Rows are predictions (native-ui-spec §4.2): no lock and no banner.
     bool prediction_mode{false};
+    // Index of the candidate in the top drawn row; item_count rows are drawn.
+    int first_index{0};
   };
   static Hit HitTest(const HitLayout& layout, POINT point);
+
+  // How many candidate rows fit (native-ui-spec §4.1): every row when the rows
+  // and the other_height of the elements below them fit work_height, otherwise
+  // as many as fit above one position row, and at least one.
+  static int ComputeVisibleRows(int count, int item_height, int other_height, int work_height);
+  // The candidate in the top drawn row: the previous range, moved only as far as
+  // it takes to include the selection, within [0, count - visible_rows].
+  static int ComputeFirstVisibleRow(int previous_first, int selected, int count, int visible_rows);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);
   void SetSelected(int idx);
   int GetSelected() const { return selected_idx_; }
   int GetCount() const { return static_cast<int>(items_.size()); }
+  // The drawn range of candidates; every candidate when they all fit.
+  int GetFirstVisibleRow() const { return first_visible_; }
+  int GetVisibleRowCount() const { return visible_rows_; }
 
   // Invoked when the user left-clicks a candidate row.
   using OnClickFn = std::function<void(int idx)>;
@@ -264,6 +277,8 @@ class CandidateWindow {
   std::wstring notice_;
   int surface_column_width_{0};
   int selected_idx_{0};
+  int first_visible_{0};
+  int visible_rows_{0};  // Candidate rows drawn; less than items_ adds the position row.
   Mode mode_{Mode::Candidate};
   std::vector<std::wstring> predictions_;
   int hint_column_width_{0};  // Prediction mode: the key hint column.
@@ -328,8 +343,11 @@ class CandidateWindow {
   bool ShowDetails();
   void HideDetails();
   int HealthBannerHeight() const;
-  // Candidate rows and the notice row end here; the secure toast row, then the
-  // health banner, stack below it.
+  // The "3/12" row below the candidate rows when not every candidate is drawn.
+  bool HasPositionRow() const;
+  std::wstring PositionText() const;
+  // Candidate rows, the position row and the notice row end here; the secure
+  // toast row, then the health banner, stack below it.
   int FooterTop() const;
   int HealthBannerTop() const;
   int SecureIndicatorWidth() const;

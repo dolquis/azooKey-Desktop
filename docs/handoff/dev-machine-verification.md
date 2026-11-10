@@ -96,7 +96,7 @@ VM なら失敗しても復元で済む。
 
 ## 6. 後始末
 
-1. 人が、展開した zip の `unregister-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll` で解除する。スクリプトは昇格前に、TIP DLL と同じディレクトリの `azookey_ime_switch.exe` でセッションを別の入力方式へ切り替える（無いときは警告して解除を続ける）。azooKey を選択中のアプリを開いたまま解除してよい。
+1. 人が、展開した zip の `unregister-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll` で解除する。スクリプトは昇格前に、TIP DLL と同じディレクトリの `azookey_ime_switch.exe` でセッションを別の入力方式へ切り替える（無いときは警告して解除を続ける）。azooKey を選択中のアプリを開いたまま解除してよい。スクリプトは既定では常駐中の Host を止めない。Host も止めるときは `-StopHost` を付ける（同じ Windows セッションの `azookey_inference_host` だけを終了する）。`register-dev.ps1 -ModelPath` は Host が pipe を提供中だと already serving で止まるので、再登録の前にも `-StopHost` で解除する。
 2. `azookey_diag.exe --json` で登録の残骸が無いことを確かめる。
 3. `learning-data-snapshot.ps1 -Label after` を記録し、`-From before -To after` で学習データの変化を見る。
 4. 課題の手順が書き込んだユーザーデータは、§4 で退避したコピーから元に戻す。普段の開発で使う登録があれば、元のとおり登録し直す。

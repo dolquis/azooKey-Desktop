@@ -15,7 +15,7 @@
 # WHAT IT DOES:
 #   Installs the Linux toolchain and builds the OS-independent parts
 #   (core/ipc/learning/inference-host; tsf-tip is Windows-only and auto-skips
-#   on Linux via the if(WIN32) guard). Mirrors the linux-debug job in
+#   on Linux via the if(WIN32) guard). Mirrors the "Linux Debug" job (linux-build) in
 #   .github/workflows/windows.yml so cloud sessions match CI.
 #
 # NETWORK: needs outbound access to the Ubuntu apt archive and github.com

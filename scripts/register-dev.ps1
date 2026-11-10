@@ -209,7 +209,7 @@ if (-not $ElevatedReentry) {
       $hostServing = $false
     }
     if ($ModelPath -and $hostServing) {
-      throw "Inference host already serving this user's pipe ($myPipe). Stop it and rerun with -ModelPath so the current session uses the requested model."
+      throw "Inference host already serving this user's pipe ($myPipe). Stop it with `"unregister-dev.ps1 -StopHost`" (or end azookey_inference_host.exe yourself), then rerun with -ModelPath so the current session uses the requested model."
     }
 
     $hostStderrLog = $null

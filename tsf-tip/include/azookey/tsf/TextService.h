@@ -261,6 +261,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // input is gone; the next edit session ends the composition without
   // touching the text the app left.
   bool external_edit_end_pending_{false};
+  // DEV-1845: the composition's text read back right after the TIP wrote it.
+  // A document may cut or normalize the write; OnEndEdit compares with this.
+  std::optional<std::wstring> composition_range_readback_;
   // Mouse sink over the composition while it exists (ITfMouseTracker).
   ITfMouseTracker* mouse_tracker_{nullptr};
   ITfContext* mouse_tracker_context_{nullptr};
@@ -1640,7 +1643,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // DEV-1845: records a key the TIP left to the app over a shown composition.
   void NoteKeyLeftToApp(ITfContext* context, WPARAM key, BOOL eaten) noexcept;
   // DEV-1845: the app changed the live composition's text (OnEndEdit).
-  void CheckLiveCompositionText(ITfContext* context, TfEditCookie cookie);
+  // Returns true when the composition's text is read back unchanged.
+  bool CheckLiveCompositionText(ITfContext* context, TfEditCookie cookie);
   HRESULT ReplayWindowWaitingKeys(ITfContext* context);
   void ReplayWindowWaitingKeysIfReady();
   HRESULT ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key, LPARAM retry_key_data);

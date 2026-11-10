@@ -972,6 +972,8 @@ struct BracketDocument {
   bool fail_write{false};
   bool short_shift{false};
   bool fail_clone{false};
+  // A store that keeps a write changed (cut or normalized), as some do.
+  std::function<std::wstring(std::wstring)> transform_write;
 };
 
 class DocumentRange final : public FakeRange {
@@ -997,8 +999,12 @@ class DocumentRange final : public FakeRange {
     if (flags & TF_TF_MOVESTART) start = readable_start + static_cast<LONG>(*count);
     return S_OK;
   }
-  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
+  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* written, LONG written_length) override {
     if (document->fail_write) return E_FAIL;
+    std::wstring kept(written, static_cast<size_t>(written_length));
+    if (document->transform_write) kept = document->transform_write(std::move(kept));
+    const WCHAR* text = kept.data();
+    const LONG length = static_cast<LONG>(kept.size());
     ++document->writes;
     document->last_write_start = start;
     document->last_write_text.assign(text, static_cast<size_t>(length));
@@ -16662,8 +16668,17 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentSwitchClearsTheEditKeyMark) {
   ASSERT_TRUE(h.service.app_edit_key_passed_);
   FakeDocumentMgr focused;
   FakeDocumentMgr previous;
+  // The switch's commit is refused, so the composition stays for the host to end.
+  h.context.lock_write = true;
   EXPECT_EQ(h.service.OnSetFocus(&focused, &previous), S_OK);
+  h.context.lock_write = false;
   EXPECT_FALSE(h.service.app_edit_key_passed_);
+  // A termination after the switch is written back as before (DEV-1637).
+  ASSERT_NE(h.service.composition_, nullptr) << "the refused commit kept the composition";
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_FALSE(h.service.terminated_composition_after_app_edit_);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"か");
 }
 
 // DEV-1845: redo on Ctrl+Shift+Z is not eaten, but marks an app edit as the
@@ -16675,4 +16690,122 @@ TEST(TsfTipOnKeyDownPreeditTest, ShiftedRedoReachesTheAppAndMarksAnEdit) {
   ASSERT_TRUE(h.Press('A'));
   ASSERT_FALSE(ProbeWith(h, {VK_CONTROL, VK_SHIFT}, 'Z'));
   EXPECT_TRUE(h.service.app_edit_key_passed_);
+}
+
+// DEV-1845 (M1): Delete alone does nothing at the end of the reading in most
+// apps, so it leaves no mark; and a selection change that leaves the
+// composition alone (a click) ends the mark of a Ctrl+X. Either way a later
+// emptied range is written back as before (DEV-1637).
+TEST(TsfTipOnKeyDownPreeditTest, EmptiedRangeIsWrittenBackAfterDeleteAloneOrASelectionChange) {
+  for (const bool ctrl_x_then_click : {false, true}) {
+    SCOPED_TRACE(ctrl_x_then_click ? "Ctrl+X, then a click" : "Delete alone");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    if (ctrl_x_then_click) {
+      ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+      ASSERT_TRUE(h.service.app_edit_key_passed_);
+      EndEditAfterAppEdit(h);
+      ASSERT_NE(h.service.composition_, nullptr) << "the click left the composition alone";
+    } else {
+      ASSERT_FALSE(ProbeTypoKey(h, VK_DELETE));
+    }
+    EXPECT_FALSE(h.service.app_edit_key_passed_);
+    ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+    ASSERT_FALSE(h.service.terminated_composition_after_app_edit_);
+    EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    EXPECT_EQ(h.context.document->text, L"か");
+  }
+}
+
+// DEV-1845 (M1): Shift+Delete cuts and Ctrl+Delete deletes a word; they mark.
+TEST(TsfTipOnKeyDownPreeditTest, ModifiedDeleteMarksAnAppEdit) {
+  for (const int modifier : {VK_SHIFT, VK_CONTROL}) {
+    SCOPED_TRACE(modifier);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_FALSE(ProbeWith(h, {modifier}, VK_DELETE));
+    EXPECT_TRUE(h.service.app_edit_key_passed_);
+  }
+}
+
+// DEV-1845 (L1): a document that keeps the TIP's write changed (normalized or
+// cut) is not taken for the app's edit right after that write.
+TEST(TsfTipOnKeyDownPreeditTest, EndEditAfterAWriteTheDocumentChangedKeepsTheComposition) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.context.document->transform_write = [](std::wstring text) {
+    for (auto& c : text)
+      if (c == L'か') c = L'カ';
+    return text;
+  };
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"カ");
+  EndEditAfterAppEdit(h);
+  EXPECT_NE(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+  // A real change after it is still seen.
+  AppWritesOverComposition(h, L"");
+  EndEditAfterAppEdit(h);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
+// DEV-1845 (L5a): an edit key marked first, and the commit waiting for its
+// session after it (a refused focus-loss commit of the shown text): the
+// termination is the pending commit's and is written back.
+TEST(TsfTipOnKeyDownPreeditTest, CommitPendingAfterTheEditKeyIsWrittenBack) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  ASSERT_FALSE(ProbeWith(h, {VK_CONTROL}, 'X'));
+  ASSERT_TRUE(h.service.app_edit_key_passed_);
+  h.context.lock_write = true;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  h.context.lock_write = false;
+  ASSERT_TRUE(h.service.committing_) << "the refused commit must wait for its session";
+  ASSERT_TRUE(h.service.app_edit_key_passed_);
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_FALSE(h.service.terminated_composition_after_app_edit_);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+// DEV-1845 (L5c): the TIP's own sessions for a live conversion leave nothing
+// for OnEndEdit to take for an app edit.
+TEST(TsfTipOnKeyDownPreeditTest, EndEditAfterTheLiveConversionKeepsTheComposition) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  StartLive(h, DynamicPunctuation());
+  TypeKaAndShow(h);
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  EndEditAfterAppEdit(h);
+  EXPECT_NE(h.service.composition_, nullptr);
+  EXPECT_FALSE(h.service.external_edit_end_pending_);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+}
+
+// DEV-1845 (L5c) with DEV-1928 (#655): input carried to the focused document
+// and shown there is the TIP's own text for OnEndEdit.
+TEST(TsfTipDocumentSwitchTest, EndEditAfterTheCarriedInputKeepsTheComposition) {
+  DocumentSwitch s(/*batch_romaji=*/false);
+  FixDocumentSwitchHarness(s);
+  TypeShownFirstKey(s);
+  s.Switch(&s.cell_document, &s.grid_document);
+  ASSERT_EQ(s.cell.document->text, L"k") << "the first switch must carry the key";
+  s.Type(s.cell, {'Y', 'O', 'U'});
+  ASSERT_EQ(s.cell.document->text, kKyouText);
+  s.h.service.set_text_edit_context_for_test(&s.cell);
+  SelectionChangedRecord record;
+  EXPECT_EQ(s.h.service.OnEndEdit(&s.cell, 1, &record), S_OK);
+  EXPECT_NE(s.h.service.composition_, nullptr);
+  EXPECT_EQ(s.h.service.preedit_kana_, kKyouKana);
+  EXPECT_FALSE(s.h.service.external_edit_end_pending_);
 }

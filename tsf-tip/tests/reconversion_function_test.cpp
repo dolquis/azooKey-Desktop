@@ -1717,3 +1717,25 @@ TEST(ProofreadReconversionTest, SuggestionsStayOutOfTheCacheAndLaterReconversion
 }
 
 }  // namespace
+
+// DEV-1845 (legacy-parity-spec §1.4): over the reconversion's candidate list,
+// undo and redo are eaten and do nothing; the list and the text stay.
+TEST(ReconversionFunctionTest, UndoAndRedoChordsAreEatenOverTheCandidateList) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open());
+  KeyboardStateGuard keyboard_state;
+  keyboard_state.SetDown(VK_CONTROL, true);
+  for (const WPARAM key : {WPARAM{'Z'}, WPARAM{'Y'}}) {
+    SCOPED_TRACE(static_cast<int>(key));
+    keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    ASSERT_EQ(test.service.OnTestKeyDown(&test.context, key, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+    eaten = FALSE;
+    ASSERT_EQ(test.service.OnKeyDown(&test.context, key, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+  }
+  keyboard_state.SetDown(VK_CONTROL, false);
+  EXPECT_TRUE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(*test.text, L"明日別");
+}

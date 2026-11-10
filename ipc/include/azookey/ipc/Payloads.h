@@ -47,7 +47,7 @@ struct PingPayload {
 
 struct HealthPayload {
   std::string status;   // "ok" | "degraded" | "error"
-  std::string backend;  // "cpu" | "cuda" | "directml"
+  std::string backend;  // "cpu" | "cuda" | "vulkan"
   bool model_loaded{false};
   std::optional<uint32_t> vram_mb;
   std::optional<std::string> last_error;
@@ -111,7 +111,7 @@ struct QueryDiagnosticsPayload {
 
 struct LoadModelRequest {
   std::string path;
-  std::string backend;  // "cpu" | "cuda" | "directml"
+  std::string backend;  // "cpu" | "cuda" | "vulkan"
   std::optional<int32_t> n_gpu_layers;
 };
 

@@ -3,6 +3,11 @@ param(
   # Leave the ALL APPLICATION PACKAGES (S-1-15-2-1) grant that register-dev.ps1
   # added in place. Useful when another TIP build shares the same directory.
   [switch]$SkipAppContainerAcl,
+  # Also stop the running azooKey inference host of the current user. Off by
+  # default: the host keeps its lifetime so open apps are not interrupted. Needed
+  # before register-dev.ps1 -ModelPath, which refuses to start while a host is
+  # still serving the user's pipe.
+  [switch]$StopHost,
   # Internal: set when the script relaunches itself elevated. Per-user (HKCU)
   # cleanup runs in the original user's process *before* elevation, so the
   # elevated reentry skips it -- otherwise a relaunch under a separate
@@ -70,6 +75,28 @@ if (-not $ElevatedReentry) {
     $stopEvent.Dispose()
   } catch [System.Threading.WaitHandleCannotBeOpenedException] {
     Write-Verbose "No inference host supervisor is running for the current user."
+  }
+
+  # Opt-in: terminate the running host after the supervisor has been told to
+  # stop respawning it. Only processes named azookey_inference_host in the
+  # current logon session are touched, so another user's host and unrelated
+  # processes survive.
+  if ($StopHost) {
+    $mySession = (Get-Process -Id $PID).SessionId
+    $hostProcesses = @(Get-Process -Name "azookey_inference_host" -ErrorAction SilentlyContinue |
+      Where-Object { $_.SessionId -eq $mySession })
+    if ($hostProcesses.Count -eq 0) {
+      Write-Host "No azooKey inference host is running in this session."
+    } else {
+      foreach ($hostProcess in $hostProcesses) {
+        try {
+          Stop-Process -Id $hostProcess.Id -Force -ErrorAction Stop
+          Write-Host "Stopped azooKey inference host (PID $($hostProcess.Id))."
+        } catch {
+          Write-Warning "Could not stop azooKey inference host (PID $($hostProcess.Id)): $_"
+        }
+      }
+    }
   }
 
   $clsidHkcu = "HKCU:\Software\Classes\CLSID\$clsid"

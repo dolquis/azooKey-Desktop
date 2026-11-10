@@ -95,7 +95,17 @@ UINT g_monitor_dpi_for_test = 0;
 CandidateWindow::RenderFailureForTest g_render_failure_for_test =
     CandidateWindow::RenderFailureForTest::None;
 int g_client_area_animation_for_test = -1;
+POINT g_last_monitor_point_for_test{0, 0};
 #endif
+
+// The monitor and work area the candidate window opens on, for both modes
+// (legacy-parity-spec §9.2).
+MonitorWorkArea ResolveCandidateMonitor(POINT anchor) {
+#ifdef AZOOKEY_TSF_TESTING
+  g_last_monitor_point_for_test = anchor;
+#endif
+  return ResolveMonitorWorkArea(DefaultMonitorWin32Api(), anchor);
+}
 
 // The candidate window fades in over this long when it appears (native-ui-spec §6.1).
 constexpr double kFadeInSeconds = 0.15;
@@ -327,6 +337,9 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 
 // static
+POINT CandidateWindow::LastMonitorPointForTest() { return g_last_monitor_point_for_test; }
+
+// static
 void CandidateWindow::SetClientAreaAnimationForTest(int enabled) {
   g_client_area_animation_for_test = enabled;
 }
@@ -457,7 +470,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   items_ = items;
   notice_ = std::move(notice);
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
-  const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), pt);
+  const MonitorWorkArea monitor = ResolveCandidateMonitor(pt);
   UpdateDpi(DpiForMonitor(monitor.monitor, hwnd_));
 
   // DirectWrite measures the same strings GDI did; widths may differ by a few
@@ -508,10 +521,9 @@ void CandidateWindow::ShowPredictions(RECT anchor, const std::vector<std::wstrin
       predictions.begin(),
       predictions.begin() + std::min<std::ptrdiff_t>(
                                 static_cast<std::ptrdiff_t>(predictions.size()), kMaxPredictions));
-  // The monitor of the anchor's center (legacy-parity-spec §3.2).
-  const POINT center{anchor.left + (anchor.right - anchor.left) / 2,
-                     anchor.top + (anchor.bottom - anchor.top) / 2};
-  const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), center);
+  // Both modes pick the monitor at the same anchor point, the extent's bottom-left
+  // (legacy-parity-spec §9.2), so switching modes never moves the window across monitors.
+  const MonitorWorkArea monitor = ResolveCandidateMonitor({anchor.left, anchor.bottom});
   UpdateDpi(DpiForMonitor(monitor.monitor, hwnd_));
 
   // Each row: padding, the key hint column, a gap, the prediction, padding.

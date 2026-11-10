@@ -795,7 +795,7 @@ legacy（macOS）は予測と変換候補を別々の窓に描く。ライブ変
    - composition 開始位置の下に配置: `x = anchor.left`, `y = anchor.bottom`
    - 下が画面外なら上に: `y = anchor.top - height`
    - 作業領域の外に出る分は内側へ寄せる
-4. `MonitorFromPoint(caret_center, MONITOR_DEFAULTTONEAREST)` で対象モニタを判定し、矩形外チェック
+4. 候補モードと同じ anchor 点（anchor の左下）で対象モニタを判定し（§9.2）、矩形外チェック
 
 打鍵で動く anchor の辺は、1 行に収まる composition では右辺だけである。左辺と上下辺から位置を
 決めるので、composition の間、窓は打鍵ごとに動かない。候補モードと同じ点

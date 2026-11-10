@@ -185,6 +185,8 @@ class CandidateWindow {
   Hit HitTestForTest(POINT point) const;
   // Pretends every monitor has this DPI; 0 restores the real lookup.
   static void SetMonitorDpiForTest(UINT dpi);
+  // The point the last Show or ShowPredictions picked its monitor at.
+  static POINT LastMonitorPointForTest();
   // Draws the current content offscreen at the client size with grayscale text
   // and returns the pixels row by row as RGB values.
   bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;

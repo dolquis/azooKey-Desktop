@@ -785,6 +785,27 @@ TEST(CandidateWindowPredictionTest, RenderFailureKeepsPredictionsHiddenAndUnclic
   window.Destroy();
 }
 
+TEST(CandidateWindowPredictionTest, BothModesPickTheMonitorAtTheAnchorsBottomLeft) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  // An extent across the edge of two monitors side by side at x = 1920: its center
+  // is on the right one, its bottom-left on the left one (legacy-parity-spec §9.2).
+  constexpr RECT kAcrossTheEdge{1900, 100, 2100, 120};
+  window.ShowPredictions(kAcrossTheEdge, {L"一"});
+  const POINT prediction = CandidateWindow::LastMonitorPointForTest();
+  EXPECT_EQ(prediction.x, kAcrossTheEdge.left);
+  EXPECT_EQ(prediction.y, kAcrossTheEdge.bottom);
+  // The candidate mode is shown at the same anchor point and picks the same one.
+  window.Show(POINT{kAcrossTheEdge.left, kAcrossTheEdge.bottom}, {{L"候補", L""}}, 0);
+  const POINT candidate = CandidateWindow::LastMonitorPointForTest();
+  EXPECT_EQ(candidate.x, prediction.x);
+  EXPECT_EQ(candidate.y, prediction.y);
+  window.Destroy();
+}
+
 TEST(CandidateWindowPredictionTest, OpensAboveTheAnchorAndRemeasuresOnDpiChange) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());

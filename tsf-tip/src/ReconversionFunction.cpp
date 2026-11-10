@@ -310,19 +310,63 @@ HRESULT RangesMatch(ITfRange* selected, ITfRange* expected, TfClientId client_id
   });
 }
 
+HRESULT ReplaceInSession(ITfRange* range, TfEditCookie cookie, const std::wstring& original,
+                         const std::wstring& replacement) {
+  std::wstring current;
+  HRESULT hr = ReadSurface(range, cookie, current);
+  if (FAILED(hr)) return hr;
+  if (current != original) return TF_E_NOCONVERSION;
+  if (replacement == original) return S_OK;
+  return range->SetText(cookie, 0, replacement.data(), static_cast<LONG>(replacement.size()));
+}
+
 HRESULT ReplaceCandidate(ITfRange* range, TfClientId client_id, const std::wstring& original,
                          const std::wstring& replacement) {
   return WithEditSession(range, client_id, TF_ES_READWRITE, [&](TfEditCookie cookie) {
-    std::wstring current;
-    HRESULT hr = ReadSurface(range, cookie, current);
-    if (FAILED(hr)) return hr;
-    if (current != original) return TF_E_NOCONVERSION;
-    if (replacement == original) return S_OK;
-    return range->SetText(cookie, 0, replacement.data(), static_cast<LONG>(replacement.size()));
+    return ReplaceInSession(range, cookie, original, replacement);
   });
 }
 
 }  // namespace
+
+HRESULT RequestCandidateReplacement(ITfRange* range, TfClientId client_id, std::wstring original,
+                                    std::wstring replacement,
+                                    CandidateReplacementGuard still_wanted,
+                                    CandidateReplacementCallback done) {
+  if (!range || !still_wanted || !done) return E_INVALIDARG;
+  try {
+    Microsoft::WRL::ComPtr<ITfContext> context;
+    HRESULT hr = range->GetContext(&context);
+    if (FAILED(hr)) return hr;
+    if (!context) return E_FAIL;
+    // A queued session outlives this call, so it owns what it uses.
+    auto ran = std::make_shared<bool>(false);
+    Microsoft::WRL::ComPtr<ITfRange> target(range);
+    auto* edit = new (std::nothrow) FunctionEditSession(
+        [target, ran, original = std::move(original), replacement = std::move(replacement),
+         still_wanted = std::move(still_wanted), done = std::move(done)](TfEditCookie cookie) {
+          *ran = true;
+          done(still_wanted() ? ReplaceInSession(target.Get(), cookie, original, replacement)
+                              : E_ABORT,
+               cookie);
+          return S_OK;
+        });
+    if (!edit) return E_OUTOFMEMORY;
+    HRESULT session_hr = E_FAIL;
+    hr = context->RequestEditSession(client_id, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
+                                     &session_hr);
+    edit->Release();
+    if (*ran) return S_OK;
+    if (SUCCEEDED(hr) && session_hr == TF_S_ASYNC) return TF_S_ASYNC;
+    return FAILED(hr) ? hr : (FAILED(session_hr) ? session_hr : E_FAIL);
+  } catch (const std::bad_alloc&) {
+    LogComBoundaryException("RequestCandidateReplacement", E_OUTOFMEMORY);
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    LogComBoundaryException("RequestCandidateReplacement", E_FAIL);
+    return E_FAIL;
+  }
+}
 
 ReconversionFunction::ReconversionFunction(TfClientId client_id,
                                            ReconversionCandidateProvider provider)

@@ -64,6 +64,8 @@ class CandidateUiCoordinator {
 
   bool IsShowing() const { return showing_; }
   HRESULT MoveSelection(int delta);
+  // Highlights row `selected_idx` in the window and the UI element alike.
+  HRESULT SetSelection(int selected_idx);
   int GetSelected() const { return selected_idx_; }
   int GetCount() const { return static_cast<int>(items_.size()); }
 

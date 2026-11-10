@@ -666,6 +666,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // The candidate window's click callback, without a window.
   void click_candidate_for_test(int idx) { OnCandidateClicked(idx); }
+  bool reconversion_select_pending_for_test() const { return reconversion_select_pending_; }
+  // The TIP's selection: what Enter chooses and the candidate UI highlights.
+  int candidate_selected_for_test() const { return candidate_ui_.GetSelected(); }
   uint64_t reconversion_generation_for_test() const { return reconversion_generation_.load(); }
   // The prefetch a selection change schedules, run now.
   void prefetch_selected_reconversion_for_test() {
@@ -1384,6 +1387,9 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
   std::wstring reconversion_surface_;             // UI thread only
+  // A replacement session for the open list is queued; the next Enter, digit
+  // or click is eaten so the range is not replaced twice (DEV-1926).
+  bool reconversion_select_pending_{false};  // UI thread only
   // A batch correction finding's suggestions for the open range (X-3-6). They
   // are model text: shown as candidates only, never cached, never learned.
   std::vector<std::wstring> reconversion_suggestions_;  // UI thread only
@@ -1499,7 +1505,21 @@ class TextService final : public ITfTextInputProcessorEx,
                                      const std::wstring* expected_surface = nullptr,
                                      ITfRange* expected_range = nullptr,
                                      std::vector<std::wstring> suggestions = {});
-  HRESULT CompleteReconversionSelection(size_t index);
+  // Replaces the open range with candidate `index` in a session TSF may queue
+  // (DEV-1926). `click` names the trigger in the log and, on failure, moves the
+  // highlight back to `restore_selection`, the TIP's selection before the click.
+  HRESULT CompleteReconversionSelection(size_t index, bool click = false,
+                                        int restore_selection = -1);
+  // Runs inside the replacement session, now or once the application grants it.
+  struct ReconversionCorrection {
+    std::string reading;
+    std::string rejected;
+    std::string selected;
+  };
+  void FinishReconversionSelection(uint64_t generation, ITfRange* range, bool click, size_t index,
+                                   int restore_selection, bool unchanged, HRESULT hr,
+                                   const std::optional<ReconversionCorrection>& correction,
+                                   ITfContext* correction_context, TfEditCookie cookie);
   // A left click on candidate row `idx`, from the candidate window.
   void OnCandidateClicked(int idx);
   void ClearReconversionState();
@@ -1573,9 +1593,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void TrackTypoKey(ITfContext* context, WPARAM key);
   // Consumes the one-key undo window; a plain Backspace in it sends "undo".
   void TrackUndoKey(ITfContext* context, WPARAM key);
+  // Inside an edit session, pass its cookie: privacy is then read without a
+  // nested lock request.
   void PostCommitCorrection(ITfContext* context, std::string_view kind, std::string reading,
                             std::string rejected_surface,
-                            std::optional<std::string> selected_surface);
+                            std::optional<std::string> selected_surface,
+                            std::optional<TfEditCookie> edit_cookie = std::nullopt);
   void PrepareTypoCommit(const std::string& reading);
   void CompleteTypoCommit(std::optional<PendingTypoCommit> pending, bool committed) noexcept;
   void ResetTypoTracking();

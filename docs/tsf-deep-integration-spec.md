@@ -98,6 +98,10 @@ IPC は `ReverseConvert` を使う。payload の正典は `ipc/include/azookey/i
 - 元の選択文字列と同じ候補を確定した場合、その文字列を変更しない
 - Host 候補の確定は、対象の選択範囲と context が一致する場合に限って置換する
 - 候補選択には azooKey の候補 UI を使う
+- 候補 UI での確定（Enter・数字キー・クリック）は `TF_ES_ASYNCDONTCARE` の edit session で置換する。
+  クリックはアプリのコールバックの外に届き、同期ロックを拒むアプリ（Word）では後から実行されるため、
+  その間の次の確定は受け付けず、実行時に選択・context・候補 UI が変わっていれば置換しない
+- 置換に失敗したら候補 UI を開いたままにし、強調を Enter が確定する候補（TIP の選択位置）へ戻す
 
 ### 1.3 FunctionProvider 公開
 

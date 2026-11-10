@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <string>
 
 #include "CandidateSelection.h"
@@ -40,6 +41,8 @@ constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
 constexpr wchar_t kDetailsClassName[] = L"azooKeyCandidateHealthDetailsWnd";
 constexpr wchar_t kSecureIndicatorText[] = L"🔒";
 constexpr wchar_t kSecureToastText[] = L"🔒 セーフ入力中: 学習・AI・予測は停止しています";
+// Key hints at the head of the first two prediction rows (native-ui-spec §4.2).
+constexpr const wchar_t* kPredictionHints[] = {L"Tab", L"⇧Tab"};
 
 const wchar_t* HealthBannerText(CandidateHealthState state) {
   switch (state) {
@@ -257,6 +260,14 @@ RECT CandidateWindow::ComputeDetailsPlacement(RECT candidate, RECT work_area, in
 // static
 CandidateWindow::Hit CandidateWindow::HitTest(const HitLayout& layout, POINT point) {
   constexpr Hit kNone{HitTarget::None, -1};
+  if (layout.prediction_mode) {
+    // Only the rows take clicks: no lock, notice, toast or banner (native-ui-spec §4.2).
+    if (layout.item_height <= 0 || point.y < 0 || point.x < 0 || point.x >= layout.client_width)
+      return kNone;
+    const int row = point.y / layout.item_height;
+    if (row < layout.item_count) return {HitTarget::Prediction, row};
+    return kNone;
+  }
   if (layout.health_banner_visible && point.y >= layout.health_banner_top) {
     if (PtInRect(&layout.details_button, point)) return {HitTarget::HealthDetailsButton, -1};
     if (layout.has_retry_button && PtInRect(&layout.retry_button, point))
@@ -440,6 +451,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   last_anchor_ = pt;
 
   const ScopedPerMonitorDpiAwareness dpi_context;
+  // The window draws one mode at a time (native-ui-spec §4.1).
+  mode_ = Mode::Candidate;
+  predictions_.clear();
   items_ = items;
   notice_ = std::move(notice);
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
@@ -471,8 +485,54 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
     width = std::max(width, ScaleForDpi(480, dpi_));
     height += HealthBannerHeight();
   }
+  PresentAt(pt, monitor.work_area, width, height, metrics_.caret_gap);
+}
 
-  const RECT placement = ComputePlacement(pt, monitor.work_area, width, height, metrics_.caret_gap);
+void CandidateWindow::ShowPredictions(RECT anchor, const std::vector<std::wstring>& predictions) {
+  if (!hwnd_) return;
+  if (predictions.empty()) {
+    if (mode_ == Mode::Prediction) Hide();
+    return;
+  }
+  last_prediction_anchor_ = anchor;
+
+  const ScopedPerMonitorDpiAwareness dpi_context;
+  // The candidate details belong to the candidate rows that this mode replaces.
+  HideDetails();
+  // The window draws one mode at a time (native-ui-spec §4.1); the candidate
+  // rows are dropped so no key or click can reach them while predictions show.
+  mode_ = Mode::Prediction;
+  items_.clear();
+  selected_idx_ = 0;
+  predictions_.assign(
+      predictions.begin(),
+      predictions.begin() + std::min<std::ptrdiff_t>(
+                                static_cast<std::ptrdiff_t>(predictions.size()), kMaxPredictions));
+  // The monitor of the anchor's center (legacy-parity-spec §3.2).
+  const POINT center{anchor.left + (anchor.right - anchor.left) / 2,
+                     anchor.top + (anchor.bottom - anchor.top) / 2};
+  const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), center);
+  UpdateDpi(DpiForMonitor(monitor.monitor, hwnd_));
+
+  // Each row: padding, the key hint column, a gap, the prediction, padding.
+  hint_column_width_ = std::max(MeasureText(kPredictionHints[0]), MeasureText(kPredictionHints[1]));
+  int max_text_w = metrics_.min_text_width;
+  for (const auto& prediction : predictions_)
+    max_text_w = std::max(max_text_w, MeasureText(prediction));
+  const int width =
+      std::min(metrics_.horizontal_padding * 2 + hint_column_width_ +
+                   ScaleForDpi(kBaseColumnGap, dpi_) + max_text_w + metrics_.extra_width,
+               metrics_.max_width);
+  // No margin above or below the rows (native-ui-spec §4.2).
+  const int height = metrics_.item_height * static_cast<int>(predictions_.size());
+  // Below the anchor's bottom-left, or with the bottom at anchor.top when that
+  // overflows (legacy-parity-spec §3.2): the anchor's height is the gap to flip over.
+  PresentAt({anchor.left, anchor.bottom}, monitor.work_area, width, height,
+            static_cast<int>(std::max(0L, anchor.bottom - anchor.top)));
+}
+
+void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height, int flip_gap) {
+  const RECT placement = ComputePlacement(pt, work_area, width, height, flip_gap);
   const int placed_width = placement.right - placement.left;
   const int placed_height = placement.bottom - placement.top;
   const bool appearing = !IsWindowVisible(hwnd_);
@@ -684,21 +744,33 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
 }
 
 void CandidateWindow::ResizeAtLastAnchor() {
+  if (mode_ == Mode::Prediction) {
+    // Copy first: ShowPredictions assigns the member from its argument.
+    if (!predictions_.empty())
+      ShowPredictions(last_prediction_anchor_, std::vector<std::wstring>(predictions_));
+    return;
+  }
   if (!items_.empty()) Show(last_anchor_, items_, selected_idx_, notice_);
 }
 
 int CandidateWindow::HealthBannerHeight() const { return metrics_.item_height * 3; }
 
 int CandidateWindow::FooterTop() const {
+  // Prediction mode has nothing below its rows (native-ui-spec §4.2).
+  if (mode_ == Mode::Prediction)
+    return metrics_.item_height * static_cast<int>(predictions_.size());
   return metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
 }
 
 int CandidateWindow::HealthBannerTop() const {
+  if (mode_ == Mode::Prediction) return FooterTop();
   return FooterTop() + (secure_toast_visible_ ? metrics_.item_height : 0);
 }
 
 int CandidateWindow::SecureIndicatorWidth() const {
-  return secure_indicator_visible_ ? ScaleForDpi(kBaseSecureIndicatorWidth, dpi_) : 0;
+  return secure_indicator_visible_ && mode_ == Mode::Candidate
+             ? ScaleForDpi(kBaseSecureIndicatorWidth, dpi_)
+             : 0;
 }
 
 RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
@@ -717,15 +789,17 @@ RECT CandidateWindow::HealthRetryButtonRect(int width) const {
 }
 
 CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) const {
+  const bool prediction = mode_ == Mode::Prediction;
   return {metrics_.item_height,
-          static_cast<int>(items_.size()),
+          static_cast<int>(prediction ? predictions_.size() : items_.size()),
           client_width,
           SecureIndicatorWidth(),
-          health_banner_visible_,
+          health_banner_visible_ && !prediction,
           HealthBannerTop(),
           HealthDetailsButtonRect(client_width),
           health_state_ == CandidateHealthState::DegradedModel,
-          HealthRetryButtonRect(client_width)};
+          HealthRetryButtonRect(client_width),
+          prediction};
 }
 
 void CandidateWindow::PostCandidatesReady() {
@@ -857,7 +931,33 @@ bool CandidateWindow::RenderTo(std::unique_ptr<RenderState>& state, int& init_fa
   }
 }
 
+void CandidateWindow::DrawPredictions(ID2D1DeviceContext* context, int width, int height) const {
+  context->Clear(ToColorF(theme_.background));
+  Painter paint(context, text_style_->factory.Get());
+  if (!paint.ok()) return;
+  const TextStyle& style = *text_style_;
+  for (int i = 0; i < static_cast<int>(predictions_.size()); ++i) {
+    const RECT row_rc = {0, i * metrics_.item_height, width, (i + 1) * metrics_.item_height};
+    RECT hint_rc = row_rc;
+    hint_rc.left += metrics_.horizontal_padding;
+    hint_rc.right = hint_rc.left + hint_column_width_;
+    // Rows past the second keep the column empty so every row starts aligned.
+    if (i < static_cast<int>(std::size(kPredictionHints)))
+      paint.Text(kPredictionHints[i], style.line.Get(), hint_rc, theme_.sub_text);
+    RECT text_rc = row_rc;
+    text_rc.left = hint_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
+    text_rc.right = width - metrics_.horizontal_padding;
+    // Same font fallback and ellipsis as the candidate rows (native-ui-spec §3.4, §4.2).
+    paint.Text(predictions_[static_cast<size_t>(i)], style.line.Get(), text_rc, theme_.text);
+  }
+  paint.Frame(width, height, theme_.border);
+}
+
 void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int height) const {
+  if (mode_ == Mode::Prediction) {
+    DrawPredictions(context, width, height);
+    return;
+  }
   // Clear first so a failed brush still commits a defined frame.
   context->Clear(ToColorF(theme_.background));
   Painter paint(context, text_style_->factory.Get());
@@ -1050,6 +1150,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           selected_idx_ = hit.index;
           Repaint();
           if (on_click_) on_click_(hit.index);
+          break;
+        case HitTarget::Prediction:
+          // Accepted on the press, like a candidate; there is no selection to move.
+          if (on_prediction_click_) on_prediction_click_(hit.index);
           break;
         case HitTarget::None:
         case HitTarget::SecureIndicator:

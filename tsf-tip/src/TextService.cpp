@@ -1985,6 +1985,53 @@ void TextService::LogKeyPathContext(std::string_view operation, ITfContext* cont
   }
 }
 
+// DEV-1927: how a held Enter began and ended, and what a commit session did.
+// Only fixed words: never a key, its text or the reading.
+void TextService::LogKeyPathHold(std::string_view operation, std::string_view route,
+                                 std::string_view commit) noexcept {
+  if (!KeyPathLogging() || secure_input_.load(std::memory_order_relaxed)) return;
+  try {
+    if (commit.empty()) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_hold",
+                 {{"operation", SafeLogText(std::string(operation))},
+                  {"route", SafeLogText(std::string(route))}});
+      return;
+    }
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_hold",
+               {{"operation", SafeLogText(std::string(operation))},
+                {"route", SafeLogText(std::string(route))},
+                {"commit", SafeLogText(std::string(commit))}});
+  } catch (...) {
+  }
+}
+
+void TextService::LogKeyPathCommitSession(HRESULT hr, HRESULT hr_session, bool completed) noexcept {
+  if (!KeyPathLogging() || secure_input_.load(std::memory_order_relaxed)) return;
+  try {
+    std::string_view mode = "request_failed";
+    if (SUCCEEDED(hr)) {
+      mode = hr_session == TF_S_ASYNC ? "queued"
+             : FAILED(hr_session)     ? "refused"
+             : completed              ? "ran"
+                                      : "not_run";
+    }
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_commit",
+               {{"mode", SafeLogText(std::string(mode))},
+                {"hr", static_cast<int64_t>(SUCCEEDED(hr) ? hr_session : hr)},
+                {"completed", completed}});
+  } catch (...) {
+  }
+}
+
+void TextService::LogKeyPathTerminatedCommit(std::string_view action) noexcept {
+  if (!KeyPathLogging() || secure_input_.load(std::memory_order_relaxed)) return;
+  try {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_terminated_commit",
+               {{"range_empty", true}, {"action", SafeLogText(std::string(action))}});
+  } catch (...) {
+  }
+}
+
 void TextService::LogInputGateOnChange(const azookey::tsf::InputGateDecision& gate,
                                        bool secure) noexcept {
   // Scope values are InputScope enum numbers and the classes are fixed words;
@@ -2656,7 +2703,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = TRUE;
       return S_OK;
     }
-    if (final_punctuation_hold_) ResolveFinalPunctuationHold();
+    // DEV-1927: Shift and the other modifiers alone leave the wait running, so
+    // no commit is asked for inside this probe, where an app may refuse or
+    // queue the lock; the answer or the timer commits with the punctuation.
+    if (LeavesFinalPunctuationHold(context, wParam)) {
+      LogKeyPathHold("kept", "test_key");
+      return S_OK;
+    }
+    if (final_punctuation_hold_) ResolveFinalPunctuationHold("test_key");
     TrackTypoKey(context, wParam);
     TrackUndoKey(context, wParam);
     typo_test_key_context_ = context;
@@ -2958,7 +3012,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
       return S_OK;
     }
-    if (final_punctuation_hold_) ResolveFinalPunctuationHold();
+    if (LeavesFinalPunctuationHold(context, wParam)) {
+      LogKeyPathHold("kept", "key_down");
+      return S_OK;
+    }
+    if (final_punctuation_hold_) ResolveFinalPunctuationHold("key_down");
     if (typo_test_key_context_ != context || typo_test_key_ != wParam) {
       TrackTypoKey(context, wParam);
       TrackUndoKey(context, wParam);
@@ -4090,7 +4148,7 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
-  if (final_punctuation_hold_) ResolveFinalPunctuationHold();
+  if (final_punctuation_hold_) ResolveFinalPunctuationHold("preserved_key");
   // With the IME closed, in alphanumeric mode or in an app-disabled context,
   // F10 belongs to the application (menu activation). With a reading it goes on
   // to the key sinks, which commit the reading in half-width roman (spec §3.6).
@@ -4679,6 +4737,11 @@ TextService::WindowWaitKey TextService::ClassifyWindowWaitKey(WPARAM key, LPARAM
   return WindowWaitKey::Pass;
 }
 
+bool TextService::LeavesFinalPunctuationHold(ITfContext* context, WPARAM key) const {
+  return final_punctuation_hold_ && !final_punctuation_hold_->replay && IsModifierOnlyKey(key) &&
+         SameComIdentity(context, final_punctuation_hold_->context.get());
+}
+
 // DEV-1794 (dynamic-punctuation-spec §7.3): while Enter waits for the final
 // request, a key that starts the next input from Idle waits with it and runs
 // after the commit, so fast typing never cuts the final answer short. Other
@@ -4826,11 +4889,13 @@ HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
   const HRESULT hr =
       context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
   edit->Release();
-  if (FAILED(hr)) return hr;
-  if (FAILED(hr_session)) return hr_session;
   // RequestEditSession can report S_OK even when a sync session was not run.
   // DoEditSession clears this state only after the commit path really finishes.
-  const bool commit_completed = !committing_ && commit_surface_.empty();
+  const bool commit_completed =
+      SUCCEEDED(hr) && SUCCEEDED(hr_session) && !committing_ && commit_surface_.empty();
+  LogKeyPathCommitSession(hr, hr_session, commit_completed);
+  if (FAILED(hr)) return hr;
+  if (FAILED(hr_session)) return hr_session;
   if (commit_completed) ClearCommitContext();
   return commit_completed ? S_OK : E_FAIL;
 }
@@ -9505,7 +9570,7 @@ void TextService::ArmIdlePunctuationTimer() {
 void TextService::OnPunctuationTimer(DelayedActionTimer::Slot slot) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (slot == DelayedActionTimer::kFinal) {
-    ResolveFinalPunctuationHold();
+    ResolveFinalPunctuationHold("timer");
     return;
   }
   const bool live_conversion = local_settings_.LiveConversionSnapshot();
@@ -9575,10 +9640,11 @@ bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::Inp
     hold.request_id = ipc_pending_id_;
   }
   final_punctuation_hold_ = std::move(hold);
+  LogKeyPathHold("begin", "enter");
   return true;
 }
 
-void TextService::ResolveFinalPunctuationHold() {
+void TextService::ResolveFinalPunctuationHold(std::string_view route) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!final_punctuation_hold_) return;
   auto hold = std::move(*final_punctuation_hold_);
@@ -9599,16 +9665,19 @@ void TextService::ResolveFinalPunctuationHold() {
   }
   // The commit runs outside the key handler, so its edit session can be refused.
   // The composition then stays (rolled back) and the next Enter commits it.
-  if (const HRESULT hr = ApplyInputStateResult(hold.context.get(), std::move(hold.result));
-      FAILED(hr)) {
+  const HRESULT hr = ApplyInputStateResult(hold.context.get(), std::move(hold.result));
+  if (FAILED(hr)) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "final_punctuation_commit_failed",
                {{"hresult", static_cast<uint64_t>(static_cast<uint32_t>(hr))}});
   }
+  // A commit the document did not run now stays pending for a later session.
+  LogKeyPathHold("resolve", route, FAILED(hr) ? "failed" : (committing_ ? "pending" : "completed"));
   // DEV-1794: the keys typed during the wait run now, in order, after the commit.
   if (!window_waiting_keys_.empty()) (void)ReplayWindowWaitingKeys(hold.context.get());
 }
 
 void TextService::AbortFinalPunctuationHold() {
+  if (final_punctuation_hold_) LogKeyPathHold("abort", "lifecycle");
   // The keys that waited for the dropped commit go with it (DEV-1794).
   if (final_punctuation_hold_ && !final_punctuation_hold_->replay) window_waiting_keys_.clear();
   final_punctuation_hold_.reset();
@@ -9739,7 +9808,7 @@ void TextService::ResolvePunctuationConversionHoldIfReady() {
         candidates_.front().field.reading != final_punctuation_hold_->reading)
       return;
   }
-  ResolveFinalPunctuationHold();
+  ResolveFinalPunctuationHold("response");
 }
 
 void TextService::ObservePunctuationConversion(ITfContext* context,
@@ -9772,7 +9841,7 @@ void TextService::ObservePunctuationConversion(ITfContext* context,
 void TextService::ApplyLiveConversionResult() {
   const auto consumed = ApplyLiveConversionResultImpl();
   if (consumed && final_punctuation_hold_ && *consumed == final_punctuation_hold_->request_id)
-    ResolveFinalPunctuationHold();
+    ResolveFinalPunctuationHold("response");
 }
 
 std::optional<uint64_t> TextService::ApplyLiveConversionResultImpl() {
@@ -10843,14 +10912,42 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           return read_hr;
         }
         terminated_text.resize(length);
+        // DEV-1927: an empty range may only have collapsed while the host kept
+        // the text we last wrote right after it. That text is the input, not a
+        // gap to fill: it is replaced, as a retained range is, never doubled.
+        Microsoft::WRL::ComPtr<ITfRange> kept_range;
+        if (terminated_text.empty() && !previous_surface.empty()) {
+          ITfRange* beside = nullptr;
+          LONG shifted = 0;
+          std::wstring beside_text(previous_surface.size() + 1, L'\0');
+          ULONG beside_length = 0;
+          if (SUCCEEDED(range->Clone(&beside)) && beside &&
+              SUCCEEDED(beside->ShiftEnd(ec, static_cast<LONG>(previous_surface.size()), &shifted,
+                                         nullptr)) &&
+              shifted == static_cast<LONG>(previous_surface.size()) &&
+              SUCCEEDED(beside->GetText(ec, 0, beside_text.data(),
+                                        static_cast<ULONG>(beside_text.size()), &beside_length))) {
+            beside_text.resize(beside_length);
+            if (beside_text == previous_surface) kept_range.Attach(std::exchange(beside, nullptr));
+          }
+          if (beside) beside->Release();
+          service_->LogKeyPathTerminatedCommit(kept_range ? "replaced_kept_text" : "restored");
+        }
         if (terminated_text.empty() ||
             (!previous_surface.empty() && terminated_text == previous_surface &&
              terminated_text != surface)) {
+          ITfRange* target = kept_range ? kept_range.Get() : range;
           const HRESULT write_hr =
-              range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+              target->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
           if (FAILED(write_hr)) {
             restore_pending_commit();
             return write_hr;
+          }
+          // The replaced text is the terminated range from now on, so a later
+          // pass over it (the lifecycle cleanup) finds the commit already there.
+          if (kept_range) {
+            service_->terminated_composition_range_->Release();
+            service_->terminated_composition_range_ = kept_range.Detach();
           }
         } else if (terminated_text != surface) {
           // The application changed the text after our last preedit update.

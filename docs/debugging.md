@@ -232,13 +232,23 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
   有無と保留中の入力の長さ、まだどの document にも出ていない入力を切替先へ持ち越したか
   （`carried`）。
 - `event=key_path_context`: context の push / pop。
+- `event=key_path_hold`: 動的句読点の Enter の保留（`dynamic-punctuation-spec.md` §7.3）。
+  `operation`（`begin` / `kept` / `resolve` / `abort`）と `route`（`enter` / `response` /
+  `timer` / `test_key` / `key_down` / `preserved_key` / `lifecycle`）。`kept` は修飾キーの単独押下が
+  保留を残したこと、`resolve` の `commit` はその確定が済んだか（`completed`）、アプリが edit session を
+  走らせず後の session に残ったか（`pending`）、失敗したか（`failed`）。
+- `event=key_path_commit`: 確定の edit session の結果（`mode` = `ran` / `refused` / `queued` /
+  `not_run` / `request_failed`、`hr`、`completed`）。
+- `event=key_path_terminated_commit`: アプリが終了した composition の range が空のときの確定
+  （`action` = `restored`（書き戻した）/ `replaced_kept_text`（range の直後に残っていた文字列を
+  置き換えた））。
 
 打鍵した文字、読み、表層、キーコードは出力しない。IME が切れている間、
 アプリが入力を無効にした context、secure の入力欄（`privacy.secureApps` など）の打鍵は、
 キーごとではなく、フォーカスした文書と理由（`closed` / `alnum` / `keyboard_disabled` /
 `secure`）の組ごとに 1 件だけ、`once_per_document=true` で記録する。この記録と secure 中の
-`key_path_focus` / `key_path_context` は長さを含まず、secure 中は `key_path_preedit` も
-出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
+`key_path_focus` / `key_path_context` は長さを含まず、secure 中は `key_path_preedit`・
+`key_path_hold`・`key_path_commit`・`key_path_terminated_commit` も出さない。キーごとの経路を採るときは、対象アプリを secure の設定から外して再現する。
 収集後は `AZOOKEY_LOG_KEYS` も削除する。
 
 ### 候補 UI の `pbShow` を収集する

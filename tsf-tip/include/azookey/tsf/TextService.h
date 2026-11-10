@@ -1452,7 +1452,8 @@ class TextService final : public ITfTextInputProcessorEx,
   static void PunctuationTimerTrampoline(void* context, DelayedActionTimer::Slot slot) noexcept;
   bool BeginFinalPunctuationHold(ITfContext* context, const core::InputState& previous,
                                  core::HandleResult& result);
-  void ResolveFinalPunctuationHold();
+  // The route names what ended the wait for the key_path log (DEV-1927).
+  void ResolveFinalPunctuationHold(std::string_view route);
   void AbortFinalPunctuationHold();
   void CancelPunctuationTimers();
   void AdoptLiveCommitObservation(ITfContext* context);
@@ -1597,6 +1598,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void HoldWindowWaitingKey(ITfContext* context, WPARAM key, LPARAM key_data, bool tracked = true);
   // DEV-1794: a character key that waits with the held Enter (section 7.3).
   bool HoldsKeyForFinalPunctuation(ITfContext* context, WPARAM key, LPARAM key_data);
+  // DEV-1927: a modifier pressed alone neither waits with nor ends the held Enter.
+  bool LeavesFinalPunctuationHold(ITfContext* context, WPARAM key) const;
   HRESULT ReplayWindowWaitingKeys(ITfContext* context);
   void ReplayWindowWaitingKeysIfReady();
   HRESULT ReplayRetryWaitingKeys(ITfContext* context, WPARAM retry_key, LPARAM retry_key_data);
@@ -1631,6 +1634,10 @@ class TextService final : public ITfTextInputProcessorEx,
   bool KeyPathLogging() const noexcept;
   void LogKeyPath(std::string_view sink, ITfContext* context, WPARAM key, BOOL eaten) noexcept;
   void LogKeyPathContext(std::string_view operation, ITfContext* context) noexcept;
+  void LogKeyPathHold(std::string_view operation, std::string_view route,
+                      std::string_view commit = {}) noexcept;
+  void LogKeyPathCommitSession(HRESULT hr, HRESULT hr_session, bool completed) noexcept;
+  void LogKeyPathTerminatedCommit(std::string_view action) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogPredictionOnce(PredictionLogReason reason) noexcept;
   void ShowPredictionWindow();

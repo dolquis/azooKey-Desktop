@@ -15010,6 +15010,9 @@ TEST(TsfTipWindowWaitTest, SpaceClosesThePredictionWindowForTheWait) {
                        : h.service.input_state_for_test().awaiting_candidates());
     EXPECT_FALSE(h.service.prediction_window_visible_for_test());
     EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
+    // Tab during the wait does not accept the prediction that was on screen.
+    PressWhileWaiting(h, VK_TAB);
+    EXPECT_EQ(legacy ? h.service.preedit_kana_ : h.service.input_state_for_test().Reading(), "か");
     // A prediction that lands during the wait is not shown either.
     ShowPredictionWhileComposing(h);
     EXPECT_FALSE(h.service.prediction_window_visible_for_test());

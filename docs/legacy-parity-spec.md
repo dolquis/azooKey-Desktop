@@ -160,16 +160,17 @@ enum class InputStateKind {
 > `MapUserAction(VK, modifiers, Selecting)`（§1.5.3）が `nullopt` でないキー（Enter、Space、Shift+Space、↑↓、
 > 変換、数字、Backspace、Ctrl+P/N/H、Ctrl+Shift+U など）、F6〜F10、`docs/tsf-deep-integration-spec.md` §3.5 で
 > 取り込む文字・記号・数字は、TIP が消費して保留し、窓が開いた時点（応答の到着、上記の 750ms の deadline、
-> Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（Tab、`Selecting` で割り当ての
+> Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（`Selecting` で割り当ての
 > 無い ←→、Home など）は保留せず、その場でアプリへ渡す（保留中のキーはそのまま残す）。
+> Tab・Shift+Tab は保留せず、消費して何もしない（§3.4）。
 > 記号キーと Shift 付きの数字キーは `Selecting` でも `Input` だが、生んだ文字が
 > `docs/tsf-deep-integration-spec.md` §3.5 の全角化の表に無いキーは
 > 保留せずアプリへ渡す（DEV-1811）。`0` とテンキーの数字は保留し、`0` は再生した時点で選択中の候補を確定して
 > 次の読みを始め、テンキーの `1`〜`9` は候補番号になる（§1.4）。
 > Esc と、IME を Off にするキー（`VK_IME_OFF`、半角/全角、`imeOnOff` の無変換）と英数モードへの切替（英数キー、
 > 入力インジケーター）は保留せず、その場で処理して保留中のキーを捨てる。IME を On にするキー（`VK_IME_ON`、
-> `imeOnOff` の変換）は保留せず、保留中のキーも捨てない（Tab などと同じくその場で処理する）。応答を待つ間に
-> Host を失ったときは、Esc とオフのキー以外の次のキーが来た時点でローカル候補の窓を開き、保留中のキーを
+> `imeOnOff` の変換）は保留せず、保留中のキーも捨てない（←→ などと同じくその場で処理する）。応答を待つ間に
+> Host を失ったときは、Esc とオフのキーと Tab・Shift+Tab 以外の次のキーが来た時点でローカル候補の窓を開き、保留中のキーを
 > 再生してからそのキーを処理する。結果は legacy の同期処理と同じになる。Space→Enter は第 1 候補、
 > Space→Space→Enter は第 2 候補を確定し、Space→`2` は 2 番目の候補を確定し、Space→文字は選択中の
 > 候補を確定して次の入力を始める。待つ間の 2 回目以降の Space で候補窓用の要求を出し直さない（候補が 0 件で

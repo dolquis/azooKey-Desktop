@@ -14976,10 +14976,69 @@ TEST(TsfTipWindowWaitTest, KeysTheWindowDoesNotTakeAreNotHeld) {
   DocumentPreeditHarness h;
   StartWindowWait(h);
   PressWhileWaiting(h, VK_RETURN);
-  for (const WPARAM key : {WPARAM{VK_TAB}, WPARAM{VK_LEFT}, WPARAM{VK_HOME}}) {
+  for (const WPARAM key : {WPARAM{VK_LEFT}, WPARAM{VK_HOME}}) {
     EXPECT_FALSE(ProbeTypoKey(h, key)) << "key " << key;
   }
   EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 1u);
+}
+
+namespace {
+
+void ShowPredictionWhileComposing(DocumentPreeditHarness& h) {
+  azookey::ipc::CandidateField prediction;
+  prediction.surface = "柿";
+  prediction.reading = "かき";
+  h.service.show_prediction_for_test(prediction);
+}
+
+}  // namespace
+
+// DEV-1938 (legacy-parity-spec §3.1): the Space that asks for the window closes
+// the prediction window, which stays closed until the window opens.
+TEST(TsfTipWindowWaitTest, SpaceClosesThePredictionWindowForTheWait) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ShowPredictionWhileComposing(h);
+    ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_FALSE(h.service.candidate_window_showing_for_test());
+    ASSERT_TRUE(legacy ? h.service.candidate_window_show_pending_for_test()
+                       : h.service.input_state_for_test().awaiting_candidates());
+    EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+    EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
+    // A prediction that lands during the wait is not shown either.
+    ShowPredictionWhileComposing(h);
+    EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+    AnswerWindow(h);
+    EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+    EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  }
+}
+
+// DEV-1938 (legacy-parity-spec §3.4): Tab and Shift+Tab during the wait are
+// eaten and do nothing: no prediction is accepted, nothing reaches the app,
+// and the key does not wait for the window.
+TEST(TsfTipWindowWaitTest, TabDuringTheWaitIsEatenAndDoesNothing) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_TAB);
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    PressWhileWaiting(h, VK_TAB);
+    h.keyboard_state.SetDown(VK_SHIFT, false);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+    // The wait goes on as before: the window opens on its first candidate.
+    AnswerWindow(h);
+    EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"蚊");
+  }
 }
 
 // The wait keeps 16 keys, shared with the commit retry (tsf-deep-integration-spec

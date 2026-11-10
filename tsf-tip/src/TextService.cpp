@@ -2788,6 +2788,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = TRUE;
       return S_OK;
     }
+    if (EatsTabWhileAwaitingCandidateWindow(context, wParam, modifiers)) {
+      *eaten = TRUE;
+      return S_OK;
+    }
     // TSF delivers OnKeyDown only for keys claimed here, so a key that ends
     // Unicode input must end it in this probe, before it is classified. This
     // commits from a test probe; hosts differ in whether they probe at all,
@@ -3020,6 +3024,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     ~FirstKeyCarryRecord() { service.TrackFirstKeyCarry(had_input, *eaten); }
   } first_key_carry_record{
       *this, !batch_raw_romaji_.empty() || !preedit_kana_.empty() || romaji_.HasPending(), eaten};
+  // DEV-1938: a key that decides on the candidate window, on any path, leaves
+  // no prediction window up while that window is awaited or shown.
+  struct PredictionForCandidateWindowRecord {
+    TextService& service;
+    ~PredictionForCandidateWindowRecord() { service.HidePredictionForCandidateWindow(); }
+  } prediction_for_candidate_window_record{*this};
   active_key_trace_active_ = true;
   if (retyped) {
     active_key_trace_id_ = trace_reset.previous_id;
@@ -3129,6 +3139,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           return hr == E_OUTOFMEMORY ? hr : S_OK;
         }
       }
+    }
+    if (EatsTabWhileAwaitingCandidateWindow(context, wParam, modifiers)) {
+      *eaten = TRUE;
+      return S_OK;
     }
     // Normally OnTestKeyDown already ended Unicode input for this key; this
     // covers hosts that call OnKeyDown without the probe.
@@ -4725,6 +4739,22 @@ bool TextService::AwaitingCandidateWindow() {
     return false;
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   return candidate_window_show_pending_;
+}
+
+void TextService::HidePredictionForCandidateWindow() noexcept {
+  try {
+    if ((prediction_window_.IsVisible() || !shown_predictions_.empty()) && CandidateWindowDecided())
+      ClearPrediction();
+  } catch (...) {
+    // Prediction is best-effort; a failed clear leaves the key's result alone.
+  }
+}
+
+bool TextService::EatsTabWhileAwaitingCandidateWindow(ITfContext* context, WPARAM key,
+                                                      uint32_t modifiers) {
+  return key == VK_TAB &&
+         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0 &&
+         SameComIdentity(context, active_context_) && AwaitingCandidateWindow();
 }
 
 // Without a Host the TIP-local candidates answer the window query that core
@@ -9498,6 +9528,12 @@ void TextService::ShowPredictionWindow() {
     prediction_window_.Hide();
     return;
   }
+  // DEV-1938: a result that lands while the candidate window is awaited stays hidden.
+  if (CandidateWindowDecided()) {
+    LogPredictionOnce(PredictionLogReason::CandidateWindow);
+    prediction_window_.Hide();
+    return;
+  }
   if (!prediction_window_.Create()) {
     LogPredictionOnce(PredictionLogReason::WindowCreateFailed);
     prediction_window_.Hide();
@@ -9555,7 +9591,7 @@ void TextService::RefreshPrediction(ITfContext* context) {
     inactive = PredictionLogReason::KeyboardClosed;
   else if (alnum_mode_)
     inactive = PredictionLogReason::AlphanumericMode;
-  else if (candidate_ui_.IsShowing())
+  else if (CandidateWindowDecided())
     inactive = PredictionLogReason::CandidateWindow;
   else if (input_state_.kind() != core::InputStateKind::Composing &&
            input_state_.kind() != core::InputStateKind::Previewing)

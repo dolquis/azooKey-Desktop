@@ -1661,6 +1661,7 @@ STDMETHODIMP TextService::Deactivate() try {
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
   carried_from_context_ = nullptr;
+  ReleaseCarriedOrigin();
   // Idempotent: also breaks the tracker <-> sink cycle if cleanup kept a composition.
   UnadviseCompositionMouseSink();
   candidate_ui_.Destroy();
@@ -4122,6 +4123,9 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
     if (focused_document_identity_ == identity) focused_document_identity_ = nullptr;
     if (keyboard_open_pending_document_ == identity) keyboard_open_pending_document_ = nullptr;
   }
+  // DEV-1928: input taken back from a document that is going away has nowhere
+  // to return; until it shows, it is dropped like other carried input.
+  if (CarriedOriginBelongsToDocumentMgr(pdim)) ReleaseCarriedOrigin();
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
@@ -4163,10 +4167,16 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     // DEV-1928: the first key's preedit shown just before the switch moves
     // too, once the old document has taken it back without committing it.
     // When it cannot, the composition commits there as before.
+    ITfContext* shown_origin = nullptr;
     if (!carry_input && CanCarryShownFirstKey(pdimFocus) &&
         !EvaluateInputGate(active_context_, client_id_, std::nullopt, true).secure &&
-        FocusedDocumentKeepsCarriedInput(pdimFocus))
+        FocusedDocumentKeepsCarriedInput(pdimFocus)) {
       carry_input = DiscardShownFirstKey(active_context_);
+      if (carry_input) {
+        shown_origin = active_context_;
+        shown_origin->AddRef();
+      }
+    }
     first_key_carry_deadline_.reset();
     const void* carried_from = ComIdentity(active_context_);
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
@@ -4178,8 +4188,11 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
       pdimFocus->AddRef();
       carried_input_document_ = pdimFocus;
       carried_from_context_ = carried_from;
+      ReleaseCarriedOrigin();
+      carried_origin_context_ = std::exchange(shown_origin, nullptr);
       ShowCarriedInput(pdimFocus);
     }
+    if (shown_origin) shown_origin->Release();
     if (log_key_path && secure_input_.load(std::memory_order_relaxed)) {
       try {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_path_focus",
@@ -5223,6 +5236,10 @@ bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr
   return ContextBelongsToDocumentMgr(active_context_, document_mgr);
 }
 
+bool TextService::CarriedOriginBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
+  return ContextBelongsToDocumentMgr(carried_origin_context_, document_mgr);
+}
+
 // DEV-1743: the converted text a composition shows (the live conversion, the
 // highlighted candidate, the batch segments), or empty when it shows the
 // reading. Input no composition shows yet has nothing else to commit.
@@ -5497,15 +5514,38 @@ bool TextService::CarriesUnshownInput() {
     return true;
   carried_input_document_->Release();
   carried_input_document_ = nullptr;
+  ReleaseCarriedOrigin();
   return false;
 }
 
+// Ends a carry that never showed. Input taken back from the document it was
+// shown in (DEV-1928) is committed there, as it was before the switch, when
+// that document still takes input; otherwise, and for input never shown, it is
+// dropped.
 void TextService::DropCarriedInput() {
   if (carried_input_document_) {
     carried_input_document_->Release();
     carried_input_document_ = nullptr;
   }
-  ClearTextStateForLifecycle();
+  if (!ReturnCarriedInputToOrigin()) ClearTextStateForLifecycle();
+}
+
+bool TextService::ReturnCarriedInputToOrigin() {
+  ITfContext* origin = std::exchange(carried_origin_context_, nullptr);
+  if (!origin) return false;
+  const bool committed = keyboard_open_ && !alnum_mode_ &&
+                         !EvaluateInputGate(origin, client_id_, std::nullopt, true).secure &&
+                         RequestLifecycleCommitOrEndComposition(origin, {});
+  origin->Release();
+  if (committed) ClearTextStateForLifecycle();
+  return committed;
+}
+
+void TextService::ReleaseCarriedOrigin() {
+  if (carried_origin_context_) {
+    carried_origin_context_->Release();
+    carried_origin_context_ = nullptr;
+  }
 }
 
 // --- Commit helpers (M5) ---
@@ -10712,12 +10752,19 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       return S_OK;
 
     // Ends the composition with its text removed, so nothing is committed.
-    const auto end_composition_without_text = [&]() -> HRESULT {
+    // With `place_caret`, the caret moves to where the text was.
+    const auto end_composition_without_text = [&](bool place_caret = false) -> HRESULT {
       if (!service_->composition_) return S_OK;
       ITfRange* cleared_range = nullptr;
       HRESULT clear_hr = service_->composition_->GetRange(&cleared_range);
       if (SUCCEEDED(clear_hr) && cleared_range) {
         clear_hr = cleared_range->SetText(ec, 0, L"", 0);
+      }
+      if (SUCCEEDED(clear_hr) && cleared_range && place_caret &&
+          SUCCEEDED(cleared_range->Collapse(ec, TF_ANCHOR_START))) {
+        TF_SELECTION sel{};
+        sel.range = cleared_range;
+        (void)context_->SetSelection(ec, 1, &sel);
       }
       const bool had_range = cleared_range != nullptr;
       if (cleared_range) cleared_range->Release();
@@ -10740,8 +10787,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
       return S_OK;
     };
-    // DEV-1928: the first key moves to the focused document (OnSetFocus).
-    if (service_->discarding_first_key_composition_) return end_composition_without_text();
+    // DEV-1928: the first key moves to the focused document (OnSetFocus). The
+    // caret stays where it was, so a return of the key lands there.
+    if (service_->discarding_first_key_composition_)
+      return end_composition_without_text(/*place_caret=*/true);
 
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {

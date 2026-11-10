@@ -275,6 +275,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // Set while the edit session that removes that input from the old document
   // runs, so the session ends the composition without committing its text.
   bool discarding_first_key_composition_{false};
+  // The context a shown first key was taken back from (owned). Until the
+  // carried input shows, it goes back there instead of being dropped.
+  ITfContext* carried_origin_context_{nullptr};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
   bool committing_{false};
@@ -538,6 +541,7 @@ class TextService final : public ITfTextInputProcessorEx,
     live_display_surface_ = std::move(surface);
   }
   std::string lifecycle_shown_surface_for_test() const { return LifecycleShownSurface(); }
+  void set_keyboard_open_for_test(bool open) { keyboard_open_ = open; }
   void age_first_key_carry_window_for_test(std::chrono::steady_clock::duration age) {
     if (first_key_carry_deadline_) *first_key_carry_deadline_ -= age;
   }
@@ -1641,6 +1645,9 @@ class TextService final : public ITfTextInputProcessorEx,
   bool FocusedDocumentKeepsCarriedInput(ITfDocumentMgr* focus);
   bool DiscardShownFirstKey(ITfContext* context);
   void TrackFirstKeyCarry(bool had_input, BOOL eaten);
+  bool ReturnCarriedInputToOrigin();
+  void ReleaseCarriedOrigin();
+  bool CarriedOriginBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   void ResolveCarriedInput(ITfContext* context);
   void ShowCarriedInput(ITfDocumentMgr* focus);
   bool CarriesUnshownInput();

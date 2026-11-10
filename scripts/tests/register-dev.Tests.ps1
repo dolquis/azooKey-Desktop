@@ -340,6 +340,22 @@ Describe "development registration scripts" {
     }
   }
 
+  Context "host stop (DEV-1846)" {
+    It "keeps the host running unless -StopHost is passed" {
+      Assert-Condition ($script:unregisterParameters -contains "StopHost") "unregister-dev.ps1 should expose StopHost."
+      Assert-Condition ($script:unregister.Text -match 'if\s*\(\s*\$StopHost\s*\)\s*\{') "unregister-dev.ps1 should only stop the host behind StopHost."
+    }
+
+    It "stops only azooKey inference hosts in the current session" {
+      Assert-Condition ($script:unregister.Text -match 'Get-Process\s+-Name\s+"azookey_inference_host"') "unregister-dev.ps1 should select processes by the host image name."
+      Assert-Condition ($script:unregister.Text -match '\$_\.SessionId\s+-eq\s+\$mySession') "unregister-dev.ps1 should limit the stop to the current session."
+    }
+
+    It "tells register-dev.ps1 users how to stop the host" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape('unregister-dev.ps1 -StopHost')) "register-dev.ps1 already-serving error should name unregister-dev.ps1 -StopHost."
+    }
+  }
+
   Context "AppContainerAcl.ps1" {
     BeforeAll {
       . $script:aclPath

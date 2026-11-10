@@ -204,6 +204,7 @@
   "testPresets": [
     {
       "name": "windows-vulkan-release",
+      "inherits": "parallel-tests",
       "configurePreset": "windows-vulkan-release",
       "output": { "outputOnFailure": true }
     },

@@ -812,44 +812,97 @@ class FakeMouseTracker final : public ITfMouseTracker {
   std::vector<std::pair<DWORD, ITfMouseSink*>> sinks_;
 };
 
-// DEV-1828: a key the harness sees not eaten leaves the state behind it here,
-// and a failed test prints the latest ones. Many tests expect a key not to be
-// eaten, so this never fails a test by itself.
+// DEV-1828: Shift / Ctrl / Alt / Win as four 0/1 digits, from the calling
+// thread's key state (what TextService reads and the harness pins) or from
+// GetAsyncKeyState (the keys held on the desktop right now).
+std::string ModifierDigits(bool async) {
+  const auto down = [async](int vk) {
+    return ((async ? GetAsyncKeyState(vk) : GetKeyState(vk)) & 0x8000) != 0;
+  };
+  const auto digit = [](bool value) { return value ? '1' : '0'; };
+  return {digit(down(VK_SHIFT)), digit(down(VK_CONTROL)), digit(down(VK_MENU)),
+          digit(down(VK_LWIN) || down(VK_RWIN))};
+}
+
+// DEV-1828: every key the tests send leaves the state around it here, and a
+// failed test prints the latest ones. Many tests expect a key not to be eaten,
+// so this never fails a test by itself.
 class NotEatenKeyLog final : public ::testing::EmptyTestEventListener {
  public:
+  // `thread_before` is ModifierDigits(false) read right before the key.
   static void Record(const azookey::tsf::TextService& service, ITfContext* context, WPARAM key,
-                     std::string_view via, std::chrono::steady_clock::time_point since) {
-    const auto down = [](int vk) { return (GetKeyState(vk) & 0x8000) != 0 ? '1' : '0'; };
+                     std::string_view via, std::chrono::steady_clock::time_point since, BOOL eaten,
+                     const std::string& thread_before) {
+    const std::string thread_after = ModifierDigits(false);
     std::string entry = std::string(via) + " key=0x";
-    char hex[16];
+    char hex[32];
     std::snprintf(hex, sizeof(hex), "%02X", static_cast<unsigned>(key));
     entry += hex;
+    entry += " eaten=" + std::to_string(eaten != FALSE);
     const auto elapsed = std::chrono::steady_clock::now() - since;
     entry += " after_ms=" +
              std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-    entry += " disabled=" + std::to_string(azookey::tsf::IsContextKeyboardDisabled(context));
-    entry += " shift/ctrl/alt/win=";
-    entry += {down(VK_SHIFT), down(VK_CONTROL), down(VK_MENU), down(VK_LWIN)};
+    // Shift/Ctrl/Alt/Win: the thread's state before and after the key, and the
+    // desktop's. A thread state that changed during the key was not the harness.
+    entry += " scaw_thread=" + thread_before + ">" + thread_after;
+    if (thread_after != thread_before) entry += "(changed)";
+    entry += " scaw_async=" + ModifierDigits(true);
+    entry += " kana/caps_toggle=";
+    entry += {(GetKeyState(VK_KANA) & 1) != 0 ? '1' : '0',
+              (GetKeyState(VK_CAPITAL) & 1) != 0 ? '1' : '0'};
+    std::snprintf(
+        hex, sizeof(hex), " hkl=0x%llX",
+        static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(GetKeyboardLayout(0))));
+    entry += hex;
+    // Only a key left to the app asks the context, as before, so the fakes
+    // that count their calls see none from an eaten key.
+    if (!eaten)
+      entry += " disabled=" + std::to_string(azookey::tsf::IsContextKeyboardDisabled(context));
     entry += " " + service.key_state_snapshot_for_test(context);
-    auto& entries = Entries();
-    if (entries.size() == kMaxEntries) entries.erase(entries.begin());
-    entries.push_back(std::move(entry));
+    if (!eaten) Push(NotEaten(), kMaxNotEaten, entry);
+    Push(Keys(), kMaxKeys, std::move(entry));
   }
 
-  void OnTestStart(const ::testing::TestInfo&) override { Entries().clear(); }
+  static std::chrono::steady_clock::time_point TestStart() { return StartTime(); }
+
+  void OnTestStart(const ::testing::TestInfo&) override {
+    NotEaten().clear();
+    Keys().clear();
+    StartTime() = std::chrono::steady_clock::now();
+  }
   void OnTestEnd(const ::testing::TestInfo& info) override {
-    if (!info.result()->Failed() || Entries().empty()) return;
-    std::printf("[ NOT EATEN ] last %zu keys the harness saw not eaten (oldest first)\n",
-                Entries().size());
-    for (const auto& entry : Entries()) std::printf("  %s\n", entry.c_str());
+    if (!info.result()->Failed()) return;
+    if (!NotEaten().empty()) {
+      std::printf("[ NOT EATEN ] last %zu keys the harness saw not eaten (oldest first)\n",
+                  NotEaten().size());
+      for (const auto& entry : NotEaten()) std::printf("  %s\n", entry.c_str());
+    }
+    if (!Keys().empty()) {
+      std::printf("[ KEYS ] last %zu keys of this test, eaten or not (oldest first)\n",
+                  Keys().size());
+      for (const auto& entry : Keys()) std::printf("  %s\n", entry.c_str());
+    }
     std::fflush(stdout);
   }
 
  private:
-  static constexpr size_t kMaxEntries = 8;
-  static std::vector<std::string>& Entries() {
+  static constexpr size_t kMaxNotEaten = 8;
+  static constexpr size_t kMaxKeys = 24;
+  static void Push(std::vector<std::string>& entries, size_t max, std::string entry) {
+    if (entries.size() == max) entries.erase(entries.begin());
+    entries.push_back(std::move(entry));
+  }
+  static std::vector<std::string>& NotEaten() {
     static std::vector<std::string> entries;
     return entries;
+  }
+  static std::vector<std::string>& Keys() {
+    static std::vector<std::string> entries;
+    return entries;
+  }
+  static std::chrono::steady_clock::time_point& StartTime() {
+    static std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    return start;
   }
 };
 
@@ -857,6 +910,20 @@ const bool kNotEatenKeyLogInstalled = [] {
   ::testing::UnitTest::GetInstance()->listeners().Append(new NotEatenKeyLog);
   return true;
 }();
+
+// DEV-1828: OnKeyDown / OnTestKeyDown with the key recorded. Tests that call
+// TextService directly go through here too, so a failed one prints its keys.
+HRESULT RecordedKeyDown(azookey::tsf::TextService& service, ITfContext* context, WPARAM key,
+                        LPARAM key_data, BOOL* eaten, bool probe,
+                        std::chrono::steady_clock::time_point since = NotEatenKeyLog::TestStart()) {
+  const std::string thread_before = ModifierDigits(false);
+  const HRESULT hr = probe ? service.OnTestKeyDown(context, key, key_data, eaten)
+                           : service.OnKeyDown(context, key, key_data, eaten);
+  if (eaten)
+    NotEatenKeyLog::Record(service, context, key, probe ? "TestPress" : "Press", since, *eaten,
+                           thread_before);
+  return hr;
+}
 
 class TextServiceHarness {
  public:
@@ -881,18 +948,16 @@ class TextServiceHarness {
   BOOL Press(WPARAM key) {
     keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
+    const HRESULT hr = RecordedKeyDown(service, &context, key, 0, &eaten, false, created);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
-    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "Press", created);
     return eaten;
   }
 
   BOOL TestPress(WPARAM key) {
     keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    const HRESULT hr = service.OnTestKeyDown(&context, key, 0, &eaten);
+    const HRESULT hr = RecordedKeyDown(service, &context, key, 0, &eaten, true, created);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnTestKeyDown failed for key " << key;
-    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "TestPress", created);
     return eaten;
   }
 
@@ -1264,9 +1329,8 @@ class DocumentPreeditHarness {
   BOOL Press(WPARAM key) {
     keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
+    const HRESULT hr = RecordedKeyDown(service, &context, key, 0, &eaten, false, created);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
-    if (!eaten) NotEatenKeyLog::Record(service, &context, key, "Press", created);
     return eaten;
   }
 
@@ -1609,11 +1673,8 @@ class BracketHarness {
   BOOL Press(WPARAM key, bool test = false, bool expect_success = true) {
     keyboard.Reapply();
     BOOL eaten = FALSE;
-    const HRESULT hr = test ? service.OnTestKeyDown(&context, key, 0, &eaten)
-                            : service.OnKeyDown(&context, key, 0, &eaten);
+    const HRESULT hr = RecordedKeyDown(service, &context, key, 0, &eaten, test, created);
     if (expect_success) EXPECT_TRUE(SUCCEEDED(hr)) << std::hex << hr;
-    if (!eaten)
-      NotEatenKeyLog::Record(service, &context, key, test ? "TestPress" : "Press", created);
     return eaten;
   }
   void ApplySettings() { service.set_bracket_settings_for_test(settings); }
@@ -1942,7 +2003,7 @@ TEST(TsfTipBracketTest, PendingPairFinishesInItsOwningContextAfterFocusMoves) {
   DocumentContext next;
   next.document->text = L"another document";
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&next, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &next, VK_RETURN, 0, &eaten, false), S_OK);
   EXPECT_TRUE(eaten);
   EXPECT_FALSE(h.service.bracket_composition_for_test());
   EXPECT_EQ(h.context.document->start, 1);
@@ -2152,7 +2213,7 @@ TEST(TsfTipOnKeyDownPreeditTest, OnTestKeyDownAllocationFailureReturnsOutOfMemor
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'A', 0, &eaten, true), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
 }
 
@@ -2172,13 +2233,13 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackTypedKey
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'K', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'K', 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_EQ(h.context.request_count, 0);
 
   eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'A', 0, &eaten, false), S_OK);
   EXPECT_EQ(eaten, TRUE);
   EXPECT_EQ(h.service.preedit_kana_, "あ");
 }
@@ -2194,7 +2255,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureKeepsActiveContex
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&next_context, 'N', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &next_context, 'N', 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.active_context_is_for_test(&h.context));
@@ -2224,7 +2285,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRestoresCandidate
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'N', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'N', 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
@@ -2245,13 +2306,13 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspac
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
   eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_ESCAPE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_ESCAPE, 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
@@ -2264,12 +2325,12 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlu
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_SPACE, 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "");
 
   eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'A', 0, &eaten, false), S_OK);
   EXPECT_EQ(eaten, TRUE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
@@ -2284,7 +2345,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemor
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_RETURN, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_RETURN, 0, &eaten, false), E_OUTOFMEMORY);
 
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.context.request_count, previous_request_count);
@@ -7305,10 +7366,10 @@ TEST(TsfTipOnKeyDownPreeditTest,
   next_context.run_edit_session = true;
 
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&next_context, 'K', 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &next_context, 'K', 0, &eaten, true), S_OK);
   EXPECT_TRUE(eaten);
   eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&next_context, 'K', 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &next_context, 'K', 0, &eaten, false), S_OK);
   EXPECT_TRUE(eaten);
 
   EXPECT_EQ(old_range.set_text_count, 1);
@@ -7360,7 +7421,7 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryAllocationFailureReturnsOutOfM
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, 'A', 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.service.commit_surface_, "か");
@@ -7571,10 +7632,10 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitAfterExternalTerminationDoesNotInse
 
   h.context.reject_write = false;
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_SPACE, 0, &eaten, true), S_OK);
   EXPECT_TRUE(eaten);
   eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_SPACE, 0, &eaten, false), S_OK);
   EXPECT_TRUE(eaten);
   EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
 
@@ -7779,7 +7840,7 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeAfterExternalTerminationCancelsPendingRes
   ASSERT_FALSE(h.service.terminated_composition_surface_.empty());
 
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_ESCAPE, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_ESCAPE, 0, &eaten, true), S_OK);
   EXPECT_TRUE(eaten);
   EXPECT_TRUE(h.Press(VK_ESCAPE));
   h.context.reject_write = false;
@@ -7833,7 +7894,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PassThroughKeyRestoresHostClearedTextBeforeAppl
   ASSERT_EQ(h.context.document->text, L"");
 
   BOOL eaten = TRUE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_SPACE, 0, &eaten, true), S_OK);
   EXPECT_FALSE(eaten);
   EXPECT_EQ(h.context.document->text, L"か");
   EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
@@ -8941,10 +9002,10 @@ class DocumentSwitch {
     for (const WPARAM key : keys) {
       h.keyboard_state.Reapply();
       BOOL test_eaten = FALSE;
-      EXPECT_EQ(h.service.OnTestKeyDown(&context, key, 0, &test_eaten), S_OK);
+      EXPECT_EQ(RecordedKeyDown(h.service, &context, key, 0, &test_eaten, true), S_OK);
       EXPECT_EQ(test_eaten != FALSE, eaten) << key;
       BOOL key_eaten = FALSE;
-      EXPECT_EQ(h.service.OnKeyDown(&context, key, 0, &key_eaten), S_OK);
+      EXPECT_EQ(RecordedKeyDown(h.service, &context, key, 0, &key_eaten, false), S_OK);
       EXPECT_EQ(key_eaten != FALSE, eaten) << key;
     }
   }
@@ -10266,7 +10327,7 @@ void TypeTypoRomaji(DocumentPreeditHarness& h, std::string_view keys) {
 BOOL ProbeTypoKey(DocumentPreeditHarness& h, WPARAM key) {
   h.keyboard_state.Reapply();
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, key, 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, key, 0, &eaten, true, h.created), S_OK);
   return eaten;
 }
 
@@ -10752,7 +10813,7 @@ TEST(TsfTipTypoCorrectionTest, CorrectedReadingAllocationFailureRollsBackAndCanR
   BOOL eaten = TRUE;
   h.keyboard_state.Reapply();
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
-  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_SPACE, 0, &eaten, false), E_OUTOFMEMORY);
   EXPECT_FALSE(eaten);
   EXPECT_EQ(h.service.preedit_kana_, "かに");
   EXPECT_EQ(h.service.input_state_for_test().Reading(), "かに");
@@ -12060,7 +12121,7 @@ TEST(TsfTipCommitCorrectionTest, BackspaceInAnotherContextSendsNoUndo) {
   NoopContext other;
   h.keyboard_state.Reapply();
   BOOL eaten = TRUE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&other, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &other, VK_BACK, 0, &eaten, true), S_OK);
   EXPECT_TRUE(h.service.queued_corrections_for_test().empty());
 }
 
@@ -12521,10 +12582,10 @@ TEST(TsfTipDynamicPunctuationTest, ModifierAloneLeavesTheHeldEnterToItsFinalAnsw
       h.keyboard_state.SetDown(static_cast<int>(modifier), true);
       h.keyboard_state.Reapply();
       BOOL eaten = TRUE;
-      ASSERT_EQ(h.service.OnTestKeyDown(&h.context, modifier, 0, &eaten), S_OK);
+      ASSERT_EQ(RecordedKeyDown(h.service, &h.context, modifier, 0, &eaten, true), S_OK);
       EXPECT_FALSE(eaten);
       eaten = TRUE;
-      ASSERT_EQ(h.service.OnKeyDown(&h.context, modifier, 0, &eaten), S_OK);
+      ASSERT_EQ(RecordedKeyDown(h.service, &h.context, modifier, 0, &eaten, false), S_OK);
       EXPECT_FALSE(eaten);
       ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test())
           << "the modifier ended the wait";
@@ -12550,7 +12611,7 @@ TEST(TsfTipDynamicPunctuationTest, ModifierAloneLeavesTheHeldEnterToItsTimeout) 
   h.keyboard_state.SetDown(VK_SHIFT, true);
   h.keyboard_state.Reapply();
   BOOL eaten = TRUE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_SHIFT, 0, &eaten, true), S_OK);
   ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
   h.keyboard_state.SetDown(VK_SHIFT, false);
   h.service.fire_punctuation_timer_for_test(DelayedActionTimer::kFinal);
@@ -12566,7 +12627,7 @@ TEST(TsfTipDynamicPunctuationTest, ShiftThenLetterStillWaitsWithTheHeldEnter) {
   h.keyboard_state.SetDown(VK_SHIFT, true);
   h.keyboard_state.Reapply();
   BOOL eaten = TRUE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_SHIFT, 0, &eaten, true), S_OK);
   ASSERT_FALSE(eaten);
   EXPECT_TRUE(ProbeTypoKey(h, 'A'));
   ASSERT_TRUE(h.Press('A'));
@@ -12601,7 +12662,7 @@ TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationReplacesTheKe
     h.context.lock_write = true;
     h.keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
     ASSERT_TRUE(eaten);
     ASSERT_TRUE(h.service.committing_) << "the refused commit is no longer pending";
     h.context.lock_write = false;
@@ -12614,7 +12675,7 @@ TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationReplacesTheKe
 
     h.keyboard_state.Reapply();
     eaten = FALSE;
-    ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), S_OK);
     EXPECT_FALSE(h.service.committing_);
     EXPECT_EQ(h.context.document->text, L"蚊");
     (void)h.context.RunDeferredWrites();
@@ -12636,11 +12697,11 @@ TEST(TsfTipDynamicPunctuationTest, QueuedCommitAfterACollapsedTerminationReplace
 
   h.keyboard_state.Reapply();
   BOOL eaten = FALSE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
   ASSERT_TRUE(eaten);
   ASSERT_TRUE(h.service.committing_) << "the queued commit is no longer pending";
   h.keyboard_state.Reapply();
-  ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), S_OK);
   ASSERT_TRUE(h.service.committing_);
   ASSERT_GE(h.context.deferred_writes.size(), 2u);
   h.context.defer_write_callback = false;
@@ -12667,7 +12728,7 @@ TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationRestoresBesid
   h.context.lock_write = true;
   h.keyboard_state.Reapply();
   BOOL eaten = FALSE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
   ASSERT_TRUE(h.service.committing_);
   h.context.lock_write = false;
 
@@ -12680,7 +12741,7 @@ TEST(TsfTipDynamicPunctuationTest, CommitAfterACollapsedTerminationRestoresBesid
 
   h.keyboard_state.Reapply();
   eaten = FALSE;
-  ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), S_OK);
   EXPECT_FALSE(h.service.committing_);
   EXPECT_EQ(h.context.document->text, L"蚊x");
 }
@@ -12695,7 +12756,7 @@ TEST(TsfTipKeyPathLogTest, HeldEnterRecordsItsRouteAndCommitWithoutText) {
     h.keyboard_state.SetDown(VK_SHIFT, true);
     h.keyboard_state.Reapply();
     BOOL eaten = TRUE;
-    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_SHIFT, 0, &eaten), S_OK);
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_SHIFT, 0, &eaten, true), S_OK);
     h.keyboard_state.SetDown(VK_SHIFT, false);
     AnswerTheFinalRequest(h, final_id);
     ASSERT_EQ(h.context.document->text, L"蚊。");
@@ -12706,14 +12767,14 @@ TEST(TsfTipKeyPathLogTest, HeldEnterRecordsItsRouteAndCommitWithoutText) {
     h.context.lock_write = true;
     h.keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
     h.context.lock_write = false;
     auto* range = static_cast<DocumentRange*>(h.service.composition_range_);
     ASSERT_NE(range, nullptr);
     range->end = range->start;
     ASSERT_EQ(h.ExternallyTerminate(), S_OK);
     h.keyboard_state.Reapply();
-    ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+    ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), S_OK);
     ASSERT_EQ(h.context.document->text, L"蚊");
   }
   const auto records = log.Records();
@@ -12764,7 +12825,7 @@ TEST(TsfTipKeyPathLogTest, CollapsedTerminationRecordsWhereTheKeptTextIs) {
       h.context.lock_write = true;
       h.keyboard_state.Reapply();
       BOOL eaten = FALSE;
-      ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
       ASSERT_TRUE(h.service.committing_);
       h.context.lock_write = false;
       if (c.collapse == Collapse::StartBesideOther) {
@@ -12782,7 +12843,7 @@ TEST(TsfTipKeyPathLogTest, CollapsedTerminationRecordsWhereTheKeptTextIs) {
       // A store that cannot move the probe's anchors.
       h.context.document->short_shift = c.collapse == Collapse::StartUnreadable;
       h.keyboard_state.Reapply();
-      ASSERT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+      ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, false), S_OK);
       h.context.document->short_shift = false;
       EXPECT_FALSE(h.service.committing_);
       EXPECT_EQ(h.context.document->text, c.text);
@@ -12949,7 +13010,7 @@ TEST(TsfTipDynamicPunctuationTest, ProbeResolvesTheHoldBeforeTrackingAndAnswersF
   // one after the commit (an undo) and the probe says it is not ours to eat.
   h.keyboard_state.Reapply();
   BOOL eaten = TRUE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
   EXPECT_FALSE(h.service.final_punctuation_hold_pending_for_test());
   EXPECT_EQ(h.context.document->text, L"蚊");
   EXPECT_FALSE(eaten);
@@ -12960,7 +13021,7 @@ TEST(TsfTipDynamicPunctuationTest, ProbeResolvesTheHoldBeforeTrackingAndAnswersF
 
   // A second Backspace is no longer the first key after the commit.
   eaten = TRUE;
-  ASSERT_EQ(h.service.OnTestKeyDown(&h.context, VK_BACK, 0, &eaten), S_OK);
+  ASSERT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, 0, &eaten, true), S_OK);
   EXPECT_FALSE(eaten);
   EXPECT_EQ(h.service.queued_corrections_for_test().size(), 1u);
 }
@@ -13715,7 +13776,7 @@ TEST(TsfTipCommitOnTypeTest, ShiftOneOfAnotherLayoutLeavesTheWindow) {
       &TranslateWithoutExclamationForTest);
   h.keyboard_state.SetDown(VK_SHIFT, true);
   BOOL tested = TRUE;
-  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, '1', 0, &tested), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, '1', 0, &tested, true), S_OK);
   EXPECT_FALSE(tested);
   EXPECT_FALSE(h.Press('1'));
   h.keyboard_state.SetDown(VK_SHIFT, false);
@@ -15378,7 +15439,8 @@ TEST(TsfTipReadingSymbolTest, JisYenKeyTypesYenAndOtherBackslashKeysTypeBackslas
     h.keyboard_state.SetDown(VK_SHIFT, shift);
     h.keyboard_state.Reapply();
     BOOL eaten = FALSE;
-    EXPECT_EQ(h.service.OnKeyDown(&h.context, key, static_cast<LPARAM>(scan_code) << 16, &eaten),
+    EXPECT_EQ(RecordedKeyDown(h.service, &h.context, key, static_cast<LPARAM>(scan_code) << 16,
+                              &eaten, false),
               S_OK);
     h.keyboard_state.SetDown(VK_SHIFT, false);
     return eaten;
@@ -16217,7 +16279,7 @@ TEST(TsfTipFullWidthSpaceTest, WaitingSpaceIsDroppedForAKeyFromAnotherContext) {
   h.context.skip_callback = false;
   h.keyboard_state.Reapply();
   BOOL eaten = FALSE;
-  EXPECT_EQ(h.service.OnKeyDown(&other, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(RecordedKeyDown(h.service, &other, 'A', 0, &eaten, false), S_OK);
   EXPECT_FALSE(h.service.full_width_space_waits_for_retry_for_test());
   EXPECT_EQ(h.context.document->text, L"");
   EXPECT_EQ(other.document->text.find(L'\x3000'), std::wstring::npos);

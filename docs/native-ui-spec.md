@@ -35,7 +35,7 @@ C++/WinRT の `UISettings` は TIP DLL に WinRT 依存を持ち込むため使�
 
 ### 1.2 変化の購読
 
-候補ウィンドウと予測候補ウィンドウは owner を持たない top-level の `WS_POPUP` なので、
+候補ウィンドウ（予測モードを含む。§4.1）は owner を持たない top-level の `WS_POPUP` なので、
 `WM_SETTINGCHANGE` の broadcast を直接受け取る。
 次のいずれかでテーマを読み直し、再描画する。
 
@@ -54,16 +54,16 @@ TIP は他プロセスに読み込まれ、broadcast の lParam を検証でき�
 
 ### 1.3 色テーブル
 
-`ThemeColors` は両ウィンドウが描く要素ごとの色を持つ。
+`ThemeColors` は候補ウィンドウ（両モード）、詳細ポップアップ、デバッグウィンドウが描く要素ごとの色を持つ。
 
 | フィールド | 用途 | `kLightTheme` | `kDarkTheme` | ハイコントラスト |
 |---|---|---|---|---|
 | `background` | 背景 | RGB(255,255,255) | RGB(32,32,32) | `COLOR_WINDOW` |
 | `text` | 候補 | RGB(0,0,0) | RGB(255,255,255) | `COLOR_WINDOWTEXT` |
-| `sub_text` | 説明、無効なボタン | RGB(96,96,96) | RGB(160,160,160) | `COLOR_GRAYTEXT` |
+| `sub_text` | 説明、無効なボタン、予測モードのキーの手掛かり | RGB(96,96,96) | RGB(160,160,160) | `COLOR_GRAYTEXT` |
 | `selection` | 選択行の背景 | RGB(0,120,215) | RGB(76,194,255) | `COLOR_HIGHLIGHT` |
 | `selection_text` | 選択行の文字 | RGB(255,255,255) | RGB(0,0,0) | `COLOR_HIGHLIGHTTEXT` |
-| `border` | 予測候補ウィンドウの枠 | RGB(160,160,160) | RGB(80,80,80) | `COLOR_WINDOWTEXT` |
+| `border` | 候補ウィンドウと詳細ポップアップの枠 | RGB(160,160,160) | RGB(80,80,80) | `COLOR_WINDOWTEXT` |
 | `panel_background` / `panel_text` | 案内行 | RGB(243,243,243) / 黒 | RGB(45,45,45) / 白 | `COLOR_BTNFACE` / `COLOR_BTNTEXT` |
 | `info_background` / `info_text` | secure toast、劣化の詳細 | RGB(255,255,225) / 黒 | RGB(56,56,40) / 白 | `COLOR_INFOBK` / `COLOR_INFOTEXT` |
 | `banner_background` | 劣化バナー（文字は `info_text`） | RGB(255,249,225) | RGB(67,53,25) | `COLOR_INFOBK` |
@@ -76,8 +76,8 @@ TIP は他プロセスに読み込まれ、broadcast の lParam を検証でき�
 
 ### 2.1 背景効果
 
-候補ウィンドウ、予測候補ウィンドウ、詳細ポップアップの背景は、テーマ色の不透明な塗りとする。
-3 つとも DirectComposition で描くが、Mica / Acrylic などのシステム背景効果は使わない。
+候補ウィンドウ（両モード）と詳細ポップアップの背景は、テーマ色の不透明な塗りとする。
+2 つとも DirectComposition で描くが、Mica / Acrylic などのシステム背景効果は使わない。
 surface は `SurfaceAlpha::Opaque`（`DXGI_ALPHA_MODE_IGNORE`）で作り、文字は ClearType で描く。
 
 採らない理由は次のとおり。
@@ -125,49 +125,22 @@ visual tree は root visual に surface を 1 枚載せるだけとし、背景�
 96 DPI の device context 用 text format を作る。読めないときは 9 pt の Yu Gothic UI とする。
 `lfHeight` が負なら em サイズとしてそのまま使い、正（セルの高さ）なら
 フォントの `designUnitsPerEm / (ascent + descent)` を掛けて em サイズにする。
-候補ウィンドウとデバッグウィンドウはこれを使う。
+候補ウィンドウ（両モード）、詳細ポップアップ、デバッグウィンドウはこれを使う。
 
 ## 3. DirectWrite 描画
 
 ### 3.1 ファクトリと TextFormat
 
-```cpp
-ComPtr<IDWriteFactory7> dwrite;
-DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                    __uuidof(IDWriteFactory7),
-                    reinterpret_cast<IUnknown**>(dwrite.GetAddressOf()));
-
-ComPtr<IDWriteTextFormat> text_format;
-dwrite->CreateTextFormat(
-    L"Yu Gothic UI",              // フォントファミリ
-    nullptr,                      // システムフォントコレクション
-    DWRITE_FONT_WEIGHT_REGULAR,
-    DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_STRETCH_NORMAL,
-    14.0f * dpi / 96.0f,          // ポイントサイズ
-    L"ja-JP",
-    &text_format);
-```
-
-フォール優先順：
-1. `"Yu Gothic UI"`（Windows 8.1+）
-2. `"Meiryo UI"`
-3. `"MS UI Gothic"`
+DirectWrite の factory は `DWRITE_FACTORY_TYPE_SHARED` で作る。text format は §2.2 の
+`CreateMessageTextFormat` で、システムのメッセージフォントから作る。フォントの family と大きさを
+窓ごとに固定しないので、利用者が選んだシステムのフォントと文字サイズに、候補ウィンドウの両モードがそろって従う。
 
 ### 3.2 TextLayout
 
-```cpp
-ComPtr<IDWriteTextLayout> layout;
-dwrite->CreateTextLayout(
-    text.c_str(), text.size(),
-    text_format.Get(),
-    max_width, max_height,
-    &layout);
-
-// 候補番号と本体で別のフォントウェイト
-DWRITE_TEXT_RANGE number_range = { 0, 2 };  // "1. "
-layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, number_range);
-```
+1 行に描く文字列（候補、予測、案内行、secure toast）は折り返さず、はみ出す分は末尾を省略記号にする
+（`DWRITE_TRIMMING_GRANULARITY_CHARACTER` と `CreateEllipsisTrimmingSign`）。
+劣化バナーと詳細ポップアップの本文は折り返す。
+文字はすべて同じ太さで描く。候補番号は候補の本体と同じ色、予測モードのキーの手掛かりは `sub_text` で描く（§4.1・§4.2）。
 
 ### 3.3 描画
 
@@ -203,6 +176,22 @@ context->DrawTextLayout(origin, layout.Get(), brush.Get(),
 
 ### 4.1 CandidateWindow.cpp
 
+候補ウィンドウは 1 つの HWND で、予測モードと候補モードを持つ（`docs/legacy-parity-spec.md` §3.1）。
+窓は一度に一方のモードだけを描き、2 つのモードの行を混ぜない。
+
+| | 予測モード（§4.2） | 候補モード |
+|---|---|---|
+| 出す時機 | 読み入力中、ライブ変換のプレビュー中 | 候補選択中（`Selecting`） |
+| 行 | 予測。最大 5 件 | 候補。全件 |
+| 行頭 | キーの手掛かり（1 件目 Tab、2 件目 Shift+Tab、3 件目以降は空） | 通し番号（`1.` から） |
+| 選択の強調 | 付けない | 選択中の行に付ける |
+| 行の下の要素 | 置かない | 案内行、secure toast、劣化バナー |
+| 左クリック | 押した行の予測を受理する | 押した行の候補を選んで確定する |
+| 支援技術 | 渡さない（§5.2） | TSF の UIElement で渡す（§5.2） |
+
+Space などで候補を求めた時点で予測モードを消し、応答を待つ間は窓を出さない。応答が届いたら候補モードで出す。
+次の規則は、断りのない限り両モードに共通する。
+
 `RenderingEngine`（`SurfaceAlpha::Opaque`）で描き、色は §1.3 の `ThemeColors` を使う。
 候補ウィンドウと詳細ポップアップは `WS_POPUP` と `WS_EX_NOREDIRECTIONBITMAP` で作り、
 それぞれが `RenderingEngine` を 1 組持つ。詳細ポップアップの組は表示のたびに作り、閉じると捨てる。
@@ -236,20 +225,44 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 - 詳細ポップアップは、描画に失敗したら閉じ、`ShowDetails` / `RenderDetails` は `false` を返す。
   この失敗は候補窓の失敗段階と HRESULT を上書きしない。
 
+候補モードの行と、その下の要素は次の規則で置く。
+
+- 窓の高さは作業領域の高さに収める。収まる行数を超える候補は、選択中の候補を含む連続した行だけを描く。
+  選択が描いている範囲の外へ動いたら、その候補が範囲の端に来るだけ範囲をずらす（巡回で先頭や末尾へ
+  移ったときは、その端の範囲を描く）。番号は全件の通し番号のままとし、描いている範囲で振り直さない。
+  番号キーの意味（`docs/legacy-parity-spec.md` §1.4）と、TSF の UIElement に渡す候補の全件・ページ数
+  （§5.2）は変えない。
+- 全件を描ききれないときは、候補の行の下に「選択中の番号/件数」（例 `3/12`）の行を 1 行置き、`sub_text` で描く。
+- 行の下の要素は、上から、位置の行、案内行、secure toast、劣化バナーの順に置く。この順は表示の有無で入れ替えない。
+- 劣化バナーは窓の幅で本文を折り返し、本文を測った行数（3 行まで）と、ボタンの 1 行の高さにする。
+  バナーのために窓の幅は広げない。ただし、窓の幅が `[詳細]` と `[再試行]` を並べる幅（96 DPI で 240 px）に
+  満たないときだけ、その幅まで広げる。
+- `[詳細]` と `[再試行]` は、枠を持つボタンの形で描き、ポインターが乗っている間は手の形のカーソルにする。
+  キーボードでは操作しない（候補選択中のキーの意味を変えないため）。
+- 詳細ポップアップの幅は候補ウィンドウの幅とし、96 DPI で 320 px 以上 480 px 以下に収める。高さは本文を測って決め、
+  作業領域に収める。本文は、利用者が行う操作を先に書き、ファイルのパス、設定のキー、コマンドは最後にまとめる。
+
 クリック領域は `CandidateWindow::HitTest` が決める。
-行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、
+行（予測モードの行を含む）、位置の行、🔒 列、案内行と secure toast 行、劣化バナーと `[詳細]` / `[再試行]` の範囲は描画から独立しており、
 キャレット追従の配置計算（`ComputePlacement`、`docs/legacy-parity-spec.md` §9.2）とともに描画方式の影響を受けない。
 
-### 4.2 PredictionWindow.cpp（M15）
+### 4.2 予測モード（M15）
 
-`RenderingEngine` で描き、色は §1.3 の `ThemeColors` を使う。
-`WM_DPICHANGED` で行高・余白・フォントを作り直し、表示中なら最後のキャレット矩形で表示をやり直す
-（測り直し、作業領域内への配置、再描画）。
-`WM_DPICHANGED` の推奨矩形は使わない。
-`Show` 自身の `SetWindowPos` が別 DPI のモニタへ動かして発生した通知は無視する（`Show` が移動先の DPI で測り終えているため）。
-DPI の変化で表示をやり直すときのキャレット矩形は、直前の `Show` の値である。
-ウィンドウの移動でキャレットの位置も変わっていた場合は、次の preedit 更新による `Show` で正しい位置へ戻る。
-テーマの変更通知では、テーマを読み直したときだけ再描画し、描画に失敗したらウィンドウを隠す。
+予測は候補ウィンドウ（§4.1）の予測モードで描く。描き方は候補モードと同じ規則に従う。
+
+- フォント、行の高さ、左右の余白、枠、影（`CS_DROPSHADOW`）、カラーの絵文字（§3.4）、末尾の省略記号（§3.2）は
+  候補モードと同じにする。窓の上下に行と別の余白は置かない
+- 行は最大 5 件で、スクロールしない。各行の頭に手掛かりの列を置き、1 件目に `Tab`、2 件目に `⇧Tab` を
+  `sub_text` で描く。3 件目以降は列を空けたまま描き、行の頭をそろえる
+- 番号、選択の強調、案内行、secure toast、劣化バナー、🔒 は描かない
+- 左クリックはボタンを押したとき（`WM_LBUTTONDOWN`）に、その行の予測を受理する。候補モードと同じ時機である
+- 窓の幅は行を測って決め、候補モードと同じ最大幅に収める
+- 配置は `docs/legacy-parity-spec.md` §3.2 に従う（composition 全体の text extent の左下）
+- フェードイン（§6.1）、DPI の変化（`WM_DPICHANGED` の推奨矩形を使わず、最後の anchor で測り直す）、
+  テーマの変更、描画の失敗（窓を出さず、失敗の間はクリックを受けない）は §4.1 と同じに扱う
+
+キーの扱い（Tab・Shift+Tab・Esc）は `docs/legacy-parity-spec.md` §3.4 に従い、予測モードの行を出しているか
+どうかで決める。候補モードで窓が見えていても、予測を受理するキーとしては扱わない。
 
 ### 4.3 デバッグウィンドウ（M18-3）
 
@@ -261,8 +274,8 @@ DPI の変化で表示をやり直すときのキャレット矩形は、直前�
 
 ### 4.4 Magic Conversion プロンプト（M16）
 
-Phase 5 では Win32 標準ダイアログ（IDD_*）で実装。
-Phase 7-M30 で設定アプリと統合して WinUI 3 に移行。
+Magic Conversion（`docs/ai-backend-spec.md` の M16）の指示を入れるプロンプトは、Win32 標準ダイアログ（IDD_*）で出す。
+設定アプリと統合する M30 で WinUI 3 へ移す。プロンプトは候補ウィンドウとは別の窓であり、§4.1・§4.2 の規則は適用しない。
 
 入力インジケーターの右クリックのメニュー（`docs/tsf-deep-integration-spec.md` §4.5）は Win32 のポップアップメニュー（`TrackPopupMenuEx`）で、OS 標準の見た目に任せ、`ThemeColors` は使わない。本書の適用外である。
 
@@ -314,12 +327,19 @@ UI Automation の Provider を持たない。`UiaRaiseAutomationEvent` などの
 Narrator / NVDA が候補と選択の移動を読み上げるかは実機で確認する（Human Gate）。読み上げられない場合は、
 Provider を置くかどうかを改めて判断する。
 
+予測モード（§4.2）の行は `ITfCandidateListUIElement` に含めず、支援技術へも渡さない。UIElement に含めると、
+UI-less のアプリ（`docs/tsf-deep-integration-spec.md` §2）が読み入力中ずっと予測を候補一覧として描き、
+予測の行が選択や番号で選べるように見えてしまうためである。UI-less の環境でも予測モードは TIP が描き
+（同 §8）、候補モードはアプリが描く（`pbShow == FALSE`）。UIElement の内容と契約は予測モードの有無で変えない。
+
 ## 6. アニメーション
 
 ### 6.1 候補ウィンドウのフェードイン
 
 候補ウィンドウが非表示から表示に移るときだけ、root visual の不透明度を 0 から 1 へ 150ms で上げる。
-表示中の候補の更新や選択の移動では掛け直さない。曲線は cubic の ease-out
+予測モードと候補モードのどちらで現れるときも同じである。表示中の候補や予測の更新、選択の移動、
+表示中のモードの切り替えでは掛け直さない（Space の後は応答を待つ間に窓を隠すので、候補モードは
+非表示から現れ、フェードする）。曲線は cubic の ease-out
 （`1 - (1 - t/T)^3`、T = 0.15 秒）とし、`RenderingEngine::FadeIn` が次のように設定して commit する。
 
 ```cpp
@@ -362,10 +382,8 @@ v1.x で扱う。
 | フェードイン | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。`SPI_GETCLIENTAREAANIMATION` の結果を注入し、非表示から表示に移るときだけフェード（有効時）か即時の不透明度 1（無効時）を設定すること、表示中の再表示と選択の移動では設定しないこと、描画に失敗した表示では設定しないことを確かめる。150ms の見た目は実機で確認する |
 | 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる。初期化と描画の失敗を注入し、窓が表示されずクリックで候補が選ばれないこと、状態の変化で描き直して表示すること、初期化の再試行が 3 回で止まることを確かめる |
 
-実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト）は実機で確認する。
-
-CI では `windows-2022` ランナーで実行。アーティファクトとしてスクリーンショットを
-`bench/` で出力（Phase 6-C 完了時の見栄え確認用）。
+実描画の見た目（Dark / Light の切替、DPI 切替、ハイコントラスト、予測モードと候補モードの切り替え）は実機で確認する。
+CI はスクリーンショットを撮らない。
 
 ## 8. 参照
 
@@ -374,4 +392,4 @@ CI では `windows-2022` ランナーで実行。アーティファクトとし�
 - DWMWA_SYSTEMBACKDROP_TYPE: <https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type>
 - Mica の利用ガイド: <https://learn.microsoft.com/windows/apps/design/style/mica>
 - 既存実装：`tsf-tip/src/CandidateWindow.cpp`
-- PredictionWindow 仕様：`docs/legacy-parity-spec.md` §3
+- 予測モードの表示の時機・配置・操作：`docs/legacy-parity-spec.md` §3

@@ -1631,6 +1631,13 @@ class TextService final : public ITfTextInputProcessorEx,
   // window waits for its answer after Space.
   enum class WindowWaitKey { Hold, Drop, Pass };
   bool AwaitingCandidateWindow();
+  // DEV-1938 (legacy-parity-spec §3.1): from the moment the candidate window is
+  // decided on, through its wait, no prediction is shown.
+  bool CandidateWindowDecided() { return candidate_ui_.IsShowing() || AwaitingCandidateWindow(); }
+  void HidePredictionForCandidateWindow() noexcept;
+  // DEV-1938 (legacy-parity-spec §3.4): Tab and Shift+Tab during the wait are
+  // eaten and do nothing.
+  bool EatsTabWhileAwaitingCandidateWindow(ITfContext* context, WPARAM key, uint32_t modifiers);
   HRESULT OpenLocalCandidateWindow(ITfContext* context);
   WindowWaitKey ClassifyWindowWaitKey(WPARAM key, LPARAM key_data, uint32_t modifiers,
                                       OpenCloseKeyAction open_close);

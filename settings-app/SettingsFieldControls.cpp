@@ -85,9 +85,7 @@ double CurrentNumber(const controls::NumberBox& box) {
   const double value = box.Value();
   const auto input = InputBoxOf(box);
   if (!input || input.FocusState() == xaml::FocusState::Unfocused) return value;
-  const winrt::hstring text = input.Text();
-  if (std::isfinite(value) && text == box.NumberFormatter().FormatDouble(value)) return value;
-  return ParseTypedNumber(text).value_or(std::numeric_limits<double>::quiet_NaN());
+  return ParseTypedNumber(input.Text()).value_or(std::numeric_limits<double>::quiet_NaN());
 }
 
 // Names the switch a disabled control waits for, for screen readers.

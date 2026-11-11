@@ -767,7 +767,8 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
   }
   if (save_result.ok) {
     if (settings.openai_api_key_changed) {
-      loaded_api_key_hash_ = ApiKeyHash(winrt::to_hstring(settings.openai_api_key));
+      // From the box, as when loading: a UTF-8 round trip could change what the box holds.
+      loaded_api_key_hash_ = ApiKeyHash(OpenAiApiKeyPasswordBox().Password());
     }
     openai_api_key_cleared_ = false;
     RefreshNeologdLayerStatus();

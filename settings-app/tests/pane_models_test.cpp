@@ -88,6 +88,79 @@ TEST(ModelPaneModelTest, ComparesPathsIgnoringCaseAndSeparators) {
   EXPECT_FALSE(SameModelPath("", ""));
 }
 
+TEST(ModelPaneModelTest, AFileInBothListsIsChosenFromTheModelsListOnly) {
+  using azookey::settings::IsCatalogEntryListedInModels;
+  using azookey::settings::IsDefaultCatalogModel;
+  const std::vector<azookey::ipc::ListedModel> models = {Model("gguf", true, "")};
+  azookey::ipc::CatalogModelEntry entry;
+  entry.id = "zenz";
+  entry.is_default = true;
+  entry.state = "verified";
+  // Only case and separators differ from the listed path.
+  entry.path = "c:/Models/ZENZ.gguf";
+  EXPECT_TRUE(IsCatalogEntryListedInModels(entry, models));
+  EXPECT_TRUE(IsDefaultCatalogModel(models[0], {entry}));
+  // A file that is not there yet, or another file of the same name, stays a catalog row.
+  for (const char* state : {"missing", "mismatch"}) {
+    SCOPED_TRACE(state);
+    auto other = entry;
+    other.state = state;
+    EXPECT_FALSE(IsCatalogEntryListedInModels(other, models));
+    EXPECT_FALSE(IsDefaultCatalogModel(models[0], {other}));
+  }
+  auto elsewhere = entry;
+  elsewhere.path = "C:\\models\\zenzai\\other.gguf";
+  EXPECT_FALSE(IsCatalogEntryListedInModels(elsewhere, models));
+  EXPECT_FALSE(IsCatalogEntryListedInModels(entry, {}));
+  auto not_default = entry;
+  not_default.is_default = false;
+  EXPECT_FALSE(IsDefaultCatalogModel(models[0], {not_default}));
+}
+
+TEST(ModelPaneModelTest, ShowsTheChosenPathOrThatNoneIsChosen) {
+  using azookey::settings::SelectedModelDisplay;
+  EXPECT_EQ(SelectedModelDisplay("", L"none"), L"none");
+  EXPECT_EQ(SelectedModelDisplay("C:\\models\\zenz.gguf", L"none"), L"C:\\models\\zenz.gguf");
+  // UTF-8 bytes of a folder named "モデル", read as UTF-8 and not in the ANSI code page.
+  EXPECT_EQ(SelectedModelDisplay("C:\\\xE3\x83\xA2\xE3\x83\x87\xE3\x83\xAB\\a.gguf", L"none"),
+            L"C:\\モデル\\a.gguf");
+}
+
+TEST(ModelPaneModelTest, AFetchThatEndsAfterTheChoiceChangedKeepsTheChoice) {
+  // model-management-spec section 6.1: a fetch puts its file into "使うモデル" only when the user
+  // has not changed the choice since it started.
+  azookey::settings::ModelChoiceGeneration generation;
+  const auto untouched = generation.value();
+  EXPECT_TRUE(generation.FetchMayChoose(untouched));
+
+  const auto at_start = generation.value();
+  generation.Changed();  // Another model chosen, or the choice cleared, while the fetch ran.
+  EXPECT_FALSE(generation.FetchMayChoose(at_start));
+  // Choosing back the same file is still a change made meanwhile.
+  generation.Changed();
+  EXPECT_FALSE(generation.FetchMayChoose(at_start));
+  // A fetch started after those changes may choose its file.
+  EXPECT_TRUE(generation.FetchMayChoose(generation.value()));
+}
+
+TEST(ModelPaneModelTest, OnlyAnExistingAbsoluteGgufFileIsUsable) {
+  using azookey::settings::IsUsableModelFile;
+  const auto dir = std::filesystem::temp_directory_path() / "azookey_settings_usable_model";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir / "folder.gguf");
+  for (const char* name : {"model.gguf", "UPPER.GGUF", "model.bin"}) {
+    std::ofstream(dir / name, std::ios::binary) << "GGUF";
+  }
+  EXPECT_TRUE(IsUsableModelFile(dir / "model.gguf"));
+  EXPECT_TRUE(IsUsableModelFile(dir / "UPPER.GGUF"));
+  EXPECT_FALSE(IsUsableModelFile(dir / "model.bin"));
+  EXPECT_FALSE(IsUsableModelFile(dir / "missing.gguf"));
+  EXPECT_FALSE(IsUsableModelFile(dir / "folder.gguf"));
+  EXPECT_FALSE(IsUsableModelFile(std::filesystem::path("model.gguf")));
+  EXPECT_FALSE(IsUsableModelFile(std::filesystem::path()));
+  std::filesystem::remove_all(dir);
+}
+
 TEST(ModelPaneModelTest, FormatsByteSizes) {
   using azookey::settings::FormatByteSize;
   EXPECT_EQ(FormatByteSize(0), "0 B");

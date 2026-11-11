@@ -40,8 +40,6 @@
   <data name="BackendCpu.Content" xml:space="preserve"><value>CPU</value></data>
   <data name="CpuOnlyDistributionNote.Text" xml:space="preserve"><value>配布ビルドの推論は CPU だけで行います。</value></data>
   <data name="BackendDowngradeNote" xml:space="preserve"><value>現在の配布ビルドでは CPU 実行へ降格します。</value></data>
-  <data name="ModelPathTextBox.Header" xml:space="preserve"><value>モデルファイル</value></data>
-  <data name="ModelPathTextBox.PlaceholderText" xml:space="preserve"><value>C:\models\model.gguf（空欄ならモデル未選択）</value></data>
   <data name="OpenAiApiKeyPasswordBox.Header" xml:space="preserve"><value>OpenAI API キー</value></data>
   <data name="OpenAiApiKeyPasswordBox.PlaceholderText" xml:space="preserve"><value>API キーを入力</value></data>
   <data name="ClearOpenAiApiKeyButton.Content" xml:space="preserve"><value>API キーを削除</value></data>
@@ -86,7 +84,7 @@
   <data name="HostUpdateFailedMessage" xml:space="preserve"><value>設定は保存しましたが、起動中の変換エンジンへ反映できませんでした。</value></data>
   <data name="InvalidEntriesSkipped" xml:space="preserve"><value>未知または無効な設定値を既定値として表示します。保存時には無効な項目を除去します。</value></data>
   <data name="UnsupportedBackendPrefix" xml:space="preserve"><value>このバージョンの UI では選択できない有効値を保持しています: </value></data>
-  <data name="InvalidModelPath" xml:space="preserve"><value>モデルファイルには、実在する .gguf ファイルの絶対パスを指定してください。</value></data>
+  <data name="InvalidModelPath" xml:space="preserve"><value>「AI 変換」の「使うモデル」のファイルが見つからないか、.gguf のファイルではありません。一覧から選び直すか、「参照…」で選ぶか、「選択を外す」を押してください。</value></data>
   <data name="LaunchContextInfoBar.Title" xml:space="preserve"><value>起動コンテキスト</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>言語:</value></data>
   <data name="ProfileLabel.Text" xml:space="preserve"><value>プロファイル:</value></data>
@@ -344,7 +342,14 @@
   <data name="ModelsError_benchmark_failed" xml:space="preserve"><value>ベンチマークに失敗しました。</value></data>
   <data name="ModelsError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="Models_Title" xml:space="preserve"><value>モデル</value></data>
-  <data name="Models_Description" xml:space="preserve"><value>models フォルダにあるモデルと検証結果を表示します。モデルを選んで保存すると、次にロードするモデルが切り替わります。</value></data>
+  <data name="Models_SelectedHeading" xml:space="preserve"><value>使うモデル</value></data>
+  <data name="Models_SelectedNone" xml:space="preserve"><value>未選択（AI モデルを使わずに変換します）</value></data>
+  <data name="Models_BrowseButton" xml:space="preserve"><value>参照…</value></data>
+  <data name="Models_ClearButton" xml:space="preserve"><value>選択を外す</value></data>
+  <data name="Models_BrowseInvalidTitle" xml:space="preserve"><value>このファイルは使えません</value></data>
+  <data name="Models_BrowseInvalidMessage" xml:space="preserve"><value>「参照…」で選べるのは、この PC にある .gguf のファイルだけです。</value></data>
+  <data name="Models_Catalog_ListedAbove" xml:space="preserve"><value>取得済み（上の一覧から選べます）</value></data>
+  <data name="Models_Description" xml:space="preserve"><value>models フォルダにあるモデルと検証結果です。選んで保存すると、次にロードするモデルが切り替わります。</value></data>
   <data name="Models_RefreshButton" xml:space="preserve"><value>一覧を更新</value></data>
   <data name="Models_ProblemTitle" xml:space="preserve"><value>モデルの一覧または測定に失敗しました</value></data>
   <data name="Models_Empty" xml:space="preserve"><value>models フォルダにモデルが見つかりません。</value></data>
@@ -357,7 +362,7 @@
   <data name="Models_BenchmarkButton" xml:space="preserve"><value>ベンチマーク</value></data>
   <data name="Models_NotSelectable" xml:space="preserve"><value>有効な GGUF 形式のモデルだけ選べます。</value></data>
   <data name="Models_SelectedTitle" xml:space="preserve"><value>モデルを選びました</value></data>
-  <data name="Models_SelectedMessage" xml:space="preserve"><value>「モデルファイル」に入れました。保存すると反映されます。</value></data>
+  <data name="Models_SelectedMessage" xml:space="preserve"><value>「使うモデル」を変えました。保存すると反映されます。</value></data>
   <data name="Models_BenchmarkHeading" xml:space="preserve"><value>ベンチマーク結果</value></data>
   <data name="Models_BenchmarkNone" xml:space="preserve"><value>まだ測定していません。</value></data>
   <data name="Models_BenchmarkRunning" xml:space="preserve"><value>測定中です（最大 60 秒ほどかかります）…</value></data>
@@ -388,6 +393,7 @@
   <data name="Models_Catalog_CancelFailedTitle" xml:space="preserve"><value>取得を中止できませんでした</value></data>
   <data name="Models_Catalog_NotFetchableNote" xml:space="preserve"><value>このモデルには取得元がありません。手で models\zenzai に置いてください。</value></data>
   <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
+  <data name="Models_Catalog_FetchedChoiceKept" xml:space="preserve"><value>取得中に「使うモデル」が変わったので、選択はそのままにしました。取得したモデルは一覧から選べます。</value></data>
   <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
   <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。変換エンジンは取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
   <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で変換エンジンが再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>

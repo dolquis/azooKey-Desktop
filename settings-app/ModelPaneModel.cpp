@@ -126,6 +126,36 @@ bool CanStartCatalogFetch(const azookey::ipc::CatalogModelEntry& entry, bool fet
   return entry.fetchable && entry.state == "missing" && !fetching && !cancel_in_flight;
 }
 
+bool IsCatalogEntryListedInModels(const azookey::ipc::CatalogModelEntry& entry,
+                                  const std::vector<azookey::ipc::ListedModel>& models) {
+  if (entry.state != "verified") return false;
+  return std::any_of(models.begin(), models.end(),
+                     [&entry](const auto& model) { return SameModelPath(model.path, entry.path); });
+}
+
+bool IsDefaultCatalogModel(const azookey::ipc::ListedModel& model,
+                           const std::vector<azookey::ipc::CatalogModelEntry>& catalog) {
+  return std::any_of(catalog.begin(), catalog.end(), [&model](const auto& entry) {
+    return entry.is_default && entry.state == "verified" && SameModelPath(model.path, entry.path);
+  });
+}
+
+bool IsUsableModelFile(const std::filesystem::path& path) {
+  auto extension = path.extension().wstring();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+  std::error_code ec;
+  return path.is_absolute() && extension == L".gguf" && std::filesystem::is_regular_file(path, ec);
+}
+
+std::wstring SelectedModelDisplay(std::string_view utf8_path, std::wstring_view none_text) {
+  if (utf8_path.empty()) return std::wstring(none_text);
+  std::u8string text;
+  text.reserve(utf8_path.size());
+  for (const char ch : utf8_path) text.push_back(static_cast<char8_t>(ch));
+  return std::filesystem::path(text).wstring();
+}
+
 std::string CatalogEntryStateResource(std::string_view state) {
   if (state == "verified") return "Models_Catalog_State_verified";
   if (state == "mismatch") return "Models_Catalog_State_mismatch";

@@ -1151,6 +1151,31 @@ TEST(SettingsDocumentTest, BenchmarkHistoryIsShownAndSurvivesASave) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, ClearingTheModelWritesAnEmptySelectedPath) {
+  // sideload-packaging-spec section 3.7: an empty selectedPath is "no model chosen yet", the
+  // schema default; clearing the choice in the "AI 変換" pane saves it that way.
+  const auto dir = TestDir("azookey_settings_clear_model");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"model": {"enabled": true, "selectedPath": "C:/models/zenz.gguf"}})");
+
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_EQ(loaded.settings.model_selected_path, "C:/models/zenz.gguf");
+  auto edited = loaded.settings;
+  edited.model_selected_path.clear();
+  EXPECT_EQ(azookey::settings::ChangedSettingPaths(edited, loaded.settings),
+            (std::vector<std::string>{"model.selectedPath"}));
+
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& model = parsed->AsObject().at("model").AsObject();
+  ASSERT_TRUE(model.contains("selectedPath"));
+  EXPECT_EQ(model.at("selectedPath").AsString(), "");
+  EXPECT_TRUE(model.at("enabled").AsBool());
+  EXPECT_TRUE(azookey::settings::LoadSettingsDocument(path).settings.model_selected_path.empty());
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, CanonicalBenchmarkHistoryIsReadAndConcurrentAppendSurvivesSave) {
   const auto dir = TestDir("azookey_settings_canonical_benchmark_history");
   const auto path = dir / "settings.json";

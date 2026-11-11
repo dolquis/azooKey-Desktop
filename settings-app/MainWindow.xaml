@@ -166,10 +166,7 @@
                     <ToggleSwitch x:Name="ModelEnabledToggle"
                                   x:Uid="ModelEnabledToggle"
                                   AutomationProperties.AutomationId="ModelEnabledToggle" />
-                    <TextBox x:Name="ModelPathTextBox"
-                             x:Uid="ModelPathTextBox"
-                             AutomationProperties.AutomationId="ModelPathTextBox" />
-                    <!-- The model list stays beside the fields until DEV-1942 merges them. -->
+                    <!-- The model in use, its choice ("参照…", "選択を外す") and the model lists. -->
                     <StackPanel x:Name="ModelsPaneHost" Spacing="16" />
                     <StackPanel Spacing="4">
                         <TextBlock x:Uid="BackendPreferenceLabel" />

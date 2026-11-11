@@ -98,6 +98,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   std::shared_ptr<bool> alive_{std::make_shared<bool>(true)};
   std::shared_ptr<azookey::settings::ProfilesPane> profiles_pane_;
   std::shared_ptr<azookey::settings::ModelPane> model_pane_;
+  // model.selectedPath as chosen in the "AI 変換" pane, UTF-8; empty when none is chosen.
+  std::string model_selected_path_;
   std::shared_ptr<azookey::settings::LearningPane> learning_pane_;
   std::shared_ptr<azookey::settings::PersonaPane> persona_pane_;
   std::shared_ptr<azookey::settings::ProofreadPane> proofread_pane_;

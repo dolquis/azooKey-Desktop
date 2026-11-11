@@ -84,14 +84,28 @@ TEST(UpdateStatusModelTest, EverySentenceHasAString) {
   for (const auto kind : {UpdateCheckKind::None, UpdateCheckKind::UpdateAvailable,
                           UpdateCheckKind::UpToDate, UpdateCheckKind::Failed}) {
     status.kind = kind;
-    const auto resource = UpdateStatusResource(status, true, false, "stable");
+    const auto resource = UpdateStatusResource(status, true, false, "stable", "");
     EXPECT_TRUE(names.contains(resource)) << resource;
     // Turned off, or offline, the pane says so whatever an earlier check recorded.
-    EXPECT_EQ(UpdateStatusResource(status, false, false, "stable"), "UpdateStatus_Disabled");
-    EXPECT_EQ(UpdateStatusResource(status, true, true, "stable"), "UpdateStatus_Offline");
+    EXPECT_EQ(UpdateStatusResource(status, false, false, "stable", ""), "UpdateStatus_Disabled");
+    EXPECT_EQ(UpdateStatusResource(status, true, true, "stable", ""), "UpdateStatus_Offline");
     // A record of the other channel is not shown as the result for this one.
-    EXPECT_EQ(UpdateStatusResource(status, true, false, "beta"), "UpdateStatus_None");
+    EXPECT_EQ(UpdateStatusResource(status, true, false, "beta", ""), "UpdateStatus_None");
   }
   EXPECT_TRUE(names.contains("UpdateStatus_Disabled"));
   EXPECT_TRUE(names.contains("UpdateStatus_Offline"));
+}
+
+// DEV-1934: right after an update, the previous build's record is not shown for this one.
+TEST(UpdateStatusModelTest, ARecordOfAnotherProductVersionIsNotShown) {
+  auto status = ParseUpdateStatus(
+      R"({"version":1,"channel":"stable","result":"update_available","currentVersion":"1.0.0",)"
+      R"("latestVersion":"1.1.0"})");
+  ASSERT_EQ(status.kind, UpdateCheckKind::UpdateAvailable);
+  EXPECT_EQ(UpdateStatusResource(status, true, false, "stable", "1.0.0"),
+            "UpdateStatus_UpdateAvailable");
+  EXPECT_EQ(UpdateStatusResource(status, true, false, "stable", "1.1.0"), "UpdateStatus_None");
+  // The version could not be read: the record is shown as it is.
+  EXPECT_EQ(UpdateStatusResource(status, true, false, "stable", ""),
+            "UpdateStatus_UpdateAvailable");
 }

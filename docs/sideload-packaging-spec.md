@@ -1978,9 +1978,12 @@ wingetcreate update --urls `
 `inference-host/src/UpdateChecker.cpp`（`azookey::host::UpdateChecker`）が、常駐 Host の中で
 確認を担う。
 
-- `autoUpdate.enabled` が `true` で、`privacy.mode` が `offline` でないときだけ確認する。
-  設定の再読込で無効になると、実行中の確認を取り消す（ダウンローダの取り消しは受信の待ちの
-  間にも効く。`docs/model-management-spec.md` §3.1.2）。
+- `autoUpdate.enabled` が `true` で、`privacy.mode` が `offline` でも `secure` でもないときだけ
+  確認する（§6.2）。設定の再読込で無効になると、実行中の確認を取り消す（ダウンローダの
+  取り消しは受信の待ちの間にも効く。`docs/model-management-spec.md` §3.1.2）。
+- `settings.json` が読めない・不正な間も確認しない。不正な再読込は設定を適用しないが、Host が
+  publish するプライバシーの判定が secure に倒れる（`docs/privacy-and-secure-input-spec.md` §2 の
+  fail closed）ので、それを見て止める。
 - 確認は Host の起動時と、`checkIntervalHours` ごとに行う（8760 を超える値は 8760 として
   扱う）。Host を再起動しても、同じ `channel` と同じ製品のバージョンの前回の確認から
   `checkIntervalHours` が経つまでは確認しない。更新を入れた後の最初の起動では、すぐに確認して
@@ -2003,7 +2006,9 @@ wingetcreate update --urls `
 ```
 
 `result` は `update_available` / `up_to_date` / `failed` のいずれかである。設定アプリの
-「バージョン」はこのファイルを読んで表示し（§3.2）、IPC は使わない。Host は各確認の結果を
+「バージョン」はこのファイルを読んで表示し（§3.2）、IPC は使わない。版は `v` を付けて
+「v1.1.0」と表示する。記録の `channel` か `currentVersion` が設定アプリの設定と製品のバージョンに
+合わない記録は、結果として表示しない。Host は各確認の結果を
 RuntimeLog の `update_check` イベントに、固定の `reason`（`up_to_date` / `update_available` /
 `failed` / `cancelled` / `disabled`）だけで記録する。URL と応答本文は記録しない。
 
@@ -2023,7 +2028,9 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 送る情報は、接続元の IP アドレス（通信の性質上 GitHub に見える）と、User-Agent に入る製品の
 バージョンだけである。端末やインストールの識別子、設定値、利用状況、Cookie は送らない。確認の
 結果を外部へ送り返すこともなく、テレメトリにはならない。止め方は `autoUpdate.enabled` を
-`false` にする（既定）か、`privacy.mode` を `offline` にすることである。
+`false` にする（既定）か、`privacy.mode` を `offline` か `secure` にすることである。opt-in の
+うえでも、利用者が最も強い保護（`secure`）を選んだときは外部へ通信しない。`custom` の
+`externalAi` は AI バックエンドの可否であり、更新の確認とは連動させない。
 
 §1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
 既定で無効（opt-in）であり、利用者が `autoUpdate.enabled` をオンにすることを、起動時と周期の

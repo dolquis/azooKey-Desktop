@@ -22,8 +22,7 @@ namespace azookey::host {
 
 enum class UpdateCheckStatus { Disabled, UpToDate, UpdateAvailable, Failed, Cancelled };
 
-// MAJOR.MINOR.PATCH with an optional pre-release (SemVer 2.0.0 precedence). Build metadata
-// after '+' is ignored.
+// MAJOR.MINOR.PATCH with an optional pre-release (SemVer 2.0.0 precedence).
 struct ReleaseVersion {
   uint64_t major{0};
   uint64_t minor{0};
@@ -31,7 +30,8 @@ struct ReleaseVersion {
   std::vector<std::string> prerelease;
 };
 
-// Accepts an optional leading 'v' (release tags are v*). nullopt for anything else.
+// Accepts an optional leading 'v' (release tags are v*). nullopt for anything else, including
+// build metadata ('+'), which would otherwise be shown without being compared.
 std::optional<ReleaseVersion> ParseReleaseVersion(std::string_view text);
 // Negative, zero or positive as a has lower, equal or higher precedence than b.
 int CompareReleaseVersions(const ReleaseVersion& a, const ReleaseVersion& b);
@@ -64,6 +64,10 @@ struct UpdateCheckDependencies {
   std::function<uint64_t()> now_epoch;
   // Monotonic clock for the wait between checks. Overrides must be thread-safe.
   std::function<std::chrono::steady_clock::time_point()> steady_now;
+  // False while the privacy setting forbids the check whatever the config says, for example
+  // after a reload found settings.json invalid (fail closed; no config is applied then). Read
+  // on the worker and while a check waits; must be thread-safe. Empty allows the check.
+  std::function<bool()> network_allowed;
   // Invoked on the worker with the status only (no URL or response text).
   std::function<void(UpdateCheckStatus)> report;
 };
@@ -101,6 +105,9 @@ class UpdateChecker {
   std::string channel_{"stable"};
   uint32_t interval_hours_{24};
   std::atomic<uint64_t> generation_{0};
+  // Counts UpdateSettings calls, so a worker held back by network_allowed looks again on the
+  // next reload even when it leaves the settings unchanged.
+  uint64_t settings_calls_{0};
   std::atomic<bool> stopped_{false};
   std::thread worker_;
 };

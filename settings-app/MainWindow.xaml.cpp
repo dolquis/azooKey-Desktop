@@ -13,6 +13,8 @@
 
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
+
+#pragma comment(lib, "version.lib")
 #endif
 
 #include <microsoft.ui.xaml.window.h>
@@ -25,6 +27,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "azookey/core/CrashReporting.h"
 
@@ -64,6 +67,32 @@ winrt::hstring StatusText(
       break;
   }
   return {};
+}
+
+}  // namespace
+
+namespace {
+
+// This executable's product version as MAJOR.MINOR.PATCH (the VERSIONINFO the build writes from
+// AZOOKEY_PRODUCT_VERSION, the value the Host records). Empty when it cannot be read.
+std::string ProductVersion() {
+  std::array<wchar_t, MAX_PATH> path{};
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  if (length == 0 || length >= path.size()) return {};
+  DWORD ignored = 0;
+  const DWORD size = GetFileVersionInfoSizeW(path.data(), &ignored);
+  if (size == 0) return {};
+  std::vector<BYTE> data(size);
+  if (!GetFileVersionInfoW(path.data(), 0, size, data.data())) return {};
+  VS_FIXEDFILEINFO* info = nullptr;
+  UINT info_size = 0;
+  if (!VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &info_size) || !info ||
+      info_size < sizeof(VS_FIXEDFILEINFO)) {
+    return {};
+  }
+  return std::to_string(HIWORD(info->dwProductVersionMS)) + "." +
+         std::to_string(LOWORD(info->dwProductVersionMS)) + "." +
+         std::to_string(HIWORD(info->dwProductVersionLS));
 }
 
 }  // namespace
@@ -174,7 +203,6 @@ void MainWindow::ShowPane(std::wstring_view tag) {
 }
 
 void MainWindow::RefreshUpdateStatus() {
-  using azookey::settings::UpdateCheckKind;
   const auto* enabled_field = azookey::settings::FindSettingField("autoUpdate.enabled");
   const bool enabled = enabled_field && std::get<bool>(azookey::settings::SettingValueOrDefault(
                                             *enabled_field, saved_settings_.values));
@@ -183,16 +211,19 @@ void MainWindow::RefreshUpdateStatus() {
                                   ? std::get<std::string>(azookey::settings::SettingValueOrDefault(
                                         *channel_field, saved_settings_.values))
                                   : std::string("stable");
-  // The Host does not check under privacy.mode=offline.
+  // The Host does not check under privacy.mode offline or secure.
   const auto* mode_field = azookey::settings::FindSettingField("privacy.mode");
-  const bool offline = mode_field && std::get<std::string>(azookey::settings::SettingValueOrDefault(
-                                         *mode_field, saved_settings_.values)) == "offline";
+  const auto mode = mode_field ? std::get<std::string>(azookey::settings::SettingValueOrDefault(
+                                     *mode_field, saved_settings_.values))
+                               : std::string("normal");
+  const bool offline = mode == "offline" || mode == "secure";
   const auto status = settings_path_ ? azookey::settings::ReadUpdateStatus(
                                            settings_path_->parent_path() / L"update-status.json")
                                      : azookey::settings::UpdateStatusView{};
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-  std::wstring text(resources.GetString(winrt::to_hstring(
-      azookey::settings::UpdateStatusResource(status, enabled, offline, channel))));
+  const auto resource =
+      azookey::settings::UpdateStatusResource(status, enabled, offline, channel, ProductVersion());
+  std::wstring text(resources.GetString(winrt::to_hstring(resource)));
   const auto replace = [&text](std::wstring_view name, std::wstring_view value) {
     if (const auto at = text.find(name); at != std::wstring::npos) {
       text.replace(at, name.size(), value);
@@ -220,8 +251,7 @@ void MainWindow::RefreshUpdateStatus() {
   UpdateStatusText().Text(text);
 
   // Only a release page of the repository is offered (UpdateStatusModel validates the URL).
-  const bool link = enabled && !offline && status.channel == channel &&
-                    status.kind == UpdateCheckKind::UpdateAvailable && !status.release_url.empty();
+  const bool link = resource == "UpdateStatus_UpdateAvailable" && !status.release_url.empty();
   if (link) {
     OpenReleasePageButton().NavigateUri(
         Windows::Foundation::Uri(winrt::to_hstring(status.release_url)));

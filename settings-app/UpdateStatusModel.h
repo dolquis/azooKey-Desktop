@@ -36,9 +36,11 @@ UpdateStatusView ParseUpdateStatus(std::string_view json);
 UpdateStatusView ReadUpdateStatus(const std::filesystem::path& path);
 
 // The resource name of the pane's sentence: "UpdateStatus_<kind>"; "UpdateStatus_Disabled"
-// while autoUpdate.enabled is false, "UpdateStatus_Offline" under privacy.mode=offline (the
-// Host does not check), and "UpdateStatus_None" for a record of another channel.
+// while autoUpdate.enabled is false, "UpdateStatus_Offline" under privacy.mode offline or secure
+// (the Host does not check), and "UpdateStatus_None" for a record of another channel or of
+// another product version than `product_version` (the record of the build before an update).
+// An empty `product_version` is not compared.
 std::string UpdateStatusResource(const UpdateStatusView& status, bool enabled, bool offline,
-                                 std::string_view channel);
+                                 std::string_view channel, std::string_view product_version);
 
 }  // namespace azookey::settings

@@ -73,11 +73,14 @@ UpdateStatusView ReadUpdateStatus(const std::filesystem::path& path) {
 }
 
 std::string UpdateStatusResource(const UpdateStatusView& status, bool enabled, bool offline,
-                                 std::string_view channel) {
+                                 std::string_view channel, std::string_view product_version) {
   if (!enabled) return "UpdateStatus_Disabled";
   if (offline) return "UpdateStatus_Offline";
-  // A record for the other channel says nothing about the one now chosen.
+  // A record for the other channel, or made by another build, says nothing about this one.
   if (status.channel != channel) return "UpdateStatus_None";
+  if (!product_version.empty() && status.current_version != product_version) {
+    return "UpdateStatus_None";
+  }
   switch (status.kind) {
     case UpdateCheckKind::UpdateAvailable:
       return "UpdateStatus_UpdateAvailable";

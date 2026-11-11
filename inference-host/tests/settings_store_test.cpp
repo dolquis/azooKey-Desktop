@@ -242,6 +242,43 @@ TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisab
   EXPECT_EQ(invalid.settings.log_level, "debug");
 }
 
+// DEV-1934: the update check reaches the network only when opted in under a mode that allows
+// it. An invalid reload keeps the last-good opt-in but publishes secure (fail closed), which
+// the Host's UpdateChecker reads through LockPrivacyPolicy.
+TEST(SettingsStoreTest, UpdateCheckIsOptInAndStopsUnderOfflineSecureOrInvalidSettings) {
+  ScopedTempDirectory temp("azookey_settings_update_check");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  const auto enabled_for = [&](const char* text) {
+    WriteText(path, text);
+    const auto result = store.Reload();
+    EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded) << text;
+    return azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings)
+        .auto_update_enabled;
+  };
+  EXPECT_FALSE(azookey::host::ApplyRuntimeSettingsToEngineConfig({}, store.Load().settings)
+                   .auto_update_enabled);
+  EXPECT_FALSE(enabled_for(R"({})"));
+  EXPECT_FALSE(enabled_for(R"({"autoUpdate":{"enabled":false}})"));
+  EXPECT_TRUE(enabled_for(R"({"autoUpdate":{"enabled":true}})"));
+  EXPECT_TRUE(enabled_for(R"({"autoUpdate":{"enabled":true},"privacy":{"mode":"normal"}})"));
+  EXPECT_TRUE(enabled_for(R"({"autoUpdate":{"enabled":true},"privacy":{"mode":"private"}})"));
+  EXPECT_FALSE(enabled_for(R"({"autoUpdate":{"enabled":true},"privacy":{"mode":"offline"}})"));
+  EXPECT_FALSE(enabled_for(R"({"autoUpdate":{"enabled":true},"privacy":{"mode":"secure"}})"));
+  // custom's externalAi is about the AI backend and does not decide the update check.
+  EXPECT_TRUE(enabled_for(
+      R"({"autoUpdate":{"enabled":true},"privacy":{"mode":"custom","custom":{"externalAi":false}}})"));
+
+  EXPECT_TRUE(enabled_for(R"({"autoUpdate":{"enabled":true}})"));
+  EXPECT_FALSE(store.LockPrivacyPolicy().privacy_mode_secure);
+  WriteText(path, "{");
+  const auto invalid = store.Reload();
+  EXPECT_EQ(invalid.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_TRUE(store.LockPrivacyPolicy().privacy_mode_secure);
+  EXPECT_FALSE(
+      azookey::host::ApplyRuntimeSettingsToEngineConfig({}, invalid.settings).auto_update_enabled);
+}
+
 TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
   ScopedTempDirectory temp("azookey_settings_ai_privacy");
   const auto& dir = temp.path();

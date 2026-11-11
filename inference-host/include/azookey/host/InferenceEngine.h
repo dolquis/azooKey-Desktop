@@ -165,7 +165,7 @@ struct EngineConfig {
   uint32_t auto_word_min_count{3};
   // M32 update check; docs/sideload-packaging-spec.md section 6. Read by the Host's
   // UpdateChecker from the startup config and from on_config_applied; the engine itself does
-  // not use them. auto_update_enabled is already false under privacy.mode=offline.
+  // not use them. auto_update_enabled is already false under privacy.mode=offline or secure.
   bool auto_update_enabled{false};
   std::string auto_update_channel{"stable"};
   uint32_t auto_update_check_interval_hours{24};

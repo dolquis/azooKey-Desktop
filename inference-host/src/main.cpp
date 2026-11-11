@@ -1020,6 +1020,11 @@ int main(int argc, char** argv) {
   update_options.current_version = AZOOKEY_PRODUCT_VERSION_STRING;
   update_options.status_path = user_paths->settings_path.parent_path() / "update-status.json";
   azookey::host::UpdateCheckDependencies update_dependencies;
+  // An invalid reload applies no config, so the checker also asks the published privacy policy:
+  // that turns secure (fail closed) for an invalid or unreadable settings.json.
+  update_dependencies.network_allowed = [&settings_store] {
+    return !settings_store.LockPrivacyPolicy().privacy_mode_secure;
+  };
   update_dependencies.report = [&runtime_log](azookey::host::UpdateCheckStatus status) {
     using azookey::host::UpdateCheckStatus;
     const char* result = "failed";

@@ -99,9 +99,7 @@ std::string_view ResultName(UpdateCheckStatus status) {
 std::optional<ReleaseVersion> ParseReleaseVersion(std::string_view text) {
   if (text.size() > kMaxVersionText) return std::nullopt;
   if (text.starts_with('v')) text.remove_prefix(1);
-  if (const auto plus = text.find('+'); plus != std::string_view::npos) {
-    text = text.substr(0, plus);
-  }
+  if (text.find('+') != std::string_view::npos) return std::nullopt;
   std::string_view prerelease;
   if (const auto dash = text.find('-'); dash != std::string_view::npos) {
     prerelease = text.substr(dash + 1);
@@ -201,6 +199,7 @@ void UpdateChecker::UpdateSettings(bool enabled, std::string channel, uint32_t i
     interval_hours_ = interval_hours;
     ++generation_;
   }
+  ++settings_calls_;
   wake_.notify_all();
 }
 
@@ -248,6 +247,7 @@ void UpdateChecker::Run() {
     const auto generation = generation_.load();
     const auto interval = std::chrono::hours(interval_hours_);
     const auto channel = channel_;
+    const auto settings_calls = settings_calls_;
     lock.unlock();
 
     // The next check is one interval after the last one for this channel: the attempt made by
@@ -288,6 +288,11 @@ void UpdateChecker::Run() {
       }
     }
     lock.lock();
+    if (result == UpdateCheckStatus::Disabled) {
+      // Held back by network_allowed (or disabled meanwhile): wait for the next reload, and
+      // look again after an interval at the latest, rather than spinning.
+      wake_.wait_for(lock, interval, [&] { return stopped_ || settings_calls_ != settings_calls; });
+    }
   }
 }
 
@@ -311,7 +316,13 @@ UpdateCheckStatus UpdateChecker::CheckOnceImpl() {
     generation = generation_.load();
     channel = channel_;
   }
-  const auto cancelled = [this, generation] { return stopped_ || generation_ != generation; };
+  const auto allowed = [this] {
+    return !dependencies_.network_allowed || dependencies_.network_allowed();
+  };
+  if (!allowed()) return UpdateCheckStatus::Disabled;
+  const auto cancelled = [this, generation, allowed] {
+    return stopped_ || generation_ != generation || !allowed();
+  };
 
   const auto finish = [&](UpdateCheckStatus status,
                           const std::optional<AvailableRelease>& release) {

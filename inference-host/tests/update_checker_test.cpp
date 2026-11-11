@@ -126,6 +126,8 @@ struct Fixture {
   FakeReleases releases;
   FakeSteadyClock clock;
   std::filesystem::path status_path = temp.path() / "update-status.json";
+  // The published privacy policy as main.cpp passes it (false: secure or invalid settings).
+  std::atomic<bool> network_allowed{true};
 
   UpdateChecker Make(std::string current_version = "1.0.0") {
     UpdateCheckerOptions options;
@@ -139,6 +141,7 @@ struct Fixture {
     };
     dependencies.now_epoch = [] { return kNow; };
     dependencies.steady_now = [this] { return clock.Now(); };
+    dependencies.network_allowed = [this] { return network_allowed.load(); };
     return UpdateChecker(std::move(options), std::move(dependencies));
   }
 };
@@ -149,12 +152,14 @@ TEST(UpdateCheckerVersionTest, ParsesTagsWithAndWithoutThePrefix) {
   EXPECT_EQ(plain->major, 1u);
   EXPECT_EQ(plain->minor, 2u);
   EXPECT_EQ(plain->patch, 3u);
-  const auto tagged = ParseReleaseVersion("v10.0.1-beta.2+build.5");
+  const auto tagged = ParseReleaseVersion("v10.0.1-beta.2");
   ASSERT_TRUE(tagged);
   EXPECT_EQ(tagged->major, 10u);
   EXPECT_EQ(tagged->prerelease, (std::vector<std::string>{"beta", "2"}));
   for (const char* invalid : {"", "v", "1.2", "1.2.3.4", "01.2.3", "1.2.-3", "1.2.3-", "1.2.3-a..b",
-                              "1.2.3-01", "V1.2.3", "1.2.3 ", "nightly", "1.2.x"}) {
+                              "1.2.3-01", "V1.2.3", "1.2.3 ", "nightly", "1.2.x",
+                              // Build metadata would be shown without being compared.
+                              "1.2.3+build.5", "v1.2.3-beta.1+sha"}) {
     EXPECT_FALSE(ParseReleaseVersion(invalid)) << invalid;
   }
 }
@@ -172,7 +177,7 @@ TEST(UpdateCheckerVersionTest, FollowsSemanticVersionPrecedence) {
     EXPECT_LT(CompareReleaseVersions(*lower, *higher), 0) << ordered[i] << " < " << ordered[i + 1];
     EXPECT_GT(CompareReleaseVersions(*higher, *lower), 0);
   }
-  EXPECT_EQ(CompareReleaseVersions(*ParseReleaseVersion("v1.0.0+a"), *ParseReleaseVersion("1.0.0")),
+  EXPECT_EQ(CompareReleaseVersions(*ParseReleaseVersion("v1.0.0"), *ParseReleaseVersion("1.0.0")),
             0);
 }
 
@@ -307,6 +312,78 @@ TEST(UpdateCheckerTest, SettingsChangeDuringACheckCancelsItWithoutWritingStatus)
   ASSERT_EQ(f.releases.count(), 1u);
   EXPECT_TRUE(f.releases.requests.front().cancelled());
   EXPECT_FALSE(std::filesystem::exists(f.status_path));
+}
+
+TEST(UpdateCheckerTest, APrivacyPolicyThatForbidsTheNetworkHoldsTheCheckBack) {
+  // An invalid settings.json applies no config, so the opt-in stays on; the published policy
+
+  // (secure, fail closed) still keeps the check off the network.
+
+  Fixture f;
+
+  f.releases.answer.body = Release("v2.0.0");
+
+  f.network_allowed = false;
+
+  auto checker = f.Make();
+
+  checker.UpdateSettings(true, "stable", 24);
+
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::Disabled);
+
+  EXPECT_EQ(f.releases.count(), 0u);
+
+  EXPECT_FALSE(std::filesystem::exists(f.status_path));
+
+  // A policy that turns secure during a check cancels it without a record.
+
+  f.network_allowed = true;
+
+  f.releases.during_fetch = [&] { f.network_allowed = false; };
+
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::Cancelled);
+
+  EXPECT_EQ(f.releases.count(), 1u);
+
+  EXPECT_FALSE(std::filesystem::exists(f.status_path));
+}
+
+TEST(UpdateCheckerWorkerTest, AHeldBackWorkerWaitsForTheNextReloadWithoutSpinning) {
+  Fixture f;
+
+  f.releases.answer.body = Release("v1.0.0");
+
+  f.network_allowed = false;
+
+  auto checker = f.Make();
+
+  checker.UpdateSettings(true, "stable", 24);
+
+  checker.Start();
+
+  // Clock reads: the due time and its remaining wait; then the worker finds the check held
+
+  // back and waits for a reload. A spinning worker would keep reading the clock.
+
+  ASSERT_TRUE(f.clock.WaitForReads(0, 2));
+
+  const auto reads = f.clock.reads.load();
+
+  std::this_thread::sleep_for(50ms);
+
+  EXPECT_EQ(f.clock.reads.load(), reads);
+
+  EXPECT_EQ(f.releases.count(), 0u);
+
+  // A valid reload that leaves the settings as they were lets it check.
+
+  f.network_allowed = true;
+
+  checker.UpdateSettings(true, "stable", 24);
+
+  EXPECT_TRUE(f.releases.WaitForCount(1));
+
+  checker.Stop();
 }
 
 TEST(UpdateCheckerWorkerTest, ChecksAtStartWhenNothingIsRecorded) {

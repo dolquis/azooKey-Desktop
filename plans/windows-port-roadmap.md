@@ -1022,8 +1022,11 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   `.part`→検証→rename → probe-load → `selectedPath` コミット）、設定アプリ UI。
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
-  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSI 適用（`msiexec /i /qn /norestart`、
-    要再起動時は通知。spec §6.3）
+  - 更新の確認（opt-in。`autoUpdate.enabled` の既定は `false`）: 有効にしたとき、起動時と
+    `checkIntervalHours` の周期で新版を検出し、設定アプリの「バージョン」に表示する。`offline` と
+    secure では確認しない（spec §6.1 / §6.2）
+  - MSI の適用（別の受入条件）: 見つけた版の MSI をダウンロード・SHA256 検証し、ユーザー承認で
+    適用する（`msiexec /i /qn /norestart`、要再起動時は通知。spec §6.3）
   - **DEV-202 で auto-DL が承認されているとき**（上流 HF から、または著者確認後の
     GitHub 再ホストから。ピンは既定の catalog として常に Host に埋め込まれる）: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ

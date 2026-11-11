@@ -27,6 +27,24 @@ void LogStage(std::string_view stage, std::string_view result, HRESULT hr = S_OK
   }
 }
 
+// The range's extent from the active view, as the composition path reads it.
+// Anything but S_OK with a non-empty rect, TS_E_NOLAYOUT included, is no extent.
+ReconversionTextExtent ReadTextExtent(ITfContext* context, ITfRange* range, TfEditCookie cookie) {
+  ReconversionTextExtent extent;
+  Microsoft::WRL::ComPtr<ITfContextView> view;
+  if (FAILED(context->GetActiveView(&view)) || !view) return extent;
+  RECT rect{};
+  BOOL clipped = FALSE;
+  if (view->GetTextExt(cookie, range, &rect, &clipped) != S_OK || rect.right <= rect.left ||
+      rect.bottom <= rect.top)
+    return extent;
+  extent.valid = true;
+  extent.rect = rect;
+  HWND window = nullptr;
+  if (SUCCEEDED(view->GetWnd(&window))) extent.window = window;
+  return extent;
+}
+
 template <typename Interface>
 class RefCounted : public Interface {
  public:
@@ -516,19 +534,23 @@ HRESULT ReconversionFunction::RequestReconversion(ITfRange* range, ReconversionL
     auto ran = std::make_shared<bool>(false);
     Microsoft::WRL::ComPtr<ReconversionFunction> self(this);
     Microsoft::WRL::ComPtr<ITfRange> target(range);
-    auto* edit = new (std::nothrow)
-        FunctionEditSession([self, target, ran, done = std::move(done)](TfEditCookie cookie) {
+    auto* edit = new (std::nothrow) FunctionEditSession(
+        [self, context, target, ran, done = std::move(done)](TfEditCookie cookie) {
           *ran = true;
           std::wstring surface;
           ITfCandidateList* list = nullptr;
+          ReconversionTextExtent extent;
           HRESULT list_hr = ReadSurface(target.Get(), cookie, surface);
           if (FAILED(list_hr)) {
             LogStage("request_reconversion", "read_failed", list_hr);
           } else {
             list_hr = self->BuildCandidateList(target.Get(), std::move(surface), &list,
                                                "request_reconversion");
+            // DEV-1937: the candidate window anchors on the range, not the caret
+            // or the cursor, which a context menu leaves on its item.
+            if (SUCCEEDED(list_hr)) extent = ReadTextExtent(context.Get(), target.Get(), cookie);
           }
-          done(list_hr, list);
+          done(list_hr, list, extent);
           if (list) list->Release();
           return S_OK;
         });

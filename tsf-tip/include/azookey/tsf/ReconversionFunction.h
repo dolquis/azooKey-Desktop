@@ -15,9 +15,20 @@ namespace azookey::tsf {
 using ReconversionCandidateProvider = std::function<HRESULT(
     ITfRange* range, const std::wstring& surface, std::vector<std::wstring>& candidates)>;
 
-// Receives the list RequestReconversion built, or why there is none. `list` is
-// borrowed: the receiver AddRefs it to keep it.
-using ReconversionListCallback = std::function<void(HRESULT hr, ITfCandidateList* list)>;
+// Where the reconverted range lies on screen, read in the same session as the
+// list. `valid` is false when the active view gave no extent (a failure, an
+// empty rect or TS_E_NOLAYOUT); `rect` is then unset. `window` is the view's
+// window for the physical-point conversion, or null.
+struct ReconversionTextExtent {
+  bool valid{false};
+  RECT rect{};
+  HWND window{nullptr};
+};
+
+// Receives the list RequestReconversion built, or why there is none, with the
+// range's extent. `list` is borrowed: the receiver AddRefs it to keep it.
+using ReconversionListCallback =
+    std::function<void(HRESULT hr, ITfCandidateList* list, const ReconversionTextExtent& extent)>;
 
 // Receives the outcome of a RequestCandidateReplacement session, inside it:
 // further reads use `cookie` rather than request a nested lock.

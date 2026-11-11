@@ -8,79 +8,79 @@
                     IsSettingsVisible="False"
                     SelectionChanged="SettingsNavigationView_SelectionChanged"
                     AutomationProperties.AutomationId="SettingsNavigationView">
+        <!-- Tags are the pane names the pane launch option takes (sideload-packaging-spec 3.2). -->
         <NavigationView.MenuItems>
-            <NavigationViewItem x:Name="GeneralNavigationItem"
-                                x:Uid="GeneralNavigationItem"
-                                Tag="General"
-                                AutomationProperties.AutomationId="GeneralNavigationItem">
-                <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
+            <NavigationViewItemHeader x:Uid="SettingsGroupHeader" />
             <NavigationViewItem x:Name="InputNavigationItem"
                                 x:Uid="InputNavigationItem"
-                                Tag="Input"
+                                Tag="input"
                                 AutomationProperties.AutomationId="InputNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Keyboard" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem x:Name="CandidatesNavigationItem"
+                                x:Uid="CandidatesNavigationItem"
+                                Tag="candidates"
+                                AutomationProperties.AutomationId="CandidatesNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="List" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem x:Name="DictionaryNavigationItem"
                                 x:Uid="DictionaryNavigationItem"
-                                Tag="Dictionary"
+                                Tag="dictionary"
                                 AutomationProperties.AutomationId="DictionaryNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem x:Name="AiConversionNavigationItem"
+                                x:Uid="AiConversionNavigationItem"
+                                Tag="ai-conversion"
+                                AutomationProperties.AutomationId="AiConversionNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Calculator" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem x:Name="AiNavigationItem"
                                 x:Uid="AiNavigationItem"
-                                Tag="Ai"
+                                Tag="ai-service"
                                 AutomationProperties.AutomationId="AiNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Message" /></NavigationViewItem.Icon>
             </NavigationViewItem>
             <NavigationViewItem x:Name="PrivacyNavigationItem"
                                 x:Uid="PrivacyNavigationItem"
-                                Tag="Privacy"
+                                Tag="privacy"
                                 AutomationProperties.AutomationId="PrivacyNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="ProtectedDocument" /></NavigationViewItem.Icon>
             </NavigationViewItem>
             <NavigationViewItem x:Name="ProfilesNavigationItem"
                                 x:Uid="ProfilesNavigationItem"
-                                Tag="Profiles"
+                                Tag="profiles"
                                 AutomationProperties.AutomationId="ProfilesNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="AllApps" /></NavigationViewItem.Icon>
             </NavigationViewItem>
-            <NavigationViewItem x:Name="ModelsNavigationItem"
-                                x:Uid="ModelsNavigationItem"
-                                Tag="Models"
-                                AutomationProperties.AutomationId="ModelsNavigationItem">
-                <NavigationViewItem.Icon><SymbolIcon Symbol="Calculator" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem x:Name="LearningNavigationItem"
-                                x:Uid="LearningNavigationItem"
-                                Tag="Learning"
-                                AutomationProperties.AutomationId="LearningNavigationItem">
-                <NavigationViewItem.Icon><SymbolIcon Symbol="Edit" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem x:Name="PersonaNavigationItem"
-                                x:Uid="PersonaNavigationItem"
-                                Tag="Persona"
-                                AutomationProperties.AutomationId="PersonaNavigationItem">
-                <NavigationViewItem.Icon><SymbolIcon Symbol="Contact" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem x:Name="ProofreadNavigationItem"
-                                x:Uid="ProofreadNavigationItem"
-                                Tag="Proofread"
-                                AutomationProperties.AutomationId="ProofreadNavigationItem">
-                <NavigationViewItem.Icon><SymbolIcon Symbol="Accept" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
             <NavigationViewItem x:Name="AdvancedNavigationItem"
                                 x:Uid="AdvancedNavigationItem"
-                                Tag="Advanced"
+                                Tag="advanced"
                                 AutomationProperties.AutomationId="AdvancedNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
             </NavigationViewItem>
-            <NavigationViewItem x:Uid="VersionNavigationItem"
-                                Tag="Version"
+            <NavigationViewItemHeader x:Uid="DataToolsGroupHeader" />
+            <NavigationViewItem x:Name="LearningNavigationItem"
+                                x:Uid="LearningNavigationItem"
+                                Tag="learning"
+                                AutomationProperties.AutomationId="LearningNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Edit" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Name="ProofreadNavigationItem"
+                                x:Uid="ProofreadNavigationItem"
+                                Tag="proofread"
+                                AutomationProperties.AutomationId="ProofreadNavigationItem">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Accept" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <NavigationView.FooterMenuItems>
+            <NavigationViewItem x:Name="VersionNavigationItem"
+                                x:Uid="VersionNavigationItem"
+                                Tag="version"
                                 AutomationProperties.AutomationId="VersionNavigationItem">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Help" /></NavigationViewItem.Icon>
             </NavigationViewItem>
-        </NavigationView.MenuItems>
+        </NavigationView.FooterMenuItems>
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
@@ -98,35 +98,16 @@
                          IsClosable="True"
                          AutomationProperties.AutomationId="SettingsStatusInfoBar" />
 
-                <StackPanel x:Name="GeneralPane" Spacing="16">
-                    <TextBlock x:Uid="GeneralSectionTitle"
-                               Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <ToggleSwitch x:Name="ModelEnabledToggle"
-                                  x:Uid="ModelEnabledToggle"
-                                  AutomationProperties.AutomationId="ModelEnabledToggle" />
-                    <TextBox x:Name="ModelPathTextBox"
-                             x:Uid="ModelPathTextBox"
-                             AutomationProperties.AutomationId="ModelPathTextBox" />
-                    <InfoBar x:Name="SafeModeInfoBar"
-                             x:Uid="SafeModeInfoBar"
-                             IsOpen="False"
-                             IsClosable="False"
-                             Severity="Warning"
-                             AutomationProperties.AutomationId="SafeModeInfoBar">
-                        <InfoBar.ActionButton>
-                            <Button x:Name="ClearSafeModeButton"
-                                    x:Uid="ClearSafeModeButton"
-                                    Click="ClearSafeModeButton_Click"
-                                    AutomationProperties.AutomationId="ClearSafeModeButton" />
-                        </InfoBar.ActionButton>
-                    </InfoBar>
-                    <StackPanel x:Name="GeneralFieldsPanel" Spacing="16" />
-                </StackPanel>
-
-                <StackPanel x:Name="InputPane" Spacing="16" Visibility="Collapsed">
+                <StackPanel x:Name="InputPane" Spacing="16">
                     <TextBlock x:Uid="InputSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
                     <StackPanel x:Name="InputFieldsPanel" Spacing="16" />
+                </StackPanel>
+
+                <StackPanel x:Name="CandidatesPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="CandidatesSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel x:Name="CandidatesFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="DictionaryPane" Spacing="16" Visibility="Collapsed">
@@ -178,6 +159,36 @@
                     <StackPanel x:Name="DictionaryFieldsPanel" Spacing="16" />
                 </StackPanel>
 
+                <StackPanel x:Name="AiConversionPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="AiConversionSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ToggleSwitch x:Name="ModelEnabledToggle"
+                                  x:Uid="ModelEnabledToggle"
+                                  AutomationProperties.AutomationId="ModelEnabledToggle" />
+                    <TextBox x:Name="ModelPathTextBox"
+                             x:Uid="ModelPathTextBox"
+                             AutomationProperties.AutomationId="ModelPathTextBox" />
+                    <!-- The model list stays beside the fields until DEV-1942 merges them. -->
+                    <StackPanel x:Name="ModelsPaneHost" Spacing="16" />
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Uid="BackendPreferenceLabel" />
+                        <ComboBox x:Name="BackendPreferenceCombo"
+                                  HorizontalAlignment="Stretch"
+                                  AutomationProperties.AutomationId="BackendPreferenceCombo">
+                            <ComboBoxItem x:Uid="BackendAuto" />
+                            <ComboBoxItem x:Uid="BackendCpu" />
+                        </ComboBox>
+                        <TextBlock x:Uid="CpuOnlyDistributionNote"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="UnsupportedBackendText"
+                                   Visibility="Collapsed"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <StackPanel x:Name="AiConversionFieldsPanel" Spacing="16" />
+                </StackPanel>
+
                 <StackPanel x:Name="AiPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AiSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
@@ -198,37 +209,46 @@
                     <TextBlock x:Uid="PrivacySectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
                     <StackPanel x:Name="PrivacyFieldsPanel" Spacing="16" />
+                    <TextBlock x:Uid="CrashReportSectionTitle"
+                               Margin="0,8,0,0"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ToggleSwitch x:Name="CrashReportConsentToggle"
+                                  x:Uid="CrashReportConsentToggle"
+                                  AutomationProperties.AutomationId="CrashReportConsentToggle" />
+                    <TextBlock x:Uid="CrashReportDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="CrashReportStatusText" TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="CrashReportStatusText" />
+                    <Button x:Uid="OpenCrashReportsButton"
+                            Click="OpenCrashReportsButton_Click"
+                            AutomationProperties.AutomationId="OpenCrashReportsButton" />
                 </StackPanel>
 
                 <StackPanel x:Name="ProfilesPaneHost" Spacing="16" Visibility="Collapsed" />
 
-                <StackPanel x:Name="PersonaPaneHost" Spacing="16" Visibility="Collapsed" />
-
                 <StackPanel x:Name="ProofreadPaneHost" Spacing="16" Visibility="Collapsed" />
 
-                <StackPanel x:Name="ModelsPaneHost" Spacing="16" Visibility="Collapsed" />
-
                 <StackPanel x:Name="LearningPaneHost" Spacing="16" Visibility="Collapsed" />
+
+                <!-- Shown with "学習" until DEV-1945 makes it a tab of that pane. -->
+                <StackPanel x:Name="PersonaPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AdvancedSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <StackPanel Spacing="4">
-                        <TextBlock x:Uid="BackendPreferenceLabel" />
-                        <ComboBox x:Name="BackendPreferenceCombo"
-                                  HorizontalAlignment="Stretch"
-                                  AutomationProperties.AutomationId="BackendPreferenceCombo">
-                            <ComboBoxItem x:Uid="BackendAuto" />
-                            <ComboBoxItem x:Uid="BackendCpu" />
-                        </ComboBox>
-                        <TextBlock x:Uid="CpuOnlyDistributionNote"
-                                   TextWrapping="Wrap"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock x:Name="UnsupportedBackendText"
-                                   Visibility="Collapsed"
-                                   TextWrapping="Wrap"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </StackPanel>
+                    <InfoBar x:Name="SafeModeInfoBar"
+                             x:Uid="SafeModeInfoBar"
+                             IsOpen="False"
+                             IsClosable="False"
+                             Severity="Warning"
+                             AutomationProperties.AutomationId="SafeModeInfoBar">
+                        <InfoBar.ActionButton>
+                            <Button x:Name="ClearSafeModeButton"
+                                    x:Uid="ClearSafeModeButton"
+                                    Click="ClearSafeModeButton_Click"
+                                    AutomationProperties.AutomationId="ClearSafeModeButton" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                     <StackPanel Spacing="4">
                         <TextBlock x:Uid="LogLevelLabel" />
                         <ComboBox x:Name="LogLevelCombo"
@@ -246,25 +266,13 @@
                 <StackPanel x:Name="VersionPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="UpdateSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <StackPanel x:Name="VersionFieldsPanel" Spacing="16" />
                     <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap"
                                AutomationProperties.AutomationId="UpdateStatusText" />
                     <HyperlinkButton x:Name="OpenReleasePageButton"
                                      x:Uid="OpenReleasePageButton"
                                      Visibility="Collapsed"
                                      AutomationProperties.AutomationId="OpenReleasePageButton" />
-                    <TextBlock x:Uid="CrashReportSectionTitle"
-                               Margin="0,8,0,0"
-                               Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <ToggleSwitch x:Name="CrashReportConsentToggle"
-                                  x:Uid="CrashReportConsentToggle"
-                                  AutomationProperties.AutomationId="CrashReportConsentToggle" />
-                    <TextBlock x:Uid="CrashReportDescription" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock x:Name="CrashReportStatusText" TextWrapping="Wrap"
-                               AutomationProperties.AutomationId="CrashReportStatusText" />
-                    <Button x:Uid="OpenCrashReportsButton"
-                            Click="OpenCrashReportsButton_Click"
-                            AutomationProperties.AutomationId="OpenCrashReportsButton" />
                     <TextBlock x:Uid="LicensesSectionTitle"
                                Margin="0,8,0,0"
                                Style="{StaticResource SubtitleTextBlockStyle}" />

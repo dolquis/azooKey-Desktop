@@ -1195,12 +1195,12 @@ Microsoft Learn の事実は
 
 - 「設定」群: `settings.json` のキーを編集するペイン。変えた値は保存バーで保存するまで書かない。
 - 「データとツール」群: Host への IPC で操作し、その場で反映するペイン。保存の対象を持たず、保存バーを出さない。
-- フッター（`NavigationView.FooterMenuItems`）: 「バージョン」。保存バーを出さない。
+- フッター（`NavigationView.FooterMenuItems`）: 「バージョン」。`autoUpdate` の 3 キーを持ち、保存バーを出す。
 
 起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`rich-features-spec.md`
 X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
 `dictionary` / `ai-conversion` / `ai-service` / `privacy` / `profiles` / `advanced` / `learning` / `proofread` /
-`version`。知らない名前は無視して「入力」を表示する）。`--pane` は入力インジケーターの「設定を開く」が渡す
+`version`。知らない名前は無視して「入力」を表示する）。既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ（§3.5）。`--pane` は入力インジケーターの「設定を開く」が渡す
 （`docs/tsf-deep-integration-spec.md` §4.5）。`ITfFnConfigure::Show`（§3.5）は渡さない。
 `liveConversion` / `predictionEnabled` だけは、入力インジケーターの右クリックのメニューからも切り替えられる（TIP が対象の 1 キーを書く。`docs/tsf-deep-integration-spec.md` §4.5）。
 
@@ -1216,10 +1216,10 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| フッター | バージョン | 製品のバージョン / 更新の確認の結果（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+| フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
-`autoUpdate` の 3 キーは編集できる（`enabled` をオンにしたときだけ `channel` と
-`checkIntervalHours` を操作できる）。「バージョン」は、Host の最後の更新確認の結果（§6.1 の
+`autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
+`checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（§6.1 の
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
@@ -1230,8 +1230,8 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 
 保存バー:
 
-- 「設定」群のペインで、スクロール領域の外のウィンドウ下端に固定して表示する。保存結果の InfoBar も保存バーに出す。
-- 保存は「設定」群の全ペインの値をまとめて書く（モデルの取得などの IPC 操作は含まない。書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
+- 「設定」群のペインと「バージョン」で、スクロール領域の外のウィンドウ下端に固定して表示する。保存結果の InfoBar も保存バーに出す。
+- 保存は「設定」群の全ペインと「バージョン」の値をまとめて書く（モデルの取得などの IPC 操作は含まない。書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
 - 読み込んだ値から変えたキーの数を示し、変えたキーが無い間は保存ボタンを無効にする。
   例外として、読み込んだファイルの形式が不正か無効な項目を含むときは、保存で退避や除去をして直すため、変えたキーが無くても保存ボタンを有効にし、件数の代わりに「保存すると設定ファイルを修復します」と示す。
 - 変えたキーが残ったままウィンドウを閉じようとしたときは、保存する・破棄する・閉じるのをやめる、を選ぶ確認を出す。
@@ -1378,6 +1378,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **開くペインの引数**: `--pane <名前>`（§3.2）は開くペインだけを指定する。`--proofread-session` と同時に
   受けたときは `--proofread-session` を優先して「校正」を開く。`langid` / `rguidProfile` は開くペインを
   変えず、どちらも受けたときも `--pane` が無ければ「入力」を開く（言語プロファイルごとの設定ページは持たない）。
+  既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ。
 - **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
   インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
@@ -1441,7 +1442,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般（結果は「バージョン」） | M32 | 即時 | 本書 §6 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン（結果も同じ節に表示） | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
 | `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |

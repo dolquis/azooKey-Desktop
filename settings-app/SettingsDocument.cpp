@@ -830,8 +830,7 @@ bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool r
 }
 
 bool PaneShowsSaveBar(std::wstring_view pane_tag) {
-  // "Version" still holds privacy.crashReportConsent until it moves to "Privacy" (DEV-1941).
-  return pane_tag != L"Learning" && pane_tag != L"Persona" && pane_tag != L"Proofread";
+  return pane_tag != L"learning" && pane_tag != L"proofread";
 }
 
 }  // namespace azookey::settings

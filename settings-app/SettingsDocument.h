@@ -130,8 +130,8 @@ bool SaveRepairsLoadedDocument(const SettingsDocumentResult& result);
 // changed key or a repair to make.
 bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool repair_pending);
 
-// Panes that act on the Host at once hold no key to save and show no save bar. The tag is the
-// NavigationViewItem's Tag.
+// Panes that act on the Host at once ("データとツール") hold no key to save and show no save bar.
+// The tag is the NavigationViewItem's Tag, the pane name --pane takes.
 bool PaneShowsSaveBar(std::wstring_view pane_tag);
 
 }  // namespace azookey::settings

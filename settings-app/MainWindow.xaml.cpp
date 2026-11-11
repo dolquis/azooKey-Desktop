@@ -119,16 +119,20 @@ MainWindow::MainWindow() {
   field_controls_.Build([this](azookey::settings::SettingsPane pane) {
     using Pane = azookey::settings::SettingsPane;
     switch (pane) {
-      case Pane::General:
-        return GeneralFieldsPanel();
       case Pane::Input:
         return InputFieldsPanel();
+      case Pane::Candidates:
+        return CandidatesFieldsPanel();
       case Pane::Dictionary:
         return DictionaryFieldsPanel();
-      case Pane::Ai:
+      case Pane::AiConversion:
+        return AiConversionFieldsPanel();
+      case Pane::AiService:
         return AiFieldsPanel();
       case Pane::Privacy:
         return PrivacyFieldsPanel();
+      case Pane::Version:
+        return VersionFieldsPanel();
       case Pane::Advanced:
         break;
     }
@@ -198,7 +202,7 @@ MainWindow::MainWindow() {
   persona_pane_->Build(PersonaPaneHost(), DispatcherQueue());
   proofread_pane_ = std::make_shared<azookey::settings::ProofreadPane>();
   proofread_pane_->Build(ProofreadPaneHost(), DispatcherQueue());
-  SettingsNavigationView().SelectedItem(GeneralNavigationItem());
+  SettingsNavigationView().SelectedItem(InputNavigationItem());
   neologd_attribution_ = azookey::settings::ParseNeologdPackAttribution(
       azookey::settings::PinnedNeologdPackManifestJson());
   if (!neologd_attribution_ || !neologd_attribution_->published) {
@@ -226,26 +230,26 @@ void MainWindow::ShowPane(std::wstring_view tag) {
     return tag == pane ? Microsoft::UI::Xaml::Visibility::Visible
                        : Microsoft::UI::Xaml::Visibility::Collapsed;
   };
-  GeneralPane().Visibility(visible(L"General"));
-  InputPane().Visibility(visible(L"Input"));
-  DictionaryPane().Visibility(visible(L"Dictionary"));
-  AiPane().Visibility(visible(L"Ai"));
-  PrivacyPane().Visibility(visible(L"Privacy"));
-  ProfilesPaneHost().Visibility(visible(L"Profiles"));
-  ModelsPaneHost().Visibility(visible(L"Models"));
-  LearningPaneHost().Visibility(visible(L"Learning"));
-  PersonaPaneHost().Visibility(visible(L"Persona"));
-  ProofreadPaneHost().Visibility(visible(L"Proofread"));
-  AdvancedPane().Visibility(visible(L"Advanced"));
-  VersionPane().Visibility(visible(L"Version"));
+  InputPane().Visibility(visible(L"input"));
+  CandidatesPane().Visibility(visible(L"candidates"));
+  DictionaryPane().Visibility(visible(L"dictionary"));
+  AiConversionPane().Visibility(visible(L"ai-conversion"));
+  AiPane().Visibility(visible(L"ai-service"));
+  PrivacyPane().Visibility(visible(L"privacy"));
+  ProfilesPaneHost().Visibility(visible(L"profiles"));
+  LearningPaneHost().Visibility(visible(L"learning"));
+  PersonaPaneHost().Visibility(visible(L"learning"));
+  ProofreadPaneHost().Visibility(visible(L"proofread"));
+  AdvancedPane().Visibility(visible(L"advanced"));
+  VersionPane().Visibility(visible(L"version"));
   SaveBar().Visibility(azookey::settings::PaneShowsSaveBar(tag)
                            ? Microsoft::UI::Xaml::Visibility::Visible
                            : Microsoft::UI::Xaml::Visibility::Collapsed);
-  if (tag == L"Models" && model_pane_) model_pane_->OnShown();
-  if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
-  if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
-  if (tag == L"Dictionary") RefreshNeologdLayerStatus();
-  if (tag == L"Version") RefreshUpdateStatus();
+  if (tag == L"ai-conversion" && model_pane_) model_pane_->OnShown();
+  if (tag == L"learning" && learning_pane_) learning_pane_->OnShown();
+  if (tag == L"learning" && persona_pane_) persona_pane_->OnShown();
+  if (tag == L"dictionary") RefreshNeologdLayerStatus();
+  if (tag == L"version") RefreshUpdateStatus();
 }
 
 void MainWindow::RefreshUpdateStatus() {
@@ -808,6 +812,8 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
       load_problem_shown_ = false;
       SettingsStatusInfoBar().IsOpen(false);
     }
+    // The update status reads the saved autoUpdate and privacy.mode, which the same pane edits.
+    RefreshUpdateStatus();
   }
   RefreshSaveBar();
   if (save_result.invalid_setting) {
@@ -877,12 +883,14 @@ void MainWindow::ShowInvalidSetting(const std::string& path) {
   if (path == "profilesByApp") SettingsNavigationView().SelectedItem(ProfilesNavigationItem());
   if (const auto* field = azookey::settings::FindSettingField(path)) {
     using Pane = azookey::settings::SettingsPane;
-    const auto item = field->pane == Pane::General      ? GeneralNavigationItem()
-                      : field->pane == Pane::Input      ? InputNavigationItem()
-                      : field->pane == Pane::Dictionary ? DictionaryNavigationItem()
-                      : field->pane == Pane::Ai         ? AiNavigationItem()
-                      : field->pane == Pane::Privacy    ? PrivacyNavigationItem()
-                                                        : AdvancedNavigationItem();
+    const auto item = field->pane == Pane::Input          ? InputNavigationItem()
+                      : field->pane == Pane::Candidates   ? CandidatesNavigationItem()
+                      : field->pane == Pane::Dictionary   ? DictionaryNavigationItem()
+                      : field->pane == Pane::AiConversion ? AiConversionNavigationItem()
+                      : field->pane == Pane::AiService    ? AiNavigationItem()
+                      : field->pane == Pane::Privacy      ? PrivacyNavigationItem()
+                      : field->pane == Pane::Version      ? VersionNavigationItem()
+                                                          : AdvancedNavigationItem();
     SettingsNavigationView().SelectedItem(item);
     DispatcherQueue().TryEnqueue(
         [this, lifetime = get_strong(), path] { field_controls_.Focus(path); });
@@ -941,6 +949,19 @@ void MainWindow::OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspect
              resources.GetString(L"ThirdPartyNoticesUnavailable"));
 }
 
+void MainWindow::SelectPane(std::wstring_view tag) {
+  const auto navigation = SettingsNavigationView();
+  for (const auto& items : {navigation.MenuItems(), navigation.FooterMenuItems()}) {
+    for (const auto& entry : items) {
+      const auto item = entry.try_as<Microsoft::UI::Xaml::Controls::NavigationViewItem>();
+      if (item && winrt::unbox_value_or<winrt::hstring>(item.Tag(), L"") == tag) {
+        navigation.SelectedItem(item);
+        return;
+      }
+    }
+  }
+}
+
 void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
   const auto arguments = azookey::settings::ParseLaunchArguments(raw_arguments);
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
@@ -976,10 +997,12 @@ void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
     ProfileValueText().Text(StatusText(profile_status, resources));
   }
 
-  // Ctrl+Shift+Space in an application (rich-features-spec X-3-6).
+  // Ctrl+Shift+Space in an application (rich-features-spec X-3-6) wins over --pane (section 3.5).
   if (arguments.proofread_session_status == azookey::settings::LaunchArgumentStatus::Valid) {
     SettingsNavigationView().SelectedItem(ProofreadNavigationItem());
     proofread_pane_->OpenSession(arguments.proofread_session_token);
+  } else if (!arguments.pane.empty()) {
+    SelectPane(arguments.pane);
   }
 }
 

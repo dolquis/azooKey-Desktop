@@ -93,3 +93,38 @@ TEST(SettingsLaunchArgumentsTest, RejectsAnythingButALowercaseHexToken) {
     EXPECT_TRUE(arguments.proofread_session_token.empty());
   }
 }
+
+TEST(SettingsLaunchArgumentsTest, PaneNamesThePaneToOpenAndIgnoresUnknownNames) {
+  const auto arguments = azookey::settings::ParseLaunchArguments(
+      L"--langid 0x0411 --profile {8D80B94E-75BA-47D4-90B9-68977A5A6E2B} --pane input");
+  EXPECT_FALSE(arguments.parse_error);
+  EXPECT_EQ(arguments.pane, L"input");
+  EXPECT_EQ(arguments.langid_status, LaunchArgumentStatus::Valid);
+  EXPECT_EQ(arguments.profile_status, LaunchArgumentStatus::Valid);
+
+  for (const auto* name :
+       {L"candidates", L"dictionary", L"ai-conversion", L"ai-service", L"privacy", L"profiles",
+        L"advanced", L"learning", L"proofread", L"version"}) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(azookey::settings::ParseLaunchArguments(std::wstring(L"--pane ") + name).pane, name);
+  }
+  // An unknown name, a missing value or a second --pane leaves the launch as it was.
+  for (const auto* raw : {L"--pane general", L"--pane Input", L"--pane", L"--pane --langid 0x0411",
+                          L"--pane models"}) {
+    SCOPED_TRACE(raw);
+    const auto ignored = azookey::settings::ParseLaunchArguments(raw);
+    EXPECT_TRUE(ignored.pane.empty());
+    EXPECT_FALSE(ignored.parse_error);
+  }
+  EXPECT_EQ(azookey::settings::ParseLaunchArguments(L"--pane privacy --pane input").pane,
+            L"privacy");
+}
+
+TEST(SettingsLaunchArgumentsTest, ProofreadSessionAndPaneAreBothRead) {
+  // MainWindow opens "校正" when both are given (sideload-packaging-spec section 3.5).
+  const auto arguments = azookey::settings::ParseLaunchArguments(
+      L"--pane privacy --proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  EXPECT_FALSE(arguments.parse_error);
+  EXPECT_EQ(arguments.pane, L"privacy");
+  EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
+}

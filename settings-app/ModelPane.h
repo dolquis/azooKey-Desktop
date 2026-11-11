@@ -13,13 +13,13 @@ namespace azookey::settings {
 
 // The "モデル" pane: the models ListModels finds with their validation result, a benchmark of
 // each, and the choice of model.selectedPath (model-management-spec section 6). Choosing a model
-// only fills the path box of the "一般" pane; the value is saved by the common save button.
+// only fills the path box of the "AI 変換" pane; the value is saved by the common save button.
 // DEV-1821: the entries of the Host's default catalog, each fetched on request with its
 // progress; a fetched file is put into the path box the same way.
 class ModelPane : public std::enable_shared_from_this<ModelPane> {
  public:
   struct Host {
-    // The path currently in the "一般" pane's box, UTF-8.
+    // The path currently in the "AI 変換" pane's box, UTF-8.
     std::function<std::string()> selected_path;
     // Puts a path into that box.
     std::function<void(const std::string&)> select_path;

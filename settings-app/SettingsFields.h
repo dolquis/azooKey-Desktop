@@ -18,7 +18,17 @@ using SettingValues = std::map<std::string, SettingValue, std::less<>>;
 
 enum class SettingKind { Bool, Integer, Number, Enum, String, StringList };
 
-enum class SettingsPane { General, Input, Dictionary, Ai, Privacy, Advanced };
+// The "設定" panes of sideload-packaging-spec section 3.2, and the footer "バージョン".
+enum class SettingsPane {
+  Input,
+  Candidates,
+  Dictionary,
+  AiConversion,
+  AiService,
+  Privacy,
+  Advanced,
+  Version
+};
 
 // The field is editable only while another field holds this value (the feature spec says it
 // has no effect otherwise). `equals` is "true"/"false" for a bool or an enum value.

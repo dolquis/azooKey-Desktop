@@ -731,13 +731,25 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
   const auto path = *settings_path_;
   const auto dispatcher = DispatcherQueue();
   co_await winrt::resume_background();
-  const auto save_result = azookey::settings::SaveSettingsDocument(path, settings);
+  // A throw here is reported as a failed save, so the save bar (and closing) is never left
+  // waiting for a save that has ended.
+  azookey::settings::SettingsSaveResult save_result;
+  try {
+    save_result = azookey::settings::SaveSettingsDocument(path, settings);
+  } catch (...) {
+    save_result = {};
+  }
   azookey::settings::SettingsIpcResult ipc_result;
   if (save_result.ok) {
-    azookey::core::CrashReporting::SetConsent(settings.crash_report_consent == "local"
-        ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
-    ipc_result = azookey::settings::NotifyHostOfSettingsChange(
-        azookey::settings::DefaultSettingsIpcOptions());
+    try {
+      azookey::core::CrashReporting::SetConsent(settings.crash_report_consent == "local"
+                                                    ? azookey::core::CrashConsent::Local
+                                                    : azookey::core::CrashConsent::Off);
+      ipc_result = azookey::settings::NotifyHostOfSettingsChange(
+          azookey::settings::DefaultSettingsIpcOptions());
+    } catch (...) {
+      ipc_result = {};
+    }
   }
   co_await ResumeForeground(dispatcher);
 

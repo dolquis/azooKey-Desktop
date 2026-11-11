@@ -795,9 +795,10 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
     saved_settings_ = settings;
     saved_settings_.values = std::move(saved_values);
     saved_settings_.openai_api_key.clear();
+    // The file no longer holds what loading reported once a save has repaired it.
+    const bool repaired = repair_pending_;
     repair_pending_ = false;
-    // The file no longer holds what loading reported.
-    if (load_problem_shown_) {
+    if (repaired && load_problem_shown_) {
       load_problem_shown_ = false;
       SettingsStatusInfoBar().IsOpen(false);
     }

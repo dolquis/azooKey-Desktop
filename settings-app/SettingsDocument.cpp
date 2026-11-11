@@ -413,6 +413,8 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
 }
 
 // The dictionary keys in schema order, paired with their EditableSettings field.
+constexpr std::string_view kUndecryptableApiKeyWarning = "openAiApiKey could not be decrypted";
+
 constexpr std::pair<std::string_view, bool DictionarySettings::*> kDictionaryFields[] = {
     {"sudachiEnabled", &DictionarySettings::sudachi_enabled},
     {"neologdEnabled", &DictionarySettings::neologd_enabled},
@@ -516,7 +518,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
       settings.openai_api_key = key.value;
     } else {
       settings.openai_api_key_unavailable = true;
-      warnings->push_back("openAiApiKey could not be decrypted");
+      warnings->push_back(std::string(kUndecryptableApiKeyWarning));
     }
   }
   if (const auto privacy = root.find("privacy"); privacy != root.end() && privacy->second.IsObject()) {
@@ -815,7 +817,11 @@ bool SaveRepairsLoadedDocument(const SettingsDocumentResult& result) {
       result.status == SettingsDocumentStatus::ReadError) {
     return false;
   }
-  return result.status == SettingsDocumentStatus::Invalid || !result.warnings.empty();
+  if (result.status == SettingsDocumentStatus::Invalid) return true;
+  // A key that cannot be decrypted is kept by a save until it is replaced, so it is not repaired.
+  return std::any_of(
+      result.warnings.begin(), result.warnings.end(),
+      [](const std::string& warning) { return warning != kUndecryptableApiKeyWarning; });
 }
 
 bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool repair_pending) {

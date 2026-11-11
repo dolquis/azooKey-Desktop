@@ -1023,6 +1023,14 @@ TEST(SettingsDocumentTest, SaveBarAllowsARepairingSaveWithoutChanges) {
   EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
   WriteText(path, "{not json");
   EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  // A key that cannot be decrypted is kept by a save, so a save would repair nothing.
+  azookey::settings::SettingsDocumentResult undecryptable;
+  undecryptable.status = azookey::settings::SettingsDocumentStatus::Loaded;
+  undecryptable.settings.openai_api_key_unavailable = true;
+  undecryptable.warnings.emplace_back("openAiApiKey could not be decrypted");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(undecryptable));
+  undecryptable.warnings.emplace_back("maxCandidates: wrong type");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(undecryptable));
   azookey::settings::SettingsDocumentResult unreadable;
   unreadable.status = azookey::settings::SettingsDocumentStatus::ReadError;
   unreadable.warnings.emplace_back("ignored");

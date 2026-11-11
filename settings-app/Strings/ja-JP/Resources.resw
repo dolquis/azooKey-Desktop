@@ -114,7 +114,7 @@
   <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI サービス</value></data>
   <data name="OpenReleasePageButton.Content" xml:space="preserve"><value>リリースページを開く</value></data>
   <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。上の「自動更新を確認する」でオンにできます。</value></data>
-  <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」か「常にセーフ入力」の間は、更新を確認しません。</value></data>
+  <data name="UpdateStatus_Offline" xml:space="preserve"><value>いまのプライバシーモードでは、更新を確認しません。</value></data>
   <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
   <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>
@@ -278,7 +278,7 @@
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。更新のダウンロードやインストールはしません。</value></data>
+  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」か「常にセーフ入力」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>

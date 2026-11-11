@@ -836,5 +836,135 @@ TEST(CandidateWindowPredictionTest, OpensAboveTheAnchorAndRemeasuresOnDpiChange)
   window.Destroy();
 }
 
+TEST(CandidateWindowScrollTest, VisibleRowsFitTheWorkAreaWithAPositionRow) {
+  // Every row fits, with or without the elements below them.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(5, 24, 0, 120), 5);
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(4, 24, 24, 120), 4);
+  // One row short: the position row takes a row too, so two rows go.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(6, 24, 0, 120), 4);
+  // The notice, toast and banner keep their height; the rows give way.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, 24 * 4, 240), 5);
+  // At least one candidate row stays, even when nothing else fits.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, 24 * 20, 240), 1);
+  // No work area or no candidates.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, 0, 0), 32);
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(0, 24, 0, 240), 0);
+}
+
+TEST(CandidateWindowScrollTest, FirstVisibleRowFollowsTheSelectionAndTheWrap) {
+  constexpr int kCount = 12;
+  constexpr int kRows = 4;
+  // Everything fits: always from the top.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(3, 7, 4, 4), 0);
+  // Inside the range: unchanged.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(0, 3, kCount, kRows), 0);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(5, 6, kCount, kRows), 5);
+  // One past the bottom edge: the range moves down by one.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(0, 4, kCount, kRows), 1);
+  // One past the top edge: the range moves up by one.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(5, 4, kCount, kRows), 4);
+  // The wrap from the first to the last candidate shows the last range, and back.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(0, kCount - 1, kCount, kRows), kCount - kRows);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(kCount - kRows, 0, kCount, kRows), 0);
+  // A stale range from a longer list is pulled back inside the list.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRow(20, 11, kCount, kRows), kCount - kRows);
+}
+
+TEST(CandidateWindowScrollTest, HitTestMapsDrawnRowsToTheFullList) {
+  using Target = CandidateWindow::HitTarget;
+  for (const int row : {24, 36, 48}) {
+    SCOPED_TRACE(row);
+    CandidateWindow::HitLayout layout{row, 3, 200, 0, false, 5 * row, {}, false, {}};
+    layout.first_index = 7;
+    EXPECT_EQ(CandidateWindow::HitTest(layout, {0, 0}).index, 7);
+    EXPECT_EQ(CandidateWindow::HitTest(layout, {199, 3 * row - 1}).index, 9);
+    // The position row below the drawn rows is not a candidate.
+    EXPECT_EQ(CandidateWindow::HitTest(layout, {0, 3 * row}).target, Target::None);
+    EXPECT_EQ(CandidateWindow::HitTest(layout, {0, -1}).target, Target::None);
+  }
+}
+
+TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  tsf::testing::SetThemeInputsForTest(false, 1u);
+  RECT work{};
+  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
+  const int work_height = work.bottom - work.top;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    // More candidates than any work area holds.
+    const int count = work_height / row + 10;
+    std::vector<CandidateViewItem> items;
+    for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    int clicked = -1;
+    window.SetOnClick([&](int index) { clicked = index; });
+    window.Show(POINT{work.left + 20, work.top + 20}, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+
+    const int visible = window.GetVisibleRowCount();
+    EXPECT_EQ(visible, (work_height - row) / row);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
+    EXPECT_GE(bounds.top, work.top);
+    EXPECT_LE(bounds.bottom, work.bottom);
+    EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
+
+    // The wrap to the last candidate shows the last range; numbers stay global.
+    window.MoveSelection(-1);
+    EXPECT_EQ(window.GetSelected(), count - 1);
+    EXPECT_EQ(window.GetFirstVisibleRow(), count - visible);
+    EXPECT_EQ(window.GetCount(), count);
+    const auto top = window.HitTestForTest({2, 2});
+    EXPECT_EQ(top.target, CandidateWindow::HitTarget::Candidate);
+    EXPECT_EQ(top.index, count - visible);
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, row + 2));
+    EXPECT_EQ(clicked, count - visible + 1);
+    EXPECT_EQ(window.GetSelected(), count - visible + 1);
+    EXPECT_EQ(window.GetFirstVisibleRow(), count - visible);
+
+    // The position row is drawn in sub_text below the rows, and not filled.
+    std::vector<COLORREF> pixels;
+    int width = 0;
+    int height = 0;
+    ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+    const ThemeColors& colors = window.theme_for_test();
+    const auto at = [&](int x, int y) { return pixels[static_cast<size_t>(y * width + x)]; };
+    int darkest = 255;
+    for (int y = visible * row + 1; y < (visible + 1) * row - 1; ++y)
+      for (int x = 1; x < width - 1; ++x) darkest = std::min(darkest, int{GetRValue(at(x, y))});
+    EXPECT_LT(darkest, 200);
+    EXPECT_GE(darkest, GetRValue(colors.sub_text) - 8);
+    EXPECT_EQ(at(width - 3, visible * row + row / 2), colors.background);
+
+    // Back to the first candidate: the first range again.
+    window.SetSelected(0);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowScrollTest, FewCandidatesHaveNoPositionRow) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow::SetMonitorDpiForTest(96);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  window.Show(POINT{20, 20}, {{L"一", L""}, {L"二", L""}, {L"三", L""}}, 2, L"案内");
+  EXPECT_EQ(window.GetVisibleRowCount(), 3);
+  EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+  // Rows, then the notice row; nothing in between.
+  EXPECT_EQ(window.footer_top_for_test(), 4 * 24);
+  window.Destroy();
+}
+
 }  // namespace
 }  // namespace azookey::tsf

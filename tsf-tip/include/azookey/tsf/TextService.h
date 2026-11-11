@@ -724,6 +724,11 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool batch_query_in_progress_for_test() const;
   void set_cached_batch_segments_for_test(std::vector<ipc::BatchConversionSegment> segments);
+  // Fixes the display attribute atoms so tests need no ITfCategoryMgr.
+  void set_display_attribute_atoms_for_test(const TfGuidAtom (&atoms)[kDisplayAttributeKindCount]) {
+    for (ULONG index = 0; index < kDisplayAttributeKindCount; ++index)
+      display_attribute_atoms_[index] = atoms[index];
+  }
   std::wstring cached_batch_notice_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return cached_batch_notice_;
@@ -1560,6 +1565,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // is not a batch conversion with the candidate window open.
   std::vector<DisplayedSegment> DisplayedBatchSegments() const;
   bool ShowsBatchSegments() const;
+  // The preedit is the candidate selected in core's Selecting, which covers the
+  // whole composition (tsf-deep-integration-spec §5.5).
+  bool ShowsSelectedCoreCandidate() const;
   // The candidate surface the segment shows, or its reading when none is chosen.
   const std::string& DisplayedBatchSegmentSurface(size_t index, bool* converted) const;
   // Moves the batch-conversion focus to the segment and re-shows its candidates.

@@ -1043,6 +1043,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 
 色は provider から指定しない（§5.6）。
 「想定する描画」は、`bAttr` に応じてアプリが選ぶ配色の典型である。
+一括変換が OFF の候補選択中（§5.5）は、preedit 全体を Focused で表示する。
 
 ### 5.2 GUID 定義
 
@@ -1079,6 +1080,9 @@ for (const auto& segment : ranges) {
 読みのまま表示している文節が Unconverted である。
 長さ 0 の文節には range を作らない。
 
+一括変換が OFF の候補選択中（core の `Selecting`、§5.5）は、composition 全体を覆う Focused の
+range を 1 つ作る。この range は文節ではないので、preedit のクリックで注目を移す対象にしない（§7）。
+
 アトムは `ITfCategoryMgr::RegisterGUID` で 4 つまとめて取得し、TextService インスタンス内に保持する。
 
 ### 5.4 文節境界
@@ -1097,10 +1101,14 @@ segment は区間を持たないので、各文節が表示している文字列
 roadmap M23 の「青背景」は、provider が色を指定しないため、アプリが `TF_ATTR_TARGET_CONVERTED` を
 描く配色である。アプリごとの見え方は実機チェックリストの D-11 で確認する（§5.7）。
 
-一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たないので
-§5.6 の fallback 属性（入力中と同じ細い実線）になる。注目文節の強調は付かず、変換中であることは
-候補窓の表示で分かる。legacy は選択中の候補を `kTSMHiliteSelectedConvertedText`、残りの読みを
-`kTSMHiliteConvertedText` で描くので、この強調は legacy との差である。
+一括変換が OFF の既定では、Space の後の preedit は core 経由で候補の表記に置き換わり、文節を持たない。
+選択中の候補が preedit 全体を占めるので、候補選択中（core の `Selecting`）は composition 全体を
+Focused で表示し、入力中（`Composing`）の fallback 属性（§5.6）と見分けられるようにする。
+候補を移っても Focused のままである。Backspace で読みへ戻ると fallback 属性に戻る。
+Esc は入力ごと取り消して composition を終えるので、属性を付ける文字列が残らない。
+legacy が選択中の候補を `kTSMHiliteSelectedConvertedText` で描くのと同じ扱いである。
+legacy は残りの読みを `kTSMHiliteConvertedText` で描く。候補が読みの前方だけを覆う形になったときは、
+残りの読みを Converted にする。
 
 ### 5.6 M3 の単一 DisplayAttribute との対応関係
 
@@ -1148,9 +1156,9 @@ M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAt
 - `kInputAttributeGuid` は M23 実装後も残し、**文節情報が使えないときの fallback
   属性**として composition 全体に適用する。`EnumDisplayAttributeInfo` は M3 の 1
   エントリ + M23 の 3 エントリ = 4 エントリを返す。
-- fallback を使う条件は、一括変換の文節を候補ウィンドウで表示していないこと
-  （入力中の読み、ライブ変換の preedit、絵文字入力、core 経由の preedit を含む）、
-  または文節の区間の和が composition の長さと一致しないこと。
+- fallback を使う条件は、一括変換の文節を候補ウィンドウで表示しておらず、core の候補選択中
+  （§5.5）でもないこと（入力中の読み、ライブ変換の preedit、絵文字入力、候補選択中以外の
+  core 経由の preedit を含む）、または文節の区間の和が composition の長さと一致しないこと。
   ライブ変換の preedit は文節情報を持たないため、常に fallback 属性で表示する。
 - 文節ごとの `SetValue`（§5.3）に 1 つでも失敗したとき、または文節属性のアトムを
   取得できないときは、composition 全体を fallback 属性で塗り直し、色が文節間で
@@ -1175,6 +1183,8 @@ Dark テーマやハイコントラストでの配色はアプリの描画に任
 enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー、文節の区間と属性の割り当て、
 文節ごとの `SetValue` と失敗時の fallback）が担う。
 enumerator の境界テストは属性数（`kDisplayAttributeKindCount`）を基準に書く。
+打鍵から `GUID_PROP_ATTRIBUTE` に設定される範囲と属性（読み、候補選択中、Backspace での読みへの戻り、Esc での取り消し、一括変換の文節）は
+`tsf-tip/tests/onkeydown_preedit_test.cpp` の `TsfTipSelectingDisplayAttributeTest` が担う。
 
 ### 5.7 アプリ互換チェックリスト（M3・実機 Win11）
 
@@ -1331,6 +1341,7 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
+| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性 |
 | Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |
 
 ## 10. 参照

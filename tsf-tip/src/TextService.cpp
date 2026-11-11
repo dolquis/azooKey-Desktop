@@ -9319,6 +9319,11 @@ HRESULT TextService::FocusBatchSegment(size_t index) {
                                shown_batch_notice_);
 }
 
+bool TextService::ShowsSelectedCoreCandidate() const {
+  return core_input_active_ && !committing_ &&
+         input_state_.kind() == core::InputStateKind::Selecting;
+}
+
 std::vector<DisplayedSegment> TextService::DisplayedBatchSegments() const {
   std::vector<DisplayedSegment> segments;
   if (!ShowsBatchSegments()) return segments;
@@ -11482,6 +11487,11 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     if (segments_length != static_cast<LONG>(kana.size())) ranges.clear();
     service_->attributed_segments_ =
         ranges.empty() ? std::vector<DisplayedSegment>{} : displayed_segments;
+    // The candidate selected without batch conversion is no segment, so clicks
+    // stay with the application (§5.3).
+    if (ranges.empty() && service_->ShowsSelectedCoreCandidate()) {
+      ranges.push_back({0, static_cast<LONG>(kana.size()), DisplayAttributeKind::FocusedSegment});
+    }
     ITfProperty* pProp = nullptr;
     if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {
       service_->EnsureDisplayAttributeAtoms();

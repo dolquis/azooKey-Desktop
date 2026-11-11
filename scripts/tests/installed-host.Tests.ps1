@@ -6,7 +6,7 @@ Describe "installed host startup contracts" {
     $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($supervisorPath, [ref]$tokens, [ref]$errors)
     if ($errors.Count) { throw $errors[0] }
-    foreach ($name in @("Test-InstallationActive", "Test-VulkanLoader", "Test-VulkanHost", "Get-HostSelection")) {
+    foreach ($name in @("Test-InstallationActive", "Test-VulkanLoader", "Test-VulkanHost", "Test-VulkanAddonVersion", "Get-HostSelection")) {
       $function = $ast.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
       }, $false)
@@ -75,6 +75,50 @@ Describe "installed host startup contracts" {
     (Get-HostSelection -BasePath $script:basePath).Path | Should -Be $script:basePath
     Should -Invoke Test-VulkanLoader -Times 2 -Exactly
     Should -Invoke Test-VulkanHost -Times 2 -Exactly
+  }
+
+  It "launches an installed add-on only when its version equals the base version" {
+    Mock Get-ItemProperty { [pscustomobject]@{ ProductVersion = '1.2.3' } }
+    $selection = Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory
+    $selection.Path | Should -Be $script:addonPath
+    Should -Invoke Get-ItemProperty -Times 2 -Exactly
+  }
+
+  It "uses base without probing when the add-on version differs from the base" -TestCases @(
+    @{ BaseVersion = '1.2.3'; AddonVersion = '1.2.2' },
+    @{ BaseVersion = '1.2.3'; AddonVersion = $null },
+    @{ BaseVersion = $null; AddonVersion = '1.2.3' },
+    @{ BaseVersion = $null; AddonVersion = $null }
+  ) {
+    # Unique names: mock bodies resolve variables dynamically, and the
+    # function under test has its own $addon.
+    param($BaseVersion, $AddonVersion)
+    Mock Get-ItemProperty { if ($null -ne $BaseVersion) { [pscustomobject]@{ ProductVersion = $BaseVersion } } } `
+      -ParameterFilter { $LiteralPath -like '*\HostStartup' }
+    Mock Get-ItemProperty { if ($null -ne $AddonVersion) { [pscustomobject]@{ ProductVersion = $AddonVersion } } } `
+      -ParameterFilter { $LiteralPath -like '*\VulkanAddon' }
+    $selection = Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory
+    $selection.Path | Should -Be $script:basePath
+    $selection.Reason | Should -Be "addon_version_mismatch"
+    $selection.Detail | Should -Be "base_version=$BaseVersion; addon_version=$AddonVersion"
+    Should -Invoke Test-VulkanLoader -Times 0 -Exactly
+    Should -Invoke Test-VulkanHost -Times 0 -Exactly
+  }
+
+  It "treats an unreadable version as a mismatch" {
+    Mock Get-ItemProperty { throw "Registry unavailable" }
+    (Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory).Reason |
+      Should -Be "addon_version_mismatch"
+  }
+
+  It "skips the version check for development registration" {
+    Mock Get-ItemProperty { throw "Must not read MSI registry for development" }
+    (Get-HostSelection -BasePath $script:basePath -InstalledDirectory "").Path | Should -Be $script:addonPath
+  }
+
+  It "passes the installed directory to the host selection" {
+    $source = Get-Content -Raw (Join-Path $repoRoot "scripts/host-supervisor.ps1")
+    $source | Should -Match 'Get-HostSelection -BasePath \$HostExePath -InstalledDirectory \$InstalledDirectory'
   }
 }
 

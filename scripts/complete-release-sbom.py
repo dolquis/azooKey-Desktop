@@ -20,6 +20,19 @@ import subprocess
 # redist directory than the CRT, so the search covers every --runtime-dir.
 RUNTIME_FILES = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"}
 BUILD_ONLY = {"Microsoft.Windows.SDK.BuildTools", "Microsoft.Windows.SDK.BuildTools.MSIX"}
+# Each release MSI has its own SBOM (docs/sideload-packaging-spec.md 1.6.3).
+# A selector without "packages" belongs to the base MSI only.
+PACKAGES = ("base", "vulkan-addon")
+ANNOTATIONS = {
+    "base": "Declared canonical release build inputs, not an exhaustive binary scan. "
+            "GoogleTest and Windows SDK BuildTools are test/build-only and not shipped. "
+            "GGUF models, CUDA runtime and the Vulkan add-on are not in the base MSI. "
+            "LicenseRef text is attribution from THIRD_PARTY_LICENSES, not a license grant.",
+    "vulkan-addon": "Declared canonical build inputs of the Vulkan add-on host, not an exhaustive binary scan. "
+                    "The Vulkan loader and GPU drivers come from the GPU vendor and are not shipped; "
+                    "the MSVC runtime ships in the base MSI. Vulkan SDK entries are headers compiled "
+                    "into the host; the SDK tools are build-only.",
+}
 
 
 def runtime_file(directories, name):
@@ -43,8 +56,10 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def inventory(root):
+def inventory(root, package="base"):
     """Read version selectors and licenses from their attribution sections."""
+    if package not in PACKAGES:
+        raise ValueError(f"Unknown release package: {package}")
     text = (root / "THIRD_PARTY_LICENSES").read_text(encoding="utf-8")
     result = []
     for section in re.split(r"(?m)^## ", text)[1:]:
@@ -53,6 +68,11 @@ def inventory(root):
             raise ValueError("Redistributed attribution needs one SBOM selector")
         for marker in markers:
             item = json.loads(marker)
+            packages = item.pop("packages", ["base"])
+            if not packages or set(packages) - set(PACKAGES):
+                raise ValueError(f"Unknown release package in SBOM selector: {packages}")
+            if package not in packages:
+                continue
             license_line = re.search(r"(?m)^- License: (.+)", section)
             if not license_line:
                 raise ValueError("SBOM selector has no attribution license")
@@ -64,9 +84,18 @@ def inventory(root):
     if len(sources) != len(set(sources)) or not result:
         raise ValueError("Missing or duplicate SBOM selectors")
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-    required = {"cmake:" + key for key in re.findall(r"set\((AZOOKEY_\w+_GIT_TAG)\s", cmake)} | {"runtime"}
-    if {source for source in sources if not source.startswith("nuget:")} != required:
-        raise ValueError("CMake/runtime attribution coverage differs")
+    pinned = {"cmake:" + key for key in re.findall(r"set\((AZOOKEY_\w+_GIT_TAG)\s", cmake)}
+    if package == "base":
+        if any(source.startswith("vulkan-sdk:") for source in sources):
+            raise ValueError("Vulkan SDK attribution belongs to the Vulkan add-on")
+        if {source for source in sources if not source.startswith("nuget:")} != pinned | {"runtime"}:
+            raise ValueError("CMake/runtime attribution coverage differs")
+    else:
+        # The add-on ships one host: the same pinned sources plus Vulkan SDK headers,
+        # and neither the MSVC runtime nor NuGet packages (both ship in the base).
+        sdk = {source for source in sources if source.startswith("vulkan-sdk:")}
+        if not sdk or set(sources) - sdk != pinned:
+            raise ValueError("CMake/Vulkan SDK attribution coverage differs")
     return result
 
 
@@ -118,6 +147,21 @@ def cmake_pin(root, build_dir, key):
     return pin
 
 
+def vulkan_sdk_header(build_dir, sdk, relative):
+    """Return the SDK version and SHA256 of a header the Vulkan build compiled in."""
+    version = sdk.name
+    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
+        raise ValueError("Vulkan SDK directory must be named by its version: " + version)
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    include = re.search(r"(?m)^Vulkan_INCLUDE_DIR:[^=]+=(.*)$", cache)
+    if not include or Path(include[1]).resolve() != (sdk / "Include").resolve():
+        raise ValueError("CMake cache did not use the supplied Vulkan SDK")
+    header = (sdk / relative).resolve()
+    if not header.is_relative_to(sdk.resolve()) or not header.is_file():
+        raise ValueError(f"Vulkan SDK header not found: {relative}")
+    return version, sha256(header)
+
+
 def msi_root(document, msi, version):
     """Reuse the single MSI package described by Syft; reject ambiguous input."""
     if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
@@ -145,7 +189,12 @@ def msi_root(document, msi, version):
     return package["SPDXID"]
 
 
-def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version):
+def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version,
+             package="base", vulkan_sdk=None):
+    if (package == "vulkan-addon") != (vulkan_sdk is not None):
+        raise ValueError("--vulkan-sdk is required for, and only for, the Vulkan add-on")
+    if (package == "base") != (runtime_info is not None and bool(runtime_dirs)):
+        raise ValueError("--runtime-info and --runtime-dir are required for, and only for, the base MSI")
     if document.get("spdxVersion") != "SPDX-2.3":
         raise ValueError("Expected a Syft SPDX-2.3 document")
     result = copy.deepcopy(document)
@@ -170,13 +219,16 @@ def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version
         return identifier
 
     root_id = msi_root(result, msi, version)
-    locked = nuget_packages(root)
+    # The add-on ships no settings app and no MSVC runtime; both come with the base.
+    locked = nuget_packages(root) if package == "base" else {}
     covered = set()
-    runtime = read_json(runtime_info)
-    if len(runtime) != len(RUNTIME_FILES) or {x["name"] for x in runtime} != RUNTIME_FILES:
-        raise ValueError("Expected exactly the app-local MSVC runtime DLLs: "
-                         + ", ".join(sorted(RUNTIME_FILES)))
-    for item in inventory(root):
+    runtime = []
+    if package == "base":
+        runtime = read_json(runtime_info)
+        if len(runtime) != len(RUNTIME_FILES) or {x["name"] for x in runtime} != RUNTIME_FILES:
+            raise ValueError("Expected exactly the app-local MSVC runtime DLLs: "
+                             + ", ".join(sorted(RUNTIME_FILES)))
+    for item in inventory(root, package):
         source, _, selector = item["source"].partition(":")
         license_id = item["license"]
         if license_id.startswith("LicenseRef-"):
@@ -210,6 +262,10 @@ def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version
                     raise ValueError("CRT changed after version capture")
                 entries.append((entry["name"], entry["version"], "NOASSERTION",
                                 [{"algorithm": "SHA256", "checksumValue": digest}]))
+        elif source == "vulkan-sdk":
+            sdk_version, digest = vulkan_sdk_header(build_dir, vulkan_sdk, selector)
+            entries.append((item["name"], sdk_version, "NOASSERTION",
+                            [{"algorithm": "SHA256", "checksumValue": digest}]))
         else:
             raise ValueError(f"Unknown SBOM source: {source}")
         if not entries:
@@ -217,29 +273,31 @@ def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version
         for name, version, download, checksums in entries:
             identifier = add(name, version, license_id, item["attribution"], download, checksums)
             relationships.append({"spdxElementId": root_id, "relationshipType": "DEPENDS_ON", "relatedSpdxElement": identifier})
-    if set(locked) - covered != BUILD_ONLY:
+    if package == "base" and set(locked) - covered != BUILD_ONLY:
         raise ValueError("NuGet lock and THIRD_PARTY_LICENSES coverage differ")
     result.setdefault("annotations", []).append({
         "annotationDate": result["creationInfo"]["created"], "annotationType": "OTHER",
         "annotator": "Tool: azookey-complete-release-sbom",
-        "comment": "Declared canonical release build inputs, not an exhaustive binary scan. "
-                   "GoogleTest and Windows SDK BuildTools are test/build-only and not shipped. "
-                   "GGUF models and CUDA runtime are not in the base MSI. "
-                   "LicenseRef text is attribution from THIRD_PARTY_LICENSES, not a license grant."})
+        "comment": ANNOTATIONS[package]})
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ("input", "output", "build-dir", "runtime-info", "msi"):
+    for flag in ("input", "output", "build-dir", "msi"):
         parser.add_argument("--" + flag, required=True, type=Path)
-    # The CRT and the OpenMP runtime live in sibling redist directories.
-    parser.add_argument("--runtime-dir", required=True, type=Path, action="append")
+    parser.add_argument("--package", choices=PACKAGES, default="base")
+    # Base only. The CRT and the OpenMP runtime live in sibling redist directories.
+    parser.add_argument("--runtime-info", type=Path)
+    parser.add_argument("--runtime-dir", type=Path, action="append")
+    # Vulkan add-on only: the SDK root the build configured against.
+    parser.add_argument("--vulkan-sdk", type=Path)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     try:
-        result = complete(read_json(args.input), args.root, args.build_dir, args.runtime_info, args.runtime_dir, args.msi, args.version)
+        result = complete(read_json(args.input), args.root, args.build_dir, args.runtime_info, args.runtime_dir,
+                          args.msi, args.version, args.package, args.vulkan_sdk)
     except (ValueError, OSError) as error:
         parser.exit(1, f"Release SBOM error: {error}\n")
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

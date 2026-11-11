@@ -1,0 +1,30 @@
+<Project Sdk="WixToolset.Sdk/7.0.0">
+  <PropertyGroup>
+    <!--
+      WiX 7 fails with WIX7015 until the OSMF EULA is accepted. The terms and the
+      fee condition are recorded in docs/licensing-policy.md.
+    -->
+    <AcceptEula>wix7</AcceptEula>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <!--
+      Both presets emit azookey_inference_host.exe. The release workflow copies the
+      windows-vulkan-release output under the add-on name and passes that path here.
+    -->
+    <VulkanHostExePath Condition="'$(VulkanHostExePath)' == ''">$(MSBuildThisFileDirectory)..\..\build\vk\inference-host\azookey_inference_host_vulkan.exe</VulkanHostExePath>
+    <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
+    <OutputName>azooKey-vulkan-addon-$(ProductVersion)-x64</OutputName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <DefineConstants>
+      ProductVersion=$(ProductVersion);
+      VulkanHostExePath=$(VulkanHostExePath);
+      ThirdPartyLicensesPath=$(ThirdPartyLicensesPath)
+    </DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="ValidateVulkanAddonPayload" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(VulkanHostExePath)')" Text="Vulkan inference host not found: $(VulkanHostExePath)" />
+    <Error Condition="'$([System.IO.Path]::GetFileName($(VulkanHostExePath)))' != 'azookey_inference_host_vulkan.exe'" Text="Vulkan inference host must be named azookey_inference_host_vulkan.exe: $(VulkanHostExePath)" />
+    <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
+  </Target>
+</Project>

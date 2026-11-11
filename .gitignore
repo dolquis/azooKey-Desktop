@@ -10,6 +10,8 @@ build/
 build_local/
 pkg/msi/bin/
 pkg/msi/obj/
+pkg/msi-vulkan/bin/
+pkg/msi-vulkan/obj/
 CMakeUserPresets.json
 out/
 install/

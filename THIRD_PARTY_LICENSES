@@ -616,7 +616,7 @@ SPDX-License-Identifier: MIT
 
 ## 配布物へ同梱する llama.cpp / ggml
 
-<!-- sbom: {"source":"cmake:AZOOKEY_LLAMA_CPP_GIT_TAG","name":"llama.cpp","license":"MIT"} -->
+<!-- sbom: {"source":"cmake:AZOOKEY_LLAMA_CPP_GIT_TAG","name":"llama.cpp","license":"MIT","packages":["base","vulkan-addon"]} -->
 
 - Source: `https://github.com/ggml-org/llama.cpp.git`（`AZOOKEY_LLAMA_CPP_GIT_TAG` で pin。
   `AZOOKEY_FETCH_LLAMA_CPP=ON` または `AZOOKEY_LLAMA_CPP_SOURCE_DIR` でビルドに取り込む）
@@ -625,7 +625,8 @@ SPDX-License-Identifier: MIT
 - azooKey path: リポジトリへはベンダリングせず、`windows-release` プリセットで
   `BUILD_SHARED_LIBS=OFF` として静的リンクし、`azookey_inference_host.exe` へ組み込む
   （実モデル対応の Zenzai 推論経路）。MSI（[`pkg/msi/README.md`](pkg/msi/README.md)）が
-  この実行ファイルを配布する
+  この実行ファイルを配布する。ggml-vulkan を含む `windows-vulkan-release` の成果物は
+  Vulkan add-on の `azookey_inference_host_vulkan.exe` として別 MSI で配布する
 - Notes: MVP の no-egress mock ビルド（`windows-debug` 既定）では取り込まれず、この
   attribution は `windows-release` / `windows-llama-debug` 等 llama.cpp を組み込む
   ビルド構成にのみ適用される
@@ -652,7 +653,7 @@ SOFTWARE.
 
 ## 配布物へ同梱する WIL（Windows Implementation Libraries）
 
-<!-- sbom: {"source":"cmake:AZOOKEY_WIL_GIT_TAG","name":"WIL","license":"MIT"} -->
+<!-- sbom: {"source":"cmake:AZOOKEY_WIL_GIT_TAG","name":"WIL","license":"MIT","packages":["base","vulkan-addon"]} -->
 
 - Source: `third_party/wil`（`https://github.com/microsoft/wil.git` を commit SHA 固定の
   submodule として参照。header-only）
@@ -688,6 +689,74 @@ SOFTWARE.
 > 選べるモデル kanakanji-edge-33m（`yuuki14202028/kanakanji-edge-33m`）の GGUF も同節を
 > 正典とする（重みは Apache-2.0、語彙 `ku-nlp/gpt2-small-japanese-char` と学習データには
 > CC-BY-SA-4.0 の帰属表記を置き、上流 HF から取得して再ホストしない）。
+
+## 配布物へ同梱する Vulkan-Headers（Vulkan add-on のみ）
+
+<!-- sbom: {"source":"vulkan-sdk:Include/vulkan/vulkan_core.h","name":"Vulkan-Headers","license":"Apache-2.0 OR MIT","packages":["vulkan-addon"]} -->
+
+- Source: `https://github.com/KhronosGroup/Vulkan-Headers`（`vulkan.hpp` は Vulkan-Hpp が生成して
+  同リポジトリへ収録する）。ビルドでは Vulkan SDK（版は Release workflow で固定）の
+  `Include/vulkan` を使う
+- License: Apache-2.0 OR MIT（各ヘッダの `SPDX-License-Identifier`。本配布物は MIT を選ぶ）
+- Copyright: Copyright 2015-2026 The Khronos Group Inc.
+- azooKey path: リポジトリへはベンダリングしない。固定 llama.cpp の ggml-vulkan が
+  `vulkan/vulkan_core.h` と `vulkan/vulkan.hpp` を読み、そのインライン定義が Vulkan add-on の
+  `azookey_inference_host_vulkan.exe` に組み込まれる。base MSI には含まれない
+- Notes: Vulkan loader（`vulkan-1.dll`）と GPU ドライバーは GPU ベンダーが提供し、再配布しない
+  （`docs/sideload-packaging-spec.md` §1.6.2）
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## 配布物へ同梱する SPIRV-Headers（Vulkan add-on のみ）
+
+<!-- sbom: {"source":"vulkan-sdk:Include/spirv/unified1/spirv.hpp","name":"SPIRV-Headers","license":"MIT","packages":["vulkan-addon"]} -->
+
+- Source: `https://github.com/KhronosGroup/SPIRV-Headers`。ビルドでは Vulkan SDK の
+  `Include/spirv/unified1` を使う
+- License: MIT（`spirv.hpp` の表記。上流の LICENSE は MIT 形式の Khronos 条項で、Apache-2.0 ではない）
+- Copyright: Copyright 2014-2024 The Khronos Group Inc.
+- azooKey path: リポジトリへはベンダリングしない。固定 llama.cpp の ggml-vulkan が
+  `spirv/unified1/spirv.hpp` の定数を読み、Vulkan add-on の
+  `azookey_inference_host_vulkan.exe` に組み込まれる。base MSI には含まれない
+- Notes: ビルドに使う `glslc` などの SDK ツールは配布物に含めない（ビルド時のみ）
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## 配布物へ同梱する MSVC runtime
 

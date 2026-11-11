@@ -421,7 +421,7 @@ R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2�
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **base に含めない**。採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典で、同項の再検討の条件を満たして配る場合に限り optional add-on / 別パッケージとし、cudart/cublas を同梱する | CUDA ランタイムが大きく NVIDIA 環境限定。配る場合の再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
-| ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。Vulkan loader / ドライバーは同梱しない。構成と起動する Host の決定は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
+| ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。別 MSI `azooKey-vulkan-addon-<version>-x64.msi` として配る。Vulkan loader / ドライバーは同梱しない。構成、起動する Host の決定、導入と更新は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
 | R2 の ONNX 変換モデル（R1 と同じモデル。対象は `kanakanji-edge-33m`） | **R2 の再開前は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL。R2 を使えない機器では取得しない） | zenz-v3（GPT-2）は builder で変換できない。Llama 構造の edge は変換できる（`docs/copilot-pc-backend-spec.md` §4.2.2・§4.2.3） |
 
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
@@ -679,8 +679,9 @@ ggml のバックエンドレジストリは Vulkan を有効にしたビルド�
 | `azookey_inference_host.exe` | base（§4 の MSI） | `windows-release` preset（`AZOOKEY_BACKEND=cpu`） | 無し |
 | `azookey_inference_host_vulkan.exe` | Vulkan add-on | `windows-vulkan-release` preset（`AZOOKEY_BACKEND=vulkan`） | 有り（暗黙インポート） |
 
-どちらの preset もビルドツリーへは `azookey_inference_host.exe` を出力するので、2 つの実行体が
-同じインストール先に並ぶ add-on 側のファイル名は、パッケージ生成時に確定させる。
+どちらの preset もビルドツリーへは `azookey_inference_host.exe` を出力する。add-on の実行体名は
+パッケージ生成時に `azookey_inference_host_vulkan.exe` へ改名して確定させ、add-on の
+`pkg/msi-vulkan/azooKey.VulkanAddon.wixproj` はこの名前以外の入力を拒否する。
 
 **MSIX 経路での package identity**: external-location MSIX（§1.1.2）は `Application@Executable` に
 宣言した実行体へ identity を与える。`pkg/msix/AppxManifest.xml` が持つ `Application` は base の
@@ -688,28 +689,50 @@ Host 1 つなので、この経路で add-on を配る場合は **add-on の実�
 `Application@Id` に一致する app 側 side-by-side manifest（`<msix>` の 3 属性）、および両者の
 静的整合検証を用意する**。用意しなければ add-on 側の Host は `-ExternalLocation` 付きで登録しても
 `Package.Current` が null になり、roadmap M28 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
-package identity を使わないため、この要求は MSIX 経路にだけ掛かる。
+package identity を使わないため、この要求は MSIX 経路にだけ掛かる。MSIX の配布は延期中
+（§2.0、DEV-255）であり、MSIX 経路の add-on はその再開まで配らない。
 
 add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
 add-on の導入有無で変わらない。Vulkan loader と GPU ドライバーは同梱せず、GPU ベンダーの
 ドライバーが提供するものを使う（§1.6.2）。
+
+##### add-on MSI の導入・更新・削除
+
+add-on は base とは別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs`、独自の UpgradeCode、per-machine、
+未署名は base と同じ扱い）である。
+
+| 項目 | 定義 |
+|---|---|
+| 中身 | `azookey_inference_host_vulkan.exe` と、帰属表示 `THIRD_PARTY_LICENSES-vulkan-addon.txt`。MSVC runtime と OpenMP runtime は base の同梱物を使う |
+| 配置先 | base が `HKLM\Software\azooKey\HostStartup` の `InstallDirectory` に記録した base の `INSTALLFOLDER`。supervisor は base の Host と同じディレクトリでしか add-on を探さない |
+| 導入の前提 | base が導入済みで、base の `ProductVersion`（同じキー）が add-on の版と一致すること。満たさない場合は LaunchCondition で導入を止める |
+| 版の記録 | base は `HKLM\Software\azooKey\HostStartup`、add-on は `HKLM\Software\azooKey\VulkanAddon` の `ProductVersion` に自分の版を書く |
+| 更新 | add-on は base と同じ版番号で出す。base だけを更新すると版が食い違い、supervisor は add-on を選ばない。add-on を同じ版へ更新すると Vulkan 版 Host の選択に戻る |
+| 削除 | add-on を削除しても base は残る。base だけを削除すると Run キーが消え、supervisor は起動しない。残った add-on は版の記録が消えるため選ばれず、利用者が「アプリと機能」から削除する |
+
+稼働中の Host が add-on の実行体を使っているときの削除・更新は、ファイル使用中として
+Windows Installer が再起動を求めうる。base と同じく Restart Manager による停止は無効にしている。
 
 ##### 起動する Host の決定
 
 Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-architecture.md`「Host の起動と
 再起動」）。どちらの実行体を起動するかは、その Host 起動経路が次の順で決定する。
 
-1. Vulkan add-on が導入済みで、`vulkan-1.dll` をロードできること。
-2. Vulkan 版 Host の probe 起動が成功し、Vulkan デバイスを 1 つ以上列挙できること。
-3. 1 と 2 の両方が成立する場合に限り Vulkan 版 Host を起動し、それ以外は base の CPU 版 Host を
+1. Vulkan add-on が導入済みで、MSI 経由の導入では add-on と base の `ProductVersion` が一致すること
+   （開発登録には MSI の版の記録が無いため、この照合を行わない）。
+2. `vulkan-1.dll` をロードできること。
+3. Vulkan 版 Host の probe 起動が成功し、Vulkan デバイスを 1 つ以上列挙できること。
+4. 1 から 3 がすべて成立する場合に限り Vulkan 版 Host を起動し、それ以外は base の CPU 版 Host を
    起動する。
 
-1 を先に判定するのは、loader が無い状態で Vulkan 版 Host を起動するとプロセス生成そのものが
-失敗し、失敗理由が Host 側のログに残らないためである。2 は loader はあるがドライバーが無い、
-または非対応の環境を Host 起動前に CPU 版へ寄せる。probe は Host 起動ごとに評価し、前回の
+版を照合するのは、base の更新後に古い add-on が残ると、IPC と設定の契約が違う Host を
+起動してしまうためである。2 を 3 より先に判定するのは、loader が無い状態で Vulkan 版 Host を
+起動するとプロセス生成そのものが失敗し、失敗理由が Host 側のログに残らないためである。3 は
+loader はあるがドライバーが無い、または非対応の環境を Host 起動前に CPU 版へ寄せる。probe は Host 起動ごとに評価し、前回の
 判定結果を持ち越さない。
 
-起動経路は、選んだ実行体と判定理由を診断可能な形で記録する。実際に動いている Host が
+起動経路（`scripts/host-supervisor.ps1`）は、選んだ実行体と判定理由（`addon_absent`、
+`addon_version_mismatch`、`loader_unavailable`、`probe_failed` など）を診断可能な形で記録する。実際に動いている Host が
 どちらかを、Health の backend 値（`docs/copilot-pc-backend-spec.md` §4.4）だけでなく起動側からも
 特定できるようにする。
 
@@ -727,12 +750,16 @@ Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-ar
 
 - Vulkan 版 Host は llama.cpp の成果物に加え、Vulkan-Headers / Vulkan-Hpp / SPIRV-Headers を
   ビルド時に使う。ライセンスは依存ごとに異なるため、SPDX 識別子と帰属文の正典はルートの
-  `THIRD_PARTY_LICENSES` とし、本節では列挙しない。add-on を生成する変更で、各依存の実際の
-  ライセンスに沿った節を同ファイルへ追加する。
+  `THIRD_PARTY_LICENSES` とし、本節では列挙しない。同ファイルの Vulkan add-on 向けの節は、
+  固定した llama.cpp が読むヘッダを Release workflow で固定した Vulkan SDK の実ファイルで確かめて
+  書く。add-on の MSI も同ファイルを `THIRD_PARTY_LICENSES-vulkan-addon.txt` として同梱する。
 - Vulkan loader とドライバーを再配布しないため、CUDA add-on（§1.6.2）のような再配布条項の
   pass-down は生じない。
 - add-on は独立した配布物なので、SBOM と build provenance（§4.4）を add-on 成果物に対しても
-  生成し、base の SBOM に Vulkan 版 Host の依存を混ぜない。
+  生成し、base の SBOM に Vulkan 版 Host の依存を混ぜない。`scripts/complete-release-sbom.py` は
+  `--package vulkan-addon` で add-on の SBOM を補完する。対象は `THIRD_PARTY_LICENSES` の `sbom` 注記の
+  `packages` に `vulkan-addon` を持つ依存で、Vulkan SDK のヘッダは CMake cache の
+  `Vulkan_INCLUDE_DIR` が渡した SDK を指すことを確かめてから、SDK の版とヘッダの SHA256 で記録する。
 
 ##### 検証の段階
 
@@ -1668,6 +1695,8 @@ WiX Toolset は MSBuild SDK の 7.0.0 に固定し、x64 の per-machine MSI を
 WiX 7 のビルドに必要な OSMF EULA への同意は `azooKey.wixproj` の `AcceptEula` に記録する
 （条件は [`licensing-policy.md`](licensing-policy.md#ビルドツールの利用条件)）。
 配置先は `%ProgramFiles%\azooKey` とする。
+Vulkan add-on は別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs` と `pkg/msi-vulkan/azooKey.VulkanAddon.wixproj`、
+同じ WiX SDK）で、base の `INSTALLFOLDER` へ実行体を 1 つ足す。構成と導入の条件は §1.6.3 が正典。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1867,6 +1896,8 @@ NuGet lock の未分類依存、対応する attribution の欠落、pin や CRT
 
 GoogleTest はテスト専用、Windows SDK BuildTools はビルド専用として配布依存から除外し、
 理由を SPDX annotation に残す。GGUF モデルと CUDA runtime も基本 MSI には同梱しない。
+Vulkan add-on の MSI は base と別の SBOM と attestation を持ち、`--package vulkan-addon` で
+補完する（対象の依存と Vulkan SDK ヘッダの照合は §1.6.3）。
 
 同梱・依存する第三者資産を列挙する正典は、引き続きルート `THIRD_PARTY_LICENSES`
 （運用規約は `docs/licensing-policy.md`）である。SBOM をもって attribution の確認を

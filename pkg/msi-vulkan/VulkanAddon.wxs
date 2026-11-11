@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Vulkan add-on for the azooKey base MSI (docs/sideload-packaging-spec.md 1.6.3).
+  It adds azookey_inference_host_vulkan.exe beside the base CPU host and never
+  replaces it. The supervisor launches the add-on only when its ProductVersion
+  equals the base ProductVersion, the Vulkan loader loads and the probe finds a
+  device. The Vulkan loader, GPU drivers and the MSVC runtime are not shipped
+  here: the loader and drivers come from the GPU vendor, the runtime from the base.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="azooKey Vulkan add-on"
+      Manufacturer="dolquis"
+      Version="$(ProductVersion)"
+      Language="1041"
+      UpgradeCode="CFF14C83-49FA-4184-BB6E-A1562C721003"
+      Scope="perMachine"
+      InstallerVersion="500"
+      Compressed="yes">
+    <SummaryInformation Description="azooKey Vulkan inference host add-on" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- The base MSI records where it is installed and which version it is. -->
+    <Property Id="BASEINSTALLDIR" Secure="yes">
+      <RegistrySearch Id="BaseInstallDirectorySearch" Root="HKLM"
+          Key="SOFTWARE\azooKey\HostStartup"
+          Name="InstallDirectory" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="BASEPRODUCTVERSION" Secure="yes">
+      <RegistrySearch Id="BaseProductVersionSearch" Root="HKLM"
+          Key="SOFTWARE\azooKey\HostStartup"
+          Name="ProductVersion" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR BASEINSTALLDIR"
+        Message="Install azooKey before the azooKey Vulkan add-on." />
+    <Launch Condition="Installed OR BASEPRODUCTVERSION = &quot;$(ProductVersion)&quot;"
+        Message="The azooKey Vulkan add-on must have the same version as the installed azooKey." />
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of the azooKey Vulkan add-on is already installed." />
+
+    <!-- Install into the base INSTALLFOLDER so the supervisor finds the add-on beside the base host. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="azooKey">
+        <Component Id="VulkanHostComponent" Guid="*">
+          <File
+              Id="VulkanHostExe"
+              Source="$(VulkanHostExePath)"
+              Name="azookey_inference_host_vulkan.exe"
+              KeyPath="yes" />
+        </Component>
+        <!-- The add-on MSI is downloaded on its own, so it carries the attribution too. -->
+        <Component Id="VulkanAddonLicensesComponent" Guid="*">
+          <File
+              Id="VulkanAddonThirdPartyLicensesFile"
+              Source="$(ThirdPartyLicensesPath)"
+              Name="THIRD_PARTY_LICENSES-vulkan-addon.txt"
+              KeyPath="yes" />
+        </Component>
+        <Component Id="VulkanAddonVersionComponent" Guid="*" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="SOFTWARE\azooKey\VulkanAddon"
+              Name="ProductVersion" Value="[ProductVersion]" Type="string" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <SetDirectory Id="INSTALLFOLDER" Value="[BASEINSTALLDIR]" Condition="BASEINSTALLDIR" Sequence="both" />
+
+    <!-- Retain files-in-use detection without racing supervisor restarts (same as the base). -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
+    <Property Id="MSIDISABLERMRESTART" Value="1" />
+    <Feature Id="VulkanAddonFeature" Title="azooKey Vulkan add-on" Level="1">
+      <ComponentRef Id="VulkanHostComponent" />
+      <ComponentRef Id="VulkanAddonLicensesComponent" />
+      <ComponentRef Id="VulkanAddonVersionComponent" />
+    </Feature>
+  </Package>
+</Wix>

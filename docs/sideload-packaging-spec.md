@@ -708,7 +708,7 @@ add-on は base とは別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs`、独自の 
 | 導入の前提 | base が導入済みで、base の `ProductVersion`（同じキー）が add-on の版と一致すること。満たさない場合は LaunchCondition で導入を止める |
 | 版の記録 | base は `HKLM\Software\azooKey\HostStartup`、add-on は `HKLM\Software\azooKey\VulkanAddon` の `ProductVersion` に自分の版を書く |
 | 更新 | add-on は base と同じ版番号で出す。base だけを更新すると版が食い違い、supervisor は add-on を選ばない。add-on を同じ版へ更新すると Vulkan 版 Host の選択に戻る |
-| 削除 | add-on を削除しても base は残る。base だけを削除すると Run キーが消え、supervisor は起動しない。残った add-on は版の記録が消えるため選ばれず、利用者が「アプリと機能」から削除する |
+| 削除 | add-on を削除しても base は残る。base だけを削除すると Run キーと base の版の記録が消え、supervisor は起動しない。残った add-on は、base を同じ版で入れ直すと再び選ばれ、違う版で入れ直すと版の照合で選ばれない。不要なら利用者が「アプリと機能」から削除する |
 
 稼働中の Host が add-on の実行体を使っているときの削除・更新は、ファイル使用中として
 Windows Installer が再起動を求めうる。base と同じく Restart Manager による停止は無効にしている。
@@ -890,7 +890,7 @@ stderr は直近 20 起動分を保持する。ログ保持は過去の起動フ
 開発用 Host が同じユーザーの pipe を所有する場合は、その終了を待つ。
 
 MSI はアンインストールと major upgrade で Run 値と
-`HKLM\Software\azooKey\HostStartup` の `InstallDirectory` 値を削除する。
+`HKLM\Software\azooKey\HostStartup` の `InstallDirectory` 値と `ProductVersion` 値を削除する。
 配布 supervisor は登録の削除を検知して終了し、Host は `--supervisor-pid` で保持した
 プロセスハンドルの終了を検知して通常の終了・保存処理を行う。MSI は登録値の削除後、
 ファイル削除前に配布 launcher とインストール先の Host の終了を待つ。

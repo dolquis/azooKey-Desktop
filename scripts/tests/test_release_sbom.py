@@ -308,6 +308,19 @@ class ReleaseSbomTests(unittest.TestCase):
             with self.subTest(text=len(text)), self.assertRaisesRegex(ValueError, "Vulkan SDK attribution coverage"):
                 SBOM.inventory(self.root, "vulkan-addon")
 
+    def test_cli_rejects_package_argument_mismatch_as_usage_error(self):
+        sdk = self.make_vulkan_sdk()
+        common = [sys.executable, str(ROOT / "scripts/complete-release-sbom.py"), "--root", str(self.root),
+                  "--build-dir", str(self.build), "--msi", str(self.msi), "--input", str(self.msi),
+                  "--output", str(self.root / "unused.json"), "--version", "1.2.3"]
+        runtime = ["--runtime-info", str(self.runtime_info), "--runtime-dir", str(self.crt_dir)]
+        for extra in ([], ["--vulkan-sdk", str(sdk)] + runtime, ["--package", "vulkan-addon"],
+                      ["--package", "vulkan-addon", "--vulkan-sdk", str(sdk)] + runtime):
+            with self.subTest(extra=extra):
+                result = subprocess.run(common + extra, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.root / "unused.json").exists())
+
     def test_attribution_does_not_copy_nuget_versions(self):
         text = (ROOT / "THIRD_PARTY_LICENSES").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"`Microsoft\.[^`]+`(?: NuGet package)? \d+\.\d+")

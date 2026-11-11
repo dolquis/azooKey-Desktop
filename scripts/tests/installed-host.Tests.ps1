@@ -105,6 +105,31 @@ Describe "installed host startup contracts" {
     Should -Invoke Test-VulkanHost -Times 0 -Exactly
   }
 
+  It "reports an absent add-on without reading the installed versions" {
+    Mock Test-Path { $false }
+    Mock Get-ItemProperty { throw "Must not read versions without an add-on" }
+    $selection = Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory
+    $selection.Path | Should -Be $script:basePath
+    $selection.Reason | Should -Be "addon_absent"
+    Should -Invoke Get-ItemProperty -Times 0 -Exactly
+  }
+
+  It "checks the loader and then the probe only after the versions match" -TestCases @(
+    @{ Loader = $false; Probe = $true; Reason = "loader_unavailable"; ProbeCalls = 0 },
+    @{ Loader = $true; Probe = $false; Reason = "probe_failed"; ProbeCalls = 1 }
+  ) {
+    # Pester defines the test-case keys as variables; the mocks read $Loader and $Probe.
+    Mock Get-ItemProperty { [pscustomobject]@{ ProductVersion = '1.2.3' } }
+    Mock Test-VulkanLoader { $Loader }
+    Mock Test-VulkanHost { $Probe }
+    $selection = Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory
+    $selection.Path | Should -Be $script:basePath
+    $selection.Reason | Should -Be $Reason
+    Should -Invoke Get-ItemProperty -Times 2 -Exactly
+    Should -Invoke Test-VulkanLoader -Times 1 -Exactly
+    Should -Invoke Test-VulkanHost -Times $ProbeCalls -Exactly
+  }
+
   It "treats an unreadable version as a mismatch" {
     Mock Get-ItemProperty { throw "Registry unavailable" }
     (Get-HostSelection -BasePath $script:basePath -InstalledDirectory $script:InstalledDirectory).Reason |

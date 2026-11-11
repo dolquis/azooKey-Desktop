@@ -295,6 +295,13 @@ def main():
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
+    # Usage errors keep argparse's exit status 2; complete() re-checks for library callers.
+    if args.package == "base" and (args.runtime_info is None or not args.runtime_dir):
+        parser.error("--runtime-info and --runtime-dir are required for the base MSI")
+    if (args.package == "vulkan-addon") != (args.vulkan_sdk is not None):
+        parser.error("--vulkan-sdk is required for, and only for, --package vulkan-addon")
+    if args.package == "vulkan-addon" and (args.runtime_info is not None or args.runtime_dir):
+        parser.error("--runtime-info and --runtime-dir are not used for --package vulkan-addon")
     try:
         result = complete(read_json(args.input), args.root, args.build_dir, args.runtime_info, args.runtime_dir,
                           args.msi, args.version, args.package, args.vulkan_sdk)

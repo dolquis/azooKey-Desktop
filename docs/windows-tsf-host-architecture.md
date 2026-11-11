@@ -352,7 +352,7 @@ quarantine と保存の排他の契約は `docs/learning-data-management-spec.md
   settings.json 書き込み + `UpdateConfig` 再読込まで含む。フル UI は M30。roadmap M11 / M30、
   `docs/sideload-packaging-spec.md` §3.0）
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
-- `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認（予定。roadmap M32、`docs/sideload-packaging-spec.md` §6）
+- `inference-host/src/UpdateChecker.cpp` — GitHub Releases による更新の確認（opt-in。roadmap M32、`docs/sideload-packaging-spec.md` §6。MSI のダウンロードと適用は §6.3）
 - `core/src/CrashReporting.cpp` — `SetUnhandledExceptionFilter` による同意制の例外メタデータ収集（Host と設定アプリ。TIP DLL には入れない）
 - `learning/src/DpapiCrypto.cpp` — DPAPI ラッパ
 - `pkg/msix/AppxManifest.xml` — MSIX マニフェスト

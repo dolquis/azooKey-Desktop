@@ -57,6 +57,12 @@ bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix) {
       !url.starts_with(prefix)) {
     return false;
   }
+  // No dot segments or escapes, which a browser could resolve to a page outside the prefix.
+  const auto rest = url.substr(prefix.size());
+  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
+      rest.find('%') != std::string_view::npos) {
+    return false;
+  }
   return std::all_of(url.begin(), url.end(), [](char c) {
     const auto byte = static_cast<unsigned char>(c);
     return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
@@ -223,8 +229,12 @@ std::optional<uint64_t> UpdateChecker::LastCheckedEpoch(const std::string& chann
   std::string text(static_cast<size_t>(size), '\0');
   if (!input.read(text.data(), static_cast<std::streamsize>(size))) return std::nullopt;
   const auto root = ipc::json::Parse(text);
-  // A check for the other channel does not count, so switching channels checks soon.
-  if (!root || !root->IsObject() || root->GetString("channel") != channel) return std::nullopt;
+  // A check for the other channel, or one made by another build (before an update was
+  // installed), does not count: the next check comes soon and replaces its record.
+  if (!root || !root->IsObject() || root->GetString("channel") != channel ||
+      root->GetString("currentVersion") != options_.current_version) {
+    return std::nullopt;
+  }
   return root->GetUInt("checkedAtEpoch");
 }
 

@@ -178,12 +178,21 @@ void MainWindow::RefreshUpdateStatus() {
   const auto* enabled_field = azookey::settings::FindSettingField("autoUpdate.enabled");
   const bool enabled = enabled_field && std::get<bool>(azookey::settings::SettingValueOrDefault(
                                             *enabled_field, saved_settings_.values));
+  const auto* channel_field = azookey::settings::FindSettingField("autoUpdate.channel");
+  const std::string channel = channel_field
+                                  ? std::get<std::string>(azookey::settings::SettingValueOrDefault(
+                                        *channel_field, saved_settings_.values))
+                                  : std::string("stable");
+  // The Host does not check under privacy.mode=offline.
+  const auto* mode_field = azookey::settings::FindSettingField("privacy.mode");
+  const bool offline = mode_field && std::get<std::string>(azookey::settings::SettingValueOrDefault(
+                                         *mode_field, saved_settings_.values)) == "offline";
   const auto status = settings_path_ ? azookey::settings::ReadUpdateStatus(
                                            settings_path_->parent_path() / L"update-status.json")
                                      : azookey::settings::UpdateStatusView{};
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-  std::wstring text(resources.GetString(
-      winrt::to_hstring(azookey::settings::UpdateStatusResource(status, enabled))));
+  std::wstring text(resources.GetString(winrt::to_hstring(
+      azookey::settings::UpdateStatusResource(status, enabled, offline, channel))));
   const auto replace = [&text](std::wstring_view name, std::wstring_view value) {
     if (const auto at = text.find(name); at != std::wstring::npos) {
       text.replace(at, name.size(), value);
@@ -211,8 +220,8 @@ void MainWindow::RefreshUpdateStatus() {
   UpdateStatusText().Text(text);
 
   // Only a release page of the repository is offered (UpdateStatusModel validates the URL).
-  const bool link =
-      enabled && status.kind == UpdateCheckKind::UpdateAvailable && !status.release_url.empty();
+  const bool link = enabled && !offline && status.channel == channel &&
+                    status.kind == UpdateCheckKind::UpdateAvailable && !status.release_url.empty();
   if (link) {
     OpenReleasePageButton().NavigateUri(
         Windows::Foundation::Uri(winrt::to_hstring(status.release_url)));

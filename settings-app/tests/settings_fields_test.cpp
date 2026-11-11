@@ -193,7 +193,6 @@ TEST(SettingsFieldsTest, AutoUpdateIsOptInAndItsOptionsFollowTheSwitch) {
   const auto names = ResourceNames();
   const auto* enabled = azookey::settings::FindSettingField("autoUpdate.enabled");
   ASSERT_NE(enabled, nullptr);
-  EXPECT_FALSE(enabled->unsupported);
   EXPECT_FALSE(std::get<bool>(enabled->default_value));
   EXPECT_TRUE(enabled->described);
   EXPECT_TRUE(names.contains(azookey::settings::SettingDescriptionResource("autoUpdate.enabled")));
@@ -203,7 +202,6 @@ TEST(SettingsFieldsTest, AutoUpdateIsOptInAndItsOptionsFollowTheSwitch) {
     SCOPED_TRACE(path);
     const auto* field = azookey::settings::FindSettingField(path);
     ASSERT_NE(field, nullptr);
-    EXPECT_FALSE(field->unsupported);
     values.erase("autoUpdate.enabled");
     EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
     values["autoUpdate.enabled"] = true;

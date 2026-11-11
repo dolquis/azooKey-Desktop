@@ -203,7 +203,9 @@ TEST(UpdateCheckerSelectTest, KeepsOnlyReleasePagesOfTheRepository) {
   for (const char* url : {"https://example.com/releases/tag/v1.2.0",
                           "http://github.com/dolquis/azooKey-Desktop/releases/tag/v1.2.0",
                           "https://github.com/dolquis/azooKey-Desktop/releases/",
-                          "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1 2"}) {
+                          "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1 2",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/../../other/repo",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/tag/%2e%2e"}) {
     const auto release = SelectRelease(Release("v1.2.0", false, false, url), "stable", kPrefix);
     ASSERT_TRUE(release) << url;
     EXPECT_EQ(release->version, "1.2.0");
@@ -348,6 +350,22 @@ TEST(UpdateCheckerWorkerTest, ARecordForTheOtherChannelDoesNotDefer) {
   checker.Stop();
 }
 
+TEST(UpdateCheckerWorkerTest, ARecordFromAnotherBuildDoesNotDefer) {
+  // 1.0.0 recorded an available 1.1.0 a minute ago; 1.1.0 is now installed and must not keep
+  // showing that record until the interval passes.
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  WriteStatus(f.status_path, kNow - 60, "stable");
+  auto checker = f.Make("1.1.0");
+  checker.UpdateSettings(true, "stable", 24);
+  checker.Start();
+  EXPECT_TRUE(f.releases.WaitForCount(1));
+  checker.Stop();
+  const auto status = ReadStatus(f.status_path);
+  ASSERT_TRUE(status);
+  EXPECT_EQ(status->GetString("result"), "up_to_date");
+}
+
 TEST(UpdateCheckerWorkerTest, AFailedCheckIsRetriedAtTheNextIntervalNotAtOnce) {
   Fixture f;
   f.releases.answer.error = "network";
@@ -355,9 +373,9 @@ TEST(UpdateCheckerWorkerTest, AFailedCheckIsRetriedAtTheNextIntervalNotAtOnce) {
   checker.UpdateSettings(true, "stable", 6);
   checker.Start();
   ASSERT_TRUE(f.releases.WaitForCount(1));
-  // Clock reads: the first due time, its remaining wait, the attempt time, and then the
-  // remaining wait before the retry, which the worker sleeps on.
-  ASSERT_TRUE(f.clock.WaitForReads(0, 4));
+  // Clock reads: the first due time, its remaining wait, the attempt time, the second due
+  // time, and then the remaining wait before the retry, which the worker sleeps on.
+  ASSERT_TRUE(f.clock.WaitForReads(0, 5));
   EXPECT_EQ(f.releases.count(), 1u);
 
   f.clock.offset_seconds += 6 * 3600;

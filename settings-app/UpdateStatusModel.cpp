@@ -21,6 +21,12 @@ bool IsReleasePage(std::string_view url) {
       !url.starts_with(kReleasePagePrefix)) {
     return false;
   }
+  // No dot segments or escapes, which could resolve to a page outside the prefix.
+  const auto rest = url.substr(kReleasePagePrefix.size());
+  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
+      rest.find('%') != std::string_view::npos) {
+    return false;
+  }
   return std::all_of(url.begin(), url.end(), [](char c) {
     const auto byte = static_cast<unsigned char>(c);
     return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
@@ -66,8 +72,12 @@ UpdateStatusView ReadUpdateStatus(const std::filesystem::path& path) {
   return ParseUpdateStatus(text);
 }
 
-std::string UpdateStatusResource(const UpdateStatusView& status, bool enabled) {
+std::string UpdateStatusResource(const UpdateStatusView& status, bool enabled, bool offline,
+                                 std::string_view channel) {
   if (!enabled) return "UpdateStatus_Disabled";
+  if (offline) return "UpdateStatus_Offline";
+  // A record for the other channel says nothing about the one now chosen.
+  if (status.channel != channel) return "UpdateStatus_None";
   switch (status.kind) {
     case UpdateCheckKind::UpdateAvailable:
       return "UpdateStatus_UpdateAvailable";

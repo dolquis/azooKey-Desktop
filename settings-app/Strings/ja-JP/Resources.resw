@@ -98,7 +98,8 @@
   <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI</value></data>
   <data name="UpdateSectionTitle.Text" xml:space="preserve"><value>更新の確認</value></data>
   <data name="OpenReleasePageButton.Content" xml:space="preserve"><value>リリースページを開く</value></data>
-  <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。「全般」の「自動更新を確認する」でオンにできます。</value></data>
+  <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。「一般」の「自動更新を確認する」でオンにできます。</value></data>
+  <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」の間は、更新を確認しません。</value></data>
   <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン {latest} が公開されています（確認: {checked}）。</value></data>
   <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>

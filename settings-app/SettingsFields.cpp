@@ -302,7 +302,6 @@ std::optional<std::string> ValidateSettingValue(const SettingField& field,
 }
 
 bool IsSettingFieldActive(const SettingField& field, const SettingValues& values) {
-  if (field.unsupported) return false;
   if (!field.active_when) return true;
   const auto* condition = FindSettingField(field.active_when->path);
   if (!condition) return true;

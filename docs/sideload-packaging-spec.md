@@ -1189,7 +1189,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| フッター | バージョン | 製品のバージョン / `autoUpdate` の表示（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+| フッター | バージョン | 製品のバージョン / 更新の確認の結果（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
 `autoUpdate` の 3 キーは編集できる（`enabled` をオンにしたときだけ `channel` と
 `checkIntervalHours` を操作できる）。「バージョン」は、Host の最後の更新確認の結果（§6.1 の
@@ -1413,7 +1413,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン | M32 | 即時 | 本書 §6 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般（結果は「バージョン」） | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
 | `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |
@@ -1605,7 +1605,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M30（バージョンペイン。更新処理は M32） |
+| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。§6） |
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
@@ -1981,9 +1981,10 @@ wingetcreate update --urls `
 - `autoUpdate.enabled` が `true` で、`privacy.mode` が `offline` でないときだけ確認する。
   設定の再読込で無効になると、実行中の確認を取り消す（ダウンローダの取り消しは受信の待ちの
   間にも効く。`docs/model-management-spec.md` §3.1.2）。
-- 確認は Host の起動時と、`checkIntervalHours` ごとに行う。Host を再起動しても、同じ
-  `channel` の前回の確認から `checkIntervalHours` が経つまでは確認しない。失敗した確認は、
-  次の周期で再び試す（即時の再試行はしない）。
+- 確認は Host の起動時と、`checkIntervalHours` ごとに行う（8760 を超える値は 8760 として
+  扱う）。Host を再起動しても、同じ `channel` と同じ製品のバージョンの前回の確認から
+  `checkIntervalHours` が経つまでは確認しない。更新を入れた後の最初の起動では、すぐに確認して
+  記録を書き換える。失敗した確認は、次の周期で再び試す（即時の再試行はしない）。
 - 結果は `settings.json` と同じディレクトリの `update-status.json` に atomic write で書く。
   形式は次のとおりで、`latestVersion` と `releaseUrl` は確認に成功したときだけ置く。
   `releaseUrl` は `https://github.com/dolquis/azooKey-Desktop/releases/` で始まる URL だけを

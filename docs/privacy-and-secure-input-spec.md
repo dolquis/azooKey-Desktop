@@ -45,6 +45,7 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 
 `offline` のネットワーク禁止は、外部 AI に加えて公開アセットの取得にも及ぶ。
 Host での適用は `docs/auto-word-registration-spec.md` §9（trending）と §15.14（neologd pack）に従う。
+更新の確認（`docs/sideload-packaging-spec.md` §6）も `offline` の間は行わない。送る情報はそちらの §6.2 が定める。
 
 既定モードは `normal`。ユーザーが明示的に変更しない限り、自動 secure
 判定（§4）でのみ一時的に `secure` へ落とす。

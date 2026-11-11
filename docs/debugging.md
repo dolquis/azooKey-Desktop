@@ -188,6 +188,8 @@ Host の stderr も従来どおり残る。
 トレンド語の取得失敗は Host ログの `event=trending_word_fetch` と固定の `reason` で
 確認する。取得先未設定は `source_unavailable`、通信・検証・保存失敗は `failed` となる。
 各値の契約は `auto-word-registration-spec.md` §5-1 を参照する。
+更新の確認は `event=update_check` の `reason` と、`settings.json` と同じディレクトリの
+`update-status.json` で確認する。各値の契約は `sideload-packaging-spec.md` §6.1 を参照する。
 
 本文を確認する場合は Debug ビルドに加え、`AZOOKEY_LOG_BODY=1`、非 secure の入力、
 `privacy.redactLogs=false`、詳細ログを許可するモードがすべて必要となる。

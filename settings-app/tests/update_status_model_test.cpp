@@ -66,7 +66,9 @@ TEST(UpdateStatusModelTest, OffersOnlyReleasePagesOfTheRepository) {
        {"https://example.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
         "http://github.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
         "https://github.com/dolquis/azooKey-Desktop/releases/",
-        "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1 1", "javascript:alert(1)"}) {
+        "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1 1", "javascript:alert(1)",
+        "https://github.com/dolquis/azooKey-Desktop/releases/../../other/repo",
+        "https://github.com/dolquis/azooKey-Desktop/releases/tag/%2e%2e"}) {
     const auto status = ParseUpdateStatus(
         std::string(R"({"version":1,"result":"update_available","latestVersion":"1.1.0",)") +
         R"("releaseUrl":")" + url + R"("})");
@@ -78,14 +80,18 @@ TEST(UpdateStatusModelTest, OffersOnlyReleasePagesOfTheRepository) {
 TEST(UpdateStatusModelTest, EverySentenceHasAString) {
   const auto names = ResourceNames();
   azookey::settings::UpdateStatusView status;
-  EXPECT_EQ(UpdateStatusResource(status, false), "UpdateStatus_Disabled");
+  status.channel = "stable";
   for (const auto kind : {UpdateCheckKind::None, UpdateCheckKind::UpdateAvailable,
                           UpdateCheckKind::UpToDate, UpdateCheckKind::Failed}) {
     status.kind = kind;
-    EXPECT_TRUE(names.contains(UpdateStatusResource(status, true)))
-        << UpdateStatusResource(status, true);
-    // Turned off, the pane says so whatever an earlier check recorded.
-    EXPECT_EQ(UpdateStatusResource(status, false), "UpdateStatus_Disabled");
+    const auto resource = UpdateStatusResource(status, true, false, "stable");
+    EXPECT_TRUE(names.contains(resource)) << resource;
+    // Turned off, or offline, the pane says so whatever an earlier check recorded.
+    EXPECT_EQ(UpdateStatusResource(status, false, false, "stable"), "UpdateStatus_Disabled");
+    EXPECT_EQ(UpdateStatusResource(status, true, true, "stable"), "UpdateStatus_Offline");
+    // A record of the other channel is not shown as the result for this one.
+    EXPECT_EQ(UpdateStatusResource(status, true, false, "beta"), "UpdateStatus_None");
   }
   EXPECT_TRUE(names.contains("UpdateStatus_Disabled"));
+  EXPECT_TRUE(names.contains("UpdateStatus_Offline"));
 }

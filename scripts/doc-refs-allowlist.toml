@@ -123,22 +123,6 @@ spec = "docs/typo-correction-learning-spec.md §12.8"
 reason = "TypoCorrectionStore を改名・拡張した v2 の学習ストア。M55 で作る"
 files = ["plans/windows-port-roadmap.md"]
 
-# --- unowned -----------------------------------------------------------------
-
-[[allow]]
-ref = "tsf-tip/src/ContextTracker.h"
-kind = "unowned"
-issue = "DEV-1912"
-reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
-files = ["docs/rich-features-spec.md"]
-
-[[allow]]
-ref = "tsf-tip/src/ContextTracker.cpp"
-kind = "unowned"
-issue = "DEV-1912"
-reason = "rich-features-spec X-4-3 の予定ファイル。所有する M が roadmap に無い"
-files = ["docs/windows-tsf-host-architecture.md"]
-
 # --- origin ------------------------------------------------------------------
 
 [[allow]]

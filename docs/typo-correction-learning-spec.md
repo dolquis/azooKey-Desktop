@@ -484,6 +484,9 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 
 ### 12.8 TypoLearningStore（v2）
 
+予定（M55）。形式は DEV-1955 で決める。本節の SQL は設計案であり、コードは v1
+（`typo_corrections.tsv`、`# azookey-typo-correction-tsv escaped=1`）だけを持つ。
+
 `last_used_at` / `created_at` / `updated_at` はいずれも epoch 秒
 （INTEGER、ミリ秒ではない。`docs/user-learning-enhancement-spec.md` §3.1
 の `LearningStore.cpp` 単位と整合）。
@@ -745,6 +748,9 @@ privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCand
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 
+予定（M55、DEV-1956）。`raw_keys` と `typo_correction_mode` は `Payloads.h` に無く、
+以下は設計案である。`secure` / `learning_allowed` の伝達は既存の契約である。
+
 v1 の `ObserveTypo` IPC に加え、既存 `QueryCandidates` の payload に
 optional フィールドを追加（エンベロープ schema 自体は変更しない）:
 
@@ -806,7 +812,7 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 
 ### 12.14 設定スキーマ拡張
 
-v2 は nested `typoCorrection.*` に集約する。このブロックは M55 が `settings/mvp-settings.schema.json`
+v2 は nested `typoCorrection.*` に集約する。このブロックは M55（DEV-1957）が `settings/mvp-settings.schema.json`
 へ追加する予定の定義であり、v1 の schema が持つのは root の `typoCorrectionMode` / `typoMinCount`（§8）:
 
 ```json

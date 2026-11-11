@@ -1049,16 +1049,6 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 の M53 節とする。本書は辞書層の構成・同梱判定・スコア係数・帰属表示を定義し、受け入れ条件を
 複製しない。物理層（`.azdic`）の受け入れ条件は §15.11 が定義し、roadmap M53 から参照される。
 
-**実装上の留意点**:
-
-- M53 v1 のベンチ対象は同梱の `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0
-  で内包）+ `base_lexicon` の範囲に限る。`neologd_lexicon`（別 DL pack）有効時の追加改善は
-  §14.10 の neologd pack follow-up（M36-B とは別作業）完了時に、当該 pack を有効化した
-  構成で評価する。
-- §14.10 の配布ガードが除外するのは **standalone NEologd 単体パック**であり、SudachiDict が
-  内包する NEologd 由来データは対象外。
-- `app_specific_dictionary` layer は M48 未完了時に空（無効）として扱う。
-
 ## 15. M53 追補: system 辞書の物理層
 
 §14 は辞書層の**論理設計**（層構成・エントリ意味・スコア・ライセンス判定）を定める。

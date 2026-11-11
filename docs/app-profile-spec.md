@@ -7,6 +7,22 @@
       `docs/rich-features-spec.md`（X-2-6 promptPrefixByApp UI、X-2-7
       Persona）
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2 | M48 |
+| §3 | M46（ForegroundAppDetector の導入）。M48 が共用する |
+| §4〜§5 | M48 |
+| §6 | M48（`promptPrefixByApp` の移行。同キーは M30 の横断テーマ X-2-6） |
+| §7 | M48（候補タグの定義は M52） |
+| §8 | M30（設定アプリ） |
+| §9 | M48 |
+| §10 | M48（e2e は M50 の connect） |
+| §11〜§12 | M48（§12 は M48 範囲外の将来拡張） |
+
 ## 1. 目的
 
 前面アプリに応じて、予測 / 学習 / 文体 / AI backend / 候補タグ重みを

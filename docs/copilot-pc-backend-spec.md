@@ -722,8 +722,7 @@ Zenzai の 1 pass、Heavy は既定の beam 幅の Zenzai と、その上に重�
 
 ### 7.1 適用範囲
 
-- `CandidateWindow.cpp`
-- `PredictionWindow.cpp`
+- `CandidateWindow.cpp`（候補と予測の両モード）
 - デバッグウィンドウ（M18-3）
 - Magic Conversion プロンプト（M16）
 - 設定アプリ（M30、別プロセス）

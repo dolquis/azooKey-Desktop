@@ -62,7 +62,7 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 | M13 | C-015: ↑↓/Space/Shift+Space/Ctrl+N/P の選択移動、数字 2 確定、Esc 2 段階。C-017: Ctrl+H による preedit 削除。C-011: Idle の Ctrl+A/C/V | 窓の見え方、入力モード切替、batch 文節操作、応答前 Enter の時序 |
 | 候補・句読点・キャレット | C-015: 候補 surface の追従と確定文字列、reading への復帰 | 下線・句読点の見え方、確定後キャレット位置、全アプリの視覚品質 |
 | M14 | C-018: ライブ変換 ON 時の preedit と Enter/Backspace/Esc の文字列遷移 | 高速入力中の表示、古い応答の巻戻り、設定切替・secure 入力の実機判断 |
-| M15 | C-019: 別 HWND の予測窓とキャレットに対する位置、Tab 受理、2 件表示時の Shift+Tab 受理、Esc 消去 | 画面端の視覚品質、候補 index の区別とクリック操作、設定 OFF の実機判断 |
+| M15 | C-019: 候補窓の予測モードとキャレットに対する位置、Tab 受理、2 件表示時の Shift+Tab 受理、Esc 消去 | 画面端の視覚品質、候補 index の区別とクリック操作、設定 OFF の実機判断 |
 
 **省略条件。** (a) の行を省略してよいのは、次をすべて満たす compat の report がある場合に限る。
 1 つでも欠ければ省略せず実施する。

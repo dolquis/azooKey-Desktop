@@ -318,6 +318,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_live_conversion_for_test(bool enabled) {
     local_settings_.SetLiveConversionForTest(enabled);
   }
+  void set_app_profiles_for_test(std::string_view contents) {
+    local_settings_.SetAppProfilesForTest(contents);
+  }
   void set_punctuation_conversion_for_test(bool enabled) {
     local_settings_.SetPunctuationConversionForTest(enabled);
   }

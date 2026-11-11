@@ -259,7 +259,7 @@ TEST(InputModeMenuTest, ListsTheModesTheSwitchesAndTheSettingsAppInOrder) {
   EXPECT_EQ(entries[1].label, L"半角英数");
   EXPECT_EQ(entries[2].label, L"直接入力");
   EXPECT_EQ(entries[3].label, L"ライブ変換");
-  EXPECT_EQ(entries[4].label, L"予測");
+  EXPECT_EQ(entries[4].label, L"予測変換");
   EXPECT_EQ(entries[5].label, L"設定を開く");
   // Separators set the modes, the switches and the settings app apart.
   const bool separators[] = {false, false, false, true, false, true};
@@ -319,8 +319,34 @@ TEST(InputModeMenuTest, GraysOutOnlyTheSwitchesWhereSettingsCannotBeWritten) {
                            entry.command == InputModeMenuCommand::Prediction;
     EXPECT_EQ(entry.enabled, !is_switch) << static_cast<UINT>(entry.command);
   }
-  // The value is still shown.
+  // The value is still shown, with the reason it cannot be changed.
   EXPECT_TRUE(EntryFor(entries, InputModeMenuCommand::LiveConversion).checked);
+  EXPECT_EQ(EntryFor(entries, InputModeMenuCommand::LiveConversion).label,
+            L"ライブ変換（このアプリでは変更できません）");
+  EXPECT_EQ(EntryFor(entries, InputModeMenuCommand::Prediction).label,
+            L"予測変換（このアプリでは変更できません）");
+  EXPECT_EQ(EntryFor(entries, InputModeMenuCommand::OpenSettings).label, L"設定を開く");
+}
+
+TEST(InputModeMenuTest, PredictionSetByAnAppProfileSaysSoAndKeepsTheGlobalCheck) {
+  for (const bool prediction : {false, true}) {
+    InputModeMenuState state;
+    state.prediction = prediction;
+    state.prediction_by_app_profile = true;
+    const auto entries = azookey::tsf::BuildInputModeMenu(state);
+    const auto& entry = EntryFor(entries, InputModeMenuCommand::Prediction);
+    EXPECT_EQ(entry.label, L"予測変換（このアプリはアプリ別の設定）");
+    EXPECT_EQ(entry.checked, prediction);
+    EXPECT_TRUE(entry.enabled);
+    EXPECT_EQ(EntryFor(entries, InputModeMenuCommand::LiveConversion).label, L"ライブ変換");
+  }
+  // Where the switch is grayed out, the reason it cannot be changed wins.
+  InputModeMenuState state;
+  state.prediction_by_app_profile = true;
+  state.settings_writable = false;
+  const auto entries = azookey::tsf::BuildInputModeMenu(state);
+  EXPECT_EQ(EntryFor(entries, InputModeMenuCommand::Prediction).label,
+            L"予測変換（このアプリでは変更できません）");
 }
 
 TEST(InputModeMenuTest, TestBuildsCloseTheMenuWithoutAChoiceUnlessAPresenterIsSet) {

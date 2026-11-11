@@ -132,6 +132,30 @@ TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return reader.PredictionEnabledSnapshot(); }));
 }
 
+// DEV-1946: whether profilesByApp sets predictionEnabled for an app, for the
+// input indicator's menu.
+TEST_F(LocalSettingsTest, PredictionSetByAppProfileReloadsWithTheFile) {
+  const azookey::core::ForegroundApp notepad{"notepad.exe", "Notepad", true};
+  const auto set = [&] {
+    return reader.PredictionSetByAppProfile(notepad, azookey::core::EqualAsciiAppName);
+  };
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(set());
+  Write(R"({"predictionEnabled":true,"profilesByApp":{"notepad.exe":{"predictionEnabled":true}}})");
+  ASSERT_TRUE(WaitUntil(set));
+  // Another app's profile does not apply, and the global value never counts.
+  EXPECT_FALSE(reader.PredictionSetByAppProfile({"code.exe", "Code", true},
+                                                azookey::core::EqualAsciiAppName));
+  Write(R"({"predictionEnabled":false,"profilesByApp":{"notepad.exe":{"promptPrefix":"x"}}})");
+  ASSERT_TRUE(WaitUntil([&] { return !set(); }));
+  // A file that is not a JSON object clears it.
+  Write(R"({"profilesByApp":{"default":{"predictionEnabled":false}}})");
+  ASSERT_TRUE(WaitUntil(set));
+  Write("[");
+  ASSERT_TRUE(WaitUntil([&] { return !set(); }));
+}
+
 TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndependentlyOfUiSwitch) {
   Write(R"({"predictionEnabled":false,"privacy":{"mode":"custom","custom":{}}})");
   ASSERT_TRUE(reader.Start(path));

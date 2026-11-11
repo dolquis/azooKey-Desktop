@@ -8,7 +8,10 @@
 
 namespace azookey::tsf {
 
-HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile);
+// A non-empty `pane` adds `--pane <pane>` (docs/sideload-packaging-spec.md §3.2);
+// ITfFnConfigure::Show passes none.
+HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile,
+                                  std::wstring_view pane = {});
 // Opens the batch correction view of the settings app on a session pipe
 // (rich-features-spec X-3-6). Only the token is on the command line.
 HRESULT LaunchSettingsApplicationForProofread(HWND parent, std::string_view session_token);

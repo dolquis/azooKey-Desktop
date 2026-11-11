@@ -1371,7 +1371,8 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   `AppInstance::FindOrRegisterForKey` で単一インスタンスを登録し、後続起動は
   `RedirectActivationToAsync` で新しい引数を既存インスタンスへ転送する。既存ウィンドウは転送後に
   前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
-  profile を GUID として検証し、未指定と不正値を区別する。
+  profile を GUID として検証し、未指定と不正値を区別する。起動コンテキストの表示は、転送された起動を含め、
+  最後に受けた起動の引数で決め直す（`langid` も profile も無い起動では隠す）。
 - **校正ビューの引数**: TIP の校正ビュー（`rich-features-spec.md` X-3-6）は
   `--proofread-session <token>` だけを渡す。token は小文字 16 進 32 桁で、重複・値なし・それ以外の値は
   parse error とする。後続起動の転送でも同じく既存インスタンスへ渡り、「校正」ペインがその session を開く。

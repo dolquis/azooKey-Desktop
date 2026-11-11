@@ -133,6 +133,21 @@ class RoadmapTest(unittest.TestCase):
         self.assertTrue(any("M2 → M3" in p for p in problems), problems)
         self.assertFalse(any("M1 → M2" in p for p in problems), problems)
 
+    def test_plus_enumerates_sources_like_slash(self) -> None:
+        roadmap = ROADMAP.replace("（M31 = 廃止）", "（M31 = 廃止）\nM1 + M3 ─→ M2")
+        self.assertEqual(MODULE.check_roadmap(make_root(roadmap)), [])
+        roadmap = ROADMAP.replace("（M31 = 廃止）", "（M31 = 廃止）\nM3 + M31 ─→ M2")
+        problems = MODULE.check_roadmap(make_root(roadmap))
+        self.assertTrue(any("M31 → M2" in p for p in problems), problems)
+
+    def test_suffixed_ids_are_compared_by_base_milestone(self) -> None:
+        # `M1 ─→ M3-A`: M3-A is checked against the 前提 of the M3 section.
+        roadmap = ROADMAP.replace("（M31 = 廃止）", "（M31 = 廃止）\nM1 ─→ M3-A ─→ M3-B")
+        self.assertEqual(MODULE.check_roadmap(make_root(roadmap)), [])
+        roadmap = ROADMAP.replace("（M31 = 廃止）", "（M31 = 廃止）\nM2 ─→ M3-A")
+        problems = MODULE.check_roadmap(make_root(roadmap))
+        self.assertTrue(any("M2 → M3-A" in p for p in problems), problems)
+
     def test_diagram_missing(self) -> None:
         problems = MODULE.check_roadmap(make_root("# Roadmap\n\n### M1: First\n"))
         self.assertTrue(any("依存図" in p for p in problems), problems)

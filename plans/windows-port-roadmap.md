@@ -638,7 +638,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     分岐しない（4 つの `AiTask` の正規化。Host 側の単体テストは `inference-host/tests/ai_backend_test.cpp`）
   - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず
     `BlockedBySecure` で早期 return する。TIP 側の抑止に依存しない
-  - 401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に
+  - モック HTTP で、401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に
     分類され、再試行対象（429 / 5xx / 一時的な Network）だけがバックオフ再試行される
   - `aiBackend=none` で M58-C が `neural` へ落ち、X-3-3 が Lint を実行しない
   - API キーは `dpapi:` prefix の有無で復号と平文を分け、平文でも動作する（同 §9）

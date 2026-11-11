@@ -13,10 +13,20 @@ Roadmap (`plans/windows-port-roadmap.md`)
   R2  Every `### M<n>` section has a `- **前提**:` line (`NO_PREREQUISITE_LINE`
       lists the exceptions), and every M named in such a line appears in the
       diagram.
-  R3  An edge the diagram states directly on one line (`A ─→ B`, `A / B ─→ C`)
-      must be named in the 前提 of the target. The diagram is ASCII art, so
-      branches drawn across lines (`┬`, `├`, `└`) are not extracted; the full
-      edge-by-edge match is deliberately not attempted.
+  R3  An edge the diagram states directly on one line (`A ─→ B`, `A / B ─→ C`,
+      `A + B ─→ C`, and chains `A ─→ B ─→ C`) must be named in the 前提 of the
+      target. `/` and `+` both enumerate sources. An ID with a suffix
+      (`M58-A`) is compared by its base (`M58`), because the 前提 lines are
+      written per milestone section; an edge between two steps of one
+      milestone (`M61-A ─→ M61-B`) is not an edge between milestones and is
+      skipped. Not extracted: branches drawn across lines
+      (`┬`, `├`, `└`) and dotted arrows (`⇢`). The full edge-by-edge match is
+      deliberately not attempted.
+
+  How the 前提 is read: all `- **前提**` bullets of a `### M<n>` section are
+  merged (continuation lines included). "Appears in the diagram" means the M
+  number occurs anywhere in the diagram block, so a mention in a note line
+  counts.
 
 Specs (`docs/*-spec.md`)
   S1  A section whose heading mentions 受け入れ条件 holds no list item or table
@@ -60,7 +70,7 @@ EDGE_CHARS = "─┬┴├└┘┐│"
 # The target is a lookahead so that a chain `A ─→ B ─→ C` yields both edges:
 # B is the target of the first and the source of the second.
 EDGE = re.compile(
-    r"(?P<left>M\d+(?:-[A-Z])?(?:\s*/\s*M\d+(?:-[A-Z])?)*)"
+    r"(?P<left>M\d+(?:-[A-Z])?(?:\s*[/+]\s*M\d+(?:-[A-Z])?)*)"
     r"\s*[" + EDGE_CHARS + r"]*─→\s*"
     r"(?=(?P<right>M\d+(?:-[A-Z])?))"
 )
@@ -145,6 +155,8 @@ def check_roadmap(root: Path) -> list[str]:
             for src in M_ID.findall(edge.group("left")):
                 src_base = M_TOKEN.match(src)
                 assert src_base is not None
+                if src_base.group(0) == base.group(0):
+                    continue  # a step inside one milestone (`M61-A ─→ M61-B`)
                 if src_base.group(0) not in pre:
                     problems.append(
                         f"{ROADMAP}: 依存図の辺 {src} → {target} が、{base.group(0)} の前提に書かれていません"

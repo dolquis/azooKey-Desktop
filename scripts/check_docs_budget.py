@@ -5,7 +5,8 @@ Two independent checks share this script.
 
 Size budget (warning only)
   A spec (`docs/*-spec.md`) of `SPEC_LINE_WARN` lines or more, and a `## `
-  section of `SECTION_LINE_WARN` lines or more, are reported. The report never
+  section of `SECTION_LINE_WARN` lines or more, are reported (a `## ` line inside a fenced
+  code block is not a section boundary). The report never
   changes the exit status: it makes growth visible early, it does not decide
   where a document is split. On GitHub Actions the report is emitted as
   `::warning` annotations as well.
@@ -51,7 +52,14 @@ def size_warnings(root: Path) -> list[tuple[str, str]]:
         lines = path.read_text(encoding="utf-8").splitlines()
         if len(lines) >= SPEC_LINE_WARN:
             out.append((rel, f"{rel}: {len(lines)} 行（警告の閾値 {SPEC_LINE_WARN} 行）。分割を検討してください"))
-        heads = [i for i, l in enumerate(lines) if re.match(r"## ", l)] + [len(lines)]
+        heads = []
+        fenced = False
+        for i, l in enumerate(lines):
+            if l.startswith("```"):
+                fenced = not fenced
+            elif not fenced and l.startswith("## "):
+                heads.append(i)
+        heads.append(len(lines))
         for start, end in zip(heads, heads[1:]):
             if end - start >= SECTION_LINE_WARN:
                 out.append(

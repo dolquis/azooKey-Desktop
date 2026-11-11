@@ -114,6 +114,12 @@ class SizeTest(unittest.TestCase):
         body = "## 1. x\n" + "line\n" * (MODULE.SECTION_LINE_WARN - 1)
         self.assertEqual(len(MODULE.size_warnings(make_root({}, {}, {"a-spec.md": body}))), 1)
 
+    def test_heading_like_line_in_a_code_block_is_not_a_boundary(self) -> None:
+        body = "## 1. x\n```\n## not a section\n```\n" + "line\n" * (MODULE.SECTION_LINE_WARN - 2)
+        warnings = MODULE.size_warnings(make_root({}, {}, {"a-spec.md": body}))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("節「1. x」", warnings[0][1])
+
     def test_non_spec_documents_are_ignored(self) -> None:
         body = "## 1. Big\n" + "line\n" * 2000
         self.assertEqual(MODULE.size_warnings(make_root({}, {}, {"guide.md": body})), [])

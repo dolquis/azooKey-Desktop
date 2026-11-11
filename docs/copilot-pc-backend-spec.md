@@ -722,8 +722,7 @@ Zenzai の 1 pass、Heavy は既定の beam 幅の Zenzai と、その上に重�
 
 ### 7.1 適用範囲
 
-- `CandidateWindow.cpp`
-- `PredictionWindow.cpp`
+- `CandidateWindow.cpp`（候補と予測の両モード）
 - デバッグウィンドウ（M18-3）
 - Magic Conversion プロンプト（M16）
 - 設定アプリ（M30、別プロセス）
@@ -969,7 +968,7 @@ endif()
   `arm64.msix` が成立する。詳細レシピは M28/M29（`docs/sideload-packaging-spec.md` §1/§2）で
   確定する。
 
-### 8.4 ARM64 テスト実行と受け入れ条件
+### 8.4 ARM64 テスト実行経路
 
 ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM64 ネイティブ環境が要る。
 

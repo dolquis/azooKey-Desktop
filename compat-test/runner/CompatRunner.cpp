@@ -23,6 +23,11 @@
 namespace azookey::compat_test {
 namespace {
 
+// The TIP shows candidates and predictions in one window and marks which rows
+// are on screen with this property (tsf-tip/include/azookey/tsf/CandidateWindow.h).
+constexpr wchar_t kCandidateWindowModeProperty[] = L"azooKey.CandidateWindowMode";
+constexpr UINT_PTR kCandidateWindowModePrediction = 2;
+
 template <typename T>
 void SafeRelease(T*& value) {
   if (value) {
@@ -706,22 +711,24 @@ std::optional<RECT> AutomationSession::CaretRect() const {
 }
 
 std::optional<RECT> AutomationSession::CandidateRect() const {
-  return WindowRectForClass(target_.candidate_window_class);
+  return WindowRectForClass(target_.candidate_window_class, /*predictions=*/false);
 }
 
 std::optional<RECT> AutomationSession::PredictionRect() const {
-  return WindowRectForClass(L"azooKeyPredictionWindow");
+  return WindowRectForClass(target_.candidate_window_class, /*predictions=*/true);
 }
 
-std::optional<RECT> AutomationSession::WindowRectForClass(std::wstring_view class_name) const {
+std::optional<RECT> AutomationSession::WindowRectForClass(std::wstring_view class_name,
+                                                          bool predictions) const {
   if (!window_) return std::nullopt;
   DWORD target_process_id = 0;
   GetWindowThreadProcessId(window_, &target_process_id);
   struct Data {
     std::wstring_view class_name;
     DWORD process_id;
+    bool predictions;
     HWND result{nullptr};
-  } data{class_name, target_process_id};
+  } data{class_name, target_process_id, predictions};
   EnumWindows(
       [](HWND window, LPARAM param) -> BOOL {
         auto* data = reinterpret_cast<Data*>(param);
@@ -730,7 +737,10 @@ std::optional<RECT> AutomationSession::WindowRectForClass(std::wstring_view clas
         if (process_id != data->process_id || !IsWindowVisible(window)) return TRUE;
         wchar_t class_name[256]{};
         GetClassNameW(window, class_name, static_cast<int>(std::size(class_name)));
-        if (data->class_name == class_name) {
+        const bool showing_predictions =
+            reinterpret_cast<UINT_PTR>(GetPropW(window, kCandidateWindowModeProperty)) ==
+            kCandidateWindowModePrediction;
+        if (data->class_name == class_name && showing_predictions == data->predictions) {
           data->result = window;
           return FALSE;
         }

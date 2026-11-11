@@ -701,12 +701,15 @@ void CandidateWindow::PresentAt(POINT pt, RECT work_area, int width, int height,
   if (Render(placed_width, placed_height)) {
     render_failed_ = false;
     if (appearing) StartAppearance();
+    // Marked before it shows, so an observer never sees it visible without a mode.
+    UpdateModeProperty(true);
     SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, placed_width, placed_height,
                  SWP_SHOWWINDOW | SWP_NOACTIVATE);
   } else {
     render_failed_ = true;
     HideDetails();
     ShowWindow(hwnd_, SW_HIDE);
+    UpdateModeProperty(false);
   }
   showing_ = false;
   if (on_render_result_) on_render_result_(!render_failed_, on_render_result_context_);
@@ -716,8 +719,20 @@ void CandidateWindow::Hide() {
   HideDetails();
   render_failed_ = false;
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+  UpdateModeProperty(false);
   HideHealthBanner();
   HideSecureToast();
+}
+
+void CandidateWindow::UpdateModeProperty(bool on_screen) {
+  if (!hwnd_) return;
+  if (!on_screen) {
+    RemovePropW(hwnd_, kModeProperty);
+    return;
+  }
+  const UINT_PTR value =
+      mode_ == Mode::Prediction ? kModePropertyPrediction : kModePropertyCandidate;
+  SetPropW(hwnd_, kModeProperty, reinterpret_cast<HANDLE>(value));
 }
 
 void CandidateWindow::SetSecureIndicator(bool visible) {
@@ -1031,6 +1046,7 @@ void CandidateWindow::Repaint() {
   render_failed_ = true;
   HideDetails();
   ShowWindow(hwnd_, SW_HIDE);
+  UpdateModeProperty(false);
   if (on_render_result_) on_render_result_(false, on_render_result_context_);
 }
 
@@ -1431,6 +1447,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     case WM_DESTROY:
       HideDetails();
+      UpdateModeProperty(false);
       // The device stack is bound to this HWND; a later Create makes a new one.
       render_.reset();
       hwnd_ = nullptr;

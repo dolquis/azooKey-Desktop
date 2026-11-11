@@ -602,14 +602,15 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 
 ### M15: 予測候補ウィンドウ
 
-- **目的**: 入力中常時、キャレット右側に予測候補（Word モード）を別 HWND で表示。
+- **目的**: 入力中常時、composition の下に予測候補（Word モード）を候補窓の予測モードで表示。
 - **前提**: M13 完了。
-- **変更対象**: `tsf-tip/src/PredictionWindow.cpp`、`ipc/src/Payloads.cpp`
+- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`（予測モード）、`ipc/src/Payloads.cpp`
   （`QueryPredictions` Payload 本実装）、`inference-host/src/Dispatcher.cpp`、
   `learning/src/LearningStore.cpp`（学習由来の予測供給を足す場合。
   `docs/user-learning-enhancement-spec.md` §14）。
 - **受け入れ条件**:
-  - キャレット右側 / 画面外なら左反転、上下反転で配置
+  - composition の text extent の左下の下に置き、下が溢れたら上へ反転し、作業領域の内側に収める
+    （`docs/legacy-parity-spec.md` §3.2）
   - Tab で第一候補受理、Esc で閉鎖
   - 1 秒キャッシュで連続呼び出し抑制
 - **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2、
@@ -635,10 +636,10 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答（`mode` 別 system プロンプト）が表示される
   - 結果が selection range に置換される
   - M16 / M58-C / X-3-3 / X-3-6 が Host 側で同一の `AiBackend::Transform` を通り、別 backend 実装に
-    分岐しない（4 つの `AiTask` の正規化）
+    分岐しない（4 つの `AiTask` の正規化。Host 側の単体テストは `inference-host/tests/ai_backend_test.cpp`）
   - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず
     `BlockedBySecure` で早期 return する。TIP 側の抑止に依存しない
-  - 401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に
+  - モック HTTP で、401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に
     分類され、再試行対象（429 / 5xx / 一時的な Network）だけがバックオフ再試行される
   - `aiBackend=none` で M58-C が `neural` へ落ち、X-3-3 が Lint を実行しない
   - API キーは `dpapi:` prefix の有無で復号と平文を分け、平文でも動作する（同 §9）
@@ -711,7 +712,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **目的**: 候補・予測ウィンドウが現在のキャレット位置のモニタ作業領域内に
   正しく配置される。
 - **前提**: M14, M15 完了。
-- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
+- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、
   `tsf-tip/src/CaretRectResolver.cpp`。
 - **受け入れ条件**:
   - 2 枚モニタ環境で、ウィンドウ移動後の入力でも対象モニタの作業領域内に
@@ -757,8 +758,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
       Windows 11 標準の候補 UI に候補が表示される
     - `pbShow == TRUE` を返すアプリ（UI element sink を持たない大多数のレガシー Win32 等）では
       `CandidateWindow` が出る
-    - UI-less の環境でも、読み入力中は自前 `PredictionWindow` が出る。候補窓の表示中は予測窓が
-      出ない（spec §8）
+    - UI-less の環境でも、読み入力中は TIP が自前の候補窓の予測モードで予測を描く。候補の表示中は
+      予測を出さない（spec §8）
   - IME On/Off 状態管理（spec §4）:
     - azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
     - 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
@@ -875,7 +876,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 
 - **目的**: 候補・予測ウィンドウの DPI 換算と配色を Windows 11 のテーマに揃える。
 - **前提**: M19 完了。
-- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
+- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、
   `tsf-tip/include/azookey/tsf/ThemeColors.h` と `tsf-tip/src/ThemeColors.cpp`、
   `tsf-tip/include/azookey/tsf/DpiScaling.h`、`tsf-tip/src/RenderingEngine.cpp`
   （DComp + D2D + DirectWrite ラッパ）。

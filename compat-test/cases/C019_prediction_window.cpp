@@ -52,9 +52,9 @@ std::optional<bool> HasTwoPredictionRows(const RECT& prediction, const RECT& car
   UINT dpi_y = 0;
   if (!monitor || FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) || !dpi_x)
     return std::nullopt;
-  // PredictionWindow uses 8 px padding and 28 px per visible row at 96 DPI.
-  const int height_for_two_rows = 2 * MulDiv(8, dpi_x, USER_DEFAULT_SCREEN_DPI) +
-                                  2 * MulDiv(28, dpi_x, USER_DEFAULT_SCREEN_DPI);
+  // The candidate window's prediction mode is 24 px per row at 96 DPI, with no
+  // margin above or below the rows (native-ui-spec §4.2).
+  const int height_for_two_rows = 2 * MulDiv(24, dpi_x, USER_DEFAULT_SCREEN_DPI);
   return prediction.bottom - prediction.top >= height_for_two_rows;
 }
 

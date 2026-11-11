@@ -70,6 +70,10 @@ winrt::hstring StatusText(
   return {};
 }
 
+size_t ApiKeyHash(const winrt::hstring& key) {
+  return std::hash<std::wstring_view>{}(std::wstring_view(key));
+}
+
 // Replaces the first "{0}" in a resource string.
 winrt::hstring WithCount(const winrt::hstring& format, size_t count) {
   std::wstring text(format);
@@ -515,7 +519,7 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
       result.settings.profiles_by_app.value_or(azookey::settings::AppProfiles{}),
       result.settings.legacy_prompt_prefixes);
   OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
-  loaded_api_key_hash_ = std::hash<std::string>{}(result.settings.openai_api_key);
+  loaded_api_key_hash_ = ApiKeyHash(OpenAiApiKeyPasswordBox().Password());
   openai_api_key_cleared_ = false;
   if (result.settings.model_backend_preference) {
     const auto& backend = *result.settings.model_backend_preference;
@@ -583,12 +587,13 @@ azookey::settings::EditableSettings MainWindow::SettingsFromControls(
     settings.model_backend_preference.reset();
   }
   settings.model_selected_path = winrt::to_string(ModelPathTextBox().Text());
-  // Compared by hash, so no further copy of the loaded key is kept. A clear is always written,
-  // which also replaces a stored key that could not be decrypted.
-  auto api_key = winrt::to_string(OpenAiApiKeyPasswordBox().Password());
+  // Compared by hash, so no copy of the key is kept, and the box's text is copied into a string
+  // only when it is to be written. A clear is always written, which also replaces a stored key
+  // that could not be decrypted.
+  const auto api_key = OpenAiApiKeyPasswordBox().Password();
   settings.openai_api_key_changed =
-      openai_api_key_cleared_ || std::hash<std::string>{}(api_key) != loaded_api_key_hash_;
-  if (settings.openai_api_key_changed) settings.openai_api_key = std::move(api_key);
+      openai_api_key_cleared_ || ApiKeyHash(api_key) != loaded_api_key_hash_;
+  if (settings.openai_api_key_changed) settings.openai_api_key = winrt::to_string(api_key);
   const int log_index = LogLevelCombo().SelectedIndex();
   settings.log_level = log_index == 0   ? "error"
                        : log_index == 1 ? "warn"
@@ -766,7 +771,7 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
   }
   if (save_result.ok) {
     if (settings.openai_api_key_changed) {
-      loaded_api_key_hash_ = std::hash<std::string>{}(settings.openai_api_key);
+      loaded_api_key_hash_ = ApiKeyHash(winrt::to_hstring(settings.openai_api_key));
     }
     openai_api_key_cleared_ = false;
     RefreshNeologdLayerStatus();

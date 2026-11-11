@@ -84,6 +84,11 @@ bool IsSettingFieldActive(const SettingField& field, const SettingValues& values
 // was loaded), so a save leaves untouched keys exactly as they are on disk.
 SettingValues ChangedSettingValues(const SettingValues& edited, const SettingValues& loaded);
 
+// The number typed into a number box that has not been committed yet (WinUI updates the value
+// only on Enter or when focus leaves). Blanks around it are trimmed and full-width digits, sign and
+// point are read as ASCII; empty or anything else is nullopt.
+std::optional<double> ParseTypedNumber(std::wstring_view text);
+
 // One entry per line; surrounding blanks are trimmed and empty lines dropped.
 std::vector<std::string> ParseSettingList(std::string_view text);
 std::string FormatSettingList(const std::vector<std::string>& items);

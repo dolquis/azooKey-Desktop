@@ -412,9 +412,10 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
   return SanitizeRoot(parsed->AsObject(), warnings);
 }
 
-// The dictionary keys in schema order, paired with their EditableSettings field.
+// The load warning for a stored API key that cannot be decrypted.
 constexpr std::string_view kUndecryptableApiKeyWarning = "openAiApiKey could not be decrypted";
 
+// The dictionary keys in schema order, paired with their EditableSettings field.
 constexpr std::pair<std::string_view, bool DictionarySettings::*> kDictionaryFields[] = {
     {"sudachiEnabled", &DictionarySettings::sudachi_enabled},
     {"neologdEnabled", &DictionarySettings::neologd_enabled},

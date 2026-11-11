@@ -116,6 +116,16 @@ namespace winrt::azookey_settings::implementation {
 MainWindow::MainWindow() {
   InitializeComponent();
   SaveButton().IsEnabled(false);
+  {
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    const auto version = ProductVersion();
+    std::wstring text(
+        resources.GetString(version.empty() ? L"ProductVersion_Unknown" : L"ProductVersion_Text"));
+    if (const auto at = text.find(L"{0}"); at != std::wstring::npos) {
+      text.replace(at, 3, winrt::to_hstring(version));
+    }
+    ProductVersionText().Text(text);
+  }
   field_controls_.Build([this](azookey::settings::SettingsPane pane) {
     using Pane = azookey::settings::SettingsPane;
     switch (pane) {
@@ -972,16 +982,12 @@ void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
   const auto arguments = azookey::settings::ParseLaunchArguments(raw_arguments);
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
 
-  auto langid_status = arguments.langid_status;
-  auto profile_status = arguments.profile_status;
-  if (arguments.parse_error) {
-    if (langid_status == azookey::settings::LaunchArgumentStatus::NotSupplied) {
-      langid_status = azookey::settings::LaunchArgumentStatus::Invalid;
-    }
-    if (profile_status == azookey::settings::LaunchArgumentStatus::NotSupplied) {
-      profile_status = azookey::settings::LaunchArgumentStatus::Invalid;
-    }
-  }
+  // Each launch, including one forwarded to this window, decides whether the context is shown.
+  LaunchContextInfoBar().Visibility(azookey::settings::HasLaunchContext(arguments)
+                                        ? Microsoft::UI::Xaml::Visibility::Visible
+                                        : Microsoft::UI::Xaml::Visibility::Collapsed);
+  const auto langid_status = arguments.langid_status;
+  const auto profile_status = arguments.profile_status;
 
   if (langid_status == azookey::settings::LaunchArgumentStatus::Valid) {
     wchar_t langid_text[7]{};

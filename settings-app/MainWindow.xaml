@@ -273,6 +273,8 @@
                                Style="{StaticResource SubtitleTextBlockStyle}" />
                     <TextBlock x:Uid="VersionPaneDescription" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="ProductVersionText" IsTextSelectionEnabled="True"
+                               AutomationProperties.AutomationId="ProductVersionText" />
                     <!-- The generated autoUpdate fields bring the "更新の確認" heading. -->
                     <StackPanel x:Name="VersionFieldsPanel" Spacing="16" />
                     <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap"
@@ -289,8 +291,11 @@
                     <HyperlinkButton x:Uid="OpenThirdPartyNoticesButton"
                                      Click="OpenThirdPartyNoticesButton_Click"
                                      AutomationProperties.AutomationId="OpenThirdPartyNoticesButton" />
-                    <InfoBar x:Uid="LaunchContextInfoBar"
+                    <InfoBar x:Name="LaunchContextInfoBar"
+                             x:Uid="LaunchContextInfoBar"
                              IsOpen="True"
+                             IsClosable="False"
+                             Visibility="Collapsed"
                              Severity="Informational"
                              AutomationProperties.AutomationId="LaunchContextInfoBar">
                         <Grid RowSpacing="8" ColumnSpacing="8">

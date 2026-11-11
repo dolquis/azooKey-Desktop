@@ -38,8 +38,9 @@ struct RuntimeModelSettings {
   bool benchmark_on_model_change{false};
 };
 
+// M32 autoUpdate.*; docs/sideload-packaging-spec.md section 6. Opt-in.
 struct RuntimeAutoUpdateSettings {
-  bool enabled{true};
+  bool enabled{false};
   std::string channel{"stable"};
   int32_t check_interval_hours{24};
 };

@@ -99,6 +99,12 @@ if(WIN32)
   azookey_discover_tests(host_trending_word_fetcher_tests)
 endif()
 
+add_executable(host_update_checker_tests update_checker_test.cpp)
+target_link_libraries(host_update_checker_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_update_checker_tests)
+
 add_executable(host_userdict_cli_tests userdict_cli_test.cpp)
 target_link_libraries(host_userdict_cli_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
@@ -131,13 +137,15 @@ if(WIN32)
   set(host_process_test_flush_interval_sec 3600)
   add_executable(host_shutdown_test_fixture ../src/main.cpp)
   target_compile_definitions(host_shutdown_test_fixture PRIVATE
-    AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec})
+    AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec}
+    AZOOKEY_PRODUCT_VERSION_STRING="${AZOOKEY_PRODUCT_VERSION}")
   target_link_libraries(host_shutdown_test_fixture PRIVATE
     azookey_host azookey_binary_hardening azookey_project_options azookey_project_warnings)
   add_executable(host_model_diagnostic_test_fixture ../src/main.cpp)
   target_compile_definitions(host_model_diagnostic_test_fixture PRIVATE
     AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec}
-    AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD=1)
+    AZOOKEY_HOST_PROCESS_TEST_MODEL_LOG_FLOOD=1
+    AZOOKEY_PRODUCT_VERSION_STRING="${AZOOKEY_PRODUCT_VERSION}")
   target_link_libraries(host_model_diagnostic_test_fixture PRIVATE
     azookey_host azookey_binary_hardening azookey_project_options azookey_project_warnings)
   add_executable(host_process_integration_tests host_process_integration_test.cpp)

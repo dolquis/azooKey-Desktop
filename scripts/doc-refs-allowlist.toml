@@ -77,26 +77,6 @@ reason = "署名検証のテスト。M29 で署名経路と同時に追加する
 files = ["docs/sideload-packaging-spec.md"]
 
 [[allow]]
-ref = "inference-host/src/UpdateChecker.cpp"
-kind = "planned"
-milestone = "M32"
-spec = "docs/sideload-packaging-spec.md §6.1"
-reason = "GitHub Releases ベースの更新確認。M32 で新設する"
-files = [
-  "docs/sideload-packaging-spec.md",
-  "docs/windows-tsf-host-architecture.md",
-  "plans/windows-port-roadmap.md",
-]
-
-[[allow]]
-ref = "inference-host/tests/update_checker_test.cpp"
-kind = "planned"
-milestone = "M32"
-spec = "docs/sideload-packaging-spec.md §10"
-reason = "UpdateChecker のテスト。M32 で UpdateChecker と同時に追加する"
-files = ["docs/sideload-packaging-spec.md"]
-
-[[allow]]
 ref = "bench/data/PROVENANCE.json"
 kind = "planned"
 milestone = "M52"

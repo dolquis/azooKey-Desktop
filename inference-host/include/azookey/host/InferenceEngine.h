@@ -163,6 +163,12 @@ struct EngineConfig {
   uint32_t auto_word_trending_interval_hours{24};
   bool auto_word_auto_register{false};
   uint32_t auto_word_min_count{3};
+  // M32 update check; docs/sideload-packaging-spec.md section 6. Read by the Host's
+  // UpdateChecker from the startup config and from on_config_applied; the engine itself does
+  // not use them. auto_update_enabled is already false under privacy.mode=offline or secure.
+  bool auto_update_enabled{false};
+  std::string auto_update_channel{"stable"};
+  uint32_t auto_update_check_interval_hours{24};
   // Score for a confirmed auto-word that carries none of its own (every mined
   // word). Below user_word_default_score so an explicit user entry for the same
   // surface wins the merge, and above a typical static-dictionary hit

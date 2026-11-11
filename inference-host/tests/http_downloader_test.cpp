@@ -27,6 +27,7 @@
 #include "azookey/host/AiBackend.h"
 #include "azookey/host/HttpDownloader.h"
 #include "azookey/host/TrendingWordFetcher.h"
+#include "azookey/host/UpdateChecker.h"
 
 namespace {
 
@@ -544,6 +545,37 @@ TEST_F(TrendingWordHttpIntegrationTest, RealHttpValidHashWithInvalidAssetPreserv
   ASSERT_TRUE(download_result_ && download_result_->ok());
   ExpectDownloadRequestsAndCleanStaging(server);
   ExpectOldStoreAndCache(before);
+}
+
+// DEV-1934: the update check goes through the real downloader to a loopback Releases API.
+// The request carries the fixed path and the product version in the User-Agent, and nothing
+// that identifies the user or the device.
+TEST(UpdateCheckerHttpIntegrationTest, RealHttpRecordsANewerReleaseAndSendsOnlyTheVersion) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  const std::string release =
+      R"({"tag_name":"v1.2.0","html_url":"https://github.com/dolquis/azooKey-Desktop/releases/)"
+      R"(tag/v1.2.0","prerelease":false,"draft":false})";
+  LocalHttpServer server("", false, 1, 0, 200,
+                         {{"/repos/dolquis/azooKey-Desktop/releases/latest", release}});
+  ASSERT_TRUE(server.ok());
+  azookey::host::UpdateCheckerOptions options;
+  options.current_version = "1.1.0";
+  options.api_base_url = server.url(L"/repos/dolquis/azooKey-Desktop");
+  options.status_path = temp.path() / "update-status.json";
+  azookey::host::UpdateChecker checker(std::move(options));
+  checker.UpdateSettings(true, "stable", 24);
+  EXPECT_EQ(checker.CheckOnce(), azookey::host::UpdateCheckStatus::UpdateAvailable);
+
+  const auto request = server.request();
+  EXPECT_TRUE(request.starts_with("GET /repos/dolquis/azooKey-Desktop/releases/latest HTTP/1.1"))
+      << request;
+  EXPECT_NE(request.find("User-Agent: azooKey-Desktop/1.1.0\r\n"), std::string::npos) << request;
+  EXPECT_EQ(request.find("Cookie:"), std::string::npos) << request;
+  const auto status = ReadFile(temp.path() / "update-status.json");
+  EXPECT_NE(status.find(R"("result":"update_available")"), std::string::npos) << status;
+  EXPECT_NE(status.find(R"("latestVersion":"1.2.0")"), std::string::npos) << status;
 }
 
 TEST(AiHttpTest, PostsToLoopbackAndBoundsResponse) {

@@ -1216,11 +1216,11 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| フッター | バージョン | 製品のバージョン / `autoUpdate` の表示（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+| フッター | バージョン | 製品のバージョン / 更新の確認の結果（下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
-「バージョン」の `autoUpdate` は表示専用とする。3 キーを操作できない状態で表示し、未対応である旨の注記を 1 つだけ置く
-（バージョンは保存バーを出さないので、値は保存時に書き戻すだけで変わらない）。M32 の更新確認（§6、DEV-1934）で
-編集できるようにするときに、置くペインと保存の扱いを決め直す。
+`autoUpdate` の 3 キーは編集できる（`enabled` をオンにしたときだけ `channel` と
+`checkIntervalHours` を操作できる）。「バージョン」は、Host の最後の更新確認の結果（§6.1 の
+`update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
 「ログ出力先を開く」（§3.7）のボタンを置く（`docs/dev-infrastructure-spec.md` §8.5.4・§12.1.1 が設定アプリの診断として指す先は、この節である）。
@@ -1440,7 +1440,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン | M32 | 即時 | 本書 §6 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般（結果は「バージョン」） | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
 | `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |
@@ -1632,7 +1632,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M30（バージョンペイン。更新処理は M32） |
+| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。§6） |
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
@@ -2001,41 +2001,75 @@ wingetcreate update --urls `
 
 ## 6. 自動更新（M32）
 
+本節の範囲は更新の確認（新しいリリースを見つけて利用者に示すこと）である。MSI のダウンロードと
+適用（§6.3）は別の課題とする。
+
 ### 6.1 チェック経路
 
-`inference-host/src/UpdateChecker.cpp`（M32 で新設する予定のファイル。実装は DEV-1934。下記は設計案）：
+`inference-host/src/UpdateChecker.cpp`（`azookey::host::UpdateChecker`）が、常駐 Host の中で
+確認を担う。
 
-```cpp
-class UpdateChecker {
-public:
-    struct Release {
-        std::string version;
-        std::string url;        // MSI installer ダウンロード URL
-        std::string sha256;
-        std::string body;       // changelog
-    };
+- `autoUpdate.enabled` が `true` で、`privacy.mode` が `offline` でも `secure` でもないときだけ
+  確認する（§6.2）。設定の再読込で無効になると、実行中の確認を取り消す（ダウンローダの
+  取り消しは受信の待ちの間にも効く。`docs/model-management-spec.md` §3.1.2）。
+- `settings.json` が読めない・不正な間も確認しない。不正な再読込は設定を適用しないが、Host が
+  publish するプライバシーの判定が secure に倒れる（`docs/privacy-and-secure-input-spec.md` §2 の
+  fail closed）ので、それを見て止める。
+- 確認は Host の起動時と、`checkIntervalHours` ごとに行う（8760 を超える値は 8760 として
+  扱う）。Host を再起動しても、同じ `channel` と同じ製品のバージョンの前回の確認から
+  `checkIntervalHours` が経つまでは確認しない。更新を入れた後の最初の起動では、すぐに確認して
+  記録を書き換える。失敗した確認は、次の周期で再び試す（即時の再試行はしない）。
+- 結果は `settings.json` と同じディレクトリの `update-status.json` に atomic write で書く。
+  形式は次のとおりで、`latestVersion` と `releaseUrl` は確認に成功したときだけ置く。
+  `releaseUrl` は `https://github.com/dolquis/azooKey-Desktop/releases/` で始まる URL だけを
+  書く。取り消した確認は何も書かない。
 
-    // GitHub Releases API を叩く
-    std::optional<Release> CheckLatest();
-
-    // 起動時 + 24h タイマで呼ぶ
-    void StartPeriodicCheck();
-};
+```json
+{
+  "version": 1,
+  "checkedAtEpoch": 1794370000,
+  "channel": "stable",
+  "result": "update_available",
+  "currentVersion": "1.0.0",
+  "latestVersion": "1.1.0",
+  "releaseUrl": "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0"
+}
 ```
 
-### 6.2 API
+`result` は `update_available` / `up_to_date` / `failed` のいずれかである。設定アプリの
+「バージョン」はこのファイルを読んで表示し（§3.2）、IPC は使わない。版は `v` を付けて
+「v1.1.0」と表示する。記録の `channel` か `currentVersion` が設定アプリの設定と製品のバージョンに
+合わない記録は、結果として表示しない。Host は各確認の結果を
+RuntimeLog の `update_check` イベントに、固定の `reason`（`up_to_date` / `update_available` /
+`failed` / `cancelled` / `disabled`）だけで記録する。URL と応答本文は記録しない。
+
+### 6.2 API と送る情報
 
 ```
-GET https://api.github.com/repos/dolquis/azooKey-Desktop/releases/latest
-Accept: application/vnd.github+json
-User-Agent: azooKey/1.0.0 (Windows)
+stable: GET https://api.github.com/repos/dolquis/azooKey-Desktop/releases/latest
+beta:   GET https://api.github.com/repos/dolquis/azooKey-Desktop/releases?per_page=20
+User-Agent: azooKey-Desktop/<製品のバージョン>
 ```
 
-レスポンスから `tag_name` をパースし、現バージョンと比較。
+`stable` は最新の正式リリース（draft と pre-release を除く）を、`beta` は一覧のうち draft を除いた
+最も新しいリリース（pre-release を含む）を採る。`tag_name`（`v` 接頭辞を許す）を SemVer 2.0.0 の
+優先順位で現在の製品のバージョン（ビルド時の `AZOOKEY_PRODUCT_VERSION`）と比べ、新しければ
+`update_available` とする。応答は 1 MiB を上限とし、プロキシは WinHTTP の automatic proxy に従う。
+
+送る情報は、接続元の IP アドレス（通信の性質上 GitHub に見える）と、User-Agent に入る製品の
+バージョンだけである。端末やインストールの識別子、設定値、利用状況、Cookie は送らない。確認の
+結果を外部へ送り返すこともなく、テレメトリにはならない。止め方は `autoUpdate.enabled` を
+`false` にする（既定）か、`privacy.mode` を `offline` か `secure` にすることである。opt-in の
+うえでも、利用者が最も強い保護（`secure`）を選んだときは外部へ通信しない。`custom` の
+`externalAi` は AI バックエンドの可否であり、更新の確認とは連動させない。
+
+§1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
+既定で無効（opt-in）であり、利用者が `autoUpdate.enabled` をオンにすることを、起動時と周期の
+確認を許す利用者の操作として扱う。
 
 ### 6.3 ダウンロード → 適用
 
-新バージョンを検出したら：
+本節は将来の課題であり、更新の確認（§6.1）とは別に実装する。新バージョンを検出したら：
 
 1. 通知（トースト）「新しいバージョン v1.1.0 が利用可能」
 2. ユーザーが「インストール」をクリック
@@ -2047,6 +2081,9 @@ User-Agent: azooKey/1.0.0 (Windows)
 6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
    ユーザーに通知して同意を得てから再起動する
 
+更新の確認の結果は、設定アプリの「バージョン」に表示するだけで、トースト通知はしない。非パッケージの
+MSI 配布でトーストを出すには AUMID の登録が要るため、トースト通知は別の課題とする。
+
 ### 6.4 WinSparkle 互換
 
 WinSparkle 互換の `appcast.xml` フィードも `gh-pages` ブランチで提供
@@ -2057,7 +2094,7 @@ WinSparkle 互換の `appcast.xml` フィードも `gh-pages` ブランチで提
 ```json
 {
   "autoUpdate": {
-    "enabled": true,        // default: true
+    "enabled": false,       // default: false（opt-in。§6.2）
     "channel": "stable",    // "stable" | "beta"
     "checkIntervalHours": 24
   }
@@ -2352,7 +2389,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
 | 署名検証 | `pkg/tests/signature_test.ps1`（M29 で新設する予定。署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
-| UpdateChecker | `inference-host/tests/update_checker_test.cpp`（M32 で新設する予定。`UpdateChecker`〔§6.1〕と同時に追加する） | GitHub API モック、バージョン比較 |
+| UpdateChecker | `inference-host/tests/update_checker_test.cpp`、`inference-host/tests/http_downloader_test.cpp`（`UpdateCheckerHttpIntegrationTest`） | 版の比較、channel ごとのリリースの選択、無効・失敗・取り消し時の扱い、周期と前回の確認による間隔、ループバックの Releases API を通した確認と送る情報 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |

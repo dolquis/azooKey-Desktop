@@ -96,6 +96,14 @@
   <data name="AdvancedNavigationItem.Content" xml:space="preserve"><value>詳細</value></data>
   <data name="VersionNavigationItem.Content" xml:space="preserve"><value>バージョン</value></data>
   <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI</value></data>
+  <data name="UpdateSectionTitle.Text" xml:space="preserve"><value>更新の確認</value></data>
+  <data name="OpenReleasePageButton.Content" xml:space="preserve"><value>リリースページを開く</value></data>
+  <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。「一般」の「自動更新を確認する」でオンにできます。</value></data>
+  <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」か「セーフ」の間は、更新を確認しません。</value></data>
+  <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
+  <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
+  <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>
+  <data name="UpdateStatus_Failed" xml:space="preserve"><value>更新を確認できませんでした（{checked}）。次の確認で再び試します。</value></data>
   <data name="CrashReportSectionTitle.Text" xml:space="preserve"><value>障害診断</value></data>
   <data name="RestartRequiredTitle" xml:space="preserve"><value>Host の再起動後に反映される設定があります</value></data>
   <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 辞書 pack は取得されません</value></data>
@@ -254,9 +262,7 @@
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>未対応（M32 で提供予定）です。値は保存されたまま、変更できません。</value></data>
-  <data name="SettingNote_autoUpdate_channel" xml:space="preserve"><value>未対応（M32 で提供予定）です。値は保存されたまま、変更できません。</value></data>
-  <data name="SettingNote_autoUpdate_checkIntervalHours" xml:space="preserve"><value>未対応（M32 で提供予定）です。値は保存されたまま、変更できません。</value></data>
+  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、Host が起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を「バージョン」に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>

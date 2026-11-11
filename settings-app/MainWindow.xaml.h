@@ -58,6 +58,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   void SetNeologdToggle(bool enabled);
   // Asks the Host (QueryDiagnostics) what became of the neologd layer and shows it.
   winrt::fire_and_forget RefreshNeologdLayerStatus();
+  // Shows the Host's last update check (update-status.json beside settings.json, M32).
+  void RefreshUpdateStatus();
   Windows::Foundation::IAsyncOperation<bool> ShowNeologdNoticesAsync(bool ask_consent);
   void ShowSafeMode(const azookey::settings::EditableSettings& settings);
   void ShowInvalidSetting(const std::string& path);

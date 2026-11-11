@@ -187,22 +187,25 @@ TEST(SettingsFieldsTest, PrivacyAxesAreActiveOnlyInCustomMode) {
   EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*axis, values));
 }
 
-TEST(SettingsFieldsTest, AutoUpdateFieldsAreUnsupportedAndNeverEditable) {
-  // No UpdateChecker reads autoUpdate.* until M32, so all three controls stay disabled with a
-  // note, whatever is stored.
+TEST(SettingsFieldsTest, AutoUpdateIsOptInAndItsOptionsFollowTheSwitch) {
+  // M32 (DEV-1934): the update check is off by default; channel and interval have no effect
+  // until it is on.
   const auto names = ResourceNames();
-  for (const auto path :
-       {"autoUpdate.enabled", "autoUpdate.channel", "autoUpdate.checkIntervalHours"}) {
+  const auto* enabled = azookey::settings::FindSettingField("autoUpdate.enabled");
+  ASSERT_NE(enabled, nullptr);
+  EXPECT_FALSE(std::get<bool>(enabled->default_value));
+  EXPECT_TRUE(enabled->described);
+  EXPECT_TRUE(names.contains(azookey::settings::SettingDescriptionResource("autoUpdate.enabled")));
+  azookey::settings::SettingValues values;
+  EXPECT_TRUE(azookey::settings::IsSettingFieldActive(*enabled, values));
+  for (const auto path : {"autoUpdate.channel", "autoUpdate.checkIntervalHours"}) {
     SCOPED_TRACE(path);
     const auto* field = azookey::settings::FindSettingField(path);
     ASSERT_NE(field, nullptr);
-    EXPECT_TRUE(field->unsupported);
-    EXPECT_TRUE(field->described);
-    EXPECT_TRUE(names.contains(azookey::settings::SettingDescriptionResource(path)));
-    azookey::settings::SettingValues values;
+    values.erase("autoUpdate.enabled");
     EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
     values["autoUpdate.enabled"] = true;
-    EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
+    EXPECT_TRUE(azookey::settings::IsSettingFieldActive(*field, values));
     values["autoUpdate.enabled"] = false;
     EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*field, values));
   }

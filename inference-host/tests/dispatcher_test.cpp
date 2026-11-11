@@ -4371,7 +4371,7 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   azookey::host::Dispatcher first(&engine, &scheduler, &user_dict, config, &settings_store);
   azookey::host::Dispatcher second(&engine, &scheduler, &user_dict, config, &settings_store);
 
-  write_settings(R"({"autoWordRegistration":{"trendingEnabled":true,
+  write_settings(R"({"autoUpdate":{"enabled":true},"autoWordRegistration":{"trendingEnabled":true,
                     "trendingIntervalHours":6,"registrationMode":"auto"}})");
   const auto enabled = first.Dispatch(MakeReq(740, ipc::MessageType::UpdateConfig, "{}"));
   ASSERT_TRUE(enabled);
@@ -4382,8 +4382,11 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   EXPECT_TRUE(applied_configs.back().auto_word_trending_enabled);
   EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
   EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
+  // DEV-1934: the opted-in update check is on under normal mode.
+  EXPECT_TRUE(applied_configs.back().auto_update_enabled);
 
-  write_settings(R"({"privacy":{"mode":"offline"},"autoWordRegistration":{
+  write_settings(R"({"privacy":{"mode":"offline"},"autoUpdate":{"enabled":true},
+                    "autoWordRegistration":{
                     "trendingEnabled":true,"trendingIntervalHours":6,"registrationMode":"auto"}})");
   const auto offline = second.Dispatch(MakeReq(743, ipc::MessageType::UpdateConfig, "{}"));
   ASSERT_TRUE(offline);
@@ -4395,6 +4398,9 @@ TEST_F(DispatcherTest, UpdateConfigNotifiesTrendingSettingsAndSafeModeButNotInva
   EXPECT_EQ(applied_configs.back().auto_word_trending_interval_hours, 6u);
   EXPECT_TRUE(applied_configs.back().auto_word_auto_register);
   EXPECT_TRUE(settings_store.settings().auto_word.trending_enabled);
+  // ...and off under offline, so the checker stops its network work.
+  EXPECT_FALSE(applied_configs.back().auto_update_enabled);
+  EXPECT_TRUE(settings_store.settings().auto_update.enabled);
   EXPECT_EQ(network_policies, (std::vector<bool>{true, false}));
 
   write_settings("{ invalid json");

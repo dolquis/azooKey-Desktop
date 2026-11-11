@@ -1628,6 +1628,7 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 の load/save 結果。
 トレンド語取得の `trending_word_fetch` と固定 `reason` は
 `auto-word-registration-spec.md` §5-1 で定義する。
+更新の確認の `update_check` と固定 `reason` は `sideload-packaging-spec.md` §6.1 で定義する。
 
 実装は自前の軽量 JSON Lines ロガーを第一候補とする（依存最小主義）。
 `spdlog` 採用はビルド依存の増加に見合うかを評価したうえで判断し、本仕様の

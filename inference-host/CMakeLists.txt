@@ -25,6 +25,7 @@ add_library(azookey_host STATIC
   src/HostStartup.cpp
   src/HttpDownloader.cpp
   src/TrendingWordFetcher.cpp
+  src/UpdateChecker.cpp
   src/InferenceEngine.cpp
   src/InferenceEngineLearningData.cpp
   src/LearningDataManager.cpp
@@ -127,6 +128,11 @@ target_link_libraries(azookey_inference_host
     azookey_project_options
     azookey_project_warnings
 )
+# The same cache entry as settings-app/CMakeLists.txt and the MSI ProductVersion. The Host
+# reports it to the M32 update check (docs/sideload-packaging-spec.md section 6).
+set(AZOOKEY_PRODUCT_VERSION "0.0.0" CACHE STRING "Product version (MAJOR.MINOR.PATCH)")
+target_compile_definitions(azookey_inference_host
+  PRIVATE AZOOKEY_PRODUCT_VERSION_STRING="${AZOOKEY_PRODUCT_VERSION}")
 
 if(AZOOKEY_ENABLE_ASAN AND MSVC AND AZOOKEY_BUILD_TESTS)
   # host_cli_unicode_argv launches this executable from its own directory, so it

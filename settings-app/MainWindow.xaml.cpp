@@ -6,12 +6,15 @@
 #include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
 #include "StatusPaneModel.h"
+#include "UpdateStatusModel.h"
 #include "UiDispatch.h"
 #include "ModelPaneModel.h"
 // clang-format on
 
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
+
+#pragma comment(lib, "version.lib")
 #endif
 
 #include <microsoft.ui.xaml.window.h>
@@ -24,6 +27,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "azookey/core/CrashReporting.h"
 
@@ -63,6 +67,32 @@ winrt::hstring StatusText(
       break;
   }
   return {};
+}
+
+}  // namespace
+
+namespace {
+
+// This executable's product version as MAJOR.MINOR.PATCH (the VERSIONINFO the build writes from
+// AZOOKEY_PRODUCT_VERSION, the value the Host records). Empty when it cannot be read.
+std::string ProductVersion() {
+  std::array<wchar_t, MAX_PATH> path{};
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  if (length == 0 || length >= path.size()) return {};
+  DWORD ignored = 0;
+  const DWORD size = GetFileVersionInfoSizeW(path.data(), &ignored);
+  if (size == 0) return {};
+  std::vector<BYTE> data(size);
+  if (!GetFileVersionInfoW(path.data(), 0, size, data.data())) return {};
+  VS_FIXEDFILEINFO* info = nullptr;
+  UINT info_size = 0;
+  if (!VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &info_size) || !info ||
+      info_size < sizeof(VS_FIXEDFILEINFO)) {
+    return {};
+  }
+  return std::to_string(HIWORD(info->dwProductVersionMS)) + "." +
+         std::to_string(LOWORD(info->dwProductVersionMS)) + "." +
+         std::to_string(HIWORD(info->dwProductVersionLS));
 }
 
 }  // namespace
@@ -169,6 +199,65 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
   if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
   if (tag == L"Dictionary") RefreshNeologdLayerStatus();
+  if (tag == L"Version") RefreshUpdateStatus();
+}
+
+void MainWindow::RefreshUpdateStatus() {
+  const auto* enabled_field = azookey::settings::FindSettingField("autoUpdate.enabled");
+  const bool enabled = enabled_field && std::get<bool>(azookey::settings::SettingValueOrDefault(
+                                            *enabled_field, saved_settings_.values));
+  const auto* channel_field = azookey::settings::FindSettingField("autoUpdate.channel");
+  const std::string channel = channel_field
+                                  ? std::get<std::string>(azookey::settings::SettingValueOrDefault(
+                                        *channel_field, saved_settings_.values))
+                                  : std::string("stable");
+  // The Host does not check under privacy.mode offline or secure.
+  const auto* mode_field = azookey::settings::FindSettingField("privacy.mode");
+  const auto mode = mode_field ? std::get<std::string>(azookey::settings::SettingValueOrDefault(
+                                     *mode_field, saved_settings_.values))
+                               : std::string("normal");
+  const bool offline = mode == "offline" || mode == "secure";
+  const auto status = settings_path_ ? azookey::settings::ReadUpdateStatus(
+                                           settings_path_->parent_path() / L"update-status.json")
+                                     : azookey::settings::UpdateStatusView{};
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  const auto resource =
+      azookey::settings::UpdateStatusResource(status, enabled, offline, channel, ProductVersion());
+  std::wstring text(resources.GetString(winrt::to_hstring(resource)));
+  const auto replace = [&text](std::wstring_view name, std::wstring_view value) {
+    if (const auto at = text.find(name); at != std::wstring::npos) {
+      text.replace(at, name.size(), value);
+    }
+  };
+  replace(L"{latest}", winrt::to_hstring(status.latest_version));
+  std::wstring checked;
+  if (status.checked_at_epoch) {
+    // Local time of the check, as "2026-11-11 10:30".
+    const uint64_t ticks = (*status.checked_at_epoch + 11644473600ULL) * 10000000ULL;
+    FILETIME utc{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+    SYSTEMTIME utc_time{};
+    SYSTEMTIME local{};
+    if (FileTimeToSystemTime(&utc, &utc_time) &&
+        SystemTimeToTzSpecificLocalTime(nullptr, &utc_time, &local)) {
+      std::array<wchar_t, 32> buffer{};
+      swprintf_s(buffer.data(), buffer.size(), L"%04u-%02u-%02u %02u:%02u",
+                 static_cast<unsigned>(local.wYear), static_cast<unsigned>(local.wMonth),
+                 static_cast<unsigned>(local.wDay), static_cast<unsigned>(local.wHour),
+                 static_cast<unsigned>(local.wMinute));
+      checked = buffer.data();
+    }
+  }
+  replace(L"{checked}", checked.empty() ? std::wstring(L"-") : checked);
+  UpdateStatusText().Text(text);
+
+  // Only a release page of the repository is offered (UpdateStatusModel validates the URL).
+  const bool link = resource == "UpdateStatus_UpdateAvailable" && !status.release_url.empty();
+  if (link) {
+    OpenReleasePageButton().NavigateUri(
+        Windows::Foundation::Uri(winrt::to_hstring(status.release_url)));
+  }
+  OpenReleasePageButton().Visibility(link ? Microsoft::UI::Xaml::Visibility::Visible
+                                          : Microsoft::UI::Xaml::Visibility::Collapsed);
 }
 
 void MainWindow::ApplyDictionaryToControls(

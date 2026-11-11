@@ -672,6 +672,13 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
       static_cast<uint32_t>(settings.auto_word.trending_interval_hours);
   config.auto_word_auto_register = settings.auto_word.registration_mode == "auto";
   config.auto_word_min_count = static_cast<uint32_t>(settings.auto_word.mining_min_count);
+  // No update check under offline or secure (also an unreadable privacy setting): the user's
+  // strongest protection wins over the opt-in (sideload-packaging-spec section 6.2).
+  config.auto_update_enabled =
+      settings.auto_update.enabled && !settings.offline_mode && !settings.privacy_mode_secure;
+  config.auto_update_channel = settings.auto_update.channel;
+  config.auto_update_check_interval_hours =
+      static_cast<uint32_t>(std::max(settings.auto_update.check_interval_hours, int32_t{1}));
 
   std::string backend_preference = settings.backend_preference;
   if (settings.model.backend_preference != "auto") {

@@ -41,6 +41,18 @@ TEST(ProofreadModelTest, RefusesAnEmptyOrOversizedTextBeforeAnythingIsSent) {
             ProofreadInputProblem::TooLarge);
 }
 
+TEST(ProofreadModelTest, ShowsTheSizeInKibAndOverTheLimitOnlyWhenTooLarge) {
+  using azookey::settings::FormatProofreadSize;
+  constexpr auto kLimit = azookey::ipc::kMaxAnomalyTextBytes;
+  EXPECT_EQ(FormatProofreadSize(0), "0 / 60 KiB");
+  EXPECT_EQ(FormatProofreadSize(1), "1 / 60 KiB");
+  EXPECT_EQ(FormatProofreadSize(1024), "1 / 60 KiB");
+  EXPECT_EQ(FormatProofreadSize(1025), "2 / 60 KiB");
+  // The limit itself is still sent, and the first byte over it shows more than 60.
+  EXPECT_EQ(FormatProofreadSize(kLimit), "60 / 60 KiB");
+  EXPECT_EQ(FormatProofreadSize(kLimit + 1), "61 / 60 KiB");
+}
+
 TEST(ProofreadModelTest, ThePastedTextIsSentAsTheUsersOwnText) {
   const auto request = azookey::settings::MakeProofreadRequest("pasted");
   EXPECT_EQ(request.text, "pasted");

@@ -19,6 +19,11 @@ enum class ProofreadInputProblem { None, Empty, TooLarge };
 // The Host refuses an empty text and one over kMaxAnomalyTextBytes (UTF-8 bytes); neither is sent.
 ProofreadInputProblem CheckProofreadInput(std::string_view utf8_text);
 
+// The size shown under the pasted text, as "<used> / <limit> KiB" (sideload-packaging-spec section
+// 3.2). The used size is rounded up to a whole KiB, so it shows more than the limit exactly when
+// the text is over kMaxAnomalyTextBytes, and any text at all shows at least 1.
+std::string FormatProofreadSize(std::size_t utf8_bytes);
+
 // The request for text the user pasted into the settings app: it is the user's own text, so it is
 // not from a secure context and learning is allowed (rich-features-spec X-3-6). The Host still
 // refuses it unless the AI cleanup settings and consent allow an external backend.

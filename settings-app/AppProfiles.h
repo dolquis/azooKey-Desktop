@@ -62,4 +62,8 @@ std::optional<std::string> ValidateAppProfiles(const AppProfiles& profiles);
 // Whether two keys name the same app (case-insensitive, as the resolver compares them).
 bool SameProfileKey(std::string_view left, std::string_view right);
 
+// The string an enum value of a profile is shown with, "Profiles_Option_<value>" ("-" becomes
+// "_"), so the saved value never appears on screen (sideload-packaging-spec section 3.2).
+std::string ProfileOptionResource(std::string_view value);
+
 }  // namespace azookey::settings

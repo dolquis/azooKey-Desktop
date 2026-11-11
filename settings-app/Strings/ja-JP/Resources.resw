@@ -34,13 +34,11 @@
   <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <data name="WindowTitle" xml:space="preserve"><value>azooKey 設定</value></data>
-  <data name="PageTitle.Text" xml:space="preserve"><value>azooKey 設定</value></data>
-  <data name="PageDescription.Text" xml:space="preserve"><value>azooKey の設定を変更できます。保存後、起動中の Host へ再読込を通知します。</value></data>
   <data name="ModelEnabledToggle.Header" xml:space="preserve"><value>Zenzai を使う</value></data>
   <data name="BackendPreferenceLabel.Text" xml:space="preserve"><value>推論デバイス</value></data>
   <data name="BackendAuto.Content" xml:space="preserve"><value>自動</value></data>
   <data name="BackendCpu.Content" xml:space="preserve"><value>CPU</value></data>
-  <data name="CpuOnlyDistributionNote.Text" xml:space="preserve"><value>v1.0 の配布ビルドは CPU 推論のみを含みます。</value></data>
+  <data name="CpuOnlyDistributionNote.Text" xml:space="preserve"><value>配布ビルドの推論は CPU だけで行います。</value></data>
   <data name="BackendDowngradeNote" xml:space="preserve"><value>現在の配布ビルドでは CPU 実行へ降格します。</value></data>
   <data name="ModelPathTextBox.Header" xml:space="preserve"><value>モデルファイル</value></data>
   <data name="ModelPathTextBox.PlaceholderText" xml:space="preserve"><value>C:\models\model.gguf（空欄ならモデル未選択）</value></data>
@@ -49,6 +47,18 @@
   <data name="ClearOpenAiApiKeyButton.Content" xml:space="preserve"><value>API キーを削除</value></data>
   <data name="OpenAiApiKeyDescription.Text" xml:space="preserve"><value>キーは伏字で表示し、変更または保存時に Windows のユーザー保護で暗号化します。削除は保存後に反映されます。</value></data>
   <data name="AdvancedSectionTitle.Text" xml:space="preserve"><value>詳細</value></data>
+  <data name="InputPaneDescription.Text" xml:space="preserve"><value>文字の入り方と、句読点、ローマ字の一括変換を設定します。</value></data>
+  <data name="CandidatesPaneDescription.Text" xml:space="preserve"><value>候補に出す英単語や表記、カッコ補完、候補の数を設定します。</value></data>
+  <data name="AiConversionPaneDescription.Text" xml:space="preserve"><value>Zenzai による変換と、使うモデル、推論の性能を設定します。</value></data>
+  <data name="AiPaneDescription.Text" xml:space="preserve"><value>AI による変換に使う外部の AI サービスを設定します。</value></data>
+  <data name="PrivacyPaneDescription.Text" xml:space="preserve"><value>学習や AI に使う内容と、セーフ入力、障害診断を設定します。</value></data>
+  <data name="AdvancedPaneDescription.Text" xml:space="preserve"><value>ログレベル、実験的な機能、セーフモードの解除を扱います。</value></data>
+  <data name="VersionSectionTitle.Text" xml:space="preserve"><value>バージョン</value></data>
+  <data name="VersionPaneDescription.Text" xml:space="preserve"><value>更新の確認、ライセンス、起動コンテキストを表示します。</value></data>
+  <data name="LogLevelError.Content" xml:space="preserve"><value>エラー</value></data>
+  <data name="LogLevelWarn.Content" xml:space="preserve"><value>警告</value></data>
+  <data name="LogLevelInfo.Content" xml:space="preserve"><value>情報</value></data>
+  <data name="LogLevelDebug.Content" xml:space="preserve"><value>デバッグ</value></data>
   <data name="LogLevelLabel.Text" xml:space="preserve"><value>ログレベル</value></data>
   <data name="SaveButton.Content" xml:space="preserve"><value>保存</value></data>
   <data name="SaveBar_ChangeCount" xml:space="preserve"><value>変更した設定: {0} 件</value></data>
@@ -61,9 +71,9 @@
   <data name="SaveBar_UnsavedCancel" xml:space="preserve"><value>閉じるのをやめる</value></data>
   <data name="LoadFailedTitle" xml:space="preserve"><value>設定の読み込みに問題があります</value></data>
   <data name="SaveFailedTitle" xml:space="preserve"><value>設定を保存できませんでした</value></data>
-  <data name="SavedHostWarningTitle" xml:space="preserve"><value>保存しましたが、Host へ反映できませんでした</value></data>
+  <data name="SavedHostWarningTitle" xml:space="preserve"><value>保存しましたが、変換エンジンへ反映できませんでした</value></data>
   <data name="SaveSucceededTitle" xml:space="preserve"><value>設定を保存しました</value></data>
-  <data name="SaveSucceededMessage" xml:space="preserve"><value>起動中の Host へ設定を反映しました。</value></data>
+  <data name="SaveSucceededMessage" xml:space="preserve"><value>起動中の変換エンジンへ設定を反映しました。</value></data>
   <data name="SaveWarningTitle" xml:space="preserve"><value>設定を保存しました（確認事項あり）</value></data>
   <data name="LocalAppDataUnavailable" xml:space="preserve"><value>LOCALAPPDATA を取得できません。</value></data>
   <data name="SettingsBusyMessage" xml:space="preserve"><value>設定ファイルをほかの処理が使用しています。しばらく待ってから再試行してください。</value></data>
@@ -73,7 +83,7 @@
   <data name="SaveFailedAfterQuarantineMessage" xml:space="preserve"><value>設定ファイルを保存できませんでした。破損していた元のファイルは .invalid* に退避されています。</value></data>
   <data name="InvalidFileQuarantinedMessage" xml:space="preserve"><value>破損していた元の設定ファイルを .invalid* に退避しました。</value></data>
   <data name="InvalidEntriesRemovedMessage" xml:space="preserve"><value>未知または無効な設定項目を除去しました。</value></data>
-  <data name="HostUpdateFailedMessage" xml:space="preserve"><value>設定は保存しましたが、起動中の Host へ反映できませんでした。</value></data>
+  <data name="HostUpdateFailedMessage" xml:space="preserve"><value>設定は保存しましたが、起動中の変換エンジンへ反映できませんでした。</value></data>
   <data name="InvalidEntriesSkipped" xml:space="preserve"><value>未知または無効な設定値を既定値として表示します。保存時には無効な項目を除去します。</value></data>
   <data name="UnsupportedBackendPrefix" xml:space="preserve"><value>このバージョンの UI では選択できない有効値を保持しています: </value></data>
   <data name="InvalidModelPath" xml:space="preserve"><value>モデルファイルには、実在する .gguf ファイルの絶対パスを指定してください。</value></data>
@@ -94,47 +104,46 @@
   <data name="ThirdPartyNoticesUnavailable" xml:space="preserve"><value>ライセンス文書が見つからないか、開けません。インストール先の第三者ライセンス文書を確認してください。</value></data>
   <data name="CrashReportFolderTitle" xml:space="preserve"><value>診断ファイルの保存先</value></data>
   <data name="CrashReportFolderUnavailable" xml:space="preserve"><value>保存先がまだないか、開けません。保存を許可して設定を保存すると、診断用フォルダーが作成されます。</value></data>
-  <data name="CrashReportReady" xml:space="preserve"><value>この Settings アプリでの保存準備ができています。</value></data>
-  <data name="CrashReportDisabled" xml:space="preserve"><value>この Settings アプリでは診断ファイルを収集しません。</value></data>
-  <data name="CrashReportUnavailable" xml:space="preserve"><value>この Settings アプリでは診断ファイルを保存できません。保存先やアクセス権を確認してください。保存に失敗した障害は、OS の既定の障害処理へ引き継ぎます。</value></data>
+  <data name="CrashReportReady" xml:space="preserve"><value>この設定アプリでの保存準備ができています。</value></data>
+  <data name="CrashReportDisabled" xml:space="preserve"><value>この設定アプリでは診断ファイルを収集しません。</value></data>
+  <data name="CrashReportUnavailable" xml:space="preserve"><value>この設定アプリでは診断ファイルを保存できません。保存先やアクセス権を確認してください。保存に失敗した障害は、OS の既定の障害処理へ引き継ぎます。</value></data>
   <data name="DictionaryNavigationItem.Content" xml:space="preserve"><value>辞書</value></data>
   <data name="AiNavigationItem.Content" xml:space="preserve"><value>AI サービス</value></data>
   <data name="AdvancedNavigationItem.Content" xml:space="preserve"><value>詳細</value></data>
   <data name="VersionNavigationItem.Content" xml:space="preserve"><value>バージョン</value></data>
   <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI サービス</value></data>
-  <data name="UpdateSectionTitle.Text" xml:space="preserve"><value>更新の確認</value></data>
   <data name="OpenReleasePageButton.Content" xml:space="preserve"><value>リリースページを開く</value></data>
   <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。上の「自動更新を確認する」でオンにできます。</value></data>
-  <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」か「セーフ」の間は、更新を確認しません。</value></data>
+  <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」か「常にセーフ入力」の間は、更新を確認しません。</value></data>
   <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
   <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>
   <data name="UpdateStatus_Failed" xml:space="preserve"><value>更新を確認できませんでした（{checked}）。次の確認で再び試します。</value></data>
   <data name="CrashReportSectionTitle.Text" xml:space="preserve"><value>障害診断</value></data>
-  <data name="RestartRequiredTitle" xml:space="preserve"><value>Host の再起動後に反映される設定があります</value></data>
-  <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 辞書 pack は取得されません</value></data>
-  <data name="NeologdNoticesDialogFailed" xml:space="preserve"><value>ライセンスと帰属のダイアログを表示できなかったため、NEologd 辞書 pack を有効にしませんでした。もう一度切り替えてください。</value></data>
+  <data name="RestartRequiredTitle" xml:space="preserve"><value>変換エンジンの再起動後に反映される設定があります</value></data>
+  <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 追加辞書は取得されません</value></data>
+  <data name="NeologdNoticesDialogFailed" xml:space="preserve"><value>ライセンスと帰属のダイアログを表示できなかったため、NEologd 追加辞書を有効にしませんでした。もう一度切り替えてください。</value></data>
   <data name="DictionarySectionTitle.Text" xml:space="preserve"><value>辞書</value></data>
-  <data name="DictionaryDescription.Text" xml:space="preserve"><value>変換に使う辞書層を個別に有効・無効にできます。保存すると次回の変換から反映されます。</value></data>
+  <data name="DictionaryDescription.Text" xml:space="preserve"><value>変換に使う辞書を個別に有効・無効にできます。</value></data>
   <data name="SudachiDictionaryToggle.Header" xml:space="preserve"><value>基本辞書（SudachiDict）</value></data>
   <data name="NamedEntityDictionaryToggle.Header" xml:space="preserve"><value>固有名詞辞書</value></data>
   <data name="TechnicalTermsDictionaryToggle.Header" xml:space="preserve"><value>技術用語辞書</value></data>
   <data name="UserDictionaryToggle.Header" xml:space="preserve"><value>ユーザー辞書</value></data>
   <data name="AutoWordsDictionaryToggle.Header" xml:space="preserve"><value>自動登録した単語</value></data>
   <data name="AppSpecificDictionaryToggle.Header" xml:space="preserve"><value>アプリ別辞書</value></data>
-  <data name="NeologdSectionTitle.Text" xml:space="preserve"><value>追加辞書 pack（mecab-ipadic-NEologd）</value></data>
-  <data name="NeologdDictionaryToggle.Header" xml:space="preserve"><value>NEologd 辞書 pack を使う</value></data>
-  <data name="NeologdDescription.Text" xml:space="preserve"><value>NEologd 辞書 pack はインストーラーに含まれず、別にダウンロードします（既定は無効）。有効にする前に上流のライセンスと帰属を表示し、同意したときだけ有効にします。ダウンロードは Host の起動時に行います。</value></data>
-  <data name="ShowNeologdNoticesButton.Content" xml:space="preserve"><value>NEologd 辞書 pack のライセンスと帰属を表示</value></data>
-  <data name="NeologdPackUnpublished" xml:space="preserve"><value>現在は公開された NEologd 辞書 pack が無いため、有効にしてもダウンロードしません。</value></data>
-  <data name="NeologdNoticesUnavailable" xml:space="preserve"><value>NEologd 辞書 pack の帰属情報を読み込めないため、有効にできません。</value></data>
-  <data name="NeologdNoticesTitle" xml:space="preserve"><value>NEologd 辞書 pack のライセンスと帰属</value></data>
+  <data name="NeologdSectionTitle.Text" xml:space="preserve"><value>追加辞書（mecab-ipadic-NEologd）</value></data>
+  <data name="NeologdDictionaryToggle.Header" xml:space="preserve"><value>NEologd 追加辞書を使う</value></data>
+  <data name="NeologdDescription.Text" xml:space="preserve"><value>NEologd 追加辞書はインストーラーに含まれず、変換エンジンの起動時に別にダウンロードします（既定は無効）。有効にする前に上流のライセンスと帰属を表示し、同意したときだけ有効にします。</value></data>
+  <data name="ShowNeologdNoticesButton.Content" xml:space="preserve"><value>NEologd 追加辞書のライセンスと帰属を表示</value></data>
+  <data name="NeologdPackUnpublished" xml:space="preserve"><value>現在は公開された NEologd 追加辞書が無いため、有効にしてもダウンロードしません。</value></data>
+  <data name="NeologdNoticesUnavailable" xml:space="preserve"><value>NEologd 追加辞書の帰属情報を読み込めないため、有効にできません。</value></data>
+  <data name="NeologdNoticesTitle" xml:space="preserve"><value>NEologd 追加辞書のライセンスと帰属</value></data>
   <data name="NeologdConsentIntro" xml:space="preserve"><value>次の上流ライセンスと帰属（個別の条件を含む）を確認し、同意する場合だけ有効にしてください。</value></data>
-  <data name="NeologdNoticesIntro" xml:space="preserve"><value>NEologd 辞書 pack の上流ライセンスと帰属です。</value></data>
+  <data name="NeologdNoticesIntro" xml:space="preserve"><value>NEologd 追加辞書の上流ライセンスと帰属です。</value></data>
   <data name="NeologdConsentAcceptButton" xml:space="preserve"><value>同意して有効化</value></data>
   <data name="NeologdConsentCancelButton" xml:space="preserve"><value>キャンセル</value></data>
   <data name="NeologdNoticesCloseButton" xml:space="preserve"><value>閉じる</value></data>
-  <data name="NeologdRestartRequiredMessage" xml:space="preserve"><value>NEologd 辞書 pack は Host の起動時にダウンロードします。サインアウトして再度サインインした後に取得します。</value></data>
+  <data name="NeologdRestartRequiredMessage" xml:space="preserve"><value>NEologd 追加辞書は変換エンジンの起動時にダウンロードします。サインアウトして再度サインインした後に取得します。</value></data>
   <data name="Setting_autoUpdate_enabled" xml:space="preserve"><value>自動更新を確認する</value></data>
   <data name="Setting_autoUpdate_channel" xml:space="preserve"><value>更新チャネル</value></data>
   <data name="Setting_autoUpdate_checkIntervalHours" xml:space="preserve"><value>更新を確認する間隔（時間）</value></data>
@@ -173,16 +182,16 @@
   <data name="Setting_emojiMaxCandidates" xml:space="preserve"><value>絵文字候補の最大数</value></data>
   <data name="Setting_emojiTriggerMinQueryLength" xml:space="preserve"><value>絵文字検索を始める最小文字数</value></data>
   <data name="Setting_emojiDataPath" xml:space="preserve"><value>絵文字データのパス</value></data>
-  <data name="Setting_bracketPairing" xml:space="preserve"><value>括弧を自動で閉じる</value></data>
-  <data name="Setting_bracketPairingTrigger" xml:space="preserve"><value>閉じ括弧を入れるタイミング</value></data>
-  <data name="Setting_bracketSkipOverClosing" xml:space="preserve"><value>閉じ括弧の入力で既存の閉じ括弧を飛び越す</value></data>
-  <data name="Setting_bracketBackspaceDeletesPair" xml:space="preserve"><value>Backspace で括弧の組を消す</value></data>
-  <data name="Setting_bracketPairingInAlnumMode" xml:space="preserve"><value>英数モードでも括弧を閉じる</value></data>
+  <data name="Setting_bracketPairing" xml:space="preserve"><value>カッコを自動で閉じる</value></data>
+  <data name="Setting_bracketPairingTrigger" xml:space="preserve"><value>閉じカッコを入れるタイミング</value></data>
+  <data name="Setting_bracketSkipOverClosing" xml:space="preserve"><value>閉じカッコの入力で既存の閉じカッコを飛び越す</value></data>
+  <data name="Setting_bracketBackspaceDeletesPair" xml:space="preserve"><value>Backspace でカッコの組を消す</value></data>
+  <data name="Setting_bracketPairingInAlnumMode" xml:space="preserve"><value>英数モードでもカッコを閉じる</value></data>
   <data name="Setting_bracketSymmetricQuotePairing" xml:space="preserve"><value>引用符も対にする</value></data>
-  <data name="Setting_bracketWrapSelection" xml:space="preserve"><value>選択範囲を括弧で囲む</value></data>
+  <data name="Setting_bracketWrapSelection" xml:space="preserve"><value>選択範囲をカッコで囲む</value></data>
   <data name="Setting_bracketPairingAppPolicy" xml:space="preserve"><value>アプリの指定方法</value></data>
   <data name="Setting_bracketPairingApps" xml:space="preserve"><value>対象アプリ（実行ファイル名）</value></data>
-  <data name="Setting_bracketPairsPath" xml:space="preserve"><value>括弧の組のパス</value></data>
+  <data name="Setting_bracketPairsPath" xml:space="preserve"><value>カッコの組のパス</value></data>
   <data name="Setting_autoWordRegistration_miningEnabled" xml:space="preserve"><value>入力から新語を集める</value></data>
   <data name="Setting_autoWordRegistration_miningMinCount" xml:space="preserve"><value>新語とみなす最小出現回数</value></data>
   <data name="Setting_autoWordRegistration_trendingEnabled" xml:space="preserve"><value>流行語を取り込む</value></data>
@@ -190,7 +199,7 @@
   <data name="Setting_autoWordRegistration_registrationMode" xml:space="preserve"><value>新語の登録方法</value></data>
   <data name="Setting_typoCorrectionMode" xml:space="preserve"><value>タイプミスの訂正</value></data>
   <data name="Setting_typoMinCount" xml:space="preserve"><value>タイプミスとみなす最小回数</value></data>
-  <data name="Setting_aiBackend" xml:space="preserve"><value>AI バックエンド</value></data>
+  <data name="Setting_aiBackend" xml:space="preserve"><value>AI サービス</value></data>
   <data name="Setting_llmMagicConversion" xml:space="preserve"><value>AI による変換（Magic Conversion）</value></data>
   <data name="Setting_includeContextInAITransform" xml:space="preserve"><value>AI に前後の文脈を送る</value></data>
   <data name="Setting_openAiApiEndpoint" xml:space="preserve"><value>OpenAI API のエンドポイント</value></data>
@@ -198,7 +207,7 @@
   <data name="Setting_openAiTimeoutMs" xml:space="preserve"><value>OpenAI の応答待ち時間（ミリ秒）</value></data>
   <data name="Setting_privacy_mode" xml:space="preserve"><value>プライバシーモード</value></data>
   <data name="Setting_privacy_custom_learning" xml:space="preserve"><value>学習する</value></data>
-  <data name="Setting_privacy_custom_prediction" xml:space="preserve"><value>予測する</value></data>
+  <data name="Setting_privacy_custom_prediction" xml:space="preserve"><value>予測変換を使う</value></data>
   <data name="Setting_privacy_custom_aiCandidate" xml:space="preserve"><value>AI 候補を使う</value></data>
   <data name="Setting_privacy_custom_externalAi" xml:space="preserve"><value>外部 AI を使う</value></data>
   <data name="Setting_privacy_custom_detailedLogging" xml:space="preserve"><value>詳細なログを残す</value></data>
@@ -214,13 +223,13 @@
   <data name="Setting_postCommitLint" xml:space="preserve"><value>確定後の校正（実験）</value></data>
   <data name="Setting_retroactiveRecompute" xml:space="preserve"><value>遡って再変換（実験）</value></data>
   <data name="Setting_sentenceCompletion" xml:space="preserve"><value>文の補完（実験）</value></data>
-  <data name="SettingSection_AutoUpdate" xml:space="preserve"><value>自動更新</value></data>
+  <data name="SettingSection_AutoUpdate" xml:space="preserve"><value>更新の確認</value></data>
   <data name="SettingSection_InputMethod" xml:space="preserve"><value>入力方式</value></data>
   <data name="SettingSection_Punctuation" xml:space="preserve"><value>句読点</value></data>
   <data name="SettingSection_Batch" xml:space="preserve"><value>ローマ字の一括変換</value></data>
   <data name="SettingSection_English" xml:space="preserve"><value>英単語候補</value></data>
   <data name="SettingSection_Rewriters" xml:space="preserve"><value>候補の書き換え</value></data>
-  <data name="SettingSection_Brackets" xml:space="preserve"><value>括弧</value></data>
+  <data name="SettingSection_Brackets" xml:space="preserve"><value>カッコ補完</value></data>
   <data name="SettingSection_AutoWords" xml:space="preserve"><value>新語の自動登録</value></data>
   <data name="SettingSection_Typo" xml:space="preserve"><value>タイプミスの学習</value></data>
   <data name="SettingSection_AiBackend" xml:space="preserve"><value>AI</value></data>
@@ -249,7 +258,7 @@
   <data name="SettingOption_batchRomajiPreviewStyle_romaji" xml:space="preserve"><value>ローマ字</value></data>
   <data name="SettingOption_batchConversionMode_neural" xml:space="preserve"><value>ニューラル変換</value></data>
   <data name="SettingOption_batchConversionMode_ai_cleanup" xml:space="preserve"><value>AI で整える</value></data>
-  <data name="SettingOption_bracketPairingTrigger_immediate" xml:space="preserve"><value>開き括弧の入力時</value></data>
+  <data name="SettingOption_bracketPairingTrigger_immediate" xml:space="preserve"><value>開きカッコの入力時</value></data>
   <data name="SettingOption_bracketPairingTrigger_composition" xml:space="preserve"><value>変換の確定時</value></data>
   <data name="SettingOption_bracketPairingAppPolicy_denylist" xml:space="preserve"><value>指定したアプリでは使わない</value></data>
   <data name="SettingOption_bracketPairingAppPolicy_allowlist" xml:space="preserve"><value>指定したアプリだけで使う</value></data>
@@ -263,20 +272,20 @@
   <data name="SettingOption_aiBackend_local_zenzai" xml:space="preserve"><value>ローカル（Zenzai）</value></data>
   <data name="SettingOption_privacy_mode_normal" xml:space="preserve"><value>通常</value></data>
   <data name="SettingOption_privacy_mode_private" xml:space="preserve"><value>プライベート</value></data>
-  <data name="SettingOption_privacy_mode_secure" xml:space="preserve"><value>セーフ</value></data>
+  <data name="SettingOption_privacy_mode_secure" xml:space="preserve"><value>常にセーフ入力</value></data>
   <data name="SettingOption_privacy_mode_offline" xml:space="preserve"><value>オフライン</value></data>
   <data name="SettingOption_privacy_mode_custom" xml:space="preserve"><value>カスタム</value></data>
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、Host が起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を「バージョン」に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
+  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>
   <data name="SettingNote_punctuationConversion" xml:space="preserve"><value>「変換して確定する」では、読みを第 1 候補へ変換し、句読点と一緒に確定します。数字の直後と一括変換中は読みに足します。</value></data>
   <data name="SettingNote_dynamicPunctuation" xml:space="preserve"><value>ライブ変換が有効なときだけ働きます。</value></data>
   <data name="SettingNote_dynamicPunctuationIdleMs" xml:space="preserve"><value>確定のタイミングが「入力が止まったとき」の場合だけ使います。</value></data>
-  <data name="SettingNote_batchConversionMode" xml:space="preserve"><value>「AI で整える」は、AI バックエンドが「使わない」のときニューラル変換になります。</value></data>
+  <data name="SettingNote_batchConversionMode" xml:space="preserve"><value>「AI で整える」は、「AI サービス」が「使わない」のときニューラル変換になります。</value></data>
   <data name="SettingNote_symbolDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
   <data name="SettingNote_emojiTriggerSearch" xml:space="preserve"><value>ひらがなモードのときだけ働きます。</value></data>
   <data name="SettingNote_emojiDataPath" xml:space="preserve"><value>空欄なら同梱のデータを使います。</value></data>
@@ -284,7 +293,7 @@
   <data name="SettingNote_bracketPairingApps" xml:space="preserve"><value>1 行に 1 つ、実行ファイル名（例: Code.exe）を書きます。大文字と小文字は区別しません。</value></data>
   <data name="SettingNote_bracketPairsPath" xml:space="preserve"><value>空欄なら %LOCALAPPDATA%\azooKey\bracket-pairs.tsv を使います。</value></data>
   <data name="SettingNote_openAiApiEndpoint" xml:space="preserve"><value>HTTPS の URL を指定します（ループバックアドレスを除く）。</value></data>
-  <data name="SettingNote_privacy_mode" xml:space="preserve"><value>セーフは常に最優先です。カスタムでは下の項目を個別に設定します。</value></data>
+  <data name="SettingNote_privacy_mode" xml:space="preserve"><value>「常にセーフ入力」はほかの設定より優先します。「カスタム」では下の項目を個別に設定します。</value></data>
   <data name="SettingNote_privacy_custom_externalAi" xml:space="preserve"><value>「AI 候補を使う」がオフのときは使いません。</value></data>
   <data name="SettingNote_privacy_custom_detailedLogging" xml:space="preserve"><value>「ログから入力内容を伏せる」がオンのときは残しません。</value></data>
   <data name="SettingNote_privacy_autoSecureInput" xml:space="preserve"><value>オフでも、アプリが IME を無効にした欄ではセーフ入力になります。</value></data>
@@ -302,7 +311,7 @@
   <data name="InputSectionTitle.Text" xml:space="preserve"><value>入力</value></data>
   <data name="PrivacySectionTitle.Text" xml:space="preserve"><value>プライバシー</value></data>
   <data name="SafeModeInfoBar.Title" xml:space="preserve"><value>セーフモードで動作しています</value></data>
-  <data name="SafeModeMessage" xml:space="preserve"><value>Host が繰り返し異常終了したため、安全な構成で動作しています。</value></data>
+  <data name="SafeModeMessage" xml:space="preserve"><value>変換エンジンが繰り返し異常終了したため、安全な構成で動作しています。</value></data>
   <data name="SafeModeEnteredAtLabel" xml:space="preserve"><value>開始時刻: </value></data>
   <data name="SafeModeCrashCountLabel" xml:space="preserve"><value>直前の異常終了回数: </value></data>
   <data name="ClearSafeModeButton.Content" xml:space="preserve"><value>セーフモードを解除する</value></data>
@@ -312,38 +321,38 @@
   <data name="SettingInactiveUntilValue" xml:space="preserve"><value>「{0}」が「{1}」のときに使えます。</value></data>
   <data name="ClearSafeModeLabel" xml:space="preserve"><value>セーフモードを解除する</value></data>
   <data name="CancelClearSafeModeLabel" xml:space="preserve"><value>解除を取り消す</value></data>
-  <data name="SafeModeReentered" xml:space="preserve"><value>Host が再びセーフモードに入ったため、解除しませんでした。設定アプリを開き直して状態を確認してください。</value></data>
+  <data name="SafeModeReentered" xml:space="preserve"><value>変換エンジンが再びセーフモードに入ったため、解除しませんでした。設定アプリを開き直して状態を確認してください。</value></data>
   <data name="LearningNavigationItem.Content" xml:space="preserve"><value>学習</value></data>
   <data name="HostCall_Unavailable" xml:space="preserve"><value>この PC の通信設定（パイプ名または認証トークン）を解決できませんでした。</value></data>
-  <data name="HostCall_HostNotRunning" xml:space="preserve"><value>azooKey の Host が起動していません。入力を一度行うか、サインインし直してから再試行してください。</value></data>
-  <data name="HostCall_HandshakeRejected" xml:space="preserve"><value>Host が接続を受け付けませんでした。</value></data>
-  <data name="HostCall_Unsupported" xml:space="preserve"><value>起動中の Host はこの機能に対応していません。azooKey を更新して Host を再起動してください。</value></data>
-  <data name="HostCall_Timeout" xml:space="preserve"><value>Host から時間内に応答がありませんでした。</value></data>
-  <data name="HostCall_InvalidResponse" xml:space="preserve"><value>Host の応答を読み取れませんでした。</value></data>
-  <data name="HostCall_Failed" xml:space="preserve"><value>Host への要求に失敗しました。</value></data>
+  <data name="HostCall_HostNotRunning" xml:space="preserve"><value>変換エンジンが起動していません。入力を一度行うか、サインインし直してから再試行してください。</value></data>
+  <data name="HostCall_HandshakeRejected" xml:space="preserve"><value>変換エンジンが接続を受け付けませんでした。</value></data>
+  <data name="HostCall_Unsupported" xml:space="preserve"><value>この変換エンジンは未対応です。azooKey を更新して、サインインし直してください。</value></data>
+  <data name="HostCall_Timeout" xml:space="preserve"><value>変換エンジンから時間内に応答がありませんでした。</value></data>
+  <data name="HostCall_InvalidResponse" xml:space="preserve"><value>変換エンジンの応答を読み取れませんでした。</value></data>
+  <data name="HostCall_Failed" xml:space="preserve"><value>変換エンジンへの要求に失敗しました。</value></data>
   <data name="ModelsError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
-  <data name="ModelsError_models_dir_unavailable" xml:space="preserve"><value>Host に models フォルダがありません。</value></data>
+  <data name="ModelsError_models_dir_unavailable" xml:space="preserve"><value>models フォルダがありません。</value></data>
   <data name="ModelsError_directory_outside_models_root" xml:space="preserve"><value>models フォルダの外は一覧にできません。</value></data>
   <data name="ModelsError_scan_failed" xml:space="preserve"><value>models フォルダを走査できませんでした。</value></data>
-  <data name="ModelsError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
-  <data name="ModelsError_unsupported_backend" xml:space="preserve"><value>指定した backend には対応していません。</value></data>
+  <data name="ModelsError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
+  <data name="ModelsError_unsupported_backend" xml:space="preserve"><value>指定した推論デバイスには対応していません。</value></data>
   <data name="ModelsError_invalid_model" xml:space="preserve"><value>検証に通らないモデルです（GGUF のみ測定できます）。</value></data>
   <data name="ModelsError_path_outside_models_root" xml:space="preserve"><value>models フォルダの外のモデルは測定できません。</value></data>
   <data name="ModelsError_busy" xml:space="preserve"><value>別のベンチマークを実行中です。終わってからやり直してください。</value></data>
   <data name="ModelsError_load_failed" xml:space="preserve"><value>モデルをロードできませんでした。</value></data>
   <data name="ModelsError_safe_mode" xml:space="preserve"><value>セーフモード中はベンチマークできません。</value></data>
   <data name="ModelsError_benchmark_failed" xml:space="preserve"><value>ベンチマークに失敗しました。</value></data>
-  <data name="ModelsError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
+  <data name="ModelsError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="Models_Title" xml:space="preserve"><value>モデル</value></data>
   <data name="Models_Description" xml:space="preserve"><value>models フォルダにあるモデルと検証結果を表示します。モデルを選んで保存すると、次にロードするモデルが切り替わります。</value></data>
   <data name="Models_RefreshButton" xml:space="preserve"><value>一覧を更新</value></data>
   <data name="Models_ProblemTitle" xml:space="preserve"><value>モデルの一覧または測定に失敗しました</value></data>
   <data name="Models_Empty" xml:space="preserve"><value>models フォルダにモデルが見つかりません。</value></data>
   <data name="Models_SelectedSuffix" xml:space="preserve"><value>（選択中）</value></data>
-  <data name="Models_State_Loaded" xml:space="preserve"><value>✅ 有効（ロード済み）</value></data>
-  <data name="Models_State_NotLoaded" xml:space="preserve"><value>✅ 有効（未ロード）</value></data>
-  <data name="Models_State_LoadFailed" xml:space="preserve"><value>⚠️ 有効ですが、ロードに失敗した履歴があります</value></data>
-  <data name="Models_State_Invalid" xml:space="preserve"><value>❌ 検証に通りません</value></data>
+  <data name="Models_State_Loaded" xml:space="preserve"><value>有効（ロード済み）</value></data>
+  <data name="Models_State_NotLoaded" xml:space="preserve"><value>有効（未ロード）</value></data>
+  <data name="Models_State_LoadFailed" xml:space="preserve"><value>有効ですが、ロードに失敗した履歴があります</value></data>
+  <data name="Models_State_Invalid" xml:space="preserve"><value>検証に通りません</value></data>
   <data name="Models_SelectButton" xml:space="preserve"><value>このモデルを選ぶ</value></data>
   <data name="Models_BenchmarkButton" xml:space="preserve"><value>ベンチマーク</value></data>
   <data name="Models_NotSelectable" xml:space="preserve"><value>有効な GGUF 形式のモデルだけ選べます。</value></data>
@@ -351,23 +360,27 @@
   <data name="Models_SelectedMessage" xml:space="preserve"><value>「モデルファイル」に入れました。保存すると反映されます。</value></data>
   <data name="Models_BenchmarkHeading" xml:space="preserve"><value>ベンチマーク結果</value></data>
   <data name="Models_BenchmarkNone" xml:space="preserve"><value>まだ測定していません。</value></data>
-  <data name="Models_BenchmarkRunning" xml:space="preserve"><value>🔄 測定中です（最大 60 秒ほどかかります）…</value></data>
+  <data name="Models_BenchmarkRunning" xml:space="preserve"><value>測定中です（最大 60 秒ほどかかります）…</value></data>
   <data name="Models_Bench_Status" xml:space="preserve"><value>結果</value></data>
   <data name="Models_Bench_Error" xml:space="preserve"><value>エラー</value></data>
-  <data name="Models_Bench_Backend" xml:space="preserve"><value>実際の backend</value></data>
+  <data name="Models_Bench_Backend" xml:space="preserve"><value>実際の推論デバイス</value></data>
   <data name="Models_Bench_Latency" xml:space="preserve"><value>p50 / p95 / p99</value></data>
   <data name="Models_Bench_Load" xml:space="preserve"><value>ロード時間</value></data>
   <data name="Models_Bench_Memory" xml:space="preserve"><value>メモリ</value></data>
   <data name="Models_Bench_Iterations" xml:space="preserve"><value>完了した回数</value></data>
-  <data name="Models_HistoryHeading" xml:space="preserve"><value>ベンチマーク履歴（Host が記録）</value></data>
+  <data name="Models_BenchStatus_success" xml:space="preserve"><value>成功</value></data>
+  <data name="Models_BenchStatus_timeout" xml:space="preserve"><value>時間切れ</value></data>
+  <data name="Models_BenchStatus_error" xml:space="preserve"><value>失敗</value></data>
+  <data name="Models_BenchStatus_other" xml:space="preserve"><value>不明</value></data>
+  <data name="Models_HistoryHeading" xml:space="preserve"><value>ベンチマーク履歴</value></data>
   <data name="Models_HistoryEmpty" xml:space="preserve"><value>履歴はありません。</value></data>
-  <data name="Models_Catalog_Heading" xml:space="preserve"><value>取得できるモデル（既定の catalog）</value></data>
+  <data name="Models_Catalog_Heading" xml:space="preserve"><value>取得できるモデル</value></data>
   <data name="Models_Catalog_DefaultSuffix" xml:space="preserve"><value>（既定）</value></data>
   <data name="Models_Catalog_State_missing" xml:space="preserve"><value>未取得</value></data>
-  <data name="Models_Catalog_State_verified" xml:space="preserve"><value>✅ 取得済み（SHA-256 が一致）</value></data>
-  <data name="Models_Catalog_State_mismatch" xml:space="preserve"><value>⚠️ 同じ名前の別のファイルがあります。置き換えないので、取得するには先にそのファイルを移してください。</value></data>
+  <data name="Models_Catalog_State_verified" xml:space="preserve"><value>取得済み（SHA-256 が一致）</value></data>
+  <data name="Models_Catalog_State_mismatch" xml:space="preserve"><value>同じ名前の別のファイルがあります。置き換えないので、取得するには先にそのファイルを移してください。</value></data>
   <data name="Models_Catalog_FetchButton" xml:space="preserve"><value>取得</value></data>
-  <data name="Models_Catalog_Fetching" xml:space="preserve"><value>🔄 取得中</value></data>
+  <data name="Models_Catalog_Fetching" xml:space="preserve"><value>取得中</value></data>
   <data name="Models_Catalog_CancelButton" xml:space="preserve"><value>中止</value></data>
   <data name="Models_Catalog_Cancelling" xml:space="preserve"><value>中止しています…</value></data>
   <data name="Models_Catalog_CancelledTitle" xml:space="preserve"><value>取得を中止しました</value></data>
@@ -376,35 +389,35 @@
   <data name="Models_Catalog_NotFetchableNote" xml:space="preserve"><value>このモデルには取得元がありません。手で models\zenzai に置いてください。</value></data>
   <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
   <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
-  <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。Host は取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
-  <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で Host が再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>
+  <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。変換エンジンは取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
+  <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で変換エンジンが再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>
   <data name="Models_Catalog_Result_downloaded" xml:space="preserve"><value>取得し、SHA-256 と形式を確かめました。</value></data>
   <data name="Models_Catalog_Result_already_valid" xml:space="preserve"><value>SHA-256 が一致するファイルが既にあったので、それを使います。</value></data>
-  <data name="Models_Catalog_Result_offline" xml:space="preserve"><value>privacy.mode が offline のため取得しませんでした。</value></data>
+  <data name="Models_Catalog_Result_offline" xml:space="preserve"><value>プライバシーモードが「オフライン」のため取得しませんでした。</value></data>
   <data name="Models_Catalog_Result_not_fetchable" xml:space="preserve"><value>このモデルには取得元がありません。</value></data>
   <data name="CatalogFetchError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
   <data name="CatalogFetchError_busy" xml:space="preserve"><value>別のモデルを取得中です。終わってからやり直してください。</value></data>
-  <data name="CatalogFetchError_unknown_model_id" xml:space="preserve"><value>Host の catalog にないモデルです。</value></data>
-  <data name="CatalogFetchError_catalog_unavailable" xml:space="preserve"><value>Host の catalog を使えません。</value></data>
-  <data name="CatalogFetchError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
+  <data name="CatalogFetchError_unknown_model_id" xml:space="preserve"><value>取得できるモデルの一覧にないモデルです。</value></data>
+  <data name="CatalogFetchError_catalog_unavailable" xml:space="preserve"><value>取得できるモデルの一覧を使えません。</value></data>
+  <data name="CatalogFetchError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
   <data name="CatalogFetchError_directory_unavailable" xml:space="preserve"><value>models\zenzai フォルダを作れませんでした。</value></data>
   <data name="CatalogFetchError_destination_occupied" xml:space="preserve"><value>同じ名前の別のファイルがあるので、置き換えずに止めました。</value></data>
   <data name="CatalogFetchError_download_failed" xml:space="preserve"><value>ダウンロードに失敗しました（接続、SHA-256 の不一致など）。</value></data>
-  <data name="CatalogFetchError_cancelled" xml:space="preserve"><value>中止の操作か Host の停止で取得を中断しました。次に取得すると続きから再開します。</value></data>
+  <data name="CatalogFetchError_cancelled" xml:space="preserve"><value>中止の操作か変換エンジンの停止で取得を中断しました。次に取得すると続きから再開します。</value></data>
   <data name="CatalogFetchError_format" xml:space="preserve"><value>取得したファイルが GGUF の検証に通らなかったため削除しました。</value></data>
   <data name="CatalogFetchError_not_running" xml:space="preserve"><value>その取得は既に終わっています。</value></data>
-  <data name="CatalogFetchError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
+  <data name="CatalogFetchError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="LearningStore_learning" xml:space="preserve"><value>学習候補</value></data>
   <data name="LearningStore_user_dict" xml:space="preserve"><value>ユーザー辞書</value></data>
   <data name="LearningStore_typo" xml:space="preserve"><value>タイプミス補正</value></data>
   <data name="LearningStore_auto_word" xml:space="preserve"><value>新語候補</value></data>
   <data name="LearningStore_backup" xml:space="preserve"><value>バックアップ</value></data>
-  <data name="LearningConflict_merge" xml:space="preserve"><value>統合する（merge）</value></data>
-  <data name="LearningConflict_overwrite" xml:space="preserve"><value>上書きする（overwrite）</value></data>
-  <data name="LearningConflict_keep_both" xml:space="preserve"><value>両方残す（keep_both）</value></data>
+  <data name="LearningConflict_merge" xml:space="preserve"><value>統合する</value></data>
+  <data name="LearningConflict_overwrite" xml:space="preserve"><value>上書きする</value></data>
+  <data name="LearningConflict_keep_both" xml:space="preserve"><value>両方残す</value></data>
   <data name="LearningError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
-  <data name="LearningError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
-  <data name="LearningError_store_unavailable" xml:space="preserve"><value>対象のデータを Host が開けません。</value></data>
+  <data name="LearningError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
+  <data name="LearningError_store_unavailable" xml:space="preserve"><value>対象のデータを変換エンジンが開けません。</value></data>
   <data name="LearningError_save_failed" xml:space="preserve"><value>保存できませんでした。</value></data>
   <data name="LearningError_unsupported" xml:space="preserve"><value>この操作には対応していません。</value></data>
   <data name="LearningError_invalid_path" xml:space="preserve"><value>ファイルの場所が正しくありません（絶対パスの .zip を指定してください）。</value></data>
@@ -413,15 +426,15 @@
   <data name="LearningError_io" xml:space="preserve"><value>ファイルの読み書きに失敗しました。取り込み中だった場合、内容はまだディスクに保存されていません。次の保存で再試行されます。</value></data>
   <data name="LearningError_too_large" xml:space="preserve"><value>ファイルが大きすぎます。</value></data>
   <data name="LearningError_not_archive" xml:space="preserve"><value>バックアップのファイルではありません。</value></data>
-  <data name="LearningError_bad_manifest" xml:space="preserve"><value>バックアップの manifest が壊れています。</value></data>
+  <data name="LearningError_bad_manifest" xml:space="preserve"><value>バックアップの目録が壊れています。</value></data>
   <data name="LearningError_unsupported_version" xml:space="preserve"><value>対応していない版のバックアップです。</value></data>
   <data name="LearningError_missing_item" xml:space="preserve"><value>バックアップに必要な項目がありません。</value></data>
   <data name="LearningError_checksum_mismatch" xml:space="preserve"><value>バックアップの内容が壊れています（チェックサムが一致しません）。</value></data>
   <data name="LearningError_decrypt_failed" xml:space="preserve"><value>バックアップを復号できませんでした。別の PC や別のユーザーで暗号化されたものは読めません。</value></data>
   <data name="LearningError_bad_item" xml:space="preserve"><value>バックアップの項目を読み取れませんでした。</value></data>
-  <data name="LearningError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
-  <data name="Learning_Title" xml:space="preserve"><value>学習データ</value></data>
-  <data name="Learning_Description" xml:space="preserve"><value>azooKey が学習した内容を確認し、忘れさせたり、バックアップしたりできます。変更は Host を通して行われ、すぐに反映されます。</value></data>
+  <data name="LearningError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
+  <data name="Learning_Title" xml:space="preserve"><value>学習</value></data>
+  <data name="Learning_Description" xml:space="preserve"><value>azooKey が学習した内容を確認し、忘れさせたり、バックアップしたりできます。</value></data>
   <data name="Learning_ProblemTitle" xml:space="preserve"><value>学習データの操作に失敗しました</value></data>
   <data name="Learning_SearchPlaceholder" xml:space="preserve"><value>読みまたは表記で検索</value></data>
   <data name="Learning_SearchButton" xml:space="preserve"><value>検索</value></data>
@@ -473,35 +486,35 @@
   <data name="LearningUserDictError_lock_failed" xml:space="preserve"><value>ユーザー辞書のファイルをロックできませんでした。少し待ってからもう一度試してください。</value></data>
   <data name="LearningUserDictError_load_failed" xml:space="preserve"><value>ユーザー辞書のファイルを読み込めませんでした。</value></data>
   <data name="LearningUserDictError_save_failed" xml:space="preserve"><value>ユーザー辞書を保存できませんでした。</value></data>
-  <data name="LearningUserDictError_unavailable" xml:space="preserve"><value>Host がユーザー辞書を開いていません。</value></data>
+  <data name="LearningUserDictError_unavailable" xml:space="preserve"><value>変換エンジンがユーザー辞書を開いていません。</value></data>
   <data name="LearningUserDictError_invalid_request" xml:space="preserve"><value>要求が不正です。</value></data>
-  <data name="LearningUserDictError_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
-  <data name="LearningUserDictError_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
+  <data name="LearningUserDictError_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
+  <data name="LearningUserDictError_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
   <data name="ProfilesNavigationItem.Content" xml:space="preserve"><value>アプリ別</value></data>
   <data name="Setting_profilesByApp" xml:space="preserve"><value>アプリ別のプロファイル</value></data>
-  <data name="Profiles_Title" xml:space="preserve"><value>アプリ別の設定</value></data>
-  <data name="Profiles_Description" xml:space="preserve"><value>アプリ（実行ファイル名）ごとに、予測・学習・AI・候補タグの倍率などを変えられます。設定していない項目は、default のプロファイルと全体の設定を引き継ぎます。</value></data>
+  <data name="Profiles_Title" xml:space="preserve"><value>アプリ別</value></data>
+  <data name="Profiles_Description" xml:space="preserve"><value>アプリ（実行ファイル名）ごとに、予測変換・学習・AI・候補タグの倍率などを変えられます。</value></data>
   <data name="Profiles_UnsavedNote" xml:space="preserve"><value>追加・編集・削除は、保存ボタンを押すと反映されます。</value></data>
   <data name="Profiles_AddButton" xml:space="preserve"><value>プロファイルを追加</value></data>
   <data name="Profiles_Empty" xml:space="preserve"><value>プロファイルはまだありません。</value></data>
   <data name="Profiles_EditButton" xml:space="preserve"><value>編集</value></data>
   <data name="Profiles_DeleteButton" xml:space="preserve"><value>削除</value></data>
   <data name="Profiles_InheritsAll" xml:space="preserve"><value>すべて継承</value></data>
-  <data name="Profiles_PrefixCleared" xml:space="preserve"><value>（空：従来の prompt prefix を使わない）</value></data>
+  <data name="Profiles_PrefixCleared" xml:space="preserve"><value>（空：以前の AI への指示文を使わない）</value></data>
   <data name="Profiles_Summary_Name" xml:space="preserve"><value>表示名</value></data>
-  <data name="Profiles_Summary_Prediction" xml:space="preserve"><value>予測</value></data>
+  <data name="Profiles_Summary_Prediction" xml:space="preserve"><value>予測変換</value></data>
   <data name="Profiles_Summary_Sentence" xml:space="preserve"><value>文末補完</value></data>
   <data name="Profiles_Summary_Learning" xml:space="preserve"><value>学習</value></data>
   <data name="Profiles_Summary_Ai" xml:space="preserve"><value>AI</value></data>
-  <data name="Profiles_Summary_Prefix" xml:space="preserve"><value>prompt prefix</value></data>
+  <data name="Profiles_Summary_Prefix" xml:space="preserve"><value>AI への指示文</value></data>
   <data name="Profiles_Summary_Style" xml:space="preserve"><value>文体</value></data>
   <data name="Profiles_Summary_Technical" xml:space="preserve"><value>技術語を優先</value></data>
   <data name="Profiles_Summary_Privacy" xml:space="preserve"><value>プライバシー</value></data>
   <data name="Profiles_Summary_Bracket" xml:space="preserve"><value>カッコ補完</value></data>
   <data name="Profiles_Summary_Boosts" xml:space="preserve"><value>候補タグ</value></data>
-  <data name="Profiles_LegacyHeading" xml:space="preserve"><value>従来の prompt prefix（読み取り専用）</value></data>
-  <data name="Profiles_LegacyNote" xml:space="preserve"><value>従来の設定（promptPrefixByApp）にある値です。ここでは編集せず、保存しても消えません。「プロファイルへ移す」で、同じアプリのプロファイルの prompt prefix にコピーできます（従来の値は残ります）。プロファイルに prompt prefix があれば、そちらが優先されます。</value></data>
-  <data name="Profiles_LegacyEmpty" xml:space="preserve"><value>従来の prompt prefix はありません。</value></data>
+  <data name="Profiles_LegacyHeading" xml:space="preserve"><value>以前の設定にある AI への指示文（読み取り専用）</value></data>
+  <data name="Profiles_LegacyNote" xml:space="preserve"><value>ここでは編集せず、保存しても消えません。「プロファイルへ移す」で同じアプリのプロファイルへコピーでき、プロファイルの指示文が優先されます。</value></data>
+  <data name="Profiles_LegacyEmpty" xml:space="preserve"><value>以前の設定にある AI への指示文はありません。</value></data>
   <data name="Profiles_EditorTitleNew" xml:space="preserve"><value>プロファイルを追加</value></data>
   <data name="Profiles_EditorTitleEdit" xml:space="preserve"><value>プロファイルを編集</value></data>
   <data name="Profiles_Apply" xml:space="preserve"><value>OK</value></data>
@@ -509,17 +522,17 @@
   <data name="Profiles_Key_Header" xml:space="preserve"><value>アプリ（実行ファイル名）</value></data>
   <data name="Profiles_Key_Placeholder" xml:space="preserve"><value>例: Code.exe（全アプリ共通の既定は default）</value></data>
   <data name="Profiles_Name_Header" xml:space="preserve"><value>表示名（省略可）</value></data>
-  <data name="Profiles_Prediction_Header" xml:space="preserve"><value>予測候補を出す</value></data>
+  <data name="Profiles_Prediction_Header" xml:space="preserve"><value>予測変換を使う</value></data>
   <data name="Profiles_Sentence_Header" xml:space="preserve"><value>文末補完を出す</value></data>
   <data name="Profiles_Learning_Header" xml:space="preserve"><value>このアプリで学習する</value></data>
-  <data name="Profiles_AiBackend_Header" xml:space="preserve"><value>AI の backend</value></data>
-  <data name="Profiles_PromptPrefix_Toggle" xml:space="preserve"><value>prompt prefix を指定する</value></data>
-  <data name="Profiles_PromptPrefix_Header" xml:space="preserve"><value>prompt prefix</value></data>
-  <data name="Profiles_PromptPrefix_Note" xml:space="preserve"><value>指定して空にすると、従来の prompt prefix をこのアプリでは使いません。指定しないと従来の値を引き継ぎます。</value></data>
+  <data name="Profiles_AiBackend_Header" xml:space="preserve"><value>AI サービス</value></data>
+  <data name="Profiles_PromptPrefix_Toggle" xml:space="preserve"><value>AI への指示文を指定する</value></data>
+  <data name="Profiles_PromptPrefix_Header" xml:space="preserve"><value>AI への指示文</value></data>
+  <data name="Profiles_PromptPrefix_Note" xml:space="preserve"><value>指定して空にすると、以前の設定にある指示文をこのアプリでは使いません。指定しないとそれを引き継ぎます。</value></data>
   <data name="Profiles_Style_Header" xml:space="preserve"><value>文体</value></data>
   <data name="Profiles_Technical_Header" xml:space="preserve"><value>技術語を優先する</value></data>
   <data name="Profiles_Privacy_Header" xml:space="preserve"><value>プライバシーモード</value></data>
-  <data name="Profiles_Bracket_Header" xml:space="preserve"><value>カッコの自動補完</value></data>
+  <data name="Profiles_Bracket_Header" xml:space="preserve"><value>カッコ補完</value></data>
   <data name="Profiles_Boosts_Header" xml:space="preserve"><value>候補タグの倍率</value></data>
   <data name="Profiles_Boosts_Note" xml:space="preserve"><value>タグ名（Technical、Polite、English など）ごとに 1.0〜3.0 の倍率を指定します。1.0 は変化なしです。</value></data>
   <data name="Profiles_Boost_Tag" xml:space="preserve"><value>タグ名</value></data>
@@ -535,20 +548,33 @@
   <data name="Profiles_Error_BoostRange" xml:space="preserve"><value>倍率は 1.0 から 3.0 の数値で指定してください。</value></data>
   <data name="Profiles_MigrateButton" xml:space="preserve"><value>プロファイルへ移す</value></data>
   <data name="Profiles_Migrated" xml:space="preserve"><value>移行済み</value></data>
+  <data name="Profiles_Option_auto" xml:space="preserve"><value>自動</value></data>
+  <data name="Profiles_Option_local_zenzai" xml:space="preserve"><value>ローカル（Zenzai）</value></data>
+  <data name="Profiles_Option_openai" xml:space="preserve"><value>OpenAI</value></data>
+  <data name="Profiles_Option_none" xml:space="preserve"><value>使わない</value></data>
+  <data name="Profiles_Option_polite" xml:space="preserve"><value>丁寧</value></data>
+  <data name="Profiles_Option_casual" xml:space="preserve"><value>くだけた言い回し</value></data>
+  <data name="Profiles_Option_technical" xml:space="preserve"><value>技術的</value></data>
+  <data name="Profiles_Option_inherit" xml:space="preserve"><value>全体の設定に従う</value></data>
+  <data name="Profiles_Option_normal" xml:space="preserve"><value>通常</value></data>
+  <data name="Profiles_Option_private" xml:space="preserve"><value>プライベート</value></data>
+  <data name="Profiles_Option_secure" xml:space="preserve"><value>常にセーフ入力</value></data>
+  <data name="Profiles_Option_on" xml:space="preserve"><value>オン</value></data>
+  <data name="Profiles_Option_off" xml:space="preserve"><value>オフ</value></data>
   <data name="Learning_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
   <data name="Models_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
-  <data name="NeologdStatus_Unknown" xml:space="preserve"><value>Host の状態: この Host は NEologd 層の状態を返しません。</value></data>
-  <data name="NeologdStatus_NotEnabled" xml:space="preserve"><value>Host の状態: 使っていません。</value></data>
-  <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>Host の状態: Host の再起動後に取得します（サインアウトして再度サインインしてください）。オフラインモードの間は取得しません。</value></data>
-  <data name="NeologdStatus_FetchAfterSaveAndRestart" xml:space="preserve"><value>Host の状態: 保存すると、Host の再起動後に取得します。オフラインモードの間は取得しません。</value></data>
-  <data name="NeologdStatus_Loading" xml:space="preserve"><value>Host の状態: 取得・読み込み中です。</value></data>
-  <data name="NeologdStatus_Ready" xml:space="preserve"><value>Host の状態: 読み込み済みで、変換に使っています。</value></data>
-  <data name="NeologdStatus_MissingPack" xml:space="preserve"><value>Host の状態: 公開された pack が無いため、取得していません。</value></data>
-  <data name="NeologdStatus_Error" xml:space="preserve"><value>Host の状態: 取得または読み込みに失敗しました。</value></data>
-  <data name="Persona_Title" xml:space="preserve"><value>Persona</value></data>
-  <data name="Persona_Description" xml:space="preserve"><value>学習した確定の傾向を、Host が数えた割合で表示します（読み取り専用）。語句や読みは表示しません。</value></data>
+  <data name="NeologdStatus_Unknown" xml:space="preserve"><value>変換エンジンの状態: この変換エンジンは NEologd 追加辞書の状態を返しません。</value></data>
+  <data name="NeologdStatus_NotEnabled" xml:space="preserve"><value>変換エンジンの状態: 使っていません。</value></data>
+  <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>変換エンジンの状態: 変換エンジンの再起動後に取得します（サインアウトして再度サインインしてください）。オフラインモードの間は取得しません。</value></data>
+  <data name="NeologdStatus_FetchAfterSaveAndRestart" xml:space="preserve"><value>変換エンジンの状態: 保存すると、変換エンジンの再起動後に取得します。オフラインモードの間は取得しません。</value></data>
+  <data name="NeologdStatus_Loading" xml:space="preserve"><value>変換エンジンの状態: 取得・読み込み中です。</value></data>
+  <data name="NeologdStatus_Ready" xml:space="preserve"><value>変換エンジンの状態: 読み込み済みで、変換に使っています。</value></data>
+  <data name="NeologdStatus_MissingPack" xml:space="preserve"><value>変換エンジンの状態: 公開された追加辞書が無いため、取得していません。</value></data>
+  <data name="NeologdStatus_Error" xml:space="preserve"><value>変換エンジンの状態: 取得または読み込みに失敗しました。</value></data>
+  <data name="Persona_Title" xml:space="preserve"><value>入力の傾向</value></data>
+  <data name="Persona_Description" xml:space="preserve"><value>確定した語の傾向を割合で表示します（読み取り専用）。語句や読みは表示しません。</value></data>
   <data name="Persona_RefreshButton" xml:space="preserve"><value>再読み込み</value></data>
-  <data name="Persona_ProblemTitle" xml:space="preserve"><value>Persona を読み込めませんでした</value></data>
+  <data name="Persona_ProblemTitle" xml:space="preserve"><value>入力の傾向を読み込めませんでした</value></data>
   <data name="Persona_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
   <data name="Persona_NoData" xml:space="preserve"><value>データ不足です。入力して確定した語が増えると表示されます。</value></data>
   <data name="Persona_Polite" xml:space="preserve"><value>丁寧（です・ます）</value></data>
@@ -560,18 +586,18 @@
   <data name="Learning_ResetButton" xml:space="preserve"><value>全削除</value></data>
   <data name="Learning_ResetConfirmTitle" xml:space="preserve"><value>このタブのデータをすべて削除しますか？</value></data>
   <data name="Learning_ResetConfirmMessage" xml:space="preserve"><value>表示中のストアの内容をすべて消します。元に戻せません。</value></data>
-  <data name="Learning_ResetNote_learning" xml:space="preserve"><value>かなと英語の学習結果がすべて消えます。入力の予測や並びがもとに戻ります。</value></data>
+  <data name="Learning_ResetNote_learning" xml:space="preserve"><value>かなと英語の学習結果がすべて消えます。予測変換の候補や並びがもとに戻ります。</value></data>
   <data name="Learning_ResetNote_user_dict" xml:space="preserve"><value>ユーザー辞書の単語がすべて消えます。</value></data>
   <data name="Learning_ResetNote_typo" xml:space="preserve"><value>タイプミス補正の登録がすべて消えます。</value></data>
   <data name="Learning_ResetNote_auto_word" xml:space="preserve"><value>新語候補がすべて消えます。断った語も消えるので、同じ語が再び候補になることがあります。</value></data>
   <data name="Learning_ResetDoneTitle" xml:space="preserve"><value>削除しました</value></data>
   <data name="Learning_ResetDoneMessage" xml:space="preserve"><value>このタブのデータを削除しました。</value></data>
-  <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>Host の状態: 不明な状態です（この設定アプリより新しい Host かもしれません）。</value></data>
+  <data name="NeologdStatus_UnknownState" xml:space="preserve"><value>変換エンジンの状態: 不明な状態です（この設定アプリより新しい変換エンジンかもしれません）。</value></data>
   <data name="ProofreadNavigationItem.Content" xml:space="preserve"><value>校正</value></data>
   <data name="Proofread_Title" xml:space="preserve"><value>校正</value></data>
-  <data name="Proofread_Description" xml:space="preserve"><value>文章を貼り付けると、誤変換や誤りの疑いがある箇所を AI が探して一覧にします。azooKey で入力中のアプリで Ctrl+Shift+Space を押すと、そのアプリの文章を読み込んでここに開きます。</value></data>
+  <data name="Proofread_Description" xml:space="preserve"><value>貼り付けた文章や、入力中のアプリで Ctrl+Shift+Space を押して読み込んだ文章から、誤りの疑いがある箇所を AI が探して一覧にします。</value></data>
   <data name="Proofread_ExternalNoticeTitle" xml:space="preserve"><value>本文は外部の AI サービスへ送られます</value></data>
-  <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、貼り付けた本文が、設定した外部の AI バックエンドへ送信されます。「AI サービス」ペインの AI の設定と、プライバシーの AI に関する同意（AI 整文と同じ設定）が必要です。送りたくない文章は貼り付けないでください。</value></data>
+  <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、本文を「AI サービス」で選んだ外部の AI サービスへ送ります。送るのは「プライバシー」の「プライバシーモード」が「通常」のときと、「カスタム」で「AI 候補を使う」と「外部 AI を使う」がオンのときだけです。送りたくない文章は検査しないでください。</value></data>
   <data name="Proofread_InputHeader" xml:space="preserve"><value>検査する文章</value></data>
   <data name="Proofread_InputPlaceholder" xml:space="preserve"><value>ここに文章を貼り付けます</value></data>
   <data name="Proofread_TooLargeSuffix" xml:space="preserve"><value>（60 KiB を超えているため送れません）</value></data>
@@ -588,12 +614,12 @@
   <data name="Proofread_Confidence" xml:space="preserve"><value>確信度</value></data>
   <data name="Proofread_SelectButton" xml:space="preserve"><value>該当箇所を選択</value></data>
   <data name="Proofread_Error_invalid_request" xml:space="preserve"><value>要求が不正です（文章が空か、大きすぎます）。</value></data>
-  <data name="Proofread_Error_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
-  <data name="Proofread_Error_unsupported" xml:space="preserve"><value>使える AI がありません。「AI サービス」ペインで外部の AI バックエンドと API キーを設定し、プライバシーの AI に関する同意（AI 整文と同じ設定）を有効にしてください。</value></data>
+  <data name="Proofread_Error_not_authenticated" xml:space="preserve"><value>変換エンジンとの認証が済んでいません。</value></data>
+  <data name="Proofread_Error_unsupported" xml:space="preserve"><value>使える AI サービスがありません。「AI サービス」の「AI サービス」で「OpenAI」を選んで「OpenAI API キー」を設定し、「プライバシー」の「プライバシーモード」を「通常」にしてください（「カスタム」では「AI 候補を使う」と「外部 AI を使う」をオンにします）。</value></data>
   <data name="Proofread_Error_blocked" xml:space="preserve"><value>プライバシーの設定により、この文章は AI へ送れません。</value></data>
   <data name="Proofread_Error_backend_failed" xml:space="preserve"><value>AI サービスとの通信または応答の読み取りに失敗しました。時間をおいて試してください。</value></data>
-  <data name="Proofread_Error_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>
-  <data name="Proofread_TimeoutNote" xml:space="preserve"><value>本文はすでに外部の AI サービスへ送られていて、Host がまだ処理を続けている可能性があります。</value></data>
+  <data name="Proofread_Error_other" xml:space="preserve"><value>変換エンジンがエラーを返しました。</value></data>
+  <data name="Proofread_TimeoutNote" xml:space="preserve"><value>本文はすでに外部の AI サービスへ送られていて、変換エンジンがまだ処理を続けている可能性があります。</value></data>
   <data name="Proofread_SessionTitle" xml:space="preserve"><value>入力中のアプリの文章</value></data>
   <data name="Proofread_Session_captured" xml:space="preserve"><value>入力中のアプリから文章を読み込みました。「検査する」を押すと、外部の AI サービスへ送られます。一覧の「該当箇所を選択」を押すと、アプリ側の該当箇所を選択します。</value></data>
   <data name="Proofread_Session_blocked" xml:space="preserve"><value>この入力欄の文章は校正に送れないため、読み込みませんでした。保護された入力欄（パスワード欄など）、学習や AI の利用を許可しない設定の入力欄、または種類を判定できない入力欄では、文章を読み込みません。</value></data>

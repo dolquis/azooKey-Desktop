@@ -44,6 +44,19 @@ void SetId(xaml::DependencyObject const& object, const std::wstring& id) {
 
 std::wstring Wide(const std::string& utf8) { return std::wstring(winrt::to_hstring(utf8)); }
 
+// How an enum value of a profile is shown: its string when the value is one this version knows,
+// and the value itself otherwise (a file edited by hand can hold any string).
+std::wstring OptionText(const ResourceLoader& resources, std::string_view value) {
+  const auto known = [value](const auto& options) {
+    return std::find(options.begin(), options.end(), value) != options.end();
+  };
+  if (!known(kProfileAiBackends) && !known(kProfileStyles) && !known(kProfilePrivacyModes) &&
+      !known(kProfileBracketPairings)) {
+    return Wide(std::string(value));
+  }
+  return std::wstring(resources.GetString(winrt::to_hstring(ProfileOptionResource(value))));
+}
+
 double RoundBoost(double value) { return std::round(value * 100.0) / 100.0; }
 
 std::string BoostText(double value) {
@@ -85,7 +98,7 @@ controls::ComboBox EnumCombo(const ResourceLoader& resources, const winrt::hstri
   int selected = kInherit;
   int index = 1;
   for (const auto option : options) {
-    combo.Items().Append(winrt::box_value(winrt::to_hstring(std::string(option))));
+    combo.Items().Append(winrt::box_value(winrt::hstring(OptionText(resources, option))));
     if (value && *value == option) selected = index;
     ++index;
   }
@@ -293,20 +306,24 @@ xaml::UIElement ProfilesPane::SummaryRow(const std::string& key, const AppProfil
   if (profile.learning_enabled) {
     add(label(L"Profiles_Summary_Learning") + on_off(*profile.learning_enabled));
   }
-  if (profile.ai_backend) add(label(L"Profiles_Summary_Ai") + Wide(*profile.ai_backend));
+  if (profile.ai_backend) {
+    add(label(L"Profiles_Summary_Ai") + OptionText(resources, *profile.ai_backend));
+  }
   if (profile.prompt_prefix) {
     add(label(L"Profiles_Summary_Prefix") +
         (profile.prompt_prefix->empty()
              ? std::wstring(resources.GetString(L"Profiles_PrefixCleared"))
              : Wide(Preview(*profile.prompt_prefix))));
   }
-  if (profile.style) add(label(L"Profiles_Summary_Style") + Wide(*profile.style));
+  if (profile.style) add(label(L"Profiles_Summary_Style") + OptionText(resources, *profile.style));
   if (profile.prefer_technical_terms) {
     add(label(L"Profiles_Summary_Technical") + on_off(*profile.prefer_technical_terms));
   }
-  if (profile.privacy_mode) add(label(L"Profiles_Summary_Privacy") + Wide(*profile.privacy_mode));
+  if (profile.privacy_mode) {
+    add(label(L"Profiles_Summary_Privacy") + OptionText(resources, *profile.privacy_mode));
+  }
   if (profile.bracket_pairing) {
-    add(label(L"Profiles_Summary_Bracket") + Wide(*profile.bracket_pairing));
+    add(label(L"Profiles_Summary_Bracket") + OptionText(resources, *profile.bracket_pairing));
   }
   if (!profile.candidate_tag_boosts.empty()) {
     std::wstring boosts;

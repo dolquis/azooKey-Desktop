@@ -107,8 +107,7 @@ void ProofreadPane::UpdateCounter() {
   ResourceLoader resources;
   const auto bytes = winrt::to_string(input_.Text()).size();
   const bool too_large = bytes > azookey::ipc::kMaxAnomalyTextBytes;
-  counter_.Text(winrt::to_hstring(std::to_string(bytes) + " / " +
-                                  std::to_string(azookey::ipc::kMaxAnomalyTextBytes) + " bytes") +
+  counter_.Text(winrt::to_hstring(azookey::settings::FormatProofreadSize(bytes)) +
                 (too_large ? resources.GetString(L"Proofread_TooLargeSuffix") : winrt::hstring()));
 }
 

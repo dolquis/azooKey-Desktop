@@ -49,13 +49,6 @@ SettingField List(std::string_view path, Pane pane, std::string_view section,
           std::nullopt, std::nullopt,     {},   when,    true};
 }
 
-// Marks a field whose value no component reads yet (shown disabled with a note).
-SettingField Unsupported(SettingField field) {
-  field.described = true;
-  field.unsupported = true;
-  return field;
-}
-
 std::vector<SettingField> BuildFields() {
   // Conditions follow the feature specs: a field is disabled where the spec says it has no effect.
   const SettingCondition custom_romaji{"inputStyle", "custom"};
@@ -71,15 +64,16 @@ std::vector<SettingField> BuildFields() {
   const SettingCondition trending{"autoWordRegistration.trendingEnabled", "true"};
   const SettingCondition openai{"aiBackend", "openai"};
   const SettingCondition custom_privacy{"privacy.mode", "custom"};
+  const SettingCondition auto_update{"autoUpdate.enabled", "true"};
 
   return {
-      // No UpdateChecker exists until M32 (sideload-packaging-spec section 6), so the three
-      // keys are kept as they are but cannot be edited.
-      Unsupported(Bool("autoUpdate.enabled", Pane::General, "AutoUpdate", true)),
-      Unsupported(
-          Enum("autoUpdate.channel", Pane::General, "AutoUpdate", "stable", {"stable", "beta"})),
-      Unsupported(Integer("autoUpdate.checkIntervalHours", Pane::General, "AutoUpdate", 24, 1.0,
-                          kInt32Max)),
+      // M32 update check (sideload-packaging-spec section 6). Opt-in; the note says what the
+      // check sends.
+      Bool("autoUpdate.enabled", Pane::General, "AutoUpdate", false, std::nullopt, true),
+      Enum("autoUpdate.channel", Pane::General, "AutoUpdate", "stable", {"stable", "beta"},
+           auto_update),
+      Integer("autoUpdate.checkIntervalHours", Pane::General, "AutoUpdate", 24, 1.0, kInt32Max,
+              auto_update),
 
       Enum("inputMode", Pane::Input, "InputMethod", "hiragana",
            {"hiragana", "alnum_half", "alnum_full"}, std::nullopt, true),

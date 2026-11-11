@@ -244,7 +244,16 @@
                 </StackPanel>
 
                 <StackPanel x:Name="VersionPane" Spacing="16" Visibility="Collapsed">
+                    <TextBlock x:Uid="UpdateSectionTitle"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="UpdateStatusText" />
+                    <HyperlinkButton x:Name="OpenReleasePageButton"
+                                     x:Uid="OpenReleasePageButton"
+                                     Visibility="Collapsed"
+                                     AutomationProperties.AutomationId="OpenReleasePageButton" />
                     <TextBlock x:Uid="CrashReportSectionTitle"
+                               Margin="0,8,0,0"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
                     <ToggleSwitch x:Name="CrashReportConsentToggle"
                                   x:Uid="CrashReportConsentToggle"

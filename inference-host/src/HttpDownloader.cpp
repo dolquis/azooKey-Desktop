@@ -479,9 +479,10 @@ class AsyncRequest {
 
   void Close() {
     if (!request_) return;
-    WinHttpCloseHandle(request_);
+    const bool closed = WinHttpCloseHandle(request_) != FALSE;
     request_ = nullptr;
-    if (!callback_registered_) return;
+    // A failed close sends no HANDLE_CLOSING, so waiting for it would never end.
+    if (!closed || !callback_registered_) return;
     std::unique_lock lock(mutex_);
     changed_.wait(lock, [this] { return closed_; });
   }

@@ -31,6 +31,9 @@ class ProofreadPane : public std::enable_shared_from_this<ProofreadPane> {
                                              std::vector<std::string> suggestions);
   void CloseSession();
   void UpdateCounter();
+  // Puts the session's text in the input box once the box is loaded (DEV-1932).
+  void ShowSessionText(uint64_t generation);
+  void FillSessionText();
 
   winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox input_{nullptr};
@@ -52,6 +55,8 @@ class ProofreadPane : public std::enable_shared_from_this<ProofreadPane> {
   bool checked_session_text_{false};
   // Counts OpenSession calls; a connection that finishes after a newer call is dropped.
   uint64_t open_generation_{0};
+  // Waits for the input box's first Loaded when a session arrives before it.
+  winrt::Microsoft::UI::Xaml::FrameworkElement::Loaded_revoker input_loaded_;
 };
 
 }  // namespace azookey::settings

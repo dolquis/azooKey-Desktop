@@ -59,6 +59,7 @@
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/TrendingWordFetcher.h"
+#include "azookey/host/UpdateChecker.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -1013,6 +1014,52 @@ int main(int argc, char** argv) {
                                         applied.auto_word_auto_register);
       };
   update_trending_settings(engine.config());
+  // M32 update check (sideload-packaging-spec section 6). Opt-in; the config already turns it
+  // off under privacy.mode=offline, and a change cancels a check in progress.
+  azookey::host::UpdateCheckerOptions update_options;
+  update_options.current_version = AZOOKEY_PRODUCT_VERSION_STRING;
+  update_options.status_path = user_paths->settings_path.parent_path() / "update-status.json";
+  azookey::host::UpdateCheckDependencies update_dependencies;
+  update_dependencies.report = [&runtime_log](azookey::host::UpdateCheckStatus status) {
+    using azookey::host::UpdateCheckStatus;
+    const char* result = "failed";
+    switch (status) {
+      case UpdateCheckStatus::Disabled:
+        result = "disabled";
+        break;
+      case UpdateCheckStatus::UpToDate:
+        result = "up_to_date";
+        break;
+      case UpdateCheckStatus::UpdateAvailable:
+        result = "update_available";
+        break;
+      case UpdateCheckStatus::Failed:
+        result = "failed";
+        break;
+      case UpdateCheckStatus::Cancelled:
+        result = "cancelled";
+        break;
+    }
+    if (status == UpdateCheckStatus::Failed) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "update_check",
+                      {{"result", SafeLogText("error")},
+                       {"reason", SafeLogText(result)},
+                       {"error_code", SafeLogText("business")}});
+    } else {
+      runtime_log.Log(
+          azookey::logging::RuntimeLogLevel::Info, "update_check",
+          {{"result", SafeLogText(status == UpdateCheckStatus::Cancelled ? "cancelled" : "ok")},
+           {"reason", SafeLogText(result)}});
+    }
+  };
+  azookey::host::UpdateChecker update_checker(std::move(update_options),
+                                              std::move(update_dependencies));
+  const auto apply_update_check_settings =
+      [&update_checker](const azookey::host::EngineConfig& applied) {
+        update_checker.UpdateSettings(applied.auto_update_enabled, applied.auto_update_channel,
+                                      applied.auto_update_check_interval_hours);
+      };
+  apply_update_check_settings(engine.config());
   if (entered_safe_mode) {
     (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected);
   } else if (safe_mode) {
@@ -1143,7 +1190,11 @@ int main(int argc, char** argv) {
   std::atomic<azookey::host::BackendKind> current_auto_backend{default_backend};
   dconf.auto_backend = [&current_auto_backend] { return current_auto_backend.load(); };
   dconf.models_dir = user_paths->models_dir;
-  dconf.on_config_applied = update_trending_settings;
+  dconf.on_config_applied = [&update_trending_settings, &apply_update_check_settings](
+                                const azookey::host::EngineConfig& applied) {
+    update_trending_settings(applied);
+    apply_update_check_settings(applied);
+  };
   dconf.neologd_layer = neologd_pack_sink->layer;
   dconf.on_network_policy_applied = [sink = neologd_pack_sink](bool network_allowed) {
     sink->network_allowed = network_allowed;
@@ -1348,6 +1399,7 @@ int main(int argc, char** argv) {
     start_neologd_pack();
     start_english_backfill();
     trending_fetcher.Start();
+    update_checker.Start();
     auto supervisor_state = supervisor_process.GetState();
     while (!StopRequested() &&
            supervisor_state == azookey::host::SupervisorLifetime::State::Running) {
@@ -1356,6 +1408,7 @@ int main(int argc, char** argv) {
     }
     server.Stop();
     trending_fetcher.Stop();
+    update_checker.Stop();
     const bool wait_failed = supervisor_state == azookey::host::SupervisorLifetime::State::Failed;
     const auto stop_reason = wait_failed       ? "supervisor_wait_failed"
                              : StopRequested() ? "requested"
@@ -1381,6 +1434,7 @@ int main(int argc, char** argv) {
   start_neologd_pack();
   start_english_backfill();
   trending_fetcher.Start();
+  update_checker.Start();
   std::string line;
   while (ReadStdioLine(line)) {
     if (line.empty()) continue;
@@ -1405,6 +1459,7 @@ int main(int argc, char** argv) {
     }
   }
   trending_fetcher.Stop();
+  update_checker.Stop();
   runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
                   {{"result", SafeLogText("ok")}});
   return 0;

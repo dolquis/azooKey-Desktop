@@ -299,13 +299,42 @@ winrt::fire_and_forget ProofreadPane::OpenSession(std::string token) {
     session_document_ = std::move(document);
     results_.Children().Clear();
     checked_text_.clear();
-    input_.Text(winrt::hstring(session_text_));
-    session_input_text_ = std::wstring(input_.Text());
-    // TextChanged is not relied on for programmatic changes: refresh the count here.
-    UpdateCounter();
+    ShowSessionText(generation);
     ShowStatus(controls::InfoBarSeverity::Informational, message, L"Proofread_SessionTitle");
   } catch (...) {
     RecoverFromFailure();
+  }
+}
+
+void ProofreadPane::ShowSessionText(uint64_t generation) {
+  input_loaded_.revoke();
+  // A session opened at launch can arrive before the window's first layout. Text set on a box
+  // whose template is not applied yet is the likely cause of a faded, placeholder-like color
+  // that stayed until the box was edited (DEV-1932), so the text waits for the box to load.
+  if (input_.IsLoaded()) {
+    FillSessionText();
+    return;
+  }
+  input_loaded_ = input_.Loaded(winrt::auto_revoke,
+                                [weak = weak_from_this(), generation](auto const&, auto const&) {
+                                  const auto self = weak.lock();
+                                  if (!self) return;
+                                  self->input_loaded_.revoke();
+                                  // A newer session, or a closed one, has nothing to show here.
+                                  if (generation != self->open_generation_ || !self->session_)
+                                    return;
+                                  self->FillSessionText();
+                                });
+}
+
+void ProofreadPane::FillSessionText() {
+  input_.Text(winrt::hstring(session_text_));
+  session_input_text_ = std::wstring(input_.Text());
+  // TextChanged is not relied on for programmatic changes: refresh the count here.
+  UpdateCounter();
+  // Settle the visual state for the text now in the box, unless the user is in it.
+  if (input_.FocusState() == xaml::FocusState::Unfocused) {
+    xaml::VisualStateManager::GoToState(input_, L"Normal", false);
   }
 }
 

@@ -102,7 +102,7 @@
     "nllFailureThreshold": 3
   },
   "autoUpdate": {
-    "enabled": true,
+    "enabled": false,
     "channel": "stable",
     "checkIntervalHours": 24
   },

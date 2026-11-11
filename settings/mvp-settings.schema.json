@@ -466,9 +466,9 @@
     },
     "autoUpdate": {
       "type": "object",
-      "description": "Phase 7 (M32): 自動更新設定",
+      "description": "Phase 7 (M32): 更新の確認（opt-in。docs/sideload-packaging-spec.md section 6）",
       "properties": {
-        "enabled": { "type": "boolean", "default": true },
+        "enabled": { "type": "boolean", "default": false },
         "channel": { "type": "string", "enum": ["stable", "beta"], "default": "stable" },
         "checkIntervalHours": { "type": "integer", "default": 24, "minimum": 1 }
       },

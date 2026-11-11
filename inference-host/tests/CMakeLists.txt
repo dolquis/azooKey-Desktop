@@ -99,6 +99,12 @@ if(WIN32)
   azookey_discover_tests(host_trending_word_fetcher_tests)
 endif()
 
+add_executable(host_update_checker_tests update_checker_test.cpp)
+target_link_libraries(host_update_checker_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_update_checker_tests)
+
 add_executable(host_userdict_cli_tests userdict_cli_test.cpp)
 target_link_libraries(host_userdict_cli_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings

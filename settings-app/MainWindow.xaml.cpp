@@ -6,6 +6,7 @@
 #include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
 #include "StatusPaneModel.h"
+#include "UpdateStatusModel.h"
 #include "UiDispatch.h"
 #include "ModelPaneModel.h"
 // clang-format on
@@ -169,6 +170,55 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
   if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
   if (tag == L"Dictionary") RefreshNeologdLayerStatus();
+  if (tag == L"Version") RefreshUpdateStatus();
+}
+
+void MainWindow::RefreshUpdateStatus() {
+  using azookey::settings::UpdateCheckKind;
+  const auto* enabled_field = azookey::settings::FindSettingField("autoUpdate.enabled");
+  const bool enabled = enabled_field && std::get<bool>(azookey::settings::SettingValueOrDefault(
+                                            *enabled_field, saved_settings_.values));
+  const auto status = settings_path_ ? azookey::settings::ReadUpdateStatus(
+                                           settings_path_->parent_path() / L"update-status.json")
+                                     : azookey::settings::UpdateStatusView{};
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  std::wstring text(resources.GetString(
+      winrt::to_hstring(azookey::settings::UpdateStatusResource(status, enabled))));
+  const auto replace = [&text](std::wstring_view name, std::wstring_view value) {
+    if (const auto at = text.find(name); at != std::wstring::npos) {
+      text.replace(at, name.size(), value);
+    }
+  };
+  replace(L"{latest}", winrt::to_hstring(status.latest_version));
+  std::wstring checked;
+  if (status.checked_at_epoch) {
+    // Local time of the check, as "2026-11-11 10:30".
+    const uint64_t ticks = (*status.checked_at_epoch + 11644473600ULL) * 10000000ULL;
+    FILETIME utc{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+    SYSTEMTIME utc_time{};
+    SYSTEMTIME local{};
+    if (FileTimeToSystemTime(&utc, &utc_time) &&
+        SystemTimeToTzSpecificLocalTime(nullptr, &utc_time, &local)) {
+      std::array<wchar_t, 32> buffer{};
+      swprintf_s(buffer.data(), buffer.size(), L"%04u-%02u-%02u %02u:%02u",
+                 static_cast<unsigned>(local.wYear), static_cast<unsigned>(local.wMonth),
+                 static_cast<unsigned>(local.wDay), static_cast<unsigned>(local.wHour),
+                 static_cast<unsigned>(local.wMinute));
+      checked = buffer.data();
+    }
+  }
+  replace(L"{checked}", checked.empty() ? std::wstring(L"-") : checked);
+  UpdateStatusText().Text(text);
+
+  // Only a release page of the repository is offered (UpdateStatusModel validates the URL).
+  const bool link =
+      enabled && status.kind == UpdateCheckKind::UpdateAvailable && !status.release_url.empty();
+  if (link) {
+    OpenReleasePageButton().NavigateUri(
+        Windows::Foundation::Uri(winrt::to_hstring(status.release_url)));
+  }
+  OpenReleasePageButton().Visibility(link ? Microsoft::UI::Xaml::Visibility::Visible
+                                          : Microsoft::UI::Xaml::Visibility::Collapsed);
 }
 
 void MainWindow::ApplyDictionaryToControls(

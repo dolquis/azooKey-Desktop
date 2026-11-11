@@ -35,13 +35,16 @@ CandidateUiCoordinator::~CandidateUiCoordinator() { Destroy(); }
 
 bool CandidateUiCoordinator::Create() {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  // Predictions may have created the window already; a second HWND would leak the first.
+  if (window_created_) return true;
   logged_render_failure_stages_.clear();
   own_window_.SetOnRenderResult(
       [](bool drawn, void* context) noexcept {
         static_cast<CandidateUiCoordinator*>(context)->OnWindowRenderResult(drawn);
       },
       this);
-  return own_window_.Create();
+  window_created_ = own_window_.Create();
+  return window_created_;
 }
 
 void CandidateUiCoordinator::Destroy() {
@@ -49,6 +52,7 @@ void CandidateUiCoordinator::Destroy() {
   EndUI();
   own_window_.SetOnRenderResult(nullptr, nullptr);
   own_window_.Destroy();
+  window_created_ = false;
   ReleaseUiElementMgr();
 }
 
@@ -60,6 +64,26 @@ void CandidateUiCoordinator::SetUiLessMode(bool ui_less) {
 void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
   own_window_.SetOnClick(std::move(fn));
+}
+
+void CandidateUiCoordinator::SetOnPredictionClick(CandidateWindow::OnPredictionClickFn fn) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.SetOnPredictionClick(std::move(fn));
+}
+
+bool CandidateUiCoordinator::ShowPredictions(RECT anchor,
+                                             const std::vector<std::wstring>& predictions) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  // The candidate list owns the window until EndUI; predictions wait for it to close.
+  if (showing_) return true;
+  if (!window_created_ && !Create()) return false;
+  own_window_.ShowPredictions(anchor, predictions);
+  return true;
+}
+
+void CandidateUiCoordinator::HidePredictions() {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  if (!showing_ && own_window_.mode() == CandidateWindow::Mode::Prediction) own_window_.Hide();
 }
 
 void CandidateUiCoordinator::SetOnRetry(CandidateWindow::OnRetryFn fn) {
@@ -162,6 +186,9 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     // secure toast or health banner it hides comes back for the rest of its five seconds.
     const bool resume_secure_toast = own_window_.IsSecureToastVisible();
     const bool resume_health_banner = own_window_.IsHealthBannerVisible();
+    // Predictions leave first, so the candidate rows appear in a hidden window
+    // (native-ui-spec §4.2) rather than replacing them on screen.
+    if (own_window_.mode() == CandidateWindow::Mode::Prediction) own_window_.Hide();
     const HRESULT end_hr = EndUI();
     if (FAILED(end_hr)) {
       NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
@@ -268,7 +295,8 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
 HRESULT CandidateUiCoordinator::EndUI() {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   HRESULT result = S_OK;
-  own_window_.Hide();
+  // Closing the candidate list leaves predictions alone; they have their own lifetime.
+  if (own_window_.mode() == CandidateWindow::Mode::Candidate) own_window_.Hide();
   if (showing_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
     result = ui_element_mgr_->EndUIElement(ui_element_id_);
   }
@@ -329,7 +357,7 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
 }
 
 void CandidateUiCoordinator::ShowPendingHealthBanner() {
-  if (!health_banner_pending_ || !own_window_.IsVisible()) return;
+  if (!health_banner_pending_ || !CandidateRowsVisible()) return;
   if (health_state_ == CandidateHealthState::SafeMode) {
     notified_safe_mode_generations_.push_back(host_generation_id_);
   }
@@ -338,14 +366,21 @@ void CandidateUiCoordinator::ShowPendingHealthBanner() {
 }
 
 void CandidateUiCoordinator::ShowPendingSecureToast() {
-  if (!secure_toast_pending_ || !own_window_.IsVisible()) return;
+  if (!secure_toast_pending_ || !CandidateRowsVisible()) return;
   secure_toast_pending_ = false;
   own_window_.ShowSecureToast();
+}
+
+bool CandidateUiCoordinator::CandidateRowsVisible() const {
+  return own_window_.mode() == CandidateWindow::Mode::Candidate && own_window_.IsVisible();
 }
 
 void CandidateUiCoordinator::OnWindowRenderResult(bool drawn) noexcept {
   // Showing a pending footer redraws the candidate frame and calls us again.
   if (drawn && handling_render_result_) return;
+  // Prediction frames draw no footer and keep the pending ones for the candidate
+  // rows (native-ui-spec §4.2); the TIP logs their failures as prediction_state.
+  if (own_window_.mode() == CandidateWindow::Mode::Prediction) return;
   const bool was_handling = handling_render_result_;
   handling_render_result_ = true;
   try {

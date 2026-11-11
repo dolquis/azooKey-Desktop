@@ -102,7 +102,8 @@ class AutomationSession {
   bool FindEditorElement();
   bool IsTargetForeground() const;
   bool SendKeyInputs(const std::vector<INPUT>& inputs);
-  std::optional<RECT> WindowRectForClass(std::wstring_view class_name) const;
+  // predictions: the window must show prediction rows rather than candidates.
+  std::optional<RECT> WindowRectForClass(std::wstring_view class_name, bool predictions) const;
   void CloseLaunchedWindow();
   void NoteInputAction(std::string action);
   uint64_t MillisecondsSinceInput() const;

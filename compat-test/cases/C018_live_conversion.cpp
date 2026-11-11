@@ -99,7 +99,7 @@ CaseDefinition MakeC018LiveConversionCase() {
           result.reason_code = "live-backspace-transition-mismatch";
           return result;
         }
-        // Prediction Esc has its own meaning; close that separate window first.
+        // Prediction Esc has its own meaning; close the predictions first.
         if (!session.DismissPredictionWindow()) {
           result.reason_code = session.input_failure_reason();
           return result;

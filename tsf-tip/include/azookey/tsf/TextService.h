@@ -38,7 +38,6 @@
 #include "azookey/tsf/LiveCarry.h"
 #include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/OpenCloseKey.h"
-#include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
 #include "azookey/tsf/ProofreadSessionServer.h"
 #include "azookey/tsf/ReconversionFunction.h"
@@ -383,7 +382,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_prediction_left_context_for_test(std::string context) {
     prediction_left_context_ = std::move(context);
   }
-  bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
+  bool prediction_window_visible_for_test() const { return candidate_ui_.IsShowingPredictions(); }
+  const CandidateWindow& candidate_window_for_test() const {
+    return candidate_ui_.own_window_for_test();
+  }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);
     ShowPredictionWindow();
@@ -1051,8 +1053,8 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfContext* commit_context_{nullptr};
 
   // Candidate UI coordinator (M5).
+  // Also shows predictions in the window's prediction mode (native-ui-spec §4.2).
   CandidateUiCoordinator candidate_ui_;
-  PredictionWindow prediction_window_;
   std::vector<ipc::CandidateField> shown_predictions_;  // UI thread only.
   // The cache key of the reading shown_predictions_ answers; empty when nothing is shown.
   std::string shown_prediction_key_;  // UI thread only.

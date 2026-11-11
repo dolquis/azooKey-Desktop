@@ -142,7 +142,7 @@
     "predictionEnabled": {
       "type": "boolean",
       "default": true,
-      "description": "Phase 5 (M15): 予測候補ウィンドウを表示。OFF で PredictionWindow を生成しない"
+      "description": "Phase 5 (M15): 予測候補ウィンドウを表示。OFF で候補窓の予測モードを出さない"
     },
     "aiBackend": {
       "type": "string",

@@ -190,6 +190,8 @@ context->DrawTextLayout(origin, layout.Get(), brush.Get(),
 | 支援技術 | 渡さない（§5.2） | TSF の UIElement で渡す（§5.2） |
 
 Space などで候補を求めた時点で予測モードを消し、応答を待つ間は窓を出さない。応答が届いたら候補モードで出す。
+窓は表示中のモードを窓プロパティ `azooKey.CandidateWindowMode` で外へ示す（候補モードが 1、予測モードが 2、非表示の間は無し）。
+compat-test は窓クラスが同じ 2 つのモードをこれで区別する。
 次の規則は、断りのない限り両モードに共通する。
 
 `RenderingEngine`（`SurfaceAlpha::Opaque`）で描き、色は §1.3 の `ThemeColors` を使う。
@@ -380,7 +382,7 @@ v1.x で扱う。
 |---|---|---|
 | テーマ判定と色テーブル | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。ハイコントラスト優先と `AppsUseLightTheme` の解釈、Light / Dark の固定表、ハイコントラストのシステム色、`ImmersiveColorSet` の判定 |
 | DPI scaling | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/candidate_window_dpi_test.cpp` | 96/144/192 DPI での換算、PMv2 の一時切替と復元、候補ウィンドウのレイアウト metrics |
-| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp`、`tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。`FadeIn` が不透明度のアニメーションと即時の 1 を設定して commit できること。予測候補ウィンドウの作成と表示。デバッグウィンドウが layered window を使わずに描くこと |
+| 描画 smoke | `tsf-tip/tests/theme_colors_test.cpp` | Windows 限定。`RenderingEngine` で 1 フレーム描画して commit する。`FadeIn` が不透明度のアニメーションと即時の 1 を設定して commit できること。デバッグウィンドウが layered window を使わずに描くこと |
 | フェードイン | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。`SPI_GETCLIENTAREAANIMATION` の結果を注入し、非表示から表示に移るときだけフェード（有効時）か即時の不透明度 1（無効時）を設定すること、表示中の再表示と選択の移動では設定しないこと、描画に失敗した表示では設定しないことを確かめる。150ms の見た目は実機で確認する |
 | 候補ウィンドウの描画とクリック領域 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。96/144/192 DPI での `HitTest` の境界。描画内容を WARP のオフスクリーンへ描き、Light / Dark / ハイコントラスト × 96/144/192 DPI で各行・バナー・枠の色を確かめる。絵文字がカラーフォントで描かれること。`WM_DPICHANGED` で推奨矩形を使わずに測り直すこと。色と絵文字の確認は描画内容をオフスクリーンへ描き直したもので、DComp surface、ClearType、デバイスの作り直しは通らない。本番経路は `RenderingEngine` で 1 フレームを commit できることだけを確かめる。初期化と描画の失敗を注入し、窓が表示されずクリックで候補が選ばれないこと、状態の変化で描き直して表示すること、初期化の再試行が 3 回で止まることを確かめる。予測モード（§4.2）は、96/144/192 DPI の `HitTest` で行だけがクリック領域になること、押した行の index が予測用のコールバックだけへ渡ること、手掛かりが 1・2 件目だけに描かれ選択の強調が無いこと、描画失敗の間は窓を出さずクリックを受けないこと、下が溢れると上へ反転して下端を anchor の上辺にそろえること、`WM_DPICHANGED` で推奨矩形を使わず新しい DPI で測り直すこと、両モードが anchor の左下の同じ点でモニタを選ぶことを確かめる |
 

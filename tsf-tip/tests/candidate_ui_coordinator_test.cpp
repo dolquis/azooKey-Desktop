@@ -867,3 +867,130 @@ TEST(TsfTipCandidateUiCoordinatorTest, ElementShowFalseSwitchesSubsequentUpdates
   EXPECT_EQ(coordinator.EndUI(), S_OK);
   EXPECT_EQ(thread_mgr.end_count, 1);
 }
+
+namespace {
+
+class ScopedRenderFailure {
+ public:
+  explicit ScopedRenderFailure(azookey::tsf::CandidateWindow::RenderFailureForTest failure) {
+    azookey::tsf::CandidateWindow::SetRenderFailureForTest(failure);
+  }
+  ~ScopedRenderFailure() {
+    azookey::tsf::CandidateWindow::SetRenderFailureForTest(
+        azookey::tsf::CandidateWindow::RenderFailureForTest::None);
+  }
+};
+
+const RECT kPredictionAnchor{10, 20, 60, 40};
+const std::vector<std::wstring> kPredictions{L"日本", L"日本語"};
+
+}  // namespace
+
+// DEV-1949 (native-ui-spec §4.2): prediction rows draw no footer, so a secure
+// toast or health banner raised meanwhile waits for the candidate rows instead
+// of running out its five seconds unseen.
+TEST(TsfTipCandidateUiCoordinatorTest, PendingToastAndBannerWaitForCandidateRowsAfterPredictions) {
+  using azookey::tsf::CandidateHealthState;
+  using azookey::tsf::CandidateWindow;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+  ASSERT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, kPredictions));
+  ASSERT_TRUE(coordinator.IsShowingPredictions());
+
+  coordinator.SetSecureState(true, true);
+  coordinator.SetHealthState(CandidateHealthState::DegradedModel, "generation-1");
+  EXPECT_TRUE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(coordinator.health_banner_pending_for_test());
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  EXPECT_FALSE(window.health_banner_visible_for_test());
+  // A redrawn prediction frame does not take them either.
+  ASSERT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, {L"日本"}));
+  EXPECT_TRUE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(coordinator.health_banner_pending_for_test());
+
+  // The candidate rows replace the predictions in a hidden window, then show both.
+  const int appearances = window.appearances_for_test();
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 40}, SampleItems(), 0), S_OK);
+  EXPECT_EQ(window.mode(), CandidateWindow::Mode::Candidate);
+  EXPECT_EQ(window.appearances_for_test(), appearances + 1);
+  EXPECT_FALSE(coordinator.IsShowingPredictions());
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  EXPECT_TRUE(window.health_banner_visible_for_test());
+  coordinator.EndUI();
+}
+
+// DEV-1949 (native-ui-spec §5.2): predictions never reach the candidate list UI
+// element, and the TIP draws them even where the app draws the candidates.
+TEST(TsfTipCandidateUiCoordinatorTest, PredictionsStayOutOfTheUiElementAndApartFromTheList) {
+  using azookey::tsf::CandidateWindow;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  coordinator.SetUiLessMode(true);
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  ASSERT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, kPredictions));
+  EXPECT_TRUE(coordinator.IsShowingPredictions());
+  EXPECT_EQ(thread_mgr.begin_count, 0);
+  EXPECT_EQ(coordinator.GetCount(), 0);
+  // Closing the candidate list leaves the predictions alone.
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+  EXPECT_TRUE(coordinator.IsShowingPredictions());
+
+  // The app draws the list: the window hides and the element holds the candidates only.
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 40}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_FALSE(coordinator.IsShowingPredictions());
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+  UINT count = 0;
+  EXPECT_EQ(candidates->GetCount(&count), S_OK);
+  EXPECT_EQ(count, SampleItems().size());
+  candidates->Release();
+  // Predictions wait for the list to close, and hiding them leaves it alone.
+  EXPECT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, kPredictions));
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_FALSE(coordinator.IsShowingPredictions());
+  coordinator.HidePredictions();
+  EXPECT_TRUE(coordinator.IsShowing());
+  EXPECT_EQ(thread_mgr.end_count, 0);
+
+  ASSERT_EQ(coordinator.EndUI(), S_OK);
+  ASSERT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, kPredictions));
+  EXPECT_TRUE(coordinator.IsShowingPredictions());
+  coordinator.HidePredictions();
+  EXPECT_FALSE(window.IsVisible());
+}
+
+// DEV-1949 (native-ui-spec §4.2): a prediction frame that failed to draw is not
+// shown, and HidePredictions hides only the prediction mode.
+TEST(TsfTipCandidateUiCoordinatorTest, PredictionDrawFailureIsNotShowingAndHideSparesCandidates) {
+  using azookey::tsf::CandidateWindow;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+  {
+    const ScopedRenderFailure failure(CandidateWindow::RenderFailureForTest::Draw);
+    ASSERT_TRUE(coordinator.ShowPredictions(kPredictionAnchor, kPredictions));
+    EXPECT_EQ(window.mode(), CandidateWindow::Mode::Prediction);
+    EXPECT_FALSE(coordinator.IsShowingPredictions());
+    EXPECT_NE(std::string(coordinator.window_failure_stage()), "");
+  }
+  coordinator.HidePredictions();
+
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 40}, SampleItems(), 0), S_OK);
+  ASSERT_TRUE(window.IsVisible());
+  coordinator.HidePredictions();
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_EQ(window.GetCount(), static_cast<int>(SampleItems().size()));
+  coordinator.EndUI();
+  EXPECT_FALSE(window.IsVisible());
+}

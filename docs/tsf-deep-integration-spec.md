@@ -1313,7 +1313,7 @@ composition の末尾より後ろは最後の文節とする。
 
 ## 8. 予測窓と UI-less Mode の関係
 
-UI-less Mode（M21）の環境でも、読み入力中の予測は TIP 自前の `PredictionWindow`
+UI-less Mode（M21）の環境でも、読み入力中の予測は TIP 自前の候補窓（`CandidateWindow`）の予測モード
 （`docs/legacy-parity-spec.md` §3）で表示する。候補窓（`CandidateWindow` または OS 側の候補 UI）の
 表示中は予測窓を出さない。OS の Suggestion UI へ予測候補を渡す統合
 （`ITfReadingInformationUIElement` による公開）はこの仕様の範囲に含めない。

@@ -1312,7 +1312,6 @@ TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
 TextService::~TextService() {
   AZOOKEY_ASSERT_UI_THREAD();
   ClearPrediction();
-  prediction_window_.Destroy();
   // Before the IPC members it signals: the watcher holds a callback bound to
   // this object, and a release that skips Deactivate would otherwise leave it
   // running against members already destroyed.
@@ -1575,7 +1574,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   candidate_ui_.SetOnClick([this](int idx) { OnCandidateClicked(idx); });
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
   candidate_ui_.SetOnRetry([this] { RetryModelFromUi(); });
-  prediction_window_.SetOnClick([this](int index) {
+  candidate_ui_.SetOnPredictionClick([this](int index) {
     try {
       if (active_context_) (void)AcceptPrediction(active_context_, static_cast<size_t>(index));
     } catch (...) {
@@ -1649,7 +1648,6 @@ STDMETHODIMP TextService::Deactivate() try {
 
   UnadviseTextEditSink();
   ClearPrediction();
-  prediction_window_.Destroy();
   debug_window_.Destroy();
   prediction_logged_reasons_.store(0, std::memory_order_relaxed);
   ClearReconversionState();
@@ -2781,7 +2779,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       LogKeyPassthroughOnce();
       return S_OK;
     }
-    if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
+    if (candidate_ui_.IsShowingPredictions() && SameComIdentity(context, active_context_) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0 &&
         (wParam == VK_ESCAPE || (wParam == VK_TAB && ((modifiers & core::kModifierShift) == 0 ||
                                                       shown_predictions_.size() > 1)))) {
@@ -3117,7 +3115,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       LogKeyPassthroughOnce();
       return S_OK;
     }
-    if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
+    if (candidate_ui_.IsShowingPredictions() && SameComIdentity(context, active_context_) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
       if (wParam == VK_ESCAPE) {
         ClearPrediction();
@@ -4743,7 +4741,8 @@ bool TextService::AwaitingCandidateWindow() {
 
 void TextService::HidePredictionForCandidateWindow() noexcept {
   try {
-    if ((prediction_window_.IsVisible() || !shown_predictions_.empty()) && CandidateWindowDecided())
+    if ((candidate_ui_.IsShowingPredictions() || !shown_predictions_.empty()) &&
+        CandidateWindowDecided())
       ClearPrediction();
   } catch (...) {
     // Prediction is best-effort; a failed clear leaves the key's result alone.
@@ -5678,7 +5677,7 @@ bool TextService::CanCarryShownFirstKey(ITfDocumentMgr* focus) const {
     return false;
   if (!first_key_carry_deadline_ || std::chrono::steady_clock::now() > *first_key_carry_deadline_)
     return false;
-  if (ContextBelongsToDocumentMgr(active_context_, focus) || prediction_window_.IsVisible() ||
+  if (ContextBelongsToDocumentMgr(active_context_, focus) || candidate_ui_.IsShowingPredictions() ||
       !LifecycleShownSurface().empty())
     return false;
   return HasCarryableInput();
@@ -9516,8 +9515,8 @@ void TextService::LogPredictionOnce(PredictionLogReason reason) noexcept {
         reason == PredictionLogReason::WindowShowFailed) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "prediction_state",
                  {{"reason", name},
-                  {"stage", SafeLogText(prediction_window_.failure_stage())},
-                  {"hresult", static_cast<int64_t>(prediction_window_.failure_hr())}});
+                  {"stage", SafeLogText(candidate_ui_.window_failure_stage())},
+                  {"hresult", static_cast<int64_t>(candidate_ui_.window_failure_hr())}});
     } else {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "prediction_state", {{"reason", name}});
     }
@@ -9530,23 +9529,23 @@ void TextService::ShowPredictionWindow() {
   for (const auto& candidate : shown_predictions_) labels.push_back(Utf8ToWide(candidate.surface));
   if (labels.empty()) {
     LogPredictionOnce(PredictionLogReason::NoAcceptablePrediction);
-    prediction_window_.Hide();
+    candidate_ui_.HidePredictions();
     return;
   }
   // DEV-1938: a result that lands while the candidate window is awaited stays hidden.
   if (CandidateWindowDecided()) {
     LogPredictionOnce(PredictionLogReason::CandidateWindow);
-    prediction_window_.Hide();
+    candidate_ui_.HidePredictions();
     return;
   }
-  if (!prediction_window_.Create()) {
+  // Predictions are drawn by the TIP alone and never reach the candidate list
+  // UI element (native-ui-spec §5.2).
+  if (!candidate_ui_.ShowPredictions(PredictionCaretRect(), labels)) {
     LogPredictionOnce(PredictionLogReason::WindowCreateFailed);
-    prediction_window_.Hide();
     return;
   }
-  prediction_window_.Show(labels, PredictionCaretRect());
-  LogPredictionOnce(prediction_window_.IsVisible() ? PredictionLogReason::Shown
-                                                   : PredictionLogReason::WindowShowFailed);
+  LogPredictionOnce(candidate_ui_.IsShowingPredictions() ? PredictionLogReason::Shown
+                                                         : PredictionLogReason::WindowShowFailed);
 }
 
 void TextService::ClearPrediction() {
@@ -9554,7 +9553,7 @@ void TextService::ClearPrediction() {
   candidate_ui_.CancelScheduledCandidatesReady();
   prediction_retry_scheduled_generation_ = 0;
   prediction_retry_generation_.store(0, std::memory_order_release);
-  prediction_window_.Hide();
+  candidate_ui_.HidePredictions();
   shown_predictions_.clear();
   shown_prediction_key_.clear();
   // The duplicate-query hold in RefreshPrediction waits on the outstanding
@@ -9576,8 +9575,8 @@ void TextService::RefreshPrediction(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!local_settings_.PredictionEnabledSnapshot()) {
     LogPredictionOnce(PredictionLogReason::Disabled);
+    // Only the prediction mode goes; the candidate window stays for conversion.
     ClearPrediction();
-    prediction_window_.Destroy();
     prediction_cache_.clear();
     prediction_last_query_key_.clear();
     return;
@@ -9643,7 +9642,7 @@ void TextService::RefreshPrediction(ITfContext* context) {
     ShowPredictionWindow();
     return;
   }
-  prediction_window_.Hide();
+  candidate_ui_.HidePredictions();
   shown_predictions_.clear();
   shown_prediction_key_.clear();
   if (prediction_last_query_key_ == cache_key &&
@@ -9680,8 +9679,8 @@ void TextService::ApplyPredictionResult() {
   }
   if (!local_settings_.PredictionEnabledSnapshot()) {
     if (result) LogPredictionOnce(PredictionLogReason::Disabled);
+    // Only the prediction mode goes; the candidate window stays for conversion.
     ClearPrediction();
-    prediction_window_.Destroy();
     prediction_cache_.clear();
     prediction_last_query_key_.clear();
     return;
@@ -9730,7 +9729,7 @@ void TextService::ApplyPredictionResult() {
 
 HRESULT TextService::AcceptPrediction(ITfContext* context, size_t index) {
   AZOOKEY_ASSERT_UI_THREAD();
-  if (!context || index >= shown_predictions_.size() || !prediction_window_.IsVisible())
+  if (!context || index >= shown_predictions_.size() || !candidate_ui_.IsShowingPredictions())
     return S_FALSE;
   const std::string current = input_state_.confirmed_kana();
   const auto suffix = PredictionReadingSuffix(current, shown_predictions_[index]);

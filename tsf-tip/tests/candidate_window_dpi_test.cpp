@@ -836,5 +836,42 @@ TEST(CandidateWindowPredictionTest, OpensAboveTheAnchorAndRemeasuresOnDpiChange)
   window.Destroy();
 }
 
+// DEV-1949: the mode property tells compat-test which rows are on screen.
+TEST(CandidateWindowPredictionTest, ModePropertyFollowsTheRowsOnScreen) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  const HWND hwnd = window.hwnd_for_test();
+  const auto mode_property = [&] {
+    return reinterpret_cast<UINT_PTR>(GetPropW(hwnd, CandidateWindow::kModeProperty));
+  };
+  EXPECT_EQ(mode_property(), 0u);
+
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_TRUE(window.IsVisible());
+  EXPECT_EQ(mode_property(), CandidateWindow::kModePropertyCandidate);
+  window.ShowPredictions(kAnchor, {L"一", L"二"});
+  ASSERT_TRUE(window.IsShowingPredictions());
+  EXPECT_EQ(mode_property(), CandidateWindow::kModePropertyPrediction);
+  window.Hide();
+  EXPECT_EQ(mode_property(), 0u);
+
+  // A frame that failed to draw keeps the window hidden and the property absent.
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  window.ShowPredictions(kAnchor, {L"一"});
+  EXPECT_EQ(mode_property(), 0u);
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.ShowPredictions(kAnchor, {L"一"});
+  EXPECT_EQ(mode_property(), CandidateWindow::kModePropertyPrediction);
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  SendMessageW(hwnd, WM_THEMECHANGED, 0, 0);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(mode_property(), 0u);
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.Destroy();
+}
 }  // namespace
 }  // namespace azookey::tsf

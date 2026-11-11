@@ -9,7 +9,6 @@ add_library(azookey_tsf_tip SHARED
   src/DebugLogBuffer.cpp
   src/DebugWindow.cpp
   src/DelayedActionTimer.cpp
-  src/PredictionWindow.cpp
   src/ProofreadDocumentReader.cpp
   src/ProofreadSessionServer.cpp
   src/RenderingEngine.cpp
@@ -74,7 +73,6 @@ if(AZOOKEY_BUILD_TESTS)
     src/DebugLogBuffer.cpp
     src/DebugWindow.cpp
     src/DelayedActionTimer.cpp
-    src/PredictionWindow.cpp
     src/ProofreadDocumentReader.cpp
     src/ProofreadSessionServer.cpp
     src/RenderingEngine.cpp
@@ -237,7 +235,6 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 15)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
-  add_tsf_tip_unit_test(tsf_tip_prediction_window_tests tests/prediction_window_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_theme_colors_tests tests/theme_colors_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_langbar_input_mode_tests tests/langbar_input_mode_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)

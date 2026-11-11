@@ -213,7 +213,7 @@ struct Candidate {
 ```
 
 候補 UI のアノテーション列に `[敬]` `[砕]` `[技]` 等の 2 文字バッジを表示
-（`PredictionWindow.cpp` / `CandidateWindow.cpp` 共通）。
+（`CandidateWindow.cpp` の候補・予測の両モード共通）。
 
 IPC：`CandidateField`（候補・予測の両 payload が使う）に `tag: uint8` フィールドを追加する（0 = None は省略）。
 

@@ -15132,6 +15132,114 @@ TEST(TsfTipWindowWaitTest, SpaceClosesThePredictionWindowForTheWait) {
   }
 }
 
+// DEV-1949 (native-ui-spec §4.2): predictions that failed to draw are not on
+// screen, so Tab and Esc mean what they do without a prediction window.
+TEST(TsfTipPredictionModeTest, DrawFailureLeavesTabAndEscapeToTheApp) {
+  using azookey::tsf::CandidateWindow;
+  struct ResetRenderFailure {
+    ~ResetRenderFailure() {
+      CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
+    }
+  } reset;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Draw);
+  ShowPredictionForTest(h.service);
+  ASSERT_EQ(h.service.shown_prediction_count_for_test(), 1u);
+  ASSERT_EQ(h.service.candidate_window_for_test().mode(), CandidateWindow::Mode::Prediction);
+  ASSERT_FALSE(h.service.prediction_window_visible_for_test())
+      << "a failed frame must keep the prediction rows off screen";
+  EXPECT_FALSE(ProbeTypoKey(h, VK_TAB));
+  EXPECT_FALSE(h.Press(VK_TAB));
+  EXPECT_FALSE(ProbeTypoKey(h, VK_ESCAPE));
+  EXPECT_FALSE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.context.document->text, L"か");
+
+  // Drawn, the same window takes Esc and closes.
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
+  ShowPredictionForTest(h.service);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_TRUE(ProbeTypoKey(h, VK_ESCAPE));
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
+// DEV-1949 (native-ui-spec §5.2): predictions are not part of the candidate list
+// UI element, so UI-less hosts still see the TIP draw them.
+TEST(TsfTipPredictionModeTest, UiLessHostsStillSeeTipDrawnPredictions) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_ui_less_mode_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ShowPredictionWhileComposing(h);
+  EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+}
+
+// DEV-1949: turning predictions off hides the prediction mode and keeps the
+// window, which the candidates still use.
+TEST(TsfTipPredictionModeTest, TurningPredictionsOffKeepsTheCandidateWindow) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_prediction_enabled_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ShowPredictionWhileComposing(h);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+
+  h.service.set_prediction_enabled_for_test(false);
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.context.document->text, L"か");
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
+  const HWND window = h.service.candidate_window_for_test().hwnd_for_test();
+  ASSERT_NE(window, nullptr);
+  EXPECT_TRUE(IsWindow(window));
+
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  AnswerWindow(h);
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  EXPECT_EQ(h.service.candidate_window_for_test().hwnd_for_test(), window);
+  EXPECT_TRUE(h.service.candidate_window_for_test().IsVisible());
+}
+
+// DEV-1949 (DEV-1931): leaving the candidate list for the reading hides the
+// window before the predictions appear in it, so the two modes never swap on screen.
+TEST(TsfTipPredictionModeTest, LeavingTheCandidatesHidesTheWindowBeforePredictions) {
+  using azookey::tsf::CandidateWindow;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  // The test harness skips Activate; the first predictions create the window.
+  ShowPredictionWhileComposing(h);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  AnswerWindow(h);
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  const auto& window = h.service.candidate_window_for_test();
+  ASSERT_EQ(window.mode(), CandidateWindow::Mode::Candidate);
+  ASSERT_TRUE(window.IsVisible());
+  const int appearances = window.appearances_for_test();
+
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_FALSE(h.service.candidate_window_showing_for_test());
+  EXPECT_FALSE(window.IsVisible());
+  ShowPredictionWhileComposing(h);
+  ASSERT_TRUE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(window.mode(), CandidateWindow::Mode::Prediction);
+  EXPECT_EQ(window.appearances_for_test(), appearances + 1);
+}
+
 // DEV-1938 (legacy-parity-spec §3.4): Tab and Shift+Tab during the wait are
 // eaten and do nothing: no prediction is accepted, nothing reaches the app,
 // and the key does not wait for the window.

@@ -6,7 +6,9 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
+#include "AppProfiles.h"
 #include "LearningPaneModel.h"
 #include "ModelPaneModel.h"
 
@@ -307,6 +309,102 @@ TEST(LearningPaneModelTest, AcceptsOnlyAnAbsoluteZipPathForABackup) {
   EXPECT_FALSE(IsBackupArchivePath("C:\\Users\\me\\azookey-backup.tar"));
   EXPECT_FALSE(IsBackupArchivePath("C:\\Users\\me\\"));
   EXPECT_FALSE(IsBackupArchivePath(""));
+}
+
+namespace {
+
+std::string ReadSource(const char* name) {
+  std::ifstream input(std::filesystem::path(std::u8string(u8"" AZOOKEY_SETTINGS_SOURCE_DIR)) / name,
+                      std::ios::binary);
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
+// Whether a UTF-8 string holds a pictograph: any code point outside the BMP, the dingbats and
+// miscellaneous symbols (U+2600-U+27BF), or the emoji presentation selector U+FE0F.
+bool HasEmoji(const std::string& text) {
+  for (size_t at = 0; at < text.size(); ++at) {
+    const auto lead = static_cast<unsigned char>(text[at]);
+    if (lead >= 0xF0) return true;
+    if (at + 2 >= text.size()) continue;
+    const auto second = static_cast<unsigned char>(text[at + 1]);
+    const auto third = static_cast<unsigned char>(text[at + 2]);
+    if (lead == 0xE2 && second >= 0x98 && second <= 0x9E) return true;
+    if (lead == 0xEF && second == 0xB8 && third == 0x8F) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(ReswNotationTest, NoStringShowsAnInternalWordOrAnEmoji) {
+  // sideload-packaging-spec section 3.2, "表記規則".
+  std::ifstream input(std::filesystem::path(std::u8string(u8"" AZOOKEY_SETTINGS_RESW_PATH)),
+                      std::ios::binary);
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  const auto resw = buffer.str();
+  const std::vector<std::string> internal_words = {
+      "Host",    "backend",   "catalog", "pack",         "prompt prefix",
+      "Persona", "Settings ", "merge",   "overwrite",    "keep_both",
+      "bytes",   "v1.",       "括弧",    "バックエンド", "整文"};
+  const std::string name_marker = "<data name=\"";
+  const std::string open = "<value>";
+  const std::string close = "</value>";
+  size_t checked = 0;
+  for (auto at = resw.find(name_marker); at != std::string::npos; at = resw.find(name_marker, at)) {
+    at += name_marker.size();
+    const auto name = resw.substr(at, resw.find('"', at) - at);
+    const auto begin = resw.find(open, at) + open.size();
+    const auto value = resw.substr(begin, resw.find(close, begin) - begin);
+    ++checked;
+    for (const auto& word : internal_words) {
+      EXPECT_EQ(value.find(word), std::string::npos) << name << ": " << word;
+    }
+    EXPECT_FALSE(HasEmoji(value)) << name;
+  }
+  EXPECT_GT(checked, 100u);
+}
+
+TEST(ReswNotationTest, EveryUidInTheWindowHasAStringAndNoPageWideHeadingIsLeft) {
+  const auto names = ResourceNames();
+  const auto xaml = ReadSource("MainWindow.xaml");
+  const std::regex pattern(R"re(x:Uid="([A-Za-z0-9_]+)")re");
+  size_t uids = 0;
+  for (std::sregex_iterator it(xaml.begin(), xaml.end(), pattern), end; it != end; ++it) {
+    const auto uid = (*it)[1].str();
+    ++uids;
+    const auto prefix = uid + ".";
+    const auto found = names.lower_bound(prefix);
+    EXPECT_TRUE(found != names.end() && found->starts_with(prefix)) << uid;
+  }
+  EXPECT_GT(uids, 20u);
+  // Each pane carries its own heading and line; the app-wide ones are gone (section 3.2).
+  EXPECT_EQ(xaml.find("PageTitle"), std::string::npos);
+  EXPECT_EQ(xaml.find("PageDescription"), std::string::npos);
+}
+
+TEST(ReswNotationTest, EnumValuesShowAStringRatherThanTheSavedValue) {
+  using namespace azookey::settings;
+  const auto names = ResourceNames();
+  const auto check = [&names](const auto& options) {
+    for (const auto option : options) {
+      EXPECT_TRUE(names.contains(ProfileOptionResource(option))) << option;
+    }
+  };
+  check(kProfileAiBackends);
+  check(kProfileStyles);
+  check(kProfilePrivacyModes);
+  check(kProfileBracketPairings);
+  EXPECT_EQ(ProfileOptionResource("local-zenzai"), "Profiles_Option_local_zenzai");
+  for (const char* status : {"success", "timeout", "error", "unexpected"}) {
+    EXPECT_TRUE(names.contains(BenchmarkStatusResource(status))) << status;
+  }
+  EXPECT_EQ(BenchmarkStatusResource("unexpected"), "Models_BenchStatus_other");
+  EXPECT_EQ(InferenceDeviceName("cpu"), "CPU");
+  EXPECT_EQ(InferenceDeviceName("vulkan"), "Vulkan");
+  EXPECT_EQ(InferenceDeviceName("npu"), "npu");
 }
 
 TEST(PaneSourcesTest, EveryStringTheNewPanesLoadIsInTheResources) {

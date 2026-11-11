@@ -88,11 +88,6 @@
             </Grid.RowDefinitions>
         <ScrollViewer>
             <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
-                <TextBlock x:Uid="PageTitle"
-                           Style="{StaticResource TitleTextBlockStyle}"
-                           AutomationProperties.AutomationId="PageTitle" />
-                <TextBlock x:Uid="PageDescription"
-                           TextWrapping="Wrap" />
                 <InfoBar x:Name="SettingsStatusInfoBar"
                          IsOpen="False"
                          IsClosable="True"
@@ -101,12 +96,16 @@
                 <StackPanel x:Name="InputPane" Spacing="16">
                     <TextBlock x:Uid="InputSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="InputPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel x:Name="InputFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="CandidatesPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="CandidatesSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="CandidatesPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel x:Name="CandidatesFieldsPanel" Spacing="16" />
                 </StackPanel>
 
@@ -162,6 +161,8 @@
                 <StackPanel x:Name="AiConversionPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AiConversionSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="AiConversionPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleSwitch x:Name="ModelEnabledToggle"
                                   x:Uid="ModelEnabledToggle"
                                   AutomationProperties.AutomationId="ModelEnabledToggle" />
@@ -192,6 +193,8 @@
                 <StackPanel x:Name="AiPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AiSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="AiPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel x:Name="AiFieldsPanel" Spacing="16" />
                     <PasswordBox x:Name="OpenAiApiKeyPasswordBox"
                                  x:Uid="OpenAiApiKeyPasswordBox"
@@ -208,10 +211,12 @@
                 <StackPanel x:Name="PrivacyPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="PrivacySectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="PrivacyPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel x:Name="PrivacyFieldsPanel" Spacing="16" />
                     <TextBlock x:Uid="CrashReportSectionTitle"
                                Margin="0,8,0,0"
-                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
                     <ToggleSwitch x:Name="CrashReportConsentToggle"
                                   x:Uid="CrashReportConsentToggle"
                                   AutomationProperties.AutomationId="CrashReportConsentToggle" />
@@ -236,6 +241,8 @@
                 <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AdvancedSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="AdvancedPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <InfoBar x:Name="SafeModeInfoBar"
                              x:Uid="SafeModeInfoBar"
                              IsOpen="False"
@@ -254,18 +261,22 @@
                         <ComboBox x:Name="LogLevelCombo"
                                   HorizontalAlignment="Stretch"
                                   AutomationProperties.AutomationId="LogLevelCombo">
-                            <ComboBoxItem Content="error" />
-                            <ComboBoxItem Content="warn" />
-                            <ComboBoxItem Content="info" />
-                            <ComboBoxItem Content="debug" />
+                            <!-- The order is the index MainWindow maps to the saved logLevel. -->
+                            <ComboBoxItem x:Uid="LogLevelError" />
+                            <ComboBoxItem x:Uid="LogLevelWarn" />
+                            <ComboBoxItem x:Uid="LogLevelInfo" />
+                            <ComboBoxItem x:Uid="LogLevelDebug" />
                         </ComboBox>
                     </StackPanel>
                     <StackPanel x:Name="AdvancedFieldsPanel" Spacing="16" />
                 </StackPanel>
 
                 <StackPanel x:Name="VersionPane" Spacing="16" Visibility="Collapsed">
-                    <TextBlock x:Uid="UpdateSectionTitle"
+                    <TextBlock x:Uid="VersionSectionTitle"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Uid="VersionPaneDescription" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <!-- The generated autoUpdate fields bring the "更新の確認" heading. -->
                     <StackPanel x:Name="VersionFieldsPanel" Spacing="16" />
                     <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap"
                                AutomationProperties.AutomationId="UpdateStatusText" />
@@ -275,7 +286,7 @@
                                      AutomationProperties.AutomationId="OpenReleasePageButton" />
                     <TextBlock x:Uid="LicensesSectionTitle"
                                Margin="0,8,0,0"
-                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
                     <TextBlock x:Uid="LicensesDescription" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <HyperlinkButton x:Uid="OpenThirdPartyNoticesButton"

@@ -63,6 +63,20 @@ std::string ModelErrorResource(std::string_view error) {
   return name;
 }
 
+std::string BenchmarkStatusResource(std::string_view status) {
+  if (status == "success" || status == "timeout" || status == "error") {
+    return "Models_BenchStatus_" + std::string(status);
+  }
+  return "Models_BenchStatus_other";
+}
+
+std::string InferenceDeviceName(std::string_view backend) {
+  if (backend == "cpu") return "CPU";
+  if (backend == "cuda") return "CUDA";
+  if (backend == "vulkan") return "Vulkan";
+  return std::string(backend);
+}
+
 std::string HostCallStatusResource(HostCallStatus status) {
   switch (status) {
     case HostCallStatus::Ok:

@@ -42,6 +42,12 @@ bool SameProfileKey(std::string_view left, std::string_view right) {
   return azookey::core::EqualAppName(left, right);
 }
 
+std::string ProfileOptionResource(std::string_view value) {
+  std::string name = "Profiles_Option_";
+  for (const char ch : value) name.push_back(ch == '-' ? '_' : ch);
+  return name;
+}
+
 AppProfiles ParseAppProfiles(const j::Object& object) {
   AppProfiles profiles;
   for (const auto& [key, value] : object) {

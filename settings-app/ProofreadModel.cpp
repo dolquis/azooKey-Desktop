@@ -19,6 +19,13 @@ ProofreadInputProblem CheckProofreadInput(std::string_view utf8_text) {
   return ProofreadInputProblem::None;
 }
 
+std::string FormatProofreadSize(std::size_t utf8_bytes) {
+  constexpr std::size_t kKiB = 1024;
+  const auto used = (utf8_bytes + kKiB - 1) / kKiB;
+  return std::to_string(used) + " / " + std::to_string(azookey::ipc::kMaxAnomalyTextBytes / kKiB) +
+         " KiB";
+}
+
 azookey::ipc::DetectAnomaliesRequest MakeProofreadRequest(std::string utf8_text) {
   azookey::ipc::DetectAnomaliesRequest request;
   request.text = std::move(utf8_text);

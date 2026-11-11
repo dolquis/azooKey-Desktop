@@ -49,6 +49,14 @@ inline constexpr std::array<std::string_view, 12> kModelErrorCodes{"invalid_requ
 
 std::string ModelErrorResource(std::string_view error);
 
+// A benchmark's status ("success" / "timeout" / "error", model-management-spec section 6) as
+// "Models_BenchStatus_<status>"; any other value falls back to "Models_BenchStatus_other".
+std::string BenchmarkStatusResource(std::string_view status);
+
+// The inference device a benchmark ran on, as the device's name ("cpu" shows "CPU"); a value this
+// version does not know is shown as it is.
+std::string InferenceDeviceName(std::string_view backend);
+
 // The string for a request that produced no Host response at all.
 std::string HostCallStatusResource(HostCallStatus status);
 

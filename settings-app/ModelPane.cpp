@@ -342,11 +342,12 @@ winrt::fire_and_forget ModelPane::Benchmark(std::string path, std::string file_n
       text += L"\n" + std::wstring(resources.GetString(label)) + L": " +
               std::wstring(winrt::to_hstring(value));
     };
-    line(L"Models_Bench_Status", r.status);
+    line(L"Models_Bench_Status",
+         winrt::to_string(Str(resources, BenchmarkStatusResource(r.status))));
     if (r.error) {
       line(L"Models_Bench_Error", winrt::to_string(Str(resources, ModelErrorResource(*r.error))));
     }
-    line(L"Models_Bench_Backend", r.backend);
+    line(L"Models_Bench_Backend", InferenceDeviceName(r.backend));
     line(L"Models_Bench_Latency", OneDecimal(r.p50_ms) + " / " + OneDecimal(r.p95_ms) + " / " +
                                       OneDecimal(r.p99_ms) + " ms");
     line(L"Models_Bench_Load", OneDecimal(r.load_ms) + " ms");
@@ -640,8 +641,11 @@ void ModelPane::RenderHistory() {
     };
     append(entry.path);
     append(entry.completed_at);
-    append(entry.backend);
-    append(entry.status);
+    append(InferenceDeviceName(entry.backend));
+    if (!entry.status.empty()) {
+      append(winrt::to_string(
+          resources.GetString(winrt::to_hstring(BenchmarkStatusResource(entry.status)))));
+    }
     if (entry.p50_ms || entry.p95_ms || entry.p99_ms) {
       const auto ms = [](const std::optional<double>& value) {
         return value ? OneDecimal(*value) : std::string("-");

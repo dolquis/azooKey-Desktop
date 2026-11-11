@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "LearningPane.h"
 #include "MainWindow.g.h"
@@ -47,7 +49,19 @@ struct MainWindow : MainWindowT<MainWindow> {
  private:
   winrt::fire_and_forget LoadSettingsAsync();
   Windows::Foundation::IAsyncAction LoadSettingsCoreAsync();
-  Windows::Foundation::IAsyncAction SaveSettingsCoreAsync();
+  // True when the settings were written.
+  Windows::Foundation::IAsyncOperation<bool> SaveSettingsCoreAsync();
+  // What a save would be given, from the controls; `invalid_paths` lists enabled controls that
+  // hold no valid value (their keys are left out of `values`).
+  azookey::settings::EditableSettings SettingsFromControls(std::vector<std::string>* invalid_paths);
+  // The number of keys changed from what was loaded; an invalid control counts as one.
+  size_t ChangedSettingCount();
+  // Recounts the changes and sets the save bar's text and the save button (section 3.2).
+  void RefreshSaveBar();
+  void ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
+                      const winrt::hstring& title, const winrt::hstring& message);
+  // Asks whether to save, discard or keep the changes when the window is being closed.
+  winrt::fire_and_forget ConfirmCloseAsync();
   void ApplySettingsToControls(const azookey::settings::SettingsDocumentResult& result);
   void UpdateCrashReportStatus();
   void ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
@@ -82,6 +96,16 @@ struct MainWindow : MainWindowT<MainWindow> {
   std::shared_ptr<azookey::settings::PersonaPane> persona_pane_;
   std::shared_ptr<azookey::settings::ProofreadPane> proofread_pane_;
   bool clear_safe_mode_{false};
+  // Save bar state: whether the loaded file may be written, whether a save is running, whether a
+  // save would repair what loading reported, and whether the controls show the loaded values.
+  bool can_save_{false};
+  bool saving_{false};
+  bool repair_pending_{false};
+  bool controls_loaded_{false};
+  bool load_problem_shown_{false};
+  // Set once the user chose to save or discard, so the next close is not asked about again.
+  bool close_confirmed_{false};
+  bool close_dialog_open_{false};
 };
 
 }  // namespace winrt::azookey_settings::implementation

@@ -18,6 +18,8 @@ class ProfilesPane : public std::enable_shared_from_this<ProfilesPane> {
  public:
   struct Host {
     std::function<winrt::Microsoft::UI::Xaml::XamlRoot()> xaml_root;
+    // Called after the profiles change, so the save bar can recount (may be empty).
+    std::function<void()> changed;
   };
 
   void Build(winrt::Microsoft::UI::Xaml::Controls::StackPanel panel, Host host);

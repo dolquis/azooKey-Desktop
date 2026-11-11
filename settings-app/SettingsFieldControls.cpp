@@ -86,6 +86,9 @@ winrt::hstring InactiveReason(const ResourceLoader& resources, const SettingCond
 }  // namespace
 
 void SettingsFieldControls::Build(const PanelForPane& panels) {
+  const auto notify = [this] {
+    if (changed_) changed_();
+  };
   ResourceLoader resources;
   std::string_view section;
   std::optional<SettingsPane> pane;
@@ -103,7 +106,10 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
       case SettingKind::Bool: {
         controls::ToggleSwitch toggle;
         toggle.Header(label);
-        toggle.Toggled([this](auto&&, auto&&) { RefreshActiveStates(); });
+        toggle.Toggled([this, notify](auto&&, auto&&) {
+          RefreshActiveStates();
+          notify();
+        });
         control = toggle;
         break;
       }
@@ -118,7 +124,10 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
           item.Tag(winrt::box_value(winrt::to_hstring(option)));
           combo.Items().Append(item);
         }
-        combo.SelectionChanged([this](auto&&, auto&&) { RefreshActiveStates(); });
+        combo.SelectionChanged([this, notify](auto&&, auto&&) {
+          RefreshActiveStates();
+          notify();
+        });
         control = combo;
         break;
       }
@@ -126,6 +135,7 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
       case SettingKind::Number: {
         auto box = NumberControl(field);
         box.Header(label);
+        box.ValueChanged([notify](auto&&, auto&&) { notify(); });
         control = box;
         break;
       }
@@ -138,6 +148,7 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
           text.TextWrapping(xaml::TextWrapping::Wrap);
           text.MinHeight(80);
         }
+        text.TextChanged([notify](auto&&, auto&&) { notify(); });
         control = text;
         break;
       }
@@ -217,7 +228,7 @@ std::optional<SettingValue> SettingsFieldControls::ReadEntry(const Entry& entry)
   return std::nullopt;
 }
 
-bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_path) const {
+SettingValues SettingsFieldControls::ReadValid(std::vector<std::string>* invalid_paths) const {
   SettingValues read;
   std::vector<const SettingField*> invalid;
   for (const auto& entry : entries_) {
@@ -230,10 +241,17 @@ bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_pat
   }
   // A disabled control cannot be corrected, so its invalid value is left out of the save.
   for (const auto* field : invalid) {
-    if (IsSettingFieldActive(*field, read)) {
-      *invalid_path = std::string(field->path);
-      return false;
-    }
+    if (IsSettingFieldActive(*field, read)) invalid_paths->emplace_back(field->path);
+  }
+  return read;
+}
+
+bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_path) const {
+  std::vector<std::string> invalid;
+  auto read = ReadValid(&invalid);
+  if (!invalid.empty()) {
+    *invalid_path = invalid.front();
+    return false;
   }
   for (auto& [path, value] : read) (*values)[path] = std::move(value);
   return true;

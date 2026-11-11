@@ -951,6 +951,65 @@ TEST(SettingsDocumentTest, OnlyTurningNeologdOnRequiresAHostRestart) {
   EXPECT_TRUE(azookey::settings::SettingsRequiringHostRestart(off, other).empty());
 }
 
+TEST(SettingsDocumentTest, ChangedSettingPathsIsEmptyForTheControlsAsLoaded) {
+  ScopedTempDirectory temp("azookey_settings_changed_paths");
+  const auto path = temp.path() / "settings.json";
+  // An invalid generic value and a backend this UI cannot select are shown without counting.
+  WriteText(path, R"({"maxCandidates":"many","model":{"backendPreference":"cuda"},
+    "dictionary":{"sudachiEnabled":false}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_FALSE(loaded.settings.model_backend_preference.has_value());
+
+  // What the controls hand to a save when nothing was touched: every generic field at its shown
+  // value, the dictionary switches, and the profiles as loaded.
+  auto edited = loaded.settings;
+  edited.dictionary = loaded.settings.dictionary.value_or(azookey::settings::DictionarySettings{});
+  for (const auto& field : azookey::settings::GenericSettingFields()) {
+    edited.values[std::string(field.path)] =
+        azookey::settings::SettingValueOrDefault(field, loaded.settings.values);
+  }
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(edited, loaded.settings).empty());
+
+  const auto missing = azookey::settings::LoadSettingsDocument(temp.path() / "absent.json");
+  auto untouched = missing.settings;
+  untouched.dictionary = azookey::settings::DictionarySettings{};
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(untouched, missing.settings).empty());
+}
+
+TEST(SettingsDocumentTest, ChangedSettingPathsCountsEachKeyASaveWouldWrite) {
+  azookey::settings::EditableSettings loaded;
+  loaded.dictionary = azookey::settings::DictionarySettings{};
+  loaded.values = {{"maxCandidates", int64_t{12}}};
+  loaded.profiles_by_app = azookey::settings::AppProfiles{};
+
+  auto edited = loaded;
+  edited.model_enabled = false;
+  edited.model_backend_preference = "cpu";
+  edited.model_selected_path = "C:\\models\\a.gguf";
+  edited.openai_api_key_changed = true;
+  edited.log_level = "debug";
+  edited.crash_report_consent = "local";
+  edited.dictionary->sudachi_enabled = false;
+  edited.dictionary->neologd_enabled = true;
+  edited.clear_safe_mode = true;
+  edited.values["maxCandidates"] = int64_t{9};
+  edited.values["liveConversion"] = true;
+  // Still the default, so not a change.
+  edited.values["inputMode"] = std::string("hiragana");
+
+  const auto paths = azookey::settings::ChangedSettingPaths(edited, loaded);
+  EXPECT_EQ(paths, (std::vector<std::string>{
+                       "model.enabled", "model.backendPreference", "model.selectedPath",
+                       "openAiApiKey", "logLevel", "privacy.crashReportConsent",
+                       "dictionary.sudachiEnabled", "dictionary.neologdEnabled", "safeMode.enabled",
+                       "liveConversion", "maxCandidates"}));
+
+  // Changing a value back is no longer a change.
+  auto reverted = loaded;
+  reverted.model_backend_preference = loaded.model_backend_preference;
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(reverted, loaded).empty());
+}
+
 TEST(SettingsDocumentTest, UnknownAndMistypedDictionaryLayerValuesAreRemoved) {
   ScopedTempDirectory temp("azookey_settings_dictionary_invalid");
   const auto path = temp.path() / "settings.json";

@@ -775,4 +775,39 @@ std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& be
   return keys;
 }
 
+std::vector<std::string> ChangedSettingPaths(const EditableSettings& edited,
+                                             const EditableSettings& loaded) {
+  std::vector<std::string> paths;
+  if (edited.model_enabled != loaded.model_enabled) paths.emplace_back("model.enabled");
+  // An unset preference keeps the stored value that this UI cannot select.
+  if (edited.model_backend_preference &&
+      edited.model_backend_preference != loaded.model_backend_preference) {
+    paths.emplace_back("model.backendPreference");
+  }
+  if (edited.model_selected_path != loaded.model_selected_path) {
+    paths.emplace_back("model.selectedPath");
+  }
+  if (edited.openai_api_key_changed) paths.emplace_back("openAiApiKey");
+  if (edited.log_level != loaded.log_level) paths.emplace_back("logLevel");
+  if (edited.crash_report_consent != loaded.crash_report_consent) {
+    paths.emplace_back("privacy.crashReportConsent");
+  }
+  if (edited.dictionary) {
+    const auto before = loaded.dictionary.value_or(DictionarySettings{});
+    for (const auto& [key, field] : kDictionaryFields) {
+      if ((*edited.dictionary).*field != before.*field) {
+        paths.emplace_back("dictionary." + std::string(key));
+      }
+    }
+  }
+  if (edited.profiles_by_app && edited.profiles_by_app != loaded.profiles_by_app) {
+    paths.emplace_back("profilesByApp");
+  }
+  if (edited.clear_safe_mode) paths.emplace_back("safeMode.enabled");
+  for (const auto& [path, value] : ChangedSettingValues(edited.values, loaded.values)) {
+    paths.push_back(path);
+  }
+  return paths;
+}
+
 }  // namespace azookey::settings

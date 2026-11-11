@@ -18,6 +18,7 @@
 #endif
 
 #include <microsoft.ui.xaml.window.h>
+#include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
@@ -67,6 +68,21 @@ winrt::hstring StatusText(
       break;
   }
   return {};
+}
+
+// Panes that act on the Host at once hold nothing to save, so they show no save bar
+// (sideload-packaging-spec section 3.2). "Version" still holds privacy.crashReportConsent.
+bool PaneHasSaveBar(std::wstring_view tag) {
+  return tag != L"Learning" && tag != L"Persona" && tag != L"Proofread";
+}
+
+// Replaces the first "{0}" in a resource string.
+winrt::hstring WithCount(const winrt::hstring& format, size_t count) {
+  std::wstring text(format);
+  if (const auto at = text.find(L"{0}"); at != std::wstring::npos) {
+    text.replace(at, 3, std::to_wstring(count));
+  }
+  return winrt::hstring(text);
 }
 
 }  // namespace
@@ -120,14 +136,43 @@ MainWindow::MainWindow() {
     }
     return AdvancedFieldsPanel();
   });
+  field_controls_.SetChangedHandler([this] { RefreshSaveBar(); });
   // The panes keep these callbacks for requests that outlive a click, so they must not touch the
   // window once it has closed.
   Closed([alive = alive_](auto const&, auto const&) { *alive = false; });
+  AppWindow().Closing(
+      [this](auto const&, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& args) {
+        if (close_confirmed_ || !controls_loaded_) return;
+        // A save still running keeps the window open; its result decides what is left unsaved.
+        if (saving_ || close_dialog_open_) {
+          args.Cancel(true);
+          return;
+        }
+        if (ChangedSettingCount() == 0) return;
+        args.Cancel(true);
+        ConfirmCloseAsync();
+      });
+  // The dedicated controls recount the save bar's changes as they are edited.
+  const auto recount = [this](auto const&, auto const&) { RefreshSaveBar(); };
+  ModelEnabledToggle().Toggled(recount);
+  ModelPathTextBox().TextChanged(recount);
+  BackendPreferenceCombo().SelectionChanged(recount);
+  LogLevelCombo().SelectionChanged(recount);
+  CrashReportConsentToggle().Toggled(recount);
+  SudachiDictionaryToggle().Toggled(recount);
+  NamedEntityDictionaryToggle().Toggled(recount);
+  TechnicalTermsDictionaryToggle().Toggled(recount);
+  UserDictionaryToggle().Toggled(recount);
+  AutoWordsDictionaryToggle().Toggled(recount);
+  AppSpecificDictionaryToggle().Toggled(recount);
   profiles_pane_ = std::make_shared<azookey::settings::ProfilesPane>();
   profiles_pane_->Build(ProfilesPaneHost(), {[this, alive = alive_] {
-                          if (!*alive) throw winrt::hresult_error(E_ABORT);
-                          return Content().XamlRoot();
-                        }});
+                                               if (!*alive) throw winrt::hresult_error(E_ABORT);
+                                               return Content().XamlRoot();
+                                             },
+                                             [this, alive = alive_] {
+                                               if (*alive) RefreshSaveBar();
+                                             }});
   model_pane_ = std::make_shared<azookey::settings::ModelPane>();
   model_pane_->Build(ModelsPaneHost(), DispatcherQueue(),
                      {[this, alive = alive_] {
@@ -195,6 +240,8 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   ProofreadPaneHost().Visibility(visible(L"Proofread"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
+  SaveBar().Visibility(PaneHasSaveBar(tag) ? Microsoft::UI::Xaml::Visibility::Visible
+                                           : Microsoft::UI::Xaml::Visibility::Collapsed);
   if (tag == L"Models" && model_pane_) model_pane_->OnShown();
   if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
   if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
@@ -297,6 +344,7 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
   const bool requested = NeologdDictionaryToggle().IsOn();
   if (!azookey::settings::NeologdConsentRequired(neologd_enabled_, requested)) {
     neologd_enabled_ = requested;
+    RefreshSaveBar();
     RefreshNeologdLayerStatus();
     co_return;
   }
@@ -321,6 +369,7 @@ winrt::fire_and_forget MainWindow::NeologdDictionaryToggle_Toggled(
                resources.GetString(L"NeologdNoticesUnavailable"));
   }
   SetNeologdToggle(accepted);
+  RefreshSaveBar();
   RefreshNeologdLayerStatus();
 }
 
@@ -425,7 +474,8 @@ Windows::Foundation::IAsyncAction MainWindow::LoadSettingsCoreAsync() {
     ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
                resources.GetString(L"LoadFailedTitle"),
                resources.GetString(L"LocalAppDataUnavailable"));
-    SaveButton().IsEnabled(false);
+    can_save_ = false;
+    RefreshSaveBar();
     co_return;
   }
 
@@ -443,9 +493,14 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   azookey::core::CrashReporting::SetConsent(collect_crash_metadata
       ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
   UpdateCrashReportStatus();
-  SaveButton().IsEnabled(result.status !=
-                             azookey::settings::SettingsDocumentStatus::LockUnavailable &&
-                         result.status != azookey::settings::SettingsDocumentStatus::ReadError);
+  // Events raised while the controls take the loaded values are not counted as edits.
+  controls_loaded_ = false;
+  can_save_ = result.status != azookey::settings::SettingsDocumentStatus::LockUnavailable &&
+              result.status != azookey::settings::SettingsDocumentStatus::ReadError;
+  // The load message says a save rewrites the file without the invalid entries.
+  repair_pending_ =
+      can_save_ && (result.status == azookey::settings::SettingsDocumentStatus::Invalid ||
+                    !result.warnings.empty());
   saved_settings_ = result.settings;
   saved_settings_.openai_api_key.clear();  // Only compared for restart; keep no extra secret copy.
   ApplyDictionaryToControls(
@@ -493,7 +548,10 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
             ? Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error
             : Microsoft::UI::Xaml::Controls::InfoBarSeverity::Warning;
     ShowStatus(severity, resources.GetString(L"LoadFailedTitle"), message);
+    load_problem_shown_ = true;
   }
+  controls_loaded_ = true;
+  RefreshSaveBar();
 }
 
 void MainWindow::ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
@@ -504,38 +562,16 @@ void MainWindow::ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity sever
   SettingsStatusInfoBar().IsOpen(true);
 }
 
-winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspectable const&,
-                                                    Microsoft::UI::Xaml::RoutedEventArgs const&) {
-  try {
-    co_await SaveSettingsCoreAsync();
-  } catch (...) {
-    co_return;
-  }
+void MainWindow::ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
+                                const winrt::hstring& title, const winrt::hstring& message) {
+  SaveStatusInfoBar().Severity(severity);
+  SaveStatusInfoBar().Title(title);
+  SaveStatusInfoBar().Message(message);
+  SaveStatusInfoBar().IsOpen(true);
 }
 
-void MainWindow::OpenAiApiKeyPasswordBox_PasswordChanged(
-    Windows::Foundation::IInspectable const&,
-    Microsoft::UI::Xaml::RoutedEventArgs const&) {
-  openai_api_key_changed_ = true;
-}
-
-void MainWindow::ClearOpenAiApiKeyButton_Click(
-    Windows::Foundation::IInspectable const&,
-    Microsoft::UI::Xaml::RoutedEventArgs const&) {
-  OpenAiApiKeyPasswordBox().Password(L"");
-  openai_api_key_changed_ = true;
-}
-
-Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
-  const auto lifetime = get_strong();
-  if (!settings_path_) {
-    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-    ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
-               resources.GetString(L"SaveFailedTitle"),
-               resources.GetString(L"LocalAppDataUnavailable"));
-    co_return;
-  }
-
+azookey::settings::EditableSettings MainWindow::SettingsFromControls(
+    std::vector<std::string>* invalid_paths) {
   azookey::settings::EditableSettings settings;
   settings.crash_report_consent = CrashReportConsentToggle().IsOn() ? "local" : "off";
   settings.model_enabled = ModelEnabledToggle().IsOn();
@@ -563,13 +599,111 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   settings.safe_mode_enabled = saved_settings_.safe_mode_enabled;
   settings.safe_mode_entered_at = saved_settings_.safe_mode_entered_at;
   settings.safe_mode_last_crash_count = saved_settings_.safe_mode_last_crash_count;
-  azookey::settings::SettingValues edited;
-  if (std::string invalid_path; !field_controls_.Read(&edited, &invalid_path)) {
-    ShowInvalidSetting(invalid_path);
+  settings.values = field_controls_.ReadValid(invalid_paths);
+  return settings;
+}
+
+size_t MainWindow::ChangedSettingCount() {
+  std::vector<std::string> invalid;
+  const auto settings = SettingsFromControls(&invalid);
+  return azookey::settings::ChangedSettingPaths(settings, saved_settings_).size() + invalid.size();
+}
+
+void MainWindow::RefreshSaveBar() {
+  if (!controls_loaded_) {
+    SaveButton().IsEnabled(false);
+    return;
+  }
+  const size_t count = ChangedSettingCount();
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  if (count > 0) {
+    ChangeCountText().Text(WithCount(resources.GetString(L"SaveBar_ChangeCount"), count));
+  } else {
+    ChangeCountText().Text(
+        resources.GetString(repair_pending_ ? L"SaveBar_RepairPending" : L"SaveBar_NoChanges"));
+  }
+  SaveButton().IsEnabled(can_save_ && !saving_ && (count > 0 || repair_pending_));
+}
+
+winrt::fire_and_forget MainWindow::ConfirmCloseAsync() {
+  const auto lifetime = get_strong();
+  close_dialog_open_ = true;
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  Microsoft::UI::Xaml::Controls::ContentDialog dialog;
+  dialog.XamlRoot(Content().XamlRoot());
+  dialog.Title(winrt::box_value(resources.GetString(L"SaveBar_UnsavedTitle")));
+  dialog.Content(winrt::box_value(
+      WithCount(resources.GetString(L"SaveBar_UnsavedMessage"), ChangedSettingCount())));
+  dialog.PrimaryButtonText(resources.GetString(L"SaveBar_UnsavedSave"));
+  // A file that could not be read is never overwritten (the save button is off as well).
+  dialog.IsPrimaryButtonEnabled(can_save_);
+  dialog.SecondaryButtonText(resources.GetString(L"SaveBar_UnsavedDiscard"));
+  dialog.CloseButtonText(resources.GetString(L"SaveBar_UnsavedCancel"));
+  dialog.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Primary);
+  bool close = false;
+  try {
+    const auto choice = co_await dialog.ShowAsync();
+    if (choice == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary) {
+      // A failed or refused save leaves the window open with the reason in the save bar.
+      close = co_await SaveSettingsCoreAsync();
+    } else {
+      close = choice == Microsoft::UI::Xaml::Controls::ContentDialogResult::Secondary;
+    }
+  } catch (...) {
+    // For example another dialog is already open; keep the window and its changes.
+    close = false;
+  }
+  close_dialog_open_ = false;
+  if (close && *alive_) {
+    close_confirmed_ = true;
+    Close();
+  }
+}
+
+winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspectable const&,
+                                                    Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  try {
+    co_await SaveSettingsCoreAsync();
+  } catch (...) {
     co_return;
   }
+}
+
+void MainWindow::OpenAiApiKeyPasswordBox_PasswordChanged(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  // Only typing (or pasting) into the box is an edit; the value set when loading is not.
+  if (OpenAiApiKeyPasswordBox().FocusState() == Microsoft::UI::Xaml::FocusState::Unfocused) return;
+  openai_api_key_changed_ = true;
+  RefreshSaveBar();
+}
+
+void MainWindow::ClearOpenAiApiKeyButton_Click(Windows::Foundation::IInspectable const&,
+                                               Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  OpenAiApiKeyPasswordBox().Password(L"");
+  openai_api_key_changed_ = true;
+  RefreshSaveBar();
+}
+
+Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
+  const auto lifetime = get_strong();
+  if (saving_ || !can_save_) co_return false;
+  if (!settings_path_) {
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+                   resources.GetString(L"SaveFailedTitle"),
+                   resources.GetString(L"LocalAppDataUnavailable"));
+    co_return false;
+  }
+
+  std::vector<std::string> invalid;
+  auto settings = SettingsFromControls(&invalid);
+  if (!invalid.empty()) {
+    ShowInvalidSetting(invalid.front());
+    co_return false;
+  }
   // Only changed values are written, so untouched keys keep whatever is on disk.
-  settings.values = azookey::settings::ChangedSettingValues(edited, saved_settings_.values);
+  settings.values =
+      azookey::settings::ChangedSettingValues(settings.values, saved_settings_.values);
 
   if (!settings.model_selected_path.empty()) {
     const std::filesystem::path model_path(ModelPathTextBox().Text().c_str());
@@ -580,18 +714,20 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
     if (!model_path.is_absolute() || extension != L".gguf" ||
         !std::filesystem::is_regular_file(model_path, ec)) {
       Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-      ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
-                 resources.GetString(L"SaveFailedTitle"), resources.GetString(L"InvalidModelPath"));
-      co_return;
+      ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+                     resources.GetString(L"SaveFailedTitle"),
+                     resources.GetString(L"InvalidModelPath"));
+      co_return false;
     }
   }
 
-  SaveButton().IsEnabled(false);
+  saving_ = true;
+  RefreshSaveBar();
   OpenAiApiKeyPasswordBox().IsEnabled(false);
   ClearOpenAiApiKeyButton().IsEnabled(false);
   SaveProgressRing().IsActive(true);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
-  SettingsStatusInfoBar().IsOpen(false);
+  SaveStatusInfoBar().IsOpen(false);
   const auto path = *settings_path_;
   const auto dispatcher = DispatcherQueue();
   co_await winrt::resume_background();
@@ -605,7 +741,7 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   }
   co_await ResumeForeground(dispatcher);
 
-  SaveButton().IsEnabled(true);
+  saving_ = false;
   OpenAiApiKeyPasswordBox().IsEnabled(true);
   ClearOpenAiApiKeyButton().IsEnabled(true);
   UpdateCrashReportStatus();
@@ -647,11 +783,18 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
     saved_settings_ = settings;
     saved_settings_.values = std::move(saved_values);
     saved_settings_.openai_api_key.clear();
+    repair_pending_ = false;
+    // The file no longer holds what loading reported.
+    if (load_problem_shown_) {
+      load_problem_shown_ = false;
+      SettingsStatusInfoBar().IsOpen(false);
+    }
   }
+  RefreshSaveBar();
   if (save_result.invalid_setting) {
     ShowInvalidSetting(*save_result.invalid_setting);
   } else if (!save_result.ok) {
-    ShowStatus(
+    ShowSaveStatus(
         Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
         final_resources.GetString(L"SaveFailedTitle"),
         final_resources.GetString(save_result.quarantined_path ? L"SaveFailedAfterQuarantineMessage"
@@ -666,15 +809,16 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
     if (!ipc_result.ok) {
       AppendMessage(&message, final_resources.GetString(L"HostUpdateFailedMessage"));
     }
-    ShowStatus(
+    ShowSaveStatus(
         Microsoft::UI::Xaml::Controls::InfoBarSeverity::Warning,
         final_resources.GetString(!ipc_result.ok ? L"SavedHostWarningTitle" : L"SaveWarningTitle"),
         message);
   } else {
-    ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Success,
-               final_resources.GetString(L"SaveSucceededTitle"),
-               final_resources.GetString(L"SaveSucceededMessage"));
+    ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Success,
+                   final_resources.GetString(L"SaveSucceededTitle"),
+                   final_resources.GetString(L"SaveSucceededMessage"));
   }
+  co_return save_result.ok;
 }
 
 void MainWindow::ShowSafeMode(const azookey::settings::EditableSettings& settings) {
@@ -699,12 +843,14 @@ void MainWindow::ClearSafeModeButton_Click(Windows::Foundation::IInspectable con
   // A second press withdraws the request before it is saved.
   if (clear_safe_mode_) {
     ShowSafeMode(saved_settings_);
+    RefreshSaveBar();
     return;
   }
   clear_safe_mode_ = true;
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
   ClearSafeModeButton().Content(winrt::box_value(resources.GetString(L"CancelClearSafeModeLabel")));
   SafeModeInfoBar().Message(resources.GetString(L"SafeModeClearPending"));
+  RefreshSaveBar();
 }
 
 void MainWindow::ShowInvalidSetting(const std::string& path) {
@@ -723,7 +869,7 @@ void MainWindow::ShowInvalidSetting(const std::string& path) {
         [this, lifetime = get_strong(), path] { field_controls_.Focus(path); });
   }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-  ShowStatus(
+  ShowSaveStatus(
       Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
       resources.GetString(L"SaveFailedTitle"),
       resources.GetString(L"InvalidSettingValue") +

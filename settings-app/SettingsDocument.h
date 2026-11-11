@@ -116,4 +116,9 @@ SettingsSaveResult SaveSettingsDocument(
 std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& before,
                                                       const EditableSettings& after);
 
+// The settings.json keys the controls changed from what was loaded: the count the save bar shows
+// (sideload-packaging-spec section 3.2). `edited` is what a save would be given.
+std::vector<std::string> ChangedSettingPaths(const EditableSettings& edited,
+                                             const EditableSettings& loaded);
+
 }  // namespace azookey::settings

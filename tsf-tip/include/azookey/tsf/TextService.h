@@ -386,6 +386,8 @@ class TextService final : public ITfTextInputProcessorEx,
   const CandidateWindow& candidate_window_for_test() const {
     return candidate_ui_.own_window_for_test();
   }
+  // The window Activate creates, for tests that show it without activating.
+  bool create_candidate_window_for_test() { return candidate_ui_.Create(); }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);
     ShowPredictionWindow();
@@ -1547,10 +1549,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void OnCandidateClicked(int idx);
   void ClearReconversionState();
   void ShowReconversionResult();
-  // Opens the list for `range` if it is still the open request's.
+  // Opens the list for `range` if it is still the open request's, anchored on
+  // `extent` (DEV-1937).
   void ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
                             ITfCandidateList* list, std::vector<std::wstring> values,
-                            std::vector<ReconversionOrigin> origins, std::string reading);
+                            std::vector<ReconversionOrigin> origins, std::string reading,
+                            const ReconversionTextExtent& extent);
   void PrefetchSelectedReconversion();
   void AdviseTextEditSink(ITfContext* context);
   void UnadviseTextEditSink();

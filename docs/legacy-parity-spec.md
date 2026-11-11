@@ -1290,6 +1290,9 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 
 - 候補ウィンドウ: anchor 点。両モードで同じ点を使う。anchor 点は composition 全体の text extent
   （`ITfContextView::GetTextExt`）の左下で、アプリが返さないときはキャレット矩形の左下で代える。
+  再変換の候補一覧では、再変換の範囲の text extent の左下を anchor 点とする。範囲は候補一覧を作る読み取り session の中で測る。
+  アプリが返さないとき（失敗、空の矩形、`TS_E_NOLAYOUT`）は §9.1 の (2)、(3) で代える。
+  前の composition で測った点は、別の位置を指すので使わない。
 - 詳細ポップアップ: 候補ウィンドウの矩形の中心。
 
 候補ウィンドウは作業領域内に収まるよう配置する。

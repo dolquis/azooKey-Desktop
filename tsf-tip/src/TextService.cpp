@@ -10501,9 +10501,10 @@ void TextService::ShowReconversionResult() {
   const HRESULT hr = function->RequestReconversion(
       reconversion_range_,
       [owner, range, generation, values = std::move(values), origins = std::move(origins),
-       reading = std::move(result->reading)](HRESULT list_hr, ITfCandidateList* list) {
+       reading = std::move(result->reading)](HRESULT list_hr, ITfCandidateList* list,
+                                             const ReconversionTextExtent& extent) {
         owner->ShowReconversionList(generation, range.Get(), list_hr, list, values, origins,
-                                    reading);
+                                    reading, extent);
       });
   function->Release();
   if (hr == TF_S_ASYNC) {
@@ -10516,8 +10517,8 @@ void TextService::ShowReconversionResult() {
 
 void TextService::ShowReconversionList(uint64_t generation, ITfRange* range, HRESULT hr,
                                        ITfCandidateList* list, std::vector<std::wstring> values,
-                                       std::vector<ReconversionOrigin> origins,
-                                       std::string reading) {
+                                       std::vector<ReconversionOrigin> origins, std::string reading,
+                                       const ReconversionTextExtent& extent) {
   // A queued session can run after the selection, context or service moved on.
   if (generation != reconversion_generation_ || range != reconversion_range_ ||
       reconversion_list_) {
@@ -10533,7 +10534,12 @@ void TextService::ShowReconversionList(uint64_t generation, ITfRange* range, HRE
   items.reserve(values.size());
   // Plain text rows; a suggestion gets no description of its own.
   for (const auto& value : values) items.push_back({value, L""});
-  const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
+  // DEV-1937: the range's bottom-left, as a composition anchors. Without an
+  // extent the caret, then the cursor, stand in; never the point an earlier
+  // composition cached, which lies elsewhere in the document.
+  const CaretAnchor anchor =
+      ResolveCurrentCaretAnchor(extent.valid ? &extent.rect : nullptr, extent.window);
+  const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, anchor.point, items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
     ClearReconversionState();

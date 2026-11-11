@@ -18,6 +18,7 @@
 #include "KeyboardStateGuard.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/tsf/CandidateWindow.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TextService.h"
 
@@ -99,7 +100,13 @@ class TestContext final : public ITfContext {
   }
   STDMETHODIMP GetStart(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
   STDMETHODIMP GetEnd(TfEditCookie, ITfRange**) override { return E_NOTIMPL; }
-  STDMETHODIMP GetActiveView(ITfContextView**) override { return E_NOTIMPL; }
+  STDMETHODIMP GetActiveView(ITfContextView** out) override {
+    if (!out) return E_POINTER;
+    *out = view;
+    if (!view) return E_NOTIMPL;
+    view->AddRef();
+    return S_OK;
+  }
   STDMETHODIMP EnumViews(IEnumTfContextViews**) override { return E_NOTIMPL; }
   STDMETHODIMP GetStatus(TF_STATUS*) override { return E_NOTIMPL; }
   STDMETHODIMP GetProperty(REFGUID, ITfProperty**) override { return E_NOTIMPL; }
@@ -120,7 +127,52 @@ class TestContext final : public ITfContext {
   bool selectable{false};
   ITfRange* selection{nullptr};
   ITfRange* placed{nullptr};
+  ITfContextView* view{nullptr};
   std::vector<DWORD> flags_seen;
+
+ private:
+  ULONG refs_{1};
+};
+
+// The active view's answer for GetTextExt, as an application lays it out.
+class TestView final : public ITfContextView {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfContextView) return E_NOINTERFACE;
+    *out = static_cast<ITfContextView*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+  STDMETHODIMP_(ULONG) Release() override { return --refs_; }
+  STDMETHODIMP GetRangeFromPoint(TfEditCookie, const POINT*, DWORD, ITfRange** range) override {
+    if (range) *range = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetTextExt(TfEditCookie, ITfRange* range, RECT* rect, BOOL* clipped) override {
+    ++text_ext_calls;
+    last_range = range;
+    if (rect) *rect = text_ext;
+    if (clipped) *clipped = FALSE;
+    return text_ext_result;
+  }
+  STDMETHODIMP GetScreenExt(RECT* rect) override {
+    if (rect) *rect = {};
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetWnd(HWND* out) override {
+    if (!out) return E_POINTER;
+    *out = window;
+    return S_OK;
+  }
+
+  RECT text_ext{};
+  HRESULT text_ext_result{S_OK};
+  HWND window{nullptr};
+  int text_ext_calls{0};
+  ITfRange* last_range{nullptr};
 
  private:
   ULONG refs_{1};
@@ -628,6 +680,100 @@ TEST(ReconversionFunctionTest, QueuedShowSessionDropsCandidatesForChangedRangeOr
        {DeferredShowChange::Text, DeferredShowChange::Selection, DeferredShowChange::Deactivate}) {
     SCOPED_TRACE(static_cast<int>(change));
     VerifyHostCandidatesShowWithoutSynchronousLock(change);
+  }
+}
+
+// DEV-1937: Word's context menu leaves the cursor on its item and no caret, so
+// the candidate window anchors on the reconverted range's extent.
+BOOL WINAPI CursorOnTheMenuItem(POINT* point) {
+  if (!point) return FALSE;
+  *point = {900, 700};
+  return TRUE;
+}
+
+BOOL WINAPI ShiftToPhysical(HWND, POINT* point) {
+  if (!point) return FALSE;
+  point->x += 10;
+  point->y += 20;
+  return TRUE;
+}
+
+UINT ScaleAt100Percent(POINT) { return 100; }
+
+struct NoCaretCursorOnMenu {
+  NoCaretCursorOnMenu() {
+    azookey::tsf::testing::SetCaretWin32ApiForTest(nullptr, nullptr, &CursorOnTheMenuItem,
+                                                   &ShiftToPhysical, &ScaleAt100Percent);
+  }
+  ~NoCaretCursorOnMenu() { azookey::tsf::testing::ClearCaretWin32ApiForTest(); }
+};
+
+enum class MissingExtent { NoView, NoLayout, Failed, EmptyRect };
+
+void VerifyReconversionAnchorsOnTheRange(MissingExtent missing) {
+  NoCaretCursorOnMenu caret_api;
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日、今日");
+  TestRange first(&context, text, 0, 2);
+  TestRange second(&context, text, 3, 5);
+  TestView view;
+  view.window = reinterpret_cast<HWND>(static_cast<INT_PTR>(0x1937));
+  if (missing != MissingExtent::NoView) context.view = &view;
+  view.text_ext_result = missing == MissingExtent::NoLayout ? TS_E_NOLAYOUT
+                         : missing == MissingExtent::Failed ? E_FAIL
+                                                            : S_OK;
+  view.text_ext = missing == MissingExtent::EmptyRect ? RECT{40, 50, 40, 50} : RECT{};
+  context.selection = &first;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"winword.exe", "Word", true});
+  service.set_text_edit_context_for_test(&context);
+  ASSERT_TRUE(service.create_candidate_window_for_test());
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  const auto open = [&](ITfRange* range, const char* surface) {
+    ITfCandidateList* list = nullptr;
+    ASSERT_EQ(function->GetReconversion(range, &list), S_OK);
+    ASSERT_NE(list, nullptr);
+    list->Release();
+    ASSERT_EQ(service.pending_reconversion_surface_for_test(), surface);
+    service.deliver_reconversion_result_for_test({L"候補"}, "こうほ");
+    ASSERT_TRUE(service.has_reconversion_ui_for_test());
+  };
+
+  // Without an extent the cursor stands in, a caret height below it.
+  ASSERT_NO_FATAL_FAILURE(open(&first, "明日"));
+  POINT anchor = azookey::tsf::CandidateWindow::LastMonitorPointForTest();
+  EXPECT_EQ(anchor.x, 900);
+  EXPECT_EQ(anchor.y, 716);
+
+  // The next range's extent wins over the point the first one fell back to.
+  context.selection = &second;
+  ChangedSelectionRecord record;
+  ASSERT_EQ(service.OnEndEdit(&context, 1, &record), S_OK);
+  ASSERT_FALSE(service.has_reconversion_ui_for_test());
+  context.view = &view;
+  view.text_ext_result = S_OK;
+  view.text_ext = {40, 50, 120, 74};
+  const int calls_before = view.text_ext_calls;
+  ASSERT_NO_FATAL_FAILURE(open(&second, "今日"));
+  EXPECT_GT(view.text_ext_calls, calls_before);
+  anchor = azookey::tsf::CandidateWindow::LastMonitorPointForTest();
+  // The extent's bottom-left, converted from the view window's logical point.
+  EXPECT_EQ(anchor.x, 50);
+  EXPECT_EQ(anchor.y, 94);
+  function->Release();
+  service.Deactivate();
+}
+
+TEST(ReconversionFunctionTest, CandidateWindowAnchorsOnTheReconvertedRange) {
+  for (const auto missing : {MissingExtent::NoView, MissingExtent::NoLayout, MissingExtent::Failed,
+                             MissingExtent::EmptyRect}) {
+    SCOPED_TRACE(static_cast<int>(missing));
+    VerifyReconversionAnchorsOnTheRange(missing);
   }
 }
 

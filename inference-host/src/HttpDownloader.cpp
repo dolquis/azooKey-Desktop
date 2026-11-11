@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cwctype>
 #include <limits>
+#include <mutex>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -325,42 +328,190 @@ UniqueFileHandle OpenPartFile(const std::filesystem::path& path, bool append, st
   return file;
 }
 
-bool SendGetRequest(HINTERNET request, const std::function<bool()>& cancelled, std::string* error) {
-  if (CheckCancelled(cancelled, error)) return false;
-  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0,
-                          0)) {
-    *error = WindowsError("sending HTTP request");
-    return false;
-  }
-  if (CheckCancelled(cancelled, error)) return false;
-  if (!WinHttpReceiveResponse(request, nullptr)) {
-    *error = WindowsError("receiving HTTP response");
-    return false;
-  }
-  return !CheckCancelled(cancelled, error);
-}
+// An asynchronous WinHTTP request (the session is opened with WINHTTP_FLAG_ASYNC), so that a
+// cancellation can stop a wait for the connection, the headers or the body (DEV-1842).
+// WinHttpCloseHandle must not be used to abort a synchronous request from another thread.
+// Only the calling thread calls WinHTTP on the request handle and runs `cancelled`; the status
+// callback only publishes completion state. The handle is closed by the calling thread, and the
+// callback state and the read buffer stay alive until HANDLE_CLOSING, the last callback.
+class AsyncRequest {
+ public:
+  AsyncRequest() = default;
+  ~AsyncRequest() { Close(); }
+  AsyncRequest(const AsyncRequest&) = delete;
+  AsyncRequest& operator=(const AsyncRequest&) = delete;
 
-template <typename Sink>
-bool ReadResponse(HINTERNET request, uint64_t initial_size, uint64_t max_bytes,
-                  uint64_t* bytes_received, const std::function<bool()>& cancelled, Sink&& sink,
-                  std::string* error) {
-  std::array<unsigned char, 65'536> buffer{};
-  for (;;) {
+  // Takes ownership of request, also on failure.
+  bool Attach(HINTERNET request, std::string* error) {
+    request_ = request;
+    if (!request_) {
+      *error = WindowsError("opening HTTP request");
+      return false;
+    }
+    auto context = reinterpret_cast<DWORD_PTR>(this);
+    if (!WinHttpSetOption(request_, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context))) {
+      *error = WindowsError("setting HTTP request context");
+      return false;
+    }
+    if (WinHttpSetStatusCallback(
+            request_, Callback,
+            WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
+            0) == WINHTTP_INVALID_STATUS_CALLBACK) {
+      *error = WindowsError("registering HTTP request callback");
+      return false;
+    }
+    callback_registered_ = true;
+    return true;
+  }
+
+  HINTERNET get() const { return request_; }
+  const unsigned char* buffer() const { return buffer_.data(); }
+  DWORD buffer_size() const { return static_cast<DWORD>(buffer_.size()); }
+
+  // Sends the GET and waits for the response headers, connecting first if needed.
+  bool SendAndReceive(const std::function<bool()>& cancelled, std::string* error) {
     if (CheckCancelled(cancelled, error)) return false;
-    DWORD available = 0;
-    if (!WinHttpQueryDataAvailable(request, &available)) {
+    Begin();
+    if (!WinHttpSendRequest(request_, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0,
+                            0, reinterpret_cast<DWORD_PTR>(this))) {
+      *error = WindowsError("sending HTTP request");
+      return false;
+    }
+    if (!Wait(WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE, "sending HTTP request", cancelled,
+              error)) {
+      return false;
+    }
+    Begin();
+    if (!WinHttpReceiveResponse(request_, nullptr)) {
+      *error = WindowsError("receiving HTTP response");
+      return false;
+    }
+    return Wait(WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, "receiving HTTP response", cancelled,
+                error);
+  }
+
+  bool QueryDataAvailable(const std::function<bool()>& cancelled, DWORD* available,
+                          std::string* error) {
+    Begin();
+    if (!WinHttpQueryDataAvailable(request_, nullptr)) {
       *error = WindowsError("querying HTTP response data");
       return false;
     }
+    if (!Wait(WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE, "querying HTTP response data", cancelled,
+              error)) {
+      return false;
+    }
+    *available = bytes_;
+    return true;
+  }
+
+  // Reads into buffer().
+  bool Read(DWORD requested, const std::function<bool()>& cancelled, DWORD* read,
+            std::string* error) {
+    Begin();
+    if (!WinHttpReadData(request_, buffer_.data(), std::min(requested, buffer_size()), nullptr)) {
+      *error = WindowsError("reading HTTP response");
+      return false;
+    }
+    if (!Wait(WINHTTP_CALLBACK_STATUS_READ_COMPLETE, "reading HTTP response", cancelled, error)) {
+      return false;
+    }
+    *read = bytes_;
+    return true;
+  }
+
+ private:
+  static void CALLBACK Callback(HINTERNET, DWORD_PTR context, DWORD status, void* data,
+                                DWORD size) {
+    if (!context) return;
+    auto& self = *reinterpret_cast<AsyncRequest*>(context);
+    const std::lock_guard lock(self.mutex_);
+    switch (status) {
+      case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+        self.closed_ = true;
+        break;
+      case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: {
+        const auto error = static_cast<const WINHTTP_ASYNC_RESULT*>(data)->dwError;
+        // A zero error code must still end the wait as a failure.
+        self.failure_ = error == 0 ? ERROR_WINHTTP_INTERNAL_ERROR : error;
+        break;
+      }
+      case WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE:
+        self.completion_ = status;
+        self.bytes_ = *static_cast<const DWORD*>(data);
+        break;
+      case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+      case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+      case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+        self.completion_ = status;
+        self.bytes_ = size;
+        break;
+      default:
+        return;
+    }
+    // Notify under the lock: once HANDLE_CLOSING is seen the waiter may destroy this object
+    // as soon as the lock is released.
+    self.changed_.notify_all();
+  }
+
+  void Begin() {
+    const std::lock_guard lock(mutex_);
+    completion_ = 0;
+    bytes_ = 0;
+  }
+
+  // Waits on the calling thread for one asynchronous operation. A cancellation observed here
+  // wins over a completion that arrives at the same time; the handle is then closed by Close().
+  bool Wait(DWORD expected, std::string_view operation, const std::function<bool()>& cancelled,
+            std::string* error) {
+    for (;;) {
+      if (CheckCancelled(cancelled, error)) return false;
+      std::unique_lock lock(mutex_);
+      if (failure_ != 0) {
+        *error = WindowsError(operation, failure_);
+        return false;
+      }
+      if (completion_ == expected) return true;
+      changed_.wait_for(lock, kCancellationPollInterval,
+                        [&] { return failure_ != 0 || completion_ == expected; });
+    }
+  }
+
+  void Close() {
+    if (!request_) return;
+    WinHttpCloseHandle(request_);
+    request_ = nullptr;
+    if (!callback_registered_) return;
+    std::unique_lock lock(mutex_);
+    changed_.wait(lock, [this] { return closed_; });
+  }
+
+  static constexpr std::chrono::milliseconds kCancellationPollInterval{20};
+
+  HINTERNET request_{nullptr};
+  bool callback_registered_{false};
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  DWORD completion_{0};
+  DWORD bytes_{0};
+  DWORD failure_{0};
+  bool closed_{false};
+  std::array<unsigned char, 65'536> buffer_{};
+};
+
+template <typename Sink>
+bool ReadResponse(AsyncRequest& request, uint64_t initial_size, uint64_t max_bytes,
+                  uint64_t* bytes_received, const std::function<bool()>& cancelled, Sink&& sink,
+                  std::string* error) {
+  for (;;) {
+    if (CheckCancelled(cancelled, error)) return false;
+    DWORD available = 0;
+    if (!request.QueryDataAvailable(cancelled, &available, error)) return false;
     if (available == 0) break;
     while (available > 0) {
       if (CheckCancelled(cancelled, error)) return false;
-      const DWORD requested = std::min<DWORD>(available, static_cast<DWORD>(buffer.size()));
       DWORD read = 0;
-      if (!WinHttpReadData(request, buffer.data(), requested, &read)) {
-        *error = WindowsError("reading HTTP response");
-        return false;
-      }
+      if (!request.Read(available, cancelled, &read, error)) return false;
       if (CheckCancelled(cancelled, error)) return false;
       if (read == 0) {
         *error = "HTTP response ended before the advertised data was read";
@@ -371,7 +522,7 @@ bool ReadResponse(HINTERNET request, uint64_t initial_size, uint64_t max_bytes,
         *error = "HTTP response exceeds the configured maximum size";
         return false;
       }
-      if (!sink(buffer.data(), read)) return false;
+      if (!sink(request.buffer(), read)) return false;
       *bytes_received += read;
       available -= read;
     }
@@ -394,11 +545,12 @@ uint64_t AnnouncedTotalSize(HINTERNET request, uint64_t initial_size) {
   return length > std::numeric_limits<uint64_t>::max() - initial_size ? 0 : initial_size + length;
 }
 
-bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, uint64_t max_bytes,
-                        uint64_t* bytes_received, const std::function<bool()>& cancelled,
+bool ReadResponseToFile(AsyncRequest& request, HANDLE file, uint64_t initial_size,
+                        uint64_t max_bytes, uint64_t* bytes_received,
+                        const std::function<bool()>& cancelled,
                         const std::function<void(uint64_t, uint64_t)>& progress,
                         std::string* error) {
-  const uint64_t total = progress ? AnnouncedTotalSize(request, initial_size) : 0;
+  const uint64_t total = progress ? AnnouncedTotalSize(request.get(), initial_size) : 0;
   if (!ReadResponse(
           request, initial_size, max_bytes, bytes_received, cancelled,
           [&](const unsigned char* data, DWORD size) {
@@ -556,7 +708,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
   UniqueInternetHandle session(OpenHttpSession(
-      user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
+      user_agent_.c_str(), parsed->loopback, true, static_cast<int>(request.connect_timeout_ms),
       static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return Failure(WindowsError("opening WinHTTP session"));
   if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
@@ -574,10 +726,15 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
     }
     const uint64_t resume_offset = attempt == 0 ? *part_size : 0;
 
-    UniqueInternetHandle http_request(WinHttpOpenRequest(
-        connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
-        WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
-    if (!http_request) return Failure(WindowsError("opening HTTP request"));
+    // Declared after the connection, so it is closed (and HANDLE_CLOSING awaited) first.
+    AsyncRequest http_request;
+    if (!http_request.Attach(
+            WinHttpOpenRequest(connection.get(), L"GET", parsed->path.c_str(), nullptr,
+                               WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                               parsed->secure ? WINHTTP_FLAG_SECURE : 0),
+            &error)) {
+      return Failure(std::move(error));
+    }
     if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
     if (resume_offset > 0) {
@@ -588,9 +745,8 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
         return Failure(WindowsError("adding HTTP Range header"));
       }
     }
-    if (!SendGetRequest(http_request.get(), cancelled, &error)) {
-      return Failure(std::move(error));
-    }
+    if (!http_request.SendAndReceive(cancelled, &error)) return Failure(std::move(error));
+    if (CheckCancelled(cancelled, &error)) return Failure(std::move(error));
 
     auto status = QueryStatusCode(http_request.get(), &error);
     if (!status) return Failure(std::move(error));
@@ -626,7 +782,7 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
     auto file = OpenPartFile(part, partial, &error);
     if (!file) return Failure(std::move(error));
     const uint64_t initial_size = partial ? resume_offset : 0;
-    if (!ReadResponseToFile(http_request.get(), file.get(), initial_size, request.max_bytes,
+    if (!ReadResponseToFile(http_request, file.get(), initial_size, request.max_bytes,
                             &result.bytes_received, cancelled, request.progress, &error)) {
       return Failure(std::move(error));
     }
@@ -664,7 +820,7 @@ HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
   if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
 
   UniqueInternetHandle session(OpenHttpSession(
-      user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
+      user_agent_.c_str(), parsed->loopback, true, static_cast<int>(request.connect_timeout_ms),
       static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return {{}, WindowsError("opening WinHTTP session")};
   if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
@@ -672,13 +828,16 @@ HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
       WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));
   if (!connection) return {{}, WindowsError("opening WinHTTP connection")};
   if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
-  UniqueInternetHandle http_request(WinHttpOpenRequest(
-      connection.get(), L"GET", parsed->path.c_str(), nullptr, WINHTTP_NO_REFERER,
-      WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0));
-  if (!http_request) return {{}, WindowsError("opening HTTP request")};
-  if (!SendGetRequest(http_request.get(), cancelled, &error)) {
+  AsyncRequest http_request;
+  if (!http_request.Attach(
+          WinHttpOpenRequest(connection.get(), L"GET", parsed->path.c_str(), nullptr,
+                             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                             parsed->secure ? WINHTTP_FLAG_SECURE : 0),
+          &error)) {
     return {{}, std::move(error)};
   }
+  if (!http_request.SendAndReceive(cancelled, &error)) return {{}, std::move(error)};
+  if (CheckCancelled(cancelled, &error)) return {{}, std::move(error)};
   const auto status = QueryStatusCode(http_request.get(), &error);
   if (!status) return {{}, std::move(error)};
   if (*status != HTTP_STATUS_OK) {
@@ -688,7 +847,7 @@ HttpTextResult HttpDownloader::FetchText(const HttpTextRequest& request) const {
   HttpTextResult result;
   uint64_t received = 0;
   if (!ReadResponse(
-          http_request.get(), 0, request.max_bytes, &received, cancelled,
+          http_request, 0, request.max_bytes, &received, cancelled,
           [&](const unsigned char* data, DWORD size) {
             result.body.append(reinterpret_cast<const char*>(data), size);
             return true;

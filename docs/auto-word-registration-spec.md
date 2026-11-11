@@ -267,8 +267,8 @@ worker は `Start` / `Stop` で所有し、終了時に join してストアよ�
 起動時から無効な場合は、HTTP セッションもソケットも生成しない。
 
 チェックサムは 1 KiB、JSON は共有 JSON parser と同じ 1 MiB を上限とする。各 WinHTTP 操作の timeout は
-1 秒、取得全体の協調キャンセル期限は 15 秒。実行中の同期 WinHTTP 操作はその
-timeout まで待ち、操作間と受信ループで停止を確認する。
+1 秒、取得全体のキャンセル期限は 15 秒。停止と期限は、操作の間に加えて、WinHTTP の
+接続・応答・本文の待ちの間にも確認する（`HttpDownloader` は WinHTTP を非同期で使う）。
 `generated_at` は保存に成功した直近の値と比較し、同じ値なら再取り込みと recency 更新を
 省略する。この比較値は Host 内で保持し、再起動後の初回取得では再検証・取り込みを行う。
 
@@ -540,7 +540,7 @@ offline による抑止は保存された `trendingEnabled` を変更せず、�
   GET するだけ。ユーザー語・入力統計・端末情報をリクエストに含めない
   （User-Agent はバージョン文字列のみ、M32 と同様）。アップロードは行わない。
   `privacy.mode=offline` は公開アセットの取得も禁止する。起動時は通信せず、実行中に
-  offline へ切り替えると設定世代を更新し、進行中の取得を協調キャンセルする。
+  offline へ切り替えると設定世代を更新し、進行中の取得をキャンセルする。
   neologd pack にも同じ禁止を適用する（§15.14）。
 - **DPAPI 暗号化（M34）対象に新ストアを含める** — `auto_words.tsv` はユーザーの
   未知語（固有名詞・個人情報を含みうる）を蓄積するため、`learning.tsv` /
@@ -1763,8 +1763,8 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
   取得やロードはしない。
 - **offline**: `privacy.mode=offline` の間は通信しない。宛先に SHA256 の一致するファイルが
   あればそれを検証してロードし、無ければ取得せずに終える。設定の再読込で offline へ
-  切り替えると、取得中の通信を協調キャンセルする。協調キャンセルは操作の間で確認するので、
-  実行中の WinHTTP 操作はその timeout（接続・送信 15 秒、受信 30 秒）まで待つ。
+  切り替えると、取得中の通信をキャンセルする。キャンセルは WinHTTP の接続・応答・本文の
+  待ちの間にも確認するので、その timeout（接続・送信 15 秒、受信 30 秒）を待たずに止まる。
   `Dispatcher::HandleUpdateConfig` は有効な再読込のたびに、Fetcher の設定 callback の直後に
   通信の可否を通知する（`DispatcherConfig::on_network_policy_applied`）。不正な再読込では
   通知せず、直前の可否を保つ。通常モードへ戻しても再取得はせず、

@@ -282,7 +282,7 @@ Enter の確定と同じく、打ったキーを消費して確定の後に残�
   入力を捨てる。通知の順だけでは、この場合とアプリの編集を見分けられない。
 - composition が終わらないまま、アプリが composition の文字列を変えたとき（`OnEndEdit` で、TIP が書いた直後に
   同じ edit session の中で読み戻した文字列と比べて検知する。文書が書き込みを切り詰めたり正規化したりしても、
-  読み戻した文字列が基準になる）は、TIP は読み、候補窓、予測窓、保留中のキーを捨て、次の edit session で
+  読み戻した文字列が基準になる）は、TIP は読み、候補窓（候補モードと予測モード）、保留中のキーを捨て、次の edit session で
   composition をアプリの文字列のまま終える。その後の Enter などは、消えた入力を確定しない。その edit session より
   前に打ったキーは、composition を終えた後の新しい入力になる。
 Esc は読みへ戻らず入力を取り消す
@@ -402,8 +402,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
 - **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測窓
-  は UIElement 化せず自前の窓で出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測
+  は UIElement 化せず、自前の候補窓の予測モードで出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。
 
@@ -910,7 +910,7 @@ On → Off で何を確定するかは、Off にした操作で決まる。
   最初の打鍵でセル編集用の document へフォーカスを移す場合がこれに当たる。
   - 表示済みの composition でも、入力が最初の 1 打だけで、その打鍵から 500 ms 以内の切替なら、
     旧 document では確定せずに取り消して持ち越す。Excel がその打鍵の preedit を表示した後に
-    切り替える場合がこれに当たる。2 打目以降の入力、候補窓や予測窓の表示中、読みと違うライブ
+    切り替える場合がこれに当たる。2 打目以降の入力、候補窓（候補モードか予測モード）の表示中、読みと違うライブ
     変換の表示、上限より後の切替、旧入力欄自体が secure な場合、切替先が持ち越した入力を
     捨てる場合（IME が閉じている、英数モード、切替先の入力欄自体が secure）は、上の確定の
     規則に従う。旧 document が同期の edit session で取り消しを受け付けなければ持ち越さず、
@@ -1311,14 +1311,14 @@ composition の末尾より後ろは最後の文節とする。
 受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
 の M23 節とする。本節は受け入れ条件を複製しない。
 
-## 8. 予測窓と UI-less Mode の関係
+## 8. 予測モードと UI-less Mode の関係
 
-UI-less Mode（M21）の環境でも、読み入力中の予測は TIP 自前の `PredictionWindow`
-（`docs/legacy-parity-spec.md` §3）で表示する。候補窓（`CandidateWindow` または OS 側の候補 UI）の
-表示中は予測窓を出さない。OS の Suggestion UI へ予測候補を渡す統合
+UI-less Mode（M21）の環境でも、読み入力中の予測は TIP 自前の候補窓（`CandidateWindow`）の予測モード
+（`docs/legacy-parity-spec.md` §3）で表示する。候補モード（`CandidateWindow` または OS 側の候補 UI）の
+表示中は予測モードを出さない。OS の Suggestion UI へ予測候補を渡す統合
 （`ITfReadingInformationUIElement` による公開）はこの仕様の範囲に含めない。
 
-アプリが候補を描く環境では、アプリの UI と TIP の予測窓が重なりうる。legacy の macOS 版は
+アプリが候補を描く環境では、アプリの UI と TIP の予測モードの窓が重なりうる。legacy の macOS 版は
 候補の描画をすべて自前の窓で行うので、この重なりは Windows 固有である。
 
 Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイルストーンを置いてから本節に定義を書く。

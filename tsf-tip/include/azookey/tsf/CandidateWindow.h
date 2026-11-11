@@ -58,6 +58,11 @@ class CandidateWindow {
   // to draw keeps the window hidden and this false (native-ui-spec §4.2).
   bool IsShowingPredictions() const { return mode_ == Mode::Prediction && IsVisible(); }
   int GetPredictionCount() const { return static_cast<int>(predictions_.size()); }
+  // Window property for observers in other processes (compat-test): 1 while
+  // candidate rows are on screen, 2 while predictions are, absent while hidden.
+  static constexpr wchar_t kModeProperty[] = L"azooKey.CandidateWindowMode";
+  static constexpr UINT_PTR kModePropertyCandidate = 1;
+  static constexpr UINT_PTR kModePropertyPrediction = 2;
   // Invoked when the user presses the left button on a prediction row.
   using OnPredictionClickFn = std::function<void(int idx)>;
   void SetOnPredictionClick(OnPredictionClickFn fn) { on_prediction_click_ = std::move(fn); }
@@ -366,6 +371,8 @@ class CandidateWindow {
   static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
   void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
   void DrawPredictions(ID2D1DeviceContext* context, int width, int height) const;
+  // Sets kModeProperty for the mode on screen, or removes it.
+  void UpdateModeProperty(bool on_screen);
   // Places, draws and shows the window at this size; shared by both modes.
   void PresentAt(POINT pt, RECT work_area, int width, int height, int flip_gap);
   bool RenderDetails();

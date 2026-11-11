@@ -229,8 +229,8 @@ TSF 操作に対応付ける。
 | `cancelMarkedText()` | composition range を空文字に SetText → EndComposition |
 | `showCandidateWindow(list)` | `CandidateWindow::Show(list, anchor)` |
 | `hideCandidateWindow()` | `CandidateWindow::Hide()` |
-| `showPredictionWindow(list)` | `PredictionWindow::Show(list, anchor)` |
-| `hidePredictionWindow()` | `PredictionWindow::Hide()` |
+| `showPredictionWindow(list)` | `CandidateWindow::ShowPredictions(anchor, list)`（候補窓の予測モード） |
+| `hidePredictionWindow()` | 予測モードの `CandidateWindow::Hide()` |
 | `replaceSelectedText(s)` | selection range に `SetText(s)`、composition 無し |
 | `playBeep()` | `MessageBeep(MB_OK)` |
 
@@ -874,7 +874,7 @@ private の入力でも左文脈を送る（予測は維持する。同 §3）�
 ### 3.6 設定
 
 `settings.predictionEnabled`（bool、default=true）。
-OFF のときは `PredictionWindow` を生成しない。
+OFF のときは候補窓の予測モードを出さない。候補窓は変換に使うので残す。
 
 既定 ON は意図した legacy との差である。legacy の予測（`DebugPredictiveTyping`）は開発中の機能として既定
 OFF で、Tab は予測を受理しない。Windows 版は既定 ON で、予測窓があるときの Tab で第 1 候補を受理する
@@ -1293,7 +1293,7 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 - 詳細ポップアップ: 候補ウィンドウの矩形の中心。
 
 候補ウィンドウは作業領域内に収まるよう配置する。
-配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`、`PredictionWindow::ComputePlacement`）とする。
+配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`）とする。予測モードも `CandidateWindow::ComputePlacement` を使う。
 
 - 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
   下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
@@ -1335,7 +1335,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | Unicode 入力 | `core/tests/input_state_test.cpp` | 範囲チェック、桁数上限、`30A1` の確定 |
 | 候補ウィンドウのレイアウト、DPI 換算、配置 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算、作業領域内への配置と上への反転、負座標のモニタ（§9.2） |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3）、モニタ作業領域の解決と仮想スクリーンへの fallback（§9.2） |
-| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。composition 開始位置の下への配置と、composition が伸びても位置が変わらないこと、モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |
+| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/candidate_window_dpi_test.cpp`（`CandidateWindowPredictionTest`） | Windows 限定。予測モードで anchor の左下の下への配置と、下が溢れるときの上への反転、両モードが同じ anchor 点でモニタを選ぶこと、`WM_DPICHANGED` での測り直し |
 
 ## 11. 参照
 

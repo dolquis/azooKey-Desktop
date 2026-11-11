@@ -63,6 +63,20 @@ class CandidateUiCoordinator {
   HRESULT EndUI();
 
   bool IsShowing() const { return showing_; }
+
+  // Prediction mode of the same window (native-ui-spec §4.2). Predictions never
+  // reach the ITfCandidateListUIElement (§5.2), so the TIP draws them even where
+  // the app draws the candidate list. Ignored while the candidate list is shown.
+  // False when the window could not be created.
+  bool ShowPredictions(RECT anchor, const std::vector<std::wstring>& predictions);
+  // Hides the window only while it is in prediction mode.
+  void HidePredictions();
+  // True only while prediction rows are actually on screen.
+  bool IsShowingPredictions() const { return !showing_ && own_window_.IsShowingPredictions(); }
+  void SetOnPredictionClick(CandidateWindow::OnPredictionClickFn fn);
+  // Stage and HRESULT of the window's last drawing failure; never drawn content.
+  const char* window_failure_stage() const { return own_window_.failure_stage(); }
+  HRESULT window_failure_hr() const { return own_window_.failure_hr(); }
   HRESULT MoveSelection(int delta);
   // Highlights row `selected_idx` in the window and the UI element alike.
   HRESULT SetSelection(int selected_idx);
@@ -84,6 +98,8 @@ class CandidateUiCoordinator {
   void OnElementShow(bool show);
   void ShowPendingHealthBanner();
   void ShowPendingSecureToast();
+  // The window is on screen with candidate rows, not predictions.
+  bool CandidateRowsVisible() const;
   void OnWindowRenderResult(bool drawn) noexcept;
   void ReleaseUiElement();
   void ReleaseUiElementMgr();
@@ -105,6 +121,7 @@ class CandidateUiCoordinator {
   bool ui_less_mode_{false};
   bool tip_draws_{true};
   bool showing_{false};
+  bool window_created_{false};
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
   bool health_banner_pending_{false};
   std::string host_generation_id_;

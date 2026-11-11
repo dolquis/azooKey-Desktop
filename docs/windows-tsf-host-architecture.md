@@ -313,7 +313,6 @@ quarantine と保存の排他の契約は `docs/learning-data-management-spec.md
 - `core/src/CustomRomajiLoader.cpp` — TSV パース + ホットリロード
 - `core/src/InputState.cpp` — Ctrl+Shift+U hex バッファ（Unicode 入力状態）
 - `tsf-tip/src/DebugLogBuffer.cpp` — F10 デバッグウィンドウのログ保持と本文ゲート
-- `tsf-tip/src/PredictionWindow.cpp` — 予測候補 HWND
 - `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト（予定。roadmap M16、`docs/legacy-parity-spec.md` §4.3）
 - `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
 - `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
@@ -369,8 +368,7 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 
 | HWND | 用途 | 親 | 生存期間 |
 |---|---|---|---|
-| `CandidateWindow` | 変換候補 | デスクトップ | composition 中のみ表示 |
-| `PredictionWindow` | 予測候補（M15 で追加） | デスクトップ | composition 中常時表示（設定 ON 時） |
+| `CandidateWindow` | 変換候補と、予測モードでの予測候補（M15） | デスクトップ | composition 中のみ表示（予測は設定 ON 時） |
 | `PromptDialog` | Magic Conversion / Replace Suggestion（予定。M16 が追加する。`docs/legacy-parity-spec.md` §4.3） | フォアグラウンド | モーダル表示中のみ |
 | `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
 

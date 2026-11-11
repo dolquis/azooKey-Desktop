@@ -4,13 +4,17 @@
 #include "ModelPane.h"
 // clang-format on
 
+#include <shobjidl_core.h>
 #include <winrt/Microsoft.UI.Text.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Storage.Pickers.h>
+#include <winrt/Windows.Storage.h>
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -97,18 +101,40 @@ void ModelPane::Build(controls::StackPanel panel,
   host_ = std::move(host);
   ResourceLoader resources;
 
-  controls::TextBlock title;
-  title.Text(resources.GetString(L"Models_Title"));
-  title.FontSize(20);
-  title.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
-  panel.Children().Append(title);
-  panel.Children().Append(Block(resources.GetString(L"Models_Description"), true));
+  // sideload-packaging-spec section 3.2: the model in use is shown, never typed.
+  panel.Children().Append(Heading(resources.GetString(L"Models_SelectedHeading")));
+  selected_text_ = Block(L"");
+  selected_text_.IsTextSelectionEnabled(true);
+  SetId(selected_text_, L"ModelSelectedPath");
+  panel.Children().Append(selected_text_);
+  controls::StackPanel choice_buttons;
+  choice_buttons.Orientation(controls::Orientation::Horizontal);
+  choice_buttons.Spacing(8);
+  controls::Button browse_button;
+  browse_button.Content(winrt::box_value(resources.GetString(L"Models_BrowseButton")));
+  SetId(browse_button, L"ModelBrowseButton");
+  browse_button.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->BrowseForModel();
+  });
+  choice_buttons.Children().Append(browse_button);
+  clear_button_ = controls::Button();
+  clear_button_.Content(winrt::box_value(resources.GetString(L"Models_ClearButton")));
+  SetId(clear_button_, L"ModelClearButton");
+  clear_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->Choose(std::string());
+  });
+  choice_buttons.Children().Append(clear_button_);
+  panel.Children().Append(choice_buttons);
 
   problem_bar_ = controls::InfoBar();
   problem_bar_.IsOpen(false);
   problem_bar_.IsClosable(true);
   SetId(problem_bar_, L"ModelsStatusInfoBar");
   panel.Children().Append(problem_bar_);
+
+  // A section of the "AI 変換" pane, so it takes the section heading, not the pane's.
+  panel.Children().Append(Heading(resources.GetString(L"Models_Title")));
+  panel.Children().Append(Block(resources.GetString(L"Models_Description"), true));
 
   refresh_button_ = controls::Button();
   refresh_button_.Content(winrt::box_value(resources.GetString(L"Models_RefreshButton")));
@@ -143,10 +169,57 @@ void ModelPane::Build(controls::StackPanel panel,
   SetId(history_panel_, L"ModelsHistory");
   panel.Children().Append(history_panel_);
   RenderHistory();
+  ShowSelection();
 }
 
 void ModelPane::OnShown() {
   if (!listed_once_ && !listing_) Refresh();
+}
+
+void ModelPane::ShowSelection() {
+  ResourceLoader resources;
+  const auto selected = host_.selected_path ? host_.selected_path() : std::string();
+  // An empty model.selectedPath is "no model chosen yet" (sideload-packaging-spec section 3.7).
+  selected_text_.Text(
+      winrt::hstring(SelectedModelDisplay(selected, resources.GetString(L"Models_SelectedNone"))));
+  clear_button_.IsEnabled(!selected.empty());
+  if (listed_once_) {
+    RenderModels();
+    RenderCatalog();
+  }
+}
+
+void ModelPane::Choose(const std::string& path) {
+  const auto selected = host_.selected_path ? host_.selected_path() : std::string();
+  // Choosing the same file again changes nothing, so the save bar does not count it.
+  const bool same = path.empty() ? selected.empty() : SameModelPath(path, selected);
+  if (!same && host_.select_path) host_.select_path(path);
+  ShowSelection();
+}
+
+winrt::fire_and_forget ModelPane::BrowseForModel() {
+  const auto self = shared_from_this();
+  try {
+    winrt::Windows::Storage::Pickers::FileOpenPicker picker;
+    winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(host_.window_handle()));
+    picker.FileTypeFilter().Append(L".gguf");
+    const auto file = co_await picker.PickSingleFileAsync();
+    if (!file) co_return;
+    ResourceLoader resources;
+    const std::filesystem::path path(file.Path().c_str());
+    if (!IsUsableModelFile(path)) {
+      ShowBar(controls::InfoBarSeverity::Warning, resources.GetString(L"Models_ProblemTitle"),
+              resources.GetString(L"InvalidModelPath"));
+      co_return;
+    }
+    Choose(winrt::to_string(file.Path()));
+    ShowBar(controls::InfoBarSeverity::Informational, resources.GetString(L"Models_SelectedTitle"),
+            resources.GetString(L"Models_SelectedMessage"));
+  } catch (...) {
+    ResourceLoader resources;
+    ShowBar(controls::InfoBarSeverity::Error, resources.GetString(L"Models_ProblemTitle"),
+            resources.GetString(L"Models_UnexpectedError"));
+  }
 }
 
 void ModelPane::SetHistory(std::vector<BenchmarkHistoryEntry> history) {
@@ -241,6 +314,9 @@ void ModelPane::RenderModels() {
     controls::StackPanel row;
     row.Spacing(4);
     auto name = winrt::to_hstring(model.file_name);
+    if (IsDefaultCatalogModel(model, catalog_)) {
+      name = name + resources.GetString(L"Models_Catalog_DefaultSuffix");
+    }
     if (is_selected) name = name + resources.GetString(L"Models_SelectedSuffix");
     auto name_block = Block(name);
     name_block.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
@@ -270,13 +346,12 @@ void ModelPane::RenderModels() {
     select_button.Click([weak = weak_from_this(), path = model.path](auto const&, auto const&) {
       const auto self = weak.lock();
       if (!self) return;
-      self->host_.select_path(path);
+      self->Choose(path);
       ResourceLoader strings;
       self->problem_bar_.Severity(controls::InfoBarSeverity::Informational);
       self->problem_bar_.Title(strings.GetString(L"Models_SelectedTitle"));
       self->problem_bar_.Message(strings.GetString(L"Models_SelectedMessage"));
       self->problem_bar_.IsOpen(true);
-      self->RenderModels();
     });
     buttons.Children().Append(select_button);
 
@@ -394,6 +469,21 @@ void ModelPane::RenderCatalog() {
                                                : xaml::Visibility::Visible);
   const auto selected = host_.selected_path ? host_.selected_path() : std::string();
   for (const auto& entry : catalog_) {
+    if (IsCatalogEntryListedInModels(entry, models_)) {
+      // The models list shows this file with its state and choice; here it is only named
+      // (model-management-spec section 6.1).
+      controls::StackPanel row;
+      row.Spacing(4);
+      auto name = winrt::to_hstring(entry.display_name.empty() ? entry.id : entry.display_name);
+      if (entry.is_default) name = name + resources.GetString(L"Models_Catalog_DefaultSuffix");
+      auto name_block = Block(name);
+      name_block.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+      row.Children().Append(name_block);
+      row.Children().Append(Block(resources.GetString(L"Models_Catalog_ListedAbove"), true));
+      SetId(row, L"CatalogListedAbove_" + std::wstring(winrt::to_hstring(entry.id)));
+      catalog_panel_.Children().Append(row);
+      continue;
+    }
     const bool verified = entry.state == "verified";
     const bool is_selected = verified && SameModelPath(entry.path, selected);
     const auto id = std::wstring(winrt::to_hstring(entry.id));
@@ -450,13 +540,11 @@ void ModelPane::RenderCatalog() {
     select_button.Click([weak = weak_from_this(), path = entry.path](auto const&, auto const&) {
       const auto self = weak.lock();
       if (!self) return;
-      self->host_.select_path(path);
+      self->Choose(path);
       ResourceLoader strings;
       self->ShowBar(controls::InfoBarSeverity::Informational,
                     strings.GetString(L"Models_SelectedTitle"),
                     strings.GetString(L"Models_SelectedMessage"));
-      self->RenderModels();
-      self->RenderCatalog();
     });
     buttons.Children().Append(select_button);
     row.Children().Append(buttons);
@@ -610,12 +698,12 @@ winrt::fire_and_forget ModelPane::CancelCatalogFetch() {
 }
 
 // sideload-packaging-spec section 1.6.1: the fetch's SHA-256 match and GGUF checks are the
-// probe, and the path box plus the common save button are the commit.
+// probe, and "使うモデル" plus the save bar are the commit.
 void ModelPane::ShowFetchResult(const azookey::ipc::CatalogFetchResponse& response) {
   ResourceLoader resources;
   const auto result = Str(resources, CatalogFetchResultResource(response));
   if (CatalogFetchSucceeded(response)) {
-    host_.select_path(response.path);
+    Choose(response.path);
     ShowBar(controls::InfoBarSeverity::Success, resources.GetString(L"Models_Catalog_FetchedTitle"),
             result + L"\n" + resources.GetString(L"Models_SelectedMessage"));
     return;

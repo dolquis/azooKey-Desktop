@@ -157,7 +157,6 @@ MainWindow::MainWindow() {
   // The dedicated controls recount the save bar's changes as they are edited.
   const auto recount = [this](auto const&, auto const&) { RefreshSaveBar(); };
   ModelEnabledToggle().Toggled(recount);
-  ModelPathTextBox().TextChanged(recount);
   BackendPreferenceCombo().SelectionChanged(recount);
   LogLevelCombo().SelectionChanged(recount);
   CrashReportConsentToggle().Toggled(recount);
@@ -176,13 +175,23 @@ MainWindow::MainWindow() {
                                                if (*alive) RefreshSaveBar();
                                              }});
   model_pane_ = std::make_shared<azookey::settings::ModelPane>();
-  model_pane_->Build(ModelsPaneHost(), DispatcherQueue(),
-                     {[this, alive = alive_] {
-                        return *alive ? winrt::to_string(ModelPathTextBox().Text()) : std::string();
-                      },
-                      [this, alive = alive_](const std::string& path) {
-                        if (*alive) ModelPathTextBox().Text(winrt::to_hstring(path));
-                      }});
+  model_pane_->Build(
+      ModelsPaneHost(), DispatcherQueue(),
+      {[this, alive = alive_] { return *alive ? model_selected_path_ : std::string(); },
+       [this, alive = alive_](const std::string& path) {
+         if (!*alive) return;
+         model_selected_path_ = path;
+         RefreshSaveBar();
+       },
+       [this, alive = alive_] {
+         HWND window = nullptr;
+         if (*alive) {
+           if (const auto native = this->try_as<::IWindowNative>()) {
+             native->get_WindowHandle(&window);
+           }
+         }
+         return window;
+       }});
   learning_pane_ = std::make_shared<azookey::settings::LearningPane>();
   learning_pane_->Build(LearningPaneHost(), DispatcherQueue(),
                         {[this, alive = alive_] {
@@ -509,7 +518,8 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   field_controls_.Apply(result.settings.values);
   ShowSafeMode(result.settings);
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
-  ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
+  model_selected_path_ = result.settings.model_selected_path;
+  model_pane_->ShowSelection();
   model_pane_->SetHistory(result.settings.benchmark_history);
   // The stored switch decides how a not_requested layer reads, so ask again now it is known.
   if (DictionaryPane().Visibility() == Microsoft::UI::Xaml::Visibility::Visible) {
@@ -586,7 +596,7 @@ azookey::settings::EditableSettings MainWindow::SettingsFromControls(
   } else {
     settings.model_backend_preference.reset();
   }
-  settings.model_selected_path = winrt::to_string(ModelPathTextBox().Text());
+  settings.model_selected_path = model_selected_path_;
   // Compared by hash, so no copy of the key is kept, and the box's text is copied into a string
   // only when it is to be written. A clear is always written, which also replaces a stored key
   // that could not be decrypted.
@@ -712,13 +722,9 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
       azookey::settings::ChangedSettingValues(settings.values, saved_settings_.values);
 
   if (!settings.model_selected_path.empty()) {
-    const std::filesystem::path model_path(ModelPathTextBox().Text().c_str());
-    auto extension = model_path.extension().wstring();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-    std::error_code ec;
-    if (!model_path.is_absolute() || extension != L".gguf" ||
-        !std::filesystem::is_regular_file(model_path, ec)) {
+    // Built from the wide string, so a path with Japanese in it is not read in the ANSI code page.
+    const std::filesystem::path model_path(winrt::to_hstring(settings.model_selected_path).c_str());
+    if (!azookey::settings::IsUsableModelFile(model_path)) {
       Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
       ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
                      resources.GetString(L"SaveFailedTitle"),

@@ -11,24 +11,28 @@
 
 namespace azookey::settings {
 
-// The "モデル" pane: the models ListModels finds with their validation result, a benchmark of
-// each, and the choice of model.selectedPath (model-management-spec section 6). Choosing a model
-// only fills the path box of the "AI 変換" pane; the value is saved by the common save button.
-// DEV-1821: the entries of the Host's default catalog, each fetched on request with its
-// progress; a fetched file is put into the path box the same way.
+// The models part of the "AI 変換" pane (model-management-spec section 6.1): the model in use
+// ("使うモデル", read-only, with "参照…" and "選択を外す"), the models ListModels finds with their
+// validation result and a benchmark of each, and the entries of the Host's default catalog, each
+// fetched on request with its progress. Choosing a model, picking a file, or a successful fetch
+// changes "使うモデル"; model.selectedPath is written by the save bar.
 class ModelPane : public std::enable_shared_from_this<ModelPane> {
  public:
   struct Host {
-    // The path currently in the "AI 変換" pane's box, UTF-8.
+    // The chosen model.selectedPath, UTF-8; empty when none is chosen.
     std::function<std::string()> selected_path;
-    // Puts a path into that box.
+    // Changes the choice (an empty path clears it).
     std::function<void(const std::string&)> select_path;
+    // The window the file picker of "参照…" belongs to.
+    std::function<HWND()> window_handle;
   };
 
   void Build(winrt::Microsoft::UI::Xaml::Controls::StackPanel panel,
              winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher, Host host);
   // Called each time the pane is shown; the first call lists the models.
   void OnShown();
+  // Shows the current choice again, after the window read it from settings.json.
+  void ShowSelection();
   // The Host's benchmark history from settings.json (shown, never edited).
   void SetHistory(std::vector<BenchmarkHistoryEntry> history);
 
@@ -39,6 +43,10 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::fire_and_forget FetchCatalog(std::string model_id);
   // DEV-1840: asks the Host to stop the running fetch; FetchCatalog keeps polling until it ends.
   winrt::fire_and_forget CancelCatalogFetch();
+  // "参照…": a local GGUF that is not in the lists (sideload-packaging-spec section 3.7).
+  winrt::fire_and_forget BrowseForModel();
+  // Every way of choosing goes through here, so the lists and "使うモデル" stay in step.
+  void Choose(const std::string& path);
   void RenderModels();
   void RenderCatalog();
   // Updates only the running fetch's progress bar and text, so a poll does not rebuild the rows
@@ -56,6 +64,8 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
   Host host_;
   winrt::Microsoft::UI::Xaml::Controls::InfoBar problem_bar_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBlock selected_text_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button clear_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button refresh_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel models_panel_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock catalog_heading_{nullptr};

@@ -1209,7 +1209,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
 | 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
 | 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
-| 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択 / `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
+| 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択（「選択を外す」で空の未選択に戻す。§3.7）/ `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
 | 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | 設定 | プライバシー | `privacy`（`crashReportConsent` を含む） |
 | 設定 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
@@ -1584,8 +1584,8 @@ schema 自体は superset のまま変えない。
       `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
       **ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
       非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
-  いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を
-  表示する。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
+  いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「使うモデル」に「未選択（AI モデルを使わずに
+  変換します）」と表示する（Host は SimpleConverter で動く）。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
   モデルが commit されず degraded のまま」の両方の不整合を防ぐ。
 - **root `backendPreference` を v1.0 UI に二重表示せず、保存時に UI 選択値で上書きする**: デバイス選択は
   `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`

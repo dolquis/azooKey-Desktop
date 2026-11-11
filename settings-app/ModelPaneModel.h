@@ -3,15 +3,17 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "SettingsIpcClient.h"
 #include "azookey/ipc/Payloads.h"
 
 namespace azookey::settings {
 
-// How the "モデル" pane shows one ListModels entry (model-management-spec section 6.2).
+// How the "AI 変換" pane shows one ListModels entry (model-management-spec section 6.2).
 enum class ModelEntryState {
   Loaded,      // Valid, and the running engine has loaded it.
   NotLoaded,   // Valid, not loaded so far.
@@ -92,6 +94,24 @@ bool CatalogFetchSucceeded(const azookey::ipc::CatalogFetchResponse& response);
 // the stop reaches.
 bool CanStartCatalogFetch(const azookey::ipc::CatalogModelEntry& entry, bool fetching,
                           bool cancel_in_flight);
+
+// A verified catalog entry whose file the models list also shows (same path, ignoring case and
+// separators). The "AI 変換" pane shows such a file once: its models row carries the choice, and
+// the entry only says it is there (model-management-spec section 6.1).
+bool IsCatalogEntryListedInModels(const azookey::ipc::CatalogModelEntry& entry,
+                                  const std::vector<azookey::ipc::ListedModel>& models);
+
+// Whether a listed model is the file of the default catalog entry, verified.
+bool IsDefaultCatalogModel(const azookey::ipc::ListedModel& model,
+                           const std::vector<azookey::ipc::CatalogModelEntry>& catalog);
+
+// What saving asks of a chosen model, and what a file picked with "参照…" must be: an absolute
+// path to an existing regular file named .gguf (any case). The Host still validates the file.
+bool IsUsableModelFile(const std::filesystem::path& path);
+
+// What "使うモデル" shows: the chosen path, or `none_text` when model.selectedPath is empty (no
+// model chosen yet, so the Host converts without one; sideload-packaging-spec section 3.7).
+std::wstring SelectedModelDisplay(std::string_view utf8_path, std::wstring_view none_text);
 
 // The string for a catalog entry's file state ("missing", "verified", "mismatch").
 std::string CatalogEntryStateResource(std::string_view state);

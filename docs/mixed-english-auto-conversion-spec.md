@@ -17,6 +17,22 @@ Auto Conversion）」を定める。`plans/windows-port-roadmap.md` の M63 が�
 - `docs/conversion-quality-benchmark-spec.md` … M52 の評価データと品質指標。
 - `docs/mixed-english-input-feasibility-report.md` … 実現可能性と先行事例の調査記録（参考。正典ではない）。
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§5 | M63 |
+| §6 | M63-B（文中混在の分割器） |
+| §7 | M63（E 区間が Zenzai の読みに入るのは M63-B から） |
+| §8.1・§8.4・§8.5 | M63 |
+| §8.2 | M63-A（composition 全体が 1 語） |
+| §8.3 | M63-B（文中混在） |
+| §9〜§11 | M63 |
+| §12・§13 | M63（M35 / M55、M58 との優先と境界を定める） |
+| §14〜§16 | M63 |
+
 ## 1. 目的
 
 日本語入力モードのまま、英単語を含むローマ字の文を打つと、日本語部分はかな漢字に、英単語部分は

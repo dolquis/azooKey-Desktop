@@ -635,7 +635,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答（`mode` 別 system プロンプト）が表示される
   - 結果が selection range に置換される
   - M16 / M58-C / X-3-3 / X-3-6 が Host 側で同一の `AiBackend::Transform` を通り、別 backend 実装に
-    分岐しない（4 つの `AiTask` の正規化）
+    分岐しない（4 つの `AiTask` の正規化。Host 側の単体テストは `inference-host/tests/ai_backend_test.cpp`）
   - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず
     `BlockedBySecure` で早期 return する。TIP 側の抑止に依存しない
   - 401 / 403 / 429 / 5xx / timeout / parse が `AiErrorClass`（`docs/ai-backend-spec.md` §7.2）に

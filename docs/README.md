@@ -90,6 +90,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順、Claude Code on the web の SessionStart hook |
 | [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック、分担の例と、管制塔セッションと子セッションの役割分担 |
 | [`handoff/parallel-worktree-runbook.md`](handoff/parallel-worktree-runbook.md) | 複数 worktree で同時に build / test / PR 作業をするときに共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と回避策、main の取り込み |
+| [`handoff/docs-audit-runbook.md`](handoff/docs-audit-runbook.md) | repo docs を read-only で読み直し、機械検査が拾えない陳腐化・矛盾・重複を 6 領域に分けて所見として起票する手順。手動で起動する |
 
 ### 一回限りの引き継ぎ（`docs/handoff/`）
 

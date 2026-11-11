@@ -7,6 +7,20 @@
       `docs/auto-word-registration-spec.md`、
       `docs/privacy-and-secure-input-spec.md`
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3 | M49 |
+| §4.1〜§4.4 | M49 |
+| §4.5・§4.6 | 共通 |
+| §5〜§10 | M49 |
+| §11・§12 | 共通 |
+| §13 | 共通。Debug CLI の `userdict` は M9 の移行措置（§13 本文） |
+| §14 | 共通 |
+
 ## 1. 目的
 
 ユーザーが azooKey の学習内容を **確認・削除・バックアップ・復元** できる

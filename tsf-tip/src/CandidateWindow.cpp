@@ -1307,30 +1307,37 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
   // as a case in HandleMessage: clang-cl 19 for ARM64 fails with "assembler
   // label '' can not be undefined" when that switch gains it.
   if (msg == WM_ERASEBKGND) return 1;
+  // Kept out of HandleMessage for the same clang-cl 19 ARM64 failure.
+  if (self && msg == WM_SETCURSOR && self->SetHandCursor(hwnd, lParam)) return TRUE;
+  if (self && ((msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA) || msg == WM_DISPLAYCHANGE))
+    self->OnWorkAreaChanged();
   if (self) return self->HandleMessage(hwnd, msg, wParam, lParam);
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+bool CandidateWindow::SetHandCursor(HWND hwnd, LPARAM lParam) {
+  // The hand over the banner buttons; the keys never press them (native-ui-spec §4.1).
+  if (LOWORD(lParam) != HTCLIENT || render_failed_) return false;
+  POINT cursor{};
+  RECT client_rc{};
+  if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd, &cursor) ||
+      !GetClientRect(hwnd, &client_rc) ||
+      !UsesHandCursor(HitTest(CurrentHitLayout(client_rc.right), cursor).target))
+    return false;
+  SetCursor(LoadCursorW(nullptr, IDC_HAND));
+  return true;
+}
+
+void CandidateWindow::OnWorkAreaChanged() {
+  // The taskbar or the resolution changed: the rows that fit and the placement
+  // come from the work area, so a shown window is measured again at its anchor.
+  if (!IsVisible() && !render_failed_) return;
+  // The popup was placed against the old window and work area; it closes.
+  HideDetails();
+  ResizeAtLastAnchor();
+}
+
 LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  if (msg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT && !render_failed_) {
-    // The hand over the banner buttons; the keys never press them (native-ui-spec §4.1).
-    POINT cursor{};
-    RECT client_rc{};
-    if (GetCursorPos(&cursor) && ScreenToClient(hwnd, &cursor) && GetClientRect(hwnd, &client_rc) &&
-        UsesHandCursor(HitTest(CurrentHitLayout(client_rc.right), cursor).target)) {
-      SetCursor(LoadCursorW(nullptr, IDC_HAND));
-      return TRUE;
-    }
-  }
-  if ((msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA) || msg == WM_DISPLAYCHANGE) {
-    // The taskbar or the resolution changed: the rows that fit and the placement
-    // come from the work area, so a shown window is measured again at its anchor.
-    if (IsVisible() || render_failed_) {
-      // The popup was placed against the old window and work area; it closes.
-      HideDetails();
-      ResizeAtLastAnchor();
-    }
-  }
   switch (msg) {
     case WM_MOUSEACTIVATE:
       return MA_NOACTIVATE;

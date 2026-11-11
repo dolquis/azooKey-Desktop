@@ -343,6 +343,9 @@ class CandidateWindow {
   // null after WM_DESTROY, but trailing messages like WM_NCDESTROY still need
   // a valid handle for DefWindowProcW).
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  // True when the pointer is over a banner button and the hand cursor was set.
+  bool SetHandCursor(HWND hwnd, LPARAM lParam);
+  void OnWorkAreaChanged();
   void UpdateDpi(UINT dpi);
   void UpdateTheme();
   void Repaint();

@@ -168,4 +168,9 @@ LaunchArguments ParseLaunchArguments(std::wstring_view raw_arguments) noexcept {
   }
 }
 
+bool HasLaunchContext(const LaunchArguments& arguments) noexcept {
+  return arguments.langid_status != LaunchArgumentStatus::NotSupplied ||
+         arguments.profile_status != LaunchArgumentStatus::NotSupplied;
+}
+
 }  // namespace azookey::settings

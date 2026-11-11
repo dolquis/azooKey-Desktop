@@ -812,6 +812,8 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
       load_problem_shown_ = false;
       SettingsStatusInfoBar().IsOpen(false);
     }
+    // The update status reads the saved autoUpdate and privacy.mode, which the same pane edits.
+    RefreshUpdateStatus();
   }
   RefreshSaveBar();
   if (save_result.invalid_setting) {

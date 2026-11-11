@@ -1200,7 +1200,7 @@ Microsoft Learn の事実は
 起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`rich-features-spec.md`
 X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
 `dictionary` / `ai-conversion` / `ai-service` / `privacy` / `profiles` / `advanced` / `learning` / `proofread` /
-`version`。知らない名前は無視して「入力」を表示する）。`--pane` は入力インジケーターの「設定を開く」が渡す
+`version`。知らない名前は無視して「入力」を表示する）。既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ（§3.5）。`--pane` は入力インジケーターの「設定を開く」が渡す
 （`docs/tsf-deep-integration-spec.md` §4.5）。`ITfFnConfigure::Show`（§3.5）は渡さない。
 `liveConversion` / `predictionEnabled` だけは、入力インジケーターの右クリックのメニューからも切り替えられる（TIP が対象の 1 キーを書く。`docs/tsf-deep-integration-spec.md` §4.5）。
 
@@ -1378,6 +1378,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **開くペインの引数**: `--pane <名前>`（§3.2）は開くペインだけを指定する。`--proofread-session` と同時に
   受けたときは `--proofread-session` を優先して「校正」を開く。`langid` / `rguidProfile` は開くペインを
   変えず、どちらも受けたときも `--pane` が無ければ「入力」を開く（言語プロファイルごとの設定ページは持たない）。
+  既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ。
 - **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
   インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。

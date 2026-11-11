@@ -61,6 +61,39 @@ TEST(SettingsLaunchArgumentsTest, RejectsDuplicateOrUnknownOptions) {
   EXPECT_TRUE(unknown.parse_error);
 }
 
+}  // namespace
+
+// rich-features-spec X-3-6: the TIP opens the batch correction view with a session token only.
+TEST(SettingsLaunchArgumentsTest, AcceptsAProofreadSessionToken) {
+  const auto arguments = azookey::settings::ParseLaunchArguments(
+      L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+  EXPECT_FALSE(arguments.parse_error);
+  EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
+  EXPECT_EQ(arguments.proofread_session_token, std::string(32, 'a'));
+  EXPECT_EQ(arguments.langid_status, LaunchArgumentStatus::NotSupplied);
+  EXPECT_EQ(arguments.profile_status, LaunchArgumentStatus::NotSupplied);
+}
+
+TEST(SettingsLaunchArgumentsTest, RejectsAnythingButALowercaseHexToken) {
+  for (const wchar_t* raw : {
+           L"--proofread-session",
+           L"--proofread-session AAAAAAAAAAAAAAAAaaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session ..\\..\\pipe\\aaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session ａaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+           L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+           L"--proofread-session bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       }) {
+    SCOPED_TRACE(raw);
+    const auto arguments = azookey::settings::ParseLaunchArguments(raw);
+    EXPECT_TRUE(arguments.parse_error);
+    EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Invalid);
+    EXPECT_TRUE(arguments.proofread_session_token.empty());
+  }
+}
+
 TEST(SettingsLaunchArgumentsTest, PaneNamesThePaneToOpenAndIgnoresUnknownNames) {
   const auto arguments = azookey::settings::ParseLaunchArguments(
       L"--langid 0x0411 --profile {8D80B94E-75BA-47D4-90B9-68977A5A6E2B} --pane input");
@@ -87,4 +120,11 @@ TEST(SettingsLaunchArgumentsTest, PaneNamesThePaneToOpenAndIgnoresUnknownNames) 
             L"privacy");
 }
 
-}  // namespace
+TEST(SettingsLaunchArgumentsTest, ProofreadSessionAndPaneAreBothRead) {
+  // MainWindow opens "校正" when both are given (sideload-packaging-spec section 3.5).
+  const auto arguments = azookey::settings::ParseLaunchArguments(
+      L"--pane privacy --proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  EXPECT_FALSE(arguments.parse_error);
+  EXPECT_EQ(arguments.pane, L"privacy");
+  EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
+}

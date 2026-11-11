@@ -4,7 +4,7 @@ DEV-101（D-05 M28: MSIX `com4:ComServer` と TIP CLSID/Profile 登録の整合 
 **配布経路 Option A（external-location packaging / sparse package）**の PoC 一式。
 
 仕様の正典は [`docs/sideload-packaging-spec.md`](../../docs/sideload-packaging-spec.md) §1
-（特に §1.0 経路 3 候補・§1.1 Option B 参考例・§1.5 受け入れ条件）。状態・進捗の正典は
+（特に §1.0 経路 3 候補・§1.1 Option B 参考例・§1.5 経路ごとの対象 OS）。状態・進捗の正典は
 Linear（DEV-101 / 実機検証は DEV-267）。
 
 > **⚠️ 実機検証は human gate**: 実 Windows ビルド / 実機 VM での schema validation・登録検証は

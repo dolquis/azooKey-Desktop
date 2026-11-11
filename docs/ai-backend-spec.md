@@ -529,18 +529,11 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
 
 ---
 
-## 12. 受け入れ条件 / テスト観点
+## 12. 受け入れ条件
 
 受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
 の M16 節とする。本書は `AiBackend` の IPC・Host 側抽象・エラー分類・secure ガード・
 キー保存を定義し、受け入れ条件を複製しない。
-
-roadmap M16 の条件は次の方法で検証する。
-
-- 4 つの `AiTask` の正規化と secure ガードは、Host 側の単体テスト（`inference-host/tests/ai_backend_test.cpp`）で
-  検証する。secure ガードの検証は TIP 側の抑止に依存しない。
-- エラー分類と再試行は、モック HTTP で検証する。
-- AI の POST 経路と M32 の GET + SHA256 が同じ WinHTTP 基盤を使う構造は、レビューで確認する。
 
 > 既知のテストギャップ・実機検証（OpenAI 実 API への結合テスト、secure 実機確認）は
 > Linear に課題として起票し追跡する（roadmap には状態を書かない）。

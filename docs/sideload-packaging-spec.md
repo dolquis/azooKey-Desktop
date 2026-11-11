@@ -390,7 +390,7 @@ Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
 解除前の入力方式の切替（`azookey_ime_switch.exe`）は MSI と開発登録の解除手順に含め、
 MSIX の `Remove-AppxPackage` には含めない。手順は §4.2 に従う。
 
-### 1.5 受け入れ条件
+### 1.5 経路ごとの対象 OS
 
 受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
 の M28 節とする。本節は受け入れで検証する OS を経路ごとに定義し、受け入れ条件を複製しない。

@@ -7,6 +7,22 @@
       `docs/neural-reranker-spec.md`（M56）、
       `docs/copilot-pc-backend-spec.md`（M24 backend）
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§3 | M57 |
+| §4 | M57（起動条件。M46・M55・M56 に依存する） |
+| §5 | M57（M24 の backend 上で実行する） |
+| §6 | M57（ロードゲートと RSS 上限。M24 の backend が前提） |
+| §7 | M57（M56 で予約した `reranker.modernbert*` キーの正典） |
+| §8 | M57（M56 の `final_score` との統合） |
+| §9 | M57（M46 secure 中の完全 OFF） |
+| §10〜§11 | M57 |
+| §12 | M57 範囲外（将来拡張） |
+
 ## 1. 目的
 
 同音異義語など難しい候補のみ ModernBERT-Ja で**文脈自然度**を評価し、

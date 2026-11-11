@@ -37,6 +37,10 @@ Specs (`docs/*-spec.md`)
       「マイルストーン」 and 「対応」, or a table whose header row has the
       columns 「節」 and 「マイルストーン」.
 
+  "The first lines" of S2 and S3 are counted after the front matter (the
+  `---` block that `check_doc_meta.py` reads), so that metadata neither
+  pushes the opening prose out of the window nor counts as a mention.
+
 Heading state words (確定・DEV 番号・日付) are the origin docs-lint's job and are
 not repeated here.
 """
@@ -44,9 +48,27 @@ not repeated here.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
 import re
 import sys
+
+
+def _load_doc_meta():
+    """`check_doc_meta.py` owns the front matter rule; load it by path.
+
+    The script is run both directly and from `scripts/tests/`, so the module is
+    loaded from the file next to this one rather than imported by name.
+    """
+    path = Path(__file__).with_name("check_doc_meta.py")
+    spec = importlib.util.spec_from_file_location("check_doc_meta_for_format", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+front_matter_end = _load_doc_meta().front_matter_end
 
 ROADMAP = "plans/windows-port-roadmap.md"
 DIAGRAM_HEADING = "## Phase 5〜7 の依存関係と実行順"
@@ -77,7 +99,7 @@ EDGE = re.compile(
 
 
 def read_lines(path: Path) -> list[str]:
-    return path.read_text(encoding="utf-8").split("\n")
+    return path.read_text(encoding="utf-8-sig").split("\n")
 
 
 def diagram_block(lines: list[str]) -> list[str] | None:
@@ -167,7 +189,8 @@ def check_roadmap(root: Path) -> list[str]:
 def check_spec(path: Path, rel: str) -> list[str]:
     lines = read_lines(path)
     problems: list[str] = []
-    for i, line in enumerate(lines[:HEAD_LINES_FOR_DATE]):
+    start = front_matter_end(lines)
+    for i, line in enumerate(lines[start : start + HEAD_LINES_FOR_DATE], start):
         if DATE_LINE.match(line):
             problems.append(f"{rel}:{i + 1}: 冒頭に作成日・更新日を置かないでください（履歴は git と Linear が持ちます）")
     # Headings inside a fenced code block are comments, not sections.
@@ -198,12 +221,12 @@ def check_spec(path: Path, rel: str) -> list[str]:
                 f"{rel}:{i + 1}: 受け入れ条件の節に箇条書き・表が {count} 行あります"
                 "（定義は roadmap の該当 M 節に置き、spec には参照だけを残します）"
             )
-    head = "\n".join(lines[:HEAD_LINES_FOR_MILESTONES])
+    head = "\n".join(lines[start : start + HEAD_LINES_FOR_MILESTONES])
     if len(set(M_TOKEN.findall(head))) >= MULTI_MILESTONE_THRESHOLD:
         has_table = any(
             (l.startswith("#") and "マイルストーン" in l and "対応" in l)
             or (l.startswith("|") and "節" in l and "マイルストーン" in l)
-            for l in lines[:HEAD_LINES_FOR_TABLE]
+            for l in lines[start : start + HEAD_LINES_FOR_TABLE]
         )
         if not has_table:
             problems.append(

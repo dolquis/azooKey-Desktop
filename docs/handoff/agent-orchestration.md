@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック", "管制塔セッションと子セッションの役割分担"]
+---
+
 # ローカル agent の分担規約（orchestration）
 
 本書は、Claude Code と Codex で親 agent が 1 つの塊（1 Linear Issue、または 1 PR にまとめた関連 Issue 群）の調査・実装・レビュー・build を分担させるときと、管制塔セッションが塊ごとに子セッションを立てるときの恒常 runbook である。

@@ -1,3 +1,7 @@
+---
+kind: reference
+---
+
 # azooKey-Desktop Windows移植: 資産棚卸し（初回調査）
 
 > 本書は M0 以前の初回調査であり、現行設計の正典ではない。最新の設計・計画は

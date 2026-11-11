@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["Hyper-V VM 上での TIP 登録・入力確認の実機検証手順", "VM 内の TIP 登録をエージェントへ委任する条件と範囲"]
+---
+
 # Hyper-V Win11 VM での TIP 実機検証 runbook
 
 azooKey TIP（`tsf-tip`）と inference-host を Hyper-V の Windows 11 VM 上で実機検証するための手順。

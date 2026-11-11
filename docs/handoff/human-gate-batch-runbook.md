@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["1 回の VM セッションでまとめるときのレーン設計、ゲート種別ごとの実行条件、検証メモの記録様式"]
+---
+
 # 人間ゲート一括消化の VM セッション runbook
 
 複数の `gate:human-required` 課題を 1 回の Hyper-V VM セッションでまとめて消化するための実行計画と記録様式を定める。

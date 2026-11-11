@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["VM 検証資産の一覧と、エージェントが Hyper-V VM 操作を補助する前提（ホスト側の権限）とリスク"]
+---
+
 # Hyper-V VM 実機確認の検証資産とエージェント補助の前提
 
 Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの検証資産と、

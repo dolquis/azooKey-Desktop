@@ -297,6 +297,10 @@ python -m onnxruntime_genai.models.builder \
 
 CUDA backend の実リンクを中止した経緯は
 [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
+重みの形式とエンジン経路を選んだ経緯は
+[`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md)、
+llama.cpp バインディングの初期選定とモデルロード境界の決定は
+[`decisions/2026-05-20-model-load-and-userdict-cli.md`](decisions/2026-05-20-model-load-and-userdict-cli.md) にある。
 
 1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。
    配布中の GGUF を無変換で使え、実モデルでロードと候補生成を確認できた。
@@ -779,6 +783,9 @@ AdjustWindowRectExForDpi(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
 > 「**テスト実行（ネイティブ ARM64 が必要）**」を分離して扱う。CI の緑ゲートは既存 x64
 > ランナー上のクロスビルドで満たし、ARM64 バイナリの**実行テスト**は別経路（§8.4）に置く。
 > NPU 経路は §4.3（R2=Windows ML）が正典であり、本節はビルド系・配布系の確定に限る。
+
+M27 の着手条件に ARM64 実機の入手を加えた経緯は
+[`decisions/2026-09-arm64-hardware-start-condition.md`](decisions/2026-09-arm64-hardware-start-condition.md) にある。
 
 ### 8.1 ビルド方式（クロスコンパイル前提）
 

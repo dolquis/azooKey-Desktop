@@ -1,3 +1,8 @@
+---
+kind: design
+canonical_for: ["TSF TIP + Inference Host 分離設計、実装ルール（スレッドモデル・例外耐性・互換性）"]
+---
+
 # Windows TSF TIP + Inference Host 分離設計
 
 ## 構成

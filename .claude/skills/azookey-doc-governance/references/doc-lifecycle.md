@@ -12,6 +12,22 @@
 | 決定記録・測定記録 | 日付つきの決定の経緯・根拠・不採用理由と、固定条件での実測値。凍結し、追記のみで書き換えない | `docs/decisions/YYYY-MM-DD-<slug>.md`（命名と書式は `docs/decisions/README.md`） | `docs/README.md`「決定記録と測定記録」表に必須。状態語を含んでよい（docs-lint の prose 検査の対象外） |
 | 運用規約 | Linear 運用・ラベル規約など、リポジトリ横断の作業ルール | `docs/linear-conventions.md`（共有コア部分は origin 側で編集）、`AGENTS.md`（要約） | `docs/README.md`「運用」表 |
 
+## 冒頭のメタデータ
+
+`docs/**/*.md` は、1 行目からの front matter に種別を宣言する。`scripts/check_doc_meta.py` が `docs/README.md` の表と突き合わせる（キーの定義と規則の正典は同スクリプトの docstring）。
+
+```markdown
+---
+kind: runbook
+canonical_for: ["索引の役割の列にある句"]
+---
+```
+
+- `kind` は spec / design / runbook / one-off / reference / policy のどれかにする。decision と archive は置き場所で決まるので書かない。
+- spec は `milestones`（`[M13, M14]` のように列挙する）、one-off は `dod`（完了基準の節。例 `"§6"`）を持つ。spec・design・policy・runbook は `canonical_for` を持ち、その句は索引の行にそのまま含める。
+- 値は 1 行の文字列か `[a, b]` のリストに限る。状態語は書かない（docs-lint が front matter も検査する）。
+- 付けないもの: `docs/decisions/`（固定ヘッダを読む）、`docs/archive/`、`docs/linear-conventions.md`（共有コアのミラー）、README・AGENTS・CLAUDE。spec への付与は spec の分割の後に行う（それまでは無くてもよい）。
+
 ## 一回限り文書を archive するタイミング
 
 1. 文書自身が DoD（完了基準）チェックリストを持っている場合、そのチェックリストを実体（`.mcp.json` の存在、スキルファイルの実在など）と照合する。

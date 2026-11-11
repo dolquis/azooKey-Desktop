@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["§12 の診断ウィザードと §4.6.2 の Application Verifier runbook"]
+---
+
 # Windows 診断プレイブック
 
 この文書は、azooKey TIP、inference-host、Named Pipe の crash、hang、IPC timeout、handle leak を開発環境で調査する手順を定める。

@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["TIP の打鍵確認（コア A1〜A8、拡張 B1〜B7）と compat runner との分担"]
+---
+
 # TIP 実機確認チェックリスト
 
 azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）用チェックリスト。記入して**対象の課題にコメント**する。環境準備・登録・ログ取得の手順は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md) を参照。

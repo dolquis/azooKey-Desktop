@@ -23,12 +23,13 @@ struct HttpDownloadRequest {
   uint32_t connect_timeout_ms{15'000};
   uint32_t send_timeout_ms{15'000};
   uint32_t receive_timeout_ms{30'000};
-  // Cooperative cancellation between blocking operations; in-flight WinHTTP calls
-  // still use the timeouts above. The callback runs on the calling thread.
+  // Cancellation. Checked between operations and polled while waiting for the connection,
+  // the headers or the body, so it also stops a wait before the timeouts above expire.
+  // The callback runs on the calling thread.
   std::function<bool()> cancelled;
   // privacy.mode=offline. Empty allows the network. A destination whose SHA256
   // already matches is still reused; otherwise false fails before any network
-  // operation, and a change to false is cooperative cancellation like the above.
+  // operation, and a change to false is a cancellation like the above.
   std::function<bool()> network_allowed;
   // Called on the calling thread after each chunk is written to <destination>.part, with the
   // bytes the part file now holds (a resumed prefix included) and the full size the response
@@ -81,7 +82,7 @@ class HttpDownloader {
   HttpDownloadResult Download(const HttpDownloadRequest& request) const;
 
   // Bounded GET for small metadata such as checksum sidecars. No file is written
-  // and no SHA256 verification is performed. Cancellation is cooperative, as above.
+  // and no SHA256 verification is performed. Cancellation works as above.
   // Failed requests return an empty body.
   HttpTextResult FetchText(const HttpTextRequest& request) const;
 

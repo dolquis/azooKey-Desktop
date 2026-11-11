@@ -51,33 +51,49 @@ const wchar_t* HealthBannerText(CandidateHealthState state) {
     case CandidateHealthState::DegradedModel:
       return L"⚠️ Zenzai を使えないため、簡易変換で継続しています";
     case CandidateHealthState::SafeMode:
-      return L"⚠️ 異常終了が続いたため、安全モードで動作しています（AI と学習を停止中）";
+      return L"⚠️ 異常終了が続いたため、セーフモードで動作しています（AI と学習を停止中）";
     case CandidateHealthState::Healthy:
       return L"";
   }
   return L"";
 }
 
+// What the user does comes first; paths, setting keys and commands close the
+// text (native-ui-spec §4.1, wording per sideload-packaging-spec §3.2). The
+// steps name the settings app's panes and fields as they are labeled today.
 const wchar_t* HealthDetailsText(CandidateHealthState state) {
   switch (state) {
     case CandidateHealthState::DegradedSimple:
-      return L"変換エンジンとの接続を確認してください。詳しく調べるには、コマンドプロンプトで "
-             L"azookey_diag.exe --json を実行してください。診断 ZIP は azookey_diag.exe --collect "
-             L"--output azookey-diag.zip で作成できます。";
+      return L"変換エンジンに接続できないため、ひらがなやカタカナなどの簡易な候補で入力を続けて"
+             L"います。変換エンジンには自動でつなぎ直し、つながれば元の変換に戻ります。\n\n"
+             L"調べるときのコマンド: azookey_diag.exe --json\n"
+             L"診断ファイルの作成: azookey_diag.exe --collect --output azookey-diag.zip";
     case CandidateHealthState::DegradedModel:
-      return L"Zenzai "
-             L"モデルを利用できません。モデル設定を確認し、再試行してください。詳しく調べるには、コ"
-             L"マンドプロンプトで azookey_diag.exe --json を実行してください。";
+      return L"Zenzai のモデルを読み込めないため、簡易変換で入力を続けています。設定アプリの"
+             L"「一般」で「モデルファイル」を確かめてから、「再試行」を押してください。\n\n"
+             L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::SafeMode:
-      return L"異常終了の原因（直前に変更したモデルや backend "
-             L"など）を取り除き、%LOCALAPPDATA%\\azooKey\\config\\settings.json の "
-             L"safeMode.enabled を false "
-             L"にしてください。その後サインアウトして入り直すか、設定アプリで任意の設定を保存して "
-             L"UpdateConfig を送ってください。詳しくは azookey_diag.exe --json で確認できます。";
+      return L"変換エンジンの異常終了が続いたため、セーフモードで動いています（AI と学習は止めて"
+             L"います）。直前に変えたモデルや推論デバイスなどの設定を元に戻してから、設定アプリの"
+             L"「一般」で「セーフモードを解除する」を押し、保存してください。\n\n"
+             L"設定ファイル: %LOCALAPPDATA%\\azooKey\\config\\settings.json（safeMode.enabled）\n"
+             L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::Healthy:
       return L"";
   }
   return L"";
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+std::wstring g_health_banner_text_for_test;
+#endif
+
+// The banner text of a state; tests may stand in a longer one.
+std::wstring BannerText(CandidateHealthState state) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (!g_health_banner_text_for_test.empty()) return g_health_banner_text_for_test;
+#endif
+  return HealthBannerText(state);
 }
 
 HMODULE GetTipModuleHandle() {
@@ -178,6 +194,15 @@ class Painter {
     context_->DrawRectangle(D2D1::RectF(0.5f, 0.5f, static_cast<FLOAT>(width) - 0.5f,
                                         static_cast<FLOAT>(height) - 0.5f),
                             brush_.Get());
+  }
+
+  // A one-pixel border along the inside of a rect (the banner buttons).
+  void Outline(const RECT& rect, COLORREF color) {
+    brush_->SetColor(ToColorF(color));
+    context_->DrawRectangle(
+        D2D1::RectF(static_cast<FLOAT>(rect.left) + 0.5f, static_cast<FLOAT>(rect.top) + 0.5f,
+                    static_cast<FLOAT>(rect.right) - 0.5f, static_cast<FLOAT>(rect.bottom) - 0.5f),
+        brush_.Get());
   }
 
   void Text(const std::wstring& text, IDWriteTextFormat* format, const RECT& rect, COLORREF color) {
@@ -363,6 +388,11 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 
 // static
+void CandidateWindow::SetHealthBannerTextForTest(const std::wstring& text) {
+  g_health_banner_text_for_test = text;
+}
+
+// static
 POINT CandidateWindow::LastMonitorPointForTest() { return g_last_monitor_point_for_test; }
 
 // static
@@ -484,6 +514,64 @@ int CandidateWindow::MeasureText(const std::wstring& text) const {
   return static_cast<int>(std::ceil(measured.widthIncludingTrailingWhitespace));
 }
 
+int CandidateWindow::MeasureWrappedLines(const std::wstring& text, int width) const {
+  if (!text_style_ || text.empty() || width <= 0) return 1;
+  ComPtr<IDWriteTextLayout> layout;
+  DWRITE_TEXT_METRICS measured{};
+  if (FAILED(text_style_->factory->CreateTextLayout(
+          text.c_str(), static_cast<UINT32>(text.size()), text_style_->wrapped.Get(),
+          static_cast<FLOAT>(width), 100000.0f, &layout)) ||
+      FAILED(layout->GetMetrics(&measured)))
+    return 1;
+  return std::max(1, static_cast<int>(measured.lineCount));
+}
+
+int CandidateWindow::MeasureWrappedHeight(const std::wstring& text, int width) const {
+  if (!text_style_ || text.empty() || width <= 0) return 0;
+  ComPtr<IDWriteTextLayout> layout;
+  DWRITE_TEXT_METRICS measured{};
+  if (FAILED(text_style_->factory->CreateTextLayout(
+          text.c_str(), static_cast<UINT32>(text.size()), text_style_->wrapped.Get(),
+          static_cast<FLOAT>(width), 100000.0f, &layout)) ||
+      FAILED(layout->GetMetrics(&measured)))
+    return 0;
+  return static_cast<int>(std::ceil(measured.height));
+}
+
+int CandidateWindow::HealthBannerTextBottom(int width) const {
+  const int top = HealthBannerTop() + ScaleForDpi(3, dpi_);
+  const int rows_bottom = HealthBannerTop() + metrics_.item_height * health_banner_lines_;
+  if (!text_style_) return rows_bottom;
+  const std::wstring text = BannerText(health_state_);
+  ComPtr<IDWriteTextLayout> layout;
+  if (text.empty() ||
+      FAILED(text_style_->factory->CreateTextLayout(
+          text.c_str(), static_cast<UINT32>(text.size()), text_style_->wrapped.Get(),
+          static_cast<FLOAT>(std::max(1, width - metrics_.horizontal_padding * 2)), 100000.0f,
+          &layout)))
+    return rows_bottom;
+  // A short buffer fills nothing and only reports the count, so ask for every line.
+  UINT32 count = 0;
+  HRESULT hr = layout->GetLineMetrics(nullptr, 0, &count);
+  if (hr != E_NOT_SUFFICIENT_BUFFER || count == 0) return rows_bottom;
+  std::vector<DWRITE_LINE_METRICS> lines(count);
+  if (FAILED(hr = layout->GetLineMetrics(lines.data(), count, &count))) return rows_bottom;
+  float height = 0.0f;
+  for (UINT32 i = 0; i < std::min<UINT32>(count, kMaxBannerLines); ++i) height += lines[i].height;
+  return std::min(rows_bottom, top + static_cast<int>(std::ceil(height)));
+}
+
+// static
+int CandidateWindow::ComputeDetailsWidth(int candidate_width, UINT dpi) {
+  return std::clamp(candidate_width, ScaleForDpi(kBaseDetailsMinWidth, dpi),
+                    ScaleForDpi(kBaseDetailsMaxWidth, dpi));
+}
+
+// static
+int CandidateWindow::ComputeHealthBannerHeight(int text_lines, int item_height) {
+  return item_height * (std::clamp(text_lines, 1, kMaxBannerLines) + 1);
+}
+
 void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
                            std::wstring notice) {
   if (!hwnd_ || items.empty()) return;
@@ -519,27 +607,42 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
                        metrics_.max_width);
   width =
       std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
+  // The banner wraps at the window's width and does not widen it, except to fit
+  // its two buttons (native-ui-spec §4.1).
+  const auto measure_banner = [&] {
+    if (!health_banner_visible_) return;
+    width = std::max(width, ScaleForDpi(kBaseBannerMinWidth, dpi_));
+    health_banner_lines_ = std::min(
+        kMaxBannerLines,
+        MeasureWrappedLines(BannerText(health_state_), width - metrics_.horizontal_padding * 2));
+  };
+  measure_banner();
   // Keep the window inside the work area's height: draw only the rows that fit
   // and follow the selection with them (native-ui-spec §4.1).
   const int count = static_cast<int>(items_.size());
-  const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
-                           (secure_toast_visible_ ? metrics_.item_height : 0) +
-                           (health_banner_visible_ ? HealthBannerHeight() : 0);
-  visible_rows_ =
-      ComputeVisibleRows(count, metrics_.item_height, other_height,
-                         static_cast<int>(monitor.work_area.bottom - monitor.work_area.top));
-  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, count, visible_rows_);
+  const int work_height = static_cast<int>(monitor.work_area.bottom - monitor.work_area.top);
+  const auto fit_rows = [&] {
+    const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
+                             (secure_toast_visible_ ? metrics_.item_height : 0) +
+                             (health_banner_visible_ ? HealthBannerHeight() : 0);
+    visible_rows_ = ComputeVisibleRows(count, metrics_.item_height, other_height, work_height);
+    first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, count, visible_rows_);
+  };
+  fit_rows();
   if (HasPositionRow()) {
     // The widest position, so the width stays put while the selection moves.
     const std::wstring widest = std::to_wstring(count) + L"/" + std::to_wstring(count);
-    width = std::min(std::max(width, MeasureText(widest) + metrics_.horizontal_padding * 2),
-                     metrics_.max_width);
+    const int position_width =
+        std::min(MeasureText(widest) + metrics_.horizontal_padding * 2, metrics_.max_width);
+    if (position_width > width) {
+      // A wider window may wrap the banner into fewer lines and fit more rows.
+      width = position_width;
+      measure_banner();
+      fit_rows();
+    }
   }
   int height = HealthBannerTop();
-  if (health_banner_visible_) {
-    width = std::max(width, ScaleForDpi(480, dpi_));
-    height += HealthBannerHeight();
-  }
+  if (health_banner_visible_) height += HealthBannerHeight();
   PresentAt(pt, monitor.work_area, width, height, metrics_.caret_gap);
 }
 
@@ -725,8 +828,13 @@ bool CandidateWindow::ShowDetails() {
       DefaultMonitorWin32Api(), {candidate_rc.left + (candidate_rc.right - candidate_rc.left) / 2,
                                  candidate_rc.top + (candidate_rc.bottom - candidate_rc.top) / 2});
   if (monitor.work_area.right <= monitor.work_area.left) return false;
-  const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area,
-                                                 ScaleForDpi(480, dpi_), ScaleForDpi(240, dpi_));
+  // The candidate window's width within 320..480 at 96 DPI, and the measured
+  // text's height plus the close row; ComputeDetailsPlacement keeps it in the work area.
+  const int width = ComputeDetailsWidth(candidate_rc.right - candidate_rc.left, dpi_);
+  const int height = MeasureWrappedHeight(HealthDetailsText(health_state_),
+                                          width - metrics_.horizontal_padding * 2) +
+                     metrics_.horizontal_padding * 2 + metrics_.item_height;
+  const RECT placement = ComputeDetailsPlacement(candidate_rc, monitor.work_area, width, height);
   details_hwnd_ = CreateWindowExW(
       WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
       kDetailsClassName, nullptr, WS_POPUP, placement.left, placement.top,
@@ -824,7 +932,9 @@ void CandidateWindow::ResizeAtLastAnchor() {
   if (!items_.empty()) Show(last_anchor_, items_, selected_idx_, notice_);
 }
 
-int CandidateWindow::HealthBannerHeight() const { return metrics_.item_height * 3; }
+int CandidateWindow::HealthBannerHeight() const {
+  return ComputeHealthBannerHeight(health_banner_lines_, metrics_.item_height);
+}
 
 int CandidateWindow::FooterTop() const {
   // Prediction mode has nothing below its rows (native-ui-spec §4.2).
@@ -853,19 +963,25 @@ int CandidateWindow::SecureIndicatorWidth() const {
              : 0;
 }
 
+// The buttons sit on the banner's last row, right aligned, inset from the row's
+// top and bottom so their frames stand apart from the rows around them.
 RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
-  const int top = HealthBannerTop() + metrics_.item_height * 2;
-  const int button_width = ScaleForDpi(52, dpi_);
-  const int right =
-      width - metrics_.horizontal_padding -
-      (health_state_ == CandidateHealthState::DegradedModel ? ScaleForDpi(68, dpi_) : 0);
-  return {right - button_width, top, right, top + metrics_.item_height};
+  const int top = HealthBannerTop() + metrics_.item_height * health_banner_lines_;
+  const int inset = ScaleForDpi(2, dpi_);
+  const int right = health_state_ == CandidateHealthState::DegradedModel
+                        ? static_cast<int>(HealthRetryButtonRect(width).left) -
+                              ScaleForDpi(kBaseBannerButtonGap, dpi_)
+                        : width - metrics_.horizontal_padding;
+  return {right - ScaleForDpi(kBaseBannerButtonWidth, dpi_), top + inset, right,
+          top + metrics_.item_height - inset};
 }
 
 RECT CandidateWindow::HealthRetryButtonRect(int width) const {
-  const int top = HealthBannerTop() + metrics_.item_height * 2;
+  const int top = HealthBannerTop() + metrics_.item_height * health_banner_lines_;
+  const int inset = ScaleForDpi(2, dpi_);
   const int right = width - metrics_.horizontal_padding;
-  return {right - ScaleForDpi(60, dpi_), top, right, top + metrics_.item_height};
+  return {right - ScaleForDpi(kBaseBannerButtonWidth, dpi_), top + inset, right,
+          top + metrics_.item_height - inset};
 }
 
 CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) const {
@@ -1109,11 +1225,18 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
     text_rc.left += metrics_.horizontal_padding;
     text_rc.right -= metrics_.horizontal_padding;
     text_rc.top += ScaleForDpi(3, dpi_);
-    text_rc.bottom = banner_rc.bottom - metrics_.item_height;
-    paint.Text(HealthBannerText(health_state_), style.wrapped.Get(), text_rc, theme_.info_text);
-    paint.Text(L"[詳細]", style.centered.Get(), HealthDetailsButtonRect(width), theme_.info_text);
+    text_rc.bottom = HealthBannerTextBottom(width);
+    // The box holds exactly three of the font's lines, so a longer text ends in
+    // an ellipsis instead of a fourth line squeezed into the rows' height.
+    paint.Text(BannerText(health_state_), style.wrapped.Get(), text_rc, theme_.info_text);
+    // Framed buttons, so they read as something to press (native-ui-spec §4.1).
+    const RECT details_rc = HealthDetailsButtonRect(width);
+    paint.Outline(details_rc, theme_.border);
+    paint.Text(L"詳細", style.centered.Get(), details_rc, theme_.info_text);
     if (health_state_ == CandidateHealthState::DegradedModel) {
-      paint.Text(L"[再試行]", style.centered.Get(), HealthRetryButtonRect(width),
+      const RECT retry_rc = HealthRetryButtonRect(width);
+      paint.Outline(retry_rc, theme_.border);
+      paint.Text(L"再試行", style.centered.Get(), retry_rc,
                  retry_in_flight_ ? theme_.sub_text : theme_.info_text);
     }
   }
@@ -1200,8 +1323,34 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
   // as a case in HandleMessage: clang-cl 19 for ARM64 fails with "assembler
   // label '' can not be undefined" when that switch gains it.
   if (msg == WM_ERASEBKGND) return 1;
+  // Kept out of HandleMessage for the same clang-cl 19 ARM64 failure.
+  if (self && msg == WM_SETCURSOR && self->SetHandCursor(hwnd, lParam)) return TRUE;
+  if (self && ((msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA) || msg == WM_DISPLAYCHANGE))
+    self->OnWorkAreaChanged();
   if (self) return self->HandleMessage(hwnd, msg, wParam, lParam);
   return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool CandidateWindow::SetHandCursor(HWND hwnd, LPARAM lParam) {
+  // The hand over the banner buttons; the keys never press them (native-ui-spec §4.1).
+  if (LOWORD(lParam) != HTCLIENT || render_failed_) return false;
+  POINT cursor{};
+  RECT client_rc{};
+  if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd, &cursor) ||
+      !GetClientRect(hwnd, &client_rc) ||
+      !UsesHandCursor(HitTest(CurrentHitLayout(client_rc.right), cursor).target))
+    return false;
+  SetCursor(LoadCursorW(nullptr, IDC_HAND));
+  return true;
+}
+
+void CandidateWindow::OnWorkAreaChanged() {
+  // The taskbar or the resolution changed: the rows that fit and the placement
+  // come from the work area, so a shown window is measured again at its anchor.
+  if (!IsVisible() && !render_failed_) return;
+  // The popup was placed against the old window and work area; it closes.
+  HideDetails();
+  ResizeAtLastAnchor();
 }
 
 LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

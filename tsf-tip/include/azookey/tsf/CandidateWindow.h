@@ -134,6 +134,16 @@ class CandidateWindow {
     int first_index{0};
   };
   static Hit HitTest(const HitLayout& layout, POINT point);
+  // The banner buttons show the hand cursor while the pointer is over them.
+  static bool UsesHandCursor(HitTarget target) {
+    return target == HitTarget::HealthDetailsButton || target == HitTarget::HealthRetryButton;
+  }
+  // Width of the details popup: the candidate window's, kept within 320 to 480
+  // pixels at 96 DPI (native-ui-spec §4.1).
+  static int ComputeDetailsWidth(int candidate_width, UINT dpi);
+  // Height of the health banner: its measured text lines, at most three, and one
+  // row of buttons.
+  static int ComputeHealthBannerHeight(int text_lines, int item_height);
 
   // How many candidate rows fit (native-ui-spec §4.1): every row when the rows
   // and the other_height of the elements below them fit work_height, otherwise
@@ -199,6 +209,14 @@ class CandidateWindow {
   CandidateHealthState health_state_for_test() const { return health_state_; }
   int footer_top_for_test() const { return FooterTop(); }
   int health_banner_top_for_test() const { return HealthBannerTop(); }
+  int health_banner_height_for_test() const { return HealthBannerHeight(); }
+  int health_banner_lines_for_test() const { return health_banner_lines_; }
+  int health_banner_text_bottom_for_test(int width) const { return HealthBannerTextBottom(width); }
+  // Stands in for the banner text of every state; empty restores the real text.
+  static void SetHealthBannerTextForTest(const std::wstring& text);
+  RECT health_details_button_for_test(int width) const { return HealthDetailsButtonRect(width); }
+  RECT health_retry_button_for_test(int width) const { return HealthRetryButtonRect(width); }
+  HWND details_hwnd_for_test() const { return details_hwnd_; }
   // Hit test against the window's current client width.
   Hit HitTestForTest(POINT point) const;
   // Pretends every monitor has this DPI; 0 restores the real lookup.
@@ -261,6 +279,13 @@ class CandidateWindow {
   static constexpr UINT_PTR kSecureToastTimer = 0x4b4;
   static constexpr UINT kSecureToastDurationMs = 5000;
   static constexpr int kBaseSecureIndicatorWidth = 24;
+  // [詳細] and [再試行] side by side with the padding fill this width.
+  static constexpr int kBaseBannerMinWidth = 240;
+  static constexpr int kBaseBannerButtonWidth = 108;
+  static constexpr int kBaseBannerButtonGap = 8;
+  static constexpr int kMaxBannerLines = 3;
+  static constexpr int kBaseDetailsMinWidth = 320;
+  static constexpr int kBaseDetailsMaxWidth = 480;
 
   HWND hwnd_{nullptr};
   HWND details_hwnd_{nullptr};
@@ -293,6 +318,7 @@ class CandidateWindow {
   ThemeColors theme_{kLightTheme};
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
   bool health_banner_visible_{false};
+  int health_banner_lines_{1};        // Measured lines of the banner text at the window width.
   ULONGLONG health_banner_until_{0};  // GetTickCount64 deadline of the last banner.
   bool retry_in_flight_{false};
   bool secure_indicator_visible_{false};
@@ -322,10 +348,16 @@ class CandidateWindow {
   // null after WM_DESTROY, but trailing messages like WM_NCDESTROY still need
   // a valid handle for DefWindowProcW).
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  // True when the pointer is over a banner button and the hand cursor was set.
+  bool SetHandCursor(HWND hwnd, LPARAM lParam);
+  void OnWorkAreaChanged();
   void UpdateDpi(UINT dpi);
   void UpdateTheme();
   void Repaint();
   int MeasureText(const std::wstring& text) const;
+  // Lines and height of text wrapped at this width with the banner format.
+  int MeasureWrappedLines(const std::wstring& text, int width) const;
+  int MeasureWrappedHeight(const std::wstring& text, int width) const;
   // Draws the window at this client size and commits it (native-ui-spec §4.1).
   bool Render(int width, int height);
   // Fades a window that is about to appear in, or shows it at full opacity when
@@ -350,6 +382,8 @@ class CandidateWindow {
   bool ShowDetails();
   void HideDetails();
   int HealthBannerHeight() const;
+  // Bottom of the banner text box: the first three of the font's lines.
+  int HealthBannerTextBottom(int width) const;
   // The "3/12" row below the candidate rows when not every candidate is drawn.
   bool HasPositionRow() const;
   std::wstring PositionText() const;

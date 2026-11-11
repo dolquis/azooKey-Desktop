@@ -43,7 +43,7 @@ struct ModelFetchResult {
 std::string_view ModelFetchStatusName(ModelFetchStatus status);
 
 struct ModelFetchHooks {
-  // Cooperative cancellation, passed to the downloader as HttpDownloadRequest::cancelled.
+  // Cancellation, passed to the downloader as HttpDownloadRequest::cancelled.
   std::function<bool()> cancelled;
   // Bytes received so far and the full size, on the calling thread while the download runs.
   // The full size is the response's Content-Length, or the entry's sizeBytes without one.

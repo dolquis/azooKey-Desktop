@@ -336,3 +336,85 @@ Describe "WiX MSI package consistency" {
     $script:rootReadme | Should -Match '不明な発行元'
   }
 }
+
+Describe "Vulkan add-on MSI consistency" {
+  BeforeAll {
+    $repoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
+    $script:basePackage = Get-Content -Raw (Join-Path $repoRoot "pkg\msi\Package.wxs")
+    $script:addonProject = Get-Content -Raw (Join-Path $repoRoot "pkg\msi-vulkan\azooKey.VulkanAddon.wixproj")
+    [xml]$script:addonXml = Get-Content -Raw (Join-Path $repoRoot "pkg\msi-vulkan\VulkanAddon.wxs")
+    [xml]$script:baseXml = $script:basePackage
+    $script:ns = [Xml.XmlNamespaceManager]::new($script:addonXml.NameTable)
+    $script:ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $script:baseNs = [Xml.XmlNamespaceManager]::new($script:baseXml.NameTable)
+    $script:baseNs.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $script:supervisor = Get-Content -Raw (Join-Path $repoRoot "scripts\host-supervisor.ps1")
+    $script:waiter = Get-Content -Raw (Join-Path $repoRoot "scripts\wait-installed-host.ps1")
+  }
+
+  It "keeps the Vulkan host out of the base MSI" {
+    $script:basePackage | Should -Not -Match '(?i)vulkan'
+  }
+
+  It "is a separate per-machine x64 package with its own upgrade code" {
+    $script:addonProject | Should -Match 'Project Sdk="WixToolset\.Sdk/7\.0\.0"'
+    $script:addonProject | Should -Match '<InstallerPlatform>x64</InstallerPlatform>'
+    $script:addonProject | Should -Match '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'
+    $addon = $script:addonXml.SelectSingleNode('/w:Wix/w:Package', $script:ns)
+    $base = $script:baseXml.SelectSingleNode('/w:Wix/w:Package', $script:baseNs)
+    $addon.Scope | Should -Be 'perMachine'
+    $addon.Version | Should -Be '$(ProductVersion)'
+    $addon.UpgradeCode | Should -Match '^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$'
+    $addon.UpgradeCode | Should -Not -Be $base.UpgradeCode
+  }
+
+  It "installs only the renamed host and attribution beside the base host" {
+    $files = @($script:addonXml.SelectNodes('//w:File', $script:ns))
+    ($files | ForEach-Object Name | Sort-Object) -join ',' |
+      Should -Be 'azookey_inference_host_vulkan.exe,THIRD_PARTY_LICENSES-vulkan-addon.txt'
+    $script:addonXml.SelectSingleNode('//w:Directory[@Id="INSTALLFOLDER"]', $script:ns).Name | Should -Be 'azooKey'
+    $script:baseXml.SelectSingleNode('//w:Directory[@Id="INSTALLFOLDER"]', $script:baseNs).Name | Should -Be 'azooKey'
+    $set = $script:addonXml.SelectSingleNode('//w:SetDirectory[@Id="INSTALLFOLDER"]', $script:ns)
+    $set.Value | Should -Be '[BASEINSTALLDIR]'
+    $script:addonProject | Should -Match "!= 'azookey_inference_host_vulkan\.exe'"
+    # The supervisor and the MSI shutdown waiter look for the same file name.
+    $script:supervisor | Should -Match '"azookey_inference_host_vulkan\.exe"'
+    $script:waiter | Should -Match 'azookey_inference_host_vulkan\.exe'
+    $script:addonXml.OuterXml | Should -Not -Match '(?i)vulkan-1\.dll|vcruntime|msvcp|vcomp'
+  }
+
+  It "requires the base install and its exact version" {
+    $searches = @{}
+    foreach ($property in $script:addonXml.SelectNodes('//w:Property[w:RegistrySearch]', $script:ns)) {
+      $search = $property.SelectSingleNode('w:RegistrySearch', $script:ns)
+      $search.Root | Should -Be 'HKLM'
+      $search.Key | Should -Be 'SOFTWARE\azooKey\HostStartup'
+      $search.Bitness | Should -Be 'always64'
+      $searches[$property.Id] = $search.Name
+    }
+    $searches['BASEINSTALLDIR'] | Should -Be 'InstallDirectory'
+    $searches['BASEPRODUCTVERSION'] | Should -Be 'ProductVersion'
+    $conditions = @($script:addonXml.SelectNodes('//w:Launch', $script:ns) | ForEach-Object Condition)
+    $conditions | Should -Contain 'Installed OR BASEINSTALLDIR'
+    $conditions | Should -Contain 'Installed OR BASEPRODUCTVERSION = "$(ProductVersion)"'
+  }
+
+  It "records both product versions where the supervisor compares them" {
+    $baseVersion = $script:baseXml.SelectSingleNode(
+      '//w:Component[@Id="HostStartupComponent"]/w:RegistryValue[@Name="ProductVersion"]', $script:baseNs)
+    $baseVersion.Key | Should -Be 'SOFTWARE\azooKey\HostStartup'
+    $baseVersion.Value | Should -Be '[ProductVersion]'
+    $addonVersion = $script:addonXml.SelectSingleNode('//w:RegistryValue[@Name="ProductVersion"]', $script:ns)
+    $addonVersion.Root | Should -Be 'HKLM'
+    $addonVersion.Key | Should -Be 'SOFTWARE\azooKey\VulkanAddon'
+    $addonVersion.Value | Should -Be '[ProductVersion]'
+    $addonVersion.ParentNode.Bitness | Should -Be 'always64'
+    $script:supervisor | Should -Match 'foreach \(\$key in "HostStartup", "VulkanAddon"\)'
+  }
+
+  It "references every component from the single feature" {
+    $components = @($script:addonXml.SelectNodes('//w:Component', $script:ns) | ForEach-Object Id)
+    $refs = @($script:addonXml.SelectNodes('//w:Feature/w:ComponentRef', $script:ns) | ForEach-Object Id)
+    ($refs | Sort-Object) -join ',' | Should -Be (($components | Sort-Object) -join ',')
+  }
+}

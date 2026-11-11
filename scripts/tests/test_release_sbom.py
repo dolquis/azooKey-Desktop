@@ -235,6 +235,92 @@ class ReleaseSbomTests(unittest.TestCase):
         self.assertIn('--version "$env:MSI_VERSION"', workflow)
         self.assertIn("python-version: '3.12'", workflow)
 
+    def make_vulkan_sdk(self):
+        sdk = self.root / "VulkanSDK" / "1.4.357.0"
+        for relative in ("Include/vulkan/vulkan_core.h", "Include/spirv/unified1/spirv.hpp"):
+            (sdk / relative).parent.mkdir(parents=True, exist_ok=True)
+            (sdk / relative).write_bytes(relative.encode())
+        with self.cache.open("a", encoding="utf-8") as stream:
+            stream.write(f"Vulkan_INCLUDE_DIR:PATH={(sdk / 'Include').as_posix()}\n")
+        return sdk
+
+    def generate_addon(self, sdk):
+        with patch.object(SBOM.subprocess, "check_output", side_effect=self.git):
+            return SBOM.complete(self.document, self.root, self.build, None, None, self.msi, "1.2.3",
+                                 "vulkan-addon", sdk)
+
+    def test_vulkan_addon_declares_host_sources_and_sdk_headers_only(self):
+        sdk = self.make_vulkan_sdk()
+        result = self.generate_addon(sdk)
+        packages = {x["name"]: x for x in result["packages"][1:]}
+        self.assertEqual(set(packages), {"llama.cpp", "WIL", "Vulkan-Headers", "SPIRV-Headers"})
+        self.assertEqual(packages["llama.cpp"]["versionInfo"], self.pins["AZOOKEY_LLAMA_CPP_GIT_TAG"])
+        self.assertEqual(packages["Vulkan-Headers"]["versionInfo"], "1.4.357.0")
+        self.assertEqual(packages["Vulkan-Headers"]["licenseDeclared"], "Apache-2.0 OR MIT")
+        self.assertEqual(packages["SPIRV-Headers"]["licenseDeclared"], "MIT")
+        self.assertEqual(packages["SPIRV-Headers"]["checksums"][0]["checksumValue"],
+                         SBOM.sha256(sdk / "Include/spirv/unified1/spirv.hpp"))
+        self.assertNotIn("hasExtractedLicensingInfos", {k for k, v in result.items() if v})
+        self.assertIn("Vulkan loader", result["annotations"][0]["comment"])
+
+    def test_base_sbom_excludes_vulkan_addon_attribution(self):
+        result = self.generate()
+        self.assertFalse({x["name"] for x in result["packages"]} & {"Vulkan-Headers", "SPIRV-Headers"})
+        self.assertIn("Vulkan add-on", result["annotations"][0]["comment"])
+
+    def test_vulkan_addon_rejects_another_sdk_and_missing_headers(self):
+        sdk = self.make_vulkan_sdk()
+        other = self.root / "VulkanSDK" / "1.4.300.0"
+        (other / "Include").mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, "did not use the supplied Vulkan SDK"):
+            self.generate_addon(other)
+        (sdk / "Include/spirv/unified1/spirv.hpp").unlink()
+        with self.assertRaisesRegex(ValueError, "header not found"):
+            self.generate_addon(sdk)
+        with self.assertRaisesRegex(ValueError, "named by its version"):
+            self.generate_addon(self.root / "VulkanSDK")
+
+    def test_package_arguments_and_selector_scope_are_enforced(self):
+        sdk = self.make_vulkan_sdk()
+        with self.assertRaisesRegex(ValueError, "only for, the Vulkan add-on"):
+            SBOM.complete(self.document, self.root, self.build, self.runtime_info, self.runtime_dirs,
+                          self.msi, "1.2.3", "base", sdk)
+        with self.assertRaisesRegex(ValueError, "only for, the base MSI"):
+            SBOM.complete(self.document, self.root, self.build, self.runtime_info, self.runtime_dirs,
+                          self.msi, "1.2.3", "vulkan-addon", sdk)
+        path = self.root / "THIRD_PARTY_LICENSES"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original.replace('"packages":["vulkan-addon"]}', '"packages":["base","vulkan-addon"]}', 1),
+                        encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "belongs to the Vulkan add-on"):
+            SBOM.inventory(self.root)
+        path.write_text(original.replace('"packages":["vulkan-addon"]}', '"packages":["cuda-addon"]}', 1),
+                        encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Unknown release package"):
+            SBOM.inventory(self.root)
+        # The add-on must declare the SDK headers and every pinned source it links.
+        without_sdk = re.sub(r"## 配布物へ同梱する Vulkan-Headers.*?(?=\n## 配布物へ同梱する MSVC)", "",
+                             original, flags=re.S)
+        without_wil = original.replace(
+            '"name":"WIL","license":"MIT","packages":["base","vulkan-addon"]}', '"name":"WIL","license":"MIT"}')
+        for text in (without_sdk, without_wil):
+            path.write_text(text, encoding="utf-8")
+            with self.subTest(text=len(text)), self.assertRaisesRegex(ValueError, "Vulkan SDK attribution coverage"):
+                SBOM.inventory(self.root, "vulkan-addon")
+
+    def test_cli_rejects_package_argument_mismatch_as_usage_error(self):
+        sdk = self.make_vulkan_sdk()
+        common = [sys.executable, str(ROOT / "scripts/complete-release-sbom.py"), "--root", str(self.root),
+                  "--build-dir", str(self.build), "--msi", str(self.msi), "--input", str(self.msi),
+                  "--output", str(self.root / "unused.json"), "--version", "1.2.3"]
+        runtime = ["--runtime-info", str(self.runtime_info), "--runtime-dir", str(self.crt_dir)]
+        for extra in ([], ["--vulkan-sdk", str(sdk)] + runtime, ["--package", "vulkan-addon"],
+                      ["--package", "vulkan-addon", "--vulkan-sdk", str(sdk)] + runtime):
+            with self.subTest(extra=extra):
+                result = subprocess.run(common + extra, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.root / "unused.json").exists())
+
     def test_attribution_does_not_copy_nuget_versions(self):
         text = (ROOT / "THIRD_PARTY_LICENSES").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"`Microsoft\.[^`]+`(?: NuGet package)? \d+\.\d+")

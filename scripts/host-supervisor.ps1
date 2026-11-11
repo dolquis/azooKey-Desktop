@@ -100,13 +100,33 @@ function Test-VulkanHost {
   }
 }
 
+function Test-VulkanAddonVersion {
+  param([string]$Directory)
+  # Development registration has no MSI and therefore no versions to compare.
+  if (-not $Directory) { return $true }
+  # The add-on MSI is separate from the base, so a base upgrade or a base-only
+  # uninstall can leave an add-on built for another version beside the base host.
+  $versions = foreach ($key in "HostStartup", "VulkanAddon") {
+    try {
+      $value = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\azooKey\$key" `
+        -Name "ProductVersion" -ErrorAction SilentlyContinue
+      if ($null -eq $value) { "" } else { [string]$value.ProductVersion }
+    } catch { "" }
+  }
+  $script:selectionDetail = "base_version=$($versions[0]); addon_version=$($versions[1])"
+  return [bool]$versions[0] -and $versions[0] -ceq $versions[1]
+}
+
 function Get-HostSelection {
-  param([string]$BasePath)
+  param([string]$BasePath, [string]$InstalledDirectory = "")
   $addon = Join-Path (Split-Path -Parent $BasePath) "azookey_inference_host_vulkan.exe"
   $reason = "addon_absent"
   $script:selectionDetail = ""
   $script:probeReason = "probe_failed"
-  if (Test-Path -LiteralPath $addon -PathType Leaf) {
+  if ((Test-Path -LiteralPath $addon -PathType Leaf) -and
+      -not (Test-VulkanAddonVersion -Directory $InstalledDirectory)) {
+    $reason = "addon_version_mismatch"
+  } elseif (Test-Path -LiteralPath $addon -PathType Leaf) {
     $reason = "loader_unavailable"
     $loaderAvailable = $false
     try { $loaderAvailable = Test-VulkanLoader } catch {
@@ -222,7 +242,7 @@ try {
       break
     }
 
-    $selection = Get-HostSelection -BasePath $HostExePath
+    $selection = Get-HostSelection -BasePath $HostExePath -InstalledDirectory $InstalledDirectory
     # Probe can take time. Do not launch after MSI has removed the registration.
     if (-not (Test-InstallationActive -Directory $InstalledDirectory)) { break }
     $stderrPath = ""

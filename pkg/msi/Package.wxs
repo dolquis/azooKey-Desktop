@@ -103,6 +103,8 @@
           <File Id="InstalledHostLauncher" Source="$(HostScriptsDir)\start-installed-host.ps1" />
           <RegistryValue Root="HKLM" Key="SOFTWARE\azooKey\HostStartup"
               Name="InstallDirectory" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+          <RegistryValue Root="HKLM" Key="SOFTWARE\azooKey\HostStartup"
+              Name="ProductVersion" Value="[ProductVersion]" Type="string" />
           <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               Name="azooKeyHost" Type="string"
               Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File &quot;[#InstalledHostLauncher]&quot;" />

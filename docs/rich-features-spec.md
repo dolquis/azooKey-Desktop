@@ -638,33 +638,6 @@ Envelope:
 TIP 側は受信スレッドで `push=true` を検出したら `request_id` から元リクエストを
 lookup し、該当ハンドラを呼ぶ。
 
-### X-4-3. ContextTracker
-
-TIP プロセス内で段落 / 直前文 / アプリ別履歴を保持する。
-
-予定ファイル: `tsf-tip/src/ContextTracker.h` / `.cpp`
-
-```cpp
-class ContextTracker {
-public:
-    // commit 時に履歴へ追加
-    void RecordCommit(std::string_view reading,
-                      std::string_view surface,
-                      uint64_t timestamp_ms,
-                      std::string_view app_id);
-
-    // 直近の段落（句点まで）
-    std::string CurrentParagraph(ITfContext* ctx) const;
-
-    // アプリ別の直近 commit N=20 件
-    std::vector<CommitRecord> RecentCommitsForApp(std::string_view app_id,
-                                                  size_t n) const;
-};
-```
-
-QueryCandidates / QueryPredictions / QueryLiveConversion で `context` フィールドに
-`CurrentParagraph` の結果を含める。`paragraph_context` 取得の実体はここ。
-
 ### X-4-4. ForegroundAppDetector
 
 入力先アプリの識別は `ForegroundAppDetector::Get()` を使う。型、owner thread、

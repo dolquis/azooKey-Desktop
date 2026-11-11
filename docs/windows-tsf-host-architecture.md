@@ -321,7 +321,6 @@ quarantine と保存の排他の契約は `docs/learning-data-management-spec.md
 
 ### Phase 5〜6 横断（`docs/rich-features-spec.md`）
 
-- `tsf-tip/src/ContextTracker.cpp` — 段落 / 直前文 / アプリ別履歴（予定。`docs/rich-features-spec.md` X-4-3）
 - `tsf-tip/src/ForegroundAppDetector.cpp` — 前面アプリ実行ファイル名取得
 - `tsf-tip/src/TypingTempoTracker.h` — タイピング速度推定（予定。roadmap M24 の横断、`docs/rich-features-spec.md` X-1-2）
 - `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表（予定。roadmap M17 の横断、`docs/rich-features-spec.md` X-3-1）

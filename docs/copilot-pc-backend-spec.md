@@ -356,7 +356,9 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   Vulkan 版の実行環境には Vulkan loader と対応ドライバーを要する。
 - R2 エンジン追加: `WinML`（ONNX Runtime GenAI + Windows ML）を追加。**具体 EP
   （QNN / OpenVINO / VitisAI / …）は enum 値化せず**、Windows ML の自動選択に委ねる。
-- `LoadModelRequest`（`ipc/include/azookey/ipc/Payloads.h`）に optional 予約 fields を追加:
+- `LoadModelRequest`（`ipc/include/azookey/ipc/Payloads.h`）に optional 予約 fields を追加
+  （予定。DEV-1769 が実装する。`Payloads.h` の `LoadModelRequest` は `path` / `backend` /
+  `n_gpu_layers` だけを持つ）:
   - `engine`: `"llama_cpp" | "winml"`（既定 `llama_cpp`、後方互換）
   - `ep_preference`: `"auto" | "npu" | "gpu" | "cpu"`（R2 のみ、既定 `auto`）
   - 既存 `n_gpu_layers` は R1（llama.cpp）専用として維持。

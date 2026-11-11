@@ -7,6 +7,21 @@
       `docs/copilot-pc-backend-spec.md`、
       `docs/dev-infrastructure-spec.md` §12 (M44 診断)
 
+## 0. 節とマイルストーンの対応
+
+本書の節と、その範囲を定める `plans/windows-port-roadmap.md` のマイルストーンの対応を次に示す。
+
+| 節 | マイルストーン |
+|---|---|
+| §1〜§2 | M45 |
+| §3（§3.1.2 を除く） | M45 |
+| §3.1.2 | 共通（GGUF 取得基盤） |
+| §4（§4.4 を除く） | M45 |
+| §4.4 | 共通（カタログ entry の取得 IPC） |
+| §5 | M45（backend 順位は M24 の決定に従う） |
+| §6〜§7 | M45 |
+| §8〜§10 | M45 |
+
 ## 1. 目的
 
 Zenzai モデル（R1=GGUF / R2=ONNX Runtime GenAI ディレクトリ。

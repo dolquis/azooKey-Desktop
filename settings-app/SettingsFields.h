@@ -79,6 +79,17 @@ std::optional<std::string> ValidateSettingValue(const SettingField& field,
 
 // False while the field's `active_when` condition does not hold.
 bool IsSettingFieldActive(const SettingField& field, const SettingValues& values);
+bool IsSettingConditionMet(const SettingCondition& condition, const SettingValues& values);
+
+// The condition of the "OpenAI" section, which the API key box shares (aiBackend is openai).
+const SettingCondition& OpenAiCondition();
+
+// The switch whose closed Expander the field is drawn in (sideload-packaging-spec section 3.2):
+// a field after one of the detail switches (dynamicPunctuation, batchRomajiConversion,
+// inlineEnglishCandidates, bracketPairing) in the same pane and section. Empty for the other
+// fields and for the switches themselves. Folding only changes the layout; `active_when` still
+// decides whether a field is enabled.
+std::string_view CollapsingSwitch(const SettingField& field);
 
 // The entries of `edited` that differ from what was loaded (or the default when nothing valid
 // was loaded), so a save leaves untouched keys exactly as they are on disk.
@@ -98,5 +109,8 @@ std::string SettingLabelResource(std::string_view path);
 std::string SettingDescriptionResource(std::string_view path);
 std::string SettingOptionResource(std::string_view path, std::string_view option);
 std::string SettingSectionResource(std::string_view section);
+// The header of a switch's details Expander, and its accessible name ("{0}" is the switch).
+inline constexpr std::string_view kSettingDetailsHeaderResource = "SettingDetails_Header";
+inline constexpr std::string_view kSettingDetailsNameResource = "SettingDetails_Name";
 
 }  // namespace azookey::settings

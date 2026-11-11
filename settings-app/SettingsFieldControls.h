@@ -25,18 +25,26 @@ class SettingsFieldControls {
   bool Read(SettingValues* values, std::string* invalid_path) const;
   // Every valid field value, and the paths of enabled controls that hold no valid value.
   SettingValues ReadValid(std::vector<std::string>* invalid_paths) const;
-  // Moves keyboard focus to the field's control (its pane must already be shown).
+  // Moves keyboard focus to the field's control (its pane must already be shown), opening the
+  // details Expander the control is folded in.
   void Focus(std::string_view path) const;
+  // Whether the condition holds for the values the controls show now (not the saved ones).
+  bool ConditionHolds(const SettingCondition& condition) const;
+  // "「{0}」が「{1}」のときに使えます。" for the condition, for screen readers.
+  winrt::hstring ConditionText(const SettingCondition& condition) const;
 
  private:
   struct Entry {
     const SettingField* field;
     winrt::Microsoft::UI::Xaml::Controls::Control control{nullptr};
+    // The details Expander the control is folded in, or null.
+    winrt::Microsoft::UI::Xaml::Controls::Expander details{nullptr};
     winrt::hstring note;
     winrt::hstring inactive_reason;
   };
 
   void RefreshActiveStates();
+  SettingValues CurrentValues() const;
   std::optional<SettingValue> ReadEntry(const Entry& entry) const;
 
   std::vector<Entry> entries_;

@@ -317,6 +317,8 @@
   <data name="ClearSafeModeButton.Content" xml:space="preserve"><value>セーフモードを解除する</value></data>
   <data name="SafeModeClearPending" xml:space="preserve"><value>保存するとセーフモードを解除します。</value></data>
   <data name="InvalidSettingValue" xml:space="preserve"><value>次の設定の値が正しくありません: </value></data>
+  <data name="SettingDetails_Header" xml:space="preserve"><value>詳細設定</value></data>
+  <data name="SettingDetails_Name" xml:space="preserve"><value>「{0}」の詳細設定</value></data>
   <data name="SettingInactiveUntilOn" xml:space="preserve"><value>「{0}」をオンにすると使えます。</value></data>
   <data name="SettingInactiveUntilValue" xml:space="preserve"><value>「{0}」が「{1}」のときに使えます。</value></data>
   <data name="ClearSafeModeLabel" xml:space="preserve"><value>セーフモードを解除する</value></data>

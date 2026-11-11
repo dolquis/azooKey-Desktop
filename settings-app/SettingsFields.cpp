@@ -63,7 +63,7 @@ std::vector<SettingField> BuildFields() {
   const SettingCondition brackets{"bracketPairing", "true"};
   const SettingCondition mining{"autoWordRegistration.miningEnabled", "true"};
   const SettingCondition trending{"autoWordRegistration.trendingEnabled", "true"};
-  const SettingCondition openai{"aiBackend", "openai"};
+  const SettingCondition openai = OpenAiCondition();
   const SettingCondition custom_privacy{"privacy.mode", "custom"};
   const SettingCondition auto_update{"autoUpdate.enabled", "true"};
 
@@ -308,18 +308,51 @@ std::optional<std::string> ValidateSettingValue(const SettingField& field,
   return "wrong type";
 }
 
-bool IsSettingFieldActive(const SettingField& field, const SettingValues& values) {
-  if (!field.active_when) return true;
-  const auto* condition = FindSettingField(field.active_when->path);
-  if (!condition) return true;
-  const auto value = SettingValueOrDefault(*condition, values);
+bool IsSettingConditionMet(const SettingCondition& condition, const SettingValues& values) {
+  const auto* parent = FindSettingField(condition.path);
+  if (!parent) return true;
+  const auto value = SettingValueOrDefault(*parent, values);
   if (const auto* flag = std::get_if<bool>(&value)) {
-    return (*flag ? "true" : "false") == field.active_when->equals;
+    return (*flag ? "true" : "false") == condition.equals;
   }
   if (const auto* text = std::get_if<std::string>(&value)) {
-    return *text == field.active_when->equals;
+    return *text == condition.equals;
   }
   return true;
+}
+
+bool IsSettingFieldActive(const SettingField& field, const SettingValues& values) {
+  return !field.active_when || IsSettingConditionMet(*field.active_when, values);
+}
+
+const SettingCondition& OpenAiCondition() {
+  static const SettingCondition condition{"aiBackend", "openai"};
+  return condition;
+}
+
+std::string_view CollapsingSwitch(const SettingField& field) {
+  static const auto switches = [] {
+    // The fields after one of these switches in its pane and section are its details.
+    constexpr std::string_view kDetailSwitches[] = {"dynamicPunctuation", "batchRomajiConversion",
+                                                    "inlineEnglishCandidates", "bracketPairing"};
+    std::map<std::string_view, std::string_view, std::less<>> under;
+    std::string_view current;
+    const SettingField* previous = nullptr;
+    for (const auto& entry : GenericSettingFields()) {
+      if (previous && (previous->pane != entry.pane || previous->section != entry.section)) {
+        current = {};
+      }
+      if (!current.empty()) under.emplace(entry.path, current);
+      if (std::find(std::begin(kDetailSwitches), std::end(kDetailSwitches), entry.path) !=
+          std::end(kDetailSwitches)) {
+        current = entry.path;
+      }
+      previous = &entry;
+    }
+    return under;
+  }();
+  const auto found = switches.find(field.path);
+  return found == switches.end() ? std::string_view{} : found->second;
 }
 
 SettingValues ChangedSettingValues(const SettingValues& edited, const SettingValues& loaded) {

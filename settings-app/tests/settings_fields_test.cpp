@@ -188,6 +188,73 @@ TEST(SettingsFieldsTest, PrivacyAxesAreActiveOnlyInCustomMode) {
   EXPECT_FALSE(azookey::settings::IsSettingFieldActive(*axis, values));
 }
 
+TEST(SettingsFieldsTest, DetailsFoldUnderTheirSwitchInTheSameSection) {
+  // sideload-packaging-spec section 3.2: the details of four switches are folded in a closed
+  // Expander under the switch. Folding is layout only; the conditions stay as they are.
+  using azookey::settings::CollapsingSwitch;
+  const auto& fields = azookey::settings::GenericSettingFields();
+  std::set<std::string_view> switches;
+  for (size_t index = 0; index < fields.size(); ++index) {
+    const auto& field = fields[index];
+    const auto parent_path = CollapsingSwitch(field);
+    if (parent_path.empty()) continue;
+    SCOPED_TRACE(std::string(field.path));
+    switches.insert(parent_path);
+    const auto parent = std::find_if(fields.begin(), fields.begin() + index,
+                                     [&](const auto& other) { return other.path == parent_path; });
+    ASSERT_NE(parent, fields.begin() + index) << "the switch comes first";
+    EXPECT_EQ(parent->kind, SettingKind::Bool);
+    EXPECT_EQ(parent->pane, field.pane);
+    EXPECT_EQ(parent->section, field.section);
+    EXPECT_TRUE(CollapsingSwitch(*parent).empty()) << "the switch itself stays out";
+  }
+  EXPECT_EQ(switches, (std::set<std::string_view>{"dynamicPunctuation", "batchRomajiConversion",
+                                                  "inlineEnglishCandidates", "bracketPairing"}));
+
+  const auto under = [](std::string_view path) {
+    return CollapsingSwitch(*azookey::settings::FindSettingField(path));
+  };
+  // Before the switch in its section, and in other sections, a field stays out.
+  EXPECT_TRUE(under("punctuationConversion").empty());
+  EXPECT_TRUE(under("inputMode").empty());
+  EXPECT_TRUE(under("maxCandidates").empty());
+  EXPECT_TRUE(under("emojiMaxCandidates").empty());
+  EXPECT_TRUE(under("autoUpdate.channel").empty());
+  EXPECT_EQ(under("batchAutoPunctuation"), "batchRomajiConversion");
+  // All of "英単語候補", including the options without a condition on the switch.
+  EXPECT_EQ(under("inlineEnglishCaseVariants"), "inlineEnglishCandidates");
+  EXPECT_EQ(under("inlineEnglishDictionaryPath"), "inlineEnglishCandidates");
+  EXPECT_FALSE(azookey::settings::FindSettingField("inlineEnglishCaseVariants")->active_when);
+
+  const auto names = ResourceNames();
+  EXPECT_TRUE(names.contains(std::string(azookey::settings::kSettingDetailsHeaderResource)));
+  EXPECT_TRUE(names.contains(std::string(azookey::settings::kSettingDetailsNameResource)));
+}
+
+TEST(SettingsFieldsTest, TheApiKeyFollowsTheOpenAiSection) {
+  // The key box sits after the generated "OpenAI" section, the last of "AI サービス", and shares
+  // its condition (sideload-packaging-spec section 3.2).
+  const auto& condition = azookey::settings::OpenAiCondition();
+  const azookey::settings::SettingField* last = nullptr;
+  for (const auto& field : azookey::settings::GenericSettingFields()) {
+    if (field.pane == azookey::settings::SettingsPane::AiService) last = &field;
+    if (field.section == "OpenAi") {
+      ASSERT_TRUE(field.active_when) << field.path;
+      EXPECT_EQ(field.active_when->path, condition.path);
+      EXPECT_EQ(field.active_when->equals, condition.equals);
+    }
+  }
+  ASSERT_NE(last, nullptr);
+  EXPECT_EQ(last->section, "OpenAi");
+
+  azookey::settings::SettingValues values;
+  EXPECT_FALSE(azookey::settings::IsSettingConditionMet(condition, values));  // default "none"
+  values["aiBackend"] = std::string("openai");
+  EXPECT_TRUE(azookey::settings::IsSettingConditionMet(condition, values));
+  values["aiBackend"] = std::string("local-zenzai");
+  EXPECT_FALSE(azookey::settings::IsSettingConditionMet(condition, values));
+}
+
 TEST(SettingsFieldsTest, AutoUpdateIsOptInAndItsOptionsFollowTheSwitch) {
   // M32 (DEV-1934): the update check is off by default; channel and interval have no effect
   // until it is on.

@@ -116,6 +116,10 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
   ResourceLoader resources;
   std::string_view section;
   std::optional<SettingsPane> pane;
+  // The details Expander of the switch the current fields fold under.
+  std::string_view details_switch;
+  controls::Expander details{nullptr};
+  controls::StackPanel details_panel{nullptr};
   for (const auto& field : GenericSettingFields()) {
     auto panel = panels(field.pane);
     if (pane != field.pane || section != field.section) {
@@ -124,6 +128,31 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
       pane = field.pane;
       section = field.section;
     }
+    const auto folds_under = CollapsingSwitch(field);
+    if (folds_under.empty()) {
+      details = nullptr;
+      details_switch = {};
+    } else if (folds_under != details_switch) {
+      details_switch = folds_under;
+      details = controls::Expander();
+      details.Header(
+          winrt::box_value(Resource(resources, std::string(kSettingDetailsHeaderResource))));
+      details.IsExpanded(false);
+      details.HorizontalAlignment(xaml::HorizontalAlignment::Stretch);
+      details.HorizontalContentAlignment(xaml::HorizontalAlignment::Stretch);
+      std::wstring name(Resource(resources, std::string(kSettingDetailsNameResource)));
+      if (const auto at = name.find(L"{0}"); at != std::wstring::npos) {
+        name.replace(at, 3, Resource(resources, SettingLabelResource(folds_under)));
+      }
+      xaml::Automation::AutomationProperties::SetName(details, winrt::hstring(name));
+      xaml::Automation::AutomationProperties::SetAutomationId(
+          details, winrt::to_hstring(folds_under) + L".details");
+      details_panel = controls::StackPanel();
+      details_panel.Spacing(16);
+      details.Content(details_panel);
+      panel.Children().Append(details);
+    }
+    if (details) panel = details_panel;
     const auto label = winrt::box_value(Resource(resources, SettingLabelResource(field.path)));
     controls::Control control{nullptr};
     switch (field.kind) {
@@ -189,6 +218,7 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
     xaml::Automation::AutomationProperties::SetAutomationId(control, winrt::to_hstring(field.path));
     panel.Children().Append(control);
     Entry entry{&field, control};
+    entry.details = details;
     if (field.described) {
       entry.note = Resource(resources, SettingDescriptionResource(field.path));
       panel.Children().Append(Note(entry.note));
@@ -290,11 +320,24 @@ bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_pat
   return true;
 }
 
-void SettingsFieldControls::RefreshActiveStates() {
+SettingValues SettingsFieldControls::CurrentValues() const {
   SettingValues current;
   for (const auto& entry : entries_) {
     if (auto value = ReadEntry(entry)) current[std::string(entry.field->path)] = std::move(*value);
   }
+  return current;
+}
+
+bool SettingsFieldControls::ConditionHolds(const SettingCondition& condition) const {
+  return IsSettingConditionMet(condition, CurrentValues());
+}
+
+winrt::hstring SettingsFieldControls::ConditionText(const SettingCondition& condition) const {
+  return InactiveReason(ResourceLoader(), condition);
+}
+
+void SettingsFieldControls::RefreshActiveStates() {
+  const auto current = CurrentValues();
   for (const auto& entry : entries_) {
     const bool active = IsSettingFieldActive(*entry.field, current);
     entry.control.IsEnabled(active);
@@ -309,6 +352,11 @@ void SettingsFieldControls::RefreshActiveStates() {
 void SettingsFieldControls::Focus(std::string_view path) const {
   for (const auto& entry : entries_) {
     if (entry.field->path != path) continue;
+    // A folded control has no layout until its Expander opens.
+    if (entry.details && !entry.details.IsExpanded()) {
+      entry.details.IsExpanded(true);
+      entry.details.UpdateLayout();
+    }
     entry.control.StartBringIntoView();
     entry.control.Focus(xaml::FocusState::Programmatic);
     return;

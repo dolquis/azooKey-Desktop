@@ -8,11 +8,14 @@
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.NumberFormatting.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -62,6 +65,29 @@ controls::NumberBox NumberControl(const SettingField& field) {
   formatter.IsGrouped(false);
   box.NumberFormatter(formatter);
   return box;
+}
+
+// The text box inside a number box's template, once the template is applied.
+controls::TextBox InputBoxOf(const xaml::DependencyObject& parent) {
+  const int32_t count = xaml::Media::VisualTreeHelper::GetChildrenCount(parent);
+  for (int32_t index = 0; index < count; ++index) {
+    const auto child = xaml::Media::VisualTreeHelper::GetChild(parent, index);
+    if (const auto text = child.try_as<controls::TextBox>()) return text;
+    if (const auto nested = InputBoxOf(child)) return nested;
+  }
+  return nullptr;
+}
+
+// The number box's value, or what is typed into it while it is being edited: WinUI commits the
+// typed text to Value only on Enter or when focus leaves, so a close or a save bar count taken
+// before that would miss it. NaN when the typed text is not a number.
+double CurrentNumber(const controls::NumberBox& box) {
+  const double value = box.Value();
+  const auto input = InputBoxOf(box);
+  if (!input || input.FocusState() == xaml::FocusState::Unfocused) return value;
+  const winrt::hstring text = input.Text();
+  if (std::isfinite(value) && text == box.NumberFormatter().FormatDouble(value)) return value;
+  return ParseTypedNumber(text).value_or(std::numeric_limits<double>::quiet_NaN());
 }
 
 // Names the switch a disabled control waits for, for screen readers.
@@ -136,6 +162,15 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
         auto box = NumberControl(field);
         box.Header(label);
         box.ValueChanged([notify](auto&&, auto&&) { notify(); });
+        // Typing is counted before the value is committed; the inner text box exists once the
+        // template is applied, which is before it can take focus.
+        box.GotFocus([notify, hooked = std::make_shared<bool>(false)](auto const& sender, auto&&) {
+          if (*hooked) return;
+          if (const auto input = InputBoxOf(sender.as<xaml::DependencyObject>())) {
+            *hooked = true;
+            input.TextChanged([notify](auto&&, auto&&) { notify(); });
+          }
+        });
         control = box;
         break;
       }
@@ -211,12 +246,12 @@ std::optional<SettingValue> SettingsFieldControls::ReadEntry(const Entry& entry)
     }
     case SettingKind::Integer: {
       // An emptied NumberBox holds NaN.
-      const double number = entry.control.as<controls::NumberBox>().Value();
+      const double number = CurrentNumber(entry.control.as<controls::NumberBox>());
       if (!std::isfinite(number) || std::floor(number) != number) return std::nullopt;
       return static_cast<int64_t>(number);
     }
     case SettingKind::Number: {
-      const double number = entry.control.as<controls::NumberBox>().Value();
+      const double number = CurrentNumber(entry.control.as<controls::NumberBox>());
       if (!std::isfinite(number)) return std::nullopt;
       return number;
     }

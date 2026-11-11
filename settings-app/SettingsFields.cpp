@@ -1,6 +1,7 @@
 #include "SettingsFields.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <utility>
 
@@ -331,6 +332,45 @@ SettingValues ChangedSettingValues(const SettingValues& edited, const SettingVal
     if (value != original) changed.emplace(path, value);
   }
   return changed;
+}
+
+std::optional<double> ParseTypedNumber(std::wstring_view text) {
+  std::string ascii;
+  for (const wchar_t character : text) {
+    wchar_t narrow = character;
+    if (character >= L'０' && character <= L'９') {
+      narrow = static_cast<wchar_t>(L'0' + (character - L'０'));
+    } else if (character == L'．') {
+      narrow = L'.';
+    } else if (character == L'－' || character == L'−') {
+      narrow = L'-';
+    } else if (character == L'＋') {
+      narrow = L'+';
+    } else if (character == L'　') {
+      narrow = L' ';
+    }
+    if (narrow == L' ' || narrow == L'	') {
+      ascii.push_back(' ');
+    } else if ((narrow >= L'0' && narrow <= L'9') || narrow == L'.' || narrow == L'-' ||
+               narrow == L'+' || narrow == L'e' || narrow == L'E') {
+      ascii.push_back(static_cast<char>(narrow));
+    } else {
+      return std::nullopt;
+    }
+  }
+  const auto begin = ascii.find_first_not_of(' ');
+  if (begin == std::string::npos) return std::nullopt;
+  const auto end = ascii.find_last_not_of(' ');
+  std::string trimmed = ascii.substr(begin, end - begin + 1);
+  // from_chars takes no leading '+'.
+  if (trimmed.size() > 1 && trimmed.front() == '+' && trimmed[1] != '-') trimmed.erase(0, 1);
+  if (trimmed.find(' ') != std::string::npos) return std::nullopt;
+  double value = 0;
+  const auto* first = trimmed.data();
+  const auto* last = trimmed.data() + trimmed.size();
+  const auto [rest, error] = std::from_chars(first, last, value);
+  if (error != std::errc() || rest != last || !std::isfinite(value)) return std::nullopt;
+  return value;
 }
 
 std::vector<std::string> ParseSettingList(std::string_view text) {

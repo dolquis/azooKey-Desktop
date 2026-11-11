@@ -52,7 +52,9 @@
   <data name="PrivacyPaneDescription.Text" xml:space="preserve"><value>学習や AI に使う内容と、セーフ入力、障害診断を設定します。</value></data>
   <data name="AdvancedPaneDescription.Text" xml:space="preserve"><value>ログレベル、実験的な機能、セーフモードの解除を扱います。</value></data>
   <data name="VersionSectionTitle.Text" xml:space="preserve"><value>バージョン</value></data>
-  <data name="VersionPaneDescription.Text" xml:space="preserve"><value>更新の確認、ライセンス、起動コンテキストを表示します。</value></data>
+  <data name="VersionPaneDescription.Text" xml:space="preserve"><value>製品のバージョン、更新の確認、ライセンスを表示します。</value></data>
+  <data name="ProductVersion_Text" xml:space="preserve"><value>バージョン {0}</value></data>
+  <data name="ProductVersion_Unknown" xml:space="preserve"><value>バージョンを読み取れませんでした。</value></data>
   <data name="LogLevelError.Content" xml:space="preserve"><value>エラー</value></data>
   <data name="LogLevelWarn.Content" xml:space="preserve"><value>警告</value></data>
   <data name="LogLevelInfo.Content" xml:space="preserve"><value>情報</value></data>
@@ -88,8 +90,8 @@
   <data name="LaunchContextInfoBar.Title" xml:space="preserve"><value>起動コンテキスト</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>言語:</value></data>
   <data name="ProfileLabel.Text" xml:space="preserve"><value>プロファイル:</value></data>
-  <data name="NotSuppliedValue" xml:space="preserve"><value>(未指定)</value></data>
-  <data name="InvalidValue" xml:space="preserve"><value>(無効)</value></data>
+  <data name="NotSuppliedValue" xml:space="preserve"><value>未指定</value></data>
+  <data name="InvalidValue" xml:space="preserve"><value>無効な値</value></data>
   <data name="CrashReportConsentToggle.Header" xml:space="preserve"><value>障害診断をこの端末に保存する</value></data>
   <data name="CrashReportConsentToggle.OnContent" xml:space="preserve"><value>許可する</value></data>
   <data name="CrashReportConsentToggle.OffContent" xml:space="preserve"><value>許可しない（既定）</value></data>
@@ -276,7 +278,7 @@
   <data name="SettingOption_powerProfile_auto" xml:space="preserve"><value>自動</value></data>
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
-  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
+  <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。更新のダウンロードやインストールはしません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>

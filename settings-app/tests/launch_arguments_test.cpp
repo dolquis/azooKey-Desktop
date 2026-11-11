@@ -128,3 +128,26 @@ TEST(SettingsLaunchArgumentsTest, ProofreadSessionAndPaneAreBothRead) {
   EXPECT_EQ(arguments.pane, L"privacy");
   EXPECT_EQ(arguments.proofread_session_status, LaunchArgumentStatus::Valid);
 }
+
+TEST(SettingsLaunchArgumentsTest, LaunchContextIsShownOnlyWhenLangIdOrProfileIsSupplied) {
+  // sideload-packaging-spec section 3.2: the "バージョン" pane shows the launch context only
+  // for a launch that supplied --langid or --profile.
+  using azookey::settings::HasLaunchContext;
+  using azookey::settings::ParseLaunchArguments;
+  for (const auto* raw :
+       {L"", L"--pane version", L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}) {
+    EXPECT_FALSE(HasLaunchContext(ParseLaunchArguments(raw))) << raw;
+  }
+  EXPECT_TRUE(HasLaunchContext(ParseLaunchArguments(L"--langid 0x0411")));
+  EXPECT_TRUE(HasLaunchContext(ParseLaunchArguments(L"--profile not-a-guid")));
+
+  // A parse error elsewhere leaves the values that were not supplied as "未指定".
+  const auto unknown = ParseLaunchArguments(L"--unknown value");
+  EXPECT_TRUE(unknown.parse_error);
+  EXPECT_FALSE(HasLaunchContext(unknown));
+  const auto with_bad_session = ParseLaunchArguments(L"--langid 0x0411 --proofread-session x");
+  EXPECT_TRUE(with_bad_session.parse_error);
+  EXPECT_TRUE(HasLaunchContext(with_bad_session));
+  EXPECT_EQ(with_bad_session.langid_status, LaunchArgumentStatus::Valid);
+  EXPECT_EQ(with_bad_session.profile_status, LaunchArgumentStatus::NotSupplied);
+}

@@ -34,4 +34,9 @@ bool IsKnownPaneName(std::wstring_view name) noexcept;
 
 LaunchArguments ParseLaunchArguments(std::wstring_view raw_arguments) noexcept;
 
+// Whether the "バージョン" pane shows the launch context (sideload-packaging-spec section 3.2):
+// only when the launch supplied --langid or --profile. A value that was not supplied stays
+// NotSupplied and reads "未指定", even when another option was a parse error.
+bool HasLaunchContext(const LaunchArguments& arguments) noexcept;
+
 }  // namespace azookey::settings

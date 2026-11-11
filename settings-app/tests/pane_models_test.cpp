@@ -43,7 +43,7 @@ std::set<std::string> ResourcesUsedBy(const char* source) {
   const auto text = buffer.str();
   std::set<std::string> used;
   const std::regex pattern(R"(L"((?:Models|Learning|Profiles|HostCall|Persona|NeologdStatus|)"
-                           R"(Proofread|SaveBar)_[A-Za-z0-9_]+)\")");
+                           R"(Proofread|SaveBar|ProductVersion)_[A-Za-z0-9_]+)\")");
   for (std::sregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it) {
     used.insert((*it)[1].str());
   }

@@ -203,6 +203,17 @@ class SpecTest(unittest.TestCase):
     def test_two_milestones_need_no_table(self) -> None:
         self.assertEqual(self.check("# Sample\n\nM1 と M2 を扱う。\n"), [])
 
+    def test_front_matter_milestones_are_not_counted(self) -> None:
+        text = "---\nkind: spec\nmilestones: [M1, M2, M3]\n---\n\n# Sample\n\nM1 と M2 を扱う。\n"
+        self.assertEqual(self.check(text), [])
+
+    def test_window_starts_after_front_matter(self) -> None:
+        front = "---\nkind: spec\n" + "canonical_for: [x]\n" * 20 + "---\n"
+        problems = self.check(front + "# Sample\n\n更新日: x\n")
+        self.assertTrue(any(":26: 冒頭に作成日" in p for p in problems), problems)
+        table = "M1 / M2 / M3 を扱う。\n\n" + "本文。\n" * 50 + "## 0. 節とマイルストーンの対応\n"
+        self.assertEqual(self.check(front + "# Sample\n\n" + table), [])
+
 
 class MainTest(unittest.TestCase):
     def test_failure_exit_code(self) -> None:

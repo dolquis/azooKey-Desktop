@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["repo docs を read-only で読み直し、機械検査が拾えない陳腐化・矛盾・重複を 6 領域に分けて所見として起票する手順"]
+---
+
 # docs 監査 runbook
 
 本書は、repo docs（`README.md`、`AGENTS.md`、`CLAUDE.md`、`docs/`、`plans/`）を read-only で読み直し、機械検査が拾えない陳腐化・矛盾・重複を所見として Linear に起票する手順である。

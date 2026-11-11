@@ -1,3 +1,7 @@
+---
+kind: reference
+---
+
 <!-- lint:allow-file line-ref,status -->
 <!-- 本ファイルは作成日時点の調査スナップショットであり、更新しない前提の記録である。 -->
 

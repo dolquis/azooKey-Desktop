@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順"]
+---
+
 # エージェント用ツールのセットアップと診断
 
 本書は、Claude Code と Codex が azooKey-Desktop の調査、Windows ビルド、実機確認で使うホスト側ツールの恒常 runbook である。

@@ -1,3 +1,8 @@
+---
+kind: one-off
+dod: "§6"
+---
+
 # ドキュメント整理計画
 
 本書は、repo docs（`README.md`、`AGENTS.md`、`CLAUDE.md`、`docs/`、`plans/`）の陳腐化・矛盾・重複を解消し、再発を防ぐ仕組みを入れるための一回限りの引き継ぎ文書である。

@@ -1,3 +1,8 @@
+---
+kind: policy
+canonical_for: ["ビルドの差分（Release / Linux）・ベンチ・手動確認・ログ収集・CI・典型トラブル"]
+---
+
 # Windows TSF + Inference Host デバッグ
 
 ## Build

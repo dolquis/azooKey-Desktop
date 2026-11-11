@@ -1,3 +1,8 @@
+---
+kind: policy
+canonical_for: ["第三者資産 attribution と採用手順、ビルドツールの利用条件"]
+---
+
 # ライセンス・第三者資産 attribution 規約
 
 azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同梱する際の attribution

@@ -37,6 +37,10 @@ Specs (`docs/*-spec.md`)
       「マイルストーン」 and 「対応」, or a table whose header row has the
       columns 「節」 and 「マイルストーン」.
 
+  "The first lines" of S2 and S3 are counted after the front matter (the
+  `---` block that `check_doc_meta.py` reads), so that metadata neither
+  pushes the opening prose out of the window nor counts as a mention.
+
 Heading state words (確定・DEV 番号・日付) are the origin docs-lint's job and are
 not repeated here.
 """
@@ -164,10 +168,21 @@ def check_roadmap(root: Path) -> list[str]:
     return problems
 
 
+def front_matter_end(lines: list[str]) -> int:
+    """Index of the first line after the front matter, or 0 when there is none."""
+    if not lines or lines[0].rstrip("\r") != "---":
+        return 0
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r") == "---":
+            return i + 1
+    return 0
+
+
 def check_spec(path: Path, rel: str) -> list[str]:
     lines = read_lines(path)
     problems: list[str] = []
-    for i, line in enumerate(lines[:HEAD_LINES_FOR_DATE]):
+    start = front_matter_end(lines)
+    for i, line in enumerate(lines[start : start + HEAD_LINES_FOR_DATE], start):
         if DATE_LINE.match(line):
             problems.append(f"{rel}:{i + 1}: 冒頭に作成日・更新日を置かないでください（履歴は git と Linear が持ちます）")
     # Headings inside a fenced code block are comments, not sections.
@@ -198,12 +213,12 @@ def check_spec(path: Path, rel: str) -> list[str]:
                 f"{rel}:{i + 1}: 受け入れ条件の節に箇条書き・表が {count} 行あります"
                 "（定義は roadmap の該当 M 節に置き、spec には参照だけを残します）"
             )
-    head = "\n".join(lines[:HEAD_LINES_FOR_MILESTONES])
+    head = "\n".join(lines[start : start + HEAD_LINES_FOR_MILESTONES])
     if len(set(M_TOKEN.findall(head))) >= MULTI_MILESTONE_THRESHOLD:
         has_table = any(
             (l.startswith("#") and "マイルストーン" in l and "対応" in l)
             or (l.startswith("|") and "節" in l and "マイルストーン" in l)
-            for l in lines[:HEAD_LINES_FOR_TABLE]
+            for l in lines[start : start + HEAD_LINES_FOR_TABLE]
         )
         if not has_table:
             problems.append(

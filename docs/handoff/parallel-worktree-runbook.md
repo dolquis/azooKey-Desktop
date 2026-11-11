@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["複数 worktree で同時に build / test / PR 作業をするときに共有される資源"]
+---
+
 # 複数 worktree での並行作業 runbook
 
 本書は、同じマシン上の複数の git worktree で同時に build、test、PR 作業を進めるときの恒常 runbook である。

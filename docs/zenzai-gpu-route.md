@@ -1,3 +1,8 @@
+---
+kind: design
+canonical_for: ["Zenzai の重み形式と推論エンジン経路の結論、実装構成（AZOOKEY_BACKEND、llama.cpp 接続）、計測ゲート"]
+---
+
 # Zenzai 推論形式の特定とGPU化ルート決定
 
 本書は Zenzai の重み形式と、それを実行するエンジン経路（**どの実行系か**）の正典である。

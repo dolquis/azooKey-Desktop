@@ -1,3 +1,8 @@
+---
+kind: runbook
+canonical_for: ["trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック"]
+---
+
 # Trending アセットの公開・更新手順
 
 本書は [`auto-word-registration-spec.md`](../auto-word-registration-spec.md) §5-2 から参照する

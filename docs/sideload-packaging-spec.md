@@ -2416,4 +2416,4 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 - WinGet manifest: <https://github.com/microsoft/winget-cli/blob/master/doc/ManifestSpecv1.5.md>
 - 既存：`scripts/register-dev.ps1` / `scripts/unregister-dev.ps1`（`regsvr32` 開発用経路）
 - ベース：`docs/windows-tsf-host-architecture.md`
-- CUDA backend の実リンクを中止し、§3.7 の v1.0 設定 UI から CUDA の選択を外した経緯：[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md)
+- CUDA backend の実リンクの中止に合わせて、§3.7 の v1.0 設定 UI のデバイス選択を `auto` / `cpu` の 2 値にした経緯：[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md)

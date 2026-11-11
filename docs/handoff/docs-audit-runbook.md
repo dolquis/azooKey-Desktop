@@ -18,6 +18,7 @@ canonical_for: ["repo docs を read-only で読み直し、機械検査が拾え
 | `scripts/check_doc_contracts.py` | IPC の型の表、spec の設定キー表、preset 名と、コードの突合 |
 | `scripts/check_doc_format.py` | roadmap の全 M が依存図に現れること、spec の受け入れ条件の複製、冒頭の日付、節と M の対応表 |
 | `scripts/check_docs_budget.py` | spec と節の行数の警告、docs-lint ベースラインの上限 |
+| `scripts/check_doc_meta.py` | 文書冒頭の front matter と `docs/README.md` の表の対応、決定記録の結論の正典と逆リンク、one-off の完了基準 |
 | `scripts/check_test_inventory.py` | テスト一覧と CMake の登録 |
 | `scripts/check_docs_impact.py` | 契約ファイルを変えて docs を変えない PR |
 

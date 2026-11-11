@@ -299,7 +299,7 @@ CUDA backend の実リンクを中止した経緯は
 [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) に残す。
 重みの形式とエンジン経路を選んだ経緯は
 [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md)、
-llama.cpp を採った時点のモデルロード境界の決定は
+llama.cpp バインディングの初期選定とモデルロード境界の決定は
 [`decisions/2026-05-20-model-load-and-userdict-cli.md`](decisions/2026-05-20-model-load-and-userdict-cli.md) にある。
 
 1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。

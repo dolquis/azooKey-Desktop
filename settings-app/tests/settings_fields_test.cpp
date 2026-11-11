@@ -261,3 +261,20 @@ TEST(SettingsFieldsTest, ListTextIsOneTrimmedEntryPerLine) {
   EXPECT_EQ(ParseSettingList(FormatSettingList({"a.exe", "b.exe"})),
             (std::vector<std::string>{"a.exe", "b.exe"}));
 }
+
+TEST(SettingsFieldsTest, TypedNumberIsReadBeforeTheBoxCommitsIt) {
+  using azookey::settings::ParseTypedNumber;
+  EXPECT_EQ(ParseTypedNumber(L"12"), 12.0);
+  EXPECT_EQ(ParseTypedNumber(L" 0.6 "), 0.6);
+  EXPECT_EQ(ParseTypedNumber(L"-3"), -3.0);
+  // What the number box itself leaves uncommitted is not counted as a number either.
+  EXPECT_FALSE(ParseTypedNumber(L"+4").has_value());
+  EXPECT_FALSE(ParseTypedNumber(L"1e2").has_value());
+  // Full-width digits typed through an IME (U+FF11, U+FF12).
+  EXPECT_EQ(ParseTypedNumber(std::wstring{L'\xFF11', L'\xFF12'}), 12.0);
+  EXPECT_FALSE(ParseTypedNumber(L"").has_value());
+  EXPECT_FALSE(ParseTypedNumber(L"   ").has_value());
+  EXPECT_FALSE(ParseTypedNumber(L"1 2").has_value());
+  EXPECT_FALSE(ParseTypedNumber(L"12a").has_value());
+  EXPECT_FALSE(ParseTypedNumber(L"1e999").has_value());
+}

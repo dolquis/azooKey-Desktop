@@ -412,6 +412,9 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
   return SanitizeRoot(parsed->AsObject(), warnings);
 }
 
+// The load warning for a stored API key that cannot be decrypted.
+constexpr std::string_view kUndecryptableApiKeyWarning = "openAiApiKey could not be decrypted";
+
 // The dictionary keys in schema order, paired with their EditableSettings field.
 constexpr std::pair<std::string_view, bool DictionarySettings::*> kDictionaryFields[] = {
     {"sudachiEnabled", &DictionarySettings::sudachi_enabled},
@@ -516,7 +519,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
       settings.openai_api_key = key.value;
     } else {
       settings.openai_api_key_unavailable = true;
-      warnings->push_back("openAiApiKey could not be decrypted");
+      warnings->push_back(std::string(kUndecryptableApiKeyWarning));
     }
   }
   if (const auto privacy = root.find("privacy"); privacy != root.end() && privacy->second.IsObject()) {
@@ -773,6 +776,62 @@ std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& be
   std::vector<std::string> keys;
   if (!neologd(before) && neologd(after)) keys.emplace_back("dictionary.neologdEnabled");
   return keys;
+}
+
+std::vector<std::string> ChangedSettingPaths(const EditableSettings& edited,
+                                             const EditableSettings& loaded) {
+  std::vector<std::string> paths;
+  if (edited.model_enabled != loaded.model_enabled) paths.emplace_back("model.enabled");
+  // An unset preference keeps the stored value that this UI cannot select.
+  if (edited.model_backend_preference &&
+      edited.model_backend_preference != loaded.model_backend_preference) {
+    paths.emplace_back("model.backendPreference");
+  }
+  if (edited.model_selected_path != loaded.model_selected_path) {
+    paths.emplace_back("model.selectedPath");
+  }
+  if (edited.openai_api_key_changed) paths.emplace_back("openAiApiKey");
+  if (edited.log_level != loaded.log_level) paths.emplace_back("logLevel");
+  if (edited.crash_report_consent != loaded.crash_report_consent) {
+    paths.emplace_back("privacy.crashReportConsent");
+  }
+  if (edited.dictionary) {
+    const auto before = loaded.dictionary.value_or(DictionarySettings{});
+    for (const auto& [key, field] : kDictionaryFields) {
+      if ((*edited.dictionary).*field != before.*field) {
+        paths.emplace_back("dictionary." + std::string(key));
+      }
+    }
+  }
+  if (edited.profiles_by_app && edited.profiles_by_app != loaded.profiles_by_app) {
+    paths.emplace_back("profilesByApp");
+  }
+  if (edited.clear_safe_mode) paths.emplace_back("safeMode.enabled");
+  for (const auto& [path, value] : ChangedSettingValues(edited.values, loaded.values)) {
+    paths.push_back(path);
+  }
+  return paths;
+}
+
+bool SaveRepairsLoadedDocument(const SettingsDocumentResult& result) {
+  if (result.status == SettingsDocumentStatus::LockUnavailable ||
+      result.status == SettingsDocumentStatus::ReadError) {
+    return false;
+  }
+  if (result.status == SettingsDocumentStatus::Invalid) return true;
+  // A key that cannot be decrypted is kept by a save until it is replaced, so it is not repaired.
+  return std::any_of(
+      result.warnings.begin(), result.warnings.end(),
+      [](const std::string& warning) { return warning != kUndecryptableApiKeyWarning; });
+}
+
+bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool repair_pending) {
+  return can_write && !saving && (changed_count > 0 || repair_pending);
+}
+
+bool PaneShowsSaveBar(std::wstring_view pane_tag) {
+  // "Version" still holds privacy.crashReportConsent until it moves to "Privacy" (DEV-1941).
+  return pane_tag != L"Learning" && pane_tag != L"Persona" && pane_tag != L"Proofread";
 }
 
 }  // namespace azookey::settings

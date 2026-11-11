@@ -52,6 +52,14 @@
   <data name="AdvancedSectionTitle.Text" xml:space="preserve"><value>詳細</value></data>
   <data name="LogLevelLabel.Text" xml:space="preserve"><value>ログレベル</value></data>
   <data name="SaveButton.Content" xml:space="preserve"><value>保存</value></data>
+  <data name="SaveBar_ChangeCount" xml:space="preserve"><value>変更した設定: {0} 件</value></data>
+  <data name="SaveBar_NoChanges" xml:space="preserve"><value>変更した設定はありません。</value></data>
+  <data name="SaveBar_RepairPending" xml:space="preserve"><value>保存すると設定ファイルを修復します。</value></data>
+  <data name="SaveBar_UnsavedTitle" xml:space="preserve"><value>保存していない変更があります</value></data>
+  <data name="SaveBar_UnsavedMessage" xml:space="preserve"><value>変更した {0} 件の設定を保存してから閉じますか。</value></data>
+  <data name="SaveBar_UnsavedSave" xml:space="preserve"><value>保存する</value></data>
+  <data name="SaveBar_UnsavedDiscard" xml:space="preserve"><value>破棄する</value></data>
+  <data name="SaveBar_UnsavedCancel" xml:space="preserve"><value>閉じるのをやめる</value></data>
   <data name="LoadFailedTitle" xml:space="preserve"><value>設定の読み込みに問題があります</value></data>
   <data name="SaveFailedTitle" xml:space="preserve"><value>設定を保存できませんでした</value></data>
   <data name="SavedHostWarningTitle" xml:space="preserve"><value>保存しましたが、Host へ反映できませんでした</value></data>

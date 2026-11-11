@@ -8,11 +8,14 @@
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.NumberFormatting.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -64,6 +67,27 @@ controls::NumberBox NumberControl(const SettingField& field) {
   return box;
 }
 
+// The text box inside a number box's template, once the template is applied.
+controls::TextBox InputBoxOf(const xaml::DependencyObject& parent) {
+  const int32_t count = xaml::Media::VisualTreeHelper::GetChildrenCount(parent);
+  for (int32_t index = 0; index < count; ++index) {
+    const auto child = xaml::Media::VisualTreeHelper::GetChild(parent, index);
+    if (const auto text = child.try_as<controls::TextBox>()) return text;
+    if (const auto nested = InputBoxOf(child)) return nested;
+  }
+  return nullptr;
+}
+
+// The number box's value, or what is typed into it while it is being edited: WinUI commits the
+// typed text to Value only on Enter or when focus leaves, so a close or a save bar count taken
+// before that would miss it. NaN when the typed text is not a number.
+double CurrentNumber(const controls::NumberBox& box) {
+  const double value = box.Value();
+  const auto input = InputBoxOf(box);
+  if (!input || input.FocusState() == xaml::FocusState::Unfocused) return value;
+  return ParseTypedNumber(input.Text()).value_or(std::numeric_limits<double>::quiet_NaN());
+}
+
 // Names the switch a disabled control waits for, for screen readers.
 winrt::hstring InactiveReason(const ResourceLoader& resources, const SettingCondition& condition) {
   const auto* parent = FindSettingField(condition.path);
@@ -86,6 +110,9 @@ winrt::hstring InactiveReason(const ResourceLoader& resources, const SettingCond
 }  // namespace
 
 void SettingsFieldControls::Build(const PanelForPane& panels) {
+  const auto notify = [this] {
+    if (changed_) changed_();
+  };
   ResourceLoader resources;
   std::string_view section;
   std::optional<SettingsPane> pane;
@@ -103,7 +130,10 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
       case SettingKind::Bool: {
         controls::ToggleSwitch toggle;
         toggle.Header(label);
-        toggle.Toggled([this](auto&&, auto&&) { RefreshActiveStates(); });
+        toggle.Toggled([this, notify](auto&&, auto&&) {
+          RefreshActiveStates();
+          notify();
+        });
         control = toggle;
         break;
       }
@@ -118,7 +148,10 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
           item.Tag(winrt::box_value(winrt::to_hstring(option)));
           combo.Items().Append(item);
         }
-        combo.SelectionChanged([this](auto&&, auto&&) { RefreshActiveStates(); });
+        combo.SelectionChanged([this, notify](auto&&, auto&&) {
+          RefreshActiveStates();
+          notify();
+        });
         control = combo;
         break;
       }
@@ -126,6 +159,16 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
       case SettingKind::Number: {
         auto box = NumberControl(field);
         box.Header(label);
+        box.ValueChanged([notify](auto&&, auto&&) { notify(); });
+        // Typing is counted before the value is committed; the inner text box exists once the
+        // template is applied, which is before it can take focus.
+        box.GotFocus([notify, hooked = std::make_shared<bool>(false)](auto const& sender, auto&&) {
+          if (*hooked) return;
+          if (const auto input = InputBoxOf(sender.as<xaml::DependencyObject>())) {
+            *hooked = true;
+            input.TextChanged([notify](auto&&, auto&&) { notify(); });
+          }
+        });
         control = box;
         break;
       }
@@ -138,6 +181,7 @@ void SettingsFieldControls::Build(const PanelForPane& panels) {
           text.TextWrapping(xaml::TextWrapping::Wrap);
           text.MinHeight(80);
         }
+        text.TextChanged([notify](auto&&, auto&&) { notify(); });
         control = text;
         break;
       }
@@ -200,12 +244,12 @@ std::optional<SettingValue> SettingsFieldControls::ReadEntry(const Entry& entry)
     }
     case SettingKind::Integer: {
       // An emptied NumberBox holds NaN.
-      const double number = entry.control.as<controls::NumberBox>().Value();
+      const double number = CurrentNumber(entry.control.as<controls::NumberBox>());
       if (!std::isfinite(number) || std::floor(number) != number) return std::nullopt;
       return static_cast<int64_t>(number);
     }
     case SettingKind::Number: {
-      const double number = entry.control.as<controls::NumberBox>().Value();
+      const double number = CurrentNumber(entry.control.as<controls::NumberBox>());
       if (!std::isfinite(number)) return std::nullopt;
       return number;
     }
@@ -217,7 +261,7 @@ std::optional<SettingValue> SettingsFieldControls::ReadEntry(const Entry& entry)
   return std::nullopt;
 }
 
-bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_path) const {
+SettingValues SettingsFieldControls::ReadValid(std::vector<std::string>* invalid_paths) const {
   SettingValues read;
   std::vector<const SettingField*> invalid;
   for (const auto& entry : entries_) {
@@ -230,10 +274,17 @@ bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_pat
   }
   // A disabled control cannot be corrected, so its invalid value is left out of the save.
   for (const auto* field : invalid) {
-    if (IsSettingFieldActive(*field, read)) {
-      *invalid_path = std::string(field->path);
-      return false;
-    }
+    if (IsSettingFieldActive(*field, read)) invalid_paths->emplace_back(field->path);
+  }
+  return read;
+}
+
+bool SettingsFieldControls::Read(SettingValues* values, std::string* invalid_path) const {
+  std::vector<std::string> invalid;
+  auto read = ReadValid(&invalid);
+  if (!invalid.empty()) {
+    *invalid_path = invalid.front();
+    return false;
   }
   for (auto& [path, value] : read) (*values)[path] = std::move(value);
   return true;

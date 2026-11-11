@@ -41,7 +41,7 @@ std::set<std::string> ResourcesUsedBy(const char* source) {
   const auto text = buffer.str();
   std::set<std::string> used;
   const std::regex pattern(R"(L"((?:Models|Learning|Profiles|HostCall|Persona|NeologdStatus|)"
-                           R"(Proofread)_[A-Za-z0-9_]+)\")");
+                           R"(Proofread|SaveBar)_[A-Za-z0-9_]+)\")");
   for (std::sregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it) {
     used.insert((*it)[1].str());
   }
@@ -312,7 +312,7 @@ TEST(LearningPaneModelTest, AcceptsOnlyAnAbsoluteZipPathForABackup) {
 TEST(PaneSourcesTest, EveryStringTheNewPanesLoadIsInTheResources) {
   const auto names = ResourceNames();
   for (const char* source : {"ModelPane.cpp", "LearningPane.cpp", "ProfilesPane.cpp",
-                             "PersonaPane.cpp", "ProofreadPane.cpp"}) {
+                             "PersonaPane.cpp", "ProofreadPane.cpp", "MainWindow.xaml.cpp"}) {
     const auto used = ResourcesUsedBy(source);
     EXPECT_FALSE(used.empty()) << source;
     for (const auto& name : used) {

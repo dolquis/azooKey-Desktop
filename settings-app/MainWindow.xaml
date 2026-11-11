@@ -81,6 +81,11 @@
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Help" /></NavigationViewItem.Icon>
             </NavigationViewItem>
         </NavigationView.MenuItems>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
         <ScrollViewer>
             <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
                 <TextBlock x:Uid="PageTitle"
@@ -92,11 +97,6 @@
                          IsOpen="False"
                          IsClosable="True"
                          AutomationProperties.AutomationId="SettingsStatusInfoBar" />
-                <InfoBar x:Name="RestartRequiredInfoBar"
-                         IsOpen="False"
-                         IsClosable="True"
-                         Severity="Informational"
-                         AutomationProperties.AutomationId="RestartRequiredInfoBar" />
 
                 <StackPanel x:Name="GeneralPane" Spacing="16">
                     <TextBlock x:Uid="GeneralSectionTitle"
@@ -300,18 +300,45 @@
                     </InfoBar>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button x:Name="SaveButton"
-                            x:Uid="SaveButton"
-                            Click="SaveButton_Click"
-                            AutomationProperties.AutomationId="SaveButton" />
-                    <ProgressRing x:Name="SaveProgressRing"
-                                  Width="24"
-                                  Height="24"
-                                  IsActive="False"
-                                  Visibility="Collapsed" />
-                </StackPanel>
             </StackPanel>
         </ScrollViewer>
+            <!-- The save bar stays at the bottom of the window, outside the scrolled pane
+                 (sideload-packaging-spec section 3.2). -->
+            <Border x:Name="SaveBar"
+                    Grid.Row="1"
+                    Padding="32,12"
+                    BorderThickness="0,1,0,0"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                    AutomationProperties.AutomationId="SaveBar">
+                <StackPanel Spacing="8" MaxWidth="720" HorizontalAlignment="Left">
+                    <InfoBar x:Name="SaveStatusInfoBar"
+                             IsOpen="False"
+                             IsClosable="True"
+                             AutomationProperties.AutomationId="SaveStatusInfoBar" />
+                    <InfoBar x:Name="RestartRequiredInfoBar"
+                             IsOpen="False"
+                             IsClosable="True"
+                             Severity="Informational"
+                             AutomationProperties.AutomationId="RestartRequiredInfoBar" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="SaveButton"
+                                x:Uid="SaveButton"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="SaveButton_Click"
+                                AutomationProperties.AutomationId="SaveButton" />
+                        <ProgressRing x:Name="SaveProgressRing"
+                                      Width="24"
+                                      Height="24"
+                                      IsActive="False"
+                                      Visibility="Collapsed" />
+                        <TextBlock x:Name="ChangeCountText"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.AutomationId="ChangeCountText" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
     </NavigationView>
 </Window>

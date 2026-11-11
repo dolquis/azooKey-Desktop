@@ -951,6 +951,111 @@ TEST(SettingsDocumentTest, OnlyTurningNeologdOnRequiresAHostRestart) {
   EXPECT_TRUE(azookey::settings::SettingsRequiringHostRestart(off, other).empty());
 }
 
+TEST(SettingsDocumentTest, ChangedSettingPathsIsEmptyForTheControlsAsLoaded) {
+  ScopedTempDirectory temp("azookey_settings_changed_paths");
+  const auto path = temp.path() / "settings.json";
+  // An invalid generic value and a backend this UI cannot select are shown without counting.
+  WriteText(path, R"({"maxCandidates":"many","model":{"backendPreference":"cuda"},
+    "dictionary":{"sudachiEnabled":false}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_FALSE(loaded.settings.model_backend_preference.has_value());
+
+  // What the controls hand to a save when nothing was touched: every generic field at its shown
+  // value, the dictionary switches, and the profiles as loaded.
+  auto edited = loaded.settings;
+  edited.dictionary = loaded.settings.dictionary.value_or(azookey::settings::DictionarySettings{});
+  for (const auto& field : azookey::settings::GenericSettingFields()) {
+    edited.values[std::string(field.path)] =
+        azookey::settings::SettingValueOrDefault(field, loaded.settings.values);
+  }
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(edited, loaded.settings).empty());
+
+  const auto missing = azookey::settings::LoadSettingsDocument(temp.path() / "absent.json");
+  auto untouched = missing.settings;
+  untouched.dictionary = azookey::settings::DictionarySettings{};
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(untouched, missing.settings).empty());
+}
+
+TEST(SettingsDocumentTest, ChangedSettingPathsCountsEachKeyASaveWouldWrite) {
+  azookey::settings::EditableSettings loaded;
+  loaded.dictionary = azookey::settings::DictionarySettings{};
+  loaded.values = {{"maxCandidates", int64_t{12}}};
+  loaded.profiles_by_app = azookey::settings::AppProfiles{};
+
+  auto edited = loaded;
+  edited.model_enabled = false;
+  edited.model_backend_preference = "cpu";
+  edited.model_selected_path = "C:\\models\\a.gguf";
+  edited.openai_api_key_changed = true;
+  edited.log_level = "debug";
+  edited.crash_report_consent = "local";
+  edited.dictionary->sudachi_enabled = false;
+  edited.dictionary->neologd_enabled = true;
+  edited.clear_safe_mode = true;
+  edited.values["maxCandidates"] = int64_t{9};
+  edited.values["liveConversion"] = true;
+  // Still the default, so not a change.
+  edited.values["inputMode"] = std::string("hiragana");
+
+  const auto paths = azookey::settings::ChangedSettingPaths(edited, loaded);
+  EXPECT_EQ(paths, (std::vector<std::string>{
+                       "model.enabled", "model.backendPreference", "model.selectedPath",
+                       "openAiApiKey", "logLevel", "privacy.crashReportConsent",
+                       "dictionary.sudachiEnabled", "dictionary.neologdEnabled", "safeMode.enabled",
+                       "liveConversion", "maxCandidates"}));
+
+  // Changing a value back is no longer a change.
+  auto reverted = loaded;
+  reverted.model_backend_preference = loaded.model_backend_preference;
+  EXPECT_TRUE(azookey::settings::ChangedSettingPaths(reverted, loaded).empty());
+}
+
+TEST(SettingsDocumentTest, SaveBarAllowsARepairingSaveWithoutChanges) {
+  ScopedTempDirectory temp("azookey_settings_save_bar");
+  const auto path = temp.path() / "settings.json";
+  using azookey::settings::SaveRepairsLoadedDocument;
+
+  EXPECT_FALSE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  WriteText(path, R"({"logLevel":"debug"})");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  // The load message promises that a save removes the invalid entry or rebuilds the file.
+  WriteText(path, R"({"maxCandidates":"many"})");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  WriteText(path, "{not json");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  // A key that cannot be decrypted is kept by a save, so a save would repair nothing.
+  azookey::settings::SettingsDocumentResult undecryptable;
+  undecryptable.status = azookey::settings::SettingsDocumentStatus::Loaded;
+  undecryptable.settings.openai_api_key_unavailable = true;
+  undecryptable.warnings.emplace_back("openAiApiKey could not be decrypted");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(undecryptable));
+  undecryptable.warnings.emplace_back("maxCandidates: wrong type");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(undecryptable));
+  azookey::settings::SettingsDocumentResult unreadable;
+  unreadable.status = azookey::settings::SettingsDocumentStatus::ReadError;
+  unreadable.warnings.emplace_back("ignored");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(unreadable));
+
+  using azookey::settings::SaveBarAllowsSave;
+  EXPECT_FALSE(SaveBarAllowsSave(true, false, 0, false));
+  EXPECT_TRUE(SaveBarAllowsSave(true, false, 2, false));
+  EXPECT_TRUE(SaveBarAllowsSave(true, false, 0, true));
+  EXPECT_FALSE(SaveBarAllowsSave(true, true, 2, false));
+  // A file that could not be read is never overwritten.
+  EXPECT_FALSE(SaveBarAllowsSave(false, false, 2, true));
+}
+
+TEST(SettingsDocumentTest, OnlyPanesWithKeysToSaveShowTheSaveBar) {
+  using azookey::settings::PaneShowsSaveBar;
+  for (const auto* pane : {L"General", L"Input", L"Dictionary", L"Ai", L"Privacy", L"Profiles",
+                           L"Models", L"Advanced", L"Version"}) {
+    EXPECT_TRUE(PaneShowsSaveBar(pane));
+  }
+  for (const auto* pane : {L"Learning", L"Persona", L"Proofread"}) {
+    EXPECT_FALSE(PaneShowsSaveBar(pane));
+  }
+}
+
 TEST(SettingsDocumentTest, UnknownAndMistypedDictionaryLayerValuesAreRemoved) {
   ScopedTempDirectory temp("azookey_settings_dictionary_invalid");
   const auto path = temp.path() / "settings.json";

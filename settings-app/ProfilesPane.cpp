@@ -415,6 +415,7 @@ void ProfilesPane::Render() {
     row.Children().Append(move);
     legacy_panel_.Children().Append(row);
   }
+  if (host_.changed) host_.changed();
 }
 
 winrt::fire_and_forget ProfilesPane::Edit(std::optional<std::string> key) {

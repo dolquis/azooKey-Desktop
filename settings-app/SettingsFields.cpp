@@ -1,6 +1,7 @@
 #include "SettingsFields.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <utility>
 
@@ -331,6 +332,36 @@ SettingValues ChangedSettingValues(const SettingValues& edited, const SettingVal
     if (value != original) changed.emplace(path, value);
   }
   return changed;
+}
+
+std::optional<double> ParseTypedNumber(std::wstring_view text) {
+  // The forms the number box itself accepts when it commits: digits (full-width ones too), one
+  // point and a leading minus, with blanks around them. An exponent or a '+' it leaves as text.
+  std::string ascii;
+  for (const wchar_t character : text) {
+    if (character >= L'0' && character <= L'9') {
+      ascii.push_back(static_cast<char>(character));
+    } else if (character >= L'０' && character <= L'９') {
+      ascii.push_back(static_cast<char>('0' + (character - L'０')));
+    } else if (character == L'.' || character == L'-') {
+      ascii.push_back(static_cast<char>(character));
+    } else if (character == L' ' || character == L'	' || character == L'　') {
+      ascii.push_back(' ');
+    } else {
+      return std::nullopt;
+    }
+  }
+  const auto begin = ascii.find_first_not_of(' ');
+  if (begin == std::string::npos) return std::nullopt;
+  const auto end = ascii.find_last_not_of(' ');
+  const std::string trimmed = ascii.substr(begin, end - begin + 1);
+  if (trimmed.find(' ') != std::string::npos) return std::nullopt;
+  double value = 0;
+  const auto* first = trimmed.data();
+  const auto* last = trimmed.data() + trimmed.size();
+  const auto [rest, error] = std::from_chars(first, last, value, std::chars_format::fixed);
+  if (error != std::errc() || rest != last || !std::isfinite(value)) return std::nullopt;
+  return value;
 }
 
 std::vector<std::string> ParseSettingList(std::string_view text) {

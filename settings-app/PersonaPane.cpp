@@ -74,11 +74,7 @@ void PersonaPane::Build(controls::StackPanel panel,
   dispatcher_ = std::move(dispatcher);
   ResourceLoader resources;
 
-  controls::TextBlock title;
-  title.Text(resources.GetString(L"Persona_Title"));
-  title.FontSize(20);
-  title.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
-  panel.Children().Append(title);
+  // The "学習" pane's tab names this view ("入力の傾向"), so it has no heading of its own.
   panel.Children().Append(Block(resources.GetString(L"Persona_Description"), true));
 
   problem_bar_ = controls::InfoBar();

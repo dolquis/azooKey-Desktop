@@ -349,10 +349,22 @@ TEST(LearningPaneModelTest, FormatsEntryColumns) {
   ASSERT_EQ(date.size(), 10u);
   EXPECT_EQ(date[4], '-');
   EXPECT_EQ(date[7], '-');
-  EXPECT_EQ(FormatLearningWeight(4.25), "4.2");
-  EXPECT_EQ(FormatLearningWeight(3), "3.0");
   EXPECT_EQ(JoinLearningTags({}), "");
   EXPECT_EQ(JoinLearningTags({"learned", "Code.exe"}), "learned, Code.exe");
+}
+
+TEST(LearningPaneModelTest, TheStoresAreFollowedByTheTendencyAndBackupTabs) {
+  // sideload-packaging-spec section 3.2: the four stores, "入力の傾向", then "バックアップ".
+  using namespace azookey::settings;
+  ASSERT_EQ(kLearningTabCount, 6u);
+  for (size_t index = 0; index < kLearningStoreTabs.size(); ++index) {
+    EXPECT_EQ(LearningTabKindAt(index), LearningTabKind::Store) << index;
+  }
+  EXPECT_EQ(LearningTabKindAt(4), LearningTabKind::Persona);
+  EXPECT_EQ(LearningTabKindAt(5), LearningTabKind::Backup);
+  // The "辞書" pane's button opens the user dictionary tab.
+  EXPECT_EQ(LearningStoreTabIndex("user_dict"), 1u);
+  EXPECT_EQ(LearningStoreTabIndex("unknown"), kLearningTabCount);
 }
 
 TEST(LearningPaneModelTest, ComputesThePageRange) {

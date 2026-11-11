@@ -1511,7 +1511,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   schema fragment を正典とする。既存 `promptPrefixByApp` との統合は `app-profile-spec.md` §6 に従う。
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
   §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
-  が制御する）。LearningStore / Persona 表示はキーではなく読み取り専用ビューである。
+  が制御する）。「学習」ペインのストア別の一覧と「入力の傾向」タブはキーではなく、Host の IPC を読むビューである。
 
 ### 3.7 v1.0 設定 UI の最小機能セット（M11）と v1.0 / v1.x 境界
 

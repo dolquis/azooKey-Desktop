@@ -25,10 +25,16 @@ std::string FormatLearningDate(uint64_t epoch_seconds) {
   return buffer;
 }
 
-std::string FormatLearningWeight(double weight) {
-  char buffer[32]{};
-  std::snprintf(buffer, sizeof(buffer), "%.1f", weight);
-  return buffer;
+LearningTabKind LearningTabKindAt(size_t index) {
+  if (index < kLearningStoreTabs.size()) return LearningTabKind::Store;
+  return index == kLearningStoreTabs.size() ? LearningTabKind::Persona : LearningTabKind::Backup;
+}
+
+size_t LearningStoreTabIndex(std::string_view store) {
+  for (size_t index = 0; index < kLearningStoreTabs.size(); ++index) {
+    if (kLearningStoreTabs[index].id == store) return index;
+  }
+  return kLearningTabCount;
 }
 
 std::string JoinLearningTags(const std::vector<std::string>& tags) {

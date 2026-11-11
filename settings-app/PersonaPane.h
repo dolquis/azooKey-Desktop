@@ -6,13 +6,14 @@
 
 namespace azookey::settings {
 
-// The "Persona" pane (rich-features-spec X-2-7): the four ratios the Host computed from the
-// learning data, read-only. The Host sends ratios and a sample count only, never a surface.
+// The "学習" pane's tab "入力の傾向" (rich-features-spec X-2-7): the four ratios the Host computed
+// from the learning data, read-only. The Host sends ratios and a sample count only, never a
+// surface.
 class PersonaPane : public std::enable_shared_from_this<PersonaPane> {
  public:
   void Build(winrt::Microsoft::UI::Xaml::Controls::StackPanel panel,
              winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher);
-  // Called each time the pane is shown; reads the Host's cached ratios until one read succeeds.
+  // Called each time the tab is shown; reads the Host's cached ratios until one read succeeds.
   void OnShown();
 
  private:

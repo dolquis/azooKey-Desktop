@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/ipc/Payloads.h"
@@ -20,12 +21,20 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   struct Host {
     std::function<winrt::Microsoft::UI::Xaml::XamlRoot()> xaml_root;
     std::function<HWND()> window_handle;
+    // Runs each time the "入力の傾向" tab is shown (PersonaPane::OnShown).
+    std::function<void()> persona_shown;
   };
 
   void Build(winrt::Microsoft::UI::Xaml::Controls::StackPanel panel,
              winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher, Host host);
   // Called each time the pane is shown; the first call lists the first store.
   void OnShown();
+  // The "入力の傾向" tab's body, which PersonaPane builds into.
+  winrt::Microsoft::UI::Xaml::Controls::StackPanel PersonaSection() const {
+    return persona_section_;
+  }
+  // Selects the tab of a store such as "user_dict" (the "辞書" pane's button).
+  void OpenStoreTab(std::string_view store);
 
  private:
   void SelectTab(int index);
@@ -50,7 +59,9 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
 
   winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
   Host host_;
-  winrt::Microsoft::UI::Xaml::Controls::RadioButtons tabs_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::SelectorBar tabs_{nullptr};
+  std::vector<winrt::Microsoft::UI::Xaml::Controls::SelectorBarItem> tab_items_;
+  winrt::Microsoft::UI::Xaml::Controls::StackPanel persona_section_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::InfoBar status_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel entries_section_{nullptr};
   // The user dictionary tab's add form; hidden on the other tabs.

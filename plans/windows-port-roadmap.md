@@ -602,14 +602,15 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 
 ### M15: 予測候補ウィンドウ
 
-- **目的**: 入力中常時、キャレット右側に予測候補（Word モード）を候補窓の予測モードで表示。
+- **目的**: 入力中常時、composition の下に予測候補（Word モード）を候補窓の予測モードで表示。
 - **前提**: M13 完了。
 - **変更対象**: `tsf-tip/src/CandidateWindow.cpp`（予測モード）、`ipc/src/Payloads.cpp`
   （`QueryPredictions` Payload 本実装）、`inference-host/src/Dispatcher.cpp`、
   `learning/src/LearningStore.cpp`（学習由来の予測供給を足す場合。
   `docs/user-learning-enhancement-spec.md` §14）。
 - **受け入れ条件**:
-  - キャレット右側 / 画面外なら左反転、上下反転で配置
+  - composition の text extent の左下の下に置き、下が溢れたら上へ反転し、作業領域の内側に収める
+    （`docs/legacy-parity-spec.md` §3.2）
   - Tab で第一候補受理、Esc で閉鎖
   - 1 秒キャッシュで連続呼び出し抑制
 - **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2、

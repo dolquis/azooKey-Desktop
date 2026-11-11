@@ -862,6 +862,58 @@ TEST(CandidateWindowPredictionTest, OpensAboveTheAnchorAndRemeasuresOnDpiChange)
   window.Destroy();
 }
 
+// legacy-parity-spec §3.2: only the anchor's right edge moves while one line is
+// typed, so the prediction window stays where it opened.
+TEST(CandidateWindowPredictionTest, StaysPutWhileTheCompositionGrows) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  window.ShowPredictions(RECT{kAnchor.left, kAnchor.top, kAnchor.left + 16, kAnchor.bottom},
+                         {L"予測"});
+  ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  RECT first{};
+  ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &first));
+  for (const LONG grown : {LONG{40}, LONG{200}, LONG{600}}) {
+    SCOPED_TRACE(grown);
+    window.ShowPredictions(RECT{kAnchor.left, kAnchor.top, kAnchor.left + grown, kAnchor.bottom},
+                           {L"予測", L"予測の続き"});
+    ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+    RECT next{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &next));
+    EXPECT_EQ(next.left, first.left);
+    EXPECT_EQ(next.top, first.top);
+  }
+  window.Destroy();
+}
+
+// native-ui-spec §1.2: the theme follows the system while predictions show,
+// and the rows stay on screen.
+TEST(CandidateWindowPredictionTest, ThemeFollowsTheSystemWhilePredictionsShow) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  testing::SetThemeInputsForTest(false, 1u);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  window.ShowPredictions(kAnchor, {L"予測"});
+  ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  EXPECT_EQ(window.theme_for_test().background, kLightTheme.background);
+
+  testing::SetThemeInputsForTest(false, 0u);
+  SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, 0,
+               reinterpret_cast<LPARAM>(L"ImmersiveColorSet"));
+  EXPECT_EQ(window.theme_for_test().background, kDarkTheme.background);
+  EXPECT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+
+  testing::SetThemeInputsForTest(true, 0u);
+  SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, SPI_SETHIGHCONTRAST, 0);
+  EXPECT_EQ(window.theme_for_test().background, GetSysColor(COLOR_WINDOW));
+  EXPECT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  window.Destroy();
+}
+
 // DEV-1949: the mode property tells compat-test which rows are on screen.
 TEST(CandidateWindowPredictionTest, ModePropertyFollowsTheRowsOnScreen) {
   ScopedPerMonitorDpi dpi_context;

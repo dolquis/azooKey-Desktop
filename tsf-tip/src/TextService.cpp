@@ -9539,7 +9539,9 @@ void TextService::ShowPredictionWindow() {
     return;
   }
   // Predictions are drawn by the TIP alone and never reach the candidate list
-  // UI element (native-ui-spec §5.2).
+  // UI element (native-ui-spec §5.2). CandidateWindowDecided() above includes
+  // candidate_ui_.IsShowing(), so ShowPredictions never declines for the list
+  // here, and WindowShowFailed below means the prediction frame failed to draw.
   if (!candidate_ui_.ShowPredictions(PredictionCaretRect(), labels)) {
     LogPredictionOnce(PredictionLogReason::WindowCreateFailed);
     return;

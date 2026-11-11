@@ -3066,7 +3066,7 @@ Edge は ControlType だけで Edit を探索するとアドレスバーへ一�
 | C-016 | ライブ変換 OFF で `nihongo` + 即 Space を一括送出し、確定後も入力する | 候補・確定・後続入力を UIA で確認する |
 | C-017 | preedit 中に Ctrl+H を押す | 1 単位が削除される |
 | C-018 | ライブ変換 ON で入力・編集・確定する | UIA で preedit と確定文字列の遷移を確認する |
-| C-019 | 予測候補を表示し Tab / Shift+Tab / Esc を押す | 候補窓の予測モード（窓プロパティ `azooKey.CandidateWindowMode` で候補と区別する）の位置、受理後の文字列変化、Esc 1 回で窓と preedit が消えることを確認する。Shift+Tab は予測窓に 2 件以上表示された場合に判定し、1 件の場合は failing-skip とする。表示候補の index は文字列から判定しない |
+| C-019 | 予測候補を表示し Tab / Shift+Tab / Esc を押す | 候補窓の予測モード（窓プロパティ `azooKey.CandidateWindowMode` で候補と区別する）の位置、受理後の文字列変化、Esc 1 回で窓と preedit が消えることを確認する。Shift+Tab は予測モードに 2 件以上表示された場合に判定し、1 件の場合は failing-skip とする。表示候補の index は文字列から判定しない |
 
 C-001〜C-012 は `full` アプリ（§13.2）で UI Automation により自動判定できる。
 C-014〜C-019 は UI Automation と対象 process の HWND 列挙により自動判定する。

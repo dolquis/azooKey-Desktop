@@ -32,6 +32,7 @@ class ScopedTestInputs {
     CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
     CandidateWindow::SetMonitorDpiForTest(0);
     CandidateWindow::SetClientAreaAnimationForTest(-1);
+    CandidateWindow::SetHealthBannerTextForTest(L"");
     tsf::testing::ClearThemeInputsForTest();
   }
   ScopedTestInputs(const ScopedTestInputs&) = delete;
@@ -1104,6 +1105,69 @@ TEST(CandidateWindowHealthBannerTest, WrapsAtTheWindowWidthWithoutWideningIt) {
     const RECT details = window.health_details_button_for_test(wide_width);
     EXPECT_EQ(details.right, wide_width - scale(8));
     EXPECT_EQ(details.right - details.left, scale(108));
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowHealthBannerTest, ALongTextStopsAtThreeLinesOfTheFont) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  tsf::testing::SetThemeInputsForTest(false, 1u);
+  std::wstring long_text;
+  for (int i = 0; i < 12; ++i) long_text += L"変換エンジンの状態をお知らせしています。";
+  CandidateWindow::SetHealthBannerTextForTest(long_text);
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    const int row = scale(24);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.Show(POINT{20, 20}, {{L"字", L""}}, 0);
+    window.ShowHealthBanner(CandidateHealthState::DegradedSimple);
+    EXPECT_EQ(window.health_banner_lines_for_test(), 3);
+    EXPECT_EQ(window.health_banner_height_for_test(), 4 * row);
+
+    std::vector<COLORREF> pixels;
+    int width = 0;
+    int height = 0;
+    ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+    const ThemeColors& colors = window.theme_for_test();
+    const auto at = [&](int x, int y) { return pixels[static_cast<size_t>(y * width + x)]; };
+    // Between the third line and the buttons the banner stays empty: no fourth line.
+    const int text_bottom = window.health_banner_text_bottom_for_test(width);
+    const int buttons_top = window.health_details_button_for_test(width).top;
+    ASSERT_LT(text_bottom, buttons_top);
+    for (int y = text_bottom; y < buttons_top; ++y)
+      for (int x = scale(8); x < width - scale(8); ++x)
+        ASSERT_EQ(at(x, y), colors.banner_background) << x << "," << y;
+    // The three lines are drawn.
+    bool ink = false;
+    for (int y = row + 1; y < text_bottom && !ink; ++y)
+      for (int x = scale(8); x < width - scale(8) && !ink; ++x)
+        ink = at(x, y) != colors.banner_background;
+    EXPECT_TRUE(ink);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowHealthBannerTest, AWorkAreaChangeClosesTheDetails) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  for (const UINT msg : {UINT{WM_DISPLAYCHANGE}, UINT{WM_SETTINGCHANGE}}) {
+    SCOPED_TRACE(msg);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.Show(POINT{20, 20}, {{L"字", L""}}, 0);
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+    ASSERT_TRUE(window.ShowDetailsForTest()) << window.failure_stage();
+    ASSERT_TRUE(window.details_visible_for_test());
+    // The popup was placed against the old work area; it closes, the window stays.
+    SendMessageW(window.hwnd_for_test(), msg, msg == WM_SETTINGCHANGE ? SPI_SETWORKAREA : 32, 0);
+    EXPECT_FALSE(window.details_visible_for_test());
+    EXPECT_TRUE(window.IsVisible());
     window.Destroy();
   }
 }

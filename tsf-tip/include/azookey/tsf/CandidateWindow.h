@@ -206,6 +206,9 @@ class CandidateWindow {
   int health_banner_top_for_test() const { return HealthBannerTop(); }
   int health_banner_height_for_test() const { return HealthBannerHeight(); }
   int health_banner_lines_for_test() const { return health_banner_lines_; }
+  int health_banner_text_bottom_for_test(int width) const { return HealthBannerTextBottom(width); }
+  // Stands in for the banner text of every state; empty restores the real text.
+  static void SetHealthBannerTextForTest(const std::wstring& text);
   RECT health_details_button_for_test(int width) const { return HealthDetailsButtonRect(width); }
   RECT health_retry_button_for_test(int width) const { return HealthRetryButtonRect(width); }
   HWND details_hwnd_for_test() const { return details_hwnd_; }
@@ -369,6 +372,8 @@ class CandidateWindow {
   bool ShowDetails();
   void HideDetails();
   int HealthBannerHeight() const;
+  // Bottom of the banner text box: the first three of the font's lines.
+  int HealthBannerTextBottom(int width) const;
   // The "3/12" row below the candidate rows when not every candidate is drawn.
   bool HasPositionRow() const;
   std::wstring PositionText() const;

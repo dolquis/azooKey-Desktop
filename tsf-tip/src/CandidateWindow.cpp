@@ -59,28 +59,41 @@ const wchar_t* HealthBannerText(CandidateHealthState state) {
 }
 
 // What the user does comes first; paths, setting keys and commands close the
-// text (native-ui-spec §4.1, wording per sideload-packaging-spec §3.2).
+// text (native-ui-spec §4.1, wording per sideload-packaging-spec §3.2). The
+// steps name the settings app's panes and fields as they are labeled today.
 const wchar_t* HealthDetailsText(CandidateHealthState state) {
   switch (state) {
     case CandidateHealthState::DegradedSimple:
-      return L"変換エンジンに接続できないため、ひらがなとカタカナの候補だけで入力を続けています。"
-             L"変換エンジンには自動でつなぎ直し、つながれば元の変換に戻ります。\n\n"
+      return L"変換エンジンに接続できないため、ひらがなやカタカナなどの簡易な候補で入力を続けて"
+             L"います。変換エンジンには自動でつなぎ直し、つながれば元の変換に戻ります。\n\n"
              L"調べるときのコマンド: azookey_diag.exe --json\n"
              L"診断ファイルの作成: azookey_diag.exe --collect --output azookey-diag.zip";
     case CandidateHealthState::DegradedModel:
-      return L"Zenzai のモデルを読み込めないため、簡易変換で入力を続けています。"
-             L"設定アプリの「AI 変換」でモデルを確かめてから、「再試行」を押してください。\n\n"
+      return L"Zenzai のモデルを読み込めないため、簡易変換で入力を続けています。設定アプリの"
+             L"「一般」で「モデルファイル」を確かめてから、「再試行」を押してください。\n\n"
              L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::SafeMode:
       return L"変換エンジンの異常終了が続いたため、セーフモードで動いています（AI と学習は止めて"
              L"います）。直前に変えたモデルや推論デバイスなどの設定を元に戻してから、設定アプリの"
-             L"「詳細」で「セーフモードを解除する」を押し、保存してください。\n\n"
+             L"「一般」で「セーフモードを解除する」を押し、保存してください。\n\n"
              L"設定ファイル: %LOCALAPPDATA%\\azooKey\\config\\settings.json（safeMode.enabled）\n"
              L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::Healthy:
       return L"";
   }
   return L"";
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+std::wstring g_health_banner_text_for_test;
+#endif
+
+// The banner text of a state; tests may stand in a longer one.
+std::wstring BannerText(CandidateHealthState state) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (!g_health_banner_text_for_test.empty()) return g_health_banner_text_for_test;
+#endif
+  return HealthBannerText(state);
 }
 
 HMODULE GetTipModuleHandle() {
@@ -375,6 +388,11 @@ CandidateWindow::Hit CandidateWindow::HitTestForTest(POINT point) const {
 void CandidateWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
 
 // static
+void CandidateWindow::SetHealthBannerTextForTest(const std::wstring& text) {
+  g_health_banner_text_for_test = text;
+}
+
+// static
 POINT CandidateWindow::LastMonitorPointForTest() { return g_last_monitor_point_for_test; }
 
 // static
@@ -520,6 +538,29 @@ int CandidateWindow::MeasureWrappedHeight(const std::wstring& text, int width) c
   return static_cast<int>(std::ceil(measured.height));
 }
 
+int CandidateWindow::HealthBannerTextBottom(int width) const {
+  const int top = HealthBannerTop() + ScaleForDpi(3, dpi_);
+  const int rows_bottom = HealthBannerTop() + metrics_.item_height * health_banner_lines_;
+  if (!text_style_) return rows_bottom;
+  const std::wstring text = BannerText(health_state_);
+  ComPtr<IDWriteTextLayout> layout;
+  if (text.empty() ||
+      FAILED(text_style_->factory->CreateTextLayout(
+          text.c_str(), static_cast<UINT32>(text.size()), text_style_->wrapped.Get(),
+          static_cast<FLOAT>(std::max(1, width - metrics_.horizontal_padding * 2)), 100000.0f,
+          &layout)))
+    return rows_bottom;
+  // A short buffer fills nothing and only reports the count, so ask for every line.
+  UINT32 count = 0;
+  HRESULT hr = layout->GetLineMetrics(nullptr, 0, &count);
+  if (hr != E_NOT_SUFFICIENT_BUFFER || count == 0) return rows_bottom;
+  std::vector<DWRITE_LINE_METRICS> lines(count);
+  if (FAILED(hr = layout->GetLineMetrics(lines.data(), count, &count))) return rows_bottom;
+  float height = 0.0f;
+  for (UINT32 i = 0; i < std::min<UINT32>(count, kMaxBannerLines); ++i) height += lines[i].height;
+  return std::min(rows_bottom, top + static_cast<int>(std::ceil(height)));
+}
+
 // static
 int CandidateWindow::ComputeDetailsWidth(int candidate_width, UINT dpi) {
   return std::clamp(candidate_width, ScaleForDpi(kBaseDetailsMinWidth, dpi),
@@ -571,9 +612,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   const auto measure_banner = [&] {
     if (!health_banner_visible_) return;
     width = std::max(width, ScaleForDpi(kBaseBannerMinWidth, dpi_));
-    health_banner_lines_ =
-        std::min(kMaxBannerLines, MeasureWrappedLines(HealthBannerText(health_state_),
-                                                      width - metrics_.horizontal_padding * 2));
+    health_banner_lines_ = std::min(
+        kMaxBannerLines,
+        MeasureWrappedLines(BannerText(health_state_), width - metrics_.horizontal_padding * 2));
   };
   measure_banner();
   // Keep the window inside the work area's height: draw only the rows that fit
@@ -1168,8 +1209,10 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
     text_rc.left += metrics_.horizontal_padding;
     text_rc.right -= metrics_.horizontal_padding;
     text_rc.top += ScaleForDpi(3, dpi_);
-    text_rc.bottom = banner_rc.bottom - metrics_.item_height;
-    paint.Text(HealthBannerText(health_state_), style.wrapped.Get(), text_rc, theme_.info_text);
+    text_rc.bottom = HealthBannerTextBottom(width);
+    // The box holds exactly three of the font's lines, so a longer text ends in
+    // an ellipsis instead of a fourth line squeezed into the rows' height.
+    paint.Text(BannerText(health_state_), style.wrapped.Get(), text_rc, theme_.info_text);
     // Framed buttons, so they read as something to press (native-ui-spec §4.1).
     const RECT details_rc = HealthDetailsButtonRect(width);
     paint.Outline(details_rc, theme_.border);
@@ -1282,7 +1325,11 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
   if ((msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA) || msg == WM_DISPLAYCHANGE) {
     // The taskbar or the resolution changed: the rows that fit and the placement
     // come from the work area, so a shown window is measured again at its anchor.
-    if (IsVisible() || render_failed_) ResizeAtLastAnchor();
+    if (IsVisible() || render_failed_) {
+      // The popup was placed against the old window and work area; it closes.
+      HideDetails();
+      ResizeAtLastAnchor();
+    }
   }
   switch (msg) {
     case WM_MOUSEACTIVATE:

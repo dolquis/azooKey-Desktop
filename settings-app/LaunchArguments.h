@@ -23,8 +23,14 @@ struct LaunchArguments {
   // accepted; anything else is a parse error.
   LaunchArgumentStatus proofread_session_status = LaunchArgumentStatus::NotSupplied;
   std::string proofread_session_token;
+  // --pane <name> (sideload-packaging-spec section 3.2 / 3.5): the pane to show. Empty when not
+  // supplied; an unknown name, a missing value or a repeated option is ignored, not an error.
+  std::wstring pane;
   bool parse_error = false;
 };
+
+// The pane names --pane accepts, which are also the navigation items' Tags.
+bool IsKnownPaneName(std::wstring_view name) noexcept;
 
 LaunchArguments ParseLaunchArguments(std::wstring_view raw_arguments) noexcept;
 

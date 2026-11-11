@@ -36,7 +36,6 @@
   <data name="WindowTitle" xml:space="preserve"><value>azooKey 設定</value></data>
   <data name="PageTitle.Text" xml:space="preserve"><value>azooKey 設定</value></data>
   <data name="PageDescription.Text" xml:space="preserve"><value>azooKey の設定を変更できます。保存後、起動中の Host へ再読込を通知します。</value></data>
-  <data name="GeneralSectionTitle.Text" xml:space="preserve"><value>一般</value></data>
   <data name="ModelEnabledToggle.Header" xml:space="preserve"><value>Zenzai を使う</value></data>
   <data name="BackendPreferenceLabel.Text" xml:space="preserve"><value>推論デバイス</value></data>
   <data name="BackendAuto.Content" xml:space="preserve"><value>自動</value></data>
@@ -98,15 +97,14 @@
   <data name="CrashReportReady" xml:space="preserve"><value>この Settings アプリでの保存準備ができています。</value></data>
   <data name="CrashReportDisabled" xml:space="preserve"><value>この Settings アプリでは診断ファイルを収集しません。</value></data>
   <data name="CrashReportUnavailable" xml:space="preserve"><value>この Settings アプリでは診断ファイルを保存できません。保存先やアクセス権を確認してください。保存に失敗した障害は、OS の既定の障害処理へ引き継ぎます。</value></data>
-  <data name="GeneralNavigationItem.Content" xml:space="preserve"><value>一般</value></data>
   <data name="DictionaryNavigationItem.Content" xml:space="preserve"><value>辞書</value></data>
-  <data name="AiNavigationItem.Content" xml:space="preserve"><value>AI</value></data>
+  <data name="AiNavigationItem.Content" xml:space="preserve"><value>AI サービス</value></data>
   <data name="AdvancedNavigationItem.Content" xml:space="preserve"><value>詳細</value></data>
   <data name="VersionNavigationItem.Content" xml:space="preserve"><value>バージョン</value></data>
-  <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI</value></data>
+  <data name="AiSectionTitle.Text" xml:space="preserve"><value>AI サービス</value></data>
   <data name="UpdateSectionTitle.Text" xml:space="preserve"><value>更新の確認</value></data>
   <data name="OpenReleasePageButton.Content" xml:space="preserve"><value>リリースページを開く</value></data>
-  <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。「一般」の「自動更新を確認する」でオンにできます。</value></data>
+  <data name="UpdateStatus_Disabled" xml:space="preserve"><value>更新の確認はオフです。上の「自動更新を確認する」でオンにできます。</value></data>
   <data name="UpdateStatus_Offline" xml:space="preserve"><value>プライバシーモードが「オフライン」か「セーフ」の間は、更新を確認しません。</value></data>
   <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
@@ -231,6 +229,7 @@
   <data name="SettingSection_SecureInput" xml:space="preserve"><value>セーフ入力</value></data>
   <data name="SettingSection_Performance" xml:space="preserve"><value>性能</value></data>
   <data name="SettingSection_Experimental" xml:space="preserve"><value>実験的な機能</value></data>
+  <data name="SettingSection_CandidateCount" xml:space="preserve"><value>候補の数</value></data>
   <data name="SettingOption_autoUpdate_channel_stable" xml:space="preserve"><value>安定版</value></data>
   <data name="SettingOption_autoUpdate_channel_beta" xml:space="preserve"><value>ベータ版</value></data>
   <data name="SettingOption_inputMode_hiragana" xml:space="preserve"><value>ひらがな</value></data>
@@ -293,6 +292,12 @@
   <data name="SettingNote_inferenceThreads" xml:space="preserve"><value>0 なら電源プロファイルに従います。</value></data>
   <data name="SettingNote_maxContextLength" xml:space="preserve"><value>0 なら左文脈を送りません。</value></data>
   <data name="InputNavigationItem.Content" xml:space="preserve"><value>入力</value></data>
+  <data name="SettingsGroupHeader.Content" xml:space="preserve"><value>設定</value></data>
+  <data name="DataToolsGroupHeader.Content" xml:space="preserve"><value>データとツール</value></data>
+  <data name="CandidatesNavigationItem.Content" xml:space="preserve"><value>候補</value></data>
+  <data name="AiConversionNavigationItem.Content" xml:space="preserve"><value>AI 変換</value></data>
+  <data name="CandidatesSectionTitle.Text" xml:space="preserve"><value>候補</value></data>
+  <data name="AiConversionSectionTitle.Text" xml:space="preserve"><value>AI 変換</value></data>
   <data name="PrivacyNavigationItem.Content" xml:space="preserve"><value>プライバシー</value></data>
   <data name="InputSectionTitle.Text" xml:space="preserve"><value>入力</value></data>
   <data name="PrivacySectionTitle.Text" xml:space="preserve"><value>プライバシー</value></data>
@@ -308,7 +313,6 @@
   <data name="ClearSafeModeLabel" xml:space="preserve"><value>セーフモードを解除する</value></data>
   <data name="CancelClearSafeModeLabel" xml:space="preserve"><value>解除を取り消す</value></data>
   <data name="SafeModeReentered" xml:space="preserve"><value>Host が再びセーフモードに入ったため、解除しませんでした。設定アプリを開き直して状態を確認してください。</value></data>
-  <data name="ModelsNavigationItem.Content" xml:space="preserve"><value>モデル</value></data>
   <data name="LearningNavigationItem.Content" xml:space="preserve"><value>学習</value></data>
   <data name="HostCall_Unavailable" xml:space="preserve"><value>この PC の通信設定（パイプ名または認証トークン）を解決できませんでした。</value></data>
   <data name="HostCall_HostNotRunning" xml:space="preserve"><value>azooKey の Host が起動していません。入力を一度行うか、サインインし直してから再試行してください。</value></data>
@@ -344,7 +348,7 @@
   <data name="Models_BenchmarkButton" xml:space="preserve"><value>ベンチマーク</value></data>
   <data name="Models_NotSelectable" xml:space="preserve"><value>有効な GGUF 形式のモデルだけ選べます。</value></data>
   <data name="Models_SelectedTitle" xml:space="preserve"><value>モデルを選びました</value></data>
-  <data name="Models_SelectedMessage" xml:space="preserve"><value>「一般」のモデルのパスに入れました。保存すると反映されます。</value></data>
+  <data name="Models_SelectedMessage" xml:space="preserve"><value>「モデルファイル」に入れました。保存すると反映されます。</value></data>
   <data name="Models_BenchmarkHeading" xml:space="preserve"><value>ベンチマーク結果</value></data>
   <data name="Models_BenchmarkNone" xml:space="preserve"><value>まだ測定していません。</value></data>
   <data name="Models_BenchmarkRunning" xml:space="preserve"><value>🔄 測定中です（最大 60 秒ほどかかります）…</value></data>
@@ -533,7 +537,6 @@
   <data name="Profiles_Migrated" xml:space="preserve"><value>移行済み</value></data>
   <data name="Learning_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
   <data name="Models_UnexpectedError" xml:space="preserve"><value>予期しないエラーが起きました。もう一度お試しください。</value></data>
-  <data name="PersonaNavigationItem.Content" xml:space="preserve"><value>Persona</value></data>
   <data name="NeologdStatus_Unknown" xml:space="preserve"><value>Host の状態: この Host は NEologd 層の状態を返しません。</value></data>
   <data name="NeologdStatus_NotEnabled" xml:space="preserve"><value>Host の状態: 使っていません。</value></data>
   <data name="NeologdStatus_FetchAfterRestart" xml:space="preserve"><value>Host の状態: Host の再起動後に取得します（サインアウトして再度サインインしてください）。オフラインモードの間は取得しません。</value></data>
@@ -568,7 +571,7 @@
   <data name="Proofread_Title" xml:space="preserve"><value>校正</value></data>
   <data name="Proofread_Description" xml:space="preserve"><value>文章を貼り付けると、誤変換や誤りの疑いがある箇所を AI が探して一覧にします。azooKey で入力中のアプリで Ctrl+Shift+Space を押すと、そのアプリの文章を読み込んでここに開きます。</value></data>
   <data name="Proofread_ExternalNoticeTitle" xml:space="preserve"><value>本文は外部の AI サービスへ送られます</value></data>
-  <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、貼り付けた本文が、設定した外部の AI バックエンドへ送信されます。「AI」ペインの AI の設定と、プライバシーの AI に関する同意（AI 整文と同じ設定）が必要です。送りたくない文章は貼り付けないでください。</value></data>
+  <data name="Proofread_ExternalNoticeMessage" xml:space="preserve"><value>「検査する」を押すと、貼り付けた本文が、設定した外部の AI バックエンドへ送信されます。「AI サービス」ペインの AI の設定と、プライバシーの AI に関する同意（AI 整文と同じ設定）が必要です。送りたくない文章は貼り付けないでください。</value></data>
   <data name="Proofread_InputHeader" xml:space="preserve"><value>検査する文章</value></data>
   <data name="Proofread_InputPlaceholder" xml:space="preserve"><value>ここに文章を貼り付けます</value></data>
   <data name="Proofread_TooLargeSuffix" xml:space="preserve"><value>（60 KiB を超えているため送れません）</value></data>
@@ -586,7 +589,7 @@
   <data name="Proofread_SelectButton" xml:space="preserve"><value>該当箇所を選択</value></data>
   <data name="Proofread_Error_invalid_request" xml:space="preserve"><value>要求が不正です（文章が空か、大きすぎます）。</value></data>
   <data name="Proofread_Error_not_authenticated" xml:space="preserve"><value>Host の認証が済んでいません。</value></data>
-  <data name="Proofread_Error_unsupported" xml:space="preserve"><value>使える AI がありません。「AI」ペインで外部の AI バックエンドと API キーを設定し、プライバシーの AI に関する同意（AI 整文と同じ設定）を有効にしてください。</value></data>
+  <data name="Proofread_Error_unsupported" xml:space="preserve"><value>使える AI がありません。「AI サービス」ペインで外部の AI バックエンドと API キーを設定し、プライバシーの AI に関する同意（AI 整文と同じ設定）を有効にしてください。</value></data>
   <data name="Proofread_Error_blocked" xml:space="preserve"><value>プライバシーの設定により、この文章は AI へ送れません。</value></data>
   <data name="Proofread_Error_backend_failed" xml:space="preserve"><value>AI サービスとの通信または応答の読み取りに失敗しました。時間をおいて試してください。</value></data>
   <data name="Proofread_Error_other" xml:space="preserve"><value>Host がエラーを返しました。</value></data>

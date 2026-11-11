@@ -1047,11 +1047,12 @@ TEST(SettingsDocumentTest, SaveBarAllowsARepairingSaveWithoutChanges) {
 
 TEST(SettingsDocumentTest, OnlyPanesWithKeysToSaveShowTheSaveBar) {
   using azookey::settings::PaneShowsSaveBar;
-  for (const auto* pane : {L"General", L"Input", L"Dictionary", L"Ai", L"Privacy", L"Profiles",
-                           L"Models", L"Advanced", L"Version"}) {
+  for (const auto* pane : {L"input", L"candidates", L"dictionary", L"ai-conversion", L"ai-service",
+                           L"privacy", L"profiles", L"advanced", L"version"}) {
     EXPECT_TRUE(PaneShowsSaveBar(pane));
   }
-  for (const auto* pane : {L"Learning", L"Persona", L"Proofread"}) {
+  // The "データとツール" panes.
+  for (const auto* pane : {L"learning", L"proofread"}) {
     EXPECT_FALSE(PaneShowsSaveBar(pane));
   }
 }

@@ -68,6 +68,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   void ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                   const winrt::hstring& title, const winrt::hstring& message);
   void ShowPane(std::wstring_view tag);
+  // Selects the navigation item whose Tag is `tag` (a --pane name); does nothing for another.
+  void SelectPane(std::wstring_view tag);
   void ApplyDictionaryToControls(const azookey::settings::DictionarySettings& dictionary);
   azookey::settings::DictionarySettings DictionaryFromControls();
   void SetNeologdToggle(bool enabled);

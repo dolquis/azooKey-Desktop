@@ -70,12 +70,12 @@ const wchar_t* HealthDetailsText(CandidateHealthState state) {
              L"診断ファイルの作成: azookey_diag.exe --collect --output azookey-diag.zip";
     case CandidateHealthState::DegradedModel:
       return L"Zenzai のモデルを読み込めないため、簡易変換で入力を続けています。設定アプリの"
-             L"「一般」で「モデルファイル」を確かめてから、「再試行」を押してください。\n\n"
+             L"「AI 変換」で「モデルファイル」を確かめてから、「再試行」を押してください。\n\n"
              L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::SafeMode:
       return L"変換エンジンの異常終了が続いたため、セーフモードで動いています（AI と学習は止めて"
              L"います）。直前に変えたモデルや推論デバイスなどの設定を元に戻してから、設定アプリの"
-             L"「一般」で「セーフモードを解除する」を押し、保存してください。\n\n"
+             L"「詳細」で「セーフモードを解除する」を押し、保存してください。\n\n"
              L"設定ファイル: %LOCALAPPDATA%\\azooKey\\config\\settings.json（safeMode.enabled）\n"
              L"調べるときのコマンド: azookey_diag.exe --json";
     case CandidateHealthState::Healthy:

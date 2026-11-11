@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -260,4 +261,42 @@ TEST(SettingsFieldsTest, ListTextIsOneTrimmedEntryPerLine) {
   EXPECT_EQ(FormatSettingList({"a.exe", "b.exe"}), "a.exe\rb.exe");
   EXPECT_EQ(ParseSettingList(FormatSettingList({"a.exe", "b.exe"})),
             (std::vector<std::string>{"a.exe", "b.exe"}));
+}
+
+TEST(SettingsFieldsTest, FieldsSitInThePanesOfTheSpecTable) {
+  // sideload-packaging-spec section 3.6, "UI ペイン" column.
+  using azookey::settings::FindSettingField;
+  using Pane = azookey::settings::SettingsPane;
+  const std::vector<std::pair<const char*, Pane>> expected = {
+      {"convertKeysAction", Pane::Input},
+      {"liveConversion", Pane::Input},
+      {"punctuationConversion", Pane::Input},
+      {"batchRomajiConversion", Pane::Input},
+      {"inputMode", Pane::Candidates},
+      {"bracketPairing", Pane::Candidates},
+      {"inlineEnglishCandidates", Pane::Candidates},
+      {"mixedEnglishAutoConversion", Pane::Candidates},
+      {"numberRewriter", Pane::Candidates},
+      {"emojiRewriter", Pane::Candidates},
+      {"maxCandidates", Pane::Candidates},
+      {"typoCorrectionMode", Pane::Dictionary},
+      {"autoWordRegistration.miningEnabled", Pane::Dictionary},
+      {"powerProfile", Pane::AiConversion},
+      {"inferenceThreads", Pane::AiConversion},
+      {"maxContextLength", Pane::AiConversion},
+      {"aiBackend", Pane::AiService},
+      {"openAiTimeoutMs", Pane::AiService},
+      {"privacy.mode", Pane::Privacy},
+      {"privacy.secureApps", Pane::Privacy},
+      {"contextReselection", Pane::Advanced},
+      {"autoUpdate.enabled", Pane::Version},
+  };
+  for (const auto& [path, pane] : expected) {
+    SCOPED_TRACE(path);
+    const auto* field = FindSettingField(path);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(field->pane, pane);
+  }
+  // inputMode is listed under "カッコ補完" (bracket-pairing-spec section 4.4).
+  EXPECT_EQ(FindSettingField("inputMode")->section, "Brackets");
 }

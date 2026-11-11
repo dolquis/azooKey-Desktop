@@ -72,14 +72,21 @@ azookey::settings::LaunchArguments ParseTokens(const std::vector<std::wstring_vi
 
   for (size_t index = 0; index < arguments.size();) {
     const std::wstring_view option = arguments[index];
-    if (option != L"--langid" && option != L"--profile" && option != L"--proofread-session") {
+    if (option != L"--langid" && option != L"--profile" && option != L"--proofread-session" &&
+        option != L"--pane") {
       result.parse_error = true;
       ++index;
       continue;
     }
 
     const bool has_value = index + 1 < arguments.size() && !IsOption(arguments[index + 1]);
-    if (option == L"--langid") {
+    if (option == L"--pane") {
+      // Only the first known name counts; the others are ignored without failing the launch.
+      if (has_value && result.pane.empty() &&
+          azookey::settings::IsKnownPaneName(arguments[index + 1])) {
+        result.pane = std::wstring(arguments[index + 1]);
+      }
+    } else if (option == L"--langid") {
       if (!has_value || result.langid_status != LaunchArgumentStatus::NotSupplied) {
         result.langid_status = LaunchArgumentStatus::Invalid;
       } else {
@@ -121,6 +128,15 @@ azookey::settings::LaunchArguments ParseTokens(const std::vector<std::wstring_vi
 }  // namespace
 
 namespace azookey::settings {
+
+bool IsKnownPaneName(std::wstring_view name) noexcept {
+  for (const std::wstring_view known :
+       {L"input", L"candidates", L"dictionary", L"ai-conversion", L"ai-service", L"privacy",
+        L"profiles", L"advanced", L"learning", L"proofread", L"version"}) {
+    if (name == known) return true;
+  }
+  return false;
+}
 
 LaunchArguments ParseLaunchArguments(std::wstring_view raw_arguments) noexcept {
   try {

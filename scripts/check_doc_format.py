@@ -48,9 +48,27 @@ not repeated here.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
 import re
 import sys
+
+
+def _load_doc_meta():
+    """`check_doc_meta.py` owns the front matter rule; load it by path.
+
+    The script is run both directly and from `scripts/tests/`, so the module is
+    loaded from the file next to this one rather than imported by name.
+    """
+    path = Path(__file__).with_name("check_doc_meta.py")
+    spec = importlib.util.spec_from_file_location("check_doc_meta_for_format", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+front_matter_end = _load_doc_meta().front_matter_end
 
 ROADMAP = "plans/windows-port-roadmap.md"
 DIAGRAM_HEADING = "## Phase 5〜7 の依存関係と実行順"
@@ -81,7 +99,7 @@ EDGE = re.compile(
 
 
 def read_lines(path: Path) -> list[str]:
-    return path.read_text(encoding="utf-8").split("\n")
+    return path.read_text(encoding="utf-8-sig").split("\n")
 
 
 def diagram_block(lines: list[str]) -> list[str] | None:
@@ -166,16 +184,6 @@ def check_roadmap(root: Path) -> list[str]:
                         f"{ROADMAP}: 依存図の辺 {src} → {target} が、{base.group(0)} の前提に書かれていません"
                     )
     return problems
-
-
-def front_matter_end(lines: list[str]) -> int:
-    """Index of the first line after the front matter, or 0 when there is none."""
-    if not lines or lines[0].rstrip("\r") != "---":
-        return 0
-    for i in range(1, len(lines)):
-        if lines[i].rstrip("\r") == "---":
-            return i + 1
-    return 0
 
 
 def check_spec(path: Path, rel: str) -> list[str]:

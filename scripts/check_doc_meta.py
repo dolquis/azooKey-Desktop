@@ -17,8 +17,9 @@ Front matter
 
     kind           required. One of KINDS.
     milestones     spec: required. design: optional. Others: not allowed.
-                   Every ID is written out (`M13, M14`), no ranges. `M58-A`
-                   and `X-1` are accepted.
+                   Every ID is written out (`M13, M14`), no ranges. A step
+                   (`M58-A`), a theme (`X-1`) and a theme item (`X-3-3`) are
+                   written as the index row writes them.
     canonical_for  spec / design / policy / runbook: required. Others: not
                    allowed. Each phrase must occur in the document's row of the
                    index, so the two cannot drift apart.
@@ -33,7 +34,7 @@ Which documents
   (`NOT_GOVERNED`), `docs/decisions/` (frozen records with their own fixed
   header, read instead of front matter), `docs/archive/` (kind by location) and
   `docs/linear-conventions.md` (a mirror of a shared core; its kind comes from
-  the index). Specs may still lack front matter (`FRONT_MATTER_OPTIONAL`);
+  the index). Specs may still lack front matter (`SPEC_FRONT_MATTER_OPTIONAL`);
   their kind then comes from the file name.
 
 Rules (fail)
@@ -43,8 +44,9 @@ Rules (fail)
       table of INDEX_SECTIONS, that table allows the kind, a reference row
       says 「正典ではない」 and a design row does not. An archived document
       is in no table.
-  M3  A spec's milestones equal the IDs in its index row (`M13〜M19` is
-      expanded).
+  M3  A spec's milestones equal the IDs in its index row (`M13〜M19` and
+      `X-1〜X-4` are expanded; an ID inside a word, such as `ARM64`, is not
+      an ID).
   M4  A decision record's header has 種別 and 結論の正典. The documents its
       結論の正典 links to equal the ones the index row links to, and every one
       of them mentions the record's file name (the back link).
@@ -65,9 +67,8 @@ Warnings (exit status unchanged)
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 
@@ -87,7 +88,7 @@ DECLARABLE = {"spec", "design", "runbook", "one-off", "reference", "policy"}
 NOT_GOVERNED = ("docs/README.md", "docs/AGENTS.md", "docs/CLAUDE.md", "docs/decisions/README.md")
 NO_FRONT_MATTER = {"docs/linear-conventions.md": "policy"}
 # Specs get their front matter after the spec split (DEV-1976〜DEV-1981).
-FRONT_MATTER_OPTIONAL = ("docs/*-spec.md",)
+SPEC_FRONT_MATTER_OPTIONAL = True
 
 # Table headings of the index and the kinds each one holds. A heading matches
 # when it starts with the key.
@@ -102,11 +103,16 @@ INDEX_SECTIONS = {
 NOT_CANONICAL = "正典ではない"
 DECISION_TYPES = {"決定記録", "測定記録", "測定記録・決定記録", "決定記録・測定記録"}
 
-MILESTONE_ID = re.compile(r"^(?:M\d+(?:-[A-Z])?|X-\d+)$")
-ROW_MILESTONE = re.compile(r"M\d+(?:-[A-Z])?|X-\d+")
-ROW_RANGE = re.compile(r"M(\d+)〜M(\d+)")
+# A milestone is `M<n>` with an optional step letter (`M58-A`), or a
+# cross-cutting theme `X-<n>` with optional sub-items (`X-3-3`), written the way
+# the index rows write them.
+MILESTONE_ID = re.compile(r"^(?:M\d+(?:-[A-Z])?|X-\d+(?:-\d+)*)$")
+# The boundaries keep `ARM64` from yielding `M64` and `MAX-1` from yielding `X-1`.
+ROW_MILESTONE = re.compile(r"(?<![A-Za-z0-9-])(?:M\d+(?:-[A-Z](?![A-Za-z]))?|X-\d+(?:-\d+)*)(?![0-9])")
+ROW_RANGE = re.compile(r"(?<![A-Za-z0-9-])(M|X-)(\d+)〜(?:M|X-)(\d+)(?![0-9-])")
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 KEY_LINE = re.compile(r"^([a-z_]+):(?: (.*))?$")
+BOM = chr(0xFEFF)
 CHECKBOX = re.compile(r"^\s*[-*] \[([ xX])\] ")
 
 
@@ -115,17 +121,33 @@ class FrontMatterError(ValueError):
 
 
 def read_lines(path: Path) -> list[str]:
-    return path.read_text(encoding="utf-8").splitlines()
+    """The lines of a document, split as `check_doc_format.py` splits them.
+
+    A UTF-8 BOM is dropped so that it cannot hide the opening `---`, and a
+    trailing `\\r` is dropped so that CRLF files read the same as LF files.
+    """
+    text = path.read_text(encoding="utf-8-sig")
+    return [line.rstrip("\r") for line in text.split("\n")]
 
 
 def front_matter_end(lines: list[str]) -> int:
-    """Index of the first line after the front matter, or 0 when there is none."""
-    if not lines or lines[0] != "---":
+    """Index of the first line after the front matter, or 0 when there is none.
+
+    `check_doc_format.py` uses this function, so both scripts agree on where
+    the front matter ends.
+    """
+    if not lines or lines[0].lstrip(BOM).rstrip("\r") != "---":
         return 0
     for i in range(1, len(lines)):
-        if lines[i] == "---":
+        if lines[i].rstrip("\r") == "---":
             return i + 1
     return 0
+
+
+def is_spec(rel: str) -> bool:
+    """A spec is `docs/<name>-spec.md`, directly under `docs/`."""
+    path = PurePosixPath(rel)
+    return str(path.parent) == "docs" and path.name.endswith("-spec.md")
 
 
 def parse_scalar(text: str) -> str:
@@ -135,7 +157,7 @@ def parse_scalar(text: str) -> str:
         if '"' in inner or "\\" in inner:
             raise FrontMatterError(f"引用符の中に \" や \\ は書けません: {text}")
         return inner
-    if not text or text[0] in "\"'[]{}#&*!|>%@`" or ": " in text or " #" in text:
+    if not text or text[0] in "'[]{}#&*!|>%@`" or '"' in text or ": " in text or " #" in text:
         raise FrontMatterError(f"値は素の文字列か \"...\" で書いてください: {text}")
     return text
 
@@ -150,7 +172,10 @@ def parse_value(text: str) -> str | list[str]:
             return []
         items, buf, quoted = [], "", False
         for ch in inner:
-            if ch == '"':
+            # A quote opens only at the start of an item and closes the quoted
+            # item; a quote inside an unquoted item is left for parse_scalar
+            # to reject.
+            if ch == '"' and (quoted or not buf.strip()):
                 quoted = not quoted
             if ch == "," and not quoted:
                 items.append(buf)
@@ -224,8 +249,8 @@ def row_milestones(row: str) -> set[str]:
     cells = row.split("|")
     text = cells[2] if len(cells) > 2 else ""
     found = set(ROW_MILESTONE.findall(text))
-    for a, b in ROW_RANGE.findall(text):
-        found.update(f"M{n}" for n in range(int(a), int(b) + 1))
+    for prefix, a, b in ROW_RANGE.findall(text):
+        found.update(f"{prefix}{n}" for n in range(int(a), int(b) + 1))
     return found
 
 
@@ -248,13 +273,28 @@ def find_section(lines: list[str], ref: str) -> tuple[int, int] | None:
     number = ref.strip().lstrip("§").strip()
     if not number:
         return None
-    pattern = re.compile(r"^(#{1,6}) (?:§\s*)?" + re.escape(number) + r"(?:[.．:：]|\s)")
+    # `6` must not match `6.1`: a dot is a terminator only when no digit follows.
+    pattern = re.compile(
+        r"^(#{1,6}) (?:§\s*)?" + re.escape(number) + r"(?:[.．](?![0-9])|[:：]|\s)"
+    )
+    fenced = []
+    in_fence = False
+    for line in lines:
+        if line.startswith("```"):
+            in_fence = not in_fence
+            fenced.append(True)
+        else:
+            fenced.append(in_fence)
     for i, line in enumerate(lines):
-        m = pattern.match(line)
+        m = None if fenced[i] else pattern.match(line)
         if m:
             level = len(m.group(1))
             end = next(
-                (j for j in range(i + 1, len(lines)) if re.match(r"#{1,%d} " % level, lines[j])),
+                (
+                    j
+                    for j in range(i + 1, len(lines))
+                    if not fenced[j] and re.match(r"#{1,%d} " % level, lines[j])
+                ),
                 len(lines),
             )
             return i + 1, end
@@ -290,7 +330,7 @@ def check(root: Path) -> tuple[list[str], list[str]]:
     kinds: dict[str, str] = {}
     for rel in governed_docs(root):
         lines = read_lines(root / rel)
-        is_spec = fnmatch.fnmatch(rel, "docs/*-spec.md")
+        spec_name = is_spec(rel)
         kind = kind_by_location(rel)
         meta: dict[str, str | list[str]] | None = None
         if kind is None:
@@ -300,17 +340,17 @@ def check(root: Path) -> tuple[list[str], list[str]]:
                 problems.append(f"{rel}: M1 {exc}")
                 continue
             if meta is None:
-                if any(fnmatch.fnmatch(rel, pat) for pat in FRONT_MATTER_OPTIONAL):
+                if spec_name and SPEC_FRONT_MATTER_OPTIONAL:
                     kind = "spec"
                 else:
                     problems.append(f"{rel}: M1 冒頭に front matter（kind ほか）がありません")
                     continue
-        elif lines and lines[0] == "---":
+        elif front_matter_end(lines):
             problems.append(f"{rel}: M1 この文書は front matter を持ちません（種別は置き場所と索引で決まります）")
             continue
 
         if meta is not None:
-            problems.extend(check_meta(root, rel, meta, lines, is_spec, warnings))
+            problems.extend(check_meta(root, rel, meta, lines, spec_name, warnings))
             kind = str(meta.get("kind", ""))
             if kind not in KINDS:
                 continue
@@ -348,7 +388,7 @@ def check_meta(
     rel: str,
     meta: dict[str, str | list[str]],
     lines: list[str],
-    is_spec: bool,
+    spec_name: bool,
     warnings: list[str],
 ) -> list[str]:
     problems = []
@@ -361,7 +401,7 @@ def check_meta(
         return problems
     if kind not in DECLARABLE:
         problems.append(f"{rel}: M1 kind {kind} は置き場所で決まり、front matter には書けません")
-    if is_spec != (kind == "spec"):
+    if spec_name != (kind == "spec"):
         problems.append(f"{rel}: M1 kind spec は *-spec.md だけに付け、*-spec.md は kind spec にします")
     for key, required, allowed in (
         ("milestones", MILESTONES_REQUIRED, MILESTONES_ALLOWED),
@@ -383,9 +423,13 @@ def check_meta(
         problems.append(f"{rel}: M1 dod は節の参照（例 §6）を 1 つ書きます")
     if isinstance(meta.get("canonical_for"), list):
         rows = [row for _, d, row in index_rows(root) if d == rel]
-        row = rows[0].replace("`", "") if rows else ""
+        cells = rows[0].split("|") if rows else []
+        # The role column only: the document column holds the file name.
+        role = cells[2].replace("`", "") if len(cells) > 2 else ""
         for phrase in meta["canonical_for"]:
-            if phrase.replace("`", "") not in row:
+            if not phrase.strip():
+                problems.append(f"{rel}: M1 canonical_for に空の句があります")
+            elif phrase.replace("`", "") not in role:
                 problems.append(f"{rel}: M1 canonical_for の「{phrase}」が索引の行にありません")
     for target in as_list(meta.get("defers_to", [])):
         path = target.split(" §")[0].strip()

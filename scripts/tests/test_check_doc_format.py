@@ -207,6 +207,10 @@ class SpecTest(unittest.TestCase):
         text = "---\nkind: spec\nmilestones: [M1, M2, M3]\n---\n\n# Sample\n\nM1 と M2 を扱う。\n"
         self.assertEqual(self.check(text), [])
 
+    def test_front_matter_after_a_bom_is_skipped(self) -> None:
+        text = "﻿---\nkind: spec\nmilestones: [M1, M2, M3]\n---\n\n# Sample\n\nM1 と M2 を扱う。\n"
+        self.assertEqual(self.check(text), [])
+
     def test_window_starts_after_front_matter(self) -> None:
         front = "---\nkind: spec\n" + "canonical_for: [x]\n" * 20 + "---\n"
         problems = self.check(front + "# Sample\n\n更新日: x\n")

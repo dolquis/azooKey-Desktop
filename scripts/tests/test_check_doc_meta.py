@@ -107,7 +107,7 @@ def root_with(files: Mapping[str, str | None]) -> Path:
     for rel, text in docs.items():
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_text(text, encoding="utf-8", newline="")
     return tmp
 
 
@@ -323,6 +323,60 @@ class ReferenceWarningTest(unittest.TestCase):
         found, warned = MODULE.check(root_with({"docs/a-spec.md": spec}))
         self.assertEqual(found, [])
         self.assertTrue(has(warned, "docs/a-spec.md: W2 参考資料 docs/old-report.md を 1 か所"), warned)
+
+
+class ReviewFixTest(unittest.TestCase):
+    def test_row_milestones_need_a_word_boundary(self) -> None:
+        self.assertEqual(MODULE.row_milestones("| x | ARM64 と MAX-1 と M3 |"), {"M3"})
+
+    def test_row_milestones_expand_theme_ranges_and_keep_sub_ids(self) -> None:
+        found = MODULE.row_milestones("| x | X-1〜X-3、M16 / X-3-3 |")
+        self.assertEqual(found, {"X-1", "X-2", "X-3", "X-3-3", "M16"})
+        self.assertTrue(MODULE.MILESTONE_ID.match("X-3-3"))
+
+    def test_empty_canonical_phrase_fails(self) -> None:
+        found = problems({"docs/rules.md": '---\nkind: policy\ncanonical_for: [""]\n---\n'})
+        self.assertTrue(has(found, "canonical_for に空の句"), found)
+
+    def test_canonical_phrase_is_matched_against_the_role_column_only(self) -> None:
+        found = problems({"docs/rules.md": "---\nkind: policy\ncanonical_for: [rules.md]\n---\n"})
+        self.assertTrue(has(found, "canonical_for の「rules.md」が索引の行にありません"), found)
+
+    def test_bom_before_front_matter_is_read(self) -> None:
+        text = '﻿---\nkind: spec\ncanonical_for: ["M13〜M15"]\n---\n\n# A\ndecisions/2026-01-x.md\n'
+        found = problems({"docs/a-spec.md": text})
+        self.assertTrue(has(found, "kind spec には milestones が要ります"), found)
+
+    def test_crlf_front_matter_is_read(self) -> None:
+        text = DOCS["docs/rules.md"].replace("\n", "\r\n")
+        self.assertEqual(problems({"docs/rules.md": text}), [])
+
+    def test_spec_name_below_docs_is_not_a_spec(self) -> None:
+        index = INDEX.replace(
+            "| [`handoff/run.md`](handoff/run.md) | VM の手順 |",
+            "| [`handoff/run.md`](handoff/run.md) | VM の手順 |\n| [`handoff/x-spec.md`](handoff/x-spec.md) | 検証の手順 |",
+        )
+        text = '---\nkind: runbook\ncanonical_for: ["検証の手順"]\n---\n'
+        self.assertEqual(problems({"docs/README.md": index, "docs/handoff/x-spec.md": text}), [])
+
+    def test_dod_section_is_not_a_subsection_or_a_fenced_line(self) -> None:
+        plan = PLAN.replace(
+            "## 6. 完了基準",
+            "```\n## 6. 例\n- [x] a\n```\n\n## 6.1 準備\n\n- [x] 準備\n\n## 6. 完了基準",
+        )
+        self.assertEqual(warnings({"docs/handoff/plan.md": plan}), [])
+        self.assertEqual(problems({"docs/handoff/plan.md": plan}), [])
+
+    def test_quote_inside_an_unquoted_item_is_rejected(self) -> None:
+        with self.assertRaises(MODULE.FrontMatterError):
+            MODULE.parse_value('[x"y, z"w]')
+
+    def test_warnings_alone_keep_exit_code_zero(self) -> None:
+        root = root_with({"docs/a-spec.md": DOCS["docs/a-spec.md"] + "根拠は old-report.md。\n"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(MODULE.main(["--root", str(root)]), 0)
+        self.assertIn("warning: docs/a-spec.md: W2", out.getvalue())
 
 
 class RepositoryTest(unittest.TestCase):

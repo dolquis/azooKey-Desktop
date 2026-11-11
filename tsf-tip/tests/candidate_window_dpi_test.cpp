@@ -976,6 +976,45 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
   }
 }
 
+TEST(CandidateWindowScrollTest, WorkAreaAndDisplayChangesRemeasureAShownWindow) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  for (const bool display_change : {false, true}) {
+    SCOPED_TRACE(display_change);
+    const auto notify = [&](HWND hwnd) {
+      if (display_change) {
+        SendMessageW(hwnd, WM_DISPLAYCHANGE, 32, MAKELPARAM(1920, 1080));
+      } else {
+        SendMessageW(hwnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+      }
+    };
+    CandidateWindow::SetMonitorDpiForTest(96);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    const HWND hwnd = window.hwnd_for_test();
+    window.Show(POINT{20, 20}, {{L"一", L""}, {L"二", L""}}, 0);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, 2 * 24);
+
+    // A change of the monitor is measured again at the last anchor; the 144 DPI
+    // rows stand in for a work area that changed under the shown window.
+    CandidateWindow::SetMonitorDpiForTest(144);
+    notify(hwnd);
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, 2 * 36);
+    EXPECT_TRUE(window.IsVisible());
+
+    // A hidden window is left hidden.
+    window.Hide();
+    CandidateWindow::SetMonitorDpiForTest(96);
+    notify(hwnd);
+    EXPECT_FALSE(window.IsVisible());
+    window.Destroy();
+  }
+}
+
 TEST(CandidateWindowScrollTest, FewCandidatesHaveNoPositionRow) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());

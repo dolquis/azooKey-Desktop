@@ -1279,6 +1279,11 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       return TRUE;
     }
   }
+  if ((msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA) || msg == WM_DISPLAYCHANGE) {
+    // The taskbar or the resolution changed: the rows that fit and the placement
+    // come from the work area, so a shown window is measured again at its anchor.
+    if (IsVisible() || render_failed_) ResizeAtLastAnchor();
+  }
   switch (msg) {
     case WM_MOUSEACTIVATE:
       return MA_NOACTIVATE;

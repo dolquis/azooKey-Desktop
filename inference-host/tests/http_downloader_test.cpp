@@ -9,9 +9,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -269,6 +273,135 @@ class LocalHttpServer {
   mutable std::mutex mutex_;
   std::vector<std::string> requests_;
 };
+
+// Reads one request, sends `prefix` (nothing, or headers and part of a body), then holds the
+// connection open until Release() or destruction, so the client stays waiting in WinHTTP.
+class HoldingHttpServer {
+ public:
+  explicit HoldingHttpServer(std::string prefix) : prefix_(std::move(prefix)) {
+    socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_ == INVALID_SOCKET) return;
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int length = sizeof(address);
+    if (bind(socket_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) ==
+            SOCKET_ERROR ||
+        listen(socket_, 1) == SOCKET_ERROR ||
+        getsockname(socket_, reinterpret_cast<sockaddr*>(&address), &length) == SOCKET_ERROR) {
+      closesocket(socket_);
+      socket_ = INVALID_SOCKET;
+      return;
+    }
+    port_ = ntohs(address.sin_port);
+    listener_open_ = true;
+    worker_ = std::thread([this, listener = socket_] { Serve(listener); });
+  }
+
+  ~HoldingHttpServer() {
+    Release();
+    if (worker_.joinable()) worker_.join();
+  }
+
+  bool ok() const { return socket_ != INVALID_SOCKET; }
+  std::wstring url() const {
+    return L"http://127.0.0.1:" + std::to_wstring(port_) + L"/model.gguf";
+  }
+  bool holding() const {
+    std::lock_guard lock(mutex_);
+    return holding_;
+  }
+  // Also closes the listener, so a client that reconnects after the release is refused
+  // instead of waiting in the backlog.
+  void Release() {
+    std::lock_guard lock(mutex_);
+    released_ = true;
+    changed_.notify_all();
+    if (listener_open_) {
+      listener_open_ = false;
+      shutdown(socket_, SD_BOTH);
+      closesocket(socket_);
+    }
+  }
+
+ private:
+  void Serve(SOCKET listener) {
+    const SOCKET client = accept(listener, nullptr, nullptr);
+    if (client == INVALID_SOCKET) return;
+    const DWORD timeout_ms = 5000;
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+               sizeof(timeout_ms));
+    std::string request;
+    char buffer[1024];
+    while (request.find("\r\n\r\n") == std::string::npos) {
+      const int read = recv(client, buffer, sizeof(buffer), 0);
+      if (read <= 0) break;
+      request.append(buffer, static_cast<size_t>(read));
+    }
+    SendAll(client, prefix_);
+    std::unique_lock lock(mutex_);
+    holding_ = true;
+    changed_.wait(lock, [this] { return released_; });
+    lock.unlock();
+    shutdown(client, SD_BOTH);
+    closesocket(client);
+  }
+
+  const std::string prefix_;
+  SOCKET socket_{INVALID_SOCKET};
+  uint16_t port_{0};
+  std::thread worker_;
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  bool holding_{false};
+  bool released_{false};
+  bool listener_open_{false};
+};
+
+// A cancellation that turns true only after the client has asked it kArmedPolls times since
+// `armed` became true. Checks between WinHTTP calls alone never reach that count while the
+// client is blocked in one; only a wait that keeps polling the cancellation does.
+class PolledCancellation {
+ public:
+  static constexpr int kArmedPolls = 20;
+
+  explicit PolledCancellation(std::function<bool()> armed) : armed_(std::move(armed)) {}
+
+  std::function<bool()> callback() {
+    return [this] {
+      const auto id = std::this_thread::get_id();
+      if (!caller_) caller_ = id;
+      if (*caller_ != id) called_from_another_thread_ = true;
+      if (!armed_()) return false;
+      return ++armed_polls_ > kArmedPolls;
+    };
+  }
+  bool called_from_another_thread() const { return called_from_another_thread_; }
+
+ private:
+  std::function<bool()> armed_;
+  std::optional<std::thread::id> caller_;
+  int armed_polls_{0};
+  bool called_from_another_thread_{false};
+};
+
+// Runs call() on a worker and waits up to a bound far above a cancellation's latency, including
+// under coverage. The bound is not the measure; a request that ignored the cancellation would
+// otherwise wait for its 10-minute receive timeout. Afterwards the server is released so that
+// such a request ends and the worker can be joined. nullopt when the bound passed.
+template <typename Result, typename Call>
+std::optional<Result> RunBounded(HoldingHttpServer& server, Call call) {
+  std::promise<Result> done;
+  auto future = done.get_future();
+  std::thread worker([&] { done.set_value(call()); });
+  const bool finished = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
+  server.Release();
+  worker.join();
+  if (!finished) return std::nullopt;
+  return future.get();
+}
+
+constexpr uint32_t kLongReceiveTimeoutMs = 10 * 60 * 1000;
 
 void WriteFile(const std::filesystem::path& path, std::string_view contents) {
   std::ofstream stream(path, std::ios::binary | std::ios::trunc);
@@ -837,6 +970,123 @@ TEST(HttpDownloaderTest, FetchTextCancellationDiscardsResponse) {
   EXPECT_TRUE(result.body.empty());
   ASSERT_TRUE(result.error);
   EXPECT_NE(result.error->find("cancelled"), std::string::npos);
+}
+
+// DEV-1842: a cancellation stops a request that waits for the response headers, without
+// waiting for the receive timeout, and runs on the calling thread.
+TEST(HttpDownloaderTest, CancellationStopsDownloadWaitingForHeaders) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  HoldingHttpServer server("");
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.receive_timeout_ms = kLongReceiveTimeoutMs;
+  PolledCancellation cancellation([&] { return server.holding(); });
+  request.cancelled = cancellation.callback();
+  const auto result = RunBounded<azookey::host::HttpDownloadResult>(
+      server, [&] { return azookey::host::HttpDownloader().Download(request); });
+  ASSERT_TRUE(result) << "the download did not stop while waiting for the headers";
+  EXPECT_FALSE(result->ok());
+  ASSERT_TRUE(result->error);
+  EXPECT_NE(result->error->find("cancelled"), std::string::npos) << *result->error;
+  EXPECT_FALSE(cancellation.called_from_another_thread());
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+}
+
+// DEV-1842: a cancellation stops a download waiting in the middle of the body; the received
+// prefix stays in .part for a later resume and the destination is untouched.
+TEST(HttpDownloaderTest, CancellationStopsDownloadWaitingMidBodyAndKeepsPart) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  constexpr size_t kSent = 8;
+  HoldingHttpServer server("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(kFixture.size()) +
+                           "\r\nConnection: close\r\n\r\n" +
+                           std::string(kFixture.substr(0, kSent)));
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.receive_timeout_ms = kLongReceiveTimeoutMs;
+  std::atomic<uint64_t> received{0};
+  request.progress = [&](uint64_t bytes, uint64_t) { received = bytes; };
+  PolledCancellation cancellation([&] { return received.load() == kSent; });
+  request.cancelled = cancellation.callback();
+  const auto result = RunBounded<azookey::host::HttpDownloadResult>(
+      server, [&] { return azookey::host::HttpDownloader().Download(request); });
+  ASSERT_TRUE(result) << "the download did not stop while waiting for the rest of the body";
+  EXPECT_FALSE(result->ok());
+  ASSERT_TRUE(result->error);
+  EXPECT_NE(result->error->find("cancelled"), std::string::npos) << *result->error;
+  EXPECT_FALSE(cancellation.called_from_another_thread());
+  EXPECT_EQ(ReadFile(destination), "existing-model");
+  EXPECT_EQ(ReadFile(destination.wstring() + L".part"), kFixture.substr(0, kSent));
+}
+
+// DEV-1842: FetchText stops the same way while waiting for the headers.
+TEST(HttpDownloaderTest, CancellationStopsFetchTextWaitingForHeaders) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  HoldingHttpServer server("");
+  ASSERT_TRUE(server.ok());
+  azookey::host::HttpTextRequest request;
+  request.url = server.url();
+  request.max_bytes = 1024;
+  request.receive_timeout_ms = kLongReceiveTimeoutMs;
+  PolledCancellation cancellation([&] { return server.holding(); });
+  request.cancelled = cancellation.callback();
+  const auto result = RunBounded<azookey::host::HttpTextResult>(
+      server, [&] { return azookey::host::HttpDownloader().FetchText(request); });
+  ASSERT_TRUE(result) << "the text request did not stop while waiting for the headers";
+  EXPECT_FALSE(result->ok());
+  EXPECT_TRUE(result->body.empty());
+  ASSERT_TRUE(result->error);
+  EXPECT_NE(result->error->find("cancelled"), std::string::npos) << *result->error;
+}
+
+// DEV-1842: a WinHTTP failure reported by the asynchronous callback keeps the error shape the
+// callers pass on as detail ("<operation> failed (Windows error N)").
+TEST(HttpDownloaderTest, ReceiveTimeoutKeepsTheWindowsErrorShape) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  HoldingHttpServer server("");
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.receive_timeout_ms = 500;
+  const auto result = RunBounded<azookey::host::HttpDownloadResult>(
+      server, [&] { return azookey::host::HttpDownloader().Download(request); });
+  ASSERT_TRUE(result) << "the receive timeout did not end the download";
+  EXPECT_FALSE(result->ok());
+  ASSERT_TRUE(result->error);
+  // 12002 is ERROR_WINHTTP_TIMEOUT.
+  EXPECT_EQ(*result->error, "receiving HTTP response failed (Windows error 12002)");
+  EXPECT_FALSE(std::filesystem::exists(destination));
+}
+
+// DEV-1842 regression guard: a cancellation that turns true with the last chunk is caught by
+// the checks after the read, before the complete .part is promoted.
+TEST(HttpDownloaderTest, CancellationArrivingWithTheLastChunkNeverPromotes) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), false);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination, "existing-model");
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  std::atomic<bool> complete{false};
+  request.progress = [&](uint64_t bytes, uint64_t) { complete = bytes == kFixture.size(); };
+  request.cancelled = [&] { return complete.load(); };
+  const auto result = azookey::host::HttpDownloader().Download(request);
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("cancelled"), std::string::npos) << *result.error;
+  EXPECT_EQ(ReadFile(destination), "existing-model");
 }
 
 }  // namespace

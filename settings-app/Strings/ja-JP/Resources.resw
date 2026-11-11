@@ -54,7 +54,7 @@
   <data name="SaveButton.Content" xml:space="preserve"><value>保存</value></data>
   <data name="SaveBar_ChangeCount" xml:space="preserve"><value>変更した設定: {0} 件</value></data>
   <data name="SaveBar_NoChanges" xml:space="preserve"><value>変更した設定はありません。</value></data>
-  <data name="SaveBar_RepairPending" xml:space="preserve"><value>保存すると、設定ファイルの無効な内容を直します。</value></data>
+  <data name="SaveBar_RepairPending" xml:space="preserve"><value>保存すると設定ファイルを修復します。</value></data>
   <data name="SaveBar_UnsavedTitle" xml:space="preserve"><value>保存していない変更があります</value></data>
   <data name="SaveBar_UnsavedMessage" xml:space="preserve"><value>変更した {0} 件の設定を保存してから閉じますか。</value></data>
   <data name="SaveBar_UnsavedSave" xml:space="preserve"><value>保存する</value></data>

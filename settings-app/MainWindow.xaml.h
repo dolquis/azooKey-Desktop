@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -79,7 +80,10 @@ struct MainWindow : MainWindowT<MainWindow> {
   void ShowInvalidSetting(const std::string& path);
 
   std::optional<std::filesystem::path> settings_path_;
-  bool openai_api_key_changed_{false};
+  // The hash of the API key the box was given when loading or last saving, to tell an edit.
+  size_t loaded_api_key_hash_{std::hash<std::string>{}(std::string())};
+  // The user pressed "API キーを削除" since then.
+  bool openai_api_key_cleared_{false};
   std::optional<azookey::settings::NeologdPackAttribution> neologd_attribution_;
   // The neologd switch value the user has accepted; programmatic changes keep it in sync.
   bool neologd_enabled_{false};

@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "AppProfiles.h"
@@ -120,5 +121,17 @@ std::vector<std::string> SettingsRequiringHostRestart(const EditableSettings& be
 // (sideload-packaging-spec section 3.2). `edited` is what a save would be given.
 std::vector<std::string> ChangedSettingPaths(const EditableSettings& edited,
                                              const EditableSettings& loaded);
+
+// Whether a save would repair what loading reported (an invalid document or dropped entries), so
+// the save bar allows a save with no changed key (sideload-packaging-spec section 3.2).
+bool SaveRepairsLoadedDocument(const SettingsDocumentResult& result);
+
+// The save button's state: the loaded file may be written, no save is running, and there is a
+// changed key or a repair to make.
+bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool repair_pending);
+
+// Panes that act on the Host at once hold no key to save and show no save bar. The tag is the
+// NavigationViewItem's Tag.
+bool PaneShowsSaveBar(std::wstring_view pane_tag);
 
 }  // namespace azookey::settings

@@ -1010,6 +1010,44 @@ TEST(SettingsDocumentTest, ChangedSettingPathsCountsEachKeyASaveWouldWrite) {
   EXPECT_TRUE(azookey::settings::ChangedSettingPaths(reverted, loaded).empty());
 }
 
+TEST(SettingsDocumentTest, SaveBarAllowsARepairingSaveWithoutChanges) {
+  ScopedTempDirectory temp("azookey_settings_save_bar");
+  const auto path = temp.path() / "settings.json";
+  using azookey::settings::SaveRepairsLoadedDocument;
+
+  EXPECT_FALSE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  WriteText(path, R"({"logLevel":"debug"})");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  // The load message promises that a save removes the invalid entry or rebuilds the file.
+  WriteText(path, R"({"maxCandidates":"many"})");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  WriteText(path, "{not json");
+  EXPECT_TRUE(SaveRepairsLoadedDocument(azookey::settings::LoadSettingsDocument(path)));
+  azookey::settings::SettingsDocumentResult unreadable;
+  unreadable.status = azookey::settings::SettingsDocumentStatus::ReadError;
+  unreadable.warnings.emplace_back("ignored");
+  EXPECT_FALSE(SaveRepairsLoadedDocument(unreadable));
+
+  using azookey::settings::SaveBarAllowsSave;
+  EXPECT_FALSE(SaveBarAllowsSave(true, false, 0, false));
+  EXPECT_TRUE(SaveBarAllowsSave(true, false, 2, false));
+  EXPECT_TRUE(SaveBarAllowsSave(true, false, 0, true));
+  EXPECT_FALSE(SaveBarAllowsSave(true, true, 2, false));
+  // A file that could not be read is never overwritten.
+  EXPECT_FALSE(SaveBarAllowsSave(false, false, 2, true));
+}
+
+TEST(SettingsDocumentTest, OnlyPanesWithKeysToSaveShowTheSaveBar) {
+  using azookey::settings::PaneShowsSaveBar;
+  for (const auto* pane : {L"General", L"Input", L"Dictionary", L"Ai", L"Privacy", L"Profiles",
+                           L"Models", L"Advanced", L"Version"}) {
+    EXPECT_TRUE(PaneShowsSaveBar(pane));
+  }
+  for (const auto* pane : {L"Learning", L"Persona", L"Proofread"}) {
+    EXPECT_FALSE(PaneShowsSaveBar(pane));
+  }
+}
+
 TEST(SettingsDocumentTest, UnknownAndMistypedDictionaryLayerValuesAreRemoved) {
   ScopedTempDirectory temp("azookey_settings_dictionary_invalid");
   const auto path = temp.path() / "settings.json";

@@ -810,4 +810,21 @@ std::vector<std::string> ChangedSettingPaths(const EditableSettings& edited,
   return paths;
 }
 
+bool SaveRepairsLoadedDocument(const SettingsDocumentResult& result) {
+  if (result.status == SettingsDocumentStatus::LockUnavailable ||
+      result.status == SettingsDocumentStatus::ReadError) {
+    return false;
+  }
+  return result.status == SettingsDocumentStatus::Invalid || !result.warnings.empty();
+}
+
+bool SaveBarAllowsSave(bool can_write, bool saving, size_t changed_count, bool repair_pending) {
+  return can_write && !saving && (changed_count > 0 || repair_pending);
+}
+
+bool PaneShowsSaveBar(std::wstring_view pane_tag) {
+  // "Version" still holds privacy.crashReportConsent until it moves to "Privacy" (DEV-1941).
+  return pane_tag != L"Learning" && pane_tag != L"Persona" && pane_tag != L"Proofread";
+}
+
 }  // namespace azookey::settings

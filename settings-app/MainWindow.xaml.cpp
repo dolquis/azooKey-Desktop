@@ -70,12 +70,6 @@ winrt::hstring StatusText(
   return {};
 }
 
-// Panes that act on the Host at once hold nothing to save, so they show no save bar
-// (sideload-packaging-spec section 3.2). "Version" still holds privacy.crashReportConsent.
-bool PaneHasSaveBar(std::wstring_view tag) {
-  return tag != L"Learning" && tag != L"Persona" && tag != L"Proofread";
-}
-
 // Replaces the first "{0}" in a resource string.
 winrt::hstring WithCount(const winrt::hstring& format, size_t count) {
   std::wstring text(format);
@@ -240,8 +234,9 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   ProofreadPaneHost().Visibility(visible(L"Proofread"));
   AdvancedPane().Visibility(visible(L"Advanced"));
   VersionPane().Visibility(visible(L"Version"));
-  SaveBar().Visibility(PaneHasSaveBar(tag) ? Microsoft::UI::Xaml::Visibility::Visible
-                                           : Microsoft::UI::Xaml::Visibility::Collapsed);
+  SaveBar().Visibility(azookey::settings::PaneShowsSaveBar(tag)
+                           ? Microsoft::UI::Xaml::Visibility::Visible
+                           : Microsoft::UI::Xaml::Visibility::Collapsed);
   if (tag == L"Models" && model_pane_) model_pane_->OnShown();
   if (tag == L"Learning" && learning_pane_) learning_pane_->OnShown();
   if (tag == L"Persona" && persona_pane_) persona_pane_->OnShown();
@@ -498,9 +493,7 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   can_save_ = result.status != azookey::settings::SettingsDocumentStatus::LockUnavailable &&
               result.status != azookey::settings::SettingsDocumentStatus::ReadError;
   // The load message says a save rewrites the file without the invalid entries.
-  repair_pending_ =
-      can_save_ && (result.status == azookey::settings::SettingsDocumentStatus::Invalid ||
-                    !result.warnings.empty());
+  repair_pending_ = azookey::settings::SaveRepairsLoadedDocument(result);
   saved_settings_ = result.settings;
   saved_settings_.openai_api_key.clear();  // Only compared for restart; keep no extra secret copy.
   ApplyDictionaryToControls(
@@ -518,7 +511,8 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
       result.settings.profiles_by_app.value_or(azookey::settings::AppProfiles{}),
       result.settings.legacy_prompt_prefixes);
   OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
-  openai_api_key_changed_ = false;
+  loaded_api_key_hash_ = std::hash<std::string>{}(result.settings.openai_api_key);
+  openai_api_key_cleared_ = false;
   if (result.settings.model_backend_preference) {
     const auto& backend = *result.settings.model_backend_preference;
     BackendPreferenceCombo().SelectedIndex(backend == "cpu" ? 1 : 0);
@@ -556,6 +550,7 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
 
 void MainWindow::ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                             const winrt::hstring& title, const winrt::hstring& message) {
+  load_problem_shown_ = false;
   SettingsStatusInfoBar().Severity(severity);
   SettingsStatusInfoBar().Title(title);
   SettingsStatusInfoBar().Message(message);
@@ -568,6 +563,8 @@ void MainWindow::ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity s
   SaveStatusInfoBar().Title(title);
   SaveStatusInfoBar().Message(message);
   SaveStatusInfoBar().IsOpen(true);
+  // A save asked for when closing may run from a pane without the save bar; show its result.
+  SaveBar().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
 }
 
 azookey::settings::EditableSettings MainWindow::SettingsFromControls(
@@ -582,10 +579,12 @@ azookey::settings::EditableSettings MainWindow::SettingsFromControls(
     settings.model_backend_preference.reset();
   }
   settings.model_selected_path = winrt::to_string(ModelPathTextBox().Text());
-  settings.openai_api_key_changed = openai_api_key_changed_;
-  if (openai_api_key_changed_) {
-    settings.openai_api_key = winrt::to_string(OpenAiApiKeyPasswordBox().Password());
-  }
+  // Compared by hash, so no further copy of the loaded key is kept. A clear is always written,
+  // which also replaces a stored key that could not be decrypted.
+  auto api_key = winrt::to_string(OpenAiApiKeyPasswordBox().Password());
+  settings.openai_api_key_changed =
+      openai_api_key_cleared_ || std::hash<std::string>{}(api_key) != loaded_api_key_hash_;
+  if (settings.openai_api_key_changed) settings.openai_api_key = std::move(api_key);
   const int log_index = LogLevelCombo().SelectedIndex();
   settings.log_level = log_index == 0   ? "error"
                        : log_index == 1 ? "warn"
@@ -622,7 +621,8 @@ void MainWindow::RefreshSaveBar() {
     ChangeCountText().Text(
         resources.GetString(repair_pending_ ? L"SaveBar_RepairPending" : L"SaveBar_NoChanges"));
   }
-  SaveButton().IsEnabled(can_save_ && !saving_ && (count > 0 || repair_pending_));
+  SaveButton().IsEnabled(
+      azookey::settings::SaveBarAllowsSave(can_save_, saving_, count, repair_pending_));
 }
 
 winrt::fire_and_forget MainWindow::ConfirmCloseAsync() {
@@ -671,16 +671,13 @@ winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspec
 
 void MainWindow::OpenAiApiKeyPasswordBox_PasswordChanged(
     Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
-  // Only typing (or pasting) into the box is an edit; the value set when loading is not.
-  if (OpenAiApiKeyPasswordBox().FocusState() == Microsoft::UI::Xaml::FocusState::Unfocused) return;
-  openai_api_key_changed_ = true;
   RefreshSaveBar();
 }
 
 void MainWindow::ClearOpenAiApiKeyButton_Click(Windows::Foundation::IInspectable const&,
                                                Microsoft::UI::Xaml::RoutedEventArgs const&) {
   OpenAiApiKeyPasswordBox().Password(L"");
-  openai_api_key_changed_ = true;
+  openai_api_key_cleared_ = true;
   RefreshSaveBar();
 }
 
@@ -764,7 +761,10 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
     UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
   }
   if (save_result.ok) {
-    openai_api_key_changed_ = false;
+    if (settings.openai_api_key_changed) {
+      loaded_api_key_hash_ = std::hash<std::string>{}(settings.openai_api_key);
+    }
+    openai_api_key_cleared_ = false;
     RefreshNeologdLayerStatus();
   }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;

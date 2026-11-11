@@ -346,6 +346,8 @@
   <data name="Models_SelectedNone" xml:space="preserve"><value>未選択（AI モデルを使わずに変換します）</value></data>
   <data name="Models_BrowseButton" xml:space="preserve"><value>参照…</value></data>
   <data name="Models_ClearButton" xml:space="preserve"><value>選択を外す</value></data>
+  <data name="Models_BrowseInvalidTitle" xml:space="preserve"><value>このファイルは使えません</value></data>
+  <data name="Models_BrowseInvalidMessage" xml:space="preserve"><value>「参照…」で選べるのは、この PC にある .gguf のファイルだけです。</value></data>
   <data name="Models_Catalog_ListedAbove" xml:space="preserve"><value>取得済み（上の一覧から選べます）</value></data>
   <data name="Models_Description" xml:space="preserve"><value>models フォルダにあるモデルと検証結果です。選んで保存すると、次にロードするモデルが切り替わります。</value></data>
   <data name="Models_RefreshButton" xml:space="preserve"><value>一覧を更新</value></data>
@@ -391,6 +393,7 @@
   <data name="Models_Catalog_CancelFailedTitle" xml:space="preserve"><value>取得を中止できませんでした</value></data>
   <data name="Models_Catalog_NotFetchableNote" xml:space="preserve"><value>このモデルには取得元がありません。手で models\zenzai に置いてください。</value></data>
   <data name="Models_Catalog_FetchedTitle" xml:space="preserve"><value>モデルを取得しました</value></data>
+  <data name="Models_Catalog_FetchedChoiceKept" xml:space="preserve"><value>取得中に「使うモデル」が変わったので、選択はそのままにしました。取得したモデルは一覧から選べます。</value></data>
   <data name="Models_Catalog_FailedTitle" xml:space="preserve"><value>モデルを取得できませんでした</value></data>
   <data name="Models_Catalog_Stalled" xml:space="preserve"><value>しばらく受信が進まないため、待つのをやめました。変換エンジンは取得を続けている場合があります。「一覧を更新」で状態を確かめてください。</value></data>
   <data name="Models_Catalog_Interrupted" xml:space="preserve"><value>取得の途中で変換エンジンが再起動したため、取得は中断されました。もう一度「取得」を押すと続きから再開します。</value></data>

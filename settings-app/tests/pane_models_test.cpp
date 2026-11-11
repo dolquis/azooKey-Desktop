@@ -126,6 +126,23 @@ TEST(ModelPaneModelTest, ShowsTheChosenPathOrThatNoneIsChosen) {
             L"C:\\モデル\\a.gguf");
 }
 
+TEST(ModelPaneModelTest, AFetchThatEndsAfterTheChoiceChangedKeepsTheChoice) {
+  // model-management-spec section 6.1: a fetch puts its file into "使うモデル" only when the user
+  // has not changed the choice since it started.
+  azookey::settings::ModelChoiceGeneration generation;
+  const auto untouched = generation.value();
+  EXPECT_TRUE(generation.FetchMayChoose(untouched));
+
+  const auto at_start = generation.value();
+  generation.Changed();  // Another model chosen, or the choice cleared, while the fetch ran.
+  EXPECT_FALSE(generation.FetchMayChoose(at_start));
+  // Choosing back the same file is still a change made meanwhile.
+  generation.Changed();
+  EXPECT_FALSE(generation.FetchMayChoose(at_start));
+  // A fetch started after those changes may choose its file.
+  EXPECT_TRUE(generation.FetchMayChoose(generation.value()));
+}
+
 TEST(ModelPaneModelTest, OnlyAnExistingAbsoluteGgufFileIsUsable) {
   using azookey::settings::IsUsableModelFile;
   const auto dir = std::filesystem::temp_directory_path() / "azookey_settings_usable_model";

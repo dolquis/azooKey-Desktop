@@ -113,6 +113,20 @@ bool IsUsableModelFile(const std::filesystem::path& path);
 // model chosen yet, so the Host converts without one; sideload-packaging-spec section 3.7).
 std::wstring SelectedModelDisplay(std::string_view utf8_path, std::wstring_view none_text);
 
+// Counts the user's changes of "使うモデル". A catalog fetch remembers the count when it starts and
+// puts its file into "使うモデル" only if no change came meanwhile, so a fetch that ends after the
+// user chose another model or cleared the choice does not take the choice back
+// (model-management-spec section 6.1).
+class ModelChoiceGeneration {
+ public:
+  void Changed() { ++value_; }
+  uint64_t value() const { return value_; }
+  bool FetchMayChoose(uint64_t at_start) const { return at_start == value_; }
+
+ private:
+  uint64_t value_{0};
+};
+
 // The string for a catalog entry's file state ("missing", "verified", "mismatch").
 std::string CatalogEntryStateResource(std::string_view state);
 

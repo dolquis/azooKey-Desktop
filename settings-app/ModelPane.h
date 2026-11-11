@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "ModelPaneModel.h"
 #include "SettingsDocument.h"
 #include "azookey/ipc/Payloads.h"
 #include "pch.h"
@@ -65,6 +66,7 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   Host host_;
   winrt::Microsoft::UI::Xaml::Controls::InfoBar problem_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBlock selected_text_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Button browse_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button clear_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Button refresh_button_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel models_panel_{nullptr};
@@ -82,6 +84,11 @@ class ModelPane : public std::enable_shared_from_this<ModelPane> {
   bool listing_{false};
   bool benchmarking_{false};
   bool fetching_{false};
+  // The file picker of "参照…" is open; a second one is not asked for.
+  bool browsing_{false};
+  // The user's changes of "使うモデル", and their count when the running fetch started.
+  ModelChoiceGeneration choice_generation_;
+  uint64_t fetch_choice_at_start_{0};
   std::string fetching_id_;
   uint64_t fetch_received_{0};
   uint64_t fetch_total_{0};

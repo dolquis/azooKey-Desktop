@@ -110,13 +110,13 @@ void ModelPane::Build(controls::StackPanel panel,
   controls::StackPanel choice_buttons;
   choice_buttons.Orientation(controls::Orientation::Horizontal);
   choice_buttons.Spacing(8);
-  controls::Button browse_button;
-  browse_button.Content(winrt::box_value(resources.GetString(L"Models_BrowseButton")));
-  SetId(browse_button, L"ModelBrowseButton");
-  browse_button.Click([weak = weak_from_this()](auto const&, auto const&) {
+  browse_button_ = controls::Button();
+  browse_button_.Content(winrt::box_value(resources.GetString(L"Models_BrowseButton")));
+  SetId(browse_button_, L"ModelBrowseButton");
+  browse_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
     if (const auto self = weak.lock()) self->BrowseForModel();
   });
-  choice_buttons.Children().Append(browse_button);
+  choice_buttons.Children().Append(browse_button_);
   clear_button_ = controls::Button();
   clear_button_.Content(winrt::box_value(resources.GetString(L"Models_ClearButton")));
   SetId(clear_button_, L"ModelClearButton");
@@ -193,29 +193,42 @@ void ModelPane::Choose(const std::string& path) {
   const auto selected = host_.selected_path ? host_.selected_path() : std::string();
   // Choosing the same file again changes nothing, so the save bar does not count it.
   const bool same = path.empty() ? selected.empty() : SameModelPath(path, selected);
-  if (!same && host_.select_path) host_.select_path(path);
+  if (!same) {
+    if (host_.select_path) host_.select_path(path);
+    choice_generation_.Changed();
+  }
   ShowSelection();
 }
 
 winrt::fire_and_forget ModelPane::BrowseForModel() {
   const auto self = shared_from_this();
+  // Pressed again while the picker is open: one picker at a time.
+  if (browsing_) co_return;
+  browsing_ = true;
+  browse_button_.IsEnabled(false);
   try {
     winrt::Windows::Storage::Pickers::FileOpenPicker picker;
     winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(host_.window_handle()));
     picker.FileTypeFilter().Append(L".gguf");
     const auto file = co_await picker.PickSingleFileAsync();
+    browsing_ = false;
+    browse_button_.IsEnabled(true);
     if (!file) co_return;
     ResourceLoader resources;
+    // A file outside this PC's file system has an empty Path, and "*.*" in the picker's name box
+    // lets any file through; neither can be model.selectedPath.
     const std::filesystem::path path(file.Path().c_str());
     if (!IsUsableModelFile(path)) {
-      ShowBar(controls::InfoBarSeverity::Warning, resources.GetString(L"Models_ProblemTitle"),
-              resources.GetString(L"InvalidModelPath"));
+      ShowBar(controls::InfoBarSeverity::Warning, resources.GetString(L"Models_BrowseInvalidTitle"),
+              resources.GetString(L"Models_BrowseInvalidMessage"));
       co_return;
     }
     Choose(winrt::to_string(file.Path()));
     ShowBar(controls::InfoBarSeverity::Informational, resources.GetString(L"Models_SelectedTitle"),
             resources.GetString(L"Models_SelectedMessage"));
   } catch (...) {
+    browsing_ = false;
+    browse_button_.IsEnabled(true);
     ResourceLoader resources;
     ShowBar(controls::InfoBarSeverity::Error, resources.GetString(L"Models_ProblemTitle"),
             resources.GetString(L"Models_UnexpectedError"));
@@ -562,6 +575,7 @@ winrt::fire_and_forget ModelPane::FetchCatalog(std::string model_id) {
   const auto self = shared_from_this();
   if (fetching_ || cancel_in_flight_) co_return;
   fetching_ = true;
+  fetch_choice_at_start_ = choice_generation_.value();
   fetching_id_ = model_id;
   fetch_received_ = 0;
   fetch_total_ = 0;
@@ -703,9 +717,13 @@ void ModelPane::ShowFetchResult(const azookey::ipc::CatalogFetchResponse& respon
   ResourceLoader resources;
   const auto result = Str(resources, CatalogFetchResultResource(response));
   if (CatalogFetchSucceeded(response)) {
-    Choose(response.path);
+    // The user chose another model or cleared the choice while it ran: keep that choice.
+    const bool take = choice_generation_.FetchMayChoose(fetch_choice_at_start_);
+    if (take) Choose(response.path);
     ShowBar(controls::InfoBarSeverity::Success, resources.GetString(L"Models_Catalog_FetchedTitle"),
-            result + L"\n" + resources.GetString(L"Models_SelectedMessage"));
+            result + L"\n" +
+                resources.GetString(take ? L"Models_SelectedMessage"
+                                         : L"Models_Catalog_FetchedChoiceKept"));
     return;
   }
   const bool failed = response.status == "failed";

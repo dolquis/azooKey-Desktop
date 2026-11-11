@@ -3,6 +3,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #include "azookey/tsf/CandidateWindow.h"
@@ -613,6 +614,226 @@ TEST(CandidateWindowRenderTest, DetailsFailureReturnsFalseAndClosesOnlyThePopup)
   EXPECT_TRUE(window.IsVisible());
   EXPECT_STREQ(window.failure_stage(), "");
   EXPECT_EQ(window.failure_hr(), S_OK);
+}
+
+// A composition's text extent: the window opens below its bottom-left.
+constexpr RECT kAnchor{20, 4, 120, 20};
+
+const std::vector<std::wstring> kSixPredictions = {L"予測一", L"予測二", L"予測三",
+                                                   L"予測四", L"予測五", L"予測六"};
+
+TEST(CandidateWindowPredictionTest, RowsAreTheOnlyClickRegionsAt96And144And192Dpi) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Target = CandidateWindow::HitTarget;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    int candidate_clicks = 0;
+    std::vector<int> prediction_clicks;
+    window.SetOnClick([&](int) { ++candidate_clicks; });
+    window.SetOnPredictionClick([&](int index) { prediction_clicks.push_back(index); });
+    // The lock and the banner belong to candidate mode only.
+    window.SetSecureIndicator(true);
+    window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+    window.ShowPredictions(kAnchor, kSixPredictions);
+    ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+    EXPECT_EQ(window.mode(), CandidateWindow::Mode::Prediction);
+    EXPECT_EQ(window.GetPredictionCount(), CandidateWindow::kMaxPredictions);
+    EXPECT_EQ(window.GetCount(), 0);
+
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    RECT client{};
+    ASSERT_TRUE(GetClientRect(window.hwnd_for_test(), &client));
+    // Five rows and no margin above or below them.
+    EXPECT_EQ(client.bottom, 5 * row);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.left, kAnchor.left);
+    EXPECT_EQ(bounds.top, kAnchor.bottom);
+    const int width = client.right;
+    const auto expect = [&](POINT point, Target target, int index = -1) {
+      const auto hit = window.HitTestForTest(point);
+      EXPECT_EQ(hit.target, target) << point.x << "," << point.y;
+      EXPECT_EQ(hit.index, index) << point.x << "," << point.y;
+    };
+    expect({0, 0}, Target::Prediction, 0);
+    expect({width - 1, 0}, Target::Prediction, 0);
+    expect({width - 1, row - 1}, Target::Prediction, 0);
+    expect({0, row}, Target::Prediction, 1);
+    expect({width - 1, 5 * row - 1}, Target::Prediction, 4);
+    expect({0, 5 * row}, Target::None);
+
+    // A press accepts the prediction; the candidate callback never sees it.
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, row + 2));
+    EXPECT_EQ(prediction_clicks, std::vector<int>{1});
+    EXPECT_EQ(candidate_clicks, 0);
+
+    // Candidate mode replaces the predictions; the two are never drawn together.
+    window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+    EXPECT_EQ(window.mode(), CandidateWindow::Mode::Candidate);
+    EXPECT_FALSE(window.IsShowingPredictions());
+    EXPECT_EQ(window.GetPredictionCount(), 0);
+    expect({0, 0}, Target::Candidate, 0);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowPredictionTest, DrawsKeyHintsWithoutNumbersOrSelection) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    tsf::testing::SetThemeInputsForTest(false, 1u);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.ShowSecureToast();
+    window.ShowPredictions(kAnchor, {L"漢字漢字", L"漢字漢字", L"漢字漢字"});
+    ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+    EXPECT_TRUE(window.RenderForTest()) << window.failure_stage();
+
+    std::vector<COLORREF> pixels;
+    int width = 0;
+    int height = 0;
+    ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    const int row = scale(24);
+    // No toast row: three rows only.
+    ASSERT_EQ(height, 3 * row);
+    const ThemeColors& colors = window.theme_for_test();
+    const auto at = [&](int x, int y) { return pixels[static_cast<size_t>(y * width + x)]; };
+    // The start of the hint column: Tab, ⇧Tab, then empty.
+    const auto hint_has_ink = [&](int index) {
+      for (int y = index * row + 2; y < (index + 1) * row - 2; ++y)
+        for (int x = scale(8); x < scale(8) + scale(10); ++x)
+          if (at(x, y) != colors.background) return true;
+      return false;
+    };
+    EXPECT_TRUE(hint_has_ink(0));
+    EXPECT_TRUE(hint_has_ink(1));
+    EXPECT_FALSE(hint_has_ink(2));
+    // Hints are sub_text: grayscale coverage of that gray over white is never
+    // darker than it, while the prediction text reaches the darker text color.
+    const auto darkest = [&](int index, int left, int right) {
+      int value = 255;
+      for (int y = index * row + 1; y < (index + 1) * row - 1; ++y)
+        for (int x = left; x < right; ++x) value = std::min(value, int{GetRValue(at(x, y))});
+      return value;
+    };
+    const int sub_text = GetRValue(colors.sub_text);
+    ASSERT_GT(sub_text, GetRValue(colors.text) + 40);
+    for (int i = 0; i < 2; ++i) {
+      SCOPED_TRACE(i);
+      const int hint = darkest(i, scale(8), scale(8) + scale(14));
+      EXPECT_GE(hint, sub_text - 8);
+      EXPECT_LT(hint, 200);
+      EXPECT_LT(darkest(i, scale(60), width - scale(8)), sub_text - 30);
+    }
+    // No row is highlighted as selected.
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(at(width - 3, i * row + row / 2), colors.background) << i;
+    EXPECT_EQ(at(0, row / 2), colors.border);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowPredictionTest, RenderFailureKeepsPredictionsHiddenAndUnclickable) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  using Failure = CandidateWindow::RenderFailureForTest;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  int clicks = 0;
+  window.SetOnPredictionClick([&](int) { ++clicks; });
+
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  window.ShowPredictions(kAnchor, {L"一", L"二"});
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_FALSE(window.IsShowingPredictions());
+  EXPECT_STREQ(window.failure_stage(), "injected");
+  SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(clicks, 0);
+
+  // The next Show draws and shows the rows again.
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  window.ShowPredictions(kAnchor, {L"一", L"二"});
+  EXPECT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(clicks, 1);
+
+  // A failed frame while shown hides the rows; the next theme change redraws
+  // the same predictions at the same anchor and shows them again.
+  CandidateWindow::SetRenderFailureForTest(Failure::Draw);
+  SendMessageW(window.hwnd_for_test(), WM_THEMECHANGED, 0, 0);
+  EXPECT_FALSE(window.IsShowingPredictions());
+  CandidateWindow::SetRenderFailureForTest(Failure::None);
+  SendMessageW(window.hwnd_for_test(), WM_THEMECHANGED, 0, 0);
+  EXPECT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  EXPECT_EQ(window.GetPredictionCount(), 2);
+  // Empty predictions hide the window in prediction mode only.
+  window.ShowPredictions(kAnchor, {});
+  EXPECT_FALSE(window.IsVisible());
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  window.ShowPredictions(kAnchor, {});
+  EXPECT_TRUE(window.IsVisible());
+  EXPECT_EQ(window.mode(), CandidateWindow::Mode::Candidate);
+  window.Destroy();
+}
+
+TEST(CandidateWindowPredictionTest, BothModesPickTheMonitorAtTheAnchorsBottomLeft) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  // An extent across the edge of two monitors side by side at x = 1920: its center
+  // is on the right one, its bottom-left on the left one (legacy-parity-spec §9.2).
+  constexpr RECT kAcrossTheEdge{1900, 100, 2100, 120};
+  window.ShowPredictions(kAcrossTheEdge, {L"一"});
+  const POINT prediction = CandidateWindow::LastMonitorPointForTest();
+  EXPECT_EQ(prediction.x, kAcrossTheEdge.left);
+  EXPECT_EQ(prediction.y, kAcrossTheEdge.bottom);
+  // The candidate mode is shown at the same anchor point and picks the same one.
+  window.Show(POINT{kAcrossTheEdge.left, kAcrossTheEdge.bottom}, {{L"候補", L""}}, 0);
+  const POINT candidate = CandidateWindow::LastMonitorPointForTest();
+  EXPECT_EQ(candidate.x, prediction.x);
+  EXPECT_EQ(candidate.y, prediction.y);
+  window.Destroy();
+}
+
+TEST(CandidateWindowPredictionTest, OpensAboveTheAnchorAndRemeasuresOnDpiChange) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  CandidateWindow::SetMonitorDpiForTest(96);
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  // An anchor at the bottom of the primary work area: the window goes above it.
+  RECT work{};
+  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
+  const RECT anchor{work.left + 20, work.bottom - 30, work.left + 120, work.bottom - 10};
+  window.ShowPredictions(anchor, {L"一", L"二"});
+  ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  const HWND hwnd = window.hwnd_for_test();
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom, anchor.top);
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * 24);
+
+  // At 144 DPI the suggested rect is ignored and the rows are measured again.
+  CandidateWindow::SetMonitorDpiForTest(144);
+  RECT suggested{0, 0, 10, 10};
+  SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(144, 144), reinterpret_cast<LPARAM>(&suggested));
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * 36);
+  EXPECT_EQ(bounds.bottom, anchor.top);
+  EXPECT_TRUE(window.IsShowingPredictions());
+  window.Destroy();
 }
 
 }  // namespace

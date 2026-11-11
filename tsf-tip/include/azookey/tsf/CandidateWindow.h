@@ -42,6 +42,26 @@ class CandidateWindow {
   void Hide();
   bool IsVisible() const;
 
+  // Prediction mode (native-ui-spec §4.2): the same window shows up to
+  // kMaxPredictions predictions, with a key hint column instead of numbers and
+  // no selection, notice, secure toast, health banner or lock. 'anchor' is the
+  // composition's text extent in screen pixels (or the caret rect when the app
+  // reports none); the window opens below its bottom-left, or above its top when
+  // that overflows (legacy-parity-spec §3.2). Show switches back to candidate
+  // mode; the two modes are never drawn together. Empty predictions hide the
+  // window while it is in prediction mode and are ignored in candidate mode.
+  static constexpr int kMaxPredictions = 5;
+  enum class Mode { Candidate, Prediction };
+  void ShowPredictions(RECT anchor, const std::vector<std::wstring>& predictions);
+  Mode mode() const { return mode_; }
+  // True only while prediction rows are actually on screen; a frame that failed
+  // to draw keeps the window hidden and this false (native-ui-spec §4.2).
+  bool IsShowingPredictions() const { return mode_ == Mode::Prediction && IsVisible(); }
+  int GetPredictionCount() const { return static_cast<int>(predictions_.size()); }
+  // Invoked when the user presses the left button on a prediction row.
+  using OnPredictionClickFn = std::function<void(int idx)>;
+  void SetOnPredictionClick(OnPredictionClickFn fn) { on_prediction_click_ = std::move(fn); }
+
   // Stage and HRESULT of the most recent drawing failure (native-ui-spec §4.1);
   // empty and S_OK after a committed frame. Never drawn content.
   const char* failure_stage() const { return failure_stage_; }
@@ -82,6 +102,7 @@ class CandidateWindow {
   enum class HitTarget {
     None,
     Candidate,
+    Prediction,
     SecureIndicator,
     HealthBanner,
     HealthDetailsButton,
@@ -89,7 +110,7 @@ class CandidateWindow {
   };
   struct Hit {
     HitTarget target;
-    int index;  // Candidate row; -1 for every other target.
+    int index;  // Candidate or prediction row; -1 for every other target.
   };
   // The click regions of one shown window, in client pixels.
   struct HitLayout {
@@ -102,6 +123,8 @@ class CandidateWindow {
     RECT details_button;
     bool has_retry_button;
     RECT retry_button;
+    // Rows are predictions (native-ui-spec §4.2): no lock and no banner.
+    bool prediction_mode{false};
   };
   static Hit HitTest(const HitLayout& layout, POINT point);
 
@@ -162,6 +185,8 @@ class CandidateWindow {
   Hit HitTestForTest(POINT point) const;
   // Pretends every monitor has this DPI; 0 restores the real lookup.
   static void SetMonitorDpiForTest(UINT dpi);
+  // The point the last Show or ShowPredictions picked its monitor at.
+  static POINT LastMonitorPointForTest();
   // Draws the current content offscreen at the client size with grayscale text
   // and returns the pixels row by row as RGB values.
   bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
@@ -239,7 +264,11 @@ class CandidateWindow {
   std::wstring notice_;
   int surface_column_width_{0};
   int selected_idx_{0};
+  Mode mode_{Mode::Candidate};
+  std::vector<std::wstring> predictions_;
+  int hint_column_width_{0};  // Prediction mode: the key hint column.
   OnClickFn on_click_;
+  OnPredictionClickFn on_prediction_click_;
   OnRetryFn on_retry_;
   ThemeColors theme_{kLightTheme};
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
@@ -250,6 +279,7 @@ class CandidateWindow {
   bool secure_toast_visible_{false};
   ULONGLONG secure_toast_until_{0};  // GetTickCount64 deadline of the last toast.
   POINT last_anchor_{0, 0};
+  RECT last_prediction_anchor_{0, 0, 0, 0};
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};
   OnRenderResultFn on_render_result_{nullptr};
@@ -288,6 +318,9 @@ class CandidateWindow {
                 int height, DrawFn draw) noexcept;
   static std::unique_ptr<TextStyle> CreateTextStyle(UINT dpi) noexcept;
   void DrawContent(ID2D1DeviceContext* context, int width, int height) const;
+  void DrawPredictions(ID2D1DeviceContext* context, int width, int height) const;
+  // Places, draws and shows the window at this size; shared by both modes.
+  void PresentAt(POINT pt, RECT work_area, int width, int height, int flip_gap);
   bool RenderDetails();
   void DrawDetails(ID2D1DeviceContext* context, int width, int height) const;
   bool Fail(const char* stage, HRESULT hr);

@@ -289,9 +289,35 @@ CandidateWindow::Hit CandidateWindow::HitTest(const HitLayout& layout, POINT poi
       point.x >= layout.client_width - layout.secure_indicator_width)
     return {HitTarget::SecureIndicator, -1};
   if (layout.item_height <= 0) return kNone;
-  const int index = point.y / layout.item_height;
-  if (index >= 0 && index < layout.item_count) return {HitTarget::Candidate, index};
+  if (point.y < 0) return kNone;
+  // Rows count from the drawn range; the index is the candidate's in the full list.
+  const int row = point.y / layout.item_height;
+  if (row < layout.item_count) return {HitTarget::Candidate, layout.first_index + row};
   return kNone;
+}
+
+// static
+int CandidateWindow::ComputeVisibleRows(int count, int item_height, int other_height,
+                                        int work_height) {
+  if (count <= 0) return 0;
+  // Without a usable work area or row height there is nothing to fit into.
+  if (item_height <= 0 || work_height <= 0) return count;
+  const long long all = static_cast<long long>(count) * item_height + other_height;
+  if (all <= work_height) return count;
+  // One row is left for the position ("3/12").
+  const int rows = (work_height - other_height - item_height) / item_height;
+  return std::clamp(rows, 1, count);
+}
+
+// static
+int CandidateWindow::ComputeFirstVisibleRow(int previous_first, int selected, int count,
+                                            int visible_rows) {
+  if (count <= 0 || visible_rows <= 0 || visible_rows >= count) return 0;
+  selected = std::clamp(selected, 0, count - 1);
+  int first = previous_first;
+  if (selected < first) first = selected;
+  if (selected >= first + visible_rows) first = selected - visible_rows + 1;
+  return std::clamp(first, 0, count - visible_rows);
 }
 
 // static
@@ -493,6 +519,22 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
                        metrics_.max_width);
   width =
       std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
+  // Keep the window inside the work area's height: draw only the rows that fit
+  // and follow the selection with them (native-ui-spec §4.1).
+  const int count = static_cast<int>(items_.size());
+  const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
+                           (secure_toast_visible_ ? metrics_.item_height : 0) +
+                           (health_banner_visible_ ? HealthBannerHeight() : 0);
+  visible_rows_ =
+      ComputeVisibleRows(count, metrics_.item_height, other_height,
+                         static_cast<int>(monitor.work_area.bottom - monitor.work_area.top));
+  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, count, visible_rows_);
+  if (HasPositionRow()) {
+    // The widest position, so the width stays put while the selection moves.
+    const std::wstring widest = std::to_wstring(count) + L"/" + std::to_wstring(count);
+    width = std::min(std::max(width, MeasureText(widest) + metrics_.horizontal_padding * 2),
+                     metrics_.max_width);
+  }
   int height = HealthBannerTop();
   if (health_banner_visible_) {
     width = std::max(width, ScaleForDpi(480, dpi_));
@@ -517,6 +559,8 @@ void CandidateWindow::ShowPredictions(RECT anchor, const std::vector<std::wstrin
   mode_ = Mode::Prediction;
   items_.clear();
   selected_idx_ = 0;
+  first_visible_ = 0;
+  visible_rows_ = 0;
   predictions_.assign(
       predictions.begin(),
       predictions.begin() + std::min<std::ptrdiff_t>(
@@ -771,7 +815,16 @@ int CandidateWindow::FooterTop() const {
   // Prediction mode has nothing below its rows (native-ui-spec §4.2).
   if (mode_ == Mode::Prediction)
     return metrics_.item_height * static_cast<int>(predictions_.size());
-  return metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+  return metrics_.item_height *
+         (visible_rows_ + (HasPositionRow() ? 1 : 0) + (notice_.empty() ? 0 : 1));
+}
+
+bool CandidateWindow::HasPositionRow() const {
+  return mode_ == Mode::Candidate && visible_rows_ < static_cast<int>(items_.size());
+}
+
+std::wstring CandidateWindow::PositionText() const {
+  return std::to_wstring(selected_idx_ + 1) + L"/" + std::to_wstring(items_.size());
 }
 
 int CandidateWindow::HealthBannerTop() const {
@@ -803,7 +856,7 @@ RECT CandidateWindow::HealthRetryButtonRect(int width) const {
 CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) const {
   const bool prediction = mode_ == Mode::Prediction;
   return {metrics_.item_height,
-          static_cast<int>(prediction ? predictions_.size() : items_.size()),
+          prediction ? static_cast<int>(predictions_.size()) : visible_rows_,
           client_width,
           SecureIndicatorWidth(),
           health_banner_visible_ && !prediction,
@@ -811,7 +864,8 @@ CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) c
           HealthDetailsButtonRect(client_width),
           health_state_ == CandidateHealthState::DegradedModel,
           HealthRetryButtonRect(client_width),
-          prediction};
+          prediction,
+          prediction ? 0 : first_visible_};
 }
 
 void CandidateWindow::PostCandidatesReady() {
@@ -832,12 +886,15 @@ void CandidateWindow::MoveSelection(int delta) {
   if (items_.empty()) return;
   int n = static_cast<int>(items_.size());
   selected_idx_ = internal::WrapCandidateSelectionIndex(selected_idx_, delta, n);
+  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, n, visible_rows_);
   Repaint();
 }
 
 void CandidateWindow::SetSelected(int idx) {
   if (items_.empty()) return;
   selected_idx_ = std::clamp(idx, 0, static_cast<int>(items_.size()) - 1);
+  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_,
+                                          static_cast<int>(items_.size()), visible_rows_);
   Repaint();
 }
 
@@ -978,8 +1035,11 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
   // Candidate text stops short of the secure indicator column.
   const int content_right = width - SecureIndicatorWidth();
 
-  for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-    const RECT row_rc = {0, i * metrics_.item_height, width, (i + 1) * metrics_.item_height};
+  // Only the drawn range; numbers stay those of the full list (native-ui-spec §4.1).
+  const int last = std::min(first_visible_ + visible_rows_, static_cast<int>(items_.size()));
+  for (int i = first_visible_; i < last; ++i) {
+    const int top = (i - first_visible_) * metrics_.item_height;
+    const RECT row_rc = {0, top, width, top + metrics_.item_height};
     const bool selected = i == selected_idx_;
     if (selected) paint.Fill(row_rc, theme_.selection);
     const auto& item = items_[static_cast<size_t>(i)];
@@ -1004,9 +1064,15 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
     // Top-right corner of the first row; drawn over that row's background.
     const RECT icon_rc{content_right, 0, width, metrics_.item_height};
     paint.Text(kSecureIndicatorText, style.centered.Get(), icon_rc,
-               selected_idx_ == 0 ? theme_.selection_text : theme_.text);
+               selected_idx_ == first_visible_ ? theme_.selection_text : theme_.text);
   }
-  const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
+  int notice_top = metrics_.item_height * visible_rows_;
+  if (HasPositionRow()) {
+    RECT position_rc = {0, notice_top, width, notice_top + metrics_.item_height};
+    InflateRect(&position_rc, -metrics_.horizontal_padding, 0);
+    paint.Text(PositionText(), style.line.Get(), position_rc, theme_.sub_text);
+    notice_top += metrics_.item_height;
+  }
   if (!notice_.empty()) {
     RECT notice_rc = {0, notice_top, width, notice_top + metrics_.item_height};
     paint.Fill(notice_rc, theme_.panel_background);

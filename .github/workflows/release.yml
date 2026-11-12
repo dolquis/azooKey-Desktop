@@ -185,7 +185,7 @@ jobs:
             -PayloadDirectory "$settingsPayload"
       - name: Build unsigned MSI
         run: >-
-          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe" "-p:BundledDictionaryDir=${{ github.workspace }}\build\bundled-dictionaries"
+          dotnet build pkg\msi\azooKey.wixproj --configuration Release --output "${{ github.workspace }}\pkg\msi\bin\Release" -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe" "-p:BundledDictionaryDir=${{ github.workspace }}\build\bundled-dictionaries"
       - name: Verify MSI is unsigned
         id: msi-artifact
         shell: pwsh

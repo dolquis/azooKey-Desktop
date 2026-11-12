@@ -318,6 +318,7 @@ Describe "WiX MSI package consistency" {
   It "builds and uploads an unsigned MSI in the guarded release workflow" {
     $script:releaseWorkflow | Should -Match "vars\.RELEASE_ENABLED == 'true'"
     $script:releaseWorkflow | Should -Match 'dotnet build pkg\\msi\\azooKey\.wixproj'
+    $script:releaseWorkflow | Should -Match 'dotnet build pkg\\msi\\azooKey\.wixproj --configuration Release --output "\$\{\{ github\.workspace \}\}\\pkg\\msi\\bin\\Release"'
     $script:releaseWorkflow | Should -Match 'Get-AuthenticodeSignature'
     $script:releaseWorkflow | Should -Match 'pkg\\msi\\bin\\Release\\\*\.msi'
     $script:releaseWorkflow | Should -Not -Match '(?m)^\s+(?:run:\s*)?.*signtool'

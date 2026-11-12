@@ -33,7 +33,8 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   winrt::Microsoft::UI::Xaml::Controls::StackPanel PersonaSection() const {
     return persona_section_;
   }
-  // Selects the tab of a store such as "user_dict" (the "辞書" pane's button).
+  // Selects the tab of a store such as "user_dict" (the "辞書" pane's button). Does nothing
+  // while a request is in flight.
   void OpenStoreTab(std::string_view store);
 
  private:

@@ -365,6 +365,11 @@ TEST(LearningPaneModelTest, TheStoresAreFollowedByTheTendencyAndBackupTabs) {
   // The "辞書" pane's button opens the user dictionary tab.
   EXPECT_EQ(LearningStoreTabIndex("user_dict"), 1u);
   EXPECT_EQ(LearningStoreTabIndex("unknown"), kLearningTabCount);
+  EXPECT_EQ(LearningStoreTabToOpen("user_dict", false), 1u);
+  // While an export or import is in flight the tab stays, so its completion cannot clear busy
+  // under a listing the button started.
+  EXPECT_EQ(LearningStoreTabToOpen("user_dict", true), kLearningTabCount);
+  EXPECT_EQ(LearningStoreTabToOpen("unknown", false), kLearningTabCount);
 }
 
 TEST(LearningPaneModelTest, ComputesThePageRange) {

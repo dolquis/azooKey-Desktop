@@ -37,6 +37,10 @@ size_t LearningStoreTabIndex(std::string_view store) {
   return kLearningTabCount;
 }
 
+size_t LearningStoreTabToOpen(std::string_view store, bool busy) {
+  return busy ? kLearningTabCount : LearningStoreTabIndex(store);
+}
+
 std::string JoinLearningTags(const std::vector<std::string>& tags) {
   std::string joined;
   for (const auto& tag : tags) {

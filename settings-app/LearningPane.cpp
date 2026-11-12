@@ -333,7 +333,7 @@ void LearningPane::OnShown() {
 }
 
 void LearningPane::OpenStoreTab(std::string_view store) {
-  const auto index = LearningStoreTabIndex(store);
+  const auto index = LearningStoreTabToOpen(store, busy_);
   if (index < tab_items_.size()) tabs_.SelectedItem(tab_items_[index]);
 }
 

@@ -632,7 +632,7 @@ jobs:
 
       - name: Upload test report artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-${{ matrix.config }}-logs
           path: |
@@ -643,7 +643,7 @@ jobs:
 
       - name: Upload Release symbols
         if: always() && matrix.config == 'Release'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release-pdb
           path: build/${{ matrix.preset }}/**/*.pdb
@@ -652,7 +652,7 @@ jobs:
 
       - name: Upload Release binary hardening report
         if: always() && matrix.config == 'Release'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release-binary-hardening
           path: binary-hardening/
@@ -821,7 +821,7 @@ jobs:
 
       - name: Upload llama.cpp build logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-llama-build-logs
           path: |
@@ -980,7 +980,7 @@ jobs:
 
       - name: Upload Vulkan build logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-vulkan-compile-logs
           path: |
@@ -1153,7 +1153,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload LLVM coverage report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-llvm-coverage
           path: build/linux-coverage/coverage
@@ -1280,7 +1280,7 @@ jobs:
 
       - name: Upload Windows coverage shard
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-opencppcoverage-shard-${{ matrix.shard }}
           path: build/windows-debug/coverage/shard-${{ matrix.shard }}
@@ -1377,7 +1377,7 @@ jobs:
 
       - name: Upload Windows coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-opencppcoverage
           path: build/windows-debug/coverage
@@ -1736,7 +1736,7 @@ jobs:
 
       - name: Upload ARM64 cross-build logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-arm64-crossbuild-logs
           path: |
@@ -1747,7 +1747,7 @@ jobs:
 
       - name: Upload ARM64 binaries
         if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-arm64-crossbuild-binaries
           path: |

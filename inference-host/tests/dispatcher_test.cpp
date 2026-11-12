@@ -4016,6 +4016,11 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
 }
 
 TEST_F(DispatcherTest, QueryDiagnosticsReportsPromptFormatOnlyForLoadedZenzaiModel) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
   auto config = DefaultDispatcherConfig();
   config.runtime_tier = "llama_cpp";
   azookey::host::Dispatcher llama_dispatcher(&engine, &scheduler, &user_dict, config);

@@ -235,6 +235,29 @@ class ReleaseSbomTests(unittest.TestCase):
         self.assertIn('--version "$env:MSI_VERSION"', workflow)
         self.assertIn("python-version: '3.12'", workflow)
 
+    def test_addon_workflow_completes_before_attestation_and_upload(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        base, addon = workflow.split("\n  vulkan-addon:\n")
+        addon, attach = addon.split("\n  attach-vulkan-addon:\n")
+        complete = addon.index("Complete Vulkan add-on SBOM with release dependencies")
+        self.assertLess(complete, addon.index("- name: Attest build provenance"))
+        self.assertLess(complete, addon.index("- name: Attest SBOM"))
+        self.assertLess(complete, addon.index("- name: Save Vulkan add-on assets"))
+        self.assertIn("--input azooKey-vulkan-addon.syft.spdx.json --output azooKey-vulkan-addon.spdx.json", addon)
+        self.assertIn('sbom-path: ${{ github.workspace }}\\azooKey-vulkan-addon.spdx.json', addon)
+        self.assertIn('--package vulkan-addon --vulkan-sdk "$env:VULKAN_SDK"', addon)
+        self.assertNotIn("--runtime-info", addon)
+        self.assertNotIn("--runtime-dir", addon)
+        # Base and add-on must use the identical version calculation.
+        def version_step(job):
+            return job.split("      - name: Resolve MSI version\n", 1)[1].split("      - name:", 1)[0]
+        self.assertEqual(version_step(base), version_step(addon))
+        self.assertIn("needs.release.result == 'success'", attach)
+        windows = (ROOT / ".github/workflows/windows.yml").read_text(encoding="utf-8")
+        for key in ("VULKAN_SDK_VERSION", "VULKAN_SDK_SHA256"):
+            pin = next(line.strip() for line in addon.splitlines() if line.strip().startswith(key + ":"))
+            self.assertIn(pin, windows)
+
     def make_vulkan_sdk(self):
         sdk = self.root / "VulkanSDK" / "1.4.357.0"
         for relative in ("Include/vulkan/vulkan_core.h", "Include/spirv/unified1/spirv.hpp"):

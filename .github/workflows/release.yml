@@ -401,7 +401,7 @@ jobs:
         run: ./scripts/check-app-local-runtime.ps1 -BinaryPath "${{ github.workspace }}\build\vk\inference-host\azookey_inference_host_vulkan.exe" -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs"
       - name: Build unsigned Vulkan add-on MSI
         run: >-
-          dotnet build pkg\msi-vulkan\azooKey.VulkanAddon.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VulkanHostExePath=${{ github.workspace }}\build\vk\inference-host\azookey_inference_host_vulkan.exe"
+          dotnet build pkg\msi-vulkan\azooKey.VulkanAddon.wixproj --configuration Release --output "${{ github.workspace }}\pkg\msi-vulkan\bin\Release" -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VulkanHostExePath=${{ github.workspace }}\build\vk\inference-host\azookey_inference_host_vulkan.exe"
       - name: Verify MSI is unsigned
         id: addon-artifact
         shell: pwsh

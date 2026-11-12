@@ -340,6 +340,7 @@ Describe "WiX MSI package consistency" {
     $addon | Should -Match "vars\.RELEASE_ENABLED == 'true'"
     $addon | Should -Not -Match '(?m)^    needs:'
     $addon | Should -Match 'dotnet build pkg\\msi-vulkan\\azooKey\.VulkanAddon\.wixproj'
+    $addon | Should -Match 'dotnet build pkg\\msi-vulkan\\azooKey\.VulkanAddon\.wixproj --configuration Release --output "\$\{\{ github\.workspace \}\}\\pkg\\msi-vulkan\\bin\\Release"'
     $addon | Should -Match '--package vulkan-addon --vulkan-sdk'
     $addon | Should -Match 'name: Install Vulkan SDK'
     $addon | Should -Match 'name: Verify the Vulkan host links the loader implicitly'

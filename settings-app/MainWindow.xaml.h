@@ -35,6 +35,9 @@ struct MainWindow : MainWindowT<MainWindow> {
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspectable const& sender,
                                          Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  // "辞書" pane: opens the user dictionary tab of "学習".
+  void OpenUserDictionaryButton_Click(Windows::Foundation::IInspectable const& sender,
+                                      Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void SettingsNavigationView_SelectionChanged(
       Microsoft::UI::Xaml::Controls::NavigationView const& sender,
       Microsoft::UI::Xaml::Controls::NavigationViewSelectionChangedEventArgs const& args);

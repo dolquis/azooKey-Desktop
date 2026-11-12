@@ -117,21 +117,43 @@
                     <ToggleSwitch x:Name="SudachiDictionaryToggle"
                                   x:Uid="SudachiDictionaryToggle"
                                   AutomationProperties.AutomationId="SudachiDictionaryToggle" />
+                    <TextBlock x:Uid="SudachiDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleSwitch x:Name="NamedEntityDictionaryToggle"
                                   x:Uid="NamedEntityDictionaryToggle"
                                   AutomationProperties.AutomationId="NamedEntityDictionaryToggle" />
+                    <TextBlock x:Uid="NamedEntityDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleSwitch x:Name="TechnicalTermsDictionaryToggle"
                                   x:Uid="TechnicalTermsDictionaryToggle"
                                   AutomationProperties.AutomationId="TechnicalTermsDictionaryToggle" />
+                    <TextBlock x:Uid="TechnicalTermsDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleSwitch x:Name="UserDictionaryToggle"
                                   x:Uid="UserDictionaryToggle"
                                   AutomationProperties.AutomationId="UserDictionaryToggle" />
+                    <TextBlock x:Uid="UserDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Button x:Name="OpenUserDictionaryButton"
+                            x:Uid="OpenUserDictionaryButton"
+                            Click="OpenUserDictionaryButton_Click"
+                            AutomationProperties.AutomationId="OpenUserDictionaryButton" />
                     <ToggleSwitch x:Name="AutoWordsDictionaryToggle"
                                   x:Uid="AutoWordsDictionaryToggle"
                                   AutomationProperties.AutomationId="AutoWordsDictionaryToggle" />
+                    <TextBlock x:Uid="AutoWordsDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleSwitch x:Name="AppSpecificDictionaryToggle"
                                   x:Uid="AppSpecificDictionaryToggle"
                                   AutomationProperties.AutomationId="AppSpecificDictionaryToggle" />
+                    <TextBlock x:Uid="AppSpecificDictionaryDescription" TextWrapping="Wrap"
+                               Margin="0,-12,0,0"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <TextBlock x:Uid="NeologdSectionTitle"
                                Margin="0,8,0,0"
                                Style="{StaticResource BodyStrongTextBlockStyle}" />
@@ -231,9 +253,6 @@
                 <StackPanel x:Name="ProofreadPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="LearningPaneHost" Spacing="16" Visibility="Collapsed" />
-
-                <!-- Shown with "学習" until DEV-1945 makes it a tab of that pane. -->
-                <StackPanel x:Name="PersonaPaneHost" Spacing="16" Visibility="Collapsed" />
 
                 <StackPanel x:Name="AdvancedPane" Spacing="16" Visibility="Collapsed">
                     <TextBlock x:Uid="AdvancedSectionTitle"

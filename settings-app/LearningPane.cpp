@@ -15,6 +15,7 @@
 #include <winrt/Windows.System.h>
 
 #include <filesystem>
+#include <iterator>
 #include <string>
 
 #include "LearningPaneModel.h"
@@ -54,9 +55,11 @@ controls::Grid TableRow(const std::vector<winrt::hstring>& cells, bool header,
                         xaml::UIElement const& action) {
   controls::Grid grid;
   grid.ColumnSpacing(12);
-  static constexpr double kStar[] = {1.2, 1.5, 0.0, 0.0, 1.0};
-  static constexpr double kFixed[] = {0.0, 0.0, 56.0, 96.0, 0.0};
-  for (size_t i = 0; i < 5; ++i) {
+  // Reading, surface, last used, tags. The weight is an internal number and is not shown.
+  static constexpr double kStar[] = {1.2, 1.5, 0.0, 1.0};
+  static constexpr double kFixed[] = {0.0, 0.0, 96.0, 0.0};
+  constexpr size_t kColumns = std::size(kStar);
+  for (size_t i = 0; i < kColumns; ++i) {
     controls::ColumnDefinition column;
     column.Width(kFixed[i] > 0 ? xaml::GridLengthHelper::FromPixels(kFixed[i])
                                : xaml::GridLengthHelper::FromValueAndType(
@@ -66,14 +69,14 @@ controls::Grid TableRow(const std::vector<winrt::hstring>& cells, bool header,
   controls::ColumnDefinition action_column;
   action_column.Width(xaml::GridLengthHelper::FromPixels(72));
   grid.ColumnDefinitions().Append(action_column);
-  for (size_t i = 0; i < cells.size() && i < 5; ++i) {
+  for (size_t i = 0; i < cells.size() && i < kColumns; ++i) {
     auto cell = Block(cells[i], !header);
     if (header) cell.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     controls::Grid::SetColumn(cell, static_cast<int32_t>(i));
     grid.Children().Append(cell);
   }
   if (action) {
-    controls::Grid::SetColumn(action.as<xaml::FrameworkElement>(), 5);
+    controls::Grid::SetColumn(action.as<xaml::FrameworkElement>(), static_cast<int32_t>(kColumns));
     grid.Children().Append(action);
   }
   return grid;
@@ -100,16 +103,36 @@ void LearningPane::Build(controls::StackPanel panel,
   SetId(status_bar_, L"LearningStatusInfoBar");
   panel.Children().Append(status_bar_);
 
-  tabs_ = controls::RadioButtons();
-  tabs_.MaxColumns(5);
+  tabs_ = controls::SelectorBar();
   SetId(tabs_, L"LearningTabs");
-  for (const auto& tab : kLearningStoreTabs) {
-    tabs_.Items().Append(winrt::box_value(Str(resources, std::string(tab.resource))));
+  for (size_t index = 0; index < kLearningTabCount; ++index) {
+    controls::SelectorBarItem item;
+    switch (LearningTabKindAt(index)) {
+      case LearningTabKind::Store:
+        item.Text(Str(resources, std::string(kLearningStoreTabs[index].resource)));
+        SetId(item, L"LearningTab_" +
+                        std::wstring(winrt::to_hstring(std::string(kLearningStoreTabs[index].id))));
+        break;
+      case LearningTabKind::Persona:
+        item.Text(resources.GetString(L"Persona_Title"));
+        SetId(item, L"LearningTab_persona");
+        break;
+      case LearningTabKind::Backup:
+        item.Text(resources.GetString(L"LearningStore_backup"));
+        SetId(item, L"LearningTab_backup");
+        break;
+    }
+    tabs_.Items().Append(item);
+    tab_items_.push_back(item);
   }
-  tabs_.Items().Append(winrt::box_value(resources.GetString(L"LearningStore_backup")));
-  tabs_.SelectedIndex(0);
+  tabs_.SelectedItem(tab_items_.front());
   tabs_.SelectionChanged([weak = weak_from_this()](auto const&, auto const&) {
-    if (const auto self = weak.lock()) self->SelectTab(self->tabs_.SelectedIndex());
+    const auto self = weak.lock();
+    if (!self) return;
+    const auto selected = self->tabs_.SelectedItem();
+    for (size_t index = 0; index < self->tab_items_.size(); ++index) {
+      if (self->tab_items_[index] == selected) self->SelectTab(static_cast<int>(index));
+    }
   });
   panel.Children().Append(tabs_);
 
@@ -183,13 +206,6 @@ void LearningPane::Build(controls::StackPanel panel,
     }
   });
   search_row.Children().Append(search_button_);
-  reset_button_ = controls::Button();
-  reset_button_.Content(winrt::box_value(resources.GetString(L"Learning_ResetButton")));
-  SetId(reset_button_, L"LearningResetButton");
-  reset_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
-    if (const auto self = weak.lock()) self->Reset();
-  });
-  search_row.Children().Append(reset_button_);
   entries_section_.Children().Append(search_row);
 
   entries_panel_ = controls::StackPanel();
@@ -225,7 +241,25 @@ void LearningPane::Build(controls::StackPanel panel,
   SetId(page_text_, L"LearningPageText");
   pager.Children().Append(page_text_);
   entries_section_.Children().Append(pager);
+
+  // Deleting a whole store sits apart at the end of the tab, away from the search. It still asks
+  // for confirmation first.
+  reset_button_ = controls::Button();
+  reset_button_.Content(winrt::box_value(resources.GetString(L"Learning_ResetButton")));
+  reset_button_.Margin(xaml::ThicknessHelper::FromLengths(0, 24, 0, 0));
+  SetId(reset_button_, L"LearningResetButton");
+  reset_button_.Click([weak = weak_from_this()](auto const&, auto const&) {
+    if (const auto self = weak.lock()) self->Reset();
+  });
+  entries_section_.Children().Append(reset_button_);
   panel.Children().Append(entries_section_);
+
+  // "入力の傾向": PersonaPane builds into this.
+  persona_section_ = controls::StackPanel();
+  persona_section_.Spacing(16);
+  persona_section_.Visibility(xaml::Visibility::Collapsed);
+  SetId(persona_section_, L"LearningPersonaSection");
+  panel.Children().Append(persona_section_);
 
   // Backup: export and import.
   backup_section_ = controls::StackPanel();
@@ -293,19 +327,29 @@ void LearningPane::Build(controls::StackPanel panel,
 }
 
 void LearningPane::OnShown() {
-  if (!loaded_once_ && !busy_ && tab_index_ < static_cast<int>(kLearningStoreTabs.size())) {
-    LoadPage();
-  }
+  const auto kind = LearningTabKindAt(static_cast<size_t>(tab_index_));
+  if (kind == LearningTabKind::Persona && host_.persona_shown) host_.persona_shown();
+  if (!loaded_once_ && !busy_ && kind == LearningTabKind::Store) LoadPage();
+}
+
+void LearningPane::OpenStoreTab(std::string_view store) {
+  const auto index = LearningStoreTabToOpen(store, busy_);
+  if (index < tab_items_.size()) tabs_.SelectedItem(tab_items_[index]);
 }
 
 void LearningPane::SelectTab(int index) {
   if (index < 0 || index == tab_index_) return;
   tab_index_ = index;
-  const bool backup = index >= static_cast<int>(kLearningStoreTabs.size());
-  entries_section_.Visibility(backup ? xaml::Visibility::Collapsed : xaml::Visibility::Visible);
-  backup_section_.Visibility(backup ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
+  const auto kind = LearningTabKindAt(static_cast<size_t>(index));
+  const auto shown_when = [kind](LearningTabKind tab) {
+    return kind == tab ? xaml::Visibility::Visible : xaml::Visibility::Collapsed;
+  };
+  entries_section_.Visibility(shown_when(LearningTabKind::Store));
+  persona_section_.Visibility(shown_when(LearningTabKind::Persona));
+  backup_section_.Visibility(shown_when(LearningTabKind::Backup));
   status_bar_.IsOpen(false);
-  if (backup) {
+  if (kind != LearningTabKind::Store) {
+    if (kind == LearningTabKind::Persona && host_.persona_shown) host_.persona_shown();
     // A listing still in flight is dropped as stale and would never clear the busy state.
     ++generation_;
     SetBusy(false);
@@ -428,8 +472,7 @@ void LearningPane::RenderEntries() {
   if (!entries_.empty()) {
     entries_panel_.Children().Append(TableRow(
         {resources.GetString(L"Learning_Col_Reading"), resources.GetString(L"Learning_Col_Surface"),
-         resources.GetString(L"Learning_Col_Weight"), resources.GetString(L"Learning_Col_LastUsed"),
-         resources.GetString(L"Learning_Col_Tags")},
+         resources.GetString(L"Learning_Col_LastUsed"), resources.GetString(L"Learning_Col_Tags")},
         true, nullptr));
   }
   for (const auto& entry : entries_) {
@@ -441,7 +484,6 @@ void LearningPane::RenderEntries() {
     });
     entries_panel_.Children().Append(
         TableRow({winrt::to_hstring(entry.reading), winrt::to_hstring(entry.surface),
-                  winrt::to_hstring(FormatLearningWeight(entry.weight)),
                   winrt::to_hstring(FormatLearningDate(entry.last_updated_epoch_sec)),
                   winrt::to_hstring(JoinLearningTags(entry.tags))},
                  false, forget_button));

@@ -219,9 +219,13 @@ MainWindow::MainWindow() {
                              }
                            }
                            return window;
+                         },
+                         [this] {
+                           if (persona_pane_) persona_pane_->OnShown();
                          }});
+  // "入力の傾向" is a tab of "学習" (sideload-packaging-spec section 3.2).
   persona_pane_ = std::make_shared<azookey::settings::PersonaPane>();
-  persona_pane_->Build(PersonaPaneHost(), DispatcherQueue());
+  persona_pane_->Build(learning_pane_->PersonaSection(), DispatcherQueue());
   proofread_pane_ = std::make_shared<azookey::settings::ProofreadPane>();
   proofread_pane_->Build(ProofreadPaneHost(), DispatcherQueue());
   SettingsNavigationView().SelectedItem(InputNavigationItem());
@@ -260,7 +264,6 @@ void MainWindow::ShowPane(std::wstring_view tag) {
   PrivacyPane().Visibility(visible(L"privacy"));
   ProfilesPaneHost().Visibility(visible(L"profiles"));
   LearningPaneHost().Visibility(visible(L"learning"));
-  PersonaPaneHost().Visibility(visible(L"learning"));
   ProofreadPaneHost().Visibility(visible(L"proofread"));
   AdvancedPane().Visibility(visible(L"advanced"));
   VersionPane().Visibility(visible(L"version"));
@@ -269,7 +272,6 @@ void MainWindow::ShowPane(std::wstring_view tag) {
                            : Microsoft::UI::Xaml::Visibility::Collapsed);
   if (tag == L"ai-conversion" && model_pane_) model_pane_->OnShown();
   if (tag == L"learning" && learning_pane_) learning_pane_->OnShown();
-  if (tag == L"learning" && persona_pane_) persona_pane_->OnShown();
   if (tag == L"dictionary") RefreshNeologdLayerStatus();
   if (tag == L"version") RefreshUpdateStatus();
 }
@@ -953,6 +955,13 @@ void MainWindow::OpenCrashReportsButton_Click(Windows::Foundation::IInspectable 
   ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Informational,
               resources.GetString(L"CrashReportFolderTitle"),
               resources.GetString(L"CrashReportFolderUnavailable"));
+}
+
+void MainWindow::OpenUserDictionaryButton_Click(Windows::Foundation::IInspectable const&,
+                                                Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  // The tab first, so showing the pane lists the user dictionary rather than the first store.
+  learning_pane_->OpenStoreTab("user_dict");
+  SettingsNavigationView().SelectedItem(LearningNavigationItem());
 }
 
 void MainWindow::OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspectable const&,

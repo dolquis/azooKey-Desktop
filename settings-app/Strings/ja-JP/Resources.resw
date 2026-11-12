@@ -131,6 +131,13 @@
   <data name="UserDictionaryToggle.Header" xml:space="preserve"><value>ユーザー辞書</value></data>
   <data name="AutoWordsDictionaryToggle.Header" xml:space="preserve"><value>自動登録した単語</value></data>
   <data name="AppSpecificDictionaryToggle.Header" xml:space="preserve"><value>アプリ別辞書</value></data>
+  <data name="SudachiDictionaryDescription.Text" xml:space="preserve"><value>SudachiDict から作った、一般の語を収めた辞書です。</value></data>
+  <data name="NamedEntityDictionaryDescription.Text" xml:space="preserve"><value>人名・地名・会社名などの固有名詞を収めた辞書です。</value></data>
+  <data name="TechnicalTermsDictionaryDescription.Text" xml:space="preserve"><value>プログラミングなどの技術用語を収めた辞書です。</value></data>
+  <data name="UserDictionaryDescription.Text" xml:space="preserve"><value>自分で登録した語です。登録と削除は「学習」ペインのユーザー辞書タブで行います。</value></data>
+  <data name="OpenUserDictionaryButton.Content" xml:space="preserve"><value>ユーザー辞書を編集</value></data>
+  <data name="AutoWordsDictionaryDescription.Text" xml:space="preserve"><value>入力の中から見つけて登録した新しい語です。</value></data>
+  <data name="AppSpecificDictionaryDescription.Text" xml:space="preserve"><value>アプリごとに用意した語です。用意した語が無いときは、候補は変わりません。</value></data>
   <data name="NeologdSectionTitle.Text" xml:space="preserve"><value>追加辞書（mecab-ipadic-NEologd）</value></data>
   <data name="NeologdDictionaryToggle.Header" xml:space="preserve"><value>NEologd 追加辞書を使う</value></data>
   <data name="NeologdDescription.Text" xml:space="preserve"><value>NEologd 追加辞書はインストーラーに含まれず、変換エンジンの起動時に別にダウンロードします（既定は無効）。有効にする前に上流のライセンスと帰属を表示し、同意したときだけ有効にします。</value></data>
@@ -453,7 +460,6 @@
   <data name="Learning_NoEntries" xml:space="preserve"><value>該当する項目はありません。</value></data>
   <data name="Learning_Col_Reading" xml:space="preserve"><value>読み</value></data>
   <data name="Learning_Col_Surface" xml:space="preserve"><value>候補</value></data>
-  <data name="Learning_Col_Weight" xml:space="preserve"><value>重み</value></data>
   <data name="Learning_Col_LastUsed" xml:space="preserve"><value>最終使用</value></data>
   <data name="Learning_Col_Tags" xml:space="preserve"><value>タグ</value></data>
   <data name="Learning_ForgetButton" xml:space="preserve"><value>忘却</value></data>

@@ -22,6 +22,18 @@ inline constexpr std::array<LearningStoreTab, 4> kLearningStoreTabs{{
     {"auto_word", "LearningStore_auto_word"},
 }};
 
+// The tabs of the "学習" pane in order: the four stores, "入力の傾向" (rich-features-spec X-2-7)
+// and "バックアップ" (sideload-packaging-spec section 3.2).
+enum class LearningTabKind { Store, Persona, Backup };
+inline constexpr size_t kLearningTabCount = kLearningStoreTabs.size() + 2;
+LearningTabKind LearningTabKindAt(size_t index);
+// The tab of a store id such as "user_dict"; kLearningTabCount when there is none.
+size_t LearningStoreTabIndex(std::string_view store);
+// The tab the "辞書" pane's button selects, or kLearningTabCount to leave the tab as it is. A
+// selection made from code passes the disabled tab bar, so while a request is in flight (busy,
+// such as an export) the tab is not changed: its completion would clear busy under a new listing.
+size_t LearningStoreTabToOpen(std::string_view store, bool busy);
+
 inline constexpr uint32_t kLearningPageSize = 100;
 
 // `conflict_resolution` values of ImportLearningData, in the order the pane offers them.
@@ -43,9 +55,6 @@ std::string LearningErrorResource(std::string_view error);
 
 // Local date of a last-used time as "YYYY-MM-DD"; empty for 0 (never).
 std::string FormatLearningDate(uint64_t epoch_seconds);
-
-// Weight with one decimal.
-std::string FormatLearningWeight(double weight);
 
 // Tags joined with ", ".
 std::string JoinLearningTags(const std::vector<std::string>& tags);

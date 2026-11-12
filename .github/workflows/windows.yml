@@ -356,7 +356,22 @@ jobs:
       # v0.0.6) only export the legacy ACTIONS_CACHE_URL (v1), which GitHub
       # retired on 2025-04-15 — that returns HTTP 400 and fails sccache startup.
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache GoogleTest source
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -380,7 +395,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          cmake --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-${{ matrix.config }}.log
+          cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-${{ matrix.config }}.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
@@ -559,7 +574,8 @@ jobs:
           ./scripts/verify-msix-identity-embedding.ps1 -ExePath build/${{ matrix.preset }}/inference-host/azookey_inference_host.exe
 
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
         shell: pwsh
         run: sccache --show-stats
 
@@ -685,7 +701,22 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache fetched dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -733,7 +764,7 @@ jobs:
         shell: pwsh
         run: |
           $cmakeModelPath = $env:AZOOKEY_REAL_MODEL.Replace('\', '/')
-          cmake -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_ZENZAI_TEST_MODEL=$cmakeModelPath" 2>&1 | Tee-Object -FilePath configure-llama.log
+          cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_ZENZAI_TEST_MODEL=$cmakeModelPath" 2>&1 | Tee-Object -FilePath configure-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build shipped binaries, host tests and Zenzai bench with llama.cpp
@@ -783,7 +814,8 @@ jobs:
           }
 
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
         shell: pwsh
         run: sccache --show-stats
 
@@ -834,7 +866,22 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache Vulkan SDK installer
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -896,7 +943,7 @@ jobs:
       - name: Configure Vulkan build
         shell: pwsh
         run: |
-          cmake --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF 2>&1 | Tee-Object -FilePath configure-vulkan.log
+          cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF 2>&1 | Tee-Object -FilePath configure-vulkan.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build inference host with ggml-vulkan
@@ -925,7 +972,8 @@ jobs:
           }
 
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
         shell: pwsh
         run: sccache --show-stats
 
@@ -968,7 +1016,22 @@ jobs:
         run: python3 -B -m unittest discover -s scripts/tests -p test_generate_mixed_english_eval.py
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache GoogleTest source
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -979,13 +1042,14 @@ jobs:
             googletest-v1.18.0-${{ runner.os }}-
 
       - name: Configure
-        run: cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+        run: cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 
       - name: Build
         run: cmake --build --preset linux-debug
 
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
         run: sccache --show-stats
 
       - name: Run tests via CTest
@@ -1118,7 +1182,22 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache GoogleTest source
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1153,7 +1232,7 @@ jobs:
       - name: Configure Windows Debug coverage build
         shell: pwsh
         run: |
-          cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_USE_COMPILER_CACHE=ON
+          cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows Debug coverage targets
@@ -1163,7 +1242,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Report coverage sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
         continue-on-error: true
         shell: pwsh
         run: sccache --show-stats
@@ -1350,7 +1429,22 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache settings-app NuGet packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1360,7 +1454,7 @@ jobs:
 
       - name: Configure without tests or benchmarks
         shell: pwsh
-        run: cmake --preset windows-no-tests -DAZOOKEY_FETCH_WIL=ON
+        run: cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-no-tests -DAZOOKEY_FETCH_WIL=ON
 
       - name: Build Windows-only targets without tests or benchmarks
         shell: pwsh
@@ -1369,6 +1463,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset windows-no-tests --target azookey_settings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report sccache stats
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: sccache --show-stats
 
   # cpp-quality was a single sequential job (format then tidy). It is split into
   # two independent jobs so the required format gate and the advisory tidy run
@@ -1514,7 +1614,22 @@ jobs:
           arch: amd64_arm64
 
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
 
       - name: Cache settings-app NuGet packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1539,7 +1654,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          cmake --preset windows-release-arm64 -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-arm64.log
+          cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-release-arm64 -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-arm64.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build ARM64 binaries
@@ -1553,7 +1668,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
+        continue-on-error: true
         shell: pwsh
         run: sccache --show-stats
 

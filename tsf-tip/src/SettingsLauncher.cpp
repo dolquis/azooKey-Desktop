@@ -114,7 +114,8 @@ HRESULT LaunchWithParameters(HWND parent, const std::wstring& parameters) {
 
 }  // namespace
 
-HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
+HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile,
+                                  std::wstring_view pane) {
   try {
     std::array<wchar_t, 40> profile_text{};
     if (StringFromGUID2(profile, profile_text.data(), static_cast<int>(profile_text.size())) == 0) {
@@ -125,8 +126,10 @@ HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
     if (swprintf_s(langid_text, L"0x%04X", static_cast<unsigned int>(langid)) < 0) {
       return E_UNEXPECTED;
     }
-    return LaunchWithParameters(
-        parent, L"--langid " + std::wstring(langid_text) + L" --profile " + profile_text.data());
+    std::wstring parameters =
+        L"--langid " + std::wstring(langid_text) + L" --profile " + profile_text.data();
+    if (!pane.empty()) parameters.append(L" --pane ").append(pane);
+    return LaunchWithParameters(parent, parameters);
   } catch (const std::bad_alloc&) {
     return E_OUTOFMEMORY;
   } catch (...) {

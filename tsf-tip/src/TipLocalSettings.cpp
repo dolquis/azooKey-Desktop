@@ -76,6 +76,24 @@ bool ParsePredictionPermission(const ipc::json::Value& settings) {
   return custom->GetBool("prediction").value_or(true);
 }
 
+// The resolver falls back to the global value, so it cannot tell a profile
+// that sets predictionEnabled from one that inherits it. profilesByApp is
+// resolved over a global false and a global true instead: a layer sets the
+// value where both give the same answer (app-profile-spec §5).
+std::array<std::shared_ptr<const core::AppProfileResolver>, 2> MakePredictionProfileProbes(
+    const ipc::json::Value& settings) {
+  std::array<std::shared_ptr<const core::AppProfileResolver>, 2> probes;
+  const auto* profiles = settings.IsObject() ? settings.FindObject("profilesByApp") : nullptr;
+  if (!profiles) return probes;
+  for (const bool global : {false, true}) {
+    const ipc::json::Value probe(
+        ipc::json::Object{{"profilesByApp", *profiles}, {"predictionEnabled", global}});
+    probes[global ? 1 : 0] = std::make_shared<const core::AppProfileResolver>(
+        core::AppProfileResolver::FromSettings(probe));
+  }
+  return probes;
+}
+
 bool ParseShowSecureIndicator(const ipc::json::Value& settings) {
   const auto* privacy = settings.IsObject() ? settings.Find("privacy") : nullptr;
   if (!privacy || !privacy->IsObject()) return true;
@@ -301,6 +319,19 @@ bool TipLocalSettings::PredictionEnabledSnapshot() const {
   return prediction_enabled_;
 }
 
+bool TipLocalSettings::PredictionSetByAppProfile(const core::ForegroundApp& app,
+                                                 core::AppNameEqual equal) const {
+  std::array<std::shared_ptr<const core::AppProfileResolver>, 2> probes;
+  {
+    const std::lock_guard lock(mutex_);
+    probes = prediction_profile_probes_;
+  }
+  if (!probes[0] || !probes[1]) return false;
+  const auto off = probes[0]->ResolveField("predictionEnabled", app, equal);
+  const auto on = probes[1]->ResolveField("predictionEnabled", app, equal);
+  return off && on && off->IsBool() && on->IsBool() && off->AsBool() == on->AsBool();
+}
+
 bool TipLocalSettings::InlineEnglishCandidatesSnapshot() const {
   const std::lock_guard lock(mutex_);
   return inline_english_candidates_;
@@ -331,6 +362,7 @@ void TipLocalSettings::Reload() noexcept {
   TipDynamicPunctuationSettings dynamic_punctuation;
   uint32_t max_context_length = 30;
   bool prediction_enabled = true;
+  std::array<std::shared_ptr<const core::AppProfileResolver>, 2> prediction_profile_probes;
   bool inline_english_candidates = false;
   bool mixed_english_auto_conversion = false;
   bool custom_romaji = false;
@@ -381,6 +413,7 @@ void TipLocalSettings::Reload() noexcept {
           configured && *configured >= 0 && *configured <= 30)
         max_context_length = static_cast<uint32_t>(*configured);
       prediction_enabled = json->GetBool("predictionEnabled").value_or(true);
+      prediction_profile_probes = MakePredictionProfileProbes(*json);
       inline_english_candidates = json->GetBool("inlineEnglishCandidates").value_or(false);
       mixed_english_auto_conversion = json->GetBool("mixedEnglishAutoConversion").value_or(false);
       custom_romaji = json->GetString("inputStyle").value_or("default") == "custom";
@@ -442,6 +475,7 @@ void TipLocalSettings::Reload() noexcept {
     ai = {};
     ai.privacy_policy = {};
     ai.prediction_allowed = false;
+    prediction_profile_probes = {};
     next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
@@ -456,6 +490,7 @@ void TipLocalSettings::Reload() noexcept {
     dynamic_punctuation_ = std::move(dynamic_punctuation);
     max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
+    prediction_profile_probes_ = std::move(prediction_profile_probes);
     inline_english_candidates_ = inline_english_candidates;
     mixed_english_auto_conversion_ = mixed_english_auto_conversion;
     romaji_table_ = std::move(romaji_table);
@@ -646,6 +681,14 @@ void TipLocalSettings::SetMaxContextLengthForTest(uint32_t length) {
 void TipLocalSettings::SetPredictionEnabledForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   prediction_enabled_ = enabled;
+}
+
+void TipLocalSettings::SetAppProfilesForTest(std::string_view contents) {
+  const auto json = ipc::json::Parse(contents);
+  auto probes = json ? MakePredictionProfileProbes(*json)
+                     : std::array<std::shared_ptr<const core::AppProfileResolver>, 2>{};
+  const std::lock_guard<std::mutex> lock(mutex_);
+  prediction_profile_probes_ = std::move(probes);
 }
 
 void TipLocalSettings::SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table) {

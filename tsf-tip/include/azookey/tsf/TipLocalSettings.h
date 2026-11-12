@@ -66,6 +66,9 @@ class TipLocalSettings final {
   TipDynamicPunctuationSettings DynamicPunctuationSnapshot() const;
   uint32_t MaxContextLengthSnapshot() const;
   bool PredictionEnabledSnapshot() const;
+  // Whether a profilesByApp layer that applies to `app` (process, window class
+  // or "default") sets predictionEnabled (tsf-deep-integration-spec §4.5).
+  bool PredictionSetByAppProfile(const core::ForegroundApp& app, core::AppNameEqual equal) const;
   // inlineEnglishCandidates (M60). An absent or unreadable value is false.
   bool InlineEnglishCandidatesSnapshot() const;
   // mixedEnglishAutoConversion (M63). An absent or unreadable value is false.
@@ -82,6 +85,8 @@ class TipLocalSettings final {
   void SetDynamicPunctuationForTest(const TipDynamicPunctuationSettings& settings);
   void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
+  // The profilesByApp of a settings.json text, for PredictionSetByAppProfile.
+  void SetAppProfilesForTest(std::string_view contents);
   void SetInlineEnglishCandidatesForTest(bool enabled);
   void SetMixedEnglishAutoConversionForTest(bool enabled);
   void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
@@ -128,6 +133,9 @@ class TipLocalSettings final {
   TipDynamicPunctuationSettings dynamic_punctuation_;
   uint32_t max_context_length_{30};
   bool prediction_enabled_{true};
+  // profilesByApp resolved over a global predictionEnabled of false and of
+  // true; empty without profiles.
+  std::array<std::shared_ptr<const core::AppProfileResolver>, 2> prediction_profile_probes_;
   bool inline_english_candidates_{false};
   bool mixed_english_auto_conversion_{false};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;

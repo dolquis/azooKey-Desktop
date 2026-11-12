@@ -163,9 +163,17 @@ std::vector<InputModeMenuEntry> BuildInputModeMenu(const InputModeMenuState& sta
   entries.push_back(mode(Command::Hiragana, L"ひらがな", InputModeIndicator::Hiragana));
   entries.push_back(mode(Command::Alphanumeric, L"半角英数", InputModeIndicator::Alphanumeric));
   entries.push_back(mode(Command::Direct, L"直接入力", InputModeIndicator::Direct));
-  entries.push_back(setting(Command::LiveConversion, L"ライブ変換", state.live_conversion));
+  // The labels are literals: the entries hold views of them.
+  const std::wstring_view live_label =
+      state.settings_writable ? L"ライブ変換" : L"ライブ変換（このアプリでは変更できません）";
+  // Where the switch is grayed out, why it cannot be changed comes first.
+  const std::wstring_view prediction_label =
+      !state.settings_writable ? L"予測変換（このアプリでは変更できません）"
+      : state.prediction_by_app_profile ? L"予測変換（このアプリはアプリ別の設定）"
+                                        : L"予測変換";
+  entries.push_back(setting(Command::LiveConversion, live_label, state.live_conversion));
   entries.back().separator_before = true;
-  entries.push_back(setting(Command::Prediction, L"予測", state.prediction));
+  entries.push_back(setting(Command::Prediction, prediction_label, state.prediction));
   InputModeMenuEntry open_settings;
   open_settings.command = Command::OpenSettings;
   open_settings.label = L"設定を開く";

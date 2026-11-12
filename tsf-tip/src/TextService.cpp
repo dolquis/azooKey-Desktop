@@ -2148,6 +2148,8 @@ void TextService::ShowInputModeLangBarMenu(POINT point, const RECT* area) {
   state.indicator = ResolveInputModeIndicator(keyboard_open_, alnum_mode_);
   state.live_conversion = local_settings_.LiveConversionSnapshot();
   state.prediction = local_settings_.PredictionEnabledSnapshot();
+  state.prediction_by_app_profile =
+      local_settings_.PredictionSetByAppProfile(foreground_app_.Get(), WindowsAppNameEqual);
   state.settings_writable = !settings_path_.empty() && SettingsMenuWritable();
   const uint64_t epoch = activation_epoch_;
   const auto command = ShowInputModeMenu(BuildInputModeMenu(state), point, area);
@@ -2196,7 +2198,8 @@ void TextService::RunInputModeMenuCommand(InputModeMenuCommand command,
       return;
     case InputModeMenuCommand::OpenSettings: {
       constexpr LANGID langid = 0x0411;  // The profile DllMain registers.
-      const HRESULT hr = LaunchSettingsApplication(nullptr, langid, kTextServiceProfileGuid);
+      const HRESULT hr =
+          LaunchSettingsApplication(nullptr, langid, kTextServiceProfileGuid, L"input");
       RuntimeLog(FAILED(hr) ? azookey::logging::RuntimeLogLevel::Warn
                             : azookey::logging::RuntimeLogLevel::Info,
                  FAILED(hr) ? "settings_launch_failed" : "settings_launch",

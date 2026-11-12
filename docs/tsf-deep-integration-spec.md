@@ -1000,7 +1000,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 
 - 今の値: ライブ変換と予測変換のチェックは、TIP が settings.json から読んでいる全体設定の値（`TipLocalSettings`）を出す。
   アプリごとのプロファイル（`profilesByApp`）はチェックにも書き込みにも使わない。フォーカス中のアプリのプロファイルが
-  予測変換を指定している（`app-profile-spec.md` §4）ときは、チェックは全体設定のままにし、ラベルを
+  予測変換を指定している（`app-profile-spec.md` §4。§5 の解決順でそのアプリに当たる層のどれかが、全体設定と同じ値でも `predictionEnabled` を持つ）ときは、チェックは全体設定のままにし、ラベルを
   「予測変換（このアプリはアプリ別の設定）」とする。選んだときに書くのは全体設定の `predictionEnabled` である。
 - 表記: 項目の名前は設定アプリと同じ語にする（`docs/sideload-packaging-spec.md` §3.2「表記規則」）。
 - 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
@@ -1024,7 +1024,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   ただし開いている設定アプリの画面は古い値のままで、同じキーを設定アプリでも変えて保存すると設定アプリの値が残る。
 - 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、rich-features-spec
   X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測変換をグレーアウトし、ラベルに
-  「（このアプリでは変更できません）」を添える。入力モードと「設定を開く」は使える。
+  「（このアプリでは変更できません）」を添える（予測変換では、アプリ別の設定の注記よりこちらを出す）。入力モードと「設定を開く」は使える。
 
 アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動、タスクバーの入力インジケーターが
 右クリックを `OnClick` に渡すことと、メニューの表示位置と閉じ方は実機で確かめる（Human Gate）。
@@ -1336,8 +1336,8 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | Configure 起動 | `tsf-tip/tests/query_interface_contract_test.cpp` | Windows 限定。`ITfFnConfigure` / `ITfFunction` の公開、`Show` がプロファイル付きで設定アプリを起動するか、起動失敗時の HRESULT |
 | KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動。開閉キーの分類（§3.1、§3.1.1） |
 | 開閉キーと入力インジケーター（§3.1、§4.1、§4.5） | `tsf-tip/tests/activate_uiless_test.cpp` | Windows 限定。`VK_IME_ON` / `VK_IME_OFF` と `imeOnOff` の変換・無変換、初回フォーカス直後の Off、言語バー項目の追加・削除・通知・クリック |
-| 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し、右クリックのメニューの構成、settings.json の 1 キーの書き込み（`TipSettingsWriter`） |
-| 入力インジケーターのメニュー（§4.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipLangBarMenuTest`: 入力モードの切り替え、ライブ変換・予測の書き込みと `UpdateConfig` の有無、グレーアウト、無効化後の選択の破棄、設定アプリの起動 |
+| 言語バー項目（§4.5） | `tsf-tip/tests/langbar_input_mode_test.cpp` | Windows 限定。表示の規則、文字の色、アイコンの大きさと透明度、sink への通知、クリックの受け渡し、右クリックのメニューの構成と項目の名前・注記、settings.json の 1 キーの書き込み（`TipSettingsWriter`） |
+| 入力インジケーターのメニュー（§4.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipLangBarMenuTest`: 入力モードの切り替え、ライブ変換・予測変換の書き込みと `UpdateConfig` の有無、グレーアウト、アプリ別の設定の注記、無効化後の選択の破棄、設定アプリの起動（`--pane input`） |
 | CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |

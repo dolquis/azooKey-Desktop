@@ -10043,10 +10043,55 @@ TEST(TsfTipLangBarMenuTest, OpenSettingsLaunchesTheSettingsAppForTheProfile) {
     h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
   }
   azookey::tsf::testing::ClearSettingsLauncherForTest();
-  // The same arguments as ITfFnConfigure::Show, and no page.
+  // The same arguments as ITfFnConfigure::Show, plus the input pane.
   wchar_t profile[40] = {};
   ASSERT_GT(StringFromGUID2(azookey::tsf::kTextServiceProfileGuid, profile, 40), 0);
-  EXPECT_EQ(g_menu_launch_parameters, std::wstring(L"--langid 0x0411 --profile ") + profile);
+  EXPECT_EQ(g_menu_launch_parameters,
+            std::wstring(L"--langid 0x0411 --profile ") + profile + L" --pane input");
+}
+
+// DEV-1946: a profilesByApp layer that sets predictionEnabled for the focused
+// app is named in the label; the check and the write stay global.
+TEST(TsfTipLangBarMenuTest, PredictionSetByTheFocusedAppsProfileIsNamedButStaysGlobal) {
+  ScopedSettingsMenuFile file;
+  DocumentPreeditHarness h;
+  // The same fixed app and privacy as ConfigureTypoHarness.
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  h.service.set_number_rewriter_enabled_for_test(false);
+  h.service.set_settings_path_for_test(file.path);
+  h.service.set_prediction_enabled_for_test(true);
+  const auto label = [&](std::string_view settings) {
+    h.service.set_app_profiles_for_test(settings);
+    ScopedMenuChoice menu(InputModeMenuCommand::None);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    EXPECT_EQ(menu.opened, 1) << settings;
+    if (menu.shown.empty()) return std::wstring();
+    EXPECT_TRUE(menu.Entry(InputModeMenuCommand::Prediction).checked) << settings;
+    return std::wstring(menu.Entry(InputModeMenuCommand::Prediction).label);
+  };
+  const std::wstring by_app = L"予測変換（このアプリはアプリ別の設定）";
+  // The same value as the global one still overrides it for this app.
+  EXPECT_EQ(label(R"({"profilesByApp":{"NOTEPAD.EXE":{"predictionEnabled":true}}})"), by_app);
+  EXPECT_EQ(label(R"({"profilesByApp":{"Notepad":{"predictionEnabled":false}}})"), by_app);
+  EXPECT_EQ(label(R"({"profilesByApp":{"default":{"predictionEnabled":false}}})"), by_app);
+  // Profiles of other apps, or without the field, inherit the global value.
+  EXPECT_EQ(label(R"({"profilesByApp":{"code.exe":{"predictionEnabled":false}}})"), L"予測変換");
+  EXPECT_EQ(label(R"({"profilesByApp":{"notepad.exe":{"promptPrefix":"x"}}})"), L"予測変換");
+  EXPECT_EQ(label(R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":"no"}}})"), L"予測変換");
+  EXPECT_EQ(label("{}"), L"予測変換");
+  // Choosing it flips the global value the menu showed.
+  h.service.set_app_profiles_for_test(
+      R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":true}}})");
+  {
+    ScopedMenuChoice menu(InputModeMenuCommand::Prediction);
+    h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_RIGHT);
+    ASSERT_EQ(menu.opened, 1);
+  }
+  EXPECT_EQ(file.Bool("predictionEnabled"), false);
+  const auto parsed = azookey::ipc::json::Parse(file.Read());
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_EQ(parsed->Find("profilesByApp"), nullptr) << "only the global key is written";
 }
 
 // DEV-1637: key_path records, written to a private log with AZOOKEY_LOG_KEYS

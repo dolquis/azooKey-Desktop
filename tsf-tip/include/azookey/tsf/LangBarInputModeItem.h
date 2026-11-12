@@ -53,6 +53,9 @@ struct InputModeMenuState {
   // False where the TIP does not write settings.json; the two switches are
   // then shown grayed out.
   bool settings_writable{true};
+  // A profilesByApp layer sets predictionEnabled for the focused app; the
+  // check and the write stay on the global value.
+  bool prediction_by_app_profile{false};
 };
 
 struct InputModeMenuEntry {

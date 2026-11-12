@@ -31,6 +31,8 @@ for (const key of ['issue', 'base', 'head', 'boundary']) {
 }
 if (!Array.isArray(args.touchedPaths) || args.touchedPaths.length === 0) throw new Error('args.touchedPaths が空')
 if (!Array.isArray(args.agents) || args.agents.length === 0) throw new Error('args.agents が空')
+// 1 体だけなら Workflow を使わず、親がその agent を直接起動する（L1。orchestration「分割レベル」）
+if (args.agents.length < 2) throw new Error('args.agents が 1 体だけ。L2 の Workflow は 2 体以上で使い、1 体なら親が直接起動する')
 const unknown = args.agents.filter(a => !ALLOWED.includes(a))
 if (new Set(args.agents).size !== args.agents.length) throw new Error('args.agents に重複がある')
 if (unknown.length) throw new Error(`args.agents に対象外の agent: ${unknown.join(', ')}`)

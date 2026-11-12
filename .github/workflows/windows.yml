@@ -1484,7 +1484,7 @@ jobs:
             --configure-exit-code "$CONFIGURE_EXIT" --summary "$GITHUB_STEP_SUMMARY"
 
   # ARM64（Windows on Arm）クロスビルドゲート。正典は
-  # docs/copilot-pc-backend-spec.md §8.1 / §8.4 受け入れ条件 1。
+  # docs/copilot-pc-backend-spec.md §8.1 / §8.4（実行経路）と plans/windows-port-roadmap.md M27 の受け入れ条件。
   #
   # 既存 windows-build の matrix に行追加せず専用ジョブとするのは、x64 Release と
   # ARM64 Release がどちらも config == Release になり artifact 名が衝突すること、

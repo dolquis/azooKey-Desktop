@@ -12,6 +12,7 @@
 - [DisplayAttribute](#displayattribute-tsf-tipincludeazookeytsfdisplayattributeh)
 - [Candidate UI](#candidatelistuielement-tsf-tipincludeazookeytsfcandidatelistuielementh)
 - [内部 EditSession](#内部で-itfeditsession-を実装する補助)
+- [ReconversionFunction](#reconversionfunction-tsf-tipincludeazookeytsfreconversionfunctionh)
 - [COM ではない補助クラス](#com-ではない補助クラス)
 - [DllMain](#dllmain-tsf-tipsrcdllmaincpp)
 - [対応テスト](#対応テスト)
@@ -37,6 +38,10 @@
 - `ITfThreadMgrEventSink` — フォーカス / ドキュメント遷移
   (`OnInitDocumentMgr`, `OnUninitDocumentMgr`, `OnSetFocus`,
   `OnPushContext`, `OnPopContext`)。
+- `ITfTextEditSink` — 編集通知（`OnEndEdit`）。アプリ側の選択・文字列の変化の検知に使う。
+  TIP 自身の EditSession 後の通知と区別する。
+- `ITfCompartmentEventSink` — compartment（キーボードの開閉状態など）の変化通知。
+- `ITfFunctionProvider` — 再変換（`ITfFnReconversion`、`ReconversionFunction`）を提供する。
 - `ITfCompositionSink` — composition 終了通知
   (`OnCompositionTerminated`)。
 - `ITfDisplayAttributeProvider` — 下線 / 色付けスタイル提供
@@ -51,7 +56,7 @@
   `azookey_settings.exe` を `ShellExecuteExW` で起動する。TIP 自身は設定 UI を描画しない。
 
 `TextService::QueryInterface`は`IID_IUnknown`、`IID_ITfTextInputProcessor`、
-`IID_ITfTextInputProcessorEx`、上記sink/providerのIID（`IID_ITfMouseSink`を含む）、`IID_ITfFunction`、
+`IID_ITfTextInputProcessorEx`、上記sink/providerのIID（`IID_ITfMouseSink`、`IID_ITfFunctionProvider`を含む）、`IID_ITfFunction`、
 `IID_ITfFnConfigure`を公開する。多重継承を追加しただけでは
 COMから取得できないため、QueryInterfaceと契約テストを同じ変更で更新する。
 
@@ -75,7 +80,8 @@ COMから取得できないため、QueryInterfaceと契約テストを同じ変
 ## DisplayAttribute (`tsf-tip/include/azookey/tsf/DisplayAttribute.h`)
 
 - `ITfDisplayAttributeInfo` — `DisplayAttributeKind` ごとの属性情報を返す軽量実装。
-  入力属性（fallback）と、一括変換の注目・変換済み・未変換の文節属性の 4 種類がある。
+  入力属性（fallback）と、注目・変換済み・未変換の文節属性の 4 種類がある。
+  注目属性は一括変換の文節に加え、一括変換 OFF の候補選択中の preedit にも使う。
 - 列挙子 (`IEnumTfDisplayAttributeInfo` 相当) は `DisplayAttribute.cpp` 側で
   実装される。
 
@@ -115,18 +121,31 @@ COM interfaceそのものではないが、自前`CandidateWindow`と`ITfUIEleme
 新しい内部 EditSession を足すときも、`QueryInterface` で `IID_ITfEditSession` を返し、
 `DoEditSession` から C++ 例外を漏らさない点は `EditSession` と同じ契約に従う。
 
+## ReconversionFunction (`tsf-tip/include/azookey/tsf/ReconversionFunction.h`)
+
+- `ITfFnReconversion` — 再変換の範囲判定、候補一覧、選択結果の適用。`TextService` の
+  `ITfFunctionProvider` から取得される。候補窓のクリックによる置換は非同期の EditSession で行う。
+
 ## COM ではない補助クラス
 
 TSF/COM object ではないが、thread 境界と責務境界を持つため変更時に確認する。
 
 - `CandidateWindow` (`CandidateWindow.h`) — 候補リストを描画する popup HWND。生成した thread
   でだけ使い、内部 lock を持たない。`CandidateUiCoordinator` が `pbShow` に応じて表示を決める。
+  `Mode::Prediction` で予測も同じ窓に出す（`docs/native-ui-spec.md` §4.2）。`WndProc` が
+  `WM_SETTINGCHANGE`（`SPI_SETWORKAREA`）と `WM_DISPLAYCHANGE` を受けて作業領域へ収め直す。
+- `LiveCarry` (`LiveCarry.h`) — ライブ変換の応答待ちの間に preedit が持つ変換済み断片の組み立て。
+- `CaretRectResolver` (`CaretRectResolver.h`) — caret と候補窓の基準位置、モニタの作業領域の解決。
+- `DelayedActionTimer` (`DelayedActionTimer.h`)、`TypoCorrectionTracker` (`TypoCorrectionTracker.h`)、
+  `CharacterFormEditSession` (`CharacterFormEditSession.h`)、`ProofreadSessionServer`
+  (`ProofreadSessionServer.h`) — 遅延実行、タイプミス学習の観測、字形の切り替え、校正ビューとの往復。
 - `TipLocalSettings` (`TipLocalSettings.h`) — Host に依存せず共有 `settings.json` を読み、
   directory watch worker で再読込する。worker は TSF/COM object に触らず、`Snapshot` /
   `RewriterSnapshot` の値型だけを UI thread へ渡す。
 - `ForegroundAppDetector` (`ForegroundAppDetector.h`) — アプリ別プロファイル解決のための
   前面プロセス判定。owner thread 専用で、window title を読まず、identity を IPC へ送らない。
-- `SettingsLauncher` (`SettingsLauncher.h`) — `ITfFnConfigure::Show` と、入力インジケーターのメニューの「設定を開く」の実体。
+- `SettingsLauncher` (`SettingsLauncher.h`) — `ITfFnConfigure::Show` と、入力インジケーターのメニューの「設定を開く」の実体。`--langid` と `--profile` は常に渡し、
+  `--pane` はメニューからの起動だけが渡す（`Show` は渡さない）。
   テスト用 hook は `AZOOKEY_TSF_TESTING` 時のみ公開する。
 - `TipSettingsWriter` (`TipSettingsWriter.h`) — メニューからの切り替えで settings.json の 1 キーだけを、
   設定アプリと Host と同じファイルロックの下で atomic に書く。読めないファイルは書き換えない。
@@ -156,6 +175,10 @@ TSF/COM object ではないが、thread 境界と責務境界を持つため変�
 | Candidate UI negotiation | `tsf_tip_candidate_ui_coordinator_tests` |
 | key / composition / preedit | `tsf_tip_onkeydown_preedit_tests` |
 | 応答の鮮度（stale response 破棄） | `tsf_tip_staleness_tests` |
+| ライブ変換の持ち越し | `tsf_tip_live_carry_tests` |
+| 再変換 | `tsf_tip_reconversion_function_tests` |
+| Space の候補窓 | `tsf_tip_space_candidate_window_tests` |
+| 入力インジケーター | `tsf_tip_langbar_input_mode_tests` |
 | caret 位置と候補窓の座標 | `tsf_tip_caret_position_tests` |
 | 候補窓の DPI スケール | `tsf_tip_candidate_window_dpi_tests` |
 | TIP ローカル設定の読込と監視 | `tsf_tip_local_settings_tests` |

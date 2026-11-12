@@ -24,14 +24,17 @@ Linear MCP を優先する。起票と更新は `save_issue`、コメントは `
 2. 所属 Project を `docs/linear-conventions.md` §13 の `PROJECT_NAME` から確定する。
 3. 本文は AGENTS.md「Linear とレビュー指摘」の項目（file / symbol、現象、影響、推奨修正）と
    §5 Agent Task Format に沿って書く。Priority、`repo:*`、`area:*`、`kind:*`、`type:*`、
-   担当 `agent:*` を付ける。人間専任なら `gate:human-required` を付け、`agent:*` を省略できる。
+   担当 `agent:*` を付ける。人間専任なら `gate:human-required` を付け、`agent:*` を省略できる。実機検証の人間ゲートには、実施してよい環境の `env:vm` または `env:dev-machine` を 1 つ付ける（§13 VERIFY_ENV_LABELS）。
 4. 実装 Issue と人間ゲートは §7.1 の分離テストで分け、同居させない。
 
 ### PR と連動する状態遷移
 
 1. Draft PR を作成したら Issue を In Review にし、PR URL をコメントに残す。
    PR 本文からは DEV 番号と GitHub mirror を相互参照する（`create-draft-pr` の手順内で行う）。
-2. マージされたら Merged にする。検証メモが書けるまで Done にしない。
+   関連 Issue を 1 PR にまとめた塊は、含まれる全 Issue を遷移させる（§13「関連 Issue の塊と PR」）。
+   管制塔セッションが子セッションを立てる場合、In Review までは子、マージ後は管制塔が担う（`docs/handoff/agent-orchestration.md`「管制塔セッションと子セッション」）。
+   `type:tracking` は In Progress を維持し、人間ゲート課題は PR を持たないため Todo のままにする（§3.1）。
+2. マージされたら Merged にする。検証メモが書けるまで Done にしない。ただし `docs/linear-conventions.md` §13「マージ後に Merged を省略できる場合」の条件を満たす Issue は、検証メモをその場で書いて Done へ直接進めてよい。
 3. Done にするときは §6 Agent Run Report Format で検証メモ（実行した検証、未実行、次アクション）を
    コメントに残してから遷移する。Human Gate が残る Issue は Done にしない。
 4. PR 本文の `Fixes` は GitHub mirror を自動 close するため、Human Gate や検証メモ待ちの Issue には
@@ -55,9 +58,7 @@ LINEAR_API_KEY=<非空文字列> python3 <path>/scripts/linear-audit.py --team D
 `SSL_CERT_FILE` で指す。
 
 `CONFIRMED` を先に処置する。`REVIEW` はヒューリスティックで過検出を前提とするため、採否を
-判断して棄却する場合は理由を当該 Issue に残す。そのうえで §11 の共通項目と §13 の repo 固有項目
-（spec-first、アーカイブ衛生、保留理由の失効、実装課題と人間ゲートの分離、一括誤 Done、
-Linear と main の突合）を順に確認する。機械判定が持たない項目はこちらにしかない。
+判断して棄却する場合は理由を当該 Issue に残す。そのうえで §11 と §13 の全項目を順に確認する。機械判定が持たない項目はこちらにしかない。
 結果は Project の Status Update に追記する。
 
 ## 必須ガードレール

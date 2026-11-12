@@ -5,12 +5,13 @@
 | 変更領域 | 最初に読む仕様 | 主な実装 | 優先テスト |
 |---|---|---|---|
 | Zenzai の変換、ロード、推論 | `docs/zenzai-inference-spec.md`, `docs/zenzai-gpu-route.md` | `inference-host/src/ZenzaiModelConverter.cpp`, `inference-host/src/InferenceEngine.cpp` | `host_engine_tests` |
-| request dispatch と degraded mode | `docs/windows-tsf-host-architecture.md`, `tsf-ipc-protocol` skill | `inference-host/src/Dispatcher.cpp` | `host_dispatcher_tests` |
+| request dispatch と degraded mode | `docs/windows-tsf-host-architecture.md`, `tsf-ipc-protocol` skill | `inference-host/src/Dispatcher.cpp`, `inference-host/src/HealthStateMachine.cpp` | `host_dispatcher_tests`, `host_health_state_tests` |
+| backend 選択（CPU / Vulkan の `auto` 解決） | `docs/zenzai-gpu-route.md`, `docs/copilot-pc-backend-spec.md` | `inference-host/src/BackendSelector.cpp` | `host_args_tests`（`backend_selector_test.cpp`） |
 | scheduler、cancel、timeout | `docs/dev-infrastructure-spec.md`, `docs/rich-features-spec.md` | `inference-host/src/RequestScheduler.cpp` | `host_scheduler_tests` |
-| ModelCatalog とモデル選択 | `docs/model-management-spec.md`, `settings/model-catalog.schema.json` | `inference-host/src/ModelCatalog.cpp`, `inference-host/src/ModelFetch.cpp`, `inference-host/src/ModelsCli.cpp`, `settings/default-model-catalog.json` | `host_model_catalog_tests` |
+| ModelCatalog とモデル選択 | `docs/model-management-spec.md`, `settings/model-catalog.schema.json` | `inference-host/src/ModelCatalog.cpp`, `inference-host/src/ModelFetch.cpp`, `inference-host/src/ModelsCli.cpp`, `inference-host/src/CatalogFetchService.cpp`, `inference-host/src/CatalogModelMatcher.cpp`, `inference-host/src/HttpDownloader.cpp`, `settings/default-model-catalog.json` | `host_model_catalog_tests`（`catalog_fetch_test.cpp` を含む）, `host_http_downloader_tests`（Windows のみ） |
 | ユーザーデータパス | `docs/learning-data-management-spec.md` | `inference-host/src/UserDataPaths.cpp` | `host_user_data_paths_tests` |
 | runtime 設定 | `docs/zenzai-gpu-route.md`, `docs/ai-backend-spec.md` | `inference-host/src/SettingsStore.cpp` | `host_settings_store_tests` |
-| privacy と入力ログ | `docs/privacy-and-secure-input-spec.md` | engine / dispatcher のログ境界 | `host_engine_tests`, `host_dispatcher_tests` |
+| privacy と入力ログ、予測の secure 境界 | `docs/privacy-and-secure-input-spec.md` | engine / dispatcher のログ境界。`QueryPredictions` は secure の要求と設定で予測を返さず、SafeMode でも利用者の privacy 設定だけに従う | `host_engine_tests`, `host_dispatcher_tests` |
 | 品質と性能の比較 | `docs/conversion-quality-benchmark-spec.md` | `bench/` | `azookey_zenzai_bench` と関連 bench |
 
 ## Runtime tier
@@ -20,12 +21,13 @@
 | llama.cpp 無効 / mock | Host の制御経路、fallback、エラー処理 | 実GGUFのロードと推論 |
 | 最小GGUF probe | loader の入口、形式エラー、最低限の初期化 | 実用モデル品質、完全なtoken生成 |
 | 完全GGUF / real model | 実ロード、実推論、Zenzai 経路、性能 | 別モデルや別GPUでの同等性 |
+| Vulkan の compile / link のみ（`windows-vulkan-release`、CI の `windows-vulkan-compile`） | ggml-vulkan 有効の Host のビルドと loader の暗黙リンク | 実GGUFでの Vulkan 推論 |
 
 実モデル検証では `windows-llama-debug`、`llama_cpp=1`、`--require-model`、必要なら `--require-zenzai` を確認する。CTest では `zenzai-real-model` ラベルを候補にし、モデルがないための skip を合格として報告しない。
 
 ## 検証対象
 
-- Host: `host_engine_tests`, `host_dispatcher_tests`, `host_scheduler_tests`
+- Host: `host_engine_tests`, `host_dispatcher_tests`, `host_scheduler_tests`, `host_health_state_tests`, `host_args_tests`
 - パス、catalog、設定: `host_user_data_paths_tests`, `host_model_catalog_tests`, `host_settings_store_tests`
 - CLI: `host_userdict_cli_tests`
 - bench: `azookey_zenzai_bench`

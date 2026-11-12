@@ -48,7 +48,7 @@ python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json
 
 DECISIVE は全ファイル 0 件で凍結してあるので、1 件でも出れば増加として落ちる。HEURISTIC は既存の件数を凍結してあり、止めるのは増加だけである。警告を消すためにベースラインを書き直さない。
 
-docs-lint が見ない文書とコードの対応は、最初の 2 本が CI（`docs-lint` ジョブ）で検査する。続く `check_doc_format.py`、`check_docs_budget.py`、`check_doc_meta.py` は手元で実行する（CI への接続は別 Issue で追跡する）。
+docs-lint が見ない文書とコードの対応は、次の 5 本が CI（`docs-lint` ジョブ）で検査する。同ジョブは `check_agent_instruction_size.py`、`check_test_inventory.py`、`check_skill_references.py`、`check_agent_definitions.py` も実行する。
 
 ```
 python3 scripts/check_doc_refs.py

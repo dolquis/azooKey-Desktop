@@ -66,7 +66,12 @@ description: tsf-tip/ 配下のC++、COM/TSFインターフェース、EditSessi
    - key/preedit: `tsf_tip_onkeydown_preedit_tests`
    - 登録round-trip: `tsf_tip_com_smoke_tests`（昇格可能時。未昇格ではskipを確認）
 6. 最終確認では`cmake --build --preset windows-debug --target azookey_check`を優先する。
-7. UI-less描画、TIP登録、実アプリ入力などunit testで代替できない検証は人間ゲートとして明記する。
+7. 見落としやすい点は対応するspecで確認する。
+   - アプリ側の編集の検知（`OnEndEdit`）: `docs/tsf-deep-integration-spec.md`。TIP自身のEditSession後の通知と区別する。
+   - ライブ変換の応答待ちの表示と持ち越し: `docs/legacy-parity-spec.md` §2.3.1。
+   - 再変換の候補窓のクリックは非同期のEditSessionで置換する。
+   - 打鍵ごとのキー状態を扱うテストは`tsf-tip/tests/KeyboardStateGuard.h`を使う。
+8. UI-less描画、TIP登録、実アプリ入力などunit testで代替できない検証は人間ゲートとして明記する。
 
 ## 禁止事項
 

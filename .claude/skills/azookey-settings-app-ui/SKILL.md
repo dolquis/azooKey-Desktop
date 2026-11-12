@@ -15,12 +15,14 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
 1. `references/spec-routing.md` を読み、対象が UI 表示、保存、Host 通知、起動引数、ビルドの
    どれかを決める。設定キーの追加・変更を伴うなら先に `azookey-settings-schema-evolution` を読む。
 2. ツール選択・初期化は AGENTS.md「調査と実装」に従い、`EditableSettings` の読込・保存経路と
-   `MainWindow.xaml.cpp` のバインディング、`SettingsIpcClient` の送信経路を確認する。
+   `MainWindow.xaml.cpp` のバインディング、ペイン別の実装（`*Pane.cpp`、`*PaneModel.cpp`、`SettingsFields.cpp`）、
+   `SettingsIpcClient` の送信経路を確認する。
 3. 既定値、範囲、無効値、隠しキー（UI に出さないが保持するキー）の扱いを列挙する。
 4. 最小差分で実装し、`SettingsDocument` と `LaunchArguments` の単体テストを更新する。
 5. `azookey_settings_persistence_tests`、`azookey_settings_launch_arguments_tests` を実行し、
    Host 側は `host_settings_store_tests`、TIP 側は `tsf_tip_local_settings_tests` へ広げる。
-6. 表示文言、項目、保存形式、起動経路が変わる場合は `docs/native-ui-spec.md` と
+6. 表示文言、項目、保存形式、起動経路が変わる場合は `docs/sideload-packaging-spec.md` §3.2 と
+   `docs/native-ui-spec.md`、
    機能別 spec の「UI」節を同じ変更で更新する。
 
 ## 必須ガードレール
@@ -30,9 +32,17 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
   「設定アプリだけが書くので競合しない」とは扱わず、`FileLock.h` の排他を保存・quarantine・TIP の 1 キー書き込みで取る。
 - 不正な `settings.json` は quarantine してから保存する既存契約を、無言の上書きに変えない。
 - UI が持つ既定値を schema、sample、runtime と一致させる。UI だけで既定値を決めない。
+- 表示文字列は `Strings/ja-JP` の resw に置き、`x:Uid` で結ぶ。語の表記は
+  `docs/sideload-packaging-spec.md` §3.2「表記規則」に従う。
 - C++/WinRT と Windows App SDK は `settings-app/` に閉じる。`tsf-tip/` へ持ち込まない。
-- 起動引数（`--langid`、profile GUID）は `ITfFnConfigure::Show` から
-  `tsf-tip/src/SettingsLauncher.cpp` が渡す。引数の追加は TIP 側と同じ変更で行う。
+- 起動引数は `LaunchArguments` が解釈する（`--langid`、`--profile`、`--pane`、`--proofread-session`）。
+  `ITfFnConfigure::Show` は `--langid` と `--profile` を、入力インジケーターのメニューは加えて `--pane` を
+  `tsf-tip/src/SettingsLauncher.cpp` が渡す。引数の追加は `LaunchArguments`、`SettingsLauncher`、
+  `docs/sideload-packaging-spec.md` §3.2 を同じ変更で更新する。
+- 「設定」群と「バージョン」のペインは保存バーで保存するまで `settings.json` へ書かない。変更件数は
+  `ChangedSettingPaths`、Host の再起動が要る変更は `SettingsRequiringHostRestart` で判定し、
+  未保存のまま閉じるときは確認を出す。確定前の `NumberBox` の入力も件数と保存に含め、API キーは
+  読込時の値を保持せず、ハッシュで変更を判定する。「データとツール」群は IPC で即時に反映し、保存バーを出さない。
 - Host への通知は `Handshake` と `UpdateConfig` の既存 IPC 契約に従う。
   新しい message が要るなら `tsf-ipc-protocol` を併用する。
 - API key、token、credential を UI のログ、テスト fixture、スクリーンショットに残さない。

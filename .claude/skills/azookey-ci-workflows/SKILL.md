@@ -17,6 +17,9 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
    ファイル種別が既存の filter に入るかを確認する。入らないなら filter を同じ変更で更新する。
 3. 変更する job の名前が branch ruleset の required check に含まれるかを
    `docs/dev-infrastructure-spec.md` §4.9 で確認する。名前を変えると必須チェックが外れる。
+   required check は `Secret scan` と `CI gate` の 2 つで、`windows.yml` に判定対象のジョブを
+   足すときは `ci-gate` の `needs` にも加える。加えないとそのジョブの失敗が素通りする。
+   advisory ジョブ（`cpp-tidy`、`windows-coverage`）は `needs` に入れない。
 4. ローカルで実行できる検査を先に回す。`pre-commit run --all-files`、`python3 scripts/tests/` の
    各テスト、`python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、
    `python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py`。
@@ -41,6 +44,9 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
   この repo では編集しない。呼び出し方だけを workflow 側で変える。
 - Sanitizer や benchmark の定期実行を、通常 PR の必須チェックへ昇格しない。§4.6 / §4.5 の分離を保つ。
 - CMake preset を増やすときは `CMakePresets.json`、`justfile`、README の手順、§4.2 を同期する。
+  文書中の preset 名は `scripts/check_doc_contracts.py` が `CMakePresets.json` と突合する。
+- sccache を使うジョブは、sccache が起動できなくてもコンパイラキャッシュ無しでビルドを続ける
+  （`sccache-setup` / `sccache-start` の outcome で分岐する）。新しい build ジョブも同じ形にそろえる。
 
 ## 完了条件
 

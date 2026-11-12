@@ -40,7 +40,7 @@ build を伴わない検査を CI と同じコマンドで実行し、判定に�
 
 | 変更範囲 | コマンド |
 |---|---|
-| Markdown（`docs/`、`plans/`、ルートの README / AGENTS / CLAUDE、`.claude/`、`.agents/`） | `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、`python3 scripts/check_doc_refs.py`、`python3 scripts/check_doc_contracts.py` |
+| Markdown（`docs/`、`plans/`、ルートの README / AGENTS / CLAUDE、`.claude/`、`.agents/`） | `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、`python3 scripts/check_doc_refs.py`、`python3 scripts/check_doc_contracts.py`、`python3 scripts/check_doc_format.py`、`python3 scripts/check_docs_budget.py`、`python3 scripts/check_doc_meta.py`。`check_docs_budget.py` の行数超過と、`check_doc_meta.py` の参考資料・完了済み one-off の指摘は警告で、終了コードが 0 なら合格に数える |
 | AGENTS.md / CLAUDE.md | 上記に加えて `python3 scripts/check_agent_instruction_size.py` |
 | Skill（`.claude/skills/`、`.agents/skills/`） | `python3 scripts/check_skill_references.py` |
 | agent 定義、`.codex/`、`.claude/hooks/` | `python3 scripts/check_agent_definitions.py` と、`.github/workflows/docs.yml` の同じジョブが回す hook と checker のテスト（`scripts/tests/test_check_agent_definitions.py`、`scripts/tests/test_agent_readonly_guard.py`、`scripts/tests/test_subagent_snapshot.py`、`scripts/tests/test_git_push_guard.py`、`scripts/tests/test_codex_push.py`、`scripts/tests/test_codex_docs_lint_hook.py`） |

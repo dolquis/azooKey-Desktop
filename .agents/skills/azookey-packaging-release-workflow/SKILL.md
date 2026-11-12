@@ -9,7 +9,7 @@ description: azooKey Desktop の MSI、WiX、MSIX、AppxManifest、external-loca
 
 ## 手順
 
-1. `references/spec-routing.md` を読み、対象を MVP 直接配布 MSI、Microsoft Store MSIX、スタンドアロン MSIX サイドロードのいずれかに分類する。
+1. `references/spec-routing.md` を読み、対象を MVP 直接配布 MSI、Vulkan add-on MSI、Microsoft Store MSIX、スタンドアロン MSIX サイドロードのいずれかに分類する。
 2. 対象チャネルの正典、実装、既存テストを確認し、未検証 PoC と canonical 経路を区別する。
 3. C++ の package identity、TIP 登録、AppContainer 境界へ影響する場合は、AGENTS.md「調査と実装」のツール選択・初期化に従い、経路・対象シンボル・参照元を確認する。
 4. Context-Mode が利用可能なら、XML、PowerShell、workflow、長い diff やログを整理する。利用できない場合は必要な範囲を絞って確認する。
@@ -21,6 +21,7 @@ description: azooKey Desktop の MSI、WiX、MSIX、AppxManifest、external-loca
 ## 必須ガードレール
 
 - `docs/sideload-packaging-spec.md` §0 の配布方針を先に確認し、MSI、Store MSIX、スタンドアロン MSIX の要件を混同しない。
+- Vulkan add-on は base MSI と別の MSI で、base に混ぜない。Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。add-on は base と版が揃うときだけ選ばれ、loader とドライバーは同梱しない（`docs/sideload-packaging-spec.md` §1.6.3）。add-on の失敗で base のリリースを止めない。
 - `.pfx`、秘密鍵、証明書パスワード、token をリポジトリ、ログ、コマンド履歴、PR 本文へ含めない。
 - MSIX の `Identity@Publisher` と署名証明書 Subject の一致を確認し、実在しない Publisher や証明書値を推測で設定しない。
 - machine-wide TIP 登録、証明書ストア変更、署名済み package の登録、IME 実入力、アンインストール確認は、明示された管理者権限、実機確認、人間ゲートとして扱う。

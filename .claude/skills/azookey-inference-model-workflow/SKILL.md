@@ -22,6 +22,8 @@ description: azooKey Desktop の inference-host、Zenzai、GGUF、llama.cpp、Mo
 - 完全GGUFによる実モデル検証では、モデル必須オプションと Zenzai 必須条件を明示し、skip を成功に数えない。
 - 任意のGGUFを暗黙に自動選択しない。catalog、設定、明示パスの優先順位を仕様どおりに保つ。
 - モデル不在、破損、非対応、OOM、初期化失敗時の fallback と degraded 状態を壊さない。
+- backend のロード失敗ログは固定語彙の理由だけを出し、モデル path、例外文字列、ユーザー入力を含めない。
+- catalog の取得は `selectedPath` を解決した長いパスで既定 catalog と照合し、取得の中止は `model_id` で対象を指す（`docs/model-management-spec.md` §3.1.2、§4.4）。
 - モデルバイナリ、ライセンス制限物、secret、ユーザー入力をコミットやログへ含めない。
 - IPC payload や TIP / Host の責務境界を変える場合は `tsf-ipc-protocol` も使用する。
 

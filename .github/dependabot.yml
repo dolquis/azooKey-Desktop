@@ -4,7 +4,5 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    groups:
-      github-actions:
-        patterns:
-          - "*"
+    # DEV-1988: keep updates independent while grouped updates fail on an empty
+    # second commit with a dirty submodule in the updater workspace.

@@ -307,7 +307,22 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - name: Set up sccache
+        id: sccache-setup
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          # Disable unguarded post-action stats; report only after successful startup.
+          disable_annotations: 'true'
+      - name: Start sccache server
+        id: sccache-start
+        if: steps.sccache-setup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: sccache --start-server
+      - name: Fall back to uncached compilation
+        if: steps.sccache-start.outcome != 'success'
+        shell: bash
+        run: echo "::warning::sccache setup or server startup failed; building without compiler cache."
       - name: Resolve MSI version
         id: msi-version
         shell: pwsh
@@ -387,11 +402,11 @@ jobs:
         shell: pwsh
         env:
           PRODUCT_VERSION: ${{ steps.msi-version.outputs.version }}
-        run: cmake --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF "-DAZOOKEY_PRODUCT_VERSION=$env:PRODUCT_VERSION"
+        run: cmake -DAZOOKEY_USE_COMPILER_CACHE=${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF "-DAZOOKEY_PRODUCT_VERSION=$env:PRODUCT_VERSION"
       - name: Build inference host with ggml-vulkan
         run: cmake --build --preset windows-vulkan-release --target azookey_inference_host --parallel 2
       - name: Report sccache stats
-        if: always()
+        if: always() && steps.sccache-start.outcome == 'success'
         continue-on-error: true
         run: sccache --show-stats
       - name: Verify the Vulkan host links the loader implicitly

@@ -340,6 +340,12 @@ Describe "WiX MSI package consistency" {
     $attach | Should -Not -BeNullOrEmpty
     $addon | Should -Match "vars\.RELEASE_ENABLED == 'true'"
     $addon | Should -Not -Match '(?m)^    needs:'
+    $cacheSetup = [regex]::Match($addon, '(?ms)      - name: Set up sccache\r?\n.*?(?=      - name: Resolve MSI version)').Value
+    $baseCacheSetup = [regex]::Match($base, '(?ms)      - name: Set up sccache\r?\n.*?(?=      - name: Resolve MSI version)').Value
+    $cacheSetup | Should -Not -BeNullOrEmpty
+    $cacheSetup | Should -Be $baseCacheSetup
+    $addon | Should -Match ([regex]::Escape("-DAZOOKEY_USE_COMPILER_CACHE=`${{ steps.sccache-start.outcome == 'success' && 'ON' || 'OFF' }} --preset windows-vulkan-release"))
+    $addon | Should -Match "name: Report sccache stats\r?\n        if: always\(\) && steps\.sccache-start\.outcome == 'success'"
     $addon | Should -Match 'dotnet build pkg\\msi-vulkan\\azooKey\.VulkanAddon\.wixproj'
     $addon | Should -Match 'dotnet build pkg\\msi-vulkan\\azooKey\.VulkanAddon\.wixproj --configuration Release --output "\$\{\{ github\.workspace \}\}\\pkg\\msi-vulkan\\bin\\Release"'
     $addon | Should -Match '--package vulkan-addon --vulkan-sdk'

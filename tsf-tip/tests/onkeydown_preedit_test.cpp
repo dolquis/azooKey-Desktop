@@ -10161,11 +10161,11 @@ std::optional<uint64_t> NumberField(const std::string& line, std::string_view na
 TEST(TsfTipKeyPathLogTest, NothingIsWrittenWithoutTheOptIn) {
   ScopedKeyPathLog log(/*keys=*/false);
   {
+    FakeDocumentMgr first;
+    FakeDocumentMgr second;
     TextServiceHarness h;
     EXPECT_TRUE(h.TestPress('K'));
     EXPECT_TRUE(h.Press('K'));
-    FakeDocumentMgr first;
-    FakeDocumentMgr second;
     EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
   }
   EXPECT_TRUE(log.Records().empty());
@@ -10174,6 +10174,8 @@ TEST(TsfTipKeyPathLogTest, NothingIsWrittenWithoutTheOptIn) {
 TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePerDocument) {
   ScopedKeyPathLog log(/*keys=*/true);
   {
+    FakeDocumentMgr first;
+    FakeDocumentMgr second;
     TextServiceHarness h;
     h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
     h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
@@ -10181,8 +10183,6 @@ TEST(TsfTipKeyPathLogTest, RecordsTraceTheKeyWithoutItsTextAndPassthroughOncePer
     EXPECT_TRUE(h.Press('K'));
     EXPECT_TRUE(h.TestPress('A'));
     EXPECT_TRUE(h.Press('A'));
-    FakeDocumentMgr first;
-    FakeDocumentMgr second;
     EXPECT_EQ(h.service.OnSetFocus(&second, &first), S_OK);
     ChromiumCompartmentMgr compartments;
     compartments.keyboard_disabled.value = 1;

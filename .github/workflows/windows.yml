@@ -367,9 +367,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -715,9 +712,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -883,9 +877,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -1036,9 +1027,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -1205,9 +1193,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -1455,9 +1440,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'
@@ -1643,9 +1625,6 @@ jobs:
         if: steps.sccache-setup.outcome == 'success'
         continue-on-error: true
         shell: bash
-        # Temporary DEV-1984 endpoint-failure validation; remove after the run.
-        env:
-          ACTIONS_RESULTS_URL: http://127.0.0.1:9/
         run: sccache --start-server
       - name: Fall back to uncached compilation
         if: steps.sccache-start.outcome != 'success'

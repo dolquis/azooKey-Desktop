@@ -92,6 +92,33 @@ jobs:
       - name: Check documents against IPC types, settings schema, and presets
         run: python3 scripts/check_doc_contracts.py
 
+      # spec と roadmap の書式を検査する。roadmap の全 M が依存図に現れること、前提に書いた M が
+      # 図に現れること、図で 1 行に直接読める辺が前提に書かれていること。spec の受け入れ条件の節に
+      # 定義を複製しないこと、冒頭に作成日・更新日を置かないこと、M を 3 つ以上扱う spec が
+      # 「節とマイルストーンの対応」を持つこと。
+      - name: Test the document format checker
+        run: python3 scripts/tests/test_check_doc_format.py
+
+      - name: Check the format of specs and the roadmap
+        run: python3 scripts/check_doc_format.py
+
+      # spec（1500 行）と節（400 行）の行数は警告だけで、CI を落とさない。docs-lint ベースラインは
+      # scripts/docs-baseline-cap.json の上限と一致させる。件数が減ったら同じ PR で上限も下げる。
+      - name: Test the document budget checker
+        run: python3 scripts/tests/test_check_docs_budget.py
+
+      - name: Warn on spec size and pin the docs-lint baseline to its cap
+        run: python3 scripts/check_docs_budget.py
+
+      # 文書冒頭の front matter（kind ほか）を docs/README.md の表、決定記録の「結論の正典」と
+      # 逆リンク、one-off の完了基準と突き合わせる。参考資料への言及と、完了基準を満たした
+      # one-off は警告だけで、CI を落とさない。
+      - name: Test the document metadata checker
+        run: python3 scripts/tests/test_check_doc_meta.py
+
+      - name: Check document metadata against the docs index
+        run: python3 scripts/check_doc_meta.py
+
       # 契約ファイル（一覧は scripts/check_docs_impact.py の CONTRACT_PATHS）を変えて docs を
       # 変えない PR に、本文の Documentation impact で影響なしの理由を求める。
       - name: Test the docs impact gate

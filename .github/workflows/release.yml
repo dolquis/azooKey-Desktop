@@ -269,3 +269,232 @@ jobs:
           files: |
             pkg\msi\bin\Release\*.msi
             azooKey.spdx.json
+
+  # Base publication does not depend on this optional add-on.
+  vulkan-addon:
+    name: Build unsigned Vulkan add-on MSI
+    runs-on: windows-2022
+    timeout-minutes: 90
+    if: ${{ vars.RELEASE_ENABLED == 'true' }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: "release-vulkan-v1"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      # Keep both SDK pins aligned with windows.yml / windows-vulkan-compile.
+      VULKAN_SDK_VERSION: "1.4.357.0"
+      VULKAN_SDK_SHA256: "81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # legacy/ 配下の macOS モデル submodule は Windows パッケージングに不要。
+          # 既存 windows.yml と同じく無効化する（取得の遅延・脆弱性を避ける）。
+          submodules: false
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Resolve MSI version
+        id: msi-version
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if ($env:REF_TYPE -eq "tag") {
+            $version = $env:REF_NAME.Substring(1)
+          } else {
+            $version = "0.0.0"
+          }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Release tag must use vMAJOR.MINOR.PATCH: $version"
+          }
+
+          $parts = @()
+          foreach ($field in $version.Split('.')) {
+            [uint32]$parsed = 0
+            if (-not [uint32]::TryParse($field, [ref]$parsed)) {
+              throw "MSI version field exceeds the supported integer range: $version"
+            }
+            $parts += $parsed
+          }
+          if ($parts[0] -gt 255 -or $parts[1] -gt 255 -or $parts[2] -gt 65535) {
+            throw "MSI version must satisfy MAJOR <= 255, MINOR <= 255, PATCH <= 65535: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Cache Vulkan SDK installer
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\vulkan-sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ env.VULKAN_SDK_SHA256 }}
+
+      # LunarG の配布物を SHA256 で照合してから実行する（M38 供給網固定と同じ規律）。
+      # --root でランナー作業領域へ入れるサイレントインストールで、昇格を伴わない。
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cacheDir = Join-Path $env:RUNNER_TEMP 'vulkan-sdk'
+          $installer = Join-Path $cacheDir "vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          if (Test-Path -LiteralPath $installer) {
+            $cachedSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($cachedSha -ne $env:VULKAN_SDK_SHA256) {
+              Remove-Item -LiteralPath $installer -Force
+            }
+          }
+          if (-not (Test-Path -LiteralPath $installer)) {
+            $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+            curl.exe --fail --location --retry 3 --output $installer $url
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $actualSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha -ne $env:VULKAN_SDK_SHA256) {
+            throw "Vulkan SDK installer SHA256 mismatch: expected $env:VULKAN_SDK_SHA256, got $actualSha"
+          }
+
+          # インストーラーは GUI サブシステムの実行体なので、& 演算子では終了を
+          # 待たないことがある。Start-Process -Wait で完了と exit code を確定させる。
+          $root = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_SDK_VERSION"
+          $arguments = @('--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
+          $install = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+          if ($install.ExitCode -ne 0) { throw "Vulkan SDK install failed with exit code $($install.ExitCode)" }
+          # ggml-vulkan は glslc と SPIRV-Headers の CMake config を SDK から引く。
+          foreach ($required in "Bin\glslc.exe", "Include\vulkan\vulkan.h", "Lib\vulkan-1.lib") {
+            $path = Join-Path $root $required
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Vulkan SDK is missing a required component: $required"
+            }
+          }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          Join-Path $root 'Bin' >> $env:GITHUB_PATH
+
+      - name: Configure Vulkan build
+        shell: pwsh
+        env:
+          PRODUCT_VERSION: ${{ steps.msi-version.outputs.version }}
+        run: cmake --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF "-DAZOOKEY_PRODUCT_VERSION=$env:PRODUCT_VERSION"
+      - name: Build inference host with ggml-vulkan
+        run: cmake --build --preset windows-vulkan-release --target azookey_inference_host --parallel 2
+      - name: Report sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
+      - name: Verify the Vulkan host links the loader implicitly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'build\vk\inference-host\azookey_inference_host.exe'
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Vulkan host executable was not produced: $exe"
+          }
+          $dependents = & dumpbin /nologo /dependents $exe | Out-String
+          $dependents
+          if ($dependents -notmatch '(?im)^\s*vulkan-1\.dll\s*$') {
+            throw "azookey_inference_host.exe no longer imports vulkan-1.dll; revisit the add-on layout in docs/sideload-packaging-spec.md 1.6.3"
+          }
+
+      - name: Copy the Vulkan host for packaging
+        shell: pwsh
+        run: Copy-Item build\vk\inference-host\azookey_inference_host.exe build\vk\inference-host\azookey_inference_host_vulkan.exe
+      - name: Verify the base MSI covers the imported MSVC runtime
+        shell: pwsh
+        run: ./scripts/check-app-local-runtime.ps1 -BinaryPath "${{ github.workspace }}\build\vk\inference-host\azookey_inference_host_vulkan.exe" -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs"
+      - name: Build unsigned Vulkan add-on MSI
+        run: >-
+          dotnet build pkg\msi-vulkan\azooKey.VulkanAddon.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VulkanHostExePath=${{ github.workspace }}\build\vk\inference-host\azookey_inference_host_vulkan.exe"
+      - name: Verify MSI is unsigned
+        id: addon-artifact
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem pkg\msi-vulkan\bin\Release\*.msi -File -ErrorAction Stop
+          if ($msi.Count -ne 1) {
+            throw "Expected one MSI, found $($msi.Count)."
+          }
+          $signature = Get-AuthenticodeSignature -FilePath $msi.FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+            throw "Expected an unsigned MSI, found signature status $($signature.Status)."
+          }
+          "path=$($msi.FullName)" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Generate SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          file: ${{ steps.addon-artifact.outputs.path }}
+          format: spdx-json
+          output-file: ${{ github.workspace }}\azooKey-vulkan-addon.syft.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Complete Vulkan add-on SBOM with release dependencies
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.addon-artifact.outputs.path }}
+          MSI_VERSION: ${{ steps.msi-version.outputs.version }}
+        run: >-
+          python scripts/complete-release-sbom.py --package vulkan-addon --vulkan-sdk "$env:VULKAN_SDK" --input azooKey-vulkan-addon.syft.spdx.json --output azooKey-vulkan-addon.spdx.json --build-dir build/vk --msi "$env:MSI_PATH" --version "$env:MSI_VERSION"
+      - name: Attest build provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.addon-artifact.outputs.path }}
+      - name: Attest SBOM
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.addon-artifact.outputs.path }}
+          sbom-path: ${{ github.workspace }}\azooKey-vulkan-addon.spdx.json
+      - name: Record Release asset sizes and hashes
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.addon-artifact.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = @($env:MSI_PATH, 'azooKey-vulkan-addon.spdx.json')
+          $rows = foreach ($path in $assets) {
+            $file = Get-Item -LiteralPath $path -ErrorAction Stop
+            if ($file.Length -le 0) { throw "Release asset is empty: $($file.Name)" }
+            $sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "| $($file.Name) | $($file.Length) | $sha256 |"
+          }
+          @(
+            '## Vulkan add-on assets before upload'
+            ''
+            '| Asset | Bytes | SHA256 |'
+            '|---|---:|---|'
+          ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+      - name: Save Vulkan add-on assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulkan-addon
+          if-no-files-found: error
+          path: |
+            pkg\msi-vulkan\bin\Release\*.msi
+            azooKey-vulkan-addon.spdx.json
+
+  attach-vulkan-addon:
+    needs: [release, vulkan-addon]
+    if: ${{ always() && vars.RELEASE_ENABLED == 'true' && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Report unavailable Vulkan add-on
+        if: needs.vulkan-addon.result != 'success'
+        env:
+          ADDON_RESULT: ${{ needs.vulkan-addon.result }}
+        run: |
+          echo "Vulkan add-on was not attached: vulkan-addon job result=$ADDON_RESULT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Download Vulkan add-on assets
+        if: needs.vulkan-addon.result == 'success' && github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vulkan-addon
+      - name: Attach Vulkan add-on to the base draft release
+        if: needs.vulkan-addon.result == 'success' && github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" pkg/msi-vulkan/bin/Release/*.msi azooKey-vulkan-addon.spdx.json --repo "$GITHUB_REPOSITORY"
+      - name: Report dry-run
+        if: github.event_name == 'workflow_dispatch'
+        run: echo 'Vulkan add-on was not attached because this is a dry-run.' >> "$GITHUB_STEP_SUMMARY"

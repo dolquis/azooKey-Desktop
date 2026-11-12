@@ -128,14 +128,14 @@ jobs:
 
               # Keep this list aligned with the non-document inputs read by Pester:
               # msi-package-consistency / msix-identity-consistency: build definitions,
-              # settings project, TIP registration sources, licenses, SBOM and release.
+              # Vulkan add-on MSI definitions, settings project, TIP registration sources, licenses, SBOM and release.
               # doctor: presets, justfile, .clangd and WPR profile.
               # vm-verify-fixtures: diagnostic markers and compatibility cases.
               case "$path" in
                 *.md|docs/*|plans/*)
                   # Documentation-only changes do not run PowerShell quality.
                   ;;
-                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*|scripts/vm-verify-fixtures/*|\
+                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msi-vulkan/*|pkg/msix/*|scripts/vm-verify-fixtures/*|\
                 CMakeLists.txt|inference-host/CMakeLists.txt|settings-app/CMakeLists.txt|CMakePresets.json|\
                 settings-app/*.vcxproj|\
                 .github/workflows/release.yml|THIRD_PARTY_LICENSES|scripts/complete-release-sbom.py|\
@@ -823,6 +823,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
       # DEV-944 の実ビルド検証と同じ SDK 版に固定する。
+      # Keep both SDK pins aligned with release.yml / vulkan-addon.
       VULKAN_SDK_VERSION: "1.4.357.0"
       VULKAN_SDK_SHA256: "81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d"
     steps:

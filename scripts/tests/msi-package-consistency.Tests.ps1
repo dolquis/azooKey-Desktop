@@ -330,6 +330,36 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match '\$parts\[2\] -gt 65535'
   }
 
+  It "builds the guarded Vulkan add-on independently and attaches only after base success" {
+    $addon = [regex]::Match($script:releaseWorkflow, '(?ms)^  vulkan-addon:\r?\n(?<body>.*?)^  attach-vulkan-addon:').Groups['body'].Value
+    $attach = [regex]::Match($script:releaseWorkflow, '(?ms)^  attach-vulkan-addon:\r?\n(?<body>.*)').Groups['body'].Value
+    $base = [regex]::Match($script:releaseWorkflow, '(?ms)^  release:\r?\n(?<body>.*?)^  vulkan-addon:').Groups['body'].Value
+    $base | Should -Not -Match '(?m)^    needs:'
+    $addon | Should -Not -BeNullOrEmpty
+    $attach | Should -Not -BeNullOrEmpty
+    $addon | Should -Match "vars\.RELEASE_ENABLED == 'true'"
+    $addon | Should -Not -Match '(?m)^    needs:'
+    $addon | Should -Match 'dotnet build pkg\\msi-vulkan\\azooKey\.VulkanAddon\.wixproj'
+    $addon | Should -Match '--package vulkan-addon --vulkan-sdk'
+    $addon | Should -Match 'name: Install Vulkan SDK'
+    $addon | Should -Match 'name: Verify the Vulkan host links the loader implicitly'
+    $addon.IndexOf('name: Install Vulkan SDK') | Should -BeLessThan $addon.IndexOf('name: Configure Vulkan build')
+    $addon.IndexOf('name: Verify the Vulkan host links the loader implicitly') | Should -BeLessThan $addon.IndexOf('- name: Build unsigned Vulkan add-on MSI')
+    $addon | Should -Not -Match '--runtime-info|--runtime-dir|build/vk/_deps|action-gh-release'
+    $addon | Should -Match 'Copy-Item build\\vk\\inference-host\\azookey_inference_host\.exe build\\vk\\inference-host\\azookey_inference_host_vulkan\.exe'
+    $addon | Should -Match '-PackagePath "\$\{\{ github\.workspace \}\}\\pkg\\msi\\Package\.wxs"'
+    $attestations = [regex]::Matches($addon, "(?m)^      - name: Attest [^\r\n]+\r?\n        if: github\.event_name == 'push' && github\.ref_type == 'tag'")
+    $attestations.Count | Should -Be 2
+    $attach | Should -Match 'needs: \[release, vulkan-addon\]'
+    $attach | Should -Match "always\(\).*needs\.release\.result == 'success'"
+    $attach | Should -Match "if: needs\.vulkan-addon\.result != 'success'"
+    $attach | Should -Match 'Vulkan add-on was not attached: vulkan-addon job result='
+    $attach | Should -Match "if: github\.event_name == 'workflow_dispatch'"
+    $attach | Should -Match "if: needs\.vulkan-addon\.result == 'success' && github\.event_name == 'push' && github\.ref_type == 'tag'"
+    $attach | Should -Match 'gh release upload'
+    $attach | Should -Not -Match 'gh release create|action-gh-release'
+  }
+
   It "documents the unsigned-publisher warning for users" {
     $script:rootReadme | Should -Match '未署名 MSI'
     $script:rootReadme | Should -Match 'SmartScreen'

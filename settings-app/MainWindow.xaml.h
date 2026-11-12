@@ -59,6 +59,9 @@ struct MainWindow : MainWindowT<MainWindow> {
   size_t ChangedSettingCount();
   // Recounts the changes and sets the save bar's text and the save button (section 3.2).
   void RefreshSaveBar();
+  // The API key box is editable only while "AI サービス" is OpenAI and no save is running; the
+  // clear button only waits for a save, so a stored key can always be removed.
+  void RefreshOpenAiKeyState();
   void ShowSaveStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                       const winrt::hstring& title, const winrt::hstring& message);
   // Asks whether to save, discard or keep the changes when the window is being closed.

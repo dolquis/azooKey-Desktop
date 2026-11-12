@@ -148,7 +148,10 @@ MainWindow::MainWindow() {
     }
     return AdvancedFieldsPanel();
   });
-  field_controls_.SetChangedHandler([this] { RefreshSaveBar(); });
+  field_controls_.SetChangedHandler([this] {
+    RefreshOpenAiKeyState();
+    RefreshSaveBar();
+  });
   // The panes keep these callbacks for requests that outlive a click, so they must not touch the
   // window once it has closed.
   Closed([alive = alive_](auto const&, auto const&) { *alive = false; });
@@ -526,6 +529,7 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   ApplyDictionaryToControls(
       result.settings.dictionary.value_or(azookey::settings::DictionarySettings{}));
   field_controls_.Apply(result.settings.values);
+  RefreshOpenAiKeyState();
   ShowSafeMode(result.settings);
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   model_selected_path_ = result.settings.model_selected_path;
@@ -698,6 +702,16 @@ winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspec
   }
 }
 
+void MainWindow::RefreshOpenAiKeyState() {
+  const auto& condition = azookey::settings::OpenAiCondition();
+  const bool openai = field_controls_.ConditionHolds(condition);
+  OpenAiApiKeyPasswordBox().IsEnabled(!saving_ && openai);
+  ClearOpenAiApiKeyButton().IsEnabled(!saving_);
+  Microsoft::UI::Xaml::Automation::AutomationProperties::SetHelpText(
+      OpenAiApiKeyPasswordBox(),
+      openai ? winrt::hstring{} : field_controls_.ConditionText(condition));
+}
+
 void MainWindow::OpenAiApiKeyPasswordBox_PasswordChanged(
     Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
   RefreshSaveBar();
@@ -745,8 +759,7 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
 
   saving_ = true;
   RefreshSaveBar();
-  OpenAiApiKeyPasswordBox().IsEnabled(false);
-  ClearOpenAiApiKeyButton().IsEnabled(false);
+  RefreshOpenAiKeyState();
   SaveProgressRing().IsActive(true);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
   SaveStatusInfoBar().IsOpen(false);
@@ -776,8 +789,7 @@ Windows::Foundation::IAsyncOperation<bool> MainWindow::SaveSettingsCoreAsync() {
   co_await ResumeForeground(dispatcher);
 
   saving_ = false;
-  OpenAiApiKeyPasswordBox().IsEnabled(true);
-  ClearOpenAiApiKeyButton().IsEnabled(true);
+  RefreshOpenAiKeyState();
   UpdateCrashReportStatus();
   SaveProgressRing().IsActive(false);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);

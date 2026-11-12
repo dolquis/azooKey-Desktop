@@ -1262,7 +1262,12 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 専用コントロールを持たないキーの UI は、`settings-app/SettingsFields.cpp` の記述子表から生成する。
 記述子は各キーの型・既定・範囲・選択肢・ペインと、機能別 spec が「効果を持たない」と定める条件
 （例: `privacy.custom.*` は `privacy.mode` が `custom` のときだけ、カッコ補完の各キーは `bracketPairing` が
-真のときだけ）を持ち、条件を満たさない間はコントロールを無効にする。記述子と schema の型・既定・範囲・
+真のときだけ）を持ち、条件を満たさない間はコントロールを無効にする。`dynamicPunctuation` /
+`batchRomajiConversion` / `inlineEnglishCandidates` / `bracketPairing` の 4 つのスイッチは、同じ節で後に並ぶ
+項目を、スイッチの下の閉じた「詳細設定」に畳む。畳むのは表示だけで、有効・無効は上の条件で決める。
+保存できない値が畳んだ項目にあるときは、「詳細設定」を開いてその項目へフォーカスする。
+OpenAI API キーの欄は「OpenAI」の節の末尾に置き、同じ節の条件（`aiBackend` が `openai`）を満たさない間は
+入力欄だけを無効にする。保存済みのキーを消せるように、「削除」は条件によらず押せる。記述子と schema の型・既定・範囲・
 選択肢の一致、schema の全キーが「生成する / 専用コントロール / 編集しない（理由付き）」のいずれかに
 属すること、表示文字列の有無は `azookey_settings_persistence_tests` が検査する。
 

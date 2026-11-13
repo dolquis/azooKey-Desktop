@@ -1187,6 +1187,13 @@ struct PreeditAttributeWrite {
   friend bool operator==(const PreeditAttributeWrite&, const PreeditAttributeWrite&) = default;
 };
 
+// A SetValue or a Clear, in the order the TIP made them (DEV-1954).
+struct PreeditAttributeOperation {
+  bool clear;
+  LONG start;
+  LONG end;
+};
+
 class PreeditAttributeRecorder final : public ITfProperty {
  public:
   STDMETHODIMP QueryInterface(REFIID, void** object) override {
@@ -1210,11 +1217,18 @@ class PreeditAttributeRecorder final : public ITfProperty {
     const auto* document_range = static_cast<const DocumentRange*>(range);
     writes.push_back(
         {document_range->start, document_range->end, static_cast<TfGuidAtom>(value->lVal)});
+    operations.push_back({false, document_range->start, document_range->end});
     return S_OK;
   }
-  STDMETHODIMP Clear(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+  STDMETHODIMP Clear(TfEditCookie, ITfRange* range) override {
+    if (!range) return E_INVALIDARG;
+    const auto* document_range = static_cast<const DocumentRange*>(range);
+    operations.push_back({true, document_range->start, document_range->end});
+    return S_OK;
+  }
 
   std::vector<PreeditAttributeWrite> writes;
+  std::vector<PreeditAttributeOperation> operations;
 };
 
 class DocumentContext final : public NoopContext, public ITfContextComposition {
@@ -17429,4 +17443,91 @@ TEST(TsfTipSelectingDisplayAttributeTest, BatchSegmentsKeepTheirOwnAttributes) {
             (PreeditAttributeWrite{0, 1, PreeditAtom(DisplayAttributeKind::FocusedSegment)}));
   EXPECT_EQ(recorder.writes[1],
             (PreeditAttributeWrite{1, 2, PreeditAtom(DisplayAttributeKind::ConvertedSegment)}));
+}
+
+// DEV-1954: a commit clears the preedit attribute from the committed text
+// before the composition ends (tsf-deep-integration-spec §5.6).
+namespace {
+// The committed text [start, end) was cleared by an operation made since
+// `from`, and no attribute was set over it after that.
+::testing::AssertionResult CommittedTextKeepsNoAttribute(const PreeditAttributeRecorder& recorder,
+                                                         size_t from, LONG start, LONG end) {
+  const auto& operations = recorder.operations;
+  std::optional<size_t> cleared;
+  for (size_t i = from; i < operations.size(); ++i) {
+    if (operations[i].clear && operations[i].start == start && operations[i].end == end)
+      cleared = i;
+  }
+  if (!cleared)
+    return ::testing::AssertionFailure() << "no Clear over [" << start << ", " << end << ")";
+  for (size_t i = *cleared + 1; i < operations.size(); ++i) {
+    if (!operations[i].clear && operations[i].start < end && start < operations[i].end)
+      return ::testing::AssertionFailure() << "an attribute over [" << operations[i].start << ", "
+                                           << operations[i].end << ") follows the Clear";
+  }
+  return ::testing::AssertionSuccess();
+}
+}  // namespace
+
+TEST(TsfTipCommitDisplayAttributeTest, EnterCommitsTheReadingWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  ASSERT_FALSE(recorder.writes.empty());
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"てんき");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+}
+
+TEST(TsfTipCommitDisplayAttributeTest, EnterCommitsTheSelectedCandidateWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"天気");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+}
+
+TEST(TsfTipCommitDisplayAttributeTest, DigitCommitsItsCandidateWithoutTheAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press('2'));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+}
+
+// The mark starts the next composition, which keeps its own attribute.
+TEST(TsfTipCommitDisplayAttributeTest, PunctuationCommitsTheCandidateWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  ConfigureTypoHarness(h);
+  StartPunctuationConversion(h, false);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_EQ(h.context.document->text, L"天気、");
+  ASSERT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+  ASSERT_FALSE(recorder.writes.empty());
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{2, 3, PreeditAtom(DisplayAttributeKind::Input)}));
 }

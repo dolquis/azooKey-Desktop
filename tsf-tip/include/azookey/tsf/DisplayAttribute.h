@@ -73,6 +73,10 @@ std::vector<SegmentAttributeRange> BuildSegmentAttributeRanges(
 bool SegmentIndexAtMouseEdge(const std::vector<DisplayedSegment>& segments, ULONG edge,
                              ULONG quadrant, size_t* index);
 
+// Removes the attribute from the text of a composition that ends, so the
+// committed text keeps no preedit underline (tsf-deep-integration-spec §5.6).
+HRESULT ClearDisplayAttributes(TfEditCookie ec, ITfProperty* property, ITfRange* range);
+
 // Sets GUID_PROP_ATTRIBUTE over the composition: each range with its segment
 // attribute, or the input attribute over the whole composition when there are
 // no ranges, an atom is missing, or any segment fails (spec §5.6).

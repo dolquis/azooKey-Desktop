@@ -11175,6 +11175,23 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
       return S_OK;
     };
+    // DEV-1954: text a composition leaves in the document keeps no preedit
+    // attribute (tsf-deep-integration-spec §5.6). A failure only leaves the
+    // attribute behind; it never stops the composition from ending.
+    const auto clear_display_attributes = [&](ITfRange* range) {
+      if (!range) return;
+      ITfProperty* property = nullptr;
+      const HRESULT property_hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &property);
+      if (SUCCEEDED(property_hr) && property && FAILED(ClearDisplayAttributes(ec, property, range)))
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                   "commit_display_attribute_clear_failed");
+      if (property) property->Release();
+    };
+    const auto clear_composition_display_attributes = [&](ITfComposition* composition) {
+      ITfRange* range = nullptr;
+      if (SUCCEEDED(composition->GetRange(&range))) clear_display_attributes(range);
+      if (range) range->Release();
+    };
     // DEV-1928: the first key moves to the focused document (OnSetFocus). The
     // caret stays where it was, so a return of the key lands there.
     if (service_->discarding_first_key_composition_)
@@ -11188,6 +11205,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         // composition, so the termination callback must not clear it.
         service_->composition_ = nullptr;
         service_->UnadviseCompositionMouseSink();
+        clear_composition_display_attributes(comp);
         const HRESULT end_hr = comp->EndComposition(ec);
         if (FAILED(end_hr)) {
           service_->composition_ = comp;
@@ -11326,6 +11344,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "external_composition_text_changed");
           log_app_edit("kept_app_text");
         }
+        // The host ended the composition, but the text it kept still carries
+        // the attribute of the last preedit.
+        clear_display_attributes(service_->terminated_composition_range_);
       } else if (service_->composition_) {
         ITfRange* committed_range = nullptr;
         if (!surface.empty()) {
@@ -11340,6 +11361,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
             return FAILED(text_hr) ? text_hr : E_FAIL;
           }
         }
+        // Without a surface the composition still leaves the shown preedit.
+        clear_composition_display_attributes(service_->composition_);
         // EndComposition finalizes the text in the document.
         ITfComposition* comp = service_->composition_;
         comp->AddRef();

@@ -47,7 +47,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI・設定アプリ（M11 / M12）、Phase 7（M28〜M30、M32〜M34）の配布・署名・更新・観測。設定アプリのナビゲーション（ペインの構成と保存バー）と表示文字列の表記規則は §3.2 |
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、IPC、観測性、Host 可用性、診断基盤。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
-| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層、§15 物理層） |
+| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層。§15 は転送表で下の spec へ） |
+| [`azdic-physical-layer-spec.md`](azdic-physical-layer-spec.md) | M53 system 辞書の物理層（`.azdic` v1、ビルドパイプライン） |
 | [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |

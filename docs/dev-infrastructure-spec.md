@@ -2939,7 +2939,7 @@ Response:
 v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落を `0` として扱う。
 `engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
 `neologd_layer` は protocol v1 の追加フィールドで、欠落と未知の `state` はどちらも「無し」として
-扱い、payload 全体は不正にしない。値の意味は `docs/auto-word-registration-spec.md` §15.14 が定める。
+扱い、payload 全体は不正にしない。値の意味は `docs/azdic-physical-layer-spec.md` §15.14 が定める。
 `reason` は `neologd_pack_load` ログと同じ固定の分類名だけで、パスやサーバの応答を含まない。
 
 `backend_selection` は protocol v1 への省略可能な追加フィールドである。欠落、型違い、

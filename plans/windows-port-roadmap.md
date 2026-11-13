@@ -565,7 +565,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 ## Phase 5: レガシー parity 復元（M13〜M19）
 
 > Phase 4 完了後に着手。**正典仕様**は `docs/legacy-parity-spec.md`。
-> リッチ化の横断テーマは `docs/rich-features-spec.md`。
+> リッチ化の横断テーマ（X-1〜X-4）の各項は、`docs/rich-features-spec.md` の転送表が移動先の spec を示す。
 
 ### M13: 入力パイプライン（UserAction / InputState / ClientAction）
 
@@ -595,7 +595,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 軽量推論で 30ms 以下の応答（`bench/rich_features_bench.cpp`）
   - Esc で composition がクリア、Backspace で 1 文字戻る
   - 高速タイピングで preedit が逆転しない
-- **参照仕様**: `docs/legacy-parity-spec.md` §2、`docs/rich-features-spec.md` X-1
+- **参照仕様**: `docs/legacy-parity-spec.md` §2、`docs/copilot-pc-backend-spec.md` §11（X-1-2・X-1-3）
   - 実装範囲の正典: 仕様書 §2（IPC、シーケンス、キャンセル経路、staleness）
 - **補足**:
   - **横断**: 仕様完了後に X-1-1（信頼度 4 段階 DisplayAttribute）を追加実装する。
@@ -613,7 +613,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     （`docs/legacy-parity-spec.md` §3.2）
   - Tab で第一候補受理、Esc で閉鎖
   - 1 秒キャッシュで連続呼び出し抑制
-- **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2、
+- **参照仕様**: `docs/legacy-parity-spec.md` §3（§3.8・§3.9 は X-2-1〜X-2-3）、
   `docs/user-learning-enhancement-spec.md` §14（学習由来の予測供給）
 - **補足**:
   - **実装範囲**: 仕様書 §3（配置アルゴリズム、キャッシュ、操作、設定）。
@@ -621,7 +621,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `docs/user-learning-enhancement-spec.md` §14（reading-keyed 二層化・前方一致
     lookup 契約・区分連結での供給・§14.6.1 の受理動作）を併せて実装範囲とする。
     この供給は M15 本体の受け入れ条件には含めず、独立に着手できる。
-  - **横断**: 仕様完了後に X-2-2/X-2-3（paragraph_context、ラベル付き候補）。
+  - **横断**: 仕様完了後に X-2-2/X-2-3（`leftSideContext` の段落文脈、ラベル付き候補）。
 
 ### M16: Magic Conversion / Replace Suggestion
 
@@ -644,8 +644,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - `aiBackend=none` で M58-C が `neural` へ落ち、X-3-3 が Lint を実行しない
   - API キーは `dpapi:` prefix の有無で復号と平文を分け、平文でも動作する（同 §9）
   - AI の POST 経路が共通 WinHTTP 基盤（同 §6.1）を使い、M32 の GET + SHA256 と基盤を共有する
-- **参照仕様**: `docs/ai-backend-spec.md`（AiBackend 契約・正典）、
-  `docs/legacy-parity-spec.md` §4、`docs/rich-features-spec.md` X-3-3
+- **参照仕様**: `docs/ai-backend-spec.md`（AiBackend 契約・正典。§4.3 は X-3-3）、
+  `docs/legacy-parity-spec.md` §4
   - 実装範囲の正典: 仕様書 §4（トリガ、選択取得、プロンプト UI、IPC、OpenAI 呼び出し、 結果反映）
 - **補足**:
   - **リスク**: M46（プライバシーゲート / セーフ入力モード）は M16 の hard prerequisite では
@@ -673,7 +673,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` から読み込んで変換に反映
   - TSV を保存すると次の入力からテーブルが入れ替わる
   - 不正行は warning ログでスキップ
-- **参照仕様**: `docs/legacy-parity-spec.md` §5、`docs/rich-features-spec.md` X-3-1
+- **参照仕様**: `docs/legacy-parity-spec.md` §5、`docs/typo-correction-learning-spec.md` §12.4.6（X-3-1）
   - 実装範囲の正典: 仕様書 §5（TSV フォーマット、配置、ホットリロード、内蔵 テーブルとの関係）
 - **補足**:
   - **横断**: 仕様完了後に X-3-1（FuzzyMatch）を `RomajiKanaConverter` に追加。
@@ -847,14 +847,14 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - `--backend cuda` 指定で失敗時 CPU に自動フォールバック
   - R2（Windows ML）を有効にするのは、`docs/copilot-pc-backend-spec.md` §4.3 項 2 の再開条件を
     満たした後に限る
-- **参照仕様**: `docs/copilot-pc-backend-spec.md` §1〜§4、
-  `docs/rich-features-spec.md` X-1-2, X-2-4, X-3-4
+- **参照仕様**: `docs/copilot-pc-backend-spec.md` §1〜§4、§11（X-1-2）、
+  `docs/proofread-view-spec.md` §1（X-3-4）
   - 実装範囲の正典: `docs/copilot-pc-backend-spec.md` §1〜§4（決定は §4.3、enum / 境界 ポリシーは §4.4、フォールバック段位は §4.5）
 - **補足**:
   - **リスク**: ORT GenAI の Generator は sequence ごとの KV 分岐を持たず、製品の beam / n-best と
     NLL rerank をそのまま再現できない。NPU / GPU EP で組み込み beam search が動くかを R2 spike で
     確かめ、動かなければ ONNX Runtime session で KV を自前管理する（同 §4.4）。
-  - **横断**: X-1-2 (TypingTempoTracker)・X-2-4 (PredictWithLLM)・
+  - **横断**: X-1-2 (TypingTempoTracker)・PredictWithLLM・
     X-3-4 (DetectAnomalies) はこの段階で Heavy レーンに乗せる。
 
 ### M25: mmap ロード / 省電力モード
@@ -987,8 +987,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **受け入れ条件**:
   - 設定アプリで値を変更 → Host が即時反映 or 再起動指示
   - Windows 設定からの「詳細設定」起動で開く（`ITfFnConfigure`）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
-  X-2-6, X-2-7, X-3-6
+- **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/app-profile-spec.md` §6（X-2-6）、
+  `docs/learning-data-management-spec.md` §15（X-2-7）、`docs/proofread-view-spec.md` §2（X-3-6）
 - **補足**:
   - **UI フレームワーク**: M11「UI フレームワーク決定」に揃える。
   - **横断**: X-3-6（バッチ訂正ビュー）、X-2-6（promptPrefixByApp UI）、
@@ -1421,9 +1421,9 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 
 > 確定済み候補（または読み）から、数字の各種表記（漢数字・大字・ローマ数字・丸数字・
 > 16/8/2 進数）、記号の関連候補、半角/全角カタカナ、英字の大小・全半角、絵文字を
-> **自動派生して候補列へ注入する**追加機能。`docs/rich-features-spec.md` は richness X-1〜X-3
-> を定めるが、数字/記号/絵文字の異表記展開リライターは同 spec の範囲外（`docs/candidate-rewriter-spec.md`
-> が正典）。参考実装は karukan（`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。
+> **自動派生して候補列へ注入する**追加機能。richness（X-1〜X-3。移動先は `docs/rich-features-spec.md` の転送表）
+> の範囲外として、数字/記号/絵文字の異表記展開リライターは `docs/candidate-rewriter-spec.md`
+> が正典である。参考実装は karukan（`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。
 > **ロジック（アルゴリズム）とデータ（Mozc 由来）を分離**して扱い、karukan のコードは
 > 逐語コピーせず設計移植する。M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→
 > M62-D（絵文字）の段階構成。既定 OFF・後方互換。
@@ -2335,13 +2335,13 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 
 ## 横断テーマと Phase の対応
 
-各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
-以下のマイルストーンに紐付ける（本表は `docs/rich-features-spec.md`「マイルストーン対応表」から参照される）：
+各リッチ化テーマ（移動先は `docs/rich-features-spec.md` の転送表）の実装タイミングは
+以下のマイルストーンに紐付ける（本表は `docs/rich-features-spec.md` から参照される）：
 
 | テーマ | 短期（Phase 5 末） | 中期（Phase 6 統合） | 長期（Phase 7 後） |
 |---|---|---|---|
 | X-1 ライブ変換 | M14 末（信頼度 4 段階） | M24（重い推論） | — |
-| X-2 AI 予測 | M15 末（paragraph_context） | M24（PredictWithLLM + Stream） | M30（promptPrefix UI） |
+| X-2 AI 予測 | M15 末（段落文脈） | M24（PredictWithLLM） | M30（promptPrefix UI） |
 | X-3 誤変換訂正 | M16 末（Post-Commit Lint）/ M17 末（FuzzyMatch） | M24 後（DetectAnomalies） | M30（バッチ訂正ビュー） |
 | X-4 基盤 | M13〜M19 で個別 | M24 後にスケジューラ統合 | — |
 

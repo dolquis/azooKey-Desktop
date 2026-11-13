@@ -16,6 +16,7 @@ Phase 6 の M24〜M27 が本書を参照する。
 | §7 | M26 |
 | §8 | M27 |
 | §9〜§10 | M24〜M27 共通 |
+| §11 | M24（ライブ変換の重い推論の横断項目） |
 
 ## 1. BackendKind enum 拡張
 
@@ -1045,5 +1046,103 @@ public:
 - QNN SDK: <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>
 - OpenVINO: <https://docs.openvino.ai/>
 - ベース：`docs/zenzai-gpu-route.md`
-- ライブ変換のレーン分け：`docs/rich-features-spec.md` X-4-1
+- ライブ変換のレーン分け：§11.3
 - マルチディスプレイ：`docs/legacy-parity-spec.md` 9 章
+
+## 11. タイピング速度とライブ変換のレーン（M24 の横断項目）
+
+ライブ変換の推論を、タイピング中は軽く、入力が止まったときは重くする。軽い経路は Fast レーン、重い経路は Heavy レーンで、
+レーンの選択は電源状態からも決まる（§6.2）。本節は、入力の速度から決めるレーンと、その上で動く再評価を定める。
+
+### 11.1 TypingTempoTracker
+
+`tsf-tip/src/TypingTempoTracker.h`（M24 の横断項目で新設する）。
+
+```cpp
+class TypingTempoTracker {
+public:
+    void RecordKeyDown(uint64_t now_ms);
+    // 直近 N=8 キーストロークのインターバル平均（ms）
+    double AverageIntervalMs() const;
+    // 直近のキー入力からの経過（ms）。後戻り再評価（§11.2）が使う
+    double IdleMs(uint64_t now_ms) const;
+    // true: タイピング中 (平均 < threshold)
+    bool   IsTyping(double threshold_ms = 150.0) const;
+private:
+    std::array<uint64_t, 8> recent_ms_{};
+    size_t                  count_  = 0;
+    size_t                  head_   = 0;
+};
+```
+
+- 平均 < 150ms = 「タイピング中」→ 軽量推論（SimpleConverter or Zenzai 1-pass）
+- 平均 ≥ 150ms = 「思考中」→ 重い推論（Zenzai 多 passes）
+
+`TextService::OnKeyDown` で `RecordKeyDown(GetTickCount64())` を呼ぶ。`PostQueryLiveConversion` 時に
+`mode = tempo.IsTyping() ? Fast : Heavy` をリクエストに含める。
+
+新規 IPC フィールド:
+
+```
+QueryLiveConversionRequest:
+  kana, context,
+  mode: enum { Fast, Heavy }
+```
+
+要求 ID は IPC Envelope の `request_id` に置く。
+
+Host 側のレーン:
+
+- `Fast` レーン: SimpleConverter or Zenzai n_predict=8
+- `Heavy` レーン: Zenzai n_predict=32 + 多 pass beam search
+
+両レーンは §11.3 で管理する。動的句読点（`docs/dynamic-punctuation-spec.md`）は `IsTyping()` を挿入の安定化に再利用する。
+
+### 11.2 後戻り再評価
+
+ユーザーが入力を止めた瞬間に、直近 commit を含めた全体を再評価して、より良い候補があれば差し替える。
+
+トリガ条件はすべて満たすこと:
+
+- 直近 commit から **5 文字以上経過**
+- 直近 **5 キー未編集（無入力）が 800ms 以上継続**
+- `settings.retroactiveRecompute == true`（既定 false、実験機能）
+
+動作:
+
+1. `TypingTempoTracker::IdleMs(now_ms) >= 800` を検知
+2. 直近 commit を含む文（句点 `。` or 改行までの範囲）を抽出
+3. `PostQueryFullRecompute(request_id, paragraph)` を送信
+4. Host が再評価した結果と表示中の内容に差分があれば、
+   - 既存 commit 範囲は **読み取り専用波線**（Post-Commit Lint、`docs/ai-backend-spec.md` §4.3 と統合）
+   - composition 範囲は EditSession で差し替え
+
+IPC は `QueryFullRecomputeRequest` / `Response` を新規に追加する（Post-Commit Lint と内部実装を共有してよい）。
+
+### 11.3 多段推論キュー
+
+`inference-host/src/RequestScheduler.cpp` は request id の採番、`Cancel`、`MarkLatest` / `IsLatest` を持つ。
+`InferenceLane`（§6.2）は電源状態から決まるエンジン設定で、ここでいう `Lane` は要求ごとのスケジューラの優先度である。
+§11.1 の Fast / Heavy は入力の速度から決める軸で、§6.2 の定義を上書きしない。両者を合成する規則は M24 で定める。
+M24 の重い推論は、現行の `RequestScheduler`（client ごとの名前空間と pending 上限を持つ）を、次の 2 レーンの優先キューへ広げる設計案である。
+
+```cpp
+enum class Lane : uint8_t {
+    Fast  = 0,   // SimpleConverter / Zenzai 1-pass、目標 <30ms
+    Heavy = 1,   // Zenzai 多 pass、目標 <500ms
+};
+
+class RequestScheduler {
+public:
+    uint64_t NextRequestId();
+    void     Submit(uint64_t id, Lane lane, std::function<void()> work);
+    void     Cancel(uint64_t id);
+    bool     IsCanceled(uint64_t id) const;
+    void     MarkLatest(uint64_t id, Lane lane);
+    bool     IsLatest(uint64_t id, Lane lane) const;
+};
+```
+
+- 各レーンは独立スレッドプール（Fast=2, Heavy=1）
+- Cancel 優先: 新しい同レーン Submit が来たら、古いものは即時 Cancel
+- レーン間は独立（Fast の Cancel が Heavy を停めない）

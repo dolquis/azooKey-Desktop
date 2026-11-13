@@ -10,7 +10,7 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 
 - `docs/legacy-parity-spec.md` … 候補ウィンドウ（§1.3）、ライブ変換（§2）、
   カスタムローマ字テーブル（§5）。本機能は候補生成・確定動線を土台にする。
-- `docs/rich-features-spec.md` … X-2-3（ラベル付き候補・`CandidateTag::English`）。
+- `docs/legacy-parity-spec.md` §3.9（ラベル付き候補・`CandidateTag::English`）。
   英単語候補の識別・バッジ表示に再利用する。
 - `docs/romaji-batch-conversion-spec.md` … §4.1（生ローマ字バッファの保持）。
   本機能は生ローマ字を reading と別フィールドで送る同じ方針に従うが、バッファは別に持つ（§4.1）。
@@ -914,7 +914,7 @@ overlay とコンパクションの構成（§4.6・§4.7）は変えない。jo
 
 | field | 型 | 既定 | 説明 |
 |---|---|---|---|
-| `tag` | uint8 | `0`（None） | `docs/rich-features-spec.md` X-2-3 の `CandidateTag`。英単語候補は `English = 4` |
+| `tag` | uint8 | `0`（None） | `docs/legacy-parity-spec.md` §3.9 の `CandidateTag`。英単語候補は `English = 4` |
 
 `CandidateToJson` / `CandidateFromJson` 追記（規約例）:
 
@@ -1188,5 +1188,5 @@ roadmap は受け入れ条件の「定義」、達成状態は Linear）。
 - 英語候補オプション 旧実装: `legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`
   （`englishCandidateInRoman2KanaInput` / `fullWidthRomanCandidate` / `requireEnglishPrediction`）
 - 候補生成・確定動線: `docs/legacy-parity-spec.md` §1.2・§1.3
-- ラベル付き候補（English タグ）: `docs/rich-features-spec.md` X-2-3
+- ラベル付き候補（English タグ）: `docs/legacy-parity-spec.md` §3.9
 - 生ローマ字を reading と分ける原則: `docs/romaji-batch-conversion-spec.md` §4.1。TIP 側の保持は本書 §4.1

@@ -56,6 +56,14 @@ CTest として動作する（M38）。本 M52 は **同一ターゲット `azoo
 
 既存 latency smoke 機能は維持する（後方互換）。
 
+### 3.1 `azookey_rich_features_bench`
+
+`bench/rich_features_bench.cpp`（ターゲット `azookey_rich_features_bench`、CTest `azookey_rich_features_bench_smoke`）は、
+M14 の軽量ライブ変換について、Host 推論（`InferenceEngine`。モデルを載せない `SimpleConverter` の経路）の latency を測る。合否の指標は
+`live_conversion` の p95 で、既定の上限は 30ms（`--max-p95-ms` で変える）。p50・p99・最大値は同じ出力に載せるが、
+合否には使わない。`--json` の出力は `BenchmarkResult` の schema（§8）に従う。`--baseline` を渡すと p95 / p99 の変化を warning として出すが、
+合否には使わず、§10 の定期採取にも含まれない。
+
 ## 4. 評価データ
 
 ### 4.1 ファイル構成

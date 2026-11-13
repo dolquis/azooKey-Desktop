@@ -5,7 +5,8 @@
 （C++ 移植: `core/` `learning/` `ipc/` `inference-host/` `tsf-tip/`）** のみ。
 macOS 版 `legacy/` は対象外。
 
-関連: `docs/rich-features-spec.md` X-3（誤変換訂正）、
+関連: `docs/ai-backend-spec.md` §4.3（Post-Commit Lint）、
+      `docs/user-learning-enhancement-spec.md` §4.2（訂正の学習）、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/privacy-and-secure-input-spec.md`（M46）。
@@ -18,6 +19,7 @@ macOS 版 `legacy/` は対象外。
 |---|---|
 | §1〜§11 | M35（v1: 基本タイプミス学習） |
 | §12 | M55（v2: 統合補正エンジン） |
+| §12.4.6 | M17（`FuzzyMatch`。M17 の横断項目） |
 
 §12 は M55 の追補章で、v1 の機能を発展させ、ReadingHypothesis 経由で CandidateGenerator 前段に
 補正を組み込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
@@ -342,8 +344,7 @@ cost =
 
 個人がよく行う誤りは `personalized_pattern_cost` を下げる。
 
-本節と §12.4.2 は重み付き編集距離のコストモデルの正典であり、`docs/rich-features-spec.md` X-3-1 の
-コスト表から初期値として参照される。
+本節と §12.4.2 は重み付き編集距離のコストモデルの正典であり、§12.4.6 のコスト表を初期値とする。
 
 例:
 
@@ -408,6 +409,42 @@ candidate: 交渉
 
 文脈上「交渉」が高スコアなら補正候補を上げる。M57 ModernBERT が有効
 なら文脈自然度スコアを利用する。
+
+#### 12.4.6 `RomajiKanaConverter::FuzzyMatch`（M17 の横断項目）
+
+入力ローマ字 `input` に対して、上位 `K=8` 通りのかな解釈を返す API。
+
+```cpp
+struct FuzzyKanaCandidate {
+    std::string kana;
+    double      cost;   // 編集距離 + ペナルティ
+};
+
+std::vector<FuzzyKanaCandidate>
+RomajiKanaConverter::FuzzyMatch(std::string_view input, size_t k) const;
+```
+
+コストは Damerau-Levenshtein を拡張した次の初期値で与える。個人化の項（§12.4.1）と
+JIS / US 配列の隣接（§12.4.2）は、この初期値の上に載る。
+
+| 操作 | コスト |
+|---|---|
+| substitution | 1.0 |
+| insertion | 1.0 |
+| deletion | 1.0 |
+| transposition (隣接 2 文字入れ替え) | 0.5 |
+| QWERTY 隣接キー substitution | 0.7（−0.3 ボーナス） |
+| 同一指 substitution | 0.6（−0.4 ボーナス） |
+
+QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
+`core/src/QwertyAdjacency.cpp`（M17 の横断 X-3-1 で新設する）に静的テーブルとして持つ。
+
+適用順序:
+
+1. Standard parse（既存）→ 1 候補
+2. FuzzyMatch (K=8) → 8 候補
+3. それぞれを `SimpleConverter::Query` or `Zenzai::Query` に通す
+4. 全候補を `score - alpha * cost` でソート（alpha=0.5、設定で変更可）
 
 ### 12.5 発動条件
 

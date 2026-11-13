@@ -4,8 +4,7 @@
 対応マイルストーン: M48（追加機能トラック）
 関連: `plans/windows-port-roadmap.md` M30 / M46、
       `docs/privacy-and-secure-input-spec.md`（M46）、
-      `docs/rich-features-spec.md`（X-2-6 promptPrefixByApp UI、X-2-7
-      Persona）
+      `docs/learning-data-management-spec.md` §15（Persona）
 
 ## 0. 節とマイルストーンの対応
 
@@ -284,7 +283,7 @@ window_class → default）に限り、下記の **グローバル floor** を�
 
 ## 6. 既存 `promptPrefixByApp` との統合
 
-本節は `promptPrefixByApp` の解決と移行の正典であり、`docs/rich-features-spec.md` X-2-6 から参照される。
+本節は `promptPrefixByApp` の解決と移行の正典である。前面アプリは `ForegroundAppDetector` が返す `process_name` で引く。
 
 既存設定キー `promptPrefixByApp` は値 `{"<process>": "<prefix>"}` の
 map（M30 横断テーマ X-2-6）で、key は大文字小文字混在の実プロセス名
@@ -301,7 +300,8 @@ Windows では Unicode ordinal 比較を使い、設定ファイルの元のキ�
    `promptPrefix` キーが無い）場合のみ `promptPrefixByApp[process.lower()]` を読む（§5
    overlay と同じく「未指定 field のみ下位層を継承」。空 `""` は未指定ではない）。このため
    設定ローダは `promptPrefix` の**キー有無を保持**し、既定 `""` を overlay / legacy 解決前に
-   先食いで適用しない（大文字混在キーも同じ照合規約で扱う）
+   先食いで適用しない（大文字混在キーも同じ照合規約で扱う）。
+   `profilesByApp` にも `promptPrefixByApp` にも該当が無ければ、prefix を付けない（generic prompt）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
 4. `promptPrefixByApp` は M48 を含むリリースから 3 マイナーバージョンの間は読み込み、

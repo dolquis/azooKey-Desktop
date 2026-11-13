@@ -1022,8 +1022,8 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 - 設定アプリとの同時編集: 設定アプリは保存のとき、ライブ変換・予測変換を含む一般の設定値については、ユーザーが
   変えたキーだけをロックの下でディスク上のファイルへ書く。設定アプリを開いたままメニューで切り替えても、その変更は設定アプリの保存で消えない。
   ただし開いている設定アプリの画面は古い値のままで、同じキーを設定アプリでも変えて保存すると設定アプリの値が残る。
-- 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、rich-features-spec
-  X-3-6）と、settings.json の場所が分からないときは、ライブ変換と予測変換をグレーアウトし、ラベルに
+- 書き込まない場面: 管理者・低 IL・AppContainer のプロセス（一括校正の画面と同じ判定、`docs/proofread-view-spec.md`
+  §2.2）と、settings.json の場所が分からないときは、ライブ変換と予測変換をグレーアウトし、ラベルに
   「（このアプリでは変更できません）」を添える（予測変換では、アプリ別の設定の注記よりこちらを出す）。入力モードと「設定を開く」は使える。
 
 アイコンの見え方（ライト／ダーク、DPI）、Windows 11 での表示、クリックの挙動、タスクバーの入力インジケーターが
@@ -1213,7 +1213,7 @@ COM identity を返す。
 `LaunchSettingsApplication` は `--langid 0xNNNN --profile {GUID}` を生成し、§6.4 の固定パスを
 `ShellExecuteExW` で非同期起動する。起動 API が失敗した場合は `GetLastError()` を HRESULT へ
 変換し、エラー値が設定されていない場合も `E_FAIL` を返す。成功時に得た process handle は
-直ちに閉じる。校正ビュー（`docs/rich-features-spec.md` X-3-6）は同じ固定パスを
+直ちに閉じる。校正ビュー（`docs/proofread-view-spec.md` §2.4）は同じ固定パスを
 `LaunchSettingsApplicationForProofread` で起動し、引数は `--proofread-session <token>` だけとする。
 
 > **重要: `kTextServiceClsid` の COM オブジェクトが `ITfFnConfigure` を QI で返すこと**:

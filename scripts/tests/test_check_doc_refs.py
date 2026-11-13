@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 sys.dont_write_bytecode = True
@@ -133,6 +134,53 @@ class PathReferenceTest(unittest.TestCase):
             problems_for({"docs/guide.md": "`diagnostics/captures` `build/windows-debug/x.exe`\n"}),
             [],
         )
+
+    def test_crlf_gitignore_blank_lines_do_not_hide_missing_paths(self) -> None:
+        # CRLF の .gitignore（Windows の autocrlf checkout）では、git が空行を空パターンとして
+        # 読み、末尾 "/" の問い合わせへ一致する。存在しないパスまで無視扱いになってはならない（DEV-2012）。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repo(root, {"docs/guide.md": "`core/src/Gone.cpp` `diagnostics/captures`\n"})
+            (root / ".gitignore").write_bytes(b"build/\r\n\r\ndiagnostics/captures/\r\n\r\n")
+            problems = MODULE.check(root)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("`core/src/Gone.cpp`", problems[0])
+
+    def test_ignored_paths_sends_nul_separated_bytes_to_git(self) -> None:
+        # text=True で stdin を渡すと Windows が "\n" を "\r\n" に変え、git が CR 付きのパスを受け取る
+        # （DEV-2012）。どの OS でも、改行変換の掛からない NUL 区切りの bytes で渡すことを固定する。
+        sent: list[bytes] = []
+        commands: list[list[str]] = []
+        text_modes: list[object] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            commands.append(command)
+            text_modes.append(kwargs.get("text"))
+            payload = kwargs.get("input")
+            assert isinstance(payload, bytes), type(payload)
+            sent.append(payload)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b".claude/worktrees/__doc_refs_probe__\0core/src/Foo.h\0",
+                stderr=b"",
+            )
+
+        with mock.patch.object(MODULE.subprocess, "run", fake_run):
+            ignored = MODULE.ignored_paths(
+                Path("."), {".claude/worktrees", "core/src/Foo.h::Bar", "tsf-tip/x.h"}
+            )
+
+        self.assertEqual(ignored, {".claude/worktrees", "core/src/Foo.h"})
+        self.assertEqual(len(sent), 1)
+        self.assertIn("-z", commands[0])
+        self.assertFalse(text_modes[0])
+        self.assertNotIn(b"\r", sent[0])
+        self.assertNotIn(b"\n", sent[0])
+        queries = sent[0].decode("utf-8").split("\0")
+        self.assertIn("core/src/Foo.h", queries)
+        self.assertIn(".claude/worktrees/__doc_refs_probe__", queries)
+        self.assertFalse(any(query.endswith("/") for query in queries), queries)
 
     def test_target_documents_cover_rules_and_plans(self) -> None:
         problems = problems_for(

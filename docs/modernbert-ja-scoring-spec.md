@@ -373,7 +373,7 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う。本節は `rer
 `docs/neural-reranker-spec.md` §9 が正典。
 
 `W_BERT` を高くすると homophone 精度が上がるが latency 悪化が大きい。
-balanced mode（既定）では neural §9 の初期値、quality mode では 0.10 など
+balanced mode（既定）では `neural-reranker-spec` §9 の初期値、quality mode では 0.10 など
 で調整する（`settings.conversionQuality` キー。M57 が schema へ追加する予定）。
 
 ## 9. secure 判定との連携

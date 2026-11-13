@@ -391,7 +391,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   3. (a) が成り立たなければ (c) Windows ML の ONNX Runtime session を直接使い、
      `past_key_values` を自前で管理する。beam ごとに `RewindTo` と `AppendTokens` で再計算する
      (b) は、再計算の量が読み長の 2 乗で増えるため採らない。
-- NLL rerank（`docs/neural-reranker-spec.md` §B2）は候補表層の全位置の logits を要する。
+- NLL rerank（`docs/neural-reranker-nll-spec.md` §B2）は候補表層の全位置の logits を要する。
   `GetLogits` は最後のトークンだけを返すので、(a) では R2 で NLL rerank を使えない。(a) を採ると
   R1 と R2 で候補の順位が変わり、上の「候補の扱いをエンジンごとに分けない」と §4.3 項 2 の
   理由（閾値の二重化を避ける）に反する。(a) を採って NLL rerank の無効化と順位の差を許すか、

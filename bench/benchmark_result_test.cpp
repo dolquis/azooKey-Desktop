@@ -54,6 +54,31 @@ TEST(BenchmarkResultTest, SerializesStableZenzaiBenchSchemaSnapshot) {
       R"({"baseline":{"commit":null,"minimumChangeMs":0.05,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_zenzai_bench","commit":"0123456789abcdef","config":"Release","deadlineCutoffs":{"count":1,"rate":0.25,"samples":[false,true,false,false]},"decodePhases":{"beam":{"evaluations":150,"latencyMs":{"max":23,"p50":20,"p95":21,"p99":22},"samples":50,"tokens":300},"prompt":{"latencyMs":{"max":13,"p50":10,"p95":11,"p99":12},"reusedTokens":450,"samples":50,"tokens":600}},"iterations":50,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":null,"passed":true}})");
 }
 
+TEST(BenchmarkResultTest, SerializesIpcSendHostReceiveOnlyWhenMeasured) {
+  auto result = SampleResult();
+  IpcPhaseBreakdown ipc;
+  ipc.samples = 200;
+  ipc.payload_bytes = 64;
+  ipc.serialize = LatencyMetrics{0.1, 0.2, 0.3, 0.4};
+  ipc.framing = LatencyMetrics{0.1, 0.2, 0.3, 0.4};
+  ipc.deserialize = LatencyMetrics{0.1, 0.2, 0.3, 0.4};
+  result.ipc_phases = ipc;
+  const auto without = SerializeBenchmarkResult(result);
+  EXPECT_NE(without.find(R"("pipeRoundTripMs":null)"), std::string::npos);
+  EXPECT_EQ(without.find("sendMs"), std::string::npos);
+  EXPECT_EQ(without.find("hostComputeMs"), std::string::npos);
+  EXPECT_EQ(without.find("receiveMs"), std::string::npos);
+
+  result.ipc_phases->send = LatencyMetrics{1.0, 2.0, 3.0, 4.0};
+  result.ipc_phases->host_compute = LatencyMetrics{5.0, 6.0, 7.0, 8.0};
+  result.ipc_phases->receive = LatencyMetrics{9.0, 10.0, 11.0, 12.0};
+  const auto with = SerializeBenchmarkResult(result);
+  EXPECT_NE(with.find(R"("hostComputeMs":{"max":8,"p50":5,"p95":6,"p99":7})"), std::string::npos);
+  EXPECT_NE(with.find(R"("receiveMs":{"max":12,"p50":9,"p95":10,"p99":11})"), std::string::npos);
+  EXPECT_NE(with.find(R"("sendMs":{"max":4,"p50":1,"p95":2,"p99":3})"), std::string::npos);
+  EXPECT_NE(with.find(R"("schemaVersion":1)"), std::string::npos);
+}
+
 TEST(BenchmarkResultTest, ComparesMatchingBaselineAndWarnsAboveTenPercent) {
   const auto path = UniqueTempPath("-baseline.json");
   ASSERT_TRUE(WriteBenchmarkResult(path, SerializeBenchmarkResult(SampleResult()), nullptr));

@@ -63,6 +63,12 @@ struct IpcPhaseBreakdown {
   LatencyMetrics framing;
   LatencyMetrics deserialize;
   std::optional<LatencyMetrics> pipe_round_trip;
+  // Real Dispatcher round trips over the same pipe. The three partition one round trip:
+  // send (Send start -> Host handler entry), host_compute (handler entry -> exit),
+  // receive (handler exit -> response fully read).
+  std::optional<LatencyMetrics> send;
+  std::optional<LatencyMetrics> host_compute;
+  std::optional<LatencyMetrics> receive;
 };
 
 struct BenchmarkResult {

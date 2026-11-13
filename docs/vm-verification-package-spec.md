@@ -9,8 +9,7 @@
       `docs/handoff/human-gate-batch-runbook.md`、
       `plans/windows-port-roadmap.md` M37
 
-本書は `docs/dev-infrastructure-spec.md` から §2.6を切り出した文書である。節番号 §2.6 は旧 spec のまま保ち、旧 spec の転送表が§2.6を本書へ解決する。本書内で、本書にない節（旧 spec の他の節）を指すときは、文書名を付けて書く（例: `observability-spec.md` §7.6）。
-旧 `dev-infrastructure-spec §2.6` は、旧 spec の転送表（番号を変える行）が本書の §1 へ解決する。
+本書は `docs/dev-infrastructure-spec.md` から §2.6 を切り出した文書である。旧 spec の §2.6 は、本書の §1 に番号を変えて移した。旧 spec の転送表（番号を変える行）が、旧来の `dev-infrastructure-spec §2.6` の参照を本書の §1 へ解決する。本書内で、本書にない節（旧 spec の他の節）を指すときは、文書名を付けて書く（例: `observability-spec.md` §7.6）。
 
 ## 正典範囲
 

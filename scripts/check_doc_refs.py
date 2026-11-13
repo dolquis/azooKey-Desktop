@@ -33,7 +33,15 @@ Rules:
    and a spec name wrapped across comment lines is joined first. A run such as
    `§3、§4.2` after one document checks every number, and `同 §N` reuses the
    document named last before it in the same paragraph (never across table
-   rows).
+   rows). A short name counts too (`app-profile §3.1`) when it resolves to
+   exactly one document: `docs/<name>-spec.md`, `docs/<name>.md`,
+   `docs/handoff/<name>.md`, or the only `docs/<name>-*-spec.md` (for names of
+   four letters or more). A name that resolves to none is prose and is ignored,
+   and so are `README`, `AGENTS` and `CLAUDE`, which also name root files. An
+   ordinary word that happens to be the start of exactly one `docs/<word>-*-spec.md`
+   is read as that document, so write `§` after a plain word only for a spec.
+   A section the document no longer holds resolves through its forwarding
+   table (rule 6).
 4. Allowlist. A reference that does not exist yet but is correct (a planned
    file, a file that lives only in the origin repository, a path in another
    repository, a historical or runtime path) passes only when
@@ -46,6 +54,47 @@ Rules:
 5. Line exemption. `<!-- doc-refs:allow -->` in a doc exempts the line it is
    on, or the next line when it stands alone. An exemption that hides nothing
    fails.
+6. Forwarding table. A spec that moved sections to other documents keeps a
+   `## 転送表` heading (any level) whose table has the header `旧節 | 移動先`
+   and one row per destination (a table inside a code fence is a sample and is
+   ignored):
+
+       | 旧節 | 移動先 |
+       |---|---|
+       | §2、§3、§9〜§11 | `docs/new-spec.md` |
+       | §12.3 | `docs/other-spec.md` §M |
+       | X-3-6 | `docs/typo-spec.md` §M |
+
+   The left cell lists `§N` keys (a `§A〜§B` range of whole numbers expands),
+   or `X-N-M` keys, separated by `、` or `,`. The right cell is one back-quoted
+   `docs/**.md` path that exists and is not the document itself; the optional
+   `§M` after it (M is a section number) renumbers: the key's number is
+   replaced by M and the rest of the reference keeps its separators (a key
+   `X-7` renumbered to `§8` turns a reference ending `-6` into `8-6`). Without
+   it the number is kept. A key covers its
+   sub-sections (`§4` covers `§4.3` and `§4.3a`); the longest key wins.
+   `<doc> §N` is resolved by the document's own headings first, then by the
+   table, and the destination must hold the resulting number in its headings.
+   A destination may forward again (at most 3 hops; a cycle fails). Every row
+   is checked: the destination must hold the key's own number (or `M`) in its
+   headings.
+7. Item. An `X-N-M` item number (rich-features) written anywhere in the tracked
+   files with a text suffix listed in ITEM_SCAN_SUFFIXES (docs, code comments,
+   skills, schemas; not the frozen docs, not scripts/tests/, not the
+   allowlist) must be a heading `X-N-M.` of
+   docs/rich-features-spec.md or be covered by a forwarding table row, in that
+   document or in any other.
+8. Forwarding group. A document with forwarding table rows that keep the
+   number, and those rows' destinations, form one `§` namespace. A bare `§N`
+   (no document named) in a group member must name a heading of any member.
+   A `§` is not looked at when it may point at another document: a document
+   name (`-spec`, `.md`, `docs/`, `plans/`, `roadmap`, `architecture`) comes
+   earlier on the line, an ASCII word (`M60`, `app-profile`, `DEV-1975`, also
+   at the end of the previous line when the `§` starts the line) comes right
+   before it, or a `同` or a list separator comes right before it. In a list
+   (`§4、§5`) the head of the list decides for all of it. A leftover false
+   positive takes a `<!-- doc-refs:allow -->` marker. Specs outside a group
+   are not checked for bare `§N`.
 
 The file list comes from `git ls-files` (tracked plus untracked files that are
 not ignored), so a file you have created but not committed counts locally;
@@ -136,6 +185,77 @@ CHAINED_SECTION_PATTERN = re.compile(
     r"^\s*(?:、|,|，|/|と|および|及び|or|and|～|〜|-)\s*§\s*(?P<number>" + SECTION_NUMBER + r")"
 )
 SAME_DOCUMENT_PATTERN = re.compile(r"同\s*§\s*(?P<number>" + SECTION_NUMBER + r")")
+# A short document name before `§N`: `app-profile §3.1`, `linear-conventions.md §2`.
+SHORT_NAME_PATTERN = re.compile(
+    r"(?<![\w/.-])(?P<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)(?:\.md)?`?\s*§\s*(?P<number>"
+    + SECTION_NUMBER
+    + r")",
+    re.ASCII,
+)
+SHORT_NAME_MIN_PREFIX = 4
+# These also name a root file (README.md, AGENTS.md, CLAUDE.md), so they stay prose.
+SHORT_NAME_ROOT_DOCUMENTS = ("README", "AGENTS", "CLAUDE")
+
+# rich-features item numbers (`X-3-6`); a heading may also be `X-3`.
+ITEM_ID = r"X-\d+(?:-\d+)*"
+ITEM_ID_PATTERN = re.compile(ITEM_ID)
+ITEM_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])(?P<id>X-\d+-\d+)(?![A-Za-z0-9_-])")
+ITEM_HEADING_PATTERN = re.compile(r"^(" + ITEM_ID + r")(?=[.\s:：）)]|$)")
+ITEM_DOCUMENT = "docs/rich-features-spec.md"
+ITEM_SCAN_SUFFIXES = (
+    ".md",
+    ".h",
+    ".hpp",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".ps1",
+    ".py",
+    ".json",
+    ".toml",
+    ".yml",
+    ".yaml",
+    ".cmake",
+    ".txt",
+    ".idl",
+    ".xaml",
+    ".wxs",
+)
+ITEM_SCAN_NAMES = ("justfile",)
+ITEM_EXCLUDED_PREFIXES = ("scripts/tests/",)
+
+# Forwarding table: a `転送表` heading (a section number may precede it), then a
+# table `旧節 | 移動先`.
+FORWARD_HEADING_PATTERN = re.compile(r"^#{1,6}\s+(?:§?\d+(?:[.-]\d+)*\.?\s+)?転送表\s*$")
+FORWARD_HEADER = ["旧節", "移動先"]
+FORWARD_SEPARATOR_PATTERN = re.compile(r"^:?-{3,}:?$")
+FORWARD_KEY_SEPARATOR_PATTERN = re.compile(r"\s*[、,，]\s*")
+FORWARD_RANGE_PATTERN = re.compile(r"^§\s*(\d+)\s*[〜~～]\s*§?\s*(\d+)$")
+FORWARD_KEY_PATTERN = re.compile(r"^(?:§\s*(" + SECTION_NUMBER + r")|(" + ITEM_ID + r"))$")
+FORWARD_DESTINATION_PATTERN = re.compile(
+    r"^`(?P<path>[^`\s]+)`(?:\s*§\s*(?P<section>" + SECTION_NUMBER + r"))?$"
+)
+FORWARD_RANGE_LIMIT = 200
+FORWARD_MAX_HOPS = 3
+UNRESOLVED_SECTION = "見出しに解決しない § 参照"
+# What may follow a forwarding key inside a section number: `.4`, `-2`, `.4.1a`, `a`.
+SECTION_SUFFIX_PATTERN = re.compile(r"(?:[.-]\d+)*[a-z]?")
+
+# A bare `§N` beside a document name, or after `同` or a list separator, names
+# another document.
+BARE_SECTION_PATTERN = re.compile(r"§\s*(?P<number>" + SECTION_NUMBER + r")")
+BARE_OTHER_DOCUMENT_PATTERN = re.compile(
+    r"-spec|\.md|docs/|plans/|roadmap|architecture", re.IGNORECASE
+)
+BARE_CHAIN_BEFORE_PATTERN = re.compile(r"(?:同|[/、,，・〜～]|と|および|及び)\s*$")
+# `§4、§5、` before a `§`: the references of one list, which share the head's document.
+BARE_CHAIN_ITEMS_PATTERN = re.compile(
+    r"(?:§\s*" + SECTION_NUMBER + r"\s*(?:、|,|，|/|・|〜|～|と|および|及び)\s*)+$"
+)
+# An ASCII word right before a `§` (`M60 §4`, `DEV-1975 §3`, `**app-profile** §3`) is a
+# name, so the section is not this document's.
+BARE_NAME_BEFORE_PATTERN = re.compile(r"[A-Za-z0-9_][*_`)\]]*\s*$")
 
 
 @dataclass(frozen=True)
@@ -165,6 +285,16 @@ class AllowEntry:
         )
 
 
+@dataclass(frozen=True)
+class ForwardRule:
+    """One key of a forwarding table: where a moved section (or item) lives now."""
+
+    key: str  # `4`, `4.3`, `X-3-6`
+    destination: str  # `docs/x.md`
+    section: str = ""  # renumbering target; empty keeps the number
+    line: int = 0
+
+
 @dataclass
 class Repository:
     root: Path
@@ -176,6 +306,13 @@ class Repository:
     casefolded: dict[str, str] = field(default_factory=dict)
     basenames: dict[str, list[str]] = field(default_factory=dict)
     texts: dict[str, str] = field(default_factory=dict)
+    # Forwarding tables, by the document that holds them: {document: {key: rule}}.
+    forwarding: dict[str, dict[str, ForwardRule]] = field(default_factory=dict)
+    forwarding_problems: list[str] = field(default_factory=list)
+    forwarding_lines: dict[str, set[int]] = field(default_factory=dict)
+    # Documents that share one `§` namespace: {member: all members of its groups}.
+    groups: dict[str, frozenset[str]] = field(default_factory=dict)
+    short_documents: dict[str, str | None] = field(default_factory=dict)
 
     def exists(self, path: str) -> bool:
         return path in self.files or path in self.directories
@@ -237,7 +374,139 @@ def load_repository(root: Path) -> Repository:
     repo.casefolded = {path.casefold(): path for path in files if path.endswith(".md")}
     for path in sorted(files):
         repo.basenames.setdefault(posixpath.basename(path), []).append(path)
+    collect_forwarding(repo)
     return repo
+
+
+def split_table_row(line: str) -> list[str]:
+    row = line.strip()
+    row = row.removeprefix("|").removesuffix("|")
+    return [cell.strip() for cell in row.split("|")]
+
+
+def parse_forward_keys(cell: str) -> tuple[list[str], str | None]:
+    """Return (keys, problem) for the left cell of a forwarding row."""
+    keys: list[str] = []
+    for token in FORWARD_KEY_SEPARATOR_PATTERN.split(cell.strip()):
+        token = token.strip()
+        span = FORWARD_RANGE_PATTERN.match(token)
+        single = FORWARD_KEY_PATTERN.match(token)
+        if span:
+            first, last = int(span.group(1)), int(span.group(2))
+            if not first <= last <= first + FORWARD_RANGE_LIMIT:
+                return [], f"範囲 `{token}` が昇順の整数でない（{FORWARD_RANGE_LIMIT} 節まで）"
+            keys.extend(str(number) for number in range(first, last + 1))
+        elif single:
+            keys.append(single.group(1) or single.group(2))
+        else:
+            return [], f"節 `{token}` を読めない（`§N`、`§A〜§B`、`X-N-M` のいずれか）"
+    return keys, None
+
+
+def parse_forwarding(
+    repo: Repository, path: str
+) -> tuple[dict[str, ForwardRule], list[str], set[int]]:
+    """Read every `転送表` table of a document: (rules, problems, table line numbers)."""
+    lines = strip_code_fences(repo.read(path).splitlines())
+    rules: dict[str, ForwardRule] = {}
+    problems: list[str] = []
+    table_lines: set[int] = set()
+    index = 0
+    while index < len(lines):
+        if not FORWARD_HEADING_PATTERN.match(lines[index]):
+            index += 1
+            continue
+        heading_line = index + 1
+        index += 1
+        while (
+            index < len(lines)
+            and not lines[index].lstrip().startswith("|")
+            and not HEADING_PATTERN.match(lines[index])
+        ):
+            index += 1
+        rows: list[tuple[int, list[str]]] = []
+        while index < len(lines) and lines[index].lstrip().startswith("|"):
+            rows.append((index + 1, split_table_row(lines[index])))
+            index += 1
+        if not rows:
+            problems.append(f"{path}:{heading_line}: 転送表の見出しの下に表が無い")
+            continue
+        follow = index
+        while follow < len(lines) and not lines[follow].strip():
+            follow += 1
+        if follow < len(lines) and lines[follow].lstrip().startswith("|"):
+            problems.append(
+                f"{path}:{follow + 1}: 転送表の後に別の表が続く"
+                "（空行で表を分けず、別の表には見出しを付ける）"
+            )
+        table_lines.update(number for number, _ in rows)
+        if rows[0][1] != FORWARD_HEADER:
+            problems.append(f"{path}:{rows[0][0]}: 転送表の見出し行は `| 旧節 | 移動先 |`")
+            continue
+        if len(rows) < 3 or not all(FORWARD_SEPARATOR_PATTERN.match(c) for c in rows[1][1]):
+            problems.append(f"{path}:{rows[0][0]}: 転送表に区切り行（`|---|---|`）か行が無い")
+            continue
+        for number, cells in rows[2:]:
+            if len(cells) != 2:
+                problems.append(f"{path}:{number}: 転送表の行は 2 列（旧節 | 移動先）")
+                continue
+            keys, problem = parse_forward_keys(cells[0])
+            if problem:
+                problems.append(f"{path}:{number}: 転送表 {problem}")
+                continue
+            target = FORWARD_DESTINATION_PATTERN.match(cells[1])
+            if not target:
+                problems.append(
+                    f"{path}:{number}: 転送先 `{cells[1]}` を読めない（`docs/x.md` か `docs/x.md` §M）"
+                )
+                continue
+            destination = target.group("path")
+            section = target.group("section") or ""
+            if not (destination.startswith("docs/") and destination.endswith(".md")):
+                problems.append(f"{path}:{number}: 転送先 `{destination}` は docs/ の .md に限る")
+                continue
+            if destination == path:
+                problems.append(f"{path}:{number}: 転送先が自分自身")
+                continue
+            if destination not in repo.files:
+                problems.append(f"{path}:{number}: 転送先 `{destination}` が存在しない")
+                continue
+            if section and len(keys) > 1:
+                problems.append(f"{path}:{number}: 複数の節の行は転送先の § を書けない")
+                continue
+            for key in keys:
+                if key in rules:
+                    problems.append(f"{path}:{number}: 転送表の節 `{key}` が重複している")
+                    continue
+                rules[key] = ForwardRule(key, destination, section, number)
+    return rules, problems, table_lines
+
+
+def collect_forwarding(repo: Repository) -> None:
+    """Fill repo.forwarding and repo.groups from the `転送表` tables under docs/."""
+    for path in sorted(repo.files):
+        if not (path.startswith("docs/") and is_target_document(path)):
+            continue
+        if "転送表" not in repo.read(path):
+            continue
+        rules, problems, table_lines = parse_forwarding(repo, path)
+        repo.forwarding_problems.extend(problems)
+        if table_lines:
+            repo.forwarding_lines[path] = table_lines
+        if rules:
+            repo.forwarding[path] = rules
+    members: dict[str, set[str]] = {}
+    for source, rules in repo.forwarding.items():
+        kept = {
+            rule.destination
+            for rule in rules.values()
+            if not rule.section and not ITEM_ID_PATTERN.fullmatch(rule.key)
+        }
+        if not kept:
+            continue
+        for member in {source} | kept:
+            members.setdefault(member, set()).update({source} | kept)
+    repo.groups = {path: frozenset(group) for path, group in members.items()}
 
 
 def collect_section_numbers(text: str) -> set[str]:
@@ -251,7 +520,8 @@ def collect_section_numbers(text: str) -> set[str]:
             continue
         heading = HEADING_PATTERN.match(line)
         if heading:
-            number = HEADING_NUMBER_PATTERN.match(heading.group(2).strip())
+            title = heading.group(2).strip()
+            number = HEADING_NUMBER_PATTERN.match(title) or ITEM_HEADING_PATTERN.match(title)
             if number:
                 numbers.add(number.group(1))
             continue
@@ -431,19 +701,27 @@ def section_findings(repo: Repository, text: str, source: str, is_doc: bool) -> 
             last_document = None
         events = sorted(
             [(match.start(), match) for match in DOCUMENT_THEN_SECTION_PATTERN.finditer(line)]
+            + [(match.start(), match) for match in SHORT_NAME_PATTERN.finditer(line)]
             + [(match.start(), match) for match in SAME_DOCUMENT_PATTERN.finditer(line)],
             key=lambda event: event[0],
         )
         for _, match in events:
+            numbers = [match.group("number")]
             if match.re is SAME_DOCUMENT_PATTERN:
                 document = last_document
-                numbers = [match.group("number")]
             else:
-                if is_doc and "section" in match.group(0):
-                    continue
-                document = resolve_document(repo, match.group("doc"), source)
+                if match.re is SHORT_NAME_PATTERN:
+                    # `-spec` names belong to DOCUMENT_THEN_SECTION_PATTERN.
+                    if match.group("name").endswith("-spec"):
+                        continue
+                    document = resolve_short_document(repo, match.group("name"))
+                    if document is None:
+                        continue
+                else:
+                    if is_doc and "section" in match.group(0):
+                        continue
+                    document = resolve_document(repo, match.group("doc"), source)
                 last_document = document
-                numbers = [match.group("number")]
                 rest = line[match.end():]
                 while chained := CHAINED_SECTION_PATTERN.match(rest):
                     numbers.append(chained.group("number"))
@@ -475,7 +753,22 @@ def join_wrapped_names(lines: list[str]) -> list[str]:
     return joined
 
 
-def resolve_section(repo: Repository, document: str, section: str) -> str | None:
+def match_forward_rule(rules: dict[str, ForwardRule], section: str) -> ForwardRule | None:
+    """The rule whose key is `section` or its longest ancestor (`4` covers `4.3a`)."""
+    best: ForwardRule | None = None
+    for key, rule in rules.items():
+        rest = section[len(key) :]
+        if not section.startswith(key) or (rest and not SECTION_SUFFIX_PATTERN.fullmatch(rest)):
+            continue
+        if best is None or len(key) > len(best.key):
+            best = rule
+    return best
+
+
+def resolve_section(
+    repo: Repository, document: str, section: str, trail: tuple[tuple[str, str], ...] = ()
+) -> str | None:
+    """None when `document` holds `section` (itself, or through its forwarding table)."""
     numbers = repo.section_numbers(document)
     if numbers is None:
         if under_submodule(repo, document):
@@ -483,7 +776,148 @@ def resolve_section(repo: Repository, document: str, section: str) -> str | None
         return "§ 参照先の文書が存在しない"
     if section in numbers:
         return None
-    return "見出しに解決しない § 参照"
+    rule = match_forward_rule(repo.forwarding.get(document, {}), section)
+    if rule is None:
+        return UNRESOLVED_SECTION
+    step = (document, section)
+    if step in trail:
+        return f"転送表が循環している（`{document}` §{section}）"
+    if len(trail) >= FORWARD_MAX_HOPS:
+        return f"転送表の連鎖が {FORWARD_MAX_HOPS} 段を超える（`{document}` §{section}）"
+    target = rule.section + section[len(rule.key) :] if rule.section else section
+    problem = resolve_section(repo, rule.destination, target, (*trail, step))
+    if problem is None:
+        return None
+    if problem != UNRESOLVED_SECTION:
+        # A cycle, a chain too long, or a destination that already says what is missing.
+        return problem
+    return f"{UNRESOLVED_SECTION}（転送先 `{rule.destination}` に §{target} が無い）"
+
+
+def resolve_short_document(repo: Repository, name: str) -> str | None:
+    """The one document a short name (`app-profile`) stands for, or None."""
+    if name.upper() in SHORT_NAME_ROOT_DOCUMENTS:
+        return None
+    if name not in repo.short_documents:
+        exact = [
+            path
+            for path in (f"docs/{name}-spec.md", f"docs/{name}.md", f"docs/handoff/{name}.md")
+            if path in repo.files
+        ]
+        if not exact and len(name) >= SHORT_NAME_MIN_PREFIX:
+            exact = sorted(
+                path
+                for path in repo.files
+                if path.startswith(f"docs/{name}-")
+                and path.endswith("-spec.md")
+                and path.count("/") == 1
+            )
+        repo.short_documents[name] = exact[0] if len(exact) == 1 else None
+    return repo.short_documents[name]
+
+
+def resolve_item(repo: Repository, item: str) -> str | None:
+    """None when an `X-N-M` item has a heading or a forwarding row somewhere."""
+    owners = [ITEM_DOCUMENT] if ITEM_DOCUMENT in repo.files else []
+    owners += sorted(
+        path
+        for path, rules in repo.forwarding.items()
+        if path != ITEM_DOCUMENT and any(ITEM_ID_PATTERN.fullmatch(key) for key in rules)
+    )
+    if any(resolve_section(repo, owner, item) is None for owner in owners):
+        return None
+    return "見出しにも転送表にも無い X-N-M 参照"
+
+
+def forwarding_table_problems(repo: Repository) -> list[str]:
+    """Unreadable tables, plus rows whose destination does not hold what the row promises."""
+    problems = list(repo.forwarding_problems)
+    for path in sorted(repo.forwarding):
+        for rule in repo.forwarding[path].values():
+            wanted = rule.section or rule.key
+            problem = resolve_section(repo, rule.destination, wanted)
+            if problem is None:
+                continue
+            if problem.startswith("転送表"):
+                problems.append(f"{path}:{rule.line}: {problem}")
+            else:
+                label = f"§{wanted}" if wanted[0].isdigit() else wanted
+                problems.append(
+                    f"{path}:{rule.line}: 転送先 `{rule.destination}` の見出しに {label} が無い"
+                )
+    return problems
+
+
+def item_findings(repo: Repository) -> list[Finding]:
+    """`X-N-M` references, in every tracked text file, that resolve nowhere."""
+    findings: list[Finding] = []
+    for path in sorted(repo.files):
+        name = PurePosixPath(path).name
+        if path.startswith(SKIPPED_PREFIXES + ITEM_EXCLUDED_PREFIXES):
+            continue
+        if path in DOC_EXCLUDED_FILES or path.startswith(DOC_EXCLUDED_PREFIXES):
+            continue
+        # The allowlist is the registry that excuses references, so it cannot be a
+        # place that mentions them: an entry would excuse itself.
+        if path == ALLOWLIST_RELATIVE_PATH:
+            continue
+        if not (name.endswith(ITEM_SCAN_SUFFIXES) or name in ITEM_SCAN_NAMES):
+            continue
+        lines = repo.read(path).splitlines()
+        if path.endswith(".md"):
+            lines = strip_code_fences(lines)
+        table_lines = repo.forwarding_lines.get(path, set())
+        for number, line in enumerate(lines, start=1):
+            if number in table_lines or "X-" not in line:
+                continue
+            for item in dict.fromkeys(match.group("id") for match in ITEM_PATTERN.finditer(line)):
+                problem = resolve_item(repo, item)
+                if problem:
+                    findings.append(Finding(path, number, item, problem))
+    return findings
+
+
+def names_this_document(before: str, previous_line: str) -> bool:
+    """True when a bare `§` after `before` can only mean the document it is written in.
+
+    `before` is the text ahead of the `§` on its line; `previous_line` is the last
+    non-blank line above, which stands in when the `§` starts the line. Anything that
+    may name another document (a document name, an ASCII word, `同`, a list separator)
+    makes the answer False, so the check errs toward saying nothing.
+    """
+    chain = BARE_CHAIN_ITEMS_PATTERN.search(before)
+    head = before[: chain.start()] if chain else before
+    if BARE_CHAIN_BEFORE_PATTERN.search(head) or BARE_OTHER_DOCUMENT_PATTERN.search(head):
+        return False
+    text = head.rstrip()
+    if not text:
+        if BARE_OTHER_DOCUMENT_PATTERN.search(previous_line[-80:]):
+            return False
+        text = previous_line.rstrip()
+    return not BARE_NAME_BEFORE_PATTERN.search(text)
+
+
+def group_findings(repo: Repository, path: str) -> list[tuple[int, str, str]]:
+    """Bare `§N` of a forwarding-group member that no member's headings hold."""
+    members = repo.groups.get(path)
+    if members is None:
+        return []
+    results: list[tuple[int, str, str]] = []
+    table_lines = repo.forwarding_lines.get(path, set())
+    lines = strip_code_fences(repo.read(path).splitlines())
+    previous = ""
+    for number, line in enumerate(lines, start=1):
+        previous_line, previous = previous, (line if line.strip() else previous)
+        if number in table_lines:
+            continue
+        for match in BARE_SECTION_PATTERN.finditer(line):
+            if not names_this_document(line[: match.start()], previous_line):
+                continue
+            section = match.group("number")
+            if any(resolve_section(repo, member, section) is None for member in sorted(members)):
+                continue
+            results.append((number, f"{path} §{section}", "転送グループの見出しに解決しない裸の § 参照"))
+    return results
 
 
 def doc_findings(repo: Repository, path: str) -> list[tuple[int, str, str]]:
@@ -565,6 +999,8 @@ def reference_resolves(repo: Repository, ref: str) -> bool:
     section = re.fullmatch(r"(.+?) §(" + SECTION_NUMBER + r")", ref)
     if section:
         return resolve_section(repo, section.group(1), section.group(2)) is None
+    if ITEM_ID_PATTERN.fullmatch(ref):
+        return resolve_item(repo, ref) is None
     return check_code_span(repo, ref) is None and (
         "::" in ref or repo.exists(ref) or glob_matches(repo, ref)
     )
@@ -608,16 +1044,26 @@ def check(repo_root: Path) -> list[str]:
                     f"{ALLOWLIST_RELATIVE_PATH}: `{entry.ref}` の files に存在しない文書 `{path}`"
                 )
 
+    problems.extend(forwarding_table_problems(repo))
+
     raw: list[Finding] = []
     for path in target_documents(repo):
         for line, reference, message in doc_findings(repo, path):
             raw.append(Finding(path, line, reference, message))
+        for line, reference, message in group_findings(repo, path):
+            raw.append(Finding(path, line, reference, message))
     for path in code_files(repo):
         for line, reference, message in section_findings(repo, repo.read(path), path, is_doc=False):
             raw.append(Finding(path, line, reference, message))
+    raw.extend(item_findings(repo))
 
     ignored = ignored_paths(
-        repo_root, {finding.reference for finding in raw if "§" not in finding.reference}
+        repo_root,
+        {
+            finding.reference
+            for finding in raw
+            if "§" not in finding.reference and not ITEM_ID_PATTERN.fullmatch(finding.reference)
+        },
     )
 
     markers: dict[str, dict[int, int]] = {}

@@ -196,11 +196,12 @@ M35 が使うフィールドの意味を定める。
 
 型・既定値・範囲の正典は `settings/mvp-settings.schema.json` の root キー `typoCorrectionMode` /
 `typoMinCount` である（`typoCorrectionMode` の schema の `description` が本節を指す）。
-`SettingsStore` が読み、本節は各キーの意味と反映先を定める。
+`SettingsStore` が読み、本節は各キーの意味と反映先を定める。M55 の `typoCorrection.*` は §12.14 が定め、
+`typoCorrection.mode` があれば `typoCorrectionMode` より優先する。
 
 | キー | 意味 | `EngineConfig` の反映先 |
 |---|---|---|
-| `typoCorrectionMode` | 動作モード（`off` / `suggest` / `auto_replace`。値の意味は §3） | `typo_correction_mode` |
+| `typoCorrectionMode` | 動作モード（`off` / `suggest` / `auto_replace`。値の意味は §3。§12.14 の migration で v2 の mode として読む） | `typo_correction_mode` |
 | `typoMinCount` | 同じ打ち間違えペアをこの回数観測してから補正候補に使う | `typo_min_count` |
 
 `settings.json` に無いキーは schema の既定を使う。`typoMinCount` の範囲外の値は既定へ戻す。
@@ -363,8 +364,8 @@ u の隣に i / y / j がある
 s の隣に a / d / w / x がある
 ```
 
-`settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`。§12.14 の nested v2 キーで、
-M55 が schema へ追加する予定）で切替。
+`settings.typoCorrection.keyboardLayout`（§12.14）で切替える。schema が受ける値は `auto`（OS の配列に
+従う）だけとし、配列を固定する `jis` / `us` は配列ごとの隣接表と同時に足す。
 
 #### 12.4.3 Romaji Variant Normalizer
 
@@ -785,11 +786,9 @@ privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCand
 
 ### 12.13 IPC（protocol v1 の加算的拡張）
 
-予定（M55、DEV-1956）。`raw_keys` と `typo_correction_mode` は `Payloads.h` に無く、
-以下は設計案である。`secure` / `learning_allowed` の伝達は既存の契約である。
-
 v1 の `ObserveTypo` IPC に加え、既存 `QueryCandidates` の payload に
-optional フィールドを追加（エンベロープ schema 自体は変更しない）:
+optional フィールドを追加する（エンベロープ schema 自体は変更しない）。payload の正典は
+`ipc/include/azookey/ipc/Payloads.h` の `QueryCandidatesRequest` である（wire key は C++ のメンバ名と同じ）:
 
 ```json
 {
@@ -809,10 +808,35 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
 }
 ```
 
-`raw_keys` / `typo_correction_mode` は optional（TIP が取得可能・送信意図が
-あるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま再利用し、
-新規 enum 値は追加しない。M40 互換性ルールに従い、**`raw_keys` /
+| フィールド | 型 | 意味 | 欠落時・不正時 |
+|---|---|---|---|
+| `raw_keys` | string | 打鍵したキーの列（ローマ字入力は小文字の英字、かな入力はひらがな） | 空。補正の手がかりを持たない（v1 動作） |
+| `typo_correction_mode` | string（`off` / `suggest` / `rank` / `aggressive`） | 要求が求める補正モード（§12.6） | 空。Host 設定の実効値（§12.14）に従う（v1 動作） |
+
+両フィールドは optional で、空なら wire に出さない。`MessageType` は既存 `QueryCandidates` のまま
+再利用し、新規 enum 値は追加しない。M40 互換性ルールに従い、**`raw_keys` /
 `typo_correction_mode` が**未指定のときは v1 動作に fallback する。
+
+- **`raw_keys` の境界検証**: Host の parse（`ParseQueryCandidatesRequest`）は、`"secure": false` を
+  明示した要求の `raw_keys` だけを残し、`secure` の欠落・型不正・`true` の要求では捨てる。
+  `kMaxRawKeysBytes`（256 バイト）を超えるものと、§12.12.1 の文字集合（`a`〜`z`、`-`、`'`、
+  ひらがな U+3041〜U+3096、長音符 U+30FC）の外の文字を 1 つでも含むものは、切り詰めずに全体を捨てる。
+  送り手の codec（`BuildQueryCandidatesRequest`）も、secure の要求には `raw_keys` を載せない。
+- **capability**: Host は Handshake 応答の capabilities に `raw_keys` を入れる。TIP は `raw_keys` を
+  広告した Host にだけ `raw_keys` を送り、secure の入力では送らない（§12.12.2）。
+- **`typo_correction_mode` の値**: 4 値以外（v1 の `auto_replace` を含む）と文字列以外は未指定として parse する。
+  TIP は設定を参照しない（§3）ので、TIP の要求はこのフィールドを持たない。
+- **要求値は Host の実効値を上回らない**: protocol v1 の Host は、`typo_correction_mode` と `raw_keys` を
+  補正の判定に使わず、Host 設定から決まる実効値（§12.14）で変換する。M55 の補正エンジンが要求値を
+  使うときも、要求値で補正を強めない。Host の実効値が `off`（設定または SafeMode）のとき、
+  secure の要求のとき、`rank` のように engine が持たない値のときも、要求値は Host の実効値を変えない。
+- **互換**: protocol version は 1 を維持する。
+
+| 組み合わせ | 挙動 |
+|---|---|
+| 新しい TIP と古い Host | 古い Host は capability `raw_keys` を広告しないので、TIP は `raw_keys` を送らない。古い Host は両フィールドを未知のキーとして読み飛ばす |
+| 古い TIP と新しい Host | 古い TIP は両フィールドを送らない。Host は空として parse し、v1 動作になる |
+| 新しい TIP と新しい Host | TIP は secure でない要求に `raw_keys` を載せる。Host は境界検証を通ったものだけを保持し、補正の判定には使わない |
 
 > privacy フラグの欠落・型不正は `secure = true` /
 > `learning_allowed = false` として parse する。これは parse エラーではない。
@@ -849,8 +873,8 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 
 ### 12.14 設定スキーマ拡張
 
-v2 は nested `typoCorrection.*` に集約する。このブロックは M55（DEV-1957）が `settings/mvp-settings.schema.json`
-へ追加する予定の定義であり、v1 の schema が持つのは root の `typoCorrectionMode` / `typoMinCount`（§8）:
+v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正典は `settings/mvp-settings.schema.json` の
+`typoCorrection` であり、v1 の root `typoCorrectionMode` / `typoMinCount`（§8）も残す:
 
 ```json
 {
@@ -867,16 +891,42 @@ v2 は nested `typoCorrection.*` に集約する。このブロックは M55（D
 }
 ```
 
-**v1 互換性**: v1 設定 `typoCorrectionMode`（root レベル、3 値 enum）を持つ
-設定ファイルを読む。`SettingsStore` は読み込み時に以下の migration を実行する:
+| キー | 既定 | 意味 | 不正な値のとき |
+|---|---|---|---|
+| `typoCorrection.enabled` | `true` | false は `mode` によらず補正も学習もしない（実効値 `off`） | 既定 |
+| `typoCorrection.mode` | `suggest` | §12.6 の 4 モード。あれば root の `typoCorrectionMode` より優先する | 未設定と同じ（下の migration） |
+| `typoCorrection.learnPersonalPatterns` | `true` | false は `ObserveTypo` の蓄積だけを止め、学習済みの補正は使い続ける | 既定 |
+| `typoCorrection.keyboardLayout` | `auto` | §12.4.2 の配列。値は `auto` だけ | 既定 |
+| `typoCorrection.maxReadingHypotheses` | `3` | 1 つの読みから作る §12.2 の補正 hypothesis の上限（1〜8） | 既定 |
+| `typoCorrection.minConfidenceForRanking` | `0.70` | §12.5・§12.11 のしきい値（0〜1） | 既定。2 つの大小が逆（等しいを含む）なら両方を既定 |
+| `typoCorrection.minConfidenceForTopCandidate` | `0.90` | §12.11 のしきい値（0〜1） | 同上 |
+| `typoCorrection.disableInSecretApps` | `true` | secure の入力では補正も学習もしない（§12.11）。schema は `false` を拒否する | Host は `false` を読んでも `true` として扱う |
 
-1. v2 の `typoCorrection.mode` が存在すればそれを採用
-2. v2 が未設定 / 空で、v1 root `typoCorrectionMode` が存在すれば値を読み、
-   `auto_replace` → `aggressive` に読み替え（§12.6 と整合）し、
-   `typoCorrection.mode` へコピー
+信頼度の 2 キーを除き、各キーは単独で既定へ戻り、不正な値が他のキーを巻き込まない。`typoCorrection` が
+オブジェクトでなければ全体を無いものとして扱う。
+
+**v1 互換性**: v1 設定 `typoCorrectionMode`（root レベル、3 値 enum）を持つ
+設定ファイルを読む。`SettingsStore` は読み込みのたびに次の順で `typoCorrection.mode` を決める:
+
+1. v2 の `typoCorrection.mode` が 4 値のどれかならそれを採用
+2. v2 が未設定・空・不正で、v1 root `typoCorrectionMode` が 3 値のどれかなら値を読み、
+   `auto_replace` を `aggressive` に読み替えて採用（§12.6 と整合）
 3. 両方未設定なら既定値 `suggest`
 
-migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出す。
+`typoCorrection.enabled` が false なら、決まった mode によらず実効値は `off` とする。SafeMode
+（`docs/host-availability-spec.md` §8.5.3）は migration の後で `enabled` / `mode` / `learnPersonalPatterns` を
+止める側へ上書きするので、どちらのキーからも補正は戻らない。
+
+**engine への反映**: engine（`EngineConfig::typo_correction_mode`）は v1 の 3 値を受ける。Host の
+`ApplyRuntimeSettingsToEngineConfig` は実効値を `off` → `off`、`suggest` / `rank` → `suggest`、
+`aggressive` → `auto_replace` に写す。`rank` は v1 に対応が無く、`suggest` と同じに変換する。
+
+**書き出し**: migration は読み取りだけで、Host は settings.json を書き戻さない。v1 key を残したまま
+（破壊的削除はしない）両方を書くのは設定アプリである。「辞書」ペインはファイルが解決する実効値を
+v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_replace`、`enabled` が false なら `off`）、
+ペインでモードを変えた保存では root の `typoCorrectionMode` と `typoCorrection.mode`（`auto_replace` は
+`aggressive`）の両方を書く。`off` 以外を選んだときは、`typoCorrection.enabled` の false も true に戻す。
+モードを変えない保存は `typoCorrection` をそのまま残すので、ペインの外で設定した `rank` は消えない。
 v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
 その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
 M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。

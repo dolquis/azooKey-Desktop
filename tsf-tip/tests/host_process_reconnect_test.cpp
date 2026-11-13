@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/tsf/IpcConnectionState.h"
 #include "azookey/tsf/TextService.h"
@@ -52,20 +53,25 @@ constexpr uint32_t kHealthMissThreshold = 1000;
 
 class ScopedEnvironmentValue {
  public:
+  // An empty value removes the variable. The Hosts started later inherit the
+  // change.
   ScopedEnvironmentValue(const char* name, const std::string& value) : name_(name) {
     char* prior = nullptr;
     size_t length = 0;
     if (_dupenv_s(&prior, &length, name) == 0 && prior) original_ = prior;
     std::free(prior);
-    EXPECT_EQ(_putenv_s(name, value.c_str()), 0);
+    applied_ = _putenv_s(name, value.c_str()) == 0;
   }
   ~ScopedEnvironmentValue() { _putenv_s(name_.c_str(), original_.c_str()); }
   ScopedEnvironmentValue(const ScopedEnvironmentValue&) = delete;
   ScopedEnvironmentValue& operator=(const ScopedEnvironmentValue&) = delete;
 
+  bool applied() const { return applied_; }
+
  private:
   std::string name_;
   std::string original_;
+  bool applied_ = false;
 };
 
 // Tail of the Host's redirected stdout/stderr, where the reason it ended is
@@ -197,7 +203,7 @@ std::string StatesToString(const std::vector<IpcConnectionState>& states) {
 class TsfTipHostRestartReconnectTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    host_executable_ = std::filesystem::path(HOST_RECONNECT_TEST_EXE);
+    host_executable_ = azookey::core::Utf8Path(HOST_RECONNECT_TEST_EXE);
     ASSERT_TRUE(std::filesystem::exists(host_executable_)) << host_executable_;
     const auto suffix = std::to_string(GetCurrentProcessId()) + "-" +
                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -289,8 +295,14 @@ class TsfTipHostRestartReconnectTest : public ::testing::Test {
 
 TEST_F(TsfTipHostRestartReconnectTest, WorkerReconnectsToARestartedHostProcess) {
   // The worker reads the token from this variable, the same value the Host is
-  // given on its command line.
+  // given on its command line. Without it the worker would fall back to the
+  // real per-user token file.
   ScopedEnvironmentValue token("AZOOKEY_IPC_HANDSHAKE_TOKEN", token_);
+  ASSERT_TRUE(token.applied());
+  // Structured logs are opt-in and go to LocalAppData. Neither the worker nor
+  // the Hosts started below may write there.
+  ScopedEnvironmentValue logging_off("AZOOKEY_LOG", "");
+  ASSERT_TRUE(logging_off.applied());
 
   HostProcess first;
   HostProcess second;

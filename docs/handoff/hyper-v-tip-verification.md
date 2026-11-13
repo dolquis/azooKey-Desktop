@@ -31,7 +31,7 @@ VM を要しない課題を開発機で行う場合の範囲と手順は [`dev-m
 
 ### 拡張セッションの限定例外（C-005）
 
-`compat-test` の C-005（マルチディスプレイ端で候補ウィンドウが画面内にクランプされること。ケース定義の正典は `docs/dev-infrastructure-spec.md` §13.3）に限り、拡張セッションでの実施を認める。
+`compat-test` の C-005（マルチディスプレイ端で候補ウィンドウが画面内にクランプされること。ケース定義の正典は `docs/diagnostics-compat-spec.md` §13.3）に限り、拡張セッションでの実施を認める。
 
 Hyper-V の基本セッションは単一ディスプレイしか持てず、複数モニター構成は拡張セッションの機能である。一方 C-005 の判定材料は候補ウィンドウの表示位置であり、描画側にある。入力経路のリダイレクトが判定を歪める余地は、打鍵結果そのものを判定する他のケースより小さい。
 
@@ -302,7 +302,7 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   C-013 の結果が `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を
   確認して対象アプリの全プロセスを人手で終了し、C-013 を再実行する。
 
-  C-006 はゲストの表示スケール 150% を前提とする（`docs/dev-infrastructure-spec.md` §13.3）。
+  C-006 はゲストの表示スケール 150% を前提とする（`docs/diagnostics-compat-spec.md` §13.3）。
   表示スケールを変えずに回す場合は、先行実行の `-CompatSkip C-013,C-010` に C-006 も加える。
 
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、

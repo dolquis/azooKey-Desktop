@@ -8,7 +8,7 @@
 | 既定値サンプル | `settings/mvp-settings.schema.json` | `settings/default-settings.sample.json` | schema sample validation |
 | ModelCatalog | `docs/model-management-spec.md` | `settings/model-catalog.schema.json`, `settings/default-model-catalog.json`（Host に埋め込む既定の catalog）, `inference-host/src/ModelCatalog.cpp`, `inference-host/src/ModelFetch.cpp`, `inference-host/src/ModelsCli.cpp` | `host_model_catalog_tests` |
 | 設定UI | `docs/native-ui-spec.md` と機能別仕様、`azookey-settings-app-ui` skill | `settings-app/SettingsDocument.cpp`（`settings.json` を保存する writer。Host の quarantine rename は `inference-host/src/SettingsStore.cpp`、TIP のメニューによる 1 キー書き込みは `tsf-tip/src/TipSettingsWriter.cpp`）、`settings-app/MainWindow.xaml.cpp`、`settings-app/SettingsFields.cpp`（設定 UI の記述子表）、`settings-app/Strings/ja-JP/Resources.resw`、`settings-app/SettingsIpcClient.cpp`（`UpdateConfig` 送信） | `azookey_settings_persistence_tests`（`settings_fields_test.cpp` が記述子表と schema の一致を検査する）、`azookey_settings_launch_arguments_tests` |
-| migration と破損復旧 | `docs/dev-infrastructure-spec.md`, 対応する機能仕様 | SettingsStore / ModelCatalog の読込経路 | 旧版と破損fixtureを扱うテスト |
+| migration と破損復旧 | `docs/ipc-persistence-hardening-spec.md` §5、`docs/diagnostics-compat-spec.md` §12.2.1、対応する機能仕様 | SettingsStore / ModelCatalog の読込経路 | 旧版と破損fixtureを扱うテスト |
 | credential と外部AI設定 | `docs/ai-backend-spec.md`, `docs/privacy-and-secure-input-spec.md` | secret storage と設定参照箇所 | credential を含めないfixtureとエラー経路 |
 
 ## 同期チェックリスト

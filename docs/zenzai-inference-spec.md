@@ -162,7 +162,7 @@ edge は Q5_K_M 以下の量子化で精度が落ちる（モデルカードで�
   CLI の `--model` で指定した GGUF）は推定値を使う。R2 を再開した構成では、一致した entry の
   `promptFormat` を R1 と R2 の両方に使い、照合できない GGUF は R1 だけで動く
   （`docs/copilot-pc-backend-spec.md` §4.4「R1 / R2 の artifact と model catalog」）。
-  QueryDiagnostics の `prompt_format`（`docs/dev-infrastructure-spec.md` §12.6）が宣言値または
+  QueryDiagnostics の `prompt_format`（`docs/diagnostics-compat-spec.md` §12.6）が宣言値または
   推定値を返し、診断 CLI は D-008 の `details.prompt_format` に載せる。
 - `[PROF]` を使わない形式では、instruction profile を要する AI backend のローカル実行
   （整文、翻訳、要約、自由指示）を `Disabled` で返す。別モデルとの併用や追加学習はしない。
@@ -193,7 +193,7 @@ SHA-256 を照合）と edge Q8_0（revision と SHA-256 を固定）を比べ�
 選べるモデルとして加える（§2.4 冒頭）。
 
 - 条件: Intel Core i7-12700KF、CPU（threads 8、§8.1.1）、llama.cpp は `AZOOKEY_LLAMA_CPP_GIT_TAG`
-  の `7fe450e19305b828c199d602c23a8337aaa1f03b`（pin の所在は `docs/dev-infrastructure-spec.md` §3.4）、
+  の `7fe450e19305b828c199d602c23a8337aaa1f03b`（pin の所在は `docs/build-ci-spec.md` §3.4）、
   Release ビルド、`azookey_bench --eval`（`InferenceEngine::QueryCandidates`、beam 4、§8.2 の
   600ms deadline、候補上限 5）、NLL rerank off（製品の既定）。他のビルドを止めた状態で計測した。
 - 辞書層（neologd pack）を読まない構成で比べた。Acc@1 と大崩れはモデルの候補だけの値である。
@@ -1201,7 +1201,7 @@ llama.cpp のヘッダで次を確認する。
 計測側では `decodePhases.beam.evaluations` の定義（beam 評価回数）を変えない。本方式では
 1 step の全 beam 評価が 1 回の decode に対応するため、evaluations は decode 呼び出し回数と
 一致しない。beam phase の短縮は `decodePhases.beam.tokens` と `latencyMs` に現れる
-（`dev-infrastructure-spec` の `decodePhases` 定義を参照）。
+（`build-ci-spec` の `decodePhases` 定義を参照）。
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 

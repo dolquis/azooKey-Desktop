@@ -22,9 +22,9 @@ Claude Code / Codex CLI が VM 操作を補助するときの前提とリスク�
 
 | 資産 | 役割 | 正典 |
 |---|---|---|
-| `scripts/make-vm-verify-package.ps1` | ホスト側で Release 成果物を manifest 付き検証 zip にする | `docs/dev-infrastructure-spec.md` §2.6 |
+| `scripts/make-vm-verify-package.ps1` | ホスト側で Release 成果物を manifest 付き検証 zip にする | `docs/vm-verification-package-spec.md` §1 |
 | `verify-bootstrap.ps1`（zip 同梱） | VM 内での導入と事前確認。`-Json` で機械可読な結果を返す | 同上 |
-| `compat_test.exe` と `compat_host_hang_watchdog.exe`（`compat-test/`） | Notepad、VS Code、Edge の compat ケース（範囲は `docs/dev-infrastructure-spec.md` §13.3）を UI Automation + SendInput で自動実行し、`report.json` を出す。watchdog は C-013 の Host 再開を担当する | `docs/dev-infrastructure-spec.md` §13 |
+| `compat_test.exe` と `compat_host_hang_watchdog.exe`（`compat-test/`） | Notepad、VS Code、Edge の compat ケース（範囲は `docs/diagnostics-compat-spec.md` §13.3）を UI Automation + SendInput で自動実行し、`report.json` を出す。watchdog は C-013 の Host 再開を担当する | `docs/diagnostics-compat-spec.md` §13 |
 | `azookey_diag.exe` | 登録、pipe、ログディレクトリの診断と `--repair` | `docs/handoff/windows-diagnostics-playbook.md` |
 
 手動確認の動線はチェックリスト（コア A1〜A8、拡張 B1〜B7）が定める。

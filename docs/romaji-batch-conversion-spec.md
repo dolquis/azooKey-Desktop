@@ -329,7 +329,7 @@ control接続からCancelを処理できる。1リクエスト1応答を維持�
   いずれかで stale 応答を排除しなければならない:
   - **(推奨) `(trace_id, request_id)` 相関**: TIP は全応答を envelope の
     `(trace_id, request_id)`（`ipc/include/azookey/ipc/Messages.h`・
-    `docs/dev-infrastructure-spec.md` の横断追跡キー）で照合し、**現在 await 中の
+    `docs/observability-spec.md` の横断追跡キー）で照合し、**現在 await 中の
     in-flight サブリクエスト集合に属さない応答は drain して破棄**する（タイムアウト /
     キャンセル済みの遅延応答を含む）。`request_id` 単独はインスタンスごと採番で
     衝突しうるため、グローバル一意な `trace_id` を組で使う（§6.3.2）。これにより

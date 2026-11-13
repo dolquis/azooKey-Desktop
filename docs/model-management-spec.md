@@ -5,7 +5,7 @@
 関連: `plans/windows-port-roadmap.md` M8 / M30 / M24、
       `docs/zenzai-gpu-route.md`、
       `docs/copilot-pc-backend-spec.md`、
-      `docs/dev-infrastructure-spec.md` §12 (M44 診断)
+      `docs/diagnostics-compat-spec.md` §12 (M44 診断)
 
 ## 0. 節とマイルストーンの対応
 

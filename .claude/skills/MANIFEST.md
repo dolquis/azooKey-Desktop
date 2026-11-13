@@ -36,6 +36,34 @@
 | `azookey-linear-issue-ops` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
 | `azookey-quality-harness` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
 
+## 担当パス
+
+区分 `repo` の Skill が担当するソースのパス。`scripts/check_skill_impact.py` が PR の変更ファイルと照合し、
+担当パスを変えて Skill を変えない PR に、本文の「Skill impact」節の記入を求める。同じ表から、Skill の最終更新以降に
+担当パスへ入った commit 数（`--freshness`）も出す。
+
+- 担当パスは back-quote で囲んだ glob を「、」で区切って書く。`*` は `/` を越えず、`**` は末尾の 1 segment だけに使え、
+  残りの全階層に一致する。`—` は担当パスを持たない（docs や運用の Skill で、ほぼ全 PR が触れるため）。
+- テスト（`tests/`）は含めない。テストの追加は Skill の入口表を変えることが少なく、含めると記入が形骸化する。
+- 区分 `repo` の Skill は全員が 1 行を持つ。各 glob は 1 件以上のパスに一致する。`scripts/check_skill_references.py` が検査する。
+- 担当パスを足す・直す PR は、同じ PR で本表を更新する。
+
+| Skill | 担当パス |
+|---|---|
+| `azookey-doc-governance` | — |
+| `azookey-inference-model-workflow` | `inference-host/src/**`、`inference-host/include/**` |
+| `azookey-learning-data-safety` | `learning/src/**`、`learning/include/**` |
+| `azookey-packaging-release-workflow` | `pkg/**`、`.github/workflows/release.yml` |
+| `azookey-settings-schema-evolution` | `settings/*` |
+| `tsf-ipc-protocol` | `ipc/src/**`、`ipc/include/**` |
+| `tsf-tip-development` | `tsf-tip/src/**`、`tsf-tip/include/**` |
+| `azookey-core-conversion` | `core/src/**`、`core/include/**`、`dictbuild/*` |
+| `azookey-observability-diagnostics` | `diagnostics/*`、`diagnostics/etw/**` |
+| `azookey-settings-app-ui` | `settings-app/*`、`settings-app/Strings/**` |
+| `azookey-ci-workflows` | `.github/workflows/**`、`CMakePresets.json`、`.pre-commit-config.yaml`、`justfile` |
+| `azookey-linear-issue-ops` | — |
+| `azookey-quality-harness` | `bench/*`、`compat-test/runner/**`、`compat-test/cases/**`、`compat-test/targets/**` |
+
 ## 区分の根拠と未確定事項
 
 `azookey-*` と `tsf-*` のうち `6c286e9` で取り込まれたものは、commit message 上は agent-ops からの

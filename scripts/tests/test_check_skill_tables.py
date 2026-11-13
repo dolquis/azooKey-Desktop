@@ -129,6 +129,15 @@ class ParserTest(unittest.TestCase):
     def test_checkers_ignore_tests_directory(self) -> None:
         self.assertEqual({"check_alpha.py", "docs-lint.py"}, MODULE.workflow_checkers(DOCS_YML))
 
+    def test_only_the_plain_python_form_is_recognised(self) -> None:
+        text = (
+            "run: python scripts/check_a.py\n"
+            "run: python3 -u scripts/check_b.py\n"
+            "run: python3 -m scripts.check_c\n"
+            "run: uv run --python 3.12 python3 scripts/check_d.py\n"
+        )
+        self.assertEqual({"check_a.py", "check_d.py"}, MODULE.workflow_checkers(text))
+
     def test_commented_out_checker_is_not_run(self) -> None:
         text = DOCS_YML + "      # - run: python3 scripts/check_old.py\n        # python3 scripts/check_older.py\n"
         self.assertEqual({"check_alpha.py", "docs-lint.py"}, MODULE.workflow_checkers(text))

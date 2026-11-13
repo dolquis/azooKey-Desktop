@@ -33,6 +33,11 @@ quality-gate-runner gate table
       (`GATE_EXCLUDED_CHECKERS` lists intentional omissions).
     - A checker a definition names that `docs.yml` does not run fails, unless
       `GATE_NOT_RUN_IN_DOCS_WORKFLOW` lists it with the reason.
+  A checker is recognised only in the form `python3 scripts/<name>.py` (or
+  `python scripts/<name>.py`). `uv run ... python scripts/x.py`, `python3 -u`
+  and `python3 -m` are not recognised, so a workflow step or a gate table that
+  uses them is invisible to this check; write the plain form in both places.
+  Whole-line `#` comments are ignored.
 
 Deliberately not checked: the test table of `tsf-tip-development`
 (`references/itf-interfaces.md`) against `docs/test-inventory.md`.

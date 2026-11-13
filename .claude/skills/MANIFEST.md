@@ -44,7 +44,8 @@
 
 - 担当パスは back-quote で囲んだ glob を「、」で区切って書く。`*` は `/` を越えず、`**` は末尾の 1 segment だけに使え、
   残りの全階層に一致する。`—` は担当パスを持たない（docs や運用の Skill で、ほぼ全 PR が触れるため）。
-- テスト（`tests/`）は含めない。テストの追加は Skill の入口表を変えることが少なく、含めると記入が形骸化する。
+- テスト（`tests/`）と、モジュールの `CMakeLists.txt`（例 `tsf-tip/CMakeLists.txt`）は含めない。テストや target 登録の追加は
+  Skill の入口表を変えることが少なく、含めると記入が形骸化する。
 - 区分 `repo` の Skill は全員が 1 行を持つ。各 glob は 1 件以上のパスに一致する。`scripts/check_skill_references.py` が検査する。
 - 担当パスを足す・直す PR は、同じ PR で本表を更新する。
 

@@ -45,7 +45,8 @@ macOS 版 `legacy/` は対象外。
 
 ## 3. 動作モード
 
-設定 `typoCorrectionMode`（3 値）で切り替える。
+設定 `typoCorrectionMode`（3 値）で切り替える。M55 の `typoCorrection.mode`（§12.14）があればそちらを使い、
+v2 の 4 モードと本表の 3 値の対応は §12.14 の「engine への反映」が定める。
 
 | 値 | 学習 | 適用 |
 |---|---|---|
@@ -53,7 +54,7 @@ macOS 版 `legacy/` は対象外。
 | `suggest`（既定） | する | 補正後読みの変換結果を `typo-correction` マーク付きで候補リスト先頭付近に注入。元の読みの候補も残す。 |
 | `auto_replace` | する | 補正後読みのみで変換し、preedit のかなも補正後へ置換。 |
 
-- 実効値の経路は `settings.json` の `typoCorrectionMode` とする。host の
+- 実効値の経路は `settings.json` の `typoCorrection.mode` と `typoCorrectionMode` とする（§8・§12.14）。host の
   `SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が
   `EngineConfig::typo_correction_mode` へ反映する。TIP は設定を参照しない。
 - `off` の最終ゲートは host 側。TIP は検出した観測を緩く送り、蓄積・適用の

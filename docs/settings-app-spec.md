@@ -338,7 +338,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 候補 | M60 | 即時 | `inline-english-candidate-spec.md` |
 | `mixedEnglishAutoConversion` | bool | `false` | 候補 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
 | `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 候補 | M62 | 即時 | `candidate-rewriter-spec.md` |
-| `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
+| `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書（`typoCorrectionMode` は `typoCorrection` を含む実効値を示す） | M35 | 即時 | `typo-correction-learning-spec.md`（§8・§12.14） |
 | `typoCorrection` | object | 下位キーの既定に従う | —（保存時保持。`typoCorrection.mode` は辞書ペインで `typoCorrectionMode` を変えたときに一緒に書く） | M55 | 即時 | `typo-correction-learning-spec.md` §12.14 |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-nll-spec.md` §B9 |

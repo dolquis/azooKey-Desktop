@@ -112,7 +112,7 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 
 | 型 | 正典の節 |
 |---|---|
-| `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/host-availability-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`） |
+| `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/host-availability-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`）、`docs/typo-correction-learning-spec.md` §12.13（`raw_keys`） |
 | `LoadModel` | 本書「型ごとの処理規則」、`docs/copilot-pc-backend-spec.md` §4.4（backend の指定と降格）、`docs/host-availability-spec.md` §8.5.3（SafeMode での拒否） |
 | `QueryCandidates` | `docs/app-profile-spec.md` §3.1・§7（`app` と `tag`）、`docs/inline-english-candidate-spec.md` §6.2（`raw_romaji` / `english_candidates`）、`docs/mixed-english-auto-conversion-spec.md` §9.1（`mixed_english`）、`docs/dynamic-punctuation-spec.md` §7.1・§7.2（`auto_punctuation` / `punctuation_style` / `segments`）、`docs/candidate-rewriter-spec.md` §8.4（`emoji_trigger`）・§9.5（`max_candidates` との適用順）、`docs/typo-correction-learning-spec.md` §7（`corrected_reading`）・§12.13（`raw_keys` / `typo_correction_mode`）、`docs/legacy-parity-spec.md` §5.4（`alt_readings`）、`docs/privacy-and-secure-input-spec.md` §5.1.1（`secure` / `learning_allowed`） |
 | `QueryLiveConversion` | `docs/legacy-parity-spec.md` §2.2 |

@@ -78,6 +78,16 @@
   "emojiDataPath": "",
   "typoCorrectionMode": "suggest",
   "typoMinCount": 3,
+  "typoCorrection": {
+    "enabled": true,
+    "mode": "suggest",
+    "learnPersonalPatterns": true,
+    "keyboardLayout": "auto",
+    "maxReadingHypotheses": 3,
+    "minConfidenceForRanking": 0.70,
+    "minConfidenceForTopCandidate": 0.90,
+    "disableInSecretApps": true
+  },
   "dictionary": {
     "sudachiEnabled": true,
     "neologdEnabled": false,

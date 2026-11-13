@@ -943,6 +943,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   // M48: app_profile = honors QueryCandidates.app; candidate_tag = fills
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
   // mixed_english = M63 (mixed-english-auto-conversion-spec section 9.3).
+  // raw_keys = M55: the TIP sends QueryCandidates.raw_keys only to a Host that
+  // advertises it (typo-correction-learning-spec section 12.13).
   res.capabilities = {"oob_cancel",
                       "commit_segments",
                       "query_live_conversion",
@@ -957,7 +959,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "learning_reset",
                       "persona",
                       "detect_anomalies",
-                      "mixed_english"};
+                      "mixed_english",
+                      "raw_keys"};
   // DEV-1821 (model-management-spec section 4.4).
   if (config_.catalog_fetch) {
     res.capabilities.push_back("fetch_catalog_model");
@@ -1204,6 +1207,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // DEV-1734: the candidate window also weighs the other reading of an
     // ambiguous "nn" + vowel. Per-key queries, a secure request (its TIP drops
     // corrected_reading) and an M63 split are converted as typed.
+    // M55 (typo-correction-learning-spec section 12.13): raw_keys and
+    // typo_correction_mode wait for the M55 correction engine. The conversion
+    // uses the mode the Host settings resolve to, so a request cannot raise it.
     auto queried =
         !parsed->live && !parsed->secure && !parsed->alt_readings.empty() && !IsInlineSplit(split)
             ? engine_->QueryAmbiguousCandidatesEx(parsed->reading, parsed->alt_readings,
@@ -1516,6 +1522,9 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   if (!LearningAllowed(parsed->secure, parsed->learning_allowed,
                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed)))
     return;
+  // M55 typoCorrection.learnPersonalPatterns stops the accumulation only; the
+  // pairs already learned still apply (typo-correction-learning-spec 12.12.2).
+  if (privacy && !privacy->typo_learning) return;
   // The engine applies the accept filters and the "off" gate; a rejected pair
   // is simply not recorded, and there is no reply to carry that outcome.
   engine_->ObserveTypo(parsed->wrong_reading, parsed->correct_reading, NowSec());

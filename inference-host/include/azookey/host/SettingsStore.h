@@ -56,6 +56,23 @@ struct RuntimeAutoWordSettings {
   int32_t trending_interval_hours{24};
 };
 
+// M55 typoCorrection.*; docs/typo-correction-learning-spec.md section 12.14.
+// `mode` is the v2 mode after the section 12.14 migration from the v1 root
+// typoCorrectionMode. The engine reads `enabled` and `mode` through
+// ApplyRuntimeSettingsToEngineConfig and the ObserveTypo gate reads
+// `learn_personal_patterns`; the rest waits for the M55 correction engine.
+struct RuntimeTypoCorrectionSettings {
+  bool enabled{true};
+  std::string mode{"suggest"};
+  bool learn_personal_patterns{true};
+  std::string keyboard_layout{"auto"};
+  int32_t max_reading_hypotheses{3};
+  double min_confidence_for_ranking{0.70};
+  double min_confidence_for_top_candidate{0.90};
+  // Fixed: a secure input never gets typo correction (section 12.11).
+  bool disable_in_secret_apps{true};
+};
+
 // M47 safeMode.*; docs/dev-infrastructure-spec.md section 8.5.3. Only the
 // Host writes it (on a crash loop) and only the user clears it.
 struct RuntimeSafeModeSettings {
@@ -138,8 +155,9 @@ struct RuntimeSettings {
   int32_t emoji_max_candidates{12};
   int32_t emoji_trigger_min_query_length{1};
   std::string emoji_data_path;
-  // M35 typoCorrectionMode / typoMinCount.
-  std::string typo_correction_mode{"suggest"};
+  // M55 typoCorrection.*, which absorbs the M35 root typoCorrectionMode.
+  RuntimeTypoCorrectionSettings typo_correction;
+  // M35 typoMinCount.
   int32_t typo_min_count{3};
   RuntimeAutoWordSettings auto_word;
   RuntimeAutoUpdateSettings auto_update;
@@ -169,6 +187,9 @@ class SettingsStore {
     std::unique_lock<std::mutex> lock;
     core::PrivacyPolicy policy;
     bool privacy_mode_secure{true};  // As RuntimeSettings::privacy_mode_secure.
+    // typoCorrection.learnPersonalPatterns (typo-correction-learning-spec
+    // section 12.14): false stops ObserveTypo from accumulating pairs.
+    bool typo_learning{false};
   };
   // Hold through the learning operation. Reload publishes under this same lock,
   // independently of model loading and the caller's config serialization lock.
@@ -210,6 +231,7 @@ class SettingsStore {
   mutable std::mutex privacy_mutex_;
   core::PrivacyPolicy privacy_policy_{false, false, true};
   bool privacy_mode_secure_{false};
+  bool typo_learning_{true};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
   std::mutex peeked_mutex_;

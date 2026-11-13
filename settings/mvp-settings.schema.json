@@ -419,11 +419,42 @@
       "type": "string",
       "enum": ["off", "suggest", "auto_replace"],
       "default": "suggest",
-      "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。docs/typo-correction-learning-spec.md section 8"
+      "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。typoCorrection.mode があればそちらを使う（auto_replace は aggressive と読む）。docs/typo-correction-learning-spec.md section 8 / section 12.14"
     },
     "typoMinCount": {
       "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
       "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
+    },
+    "typoCorrection": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "M55: 打ち間違え補正（v2）。docs/typo-correction-learning-spec.md section 12.14",
+      "properties": {
+        "enabled": {
+          "type": "boolean", "default": true,
+          "description": "false は mode によらず補正も学習もしない"
+        },
+        "mode": {
+          "type": "string", "enum": ["off", "suggest", "rank", "aggressive"], "default": "suggest",
+          "description": "あれば root の typoCorrectionMode より優先する"
+        },
+        "learnPersonalPatterns": {
+          "type": "boolean", "default": true,
+          "description": "false は打ち間違えの学習だけを止め、学習済みの補正は使い続ける"
+        },
+        "keyboardLayout": { "type": "string", "enum": ["auto"], "default": "auto" },
+        "maxReadingHypotheses": { "type": "integer", "minimum": 1, "maximum": 8, "default": 3 },
+        "minConfidenceForRanking": {
+          "type": "number", "minimum": 0, "maximum": 1, "default": 0.70,
+          "description": "minConfidenceForTopCandidate より小さくする。大小が逆なら両方を既定値に戻す"
+        },
+        "minConfidenceForTopCandidate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.90 },
+        "disableInSecretApps": {
+          "type": "boolean", "enum": [true], "default": true,
+          "description": "secure の入力では補正も学習もしない。false にはできない"
+        }
+      }
     },
     "dictionary": {
       "type": "object",

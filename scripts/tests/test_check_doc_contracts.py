@@ -317,6 +317,10 @@ class CheckDocContractsTest(unittest.TestCase):
         )
         self.assertFalse(any("windows-build" in problem for problem in problems))
 
+    def test_settings_key_table_is_read_from_settings_app_spec(self) -> None:
+        self.assertEqual(MODULE.SETTINGS_INDEX_DOC, "docs/settings-app-spec.md")
+        self.assertTrue((REPO_ROOT / MODULE.SETTINGS_INDEX_DOC).is_file())
+
     def test_real_repository_is_consistent(self) -> None:
         self.assertEqual(MODULE.check(REPO_ROOT), [])
 

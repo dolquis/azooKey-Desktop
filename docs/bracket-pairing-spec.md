@@ -600,7 +600,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
 取得する経路にはならない**（Host 切断時は読めない）。したがって M61 設定は次のように供給する:
 
 - **TIP がローカルに設定ファイルを直接読む。** 正典の **`%LOCALAPPDATA%\azooKey\config\settings.json`**
-  （`docs/windows-tsf-host-architecture.md` §設定 / `docs/sideload-packaging-spec.md` §3.4 が定める
+  （`docs/windows-tsf-host-architecture.md` §設定 / `docs/settings-app-spec.md` §3.4 が定める
   正典パス。`config\` サブディレクトリ配下。schema = `settings/mvp-settings.schema.json`）を
   **TIP プロセス内で読み取る**（IPC を介さない）。設定 UI / host が書き込むのと**同一ファイル**を
   TIP が読むため、Host-offline でも `bracketPairing` が確実に反映される。読み取りは TIP 有効化時
@@ -632,7 +632,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
   理由に設定を既定値へ戻さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
   TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定アプリと、writer 責務の節に挙げた Host・TIP の経路で、正典は `docs/learning-data-management-spec.md` §14）。
-- 設定は設定アプリの「候補」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+- 設定は設定アプリの「候補」ペインで編集する（`docs/settings-app-spec.md` §3.2）。
   host CLI は経由しない。本機能は TIP ローカルで完結する。
 
 > TIP 側ローカル設定読み取りは本機能だけでなく、TIP が単独で挙動を決める他機能（将来）にも

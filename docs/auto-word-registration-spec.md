@@ -911,7 +911,7 @@ pack のファイル名、マニフェスト、生成ツール、検証順序は
 - 同梱辞書の全ライセンス（Apache-2.0 LICENSE + NOTICE、UniDic BSD-3 著作権表示、
   GeoNames CC-BY-4.0 クレジット、郵便データ出典）を 1 つの
   `ThirdPartyNotices.txt` に集約して配布物に同梱し、設定アプリのライセンス画面
-  （`docs/sideload-packaging-spec.md` §3.2 のバージョン/ライセンス導線）から参照
+  （`docs/settings-app-spec.md` §3.2 のバージョン/ライセンス導線）から参照
   可能にする。
 - **bundled の SudachiDict(core) は NEologd 由来データを内包する**（LEGAL が
   `core_lex.csv` / `notcore_lex.csv` の由来として明記）。Apache-2.0 の

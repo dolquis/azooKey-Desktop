@@ -125,7 +125,7 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `AddUserWord` | 本書「型ごとの処理規則」、`docs/learning-data-management-spec.md` §4.5（ロックと保存の順序） |
 | `UpdateUserWord` | ハンドラを持たない。応答は `docs/dev-infrastructure-spec.md` §6.3 |
 | `RemoveUserWord` | `AddUserWord` と同じ |
-| `UpdateConfig` | 本書「設定（SettingsStore）」、`docs/sideload-packaging-spec.md` §3.3 |
+| `UpdateConfig` | 本書「設定（SettingsStore）」、`docs/settings-app-spec.md` §3.3 |
 | `Ping` | `docs/dev-infrastructure-spec.md` §8.5.2（timeout） |
 | `Health` | `docs/dev-infrastructure-spec.md` §8.3・§8.5.1 |
 | `QueryDiagnostics` | `docs/dev-infrastructure-spec.md` §12.6（payload）・§8.5.1（TIP の利用と `fallback_state` の導出） |
@@ -316,7 +316,7 @@ Phase 5 以降が足すモジュールのファイル構成と挙動は、機能
 | TSF 深部（再変換、UI-less、設定アプリ起動） | `docs/tsf-deep-integration-spec.md` |
 | Copilot+ PC / NPU（backend 選択、mmap ロード、電源監視） | `docs/copilot-pc-backend-spec.md` |
 | UI モダン化（テーマ色、DPI、描画エンジン） | `docs/native-ui-spec.md` |
-| サイドロード配信（設定アプリ、MSIX / MSI、更新確認、ETW、crash 収集、DPAPI） | `docs/sideload-packaging-spec.md` |
+| サイドロード配信（設定アプリ、MSIX / MSI、更新確認、ETW、crash 収集、DPAPI） | `docs/sideload-packaging-spec.md`、設定アプリは `docs/settings-app-spec.md` |
 
 「予定」のファイルが存在するかは、各 spec と `plans/windows-port-roadmap.md` の該当マイルストーンが定める。
 
@@ -333,5 +333,5 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 設定アプリは **別プロセス**（`azookey_settings.exe`）で、IPC 経由で Host 設定を変更する。
 最小の設定永続化・反映（settings.json 書き込み + `UpdateConfig` 再読込）は **M11**（v1.0）で
 導入し、フル設定 UI は **M30**（post-v1.0）で本格化する（roadmap M11 / M30、
-`docs/sideload-packaging-spec.md` §3）。TIP プロセスからは `ITfFnConfigure::Show` で
+`docs/settings-app-spec.md` §3）。TIP プロセスからは `ITfFnConfigure::Show` で
 起動するのみ。

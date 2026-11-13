@@ -776,7 +776,7 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 
 **設定アプリでの提示と同意**（`settings-app/NeologdAttribution.*`、`settings-app/MainWindow.xaml.cpp`）。
 §14.9 / §14.10 の「DL 画面」は、設定アプリの「辞書」ペインにある `neologdEnabled` の切替である
-（`docs/sideload-packaging-spec.md` §3.2）。
+（`docs/settings-app-spec.md` §3.2）。
 
 - **文面の出所**: 設定アプリも pin したマニフェストをビルド時にバイト列として埋め込み
   （`settings-app/EmbedNeologdPin.cmake`）、`attribution.notices` を逐語で表示する。UI 側に
@@ -789,7 +789,7 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 - **未公開のとき**: マニフェストの `url` が空なら、切替は操作できるまま、公開された pack が
   無いため取得しない旨を表示する。Host はこの状態を missing-pack として扱う。
 - **反映の時期**: 真にして保存したときは、Host の再起動後（サインアウトして再度サインイン）に
-  取得する旨を表示する（`docs/sideload-packaging-spec.md` §3.6「反映方法の確定」）。未公開の
+  取得する旨を表示する（`docs/settings-app-spec.md` §3.6「反映方法の確定」）。未公開の
   ときは再起動しても取得しないので、取得しない旨だけを表示する。偽に戻して保存したら、この表示を閉じる。
 - **既知の制限**: 同意を記録する設定キーは持たず、opt-in は `neologdEnabled` だけである。
   `settings.json` を直接編集して真にすると、帰属の提示を経ずに Host が取得する。

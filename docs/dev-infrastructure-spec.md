@@ -2563,7 +2563,7 @@ Named Pipe の payload は JSON のまま維持し、§6 の境界コーパス�
 ### 11.7 設定アプリの C#/.NET 9 化 — 不採用
 
 設定アプリは WinUI 3（C++/WinRT）を維持する。UI フレームワークの選定と再評価の条件は
-`docs/sideload-packaging-spec.md` §3.0 が正典である。
+`docs/settings-app-spec.md` §3.0 が正典である。
 
 ### 11.8 PCH — 不採用 / unity build — 見送り
 
@@ -2701,7 +2701,7 @@ v2 が可読なら併存を cleanup 待ちの `warning` とし、v2 が読めな
 残存だけでは cleanup 待ちと判定しない。
 
 D-012 が `warning` とする旧形式は、本節に登録したものに限る。`settings.json` は版識別子を持たず、
-`settings/mvp-settings.schema.json` は加算的に拡張する（`docs/sideload-packaging-spec.md` §3.6
+`settings/mvp-settings.schema.json` は加算的に拡張する（`docs/settings-app-spec.md` §3.6
 「拡張方針」）。破壊的変更は下記の登録を伴うため、登録済みの旧形式が無い限り、過去の schema に
 適合した `settings.json` は現行 schema にも適合し、`ok` になる。ただし下記のベンチマーク履歴の例外を除く。
 後方互換として受理する値形式、すなわち平文の `openAiApiKey`（D-014 が扱う）、root tier の

@@ -2,7 +2,7 @@
 kind: reference
 ---
 
-<!-- lint:allow-file line-ref,status -->
+<!-- lint:allow-file line-ref,section,status -->
 <!-- 本ファイルは作成日時点の監査スナップショットであり、更新しない前提の記録である。 -->
 
 # macOS 版との入力体験パリティ監査レポート

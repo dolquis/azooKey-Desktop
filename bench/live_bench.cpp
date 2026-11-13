@@ -469,7 +469,7 @@ int main(int argc, char** argv) {
       azookey::bench::CompareBaseline(baseline_path, result.bench, result.config, result.latency);
   if (ipc_benchmark) {
     try {
-      result.ipc_phases = azookey::bench::RunIpcBenchmark(engine);
+      result.ipc_phases = azookey::bench::RunIpcBenchmark();
     } catch (const std::exception& ex) {
       std::cerr << ex.what() << std::endl;
       return 2;

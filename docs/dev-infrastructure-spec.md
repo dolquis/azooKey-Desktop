@@ -879,8 +879,11 @@ framing は length-prefix の encode と decode の合計、pipe 往復は Windo
 測れる。一方で `sendMs` と `receiveMs` は転送だけでなく待機と起床を含む。
 `hostComputeMs` は `Dispatcher::Dispatch` の呼び出し全体で、推論と rerank に加え、要求の parse、
 要求登録、応答の JSON 生成も含むため、`latencyMs`（変換器の呼び出しだけ）より大きい。
-フェーズ別の内訳は `azookey_bench --trace` の JSONL を `azookey_trace_viewer` で集計する。
-`--ipc` と `--trace` を併用すると、Host 計測の問い合わせの phase 行も同じ JSONL に入る。
+Host 側の `InferenceEngine` は `--ipc` のために別に作り、変換器は `SimpleConverter`、
+model path は空、trace の出力先は無しとする。`--model` や `--trace` を併用しても
+`hostComputeMs` は実モデルの推論を含まず、`--trace` の JSONL にも入らない。
+推論のフェーズ別の内訳は、`azookey_bench --trace` の通常の計測（`--ipc` の外）を
+`azookey_trace_viewer` で集計する。
 これらも非 Windows では出力しない（`pipeRoundTripMs=null` と同じ理由）。
 
 UI 反映（`ui_apply`）は `TextService` の中で計時され、実機の `AZOOKEY_LOG` と

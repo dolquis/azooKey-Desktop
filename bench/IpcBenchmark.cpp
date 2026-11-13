@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -11,7 +12,9 @@
 #include <windows.h>
 #endif
 
+#include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
+#include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -51,7 +54,12 @@ Clock::time_point FromRep(Clock::rep rep) { return Clock::time_point(Clock::dura
 // Real QueryCandidates round trips: send is Send() start -> handler entry (client write plus
 // the server's read and wake-up), host_compute is the Dispatcher call, receive is handler exit
 // -> response fully read (server write plus client read). The three sum to the round trip.
-HostBreakdownSamples MeasureHostBreakdown(host::InferenceEngine& engine) {
+HostBreakdownSamples MeasureHostBreakdown() {
+  // Its own engine: the one the caller converts with may hold a real model (--model) or write
+  // trace phases (--trace), and neither belongs in the Host handler time. An empty model path
+  // keeps the SimpleConverter path, as the default latency run does.
+  host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
+  (void)engine.LoadModel();
   host::RequestScheduler scheduler;
   host::Dispatcher dispatcher(&engine, &scheduler, nullptr);
   HandlerStamps stamps;
@@ -108,7 +116,7 @@ HostBreakdownSamples MeasureHostBreakdown(host::InferenceEngine& engine) {
 #endif
 }  // namespace
 
-IpcPhaseBreakdown RunIpcBenchmark(host::InferenceEngine& engine) {
+IpcPhaseBreakdown RunIpcBenchmark() {
   ipc::QueryCandidatesResponse payload;
   for (int i = 0; i < 10; ++i) {
     payload.candidates.push_back(
@@ -175,12 +183,10 @@ IpcPhaseBreakdown RunIpcBenchmark(host::InferenceEngine& engine) {
   result.deserialize = Summarize(std::move(deserialize));
   if (!pipe.empty()) result.pipe_round_trip = Summarize(std::move(pipe));
 #ifdef _WIN32
-  auto host_samples = MeasureHostBreakdown(engine);
+  auto host_samples = MeasureHostBreakdown();
   result.send = Summarize(std::move(host_samples.send));
   result.host_compute = Summarize(std::move(host_samples.host_compute));
   result.receive = Summarize(std::move(host_samples.receive));
-#else
-  (void)engine;
 #endif
   return result;
 }

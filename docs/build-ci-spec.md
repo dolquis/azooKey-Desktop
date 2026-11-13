@@ -154,7 +154,7 @@ Visual Studio 2022 + MSVC dev shell / CMake / Ninja / Windows SDK / LLVM
 compile_commands は `.clangd` が参照する `build/clangd/compile_commands.json` を検査し、
 別のビルドディレクトリにある DB を代用しない。
 
-これは**開発環境の診断であり、§12 の `azookey_diag.exe`（エンドユーザー向けの
+これは**開発環境の診断であり、`diagnostics-compat-spec.md` §12 の `azookey_diag.exe`（エンドユーザー向けの
 IME ランタイム診断・修復ウィザード）とは別物**である。両者を混同しないこと。
 本項はオンボーディング短縮・エージェント初動ミス削減を目的とする補助ツールで、
 M37 受け入れ条件には含めず、導入は Linear で追跡する（2026-07 開発基盤ツール
@@ -203,8 +203,8 @@ clang-cl での内訳は傾向を示すものであり、MSVC での短縮幅の
 | GoogleTest | テスト | `find_package` →（オプトイン時）`FetchContent` | 採用（本トラックで変更しない） |
 | llama.cpp | 推論 | `FetchContent` / submodule、`AZOOKEY_BACKEND` で制御 | 採用（M8 の範囲。本トラック対象外） |
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | 採用（M43 の範囲。§9） |
-| nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6・§11 参照（即時導入しない） |
-| spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7・§11 参照（自前ロガーを優先評価） |
+| nlohmann-json | header-only | 任意・保留 | `ipc-persistence-hardening-spec.md` §6、`build-ci-spec.md` §11 参照（即時導入しない） |
+| spdlog | 要ビルド | 任意・保留 | `observability-spec.md` §7、`build-ci-spec.md` §11 参照（自前ロガーを優先評価） |
 | miniz | 要ビルド（C ソース 2 ファイル） | 導入しない | M49 の ZIP backup は STORE 方式だけの自前実装で足りるため採用しない（`docs/learning-data-management-spec.md` §7） |
 
 ### 3.3 vcpkg.json の扱い
@@ -895,7 +895,7 @@ header-only 優先・`FetchContent`/submodule オプトインで導入し（§3�
 #### 11.2.1 外部ライブラリ移行の方針
 
 **v1.0 の範囲では自前パーサを維持し、外部ライブラリへは移行しない。** 移行の動機だった
-自前実装に起因するバグクラスは、§6.2 のパーサ強化で閉じている。一方で移行のコストは残る。
+自前実装に起因するバグクラスは、`ipc-persistence-hardening-spec.md` §6.2 のパーサ強化で閉じている。一方で移行のコストは残る。
 自前パーサは `ipc-persistence-hardening-spec.md` §6.2 の上限値と wire contract を spec と `static_assert` で結び付けており、
 置換すればこの対応関係を作り直すことになる。TIP は任意アプリへ in-proc ロードされる DLL であり、
 依存追加はコンパイル時間とバイナリサイズに直接効く。no-egress 方針のもとでは FetchContent の
@@ -941,7 +941,7 @@ SARIF・job summary・artifact に所見を残す。未署名に由来する `BA
 
 ### 11.6 IPC payload の Protobuf 即時移行 — 不採用
 
-Named Pipe の payload は JSON のまま維持し、§6 の境界コーパスと有界スモークで自前パーサを
+Named Pipe の payload は JSON のまま維持し、`ipc-persistence-hardening-spec.md` §6 の境界コーパスと有界スモークで自前パーサを
 堅牢化する（§11.2 と整合）。同一マシン内・単一実装・少数メッセージの IPC では、schema 進化の
 恩恵よりも、コード生成ツールチェーンの追加がオフラインビルド原則（`dev-infrastructure-spec.md` §1）へ与える影響と移行コストが
 上回る。Protobuf 化は将来判断とし、設定アプリの実装と fuzz の整備の後に再評価する。

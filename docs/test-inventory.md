@@ -273,4 +273,4 @@ CTest に載らない検査と、CTest を走らせる CI ジョブが CTest 以
 | `.github/workflows/compat.yml` の `compat` | GitHub Actions（ラベル付与時の PR / 手動 dispatch） | Notepad / VS Code / Edge を対象にアプリ互換ランナーを実行し、レポートを artifact に残す。required check には含めない（`docs/build-ci-spec.md` §4.9） |
 | `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
 | `scripts/tests/test_benchmark_commit_freshness.py` | Python unittest（手動。CMake / Ninja / Git が必要） | commit ヘッダーと consumer の依存追跡。ソース・ヘッダー・HEAD・override・branch・worktree・packed ref の変更後の再ビルドと、ビルド直後の dry-run を検証 |
-| `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/build-ci-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
+| `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/build-ci-spec.md` §2.5。`docs/diagnostics-compat-spec.md` §12 の `azookey_diag.exe` とは別物） |

@@ -108,7 +108,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功、または `settings.json` が無い（既定値で動作） | 本節の登録済み旧形式に一致し、登録された移行経路で移行できる | 読み込み不可、JSON 不正、または validation 失敗（旧ベンチマーク履歴の例外を含む） | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
-| D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が `build-ci-spec.md` §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可）、または settings の読み込み・schema 検証の失敗や DPAPI を使えないことで判定できない（`details.state` が `unavailable`。settings の不備そのものは D-012 が担う） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が `docs/app-profile-spec.md` §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可）、または settings の読み込み・schema 検証の失敗や DPAPI を使えないことで判定できない（`details.state` が `unavailable`。settings の不備そのものは D-012 が担う） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
 
 D-002 の `warning` は任意の表示名だけが欠けた状態であり、`--repair` は登録を再実行しない。
@@ -174,10 +174,10 @@ D-015 の `details.reason` は `context_unverified`、`no_foreground_window`、
 正常系として扱い、`warning` を出さない。具体的には、クリーンインストール
 直後で学習・辞書が空（`UserDictionary::Load()` は欠損ファイルを空の成功
 ロードとして扱う）の D-010 / D-011 と、OpenAI 鍵を要求する**実効バックエンド**が
-無い構成（global および全 app-profile の `build-ci-spec.md` §4.2 実効 `aiBackend` が
+無い構成（global および全 app-profile の `docs/app-profile-spec.md` §4.2 実効 `aiBackend` が
 `none` / `local-zenzai`）で復号対象の機密が無い D-014 は
 `ok` とする。ただし global もしくはいずれかの app-profile の実効バックエンドが
-`openai`（`build-ci-spec.md` §4.2 解決後）で `openAiApiKey` が空の場合は、
+`openai`（`docs/app-profile-spec.md` §4.2 解決後）で `openAiApiKey` が空の場合は、
 当該 AI backend が認証できないため D-014 を `warning` とする
 （機能を選択したのに資格情報が欠落している状態）。`warning` / `error` は
 migration 要・読み込み不可・破損・**選択中機能の資格情報欠落**、または
@@ -189,7 +189,7 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 集合を指す。診断は前面アプリに依存しない**静的構成チェック**のため、その集合の
 **いずれか 1 つでも** `openai` に解決されれば「OpenAI 鍵を要求する」とみなす。逆に
 プロファイルが `aiBackend=openai` を宣言しても、privacy（`secure`、または `private` /
-`offline` / `custom` の外部 AI 無効）で `build-ci-spec.md` §4.2 step 2–3 により `local-zenzai` / `none` へ
+`offline` / `custom` の外部 AI 無効）で `docs/app-profile-spec.md` §4.2 step 2–3 により `local-zenzai` / `none` へ
 降格する実効値は鍵を要求しない（D-014 の判定対象に含めない）。`profilesByApp` が未導入
 （M48 前）の構成では実効集合は global のみとなり、従来の D-014（global `aiBackend` のみで
 判定）と等価で後方互換である。
@@ -373,7 +373,7 @@ Response:
       "prompt_format": "zenz-v3" | "kanakanji-edge-v1"   (optional, ロード中モデルの値),
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
-      "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),
+      "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; `docs/copilot-pc-backend-spec.md` §4.6),
       "learning_entries": int, "user_dict_entries": int,
       "fallback_state": "healthy" | "degraded_simple" |
                         "degraded_model" | "safe_mode",

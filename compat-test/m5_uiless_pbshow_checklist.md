@@ -62,6 +62,6 @@ M5 ではスタート検索で TIP が activate され入力できること（�
 ## 5. 参照
 
 - `docs/tsf-deep-integration-spec.md` §2.8（候補 UI 統合方針）、§2.9（カテゴリ登録）、§2.10（`ActivateEx`）、§2.11
-- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、§7.2（構造化ログ）
+- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、`docs/observability-spec.md` §7.2（構造化ログ）
 - `docs/debugging.md`「候補 UI の `pbShow` を収集する」
 - `plans/windows-port-roadmap.md` M5 / M21

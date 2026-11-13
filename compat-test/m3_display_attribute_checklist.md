@@ -190,7 +190,7 @@ D-08 / D-09 は Notepad / Edge / VS Code のみ必須で、他アプリでは `N
 ## 8. 参照
 
 - `docs/tsf-deep-integration-spec.md` §5.6（M3 属性と M23 複合属性の対応）、§5.7
-- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、§13.3.2（既知の差異）、§7.6（redaction）
+- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、§13.3.2（既知の差異）、`docs/observability-spec.md` §7.6（redaction）
 - `compat-test/m5_uiless_pbshow_checklist.md`（UI-less / `pbShow` の実機チェック。目的が異なる別チェック）
 - `plans/windows-port-roadmap.md` M3 / M23 / M50
 - [Using Display Attributes](https://learn.microsoft.com/windows/win32/tsf/using-display-attributes) /

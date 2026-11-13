@@ -91,7 +91,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 |
 |---|---|
-| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `diagnostics-compat-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook |
+| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `diagnostics-compat-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook（§4.6.2 は `build-ci-spec.md`） |
 | [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) | trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック |
 | [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証を 1 回の VM セッションでまとめるときのレーン設計、ゲート種別ごとの実行条件、検証メモの記録様式。課題の割当と課題別の確認項目は Linear が持つ |
 | [`handoff/dev-machine-verification.md`](handoff/dev-machine-verification.md) | 実機検証を VM と開発機のどちらで行うかの判定基準（Linear の `env:vm` / `env:dev-machine`）と、開発機での前提・手順・後始末 |

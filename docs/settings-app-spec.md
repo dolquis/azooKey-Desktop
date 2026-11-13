@@ -68,7 +68,7 @@ Microsoft Learn の事実は
 - フレームワーク: WinUI 3（採用 component packages と版は
   `settings-app/azookey_settings.vcxproj` / `THIRD_PARTY_LICENSES` を正典とする。更新時は
   self-contained 出力と MSI の回収結果を再検証する）
-- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、`msix-packaging-spec` §1.3 / §4）。
+- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、`msix-packaging-spec` §1.3 / `sideload-packaging-spec` §4）。
   MS Store 用 MSIX（`msix-packaging-spec` §1）では packaged EXE として同梱（配布方針は `sideload-packaging-spec` §0）
 
 ### 3.2 ナビゲーション

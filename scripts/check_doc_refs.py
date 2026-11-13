@@ -97,6 +97,10 @@ CODE_NAMES = ("CMakeLists.txt",)
 # comments this repository owns.
 SKIPPED_PREFIXES = (".claude/worktrees/", "build/", "out/", "third_party/", "legacy/")
 
+# `git check-ignore` に渡す仮のファイル名。`.gitignore` の規則に一致しない名前にする
+# （`__*` や `*probe*` のような広い規則を足すと、全パスが無視扱いになる）。
+IGNORE_PROBE_NAME = "__doc_refs_probe__"
+
 ALLOWED_KINDS = {
     "planned": ("milestone", "spec"),
     "origin": (),
@@ -193,17 +197,19 @@ class Repository:
 
 
 def git_lines(root: Path, *arguments: str, stdin: str | None = None) -> list[str]:
+    # stdin と stdout は bytes で受け渡す。text=True にすると Windows では stdin の
+    # "\n" が "\r\n" に変わり、git が CR 付きのパスを受け取って判定が CI と食い違う。
     result = subprocess.run(
         ["git", "-C", str(root), *arguments],
-        input=stdin,
+        input=None if stdin is None else stdin.encode("utf-8"),
         capture_output=True,
-        text=True,
-        encoding="utf-8",
         check=False,
     )
     if result.returncode not in (0, 1):
-        raise RuntimeError(f"git {' '.join(arguments)} failed: {result.stderr.strip()}")
-    return [line for line in result.stdout.split("\0" if "-z" in arguments else "\n") if line]
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {message}")
+    separator = "\0" if "-z" in arguments else "\n"
+    return [line for line in result.stdout.decode("utf-8").split(separator) if line]
 
 
 def load_repository(root: Path) -> Repository:
@@ -569,9 +575,15 @@ def ignored_paths(root: Path, references: set[str]) -> set[str]:
     paths = {reference.partition("::")[0] for reference in references}
     if not paths:
         return set()
-    queries = sorted(paths | {path + "/" for path in paths})
-    matched = git_lines(root, "check-ignore", "--no-index", "--stdin", stdin="\n".join(queries))
-    return {path.rstrip("/") for path in matched}
+    # path が directory のとき中身を無視する規則（`build/` など）を見るため、path 自体に加えて
+    # `path/<probe>` を問い合わせる。末尾 "/" の問い合わせは使わない。CRLF の .gitignore では
+    # 空行が空パターンになり、basename が空の問い合わせへ誤って一致する（何でも無視と判定される）。
+    queries = sorted(paths | {f"{path}/{IGNORE_PROBE_NAME}" for path in paths})
+    # -z で入出力を NUL 区切りにすると、改行コードにもパスの引用符化にも左右されない。
+    matched = git_lines(
+        root, "check-ignore", "-z", "--no-index", "--stdin", stdin="\0".join(queries)
+    )
+    return {path.removesuffix(f"/{IGNORE_PROBE_NAME}") for path in matched}
 
 
 def check(repo_root: Path) -> list[str]:

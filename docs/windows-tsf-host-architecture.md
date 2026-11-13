@@ -305,67 +305,20 @@ quarantine と保存の排他の契約は `docs/learning-data-management-spec.md
   OS ショートカットへ pass-through する。Shift 単独は通常のローマ字入力として扱う。
 - composition 状態の不整合時は安全側（キャンセル）で復帰する。
 
-## 新規モジュール（Phase 5〜7）
+## 機能別の正典 spec
 
-下記は v1.0 以降の Phase が追加するモジュールの配置である。正典仕様は各 spec を参照。
-「予定」と付けたファイルはリポジトリにまだ無く、括弧内の roadmap / spec が定義を持つ。
+Phase 5 以降が足すモジュールのファイル構成と挙動は、機能ごとの spec が定める。本書は配置を写さない。
 
-### Phase 5（レガシー parity、`docs/legacy-parity-spec.md`）
+| 領域 | 正典 |
+|---|---|
+| レガシー parity（入力状態機械、VK → アクション、カスタムローマ字、F10 デバッグ、キャレット位置、AI backend） | `docs/legacy-parity-spec.md` |
+| リッチ化（前面アプリ、タイピング速度、FuzzyMatch、リッチ機能の bench） | `docs/rich-features-spec.md` |
+| TSF 深部（再変換、UI-less、設定アプリ起動） | `docs/tsf-deep-integration-spec.md` |
+| Copilot+ PC / NPU（backend 選択、mmap ロード、電源監視） | `docs/copilot-pc-backend-spec.md` |
+| UI モダン化（テーマ色、DPI、描画エンジン） | `docs/native-ui-spec.md` |
+| サイドロード配信（設定アプリ、MSIX / MSI、更新確認、ETW、crash 収集、DPAPI） | `docs/sideload-packaging-spec.md` |
 
-- `core/include/azookey/core/UserAction.h` — VK → 抽象アクション enum
-- `core/include/azookey/core/InputState.h` — 入力状態機械
-- `core/src/UserActionMap.cpp` — VK → UserAction 変換テーブル
-- `core/src/CustomRomajiLoader.cpp` — TSV パース + ホットリロード
-- `core/src/InputState.cpp` — Ctrl+Shift+U hex バッファ（Unicode 入力状態）
-- `tsf-tip/src/DebugLogBuffer.cpp` — F10 デバッグウィンドウのログ保持と本文ゲート
-- `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト（予定。roadmap M16、`docs/legacy-parity-spec.md` §4.3）
-- `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
-- `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
-  フォールバックとモニタ作業領域の解決（`docs/legacy-parity-spec.md` §9）
-- `inference-host/src/AiBackend.cpp` — OpenAI 互換 API クライアント
-
-### Phase 5〜6 横断（`docs/rich-features-spec.md`）
-
-- `tsf-tip/src/ForegroundAppDetector.cpp` — 前面アプリ実行ファイル名取得
-- `tsf-tip/src/TypingTempoTracker.h` — タイピング速度推定（予定。roadmap M24 の横断、`docs/rich-features-spec.md` X-1-2）
-- `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表（予定。roadmap M17 の横断、`docs/rich-features-spec.md` X-3-1）
-- `bench/rich_features_bench.cpp` — リッチ化機能のレイテンシ計測
-
-### Phase 6-A（TSF 深部、`docs/tsf-deep-integration-spec.md`）
-
-- `tsf-tip/src/ReconversionFunction.cpp` — `ITfFnReconversion`
-- `tsf-tip/src/CandidateListUIElement.cpp` — UI-less Mode 用
-- `tsf-tip/src/TextService.cpp` — `ITfFnConfigure` / `ITfFunction`
-- `tsf-tip/src/SettingsLauncher.cpp` — 設定アプリ EXE 解決・起動
-
-### Phase 6-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
-
-- `inference-host/include/azookey/host/BackendSelector.h` / `src/BackendSelector.cpp` — DXCore 列挙・ランタイム DLL 判定による `auto` の解決（優先順位の適用は `src/main.cpp`）
-- `inference-host/src/MmapModelLoader.cpp` — `CreateFileMapping` + `MapViewOfFile`
-- `inference-host/src/PowerStatusWatcher.cpp` — AC/バッテリ検知
-
-### Phase 6-C（UI モダン化、`docs/native-ui-spec.md`）
-
-- `tsf-tip/src/ThemeColors.cpp` — Light/Dark/ハイコントラストの判定と色テーブル
-- `tsf-tip/include/azookey/tsf/DpiScaling.h` — DPI 換算と PMv2 の一時切替
-- `tsf-tip/src/RenderingEngine.cpp` — DComp + D2D + DirectWrite 共通
-
-### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）
-
-- `settings-app/` — C++/WinRT WinUI 3 設定アプリ（**最小版は M11 / v1.0** で導入し
-  settings.json 書き込み + `UpdateConfig` 再読込まで含む。フル UI は M30。roadmap M11 / M30、
-  `docs/sideload-packaging-spec.md` §3.0）
-- `core/src/EtwLogger.cpp` — ETW Provider ラッパ
-- `inference-host/src/UpdateChecker.cpp` — GitHub Releases による更新の確認（opt-in。roadmap M32、`docs/sideload-packaging-spec.md` §6。MSI のダウンロードと適用は §6.3）
-- `core/src/CrashReporting.cpp` — `SetUnhandledExceptionFilter` による同意制の例外メタデータ収集（Host と設定アプリ。TIP DLL には入れない）
-- `learning/src/DpapiCrypto.cpp` — DPAPI ラッパ
-- `pkg/msix/AppxManifest.xml` — MSIX マニフェスト
-- `pkg/msi/Package.wxs` — WiX インストーラ
-
-## 新規 IPC メッセージ
-
-設定アプリ向けの型と M45 以降に足した型も、「IPC メッセージ」の索引表に `MessageType` の順で載せる。
-`UpdateConfig` の payload を拡張する範囲は roadmap M30 と `docs/sideload-packaging-spec.md` §3 が定める。
+「予定」のファイルが存在するかは、各 spec と `plans/windows-port-roadmap.md` の該当マイルストーンが定める。
 
 ## TIP プロセス HWND 構成
 

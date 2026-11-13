@@ -707,7 +707,7 @@ OFF のまま）。
   親の sandbox と承認設定を継承する。`scripts/check_agent_definitions.py` が `docs-lint`
   ジョブで本文・型・既知の無効な override と MANIFEST の agent 名集合を検査する。全 schema や実効権限の検査ではない。
   `[agents].enabled = false` は親による代替実行を許す有効な設定とする。
-  Claude の `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
+  Claude の `tools` が `Agent` / `Task`（`Agent(...)` / `Task(...)` を含む）を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
 - Codex の限定 push — `scripts/codex_push.py` は指定 branch と送信先を検査し、明示した
   commit と宛先 ref だけを送る。利用条件は `docs/handoff/agent-tooling-setup.md` が定義する。
   `docs-lint` ジョブで `scripts/tests/test_codex_push.py` を実行し、保護対象や曖昧な送信先の拒否、

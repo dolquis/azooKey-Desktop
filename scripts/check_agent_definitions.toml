@@ -16,7 +16,28 @@ write_boundary = "read-only"
 require_declaration = true
 
 [references]
-roots = [".agents", ".claude", ".github", "bench", "cmake", "compat-test", "core", "data", "diagnostics", "dictbuild", "docs", "inference-host", "ipc", "learning", "pkg", "plans", "scripts", "settings", "settings-app", "tsf-tip"]
+roots = [
+  ".agents",
+  ".claude",
+  ".github",
+  "bench",
+  "cmake",
+  "compat-test",
+  "core",
+  "data",
+  "diagnostics",
+  "dictbuild",
+  "docs",
+  "inference-host",
+  "ipc",
+  "learning",
+  "pkg",
+  "plans",
+  "scripts",
+  "settings",
+  "settings-app",
+  "tsf-tip",
+]
 
 [skills]
 prefixes = ["azookey-", "tsf-"]

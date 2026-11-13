@@ -11,6 +11,14 @@
 
 <!-- 実行した build、test、lint、実機確認と、その結果を記載してください。 -->
 
+## Skill impact
+
+- [ ] No Skill impact
+
+<!-- `.claude/skills/MANIFEST.md` の「担当パス」に挙げたパス（tsf-tip/src、inference-host/src、ipc、pkg、.github/workflows など）を変更し、その Skill（`.claude/skills/<名前>/` と `.agents/skills/<名前>/`）を変更しない PR では、No Skill impact にチェックを入れ、Reason: の後に Skill の routing 表・テスト表・手順が変わらない理由を必ず書いてください。空欄、このコメントだけ、「なし」「N/A」だけの記入は、検査（`python3 scripts/check_skill_impact.py`）が理由なしとして扱います。 -->
+
+Reason: <!-- 例: 内部の整理だけで、Skill が挙げるファイル名とテスト target は変わらない -->
+
 ## Documentation impact
 
 - [ ] Roadmap updated

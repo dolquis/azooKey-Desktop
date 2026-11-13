@@ -2,6 +2,15 @@
 name: diff-auditor
 description: 変更一式を独立した文脈で読み直し、設計の根拠を知らない読み手として差分だけから問題を挙げる read-only レビュー。Draft PR を作る前、最終報告の前、監査の指摘の当否を自分の結論から切り離したいときに使う。書き込み・commit・push・Linear 操作は行わない。typo や 1 行の可逆な修正には使わない。
 tools: Read, Grep, Glob, Bash
+# read-only の境界を機械的に持つ。Bash の書込みは .claude/hooks/agent-readonly-guard.py が止める
+# （vendor-docs-governance.sh が同じ版を配る）。model は指定せず親から継承し、レビューの質を親と揃える。
+disallowedTools: Edit, Write, NotebookEdit
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-readonly-guard.py"
 ---
 
 # 独立差分レビュー（read-only）

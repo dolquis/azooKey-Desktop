@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Advisory Codex adapter for the unmodified, vendored docs-lint hook.
 
+Origin: dolquis/agent-ops. scripts/vendor-docs-governance.sh distributes this
+file to product repos; do not edit it there (a repo-side edit is a silent fork).
+Wiring stays repo-owned in .codex/hooks.json (matcher, commandWindows, timeout).
+The configured timeout must exceed this adapter's internal budget:
+TIMEOUT_SECONDS + 2 * GIT_TIMEOUT_SECONDS (65 + 5 + 5 = 75 s today).
+
 Patch paths are relative to payload.cwd, not necessarily the repository root.
 Shell/unified-exec hooks use the canonical name Bash; inspect dirty documents
 after those calls without interpreting their command text. One vendored run
@@ -15,7 +21,7 @@ is not proof of a passed check and must never populate a success cache.
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import subprocess
 import sys
@@ -118,7 +124,12 @@ def run_hook(payload, root=None):
             path_base = cwd
         selected = set()
         for name in paths:
+            if "\x00" in name:
+                continue
             path = Path(name.replace("\\", "/"))
+            # A Windows absolute path must not become a relative name on POSIX.
+            if PureWindowsPath(name).is_absolute() and not path.is_absolute():
+                continue
             path = (path if path.is_absolute() else path_base / path).resolve()
             if path.is_relative_to(root) and watched(path):
                 selected.add(path)
@@ -139,7 +150,7 @@ def run_hook(payload, root=None):
                               "tool_input": {"file_path": str(path)}, "cwd": str(root)})
     env = dict(os.environ, CLAUDE_PROJECT_DIR=str(root), PYTHONIOENCODING="utf-8")
     try:
-        done = subprocess.run([sys.executable, "-B", str(vendored)],
+        done = subprocess.run([sys.executable, "-B", "-X", "utf8", str(vendored)],
                               input=synthesized.encode("utf-8"), cwd=root, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               timeout=TIMEOUT_SECONDS)

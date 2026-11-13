@@ -700,12 +700,12 @@ OFF のまま）。
   ベンダリングしたコピーであり、閾値・終了コード・出力形式の正典は origin にある。
   この repo では編集せず、変更は origin で行って配布し直す。本節は azooKey が
   この検査を CI のどのジョブで走らせるかを定義する。
-- agent 定義の突合 — `.claude/agents/MANIFEST.md` が区分 `repo` としたカスタム agent は、
+- agent 定義の突合 — `scripts/check_agent_definitions.toml` に宣言したカスタム agent（shared を含む）は、
   `.claude/agents/<name>.md` と `.codex/agents/<name>.toml` で `name`・`description`・本文を
-  一致させ、権限列（`read-only` / `build-write`）を役割上の書込み境界として扱う。
+  一致させ、設定の `write_boundary`（`read-only` / `build-write`）を検査上の書込み境界として扱う。
   Claude 側は `disallowedTools` と read-only の `hooks.PreToolUse` で制限し、Codex 側は
   親の sandbox と承認設定を継承する。`scripts/check_agent_definitions.py` が `docs-lint`
-  ジョブで本文・型・既知の無効な override を検査する。全 schema や実効権限の検査ではない。
+  ジョブで本文・型・既知の無効な override と MANIFEST の agent 名集合を検査する。全 schema や実効権限の検査ではない。
   `[agents].enabled = false` は親による代替実行を許す有効な設定とする。
   Claude の `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
 - Codex の限定 push — `scripts/codex_push.py` は指定 branch と送信先を検査し、明示した

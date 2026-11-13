@@ -1,0 +1,28 @@
+# repo 固有の検査対象。checker とテストの正典は dolquis/agent-ops。
+# 全 agent に Claude / Codex の対を要求するため mirror の例外は設けない。
+[agents.diff-auditor]
+write_boundary = "read-only"
+
+[agents.spec-drift-checker]
+write_boundary = "read-only"
+
+[agents.windows-build-runner]
+write_boundary = "build-write"
+
+[agents.quality-gate-runner]
+write_boundary = "read-only"
+
+[boundary]
+require_declaration = true
+
+[references]
+roots = [".agents", ".claude", ".github", "bench", "cmake", "compat-test", "core", "data", "diagnostics", "dictbuild", "docs", "inference-host", "ipc", "learning", "pkg", "plans", "scripts", "settings", "settings-app", "tsf-tip"]
+
+[skills]
+prefixes = ["azookey-", "tsf-"]
+
+[manifest]
+path = ".claude/agents/MANIFEST.md"
+
+[codex_config]
+path = ".codex/config.toml"

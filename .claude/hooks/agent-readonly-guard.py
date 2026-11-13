@@ -2,11 +2,13 @@
 """PreToolUse hook: keep a read-only subagent's Bash tool read-only.
 
 A read-only agent definition (`.claude/agents/*.md`) can drop Edit and Write
-through `disallowedTools`, but Bash stays a general shell. The Codex twin of the
-same agent runs under `sandbox_mode = "read-only"`, which the OS enforces. This
-hook is the Claude Code side of that pair: it is declared in the agent's
+through `disallowedTools`, but Bash stays a general shell. A Codex twin of the
+same agent, where a repo has one, runs under the parent's sandbox, which the OS
+enforces. This hook is the Claude Code side: it is declared in the agent's
 frontmatter `hooks.PreToolUse` (matcher `Bash`) and blocks the commands that
-turn a review into a write.
+turn a review into a write. The origin is `dolquis/agent-ops`;
+`scripts/vendor-docs-governance.sh` copies it into product repos, so a product
+repo edits neither this file nor its test.
 
 What it blocks (exit 2, reason on stderr so the agent sees why):
 
@@ -25,7 +27,7 @@ What it blocks (exit 2, reason on stderr so the agent sees why):
   `--in-place`), `perl -i` / `-pi`.
 - Build tools that write build directories: `cmake --build/--preset/-B/-S/
   --install`, `cmake -E <verb>` other than read-only verbs, ninja, ctest,
-  msbuild. Those belong to `windows-build-runner`.
+  msbuild. Those belong to the parent or to a build-runner agent.
 - Wrappers are unwrapped before the check: env assignments, `env`, `command`,
   `exec`, `nice`, `time`, `timeout <n>`, `nohup`, `sudo`. A `bash -c` /
   `sh -c` / `zsh -c` string and `$(...)` substitutions are checked recursively.
@@ -33,15 +35,13 @@ What it blocks (exit 2, reason on stderr so the agent sees why):
 What it cannot see: writes hidden in an interpreter (`python3 -c
 "open(...,'w')"`, `powershell -Command Set-Content`), or a script the agent
 runs. The hook raises the cost of a slip; it is not a sandbox. On the Codex side
-the sandbox is. `docs/handoff/agent-orchestration.md` states that asymmetry.
+the sandbox is.
 
 Everything else exits 0. A parse failure also exits 0: the hook errs on the side
 of not blocking, because a blocked read costs a review round and CI is still the
 canonical gate. `python3` must be on PATH; Claude Code treats a hook it cannot
 start as non-blocking, so a missing interpreter silently removes the guard.
-`scripts/check_agent_definitions.py` verifies that every read-only agent
-declares this hook; `scripts/tests/test_agent_readonly_guard.py` pins the
-allow / deny table.
+`scripts/tests/test_agent_readonly_guard.py` pins the allow / deny table.
 
 The hook reads the documented PreToolUse stdin JSON (`tool_name`,
 `tool_input.command`).
@@ -248,7 +248,7 @@ def command_reason(words: list[str]) -> list[str]:
                 return [f"cmake -E {verb} はファイルを変える"]
             if not any(word in CMAKE_WRITE_FLAGS or word.startswith("--preset=") for word in options):
                 return []
-        return [f"{program} は build directory へ書く（windows-build-runner の担当）"]
+        return [f"{program} は build directory へ書く（親か build 担当 agent が回す）"]
     return []
 
 

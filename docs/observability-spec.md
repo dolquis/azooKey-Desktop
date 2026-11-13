@@ -268,7 +268,7 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
   パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
-- 本ポリシーの実装は M44 診断 ZIP（`dev-infrastructure-spec.md` §12.5）と secure redaction（同 §5 / §8）で
+- 本ポリシーの実装は M44 診断 ZIP（`dev-infrastructure-spec.md` §12.5）と secure redaction（`docs/privacy-and-secure-input-spec.md` §5 / §8）で
   **共通の redaction 関数** を用い、二重定義・不整合を作らない。共通関数は、フィールド名から
   本文系・機密を判定する `logging::IsSensitiveRuntimeLogField`
   （`core/include/azookey/logging/RuntimeLogger.h`）と、自由文字列のユーザーパスを環境変数表記へ
@@ -346,7 +346,7 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 - `backend`: R1 アクセラレータ `cpu` / `cuda` / `vulkan`（旧 `directml` / `npu` は
   非推奨。R2 では `winml`）
 - R2(`winml`) 時のみ `ep`（選択 EP 名。例 `QNNExecutionProvider`）と `ep_state`
-  （`NotPresent` / `NotReady` / `Ready` / `Registered` / `Failed`、§4.6）。EP 取得・登録
+  （`NotPresent` / `NotReady` / `Ready` / `Registered` / `Failed`、`docs/copilot-pc-backend-spec.md` §4.6）。EP 取得・登録
   失敗をトレースで切り分け可能にする。
 
 モデル推論が例外で失敗して SimpleConverter に fallback した場合、JSONL の

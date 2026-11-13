@@ -393,7 +393,7 @@ private の入力でも送る。外部 AI への送信、
   ウィンドウを描かないため、toast も 🔒 も出さない。toast は保留したまま、TIP が候補
   ウィンドウを描いたときに表示する。
 - **劣化インジケータとの同時表示**: 候補ウィンドウ下部は M47 の劣化インジケータ
-  （[`dev-infrastructure-spec.md`](host-availability-spec.md) §8.5.4）と共有する。
+  （[`host-availability-spec.md`](host-availability-spec.md) §8.5.4）と共有する。
   両方を表示するときは、候補（と案内行）の直下に secure の toast を置き、その下に劣化
   インジケータを置く。どちらも他方を消さず、5 秒の自動消滅はそれぞれ独立に数える。
   劣化インジケータの [詳細] / [再試行] は toast の有無に関わらず劣化インジケータの行に置く。

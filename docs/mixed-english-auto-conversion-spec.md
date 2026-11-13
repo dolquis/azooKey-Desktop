@@ -12,7 +12,7 @@ Auto Conversion）」を定める。`plans/windows-port-roadmap.md` の M63 が�
   再利用し、M60 の設定キーの意味を変えない。
 - `docs/zenzai-inference-spec.md` … Zenzai のプロンプト（§3）と性能予算（§8）。
 - `docs/romaji-batch-conversion-spec.md` … `CommitSegmentsObservation`（§6.4）。
-- `docs/dev-infrastructure-spec.md` … ライブ変換の timeout（§8.5.2、150ms）。
+- `docs/host-availability-spec.md` … ライブ変換の timeout（§8.5.2、150ms）。
 - `docs/typo-correction-learning-spec.md` … M35 / M55 の打ち間違い補正。
 - `docs/conversion-quality-benchmark-spec.md` … M52 の評価データと品質指標。
 - `docs/mixed-english-input-feasibility-report.md` … 実現可能性と先行事例の調査記録（参考。正典ではない）。
@@ -388,7 +388,7 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   読める辞書語を英字にした変換も、低確度の区間と同じ 3 回に数える。すべて J の候補（§8.3 の 2）
   は通常の変換の結果を使い、追加の変換に数えない。追加の変換には NLL の rerank と M35 の候補を掛けない。
 - 合計時間の打ち切り: 通常の変換と追加の変換は直列に行う。1 回ずつ Zenzai の予算（600ms）に
-  収まっても、合計は候補窓用 `QueryCandidates` の timeout 750ms（`docs/dev-infrastructure-spec.md`
+  収まっても、合計は候補窓用 `QueryCandidates` の timeout 750ms（`docs/host-availability-spec.md`
   §8.5.2）を超えうる。Host は要求の受信から 650ms（750ms から、辞書候補・rerank・応答の組み立てと
   IPC の余裕 100ms を引いた値）を、追加の変換の期限とする。
   - 追加の変換は、期限を過ぎたら始めない。

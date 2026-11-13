@@ -366,7 +366,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。実体は `core/src/RuntimeLogger.cpp` で、環境変数 `AZOOKEY_LOG=1` のとき
   コンポーネント別の `.jsonl` へ書く（M41 構造化ログと可観測性）。
-  ログスキーマ・相関 ID・エラーコード体系は `docs/dev-infrastructure-spec.md`
+  ログスキーマ・相関 ID・エラーコード体系は `docs/observability-spec.md`
   §7 を正典とする。
 - **ドキュメント**: 各マイルストーン完了時に `docs/windows-tsf-host-architecture.md`
   を実装に合わせて更新する。

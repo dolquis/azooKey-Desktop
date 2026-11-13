@@ -43,16 +43,16 @@ Microsoft Learn の事実は
 
 配布形態と OS 下限は次のとおりとする。
 
-- MVP の未署名 MSI（§0 / §4）では、`azookey_settings.exe` を unpackaged の
-  **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロードに同梱する。
-  MS Store 用 MSIX（§1）では packaged EXE として同梱する。
+- MVP の未署名 MSI（`sideload-packaging-spec` §0 / `sideload-packaging-spec` §4）では、`azookey_settings.exe` を unpackaged の
+  **self-contained 配置（`sideload-packaging-spec` §1.3・`sideload-packaging-spec` §4 の同梱必須注記）**でペイロードに同梱する。
+  MS Store 用 MSIX（`sideload-packaging-spec` §1）では packaged EXE として同梱する。
 - WinUI 3 がサポートする言語は C# と C++/WinRT である（C++/CX は使わない）。
 - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**である。
   これは設定アプリ単体の下限であり、配布パッケージ全体の最小 OS ではない。
 - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
-  §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
+  `sideload-packaging-spec` §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
-  §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
+  `sideload-packaging-spec` §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく `sideload-packaging-spec` §1 の経路別下限を設定する。
 
 再評価の条件は次のとおりとする。
 
@@ -68,8 +68,8 @@ Microsoft Learn の事実は
 - フレームワーク: WinUI 3（採用 component packages と版は
   `settings-app/azookey_settings.vcxproj` / `THIRD_PARTY_LICENSES` を正典とする。更新時は
   self-contained 出力と MSI の回収結果を再検証する）
-- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、§1.3 / §4）。
-  MS Store 用 MSIX（§1）では packaged EXE として同梱（配布方針は §0）
+- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、`sideload-packaging-spec` §1.3 / §4）。
+  MS Store 用 MSIX（`sideload-packaging-spec` §1）では packaged EXE として同梱（配布方針は `sideload-packaging-spec` §0）
 
 ### 3.2 ナビゲーション
 
@@ -102,7 +102,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
 `autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
-`checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（§6.1 の
+`checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（`sideload-packaging-spec` §6.1 の
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
@@ -226,7 +226,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
 | 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv.enc`（M54 の v2 形式。DPAPI 暗号化、M34。M7 形式の `learning.tsv.enc` は移行元） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
+| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は `sideload-packaging-spec` §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
 
 拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
@@ -240,7 +240,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 「Windows 設定からの『詳細設定』起動で開く」に対応）。
 
 - **実装場所**: `ITfFnConfigure` は **TIP DLL（`tsf-tip/`）側**が実装する（設定アプリ EXE
-  ではない）。TSF が `DllRegisterServer`（§1）で登録した CLSID に対して直接
+  ではない）。TSF が `DllRegisterServer`（`sideload-packaging-spec` §1）で登録した CLSID に対して直接
   `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
   `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
   **CLSID 直 `CoCreateInstance`** で取得される点に注意 — すなわち
@@ -317,7 +317,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `romaji-batch-conversion-spec.md` |
 | `llmMagicConversion` | bool | `false` | AI サービス | M16 | 即時 | roadmap M16 |
 | `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI サービス | M16 | 即時 | roadmap M16 |
-| `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI サービス | M16 / M34 | 即時 | roadmap M16 / §9 |
+| `openAiApiKey` | string（機微・`sideload-packaging-spec` §9 DPAPI） | `""` | AI サービス | M16 / M34 | 即時 | roadmap M16 / `sideload-packaging-spec` §9 |
 | `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI サービス | M16 | 即時 | roadmap M16 |
 | `openAiModel` | string | `gpt-4o-mini` | AI サービス | M16 | 即時 | roadmap M16 |
 | `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | roadmap M16 |
@@ -329,9 +329,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | AI 変換※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | AI 変換※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
-| `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
+| `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / `sideload-packaging-spec` §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン（結果も同じ節に表示） | M32 | 即時 | 本書 §6 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン（結果も同じ節に表示） | M32 | 即時 | `sideload-packaging-spec` §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
 | `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |
@@ -375,9 +375,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   それ以外は次回変換から即時反映する。例外は `dictionary.neologdEnabled` を偽から真にする変更で、
   Host は `neologd_lexicon` pack を起動時にだけ取得するため（`azdic-physical-layer-spec.md` §15.14）、
   反映は Host の再起動後になる。設定アプリはこの変更を保存したときに、サインアウトして再度サインイン
-  すると反映される旨を表示する（Host はログオン時に起動する。§1.7）。再起動を要する変更の判定は
+  すると反映される旨を表示する（Host はログオン時に起動する。`sideload-packaging-spec` §1.7）。再起動を要する変更の判定は
   設定アプリが持つ静的な分類で行い、`UpdateConfig` の応答には含めない。
-- **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（§9）。
+- **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（`sideload-packaging-spec` §9）。
   平文保存は移行期のみ許容し、Host は両形式を受理する。
 
 #### 拡張方針（`additionalProperties: false` 下でのキー追加）
@@ -385,7 +385,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **追加は加算的**: 新規キーは既定値付きで追加し、旧 `settings.json` は欠落キーを schema 既定で
   補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、Host の `SettingsStore` または
   設定アプリの `settings-app/SettingsDocument.*` に移行処理を実装し、`docs/dev-infrastructure-spec.md`
-  §12.2.1 に旧形式を登録してから schema を変更する。
+  `dev-infrastructure-spec` §12.2.1 に旧形式を登録してから schema を変更する。
 - **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
   行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
   `app-profile-spec.md` §4 と同方針）。
@@ -393,7 +393,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   `docs/privacy-and-secure-input-spec.md` §7、`profilesByApp`（M48）は `docs/app-profile-spec.md` §4 の
   schema fragment を正典とする。既存 `promptPrefixByApp` との統合は `app-profile-spec.md` §6 に従う。
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
-  §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
+  §3.2 に挙げる「ETW プロバイダ」は固定 GUID（`sideload-packaging-spec` §7.1）であって設定キーではない（ログ詳細度は `logLevel`
   が制御する）。「学習」ペインのストア別の一覧と「入力の傾向」タブはキーではなく、Host の IPC を読むビューである。
 
 ### 3.7 v1.0 設定 UI の最小機能セット（M11）と v1.0 / v1.x 境界
@@ -446,7 +446,7 @@ schema 自体は superset のまま変えない。
   条件であり、M24 の進捗に依存しない）。実行時の選択は `docs/copilot-pc-backend-spec.md` §4.4 の
   BackendSelector が担い、Vulkan ビルド（`windows-vulkan-release` preset）の `auto` は一次フィルタを
   通った機器で Vulkan を選ぶ。
-  配布物への組み込みと §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
+  配布物への組み込みと `sideload-packaging-spec` §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
   選択肢を追加し、それまでは **v1.0 UI には出さない**。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
   `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
@@ -465,13 +465,13 @@ schema 自体は superset のまま変えない。
 - **モデルパスの probe-then-commit（既定 autoselect と明示選択を分ける）**: 空 `model.selectedPath` は
   「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
   `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
-  `selectedPath` 確定の規律は §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
-    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、§1.6.1）の
+  `selectedPath` 確定の規律は `sideload-packaging-spec` §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
+    - **既定モデルの autoselect（ピン依存、`sideload-packaging-spec` §1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、`sideload-packaging-spec` §1.6.1）の
       モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
       へ commit する（commit 後に「既定モデル使用中」と表示）。ピンと一致しなければ autoselect しない。
-    - **ユーザー / 管理者の明示選択（ピン非依存、§1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
+    - **ユーザー / 管理者の明示選択（ピン非依存、`sideload-packaging-spec` §1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
       `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
-      **ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
+      **ピン一致を要求しない**（`sideload-packaging-spec` §1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
       非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
   いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「使うモデル」に「未選択（AI モデルを使わずに
   変換します）」と表示する（Host は SimpleConverter で動く）。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
@@ -521,9 +521,9 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
 | 句読点・バッチ変換・インライン英単語候補・候補リライター・カッコ補完の各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・カッコ補完は候補ペイン） |
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
-| `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
+| `openAiApiKey` | — | M34（AI サービスペイン。鍵は `sideload-packaging-spec` §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。§6） |
+| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。`sideload-packaging-spec` §6） |
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`azdic-physical-layer-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |

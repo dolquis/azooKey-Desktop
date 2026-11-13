@@ -326,7 +326,7 @@ external location（§4 WiX/MSI の install ディレクトリ）に置き、COM
 - 同梱物:
   - `azookey_tsf_tip.dll`
   - `azookey_inference_host.exe`
-  - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。§3.0）
+  - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。`settings-app-spec` §3.0）
   - `Assets/*.png`
   - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に DL
     （v1.0 の最小取得経路と配信元の分岐は §1.6.1）
@@ -367,7 +367,7 @@ C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
   ```xml
   <!-- framework package family は major 版に揃う（WASDK 2.0 SemVer 移行）。NuGet/版が
        2.2.0 でも family は Microsoft.WindowsAppRuntime.2.0 のまま（".2.2" は存在せず、
-       clean VM で解決失敗する）。MinVersion は採用する WASDK 版（§3.1）に対応する
+       clean VM で解決失敗する）。MinVersion は採用する WASDK 版（`settings-app-spec` §3.1）に対応する
        ランタイムパッケージ版に合わせる。 -->
   <PackageDependency Name="Microsoft.WindowsAppRuntime.2.0"
                      MinVersion="..."
@@ -446,7 +446,7 @@ catalog」）の `defaultModelId` の entry である。
 > ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
 > 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
 > 既定の catalog に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
-> §3.4 のモデルパス例や roadmap M8 受け入れの版表記も、本ピン（上流
+> `settings-app-spec` §3.4 のモデルパス例や roadmap M8 受け入れの版表記も、本ピン（上流
 > `Miwa-Keita/zenz-v3.2-small-gguf` = v3.2）を正として揃える。版番号は各 doc に
 > 直書きせず本ピンを参照し、版の更新は既定の catalog の entry を書き換えて行う。
 
@@ -497,7 +497,7 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 
 ##### 配置パスとバージョニング
 
-- **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
+- **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`settings-app-spec` §3.4、および
   `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
 - **取得の原子性・中断と再試行**: `.part` への書き込み、Range による再開、SHA256 検証、
   確定パスへの原子置換は `docs/model-management-spec.md` §3.1.2 が正典。検証前のファイルは
@@ -524,7 +524,7 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
     - **利用者の操作による取得（設定アプリ）**: 設定アプリの「AI 変換」ペインは既定の
       catalog の entry を一覧し、利用者が押した取得ボタンから Host に取得させる
       （IPC は `model-management-spec.md` §4.4、取得機構は同 §3.1.2）。`privacy.mode=offline`
-      では接続しない。取得時の SHA-256 のピン一致と §3.3 の R1 検証を probe とみなし、
+      では接続しない。取得時の SHA-256 のピン一致と `settings-app-spec` §3.3 の R1 検証を probe とみなし、
       成功したら確定パスを同じペインの「使うモデル」へ入れる。commit は (c2) と同じく
       保存バーが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
       行う。取得しただけでは `selectedPath` を変えない。
@@ -738,7 +738,7 @@ loader はあるがドライバーが無い、または非対応の環境を Hos
 
 ##### backend 解決との関係
 
-`model.backendPreference` の解決は Host 内で完結する（§3.7、`docs/model-management-spec.md` §5.1）。
+`model.backendPreference` の解決は Host 内で完結する（`settings-app-spec` §3.7、`docs/model-management-spec.md` §5.1）。
 本節が決めるのは起動する実行体であり、実行体ごとの解決は次になる。
 
 | 起動した実行体 | `auto` | 明示 `cpu` | Vulkan 初期化失敗時 |
@@ -1513,7 +1513,7 @@ wingetcreate update --urls `
 ```
 
 `result` は `update_available` / `up_to_date` / `failed` のいずれかである。設定アプリの
-「バージョン」はこのファイルを読んで表示し（§3.2）、IPC は使わない。版は `v` を付けて
+「バージョン」はこのファイルを読んで表示し（`settings-app-spec` §3.2）、IPC は使わない。版は `v` を付けて
 「v1.1.0」と表示する。記録の `channel` か `currentVersion` が設定アプリの設定と製品のバージョンに
 合わない記録は、結果として表示しない。Host は各確認の結果を
 RuntimeLog の `update_check` イベントに、固定の `reason`（`up_to_date` / `update_available` /

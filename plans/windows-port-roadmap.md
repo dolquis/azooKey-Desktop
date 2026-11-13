@@ -303,7 +303,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **受け入れ条件**:
   - クリーンな Win11 VM でインストール → IME 選択 → 入力 → 確定が動く
   - アンインストールでレジストリ・ファイルが残らない
-- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§3・§4
+- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§4、`docs/settings-app-spec.md` §3
 - **補足**:
   - **実装範囲**:
     - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー

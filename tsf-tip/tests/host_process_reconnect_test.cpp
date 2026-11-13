@@ -306,19 +306,21 @@ TEST_F(TsfTipHostRestartReconnectTest, WorkerReconnectsToARestartedHostProcess) 
   service.start_ipc_worker_for_test();
 
   // Before the kill: the worker is connected and the Host is not marked down.
+  // The mark follows the published state, so it is part of the wait.
   ASSERT_TRUE(WaitUntil(
       "the worker to reach Ready on the first Host",
       [&] {
         return states_.Count(IpcConnectionState::Ready) >= 1 &&
-               service.ipc_connection_state_for_test() == IpcConnectionState::Ready;
+               service.ipc_connection_state_for_test() == IpcConnectionState::Ready &&
+               !service.ipc_host_unavailable_for_test();
       },
       &first));
   Mark("worker_ready");
-  EXPECT_FALSE(service.ipc_host_unavailable_for_test());
 
   // The Host dies. Only once the process is gone is the worker's view of it
   // examined, so a Ready left over from before the kill cannot satisfy the
   // reconnect wait below.
+  const size_t disconnected_before_kill = states_.Count(IpcConnectionState::Disconnected);
   ASSERT_TRUE(first.Kill()) << "the first Host did not end";
   Mark("host_killed");
   ASSERT_TRUE(WaitUntil("the worker to notice the lost Host",
@@ -327,11 +329,13 @@ TEST_F(TsfTipHostRestartReconnectTest, WorkerReconnectsToARestartedHostProcess) 
   EXPECT_NE(service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
 
   // The new Host starts only after one connect attempt has failed against the
-  // missing Host (the second Disconnected: the first is the lost connection).
-  // Otherwise the worker could find it inside that attempt's 0.5 s window and
-  // the backoff retry would go unexercised.
-  ASSERT_TRUE(WaitUntil("the worker to fail a connect attempt against the missing Host",
-                        [&] { return states_.Count(IpcConnectionState::Disconnected) >= 2; }));
+  // missing Host: two more Disconnected than before the kill, the lost
+  // connection and that failed attempt. Otherwise the worker could find the
+  // Host inside the attempt's 0.5 s window and the backoff retry would go
+  // unexercised.
+  ASSERT_TRUE(WaitUntil("the worker to fail a connect attempt against the missing Host", [&] {
+    return states_.Count(IpcConnectionState::Disconnected) >= disconnected_before_kill + 2;
+  }));
   Mark("connect_failed");
 
   // A new Host process on the same pipe name and token. Nothing tells the

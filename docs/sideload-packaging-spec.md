@@ -1458,7 +1458,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 候補 | M62 | 即時 | `candidate-rewriter-spec.md` |
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
-| `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §B9 |
+| `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-nll-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
 | `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
@@ -1644,7 +1644,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
-| `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §B9） |
+| `reranker.*` | — | 専用 UI を持たない（`neural-reranker-nll-spec.md` §B9） |
 | ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で

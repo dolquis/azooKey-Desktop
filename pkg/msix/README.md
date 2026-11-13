@@ -3,7 +3,7 @@
 DEV-101（D-05 M28: MSIX `com4:ComServer` と TIP CLSID/Profile 登録の整合 smoke）の
 **配布経路 Option A（external-location packaging / sparse package）**の PoC 一式。
 
-仕様の正典は [`docs/sideload-packaging-spec.md`](../../docs/sideload-packaging-spec.md) §1
+仕様の正典は [`docs/msix-packaging-spec.md`](../../docs/msix-packaging-spec.md) §1
 （特に §1.0 経路 3 候補・§1.1 Option B 参考例・§1.5 経路ごとの対象 OS）。状態・進捗の正典は
 Linear（DEV-101 / 実機検証は DEV-267）。
 
@@ -136,5 +136,5 @@ COM 登録ラウンドトリップ自体は CTest `tsf_tip_com_smoke_tests::TsfT
 MSIX 経由で設定アプリへも identity を与える場合は、`azookey_inference_host.exe.manifest`
 と同形式の `.exe.manifest` を作成し、`AppxManifest.xml` へ同形式の `Application` を追加する。
 
-経路（Option A/B/C）の選定は [`docs/sideload-packaging-spec.md`](../../docs/sideload-packaging-spec.md)
+経路（Option A/B/C）の選定は [`docs/msix-packaging-spec.md`](../../docs/msix-packaging-spec.md)
 §1.0 が正典。ハーネスの経路別アサーション強化は同 spec の TODO。

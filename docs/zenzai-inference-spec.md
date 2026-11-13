@@ -100,7 +100,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 - メモリ: small モデルで概ね 150MB 級。
 - 配布形式: GGUF（`docs/zenzai-gpu-route.md` と整合）。
 - v1.0 採用モデル: 上流 `Miwa-Keita/zenz-v3.2-small-gguf`（roadmap M8 受け入れ条件の
-  配置対象。v1.0 配布での取得・配置の正は `sideload-packaging-spec.md` §1.6.1）。
+  配置対象。v1.0 配布での取得・配置の正は `msix-packaging-spec.md` §1.6.1）。
   プロンプトは **v3 系フォーマット**（§3）を用いる。
 - 選択可能なモデル: `yuuki14202028/kanakanji-edge-33m`（Llama 構造、§2.4）。既定を切り替えるかは
   §2.4.3 で判断する。
@@ -256,7 +256,7 @@ zenz 3 件、edge 0 件だった。Qwen3-Next / LFM2 MoE ベースの hourai2 / 
 #### 2.4.4 配布とライセンス
 
 配布形態は zenz と同じく、MSIX に同梱せず上流の Hugging Face から取得し、再ホストしない
-（`docs/sideload-packaging-spec.md` §1.6）。revision、SHA-256、ライセンスの結論（DEV-1721）は
+（`docs/msix-packaging-spec.md` §1.6）。revision、SHA-256、ライセンスの結論（DEV-1721）は
 同 §1.6.2 が持つ。
 
 ---
@@ -560,7 +560,7 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 7. **NLL 補正**: `config.nll.enabled && !live` のとき、変換が例外終了しておらず、
    `ZenzaiModelConverter` の runtime がロードされ、`last_error()` がない場合に
    `RerankNll` を呼ぶ。手順 5 と同じ deadline を引き継ぐ。対象ソース・減点による
-   score 合成・予算の正典は `neural-reranker-spec.md` §B5〜B7 とする。
+   score 合成・予算の正典は `neural-reranker-nll-spec.md` §B5〜B7 とする。
 8. **学習 reranker**: `ApplyRerankerOrRaw` を適用する。既定の `Reranker::Apply` は
    `LearningStore::Score` を加算し、非有限 score を除いて score 降順に stable_sort する。
    store がなければ入力の順序・score を保つ。`user_learning_scorer_enabled` と store が
@@ -635,7 +635,7 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   `fallback_->Convert` の結果を返し、`debug_info` には `zenzai-degraded` ではなく
   `zenzai-deadline-fallback` を付ける。converter の `last_error_` は立てず、`model_runtime_error_`
   も Health も変えない（直前の劣化も回復の証拠が無いので消さない）。NLL 再ランク
-  （`docs/neural-reranker-spec.md` §B8）は予算を使い切っているので掛けない。decode 統計の
+  （`docs/neural-reranker-nll-spec.md` §B8）は予算を使い切っているので掛けない。decode 統計の
   `deadline_exceeded` は立つので、§8.2 の打ち切り率には数える。
 - `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
   converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を engine が
@@ -671,7 +671,7 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   `docs/dev-infrastructure-spec.md` §8.5.1 が正典。
 
 本節は degraded / fallback の規則の正典であり、`docs/copilot-pc-backend-spec.md` §4.4・§4.5、
-`docs/model-management-spec.md` §5.3、`docs/sideload-packaging-spec.md` §1.6.1、
+`docs/model-management-spec.md` §5.3、`docs/msix-packaging-spec.md` §1.6.1、
 `docs/zenzai-gpu-route.md`「フォールバック」、`plans/windows-port-roadmap.md` M8 から参照される。
 
 ### 7.5 将来の score 統合（参照）
@@ -918,13 +918,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   を保持している場合は、生成も NLL 評価も prompt 全体を再利用する。beam の初手は
   そのスナップショットを読む。完全再利用できない場合は、最終 token を含む suffix を
   decode してスナップショットを更新する。suffix が空でも cancel と deadline を確認する
-  （`docs/neural-reranker-spec.md` §B3.4）。
+  （`docs/neural-reranker-nll-spec.md` §B3.4）。
   beam ごとの KV キャッシュの扱い
   （sequence 割り当て、prune 時の付け替え、中断時の状態）は **§9.2.3** が規定し、beam は
   sequence 0 を変更しない。
 - prompt 接頭辞キャッシュは、次のいずれかで無効化して sequence 0 を全削除する。
   - 前回の `Generate` が例外または cancel で終了した場合。
-  - NLL 評価が例外または cancel で終了した場合（`docs/neural-reranker-spec.md` §B3.4）。
+  - NLL 評価が例外または cancel で終了した場合（`docs/neural-reranker-nll-spec.md` §B3.4）。
   - 前回の prompt decode が deadline または decode error で完了しなかった場合。
   - モデル再ロードで `llama_context` が再生成された場合。この境界では runtime 自体を破棄する。
   - tokenizer override または prompt template の変更により、記録した token 列を現 runtime の
@@ -1050,7 +1050,7 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
 
 beam index と `seq_id` の対応は固定しない。対応は step ごとに §9.2.3.3 の規則で決まるため、
 実装は beam 側に「現在占有している working sequence」を持たせる。`llama_context` の
-sequence 上限は、排他実行する NLL と共有する（`neural-reranker-spec.md` §B3.4）。
+sequence 上限は、排他実行する NLL と共有する（`neural-reranker-nll-spec.md` §B3.4）。
 生成で使う working sequence は 1〜4 のままで、B が 1 の変換でも context は作り直さない。
 
 各 step の開始時点で次が成り立つ（**不変条件**）。
@@ -1161,7 +1161,7 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   切り詰めた時点でこの logits 記録を無効化する。記録が無い consumer は最終 token を
   decode し直す。
 
-常駐接頭辞の再利用者は生成経路と `neural-reranker-spec` §B3.4 の NllScorer であり、
+常駐接頭辞の再利用者は生成経路と `neural-reranker-nll-spec` §B3.4 の NllScorer であり、
 上の 4 制約は両方の consumer に課される。
 
 #### 9.2.3.7 context のサイズと実装時に確認する項目
@@ -1175,17 +1175,17 @@ DEV-857 以前の方式を維持する。
 （`max_new` は §8 の `MaxNewTokensForReading`、上限 64）。`n_ctx` が sequence 間で分割される
 構成では `n_ctx ≥ n_seq_max × (P の最大値 + max_new)`、共有される構成では
 `n_ctx ≥ P の最大値 + kMaxModelCandidates × max_new` を満たす容量を確保する。NLL の候補群は
-`neural-reranker-spec.md` §B3 に従って共有 KV 容量内に分割し、生成と同時には保持しない。
+`neural-reranker-nll-spec.md` §B3 に従って共有 KV 容量内に分割し、生成と同時には保持しない。
 P の最大値はプロンプト契約
 （§3.2、左文脈 30 コードポイント）と受理する読み長から見積もる。予算を超える入力では KV を
 溢れさせず degrade する（§7.4）。
 
-関数名は本書で確定しない（`neural-reranker-spec` §B3.3 と同じ方針）。実装時に pin 済み
+関数名は本書で確定しない（`neural-reranker-nll-spec` §B3.3 と同じ方針）。実装時に pin 済み
 llama.cpp のヘッダで次を確認する。
 
 - seq 単位のコピー操作の名前と、複製先が空であることを要求するかどうか
 - セル共有型（unified）の KV キャッシュが既定か、明示指定が要るか
-- 並列 sequence 数の上限定数が共有 context の設定を満たすか（`neural-reranker-spec.md` §B3.4）
+- 並列 sequence 数の上限定数が共有 context の設定を満たすか（`neural-reranker-nll-spec.md` §B3.4）
 - `n_ctx` が sequence 間で分割されるか共有されるか
 
 #### 9.2.3.8 本契約が変更しないもの

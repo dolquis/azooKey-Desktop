@@ -44,17 +44,21 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド。§4 の推論エンジン選定は M8 と共有 |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。§4.4 は M16 の Magic Conversion プロンプト、§4.5 は M34 の API キー入力、§4.6 は M53 の設定アプリの辞書ライセンス導線 |
-| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI・設定アプリ（M11 / M12）、Phase 7（M28〜M30、M32〜M34）の配布・署名・更新・観測。設定アプリのナビゲーション（ペインの構成と保存バー）と表示文字列の表記規則は §3.2 |
+| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI（M11 / M12）、Phase 7（M29、M32〜M34）の配布・署名・更新・観測。MSIX（§1）と設定アプリ（§3）は転送表で下の spec へ |
+| [`settings-app-spec.md`](settings-app-spec.md) | M11 / M30 設定アプリ（構成、ナビゲーション、Host との IPC、設定キーの確定、v1.0 最小機能）。ペインの構成と保存バー、表示文字列の表記規則は §3.2 |
+| [`msix-packaging-spec.md`](msix-packaging-spec.md) | M28 MSIX パッケージング（TIP 配布経路の 3 候補、`pkg/msix/` の identity package、VCRT 同梱、推論バックエンドとモデルの配布方針、Host の常駐起動） |
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、IPC、観測性、Host 可用性、診断基盤。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
-| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層、§15 物理層） |
+| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層。§15 は転送表で下の spec へ） |
+| [`azdic-physical-layer-spec.md`](azdic-physical-layer-spec.md) | M53 system 辞書の物理層（`.azdic` v1、ビルドパイプライン） |
 | [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給 |
-| [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker と NllScorer 契約 |
+| [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker（Track A） |
+| [`neural-reranker-nll-spec.md`](neural-reranker-nll-spec.md) | NllScorer 型ニューラルリランク（Track B） |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
@@ -111,17 +115,17 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md) | 決定記録 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md)「決定（ADR 要旨）」、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3 |
 | [`decisions/2026-06-11-candidate-ui-coexistence.md`](decisions/2026-06-11-candidate-ui-coexistence.md) | 決定記録 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) §2.8〜§2.11、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M5 |
 | [`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0 |
-| [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.0 |
+| [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.0 は転送表で `settings-app-spec.md` へ） |
 | [`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §2.0 |
 | [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11 |
 | [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §4.7 |
-| [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3、[`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.7、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
+| [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3、[`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.7 は転送表で `settings-app-spec.md` へ）、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
 | [`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.1・§4.2.1.1 |
 | [`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) | 決定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.2 |
 | [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11.2.1 |
 | [`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
-| [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) | 測定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) §B12 |
+| [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) | 測定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) Track B（正典の節は `neural-reranker-nll-spec.md` の B12） |
 | [`decisions/2026-09-arm64-hardware-start-condition.md`](decisions/2026-09-arm64-hardware-start-condition.md) | 決定記録 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M27、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §8 |
 | [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §2.7・§11.8 |
 | [`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.3 |

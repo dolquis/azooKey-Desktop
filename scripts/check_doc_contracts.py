@@ -57,7 +57,7 @@ Settings keys
   nested `properties`; map-shaped objects (`additionalProperties` schemas) have
   no fixed sub-keys.
 
-  a. The key table of `docs/sideload-packaging-spec.md` §3.6 (first table with
+  a. The key table of `docs/settings-app-spec.md` §3.6 (first table with
      a `キー` header). A key cell holds back-quoted keys; `prefix*` followed by
      「の N キー」 stands for every top-level key with that prefix and N must
      match the schema. A key absent from the schema is allowed only when its
@@ -143,7 +143,7 @@ NO_HANDLER_MARKER = "ハンドラを持たない"
 ENUM_ORDER_MARKERS = ("enum の並び順", "`MessageType` の順")
 
 SETTINGS_DIRECTORY = "settings"
-SETTINGS_INDEX_DOC = "docs/sideload-packaging-spec.md"
+SETTINGS_INDEX_DOC = "docs/settings-app-spec.md"
 SETTINGS_INDEX_HEADING = "3.6 "
 UNREGISTERED_MARKER = "schema 未登録"
 ALL_KEYS_MARKER = "全 top-level キー"

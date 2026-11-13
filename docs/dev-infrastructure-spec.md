@@ -854,7 +854,7 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
 | `deadlineCutoffs` | object（任意） | `azookey_zenzai_bench` の各 iteration が deadline で打ち切られたかを表す `samples`、打ち切り回数 `count`、打ち切り率 `rate` |
 | `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
-| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec と試験用 pipe 往復の計測 |
+| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec、試験用 pipe 往復、実 Dispatcher 経由の送信 / Host / 受信の計測 |
 
 `azookey_bench --ipc` は固定の10候補 payload を使い、20回の warmup 後に200回計測する。
 `ipcPhases` は `samples`、`payloadBytes` と、`serializeMs`、`framingMs`、
@@ -863,6 +863,32 @@ framing は length-prefix の encode と decode の合計、pipe 往復は Windo
 同一プロセス内 echo server に対する Send / Receive の合計で、両端の codec を含む。
 接続確立、payload の Build / 型別 Parse、推論はこれらの計測に含めない。
 非 Windows では `pipeRoundTripMs=null` とし、ゼロ時間として扱わない。
+
+`ipcPhases` は、同じ warmup と標本数で実 `Dispatcher`（モデル無しの `InferenceEngine`）へ
+`QueryCandidates` を往復させた `sendMs`、`hostComputeMs`、`receiveMs` も持つ。
+各 field は `p50` / `p95` / `p99` / `max` を持ち、1 回の往復を次の 3 区間に分けて
+同じ `steady_clock` で測る。3 区間の和は往復全体に一致する。
+
+| field | 区間 |
+|---|---|
+| `sendMs` | client の `Send` 開始から、Host の handler 入口まで。client の書込と server の読取・起床を含む |
+| `hostComputeMs` | Host の handler 入口から出口まで（`Dispatcher::Dispatch`） |
+| `receiveMs` | Host の handler 出口から、client が応答を読み終えるまで。server の書込と client の読取を含む |
+
+読み方の注意: bench は Host と client を同一プロセスに置くため、区間の境界を同じ時計で
+測れる。一方で `sendMs` と `receiveMs` は転送だけでなく待機と起床を含む。
+`hostComputeMs` は `Dispatcher::Dispatch` の呼び出し全体で、推論と rerank に加え、要求の parse、
+要求登録、応答の JSON 生成も含むため、`latencyMs`（変換器の呼び出しだけ）より大きい。
+Host 側の `InferenceEngine` は `--ipc` のために別に作り、変換器は `SimpleConverter`、
+model path は空、trace の出力先は無しとする。`--model` や `--trace` を併用しても
+`hostComputeMs` は実モデルの推論を含まず、`--trace` の JSONL にも入らない。
+推論のフェーズ別の内訳は、`azookey_bench --trace` の通常の計測（`--ipc` の外）を
+`azookey_trace_viewer` で集計する。
+これらも非 Windows では出力しない（`pipeRoundTripMs=null` と同じ理由）。
+
+UI 反映（`ui_apply`）は `TextService` の中で計時され、実機の `AZOOKEY_LOG` と
+`azookey_trace_viewer` で集計する。bench は TSF の編集セッションと候補ウィンドウを持たず測れないため、
+`ipcPhases` の対象外とする。
 既定の `latencyMs` と baseline 比較は推論時間のままとし、IPC 時間を加算しない。
 `--ipc` は `--eval` と併用せず、pipe の作成・通信失敗時は非ゼロ終了する。
 
@@ -2537,7 +2563,7 @@ Named Pipe の payload は JSON のまま維持し、§6 の境界コーパス�
 ### 11.7 設定アプリの C#/.NET 9 化 — 不採用
 
 設定アプリは WinUI 3（C++/WinRT）を維持する。UI フレームワークの選定と再評価の条件は
-`docs/sideload-packaging-spec.md` §3.0 が正典である。
+`docs/settings-app-spec.md` §3.0 が正典である。
 
 ### 11.8 PCH — 不採用 / unity build — 見送り
 
@@ -2675,7 +2701,7 @@ v2 が可読なら併存を cleanup 待ちの `warning` とし、v2 が読めな
 残存だけでは cleanup 待ちと判定しない。
 
 D-012 が `warning` とする旧形式は、本節に登録したものに限る。`settings.json` は版識別子を持たず、
-`settings/mvp-settings.schema.json` は加算的に拡張する（`docs/sideload-packaging-spec.md` §3.6
+`settings/mvp-settings.schema.json` は加算的に拡張する（`docs/settings-app-spec.md` §3.6
 「拡張方針」）。破壊的変更は下記の登録を伴うため、登録済みの旧形式が無い限り、過去の schema に
 適合した `settings.json` は現行 schema にも適合し、`ok` になる。ただし下記のベンチマーク履歴の例外を除く。
 後方互換として受理する値形式、すなわち平文の `openAiApiKey`（D-014 が扱う）、root tier の
@@ -2939,7 +2965,7 @@ Response:
 v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落を `0` として扱う。
 `engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
 `neologd_layer` は protocol v1 の追加フィールドで、欠落と未知の `state` はどちらも「無し」として
-扱い、payload 全体は不正にしない。値の意味は `docs/auto-word-registration-spec.md` §15.14 が定める。
+扱い、payload 全体は不正にしない。値の意味は `docs/azdic-physical-layer-spec.md` §15.14 が定める。
 `reason` は `neologd_pack_load` ログと同じ固定の分類名だけで、パスやサーバの応答を含まない。
 
 `backend_selection` は protocol v1 への省略可能な追加フィールドである。欠落、型違い、
@@ -3123,7 +3149,7 @@ recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対�
 | Discord / Slack（Electron） | `contenteditable` で `GetTextExt` 精度が低い | best-effort。位置ずれ時はキャレット位置 fallback |
 | Word / Excel / Outlook | UI Automation TextPattern の信頼性が低い | recorder + §13.3.1 チェックリスト。Excel はセル編集と数式バーで context が切り替わる点に注意 |
 | Windows Terminal / PowerShell | conhost 系で TSF level 3 非対応の場面がある | level 1（最小 composition）で確定を優先、候補位置はキャレット概算 |
-| UWP / WinUI（Store apps） | AppContainer ACL、Windows アプリ互換カテゴリ、第三者 IME の署名がロード前提 | `ALL APPLICATION PACKAGES`（S-1-15-2-1）RX、`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` 登録、署名済み TIP を揃える（正典は `docs/sideload-packaging-spec.md` §1.7）。本ハーネスは Windows Settings を `full`、その他 Store apps を `best-effort` とし、署名済み成果物の確認は Human Gate で行う |
+| UWP / WinUI（Store apps） | AppContainer ACL、Windows アプリ互換カテゴリ、第三者 IME の署名がロード前提 | `ALL APPLICATION PACKAGES`（S-1-15-2-1）RX、`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` 登録、署名済み TIP を揃える（正典は `docs/msix-packaging-spec.md` §1.7）。本ハーネスは Windows Settings を `full`、その他 Store apps を `best-effort` とし、署名済み成果物の確認は Human Gate で行う |
 
 ### 13.4 実装
 

@@ -6,8 +6,8 @@
 |---|---|---|---|
 | ローマ字かな変換（Feed / Flush / Preview） | `docs/romaji-batch-conversion-spec.md` §3〜§5、`docs/legacy-parity-spec.md` | `core/src/RomajiKanaConverter.cpp` | `core_tests`（`core/tests/romaji_kana_converter_test.cpp`） |
 | 固定辞書変換と bigram 文脈 | `docs/conversion-quality-benchmark-spec.md`、`docs/model-management-spec.md` | `core/src/SimpleConverter.cpp`、`core/include/azookey/core/IConverter.h` | `core_tests`（`core/tests/simple_converter_test.cpp`）、`host_engine_tests` |
-| 辞書 trie とレイヤ（静的・可変・ユーザー語） | `docs/auto-word-registration-spec.md` | `core/src/DoubleArrayTrie.cpp`、`learning/src/DictionaryStore.cpp`、`inference-host/src/DictionaryCandidateProvider.cpp` | `dictionary_tests`、`host_engine_tests` |
-| オフライン辞書ビルド | `docs/auto-word-registration-spec.md`、`docs/decisions/2026-09-08-nll-release-measurement.md` | `dictbuild/dictbuild.py` | `dictbuild_python_tests` |
+| 辞書 trie とレイヤ（静的・可変・ユーザー語） | `docs/auto-word-registration-spec.md`、`docs/azdic-physical-layer-spec.md` | `core/src/DoubleArrayTrie.cpp`、`learning/src/DictionaryStore.cpp`、`inference-host/src/DictionaryCandidateProvider.cpp` | `dictionary_tests`、`host_engine_tests` |
+| オフライン辞書ビルド | `docs/auto-word-registration-spec.md`、`docs/azdic-physical-layer-spec.md`、`docs/decisions/2026-09-08-nll-release-measurement.md` | `dictbuild/dictbuild.py` | `dictbuild_python_tests` |
 | live 変換の span 分割 | `docs/rich-features-spec.md`、`docs/inline-english-candidate-spec.md` | `core/src/LiveConversionChunker.cpp` | `core_tests`（`core/tests/live_conversion_chunker_test.cpp`） |
 | 一括変換の chunk 境界 | `docs/romaji-batch-conversion-spec.md` §5〜§7 | `core/include/azookey/core/BatchConversionChunker.h` | `core_tests`、`ipc_payloads_tests` |
 | 数字・半角カタカナ・記号・絵文字リライター | `docs/candidate-rewriter-spec.md` §3、§6〜§9、§18、§19 | `core/src/NumberRewriter.cpp`、`core/src/KatakanaRewriter.cpp`、`core/src/SymbolRewriter.cpp`、`core/src/SymbolChainTable.cpp`、`core/src/RewriterIndex.cpp`、`core/src/RewriterNormalization.cpp`、`inference-host/src/RewriterData.cpp` | `core_tests`（`number_rewriter`、`katakana_rewriter`、`symbol_rewriter`、`rewriter_index`） |

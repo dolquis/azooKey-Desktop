@@ -195,6 +195,9 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
     phases.emplace("deserializeMs", metrics(ipc.deserialize));
     phases.emplace("pipeRoundTripMs",
                    ipc.pipe_round_trip ? metrics(*ipc.pipe_round_trip) : Value());
+    if (ipc.send) phases.emplace("sendMs", metrics(*ipc.send));
+    if (ipc.host_compute) phases.emplace("hostComputeMs", metrics(*ipc.host_compute));
+    if (ipc.receive) phases.emplace("receiveMs", metrics(*ipc.receive));
     root.emplace("ipcPhases", Value(std::move(phases)));
   }
   root.emplace("latencyMs", Value(std::move(latency)));

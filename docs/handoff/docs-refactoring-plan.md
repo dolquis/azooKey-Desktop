@@ -94,7 +94,7 @@ dod: "§6"
 
 - roadmap の各 M 節を「目的 / 前提 / 変更対象 / 受け入れ条件 / 参照仕様」に揃え、依存図を 1 つに統合する。
 - `dev-infrastructure-spec.md` を、§ 番号を保ったまま、CI、IPC の堅牢化、観測性、Host の可用性、診断ウィザード、互換ハーネスに分ける。元のファイルには § ごとの転送表を残す。
-- `sideload-packaging-spec.md` §3（設定アプリ）、`auto-word-registration-spec.md` §15（物理層）、`inline-english-candidate-spec.md` §4.5〜4.8（格納層）、`neural-reranker-spec.md` の Track A / B を分ける候補とする。`rich-features-spec.md` は、実装のある契約を所有 spec へ移して解体する。
+- `sideload-packaging-spec.md` §3（設定アプリ）、`azdic-physical-layer-spec.md` §15（物理層）、`inline-english-candidate-spec.md` §4.5〜4.8（格納層）、`neural-reranker-spec.md` の Track A / B を分ける候補とする。`rich-features-spec.md` は、実装のある契約を所有 spec へ移して解体する。 <!-- lint:allow section -->
 - `docs/README.md` の handoff 表を、検証系とエージェント運用系に分ける。
 
 ## 5. 再発防止

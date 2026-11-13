@@ -40,7 +40,7 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 - 任意の URL からモデルを取得する汎用ダウンロード機能。
   設定 UI から取得できるのは既定の catalog の entry だけである（§4.4 / §6.1）。
   v1.0 の最小取得経路（利用者の操作による取得 + 手動配置）は
-  `docs/sideload-packaging-spec.md` §1.6.1 が正典であり、共通取得基盤は §3.1.2 に定める
+  `docs/msix-packaging-spec.md` §1.6.1 が正典であり、共通取得基盤は §3.1.2 に定める
 - モデルの自動更新機能（同上）
 - llama.cpp バインディング自体の改修（M8 / M24 の責務）
 - 推論精度評価（M52 変換品質評価ベンチの責務）
@@ -145,7 +145,7 @@ catalog v2 は、同じモデルの artifact を 1 entry にエンジン別に�
     コミット ID）の 2 つを必須とする。ブランチ名やタグは成果物が pin の下で変わり得るため
     認めない。URL は `https://huggingface.co/<huggingFaceRepo>/resolve/<revision>/<fileName>`
     （`fileName` は percent-encode）で組み立てる。任意の URL や別のホストは書けない
-    （`docs/sideload-packaging-spec.md` §1.6.2 の再ホストしない方針を構造で守る）。
+    （`docs/msix-packaging-spec.md` §1.6.2 の再ホストしない方針を構造で守る）。
     `source` を持つ artifact は `sizeBytes` を必須とする。
 - v2 の entry は `backendHint` を持たない。エンジンは `artifacts` のキーで表す。
 - R2 artifact はディレクトリなので 1 つのハッシュにまとめず、構成ファイルごとに
@@ -170,7 +170,7 @@ catalog v2 は、同じモデルの artifact を 1 entry にエンジン別に�
 製品の既定の catalog は `settings/default-model-catalog.json`（v2）とし、ビルド時に
 `azookey_inference_host` へバイト列として埋め込む（`DefaultModelCatalogJson`）。MSI と検証用
 zip には catalog のファイルを置かない。インストール先のファイルを書き換えて pin を外す
-経路を作らないためである。中身は `docs/sideload-packaging-spec.md` §1.6.2 の固定値で、
+経路を作らないためである。中身は `docs/msix-packaging-spec.md` §1.6.2 の固定値で、
 `zenz-v3.2-small`（`promptFormat` は `zenz-v3`）を `defaultModelId`、`kanakanji-edge-33m`
 （`kanakanji-edge-v1`）を選べる entry とする。ファイルが schema に通ることは手元の pre-commit の
 `check-jsonschema` で、parser に通り既定が zenz であることは CI でも走る単体テストで確かめる。
@@ -182,7 +182,7 @@ zip には catalog のファイルを置かない。インストール先のフ�
 した entry を返す。SHA-256 は呼び出し側が計算して渡す。常駐 Host では `CatalogModelMatcher` が
 SHA-256 を計算・保持してこれを呼び、一致した entry の `promptFormat` をロードに使う（同 §4.4）。
 設定アプリからの取得は §4.4 の IPC が持つ。Host 起動時の自動取得は行わず、入れるかは
-`docs/sideload-packaging-spec.md` §1.6.1 (b) の将来の判断とする。
+`docs/msix-packaging-spec.md` §1.6.1 (b) の将来の判断とする。
 
 ### 3.1.2 GGUF 取得基盤
 
@@ -225,7 +225,7 @@ HTTP はループバックの自動テストに限って使用する。
 タイムアウトを呼び出しごとに設定する。
 
 本節の取得手順（`.part`、Range、SHA256、原子置換）はモデル取得の正典であり、
-`docs/sideload-packaging-spec.md` §1.6.1「配置パスとバージョニング」と
+`docs/msix-packaging-spec.md` §1.6.1「配置パスとバージョニング」と
 `docs/ai-backend-spec.md` §6.2 から参照される。
 
 #### catalog の entry の取得
@@ -239,7 +239,7 @@ HTTP はループバックの自動テストに限って使用する。
 2. 確定パスに同じ名前のファイルがあれば、ネットワークを禁じた要求で先に照合する。SHA-256 が
    一致すればそれを使う（`already_valid`）。一致しなければ、利用者が置いたファイルか別の版
    なので置き換えず、接続せずに `destination_occupied` で失敗する（新版は別のファイル名で
-   取得する。`docs/sideload-packaging-spec.md` §1.6.1「更新時の置換」）。共有違反などで
+   取得する。`docs/msix-packaging-spec.md` §1.6.1「更新時の置換」）。共有違反などで
    読めなかった場合も同じ扱いとし、ダウンローダのメッセージを CLI に出す。この判定は取得の
    開始時点のもので、取得中に同じ名前のファイルが置かれると、手順 3 の昇格（replace）で
    置き換わりうる。
@@ -277,7 +277,7 @@ id を省くと `defaultModelId`）。CLI は `settings.json` の `privacy.mode`
 その timeout（接続 15 秒、受信 30 秒）を待たずに止まる（ダウンローダは WinHTTP を非同期で使い、
 待ちの間に取り消しを確かめる）。Host の停止か利用者の中止で止まった取得は
 `cancelled` で失敗し、`.part` が残るので次の取得で続きから再開する。
-Host が起動時に利用者の操作なしで取得することはない（`docs/sideload-packaging-spec.md` §1.6.1 (b)）。
+Host が起動時に利用者の操作なしで取得することはない（`docs/msix-packaging-spec.md` §1.6.1 (b)）。
 
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
 
@@ -735,7 +735,7 @@ Backend: auto → CPU
 - **選択モデルをロード**: `LoadModel` IPC を送信、進捗バー表示
 - **ベンチマーク**: `BenchmarkModel` IPC を送信、結果を表示・保存
 
-設定アプリの「AI 変換」ペイン（`sideload-packaging-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
+設定アプリの「AI 変換」ペイン（`settings-app-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
 検証結果の表示、ベンチマーク（`BenchmarkModel`。backend は `cpu`）、モデルの選択、`model.benchmarkHistory` の
 表示である。モデルを選ぶと同じペインの「使うモデル」の表示が変わり、`model.selectedPath` は保存バーが
 書く。選択と測定の対象は、`valid` な `gguf` に限る（`onnx_genai` は一覧に出すが選べない）。
@@ -754,7 +754,7 @@ Host が応答するまでは、同じウィンドウから新しい取得を始
 指すため、応答前に始めた取得を止めないようにする）。
 取得が成功したら（`downloaded` / `already_valid`）、その確定パスを同じペインの
 「使うモデル」へ入れる。`model.selectedPath` を書くのは、ほかの選択と同じく保存バーである
-（`docs/sideload-packaging-spec.md` §1.6.1「利用者の操作による取得」）。
+（`docs/msix-packaging-spec.md` §1.6.1「利用者の操作による取得」）。
 取得中に利用者が「使うモデル」を変えたとき（別のモデルを選ぶ、選択を外す）は、取得が成功しても「使うモデル」を変えず、取得したことだけを示す。`mismatch` の entry は、
 同じ名前の別のファイルを置き換えないので取得ボタンを出さない。
 `verified` の entry と同じファイルがモデル一覧にもあるときは、選ぶ操作をモデル一覧の行に一本化する。

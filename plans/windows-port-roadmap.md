@@ -303,15 +303,15 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **受け入れ条件**:
   - クリーンな Win11 VM でインストール → IME 選択 → 入力 → 確定が動く
   - アンインストールでレジストリ・ファイルが残らない
-- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§3・§4
+- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§4、`docs/settings-app-spec.md` §3
 - **補足**:
   - **実装範囲**:
     - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
       `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
       と、学習ペインでのユーザー辞書の追加・削除、「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
-      `docs/sideload-packaging-spec.md` §3.7 を正典とする
+      `docs/settings-app-spec.md` §3.7 を正典とする
     - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
-      `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/sideload-packaging-spec.md` §3.3）と
+      `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/settings-app-spec.md` §3.3）と
       `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
       スコープとする（M30 はこの最小層の上に UI を本格化する）。
     - 共有ユーザーデータの writer 責務は
@@ -324,12 +324,12 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
     - TIP 登録はインストーラのカスタムアクションで HKLM `DllRegisterServer` を呼ぶ
       **per-machine・要昇格**の経路とし、アンインストール時に自動解除する
     - `ITfFnConfigure` からの設定アプリ起動は別プロセス EXE の非同期起動
-      （`docs/sideload-packaging-spec.md` §3.5、正典は `docs/tsf-deep-integration-spec.md` §6）
+      （`docs/settings-app-spec.md` §3.5、正典は `docs/tsf-deep-integration-spec.md` §6）
   - **UI フレームワーク決定**: **WinUI 3（C++/WinRT）**。根拠は
     既存 C++/WinRT スタックとの親和性・Fluent / Mica 標準対応・配布形態
     （MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は
     代替案とする。実機での配布サイズ・初回起動・IPC 連携行数の確証は
-    `gate:human-required` とする。詳細は `docs/sideload-packaging-spec.md` §3.0、選定の経緯は
+    `gate:human-required` とする。詳細は `docs/settings-app-spec.md` §3.0、選定の経緯は
     [`docs/decisions/2026-06-settings-app-ui-framework.md`](../docs/decisions/2026-06-settings-app-ui-framework.md)。
     本ロードマップ内で WinUI 3 採用に言及する箇所（リスク章・M30）は本節を参照する。
   - **設計メモ**: 設定 UI が読み書きするユーザーデータの保存先は M39 で確定
@@ -944,16 +944,16 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体パックは同梱しない
     （同 §14.9）
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
-- **参照仕様**: `docs/sideload-packaging-spec.md` §1
+- **参照仕様**: `docs/msix-packaging-spec.md` §1
 - **補足**:
-  - **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
+  - **実装範囲**: `docs/msix-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
     DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
     operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
   - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
     `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
     MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
     ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke）で検証する。
-    詳細は `docs/sideload-packaging-spec.md` §1.1.1。
+    詳細は `docs/msix-packaging-spec.md` §1.1.1。
 
 ### M29: EV/OV コード署名 CI（TIP バイナリ署名。スタンドアロン MSIX 署名は延期）
 
@@ -987,7 +987,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **受け入れ条件**:
   - 設定アプリで値を変更 → Host が即時反映 or 再起動指示
   - Windows 設定からの「詳細設定」起動で開く（`ITfFnConfigure`）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
+- **参照仕様**: `docs/settings-app-spec.md` §3、`docs/rich-features-spec.md`
   X-2-6, X-2-7, X-3-6
 - **補足**:
   - **UI フレームワーク**: M11「UI フレームワーク決定」に揃える。
@@ -1041,8 +1041,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
     いずれの分岐でも DL 失敗 / 不一致時は手動配置へフォールバックし Host は
     落ちない（§1.6.1 / M8 / M47 と整合）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
-  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6、`docs/msix-packaging-spec.md` §1.6.1
+  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および `docs/msix-packaging-spec.md` §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
 
 ### M33: ETW / WER
 
@@ -1110,7 +1110,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **参照仕様**: `docs/typo-correction-learning-spec.md`
   - 実装範囲の正典: `docs/typo-correction-learning-spec.md` §1〜§8
 - **補足**:
-  - **設定**: 設定アプリの「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  - **設定**: 設定アプリの「辞書」ペインで編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M36: 新語自動取得
 
@@ -1311,7 +1311,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 品詞フィールド `segments[].pos` / `head_pos` の導出と曖昧性ガードの品詞駆動化（§7.2）
-  - **設定**: 設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  - **設定**: 設定アプリの「入力」ペインで編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M60: ローマ字入力中インライン英単語候補
 
@@ -1348,7 +1348,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 実装範囲の正典: `docs/inline-english-candidate-spec.md` §3〜§8
 - **補足**:
   - **設定**: Zenzai・TSF 深耕・パッケージングに依存しない。設定は設定アプリの「候補」ペインで
-    編集する（`docs/sideload-packaging-spec.md` §3.2）。
+    編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M61: 自動カッコペアリング（Bracket Auto-Pairing）
 
@@ -1563,7 +1563,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M52（変換品質ベンチ）。
   - 英語区間は英字のまま Zenzai の入力に入れるため、`core/` の `LiveConversionChunker` の
     Verbatim 分類は M63 では使わない（spec §7）。
-  - NllScorer は言語判別に使わず、Track B の適用範囲（同 §B1・§B5）は変えない（spec §3）。
+  - NllScorer は言語判別に使わず、Track B（`docs/neural-reranker-nll-spec.md` §B1・§B5）の適用範囲は変えない（spec §3）。
 - **変更対象**（spec の各章）: `tsf-tip/src/TextService.cpp`（生ローマ字の送信条件、ライブ変換要求、
   区間ごとの確定）、`core/`（日英分割器）、`ipc/include/azookey/ipc/Payloads.h` と
   `ipc/src/Payloads.cpp`（`QueryLiveConversion` / `QueryCandidates` / `LiveSegment` の拡張）、
@@ -1590,7 +1590,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   `docs/inline-english-candidate-spec.md`（M60）、`docs/romaji-batch-conversion-spec.md`
   §4.1・§7（生ローマ字と chunk）、`docs/zenzai-inference-spec.md` §3・§8、
   `docs/dev-infrastructure-spec.md` §8.5.2（ライブ変換の timeout）、
-  `docs/neural-reranker-spec.md` Track B、`docs/mixed-english-input-feasibility-report.md`
+  `docs/neural-reranker-nll-spec.md`（Track B）、`docs/mixed-english-input-feasibility-report.md`
 - **補足**:
   - **ユーザー可視挙動の要求**（仕様化の前提として固定する）:
     1. 英語の可能性が高い語は、ライブ変換と第 1 候補で英字になる。日本語の可能性が高い語は
@@ -2090,15 +2090,15 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/auto-word-registration-spec.md`（M36-A/B 改訂 + M53 追補）
 > - `docs/user-learning-enhancement-spec.md`（M54）
 > - `docs/typo-correction-learning-spec.md`（M35 改訂 + M55 追補）
-> - `docs/neural-reranker-spec.md`（M56 = Track A。同書 Track B は M 番号を
->   持たない NllScorer トラック）
+> - `docs/neural-reranker-spec.md`（M56 = Track A）
+> - `docs/neural-reranker-nll-spec.md`（Track B。M 番号を持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
 >
-> `docs/neural-reranker-spec.md` は 2 トラックを収容する。Track A（§1〜§14）が
-> 本トラックの M56、Track B（§B1〜§B12）が **NllScorer 型ニューラルリランク**
+> リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
+> 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
 > （ロード済み Zenzai で辞書由来候補を NLL リランク。karukan 設計参照）である。
 > Track B は M8 のみを前提とし M52〜M55 に依存しないため、本トラックの M 番号を
-> 与えず独立したトラックとして扱う。既定 OFF で挙動不変（同書 §B9）。
+> 与えず独立したトラックとして扱う。既定 OFF で挙動不変（Track B §B9）。
 
 ### M52: 変換品質評価ベンチ
 
@@ -2368,6 +2368,6 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
 1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の
-順で効果を測定しながら進める。例外は `docs/neural-reranker-spec.md` Track B
+順で効果を測定しながら進める。例外は `docs/neural-reranker-nll-spec.md`（Track B）
 （NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
 （前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。

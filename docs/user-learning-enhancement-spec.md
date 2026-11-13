@@ -584,7 +584,7 @@ M54 の `app_name` 行（§3.2）は表記の下の 3 層目に置く。前方�
 
 **double-array trie は採らない**。
 M53 の system 辞書はビルド時に構築して以後変更しない静的な索引である
-（`auto-word-registration-spec.md` §15.2）。
+（`azdic-physical-layer-spec.md` §15.2）。
 学習ストアは確定のたびに `Observe` が走る mutable なストアであり、
 挿入のたびに再配置を伴う double-array は向かない。
 レコード数は `learning_max_records`（既定 10000、§3.1.1）で上限が付いており、

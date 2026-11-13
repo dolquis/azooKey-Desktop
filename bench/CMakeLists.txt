@@ -170,6 +170,13 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 30
   )
   if(WIN32)
+    # DEV-1962: keys are sorted, so hostComputeMs and receiveMs precede samples and sendMs follows it.
+    set_tests_properties(azookey_bench_ipc_smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "\"hostComputeMs\":\\{.*\"receiveMs\":\\{.*\"samples\":200.*\"sendMs\":\\{.*\"serializeMs\":"
+    )
+  endif()
+  if(WIN32)
     add_test(NAME azookey_conversion_quality_smoke
              COMMAND "${CMAKE_COMMAND}"
                      "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"

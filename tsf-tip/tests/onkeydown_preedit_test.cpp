@@ -15256,6 +15256,123 @@ TEST(TsfTipPredictionModeTest, TurningPredictionsOffKeepsTheCandidateWindow) {
   EXPECT_TRUE(h.service.candidate_window_for_test().IsVisible());
 }
 
+namespace {
+uint32_t PredictionReasonBit(azookey::tsf::PredictionLogReason reason) {
+  return 1U << static_cast<unsigned>(reason);
+}
+}  // namespace
+
+// DEV-1985: the profilesByApp layer that sets predictionEnabled for the
+// focused app decides whether a prediction is asked for; without one the
+// global value does (app-profile-spec §4.1, §5).
+TEST(TsfTipPredictionModeTest, FocusedAppsProfileDecidesWhetherAPredictionIsAsked) {
+  using azookey::tsf::PredictionLogReason;
+  struct Case {
+    bool global;
+    const char* profiles;
+    bool expected_query;
+    PredictionLogReason reason;
+  };
+  for (const auto& item : {
+           Case{true, R"({"profilesByApp":{"NOTEPAD.EXE":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true, R"({"profilesByApp":{"Notepad":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true, R"({"profilesByApp":{"default":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true,
+                R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":true},)"
+                R"("default":{"predictionEnabled":false}}})",
+                true, PredictionLogReason::Queued},
+           Case{false, R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":true}}})", true,
+                PredictionLogReason::Queued},
+           Case{false, R"({"profilesByApp":{"code.exe":{"predictionEnabled":true}}})", false,
+                PredictionLogReason::Disabled},
+           Case{true, R"({"profilesByApp":{"notepad.exe":{"promptPrefix":"x"}}})", true,
+                PredictionLogReason::Queued},
+       }) {
+    SCOPED_TRACE(item.profiles);
+    SCOPED_TRACE(item.global ? "global on" : "global off");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_prediction_enabled_for_test(item.global);
+    h.service.set_app_profiles_for_test(item.profiles);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+    EXPECT_EQ(h.service.pending_prediction_generation_for_test() != 0, item.expected_query);
+    const uint32_t logged = h.service.prediction_logged_reasons_for_test();
+    EXPECT_NE(logged & PredictionReasonBit(item.reason), 0u);
+    // The log names the layer that turned it off, and nothing else.
+    const uint32_t off = PredictionReasonBit(PredictionLogReason::Disabled) |
+                         PredictionReasonBit(PredictionLogReason::AppProfileDisabled);
+    EXPECT_EQ(logged & off & ~PredictionReasonBit(item.reason), 0u);
+  }
+}
+
+// DEV-1985: a prediction answered after the focused app's profile turned
+// predictions off is not shown.
+TEST(TsfTipPredictionModeTest, PredictionAnsweredAfterTheAppsProfileTurnsItOffIsNotShown) {
+  using namespace azookey::ipc;
+  using azookey::tsf::PredictionLogReason;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-app-profile-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> prediction_queries{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      ++prediction_queries;
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  // Without the handshake token the worker never connects.
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
+  ASSERT_NE(h.service.pending_prediction_generation_for_test(), 0u);
+  // The query is already queued when the profile turns predictions off.
+  h.service.set_app_profiles_for_test(
+      R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":false}}})");
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(
+      WaitUntil([&] { return prediction_queries.load() > 0; }, std::chrono::milliseconds(10000)));
+  EXPECT_TRUE(WaitUntil(
+      [&] {
+        h.service.process_candidates_ready_for_test();
+        return (h.service.prediction_logged_reasons_for_test() &
+                PredictionReasonBit(PredictionLogReason::AppProfileDisabled)) != 0;
+      },
+      std::chrono::milliseconds(20000)));
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
+  EXPECT_EQ(h.service.prediction_logged_reasons_for_test() &
+                PredictionReasonBit(PredictionLogReason::Shown),
+            0u);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
 // DEV-1949 (DEV-1931): leaving the candidate list for the reading hides the
 // window before the predictions appear in it, so the two modes never swap on screen.
 TEST(TsfTipPredictionModeTest, LeavingTheCandidatesHidesTheWindowBeforePredictions) {

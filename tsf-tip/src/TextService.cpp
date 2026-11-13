@@ -1256,6 +1256,8 @@ std::string PredictionLogReasonName(PredictionLogReason reason) {
   switch (reason) {
     case PredictionLogReason::Disabled:
       return "disabled";
+    case PredictionLogReason::AppProfileDisabled:
+      return "app_profile_disabled";
     case PredictionLogReason::NotAllowed:
       return "not_allowed";
     case PredictionLogReason::NoContext:
@@ -9578,8 +9580,13 @@ void TextService::ClearPrediction() {
 
 void TextService::RefreshPrediction(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
-  if (!local_settings_.PredictionEnabledSnapshot()) {
-    LogPredictionOnce(PredictionLogReason::Disabled);
+  // The focused app's profile decides over the global switch (DEV-1985); the
+  // menu still shows the global one (tsf-deep-integration-spec §4.5).
+  const auto prediction =
+      local_settings_.PredictionSettingFor(foreground_app_.Get(), WindowsAppNameEqual);
+  if (!prediction.enabled) {
+    LogPredictionOnce(prediction.by_app_profile ? PredictionLogReason::AppProfileDisabled
+                                                : PredictionLogReason::Disabled);
     // Only the prediction mode goes; the candidate window stays for conversion.
     ClearPrediction();
     prediction_cache_.clear();
@@ -9682,8 +9689,12 @@ void TextService::ApplyPredictionResult() {
     result = std::move(prediction_result_);
     prediction_result_.reset();
   }
-  if (!local_settings_.PredictionEnabledSnapshot()) {
-    if (result) LogPredictionOnce(PredictionLogReason::Disabled);
+  const auto prediction =
+      local_settings_.PredictionSettingFor(foreground_app_.Get(), WindowsAppNameEqual);
+  if (!prediction.enabled) {
+    if (result)
+      LogPredictionOnce(prediction.by_app_profile ? PredictionLogReason::AppProfileDisabled
+                                                  : PredictionLogReason::Disabled);
     // Only the prediction mode goes; the candidate window stays for conversion.
     ClearPrediction();
     prediction_cache_.clear();

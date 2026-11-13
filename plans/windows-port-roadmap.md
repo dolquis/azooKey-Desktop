@@ -1041,8 +1041,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
     いずれの分岐でも DL 失敗 / 不一致時は手動配置へフォールバックし Host は
     落ちない（§1.6.1 / M8 / M47 と整合）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
-  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6、`docs/msix-packaging-spec.md` §1.6.1
+  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および `docs/msix-packaging-spec.md` §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
 
 ### M33: ETW / WER
 

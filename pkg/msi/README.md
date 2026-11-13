@@ -94,7 +94,7 @@ TIP DLL の `DllRegisterServer` に COM クラス、TSF プロファイル、カ
 どちらの経路にも、後続処理が失敗した場合の rollback action を設定しています。
 Host はインストール後の再ログオンで通常権限の supervisor から起動します。
 削除・upgrade・rollback 時の常駐とデータ保持の規則は
-[`docs/msix-packaging-spec.md` §1.7](../../docs/sideload-packaging-spec.md#msi-のログオン常駐)を参照してください。
+[`docs/msix-packaging-spec.md` §1.7](../../docs/msix-packaging-spec.md#msi-のログオン常駐)を参照してください。
 64-bit TIP を確実に登録するため、カスタムアクションは
 `%SystemRoot%\System32\msiexec.exe`（WiX の `System64Folder`）を使用します。
 
@@ -107,13 +107,13 @@ Edge のように AppContainer を使うが入力欄を Win32 プロセスがホ
 
 GGUF モデルと CUDA ランタイムは base MSI に同梱しません。
 モデルは設定アプリの取得ボタンや CLI の `models fetch` による取得と手動配置で扱います
-（[`docs/msix-packaging-spec.md` §1.6.1](../../docs/sideload-packaging-spec.md)）。
+（[`docs/msix-packaging-spec.md` §1.6.1](../../docs/msix-packaging-spec.md)）。
 CUDA の扱いは [`docs/copilot-pc-backend-spec.md` §4.3](../../docs/copilot-pc-backend-spec.md) を正典とします。
 Vulkan 版の Inference Host も base MSI に入れず、別の MSI（`pkg\msi-vulkan\azooKey.VulkanAddon.wixproj`）で
 配ります。`windows-vulkan-release` の Host を `azookey_inference_host_vulkan.exe` に改名して
 `-p:VulkanHostExePath=<絶対パス>` と `-p:ProductVersion=<base と同じ版>` を渡すと、
 `pkg\msi-vulkan\bin\Release\azooKey-vulkan-addon-<版>-x64.msi` ができます。導入の条件と起動する Host の決定は
-[`docs/msix-packaging-spec.md` §1.6.3](../../docs/sideload-packaging-spec.md) を正典とします。
+[`docs/msix-packaging-spec.md` §1.6.3](../../docs/msix-packaging-spec.md) を正典とします。
 
 この MSI はコード署名しません。
 インストール時には Windows Defender SmartScreen と UAC に「不明な発行元」と表示されます。

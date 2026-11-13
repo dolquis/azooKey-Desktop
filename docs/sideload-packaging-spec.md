@@ -1,7 +1,8 @@
 # 配布・パッケージング 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
-`plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
+`plans/windows-port-roadmap.md` の M11・M12 と Phase 7 の M29・M32〜M34 が本書を参照する。
+M28（MSIX）は `docs/msix-packaging-spec.md`、M30（設定アプリ）は `docs/settings-app-spec.md` が定める。
 
 ## 読み方
 
@@ -19,7 +20,7 @@
 | 節 | 内容 | マイルストーン |
 |---|---|---|
 | §0 | 配布方針（チャネルと署名要否の確定） | M11・M12 |
-| §1 | MSIX パッケージング（MS Store 向け。`docs/msix-packaging-spec.md` へ移動。転送表を参照） | M28（§1.6 は M24 と連動） |
+| §1 | MSIX パッケージング（MS Store 向け。`docs/msix-packaging-spec.md` へ移動。転送表を参照） | M28（移動先が定める。§1.6 は M24 と連動） |
 | §2 | EV/OV コード署名 | M29 |
 | §3 | 設定アプリ（`docs/settings-app-spec.md` へ移動。転送表を参照） | M11（最小）・M30（フル） |
 | §4 | WiX / MSI インストーラ（MVP 既定） | M11・M12（§4.4 は M38） |
@@ -39,7 +40,7 @@
 | チャネル | 形式 | 自前コード署名 | 位置づけ |
 |---|---|---|---|
 | **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | MVP（評価配布）と v1.0 の既定形式。§4 が正典。GitHub Release で配布。TIP バイナリ署名は §0.1 |
-| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成 |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。`msix-packaging-spec` §1 を Store 用 Identity で構成 |
 | **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | 延期。§2 の署名ルート（§2.0 の経路 B）は本チャネルの着手時に実施する |
 
 MSIX は署名がインストールの前提条件だが、MSI は署名が任意である。未署名 MSI では
@@ -50,7 +51,7 @@ SmartScreen 警告と UAC「不明な発行元」が出るが、reputation build
 上表の「自前コード署名」欄は**インストーラの署名要否**を示す。第三者 IME として TIP バイナリに
 求められる署名要件は別の境界であり、§0.1 で扱う。
 
-以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
+以降の `msix-packaging-spec` §1（MSIX）・§2（署名）は上表に従って読むこと。**`msix-packaging-spec` §1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
 ### 0.1 MVP の入力対象スコープと署名ゲート
@@ -83,8 +84,8 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 
 * `tsf-tip/` に x86 ターゲットを追加し、x86 TIP DLL をビルドする
 * 32 bit の `regsvr32` から `DllRegisterServer` を呼び、レジストリの 32 bit ビュー（`WOW6432Node`）へ CLSID と `CTF\TIP` を登録する
-* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
-* MSIX（§1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
+* `msix-packaging-spec` §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
+* MSIX（`msix-packaging-spec` §1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
 
 再評価のトリガは 2 つある。
 実利用者から 32 bit プロセスでの入力要望が挙がること、または M27（ARM64 ビルド）で複数アーキテクチャのビルドと登録の経路が整備され、x86 追加の限界コストが下がることである。
@@ -112,13 +113,13 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 Store 入力の失敗が IME 署名要件と CIG のどちらによるものかは切り分けておらず、MVP の期間内に決着させる見込みが立たない。
 そのため入力対象から外して v1.0 以降のトラックへ送り、切り分けもそのトラックで行う。
 
-TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（§1.7）は、将来の対応に備えた回帰防止として残す。
+TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（`msix-packaging-spec` §1.7）は、将来の対応に備えた回帰防止として残す。
 
 ## 2. EV/OV コード署名（M29）
 
 > **スコープ注記（§0 配布方針 / §0.1）**: 本節（自前コード署名）が要るのは 2 つの文脈である。
 > 1 つは**スタンドアロン MSIX サイドロード**で、これは §0 の配布方針により当面延期する。
-> もう 1 つは**第三者 IME としての TIP バイナリ署名**（§1.7 の要件 3）で、こちらは入力対象の
+> もう 1 つは**第三者 IME としての TIP バイナリ署名**（`msix-packaging-spec` §1.7 の要件 3）で、こちらは入力対象の
 > スコープと独立に **v1.0 のリリースゲート**として残る（§0.1 / DEV-783）。
 > MVP 期間の MSI 直接配布は未署名（§4 / DEV-415）だが、これは評価配布としての扱いであり、
 > 署名義務が免除されたことを意味しない。MS Store の MSIX は Microsoft が再署名するため、
@@ -222,7 +223,7 @@ distinguished name (DN) 全体と完全一致**（フィールド順含む）で
 CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が含まれる。
 不一致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
 
-* §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
+* `msix-packaging-spec` §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
   を持つ自己署名 dev cert で動作する想定（OV/EV cert ではほぼ通らない）
 * OV/EV cert 取得後は **certutil / openssl で Subject を取得**し、その全文を
   `Publisher` に貼る。例:
@@ -234,7 +235,7 @@ CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が�
 * CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
 * **個人名義の OV では CN が法的氏名になる。** 個人開発者が OV を取得すると
   Subject CN は本人確認で用いた法的氏名で発行され、ハンドル名にはならない。
-  §1.1 manifest 例の `Publisher="CN=dolquis"` はそのままでは通らないため、証明書
+  `msix-packaging-spec` §1.1 manifest 例の `Publisher="CN=dolquis"` はそのままでは通らないため、証明書
   取得後に `Identity@Publisher` を実際の Subject DN 全文へ差し替える。ハンドル名を
   残せるのは `DisplayName` / `PublisherDisplayName` の側であり、完全一致が要求
   されるのは `Identity@Publisher` と証明書 Subject DN だけである。
@@ -353,7 +354,7 @@ Host が静的リンクする [OS 付属 ICU](https://learn.microsoft.com/en-us/
 > **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が MVP と v1.0 の既定配布形態**である。MVP の MSI は未署名の評価配布（DEV-415）、
 > v1.0 の MSI は TIP バイナリ署名を含む正式リリースとする（§0.1）。
 > 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
-> 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、
+> 配布方針転換により MVP の主経路へ格上げした。MSIX は `msix-packaging-spec` §1（MS Store 用）に回す。MSI は署名が任意で、
 > 未署名でもインストール可能（SmartScreen 警告 + UAC「不明な発行元」は出る）。
 
 MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
@@ -362,9 +363,9 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経
 > `azookey_settings` target は unpackaged の設定アプリを self-contained でビルドする。
 > MVP MSI は、その出力フォルダから `azookey_settings.exe` と WinUI 3 ランタイムを回収する。
 > MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
-> **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式を配置する**。
+> **self-contained 配置（`msix-packaging-spec` §1.3）でビルドし、その出力フォルダ一式を配置する**。
 > self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに含めて
-> インストール時に実行する。TIP DLL / Host は WinUI 3 非依存（§1.3）。
+> インストール時に実行する。TIP DLL / Host は WinUI 3 非依存（`msix-packaging-spec` §1.3）。
 
 ### 4.1 WiX 構成
 
@@ -374,7 +375,7 @@ WiX 7 のビルドに必要な OSMF EULA への同意は `azooKey.wixproj` の `
 （条件は [`licensing-policy.md`](licensing-policy.md#ビルドツールの利用条件)）。
 配置先は `%ProgramFiles%\azooKey` とする。
 Vulkan add-on は別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs` と `pkg/msi-vulkan/azooKey.VulkanAddon.wixproj`、
-同じ WiX SDK）で、base の `INSTALLFOLDER` へ実行体を 1 つ足す。構成と導入の条件は §1.6.3 が正典。
+同じ WiX SDK）で、base の `INSTALLFOLDER` へ実行体を 1 つ足す。構成と導入の条件は `msix-packaging-spec` §1.6.3 が正典。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -530,7 +531,7 @@ Inno Setup 版の成果物はリポジトリに持たない。代替を採る場
   `PrivilegesRequired=lowest`）。管理者権限を要求しない。
 - TIP DLL の登録・解除は `[Run]` / `[UninstallRun]` から `regsvr32`（`/s`、解除は `/u /s`）を
   `waituntilterminated` で呼ぶ。
-- 設定アプリの WinUI 3 ランタイムの扱いは §1.3 と同じ判断に従う。self-contained 出力なら
+- 設定アプリの WinUI 3 ランタイムの扱いは `msix-packaging-spec` §1.3 と同じ判断に従う。self-contained 出力なら
   一式を同梱し、framework-dependent なら `WindowsAppRuntimeInstall.exe` を同梱して
   インストール時に実行する。
 
@@ -575,7 +576,7 @@ NuGet lock の未分類依存、対応する attribution の欠落、pin や CRT
 GoogleTest はテスト専用、Windows SDK BuildTools はビルド専用として配布依存から除外し、
 理由を SPDX annotation に残す。GGUF モデルと CUDA runtime も基本 MSI には同梱しない。
 Vulkan add-on の MSI は base と別の SBOM と attestation を持ち、`--package vulkan-addon` で
-補完する（対象の依存と Vulkan SDK ヘッダの照合は §1.6.3）。
+補完する（対象の依存と Vulkan SDK ヘッダの照合は `msix-packaging-spec` §1.6.3）。
 
 同梱・依存する第三者資産を列挙する正典は、引き続きルート `THIRD_PARTY_LICENSES`
 （運用規約は `docs/licensing-policy.md`）である。SBOM をもって attribution の確認を
@@ -741,7 +742,7 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 うえでも、利用者が最も強い保護（`secure`）を選んだときは外部へ通信しない。`custom` の
 `externalAi` は AI バックエンドの可否であり、更新の確認とは連動させない。
 
-§1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
+`msix-packaging-spec` §1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
 既定で無効（opt-in）であり、利用者が `autoUpdate.enabled` をオンにすることを、起動時と周期の
 確認を許す利用者の操作として扱う。
 
@@ -969,7 +970,7 @@ azooKey 管理ダンプを試みず、OS の障害処理へ委ねる。WinRT thr
   Host / Settings の同時書き込みは同一セッション内の名前付き mutex で直列化する。
   書き込み成功後は完了を通知してから再度適用するが、プロセス終了によって中断され得る。
   `off` への切替は新規収集を停止し、既存ファイルの手動削除は保存先から行う。
-- **アンインストール時**: MSIX（§1.4）・手動アンインストール経路では当該ディレクトリも
+- **アンインストール時**: MSIX（`msix-packaging-spec` §1.4）・手動アンインストール経路では当該ディレクトリも
   削除対象とする（`compat-test` の残骸 0 smoke 対象）。
 
 ### 8.3 ダンプ内容の最小化と同意（redaction / consent）

@@ -126,7 +126,7 @@ cmake --build --preset windows-llama-debug
 
 machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。
 `-dev` 接尾辞は `regsvr32` 開発用経路であることを示します（MSIX 配布経路とは別。
-[`docs/sideload-packaging-spec.md`](./docs/msix-packaging-spec.md) §1.1.1）。
+[`docs/msix-packaging-spec.md`](./docs/msix-packaging-spec.md) §1.1.1）。
 `regsvr32` 直接実行と `register-dev.ps1` が行う処理の違いは
 [`docs/debugging.md`](./docs/debugging.md)、登録時に付与する AppContainer 向け ACL
 （`ALL APPLICATION PACKAGES` の RX）と opt-out の `-SkipAppContainerAcl` は

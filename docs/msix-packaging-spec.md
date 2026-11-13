@@ -226,7 +226,7 @@ identity manifest の一致、(b) Option A の不変条件（`uap10:AllowExterna
 external location（`sideload-packaging-spec` §4 WiX/MSI の install ディレクトリ）に置き、COM 登録は
 `scripts/register-dev.ps1` の `regsvr32` 経路で行う。**本 PoC は Option A を具体化するが経路の
 最終確定ではない**（確定は DEV-267 の実機 smoke 結果を待つ）。identity package は MS Store
-提出物ではなくサイドロード登録専用で、§0 の配布方針（MVP=MSI/WiX §4、MS Store MSIX=DEV-416、
+提出物ではなくサイドロード登録専用で、`sideload-packaging-spec` §0 の配布方針（MVP=MSI/WiX `sideload-packaging-spec` §4、MS Store MSIX=DEV-416、
 スタンドアロン MSIX サイドロード延期）を変更しない。
 
 ### 1.2 Package.wapproj

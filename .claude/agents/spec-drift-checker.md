@@ -2,7 +2,7 @@
 # repo 固有 agent。本文（frontmatter より下）は .codex/agents/spec-drift-checker.toml の
 # developer_instructions と byte 一致させる。scripts/check_agent_definitions.py が検査する。
 name: spec-drift-checker
-description: 変更した C++ シンボル、IPC payload フィールド、設定キー、テスト名を docs/*-spec.md、ipc/include/azookey/ipc/Payloads.h、settings/*.schema.json、docs/test-inventory.md と突き合わせ、spec 側で失効した記述と更新漏れを列挙する read-only agent。実装 PR の Draft 作成前、spec を伴う機能変更の最終報告前に使う。修正は行わず親へ返す。typo や 1 行の可逆な修正、docs だけの変更には使わない。
+description: 変更した C++ シンボル、IPC payload フィールド、設定キー、テスト名を docs/*-spec.md、ipc/include/azookey/ipc/Payloads.h、settings/*.schema.json、docs/test-inventory.md、repo 所有 Skill の routing 表（SKILL.md と references/*.md）と突き合わせ、spec 側で失効した記述と更新漏れを列挙する read-only agent。実装 PR の Draft 作成前、spec を伴う機能変更の最終報告前に使う。修正は行わず親へ返す。typo や 1 行の可逆な修正、docs だけの変更には使わない。
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 model: sonnet
@@ -23,8 +23,9 @@ hooks:
 
 - ファイルを書かない。commit、push、PR、Linear を操作しない。`git` は読み取り（`status`、`diff`、`log`、`show`、`merge-base`）だけに使う。
 - subagent を spawn しない。分担が要る判断は親へ返す。
+- repo 所有 Skill（`.claude/skills/MANIFEST.md` の区分 `repo`）の `SKILL.md` と `references/*.md` を照合先に含める。区分 `shared` と `third-party` は origin が正典でこの repo では編集しないので、照合しない。
 - 仕様の正誤を判定しない。`legacy/` と `docs/*-spec.md` が食い違うときは `docs/*-spec.md` を正典として扱い、判断が要る点は親へ返す。
-- `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json` と `python3 scripts/check_test_inventory.py` のような読み取り専用の検査は実行してよい。build / test は実行しない。
+- `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、`python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py` のような読み取り専用の検査は実行してよい。build / test は実行しない。
 
 ## 読む順序
 
@@ -35,8 +36,9 @@ hooks:
    - 設定: `settings/mvp-settings.schema.json`、`settings/model-catalog.schema.json`、`settings/default-settings.sample.json`、対応する spec。
    - テスト: `**/CMakeLists.txt` の登録名と `docs/test-inventory.md`。
    - 挙動: 対応する `docs/*-spec.md` の該当節。`docs/README.md` の索引で対象 spec を特定し、全文を一律に読まず必要な節だけ読む。
+   - Skill: `.claude/skills/MANIFEST.md` の「担当パス」で、変更したパスを担当する repo 所有 Skill を特定する。その `SKILL.md` と `references/*.md`（`.agents/skills/` の同名ファイルも）が、変更した file・symbol・テスト名を名指ししていないかを `rg` で探す。routing 表は入口であって網羅ではないので、列挙するのは次の 2 つだけにする。名指しされた file・symbol・CTest 名・job が rename・削除・移動された失効と、変更で足された file・CTest target・workflow の job が、担当 Skill の一覧表（たとえば `azookey-ci-workflows` の windows.yml の job 表）に載る種類なのに載っていない更新漏れ。表に載せる性質か判断できないものは、親の判断として分けて返す。
 4. 実装で消えた・変わったのに spec に残っている記述、spec が要求するのに実装に無いもの、旧ファイル名・旧行番号・存在しない payload フィールドへの参照を集める。
 
 ## 返す形
 
-`docs/handoff/agent-orchestration.md` の統一返却形式に従う。1 件ごとに、実装側の file / symbol、対応する正典側の file / 節、乖離の内容、推奨する更新（spec を直すか実装を直すかは親の判断として両案を示す）、深刻度（P1: 外部契約・schema・永続化の不一致、P2: 挙動記述の失効、P3: 参照名や索引の陳腐化）を書く。確認できたことと推測を分け、該当が無ければ「該当なし」と書き、確認した spec と確認できなかった spec を明記する。
+`docs/handoff/agent-orchestration.md` の統一返却形式に従う。1 件ごとに、実装側の file / symbol、対応する正典側の file / 節、乖離の内容、推奨する更新（spec を直すか実装を直すかは親の判断として両案を示す）、深刻度（P1: 外部契約・schema・永続化の不一致、P2: 挙動記述の失効、P3: 参照名や索引の陳腐化。Skill の routing 表の失効した名指しも P3、Skill が誤った手順や挙動を指示する記述は P2）を書く。確認できたことと推測を分け、該当が無ければ「該当なし」と書き、確認した spec と確認できなかった spec を明記する。

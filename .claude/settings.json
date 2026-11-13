@@ -107,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\" --return-format-doc 'docs/handoff/agent-orchestration.md「統一返却形式」'",
             "timeout": 30,
             "statusMessage": "subagent-snapshot (checkout snapshot)"
           }
@@ -120,7 +120,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-snapshot.py\" --return-format-doc 'docs/handoff/agent-orchestration.md「統一返却形式」'",
             "timeout": 30,
             "statusMessage": "subagent-snapshot (return format)"
           }

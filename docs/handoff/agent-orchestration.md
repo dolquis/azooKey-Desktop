@@ -28,7 +28,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 5. Codex Cloud への assign / delegate / mention は `docs/linear-conventions.md` §2.1 の人間承認規則に従う。
 6. agent の報告は完了判定ではなく入力である。親が実ファイルと最新 diff で検証する。
 7. reviewer と build runner は subagent を spawn しない。Claude Code の subagent は既定で再帰 spawn できるため、agent 本文で禁じるだけでなく、repo 所有 agent の `tools` を明示の allowlist にして `Agent` を含めない。`scripts/check_agent_definitions.py` がこれを検査する。
-8. read-only という役割契約と、ハーネスの権限制御を区別する。Codex は親ターンの sandbox / approval を継承し、custom agent の `sandbox_mode` / `approval_policy` では上書きできない。本文の read-only 指示は独立した OS sandbox ではないため、親は実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親が担当する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）で書込み系 git、リダイレクト、build コマンドを止める。この hook は字句解析であり、インタプリタ経由の書込み（`python3 -c` など）は見えないため、逸脱のコストを上げる機構であって sandbox ではない。`windows-build-runner` は build directory へ書く役割、`shared` の agent は origin の定義に従い、Claude 側の hook は再配布で取り込む。役割上の境界は `.claude/agents/MANIFEST.md` の権限列に記録する。
+8. read-only という役割契約と、ハーネスの権限制御を区別する。Codex は親ターンの sandbox / approval を継承し、custom agent の `sandbox_mode` / `approval_policy` では上書きできない。本文の read-only 指示は独立した OS sandbox ではないため、親は実行前に権限と書込み範囲を確認し、必要な境界を確保できない場合は親が担当する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）で書込み系 git、リダイレクト、build コマンドを止める。この hook は字句解析であり、インタプリタ経由の書込み（`python3 -c` など）は見えないため、逸脱のコストを上げる機構であって sandbox ではない。`windows-build-runner` は build directory へ書く役割、`shared` の `diff-auditor` も origin の定義と guard を再配布し、Claude 側の `disallowedTools` と `hooks.PreToolUse` を持つ。役割上の境界は `.claude/agents/MANIFEST.md` の権限列に記録する。
    Agent Teams の teammate として spawn した場合、agent 定義のうち適用されるのは `tools`、`model`、本文だけで、frontmatter の `hooks` と `disallowedTools` は乗らない。Agent Teams が有効な session では、名前を付けて spawn した subagent は teammate として起動する。read-only reviewer は名前を付けず通常の subagent として起動し、teammate にするなら Bash guard が無いことを前提に `tools` の allowlist だけで運用する。
 9. 親が編集中の working tree を reviewer に読ませない。レビューは編集を止めた checkpoint に対して行う。
 10. typo、1 行の可逆な修正、直列依存だけの仕事、1 ファイルの明白な変更は分割しない。
@@ -130,7 +130,7 @@ Expected return: 本書「統一返却形式」
 Validation owned by parent: <commands>
 ```
 
-Claude Code では `.claude/hooks/subagent-snapshot.py` が、repo の specialist の起動時に実行時点の branch、HEAD、`origin/main` との merge-base、未 commit の変更の有無を注入し、終了時に返却から snapshot と確認できなかった範囲が抜けていれば 1 回だけ追記を求める。hook は prompt の snapshot の代わりではなく、食い違いを見つけるための照合材料である。
+Claude Code では `.claude/hooks/subagent-snapshot.py` が、repo の specialist の起動時に実行時点の branch、HEAD、`origin/main` との merge-base、未 commit の変更の有無を注入し、終了時には `--return-format-doc` で指定した本書「統一返却形式」に従い、返却から snapshot と確認できなかった範囲が抜けていれば 1 回だけ追記を求める。この引数は `.claude/settings.json` の SubagentStart / SubagentStop の command に渡す。引数が無い場合、Stop は追記を求めない。追記要求は Base / Review head と確認できなかった範囲を対象とし、Boundary の確認は親が担う。hook は prompt の snapshot の代わりではなく、食い違いを見つけるための照合材料である。
 親が checkpoint 後に対象差分・base・検証条件を変更した場合、影響する報告を stale として再確認する。同一 snapshot と条件のレビュー・テスト結果は、stage、commit、最終報告の各段階で内容の一致を確かめて再利用する。build / test runner は実行対象の commit SHA と使用した preset / build directory を返す。
 
 ## 統一返却形式
@@ -162,5 +162,8 @@ azooKey 固有の引継ぎ対象には、実機入力や管理者操作の承認
 
 ## 機械検査
 
-`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、`.claude/agents/MANIFEST.md` の区分 `repo` の agent について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、役割上の権限列に対応する Claude 側の guard 宣言、`tools` が明示の allowlist で `Agent` を含まないこと、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse・限定的な型・無効な権限上書き指定を検査する。実効権限や実行時の役割契約の遵守を保証する検査ではない。
+`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、repo 所有の `scripts/check_agent_definitions.toml` に宣言した agent（`shared` を含む）について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、設定の `write_boundary` に対応する Claude 側の guard 宣言、MANIFEST との agent 名集合の突合、`tools` が明示の allowlist で `Agent` / `Task` を含まないこと、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse・限定的な型・無効な権限上書き指定を検査する。実効権限や実行時の役割契約の遵守を保証する検査ではない。
+checker とそのテストは `dolquis/agent-ops` を正典として再配布する。検査対象のパスは設定の `[references] roots`、Skill の接頭辞は `[skills] prefixes` が持つ。frontmatter は checker の限定パーサーで検査し、PyYAML や `check_skill_references.REPOSITORY_ROOTS` には依存しない。全 agent に Claude / Codex ペアを要求するため、`[mirror] claude_only` の例外は設けない。各 agent の `write_boundary` は `[boundary] require_declaration = true` で必須にする。MANIFEST の権限列と設定値の一致は親のレビューで確認する。設定の欠落・未知キー・不正な型は exit 2、定義の検査失敗は exit 1 とする。
 `scripts/tests/test_agent_readonly_guard.py` は read-only guard hook の allow / deny 表を固定する。
+
+共有 hook の再配布時は、repo 所有の `.codex/hooks.json` の matcher が `Bash` / `apply_patch` を含むこと、Windows command が `py -3` を使うこと、timeout が adapter の内部予算を上回ることを親が確認する。共有テストは repo 固有の配線を検査しない。

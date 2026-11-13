@@ -57,9 +57,9 @@ jobs:
       - name: Check repo-owned skills against the repository
         run: python3 scripts/check_skill_references.py
 
-      # .claude/agents/MANIFEST.md が区分 repo とした agent は、Claude 側 .md と Codex 側
-      # .toml の本文・description・役割境界を揃える契約を持つ。片側だけ直した PR を
-      # ここで止める。read-only guard hook の allow / deny 表と、git push guard hook の
+      # check_agent_definitions.toml に宣言した agent（shared を含む）の Claude / Codex
+      # の本文・description・設定上の役割境界を検査し、MANIFEST とは名前集合を突き合わせる。
+      # read-only guard hook の allow / deny 表と、git push guard hook の
       # allow / deny / ask 表、specialist の SubagentStart / SubagentStop hook の振る舞いも
       # 同じジョブで固定する。
       - name: Test the agent definition checker and the guard hooks

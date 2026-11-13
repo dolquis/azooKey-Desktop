@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the repository-owned Codex docs adapter."""
+"""Regression tests for the Codex docs-lint adapter (origin: dolquis/agent-ops)."""
 
 import contextlib
 import importlib.util
@@ -7,7 +7,6 @@ import io
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -250,14 +249,61 @@ class DocsHookTests(unittest.TestCase):
         self.assertEqual(hook.dirty_documents(self.root),
                          {"docs/tracked.md", "docs/deleted.md", "docs/new.md"})
 
-    def test_hook_configuration_matches_canonical_shell_and_timeout_budget(self):
-        config = json.loads((REPO / ".codex/hooks.json").read_text(encoding="utf-8"))
-        entry = config["hooks"]["PostToolUse"][0]
-        self.assertTrue(re.search(entry["matcher"], "Bash"))
-        self.assertTrue(re.search(entry["matcher"], "apply_patch"))
-        command = entry["hooks"][0]
-        self.assertIn("py -3", command["commandWindows"])
-        self.assertGreater(command["timeout"], hook.TIMEOUT_SECONDS + 2 * hook.GIT_TIMEOUT_SECONDS)
+    def test_windows_absolute_and_nul_paths_are_ignored(self):
+        for name in ("C:/elsewhere/x.md", "C:\\elsewhere\\x.md", "docs/a\x00.md"):
+            with self.subTest(name=name):
+                state, output, run = self.invoke(self.payload(name))
+                self.assertEqual((state, output), ("skipped", ""))
+                run.assert_not_called()
+
+    def test_vendor_is_started_with_utf8_and_no_bytecode(self):
+        _, _, run = self.invoke(self.payload("README.md"))
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[1:4], ["-B", "-X", "utf8"])
+
+    def _real_run(self, root, cwd, payload_path):
+        adapter = root / ".codex/hooks/post-edit-docs-lint.py"
+        adapter.parent.mkdir(parents=True, exist_ok=True)
+        adapter.write_bytes(HOOK.read_bytes())
+        (root / hook.VENDORED).write_bytes((REPO / hook.VENDORED).read_bytes())
+        for name, message in (("docs-lint.py", "synthetic lint finding"),
+                              ("check_agent_instruction_size.py", "synthetic budget")):
+            (root / "scripts" / name).write_text(
+                "from pathlib import Path\n"
+                "with Path('calls.txt').open('a', encoding='utf-8') as s:\n"
+                "    s.write(" + repr(name) + " + '\\n')\n"
+                "print(" + repr(message) + ")\nraise SystemExit(1)\n", encoding="utf-8")
+        payload = {"cwd": str(cwd), "tool_name": "apply_patch",
+                   "tool_input": {"command": "*** Update File: " + payload_path}}
+        return subprocess.run([sys.executable, "-B", str(adapter)], cwd=cwd,
+                              input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                              timeout=30)
+
+    def test_real_run_from_subdirectory_cwd(self):
+        done = self._real_run(self.root, self.root / "docs", "../AGENTS.md")
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual((self.root / "calls.txt").read_text(encoding="utf-8").split(),
+                         ["docs-lint.py", "check_agent_instruction_size.py"])
+
+    def test_real_run_in_linked_worktree_with_git_file(self):
+        (self.root / ".git").write_text("gitdir: nonexistent-synthetic-dir\n", encoding="utf-8")
+        done = self._real_run(self.root, self.root / "docs", "guide.md")
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual((self.root / "calls.txt").read_text(encoding="utf-8").split(),
+                         ["docs-lint.py"])
+
+    def test_real_run_in_root_with_spaces_japanese_and_quotes(self):
+        root = self.root / "work tree 日本 & quoted's"
+        for name in (hook.VENDORED, Path("scripts/docs-lint.py"),
+                     Path("scripts/check_agent_instruction_size.py")):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text("", encoding="utf-8")
+        (root / "docs").mkdir(exist_ok=True)
+        done = self._real_run(root, root / "docs", "guide.md")
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual((root / "calls.txt").read_text(encoding="utf-8").split(),
+                         ["docs-lint.py"])
 
 
 if __name__ == "__main__":

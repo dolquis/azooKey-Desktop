@@ -692,7 +692,7 @@ R2 では device 名表示などの補助に留め、R1 の `auto` 解決では�
 選択した backend で `LoadModel` が失敗した場合:
 
 1. ログに `result=error`、`error_code=business`、`reason=backend_load_failed` を記録
-   （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）。
+   （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/observability-spec.md` §7.4）。
    あわせて最後に試した `backend`（`cpu` / `vulkan`）と、降格の有無 `fallback`
    （`vulkan_then_cpu` / `none`）を固定語彙で記録する。モデルの path、ローダの生のエラー文、
    例外メッセージは出さない（同 §7.6）。`reason=backend_load_failed` 付きの行は

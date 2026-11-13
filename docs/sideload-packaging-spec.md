@@ -818,7 +818,7 @@ Provider 名は `azooKey-Desktop`。GUID はバージョン間で固定する。
 ID はゼロ GUID とし、本文や任意文字列に置き換えない。`result` は Success=0、Timeout=1、
 Disconnected=2、Failed=3、Cancelled=4、`backend` は Unknown=0、Kana=1、Neural=2、Ai=3。
 `phase` は Converter=0、AiTransform=1、FrameWrite=2、FrameRead=3 とする。この 4 値は
-構造化ログの phase（`docs/dev-infrastructure-spec.md` §7.7.2 の 11 値）の粗い射影であり、
+構造化ログの phase（`docs/observability-spec.md` §7.7.2 の 11 値）の粗い射影であり、
 対応表と `trace_id` を載せない相関の規則は同 §7.3 を正典とする。
 converter の失敗後に代替変換が成功した場合、4002 は Failed、4001 は Success を記録する。
 `kana_len`、`reading_len`、`surface_len`、`payload_size` は UTF-8 バイト数、
@@ -831,26 +831,26 @@ GUID は 1000 では profile GUID、要求イベントでは client GUID を表�
 
 #### 7.2.1 本文を ETW に載せない（redaction 規律）
 
-ETW は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー正典が適用
+ETW は `docs/observability-spec.md` §7.6 の redaction ポリシー正典が適用
 される観測経路である。ETW トレース（`.etl`）は WPA で誰でも閲覧でき、secure /
 `privacy.redactLogs` の状態に応じて**事後にフィルタできない**（消費側に redaction
 ゲートが無い）。そのため本文系フィールド（`reading` / `surface` / `candidate.text` /
 確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）は **build / env / mode に
-よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が `docs/dev-infrastructure-spec.md` §7.6 優先順位 4 の
+よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が `docs/observability-spec.md` §7.6 優先順位 4 の
 opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を持たない。
 
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
-  載せていたが `docs/dev-infrastructure-spec.md` §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
+  載せていたが `docs/observability-spec.md` §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
   `surface_len`（整数）で記録し、内容は復元できないようにする。
 - `9000 Error` は自由文 `message` を載せず、`source`（`EtwModule` enum で符号化したモジュール
-  識別子）/ `error_code`（`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/
-  `hr`（HRESULT）のみとする。例外メッセージ等の自由文は `docs/dev-infrastructure-spec.md` §7.6 を適用済みの構造化ログ側へ
+  識別子）/ `error_code`（`docs/observability-spec.md` §7.4 の 3 カテゴリ enum）/
+  `hr`（HRESULT）のみとする。例外メッセージ等の自由文は `docs/observability-spec.md` §7.6 を適用済みの構造化ログ側へ
   出し、ETW には載せない。
 - `EtwLogger`（§7.3）は本文型の引数を受ける API を**持たない**。長さ・件数・enum・
   数値・GUID・ID のみを受ける型シグネチャに限定し、本文混入をコンパイル時に防ぐ。
   `source` も `const char*` ではなく `EtwModule` enum とし、呼び出し側が任意 / ユーザー由来の
   文字列を渡せる引数を一切残さない。
-- ETW は本文を含まないメタ情報のみのため、レイテンシ trace（`docs/dev-infrastructure-spec.md` §7.6 redact 対象外）と
+- ETW は本文を含まないメタ情報のみのため、レイテンシ trace（`docs/observability-spec.md` §7.6 redact 対象外）と
   同じく追加の同意を要さない。WPR トレース（`.etl`）の採取・共有はユーザー / 開発者の
   明示操作（§7.4）であり、その成果物にも本文は含まれない。
 

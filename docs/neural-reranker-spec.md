@@ -3,7 +3,7 @@
 対象リポジトリ: dolquis/azooKey-Desktop
 関連: `plans/windows-port-roadmap.md` M52 / M53 / M54 / M55 / M57、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
-      `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
+      `docs/observability-spec.md` §7.7（M51 trace）、
       `docs/modernbert-ja-scoring-spec.md`（M57）、
       `docs/neural-reranker-nll-spec.md`（Track B）、
       `docs/zenzai-inference-spec.md`
@@ -359,7 +359,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - 入力 NaN/Inf 検出 → 当該候補だけ skip、他は継続
 
 上記の失敗はいずれも**要求単位の fallback**であり、M47 の健康状態機械
-（`docs/dev-infrastructure-spec.md` §8.5.1）は遷移させない。reranker の失敗で
+（`docs/host-availability-spec.md` §8.5.1）は遷移させない。reranker の失敗で
 `HealthEvent::ModelFailed` を発火せず、`DegradedModel` / `RecoveringModel` にも入らない。
 `ModelFailed` を発火するのは Zenzai モデルのロード失敗だけである。Host は落ちない。
 

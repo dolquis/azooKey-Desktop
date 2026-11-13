@@ -147,7 +147,7 @@ enum class InputStateKind {
 > （M35 suggest）、英単語候補（M60）、記号・絵文字の rewriter を含まないため、候補窓には使わない。
 > 応答が届く前に届いた別の候補通知（予測、ライブ変換、Host 状態の更新など）は待ちを終わらせない。
 > これは TIP の前処理を通る Space の経路（英単語候補、記号・絵文字の rewriter）でも同じである。
-> 応答が TIP の deadline（`dev-infrastructure-spec.md` §8.5.2 の候補窓用 750ms）に間に合わなかったときは、
+> 応答が TIP の deadline（`host-availability-spec.md` §8.5.2 の候補窓用 750ms）に間に合わなかったときは、
 > 打鍵中の応答を先頭に、TIP ローカル候補をその後ろに並べて窓を開く。打鍵中の応答は、ライブ変換 OFF
 > なら `live = true` の `QueryCandidates` の候補、ON なら `QueryLiveConversion` の表層（句読点を
 > 挿入していないもの）である。読み・左文脈・学習許可が Space の要求と一致し、secure でない context の、

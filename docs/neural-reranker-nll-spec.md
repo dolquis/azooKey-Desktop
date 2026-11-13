@@ -252,7 +252,7 @@ pin の正典は `CMakeLists.txt` の
 |---|---|
 | `Candidate::debug_info` | 対象候補に `nll=<nll_per_char>;nlld=<bonus>` を追記（既存の `dup:` 併記と同じ流儀。表層・読みは含めない） |
 | `Health` | **runtime 失敗のみ** `model_runtime_error_` へ `nll-scorer:<reason>` をミラーし、既存の `last_error` フィールドで運ばれる（§B8）。payload の形は変わらない |
-| 構造化ログ（`azookey::logging::RuntimeLogger`） | `nll_rerank` イベントの `reason`、`nll_targets`、`nll_applied`、`latency_ms`（全所要時間）。IPC 要求に紐付く場合は `request_id` も記録する。適用時は `reason=applied`。既定 OFF・live・cancel では出力しない（§B9）。フィールド名の正典は `docs/dev-infrastructure-spec.md` §7.2 |
+| 構造化ログ（`azookey::logging::RuntimeLogger`） | `nll_rerank` イベントの `reason`、`nll_targets`、`nll_applied`、`latency_ms`（全所要時間）。IPC 要求に紐付く場合は `request_id` も記録する。適用時は `reason=applied`。既定 OFF・live・cancel では出力しない（§B9）。フィールド名の正典は `docs/observability-spec.md` §7.2 |
 
 **`QueryDiagnostics` へは出さない（決定）。** 現行 `QueryDiagnosticsPayload`
 （`ipc/include/azookey/ipc/Payloads.h`）は `model_loaded` / `engine` / `backend` /
@@ -466,7 +466,7 @@ Track B が単独で成立するための形式である。
 - NllScorer は**学習データを書かない**。`LearningStore` にも Track A の露出トレース
   （Track A §6.1）にも寄与しない。読み取り専用の評価層である。
 - ログに `reading` / `surface` を出さない。`debug_info` に載せるのは数値のみで、
-  redaction 方針（`docs/dev-infrastructure-spec.md` §7.6）に抵触しない。
+  redaction 方針（`docs/observability-spec.md` §7.6）に抵触しない。
 - 外部送信は無い（ローカルモデルのみ）。
 
 ## B11. テスト契約
@@ -554,6 +554,6 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
 - `nllWeight` / `nllTopK` / `nllBudgetMs` の既定値校正。M52 ベンチ
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
 - 構造化ログのフィールドは §B4.2、ログ形式の正典は
-  `docs/dev-infrastructure-spec.md` §7 に従う。
+  `docs/observability-spec.md` §7 に従う。
 - CPU / Vulkan の Release 測定の条件と結果は
   [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) にある。

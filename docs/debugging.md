@@ -173,12 +173,12 @@ $env:AZOOKEY_LOG_LEVEL = 'info' # info / warn / error
 - `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl`
 
 ローテーションと保持の規則、必須フィールド、Release ビルドで出力しない値は
-`dev-infrastructure-spec.md` §7.1.1 が正典である。ファイル名の日付は UTC である。
+`observability-spec.md` §7.1.1 が正典である。ファイル名の日付は UTC である。
 要求を追うときは `trace_id`、`request_id`、記録時刻を使い、MessageType が
 記録された行ではその値も照合する。現行の `trace_phase` と `query_latency` には
 MessageType がないため、同じ ID の組が複数系統に現れた場合、その行を一意の要求へ
 結び付けない。Host の `query_latency` と `latency_ms` を確認する。失敗行の `error_code` は
-`dev-infrastructure-spec.md` §7.4 の分類に従う。
+`observability-spec.md` §7.4 の分類に従う。
 取得後は環境変数を削除して、Host と検証対象アプリを再起動する。
 
 ```powershell
@@ -204,7 +204,7 @@ Host の stderr も従来どおり残る。
 要求する直前の policy で判定し、入力 scope が不明、または profile が `private` の場合も
 本文を出力しない。確認後は本文ログの opt-in を解除する。
 資格情報・パス・ウィンドウタイトルと診断 ZIP は、この opt-in でも redact する。
-正典は `dev-infrastructure-spec.md` §7.6。
+正典は `observability-spec.md` §7.6。
 
 TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterServer`、TSF から
 呼ばれる `TextService` などのメソッド）と、`HRESULT` を返す内部処理が例外を `HRESULT` に
@@ -221,7 +221,7 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 最初の打鍵が composition に入らない、といった症状を切り分けるときは、`AZOOKEY_LOG=1` に
 加えて `AZOOKEY_LOG_KEYS=1` を設定し、検証対象アプリを起動し直す。TIP は値が厳密に `1` の
 ときだけ、`tip-YYYYMMDD.jsonl` に次のレコードを info レベルで書く。
-有効化の条件と記録しない値の契約は `dev-infrastructure-spec.md` §7.1.1 が持ち、`key_path` 系の
+有効化の条件と記録しない値の契約は `observability-spec.md` §7.1.1 が持ち、`key_path` 系の
 項目は本節が正典として持つ（同節から参照される）。
 
 ```powershell
@@ -301,7 +301,7 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 `candidate_ui_begin_failed` レコードの `hresult` を確認する。
 TIP が自前描画する候補窓が表示されない場合は、
 `candidate_window_render_failed` レコードの `stage` と `hr` を確認する。
-記録するフィールドと重複抑止の正典は `docs/dev-infrastructure-spec.md` §7.2 とする。
+記録するフィールドと重複抑止の正典は `docs/observability-spec.md` §7.2 とする。
 検証メモには、対象アプリ名、`process_id`、取得日時、`ui_less`、`pb_show`、`tip_draws`、
 `ui_element_mgr_available`、`pb_show_available`、`ui_element_id` または `hresult` を転記する。
 
@@ -361,7 +361,7 @@ ctest --preset windows-debug --no-tests=error
   `ipc_host_deadline_missed` / `ipc_health_timeout` の後に `degraded` への遷移として現れる。Host stderr に `named pipe listening: \\.\pipe\azookey-<SID>`
   （SID 解決に失敗した場合は Debug ビルドに限り `azookey-default`）が出ているか確認。
 - **Zenzai・AI・学習が効かなくなった（SafeMode）**: Host が 60 秒以内に 3 回続けて異常終了すると
-  SafeMode に入り、ユーザーが解除するまで続く（`docs/dev-infrastructure-spec.md` §8.5.3）。
+  SafeMode に入り、ユーザーが解除するまで続く（`docs/host-availability-spec.md` §8.5.3）。
   `azookey_diag` の `fallback_state` が `safe_mode`（D-009）であること、Host ログの
   `safe_mode_entered` / `host_previous_run_crashed` で確認する。クラッシュの原因（直前に変えた
   モデルや backend など）を取り除いたうえで、`%LOCALAPPDATA%\azooKey\config\settings.json` の

@@ -105,7 +105,7 @@ Microsoft Learn の事実は
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
-「ログ出力先を開く」（§3.7）のボタンを置く（`docs/dev-infrastructure-spec.md` §8.5.4・§12.1.1 が設定アプリの診断として指す先は、この節である）。
+「ログ出力先を開く」（§3.7）のボタンを置く（`docs/host-availability-spec.md` §8.5.4・`docs/dev-infrastructure-spec.md` §12.1.1 が設定アプリの診断として指す先は、この節である）。
 
 「AI 変換」は「設定」群に置くが、モデル一覧の更新・ベンチマーク・取得・中止は Host への IPC でその場で行い、
 保存バーを経ない。保存バーが書くのは、このペインの設定キー（`model.selectedPath` を含む）だけである。

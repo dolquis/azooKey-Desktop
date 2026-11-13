@@ -663,12 +663,12 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   `<理由>` は次の固定語彙に限る: `no_device`（Vulkan のデバイスが無い、または ggml-vulkan を
   リンクしないビルド）、`model_init_failed`（モデルの読み込みに失敗）、`context_init_failed`
   （context の生成に失敗）、`exception`（ロード中の例外）。llama.cpp の生のエラー文、モデルの
-  path、例外メッセージは `last_error` にもログにも入れない（`docs/dev-infrastructure-spec.md` §7.6）。
+  path、例外メッセージは `last_error` にもログにも入れない（`docs/observability-spec.md` §7.6）。
   設定アプリの「AI 変換」ペインは `last_error` をそのまま表示するので、この形が利用者に見える。
 - **解除**: 後続の成功した LoadModel、またはモデルの無効化 / アンロードで `last_error` と
   `model_runtime_error_` を解除する（§9.2.1 項 6）。
 - **Health の status**: `effective_last_error()` から決める（§9.2.1 項 5）。対応表は
-  `docs/dev-infrastructure-spec.md` §8.5.1 が正典。
+  `docs/host-availability-spec.md` §8.5.1 が正典。
 
 本節は degraded / fallback の規則の正典であり、`docs/copilot-pc-backend-spec.md` §4.4・§4.5、
 `docs/model-management-spec.md` §5.3、`docs/msix-packaging-spec.md` §1.6.1、
@@ -974,7 +974,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 5. `Health` の status は `model_loaded` とモデルのパスで 3 値に分ける。engine は `last_error_`
    （load/learning）と `model_runtime_error_`（runtime 変換）を畳んだ `effective_last_error()`
    を公開し、`Dispatcher::HandleHealth` はそれを使う（`engine_->last_error()` 単独では見ない）。
-   status マッピング（`docs/dev-infrastructure-spec.md` §8.5.1 と同じ規則）:
+   status マッピング（`docs/host-availability-spec.md` §8.5.1 と同じ規則）:
    - `effective_last_error()` 空 → **`ok`**。
    - 設定あり **かつ `model_loaded()`** → **`degraded`**（recoverable: runtime 変換劣化や
      loaded-model 警告）。

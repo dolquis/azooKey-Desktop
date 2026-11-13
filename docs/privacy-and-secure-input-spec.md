@@ -2,7 +2,7 @@
 
 対象リポジトリ: dolquis/azooKey-Desktop
 関連: `plans/windows-port-roadmap.md` M7 / M16 / M34 / M48、
-      `docs/dev-infrastructure-spec.md` §7 (M41 ログ)、
+      `docs/observability-spec.md` §7 (M41 ログ)、
       `docs/typo-correction-learning-spec.md`、
       `docs/app-profile-spec.md`（M48）
 
@@ -217,7 +217,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure（§5.1.1 の定義。SafeMode は含まない）のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
 | Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担う（§5.1.1） |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
-| ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
+| ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/observability-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
 | M55 補正候補の学習・適用を停止 | 学習: TIP の `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` による検出を学習許可で止め、`PostIpcSend` が `ObserveTypo` を落とす。Host は `inference-host/src/Dispatcher.cpp::HandleObserveTypo` の学習ゲートで `learning/src/TypoCorrectionStore.cpp` への蓄積を拒否する。適用の停止は `docs/typo-correction-learning-spec.md` §12.12.2 の設計契約に従う |
 
@@ -245,7 +245,7 @@ Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure と学習
 設定の読取失敗・JSON 不正、
 object でない設定または `privacy`、未知・型不正の `privacy.mode` は secure 相当とし、
 学習、`QueryPredictions`、AI 送信を停止する。これを通常起動の既定と混同しない。
-本文の出力条件は `docs/dev-infrastructure-spec.md` §7.6 に従う。
+本文の出力条件は `docs/observability-spec.md` §7.6 に従う。
 
 #### 5.1.1 判定主体と二段ゲート
 
@@ -287,7 +287,7 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 Host は、要求の `secure == true` か Host 設定が secure のとき、照会を変換器へ渡さず、
 `ok = true` で予測 0 件を返す。TIP はこの応答を予測なしとして扱い、再送しない。
 ここでの Host 設定の secure は、`privacy.mode = secure` と、§5.1 で secure 相当とする
-設定の読取失敗・不正・未知のモードを指す。SafeMode（`docs/dev-infrastructure-spec.md` §8.5.3）は
+設定の読取失敗・不正・未知のモードを指す。SafeMode（`docs/host-availability-spec.md` §8.5.3）は
 学習を止めるが、予測は止めない。
 古い TIP と新しい Host の組合せでは予測が出ず、新しい TIP と古い Host の組合せでは
 TIP の送信抑止を維持する。
@@ -328,7 +328,7 @@ TIP の送信抑止を維持する。
 4. **`redactLogs` は詳細ログの floor**: 詳細ログ許可は per-axis フラグ単独では
    true にならず、`privacy.redactLogs = false`（既定 `true`）を併せて満たす場合のみ true になる。
    `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
-   redact し続ける（`docs/dev-infrastructure-spec.md` §7.6 の設定解決に従う）。
+   redact し続ける（`docs/observability-spec.md` §7.6 の設定解決に従う）。
    これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
 
 **既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
@@ -393,7 +393,7 @@ private の入力でも送る。外部 AI への送信、
   ウィンドウを描かないため、toast も 🔒 も出さない。toast は保留したまま、TIP が候補
   ウィンドウを描いたときに表示する。
 - **劣化インジケータとの同時表示**: 候補ウィンドウ下部は M47 の劣化インジケータ
-  （[`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §8.5.4）と共有する。
+  （[`dev-infrastructure-spec.md`](host-availability-spec.md) §8.5.4）と共有する。
   両方を表示するときは、候補（と案内行）の直下に secure の toast を置き、その下に劣化
   インジケータを置く。どちらも他方を消さず、5 秒の自動消滅はそれぞれ独立に数える。
   劣化インジケータの [詳細] / [再試行] は toast の有無に関わらず劣化インジケータの行に置く。
@@ -534,7 +534,7 @@ schema fragment（`properties.privacy` への追加）:
 
 ## 8. ログ redaction
 
-`docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー正典に従う。secure は
+`docs/observability-spec.md` §7.6 の redaction ポリシー正典に従う。secure は
 同表の **優先順位 1**（最優先）であり、Release・Debug いずれでも、また
 `AZOOKEY_LOG_BODY=1` が設定されていても本文系フィールドを出力しない。
 具体的には secure 中は以下を Release・Debug 双方で抑止する:

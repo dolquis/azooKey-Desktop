@@ -245,7 +245,7 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 
 ### 5-1. `host::TrendingWordFetcher`
 
-本節のログ契約は `dev-infrastructure-spec.md` §7 と `debugging.md`「ログ収集」から参照する。
+本節のログ契約は `observability-spec.md` §7 と `debugging.md`「ログ収集」から参照する。
 
 - 新規 `inference-host/include/azookey/host/TrendingWordFetcher.h` /
   `src/TrendingWordFetcher.cpp`（WinHTTP 使用）。

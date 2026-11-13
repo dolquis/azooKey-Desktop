@@ -384,8 +384,8 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | 層 | 対象 | 値（既定） | 備考 |
 |---|---|---|---|
 | 外部 API（本書） | OpenAI HTTP receive | **30 s**（接続/送信は各 10 s） | `chat/completions`。設定 `openAiTimeoutMs`（§11、既定 30000）で調整可 |
-| **外部 AI 経路の IPC deadline** | TIP↔Host（M16 / M58-C の openai backend） | **`openAiTimeoutMs` + 余裕（既定 約 35 s）** | **M47 の 150 ms などの短い deadline や、ローカル Zenzai の設計上限 800 ms を流用しない**。外部 AI 応答は通常 800 ms を超え、流用すると正常応答が stale 化して M16 が壊れて見える。`dev-infrastructure-spec.md` §8.5.2 の timeout 表「外部 AI 呼び出し」行は本値に従う |
-| ローカル経路の IPC（M47） | Zenzai 変換等（外部 AI でない重処理） | M47 の要求種別ごとの deadline（`dev-infrastructure-spec.md` §8.5.2。ライブ変換 150 ms など。一括変換は 30 s） | connected-but-silent を timeout 視（M47） |
+| **外部 AI 経路の IPC deadline** | TIP↔Host（M16 / M58-C の openai backend） | **`openAiTimeoutMs` + 余裕（既定 約 35 s）** | **M47 の 150 ms などの短い deadline や、ローカル Zenzai の設計上限 800 ms を流用しない**。外部 AI 応答は通常 800 ms を超え、流用すると正常応答が stale 化して M16 が壊れて見える。`host-availability-spec.md` §8.5.2 の timeout 表「外部 AI 呼び出し」行は本値に従う |
+| ローカル経路の IPC（M47） | Zenzai 変換等（外部 AI でない重処理） | M47 の要求種別ごとの deadline（`host-availability-spec.md` §8.5.2。ライブ変換 150 ms など。一括変換は 30 s） | connected-but-silent を timeout 視（M47） |
 
 - **外部 AI 経路（openai backend）は M47 の短い deadline ではなく、上表の「外部 AI 経路の
   IPC deadline」（`openAiTimeoutMs` + 余裕）で TIP が監視する**。Host は外部 API 待ちの間に
@@ -488,7 +488,7 @@ M48 のモード通知 API を前提としない。
 - **不変条件**: `外部 AI 許可 ⇒ AI 候補生成許可`（同 §5.1）。`secure` では
   両方 false。`private` / `offline` は AI 候補可・外部不可（ローカルのみ）。
 - **ログ**: secure 中は `reading` / `surface` / 本文を redact（同 §5、
-  `dev-infrastructure-spec.md` §7.6 優先順位 1）。
+  `observability-spec.md` §7.6 優先順位 1）。
 
 ---
 
@@ -507,7 +507,7 @@ M48 のモード通知 API を前提としない。
   値と平文の値の両方を受け付ける。README は平文も受け付ける旨を注意喚起する。`dpapi:` 付きの
   値を復号できないときは `KeyReentry` に分類する（§7.2）。
 - キーをログ・エラーメッセージ・クラッシュダンプに出さない
-  （redaction ポリシーの正典は `docs/dev-infrastructure-spec.md` §7.6）。
+  （redaction ポリシーの正典は `docs/observability-spec.md` §7.6）。
 - 設定アプリでは鍵を伏字で読み込み、変更時はユーザースコープ DPAPI で保護してから
   `dpapi:` 形式で保存する。変更しない既存値は保持し、旧形式の平文値は次の保存で
   保護値に移行する。復号できない既存値を黙って消去せず、再入力または明示削除を促す。

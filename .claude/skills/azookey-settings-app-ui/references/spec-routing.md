@@ -5,7 +5,7 @@
 | 変更領域 | 最初に読む仕様 | 主な実装 | 優先テスト |
 |---|---|---|---|
 | 画面と項目 | `docs/settings-app-spec.md` §3.2（ナビゲーション、ペイン、保存バー、表記規則）、`docs/native-ui-spec.md` §4.5 / §4.6、機能別 spec の「UI」節（例 `docs/app-profile-spec.md` §8、`docs/privacy-and-secure-input-spec.md` §6） | `settings-app/MainWindow.xaml`、`settings-app/MainWindow.xaml.cpp`、ペイン別の `settings-app/*Pane.cpp` と `*PaneModel.cpp`、`settings-app/SettingsFields.cpp`、`settings-app/Strings/` | Windows-MCP の UI Automation か人手 |
-| 保存と読込 | `settings/mvp-settings.schema.json`、`docs/dev-infrastructure-spec.md` §5 | `settings-app/SettingsDocument.cpp`（`EditableSettings`、quarantine、atomic replace） | `azookey_settings_persistence_tests`（`settings-app/tests/settings_document_test.cpp`） |
+| 保存と読込 | `settings/mvp-settings.schema.json`、`docs/ipc-persistence-hardening-spec.md` §5 | `settings-app/SettingsDocument.cpp`（`EditableSettings`、quarantine、atomic replace） | `azookey_settings_persistence_tests`（`settings-app/tests/settings_document_test.cpp`） |
 | Host への反映 | `docs/windows-tsf-host-architecture.md`、`tsf-ipc-protocol` skill | `settings-app/SettingsIpcClient.cpp`、`inference-host/src/SettingsStore.cpp` | `azookey_settings_persistence_tests`（`settings-app/tests/settings_ipc_client_test.cpp`）、`host_settings_store_tests` |
 | 更新の確認の表示（`autoUpdate`） | `docs/settings-app-spec.md` §3.2「バージョン」 | `settings-app/UpdateStatusModel.cpp`、`inference-host/include/azookey/host/UpdateChecker.h` | `azookey_settings_persistence_tests`（`settings-app/tests/update_status_model_test.cpp`） |
 | TIP 側の同じファイルの監視 | `docs/windows-tsf-host-architecture.md` | `tsf-tip/src/TipLocalSettings.cpp` | `tsf_tip_local_settings_tests` |

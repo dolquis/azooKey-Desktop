@@ -2,7 +2,7 @@
 kind: reference
 ---
 
-<!-- lint:allow-file line-ref,status -->
+<!-- lint:allow-file line-ref,section,status -->
 <!-- 本ファイルは作成日時点の調査スナップショットであり、更新しない前提の記録である。 -->
 
 # 日英混在ローマ字入力の自動変換 実現可能性調査

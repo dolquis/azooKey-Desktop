@@ -79,8 +79,8 @@ Settings keys
 Preset names
   Source of truth: `configurePresets` / `buildPresets` / `testPresets` of
   `CMakePresets.json`. Scanned files: `README.md`, `docs/debugging.md`,
-  `docs/test-inventory.md`, `docs/dev-infrastructure-spec.md`,
-  `.claude/rules/*.md` and `justfile`. A name is taken only from
+  `docs/test-inventory.md`, `docs/dev-infrastructure-spec.md` and the specs split
+  from it (`PRESET_DOCS`), `.claude/rules/*.md` and `justfile`. A name is taken only from
     `cmake --preset N` (configure), `cmake --build --preset N` (build),
     `ctest --preset N` (test), a bare `--preset N` (any kind),
     a back-quoted `windows-*` / `linux-*` name directly followed by “preset”,
@@ -155,6 +155,14 @@ PRESET_DOCS = (
     "docs/debugging.md",
     "docs/test-inventory.md",
     "docs/dev-infrastructure-spec.md",
+    # The specs split from dev-infrastructure-spec: the presets are named in
+    # build-ci-spec, and the others used to be sections of the scanned file.
+    "docs/build-ci-spec.md",
+    "docs/vm-verification-package-spec.md",
+    "docs/ipc-persistence-hardening-spec.md",
+    "docs/observability-spec.md",
+    "docs/host-availability-spec.md",
+    "docs/diagnostics-compat-spec.md",
 )
 PRESET_RULES_GLOB = ".claude/rules/*.md"
 JUSTFILE = "justfile"

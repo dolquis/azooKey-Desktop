@@ -1377,7 +1377,7 @@ public:
 - 入力中のキー押下や preedit 文字は表示しない（ログに漏れない）
 - 表示してよい本文は Reading と候補テキストだけ。Magic Conversion のプロンプトは表示しない
 - Reading と候補テキストも、M41 の本文ログゲート（`core::BodyLoggingAllowed`。
-  `dev-infrastructure-spec.md` の本文ログ規則）が開いているときだけ表示する。
+  `observability-spec.md` の本文ログ規則）が開いているときだけ表示する。
   ゲートは Debug ビルド、`AZOOKEY_LOG_BODY=1`、非 secure、詳細ログ許可のすべてを要する。
 - ゲートが閉じているときは本文を `<redacted len=N>`（N はコードポイント数）に置き換える。
   ゲートの判定はログを記録する時点で行い、閉じていれば本文を保持しない。
@@ -1480,4 +1480,4 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 ## 12. UI-less / `pbShow` アプリ互換チェック（M5・実機 Win11）
 
 計測手順・対象アプリ・合格条件は `compat-test/m5_uiless_pbshow_checklist.md` が定める。
-アプリ互換チェックリストは `docs/dev-infrastructure-spec.md` §13 と `compat-test/` に置く。
+アプリ互換チェックリストは `docs/diagnostics-compat-spec.md` §13 と `compat-test/` に置く。

@@ -128,7 +128,7 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `UpdateConfig` | 本書「設定（SettingsStore）」、`docs/settings-app-spec.md` §3.3 |
 | `Ping` | `docs/host-availability-spec.md` §8.5.2（timeout） |
 | `Health` | `docs/host-availability-spec.md` §8.3・§8.5.1 |
-| `QueryDiagnostics` | `docs/dev-infrastructure-spec.md` §12.6（payload）・§8.5.1（TIP の利用と `fallback_state` の導出） |
+| `QueryDiagnostics` | `docs/diagnostics-compat-spec.md` §12.6（payload）・§8.5.1（TIP の利用と `fallback_state` の導出） |
 | `CommitSegmentsObservation` | `docs/romaji-batch-conversion-spec.md` §6.4 |
 | `ObserveTypo` | `docs/typo-correction-learning-spec.md` §7・§12.13、`docs/privacy-and-secure-input-spec.md` §5.1.1 |
 | `ListNewWordCandidates` | `docs/auto-word-registration-spec.md` §7-1・§7-2 |

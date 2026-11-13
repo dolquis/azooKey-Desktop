@@ -315,7 +315,7 @@ Get-Content "$env:LOCALAPPDATA\azooKey\logs\tip-$utcDate.jsonl" |
 ## CI
 
 CI のジョブ一覧は [`test-inventory.md`](./test-inventory.md) の「CTest 以外の自動検査」、
-品質ゲートの方針は [`dev-infrastructure-spec.md`](./dev-infrastructure-spec.md) §4 を参照する。
+品質ゲートの方針は [`build-ci-spec.md`](./build-ci-spec.md) §4 を参照する。
 
 `.github/workflows/windows.yml` の `windows-build` ジョブの configure / build / CTest を手元で
 再現するときは、README の手順と次の点が異なる。WIL を submodule ではなく
@@ -333,7 +333,7 @@ ctest --preset windows-debug --no-tests=error
 - **起動時の backend 選択を調べたい**: `azookey_diag --json` の
   `D-008.details.backend_selection` で Host 起動時の選択元と自動判定理由を確認する。
   電源変更後の実効 backend とは区別し、フィールドの定義は
-  [`dev-infrastructure-spec.md`](./dev-infrastructure-spec.md) §12 を参照する。
+  [`diagnostics-compat-spec.md`](./diagnostics-compat-spec.md) §12 を参照する。
 - **ロード中モデルのプロンプト形式を調べたい**: `azookey_diag --json` の
   `D-008.details.prompt_format`（`zenz-v3` / `kanakanji-edge-v1`）で確認する。モデル未ロードや
   mock runtime では出ない。
@@ -341,7 +341,7 @@ ctest --preset windows-debug --no-tests=error
   `D-015` を確認する。ターミナルを前面にしたまま起動するとターミナルが検査対象になるため、
   遅延起動などで診断時に対象アプリを前面にする。`details.reason` が `x86` / `unsupported_architecture` /
   `app_container` なら既知の非対応条件に該当する。`context_unverified` や情報取得不能の
-  reason は TSF context の可否を示さないため、`docs/dev-infrastructure-spec.md` §13 の
+  reason は TSF context の可否を示さないため、`docs/diagnostics-compat-spec.md` §13 の
   互換性テストで確認する。
   診断 JSON にウィンドウタイトルや入力本文は含めない。
 - **一括変換を有効にしたのに、打鍵ごとに候補の問い合わせが出る**: その TIP が一括変換を

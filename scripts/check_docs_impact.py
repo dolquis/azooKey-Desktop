@@ -66,8 +66,8 @@ CONTRACT_PATHS = (
     # `type` string on the wire, so it is part of the wire format too.
     "ipc/include/azookey/ipc/Messages.h",
     "ipc/src/Messages.cpp",
-    # Frame and request limits. dev-infrastructure-spec declares itself the
-    # canonical source of these values and Limits.h follows it.
+    # Frame and request limits. ipc-persistence-hardening-spec declares itself
+    # the canonical source of these values and Limits.h follows it.
     "ipc/include/azookey/ipc/Limits.h",
     # Settings and model catalog schemas.
     "settings/*.schema.json",
@@ -75,7 +75,7 @@ CONTRACT_PATHS = (
     # documents. The default model catalog is data validated by its schema,
     # not a contract, so it is left out.
     "settings/default-settings.sample.json",
-    # Build and test presets, which README and dev-infrastructure-spec name.
+    # Build and test presets, which README and build-ci-spec name.
     "CMakePresets.json",
     # CI jobs, their triggers and required checks.
     ".github/workflows/*",

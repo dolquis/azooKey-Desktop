@@ -13,7 +13,7 @@
 
 本チェックリストは `docs/tsf-deep-integration-spec.md` §2.11 から参照される。
 `pbShow` の戻り値とアプリの描画責務はアプリ実装に依存するため、代表アプリでの実測が要る。
-M50 のアプリ互換性テストハーネス（`docs/dev-infrastructure-spec.md` §13）は入力動線全体の回帰を見る。
+M50 のアプリ互換性テストハーネス（`docs/diagnostics-compat-spec.md` §13）は入力動線全体の回帰を見る。
 本チェックリストは候補 UI の描画責務だけに絞った実機確認であり、
 `compat-test/m3_display_attribute_checklist.md`（表示属性の描画）とは目的が異なる。
 
@@ -62,6 +62,6 @@ M5 ではスタート検索で TIP が activate され入力できること（�
 ## 5. 参照
 
 - `docs/tsf-deep-integration-spec.md` §2.8（候補 UI 統合方針）、§2.9（カテゴリ登録）、§2.10（`ActivateEx`）、§2.11
-- `docs/dev-infrastructure-spec.md` §13（M50 ハーネス）、§7.2（構造化ログ）
+- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、§7.2（構造化ログ）
 - `docs/debugging.md`「候補 UI の `pbShow` を収集する」
 - `plans/windows-port-roadmap.md` M5 / M21

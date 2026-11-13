@@ -579,7 +579,7 @@ revision は `authored-v1`、ライセンスは Apache-2.0、category は `techn
 帰属表示のSHA-256を結ぶ。生成の前後で入力が異なる場合は成功の記録を残さない。
 絶対パス、生成時刻、commitはこの記録に含めず、同一入力での決定性を保つ。
 実機検証zipの生成では `check_bundle.py --vm-package-json` が形式・出所・入力と出力の一致を検査する
-（`dev-infrastructure-spec.md` §2.6）。この記録はローカル成果物の取り違え・古い入力の検出に使い、
+（`vm-verification-package-spec.md` §1）。この記録はローカル成果物の取り違え・古い入力の検出に使い、
 署名済み配布物の真正性を保証するものではない。
 release workflow は同じキャッシュを使って別出力先へ2回生成し、2回目を `--offline` とする。
 `check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
@@ -754,7 +754,7 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
   `offline` は offline のために取得しなかったことを表す。
   パスとサーバの応答はログに出さない。
 - **状態の照会**: 同じ結果を `QueryDiagnostics` 応答の任意フィールド `neologd_layer`
-  （`docs/dev-infrastructure-spec.md` §12.6）で返す。`state` は次のいずれかで、`reason` は
+  （`docs/diagnostics-compat-spec.md` §12.6）で返す。`state` は次のいずれかで、`reason` は
   `error` のときだけログと同じ分類名を入れる。値は Host プロセスの寿命の間だけ保持し、
   永続化しない。
 

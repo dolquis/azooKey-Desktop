@@ -8,7 +8,7 @@
       `docs/privacy-and-secure-input-spec.md`（§7 が参照するプライバシー判定）、
       `plans/windows-port-roadmap.md` M41 / M51
 
-本書は `docs/dev-infrastructure-spec.md` から §7を切り出した文書である。節番号 §7.x は旧 spec のまま保ち、旧 spec の転送表が§7を本書へ解決する。本書内で、本書にない節（旧 spec の残りの節と、同じ旧 spec から分けた他の文書の節）を指すときは、文書名を付けて書く（例: `dev-infrastructure-spec.md` §4.3）。
+本書は `docs/dev-infrastructure-spec.md` から §7を切り出した文書である。節番号 §7.x は旧 spec のまま保ち、旧 spec の転送表が§7を本書へ解決する。本書内で、本書にない節（旧 spec の他の節）を指すときは、文書名を付けて書く（例: `build-ci-spec.md` §4.3）。
 
 ## 正典範囲
 
@@ -118,7 +118,7 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 実装は自前の軽量 JSON Lines ロガーを第一候補とする（依存最小主義）。
 `spdlog` 採用はビルド依存の増加に見合うかを評価したうえで判断し、本仕様の
-必須範囲には含めない（`dev-infrastructure-spec.md` §11）。
+必須範囲には含めない（`build-ci-spec.md` §11）。
 
 ### 7.3 相関 ID とフェーズ
 
@@ -132,13 +132,13 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
   1 アクション内の複数 IPC を束ね、`request_id` がその中の個々の往復を識別する。
 - 両 ID は既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
-  にそのまま乗る（`dev-infrastructure-spec.md` §12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
+  にそのまま乗る（`diagnostics-compat-spec.md` §12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
 - `trace_id` は **全 IPC envelope に必須**（`ipc::Deserialize` は `trace_id` 欠落を
   reject、`ipc/src/Messages.cpp`）。発番単位は「1 論理操作」:
   - キー駆動操作 — TIP が `OnKeyDown` で 1 `trace_id` を発番し、その操作の複数 IPC
     （`QueryCandidates` 等）を束ねる。
   - 非キー（lifecycle / settings）IPC — `Handshake` / `Ping` / `LoadModel` /
-    `QueryDiagnostics`（`dev-infrastructure-spec.md` §12.6）等は、その発行側
+    `QueryDiagnostics`（`diagnostics-compat-spec.md` §12.6）等は、その発行側
     （TIP / 設定アプリ）が操作開始時に UUIDv7 を採番する。単発操作は 1 envelope = 1 `trace_id`。
 - 受信側は既存 client との互換性のため、文字列だが UUIDv7 形式ではない `trace_id` も
   envelope として受け付け、応答に echo する。ただしその値を phase ログに記録せず、
@@ -268,17 +268,17 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
   パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
-- 本ポリシーの実装は M44 診断 ZIP（`dev-infrastructure-spec.md` §12.5）と secure redaction（`docs/privacy-and-secure-input-spec.md` §5 / §8）で
+- 本ポリシーの実装は M44 診断 ZIP（`diagnostics-compat-spec.md` §12.5）と secure redaction（`docs/privacy-and-secure-input-spec.md` §5 / §8）で
   **共通の redaction 関数** を用い、二重定義・不整合を作らない。共通関数は、フィールド名から
   本文系・機密を判定する `logging::IsSensitiveRuntimeLogField`
   （`core/include/azookey/logging/RuntimeLogger.h`）と、自由文字列のユーザーパスを環境変数表記へ
   正規化し資格情報の形をした部分を伏せる `core::RedactFreeText`
   （`core/include/azookey/core/Redaction.h`）とする。診断 ZIP の settings は、本文系 field の判定に
-  `logging::IsSensitiveRuntimeLogField` を使い、それに加えて `dev-infrastructure-spec.md` §12.5 の `settings.redacted.json` 行が
+  `logging::IsSensitiveRuntimeLogField` を使い、それに加えて `diagnostics-compat-spec.md` §12.5 の `settings.redacted.json` 行が
   定める settings 固有の field（API key、prompt、path）を処理する。本文系の判定を別に書き起こさない。
 - レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
   redact 対象外（phase 別 `latency_ms` は Release でも記録してよい）。
-- 互換性テスト（`dev-infrastructure-spec.md` §13）でも、Release 既定で本文がログ・成果物に残らないことを
+- 互換性テスト（`diagnostics-compat-spec.md` §13）でも、Release 既定で本文がログ・成果物に残らないことを
   確認対象に含める。
 
 ### M41 受け入れ条件

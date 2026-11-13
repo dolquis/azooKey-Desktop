@@ -16,7 +16,7 @@ M3 の受け入れ条件（下線付きで表示・ESC で破棄・Backspace で
 `GUID_PROP_ATTRIBUTE` に載せた属性を**どう描くかはアプリ側の実装に依存する**。
 下線が出ないアプリや、他 IME と見た目が揃わないアプリは実機でしか観測できない。
 
-M50 のアプリ互換性テストハーネス（`docs/dev-infrastructure-spec.md` §13）の
+M50 のアプリ互換性テストハーネス（`docs/diagnostics-compat-spec.md` §13）の
 C-001〜C-012 は入力動線全体の回帰を見る。本チェックリストの D-01〜D-12 は
 DisplayAttribute の描画、`ITfCompositionSink` の終了経路、preedit のマウス操作だけに絞った補完で、
 M50 のハーネス実装後は同ハーネスの追加ケースとして取り込む。
@@ -131,7 +131,7 @@ follow-up 必須の項目は、**起票した Issue を DEV-365 にリンクす�
 
 ## 6. 既知の差異
 
-着手前に `docs/dev-infrastructure-spec.md` §13.3.2（アプリ別 workaround /
+着手前に `docs/diagnostics-compat-spec.md` §13.3.2（アプリ別 workaround /
 既知の差異）を読む。本チェックリストに直接効くものを再掲する。
 
 | アプリ / 種別 | 効いてくる項目 | 内容 |
@@ -190,7 +190,7 @@ D-08 / D-09 は Notepad / Edge / VS Code のみ必須で、他アプリでは `N
 ## 8. 参照
 
 - `docs/tsf-deep-integration-spec.md` §5.6（M3 属性と M23 複合属性の対応）、§5.7
-- `docs/dev-infrastructure-spec.md` §13（M50 ハーネス）、§13.3.2（既知の差異）、§7.6（redaction）
+- `docs/diagnostics-compat-spec.md` §13（M50 ハーネス）、§13.3.2（既知の差異）、§7.6（redaction）
 - `compat-test/m5_uiless_pbshow_checklist.md`（UI-less / `pbShow` の実機チェック。目的が異なる別チェック）
 - `plans/windows-port-roadmap.md` M3 / M23 / M50
 - [Using Display Attributes](https://learn.microsoft.com/windows/win32/tsf/using-display-attributes) /

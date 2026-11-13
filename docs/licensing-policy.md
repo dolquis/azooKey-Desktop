@@ -104,7 +104,7 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 | M62-C/D・M53 の定義・受け入れ条件 | `plans/windows-port-roadmap.md` |
 | 状態・進捗・課題トラッキング | Linear（team `Dev`） |
 
-本書と `THIRD_PARTY_LICENSES` は、配布経路の spec（`docs/sideload-packaging-spec.md` §1.6.2、
+本書と `THIRD_PARTY_LICENSES` は、配布経路の spec（`docs/msix-packaging-spec.md` §1.6.2、
 `docs/zenzai-gpu-route.md`「配布ライセンス」）から attribution の正典として参照される。
 
 > **SBOM は attribution の代替ではない。** Release 成果物には SBOM（SPDX）が添付される

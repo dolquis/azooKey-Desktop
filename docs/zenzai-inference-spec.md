@@ -100,7 +100,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 - メモリ: small モデルで概ね 150MB 級。
 - 配布形式: GGUF（`docs/zenzai-gpu-route.md` と整合）。
 - v1.0 採用モデル: 上流 `Miwa-Keita/zenz-v3.2-small-gguf`（roadmap M8 受け入れ条件の
-  配置対象。v1.0 配布での取得・配置の正は `sideload-packaging-spec.md` §1.6.1）。
+  配置対象。v1.0 配布での取得・配置の正は `msix-packaging-spec.md` §1.6.1）。
   プロンプトは **v3 系フォーマット**（§3）を用いる。
 - 選択可能なモデル: `yuuki14202028/kanakanji-edge-33m`（Llama 構造、§2.4）。既定を切り替えるかは
   §2.4.3 で判断する。
@@ -256,7 +256,7 @@ zenz 3 件、edge 0 件だった。Qwen3-Next / LFM2 MoE ベースの hourai2 / 
 #### 2.4.4 配布とライセンス
 
 配布形態は zenz と同じく、MSIX に同梱せず上流の Hugging Face から取得し、再ホストしない
-（`docs/sideload-packaging-spec.md` §1.6）。revision、SHA-256、ライセンスの結論（DEV-1721）は
+（`docs/msix-packaging-spec.md` §1.6）。revision、SHA-256、ライセンスの結論（DEV-1721）は
 同 §1.6.2 が持つ。
 
 ---
@@ -671,7 +671,7 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   `docs/dev-infrastructure-spec.md` §8.5.1 が正典。
 
 本節は degraded / fallback の規則の正典であり、`docs/copilot-pc-backend-spec.md` §4.4・§4.5、
-`docs/model-management-spec.md` §5.3、`docs/sideload-packaging-spec.md` §1.6.1、
+`docs/model-management-spec.md` §5.3、`docs/msix-packaging-spec.md` §1.6.1、
 `docs/zenzai-gpu-route.md`「フォールバック」、`plans/windows-port-roadmap.md` M8 から参照される。
 
 ### 7.5 将来の score 統合（参照）

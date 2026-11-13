@@ -944,16 +944,16 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体パックは同梱しない
     （同 §14.9）
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
-- **参照仕様**: `docs/sideload-packaging-spec.md` §1
+- **参照仕様**: `docs/msix-packaging-spec.md` §1
 - **補足**:
-  - **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
+  - **実装範囲**: `docs/msix-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
     DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
     operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
   - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
     `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
     MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
     ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke）で検証する。
-    詳細は `docs/sideload-packaging-spec.md` §1.1.1。
+    詳細は `docs/msix-packaging-spec.md` §1.1.1。
 
 ### M29: EV/OV コード署名 CI（TIP バイナリ署名。スタンドアロン MSIX 署名は延期）
 
@@ -1041,8 +1041,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
     いずれの分岐でも DL 失敗 / 不一致時は手動配置へフォールバックし Host は
     落ちない（§1.6.1 / M8 / M47 と整合）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
-  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6、`docs/msix-packaging-spec.md` §1.6.1
+  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および `docs/msix-packaging-spec.md` §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
 
 ### M33: ETW / WER
 

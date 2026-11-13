@@ -44,15 +44,15 @@ Microsoft Learn の事実は
 配布形態と OS 下限は次のとおりとする。
 
 - MVP の未署名 MSI（`sideload-packaging-spec` §0 / `sideload-packaging-spec` §4）では、`azookey_settings.exe` を unpackaged の
-  **self-contained 配置（`sideload-packaging-spec` §1.3・`sideload-packaging-spec` §4 の同梱必須注記）**でペイロードに同梱する。
-  MS Store 用 MSIX（`sideload-packaging-spec` §1）では packaged EXE として同梱する。
+  **self-contained 配置（`msix-packaging-spec` §1.3・`sideload-packaging-spec` §4 の同梱必須注記）**でペイロードに同梱する。
+  MS Store 用 MSIX（`msix-packaging-spec` §1）では packaged EXE として同梱する。
 - WinUI 3 がサポートする言語は C# と C++/WinRT である（C++/CX は使わない）。
 - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**である。
   これは設定アプリ単体の下限であり、配布パッケージ全体の最小 OS ではない。
 - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
-  `sideload-packaging-spec` §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
+  `msix-packaging-spec` §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
-  `sideload-packaging-spec` §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく `sideload-packaging-spec` §1 の経路別下限を設定する。
+  `msix-packaging-spec` §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく `msix-packaging-spec` §1 の経路別下限を設定する。
 
 再評価の条件は次のとおりとする。
 
@@ -68,8 +68,8 @@ Microsoft Learn の事実は
 - フレームワーク: WinUI 3（採用 component packages と版は
   `settings-app/azookey_settings.vcxproj` / `THIRD_PARTY_LICENSES` を正典とする。更新時は
   self-contained 出力と MSI の回収結果を再検証する）
-- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、`sideload-packaging-spec` §1.3 / §4）。
-  MS Store 用 MSIX（`sideload-packaging-spec` §1）では packaged EXE として同梱（配布方針は `sideload-packaging-spec` §0）
+- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、`msix-packaging-spec` §1.3 / `sideload-packaging-spec` §4）。
+  MS Store 用 MSIX（`msix-packaging-spec` §1）では packaged EXE として同梱（配布方針は `sideload-packaging-spec` §0）
 
 ### 3.2 ナビゲーション
 
@@ -226,7 +226,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
 | 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv.enc`（M54 の v2 形式。DPAPI 暗号化、M34。M7 形式の `learning.tsv.enc` は移行元） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は `sideload-packaging-spec` §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
+| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は `msix-packaging-spec` §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
 
 拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
@@ -240,7 +240,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 「Windows 設定からの『詳細設定』起動で開く」に対応）。
 
 - **実装場所**: `ITfFnConfigure` は **TIP DLL（`tsf-tip/`）側**が実装する（設定アプリ EXE
-  ではない）。TSF が `DllRegisterServer`（`sideload-packaging-spec` §1）で登録した CLSID に対して直接
+  ではない）。TSF が `DllRegisterServer`（`msix-packaging-spec` §1）で登録した CLSID に対して直接
   `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
   `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
   **CLSID 直 `CoCreateInstance`** で取得される点に注意 — すなわち
@@ -375,7 +375,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   それ以外は次回変換から即時反映する。例外は `dictionary.neologdEnabled` を偽から真にする変更で、
   Host は `neologd_lexicon` pack を起動時にだけ取得するため（`azdic-physical-layer-spec.md` §15.14）、
   反映は Host の再起動後になる。設定アプリはこの変更を保存したときに、サインアウトして再度サインイン
-  すると反映される旨を表示する（Host はログオン時に起動する。`sideload-packaging-spec` §1.7）。再起動を要する変更の判定は
+  すると反映される旨を表示する（Host はログオン時に起動する。`msix-packaging-spec` §1.7）。再起動を要する変更の判定は
   設定アプリが持つ静的な分類で行い、`UpdateConfig` の応答には含めない。
 - **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（`sideload-packaging-spec` §9）。
   平文保存は移行期のみ許容し、Host は両形式を受理する。
@@ -446,7 +446,7 @@ schema 自体は superset のまま変えない。
   条件であり、M24 の進捗に依存しない）。実行時の選択は `docs/copilot-pc-backend-spec.md` §4.4 の
   BackendSelector が担い、Vulkan ビルド（`windows-vulkan-release` preset）の `auto` は一次フィルタを
   通った機器で Vulkan を選ぶ。
-  配布物への組み込みと `sideload-packaging-spec` §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
+  配布物への組み込みと `msix-packaging-spec` §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
   選択肢を追加し、それまでは **v1.0 UI には出さない**。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
   `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
@@ -465,13 +465,13 @@ schema 自体は superset のまま変えない。
 - **モデルパスの probe-then-commit（既定 autoselect と明示選択を分ける）**: 空 `model.selectedPath` は
   「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
   `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
-  `selectedPath` 確定の規律は `sideload-packaging-spec` §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
-    - **既定モデルの autoselect（ピン依存、`sideload-packaging-spec` §1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、`sideload-packaging-spec` §1.6.1）の
+  `selectedPath` 確定の規律は `msix-packaging-spec` §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
+    - **既定モデルの autoselect（ピン依存、`msix-packaging-spec` §1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、`msix-packaging-spec` §1.6.1）の
       モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
       へ commit する（commit 後に「既定モデル使用中」と表示）。ピンと一致しなければ autoselect しない。
-    - **ユーザー / 管理者の明示選択（ピン非依存、`sideload-packaging-spec` §1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
+    - **ユーザー / 管理者の明示選択（ピン非依存、`msix-packaging-spec` §1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
       `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
-      **ピン一致を要求しない**（`sideload-packaging-spec` §1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
+      **ピン一致を要求しない**（`msix-packaging-spec` §1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
       非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
   いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「使うモデル」に「未選択（AI モデルを使わずに
   変換します）」と表示する（Host は SimpleConverter で動く）。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン

@@ -192,7 +192,20 @@ struct QueryCandidatesRequest {
   // corrected_reading. Omitted on the wire when empty; an older Host ignores it
   // and converts `reading`.
   std::vector<std::string> alt_readings;
+  // M55 (typo-correction-learning-spec section 12.13): the keys as typed, for
+  // typo correction. Omitted on the wire when empty and on a secure request.
+  // Decoding keeps it only on a request that says "secure": false, of at most
+  // kMaxRawKeysBytes and within the section 12.12.1 alphabet; anything else
+  // decodes as empty, so a secure or legacy request never carries it.
+  std::string raw_keys;
+  // M55 section 12.13: "off", "suggest", "rank" or "aggressive". Any other
+  // value, and absence, decode as empty (the Host settings apply). The Host
+  // never lets it raise the mode its settings resolve to.
+  std::string typo_correction_mode;
 };
+
+// M55 section 12.13: raw_keys longer than this many bytes is dropped on decode.
+inline constexpr size_t kMaxRawKeysBytes = 256;
 
 struct QueryCandidatesResponse {
   std::vector<CandidateField> candidates;

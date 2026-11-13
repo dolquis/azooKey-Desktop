@@ -647,7 +647,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
 
 帰結:
 
-- Host 未起動・切断・劣化モードでも本機能は完全動作する（`docs/dev-infrastructure-spec.md`
+- Host 未起動・切断・劣化モードでも本機能は完全動作する（`docs/host-availability-spec.md`
   §8 の劣化モードと整合）。
 - `composition` トリガ（§4.0.1）でも対は TIP がローカル生成するため候補 IPC は不要。
 - ベンチ（`bench/`）への追加計測も不要（ローカル編集のみ・推論レイテンシ無し）。

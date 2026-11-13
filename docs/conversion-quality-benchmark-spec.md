@@ -4,7 +4,7 @@
 対応マイルストーン: M52（変換品質トラック）
 関連: `plans/windows-port-roadmap.md` M7 / M9 / M53 / M54 / M55 / M56 / M57、
       `bench/` の target `azookey_bench`、
-      `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
+      `docs/observability-spec.md` §7.7（M51 trace）、
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）
 
@@ -403,7 +403,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る |
 | `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |
 | `--trace` | M51 trace ログを出す |
-| `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/dev-infrastructure-spec.md` §7.7.4） |
+| `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/observability-spec.md` §7.7.4） |
 | `--category <name>` | カテゴリ絞込 |
 | `--iterations <N>` | 各ケースの繰返し回数（latency 用） |
 | `--typo-mode <mode>` | typo 補正モード（`off` / `suggest` / `rank` / `aggressive`、既定 `off`）。`config.typo_correction_mode` に記録（§14.1 互換キー） |

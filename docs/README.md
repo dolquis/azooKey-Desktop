@@ -48,7 +48,10 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI（M11 / M12）、Phase 7（M29、M32〜M34）の配布・署名・更新・観測。MSIX（§1）と設定アプリ（§3）は転送表で下の spec へ |
 | [`settings-app-spec.md`](settings-app-spec.md) | M11 / M30 設定アプリ（構成、ナビゲーション、Host との IPC、設定キーの確定、v1.0 最小機能）。ペインの構成と保存バー、表示文字列の表記規則は §3.2 |
 | [`msix-packaging-spec.md`](msix-packaging-spec.md) | M28 MSIX パッケージング（TIP 配布経路の 3 候補、`pkg/msix/` の identity package、VCRT 同梱、推論バックエンドとモデルの配布方針、Host の常駐起動） |
-| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、IPC、観測性、Host 可用性、診断基盤。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
+| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、診断基盤。§5〜§8 は転送表で下の 3 spec へ移した。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
+| [`ipc-persistence-hardening-spec.md`](ipc-persistence-hardening-spec.md) | M39 ユーザーデータ永続化の堅牢化と M40 IPC/JSON 堅牢化 |
+| [`observability-spec.md`](observability-spec.md) | M41 構造化ログと可観測性。§7.7 は M51 の拡張 |
+| [`host-availability-spec.md`](host-availability-spec.md) | M42 Host 可用性・再接続。§8.5 は M47 の復旧 UX |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
 | [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層。§15 は転送表で下の spec へ） |
 | [`azdic-physical-layer-spec.md`](azdic-physical-layer-spec.md) | M53 system 辞書の物理層（`.azdic` v1、ビルドパイプライン） |

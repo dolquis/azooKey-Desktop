@@ -224,7 +224,7 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
   `Hide` は失敗した状態を解く。
 - 失敗段階と HRESULT は `failure_stage()` / `failure_hr()` で読める。描画内容は含まない。
   `CandidateUiCoordinator` は描画結果の通知を受け、失敗を RuntimeLogger へ記録する
-  （イベントと重複抑止は `docs/dev-infrastructure-spec.md` §7.2）。
+  （イベントと重複抑止は `docs/observability-spec.md` §7.2）。
   成功して表示に戻ったら、保留中の secure toast と劣化バナーを表示する。
   デバイスを失った（§2.2）ときは組を作り直して 1 回だけ描き直す。
 - 詳細ポップアップは、描画に失敗したら閉じ、`ShowDetails` / `RenderDetails` は `false` を返す。

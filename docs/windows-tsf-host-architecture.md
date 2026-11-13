@@ -107,27 +107,27 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 - 型を利用できるのは、Payload codec と `inference-host/src/Dispatcher.cpp` のハンドラの両方を
   持つときに限る。enum に存在するだけの型を利用可能とみなさない。
 - 認証済み Dispatcher がハンドラを持たない型または `Unknown` を受け取ったときの応答は
-  `docs/dev-infrastructure-spec.md` §6.3 が定める。応答を返さない fire-and-forget の型は
+  `docs/ipc-persistence-hardening-spec.md` §6.3 が定める。応答を返さない fire-and-forget の型は
   `Cancel` と `ObserveTypo` である。
 
 | 型 | 正典の節 |
 |---|---|
-| `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/dev-infrastructure-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`） |
-| `LoadModel` | 本書「型ごとの処理規則」、`docs/copilot-pc-backend-spec.md` §4.4（backend の指定と降格）、`docs/dev-infrastructure-spec.md` §8.5.3（SafeMode での拒否） |
+| `Handshake` | 本書「型ごとの処理規則」「Handshake 認証ゲート」「設定（SettingsStore）」（応答が載せる TIP 向け設定）、`docs/host-availability-spec.md` §8.2（`host_generation_id`）、`docs/app-profile-spec.md` §3.1（`app_profile` / `candidate_tag`）、`docs/romaji-batch-conversion-spec.md` §6.3.2（`oob_cancel`）・§6.4.3（`commit_segments`） |
+| `LoadModel` | 本書「型ごとの処理規則」、`docs/copilot-pc-backend-spec.md` §4.4（backend の指定と降格）、`docs/host-availability-spec.md` §8.5.3（SafeMode での拒否） |
 | `QueryCandidates` | `docs/app-profile-spec.md` §3.1・§7（`app` と `tag`）、`docs/inline-english-candidate-spec.md` §6.2（`raw_romaji` / `english_candidates`）、`docs/mixed-english-auto-conversion-spec.md` §9.1（`mixed_english`）、`docs/dynamic-punctuation-spec.md` §7.1・§7.2（`auto_punctuation` / `punctuation_style` / `segments`）、`docs/candidate-rewriter-spec.md` §8.4（`emoji_trigger`）・§9.5（`max_candidates` との適用順）、`docs/typo-correction-learning-spec.md` §7（`corrected_reading`）、`docs/legacy-parity-spec.md` §5.4（`alt_readings`）、`docs/privacy-and-secure-input-spec.md` §5.1.1（`secure` / `learning_allowed`） |
 | `QueryLiveConversion` | `docs/legacy-parity-spec.md` §2.2 |
 | `QueryBatchConversion` | `docs/romaji-batch-conversion-spec.md` §6・§7、`docs/inline-english-candidate-spec.md` §6.7、`docs/ai-backend-spec.md` §4.2（`ai-cleanup`） |
 | `QueryPredictions` | `docs/legacy-parity-spec.md` §3.5 |
-| `QueryCorrections` | ハンドラを持たない。応答は `docs/dev-infrastructure-spec.md` §6.3 |
+| `QueryCorrections` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `Cancel` | 本書「Handshake 認証ゲート」（`client_id` ごとの名前空間）、`docs/romaji-batch-conversion-spec.md` §6.3.1・§6.3.2 |
 | `CommitObservation` | `docs/learning-data-management-spec.md` §12（配送保証と冪等化）、`docs/privacy-and-secure-input-spec.md` §5.1.1（学習ゲート）、`docs/inline-english-candidate-spec.md` §6.4 |
 | `CommitCorrection` | `docs/user-learning-enhancement-spec.md` §4.1 |
 | `AddUserWord` | 本書「型ごとの処理規則」、`docs/learning-data-management-spec.md` §4.5（ロックと保存の順序） |
-| `UpdateUserWord` | ハンドラを持たない。応答は `docs/dev-infrastructure-spec.md` §6.3 |
+| `UpdateUserWord` | ハンドラを持たない。応答は `docs/ipc-persistence-hardening-spec.md` §6.3 |
 | `RemoveUserWord` | `AddUserWord` と同じ |
 | `UpdateConfig` | 本書「設定（SettingsStore）」、`docs/settings-app-spec.md` §3.3 |
-| `Ping` | `docs/dev-infrastructure-spec.md` §8.5.2（timeout） |
-| `Health` | `docs/dev-infrastructure-spec.md` §8.3・§8.5.1 |
+| `Ping` | `docs/host-availability-spec.md` §8.5.2（timeout） |
+| `Health` | `docs/host-availability-spec.md` §8.3・§8.5.1 |
 | `QueryDiagnostics` | `docs/dev-infrastructure-spec.md` §12.6（payload）・§8.5.1（TIP の利用と `fallback_state` の導出） |
 | `CommitSegmentsObservation` | `docs/romaji-batch-conversion-spec.md` §6.4 |
 | `ObserveTypo` | `docs/typo-correction-learning-spec.md` §7・§12.13、`docs/privacy-and-secure-input-spec.md` §5.1.1 |
@@ -146,7 +146,7 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `FetchCatalogModel` | `docs/model-management-spec.md` §4.4 |
 | `QueryCatalogFetch` | `docs/model-management-spec.md` §4.4 |
 | `CancelCatalogFetch` | `docs/model-management-spec.md` §4.4 |
-| `Unknown` | `docs/dev-infrastructure-spec.md` §6.3 |
+| `Unknown` | `docs/ipc-persistence-hardening-spec.md` §6.3 |
 
 `MessageType` に無く、spec が定義を持つ予定の型は次の 2 つである。enum へ足すときに上の表へ移す。
 

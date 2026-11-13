@@ -492,7 +492,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
     `cudart64_12.dll` + `cublas64_12.dll` = CUDA runtime。
   - OS build: `RtlGetVersion` で取得する。
 - 判定（上から順に、最初に当たったもので CPU に決める）:
-  0. SafeMode（`docs/dev-infrastructure-spec.md` §8.5.3。モデルを動かさないため probe を
+  0. SafeMode（`docs/host-availability-spec.md` §8.5.3。モデルを動かさないため probe を
      実行せず、`reason=safe_mode` とする。SafeMode を `UpdateConfig` で解除しても、`auto` は
      Host を再起動するまで CPU のまま）
   1. ビルドに ggml-vulkan が無い（`AZOOKEY_BACKEND=vulkan` 以外）
@@ -608,8 +608,8 @@ R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード�
    `QNNExecutionProvider (DeviceType: NPU)` が現れる）。
 
 この EP 取得・登録ステップの実装は M24（`WinMlBackend`）の必須要件とし、
-EP の `ep` / `ep_state` / `ep_last_error` を診断に含める（`docs/dev-infrastructure-spec.md`
-§7.7.2 トレースログ・§12.6 `QueryDiagnostics` に反映済み）。
+EP の `ep` / `ep_state` / `ep_last_error` を診断に含める（`docs/observability-spec.md`
+§7.7.2 トレースログ・`docs/dev-infrastructure-spec.md` §12.6 `QueryDiagnostics` に反映済み）。
 
 ## 5. mmap モデルロード
 

@@ -98,7 +98,7 @@ enum class InputStateKind {
 | Selecting | Cancel (Esc) | BatchAccumulating | 変換結果を破棄し蓄積状態へ戻す |
 | BatchAccumulating | Cancel (Esc) | Idle | CancelComposition |
 
-Host が使えない間（接続・Handshake の失敗、切断、`Degraded`。`docs/dev-infrastructure-spec.md`
+Host が使えない間（接続・Handshake の失敗、切断、`Degraded`。`docs/host-availability-spec.md`
 §8.3）は次の例外がある。BatchAccumulating の Space は `QueryBatchConversion` を送らず、読み全体を
 1 文節とする TIP 内ローカル候補で Selecting に入る（`Degraded` では最初の Space だけ Host へ送る）。
 BatchConverting の Space は in-flight を `Cancel` してローカル候補で Selecting に入り、Enter は
@@ -320,7 +320,7 @@ control接続からCancelを処理できる。1リクエスト1応答を維持�
   かな確定）で入力を失わずに確定可能にする。
 - **stale 応答の drain（必須）**: `ReceiveWithTimeout` はフレーム到着待ちの
   タイムアウト時に応答を消費せず `nullopt` を返す（`ipc/src/NamedPipeTransport.cpp`。
-  相の定義は `docs/dev-infrastructure-spec.md` §6.4.8。`T_sub` は同項の
+  相の定義は `docs/ipc-persistence-hardening-spec.md` §6.4.8。`T_sub` は同項の
   request deadline として渡し、フレーム転送中に `T_sub` を超えた場合のみ接続を
   切断するため、以下の drain は接続が維持されている場合の規約である）。host 側
   `ClientLoop` はハンドラ完了後に最終 / canceled 応答を **primary 接続に必ず書き込む**ため、タイム
@@ -501,7 +501,7 @@ AI整文は生ローマ字と読みを共有バックエンドへ送り、成功
 句読点の追加を結果側でも抑える。生成文と読みの細かな対応を持たないため、
 AI整文結果の学習通知は省略する。private/secureのAI経路でも学習通知を省略する。
 TIPはAI期限に5秒の余裕を足して待機する。ローカル一括整文の期限は外部API設定と
-独立した30秒とする。実モデルで1変換のハード予算の上限（800 ms、`dev-infrastructure-spec.md` §8.5.2）を超えるため、M47の短いローカル処理とは区別する。
+独立した30秒とする。実モデルで1変換のハード予算の上限（800 ms、`host-availability-spec.md` §8.5.2）を超えるため、M47の短いローカル処理とは区別する。
 AI通信失敗時は同じ論理バッチをneuralで再試行し、neuralも失敗した場合だけ全文かなへ戻す。
 追加入力・Escではキャンセルする。
 

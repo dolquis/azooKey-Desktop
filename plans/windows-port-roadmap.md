@@ -366,7 +366,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。実体は `core/src/RuntimeLogger.cpp` で、環境変数 `AZOOKEY_LOG=1` のとき
   コンポーネント別の `.jsonl` へ書く（M41 構造化ログと可観測性）。
-  ログスキーマ・相関 ID・エラーコード体系は `docs/dev-infrastructure-spec.md`
+  ログスキーマ・相関 ID・エラーコード体系は `docs/observability-spec.md`
   §7 を正典とする。
 - **ドキュメント**: 各マイルストーン完了時に `docs/windows-tsf-host-architecture.md`
   を実装に合わせて更新する。
@@ -388,7 +388,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
   Broker（設定・辞書・IPC 認証・Worker 監視）/ Worker（モデル runtime）へ分離する
   方向を将来投資として定義する。v1.0 の必須範囲外。分離の設計は `request_id` を軸とした
   Cancel/staleness/sequencing の E2E を前提とする。詳細は
-  `docs/dev-infrastructure-spec.md` §8.6、設計スパイクは Linear で追跡。
+  `docs/host-availability-spec.md` §8.6、設計スパイクは Linear で追跡。
 
 候補 UI（M5）の実装方式（`ITfCandidateListUIElement` と自前 HWND の両立）と設定アプリ（M11）の
 UI フレームワークは決まっている。前者は M5 と `docs/tsf-deep-integration-spec.md` §2.8〜§2.11、
@@ -405,7 +405,7 @@ v1.0 リリースに向けたリスクと対応:
 | TIP の machine-wide 登録 (M11 / M28) | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録とする。MSI はアンインストール時に自動解除し（M11）、MSIX は経路ごとの登録が残骸なく消えることを VM テストで確認する（M28） |
 | 設定 UI フレームワーク (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）。決定内容と実機確証の Human Gate は M11「UI フレームワーク決定」 |
 | 署名証明書の調達 (M29) | TIP バイナリ署名は入力対象と独立した v1.0 のリリースゲート（spec §0.1）。MVP の未署名 MSI は評価配布に限る | 調達経路は spec §2.0（経路 B）。MS Store は Microsoft の再署名で有料証明書不要（spec §0） |
-| Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は TIP 内のかな・カタカナ候補による劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
+| Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は TIP 内のかな・カタカナ候補による劣化モードへ（`docs/host-availability-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。外部ライブラリ移行は v1.0 の範囲では行わず自前パーサを維持する（同 §6.2, §11.2.1。再評価条件も同節） |
 | 学習永続化の書き込み増幅・無制限増大 | 確定時レイテンシ増加、SSD 書き込み増、学習 TSV 肥大化 | `LearningStore` は N 件/T 秒デバウンス、明示 flush、保存失敗ログ、上限件数 + weight 閾値 GC で抑制。burst 先頭の同期 flush は T 秒のレート制限を課し、追加書き込みを 1 burst あたり最大 1 回に抑える（`docs/learning-data-management-spec.md` §11.2） |
@@ -1582,14 +1582,14 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 英語区間の確定は English チャネルに、日本語区間の確定はかな漢字学習に記録され、互いに混線しない
   - spec §15.2 の評価セットで、日本語だけの文の変換結果が設定 OFF のときより 1 件も劣化せず、
     自動で英字にした区間の適合率が 95% 以上である
-  - ライブ変換の打鍵ごとの応答が `docs/dev-infrastructure-spec.md` §8.5.2 のライブ変換の timeout
+  - ライブ変換の打鍵ごとの応答が `docs/host-availability-spec.md` §8.5.2 のライブ変換の timeout
     （150ms）内に収まる
   - 設定 OFF で、候補生成・ライブ変換・rerank・確定・学習が一切変わらない
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **参照**: `docs/mixed-english-auto-conversion-spec.md`（M63 の正典仕様）、
   `docs/inline-english-candidate-spec.md`（M60）、`docs/romaji-batch-conversion-spec.md`
   §4.1・§7（生ローマ字と chunk）、`docs/zenzai-inference-spec.md` §3・§8、
-  `docs/dev-infrastructure-spec.md` §8.5.2（ライブ変換の timeout）、
+  `docs/host-availability-spec.md` §8.5.2（ライブ変換の timeout）、
   `docs/neural-reranker-nll-spec.md`（Track B）、`docs/mixed-english-input-feasibility-report.md`
 - **補足**:
   - **ユーザー可視挙動の要求**（仕様化の前提として固定する）:
@@ -1606,8 +1606,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     M60 §4.2 が避けている雑音（`ko` で英語を出す等）になるためである。
   - **M60 との関係**: M60 の生ローマ字バッファ、英単語辞書（TSV・`.bin`・overlay）、English
     学習チャネル、`CandidateTag::English`、英語意図シグナル（`docs/inline-english-candidate-spec.md`
-    §3〜§5）を再利用する。M60 は第 1 候補を英単語へ置き換えず（同 §4.3）、ライブ変換へ英単語を
-    注入しない（同 §4.1）。M63 はこの 2 点を、M63 の設定が ON のときに限って変える。
+    §3〜§5）を再利用する。M60 は第 1 候補を英単語へ置き換えず（`docs/inline-english-candidate-spec.md` §4.3）、ライブ変換へ英単語を
+    注入しない（`docs/inline-english-candidate-spec.md` §4.1）。M63 はこの 2 点を、M63 の設定が ON のときに限って変える。
     M60 の spec（§2・§4.1・§4.3）と M60 の受け入れ条件は、M63 の設定が OFF の composition に
     適用する。
     - M63 の設定（`mixedEnglishAutoConversion`）は、M60 の設定（`inlineEnglishCandidates`）が ON の
@@ -1624,7 +1624,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
       英字のまま Zenzai の入力に入れる方式を採る（spec §3・§7）。zenz のモデルを差し替えるときは、
       英字を写す挙動が保たれるかを spec §15.2 の評価セットで確かめる。
     - **レイテンシ**: 分割の候補ごとに推論が増える。ライブ変換は打鍵ごとに走り、client は 150ms で
-      打ち切る（`docs/dev-infrastructure-spec.md` §8.5.2）。spec §10 は打鍵ごとの推論を 1 回に限り、
+      打ち切る（`docs/host-availability-spec.md` §8.5.2）。spec §10 は打鍵ごとの推論を 1 回に限り、
       分割器の上限と打ち切りを定める。
     - **打ち間違い補正との重なり**: ローマ字かな変換の後に英字が残ることは、M35 / M55 の打ち間違い
       補正（`docs/typo-correction-learning-spec.md`）の信号でもある。英単語と打ち間違いのどちらとして
@@ -1777,7 +1777,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 必要なディレクトリが自動作成される
   - 保存が原子的で、書き込み中クラッシュで既存ファイルが壊れない
   - 保存先決定ロジックの unit test が緑、既存テストが回帰しない
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §5
+- **参照仕様**: `docs/ipc-persistence-hardening-spec.md` §5
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 既定保存先を `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\` に
@@ -1814,8 +1814,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - per-client 未完了要求が上限を超えて無制限に積み上がらない
   - `ipc/testdata/` fixture が TIP / Host 双方のテストから参照され、
     transport 層の truncated / 0-byte frame ケースが緑
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §6
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §6。上限値・タイムアウト値は同節が正典
+- **参照仕様**: `docs/ipc-persistence-hardening-spec.md` §6
+  - 実装範囲の正典: `docs/ipc-persistence-hardening-spec.md` §6。上限値・タイムアウト値は同節が正典
 - **補足**:
   - プロトコル fixture: 固定 JSON / バイナリ fixture を `ipc/testdata/` に置き、TIP 側と Host 側のデコードを同一データで検査する。transport 層の 0-byte / truncated frame ケースを追加する（spec §6.3 は `ipc/testdata/` を fuzz の seed corpus としてだけ記述する）。
 
@@ -1832,12 +1832,12 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - エラーを記録する行の `error_code` が spec §7.4 の 3 カテゴリのいずれかになる
   - タイムアウト規約（spec §7.5）の deadline 超過がログに記録される
   - Release ビルドで入力本文・候補語がログに出力されない
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §7
+- **参照仕様**: `docs/observability-spec.md` §7
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 相関 ID（`request_id` は TIP 採番。`QueryCandidates`/staleness は `ipc_pending_id_`、
       送信キュー〔`CommitObservation`〔応答あり〕/ `Cancel`〔応答なし〕〕は接続ローカル連番。
-      `trace_id` と組で相関。詳細は `docs/dev-infrastructure-spec.md` §7.3）
+      `trace_id` と組で相関。詳細は `docs/observability-spec.md` §7.3）
     - 入力本文・候補語のログ redaction は §7.6 の優先順位に従う。本文出力は
       `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ policy.detailed_logging_allowed` のときのみ
       （`privacy.redactLogs` 既定 `true`。単に Debug というだけでは出さない）
@@ -1856,7 +1856,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 状態遷移がログに記録され、Host 復帰後に `Ready` へ復帰する
   - Host 再起動をまたぐ再接続で `host_generation_id` の変化を検知・記録し、旧世代宛の
     遅延応答を破棄し、pending 要求を新しい request ID で再送する
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §8
+- **参照仕様**: `docs/host-availability-spec.md` §8
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - Host 世代 ID: Host 起動ごとにランダムな世代 ID（インスタンス UUID）を
@@ -1925,8 +1925,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 連続クラッシュ時は SafeMode に入り、次回起動時に通知する
   - 各処理の timeout が spec §8.5.2 の表どおりに動作する（request deadline の行が対象。
     「設計値」の行は含まない）
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §8
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §8 拡張。状態機械 5 種・各処理の timeout 値・UI 文言は同節が正典
+- **参照仕様**: `docs/host-availability-spec.md` §8
+  - 実装範囲の正典: `docs/host-availability-spec.md` §8 拡張。状態機械 5 種・各処理の timeout 値・UI 文言は同節が正典
 
 ### M50: アプリ互換性テストハーネス
 
@@ -1972,8 +1972,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
   - Zenzai backend 比較（R1: cpu / cuda / vulkan、R2: winml〔EP 自動選択〕）に使える
   - 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §7
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §7 拡張
+- **参照仕様**: `docs/observability-spec.md` §7
+  - 実装範囲の正典: `docs/observability-spec.md` §7 拡張
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - `azookey_trace_viewer trace.jsonl --summary` で p50/p95/p99 を出力
@@ -2124,7 +2124,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     M55 の受け入れ条件で行う。spec §7 参照）
   - baseline 比較レポート（`diff_vs_baseline`）が生成され、CI artifact 化される
   - `--trace` 指定時は phase JSONL を生成し、`azookey_trace_viewer --json` の schema と phase 別
-    p50 / p95 / p99 を検証できる（M51、`docs/dev-infrastructure-spec.md` §7.7.3）
+    p50 / p95 / p99 を検証できる（M51、`docs/observability-spec.md` §7.7.3）
   - 初期評価データが spec §11.2「M52 初期」を満たす（general / homophone /
     typo / typo_clean 各 100・計 ≥400。typo_clean は false-positive /
     overcorrection の分母のため必須）

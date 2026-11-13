@@ -4,9 +4,9 @@
 
 | 変更領域 | 最初に読む仕様 | 主な実装 | 優先テスト |
 |---|---|---|---|
-| 構造化ランタイムログ（JSON Lines、環境変数、ローテーション） | `docs/dev-infrastructure-spec.md` §7.2〜§7.5、`docs/debugging.md`「ログ収集」 | `core/src/RuntimeLogger.cpp`、`core/include/azookey/logging/RuntimeLogger.h` | `runtime_logger_tests`（OS mutex のため `RESOURCE_LOCK` 付き） |
-| redaction | `docs/dev-infrastructure-spec.md` §7.6、`docs/privacy-and-secure-input-spec.md` §8 | `core/src/Redaction.cpp` | `core_tests`（`core/tests/redaction_test.cpp`） |
-| ETW イベント | `docs/sideload-packaging-spec.md` §7（provider、Event ID、redaction）、`docs/dev-infrastructure-spec.md` §7.3（phase の対応表と相関キー） | `core/src/EtwLogger.cpp`、`diagnostics/etw/AzooKey.man`（provider `azooKey-Desktop`）、`diagnostics/azookey-diagnostics.wprp` | `core_tests`（`core/tests/etw_logger_test.cpp`） |
+| 構造化ランタイムログ（JSON Lines、環境変数、ローテーション） | `docs/observability-spec.md` §7.2〜§7.5、`docs/debugging.md`「ログ収集」 | `core/src/RuntimeLogger.cpp`、`core/include/azookey/logging/RuntimeLogger.h` | `runtime_logger_tests`（OS mutex のため `RESOURCE_LOCK` 付き） |
+| redaction | `docs/observability-spec.md` §7.6、`docs/privacy-and-secure-input-spec.md` §8 | `core/src/Redaction.cpp` | `core_tests`（`core/tests/redaction_test.cpp`） |
+| ETW イベント | `docs/sideload-packaging-spec.md` §7（provider、Event ID、redaction）、`docs/observability-spec.md` §7.3（phase の対応表と相関キー） | `core/src/EtwLogger.cpp`、`diagnostics/etw/AzooKey.man`（provider `azooKey-Desktop`）、`diagnostics/azookey-diagnostics.wprp` | `core_tests`（`core/tests/etw_logger_test.cpp`） |
 | crash 収集と同意 | `docs/sideload-packaging-spec.md`（同梱と同意の扱い）、`plans/windows-port-roadmap.md` の該当 M | `core/src/CrashReporting.cpp` | `crash_reporting_tests`（Windows では `dbghelp` をリンク） |
 | dump の保持と削除 | 同上 | `core/src/CrashRetention.cpp` | `core_tests`（`core/tests/crash_retention_test.cpp`） |
 | 診断ウィザードと CLI | `docs/dev-infrastructure-spec.md` §12 | `diagnostics/Diagnostics.cpp`、`diagnostics/azookey_diag.cpp`、`diagnostics/SettingsSchema.h.in` | `diagnostics_tests` |
@@ -27,6 +27,6 @@ target の追加・削除はそちらと `scripts/check_test_inventory.py` が�
 ## 実装後に失効する spec 記述の削除
 
 ログ項目、診断チェック ID（`D-xxx`）、zip の収集対象を追加したら、
-`docs/dev-infrastructure-spec.md` §7 / §12 の一覧と `docs/debugging.md` の手順を
+`docs/observability-spec.md` §7 / `docs/dev-infrastructure-spec.md` §12 の一覧と `docs/debugging.md` の手順を
 同じ変更で更新する。件数や「対応済み」の実況は書かず、定義だけを残す
 （詳細は `azookey-doc-governance` スキル）。

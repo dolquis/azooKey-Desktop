@@ -34,7 +34,7 @@ C-001〜C-012 は `GUID_PROP_ATTRIBUTE` に載せた属性の描画を判定し�
   チェックリストの対象外。
 - 打鍵する文字列は `nihongo`（→ 未確定「にほんご」→ 確定「日本語」）に固定する。
   スクリーンショットに個人の入力が写らないようにするため、任意の文章を打たない
-  （`docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー）。
+  （`docs/observability-spec.md` §7.6 の redaction ポリシー）。
 - 実走前に次を記録する: Windows のビルド番号 / 対象アプリのバージョン /
   表示スケール / モニタ構成 / azooKey のビルド構成（Debug or Release）と git commit。
 

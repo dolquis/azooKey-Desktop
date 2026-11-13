@@ -12,7 +12,7 @@ Auto Conversion）」を定める。`plans/windows-port-roadmap.md` の M63 が�
   再利用し、M60 の設定キーの意味を変えない。
 - `docs/zenzai-inference-spec.md` … Zenzai のプロンプト（§3）と性能予算（§8）。
 - `docs/romaji-batch-conversion-spec.md` … `CommitSegmentsObservation`（§6.4）。
-- `docs/dev-infrastructure-spec.md` … ライブ変換の timeout（§8.5.2、150ms）。
+- `docs/host-availability-spec.md` … ライブ変換の timeout（§8.5.2、150ms）。
 - `docs/typo-correction-learning-spec.md` … M35 / M55 の打ち間違い補正。
 - `docs/conversion-quality-benchmark-spec.md` … M52 の評価データと品質指標。
 - `docs/mixed-english-input-feasibility-report.md` … 実現可能性と先行事例の調査記録（参考。正典ではない）。
@@ -364,7 +364,7 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   secure として扱われる。そのため、一括変換の `secure` を判定する Host と旧 TIP の組み合わせでは、
   一括変換に M60 の英単語候補が出ない。ライブ変換は、旧 TIP が `raw_romaji` を送らないので影響を受けない。
 - 生ローマ字と区間の表層は、ログとダンプに平文で出さない。`RuntimeLogger` の redaction
-  （`docs/dev-infrastructure-spec.md` §7.6。secure 中は `docs/privacy-and-secure-input-spec.md` §8）で
+  （`docs/observability-spec.md` §7.6。secure 中は `docs/privacy-and-secure-input-spec.md` §8）で
   本文系のフィールドとして扱い、出すのは件数と長さだけにする。
 
 ## 10. レイテンシと打ち切り
@@ -377,7 +377,7 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
     2 回になる。
 - 分割器の辞書の照合は、英単語辞書の snapshot を 1 回取り、ラティスのすべての部分列をその snapshot で
   引く。Zenzai の変換は snapshot の外で行う。
-- ライブ変換の応答は `docs/dev-infrastructure-spec.md` §8.5.2 の 150ms に収める。Zenzai の 1 回の
+- ライブ変換の応答は `docs/host-availability-spec.md` §8.5.2 の 150ms に収める。Zenzai の 1 回の
   予算は `docs/zenzai-inference-spec.md` §8 のとおりで、M63 は増やさない。
 - 分割器の上限: 生ローマ字は 64 文字まで、上位の経路は 8 件まで。上限を超えた composition、
   分割器が失敗したとき、辞書の照合が失敗したときは、その要求を M63 の設定が OFF のときと同じ
@@ -388,7 +388,7 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   読める辞書語を英字にした変換も、低確度の区間と同じ 3 回に数える。すべて J の候補（§8.3 の 2）
   は通常の変換の結果を使い、追加の変換に数えない。追加の変換には NLL の rerank と M35 の候補を掛けない。
 - 合計時間の打ち切り: 通常の変換と追加の変換は直列に行う。1 回ずつ Zenzai の予算（600ms）に
-  収まっても、合計は候補窓用 `QueryCandidates` の timeout 750ms（`docs/dev-infrastructure-spec.md`
+  収まっても、合計は候補窓用 `QueryCandidates` の timeout 750ms（`docs/host-availability-spec.md`
   §8.5.2）を超えうる。Host は要求の受信から 650ms（750ms から、辞書候補・rerank・応答の組み立てと
   IPC の余裕 100ms を引いた値）を、追加の変換の期限とする。
   - 追加の変換は、期限を過ぎたら始めない。
@@ -405,7 +405,7 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
   - 打鍵ごとの変換（`live = true`）は p95 19〜37ms。
   - composition 全体の候補一覧用の変換 1 回は、中央値 50〜91ms、p95 約 95ms（最大 100ms）。
   - 第 1 候補の変換と追加の 4 回を合わせた 5 回は、中央値で約 460ms、p95 で約 480ms。候補窓用の
-    `QueryCandidates` の timeout 750ms（`docs/dev-infrastructure-spec.md` §8.5.2）に収まり、1 回ずつは
+    `QueryCandidates` の timeout 750ms（`docs/host-availability-spec.md` §8.5.2）に収まり、1 回ずつは
     Zenzai 1 変換のハード予算 600ms（`docs/zenzai-inference-spec.md` §8.2）に収まる。
 
 ## 11. 学習

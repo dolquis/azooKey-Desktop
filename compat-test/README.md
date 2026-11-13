@@ -171,7 +171,7 @@ runner 実装前でも実機で確認できる手動チェックリストを同�
 
 ## 観測性との整合
 
-ログ・成果物は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシーに
+ログ・成果物は `docs/observability-spec.md` §7.6 の redaction ポリシーに
 従う。レポートには固定の reason code だけを書き、失敗ログは reason code と
 本文を含まない診断値（下記）だけを書く。観測した入力本文・候補本文はどちらにも書かない。
 失敗スクリーンショットは元の画面ピクセルを取得せず、

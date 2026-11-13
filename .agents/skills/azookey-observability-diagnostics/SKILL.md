@@ -19,16 +19,16 @@ description: azooKey Desktop の構造化ログ（RuntimeLogger、AZOOKEY_LOG）
 4. 最小差分で実装し、schema を固定するテスト（JSON 行の形、ETW payload の固定長）を更新する。
 5. 対象テストを実行し、Host の `QueryDiagnostics` 応答に触れたら `host_dispatcher_tests` へ広げる。
 6. ログ形式、保持期間、環境変数、CLI の出力 schema が変わる場合は
-   `docs/dev-infrastructure-spec.md` §7 / §12 と `docs/debugging.md` を同じ変更で更新する。
+   `docs/observability-spec.md` §7 / `docs/dev-infrastructure-spec.md` §12 と `docs/debugging.md` を同じ変更で更新する。
 
 ## 必須ガードレール
 
 - ETW には文字列を載せない。`EtwLogger` に string を取る overload を足さない。
 - Release ビルドのランタイムログに入力本文、候補本文、`prompt`、`window_title` の生値を出さない。
-  redaction ポリシーの正典は `docs/dev-infrastructure-spec.md` §7.6 と
+  redaction ポリシーの正典は `docs/observability-spec.md` §7.6 と
   `docs/privacy-and-secure-input-spec.md` §8 である。
 - ログは環境変数 `AZOOKEY_LOG` の明示 opt-in でだけ出力し、既定ではファイルを作らない。
-  ローテーションは `docs/dev-infrastructure-spec.md` §7.1.1、出力先と収集手順は `docs/debugging.md`「ログ収集」が定義する。
+  ローテーションは `docs/observability-spec.md` §7.1.1、出力先と収集手順は `docs/debugging.md`「ログ収集」が定義する。
 - `CrashReporting` を TIP DLL に組み込まない。同意（`CrashConsent`）が Off なら何も書かない。
 - `PruneCrashDumps` は命名規則に合う dmp だけを管理し、symlink を辿らず、ディレクトリを作らない。
 - secure input 中はログ・ETW・診断 zip に入力の痕跡を残さない。

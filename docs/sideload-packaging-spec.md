@@ -1,7 +1,8 @@
 # 配布・パッケージング 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
-`plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
+`plans/windows-port-roadmap.md` の M11・M12 と Phase 7 の M29・M32〜M34 が本書を参照する。
+M28（MSIX）は `docs/msix-packaging-spec.md`、M30（設定アプリ）は `docs/settings-app-spec.md` が定める。
 
 ## 読み方
 
@@ -9,7 +10,7 @@
 
 - **MVP（未署名 MSI）の実装者**: §0 で対象チャネルを確認し、§4（WiX / MSI）→ §3（設定アプリ）
   の順に読む。
-- **Microsoft Store 提出**: §1（MSIX）。TIP 配布経路の 3 候補は §1.0、Option A の PoC 具体は
+- **Microsoft Store 提出**: `docs/msix-packaging-spec.md`（旧 §1）。TIP 配布経路の 3 候補は §1.0、Option A の PoC 具体は
   §1.1.2（経路はいずれも M28 の PoC で確定する）。
 - **コード署名**: §2。
 - **リリース後の運用（更新・観測・学習データ保護）**: §6〜§9。
@@ -19,9 +20,9 @@
 | 節 | 内容 | マイルストーン |
 |---|---|---|
 | §0 | 配布方針（チャネルと署名要否の確定） | M11・M12 |
-| §1 | MSIX パッケージング（MS Store 向け） | M28（§1.6 は M24 と連動） |
+| §1 | MSIX パッケージング（MS Store 向け。`docs/msix-packaging-spec.md` へ移動。転送表を参照） | M28（移動先が定める。§1.6 は M24 と連動） |
 | §2 | EV/OV コード署名 | M29 |
-| §3 | 設定アプリ | M11（最小）・M30（フル） |
+| §3 | 設定アプリ（`docs/settings-app-spec.md` へ移動。転送表を参照） | M11（最小）・M30（フル） |
 | §4 | WiX / MSI インストーラ（MVP 既定） | M11・M12（§4.4 は M38） |
 | §5 | WinGet マニフェスト | M32 |
 | §6 | 自動更新 | M32 |
@@ -39,7 +40,7 @@
 | チャネル | 形式 | 自前コード署名 | 位置づけ |
 |---|---|---|---|
 | **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | MVP（評価配布）と v1.0 の既定形式。§4 が正典。GitHub Release で配布。TIP バイナリ署名は §0.1 |
-| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成 |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。`msix-packaging-spec` §1 を Store 用 Identity で構成 |
 | **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | 延期。§2 の署名ルート（§2.0 の経路 B）は本チャネルの着手時に実施する |
 
 MSIX は署名がインストールの前提条件だが、MSI は署名が任意である。未署名 MSI では
@@ -50,7 +51,7 @@ SmartScreen 警告と UAC「不明な発行元」が出るが、reputation build
 上表の「自前コード署名」欄は**インストーラの署名要否**を示す。第三者 IME として TIP バイナリに
 求められる署名要件は別の境界であり、§0.1 で扱う。
 
-以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
+以降の `msix-packaging-spec` §1（MSIX）・§2（署名）は上表に従って読むこと。**`msix-packaging-spec` §1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
 ### 0.1 MVP の入力対象スコープと署名ゲート
@@ -83,8 +84,8 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 
 * `tsf-tip/` に x86 ターゲットを追加し、x86 TIP DLL をビルドする
 * 32 bit の `regsvr32` から `DllRegisterServer` を呼び、レジストリの 32 bit ビュー（`WOW6432Node`）へ CLSID と `CTF\TIP` を登録する
-* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
-* MSIX（§1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
+* `msix-packaging-spec` §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は x64 TIP DLL 1 個を前提としている）
+* MSIX（`msix-packaging-spec` §1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
 
 再評価のトリガは 2 つある。
 実利用者から 32 bit プロセスでの入力要望が挙がること、または M27（ARM64 ビルド）で複数アーキテクチャのビルドと登録の経路が整備され、x86 追加の限界コストが下がることである。
@@ -112,811 +113,13 @@ TSF と ctfmon は対象プロセスの bitness に一致する TIP をロード
 Store 入力の失敗が IME 署名要件と CIG のどちらによるものかは切り分けておらず、MVP の期間内に決着させる見込みが立たない。
 そのため入力対象から外して v1.0 以降のトラックへ送り、切り分けもそのトラックで行う。
 
-TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（§1.7）は、将来の対応に備えた回帰防止として残す。
-
-## 1. MSIX パッケージング（MS Store 向け・M28）
-
-> **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
-> Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
-> スタンドアロン MSIX サイドロードは延期する（§0。DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
-
-> **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
-> Microsoft 公式仕様上**機能制限あり**の領域である。`com4:InProcessServer`
-> は「外部位置（external location / sparse package）向け」と明記されており、
-> 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
-> 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 構成は
-> 参考であり、M28 は下表のいずれかを選ぶ。選定は Linear
-> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡する。
-
-### 1.0 TIP 配布経路 3 候補
-
-| 経路 | DLL ロード可否 | 配布形態 | OS 要件 | 評価 |
-|---|---|---|---|---|
-| A. **external-location packaging (sparse package)** + 既存 `regsvr32` 経路 | ◎ 外部から in-proc ロード可 | sparse manifest + 自前 installer（or xcopy） | Win10 2004 (19041) / Win11 21H2+ | 推奨候補。TIP DLL を MSIX 外に置けば従来の `InprocServer32` レジストリで動く |
-| B. **通常 `.msix` + `com4:InProcessServer`** | ✗ ACL でブロックされる可能性大 | フル MSIX | Win10 21H2 server (20348+) / Win11 21H2+ | Microsoft が「外部位置向け」と明記。通常 MSIX では動かない事例あり |
-| C. **通常 `.msix` + `com4:SurrogateServer`**（[ClassReference Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) が推奨） | △ out-of-proc 経路。TIP の標準的 in-proc 活性化と semantics が異なる | フル MSIX | Win10 21H2 server / Win11 21H2+ | runFullTrust 下で COM 活性化は確実だが、TIP 動作と整合するか要検証 |
-
-> 補足: D ルートとして **WiX/MSI installer** で従来の `regsvr32` 経路（§4）を
-> 使う選択肢もある。MSIX 不可環境（LTSC 等）向けには結局 §4 を持つので、
-> v1.0 は §4 / WiX で確定 + §1 は M28 PoC へ送る選択もあり得る。
-
-### 1.1 AppxManifest.xml（Option B の参考例）
-
-Option B（通常 MSIX + `com4:InProcessServer`）を採る場合の manifest 要件を、schema
-validation の観点でまとめる。**この構成だけではアクティベーションが成立しない可能性**を
-§1.0 で示したため、M28 着手時に Option A への切替を含めた PoC で確定する。Option A の
-具体（`pkg/msix/AppxManifest.xml` が現物）は §1.1.2 にある。本項は manifest 全文を持たない。
-
-- `com4:Extension` / `com4:InProcessServer` は **Win10 build 20348+** を要求するので、
-  `TargetDeviceFamily@MinVersion` を `10.0.20348.0` まで引き上げる。Win10 22H2
-  （build 19045）では schema validation で reject される。
-- `IgnorableNamespaces` に `com4` を追加する（namespace は
-  `http://schemas.microsoft.com/appx/manifest/com/windows10/4`）。
-- `com4:Class` の `Virtualization` は**必須属性**である（`enabled` / `disabled`。classic COM
-  互換のため `disabled`）。`com4:Class` に `Path` 属性は無く、DLL パスは
-  `com4:InProcessServerDll`（`Path` + `ProcessorArchitecture` とも必須）で与える。
-- `com4:Class` の `ThreadingModel` の許容値は `Both` / `STA` / `MTA` / `MainSTA` / `Neutral`
-  である（`Apartment` はクラシックレジストリ値で MSIX schema では invalid）。TIP は TSF の
-  standard STA で動作する。
-- `Application` は `runFullTrust` + `EntryPoint="Windows.FullTrustApplication"` とし、Host の
-  起動は `uap3:AppExecutionAlias` で与える。
-- TSF Profile 登録は MSIX manifest では扱わない（`windows.inputMethod` は `uap3:Extension` の
-  許容 Category に存在しない）。runtime に `ITfInputProcessorProfiles::Register` を呼ぶ。
-  詳細は本節下記「TSF Profile 登録のライフサイクル」を参照。
-
-`com4:Class@Id`（CLSID）と Profile GUID は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid` /
-`kTextServiceProfileGuid` と一致させる。
-
-> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の値
-> （`Publisher="CN=dolquis"`）のままだと、OV/EV cert で署名した場合に
-> `Identity@Publisher` が署名証明書の Subject DN と一致せず `Add-AppxPackage` が
-> `0x8007000B` で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
-
-#### MSIX `comServer` の AAP（Activate As Package）挙動と既知制限
-
-MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な COM サーバと異な
-り **Activate As Package (AAP)** で活性化される。具体的には:
-
-* package 識別子と app identity 込みの user session token で実行される
-* `runFullTrust` capability を宣言した本パッケージでは追加の制限なく動作する
-* `RunAs` 等の代替活性化挙動は **サポートされない**（[`com4:ComServer` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-comserver#remarks)）
-
-**ただし in-proc サーバの DLL ロードに既知制限**:
-
-* `com4:InProcessServer` は「**packages with external location** での利用が
-  想定されており、通常 MSIX では install location の ACL により外部クライアント
-  が DLL をロードできない場合がある」（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）
-* TSF / ctfmon は TIP DLL を外部クライアントとしてロードするので、この制限に
-  直撃する可能性が高い。Option A（sparse package + 外部 DLL 配置）への切替を
-  M28 着手時に PoC で検証する
-* [`com4:InProcessServerClassReference` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) は packaged app では
-  runFullTrust + SurrogateServer のみの登録（Option C）を推奨。ただし TIP は
-  in-proc 活性化が前提なので surrogate にすると挙動が変わる可能性がある
-
-TIP 側のレジストリ登録（`DllRegisterServer` 内の machine-wide HKLM
-`Software\Classes\CLSID\...` と TSF プロファイル `...\CTF\TIP\...`）は MSIX 経路では
-使われない。MSIX manifest が registry を上書きする形になるため、TIP 側の自己登録
-ロジックは MSIX 同梱時に動かないことを前提に書く。
-**ただし Option A（external location）を採用する場合は逆に従来の `regsvr32`
-経路で `InprocServer32` を登録するため、TIP 側自己登録ロジックがそのまま使える**。
-
-#### TSF Profile 登録のライフサイクル
-
-TSF Profile（Language Profile）の登録には **MSIX manifest の専用拡張は存在しない**。
-`uap3:Extension` の許容 `Category` は `windows.appExecutionAlias` /
-`windows.protocol` / `windows.fileTypeAssociation` / `windows.appExtension` 系
-のみで、`windows.inputMethod` カテゴリは無い（[uap3:Extension 仕様](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-extension)）。
-よって TSF Profile 登録は **runtime に `ITfInputProcessorProfiles::Register` /
-`Unregister` を呼ぶ**しか方法がない。Microsoft の TSF ドキュメント [Text Service
-Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registration) も同じ規約。
-
-* MSIX 経路 (Option B/C) — **登録**: `DllMain.cpp::DllRegisterServer` は MSIX
-  経由では呼ばれないため、`Application` の `Executable`（本書では
-  `azookey_inference_host.exe`）に Profile 登録ロジックを組み込み、初回起動 /
-  再活性時に `ITfInputProcessorProfiles::Register` を idempotent に呼ぶ。
-* MSIX 経路 (Option B/C) — **解除の既知制限**: MSIX には標準の **pre-uninstall
-  hook が存在しない**（`Remove-AppxPackage` / 設定アプリのアンインストールは
-  package を atomic に削除し、host プロセスを kill するだけ）。したがって
-  `Remove-AppxPackage` だけでは `ITfInputProcessorProfiles::Unregister` を呼ぶ
-  契機が無く、roadmap M28 の受け入れ条件（アンインストールで登録の残骸が消え、言語バーに
-  死んだエントリが残らないこと）を自動で満たせない。M28 PoC で次のいずれかを確定する:
-    1. **Companion uninstall script を README で案内**: `Remove-AppxPackage` の
-       前にユーザーに `azookey-host.exe userdict unregister-profile` を実行させ、
-       明示的に `Unregister` を呼ぶ。
-    2. **External-location（Option A）への変更**: 従来の `regsvr32 /u` 経路で
-       `DllUnregisterServer` を呼べるので、本制限は発生しない。
-    3. **PackageCatalog observer process**: `PackageCatalog.PackageStatusChanged`
-       を独立 worker / Windows service で監視し、自パッケージの uninstall を
-       検出して `Unregister` を呼ぶ。実装コストが高く、v1.0 範囲外と想定。
-
-    本制限は MSIX 同梱 TIP の本質的な課題であり、Option A の優位性として記録する。
-* Option A（external location）: 従来の `regsvr32 azookey_tsf_tip.dll` 経路で
-  `DllRegisterServer` / `DllUnregisterServer` が呼ばれるので、その中で
-  `ITfInputProcessorProfiles::Register` / `Unregister` を従来通り呼んで完結する。
-* `DllRegisterServer` / `DllUnregisterServer` を MSIX context で誤って呼ぶと
-  HKCU `\Software\Classes\CLSID\...` に二重エントリが残るので、TIP 内では
-  `IsRunningInMsixContext()`（Win32 API `GetCurrentPackageFamilyName` の戻り値
-  で判定）で MSIX context での自己登録を skip させる。
-
-### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
-
-`scripts/register-dev.ps1` / `unregister-dev.ps1` は `regsvr32` 経由で machine-wide
-(HKLM) 登録を行う管理者向け開発用スクリプトであり、MSIX 経路と衝突する。両者を
-取り違えると、片方の登録解除が漏れて言語バーに古いエントリが残る (M28 設計メモ)。
-本書では以下を運用ルールとして固定:
-
-* `scripts/register-dev.ps1` / `unregister-dev.ps1`（接尾辞 `-dev` を必須化。
-  DEV-101 でリネーム済み）。`regsvr32` 開発用経路であることを名前で明示する
-* MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
-  で分岐）
-* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、
-  `compat-test/msix_install_uninstall.ps1` の smoke ハーネスを使う。
-  clean install / uninstall では Add-AppxPackage → 登録確認 → Remove-AppxPackage →
-  残骸 0 を確認する。
-  update / rollback では旧版を `-MsixPath`、新版を `-UpdateMsixPath`、失敗が期待される
-  同一 package family のより新しい package を `-FailedUpdateMsixPath` に指定する。
-  失敗用 package は validation / staging を通過した後、依存 framework の不足や登録内容の
-  不整合によって deployment 中に失敗するものを使う。署名不正など validation 開始前に
-  拒否される package は rollback 経路を通らないため、この検証には使わない。
-  ハーネスは新版の Version 増加を確認した後、失敗する更新を実行し、直前の
-  `PackageFullName` と `Version` が保持されることを確認する。失敗時の HRESULT と
-  `FullyQualifiedErrorId` は `report.json` に記録し、実機検証で失敗段階を識別できるようにする。
-  update package 2 件は常に同時に指定し、片方だけのシナリオ実行を認めない。
-  実機 VM での実行は `gate:human-required` とする。
-  COM 登録ラウンドトリップ自体は CTest
-  `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
-  MSIX パッケージング層を補完する。
-
-### 1.1.2 Option A の具体 PoC（`pkg/msix/`）
-
-§1.1 は Option B（通常 MSIX + `com4:InProcessServer`）の参考例だった。DEV-101 の M28 PoC
-として **Option A（external-location packaging / sparse package）の具体化**を `pkg/msix/`
-に置く（`pkg/msix/README.md` が正典手順）。
-
-* `pkg/msix/AppxManifest.xml` — identity package manifest。`uap10:AllowExternalContent=true`
-  （Namespace `.../uap/windows10/10`、Win10 build 19041+）、`ProcessorArchitecture="neutral"`、
-  `runFullTrust` + `unvirtualizedResources`、`Application` は `uap10:TrustLevel="mediumIL"` /
-  `uap10:RuntimeBehavior="win32App"` + `VisualElements AppListEntry="none"`。
-  **`com4:Class` / CLSID を書かない**のが Option B/C との最大の違い（TIP は外部配置 +
-  `regsvr32` 登録のため）。出典: [Grant package identity by packaging with external location](https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
-* `pkg/msix/azookey_inference_host.exe.manifest` — app 側 side-by-side manifest。`<msix>`
-  要素の `packageName` / `publisher` / `applicationId` を identity manifest の
-  `Identity@Name` / `Identity@Publisher` / `Application@Id` と一致させ、exe を package
-  identity へ紐付ける（不一致は登録自体は成功するが runtime で identity 欠落 = 0x80073D54）。
-  この manifest は `inference-host/CMakeLists.txt` が `azookey_inference_host` の
-  `.manifest` ソースとして追加し、MSVC ビルドで CMake（`cmake -E vs_link_exe --manifests`）が
-  `mt.exe` へ渡してリンカ生成 manifest とマージ・埋め込みする（CMake オプション
-  `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。リンカへ `/MANIFEST:EMBED` を直接渡す方法は
-  使えない（CMake が続けて呼ぶ `mt.exe` の入力が 0 になり `c10100a7` でビルドが落ちる）。
-  埋め込みが無いと `-ExternalLocation` 付きで登録しても `Package.Current` が null になり、
-  roadmap M28 の受け入れ条件を満たせない。identity
-  package 未登録の環境では `<msix>` 要素は無視されるため、開発ビルドの挙動は変わらない。
-* `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
-  （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with
-  External Location」拡張）。
-
-上記のうち **実機 VM を要さない静的整合**は `scripts/tests/msix-identity-consistency.Tests.ps1`
-（Pester、CI の PowerShell lint/test ジョブ）が検証する。検証対象は (a) `<msix>` 3 属性と
-identity manifest の一致、(b) Option A の不変条件（`uap10:AllowExternalContent=true`、
-`runFullTrust` / `unvirtualizedResources`、`mediumIL` / `win32App`、`TargetDeviceFamily`
-`MinVersion` が Win10 22H2 = build 19045 を切らないこと、`com4` 宣言を持たないこと）、
-(c) `compat-test/msix_install_uninstall.ps1` の既定 `-PackageName` / `-Clsid` /
-`-ProfileGuid` / `-LangId` が `Identity@Name` および `kTextServiceClsid` /
-`kTextServiceProfileGuid` / `kJapaneseLangId` と一致すること、(d) 上記のビルド埋め込み配線が
-残っていること。`com4` 宣言を足す（= Option B/C へ移る）場合は本節と §1.0、smoke ハーネスの
-合否定義を同時に更新する必要があり、更新漏れは (b) が落として検出する。
-
-登録は `Add-AppxPackage -Path <pkg>.msix -ExternalLocation <install-dir>`。TIP DLL / 実行体は
-external location（§4 WiX/MSI の install ディレクトリ）に置き、COM 登録は
-`scripts/register-dev.ps1` の `regsvr32` 経路で行う。**本 PoC は Option A を具体化するが経路の
-最終確定ではない**（確定は DEV-267 の実機 smoke 結果を待つ）。identity package は MS Store
-提出物ではなくサイドロード登録専用で、§0 の配布方針（MVP=MSI/WiX §4、MS Store MSIX=DEV-416、
-スタンドアロン MSIX サイドロード延期）を変更しない。
-
-### 1.2 Package.wapproj
-
-> **Option A では本項の「同梱物」は同梱しない**: 以下は Option B/C（バイナリ同梱の通常 MSIX）
-> 向けの記述。Option A（sparse / external-location）ではバイナリを MSIX に含めず external
-> location へ置くため、`pkg/msix/AppxManifest.xml`（identity のみ）+ `build-identity-package.ps1`
-> を使う（§1.1.2）。`pkg/msix/Package.wapproj` は Option A では identity のみをパッケージ化する。
-
-`pkg/msix/Package.wapproj`（WAP プロジェクト）：
-
-- ターゲット: x64 / arm64
-- 同梱物:
-  - `azookey_tsf_tip.dll`
-  - `azookey_inference_host.exe`
-  - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。§3.0）
-  - `Assets/*.png`
-  - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に DL
-    （v1.0 の最小取得経路と配信元の分岐は §1.6.1）
-
-### 1.3 Microsoft.VCRTForwarders 同梱
-
-C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
-
-```xml
-<Dependencies>
-  <PackageDependency Name="Microsoft.VCLibs.140.00.UWPDesktop"
-                     MinVersion="14.0.32530.0"
-                     Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
-</Dependencies>
-```
-
-これにより、ユーザー環境に VCRedist が無くても動作する。
-
-#### Windows App SDK ランタイム（設定アプリ = WinUI 3 の依存）
-
-設定アプリ `azookey_settings.exe` は WinUI 3（§3.0）のため **Windows App SDK ランタイム**に
-依存する。VCLibs だけではクリーン VM で起動しないため、次のいずれかで同梱する。ビルド側は
-`settings-app/azookey_settings.vcxproj` に Windows App SDK の component packages を
-`PackageReference` で宣言する。採用 package と版の正典は同プロジェクトと
-`THIRD_PARTY_LICENSES` とし、本 spec へ重複記載しない。
-
-- **self-contained 配置（推奨・サイドロード向け）**:
-  `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` を **設定アプリ本体の
-  プロジェクト（`azookey_settings`）に設定し、さらに WAP パッケージングプロジェクト
-  （`pkg/msix/Package.wapproj`）にも同プロパティを設定する**（Microsoft の self-contained 配置
-  ガイド: アプリプロジェクトに必須、WAP 利用時はパッケージングプロジェクトにも追加。WAP のみだと
-  ランタイムファイルが設定アプリ出力に展開されず起動失敗し得る）。これによりランタイムを
-  アプリへバンドルし、フレームワークパッケージ依存が無くなり、外部配信に依存せずクリーン VM で
-  確実に起動する（配布サイズは増える）。
-- **framework-dependent 配置**: manifest に Windows App SDK のフレームワーク依存を宣言し、
-  `Microsoft.WindowsAppRuntime` フレームワークパッケージ（または `WindowsAppRuntimeInstall.exe`）
-  の配信をインストーラ手順（§4 / §5）に含める。
-  ```xml
-  <!-- framework package family は major 版に揃う（WASDK 2.0 SemVer 移行）。NuGet/版が
-       2.2.0 でも family は Microsoft.WindowsAppRuntime.2.0 のまま（".2.2" は存在せず、
-       clean VM で解決失敗する）。MinVersion は採用する WASDK 版（§3.1）に対応する
-       ランタイムパッケージ版に合わせる。 -->
-  <PackageDependency Name="Microsoft.WindowsAppRuntime.2.0"
-                     MinVersion="..."
-                     Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
-  ```
-
-TIP DLL（`tsf-tip/`）と Host（`inference-host/`）は WinUI 3 非依存のため、本ランタイムは
-**設定アプリのみ**が必要（TIP/Host パッケージには不要）。
-
-### 1.4 インストール / アンインストール
-
-```powershell
-# インストール
-Add-AppxPackage -Path .\azooKey-1.0.0.msix
-
-# アンインストール
-Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
-```
-
-解除前の入力方式の切替（`azookey_ime_switch.exe`）は MSI と開発登録の解除手順に含め、
-MSIX の `Remove-AppxPackage` には含めない。手順は §4.2 に従う。
-
-### 1.5 経路ごとの対象 OS
-
-受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
-の M28 節とする。本節は受け入れで検証する OS を経路ごとに定義し、受け入れ条件を複製しない。
-
-OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1 経路に確定したら、
-当該経路の行の OS で roadmap M28 の受け入れ条件を満たす。
-
-| 経路 | Win11 23H2 | Win10 22H2 (build 19045) | Win Server 2022 (build 20348+) |
-|---|---|---|---|
-| A. external-location packaging | ✅ 必須 | ✅ 必須（`com4:InProcessServer` を使わないため build 19045 で動く） | （対象外） |
-| B. 通常 MSIX + `com4:InProcessServer` | ✅ 必須 | ✗ schema reject（com4 が build 20348+ を要求） | ✅ |
-| C. 通常 MSIX + `com4:SurrogateServer` | ✅ 必須 | ✗ 同上 | ✅ |
-
-> Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
-> は上表から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
-
-### 1.6 推論バックエンド / EP / モデルの配布方針（M24 連動）
-
-推論バックエンドの選定は `docs/copilot-pc-backend-spec.md` §4 が正典。配布形態の
-決定のみを以下に固定する（同 §4.5 から参照）。
-R2 向けの行は R2 再開時（`docs/copilot-pc-backend-spec.md` §4.3 項 2）に適用し、再開前は R1 向け構成だけを配布する。
-
-| 構成要素 | 配布形態 | 理由 |
-|---|---|---|
-| llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路は §1.6.1（CC-BY-SA-4.0 として扱う保守運用・上流 HF から取得。§1.6.2） |
-| kanakanji-edge-33m Q8_0 GGUF（選べるモデル。既定ではない） | **MSIX 非同梱**（取得元は上流 HF の固定した revision で、再ホストしない。ピンは §1.6.2）。既定の catalog（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m` で取得できる。取得後は `model.selectedPath` で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2） | 既定は zenz-v3 のまま（`docs/zenzai-inference-spec.md` §2.4.3）。ライセンスの結論は §1.6.2（DEV-1721） |
-| Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
-| Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
-| ggml-cuda（R1 CUDA, NVIDIA） | **base に含めない**。採否は `docs/copilot-pc-backend-spec.md` §4.3 項 7 が正典で、同項の再検討の条件を満たして配る場合に限り optional add-on / 別パッケージとし、cudart/cublas を同梱する | CUDA ランタイムが大きく NVIDIA 環境限定。配る場合の再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
-| ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。別 MSI `azooKey-vulkan-addon-<version>-x64.msi` として配る。Vulkan loader / ドライバーは同梱しない。構成、起動する Host の決定、導入と更新は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
-| R2 の ONNX 変換モデル（R1 と同じモデル。対象は `kanakanji-edge-33m`） | **R2 の再開前は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL。R2 を使えない機器では取得しない） | zenz-v3（GPT-2）は builder で変換できない。Llama 構造の edge は変換できる（`docs/copilot-pc-backend-spec.md` §4.2.2・§4.2.3） |
-
-NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
-フォールバックする（同 §4.3 項6）。モデル本体（GGUF / 将来の ONNX）はいずれも MSIX に同梱せず
-初回起動時 DL とする方針で §1.2 と一貫させる。
-
-#### 1.6.1 v1.0 における Zenzai GGUF の最小取得経路（M8 / M28）
-
-§1.6 はモデルを「MSIX 非同梱・初回取得」と定める。本節はその **v1.0 最小実装**を
-確定する。対象は **zenz-v3 系 GGUF 1 種**（既定配置
-`%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`）。**v1.0 が対象とする
-モデル（repo / revision / ファイル / サイズ / SHA256）は Windows 側が所有するピン定義を
-唯一の正とし、(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
-アーティファクトを指す**。ピン定義は、ビルド時に Host へ埋め込む既定の model catalog
-（`settings/default-model-catalog.json`、`docs/model-management-spec.md` §3.1.1「既定の
-catalog」）の `defaultModelId` の entry である。
-
-> **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
-> HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
-> `.gitmodules` / `legacy/azooKeyMac/Resources/gguf` で参照するのと同じモデル）
-> だが、`legacy/` は保全された参照資産であり Windows 版の source of truth では
-> ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
-> 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
-> 既定の catalog に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
-> §3.4 のモデルパス例や roadmap M8 受け入れの版表記も、本ピン（上流
-> `Miwa-Keita/zenz-v3.2-small-gguf` = v3.2）を正として揃える。版番号は各 doc に
-> 直書きせず本ピンを参照し、版の更新は既定の catalog の entry を書き換えて行う。
-
-M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、二重実装を
-避けて先に敷くことを目的とする。
-
-##### 取得方式の選定
-
-| 方式 | v1.0 採否 | 理由 |
-|---|---|---|
-| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えてモデル同梱は再配布ライセンスリスクが最も高く、CC-BY-SA-4.0 として扱う保守運用（§1.6.2）でも不採用とする |
-| (b) 初回起動時オンデマンド DL | **将来の判断（auto-DL の承認後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用する。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。起動時に利用者の操作なしでネットワークへ出る挙動なので、入れるかは別に判断する（下記「初回取得後の `selectedPath` コミット」）。それまでの取得は、利用者の操作による取得（設定アプリの取得ボタンと CLI の `models fetch`）が担う |
-| (c) 手動配置 | ✅ **常時併存（M28 の operative default 兼 恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
-
-**確定**: v1.0 の取得方式は **利用者の操作による取得と (c) 手動配置**とし、(a) は採らない。
-(b) 初回起動時 DL は auto-DL の承認後に入れるかを判断する。取得のどの経路も同一の配置
-レイアウト（後述）に収束するため、Host / M45 から見た「モデルがそこに在る」状態は取得方式に
-依存しない。
-
-**マイルストーン順序の制約（初回パッケージングを M32 の DL 基盤に依存させない）**: (b) は共有
-ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。MVP 直接配布は
-**M11/M12（MVP MSI 構築・公開）→ M32** の順（M29 のうち延期したスタンドアロン MSIX 署名部分は前提でない。§0 / roadmap 依存グラフ）で、初回
-パッケージング時点では `HttpDownloader` が未だ存在しない。したがって **初回出荷時の operative
-default は (c) 手動配置**とする（初回パッケージングで one-off の重複ダウンローダを書かない＝二重
-実装回避）。M32 の共有 `HttpDownloader` の上には、利用者の操作による取得を載せる。(b) を既定に
-するかは auto-DL の承認後の将来の判断とし、入れる場合は **roadmap M32 のスコープ**
-（`plans/windows-port-roadmap.md` M32 の受け入れ条件の auto-DL 承認の分岐）で扱う。
-
-##### ライセンス分岐（配信元は上流 HF に固定。§1.6.2）
-
-再配布可否は §1.6.2 の配布ライセンス結論に従う。**zenz GGUF は CC-BY-SA-4.0 として扱い
-（保守側。§1.6.2）、配信元は上流 HuggingFace に固定する（再ホストしない）。
-GitHub Release への再ホスト最適化だけを著者確認後に解禁する。** ここで重要な
-のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
-同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
-GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
-(b) の配信元選択も律する。
-
-| 配布ライセンスの結論 | (b) の配信元 | (a) 同梱 |
-|---|---|---|
-| 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
-| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**既定の catalog が定める repo / revision / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
-| CC-BY-SA-4.0 として扱う（保守側。§1.6.2 の採用値） | 上流 HuggingFace（既定の catalog のピンが定める repo / revision / ファイル）から DL し、プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
-
-CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
-（モデルではなくランタイム。§1.6 の ggml-cuda 行で扱う）。採否の正典は
-`docs/copilot-pc-backend-spec.md` §4.3 項 7、配る場合の再配布条件は §1.6.2 参照。
-
-##### 配置パスとバージョニング
-
-- **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
-  `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
-- **取得の原子性・中断と再試行**: `.part` への書き込み、Range による再開、SHA256 検証、
-  確定パスへの原子置換は `docs/model-management-spec.md` §3.1.2 が正典。検証前のファイルは
-  確定パスに置かれないので、ロード対象に入らない。
-- **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
-  ディレクトリを自動スキャン**しない** —
-  `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は
-  `model.selectedPath` を `config.model_path` へコピーするのみで、空 path は
-  「モデル未選択 → SimpleConverter」になる。よって**ファイルを配置しただけでは
-  再起動後も degraded のまま**になり得る。これを防ぐため、取得方式ごとに次で
-  `selectedPath` を確定させる:
-    - **(b) 初回 DL**: headless 取得のため、(c1) と同じ前提ガードを
-      **ネットワーク I/O・probe-load の前に**評価し、満たす場合のみ起動する —
-      **`model.enabled` かつ `model.autoLoadOnHostStart=true`
-      （`model-management-spec.md` §7）かつ `privacy.mode` がネットワーク禁止
-      （`offline`。M46 / `privacy-and-secure-input-spec.md`）でない**こと。
-      いずれか不成立なら DL せず手動配置に委ねる（offline でも (c2) 明示選択は
-      network なしで成立）。ガードを満たす場合、
-      ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
-      `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
-      起動時に利用者の操作なしでネットワークへ出る挙動の変更なので、(b) を Host に
-      入れるかは将来の判断とし、入れるときに本項の前提ガードを適用する。それまでの
-      取得の入口は、次の利用者の操作による取得と CLI の `models fetch` だけである。
-    - **利用者の操作による取得（設定アプリ）**: 設定アプリの「AI 変換」ペインは既定の
-      catalog の entry を一覧し、利用者が押した取得ボタンから Host に取得させる
-      （IPC は `model-management-spec.md` §4.4、取得機構は同 §3.1.2）。`privacy.mode=offline`
-      では接続しない。取得時の SHA-256 のピン一致と §3.3 の R1 検証を probe とみなし、
-      成功したら確定パスを同じペインの「使うモデル」へ入れる。commit は (c2) と同じく
-      保存バーが `model.selectedPath` へ書くときであり、保存後の再ロードが実際のロードを
-      行う。取得しただけでは `selectedPath` を変えない。
-    - **(c) 手動配置**: 次の 2 経路を定める。
-        - **(c1) Host 起動時の default-path autoselect（ピン依存。将来の判断）**:
-          上記のとおり Host は起動時に既定ディレクトリを自動スキャンしないので、(c1) は
-          採っていない。(b) と同じく利用者の操作なしに起動時の挙動を変えるため、入れるかは
-          将来の判断とし、入れる場合は次の条件を適用する。
-          **`model.enabled` かつ `model.autoLoadOnHostStart=true`
-          （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の
-          場合に限り、`models\zenzai\` の中から **SHA256 が既定の catalog の
-          ピンと一致するファイル**を選び（単に format-valid な GGUF では不可。
-          **ピン一致を*前提条件*とし**、licensing / 版ゲートを迂回しない。
-          `model-management-spec.md` §3.1/§3.3 の形式検証も併せて満たすこと）、
-          プローブロード成功時に `selectedPath` へコミットする。**ピン一致
-          ファイルが無い場合は autoselect しない**（任意の有効
-          GGUF を勝手に選ばない）＝ (c1) 適用外で、(c2) か劣化モード（下記）に
-          委ねる。次も autoselect の対象外: (i) `autoLoadOnHostStart=false`
-          （起動時ロードを抑止する設定を尊重し、何もしない）、(ii) `selectedPath`
-          が**非空だが不在**（`dev-infrastructure-spec.md` D-007 が *error* 扱い
-          する「設定済みパス不在」。silently 切り替えず error / M45 モデル選択
-          誘導に委ねる）、(iii) `selectedPath` が非空かつ実在（下記 (c2) の明示
-          選択。autoselect は上書きしない）。
-        - **(c2) ユーザーによる明示選択（ピン非依存）**: ユーザー / 管理者が
-          `model.selectedPath` を直接設定する経路（`settings.json` 手編集、または
-          設定 UI / M45 の「モデルを追加」「選択モデルをロード」）。設定された
-          実在パスを probe-load して使う。**ピンと一致しないファイルでも成立
-          する唯一の手動経路**であり、(c1) を採らない間は手動配置したファイルを使う唯一の
-          経路である。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
-          `selectedPath` を明示設定する（空のままでは degraded）。
-- **期待版のピン**: 対象の Hugging Face repo / revision / ファイル名 / サイズ / SHA256 は、
-  既定の catalog（`settings/default-model-catalog.json`）の `defaultModelId` の entry の
-  `artifacts["llama.cpp"]` に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照
-  しない。上記注記参照）。形式（`fileName`・`sha256`・`sizeBytes`・`source`）は
-  `docs/model-management-spec.md` §3.1.1 の catalog v2 が定め、値は §1.6.2 の固定値と
-  同じである。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一アーティファクトを
-  指す。catalog はビルド時に Host へ埋め込み、MSI と検証用 zip には catalog のファイルを
-  置かない。版を変えるときは既定の catalog の entry を書き換える。revision はコミット ID に
-  固定するので、上流がブランチを更新しても取得物は変わらない。(b) の取得機構は
-  `docs/model-management-spec.md` §3.1.2「catalog の entry の取得」が持つ。
-- **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
-  **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
-  `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →
-  旧版を削除する。SHA256 一致でもロード非互換だったり途中でクラッシュした場合に
-  備え、`selectedPath` のコミットはロード成功後に限定する（`autoLoadOnHostStart`
-  が次回起動で参照するのはコミット済みの値のみ）。いずれかの段で失敗したら
-  `selectedPath` は旧版のまま据え置き、新版ファイルは破棄して切替しない。これに
-  より「失敗時は旧版を残す」を原子的に保証する。
-- **未配置 / 破損時の劣化モード**: ロード失敗時の fallback と Health は
-  `docs/zenzai-inference-spec.md` §7.4 が正典で、M47 の状態機械（`DegradedModel` /
-  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。部分 DL の `.part` は確定パスに
-  昇格しないのでロード対象にならず、次の取得の再開に使う（`docs/model-management-spec.md` §3.1.2）。
-
-##### M45（フル管理 UI）への橋渡し
-
-`docs/model-management-spec.md` §2 は任意の URL から取得する汎用ダウンロード機能を M45 の
-非目標とする。本 v1.0 最小取得経路は既定の catalog の entry に限った取得であり、次の責務分担で
-二重実装を避ける:
-
-- **v1.0（本節）が敷く土台**: 配置レイアウト（`models\zenzai\`）・取得機構
-  （HttpDownloader + SHA256 + 原子置換）・期待版ピン。対象は既知の zenz-v3 1 種に
-  限定し、汎用ダウンロードマネージャ UI は持たない。
-- **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
-  ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
-  と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
-- **モデル DL の UI**: 設定アプリの「AI 変換」ペインの取得ボタン（上記「利用者の操作による
-  取得」）が本節の取得機構の UI であり、既定の catalog の entry だけを取得する。上表の
-  配信元分岐を引き継ぎ、任意の URL を取得する汎用ダウンロードマネージャは持たない。
-
-#### 1.6.2 配布ライセンス結論
-
-配布ライセンスの調査結論（DEV-202、`gate:human-required`）を固定する。**本節は法的助言ではなく、
-一次情報の整理と運用方針である**。**v1.0 の zenz GGUF は下記の zenz 節の保守運用（CC-BY-SA-4.0 として扱い、
-上流 HuggingFace から取得・再ホストしない）とする**。著者確認を
-要するのは「再ホスト解禁」の任意最適化のみで、その進捗・状態は Linear DEV-497 が正典
-（本 spec には書かない）。
-本節は `docs/zenzai-gpu-route.md`「配布ライセンス」から参照される。
-
-##### モデル（zenz GGUF）
-
-| 項目 | 内容 |
-|---|---|
-| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf` の revision `c67e03e07d215c869f591b274c1631170d3e11fe`、`ggml-model-Q5_K_M.gguf`（73,871,936 バイト、SHA-256 `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`）。既定の catalog の既定 entry（§1.6.1） |
-| HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
-| 矛盾兆候 | zenz 一族（v1 / v2 / v2.5 / v3 / v3.1、safetensors 版含む）とベース `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0`（`zenz-v2.5-small` は `base_model: ku-nlp/gpt2-small-japanese-char` を明示。HF API 確認 2026-07）。apache-2.0 は一族で v3.2-small-gguf のみ。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性（README 空・ベース未記載・照合できる safetensors 版なし） |
-| **扱い** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
-| 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
-| 配信 | **再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
-| 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
-
-##### モデル（kanakanji-edge-33m GGUF）
-
-上の zenz 節の保守運用（全体を CC-BY-SA-4.0 として扱う）は zenz に限る。選べるモデルとする
-edge の扱いは、人間 lead の判断（DEV-1721）で次のとおり固定する。edge は既定の catalog
-（§1.6.1）に選べる entry として載り、`azookey_inference_host models fetch kanakanji-edge-33m`
-で取得できる（`docs/model-management-spec.md` §3.1.2）。取得したファイルは `model.selectedPath`
-で選び、プロンプト形式は語彙から推定する（`docs/zenzai-inference-spec.md` §2.4.2）。下表の
-固定値は既定の catalog の entry と同じ値である。
-
-| 項目 | 内容 |
-|---|---|
-| ピン対象 | `yuuki14202028/kanakanji-edge-33m` の revision `da588df2db17e5ab69316986823806ec5f911450`、`kanakanji-edge-33m-Q8_0.gguf`（35,806,592 バイト、SHA-256 `924b1a0e2b95a17208366048071b9fd259364f24fbc6090f0e4fd680f8bdb146`）。Q8_0 だけを使う（DEV-1766 の範囲） |
-| 一次情報 | 同じ revision のモデルカード（`README.md`「ライセンス」節）と `LICENSE`（Apache License 2.0） |
-| 重み | Apache-2.0。モデルカードは、ゼロから学習し他モデルの重みを含まないと記載する。Q8_0 は上流が配布する GGUF をそのまま使い、こちらで量子化しない |
-| 語彙 | `ku-nlp/gpt2-small-japanese-char`（京都大学 黒橋研究室）の byte-level BPE 語彙をそのまま使い、CC-BY-SA-4.0。GGUF に埋め込まれている。上流が追加した制御トークン 3 つ（id 6000〜6002）は Apache-2.0 |
-| 学習データ | `Miwa-Keita/zenz-v2.5-dataset`（CC-BY-SA-4.0 の Wikipedia 由来部分と ODC-BY の llm-jp-corpus-v3 由来部分） |
-| **扱い（確定）** | 重みは Apache-2.0 として扱う。語彙と学習データには CC-BY-SA-4.0 の帰属表記を置く（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About）。帰属表記に載せるのは、モデル名、著者 `yuuki14202028`、出所 URL（`https://huggingface.co/yuuki14202028/kanakanji-edge-33m`）、ライセンスと URL（Apache-2.0 `https://www.apache.org/licenses/LICENSE-2.0`、CC-BY-SA-4.0 `https://creativecommons.org/licenses/by-sa/4.0/`）、語彙の帰属先 ku-nlp（`https://huggingface.co/ku-nlp/gpt2-small-japanese-char`）、改変の有無である。改変の有無は「上流の GGUF をそのまま使い、こちらでは改変しない。語彙の制御トークン 6000〜6002 は上流が追加したもの」と書く |
-| 配信 | 再ホストせず、上流 HuggingFace の固定した revision から取得する |
-
-##### CUDA ランタイム（add-on として配る場合の再配布条件）
-
-- CUDA の扱いは `docs/copilot-pc-backend-spec.md` §4.3 項 7 を正典とする。R1 CUDA（ggml-cuda の実リンク）は同項の再検討の条件を満たすまで行わないので、CUDA の add-on は配らない。本節は、再検討の結果 add-on を配る場合の再配布条件を定める。
-- `ggml-cuda`（R1 CUDA, NVIDIA）を配る場合は §1.6 のとおり base 非同梱の optional add-on とし、**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
-- 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
-- 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
-- **配置制約（app-only）**: 再配布する DLL は**アプリ専用（private）ディレクトリに配置し、本アプリからのみアクセスされる**ようにする。CUDA Toolkit EULA は redistributable な SDK 部分を「アプリからのみアクセスされる」ことを条件とするため（§2.6 が cudart/cublas を redistributable と定める一方、§1.1.2 がアクセス主体をアプリに限定）、共有 `PATH` / システムディレクトリ（`System32` 等）へ設置して他アプリから参照可能にしない。DLL 探索は app-local ディレクトリに限定する（例: add-on の配置フォルダを `SetDllDirectory` / manifest で明示し、グローバル `PATH` へ注入しない）。
-- 版・ファイル名はビルドで固定し、`ThirdPartyNotices.txt` に列挙する。
-
-##### Vulkan（最小リスク）
-
-- `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
-- **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
-- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/decisions/2026-05-20-zenzai-engine-route.md`「参考: 先行 Windows 実装」）。
-
-##### 再ホスト解禁の条件（恒久ルール）
-
-GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への移行は、**上流モデルの
-ライセンスが Apache-2.0 と確認できたときに限る**。確認が取れるまでは本節の保守運用
-（上流 HuggingFace 取得・帰属・量子化改変明示）を維持する。この著者確認・再ホスト解禁
-タスクの起票・進捗・検証メモ・状態は **Linear DEV-497 が正典**（`gate:human-required`。
-本 spec には状態を書かない。運用規約は `docs/linear-conventions.md` を参照する）。
-
-#### 1.6.3 Vulkan add-on の構成と起動する Host の決定（R1）
-
-§1.6 の `ggml-vulkan` 行を具体化し、配布形態と「どの Host 実行体が起動するか」の決定規則を
-定義する。ライセンス上の扱いは §1.6.2 の Vulkan 節、backend 選択の意味論は
-`docs/copilot-pc-backend-spec.md` §4 が正典。
-
-##### 2 実行体構成を採る理由
-
-`AZOOKEY_BACKEND=vulkan` でビルドした Host は、ggml-vulkan がインポートライブラリ経由で
-Vulkan loader（`vulkan-1.dll`）を参照するため、**loader が無い環境ではプロセスが起動しない**。
-ggml のバックエンドレジストリは Vulkan を有効にしたビルドでは初期化時に Vulkan バックエンドを
-登録するので、この要求は明示 `cpu` 起動やモデル初期化の CPU 降格
-（`docs/copilot-pc-backend-spec.md` §4.5）にも及ぶ。つまり **Vulkan 版 Host 単体では、loader
-不在環境で CPU 経路も成立しない**。
-
-したがって配布は次の 2 実行体構成とする。
-
-| 実行体 | 配布物 | ビルド | Vulkan loader への依存 |
-|---|---|---|---|
-| `azookey_inference_host.exe` | base（§4 の MSI） | `windows-release` preset（`AZOOKEY_BACKEND=cpu`） | 無し |
-| `azookey_inference_host_vulkan.exe` | Vulkan add-on | `windows-vulkan-release` preset（`AZOOKEY_BACKEND=vulkan`） | 有り（暗黙インポート） |
-
-どちらの preset もビルドツリーへは `azookey_inference_host.exe` を出力する。add-on の実行体名は
-パッケージ生成時に `azookey_inference_host_vulkan.exe` へ改名して確定させ、add-on の
-`pkg/msi-vulkan/azooKey.VulkanAddon.wixproj` はこの名前以外の入力を拒否する。
-
-**MSIX 経路での package identity**: external-location MSIX（§1.1.2）は `Application@Executable` に
-宣言した実行体へ identity を与える。`pkg/msix/AppxManifest.xml` が持つ `Application` は base の
-Host 1 つなので、この経路で add-on を配る場合は **add-on の実行体にも `Application` 宣言と、
-`Application@Id` に一致する app 側 side-by-side manifest（`<msix>` の 3 属性）、および両者の
-静的整合検証を用意する**。用意しなければ add-on 側の Host は `-ExternalLocation` 付きで登録しても
-`Package.Current` が null になり、roadmap M28 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
-package identity を使わないため、この要求は MSIX 経路にだけ掛かる。MSIX の配布は延期中
-（§2.0、DEV-255）であり、MSIX 経路の add-on はその再開まで配らない。
-
-add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
-add-on の導入有無で変わらない。Vulkan loader と GPU ドライバーは同梱せず、GPU ベンダーの
-ドライバーが提供するものを使う（§1.6.2）。
-
-##### add-on MSI の導入・更新・削除
-
-add-on は base とは別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs`、独自の UpgradeCode、per-machine、
-未署名は base と同じ扱い）である。
-
-| 項目 | 定義 |
-|---|---|
-| 中身 | `azookey_inference_host_vulkan.exe` と、帰属表示 `THIRD_PARTY_LICENSES-vulkan-addon.txt`。MSVC runtime と OpenMP runtime は base の同梱物を使う |
-| 配置先 | base が `HKLM\Software\azooKey\HostStartup` の `InstallDirectory` に記録した base の `INSTALLFOLDER`。supervisor は base の Host と同じディレクトリでしか add-on を探さない |
-| 導入の前提 | base が導入済みで、base の `ProductVersion`（同じキー）が add-on の版と一致すること。満たさない場合は LaunchCondition で導入を止める |
-| 版の記録 | base は `HKLM\Software\azooKey\HostStartup`、add-on は `HKLM\Software\azooKey\VulkanAddon` の `ProductVersion` に自分の版を書く |
-| 更新 | add-on は base と同じ版番号で出す。base だけを更新すると版が食い違い、supervisor は add-on を選ばない。add-on を同じ版へ更新すると Vulkan 版 Host の選択に戻る |
-| 削除 | add-on を削除しても base は残る。base だけを削除すると Run キーと base の版の記録が消え、supervisor は起動しない。残った add-on は、base を同じ版で入れ直すと再び選ばれ、違う版で入れ直すと版の照合で選ばれない。不要なら利用者が「アプリと機能」から削除する |
-
-稼働中の Host が add-on の実行体を使っているときの削除・更新は、ファイル使用中として
-Windows Installer が再起動を求めうる。base と同じく Restart Manager による停止は無効にしている。
-
-##### 起動する Host の決定
-
-Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-architecture.md`「Host の起動と
-再起動」）。どちらの実行体を起動するかは、その Host 起動経路が次の順で決定する。
-
-1. Vulkan add-on が導入済みで、MSI 経由の導入では add-on と base の `ProductVersion` が一致すること
-   （開発登録には MSI の版の記録が無いため、この照合を行わない）。
-2. `vulkan-1.dll` をロードできること。
-3. Vulkan 版 Host の probe 起動が成功し、Vulkan デバイスを 1 つ以上列挙できること。
-4. 1 から 3 がすべて成立する場合に限り Vulkan 版 Host を起動し、それ以外は base の CPU 版 Host を
-   起動する。
-
-版を照合するのは、base の更新後に古い add-on が残ると、IPC と設定の契約が違う Host を
-起動してしまうためである。2 を 3 より先に判定するのは、loader が無い状態で Vulkan 版 Host を
-起動するとプロセス生成そのものが失敗し、失敗理由が Host 側のログに残らないためである。3 は
-loader はあるがドライバーが無い、または非対応の環境を Host 起動前に CPU 版へ寄せる。probe は Host 起動ごとに評価し、前回の
-判定結果を持ち越さない。
-
-起動経路（`scripts/host-supervisor.ps1`）は、選んだ実行体と判定理由（`addon_absent`、
-`addon_version_mismatch`、`loader_unavailable`、`probe_failed` など）を診断可能な形で記録する。実際に動いている Host が
-どちらかを、Health の backend 値（`docs/copilot-pc-backend-spec.md` §4.4）だけでなく起動側からも
-特定できるようにする。
-
-##### backend 解決との関係
-
-`model.backendPreference` の解決は Host 内で完結する（§3.7、`docs/model-management-spec.md` §5.1）。
-本節が決めるのは起動する実行体であり、実行体ごとの解決は次になる。
-
-| 起動した実行体 | `auto` | 明示 `cpu` | Vulkan 初期化失敗時 |
-|---|---|---|---|
-| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/zenzai-inference-spec.md` §7.4、段位は `docs/copilot-pc-backend-spec.md` §4.5） |
-| CPU 版 Host | CPU | CPU | — |
-
-##### ライセンス表示と SBOM
-
-- Vulkan 版 Host は llama.cpp の成果物に加え、Vulkan-Headers / Vulkan-Hpp / SPIRV-Headers を
-  ビルド時に使う。ライセンスは依存ごとに異なるため、SPDX 識別子と帰属文の正典はルートの
-  `THIRD_PARTY_LICENSES` とし、本節では列挙しない。同ファイルの Vulkan add-on 向けの節は、
-  固定した llama.cpp が読むヘッダを Release workflow で固定した Vulkan SDK の実ファイルで確かめて
-  書く。add-on の MSI も同ファイルを `THIRD_PARTY_LICENSES-vulkan-addon.txt` として同梱する。
-- Vulkan loader とドライバーを再配布しないため、CUDA add-on（§1.6.2）のような再配布条項の
-  pass-down は生じない。
-- add-on は独立した配布物なので、SBOM と build provenance（§4.4）を add-on 成果物に対しても
-  生成し、base の SBOM に Vulkan 版 Host の依存を混ぜない。`scripts/complete-release-sbom.py` は
-  `--package vulkan-addon` で add-on の SBOM を補完する。対象は `THIRD_PARTY_LICENSES` の `sbom` 注記の
-  `packages` に `vulkan-addon` を持つ依存で、Vulkan SDK のヘッダは CMake cache の
-  `Vulkan_INCLUDE_DIR` が渡した SDK を指すことを確かめてから、SDK の版とヘッダの SHA256 で記録する。
-
-##### 検証の段階
-
-| 段階 | 対象 | 実施場所 |
-|---|---|---|
-| compile / link | 固定 llama.cpp と ggml-vulkan のビルド、`vulkan-1.dll` 暗黙インポートの維持 | CI（GPU 不要。Vulkan SDK を導入する Windows ジョブ） |
-| GPU 実行 | 実 GGUF のロードと推論、`auto` の Vulkan 解決、明示 `cpu` | Vulkan 対応 GPU のある実機 |
-| 起動保証 | loader 不在、ドライバー不在・非対応、GPU 初期化失敗での CPU 経路 | GPU ドライバーの無い clean 環境（Human Gate） |
-| インストール | add-on の導入・削除と base との共存 | 実機インストール（Human Gate） |
-
-CI の compile / link 成功を、GPU 実行・起動保証・インストールの成功として読み替えない。
-
-### 1.7 Windows アプリでの TIP ロード前提と常駐起動
-
-UWP / Microsoft Store / AppContainer 実行の Windows アプリで第三者 TIP をロードするには、
-次の条件をすべて満たす。
-
-1. TIP DLL と親ディレクトリを AppContainer から読み取り、実行できること（下記 ACL）。
-2. `DllRegisterServer` が `ITfCategoryMgr::RegisterCategory` で
-   `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` を登録していること（[Custom input method editor requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements)）。
-3. 第三者 IME がデジタル署名されていること（[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors)）。
-
-Microsoft Learn の署名要件は第三者 IME 全般を対象とする。本節ではその原文のスコープを
-明示した上で、Windows アプリでの TIP ロード前提として整理する。
-
-配布パッケージの署名要否（§0 / §2）と TIP バイナリに対する第三者 IME の署名要件は
-別の境界である。Microsoft Store が提出 MSIX を再署名することだけを、TIP DLL の署名要件を
-満たした証拠として扱わない。
-
-> **MVP でのスコープ（§0.1 / DEV-783）**: **パッケージ化された UWP / Microsoft Store アプリ**での
-> 入力は MVP の対象外であり、要件 1・2 を扱う本節は v1.0 以降で当該対応に着手するときの前提整理として読む。
-> 要件 3（署名）はこのスコープ判断と独立しており、入力対象にかかわらず **v1.0 のリリースゲートとして残る**
-> （§0.1）。MVP の未署名 MSI は評価配布に限定する。署名ルートの選定は §2.0 が正典
-> （所有課題だった DEV-255 は Canceled、スコープ判断は DEV-783 で確定済み）。
-
-**AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
-有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への
-読み取り+実行 (RX) が必要である。AppContainer プロセスの実効アクセスは、ユーザー /
-グループ SID による判定と AppContainer SID（package SID・capability SID）による判定の
-積で決まる。対話ユーザーが読める DLL でも、DACL が AppContainer 側の principal を
-含まなければアクセスは成立しない（[Launch an AppContainer](https://learn.microsoft.com/windows/win32/secauthz/implementing-an-appcontainer#appcontainer-overview)）。
-ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードするため、この ACE が無いと
-当該アプリで日本語入力ができない。
-
-#### 付与対象・タイミング・権限
-
-| 配布経路 | 付与主体 | 付与対象 | タイミング |
-|---|---|---|---|
-| §4 WiX/MSI（MVP 既定） | Windows（`%ProgramFiles%` からの継承） | インストール先配下 | インストール時。**MSI は独自 ACE を追加しない** |
-| 開発用 `regsvr32` 登録 | `scripts/register-dev.ps1` | 登録する TIP DLL と**その親ディレクトリ** | **登録時**（`regsvr32` 実行の直前） |
-| Option A（external-location MSIX） | external location の配置先に準ずる（上 2 行のいずれか） | 同上 | 同上 |
-| Option B/C（通常 MSIX） | パッケージ側で解決 | — | 不要 |
-
-* **権限は RX のみ**。AppContainer アプリへ書き込み権限を与えない。
-* **登録時のみに一本化し、ビルド時フック（post_build `icacls`）は持たない**。親ディレクトリへ
-  継承付き ACE を置くので、再ビルドで置き換わった TIP DLL が ACE を継承する。付与点が
-  登録スクリプト 1 箇所に閉じ、付与漏れの探索範囲が広がらない。先行実装
-  fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与するが、本リポジトリは
-  継承 ACE が再ビルドを吸収するため二重化しない。
-* **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
-  対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
-  将来 x86 TIP DLL を追加する場合は、同じ規則を当該 DLL にも適用する
-  （`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
-* **既存 ACE の判定**: ディレクトリでは「実効 RX があるか」ではなく「`ObjectInherit` を持つ
-  allow ACE があるか」を見る。非継承の明示 ACE を「設定済み」と扱うと、再ビルドで作り直された
-  DLL が継承元を持たず AppContainer から読めなくなるため。
-* **解除**: `scripts/unregister-dev.ps1` は**登録処理が実際に追加した ACE のみ**を除去する。
-  登録と解除は別プロセスであり、DACL だけからは「手で置いた ACE」と自前の ACE を区別できない。
-  そこで付与したパスを machine-wide 台帳（`HKLM\Software\azooKey\DevRegistration` の
-  `AppContainerAclGrants`）に記録し、解除は台帳にあるパスだけを対象とする。台帳から
-  エントリを落とすのは、ACE を除去できたか、既に存在しないことを確認できた場合に限る。
-  DACL 書き込みが失敗したパスはエントリを残し、次回の解除で再試行する（消してしまうと
-  ACE が残ったまま追跡不能になるため）。台帳は最後のエントリと同時に削除する。除去は `RemoveAccessRuleSpecific` による完全一致
-  （権限・継承フラグ・伝播フラグが一致する非継承 allow ACE）で行い、権限や継承が異なる
-  手動設定の ACE には触れない。継承 ACE と `%ProgramFiles%` / `%SystemRoot%` 配下も対象外とし、
-  MSI 導入先の ACL を壊さない。
-  なお、同一 SID・同一フラグの ACE は `AddAccessRule` の時点で 1 件へ統合されるため、
-  自前 ACE が後付けの広い権限へ吸収された場合は完全一致せず、解除は何もしない。
-  他者が広げた権限を削るより残す側に倒す判断である。
-* **opt-out**: 両スクリプトの `-SkipAppContainerAcl`。ビルドツリーを AppContainer から到達可能に
-  したくないホスト向けで、指定時は UWP / Microsoft Store アプリで TIP がロードされない。
-* **実装と検証**: 共通ヘルパは `scripts/AppContainerAcl.ps1`。実機を要さない検証は
-  `scripts/tests/register-dev.Tests.ps1`（Pester、CI の PowerShell lint/test ジョブ）が担い、
-  付与 → 冪等 → 解除のラウンドトリップ、再ビルド相当の継承、非継承 ACE がある場合も継承 ACE を
-  追加すること、登録前から存在した ACE が解除後も残ること、権限の異なる手動 ACE を消さないこと、
-  解除失敗時に台帳エントリが残ること、書き込み権限を付与しないこと、保護対象パスを
-  書き換えないことを確認する。
-* **祖先ディレクトリの traverse は付与しない**。既定構成の Windows では bypass traverse
-  checking（`SeChangeNotifyPrivilege`）により最終要素の DACL だけが効くという前提を置く。
-  グループポリシーで同特権を外した環境ではビルドツリーの祖先に traverse が別途必要になる。
-  この前提は実機ゲートで確認する。
-
-実機検証は DEV-673（MSI インストール先の継承 ACL）で行う。DEV-271（開発用登録経路での
-サンドボックスアプリ入力成立）は DEV-673 に統合され Duplicate としてクローズ済み。
-パッケージ化された UWP / Store アプリでの入力成立そのものは §0.1 により MVP の受け入れ条件から
-外れており、DEV-673 で確認するのは継承 ACL までとなる。MSIX 側の制限は DEV-101（com4:ComServer ACL 制限）と
-連動する。
-
-#### MSI のログオン常駐
-
-MVP の MSI は 64-bit の `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` に
-`azooKeyHost` を登録する。各ユーザーのログオン時に Windows PowerShell へ `-WindowStyle Hidden` を指定し、
-インストール先の `start-installed-host.ps1` を実行する。
-実行権限はログオンユーザーの通常権限であり、昇格する Task Scheduler は採用しない。
-MSIX の startup task / app execution alias は本節の MSI 経路とは別に扱う。
-
-登録は MSI の machine-wide component が所有する。各ユーザーの HKCU へのコピーや
-管理者による別ユーザーのプロファイル初期化は行わない。インストール後に追加したユーザーも
-同じログオン経路を使い、Host がそのユーザーのデータ領域を初期化する。
-GGUF と設定値はユーザーごとのモデル管理規則に従う。インストール操作だけでは、
-ログオン中の各セッションで Host を起動しない。利用開始にはサインアウトして再ログオンする。
-Run の実行は Windows により遅延され得るため、ログオン直後の即時起動は保証しない
-（[Run and RunOnce Registry Keys](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys)）。
-
-起動の監視には開発登録と同じ `scripts/host-supervisor.ps1` を使い、実行体の選択は
-§1.6.3 に従う。Vulkan probe は `--probe-vulkan` を単独で指定し、モデル、IPC、ユーザーデータを
-初期化せず、列挙したデバイス数を `vulkan_devices=<数>` として出力する。成功は終了コード 0 と
-正のデバイス数の両方で判定し、タイムアウトや異常終了は CPU へ戻す。選択した実行体と理由は
-各ユーザーのログディレクトリで `inference-host-stderr.log.supervisor.jsonl` へ記録する。
-probe のタイムアウト、起動失敗、終了コード、デバイス 0、出力不正、loader 検査不能を区別し、
-Win32 エラーと probe stderr の先頭 2048 文字を診断用に残す。
-launcher 自身の失敗・登録不一致は `host-launcher.log` に記録する。
-両診断ログは各 1 MiB で 1 世代ローテーションし、書き込み不能時はユーザーの一時ディレクトリの
-`azooKey-host-startup.log`（同じ上限）へ試行する。診断ログの失敗だけでは Host 起動を止めない。
-stderr は直近 20 起動分を保持する。ログ保持は過去の起動ファイル数の制限であり、稼働中の stderr の
-サイズ上限ではない。終了コード 2（引数）・3（supervisor 監視失敗）、または安定稼働前の
-5 回連続失敗で再起動を停止し、次回ログオンまたは手動再起動で再試行する。
-開発用 Host が同じユーザーの pipe を所有する場合は、その終了を待つ。
-
-MSI はアンインストールと major upgrade で Run 値と
-`HKLM\Software\azooKey\HostStartup` の `InstallDirectory` 値と `ProductVersion` 値を削除する。
-配布 supervisor は登録の削除を検知して終了し、Host は `--supervisor-pid` で保持した
-プロセスハンドルの終了を検知して通常の終了・保存処理を行う。MSI は登録値の削除後、
-ファイル削除前に配布 launcher とインストール先の Host の終了を待つ。
-期限内に終了しなければメンテナンスを失敗させ、強制終了しない。rollback では MSI が
-登録を復元し、次回ログオンで常駐を再開する。upgrade 後も再ログオンで再開する。
-ユーザーデータと開発登録の HKCU は削除しない。
-
-ログオン起動、別ユーザーの初回起動と復帰は DEV-676、MSI の削除・upgrade・rollback と
-登録値の後始末は DEV-673 の実機ゲートで確認する。静的テストや MSI 生成だけでは
-これらの成功を判定しない。
-
-`InstallValidate` の files-in-use 判定は登録値の削除より早い。MSI は
-`MSIRESTARTMANAGERCONTROL=DisableShutdown` と `MSIDISABLERMRESTART=1` を指定し、
-Restart Manager による自動終了・再起動と supervisor の競合を抑止する。
-files-in-use の検出や再起動要求そのものは抑止しない。repair／同一版再インストールでは
-削除用 waiter は動かないため、稼働中ファイルの置換には Windows の再起動が必要になり得る。
-DEV-673 では稼働中の削除・repair・同一版再インストールについて、full／reduced UI の
-ダイアログ、終了コード 3010、再起動後の実行版を確認する。
-`-WindowStyle Hidden` はコンソール割り当て前の非表示を保証しないため、ログオン時に一瞬の表示が
-起きないことは保証しない。DEV-676 で実機の見え方も確認する。
+TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（`msix-packaging-spec` §1.7）は、将来の対応に備えた回帰防止として残す。
 
 ## 2. EV/OV コード署名（M29）
 
 > **スコープ注記（§0 配布方針 / §0.1）**: 本節（自前コード署名）が要るのは 2 つの文脈である。
 > 1 つは**スタンドアロン MSIX サイドロード**で、これは §0 の配布方針により当面延期する。
-> もう 1 つは**第三者 IME としての TIP バイナリ署名**（§1.7 の要件 3）で、こちらは入力対象の
+> もう 1 つは**第三者 IME としての TIP バイナリ署名**（`msix-packaging-spec` §1.7 の要件 3）で、こちらは入力対象の
 > スコープと独立に **v1.0 のリリースゲート**として残る（§0.1 / DEV-783）。
 > MVP 期間の MSI 直接配布は未署名（§4 / DEV-415）だが、これは評価配布としての扱いであり、
 > 署名義務が免除されたことを意味しない。MS Store の MSIX は Microsoft が再署名するため、
@@ -1020,7 +223,7 @@ distinguished name (DN) 全体と完全一致**（フィールド順含む）で
 CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が含まれる。
 不一致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
 
-* §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
+* `msix-packaging-spec` §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
   を持つ自己署名 dev cert で動作する想定（OV/EV cert ではほぼ通らない）
 * OV/EV cert 取得後は **certutil / openssl で Subject を取得**し、その全文を
   `Publisher` に貼る。例:
@@ -1032,7 +235,7 @@ CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が�
 * CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
 * **個人名義の OV では CN が法的氏名になる。** 個人開発者が OV を取得すると
   Subject CN は本人確認で用いた法的氏名で発行され、ハンドル名にはならない。
-  §1.1 manifest 例の `Publisher="CN=dolquis"` はそのままでは通らないため、証明書
+  `msix-packaging-spec` §1.1 manifest 例の `Publisher="CN=dolquis"` はそのままでは通らないため、証明書
   取得後に `Identity@Publisher` を実際の Subject DN 全文へ差し替える。ハンドル名を
   残せるのは `DisplayName` / `PublisherDisplayName` の側であり、完全一致が要求
   されるのは `Identity@Publisher` と証明書 Subject DN だけである。
@@ -1141,538 +344,6 @@ $sig.Status                                  # Valid を期待
 $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 ```
 
-## 3. 設定アプリ（M11 最小 / M30 フル）
-
-### 3.0 UI フレームワーク選定（採用: WinUI 3 / C++/WinRT）
-
-設定アプリの UI フレームワークは **WinUI 3（Windows App SDK, C++/WinRT）** とする。対象は
-**v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、それを
-**post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
-（モデル管理 UI = M45、学習データ可視化 UI = M49）である。同一フレームワークに揃えて後続の
-作り直しを避ける（v1.0 では M11 の最小機能セットのみを出荷し、M30 のフル UI / 横断機能は
-v1.0 に引き込まない）。
-
-TIP と Inference Host と同じ C++/WinRT スタックで IPC クライアント（§3.3）を共有でき、
-Fluent Design（Mica / Acrylic、Light/Dark、PerMonitorV2 DPI）を追加実装なしで得られ、
-unpackaged / packaged の両配布に載る。WPF (.NET 9+) と Tauri との比較、および選定時に確かめた
-Microsoft Learn の事実は
-[`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) にある。
-
-配布形態と OS 下限は次のとおりとする。
-
-- MVP の未署名 MSI（§0 / §4）では、`azookey_settings.exe` を unpackaged の
-  **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロードに同梱する。
-  MS Store 用 MSIX（§1）では packaged EXE として同梱する。
-- WinUI 3 がサポートする言語は C# と C++/WinRT である（C++/CX は使わない）。
-- WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**である。
-  これは設定アプリ単体の下限であり、配布パッケージ全体の最小 OS ではない。
-- **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
-  §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
-  （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
-  §1.1）。MSIX の `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
-
-再評価の条件は次のとおりとする。
-
-- **確証（`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の最小サンプル
-  （チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
-  (a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標で
-  この選定を確かめる。実測値は Linear 課題に記録する。
-- v1.x の差別化リッチ UI（M30 拡張）では、WebView ベース（Tauri）へ切り替える余地を残す。
-
-### 3.1 構成
-
-- 言語: C++/WinRT（TIP / Host と統一）
-- フレームワーク: WinUI 3（採用 component packages と版は
-  `settings-app/azookey_settings.vcxproj` / `THIRD_PARTY_LICENSES` を正典とする。更新時は
-  self-contained 出力と MSI の回収結果を再検証する）
-- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、§1.3 / §4）。
-  MS Store 用 MSIX（§1）では packaged EXE として同梱（配布方針は §0）
-
-### 3.2 ナビゲーション
-
-設定アプリは左側の `NavigationView` でペインを切り替える。ペインは 2 つの群（`NavigationViewItemHeader`
-で見出しを付ける）と、フッターの 1 つに分ける。
-
-- 「設定」群: `settings.json` のキーを編集するペイン。変えた値は保存バーで保存するまで書かない。
-- 「データとツール」群: Host への IPC で操作し、その場で反映するペイン。保存の対象を持たず、保存バーを出さない。
-- フッター（`NavigationView.FooterMenuItems`）: 「バージョン」。`autoUpdate` の 3 キーを持ち、保存バーを出す。
-
-起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`rich-features-spec.md`
-X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
-`dictionary` / `ai-conversion` / `ai-service` / `privacy` / `profiles` / `advanced` / `learning` / `proofread` /
-`version`。知らない名前は無視して「入力」を表示する）。既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ（§3.5）。`--pane` は入力インジケーターの「設定を開く」が渡す
-（`docs/tsf-deep-integration-spec.md` §4.5）。`ITfFnConfigure::Show`（§3.5）は渡さない。
-`liveConversion` / `predictionEnabled` だけは、入力インジケーターの右クリックのメニューからも切り替えられる（TIP が対象の 1 キーを書く。`docs/tsf-deep-integration-spec.md` §4.5）。
-
-| 群 | ペイン | 内容 |
-|---|---|---|
-| 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
-| 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
-| 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
-| 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択（「選択を外す」で空の未選択に戻す。§3.7）/ `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
-| 設定 | AI サービス | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
-| 設定 | プライバシー | `privacy`（`crashReportConsent` を含む） |
-| 設定 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
-| 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
-| データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
-| データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
-| フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
-
-`autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
-`checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（§6.1 の
-`update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
-
-「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
-「ログ出力先を開く」（§3.7）のボタンを置く（`docs/dev-infrastructure-spec.md` §8.5.4・§12.1.1 が設定アプリの診断として指す先は、この節である）。
-
-「AI 変換」は「設定」群に置くが、モデル一覧の更新・ベンチマーク・取得・中止は Host への IPC でその場で行い、
-保存バーを経ない。保存バーが書くのは、このペインの設定キー（`model.selectedPath` を含む）だけである。
-
-保存バー:
-
-- 「設定」群のペインと「バージョン」で、スクロール領域の外のウィンドウ下端に固定して表示する。保存結果の InfoBar も保存バーに出す。
-- 保存は「設定」群の全ペインと「バージョン」の値をまとめて書く（モデルの取得などの IPC 操作は含まない。書くキーの規則は §3.7「UI に露出したキーの書き込み」）。
-- 読み込んだ値から変えたキーの数を示し、変えたキーが無い間は保存ボタンを無効にする。
-  例外として、読み込んだファイルの形式が不正か無効な項目を含むときは、保存で退避や除去をして直すため、変えたキーが無くても保存ボタンを有効にし、件数の代わりに「保存すると設定ファイルを修復します」と示す。
-- 変えたキーが残ったままウィンドウを閉じようとしたときは、保存する・破棄する・閉じるのをやめる、を選ぶ確認を出す。
-
-各ペインの見出しはペイン名とし、その下にペインごとの 1 行の説明を置く。アプリ名の見出しと、全ペインに共通の説明文は置かない。
-
-「データとツール」群の各ペインと、「AI 変換」のモデル一覧・ベンチマーク・取得は、Host の IPC を呼ぶ設定アプリ側の
-client（`SettingsIpcClient`）と同じ変更でナビゲーションに置く。「AI 変換」でモデルを選ぶと、同じペインの
-「使うモデル」の表示が変わり、保存バーが `model.selectedPath` を書く。一覧から選べるのは検証に通った GGUF だけである。
-一覧に無いローカルの GGUF は、同じペインの「参照…」ボタン（ファイルピッカー）で選ぶ（§3.7「モデルパスの
-probe-then-commit」の明示選択）。モデルのパスを手で入力する欄は置かない。
-Host が capability（`learning_reset` / `persona` など）を告知しないときは、その操作を送らず、
-ペインに「この変換エンジンは未対応です」と示す。
-`ListModels` が返す `onnx_genai` は一覧に出すが選択と測定の対象にしない。学習データは
-設定アプリが直接開かず、一覧・忘却・エクスポート・インポートをすべて Host への IPC で行う。
-忘却・全削除・インポートは確認ダイアログを経る。暗号化しないエクスポートは警告を出して確認する。
-
-Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更でナビゲーションに加え、
-中身の無いペインは置かない。
-
-上の表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」が読む文章をフォアグラウンドの
-アプリから取る経路（TIP の preserved key、選択位置の周りの文書の取得、TIP 所有の session、アプリ側の範囲の
-選択）は `rich-features-spec.md` X-3-6 が正典である。
-
-> 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
-> 反映方法・拡張方針）は §3.6 を参照する。
-
-専用コントロールを持たないキーの UI は、`settings-app/SettingsFields.cpp` の記述子表から生成する。
-記述子は各キーの型・既定・範囲・選択肢・ペインと、機能別 spec が「効果を持たない」と定める条件
-（例: `privacy.custom.*` は `privacy.mode` が `custom` のときだけ、カッコ補完の各キーは `bracketPairing` が
-真のときだけ）を持ち、条件を満たさない間はコントロールを無効にする。`dynamicPunctuation` /
-`batchRomajiConversion` / `inlineEnglishCandidates` / `bracketPairing` の 4 つのスイッチは、同じ節で後に並ぶ
-項目を、スイッチの下の閉じた「詳細設定」に畳む。畳むのは表示だけで、有効・無効は上の条件で決める。
-保存できない値が畳んだ項目にあるときは、「詳細設定」を開いてその項目へフォーカスする。
-OpenAI API キーの欄は「OpenAI」の節の末尾に置き、同じ節の条件（`aiBackend` が `openai`）を満たさない間は
-入力欄だけを無効にする。保存済みのキーを消せるように、「削除」は条件によらず押せる。記述子と schema の型・既定・範囲・
-選択肢の一致、schema の全キーが「生成する / 専用コントロール / 編集しない（理由付き）」のいずれかに
-属すること、表示文字列の有無は `azookey_settings_persistence_tests` が検査する。
-
-#### 表記規則
-
-設定アプリの表示文字列（`settings-app/Strings/ja-JP/Resources.resw`）と、入力インジケーターのメニュー
-（`docs/tsf-deep-integration-spec.md` §4.5）は次の規則に従う。保存する値（schema の enum 値）は変えない。
-規則が拘束するのは表示文字列とメニューであり、spec の地の文は、画面の語を指す箇所（ペイン名・項目名・機能名）を
-これに揃える。
-
-- 利用者向けの文に内部の語を出さない。置き換えは次の表に従う。
-
-  | 内部の語 | 表示 |
-  |---|---|
-  | Host | 変換エンジン（例「変換エンジンが起動していません」「この変換エンジンは未対応です」） |
-  | backend（推論） | 推論デバイス |
-  | backend（AI サービス） | AI サービス |
-  | catalog | 取得できるモデル |
-  | pack | 追加辞書 |
-  | prompt prefix | AI への指示文 |
-  | Persona | 入力の傾向 |
-  | Settings アプリ | 設定アプリ |
-  | merge / overwrite / keep_both | 統合する / 上書きする / 両方残す（英語の併記をしない） |
-  | bytes | KiB（校正の文字数の上限は「0 / 60 KiB」の形） |
-
-- 1 つの概念に 1 つの語を使う。「カッコ」（機能名「カッコ補完」と `inputMode` の表示名「カッコ補完の字形」は
-  `bracket-pairing-spec.md` に合わせる。「括弧」と書かない）、「予測変換」（「予測」だけにしない）。
-  「セーフモード」は Host が繰り返し異常終了したときの安全な構成だけを指し、パスワード欄などの保護は
-  「セーフ入力」と書く。`privacy.mode` の `secure` は「常にセーフ入力」と表示する。
-- 列挙値は日本語で表示する。`logLevel` は `error` / `warn` / `info` / `debug` を「エラー」/「警告」/「情報」/「デバッグ」と表示する。
-- 状態は絵文字で示さず、文と InfoBar・InfoBadge で示す。
-- 注記は 1 項目につき 1 文を目安にし、同じ注記を複数の項目に繰り返さない。版の番号（「v1.0 の」など）を注記に書かない。
-- 画面に無い語で操作の手順を書かない。手順は、ペイン名と項目の表示名をかぎ括弧で示す（例「『プライバシー』の『外部 AI を使う』」）。
-
-> **参考（fkunn1326/azooKey-Windows, MIT）**: 「AI 変換」ペインの `backendPreference` 選択は、
-> 各バックエンドのランタイム DLL 存在判定（`cudart64_12.dll`+`cublas64_12.dll` / `vulkan-1.dll`）
-> で**未対応バックエンドを disable + 理由 Tooltip 表示**する能力検出 UX を採れる（先行実装の
-> `check_capability` 相当）。一次フィルタ扱いとし、実 EP 選択は `docs/copilot-pc-backend-spec.md`
-> §3-§4 に委ねる。`backendPreference` は自分側 schema が `cpu/cuda/vulkan/winml/directml/npu`
-> を持ち、参考側（cpu/cuda/vulkan）より広い。詳細は DEV-120 のコメント参照。**この能力検出は、当該
-> バックエンドをリンクしたビルドを配布してから導入する**（DEV-854 再確定）。DLL 存在判定が答えるのは
-> 機器側の可否であって、ビルドが当該バックエンドを含むかではないため、未リンクのバックエンドを
-> DLL 判定で出し分けると実効のない選択肢を有効化してしまう。v1.0 UI の縮小と露出条件は §3.7 を正典とする。
-
-### 3.3 Host との IPC
-
-設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
-payload 空の `UpdateConfig` メッセージを送信して再読込を促す（入力インジケーターのメニューでライブ変換を切り替えたときは TIP も送る）。設定オブジェクトは
-IPC schema に二重定義しない。設定アプリと Host の保存・quarantine は同一の named mutex 下で
-read-modify-write または read から rename までを直列化する（writer 責務とこの排他の
-正典は `docs/learning-data-management-spec.md` §14）。
-
-```
-UpdateConfigRequest:
-  request_id
-
-UpdateConfigResponse:
-  request_id
-  ok: bool
-  error: optional<string>
-```
-
-Host は `settings.json` を再読込し、即時反映可能なものを適用する。破損などで
-再読込結果が invalid の場合、`ok=false` と `error` を返し、現在の runtime 設定は
-維持する。応答は再起動の要否を持たない。Host の再起動後にだけ反映される変更は、設定アプリが
-保存の成功後に再起動指示を表示する（対象は §3.6「反映方法の確定」）。
-
-### 3.4 設定ファイルパス
-
-| 用途 | パス |
-|---|---|
-| 設定 | `%LOCALAPPDATA%\azooKey\config\settings.json` |
-| カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
-| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.v2.tsv.enc`（M54 の v2 形式。DPAPI 暗号化、M34。M7 形式の `learning.tsv.enc` は移行元） |
-| ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 のピン（既定の catalog）が定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
-| ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
-
-拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
-
-### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）
-
-Windows の「設定 > 時刻と言語 > 言語と地域 > 日本語 > キーボード」や従来の Text Services
-コントロールパネルから本 IME の「プロパティ / オプション」を開くと、TSF マネージャは TIP の
-CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
-`ITfFnConfigure::Show(hwndParent, langid, rguidProfile)` を呼ぶ（M30 受け入れ条件
-「Windows 設定からの『詳細設定』起動で開く」に対応）。
-
-- **実装場所**: `ITfFnConfigure` は **TIP DLL（`tsf-tip/`）側**が実装する（設定アプリ EXE
-  ではない）。TSF が `DllRegisterServer`（§1）で登録した CLSID に対して直接
-  `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
-  `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
-  **CLSID 直 `CoCreateInstance`** で取得される点に注意 — すなわち
-  `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` であり、**TextService オブジェクト
-  自身が `QueryInterface(IID_ITfFnConfigure)` で応答する**必要がある（別クラスで実装する場合も
-  TextService の QI 経由で到達可能にする。さもないと `E_NOINTERFACE` で「詳細設定」が開かない。
-  `docs/tsf-deep-integration-spec.md` §6.2）。
-- **呼び出し元**: `Show` は **Windows の言語/IME 設定（Text Services コントロールパネル
-  相当）が TIP の CLSID を `CoCreateInstance` したプロセス上**で同期的に呼ばれ、
-  `hwndParent` はその設定 UI のウィンドウである（入力先のメモ帳・ブラウザ等ではない）。
-- **方式（非同期起動）**: `Show` は設定アプリを起動して `S_OK` を即時返す。理由と
-  single-instance の扱いは `docs/tsf-deep-integration-spec.md` §6.2 が正典。設定値の反映は
-  §3.3 の `UpdateConfig` IPC で行う。
-- **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
-  `azookey_settings.exe` に渡し、「バージョン」の起動コンテキストに表示する（§3.2）。設定アプリは
-  `AppInstance::FindOrRegisterForKey` で単一インスタンスを登録し、後続起動は
-  `RedirectActivationToAsync` で新しい引数を既存インスタンスへ転送する。既存ウィンドウは転送後に
-  前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
-  profile を GUID として検証し、未指定と不正値を区別する。起動コンテキストの表示は、転送された起動を含め、
-  最後に受けた起動の引数で決め直す（`langid` も profile も無い起動では隠す）。
-- **校正ビューの引数**: TIP の校正ビュー（`rich-features-spec.md` X-3-6）は
-  `--proofread-session <token>` だけを渡す。token は小文字 16 進 32 桁で、重複・値なし・それ以外の値は
-  parse error とする。後続起動の転送でも同じく既存インスタンスへ渡り、「校正」ペインがその session を開く。
-- **開くペインの引数**: `--pane <名前>`（§3.2）は開くペインだけを指定する。`--proofread-session` と同時に
-  受けたときは `--proofread-session` を優先して「校正」を開く。`langid` / `rguidProfile` は開くペインを
-  変えず、どちらも受けたときも `--pane` が無ければ「入力」を開く（言語プロファイルごとの設定ページは持たない）。
-  既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ。
-- **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
-  インストールパス解決）は
-  `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
-
-### 3.6 設定スキーマの確定（キー一覧・永続化・拡張方針）
-
-設定キーが各機能 spec に分散したまま実装に入ると、設定アプリと Host の整合が崩れる。
-本節は schema の最終形（全 top-level キー）と永続化・拡張方針を一箇所に確定する索引で
-あり、M30 設定アプリ・後続 UI（M45 モデル管理 / M49 学習データ可視化）の共通基盤とする。
-
-**正典アーティファクトと責務境界**:
-
-- **スキーマ正典**: `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）。
-  **固定形オブジェクト**（root、および `model` / `autoUpdate` のように既知フィールド集合を持つもの）は
-  `additionalProperties: false` を維持し、未知キーを拒否する。一方、**マップ形オブジェクト**は値の型を
-  制約した `additionalProperties`（`false` ではない）で任意キーを許容する設計であり、本規則の対象外とする
-  （例: `promptPrefixByApp` = `additionalProperties: {type: string}`、`profilesByApp` および
-  プロファイル内 `candidateTagBoosts` も同様のマップ）。
-- **永続インスタンス**: `%LOCALAPPDATA%\azooKey\config\settings.json`（§3.4）。設定アプリが
-  書き込み（`liveConversion` / `predictionEnabled` の 1 キーずつは入力インジケーターのメニューから TIP も書く）、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
-- **意味論の正典は各機能 spec**: 各キーの挙動・enum 値の意味・閾値は下表「正典」列の spec が
-  定義する。本節はそれらを **再定義せず**、設定アプリ統合の観点（UI ペイン / 導入マイルストーン /
-  反映方法）を一覧化する。v1.0 出荷時に同梱する**最小サブセット**の選定は DEV-107（M11 schema
-  サブセット）が扱い、本節は schema 最終形と永続化・拡張方針を確定する。
-
-#### キー一覧（top-level）
-
-| キー | 型 / enum | 既定 | UI ペイン | 導入 | 反映 | 正典 |
-|---|---|---|---|---|---|---|
-| `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 候補 | Phase 5（基本） | 即時 | `bracket-pairing-spec.md` §4.4（表示名「カッコ補完の字形」） |
-| `convertKeysAction` | enum `default`/`imeOnOff` | `default` | 入力 | DEV-1736 | 即時 | `tsf-deep-integration-spec.md` §3.1.1 |
-| `fullWidthSpace` | bool | `true` | 入力 | DEV-1814 | 即時 | `tsf-deep-integration-spec.md` §3.7 |
-| `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
-| `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
-| `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
-| `punctuationConversion` | enum `off`/`commit` | `off` | 入力 | DEV-1638 | 即時 | `tsf-deep-integration-spec.md` §3.5.1 |
-| `dynamicPunctuation` | bool | `false` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
-| `dynamicPunctuationStyle` | enum `ja`/`fullwidth_latin` | `ja` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
-| `dynamicPunctuationStability` | enum `onPause`/`eager` | `onPause` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
-| `dynamicPunctuationIdleMs` | integer (ms) | `400` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
-| `segmentBoundaryConfidence` | number (0.0–1.0) | `0.5` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
-| `punctuationRulesPath` | string（パス） | `…\punctuation-rules.tsv` | 入力 | M59 | 即時（ホットリロード） | `dynamic-punctuation-spec.md` |
-| `predictionEnabled` | bool | `true` | 入力 | M15 | 即時 | roadmap M15 |
-| `batchRomajiConversion` | bool | `false` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
-| `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
-| `batchConversionMode` | enum `neural`/`ai-cleanup` | `neural` | 入力 | M58-A/C | 即時 | `romaji-batch-conversion-spec.md` |
-| `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `romaji-batch-conversion-spec.md` |
-| `llmMagicConversion` | bool | `false` | AI サービス | M16 | 即時 | roadmap M16 |
-| `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI サービス | M16 | 即時 | roadmap M16 |
-| `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI サービス | M16 / M34 | 即時 | roadmap M16 / §9 |
-| `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI サービス | M16 | 即時 | roadmap M16 |
-| `openAiModel` | string | `gpt-4o-mini` | AI サービス | M16 | 即時 | roadmap M16 |
-| `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | roadmap M16 |
-| `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
-| `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
-| `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
-| `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
-| `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | AI 変換※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
-| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | AI 変換※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
-| `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
-| `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | AI 変換（`enabled` / `selectedPath` / `backendPreference` とモデル一覧〔§3.2〕。`epPreference` は §3.7 の解禁条件まで UI に出さない） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
-| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | バージョン（結果も同じ節に表示） | M32 | 即時 | 本書 §6 |
-| `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
-| `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI サービス | M16 | 即時 | `ai-backend-spec.md` |
-| `inferenceThreads` / `maxCandidates` / `maxContextLength` | integer（0–8 / 1–32 / 0–30） | `0` / `9` / `30` | AI 変換（`inferenceThreads` / `maxContextLength`）/ 候補（`maxCandidates`） | — | 即時 | `windows-tsf-host-architecture.md` |
-| `bracketPairing` ほか `bracket*` の 10 キー | bool / enum / string[] / string（パス） | 各キーの schema 既定 | 候補 | M61 | 即時 | `bracket-pairing-spec.md` |
-| `inlineEnglish*` の 6 キーと `fullWidthEnglishCandidate` | bool / integer / number / string（パス） | 各キーの schema 既定 | 候補 | M60 | 即時 | `inline-english-candidate-spec.md` |
-| `mixedEnglishAutoConversion` | bool | `false` | 候補 | M63 | 即時 | `mixed-english-auto-conversion-spec.md` §14 |
-| `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 候補 | M62 | 即時 | `candidate-rewriter-spec.md` |
-| `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
-| `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
-| `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-nll-spec.md` §B9 |
-| `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
-| `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
-| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
-
-> オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
-> `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
-> 再掲せず、ネスト構造の単一情報源を維持する。
->
-> 「—（保存時保持）」のキーは設定アプリに編集 UI を持たないが、保存時に有効な値を書き戻す
-> （§3.7 の write-back 規則）。Host が書く値（`safeMode.enteredAt` / `safeMode.lastCrashCount` /
-> `model.benchmarkHistory`）は、設定アプリから編集しない。`model.benchmarkHistory` は「AI 変換」ペインが
-> 表示だけし、保存は既存の値を書き戻す。
-
-> **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
-> 下位レイヤ**であり（解決順 `model.*` ＞ root、`model-management-spec.md` §5.2）、設定アプリの device 選択 UI は
-> **v1.0 / M24 とも `model.backendPreference` / `model.epPreference`（`model.*` tier）にバインド**する。**root tier は
-> UI にバインドしない** — M24 で root を再露出すると、`model.*` を設定済みのユーザーでは編集しても実効値が変わらず
-> （`model.*` ＞ root）「selector が壊れて見える」二重ソース問題に戻るため。root tier は `settings.json` 直書きの
-> 後方互換としてのみ残し、§3.7 の保存規律（device 保存時に root `backendPreference` を削除して `model.*` を単一
-> 実効ソースにする）と整合させる。
-
-#### 永続化形式と適用順
-
-- 単一の `settings.json`（UTF-8）に top-level キーを格納する。書き込みは破損耐性のため
-  atomic write（一時ファイル → rename）で行う。
-- **レイヤリング / 優先順位**: per-app `profilesByApp`（M48）＞ `model.*`（同名 root キーを上書き、
-  `model-management-spec.md` §5.2）＞ root。実効値の解決順は `app-profile-spec.md` §5 を正典とする。
-- **反映方法の確定（v1.0 キー）**: Host は `settings.json` を hot-reload し、**プロセス再起動を要する
-  キーを持たない**。モデルロードに影響するキー（`backendPreference` / `epPreference` / `model.*`）は
-  Host 内部の推論エンジン再ロードで反映する（`model-management-spec.md` §5.3、`model.autoLoadOnHostStart`）。
-  それ以外は次回変換から即時反映する。例外は `dictionary.neologdEnabled` を偽から真にする変更で、
-  Host は `neologd_lexicon` pack を起動時にだけ取得するため（`azdic-physical-layer-spec.md` §15.14）、
-  反映は Host の再起動後になる。設定アプリはこの変更を保存したときに、サインアウトして再度サインイン
-  すると反映される旨を表示する（Host はログオン時に起動する。§1.7）。再起動を要する変更の判定は
-  設定アプリが持つ静的な分類で行い、`UpdateConfig` の応答には含めない。
-- **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（§9）。
-  平文保存は移行期のみ許容し、Host は両形式を受理する。
-
-#### 拡張方針（`additionalProperties: false` 下でのキー追加）
-
-- **追加は加算的**: 新規キーは既定値付きで追加し、旧 `settings.json` は欠落キーを schema 既定で
-  補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、Host の `SettingsStore` または
-  設定アプリの `settings-app/SettingsDocument.*` に移行処理を実装し、`docs/dev-infrastructure-spec.md`
-  §12.2.1 に旧形式を登録してから schema を変更する。
-- **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
-  行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
-  `app-profile-spec.md` §4 と同方針）。
-- **下位フィールドの正典**: `privacy`（M46。`crashReportConsent` だけ M33）は
-  `docs/privacy-and-secure-input-spec.md` §7、`profilesByApp`（M48）は `docs/app-profile-spec.md` §4 の
-  schema fragment を正典とする。既存 `promptPrefixByApp` との統合は `app-profile-spec.md` §6 に従う。
-- **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
-  §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
-  が制御する）。「学習」ペインのストア別の一覧と「入力の傾向」タブはキーではなく、Host の IPC を読むビューである。
-
-### 3.7 v1.0 設定 UI の最小機能セット（M11）と v1.0 / v1.x 境界
-
-§3.6 は schema の最終形（全 top-level キー）を確定する索引である。本節はそのうち
-**v1.0（M11）出荷時に設定アプリへ UI として出す最小サブセット**を確定し、残りを v1.x（M30
-フル UI）へ送る境界を引く。狙いは 2 つ: D-03（WinUI 3 UI フレームワークスパイク）の実装
-ボリュームを確定させ、v1.0 を遅らせないこと。本節は新キーを追加しない —— v1.0 UI は
-`settings/mvp-settings.schema.json`（§3.6 の正典 schema）の**部分集合**を描画するだけで、
-schema 自体は superset のまま変えない。
-
-> **設計判断（DEV-107）**: 起票時の推奨案は `zenzaiEnabled` / `modelPath` / `userDictionaryPath`
-> という新キーを提案していたが、§3.6 で schema 正典が確定した後はこれらを新設しない。M11 の目的
-> （`plans/windows-port-roadmap.md` M11「Zenzai ON/OFF・辞書管理・デバイス選択」）を**既存の正典
-> キーへ写像**して実現する: Zenzai ON/OFF → `model.enabled`、デバイス選択 → `model.backendPreference`
-> （v1.0 は enum を縮小）、モデル選択 → `model.selectedPath`。ユーザー辞書は設定 `settings.json` の
-> キーではなく `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（§3.4）の内容であり、v1.0 はキーではなく
-> 「編集」アクション（下記ボタン）で扱う。
-
-#### v1.0（M11）で UI 化するキー（最小サブセット）
-
-| キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
-|---|---|---|---|---|
-| `model.enabled` | bool（「Zenzai を使う」トグル） | AI 変換 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | AI 変換 | M8 | `auto` は Host 起動時に BackendSelector が解決する backend（`copilot-pc-backend-spec.md` §4.4、`--backend` 明示時はその値）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
-| `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | AI 変換 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
-| `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
-
-- **デバイス選択の enum 縮小（DEV-854 再確定）**: v1.0 UI は `model.backendPreference` を
-  `auto` / `cpu` の 2 値だけ描画する。**`cuda` は v1.0 UI に出さない**。CUDA backend の実リンク
-  （DEV-223）は中止され、`cuda` 要求は `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel の
-  まま CPU へ降格するため、選択肢として出すと実効のない選択になる。ランタイム DLL の存在判定による
-  disable + Tooltip（§3.2 参考実装注）はここでは採らない。DLL 判定が答えるのは「この機器に CUDA
-  ランタイムがあるか」であって、実際の制約は「配布ビルドが CUDA をリンクしていないか」だからである。
-  CUDA ランタイムを備えた NVIDIA 機ではむしろ選択肢が有効化され、実効のない選択がそのまま残る。
-  能力検出は CUDA リンク済みビルドを配布してから導入する。
-- **v1.0 の 2 値が持つ意味**: `auto` は Host 起動時に `docs/copilot-pc-backend-spec.md` §4.4
-  「`auto` の解決（BackendSelector）」が解決する backend に従い、`cpu` は CPU に固定する（解決順は `model-management-spec.md` §5.2、
-  `auto` のときに root `backendPreference` へ委ねる挙動を含む）。CPU 推論のみを含む v1.0 配布ビルドでは
-  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレータをリンクした
-  ビルドを配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。`auto` が選ぶのは、ビルドに
-  リンクされ、かつ同 §4.4 の一次フィルタ（ハードウェア GPU、loader、電源状態）を通ったアクセラレータに
-  限られ、選んだ backend もロードに失敗すれば CPU へ降格する。M11 の目的「デバイス選択」はこの 2 値で満たし、
-  UI にはアクセラレーションの有無を誤解させないため「この配布ビルドは CPU 推論のみを含む」という
-  静的な補足文を添える。
-- **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
-  v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
-  §4.3 のとおり R2 には再開条件がある。R1 に属する `vulkan` を R2 の再開に従属させないため、**露出条件を
-  「ggml-vulkan ビルドを配布に含め、かつ実行時にそれを選ぶ経路が配線された時点」へ改める**（R1 側の
-  条件であり、M24 の進捗に依存しない）。実行時の選択は `docs/copilot-pc-backend-spec.md` §4.4 の
-  BackendSelector が担い、Vulkan ビルド（`windows-vulkan-release` preset）の `auto` は一次フィルタを
-  通った機器で Vulkan を選ぶ。
-  配布物への組み込みと §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
-  選択肢を追加し、それまでは **v1.0 UI には出さない**。
-- **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
-  `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
-  限る。v1.0 UI から `cuda` を外すことで UI 由来の実効のない選択は消え、残るのは `settings.json` 直書きの
-  `cuda` だけになる。この値は下記の「UI が描画しない schema 有効値」と同じ扱いとし、UI は選択なしの状態で
-  現在値と「現在の配布ビルドでは CPU 実行へ降格する」旨を表示し、保存時にその値を温存する。
-- **UI が描画しない schema 有効値の扱い**: `settings.json` に v1.0 UI が出さない schema 有効値
-  （`cuda` / `vulkan` / `winml` / `directml` / `npu`）が直書きされていても、Host は schema 上受理し、
-  UI は選択肢として描画しないだけで破棄しない。schema 正典（§3.6）は完全 enum を保持する
-  （enum 縮小は §3.6 拡張方針で破壊的変更に当たるため、UI 露出だけを変え schema には手を入れない）。
-- **`model.*` の UI 露出を M11 へ前倒し**: §3.6 の「導入」列は `model` を M45 と記すが、これは**フル
-  モデル管理 UI**（`epPreference` / `nGpuLayers` / `benchmark*` / `autoLoadOnHostStart` / `fallbackToSimpleConverter`
-  等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
-  の 3 フィールドのみを露出する。キーは schema に既存のため schema 変更は不要で、変わるのは UI 露出の時期だけ。
-  実効値の解決順（`model.*` ＞ root 同名キー、§3.6 永続化 / `model-management-spec.md` §5.2）は v1.0 でも同一。
-- **モデルパスの probe-then-commit（既定 autoselect と明示選択を分ける）**: 空 `model.selectedPath` は
-  「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
-  `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
-  `selectedPath` 確定の規律は §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
-    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（既定の catalog、§1.6.1）の
-      モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
-      へ commit する（commit 後に「既定モデル使用中」と表示）。ピンと一致しなければ autoselect しない。
-    - **ユーザー / 管理者の明示選択（ピン非依存、§1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
-      `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
-      **ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
-      非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
-  いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「使うモデル」に「未選択（AI モデルを使わずに
-  変換します）」と表示する（Host は SimpleConverter で動く）。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
-  モデルが commit されず degraded のまま」の両方の不整合を防ぐ。
-- **root `backendPreference` を v1.0 UI に二重表示せず、保存時に UI 選択値で上書きする**: デバイス選択は
-  `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`
-  → root `backendPreference` → 既定 `auto`）。root を非表示のまま write-back で温存すると、ユーザーが直書きした
-  root `cuda` 等が UI の「auto」選択を上書きし続け、UI からバックエンドを auto へ戻せない。これを防ぐため、**v1.0 UI が
-  デバイス選択を保存するとき、UI で選んだ値（`auto` を含む）を `model.backendPreference` に書き、root `backendPreference`
-  を削除する**。**root の隠れ値を `model.*` へ「移行」してはならない** —— 移行すると root `cuda` が
-  `model.backendPreference` に複製され、UI の `auto` 選択を上書きし続けてリセット不能になる（root 値を持ち越さず、
-  常に現在の UI 選択で上書きする）。これにより `model.backendPreference` が単一の実効ソースになる。この root
-  `backendPreference` 削除は後述 write-back 規則の例外（保持対象外）とする。`epPreference` は v1.0 UI が露出せず
-  device 選択にも従属しないため、root / `model.epPreference` とも温存する（直書き intent を壊さない。v1.x で管理）。
-  **`model.backendPreference` が v1.0 UI の描画しない schema 有効値（`cuda` 等）のときは上書き対象から外し、
-  その値を温存する**（DEV-854 再確定）。このとき UI はデバイス選択を未選択の状態にし、現在値と降格の注記を
-  表示する。上書きは UI が選択を持つときの規律であり、UI が選べない値をその 2 値へ丸めると直書き intent を
-  壊すためである。root `backendPreference` の削除はこの場合も行い、実効ソースを `model.backendPreference` に
-  一本化する規律は変えない。
-
-#### v1.0（M11）の UI アクション（設定キーではないボタン）
-
-- **ユーザー辞書の追加・削除** → 「学習」ペイン（§3.2）のユーザー辞書タブに置く。タブは一覧と検索、
-  「読み」「語」の 2 欄と「追加」ボタン、行ごとの「忘却」を持つ。追加は `AddUserWord`（roadmap M9）、
-  削除は `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で Host へ送る
-  （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
-  既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
-  経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
-  CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
-- **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
-
-#### v1.0 / v1.x 境界表
-
-「v1.0 で UI 化」しないキーは、v1.0 では `settings.json` 直書き（＋ Host hot-reload、§3.3）か
-debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイルストーン）で UI 露出する。下表は
-§3.6 の全キーに対する v1.0 / v1.x の UI 露出区分である（意味論の正典は §3.6「正典」列に従う）。
-
-| キー | v1.0 UI | v1.x で UI 化（v1.0 では schema 直書き / probe） |
-|---|---|---|
-| `model.enabled` | ◯（AI 変換） | — |
-| `model.backendPreference` | ◯（AI 変換、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
-| `model.selectedPath` | ◯（AI 変換） | — |
-| `logLevel` | ◯（詳細） | — |
-| `model.*` の残りフィールド（`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（「AI 変換」ペイン。§3.2） |
-| `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
-| `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（`powerProfile` / `inferenceThreads` / `maxContextLength` は AI 変換ペイン、`maxCandidates` は候補ペイン、実験フラグは詳細ペイン） |
-| `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
-| 句読点・バッチ変換・インライン英単語候補・候補リライター・カッコ補完の各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・カッコ補完は候補ペイン） |
-| `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
-| `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
-| `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。§6） |
-| `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`azdic-physical-layer-spec.md` §15.14） |
-| `privacy.*` | — | M30（プライバシーペイン） |
-| `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
-| `reranker.*` | — | 専用 UI を持たない（`neural-reranker-nll-spec.md` §B9） |
-| ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
-
-> v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
-> 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。
-
-#### 設定アプリ起動時の schema バリデーション
-
-- 設定アプリは起動時に `settings.json` を `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）で
-  検証する。**未知キー / 型不正 / enum 外の値は警告ログ（`logLevel`）に記録して skip し、当該キーは既定値
-  （§3.6 拡張方針「欠落キーは schema 既定で補完」）で扱う。**破損キー 1 つで設定アプリやランタイムを
-  停止させない（fail-safe）。
-- **write-back 規則**: 設定アプリが `settings.json` を保存するとき、**schema 上有効で UI に露出していないキー**
-  （v1.x キー・ユーザーが直書きした有効値）を**保持して書き戻す**。v1.0 UI が知らないだけの有効キーを silently に
-  消去しない（直書きワークフローを壊さないため）。一方、**起動時バリデーションで弾いた未知キー / 型不正 / enum 外の
-  エントリは write-back で温存しない**（quarantine して書き戻さない）。これらを温存すると、`additionalProperties: false`
-  の固定オブジェクト（§3.6）に対して Host 再読込が `ok=false`（§3.3）になり、UI 側の有効な変更まで Host に拒否されるため。
-  すなわち保持対象は「schema-known かつ UI-hidden」に限る。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
-- **UI に露出したキーの書き込み**: 記述子表から生成した UI は、読み込んだ値（有効な値が無ければ schema
-  既定）から変えたキーだけを書く。変えたキーも、`settings.json` にそのキーが無く値が schema 既定と等しいときは
-  書かない。ユーザーが触れていないキーは、記述子の範囲外の値も含めてディスク上の値のまま残り、欠落キーは
-  schema 既定を引き継ぎ続ける（§3.6 拡張方針「欠落キーは schema 既定で補完」）。有効なコントロールの値が
-  型・範囲・選択肢に合わないときは何も書かずに保存を失敗させ、該当する設定名を表示し、そのペインを開いて
-  コントロールにフォーカスする。数値の入力は範囲へ丸めず、表示のために値を丸めない。依存条件を満たさず
-  無効になっているコントロールの不正な値は、保存の対象から外す。`dictionary` の 7 キーも、読み込んだ値から
-  変えたスイッチだけを、ディスクにあるか schema 既定と異なるときに書く。
-- Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
-  §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
-
 ## 4. WiX / MSI インストーラ（MVP 既定 / 旧 M31）
 
 MSI の最小 OS は Windows 10 version 1903（build 18362）とする。
@@ -1683,7 +354,7 @@ Host が静的リンクする [OS 付属 ICU](https://learn.microsoft.com/en-us/
 > **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が MVP と v1.0 の既定配布形態**である。MVP の MSI は未署名の評価配布（DEV-415）、
 > v1.0 の MSI は TIP バイナリ署名を含む正式リリースとする（§0.1）。
 > 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
-> 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、
+> 配布方針転換により MVP の主経路へ格上げした。MSIX は `msix-packaging-spec` §1（MS Store 用）に回す。MSI は署名が任意で、
 > 未署名でもインストール可能（SmartScreen 警告 + UAC「不明な発行元」は出る）。
 
 MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
@@ -1692,9 +363,9 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経
 > `azookey_settings` target は unpackaged の設定アプリを self-contained でビルドする。
 > MVP MSI は、その出力フォルダから `azookey_settings.exe` と WinUI 3 ランタイムを回収する。
 > MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
-> **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式を配置する**。
+> **self-contained 配置（`msix-packaging-spec` §1.3）でビルドし、その出力フォルダ一式を配置する**。
 > self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに含めて
-> インストール時に実行する。TIP DLL / Host は WinUI 3 非依存（§1.3）。
+> インストール時に実行する。TIP DLL / Host は WinUI 3 非依存（`msix-packaging-spec` §1.3）。
 
 ### 4.1 WiX 構成
 
@@ -1704,7 +375,7 @@ WiX 7 のビルドに必要な OSMF EULA への同意は `azooKey.wixproj` の `
 （条件は [`licensing-policy.md`](licensing-policy.md#ビルドツールの利用条件)）。
 配置先は `%ProgramFiles%\azooKey` とする。
 Vulkan add-on は別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs` と `pkg/msi-vulkan/azooKey.VulkanAddon.wixproj`、
-同じ WiX SDK）で、base の `INSTALLFOLDER` へ実行体を 1 つ足す。構成と導入の条件は §1.6.3 が正典。
+同じ WiX SDK）で、base の `INSTALLFOLDER` へ実行体を 1 つ足す。構成と導入の条件は `msix-packaging-spec` §1.6.3 が正典。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1860,7 +531,7 @@ Inno Setup 版の成果物はリポジトリに持たない。代替を採る場
   `PrivilegesRequired=lowest`）。管理者権限を要求しない。
 - TIP DLL の登録・解除は `[Run]` / `[UninstallRun]` から `regsvr32`（`/s`、解除は `/u /s`）を
   `waituntilterminated` で呼ぶ。
-- 設定アプリの WinUI 3 ランタイムの扱いは §1.3 と同じ判断に従う。self-contained 出力なら
+- 設定アプリの WinUI 3 ランタイムの扱いは `msix-packaging-spec` §1.3 と同じ判断に従う。self-contained 出力なら
   一式を同梱し、framework-dependent なら `WindowsAppRuntimeInstall.exe` を同梱して
   インストール時に実行する。
 
@@ -1905,7 +576,7 @@ NuGet lock の未分類依存、対応する attribution の欠落、pin や CRT
 GoogleTest はテスト専用、Windows SDK BuildTools はビルド専用として配布依存から除外し、
 理由を SPDX annotation に残す。GGUF モデルと CUDA runtime も基本 MSI には同梱しない。
 Vulkan add-on の MSI は base と別の SBOM と attestation を持ち、`--package vulkan-addon` で
-補完する（対象の依存と Vulkan SDK ヘッダの照合は §1.6.3）。
+補完する（対象の依存と Vulkan SDK ヘッダの照合は `msix-packaging-spec` §1.6.3）。
 
 同梱・依存する第三者資産を列挙する正典は、引き続きルート `THIRD_PARTY_LICENSES`
 （運用規約は `docs/licensing-policy.md`）である。SBOM をもって attribution の確認を
@@ -2045,7 +716,7 @@ wingetcreate update --urls `
 ```
 
 `result` は `update_available` / `up_to_date` / `failed` のいずれかである。設定アプリの
-「バージョン」はこのファイルを読んで表示し（§3.2）、IPC は使わない。版は `v` を付けて
+「バージョン」はこのファイルを読んで表示し（`settings-app-spec` §3.2）、IPC は使わない。版は `v` を付けて
 「v1.1.0」と表示する。記録の `channel` か `currentVersion` が設定アプリの設定と製品のバージョンに
 合わない記録は、結果として表示しない。Host は各確認の結果を
 RuntimeLog の `update_check` イベントに、固定の `reason`（`up_to_date` / `update_available` /
@@ -2071,7 +742,7 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 うえでも、利用者が最も強い保護（`secure`）を選んだときは外部へ通信しない。`custom` の
 `externalAi` は AI バックエンドの可否であり、更新の確認とは連動させない。
 
-§1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
+`msix-packaging-spec` §1.6.1 は Host が起動時に利用者の操作なしでネットワークへ出ることを制限する。更新の確認は
 既定で無効（opt-in）であり、利用者が `autoUpdate.enabled` をオンにすることを、起動時と周期の
 確認を許す利用者の操作として扱う。
 
@@ -2165,21 +836,21 @@ ETW は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー正典
 `privacy.redactLogs` の状態に応じて**事後にフィルタできない**（消費側に redaction
 ゲートが無い）。そのため本文系フィールド（`reading` / `surface` / `candidate.text` /
 確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）は **build / env / mode に
-よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が §7.6 優先順位 4 の
+よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が `docs/dev-infrastructure-spec.md` §7.6 優先順位 4 の
 opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を持たない。
 
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
-  載せていたが §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
+  載せていたが `docs/dev-infrastructure-spec.md` §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
   `surface_len`（整数）で記録し、内容は復元できないようにする。
 - `9000 Error` は自由文 `message` を載せず、`source`（`EtwModule` enum で符号化したモジュール
   識別子）/ `error_code`（`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/
-  `hr`（HRESULT）のみとする。例外メッセージ等の自由文は §7.6 を適用済みの構造化ログ側へ
+  `hr`（HRESULT）のみとする。例外メッセージ等の自由文は `docs/dev-infrastructure-spec.md` §7.6 を適用済みの構造化ログ側へ
   出し、ETW には載せない。
 - `EtwLogger`（§7.3）は本文型の引数を受ける API を**持たない**。長さ・件数・enum・
   数値・GUID・ID のみを受ける型シグネチャに限定し、本文混入をコンパイル時に防ぐ。
   `source` も `const char*` ではなく `EtwModule` enum とし、呼び出し側が任意 / ユーザー由来の
   文字列を渡せる引数を一切残さない。
-- ETW は本文を含まないメタ情報のみのため、レイテンシ trace（§7.6 redact 対象外）と
+- ETW は本文を含まないメタ情報のみのため、レイテンシ trace（`docs/dev-infrastructure-spec.md` §7.6 redact 対象外）と
   同じく追加の同意を要さない。WPR トレース（`.etl`）の採取・共有はユーザー / 開発者の
   明示操作（§7.4）であり、その成果物にも本文は含まれない。
 
@@ -2299,7 +970,7 @@ azooKey 管理ダンプを試みず、OS の障害処理へ委ねる。WinRT thr
   Host / Settings の同時書き込みは同一セッション内の名前付き mutex で直列化する。
   書き込み成功後は完了を通知してから再度適用するが、プロセス終了によって中断され得る。
   `off` への切替は新規収集を停止し、既存ファイルの手動削除は保存先から行う。
-- **アンインストール時**: MSIX（§1.4）・手動アンインストール経路では当該ディレクトリも
+- **アンインストール時**: MSIX（`msix-packaging-spec` §1.4）・手動アンインストール経路では当該ディレクトリも
   削除対象とする（`compat-test` の残骸 0 smoke 対象）。
 
 ### 8.3 ダンプ内容の最小化と同意（redaction / consent）
@@ -2425,3 +1096,14 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 - 既存：`scripts/register-dev.ps1` / `scripts/unregister-dev.ps1`（`regsvr32` 開発用経路）
 - ベース：`docs/windows-tsf-host-architecture.md`
 - CUDA backend の実リンクの中止に合わせて、§3.7 の v1.0 設定 UI のデバイス選択を `auto` / `cpu` の 2 値にした経緯：[`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md)
+
+## 転送表
+
+§3（設定アプリ）は `docs/settings-app-spec.md` へ、§1（MSIX パッケージング）は `docs/msix-packaging-spec.md` へ移した。節番号は保つ。
+
+| 旧節 | 移動先 |
+|---|---|
+| §3 | `docs/settings-app-spec.md` |
+| §1 | `docs/msix-packaging-spec.md` |
+
+設定アプリの UI フレームワーク選定の経緯は `decisions/2026-06-settings-app-ui-framework.md` にある。結論の節は `docs/settings-app-spec.md` §3.0 である。

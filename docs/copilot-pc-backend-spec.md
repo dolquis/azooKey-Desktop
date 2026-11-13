@@ -333,7 +333,7 @@ llama.cpp バインディングの初期選定とモデルロード境界の決�
 再開条件を満たすまでは R1 の経路（CPU と Vulkan）だけを有効にする。
 
 v1.0 設定 UI のデバイス選択は、この結論に合わせて `auto` / `cpu` の 2 値へ縮小する
-（`docs/sideload-packaging-spec.md` §3.7 が正典）。`cuda` は §4.4 の降格が続くあいだ UI に出さず、
+（`docs/settings-app-spec.md` §3.7 が正典）。`cuda` は §4.4 の降格が続くあいだ UI に出さず、
 `vulkan` の露出条件は M24 ではなく、実行時選択経路の配線（DEV-944）と
 ggml-vulkan ビルドの配布・起動保証（DEV-1001）とする。
 `vulkan` は R1 に属するため、再開条件（§4.3 項 2）を満たす前の R2 のマイルストーンに従属させない。
@@ -554,7 +554,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
 > `HardwareDevice.Type == NPU` フィルタ）。NPU device が無ければ R2 を bypass して R1 CPU
 > とする（AC 時のみ GPU を許可）。
 
-配布形態の決定は `docs/sideload-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows
+配布形態の決定は `docs/msix-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows
 Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama.cpp CPU ランタイム
 + Windows ML bootstrap。**モデル本体（GGUF / ONNX）は MSIX 非同梱で初回起動時 DL**＝
 同 §1.2 と一貫）。
@@ -934,7 +934,7 @@ endif()
 
 ### 8.3 アーキ別 backend payload 同梱表
 
-配布物の「同梱 / 非バンドル / DL」の正典は `docs/sideload-packaging-spec.md` §1.6、
+配布物の「同梱 / 非バンドル / DL」の正典は `docs/msix-packaging-spec.md` §1.6、
 フォールバック段位の正典は §4.5。本表は **アーキ軸**でどの payload が x64 / ARM64 に
 存在するかを固定する（同梱可否は §1.6 を参照、本表で重複定義しない）。
 
@@ -953,7 +953,7 @@ endif()
   R2（Windows ML / QNN EP、非バンドル）に一本化し、MSIX を肥大させない。
 - これにより配布パッケージ構成は **base MSIX（x64 / ARM64 の 2 アーキ）+ x64 専用の
   optional add-on（CUDA / Vulkan）** に収束する。各 add-on の構成は
-  `docs/sideload-packaging-spec.md` §1.6 と §1.6.3 が正典。アーキ別に別 payload を
+  `docs/msix-packaging-spec.md` §1.6 と §1.6.3 が正典。アーキ別に別 payload を
   後決めする必要はない（後戻り回避）。
 - リリース CI（`.github/workflows/release.yml`）は **x64 専用**で、`cmake --preset
   windows-release`（x64）を configure/build し、`pkg/msi/azooKey.wixproj` の
@@ -973,7 +973,7 @@ endif()
   2. **wapproj `Platform=ARM64`** でその ARM64 出力を取り込み MSIX 化。
   3. **MSIX の署名 / verify / upload をアーキ別パスで定義**（`Package_1.0.0_${arch}.msix` 等）。
   WAP 自体は x64 ホストから ARM64 をクロスパッケージ可能だが、上記 1〜3 が揃って初めて
-  `arm64.msix` が成立する。詳細レシピは M28/M29（`docs/sideload-packaging-spec.md` §1/§2）で
+  `arm64.msix` が成立する。詳細レシピは M28/M29（`docs/msix-packaging-spec.md` §1/§2）で
   確定する。
 
 ### 8.4 ARM64 テスト実行経路

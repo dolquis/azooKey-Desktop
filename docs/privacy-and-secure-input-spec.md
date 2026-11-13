@@ -468,7 +468,7 @@ schema をここで正典として定義し、値の意味（`off` / `local` の
 hostはリクエストの許可と設定の許可の積を取り、TIPから許可を引き上げられない。
 他の学習・予測・ログの各軸とM46のUIはこのAI用判定とは別範囲とする。
 `crashReportConsent`はM33（ETW/WER）で、M33では`privacy` objectに
-`crashReportConsent` を既定値付きで加算的に追加する（`docs/sideload-packaging-spec.md` §3.6
+`crashReportConsent` を既定値付きで加算的に追加する（`docs/settings-app-spec.md` §3.6
 「予定済み top-level 拡張」と整合）。
 
 schema fragment（`properties.privacy` への追加）:

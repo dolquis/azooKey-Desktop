@@ -92,7 +92,7 @@ ORT CUDA EP / TensorRT EP に切り替え可能にすることを検討する。
 ## 配布ライセンス
 
 モデル（zenz GGUF、kanakanji-edge-33m）・CUDA ランタイム・Vulkan の配布形態とライセンスの結論は
-`docs/sideload-packaging-spec.md` §1.6 / §1.6.2 が正典。CUDA の採否は
+`docs/msix-packaging-spec.md` §1.6 / §1.6.2 が正典。CUDA の採否は
 `docs/copilot-pc-backend-spec.md` §4.3 項 7 に従う。第三者資産の attribution の集約はルートの
 `THIRD_PARTY_LICENSES`、運用規約は `docs/licensing-policy.md` が持つ。
 

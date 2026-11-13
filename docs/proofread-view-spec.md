@@ -7,7 +7,7 @@
 - `docs/learning-data-management-spec.md` §15（Persona の算出と `QueryPersona`）
 - `docs/user-learning-enhancement-spec.md` §4.1（`CommitCorrection`）
 - `docs/tsf-deep-integration-spec.md`（再変換の候補窓、固定パス）
-- `docs/sideload-packaging-spec.md`（設定アプリの起動と整合性レベル）
+- `docs/settings-app-spec.md`（設定アプリの起動、校正ペインの位置づけ）
 - `plans/windows-port-roadmap.md` M24 / M30
 - `legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`（参照のみ。ライブ変換・予測候補・誤変換訂正の旧実装は、独立した `PredictionEngine.swift` / `CorrectionEngine.swift` ではなく `SegmentsManager` 内にある）
 

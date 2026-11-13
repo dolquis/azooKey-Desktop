@@ -21,7 +21,7 @@ description: azooKey Desktop の MSI、WiX、MSIX、AppxManifest、external-loca
 ## 必須ガードレール
 
 - `docs/sideload-packaging-spec.md` §0 の配布方針を先に確認し、MSI、Store MSIX、スタンドアロン MSIX の要件を混同しない。
-- Vulkan add-on は base MSI と別の MSI で、base に混ぜない。Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。add-on は base と版が揃うときだけ選ばれ、loader とドライバーは同梱しない（`docs/sideload-packaging-spec.md` §1.6.3）。add-on の失敗で base のリリースを止めない。
+- Vulkan add-on は base MSI と別の MSI で、base に混ぜない。Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。add-on は base と版が揃うときだけ選ばれ、loader とドライバーは同梱しない（`docs/msix-packaging-spec.md` §1.6.3）。add-on の失敗で base のリリースを止めない。
 - `.pfx`、秘密鍵、証明書パスワード、token をリポジトリ、ログ、コマンド履歴、PR 本文へ含めない。
 - MSIX の `Identity@Publisher` と署名証明書 Subject の一致を確認し、実在しない Publisher や証明書値を推測で設定しない。
 - machine-wide TIP 登録、証明書ストア変更、署名済み package の登録、IME 実入力、アンインストール確認は、明示された管理者権限、実機確認、人間ゲートとして扱う。

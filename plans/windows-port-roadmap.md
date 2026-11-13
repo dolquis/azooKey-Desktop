@@ -303,15 +303,15 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **受け入れ条件**:
   - クリーンな Win11 VM でインストール → IME 選択 → 入力 → 確定が動く
   - アンインストールでレジストリ・ファイルが残らない
-- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§3・§4
+- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§4、`docs/settings-app-spec.md` §3
 - **補足**:
   - **実装範囲**:
     - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
       `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
       と、学習ペインでのユーザー辞書の追加・削除、「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
-      `docs/sideload-packaging-spec.md` §3.7 を正典とする
+      `docs/settings-app-spec.md` §3.7 を正典とする
     - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
-      `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/sideload-packaging-spec.md` §3.3）と
+      `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/settings-app-spec.md` §3.3）と
       `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
       スコープとする（M30 はこの最小層の上に UI を本格化する）。
     - 共有ユーザーデータの writer 責務は
@@ -324,12 +324,12 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
     - TIP 登録はインストーラのカスタムアクションで HKLM `DllRegisterServer` を呼ぶ
       **per-machine・要昇格**の経路とし、アンインストール時に自動解除する
     - `ITfFnConfigure` からの設定アプリ起動は別プロセス EXE の非同期起動
-      （`docs/sideload-packaging-spec.md` §3.5、正典は `docs/tsf-deep-integration-spec.md` §6）
+      （`docs/settings-app-spec.md` §3.5、正典は `docs/tsf-deep-integration-spec.md` §6）
   - **UI フレームワーク決定**: **WinUI 3（C++/WinRT）**。根拠は
     既存 C++/WinRT スタックとの親和性・Fluent / Mica 標準対応・配布形態
     （MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は
     代替案とする。実機での配布サイズ・初回起動・IPC 連携行数の確証は
-    `gate:human-required` とする。詳細は `docs/sideload-packaging-spec.md` §3.0、選定の経緯は
+    `gate:human-required` とする。詳細は `docs/settings-app-spec.md` §3.0、選定の経緯は
     [`docs/decisions/2026-06-settings-app-ui-framework.md`](../docs/decisions/2026-06-settings-app-ui-framework.md)。
     本ロードマップ内で WinUI 3 採用に言及する箇所（リスク章・M30）は本節を参照する。
   - **設計メモ**: 設定 UI が読み書きするユーザーデータの保存先は M39 で確定
@@ -944,16 +944,16 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体パックは同梱しない
     （同 §14.9）
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
-- **参照仕様**: `docs/sideload-packaging-spec.md` §1
+- **参照仕様**: `docs/msix-packaging-spec.md` §1
 - **補足**:
-  - **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
+  - **実装範囲**: `docs/msix-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
     DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
     operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
   - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
     `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
     MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
     ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke）で検証する。
-    詳細は `docs/sideload-packaging-spec.md` §1.1.1。
+    詳細は `docs/msix-packaging-spec.md` §1.1.1。
 
 ### M29: EV/OV コード署名 CI（TIP バイナリ署名。スタンドアロン MSIX 署名は延期）
 
@@ -987,7 +987,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **受け入れ条件**:
   - 設定アプリで値を変更 → Host が即時反映 or 再起動指示
   - Windows 設定からの「詳細設定」起動で開く（`ITfFnConfigure`）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/app-profile-spec.md` §6（X-2-6）、
+- **参照仕様**: `docs/settings-app-spec.md` §3、`docs/app-profile-spec.md` §6（X-2-6）、
   `docs/learning-data-management-spec.md` §15（X-2-7）、`docs/proofread-view-spec.md` §2（X-3-6）
 - **補足**:
   - **UI フレームワーク**: M11「UI フレームワーク決定」に揃える。
@@ -1041,8 +1041,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     不合格（§1.6.1 (c2)）。DL 受け入れ項目は auto-DL 承認後に適用。
     いずれの分岐でも DL 失敗 / 不一致時は手動配置へフォールバックし Host は
     落ちない（§1.6.1 / M8 / M47 と整合）
-- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
-  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6、`docs/msix-packaging-spec.md` §1.6.1
+  - 実装範囲の正典: `docs/sideload-packaging-spec.md` §5、§6、および `docs/msix-packaging-spec.md` §1.6.1 (b) （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）
 
 ### M33: ETW / WER
 
@@ -1110,7 +1110,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **参照仕様**: `docs/typo-correction-learning-spec.md`
   - 実装範囲の正典: `docs/typo-correction-learning-spec.md` §1〜§8
 - **補足**:
-  - **設定**: 設定アプリの「辞書」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  - **設定**: 設定アプリの「辞書」ペインで編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M36: 新語自動取得
 
@@ -1311,7 +1311,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 品詞フィールド `segments[].pos` / `head_pos` の導出と曖昧性ガードの品詞駆動化（§7.2）
-  - **設定**: 設定アプリの「入力」ペインで編集する（`docs/sideload-packaging-spec.md` §3.2）。
+  - **設定**: 設定アプリの「入力」ペインで編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M60: ローマ字入力中インライン英単語候補
 
@@ -1348,7 +1348,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - 実装範囲の正典: `docs/inline-english-candidate-spec.md` §3〜§8
 - **補足**:
   - **設定**: Zenzai・TSF 深耕・パッケージングに依存しない。設定は設定アプリの「候補」ペインで
-    編集する（`docs/sideload-packaging-spec.md` §3.2）。
+    編集する（`docs/settings-app-spec.md` §3.2）。
 
 ### M61: 自動カッコペアリング（Bracket Auto-Pairing）
 

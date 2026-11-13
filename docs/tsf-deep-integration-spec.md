@@ -803,7 +803,7 @@ legacy との差。Windows 版の通常変換は読み全体を確定するた�
 
 TIP は `settings.json` の変更を読み直して反映する。キーが無い、または bool 以外の値は `true` とする。
 Host はこの設定を読まない。既定を全角にしたので、このキーを書いていない既存の `settings.json` を使う人も
-全角空白になる（設定アプリは既定と同じ値をファイルに書かない。`docs/sideload-packaging-spec.md` §3.6）。
+全角空白になる（設定アプリは既定と同じ値をファイルに書かない。`docs/settings-app-spec.md` §3.6）。
 移行の処理は設けない。
 
 ## 4. IME On/Off 状態管理 (M21 と統合)
@@ -994,7 +994,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 | 直接入力 | ラジオ。「A」なら選択 | 左クリックの Off と同じく表示中の文字列を確定して Off にする（`source` は `langbar_menu`） |
 | ライブ変換 | `liveConversion` の今の値でチェック | 値を反転して settings.json に書き、Host に `UpdateConfig` を送る |
 | 予測変換 | `predictionEnabled` の今の値でチェック | 値を反転して settings.json に書く。`UpdateConfig` は送らない |
-| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイルに加え、`--pane input` で「入力」ペインを開く。`docs/sideload-packaging-spec.md` §3.2） |
+| 設定を開く | 常に有効 | §6 の `ITfFnConfigure::Show` と同じく `LaunchSettingsApplication` で設定アプリを開く（日本語の言語 ID と TIP のプロファイルに加え、`--pane input` で「入力」ペインを開く。`docs/settings-app-spec.md` §3.2） |
 
 入力モードの 3 項目は設定ファイルに触れない。
 
@@ -1002,7 +1002,7 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   アプリごとのプロファイル（`profilesByApp`）はチェックにも書き込みにも使わない。フォーカス中のアプリのプロファイルが
   予測変換を指定している（`app-profile-spec.md` §4。§5 の解決順でそのアプリに当たる層のどれかが、全体設定と同じ値でも `predictionEnabled` を持つ）ときは、チェックは全体設定のままにし、ラベルを
   「予測変換（このアプリはアプリ別の設定）」とする。選んだときに書くのは全体設定の `predictionEnabled` である。
-- 表記: 項目の名前は設定アプリと同じ語にする（`docs/sideload-packaging-spec.md` §3.2「表記規則」）。
+- 表記: 項目の名前は設定アプリと同じ語にする（`docs/settings-app-spec.md` §3.2「表記規則」）。
 - 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
   設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に
   置き換える（`WriteTextFileAtomically`）。ファイルが無ければそのキーだけのファイルを作る。JSON の
@@ -1226,7 +1226,7 @@ COM identity を返す。
 > 受け取り、「詳細設定」が開かない。本実装は TextService が `ITfTextInputProcessorEx` と併せて
 > `ITfFnConfigure` を継承し、`Show` を直接実装する。
 
-> **`Show` を非同期にする理由（`docs/sideload-packaging-spec.md` §3.5 と整合）**:
+> **`Show` を非同期にする理由（`docs/settings-app-spec.md` §3.5 と整合）**:
 > `ITfFnConfigure::Show` の Remarks は「ダイアログを閉じるまで return しない」（短命な
 > モーダル プロパティ シートを想定）だが、本 IME の設定 UI は WinUI 3 の独立した**長命**
 > プロセスである。`Show` を `azookey_settings.exe` 終了までブロックすると、呼び出し元

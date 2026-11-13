@@ -21,7 +21,7 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
 4. 最小差分で実装し、`SettingsDocument` と `LaunchArguments` の単体テストを更新する。
 5. `azookey_settings_persistence_tests`、`azookey_settings_launch_arguments_tests` を実行し、
    Host 側は `host_settings_store_tests`、TIP 側は `tsf_tip_local_settings_tests` へ広げる。
-6. 表示文言、項目、保存形式、起動経路が変わる場合は `docs/sideload-packaging-spec.md` §3.2 と
+6. 表示文言、項目、保存形式、起動経路が変わる場合は `docs/settings-app-spec.md` §3.2 と
    `docs/native-ui-spec.md`、
    機能別 spec の「UI」節を同じ変更で更新する。
 
@@ -33,12 +33,12 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
 - 不正な `settings.json` は quarantine してから保存する既存契約を、無言の上書きに変えない。
 - UI が持つ既定値を schema、sample、runtime と一致させる。UI だけで既定値を決めない。
 - 表示文字列は `Strings/ja-JP` の resw に置き、`x:Uid` で結ぶ。語の表記は
-  `docs/sideload-packaging-spec.md` §3.2「表記規則」に従う。
+  `docs/settings-app-spec.md` §3.2「表記規則」に従う。
 - C++/WinRT と Windows App SDK は `settings-app/` に閉じる。`tsf-tip/` へ持ち込まない。
 - 起動引数は `LaunchArguments` が解釈する（`--langid`、`--profile`、`--pane`、`--proofread-session`）。
   `ITfFnConfigure::Show` は `--langid` と `--profile` を、入力インジケーターのメニューは加えて `--pane` を
   `tsf-tip/src/SettingsLauncher.cpp` が渡す。引数の追加は `LaunchArguments`、`SettingsLauncher`、
-  `docs/sideload-packaging-spec.md` §3.2 を同じ変更で更新する。
+  `docs/settings-app-spec.md` §3.2 を同じ変更で更新する。
 - 「設定」群と「バージョン」のペインは保存バーで保存するまで `settings.json` へ書かない。変更件数は
   `ChangedSettingPaths`、Host の再起動が要る変更は `SettingsRequiringHostRestart` で判定し、
   未保存のまま閉じるときは確認を出す。確定前の `NumberBox` の入力も件数と保存に含め、API キーは

@@ -735,7 +735,7 @@ Backend: auto → CPU
 - **選択モデルをロード**: `LoadModel` IPC を送信、進捗バー表示
 - **ベンチマーク**: `BenchmarkModel` IPC を送信、結果を表示・保存
 
-設定アプリの「AI 変換」ペイン（`sideload-packaging-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
+設定アプリの「AI 変換」ペイン（`settings-app-spec.md` §3.2）が持つ操作は、モデル一覧（`ListModels`）と
 検証結果の表示、ベンチマーク（`BenchmarkModel`。backend は `cpu`）、モデルの選択、`model.benchmarkHistory` の
 表示である。モデルを選ぶと同じペインの「使うモデル」の表示が変わり、`model.selectedPath` は保存バーが
 書く。選択と測定の対象は、`valid` な `gguf` に限る（`onnx_genai` は一覧に出すが選べない）。

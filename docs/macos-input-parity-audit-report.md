@@ -141,7 +141,7 @@ Mac 版のローマ字表、AZIK 表、かな表、`firstClauseResults`、`forge
 | P-20 | 設定キー `inputMode`（hiragana / alnum_half / alnum_full）が文字入力に効かない。カッコ補完と `:` トリガの判定にしか使われず、alnum_full にしても英字は全角にならず、起動時の入力モードにもならない。設定アプリの表示名は「起動時の入力モード」で、利用者に誤った期待を与える。Host も値を読むが使わない | spec と実装の不一致 | 相当なし | `TextService` の `alnum_mode_` は実行時のトグルでだけ変わる | `bracket-pairing-spec.md` §4.4 は定義を legacy-parity-spec に委ねるが、同 spec に `inputMode` は無い。§4.7 は用途をカッコに限る。`tsf-deep-integration-spec.md` §4.2 はオフ→オンでひらがなに初期化すると定める | キーの名前と表示名をカッコ補完用に直す / 起動時のモードとして実装する |
 | P-21 | 選択テキストの AI 変換（英数・かなのダブルタップ）が TIP に無い。core の状態機械はあるが、ダブルタップの検出も `TransformSelectedText` の IPC も無い。spec §4 の割当も Mac と違う（Mac のダブルタップは同じ窓で初期プロンプトだけを変える。spec はかなを「言い換え」の別機能とする。spec の英数キー `VK_OEM_AUTO` は半角/全角キーで、判定間隔は Mac の 0.5 秒に対して 300ms）。Mac のプロンプト窓はプレビューを確かめてから適用する 2 段だが、spec のダイアログは 1 段 | 欠落（M16）＋ spec が Mac と食い違う | `azooKeyMacInputController+SelectedTextTransform.swift`、`PromptInput/*` | `TextService::MapTipKey` が `StartAlnumDouble` / `StartKanaDouble` を落とす | `legacy-parity-spec.md` §4、roadmap M16 | M16 の着手前に §4 の割当・キー・間隔・UI の段階を決め直す |
 | P-22 | 学習の忘却のキー・状態・対象が違う。Mac は Ctrl+Delete（Backspace）で、候補選択中に選択中の候補の記憶を消す。Windows は Ctrl+Shift+Backspace で、入力していないときに直近に確定した組を消す。確定前の候補を忘れさせる手段が無い | 意図した差（legacy 差は未記載） | `UserAction.swift` の Delete、`SegmentsManager.forgetMemory` | `UserActionMap.cpp` の Ctrl+Shift+Back、`TextService::ForgetLastCommit` | `legacy-parity-spec.md` §7 | §7 に legacy との差を書く |
-| P-23 | ユーザー辞書を設定アプリから追加できない。Mac は GUI で追加・編集・削除・書き出しができ、既定で「あずーきー → azooKey」が入っている。Windows の追加手段は開発者向け CLI だけで、v1.0 の「ユーザー辞書を編集」ボタンも設定アプリに無い | v1.0 のボタンは spec と実装の不一致。フル GUI は欠落（v1.x） | `UserDictionaryEditorWindow.swift` | `settings-app/` の画面 | `sideload-packaging-spec.md` §3.7 | ボタンを置く / spec の v1.0 範囲を直す |
+| P-23 | ユーザー辞書を設定アプリから追加できない。Mac は GUI で追加・編集・削除・書き出しができ、既定で「あずーきー → azooKey」が入っている。Windows の追加手段は開発者向け CLI だけで、v1.0 の「ユーザー辞書を編集」ボタンも設定アプリに無い | v1.0 のボタンは spec と実装の不一致。フル GUI は欠落（v1.x） | `UserDictionaryEditorWindow.swift` | `settings-app/` の画面 | `settings-app-spec.md` §3.7 | ボタンを置く / spec の v1.0 範囲を直す |
 | P-24 | 字種の巡回の出力が違う。Mac は打った綴りそのものを出す（大小も打鍵どおり）。Windows はかなからヘボン式の綴りを作り直して大文字にする | 意図した差 | `SegmentsManager.swift` の英数候補 | `core/src/CharacterFormCycle.cpp` | `tsf-deep-integration-spec.md` §3.4 | なし（記録どおり） |
 | P-25 | Shift+英字を日本語モードで打つと、Windows はかなにする（`Apple` →「あっpぇ」。大文字は英語候補のためにだけ保持する）。Mac は表に規則が無ければ大文字のまま残す（推測。表が repo 外） | 記録のない差（Mac 側は推測） | `UserAction.swift` の keyMap | `core/src/RomajiKanaConverter.cpp` | なし | Mac 側を実機で確かめてから決める |
 
@@ -259,7 +259,7 @@ Windows 独自の機能で、既定で ON のまま素の打鍵結果を変え�
 | S-05 | `tsf-deep-integration-spec.md` §8 | UI-less で予測を Suggestion UI へ渡す予定を書くが、§8 を実装範囲に含む milestone が roadmap に無い | P-17 |
 | S-06 | `legacy-parity-spec.md` §4.1 | 英数キーを `VK_OEM_AUTO`（0xF3、`tsf-deep-integration-spec.md` §3.1 では半角/全角）とし、判定間隔を 300ms（Mac は 0.5 秒）、かなのダブルタップを言い換えの別機能とする。いずれも Mac と食い違う | P-21 |
 | S-07 | `bracket-pairing-spec.md` §4.4・§4.7、設定アプリの表示名 | §4.4 は `inputMode` の定義を legacy-parity-spec に委ねるが、同 spec に定義が無い。設定アプリは「起動時の入力モード」と表示するが、文字入力にも起動時のモードにも効かない | P-20 |
-| S-08 | `sideload-packaging-spec.md` §3.7 | v1.0 の「ユーザー辞書を編集」ボタンが設定アプリに無い | P-23 |
+| S-08 | `settings-app-spec.md` §3.7 | v1.0 の「ユーザー辞書を編集」ボタンが設定アプリに無い | P-23 |
 | S-09 | `native-ui-spec.md` §5.1・§5.2・§6 | フェードイン、選択の移動アニメ、UIA イベント、ハイコントラスト用フォントの実装が見つからない | P-33 |
 | S-10 | `legacy-parity-spec.md` §5.4 | カスタム表の書き出しスクリプトの記述があるが、`scripts/` に無い（Phase 7 の予定として書かれている）。カスタム表が内蔵表の促音・`-` の処理を通らないことが書かれていない | P-18 |
 

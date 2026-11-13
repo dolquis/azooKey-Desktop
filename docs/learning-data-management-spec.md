@@ -67,7 +67,7 @@
 - **インポート**: 別環境からの復元（§6）
 - **全削除**: 当該タブのデータを全消去（DPAPI 鍵は維持）
 
-設定アプリの「学習」ペイン（`sideload-packaging-spec.md` §3.2）は、上の図の
+設定アプリの「学習」ペイン（`settings-app-spec.md` §3.2）は、上の図の
 タブのうちストア別の 4 つ（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）、「入力の傾向」、「バックアップ」を
 この順に持つ。
 
@@ -78,7 +78,7 @@
 - 「入力の傾向」タブ: `QueryPersona` の 4 比率と、算出の基になった確定の回数・算出時刻を読み取り専用で示す
   （`rich-features-spec.md` X-2-7）。Host が capability `persona` を告知しないときは「この変換エンジンは未対応です」と示す。
 - ユーザー辞書のタブだけは、上の操作に加えて「読み」「語」の 2 欄と「追加」ボタンを持つ
-  （`sideload-packaging-spec.md` §3.7）。両欄の前後の空白（全角を含む）を除き、読みのカタカナを
+  （`settings-app-spec.md` §3.7）。両欄の前後の空白（全角を含む）を除き、読みのカタカナを
   ひらがなに直してから `AddUserWord` を送る。どちらかが空なら送らない。成功したら追加した読みで
   一覧を検索し直す。失敗は応答の `error`（`busy` / `lock_failed` / `load_failed` / `save_failed` /
   `unavailable` / `invalid_request` / `not_authenticated`）ごとの文言で示す。利用者が明示的に行う編集なので、
@@ -821,7 +821,7 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
 ## 14. 共有ユーザーデータの writer 責務
 
 本節は `docs/windows-tsf-host-architecture.md`「設定（SettingsStore）」「共有ユーザーデータの writer 責務」、
-`docs/sideload-packaging-spec.md` §3.3・§3.7、`docs/bracket-pairing-spec.md`、
+`docs/settings-app-spec.md` §3.3・§3.7、`docs/bracket-pairing-spec.md`、
 `docs/handoff/human-gate-batch-runbook.md`、`plans/windows-port-roadmap.md` M11 から参照される。
 対象には学習データ以外の共有ファイル（`settings.json`、`host_run_state.txt`）も含む。
 writer を 1 か所で列挙しないと、ロックを取らない書き手を見落とすためである。
@@ -842,7 +842,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。
 
-- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の学習ペインのユーザー辞書タブ（`docs/sideload-packaging-spec.md` §3.7）も M30 / M49 の辞書 GUI も、Host への IPC（`AddUserWord` / `RemoveUserWord` と §4 のストア操作）を経由する。
+- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の学習ペインのユーザー辞書タブ（`docs/settings-app-spec.md` §3.7）も M30 / M49 の辞書 GUI も、Host への IPC（`AddUserWord` / `RemoveUserWord` と §4 のストア操作）を経由する。
   この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json.enc` の直接 writer にはならない。
 - したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。

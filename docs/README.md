@@ -44,7 +44,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド。§4 の推論エンジン選定は M8 と共有 |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。§4.4 は M16 の Magic Conversion プロンプト、§4.5 は M34 の API キー入力、§4.6 は M53 の設定アプリの辞書ライセンス導線 |
-| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI・設定アプリ（M11 / M12）、Phase 7（M28〜M30、M32〜M34）の配布・署名・更新・観測。設定アプリのナビゲーション（ペインの構成と保存バー）と表示文字列の表記規則は §3.2 |
+| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI（M11 / M12）、Phase 7（M28〜M30、M32〜M34）の配布・署名・更新・観測。設定アプリの §3 は転送表で下の spec へ |
+| [`settings-app-spec.md`](settings-app-spec.md) | M11 / M30 設定アプリ（構成、ナビゲーション、Host との IPC、設定キーの確定、v1.0 最小機能）。ペインの構成と保存バー、表示文字列の表記規則は §3.2 |
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、IPC、観測性、Host 可用性、診断基盤。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
 | [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層。§15 は転送表で下の spec へ） |
@@ -113,11 +114,11 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`decisions/2026-05-20-zenzai-engine-route.md`](decisions/2026-05-20-zenzai-engine-route.md) | 決定記録 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md)「決定（ADR 要旨）」、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3 |
 | [`decisions/2026-06-11-candidate-ui-coexistence.md`](decisions/2026-06-11-candidate-ui-coexistence.md) | 決定記録 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) §2.8〜§2.11、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M5 |
 | [`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0 |
-| [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.0 |
+| [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.0 は転送表で `settings-app-spec.md` へ） |
 | [`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §2.0 |
 | [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11 |
 | [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §4.7 |
-| [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3、[`sideload-packaging-spec.md`](sideload-packaging-spec.md) §3.7、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
+| [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3、[`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.7 は転送表で `settings-app-spec.md` へ）、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
 | [`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.1・§4.2.1.1 |
 | [`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) | 決定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.2 |
 | [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11.2.1 |

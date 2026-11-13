@@ -227,6 +227,13 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_ipc_connection_state_tests tests/ipc_connection_state_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_handshake_log_tests tests/handshake_log_test.cpp TIMEOUT 60)
   add_tsf_tip_unit_test(tsf_tip_ipc_reconnect_backoff_tests tests/ipc_reconnect_backoff_test.cpp)
+  # The worker against a real Host process that is killed and started again
+  # (DEV-1960). The Host runs on its own pipe name, token and data root.
+  add_tsf_tip_unit_test(tsf_tip_host_process_reconnect_tests tests/host_process_reconnect_test.cpp
+    TIMEOUT 120)
+  target_compile_definitions(tsf_tip_host_process_reconnect_tests PRIVATE
+    HOST_RECONNECT_TEST_EXE="$<TARGET_FILE:azookey_inference_host>")
+  add_dependencies(tsf_tip_host_process_reconnect_tests azookey_inference_host)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
     LABEL tsf-com
     TIMEOUT 15)

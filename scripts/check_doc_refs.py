@@ -33,13 +33,16 @@ Rules:
    and a spec name wrapped across comment lines is joined first. A run such as
    `§3、§4.2` after one document checks every number, and `同 §N` reuses the
    document named last before it in the same paragraph (never across table
-   rows). A short name counts too (`app-profile §3.1`) when it resolves to
-   exactly one document: `docs/<name>-spec.md`, `docs/<name>.md`,
-   `docs/handoff/<name>.md`, or the only `docs/<name>-*-spec.md` (for names of
-   four letters or more). A name that resolves to none is prose and is ignored,
-   and so are `README`, `AGENTS` and `CLAUDE`, which also name root files. An
-   ordinary word that happens to be the start of exactly one `docs/<word>-*-spec.md`
-   is read as that document, so write `§` after a plain word only for a spec.
+   rows). A short name counts too (`app-profile §3.1`): it stands for
+   `docs/<name>-spec.md`, `docs/<name>.md`, `docs/handoff/<name>.md`, or, when
+   none of those exists, every `docs/<name>-*-spec.md` (for names of four
+   letters or more). One document is checked as usual. Two or more make the
+   name ambiguous, and the reference is reported until it is written with the
+   `-spec` name (otherwise it would silently stop being checked when a spec is
+   split). A name that stands for none is prose and is ignored, and so are
+   `README`, `AGENTS` and `CLAUDE`, which also name root files. An ordinary
+   word that happens to be the start of a `docs/<word>-*-spec.md` is read as
+   that document, so write `§` after a plain word only for a spec.
    A section the document no longer holds resolves through its forwarding
    table (rule 6).
 4. Allowlist. A reference that does not exist yet but is correct (a planned
@@ -77,7 +80,8 @@ Rules:
    table, and the destination must hold the resulting number in its headings.
    A destination may forward again (at most 3 hops; a cycle fails). Every row
    is checked: the destination must hold the key's own number (or `M`) in its
-   headings.
+   headings. A heading holds one table, written without a blank line inside; a
+   second table needs a `転送表` heading of its own.
 7. Item. An `X-N-M` item number (rich-features) written anywhere in the tracked
    files with a text suffix listed in ITEM_SCAN_SUFFIXES (docs, code comments,
    skills, schemas; not the frozen docs, not scripts/tests/, not the
@@ -89,9 +93,11 @@ Rules:
    (no document named) in a group member must name a heading of any member.
    A `§` is not looked at when it may point at another document: a document
    name (`-spec`, `.md`, `docs/`, `plans/`, `roadmap`, `architecture`) comes
-   earlier on the line, an ASCII word (`M60`, `app-profile`, `DEV-1975`, also
-   at the end of the previous line when the `§` starts the line) comes right
-   before it, or a `同` or a list separator comes right before it. In a list
+   earlier on the line, an ASCII word (`M60`, `app-profile`, `DEV-1975`) comes
+   right before it, or a `同` or a list separator comes right before it. When
+   the `§` starts the line, the end of the previous non-blank line stands in:
+   a document name in its last 80 characters, or an ASCII word at its end,
+   also skips the `§`. In a list
    (`§4、§5`) the head of the list decides for all of it. A leftover false
    positive takes a `<!-- doc-refs:allow -->` marker. Specs outside a group
    are not checked for bare `§N`.
@@ -312,7 +318,7 @@ class Repository:
     forwarding_lines: dict[str, set[int]] = field(default_factory=dict)
     # Documents that share one `§` namespace: {member: all members of its groups}.
     groups: dict[str, frozenset[str]] = field(default_factory=dict)
-    short_documents: dict[str, str | None] = field(default_factory=dict)
+    short_documents: dict[str, list[str]] = field(default_factory=dict)
 
     def exists(self, path: str) -> bool:
         return path in self.files or path in self.directories
@@ -707,6 +713,7 @@ def section_findings(repo: Repository, text: str, source: str, is_doc: bool) -> 
         )
         for _, match in events:
             numbers = [match.group("number")]
+            ambiguous: list[str] = []
             if match.re is SAME_DOCUMENT_PATTERN:
                 document = last_document
             else:
@@ -714,9 +721,11 @@ def section_findings(repo: Repository, text: str, source: str, is_doc: bool) -> 
                     # `-spec` names belong to DOCUMENT_THEN_SECTION_PATTERN.
                     if match.group("name").endswith("-spec"):
                         continue
-                    document = resolve_short_document(repo, match.group("name"))
-                    if document is None:
+                    candidates = short_document_candidates(repo, match.group("name"))
+                    if not candidates:
                         continue
+                    document = candidates[0] if len(candidates) == 1 else None
+                    ambiguous = candidates if len(candidates) > 1 else []
                 else:
                     if is_doc and "section" in match.group(0):
                         continue
@@ -726,6 +735,19 @@ def section_findings(repo: Repository, text: str, source: str, is_doc: bool) -> 
                 while chained := CHAINED_SECTION_PATTERN.match(rest):
                     numbers.append(chained.group("number"))
                     rest = rest[chained.end():]
+            if ambiguous:
+                # A short name that several documents share would silently stop being
+                # checked, so it is reported until it is written with the `-spec` name.
+                named = "、".join(f"`{path}`" for path in ambiguous)
+                for section in numbers:
+                    results.append(
+                        (
+                            number,
+                            f"{match.group('name')} §{section}",
+                            f"曖昧な短縮名（候補 {named}）。`-spec` 付きの文書名で書く",
+                        )
+                    )
+                continue
             if document is None:
                 continue
             for section in numbers:
@@ -794,25 +816,26 @@ def resolve_section(
     return f"{UNRESOLVED_SECTION}（転送先 `{rule.destination}` に §{target} が無い）"
 
 
-def resolve_short_document(repo: Repository, name: str) -> str | None:
-    """The one document a short name (`app-profile`) stands for, or None."""
+def short_document_candidates(repo: Repository, name: str) -> list[str]:
+    """The documents a short name (`app-profile`) may stand for: none is prose, one is
+    the document, several make the name ambiguous."""
     if name.upper() in SHORT_NAME_ROOT_DOCUMENTS:
-        return None
+        return []
     if name not in repo.short_documents:
-        exact = [
+        found = [
             path
             for path in (f"docs/{name}-spec.md", f"docs/{name}.md", f"docs/handoff/{name}.md")
             if path in repo.files
         ]
-        if not exact and len(name) >= SHORT_NAME_MIN_PREFIX:
-            exact = sorted(
+        if not found and len(name) >= SHORT_NAME_MIN_PREFIX:
+            found = sorted(
                 path
                 for path in repo.files
                 if path.startswith(f"docs/{name}-")
                 and path.endswith("-spec.md")
                 and path.count("/") == 1
             )
-        repo.short_documents[name] = exact[0] if len(exact) == 1 else None
+        repo.short_documents[name] = found
     return repo.short_documents[name]
 
 

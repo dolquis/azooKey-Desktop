@@ -547,6 +547,15 @@ class ForwardingTableTest(unittest.TestCase):
         split = "# Old\n\n## 転送表\n\n" + row + "\n| §4 | `docs/new-spec.md` |\n"
         problems = problems_for({**files, "docs/old-spec.md": split})
         self.assertTrue(any("別の表が続く" in p for p in problems), problems)
+        # A second table is fine under a `転送表` heading of its own.
+        second = "| 旧節 | 移動先 |\n|---|---|\n| §4 | `docs/new-spec.md` |\n"
+        two_headings = "# Old\n\n## 転送表\n\n" + row + "\n## 15. 転送表\n\n" + second
+        files_two = {
+            **files,
+            "docs/old-spec.md": two_headings,
+            "docs/guide.md": "old-spec §2.1 old-spec §4\n",
+        }
+        self.assertEqual(problems_for(files_two), [])
 
     def test_missing_section_names_the_last_destination(self) -> None:
         def stub(destination: str | None) -> str:
@@ -672,13 +681,31 @@ class ShortNameReferenceTest(unittest.TestCase):
         ):
             self.assertTrue(any(reference in p for p in problems), (reference, problems))
 
-    def test_names_that_resolve_to_nothing_or_to_two_are_prose(self) -> None:
+    def test_names_that_resolve_to_nothing_are_prose(self) -> None:
         files = {
             "docs/barz-a-spec.md": "# A\n",
-            "docs/barz-b-spec.md": "# B\n",
-            "docs/guide.md": "M60 §3 and §4、barz §1、the model §2、abc §3、tsf-tip §5\n",
+            "docs/guide.md": "M60 §3 and §4、the model §2、abc §3、tsf-tip §5\n",
         }
         self.assertEqual(problems_for(files), [])
+
+    def test_a_name_shared_by_several_documents_is_ambiguous(self) -> None:
+        files = {
+            "docs/barz-a-spec.md": "# A\n\n## 1. One\n",
+            "docs/dual-spec.md": "# Dual\n\n## 1. One\n",
+            "docs/dual.md": "# Dual\n",
+            "docs/guide.md": "barz §1 と同 §2、barz §3、§4、dual §1\n",
+        }
+        # One candidate: checked as usual.
+        self.assertEqual(problems_for({**files, "docs/guide.md": "barz §1\n"}), [])
+        # A second spec with the same prefix: the reference is reported, not skipped.
+        files["docs/barz-b-spec.md"] = "# B\n\n## 1. One\n"
+        problems = problems_for(files)
+        self.assertEqual(len(problems), 4, problems)
+        for reference in ("`barz §1`", "`barz §3`", "`barz §4`", "`dual §1`"):
+            self.assertTrue(any(reference in p for p in problems), (reference, problems))
+        self.assertTrue(all("曖昧な短縮名" in p for p in problems), problems)
+        self.assertTrue(any("`docs/barz-a-spec.md`、`docs/barz-b-spec.md`" in p for p in problems))
+        self.assertTrue(any("`docs/dual-spec.md`、`docs/dual.md`" in p for p in problems))
 
     def test_prefix_needs_four_letters_and_root_names_stay_prose(self) -> None:
         files = {

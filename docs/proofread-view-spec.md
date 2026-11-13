@@ -9,6 +9,7 @@
 - `docs/tsf-deep-integration-spec.md`（再変換の候補窓、固定パス）
 - `docs/sideload-packaging-spec.md`（設定アプリの起動と整合性レベル）
 - `plans/windows-port-roadmap.md` M24 / M30
+- `legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`（参照のみ。ライブ変換・予測候補・誤変換訂正の旧実装は、独立した `PredictionEngine.swift` / `CorrectionEngine.swift` ではなく `SegmentsManager` 内にある）
 
 > 本書は、文書内の不自然な確定箇所を LLM で検出し、設定アプリの「校正」ペインに一覧して、
 > アプリ側の該当範囲を選択・再変換するまでの契約を定める正典仕様である。
@@ -21,7 +22,7 @@
 
 | 節 | マイルストーン |
 |---|---|
-| §1 | M24 の後（`DetectAnomalies` の検出） |
+| §1 | M24（横断項目。`DetectAnomalies` の検出） |
 | §2 | M30（設定アプリの「校正」ペイン） |
 
 ## 1. 意味的訂正（検出の入口）

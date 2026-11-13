@@ -437,7 +437,7 @@ JIS / US 配列の隣接（§12.4.2）は、この初期値の上に載る。
 | 同一指 substitution | 0.6（−0.4 ボーナス） |
 
 QWERTY 隣接：`q-w`, `w-e`, ..., `a-s`, `s-d`, ... 全 ASCII 小文字ペアを
-`core/src/QwertyAdjacency.cpp`（M17 の横断 X-3-1 で新設する）に静的テーブルとして持つ。
+`core/src/QwertyAdjacency.cpp`（M17 の横断項目で新設する）に静的テーブルとして持つ。
 
 適用順序:
 

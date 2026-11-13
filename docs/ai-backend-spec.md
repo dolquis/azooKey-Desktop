@@ -87,7 +87,7 @@
 |---|---|---|---|---|
 | **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト（or キャレット段落） | `aiBackend` 設定値（`openai` 可） | 同期（ダイアログ完了で結果反映） |
 | **M58-C** AI 整文 `ai-cleanup` | 一括変換確定（ユーザー明示） | 蓄積全文かな + 生ローマ字 | `aiBackend` 設定値（`openai` / `local-zenzai`） | 同期（変換確定経路） |
-| **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景 push、入力を阻害しない） |
+| **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景、入力を阻害しない） |
 
 **設計含意**: M16 / M58-C はユーザーの明示操作で起動するため外部 AI（`openai`）への
 送信が妥当。一方 X-3-3 は**毎 commit 自動発火**するため、確定テキストを毎回外部 AI に
@@ -400,7 +400,7 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
   800 msは1変換のハード予算の上限を決める設計値であり、request deadlineではない。
   M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
   全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
-- X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。
+- X-3-3 は非同期の背景要求であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）
 

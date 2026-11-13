@@ -255,6 +255,23 @@ const std::vector<UneditedSetting>& UneditedSettings() {
       {"reranker.nllFailureThreshold", "no dedicated UI (neural-reranker-spec B9)"},
       {"safeMode.enteredAt", "written by the Host; shown only"},
       {"safeMode.lastCrashCount", "written by the Host; shown only"},
+      {"typoCorrection.mode",
+       "written with typoCorrectionMode when the pane changes it (typo-correction-learning-spec "
+       "12.14)"},
+      {"typoCorrection.enabled",
+       "kept on save; no v2 control yet (typo-correction-learning-spec "
+       "12.14)"},
+      {"typoCorrection.learnPersonalPatterns",
+       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.keyboardLayout",
+       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.maxReadingHypotheses",
+       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.minConfidenceForRanking",
+       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.minConfidenceForTopCandidate",
+       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.disableInSecretApps", "fixed to true (typo-correction-learning-spec 12.14)"},
   };
   return settings;
 }

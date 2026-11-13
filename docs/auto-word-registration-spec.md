@@ -358,7 +358,7 @@ M32（自動更新）の `UpdateChecker.cpp` と HTTP DL + SHA256 検証パタ�
 共通ヘルパ `inference-host/include/azookey/host/HttpDownloader.h` と
 `inference-host/src/HttpDownloader.cpp` を `UpdateChecker`（M32）と
 `TrendingWordFetcher`（M36-B）で共有する。**`HttpDownloader` は M32 が新設し
-（M32 は自動更新 §6 に加え `docs/sideload-packaging-spec.md` §1.6.1 (b) の初回
+（M32 は自動更新 §6 に加え `docs/msix-packaging-spec.md` §1.6.1 (b) の初回
 モデル DL でも利用）、M36-B はそれを再利用する**（依存順は M32 → M36-B。
 `plans/windows-port-roadmap.md` の M32 / M36-B と整合）。
 
@@ -855,7 +855,7 @@ target を達成可能な scoring 経路を確保する。
 | `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず SHA256 検証 DL（既定無効）。取り込み経路は §14.10 の neologd pack follow-up（M36-B とは別作業）。DL 時に上流ライセンス/帰属を提示 |
 | `named_entity_lexicon` | Wikidata（CC0）+ GeoNames（CC-BY-4.0）+ 日本郵便 郵便番号データ | CC0 / CC-BY-4.0 / 権利主張なし | **同梱可**（curated 派生） | Wikidata=CC0（人名/組織/製品 + 読み）。GeoNames=CC-BY-4.0（**帰属必須**）。CC-BY-SA の Wikipedia 本文は **不使用**（share-alike 回避）。郵便データは権利主張なし（帰属歓迎） |
 | `technical_terms_lexicon` | プロジェクト自作 + CC0/CC-BY 上流 | Apache-2.0（自作分）/ 上流に従う | **同梱可** | リポジトリ内で手入れ。外部由来分は上流ライセンス・帰属を ThirdPartyNotices に記載 |
-| `user_dictionary` / `auto_words` / `app_specific_dictionary` | ユーザー生成 | N/A（ユーザーデータ） | **非配布**（ローカルのみ） | 配布物に含めない。`%LOCALAPPDATA%` に保存（`docs/sideload-packaging-spec.md` §1.4 / §9） |
+| `user_dictionary` / `auto_words` / `app_specific_dictionary` | ユーザー生成 | N/A（ユーザーデータ） | **非配布**（ローカルのみ） | 配布物に含めない。`%LOCALAPPDATA%` に保存（`docs/msix-packaging-spec.md` §1.4 / §9） |
 
 一次情報（取り込み時に再検証する URL）:
 

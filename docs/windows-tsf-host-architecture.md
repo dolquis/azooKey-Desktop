@@ -31,7 +31,7 @@ Host が終了した場合は、上限付きの指数バックオフで再起動
 HKCU `Run` はスクリプトを実行したユーザーだけを provision する。
 別の Windows アカウントで TIP を使う場合は、そのアカウントでも開発登録の per-user 手順を実行する必要がある。
 配布パッケージも各ユーザーのログオン時に supervisor を起動する経路を用意し、machine-wide の TIP 登録だけで Host が利用可能になるとは扱わない。
-CPU 版と Vulkan 版のどちらの Host 実行体を起動するかの選択規則は、`docs/sideload-packaging-spec.md` §1.6.3 が正典である。
+CPU 版と Vulkan 版のどちらの Host 実行体を起動するかの選択規則は、`docs/msix-packaging-spec.md` §1.6.3 が正典である。
 
 ### Host CLI 引数
 
@@ -316,7 +316,7 @@ Phase 5 以降が足すモジュールのファイル構成と挙動は、機能
 | TSF 深部（再変換、UI-less、設定アプリ起動） | `docs/tsf-deep-integration-spec.md` |
 | Copilot+ PC / NPU（backend 選択、mmap ロード、電源監視） | `docs/copilot-pc-backend-spec.md` |
 | UI モダン化（テーマ色、DPI、描画エンジン） | `docs/native-ui-spec.md` |
-| サイドロード配信（設定アプリ、MSIX / MSI、更新確認、ETW、crash 収集、DPAPI） | `docs/sideload-packaging-spec.md`、設定アプリは `docs/settings-app-spec.md` |
+| サイドロード配信（設定アプリ、MSIX / MSI、更新確認、ETW、crash 収集、DPAPI） | `docs/sideload-packaging-spec.md`、MSIX は `docs/msix-packaging-spec.md`、設定アプリは `docs/settings-app-spec.md` |
 
 「予定」のファイルが存在するかは、各 spec と `plans/windows-port-roadmap.md` の該当マイルストーンが定める。
 

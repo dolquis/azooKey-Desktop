@@ -8,11 +8,11 @@
       `docs/neural-reranker-nll-spec.md`（Track B）、
       `docs/zenzai-inference-spec.md`
 
-## 0. 本書が扱う 2 トラック
+## 0. 2 トラックと本書の範囲
 
-本書は「候補を並べ替える（生成しない）」層の正典であり、独立した 2 つの
-リランカートラックを収容する。両者は**別モデル・別実装・別スケジュール**であり、
-一方の完了を他方の前提にしない。
+「候補を並べ替える（生成しない）」層には、独立した 2 つのリランカートラックがある。
+本書は Track A を定め、Track B は `docs/neural-reranker-nll-spec.md` が定める。
+両者は**別モデル・別実装・別スケジュール**であり、一方の完了を他方の前提にしない。
 
 | トラック | 章 | 対象 | スコア源 | 前提 |
 |---|---|---|---|---|
@@ -21,7 +21,7 @@
 
 - 章番号は分離する。他ドキュメントからの既存参照（`neural-reranker-spec` §4 /
   §7 / §9 等）はすべて Track A を指す。Track B は `docs/neural-reranker-nll-spec.md` の
-  `§B<n>` で参照する。Track B の章は、旧版では本書の後半にあった。
+  `§B<n>` で参照する。
 - Track B の Release 測定記録は `docs/decisions/2026-09-08-nll-release-measurement.md` にある
   （結論の正典は `docs/neural-reranker-nll-spec.md` §B12）。
 - 両トラックの接点は**スコア統合レイヤのみ**（`docs/neural-reranker-nll-spec.md` §B6）。Track B は Track A の

@@ -1563,7 +1563,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M52（変換品質ベンチ）。
   - 英語区間は英字のまま Zenzai の入力に入れるため、`core/` の `LiveConversionChunker` の
     Verbatim 分類は M63 では使わない（spec §7）。
-  - NllScorer は言語判別に使わず、Track B の適用範囲（同 §B1・§B5）は変えない（spec §3）。
+  - NllScorer は言語判別に使わず、Track B（`docs/neural-reranker-nll-spec.md` §B1・§B5）の適用範囲は変えない（spec §3）。
 - **変更対象**（spec の各章）: `tsf-tip/src/TextService.cpp`（生ローマ字の送信条件、ライブ変換要求、
   区間ごとの確定）、`core/`（日英分割器）、`ipc/include/azookey/ipc/Payloads.h` と
   `ipc/src/Payloads.cpp`（`QueryLiveConversion` / `QueryCandidates` / `LiveSegment` の拡張）、
@@ -1590,7 +1590,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   `docs/inline-english-candidate-spec.md`（M60）、`docs/romaji-batch-conversion-spec.md`
   §4.1・§7（生ローマ字と chunk）、`docs/zenzai-inference-spec.md` §3・§8、
   `docs/dev-infrastructure-spec.md` §8.5.2（ライブ変換の timeout）、
-  `docs/neural-reranker-spec.md` Track B、`docs/mixed-english-input-feasibility-report.md`
+  `docs/neural-reranker-nll-spec.md`（Track B）、`docs/mixed-english-input-feasibility-report.md`
 - **補足**:
   - **ユーザー可視挙動の要求**（仕様化の前提として固定する）:
     1. 英語の可能性が高い語は、ライブ変換と第 1 候補で英字になる。日本語の可能性が高い語は
@@ -2090,15 +2090,15 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/auto-word-registration-spec.md`（M36-A/B 改訂 + M53 追補）
 > - `docs/user-learning-enhancement-spec.md`（M54）
 > - `docs/typo-correction-learning-spec.md`（M35 改訂 + M55 追補）
-> - `docs/neural-reranker-spec.md`（M56 = Track A。同書 Track B は M 番号を
->   持たない NllScorer トラック）
+> - `docs/neural-reranker-spec.md`（M56 = Track A）
+> - `docs/neural-reranker-nll-spec.md`（Track B。M 番号を持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
 >
-> `docs/neural-reranker-spec.md` は 2 トラックを収容する。Track A（§1〜§14）が
-> 本トラックの M56、Track B（§B1〜§B12）が **NllScorer 型ニューラルリランク**
+> リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
+> 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
 > （ロード済み Zenzai で辞書由来候補を NLL リランク。karukan 設計参照）である。
 > Track B は M8 のみを前提とし M52〜M55 に依存しないため、本トラックの M 番号を
-> 与えず独立したトラックとして扱う。既定 OFF で挙動不変（同書 §B9）。
+> 与えず独立したトラックとして扱う。既定 OFF で挙動不変（Track B §B9）。
 
 ### M52: 変換品質評価ベンチ
 
@@ -2368,6 +2368,6 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
 1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の
-順で効果を測定しながら進める。例外は `docs/neural-reranker-spec.md` Track B
+順で効果を測定しながら進める。例外は `docs/neural-reranker-nll-spec.md`（Track B）
 （NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
 （前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。

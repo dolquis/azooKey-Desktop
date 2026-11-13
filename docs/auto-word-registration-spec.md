@@ -17,7 +17,7 @@
 | §3〜§4、§6〜§9 | M36-A |
 | §5 | M36-B |
 | §14 | M53（辞書層の論理層） |
-| §15 | M53（system 辞書の物理層。`docs/azdic-physical-layer-spec.md` へ移動。「転送表」） |
+| §15 | M53（system 辞書の物理層。`docs/azdic-physical-layer-spec.md` へ移動。転送表を参照） |
 
 §14 以降は M53 の追補章で、`AutoWordStore` を **多層 DictionaryStore**
 の 1 レイヤとして統合し、辞書層全体（base / sudachi / neologd /

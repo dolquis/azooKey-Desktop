@@ -1782,7 +1782,7 @@ self-contained 設定アプリに同じ検査を実行する（実行条件は `
 base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ、その帰属を
 `%ProgramFiles%\azooKey\ThirdPartyNotices.txt` へ配置する。Host はこの `dict` だけを
 探索する。同梱する層、配布判定、取得元とサイズ予算の正典は
-`docs/auto-word-registration-spec.md` §14.9 / §14.10 / §15.9 / §15.12 であり、本節は
+`docs/auto-word-registration-spec.md` §14.9 / §14.10 と `docs/azdic-physical-layer-spec.md` §15.9 / §15.12 であり、本節は
 配置先だけを持つ。辞書は release workflow が `dictbuild/build_bundled.py` で SHA256 固定の
 上流とリポジトリ内の自作seedから生成し、`BundledDictionaryDir` property で MSI へ渡す。
 2回生成の再現性検査は `azdic-physical-layer-spec.md` §15.12 を正典とする。`dictbuild/check_bundle.py` は

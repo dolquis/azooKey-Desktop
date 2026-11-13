@@ -163,8 +163,13 @@ TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndepend
   EXPECT_TRUE(reader.AiSnapshot().prediction_allowed);
 
   Write(R"({"predictionEnabled":false,"privacy":{"mode":"custom","custom":{"prediction":false}}})");
-  ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().prediction_allowed; }));
-  EXPECT_FALSE(reader.PredictionEnabledSnapshot());
+  // The truncate of an in-place write can be reloaded before its content lands. That
+  // empty read fails closed (permission off) but keeps predictionEnabled at its default
+  // (on), so waiting for the permission alone could stop on it. Wait for both values,
+  // permission first: a later read of the UI switch can then only see the final file.
+  ASSERT_TRUE(WaitUntil([&] {
+    return !reader.AiSnapshot().prediction_allowed && !reader.PredictionEnabledSnapshot();
+  }));
 
   Write(R"({"predictionEnabled":true,"privacy":{"mode":"custom","custom":{"prediction":true}}})");
   ASSERT_TRUE(WaitUntil([&] {

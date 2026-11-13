@@ -303,7 +303,7 @@ Magic Conversion（`docs/ai-backend-spec.md` の M16）の指示を入れるプ�
 
 別配布の `neologd_lexicon` pack の上流ライセンスと帰属は `ThirdPartyNotices.txt` に含めず、
 「辞書」ペインで pack を有効にするときに表示し、同意を得る。表示内容と同意の扱いの正典は
-`docs/auto-word-registration-spec.md` §15.14「設定アプリでの提示と同意」とする。
+`docs/azdic-physical-layer-spec.md` §15.14「設定アプリでの提示と同意」とする。
 
 ## 5. アクセシビリティ
 

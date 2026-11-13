@@ -1490,7 +1490,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   キーを持たない**。モデルロードに影響するキー（`backendPreference` / `epPreference` / `model.*`）は
   Host 内部の推論エンジン再ロードで反映する（`model-management-spec.md` §5.3、`model.autoLoadOnHostStart`）。
   それ以外は次回変換から即時反映する。例外は `dictionary.neologdEnabled` を偽から真にする変更で、
-  Host は `neologd_lexicon` pack を起動時にだけ取得するため（`auto-word-registration-spec.md` §15.14）、
+  Host は `neologd_lexicon` pack を起動時にだけ取得するため（`azdic-physical-layer-spec.md` §15.14）、
   反映は Host の再起動後になる。設定アプリはこの変更を保存したときに、サインアウトして再度サインイン
   すると反映される旨を表示する（Host はログオン時に起動する。§1.7）。再起動を要する変更の判定は
   設定アプリが持つ静的な分類で行い、`UpdateConfig` の応答には含めない。
@@ -1641,7 +1641,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
 | `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。§6） |
-| `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
+| `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`azdic-physical-layer-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-nll-spec.md` §B9） |
@@ -1782,10 +1782,10 @@ self-contained 設定アプリに同じ検査を実行する（実行条件は `
 base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ、その帰属を
 `%ProgramFiles%\azooKey\ThirdPartyNotices.txt` へ配置する。Host はこの `dict` だけを
 探索する。同梱する層、配布判定、取得元とサイズ予算の正典は
-`docs/auto-word-registration-spec.md` §14.9 / §14.10 / §15.9 / §15.12 であり、本節は
+`docs/auto-word-registration-spec.md` §14.9 / §14.10 と `docs/azdic-physical-layer-spec.md` §15.9 / §15.12 であり、本節は
 配置先だけを持つ。辞書は release workflow が `dictbuild/build_bundled.py` で SHA256 固定の
 上流とリポジトリ内の自作seedから生成し、`BundledDictionaryDir` property で MSI へ渡す。
-2回生成の再現性検査は `auto-word-registration-spec.md` §15.12 を正典とする。`dictbuild/check_bundle.py` は
+2回生成の再現性検査は `azdic-physical-layer-spec.md` §15.12 を正典とする。`dictbuild/check_bundle.py` は
 MSI をビルドする前に、standalone の `neologd_lexicon` pack の混入、層 ID とファイル名の不一致、
 `ThirdPartyNotices.txt` の帰属欠落、`Package.wxs` の同梱一覧と生成物の差を検出して失敗させる。
 本節の帰属文書の配置先は、設定アプリのライセンス導線（`native-ui-spec.md` §4.6）から参照される。

@@ -1022,8 +1022,8 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   Host が同一 surface の候補を統合するときも、辞書由来の `Technical` を無タグ・
   `English` の勝者へ引き継ぐ。採用する score / reading / source と予測の出所別枠は変えず、
   表示上限や辞書追加枠の外にある取得済み辞書候補からもタグを補完する。
-- **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
-  X-2-3 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
+- **候補タグは単一（スカラ）**。候補モデルは `docs/legacy-parity-spec.md`
+  §3.9 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
   複数行に該当する候補（例 "TensorRT" = `Technical` かつ surface=ASCII）には
   **辞書 category から付与した `Technical` を保持**する。既存タグの保持と
   未付与候補の文体判定・English fallback は **app-profile-spec §7** を正典とする。

@@ -141,8 +141,8 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `ExportLearningData` | `docs/learning-data-management-spec.md` §4.3 |
 | `ImportLearningData` | `docs/learning-data-management-spec.md` §4.4 |
 | `ResetLearningStore` | `docs/learning-data-management-spec.md` §4.6 |
-| `QueryPersona` | `docs/rich-features-spec.md` X-2-7 |
-| `DetectAnomalies` | `docs/rich-features-spec.md` X-3-6 |
+| `QueryPersona` | `docs/learning-data-management-spec.md` §15 |
+| `DetectAnomalies` | `docs/proofread-view-spec.md` §2.9 |
 | `FetchCatalogModel` | `docs/model-management-spec.md` §4.4 |
 | `QueryCatalogFetch` | `docs/model-management-spec.md` §4.4 |
 | `CancelCatalogFetch` | `docs/model-management-spec.md` §4.4 |
@@ -151,11 +151,11 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 `MessageType` に無く、spec が定義を持つ予定の型は次の 2 つである。enum へ足すときに上の表へ移す。
 
 - `TransformSelectedText`（予定。M16）: `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4
-- `RequestPostCommitLint`（予定。横断 X-3-3）: `docs/rich-features-spec.md` X-3-3、`docs/ai-backend-spec.md` §4.3
+- `RequestPostCommitLint`（予定。横断 X-3-3）: `docs/ai-backend-spec.md` §4.3
 
 校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session
 （`ipc/include/azookey/ipc/ProofreadSession.h`）は Host の IPC ではなく、TIP が押下ごとに作る
-使い捨ての pipe であり、`MessageType` に含めない（`docs/rich-features-spec.md` X-3-6）。
+使い捨ての pipe であり、`MessageType` に含めない（`docs/proofread-view-spec.md` §2.4）。
 
 ### 型ごとの処理規則
 
@@ -312,7 +312,8 @@ Phase 5 以降が足すモジュールのファイル構成と挙動は、機能
 | 領域 | 正典 |
 |---|---|
 | レガシー parity（入力状態機械、VK → アクション、カスタムローマ字、F10 デバッグ、キャレット位置、AI backend） | `docs/legacy-parity-spec.md` |
-| リッチ化（前面アプリ、タイピング速度、FuzzyMatch、リッチ機能の bench） | `docs/rich-features-spec.md` |
+| リッチ化（信頼度の属性、予測モード、ラベル付き候補、タイピング速度とレーン、FuzzyMatch、リッチ機能の bench） | `docs/legacy-parity-spec.md` §2.6・§3.8・§3.9、`docs/copilot-pc-backend-spec.md` §11、`docs/typo-correction-learning-spec.md` §12.4.6、`docs/conversion-quality-benchmark-spec.md` §3.1 |
+| 校正ビュー（バッチ訂正ビュー、`DetectAnomalies`、設定アプリの校正ペイン） | `docs/proofread-view-spec.md` |
 | TSF 深部（再変換、UI-less、設定アプリ起動） | `docs/tsf-deep-integration-spec.md` |
 | Copilot+ PC / NPU（backend 選択、mmap ロード、電源監視） | `docs/copilot-pc-backend-spec.md` |
 | UI モダン化（テーマ色、DPI、描画エンジン） | `docs/native-ui-spec.md` |

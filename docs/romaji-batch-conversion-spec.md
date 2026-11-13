@@ -10,7 +10,7 @@ Linear。運用規約は `docs/linear-conventions.md` を参照）。
 
 - `docs/legacy-parity-spec.md` … InputState 状態機械（§1.2）、キーバインド（§1.4）、
   ライブ変換（§2）。本機能はこれらを土台にする。
-- `docs/rich-features-spec.md` … AI 変換・文単位予測。M58-C の AI 整文と接続。
+- `docs/ai-backend-spec.md` と `docs/legacy-parity-spec.md` §3.8 … AI 変換・文単位予測。M58-C の AI 整文と接続。
 - `docs/tsf-deep-integration-spec.md` … 再変換・multi-segment。M58-B の文節再変換と接続。
 
 ## 0. 節とマイルストーンの対応

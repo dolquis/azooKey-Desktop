@@ -10,6 +10,7 @@
 | 更新の確認の表示（`autoUpdate`） | `docs/settings-app-spec.md` §3.2「バージョン」 | `settings-app/UpdateStatusModel.cpp`、`inference-host/include/azookey/host/UpdateChecker.h` | `azookey_settings_persistence_tests`（`settings-app/tests/update_status_model_test.cpp`） |
 | TIP 側の同じファイルの監視 | `docs/windows-tsf-host-architecture.md` | `tsf-tip/src/TipLocalSettings.cpp` | `tsf_tip_local_settings_tests` |
 | 起動引数と TIP からの起動 | `docs/tsf-deep-integration-spec.md` の `ITfFnConfigure` 節と §4.5（入力インジケーターのメニューの「設定を開く」） | `settings-app/LaunchArguments.cpp`、`tsf-tip/src/SettingsLauncher.cpp` | `azookey_settings_launch_arguments_tests` |
+| 校正ペインと `--proofread-session` | `docs/proofread-view-spec.md` §2.10 | `settings-app/ProofreadPane.cpp`、`settings-app/ProofreadModel.h`、`settings-app/ProofreadSessionClient.h` | `azookey_settings_persistence_tests`（`settings-app/tests/proofread_model_test.cpp`、`proofread_session_client_test.cpp`） |
 | ビルドと配布物 | `docs/sideload-packaging-spec.md`、`pkg/msi/README.md` | `settings-app/CMakeLists.txt`（`azookey_settings` custom target）、`settings-app/azookey_settings.vcxproj`、`settings-app/HybridCRT.props`、`settings-app/packages.lock.json`、`settings-app/app.manifest` | `.github/workflows/release.yml` の settings build と version 検証 |
 
 ## 検証コマンドの選び方

@@ -250,7 +250,7 @@ TIP は次のときに送る。
   `reading` は再変換の逆変換で得た読み、`rejected_surface` は元の表記、`selected_surface` は
   選んだ候補である。元の表記を選び直したときは送らない。再変換の確定は Forget の対象にしない。
   アプリが自前の UI で TSF の候補一覧から選ぶ経路は、確定を TIP が知れないため送らない。
-  バッチ訂正ビュー（`rich-features-spec.md` X-3-6）が混ぜた修正候補（`suggestions`）を選んだときも送らない。
+  バッチ訂正ビュー（`docs/proofread-view-spec.md` §2.7）が混ぜた修正候補（`suggestions`）を選んだときも送らない。
   修正候補はモデルの出力で、Host の読みとの組を学習に入れないためである。Host の候補と同じ表記の修正候補は
   Host の候補として扱い、選べば送る。
 - 送るかは送信時に判定する。secure の文脈、または学習が許可されない文脈では送らない
@@ -282,6 +282,38 @@ Host は `CommitObservation` と同じ判定（Handshake の `secure_flag`、要
 - `undo`: `rejected_surface` の `correction_reject` だけを記録する。変換器には何も教えない。
 - `reconvert`: `selected_surface` の `correction_accept` と `rejected_surface` の
   `correction_reject` を記録し、`selected_surface` を確定として変換器へ渡す。
+
+### 4.2 訂正の学習の呼び出し元
+
+訂正は、`CommitCorrection`（§4.1）が `correction_accept` / `correction_reject` として記録する。反映は §6.2 の
+`correction_penalty` が担い、次回同じ `(reading, context)` で拒否した表記より選んだ表記が優先される。
+訂正を記録する契機は次のとおり。
+
+| 契機 | reading | rejected_surface | selected_surface |
+|---|---|---|---|
+| 候補ウィンドウでの再選択（`reconvert`、§4.1） | 元の reading | 旧確定 | 新確定 |
+| 文脈再選択（§4.3。予定） | 元の reading | 旧確定 | 新確定 |
+| Post-Commit Lint の採用（`docs/ai-backend-spec.md` §4.3。予定） | 推測した reading | `finding.current` | `finding.suggestion` |
+
+校正ビューの修正候補（`suggestions`）を選んだときは呼ばない（§4.1、`docs/proofread-view-spec.md` §2.7）。
+
+### 4.3 同音異義語の文脈再選択
+
+本節は予定の契約（設定 `contextReselection` は読み込み済みで、再判定の処理は Host にも TIP にも無い）。
+commit の後に短い助詞（「を / に / が / は / で / と / も」）が続いたら、直前の commit を再判定する。
+設定 `contextReselection`（`settings/mvp-settings.schema.json`）が有効なときに働く。
+
+トリガ: commit から **3 文字以内** に助詞が続いて再 commit する。
+
+動作:
+
+1. 直前 commit の `reading` を保持する
+2. 2 回目の commit の後、`InferenceEngine::ReevaluateInContext(reading, prev_surface, full_context)` を呼ぶ
+3. 差分があれば、直前 commit の範囲を `ITfRange::SetText` で差し替える
+4. 同時に訂正を記録する（`rejected_surface` = `prev_surface`、`selected_surface` = `new_surface`。§4.2）
+
+安全策: 差し替えの後 5 秒間は、ユーザーの Backspace で元に戻す undo を維持する
+（TIP プロセス内の `pending_reselection_` キュー）。
 
 ## 5. 時間減衰
 

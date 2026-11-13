@@ -9,8 +9,8 @@ Punctuation）」機能を定める。`plans/windows-port-roadmap.md` の M59 �
 関連 spec:
 
 - `docs/legacy-parity-spec.md` … ライブ変換（§2）。本機能はライブ変換経路を土台にする。
-- `docs/rich-features-spec.md` … X-1（ライブ変換のリッチ化）・X-1-2（TypingTempoTracker）。
-  挿入安定化に再利用する。X-3（誤変換訂正・Post-Commit Lint）とは目的が異なる（後述 §2）。
+- `docs/legacy-parity-spec.md` §2.6（信頼度の属性）と `docs/copilot-pc-backend-spec.md` §11.1（TypingTempoTracker）。
+  後者の `TypingTempoTracker` を挿入安定化に再利用する。X-3（誤変換訂正・Post-Commit Lint）とは目的が異なる（後述 §2）。
 - `docs/romaji-batch-conversion-spec.md` … M58-C `batchAutoPunctuation`（一括変換 +
   ai-cleanup 限定の句読点挿入）。本機能（逐次ライブ変換中の動的挿入・削除）とは別経路
   （後述 §2）。
@@ -890,5 +890,5 @@ roadmap は受け入れ条件の「定義」、達成状態は Linear）。
 - ライブ変換 旧実装: `legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`
 - 句読点字種設定（本機能とは別物）: `legacy/Core/Sources/Core/Configs/PuntuationConfigItem.swift`
 - ライブ変換仕様: `docs/legacy-parity-spec.md` §2
-- リッチ化（信頼度 segments・TypingTempoTracker）: `docs/rich-features-spec.md` X-1
+- リッチ化（信頼度 segments・TypingTempoTracker）: `docs/legacy-parity-spec.md` §2.6、`docs/copilot-pc-backend-spec.md` §11.1
 - 一括 AI 整文の句読点（別経路）: `docs/romaji-batch-conversion-spec.md` §5・M58-C

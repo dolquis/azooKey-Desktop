@@ -40,7 +40,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
 | [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64 |
-| [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
+| [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）の転送表。各項の契約は移動先の spec が正典 |
+| [`proofread-view-spec.md`](proofread-view-spec.md) | M24 の横断項目の意味的訂正（`DetectAnomalies`）と M30 の校正ペイン（バッチ訂正ビュー、Ctrl+Shift+Space） |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド。§4 の推論エンジン選定は M8 と共有 |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。§4.4 は M16 の Magic Conversion プロンプト、§4.5 は M34 の API キー入力、§4.6 は M53 の設定アプリの辞書ライセンス導線 |

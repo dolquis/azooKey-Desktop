@@ -20,6 +20,7 @@
 | §11・§12 | 共通 |
 | §13 | 共通。Debug CLI の `userdict` は M9 の移行措置（§13 本文） |
 | §14 | 共通 |
+| §15 | M30（Persona 表示。表示は §3 の「入力の傾向」タブ） |
 
 ## 1. 目的
 
@@ -76,7 +77,7 @@
   表示しない。忘却は確認ダイアログを経てから `ForgetLearningEntry` を `id` で送る。
   「全削除」は検索から離し、タブの末尾に置く。
 - 「入力の傾向」タブ: `QueryPersona` の 4 比率と、算出の基になった確定の回数・算出時刻を読み取り専用で示す
-  （`rich-features-spec.md` X-2-7）。Host が capability `persona` を告知しないときは「この変換エンジンは未対応です」と示す。
+  （§15）。Host が capability `persona` を告知しないときは「この変換エンジンは未対応です」と示す。
 - ユーザー辞書のタブだけは、上の操作に加えて「読み」「語」の 2 欄と「追加」ボタンを持つ
   （`settings-app-spec.md` §3.7）。両欄の前後の空白（全角を含む）を除き、読みのカタカナを
   ひらがなに直してから `AddUserWord` を送る。どちらかが空なら送らない。成功したら追加した読みで
@@ -868,3 +869,67 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
   ファイル単位ロックを取らないため、同一ユーザーで Host を二重に起動した状態は writer が二つある状態であり、想定しない。
 - named mutex 名は正規化した絶対パスから導出する（`FileLock.h` の `MutexNameForPath`）。
   二つの writer が排他されるのは同じ実パスを解決したときに限るため、`--user-dict` で別パスを与えた検証はロックの確認にならない。
+
+## 15. ペルソナの算出と `QueryPersona`
+
+本節は設定アプリの「入力の傾向」タブ（§3）と、校正の検出（`docs/proofread-view-spec.md` §2.8）が使う
+ペルソナの算出と読み出しの契約を定める。実装は `learning/include/azookey/learning/Persona.h` と
+`QueryPersona`（`ipc/include/azookey/ipc/Payloads.h` の `QueryPersonaResponse`）である。
+
+### 15.1 比率と `Persona`
+
+かなの学習ストアの全件から以下の比率を算出する。
+
+- 敬語率: 「ます/です/いただく」を含む確定の割合
+- カジュアル率: 「だよ/だね/じゃん」を含む確定の割合
+- 技術率: 英数字 + アンダースコア識別子の割合
+- 顔文字率: 顔文字（記号 3〜10 連）の割合
+
+これを `Persona` 構造体で表現する。
+
+```cpp
+struct Persona {
+    double polite_ratio;
+    double casual_ratio;
+    double technical_ratio;
+    double kaomoji_ratio;
+    uint64_t sample_count;  // 分母の確定回数（§15.2）
+};
+```
+
+毎日 1 回（起動時 + 24h）バックグラウンドで再計算してキャッシュする（§15.3）。
+
+### 15.2 算出の近似
+
+`LearningStore` は確定した文を持たず、`(reading, surface)` ごとの集約行だけを持つ。このため各比率は、
+集約行の surface を分類し、`commit_count` で重み付けした割合として求める。分母は総 `commit_count` で、
+確定の無い行（拒否だけの行）は数えない。対象はかなの学習チャネルだけで、英語チャネル・typo・auto_word は含めない。
+分類の細部（記号とみなさない文字の範囲）は `learning/include/azookey/learning/Persona.h` のコメントが正典である。
+
+| 比率 | surface の条件 |
+|---|---|
+| `polite_ratio` | 「ます」「です」「いただ」のいずれかを含む |
+| `casual_ratio` | 「だよ」「だね」「じゃん」のいずれかを含む |
+| `technical_ratio` | ASCII の英字・数字・`_` だけから成り、2 文字以上で、英字を 1 つ以上含む |
+| `kaomoji_ratio` | 記号（ASCII の英数字、かな、漢字、全角英数字、空白、文の句読点 `、。，．「」『』…‥` 以外の文字）が 3〜10 個続く箇所を含む |
+
+surface は文節単位なので、「だ」「よ」のように別々の文節で確定した語尾は数えない。4 比率は独立に数えるので、
+合計は 1 にならない。
+
+### 15.3 再計算とキャッシュ
+
+Host の学習 flush worker が、起動時（学習ストアのロード後）と、前回の算出から 24 時間ごとに再計算する。
+学習の全削除（§4.6）、個別の忘却（§4.2）、インポート（§4.4）の直後にも再計算する。未算出のまま `QueryPersona` を受けたときは、その場で算出する。バッテリ駆動時の間隔延長（`docs/copilot-pc-backend-spec.md`）は扱わない。
+
+### 15.4 設定アプリへの経路
+
+設定アプリは `QueryPersona`（要求 payload は空オブジェクト）でキャッシュを読む。Host は capability `persona` を告知する。
+
+| 応答フィールド | 型 | 意味 |
+|---|---|---|
+| `ok` / `error` | bool / str | 失敗時は `not_authenticated` か `store_unavailable`（学習ストアが無い） |
+| `polite_ratio` ほか 3 比率 | 0〜1 の数 | §15.2 の比率 |
+| `sample_count` | uint | 分母の確定回数。0 のときは 4 比率とも 0 で、設定アプリは「データ不足」と示す |
+| `computed_at_epoch_sec` | uint | 算出時刻 |
+
+応答は比率と件数だけを持ち、surface や読みを含めない。

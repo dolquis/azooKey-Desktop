@@ -80,8 +80,7 @@ Microsoft Learn の事実は
 - 「データとツール」群: Host への IPC で操作し、その場で反映するペイン。保存の対象を持たず、保存バーを出さない。
 - フッター（`NavigationView.FooterMenuItems`）: 「バージョン」。`autoUpdate` の 3 キーを持ち、保存バーを出す。
 
-起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`rich-features-spec.md`
-X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
+起動時は「入力」を表示する。`--proofread-session` で起動されたときは「校正」を表示し（`proofread-view-spec.md` §2.10）、`--pane <名前>` を受けたときはそのペインを表示する（名前は下表のペインの英名 `input` / `candidates` /
 `dictionary` / `ai-conversion` / `ai-service` / `privacy` / `profiles` / `advanced` / `learning` / `proofread` /
 `version`。知らない名前は無視して「入力」を表示する）。既に開いている窓へ転送されたときは、`--pane` があればそのペインへ移り、無ければ今のペインを保つ（§3.5）。`--pane` は入力インジケーターの「設定を開く」が渡す
 （`docs/tsf-deep-integration-spec.md` §4.5）。`ITfFnConfigure::Show`（§3.5）は渡さない。
@@ -98,7 +97,7 @@ X-3-6）、`--pane <名前>` を受けたときはそのペインを表示する
 | 設定 | アプリ別 | `profilesByApp` の追加・編集・削除（`candidateTagBoosts` の 1.0〜3.0 を含む）と、`promptPrefixByApp` の読み取り専用の一覧と、行ごとの「プロファイルへ移す」操作（`app-profile-spec.md` §4 / §6 / §8） |
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
-| データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`rich-features-spec.md` X-3-6） |
+| データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`proofread-view-spec.md` §2.10） |
 | フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
 `autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
@@ -137,7 +136,7 @@ Host の IPC を読むペインは、その IPC を呼ぶ client と同じ変更
 
 上の表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「校正」が読む文章をフォアグラウンドの
 アプリから取る経路（TIP の preserved key、選択位置の周りの文書の取得、TIP 所有の session、アプリ側の範囲の
-選択）は `rich-features-spec.md` X-3-6 が正典である。
+選択）は `proofread-view-spec.md` §2 が正典である。
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。
@@ -261,7 +260,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
   profile を GUID として検証し、未指定と不正値を区別する。起動コンテキストの表示は、転送された起動を含め、
   最後に受けた起動の引数で決め直す（`langid` も profile も無い起動では隠す）。
-- **校正ビューの引数**: TIP の校正ビュー（`rich-features-spec.md` X-3-6）は
+- **校正ビューの引数**: TIP の校正ビュー（`proofread-view-spec.md` §2.4）は
   `--proofread-session <token>` だけを渡す。token は小文字 16 進 32 桁で、重複・値なし・それ以外の値は
   parse error とする。後続起動の転送でも同じく既存インスタンスへ渡り、「校正」ペインがその session を開く。
 - **開くペインの引数**: `--pane <名前>`（§3.2）は開くペインだけを指定する。`--proofread-session` と同時に
@@ -321,11 +320,11 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI サービス | M16 | 即時 | roadmap M16 |
 | `openAiModel` | string | `gpt-4o-mini` | AI サービス | M16 | 即時 | roadmap M16 |
 | `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | roadmap M16 |
-| `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
-| `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
-| `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
-| `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
-| `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
+| `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `app-profile-spec.md` §6 |
+| `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `user-learning-enhancement-spec.md` §4.3 |
+| `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `ai-backend-spec.md` §4.3 |
+| `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `copilot-pc-backend-spec.md` §11.2 |
+| `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `legacy-parity-spec.md` §3.8 |
 | `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | AI 変換※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | AI 変換※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | AI 変換 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |

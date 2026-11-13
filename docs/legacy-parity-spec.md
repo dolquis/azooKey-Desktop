@@ -693,7 +693,7 @@ EditSession: Preedit を surface にする（前回の表示と異なる末尾�
              docs/tsf-deep-integration-spec.md §5.6）
    ↓
 DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
-                  → Phase 5 末尾で 4 段階に拡張 (rich-features-spec X-1)
+                  → Phase 5 末尾で 4 段階に拡張 (§2.6)
 ```
 
 #### 2.3.1 応答待ちの表示
@@ -754,6 +754,60 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 確定（Enter）時は in-flight の QueryLiveConversion に `Cancel` を送ってから
 `EndComposition`。
+
+### 2.6 信頼度 4 段階の DisplayAttribute（M14 の横断項目）
+
+Phase 5 は単一属性 `kInputAttributeGuid` で、`confidence` に応じた 4 段階の属性への拡張は M14 の横断項目である
+（roadmap M14）。
+
+#### 2.6.1 GUID 設計
+
+`tsf-tip/src/DllMain.cpp` に 4 新規 GUID を追加する。
+
+```cpp
+// {AAB0...}: 高信頼ライブ変換結果 (score >= 0.9) — 黒・実線下線
+constexpr GUID kLiveAttrConfidentGuid       = { 0xAAB0..., ... };
+// {AAB1...}: 中信頼 (0.7..0.9) — 濃グレー・実線下線
+constexpr GUID kLiveAttrLikelyGuid          = { 0xAAB1..., ... };
+// {AAB2...}: 低信頼 (0.5..0.7) — 薄グレー・実線下線
+constexpr GUID kLiveAttrUncertainGuid       = { 0xAAB2..., ... };
+// {AAB3...}: 仮確定なし (< 0.5) — 既定下線（kInputAttributeGuid と同等）
+constexpr GUID kLiveAttrTentativeGuid       = { 0xAAB3..., ... };
+```
+
+GUID 実値は着手時に `uuidgen` で確定し、本節に追記する。
+
+#### 2.6.2 EnumDisplayAttributeInfo 拡張
+
+`tsf-tip/src/DisplayAttribute.cpp`（M3 が実装する enumerator）に 4 新規エントリを追加する。
+`ITfDisplayAttributeInfo::GetAttributeInfo` の返却内容は次のとおり。
+
+| GUID | TF_DA_COLOR_TYPE | rgb | TF_DA_LINESTYLE | bAttr |
+|---|---|---|---|---|
+| Confident | RGB | 0x000000 | TF_LS_SOLID | TF_ATTR_INPUT |
+| Likely | RGB | 0x404040 | TF_LS_SOLID | TF_ATTR_INPUT |
+| Uncertain | RGB | 0x808080 | TF_LS_SOLID | TF_ATTR_INPUT |
+| Tentative | RGB | 0xA0A0A0 | TF_LS_DOT | TF_ATTR_INPUT |
+
+#### 2.6.3 段階分け閾値
+
+| score | 段階 |
+|---|---|
+| ≥ 0.9 | Confident |
+| 0.7 ≤ s < 0.9 | Likely |
+| 0.5 ≤ s < 0.7 | Uncertain |
+| < 0.5 | Tentative |
+
+スコアは `QueryLiveConversionResponse.confidence`（0.0..1.0。§2.2）で受け取る。
+Zenzai 多 pass 推論時は最良候補の対数尤度を 0..1 に正規化（softmax 温度 1.0、
+top-2 候補との差を基準）する。
+
+#### 2.6.4 文節単位の混在
+
+文節（segment）ごとに異なる属性を割り当てる。`ITfRange` を文節境界で分割し、
+`ITfProperty::SetValue` を文節ごとに呼ぶ。文節境界は `QueryLiveConversionResponse.segments[]` の
+`start_char` / `end_char` / `score`（§2.2。`LiveSegment`）で受け取る。通常の要求の応答は `segments[]` を持たないので、持たない応答は表層全体を 1 文節として属性を決める。
+通常の要求の `segments[]` に信頼度の `score` を載せる拡張は、この横断項目で行う。要求 ID は Envelope の `request_id` に置く。
 
 ## 3. 予測候補ウィンドウ (M15)
 
@@ -857,7 +911,7 @@ Esc などで予測を消すと、問い合わせも再試行も捨てるので�
 |---|---|---|
 | 要求 `kana` | 予測の起点にする読み | 必須 |
 | 要求 `leftSideContext` | 左文脈（下記） | 必須 |
-| 要求 `mode` | 予測の単位。X-2 で `word \| phrase \| sentence` へ拡張する。Phase 5 では `word` のみ | 必須 |
+| 要求 `mode` | 予測の単位。§3.8 で `word \| phrase \| sentence` へ拡張する。Phase 5 では `word` のみ | 必須 |
 | 要求 `app` | `docs/app-profile-spec.md` §3.1 の前面アプリ識別。予測には boost を掛けない（同 §7） | 識別なし |
 | 要求 `secure` | 入力欄が secure か。Host は secure の要求に予測 0 件の成功応答を返す（`docs/privacy-and-secure-input-spec.md` §5.1.1） | secure とみなす。wire には `false` だけを載せる |
 | 応答 `predictions[]` | 予測候補。各要素は既存の `CandidateField`（`tag` を含む） | 必須 |
@@ -893,6 +947,76 @@ OFF で、Tab は予測を受理しない。Windows 版は既定 ON で、予測
 各 `reason` は composition ごとに 1 回だけ出し、打鍵ごとには出さない。
 composition の開始と TIP の deactivate で記録済みの `reason` を戻すので、次の入力でも同じ `reason` を出す。
 どの行も入力本文、予測候補、打鍵の回数を持たない。
+
+### 3.8 予測モードの拡張と段落文脈（M15 の横断項目）
+
+#### 3.8.1 `mode` の拡張
+
+`QueryPredictionsRequest.mode`（§3.5）を次の 3 値に拡張する。wire の `mode` は文字列（`word` / `phrase` / `sentence`）で、次の enum は Host 内部の表現である。Phase 5 の Host が受けるのは `word` だけである。
+
+```cpp
+enum class PredictionMode : uint8_t {
+    Word     = 0,   // 単語予測（既定）
+    Phrase   = 1,   // フレーズ予測（〜10 文字）
+    Sentence = 2,   // 文単位予測（〜50 文字、LLM 必須）
+};
+```
+
+| mode | 候補長 | バックエンド | 想定用途 |
+|---|---|---|---|
+| Word | 1〜6 文字 | SimpleConverter 辞書 | 速いタイピング補助 |
+| Phrase | 〜10 文字 | Zenzai 軽量 (1-pass) | 慣用句・連語 |
+| Sentence | 〜50 文字 | Zenzai 多 pass / LLM | メール定型・コード |
+
+トリガ:
+
+- Word: 全 composition 中（常時）
+- Phrase: composition の末尾が「。」「、」「\n」直後 or 段落頭
+- Sentence: 確定直後 + `settings.sentenceCompletion == true`
+
+#### 3.8.2 段落文脈
+
+現在の `leftSideContext` は、`docs/privacy-and-secure-input-spec.md` §5.3 の規則（同じ行、最大 30 コードポイント）で
+取得する。`Phrase` と `Sentence` を出すために直近 N=512 字の段落文脈へ拡張するときは、取得の上限を定める
+同節と同時に改める。拡張後の取得は次の手順で行う。
+
+1. `ITfContext::GetEnd` でカーソル位置を取得
+2. `ITfRange::ShiftStart(read_cookie, -512, &shifted, nullptr)` で 512 字遡る
+3. 段落境界（`\n` `。`）に当たったらそこで打ち切り
+4. `GetText` で UTF-16 を取得し、UTF-8 に変換して Payload に含める
+
+要求のフィールドは `kana` / `leftSideContext` / `mode` / `app` / `secure`（§3.5）のままで、段落文脈は
+`leftSideContext` に載せる。`secure` の欠落は secure とみなす（`docs/privacy-and-secure-input-spec.md` §5.1.1）。
+`app` は `{process_name, window_class}`（`docs/app-profile-spec.md` §3.1）で、値は `ForegroundAppDetector` が返す
+`process_name` / `window_class`（`docs/privacy-and-secure-input-spec.md` §4.2）である。
+
+### 3.9 ラベル付き候補（M15 の横断項目）
+
+`Candidate` 構造体（`core/include/azookey/core/Candidate.h`。次は `tag` に関わるフィールドの抜粋）に `tag` を持つ。
+
+```cpp
+enum class CandidateTag : uint8_t {
+    None        = 0,
+    Polite      = 1,   // 敬語
+    Casual      = 2,   // 砕け
+    Technical   = 3,   // 専門用語/識別子
+    English     = 4,
+    Kaomoji     = 5,   // 顔文字
+    Idiom       = 6,   // 慣用句
+};
+
+struct Candidate {
+    std::string surface;
+    std::string reading;
+    double      score;
+    CandidateTag tag;
+};
+```
+
+候補 UI のアノテーション列に `[敬]` `[砕]` `[技]` 等の 2 文字バッジを表示する
+（`CandidateWindow.cpp` の候補・予測の両モード共通）。
+
+IPC: `CandidateField`（候補・予測の両 payload が使う）に `tag: uint8` フィールドを持つ（0 = None は省略）。
 
 ## 4. Magic Conversion / Replace Suggestion (M16)
 
@@ -1348,7 +1472,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 - カスタムテーブル：`legacy/Core/Sources/Core/Configs/CustomInputTableStore.swift`
 - AI バックエンド：`legacy/Core/Sources/Core/MagicConversion/AIBackend.swift`
 - ウィンドウ配置：`legacy/Core/Sources/Core/Windows/WindowPositioning.swift`
-- 横断リッチ化：`docs/rich-features-spec.md`
+- 横断リッチ化：§2.6・§3.8・§3.9、`docs/copilot-pc-backend-spec.md` §11（各項の対応は `docs/rich-features-spec.md` の転送表）
 - macOS 版との入力体験の差の監査記録：`docs/macos-input-parity-audit-report.md`（本書の節を
   指摘ごとに参照する。指摘への結論は本書へ書く）
 - karukan-im との突き合わせの詳細：`docs/karukan-comparison-report.md` 付録 2（§1.6 の根拠）

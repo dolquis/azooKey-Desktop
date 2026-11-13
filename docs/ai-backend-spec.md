@@ -4,7 +4,8 @@
 関連:
 - `docs/legacy-parity-spec.md` §4（Magic Conversion の TIP 側の挙動。同 §4.4・§4.5 は本書へのリンク）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
-- `docs/rich-features-spec.md` X-3-3（Post-Commit Lint）/ X-3-5（訂正の学習）
+- `docs/proofread-view-spec.md`（`DetectAnomalies` を使う校正ビュー）
+- `docs/user-learning-enhancement-spec.md` §4.2（訂正の学習の呼び出し元）
 - `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、プライバシー判定）
 - `docs/app-profile-spec.md` §4.2（M48 アプリ別 backend 解決）
 - `docs/sideload-packaging-spec.md` §9（M34 DPAPI）
@@ -86,17 +87,17 @@
 |---|---|---|---|---|
 | **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト（or キャレット段落） | `aiBackend` 設定値（`openai` 可） | 同期（ダイアログ完了で結果反映） |
 | **M58-C** AI 整文 `ai-cleanup` | 一括変換確定（ユーザー明示） | 蓄積全文かな + 生ローマ字 | `aiBackend` 設定値（`openai` / `local-zenzai`） | 同期（変換確定経路） |
-| **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景 push、入力を阻害しない） |
+| **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景、入力を阻害しない） |
 
 **設計含意**: M16 / M58-C はユーザーの明示操作で起動するため外部 AI（`openai`）への
 送信が妥当。一方 X-3-3 は**毎 commit 自動発火**するため、確定テキストを毎回外部 AI に
 送るのはプライバシー・コスト両面で不適切である。X-3-3 は backend 選択を `local-zenzai`
-へ寄せる既定とする（§3.3）。`rich-features-spec.md` §X-3-3 が「Zenzai に渡す」と記すのと
+へ寄せる既定とする（§3.3）。X-3-3 が Zenzai に渡すこと（§4.3）と、
 本書の「同じ `AiBackend` 経路を流用」（roadmap M16 横断）は、この既定で整合する。
 
 このほか X-3-6 バッチ訂正ビューの `DetectAnomalies`（設定アプリ → Host）も、Host が
 `AiTransformRequest`（`task=Anomalies`）へ正規化して同じ `AiBackend` を呼ぶ。payload と
-送信条件の正典は `rich-features-spec.md` X-3-6 である。
+送信条件の正典は `docs/proofread-view-spec.md` §2 である。
 
 ### 3.2 Host 側 `AiBackend` の概念モデル
 
@@ -235,13 +236,46 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 > 共有点: M58-C と M16 は**別 IPC メッセージ**だが、Host 側で同じ
 > `AiBackend::Transform` に集約される。これが「消費者の共有」の実体である。
 
-### 4.3 X-3-3: `RequestPostCommitLint`（`rich-features-spec.md` §X-3-3 が正典）
+### 4.3 X-3-3: `RequestPostCommitLint`
 
-X-3-3 も本書では新規定義しない。既存定義（`text` 32 文字 / `app_id` / `findings[]`）を
-使い、Host が payload を `AiTransformRequest`（`task=Lint`、`text`、`max_results`=
+確定済みテキストに対して、軽量 LLM で「より自然な解釈」を検出して波線表示する（roadmap M16 の横断項目）。
+本節は予定の契約で、設定 `postCommitLint` は読み込み済みだが、`RequestPostCommitLint` は `MessageType` にも `Payloads.h` にも無い。
+Host は payload を `AiTransformRequest`（`task=Lint`、`text`、`max_results`=
 finding 上限）へ正規化して `AiBackend::Transform` を呼び、`AiFinding[]` を
-`RequestPostCommitLintResponse.findings` にマップする。非同期（背景 push）である点は
-`rich-features-spec.md`（`LintNotification`）に従う。
+`RequestPostCommitLintResponse.findings` にマップする。非同期（背景）の応答で、入力を阻害しない。
+
+#### 4.3.1 タイミング
+
+- commit 後 **800ms デバウンス**
+- 直近 32 文字（or 段落末まで）を Zenzai に渡す
+
+#### 4.3.2 IPC
+
+```
+RequestPostCommitLintRequest:
+  request_id: uint64
+  text: string        // 直近 32 文字
+  app_id: string
+
+RequestPostCommitLintResponse:
+  request_id
+  findings[]: LintFinding
+
+LintFinding:
+  start_char: uint32  // text 内の開始位置
+  end_char: uint32
+  current: string     // 現在のテキスト
+  suggestion: string  // 提案テキスト
+  reason: string      // 「同音異義語」「敬語不一致」等
+  confidence: float
+```
+
+#### 4.3.3 表示
+
+- `ITfReadOnlyProperty`（既存 `GUID_PROP_ATTRIBUTE`）で **波線下線** 属性
+  - 新規 GUID `kLintAttrGuid`（赤い波線、`TF_LS_SQUIGGLE`）
+- 右クリック（ITfMouseSink、Phase 6-A）で候補一覧をポップアップ
+- 採用したら訂正の学習を記録する（`docs/user-learning-enhancement-spec.md` §4.2）
 
 ---
 
@@ -366,7 +400,7 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
   800 msは1変換のハード予算の上限を決める設計値であり、request deadlineではない。
   M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
   全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
-- X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。
+- X-3-3 は非同期の背景要求であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）
 
@@ -485,8 +519,7 @@ M48 のモード通知 API を前提としない。
 - **MVP（Phase 5）**: `stream=false`。`chat/completions` の一括応答を待って `result` を
   返す。M16 ダイアログは完了時に一度だけ結果反映（`legacy-parity-spec.md` §4.6）。
 - **Phase 6 拡張**: `stream=true`（SSE）。Host が部分トークンを受信し、**push IPC**で
-  TIP へ逐次反映する。push 通知は既存の push 経路（`rich-features-spec.md` の
-  notification 系）に合わせる。
+  TIP へ逐次反映する。片方向の push 経路を要し、その契約はこの拡張で本書に定める。
 - **予約フィールド**: 将来の streaming / 複数案のため、本書の payload に予約を置く。
   - `TransformSelectedTextResponse.results`（複数案。MVP 未使用）。
   - streaming 中間応答は `partial:true` のチャンク + 最終 `partial:false`

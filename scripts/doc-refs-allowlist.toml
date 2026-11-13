@@ -32,17 +32,23 @@ files = [
 ref = "core/src/QwertyAdjacency.cpp"
 kind = "planned"
 milestone = "M17"
-spec = "docs/rich-features-spec.md X-3-1"
+spec = "docs/typo-correction-learning-spec.md §12.4.6"
 reason = "FuzzyMatch の QWERTY 隣接表。M17 の横断 X-3-1 で新設する"
-files = ["docs/rich-features-spec.md", "docs/windows-tsf-host-architecture.md"]
+files = [
+  "docs/typo-correction-learning-spec.md",
+  "docs/windows-tsf-host-architecture.md",
+]
 
 [[allow]]
 ref = "tsf-tip/src/TypingTempoTracker.h"
 kind = "planned"
 milestone = "M24"
-spec = "docs/rich-features-spec.md X-1-2"
+spec = "docs/copilot-pc-backend-spec.md §11.1"
 reason = "タイピング速度推定。M24 の横断 X-1-2 で新設する"
-files = ["docs/rich-features-spec.md", "docs/windows-tsf-host-architecture.md"]
+files = [
+  "docs/copilot-pc-backend-spec.md",
+  "docs/windows-tsf-host-architecture.md",
+]
 
 [[allow]]
 ref = "inference-host/src/WinMlBackend.cpp"

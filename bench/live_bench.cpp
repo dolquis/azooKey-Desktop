@@ -41,21 +41,22 @@ constexpr size_t kCurrentZenzaiContextBatchSize = 512;
 constexpr size_t kCurrentZenzaiPromptTemplateVersion = 1;
 
 void PrintUsage(const char* exe) {
-  std::cerr << "Usage: " << exe
-            << " [--max-p95-ms N] [--ipc] [--json] [--output PATH] [--baseline PATH]"
-               " [--backend cpu|cuda] [--model PATH] [--trace [--trace-output PATH]]\n"
-            << "       " << exe
-            << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
-               " [--backend cpu|cuda] [--model PATH] [--category NAME]"
-               " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
-               " [--nll on|off] [--decode-stats JSONL]\n"
-            << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
-               "failure gate. --json selects JSON stdout; --output writes the same JSON "
-               "schema to a file. --ipc adds codec and Windows pipe echo timings. "
-               "--eval selects the conversion-quality evaluator. --trace writes phase JSONL "
-               "to trace.jsonl by default. --nll sets NLL rerank (default off, the shipped "
-               "setting). --decode-stats writes one line per query with its latency, deadline "
-               "cut-off and candidate sources.\n";
+  std::cerr
+      << "Usage: " << exe
+      << " [--max-p95-ms N] [--ipc] [--json] [--output PATH] [--baseline PATH]"
+         " [--backend cpu|cuda] [--model PATH] [--trace [--trace-output PATH]]\n"
+      << "       " << exe
+      << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
+         " [--backend cpu|cuda] [--model PATH] [--category NAME]"
+         " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
+         " [--nll on|off] [--decode-stats JSONL]\n"
+      << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
+         "failure gate. --json selects JSON stdout; --output writes the same JSON "
+         "schema to a file. --ipc adds codec, Windows pipe echo and send/Host/receive "
+         "timings. --eval selects the conversion-quality evaluator. --trace writes phase JSONL "
+         "to trace.jsonl by default. --nll sets NLL rerank (default off, the shipped "
+         "setting). --decode-stats writes one line per query with its latency, deadline "
+         "cut-off and candidate sources.\n";
 }
 
 const char* CandidateSourceName(azookey::core::CandidateSource source) {
@@ -468,7 +469,7 @@ int main(int argc, char** argv) {
       azookey::bench::CompareBaseline(baseline_path, result.bench, result.config, result.latency);
   if (ipc_benchmark) {
     try {
-      result.ipc_phases = azookey::bench::RunIpcBenchmark();
+      result.ipc_phases = azookey::bench::RunIpcBenchmark(engine);
     } catch (const std::exception& ex) {
       std::cerr << ex.what() << std::endl;
       return 2;
@@ -506,6 +507,14 @@ int main(int argc, char** argv) {
         print_phase("ipc_pipe_round_trip", *result.ipc_phases->pipe_round_trip);
       } else {
         std::cout << "ipc_pipe_round_trip=unavailable (Windows only)\n";
+      }
+      if (result.ipc_phases->send && result.ipc_phases->host_compute &&
+          result.ipc_phases->receive) {
+        print_phase("ipc_send", *result.ipc_phases->send);
+        print_phase("ipc_host_compute", *result.ipc_phases->host_compute);
+        print_phase("ipc_receive", *result.ipc_phases->receive);
+      } else {
+        std::cout << "ipc_send/ipc_host_compute/ipc_receive=unavailable (Windows only)\n";
       }
     }
   }

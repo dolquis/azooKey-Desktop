@@ -854,7 +854,7 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
 | `deadlineCutoffs` | object（任意） | `azookey_zenzai_bench` の各 iteration が deadline で打ち切られたかを表す `samples`、打ち切り回数 `count`、打ち切り率 `rate` |
 | `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
-| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec と試験用 pipe 往復の計測 |
+| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec、試験用 pipe 往復、実 Dispatcher 経由の送信 / Host / 受信の計測 |
 
 `azookey_bench --ipc` は固定の10候補 payload を使い、20回の warmup 後に200回計測する。
 `ipcPhases` は `samples`、`payloadBytes` と、`serializeMs`、`framingMs`、
@@ -863,6 +863,29 @@ framing は length-prefix の encode と decode の合計、pipe 往復は Windo
 同一プロセス内 echo server に対する Send / Receive の合計で、両端の codec を含む。
 接続確立、payload の Build / 型別 Parse、推論はこれらの計測に含めない。
 非 Windows では `pipeRoundTripMs=null` とし、ゼロ時間として扱わない。
+
+`ipcPhases` は、同じ warmup と標本数で実 `Dispatcher`（モデル無しの `InferenceEngine`）へ
+`QueryCandidates` を往復させた `sendMs`、`hostComputeMs`、`receiveMs` も持つ。
+各 field は `p50` / `p95` / `p99` / `max` を持ち、1 回の往復を次の 3 区間に分けて
+同じ `steady_clock` で測る。3 区間の和は往復全体に一致する。
+
+| field | 区間 |
+|---|---|
+| `sendMs` | client の `Send` 開始から、Host の handler 入口まで。client の書込と server の読取・起床を含む |
+| `hostComputeMs` | Host の handler 入口から出口まで（`Dispatcher::Dispatch`） |
+| `receiveMs` | Host の handler 出口から、client が応答を読み終えるまで。server の書込と client の読取を含む |
+
+読み方の注意: bench は Host と client を同一プロセスに置くため、区間の境界を同じ時計で
+測れる。一方で `sendMs` と `receiveMs` は転送だけでなく待機と起床を含む。
+`hostComputeMs` は `Dispatcher::Dispatch` の呼び出し全体で、推論と rerank に加え、要求の parse、
+要求登録、応答の JSON 生成も含むため、`latencyMs`（変換器の呼び出しだけ）より大きい。
+フェーズ別の内訳は `azookey_bench --trace` の JSONL を `azookey_trace_viewer` で集計する。
+`--ipc` と `--trace` を併用すると、Host 計測の問い合わせの phase 行も同じ JSONL に入る。
+これらも非 Windows では出力しない（`pipeRoundTripMs=null` と同じ理由）。
+
+UI 反映（`ui_apply`）は `TextService` の中で計時され、実機の `AZOOKEY_LOG` と
+`azookey_trace_viewer` で集計する。bench は TSF の編集セッションと候補ウィンドウを持たず測れないため、
+`ipcPhases` の対象外とする。
 既定の `latencyMs` と baseline 比較は推論時間のままとし、IPC 時間を加算しない。
 `--ipc` は `--eval` と併用せず、pipe の作成・通信失敗時は非ゼロ終了する。
 

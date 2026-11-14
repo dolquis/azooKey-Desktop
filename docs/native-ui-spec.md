@@ -286,8 +286,13 @@ DPI は `docs/copilot-pc-backend-spec.md` §7 の規則（`tsf-tip/include/azook
 
 ### 4.4 Magic Conversion プロンプト（M16）
 
-Magic Conversion（`docs/ai-backend-spec.md` の M16）の指示を入れるプロンプトは、Win32 標準ダイアログ（IDD_*）で出す。
-設定アプリと統合する M30 で WinUI 3 へ移す。プロンプトは候補ウィンドウとは別の窓であり、§4.1・§4.2 の規則は適用しない。
+Magic Conversion（`docs/ai-backend-spec.md` の M16）の指示を入れるプロンプト窓は、Win32 の標準コントロール
+（EDIT・STATIC・BUTTON）で組んだモードレスの窓で出す（`tsf-tip/src/PromptDialog.cpp`）。TIP はアプリのプロセスで
+動くので、入れ子のメッセージループを持つモーダルのダイアログは使わない。Enter と Esc は、ダイアログマネージャの
+代わりに窓のコントロールで受ける。窓はアプリの最上位の窓を owner にし、その中央（作業領域の内側）に置く。
+文字はメッセージフォント、寸法は窓の DPI に合わせ、色は OS の標準に任せて `ThemeColors` を使わない。挙動は
+`docs/legacy-parity-spec.md` §4.3 が定める。設定アプリと統合する M30 で WinUI 3 へ移す。プロンプト窓は候補ウィンドウとは
+別の窓であり、§4.1・§4.2 の規則は適用しない。
 
 入力インジケーターの右クリックのメニュー（`docs/tsf-deep-integration-spec.md` §4.5）は Win32 のポップアップメニュー（`TrackPopupMenuEx`）で、OS 標準の見た目に任せ、`ThemeColors` は使わない。本書の適用外である。
 

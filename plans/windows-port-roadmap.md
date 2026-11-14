@@ -625,16 +625,19 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 
 ### M16: Magic Conversion / Replace Suggestion
 
-- **目的**: 英数キーダブルタップで選択テキストの英訳または読みの半角英字確定、かなキーダブルタップで
-  選択テキストの和訳（同じプロンプト窓を初期プロンプトだけ変えて開く。`docs/legacy-parity-spec.md` §4.1）。
+- **目的**: 英数キーダブルタップで選択テキストの英訳、かなキーダブルタップで選択テキストの和訳
+  （同じプロンプト窓を初期プロンプトだけ変えて開く。`docs/legacy-parity-spec.md` §4.1）。
 - **前提**: M13 完了。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（ダブルタップ検出）、
-  `tsf-tip/src/PromptDialog.cpp`（新規）、`ipc/src/Payloads.cpp`
-  （`TransformSelectedText` 追加）、`inference-host/src/AiBackend.cpp`。
+  `tsf-tip/src/PromptDialog.cpp`、`ipc/src/Payloads.cpp`
+  （`TransformSelectedText`）、`inference-host/src/AiBackend.cpp`。
 - **受け入れ条件**:
-  - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
-  - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答（`mode` 別 system プロンプト）が表示される
-  - 結果が selection range に置換される
+  - 英数 / かな双方のダブルタップでプロンプト窓が開き、利用者が送った指示が `TransformSelectedText`
+    （`mode=free` と利用者の指示）で Host へ届く。開いただけでは送らない
+  - OpenAI 互換エンドポイントで `gpt-4o-mini` の応答（`free` の system プロンプトと利用者の指示による変換）が
+    窓に表示される
+  - [適用] で、選択の範囲が窓を開いたときの文字列のままのときだけ、結果がその範囲に置換される
+  - secure の入力先では選択を読まず、Host へも送らない（窓は案内だけを出す）
   - M16 / M58-C / X-3-3 / X-3-6 が Host 側で同一の `AiBackend::Transform` を通り、別 backend 実装に
     分岐しない（4 つの `AiTask` の正規化。Host 側の単体テストは `inference-host/tests/ai_backend_test.cpp`）
   - プライバシー判定が secure（AI 候補生成不可）を返すとき、`AiBackend::Transform` が外部送信せず

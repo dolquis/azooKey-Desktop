@@ -260,6 +260,10 @@ Host は接続ごとに要求を順に処理するので、この要求は応答
 Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
 指示・結果を保持せず、学習にも使わない。
 
+IPC の ETW（`docs/observability-spec.md`）は、全型に共通して要求の型と payload の長さを記録する。
+`TransformSelectedText` の長さは選択テキストと指示の長さの目安になるが、本文は持たない。secure の入力先から
+TIP はこの型を送らないので、secure の入力の長さは記録されない。これを例外として認め、型ごとに長さを外さない。
+
 失敗のログは `transform_selected_text_failed` の 1 行で、選択テキスト・指示・文脈・結果を持たない。
 `result` は次の固定値をとる（`docs/observability-spec.md` §7.2 の、イベントを定義する spec が値を
 列挙する場合に当たる）。
@@ -511,9 +515,10 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 
 ### 7.5 劣化 UX（M47 連携）
 
-- M16 は失敗時、原文を維持し、ダイアログ/インジケータで分類済みメッセージ（§7.2）を
-  控えめに提示する。secure 由来の抑止は「セーフ入力のため外部 AI を使用しません」を
-  明示する（混乱回避）。
+- M16 は失敗時、原文を維持し、プロンプト窓の状態行に分類ごとの固定の案内（§7.2）を出す
+  （`docs/legacy-parity-spec.md` §4.3。文言は `tsf-tip/src/PromptDialogModel.cpp`）。secure 由来の抑止は
+  「セーフ入力のため AI変換を使用しません」を明示する（混乱回避）。Host の SafeMode（`error=safe_mode`）は
+  secure と別の案内「安全モードのため AI変換を使用しません」にする。
 - M58-C は neural fallback の候補表示中、候補の下に分類別の固定案内を表示する。
   app 描画の UI-less 経路では候補 UIElement の説明として同じ案内を公開する。
   ホストアプリが説明を実際に描くかはアプリの実機確認対象とする。候補 UI を閉じるか

@@ -69,7 +69,7 @@ enum class UserAction : uint16_t {
     ToggleHankaku,      // 半角/全角キー
     ToggleHiraKata,     // 無変換 (Hira ⇄ Kata)
     StartUnicodeInput,  // Ctrl+Shift+U
-    StartAlnumDouble,   // 英数キーダブルタップ → 選択テキストの英訳、または読みの半角英字確定（§4.1）
+    StartAlnumDouble,   // 英数キーダブルタップ → 選択テキストの英訳（§4.1）
     StartKanaDouble,    // かなキーダブルタップ → 選択テキストの和訳（§4.1）
 
     // 学習
@@ -333,8 +333,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   Selecting 中の Forward / Backward、TIP が確定する字種指定確定、モード切替（`ToggleHiraKata` /
   `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8））を
   消費する。`Forget` と `ToggleDebugWindow` を食う条件はそれぞれの節が定める。
-  Magic Conversion のダブルタップ（`StartAlnumDouble` / `StartKanaDouble`）は M16 が効果を実装するまで
-  TIP が落とし、キーをパススルーする（§4.1）。
+  Magic Conversion のダブルタップ（`StartAlnumDouble` / `StartKanaDouble`）は `UserActionMap` の写像に無く、
+  TIP が英数キーとひらがなキーの押下の間隔から検出する（§4.1）。
 
 > **字種指定のキーと legacy との差（DEV-1812）**: F6〜F10 は legacy と Microsoft IME に共通の操作として
 > 割り当てる（roadmap M64）。legacy で F6〜F10 と同じ働きをする Ctrl+J / K / ; / L / : と、Microsoft IME の
@@ -1045,65 +1045,77 @@ IPC: `CandidateField`（候補・予測の両 payload が使う）に `tag: uint
   `VK_OEM_AUTO`（0xF3）は半角/全角キーの別名であり、英数キーではない。
 - かなキー: ひらがなキー `VK_DBE_HIRAGANA`（0xF2）。
 
-実装：`TextService::OnKeyDown` で各キーの最終押下時刻を保持し、
-`GetTickCount64() - last_press_ms < 500` で判定する。
+TIP は `TextService::OnKeyDown` で押下を判定する。同じキーを修飾キーなしで 500ms 以内に 2 回押したときだけを
+ダブルタップとする。キーリピート（lParam の bit 30 が立った押下）は数えない。2 回の間に別のキーを押したら
+数え直す。この別のキーは、`OnTestKeyDown` だけに届いてアプリへ渡したキーも含む。
 
-legacy の割当（`azooKeyMacInputController`）に合わせて、2 回目の押下で次のように動く。
+2 回目の押下も、そのキーの通常の効果は保つ。英数キーは 2 回のトグルで押す前のモードに戻る。ひらがなキーの
+1 回目は `VK_IME_ON` と同じ効果（Off なら On、英数モードならひらがなへ。`docs/tsf-deep-integration-spec.md` §3.1）を
+持ち、2 回目は変化を起こさない。そのうえで、次の条件をすべて満たすときに窓を開く。
 
-- 英数ダブルタップ
-  - 選択テキストがあれば、Magic Conversion のプロンプト窓を初期プロンプト `english`（英訳）で開く。
-  - 選択が無く、入力中の読みがあれば、読みを半角英字で確定して英数モードにする。
-- かなダブルタップ
-  - 選択テキストがあれば、同じ窓を初期プロンプト `japanese`（和訳）で開く。
-  - 選択が無ければ何もしない。
+- 読みの入力中でない（composition、読み、未確定のローマ字、確定の再試行がない）
+- 設定 `llmMagicConversion` が true（既定 false。`settings/mvp-settings.schema.json`）
+- Host が Handshake で capability `transform_selected_text` を告知している（`docs/ai-backend-spec.md` §4.1）
+- 入力先が secure でなく、AI 候補生成と外部 AI が許可され、実効 backend が `openai`
+  （`docs/privacy-and-secure-input-spec.md` §5）
+- 選択テキストがある（§4.2）
 
-どちらも同じプロンプト窓（§4.3）を開き、初期プロンプトだけが違う。かなダブルタップを
-「言い換え」の別機能（Replace Suggestion）にはしない。Replace Suggestion は、legacy では
-Ctrl+S（AI の提案）から入る状態であり、このダブルタップとは別である。Windows 版は Ctrl+S を
-割り当てない（§1.4）。
+条件を満たさなければ、キーの通常の効果だけが起きる（legacy の AI backend が off のときと同じ）。例外として、
+`llmMagicConversion` が true で Host が対応していれば、secure の入力先と長すぎる選択では案内だけの窓を出す（§4.3）。
+窓が開いている間のダブルタップは、もう一つの窓を開かない。
 
-英数ダブルタップの「読みを半角英字で確定する」枝と、英数キーが英数モードのトグルであること
-（`docs/tsf-deep-integration-spec.md` §3.1）の関係は未決である。読みがあるとき 1 回目の押下で
-読みを確定して英数モードになり、2 回目の押下でひらがなに戻るので、このままでは読みを確定する枝に届かない。
-1 回目の押下の効果との関係は M16 で決める。かなダブルタップも同じく、ひらがなキーの 1 回目の押下が
-`VK_IME_ON` と同じ効果（Off なら On、英数モードならひらがなへ。`docs/tsf-deep-integration-spec.md` §3.1）を持つので、
-その効果との関係は M16 で決める。
+どちらのダブルタップも同じプロンプト窓（§4.3）を開き、初期プロンプトだけが違う（英数は「英語に翻訳」、
+かなは「日本語に翻訳」。core の `PromptPreset`）。かなダブルタップを「言い換え」の別機能（Replace Suggestion）にはしない。
+Replace Suggestion は、legacy では Ctrl+S（AI の提案）から入る状態であり、このダブルタップとは別である。Windows 版は
+Ctrl+S を割り当てない（§1.4）。
+
+> **英数ダブルタップで読みを半角英字で確定する枝は持たない（意図した legacy との差）**: legacy は選択が無く読みが
+> あるとき、英数ダブルタップで読みを半角英字で確定する。Windows 版の英数キーはトグルであり、1 回目の押下で読みを
+> 確定して英数モードになるので、2 回目の押下はこの枝に届かない。読みの半角英字の確定は F10 で行う
+> （`docs/tsf-deep-integration-spec.md` §3.6）。
 
 ### 4.2 選択テキスト取得
 
-```cpp
-ITfContext* ctx = GetCurrentContext();
-TF_SELECTION sel{};
-ULONG fetched = 0;
-ctx->GetSelection(read_cookie, TF_DEFAULT_SELECTION, 1, &sel, &fetched);
-WCHAR buf[4096];
-ULONG cch = 0;
-sel.range->GetText(read_cookie, 0, buf, ARRAYSIZE(buf), &cch);
-```
-
-選択が空の場合は **キャレット位置の段落 or 文** を取得（`ITfRange::Clone` +
-`ShiftStart/ShiftEnd` で改行境界まで拡張）。
+TIP は窓を開くキーの処理の中で、同期の読み取り専用 EditSession で既定の選択を読む
+（`tsf-tip/src/SelectedTextEditSession.cpp`）。再変換と違い、日本語を含まない選択も受け付け、空の選択を段落へ
+広げない。選択が空なら窓を開かない。読むのは UTF-16 で 4096 単位までで、それを超える選択は切り詰めずに断り、
+案内だけの窓を出す。secure の入力先では選択を読まない。読んだ選択の範囲（`ITfRange`）と原文は、窓が閉じるまで
+入力状態の外に保持する（窓へフォーカスが移ると入力状態は消えるため）。
 
 ### 4.3 プロンプト UI
 
-Phase 5 は簡易 Win32 ダイアログ（`DialogBox` + EDIT control）。
-WinUI 3 への移行は Phase 7-M30。
+Win32 のモードレスの窓で出す（`tsf-tip/src/PromptDialog.cpp`。`docs/native-ui-spec.md` §4.4）。窓は自分の
+メッセージループを持たず、アプリのループで動く。キーの処理の中では開かず、候補窓へ送ったメッセージで、
+キーの処理が返った後に開く。WinUI 3 への移行は Phase 7-M30。
 
-legacy のプロンプト窓は 2 段である。プロンプトを入力して変換結果のプレビューを取得し
-（`getTransformationPreview`、選択テキストへは触れない）、利用者が結果を確かめてから適用する。
-以下の 1 段のダイアログは、プレビューと適用を分けない簡易形であり、これが legacy との差である。
-プレビューを挟む 2 段にするかは、M16 の UI の段階として `docs/ai-backend-spec.md` で決める。
+窓は legacy と同じく 2 段である。利用者は指示を送って結果を確かめ、[適用] で選択に反映する。
 
-レイアウト：
 ```
-+------------------------------------------+
-| プロンプトを入力                          |
-| [____________________________________]   |
-| 選択テキスト: "こんにちは、田中さん。"     |
-|                                          |
-|                    [キャンセル] [ 変換 ]  |
-+------------------------------------------+
++--------------------------------------------------+
+| 指示                                             |
+| [日本語に翻訳___________________________________] |
+| 選択テキスト                                      |
+| [Good morning.                                 ] |
+| 結果                                             |
+| [おはようございます。                            ] |
+| （状態行: 変換中… / 失敗の案内）                   |
+|                     [キャンセル] [ 変換 ] [ 適用 ] |
++--------------------------------------------------+
 ```
+
+- 開いただけでは何も送らない（legacy は初期プロンプトがあると開いた直後に送る。外部送信の同意は DEV-1965 で決める）。
+  指示欄で Enter を押すか [変換] を押したときに送る。指示が空なら送らない。
+- 送った後は指示欄を読み取り専用にし、[変換] と [適用] を押せなくする。待つ間も Esc と [キャンセル] は効く。
+- 結果が届いたら結果欄に出す。この状態の Enter は [適用] になり、指示を直して [変換] で送り直せる。
+- 失敗したときは選択を変えず、状態行に分類ごとの固定の案内を出す（`docs/ai-backend-spec.md` §7.5）。
+  Host が安全モード（SafeMode）で断った場合は、secure とは別の案内を出す。
+- Esc、[キャンセル]、閉じるボタン、窓が非アクティブになったときは、送った要求を取り消して窓を閉じる。
+  取り消した要求の応答と、待っていない `request_id` の応答は捨てる。
+- secure の入力先と 4096 単位を超える選択では、指示欄と選択欄を出さず、案内と [閉じる] だけの窓を出す。
+- 待つ間、Host への同じ接続の後続の要求は待たされる（`docs/ai-backend-spec.md` §4.1 の制約）。窓の入力を止めて
+  いるので、窓の中の打鍵は起きない。
+
+TIP のログは段階名と HRESULT だけを持ち、選択テキスト・指示・結果を出さない。
 
 ### 4.4 IPC
 
@@ -1118,8 +1130,11 @@ Host の `AiBackend`（`inference-host/src/AiBackend.cpp`）が担う。エン�
 
 ### 4.6 結果反映
 
-`replaceSelectedText(result)` ClientAction を発行。
-TIP 側で selection range に `SetText(result)` を実行（composition 無し）。
+[適用] で窓を先に閉じ、アプリへフォーカスが戻ってから、保持した選択の範囲に結果を書く。書き込みは
+アプリが今か後で許す読み書きの EditSession で行い（`TF_ES_ASYNCDONTCARE`）、composition を作らない。書く前に、
+範囲の文字列が窓を開いたときの原文と同じかを照合し、違えば書かずに警告音を鳴らす。EditSession が許されない
+ときも原文のままにする。置換は確定ではないので、学習の観測（`ObserveCommit`・`CommitCorrection`）を送らない。
+core の `ReplaceSelectedText` はこの経路では使わない。
 
 ## 5. カスタムローマ字テーブル (M17)
 

@@ -328,7 +328,7 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 | HWND | 用途 | 親 | 生存期間 |
 |---|---|---|---|
 | `CandidateWindow` | 変換候補と、予測モードでの予測候補（M15） | デスクトップ | composition 中のみ表示（予測は設定 ON 時） |
-| `PromptDialog` | Magic Conversion / Replace Suggestion（予定。M16 が追加する。`docs/legacy-parity-spec.md` §4.3） | フォアグラウンド | モーダル表示中のみ |
+| `PromptDialog` | Magic Conversion のプロンプト窓（M16。`docs/legacy-parity-spec.md` §4.3） | アプリの最上位の窓（owner） | モードレス。英数・かなのダブルタップで開き、適用・取り消し・非アクティブ化で閉じる |
 | `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
 
 設定アプリは **別プロセス**（`azookey_settings.exe`）で、IPC 経由で Host 設定を変更する。

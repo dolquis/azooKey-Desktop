@@ -227,6 +227,23 @@ TEST_F(LocalSettingsTest, AutoSecureInputDefaultsOnReloadsAndInvalidValuesRestor
   }
 }
 
+// DEV-1963: the prompt window opens only after llmMagicConversion is explicitly true.
+TEST_F(LocalSettingsTest, MagicConversionDefaultsOffAndOnlyExplicitTrueEnablesIt) {
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.AiSnapshot().magic_conversion);
+  Write(R"({"llmMagicConversion":true})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().magic_conversion; }));
+  for (const auto* json : {R"({})", R"({"llmMagicConversion":false})",
+                           R"({"llmMagicConversion":"true"})", R"({"llmMagicConversion":1})",
+                           R"({"llmMagicConversion":null})", "{"}) {
+    SCOPED_TRACE(json);
+    Write(R"({"llmMagicConversion":true})");
+    ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().magic_conversion; }));
+    Write(json);
+    ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().magic_conversion; }));
+  }
+}
+
 TEST_F(LocalSettingsTest, ShowSecureIndicatorDefaultsOnAndOnlyExplicitFalseHidesIt) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

@@ -214,7 +214,7 @@ Describe "WiX MSI package consistency" {
   }
 
   It "gives the settings shortcut the AppUserModelID the Host's update toast uses" {
-    $toastHeader = Get-Content -Raw (Join-Path $repoRoot "inference-host\include\azookey\host\UpdateToast.h")
+    $toastHeader = Get-Content -Raw (Join-Path $script:repoRoot "inference-host\include\azookey\host\UpdateToast.h")
     $toastHeader | Should -Match 'kAppUserModelId\[\] = L"dolquis\.azooKey";'
     $script:package | Should -Match 'Id="SettingsShortcut"[^>]*>\s*(<!--[\s\S]*?-->\s*)?<ShortcutProperty Key="System\.AppUserModel\.ID" Value="dolquis\.azooKey" />\s*</Shortcut>'
   }

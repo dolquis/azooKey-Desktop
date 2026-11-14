@@ -386,7 +386,14 @@ void UpdateChecker::NotifyOnce(const AvailableRelease& release) {
   if (!dependencies_.notify_update || options_.notification_path.empty() || release.url.empty()) {
     return;
   }
-  if (NotifiedVersion() == release.version) return;
+  // Only a version above the one last notified: the record keeps the highest version shown, so
+  // switching the channel back and forth does not notify a version again.
+  const auto latest = ParseReleaseVersion(release.version);
+  if (!latest) return;
+  if (const auto notified_text = NotifiedVersion()) {
+    const auto notified = ParseReleaseVersion(*notified_text);
+    if (notified && CompareReleaseVersions(*latest, *notified) <= 0) return;
+  }
   bool shown = false;
   // A notification sink must not terminate the Host worker.
   try {

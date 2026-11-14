@@ -57,8 +57,8 @@ struct UpdateCheckerOptions {
   std::string release_page_prefix{"https://github.com/dolquis/azooKey-Desktop/releases/"};
   // update-status.json, written atomically after each finished check.
   std::filesystem::path status_path;
-  // update-notification.json: the version last notified, so the same version is notified once.
-  // Empty: never notify.
+  // update-notification.json: the highest version notified, so a version is notified once and
+  // only a higher one is notified after it. Empty: never notify.
   std::filesystem::path notification_path;
 };
 
@@ -74,9 +74,10 @@ struct UpdateCheckDependencies {
   std::function<bool()> network_allowed;
   // Invoked on the worker with the status only (no URL or response text).
   std::function<void(UpdateCheckStatus)> report;
-  // Invoked on the worker after a check recorded a newer release that has a release page and
-  // differs from the version last notified. True when the notification was shown: only then the
-  // version is recorded, so a failed or suppressed notification is tried at the next check.
+  // Invoked on the worker after a check recorded a newer release that has a release page and is
+  // above the version recorded in notification_path. True when the notification was shown: only
+  // then the version is recorded, so a failed or suppressed notification is tried at the next
+  // check.
   std::function<bool(const AvailableRelease&)> notify_update;
 };
 

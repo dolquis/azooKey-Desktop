@@ -138,6 +138,8 @@ struct Fixture {
   // CheckOnce on the test thread notifies in the tests that read these.
   std::vector<AvailableRelease> notified;
   bool notification_shown = true;
+  // Runs whenever the checker reads the wall clock (set only by tests that call CheckOnce).
+  std::function<void()> on_now;
 
   UpdateChecker Make(std::string current_version = "1.0.0") {
     UpdateCheckerOptions options;
@@ -150,7 +152,10 @@ struct Fixture {
     dependencies.fetch_text = [this](const HttpTextRequest& request) {
       return releases.Fetch(request);
     };
-    dependencies.now_epoch = [] { return kNow; };
+    dependencies.now_epoch = [this] {
+      if (on_now) on_now();
+      return kNow;
+    };
     dependencies.steady_now = [this] { return clock.Now(); };
     dependencies.network_allowed = [this] { return network_allowed.load(); };
     dependencies.notify_update = [this](const AvailableRelease& release) {
@@ -338,6 +343,30 @@ TEST(UpdateCheckerNotificationTest, ANewerReleaseIsNotifiedOncePerVersion) {
   ASSERT_EQ(f.notified.size(), 2u);
   EXPECT_EQ(f.notified.back().version, "1.2.0-beta.1");
   EXPECT_EQ(ReadStatus(f.notification_path)->GetString("notifiedVersion"), "1.2.0-beta.1");
+  // Back on stable, the older 1.1.0 is not notified, and returning to beta does not notify
+  // 1.2.0-beta.1 again.
+  restarted.UpdateSettings(true, "stable", 24);
+  f.releases.answer.body = Release("v1.1.0");
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  restarted.UpdateSettings(true, "beta", 24);
+  f.releases.answer.body = "[" + Release("v1.2.0-beta.1", true) + "]";
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_EQ(f.notified.size(), 2u);
+  EXPECT_EQ(ReadStatus(f.notification_path)->GetString("notifiedVersion"), "1.2.0-beta.1");
+}
+
+TEST(UpdateCheckerNotificationTest, ACheckCancelledWhileItsRecordIsWrittenIsNotNotified) {
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  auto checker = f.Make("1.0.0");
+  checker.UpdateSettings(true, "stable", 24);
+  // The record reads the wall clock after its own cancellation check; turning the check off
+  // there leaves only the check before the notification to stop it.
+  f.on_now = [&] { checker.UpdateSettings(false, "stable", 24); };
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_TRUE(std::filesystem::exists(f.status_path));
+  EXPECT_TRUE(f.notified.empty());
+  EXPECT_FALSE(std::filesystem::exists(f.notification_path));
 }
 
 TEST(UpdateCheckerNotificationTest, ANotificationThatWasNotShownIsTriedAtTheNextCheck) {

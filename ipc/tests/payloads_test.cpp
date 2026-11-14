@@ -2061,7 +2061,7 @@ TEST(PayloadsTest, RawKeysOutsideTheAlphabetOrTheBoundAreDropped) {
     EXPECT_EQ(keys_of(kept), kept);
   }
   for (const std::string dropped :
-       {"pass1234", "Kousyou", "kou syou", "kou,syou", "カナ", "漢字", "kana\xF0\x9F\x98\x80"}) {
+       {"kana123", "Kousyou", "kou syou", "kou,syou", "カナ", "漢字", "kana\xF0\x9F\x98\x80"}) {
     EXPECT_EQ(keys_of(dropped), "") << dropped;
   }
   EXPECT_EQ(keys_of(std::string(kMaxRawKeysBytes, 'a')), std::string(kMaxRawKeysBytes, 'a'));

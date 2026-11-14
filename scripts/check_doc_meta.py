@@ -19,7 +19,9 @@ Front matter
     milestones     spec: required. design: optional. Others: not allowed.
                    Every ID is written out (`M13, M14`), no ranges. A step
                    (`M58-A`), a theme (`X-1`) and a theme item (`X-3-3`) are
-                   written as the index row writes them.
+                   written as the index row writes them. A spec that belongs
+                   to no milestone writes `[]`, and its index row then names
+                   no ID either (M3).
     canonical_for  spec / design / policy / runbook: required. Others: not
                    allowed. Each phrase must occur in the document's row of the
                    index, so the two cannot drift apart.
@@ -34,8 +36,7 @@ Which documents
   (`NOT_GOVERNED`), `docs/decisions/` (frozen records with their own fixed
   header, read instead of front matter), `docs/archive/` (kind by location) and
   `docs/linear-conventions.md` (a mirror of a shared core; its kind comes from
-  the index). Specs may still lack front matter (`SPEC_FRONT_MATTER_OPTIONAL`);
-  their kind then comes from the file name.
+  the index). Every spec carries front matter.
 
 Rules (fail)
   M1  Front matter syntax, keys, vocabulary and the per-kind required and
@@ -87,8 +88,6 @@ DECLARABLE = {"spec", "design", "runbook", "one-off", "reference", "policy"}
 
 NOT_GOVERNED = ("docs/README.md", "docs/AGENTS.md", "docs/CLAUDE.md", "docs/decisions/README.md")
 NO_FRONT_MATTER = {"docs/linear-conventions.md": "policy"}
-# Specs get their front matter after the spec split (DEV-1976〜DEV-1981).
-SPEC_FRONT_MATTER_OPTIONAL = True
 
 # Table headings of the index and the kinds each one holds. A heading matches
 # when it starts with the key.
@@ -340,11 +339,8 @@ def check(root: Path) -> tuple[list[str], list[str]]:
                 problems.append(f"{rel}: M1 {exc}")
                 continue
             if meta is None:
-                if spec_name and SPEC_FRONT_MATTER_OPTIONAL:
-                    kind = "spec"
-                else:
-                    problems.append(f"{rel}: M1 冒頭に front matter（kind ほか）がありません")
-                    continue
+                problems.append(f"{rel}: M1 冒頭に front matter（kind ほか）がありません")
+                continue
         elif front_matter_end(lines):
             problems.append(f"{rel}: M1 この文書は front matter を持ちません（種別は置き場所と索引で決まります）")
             continue
@@ -413,8 +409,10 @@ def check_meta(
         if kind not in allowed and key in meta:
             problems.append(f"{rel}: M1 kind {kind} には {key} を書きません")
     for key in ("milestones", "canonical_for", "defers_to"):
-        if key in meta and (not isinstance(meta[key], list) or not meta[key]):
-            problems.append(f"{rel}: M1 {key} は空でないリスト [a, b] で書きます")
+        # A spec outside every milestone declares that with `milestones: []`.
+        empty_ok = key == "milestones" and kind == "spec"
+        if key in meta and (not isinstance(meta[key], list) or not (meta[key] or empty_ok)):
+            problems.append(f"{rel}: M1 {key} は空でないリスト [a, b] で書きます（spec の milestones だけ [] を許します）")
     if isinstance(meta.get("milestones"), list):
         for item in meta["milestones"]:
             if not MILESTONE_ID.match(item):

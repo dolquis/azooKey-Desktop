@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M57]
+canonical_for: ["ModernBERT-Ja 候補スコアリング"]
+---
+
 # ModernBERT-Ja 候補スコアリング 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M16, M58-C, X-3-3]
+canonical_for: ["AiBackend 契約"]
+---
+
 # AiBackend（AI 変換バックエンド）契約 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

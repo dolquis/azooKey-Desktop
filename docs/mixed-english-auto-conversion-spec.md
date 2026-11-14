@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M63, M63-A, M63-B]
+canonical_for: ["日英混在ローマ字入力の自動変換"]
+---
+
 # 日英混在ローマ字入力の自動変換 仕様（追加機能 / M63）
 
 本書は azooKey-Desktop Windows 版の「日英混在ローマ字入力の自動変換（Mixed Japanese-English

@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M49]
+canonical_for: ["学習データ可視化とバックアップ"]
+---
+
 # 学習データ可視化・バックアップ 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

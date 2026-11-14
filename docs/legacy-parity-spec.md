@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M13, M14, M15, M16, M17, M18, M19, M64]
+canonical_for: ["Phase 5（M13〜M19）のレガシー parity"]
+---
+
 # Legacy Parity 仕様（Phase 5）
 
 本書は macOS 版 (`legacy/azooKeyMac/`) が持つ機能を Windows 版へ

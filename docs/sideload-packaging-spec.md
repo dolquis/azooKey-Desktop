@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M11, M12, M29, M32, M33, M34]
+canonical_for: ["配布・署名・更新・観測"]
+---
+
 # 配布・パッケージング 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。

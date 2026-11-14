@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M44, M50]
+canonical_for: ["IME 診断・修復ウィザード", "アプリ互換性テストハーネス"]
+---
+
 # IME 診断・修復ウィザードとアプリ互換性テストハーネス 仕様（M44・M50）
 
 対象リポジトリ: dolquis/azooKey-Desktop

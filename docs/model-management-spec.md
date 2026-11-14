@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M45]
+canonical_for: ["Zenzai モデル管理 UI"]
+---
+
 # Zenzai モデル管理 UI 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

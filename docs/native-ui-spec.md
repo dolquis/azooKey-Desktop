@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M16, M26, M34, M53]
+canonical_for: ["ネイティブ UI"]
+---
+
 # Native UI 仕様（Phase 6-C）
 
 本書は候補/予測ウィンドウ等のネイティブ UI をモダン化する仕様を定める。

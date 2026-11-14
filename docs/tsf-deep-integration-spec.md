@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M3, M5, M20, M21, M22, M23, M64]
+canonical_for: ["TSF 深部統合"]
+---
+
 # TSF Deep Integration 仕様（Phase 6-A）
 
 本書は Microsoft IME（MS-IME）と同等の TSF 統合を実現するための仕様を定める。

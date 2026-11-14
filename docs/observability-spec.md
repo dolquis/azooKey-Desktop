@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M41, M51]
+canonical_for: ["構造化ログと可観測性"]
+---
+
 # 構造化ログと可観測性 仕様（M41・M51）
 
 対象リポジトリ: dolquis/azooKey-Desktop

@@ -285,7 +285,7 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 これは protocol v1 の加算的拡張である。古い TIP と新しい Host の組合せでは
 学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。
 `QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担い、
-`QueryPredictions` は次のとおり Host も二重に検査する。
+どちらも次のとおり Host も二重に検査する。
 これらに学習観測用フラグの欠落判定を流用しない。
 `QueryPredictions` の要求は `learning_allowed` を運ばず、
 イベントごとの `secure` だけを運ぶ（予測は学習と別の許可軸のため）。
@@ -297,6 +297,12 @@ Host は、要求の `secure == true` か Host 設定が secure のとき、照�
 学習を止めるが、予測は止めない。
 古い TIP と新しい Host の組合せでは予測が出ず、新しい TIP と古い Host の組合せでは
 TIP の送信抑止を維持する。
+
+`TransformSelectedText` の要求は、イベントごとの `secure` と、TIP が解いた AI 候補生成許可・
+外部 AI 許可を運ぶ。欠落は secure で AI 不可として扱う。Host は、要求の `secure == true` か
+上と同じ意味で Host 設定が secure のとき、AI backend を呼ばずに `BlockedBySecure` を返す。
+許可は Host の設定と AND する（`docs/ai-backend-spec.md` §4.1）。TIP は対応を告知した Host にだけ
+この型を送る。
 
 ### 5.2 `custom` モードの per-axis 解決
 

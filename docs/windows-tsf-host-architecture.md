@@ -146,11 +146,11 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `FetchCatalogModel` | `docs/model-management-spec.md` §4.4 |
 | `QueryCatalogFetch` | `docs/model-management-spec.md` §4.4 |
 | `CancelCatalogFetch` | `docs/model-management-spec.md` §4.4 |
+| `TransformSelectedText` | `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4 |
 | `Unknown` | `docs/ipc-persistence-hardening-spec.md` §6.3 |
 
-`MessageType` に無く、spec が定義を持つ予定の型は次の 2 つである。enum へ足すときに上の表へ移す。
+`MessageType` に無く、spec が定義を持つ予定の型は次の 1 つである。enum へ足すときに上の表へ移す。
 
-- `TransformSelectedText`（予定。M16）: `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4
 - `RequestPostCommitLint`（予定。横断 X-3-3）: `docs/ai-backend-spec.md` §4.3
 
 校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session

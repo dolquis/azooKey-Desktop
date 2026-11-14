@@ -118,6 +118,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `FetchCatalogModel` | codec + Host | 既定の catalog の entry の取得開始。送信元は設定アプリ。capability `fetch_catalog_model`。`model_id`（省略すると `defaultModelId`）を送る。Host は取得をバックグラウンドで始めて終わりを待たずに応答し、実行中なら `ok: false` / `error: "busy"` を返す。応答は `QueryCatalogFetch` と同じ形（`docs/model-management-spec.md` §4.4） |
 | `QueryCatalogFetch` | codec + Host | catalog の取得の状態の問い合わせ。要求 payload は空オブジェクト。`state`（`idle` / `running` / `done`）、`model_id`、`received_bytes`、`total_bytes`、`done` のときの `status`・`path`・`result_error` を受け取る（§4.4） |
 | `CancelCatalogFetch` | codec + Host | 実行中の catalog の取得の中止要求。送信元は設定アプリ。capability `cancel_catalog_fetch`。`model_id`（必須）を送り、止まるのを待たずに `QueryCatalogFetch` と同じ形で応答する。その entry の取得が実行中でなければ `ok: false` / `error: "not_running"`（§4.4） |
+| `TransformSelectedText` | codec + Host | M16 の選択テキストの AI 変換。capability `transform_selected_text`。`mode`・`prompt`・`selection`・`context`・`max_results` と privacy の `secure`・`ai_allowed`・`external_ai_allowed`・`ai_backend` を送る。privacy の欠落は止める側（secure・AI 不可）に倒す。成功なら `result`、失敗なら `error_class`（`AiErrorClass` 名）か `error`（`invalid_request` / `not_authenticated`）を受け取る。取り消した要求には応答しない（`docs/ai-backend-spec.md` §4.1） |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

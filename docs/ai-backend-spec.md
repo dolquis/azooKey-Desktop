@@ -196,35 +196,55 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 `ipc/src/Payloads.cpp` に追加する。各メッセージ名を `MessageType` enum と
 `TypeToString` / `TypeFromString` に追加する。
 
-`ipc` の `MessageType` に定義があり Host で `AiBackend` を呼ぶのは、`QueryBatchConversion`
-（§4.2、`task=Cleanup`）と `DetectAnomalies`（§3.1 末尾、`task=Anomalies`）である。
-§4.1 の `TransformSelectedText` と §4.3 の `RequestPostCommitLint` は、M16 / X-3-3 で
-`MessageType` に追加するメッセージの定義であり、`task=Transform` / `task=Lint` の IPC 上の
-入口はこの 2 メッセージが担う。
+`ipc` の `MessageType` に定義があり Host で `AiBackend` を呼ぶのは、`TransformSelectedText`
+（§4.1、`task=Transform`）、`QueryBatchConversion`（§4.2、`task=Cleanup`）と
+`DetectAnomalies`（§3.1 末尾、`task=Anomalies`）である。§4.3 の `RequestPostCommitLint` は、
+X-3-3 で `MessageType` に追加するメッセージの定義であり、`task=Lint` の IPC 上の入口を担う。
 
 ### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張）
 
 > 本節が当該 payload の正典であり、`legacy-parity-spec.md` §4.4 は本節へのリンクだけを持つ
 > （同 §4 冒頭の委譲注記）。
 
+TIP は、Handshake 応答の capability に `transform_selected_text` がある Host にだけ送る。
+この capability を持たない Host は未知の型を `Unknown` として扱い、要求と違う型で応答するので、
+TIP はその応答を要求に対応づけられない。
+
 ```
 TransformSelectedTextRequest:
-  request_id: uint64
-  mode: enum { rewrite, translate, summarize, free }
-  prompt: string            // ユーザー指示（例 "もっと丁寧に"）。free 以外でも併用可
-  selection: string         // 変換対象（空なら呼出側がキャレット段落へ拡張済み）
-  context: string           // 前後文脈。includeContextInAITransform=false なら空
-  max_results: uint32       // 既定 1。複数案 UI は将来拡張（§14）
+  mode: enum { rewrite, translate, summarize, free }  // 必須。未知・欠落は不正な要求
+  prompt: string            // ユーザー指示（例 "日本語に翻訳"）。free の指示（§5.2）。欠落は空
+  selection: string         // 変換対象。必須・非空
+  context: string           // 前後文脈。欠落は空
+  max_results: uint32       // 既定 1。複数案 UI は将来拡張（§14）のため 1 に丸める
+  secure: bool              // 入力先の secure 判定。欠落は true。wire には false だけを載せる
+  ai_allowed: bool          // TIP が解いた AI 候補生成許可。欠落は false
+  external_ai_allowed: bool // TIP が解いた外部 AI 許可。欠落は false。ai_allowed が false なら false
+  ai_backend: string        // TIP がアプリ別プロファイルで解いた backend。空なら Host の aiBackend。
+                            // none / openai / local-zenzai 以外は不正な要求
 TransformSelectedTextResponse:
-  request_id
-  result: string            // 変換後テキスト（max_results=1 の最良案）
-  results: optional<string[]>// 複数案（予約。MVP では未使用）
-  error: optional<string>   // 失敗時の分類済みメッセージ（§7.2）
-  error_class: optional<string> // AiErrorClass 名（呼出側 fallback 用）
+  result: string            // 変換後テキスト。成功のときだけ非空
+  results: optional<string[]>// 複数案（予約。MVP では wire に載せない）
+  error_class: optional<string> // 失敗の AiErrorClass 名（§7.2、呼出側 fallback 用）
+  error: optional<string>   // プロトコルの失敗（invalid_request / not_authenticated）
 ```
 
-`MessageType::TransformSelectedText` を追加。Host は payload を `AiTransformRequest`
-（`task=Transform`）へ正規化して `AiBackend::Transform` を呼ぶ。
+要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
+`context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
+privacy のフィールドが欠けた要求は、secure で AI 不可の要求として扱う。
+
+Host の `Dispatcher` は `MessageType::TransformSelectedText` を次の順で処理する。
+
+1. 要求の `secure` が true か、Host の privacy 設定が secure（§8）なら、`AiBackend` を呼ばずに
+   `error_class=BlockedBySecure` を返す。SafeMode の学習停止はこの判定に含めない。
+2. payload を `AiTransformRequest`（`task=Transform`）へ正規化する。AI 候補生成許可と外部 AI 許可は、
+   Host の設定と要求の値の AND とする。設定を持たない Host はどちらも不許可とする。
+3. `AiBackend::Transform` を呼ぶ。`task=Transform` はリモート専用で、外部 AI が許可されないか
+   実効 backend が `local-zenzai` なら `Disabled` を返す（ローカルの変換器は選択テキストを変換しない）。
+4. TIP が `Cancel` で取り消した要求には応答しない。
+
+Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
+指示・結果を保持せず、学習にも使わない。ログには失敗の分類だけを出す（§7.2）。
 
 ### 4.2 M58-C: `QueryBatchConversion`（`romaji-batch-conversion-spec.md` §6 が正典）
 
@@ -300,15 +320,20 @@ LintFinding:
 
 M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` の
 `Prompt.dictionary`）を Windows 版で 4 値に簡約したものである。`AiBackend` は
-`mode` から system プロンプトを選び、`prompt`（ユーザー指示）と `text`（選択）・
-`context` を user メッセージに組む。
+`mode` から system プロンプトを選ぶ。`free` では `prompt`（ユーザー指示）を指示に加え、
+ほかの `mode` は `prompt` を使わない。`text`（選択）と `context` は user メッセージに組む。
+
+M16 のプロンプト窓は、英数・かなのどちらのダブルタップでも `free` を送り、利用者が窓で確かめた
+指示を `prompt` に載せる（初期プロンプトだけが違う。`docs/legacy-parity-spec.md` §4.1）。legacy の
+プロンプト窓も、初期プロンプトを含めて自由な指示として送る。`rewrite` / `translate` / `summarize` は
+wire の値として残す。
 
 | `mode` | 意図 | system プロンプト（要旨） |
 |---|---|---|
-| `rewrite` | 言い換え（かなダブルタップ / Replace Suggestion） | 「入力テキストの意味を保ったまま、ユーザー指示に従って自然な日本語に書き換える。結果のみを返す」 |
-| `translate` | 翻訳（指示言語へ） | 「ユーザー指示で指定された言語へ翻訳する。指定が無ければ英語。結果のみを返す」 |
+| `rewrite` | 言い換え | 「入力テキストの意味を保ったまま、自然な日本語に書き換える。結果のみを返す」 |
+| `translate` | 英訳 | 「入力テキストを英語へ翻訳する。結果のみを返す」 |
 | `summarize` | 要約 | 「入力テキストを簡潔に要約する。結果のみを返す」 |
-| `free` | 自由変換（英数ダブルタップ / Magic Conversion） | 「ユーザー指示（prompt）に従い入力テキストを変換する。指示が空なら自然な続き/言い換えを返す。結果のみを返す」 |
+| `free` | 自由変換（英数・かなのダブルタップのプロンプト窓） | 「ユーザー指示（prompt）に従い入力テキストを変換する。結果のみを返す」 |
 
 - system 文言の最終確定値は実装 PR（M16）でレビューする。本書は**マッピングの
   存在と意図**を契約として固定する（4 値の追加/削除は本書改訂を要する）。
@@ -401,11 +426,12 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
   殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
   壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
 - `local-zenzai` backend の通常のAI経路はM47の要求種別ごとの deadline（§8.5.2）に従う。
-  Hostの`AiBackend`は、ローカル経路の`Cleanup`以外（Magic Conversion、Lintなど）に800 msの
-  deadlineを課し、超過は`Timeout`とする。一方で変換要求（`QueryCandidates`、一括変換）には、
+  Hostの`AiBackend`は、ローカル経路の`Lint`に800 msの deadlineを課し、超過は`Timeout`とする。
+  一方で変換要求（`QueryCandidates`、一括変換）には、
   800 msは1変換のハード予算の上限を決める設計値であり、request deadlineではない。
   M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
   全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
+  Magic Conversion（`Transform`）と`Anomalies`はローカル経路を持たず、`Disabled`を返す（§4.1）。
 - X-3-3 は非同期の背景要求であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）
@@ -476,7 +502,8 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 
 `AiBackend` の消費側は、設定と当該要求から解決した許可条件で
 処理を制限する。入力先由来の secure 判定は TIP が担い、Host は前面アプリを
-検出しない。`TransformSelectedText` の secure 中の送信抑止は TIP が担う。
+検出しない。`TransformSelectedText` の secure 中の送信抑止は TIP が担い、Host も要求の
+`secure` と Host の privacy 設定で拒否する（§4.1）。
 本節の AI backend ガードは消費側の設計契約であり、共有ゲートインスタンスや
 M48 のモード通知 API を前提としない。
 
@@ -485,6 +512,7 @@ M48 のモード通知 API を前提としない。
     で早期 return（ローカル zenzai も動かさない）。
   - `外部 AI 許可==false` かつ実効 backend が `OpenAi` → 外部送信を行わず、
     消費者の fallback（§7.4）へ。`local-zenzai` が許可されていればそちらへ寄せる。
+    ローカル経路を持たない `Transform`（M16）と `Anomalies` は寄せずに `Disabled` を返す（§7.1）。
   - `privacy-and-secure-input-spec.md` §5 の抑止表は `aiBackend=none` 強制の実装
     ポイントを `inference-host/src/AiBackend.cpp` と明記しており、本契約はそれを満たす。
 - **多層防御**: TIP 側でも secure 中は Magic Conversion を無効化する（同 §5 表。ダブルタップを検出する

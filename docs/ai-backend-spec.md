@@ -245,6 +245,9 @@ Host の `Dispatcher` は `MessageType::TransformSelectedText` を次の順で�
 4. TIP が `Cancel` で取り消した要求には応答しない。
 
 保留中の要求が接続ごとの上限に達していて受け付けられないときは、`error_class=ServerError` を返す。
+Host は接続ごとに要求を順に処理するので、この要求は応答まで（外部 AI では最大で `openAiTimeoutMs`）
+同じ接続の後続の要求を待たせる。`QueryBatchConversion` の `ai-cleanup` と同じ制約であり、取り消しの
+`Cancel` は control 接続で届く。
 Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
 指示・結果を保持せず、学習にも使わない。ログには失敗の分類だけを出す（§7.2）。
 

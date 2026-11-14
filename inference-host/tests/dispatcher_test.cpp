@@ -464,7 +464,7 @@ TEST_F(DispatcherTest, Handshake) {
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
         "learning_data_management", "commit_correction", "learning_reset", "persona",
-        "detect_anomalies", "mixed_english", "raw_keys"}) {
+        "detect_anomalies", "mixed_english", "raw_keys", "transform_selected_text"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -6259,6 +6259,259 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   scheduler.Cancel(768);
   EXPECT_FALSE(handler.Dispatch(
       MakeReq(768, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request))));
+  std::remove(settings_path.c_str());
+}
+
+// M16 (ai-backend-spec section 4.1, DEV-1963): the Host normalizes the request
+// to task=Transform, and the request's flags, the Host's privacy setting and
+// its AI settings must all allow the selection out before any backend sees it.
+TEST_F(DispatcherTest, TransformSelectedTextGatesPrivacyBeforeAnyBackend) {
+  const auto settings_path = temp_directory.File("azookey_transform_selected_text_settings.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << json;
+  };
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  unsigned calls = 0;
+  unsigned status = 200;
+  std::string sent;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string& body, const auto*, auto) {
+        ++calls;
+        sent = body;
+        ipc::json::Object message{{"content", R"({"result":"おはようございます。"})"}};
+        ipc::json::Object choice{{"message", std::move(message)}, {"finish_reason", "stop"}};
+        ipc::json::Array choices;
+        choices.emplace_back(std::move(choice));
+        return azookey::host::AiHttpResponse{
+            status, ipc::json::Stringify(ipc::json::Object{{"choices", std::move(choices)}})};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+  const auto transform = [&](uint64_t id, const ipc::TransformSelectedTextRequest& request) {
+    const auto response =
+        handler.Dispatch(MakeReq(id, ipc::MessageType::TransformSelectedText,
+                                 ipc::BuildTransformSelectedTextRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    if (response) EXPECT_EQ(response->type, ipc::MessageType::TransformSelectedText);
+    return response ? ipc::ParseTransformSelectedTextResponse(response->payload_json)
+                    : std::nullopt;
+  };
+  ipc::TransformSelectedTextRequest request;
+  request.mode = "free";
+  request.prompt = "日本語に翻訳";
+  request.selection = "Good morning.";
+  request.secure = false;
+  request.ai_allowed = request.external_ai_allowed = true;
+
+  const auto done = transform(780, request);
+  ASSERT_TRUE(done.has_value());
+  EXPECT_EQ(done->result, "おはようございます。");
+  EXPECT_FALSE(done->error_class.has_value());
+  EXPECT_EQ(calls, 1u);
+  EXPECT_NE(sent.find("Good morning."), std::string::npos);
+  EXPECT_NE(sent.find("日本語に翻訳"), std::string::npos);
+
+  // Each refusal reaches neither backend.
+  const auto refused = [&](uint64_t id, const ipc::TransformSelectedTextRequest& refused_request,
+                           const char* expected) {
+    const auto before = calls;
+    const auto response = transform(id, refused_request);
+    ASSERT_TRUE(response.has_value()) << expected;
+    EXPECT_TRUE(response->result.empty()) << expected;
+    EXPECT_EQ(response->error_class, std::optional<std::string>(expected));
+    EXPECT_EQ(calls, before) << expected;
+  };
+  auto secure = request;
+  secure.secure = true;
+  refused(781, secure, "BlockedBySecure");
+  auto no_ai = request;
+  no_ai.ai_allowed = no_ai.external_ai_allowed = false;
+  refused(782, no_ai, "BlockedBySecure");
+  // Without external AI the request falls to the local path, which does not
+  // transform a selection.
+  auto local = request;
+  local.external_ai_allowed = false;
+  refused(783, local, "Disabled");
+  auto local_backend = request;
+  local_backend.ai_backend = "local-zenzai";
+  refused(784, local_backend, "Disabled");
+  auto none = request;
+  none.ai_backend = "none";
+  refused(785, none, "Disabled");
+  // A request without the flags is secure.
+  {
+    const auto before = calls;
+    const auto response =
+        handler.Dispatch(MakeReq(786, ipc::MessageType::TransformSelectedText,
+                                 R"({"mode":"free","prompt":"x","selection":"Good morning."})"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(response->payload_json)->error_class,
+              std::optional<std::string>("BlockedBySecure"));
+    EXPECT_EQ(calls, before);
+  }
+
+  status = 401;
+  const auto auth = transform(787, request);
+  ASSERT_TRUE(auth.has_value());
+  EXPECT_TRUE(auth->result.empty());
+  EXPECT_EQ(auth->error_class, std::optional<std::string>("Auth"));
+  status = 200;
+
+  // The Host's own secure setting, and settings that refuse external AI.
+  for (const auto [json, expected] :
+       {std::pair{R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+                  R"("privacy":{"mode":"secure"}})",
+                  "BlockedBySecure"},
+        std::pair{R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+                  R"("privacy":{"mode":"private"}})",
+                  "Disabled"}}) {
+    write_settings(json);
+    settings.Reload();
+    const auto before = calls;
+    const auto response = transform(788, request);
+    ASSERT_TRUE(response.has_value()) << json;
+    EXPECT_EQ(response->error_class, std::optional<std::string>(expected)) << json;
+    EXPECT_TRUE(response->result.empty()) << json;
+    EXPECT_EQ(calls, before) << json;
+  }
+  // An unreadable settings file keeps the last good AI settings but resolves
+  // privacy to secure (privacy-and-secure-input-spec section 5.1): only the
+  // Host's own secure check stops the selection here.
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  settings.Reload();
+  write_settings("{not json");
+  settings.Reload();
+  {
+    const auto before = calls;
+    const auto response = transform(793, request);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->error_class, std::optional<std::string>("BlockedBySecure"));
+    EXPECT_TRUE(response->result.empty());
+    EXPECT_EQ(calls, before);
+  }
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  settings.Reload();
+
+  const auto invalid =
+      handler.Dispatch(MakeReq(789, ipc::MessageType::TransformSelectedText, "{}"));
+  ASSERT_TRUE(invalid.has_value());
+  EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(invalid->payload_json)->error,
+            std::optional<std::string>(ipc::kTransformErrorInvalidRequest));
+
+  // A request canceled before it runs gets no reply.
+  const auto before_cancel = calls;
+  scheduler.Cancel(790);
+  EXPECT_FALSE(handler.Dispatch(MakeReq(790, ipc::MessageType::TransformSelectedText,
+                                        ipc::BuildTransformSelectedTextRequest(request))));
+  EXPECT_EQ(calls, before_cancel);
+  std::remove(settings_path.c_str());
+}
+
+// Without a settings store there is no AI consent, and before the handshake
+// the selection is refused with a typed reply rather than silence.
+TEST_F(DispatcherTest, TransformSelectedTextWithoutSettingsOrHandshakeSendsNothing) {
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{};
+      });
+  ipc::TransformSelectedTextRequest request;
+  request.mode = "free";
+  request.selection = "Good morning.";
+  request.secure = false;
+  request.ai_allowed = request.external_ai_allowed = true;
+  const auto payload = ipc::BuildTransformSelectedTextRequest(request);
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config);
+  const auto response =
+      handler.Dispatch(MakeReq(791, ipc::MessageType::TransformSelectedText, payload));
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(response->payload_json)->error_class,
+            std::optional<std::string>("BlockedBySecure"));
+
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_handler(&engine, &scheduler, &user_dict, config);
+  const auto unauthenticated =
+      token_handler.Dispatch(MakeReq(792, ipc::MessageType::TransformSelectedText, payload));
+  ASSERT_TRUE(unauthenticated.has_value());
+  EXPECT_EQ(unauthenticated->type, ipc::MessageType::TransformSelectedText);
+  EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(unauthenticated->payload_json)->error,
+            std::optional<std::string>(ipc::kTransformErrorNotAuthenticated));
+  EXPECT_EQ(calls, 0u);
+}
+
+// privacy-and-secure-input-spec section 8: the selection, the instruction and
+// the result never reach the runtime log, on the secure stop, on a backend
+// failure or on success; the failure line carries only fixed values.
+TEST_F(DispatcherTest, TransformSelectedTextNeverLogsTheText) {
+  const auto directory = std::filesystem::path(temp_directory.File("transform_logs"));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { RemovePathNoThrow(path); }
+  } cleanup{directory};
+  const auto settings_path = temp_directory.File("azookey_transform_log_settings.json");
+  {
+    std::ofstream file(settings_path);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  unsigned status = 401;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ipc::json::Object message{{"content", R"({"result":"result-marker-text"})"}};
+        ipc::json::Object choice{{"message", std::move(message)}, {"finish_reason", "stop"}};
+        ipc::json::Array choices;
+        choices.emplace_back(std::move(choice));
+        return azookey::host::AiHttpResponse{
+            status, ipc::json::Stringify(ipc::json::Object{{"choices", std::move(choices)}})};
+      });
+  std::string responses;
+  {
+    azookey::logging::RuntimeLoggerOptions options;
+    options.enabled = true;
+    options.component = "host";
+    options.logs_directory = directory;
+    azookey::logging::RuntimeLogger logger(options);
+    azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, config, &settings, nullptr,
+                                     &logger);
+    ipc::TransformSelectedTextRequest request;
+    request.mode = "free";
+    request.prompt = "prompt-marker-text";
+    request.selection = "selection-marker-text";
+    request.context = "context-marker-text";
+    request.ai_allowed = request.external_ai_allowed = true;
+    // secure (the default), then a backend failure, then success.
+    uint64_t id = 794;
+    for (const bool secure : {true, false, false}) {
+      request.secure = secure;
+      const auto response =
+          target.Dispatch(MakeReq(id++, ipc::MessageType::TransformSelectedText,
+                                  ipc::BuildTransformSelectedTextRequest(request)));
+      ASSERT_TRUE(response.has_value());
+      responses += response->payload_json;
+      if (!secure) status = 200;
+    }
+  }
+  EXPECT_NE(responses.find("result-marker-text"), std::string::npos);
+  std::string log_text;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    log_text.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"event\":\"transform_selected_text_failed\""), std::string::npos);
+  EXPECT_NE(log_text.find("\"result\":\"blocked\""), std::string::npos);
+  EXPECT_NE(log_text.find("\"result\":\"error\""), std::string::npos);
+  for (const char* marker : {"selection-marker-text", "prompt-marker-text", "context-marker-text",
+                             "result-marker-text"}) {
+    EXPECT_EQ(log_text.find(marker), std::string::npos) << marker;
+  }
   std::remove(settings_path.c_str());
 }
 

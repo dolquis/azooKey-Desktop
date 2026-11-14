@@ -221,7 +221,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
 | 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure（§5.1.1 の定義。SafeMode は含まない）のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
-| Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担う（§5.1.1） |
+| Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担い、Host も `inference-host/src/Dispatcher.cpp::HandleTransformSelectedText` で拒否する（§5.1.1） |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/observability-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
@@ -285,7 +285,7 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 これは protocol v1 の加算的拡張である。古い TIP と新しい Host の組合せでは
 学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。
 `QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担い、
-`QueryPredictions` は次のとおり Host も二重に検査する。
+どちらも次のとおり Host も二重に検査する。
 これらに学習観測用フラグの欠落判定を流用しない。
 `QueryPredictions` の要求は `learning_allowed` を運ばず、
 イベントごとの `secure` だけを運ぶ（予測は学習と別の許可軸のため）。
@@ -297,6 +297,12 @@ Host は、要求の `secure == true` か Host 設定が secure のとき、照�
 学習を止めるが、予測は止めない。
 古い TIP と新しい Host の組合せでは予測が出ず、新しい TIP と古い Host の組合せでは
 TIP の送信抑止を維持する。
+
+`TransformSelectedText` の要求は、イベントごとの `secure` と、TIP が解いた AI 候補生成許可・
+外部 AI 許可を運ぶ。欠落は secure で AI 不可として扱う。Host は、要求の `secure == true` か
+上と同じ意味で Host 設定が secure のとき、AI backend を呼ばずに `BlockedBySecure` を返す。
+許可は Host の設定と AND する（`docs/ai-backend-spec.md` §4.1）。TIP は対応を告知した Host にだけ
+この型を送る。
 
 ### 5.2 `custom` モードの per-axis 解決
 

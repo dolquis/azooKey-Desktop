@@ -132,7 +132,8 @@ HandleResult InputState::HandleEvent(const UserActionEvent& event,
     case InputStateKind::Selecting:
       return HandleSelecting(event);
     case InputStateKind::ReplaceSuggestion:
-      return HandleReplaceSuggestion(event);
+      // Reserved (legacy-parity-spec §1.2): no transition enters it.
+      return {{}, *this};
     case InputStateKind::UnicodeInput:
       return HandleUnicodeInput(event);
   }
@@ -173,11 +174,11 @@ HandleResult InputState::HandleIdle(const UserActionEvent& event) const {
       break;
     case UserAction::StartAlnumDouble:
     case UserAction::StartKanaDouble:
-      next.kind_ = InputStateKind::ReplaceSuggestion;
-      next.replace_suggestion_mode_ = event.action == UserAction::StartAlnumDouble
-                                          ? ReplaceSuggestionMode::MagicConversion
-                                          : ReplaceSuggestionMode::ReplaceSuggestion;
-      result.actions.push_back(ShowReplaceSuggestionPrompt{next.replace_suggestion_mode_});
+      // The prompt window owns its keys and its own text field, so the
+      // state of this document stays Idle (legacy-parity-spec §1.2, §4.1).
+      result.actions.push_back(ShowReplaceSuggestionPrompt{
+          event.action == UserAction::StartAlnumDouble ? PromptPreset::English
+                                                       : PromptPreset::Japanese});
       break;
     default:
       break;
@@ -294,25 +295,6 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
       result.actions.push_back(ReplaceMarkedText{kUnicodePrefix});
       break;
     default:
-      break;
-  }
-  return result;
-}
-
-HandleResult InputState::HandleReplaceSuggestion(const UserActionEvent& event) const {
-  HandleResult result{{}, *this};
-  InputState& next = result.next;
-  switch (event.action) {
-    case UserAction::Commit:
-      next.ResetComposition();
-      result.actions.push_back(SubmitReplaceSuggestion{});
-      break;
-    case UserAction::Cancel:
-      next.ResetComposition();
-      result.actions.push_back(HideReplaceSuggestionPrompt{});
-      break;
-    default:
-      // The prompt UI owns text entry while it is open.
       break;
   }
   return result;

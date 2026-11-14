@@ -881,4 +881,41 @@ std::string BuildDetectAnomaliesResponse(const DetectAnomaliesResponse& p);
 std::optional<DetectAnomaliesRequest> ParseDetectAnomaliesRequest(const std::string& json);
 std::optional<DetectAnomaliesResponse> ParseDetectAnomaliesResponse(const std::string& json);
 
+// M16 Magic Conversion (ai-backend-spec section 4.1, DEV-1963). Capability
+// "transform_selected_text": the TIP sends it only to a Host that advertises
+// it, since an older Host answers an unknown type with type Unknown. Missing
+// privacy fields fail closed (secure, no AI, no external AI), and the Host
+// ANDs them with its own policy and settings before the AI backend runs.
+inline constexpr std::string_view kTransformErrorInvalidRequest = "invalid_request";
+inline constexpr std::string_view kTransformErrorNotAuthenticated = "not_authenticated";
+
+struct TransformSelectedTextRequest {
+  std::string mode;         // "rewrite" | "translate" | "summarize" | "free"; required.
+  std::string prompt;       // The user's instruction; at most kMaxTransformPromptBytes.
+  std::string selection;    // UTF-8, non-empty, at most kMaxTransformSelectionBytes.
+  std::string context;      // Surrounding text; at most kMaxTransformContextBytes.
+  uint32_t max_results{1};  // Clamped to [1, kMaxTransformResults].
+  // Only false goes on the wire; a request without it is secure.
+  bool secure{true};
+  bool ai_allowed{false};
+  bool external_ai_allowed{false};  // Decoded only together with ai_allowed.
+  std::string ai_backend;           // Empty keeps the Host's aiBackend setting.
+};
+
+// A canceled request gets no response. result is non-empty only on success;
+// error_class is the AiErrorClass name of a backend failure, error a protocol
+// failure (kTransformErrorInvalidRequest, kTransformErrorNotAuthenticated).
+struct TransformSelectedTextResponse {
+  std::string result;
+  std::optional<std::string> error_class;
+  std::optional<std::string> error;
+};
+
+std::string BuildTransformSelectedTextRequest(const TransformSelectedTextRequest& p);
+std::string BuildTransformSelectedTextResponse(const TransformSelectedTextResponse& p);
+std::optional<TransformSelectedTextRequest> ParseTransformSelectedTextRequest(
+    const std::string& json);
+std::optional<TransformSelectedTextResponse> ParseTransformSelectedTextResponse(
+    const std::string& json);
+
 }  // namespace azookey::ipc

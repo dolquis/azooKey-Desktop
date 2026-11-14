@@ -37,10 +37,6 @@ InputState Selecting() {
   return waiting.HandleCandidatesArrived(KanaCandidates()).next;
 }
 
-InputState ReplaceSuggestion() {
-  return InputState{}.HandleEvent(Ev(UserAction::StartAlnumDouble)).next;
-}
-
 InputState UnicodeInput() {
   return Feed(InputState{}.HandleEvent(Ev(UserAction::StartUnicodeInput)).next, U"30");
 }
@@ -90,29 +86,9 @@ struct Row {
 const Row kTransitionTable[] = {
     {"Idle",
      [] { return InputState{}; },
-     {K::Composing,
-      K::Composing,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::Idle,
-      K::UnicodeInput,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::Idle,
-      K::Idle}},
+     {K::Composing, K::Composing, K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,      K::Idle,      K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,      K::Idle,      K::UnicodeInput, K::Idle, K::Idle, K::Idle, K::Idle}},
     {"Composing",
      Composing,
      {K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
@@ -131,31 +107,6 @@ const Row kTransitionTable[] = {
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
       K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
-    {"ReplaceSuggestion",
-     ReplaceSuggestion,
-     {K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::Idle,
-      K::Idle,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion,
-      K::ReplaceSuggestion}},
     {"UnicodeInput",
      UnicodeInput,
      {K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
@@ -170,7 +121,6 @@ TEST(InputStateTest, FixtureStatesHaveExpectedKinds) {
   EXPECT_EQ(Composing().kind(), K::Composing);
   EXPECT_EQ(Previewing().kind(), K::Previewing);
   EXPECT_EQ(Selecting().kind(), K::Selecting);
-  EXPECT_EQ(ReplaceSuggestion().kind(), K::ReplaceSuggestion);
   EXPECT_EQ(UnicodeInput().kind(), K::UnicodeInput);
 }
 
@@ -407,14 +357,12 @@ TEST(InputStateTest, EmptyCorrectedReadingLeavesActiveStateUnchanged) {
 }
 
 TEST(InputStateTest, CorrectedReadingIgnoresInactiveStates) {
-  for (const InputState& state : {InputState{}, UnicodeInput(), ReplaceSuggestion(),
-                                  InputState{}.HandleEvent(Ev(UserAction::StartKanaDouble)).next}) {
+  for (const InputState& state : {InputState{}, UnicodeInput()}) {
     SCOPED_TRACE(static_cast<int>(state.kind()));
     const InputState corrected = state.WithCorrectedReading("かね");
     EXPECT_EQ(corrected.kind(), state.kind());
     EXPECT_EQ(corrected.Reading(), state.Reading());
     EXPECT_EQ(corrected.unicode_hex(), state.unicode_hex());
-    EXPECT_EQ(corrected.replace_suggestion_mode(), state.replace_suggestion_mode());
   }
 }
 
@@ -729,17 +677,22 @@ TEST(InputStateTest, PreviewingStartConversionWaitsForTheWindowQueryLikeComposin
   EXPECT_EQ(waiting.next.HandleCandidatesArrived(KanaCandidates()).next.kind(), K::Selecting);
 }
 
-TEST(InputStateTest, ReplaceSuggestionPromptModesAndExit) {
-  EXPECT_EQ(InputState{}.HandleEvent(Ev(UserAction::StartAlnumDouble)).actions,
-            (Actions{ShowReplaceSuggestionPrompt{ReplaceSuggestionMode::MagicConversion}}));
+// legacy-parity-spec §4.1 (DEV-1963): both double taps open the same prompt
+// window with a different initial prompt, and the document stays Idle because
+// the window owns its own keys. A reading in progress is left to the TIP's key
+// handling, so the double taps do nothing there.
+TEST(InputStateTest, DoubleTapsAskForThePromptWindowAndStayIdle) {
+  const HandleResult alnum = InputState{}.HandleEvent(Ev(UserAction::StartAlnumDouble));
+  EXPECT_EQ(alnum.next.kind(), K::Idle);
+  EXPECT_EQ(alnum.actions, (Actions{ShowReplaceSuggestionPrompt{PromptPreset::English}}));
   const HandleResult kana = InputState{}.HandleEvent(Ev(UserAction::StartKanaDouble));
-  EXPECT_EQ(kana.next.replace_suggestion_mode(), ReplaceSuggestionMode::ReplaceSuggestion);
-  EXPECT_EQ(kana.actions,
-            (Actions{ShowReplaceSuggestionPrompt{ReplaceSuggestionMode::ReplaceSuggestion}}));
-  EXPECT_EQ(ReplaceSuggestion().HandleEvent(Ev(UserAction::Commit)).actions,
-            (Actions{SubmitReplaceSuggestion{}}));
-  EXPECT_EQ(ReplaceSuggestion().HandleEvent(Ev(UserAction::Cancel)).actions,
-            (Actions{HideReplaceSuggestionPrompt{}}));
+  EXPECT_EQ(kana.next.kind(), K::Idle);
+  EXPECT_EQ(kana.actions, (Actions{ShowReplaceSuggestionPrompt{PromptPreset::Japanese}}));
+  for (const UserAction action : {UserAction::StartAlnumDouble, UserAction::StartKanaDouble}) {
+    const HandleResult composing = Composing().HandleEvent(Ev(action));
+    EXPECT_TRUE(composing.actions.empty());
+    EXPECT_EQ(composing.next.Reading(), "かな");
+  }
 }
 
 TEST(InputStateTest, UnicodeInputShowsPrefixedHexAndCommitsScalar) {

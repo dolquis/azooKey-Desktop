@@ -6655,6 +6655,9 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(), "mixed_english") !=
             hpayload->capabilities.end(),
         std::memory_order_relaxed);
+    ipc_host_raw_keys_.store(std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                                       "raw_keys") != hpayload->capabilities.end(),
+                             std::memory_order_relaxed);
     ipc_host_commit_correction_.store(
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_correction") != hpayload->capabilities.end(),
@@ -6891,6 +6894,7 @@ void TextService::ServeConnection() {
     std::string left_context;
     std::string raw_romaji;
     std::vector<std::string> alt_readings;
+    std::string raw_keys;
     std::shared_ptr<const core::CustomRomajiTable> batch_table;
     bool english_candidates = false;
     bool mixed_english = false;
@@ -6947,6 +6951,7 @@ void TextService::ServeConnection() {
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
         alt_readings = ipc_pending_alt_readings_;
+        raw_keys = ipc_pending_raw_keys_;
         batch_table = ipc_pending_batch_table_;
         english_candidates = ipc_pending_english_candidates_;
         mixed_english = ipc_pending_mixed_english_;
@@ -7154,6 +7159,9 @@ void TextService::ServeConnection() {
           qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
         }
         qreq.alt_readings = alt_readings;
+        // M55 section 12.13: only to a Host that advertised "raw_keys" in this
+        // connection's handshake, and never for a secure field.
+        if (!secure && ipc_host_raw_keys_.load(std::memory_order_relaxed)) qreq.raw_keys = raw_keys;
         qenv.type = MessageType::QueryCandidates;
         qenv.payload_json = BuildQueryCandidatesRequest(qreq);
       }
@@ -8144,6 +8152,10 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   auto alt_readings = !live && emoji_trigger.empty() && !privacy.secure
                           ? AltReadingsFor(reading, kWindowAmbiguousPositions)
                           : std::vector<std::string>{};
+  // M55 (typo-correction-learning-spec sections 12.12.2 and 12.13): the keys
+  // for the typo correction of the per-key and window queries, never for a
+  // secure field. ServeConnection drops them for a Host without "raw_keys".
+  auto raw_keys = emoji_trigger.empty() && !privacy.secure ? RawKeysFor(reading) : std::string{};
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -8156,6 +8168,7 @@ std::string TextService::PostQueryCandidates(ITfContext* context, const std::str
   ipc_pending_mixed_english_ = mixed_english;
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_alt_readings_ = std::move(alt_readings);
+  ipc_pending_raw_keys_ = std::move(raw_keys);
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
@@ -8222,6 +8235,9 @@ std::string TextService::PostQueryLiveConversion(ITfContext* context, const std:
   ipc_pending_mixed_english_ = !raw_romaji.empty();
   ipc_pending_raw_romaji_ = std::move(raw_romaji);
   ipc_pending_alt_readings_.clear();
+  // QueryLiveConversion has no raw_keys, and the QueryCandidates fallback for a
+  // Host before M14 has no "raw_keys" either.
+  ipc_pending_raw_keys_.clear();
   ipc_pending_english_candidates_ = false;
   ipc_pending_batch_mode_.clear();
   ipc_pending_batch_notice_.clear();
@@ -8337,6 +8353,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_alt_readings_.clear();
+  ipc_pending_raw_keys_.clear();  // QueryBatchConversion has no raw_keys.
   ipc_pending_batch_table_ = batch_romaji_table_;
   // ai-cleanup stays without English even when it falls back to neural, and a
   // secure field asks for none (DEV-1745). The request says whether it is
@@ -10822,6 +10839,23 @@ std::string TextService::EnglishRawRomajiFor(const std::string& reading) const {
           core::RomajiKanaConverter::Preview(english_raw_romaji_, table)) == reading)
     return english_raw_romaji_;
   return {};
+}
+
+std::string TextService::RawKeysFor(const std::string& reading) const {
+  // The built-in table only, as for alt_readings: the Host reads the keys with
+  // its own romaji rules.
+  if (batch_romaji_table_) return {};
+  auto keys = EnglishRawRomajiFor(reading);
+  if (keys.size() > ipc::kMaxRawKeysBytes) return {};
+  for (auto& key : keys) {
+    // Shift is kept for M60; the typo correction reads keys, not case.
+    const auto lower = static_cast<char>(std::tolower(static_cast<unsigned char>(key)));
+    // Section 12.12.1: a digit or another symbol (、。？！ keep , . ? !) leaves
+    // the alphabet, and the Host drops such keys whole, so none are sent.
+    if (!((lower >= 'a' && lower <= 'z') || lower == '-' || lower == '\'')) return {};
+    key = lower;
+  }
+  return keys;
 }
 
 std::vector<std::string> TextService::AltReadingsFor(const std::string& reading,

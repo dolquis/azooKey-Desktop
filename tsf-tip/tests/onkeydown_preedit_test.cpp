@@ -10848,6 +10848,120 @@ TEST(TsfTipTypoCorrectionTest, TypoModesApplyOnlyTheHostCorrectedReading) {
   }
 }
 
+// M55 (typo-correction-learning-spec sections 12.12.1 and 12.13): raw_keys are
+// the keys as typed, in lowercase, while they spell the reading, on the
+// per-key and the window queries. A secure field and keys outside the
+// alphabet (、 keeps the comma typed) get none.
+TEST(TsfTipTypoCorrectionTest, RawKeysAreTheLowercaseKeysThatSpellTheReading) {
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    PressShifted(h, 'K');
+    TypeTypoRomaji(h, "ANJI");
+    ASSERT_EQ(h.service.preedit_kana_, "かんじ");
+    ASSERT_TRUE(h.service.pending_ipc_live_for_test());
+    EXPECT_EQ(h.service.pending_ipc_raw_keys_for_test(), "kanji");
+    h.service.post_window_query_for_test(&h.context, "かんじ");
+    ASSERT_FALSE(h.service.pending_ipc_live_for_test());
+    EXPECT_EQ(h.service.pending_ipc_raw_keys_for_test(), "kanji");
+    // Keys that no longer spell the reading go nowhere.
+    h.service.post_window_query_for_test(&h.context, "かん");
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  }
+  {
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    TypeTypoRomaji(h, "KANJI");
+    ASSERT_EQ(h.service.preedit_kana_, "かんじ");
+    ASSERT_TRUE(h.service.pending_ipc_secure_for_test());
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  }
+  {
+    OemCompositionTranslationGuard oem_translation;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    TypeTypoRomaji(h, "NI");
+    ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+    ASSERT_EQ(h.service.preedit_kana_, "に、");
+    ASSERT_EQ(h.service.pending_ipc_reading_for_test(), "に、");
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  }
+}
+
+// M55 section 12.13: QueryCandidates carries raw_keys only to a Host whose
+// handshake advertised "raw_keys", and never for a secure field.
+TEST(TsfTipTypoCorrectionTest, RawKeysGoOnlyToAHostThatAdvertisesThemAndNeverForASecureField) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-typo-raw-keys-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::atomic<bool> advertise{true};
+  std::vector<std::string> payloads;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      if (advertise.load()) handshake.capabilities = {"raw_keys"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        payloads.push_back(request.payload_json);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  // Each case starts its own TIP, so its handshake reads `advertise` afresh.
+  const auto sent = [&](const char* privacy, bool advertised) {
+    advertise.store(advertised);
+    size_t before = 0;
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      before = payloads.size();
+    }
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    if (privacy) h.service.set_privacy_settings_for_test(privacy);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    TypeTypoRomaji(h, "KA");
+    EXPECT_EQ(h.service.preedit_kana_, "か");
+    h.service.start_ipc_worker_for_test();
+    const bool arrived = WaitUntil(
+        [&] {
+          const std::lock_guard<std::mutex> lock(mutex);
+          return payloads.size() > before;
+        },
+        std::chrono::seconds(10));
+    h.service.stop_ipc_worker_for_test();
+    const std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_TRUE(arrived);
+    return arrived ? payloads[before] : std::string();
+  };
+  const auto advertised = sent(nullptr, true);
+  const auto secure = sent(R"({"privacy":{"mode":"secure"}})", true);
+  const auto older_host = sent(nullptr, false);
+  server.Stop();
+
+  const auto parsed = ParseQueryCandidatesRequest(advertised);
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_EQ(parsed->raw_keys, "ka");
+  ASSERT_FALSE(secure.empty());
+  EXPECT_EQ(secure.find("raw_keys"), std::string::npos) << secure;
+  ASSERT_FALSE(older_host.empty());
+  EXPECT_EQ(older_host.find("raw_keys"), std::string::npos) << older_host;
+}
+
 TEST(TsfTipTypoCorrectionTest, StaleIdAndMismatchedReadingCannotApplyCorrection) {
   for (const bool stale_id : {false, true}) {
     SCOPED_TRACE(stale_id);

@@ -299,10 +299,11 @@ Host は、要求の `secure == true` か Host 設定が secure のとき、照�
 TIP の送信抑止を維持する。
 
 `TransformSelectedText` の要求は、イベントごとの `secure` と、TIP が解いた AI 候補生成許可・
-外部 AI 許可を運ぶ。欠落は secure で AI 不可として扱う。Host は、要求の `secure == true` か
-上と同じ意味で Host 設定が secure のとき、AI backend を呼ばずに `BlockedBySecure` を返す。
-許可は Host の設定と AND する（`docs/ai-backend-spec.md` §4.1）。TIP は対応を告知した Host にだけ
-この型を送る。
+外部 AI 許可を運ぶ。欠落は secure で AI 不可として扱う。Host はまず、SafeMode の間は engine の状態で
+判定して AI backend を呼ばずに `safe_mode` を返す（予測と違い、SafeMode でも止める）。SafeMode で
+なければ、要求の `secure == true` か上と同じ意味で Host 設定が secure のとき、AI backend を呼ばずに
+`BlockedBySecure` を返す。許可は Host の設定と AND する。判定の順は `docs/ai-backend-spec.md` §4.1 に
+従う。TIP は対応を告知した Host にだけこの型を送る。
 
 ### 5.2 `custom` モードの per-axis 解決
 

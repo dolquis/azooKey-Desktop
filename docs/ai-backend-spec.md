@@ -226,8 +226,11 @@ TransformSelectedTextResponse:
   result: string            // 変換後テキスト。成功のときだけ非空
   results: optional<string[]>// 複数案（予約。MVP では wire に載せない）
   error_class: optional<string> // 失敗の AiErrorClass 名（§7.2、呼出側 fallback 用）
-  error: optional<string>   // プロトコルの失敗（invalid_request / not_authenticated）
+  error: optional<string>   // 拒否（invalid_request / not_authenticated / safe_mode）
 ```
+
+応答は、空でない `result`・`error_class`・`error` の少なくとも 1 つを持つ。どれも持たない応答と、
+型が違う値を持つ応答は、不正な応答として扱う。予約の `results` を載せる将来の応答も `result` を併せて持つ。
 
 要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
 `context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
@@ -236,20 +239,36 @@ privacy のフィールドが欠けた要求と型が違う要求は、secure �
 
 Host の `Dispatcher` は `MessageType::TransformSelectedText` を次の順で処理する。
 
-1. 要求の `secure` が true か、Host の privacy 設定が secure（§8）なら、`AiBackend` を呼ばずに
-   `error_class=BlockedBySecure` を返す。SafeMode の学習停止はこの判定に含めない。
-2. payload を `AiTransformRequest`（`task=Transform`）へ正規化する。AI 候補生成許可と外部 AI 許可は、
+1. Host が SafeMode（`docs/host-availability-spec.md` §8.5.3）なら、`AiBackend` を呼ばずに
+   `error=safe_mode` を返す。SafeMode は §8.5.3 の設定の強制と engine の状態の両方で止め、判定には
+   engine の状態を使う（起動時の突入で、保存の競合が設定から flag を落とすと、強制の当たらない設定の
+   まま engine が SafeMode になりうる）。要求の `ai_backend` はこの停止を解かない。
+2. 要求の `secure` が true か、Host の privacy 設定が secure（§8）なら、`AiBackend` を呼ばずに
+   `error_class=BlockedBySecure` を返す。SafeMode の学習停止はこの判定に含めない（1 で止める）。
+3. payload を `AiTransformRequest`（`task=Transform`）へ正規化する。AI 候補生成許可と外部 AI 許可は、
    Host の設定と要求の値の AND とする。設定を持たない Host はどちらも不許可とする。
-3. `AiBackend::Transform` を呼ぶ。`task=Transform` はリモート専用で、外部 AI が許可されないか
+4. `AiBackend::Transform` を呼ぶ。`task=Transform` はリモート専用で、外部 AI が許可されないか
    実効 backend が `local-zenzai` なら `Disabled` を返す（ローカルの変換器は選択テキストを変換しない）。
-4. TIP が `Cancel` で取り消した要求には応答しない。
+5. `AiBackend` を呼んだ後に、TIP が `Cancel` で取り消したと分かった要求には応答しない。
 
+`AiBackend` を呼ぶ前に拒否した要求（不正な要求、Handshake 前、SafeMode、secure、保留の上限）には、
+取り消し済みでも拒否の応答を返す。TIP は、待っていない `request_id` の応答を捨てる。
 保留中の要求が接続ごとの上限に達していて受け付けられないときは、`error_class=ServerError` を返す。
 Host は接続ごとに要求を順に処理するので、この要求は応答まで（外部 AI では最大で `openAiTimeoutMs`）
 同じ接続の後続の要求を待たせる。`QueryBatchConversion` の `ai-cleanup` と同じ制約であり、取り消しの
 `Cancel` は control 接続で届く。
 Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
-指示・結果を保持せず、学習にも使わない。ログには失敗の分類だけを出す（§7.2）。
+指示・結果を保持せず、学習にも使わない。
+
+失敗のログは `transform_selected_text_failed` の 1 行で、選択テキスト・指示・文脈・結果を持たない。
+`result` は次の固定値をとる（`docs/observability-spec.md` §7.2 の、イベントを定義する spec が値を
+列挙する場合に当たる）。
+
+| `result` | 場面 | ほかのフィールド |
+|---|---|---|
+| `safe_mode` | SafeMode の拒否（手順 1） | `error_code=business` |
+| `blocked` | secure の拒否（手順 2 と、`AiBackend` の入口の `BlockedBySecure`） | `error_code=business`、`error_class` |
+| `error` | そのほかの `AiBackend` の失敗と保留の上限 | `error_code=business`、`error_class` |
 
 ### 4.2 M58-C: `QueryBatchConversion`（`romaji-batch-conversion-spec.md` §6 が正典）
 

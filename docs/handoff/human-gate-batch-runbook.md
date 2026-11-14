@@ -10,7 +10,7 @@ VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文�
 
 - VM 構成、3 層フロー、エージェントへの委任の範囲、登録、bootstrap、ログ取得、後始末の手順：[`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)
 - 打鍵チェック項目 A1〜A8 と B1〜B7：[`tip-manual-verification-checklist.md`](./tip-manual-verification-checklist.md)
-- compat runner の実行：[`../../compat-test/README.md`](../../compat-test/README.md)。出力レイアウトは [`../dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.5
+- compat runner の実行：[`../../compat-test/README.md`](../../compat-test/README.md)。出力レイアウトは [`../diagnostics-compat-spec.md`](../diagnostics-compat-spec.md) §13.5
 - dump、ETW、Process Monitor の採取：[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)
 - VM と開発機の振り分け基準、開発機での手順：[`dev-machine-verification.md`](./dev-machine-verification.md)
 
@@ -551,7 +551,7 @@ clean VM での IME 動作と、アンインストール後の診断ファイル
 Application Verifier はこのレーンの最後に走らせる。
 Application Verifier は対象イメージの設定を registry（Image File Execution Options）へ書くため、有効なままでは以降のどのゲートも汚染された環境で走ることになる。
 
-`windows-asan` の網が届くのは azooKey 側が生成するプロセスに限られ、実ホストアプリのプロセスへ in-proc ロードした状態は恒久的に対象外である（`docs/dev-infrastructure-spec.md` §4.6.1）。
+`windows-asan` の網が届くのは azooKey 側が生成するプロセスに限られ、実ホストアプリのプロセスへ in-proc ロードした状態は恒久的に対象外である（`docs/build-ci-spec.md` §4.6.1）。
 このレーンはその範囲だけを埋める。
 
 開始状態はレーン 2 の証跡を回収した後の保護 checkpoint とし、昇格操作ごとに必要なら復元する。
@@ -685,7 +685,7 @@ bootstrap は未登録なら TIP を登録し、pipe が無ければ supervisor 
 
 生成された `verification-summary.md` を検証メモの先頭に貼り、空欄を人が埋める。
 サマリは観測値の集約であり、ゲートの合否は各課題の判定基準で人が決める。
-入力の schema と分類は `docs/dev-infrastructure-spec.md` §2.6 を参照する。
+入力の schema と分類は `docs/vm-verification-package-spec.md` §1 を参照する。
 
 課題ごとの転記下書きが必要な場合は、ゲート ID と課題の対応表を渡して次を実行する。
 対応表は repo の `scripts/vm-verify-fixtures/gate-map.json` を使う。

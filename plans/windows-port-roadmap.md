@@ -236,7 +236,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
   - **設計メモ**: バックエンド別実装（CPU/CUDA 等）は `core::IConverter` 実装
     として `SimpleConverter` と差し替える方式で吸収する。第三者レビューが
     提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
-    新設しない（`docs/dev-infrastructure-spec.md` §11.3）。
+    新設しない（`docs/build-ci-spec.md` §11.3）。
     `InferenceEngine` の reranker・user_dict 経由パイプラインと
     `ipc/src/Payloads.cpp` の `LoadModelRequest`/`LoadModelResponse`（`--backend cuda|cpu`
     をリクエストで指定する設計）は既存実装をそのまま再利用する。
@@ -409,7 +409,7 @@ v1.0 リリースに向けたリスクと対応:
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。外部ライブラリ移行は v1.0 の範囲では行わず自前パーサを維持する（同 §6.2, §11.2.1。再評価条件も同節） |
 | 学習永続化の書き込み増幅・無制限増大 | 確定時レイテンシ増加、SSD 書き込み増、学習 TSV 肥大化 | `LearningStore` は N 件/T 秒デバウンス、明示 flush、保存失敗ログ、上限件数 + weight 閾値 GC で抑制。burst 先頭の同期 flush は T 秒のレート制限を課し、追加書き込みを 1 burst あたり最大 1 回に抑える（`docs/learning-data-management-spec.md` §11.2） |
-| 品質 KPI | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を `docs/dev-infrastructure-spec.md` §10 で定める |
+| 品質 KPI | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を `docs/build-ci-spec.md` §10 で定める |
 
 ## スコープ外
 
@@ -1728,15 +1728,15 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - `.clang-format` がルートに存在し、`clang-format --dry-run` が新規追加コードに対して
     差分ゼロ
   - `.gitignore` に Windows/CMake エントリが追加され、ビルド生成物が `git status` に現れない
-  - 依存更新手順が `docs/dev-infrastructure-spec.md` に記載され、次回の依存
+  - 依存更新手順が `docs/build-ci-spec.md` に記載され、次回の依存
     更新 PR がそれに従える
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
+- **参照仕様**: `docs/build-ci-spec.md` §2, §3
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 依存更新手順の文書化: pin 済み依存（llama.cpp のフル SHA / GoogleTest の
       タグ等）の更新 cadence（四半期）、比較項目（モデルロード / 代表プロンプト /
       レイテンシ / メモリ / ライセンス）、更新を独立 PR にする規約、pin SHA /
-      上流日付 / モデル互換性の記録先を `docs/dev-infrastructure-spec.md` に定義
+      上流日付 / モデル互換性の記録先を `docs/build-ci-spec.md` に定義
       （pin ポリシーと定期更新手順は同 spec §3.4 が正典。pin＝放置と区別する）
 
 ### M38: CI 品質ゲート拡張
@@ -1753,7 +1753,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - PR コメントが config ごとの結果に対応する
   - CI で使用する各 Action が完全コミット SHA で固定される
   - Release 成果物に SBOM と provenance が付与される
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §4
+- **参照仕様**: `docs/build-ci-spec.md` §4
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - Debug/Release マトリクス、runner を `windows-2022` に明示
@@ -1875,7 +1875,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - WIL が header-only 依存として取り込まれ、オフラインビルドを壊さない
   - 新規コードが WIL の RAII 型を使用する
   - 既存テストが回帰しない
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §9
+- **参照仕様**: `docs/build-ci-spec.md` §9
 
 ### M44: IME 診断・修復ウィザード
 
@@ -1900,8 +1900,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     （spec §12.5）どおり処理される
   - `--json` 出力が stable schema としてテストされる
   - `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く（spec §12.2.1）
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §12
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで追加）
+- **参照仕様**: `docs/diagnostics-compat-spec.md` §12
+  - 実装範囲の正典: `docs/diagnostics-compat-spec.md` §12（本マイルストーンで追加）
 
 ### M47: Host / Zenzai 障害時の自動復旧 UX
 
@@ -1943,8 +1943,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 失敗時にスクリーンショットとログが `failures/` に保存される
   - `report.json` が CI artifact としてアップロードできる
   - `report.md` が PR コメント用に整形されている
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §13
-  - 実装範囲の正典: `docs/dev-infrastructure-spec.md` §13（本マイルストーンで 追加）
+- **参照仕様**: `docs/diagnostics-compat-spec.md` §13
+  - 実装範囲の正典: `docs/diagnostics-compat-spec.md` §13（本マイルストーンで 追加）
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - テストケース C-001〜C-012（`nihongo` Space-Enter / Backspace / ESC /

@@ -38,7 +38,7 @@ canonical_for: ["repo docs を read-only で読み直し、機械検査が拾え
 | 領域 | 読む範囲 | 見る点 |
 |---|---|---|
 | roadmap | `plans/windows-port-roadmap.md` | 各 M の前提・変更対象・参照仕様が、実在するファイル・spec の節と合うか。依存図と前提の記述が食い違っていないか。廃止した M や統合した M が、他の節から生きているように参照されていないか |
-| 開発基盤 | `docs/dev-infrastructure-spec.md`、`docs/debugging.md`、`docs/test-inventory.md`、`README.md`、`docs/handoff/` の検証系 | ビルド手順、preset、CI ジョブ、診断の手順が実体と合うか。手順が参照するスクリプトの引数と出力が合うか |
+| 開発基盤 | `docs/dev-infrastructure-spec.md`、`docs/build-ci-spec.md`、`docs/vm-verification-package-spec.md`、`docs/diagnostics-compat-spec.md`、`docs/debugging.md`、`docs/test-inventory.md`、`README.md`、`docs/handoff/` の検証系 | ビルド手順、preset、CI ジョブ、診断の手順が実体と合うか。手順が参照するスクリプトの引数と出力が合うか |
 | 配布・推論 | `docs/sideload-packaging-spec.md`、`docs/zenzai-inference-spec.md`、`docs/copilot-pc-backend-spec.md`、`docs/model-management-spec.md`、`docs/ai-backend-spec.md` | 配布チャネルと署名要否、モデルのロード・fallback、backend の選定が、コードと他の spec の記述と合うか |
 | TSF・parity | `docs/tsf-deep-integration-spec.md`、`docs/legacy-parity-spec.md`、`docs/native-ui-spec.md`、`docs/windows-tsf-host-architecture.md` | TIP のクラス名・メソッド名・メッセージ名が実在するか。macOS 版の挙動の写しが `legacy/` と合うか。TIP と Host の責務境界が複数の文書で一致するか |
 | 変換・学習 | 変換・辞書・学習・予測・リライターの各 spec（`docs/README.md` の機能仕様の表を参照） | 式・定数・スキーマ・設定キーの既定値が、コードと他の spec の写しと合うか。同じ式を複数の spec が詳述していないか |

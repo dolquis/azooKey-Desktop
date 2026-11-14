@@ -48,7 +48,10 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI（M11 / M12）、Phase 7（M29、M32〜M34）の配布・署名・更新・観測。MSIX（§1）と設定アプリ（§3）は転送表で下の spec へ |
 | [`settings-app-spec.md`](settings-app-spec.md) | M11 / M30 設定アプリ（構成、ナビゲーション、Host との IPC、設定キーの確定、v1.0 最小機能）。ペインの構成と保存バー、表示文字列の表記規則は §3.2 |
 | [`msix-packaging-spec.md`](msix-packaging-spec.md) | M28 MSIX パッケージング（TIP 配布経路の 3 候補、`pkg/msix/` の identity package、VCRT 同梱、推論バックエンドとモデルの配布方針、Host の常駐起動） |
-| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 のビルド、CI、診断基盤。§5〜§8 は転送表で下の 3 spec へ移した。§12 は診断ウィザード（M44）、§13 はアプリ互換性ハーネス（M50） |
+| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M44・M47・M50・M51 の開発基盤の入口。節は転送表で下の 6 spec へ移した（§2〜§4・§9〜§11 は `build-ci-spec.md`、§2.6 は `vm-verification-package-spec.md`、§12・§13 は `diagnostics-compat-spec.md`、§5〜§8 は IPC・観測性・Host 可用性の 3 spec） |
+| [`build-ci-spec.md`](build-ci-spec.md) | M37 ビルド再現性と依存管理（§2、§3）、M38 CI 品質ゲート（§4）、M43 WIL 段階導入（§9）。§10・§11 は共通 |
+| [`vm-verification-package-spec.md`](vm-verification-package-spec.md) | M37 実機検証パッケージ（`make-vm-verify-package.ps1` の入力・同梱物・manifest） |
+| [`diagnostics-compat-spec.md`](diagnostics-compat-spec.md) | M44 IME 診断・修復ウィザード（§12）と M50 アプリ互換性テストハーネス（§13） |
 | [`ipc-persistence-hardening-spec.md`](ipc-persistence-hardening-spec.md) | M39 ユーザーデータ永続化の堅牢化と M40 IPC/JSON 堅牢化 |
 | [`observability-spec.md`](observability-spec.md) | M41 構造化ログと可観測性。§7.7 は M51 の拡張 |
 | [`host-availability-spec.md`](host-availability-spec.md) | M42 Host 可用性・再接続。§8.5 は M47 の復旧 UX |
@@ -88,7 +91,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 |
 |---|---|
-| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `dev-infrastructure-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook |
+| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `diagnostics-compat-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook（§4.6.2 は `build-ci-spec.md`） |
 | [`handoff/trending-asset-publication.md`](handoff/trending-asset-publication.md) | trending アセットの入力検証、ローカル HTTP 確認、手動公開・更新・ロールバック |
 | [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証を 1 回の VM セッションでまとめるときのレーン設計、ゲート種別ごとの実行条件、検証メモの記録様式。課題の割当と課題別の確認項目は Linear が持つ |
 | [`handoff/dev-machine-verification.md`](handoff/dev-machine-verification.md) | 実機検証を VM と開発機のどちらで行うかの判定基準（Linear の `env:vm` / `env:dev-machine`）と、開発機での前提・手順・後始末 |
@@ -121,17 +124,17 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`decisions/2026-06-distribution-channels.md`](decisions/2026-06-distribution-channels.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0 |
 | [`decisions/2026-06-settings-app-ui-framework.md`](decisions/2026-06-settings-app-ui-framework.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.0 は転送表で `settings-app-spec.md` へ） |
 | [`decisions/2026-06-signing-route-selection.md`](decisions/2026-06-signing-route-selection.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §2.0 |
-| [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11 |
-| [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §4.7 |
+| [`decisions/2026-07-dev-infrastructure-rejected-proposals.md`](decisions/2026-07-dev-infrastructure-rejected-proposals.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md)（転送表。結論の節は `build-ci-spec.md` §11） |
+| [`decisions/2026-07-sccache-action-cache-api-failure.md`](decisions/2026-07-sccache-action-cache-api-failure.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md)（転送表。結論の節は `build-ci-spec.md` §4.7） |
 | [`decisions/2026-08-04-cuda-real-link-cancellation.md`](decisions/2026-08-04-cuda-real-link-cancellation.md) | 決定記録 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) §7.4、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.3、[`sideload-packaging-spec.md`](sideload-packaging-spec.md)（§3.7 は転送表で `settings-app-spec.md` へ）、[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M8 |
 | [`decisions/2026-08-23-r1-cpu-baseline.md`](decisions/2026-08-23-r1-cpu-baseline.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.1・§4.2.1.1 |
 | [`decisions/2026-08-23-zenz-v3-r2-conversion.md`](decisions/2026-08-23-zenz-v3-r2-conversion.md) | 決定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.2 |
-| [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §11.2.1 |
+| [`decisions/2026-08-json-parser-external-library.md`](decisions/2026-08-json-parser-external-library.md) | 決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md)（転送表。結論の節は `build-ci-spec.md` §11.2.1） |
 | [`decisions/2026-08-mvp-input-scope-and-signing-gate.md`](decisions/2026-08-mvp-input-scope-and-signing-gate.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-08-x86-process-out-of-scope.md`](decisions/2026-08-x86-process-out-of-scope.md) | 決定記録 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §0.1 |
 | [`decisions/2026-09-08-nll-release-measurement.md`](decisions/2026-09-08-nll-release-measurement.md) | 測定記録 | [`neural-reranker-spec.md`](neural-reranker-spec.md) Track B（正典の節は `neural-reranker-nll-spec.md` の B12） |
 | [`decisions/2026-09-arm64-hardware-start-condition.md`](decisions/2026-09-arm64-hardware-start-condition.md) | 決定記録 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) M27、[`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §8 |
-| [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §2.7・§11.8 |
+| [`decisions/2026-09-pch-unity-build-measurement.md`](decisions/2026-09-pch-unity-build-measurement.md) | 測定記録・決定記録 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md)（転送表。結論の節は `build-ci-spec.md` §2.7・§11.8） |
 | [`decisions/2026-10-25-kanakanji-edge-r2-conversion.md`](decisions/2026-10-25-kanakanji-edge-r2-conversion.md) | 測定記録 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) §4.2.3 |
 
 ## Phase 一覧

@@ -19,7 +19,7 @@ description: azooKey Desktop の構造化ログ（RuntimeLogger、AZOOKEY_LOG）
 4. 最小差分で実装し、schema を固定するテスト（JSON 行の形、ETW payload の固定長）を更新する。
 5. 対象テストを実行し、Host の `QueryDiagnostics` 応答に触れたら `host_dispatcher_tests` へ広げる。
 6. ログ形式、保持期間、環境変数、CLI の出力 schema が変わる場合は
-   `docs/observability-spec.md` §7 / `docs/dev-infrastructure-spec.md` §12 と `docs/debugging.md` を同じ変更で更新する。
+   `docs/observability-spec.md` §7 / `docs/diagnostics-compat-spec.md` §12 と `docs/debugging.md` を同じ変更で更新する。
 
 ## 必須ガードレール
 

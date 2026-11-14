@@ -36,7 +36,7 @@ description: azooKey Desktop の README.md、AGENTS.md、CLAUDE.md、docs/、pla
 
 IPC の wire schema、設定 schema、CMake preset、workflow のように、変えると spec・roadmap・README の定義が変わりうるファイルを契約ファイルと呼ぶ。一覧の正典は `scripts/check_docs_impact.py` の定数 `CONTRACT_PATHS` であり、`python3 scripts/check_docs_impact.py --print-contract-paths` で得る。本 Skill や他の文書に一覧を写さない。
 
-同スクリプトは、契約ファイルを変更して `docs/`・`plans/`・ルートの `README.md` のどれも変更しない PR に対し、PR 本文の「Documentation impact」節で「No documentation impact」へのチェックと、`Reason:` の後の空でない理由を求め、なければ `docs.yml` の `docs-impact` ジョブが失敗する（merge を止める required check かどうかは `docs/dev-infrastructure-spec.md` §4.9 の ruleset が決める）。コメントだけ、「なし」「N/A」だけの理由は空とみなす。照合する見出しとチェックボックスの文言は `.github/PULL_REQUEST_TEMPLATE.md` と揃えてあるので、片方だけを変えない。
+同スクリプトは、契約ファイルを変更して `docs/`・`plans/`・ルートの `README.md` のどれも変更しない PR に対し、PR 本文の「Documentation impact」節で「No documentation impact」へのチェックと、`Reason:` の後の空でない理由を求め、なければ `docs.yml` の `docs-impact` ジョブが失敗する（merge を止める required check かどうかは `docs/build-ci-spec.md` §4.9 の ruleset が決める）。コメントだけ、「なし」「N/A」だけの理由は空とみなす。照合する見出しとチェックボックスの文言は `.github/PULL_REQUEST_TEMPLATE.md` と揃えてあるので、片方だけを変えない。
 
 契約ファイルに触れる実装 PR では、`spec-drift-checker` を必ず使い、どの spec・schema・テスト一覧が失効したかを列挙させてから、docs を更新するか影響なしの理由を書くかを決める。ゲートが求めるのは理由の記入だけで、理由の正しさは確かめないため、この確認を省かない。
 

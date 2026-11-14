@@ -105,7 +105,7 @@ Microsoft Learn の事実は
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
-「ログ出力先を開く」（§3.7）のボタンを置く（`docs/host-availability-spec.md` §8.5.4・`docs/dev-infrastructure-spec.md` §12.1.1 が設定アプリの診断として指す先は、この節である）。
+「ログ出力先を開く」（§3.7）のボタンを置く（`docs/host-availability-spec.md` §8.5.4・`docs/diagnostics-compat-spec.md` §12.1.1 が設定アプリの診断として指す先は、この節である）。
 
 「AI 変換」は「設定」群に置くが、モデル一覧の更新・ベンチマーク・取得・中止は Host への IPC でその場で行い、
 保存バーを経ない。保存バーが書くのは、このペインの設定キー（`model.selectedPath` を含む）だけである。
@@ -343,7 +343,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-nll-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `profilesByApp` | map<string,object> | `{}` | アプリ別（追加・編集・削除。保存は読み込み時と異なるときだけ、オブジェクト全体を書く） | M48 | 即時 | `app-profile-spec.md` §4 |
-| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
+| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 詳細（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `host-availability-spec.md` §8.5.3 |
 
 > オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
 > `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
@@ -383,8 +383,8 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 
 - **追加は加算的**: 新規キーは既定値付きで追加し、旧 `settings.json` は欠落キーを schema 既定で
   補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、Host の `SettingsStore` または
-  設定アプリの `settings-app/SettingsDocument.*` に移行処理を実装し、`docs/dev-infrastructure-spec.md`
-  `dev-infrastructure-spec` §12.2.1 に旧形式を登録してから schema を変更する。
+  設定アプリの `settings-app/SettingsDocument.*` に移行処理を実装し、`docs/diagnostics-compat-spec.md`
+  §12.2.1 に旧形式を登録してから schema を変更する。
 - **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
   行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
   `app-profile-spec.md` §4 と同方針）。

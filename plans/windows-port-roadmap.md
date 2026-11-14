@@ -2262,8 +2262,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `correction/RomajiVariantNormalizer.cpp`、
   `correction/ReadingHypothesis.h`、
   `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore を改名・
-  拡張）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys`
-  optional フィールド追加）、`docs/typo-correction-learning-spec.md`
+  拡張）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys` /
+  `typo_correction_mode` optional フィールド追加）、`docs/typo-correction-learning-spec.md`
   （改訂）。
 - **受け入れ条件**（typo 補正指標は補正有効モードで採取する。
   `conversion-quality-benchmark-spec.md` §7・§14。`--typo-mode off` での値は

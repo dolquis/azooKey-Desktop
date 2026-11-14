@@ -464,7 +464,7 @@ TEST_F(DispatcherTest, Handshake) {
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
         "learning_data_management", "commit_correction", "learning_reset", "persona",
-        "detect_anomalies", "mixed_english"}) {
+        "detect_anomalies", "mixed_english", "raw_keys"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -4672,6 +4672,129 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 
   engine.SetTypoStore(nullptr);
   std::remove(typo_path.c_str());
+}
+
+// M55 (typo-correction-learning-spec section 12.13): a requested
+// typo_correction_mode and raw_keys leave the conversion to the mode the Host
+// settings resolve to (SafeMode resolves to off), secure or not, so a request
+// can never raise it.
+TEST_F(DispatcherTest, RequestedTypoModeLeavesTheHostModeAsItIs) {
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_requested_mode.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+
+  uint64_t id = 7000;
+  const auto query = [&](bool secure, const std::string& mode) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "こんちには";
+    request.secure = secure;
+    request.learning_allowed = !secure;
+    request.typo_correction_mode = mode;
+    request.raw_keys = "konntiniha";
+    const auto response = dispatcher.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                      ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto surfaces = [](const ipc::QueryCandidatesResponse& response) {
+    std::vector<std::string> result;
+    for (const auto& candidate : response.candidates) result.push_back(candidate.surface);
+    return result;
+  };
+  for (const std::string host_mode : {"off", "suggest", "auto_replace"}) {
+    SCOPED_TRACE(host_mode);
+    auto config = engine.config();
+    config.typo_correction_mode = host_mode;
+    config.typo_min_count = 2;
+    engine.ApplyConfig(config);
+    for (const bool secure : {false, true}) {
+      SCOPED_TRACE(secure);
+      const auto unspecified = query(secure, "");
+      ASSERT_FALSE(unspecified.candidates.empty());
+      // What a secure request gets is the M55 apply gate's to decide (section
+      // 12.12.2); here only the request must not change it.
+      if (!secure)
+        EXPECT_EQ(unspecified.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
+      for (const std::string mode : {"off", "suggest", "rank", "aggressive"}) {
+        SCOPED_TRACE(mode);
+        const auto requested = query(secure, mode);
+        EXPECT_EQ(requested.corrected_reading, unspecified.corrected_reading);
+        EXPECT_EQ(surfaces(requested), surfaces(unspecified));
+      }
+    }
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+// M55 section 12.14: typoCorrection.learnPersonalPatterns false stops ObserveTypo
+// from accumulating pairs, and a settings reload that turns it on resumes it.
+TEST_F(DispatcherTest, ObserveTypoFollowsLearnPersonalPatterns) {
+  const auto settings_path = temp_directory.File("azookey_dispatcher_typo_learning.json");
+  const auto write_settings = [&](const char* text) {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << text;
+  };
+  write_settings(
+      R"({"privacy":{"mode":"normal"},"typoCorrection":{"learnPersonalPatterns":false}})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  ASSERT_EQ(settings_store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher learning(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     &settings_store);
+  EnableEventPrivacy(learning);
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_learning.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+
+  ipc::ObserveTypoRequest request;
+  request.secure = false;
+  request.learning_allowed = true;
+  request.wrong_reading = "こんちには";
+  request.correct_reading = "こんにちは";
+  request.timestamp_ms = 1'700'000'000'000ULL;
+  const auto observe = [&](uint64_t id) {
+    EXPECT_FALSE(learning
+                     .Dispatch(MakeReq(id, ipc::MessageType::ObserveTypo,
+                                       ipc::BuildObserveTypoRequest(request)))
+                     .has_value());
+  };
+  observe(7101);
+  EXPECT_EQ(typo.size(), 0u);
+
+  // Typo correction off stops it as well, through the same reload, before the
+  // engine config (still suggest here) follows.
+  uint64_t id = 7102;
+  for (const char* off : {R"({"privacy":{"mode":"normal"},"typoCorrection":{"enabled":false}})",
+                          R"({"privacy":{"mode":"normal"},"typoCorrection":{"mode":"off"}})",
+                          R"({"privacy":{"mode":"normal"},"typoCorrectionMode":"off"})"}) {
+    SCOPED_TRACE(off);
+    write_settings(off);
+    ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    ASSERT_EQ(engine.config().typo_correction_mode, "suggest");
+    observe(id++);
+    EXPECT_EQ(typo.size(), 0u);
+  }
+
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  observe(id++);
+  EXPECT_EQ(typo.size(), 1u);
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
 }
 
 TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {

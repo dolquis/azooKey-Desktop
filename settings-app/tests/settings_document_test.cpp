@@ -754,6 +754,139 @@ TEST(SettingsDocumentTest, InvalidTypoAndAutoWordValuesAreRemoved) {
   EXPECT_FALSE(auto_word.contains("unknownKey"));
 }
 
+// typo-correction-learning-spec section 12.14: typoCorrection survives a save
+// that does not touch it, and its invalid keys are dropped the way the Host
+// would ignore them.
+TEST(SettingsDocumentTest, TypoCorrectionSurvivesASaveAndInvalidKeysAreDropped) {
+  ScopedTempDirectory temp("azookey_settings_typo_correction_keep");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"typoCorrection":{"enabled":false,"mode":"rank",
+    "learnPersonalPatterns":false,"keyboardLayout":"auto","maxReadingHypotheses":8,
+    "minConfidenceForRanking":0.6,"minConfidenceForTopCandidate":0.8,
+    "disableInSecretApps":true}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.warnings.empty());
+  auto edited = loaded.settings;
+  edited.log_level = "warn";
+  // As the window saves: only the generic values the user changed.
+  edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+  auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  EXPECT_EQ(typo->AsObject().size(), 8u);
+  EXPECT_EQ(typo->GetString("mode"), "rank");
+  EXPECT_EQ(typo->GetBool("enabled"), false);
+  EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.8);
+  EXPECT_FALSE(parsed->Find("typoCorrectionMode"));
+
+  WriteText(path, R"({"typoCorrection":{"mode":"auto_replace","keyboardLayout":"jis",
+    "maxReadingHypotheses":9,"disableInSecretApps":false,"unknownKey":1,
+    "minConfidenceForRanking":0.95,"minConfidenceForTopCandidate":0.9,"learnPersonalPatterns":true}})");
+  const auto saved = azookey::settings::SaveSettingsDocument(path, {});
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  EXPECT_FALSE(saved.warnings.empty());
+  parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  // Only the valid key is left; the inverted confidences go as a pair.
+  EXPECT_EQ(typo->AsObject().size(), 1u);
+  EXPECT_EQ(typo->GetBool("learnPersonalPatterns"), true);
+}
+
+// Section 12.14: the "辞書" pane shows the mode the Host uses, and a mode the
+// user changes there is written to the root key and to typoCorrection.mode.
+TEST(SettingsDocumentTest, ThePaneTypoModeFollowsTypoCorrectionAndAChangeWritesBothKeys) {
+  ScopedTempDirectory temp("azookey_settings_typo_correction_sync");
+  const auto path = temp.path() / "settings.json";
+  const auto shown = [&](const char* json) {
+    WriteText(path, json);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    const auto it = loaded.settings.values.find("typoCorrectionMode");
+    return it == loaded.settings.values.end() ? std::string("<unset>")
+                                              : std::get<std::string>(it->second);
+  };
+  EXPECT_EQ(shown("{}"), "<unset>");
+  EXPECT_EQ(shown(R"({"typoCorrectionMode":"auto_replace"})"), "auto_replace");
+  EXPECT_EQ(shown(R"({"typoCorrectionMode":"off","typoCorrection":{"mode":"aggressive"}})"),
+            "auto_replace");
+  EXPECT_EQ(shown(R"({"typoCorrectionMode":"auto_replace","typoCorrection":{"mode":"rank"}})"),
+            "suggest");
+  EXPECT_EQ(shown(R"({"typoCorrectionMode":"suggest","typoCorrection":{"enabled":false}})"), "off");
+
+  struct Case {
+    const char* json;
+    const char* chosen;
+    const char* root;
+    const char* nested;
+    std::optional<bool> enabled;
+  };
+  for (const auto& item : {
+           // A save that keeps the mode the file resolves to leaves rank alone.
+           Case{R"({"typoCorrection":{"mode":"rank"}})", "suggest", nullptr, "rank", std::nullopt},
+           Case{R"({"typoCorrection":{"mode":"rank"}})", "off", "off", "off", std::nullopt},
+           Case{R"({"typoCorrectionMode":"suggest"})", "auto_replace", "auto_replace", "aggressive",
+                std::nullopt},
+           Case{R"({"typoCorrectionMode":"auto_replace","typoCorrection":{"mode":"aggressive"}})",
+                "suggest", "suggest", "suggest", std::nullopt},
+           // An absent root key left at the default stays absent (settings-app-spec 3.7).
+           Case{R"({"typoCorrection":{"mode":"aggressive"}})", "suggest", nullptr, "suggest",
+                std::nullopt},
+           // Turning it on clears the enabled false that would keep it off, and
+           // keeps the v2 mode the choice stands for.
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "suggest", nullptr,
+                "suggest", true},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"rank"}})", "suggest", nullptr, "rank",
+                true},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"aggressive"}})", "auto_replace",
+                "auto_replace", "aggressive", true},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "off", nullptr,
+                "suggest", false},
+       }) {
+    SCOPED_TRACE(std::string(item.json) + " -> " + item.chosen);
+    WriteText(path, item.json);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    auto edited = loaded.settings;
+    edited.values["typoCorrectionMode"] = std::string(item.chosen);
+    // As the window saves: only the generic values the user changed.
+    edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+    const auto saved = azookey::settings::SaveSettingsDocument(path, edited);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed && parsed->IsObject());
+    if (item.root) {
+      EXPECT_EQ(parsed->GetString("typoCorrectionMode"), item.root);
+    } else {
+      EXPECT_FALSE(parsed->Find("typoCorrectionMode"));
+    }
+    const auto* typo = parsed->Find("typoCorrection");
+    ASSERT_TRUE(typo && typo->IsObject());
+    EXPECT_EQ(typo->GetString("mode"), item.nested);
+    EXPECT_EQ(typo->GetBool("enabled"), item.enabled);
+  }
+
+  // The file changed between the load and the save: a choice the file now
+  // resolves to leaves typoCorrection as it is.
+  WriteText(path, R"({"typoCorrection":{"mode":"suggest"}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  auto edited = loaded.settings;
+  edited.values["typoCorrectionMode"] = std::string("off");
+  edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+  ASSERT_TRUE(edited.values.contains("typoCorrectionMode"));
+  WriteText(path, R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})");
+  const auto saved = azookey::settings::SaveSettingsDocument(path, edited);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_EQ(parsed->GetString("typoCorrectionMode"), "off");
+  const auto* typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  EXPECT_EQ(typo->GetString("mode"), "suggest");
+  EXPECT_EQ(typo->GetBool("enabled"), false);
+}
+
 TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {
   ScopedTempDirectory temp("azookey_settings_dictionary_preserve");
   const auto path = temp.path() / "settings.json";

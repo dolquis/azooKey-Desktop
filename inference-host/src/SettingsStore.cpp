@@ -107,6 +107,23 @@ int32_t ReadClampedInt32(const j::Object& object, const char* key, int32_t fallb
       std::clamp(value, static_cast<double>(minimum), static_cast<double>(maximum)));
 }
 
+// A finite number in [0, 1], otherwise the fallback.
+double ReadUnitInterval(const j::Object& object, const char* key, double fallback) {
+  const auto it = object.find(key);
+  if (it == object.end() || !it->second.IsNumber()) return fallback;
+  const double value = it->second.AsNumber();
+  return std::isfinite(value) && value >= 0.0 && value <= 1.0 ? value : fallback;
+}
+
+// M55 section 12.14: the engine knows the v1 modes until the M55 correction
+// engine arrives, so the v2 ones map back to them. rank has no v1 counterpart
+// and converts like suggest; aggressive is the v1 auto_replace (section 12.6).
+std::string EngineTypoCorrectionMode(const RuntimeTypoCorrectionSettings& typo) {
+  if (!typo.enabled || typo.mode == "off") return "off";
+  if (typo.mode == "aggressive") return "auto_replace";
+  return "suggest";
+}
+
 const j::Object* ReadObject(const j::Object& object, const char* key) {
   auto it = object.find(key);
   if (it == object.end() || !it->second.IsObject()) return nullptr;
@@ -160,7 +177,10 @@ void ApplySafeModeOverrides(RuntimeSettings& settings) {
   settings.ai_privacy = core::AiPrivacy{false, false};
   // Secure is what the Dispatcher checks before any learning write.
   settings.privacy_policy = core::PrivacyPolicy{true, false};
-  settings.typo_correction_mode = "off";
+  // After the section 12.14 migration, so neither key can turn typo correction back on.
+  settings.typo_correction.enabled = false;
+  settings.typo_correction.mode = "off";
+  settings.typo_correction.learn_personal_patterns = false;
   settings.auto_word.mining_enabled = false;
   settings.auto_word.trending_enabled = false;
 }
@@ -332,9 +352,35 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadBool(*model, "benchmarkOnModelChange", settings.model.benchmark_on_model_change);
   }
 
-  settings.typo_correction_mode =
-      ReadEnum(object, "typoCorrectionMode", settings.typo_correction_mode,
-               {"off", "suggest", "auto_replace"});
+  // M55 section 12.14: a valid typoCorrection.mode wins; without one the v1 root
+  // typoCorrectionMode is read in v2 terms (auto_replace as aggressive); with
+  // neither, suggest. Nothing is written back: the settings app writes both.
+  auto& typo = settings.typo_correction;
+  if (const auto v1_mode =
+          ReadEnum(object, "typoCorrectionMode", "", {"off", "suggest", "auto_replace"});
+      !v1_mode.empty()) {
+    typo.mode = v1_mode == "auto_replace" ? "aggressive" : v1_mode;
+  }
+  if (const auto* nested = ReadObject(object, "typoCorrection")) {
+    typo.enabled = ReadBool(*nested, "enabled", typo.enabled);
+    typo.mode = ReadEnum(*nested, "mode", typo.mode, {"off", "suggest", "rank", "aggressive"});
+    typo.learn_personal_patterns =
+        ReadBool(*nested, "learnPersonalPatterns", typo.learn_personal_patterns);
+    typo.keyboard_layout = ReadEnum(*nested, "keyboardLayout", typo.keyboard_layout, {"auto"});
+    typo.max_reading_hypotheses =
+        ReadRangedInt32(*nested, "maxReadingHypotheses", typo.max_reading_hypotheses, 1, 8);
+    const double ranking =
+        ReadUnitInterval(*nested, "minConfidenceForRanking", typo.min_confidence_for_ranking);
+    const double top = ReadUnitInterval(*nested, "minConfidenceForTopCandidate",
+                                        typo.min_confidence_for_top_candidate);
+    // Section 12.16 keeps ranking below the top candidate; a file that breaks
+    // that order gets both defaults rather than one moved against the other.
+    if (ranking < top) {
+      typo.min_confidence_for_ranking = ranking;
+      typo.min_confidence_for_top_candidate = top;
+    }
+    // disableInSecretApps stays true whatever the file says (section 12.11).
+  }
   settings.typo_min_count =
       ReadRangedInt32(object, "typoMinCount", settings.typo_min_count, 1, 100);
 
@@ -395,13 +441,17 @@ SettingsStore::SettingsStore(std::filesystem::path settings_path,
 
 SettingsStore::PrivacyGuard SettingsStore::LockPrivacyPolicy() const {
   std::unique_lock lock(privacy_mutex_);
-  return {std::move(lock), privacy_policy_, privacy_mode_secure_};
+  return {std::move(lock), privacy_policy_, privacy_mode_secure_, typo_learning_};
 }
 
 void SettingsStore::PublishPrivacyPolicy() {
   std::lock_guard lock(privacy_mutex_);
   privacy_policy_ = settings_.privacy_policy;
   privacy_mode_secure_ = settings_.privacy_mode_secure;
+  // Published under the same lock as the privacy policy, so a reload that turns
+  // typo correction off stops ObserveTypo before the engine config follows.
+  const auto& typo = settings_.typo_correction;
+  typo_learning_ = typo.learn_personal_patterns && typo.enabled && typo.mode != "off";
 }
 
 SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
@@ -664,7 +714,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   }
   config.max_candidates = static_cast<uint32_t>(settings.max_candidates);
   config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
-  config.typo_correction_mode = settings.typo_correction_mode;
+  config.typo_correction_mode = EngineTypoCorrectionMode(settings.typo_correction);
   config.typo_min_count = static_cast<uint32_t>(settings.typo_min_count);
   config.auto_word_mining_enabled = settings.auto_word.mining_enabled;
   config.auto_word_trending_enabled = settings.auto_word.trending_enabled && !settings.offline_mode;

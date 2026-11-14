@@ -492,6 +492,35 @@ std::vector<std::string> AltReadingsFromJson(const j::Value& v) {
   return readings;
 }
 
+// M55 section 12.12.1: lowercase romaji keys, the long vowel and n separator,
+// and hiragana (kana input). Digits, capitals, other symbols and any other
+// text, such as a paste, fall outside it.
+bool IsRawKeysAlphabet(std::string_view keys) {
+  for (size_t i = 0; i < keys.size();) {
+    const auto lead = static_cast<unsigned char>(keys[i]);
+    if (lead < 0x80) {
+      if (!((lead >= 'a' && lead <= 'z') || lead == '-' || lead == '\'')) return false;
+      ++i;
+      continue;
+    }
+    // Every allowed non-ASCII character (U+3041 to U+3096, U+30FC) takes three bytes.
+    if ((lead & 0xF0) != 0xE0 || keys.size() - i < 3) return false;
+    const auto second = static_cast<unsigned char>(keys[i + 1]);
+    const auto third = static_cast<unsigned char>(keys[i + 2]);
+    if ((second & 0xC0) != 0x80 || (third & 0xC0) != 0x80) return false;
+    const char32_t code_point = (static_cast<char32_t>(lead & 0x0F) << 12) |
+                                (static_cast<char32_t>(second & 0x3F) << 6) |
+                                static_cast<char32_t>(third & 0x3F);
+    if (!((code_point >= 0x3041 && code_point <= 0x3096) || code_point == 0x30FC)) return false;
+    i += 3;
+  }
+  return true;
+}
+
+bool IsTypoCorrectionMode(std::string_view mode) {
+  return mode == "off" || mode == "suggest" || mode == "rank" || mode == "aggressive";
+}
+
 }  // namespace
 
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
@@ -510,6 +539,10 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
   if (p.mixed_english) o.emplace("mixed_english", j::Value(true));
   AltReadingsToJson(p.alt_readings, o);
+  // M55 section 12.13: a secure request never carries the keys.
+  if (!p.raw_keys.empty() && !p.secure) o.emplace("raw_keys", j::Value(p.raw_keys));
+  if (!p.typo_correction_mode.empty())
+    o.emplace("typo_correction_mode", j::Value(p.typo_correction_mode));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -533,6 +566,13 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.english_candidates = v->GetBool("english_candidates").value_or(false);
   p.mixed_english = v->GetBool("mixed_english").value_or(false);
   p.alt_readings = AltReadingsFromJson(*v);
+  // M55 section 12.13: the keys survive only an explicit "secure": false, and
+  // keys over the bound or outside the alphabet are dropped whole, not cut.
+  if (auto keys = v->GetString("raw_keys");
+      keys && !p.secure && keys->size() <= kMaxRawKeysBytes && IsRawKeysAlphabet(*keys))
+    p.raw_keys = std::move(*keys);
+  if (auto mode = v->GetString("typo_correction_mode"); mode && IsTypoCorrectionMode(*mode))
+    p.typo_correction_mode = std::move(*mode);
   return p;
 }
 

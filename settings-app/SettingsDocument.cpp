@@ -512,20 +512,24 @@ void SetPath(j::Object* root, std::string_view path, j::Value value) {
   (*root)[key] = j::Value(std::move(child));
 }
 
+// The v2 typoCorrection.mode in the v1 names of the "辞書" pane, or nullopt when
+// it is not a v2 mode: rank converts as suggest, aggressive is auto_replace.
+std::optional<std::string> V1TypoCorrectionMode(const j::Object& root) {
+  const auto* v2 = FindPath(root, "typoCorrection.mode");
+  if (!v2 || !IsStringEnum(*v2, {"off", "suggest", "rank", "aggressive"})) return std::nullopt;
+  const auto& value = v2->AsString();
+  return value == "aggressive" ? "auto_replace" : value == "rank" ? "suggest" : value;
+}
+
 // typo-correction-learning-spec section 12.14: the mode the Host converts with,
 // in the v1 names of the "辞書" pane. A valid typoCorrection.mode wins over the
-// root key and typoCorrection.enabled false is off; rank shows as suggest (it
-// converts as suggest) and aggressive as auto_replace. Nullopt when no key sets it.
+// root key and typoCorrection.enabled false is off. Nullopt when no key sets it.
 std::optional<std::string> EffectiveTypoCorrectionMode(const j::Object& root) {
   std::optional<std::string> mode;
   if (const auto* v1 = FindPath(root, "typoCorrectionMode");
       v1 && IsStringEnum(*v1, {"off", "suggest", "auto_replace"}))
     mode = v1->AsString();
-  if (const auto* v2 = FindPath(root, "typoCorrection.mode");
-      v2 && IsStringEnum(*v2, {"off", "suggest", "rank", "aggressive"})) {
-    const auto& value = v2->AsString();
-    mode = value == "aggressive" ? "auto_replace" : value == "rank" ? "suggest" : value;
-  }
+  if (auto v2 = V1TypoCorrectionMode(root)) mode = std::move(v2);
   if (const auto* enabled = FindPath(root, "typoCorrection.enabled");
       enabled && enabled->IsBool() && !enabled->AsBool())
     mode = "off";
@@ -796,18 +800,20 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
       SetPath(&root, setting, ToJson(value));
     }
   }
-  // typo-correction-learning-spec section 12.14: a mode chosen in the pane goes
-  // to both keys, so this Host (typoCorrection.mode first) and an older one (the
-  // root key only) follow it; turning it on also clears typoCorrection.enabled
-  // false, which would keep it off. A mode the file already resolves to leaves
-  // typoCorrection as it is, so a rank set outside the pane survives a save.
+  // typo-correction-learning-spec section 12.14: a mode chosen in the pane also
+  // goes to typoCorrection.mode, which this Host reads before the root key the
+  // loop above wrote (an absent root key left at the default stays absent, as
+  // section 3.7 has it, and an older Host reads that the same). A v2 mode the
+  // choice already stands for stays, so rank survives choosing suggest, and
+  // turning it on clears typoCorrection.enabled false, which would keep it off.
+  // A mode the file already resolves to leaves typoCorrection as it is.
   if (const auto chosen = settings.values.find("typoCorrectionMode");
       chosen != settings.values.end()) {
     const auto* mode = std::get_if<std::string>(&chosen->second);
     if (mode && *mode != typo_mode_on_disk) {
-      SetPath(&root, "typoCorrectionMode", j::Value(*mode));
-      SetPath(&root, "typoCorrection.mode",
-              j::Value(*mode == "auto_replace" ? "aggressive" : *mode));
+      if (V1TypoCorrectionMode(root) != *mode)
+        SetPath(&root, "typoCorrection.mode",
+                j::Value(*mode == "auto_replace" ? "aggressive" : *mode));
       if (*mode != "off" && FindPath(root, "typoCorrection.enabled"))
         SetPath(&root, "typoCorrection.enabled", j::Value(true));
     }

@@ -764,10 +764,13 @@ TEST(SettingsDocumentTest, TypoCorrectionSurvivesASaveAndInvalidKeysAreDropped) 
     "learnPersonalPatterns":false,"keyboardLayout":"auto","maxReadingHypotheses":8,
     "minConfidenceForRanking":0.6,"minConfidenceForTopCandidate":0.8,
     "disableInSecretApps":true}})");
-  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
   EXPECT_TRUE(loaded.warnings.empty());
-  loaded.settings.log_level = "warn";
-  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  auto edited = loaded.settings;
+  edited.log_level = "warn";
+  // As the window saves: only the generic values the user changed.
+  edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
   auto parsed = azookey::ipc::json::Parse(ReadText(path));
   ASSERT_TRUE(parsed && parsed->IsObject());
   const auto* typo = parsed->Find("typoCorrection");
@@ -776,9 +779,7 @@ TEST(SettingsDocumentTest, TypoCorrectionSurvivesASaveAndInvalidKeysAreDropped) 
   EXPECT_EQ(typo->GetString("mode"), "rank");
   EXPECT_EQ(typo->GetBool("enabled"), false);
   EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.8);
-  // The pane shows enabled false as off and writes that, as any non-default
-  // value, to the root key, which is what an older Host reads.
-  EXPECT_EQ(parsed->GetString("typoCorrectionMode"), "off");
+  EXPECT_FALSE(parsed->Find("typoCorrectionMode"));
 
   WriteText(path, R"({"typoCorrection":{"mode":"auto_replace","keyboardLayout":"jis",
     "maxReadingHypotheses":9,"disableInSecretApps":false,"unknownKey":1,
@@ -830,17 +831,28 @@ TEST(SettingsDocumentTest, ThePaneTypoModeFollowsTypoCorrectionAndAChangeWritesB
                 std::nullopt},
            Case{R"({"typoCorrectionMode":"auto_replace","typoCorrection":{"mode":"aggressive"}})",
                 "suggest", "suggest", "suggest", std::nullopt},
-           // Turning it on clears the enabled false that would keep it off.
-           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "suggest", "suggest",
+           // An absent root key left at the default stays absent (settings-app-spec 3.7).
+           Case{R"({"typoCorrection":{"mode":"aggressive"}})", "suggest", nullptr, "suggest",
+                std::nullopt},
+           // Turning it on clears the enabled false that would keep it off, and
+           // keeps the v2 mode the choice stands for.
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "suggest", nullptr,
                 "suggest", true},
-           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "off", "off", "suggest",
-                false},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"rank"}})", "suggest", nullptr, "rank",
+                true},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"aggressive"}})", "auto_replace",
+                "auto_replace", "aggressive", true},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})", "off", nullptr,
+                "suggest", false},
        }) {
     SCOPED_TRACE(std::string(item.json) + " -> " + item.chosen);
     WriteText(path, item.json);
-    auto loaded = azookey::settings::LoadSettingsDocument(path);
-    loaded.settings.values["typoCorrectionMode"] = std::string(item.chosen);
-    const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    auto edited = loaded.settings;
+    edited.values["typoCorrectionMode"] = std::string(item.chosen);
+    // As the window saves: only the generic values the user changed.
+    edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+    const auto saved = azookey::settings::SaveSettingsDocument(path, edited);
     ASSERT_TRUE(saved.ok) << saved.error.value_or("");
     const auto parsed = azookey::ipc::json::Parse(ReadText(path));
     ASSERT_TRUE(parsed && parsed->IsObject());

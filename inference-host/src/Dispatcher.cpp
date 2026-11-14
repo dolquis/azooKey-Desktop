@@ -1824,9 +1824,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   // without a class had no usable answer (AiErrorClassToWire has no name for None).
   const auto fail = [&](AiErrorClass error) {
     if (error == AiErrorClass::None) error = AiErrorClass::Parse;
+    // result=blocked marks the secure stop (observability-spec section 7.2).
     DispatcherLogger(runtime_logger_)
         .Log(logging::RuntimeLogLevel::Warn, "transform_selected_text_failed",
-             {{"request_id", req.request_id}, {"error_class", static_cast<uint64_t>(error)}});
+             {{"request_id", req.request_id},
+              {"result", logging::RuntimeLogSafeText(
+                             error == AiErrorClass::BlockedBySecure ? "blocked" : "error")},
+              {"error_code", logging::RuntimeLogSafeText("business")},
+              {"error_class", static_cast<uint64_t>(error)}});
     res.error_class = AiErrorClassToWire(error);
     return reply();
   };

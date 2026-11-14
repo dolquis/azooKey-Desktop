@@ -186,7 +186,10 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     }
     const bool retryable = error == AiErrorClass::RateLimit || error == AiErrorClass::ServerError ||
                            error == AiErrorClass::Network;
-    if (!retryable || attempt == 2) return Failure(error);
+    // M16 keeps the user waiting in the prompt window, so it retries once at
+    // most (ai-backend-spec section 7.3); the other tasks retry twice.
+    const unsigned max_retries = request.task == AiTask::Transform ? 1u : 2u;
+    if (!retryable || attempt == max_retries) return Failure(error);
     last_error = error;
     const auto backoff = std::chrono::milliseconds(
         (250u << attempt) +

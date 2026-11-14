@@ -214,6 +214,27 @@ TEST(AiBackendTest, ClassifiesFailuresAndBoundsRetries) {
     EXPECT_EQ(calls, attempts);
   }
 }
+// ai-backend-spec section 7.3: the selection transform (M16) keeps the user
+// waiting, so a retryable failure is retried once instead of twice.
+TEST(AiBackendTest, TransformRetriesOnceAtMost) {
+  for (const auto [status, expected, attempts] : {std::tuple{401u, AiErrorClass::Auth, 1u},
+                                                  {429u, AiErrorClass::RateLimit, 2u},
+                                                  {500u, AiErrorClass::ServerError, 2u}}) {
+    unsigned calls = 0;
+    AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
+      ++calls;
+      return AiHttpResponse{status};
+    });
+    AiTransformRequest request;
+    request.task = AiTask::Transform;
+    request.mode = "free";
+    request.prompt = "英語に翻訳";
+    request.text = "おはよう";
+    request.ai_allowed = request.external_allowed = true;
+    EXPECT_EQ(backend.Transform(request, Remote()).error_class, expected);
+    EXPECT_EQ(calls, attempts) << status;
+  }
+}
 TEST(AiBackendTest, TimeoutAndKeyReentryAreNotRetried) {
   for (auto error : {AiErrorClass::Timeout, AiErrorClass::KeyReentry}) {
     unsigned calls = 0;

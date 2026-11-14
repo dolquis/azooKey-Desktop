@@ -1014,6 +1014,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   分岐 / §1.6.2）。WinGet（§5）/ 自動更新（§6）は DEV-202 に依存しない。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規。更新チェックは DEV-1934）、
+  `inference-host/src/UpdateToast.cpp`（新規。更新の通知）、
   `inference-host/src/HttpDownloader.cpp`（WinHTTP + SHA256 共通ヘルパの
   切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
   M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に
@@ -1024,7 +1025,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - winget-pkgs に PR が merge され `winget install` で導入可能
   - 更新の確認（opt-in。`autoUpdate.enabled` の既定は `false`）: 有効にしたとき、起動時と
     `checkIntervalHours` の周期で新版を検出し、設定アプリの「バージョン」に表示する。`offline` と
-    secure では確認しない（spec §6.1 / §6.2）
+    secure では確認しない（spec §6.1 / §6.2）。見つけた版はトーストで 1 回だけ知らせ、押すと
+    リリースページを開く（MSI のショートカットに AUMID を登録。spec §6.3「通知」）
   - MSI の適用（別の受入条件）: 見つけた版の MSI をダウンロード・SHA256 検証し、ユーザー承認で
     適用する（`msiexec /i /qn /norestart`、要再起動時は通知。spec §6.3）
   - **DEV-202 で auto-DL が承認されているとき**（上流 HF から、または著者確認後の

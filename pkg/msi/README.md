@@ -79,6 +79,8 @@ self-contained 設定アプリを `build\windows-release\settings-app\Release` �
 `INSTALLFOLDER\azookey_settings.exe` として配置します。スタートメニューの
 `azooKey Settings` ショートカットは `SettingsExe` の advertised shortcut としてこの
 固定パスを指し、per-machine ファイルを component KeyPath とします。
+このショートカットには AppUserModelID `dolquis.azooKey` を付けます。Host の更新通知
+（`docs/sideload-packaging-spec.md` §6.3）は、この AUMID でトーストを出します。
 設定アプリのビルド成果物が欠けている場合、MSI ビルドは失敗します。
 設定アプリの FileVersion が `ProductVersion` に `.0` を付けた値と違う場合も、MSI ビルドは失敗します。
 `SettingsExe` は版を持つ KeyPath なので、メジャーアップグレードで旧版より低い FileVersion を

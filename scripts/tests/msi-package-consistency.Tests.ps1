@@ -213,6 +213,12 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match '"-p:SettingsExePath='
   }
 
+  It "gives the settings shortcut the AppUserModelID the Host's update toast uses" {
+    $toastHeader = Get-Content -Raw (Join-Path $script:repoRoot "inference-host\include\azookey\host\UpdateToast.h")
+    $toastHeader | Should -Match 'kAppUserModelId\[\] = L"dolquis\.azooKey";'
+    $script:package | Should -Match 'Id="SettingsShortcut"[^>]*>\s*(<!--[\s\S]*?-->\s*)?<ShortcutProperty Key="System\.AppUserModel\.ID" Value="dolquis\.azooKey" />\s*</Shortcut>'
+  }
+
   It "shares the product icon between the EXE and advertised shortcut" {
     [xml]$xml = $script:package
     $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)

@@ -484,7 +484,10 @@ GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base M
 `$(SettingsPayloadDir)\azookey_settings.exe` とする。インストール後の名前は常に
 `INSTALLFOLDER\azookey_settings.exe` で、スタートメニューのショートカットはこの固定パスを
 指す。ショートカットは `SettingsExe` の advertised shortcut とし、per-machine のファイルを
-component KeyPath に保つ。release workflow は `azookey_settings` target をビルドしてから両
+component KeyPath に保つ。ショートカットには `ShortcutProperty`（MsiShortcutProperty テーブル）で
+`System.AppUserModel.ID` = `dolquis.azooKey` を付け、Host の更新通知（§6.3）がこの AUMID で
+トーストを出す。Windows Installer はこのプロパティを設定できなくても警告 1946 を出してインストールを
+続けるので、付いたことは実機の `Get-StartApps` で確かめる。release workflow は `azookey_settings` target をビルドしてから両
 property を MSI ビルドへ渡す。
 
 #### 設定アプリの製品メタデータ
@@ -686,8 +689,8 @@ wingetcreate update --urls `
 
 ## 6. 自動更新（M32）
 
-本節の範囲は更新の確認（新しいリリースを見つけて利用者に示すこと）である。MSI のダウンロードと
-適用（§6.3）は別の課題とする。
+本節の範囲は更新の確認（新しいリリースを見つけて利用者に示すこと）と、その通知（§6.3 の
+手順 1）である。MSI のダウンロードと適用（§6.3 の手順 2〜6）は別の課題とする。
 
 ### 6.1 チェック経路
 
@@ -754,9 +757,10 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 
 ### 6.3 ダウンロード → 適用
 
-本節は将来の課題であり、更新の確認（§6.1）とは別に実装する。新バージョンを検出したら：
+手順 1 の通知は下の「通知」のとおりである。手順 2〜6 は将来の課題であり、更新の確認（§6.1）
+とは別に実装する。新バージョンを検出したら：
 
-1. 通知（トースト）「新しいバージョン v1.1.0 が利用可能」
+1. 通知（トースト。下の「通知」）
 2. ユーザーが「インストール」をクリック
 3. MSI を `%TEMP%` にダウンロード（`WinHttpReadData`）
 4. SHA256 検証
@@ -766,8 +770,43 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
    ユーザーに通知して同意を得てから再起動する
 
-更新の確認の結果は、設定アプリの「バージョン」に表示するだけで、トースト通知はしない。非パッケージの
-MSI 配布でトーストを出すには AUMID の登録が要るため、トースト通知は別の課題とする。
+#### 通知
+
+Host（`inference-host/src/UpdateToast.cpp`）は、確認で新しい版を見つけて `update-status.json` を
+書いたあと、Windows のトーストを出す。
+
+- 文面は「azooKey の新しいバージョン v1.1.0 があります」で、押すとその版のリリースページを
+  既定のブラウザで開く。開く URL は §6.1 で `https://github.com/dolquis/azooKey-Desktop/releases/`
+  で始まると確かめた `releaseUrl` だけで、それが無いリリースは通知しない。クリックは protocol
+  activation で処理するので、COM activator を登録せず、Host が終わった後に通知センターから
+  押しても開く。
+- 同じ版は 1 回だけ通知する。表示に成功した版を、`settings.json` と同じディレクトリの
+  `update-notification.json`（`{"version":1,"notifiedVersion":"1.1.0"}`）に atomic write で書き、
+  以後はそれより新しい版（SemVer の優先順位、§6.2）だけを通知する。channel を往復しても、
+  Host を再起動しても、通知済みの版とそれ以下の版は再び出さない。通知は記録した版より新しい版に
+  限るので、channel を戻したとき、記録より古い版は通知せず「バージョン」に表示するだけである。
+  表示に失敗したとき、利用者が Windows の設定でこのアプリの通知を切っているときは書かず、次の
+  確認で再び試す。表示の後に記録を書けなかったときも、次の確認で同じ版を再び通知する。
+- 確認しない条件（`autoUpdate.enabled=false`、`privacy.mode` が `offline` か `secure`、§6.1）では
+  通知もしない。確認を取り消したときも通知しない。
+- 非パッケージのプロセスがトーストを出すには、スタートメニューのショートカットに同じ
+  AppUserModelID（`dolquis.azooKey`）が要る。MSI は設定アプリのショートカットにこれを付ける
+  （§4.1）。
+- 通知を止めるのは、Windows がこの AUMID の通知を有効でないと返したとき（`disabled_by_system`）
+  だけである。通知の設定を読めなかったときは、通知を一度も出していない非パッケージのアプリでも
+  起こりうるので、止めずに表示へ進む。表示の成功は Windows が表示の要求を受け付けたことを指し、
+  画面に出たことまでは確かめない。どのショートカットも持たない AUMID は、開発機（Windows の
+  ビルド 26300）で「無効」（`DisabledForUser`）と返ったので、ショートカットの無い開発ビルドや
+  付与に失敗した環境では通知済みにならない見込みである。これと、通知を一度も出していない
+  プロファイルで初回から表示されることは、実機で確かめる（Human Gate DEV-2075）。
+- 通知するのは利用者のセッションで常駐する pipe モードの Host だけで、stdio モードの Host は
+  確認はしても通知しない（並んで動いたときに同じ版を二度知らせないため）。
+- Host は各表示の結果を RuntimeLog の `update_notification` イベントに、固定の `reason`
+  （`shown` / `disabled_by_system` / `failed`）で記録する。`failed` には、失敗した段階の固定名
+  `stage`（`input` / `convert` / `runtime` / `activate` / `load_xml` / `notifier` / `show`）と符号付きの
+  HRESULT の数値 `hresult` を添える。版と URL は記録しない。
+
+実機での表示・クリック・アップグレード後のショートカットの確認は Human Gate（DEV-2075）とする。
 
 ### 6.4 WinSparkle 互換
 
@@ -1074,7 +1113,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
 | 署名検証 | `pkg/tests/signature_test.ps1`（M29 で新設する予定。署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
-| UpdateChecker | `inference-host/tests/update_checker_test.cpp`、`inference-host/tests/http_downloader_test.cpp`（`UpdateCheckerHttpIntegrationTest`） | 版の比較、channel ごとのリリースの選択、無効・失敗・取り消し時の扱い、周期と前回の確認による間隔、ループバックの Releases API を通した確認と送る情報 |
+| UpdateChecker | `inference-host/tests/update_checker_test.cpp`、`inference-host/tests/http_downloader_test.cpp`（`UpdateCheckerHttpIntegrationTest`） | 版の比較、channel ごとのリリースの選択、無効・失敗・取り消し時の扱い、周期と前回の確認による間隔、ループバックの Releases API を通した確認と送る情報、版ごとに 1 回だけの通知とトーストの XML |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |

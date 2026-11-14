@@ -52,23 +52,6 @@ int CompareIdentifiers(const std::string& a, const std::string& b) {
   return a.compare(b) < 0 ? -1 : (a == b ? 0 : 1);
 }
 
-bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix) {
-  if (prefix.empty() || url.size() <= prefix.size() || url.size() > kMaxReleaseUrl ||
-      !url.starts_with(prefix)) {
-    return false;
-  }
-  // No dot segments or escapes, which a browser could resolve to a page outside the prefix.
-  const auto rest = url.substr(prefix.size());
-  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
-      rest.find('%') != std::string_view::npos) {
-    return false;
-  }
-  return std::all_of(url.begin(), url.end(), [](char c) {
-    const auto byte = static_cast<unsigned char>(c);
-    return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
-  });
-}
-
 std::optional<AvailableRelease> ReleaseFrom(const ipc::json::Value& value,
                                             std::string_view release_page_prefix,
                                             bool allow_prerelease) {
@@ -95,6 +78,23 @@ std::string_view ResultName(UpdateCheckStatus status) {
 }
 
 }  // namespace
+
+bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix) {
+  if (prefix.empty() || url.size() <= prefix.size() || url.size() > kMaxReleaseUrl ||
+      !url.starts_with(prefix)) {
+    return false;
+  }
+  // No dot segments or escapes, which a browser could resolve to a page outside the prefix.
+  const auto rest = url.substr(prefix.size());
+  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
+      rest.find('%') != std::string_view::npos) {
+    return false;
+  }
+  return std::all_of(url.begin(), url.end(), [](char c) {
+    const auto byte = static_cast<unsigned char>(c);
+    return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
+  });
+}
 
 std::optional<ReleaseVersion> ParseReleaseVersion(std::string_view text) {
   if (text.size() > kMaxVersionText) return std::nullopt;
@@ -362,7 +362,52 @@ UpdateCheckStatus UpdateChecker::CheckOnceImpl() {
   if (!release) return finish(UpdateCheckStatus::Failed, std::nullopt);
   const auto latest = ParseReleaseVersion(release->version);
   const bool newer = latest && CompareReleaseVersions(*latest, *current) > 0;
-  return finish(newer ? UpdateCheckStatus::UpdateAvailable : UpdateCheckStatus::UpToDate, release);
+  const auto status =
+      finish(newer ? UpdateCheckStatus::UpdateAvailable : UpdateCheckStatus::UpToDate, release);
+  // A check cancelled while its record was written is not notified.
+  if (status == UpdateCheckStatus::UpdateAvailable && !cancelled()) NotifyOnce(*release);
+  return status;
+}
+
+std::optional<std::string> UpdateChecker::NotifiedVersion() const {
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(options_.notification_path, ec);
+  if (ec || size == 0 || size > kMaxStatusBytes) return std::nullopt;
+  std::ifstream input(options_.notification_path, std::ios::binary);
+  std::string text(static_cast<size_t>(size), '\0');
+  if (!input.read(text.data(), static_cast<std::streamsize>(size))) return std::nullopt;
+  const auto root = ipc::json::Parse(text);
+  if (!root || !root->IsObject() || root->GetUInt("version") != 1u) return std::nullopt;
+  return root->GetString("notifiedVersion");
+}
+
+void UpdateChecker::NotifyOnce(const AvailableRelease& release) {
+  // The notification opens the release page, so a release without one is not notified.
+  if (!dependencies_.notify_update || options_.notification_path.empty() || release.url.empty()) {
+    return;
+  }
+  // Only a version above the one last notified: the record keeps the highest version shown, so
+  // switching the channel back and forth does not notify a version again.
+  const auto latest = ParseReleaseVersion(release.version);
+  if (!latest) return;
+  if (const auto notified_text = NotifiedVersion()) {
+    const auto notified = ParseReleaseVersion(*notified_text);
+    if (notified && CompareReleaseVersions(*latest, *notified) <= 0) return;
+  }
+  bool shown = false;
+  // A notification sink must not terminate the Host worker.
+  try {
+    shown = dependencies_.notify_update(release);
+  } catch (...) {
+    shown = false;
+  }
+  if (!shown) return;
+  ipc::json::Object record;
+  record["version"] = ipc::json::Value(int64_t{1});
+  record["notifiedVersion"] = ipc::json::Value(release.version);
+  // A failed write notifies the same version again at the next check rather than never.
+  (void)learning::WriteTextFileAtomically(options_.notification_path,
+                                          ipc::json::Stringify(ipc::json::Value(record)));
 }
 
 }  // namespace azookey::host

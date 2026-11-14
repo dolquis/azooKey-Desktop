@@ -10,26 +10,31 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
 #include "azookey/host/UpdateChecker.h"
+#include "azookey/host/UpdateToast.h"
 #include "azookey/ipc/Json.h"
 
 namespace {
 using namespace std::chrono_literals;
 using azookey::host::AvailableRelease;
+using azookey::host::BuildUpdateToastXml;
 using azookey::host::CompareReleaseVersions;
 using azookey::host::HttpTextRequest;
 using azookey::host::HttpTextResult;
 using azookey::host::ParseReleaseVersion;
 using azookey::host::SelectRelease;
+using azookey::host::ShowUpdateToast;
 using azookey::host::UpdateCheckDependencies;
 using azookey::host::UpdateChecker;
 using azookey::host::UpdateCheckerOptions;
 using azookey::host::UpdateCheckStatus;
+using azookey::host::UpdateToastResult;
 
 constexpr std::string_view kPrefix = "https://github.com/dolquis/azooKey-Desktop/releases/";
 constexpr uint64_t kNow = 1'800'000'000;
@@ -126,8 +131,15 @@ struct Fixture {
   FakeReleases releases;
   FakeSteadyClock clock;
   std::filesystem::path status_path = temp.path() / "update-status.json";
+  std::filesystem::path notification_path = temp.path() / "update-notification.json";
   // The published privacy policy as main.cpp passes it (false: secure or invalid settings).
   std::atomic<bool> network_allowed{true};
+  // The releases handed to notify_update, and whether the notification counts as shown. Only
+  // CheckOnce on the test thread notifies in the tests that read these.
+  std::vector<AvailableRelease> notified;
+  bool notification_shown = true;
+  // Runs whenever the checker reads the wall clock (set only by tests that call CheckOnce).
+  std::function<void()> on_now;
 
   UpdateChecker Make(std::string current_version = "1.0.0") {
     UpdateCheckerOptions options;
@@ -135,13 +147,21 @@ struct Fixture {
     options.api_base_url = L"https://api.example.test/repos/owner/repo";
     options.release_page_prefix = std::string(kPrefix);
     options.status_path = status_path;
+    options.notification_path = notification_path;
     UpdateCheckDependencies dependencies;
     dependencies.fetch_text = [this](const HttpTextRequest& request) {
       return releases.Fetch(request);
     };
-    dependencies.now_epoch = [] { return kNow; };
+    dependencies.now_epoch = [this] {
+      if (on_now) on_now();
+      return kNow;
+    };
     dependencies.steady_now = [this] { return clock.Now(); };
     dependencies.network_allowed = [this] { return network_allowed.load(); };
+    dependencies.notify_update = [this](const AvailableRelease& release) {
+      notified.push_back(release);
+      return notification_shown;
+    };
     return UpdateChecker(std::move(options), std::move(dependencies));
   }
 };
@@ -294,6 +314,166 @@ TEST(UpdateCheckerTest, FailuresAreRecordedWithoutAVersion) {
   }
 }
 
+TEST(UpdateCheckerNotificationTest, ANewerReleaseIsNotifiedOncePerVersion) {
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  {
+    auto checker = f.Make("1.0.0");
+    checker.UpdateSettings(true, "stable", 24);
+    EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+    ASSERT_EQ(f.notified.size(), 1u);
+    EXPECT_EQ(f.notified.front().version, "1.1.0");
+    EXPECT_EQ(f.notified.front().url, std::string(kPrefix) + "tag/v1.1.0");
+    const auto record = ReadStatus(f.notification_path);
+    ASSERT_TRUE(record && record->IsObject());
+    EXPECT_EQ(record->GetUInt("version"), 1u);
+    EXPECT_EQ(record->GetString("notifiedVersion"), "1.1.0");
+    EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+    EXPECT_EQ(f.notified.size(), 1u);
+  }
+  // A restarted Host, on the other channel too, finds the same version already notified.
+  auto restarted = f.Make("1.0.0");
+  restarted.UpdateSettings(true, "beta", 24);
+  f.releases.answer.body = "[" + Release("v1.1.0") + "]";
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_EQ(f.notified.size(), 1u);
+  // A later version is notified again.
+  f.releases.answer.body = "[" + Release("v1.2.0-beta.1", true) + "]";
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  ASSERT_EQ(f.notified.size(), 2u);
+  EXPECT_EQ(f.notified.back().version, "1.2.0-beta.1");
+  EXPECT_EQ(ReadStatus(f.notification_path)->GetString("notifiedVersion"), "1.2.0-beta.1");
+  // Back on stable, the older 1.1.0 is not notified, and returning to beta does not notify
+  // 1.2.0-beta.1 again.
+  restarted.UpdateSettings(true, "stable", 24);
+  f.releases.answer.body = Release("v1.1.0");
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  restarted.UpdateSettings(true, "beta", 24);
+  f.releases.answer.body = "[" + Release("v1.2.0-beta.1", true) + "]";
+  EXPECT_EQ(restarted.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_EQ(f.notified.size(), 2u);
+  EXPECT_EQ(ReadStatus(f.notification_path)->GetString("notifiedVersion"), "1.2.0-beta.1");
+}
+
+TEST(UpdateCheckerNotificationTest, ACheckCancelledWhileItsRecordIsWrittenIsNotNotified) {
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  auto checker = f.Make("1.0.0");
+  checker.UpdateSettings(true, "stable", 24);
+  // The record reads the wall clock after its own cancellation check; turning the check off
+  // there leaves only the check before the notification to stop it.
+  f.on_now = [&] { checker.UpdateSettings(false, "stable", 24); };
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_TRUE(std::filesystem::exists(f.status_path));
+  EXPECT_TRUE(f.notified.empty());
+  EXPECT_FALSE(std::filesystem::exists(f.notification_path));
+}
+
+TEST(UpdateCheckerNotificationTest, ANotificationThatWasNotShownIsTriedAtTheNextCheck) {
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  f.notification_shown = false;
+  auto checker = f.Make("1.0.0");
+  checker.UpdateSettings(true, "stable", 24);
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_EQ(f.notified.size(), 1u);
+  EXPECT_FALSE(std::filesystem::exists(f.notification_path));
+  f.notification_shown = true;
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_EQ(f.notified.size(), 2u);
+  EXPECT_EQ(ReadStatus(f.notification_path)->GetString("notifiedVersion"), "1.1.0");
+}
+
+TEST(UpdateCheckerNotificationTest, AThrowingNotificationSinkIsContained) {
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  UpdateCheckerOptions options;
+  options.current_version = "1.0.0";
+  options.api_base_url = L"https://api.example.test/repos/owner/repo";
+  options.release_page_prefix = std::string(kPrefix);
+  options.status_path = f.status_path;
+  options.notification_path = f.notification_path;
+  UpdateCheckDependencies dependencies;
+  dependencies.fetch_text = [&f](const HttpTextRequest& request) {
+    return f.releases.Fetch(request);
+  };
+  dependencies.now_epoch = [] { return kNow; };
+  dependencies.steady_now = [&f] { return f.clock.Now(); };
+  dependencies.notify_update = [](const AvailableRelease&) -> bool {
+    throw std::runtime_error("notification failed");
+  };
+  UpdateChecker checker(std::move(options), std::move(dependencies));
+  checker.UpdateSettings(true, "stable", 24);
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::UpdateAvailable);
+  EXPECT_FALSE(std::filesystem::exists(f.notification_path));
+}
+
+TEST(UpdateCheckerNotificationTest, OnlyANewerReleaseWithItsPageIsNotified) {
+  const std::vector<std::string> bodies = {
+      R"({"message":"API rate limit exceeded"})", Release("v1.0.0"), Release("v0.9.0"),
+      // The page is outside the repository's releases, so the release has no URL to open.
+      Release("v1.1.0", false, false, "https://example.com/releases/tag/v1.1.0")};
+  for (const auto& body : bodies) {
+    Fixture f;
+    f.releases.answer.body = body;
+    auto checker = f.Make("1.0.0");
+    checker.UpdateSettings(true, "stable", 24);
+    (void)checker.CheckOnce();
+    EXPECT_TRUE(f.notified.empty()) << body;
+    EXPECT_FALSE(std::filesystem::exists(f.notification_path)) << body;
+  }
+  // Disabled, or held back by the privacy policy: no check, so no notification either.
+  Fixture f;
+  f.releases.answer.body = Release("v1.1.0");
+  auto checker = f.Make("1.0.0");
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::Disabled);
+  f.network_allowed = false;
+  checker.UpdateSettings(true, "stable", 24);
+  EXPECT_EQ(checker.CheckOnce(), UpdateCheckStatus::Disabled);
+  EXPECT_TRUE(f.notified.empty());
+}
+
+TEST(UpdateToastTest, TheToastOpensTheReleasePageAndEscapesItsValues) {
+  const auto xml = BuildUpdateToastXml(
+      "1.1.0", "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0?a=1&b='c'");
+  EXPECT_NE(xml.find(R"(<toast activationType="protocol" launch="https://github.com/dolquis/)"
+                     R"(azooKey-Desktop/releases/tag/v1.1.0?a=1&amp;b=&apos;c&apos;">)"),
+            std::string::npos)
+      << xml;
+  EXPECT_NE(xml.find("v1.1.0 "), std::string::npos) << xml;
+  EXPECT_EQ(xml.find("&b="), std::string::npos) << xml;
+  const auto hostile = BuildUpdateToastXml(R"(1"/><x a=")", "https://example.test/<y>");
+  EXPECT_EQ(hostile.find("<x"), std::string::npos) << hostile;
+  EXPECT_EQ(hostile.find("<y>"), std::string::npos) << hostile;
+  EXPECT_NE(hostile.find("v1&quot;/&gt;&lt;x a=&quot;"), std::string::npos) << hostile;
+}
+
+TEST(UpdateToastTest, OnlyAReleasePageOfTheRepositoryIsShown) {
+  // Rejected before any Windows Runtime call, so no toast appears while the test runs.
+  for (const char* url : {"", "http://github.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
+                          "file:///C:/Windows/System32/cmd.exe", "ms-settings:",
+                          "https://example.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/../../other/repo",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/tag/%2e%2e"}) {
+    const auto outcome = ShowUpdateToast("1.1.0", url);
+    EXPECT_EQ(outcome.result, UpdateToastResult::Failed) << url;
+    EXPECT_EQ(std::string_view(outcome.stage), "input") << url;
+  }
+  const auto no_version =
+      ShowUpdateToast("", "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1");
+  EXPECT_EQ(no_version.result, UpdateToastResult::Failed);
+  EXPECT_EQ(std::string_view(no_version.stage), "input");
+}
+
+TEST(UpdateToastTest, OnlyASettingReadAsNotEnabledStopsTheToast) {
+  // An unpackaged app that never notified may fail to read the setting: that does not stop it.
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(false, false), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(false, true), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(true, true), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(true, false),
+            UpdateToastResult::DisabledBySystem);
+}
+
 TEST(UpdateCheckerTest, UnparsableProductVersionFailsBeforeTheNetwork) {
   Fixture f;
   auto checker = f.Make("dev");
@@ -312,6 +492,7 @@ TEST(UpdateCheckerTest, SettingsChangeDuringACheckCancelsItWithoutWritingStatus)
   ASSERT_EQ(f.releases.count(), 1u);
   EXPECT_TRUE(f.releases.requests.front().cancelled());
   EXPECT_FALSE(std::filesystem::exists(f.status_path));
+  EXPECT_TRUE(f.notified.empty());
 }
 
 TEST(UpdateCheckerTest, APrivacyPolicyThatForbidsTheNetworkHoldsTheCheckBack) {

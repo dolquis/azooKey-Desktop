@@ -148,7 +148,11 @@
                 Advertise="yes"
                 Icon="SettingsIcon.exe"
                 IconIndex="0"
-                WorkingDirectory="INSTALLFOLDER" />
+                WorkingDirectory="INSTALLFOLDER">
+              <!-- The Host's update toast (sideload spec section 6.3) uses this AUMID; an
+                   unpackaged process can raise toasts only for a Start menu shortcut's AUMID. -->
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="dolquis.azooKey" />
+            </Shortcut>
           </File>
         </Component>
       </Directory>

@@ -14,6 +14,7 @@
 #include "azookey/host/NeologdLayerState.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/host/UpdateFetchService.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/AutoWordStore.h"
@@ -50,6 +51,9 @@ struct DispatcherConfig {
   // matches, and ListModels returns the catalog on request. nullptr leaves the format to the
   // GGUF vocabulary and sends no catalog.
   std::shared_ptr<CatalogModelMatcher> catalog_matcher;
+  // DEV-1974 FetchUpdate / QueryUpdateFetch / CancelUpdateFetch (sideload-packaging-spec 6.3),
+  // shared by every connection. nullptr leaves the update_fetch capability out.
+  std::shared_ptr<UpdateFetchService> update_fetch;
   // FetchCatalogModel / QueryCatalogFetch (model-management-spec 4.4), shared by every
   // connection. nullptr leaves the fetch_catalog_model capability out.
   std::shared_ptr<CatalogFetchService> catalog_fetch;
@@ -102,6 +106,9 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleQueryPredictions(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryBatchConversion(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleReverseConvert(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleFetchUpdate(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryUpdateFetch(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleCancelUpdateFetch(const ipc::Envelope& req);
   void HandleCancel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleCommitObservation(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleCommitCorrection(const ipc::Envelope& req);

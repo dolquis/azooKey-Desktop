@@ -305,6 +305,32 @@
                                      x:Uid="OpenReleasePageButton"
                                      Visibility="Collapsed"
                                      AutomationProperties.AutomationId="OpenReleasePageButton" />
+                    <!-- DEV-1974: download the update through the Host, then install it. -->
+                    <StackPanel x:Name="UpdateInstallPanel" Spacing="8" Visibility="Collapsed">
+                        <TextBlock x:Uid="UpdateInstallDescription" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="DownloadUpdateButton"
+                                    x:Uid="DownloadUpdateButton"
+                                    Click="DownloadUpdateButton_Click"
+                                    AutomationProperties.AutomationId="DownloadUpdateButton" />
+                            <Button x:Name="CancelUpdateDownloadButton"
+                                    x:Uid="CancelUpdateDownloadButton"
+                                    Visibility="Collapsed"
+                                    Click="CancelUpdateDownloadButton_Click"
+                                    AutomationProperties.AutomationId="CancelUpdateDownloadButton" />
+                            <Button x:Name="InstallUpdateButton"
+                                    x:Uid="InstallUpdateButton"
+                                    Visibility="Collapsed"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="InstallUpdateButton_Click"
+                                    AutomationProperties.AutomationId="InstallUpdateButton" />
+                        </StackPanel>
+                        <ProgressBar x:Name="UpdateDownloadProgress" Maximum="100"
+                                     Visibility="Collapsed" />
+                        <TextBlock x:Name="UpdateInstallText" TextWrapping="Wrap"
+                                   AutomationProperties.AutomationId="UpdateInstallText" />
+                    </StackPanel>
                     <TextBlock x:Uid="LicensesSectionTitle"
                                Margin="0,8,0,0"
                                Style="{StaticResource BodyStrongTextBlockStyle}" />

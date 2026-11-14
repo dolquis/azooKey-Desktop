@@ -30,6 +30,10 @@ enum class MessageType {
   ListNewWordCandidates,
   ResolveNewWord,
   ReverseConvert,
+  // DEV-1974 M32 update download (sideload-packaging-spec section 6.3): start, poll, stop.
+  FetchUpdate,
+  QueryUpdateFetch,
+  CancelUpdateFetch,
   // M45 model management (DEV-1191).
   ListModels,
   BenchmarkModel,

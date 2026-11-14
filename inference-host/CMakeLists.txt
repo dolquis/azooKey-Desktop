@@ -26,6 +26,7 @@ add_library(azookey_host STATIC
   src/HttpDownloader.cpp
   src/TrendingWordFetcher.cpp
   src/UpdateChecker.cpp
+  src/UpdateFetchService.cpp
   src/UpdateToast.cpp
   src/InferenceEngine.cpp
   src/InferenceEngineLearningData.cpp

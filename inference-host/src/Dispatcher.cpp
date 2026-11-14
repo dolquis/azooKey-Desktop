@@ -705,6 +705,12 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleQueryBatchConversion(req);
     case ipc::MessageType::ReverseConvert:
       return HandleReverseConvert(req);
+    case ipc::MessageType::FetchUpdate:
+      return HandleFetchUpdate(req);
+    case ipc::MessageType::QueryUpdateFetch:
+      return HandleQueryUpdateFetch(req);
+    case ipc::MessageType::CancelUpdateFetch:
+      return HandleCancelUpdateFetch(req);
     case ipc::MessageType::ListModels:
       return HandleListModels(req);
     case ipc::MessageType::BenchmarkModel:
@@ -847,6 +853,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     }
     case ipc::MessageType::ReverseConvert:
       return MakeResponse(req, ipc::BuildReverseConvertResponse(ipc::ReverseConvertResponse{}));
+    case ipc::MessageType::FetchUpdate:
+    case ipc::MessageType::QueryUpdateFetch:
+    case ipc::MessageType::CancelUpdateFetch: {
+      ipc::UpdateFetchResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildUpdateFetchResponse(r));
+    }
     case ipc::MessageType::ListLearningEntries: {
       ipc::ListLearningEntriesResponse r;
       r.ok = false;
@@ -961,6 +975,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "detect_anomalies",
                       "mixed_english",
                       "raw_keys"};
+  // DEV-1974 (sideload-packaging-spec section 6.3): FetchUpdate, QueryUpdateFetch and
+  // CancelUpdateFetch.
+  if (config_.update_fetch) {
+    res.capabilities.push_back("update_fetch");
+  }
   // DEV-1821 (model-management-spec section 4.4).
   if (config_.catalog_fetch) {
     res.capabilities.push_back("fetch_catalog_model");
@@ -2027,6 +2046,80 @@ std::optional<ipc::Envelope> Dispatcher::HandleReverseConvert(const ipc::Envelop
     response.confidence = response.reading.empty() ? 0.0 : 1.0;
   }
   return MakeResponse(req, ipc::BuildReverseConvertResponse(response));
+}
+
+// DEV-1974 (sideload-packaging-spec section 6.3): starts the download of the available update on
+// the shared service and answers at once with its state; QueryUpdateFetch follows it.
+std::optional<ipc::Envelope> Dispatcher::HandleFetchUpdate(const ipc::Envelope& req) {
+  ipc::UpdateFetchResponse res;
+  std::optional<UpdateFetchSnapshot> state;
+  const auto parsed = ipc::ParseFetchUpdateRequest(req.payload_json);
+  if (!parsed) {
+    res.ok = false;
+    res.error = "invalid_request";
+  } else if (!config_.update_fetch) {
+    res.ok = false;
+    res.error = "update_unavailable";
+  } else {
+    // The state comes from the start itself, not from a later download another connection began.
+    state.emplace();
+    switch (config_.update_fetch->Start(parsed->version, &*state)) {
+      case UpdateFetchStartResult::Started:
+        break;
+      case UpdateFetchStartResult::Busy:
+        res.ok = false;
+        res.error = "busy";
+        break;
+      case UpdateFetchStartResult::NotAvailable:
+        res.ok = false;
+        res.error = "not_available";
+        break;
+      case UpdateFetchStartResult::Disabled:
+        res.ok = false;
+        res.error = "disabled";
+        break;
+      case UpdateFetchStartResult::Unavailable:
+        res.ok = false;
+        res.error = "update_unavailable";
+        break;
+    }
+  }
+  if (!state && config_.update_fetch) state = config_.update_fetch->Snapshot();
+  if (state) FillUpdateFetchResponse(*state, res);
+  return MakeResponse(req, ipc::BuildUpdateFetchResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryUpdateFetch(const ipc::Envelope& req) {
+  ipc::UpdateFetchResponse res;
+  if (!config_.update_fetch) {
+    res.ok = false;
+    res.error = "update_unavailable";
+  } else {
+    FillUpdateFetchResponse(config_.update_fetch->Snapshot(), res);
+  }
+  return MakeResponse(req, ipc::BuildUpdateFetchResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleCancelUpdateFetch(const ipc::Envelope& req) {
+  ipc::UpdateFetchResponse res;
+  if (!config_.update_fetch) {
+    res.ok = false;
+    res.error = "update_unavailable";
+    return MakeResponse(req, ipc::BuildUpdateFetchResponse(res));
+  }
+  UpdateFetchSnapshot state;
+  const auto parsed = ipc::ParseCancelUpdateFetchRequest(req.payload_json);
+  if (!parsed) {
+    res.ok = false;
+    res.error = "invalid_request";
+    state = config_.update_fetch->Snapshot();
+  } else if (config_.update_fetch->Cancel(parsed->version, &state) ==
+             UpdateFetchCancelResult::NotRunning) {
+    res.ok = false;
+    res.error = "not_running";
+  }
+  FillUpdateFetchResponse(state, res);
+  return MakeResponse(req, ipc::BuildUpdateFetchResponse(res));
 }
 
 void Dispatcher::HandleCancel(const ipc::Envelope& req) {

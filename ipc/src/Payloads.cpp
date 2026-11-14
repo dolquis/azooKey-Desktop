@@ -757,6 +757,76 @@ std::optional<ReverseConvertResponse> ParseReverseConvertResponse(const std::str
   return ReverseConvertResponse{std::move(*reading), *confidence};
 }
 
+// -------- DEV-1974 update download --------
+
+namespace {
+
+// The version field of FetchUpdate / CancelUpdateFetch: required, a non-empty string. The Host
+// checks its form; the codec only rejects a missing or mistyped field.
+std::optional<std::string> RequiredVersionField(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  const auto* version = v->Find("version");
+  if (!version || !version->IsString() || version->AsString().empty()) return std::nullopt;
+  return version->AsString();
+}
+
+}  // namespace
+
+std::string BuildFetchUpdateRequest(const FetchUpdateRequest& p) {
+  j::Object o;
+  o.emplace("version", j::Value(p.version));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<FetchUpdateRequest> ParseFetchUpdateRequest(const std::string& json) {
+  auto version = RequiredVersionField(json);
+  if (!version) return std::nullopt;
+  return FetchUpdateRequest{std::move(*version)};
+}
+
+std::string BuildCancelUpdateFetchRequest(const CancelUpdateFetchRequest& p) {
+  j::Object o;
+  o.emplace("version", j::Value(p.version));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<CancelUpdateFetchRequest> ParseCancelUpdateFetchRequest(const std::string& json) {
+  auto version = RequiredVersionField(json);
+  if (!version) return std::nullopt;
+  return CancelUpdateFetchRequest{std::move(*version)};
+}
+
+std::string BuildUpdateFetchResponse(const UpdateFetchResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("state", j::Value(p.state));
+  if (!p.version.empty()) o.emplace("version", j::Value(p.version));
+  o.emplace("received_bytes", j::Value(p.received_bytes));
+  o.emplace("total_bytes", j::Value(p.total_bytes));
+  if (!p.sha256.empty()) o.emplace("sha256", j::Value(p.sha256));
+  if (!p.result_error.empty()) o.emplace("result_error", j::Value(p.result_error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<UpdateFetchResponse> ParseUpdateFetchResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto state = v->GetString("state");
+  if (!state) return std::nullopt;
+  UpdateFetchResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.error = v->GetString("error");
+  p.state = std::move(*state);
+  p.version = v->GetString("version").value_or(std::string());
+  p.received_bytes = v->GetUInt("received_bytes").value_or(0);
+  p.total_bytes = v->GetUInt("total_bytes").value_or(0);
+  p.sha256 = v->GetString("sha256").value_or(std::string());
+  p.result_error = v->GetString("result_error").value_or(std::string());
+  return p;
+}
+
 // -------- QueryBatchConversion --------
 
 std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p) {

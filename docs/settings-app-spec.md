@@ -109,6 +109,8 @@ Microsoft Learn の事実は
 `autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
 `checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（`sideload-packaging-spec` §6.1 の
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
+その版を Host にダウンロードさせる「ダウンロード」（`FetchUpdate`、進捗の表示と「中止」）と、
+検証の済んだ MSI を適用する「インストール」も置く（`sideload-packaging-spec` §6.3）。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
 「ログ出力先を開く」（§3.7）のボタンを置く（`docs/host-availability-spec.md` §8.5.4・`docs/diagnostics-compat-spec.md` §12.1.1 が設定アプリの診断として指す先は、この節である）。

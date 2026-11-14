@@ -689,8 +689,8 @@ wingetcreate update --urls `
 
 ## 6. 自動更新（M32）
 
-本節の範囲は更新の確認（新しいリリースを見つけて利用者に示すこと）と、その通知（§6.3 の
-手順 1）である。MSI のダウンロードと適用（§6.3 の手順 2〜6）は別の課題とする。
+本節の範囲は、更新の確認（新しいリリースを見つけて利用者に示すこと）、その通知、MSI の
+ダウンロード・検証・適用（§6.3）である。
 
 ### 6.1 チェック経路
 
@@ -744,6 +744,17 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 優先順位で現在の製品のバージョン（ビルド時の `AZOOKEY_PRODUCT_VERSION`）と比べ、新しければ
 `update_available` とする。応答は 1 MiB を上限とし、プロキシは WinHTTP の automatic proxy に従う。
 
+利用者が「バージョン」で更新のダウンロードを始めたとき（§6.3）だけ、Host は次の 2 つを取得する。
+MSI の取得は GitHub が配布用の host（`release-assets.githubusercontent.com` など）へ転送する
+ことがあり、WinHTTP の既定どおり https のまま転送に従う。届いた内容は SHA-256 で検証するので、
+最後の host は問わない。
+
+```
+GET https://api.github.com/repos/dolquis/azooKey-Desktop/releases/tags/v<version>
+GET https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/azooKey-<version>-x64.msi
+User-Agent: azooKey-Desktop/<製品のバージョン>
+```
+
 送る情報は、接続元の IP アドレス（通信の性質上 GitHub に見える）と、User-Agent に入る製品の
 バージョンだけである。端末やインストールの識別子、設定値、利用状況、Cookie は送らない。確認の
 結果を外部へ送り返すこともなく、テレメトリにはならない。止め方は `autoUpdate.enabled` を
@@ -757,18 +768,85 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 
 ### 6.3 ダウンロード → 適用
 
-手順 1 の通知は下の「通知」のとおりである。手順 2〜6 は将来の課題であり、更新の確認（§6.1）
-とは別に実装する。新バージョンを検出したら：
+新バージョンを検出したら：
 
 1. 通知（トースト。下の「通知」）
-2. ユーザーが「インストール」をクリック
-3. MSI を `%TEMP%` にダウンロード（`WinHttpReadData`）
-4. SHA256 検証
-5. `msiexec /i <msi> /qn /norestart` で更新（同一 `UpgradeCode` により in-place アップグレード。要昇格）。
-   使用中の TIP DLL 置換で再起動要求が起き得るため、`/norestart` で自動再起動を抑止する
+2. 利用者が設定アプリの「バージョン」で「ダウンロード」を押す（下の「ダウンロード」）
+3. Host が MSI をダウンロードし、Releases API が asset に付ける SHA-256 の digest で検証する
+4. 利用者が「インストール」を押し、確認のダイアログと Windows の管理者権限の確認（UAC）に
+   同意する。この同意を、適用の承認として扱う（下の「適用」）
+5. 設定アプリが `msiexec /i <msi> /qn /norestart` で更新する（同一 `UpgradeCode` により in-place
+   アップグレード。要昇格）。使用中の TIP DLL 置換で再起動要求が起き得るため、`/norestart` で
+   自動再起動を抑止する
    （[Standard Installer Command-Line Options](https://learn.microsoft.com/windows/win32/msi/standard-installer-command-line-options)）
 6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
-   ユーザーに通知して同意を得てから再起動する
+   利用者に示して同意を得てから再起動する
+
+#### ダウンロード
+
+`inference-host/src/UpdateFetchService.cpp`（`azookey::host::UpdateFetchService`）が、Host 全体で
+一度に 1 件だけ、別のスレッドでダウンロードする。設定アプリは IPC の `FetchUpdate`
+（`{version}`、必須）で始め、`QueryUpdateFetch` で進捗と結果を問い合わせ、`CancelUpdateFetch`
+（`{version}`、必須）で止める。どれも `UpdateFetchResponse`（`state` は `idle` / `running` /
+`ready` / `failed`）ですぐに答える。Host は capability `update_fetch` を示す。payload の正典は
+`ipc/include/azookey/ipc/Payloads.h` である。
+
+- 始めるのは、`autoUpdate.enabled` が `true` で `privacy.mode` が `offline` でも `secure` でもなく
+  （§6.1 と同じ条件）、`version` が `MAJOR.MINOR.PATCH`（`v` も pre-release も付けない。
+  release.yml がタグと MSI の名前に使う形）で、`update-status.json` がその版を
+  `update_available` として記録し、記録の `currentVersion` と `channel` が製品のバージョンと
+  いまの設定に合うときだけである。合わなければ `not_available`、条件が満たされなければ
+  `disabled` で断る。`version` は pipe から届く外部入力なので、この形を確かめてから URL と
+  ファイル名を組み立てる。
+- `releases/tags/v<version>` の応答から、名前が `azooKey-<version>-x64.msi` に完全に一致する
+  asset を 1 つだけ選ぶ。Vulkan アドオンの MSI（`azooKey-vulkan-addon-*`）は選ばない。
+  `browser_download_url` は `https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/`
+  の下のその名前に限り、`digest` は `sha256:` と 64 桁の小文字の 16 進数に限る。`size` は
+  2 GiB を上限とする。タグが違う・draft のリリースは `not_available`、asset が無い・複数ある・
+  URL が違うものは `asset_missing`、digest が無い・形が違うものは `digest_missing`、大きさが
+  無い・上限を超えるものは `too_large` とし、どれもダウンロードしない。
+- 置き場所は `settings.json` と同じディレクトリの `updates\azooKey-<version>-x64.msi` である。
+  `HttpDownloader` が `.part` に書き、digest と一致したときだけ名前を変える。一致しない
+  ファイルは置かない。検証が済んだら、同じディレクトリの古い版の MSI と `.part` を消す。
+- 取得の途中でも、利用者の中止（`cancelled`）、Host の停止（`cancelled`）、設定の再読込で
+  条件が満たされなくなったとき（`disabled`）に止まる。通信の失敗は `network`、取得か検証の
+  失敗は `download_failed`、置き場所を作れないときは `save_failed` とする。
+- SHA-256 の値は、MSI と同じく GitHub（Releases API の asset の `digest`）から得る。転送中や
+  CDN での破損と改ざんは検出できるが、リポジトリやリリースそのものの侵害は防げない。MVP の
+  MSI は未署名なので、Authenticode の検証は M29 の署名の後に足す（DEV-2080）。
+- Host は各ダウンロードの結果を RuntimeLog の `update_fetch` イベントに、`result`（`ready` /
+  `failed`）、固定の `reason`（上の分類か `verified`）、受け取ったバイト数だけで記録する。
+  版、URL、パスは記録しない。
+
+#### 適用
+
+設定アプリ（`settings-app/UpdateInstaller.cpp`）が適用する。適用の間は Host も止まるので、
+Host は `msiexec` の終了を待てない（MSI が `HKLM\SOFTWARE\azooKey\HostStartup` を消すと
+supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
+
+- 「インストール」を押すと、管理者権限の確認が出ること、適用の間は変換が使えないこと、
+  入力中のアプリがあると再起動が要ることがあることを確認のダイアログで示す。Vulkan アドオンが
+  導入されているとき（`HKLM\SOFTWARE\azooKey\VulkanAddon` がある）は、アドオンはこの更新では
+  変わらないので、リリースページからアドオンも同じ版に更新するよう案内する。アドオンも続けて
+  適用する形は DEV-2081 とする。
+- 設定アプリは、置き場所のファイルを書き込みと削除を拒むハンドル（`FILE_SHARE_READ` だけ）で
+  開き、そのハンドルで SHA-256 を計算し直して、Host が答えた値と一致したときだけ
+  `%SystemRoot%\System32\msiexec.exe` を昇格して起動する。ハンドルは `msiexec` が終わるまで
+  閉じないので、検証したファイルと適用するファイルは同じである。リンク（reparse point）は
+  開かない。`msiexec` にはログの出力先を渡さない（昇格したプロセスが利用者の書き込める場所へ
+  書かないため）。
+- 終了コード `0` は完了、`3010` は再起動待ち、UAC の拒否と `1602` は取り消し、`1618` は
+  ほかのインストールの実行中、それ以外は失敗として、コードを示す。結果の文言は適用の前に
+  読み込んでおく（適用が設定アプリ自身のファイルを置き換えるため）。
+- `0` と `3010` のどちらでも、設定アプリはインストール先（`HostStartup` の `InstallDirectory`）の
+  `start-installed-host.ps1` を利用者の権限で起動して Host を戻す。Run エントリはサインインの
+  ときにしか Host を起動しないためである。`3010` のときは、再起動するまで、動いているアプリの
+  古い TIP と新しい Host が組み合わさる。その間にプロトコルの版がずれると Handshake が断られ、
+  TIP はローカルの変換に落ちる。
+- `3010` では、自動で再起動せず、「再起動が必要」を示して同意を求める。同意したときだけ
+  再起動する（`InitiateShutdownW`）。
+
+実機での昇格・適用・3010・Host の復帰の確認は Human Gate（DEV-2075）とする。
 
 #### 通知
 
@@ -1114,6 +1192,7 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 | MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
 | 署名検証 | `pkg/tests/signature_test.ps1`（M29 で新設する予定。署名経路〔§2〕と同時に追加する） | signtool /verify で成功するか |
 | UpdateChecker | `inference-host/tests/update_checker_test.cpp`、`inference-host/tests/http_downloader_test.cpp`（`UpdateCheckerHttpIntegrationTest`） | 版の比較、channel ごとのリリースの選択、無効・失敗・取り消し時の扱い、周期と前回の確認による間隔、ループバックの Releases API を通した確認と送る情報、版ごとに 1 回だけの通知とトーストの XML |
+| 更新のダウンロードと適用 | `inference-host/tests/update_fetch_service_test.cpp`、`inference-host/tests/dispatcher_test.cpp`（`DispatcherTest.UpdateFetch*`）、`ipc/tests/payloads_test.cpp`、`settings-app/tests/update_installer_test.cpp` | asset の選び方と digest・大きさの検証、記録された版だけを始めること、失敗の分類、中止と設定による停止、IPC の往復と capability、置き場所のパスと開いたままのファイルの保護、`msiexec` の引数と終了コードの分類 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
 | DPAPI | `learning/tests/dpapi_crypto_test.cpp` | Windows 限定。Encrypt → Decrypt round trip、他ユーザでは失敗 |
 | WinGet manifest | CI で `winget validate` | YAML が valid |

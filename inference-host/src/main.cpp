@@ -60,6 +60,7 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/TrendingWordFetcher.h"
 #include "azookey/host/UpdateChecker.h"
+#include "azookey/host/UpdateFetchService.h"
 #include "azookey/host/UpdateToast.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
@@ -140,6 +141,30 @@ class CatalogFetchShutdownGuard {
 
  private:
   std::shared_ptr<azookey::host::CatalogFetchService> service_;
+};
+
+// DEV-1974: stops the update download before the log and the settings store it reads go away,
+// whichever connection still holds the service.
+class UpdateFetchShutdownGuard {
+ public:
+  explicit UpdateFetchShutdownGuard(std::shared_ptr<azookey::host::UpdateFetchService> service)
+      : service_(std::move(service)) {}
+  ~UpdateFetchShutdownGuard() {
+    if (service_) service_->Shutdown();
+  }
+  UpdateFetchShutdownGuard(const UpdateFetchShutdownGuard&) = delete;
+  UpdateFetchShutdownGuard& operator=(const UpdateFetchShutdownGuard&) = delete;
+
+ private:
+  std::shared_ptr<azookey::host::UpdateFetchService> service_;
+};
+
+// The autoUpdate settings the update download reads from its worker, kept current by the
+// config reloads.
+struct UpdateFetchSettings {
+  std::atomic<bool> enabled{false};
+  std::mutex mutex;
+  std::string channel{"stable"};
 };
 
 // DEV-1597 (inline-english-candidate-spec section 4.8): registers the
@@ -1087,10 +1112,35 @@ int main(int argc, char** argv) {
   }
   azookey::host::UpdateChecker update_checker(std::move(update_options),
                                               std::move(update_dependencies));
+  // DEV-1974 (sideload-packaging-spec section 6.3): the settings app's download of the update
+  // the checker found. It runs only while the check may (opt-in, not offline, not secure) and
+  // stops when a reload turns that off.
+  auto update_fetch_settings = std::make_shared<UpdateFetchSettings>();
+  azookey::host::UpdateFetchOptions update_fetch_options;
+  update_fetch_options.current_version = AZOOKEY_PRODUCT_VERSION_STRING;
+  update_fetch_options.status_path = user_paths->settings_path.parent_path() / "update-status.json";
+  update_fetch_options.updates_dir = user_paths->settings_path.parent_path() / "updates";
+  azookey::host::UpdateFetchDependencies update_fetch_dependencies;
+  update_fetch_dependencies.allowed = [update_fetch_settings, &settings_store] {
+    return update_fetch_settings->enabled.load() &&
+           !settings_store.LockPrivacyPolicy().privacy_mode_secure;
+  };
+  update_fetch_dependencies.channel = [update_fetch_settings] {
+    std::lock_guard<std::mutex> lock(update_fetch_settings->mutex);
+    return update_fetch_settings->channel;
+  };
+  const auto update_fetch = std::make_shared<azookey::host::UpdateFetchService>(
+      std::move(update_fetch_options), std::move(update_fetch_dependencies), &runtime_log);
+  UpdateFetchShutdownGuard update_fetch_guard(update_fetch);
   const auto apply_update_check_settings =
-      [&update_checker](const azookey::host::EngineConfig& applied) {
+      [&update_checker, update_fetch_settings](const azookey::host::EngineConfig& applied) {
         update_checker.UpdateSettings(applied.auto_update_enabled, applied.auto_update_channel,
                                       applied.auto_update_check_interval_hours);
+        {
+          std::lock_guard<std::mutex> lock(update_fetch_settings->mutex);
+          update_fetch_settings->channel = applied.auto_update_channel;
+        }
+        update_fetch_settings->enabled = applied.auto_update_enabled;
       };
   apply_update_check_settings(engine.config());
   if (entered_safe_mode) {
@@ -1234,6 +1284,7 @@ int main(int argc, char** argv) {
   };
   dconf.catalog_matcher = catalog_matcher;
   dconf.catalog_fetch = catalog_fetch;
+  dconf.update_fetch = update_fetch;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }

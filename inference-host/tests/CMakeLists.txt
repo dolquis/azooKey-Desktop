@@ -99,7 +99,7 @@ if(WIN32)
   azookey_discover_tests(host_trending_word_fetcher_tests)
 endif()
 
-add_executable(host_update_checker_tests update_checker_test.cpp)
+add_executable(host_update_checker_tests update_checker_test.cpp update_fetch_service_test.cpp)
 target_link_libraries(host_update_checker_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

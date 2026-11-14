@@ -34,6 +34,7 @@
 #include "azookey/host/PunctuationInserter.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/host/UpdateFetchService.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
@@ -439,6 +440,88 @@ TEST_F(DispatcherTest, ReverseConvertFallsBackToLearnedCommitAndKanaSurface) {
   ASSERT_TRUE(mixed);
   EXPECT_TRUE(mixed->reading.empty());
   EXPECT_DOUBLE_EQ(mixed->confidence, 0.0);
+}
+
+// DEV-1974 (sideload-packaging-spec section 6.3): the update download's requests reach the shared
+// service, which the Handshake advertises; without one, or before the Handshake, they are refused.
+TEST_F(DispatcherTest, UpdateFetchRequestsReachTheServiceTheHandshakeAdvertises) {
+  ipc::HandshakeRequest hello;
+  hello.tip_version = "0.1.0";
+  hello.protocol_version = kProtocolVersion;
+  const auto capabilities_of = [&](azookey::host::Dispatcher& d) {
+    const auto handshake =
+        d.Dispatch(MakeReq(170, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(hello)));
+    return ipc::ParseHandshakeResponse(handshake->payload_json)->capabilities;
+  };
+  const auto parse = [](const std::optional<ipc::Envelope>& response) {
+    return ipc::ParseUpdateFetchResponse(response->payload_json);
+  };
+
+  const auto without_caps = capabilities_of(dispatcher);
+  EXPECT_EQ(std::find(without_caps.begin(), without_caps.end(), "update_fetch"),
+            without_caps.end());
+  const auto without =
+      parse(dispatcher.Dispatch(MakeReq(171, ipc::MessageType::QueryUpdateFetch, "{}")));
+  ASSERT_TRUE(without);
+  EXPECT_FALSE(without->ok);
+  EXPECT_EQ(without->error, "update_unavailable");
+
+  azookey::host::test::ScopedTempDirectory temp;
+  azookey::host::UpdateFetchOptions options;
+  options.current_version = "1.0.0";
+  options.status_path = temp.path() / "update-status.json";
+  options.updates_dir = temp.path() / "updates";
+  azookey::host::UpdateFetchDependencies dependencies;
+  std::atomic<int> network_calls{0};
+  dependencies.fetch_text = [&](const azookey::host::HttpTextRequest&) {
+    ++network_calls;
+    return azookey::host::HttpTextResult{};
+  };
+  dependencies.download = [&](const azookey::host::HttpDownloadRequest&) {
+    ++network_calls;
+    return azookey::host::HttpDownloadResult{};
+  };
+  auto config = DefaultDispatcherConfig();
+  config.update_fetch = std::make_shared<azookey::host::UpdateFetchService>(
+      std::move(options), std::move(dependencies));
+  azookey::host::Dispatcher with_service(&engine, &scheduler, &user_dict, config);
+  const auto caps = capabilities_of(with_service);
+  EXPECT_NE(std::find(caps.begin(), caps.end(), "update_fetch"), caps.end());
+
+  const auto invalid =
+      parse(with_service.Dispatch(MakeReq(172, ipc::MessageType::FetchUpdate, "{}")));
+  ASSERT_TRUE(invalid);
+  EXPECT_FALSE(invalid->ok);
+  EXPECT_EQ(invalid->error, "invalid_request");
+  EXPECT_EQ(invalid->state, "idle");
+  // No update-status.json records 1.2.3, so nothing reaches the network.
+  const auto not_recorded = parse(with_service.Dispatch(
+      MakeReq(173, ipc::MessageType::FetchUpdate, ipc::BuildFetchUpdateRequest({"1.2.3"}))));
+  ASSERT_TRUE(not_recorded);
+  EXPECT_EQ(not_recorded->error, "not_available");
+  const auto cancel = parse(with_service.Dispatch(MakeReq(
+      174, ipc::MessageType::CancelUpdateFetch, ipc::BuildCancelUpdateFetchRequest({"1.2.3"}))));
+  ASSERT_TRUE(cancel);
+  EXPECT_EQ(cancel->error, "not_running");
+  const auto query =
+      parse(with_service.Dispatch(MakeReq(175, ipc::MessageType::QueryUpdateFetch, "{}")));
+  ASSERT_TRUE(query);
+  EXPECT_TRUE(query->ok);
+  EXPECT_EQ(query->state, "idle");
+  EXPECT_EQ(network_calls.load(), 0);
+
+  auto token_config = config;
+  token_config.handshake_token = std::string(32, 'a');
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, token_config);
+  for (const auto type : {ipc::MessageType::FetchUpdate, ipc::MessageType::QueryUpdateFetch,
+                          ipc::MessageType::CancelUpdateFetch}) {
+    const auto before = parse(
+        token_dispatcher.Dispatch(MakeReq(176, type, ipc::BuildFetchUpdateRequest({"1.2.3"}))));
+    ASSERT_TRUE(before);
+    EXPECT_FALSE(before->ok);
+    EXPECT_EQ(before->error, "not authenticated");
+  }
+  config.update_fetch->Shutdown();
 }
 
 TEST_F(DispatcherTest, Handshake) {

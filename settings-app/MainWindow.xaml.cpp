@@ -6,6 +6,7 @@
 #include "SettingsDocument.h"
 #include "SettingsIpcClient.h"
 #include "StatusPaneModel.h"
+#include "UpdateInstaller.h"
 #include "UpdateStatusModel.h"
 #include "UiDispatch.h"
 #include "ModelPaneModel.h"
@@ -333,6 +334,270 @@ void MainWindow::RefreshUpdateStatus() {
   }
   OpenReleasePageButton().Visibility(link ? Microsoft::UI::Xaml::Visibility::Visible
                                           : Microsoft::UI::Xaml::Visibility::Collapsed);
+
+  // DEV-1974: only an available update named as release.yml names its MSI is offered. A download
+  // or an install in progress keeps the version it began with.
+  std::string offered;
+  if (resource == "UpdateStatus_UpdateAvailable" && settings_path_ &&
+      azookey::settings::UpdatePackagePath(*settings_path_, status.latest_version)) {
+    offered = status.latest_version;
+  }
+  if (!update_downloading_ && !update_installing_ && offered != update_version_) {
+    update_version_ = offered;
+    update_sha256_.clear();
+    update_installed_ = false;
+    UpdateInstallText().Text(L"");
+  }
+  RenderUpdateInstall();
+}
+
+void MainWindow::RenderUpdateInstall() {
+  using Microsoft::UI::Xaml::Visibility;
+  const auto shown = [](bool visible) {
+    return visible ? Visibility::Visible : Visibility::Collapsed;
+  };
+  const bool ready = !update_sha256_.empty();
+  UpdateInstallPanel().Visibility(shown(!update_version_.empty()));
+  DownloadUpdateButton().Visibility(shown(!update_installed_ && !update_downloading_ && !ready));
+  DownloadUpdateButton().IsEnabled(!update_installing_);
+  CancelUpdateDownloadButton().Visibility(shown(update_downloading_));
+  InstallUpdateButton().Visibility(shown(!update_installed_ && !update_downloading_ && ready));
+  InstallUpdateButton().IsEnabled(!update_installing_);
+  UpdateDownloadProgress().Visibility(shown(update_downloading_));
+}
+
+winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto lifetime = get_strong();
+  if (update_downloading_ || update_installing_ || update_version_.empty()) co_return;
+  const std::string version = update_version_;
+  update_downloading_ = true;
+  update_sha256_.clear();
+  UpdateInstallText().Text(L"");
+  UpdateDownloadProgress().Value(0);
+  RenderUpdateInstall();
+  const auto dispatcher = DispatcherQueue();
+  std::string resource = "UpdateInstall_Error_Other";
+  std::string verified_sha;
+  try {
+    co_await winrt::resume_background();
+    const auto options = azookey::settings::DefaultSettingsIpcOptions();
+    azookey::ipc::FetchUpdateRequest request;
+    request.version = version;
+    const auto started = azookey::settings::RequestFetchUpdate(options, request);
+    auto call_status = started.status;
+    std::optional<azookey::ipc::UpdateFetchResponse> last = started.response;
+    // A download of the same version another window started is followed as if this one had.
+    const bool follow = call_status == azookey::settings::HostCallStatus::Ok && last &&
+                        (last->ok || (last->error == "busy" && last->version == version));
+    // A poll that gets no answer is retried; twenty in a row (ten seconds) end the wait.
+    int unanswered = 0;
+    while (follow && last->state == "running" && last->version == version) {
+      co_await azookey::settings::ResumeForeground(dispatcher);
+      if (last->total_bytes != 0) {
+        UpdateDownloadProgress().Value(100.0 * static_cast<double>(last->received_bytes) /
+                                       static_cast<double>(last->total_bytes));
+        Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+        std::wstring text(resources.GetString(L"UpdateInstall_Downloading"));
+        std::array<wchar_t, 32> received{};
+        std::array<wchar_t, 32> total{};
+        swprintf_s(received.data(), received.size(), L"%.1f",
+                   static_cast<double>(last->received_bytes) / (1024.0 * 1024.0));
+        swprintf_s(total.data(), total.size(), L"%.1f",
+                   static_cast<double>(last->total_bytes) / (1024.0 * 1024.0));
+        for (const auto& [name, value] :
+             {std::pair<std::wstring_view, const wchar_t*>{L"{received}", received.data()},
+              std::pair<std::wstring_view, const wchar_t*>{L"{total}", total.data()}}) {
+          if (const auto at = text.find(name); at != std::wstring::npos) {
+            text.replace(at, name.size(), value);
+          }
+        }
+        UpdateInstallText().Text(text);
+      }
+      co_await winrt::resume_after(std::chrono::milliseconds(500));
+      auto poll = azookey::settings::RequestQueryUpdateFetch(options);
+      if (poll.status == azookey::settings::HostCallStatus::Ok && poll.response) {
+        last = std::move(poll.response);
+        unanswered = 0;
+      } else if (++unanswered >= 20) {
+        call_status = poll.status;
+        break;
+      }
+    }
+    if (call_status != azookey::settings::HostCallStatus::Ok || !last) {
+      resource = azookey::settings::HostCallStatusResource(call_status);
+    } else if (!follow) {
+      resource = azookey::settings::UpdateFetchErrorResource(last->error.value_or(""));
+    } else if (last->state == "ready" && last->version == version &&
+               azookey::settings::IsSha256Hex(last->sha256)) {
+      verified_sha = last->sha256;
+      resource = "UpdateInstall_Ready";
+    } else if (last->state == "failed") {
+      resource = azookey::settings::UpdateFetchErrorResource(last->result_error);
+    }
+  } catch (...) {
+  }
+  co_await azookey::settings::ResumeForeground(dispatcher);
+  update_downloading_ = false;
+  // Kept only while the pane still offers that version.
+  if (version == update_version_) update_sha256_ = verified_sha;
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  std::wstring text(resources.GetString(winrt::to_hstring(resource)));
+  if (const auto at = text.find(L"{version}"); at != std::wstring::npos) {
+    text.replace(at, 9, winrt::to_hstring(version));
+  }
+  UpdateInstallText().Text(text);
+  RenderUpdateInstall();
+}
+
+winrt::fire_and_forget MainWindow::CancelUpdateDownloadButton_Click(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto lifetime = get_strong();
+  if (!update_downloading_) co_return;
+  const std::string version = update_version_;
+  CancelUpdateDownloadButton().IsEnabled(false);
+  const auto dispatcher = DispatcherQueue();
+  try {
+    co_await winrt::resume_background();
+    azookey::ipc::CancelUpdateFetchRequest request;
+    request.version = version;
+    // The download then ends as failed / "cancelled", which the running poll reports.
+    (void)azookey::settings::RequestCancelUpdateFetch(
+        azookey::settings::DefaultSettingsIpcOptions(), request);
+  } catch (...) {
+  }
+  co_await azookey::settings::ResumeForeground(dispatcher);
+  CancelUpdateDownloadButton().IsEnabled(true);
+}
+
+winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
+    Windows::Foundation::IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto lifetime = get_strong();
+  if (update_installing_ || update_downloading_ || update_sha256_.empty() || !settings_path_) {
+    co_return;
+  }
+  const std::string version = update_version_;
+  const std::string sha256 = update_sha256_;
+  const auto package_path = azookey::settings::UpdatePackagePath(*settings_path_, version);
+  if (!package_path) co_return;
+
+  // Every text the result can need is read now: the install replaces this app's own files.
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  const auto text = [&resources](const wchar_t* name) {
+    return std::wstring(resources.GetString(name));
+  };
+  const auto verify_failed = text(L"UpdateInstall_VerifyFailed");
+  const auto installing = text(L"UpdateInstall_Installing");
+  const auto installed = text(L"UpdateInstall_Installed");
+  const auto reboot_pending = text(L"UpdateInstall_RebootPending");
+  const auto cancelled = text(L"UpdateInstall_Cancelled");
+  const auto busy = text(L"UpdateInstall_Busy");
+  const auto failed = text(L"UpdateInstall_Failed");
+  const auto host_start_failed = text(L"UpdateInstall_HostStartFailed");
+  const auto reboot_title = text(L"UpdateInstall_RebootTitle");
+  const auto reboot_body = text(L"UpdateInstall_RebootBody");
+  const auto reboot_primary = text(L"UpdateInstall_RebootPrimary");
+  const auto reboot_close = text(L"UpdateInstall_RebootClose");
+  const auto restart_failed = text(L"UpdateInstall_RestartFailed");
+
+  std::wstring body = text(L"UpdateInstall_ConfirmBody");
+  // The add-on stays at the old version, which its Host refuses (msix-packaging-spec 1.6.3).
+  if (azookey::settings::VulkanAddonInstalled()) {
+    body += L"\n\n" + text(L"UpdateInstall_ConfirmVulkan");
+  }
+  Microsoft::UI::Xaml::Controls::ContentDialog confirm;
+  confirm.XamlRoot(Content().XamlRoot());
+  confirm.Title(winrt::box_value(resources.GetString(L"UpdateInstall_ConfirmTitle")));
+  Microsoft::UI::Xaml::Controls::TextBlock confirm_text;
+  confirm_text.Text(body);
+  confirm_text.TextWrapping(Microsoft::UI::Xaml::TextWrapping::Wrap);
+  confirm.Content(confirm_text);
+  confirm.PrimaryButtonText(resources.GetString(L"UpdateInstall_ConfirmPrimary"));
+  confirm.CloseButtonText(resources.GetString(L"UpdateInstall_ConfirmClose"));
+  confirm.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Close);
+  if (co_await confirm.ShowAsync() != Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary) {
+    co_return;
+  }
+
+  update_installing_ = true;
+  UpdateInstallText().Text(installing);
+  RenderUpdateInstall();
+  HWND owner = nullptr;
+  if (const auto native = try_as<::IWindowNative>()) (void)native->get_WindowHandle(&owner);
+  const auto dispatcher = DispatcherQueue();
+  bool verified = false;
+  bool host_started = true;
+  azookey::settings::UpdateInstallResult result;
+  try {
+    co_await winrt::resume_background();
+    // The handle denies writes and deletion from the verification until msiexec has ended.
+    if (auto package = azookey::settings::VerifiedUpdatePackage::Open(*package_path, sha256)) {
+      verified = true;
+      result = azookey::settings::RunElevatedMsiexec(*package, owner);
+    }
+    // The installation stopped the Host; bring it back (sideload-packaging-spec section 6.3).
+    if (verified && (result.outcome == azookey::settings::UpdateInstallOutcome::Installed ||
+                     result.outcome == azookey::settings::UpdateInstallOutcome::RebootRequired)) {
+      host_started = azookey::settings::StartInstalledHost();
+    }
+  } catch (...) {
+  }
+  co_await azookey::settings::ResumeForeground(dispatcher);
+  update_installing_ = false;
+  if (!verified) {
+    update_sha256_.clear();
+    UpdateInstallText().Text(verify_failed);
+    RenderUpdateInstall();
+    co_return;
+  }
+  using azookey::settings::UpdateInstallOutcome;
+  std::wstring message;
+  switch (result.outcome) {
+    case UpdateInstallOutcome::Installed:
+      message = installed;
+      break;
+    case UpdateInstallOutcome::RebootRequired:
+      message = reboot_pending;
+      break;
+    case UpdateInstallOutcome::Cancelled:
+      message = cancelled;
+      break;
+    case UpdateInstallOutcome::Busy:
+      message = busy;
+      break;
+    case UpdateInstallOutcome::Failed:
+      message = failed;
+      if (const auto at = message.find(L"{code}"); at != std::wstring::npos) {
+        message.replace(at, 6, std::to_wstring(result.code));
+      }
+      break;
+  }
+  const bool applied = result.outcome == UpdateInstallOutcome::Installed ||
+                       result.outcome == UpdateInstallOutcome::RebootRequired;
+  if (applied) {
+    update_installed_ = true;
+    update_sha256_.clear();
+    if (!host_started) message += L"\n" + host_start_failed;
+  }
+  UpdateInstallText().Text(message);
+  RenderUpdateInstall();
+  if (result.outcome != UpdateInstallOutcome::RebootRequired) co_return;
+
+  // 3010: never restart on our own; ask first (section 6.3).
+  Microsoft::UI::Xaml::Controls::ContentDialog reboot;
+  reboot.XamlRoot(Content().XamlRoot());
+  reboot.Title(winrt::box_value(winrt::hstring(reboot_title)));
+  Microsoft::UI::Xaml::Controls::TextBlock reboot_text;
+  reboot_text.Text(reboot_body);
+  reboot_text.TextWrapping(Microsoft::UI::Xaml::TextWrapping::Wrap);
+  reboot.Content(reboot_text);
+  reboot.PrimaryButtonText(reboot_primary);
+  reboot.CloseButtonText(reboot_close);
+  reboot.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Close);
+  if (co_await reboot.ShowAsync() == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary &&
+      !azookey::settings::RequestRestart()) {
+    UpdateInstallText().Text(message + L"\n" + restart_failed);
+  }
 }
 
 void MainWindow::ApplyDictionaryToControls(

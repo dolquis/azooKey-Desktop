@@ -1015,6 +1015,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規。更新チェックは DEV-1934）、
   `inference-host/src/UpdateToast.cpp`（新規。更新の通知）、
+  `inference-host/src/UpdateFetchService.cpp` と `settings-app/UpdateInstaller.cpp`（新規。MSI の
+  ダウンロードと適用）、
   `inference-host/src/HttpDownloader.cpp`（WinHTTP + SHA256 共通ヘルパの
   切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
   M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に
@@ -1027,8 +1029,9 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
     `checkIntervalHours` の周期で新版を検出し、設定アプリの「バージョン」に表示する。`offline` と
     secure では確認しない（spec §6.1 / §6.2）。見つけた版はトーストで 1 回だけ知らせ、押すと
     リリースページを開く（MSI のショートカットに AUMID を登録。spec §6.3「通知」）
-  - MSI の適用（別の受入条件）: 見つけた版の MSI をダウンロード・SHA256 検証し、ユーザー承認で
-    適用する（`msiexec /i /qn /norestart`、要再起動時は通知。spec §6.3）
+  - MSI の適用（別の受入条件）: 見つけた版の MSI をダウンロード・SHA256 検証（Releases API の
+    asset の digest）し、ユーザー承認で適用する（`msiexec /i /qn /norestart`、要再起動時は通知。
+    spec §6.3）
   - **DEV-202 で auto-DL が承認されているとき**（上流 HF から、または著者確認後の
     GitHub 再ホストから。ピンは既定の catalog として常に Host に埋め込まれる）: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ

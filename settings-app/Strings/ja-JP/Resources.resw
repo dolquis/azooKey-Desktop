@@ -122,6 +122,42 @@
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
   <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>
   <data name="UpdateStatus_Failed" xml:space="preserve"><value>更新を確認できませんでした（{checked}）。次の確認で再び試します。</value></data>
+  <data name="UpdateInstallDescription.Text" xml:space="preserve"><value>新しいバージョンをダウンロードして、この PC に適用できます。適用には管理者権限の確認が必要です。</value></data>
+  <data name="DownloadUpdateButton.Content" xml:space="preserve"><value>ダウンロード</value></data>
+  <data name="CancelUpdateDownloadButton.Content" xml:space="preserve"><value>中止</value></data>
+  <data name="InstallUpdateButton.Content" xml:space="preserve"><value>インストール</value></data>
+  <data name="UpdateInstall_Downloading" xml:space="preserve"><value>ダウンロードしています（{received} / {total} MB）。</value></data>
+  <data name="UpdateInstall_Ready" xml:space="preserve"><value>v{version} をダウンロードして検証しました。「インストール」で適用できます。</value></data>
+  <data name="UpdateInstall_HostUnavailable" xml:space="preserve"><value>IME のサービスに接続できないため、ダウンロードできません。</value></data>
+  <data name="UpdateInstall_Error_busy" xml:space="preserve"><value>ほかのダウンロードが進行中です。終わってから、もう一度お試しください。</value></data>
+  <data name="UpdateInstall_Error_not_available" xml:space="preserve"><value>この版は、いま更新として記録されていません。次の更新の確認の後で、もう一度お試しください。</value></data>
+  <data name="UpdateInstall_Error_disabled" xml:space="preserve"><value>更新の確認がオフか、いまのプライバシーモードでは、ダウンロードしません。</value></data>
+  <data name="UpdateInstall_Error_cancelled" xml:space="preserve"><value>ダウンロードを中止しました。</value></data>
+  <data name="UpdateInstall_Error_network" xml:space="preserve"><value>リリースの情報を取得できませんでした。ネットワークの接続を確かめてください。</value></data>
+  <data name="UpdateInstall_Error_asset_missing" xml:space="preserve"><value>このリリースにインストーラーが見つかりませんでした。リリースページから入手してください。</value></data>
+  <data name="UpdateInstall_Error_digest_missing" xml:space="preserve"><value>インストーラーの検証値（SHA-256）が公開されていないため、ダウンロードしませんでした。</value></data>
+  <data name="UpdateInstall_Error_too_large" xml:space="preserve"><value>インストーラーの大きさが想定を超えているため、ダウンロードしませんでした。</value></data>
+  <data name="UpdateInstall_Error_download_failed" xml:space="preserve"><value>ダウンロードか検証に失敗しました。もう一度お試しください。</value></data>
+  <data name="UpdateInstall_Error_save_failed" xml:space="preserve"><value>ダウンロード先に書き込めませんでした。</value></data>
+  <data name="UpdateInstall_Error_Other" xml:space="preserve"><value>ダウンロードできませんでした。</value></data>
+  <data name="UpdateInstall_VerifyFailed" xml:space="preserve"><value>ダウンロードしたファイルを検証できませんでした。もう一度ダウンロードしてください。</value></data>
+  <data name="UpdateInstall_ConfirmTitle" xml:space="preserve"><value>更新をインストールしますか</value></data>
+  <data name="UpdateInstall_ConfirmBody" xml:space="preserve"><value>管理者権限の確認が表示されます。インストールの間、IME の変換は一時的に使えなくなります。入力中のアプリがあると、Windows の再起動が必要になることがあります。</value></data>
+  <data name="UpdateInstall_ConfirmVulkan" xml:space="preserve"><value>Vulkan アドオンは、この更新では更新されません。リリースページから、アドオンも同じバージョンに更新してください。</value></data>
+  <data name="UpdateInstall_ConfirmPrimary" xml:space="preserve"><value>インストール</value></data>
+  <data name="UpdateInstall_ConfirmClose" xml:space="preserve"><value>キャンセル</value></data>
+  <data name="UpdateInstall_Installing" xml:space="preserve"><value>インストールしています。</value></data>
+  <data name="UpdateInstall_Installed" xml:space="preserve"><value>インストールしました。設定アプリを開き直すと、新しいバージョンになります。</value></data>
+  <data name="UpdateInstall_RebootPending" xml:space="preserve"><value>インストールしました。Windows を再起動すると、更新が完了します。</value></data>
+  <data name="UpdateInstall_RebootTitle" xml:space="preserve"><value>再起動が必要です</value></data>
+  <data name="UpdateInstall_RebootBody" xml:space="preserve"><value>更新を完了するには、Windows の再起動が必要です。再起動するまでは、開いているアプリで古い版の IME が動き続けることがあります。</value></data>
+  <data name="UpdateInstall_RebootPrimary" xml:space="preserve"><value>今すぐ再起動</value></data>
+  <data name="UpdateInstall_RebootClose" xml:space="preserve"><value>あとで</value></data>
+  <data name="UpdateInstall_RestartFailed" xml:space="preserve"><value>Windows を再起動できませんでした。手動で再起動してください。</value></data>
+  <data name="UpdateInstall_HostStartFailed" xml:space="preserve"><value>IME のサービスを起動できませんでした。サインインし直すと起動します。</value></data>
+  <data name="UpdateInstall_Cancelled" xml:space="preserve"><value>インストールを取り消しました。</value></data>
+  <data name="UpdateInstall_Busy" xml:space="preserve"><value>ほかのインストールが進行中です。終わってから、もう一度お試しください。</value></data>
+  <data name="UpdateInstall_Failed" xml:space="preserve"><value>インストールに失敗しました（コード {code}）。</value></data>
   <data name="CrashReportSectionTitle.Text" xml:space="preserve"><value>障害診断</value></data>
   <data name="RestartRequiredTitle" xml:space="preserve"><value>変換エンジンの再起動後に反映される設定があります</value></data>
   <data name="NeologdPackNotFetchedTitle" xml:space="preserve"><value>NEologd 追加辞書は取得されません</value></data>

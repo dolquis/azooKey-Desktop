@@ -42,4 +42,15 @@ inline constexpr std::size_t kMaxAnomalySuggestions = 5;
 inline constexpr std::size_t kMaxAnomalyReasonBytes = 512;
 inline constexpr std::size_t kMaxAnomalySuggestionBytes = 256;
 
+// TransformSelectedText (ai-backend-spec section 4.1). The TIP reads at most
+// 4096 UTF-16 units of selection, which is at most 12 KiB of UTF-8; together
+// with the prompt and the context the request stays inside the AI backend's
+// 64 KiB budget. The result is bounded by that budget too.
+inline constexpr std::size_t kMaxTransformSelectionBytes = 16 * 1024;
+inline constexpr std::size_t kMaxTransformPromptBytes = 4 * 1024;
+inline constexpr std::size_t kMaxTransformContextBytes = 16 * 1024;
+inline constexpr std::size_t kMaxTransformResultBytes = 64 * 1024;
+// One result until the multiple-result UI exists (ai-backend-spec section 14).
+inline constexpr uint32_t kMaxTransformResults = 1;
+
 }  // namespace azookey::ipc

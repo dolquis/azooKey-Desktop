@@ -780,7 +780,7 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
     設計値 800ms を下回らなければならない。800ms は変換要求（`QueryCandidates` / 一括変換）に対して
     実行時に強制される request deadline ではなく、client の待ちは要求の種別ごとの deadline（同表）が決める。
     800ms 以上の待ちを持つ要求（再変換 750ms は 600ms の予算より長く、一括変換 30s、Host の
-    `AiBackend` がローカルの非 Cleanup AI 変換に課す 800ms）では、engine 側の予算をこの設計値以下に
+    `AiBackend` がローカル経路の Lint に課す 800ms）では、engine 側の予算をこの設計値以下に
     保つことで、§6.4 の best-so-far 経路が client の待ちの中で終わる。fast / ライブ変換の 150ms は
     600ms の予算より短く、client が先に打ち切って Cancel する。この 2 つでは best-so-far は届かず、
     先に打ち切ることを意図した設計である。

@@ -264,6 +264,7 @@ void TipLocalSettings::Stop() noexcept {
   dynamic_punctuation_ = {};
   max_context_length_ = 30;
   prediction_enabled_ = true;
+  prediction_profile_probes_ = {};
   inline_english_candidates_ = false;
   mixed_english_auto_conversion_ = false;
   romaji_table_.reset();

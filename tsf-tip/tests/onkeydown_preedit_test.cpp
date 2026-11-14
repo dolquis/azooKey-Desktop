@@ -15324,9 +15324,9 @@ TEST(TsfTipPredictionModeTest, FocusedAppsProfileDecidesWhetherAPredictionIsAske
   }
 }
 
-// DEV-1985: a prediction answered after the focused app's profile turned
+// DEV-1985: a prediction that arrived before the focused app's profile turned
 // predictions off is not shown.
-TEST(TsfTipPredictionModeTest, PredictionAnsweredAfterTheAppsProfileTurnsItOffIsNotShown) {
+TEST(TsfTipPredictionModeTest, ArrivedPredictionIsNotShownOnceTheAppsProfileTurnsItOff) {
   using namespace azookey::ipc;
   using azookey::tsf::PredictionLogReason;
   const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-app-profile-test-" +
@@ -15365,19 +15365,17 @@ TEST(TsfTipPredictionModeTest, PredictionAnsweredAfterTheAppsProfileTurnsItOffIs
   for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
   ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
   ASSERT_NE(h.service.pending_prediction_generation_for_test(), 0u);
-  // The query is already queued when the profile turns predictions off.
+  h.service.start_ipc_worker_for_test();
+  // The answer waits in its slot; applying it is what the profile must stop.
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  ASSERT_GT(prediction_queries.load(), 0u);
   h.service.set_app_profiles_for_test(
       R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":false}}})");
-  h.service.start_ipc_worker_for_test();
-  ASSERT_TRUE(
-      WaitUntil([&] { return prediction_queries.load() > 0; }, std::chrono::milliseconds(10000)));
-  EXPECT_TRUE(WaitUntil(
-      [&] {
-        h.service.process_candidates_ready_for_test();
-        return (h.service.prediction_logged_reasons_for_test() &
-                PredictionReasonBit(PredictionLogReason::AppProfileDisabled)) != 0;
-      },
-      std::chrono::milliseconds(20000)));
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.has_prediction_result_for_test());
+  EXPECT_NE(h.service.prediction_logged_reasons_for_test() &
+                PredictionReasonBit(PredictionLogReason::AppProfileDisabled),
+            0u);
   EXPECT_FALSE(h.service.prediction_window_visible_for_test());
   EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
   EXPECT_EQ(h.service.prediction_logged_reasons_for_test() &

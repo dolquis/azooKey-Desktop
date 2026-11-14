@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M53]
+canonical_for: ["system 辞書の物理層"]
+---
+
 # system 辞書の物理層 仕様（`.azdic`）
 
 対象リポジトリ: dolquis/azooKey-Desktop

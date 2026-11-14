@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M15, M54]
+canonical_for: ["ユーザー学習強化"]
+---
+
 # ユーザー学習強化 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M62-A, M62-B, M62-C, M62-D]
+canonical_for: ["M62-A 数字（§1〜5）", "M62-D 絵文字（§6〜17）"]
+---
+
 # 候補リライター仕様
 
 本書は候補リライター層（`plans/windows-port-roadmap.md` M62）の機能仕様の正典である。

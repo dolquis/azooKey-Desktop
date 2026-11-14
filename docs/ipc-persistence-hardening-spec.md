@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M39, M40]
+canonical_for: ["ユーザーデータ永続化の堅牢化", "IPC/JSON 堅牢化"]
+---
+
 # ユーザーデータ永続化・IPC/JSON 堅牢化 仕様（M39・M40）
 
 対象リポジトリ: dolquis/azooKey-Desktop

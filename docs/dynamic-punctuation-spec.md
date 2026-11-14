@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M59]
+canonical_for: ["動的自動句読点"]
+---
+
 # 動的自動句読点 仕様（追加機能 / M59）
 
 本書は azooKey-Desktop Windows 版の「動的自動句読点（Dynamic Auto

@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M24, M30]
+canonical_for: ["意味的訂正（DetectAnomalies）", "校正ペイン（バッチ訂正ビュー、Ctrl+Shift+Space）"]
+---
+
 # 校正ビュー（意味的訂正とバッチ訂正ビュー）仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

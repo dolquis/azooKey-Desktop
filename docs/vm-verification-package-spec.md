@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M37]
+canonical_for: ["実機検証パッケージ"]
+---
+
 # 実機検証パッケージ 仕様（M37）
 
 対象リポジトリ: dolquis/azooKey-Desktop

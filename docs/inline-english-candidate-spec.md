@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M60, M62-B]
+canonical_for: ["ローマ字入力中インライン英単語候補"]
+---
+
 # ローマ字入力中インライン英単語候補 仕様（追加機能 / M60）
 
 本書は azooKey-Desktop Windows 版の「ローマ字入力中インライン英単語候補（Inline

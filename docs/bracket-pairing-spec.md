@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M61-A, M61-B]
+canonical_for: ["自動カッコペアリング"]
+---
+
 # 自動カッコペアリング 仕様（追加機能 / M61）
 
 本書は azooKey-Desktop Windows 版の「自動カッコペアリング（Bracket Auto-Pairing）」

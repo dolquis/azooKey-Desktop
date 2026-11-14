@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M37, M38, M39, M40, M41, M42, M43, M44, M47, M50, M51]
+canonical_for: ["開発基盤の入口"]
+---
+
 # 開発基盤・品質強化 仕様（Development Infrastructure & Quality）
 
 本書は azooKey-Desktop（Windows ポート）の**開発基盤・ビルド再現性・CI 品質

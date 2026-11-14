@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M36, M53]
+canonical_for: ["新語自動取得", "辞書層再設計"]
+---
+
 # 新語自動取得・辞書追加 仕様（Auto Word Registration）
 
 本書は「Google 日本語入力のように、新しい単語を自動で取得して辞書に追加する」

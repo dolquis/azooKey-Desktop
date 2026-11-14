@@ -82,7 +82,10 @@ DOCS = {
     "docs/README.md": INDEX,
     "docs/arch.md": '---\nkind: design\ncanonical_for: ["分離設計"]\n---\n\n# Arch\n',
     "docs/old-report.md": "---\nkind: reference\n---\n\n<!-- lint:allow-file status -->\n# Report\n",
-    "docs/a-spec.md": "# A spec\n\n経緯は decisions/2026-01-x.md にある。\n",
+    "docs/a-spec.md": (
+        '---\nkind: spec\nmilestones: [M13, M14, M15, M58-A]\ncanonical_for: ["M13〜M15"]\n---\n\n'
+        "# A spec\n\n経緯は decisions/2026-01-x.md にある。\n"
+    ),
     "docs/rules.md": "---\nkind: policy\ncanonical_for: [作業規則]\n---\n\n# Rules\n",
     "docs/linear-conventions.md": "<!-- SHARED CORE -->\n# Linear\n",
     "docs/handoff/run.md": '---\nkind: runbook\ncanonical_for: ["VM の手順"]\n---\n\n# Run\n',
@@ -168,8 +171,10 @@ class M1Test(unittest.TestCase):
     def test_missing_front_matter(self) -> None:
         self.assertTrue(has(problems({"docs/rules.md": "# Rules\n"}), "front matter（kind ほか）がありません"))
 
-    def test_spec_without_front_matter_is_allowed(self) -> None:
+    def test_spec_without_front_matter_fails(self) -> None:
         self.assertEqual(problems({}), [])
+        found = problems({"docs/a-spec.md": "# A spec\n\ndecisions/2026-01-x.md\n"})
+        self.assertTrue(has(found, "docs/a-spec.md: M1 冒頭に front matter（kind ほか）がありません"), found)
 
     def test_unknown_kind_and_key(self) -> None:
         found = problems({"docs/rules.md": "---\nkind: note\n---\n"})
@@ -259,6 +264,22 @@ class M3Test(unittest.TestCase):
         text = self.SPEC.format(ms="M13, M15, M58-A") + "decisions/2026-01-x.md\n"
         found = problems({"docs/a-spec.md": text})
         self.assertTrue(has(found, "M3 milestones"), found)
+
+    def test_empty_milestones_pass_when_the_row_has_no_id(self) -> None:
+        index = INDEX.replace("M13〜M15 と M58-A", "マイルストーンを持たないトラック")
+        text = '---\nkind: spec\nmilestones: []\ncanonical_for: ["マイルストーンを持たないトラック"]\n---\n\n'
+        text += "decisions/2026-01-x.md\n"
+        self.assertEqual(problems({"docs/README.md": index, "docs/a-spec.md": text}), [])
+
+    def test_empty_milestones_fail_when_the_row_has_ids(self) -> None:
+        text = '---\nkind: spec\nmilestones: []\ncanonical_for: ["M13〜M15"]\n---\n\ndecisions/2026-01-x.md\n'
+        found = problems({"docs/a-spec.md": text})
+        self.assertTrue(has(found, "M3 milestones []"), found)
+
+    def test_empty_milestones_are_for_specs_only(self) -> None:
+        text = '---\nkind: design\ncanonical_for: ["分離設計"]\nmilestones: []\n---\n'
+        found = problems({"docs/arch.md": text})
+        self.assertTrue(has(found, "空でないリスト"), found)
 
     def test_spec_front_matter_needs_milestones(self) -> None:
         found = problems({"docs/a-spec.md": '---\nkind: spec\ncanonical_for: ["M13〜M15"]\n---\n'})

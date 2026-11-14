@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M58, M58-A, M58-B, M58-C]
+canonical_for: ["ローマ字一括変換"]
+---
+
 # ローマ字一括変換 仕様（追加機能 / M58）
 
 本書は azooKey-Desktop Windows 版の「ローマ字一括変換（Batch Romaji

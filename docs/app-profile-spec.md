@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M48]
+canonical_for: ["アプリ別入力プロファイル"]
+---
+
 # アプリ別入力プロファイル 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

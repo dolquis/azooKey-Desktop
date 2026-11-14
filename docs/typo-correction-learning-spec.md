@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M35, M55]
+canonical_for: ["v1 基本タイプミス学習", "v2 統合補正エンジン"]
+---
+
 # 個人タイプミス学習・自動修正 仕様（Typo Correction Learning）
 
 本書は「ユーザー自身がよくする打ち間違い（タイプミス）を学習し、同じタイプミスを

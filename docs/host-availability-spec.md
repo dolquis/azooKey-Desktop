@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M42, M47]
+canonical_for: ["Host 可用性・再接続"]
+---
+
 # Host 可用性・再接続 仕様（M42・M47）
 
 対象リポジトリ: dolquis/azooKey-Desktop

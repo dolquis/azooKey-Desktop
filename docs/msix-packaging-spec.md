@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M28]
+canonical_for: ["MSIX パッケージング"]
+---
+
 # MSIX パッケージング 仕様（MS Store 向け・M28）
 
 対象リポジトリ: dolquis/azooKey-Desktop

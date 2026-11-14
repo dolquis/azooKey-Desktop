@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M52]
+canonical_for: ["評価ベンチ"]
+---
+
 # 変換品質評価ベンチ 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

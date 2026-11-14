@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M8]
+canonical_for: ["Zenzai 推論コントラクト"]
+---
+
 # Zenzai 推論コントラクト仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

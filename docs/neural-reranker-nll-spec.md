@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: []
+canonical_for: ["NllScorer 型ニューラルリランク"]
+---
+
 # ニューラルリランカー仕様（Track B: NllScorer 型ニューラルリランク）
 
 対象リポジトリ: dolquis/azooKey-Desktop

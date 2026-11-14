@@ -27,7 +27,7 @@ canonical_for: ["索引の役割の列にある句"]
 - spec は `milestones`（`[M13, M14]` のように列挙する）、one-off は `dod`（完了基準の節。例 `"§6"`）を持つ。spec・design・policy・runbook は `canonical_for` を持ち、その句は索引の行にそのまま含める。
 - 主題の一部の正典を別文書へ委ねるときは、任意の `defers_to` に委ね先（repo のパス。節を指すなら後ろに ` §N`）を並べる。委ね先は実在し、この文書のファイル名を本文で挙げて逆リンクする。
 - 値は 1 行の文字列か `[a, b]` のリストに限る。状態語は書かない（docs-lint が front matter も検査する）。
-- 付けないもの: `docs/decisions/`（固定ヘッダを読む）、`docs/archive/`、`docs/linear-conventions.md`（共有コアのミラー）、README・AGENTS・CLAUDE。spec への付与は spec の分割の後に行う（それまでは無くてもよい）。
+- 付けないもの: `docs/decisions/`（固定ヘッダを読む）、`docs/archive/`、`docs/linear-conventions.md`（共有コアのミラー）、README・AGENTS・CLAUDE。全 spec が front matter を持つ（`kind: spec`、`milestones`、`canonical_for`）。どの M にも属さない spec は `milestones: []` と書き、索引の行にも M の ID を置かない。
 
 ## 一回限り文書を archive するタイミング
 

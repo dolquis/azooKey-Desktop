@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M37, M38, M43]
+canonical_for: ["ビルド再現性と依存管理"]
+---
+
 # ビルド再現性・依存管理・CI 品質ゲート 仕様（M37・M38・M43）
 
 対象リポジトリ: dolquis/azooKey-Desktop

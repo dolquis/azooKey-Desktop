@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M56]
+canonical_for: ["Tiny Neural Reranker"]
+---
+
 # ニューラルリランカー仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

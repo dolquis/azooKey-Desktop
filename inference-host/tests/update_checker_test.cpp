@@ -448,13 +448,30 @@ TEST(UpdateToastTest, TheToastOpensTheReleasePageAndEscapesItsValues) {
   EXPECT_NE(hostile.find("v1&quot;/&gt;&lt;x a=&quot;"), std::string::npos) << hostile;
 }
 
-TEST(UpdateToastTest, OnlyAnHttpsPageIsShown) {
+TEST(UpdateToastTest, OnlyAReleasePageOfTheRepositoryIsShown) {
+  // Rejected before any Windows Runtime call, so no toast appears while the test runs.
   for (const char* url : {"", "http://github.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
-                          "file:///C:/Windows/System32/cmd.exe", "ms-settings:"}) {
-    EXPECT_EQ(ShowUpdateToast("1.1.0", url), UpdateToastResult::Failed) << url;
+                          "file:///C:/Windows/System32/cmd.exe", "ms-settings:",
+                          "https://example.com/dolquis/azooKey-Desktop/releases/tag/v1.1.0",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/../../other/repo",
+                          "https://github.com/dolquis/azooKey-Desktop/releases/tag/%2e%2e"}) {
+    const auto outcome = ShowUpdateToast("1.1.0", url);
+    EXPECT_EQ(outcome.result, UpdateToastResult::Failed) << url;
+    EXPECT_EQ(std::string_view(outcome.stage), "input") << url;
   }
-  EXPECT_EQ(ShowUpdateToast("", "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1"),
-            UpdateToastResult::Failed);
+  const auto no_version =
+      ShowUpdateToast("", "https://github.com/dolquis/azooKey-Desktop/releases/tag/v1");
+  EXPECT_EQ(no_version.result, UpdateToastResult::Failed);
+  EXPECT_EQ(std::string_view(no_version.stage), "input");
+}
+
+TEST(UpdateToastTest, OnlyASettingReadAsNotEnabledStopsTheToast) {
+  // An unpackaged app that never notified may fail to read the setting: that does not stop it.
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(false, false), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(false, true), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(true, true), std::nullopt);
+  EXPECT_EQ(azookey::host::ResultForNotificationSetting(true, false),
+            UpdateToastResult::DisabledBySystem);
 }
 
 TEST(UpdateCheckerTest, UnparsableProductVersionFailsBeforeTheNetwork) {

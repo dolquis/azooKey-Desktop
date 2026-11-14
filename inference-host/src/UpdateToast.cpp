@@ -2,6 +2,8 @@
 
 #include <climits>
 
+#include "azookey/host/UpdateChecker.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -75,64 +77,75 @@ std::string BuildUpdateToastXml(std::string_view version, std::string_view url) 
   return xml;
 }
 
-UpdateToastResult ShowUpdateToast(std::string_view version, std::string_view url) {
-  if (version.empty() || !url.starts_with("https://")) return UpdateToastResult::Failed;
+std::optional<UpdateToastResult> ResultForNotificationSetting(bool setting_read, bool enabled) {
+  if (setting_read && !enabled) return UpdateToastResult::DisabledBySystem;
+  return std::nullopt;
+}
+
+UpdateToastOutcome ShowUpdateToast(std::string_view version, std::string_view url) {
+  // The checker already keeps only release pages; the toast opens nothing else either.
+  if (version.empty() || !IsAllowedReleaseUrl(url, kReleasePagePrefix)) return {};
 #ifdef _WIN32
   namespace dom = ABI::Windows::Data::Xml::Dom;
   namespace notifications = ABI::Windows::UI::Notifications;
   using Microsoft::WRL::ComPtr;
   using Microsoft::WRL::Wrappers::HStringReference;
+  const auto failed = [](const char* stage, HRESULT hr) {
+    return UpdateToastOutcome{UpdateToastResult::Failed, stage, static_cast<int32_t>(hr)};
+  };
 
   const auto xml = WidenUtf8(BuildUpdateToastXml(version, url));
-  if (xml.empty()) return UpdateToastResult::Failed;
+  if (xml.empty()) return {UpdateToastResult::Failed, "convert", 0};
   // The update checker's worker is the Host's own thread, so it may join the MTA.
   Microsoft::WRL::Wrappers::RoInitializeWrapper runtime(RO_INIT_MULTITHREADED);
   if (FAILED(static_cast<HRESULT>(runtime)) &&
       static_cast<HRESULT>(runtime) != RPC_E_CHANGED_MODE) {
-    return UpdateToastResult::Failed;
+    return failed("runtime", static_cast<HRESULT>(runtime));
   }
 
   ComPtr<IInspectable> instance;
-  if (FAILED(RoActivateInstance(
-          HStringReference(RuntimeClass_Windows_Data_Xml_Dom_XmlDocument).Get(), &instance))) {
-    return UpdateToastResult::Failed;
-  }
+  HRESULT hr = RoActivateInstance(
+      HStringReference(RuntimeClass_Windows_Data_Xml_Dom_XmlDocument).Get(), &instance);
+  if (FAILED(hr)) return failed("activate", hr);
   ComPtr<dom::IXmlDocument> document;
   ComPtr<dom::IXmlDocumentIO> document_io;
-  if (FAILED(instance.As(&document)) || FAILED(document.As(&document_io)) ||
-      FAILED(document_io->LoadXml(
-          HStringReference(xml.c_str(), static_cast<unsigned int>(xml.size())).Get()))) {
-    return UpdateToastResult::Failed;
+  hr = instance.As(&document);
+  if (SUCCEEDED(hr)) hr = document.As(&document_io);
+  if (SUCCEEDED(hr)) {
+    hr = document_io->LoadXml(
+        HStringReference(xml.c_str(), static_cast<unsigned int>(xml.size())).Get());
   }
+  if (FAILED(hr)) return failed("load_xml", hr);
 
   ComPtr<notifications::IToastNotificationManagerStatics> manager;
   ComPtr<notifications::IToastNotifier> notifier;
-  if (FAILED(RoGetActivationFactory(
-          HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotificationManager).Get(),
-          IID_PPV_ARGS(&manager))) ||
-      FAILED(
-          manager->CreateToastNotifierWithId(HStringReference(kAppUserModelId).Get(), &notifier))) {
-    return UpdateToastResult::Failed;
+  hr = RoGetActivationFactory(
+      HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotificationManager).Get(),
+      IID_PPV_ARGS(&manager));
+  if (SUCCEEDED(hr)) {
+    hr = manager->CreateToastNotifierWithId(HStringReference(kAppUserModelId).Get(), &notifier);
   }
-  // An AppUserModelID without its Start menu shortcut fails here.
+  if (FAILED(hr)) return failed("notifier", hr);
+  // An AppUserModelID that no Start menu shortcut carries reads as disabled (DisabledForUser on
+  // build 26300), so it is not recorded as shown. A setting that cannot be read is undecided.
   notifications::NotificationSetting setting{};
-  if (FAILED(notifier->get_Setting(&setting))) return UpdateToastResult::Failed;
-  if (setting != notifications::NotificationSetting_Enabled) {
-    return UpdateToastResult::DisabledBySystem;
+  const bool setting_read = SUCCEEDED(notifier->get_Setting(&setting));
+  if (const auto decided = ResultForNotificationSetting(
+          setting_read, setting == notifications::NotificationSetting_Enabled)) {
+    return {*decided, "setting", 0};
   }
 
   ComPtr<notifications::IToastNotificationFactory> factory;
   ComPtr<notifications::IToastNotification> toast;
-  if (FAILED(RoGetActivationFactory(
-          HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotification).Get(),
-          IID_PPV_ARGS(&factory))) ||
-      FAILED(factory->CreateToastNotification(document.Get(), &toast)) ||
-      FAILED(notifier->Show(toast.Get()))) {
-    return UpdateToastResult::Failed;
-  }
-  return UpdateToastResult::Shown;
+  hr = RoGetActivationFactory(
+      HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotification).Get(),
+      IID_PPV_ARGS(&factory));
+  if (SUCCEEDED(hr)) hr = factory->CreateToastNotification(document.Get(), &toast);
+  if (SUCCEEDED(hr)) hr = notifier->Show(toast.Get());
+  if (FAILED(hr)) return failed("show", hr);
+  return {UpdateToastResult::Shown, "show", 0};
 #else
-  return UpdateToastResult::Failed;
+  return {};
 #endif
 }
 

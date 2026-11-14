@@ -790,9 +790,20 @@ Host（`inference-host/src/UpdateToast.cpp`）は、確認で新しい版を見�
   通知もしない。確認を取り消したときも通知しない。
 - 非パッケージのプロセスがトーストを出すには、スタートメニューのショートカットに同じ
   AppUserModelID（`dolquis.azooKey`）が要る。MSI は設定アプリのショートカットにこれを付ける
-  （§4.1）。ショートカットの無い開発ビルドでは表示に失敗し、通知済みにはならない。
+  （§4.1）。
+- 通知を止めるのは、Windows がこの AUMID の通知を有効でないと返したとき（`disabled_by_system`）
+  だけである。通知の設定を読めなかったときは、通知を一度も出していない非パッケージのアプリでも
+  起こりうるので、止めずに表示へ進む。表示の成功は Windows が表示の要求を受け付けたことを指し、
+  画面に出たことまでは確かめない。どのショートカットも持たない AUMID は、開発機（Windows の
+  ビルド 26300）で「無効」（`DisabledForUser`）と返ったので、ショートカットの無い開発ビルドや
+  付与に失敗した環境では通知済みにならない見込みである。これと、通知を一度も出していない
+  プロファイルで初回から表示されることは、実機で確かめる（Human Gate DEV-2075）。
+- 通知するのは利用者のセッションで常駐する pipe モードの Host だけで、stdio モードの Host は
+  確認はしても通知しない（並んで動いたときに同じ版を二度知らせないため）。
 - Host は各表示の結果を RuntimeLog の `update_notification` イベントに、固定の `reason`
-  （`shown` / `disabled_by_system` / `failed`）だけで記録する。版と URL は記録しない。
+  （`shown` / `disabled_by_system` / `failed`）で記録する。`failed` には、失敗した段階の固定名
+  `stage`（`input` / `convert` / `runtime` / `activate` / `load_xml` / `notifier` / `show`）と HRESULT の数値
+  `hresult` を添える。版と URL は記録しない。
 
 実機での表示・クリック・アップグレード後のショートカットの確認は Human Gate（DEV-2075）とする。
 

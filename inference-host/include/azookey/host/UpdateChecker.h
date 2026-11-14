@@ -37,6 +37,14 @@ std::optional<ReleaseVersion> ParseReleaseVersion(std::string_view text);
 // Negative, zero or positive as a has lower, equal or higher precedence than b.
 int CompareReleaseVersions(const ReleaseVersion& a, const ReleaseVersion& b);
 
+// The repository's release pages: the only pages the check records and a notification opens.
+inline constexpr std::string_view kReleasePagePrefix =
+    "https://github.com/dolquis/azooKey-Desktop/releases/";
+
+// Whether url is a page under prefix without dot segments, escapes, spaces or characters that
+// need quoting, which a browser could resolve to a page outside the prefix.
+bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix);
+
 struct AvailableRelease {
   std::string version;  // As tagged, without the leading 'v'.
   std::string url;      // The release page; only https://github.com/<repo>/releases/... is kept.
@@ -54,7 +62,7 @@ struct UpdateCheckerOptions {
   // GitHub Releases API of the repository, without a trailing '/'. Tests point it at loopback.
   std::wstring api_base_url{L"https://api.github.com/repos/dolquis/azooKey-Desktop"};
   // Release pages outside this prefix are dropped, so the settings app opens only them.
-  std::string release_page_prefix{"https://github.com/dolquis/azooKey-Desktop/releases/"};
+  std::string release_page_prefix{kReleasePagePrefix};
   // update-status.json, written atomically after each finished check.
   std::filesystem::path status_path;
   // update-notification.json: the highest version notified, so a version is notified once and

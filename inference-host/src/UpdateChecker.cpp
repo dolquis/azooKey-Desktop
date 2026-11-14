@@ -52,23 +52,6 @@ int CompareIdentifiers(const std::string& a, const std::string& b) {
   return a.compare(b) < 0 ? -1 : (a == b ? 0 : 1);
 }
 
-bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix) {
-  if (prefix.empty() || url.size() <= prefix.size() || url.size() > kMaxReleaseUrl ||
-      !url.starts_with(prefix)) {
-    return false;
-  }
-  // No dot segments or escapes, which a browser could resolve to a page outside the prefix.
-  const auto rest = url.substr(prefix.size());
-  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
-      rest.find('%') != std::string_view::npos) {
-    return false;
-  }
-  return std::all_of(url.begin(), url.end(), [](char c) {
-    const auto byte = static_cast<unsigned char>(c);
-    return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
-  });
-}
-
 std::optional<AvailableRelease> ReleaseFrom(const ipc::json::Value& value,
                                             std::string_view release_page_prefix,
                                             bool allow_prerelease) {
@@ -95,6 +78,23 @@ std::string_view ResultName(UpdateCheckStatus status) {
 }
 
 }  // namespace
+
+bool IsAllowedReleaseUrl(std::string_view url, std::string_view prefix) {
+  if (prefix.empty() || url.size() <= prefix.size() || url.size() > kMaxReleaseUrl ||
+      !url.starts_with(prefix)) {
+    return false;
+  }
+  // No dot segments or escapes, which a browser could resolve to a page outside the prefix.
+  const auto rest = url.substr(prefix.size());
+  if (rest.starts_with('.') || rest.find("/.") != std::string_view::npos ||
+      rest.find('%') != std::string_view::npos) {
+    return false;
+  }
+  return std::all_of(url.begin(), url.end(), [](char c) {
+    const auto byte = static_cast<unsigned char>(c);
+    return byte > 0x20 && byte < 0x7f && c != '"' && c != '<' && c != '>' && c != '\\';
+  });
+}
 
 std::optional<ReleaseVersion> ParseReleaseVersion(std::string_view text) {
   if (text.size() > kMaxVersionText) return std::nullopt;

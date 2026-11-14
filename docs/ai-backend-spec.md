@@ -416,7 +416,7 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | 構造不正 | `Parse` | 応答を解釈できない |
 
 ログには `reading` / `surface` / 入力 / 鍵 / プロバイダ応答本文を出さない
-（secure 中は §8、通常時も `dev-infrastructure-spec.md` のログ規約に従う）。
+（secure 中は §8、通常時も `observability-spec.md` のログ規約に従う）。
 エラー本文（API のエラー JSON）は任意の入力や鍵を含み得るため参照・記録せず、
 HTTP status と内部 `AiErrorClass` だけで分類する。
 

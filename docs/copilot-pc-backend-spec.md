@@ -444,7 +444,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
     ため）。照合を誤ったときの影響は `promptFormat` の選択と `ListModels` の `catalog` の
     `state` の表示だけで、catalog の取得（`docs/model-management-spec.md` §3.1.2）は
     ダウンローダが自分で SHA-256 を計算するので sidecar を使わない。
-- 診断 D-007 / D-008（`docs/dev-infrastructure-spec.md` §12.2）の判定表は変えない。
+- 診断 D-007 / D-008（`docs/diagnostics-compat-spec.md` §12.2）の判定表は変えない。
   `selectedPath` は GGUF を指すので R1 の判定がそのまま通る。R2 artifact の欠落や SHA-256 の
   不一致は、R1 で動くので D-007 / D-008 の error にせず、§4.5 の降格理由（`last_error` と
   構造化ログ）で示す。表の R2 の判定（`selectedPath` が ONNX ディレクトリを指す場合）は、手で
@@ -531,7 +531,7 @@ R1 の enum は `enum class BackendKind { Cpu, Cuda, Vulkan };`
   QueryDiagnostics の任意の `backend_selection` は起動時の `source`、`auto_backend`、
   `reason` と上記の事実を保持する。電源変化や設定再読込後も起動時の値として扱い、
   実ロード状態と区別する。wire 定義と診断 CLI 出力は
-  `docs/dev-infrastructure-spec.md` §12.6 に従う。
+  `docs/diagnostics-compat-spec.md` §12.6 に従う。
 
 ### 4.5 フォールバック段位
 
@@ -609,7 +609,7 @@ R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード�
 
 この EP 取得・登録ステップの実装は M24（`WinMlBackend`）の必須要件とし、
 EP の `ep` / `ep_state` / `ep_last_error` を診断に含める（`docs/observability-spec.md`
-§7.7.2 トレースログ・`docs/dev-infrastructure-spec.md` §12.6 `QueryDiagnostics` に反映済み）。
+§7.7.2 トレースログ・`docs/diagnostics-compat-spec.md` §12.6 `QueryDiagnostics` に反映済み）。
 
 ## 5. mmap モデルロード
 
@@ -875,7 +875,7 @@ CFG / DYNAMIC_BASE / NX_COMPAT / HIGH_ENTROPY_VA（必須ビット `0x4160`）�
 `Dependent Load Flag 0B00` を必須とし、出力をログ artifact に保存する。
 `dumpbin` は MSVC cross 環境の `VCToolsInstallDir/bin/Hostx64/arm64/dumpbin.exe` を
 明示して呼ぶ。clang-cl の未知引数・未使用引数は toolchain でエラーにする。
-フラグ適用の正典は `dev-infrastructure-spec.md` §2.2、検査対象は同 §4.3 に従う。
+フラグ適用の正典は `build-ci-spec.md` §2.2、検査対象は同 §4.3 に従う。
 設定アプリも `azookey_settings` ターゲットで ARM64 構成を生成し、PE Machine が
 `0xAA64` であることを検査して `windows-arm64-crossbuild-binaries` に含める。
 設定アプリの構成と NuGet lock は §8.3 に従い、TIP / Host の緩和策検査とは分ける。

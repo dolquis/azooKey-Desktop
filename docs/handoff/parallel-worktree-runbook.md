@@ -44,7 +44,7 @@ worktree での調査では CodeGraph の結果を正とせず、`rg` と実フ�
 
 ## マージ衝突と main の取り込み
 
-`main` の branch ruleset は `Require branches to be up to date` を要求しない（`docs/dev-infrastructure-spec.md`「ブランチ保護と必須チェック」）。
+`main` の branch ruleset は `Require branches to be up to date` を要求しない（`docs/build-ci-spec.md`「ブランチ保護と必須チェック」）。
 そのため、並行する PR は古い `main` のまま CI を通ってマージされうる。
 後続の PR は、先行 PR がマージされるたびに `origin/main` を merge で取り込み、`scripts/check_test_inventory.py` と docs-lint を通し直す。
 push 済みの branch は rebase しない。rebase すると force push が要るからである。

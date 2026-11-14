@@ -7,7 +7,7 @@
       `docs/host-availability-spec.md`（Host の再接続）、
       `plans/windows-port-roadmap.md` M39 / M40
 
-本書は `docs/dev-infrastructure-spec.md` から §5・§6を切り出した文書である。節番号 §5.x・§6.x は旧 spec のまま保ち、旧 spec の転送表が§5・§6を本書へ解決する。本書内で、本書にない節（旧 spec の残りの節と、同じ旧 spec から分けた他の文書の節）を指すときは、文書名を付けて書く（例: `dev-infrastructure-spec.md` §4.3）。
+本書は `docs/dev-infrastructure-spec.md` から §5・§6を切り出した文書である。節番号 §5.x・§6.x は旧 spec のまま保ち、旧 spec の転送表が§5・§6を本書へ解決する。本書内で、本書にない節（旧 spec の他の節）を指すときは、文書名を付けて書く（例: `build-ci-spec.md` §4.3）。
 
 ## 正典範囲
 
@@ -103,16 +103,16 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 
 レビューは自前 JSON パーサ（`ipc/src/Json.cpp`）の `nlohmann-json` 置換
 （提案 A）と、自前を残す場合の fuzz/malformed テスト追加（提案 B）を挙げる。
-本仕様は**提案 B を主**とする。即時の全置換はしない（理由は `dev-infrastructure-spec.md` §11）。自前
+本仕様は**提案 B を主**とする。即時の全置換はしない（理由は `build-ci-spec.md` §11）。自前
 パーサを残したまま境界堅牢性を上げる。外部ライブラリへの移行は v1.0 の範囲では
-行わないことを `dev-infrastructure-spec.md` §11.2.1 で確定した。再評価の条件も同節が正典とする。
+行わないことを `build-ci-spec.md` §11.2.1 で確定した。再評価の条件も同節が正典とする。
 
 Envelope の送信は payload の JSON を検証してから連結し、受信は文書全体を
 検証した parser が特定した最初のトップレベル `payload` の範囲をコピーする。
 payload の再文字列化は行わず、キー順序・空白・数値・escape の表記を保持する。
 型別 payload の Parse は引き続き行う。文字列の同一性を JSON の意味的同一性の
 判定に使わない。欠落 payload の `{}`、重複キーの先勝ち、深度・入力長・不正値の
-拒否規則は維持する。性能の確認には `dev-infrastructure-spec.md` §4.5 の IPC 計測を使う。
+拒否規則は維持する。性能の確認には `build-ci-spec.md` §4.5 の IPC 計測を使う。
 
 ### 6.2 JSON パーサ強化要件
 

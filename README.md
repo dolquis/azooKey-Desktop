@@ -95,7 +95,7 @@ Windows 以外のビルドには ICU の開発パッケージも必要です。U
 
 Release / Linux preset での実行と CI 再現手順の差分は
 [`docs/debugging.md`](./docs/debugging.md) を参照してください。
-preset の一覧と用途は [`docs/dev-infrastructure-spec.md`](./docs/dev-infrastructure-spec.md) §2.1、
+preset の一覧と用途は [`docs/build-ci-spec.md`](./docs/build-ci-spec.md) §2.1、
 各 preset の値は [`CMakePresets.json`](./CMakePresets.json) にあります。
 configure・build・CTest を順に流す簡易レシピとして `just ci` もあります（[`justfile`](./justfile)）。
 `just ci` は GoogleTest を取得しない（`AZOOKEY_FETCH_GOOGLETEST=OFF`）ため、GoogleTest が未導入の環境では

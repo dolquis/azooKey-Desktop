@@ -3,7 +3,7 @@
 主要 Windows アプリで TSF composition / 候補ウィンドウ位置 / 確定 /
 キャンセル / Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で
 検証するハーネス。仕様の正典は
-[`docs/dev-infrastructure-spec.md` §13](../docs/dev-infrastructure-spec.md)。
+[`docs/diagnostics-compat-spec.md` §13](../docs/diagnostics-compat-spec.md)。
 
 > 状態 / 進捗・優先度は Linear（team `Dev` / project *azooKey Desktop /
 > Windows IME MVP*）が正典。本 README には進捗を書かない（`AGENTS.md`）。

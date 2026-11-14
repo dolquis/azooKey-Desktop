@@ -311,7 +311,7 @@ MSI を Draft Release に添付する。`workflow_dispatch` は同じガード�
 タグ以外では Release を作成しない。
 ネイティブ成果物と設定アプリは `all azookey_settings --parallel 2` の一回の build で
 構築する。ネイティブコンパイルには Release 専用の sccache を使う
-（`docs/dev-infrastructure-spec.md` §4.7）。設定アプリの MSBuild はキャッシュ対象外である。
+（`docs/build-ci-spec.md` §4.7）。設定アプリの MSBuild はキャッシュ対象外である。
 
 スタンドアロン MSIX と自前コード署名は DEV-255 で延期しており、この workflow へ
 署名処理を混在させない。Store 用 MSIX の CI は DEV-416 で別経路として設計する。
@@ -447,7 +447,7 @@ import を `dumpbin /dependents`（delay load を含む）で読み、MSVC ラ�
 `msvcp140_atomic_wait` のような非数値の接尾辞も含む）に一致する名前が、MSI の同梱一覧に
 あるかを検査する。Release workflow は MSI をビルドする前にこれを実行する。
 Build workflow の `windows-llama-build` も、Release / CPU / llama.cpp 構成の TIP・Host・
-self-contained 設定アプリに同じ検査を実行する（実行条件は `dev-infrastructure-spec.md` §4.3）。
+self-contained 設定アプリに同じ検査を実行する（実行条件は `build-ci-spec.md` §4.3）。
 本節は同 spec の app-local MSVC runtime 検査から参照される。
 
 base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ、その帰属を
@@ -860,7 +860,7 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 
 ```cpp
 // EtwModule / EtwErrorCode は閉じた enum。文字列引数を一切持たせず、本文混入を
-// コンパイル時に防ぐ（§7.2.1）。EtwErrorCode は dev-infrastructure-spec.md §7.4 の
+// コンパイル時に防ぐ（§7.2.1）。EtwErrorCode は observability-spec.md §7.4 の
 // 3 カテゴリ（transport / protocol / business）。§7.2 9000 Error と同一。
 enum class EtwModule { Tip, Host, Settings, Ipc };
 enum class EtwErrorCode { Transport, Protocol, Business };
@@ -997,7 +997,7 @@ azooKey 管理ダンプを試みず、OS の障害処理へ委ねる。WinRT thr
   送信機能を追加する場合は、バージョンとタイムスタンプを持つ明示同意レコードを
   別途導入する。既存の `local` や未知値を送信への同意に読み替えない。
 - **診断 ZIP**: M44 の `crash-summary.txt` は
-  `docs/dev-infrastructure-spec.md` §12.5 に従い、ダンプの要約だけを含める。
+  `docs/diagnostics-compat-spec.md` §12.5 に従い、ダンプの要約だけを含める。
   ダンプ本体やメモリ上の文字列バッファを同梱しない。
 
 ## 9. DPAPI 学習データ暗号化（M34）

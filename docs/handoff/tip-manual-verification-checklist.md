@@ -31,7 +31,7 @@ runbook は検証 zip に同梱されないため、環境ブロックはホス�
 ## compat runner との分担
 
 `compat_test.exe` が判定する内容を、人間が同じセッションで繰り返さないための対応表である。
-ケース定義の正典は [`docs/dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.3 で、本節はケース ID だけを参照する。
+ケース定義の正典は [`docs/diagnostics-compat-spec.md`](../diagnostics-compat-spec.md) §13.3 で、本節はケース ID だけを参照する。
 A 系・B 系の各行は次の 3 分類のどれかに属する。
 
 - **(a) 機械判定**: 行の判定内容を、対応ケースが同じ観点で判定する。下記の省略条件をすべて満たす場合に限り、人間セッションで省略できる。

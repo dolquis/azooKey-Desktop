@@ -8,7 +8,7 @@
       `docs/windows-tsf-host-architecture.md`（Host の起動と再起動）、
       `plans/windows-port-roadmap.md` M42 / M47
 
-本書は `docs/dev-infrastructure-spec.md` から §8を切り出した文書である。節番号 §8.x は旧 spec のまま保ち、旧 spec の転送表が§8を本書へ解決する。本書内で、本書にない節（旧 spec の残りの節と、同じ旧 spec から分けた他の文書の節）を指すときは、文書名を付けて書く（例: `dev-infrastructure-spec.md` §4.3）。
+本書は `docs/dev-infrastructure-spec.md` から §8を切り出した文書である。節番号 §8.x は旧 spec のまま保ち、旧 spec の転送表が§8を本書へ解決する。本書内で、本書にない節（旧 spec の他の節）を指すときは、文書名を付けて書く（例: `build-ci-spec.md` §4.3）。
 
 ## 正典範囲
 
@@ -275,7 +275,7 @@ transport 系は M42 の接続状態機械（§8.2）が担い、TIP 側に `Hea
 
 TIP 起動直後の初回接続前は §8.3 と同じく劣化扱いにせず、何も表示しない。
 
-TIP は Host の状態を primary 接続の `QueryDiagnostics`（`dev-infrastructure-spec.md` §12.6）で取得し、`fallback_state`
+TIP は Host の状態を primary 接続の `QueryDiagnostics`（`diagnostics-compat-spec.md` §12.6）で取得し、`fallback_state`
 だけを使う。IPC の payload は追加しない。送る契機は次の 2 つとする。
 
 - Handshake が受理された直後。初回接続、再接続、設定変更による Handshake の再実行（§8.2）を含む。
@@ -355,7 +355,7 @@ Host が生きていても `Degraded` に入る。そのため候補窓用の要
 出すときは、in-flight の候補窓用の要求に `Cancel`（`observability-spec.md` §7.5）を送る。その応答は新しい要求により
 stale になっており、待ち続けると新しい要求が候補窓用の deadline まで遅れるためである。
 in-flight の要求が打鍵ごとの要求、`QueryPredictions`、再変換のときは `Cancel` を送らない。
-候補表示レイテンシの性能目標（`dev-infrastructure-spec.md` §10 の p50 < 80ms）は目標値であり、打ち切りの deadline ではない。
+候補表示レイテンシの性能目標（`build-ci-spec.md` §10 の p50 < 80ms）は目標値であり、打ち切りの deadline ではない。
 
 Host は `QueryCandidates` fast、候補窓用の `QueryCandidates`、ライブ変換の値を自分の deadline として持たない。
 これらは client 側の deadline と Cancel（`observability-spec.md` §7.5）が打ち切る。
@@ -467,7 +467,7 @@ M46 の secure 表示と同時に出すときの並びは
   （`host_generation_id`、§8.2）の間、TIP インスタンスごとに 1 回だけ表示する
 - 詳細クリックの遷移先は M30 / M44 の進捗で分岐する。M47 v1（M30 未完了
   かつ M44 v1 完了時）は `azookey_diag.exe` の起動方法を案内する TIP 内
-  ポップアップを表示する。M30 完了と M44（`dev-infrastructure-spec.md` §12.7）の診断タブ統合（M44
+  ポップアップを表示する。M30 完了と M44（`diagnostics-compat-spec.md` §12.7）の診断タブ統合（M44
   follow-up）の両方が揃った後は、設定アプリの「プライバシー」ペインの障害診断の節を直接開く動作に
   切り替える
 - 「再試行」クリックで TIP は `UpdateConfig` を送る。Host は `settings.json` を読み直し、

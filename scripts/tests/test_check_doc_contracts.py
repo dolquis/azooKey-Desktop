@@ -196,7 +196,7 @@ def make_repo(root: Path, **overrides: str) -> None:
         "docs/feature-spec.md": FEATURE_SPEC,
         "CMakePresets.json": json.dumps(PRESETS),
         "README.md": README,
-        "docs/dev-infrastructure-spec.md": DEV_INFRA,
+        "docs/build-ci-spec.md": DEV_INFRA,
         ".claude/rules/build.md": "Run `cmake --build --preset windows-debug`.\n",
         MODULE.JUSTFILE: JUSTFILE,
     }
@@ -316,6 +316,19 @@ class CheckDocContractsTest(unittest.TestCase):
             "docs/debugging.md:1: preset `linux-gone`",
         )
         self.assertFalse(any("windows-build" in problem for problem in problems))
+
+    def test_presets_in_the_specs_split_from_dev_infrastructure_are_checked(self) -> None:
+        problems = self.run_check(
+            **{
+                "docs/vm-verification-package-spec.md": "Use the `windows-gone` preset.\n",
+                "docs/diagnostics-compat-spec.md": "cmake --build --preset linux-gone\n",
+            }
+        )
+        self.assert_reported(
+            problems,
+            "docs/vm-verification-package-spec.md:1: preset `windows-gone`",
+            "docs/diagnostics-compat-spec.md:1: preset `linux-gone`",
+        )
 
     def test_settings_key_table_is_read_from_settings_app_spec(self) -> None:
         self.assertEqual(MODULE.SETTINGS_INDEX_DOC, "docs/settings-app-spec.md")

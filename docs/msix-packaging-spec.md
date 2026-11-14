@@ -460,7 +460,7 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
           GGUF を勝手に選ばない）＝ (c1) 適用外で、(c2) か劣化モード（下記）に
           委ねる。次も autoselect の対象外: (i) `autoLoadOnHostStart=false`
           （起動時ロードを抑止する設定を尊重し、何もしない）、(ii) `selectedPath`
-          が**非空だが不在**（`dev-infrastructure-spec.md` D-007 が *error* 扱い
+          が**非空だが不在**（`diagnostics-compat-spec.md` D-007 が *error* 扱い
           する「設定済みパス不在」。silently 切り替えず error / M45 モデル選択
           誘導に委ねる）、(iii) `selectedPath` が非空かつ実在（下記 (c2) の明示
           選択。autoselect は上書きしない）。

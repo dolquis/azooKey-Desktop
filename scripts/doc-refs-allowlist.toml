@@ -185,13 +185,13 @@ files = ["docs/karukan-comparison-report.md"]
 ref = "bench/generated/BenchmarkCommit.h"
 kind = "runtime"
 reason = "build directory の中の生成ヘッダ。repo の bench/ ではない"
-files = ["docs/dev-infrastructure-spec.md"]
+files = ["docs/vm-verification-package-spec.md"]
 
 [[allow]]
 ref = "diagnostics/etw/azookey_etw_manifest.dll"
 kind = "runtime"
 reason = "build directory の中の ETW resource DLL。zip へ同じ相対パスで入れることを述べている"
-files = ["docs/dev-infrastructure-spec.md"]
+files = ["docs/vm-verification-package-spec.md"]
 
 [[allow]]
 ref = "data/trending-words.json"

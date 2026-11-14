@@ -544,7 +544,7 @@ schema fragment（`properties.privacy` への追加）:
 - M16 Magic Conversion の prompt と応答を一切ログしない
 - M55 typo の `raw_keys` / `observed_reading` を hash 化
 
-これらは M44 診断 ZIP（`docs/dev-infrastructure-spec.md` §12.5）の
+これらは M44 診断 ZIP（`docs/diagnostics-compat-spec.md` §12.5）の
 redaction ポリシーと共通の関数で処理する。
 
 ## 9. 設定反映とイベント単位の判定

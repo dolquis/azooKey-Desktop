@@ -7,7 +7,7 @@
 | Zenzai の変換、ロード、推論 | `docs/zenzai-inference-spec.md`, `docs/zenzai-gpu-route.md` | `inference-host/src/ZenzaiModelConverter.cpp`, `inference-host/src/InferenceEngine.cpp` | `host_engine_tests` |
 | request dispatch と degraded mode | `docs/windows-tsf-host-architecture.md`, `tsf-ipc-protocol` skill | `inference-host/src/Dispatcher.cpp`, `inference-host/src/HealthStateMachine.cpp` | `host_dispatcher_tests`, `host_health_state_tests` |
 | backend 選択（CPU / Vulkan の `auto` 解決） | `docs/zenzai-gpu-route.md`, `docs/copilot-pc-backend-spec.md` | `inference-host/src/BackendSelector.cpp` | `host_args_tests`（`backend_selector_test.cpp`） |
-| scheduler、cancel、timeout | `docs/dev-infrastructure-spec.md`, `docs/copilot-pc-backend-spec.md` §11.3 | `inference-host/src/RequestScheduler.cpp` | `host_scheduler_tests` |
+| scheduler、cancel、timeout | `docs/observability-spec.md` §7.5、`docs/host-availability-spec.md` §8.5、`docs/copilot-pc-backend-spec.md` §11.3 | `inference-host/src/RequestScheduler.cpp` | `host_scheduler_tests` |
 | ModelCatalog とモデル選択 | `docs/model-management-spec.md`, `settings/model-catalog.schema.json` | `inference-host/src/ModelCatalog.cpp`, `inference-host/src/ModelFetch.cpp`, `inference-host/src/ModelsCli.cpp`, `inference-host/src/CatalogFetchService.cpp`, `inference-host/src/CatalogModelMatcher.cpp`, `inference-host/src/HttpDownloader.cpp`, `settings/default-model-catalog.json` | `host_model_catalog_tests`（`catalog_fetch_test.cpp` を含む）, `host_http_downloader_tests`（Windows のみ） |
 | ユーザーデータパス | `docs/learning-data-management-spec.md` | `inference-host/src/UserDataPaths.cpp` | `host_user_data_paths_tests` |
 | runtime 設定 | `docs/zenzai-gpu-route.md`, `docs/ai-backend-spec.md` | `inference-host/src/SettingsStore.cpp` | `host_settings_store_tests` |

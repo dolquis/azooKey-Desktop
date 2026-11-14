@@ -67,7 +67,7 @@ dod: "§6"
 | 契約 | 正典 |
 |---|---|
 | IPC の型一覧 | `Payloads.h` と各 spec。`windows-tsf-host-architecture.md` は型から正典 spec への索引にする |
-| CI ジョブの一覧と版 | `docs/test-inventory.md` と workflow。`dev-infrastructure-spec.md` §4 は方針だけを持つ |
+| CI ジョブの一覧と版 | `docs/test-inventory.md` と workflow。`dev-infrastructure-spec.md` §4 は方針だけを持つ | <!-- lint:allow section -->
 | モデル取得の `.part`、Range、SHA256、原子置換 | `model-management-spec.md` §3.1.2 |
 | degraded / fallback の規則 | `zenzai-inference-spec.md` §7.4 |
 | `final_score` 式 | `neural-reranker-spec.md` §9 |
@@ -76,7 +76,7 @@ dod: "§6"
 | userdict / newwords の CLI 契約と writer の責務 | `learning-data-management-spec.md`（architecture から移す） |
 | 第三者資産の attribution | `THIRD_PARTY_LICENSES` |
 | エージェント運用規約 | `AGENTS.md`（入口）→ `docs/linear-conventions.md` §2.1 → `docs/handoff/agent-orchestration.md` → `.claude/agents/MANIFEST.md`（所有の情報だけ） |
-| アプリ互換チェックリスト | `dev-infrastructure-spec.md` §13 と `compat-test/` |
+| アプリ互換チェックリスト | `dev-infrastructure-spec.md` §13 と `compat-test/` | <!-- lint:allow section -->
 
 正典を宣言した箇所には、宣言された側からの逆リンクを張る。
 

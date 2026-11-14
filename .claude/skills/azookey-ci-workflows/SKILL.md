@@ -11,12 +11,12 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
 
 ## 手順
 
-1. `references/spec-routing.md` を読み、対象 workflow の正典節（`docs/dev-infrastructure-spec.md` §4）と
+1. `references/spec-routing.md` を読み、対象 workflow の正典節（`docs/build-ci-spec.md` §4）と
    `docs/test-inventory.md`「CTest 以外の自動検査」の該当行を確認する。
 2. `.github/workflows/windows.yml` の `changes` ジョブが持つ path 分類を読み、新しいディレクトリや
    ファイル種別が既存の filter に入るかを確認する。入らないなら filter を同じ変更で更新する。
 3. 変更する job の名前が branch ruleset の required check に含まれるかを
-   `docs/dev-infrastructure-spec.md` §4.9 で確認する。名前を変えると必須チェックが外れる。
+   `docs/build-ci-spec.md` §4.9 で確認する。名前を変えると必須チェックが外れる。
    required check は `Secret scan` と `CI gate` の 2 つで、`windows.yml` に判定対象のジョブを
    足すときは `ci-gate` の `needs` にも加える。加えないとそのジョブの失敗が素通りする。
    advisory ジョブ（`cpp-tidy`、`windows-coverage`）は `needs` に入れない。

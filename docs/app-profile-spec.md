@@ -202,6 +202,10 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 下位の `on` / `off` を解除し、`bracketPairingApps` / `bracketPairingAppPolicy` の判定に戻す。
 TIP は共通 resolver の不変スナップショットからこのフィールドを解決し、Host への接続なしで適用する。
 
+`predictionEnabled` も TIP が同じスナップショットから入力先（§3）について解決し、予測を照会するか、届いた予測を
+表示するかを決める。どの層も持たなければグローバル `predictionEnabled` を継承する。適用の規則は
+`docs/legacy-parity-spec.md` §3.6、入力インジケーターのメニューでの表示は `docs/tsf-deep-integration-spec.md` §4.5 に従う。
+
 ### 4.2 フィールド制約と backend 優先順位
 
 **`candidateTagBoosts` の値域**: 各倍率は `[1.0, 3.0]`（schema で `minimum: 1.0` /

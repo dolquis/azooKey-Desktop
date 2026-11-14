@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "azookey/tsf/TipLocalSettings.h"
 
@@ -154,6 +155,31 @@ TEST_F(LocalSettingsTest, PredictionSetByAppProfileReloadsWithTheFile) {
   ASSERT_TRUE(WaitUntil(set));
   Write("[");
   ASSERT_TRUE(WaitUntil([&] { return !set(); }));
+}
+
+// DEV-1985: an app's predictions follow the profilesByApp layer that sets
+// predictionEnabled for it, or else the global value.
+TEST_F(LocalSettingsTest, PredictionSettingForPrefersTheAppsLayerOverTheGlobalValue) {
+  const auto setting = [&](const azookey::core::ForegroundApp& app) {
+    const auto resolved = reader.PredictionSettingFor(app, azookey::core::EqualAsciiAppName);
+    return std::pair{resolved.enabled, resolved.by_app_profile};
+  };
+  const azookey::core::ForegroundApp notepad{"notepad.exe", "Notepad", true};
+  const azookey::core::ForegroundApp editor{"code.exe", "Editor", true};
+  const azookey::core::ForegroundApp other{"other.exe", "Other", true};
+  Write(R"({"predictionEnabled":true,"profilesByApp":{)"
+        R"("NOTEPAD.EXE":{"predictionEnabled":false},"Editor":{"predictionEnabled":false}}})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(setting(notepad), std::pair(false, true));
+  EXPECT_EQ(setting(editor), std::pair(false, true)) << "the window class layer";
+  EXPECT_EQ(setting(other), std::pair(true, false));
+  // A profile without the field inherits the global value; "default" sets it.
+  Write(R"({"predictionEnabled":false,"profilesByApp":{)"
+        R"("notepad.exe":{"promptPrefix":"x"},"default":{"predictionEnabled":true}}})");
+  ASSERT_TRUE(WaitUntil([&] { return setting(notepad) == std::pair(true, true); }));
+  EXPECT_EQ(setting(other), std::pair(true, true));
+  Write(R"({"predictionEnabled":false})");
+  ASSERT_TRUE(WaitUntil([&] { return setting(notepad) == std::pair(false, false); }));
 }
 
 TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndependentlyOfUiSwitch) {

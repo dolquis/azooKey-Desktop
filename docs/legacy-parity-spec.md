@@ -890,8 +890,8 @@ Esc などで予測を消すと、問い合わせも再試行も捨てるので�
 - Shift+Tab: 第二候補
 - 候補窓の応答を待つ間（§1.2）の Tab・Shift+Tab は、TIP が消費して何もしない（予測を受理せず、アプリへも渡さず、窓が開いた後に再生もしない。DEV-1938）
 - Esc: 入力中（preedit か romaji 保留がある）は予測窓を閉じて入力を取り消す（§1.2 の Cancel と同じ。
-  1 回で終わる）。入力中でなく窓だけが残っている場合は窓を閉じるだけ（predictionEnabled=true なら
-  次の入力更新で再表示）
+  1 回で終わる）。入力中でなく窓だけが残っている場合は窓を閉じるだけ（入力先のアプリで予測変換が
+  有効（§3.6）なら次の入力更新で再表示）
 - マウス左クリック: 該当候補を受理。5 件のどれでも受理できる
 
 予測モードの 1 件目の行には Tab、2 件目の行には Shift+Tab の手掛かりを出す。3〜5 件目には
@@ -934,15 +934,21 @@ OFF のときは候補窓の予測モードを出さない。候補窓は変換�
 OFF で、Tab は予測を受理しない。Windows 版は既定 ON で、予測窓があるときの Tab で第 1 候補を受理する
 （§3.4）。Microsoft IME も予測入力が既定 ON で、Tab で予測を選ぶ操作が近い。
 
+アプリ別の `profilesByApp.<アプリ>.predictionEnabled`（`docs/app-profile-spec.md` §4.1）は、全体の値より優先する。
+TIP は予測を照会する前と、届いた予測を表示する前に、入力先のアプリ（同 §3）について
+同 §5 の解決順で値を決める。そのアプリに当たる層のどれもこのフィールドを持たなければ、全体の値に従う。
+アプリ別の値は予測を出すかだけを決め、プライバシー判定が予測を禁じているときに許すことはない。
+
 ### 3.7 診断ログ
 
 予測が窓に届くまでの経過は `AZOOKEY_LOG` の info ログ `prediction_state` で追える。
-`reason` は止まった箇所または結果を表し、照会しない理由（`disabled` / `not_allowed` /
+`reason` は止まった箇所または結果を表し、照会しない理由（`disabled` / `app_profile_disabled` / `not_allowed` /
 `no_context` / `keyboard_closed` / `alphanumeric_mode` / `candidate_window` / `not_composing` /
 `secure_input`）、照会の経過（`queued` / `host_unsupported` / `response_dropped`）、
 応答の破棄（`stale_reading` / `stale_context` / `stale_generation`）、
 表示の結果（`no_acceptable_prediction` / `window_create_failed` / `window_show_failed` / `shown`。
 1 秒キャッシュからの表示を含む）のいずれかをとる。
+`disabled` は全体の `predictionEnabled` が、`app_profile_disabled` は入力先のアプリのプロファイル（§3.6）が予測を止めたことを表す。
 `window_create_failed` と `window_show_failed` は失敗した初期化・描画の段階 `stage` と `hresult` を持つ。
 各 `reason` は composition ごとに 1 回だけ出し、打鍵ごとには出さない。
 composition の開始と TIP の deactivate で記録済みの `reason` を戻すので、次の入力でも同じ `reason` を出す。

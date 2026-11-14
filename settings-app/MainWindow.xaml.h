@@ -33,6 +33,9 @@ struct MainWindow : MainWindowT<MainWindow> {
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void OpenCrashReportsButton_Click(Windows::Foundation::IInspectable const& sender,
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  // Opens %LOCALAPPDATA%\azooKey\logs\ (settings-app-spec §3.4, §3.7).
+  void OpenLogFolderButton_Click(Windows::Foundation::IInspectable const& sender,
+                                 Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspectable const& sender,
                                          Microsoft::UI::Xaml::RoutedEventArgs const& args);
   // "辞書" pane: opens the user dictionary tab of "学習".

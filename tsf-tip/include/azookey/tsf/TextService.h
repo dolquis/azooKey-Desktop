@@ -86,6 +86,8 @@ std::vector<ipc::CandidateField> FilterAcceptablePredictions(
 // Where a prediction stopped or ended; logged once per composition each.
 enum class PredictionLogReason : uint8_t {
   Disabled,
+  // The focused app's profilesByApp layer sets predictionEnabled to false.
+  AppProfileDisabled,
   NotAllowed,
   NoContext,
   KeyboardClosed,

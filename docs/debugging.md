@@ -195,6 +195,9 @@ Host の stderr も従来どおり残る。
 各値の契約は `auto-word-registration-spec.md` §5-1 を参照する。
 更新の確認は `event=update_check` の `reason` と、`settings.json` と同じディレクトリの
 `update-status.json` で確認する。各値の契約は `sideload-packaging-spec.md` §6.1 を参照する。
+更新のトーストが出ないときは `event=update_notification` の `reason` と、同じディレクトリの
+`update-notification.json`（通知済みの版）を見る。`failed` が続くときは、スタートメニューの
+ショートカットの AppID（`Get-StartApps`）を確かめる。各値の契約は同 §6.3 を参照する。
 
 本文を確認する場合は Debug ビルドに加え、`AZOOKEY_LOG_BODY=1`、非 secure の入力、
 `privacy.redactLogs=false`、詳細ログを許可するモードがすべて必要となる。

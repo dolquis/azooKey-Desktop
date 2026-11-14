@@ -362,7 +362,45 @@ UpdateCheckStatus UpdateChecker::CheckOnceImpl() {
   if (!release) return finish(UpdateCheckStatus::Failed, std::nullopt);
   const auto latest = ParseReleaseVersion(release->version);
   const bool newer = latest && CompareReleaseVersions(*latest, *current) > 0;
-  return finish(newer ? UpdateCheckStatus::UpdateAvailable : UpdateCheckStatus::UpToDate, release);
+  const auto status =
+      finish(newer ? UpdateCheckStatus::UpdateAvailable : UpdateCheckStatus::UpToDate, release);
+  // A check cancelled while its record was written is not notified.
+  if (status == UpdateCheckStatus::UpdateAvailable && !cancelled()) NotifyOnce(*release);
+  return status;
+}
+
+std::optional<std::string> UpdateChecker::NotifiedVersion() const {
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(options_.notification_path, ec);
+  if (ec || size == 0 || size > kMaxStatusBytes) return std::nullopt;
+  std::ifstream input(options_.notification_path, std::ios::binary);
+  std::string text(static_cast<size_t>(size), '\0');
+  if (!input.read(text.data(), static_cast<std::streamsize>(size))) return std::nullopt;
+  const auto root = ipc::json::Parse(text);
+  if (!root || !root->IsObject() || root->GetUInt("version") != 1u) return std::nullopt;
+  return root->GetString("notifiedVersion");
+}
+
+void UpdateChecker::NotifyOnce(const AvailableRelease& release) {
+  // The notification opens the release page, so a release without one is not notified.
+  if (!dependencies_.notify_update || options_.notification_path.empty() || release.url.empty()) {
+    return;
+  }
+  if (NotifiedVersion() == release.version) return;
+  bool shown = false;
+  // A notification sink must not terminate the Host worker.
+  try {
+    shown = dependencies_.notify_update(release);
+  } catch (...) {
+    shown = false;
+  }
+  if (!shown) return;
+  ipc::json::Object record;
+  record["version"] = ipc::json::Value(int64_t{1});
+  record["notifiedVersion"] = ipc::json::Value(release.version);
+  // A failed write notifies the same version again at the next check rather than never.
+  (void)learning::WriteTextFileAtomically(options_.notification_path,
+                                          ipc::json::Stringify(ipc::json::Value(record)));
 }
 
 }  // namespace azookey::host

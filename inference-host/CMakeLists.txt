@@ -26,6 +26,7 @@ add_library(azookey_host STATIC
   src/HttpDownloader.cpp
   src/TrendingWordFetcher.cpp
   src/UpdateChecker.cpp
+  src/UpdateToast.cpp
   src/InferenceEngine.cpp
   src/InferenceEngineLearningData.cpp
   src/LearningDataManager.cpp
@@ -69,6 +70,9 @@ set_source_files_properties(src/EnglishDictionaryFiles.cpp
 # BackendSelector.cpp includes <initguid.h>, which must not reach other sources.
 set_source_files_properties(src/BackendSelector.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# UpdateToast.cpp includes <Windows.h> and the Windows Runtime headers.
+set_source_files_properties(src/UpdateToast.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(AZOOKEY_NEOLOGD_PIN "${PROJECT_SOURCE_DIR}/dictbuild/packs/neologd_lexicon.manifest.json")
 set(AZOOKEY_NEOLOGD_PIN_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/NeologdPackPin.cpp")
@@ -109,7 +113,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp crypt32 user32)
+  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp crypt32 user32 runtimeobject)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)

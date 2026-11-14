@@ -60,6 +60,7 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/TrendingWordFetcher.h"
 #include "azookey/host/UpdateChecker.h"
+#include "azookey/host/UpdateToast.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -1019,6 +1020,8 @@ int main(int argc, char** argv) {
   azookey::host::UpdateCheckerOptions update_options;
   update_options.current_version = AZOOKEY_PRODUCT_VERSION_STRING;
   update_options.status_path = user_paths->settings_path.parent_path() / "update-status.json";
+  update_options.notification_path =
+      user_paths->settings_path.parent_path() / "update-notification.json";
   azookey::host::UpdateCheckDependencies update_dependencies;
   // An invalid reload applies no config, so the checker also asks the published privacy policy:
   // that turns secure (fail closed) for an invalid or unreadable settings.json.
@@ -1057,6 +1060,26 @@ int main(int argc, char** argv) {
            {"reason", SafeLogText(result)}});
     }
   };
+  // One toast per newer version; a click opens the release page the checker already limited to
+  // the repository's releases (sideload-packaging-spec section 6.3).
+  update_dependencies.notify_update =
+      [&runtime_log](const azookey::host::AvailableRelease& release) {
+        using azookey::host::UpdateToastResult;
+        const auto result = azookey::host::ShowUpdateToast(release.version, release.url);
+        if (result == UpdateToastResult::Failed) {
+          runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "update_notification",
+                          {{"result", SafeLogText("error")},
+                           {"reason", SafeLogText("failed")},
+                           {"error_code", SafeLogText("business")}});
+        } else {
+          runtime_log.Log(
+              azookey::logging::RuntimeLogLevel::Info, "update_notification",
+              {{"result", SafeLogText("ok")},
+               {"reason",
+                SafeLogText(result == UpdateToastResult::Shown ? "shown" : "disabled_by_system")}});
+        }
+        return result == UpdateToastResult::Shown;
+      };
   azookey::host::UpdateChecker update_checker(std::move(update_options),
                                               std::move(update_dependencies));
   const auto apply_update_check_settings =

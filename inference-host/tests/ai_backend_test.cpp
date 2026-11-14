@@ -124,6 +124,44 @@ TEST(AiBackendTest, AnomaliesNeverUseTheLocalPathAndCarryThePersonaHint) {
   EXPECT_NE(body.find("quote"), std::string::npos);
 }
 
+// DEV-1963: the selection transform (M16) is remote-only too, and the free
+// mode carries the user's instruction.
+TEST(AiBackendTest, TransformNeverUsesTheLocalPathAndCarriesTheInstruction) {
+  unsigned local_calls = 0;
+  AiLocalTransform local = [&](const auto&, const auto*, auto) {
+    ++local_calls;
+    return AiTransformResult{true, "変換", AiErrorClass::None};
+  };
+  std::string body;
+  AiBackend backend([&](const auto&, const std::string& value, const auto*, auto) {
+    body = value;
+    return AiHttpResponse{200, Reply(R"({"result":"おはようございます。"})")};
+  });
+  AiTransformRequest request;
+  request.task = AiTask::Transform;
+  request.mode = "free";
+  request.prompt = "日本語に翻訳";
+  request.text = "Good morning.";
+  request.ai_allowed = true;
+  request.external_allowed = false;
+  EXPECT_EQ(backend.Transform(request, Remote(), nullptr, local).error_class,
+            AiErrorClass::Disabled);
+  auto local_options = Remote();
+  local_options.backend = "local-zenzai";
+  request.external_allowed = true;
+  EXPECT_EQ(backend.Transform(request, local_options, nullptr, local).error_class,
+            AiErrorClass::Disabled);
+  EXPECT_EQ(local_calls, 0u);
+  EXPECT_TRUE(body.empty());
+
+  const auto result = backend.Transform(request, Remote(), nullptr, local);
+  EXPECT_TRUE(result.ok);
+  EXPECT_EQ(result.result, "おはようございます。");
+  EXPECT_NE(body.find("日本語に翻訳"), std::string::npos);
+  EXPECT_NE(body.find("Good morning."), std::string::npos);
+  EXPECT_EQ(local_calls, 0u);
+}
+
 TEST(AiBackendTest, SecureAndDisabledNeverReachEitherBackend) {
   unsigned calls = 0;
   AiBackend backend([&](const auto&, const auto&, const auto*, auto) {

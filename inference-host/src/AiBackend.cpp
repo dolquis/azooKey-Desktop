@@ -149,7 +149,10 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
   if (!options.include_context) request.left_context.clear();
   const bool local_path = options.backend == "local-zenzai" || !request.external_allowed ||
                           request.task == AiTask::Lint;
-  if (local_path && request.task == AiTask::Anomalies) return Failure(AiErrorClass::Disabled);
+  // Anomaly detection and the selection transform (M16) are remote-only: the
+  // local converter turns kana into kanji and has no model for either.
+  if (local_path && (request.task == AiTask::Anomalies || request.task == AiTask::Transform))
+    return Failure(AiErrorClass::Disabled);
   const auto deadline =
       std::chrono::steady_clock::now() +
       std::chrono::milliseconds(local_path ? (request.task == AiTask::Cleanup ? 30000 : 800)

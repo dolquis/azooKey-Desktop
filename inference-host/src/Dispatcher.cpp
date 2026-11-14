@@ -761,6 +761,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleQueryPersona(req);
     case ipc::MessageType::DetectAnomalies:
       return HandleDetectAnomalies(req);
+    case ipc::MessageType::TransformSelectedText:
+      return HandleTransformSelectedText(req);
     case ipc::MessageType::ResolveNewWord:
       return HandleResolveNewWord(req);
     default:
@@ -887,6 +889,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = std::string(ipc::kLearningDataErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildDetectAnomaliesResponse(r));
     }
+    case ipc::MessageType::TransformSelectedText: {
+      // The selection never reaches a backend before the handshake.
+      ipc::TransformSelectedTextResponse r;
+      r.error = std::string(ipc::kTransformErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildTransformSelectedTextResponse(r));
+    }
     case ipc::MessageType::ListModels: {
       ipc::ListModelsResponse r;
       r.ok = false;
@@ -945,6 +953,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   // mixed_english = M63 (mixed-english-auto-conversion-spec section 9.3).
   // raw_keys = M55: the TIP sends QueryCandidates.raw_keys only to a Host that
   // advertises it (typo-correction-learning-spec section 12.13).
+  // transform_selected_text = M16: the TIP sends TransformSelectedText only to
+  // a Host that advertises it (ai-backend-spec section 4.1).
   res.capabilities = {"oob_cancel",
                       "commit_segments",
                       "query_live_conversion",
@@ -960,7 +970,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "persona",
                       "detect_anomalies",
                       "mixed_english",
-                      "raw_keys"};
+                      "raw_keys",
+                      "transform_selected_text"};
   // DEV-1821 (model-management-spec section 4.4).
   if (config_.catalog_fetch) {
     res.capabilities.push_back("fetch_catalog_model");
@@ -1796,6 +1807,79 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   if (!findings) return fail(ipc::kAnomalyErrorBackendFailed);
   res.findings = std::move(*findings);
   return MakeResponse(req, ipc::BuildDetectAnomaliesResponse(res));
+}
+
+// M16 Magic Conversion (ai-backend-spec section 4.1, DEV-1963). The request's
+// privacy flags, the Host's privacy setting and its AI settings must all let
+// the selection out: this is the Host half of the two-stage gate
+// (privacy-and-secure-input-spec section 5.1.1), so a secure request reaches
+// neither backend. Nothing is learned or kept; the TIP replaces the selection
+// only after the user applies the result.
+std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::Envelope& req) {
+  ipc::TransformSelectedTextResponse res;
+  const auto reply = [&] {
+    return MakeResponse(req, ipc::BuildTransformSelectedTextResponse(res));
+  };
+  // Never the selection, the prompt or the result: only the class. A failure
+  // without a class had no usable answer (AiErrorClassToWire has no name for None).
+  const auto fail = [&](AiErrorClass error) {
+    if (error == AiErrorClass::None) error = AiErrorClass::Parse;
+    DispatcherLogger(runtime_logger_)
+        .Log(logging::RuntimeLogLevel::Warn, "transform_selected_text_failed",
+             {{"request_id", req.request_id}, {"error_class", static_cast<uint64_t>(error)}});
+    res.error_class = AiErrorClassToWire(error);
+    return reply();
+  };
+  const auto parsed = ipc::ParseTransformSelectedTextRequest(req.payload_json);
+  if (!parsed) {
+    res.error = std::string(ipc::kTransformErrorInvalidRequest);
+    return reply();
+  }
+  // As for predictions, the user's secure setting blocks it; SafeMode's
+  // learning stop does not.
+  if (parsed->secure ||
+      (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure))
+    return fail(AiErrorClass::BlockedBySecure);
+
+  AiBackendOptions options;
+  // Without settings there is no consent to send anything anywhere.
+  core::AiPrivacy ai_privacy{false, false};
+  {
+    std::lock_guard lock(*config_.update_config_mutex);
+    if (settings_store_) {
+      const auto& settings = settings_store_->settings();
+      options.backend = settings.ai_backend;
+      options.endpoint = settings.open_ai_api_endpoint;
+      options.api_key = settings.open_ai_api_key;
+      options.model = settings.open_ai_model;
+      options.timeout_ms = settings.open_ai_timeout_ms;
+      options.include_context = settings.include_context_in_ai_transform;
+      ai_privacy = settings.ai_privacy;
+    }
+  }
+  if (!parsed->ai_backend.empty()) options.backend = parsed->ai_backend;
+  AiTransformRequest transform;
+  transform.task = AiTask::Transform;
+  transform.mode = parsed->mode;
+  transform.prompt = parsed->prompt;
+  transform.text = parsed->selection;
+  transform.left_context = parsed->context;
+  transform.ai_allowed = ai_privacy.ai && parsed->ai_allowed;
+  transform.external_allowed = ai_privacy.external && parsed->external_ai_allowed;
+
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) return fail(AiErrorClass::ServerError);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
+  // The selection is not kana: the local converter has nothing to offer, so
+  // AiBackend refuses the local path for this task.
+  const auto result = config_.ai_backend->Transform(transform, options, cancel.get());
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  completion.Complete();
+  // The TIP has stopped waiting for a canceled request.
+  if (canceled || result.error_class == AiErrorClass::Canceled) return std::nullopt;
+  if (!result.ok) return fail(result.error_class);
+  res.result = result.result;
+  return reply();
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {

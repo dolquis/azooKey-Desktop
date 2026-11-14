@@ -17,7 +17,7 @@ enum class UpdateToastResult : uint8_t { Shown, DisabledBySystem, Failed };
 struct UpdateToastOutcome {
   UpdateToastResult result{UpdateToastResult::Failed};
   // The step that decided the result, a fixed name for the log: input, convert, runtime,
-  // activate, load_xml, notifier, setting or show.
+  // activate, load_xml, notifier, setting or show (platform off Windows).
   const char* stage{"input"};
   // The failing HRESULT, 0 unless result is Failed by a Windows Runtime call.
   int32_t hresult{0};

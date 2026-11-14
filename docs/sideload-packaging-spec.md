@@ -802,8 +802,8 @@ Host（`inference-host/src/UpdateToast.cpp`）は、確認で新しい版を見�
   確認はしても通知しない（並んで動いたときに同じ版を二度知らせないため）。
 - Host は各表示の結果を RuntimeLog の `update_notification` イベントに、固定の `reason`
   （`shown` / `disabled_by_system` / `failed`）で記録する。`failed` には、失敗した段階の固定名
-  `stage`（`input` / `convert` / `runtime` / `activate` / `load_xml` / `notifier` / `show`）と HRESULT の数値
-  `hresult` を添える。版と URL は記録しない。
+  `stage`（`input` / `convert` / `runtime` / `activate` / `load_xml` / `notifier` / `show`）と符号付きの
+  HRESULT の数値 `hresult` を添える。版と URL は記録しない。
 
 実機での表示・クリック・アップグレード後のショートカットの確認は Human Gate（DEV-2075）とする。
 

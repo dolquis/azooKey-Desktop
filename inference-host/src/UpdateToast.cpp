@@ -145,7 +145,7 @@ UpdateToastOutcome ShowUpdateToast(std::string_view version, std::string_view ur
   if (FAILED(hr)) return failed("show", hr);
   return {UpdateToastResult::Shown, "show", 0};
 #else
-  return {};
+  return {UpdateToastResult::Failed, "platform", 0};
 #endif
 }
 

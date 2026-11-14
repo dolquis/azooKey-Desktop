@@ -141,7 +141,7 @@
   <data name="UpdateInstall_Error_Other" xml:space="preserve"><value>ダウンロードできませんでした。</value></data>
   <data name="UpdateInstall_VerifyFailed" xml:space="preserve"><value>ダウンロードしたファイルを検証できませんでした。もう一度ダウンロードしてください。</value></data>
   <data name="UpdateInstall_ConfirmTitle" xml:space="preserve"><value>更新をインストールしますか</value></data>
-  <data name="UpdateInstall_ConfirmBody" xml:space="preserve"><value>管理者権限の確認が表示されます。インストールの間、IME の変換は一時的に使えなくなります。入力中のアプリがあると、Windows の再起動が必要になることがあります。</value></data>
+  <data name="UpdateInstall_ConfirmBody" xml:space="preserve"><value>管理者権限の確認が表示されます。インストールの間、IME の変換は一時的に使えなくなります。多くの場合、更新の完了には Windows の再起動が必要です。</value></data>
   <data name="UpdateInstall_ConfirmVulkan" xml:space="preserve"><value>Vulkan アドオンは、この更新では更新されません。リリースページから、アドオンも同じバージョンに更新してください。</value></data>
   <data name="UpdateInstall_ConfirmPrimary" xml:space="preserve"><value>インストール</value></data>
   <data name="UpdateInstall_ConfirmClose" xml:space="preserve"><value>キャンセル</value></data>

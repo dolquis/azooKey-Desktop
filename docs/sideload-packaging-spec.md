@@ -830,7 +830,7 @@ Host は `msiexec` の終了を待てない（MSI が `HKLM\SOFTWARE\azooKey\Hos
 supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
 
 - 「インストール」を押すと、管理者権限の確認が出ること、適用の間は変換が使えないこと、
-  入力中のアプリがあると再起動が要ることがあることを確認のダイアログで示す。Vulkan アドオンが
+  多くの場合は Windows の再起動で完了することを確認のダイアログで示す。Vulkan アドオンが
   導入されているとき（`HKLM\SOFTWARE\azooKey\VulkanAddon` がある）は、アドオンはこの更新では
   変わらないので、リリースページからアドオンも同じ版に更新するよう案内する。アドオンも続けて
   適用する形は DEV-2081 とする。
@@ -850,7 +850,10 @@ supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
   古い TIP と新しい Host が組み合わさる。その間にプロトコルの版がずれると Handshake が断られ、
   TIP はローカルの変換に落ちる。
 - `3010` では、自動で再起動せず、「再起動が必要」を示して同意を求める。同意したときだけ
-  再起動する（`InitiateShutdownW`）。
+  再起動する（`InitiateShutdownW`）。適用の間も設定アプリ自身の exe と DLL は使用中であり、
+  入力中のアプリは TIP の DLL を読み込んでいる。MSI は `MSIRESTARTMANAGERCONTROL=DisableShutdown`
+  でそれらを閉じさせない（`pkg/msi/Package.wxs`）ので、使用中のファイルの置き換えは再起動まで延び、終了コードは
+  ほとんどの場合 `3010` になる見込みである（実際の値は DEV-2075 で記録する）。
 
 実機での昇格・適用・3010・Host の復帰の確認は Human Gate（DEV-2075）とする。
 

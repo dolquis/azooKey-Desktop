@@ -88,7 +88,10 @@ TEST(UpdateInstallerTest, OnlyAFileWithTheExpectedHashOpensAndItStaysLockedWhile
 // renamed while the file in it is open, not the junction, which could be re-pointed.
 TEST(UpdateInstallerTest, AJunctionAmongTheParentsIsResolvedBeforeMsiexecGetsThePath) {
   TempDirectory temp;
-  const auto real = temp.path() / "real";
+  // real sits one level below an intermediate directory, so both its parent and grandparent of
+  // the file can be tried below.
+  const auto middle = temp.path() / "middle";
+  const auto real = middle / "real";
   const auto link = temp.path() / "link";
   std::filesystem::create_directories(real);
   { std::ofstream(real / "azooKey-1.2.3-x64.msi", std::ios::binary) << "abc"; }
@@ -105,7 +108,14 @@ TEST(UpdateInstallerTest, AJunctionAmongTheParentsIsResolvedBeforeMsiexecGetsThe
     EXPECT_EQ(package->path().native().find(L"\\link\\"), std::wstring::npos)
         << package->path().string();
     EXPECT_EQ(package->path().filename(), std::filesystem::path(L"azooKey-1.2.3-x64.msi"));
+    // The resolved path keeps naming the verified file: while it is open, neither the directory
+    // holding it nor that directory's parent can be renamed and replaced.
+    EXPECT_FALSE(MoveFileExW(real.c_str(), (middle / "real-moved").c_str(), 0));
+    EXPECT_FALSE(MoveFileExW(middle.c_str(), (temp.path() / "middle-moved").c_str(), 0));
+    EXPECT_TRUE(std::filesystem::exists(real / "azooKey-1.2.3-x64.msi"));
   }
+  // Closed: the directories can be renamed again (the assertions above test the open handle).
+  EXPECT_TRUE(MoveFileExW(middle.c_str(), (temp.path() / "middle-moved").c_str(), 0));
   std::error_code ec;
   std::filesystem::remove(link, ec);  // Removes the junction, not its target.
 }

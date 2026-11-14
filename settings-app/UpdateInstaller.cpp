@@ -27,7 +27,9 @@ bool HasQuote(const std::filesystem::path& path) {
 }
 
 // The final path of an open file in the drive-letter form ("C:\..."), or "\\server\share\..."
-// for a network file, without the "\\?\" prefix msiexec does not need.
+// for a network file, without the "\\?\" prefix msiexec does not need. nullopt when that form
+// does not fit in MAX_PATH, which a path without the prefix cannot exceed; the install then
+// fails its verification instead of handing msiexec a path it may not open.
 std::optional<std::filesystem::path> ResolvedPathOf(HANDLE file) {
   std::wstring buffer(MAX_PATH, L'\0');
   for (int attempt = 0; attempt < 2; ++attempt) {
@@ -39,10 +41,14 @@ std::optional<std::filesystem::path> ResolvedPathOf(HANDLE file) {
       buffer.resize(length);
       constexpr std::wstring_view kUnc = L"\\\\?\\UNC\\";
       constexpr std::wstring_view kLocal = L"\\\\?\\";
-      if (buffer.starts_with(kUnc))
-        return std::filesystem::path(L"\\\\" + buffer.substr(kUnc.size()));
-      if (buffer.starts_with(kLocal)) return std::filesystem::path(buffer.substr(kLocal.size()));
-      return std::filesystem::path(buffer);
+      std::wstring plain = buffer;
+      if (buffer.starts_with(kUnc)) {
+        plain = L"\\\\" + buffer.substr(kUnc.size());
+      } else if (buffer.starts_with(kLocal)) {
+        plain = buffer.substr(kLocal.size());
+      }
+      if (plain.size() >= MAX_PATH) return std::nullopt;
+      return std::filesystem::path(plain);
     }
     buffer.assign(length, L'\0');  // Too small: length is the size it needs.
   }

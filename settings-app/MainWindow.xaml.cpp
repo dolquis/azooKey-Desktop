@@ -446,17 +446,23 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
     }
   } catch (...) {
   }
-  co_await azookey::settings::ResumeForeground(dispatcher);
-  update_downloading_ = false;
-  // Kept only while the pane still offers that version.
-  if (version == update_version_) update_sha256_ = verified_sha;
-  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-  std::wstring text(resources.GetString(winrt::to_hstring(resource)));
-  if (const auto at = text.find(L"{version}"); at != std::wstring::npos) {
-    text.replace(at, 9, winrt::to_hstring(version));
+  // The window may have closed meanwhile: then the dispatcher refuses the resume, or the
+  // controls are gone, and nothing is left to update.
+  try {
+    co_await azookey::settings::ResumeForeground(dispatcher);
+    if (!*alive_) co_return;
+    update_downloading_ = false;
+    // Kept only while the pane still offers that version.
+    if (version == update_version_) update_sha256_ = verified_sha;
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    std::wstring text(resources.GetString(winrt::to_hstring(resource)));
+    if (const auto at = text.find(L"{version}"); at != std::wstring::npos) {
+      text.replace(at, 9, winrt::to_hstring(version));
+    }
+    UpdateInstallText().Text(text);
+    RenderUpdateInstall();
+  } catch (...) {
   }
-  UpdateInstallText().Text(text);
-  RenderUpdateInstall();
 }
 
 winrt::fire_and_forget MainWindow::CancelUpdateDownloadButton_Click(
@@ -475,8 +481,12 @@ winrt::fire_and_forget MainWindow::CancelUpdateDownloadButton_Click(
         azookey::settings::DefaultSettingsIpcOptions(), request);
   } catch (...) {
   }
-  co_await azookey::settings::ResumeForeground(dispatcher);
-  CancelUpdateDownloadButton().IsEnabled(true);
+  try {
+    co_await azookey::settings::ResumeForeground(dispatcher);
+    if (*alive_) CancelUpdateDownloadButton().IsEnabled(true);
+  } catch (...) {
+    // The window closed meanwhile.
+  }
 }
 
 winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(

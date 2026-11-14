@@ -789,7 +789,8 @@ privacy 対応 TIP は handshake に `secure_flag` を広告し、毎 `QueryCand
 
 v1 の `ObserveTypo` IPC に加え、既存 `QueryCandidates` の payload に
 optional フィールドを追加する（エンベロープ schema 自体は変更しない）。payload の正典は
-`ipc/include/azookey/ipc/Payloads.h` の `QueryCandidatesRequest` である（wire key は C++ のメンバ名と同じ）:
+`ipc/include/azookey/ipc/Payloads.h` の `QueryCandidatesRequest` である（wire key は C++ のメンバ名と同じ）。
+次の例は optional フィールドをすべて並べたもので、TIP の要求は `typo_correction_mode` を持たない（下記）:
 
 ```json
 {
@@ -901,7 +902,7 @@ v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正�
 | `typoCorrection.maxReadingHypotheses` | `3` | 1 つの読みから作る §12.2 の補正 hypothesis の上限（1〜8） | 既定 |
 | `typoCorrection.minConfidenceForRanking` | `0.70` | §12.5・§12.11 のしきい値（0〜1） | 既定。2 つの大小が逆（等しいを含む）なら両方を既定 |
 | `typoCorrection.minConfidenceForTopCandidate` | `0.90` | §12.11 のしきい値（0〜1） | 同上 |
-| `typoCorrection.disableInSecretApps` | `true` | secure の入力では補正も学習もしない（§12.11）。schema は `false` を拒否する | Host は `false` を読んでも `true` として扱う |
+| `typoCorrection.disableInSecretApps` | `true` | M55 の適用ゲートが secure の入力で補正を止める（§12.11・§12.12.2）。schema は `false` を拒否する。protocol v1 の Host の候補要求処理はこのキーを読まない（secure の入力の学習は学習ゲートが止め、補正読みは TIP が捨てる） | Host は `false` を読んでも `true` として扱う |
 
 信頼度の 2 キーを除き、各キーは単独で既定へ戻り、不正な値が他のキーを巻き込まない。`typoCorrection` が
 オブジェクトでなければ全体を無いものとして扱う。
@@ -926,7 +927,10 @@ v2 は nested `typoCorrection.*` に集約する。型・既定・範囲の正�
 （破壊的削除はしない）両方を書くのは設定アプリである。「辞書」ペインはファイルが解決する実効値を
 v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_replace`、`enabled` が false なら `off`）、
 ペインでモードを変えた保存では root の `typoCorrectionMode` と `typoCorrection.mode`（`auto_replace` は
-`aggressive`）の両方を書く。`off` 以外を選んだときは、`typoCorrection.enabled` の false も true に戻す。
+`aggressive`）の両方を書く。root はキーの書き込み規則（`docs/settings-app-spec.md` §3.7）に従い、
+ファイルに無く既定値（`suggest`）なら書かない。古い Host もそれを `suggest` と読む。選んだモードが
+`typoCorrection.mode` の v2 の値と同じ v1 の値（`rank` に対する `suggest` など）なら、v2 の値を残す。
+`off` 以外を選んだときは、`typoCorrection.enabled` の false も true に戻す。
 モードを変えない保存は `typoCorrection` をそのまま残すので、ペインの外で設定した `rank` は消えない。
 v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
 その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。

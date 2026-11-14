@@ -1239,6 +1239,105 @@ TEST(PayloadsTest, DetectAnomaliesRoundTripsAndBoundsItsFields) {
   EXPECT_EQ(parsed_failed->error, std::optional<std::string>("blocked"));
 }
 
+// DEV-1963 (ai-backend-spec section 4.1): TransformSelectedText round-trips,
+// fails closed on missing privacy fields and bounds what it carries.
+TEST(PayloadsTest, TransformSelectedTextRoundTripsAndFailsClosed) {
+  using namespace azookey::ipc;
+  TransformSelectedTextRequest request;
+  request.mode = "free";
+  request.prompt = "日本語に翻訳";
+  request.selection = "Good morning.";
+  request.context = "before";
+  request.secure = false;
+  request.ai_allowed = true;
+  request.external_ai_allowed = true;
+  request.ai_backend = "openai";
+  const auto parsed = ParseTransformSelectedTextRequest(BuildTransformSelectedTextRequest(request));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->mode, "free");
+  EXPECT_EQ(parsed->prompt, request.prompt);
+  EXPECT_EQ(parsed->selection, request.selection);
+  EXPECT_EQ(parsed->context, "before");
+  EXPECT_EQ(parsed->max_results, 1u);
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_TRUE(parsed->ai_allowed);
+  EXPECT_TRUE(parsed->external_ai_allowed);
+  EXPECT_EQ(parsed->ai_backend, "openai");
+
+  // Only false goes on the wire, and a request without the flags is secure
+  // with no AI at all.
+  TransformSelectedTextRequest secure_request = request;
+  secure_request.secure = true;
+  const auto secure_wire = json::Parse(BuildTransformSelectedTextRequest(secure_request));
+  ASSERT_TRUE(secure_wire.has_value());
+  EXPECT_FALSE(secure_wire->Find("secure"));
+  const auto defaults =
+      ParseTransformSelectedTextRequest(R"({"mode":"translate","selection":"a"})");
+  ASSERT_TRUE(defaults.has_value());
+  EXPECT_TRUE(defaults->secure);
+  EXPECT_FALSE(defaults->ai_allowed);
+  EXPECT_FALSE(defaults->external_ai_allowed);
+  EXPECT_TRUE(defaults->prompt.empty());
+  EXPECT_TRUE(defaults->context.empty());
+  EXPECT_TRUE(defaults->ai_backend.empty());
+  // External AI is decoded only together with AI.
+  EXPECT_FALSE(ParseTransformSelectedTextRequest(
+                   R"({"mode":"free","selection":"a","external_ai_allowed":true})")
+                   ->external_ai_allowed);
+  EXPECT_EQ(ParseTransformSelectedTextRequest(R"({"mode":"free","selection":"a","max_results":5})")
+                ->max_results,
+            kMaxTransformResults);
+  EXPECT_EQ(ParseTransformSelectedTextRequest(R"({"mode":"free","selection":"a","max_results":0})")
+                ->max_results,
+            1u);
+
+  for (const char* invalid : {R"({"selection":"a"})", R"({"mode":"emoji","selection":"a"})",
+                              R"({"mode":"free"})", R"({"mode":"free","selection":""})",
+                              R"({"mode":"free","selection":"a","ai_backend":"remote"})"}) {
+    EXPECT_FALSE(ParseTransformSelectedTextRequest(invalid).has_value()) << invalid;
+  }
+  TransformSelectedTextRequest oversized = request;
+  oversized.selection = std::string(kMaxTransformSelectionBytes + 1, 'a');
+  EXPECT_FALSE(
+      ParseTransformSelectedTextRequest(BuildTransformSelectedTextRequest(oversized)).has_value());
+  oversized = request;
+  oversized.prompt = std::string(kMaxTransformPromptBytes + 1, 'a');
+  EXPECT_FALSE(
+      ParseTransformSelectedTextRequest(BuildTransformSelectedTextRequest(oversized)).has_value());
+  oversized = request;
+  oversized.context = std::string(kMaxTransformContextBytes + 1, 'a');
+  EXPECT_FALSE(
+      ParseTransformSelectedTextRequest(BuildTransformSelectedTextRequest(oversized)).has_value());
+
+  TransformSelectedTextResponse response;
+  response.result = "おはようございます。";
+  const auto parsed_response =
+      ParseTransformSelectedTextResponse(BuildTransformSelectedTextResponse(response));
+  ASSERT_TRUE(parsed_response.has_value());
+  EXPECT_EQ(parsed_response->result, response.result);
+  EXPECT_FALSE(parsed_response->error_class.has_value());
+  EXPECT_FALSE(parsed_response->error.has_value());
+
+  TransformSelectedTextResponse failed;
+  failed.error_class = "BlockedBySecure";
+  const auto failed_wire = json::Parse(BuildTransformSelectedTextResponse(failed));
+  ASSERT_TRUE(failed_wire.has_value());
+  EXPECT_FALSE(failed_wire->Find("result"));
+  const auto parsed_failed =
+      ParseTransformSelectedTextResponse(BuildTransformSelectedTextResponse(failed));
+  ASSERT_TRUE(parsed_failed.has_value());
+  EXPECT_TRUE(parsed_failed->result.empty());
+  EXPECT_EQ(parsed_failed->error_class, std::optional<std::string>("BlockedBySecure"));
+  EXPECT_EQ(ParseTransformSelectedTextResponse(R"({"error":"not_authenticated"})")->error,
+            std::optional<std::string>(kTransformErrorNotAuthenticated));
+  TransformSelectedTextResponse oversized_response;
+  oversized_response.result = std::string(kMaxTransformResultBytes + 1, 'a');
+  EXPECT_FALSE(
+      ParseTransformSelectedTextResponse(BuildTransformSelectedTextResponse(oversized_response))
+          .has_value());
+  EXPECT_FALSE(ParseTransformSelectedTextResponse("[]").has_value());
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());

@@ -2087,4 +2087,70 @@ std::optional<DetectAnomaliesResponse> ParseDetectAnomaliesResponse(const std::s
   return p;
 }
 
+// -------- TransformSelectedText --------
+
+std::string BuildTransformSelectedTextRequest(const TransformSelectedTextRequest& p) {
+  j::Object o;
+  o.emplace("mode", j::Value(p.mode));
+  o.emplace("prompt", j::Value(p.prompt));
+  o.emplace("selection", j::Value(p.selection));
+  o.emplace("context", j::Value(p.context));
+  o.emplace("max_results", j::Value(static_cast<uint64_t>(p.max_results)));
+  if (!p.secure) o.emplace("secure", j::Value(false));
+  o.emplace("ai_allowed", j::Value(p.ai_allowed));
+  o.emplace("external_ai_allowed", j::Value(p.external_ai_allowed));
+  if (!p.ai_backend.empty()) o.emplace("ai_backend", j::Value(p.ai_backend));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<TransformSelectedTextRequest> ParseTransformSelectedTextRequest(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  TransformSelectedTextRequest p;
+  auto mode = v->GetString("mode");
+  if (!mode ||
+      (*mode != "rewrite" && *mode != "translate" && *mode != "summarize" && *mode != "free"))
+    return std::nullopt;
+  p.mode = std::move(*mode);
+  auto selection = v->GetString("selection");
+  if (!selection || selection->empty() || selection->size() > kMaxTransformSelectionBytes)
+    return std::nullopt;
+  p.selection = std::move(*selection);
+  p.prompt = v->GetString("prompt").value_or(std::string());
+  p.context = v->GetString("context").value_or(std::string());
+  if (p.prompt.size() > kMaxTransformPromptBytes || p.context.size() > kMaxTransformContextBytes)
+    return std::nullopt;
+  p.max_results = static_cast<uint32_t>(std::clamp<uint64_t>(
+      v->GetUInt("max_results").value_or(1), 1, static_cast<uint64_t>(kMaxTransformResults)));
+  p.secure = v->GetBool("secure").value_or(true);
+  p.ai_allowed = v->GetBool("ai_allowed").value_or(false);
+  p.external_ai_allowed = p.ai_allowed && v->GetBool("external_ai_allowed").value_or(false);
+  p.ai_backend = v->GetString("ai_backend").value_or(std::string());
+  if (!p.ai_backend.empty() && p.ai_backend != "none" && p.ai_backend != "openai" &&
+      p.ai_backend != "local-zenzai")
+    return std::nullopt;
+  return p;
+}
+
+std::string BuildTransformSelectedTextResponse(const TransformSelectedTextResponse& p) {
+  j::Object o;
+  if (!p.result.empty()) o.emplace("result", j::Value(p.result));
+  if (p.error_class) o.emplace("error_class", j::Value(*p.error_class));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<TransformSelectedTextResponse> ParseTransformSelectedTextResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  TransformSelectedTextResponse p;
+  p.result = v->GetString("result").value_or(std::string());
+  if (p.result.size() > kMaxTransformResultBytes) return std::nullopt;
+  p.error_class = v->GetString("error_class");
+  p.error = v->GetString("error");
+  return p;
+}
+
 }  // namespace azookey::ipc

@@ -62,6 +62,8 @@ std::string TypeToString(MessageType type) {
       return "QueryCatalogFetch";
     case MessageType::CancelCatalogFetch:
       return "CancelCatalogFetch";
+    case MessageType::TransformSelectedText:
+      return "TransformSelectedText";
     default: return "Unknown";
   }
 }
@@ -101,6 +103,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "FetchCatalogModel") return MessageType::FetchCatalogModel;
   if (value == "QueryCatalogFetch") return MessageType::QueryCatalogFetch;
   if (value == "CancelCatalogFetch") return MessageType::CancelCatalogFetch;
+  if (value == "TransformSelectedText") return MessageType::TransformSelectedText;
   return MessageType::Unknown;
 }
 

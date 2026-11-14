@@ -10889,6 +10889,27 @@ TEST(TsfTipTypoCorrectionTest, RawKeysAreTheLowercaseKeysThatSpellTheReading) {
     ASSERT_EQ(h.service.pending_ipc_reading_for_test(), "に、");
     EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
   }
+  {
+    // The Host reads the keys with the built-in romaji rules only.
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_romaji_table_for_test(azookey::core::CustomRomajiLoader::Parse("ka\tか\n").table);
+    TypeTypoRomaji(h, "KA");
+    ASSERT_EQ(h.service.preedit_kana_, "か");
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  }
+  {
+    // Keys over the bound are not cut but left out.
+    constexpr size_t bound = azookey::ipc::kMaxRawKeysBytes;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    for (size_t i = 0; i < bound; ++i) ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.service.preedit_kana_.size(), std::string("あ").size() * bound);
+    EXPECT_EQ(h.service.pending_ipc_raw_keys_for_test(), std::string(bound, 'a'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.service.preedit_kana_.size(), std::string("あ").size() * (bound + 1));
+    EXPECT_TRUE(h.service.pending_ipc_raw_keys_for_test().empty());
+  }
 }
 
 // M55 section 12.13: QueryCandidates carries raw_keys only to a Host whose

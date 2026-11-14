@@ -4773,9 +4773,23 @@ TEST_F(DispatcherTest, ObserveTypoFollowsLearnPersonalPatterns) {
   observe(7101);
   EXPECT_EQ(typo.size(), 0u);
 
+  // Typo correction off stops it as well, through the same reload, before the
+  // engine config (still suggest here) follows.
+  uint64_t id = 7102;
+  for (const char* off : {R"({"privacy":{"mode":"normal"},"typoCorrection":{"enabled":false}})",
+                          R"({"privacy":{"mode":"normal"},"typoCorrection":{"mode":"off"}})",
+                          R"({"privacy":{"mode":"normal"},"typoCorrectionMode":"off"})"}) {
+    SCOPED_TRACE(off);
+    write_settings(off);
+    ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    ASSERT_EQ(engine.config().typo_correction_mode, "suggest");
+    observe(id++);
+    EXPECT_EQ(typo.size(), 0u);
+  }
+
   write_settings(R"({"privacy":{"mode":"normal"}})");
   ASSERT_EQ(settings_store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
-  observe(7102);
+  observe(id++);
   EXPECT_EQ(typo.size(), 1u);
 
   engine.SetTypoStore(nullptr);

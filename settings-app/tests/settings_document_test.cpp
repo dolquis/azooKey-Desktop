@@ -866,6 +866,25 @@ TEST(SettingsDocumentTest, ThePaneTypoModeFollowsTypoCorrectionAndAChangeWritesB
     EXPECT_EQ(typo->GetString("mode"), item.nested);
     EXPECT_EQ(typo->GetBool("enabled"), item.enabled);
   }
+
+  // The file changed between the load and the save: a choice the file now
+  // resolves to leaves typoCorrection as it is.
+  WriteText(path, R"({"typoCorrection":{"mode":"suggest"}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  auto edited = loaded.settings;
+  edited.values["typoCorrectionMode"] = std::string("off");
+  edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+  ASSERT_TRUE(edited.values.contains("typoCorrectionMode"));
+  WriteText(path, R"({"typoCorrection":{"enabled":false,"mode":"suggest"}})");
+  const auto saved = azookey::settings::SaveSettingsDocument(path, edited);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_EQ(parsed->GetString("typoCorrectionMode"), "off");
+  const auto* typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  EXPECT_EQ(typo->GetString("mode"), "suggest");
+  EXPECT_EQ(typo->GetBool("enabled"), false);
 }
 
 TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {

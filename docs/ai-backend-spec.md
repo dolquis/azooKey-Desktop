@@ -91,7 +91,7 @@ canonical_for: ["AiBackend 契約"]
 
 | 消費者 | トリガ | 送信単位 | 既定 backend 方針 | 同期/非同期 |
 |---|---|---|---|---|
-| **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト（or キャレット段落） | `aiBackend` 設定値（`openai` 可） | 同期（ダイアログ完了で結果反映） |
+| **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト | `aiBackend` 設定値（`openai` 可） | 同期（ダイアログ完了で結果反映） |
 | **M58-C** AI 整文 `ai-cleanup` | 一括変換確定（ユーザー明示） | 蓄積全文かな + 生ローマ字 | `aiBackend` 設定値（`openai` / `local-zenzai`） | 同期（変換確定経路） |
 | **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景、入力を阻害しない） |
 
@@ -231,7 +231,8 @@ TransformSelectedTextResponse:
 
 要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
 `context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
-privacy のフィールドが欠けた要求は、secure で AI 不可の要求として扱う。
+privacy のフィールドが欠けた要求と型が違う要求は、secure で AI 不可の要求として扱う。ほかのフィールドが
+型の違う値で届いた要求は、欠落とみなさず不正な要求とする。
 
 Host の `Dispatcher` は `MessageType::TransformSelectedText` を次の順で処理する。
 
@@ -243,6 +244,7 @@ Host の `Dispatcher` は `MessageType::TransformSelectedText` を次の順で�
    実効 backend が `local-zenzai` なら `Disabled` を返す（ローカルの変換器は選択テキストを変換しない）。
 4. TIP が `Cancel` で取り消した要求には応答しない。
 
+保留中の要求が接続ごとの上限に達していて受け付けられないときは、`error_class=ServerError` を返す。
 Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
 指示・結果を保持せず、学習にも使わない。ログには失敗の分類だけを出す（§7.2）。
 
@@ -347,7 +349,9 @@ wire の値として残す。
 
 ### 5.3 リクエストボディ（chat/completions）
 
-- `messages`: `[{role:"system", content:<§5.2>}, {role:"user", content:<text+prompt+context>}]`。
+- `messages`: `[{role:"system", content:<§5.2>}, {role:"user", content:<text+raw_romaji+context の JSON>}]`。
+  system には §5.2 の指示を置き、`free` ではユーザー指示（`prompt`）もここに含める。user の JSON の値は
+  指示として扱わないよう system で明示する。
 - `model`: `openAiModel`。
 - `stream`: §10 の境界に従う（MVP `false`）。
 - **構造化出力**: legacy と同様に `response_format` で JSON 構造を固定する。
@@ -468,7 +472,7 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
   ヘッダがあれば優先。総待ち時間が §7.1 のタイムアウトを超えない範囲で打ち切る。
 - Host の RequestScheduler が管理するキャンセル通知は、retry 待機を即時解除する。
   待機解除後は再送せず `Canceled` で終了する。
-- M16（同期・ユーザー待ち）は体感を優先し再試行を抑制（最大 1 回 or 即時 fallback）。
+- M16（同期・ユーザー待ち）は体感を優先し、再試行を最大 1 回（合計 2 回試行）に抑える。
   X-3-3（非同期・背景）は静かに諦めてよい（finding 0 件として扱う）。
 
 ### 7.4 fallback 連鎖（消費者別）

@@ -221,7 +221,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
 | 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure（§5.1.1 の定義。SafeMode は含まない）のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
-| Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担う（§5.1.1） |
+| Magic Conversion を無効化 | ダブルタップ検出の実装点は M16 で定める（`docs/legacy-parity-spec.md` §4.1）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担い、Host も `inference-host/src/Dispatcher.cpp::HandleTransformSelectedText` で拒否する（§5.1.1） |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/observability-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |

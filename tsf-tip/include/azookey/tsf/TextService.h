@@ -486,6 +486,10 @@ class TextService final : public ITfTextInputProcessorEx,
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     return ipc_pending_alt_readings_;
   }
+  std::string pending_ipc_raw_keys_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_raw_keys_;
+  }
   bool candidate_window_showing_for_test() const { return candidate_ui_.IsShowing(); }
   size_t window_waiting_key_count_for_test() const { return window_waiting_keys_.size(); }
   // What the IPC worker does with an empty answer to the window query.
@@ -1234,6 +1238,9 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_pending_mixed_english_{false};       // ipc_mtx_
   // ipc_mtx_; DEV-1734: other readings of the pending reading's romaji.
   std::vector<std::string> ipc_pending_alt_readings_;
+  // ipc_mtx_; M55: the pending reading's raw_keys, empty for a secure field.
+  // The user's input: never logged.
+  std::string ipc_pending_raw_keys_;
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   // ipc_mtx_; custom romaji table of the pending batch, set with its raw romaji.
@@ -1276,6 +1283,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // Handshake capability "mixed_english" (M63). Without it the TIP sends no
   // mixed_english and no live-conversion raw_romaji.
   std::atomic<bool> ipc_host_mixed_english_{false};
+  // Handshake capability "raw_keys" (M55, typo-correction-learning-spec section
+  // 12.13). Read where the request is built, after the handshake of the
+  // connection it goes out on; without it the TIP sends no raw_keys.
+  std::atomic<bool> ipc_host_raw_keys_{false};
   // Handshake capability "commit_correction" (DEV-1529); CommitCorrection is
   // sent only to a Host that advertises it.
   std::atomic<bool> ipc_host_commit_correction_{false};
@@ -1597,6 +1608,11 @@ class TextService final : public ITfTextInputProcessorEx,
   // to send with mixed_english for `reading`, or empty when any condition of
   // section 5 fails. `secure` is the request's privacy decision.
   std::string MixedEnglishRawRomajiFor(const std::string& reading, bool secure) const;
+  // M55 (docs/typo-correction-learning-spec.md section 12.13): the typed keys,
+  // lowercase, to send as raw_keys for `reading`. Empty with a custom table,
+  // when the keys no longer spell `reading`, or when they hold anything outside
+  // the section 12.12.1 alphabet or bound, which the Host would drop anyway.
+  std::string RawKeysFor(const std::string& reading) const;
   // DEV-1734 (docs/legacy-parity-spec.md section 5.4): the other readings of the
   // typed romaji's first `max_ambiguous` "nn" + vowel positions, for
   // alt_readings. Empty with a custom table, or when the romaji no longer

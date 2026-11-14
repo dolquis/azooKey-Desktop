@@ -964,7 +964,9 @@ TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
   azookey::host::SettingsStore store(path);
   const auto result = store.Load();
   ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
-  EXPECT_EQ(store.settings().typo_correction_mode, "auto_replace");
+  // typo-correction-learning-spec section 12.14 reads the v1 auto_replace as
+  // aggressive, and the engine still gets the v1 name for it.
+  EXPECT_EQ(store.settings().typo_correction.mode, "aggressive");
   EXPECT_EQ(store.settings().typo_min_count, 5);
   EXPECT_FALSE(store.settings().auto_word.mining_enabled);
   EXPECT_TRUE(store.settings().auto_word.trending_enabled);
@@ -1001,8 +1003,8 @@ TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
   azookey::host::SettingsStore store(path);
   ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
   // An out-of-range or unknown value falls back to the documented default
-  // rather than to an arbitrary one.
-  EXPECT_EQ(store.settings().typo_correction_mode, "suggest");
+  // rather than to an arbitrary one. A v2 mode in the v1 root key is not one.
+  EXPECT_EQ(store.settings().typo_correction.mode, "suggest");
   EXPECT_EQ(store.settings().typo_min_count, 3);
   EXPECT_EQ(store.settings().auto_word.registration_mode, "confirm");
   EXPECT_EQ(store.settings().auto_word.mining_min_count, 3);
@@ -1013,6 +1015,110 @@ TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
   EXPECT_FALSE(config.auto_word_auto_register);
   EXPECT_FALSE(config.auto_word_trending_enabled);
   EXPECT_EQ(config.auto_word_trending_interval_hours, 24u);
+}
+
+// typo-correction-learning-spec section 12.14: a valid typoCorrection.mode wins,
+// otherwise the v1 root key is read in v2 terms, otherwise suggest. The engine
+// gets the v1 names until the M55 correction engine (rank as suggest,
+// aggressive as auto_replace), and enabled false is off whatever the mode.
+TEST(SettingsStoreTest, TypoCorrectionModeMigratesFromTheV1RootKey) {
+  ScopedTempDirectory temp("azookey_settings_typo_correction_migration");
+  const auto path = temp.path() / "settings.json";
+  struct Case {
+    const char* json;
+    const char* mode;
+    const char* engine_mode;
+  };
+  for (const auto& item : {
+           Case{"{}", "suggest", "suggest"},
+           Case{R"({"typoCorrectionMode":"off"})", "off", "off"},
+           Case{R"({"typoCorrectionMode":"auto_replace"})", "aggressive", "auto_replace"},
+           Case{R"({"typoCorrection":{"mode":"aggressive"}})", "aggressive", "auto_replace"},
+           Case{R"({"typoCorrection":{"mode":"rank"},"typoCorrectionMode":"auto_replace"})", "rank",
+                "suggest"},
+           Case{R"({"typoCorrection":{"mode":"off"},"typoCorrectionMode":"auto_replace"})", "off",
+                "off"},
+           Case{R"({"typoCorrection":{"mode":"suggest"},"typoCorrectionMode":"off"})", "suggest",
+                "suggest"},
+           // An empty, unknown or mistyped v2 mode is unset, so the v1 key decides.
+           Case{R"({"typoCorrection":{"mode":""},"typoCorrectionMode":"off"})", "off", "off"},
+           Case{R"({"typoCorrection":{"mode":"auto_replace"},"typoCorrectionMode":"off"})", "off",
+                "off"},
+           Case{R"({"typoCorrection":{"mode":3},"typoCorrectionMode":"auto_replace"})",
+                "aggressive", "auto_replace"},
+           Case{R"({"typoCorrection":{},"typoCorrectionMode":"auto_replace"})", "aggressive",
+                "auto_replace"},
+           Case{R"({"typoCorrection":"aggressive","typoCorrectionMode":"off"})", "off", "off"},
+           Case{R"({"typoCorrection":{"enabled":false,"mode":"aggressive"}})", "aggressive", "off"},
+       }) {
+    SCOPED_TRACE(item.json);
+    WriteText(path, item.json);
+    azookey::host::SettingsStore store(path);
+    ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+    EXPECT_EQ(store.settings().typo_correction.mode, item.mode);
+    const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, store.settings());
+    EXPECT_EQ(config.typo_correction_mode, item.engine_mode);
+    // Off stops the learning too, through the same lock as the privacy policy.
+    EXPECT_EQ(store.LockPrivacyPolicy().typo_learning, std::string(item.engine_mode) != "off");
+    // The Host only reads: the file is left as it was.
+    EXPECT_EQ(ReadText(path), item.json);
+  }
+}
+
+// Section 12.14: each typoCorrection key falls back to its own default, an
+// inverted confidence pair falls back as a pair, and disableInSecretApps cannot
+// be turned off.
+TEST(SettingsStoreTest, TypoCorrectionKeysFallBackOneByOne) {
+  ScopedTempDirectory temp("azookey_settings_typo_correction_fields");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"typoCorrection":{"enabled":false,"learnPersonalPatterns":false,
+    "keyboardLayout":"auto","maxReadingHypotheses":8,"minConfidenceForRanking":0.5,
+    "minConfidenceForTopCandidate":0.8,"disableInSecretApps":false}})");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  auto typo = store.settings().typo_correction;
+  EXPECT_FALSE(typo.enabled);
+  EXPECT_FALSE(typo.learn_personal_patterns);
+  EXPECT_FALSE(store.LockPrivacyPolicy().typo_learning);
+  EXPECT_EQ(typo.max_reading_hypotheses, 8);
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_ranking, 0.5);
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_top_candidate, 0.8);
+  EXPECT_TRUE(typo.disable_in_secret_apps);
+
+  WriteText(path, R"({"typoCorrection":{"enabled":"no","learnPersonalPatterns":0,
+    "keyboardLayout":"jis","maxReadingHypotheses":9,"minConfidenceForRanking":1.5,
+    "minConfidenceForTopCandidate":0.95}})");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  typo = store.settings().typo_correction;
+  EXPECT_TRUE(typo.enabled);
+  EXPECT_TRUE(typo.learn_personal_patterns);
+  EXPECT_TRUE(store.LockPrivacyPolicy().typo_learning);
+  EXPECT_EQ(typo.keyboard_layout, "auto");
+  EXPECT_EQ(typo.max_reading_hypotheses, 3);
+  // The out-of-range one alone falls back while the order still holds.
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_ranking, 0.70);
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_top_candidate, 0.95);
+
+  for (
+      const char* inverted : {
+          R"({"typoCorrection":{"minConfidenceForRanking":0.95,"minConfidenceForTopCandidate":0.9}})",
+          R"({"typoCorrection":{"minConfidenceForRanking":0.8,"minConfidenceForTopCandidate":0.8}})",
+          R"({"typoCorrection":{"minConfidenceForRanking":0.95}})",
+          R"({"typoCorrection":{"minConfidenceForTopCandidate":0.5}})",
+      }) {
+    SCOPED_TRACE(inverted);
+    WriteText(path, inverted);
+    ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    EXPECT_DOUBLE_EQ(store.settings().typo_correction.min_confidence_for_ranking, 0.70);
+    EXPECT_DOUBLE_EQ(store.settings().typo_correction.min_confidence_for_top_candidate, 0.90);
+  }
+  for (const char* hypotheses : {"0", "2.5", "\"3\""}) {
+    SCOPED_TRACE(hypotheses);
+    WriteText(path,
+              std::string(R"({"typoCorrection":{"maxReadingHypotheses":)") + hypotheses + "}}");
+    ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    EXPECT_EQ(store.settings().typo_correction.max_reading_hypotheses, 3);
+  }
 }
 
 TEST(SettingsStoreTest, OfflineModeSuppressesTrendingWithoutChangingRegistrationPreference) {
@@ -1060,7 +1166,16 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   EXPECT_FALSE(store.settings().english.dictionary_enabled);
   EXPECT_EQ(store.settings().english.dictionary_path,
             "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv");
-  EXPECT_EQ(store.settings().typo_correction_mode, "suggest");
+  const auto& typo = store.settings().typo_correction;
+  EXPECT_TRUE(typo.enabled);
+  EXPECT_EQ(typo.mode, "suggest");
+  EXPECT_TRUE(typo.learn_personal_patterns);
+  EXPECT_EQ(typo.keyboard_layout, "auto");
+  EXPECT_EQ(typo.max_reading_hypotheses, 3);
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_ranking, 0.70);
+  EXPECT_DOUBLE_EQ(typo.min_confidence_for_top_candidate, 0.90);
+  EXPECT_TRUE(typo.disable_in_secret_apps);
+  EXPECT_TRUE(store.LockPrivacyPolicy().typo_learning);
   EXPECT_EQ(store.settings().typo_min_count, 3);
   EXPECT_TRUE(store.settings().auto_word.mining_enabled);
   EXPECT_FALSE(store.settings().auto_word.trending_enabled);
@@ -1171,6 +1286,7 @@ TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
       R"("aiBackend":"openai","llmMagicConversion":true,"batchConversionMode":"ai-cleanup",)"
       R"("privacy":{"mode":"normal","redactLogs":false,"aiEnabled":true,"externalAiEnabled":true},)"
       R"("reranker":{"nllRerankEnabled":true},"typoCorrectionMode":"auto_replace",)"
+      R"("typoCorrection":{"enabled":true,"mode":"aggressive","learnPersonalPatterns":true},)"
       R"("autoWordRegistration":{"miningEnabled":true,"trendingEnabled":true},)"
       R"("model":{"enabled":true,"selectedPath":"C:/models/zenzai.gguf","autoLoadOnHostStart":true})";
   WriteText(path, "{" + rest + "}");
@@ -1201,7 +1317,11 @@ TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
   // DEV-1829: learning stops, predictions do not.
   EXPECT_FALSE(settings.privacy_mode_secure);
   EXPECT_FALSE(store.LockPrivacyPolicy().privacy_mode_secure);
-  EXPECT_EQ(settings.typo_correction_mode, "off");
+  // Over the migrated typoCorrection.mode, not only the v1 root key.
+  EXPECT_FALSE(settings.typo_correction.enabled);
+  EXPECT_EQ(settings.typo_correction.mode, "off");
+  EXPECT_FALSE(settings.typo_correction.learn_personal_patterns);
+  EXPECT_FALSE(store.LockPrivacyPolicy().typo_learning);
   EXPECT_FALSE(settings.auto_word.mining_enabled);
   EXPECT_FALSE(settings.auto_word.trending_enabled);
 

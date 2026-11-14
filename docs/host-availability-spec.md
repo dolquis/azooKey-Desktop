@@ -415,7 +415,9 @@ supervisor を介さない手動起動に限られる。解除の手順は `docs
 ロードしない（`model.enabled` と `--model` の指定を無視し、`LoadModel` は
 `error: "safe_mode"` で拒否する）、NLL rerank・`llmMagicConversion`・`aiBackend`
 （`none` 扱い）・`ai-cleanup` の一括変換・外部 AI を止める、学習の書き込みを止める
-（privacy の `secure` と同じ扱い）、`typoCorrectionMode` を `off`、自動単語登録の
+（privacy の `secure` と同じ扱い）、打ち間違え補正を `off`（`typoCorrection` の `enabled` /
+`mode` / `learnPersonalPatterns` を止め、root の `typoCorrectionMode` も効かせない。
+`docs/typo-correction-learning-spec.md` §12.14）、自動単語登録の
 抽出を止める。辞書・既存の学習結果による変換は続ける。
 
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は

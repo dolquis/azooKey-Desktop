@@ -180,6 +180,50 @@ j::Object SanitizeAutoWordRegistration(const j::Object& input,
   return output;
 }
 
+// typo-correction-learning-spec section 12.14, as the Host reads it: an invalid
+// key goes alone, confidences out of order go as a pair (the defaults keep the
+// order), and disableInSecretApps can only be true.
+j::Object SanitizeTypoCorrection(const j::Object& input, std::vector<std::string>* warnings) {
+  const auto is_unit = [](const j::Value& value) {
+    return value.IsNumber() && std::isfinite(value.AsNumber()) && value.AsNumber() >= 0 &&
+           value.AsNumber() <= 1;
+  };
+  j::Object output;
+  for (const auto& [key, value] : input) {
+    bool valid = false;
+    if (key == "enabled" || key == "learnPersonalPatterns")
+      valid = value.IsBool();
+    else if (key == "mode")
+      valid = IsStringEnum(value, {"off", "suggest", "rank", "aggressive"});
+    else if (key == "keyboardLayout")
+      valid = IsStringEnum(value, {"auto"});
+    else if (key == "maxReadingHypotheses")
+      valid = IsInteger(value, 1, 8);
+    else if (key == "minConfidenceForRanking" || key == "minConfidenceForTopCandidate")
+      valid = is_unit(value);
+    else if (key == "disableInSecretApps")
+      valid = value.IsBool() && value.AsBool();
+    if (valid)
+      output.emplace(key, value);
+    else
+      warnings->push_back("typoCorrection." + key +
+                          " was removed because it is unknown or invalid");
+  }
+  const auto confidence = [&output](const char* key, double fallback) {
+    const auto it = output.find(key);
+    return it == output.end() ? fallback : it->second.AsNumber();
+  };
+  if (!(confidence("minConfidenceForRanking", 0.70) <
+        confidence("minConfidenceForTopCandidate", 0.90))) {
+    for (const char* key : {"minConfidenceForRanking", "minConfidenceForTopCandidate"}) {
+      if (output.erase(key) != 0)
+        warnings->push_back(std::string("typoCorrection.") + key +
+                            " was removed because the confidences are out of order");
+    }
+  }
+  return output;
+}
+
 j::Object SanitizeStringMap(const j::Object& input, std::vector<std::string>* warnings) {
   j::Object output;
   for (const auto& [key, value] : input) {
@@ -325,6 +369,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     } else if (key == "autoWordRegistration" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoWordRegistration(value.AsObject(), warnings)));
       continue;
+    } else if (key == "typoCorrection" && value.IsObject()) {
+      output.emplace(key, j::Value(SanitizeTypoCorrection(value.AsObject(), warnings)));
+      continue;
     } else if (key == "autoUpdate" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoUpdate(value.AsObject(), warnings)));
       continue;
@@ -465,6 +512,30 @@ void SetPath(j::Object* root, std::string_view path, j::Value value) {
   (*root)[key] = j::Value(std::move(child));
 }
 
+// The v2 typoCorrection.mode in the v1 names of the "辞書" pane, or nullopt when
+// it is not a v2 mode: rank converts as suggest, aggressive is auto_replace.
+std::optional<std::string> V1TypoCorrectionMode(const j::Object& root) {
+  const auto* v2 = FindPath(root, "typoCorrection.mode");
+  if (!v2 || !IsStringEnum(*v2, {"off", "suggest", "rank", "aggressive"})) return std::nullopt;
+  const auto& value = v2->AsString();
+  return value == "aggressive" ? "auto_replace" : value == "rank" ? "suggest" : value;
+}
+
+// typo-correction-learning-spec section 12.14: the mode the Host converts with,
+// in the v1 names of the "辞書" pane. A valid typoCorrection.mode wins over the
+// root key and typoCorrection.enabled false is off. Nullopt when no key sets it.
+std::optional<std::string> EffectiveTypoCorrectionMode(const j::Object& root) {
+  std::optional<std::string> mode;
+  if (const auto* v1 = FindPath(root, "typoCorrectionMode");
+      v1 && IsStringEnum(*v1, {"off", "suggest", "auto_replace"}))
+    mode = v1->AsString();
+  if (auto v2 = V1TypoCorrectionMode(root)) mode = std::move(v2);
+  if (const auto* enabled = FindPath(root, "typoCorrection.enabled");
+      enabled && enabled->IsBool() && !enabled->AsBool())
+    mode = "off";
+  return mode;
+}
+
 std::optional<SettingValue> FromJson(const SettingField& field, const j::Value& value) {
   std::optional<SettingValue> result;
   switch (field.kind) {
@@ -548,6 +619,9 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
       if (auto value = FromJson(field, *stored)) settings.values.emplace(field.path, *value);
     }
   }
+  // Section 12.14: the pane shows the mode the Host uses, not only the root key.
+  if (const auto mode = EffectiveTypoCorrectionMode(root))
+    settings.values.insert_or_assign("typoCorrectionMode", *mode);
   if (const auto* safe_mode = FindPath(root, "safeMode"); safe_mode && safe_mode->IsObject()) {
     settings.safe_mode_enabled = safe_mode->GetBool("enabled").value_or(false);
     settings.safe_mode_entered_at = safe_mode->GetString("enteredAt").value_or("");
@@ -719,10 +793,29 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   if (write_profiles) {
     root["profilesByApp"] = j::Value(AppProfilesToJson(*settings.profiles_by_app));
   }
+  const auto typo_mode_on_disk = EffectiveTypoCorrectionMode(root).value_or("suggest");
   for (const auto& [setting, value] : settings.values) {
     const auto* field = FindSettingField(setting);
     if (FindPath(root, setting) || value != field->default_value) {
       SetPath(&root, setting, ToJson(value));
+    }
+  }
+  // typo-correction-learning-spec section 12.14: a mode chosen in the pane also
+  // goes to typoCorrection.mode, which this Host reads before the root key the
+  // loop above wrote (an absent root key left at the default stays absent, as
+  // section 3.7 has it, and an older Host reads that the same). A v2 mode the
+  // choice already stands for stays, so rank survives choosing suggest, and
+  // turning it on clears typoCorrection.enabled false, which would keep it off.
+  // A mode the file already resolves to leaves typoCorrection as it is.
+  if (const auto chosen = settings.values.find("typoCorrectionMode");
+      chosen != settings.values.end()) {
+    const auto* mode = std::get_if<std::string>(&chosen->second);
+    if (mode && *mode != typo_mode_on_disk) {
+      if (V1TypoCorrectionMode(root) != *mode)
+        SetPath(&root, "typoCorrection.mode",
+                j::Value(*mode == "auto_replace" ? "aggressive" : *mode));
+      if (*mode != "off" && FindPath(root, "typoCorrection.enabled"))
+        SetPath(&root, "typoCorrection.enabled", j::Value(true));
     }
   }
   if (settings.clear_safe_mode && FindPath(root, "safeMode.enabled")) {

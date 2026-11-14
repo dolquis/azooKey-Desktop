@@ -1986,6 +1986,92 @@ TEST(PayloadsTest, AltReadingsAreOptionalOnQueryCandidates) {
       ParseQueryCandidatesRequest(R"({"reading":"x","alt_readings":"a"})")->alt_readings.empty());
 }
 
+// M55 (typo-correction-learning-spec section 12.13): raw_keys and
+// typo_correction_mode are optional, absent when empty, and an older peer
+// decodes them as empty, which is the v1 behaviour.
+TEST(PayloadsTest, TypoFieldsAreOptionalOnQueryCandidates) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "こうしょう";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto plain = json::Parse(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(plain);
+  EXPECT_FALSE(plain->Find("raw_keys"));
+  EXPECT_FALSE(plain->Find("typo_correction_mode"));
+  request.raw_keys = "kousyou";
+  request.typo_correction_mode = "rank";
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->raw_keys, "kousyou");
+  EXPECT_EQ(parsed->typo_correction_mode, "rank");
+  const auto legacy = ParseQueryCandidatesRequest(R"({"reading":"こうしょう","secure":false})");
+  ASSERT_TRUE(legacy);
+  EXPECT_TRUE(legacy->raw_keys.empty());
+  EXPECT_TRUE(legacy->typo_correction_mode.empty());
+
+  // The four modes of section 12.6 decode as sent; any other value, the v1
+  // auto_replace among them, decodes as unspecified.
+  const auto mode_of = [](const std::string& value) {
+    const auto request =
+        ParseQueryCandidatesRequest(R"({"reading":"x","typo_correction_mode":)" + value + "}");
+    return request ? request->typo_correction_mode : std::string("<parse failed>");
+  };
+  for (const std::string mode : {"off", "suggest", "rank", "aggressive"}) {
+    EXPECT_EQ(mode_of("\"" + mode + "\""), mode);
+  }
+  for (const std::string value : {R"("auto_replace")", R"("Rank")", R"("")", "7", "true"}) {
+    EXPECT_EQ(mode_of(value), "") << value;
+  }
+}
+
+// M55 section 12.12.2: the keys never travel with a secure request, and the
+// decoder drops any that a secure or privacy-less request carries anyway.
+TEST(PayloadsTest, RawKeysNeverTravelWithASecureRequest) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "こうしょう";
+  request.raw_keys = "kousyou";
+  ASSERT_TRUE(request.secure);  // The default.
+  const auto wire = json::Parse(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(wire);
+  EXPECT_FALSE(wire->Find("raw_keys"));
+
+  const auto keys_of = [](const std::string& privacy) {
+    const auto parsed =
+        ParseQueryCandidatesRequest(R"({"reading":"x","raw_keys":"kousyou")" + privacy + "}");
+    return parsed ? parsed->raw_keys : std::string("<parse failed>");
+  };
+  EXPECT_EQ(keys_of(""), "");                      // Missing privacy is secure.
+  EXPECT_EQ(keys_of(R"(,"secure":true)"), "");     // Secure.
+  EXPECT_EQ(keys_of(R"(,"secure":"false")"), "");  // Invalid privacy is secure.
+  EXPECT_EQ(keys_of(R"(,"secure":false)"), "kousyou");
+}
+
+// M55 section 12.12.1: keys over the bound or outside the alphabet are dropped
+// whole rather than cut, so a password or a paste never reaches the Host.
+TEST(PayloadsTest, RawKeysOutsideTheAlphabetOrTheBoundAreDropped) {
+  using namespace azookey::ipc;
+  const auto keys_of = [](const std::string& keys) {
+    const auto parsed = ParseQueryCandidatesRequest(
+        R"({"reading":"x","secure":false,"raw_keys":")" + keys + R"("})");
+    return parsed ? parsed->raw_keys : std::string("<parse failed>");
+  };
+  for (const std::string kept : {"kon'nichiha", "ra-men", "こんにちは", "らーめん"}) {
+    EXPECT_EQ(keys_of(kept), kept);
+  }
+  for (const std::string dropped :
+       {"kana123", "Kousyou", "kou syou", "kou,syou", "カナ", "漢字", "kana\xF0\x9F\x98\x80"}) {
+    EXPECT_EQ(keys_of(dropped), "") << dropped;
+  }
+  EXPECT_EQ(keys_of(std::string(kMaxRawKeysBytes, 'a')), std::string(kMaxRawKeysBytes, 'a'));
+  EXPECT_EQ(keys_of(std::string(kMaxRawKeysBytes + 1, 'a')), "");
+  const auto not_a_string =
+      ParseQueryCandidatesRequest(R"({"reading":"x","secure":false,"raw_keys":7})");
+  ASSERT_TRUE(not_a_string);
+  EXPECT_TRUE(not_a_string->raw_keys.empty());
+}
+
 // M63 section 9: every field is optional, absent when empty / false / None,
 // and an older peer decodes the defaults.
 TEST(PayloadsTest, MixedEnglishRequestFieldsAreOptional) {

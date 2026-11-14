@@ -1291,11 +1291,30 @@ TEST(PayloadsTest, TransformSelectedTextRoundTripsAndFailsClosed) {
                 ->max_results,
             1u);
 
-  for (const char* invalid : {R"({"selection":"a"})", R"({"mode":"emoji","selection":"a"})",
-                              R"({"mode":"free"})", R"({"mode":"free","selection":""})",
-                              R"({"mode":"free","selection":"a","ai_backend":"remote"})"}) {
+  // A present field of the wrong type is malformed, not missing.
+  for (const char* invalid :
+       {R"({"selection":"a"})", R"({"mode":"emoji","selection":"a"})", R"({"mode":"free"})",
+        R"({"mode":"free","selection":""})",
+        R"({"mode":"free","selection":"a","ai_backend":"remote"})", R"({"mode":1,"selection":"a"})",
+        R"({"mode":"free","selection":1})", R"({"mode":"free","selection":"a","prompt":1})",
+        R"({"mode":"free","selection":"a","context":[]})",
+        R"({"mode":"free","selection":"a","ai_backend":1})"}) {
     EXPECT_FALSE(ParseTransformSelectedTextRequest(invalid).has_value()) << invalid;
   }
+  // Privacy flags of the wrong type fall to the closed side.
+  const auto mistyped = ParseTransformSelectedTextRequest(
+      R"({"mode":"free","selection":"a","secure":"false","ai_allowed":"true",)"
+      R"("external_ai_allowed":1})");
+  ASSERT_TRUE(mistyped.has_value());
+  EXPECT_TRUE(mistyped->secure);
+  EXPECT_FALSE(mistyped->ai_allowed);
+  EXPECT_FALSE(mistyped->external_ai_allowed);
+  const auto mistyped_external = ParseTransformSelectedTextRequest(
+      R"({"mode":"free","selection":"a","secure":0,"ai_allowed":true,"external_ai_allowed":"true"})");
+  ASSERT_TRUE(mistyped_external.has_value());
+  EXPECT_TRUE(mistyped_external->secure);
+  EXPECT_TRUE(mistyped_external->ai_allowed);
+  EXPECT_FALSE(mistyped_external->external_ai_allowed);
   TransformSelectedTextRequest oversized = request;
   oversized.selection = std::string(kMaxTransformSelectionBytes + 1, 'a');
   EXPECT_FALSE(

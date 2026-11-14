@@ -2117,8 +2117,17 @@ std::optional<TransformSelectedTextRequest> ParseTransformSelectedTextRequest(
   if (!selection || selection->empty() || selection->size() > kMaxTransformSelectionBytes)
     return std::nullopt;
   p.selection = std::move(*selection);
-  p.prompt = v->GetString("prompt").value_or(std::string());
-  p.context = v->GetString("context").value_or(std::string());
+  // A present field of the wrong type is malformed, not missing: the user's
+  // instruction or the TIP's backend must never silently become the default.
+  const auto text_field = [&](std::string_view key) -> std::optional<std::string> {
+    return v->Find(key) ? v->GetString(key) : std::optional<std::string>(std::string());
+  };
+  auto prompt = text_field("prompt");
+  auto context = text_field("context");
+  auto ai_backend = text_field("ai_backend");
+  if (!prompt || !context || !ai_backend) return std::nullopt;
+  p.prompt = std::move(*prompt);
+  p.context = std::move(*context);
   if (p.prompt.size() > kMaxTransformPromptBytes || p.context.size() > kMaxTransformContextBytes)
     return std::nullopt;
   p.max_results = static_cast<uint32_t>(std::clamp<uint64_t>(
@@ -2126,7 +2135,7 @@ std::optional<TransformSelectedTextRequest> ParseTransformSelectedTextRequest(
   p.secure = v->GetBool("secure").value_or(true);
   p.ai_allowed = v->GetBool("ai_allowed").value_or(false);
   p.external_ai_allowed = p.ai_allowed && v->GetBool("external_ai_allowed").value_or(false);
-  p.ai_backend = v->GetString("ai_backend").value_or(std::string());
+  p.ai_backend = std::move(*ai_backend);
   if (!p.ai_backend.empty() && p.ai_backend != "none" && p.ai_backend != "openai" &&
       p.ai_backend != "local-zenzai")
     return std::nullopt;

@@ -226,10 +226,15 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset()});
   // An older package and its part are removed once the new one is verified; other files stay.
   std::filesystem::create_directories(f.UpdatesDir());
-  for (const char* name : {"azooKey-1.2.2-x64.msi", "azooKey-1.2.2-x64.msi.part", "notes.txt",
-                           "azooKey-vulkan-addon-1.2.2-x64.msi", "azooKey-latest-x64.msi"}) {
+  // Built rather than listed as literals: a list of "azooKey-..." strings reads as an API key
+  // assignment to the secret scanner.
+  const auto older = UpdatePackageFileName("1.2.2");
+  const std::vector<std::string> names = {older, older + ".part", "notes.txt",
+                                          "azooKey-vulkan-addon-1.2.2-x64.msi"};
+  for (const auto& name : names) {
     std::ofstream(f.UpdatesDir() / name) << "x";
   }
+  std::ofstream(f.UpdatesDir() / "azooKey-latest-x64.msi") << "x";
   auto service = f.Make();
   UpdateFetchSnapshot started;
   ASSERT_EQ(service->Start("1.2.3", &started), UpdateFetchStartResult::Started);

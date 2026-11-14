@@ -1,12 +1,16 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "UpdateInstaller.h"
 
@@ -84,6 +88,31 @@ TEST(UpdateInstallerTest, OnlyAFileWithTheExpectedHashOpensAndItStaysLockedWhile
   EXPECT_TRUE(std::filesystem::remove(file, ec)) << ec.message();
 }
 
+// Renames a directory through its own handle with FILE_RENAME_FLAG_POSIX_SEMANTICS. False when
+// the directory cannot be opened for the rename or the rename is refused.
+bool PosixRename(const std::filesystem::path& from, const std::filesystem::path& to,
+                 DWORD* error = nullptr) {
+  HANDLE directory = CreateFileW(from.c_str(), DELETE | SYNCHRONIZE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (directory == INVALID_HANDLE_VALUE) {
+    if (error) *error = GetLastError();
+    return false;
+  }
+  const auto& target = to.native();
+  std::vector<unsigned char> buffer(sizeof(FILE_RENAME_INFO) + target.size() * sizeof(wchar_t));
+  auto* info = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+  info->Flags = FILE_RENAME_FLAG_POSIX_SEMANTICS;
+  info->RootDirectory = nullptr;
+  info->FileNameLength = static_cast<DWORD>(target.size() * sizeof(wchar_t));
+  std::copy(target.begin(), target.end(), info->FileName);
+  const bool renamed = SetFileInformationByHandle(directory, FileRenameInfoEx, info,
+                                                  static_cast<DWORD>(buffer.size()));
+  if (!renamed && error) *error = GetLastError();
+  CloseHandle(directory);
+  return renamed;
+}
+
 // A junction among the parents is resolved: msiexec gets the real directory, which cannot be
 // renamed while the file in it is open, not the junction, which could be re-pointed.
 TEST(UpdateInstallerTest, AJunctionAmongTheParentsIsResolvedBeforeMsiexecGetsThePath) {
@@ -112,10 +141,28 @@ TEST(UpdateInstallerTest, AJunctionAmongTheParentsIsResolvedBeforeMsiexecGetsThe
     // holding it nor that directory's parent can be renamed and replaced.
     EXPECT_FALSE(MoveFileExW(real.c_str(), (middle / "real-moved").c_str(), 0));
     EXPECT_FALSE(MoveFileExW(middle.c_str(), (temp.path() / "middle-moved").c_str(), 0));
+    // Nor by the POSIX-semantics rename, which ignores some sharing rules for files.
+    EXPECT_FALSE(PosixRename(middle, temp.path() / "middle-moved"));
     EXPECT_TRUE(std::filesystem::exists(real / "azooKey-1.2.3-x64.msi"));
   }
-  // Closed: the directories can be renamed again (the assertions above test the open handle).
-  EXPECT_TRUE(MoveFileExW(middle.c_str(), (temp.path() / "middle-moved").c_str(), 0));
+  // Closed: the directories can be renamed again by both ways, so the refusals above came from
+  // the open handle. Another process (an antivirus scan of the new file) may hold the tree for a
+  // moment, so each rename is retried until it succeeds, for at most 10 seconds.
+  const auto eventually = [](const std::function<bool()>& rename) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!rename()) {
+      if (std::chrono::steady_clock::now() >= deadline) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return true;
+  };
+  EXPECT_TRUE(eventually([&] {
+    return MoveFileExW(middle.c_str(), (temp.path() / "middle-moved").c_str(), 0) != FALSE;
+  }));
+  DWORD closed_error = 0;
+  EXPECT_TRUE(eventually([&] {
+    return PosixRename(temp.path() / "middle-moved", middle, &closed_error);
+  })) << closed_error;
   std::error_code ec;
   std::filesystem::remove(link, ec);  // Removes the junction, not its target.
 }

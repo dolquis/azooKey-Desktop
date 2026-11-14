@@ -28,8 +28,8 @@ bool HasQuote(const std::filesystem::path& path) {
 
 // The final path of an open file in the drive-letter form ("C:\..."), or "\\server\share\..."
 // for a network file, without the "\\?\" prefix msiexec does not need. nullopt when that form
-// does not fit in MAX_PATH, which a path without the prefix cannot exceed; the install then
-// fails its verification instead of handing msiexec a path it may not open.
+// does not fit in MAX_PATH: msiexec is not sure to open a longer path without the prefix, so the
+// install fails its verification instead.
 std::optional<std::filesystem::path> ResolvedPathOf(HANDLE file) {
   std::wstring buffer(MAX_PATH, L'\0');
   for (int attempt = 0; attempt < 2; ++attempt) {

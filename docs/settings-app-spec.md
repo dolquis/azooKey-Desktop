@@ -501,7 +501,8 @@ schema 自体は superset のまま変えない。
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
   経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
   CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
-- **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
+- **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。フォルダーはログを書き出したときに
+  作られるので、まだ無いか開けないときは、その旨を InfoBar で示す。
 
 #### v1.0 / v1.x 境界表
 

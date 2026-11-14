@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "azookey/core/CrashReporting.h"
+#include "azookey/core/PlatformPaths.h"
 
 namespace {
 
@@ -955,6 +956,24 @@ void MainWindow::OpenCrashReportsButton_Click(Windows::Foundation::IInspectable 
   ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Informational,
               resources.GetString(L"CrashReportFolderTitle"),
               resources.GetString(L"CrashReportFolderUnavailable"));
+}
+
+void MainWindow::OpenLogFolderButton_Click(Windows::Foundation::IInspectable const&,
+                                           Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  // The directory RuntimeLogger writes to; it exists once a log has been written.
+  const auto local = azookey::core::GetLocalAppDataDirectory();
+  if (local) {
+    const auto directory = *local / L"azooKey" / L"logs";
+    std::error_code error;
+    if (std::filesystem::is_directory(directory, error)) {
+      const auto opened =
+          ShellExecuteW(nullptr, L"open", directory.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+      if (reinterpret_cast<INT_PTR>(opened) > 32) return;
+    }
+  }
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Informational,
+             resources.GetString(L"LogFolderTitle"), resources.GetString(L"LogFolderUnavailable"));
 }
 
 void MainWindow::OpenUserDictionaryButton_Click(Windows::Foundation::IInspectable const&,

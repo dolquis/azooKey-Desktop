@@ -246,6 +246,9 @@
                     <Button x:Uid="OpenCrashReportsButton"
                             Click="OpenCrashReportsButton_Click"
                             AutomationProperties.AutomationId="OpenCrashReportsButton" />
+                    <Button x:Uid="OpenLogFolderButton"
+                            Click="OpenLogFolderButton_Click"
+                            AutomationProperties.AutomationId="OpenLogFolderButton" />
                 </StackPanel>
 
                 <StackPanel x:Name="ProfilesPaneHost" Spacing="16" Visibility="Collapsed" />

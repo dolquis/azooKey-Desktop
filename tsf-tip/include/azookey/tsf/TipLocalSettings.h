@@ -40,6 +40,12 @@ struct TipAiSettings {
   std::string backend{"none"};
   int timeout_ms{30000};
 };
+// predictionEnabled for one app: the value of the profilesByApp layer that
+// sets it, or else the global value (app-profile-spec §4.1, §5).
+struct TipPredictionSetting {
+  bool enabled{true};
+  bool by_app_profile{false};
+};
 
 // Owns a cancellable directory watch. The worker never touches TSF/COM objects.
 class TipLocalSettings final {
@@ -69,6 +75,10 @@ class TipLocalSettings final {
   // Whether a profilesByApp layer that applies to `app` (process, window class
   // or "default") sets predictionEnabled (tsf-deep-integration-spec §4.5).
   bool PredictionSetByAppProfile(const core::ForegroundApp& app, core::AppNameEqual equal) const;
+  // What decides whether `app` gets predictions: the global value and the
+  // profiles are read under one lock.
+  TipPredictionSetting PredictionSettingFor(const core::ForegroundApp& app,
+                                            core::AppNameEqual equal) const;
   // inlineEnglishCandidates (M60). An absent or unreadable value is false.
   bool InlineEnglishCandidatesSnapshot() const;
   // mixedEnglishAutoConversion (M63). An absent or unreadable value is false.

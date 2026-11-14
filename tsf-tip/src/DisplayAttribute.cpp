@@ -135,6 +135,11 @@ HRESULT SetSegmentAttribute(TfEditCookie ec, ITfProperty* property, ITfRange* co
 
 }  // namespace
 
+HRESULT ClearDisplayAttributes(TfEditCookie ec, ITfProperty* property, ITfRange* range) {
+  if (!property || !range) return E_INVALIDARG;
+  return property->Clear(ec, range);
+}
+
 HRESULT ApplyDisplayAttributes(TfEditCookie ec, ITfProperty* property, ITfRange* composition,
                                const std::vector<SegmentAttributeRange>& ranges,
                                const TfGuidAtom (&atoms)[kDisplayAttributeKindCount]) {

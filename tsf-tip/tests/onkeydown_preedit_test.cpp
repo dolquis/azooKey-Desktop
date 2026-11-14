@@ -1187,6 +1187,13 @@ struct PreeditAttributeWrite {
   friend bool operator==(const PreeditAttributeWrite&, const PreeditAttributeWrite&) = default;
 };
 
+// A SetValue or a Clear, in the order the TIP made them (DEV-1954).
+struct PreeditAttributeOperation {
+  bool clear;
+  LONG start;
+  LONG end;
+};
+
 class PreeditAttributeRecorder final : public ITfProperty {
  public:
   STDMETHODIMP QueryInterface(REFIID, void** object) override {
@@ -1210,11 +1217,18 @@ class PreeditAttributeRecorder final : public ITfProperty {
     const auto* document_range = static_cast<const DocumentRange*>(range);
     writes.push_back(
         {document_range->start, document_range->end, static_cast<TfGuidAtom>(value->lVal)});
+    operations.push_back({false, document_range->start, document_range->end});
     return S_OK;
   }
-  STDMETHODIMP Clear(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+  STDMETHODIMP Clear(TfEditCookie, ITfRange* range) override {
+    if (!range) return E_INVALIDARG;
+    const auto* document_range = static_cast<const DocumentRange*>(range);
+    operations.push_back({true, document_range->start, document_range->end});
+    return S_OK;
+  }
 
   std::vector<PreeditAttributeWrite> writes;
+  std::vector<PreeditAttributeOperation> operations;
 };
 
 class DocumentContext final : public NoopContext, public ITfContextComposition {
@@ -15256,6 +15270,121 @@ TEST(TsfTipPredictionModeTest, TurningPredictionsOffKeepsTheCandidateWindow) {
   EXPECT_TRUE(h.service.candidate_window_for_test().IsVisible());
 }
 
+namespace {
+uint32_t PredictionReasonBit(azookey::tsf::PredictionLogReason reason) {
+  return 1U << static_cast<unsigned>(reason);
+}
+}  // namespace
+
+// DEV-1985: the profilesByApp layer that sets predictionEnabled for the
+// focused app decides whether a prediction is asked for; without one the
+// global value does (app-profile-spec §4.1, §5).
+TEST(TsfTipPredictionModeTest, FocusedAppsProfileDecidesWhetherAPredictionIsAsked) {
+  using azookey::tsf::PredictionLogReason;
+  struct Case {
+    bool global;
+    const char* profiles;
+    bool expected_query;
+    PredictionLogReason reason;
+  };
+  for (const auto& item : {
+           Case{true, R"({"profilesByApp":{"NOTEPAD.EXE":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true, R"({"profilesByApp":{"Notepad":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true, R"({"profilesByApp":{"default":{"predictionEnabled":false}}})", false,
+                PredictionLogReason::AppProfileDisabled},
+           Case{true,
+                R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":true},)"
+                R"("default":{"predictionEnabled":false}}})",
+                true, PredictionLogReason::Queued},
+           Case{false, R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":true}}})", true,
+                PredictionLogReason::Queued},
+           Case{false, R"({"profilesByApp":{"code.exe":{"predictionEnabled":true}}})", false,
+                PredictionLogReason::Disabled},
+           Case{true, R"({"profilesByApp":{"notepad.exe":{"promptPrefix":"x"}}})", true,
+                PredictionLogReason::Queued},
+       }) {
+    SCOPED_TRACE(item.profiles);
+    SCOPED_TRACE(item.global ? "global on" : "global off");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_prediction_enabled_for_test(item.global);
+    h.service.set_app_profiles_for_test(item.profiles);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+    EXPECT_EQ(h.service.pending_prediction_generation_for_test() != 0, item.expected_query);
+    const uint32_t logged = h.service.prediction_logged_reasons_for_test();
+    EXPECT_NE(logged & PredictionReasonBit(item.reason), 0u);
+    // The log names the layer that turned it off, and nothing else.
+    const uint32_t off = PredictionReasonBit(PredictionLogReason::Disabled) |
+                         PredictionReasonBit(PredictionLogReason::AppProfileDisabled);
+    EXPECT_EQ(logged & off & ~PredictionReasonBit(item.reason), 0u);
+  }
+}
+
+// DEV-1985: a prediction that arrived before the focused app's profile turned
+// predictions off is not shown.
+TEST(TsfTipPredictionModeTest, ArrivedPredictionIsNotShownOnceTheAppsProfileTurnsItOff) {
+  using namespace azookey::ipc;
+  using azookey::tsf::PredictionLogReason;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-app-profile-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> prediction_queries{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      ++prediction_queries;
+      QueryPredictionsResponse payload;
+      payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+      response.payload_json = BuildQueryPredictionsResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  // Without the handshake token the worker never connects.
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_prediction_enabled_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
+  ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
+  ASSERT_NE(h.service.pending_prediction_generation_for_test(), 0u);
+  h.service.start_ipc_worker_for_test();
+  // The answer waits in its slot; applying it is what the profile must stop.
+  ASSERT_TRUE(WaitForPredictionResult(h.service));
+  ASSERT_GT(prediction_queries.load(), 0u);
+  h.service.set_app_profiles_for_test(
+      R"({"profilesByApp":{"notepad.exe":{"predictionEnabled":false}}})");
+  h.service.process_candidates_ready_for_test();
+  EXPECT_FALSE(h.service.has_prediction_result_for_test());
+  EXPECT_NE(h.service.prediction_logged_reasons_for_test() &
+                PredictionReasonBit(PredictionLogReason::AppProfileDisabled),
+            0u);
+  EXPECT_FALSE(h.service.prediction_window_visible_for_test());
+  EXPECT_EQ(h.service.shown_prediction_count_for_test(), 0u);
+  EXPECT_EQ(h.service.prediction_logged_reasons_for_test() &
+                PredictionReasonBit(PredictionLogReason::Shown),
+            0u);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
 // DEV-1949 (DEV-1931): leaving the candidate list for the reading hides the
 // window before the predictions appear in it, so the two modes never swap on screen.
 TEST(TsfTipPredictionModeTest, LeavingTheCandidatesHidesTheWindowBeforePredictions) {
@@ -17312,4 +17441,108 @@ TEST(TsfTipSelectingDisplayAttributeTest, BatchSegmentsKeepTheirOwnAttributes) {
             (PreeditAttributeWrite{0, 1, PreeditAtom(DisplayAttributeKind::FocusedSegment)}));
   EXPECT_EQ(recorder.writes[1],
             (PreeditAttributeWrite{1, 2, PreeditAtom(DisplayAttributeKind::ConvertedSegment)}));
+}
+
+// DEV-1954: a commit clears the preedit attribute from the committed text
+// before the composition ends (tsf-deep-integration-spec §5.6).
+namespace {
+// The committed text [start, end) was cleared by an operation made since
+// `from`, and no attribute was set over it after that.
+::testing::AssertionResult CommittedTextKeepsNoAttribute(const PreeditAttributeRecorder& recorder,
+                                                         size_t from, LONG start, LONG end) {
+  const auto& operations = recorder.operations;
+  std::optional<size_t> cleared;
+  for (size_t i = from; i < operations.size(); ++i) {
+    if (operations[i].clear && operations[i].start == start && operations[i].end == end)
+      cleared = i;
+  }
+  if (!cleared)
+    return ::testing::AssertionFailure() << "no Clear over [" << start << ", " << end << ")";
+  for (size_t i = *cleared + 1; i < operations.size(); ++i) {
+    if (!operations[i].clear && operations[i].start < end && start < operations[i].end)
+      return ::testing::AssertionFailure() << "an attribute over [" << operations[i].start << ", "
+                                           << operations[i].end << ") follows the Clear";
+  }
+  return ::testing::AssertionSuccess();
+}
+}  // namespace
+
+TEST(TsfTipCommitDisplayAttributeTest, EnterCommitsTheReadingWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  ASSERT_FALSE(recorder.writes.empty());
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"てんき");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+}
+
+TEST(TsfTipCommitDisplayAttributeTest, EnterCommitsTheSelectedCandidateWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"天気");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+}
+
+TEST(TsfTipCommitDisplayAttributeTest, DigitCommitsItsCandidateWithoutTheAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press('2'));
+  ASSERT_EQ(h.service.input_state_for_test().kind(), InputStateKind::Idle);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"転機");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+}
+
+// The mark starts the next composition, which keeps its own attribute.
+TEST(TsfTipCommitDisplayAttributeTest, PunctuationCommitsTheCandidateWithoutItsAttribute) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  ConfigureTypoHarness(h);
+  StartPunctuationConversion(h, false);
+  AttachPreeditAttributeRecorder(h, recorder);
+  OpenTenkiCandidates(h);
+  const size_t before = recorder.operations.size();
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_EQ(h.context.document->text, L"天気、");
+  ASSERT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+  ASSERT_FALSE(recorder.writes.empty());
+  EXPECT_EQ(recorder.writes.back(),
+            (PreeditAttributeWrite{2, 3, PreeditAtom(DisplayAttributeKind::Input)}));
+}
+
+// The host ends the composition first; the commit that follows clears the text
+// the host kept, though no composition is left to end.
+TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheCommit) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  const size_t before = recorder.operations.size();
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"てんき");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
 }

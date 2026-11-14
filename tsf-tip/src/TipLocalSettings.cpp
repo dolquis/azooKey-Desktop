@@ -264,6 +264,7 @@ void TipLocalSettings::Stop() noexcept {
   dynamic_punctuation_ = {};
   max_context_length_ = 30;
   prediction_enabled_ = true;
+  prediction_profile_probes_ = {};
   inline_english_candidates_ = false;
   mixed_english_auto_conversion_ = false;
   romaji_table_.reset();
@@ -321,15 +322,24 @@ bool TipLocalSettings::PredictionEnabledSnapshot() const {
 
 bool TipLocalSettings::PredictionSetByAppProfile(const core::ForegroundApp& app,
                                                  core::AppNameEqual equal) const {
+  return PredictionSettingFor(app, equal).by_app_profile;
+}
+
+TipPredictionSetting TipLocalSettings::PredictionSettingFor(const core::ForegroundApp& app,
+                                                            core::AppNameEqual equal) const {
   std::array<std::shared_ptr<const core::AppProfileResolver>, 2> probes;
+  TipPredictionSetting setting;
   {
     const std::lock_guard lock(mutex_);
     probes = prediction_profile_probes_;
+    setting.enabled = prediction_enabled_;
   }
-  if (!probes[0] || !probes[1]) return false;
+  if (!probes[0] || !probes[1]) return setting;
   const auto off = probes[0]->ResolveField("predictionEnabled", app, equal);
   const auto on = probes[1]->ResolveField("predictionEnabled", app, equal);
-  return off && on && off->IsBool() && on->IsBool() && off->AsBool() == on->AsBool();
+  if (off && on && off->IsBool() && on->IsBool() && off->AsBool() == on->AsBool())
+    setting = {off->AsBool(), true};
+  return setting;
 }
 
 bool TipLocalSettings::InlineEnglishCandidatesSnapshot() const {

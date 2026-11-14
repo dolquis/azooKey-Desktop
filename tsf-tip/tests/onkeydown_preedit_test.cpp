@@ -17529,3 +17529,20 @@ TEST(TsfTipCommitDisplayAttributeTest, PunctuationCommitsTheCandidateWithoutItsA
   EXPECT_EQ(recorder.writes.back(),
             (PreeditAttributeWrite{2, 3, PreeditAtom(DisplayAttributeKind::Input)}));
 }
+
+// The host ends the composition first; the commit that follows clears the text
+// the host kept, though no composition is left to end.
+TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheCommit) {
+  PreeditAttributeRecorder recorder;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  AttachPreeditAttributeRecorder(h, recorder);
+  TypeTypoRomaji(h, "TENKI");
+  ASSERT_EQ(h.context.document->text, L"てんき");
+  const size_t before = recorder.operations.size();
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.context.document->text, L"てんき");
+  EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+}

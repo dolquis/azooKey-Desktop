@@ -798,6 +798,9 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
   いまの設定に合うときだけである。合わなければ `not_available`、条件が満たされなければ
   `disabled` で断る。`version` は pipe から届く外部入力なので、この形を確かめてから URL と
   ファイル名を組み立てる。
+- SafeMode（`docs/host-availability-spec.md` §8.5.3）でも、更新の確認（§6.1）とダウンロードは
+  止めない。SafeMode が止めるのは AI・学習・モデルの読み込みであり、不具合を直した版へ更新する
+  経路は SafeMode のときこそ残す。
 - `releases/tags/v<version>` の応答から、名前が `azooKey-<version>-x64.msi` に完全に一致する
   asset を 1 つだけ選ぶ。Vulkan アドオンの MSI（`azooKey-vulkan-addon-*`）は選ばない。
   `browser_download_url` は `https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/`

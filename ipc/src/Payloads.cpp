@@ -2155,10 +2155,16 @@ std::optional<TransformSelectedTextResponse> ParseTransformSelectedTextResponse(
   auto v = ParseObject(json);
   if (!v) return std::nullopt;
   TransformSelectedTextResponse p;
+  // A present field of the wrong type, or an answer with neither a result nor
+  // a failure, is no answer the TIP can show.
+  for (const char* key : {"result", "error_class", "error"}) {
+    if (v->Find(key) && !v->GetString(key)) return std::nullopt;
+  }
   p.result = v->GetString("result").value_or(std::string());
   if (p.result.size() > kMaxTransformResultBytes) return std::nullopt;
   p.error_class = v->GetString("error_class");
   p.error = v->GetString("error");
+  if (p.result.empty() && !p.error_class && !p.error) return std::nullopt;
   return p;
 }
 

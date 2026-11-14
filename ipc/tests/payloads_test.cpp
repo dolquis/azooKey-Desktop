@@ -1349,6 +1349,15 @@ TEST(PayloadsTest, TransformSelectedTextRoundTripsAndFailsClosed) {
   EXPECT_EQ(parsed_failed->error_class, std::optional<std::string>("BlockedBySecure"));
   EXPECT_EQ(ParseTransformSelectedTextResponse(R"({"error":"not_authenticated"})")->error,
             std::optional<std::string>(kTransformErrorNotAuthenticated));
+  EXPECT_EQ(ParseTransformSelectedTextResponse(R"({"error":"safe_mode"})")->error,
+            std::optional<std::string>(kTransformErrorSafeMode));
+  // An answer with neither a result nor a failure, or a field of the wrong
+  // type, is no answer.
+  for (const char* invalid :
+       {R"({})", R"({"result":""})", R"({"result":1})", R"({"error_class":1})", R"({"error":true})",
+        R"({"result":"a","error_class":[]})"}) {
+    EXPECT_FALSE(ParseTransformSelectedTextResponse(invalid).has_value()) << invalid;
+  }
   TransformSelectedTextResponse oversized_response;
   oversized_response.result = std::string(kMaxTransformResultBytes + 1, 'a');
   EXPECT_FALSE(

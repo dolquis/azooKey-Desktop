@@ -888,6 +888,10 @@ std::optional<DetectAnomaliesResponse> ParseDetectAnomaliesResponse(const std::s
 // ANDs them with its own policy and settings before the AI backend runs.
 inline constexpr std::string_view kTransformErrorInvalidRequest = "invalid_request";
 inline constexpr std::string_view kTransformErrorNotAuthenticated = "not_authenticated";
+// The Host is in SafeMode (host-availability-spec section 8.5.3): no AI runs,
+// whatever the request or the settings say. Kept apart from BlockedBySecure so
+// the TIP can tell the user which stop it is.
+inline constexpr std::string_view kTransformErrorSafeMode = "safe_mode";
 
 struct TransformSelectedTextRequest {
   std::string mode;         // "rewrite" | "translate" | "summarize" | "free"; required.
@@ -902,9 +906,13 @@ struct TransformSelectedTextRequest {
   std::string ai_backend;           // Empty keeps the Host's aiBackend setting.
 };
 
-// A canceled request gets no response. result is non-empty only on success;
-// error_class is the AiErrorClass name of a backend failure, error a protocol
-// failure (kTransformErrorInvalidRequest, kTransformErrorNotAuthenticated).
+// A request that reached the AI backend and was then found canceled gets no
+// response; one refused before it (invalid, unauthenticated, SafeMode, secure,
+// at the pending limit) is answered even if canceled. result is non-empty only on success;
+// error_class is the AiErrorClass name of a backend failure, error a refusal
+// (kTransformErrorInvalidRequest, kTransformErrorNotAuthenticated,
+// kTransformErrorSafeMode). A response that carries none of the three, or a
+// field of the wrong type, does not parse.
 struct TransformSelectedTextResponse {
   std::string result;
   std::optional<std::string> error_class;

@@ -117,6 +117,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleResetLearningStore(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryPersona(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleDetectAnomalies(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleTransformSelectedText(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleListModels(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleBenchmarkModel(const ipc::Envelope& req);

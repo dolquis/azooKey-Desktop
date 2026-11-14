@@ -99,19 +99,24 @@ struct ToggleInputMode {
   friend bool operator==(const ToggleInputMode&, const ToggleInputMode&) = default;
 };
 
-enum class ReplaceSuggestionMode : uint8_t {
-  // Alnum double tap: free-form AI conversion (Magic Conversion).
-  MagicConversion,
-  // Kana double tap: rewrite the selected text (Replace Suggestion).
-  ReplaceSuggestion,
+// The initial prompt of the Magic Conversion window (docs/legacy-parity-spec.md
+// §4.1): both double taps open the same window and differ only in it.
+enum class PromptPreset : uint8_t {
+  // Alnum double tap: translate the selection into English.
+  English,
+  // Kana double tap: translate the selection into Japanese.
+  Japanese,
 };
-// Read the selection and show the prompt UI.
+// Read the selection and show the prompt window. The window is a separate
+// window that owns its own keys, so InputState stays Idle.
 struct ShowReplaceSuggestionPrompt {
-  ReplaceSuggestionMode mode{ReplaceSuggestionMode::MagicConversion};
+  PromptPreset preset{PromptPreset::English};
   friend bool operator==(const ShowReplaceSuggestionPrompt&,
                          const ShowReplaceSuggestionPrompt&) = default;
 };
-// Send the prompt; the response is applied with ReplaceSelectedText.
+// Reserved with InputStateKind::ReplaceSuggestion for legacy's Ctrl+S
+// suggestion, which Windows does not assign (legacy-parity-spec §1.2). No
+// transition emits these two.
 struct SubmitReplaceSuggestion {
   friend bool operator==(const SubmitReplaceSuggestion&, const SubmitReplaceSuggestion&) = default;
 };

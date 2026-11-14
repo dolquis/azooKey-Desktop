@@ -149,7 +149,10 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
   if (!options.include_context) request.left_context.clear();
   const bool local_path = options.backend == "local-zenzai" || !request.external_allowed ||
                           request.task == AiTask::Lint;
-  if (local_path && request.task == AiTask::Anomalies) return Failure(AiErrorClass::Disabled);
+  // Anomaly detection and the selection transform (M16) are remote-only: the
+  // local converter turns kana into kanji and has no model for either.
+  if (local_path && (request.task == AiTask::Anomalies || request.task == AiTask::Transform))
+    return Failure(AiErrorClass::Disabled);
   const auto deadline =
       std::chrono::steady_clock::now() +
       std::chrono::milliseconds(local_path ? (request.task == AiTask::Cleanup ? 30000 : 800)
@@ -183,7 +186,10 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     }
     const bool retryable = error == AiErrorClass::RateLimit || error == AiErrorClass::ServerError ||
                            error == AiErrorClass::Network;
-    if (!retryable || attempt == 2) return Failure(error);
+    // M16 keeps the user waiting in the prompt window, so it retries once at
+    // most (ai-backend-spec section 7.3); the other tasks retry twice.
+    const unsigned max_retries = request.task == AiTask::Transform ? 1u : 2u;
+    if (!retryable || attempt == max_retries) return Failure(error);
     last_error = error;
     const auto backoff = std::chrono::milliseconds(
         (250u << attempt) +

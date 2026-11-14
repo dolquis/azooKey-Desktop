@@ -20,6 +20,8 @@ enum class InputStateKind : uint8_t {
   Composing,
   Previewing,
   Selecting,
+  // Reserved for legacy's Ctrl+S suggestion; no transition enters it
+  // (docs/legacy-parity-spec.md §1.2).
   ReplaceSuggestion,
   UnicodeInput,
 };
@@ -48,7 +50,6 @@ class InputState {
   const std::string& unicode_hex() const { return unicode_hex_; }
   bool live_conversion() const { return live_conversion_; }
   bool punctuation_conversion() const { return punctuation_conversion_; }
-  ReplaceSuggestionMode replace_suggestion_mode() const { return replace_suggestion_mode_; }
 
   // Setting injected by the frontend. Only affects later Input events.
   InputState WithLiveConversion(bool enabled) const;
@@ -78,7 +79,6 @@ class InputState {
   HandleResult HandleIdle(const UserActionEvent& event) const;
   HandleResult HandleComposing(const UserActionEvent& event) const;
   HandleResult HandleSelecting(const UserActionEvent& event) const;
-  HandleResult HandleReplaceSuggestion(const UserActionEvent& event) const;
   HandleResult HandleUnicodeInput(const UserActionEvent& event) const;
 
   void AppendInput(const UserActionEvent& event);
@@ -100,7 +100,6 @@ class InputState {
   std::string unicode_hex_;
   bool live_conversion_{false};
   bool punctuation_conversion_{false};
-  ReplaceSuggestionMode replace_suggestion_mode_{ReplaceSuggestionMode::MagicConversion};
 };
 
 struct HandleResult {

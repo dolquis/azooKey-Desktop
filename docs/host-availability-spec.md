@@ -334,7 +334,7 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 | 一括変換の ai-cleanup（外部 AI を使わない経路。`local-zenzai`、または openai でも外部不許可） | 35s（独立した 30s の全体期限 + 余裕 5s。`docs/ai-backend-spec.md` §7.1） |
 | 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕（TIP は 5s を足す）。正典は `docs/ai-backend-spec.md` §7.1 |
 | （設計値）ローカル Zenzai 1 変換のハード予算の上限 | 800ms。変換要求（`QueryCandidates` / 一括変換）の request deadline ではない（下記） |
-| ローカルの非 Cleanup AI 変換（`local-zenzai` / 外部 AI 不許可 / Lint。Host の `AiBackend`） | 800ms（Host が強制する deadline。超過は `Timeout`） |
+| ローカル経路の Lint（Host の `AiBackend`。Magic Conversion と校正の検出はローカル経路を持たない） | 800ms（Host が強制する deadline。超過は `Timeout`） |
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 

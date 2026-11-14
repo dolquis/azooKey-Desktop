@@ -49,6 +49,8 @@ enum class MessageType {
   QueryCatalogFetch,
   // DEV-1840: the user's stop of the running catalog fetch.
   CancelCatalogFetch,
+  // DEV-1963 M16 Magic Conversion (ai-backend-spec section 4.1).
+  TransformSelectedText,
   Unknown,
 };
 

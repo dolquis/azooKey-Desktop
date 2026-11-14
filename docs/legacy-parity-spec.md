@@ -117,7 +117,7 @@ enum class InputStateKind {
     Composing,           // ローマ字入力中 (preedit のみ)
     Previewing,          // ライブ変換中（preedit に最良候補が表示中）
     Selecting,           // 候補ウィンドウ表示中
-    ReplaceSuggestion,   // 既存テキスト選択中の AI 置換待ち
+    ReplaceSuggestion,   // legacy の Ctrl+S（AI の提案）用の予約。遷移で入らない
     UnicodeInput,        // U+XXXX 入力モード
 };
 ```
@@ -141,9 +141,7 @@ enum class InputStateKind {
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
 | Composing / Previewing / Selecting | Input（`、` `。` `？` `！`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
-| Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
-| ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |
-| ReplaceSuggestion | Cancel | Idle | Hide Prompt |
+| Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
@@ -258,9 +256,9 @@ append-only で加える（§1.5.2）。preedit の更新は romaji のかな化
 | `UpdateCandidateSelection(index)` | 表示中の候補窓のハイライトだけを動かす | `CandidateUiCoordinator::MoveSelection`（§1.6.2 (B)） |
 | `ObserveCommit(reading, surface)` | 候補確定を学習へ記録する | `PostCommitObservation` |
 | `ToggleInputMode(Hankaku / HiraKata)` | 入力モードを切り替える | 入力モードの compartment 更新 |
-| `ShowReplaceSuggestionPrompt(mode)` | 選択テキストを取得してプロンプトを出す（§4.2, §4.3） | Magic Conversion / Replace Suggestion のダイアログ |
-| `SubmitReplaceSuggestion` | プロンプトを送信する | `TransformSelectedText` IPC。応答は `ReplaceSelectedText` で反映 |
-| `HideReplaceSuggestionPrompt` | プロンプトを閉じる | ダイアログを閉じる |
+| `ShowReplaceSuggestionPrompt(preset)` | 選択テキストを取得してプロンプト窓を出す（§4.2, §4.3）。`preset` は初期プロンプト（`English` / `Japanese`） | Magic Conversion のプロンプト窓 |
+| `SubmitReplaceSuggestion` | 予約（legacy の Ctrl+S 用。どの遷移も出さない） | — |
+| `HideReplaceSuggestionPrompt` | 予約（同上） | — |
 | `ForgetLastCommit` | 直近確定を忘却する（§7） | 忘却 IPC |
 | `ToggleDebugWindow` | デバッグ窓を開閉する（§8） | デバッグ窓の表示切替 |
 
@@ -1110,7 +1108,7 @@ legacy のプロンプト窓は 2 段である。プロンプトを入力して�
 ### 4.4 IPC
 
 `TransformSelectedText` の Request / Response の payload は `docs/ai-backend-spec.md` §4.1 が正典である。
-TIP は `ShowReplaceSuggestionPrompt` / `SubmitReplaceSuggestion`（§1.3）で選択テキスト（§4.2）と
+TIP は `ShowReplaceSuggestionPrompt`（§1.3）でプロンプト窓を開き、窓で送るときに選択テキスト（§4.2）と
 プロンプト（§4.3）を Host へ送り、応答を §4.6 で反映する。
 
 ### 4.5 OpenAI API 呼び出し

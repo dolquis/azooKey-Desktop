@@ -825,7 +825,11 @@ optional フィールドを追加する（エンベロープ schema 自体は変
   ひらがな U+3041〜U+3096、長音符 U+30FC）の外の文字を 1 つでも含むものは、切り詰めずに全体を捨てる。
   送り手の codec（`BuildQueryCandidatesRequest`）も、secure の要求には `raw_keys` を載せない。
 - **capability**: Host は Handshake 応答の capabilities に `raw_keys` を入れる。TIP は `raw_keys` を
-  広告した Host にだけ `raw_keys` を送り、secure の入力では送らない（§12.12.2）。
+  広告した Host にだけ `raw_keys` を送り、secure の入力では送らない（§12.12.2）。capability は要求を
+  組み立てる時点の接続の Handshake で判定する。
+- **TIP が送る値**: 打鍵ごとの要求と変換窓の要求に、打鍵したキーを小文字にして載せる。キーが読みを
+  綴る間だけで、カスタムローマ字表、文字集合の外（句読点は打った `,` などを保つので外れる）、上限を
+  超えるときは送らない。TIP は `raw_keys` をログに出さない。
 - **`typo_correction_mode` の値**: 4 値以外（v1 の `auto_replace` を含む）と文字列以外は未指定として parse する。
   TIP は設定を参照しない（§3）ので、TIP の要求はこのフィールドを持たない。
 - **要求値は Host の実効値を上回らない**: protocol v1 の Host は、`typo_correction_mode` と `raw_keys` を

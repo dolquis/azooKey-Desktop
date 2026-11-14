@@ -11,6 +11,8 @@ add_library(azookey_tsf_tip SHARED
   src/DelayedActionTimer.cpp
   src/ProofreadDocumentReader.cpp
   src/ProofreadSessionServer.cpp
+  src/PromptDialog.cpp
+  src/PromptDialogModel.cpp
   src/RenderingEngine.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
@@ -21,6 +23,7 @@ add_library(azookey_tsf_tip SHARED
   src/LeftContextReader.cpp
   src/LiveCarry.cpp
   src/ReconversionFunction.cpp
+  src/SelectedTextEditSession.cpp
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
@@ -75,6 +78,8 @@ if(AZOOKEY_BUILD_TESTS)
     src/DelayedActionTimer.cpp
     src/ProofreadDocumentReader.cpp
     src/ProofreadSessionServer.cpp
+    src/PromptDialog.cpp
+    src/PromptDialogModel.cpp
     src/RenderingEngine.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
@@ -84,6 +89,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/LeftContextReader.cpp
     src/LiveCarry.cpp
     src/ReconversionFunction.cpp
+    src/SelectedTextEditSession.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp
     src/ThemeColors.cpp
@@ -186,6 +192,7 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_bracket_edit_session_tests tests/bracket_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_character_form_edit_session_tests tests/character_form_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ai_input_guard_tests tests/ai_input_guard_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_prompt_dialog_tests tests/prompt_dialog_test.cpp)
   add_executable(tsf_tip_local_settings_tests src/TipLocalSettings.cpp tests/local_settings_test.cpp)
   target_include_directories(tsf_tip_local_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_definitions(tsf_tip_local_settings_tests PRIVATE

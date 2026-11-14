@@ -38,9 +38,12 @@
 #include "azookey/tsf/LiveCarry.h"
 #include "azookey/tsf/LivePunctuation.h"
 #include "azookey/tsf/OpenCloseKey.h"
+#include "azookey/tsf/PromptDialog.h"
+#include "azookey/tsf/PromptDialogModel.h"
 #include "azookey/tsf/ProofreadDocumentReader.h"
 #include "azookey/tsf/ProofreadSessionServer.h"
 #include "azookey/tsf/ReconversionFunction.h"
+#include "azookey/tsf/SelectedTextEditSession.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #include "azookey/tsf/TypoCorrectionTracker.h"
 #ifdef _DEBUG
@@ -719,6 +722,46 @@ class TextService final : public ITfTextInputProcessorEx,
     return reconversion_cache_candidates_;
   }
   void process_candidates_ready_for_test() { OnCandidatesReady(this); }
+  // M16: the prompt window without its HWND, driven through the same calls.
+  void set_double_tap_now_for_test(uint64_t ms) { double_tap_now_for_test_ = ms; }
+  void set_prompt_dialog_headless_for_test(bool headless) {
+    prompt_dialog_headless_for_test_ = headless;
+  }
+  void set_magic_conversion_for_test(bool enabled, std::string backend, int timeout_ms = 30000) {
+    local_settings_.SetMagicConversionForTest(enabled, std::move(backend), timeout_ms);
+  }
+  void set_host_transform_capability_for_test(bool supported) {
+    ipc_host_transform_selected_text_.store(supported);
+  }
+  bool host_transform_capability_for_test() const {
+    return ipc_host_transform_selected_text_.load();
+  }
+  bool magic_conversion_open_for_test() const { return magic_session_.has_value(); }
+  std::optional<PromptDialogView> magic_conversion_view_for_test() const {
+    if (!magic_session_) return std::nullopt;
+    return magic_session_->model.view();
+  }
+  std::wstring magic_conversion_selection_for_test() const {
+    return magic_session_ ? magic_session_->original : std::wstring{};
+  }
+  std::optional<ipc::TransformSelectedTextRequest> magic_conversion_request_for_test() const {
+    if (!magic_session_) return std::nullopt;
+    return magic_session_->request;
+  }
+  void submit_magic_conversion_for_test(std::wstring prompt) {
+    SubmitMagicConversion(std::move(prompt));
+  }
+  void apply_magic_conversion_for_test() { ApplyMagicConversion(); }
+  void cancel_magic_conversion_for_test() { CancelMagicConversion(); }
+  bool has_queued_transform_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_transform_request_.has_value();
+  }
+  bool has_transform_outcome_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return transform_outcome_.has_value();
+  }
+  PromptDialog& prompt_dialog_for_test() { return prompt_dialog_; }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return reconversion_result_.has_value();
@@ -1290,6 +1333,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // Handshake capability "commit_correction" (DEV-1529); CommitCorrection is
   // sent only to a Host that advertises it.
   std::atomic<bool> ipc_host_commit_correction_{false};
+  // Handshake capability "transform_selected_text" (M16, ai-backend-spec
+  // section 4.1): an older Host answers the type as Unknown, so the prompt
+  // window opens only for a Host that advertises it.
+  std::atomic<bool> ipc_host_transform_selected_text_{false};
   // A handshake that finds no token is retried on every reconnect backoff, so
   // only the first miss and one summary per interval are logged (DEV-1658).
   // Touched on the IPC thread only.
@@ -1327,6 +1374,46 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string trace_id;
   };
   std::optional<ReconversionRequest> ipc_reconversion_request_;  // ipc_mtx_
+  // M16 (legacy-parity-spec §4.4): the prompt window's request. The privacy
+  // flags and the backend are resolved on the UI thread when the window
+  // opens; the worker only sends and waits. A generation other than
+  // ipc_transform_generation_ is stale: the worker cancels it.
+  struct TransformRequest {
+    uint64_t generation{0};
+    ipc::TransformSelectedTextRequest request;
+    std::string trace_id;
+    int wait_ms{0};
+  };
+  std::optional<TransformRequest> ipc_transform_request_;  // ipc_mtx_
+  uint64_t ipc_transform_generation_{0};                   // ipc_mtx_
+  struct TransformOutcome {
+    uint64_t generation{0};
+    std::optional<ipc::TransformSelectedTextResponse> response;
+    PromptFailure failure{PromptFailure::None};
+  };
+  std::optional<TransformOutcome> transform_outcome_;  // candidates_mtx_
+  // The open prompt window, kept apart from the input state: the window takes
+  // the focus, and the focus change clears that state (legacy-parity-spec §1.2).
+  struct MagicConversionSession {
+    uint64_t generation{0};
+    Microsoft::WRL::ComPtr<ITfContext> context;
+    Microsoft::WRL::ComPtr<ITfRange> range;
+    std::wstring original;
+    ipc::TransformSelectedTextRequest request;
+    int wait_ms{0};
+    HWND owner{nullptr};
+    PromptDialogModel model;
+    bool open_pending{true};
+  };
+  std::optional<MagicConversionSession> magic_session_;  // UI thread only.
+  PromptDialog prompt_dialog_;                           // UI thread only.
+  // The last press of the alnum or kana key, for the double tap (§4.1).
+  WPARAM double_tap_key_{0};
+  uint64_t double_tap_at_ms_{0};
+#ifdef AZOOKEY_TSF_TESTING
+  std::optional<uint64_t> double_tap_now_for_test_;
+  bool prompt_dialog_headless_for_test_{false};
+#endif
   struct PredictionRequest {
     uint64_t generation;
     std::string kana;
@@ -1561,6 +1648,23 @@ class TextService final : public ITfTextInputProcessorEx,
                                    int restore_selection, bool unchanged, HRESULT hr,
                                    const std::optional<ReconversionCorrection>& correction,
                                    ITfContext* correction_context, TfEditCookie cookie);
+  // M16 Magic Conversion (legacy-parity-spec §4). The double tap of the alnum
+  // or kana key: a press of another key forgets the last one.
+  void ForgetDoubleTapUnless(WPARAM key) noexcept;
+  // The double tap's UserAction when this press is its second, else nullopt.
+  std::optional<core::UserAction> TakeDoubleTap(WPARAM key, LPARAM key_data, uint32_t modifiers);
+  uint64_t DoubleTapNowMs() const noexcept;
+  // Opens the prompt window for the selection of `context`, if every
+  // condition holds; otherwise the key keeps only its usual effect.
+  void BeginMagicConversion(ITfContext* context, core::UserAction double_tap);
+  void OpenPendingPromptDialog();
+  void SubmitMagicConversion(std::wstring prompt);
+  void ApplyMagicConversion();
+  // Closes the window and drops its request, which the worker then cancels.
+  void CancelMagicConversion();
+  void ApplyTransformOutcome();
+  void UpdatePromptDialog();
+  bool SendTransformSelectedText(const TransformRequest& request, uint64_t& next_id);
   // A left click on candidate row `idx`, from the candidate window.
   void OnCandidateClicked(int idx);
   void ClearReconversionState();

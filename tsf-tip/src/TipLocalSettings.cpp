@@ -398,6 +398,7 @@ void TipLocalSettings::Reload() noexcept {
       ai.backend = json->GetString("aiBackend").value_or("none");
       ai.timeout_ms = static_cast<int>(
           std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
+      ai.magic_conversion = json->GetBool("llmMagicConversion").value_or(false);
       rewriters.symbol = json->GetBool("symbolRewriter").value_or(false);
       rewriters.emoji = json->GetBool("emojiRewriter").value_or(false);
       rewriters.trigger = json->GetBool("emojiTriggerSearch").value_or(true);
@@ -646,6 +647,14 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
   ai_.prediction_allowed = json && ParsePredictionPermission(*json);
   ai_.show_secure_indicator = !json || ParseShowSecureIndicator(*json);
   ai_.auto_secure_input = !json || ParseAutoSecureInput(*json);
+}
+
+void TipLocalSettings::SetMagicConversionForTest(bool enabled, std::string backend,
+                                                 int timeout_ms) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  ai_.magic_conversion = enabled;
+  ai_.backend = std::move(backend);
+  ai_.timeout_ms = timeout_ms;
 }
 
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {

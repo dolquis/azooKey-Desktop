@@ -39,6 +39,9 @@ struct TipAiSettings {
   bool show_secure_indicator{true};
   std::string backend{"none"};
   int timeout_ms{30000};
+  // llmMagicConversion: the opt-in for the M16 prompt window (legacy-parity-spec
+  // §4.1). Off unless the file says true.
+  bool magic_conversion{false};
 };
 // predictionEnabled for one app: the value of the profilesByApp layer that
 // sets it, or else the global value (app-profile-spec §4.1, §5).
@@ -88,6 +91,7 @@ class TipLocalSettings final {
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
+  void SetMagicConversionForTest(bool enabled, std::string backend, int timeout_ms = 30000);
   void SetLiveConversionForTest(bool enabled);
   void SetPunctuationConversionForTest(bool enabled);
   void SetConvertKeysActionForTest(ConvertKeysAction action);

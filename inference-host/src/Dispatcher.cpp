@@ -1824,7 +1824,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   // without a class had no usable answer (AiErrorClassToWire has no name for None).
   const auto fail = [&](AiErrorClass error) {
     if (error == AiErrorClass::None) error = AiErrorClass::Parse;
-    // result=blocked marks the secure stop (observability-spec section 7.2).
+    // result=blocked marks the secure stop (observability-spec section 7.2);
+    // ai-backend-spec section 4.1 lists the values of this event.
     DispatcherLogger(runtime_logger_)
         .Log(logging::RuntimeLogLevel::Warn, "transform_selected_text_failed",
              {{"request_id", req.request_id},
@@ -1838,6 +1839,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   const auto parsed = ipc::ParseTransformSelectedTextRequest(req.payload_json);
   if (!parsed) {
     res.error = std::string(ipc::kTransformErrorInvalidRequest);
+    return reply();
+  }
+  // Section 8.5.3 of host-availability-spec stops AI in SafeMode. The engine's
+  // state decides, as for LoadModel: when a save races the startup reload and
+  // drops the flag, the engine still enters SafeMode with settings that carry
+  // no overrides, and the request's ai_backend would replace the forced "none".
+  if (SafeModeEnabled()) {
+    DispatcherLogger(runtime_logger_)
+        .Log(logging::RuntimeLogLevel::Warn, "transform_selected_text_failed",
+             {{"request_id", req.request_id},
+              {"result", logging::RuntimeLogSafeText("safe_mode")},
+              {"error_code", logging::RuntimeLogSafeText("business")}});
+    res.error = std::string(ipc::kTransformErrorSafeMode);
     return reply();
   }
   // As for predictions, the user's secure setting blocks it; SafeMode's

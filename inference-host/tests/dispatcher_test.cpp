@@ -6444,6 +6444,75 @@ TEST_F(DispatcherTest, TransformSelectedTextWithoutSettingsOrHandshakeSendsNothi
   EXPECT_EQ(calls, 0u);
 }
 
+// host-availability-spec section 8.5.3: SafeMode stops AI by the engine's
+// state, even when the settings carry no overrides (a save that raced the
+// startup reload) and the request names a backend. A refusal before the
+// backend is answered even for a canceled request, and logs no text.
+TEST_F(DispatcherTest, TransformSelectedTextIsRefusedInSafeMode) {
+  const auto directory = std::filesystem::path(temp_directory.File("transform_safe_mode_logs"));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { RemovePathNoThrow(path); }
+  } cleanup{directory};
+  const auto settings_path = temp_directory.File("azookey_transform_safe_mode_settings.json");
+  {
+    std::ofstream file(settings_path);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{
+            200, R"({"choices":[{"message":{"content":"{\"result\":\"変換\"}"}}]})"};
+      });
+  ipc::TransformSelectedTextRequest request;
+  request.mode = "free";
+  request.prompt = "prompt-marker-text";
+  request.selection = "selection-marker-text";
+  request.secure = false;
+  request.ai_allowed = request.external_ai_allowed = true;
+  request.ai_backend = "openai";
+  engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+  {
+    azookey::logging::RuntimeLoggerOptions options;
+    options.enabled = true;
+    options.component = "host";
+    options.logs_directory = directory;
+    azookey::logging::RuntimeLogger logger(options);
+    azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings, nullptr,
+                                      &logger);
+    for (const bool canceled : {false, true}) {
+      const uint64_t id = canceled ? 798 : 797;
+      if (canceled) scheduler.Cancel(id);
+      const auto response =
+          handler.Dispatch(MakeReq(id, ipc::MessageType::TransformSelectedText,
+                                   ipc::BuildTransformSelectedTextRequest(request)));
+      ASSERT_TRUE(response.has_value()) << canceled;
+      const auto parsed = ipc::ParseTransformSelectedTextResponse(response->payload_json);
+      ASSERT_TRUE(parsed.has_value()) << canceled;
+      EXPECT_EQ(parsed->error, std::optional<std::string>(ipc::kTransformErrorSafeMode));
+      EXPECT_FALSE(parsed->error_class.has_value());
+      EXPECT_TRUE(parsed->result.empty());
+    }
+  }
+  EXPECT_EQ(calls, 0u);
+  std::string log_text;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    log_text.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"result\":\"safe_mode\""), std::string::npos);
+  EXPECT_EQ(log_text.find("selection-marker-text"), std::string::npos);
+  EXPECT_EQ(log_text.find("prompt-marker-text"), std::string::npos);
+  std::remove(settings_path.c_str());
+}
+
 // privacy-and-secure-input-spec section 8: the selection, the instruction and
 // the result never reach the runtime log, on the secure stop, on a backend
 // failure or on success; the failure line carries only fixed values.

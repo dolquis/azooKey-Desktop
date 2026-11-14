@@ -26,6 +26,29 @@ bool HasQuote(const std::filesystem::path& path) {
   return path.native().find(L'"') != std::wstring::npos;
 }
 
+// The final path of an open file in the drive-letter form ("C:\..."), or "\\server\share\..."
+// for a network file, without the "\\?\" prefix msiexec does not need.
+std::optional<std::filesystem::path> ResolvedPathOf(HANDLE file) {
+  std::wstring buffer(MAX_PATH, L'\0');
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const DWORD length =
+        GetFinalPathNameByHandleW(file, buffer.data(), static_cast<DWORD>(buffer.size()),
+                                  FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (length == 0) return std::nullopt;
+    if (length < buffer.size()) {
+      buffer.resize(length);
+      constexpr std::wstring_view kUnc = L"\\\\?\\UNC\\";
+      constexpr std::wstring_view kLocal = L"\\\\?\\";
+      if (buffer.starts_with(kUnc))
+        return std::filesystem::path(L"\\\\" + buffer.substr(kUnc.size()));
+      if (buffer.starts_with(kLocal)) return std::filesystem::path(buffer.substr(kLocal.size()));
+      return std::filesystem::path(buffer);
+    }
+    buffer.assign(length, L'\0');  // Too small: length is the size it needs.
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> HashOpenFile(HANDLE file) {
   BCRYPT_ALG_HANDLE algorithm = nullptr;
   if (!BCRYPT_SUCCESS(
@@ -131,6 +154,15 @@ std::optional<VerifiedUpdatePackage> VerifiedUpdatePackage::Open(const std::file
       (tag.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
     return std::nullopt;
   }
+  // A junction among the parent directories could be pointed elsewhere after the check, so
+  // msiexec gets the path of the opened file itself, every junction resolved. A directory that
+  // holds an open file cannot be renamed, so that path keeps naming this file.
+  const auto resolved = ResolvedPathOf(file);
+  if (!resolved || HasQuote(*resolved) ||
+      _wcsicmp(resolved->filename().c_str(), path.filename().c_str()) != 0) {
+    return std::nullopt;
+  }
+  package.path_ = *resolved;
   const auto actual = HashOpenFile(file);
   if (!actual || *actual != expected_sha256) return std::nullopt;
   return package;

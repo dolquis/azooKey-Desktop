@@ -65,7 +65,9 @@ TEST(UpdateInstallerTest, OnlyAFileWithTheExpectedHashOpensAndItStaysLockedWhile
   {
     auto package = VerifiedUpdatePackage::Open(file, kAbcSha);
     ASSERT_TRUE(package);
-    EXPECT_EQ(package->path(), file);
+    // The resolved path names the same file (the temporary directory may be given in 8.3 form).
+    EXPECT_TRUE(std::filesystem::equivalent(package->path(), file));
+    EXPECT_FALSE(package->path().native().starts_with(L"\\\\?\\"));
     // While verified, the file can be read (by msiexec) but not changed, renamed or deleted.
     std::ifstream reader(file, std::ios::binary);
     EXPECT_TRUE(reader.good());
@@ -80,6 +82,32 @@ TEST(UpdateInstallerTest, OnlyAFileWithTheExpectedHashOpensAndItStaysLockedWhile
   // Closed: the file is free again.
   std::error_code ec;
   EXPECT_TRUE(std::filesystem::remove(file, ec)) << ec.message();
+}
+
+// A junction among the parents is resolved: msiexec gets the real directory, which cannot be
+// renamed while the file in it is open, not the junction, which could be re-pointed.
+TEST(UpdateInstallerTest, AJunctionAmongTheParentsIsResolvedBeforeMsiexecGetsThePath) {
+  TempDirectory temp;
+  const auto real = temp.path() / "real";
+  const auto link = temp.path() / "link";
+  std::filesystem::create_directories(real);
+  { std::ofstream(real / "azooKey-1.2.3-x64.msi", std::ios::binary) << "abc"; }
+  // A junction (mount point) needs no privilege, unlike a directory symbolic link.
+  const std::wstring command =
+      L"cmd.exe /c mklink /J \"" + link.native() + L"\" \"" + real.native() + L"\" >nul 2>&1";
+  if (_wsystem(command.c_str()) != 0 || !std::filesystem::exists(link / "azooKey-1.2.3-x64.msi")) {
+    GTEST_SKIP() << "could not create a junction here";
+  }
+  {
+    auto package = VerifiedUpdatePackage::Open(link / "azooKey-1.2.3-x64.msi", kAbcSha);
+    ASSERT_TRUE(package);
+    EXPECT_TRUE(std::filesystem::equivalent(package->path().parent_path(), real));
+    EXPECT_EQ(package->path().native().find(L"\\link\\"), std::wstring::npos)
+        << package->path().string();
+    EXPECT_EQ(package->path().filename(), std::filesystem::path(L"azooKey-1.2.3-x64.msi"));
+  }
+  std::error_code ec;
+  std::filesystem::remove(link, ec);  // Removes the junction, not its target.
 }
 
 TEST(UpdateInstallerTest, MsiexecExitCodesAndArgumentsFollowSection63) {

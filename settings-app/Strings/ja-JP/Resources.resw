@@ -128,7 +128,6 @@
   <data name="InstallUpdateButton.Content" xml:space="preserve"><value>インストール</value></data>
   <data name="UpdateInstall_Downloading" xml:space="preserve"><value>ダウンロードしています（{received} / {total} MB）。</value></data>
   <data name="UpdateInstall_Ready" xml:space="preserve"><value>v{version} をダウンロードして検証しました。「インストール」で適用できます。</value></data>
-  <data name="UpdateInstall_HostUnavailable" xml:space="preserve"><value>IME のサービスに接続できないため、ダウンロードできません。</value></data>
   <data name="UpdateInstall_Error_busy" xml:space="preserve"><value>ほかのダウンロードが進行中です。終わってから、もう一度お試しください。</value></data>
   <data name="UpdateInstall_Error_not_available" xml:space="preserve"><value>この版は、いま更新として記録されていません。次の更新の確認の後で、もう一度お試しください。</value></data>
   <data name="UpdateInstall_Error_disabled" xml:space="preserve"><value>更新の確認がオフか、いまのプライバシーモードでは、ダウンロードしません。</value></data>

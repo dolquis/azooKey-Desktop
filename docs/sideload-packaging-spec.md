@@ -807,7 +807,8 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
   無い・上限を超えるものは `too_large` とし、どれもダウンロードしない。
 - 置き場所は `settings.json` と同じディレクトリの `updates\azooKey-<version>-x64.msi` である。
   `HttpDownloader` が `.part` に書き、digest と一致したときだけ名前を変える。一致しない
-  ファイルは置かない。検証が済んだら、同じディレクトリの古い版の MSI と `.part` を消す。
+  ファイルは置かない。検証が済んだら、同じディレクトリの古い版の base の MSI
+  （`azooKey-<MAJOR.MINOR.PATCH>-x64.msi`）と、その `.part` を消す。それ以外のファイルは残す。
 - 取得の途中でも、利用者の中止（`cancelled`）、Host の停止（`cancelled`）、設定の再読込で
   条件が満たされなくなったとき（`disabled`）に止まる。通信の失敗は `network`、取得か検証の
   失敗は `download_failed`、置き場所を作れないときは `save_failed` とする。
@@ -815,7 +816,8 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
   CDN での破損と改ざんは検出できるが、リポジトリやリリースそのものの侵害は防げない。MVP の
   MSI は未署名なので、Authenticode の検証は M29 の署名の後に足す（DEV-2080）。
 - Host は各ダウンロードの結果を RuntimeLog の `update_fetch` イベントに、`result`（`ready` /
-  `failed`）、固定の `reason`（上の分類か `verified`）、受け取ったバイト数だけで記録する。
+  `failed`）、固定の `reason`（上の分類か `verified`）、受け取ったバイト数だけで記録する。中止と
+  `disabled` 以外の失敗は Warn とし、`error_code`（`business`）を添える。
   版、URL、パスは記録しない。
 
 #### 適用
@@ -831,9 +833,10 @@ supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
   適用する形は DEV-2081 とする。
 - 設定アプリは、置き場所のファイルを書き込みと削除を拒むハンドル（`FILE_SHARE_READ` だけ）で
   開き、そのハンドルで SHA-256 を計算し直して、Host が答えた値と一致したときだけ
-  `%SystemRoot%\System32\msiexec.exe` を昇格して起動する。ハンドルは `msiexec` が終わるまで
-  閉じないので、検証したファイルと適用するファイルは同じである。リンク（reparse point）は
-  開かない。`msiexec` にはログの出力先を渡さない（昇格したプロセスが利用者の書き込める場所へ
+  `%SystemRoot%\System32\msiexec.exe` を昇格して起動する。ファイル自身がリンク（reparse point）
+  なら開かない。`msiexec` に渡すのは、開いたハンドルから解決したパス（途中の junction を
+  すべて解決したもの）である。ハンドルは `msiexec` が終わるまで閉じず、開いたファイルを含む
+  ディレクトリは名前を変えられないので、検証したファイルと適用するファイルは同じである。`msiexec` にはログの出力先を渡さない（昇格したプロセスが利用者の書き込める場所へ
   書かないため）。
 - 終了コード `0` は完了、`3010` は再起動待ち、UAC の拒否と `1602` は取り消し、`1618` は
   ほかのインストールの実行中、それ以外は失敗として、コードを示す。結果の文言は適用の前に

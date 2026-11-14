@@ -37,6 +37,7 @@ class VerifiedUpdatePackage {
   VerifiedUpdatePackage& operator=(const VerifiedUpdatePackage&) = delete;
   ~VerifiedUpdatePackage();
 
+  // The opened file's own path with every junction resolved: what msiexec is given.
   const std::filesystem::path& path() const { return path_; }
 
  private:

@@ -18,17 +18,27 @@ constexpr uint64_t kMaxStatusBytes = 64 * 1024;
 // one), so a byte-wise widening is exact.
 std::wstring WidenAscii(std::string_view text) { return std::wstring(text.begin(), text.end()); }
 
+// Only the files this service writes: azooKey-<MAJOR.MINOR.PATCH>-x64.msi and its .part. The
+// Vulkan add-on's MSI and anything else in the directory stay.
 bool IsPackageFileName(const std::filesystem::path::string_type& name) {
   using View = std::basic_string_view<std::filesystem::path::value_type>;
   const std::filesystem::path prefix_path("azooKey-");
   const std::filesystem::path msi("-x64.msi");
   const std::filesystem::path part("-x64.msi.part");
-  const View kPrefix(prefix_path.native());
+  const View prefix(prefix_path.native());
   for (const View suffix : {View(msi.native()), View(part.native())}) {
-    if (name.size() > kPrefix.size() + suffix.size() && name.starts_with(kPrefix) &&
-        name.ends_with(suffix)) {
-      return true;
+    if (name.size() <= prefix.size() + suffix.size() || !name.starts_with(prefix) ||
+        !name.ends_with(suffix)) {
+      continue;
     }
+    const View middle =
+        View(name).substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+    std::string version;
+    for (const auto c : middle) {
+      if (c > 0x7f) return false;
+      version.push_back(static_cast<char>(c));
+    }
+    if (IsInstallableVersion(version)) return true;
   }
   return false;
 }
@@ -261,14 +271,21 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
   if (runtime_logger_) {
     // The result, the fixed category and the bytes received only: the URL, the path and the
     // downloader's message stay out of the log.
-    runtime_logger_->Log(
-        error.empty() || error == "cancelled" || error == "disabled"
-            ? logging::RuntimeLogLevel::Info
-            : logging::RuntimeLogLevel::Warn,
-        "update_fetch",
-        {{"result", logging::RuntimeLogSafeText(error.empty() ? "ready" : "failed")},
-         {"reason", logging::RuntimeLogSafeText(error.empty() ? std::string("verified") : error)},
-         {"bytes_received", bytes_received}});
+    const bool stopped = error == "cancelled" || error == "disabled";
+    if (error.empty() || stopped) {
+      runtime_logger_->Log(
+          logging::RuntimeLogLevel::Info, "update_fetch",
+          {{"result", logging::RuntimeLogSafeText(error.empty() ? "ready" : "failed")},
+           {"reason", logging::RuntimeLogSafeText(error.empty() ? std::string("verified") : error)},
+           {"bytes_received", bytes_received}});
+    } else {
+      // A failure carries error_code as update_check and update_notification do.
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "update_fetch",
+                           {{"result", logging::RuntimeLogSafeText("failed")},
+                            {"reason", logging::RuntimeLogSafeText(error)},
+                            {"error_code", logging::RuntimeLogSafeText("business")},
+                            {"bytes_received", bytes_received}});
+    }
   }
 }
 

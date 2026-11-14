@@ -226,7 +226,8 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset()});
   // An older package and its part are removed once the new one is verified; other files stay.
   std::filesystem::create_directories(f.UpdatesDir());
-  for (const char* name : {"azooKey-1.2.2-x64.msi", "azooKey-1.2.2-x64.msi.part", "notes.txt"}) {
+  for (const char* name : {"azooKey-1.2.2-x64.msi", "azooKey-1.2.2-x64.msi.part", "notes.txt",
+                           "azooKey-vulkan-addon-1.2.2-x64.msi", "azooKey-latest-x64.msi"}) {
     std::ofstream(f.UpdatesDir() / name) << "x";
   }
   auto service = f.Make();
@@ -243,6 +244,11 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   ASSERT_EQ(f.network.text_requests.size(), 1u);
   EXPECT_EQ(f.network.text_requests[0].url,
             L"https://api.example.test/repos/owner/repo/releases/tags/v1.2.3");
+  EXPECT_GT(f.network.text_requests[0].max_bytes, 0u);
+  ASSERT_TRUE(f.network.text_requests[0].cancelled);
+  EXPECT_FALSE(f.network.text_requests[0].cancelled());
+  ASSERT_TRUE(f.network.text_requests[0].network_allowed);
+  EXPECT_TRUE(f.network.text_requests[0].network_allowed());
   ASSERT_EQ(f.network.downloads.size(), 1u);
   const auto& download = f.network.downloads[0];
   EXPECT_EQ(download.url,
@@ -255,7 +261,10 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   EXPECT_TRUE(download.network_allowed());
   EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / "azooKey-1.2.2-x64.msi"));
   EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / "azooKey-1.2.2-x64.msi.part"));
+  // Only this service's own files go: the add-on's MSI and other names stay.
   EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "notes.txt"));
+  EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "azooKey-vulkan-addon-1.2.2-x64.msi"));
+  EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "azooKey-latest-x64.msi"));
 
   azookey::ipc::UpdateFetchResponse response;
   azookey::host::FillUpdateFetchResponse(end, response);
@@ -347,6 +356,31 @@ TEST(UpdateFetchServiceTest, ARunningDownloadIsBusyAndStopsOnCancelOrWhenDisallo
     EXPECT_EQ(end.error, by_settings ? "disabled" : "cancelled");
     EXPECT_EQ(service->Cancel("1.2.3"), UpdateFetchCancelResult::NotRunning);
   }
+}
+
+TEST(UpdateFetchServiceTest, ABusyStartReportsTheRunningDownloadAndAFinishedOneCanRestart) {
+  Fixture f;
+  f.WriteStatus("update_available", "1.2.3", "1.0.0");
+  f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset()});
+  f.network.hold_download = true;
+  auto service = f.Make();
+  ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+  ASSERT_TRUE(f.network.WaitForDownload());
+  // The settings app follows a download another window started by this state.
+  UpdateFetchSnapshot busy;
+  EXPECT_EQ(service->Start("1.2.3", &busy), UpdateFetchStartResult::Busy);
+  EXPECT_EQ(busy.state, UpdateFetchSnapshot::State::Running);
+  EXPECT_EQ(busy.version, "1.2.3");
+  f.network.Release();
+  ASSERT_EQ(WaitForEnd(*service).state, UpdateFetchSnapshot::State::Ready);
+  // The finished worker is joined when the next download starts.
+  UpdateFetchSnapshot again;
+  ASSERT_EQ(service->Start("1.2.3", &again), UpdateFetchStartResult::Started);
+  EXPECT_EQ(again.state, UpdateFetchSnapshot::State::Running);
+  EXPECT_TRUE(again.sha256.empty());
+  const auto end = WaitForEnd(*service);
+  EXPECT_EQ(end.state, UpdateFetchSnapshot::State::Ready);
+  EXPECT_EQ(f.network.downloads.size(), 2u);
 }
 
 TEST(UpdateFetchServiceTest, ShutdownStopsTheDownloadAndRefusesLaterStarts) {

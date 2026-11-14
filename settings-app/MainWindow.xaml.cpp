@@ -159,6 +159,12 @@ MainWindow::MainWindow() {
   Closed([alive = alive_](auto const&, auto const&) { *alive = false; });
   AppWindow().Closing(
       [this](auto const&, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& args) {
+        // DEV-1974: an install keeps the window open until msiexec ends, so the verified file
+        // stays locked, the Host is brought back and a restart can be asked for.
+        if (update_installing_) {
+          args.Cancel(true);
+          return;
+        }
         if (close_confirmed_ || !controls_loaded_) return;
         // A save still running keeps the window open; its result decides what is left unsaved.
         if (saving_ || close_dialog_open_) {
@@ -390,7 +396,7 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
     // A download of the same version another window started is followed as if this one had.
     const bool follow = call_status == azookey::settings::HostCallStatus::Ok && last &&
                         (last->ok || (last->error == "busy" && last->version == version));
-    // A poll that gets no answer is retried; twenty in a row (ten seconds) end the wait.
+    // A poll that gets no answer is retried; twenty in a row (at least ten seconds) end the wait.
     int unanswered = 0;
     while (follow && last->state == "running" && last->version == version) {
       co_await azookey::settings::ResumeForeground(dispatcher);
@@ -420,7 +426,10 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
         last = std::move(poll.response);
         unanswered = 0;
       } else if (++unanswered >= 20) {
-        call_status = poll.status;
+        // An answer that could not be read is a broken response, not a Host that went away.
+        call_status = poll.status == azookey::settings::HostCallStatus::Ok
+                          ? azookey::settings::HostCallStatus::InvalidResponse
+                          : poll.status;
         break;
       }
     }
@@ -515,13 +524,24 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   confirm.PrimaryButtonText(resources.GetString(L"UpdateInstall_ConfirmPrimary"));
   confirm.CloseButtonText(resources.GetString(L"UpdateInstall_ConfirmClose"));
   confirm.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Close);
-  if (co_await confirm.ShowAsync() != Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary) {
+  // Marked before the dialog, so a second press finds the install under way; a dialog that
+  // cannot open (another is showing) is a declined install, not a crash of this window.
+  update_installing_ = true;
+  RenderUpdateInstall();
+  bool accepted = false;
+  try {
+    accepted =
+        co_await confirm.ShowAsync() == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary;
+  } catch (...) {
+    accepted = false;
+  }
+  if (!accepted) {
+    update_installing_ = false;
+    RenderUpdateInstall();
     co_return;
   }
 
-  update_installing_ = true;
   UpdateInstallText().Text(installing);
-  RenderUpdateInstall();
   HWND owner = nullptr;
   if (const auto native = try_as<::IWindowNative>()) (void)native->get_WindowHandle(&owner);
   const auto dispatcher = DispatcherQueue();
@@ -594,8 +614,15 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   reboot.PrimaryButtonText(reboot_primary);
   reboot.CloseButtonText(reboot_close);
   reboot.DefaultButton(Microsoft::UI::Xaml::Controls::ContentDialogButton::Close);
-  if (co_await reboot.ShowAsync() == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary &&
-      !azookey::settings::RequestRestart()) {
+  bool restart = false;
+  try {
+    restart =
+        co_await reboot.ShowAsync() == Microsoft::UI::Xaml::Controls::ContentDialogResult::Primary;
+  } catch (...) {
+    // Another dialog was open: the pane's text still says a restart finishes the update.
+    restart = false;
+  }
+  if (restart && !azookey::settings::RequestRestart()) {
     UpdateInstallText().Text(message + L"\n" + restart_failed);
   }
 }

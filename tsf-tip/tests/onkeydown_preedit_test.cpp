@@ -10856,7 +10856,9 @@ TEST(TsfTipTypoCorrectionTest, RawKeysAreTheLowercaseKeysThatSpellTheReading) {
   {
     DocumentPreeditHarness h;
     ConfigureTypoHarness(h);
-    PressShifted(h, 'K');
+    h.keyboard_state.SetDown(VK_SHIFT, true);
+    ASSERT_TRUE(h.Press('K'));
+    h.keyboard_state.SetDown(VK_SHIFT, false);
     TypeTypoRomaji(h, "ANJI");
     ASSERT_EQ(h.service.preedit_kana_, "かんじ");
     ASSERT_TRUE(h.service.pending_ipc_live_for_test());

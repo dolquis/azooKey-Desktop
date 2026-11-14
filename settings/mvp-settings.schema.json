@@ -452,7 +452,7 @@
         "minConfidenceForTopCandidate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.90 },
         "disableInSecretApps": {
           "type": "boolean", "enum": [true], "default": true,
-          "description": "secure の入力では補正も学習もしない。false にはできない"
+          "description": "M55 の適用ゲートが secure の入力で補正を止める（section 12.12.2）。false にはできない"
         }
       }
     },

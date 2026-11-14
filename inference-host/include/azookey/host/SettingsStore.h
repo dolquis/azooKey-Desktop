@@ -59,8 +59,9 @@ struct RuntimeAutoWordSettings {
 // M55 typoCorrection.*; docs/typo-correction-learning-spec.md section 12.14.
 // `mode` is the v2 mode after the section 12.14 migration from the v1 root
 // typoCorrectionMode. The engine reads `enabled` and `mode` through
-// ApplyRuntimeSettingsToEngineConfig and the ObserveTypo gate reads
-// `learn_personal_patterns`; the rest waits for the M55 correction engine.
+// ApplyRuntimeSettingsToEngineConfig, the ObserveTypo gate reads them with
+// `learn_personal_patterns` (PrivacyGuard::typo_learning), and the rest waits
+// for the M55 correction engine.
 struct RuntimeTypoCorrectionSettings {
   bool enabled{true};
   std::string mode{"suggest"};
@@ -69,7 +70,9 @@ struct RuntimeTypoCorrectionSettings {
   int32_t max_reading_hypotheses{3};
   double min_confidence_for_ranking{0.70};
   double min_confidence_for_top_candidate{0.90};
-  // Fixed: a secure input never gets typo correction (section 12.11).
+  // Fixed to true for the M55 apply gate (sections 12.11 and 12.12.2). This
+  // Host's candidate requests do not consult it: secure inputs already learn
+  // nothing, and their correction is the TIP's to drop (section 12.12.2).
   bool disable_in_secret_apps{true};
 };
 
@@ -187,8 +190,9 @@ class SettingsStore {
     std::unique_lock<std::mutex> lock;
     core::PrivacyPolicy policy;
     bool privacy_mode_secure{true};  // As RuntimeSettings::privacy_mode_secure.
-    // typoCorrection.learnPersonalPatterns (typo-correction-learning-spec
-    // section 12.14): false stops ObserveTypo from accumulating pairs.
+    // typo-correction-learning-spec section 12.14: false, when
+    // learnPersonalPatterns is false or typo correction is off (enabled false
+    // or mode off), stops ObserveTypo from accumulating pairs.
     bool typo_learning{false};
   };
   // Hold through the learning operation. Reload publishes under this same lock,

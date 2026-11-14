@@ -1058,6 +1058,8 @@ TEST(SettingsStoreTest, TypoCorrectionModeMigratesFromTheV1RootKey) {
     EXPECT_EQ(store.settings().typo_correction.mode, item.mode);
     const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, store.settings());
     EXPECT_EQ(config.typo_correction_mode, item.engine_mode);
+    // Off stops the learning too, through the same lock as the privacy policy.
+    EXPECT_EQ(store.LockPrivacyPolicy().typo_learning, std::string(item.engine_mode) != "off");
     // The Host only reads: the file is left as it was.
     EXPECT_EQ(ReadText(path), item.json);
   }

@@ -1522,8 +1522,9 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   if (!LearningAllowed(parsed->secure, parsed->learning_allowed,
                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed)))
     return;
-  // M55 typoCorrection.learnPersonalPatterns stops the accumulation only; the
-  // pairs already learned still apply (typo-correction-learning-spec 12.12.2).
+  // M55 (typo-correction-learning-spec 12.14): learnPersonalPatterns false, or
+  // typo correction off, stops the accumulation under the settings lock. With
+  // learnPersonalPatterns alone the pairs already learned still apply.
   if (privacy && !privacy->typo_learning) return;
   // The engine applies the accept filters and the "off" gate; a rejected pair
   // is simply not recorded, and there is no reply to carry that outcome.

@@ -4721,7 +4721,10 @@ TEST_F(DispatcherTest, RequestedTypoModeLeavesTheHostModeAsItIs) {
       SCOPED_TRACE(secure);
       const auto unspecified = query(secure, "");
       ASSERT_FALSE(unspecified.candidates.empty());
-      EXPECT_EQ(unspecified.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
+      // What a secure request gets is the M55 apply gate's to decide (section
+      // 12.12.2); here only the request must not change it.
+      if (!secure)
+        EXPECT_EQ(unspecified.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
       for (const std::string mode : {"off", "suggest", "rank", "aggressive"}) {
         SCOPED_TRACE(mode);
         const auto requested = query(secure, mode);

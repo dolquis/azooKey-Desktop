@@ -448,7 +448,10 @@ void SettingsStore::PublishPrivacyPolicy() {
   std::lock_guard lock(privacy_mutex_);
   privacy_policy_ = settings_.privacy_policy;
   privacy_mode_secure_ = settings_.privacy_mode_secure;
-  typo_learning_ = settings_.typo_correction.learn_personal_patterns;
+  // Published under the same lock as the privacy policy, so a reload that turns
+  // typo correction off stops ObserveTypo before the engine config follows.
+  const auto& typo = settings_.typo_correction;
+  typo_learning_ = typo.learn_personal_patterns && typo.enabled && typo.mode != "off";
 }
 
 SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {

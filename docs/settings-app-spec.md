@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M11, M30]
+canonical_for: ["設定アプリ（構成、ナビゲーション、Host との IPC、設定キーの確定、v1.0 最小機能）"]
+---
+
 # 設定アプリ 仕様（settings-app）
 
 対象リポジトリ: dolquis/azooKey-Desktop

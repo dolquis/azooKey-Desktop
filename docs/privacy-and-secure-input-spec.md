@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M33, M46]
+canonical_for: ["プライバシー / セーフ入力モード"]
+---
+
 # プライバシー / セーフ入力モード 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop

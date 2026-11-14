@@ -1,3 +1,9 @@
+---
+kind: spec
+milestones: [M8, M24, M25, M26, M27]
+canonical_for: ["Copilot+ PC / NPU バックエンド"]
+---
+
 # Copilot+ PC / NPU バックエンド 仕様（Phase 6-B）
 
 本書は `docs/zenzai-gpu-route.md` の発展形として、DirectML / NPU / ARM64

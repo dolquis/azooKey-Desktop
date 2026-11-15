@@ -10381,7 +10381,7 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
 #endif
   session.range = std::move(capture.range);
   session.original = std::move(capture.text);
-  // The app's promptPrefix (app-profile-spec §3), resolved while the app's
+  // The app's promptPrefix (app-profile-spec §4.1), resolved while the app's
   // field has the focus: the window's own focus would change the window class.
   std::string prompt_prefix;
   if (const auto settings = local_settings_.Snapshot(); settings.profiles) {

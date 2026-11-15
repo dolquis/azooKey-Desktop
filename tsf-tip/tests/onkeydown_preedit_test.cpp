@@ -17807,7 +17807,7 @@ TEST(TsfTipMagicConversionTest, TheCandidateWindowMessageOpensTheWindow) {
   EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
 }
 
-// app-profile-spec §3 (DEV-2083): the promptPrefix of the app the field
+// app-profile-spec §4.1 (DEV-2083): the promptPrefix of the app the field
 // belongs to goes before the prompt when sent; the window shows the prompt only.
 TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixGoesBeforeThePromptWhenSent) {
   struct Case {
@@ -17836,6 +17836,9 @@ TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixGoesBeforeThePromptWhenSent) 
     m.DoubleTap(kAlnumKey);
     ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
     EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"英語に翻訳");
+    // The focus on the window changes what the TIP sees as the app; the prefix
+    // stays the one resolved for the field the window opened from.
+    m.h.service.set_foreground_app_for_test({"other.exe", "Other", true});
     m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
     EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"英語に翻訳");
     ASSERT_TRUE(m.h.service.has_queued_transform_for_test());

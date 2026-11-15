@@ -108,7 +108,10 @@ bool PromptDialogModel::Submit(std::wstring prompt) {
   // The app's prefix goes first, on its own line; the limit covers both.
   std::string sent = prompt_prefix_.empty() ? std::move(utf8) : prompt_prefix_ + "\n" + utf8;
   if (sent.size() > ipc::kMaxTransformPromptBytes) {
-    view_.status = L"アプリ別の前置きと合わせると指示が長すぎます。短くしてください。";
+    // A prefix that leaves no room is fixed in the settings, not in the window.
+    view_.status = prompt_prefix_.size() + 2 > ipc::kMaxTransformPromptBytes
+                       ? L"アプリ別の前置きが長すぎます。設定で短くしてください。"
+                       : L"アプリ別の前置きと合わせると指示が長すぎます。短くしてください。";
     return false;
   }
   view_.prompt = std::move(prompt);

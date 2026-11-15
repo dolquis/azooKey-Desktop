@@ -61,7 +61,7 @@ std::wstring_view TransformFailureMessage(const std::optional<std::string>& erro
 
 class PromptDialogModel {
  public:
-  // `prompt_prefix` is the app's promptPrefix (app-profile-spec §3). The
+  // `prompt_prefix` is the app's promptPrefix (app-profile-spec §4.1). The
   // window never shows it; a non-empty one goes before the prompt when sent.
   static PromptDialogModel ForSelection(core::PromptPreset preset, std::wstring selection,
                                         std::string prompt_prefix = {});

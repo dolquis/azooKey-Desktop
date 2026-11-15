@@ -18113,7 +18113,7 @@ TEST(TsfTipMagicConversionTest, OnlyTheAwaitedAnswerCountsAndATimeoutCancelsTheR
     {
       MagicConversionHarness m;
       m.h.service.set_host_transform_capability_for_test(false);
-      m.h.service.set_transform_wait_for_test(300);
+      m.h.service.set_transform_wait_for_test(1000);  // From the submit, queued time included.
       m.h.service.set_ipc_pipe_name_for_test(pipe_name);
       m.h.service.start_ipc_worker_for_test();
       ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
@@ -18242,6 +18242,46 @@ TEST(TsfTipMagicConversionTest, AnUnsentRequestStopsWaitingAtItsDeadline) {
   EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
                               std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
   EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+}
+
+// The window's own timer looks at the wait again, so an unsent request ends in
+// the timeout message with no other candidate message to wake the window.
+TEST(TsfTipMagicConversionTest, TheWindowsTimerEndsTheWaitForAnUnsentRequest) {
+  MagicConversionHarness m;
+  m.h.service.set_prompt_dialog_headless_for_test(false);
+  m.h.service.set_prompt_dialog_hidden_for_test(true);
+  m.h.service.route_candidates_ready_for_test();
+  m.h.service.set_transform_wait_for_test(100);
+  const auto pump = [] {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+  };
+  m.h.service.set_double_tap_now_for_test(1000);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  m.h.service.set_double_tap_now_for_test(1200);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  ASSERT_TRUE(WaitUntil([&] {
+    pump();
+    return m.h.service.prompt_dialog_for_test().IsOpen();
+  }));
+  m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+  ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        pump();
+        const auto view = m.h.service.magic_conversion_view_for_test();
+        return view && view->state != azookey::tsf::PromptDialogState::Waiting;
+      },
+      std::chrono::seconds(5)));
+  const auto view = m.h.service.magic_conversion_view_for_test();
+  ASSERT_TRUE(view.has_value());
+  EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                              std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
+  EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  m.h.service.cancel_magic_conversion_for_test();
 }
 
 // ai-backend-spec section 4.1: the worker sends only to a Host that advertises

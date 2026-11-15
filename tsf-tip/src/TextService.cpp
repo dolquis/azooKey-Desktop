@@ -10457,13 +10457,19 @@ void TextService::ApplyTransformOutcome() {
   }
   // No answer by the deadline: the worker never sent the request (it may be
   // reconnecting), or its answer could not be posted. The window stops waiting.
-  if (magic_session_->model.view().state != PromptDialogState::Waiting ||
-      std::chrono::steady_clock::now() <
-          magic_session_->deadline + std::chrono::milliseconds(kTransformCheckGraceMs))
+  if (magic_session_->model.view().state != PromptDialogState::Waiting) return;
+  const auto due = magic_session_->deadline + std::chrono::milliseconds(kTransformCheckGraceMs);
+  const auto now = std::chrono::steady_clock::now();
+  if (now < due) {
+    // A timer may come a tick early: it is set again for the rest.
+    const auto rest = std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count();
+    prompt_dialog_.ScheduleCheck(static_cast<UINT>(rest) + 1);
     return;
+  }
   {
+    // A later answer to the request is one for an earlier generation.
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    ++ipc_transform_generation_;
+    magic_session_->generation = ++ipc_transform_generation_;
     ipc_transform_request_.reset();
   }
   magic_session_->model.OnResponse(std::nullopt, PromptFailure::TimedOut);

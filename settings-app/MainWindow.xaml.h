@@ -52,6 +52,16 @@ struct MainWindow : MainWindowT<MainWindow> {
       Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void ClearSafeModeButton_Click(Windows::Foundation::IInspectable const& sender,
                                  Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  // DEV-1974 "バージョン": the Host downloads and verifies the update; this window installs it.
+  winrt::fire_and_forget DownloadUpdateButton_Click(
+      Windows::Foundation::IInspectable const& sender,
+      Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  winrt::fire_and_forget CancelUpdateDownloadButton_Click(
+      Windows::Foundation::IInspectable const& sender,
+      Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  winrt::fire_and_forget InstallUpdateButton_Click(
+      Windows::Foundation::IInspectable const& sender,
+      Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
  private:
   winrt::fire_and_forget LoadSettingsAsync();
@@ -86,11 +96,21 @@ struct MainWindow : MainWindowT<MainWindow> {
   winrt::fire_and_forget RefreshNeologdLayerStatus();
   // Shows the Host's last update check (update-status.json beside settings.json, M32).
   void RefreshUpdateStatus();
+  // The download and install controls for the update the check found (DEV-1974).
+  void RenderUpdateInstall();
   Windows::Foundation::IAsyncOperation<bool> ShowNeologdNoticesAsync(bool ask_consent);
   void ShowSafeMode(const azookey::settings::EditableSettings& settings);
   void ShowInvalidSetting(const std::string& path);
 
   std::optional<std::filesystem::path> settings_path_;
+  // DEV-1974: the available version the pane offers, the SHA-256 the Host verified it against
+  // once its download is ready, and whether a download or an install runs.
+  std::string update_version_;
+  std::string update_sha256_;
+  bool update_downloading_{false};
+  bool update_installing_{false};
+  // The install of update_version_ succeeded (or awaits a restart): nothing more to offer.
+  bool update_installed_{false};
   // The hash of the API key the box was given when loading or last saving, to tell an edit.
   size_t loaded_api_key_hash_{std::hash<std::wstring_view>{}(std::wstring_view())};
   // The user pressed "API キーを削除" since then.

@@ -111,6 +111,49 @@ TEST(PayloadsTest, ReverseConvertRoundTripAndRejectsInvalidPayloads) {
   EXPECT_FALSE(ParseReverseConvertResponse(R"({"reading":"","confidence":1})"));
 }
 
+TEST(PayloadsTest, UpdateFetchRoundTripAndRequiresTheVersion) {
+  using namespace azookey::ipc;
+  const auto fetch = ParseFetchUpdateRequest(BuildFetchUpdateRequest({"1.2.3"}));
+  ASSERT_TRUE(fetch);
+  EXPECT_EQ(fetch->version, "1.2.3");
+  const auto cancel = ParseCancelUpdateFetchRequest(BuildCancelUpdateFetchRequest({"1.2.3"}));
+  ASSERT_TRUE(cancel);
+  EXPECT_EQ(cancel->version, "1.2.3");
+  for (const char* invalid : {R"({})", R"({"version":""})", R"({"version":3})", "[]", "not json"}) {
+    EXPECT_FALSE(ParseFetchUpdateRequest(invalid)) << invalid;
+    EXPECT_FALSE(ParseCancelUpdateFetchRequest(invalid)) << invalid;
+  }
+
+  UpdateFetchResponse ready;
+  ready.state = "ready";
+  ready.version = "1.2.3";
+  ready.received_bytes = 10;
+  ready.total_bytes = 10;
+  ready.sha256 = std::string(64, 'a');
+  const auto decoded = ParseUpdateFetchResponse(BuildUpdateFetchResponse(ready));
+  ASSERT_TRUE(decoded);
+  EXPECT_TRUE(decoded->ok);
+  EXPECT_FALSE(decoded->error);
+  EXPECT_EQ(decoded->state, "ready");
+  EXPECT_EQ(decoded->version, "1.2.3");
+  EXPECT_EQ(decoded->received_bytes, 10u);
+  EXPECT_EQ(decoded->total_bytes, 10u);
+  EXPECT_EQ(decoded->sha256, std::string(64, 'a'));
+  EXPECT_TRUE(decoded->result_error.empty());
+
+  UpdateFetchResponse refused;
+  refused.ok = false;
+  refused.error = "busy";
+  refused.state = "failed";
+  refused.result_error = "digest_missing";
+  const auto decoded_refused = ParseUpdateFetchResponse(BuildUpdateFetchResponse(refused));
+  ASSERT_TRUE(decoded_refused);
+  EXPECT_FALSE(decoded_refused->ok);
+  EXPECT_EQ(decoded_refused->error, "busy");
+  EXPECT_EQ(decoded_refused->result_error, "digest_missing");
+  EXPECT_FALSE(ParseUpdateFetchResponse(R"({"version":"1.2.3"})"));
+}
+
 TEST(PayloadsTest, BatchAiPermissionsFailClosedAndRoundTrip) {
   const auto legacy = azookey::ipc::ParseQueryBatchConversionRequest(R"({"reading":"かな"})");
   ASSERT_TRUE(legacy);

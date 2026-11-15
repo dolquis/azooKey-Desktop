@@ -1,2 +1,5 @@
 # DEV-1540 (PR #542): test-only dummy session token, not a secret; replaced with a low-entropy dummy in the work tree by 9c1834e7.
 72408bae0c626d645c87a72b8da8d6a8e86f06c3:settings-app/tests/launch_arguments_test.cpp:generic-api-key:73
+# DEV-1974 (PR #717): test file names (azooKey-<ver>-x64.msi) read as an API key, not a secret; built from UpdatePackageFileName in the work tree by a5ececda.
+ca412825e76955b8919e464fc16403ff75542fb5:inference-host/tests/update_fetch_service_test.cpp:generic-api-key:229
+0d4ab8d3ada360ccfc65f5881a91d2a1d6cbd64e:inference-host/tests/update_fetch_service_test.cpp:generic-api-key:229

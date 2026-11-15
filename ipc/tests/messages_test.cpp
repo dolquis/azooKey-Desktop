@@ -108,6 +108,19 @@ TEST(MessagesTest, TypeStringMapping) {
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryPersona), "QueryPersona");
 }
 
+TEST(MessagesTest, UpdateFetchTypesRoundTripByName) {
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::FetchUpdate), "FetchUpdate");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryUpdateFetch),
+            "QueryUpdateFetch");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::CancelUpdateFetch),
+            "CancelUpdateFetch");
+  for (const auto type :
+       {azookey::ipc::MessageType::FetchUpdate, azookey::ipc::MessageType::QueryUpdateFetch,
+        azookey::ipc::MessageType::CancelUpdateFetch}) {
+    EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
+  }
+}
+
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {
   azookey::ipc::Envelope env;
   env.request_id = 42;

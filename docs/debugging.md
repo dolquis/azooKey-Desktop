@@ -198,6 +198,8 @@ Host の stderr も従来どおり残る。
 更新のトーストが出ないときは `event=update_notification` の `reason` と、同じディレクトリの
 `update-notification.json`（通知済みの版）を見る。`disabled_by_system` が続くときは、Windows の
 通知設定と、スタートメニューのショートカットの AppID（`Get-StartApps`）を確かめる。各値の契約は同 §6.3 を参照する。
+更新のダウンロードが進まないときは `event=update_fetch` の `reason` と、`settings.json` と同じ
+ディレクトリの `updates\` を見る。契約は同 §6.3「ダウンロード」を参照する。
 
 本文を確認する場合は Debug ビルドに加え、`AZOOKEY_LOG_BODY=1`、非 secure の入力、
 `privacy.redactLogs=false`、詳細ログを許可するモードがすべて必要となる。

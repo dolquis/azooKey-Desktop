@@ -39,6 +39,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     StatusPaneModel.cpp
     SettingsDocument.cpp
     UpdateStatusModel.cpp
+    UpdateInstaller.cpp
     SettingsFields.cpp
     SettingsIpcClient.cpp
     "${AZOOKEY_SETTINGS_NEOLOGD_PIN_CPP}"
@@ -52,6 +53,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
     tests/settings_fields_test.cpp
     tests/settings_ipc_client_test.cpp
     tests/update_status_model_test.cpp
+    tests/update_installer_test.cpp
   )
   target_include_directories(azookey_settings_persistence_tests
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -69,6 +71,9 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings
+      advapi32
+      bcrypt
+      shell32
   )
   azookey_discover_tests(azookey_settings_persistence_tests LABEL settings-app)
 endif()

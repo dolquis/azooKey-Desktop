@@ -56,6 +56,32 @@ struct AvailableRelease {
 std::optional<AvailableRelease> SelectRelease(std::string_view json, std::string_view channel,
                                               std::string_view release_page_prefix);
 
+// DEV-1974: the release assets an update downloads from. Only URLs under this prefix and the
+// release's own tag are followed.
+inline constexpr std::string_view kReleaseDownloadPrefix =
+    "https://github.com/dolquis/azooKey-Desktop/releases/download/";
+// The base MSI asset of a release: azooKey-<MAJOR.MINOR.PATCH>-x64.msi (release.yml).
+std::string UpdatePackageFileName(std::string_view version);
+// A version an update may install: MAJOR.MINOR.PATCH without a pre-release or a 'v', the only
+// form release.yml tags and names its MSI with.
+bool IsInstallableVersion(std::string_view version);
+
+struct UpdatePackage {
+  std::string version;
+  std::string file_name;
+  std::string download_url;
+  std::string sha256;  // Lowercase hex from the asset's "digest".
+  uint64_t size{0};
+};
+
+// The base MSI of the release a GET /releases/tags/v<version> response describes. nullopt with
+// *error set to a fixed category: "not_available" (not that release, a draft, or not JSON),
+// "asset_missing" (no single asset of that name under download_prefix), "digest_missing" (no
+// "sha256:<64 hex>" digest) or "too_large" (no size, or above max_bytes).
+std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
+                                                 std::string_view download_prefix,
+                                                 uint64_t max_bytes, std::string* error);
+
 struct UpdateCheckerOptions {
   // This build's product version (AZOOKEY_PRODUCT_VERSION).
   std::string current_version;

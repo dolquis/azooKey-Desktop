@@ -168,6 +168,63 @@ std::optional<AvailableRelease> SelectRelease(std::string_view json, std::string
   return best;
 }
 
+bool IsInstallableVersion(std::string_view version) {
+  const auto parsed = ParseReleaseVersion(version);
+  // ParseReleaseVersion accepts a leading 'v' and a pre-release; neither names an MSI.
+  return parsed && parsed->prerelease.empty() && !version.starts_with('v');
+}
+
+std::string UpdatePackageFileName(std::string_view version) {
+  return "azooKey-" + std::string(version) + "-x64.msi";
+}
+
+std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
+                                                 std::string_view download_prefix,
+                                                 uint64_t max_bytes, std::string* error) {
+  const auto fail = [error](const char* category) {
+    if (error) *error = category;
+    return std::nullopt;
+  };
+  if (!IsInstallableVersion(version) || download_prefix.empty()) return fail("not_available");
+  const auto root = ipc::json::Parse(json);
+  if (!root || !root->IsObject() || root->GetBool("draft").value_or(false) ||
+      root->GetString("tag_name") != "v" + std::string(version)) {
+    return fail("not_available");
+  }
+  const auto* assets = root->Find("assets");
+  if (!assets || !assets->IsArray()) return fail("asset_missing");
+  const auto file_name = UpdatePackageFileName(version);
+  // The asset is named exactly, so neither the Vulkan add-on MSI nor any other file matches.
+  const std::string expected_url =
+      std::string(download_prefix) + "v" + std::string(version) + "/" + file_name;
+  const ipc::json::Value* match = nullptr;
+  for (const auto& asset : assets->AsArray()) {
+    if (!asset.IsObject() || asset.GetString("name") != file_name) continue;
+    if (match) return fail("asset_missing");  // Two assets of one name: neither is trusted.
+    match = &asset;
+  }
+  if (!match || match->GetString("browser_download_url") != expected_url) {
+    return fail("asset_missing");
+  }
+  constexpr std::string_view kDigestPrefix = "sha256:";
+  const auto digest = match->GetString("digest");
+  if (!digest || digest->size() != kDigestPrefix.size() + 64 ||
+      !digest->starts_with(kDigestPrefix) ||
+      !std::all_of(digest->begin() + kDigestPrefix.size(), digest->end(),
+                   [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) {
+    return fail("digest_missing");
+  }
+  const auto size = match->GetUInt("size");
+  if (!size || *size == 0 || *size > max_bytes) return fail("too_large");
+  UpdatePackage package;
+  package.version = std::string(version);
+  package.file_name = file_name;
+  package.download_url = expected_url;
+  package.sha256 = digest->substr(kDigestPrefix.size());
+  package.size = *size;
+  return package;
+}
+
 UpdateChecker::UpdateChecker(UpdateCheckerOptions options, UpdateCheckDependencies dependencies)
     : options_(std::move(options)), dependencies_(std::move(dependencies)) {
   if (!dependencies_.fetch_text) {

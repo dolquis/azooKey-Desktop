@@ -22,7 +22,9 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
    advisory ジョブ（`cpp-tidy`、`windows-coverage`）は `needs` に入れない。
 4. ローカルで実行できる検査を先に回す。`pre-commit run --all-files`、`python3 scripts/tests/` の
    各テスト、`python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、
-   `python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py`。
+   `python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py`、
+   `python3 scripts/check_skill_tables.py`。Skill の一覧突合と impact のテストは `docs-lint`、
+   PR 本文を使う `check_skill_impact.py` は `skill-impact` ジョブで実行する。
 5. Windows ジョブはローカルで再現できないことが多い。差分を読んで preset、target、
    環境変数、artifact 名の整合を確認し、必要なら `workflow_dispatch` で実行して結果を待つ。
 6. 頻度、対象、preset、必須チェックが変わる場合は §4 の該当節と test-inventory の表を同じ変更で更新する。

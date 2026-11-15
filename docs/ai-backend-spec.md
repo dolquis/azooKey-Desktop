@@ -365,9 +365,9 @@ wire の値として残す。
 
 - system 文言の最終確定値は実装 PR（M16）でレビューする。本書は**マッピングの
   存在と意図**を契約として固定する（4 値の追加/削除は本書改訂を要する）。
-- `context`（前後文脈）は、要求が持つときだけ user メッセージに「文脈」として付す。M16 のプロンプト窓の
-  TIP は `context` を常に空で送り、`includeContextInAITransform`（§11）を見ない（左文脈を外部 AI へ
-  送らない。`docs/privacy-and-secure-input-spec.md` §5.3）。
+- `context`（前後文脈）は、要求が持ち、Host の設定 `includeContextInAITransform`（§11）が true のときだけ
+  user メッセージに「文脈」として付す。false のとき Host は要求の文脈を捨てる。M16 のプロンプト窓の TIP は
+  `context` を常に空で送る（左文脈を外部 AI へ送らない。`docs/privacy-and-secure-input-spec.md` §5.3）。
 - M58-C（`task=Cleanup`）の system プロンプトは「誤字補正・句読点挿入・整文。
   `raw_romaji`（生ローマ字）の打鍵誤りパターンを補正に使う。`auto_punctuation` が
   true のとき句読点を挿入する」を要旨とする。詳細は `romaji-batch-conversion-spec.md`
@@ -606,7 +606,7 @@ M48 のモード通知 API を前提としない。
 | `openAiApiKey` | `""` | API キー。`dpapi:` prefix で暗号化（§9） |
 | `openAiApiEndpoint` | `https://api.openai.com/v1` | OpenAI 互換エンドポイント |
 | `openAiModel` | `gpt-4o-mini` | model 名 |
-| `includeContextInAITransform` | `true` | 前後文脈（直近 paragraph）を含める。M16 の TIP は見ない（§5.2） |
+| `includeContextInAITransform` | `true` | 前後文脈（直近 paragraph）を含める。Host が要求の文脈を使うかを決め、M16 の TIP は文脈を送らない（§5.2） |
 | `batchConversionMode` | `neural` | `neural`/`ai-cleanup`（M58-C） |
 | `batchAutoPunctuation` | `false` | `ai-cleanup` 時の句読点自動挿入（M58-C） |
 | `postCommitLint` | `false` | X-3-3 の有効化 |

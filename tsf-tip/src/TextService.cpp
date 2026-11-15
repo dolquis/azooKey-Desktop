@@ -10248,16 +10248,14 @@ void TextService::PrefetchSelectedReconversion() {
 
 namespace {
 
-// The application's top-level window, which owns the prompt window. A window
-// of another thread is no owner: owning it would join the two input queues.
+// The application's top-level window, which the prompt window is centered on
+// (and owned by, when it is a window of this thread: PromptDialog::Create).
 HWND PromptOwnerWindow(ITfContext* context) {
   HWND window = nullptr;
   Microsoft::WRL::ComPtr<ITfContextView> view;
   if (context && SUCCEEDED(context->GetActiveView(&view)) && view) (void)view->GetWnd(&window);
   if (!window) window = GetForegroundWindow();
-  if (window) window = GetAncestor(window, GA_ROOT);
-  if (window && GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId()) return nullptr;
-  return window;
+  return window ? GetAncestor(window, GA_ROOT) : nullptr;
 }
 
 // M16 stages for the log: fixed names, never the selection, the prompt or the
@@ -10399,6 +10397,9 @@ void TextService::OpenPendingPromptDialog() {
     return;
   }
   prompt_dialog_.Update(magic_session_->model.view());
+#ifdef AZOOKEY_TSF_TESTING
+  if (prompt_dialog_hidden_for_test_) return;
+#endif
   prompt_dialog_.Show();
 }
 

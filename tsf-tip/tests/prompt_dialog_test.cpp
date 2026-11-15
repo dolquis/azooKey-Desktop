@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <future>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "azookey/tsf/DpiScaling.h"
@@ -235,12 +237,49 @@ TEST(PromptDialogTest, DestroyingTheOwnerCancelsTheWindow) {
   DialogCalls calls;
   PromptDialog dialog;
   ASSERT_TRUE(dialog.Create(owner, Record(calls)));
+  EXPECT_EQ(GetWindow(dialog.hwnd(), GW_OWNER), owner);
   dialog.Update(PromptDialogModel::ForSelection(PromptPreset::English, L"a").view());
   ASSERT_TRUE(DestroyWindow(owner));
   EXPECT_FALSE(dialog.IsOpen());
   EXPECT_EQ(calls.canceled, 1);
   dialog.Close();
   EXPECT_EQ(calls.canceled, 1);
+}
+
+// A window of another thread only places the dialog: owning it would join
+// the two threads' input queues (native-ui-spec §4.4).
+TEST(PromptDialogTest, AWindowOfAnotherThreadIsNoOwnerButCentersTheDialog) {
+  const azookey::tsf::ScopedPerMonitorDpiAwareness dpi_context;
+  std::promise<HWND> created;
+  std::promise<void> done;
+  auto done_future = done.get_future();
+  std::thread thread([&] {
+    created.set_value(CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 100, 100, 800, 600, nullptr,
+                                      nullptr, GetModuleHandleW(nullptr), nullptr));
+    done_future.wait();  // The window lives as long as its thread.
+  });
+  struct Join {
+    std::promise<void>& done;
+    std::thread& thread;
+    ~Join() {
+      done.set_value();
+      thread.join();
+    }
+  } join{done, thread};
+  HWND foreign = created.get_future().get();
+  ASSERT_NE(foreign, nullptr);
+  DialogCalls calls;
+  PromptDialog dialog;
+  ASSERT_TRUE(dialog.Create(foreign, Record(calls)));
+  EXPECT_EQ(GetWindow(dialog.hwnd(), GW_OWNER), nullptr);
+  RECT owner_rect{};
+  RECT rect{};
+  ASSERT_TRUE(GetWindowRect(foreign, &owner_rect));
+  ASSERT_TRUE(GetWindowRect(dialog.hwnd(), &rect));
+  const LONG center = (rect.left + rect.right) / 2;
+  EXPECT_GE(center, owner_rect.left);
+  EXPECT_LE(center, owner_rect.right);
+  dialog.Close();
 }
 
 // copilot-pc-backend-spec §7.3: a DPI change keeps the window where the

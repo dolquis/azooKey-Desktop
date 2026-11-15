@@ -731,6 +731,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_prompt_dialog_headless_for_test(bool headless) {
     prompt_dialog_headless_for_test_ = headless;
   }
+  // The HWND is created but not shown, so a test takes neither the foreground nor the focus.
+  void set_prompt_dialog_hidden_for_test(bool hidden) { prompt_dialog_hidden_for_test_ = hidden; }
   void set_magic_conversion_for_test(bool enabled, std::string backend, int timeout_ms = 30000) {
     local_settings_.SetMagicConversionForTest(enabled, std::move(backend), timeout_ms);
   }
@@ -1419,6 +1421,7 @@ class TextService final : public ITfTextInputProcessorEx,
 #ifdef AZOOKEY_TSF_TESTING
   std::optional<uint64_t> double_tap_now_for_test_;
   bool prompt_dialog_headless_for_test_{false};
+  bool prompt_dialog_hidden_for_test_{false};
   std::optional<int> transform_wait_ms_for_test_;
 #endif
   struct PredictionRequest {

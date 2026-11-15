@@ -325,7 +325,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `openAiApiKey` | string（機微・`sideload-packaging-spec` §9 DPAPI） | `""` | AI サービス | M16 / M34 | 即時 | roadmap M16 / `sideload-packaging-spec` §9 |
 | `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI サービス | M16 | 即時 | roadmap M16 |
 | `openAiModel` | string | `gpt-4o-mini` | AI サービス | M16 | 即時 | roadmap M16 |
-| `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | roadmap M16 |
+| `includeContextInAITransform` | bool | `true` | AI サービス | M16 | 即時 | `docs/ai-backend-spec.md` §5.2（M16 の TIP は文脈を送らない） |
 | `promptPrefixByApp` | map<string,string> | `{}` | アプリ別（読み取り専用の一覧と移行操作。保存時保持。新規編集は `profilesByApp[].promptPrefix`） | rich X-2-6 | 即時 | `app-profile-spec.md` §6 |
 | `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `user-learning-enhancement-spec.md` §4.3 |
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `ai-backend-spec.md` §4.3 |

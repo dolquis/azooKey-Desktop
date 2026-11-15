@@ -72,12 +72,14 @@ bool PromptDialog::Create(HWND owner, Callbacks callbacks) noexcept {
   activated_ = false;
   closing_ = false;
   state_ = PromptDialogState::Editing;
+  HWND window_owner =
+      owner && GetWindowThreadProcessId(owner, nullptr) == GetCurrentThreadId() ? owner : nullptr;
   // The window and its controls are per-monitor aware (copilot-pc-backend-spec §7.2).
   const ScopedPerMonitorDpiAwareness dpi_context;
   HWND created =
       CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kClassName, L"AI変換",
                       WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN, CW_USEDEFAULT,
-                      CW_USEDEFAULT, kWidth, 300, owner, nullptr, ModuleInstance(), this);
+                      CW_USEDEFAULT, kWidth, 300, window_owner, nullptr, ModuleInstance(), this);
   if (!created) return false;
   hwnd_ = created;
   CreateControls();
@@ -215,7 +217,11 @@ void PromptDialog::Layout(const RECT* suggested) {
   x = (std::max)(static_cast<int>(work.left), (std::min)(x, static_cast<int>(work.right) - width));
   top = (std::max)(static_cast<int>(work.top),
                    (std::min)(top, static_cast<int>(work.bottom) - height));
+  // A move onto a monitor of another DPI comes back as WM_DPICHANGED, which
+  // lays the window out again at that DPI (see HandleMessage).
+  placing_ = true;
   SetWindowPos(hwnd_, nullptr, x, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+  placing_ = false;
 }
 
 void PromptDialog::Update(const PromptDialogView& view) noexcept {
@@ -309,7 +315,9 @@ LRESULT PromptDialog::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPAR
       Cancel();
       return 0;
     case WM_DPICHANGED:
-      Layout(reinterpret_cast<const RECT*>(lparam));
+      // Centered again when Layout() itself crossed monitors; where the system
+      // suggests when the user moved the window.
+      Layout(placing_ ? nullptr : reinterpret_cast<const RECT*>(lparam));
       return 0;
     case WM_DESTROY:
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

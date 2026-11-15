@@ -20,7 +20,8 @@ class PromptDialog {
   struct Callbacks {
     std::function<void(std::wstring prompt)> submit;
     std::function<void()> apply;
-    // Cancel, Esc, the close box, or the window losing activation.
+    // Cancel, Esc, the close box, the window losing activation, or the window
+    // destroyed with its owner.
     std::function<void()> cancel;
   };
 
@@ -37,7 +38,9 @@ class PromptDialog {
   PromptDialog(const PromptDialog&) = delete;
   PromptDialog& operator=(const PromptDialog&) = delete;
 
-  // Creates the window hidden. False when it cannot.
+  // Creates the window hidden, centered on `owner`. It is owned by `owner`
+  // only when that window belongs to this thread: owning a window of another
+  // thread would join the two input queues. False when it cannot.
   bool Create(HWND owner, Callbacks callbacks) noexcept;
   // Shows and activates the window with the prompt field focused.
   void Show() noexcept;
@@ -77,6 +80,7 @@ class PromptDialog {
   PromptDialogState state_{PromptDialogState::Editing};
   bool activated_{false};
   bool closing_{false};
+  bool placing_{false};  // Layout() is moving the window.
 };
 
 }  // namespace azookey::tsf

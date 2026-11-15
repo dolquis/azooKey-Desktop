@@ -17783,6 +17783,7 @@ TEST(TsfTipMagicConversionTest, DoubleTapsOpenTheWindowWithTheirInitialPrompt) {
 TEST(TsfTipMagicConversionTest, TheCandidateWindowMessageOpensTheWindow) {
   MagicConversionHarness m;
   m.h.service.set_prompt_dialog_headless_for_test(false);
+  m.h.service.set_prompt_dialog_hidden_for_test(true);
   m.h.service.route_candidates_ready_for_test();
   m.h.service.set_double_tap_now_for_test(1000);
   ASSERT_TRUE(m.h.Press(kAlnumKey));

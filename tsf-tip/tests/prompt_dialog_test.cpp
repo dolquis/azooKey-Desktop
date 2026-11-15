@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <future>
 #include <optional>
 #include <string>
@@ -227,6 +228,30 @@ TEST(PromptDialogTest, CancelCallbackMayCloseTheWindow) {
   dialog.key_for_test(PromptDialog::kIdPrompt, VK_ESCAPE);
   EXPECT_EQ(canceled, 1);
   EXPECT_FALSE(dialog.IsOpen());
+}
+
+// The window's own timer calls back once, so the wait is looked at again even
+// when no answer is posted.
+TEST(PromptDialogTest, ScheduledCheckCallsBackOnce) {
+  int checks = 0;
+  PromptDialog::Callbacks callbacks;
+  callbacks.check = [&] { ++checks; };
+  PromptDialog dialog;
+  ASSERT_TRUE(dialog.Create(nullptr, std::move(callbacks)));
+  dialog.ScheduleCheck(10);
+  const auto pump_until = [&](std::chrono::milliseconds limit) {
+    const auto end = std::chrono::steady_clock::now() + limit;
+    while (std::chrono::steady_clock::now() < end && checks == 0) {
+      MSG msg{};
+      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  };
+  pump_until(std::chrono::seconds(2));
+  EXPECT_EQ(checks, 1);
+  checks = 0;
+  pump_until(std::chrono::milliseconds(100));
+  EXPECT_EQ(checks, 0);
 }
 
 // The window goes with its owner, and its request with it.

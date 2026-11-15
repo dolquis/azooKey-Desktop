@@ -10258,6 +10258,10 @@ HWND PromptOwnerWindow(ITfContext* context) {
   return window ? GetAncestor(window, GA_ROOT) : nullptr;
 }
 
+// The window looks at its request this long after the worker's deadline, for
+// a request the worker never sent (it may be reconnecting to the Host).
+constexpr int kTransformCheckGraceMs = 1000;
+
 // M16 stages for the log: fixed names, never the selection, the prompt or the
 // result (privacy-and-secure-input-spec section 8).
 void LogMagicConversion(std::string_view stage, HRESULT hr = S_OK) noexcept {
@@ -10391,6 +10395,7 @@ void TextService::OpenPendingPromptDialog() {
   callbacks.submit = [this](std::wstring prompt) { SubmitMagicConversion(std::move(prompt)); };
   callbacks.apply = [this] { ApplyMagicConversion(); };
   callbacks.cancel = [this] { CancelMagicConversion(); };
+  callbacks.check = [this] { ApplyTransformOutcome(); };
   if (!prompt_dialog_.Create(magic_session_->owner, std::move(callbacks))) {
     LogMagicConversion("window_failed");
     magic_session_.reset();
@@ -10421,15 +10426,19 @@ void TextService::SubmitMagicConversion(std::wstring prompt) {
     UpdatePromptDialog();
     return;
   }
+  // legacy-parity-spec §4.3: the wait runs from here, while the request is
+  // queued as well as after it is sent.
+  session.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(session.wait_ms);
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     session.generation = ++ipc_transform_generation_;
-    ipc_transform_request_ =
-        TransformRequest{session.generation, session.request, NewTraceIdNoThrow(), session.wait_ms};
+    ipc_transform_request_ = TransformRequest{session.generation, session.request,
+                                              NewTraceIdNoThrow(), session.deadline};
   }
   ipc_cv_.notify_one();
   LogMagicConversion("submitted");
   UpdatePromptDialog();
+  prompt_dialog_.ScheduleCheck(static_cast<UINT>(session.wait_ms + kTransformCheckGraceMs));
 }
 
 void TextService::ApplyTransformOutcome() {
@@ -10438,10 +10447,27 @@ void TextService::ApplyTransformOutcome() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     outcome = std::exchange(transform_outcome_, std::nullopt);
   }
+  if (!magic_session_) return;
   // An answer for a closed window, or an earlier request, is dropped.
-  if (!outcome || !magic_session_ || outcome->generation != magic_session_->generation) return;
-  magic_session_->model.OnResponse(outcome->response, outcome->failure);
-  LogMagicConversion(magic_session_->model.CanApply() ? "answered" : "failed");
+  if (outcome && outcome->generation == magic_session_->generation) {
+    magic_session_->model.OnResponse(outcome->response, outcome->failure);
+    LogMagicConversion(magic_session_->model.CanApply() ? "answered" : "failed");
+    UpdatePromptDialog();
+    return;
+  }
+  // No answer by the deadline: the worker never sent the request (it may be
+  // reconnecting), or its answer could not be posted. The window stops waiting.
+  if (magic_session_->model.view().state != PromptDialogState::Waiting ||
+      std::chrono::steady_clock::now() <
+          magic_session_->deadline + std::chrono::milliseconds(kTransformCheckGraceMs))
+    return;
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ++ipc_transform_generation_;
+    ipc_transform_request_.reset();
+  }
+  magic_session_->model.OnResponse(std::nullopt, PromptFailure::TimedOut);
+  LogMagicConversion("timed_out");
   UpdatePromptDialog();
 }
 
@@ -10503,6 +10529,16 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
     candidate_ui_.PostCandidatesReady();
   };
   if (stale()) return true;
+  // The window's wait ran while the request was queued; a reconnect may have
+  // reached a Host that does not advertise the type (ai-backend-spec section 4.1).
+  if (std::chrono::steady_clock::now() >= request.deadline) {
+    finish(std::nullopt, PromptFailure::TimedOut);
+    return true;
+  }
+  if (!ipc_host_transform_selected_text_.load(std::memory_order_relaxed)) {
+    finish(std::nullopt, PromptFailure::NoAnswer);
+    return true;
+  }
   Envelope envelope;
   envelope.request_id = next_id++;
   envelope.trace_id = request.trace_id;
@@ -10512,8 +10548,7 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
     finish(std::nullopt, PromptFailure::NoAnswer);
     return false;
   }
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(request.wait_ms);
+  const auto deadline = request.deadline;
   while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
     // The Host serves a connection in order, so a request no one waits for
     // is canceled and the connection dropped rather than left to block it.

@@ -1390,7 +1390,8 @@ class TextService final : public ITfTextInputProcessorEx,
     uint64_t generation{0};
     ipc::TransformSelectedTextRequest request;
     std::string trace_id;
-    int wait_ms{0};
+    // The window's wait ends here, counted from the submit, queued or not.
+    std::chrono::steady_clock::time_point deadline;
   };
   std::optional<TransformRequest> ipc_transform_request_;  // ipc_mtx_
   uint64_t ipc_transform_generation_{0};                   // ipc_mtx_
@@ -1409,6 +1410,7 @@ class TextService final : public ITfTextInputProcessorEx,
     std::wstring original;
     ipc::TransformSelectedTextRequest request;
     int wait_ms{0};
+    std::chrono::steady_clock::time_point deadline;  // Of the request sent last.
     HWND owner{nullptr};
     PromptDialogModel model;
     bool open_pending{true};

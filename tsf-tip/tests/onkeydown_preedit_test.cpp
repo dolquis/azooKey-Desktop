@@ -18221,6 +18221,80 @@ TEST(TsfTipMagicConversionTest, ClosingTheWindowCancelsTheRequestInFlight) {
   server.Stop();
 }
 
+// legacy-parity-spec §4.3: the wait runs from the submit. A request the worker
+// never sent (it may be reconnecting) stops the window's wait at the deadline.
+TEST(TsfTipMagicConversionTest, AnUnsentRequestStopsWaitingAtItsDeadline) {
+  MagicConversionHarness m;
+  m.h.service.set_transform_wait_for_test(100);
+  m.DoubleTap(kAlnumKey);
+  ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+  m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+  ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+  m.h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+            azookey::tsf::PromptDialogState::Waiting);
+  // Past the deadline and the window's grace (one second).
+  std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+  m.h.service.process_candidates_ready_for_test();
+  const auto view = m.h.service.magic_conversion_view_for_test();
+  ASSERT_TRUE(view.has_value());
+  EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+  EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                              std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
+  EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+}
+
+// ai-backend-spec section 4.1: the worker sends only to a Host that advertises
+// the type; one reached by a reconnect without it gets nothing.
+TEST(TsfTipMagicConversionTest, ARequestGoesOnlyToAHostThatAdvertisesIt) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-capability-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::atomic<int> transforms{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"transform_selected_text"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type != MessageType::TransformSelectedText) return std::nullopt;
+    ++transforms;
+    TransformSelectedTextResponse answer;
+    answer.result = "Good morning.";
+    response.payload_json = BuildTransformSelectedTextResponse(answer);
+    return response;
+  }));
+  TextServiceHarness handshake_token_guard;
+  {
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    // As if the worker had reconnected to a Host without the capability.
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                                std::nullopt, std::nullopt, azookey::tsf::PromptFailure::NoAnswer));
+    EXPECT_EQ(transforms.load(), 0);
+    m.h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+}
+
 // A window closed while its request is queued drops the request; so does the
 // end of the TIP's activation.
 TEST(TsfTipMagicConversionTest, CancelDropsTheQueuedRequest) {

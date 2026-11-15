@@ -1,6 +1,7 @@
 #include "azookey/tsf/PromptDialog.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string_view>
 #include <utility>
 
@@ -23,6 +24,7 @@ constexpr wchar_t kPreviousProcProperty[] = L"AzooKeyPromptDialogPreviousProc";
 constexpr int kIdPromptLabel = 1010;
 constexpr int kIdSelectionLabel = 1011;
 constexpr int kIdResultLabel = 1012;
+constexpr UINT_PTR kCheckTimer = 1;
 
 // Layout in 96-DPI units; Layout() scales them to the window's DPI.
 constexpr int kWidth = 440;
@@ -35,7 +37,10 @@ constexpr int kButtonWidth = 88;
 constexpr int kButtonHeight = 26;
 constexpr int kGap = 6;
 
-ATOM RegisterPromptDialogClass(WNDPROC proc) noexcept {
+// Registered once; a failed registration is tried again by the next Create.
+bool EnsurePromptDialogClass(WNDPROC proc) noexcept {
+  static std::atomic<bool> registered{false};
+  if (registered.load()) return true;
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
   wc.lpfnWndProc = proc;
@@ -43,7 +48,8 @@ ATOM RegisterPromptDialogClass(WNDPROC proc) noexcept {
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
   wc.lpszClassName = kClassName;
-  return RegisterClassExW(&wc);
+  if (RegisterClassExW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) registered.store(true);
+  return registered.load();
 }
 
 std::wstring WindowText(HWND hwnd) {
@@ -65,8 +71,7 @@ PromptDialog::~PromptDialog() { Close(); }
 
 bool PromptDialog::Create(HWND owner, Callbacks callbacks) noexcept {
   Close();
-  static const ATOM atom = RegisterPromptDialogClass(&PromptDialog::WindowProc);
-  if (!atom) return false;
+  if (!EnsurePromptDialogClass(&PromptDialog::WindowProc)) return false;
   callbacks_ = std::move(callbacks);
   owner_ = owner;
   activated_ = false;
@@ -219,9 +224,9 @@ void PromptDialog::Layout(const RECT* suggested) {
                    (std::min)(top, static_cast<int>(work.bottom) - height));
   // A move onto a monitor of another DPI comes back as WM_DPICHANGED, which
   // lays the window out again at that DPI (see HandleMessage).
-  placing_ = true;
+  const bool was_placing = std::exchange(placing_, true);
   SetWindowPos(hwnd_, nullptr, x, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
-  placing_ = false;
+  placing_ = was_placing;
 }
 
 void PromptDialog::Update(const PromptDialogView& view) noexcept {
@@ -251,6 +256,10 @@ void PromptDialog::Update(const PromptDialogView& view) noexcept {
     }
   } catch (...) {
   }
+}
+
+void PromptDialog::ScheduleCheck(UINT delay_ms) noexcept {
+  if (hwnd_) SetTimer(hwnd_, kCheckTimer, delay_ms, nullptr);
 }
 
 void PromptDialog::Submit() {
@@ -315,10 +324,22 @@ LRESULT PromptDialog::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPAR
       Cancel();
       return 0;
     case WM_DPICHANGED:
+      // One layout per change: a change met while laying out for another one
+      // is left as it is, so the two cannot recurse.
+      if (dpi_changing_) return 0;
+      dpi_changing_ = true;
       // Centered again when Layout() itself crossed monitors; where the system
       // suggests when the user moved the window.
       Layout(placing_ ? nullptr : reinterpret_cast<const RECT*>(lparam));
+      dpi_changing_ = false;
       return 0;
+    case WM_TIMER:
+      if (wparam == kCheckTimer) {
+        KillTimer(hwnd, kCheckTimer);
+        if (callbacks_.check) callbacks_.check();
+        return 0;
+      }
+      break;
     case WM_DESTROY:
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
       if (hwnd_ == hwnd) {

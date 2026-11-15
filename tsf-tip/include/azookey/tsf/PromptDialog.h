@@ -23,6 +23,8 @@ class PromptDialog {
     // Cancel, Esc, the close box, the window losing activation, or the window
     // destroyed with its owner.
     std::function<void()> cancel;
+    // The time set with ScheduleCheck() has come.
+    std::function<void()> check;
   };
 
   static constexpr int kIdPrompt = 1001;
@@ -45,6 +47,9 @@ class PromptDialog {
   // Shows and activates the window with the prompt field focused.
   void Show() noexcept;
   void Update(const PromptDialogView& view) noexcept;
+  // Calls back `check` once, `delay_ms` from now (a later call replaces it).
+  // Nothing without the window.
+  void ScheduleCheck(UINT delay_ms) noexcept;
   // Destroys the window without calling back. Safe from inside a callback.
   void Close() noexcept;
   bool IsOpen() const noexcept { return hwnd_ != nullptr; }
@@ -80,7 +85,8 @@ class PromptDialog {
   PromptDialogState state_{PromptDialogState::Editing};
   bool activated_{false};
   bool closing_{false};
-  bool placing_{false};  // Layout() is moving the window.
+  bool placing_{false};       // Layout() is moving the window.
+  bool dpi_changing_{false};  // Laying out for a WM_DPICHANGED.
 };
 
 }  // namespace azookey::tsf

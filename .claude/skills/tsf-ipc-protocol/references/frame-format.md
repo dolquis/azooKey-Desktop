@@ -106,6 +106,9 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
 | `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
 | `ReverseConvert` | codec + Host + TIP | M20 の再変換で、確定済み表層（`surface`）から読み（`reading`）を引く |
+| `FetchUpdate` | codec + Host | M32 の更新の MSI のダウンロード開始（DEV-1974）。送信元は設定アプリ。capability `update_fetch`。`version`（必須、`MAJOR.MINOR.PATCH`）を送る。Host は `update-status.json` が記録した版のときだけバックグラウンドで始めて、終わりを待たずに `UpdateFetchResponse` で応答する（`docs/sideload-packaging-spec.md` §6.3） |
+| `QueryUpdateFetch` | Host | 更新のダウンロードの進捗と結果。要求 payload は空オブジェクトで、応答は `FetchUpdate` と同じ `UpdateFetchResponse`。`state`（`idle` / `running` / `ready` / `failed`）・`received_bytes`・`total_bytes`・`sha256`（`ready` のとき）・`result_error` を受け取る（§6.3） |
+| `CancelUpdateFetch` | codec + Host | 実行中の更新のダウンロードの中止。`version`（必須）を送り、その版が実行中でなければ `not_running` で断る（§6.3） |
 | `ListModels` | codec + Host | M45 の models ディレクトリの GGUF 一覧。送信元は設定アプリで、TIP からは送らない。capability `list_models`。`directory`・`compute_sha256`・`include_catalog` を送り、`models[]` と `ok` / `error`、`include_catalog` を求めたときだけ既定の catalog の `catalog[]` を受け取る（`docs/model-management-spec.md` §4.1） |
 | `BenchmarkModel` | codec + Host | M45 のモデルのベンチマーク。送信元は設定アプリ。capability `benchmark_model`。`path`（models ディレクトリ配下に限る）・`backend`（既定 `cpu`）・`cases`・`iterations`・`warmup` を送り、レイテンシの分位を受け取る（`docs/model-management-spec.md` §4.2） |
 | `ListLearningEntries` | codec + Host | M49 の学習データ一覧（4 メッセージとも capability `learning_data_management`）。`store`・`query`・`limit`（上限 `kMaxLearningEntries` で頭打ち）・`offset` を送り、`total`・`entries[]` を受け取る。応答は `ok` / `error` を持つ（`docs/learning-data-management-spec.md` §4.1） |

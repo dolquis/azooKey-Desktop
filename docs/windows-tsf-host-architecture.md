@@ -134,6 +134,9 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `ListNewWordCandidates` | `docs/auto-word-registration-spec.md` §7-1・§7-2 |
 | `ResolveNewWord` | `docs/auto-word-registration-spec.md` §7-1・§7-2 |
 | `ReverseConvert` | `docs/tsf-deep-integration-spec.md` §1.2 |
+| `FetchUpdate` | `docs/sideload-packaging-spec.md` §6.3（capability `update_fetch`） |
+| `QueryUpdateFetch` | `docs/sideload-packaging-spec.md` §6.3 |
+| `CancelUpdateFetch` | `docs/sideload-packaging-spec.md` §6.3 |
 | `ListModels` | `docs/model-management-spec.md` §4.1 |
 | `BenchmarkModel` | `docs/model-management-spec.md` §4.2 |
 | `ListLearningEntries` | `docs/learning-data-management-spec.md` §4.1 |

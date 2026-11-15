@@ -104,11 +104,13 @@ Microsoft Learn の事実は
 | 設定 | 詳細 | `logLevel` / 実験フラグ / SafeMode の解除 |
 | データとツール | 学習 | ストア別（学習候補 / ユーザー辞書 / タイプミス補正 / 新語候補）の LearningStore 表示と検索 / 個別忘却 / 全削除 / エクスポート / インポート（学習データ管理 IPC。`learning-data-management-spec.md` §3 / §4）/ ユーザー辞書への語の追加（`AddUserWord`。§3.7）/ タブ「入力の傾向」: Persona 4 比率と算出の基になった確定の回数・算出時刻の表示（読み取り専用。`QueryPersona`。`rich-features-spec.md` X-2-7） |
 | データとツール | 校正 | 貼り付けた文章、または TIP が Ctrl+Shift+Space で入力中のアプリから取った文章の誤りの疑いの一覧（`DetectAnomalies`。外部の AI へ本文を送る旨を常に画面に示す。`proofread-view-spec.md` §2.10） |
-| フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
+| フッター | バージョン | 製品のバージョン / 更新の確認（`autoUpdate` の 3 キーと、その下に結果、更新のダウンロードとインストール。下記）/ ライセンス / 起動コンテキスト（言語 ID とプロファイル。起動引数を受けたときだけ表示し、受けなかった値は「未指定」と示す） |
 
 `autoUpdate` の 3 キーは「バージョン」の「更新の確認」の節で編集できる（`enabled` をオンにしたときだけ `channel` と
 `checkIntervalHours` を操作できる）。同じ節の下に、Host の最後の更新確認の結果（`sideload-packaging-spec` §6.1 の
 `update-status.json`）を表示し、新しいバージョンがあればリリースページを開くリンクを置く。
+その版を Host にダウンロードさせる「ダウンロード」（`FetchUpdate`、進捗の表示と「中止」）と、
+検証の済んだ MSI を適用する「インストール」も置く（`sideload-packaging-spec` §6.3）。
 
 「プライバシー」の障害診断の節には `privacy.crashReportConsent` のほか、「診断ファイルの保存先を開く」と
 「ログ出力先を開く」（§3.7）のボタンを置く（`docs/host-availability-spec.md` §8.5.4・`docs/diagnostics-compat-spec.md` §12.1.1 が設定アプリの診断として指す先は、この節である）。
@@ -530,7 +532,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は `sideload-packaging-spec` §9 DPAPI） |
 | `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
-| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示。`sideload-packaging-spec` §6） |
+| `autoUpdate.*` | — | M32（更新の確認と「バージョン」の結果表示、更新のダウンロードとインストール。`sideload-packaging-spec` §6） |
 | `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`azdic-physical-layer-spec.md` §15.14） |
 | `privacy.*` | — | M30（プライバシーペイン） |
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |

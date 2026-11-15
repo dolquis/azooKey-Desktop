@@ -55,6 +55,7 @@ inline constexpr const char* kCapabilityPersona = "persona";
 inline constexpr const char* kCapabilityDetectAnomalies = "detect_anomalies";
 inline constexpr const char* kCapabilityFetchCatalogModel = "fetch_catalog_model";
 inline constexpr const char* kCapabilityCancelCatalogFetch = "cancel_catalog_fetch";
+inline constexpr const char* kCapabilityUpdateFetch = "update_fetch";
 
 // Connects and completes the Handshake only, to learn whether the Host advertises `capability`
 // before the user is asked to confirm an operation. Ok means it does; Unsupported means it does
@@ -78,6 +79,15 @@ HostCallResult<azookey::ipc::CatalogFetchResponse> RequestQueryCatalogFetch(
 // failed / "cancelled", which RequestQueryCatalogFetch reports.
 HostCallResult<azookey::ipc::CatalogFetchResponse> RequestCancelCatalogFetch(
     const SettingsIpcOptions& options, const azookey::ipc::CancelCatalogFetchRequest& request);
+// DEV-1974 (sideload-packaging-spec section 6.3): starts the Host's download of the available
+// update, which answers at once; QueryUpdateFetch then reports its progress and result, and
+// CancelUpdateFetch stops it.
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestFetchUpdate(
+    const SettingsIpcOptions& options, const azookey::ipc::FetchUpdateRequest& request);
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestQueryUpdateFetch(
+    const SettingsIpcOptions& options);
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestCancelUpdateFetch(
+    const SettingsIpcOptions& options, const azookey::ipc::CancelUpdateFetchRequest& request);
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(
     const SettingsIpcOptions& options, const azookey::ipc::ListLearningEntriesRequest& request);
 HostCallResult<azookey::ipc::ForgetLearningEntryResponse> RequestForgetLearningEntry(

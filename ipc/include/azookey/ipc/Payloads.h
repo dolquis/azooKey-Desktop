@@ -309,6 +309,39 @@ struct ReverseConvertResponse {
   double confidence{};
 };
 
+// DEV-1974 M32 update download (sideload-packaging-spec section 6.3). FetchUpdate starts the
+// download of the version update-status.json records as available; QueryUpdateFetch (empty
+// payload) reports it; CancelUpdateFetch stops it. All three answer UpdateFetchResponse at once.
+// The Host advertises the "update_fetch" capability.
+struct FetchUpdateRequest {
+  std::string version;  // Required: MAJOR.MINOR.PATCH, without a leading 'v'.
+};
+
+struct CancelUpdateFetchRequest {
+  std::string version;  // Required: the download the sender means, never another one.
+};
+
+struct UpdateFetchResponse {
+  // false when the request itself was refused: "invalid_request", "busy", "not_available",
+  // "disabled", "update_unavailable", "not_running" (CancelUpdateFetch) or
+  // "not authenticated". The fields below still describe the Host's current download.
+  bool ok{true};
+  std::optional<std::string> error;
+  std::string state{"idle"};  // "idle" | "running" | "ready" | "failed".
+  std::string version;
+  uint64_t received_bytes{};
+  uint64_t total_bytes{};
+  std::string sha256;        // When ready: the lowercase hex SHA-256 of the verified file.
+  std::string result_error;  // When failed: a fixed category (section 6.3).
+};
+
+std::string BuildFetchUpdateRequest(const FetchUpdateRequest& p);
+std::optional<FetchUpdateRequest> ParseFetchUpdateRequest(const std::string& json);
+std::string BuildCancelUpdateFetchRequest(const CancelUpdateFetchRequest& p);
+std::optional<CancelUpdateFetchRequest> ParseCancelUpdateFetchRequest(const std::string& json);
+std::string BuildUpdateFetchResponse(const UpdateFetchResponse& p);
+std::optional<UpdateFetchResponse> ParseUpdateFetchResponse(const std::string& json);
+
 struct CancelPayload {
   uint64_t target_request_id{};
 };

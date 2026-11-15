@@ -116,6 +116,7 @@
     <ClInclude Include="PersonaPane.h" />
     <ClInclude Include="StatusPaneModel.h" />
     <ClInclude Include="UpdateStatusModel.h" />
+    <ClInclude Include="UpdateInstaller.h" />
     <ClInclude Include="MainWindow.xaml.h"><DependentUpon>MainWindow.xaml</DependentUpon></ClInclude>
     <ClInclude Include="NeologdAttribution.h" />
     <ClInclude Include="ProfilesPane.h" />
@@ -143,6 +144,7 @@
     <ClCompile Include="PersonaPane.cpp" />
     <ClCompile Include="StatusPaneModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="UpdateStatusModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="UpdateInstaller.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ModelPaneModel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
     <ClCompile Include="NeologdAttribution.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

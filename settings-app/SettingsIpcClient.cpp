@@ -246,6 +246,29 @@ HostCallResult<azookey::ipc::CatalogFetchResponse> RequestCancelCatalogFetch(
       azookey::ipc::ParseCatalogFetchResponse);
 }
 
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestFetchUpdate(
+    const SettingsIpcOptions& options, const azookey::ipc::FetchUpdateRequest& request) {
+  return Call<azookey::ipc::UpdateFetchResponse>(
+      options, kCapabilityUpdateFetch, MessageType::FetchUpdate,
+      azookey::ipc::BuildFetchUpdateRequest(request), options.response_timeout_ms,
+      azookey::ipc::ParseUpdateFetchResponse);
+}
+
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestQueryUpdateFetch(
+    const SettingsIpcOptions& options) {
+  return Call<azookey::ipc::UpdateFetchResponse>(
+      options, kCapabilityUpdateFetch, MessageType::QueryUpdateFetch, "{}",
+      options.response_timeout_ms, azookey::ipc::ParseUpdateFetchResponse);
+}
+
+HostCallResult<azookey::ipc::UpdateFetchResponse> RequestCancelUpdateFetch(
+    const SettingsIpcOptions& options, const azookey::ipc::CancelUpdateFetchRequest& request) {
+  return Call<azookey::ipc::UpdateFetchResponse>(
+      options, kCapabilityUpdateFetch, MessageType::CancelUpdateFetch,
+      azookey::ipc::BuildCancelUpdateFetchRequest(request), options.response_timeout_ms,
+      azookey::ipc::ParseUpdateFetchResponse);
+}
+
 HostCallResult<azookey::ipc::ListLearningEntriesResponse> RequestListLearningEntries(
     const SettingsIpcOptions& options, const azookey::ipc::ListLearningEntriesRequest& request) {
   return Call<azookey::ipc::ListLearningEntriesResponse>(

@@ -338,7 +338,8 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 
-timeout は request 送信または backend 処理開始からの wall-clock deadline として扱う。
+timeout は request 送信または backend 処理開始からの wall-clock deadline として扱う。M16 のプロンプト窓は例外で、
+利用者が送った時点（要求を Host へ書く前）から数える（`docs/legacy-parity-spec.md` §4.3）。
 connected-but-silent Host でも、pipe 切断や blocking read の解除を待たない。
 
 本表は Host 内の推論予算とも別レイヤである。Host の `InferenceEngine` は 1 変換ごとに

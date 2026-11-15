@@ -65,6 +65,7 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
    - UI-less activation: `tsf_tip_activate_uiless_tests`
    - candidate UI: `tsf_tip_candidate_ui_coordinator_tests`
    - key/preedit: `tsf_tip_onkeydown_preedit_tests`
+   - M16 のプロンプト窓（モデルと Win32 の窓）: `tsf_tip_prompt_dialog_tests`
    - 登録round-trip: `tsf_tip_com_smoke_tests`（昇格可能時。未昇格ではskipを確認）
 6. 最終確認では`cmake --build --preset windows-debug --target azookey_check`を優先する。
 7. 見落としやすい点は対応するspecで確認する。

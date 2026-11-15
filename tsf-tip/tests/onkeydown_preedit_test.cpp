@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17682,4 +17683,679 @@ TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheComm
   ASSERT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(h.context.document->text, L"てんき");
   EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+}
+
+namespace {
+
+// M16 (legacy-parity-spec §4, DEV-1963): an ordinary field in an app the TIP
+// resolved, with Magic Conversion on, a Host that supports it and the window
+// kept headless. The selection is "Good morning." in the middle of the text.
+struct MagicConversionHarness {
+  azookey::tsf::ScopedFocusClassificationForTest focus{azookey::tsf::InputScopeClass::Normal};
+  PrivateScopeProperty scope;
+  OpenCloseCompartment compartment;  // Outlives the service, which releases it.
+  DocumentPreeditHarness h;
+
+  explicit MagicConversionHarness(bool legacy = false, bool candidate_window = true) {
+    h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+    scope.scope.value = IS_DEFAULT;
+    h.context.input_scope_property = &scope;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+    h.service.set_number_rewriter_enabled_for_test(legacy);
+    h.service.set_magic_conversion_for_test(true, "openai");
+    h.service.set_host_transform_capability_for_test(true);
+    h.service.set_prompt_dialog_headless_for_test(true);
+    // The window opens from this window's message (legacy-parity-spec §4.3).
+    if (candidate_window) EXPECT_TRUE(h.service.create_candidate_window_for_test());
+    Select(L"前 Good morning. 後", 2, 15);
+  }
+  void Select(std::wstring text, LONG start, LONG end) {
+    h.context.document->text = std::move(text);
+    h.context.document->start = start;
+    h.context.document->end = end;
+  }
+  // Two presses `gap_ms` apart; the window opens on the next candidate message.
+  void DoubleTap(WPARAM key, uint64_t gap_ms = 200) {
+    h.service.set_double_tap_now_for_test(1000);
+    ASSERT_TRUE(h.Press(key));
+    h.service.set_double_tap_now_for_test(1000 + gap_ms);
+    ASSERT_TRUE(h.Press(key));
+    h.service.process_candidates_ready_for_test();
+  }
+};
+
+constexpr WPARAM kAlnumKey = VK_OEM_ATTN;
+constexpr WPARAM kKanaKey = 0xF2;  // VK_DBE_HIRAGANA
+
+bool WaitForTransformOutcome(azookey::tsf::TextService& service) {
+  return WaitUntil([&] { return service.has_transform_outcome_for_test(); },
+                   std::chrono::seconds(10));
+}
+
+}  // namespace
+
+// Both double taps open the same window with their own initial prompt; the
+// two alnum presses toggle twice, back to the mode the user was in. The
+// legacy key path (number rewriter) opens it the same way.
+TEST(TsfTipMagicConversionTest, DoubleTapsOpenTheWindowWithTheirInitialPrompt) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    {
+      MagicConversionHarness m(legacy);
+      ASSERT_FALSE(m.h.service.alnum_mode_for_test());
+      m.DoubleTap(kAlnumKey);
+      EXPECT_FALSE(m.h.service.alnum_mode_for_test());
+      ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+      const auto view = m.h.service.magic_conversion_view_for_test();
+      ASSERT_TRUE(view.has_value());
+      EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+      EXPECT_EQ(view->prompt, L"英語に翻訳");
+      EXPECT_EQ(m.h.service.magic_conversion_selection_for_test(), L"Good morning.");
+      // Opening sends nothing.
+      EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+      const auto request = m.h.service.magic_conversion_request_for_test();
+      ASSERT_TRUE(request.has_value());
+      EXPECT_EQ(request->mode, "free");
+      EXPECT_EQ(request->selection, "Good morning.");
+      EXPECT_TRUE(request->context.empty());
+      EXPECT_FALSE(request->secure);
+      EXPECT_TRUE(request->ai_allowed);
+      EXPECT_TRUE(request->external_ai_allowed);
+      EXPECT_EQ(request->ai_backend, "openai");
+      // A double tap while the window is open does not open another one.
+      m.DoubleTap(kKanaKey);
+      EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"英語に翻訳");
+      m.h.service.cancel_magic_conversion_for_test();
+      EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    }
+    {
+      MagicConversionHarness m(legacy);
+      m.DoubleTap(kKanaKey);
+      ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+      EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"日本語に翻訳");
+    }
+  }
+}
+
+// legacy-parity-spec §4.3: the window does not open inside the key; the
+// candidate window's message opens it after the key returns.
+TEST(TsfTipMagicConversionTest, TheCandidateWindowMessageOpensTheWindow) {
+  MagicConversionHarness m;
+  m.h.service.set_prompt_dialog_headless_for_test(false);
+  m.h.service.set_prompt_dialog_hidden_for_test(true);
+  m.h.service.route_candidates_ready_for_test();
+  m.h.service.set_double_tap_now_for_test(1000);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  m.h.service.set_double_tap_now_for_test(1200);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+  auto& dialog = m.h.service.prompt_dialog_for_test();
+  EXPECT_FALSE(dialog.IsOpen());
+  ASSERT_TRUE(WaitUntil([&] {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+    return dialog.IsOpen();
+  }));
+  EXPECT_EQ(dialog.text_for_test(azookey::tsf::PromptDialog::kIdPrompt), L"英語に翻訳");
+  EXPECT_EQ(dialog.text_for_test(azookey::tsf::PromptDialog::kIdSelection), L"Good morning.");
+  m.h.service.cancel_magic_conversion_for_test();
+  EXPECT_FALSE(dialog.IsOpen());
+  EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+}
+
+// Without a candidate window to post to, the window could never open, so no
+// session is left to block the next double tap.
+TEST(TsfTipMagicConversionTest, NoSessionIsKeptWhenTheOpenCannotBePosted) {
+  MagicConversionHarness m(/*legacy=*/false, /*candidate_window=*/false);
+  m.DoubleTap(kAlnumKey);
+  EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+}
+
+// Only two fresh presses of one key within 500 ms, with no key between, count.
+TEST(TsfTipMagicConversionTest, OnlyAQuickPairOfFreshPressesIsADoubleTap) {
+  {
+    MagicConversionHarness m;
+    m.DoubleTap(kAlnumKey, 500);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    // A key between, even one only the probe saw, breaks the pair.
+    MagicConversionHarness m;
+    m.h.service.set_double_tap_now_for_test(1000);
+    ASSERT_TRUE(m.h.Press(kAlnumKey));
+    (void)ProbeTypoKey(m.h, 'A');
+    m.h.service.set_double_tap_now_for_test(1100);
+    ASSERT_TRUE(m.h.Press(kAlnumKey));
+    m.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    // A held key repeats with bit 30 set.
+    MagicConversionHarness m;
+    m.h.service.set_double_tap_now_for_test(1000);
+    ASSERT_TRUE(m.h.Press(kAlnumKey));
+    m.h.service.set_double_tap_now_for_test(1100);
+    BOOL eaten = FALSE;
+    m.h.keyboard_state.Reapply();
+    ASSERT_EQ(RecordedKeyDown(m.h.service, &m.h.context, kAlnumKey, LPARAM{1} << 30, &eaten, false,
+                              m.h.created),
+              S_OK);
+    m.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    // The alnum key then the kana key is no pair.
+    MagicConversionHarness m;
+    m.h.service.set_double_tap_now_for_test(1000);
+    ASSERT_TRUE(m.h.Press(kAlnumKey));
+    m.h.service.set_double_tap_now_for_test(1100);
+    ASSERT_TRUE(m.h.Press(kKanaKey));
+    m.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+}
+
+// Without every condition the keys keep only their usual effect.
+TEST(TsfTipMagicConversionTest, TheWindowNeedsTheSettingTheHostAnExternalAiAndASelection) {
+  {
+    MagicConversionHarness m;
+    m.h.service.set_magic_conversion_for_test(false, "openai");  // llmMagicConversion off
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_FALSE(m.h.service.alnum_mode_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);  // an older Host
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  for (const char* backend : {"none", "local-zenzai"}) {
+    MagicConversionHarness m;
+    m.h.service.set_magic_conversion_for_test(true, backend);
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test()) << backend;
+  }
+  {
+    MagicConversionHarness m;
+    m.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.Select(L"Good morning.", 4, 4);
+    m.DoubleTap(kAlnumKey);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+}
+
+// ai-backend-spec section 7.5: a secure field gets only the notice and its
+// selection is not read; a selection over 4096 units is refused, not cut.
+TEST(TsfTipMagicConversionTest, SecureFieldsAndLongSelectionsGetANoticeOnly) {
+  {
+    MagicConversionHarness m;
+    m.scope.scope.value = IS_PASSWORD;
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Notice);
+    EXPECT_EQ(view->status, azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::Secure));
+    EXPECT_TRUE(view->selection.empty());
+    EXPECT_TRUE(m.h.service.magic_conversion_selection_for_test().empty());
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.Select(std::wstring(4097, L'a'), 0, 4097);
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Notice);
+    EXPECT_EQ(view->status,
+              azookey::tsf::PromptNoticeMessage(azookey::tsf::PromptNotice::SelectionTooLong));
+    EXPECT_TRUE(m.h.service.magic_conversion_selection_for_test().empty());
+  }
+  {
+    MagicConversionHarness m;
+    m.Select(std::wstring(4096, L'a'), 0, 4096);
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Editing);
+  }
+}
+
+// The request goes to a Host that advertises the capability; the answer is
+// shown, then applied over the selection only if it still holds the text the
+// window opened with. SafeMode answers with its own message.
+TEST(TsfTipMagicConversionTest, SubmitShowsTheAnswerAndApplyReplacesTheSelection) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-conversion-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<TransformSelectedTextRequest> requests;
+  std::string answer_error;  // Empty: answer with the result.
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"transform_selected_text"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::TransformSelectedText) {
+      TransformSelectedTextResponse answer;
+      const std::lock_guard<std::mutex> lock(mutex);
+      if (const auto parsed = ParseTransformSelectedTextRequest(request.payload_json))
+        requests.push_back(*parsed);
+      if (answer_error.empty())
+        answer.result = "おはようございます。";
+      else
+        answer.error = answer_error;
+      response.payload_json = BuildTransformSelectedTextResponse(answer);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  {
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kKanaKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Waiting);
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    auto view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    ASSERT_EQ(view->state, azookey::tsf::PromptDialogState::Preview);
+    EXPECT_EQ(view->result, L"おはようございます。");
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      ASSERT_EQ(requests.size(), 1u);
+      EXPECT_EQ(requests[0].mode, "free");
+      EXPECT_EQ(requests[0].prompt, "日本語に翻訳");
+      EXPECT_EQ(requests[0].selection, "Good morning.");
+      EXPECT_TRUE(requests[0].context.empty());
+      EXPECT_FALSE(requests[0].secure);
+      EXPECT_TRUE(requests[0].ai_allowed);
+      EXPECT_TRUE(requests[0].external_ai_allowed);
+      answer_error = std::string(kTransformErrorSafeMode);
+    }
+    // SafeMode keeps the selection and says so in its own words.
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    view = m.h.service.magic_conversion_view_for_test();
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                                std::nullopt, std::string(kTransformErrorSafeMode),
+                                azookey::tsf::PromptFailure::None));
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      answer_error.clear();
+    }
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    ASSERT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Preview);
+    m.h.service.apply_magic_conversion_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.context.document->text, L"前 おはようございます。 後");
+    m.h.service.stop_ipc_worker_for_test();
+  }
+  {
+    // The text changed under the window: nothing is replaced.
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    ASSERT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Preview);
+    m.h.context.document->text = L"前 Good evening. 後";
+    m.h.service.apply_magic_conversion_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.context.document->text, L"前 Good evening. 後");
+    m.h.service.stop_ipc_worker_for_test();
+  }
+  {
+    // The application allows the write later (TF_S_ASYNC): it replaces then.
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kKanaKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    ASSERT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+              azookey::tsf::PromptDialogState::Preview);
+    m.h.context.defer_write_callback = true;
+    m.h.service.apply_magic_conversion_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.context.document->text, L"前 Good morning. 後");
+    EXPECT_EQ(m.h.context.RunDeferredWrites(), S_OK);
+    EXPECT_EQ(m.h.context.document->text, L"前 おはようございます。 後");
+    m.h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+}
+
+// ai-backend-spec section 4.1: only the answer to the request the window waits
+// for counts. Another request's answer, or an older Host's Unknown, is dropped;
+// when no answer comes in time the request is canceled out of band and the
+// window says it timed out.
+TEST(TsfTipMagicConversionTest, OnlyTheAwaitedAnswerCountsAndATimeoutCancelsTheRequest) {
+  using namespace azookey::ipc;
+  enum class Reply { OtherRequest, UnknownType };
+  for (const Reply reply : {Reply::OtherRequest, Reply::UnknownType}) {
+    SCOPED_TRACE(static_cast<int>(reply));
+    const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-timeout-" +
+                                  std::to_string(GetCurrentProcessId()) + "-" +
+                                  std::to_string(GetTickCount64());
+    std::mutex mutex;
+    std::optional<uint64_t> transform_id;
+    std::vector<uint64_t> canceled;
+    NamedPipeServer server;
+    ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+      auto response = request;
+      if (request.type == MessageType::Handshake) {
+        HandshakeResponse handshake;
+        handshake.accepted = true;
+        handshake.capabilities = {"transform_selected_text"};
+        response.payload_json = BuildHandshakeResponse(handshake);
+        return response;
+      }
+      const std::lock_guard<std::mutex> lock(mutex);
+      if (request.type == MessageType::Cancel) {
+        if (const auto cancel = ParseCancel(request.payload_json))
+          canceled.push_back(cancel->target_request_id);
+        return std::nullopt;
+      }
+      if (request.type != MessageType::TransformSelectedText) return std::nullopt;
+      transform_id = request.request_id;
+      TransformSelectedTextResponse answer;
+      answer.result = "おはようございます。";
+      response.payload_json = BuildTransformSelectedTextResponse(answer);
+      if (reply == Reply::OtherRequest)
+        response.request_id += 1000;
+      else
+        response.type = MessageType::Unknown;
+      return response;
+    }));
+    TextServiceHarness handshake_token_guard;
+    {
+      MagicConversionHarness m;
+      m.h.service.set_host_transform_capability_for_test(false);
+      m.h.service.set_transform_wait_for_test(1000);  // From the submit, queued time included.
+      m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+      m.h.service.start_ipc_worker_for_test();
+      ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                            std::chrono::seconds(10)));
+      m.DoubleTap(kKanaKey);
+      ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+      m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+      ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+      m.h.service.process_candidates_ready_for_test();
+      const auto view = m.h.service.magic_conversion_view_for_test();
+      ASSERT_TRUE(view.has_value());
+      EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+      EXPECT_TRUE(view->result.empty());
+      EXPECT_EQ(view->status,
+                azookey::tsf::TransformFailureMessage(std::nullopt, std::nullopt,
+                                                      azookey::tsf::PromptFailure::TimedOut));
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            const std::lock_guard<std::mutex> lock(mutex);
+            return transform_id && canceled.size() == 1 && canceled[0] == *transform_id;
+          },
+          std::chrono::seconds(10)));
+      m.h.service.stop_ipc_worker_for_test();
+    }
+    server.Stop();
+  }
+}
+
+// Closing the window while the Host works cancels that request out of band;
+// its late answer is not shown.
+TEST(TsfTipMagicConversionTest, ClosingTheWindowCancelsTheRequestInFlight) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-inflight-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::condition_variable released_cv;
+  bool released = false;
+  std::optional<uint64_t> transform_id;
+  std::vector<uint64_t> canceled;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"transform_selected_text"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    std::unique_lock<std::mutex> lock(mutex);
+    if (request.type == MessageType::Cancel) {
+      if (const auto cancel = ParseCancel(request.payload_json))
+        canceled.push_back(cancel->target_request_id);
+      return std::nullopt;
+    }
+    if (request.type != MessageType::TransformSelectedText) return std::nullopt;
+    transform_id = request.request_id;
+    released_cv.wait_for(lock, std::chrono::seconds(10), [&] { return released; });
+    TransformSelectedTextResponse answer;
+    answer.result = "おはようございます。";
+    response.payload_json = BuildTransformSelectedTextResponse(answer);
+    return response;
+  }));
+  TextServiceHarness handshake_token_guard;
+  {
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kKanaKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    ASSERT_TRUE(WaitUntil(
+        [&] {
+          const std::lock_guard<std::mutex> lock(mutex);
+          return transform_id.has_value();
+        },
+        std::chrono::seconds(10)));
+    m.h.service.cancel_magic_conversion_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    ASSERT_TRUE(WaitUntil(
+        [&] {
+          const std::lock_guard<std::mutex> lock(mutex);
+          return canceled.size() == 1 && canceled[0] == *transform_id;
+        },
+        std::chrono::seconds(10)));
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      released = true;
+    }
+    released_cv.notify_all();
+    m.h.service.stop_ipc_worker_for_test();
+    EXPECT_FALSE(m.h.service.has_transform_outcome_for_test());
+    m.h.service.process_candidates_ready_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+  }
+  {
+    const std::lock_guard<std::mutex> lock(mutex);
+    released = true;
+  }
+  released_cv.notify_all();
+  server.Stop();
+}
+
+// legacy-parity-spec §4.3: the wait runs from the submit. A request the worker
+// never sent (it may be reconnecting) stops the window's wait at the deadline.
+TEST(TsfTipMagicConversionTest, AnUnsentRequestStopsWaitingAtItsDeadline) {
+  MagicConversionHarness m;
+  m.h.service.set_transform_wait_for_test(100);
+  m.DoubleTap(kAlnumKey);
+  ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+  m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+  ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+  m.h.service.process_candidates_ready_for_test();
+  EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->state,
+            azookey::tsf::PromptDialogState::Waiting);
+  // Past the deadline and the window's grace (one second).
+  std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+  m.h.service.process_candidates_ready_for_test();
+  const auto view = m.h.service.magic_conversion_view_for_test();
+  ASSERT_TRUE(view.has_value());
+  EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+  EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                              std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
+  EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+}
+
+// The window's own timer looks at the wait again, so an unsent request ends in
+// the timeout message with no other candidate message to wake the window.
+TEST(TsfTipMagicConversionTest, TheWindowsTimerEndsTheWaitForAnUnsentRequest) {
+  MagicConversionHarness m;
+  m.h.service.set_prompt_dialog_headless_for_test(false);
+  m.h.service.set_prompt_dialog_hidden_for_test(true);
+  m.h.service.route_candidates_ready_for_test();
+  m.h.service.set_transform_wait_for_test(100);
+  const auto pump = [] {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+  };
+  m.h.service.set_double_tap_now_for_test(1000);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  m.h.service.set_double_tap_now_for_test(1200);
+  ASSERT_TRUE(m.h.Press(kAlnumKey));
+  ASSERT_TRUE(WaitUntil([&] {
+    pump();
+    return m.h.service.prompt_dialog_for_test().IsOpen();
+  }));
+  m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+  ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        pump();
+        const auto view = m.h.service.magic_conversion_view_for_test();
+        return view && view->state != azookey::tsf::PromptDialogState::Waiting;
+      },
+      std::chrono::seconds(5)));
+  const auto view = m.h.service.magic_conversion_view_for_test();
+  ASSERT_TRUE(view.has_value());
+  EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                              std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
+  EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  m.h.service.cancel_magic_conversion_for_test();
+}
+
+// ai-backend-spec section 4.1: the worker sends only to a Host that advertises
+// the type; one reached by a reconnect without it gets nothing.
+TEST(TsfTipMagicConversionTest, ARequestGoesOnlyToAHostThatAdvertisesIt) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-capability-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::atomic<int> transforms{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"transform_selected_text"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type != MessageType::TransformSelectedText) return std::nullopt;
+    ++transforms;
+    TransformSelectedTextResponse answer;
+    answer.result = "Good morning.";
+    response.payload_json = BuildTransformSelectedTextResponse(answer);
+    return response;
+  }));
+  TextServiceHarness handshake_token_guard;
+  {
+    MagicConversionHarness m;
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    // As if the worker had reconnected to a Host without the capability.
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                                std::nullopt, std::nullopt, azookey::tsf::PromptFailure::NoAnswer));
+    EXPECT_EQ(transforms.load(), 0);
+    m.h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+}
+
+// A window closed while its request is queued drops the request; so does the
+// end of the TIP's activation.
+TEST(TsfTipMagicConversionTest, CancelDropsTheQueuedRequest) {
+  {
+    MagicConversionHarness m;
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    m.h.service.cancel_magic_conversion_for_test();
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+    EXPECT_FALSE(m.h.service.has_transform_outcome_for_test());
+  }
+  {
+    MagicConversionHarness m;
+    m.DoubleTap(kAlnumKey);
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+    ASSERT_EQ(m.h.service.Deactivate(), S_OK);
+    EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+  }
 }

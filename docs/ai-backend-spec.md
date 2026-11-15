@@ -91,7 +91,7 @@ canonical_for: ["AiBackend 契約"]
 
 | 消費者 | トリガ | 送信単位 | 既定 backend 方針 | 同期/非同期 |
 |---|---|---|---|---|
-| **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト | `aiBackend` 設定値（`openai` 可） | 同期（ダイアログ完了で結果反映） |
+| **M16** Magic Conversion / Replace Suggestion | 英数/かなキーのダブルタップ（ユーザー明示） | 選択テキスト | `aiBackend` 設定値（`openai` 可） | 窓で応答を待ち、[適用] で反映（モードレスの窓） |
 | **M58-C** AI 整文 `ai-cleanup` | 一括変換確定（ユーザー明示） | 蓄積全文かな + 生ローマ字 | `aiBackend` 設定値（`openai` / `local-zenzai`） | 同期（変換確定経路） |
 | **X-3-3** Post-Commit Lint | commit 後 800ms デバウンス（**自動**） | 直近 32 文字 | **`local-zenzai` を優先**（§3.3） | 非同期（背景、入力を阻害しない） |
 
@@ -260,6 +260,10 @@ Host は接続ごとに要求を順に処理するので、この要求は応答
 Handshake 前の要求には、`AiBackend` を呼ばずに `error=not_authenticated` を返す。Host は選択テキスト・
 指示・結果を保持せず、学習にも使わない。
 
+IPC の ETW（`docs/observability-spec.md`）は、全型に共通して要求の型と payload の長さを記録する。
+`TransformSelectedText` の長さは選択テキストと指示の長さの目安になるが、本文は持たない。secure の入力先から
+TIP はこの型を送らないので、secure の入力の長さは記録されない。これを例外として認め、型ごとに長さを外さない。
+
 失敗のログは `transform_selected_text_failed` の 1 行で、選択テキスト・指示・文脈・結果を持たない。
 `result` は次の固定値をとる（`docs/observability-spec.md` §7.2 の、イベントを定義する spec が値を
 列挙する場合に当たる）。
@@ -361,8 +365,9 @@ wire の値として残す。
 
 - system 文言の最終確定値は実装 PR（M16）でレビューする。本書は**マッピングの
   存在と意図**を契約として固定する（4 値の追加/削除は本書改訂を要する）。
-- `context`（前後文脈）は `includeContextInAITransform=true` のとき user メッセージに
-  「文脈」として付す。`false` のとき空（§11）。
+- `context`（前後文脈）は、要求が持ち、Host の設定 `includeContextInAITransform`（§11）が true のときだけ
+  user メッセージに「文脈」として付す。false のとき Host は要求の文脈を捨てる。M16 のプロンプト窓の TIP は
+  `context` を常に空で送る（左文脈を外部 AI へ送らない。`docs/privacy-and-secure-input-spec.md` §5.3）。
 - M58-C（`task=Cleanup`）の system プロンプトは「誤字補正・句読点挿入・整文。
   `raw_romaji`（生ローマ字）の打鍵誤りパターンを補正に使う。`auto_punctuation` が
   true のとき句読点を挿入する」を要旨とする。詳細は `romaji-batch-conversion-spec.md`
@@ -511,9 +516,10 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 
 ### 7.5 劣化 UX（M47 連携）
 
-- M16 は失敗時、原文を維持し、ダイアログ/インジケータで分類済みメッセージ（§7.2）を
-  控えめに提示する。secure 由来の抑止は「セーフ入力のため外部 AI を使用しません」を
-  明示する（混乱回避）。
+- M16 は失敗時、原文を維持し、プロンプト窓の状態行に分類ごとの固定の案内（§7.2）を出す
+  （`docs/legacy-parity-spec.md` §4.3。文言は `tsf-tip/src/PromptDialogModel.cpp`）。secure 由来の抑止は
+  「セーフ入力のため AI変換を使用しません」を明示する（混乱回避）。Host の SafeMode（`error=safe_mode`）は
+  secure と別の案内「安全モードのため AI変換を使用しません」にする。
 - M58-C は neural fallback の候補表示中、候補の下に分類別の固定案内を表示する。
   app 描画の UI-less 経路では候補 UIElement の説明として同じ案内を公開する。
   ホストアプリが説明を実際に描くかはアプリの実機確認対象とする。候補 UI を閉じるか
@@ -600,7 +606,7 @@ M48 のモード通知 API を前提としない。
 | `openAiApiKey` | `""` | API キー。`dpapi:` prefix で暗号化（§9） |
 | `openAiApiEndpoint` | `https://api.openai.com/v1` | OpenAI 互換エンドポイント |
 | `openAiModel` | `gpt-4o-mini` | model 名 |
-| `includeContextInAITransform` | `true` | 前後文脈（直近 paragraph）を含める（§5.2） |
+| `includeContextInAITransform` | `true` | 前後文脈（直近 paragraph）を含める。Host が要求の文脈を使うかを決め、M16 の TIP は文脈を送らない（§5.2） |
 | `batchConversionMode` | `neural` | `neural`/`ai-cleanup`（M58-C） |
 | `batchAutoPunctuation` | `false` | `ai-cleanup` 時の句読点自動挿入（M58-C） |
 | `postCommitLint` | `false` | X-3-3 の有効化 |

@@ -1631,6 +1631,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ++activation_epoch_;
+  // The prompt window and its request end with the activation (M16).
+  CancelMagicConversion();
   ResetTypoTracking();
   // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
   last_learned_commit_pairs_.clear();
@@ -2705,6 +2707,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  // A key between the two presses of a double tap breaks it, even one a host
+  // never delivers to OnKeyDown because the probe left it to the app.
+  ForgetDoubleTapUnless(wParam);
   // DEV-1637: the answer this key leaves with, on every return path.
   struct KeyPathRecord {
     TextService& service;
@@ -2987,6 +2992,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  ForgetDoubleTapUnless(wParam);
   struct TraceReset {
     TextService& service;
     std::string previous_id;
@@ -3246,8 +3252,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Before reconversion and the character-form cycle, which Convert and
     // NonConvert give up under convertKeysAction "imeOnOff" (spec §3.1.1).
     if (open_close != OpenCloseKeyAction::None) {
+      // The kana key keeps its usual effect; a double tap also opens the M16
+      // prompt window (legacy-parity-spec §4.1).
+      const auto double_tap = wParam == core::vk::kDbeHiragana
+                                  ? TakeDoubleTap(wParam, lParam, modifiers)
+                                  : std::nullopt;
       const HRESULT hr = HandleOpenCloseKey(open_close, wParam, context);
       if (SUCCEEDED(hr)) *eaten = TRUE;
+      if (double_tap && SUCCEEDED(hr)) BeginMagicConversion(context, *double_tap);
       return hr == E_UNEXPECTED ? S_OK : hr;
     }
     // Spec §3.7: decided before the map, where Idle's Space is a pass-through.
@@ -3286,6 +3298,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
     if (IsActionKey(mode_key, core::UserAction::ToggleAlnum)) {
+      // Two presses toggle twice, back to the mode the user was in, and a
+      // double tap also opens the M16 prompt window (legacy-parity-spec §4.1).
+      const auto double_tap = TakeDoubleTap(wParam, lParam, modifiers);
       CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                               LifecycleCleanupFailurePolicy::PreserveComposition);
       if (composition_ || committing_) {
@@ -3297,6 +3312,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       recent_character_form_commit_.reset();
       UpdateInputModeLangBar();
       *eaten = TRUE;
+      if (double_tap) BeginMagicConversion(context, *double_tap);
       return S_OK;
     }
     if (IsActionKey(mode_key, core::UserAction::ToggleHiraKata)) {
@@ -6348,8 +6364,8 @@ void TextService::PublishHealthDisplayState(CandidateHealthState state) {
 // idle Health probe must give way to it.
 bool TextService::HasQueuedIpcWorkLocked() const {
   return ipc_has_request_ || ipc_reconversion_request_.has_value() ||
-         ipc_prediction_request_.has_value() || !ipc_send_queue_.empty() ||
-         ipc_refresh_options_.load(std::memory_order_relaxed);
+         ipc_transform_request_.has_value() || ipc_prediction_request_.has_value() ||
+         !ipc_send_queue_.empty() || ipc_refresh_options_.load(std::memory_order_relaxed);
 }
 
 // The Host answered a request in time: it is not silent, so clear the count of
@@ -6662,6 +6678,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_correction") != hpayload->capabilities.end(),
         std::memory_order_relaxed);
+    ipc_host_transform_selected_text_.store(
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "transform_selected_text") != hpayload->capabilities.end(),
+        std::memory_order_relaxed);
     batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
                                        std::memory_order_relaxed);
     batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
@@ -6915,6 +6935,7 @@ void TextService::ServeConnection() {
     std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
     std::optional<ReconversionRequest> reconversion;
+    std::optional<TransformRequest> transform;
     bool health_due = false;
     bool diagnostics_due = false;
 
@@ -7103,6 +7124,17 @@ void TextService::ServeConnection() {
     }
 
     if (reconversion && !ConvertReconversion(*reconversion, next_id)) {
+      if (has_qc) RearmPendingQuery(req_id);
+      return;
+    }
+    // Taken only now, so the early returns above never lose the prompt
+    // window's request (M16, ai-backend-spec section 4.1).
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      transform = std::move(ipc_transform_request_);
+      ipc_transform_request_.reset();
+    }
+    if (transform && !SendTransformSelectedText(*transform, next_id)) {
       if (has_qc) RearmPendingQuery(req_id);
       return;
     }
@@ -9435,6 +9467,10 @@ void TextService::OnCandidatesReady(void* context) {
   service->RunPendingProofreadReconversion();
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
+  // M16: the prompt window opens here, after the key that asked for it has
+  // returned, and takes the answer to its request.
+  service->OpenPendingPromptDialog();
+  service->ApplyTransformOutcome();
   service->ApplyLiveConversionResult();
   bool refreshing_settings = false;
   try {
@@ -10208,6 +10244,346 @@ void TextService::PrefetchSelectedReconversion() {
   }
   ipc_cv_.notify_one();
   LogReconversion("prefetch", "requested");
+}
+
+namespace {
+
+// The application's top-level window, which the prompt window is centered on
+// (and owned by, when it is a window of this thread: PromptDialog::Create).
+HWND PromptOwnerWindow(ITfContext* context) {
+  HWND window = nullptr;
+  Microsoft::WRL::ComPtr<ITfContextView> view;
+  if (context && SUCCEEDED(context->GetActiveView(&view)) && view) (void)view->GetWnd(&window);
+  if (!window) window = GetForegroundWindow();
+  return window ? GetAncestor(window, GA_ROOT) : nullptr;
+}
+
+// The window looks at its request this long after the worker's deadline, for
+// a request the worker never sent (it may be reconnecting to the Host).
+constexpr int kTransformCheckGraceMs = 1000;
+
+// M16 stages for the log: fixed names, never the selection, the prompt or the
+// result (privacy-and-secure-input-spec section 8).
+void LogMagicConversion(std::string_view stage, HRESULT hr = S_OK) noexcept {
+  try {
+    TipRuntimeLog(TipRuntimeLogger(), logging::RuntimeLogLevel::Info, "magic_conversion",
+                  {{"stage", logging::RuntimeLogSafeText(std::string(stage))},
+                   {"hr", static_cast<int64_t>(hr)}});
+  } catch (...) {
+  }
+}
+
+}  // namespace
+
+void TextService::ForgetDoubleTapUnless(WPARAM key) noexcept {
+  if (key != VK_OEM_ATTN && key != core::vk::kDbeHiragana) double_tap_key_ = 0;
+}
+
+uint64_t TextService::DoubleTapNowMs() const noexcept {
+#ifdef AZOOKEY_TSF_TESTING
+  if (double_tap_now_for_test_) return *double_tap_now_for_test_;
+#endif
+  return GetTickCount64();
+}
+
+std::optional<core::UserAction> TextService::TakeDoubleTap(WPARAM key, LPARAM key_data,
+                                                           uint32_t modifiers) {
+  // legacy-parity-spec §4.1: two presses of the same key within 500 ms, with
+  // no modifier and no other key between. A held key repeats with bit 30 (the
+  // previous key state) set; only a fresh press counts.
+  constexpr uint64_t kDoubleTapMs = 500;
+  if (key != VK_OEM_ATTN && key != core::vk::kDbeHiragana) return std::nullopt;
+  const bool repeat = (static_cast<uint64_t>(key_data) & (uint64_t{1} << 30)) != 0;
+  const uint64_t now = DoubleTapNowMs();
+  if (modifiers != 0 || repeat) {
+    // Logged only where it stops what would have been a double tap.
+    if (repeat && double_tap_key_ == key) LogMagicConversion("key_repeat");
+    double_tap_key_ = 0;
+    return std::nullopt;
+  }
+  if (double_tap_key_ == key && now - double_tap_at_ms_ < kDoubleTapMs) {
+    double_tap_key_ = 0;
+    return key == VK_OEM_ATTN ? core::UserAction::StartAlnumDouble
+                              : core::UserAction::StartKanaDouble;
+  }
+  double_tap_key_ = key;
+  double_tap_at_ms_ = now;
+  return std::nullopt;
+}
+
+void TextService::BeginMagicConversion(ITfContext* context, core::UserAction double_tap) {
+  const auto ai_settings = local_settings_.AiSnapshot();
+  if (!ai_settings.magic_conversion) return LogMagicConversion("disabled");
+  if (magic_session_) return LogMagicConversion("already_open");
+  if (!context) return LogMagicConversion("no_context");
+  // The TIP's own facts, not input_state_: the legacy key path leaves that
+  // state behind the composition.
+  if (composition_ || committing_ || !preedit_kana_.empty() || romaji_.HasPending())
+    return LogMagicConversion("composing");
+  if (!ipc_host_transform_selected_text_.load(std::memory_order_relaxed))
+    return LogMagicConversion("host_unsupported");
+  // core maps the double tap to the window's initial prompt.
+  std::optional<core::PromptPreset> preset;
+  core::UserActionEvent event;
+  event.action = double_tap;
+  for (const auto& action : core::InputState{}.HandleEvent(event).actions) {
+    if (const auto* show = std::get_if<core::ShowReplaceSuggestionPrompt>(&action))
+      preset = show->preset;
+  }
+  if (!preset) return LogMagicConversion("no_prompt");
+
+  // The window opens from the candidate window's message, after this key
+  // returns; a session whose message cannot be posted would never open.
+  const auto open = [this](MagicConversionSession&& opened, std::string_view stage) {
+    magic_session_ = std::move(opened);
+    LogMagicConversion(stage);
+    if (candidate_ui_.PostCandidatesReady()) return;
+    magic_session_.reset();
+    LogMagicConversion("post_failed");
+  };
+  const auto privacy = ResolvePrivacy(context, /*evaluate_ai=*/true);
+  MagicConversionSession session;
+  session.context = context;
+  session.owner = PromptOwnerWindow(context);
+  if (privacy.secure) {
+    // Nothing is read from a secure field; the window only says why
+    // (ai-backend-spec section 7.5).
+    session.model = PromptDialogModel::ForNotice(PromptNotice::Secure);
+    return open(std::move(session), "secure_notice");
+  }
+  // The selection goes to an external AI only (ai-backend-spec section 4.1).
+  if (!privacy.ai.ai || !privacy.ai.external || privacy.backend != "openai")
+    return LogMagicConversion("ai_not_allowed");
+  SelectedTextCapture capture;
+  switch (ReadSelectedText(context, client_id_, kMaxTransformSelectionUnits, capture)) {
+    case SelectedTextRead::Ok:
+      break;
+    case SelectedTextRead::TooLong:
+      session.model = PromptDialogModel::ForNotice(PromptNotice::SelectionTooLong);
+      return open(std::move(session), "too_long_notice");
+    case SelectedTextRead::Empty:
+      return LogMagicConversion("no_selection");
+    case SelectedTextRead::Failed:
+      return LogMagicConversion("read_failed");
+  }
+  session.request.selection = WideToUtf8(capture.text);
+  if (session.request.selection.empty()) return LogMagicConversion("encode_failed");
+  session.request.mode = "free";
+  // The surrounding text is not sent until DEV-1965 decides on it.
+  session.request.context.clear();
+  session.request.secure = false;
+  session.request.ai_allowed = true;
+  session.request.external_ai_allowed = true;
+  session.request.ai_backend = privacy.backend;
+  session.wait_ms = ai_settings.timeout_ms + 5000;
+#ifdef AZOOKEY_TSF_TESTING
+  if (transform_wait_ms_for_test_) session.wait_ms = *transform_wait_ms_for_test_;
+#endif
+  session.range = std::move(capture.range);
+  session.original = std::move(capture.text);
+  session.model = PromptDialogModel::ForSelection(*preset, session.original);
+  open(std::move(session), "opened");
+}
+
+void TextService::OpenPendingPromptDialog() {
+  if (!magic_session_ || !magic_session_->open_pending) return;
+  magic_session_->open_pending = false;
+#ifdef AZOOKEY_TSF_TESTING
+  if (prompt_dialog_headless_for_test_) return;
+#endif
+  PromptDialog::Callbacks callbacks;
+  callbacks.submit = [this](std::wstring prompt) { SubmitMagicConversion(std::move(prompt)); };
+  callbacks.apply = [this] { ApplyMagicConversion(); };
+  callbacks.cancel = [this] { CancelMagicConversion(); };
+  callbacks.check = [this] { ApplyTransformOutcome(); };
+  if (!prompt_dialog_.Create(magic_session_->owner, std::move(callbacks))) {
+    LogMagicConversion("window_failed");
+    magic_session_.reset();
+    return;
+  }
+  prompt_dialog_.Update(magic_session_->model.view());
+#ifdef AZOOKEY_TSF_TESTING
+  if (prompt_dialog_hidden_for_test_) return;
+#endif
+  prompt_dialog_.Show();
+}
+
+void TextService::UpdatePromptDialog() {
+  if (magic_session_ && prompt_dialog_.IsOpen())
+    prompt_dialog_.Update(magic_session_->model.view());
+}
+
+void TextService::SubmitMagicConversion(std::wstring prompt) {
+  if (!magic_session_ || !magic_session_->range) return;
+  auto& session = *magic_session_;
+  if (!session.model.Submit(std::move(prompt))) {
+    UpdatePromptDialog();
+    return;
+  }
+  session.request.prompt = session.model.prompt_utf8();
+  if (IpcHostUnavailable()) {
+    session.model.OnResponse(std::nullopt, PromptFailure::NoAnswer);
+    UpdatePromptDialog();
+    return;
+  }
+  // legacy-parity-spec §4.3: the wait runs from here, while the request is
+  // queued as well as after it is sent.
+  session.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(session.wait_ms);
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    session.generation = ++ipc_transform_generation_;
+    ipc_transform_request_ = TransformRequest{session.generation, session.request,
+                                              NewTraceIdNoThrow(), session.deadline};
+  }
+  ipc_cv_.notify_one();
+  LogMagicConversion("submitted");
+  UpdatePromptDialog();
+  prompt_dialog_.ScheduleCheck(static_cast<UINT>(session.wait_ms + kTransformCheckGraceMs));
+}
+
+void TextService::ApplyTransformOutcome() {
+  std::optional<TransformOutcome> outcome;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    outcome = std::exchange(transform_outcome_, std::nullopt);
+  }
+  if (!magic_session_) return;
+  // An answer for a closed window, or an earlier request, is dropped.
+  if (outcome && outcome->generation == magic_session_->generation) {
+    magic_session_->model.OnResponse(outcome->response, outcome->failure);
+    LogMagicConversion(magic_session_->model.CanApply() ? "answered" : "failed");
+    UpdatePromptDialog();
+    return;
+  }
+  // No answer by the deadline: the worker never sent the request (it may be
+  // reconnecting), or its answer could not be posted. The window stops waiting.
+  if (magic_session_->model.view().state != PromptDialogState::Waiting) return;
+  const auto due = magic_session_->deadline + std::chrono::milliseconds(kTransformCheckGraceMs);
+  const auto now = std::chrono::steady_clock::now();
+  if (now < due) {
+    // A timer may come a tick early: it is set again for the rest.
+    const auto rest = std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count();
+    prompt_dialog_.ScheduleCheck(static_cast<UINT>(rest) + 1);
+    return;
+  }
+  {
+    // A later answer to the request is one for an earlier generation.
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    magic_session_->generation = ++ipc_transform_generation_;
+    ipc_transform_request_.reset();
+  }
+  magic_session_->model.OnResponse(std::nullopt, PromptFailure::TimedOut);
+  LogMagicConversion("timed_out");
+  UpdatePromptDialog();
+}
+
+void TextService::ApplyMagicConversion() {
+  if (!magic_session_ || !magic_session_->range || !magic_session_->model.CanApply()) return;
+  Microsoft::WRL::ComPtr<ITfRange> range = magic_session_->range;
+  std::wstring original = magic_session_->original;
+  std::wstring replacement = Utf8ToWide(magic_session_->model.result_utf8());
+  // The window goes first, so the application has the focus back when the
+  // replacement runs (legacy-parity-spec §4.6).
+  CancelMagicConversion();
+  if (replacement.empty()) return LogMagicConversion("encode_failed");
+  // The session may run after this service is gone: it captures nothing of it.
+  const HRESULT hr = RequestSelectedTextReplacement(
+      range.Get(), client_id_, std::move(original), std::move(replacement), [](HRESULT result) {
+        LogMagicConversion(SUCCEEDED(result)             ? "applied"
+                           : result == TF_E_NOCONVERSION ? "text_changed"
+                                                         : "apply_failed",
+                           result);
+        // The selection is left as it was; a beep says nothing was replaced.
+        if (FAILED(result)) MessageBeep(MB_OK);
+      });
+  if (FAILED(hr)) {
+    LogMagicConversion("apply_failed", hr);
+    MessageBeep(MB_OK);
+  }
+}
+
+void TextService::CancelMagicConversion() {
+  if (magic_session_) {
+    // The worker sees a newer generation and cancels a request in flight.
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      ++ipc_transform_generation_;
+      ipc_transform_request_.reset();
+    }
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      transform_outcome_.reset();
+    }
+    magic_session_.reset();
+  }
+  prompt_dialog_.Close();
+}
+
+bool TextService::SendTransformSelectedText(const TransformRequest& request, uint64_t& next_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  using namespace azookey::ipc;
+  const auto stale = [&] {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_stop_.load() || ipc_transform_generation_ != request.generation;
+  };
+  const auto finish = [&](std::optional<TransformSelectedTextResponse> response,
+                          PromptFailure failure) {
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      transform_outcome_ = TransformOutcome{request.generation, std::move(response), failure};
+    }
+    candidate_ui_.PostCandidatesReady();
+  };
+  if (stale()) return true;
+  // The window's wait ran while the request was queued; a reconnect may have
+  // reached a Host that does not advertise the type (ai-backend-spec section 4.1).
+  if (std::chrono::steady_clock::now() >= request.deadline) {
+    finish(std::nullopt, PromptFailure::TimedOut);
+    return true;
+  }
+  if (!ipc_host_transform_selected_text_.load(std::memory_order_relaxed)) {
+    finish(std::nullopt, PromptFailure::NoAnswer);
+    return true;
+  }
+  Envelope envelope;
+  envelope.request_id = next_id++;
+  envelope.trace_id = request.trace_id;
+  envelope.type = MessageType::TransformSelectedText;
+  envelope.payload_json = BuildTransformSelectedTextRequest(request.request);
+  if (!ipc_client_.Send(envelope)) {
+    finish(std::nullopt, PromptFailure::NoAnswer);
+    return false;
+  }
+  const auto deadline = request.deadline;
+  while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
+    // The Host serves a connection in order, so a request no one waits for
+    // is canceled and the connection dropped rather than left to block it.
+    if (stale()) {
+      SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
+      ipc_client_.Disconnect();
+      return false;
+    }
+    auto response = ipc_client_.ReceiveWithTimeout(50, deadline);
+    if (!response) continue;
+    // A response to a request this one does not wait for is dropped
+    // (ai-backend-spec section 4.1).
+    if (response->request_id != envelope.request_id ||
+        response->type != MessageType::TransformSelectedText)
+      continue;
+    NoteHostResponded();
+    auto parsed = ParseTransformSelectedTextResponse(response->payload_json);
+    const PromptFailure failure = parsed ? PromptFailure::None : PromptFailure::NoAnswer;
+    finish(std::move(parsed), failure);
+    return true;
+  }
+  const bool connected = ipc_client_.IsConnected();
+  if (connected) {
+    ipc_client_.FinishTraceRequest(envelope.request_id, core::EtwResult::Timeout);
+    SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
+    ipc_client_.Disconnect();
+  }
+  finish(std::nullopt, connected ? PromptFailure::TimedOut : PromptFailure::NoAnswer);
+  return false;
 }
 
 HRESULT TextService::StartSelectionReconversion(ITfContext* context,

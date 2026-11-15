@@ -999,8 +999,8 @@ CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) c
           prediction ? 0 : first_visible_};
 }
 
-void CandidateWindow::PostCandidatesReady() {
-  if (hwnd_) PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
+bool CandidateWindow::PostCandidatesReady() {
+  return hwnd_ && PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
 }
 
 bool CandidateWindow::ScheduleCandidatesReady(UINT delay_ms) {

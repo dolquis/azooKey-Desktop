@@ -172,7 +172,8 @@ class CandidateWindow {
     on_candidates_ready_ = fn;
     on_candidates_ready_context_ = context;
   }
-  void PostCandidatesReady();
+  // False when no message could be posted (no window, or a full queue).
+  bool PostCandidatesReady();
   bool ScheduleCandidatesReady(UINT delay_ms);
   void CancelScheduledCandidatesReady();
 

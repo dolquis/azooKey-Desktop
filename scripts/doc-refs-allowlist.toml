@@ -18,17 +18,6 @@
 # --- planned -----------------------------------------------------------------
 
 [[allow]]
-ref = "tsf-tip/src/PromptDialog.cpp"
-kind = "planned"
-milestone = "M16"
-spec = "docs/legacy-parity-spec.md §4.3"
-reason = "Magic Conversion のプロンプト UI。M16 で新設する"
-files = [
-  "plans/windows-port-roadmap.md",
-  "docs/windows-tsf-host-architecture.md",
-]
-
-[[allow]]
 ref = "core/src/QwertyAdjacency.cpp"
 kind = "planned"
 milestone = "M17"

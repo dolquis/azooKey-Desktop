@@ -121,7 +121,7 @@
     "llmMagicConversion": {
       "type": "boolean",
       "default": false,
-      "description": "MVPでは無効固定。Phase 5 (M16) で aiBackend 経由で有効化"
+      "description": "M16 の英数・かなダブルタップのプロンプト窓を有効にする。aiBackend=openai と外部 AI の許可も要る（docs/legacy-parity-spec.md §4.1）"
     },
     "logLevel": {
       "type": "string",

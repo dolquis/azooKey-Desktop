@@ -72,13 +72,12 @@ bool PromptDialog::Create(HWND owner, Callbacks callbacks) noexcept {
   activated_ = false;
   closing_ = false;
   state_ = PromptDialogState::Editing;
-  HWND created = nullptr;
-  {
-    const ScopedPerMonitorDpiAwareness dpi_context;
-    created = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kClassName, L"AI変換",
-                              WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN, CW_USEDEFAULT,
-                              CW_USEDEFAULT, kWidth, 300, owner, nullptr, ModuleInstance(), this);
-  }
+  // The window and its controls are per-monitor aware (copilot-pc-backend-spec §7.2).
+  const ScopedPerMonitorDpiAwareness dpi_context;
+  HWND created =
+      CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kClassName, L"AI変換",
+                      WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN, CW_USEDEFAULT,
+                      CW_USEDEFAULT, kWidth, 300, owner, nullptr, ModuleInstance(), this);
   if (!created) return false;
   hwnd_ = created;
   CreateControls();
@@ -99,12 +98,14 @@ void PromptDialog::Show() noexcept {
 }
 
 void PromptDialog::Close() noexcept {
-  if (!hwnd_ || closing_) return;
-  closing_ = true;
-  HWND hwnd = std::exchange(hwnd_, nullptr);
-  DestroyWindow(hwnd);
+  if (closing_) return;
+  if (hwnd_) {
+    closing_ = true;
+    DestroyWindow(std::exchange(hwnd_, nullptr));
+    closing_ = false;
+  }
+  // Also after the window was destroyed with its owner.
   if (font_) DeleteObject(std::exchange(font_, nullptr));
-  closing_ = false;
 }
 
 HWND PromptDialog::Control(int id) const noexcept {
@@ -141,8 +142,11 @@ void PromptDialog::CreateControls() {
   child(L"BUTTON", L"適用", WS_TABSTOP | BS_PUSHBUTTON, kIdApply);
 }
 
-void PromptDialog::Layout() {
+void PromptDialog::Layout(const RECT* suggested) {
   if (!hwnd_) return;
+  // Positions are in the window's own (per-monitor) coordinates, whatever the
+  // calling thread's awareness.
+  const ScopedPerMonitorDpiAwareness dpi_context;
   const UINT dpi = NormalizeDpi(GetDpiForWindow(hwnd_));
   const auto s = [dpi](int value) { return ScaleForDpi(value, dpi); };
   NONCLIENTMETRICSW metrics{};
@@ -193,6 +197,12 @@ void PromptDialog::Layout() {
                            static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_EXSTYLE)), dpi);
   const int width = frame.right - frame.left;
   const int height = frame.bottom - frame.top;
+  if (suggested) {
+    // A DPI change keeps the window where the system put it (copilot-pc-backend-spec §7.3).
+    SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top, width, height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    return;
+  }
   // Centered on the owner, inside the work area of its monitor.
   RECT anchor{};
   if (!owner_ || !GetWindowRect(owner_, &anchor)) GetWindowRect(GetDesktopWindow(), &anchor);
@@ -299,10 +309,15 @@ LRESULT PromptDialog::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPAR
       Cancel();
       return 0;
     case WM_DPICHANGED:
-      Layout();
+      Layout(reinterpret_cast<const RECT*>(lparam));
       return 0;
     case WM_DESTROY:
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+      if (hwnd_ == hwnd) {
+        // Destroyed from outside, with its owner: the request ends with it.
+        hwnd_ = nullptr;
+        Cancel();
+      }
       return 0;
     default:
       break;

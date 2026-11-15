@@ -146,7 +146,7 @@ void CandidateUiCoordinator::SetBeginObserver(CandidateUiBeginObserver observer,
   begin_observer_context_ = context;
 }
 
-void CandidateUiCoordinator::PostCandidatesReady() { own_window_.PostCandidatesReady(); }
+bool CandidateUiCoordinator::PostCandidatesReady() { return own_window_.PostCandidatesReady(); }
 
 bool CandidateUiCoordinator::ScheduleCandidatesReady(UINT delay_ms) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();

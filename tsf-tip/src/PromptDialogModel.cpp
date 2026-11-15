@@ -95,6 +95,8 @@ PromptDialogModel PromptDialogModel::ForNotice(PromptNotice notice) {
 bool PromptDialogModel::Submit(std::wstring prompt) {
   if (view_.state != PromptDialogState::Editing && view_.state != PromptDialogState::Preview)
     return false;
+  // A prompt that is not sent stays as typed: the window shows view_.prompt.
+  view_.prompt = prompt;
   prompt = Trim(std::move(prompt));
   auto utf8 = ToUtf8(prompt);
   if (prompt.empty() || utf8.empty()) return false;

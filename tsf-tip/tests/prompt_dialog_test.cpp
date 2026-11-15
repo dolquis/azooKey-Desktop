@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/PromptDialog.h"
 #include "azookey/tsf/PromptDialogModel.h"
 
@@ -77,6 +78,8 @@ TEST(PromptDialogModelTest, EmptyOrTooLongPromptIsNotSent) {
   EXPECT_FALSE(model.Submit(std::wstring(5000, L'a')));
   EXPECT_EQ(model.view().state, PromptDialogState::Editing);
   EXPECT_FALSE(model.view().status.empty());
+  // The refused prompt stays as typed, so the window does not write it back.
+  EXPECT_EQ(model.view().prompt, std::wstring(5000, L'a'));
 }
 
 // ai-backend-spec section 7.2 and 7.5: a failure keeps the selection and says
@@ -222,6 +225,41 @@ TEST(PromptDialogTest, CancelCallbackMayCloseTheWindow) {
   dialog.key_for_test(PromptDialog::kIdPrompt, VK_ESCAPE);
   EXPECT_EQ(canceled, 1);
   EXPECT_FALSE(dialog.IsOpen());
+}
+
+// The window goes with its owner, and its request with it.
+TEST(PromptDialogTest, DestroyingTheOwnerCancelsTheWindow) {
+  HWND owner = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 100, 100, nullptr, nullptr,
+                               GetModuleHandleW(nullptr), nullptr);
+  ASSERT_NE(owner, nullptr);
+  DialogCalls calls;
+  PromptDialog dialog;
+  ASSERT_TRUE(dialog.Create(owner, Record(calls)));
+  dialog.Update(PromptDialogModel::ForSelection(PromptPreset::English, L"a").view());
+  ASSERT_TRUE(DestroyWindow(owner));
+  EXPECT_FALSE(dialog.IsOpen());
+  EXPECT_EQ(calls.canceled, 1);
+  dialog.Close();
+  EXPECT_EQ(calls.canceled, 1);
+}
+
+// copilot-pc-backend-spec §7.3: a DPI change keeps the window where the
+// system suggests instead of moving it back over the owner.
+TEST(PromptDialogTest, DpiChangeKeepsTheSuggestedPosition) {
+  // Rectangles in the window's own coordinates, whatever this thread's awareness.
+  const azookey::tsf::ScopedPerMonitorDpiAwareness dpi_context;
+  DialogCalls calls;
+  PromptDialog dialog;
+  ASSERT_TRUE(dialog.Create(nullptr, Record(calls)));
+  RECT before{};
+  ASSERT_TRUE(GetWindowRect(dialog.hwnd(), &before));
+  RECT suggested{before.left + 37, before.top + 23, before.right + 37, before.bottom + 23};
+  SendMessageW(dialog.hwnd(), WM_DPICHANGED, MAKEWPARAM(96, 96),
+               reinterpret_cast<LPARAM>(&suggested));
+  RECT after{};
+  ASSERT_TRUE(GetWindowRect(dialog.hwnd(), &after));
+  EXPECT_EQ(after.left, suggested.left);
+  EXPECT_EQ(after.top, suggested.top);
 }
 
 }  // namespace

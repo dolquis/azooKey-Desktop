@@ -396,6 +396,10 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // The window Activate creates, for tests that show it without activating.
   bool create_candidate_window_for_test() { return candidate_ui_.Create(); }
+  // Routes that window's message to OnCandidatesReady, as Activate does.
+  void route_candidates_ready_for_test() {
+    candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
+  }
   void show_prediction_for_test(const ipc::CandidateField& prediction) {
     shown_predictions_.push_back(prediction);
     ShowPredictionWindow();
@@ -730,6 +734,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_magic_conversion_for_test(bool enabled, std::string backend, int timeout_ms = 30000) {
     local_settings_.SetMagicConversionForTest(enabled, std::move(backend), timeout_ms);
   }
+  // How long the worker waits for the Host's answer, instead of openAiTimeoutMs + 5 s.
+  void set_transform_wait_for_test(int ms) { transform_wait_ms_for_test_ = ms; }
   void set_host_transform_capability_for_test(bool supported) {
     ipc_host_transform_selected_text_.store(supported);
   }
@@ -1413,6 +1419,7 @@ class TextService final : public ITfTextInputProcessorEx,
 #ifdef AZOOKEY_TSF_TESTING
   std::optional<uint64_t> double_tap_now_for_test_;
   bool prompt_dialog_headless_for_test_{false};
+  std::optional<int> transform_wait_ms_for_test_;
 #endif
   struct PredictionRequest {
     uint64_t generation;

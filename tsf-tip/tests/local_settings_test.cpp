@@ -233,9 +233,9 @@ TEST_F(LocalSettingsTest, MagicConversionDefaultsOffAndOnlyExplicitTrueEnablesIt
   EXPECT_FALSE(reader.AiSnapshot().magic_conversion);
   Write(R"({"llmMagicConversion":true})");
   ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().magic_conversion; }));
-  for (const auto* json : {R"({})", R"({"llmMagicConversion":false})",
-                           R"({"llmMagicConversion":"true"})", R"({"llmMagicConversion":1})",
-                           R"({"llmMagicConversion":null})", "{"}) {
+  for (const auto* json :
+       {R"({})", R"({"llmMagicConversion":false})", R"({"llmMagicConversion":"true"})",
+        R"({"llmMagicConversion":1})", R"({"llmMagicConversion":null})", "{"}) {
     SCOPED_TRACE(json);
     Write(R"({"llmMagicConversion":true})");
     ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().magic_conversion; }));

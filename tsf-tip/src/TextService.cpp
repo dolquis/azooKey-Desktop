@@ -10248,13 +10248,16 @@ void TextService::PrefetchSelectedReconversion() {
 
 namespace {
 
-// The application's top-level window, which owns the prompt window.
+// The application's top-level window, which owns the prompt window. A window
+// of another thread is no owner: owning it would join the two input queues.
 HWND PromptOwnerWindow(ITfContext* context) {
   HWND window = nullptr;
   Microsoft::WRL::ComPtr<ITfContextView> view;
   if (context && SUCCEEDED(context->GetActiveView(&view)) && view) (void)view->GetWnd(&window);
   if (!window) window = GetForegroundWindow();
-  return window ? GetAncestor(window, GA_ROOT) : nullptr;
+  if (window) window = GetAncestor(window, GA_ROOT);
+  if (window && GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId()) return nullptr;
+  return window;
 }
 
 // M16 stages for the log: fixed names, never the selection, the prompt or the
@@ -10307,14 +10310,14 @@ std::optional<core::UserAction> TextService::TakeDoubleTap(WPARAM key, LPARAM ke
 }
 
 void TextService::BeginMagicConversion(ITfContext* context, core::UserAction double_tap) {
+  const auto ai_settings = local_settings_.AiSnapshot();
+  if (!ai_settings.magic_conversion) return LogMagicConversion("disabled");
   if (magic_session_) return LogMagicConversion("already_open");
   if (!context) return LogMagicConversion("no_context");
   // The TIP's own facts, not input_state_: the legacy key path leaves that
   // state behind the composition.
   if (composition_ || committing_ || !preedit_kana_.empty() || romaji_.HasPending())
     return LogMagicConversion("composing");
-  const auto ai_settings = local_settings_.AiSnapshot();
-  if (!ai_settings.magic_conversion) return LogMagicConversion("disabled");
   if (!ipc_host_transform_selected_text_.load(std::memory_order_relaxed))
     return LogMagicConversion("host_unsupported");
   // core maps the double tap to the window's initial prompt.
@@ -10327,6 +10330,15 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
   }
   if (!preset) return LogMagicConversion("no_prompt");
 
+  // The window opens from the candidate window's message, after this key
+  // returns; a session whose message cannot be posted would never open.
+  const auto open = [this](MagicConversionSession&& opened, std::string_view stage) {
+    magic_session_ = std::move(opened);
+    LogMagicConversion(stage);
+    if (candidate_ui_.PostCandidatesReady()) return;
+    magic_session_.reset();
+    LogMagicConversion("post_failed");
+  };
   const auto privacy = ResolvePrivacy(context, /*evaluate_ai=*/true);
   MagicConversionSession session;
   session.context = context;
@@ -10335,10 +10347,7 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
     // Nothing is read from a secure field; the window only says why
     // (ai-backend-spec section 7.5).
     session.model = PromptDialogModel::ForNotice(PromptNotice::Secure);
-    magic_session_ = std::move(session);
-    LogMagicConversion("secure_notice");
-    candidate_ui_.PostCandidatesReady();
-    return;
+    return open(std::move(session), "secure_notice");
   }
   // The selection goes to an external AI only (ai-backend-spec section 4.1).
   if (!privacy.ai.ai || !privacy.ai.external || privacy.backend != "openai")
@@ -10349,10 +10358,7 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
       break;
     case SelectedTextRead::TooLong:
       session.model = PromptDialogModel::ForNotice(PromptNotice::SelectionTooLong);
-      magic_session_ = std::move(session);
-      LogMagicConversion("too_long_notice");
-      candidate_ui_.PostCandidatesReady();
-      return;
+      return open(std::move(session), "too_long_notice");
     case SelectedTextRead::Empty:
       return LogMagicConversion("no_selection");
     case SelectedTextRead::Failed:
@@ -10368,13 +10374,13 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
   session.request.external_ai_allowed = true;
   session.request.ai_backend = privacy.backend;
   session.wait_ms = ai_settings.timeout_ms + 5000;
+#ifdef AZOOKEY_TSF_TESTING
+  if (transform_wait_ms_for_test_) session.wait_ms = *transform_wait_ms_for_test_;
+#endif
   session.range = std::move(capture.range);
   session.original = std::move(capture.text);
   session.model = PromptDialogModel::ForSelection(*preset, session.original);
-  magic_session_ = std::move(session);
-  LogMagicConversion("opened");
-  // Opened from the candidate window's message, after this key returns.
-  candidate_ui_.PostCandidatesReady();
+  open(std::move(session), "opened");
 }
 
 void TextService::OpenPendingPromptDialog() {
@@ -10530,6 +10536,7 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
   }
   const bool connected = ipc_client_.IsConnected();
   if (connected) {
+    ipc_client_.FinishTraceRequest(envelope.request_id, core::EtwResult::Timeout);
     SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
     ipc_client_.Disconnect();
   }

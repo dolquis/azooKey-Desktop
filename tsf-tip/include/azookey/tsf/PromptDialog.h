@@ -63,7 +63,8 @@ class PromptDialog {
   static LRESULT CALLBACK ControlProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
   void CreateControls();
-  void Layout();
+  // Centered on the owner, or at `suggested` (WM_DPICHANGED).
+  void Layout(const RECT* suggested = nullptr);
   void Submit();
   void Apply();
   void Cancel();

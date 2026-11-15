@@ -53,7 +53,8 @@ class CandidateUiCoordinator {
   void SetSecureState(bool secure, bool show_indicator);
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void SetBeginObserver(CandidateUiBeginObserver observer, void* context);
-  void PostCandidatesReady();
+  // False when no message could be posted (no window, or a full queue).
+  bool PostCandidatesReady();
   bool ScheduleCandidatesReady(UINT delay_ms);
   void CancelScheduledCandidatesReady();
 

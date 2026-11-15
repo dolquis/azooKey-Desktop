@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "azookey/ipc/Limits.h"
 #include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/PromptDialog.h"
 #include "azookey/tsf/PromptDialogModel.h"
@@ -83,6 +84,43 @@ TEST(PromptDialogModelTest, EmptyOrTooLongPromptIsNotSent) {
   EXPECT_FALSE(model.view().status.empty());
   // The refused prompt stays as typed, so the window does not write it back.
   EXPECT_EQ(model.view().prompt, std::wstring(5000, L'a'));
+}
+
+// app-profile-spec §4.1 (DEV-2083): the app's promptPrefix goes before the
+// prompt, on its own line, only when sent; the window never shows it.
+TEST(PromptDialogModelTest, AppPromptPrefixGoesBeforeThePromptOnlyWhenSent) {
+  auto model = PromptDialogModel::ForSelection(PromptPreset::English, L"a", "丁寧語で");
+  EXPECT_EQ(model.view().prompt, L"英語に翻訳");
+  ASSERT_TRUE(model.Submit(L"英語に翻訳"));
+  EXPECT_EQ(model.prompt_utf8(), "丁寧語で\n英語に翻訳");
+  EXPECT_EQ(model.view().prompt, L"英語に翻訳");
+  // Sent again from the preview: one prefix, before the new prompt.
+  model.OnResponse(Result("Good morning."), PromptFailure::None);
+  ASSERT_EQ(model.view().state, PromptDialogState::Preview);
+  ASSERT_TRUE(model.Submit(L"もっと丁寧に"));
+  EXPECT_EQ(model.prompt_utf8(), "丁寧語で\nもっと丁寧に");
+  // No prefix: the prompt as typed.
+  auto plain = PromptDialogModel::ForSelection(PromptPreset::English, L"a");
+  ASSERT_TRUE(plain.Submit(L"英語に翻訳"));
+  EXPECT_EQ(plain.prompt_utf8(), "英語に翻訳");
+}
+
+// The 4 KiB limit covers the prefix, the line break and the prompt.
+TEST(PromptDialogModelTest, PromptWithTheAppPrefixKeepsTheLimit) {
+  const std::string prefix(4000, 'p');
+  const size_t room = azookey::ipc::kMaxTransformPromptBytes - prefix.size() - 1;
+  auto model = PromptDialogModel::ForSelection(PromptPreset::English, L"a", prefix);
+  EXPECT_FALSE(model.Submit(std::wstring(room + 1, L'q')));
+  EXPECT_EQ(model.view().state, PromptDialogState::Editing);
+  EXPECT_EQ(model.view().status,
+            L"アプリ別の前置きと合わせると指示が長すぎます。短くしてください。");
+  ASSERT_TRUE(model.Submit(std::wstring(room, L'q')));
+  EXPECT_EQ(model.prompt_utf8().size(), azookey::ipc::kMaxTransformPromptBytes);
+  // A prefix that leaves no room for any prompt is a settings problem.
+  auto full = PromptDialogModel::ForSelection(
+      PromptPreset::English, L"a", std::string(azookey::ipc::kMaxTransformPromptBytes - 1, 'p'));
+  EXPECT_FALSE(full.Submit(L"q"));
+  EXPECT_EQ(full.view().status, L"アプリ別の前置きが長すぎます。設定で短くしてください。");
 }
 
 // ai-backend-spec section 7.2 and 7.5: a failure keeps the selection and says

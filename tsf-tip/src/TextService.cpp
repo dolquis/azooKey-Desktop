@@ -10381,7 +10381,17 @@ void TextService::BeginMagicConversion(ITfContext* context, core::UserAction dou
 #endif
   session.range = std::move(capture.range);
   session.original = std::move(capture.text);
-  session.model = PromptDialogModel::ForSelection(*preset, session.original);
+  // The app's promptPrefix (app-profile-spec §4.1), resolved while the app's
+  // field has the focus: the window's own focus would change the window class.
+  std::string prompt_prefix;
+  if (const auto settings = local_settings_.Snapshot(); settings.profiles) {
+    if (const auto value = settings.profiles->ResolveField("promptPrefix", foreground_app_.Get(),
+                                                           WindowsAppNameEqual);
+        value && value->IsString())
+      prompt_prefix = value->AsString();
+  }
+  session.model =
+      PromptDialogModel::ForSelection(*preset, session.original, std::move(prompt_prefix));
   open(std::move(session), "opened");
 }
 

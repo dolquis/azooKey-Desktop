@@ -17807,6 +17807,45 @@ TEST(TsfTipMagicConversionTest, TheCandidateWindowMessageOpensTheWindow) {
   EXPECT_FALSE(m.h.service.magic_conversion_open_for_test());
 }
 
+// app-profile-spec §4.1 (DEV-2083): the promptPrefix of the app the field
+// belongs to goes before the prompt when sent; the window shows the prompt only.
+TEST(TsfTipMagicConversionTest, TheAppsPromptPrefixGoesBeforeThePromptWhenSent) {
+  struct Case {
+    const char* profiles;  // Settings beside "aiBackend":"openai".
+    const char* sent;
+  };
+  const Case cases[] = {
+      {R"("profilesByApp":{"notepad.exe":{"promptPrefix":"丁寧語で"}})", "丁寧語で\n英語に翻訳"},
+      {R"("promptPrefixByApp":{"Notepad.exe":"敬体で"})", "敬体で\n英語に翻訳"},
+      {R"("profilesByApp":{"other.exe":{"promptPrefix":"丁寧語で"}})", "英語に翻訳"},
+      // An explicit empty prefix clears the legacy one (app-profile-spec §6).
+      {R"("profilesByApp":{"notepad.exe":{"promptPrefix":""}},)"
+       R"("promptPrefixByApp":{"notepad.exe":"敬体で"})",
+       "英語に翻訳"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.profiles);
+    MagicConversionHarness m;
+    const auto json =
+        azookey::ipc::json::Parse(std::string(R"({"aiBackend":"openai",)") + item.profiles + "}");
+    ASSERT_TRUE(json);
+    azookey::core::BracketSettings settings;
+    settings.profiles = std::make_shared<const azookey::core::AppProfileResolver>(
+        azookey::core::AppProfileResolver::FromSettings(*json));
+    m.h.service.set_bracket_settings_for_test(settings);
+    m.DoubleTap(kAlnumKey);
+    ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"英語に翻訳");
+    // The focus on the window changes what the TIP sees as the app; the prefix
+    // stays the one resolved for the field the window opened from.
+    m.h.service.set_foreground_app_for_test({"other.exe", "Other", true});
+    m.h.service.submit_magic_conversion_for_test(L"英語に翻訳");
+    EXPECT_EQ(m.h.service.magic_conversion_view_for_test()->prompt, L"英語に翻訳");
+    ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+    EXPECT_EQ(m.h.service.magic_conversion_request_for_test()->prompt, item.sent);
+  }
+}
+
 // Without a candidate window to post to, the window could never open, so no
 // session is left to block the next double tap.
 TEST(TsfTipMagicConversionTest, NoSessionIsKeptWhenTheOpenCannotBePosted) {

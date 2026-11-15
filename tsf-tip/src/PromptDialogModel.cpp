@@ -74,9 +74,10 @@ std::wstring_view TransformFailureMessage(const std::optional<std::string>& erro
   return L"AI変換を実行できませんでした。";
 }
 
-PromptDialogModel PromptDialogModel::ForSelection(core::PromptPreset preset,
-                                                  std::wstring selection) {
+PromptDialogModel PromptDialogModel::ForSelection(core::PromptPreset preset, std::wstring selection,
+                                                  std::string prompt_prefix) {
   PromptDialogModel model;
+  model.prompt_prefix_ = std::move(prompt_prefix);
   model.view_.state = PromptDialogState::Editing;
   model.view_.prompt = std::wstring(InitialPrompt(preset));
   model.view_.selection = std::move(selection);
@@ -104,8 +105,17 @@ bool PromptDialogModel::Submit(std::wstring prompt) {
     view_.status = L"指示が長すぎます。短くしてください。";
     return false;
   }
+  // The app's prefix goes first, on its own line; the limit covers both.
+  std::string sent = prompt_prefix_.empty() ? std::move(utf8) : prompt_prefix_ + "\n" + utf8;
+  if (sent.size() > ipc::kMaxTransformPromptBytes) {
+    // A prefix that leaves no room is fixed in the settings, not in the window.
+    view_.status = prompt_prefix_.size() + 2 > ipc::kMaxTransformPromptBytes
+                       ? L"アプリ別の前置きが長すぎます。設定で短くしてください。"
+                       : L"アプリ別の前置きと合わせると指示が長すぎます。短くしてください。";
+    return false;
+  }
   view_.prompt = std::move(prompt);
-  prompt_utf8_ = std::move(utf8);
+  prompt_utf8_ = std::move(sent);
   view_.state = PromptDialogState::Waiting;
   view_.status = L"変換中…";
   view_.result.clear();

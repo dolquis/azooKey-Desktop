@@ -928,7 +928,8 @@ inline constexpr std::string_view kTransformErrorSafeMode = "safe_mode";
 
 struct TransformSelectedTextRequest {
   std::string mode;         // "rewrite" | "translate" | "summarize" | "free"; required.
-  std::string prompt;       // The user's instruction; at most kMaxTransformPromptBytes.
+  std::string prompt;       // The user's instruction, after the app's promptPrefix and a line
+                            // break when the TIP has one; at most kMaxTransformPromptBytes.
   std::string selection;    // UTF-8, non-empty, at most kMaxTransformSelectionBytes.
   std::string context;      // Surrounding text; at most kMaxTransformContextBytes.
   uint32_t max_results{1};  // Clamped to [1, kMaxTransformResults].

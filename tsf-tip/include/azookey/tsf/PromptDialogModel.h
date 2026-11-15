@@ -61,11 +61,15 @@ std::wstring_view TransformFailureMessage(const std::optional<std::string>& erro
 
 class PromptDialogModel {
  public:
-  static PromptDialogModel ForSelection(core::PromptPreset preset, std::wstring selection);
+  // `prompt_prefix` is the app's promptPrefix (app-profile-spec §4.1). The
+  // window never shows it; a non-empty one goes before the prompt when sent.
+  static PromptDialogModel ForSelection(core::PromptPreset preset, std::wstring selection,
+                                        std::string prompt_prefix = {});
   static PromptDialogModel ForNotice(PromptNotice notice);
 
   // Sends `prompt` from Editing or Preview. False, with the state unchanged,
-  // when the prompt is empty or too long, or nothing can be sent now.
+  // when the prompt is empty or too long (with the prefix), or nothing can be
+  // sent now.
   bool Submit(std::wstring prompt);
   // The answer to the last Submit. Ignored unless Waiting.
   void OnResponse(const std::optional<ipc::TransformSelectedTextResponse>& response,
@@ -73,6 +77,7 @@ class PromptDialogModel {
   bool CanApply() const noexcept { return view_.can_apply; }
   // The result of the last answer, as UTF-8 from the Host.
   const std::string& result_utf8() const noexcept { return result_utf8_; }
+  // What the last Submit sends: the prefix and a line break, then the prompt.
   const std::string& prompt_utf8() const noexcept { return prompt_utf8_; }
   const PromptDialogView& view() const noexcept { return view_; }
 
@@ -80,6 +85,7 @@ class PromptDialogModel {
   void Refresh();
 
   PromptDialogView view_;
+  std::string prompt_prefix_;
   std::string prompt_utf8_;
   std::string result_utf8_;
 };

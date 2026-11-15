@@ -213,7 +213,8 @@ TIP はその応答を要求に対応づけられない。
 ```
 TransformSelectedTextRequest:
   mode: enum { rewrite, translate, summarize, free }  // 必須。未知・欠落は不正な要求
-  prompt: string            // ユーザー指示（例 "日本語に翻訳"）。free の指示（§5.2）。欠落は空
+  prompt: string            // ユーザー指示（例 "日本語に翻訳"）。free の指示（§5.2）。欠落は空。
+                            // TIP はアプリ別の promptPrefix を先頭に付ける（下記）
   selection: string         // 変換対象。必須・非空
   context: string           // 前後文脈。欠落は空
   max_results: uint32       // 既定 1。複数案 UI は将来拡張（§14）のため 1 に丸める
@@ -234,6 +235,8 @@ TransformSelectedTextResponse:
 
 要求の id は Envelope の `request_id` を使い、payload には載せない。`selection`・`prompt`・
 `context`・`result` のバイト数の上限は `ipc/include/azookey/ipc/Limits.h` が正典である。
+TIP は、入力先のアプリの `promptPrefix`（`docs/app-profile-spec.md` §3）が空でなければ、利用者の指示の前に
+改行で区切って付けて `prompt` に載せる。`prompt` の上限は前置きを含めた長さに掛かる。
 privacy のフィールドが欠けた要求と型が違う要求は、secure で AI 不可の要求として扱う。ほかのフィールドが
 型の違う値で届いた要求は、欠落とみなさず不正な要求とする。
 

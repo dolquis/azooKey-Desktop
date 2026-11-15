@@ -197,7 +197,7 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 | `sentenceCompletion` | bool | false | 文末補完を出すか |
 | `learningEnabled` | bool | true | このアプリで学習するか |
 | `aiBackend` | enum | "auto" | `auto` / `local-zenzai` / `openai` / `none` |
-| `promptPrefix` | string | "" | Magic Conversion のプロンプト前置 |
+| `promptPrefix` | string | "" | Magic Conversion のプロンプト前置。空でなければ、TIP が窓を開いた入力先のアプリで解決し、送る指示の先頭に付けて改行で区切る。窓には見せない（`docs/legacy-parity-spec.md` §4.3） |
 | `style` | enum | "auto" | `auto` / `polite` / `casual` / `technical`。`auto` 以外は対応する候補タグ（`Polite` / `Casual` / `Technical`）へ暗黙倍率 1.5 を与える（§7） |
 | `preferTechnicalTerms` | bool | false | true で `Technical` タグへ暗黙倍率 1.5 を与える（§7） |
 | `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |

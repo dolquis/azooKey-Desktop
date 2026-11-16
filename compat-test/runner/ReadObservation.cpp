@@ -54,6 +54,16 @@ std::string AsciiInputAction(size_t count) { return "ascii:" + std::to_string(co
 
 std::string UnicodeInputAction(size_t count) { return "unicode:" + std::to_string(count); }
 
+ObservedRead SelectReadText(ReadSourcePolicy policy, std::optional<std::wstring> value,
+                            const std::function<std::optional<std::wstring>()>& read_text) {
+  if (value && (policy == ReadSourcePolicy::ValueOnly || !value->empty())) {
+    return {std::move(value), ReadSource::Value};
+  }
+  if (auto text = read_text()) return {std::move(text), ReadSource::Text};
+  if (value) return {std::move(value), ReadSource::Value};
+  return {};
+}
+
 const char* ReadSourceName(ReadSource source) {
   switch (source) {
     case ReadSource::Value:

@@ -277,14 +277,10 @@ std::optional<std::wstring> ReadTextPatternText(IUIAutomationElement* element) {
   return result;
 }
 
-// Value が非空ならそれを返す。空または取得不能なら TextPattern を読み、
-// それも取れなければ（Value が空の読み取りに成功していた場合に限り）空文字列を返す。
-ObservedRead ReadElementText(IUIAutomationElement* element) {
-  auto value = ReadValuePatternText(element);
-  if (value && !value->empty()) return {std::move(value), ReadSource::Value};
-  if (auto text = ReadTextPatternText(element)) return {std::move(text), ReadSource::Text};
-  if (value) return {std::move(value), ReadSource::Value};
-  return {};
+// 取得元の選び方は SelectReadText（Auto は従来どおり、ValueOnly は Value の空を空として扱う）。
+ObservedRead ReadElementText(IUIAutomationElement* element, ReadSourcePolicy policy) {
+  return SelectReadText(policy, ReadValuePatternText(element),
+                        [&] { return ReadTextPatternText(element); });
 }
 
 std::filesystem::path FailureDirectory(const std::filesystem::path& output,
@@ -618,8 +614,11 @@ bool AutomationSession::ClearEditor() {
   typed_ascii_.clear();
   if (!FocusEditor() || !DismissPredictionWindow()) return false;
   if (!SendVirtualKey(VK_ESCAPE)) return false;
+  // clear_with_keyboard のターゲットは UIA の SetValue を使わない。Edge（Chromium）では
+  // SetValue の後に composition が文書の外（画面左上の別窓）へ出て、以降の打鍵の判定が狂う。
   IUnknown* unknown = nullptr;
-  if (SUCCEEDED(editor_->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {
+  if (!target_.clear_with_keyboard &&
+      SUCCEEDED(editor_->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {
     IUIAutomationValuePattern* value_pattern = nullptr;
     if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&value_pattern))) && value_pattern) {
       BSTR empty = SysAllocString(L"");
@@ -651,14 +650,14 @@ bool AutomationSession::ClearEditor() {
 std::optional<std::wstring> AutomationSession::ReadEditorText() {
   if (!editor_) return std::nullopt;
   if (!settle_reads_) {
-    auto read = ReadElementText(editor_);
+    auto read = ReadElementText(editor_, target_.read_source_policy);
     read_trace_.RecordRead(ReadPhase::Judge, last_input_action_, MillisecondsSinceInput(), read,
                            typed_ascii_);
     return std::move(read.text);
   }
   const auto started_at = std::chrono::steady_clock::now();
   const auto outcome = SettleReads(
-      SettleOptions{}, [&] { return ReadElementText(editor_); },
+      SettleOptions{}, [&] { return ReadElementText(editor_, target_.read_source_policy); },
       [&] {
         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::steady_clock::now() - started_at)

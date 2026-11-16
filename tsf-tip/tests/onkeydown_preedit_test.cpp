@@ -1223,6 +1223,7 @@ class PreeditAttributeRecorder final : public ITfProperty {
   }
   STDMETHODIMP Clear(TfEditCookie, ITfRange* range) override {
     if (!range) return E_INVALIDARG;
+    if (FAILED(clear_result)) return clear_result;
     const auto* document_range = static_cast<const DocumentRange*>(range);
     operations.push_back({true, document_range->start, document_range->end});
     return S_OK;
@@ -1230,6 +1231,8 @@ class PreeditAttributeRecorder final : public ITfProperty {
 
   std::vector<PreeditAttributeWrite> writes;
   std::vector<PreeditAttributeOperation> operations;
+  // A host that refuses the write (DEV-2065); a refused Clear is not recorded.
+  HRESULT clear_result{S_OK};
 };
 
 class DocumentContext final : public NoopContext, public ITfContextComposition {
@@ -17669,7 +17672,8 @@ TEST(TsfTipCommitDisplayAttributeTest, PunctuationCommitsTheCandidateWithoutItsA
 }
 
 // The host ends the composition first; the commit that follows clears the text
-// the host kept, though no composition is left to end.
+// the host kept, though no composition is left to end. The termination clears
+// it too (DEV-2065), so the count starts after it, for the commit's own Clear.
 TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheCommit) {
   PreeditAttributeRecorder recorder;
   DocumentPreeditHarness h;
@@ -17677,12 +17681,40 @@ TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheComm
   AttachPreeditAttributeRecorder(h, recorder);
   TypeTypoRomaji(h, "TENKI");
   ASSERT_EQ(h.context.document->text, L"てんき");
-  const size_t before = recorder.operations.size();
   ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  const size_t before = recorder.operations.size();
   ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
   ASSERT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(h.context.document->text, L"てんき");
   EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+}
+
+// DEV-2065: Esc after the host ended the composition drops the input without a
+// commit, so the termination is what clears the text the host kept. A host that
+// refuses the write keeps the attribute, and the input is dropped all the same.
+TEST(TsfTipCommitDisplayAttributeTest, EscapeAfterTheHostEndedTheCompositionLeavesNoAttribute) {
+  for (const HRESULT clear_result : {S_OK, TS_E_READONLY}) {
+    SCOPED_TRACE(clear_result == S_OK ? "cleared" : "refused");
+    PreeditAttributeRecorder recorder;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    AttachPreeditAttributeRecorder(h, recorder);
+    TypeTypoRomaji(h, "TENKI");
+    ASSERT_EQ(h.context.document->text, L"てんき");
+    const size_t before = recorder.operations.size();
+    recorder.clear_result = clear_result;
+    ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+    ASSERT_EQ(h.service.composition_, nullptr);
+    ASSERT_FALSE(h.service.terminated_composition_surface_.empty());
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"てんき");
+    if (clear_result == S_OK)
+      EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
+    else
+      EXPECT_EQ(recorder.operations.size(), before);
+  }
 }
 
 // DEV-2070: the app wrote over the composition, which ends with the app's text

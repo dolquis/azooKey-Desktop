@@ -123,7 +123,6 @@ SECTION_LEVEL = 2
 # was never filled in. "TODO コメントの修正のみ" is a real reason and passes.
 UNFINISHED_MARKERS = ("todo", "tbd", "fixme")
 
-COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 HEADING_PATTERN = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 FENCE_PATTERN = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 INLINE_CODE_OR_COMMENT_OPEN = re.compile(r"`[^`\n]*`|<!--")
@@ -198,43 +197,59 @@ def git_changed_files(repo_root: Path, base: str, head: str) -> list[str]:
     return [normalise_path(line) for line in result.stdout.splitlines() if line]
 
 
-def strip_code_fences(lines: list[str]) -> list[str]:
-    """Drop fenced code blocks and their fences; an unclosed fence runs to the end.
+def visible_lines(body: str) -> list[str]:
+    """Return the body's lines without fenced code and HTML comments.
 
-    Follows CommonMark: a backtick fence's info string cannot hold a backtick
-    (so a line starting with an inline ```code``` is not a fence), and a closing
-    fence carries nothing after the fence characters.
+    One pass keeps the two apart: a `<!--` inside a fence is code, and a fence
+    inside a comment is part of the comment, so neither hides the other. A
+    comment that is never closed hides the rest of the body.
+
+    Fences follow CommonMark: a backtick fence's info string cannot hold a
+    backtick (so a line starting with an inline ```code``` is not a fence), and
+    a closing fence carries nothing after the fence characters. A `<!--` inside
+    an inline code span is text, not a comment.
     """
     kept: list[str] = []
     fence: str | None = None
-    for line in lines:
-        match = FENCE_PATTERN.match(line)
-        if fence is None:
+    in_comment = False
+    for raw in body.replace("\r\n", "\n").split("\n"):
+        line = raw
+        if in_comment:
+            end = line.find("-->")
+            if end < 0:
+                continue
+            line = line[end + 3 :]
+            in_comment = False
+        elif fence is not None:
+            match = FENCE_PATTERN.match(line)
+            if (
+                match
+                and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= len(fence)
+                and not match.group(2).strip()
+            ):
+                fence = None
+            continue
+        else:
+            match = FENCE_PATTERN.match(line)
             if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
                 fence = match.group(1)
-            else:
-                kept.append(line)
-        elif (
-            match
-            and match.group(1)[0] == fence[0]
-            and len(match.group(1)) >= len(fence)
-            and not match.group(2).strip()
-        ):
-            fence = None
+                continue
+        # Remove comments from the rest of the line; a code span hides its `<!--`.
+        text = ""
+        position = 0
+        for token in INLINE_CODE_OR_COMMENT_OPEN.finditer(line):
+            if token.group() != "<!--" or token.start() < position:
+                continue
+            text += line[position : token.start()]
+            end = line.find("-->", token.end())
+            if end < 0:
+                in_comment = True
+                position = len(line)
+                break
+            position = end + 3
+        kept.append(text + line[position:])
     return kept
-
-
-def cut_unclosed_comment(lines: list[str]) -> list[str]:
-    """Drop everything from an unclosed `<!--` on.
-
-    A `<!--` inside an inline code span is text, not a comment. Closed comments
-    and fenced code are already gone when this runs.
-    """
-    for index, line in enumerate(lines):
-        for match in INLINE_CODE_OR_COMMENT_OPEN.finditer(line):
-            if match.group() == "<!--":
-                return [*lines[:index], line[: match.start()]]
-    return lines
 
 
 def extract_section(body: str, title: str = SECTION_HEADING) -> list[str] | None:
@@ -243,8 +258,7 @@ def extract_section(body: str, title: str = SECTION_HEADING) -> list[str] | None
     Both impact gates read their section through this function, so they cannot
     disagree on comments, code fences or heading levels.
     """
-    text = COMMENT_PATTERN.sub("", body.replace("\r\n", "\n"))
-    lines = cut_unclosed_comment(strip_code_fences(text.split("\n")))
+    lines = visible_lines(body)
     section: list[str] | None = None
     for line in lines:
         heading = HEADING_PATTERN.match(line)

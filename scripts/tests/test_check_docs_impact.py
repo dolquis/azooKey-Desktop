@@ -175,6 +175,24 @@ class BodyTest(unittest.TestCase):
         in_reason = body("[x]", " `<!--` の扱いだけを直した")
         self.assertTrue(passes([CONTRACT], in_reason))
 
+    def test_comment_opener_in_a_fence_does_not_swallow_the_template_comments(self) -> None:
+        # The template's own comments end with `-->`; a `<!--` in an earlier
+        # fence must not pair with one of them and unbalance the fence.
+        template = TEMPLATE.read_text(encoding="utf-8")
+        filled = template.replace(
+            "- [ ] No documentation impact", "- [x] No documentation impact"
+        ).replace("Reason: <!--", "Reason: 内部の整理だけで wire 形式は同じ <!--")
+        self.assertTrue(passes([CONTRACT], filled))
+        for intro in ("```\n<!--\n```", "~~~\n<!--\n~~~"):
+            with self.subTest(intro=intro):
+                fenced = filled.replace("## 変更内容\n", f"## 変更内容\n\n{intro}\n", 1)
+                self.assertNotEqual(fenced, filled)
+                self.assertTrue(passes([CONTRACT], fenced))
+
+    def test_a_fence_inside_a_comment_is_part_of_the_comment(self) -> None:
+        text = "<!--\n```\n-->\n" + body("[x]", " 内部の整理で wire 形式は同じ")
+        self.assertTrue(passes([CONTRACT], text))
+
     def test_unclosed_comment_keeps_text_before_it_on_the_line(self) -> None:
         text = body("[x]", " 内部の整理で wire 形式は同じ <!-- メモ")
         self.assertTrue(passes([CONTRACT], text))

@@ -151,6 +151,14 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
     config.require_new_window = workaround_value.GetBool("require_new_window").value_or(false);
     config.allow_reused_window_for_temporary_document =
         workaround_value.GetBool("allow_reused_window_for_temporary_document").value_or(false);
+    config.clear_with_keyboard = workaround_value.GetBool("clear_with_keyboard").value_or(false);
+    if (const auto read_source = workaround_value.GetString("read_source")) {
+      if (*read_source == "value") {
+        config.read_source_policy = ReadSourcePolicy::ValueOnly;
+      } else if (*read_source != "auto") {
+        return std::nullopt;
+      }
+    }
   }
   if (const auto* temporary_document = launch_value.FindObject("temporary_document")) {
     const azookey::ipc::json::Value temporary_document_value(*temporary_document);

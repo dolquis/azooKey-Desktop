@@ -572,7 +572,7 @@ recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対�
 
 | アプリ / 種別 | 既知の差異 | workaround |
 |---|---|---|
-| Chrome / Edge（Chromium） | display attribute（下線）が完全反映されない場合がある | 位置取得は `ITfContextView::GetTextExt` を優先。下線は IME 既定描画にフォールバック |
+| Chrome / Edge（Chromium） | display attribute（下線）が完全反映されない場合がある。UIA の TextPattern が本文でなく要素名を返す。UIA の `SetValue` の後に composition が文書の外へ出る | 位置取得は `ITfContextView::GetTextExt` を優先。下線は IME 既定描画にフォールバック。本文は Value だけから読み（`read_source: "value"`）、消去は Ctrl+A → Delete にする（`clear_with_keyboard: true`） |
 | Firefox | TSF サポートが best-effort。`GetTextExt` が空矩形を返すことがある | 空矩形時は直近 caret rect のキャッシュへフォールバック |
 | VS Code / Electron | Monaco が composition 中に独自補完を出す | preedit 中は IME 候補を優先し、Electron 側 IME イベント順序に依存しない |
 | Discord / Slack（Electron） | `contenteditable` で `GetTextExt` 精度が低い | best-effort。位置ずれ時はキャレット位置 fallback |

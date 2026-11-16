@@ -408,6 +408,20 @@ TEST(TargetConfigFilesTest, EdgeAndVsCodeDeclareDocumentedWorkarounds) {
   const azookey::ipc::json::Value edge_value(*edge_workarounds);
   EXPECT_EQ(edge_value.GetBool("prefer_get_text_ext"), true);
   EXPECT_EQ(edge_value.GetString("display_attribute_fallback"), "ime-default-rendering");
+  EXPECT_EQ(edge_value.GetString("read_source"), "value");
+  EXPECT_EQ(edge_value.GetBool("clear_with_keyboard"), true);
+  const auto edge_config =
+      LoadTargetConfig(std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / "edge.json");
+  ASSERT_TRUE(edge_config);
+  EXPECT_EQ(edge_config->read_source_policy, ReadSourcePolicy::ValueOnly);
+  EXPECT_TRUE(edge_config->clear_with_keyboard);
+  for (const char* other : {"notepad", "vscode"}) {
+    const auto other_config = LoadTargetConfig(std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) /
+                                               (std::string(other) + ".json"));
+    ASSERT_TRUE(other_config) << other;
+    EXPECT_EQ(other_config->read_source_policy, ReadSourcePolicy::Auto) << other;
+    EXPECT_FALSE(other_config->clear_with_keyboard) << other;
+  }
   const auto* edge_launch = edge->FindObject("launch");
   ASSERT_NE(edge_launch, nullptr);
   const azookey::ipc::json::Value edge_launch_value(*edge_launch);
@@ -781,6 +795,99 @@ TEST(ReadObservationTest, ChangeDetectionIsTrackedPerSourceAndResetsWithTheCase)
   trace.RecordRead(ReadPhase::Judge, "", 1, {std::wstring(L"b"), ReadSource::Value}, "");
   EXPECT_NE(trace.Lines()[0].find("changed=n/a"), std::string::npos);
   EXPECT_NE(trace.Lines()[0].find("action=none"), std::string::npos);
+}
+
+// DEV-2088: Edge では TextPattern が要素名（aria-label）を返す。Value が空を返したときに
+// 要素名を本文として読むと、取り消された入力が残ったと誤判定する。
+TEST(SelectReadTextTest, ValueOnlyKeepsAnEmptyValueAndNeverCallsTextPattern) {
+  bool text_called = false;
+  const auto read = SelectReadText(ReadSourcePolicy::ValueOnly, std::wstring{}, [&] {
+    text_called = true;
+    return std::optional<std::wstring>(L"element name");
+  });
+  EXPECT_FALSE(text_called);
+  EXPECT_EQ(read.source, ReadSource::Value);
+  ASSERT_TRUE(read.text);
+  EXPECT_TRUE(read.text->empty());
+}
+
+TEST(SelectReadTextTest, ValueOnlyFallsBackToTextPatternOnlyWhenValueIsUnreadable) {
+  const auto read = SelectReadText(ReadSourcePolicy::ValueOnly, std::nullopt,
+                                   [] { return std::optional<std::wstring>(L"body"); });
+  EXPECT_EQ(read.source, ReadSource::Text);
+  EXPECT_EQ(read.text, L"body");
+  const auto none = SelectReadText(ReadSourcePolicy::ValueOnly, std::nullopt,
+                                   [] { return std::optional<std::wstring>(); });
+  EXPECT_EQ(none.source, ReadSource::None);
+  EXPECT_FALSE(none.text);
+}
+
+TEST(SelectReadTextTest, ValueOnlyReturnsNonEmptyValue) {
+  const auto read = SelectReadText(ReadSourcePolicy::ValueOnly, std::wstring(L"a"), [] {
+    ADD_FAILURE() << "TextPattern must not be read";
+    return std::optional<std::wstring>();
+  });
+  EXPECT_EQ(read.source, ReadSource::Value);
+  EXPECT_EQ(read.text, L"a");
+}
+
+// Auto は従来どおり（Notepad・VS Code の判定は変えない）。
+TEST(SelectReadTextTest, AutoSwitchesToTextPatternWhenValueIsEmpty) {
+  const auto read = SelectReadText(ReadSourcePolicy::Auto, std::wstring{},
+                                   [] { return std::optional<std::wstring>(L"body"); });
+  EXPECT_EQ(read.source, ReadSource::Text);
+  EXPECT_EQ(read.text, L"body");
+}
+
+TEST(SelectReadTextTest, AutoKeepsEmptyValueWhenTextPatternIsUnavailable) {
+  const auto read = SelectReadText(ReadSourcePolicy::Auto, std::wstring{},
+                                   [] { return std::optional<std::wstring>(); });
+  EXPECT_EQ(read.source, ReadSource::Value);
+  ASSERT_TRUE(read.text);
+  EXPECT_TRUE(read.text->empty());
+}
+
+TEST(SelectReadTextTest, AutoPrefersNonEmptyValue) {
+  const auto read = SelectReadText(ReadSourcePolicy::Auto, std::wstring(L"v"), [] {
+    ADD_FAILURE() << "TextPattern must not be read";
+    return std::optional<std::wstring>();
+  });
+  EXPECT_EQ(read.source, ReadSource::Value);
+  EXPECT_EQ(read.text, L"v");
+}
+
+TEST(TargetConfigLoaderTest, ParsesReadSourceAndClearWithKeyboardAndRejectsUnknownReadSource) {
+  TemporaryDirectory temp;
+  const auto path = temp.path() / "target.json";
+  const std::string base(kTargetConfigJson);
+  constexpr std::string_view kMarker = "\"require_new_window\": false";
+  const auto marker = base.find(kMarker);
+  ASSERT_NE(marker, std::string::npos);
+
+  WriteFile(path, base);
+  auto config = LoadTargetConfig(path);
+  ASSERT_TRUE(config);
+  EXPECT_EQ(config->read_source_policy, ReadSourcePolicy::Auto);
+  EXPECT_FALSE(config->clear_with_keyboard);
+
+  const auto with = [&](std::string_view extra) {
+    std::string json = base;
+    json.replace(marker, kMarker.size(), std::string(kMarker) + ", " + std::string(extra));
+    return json;
+  };
+  WriteFile(path, with("\"read_source\": \"value\", \"clear_with_keyboard\": true"));
+  config = LoadTargetConfig(path);
+  ASSERT_TRUE(config);
+  EXPECT_EQ(config->read_source_policy, ReadSourcePolicy::ValueOnly);
+  EXPECT_TRUE(config->clear_with_keyboard);
+
+  WriteFile(path, with("\"read_source\": \"auto\""));
+  config = LoadTargetConfig(path);
+  ASSERT_TRUE(config);
+  EXPECT_EQ(config->read_source_policy, ReadSourcePolicy::Auto);
+
+  WriteFile(path, with("\"read_source\": \"text\""));
+  EXPECT_FALSE(LoadTargetConfig(path));
 }
 
 class SettleReadsTest : public ::testing::Test {

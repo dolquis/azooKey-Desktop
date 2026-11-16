@@ -17685,6 +17685,61 @@ TEST(TsfTipCommitDisplayAttributeTest, TextTheHostKeptLosesItsAttributeOnTheComm
   EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 3));
 }
 
+// DEV-2070: the app wrote over the composition, which ends with the app's text
+// (DEV-1845), in the session the edit asked for or in the next key's.
+TEST(TsfTipCommitDisplayAttributeTest, TextTheAppWroteLosesItsAttributeWhenTheCompositionEnds) {
+  for (const bool next_key : {false, true}) {
+    SCOPED_TRACE(next_key ? "next key" : "edit session");
+    PreeditAttributeRecorder recorder;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    AttachPreeditAttributeRecorder(h, recorder);
+    TypeTypoRomaji(h, "TENKI");
+    ASSERT_EQ(h.context.document->text, L"てんき");
+    AppWritesOverComposition(h, L"xy");
+    const size_t before = recorder.operations.size();
+    h.context.defer_write_callback = next_key;
+    EndEditAfterAppEdit(h);
+    h.context.defer_write_callback = false;
+    if (next_key) {
+      ASSERT_TRUE(h.service.external_edit_end_pending_);
+      ASSERT_TRUE(h.Press('A'));
+      ASSERT_EQ(h.context.document->text, L"xyあ");
+    } else {
+      ASSERT_EQ(h.service.composition_, nullptr);
+      ASSERT_EQ(h.context.document->text, L"xy");
+    }
+    EXPECT_FALSE(h.service.external_edit_end_pending_);
+    EXPECT_EQ(h.context.RunDeferredWrites(), S_OK);
+    EXPECT_TRUE(CommittedTextKeepsNoAttribute(recorder, before, 0, 2));
+  }
+}
+
+// DEV-2070: losing the focus with the composition commits what it shows in the
+// lifecycle cleanup's session, which clears the attribute as a key's does.
+TEST(TsfTipCommitDisplayAttributeTest, FocusLossCommitsTheCompositionWithoutItsAttribute) {
+  for (const bool candidates : {false, true}) {
+    SCOPED_TRACE(candidates ? "candidate" : "reading");
+    PreeditAttributeRecorder recorder;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    AttachPreeditAttributeRecorder(h, recorder);
+    if (candidates)
+      OpenTenkiCandidates(h);
+    else
+      TypeTypoRomaji(h, "TENKI");
+    ASSERT_NE(h.service.composition_, nullptr);
+    const std::wstring shown = h.context.document->text;
+    ASSERT_EQ(shown, candidates ? L"天気" : L"てんき");
+    const size_t before = recorder.operations.size();
+    ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    ASSERT_EQ(h.service.composition_, nullptr);
+    EXPECT_EQ(h.context.document->text, shown);
+    EXPECT_TRUE(
+        CommittedTextKeepsNoAttribute(recorder, before, 0, static_cast<LONG>(shown.size())));
+  }
+}
+
 namespace {
 
 // M16 (legacy-parity-spec §4, DEV-1963): an ordinary field in an app the TIP

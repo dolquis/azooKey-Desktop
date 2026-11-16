@@ -3298,15 +3298,21 @@ TEST_F(DispatcherTest, CleanupStopsBeforeAnyBackendWhenSecureOrInSafeMode) {
   write_settings("{not json");
   settings.Reload();
   expect_stopped(838, request, "unreadable settings");
+  // The SafeMode overrides in the settings give the same reply.
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+                 R"("safeMode":{"enabled":true}})");
+  settings.Reload();
+  ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
+  expect_stopped(839, request, "safe mode overrides");
   write_settings(kOpenAi);
   settings.Reload();
   // Settings without the SafeMode overrides, as after a save that raced the startup reload.
   engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
   ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
-  expect_stopped(839, request, "safe mode");
+  expect_stopped(840, request, "safe mode");
   auto local = request;
   local.ai_backend = "local-zenzai";
-  expect_stopped(840, local, "safe mode, local backend");
+  expect_stopped(841, local, "safe mode, local backend");
   RemovePathNoThrow(path);
 }
 

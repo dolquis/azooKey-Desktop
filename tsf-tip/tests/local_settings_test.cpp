@@ -703,7 +703,12 @@ TEST_F(LocalSettingsTest, DynamicPunctuationDefaultsOffAndReloads) {
   // the feature or arming a zero-length timer.
   Write(R"({"dynamicPunctuation":true,"dynamicPunctuationStyle":"x",)"
         R"("dynamicPunctuationStability":"never","dynamicPunctuationIdleMs":0})");
-  ASSERT_TRUE(WaitUntil([&] { return !reader.DynamicPunctuationSnapshot().eager; }));
+  // DEV-2018: an empty read while Write truncates also has eager off, so the
+  // wait needs the feature still on to see the new file.
+  ASSERT_TRUE(WaitUntil([&] {
+    const auto current = reader.DynamicPunctuationSnapshot();
+    return current.enabled && !current.eager;
+  }));
   settings = reader.DynamicPunctuationSnapshot();
   EXPECT_TRUE(settings.enabled);
   EXPECT_EQ(settings.style, "ja");

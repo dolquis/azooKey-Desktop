@@ -55,6 +55,8 @@ struct TargetConfig {
   std::string temporary_document_contents;
   bool require_new_window{false};
   bool allow_reused_window_for_temporary_document{false};
+  ReadSourcePolicy read_source_policy{ReadSourcePolicy::Auto};
+  bool clear_with_keyboard{false};
 };
 
 class AutomationSession {

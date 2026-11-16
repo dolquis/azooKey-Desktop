@@ -49,12 +49,12 @@ CHECKED_WITH_REASON = (
 
 class ExtractTest(unittest.TestCase):
     def test_section_ends_at_next_heading(self) -> None:
-        body = "## 変更内容\nx\n## Skill impact\n- [x] No Skill impact\nReason: r\n## 検証\nReason: other\n"
+        body = "## 変更内容\nx\n## Skill impact\n- [x] No Skill impact\nReason: 内部の整理だけ\n## 検証\nReason: other\n"
         section = MODULE.extract_section(body)
         self.assertIsNotNone(section)
         assert section is not None
         self.assertTrue(MODULE.is_no_impact_checked(section))
-        self.assertEqual("r", MODULE.DOCS_IMPACT.extract_reason(section))
+        self.assertEqual("内部の整理だけ", MODULE.DOCS_IMPACT.extract_reason(section))
 
     def test_missing_section_is_none(self) -> None:
         self.assertIsNone(MODULE.extract_section("## Documentation impact\n- [x] No Skill impact\n"))
@@ -65,11 +65,11 @@ class ExtractTest(unittest.TestCase):
         self.assertFalse(MODULE.is_no_impact_checked(section))
 
     def test_crlf_and_comments_are_normalised(self) -> None:
-        body = "## Skill impact\r\n- [X] No Skill impact\r\n<!-- Reason: hint -->\r\nReason: 理由あり\r\n"
+        body = "## Skill impact\r\n- [X] No Skill impact\r\n<!-- Reason: hint -->\r\nReason: 理由を書いた\r\n"
         section = MODULE.extract_section(body)
         assert section is not None
         self.assertTrue(MODULE.is_no_impact_checked(section))
-        self.assertEqual("理由あり", MODULE.DOCS_IMPACT.extract_reason(section))
+        self.assertEqual("理由を書いた", MODULE.DOCS_IMPACT.extract_reason(section))
 
 
 class EvaluateTest(unittest.TestCase):
@@ -126,6 +126,29 @@ class EvaluateTest(unittest.TestCase):
                 passed, text = self.evaluate(["tip/src/a.cpp"], body)
                 self.assertFalse(passed)
                 self.assertIn("理由がありません", text)
+
+    def test_unsubstantial_reason_fails_like_docs_impact(self) -> None:
+        for reason in ("TODO", "TBD", "FIXME", "...", ".", "〜", "<理由>", "[理由]", "短い"):
+            with self.subTest(reason=reason):
+                body = f"## Skill impact\n\n- [x] No Skill impact\n\nReason: {reason}\n"
+                passed, text = self.evaluate(["tip/src/a.cpp"], body)
+                self.assertFalse(passed)
+                self.assertIn("理由がありません", text)
+
+    def test_short_but_real_reason_passes(self) -> None:
+        body = "## Skill impact\n\n- [x] No Skill impact\n\nReason: 内部の整理だけ\n"
+        passed, text = self.evaluate(["tip/src/a.cpp"], body)
+        self.assertTrue(passed, text)
+
+    def test_section_shape_failures_match_docs_impact(self) -> None:
+        reasoned = CHECKED_WITH_REASON
+        fenced = f"## 変更内容\n\n```\n{reasoned}```\n"
+        unclosed = reasoned.replace("Reason:", "<!-- メモ\nReason:")
+        wrong_level = reasoned.replace("## Skill impact", "### Skill impact")
+        for name, body in (("fenced", fenced), ("unclosed", unclosed), ("level", wrong_level)):
+            with self.subTest(case=name):
+                passed, _ = self.evaluate(["tip/src/a.cpp"], body)
+                self.assertFalse(passed)
 
     def test_nested_path_is_not_matched_by_single_segment_glob(self) -> None:
         passed, text = self.evaluate(["ipc/sub/Payloads.h"])

@@ -78,9 +78,8 @@ Settings keys
 
 Preset names
   Source of truth: `configurePresets` / `buildPresets` / `testPresets` of
-  `CMakePresets.json`. Scanned files: `README.md`, `docs/debugging.md`,
-  `docs/test-inventory.md`, `docs/dev-infrastructure-spec.md` and the specs split
-  from it (`PRESET_DOCS`), `.claude/rules/*.md` and `justfile`. A name is taken only from
+  `CMakePresets.json`. Scanned files: `README.md`, every `docs/**/*.md`
+  (`PRESET_DOCS_GLOB`), `.claude/rules/*.md` and `justfile`. A name is taken only from
     `cmake --preset N` (configure), `cmake --build --preset N` (build),
     `ctest --preset N` (test), a bare `--preset N` (any kind),
     a back-quoted `windows-*` / `linux-*` name directly followed by “preset”,
@@ -150,20 +149,13 @@ ALL_KEYS_MARKER = "全 top-level キー"
 DEFAULT_HEADERS = ("既定", "既定値")
 SKIPPED_DEFAULT_PHRASES = ("既定に従う", "schema 既定", "必須")
 
-PRESET_DOCS = (
-    "README.md",
-    "docs/debugging.md",
-    "docs/test-inventory.md",
-    "docs/dev-infrastructure-spec.md",
-    # The specs split from dev-infrastructure-spec: the presets are named in
-    # build-ci-spec, and the others used to be sections of the scanned file.
-    "docs/build-ci-spec.md",
-    "docs/vm-verification-package-spec.md",
-    "docs/ipc-persistence-hardening-spec.md",
-    "docs/observability-spec.md",
-    "docs/host-availability-spec.md",
-    "docs/diagnostics-compat-spec.md",
-)
+# Preset names are claimed in README.md and in any document under docs/, so the
+# scan walks `docs/**/*.md` instead of listing documents: a list left a new or
+# older document outside the check (DEV-2063). A line counts only when it has
+# one of the formats of `preset_claims`, so documents that never name a preset
+# add nothing.
+PRESET_ROOT_DOCS = ("README.md",)
+PRESET_DOCS_GLOB = "docs/**/*.md"
 PRESET_RULES_GLOB = ".claude/rules/*.md"
 JUSTFILE = "justfile"
 PRESET_KINDS = {
@@ -755,10 +747,13 @@ def preset_claims(relative: str, text: str) -> list[tuple[int, str, str | None]]
 def check_presets(repo_root: Path) -> list[str]:
     presets = collect_presets(repo_root)
     every = set().union(*presets.values())
-    files = [relative for relative in PRESET_DOCS if (repo_root / relative).is_file()]
-    files += sorted(
-        path.relative_to(repo_root).as_posix() for path in repo_root.glob(PRESET_RULES_GLOB)
-    )
+    files = [relative for relative in PRESET_ROOT_DOCS if (repo_root / relative).is_file()]
+    for pattern in (PRESET_DOCS_GLOB, PRESET_RULES_GLOB):
+        files += sorted(
+            path.relative_to(repo_root).as_posix()
+            for path in repo_root.glob(pattern)
+            if path.is_file()
+        )
     if (repo_root / JUSTFILE).is_file():
         files.append(JUSTFILE)
     problems = []

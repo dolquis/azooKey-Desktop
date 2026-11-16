@@ -313,6 +313,9 @@ Host 設定が secure のとき、AI backend を呼ばずに `neural` へ落と�
 `learning_allowed == false`、Host の privacy 設定が学習を止めているとき、または Host が SafeMode のとき、
 AI backend を呼ばずに `blocked` を返す（`docs/proofread-view-spec.md` §2.9）。どちらの応答も SafeMode を
 secure と分けない。SafeMode による停止は Host が担う（`docs/host-availability-spec.md` §8.5.3）。
+`TransformSelectedText` を含む AI の入口は、Host 設定の secure を、AI の設定（同意・backend・鍵）と同じ再読込の
+区切りでも読み直す。読めない設定ファイルへの再読込は直前の正常値の AI 設定を残すので、判定の後にその再読込が
+入っても、残った AI 設定で送らない。
 
 ### 5.2 `custom` モードの per-axis 解決
 

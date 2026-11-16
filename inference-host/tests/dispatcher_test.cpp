@@ -3316,6 +3316,112 @@ TEST_F(DispatcherTest, CleanupStopsBeforeAnyBackendWhenSecureOrInSafeMode) {
   RemovePathNoThrow(path);
 }
 
+// DEV-2093: UpdateConfig reloads settings under the config lock, and a reload
+// of an unreadable file keeps the last good AI settings and marks only privacy
+// secure. A request that passed its privacy check before such a reload and
+// waits on that lock reads privacy again with the AI settings, so it reaches no
+// backend. The pass does not depend on timing; only the ai-cleanup request has
+// a point to wait for (it marks itself latest just before its check).
+TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
+  const auto path = temp_directory.File("azookey_ai_config_lock_settings.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(path, std::ios::trunc);
+    file << json;
+  };
+  constexpr const char* kOpenAi =
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  write_settings(kOpenAi);
+  azookey::host::SettingsStore settings(path);
+  settings.Load();
+  std::atomic<unsigned> calls{0};
+  auto config = DefaultDispatcherConfig();
+  // The Dispatcher's copy of the config shares this mutex.
+  ASSERT_TRUE(config.update_config_mutex);
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{
+            200, R"({"choices":[{"message":{"content":"{\"result\":\"[]\"}"}}]})"};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+
+  ipc::QueryBatchConversionRequest batch;
+  batch.mode = "ai-cleanup";
+  batch.reading = "にほん";
+  batch.raw_romaji = "nihno";
+  batch.ai_allowed = batch.external_ai_allowed = true;
+  batch.ai_backend = "openai";
+  batch.secure = false;
+  ipc::TransformSelectedTextRequest selection;
+  selection.mode = "free";
+  selection.prompt = "日本語に翻訳";
+  selection.selection = "Good morning.";
+  selection.secure = false;
+  selection.ai_allowed = selection.external_ai_allowed = true;
+  ipc::DetectAnomaliesRequest anomalies;
+  anomalies.text = "今日は晴れでした。";
+  anomalies.secure = false;
+  anomalies.learning_allowed = true;
+  const auto cleanup_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                   ipc::BuildQueryBatchConversionRequest(batch));
+  };
+  const auto transform_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::TransformSelectedText,
+                   ipc::BuildTransformSelectedTextRequest(selection));
+  };
+  const auto anomalies_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::DetectAnomalies,
+                   ipc::BuildDetectAnomaliesRequest(anomalies));
+  };
+
+  // Without the reload each request reaches the backend.
+  ASSERT_TRUE(handler.Dispatch(cleanup_request(845)));
+  ASSERT_TRUE(handler.Dispatch(transform_request(846)));
+  ASSERT_TRUE(handler.Dispatch(anomalies_request(847)));
+  ASSERT_EQ(calls.load(), 3u);
+
+  const auto dispatch_across_reload = [&](const ipc::Envelope& request, bool marks_latest) {
+    write_settings(kOpenAi);
+    std::unique_lock lock(*config.update_config_mutex);
+    settings.Reload();
+    auto pending = std::async(std::launch::async, [&] { return handler.Dispatch(request); });
+    if (marks_latest) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (!scheduler.IsLatest(request.request_id) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    }
+    // As UpdateConfig does, under the lock the request waits on.
+    write_settings("{not json");
+    settings.Reload();
+    lock.unlock();
+    return pending.get();
+  };
+
+  const auto cleanup = dispatch_across_reload(cleanup_request(842), true);
+  ASSERT_TRUE(cleanup);
+  const auto cleaned = ipc::ParseQueryBatchConversionResponse(cleanup->payload_json);
+  ASSERT_TRUE(cleaned);
+  ASSERT_FALSE(cleaned->segments.empty());
+  EXPECT_EQ(cleaned->segments.front().candidates.front().source, "privacy-fallback")
+      << "ai-cleanup";
+  EXPECT_EQ(cleaned->error_class, std::optional<std::string>("BlockedBySecure")) << "ai-cleanup";
+
+  const auto transformed = dispatch_across_reload(transform_request(843), false);
+  ASSERT_TRUE(transformed);
+  EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(transformed->payload_json)->error_class,
+            std::optional<std::string>("BlockedBySecure"))
+      << "TransformSelectedText";
+
+  const auto detected = dispatch_across_reload(anomalies_request(844), false);
+  ASSERT_TRUE(detected);
+  EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(detected->payload_json)->error,
+            std::optional<std::string>("blocked"))
+      << "DetectAnomalies";
+  EXPECT_EQ(calls.load(), 3u);
+  RemovePathNoThrow(path);
+}
+
 TEST_F(DispatcherTest, BatchConversionPreservesAllReadingsAcrossHardSplits) {
   ipc::QueryBatchConversionRequest request;
   for (int i = 0; i < 100; ++i) request.reading += "あ";

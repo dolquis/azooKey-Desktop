@@ -1793,10 +1793,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   AiBackendOptions options;
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
+  bool host_blocked_now = false;
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
       const auto& settings = settings_store_->settings();
+      // Again with the AI settings, as for ai-cleanup: a reload of an
+      // unreadable file after the check above blocks only through privacy.
+      host_blocked_now =
+          settings.privacy_policy.secure || !settings.privacy_policy.learning_allowed;
       options.backend = settings.ai_backend;
       options.endpoint = settings.open_ai_api_endpoint;
       options.api_key = settings.open_ai_api_key;
@@ -1805,6 +1810,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
       ai_privacy = settings.ai_privacy;
     }
   }
+  if (host_blocked_now) return fail(ipc::kAnomalyErrorBlocked);
   AiTransformRequest transform;
   transform.task = AiTask::Anomalies;
   transform.text = parsed->text;
@@ -1887,10 +1893,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   AiBackendOptions options;
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
+  bool host_secure = false;
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
       const auto& settings = settings_store_->settings();
+      // Again with the AI settings, as for ai-cleanup: a reload of an
+      // unreadable file after the check above marks only privacy secure.
+      host_secure = settings.privacy_mode_secure;
       options.backend = settings.ai_backend;
       options.endpoint = settings.open_ai_api_endpoint;
       options.api_key = settings.open_ai_api_key;
@@ -1900,6 +1910,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
       ai_privacy = settings.ai_privacy;
     }
   }
+  if (host_secure) return fail(AiErrorClass::BlockedBySecure);
   if (!parsed->ai_backend.empty()) options.backend = parsed->ai_backend;
   AiTransformRequest transform;
   transform.task = AiTask::Transform;
@@ -2030,15 +2041,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     // Host setting (an unreadable file included, privacy-and-secure-input-spec
     // section 5.1) stops it too. Neither reaches AiBackend; the reply is the one
     // its guard gives a request without AI consent: neural, not learned.
-    const bool ai_stopped =
-        SafeModeEnabled() || parsed->secure ||
-        (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure);
+    bool ai_stopped = SafeModeEnabled() || parsed->secure ||
+                      (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure);
     AiBackendOptions options;
     core::AiPrivacy privacy{true, true};
     {
       std::lock_guard lock(*config_.update_config_mutex);
       if (settings_store_) {
         const auto& settings = settings_store_->settings();
+        // Again with the AI settings, under the lock UpdateConfig reloads under
+        // (the only writer of settings at run time): a reload of an unreadable
+        // file between the two reads keeps the last good AI settings and marks
+        // only privacy secure.
+        ai_stopped = ai_stopped || settings.privacy_mode_secure;
         options.backend = settings.ai_backend;
         options.endpoint = settings.open_ai_api_endpoint;
         options.api_key = settings.open_ai_api_key;

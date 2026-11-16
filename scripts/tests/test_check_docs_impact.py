@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +26,25 @@ REPO_ROOT = SCRIPT.parents[1]
 TEMPLATE = REPO_ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md"
 
 CONTRACT = "ipc/include/azookey/ipc/Payloads.h"
+
+
+def remove_tree(path: Path) -> None:
+    """Remove a temporary tree, including the read-only files Git writes.
+
+    Git writes loose objects as read-only files, and Windows refuses to unlink a
+    read-only file (WinError 5), so `shutil.rmtree` alone fails on a repository
+    that has a commit. Clear the attribute and retry; any other error still
+    surfaces.
+    """
+
+    def clear_read_only(function, failed_path, _error) -> None:
+        os.chmod(failed_path, stat.S_IWRITE)
+        function(failed_path)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_read_only)
+    else:
+        shutil.rmtree(path, onerror=clear_read_only)
 
 
 def body(checkbox: str = "[ ]", reason: str = "") -> str:
@@ -113,6 +134,94 @@ class BodyTest(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.assertFalse(passes([CONTRACT], body("[x]", reason)))
 
+    def test_unsubstantial_reason_fails(self) -> None:
+        for reason in (
+            " TODO", " todo: 後で書く", " TBD", " FIXME", " ...", " .", " 〜", " ー", " ???",
+            " <理由>", " [理由]", " 【理由】", " ＜理由＞", " <どの文書も変わらない理由>",
+            " 短い", " a b c", " **TODO**", " TODO:", " TODO： 後で書く", " fixme: later",
+        ):
+            with self.subTest(reason=reason):
+                self.assertFalse(passes([CONTRACT], body("[x]", reason)))
+
+    def test_short_but_real_reason_passes(self) -> None:
+        for reason in (
+            " コメントのみ", " 内部の整理だけ", " typo 修正のみ", " CI の pin 更新",
+            " <T> の整理だけ", " テストのみ", " 文言の修正", " 内部整理",
+            " TODO コメントの修正のみで挙動は同じ",
+        ):
+            with self.subTest(reason=reason):
+                self.assertTrue(passes([CONTRACT], body("[x]", reason)))
+
+    def test_unclosed_comment_hides_the_rest_of_the_body(self) -> None:
+        text = body("[x]", " 内部の整理で wire 形式は同じ").replace(
+            "Reason:", "<!-- メモ\nReason:"
+        )
+        self.assertFalse(passes([CONTRACT], text))
+        # The checkbox itself being hidden also fails, but a closed comment
+        # around the same text leaves the reason intact.
+        closed = text.replace("<!-- メモ\n", "<!-- メモ -->\n")
+        self.assertTrue(passes([CONTRACT], closed))
+
+    def test_comment_opener_in_code_or_fence_is_not_an_unclosed_comment(self) -> None:
+        reasoned = body("[x]", " 内部の整理で wire 形式は同じ")
+        for intro in (
+            "コメント `<!--` の扱いを直した",
+            "```\n<!--\n```",
+            "~~~\n<!--\n~~~",
+        ):
+            with self.subTest(intro=intro):
+                text = f"## 変更内容\n\n{intro}\n\n" + reasoned.split("\n\n", 2)[2]
+                self.assertTrue(passes([CONTRACT], text), text)
+        in_reason = body("[x]", " `<!--` の扱いだけを直した")
+        self.assertTrue(passes([CONTRACT], in_reason))
+
+    def test_unclosed_comment_keeps_text_before_it_on_the_line(self) -> None:
+        text = body("[x]", " 内部の整理で wire 形式は同じ <!-- メモ")
+        self.assertTrue(passes([CONTRACT], text))
+
+    def test_fence_follows_commonmark_open_and_close_rules(self) -> None:
+        section = "## Documentation impact\n\n- [x] No documentation impact\n\nReason: 内部の整理で wire 形式は同じ\n"
+        # An info string on the closing line does not close the fence, so the
+        # section stays inside the code.
+        for closing in ("```js", "~~~ y"):
+            with self.subTest(closing=closing):
+                opening = "~~~" if closing.startswith("~") else "```"
+                text = f"## 変更内容\n\n{opening}md\nx\n{closing}\n{section}{opening}\n"
+                self.assertFalse(passes([CONTRACT], text))
+        # An inline ```code``` at the start of a line opens no fence.
+        text = "## 変更内容\n\n```code``` を直した\n\n" + section
+        self.assertTrue(passes([CONTRACT], text))
+
+    def test_section_inside_a_code_fence_does_not_count(self) -> None:
+        for fence in ("```", "~~~~"):
+            with self.subTest(fence=fence):
+                text = (
+                    "## 変更内容\n\n"
+                    f"{fence}markdown\n"
+                    "## Documentation impact\n\n"
+                    "- [x] No documentation impact\n\n"
+                    "Reason: 内部の整理で wire 形式は同じ\n"
+                    f"{fence}\n"
+                )
+                self.assertFalse(passes([CONTRACT], text))
+                self.assertIsNone(MODULE.extract_section(text))
+
+    def test_reason_inside_a_code_fence_does_not_count(self) -> None:
+        text = body("[x]").replace("Reason:", "```\nReason: 内部の整理で wire 形式は同じ\n```\nReason:")
+        self.assertFalse(passes([CONTRACT], text))
+
+    def test_unclosed_code_fence_runs_to_the_end(self) -> None:
+        text = body("[x]").replace("Reason:", "```\nReason: 内部の整理で wire 形式は同じ\n")
+        self.assertFalse(passes([CONTRACT], text))
+
+    def test_only_a_level_two_heading_is_the_section(self) -> None:
+        reasoned = body("[x]", " 内部の整理で wire 形式は同じ")
+        self.assertTrue(passes([CONTRACT], reasoned))
+        for heading in ("#", "###", "####"):
+            with self.subTest(heading=heading):
+                text = reasoned.replace("## Documentation impact", f"{heading} Documentation impact")
+                self.assertFalse(passes([CONTRACT], text))
+
     def test_checkbox_and_reason_are_both_required(self) -> None:
         self.assertFalse(passes([CONTRACT], body("[ ]", " 理由はある")))
         self.assertFalse(passes([CONTRACT], body("[x]", "")))
@@ -138,7 +247,7 @@ class BodyTest(unittest.TestCase):
 class MainTest(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.directory)
+        self.addCleanup(remove_tree, self.directory)
 
     def write(self, name: str, text: str) -> Path:
         path = self.directory / name
@@ -163,7 +272,7 @@ class MainTest(unittest.TestCase):
         )
         self.assertEqual(status, 1)
         self.assertIn(CONTRACT, output)
-        reasoned = self.write("reasoned.md", body("[x]", " 内部の整理"))
+        reasoned = self.write("reasoned.md", body("[x]", " 内部の整理だけ"))
         status, _ = run_main(
             ["--changed-files", str(changed), "--body-file", str(reasoned)]
         )

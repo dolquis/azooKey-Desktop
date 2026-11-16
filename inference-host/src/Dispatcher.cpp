@@ -1794,6 +1794,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
   bool host_blocked_now = false;
+  if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
@@ -1894,6 +1895,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
   bool host_secure = false;
+  if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
@@ -2045,6 +2047,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
                       (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure);
     AiBackendOptions options;
     core::AiPrivacy privacy{true, true};
+    if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
     {
       std::lock_guard lock(*config_.update_config_mutex);
       if (settings_store_) {

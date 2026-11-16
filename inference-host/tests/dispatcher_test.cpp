@@ -3318,10 +3318,9 @@ TEST_F(DispatcherTest, CleanupStopsBeforeAnyBackendWhenSecureOrInSafeMode) {
 
 // DEV-2093: UpdateConfig reloads settings under the config lock, and a reload
 // of an unreadable file keeps the last good AI settings and marks only privacy
-// secure. A request that passed its privacy check before such a reload and
-// waits on that lock reads privacy again with the AI settings, so it reaches no
-// backend. The pass does not depend on timing; only the ai-cleanup request has
-// a point to wait for (it marks itself latest just before its check).
+// secure. A request that passed its privacy check before such a reload reads
+// privacy again with the AI settings under that lock, so it reaches no backend.
+// The test hook runs the reload at that point: after the check, before the lock.
 TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
   const auto path = temp_directory.File("azookey_ai_config_lock_settings.json");
   const auto write_settings = [&](const char* json) {
@@ -3333,16 +3332,25 @@ TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
   write_settings(kOpenAi);
   azookey::host::SettingsStore settings(path);
   settings.Load();
-  std::atomic<unsigned> calls{0};
+  unsigned calls = 0;
+  bool reload_before_read = false;
   auto config = DefaultDispatcherConfig();
-  // The Dispatcher's copy of the config shares this mutex.
   ASSERT_TRUE(config.update_config_mutex);
+  const auto config_mutex = config.update_config_mutex;
   config.ai_backend = std::make_shared<azookey::host::AiBackend>(
       [&](const auto&, const std::string&, const auto*, auto) {
         ++calls;
         return azookey::host::AiHttpResponse{
             200, R"({"choices":[{"message":{"content":"{\"result\":\"[]\"}"}}]})"};
       });
+  config.before_ai_settings_read_for_tests = [&] {
+    if (!reload_before_read) return;
+    reload_before_read = false;
+    // As UpdateConfig does, under the lock the request takes next.
+    write_settings("{not json");
+    std::lock_guard lock(*config_mutex);
+    settings.Reload();
+  };
   azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
 
   ipc::QueryBatchConversionRequest batch;
@@ -3379,26 +3387,18 @@ TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
   ASSERT_TRUE(handler.Dispatch(cleanup_request(845)));
   ASSERT_TRUE(handler.Dispatch(transform_request(846)));
   ASSERT_TRUE(handler.Dispatch(anomalies_request(847)));
-  ASSERT_EQ(calls.load(), 3u);
+  ASSERT_EQ(calls, 3u);
 
-  const auto dispatch_across_reload = [&](const ipc::Envelope& request, bool marks_latest) {
+  const auto dispatch_across_reload = [&](const ipc::Envelope& request) {
     write_settings(kOpenAi);
-    std::unique_lock lock(*config.update_config_mutex);
     settings.Reload();
-    auto pending = std::async(std::launch::async, [&] { return handler.Dispatch(request); });
-    if (marks_latest) {
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (!scheduler.IsLatest(request.request_id) && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::yield();
-    }
-    // As UpdateConfig does, under the lock the request waits on.
-    write_settings("{not json");
-    settings.Reload();
-    lock.unlock();
-    return pending.get();
+    reload_before_read = true;
+    auto response = handler.Dispatch(request);
+    EXPECT_FALSE(reload_before_read) << "the hook did not run";
+    return response;
   };
 
-  const auto cleanup = dispatch_across_reload(cleanup_request(842), true);
+  const auto cleanup = dispatch_across_reload(cleanup_request(842));
   ASSERT_TRUE(cleanup);
   const auto cleaned = ipc::ParseQueryBatchConversionResponse(cleanup->payload_json);
   ASSERT_TRUE(cleaned);
@@ -3407,18 +3407,18 @@ TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
       << "ai-cleanup";
   EXPECT_EQ(cleaned->error_class, std::optional<std::string>("BlockedBySecure")) << "ai-cleanup";
 
-  const auto transformed = dispatch_across_reload(transform_request(843), false);
+  const auto transformed = dispatch_across_reload(transform_request(843));
   ASSERT_TRUE(transformed);
   EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(transformed->payload_json)->error_class,
             std::optional<std::string>("BlockedBySecure"))
       << "TransformSelectedText";
 
-  const auto detected = dispatch_across_reload(anomalies_request(844), false);
+  const auto detected = dispatch_across_reload(anomalies_request(844));
   ASSERT_TRUE(detected);
   EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(detected->payload_json)->error,
             std::optional<std::string>("blocked"))
       << "DetectAnomalies";
-  EXPECT_EQ(calls.load(), 3u);
+  EXPECT_EQ(calls, 3u);
   RemovePathNoThrow(path);
 }
 

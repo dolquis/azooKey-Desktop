@@ -54,8 +54,8 @@ UIA の `SetValue` で本文を消すと composition が文書の外（画面左
 target は `workarounds` の `read_source: "value"` で本文を Value だけから読み（Value が空なら
 空として扱い、Value を読めないときだけ TextPattern へ切り替える）、`clear_with_keyboard: true`
 で本文を Ctrl+A → Delete だけで消す。どちらも既定（省略時）は従来どおりで、Notepad と
-VS Code の判定は変わらない。`read_source` は `"auto"` か `"value"` だけで、それ以外の値は
-target 定義を無効にする。
+VS Code の判定は変わらない。`read_source` は `"auto"` か `"value"` だけで、
+それ以外の値（文字列でない値を含む）は target 定義を無効にする。
 
 azooKey TIP の登録と選択は machine-wide 設定を含むため、runner は行わない。
 実行前に利用者が登録・選択を完了する。対話セッション、対象アプリ、UI Automation

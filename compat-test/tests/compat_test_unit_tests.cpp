@@ -888,6 +888,12 @@ TEST(TargetConfigLoaderTest, ParsesReadSourceAndClearWithKeyboardAndRejectsUnkno
 
   WriteFile(path, with("\"read_source\": \"text\""));
   EXPECT_FALSE(LoadTargetConfig(path));
+
+  // キーがあって文字列でない値（数値・真偽値・null・配列）も、黙って Auto にせず無効にする。
+  for (const char* invalid : {"1", "true", "null", "[\"value\"]"}) {
+    WriteFile(path, with(std::string("\"read_source\": ") + invalid));
+    EXPECT_FALSE(LoadTargetConfig(path)) << invalid;
+  }
 }
 
 class SettleReadsTest : public ::testing::Test {

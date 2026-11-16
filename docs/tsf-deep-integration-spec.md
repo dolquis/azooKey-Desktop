@@ -1156,18 +1156,19 @@ clone した selection 用 range を `TF_ANCHOR_END` へ collapse し、`SetSele
 
 確定で composition を終えるとき（Enter、候補の選択、数字、句読点、フォーカスの喪失による確定を含む）は、
 確定する edit session で `EndComposition` の前に、composition の range の `GUID_PROP_ATTRIBUTE` を
-`ITfProperty::Clear` で消す。確定した文字列は preedit の表示属性を持たない。アプリが先に composition を
-終えたときは、`ITfCompositionSink::OnCompositionTerminated` が受ける `ecWrite` で、TIP が最後に書いた
-composition の range の属性を消す。range は preedit の更新で clone したものを使う（終了後の
-`ITfComposition::GetRange` は失敗しうる）。property はその range の context から取る。こうすると、
+`ITfProperty::Clear` で消す。確定した文字列は preedit の表示属性を持たない。TIP が入力を見せている composition を
+アプリが先に終えたときは、`ITfCompositionSink::OnCompositionTerminated` が受ける `ecWrite` で、TIP が最後に書いた
+composition の range の属性を消す（TIP が見せる入力が無いときは、終了を受けても range を持たないので消さない）。
+range は preedit の更新で clone したものを使う（終了後の `ITfComposition::GetRange` は失敗しうる）。property はその range の context から取る。こうすると、
 後に確定の edit session が走らなくても（アプリが composition を終えた後の Esc は TIP の入力の状態だけを捨てて
 文書に触らない）属性は残らない。その後の確定の edit session も、アプリが残した range の属性をもう一度消す。
 復元や置換で書き直した文字列も、この Clear で消える。アプリが書き換えた文字列のまま composition を終えるとき（DEV-1845）も
 確定の edit session で同じに消す。消せなくても、確定も入力の状態の破棄も止めない。`ITfProperty::Clear` が失敗したときは
 警告ログ `commit_display_attribute_clear_failed` を出す（property や range を取れないときはログを出さない。preedit の更新で
 属性を付けるときと同じ扱いである）。TIP が composition を持つ間の Esc は入力を文字列ごと消すので、消す属性が無い。
-アプリが range を潰し、TIP が最後に書いた文字列をその直後に残したとき（DEV-1927）は、終了時に消すのは潰れた range
-だけである。その後の Esc では残った文字列の属性を消さない（確定の edit session なら、その文字列を置き換えてから消す）。
+アプリが range を潰し、TIP が最後に書いた文字列を range の外（直後か直前）に残したとき（DEV-1927）は、終了時に
+消すのは潰れた range だけである。その後の Esc では、残った文字列の属性を消さない。確定の edit session は、直後に残った
+文字列なら置き換えてから消すが、直前に残った文字列は消さない。
 
 M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAttr` は
 [`TF_DA_ATTR_INFO`](https://learn.microsoft.com/windows/win32/api/msctf/ne-msctf-tf_da_attr_info)
@@ -1373,7 +1374,7 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
-| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性。`TsfTipCommitDisplayAttributeTest`: Enter・数字・句読点の確定と、アプリが先に composition を終えた後の確定で、確定した文字列の属性を消すこと |
+| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性。`TsfTipCommitDisplayAttributeTest`: Enter・数字・句読点の確定、フォーカスの喪失による確定、アプリが書き換えた文字列のままの終了、アプリが先に composition を終えた後の確定と Esc で、文書に残った文字列の属性を消すこと |
 | Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |
 
 ## 10. 参照

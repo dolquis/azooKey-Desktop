@@ -1223,7 +1223,10 @@ class PreeditAttributeRecorder final : public ITfProperty {
   }
   STDMETHODIMP Clear(TfEditCookie, ITfRange* range) override {
     if (!range) return E_INVALIDARG;
-    if (FAILED(clear_result)) return clear_result;
+    if (FAILED(clear_result)) {
+      ++refused_clears;
+      return clear_result;
+    }
     const auto* document_range = static_cast<const DocumentRange*>(range);
     operations.push_back({true, document_range->start, document_range->end});
     return S_OK;
@@ -1231,8 +1234,9 @@ class PreeditAttributeRecorder final : public ITfProperty {
 
   std::vector<PreeditAttributeWrite> writes;
   std::vector<PreeditAttributeOperation> operations;
-  // A host that refuses the write (DEV-2065); a refused Clear is not recorded.
+  // A host that refuses the write (DEV-2065); a refused Clear is only counted.
   HRESULT clear_result{S_OK};
+  int refused_clears{0};
 };
 
 class DocumentContext final : public NoopContext, public ITfContextComposition {
@@ -17706,6 +17710,8 @@ TEST(TsfTipCommitDisplayAttributeTest, EscapeAfterTheHostEndedTheCompositionLeav
     ASSERT_EQ(h.ExternallyTerminate(), S_OK);
     ASSERT_EQ(h.service.composition_, nullptr);
     ASSERT_FALSE(h.service.terminated_composition_surface_.empty());
+    // The termination asks for the Clear whether or not the host refuses it.
+    EXPECT_EQ(recorder.refused_clears, clear_result == S_OK ? 0 : 1);
     ASSERT_TRUE(h.Press(VK_ESCAPE));
     EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
     EXPECT_FALSE(h.service.committing_);

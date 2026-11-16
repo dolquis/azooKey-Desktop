@@ -223,6 +223,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 | 予測の照会を変換器へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryPredictions` が、要求の `secure` か Host 設定の secure（§5.1.1 の定義。SafeMode は含まない）のとき、照会を変換器へ渡さず予測 0 件の成功応答を返す |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::BeginMagicConversion` が `ResolvePrivacy` で判定し、secure なら選択を読まずに案内だけの窓を出す（`docs/legacy-parity-spec.md` §4.1・§4.3）。`TransformSelectedText` の secure 由来の送信抑止は TIP が担い、Host も `inference-host/src/Dispatcher.cpp::HandleTransformSelectedText` で拒否する（§5.1.1） |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
+| AI 整文と校正の本文を AI backend へ渡さない | `inference-host/src/Dispatcher.cpp::HandleQueryBatchConversion` が `ai-cleanup` を、`inference-host/src/Dispatcher.cpp::HandleDetectAnomalies` が校正を、要求の `secure` か Host 設定の secure のとき `AiBackend` を呼ばずに止める（§5.1.1） |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/observability-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
 | M55 補正候補の学習・適用を停止 | 学習: TIP の `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` による検出を学習許可で止め、`PostIpcSend` が `ObserveTypo` を落とす。Host は `inference-host/src/Dispatcher.cpp::HandleObserveTypo` の学習ゲートで `learning/src/TypoCorrectionStore.cpp` への蓄積を拒否する（`typoCorrection.learnPersonalPatterns` が false の間も拒否する。`docs/typo-correction-learning-spec.md` §12.14）。適用の停止は `docs/typo-correction-learning-spec.md` §12.12.2 の設計契約に従う |
@@ -304,6 +305,14 @@ TIP の送信抑止を維持する。
 なければ、要求の `secure == true` か上と同じ意味で Host 設定が secure のとき、AI backend を呼ばずに
 `BlockedBySecure` を返す。許可は Host の設定と AND する。判定の順は `docs/ai-backend-spec.md` §4.1 に
 従う。TIP は対応を告知した Host にだけこの型を送る。
+
+`QueryBatchConversion` の `ai-cleanup` と `DetectAnomalies` も、Host が `AiBackend` の手前で検査する。
+`ai-cleanup` は、Host が SafeMode（engine の状態で判定する）か、要求の `secure == true` か、上と同じ意味で
+Host 設定が secure のとき、AI backend を呼ばずに `neural` へ落とし、候補を学習に使わない
+（`docs/romaji-batch-conversion-spec.md` §5・§6.2）。`DetectAnomalies` は、要求の `secure == true` か
+`learning_allowed == false`、Host の privacy 設定が学習を止めているとき、または Host が SafeMode のとき、
+AI backend を呼ばずに `blocked` を返す（`docs/proofread-view-spec.md` §2.9）。どちらの応答も SafeMode を
+secure と分けない。SafeMode による停止は Host が担う（`docs/host-availability-spec.md` §8.5.3）。
 
 ### 5.2 `custom` モードの per-axis 解決
 

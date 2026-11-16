@@ -176,7 +176,9 @@ capability は `detect_anomalies`。設定アプリが送る。
 
 secure の文脈、または学習を許さない文脈の本文は送らない。Host も、要求の `secure` が真か
 `learning_allowed` が偽のとき、または Host の privacy 設定が学習を止めているときは、AI へ渡さずに
-`blocked` を返す。利用者が設定アプリへ貼り付けた本文は、`secure=false`、`learning_allowed=true` で送る。
+`blocked` を返す。Host が SafeMode のとき（`docs/host-availability-spec.md` §8.5.3。設定の強制が
+当たっていなくても engine の状態で判定する）も同じく `blocked` を返し、SafeMode を表す別の値は返さない。
+利用者が設定アプリへ貼り付けた本文は、`secure=false`、`learning_allowed=true` で送る。
 
 | 応答フィールド | 型 | 意味 |
 |---|---|---|

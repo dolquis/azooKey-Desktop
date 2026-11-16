@@ -187,6 +187,11 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   送らない（`neural` / かな確定へ fallback）。`ai-cleanup` は全文を外部 AI
   （OpenAI 等）に渡しうるため、secure-app・パスワード欄の入力が漏れないよう M46 の
   セーフ入力契約（`docs/privacy-and-secure-input-spec.md`）に従う。
+  Host も、Host が SafeMode（`docs/host-availability-spec.md` §8.5.3。engine の状態で判定する）、
+  要求の `secure` が true、Host の privacy 設定が secure（読めない設定ファイルを含む。
+  `docs/privacy-and-secure-input-spec.md` §5.1.1）のどれかなら、AI backend を呼ばずに `neural` へ
+  落とす。要求の `ai_backend` はこの停止を解かない。このときの候補は学習に使わない
+  （`source = privacy-fallback`）。
 
 ## 6. IPC プロトコル
 
@@ -229,7 +234,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   `raw_romaji` から作った英単語候補を加える。TIP が true にする条件、Host の処理、制約は
   `docs/inline-english-candidate-spec.md` §4.1.1・§6.7 が持つ。
 - `secure` は入力欄が secure かを表す任意フィールドで、欠落と bool 以外の値は true（secure）とする。
-  TIP は secure でない入力の要求にだけ false を載せる。Host は true の要求に英単語候補を加えない。
+  TIP は secure でない入力の要求にだけ false を載せる。Host は true の要求に英単語候補を加えず、
+  `mode=ai-cleanup` でも AI backend を呼ばない（§5）。
   secure の入力では、TIP は生ローマ字で読みを分割したうえで、送る要求に `raw_romaji` を載せない
   （`mode=ai-cleanup` の必須条件は、secure では AI 整文が無効になるので当たらない。`raw_romaji` の無い
   `ai-cleanup` は Host が backend を `none` にして `neural` へ戻す）。
@@ -254,7 +260,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
 ```
 
 `error_class` は `ai-cleanup` の失敗を neural fallback 後にも伝える加算的フィールドである。
-成功時と `neural` 要求では省略する。旧 Host の応答で欠落した場合、TIP は従来の
+成功時と `neural` 要求では省略する。§5 の secure・SafeMode で AI 整文を止めた `ai-cleanup` は
+`BlockedBySecure` を返し、SafeMode を secure と分ける値は持たない。旧 Host の応答で欠落した場合、TIP は従来の
 fallback を維持し、分類別案内は出さない。未知の分類名も同様に扱う。`canceled=true`
 では案内を出さない。TIP が表示する文言は分類名から選んだ固定文言だけとし、
 プロバイダ応答本文、入力、鍵を含めない。候補の表層形と確定結果は案内の有無で変えない。

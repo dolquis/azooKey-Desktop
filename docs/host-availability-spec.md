@@ -421,6 +421,13 @@ supervisor を介さない手動起動に限られる。解除の手順は `docs
 `docs/typo-correction-learning-spec.md` §12.14）、自動単語登録の
 抽出を止める。辞書・既存の学習結果による変換は続ける。
 
+AI の入口（`TransformSelectedText`、`QueryBatchConversion` の `ai-cleanup`、`DetectAnomalies`）は、
+設定の強制に加えて engine の状態でも SafeMode を判定し、AI backend を呼ばずに止める。起動時の突入で
+保存が競合して `settings.json` から flag が落ちると、強制の当たらない設定のまま engine が SafeMode に
+なりうるためである。要求が名指しする AI backend はこの停止を解かない。応答の値は各入口の spec が
+定める（`docs/ai-backend-spec.md` §4.1、`docs/romaji-batch-conversion-spec.md` §5、
+`docs/proofread-view-spec.md` §2.9）。
+
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。
 SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し、

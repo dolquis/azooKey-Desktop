@@ -368,7 +368,8 @@ payload の正典は `ipc/include/azookey/ipc/Payloads.h` と `ipc/src/Payloads.
     診断の出力、別の要求）に使わない。
 - TIP は、secure でない入力の要求に `secure = false` を載せる。`secure` を送らない旧 TIP の要求は
   secure として扱われる。そのため、一括変換の `secure` を判定する Host と旧 TIP の組み合わせでは、
-  一括変換に M60 の英単語候補が出ない。ライブ変換は、旧 TIP が `raw_romaji` を送らないので影響を受けない。
+  一括変換に M60 の英単語候補が出ず、`ai-cleanup` の一括変換は AI 整文をせずに `neural` へ落ちる
+  （`docs/romaji-batch-conversion-spec.md` §5）。ライブ変換は、旧 TIP が `raw_romaji` を送らないので影響を受けない。
 - 生ローマ字と区間の表層は、ログとダンプに平文で出さない。`RuntimeLogger` の redaction
   （`docs/observability-spec.md` §7.6。secure 中は `docs/privacy-and-secure-input-spec.md` §8）で
   本文系のフィールドとして扱い、出すのは件数と長さだけにする。

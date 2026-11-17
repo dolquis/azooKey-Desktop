@@ -651,4 +651,30 @@ TEST(UpdateCheckerWorkerTest, DisabledWorkerDoesNotCheckAndStopReturns) {
   EXPECT_EQ(f.releases.count(), 0u);
 }
 
+// DEV-2076: only a package the Microsoft Store delivered leaves updates to the Store.
+TEST(UpdatesManagedByStoreTest, OnlyAPackageOfStoreOriginLeavesUpdatesToTheStore) {
+  using azookey::host::PackageIdentityProbe;
+  using azookey::host::UpdatesManagedByStore;
+  // Unpackaged (the MSI): no package identity wins over any origin value.
+  EXPECT_FALSE(UpdatesManagedByStore(PackageIdentityProbe{}));
+  EXPECT_FALSE(
+      UpdatesManagedByStore(PackageIdentityProbe{false, azookey::host::kPackageOriginStore}));
+  EXPECT_TRUE(
+      UpdatesManagedByStore(PackageIdentityProbe{true, azookey::host::kPackageOriginStore}));
+  // An external-location identity package or a sideloaded MSIX we sign: Unsigned,
+  // DeveloperUnsigned, DeveloperSigned, LineOfBusiness; and Unknown, Inbox, SignedSBOM.
+  for (const uint32_t origin : {0u, 1u, 2u, 4u, 5u, 6u, 7u}) {
+    EXPECT_FALSE(UpdatesManagedByStore(PackageIdentityProbe{true, origin})) << origin;
+  }
+  // An origin that could not be read keeps the check: the MSI channel must not lose it.
+  EXPECT_FALSE(UpdatesManagedByStore(PackageIdentityProbe{true, std::nullopt}));
+}
+
+TEST(UpdatesManagedByStoreTest, TheTestProcessIsNotAStorePackage) {
+  // The test runs unpackaged; on Windows this also exercises the real queries.
+  const auto probe = azookey::host::ProbeCurrentPackage();
+  EXPECT_FALSE(probe.has_package);
+  EXPECT_FALSE(azookey::host::UpdatesManagedByStore(probe));
+}
+
 }  // namespace

@@ -333,6 +333,11 @@ struct UpdateFetchResponse {
   uint64_t total_bytes{};
   std::string sha256;        // When ready: the lowercase hex SHA-256 of the verified file.
   std::string result_error;  // When failed: a fixed category (section 6.3).
+  // DEV-2081, when ready and the Vulkan add-on is installed: the lowercase hex SHA-256 of the
+  // verified add-on MSI of the same version, or else the fixed category it failed with. Both are
+  // left out of the JSON when empty; a Host without them answers neither.
+  std::string addon_sha256;
+  std::string addon_error;
 };
 
 std::string BuildFetchUpdateRequest(const FetchUpdateRequest& p);

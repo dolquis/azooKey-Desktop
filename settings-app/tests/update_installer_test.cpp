@@ -59,6 +59,30 @@ TEST(UpdateInstallerTest, ThePackagePathIsTheHostsDestinationForAPlainVersionOnl
   EXPECT_FALSE(IsSha256Hex(std::string(63, 'a')));
 }
 
+// DEV-2081: the add-on MSI sits beside the base under its own name, for the same versions only.
+TEST(UpdateInstallerTest, TheAddonPathIsBesideTheBaseForAPlainVersionOnly) {
+  const std::filesystem::path settings = L"C:\\Users\\u\\AppData\\Local\\azooKey\\settings.json";
+  const auto path = azookey::settings::UpdateAddonPackagePath(settings, "1.2.3");
+  ASSERT_TRUE(path);
+  EXPECT_EQ(*path, std::filesystem::path(L"C:\\Users\\u\\AppData\\Local\\azooKey\\updates\\"
+                                         L"azooKey-vulkan-addon-1.2.3-x64.msi"));
+  for (const char* invalid : {"", "v1.2.3", "1.2", "1.2.3-beta.1", "..\\..\\x", "1.2.3/x"}) {
+    EXPECT_FALSE(azookey::settings::UpdateAddonPackagePath(settings, invalid)) << invalid;
+  }
+  EXPECT_FALSE(azookey::settings::UpdateAddonPackagePath({}, "1.2.3"));
+}
+
+// The add-on follows only an applied base (0 or 3010); a declined, busy or failed base keeps the
+// add-on back, whose MSI would refuse a base of another version anyway.
+TEST(UpdateInstallerTest, TheAddonFollowsOnlyAnAppliedBase) {
+  using azookey::settings::AddonFollowsBase;
+  EXPECT_TRUE(AddonFollowsBase(UpdateInstallOutcome::Installed));
+  EXPECT_TRUE(AddonFollowsBase(UpdateInstallOutcome::RebootRequired));
+  EXPECT_FALSE(AddonFollowsBase(UpdateInstallOutcome::Cancelled));
+  EXPECT_FALSE(AddonFollowsBase(UpdateInstallOutcome::Busy));
+  EXPECT_FALSE(AddonFollowsBase(UpdateInstallOutcome::Failed));
+}
+
 TEST(UpdateInstallerTest, OnlyAFileWithTheExpectedHashOpensAndItStaysLockedWhileOpen) {
   TempDirectory temp;
   const auto file = temp.path() / "azooKey-1.2.3-x64.msi";
@@ -208,14 +232,20 @@ TEST(UpdateInstallerTest, EveryMessageOfTheInstallAreaIsInTheResources) {
   const auto source =
       ReadText(std::filesystem::path(std::u8string(u8"" AZOOKEY_SETTINGS_SOURCE_DIR)) /
                "MainWindow.xaml.cpp");
-  const std::regex pattern(R"(L"(UpdateInstall_[A-Za-z0-9_]+)\")");
+  const std::regex pattern(R"(L"(Update(?:Install|Status)_[A-Za-z0-9_]+)\")");
   size_t literals = 0;
   for (std::sregex_iterator it(source.begin(), source.end(), pattern), end; it != end; ++it) {
     names.insert((*it)[1].str());
     ++literals;
   }
   EXPECT_GT(literals, 0u);
+  EXPECT_TRUE(names.count("UpdateStatus_StoreManaged"));
   for (const auto& name : names) EXPECT_TRUE(has(name)) << name;
+}
+
+// DEV-2076: the test runs unpackaged, which keeps the update controls (the MSI channel).
+TEST(UpdateInstallerTest, AnUnpackagedProcessIsNotManagedByTheStore) {
+  EXPECT_FALSE(azookey::settings::UpdatesManagedByStore());
 }
 
 }  // namespace

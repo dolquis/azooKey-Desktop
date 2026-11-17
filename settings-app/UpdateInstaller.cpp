@@ -1,5 +1,6 @@
 #include "UpdateInstaller.h"
 
+#include <appmodel.h>
 #include <bcrypt.h>
 #include <shellapi.h>
 
@@ -117,6 +118,19 @@ std::optional<std::filesystem::path> UpdatePackagePath(const std::filesystem::pa
   if (dots != 2 || !digit_run || settings_path.empty()) return std::nullopt;
   return settings_path.parent_path() / L"updates" /
          (L"azooKey-" + std::wstring(version.begin(), version.end()) + L"-x64.msi");
+}
+
+std::optional<std::filesystem::path> UpdateAddonPackagePath(
+    const std::filesystem::path& settings_path, std::string_view version) {
+  // The same version check as the base, then the add-on's own name beside it.
+  const auto base = UpdatePackagePath(settings_path, version);
+  if (!base) return std::nullopt;
+  return base->parent_path() /
+         (L"azooKey-vulkan-addon-" + std::wstring(version.begin(), version.end()) + L"-x64.msi");
+}
+
+bool AddonFollowsBase(UpdateInstallOutcome base) {
+  return base == UpdateInstallOutcome::Installed || base == UpdateInstallOutcome::RebootRequired;
 }
 
 bool IsSha256Hex(std::string_view text) {
@@ -298,6 +312,25 @@ bool VulkanAddonInstalled() {
   }
   RegCloseKey(key);
   return true;
+}
+
+bool UpdatesManagedByStore() {
+  UINT32 length = 0;
+  if (GetCurrentPackageFullName(&length, nullptr) != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+    return false;  // APPMODEL_ERROR_NO_PACKAGE: unpackaged.
+  }
+  std::wstring full_name(length, L'\0');
+  if (GetCurrentPackageFullName(&length, full_name.data()) != ERROR_SUCCESS) return false;
+  // Exported by kernelbase.dll, but only onecoreuap.lib has its import (as in the Host).
+  using GetStagedPackageOriginFn = LONG(WINAPI*)(PCWSTR, PackageOrigin*);
+  const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  const auto get_origin = kernelbase
+                              ? reinterpret_cast<GetStagedPackageOriginFn>(reinterpret_cast<void*>(
+                                    GetProcAddress(kernelbase, "GetStagedPackageOrigin")))
+                              : nullptr;
+  PackageOrigin origin = PackageOrigin_Unknown;
+  return get_origin && get_origin(full_name.c_str(), &origin) == ERROR_SUCCESS &&
+         origin == PackageOrigin_Store;
 }
 
 bool RequestRestart() {

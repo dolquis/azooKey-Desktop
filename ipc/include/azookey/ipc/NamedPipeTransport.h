@@ -118,9 +118,12 @@ class NamedPipeClient {
   // the connection because the framing cannot be resumed safely.
   std::optional<Envelope> ReceiveWithTimeout(uint32_t timeout_ms);
 
-  // Poll phase A for `poll_timeout_ms`, then bound an in-progress frame by the
-  // earlier of `request_deadline` and the transport read hard deadline. Passing
-  // no request deadline is intended for batch waits that have no request-level
+  // Wait in phase A for up to `poll_timeout_ms`, returning as soon as a frame
+  // arrives, then bound an in-progress frame by the earlier of
+  // `request_deadline` and the transport read hard deadline. An unread frame
+  // found after `request_deadline` has passed is not read: the call returns as
+  // a phase-A timeout and keeps both the frame and the connection. Passing no
+  // request deadline is intended for batch waits that have no request-level
   // wall-clock bound.
   std::optional<Envelope> ReceiveWithTimeout(
       uint32_t poll_timeout_ms,

@@ -15,8 +15,10 @@ struct PipeIoResult {
   DWORD transferred{0};
   // Server stop was requested; the operation was cancelled and drained.
   bool stopped{false};
-  // The frame's wall-clock budget expired; the connection must be closed
-  // rather than resumed (see FrameDeadline in NamedPipeTransport.cpp).
+  // The wait timed out. For a frame chunk the frame's wall-clock budget
+  // expired and the connection must be closed rather than resumed (see
+  // FrameDeadline in NamedPipeTransport.cpp); for the client's zero-byte
+  // arrival wait it is an ordinary phase-A timeout that keeps the connection.
   bool timed_out{false};
 };
 

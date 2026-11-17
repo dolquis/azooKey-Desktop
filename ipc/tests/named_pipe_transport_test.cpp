@@ -290,6 +290,109 @@ DelayedFrameResult ReceiveDelayedFrameAcrossPollSlice(const std::string& pipe_na
   result.writer_ok = writer_ok.load();
   return result;
 }
+
+// A raw client opened the way NamedPipeClient opens its handle: overlapped, message read mode.
+HANDLE OpenOverlappedMessageClient(const std::string& pipe_name) {
+  const std::wstring wide(pipe_name.begin(), pipe_name.end());
+  HANDLE client = azookey::ipc::internal::OpenPipeClientHandle(wide);
+  if (client == INVALID_HANDLE_VALUE) return client;
+  DWORD mode = PIPE_READMODE_MESSAGE;
+  if (!SetNamedPipeHandleState(client, &mode, nullptr, nullptr)) {
+    CloseHandle(client);
+    return INVALID_HANDLE_VALUE;
+  }
+  return client;
+}
+
+// The client opened first, so ConnectNamedPipe finds it already connected.
+bool AcceptConnectedClient(HANDLE server) {
+  ScopedPipeHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+  if (ConnectNamedPipe(server, &overlapped)) return true;
+  const DWORD error = GetLastError();
+  if (error == ERROR_IO_PENDING) {
+    CancelIoEx(server, &overlapped);
+    DWORD transferred = 0;
+    GetOverlappedResult(server, &overlapped, &transferred, TRUE);
+  }
+  return error == ERROR_PIPE_CONNECTED;
+}
+
+std::vector<uint8_t> EncodeFrame(const azookey::ipc::Envelope& envelope) {
+  const auto json = azookey::ipc::Serialize(envelope);
+  if (!json) return {};
+  auto frame = azookey::ipc::EncodeLengthPrefixed(*json);
+  return frame ? std::move(*frame) : std::vector<uint8_t>{};
+}
+
+// Reads one whole message; empty on failure.
+std::vector<uint8_t> ReadRawMessage(HANDLE pipe, DWORD capacity) {
+  ScopedPipeHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+  std::vector<uint8_t> data(capacity);
+  const BOOL completed = ReadFile(pipe, data.data(), capacity, nullptr, &overlapped);
+  if (!completed && GetLastError() != ERROR_IO_PENDING) return {};
+  if (WaitForSingleObject(event.get(), 5000) != WAIT_OBJECT_0) {
+    CancelIoEx(pipe, &overlapped);
+  }
+  DWORD transferred = 0;
+  if (!GetOverlappedResult(pipe, &overlapped, &transferred, TRUE)) return {};
+  data.resize(transferred);
+  return data;
+}
+
+// A zero-byte overlapped read: the wait NamedPipeClient uses for a response
+// that has not arrived. Cancels and drains on destruction so the kernel never
+// owns a dead OVERLAPPED when an assertion returns early.
+class ZeroByteRead {
+ public:
+  struct Result {
+    DWORD error{ERROR_SUCCESS};
+    DWORD transferred{0};
+  };
+
+  explicit ZeroByteRead(HANDLE pipe)
+      : pipe_(pipe), event_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    overlapped_.hEvent = event_.get();
+    const BOOL completed = ReadFile(pipe_, &unused_, 0, nullptr, &overlapped_);
+    start_error_ = completed ? ERROR_SUCCESS : GetLastError();
+  }
+  ~ZeroByteRead() { Finish(); }
+
+  ZeroByteRead(const ZeroByteRead&) = delete;
+  ZeroByteRead& operator=(const ZeroByteRead&) = delete;
+
+  DWORD start_error() const { return start_error_; }
+  bool Wait(DWORD timeout_ms) const {
+    return WaitForSingleObject(event_.get(), timeout_ms) == WAIT_OBJECT_0;
+  }
+
+  // Cancels the read if it is still pending, then collects its result.
+  Result Finish() {
+    if (finished_) return result_;
+    finished_ = true;
+    if (start_error_ != ERROR_SUCCESS && start_error_ != ERROR_MORE_DATA &&
+        start_error_ != ERROR_IO_PENDING) {
+      result_.error = start_error_;
+      return result_;
+    }
+    CancelIoEx(pipe_, &overlapped_);
+    const BOOL ok = GetOverlappedResult(pipe_, &overlapped_, &result_.transferred, TRUE);
+    result_.error = ok ? ERROR_SUCCESS : GetLastError();
+    return result_;
+  }
+
+ private:
+  HANDLE pipe_;
+  ScopedPipeHandle event_;
+  OVERLAPPED overlapped_{};
+  uint8_t unused_{0};
+  DWORD start_error_{ERROR_SUCCESS};
+  bool finished_{false};
+  Result result_;
+};
 #endif  // !NDEBUG
 
 }  // namespace
@@ -995,6 +1098,212 @@ TEST(NamedPipeTransportTest, ClientIdleTimeoutPreservesUnreadResponseAndConnecti
 
   client.Disconnect();
   server.Stop();
+}
+
+// The client's phase-A wait (docs/ipc-persistence-hardening-spec.md §6.4.8)
+// depends on named pipe behavior Win32 does not document: on a message-mode
+// handle a zero-byte overlapped read stays pending while the pipe is empty,
+// completes when a message lands, and takes none of that message.
+TEST(NamedPipeTransportTest, ZeroByteOverlappedReadWaitsForMessageWithoutConsumingIt) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-zero-byte-read-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+  ScopedPipeHandle client(OpenOverlappedMessageClient(pipe_name));
+  ASSERT_TRUE(client.valid());
+  ASSERT_TRUE(AcceptConnectedClient(server.get()));
+
+  const auto frame = EncodeFrame(MakePingEnvelope(801, "zero-byte-read"));
+  ASSERT_FALSE(frame.empty());
+  const auto frame_size = static_cast<DWORD>(frame.size());
+
+  {
+    ZeroByteRead read(client.get());
+    ASSERT_EQ(read.start_error(), static_cast<DWORD>(ERROR_IO_PENDING));
+    EXPECT_FALSE(read.Wait(100));
+    ASSERT_TRUE(WriteRawPipe(server.get(), frame.data(), frame_size));
+    ASSERT_TRUE(read.Wait(5000));
+    const auto result = read.Finish();
+    EXPECT_TRUE(result.error == ERROR_SUCCESS || result.error == ERROR_MORE_DATA) << result.error;
+    EXPECT_EQ(result.transferred, 0u);
+  }
+  DWORD available = 0;
+  DWORD left_this_message = 0;
+  ASSERT_TRUE(PeekNamedPipe(client.get(), nullptr, 0, nullptr, &available, &left_this_message));
+  EXPECT_EQ(available, frame_size);
+  EXPECT_EQ(left_this_message, frame_size);
+  EXPECT_EQ(ReadRawMessage(client.get(), frame_size + 16), frame);
+
+  // A message already queued completes the read at once, still untouched.
+  ASSERT_TRUE(WriteRawPipe(server.get(), frame.data(), frame_size));
+  {
+    ZeroByteRead read(client.get());
+    ASSERT_TRUE(read.Wait(5000));
+    const auto result = read.Finish();
+    EXPECT_TRUE(result.error == ERROR_SUCCESS || result.error == ERROR_MORE_DATA) << result.error;
+    EXPECT_EQ(result.transferred, 0u);
+  }
+  EXPECT_EQ(ReadRawMessage(client.get(), frame_size + 16), frame);
+
+  // Cancelling the read on an empty pipe loses nothing that arrives later.
+  {
+    ZeroByteRead read(client.get());
+    ASSERT_EQ(read.start_error(), static_cast<DWORD>(ERROR_IO_PENDING));
+    EXPECT_EQ(read.Finish().error, static_cast<DWORD>(ERROR_OPERATION_ABORTED));
+  }
+  ASSERT_TRUE(WriteRawPipe(server.get(), frame.data(), frame_size));
+  EXPECT_EQ(ReadRawMessage(client.get(), frame_size + 16), frame);
+}
+
+TEST(NamedPipeTransportTest, ZeroByteOverlappedReadCompletesWhenServerDisconnects) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-zero-byte-read-eof-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+  ScopedPipeHandle client(OpenOverlappedMessageClient(pipe_name));
+  ASSERT_TRUE(client.valid());
+  ASSERT_TRUE(AcceptConnectedClient(server.get()));
+
+  ZeroByteRead read(client.get());
+  ASSERT_EQ(read.start_error(), static_cast<DWORD>(ERROR_IO_PENDING));
+  ASSERT_TRUE(DisconnectNamedPipe(server.get()));
+  ASSERT_TRUE(read.Wait(5000));
+  const auto result = read.Finish();
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_SUCCESS));
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_MORE_DATA));
+}
+
+// A crashed Host closes its handle without DisconnectNamedPipe; the pending
+// arrival wait must still complete so the client sees the loss at once.
+TEST(NamedPipeTransportTest, ZeroByteOverlappedReadCompletesWhenServerHandleCloses) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-zero-byte-read-close-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+  ScopedPipeHandle client(OpenOverlappedMessageClient(pipe_name));
+  ASSERT_TRUE(client.valid());
+  ASSERT_TRUE(AcceptConnectedClient(server.get()));
+
+  ZeroByteRead read(client.get());
+  ASSERT_EQ(read.start_error(), static_cast<DWORD>(ERROR_IO_PENDING));
+  server.Close();
+  ASSERT_TRUE(read.Wait(10000));
+  const auto result = read.Finish();
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_SUCCESS));
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_MORE_DATA));
+}
+
+// Each idle timeout cancels the pending arrival wait, and the last one of each
+// request may race the response landing. None of those cancellations may take
+// bytes off the pipe. The request deadline is far off so the 1 ms slice bounds
+// only phase A, as in the TIP's request-aware loops.
+TEST(NamedPipeTransportTest, ClientShortPollSlicesNeverLoseOrSplitResponses) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-short-slices-" + std::to_string(GetCurrentProcessId());
+  // The handler holds each response until the client has cancelled a few
+  // empty waits for it, so cancellation is exercised without relying on timing.
+  std::atomic<uint64_t> released_through{0};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name,
+      [&released_through](
+          const azookey::ipc::Envelope& request) -> std::optional<azookey::ipc::Envelope> {
+        const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (released_through.load() < request.request_id &&
+               std::chrono::steady_clock::now() < give_up) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return EchoResponse(request);
+      }));
+  struct ReleaseAllOnExit {
+    std::atomic<uint64_t>& released;
+    ~ReleaseAllOnExit() { released.store(UINT64_MAX); }
+  } release_all_on_exit{released_through};
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+
+  constexpr int kEmptyWaitsBeforeRelease = 3;
+  for (uint64_t request_id = 1; request_id <= 30; ++request_id) {
+    ASSERT_TRUE(client.Send(MakePingEnvelope(request_id, "short-slices")));
+    const auto request_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    int empty_waits = 0;
+    std::optional<azookey::ipc::Envelope> response;
+    while (!response && std::chrono::steady_clock::now() < request_deadline) {
+      response = client.ReceiveWithTimeout(1, request_deadline);
+      if (!response) {
+        ASSERT_TRUE(client.IsConnected()) << "request " << request_id;
+        if (++empty_waits == kEmptyWaitsBeforeRelease) {
+          released_through.store(request_id);
+        }
+      }
+    }
+    ASSERT_TRUE(response.has_value()) << "request " << request_id;
+    EXPECT_GE(empty_waits, kEmptyWaitsBeforeRelease);
+    EXPECT_EQ(response->request_id, request_id);
+    EXPECT_EQ(response->payload_json, MakePingEnvelope(request_id, "short-slices").payload_json);
+  }
+
+  client.Disconnect();
+  server.Stop();
+}
+
+// A whole frame is queued but the request deadline has already passed, as when
+// the phase-A wait overshoots its slice. Nothing has been read, so framing is
+// intact: only a partially read frame forces a disconnect (§6.4.8). The frame
+// stays queued for the caller's stale drain.
+TEST(NamedPipeTransportTest, ClientExpiredRequestDeadlineLeavesQueuedFrameUnread) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-expired-deadline-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+
+  const auto frame = EncodeFrame(MakePingEnvelope(802, "expired-deadline"));
+  ASSERT_FALSE(frame.empty());
+  ASSERT_TRUE(WriteRawPipe(server.get(), frame.data(), static_cast<DWORD>(frame.size())));
+
+  const auto expired = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+  EXPECT_FALSE(client.ReceiveWithTimeout(50, expired).has_value());
+  EXPECT_TRUE(client.IsConnected());
+
+  const auto response = client.ReceiveWithTimeout(1000);
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->request_id, 802u);
+  EXPECT_TRUE(client.IsConnected());
+}
+
+TEST(NamedPipeTransportTest, ClientIdleWaitEndsWhenServerCloses) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-idle-eof-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+
+  std::atomic<bool> receive_started{false};
+  std::optional<azookey::ipc::Envelope> response;
+  std::thread receiver([&] {
+    receive_started.store(true);
+    response = client.ReceiveWithTimeout(10000);
+  });
+  const bool started = WaitForFlag(receive_started);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // Closing the handle without DisconnectNamedPipe, as a crashed Host would.
+  const auto close_start = std::chrono::steady_clock::now();
+  server.Close();
+  receiver.join();
+  const auto close_elapsed = std::chrono::steady_clock::now() - close_start;
+
+  ASSERT_TRUE(started);
+  EXPECT_FALSE(response.has_value());
+  EXPECT_FALSE(client.IsConnected());
+  // Far below the 10 s slice: the close ended the wait, not the timeout.
+  EXPECT_LT(close_elapsed, std::chrono::seconds(5));
 }
 
 TEST(NamedPipeTransportTest, RequestAwareReceiveCompletesFrameAcrossPollSlices) {

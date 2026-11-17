@@ -887,10 +887,10 @@ TEST(SettingsDocumentTest, ThePaneTypoModeFollowsTypoCorrectionAndAChangeWritesB
   EXPECT_EQ(typo->GetBool("enabled"), false);
 }
 
-// DEV-2064, section 12.14: the "辞書" pane edits typoCorrection.learnPersonalPatterns and
-// maxReadingHypotheses in place. The other typoCorrection keys (a v2 mode, enabled false, the
-// confidences) stay as they are on disk, and a key absent on disk is not written at its default.
-TEST(SettingsDocumentTest, ThePaneEditsTheV2TypoKeysInPlaceAndKeepsTheOthers) {
+// DEV-2064, section 12.14: the "辞書" pane edits typoCorrection.learnPersonalPatterns in place.
+// The other typoCorrection keys (a v2 mode, enabled false, maxReadingHypotheses, the confidences)
+// stay as they are on disk, and a key absent on disk is not written at its default.
+TEST(SettingsDocumentTest, ThePaneEditsLearnPersonalPatternsInPlaceAndKeepsTheOtherV2TypoKeys) {
   ScopedTempDirectory temp("azookey_settings_typo_correction_pane_keys");
   const auto path = temp.path() / "settings.json";
   const auto save_edit = [&](const char* json, azookey::settings::SettingValues changes) {
@@ -905,25 +905,22 @@ TEST(SettingsDocumentTest, ThePaneEditsTheV2TypoKeysInPlaceAndKeepsTheOthers) {
     return azookey::ipc::json::Parse(ReadText(path));
   };
 
-  WriteText(path, R"({"typoCorrection":{"learnPersonalPatterns":false,"maxReadingHypotheses":5}})");
+  WriteText(path, R"({"typoCorrection":{"learnPersonalPatterns":false}})");
   const auto loaded = azookey::settings::LoadSettingsDocument(path);
   EXPECT_EQ(loaded.settings.values.at("typoCorrection.learnPersonalPatterns"),
             azookey::settings::SettingValue(false));
-  EXPECT_EQ(loaded.settings.values.at("typoCorrection.maxReadingHypotheses"),
-            azookey::settings::SettingValue(int64_t{5}));
 
   auto parsed = save_edit(
       R"({"typoCorrection":{"enabled":false,"mode":"rank","learnPersonalPatterns":false,
           "maxReadingHypotheses":5,"minConfidenceForRanking":0.6,"minConfidenceForTopCandidate":0.8}})",
-      {{"typoCorrection.learnPersonalPatterns", true},
-       {"typoCorrection.maxReadingHypotheses", int64_t{2}}});
+      {{"typoCorrection.learnPersonalPatterns", true}});
   ASSERT_TRUE(parsed && parsed->IsObject());
   const auto* typo = parsed->Find("typoCorrection");
   ASSERT_TRUE(typo && typo->IsObject());
   EXPECT_EQ(typo->GetBool("learnPersonalPatterns"), true);
-  EXPECT_EQ(typo->GetInt("maxReadingHypotheses"), 2);
   EXPECT_EQ(typo->GetBool("enabled"), false);
   EXPECT_EQ(typo->GetString("mode"), "rank");
+  EXPECT_EQ(typo->GetInt("maxReadingHypotheses"), 5);
   EXPECT_EQ(typo->GetNumber("minConfidenceForRanking"), 0.6);
   EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.8);
   EXPECT_EQ(typo->AsObject().size(), 6u);
@@ -937,7 +934,7 @@ TEST(SettingsDocumentTest, ThePaneEditsTheV2TypoKeysInPlaceAndKeepsTheOthers) {
   ASSERT_TRUE(typo && typo->IsObject());
   EXPECT_EQ(typo->AsObject().size(), 1u);
   EXPECT_EQ(typo->GetBool("learnPersonalPatterns"), false);
-  parsed = save_edit("{}", {{"typoCorrection.maxReadingHypotheses", int64_t{3}}});
+  parsed = save_edit("{}", {{"typoCorrection.learnPersonalPatterns", true}});
   ASSERT_TRUE(parsed && parsed->IsObject());
   EXPECT_FALSE(parsed->Find("typoCorrection"));
 }

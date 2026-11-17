@@ -145,15 +145,12 @@ std::vector<SettingField> BuildFields() {
       Enum("typoCorrectionMode", Pane::Dictionary, "Typo", "suggest",
            {"off", "suggest", "auto_replace"}),
       Integer("typoMinCount", Pane::Dictionary, "Typo", 3, 1.0, 100.0),
-      // typo-correction-learning-spec section 12.14. learnPersonalPatterns changes what the Host
-      // learns today. The Host reads maxReadingHypotheses but nothing uses it until the
-      // correction engine (M55) does, so the note says so. rank / aggressive and the two
-      // confidences wait for the engine as well, so the mode above stays the v1 three values and
-      // typoCorrection.enabled folds into "off".
+      // typo-correction-learning-spec section 12.14. learnPersonalPatterns is the one v2 key that
+      // changes what the Host does today (the ObserveTypo gate). The rest wait for the correction
+      // engine (M55), so the mode above stays the v1 three values and typoCorrection.enabled folds
+      // into "off".
       Bool("typoCorrection.learnPersonalPatterns", Pane::Dictionary, "Typo", true, std::nullopt,
            true),
-      Integer("typoCorrection.maxReadingHypotheses", Pane::Dictionary, "Typo", 3, 1.0, 8.0,
-              std::nullopt, true),
 
       Enum("powerProfile", Pane::AiConversion, "Performance", "auto",
            {"auto", "performance", "battery_saver"}),
@@ -272,6 +269,9 @@ const std::vector<UneditedSetting>& UneditedSettings() {
        "(typo-correction-learning-spec 12.14)"},
       {"typoCorrection.keyboardLayout",
        "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+      {"typoCorrection.maxReadingHypotheses",
+       "kept on save; shown once the correction engine uses it (typo-correction-learning-spec "
+       "12.14)"},
       {"typoCorrection.minConfidenceForRanking",
        "kept on save; shown once the correction engine uses it (typo-correction-learning-spec "
        "12.14)"},

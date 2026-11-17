@@ -1955,8 +1955,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **目的**: 入力したときの読みを、TSF を通してアプリへ渡す。
 - **前提**: M23（確定の edit session での property の扱い）、M46（secure の判定）、M64（字種指定確定）、M66（部分確定）、
   M69（確定の取り消し）。
-- **変更対象**: `tsf-tip/src/TextService.cpp`（確定と部分確定の edit session）、取り消しの edit session、
-  `tsf-tip/src/DisplayAttribute.cpp`（property の設定と消去の共通処理）。
+- **変更対象**: `tsf-tip/src/TextService.cpp`（確定と部分確定の edit session）、取り消しの edit session
+  （`docs/commit-undo-spec.md` §6。M69 が置く）、`tsf-tip/src/DisplayAttribute.cpp`（property の設定と消去の共通処理）。
 - **受け入れ条件**:
   - 実機の Excel（デスクトップ版）で spec §5.8.3 の観測を行い、結果と採否が spec §5.8 に記録されている
     （`gate:human-required`）。採らないときは、以下を実装しない

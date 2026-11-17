@@ -1265,7 +1265,8 @@ M23 の文節ごとの属性とマウスクリックによる注目文節の移�
 | `ITfProperty::SetValue` が受け付ける型は `VT_I4`・`VT_UNKNOWN`・`VT_BSTR`・`VT_EMPTY` である。範囲の文字列が変わると値は捨てられる。`VT_UNKNOWN` 以外の値はシリアライズされる。同じ種類の値の重なりには対応しない。読み書きの edit session が要る | [ITfProperty::SetValue](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfproperty-setvalue) |
 | text service はアプリと直接やり取りせず、すべて TSF マネージャーを通す | [Architecture](https://learn.microsoft.com/windows/win32/tsf/architecture) |
 | IMM32 には、確定した文字列の読みを渡す `GCS_RESULTREADSTR` と、その文節の区切りを渡す `GCS_RESULTREADCLAUSE` がある | [IME Composition String Values](https://learn.microsoft.com/windows/win32/intl/ime-composition-string-values) |
-| Excel はセルのふりがなを `Phonetic` / `Phonetics` で持ち、`Application.GetPhonetic` で文字列から読みを求められる | [Phonetic object](https://learn.microsoft.com/office/vba/api/excel.phonetic)、[Application.GetPhonetic](https://learn.microsoft.com/office/vba/api/excel.application.getphonetic) |
+| Excel はセルのふりがなを `Phonetic` / `Phonetics` で持ち、`Application.GetPhonetic` で文字列から読みを求められる。`PHONETIC` 関数はセルのふりがなの文字列を取り出す | [Phonetic object](https://learn.microsoft.com/office/vba/api/excel.phonetic)、[Application.GetPhonetic](https://learn.microsoft.com/office/vba/api/excel.application.getphonetic)、[WorksheetFunction.Phonetic](https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.phonetic) |
+| `ITfThreadMgrEx::GetActiveFlags` は、TSF が Windows Store アプリの中で働いているとき `TF_TMF_IMMERSIVEMODE` を返す（Windows 8 以降） | [ITfThreadMgrEx::GetActiveFlags](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfthreadmgrex-getactiveflags) |
 
 `GUID_PROP_READING` の値の型は Predefined Properties に書かれていない。文字列を渡せる型は `VT_BSTR` だけである。
 
@@ -1293,7 +1294,7 @@ M23 の文節ごとの属性とマウスクリックによる注目文節の移�
    - Microsoft IME。比較のための参考であり、判定には使わない。
    - `GUID_PROP_READING` を付ける TSF の IME。設定することをソースで確かめられる Mozc を使う（§5.8.2）。
    - `GUID_PROP_READING` を付けない azooKey。
-2. 各セルの `PHONETIC` の結果を記録する。
+2. 各セルの `PHONETIC` 関数（§5.8.1）の結果を記録する。
 
 読みの違う 2 つのセルを比べるのは、Excel が文字列から読みを求めた結果と、入力したときの読みを見分けるためである。
 TSF の IME はアプリと TSF マネージャーを通してだけやり取りする（§5.8.1）。そのため、2 つ目の IME で、打った読みの
@@ -1307,13 +1308,15 @@ TSF の IME はアプリと TSF マネージャーを通してだけやり取り
 
 - **時機**: 確定の edit session の中で、確定した文字列の範囲が composition の中にある間に設定する。読み全体の確定では
   `EndComposition` の前、部分確定では `docs/segment-editing-spec.md` §6.2 の 2（属性の消去）の後、3（`ShiftStart`）の前に
-  置く。composition の間（preedit の更新）には付けない。§5.8.3 の観測で、composition の間に付けないと渡らないと
-  分かったときは、この規則を見直す。
-- **型**: `VT_BSTR`。表記は §5.8.3 の 2 つ目の IME と同じにする。Mozc と同じ半角カタカナを第一案とし、M72 の実機確認で
-  確かめる。
+  置く。部分確定で `ShiftStart` が失敗し、確定する表層だけで `EndComposition` する経路（同 §6.2）では、読み全体の確定と
+  同じく `EndComposition` の前に、確定する表層の範囲へ先頭文節の読みを付ける。composition の間（preedit の更新）には
+  付けない。§5.8.3 の観測で、composition の間に付けないと渡らないと分かったときは、この規則を見直す。
+- **型**: `VT_BSTR`。表記（ひらがな、全角カタカナ、半角カタカナ）は §5.8.3 の観測で決め、決めた表記を本節に記録する。
+  観測では、2 つ目の IME（Mozc）が付ける表記（§5.8.2 の半角カタカナ）で azooKey のふりがなが付くかを確かめる。
 - **範囲**: 複数の文節を一度に確定する一括変換では、文節ごとに範囲を分け、各文節の読みを付ける。範囲は §5.4 の文節の
-  区間と同じ求め方で決める。それ以外の確定は、確定した表層の全体を 1 つの範囲にする。部分確定では、確定する先頭文節の
-  表層の範囲に、その文節の読みを付ける。範囲どうしは重ねない。長さ 0 の範囲は作らない。
+  区間と同じ求め方で決める。区間の和が確定した表層の長さと一致しないときは、文節に分けず、確定した表層の全体を
+  1 つの範囲にして、文節の読みを先頭からつないだ読みを付ける。それ以外の確定は、確定した表層の全体を 1 つの範囲にする。
+  部分確定では、確定する先頭文節の表層の範囲に、その文節の読みを付ける。範囲どうしは重ねない。長さ 0 の範囲は作らない。
 - **値**: 確定した候補の読みとする。確定の取り消しが戻す読み（`docs/commit-undo-spec.md` §5、composition の読み）とは
   別に扱う。
   - 予測の受理では、受理した予測の読みを付ける。
@@ -1325,7 +1328,8 @@ TSF の IME はアプリと TSF マネージャーを通してだけやり取り
   - Windows Store アプリの中（`ITfThreadMgrEx::GetActiveFlags` が `TF_TMF_IMMERSIVEMODE` を返すとき。§5.8.1 のとおり
     このプロパティに対応しないため）。
   - 表層が読みの発音を表さない確定。絵文字・記号・数字・日付・時刻・計算の候補（`docs/candidate-rewriter-spec.md`）、
-    英単語と日英混在の英字の部分（`docs/inline-english-candidate-spec.md`、`docs/mixed-english-auto-conversion-spec.md`）、
+    英単語の候補（`docs/inline-english-candidate-spec.md`）、英字の区間を含む日英混在の候補（`docs/mixed-english-auto-conversion-spec.md`。
+    例「今日はmeeting」。候補全体に付けない）、
     F9・F10 の字種指定確定（§3.6）、生ローマ字の確定がこれに当たる。
   - 自動句読点（M59）のように、読みを持たずに挿入した文字列。
   - 読みが空のとき。

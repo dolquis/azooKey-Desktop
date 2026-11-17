@@ -43,7 +43,7 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 ## データ採用ワークフロー
 
 1. 採用可否を判定する（ライセンス互換性・配布条項・来歴の明確さ）。
-   MIT / Apache-2.0 / BSD-3-Clause / CC0 / CC-BY-3.0 / CC-BY-4.0 / 権利主張なし（PD 相当）は同梱可、
+   MIT / Apache-2.0 / BSD-2-Clause / BSD-3-Clause / CC0 / CC-BY-3.0 / CC-BY-4.0 / 権利主張なし（PD 相当）は同梱可、
    コピーレフト・来歴不透明は不可（`plans/windows-port-roadmap.md` の配布ガード方針に整合）。
 2. データを azooKey 形式へ再ポートする（逐語コピーせず、原典準拠で変換）。
 3. 三層 attribution を付す（上記）。
@@ -56,6 +56,8 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 
 - **BSD-3-Clause（Mozc 由来 `symbol.tsv` / `emoji_data.tsv`、© Google）**: 原著作権表記と
   第 3 条項（名前による推奨・保証の禁止）を含む全文を保持する。派生データにも表記を継承する。
+- **BSD-2-Clause（japanese-usage-dictionary 由来の同音異義語の注記）**: 原著作権表記と全文を保持し、派生データにも表記を
+  継承する。採用例: DEV-2034（`docs/homophone-notes-spec.md` §8）。
 - **Unicode License v3（CLDR）**: CLDR データ条項に従い、出典バージョンと Unicode 表記を保持する。
 - **CC-BY-3.0（Google Books Ngram の頻度。英単語辞書 `english-words.tsv` の頻度源）**:
   Creative Commons Attribution 3.0 Unported。CC-BY-4.0 と同じく帰属表示を条件に再配布・改変を

@@ -56,6 +56,10 @@ struct RuntimeLoggerOptions {
   uint32_t mutex_wait_timeout_ms{200};
 };
 
+// The directory RuntimeLogger writes to when no explicit directory is given:
+// `<LocalAppData>/azooKey/logs`. Empty when LocalAppData cannot be resolved.
+std::filesystem::path DefaultLogsDirectory() noexcept;
+
 RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
     std::string component, std::filesystem::path logs_directory = {}) noexcept;
 

@@ -510,7 +510,8 @@ schema 自体は superset のまま変えない。
   経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
   CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。フォルダーはログを書き出したときに
-  作られるので、まだ無いか開けないときは、その旨を InfoBar で示す。
+  作られるので、まだ無いか開けないときは、その旨を InfoBar で示す。場所は RuntimeLogger の既定の書き出し先と同じ
+  core の `azookey::logging::DefaultLogsDirectory()` から取り、設定アプリの中で組み立て直さない。
 
 #### v1.0 / v1.x 境界表
 

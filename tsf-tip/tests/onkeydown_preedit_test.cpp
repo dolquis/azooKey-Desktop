@@ -18648,7 +18648,8 @@ class FirstTransformUnansweredHost {
 void DropTheConnectionWithARequest(MagicConversionHarness& m, FirstTransformUnansweredHost& host,
                                    ReconnectGate& gate, bool timed_out) {
   gate.Arm();
-  m.h.service.set_transform_wait_for_test(timed_out ? 300 : 60000);
+  // Long enough for the worker to send it first, as in the timeout test above.
+  m.h.service.set_transform_wait_for_test(timed_out ? 1000 : 60000);
   m.DoubleTap(kKanaKey);
   ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
   m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");

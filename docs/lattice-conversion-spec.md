@@ -160,9 +160,10 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 `max_results` は 0（無制限）で呼ぶ。上限に達した `CommonPrefixSearch` は短いキーから埋めて打ち切り、打ち切りを
 知らせない（`docs/azdic-physical-layer-spec.md` §15.4）。ラティスでは長い語ほど落ちるためである。
 
-一致した 1 エントリは、連接の変種ごとに 1 ノードになる。ノードの品詞は変種の品詞（`CONN` の `pos_index`）とする。
-変種の無いエントリは、§8.3 の既定 ID、`ENTS` の `cost` と `pos_id` で 1 ノードになる。複数の層が同じ
-（読み, 表層, 左 ID, 右 ID, 品詞）を持つときは、語コストの小さい 1 ノードに畳む。
+一致した 1 エントリは、連接の変種ごとに 1 ノードになる。ノードの品詞と表記の種別（§5.2）は、変種の `attr`
+（`docs/azdic-physical-layer-spec.md` §15.5。品詞の添字と、表層がカタカナだけか・上流の正規化形と別表記かの印）から
+取る。変種の無いエントリは、§8.3 の既定 ID、`ENTS` の `cost` と `pos_id` で 1 ノードになり、表記の種別は表層の
+文字から決める。複数の層が同じ（読み, 表層, 左 ID, 右 ID, 品詞）を持つときは、語コストの小さい 1 ノードに畳む。
 
 探索の間、ノードは（層, エントリの index, 変種の index）と区間、ID、コストだけを持つ。表層の文字列は、出力する
 経路について最後に組み立てる。`ReadEntries` の文字列の複写と UTF-8 の検証が、構築の主なコストになるためである。
@@ -208,12 +209,17 @@ SudachiDict の語コストと連接コストは、形態素解析のために�
 
 | 補正項 | 掛ける対象 | 初期値 |
 |---|---|---|
-| P_kata | 表層がカタカナと長音符だけの語 | 6000 |
+| P_kata_variant | 表層がカタカナと長音符だけで、上流の正規化形が別の表記の語（漢字・かなで書く語のカタカナ表記） | 6000 |
+| P_kata_own | 表層がカタカナと長音符だけで、上流の正規化形が表層と同じ語（外来語など、カタカナで書く語） | 0 |
 | P_node | すべてのノード（1 語ごと） | 3000 |
 | P_unk | 未知語ノード（1 文字ごと） | 20000 |
 
-`penalty(n)` は、そのノードに当たる補正項の和である。値は lattice_core の `META` に置く。初期値は試作の計測で
-選んだものなので、M52 で校正し直す（§10.3）。補正項を変えても `.azdic` の形式は変わらない。
+`CONN` を持たない語は上流の正規化形を持たないので、表層がカタカナだけなら P_kata_own を掛ける。
+
+`penalty(n)` は、そのノードに当たる補正項の和である。値は lattice_core の `META` に置く。カタカナ表記の罰金を 2 つに
+分けるのは、外来語を罰しないためである。試作ではカタカナだけの表層すべてに 6000 を掛けたが、評価データに外来語が
+ほとんど無いので、その値は外来語への影響を測れていない。初期値は M52 で校正し直す（§10.3）。補正項を変えても
+`.azdic` の形式は変わらない。
 
 ### 5.3 可変層の語コスト
 
@@ -256,7 +262,7 @@ EOS から BOS へ向けて経路を伸ばし、前向きの最小コストを�
 - 接頭辞（品詞 1 が `接頭辞`）は、後ろの自立語と同じ文節に入れる。
 - 未知語ノードは自立語として扱う。続く未知語ノードは同じ文節にまとめる。
 
-語の品詞はノードの品詞（§4.2）とする。`CONN` の変種は `pos_index` で `META.conn_pos_table`（品詞 1〜4 と
+語の品詞はノードの品詞（§4.2）とする。`CONN` の変種は `attr` の品詞の添字で `META.conn_pos_table`（品詞 1〜4 と
 活用型・活用形）を指し、変種の無い語は `ENTS.pos_id` で `META.pos_table` を指す。品詞を持たない可変層の語は
 自立語とする。
 
@@ -310,9 +316,10 @@ lattice_core は `.azdic` v1 の器を使う辞書ファイル `lattice_core.azd
 - かなだけの語（表層が読みと同じひらがなの語）の `ENTS` と `CONN`。`sudachi_lexicon` が取り込まない語である
   （`docs/azdic-physical-layer-spec.md` §15.12）。
 - 連接行列の section `CMAT`。ID を詰めた密な行列と、元の ID から詰めた添字への表を持つ。
-- `META` 直下の `connection_space`（§8.4）と `conn_pos_table`（`CONN` の `pos_index` が指す品詞の文字列表）。
+- `META` 直下の `connection_space`（§8.4）と `conn_pos_table`（`CONN` の `attr` の品詞の添字が指す品詞の文字列表）。
 - `META` の `lattice` オブジェクト: 品詞の表（品詞 1〜4 と活用型・活用形の組から代表の左 ID・右 ID へ）、品詞名の表、
-  補正項と C の値（§3.4、§5.2）、可変層の既定の語コスト（§5.3）。
+  補正項の値（P_kata_variant・P_kata_own・P_node・P_unk を別々に。§5.2）と C の値（§3.4）、可変層の既定の
+  語コスト（§5.3）。
 
 ### 8.3 ID の無い語
 
@@ -389,13 +396,21 @@ CLI の正典は `docs/conversion-quality-benchmark-spec.md` §7、baseline の�
 ### 10.2 指標
 
 `top1_accuracy`、`exact_match_rate`、`cer`、`top5_accuracy`、`latency_p95_ms`、`latency_p99_ms` を A と B で並べる。
-`top5_accuracy` は N ≥ 5 で採る。受け入れの閾値は `plans/windows-port-roadmap.md` M65 が定める。
+`top5_accuracy` は N ≥ 5 で採る。あわせて、`expected` がカタカナを含むケースだけの `top1_accuracy` を A と B で並べる。
+カタカナ表記の罰金（§5.2）が外来語を壊していないかを、この部分集合で見る。受け入れの閾値は
+`plans/windows-port-roadmap.md` M65 が定める。
+
+`bench/data/kana_kanji_eval.jsonl` には、`expected` がカタカナを含むケースがごく少ない。そのため、構成 A の
+baseline を採る前に、外来語を含む文のケースを 30 件以上足す。ケースは自作（`provenance` は `authored`）とし、
+置き場所とカテゴリは `docs/conversion-quality-benchmark-spec.md` §4・§5・§11 に、出典とライセンスは同 §13 と
+`bench/data/DATA-LICENSE.md` に従う。ケースを足すと `eval_dataset_sha256` が変わるので、A と B は足した後の
+同じデータで採る。
 
 ### 10.3 補正項の校正
 
 補正項（§5.2）と C（§3.4）は、評価ケースの半分で選ぶ。半分は、ケースの `id` を UTF-8 で SHA-256 した先頭バイトが
-偶数のケースとする。受け入れの判定は全件で行い、校正に使った半分と残りの半分の値も添える。P_kata は外来語にも
-掛かるので、`expected` がカタカナを含むケースの `top1_accuracy` も A と B で並べる。校正の結果は
+偶数のケースとする。受け入れの判定は全件で行い、校正に使った半分と残りの半分の値も添える。P_kata_variant と
+P_kata_own は別々に校正する。校正の結果は
 lattice_core の `META` に入るので、`dictionary_bundle_sha256` が変わり、baseline は採り直しになる
 （`docs/conversion-quality-benchmark-spec.md` §14.1）。
 

@@ -561,7 +561,8 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
    （§7.4）は、上限 1 の文脈をそのまま渡す。
    モデル converter から例外が出て
    fallback が存在する場合は、deadline なしで fallback を呼ぶ。converter 内での劣化は
-   §7.4 に従う。返された候補を末尾へ連結する。
+   §7.4 に従う。返された候補を末尾へ連結する。モデルを通らなかった要求では、続けてラティス変換の
+   N-best を末尾へ連結する（M65。条件と値は `docs/lattice-conversion-spec.md` §3.2・§3.4）。
 6. **表層 dedup**: `DedupMergedCandidates` で全ソースの重複を除く（§7.6）。
 7. **NLL 補正**: `config.nll.enabled && !live` のとき、変換が例外終了しておらず、
    `ZenzaiModelConverter` の runtime がロードされ、`last_error()` がない場合に
@@ -598,6 +599,7 @@ user_dict との統合は行わない。本書の Zenzai 契約（§6.5 の scor
 | 確定 auto-word（`LookupConfirmed`） | `UserDictionary` | 正の保存 score / それ以外は既定 **1.2**（`auto_word_default_score`） | `debug_info = "auto-word"` |
 | Zenzai | **`Model`** | **[0.3, 1.4]**（§6.5） | local model 変換。`Llm` は M16 クラウド用に予約 |
 | SimpleConverter（辞書/heuristic） | `SystemDictionary` / `Heuristic` | 0.1〜1.2 | fallback / 劣化時 |
+| ラティス変換の N-best（M65） | `SystemDictionary` | `docs/lattice-conversion-spec.md` §3.4 が定める | モデルを通らない要求だけで足す（同 §3.2） |
 
 NLL は §7.1 手順 7 の対象候補だけを減点する。既定 reranker の学習加点は
 weight×decay（≈0.8/確定、半減期≈4.6日）で、store がある場合に全ソースへ加算する。

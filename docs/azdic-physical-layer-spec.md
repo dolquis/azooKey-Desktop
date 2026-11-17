@@ -303,11 +303,18 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 |---|---|
 | 先頭 | `u32 variant_begin[entry_count + 1]`。エントリ i の変種は `[variant_begin[i], variant_begin[i + 1])` |
 | 続き | 8 バイト境界まで 0 埋め |
-| 続き | 変種のレコード列（8 バイト固定）: `u16 left_id` / `u16 right_id` / `i16 cost` / `u16 pos_index` |
+| 続き | 変種のレコード列（8 バイト固定）: `u16 left_id` / `u16 right_id` / `i16 cost` / `u16 attr` |
 
-`left_id` と `right_id` は連接行列の元の ID であり、`CMAT` の詰めた添字ではない。`pos_index` は `META.conn_pos_table`
-（品詞 1〜4 と活用型・活用形の `*` 以外を `-` で連結した文字列の配列。最大 65536 要素）の index である。1 エントリ内の
-変種は `(cost, left_id, right_id, pos_index)` の昇順に並べる（決定的）。変種の `cost` は上流の語コストをそのまま持ち、
+`left_id` と `right_id` は連接行列の元の ID であり、`CMAT` の詰めた添字ではない。`attr` は次の 3 つを詰めた値である。
+
+| bit | 内容 |
+|---|---|
+| 0〜13 | 品詞の添字。`META.conn_pos_table`（品詞 1〜4 と活用型・活用形の `*` 以外を `-` で連結した文字列の配列。最大 16384 要素）の index |
+| 14 | 表層がカタカナと長音符だけである |
+| 15 | 表層が上流の正規化形（§15.12 の列 13）と異なる |
+
+ラティス変換は bit 14 と bit 15 からカタカナ表記の罰金の種類を決める（`docs/lattice-conversion-spec.md` §5.2）。1 エントリ内の
+変種は `(cost, left_id, right_id, attr)` の昇順に並べる（決定的）。変種の `cost` は上流の語コストをそのまま持ち、
 `ENTS.cost`（同じ（読み, 表層）の最小値）とは別に保つ。`CONN` を持つアーティファクトは、`META` に
 `conn_pos_table` と `connection_space`（ID 空間の識別子。`docs/lattice-conversion-spec.md` §8.4）を持つ。
 
@@ -368,7 +375,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
   クエリと異なる要素や、`entry_index` が昇順でない要素がある場合は、検索の不一致ではなく
   順序の破損として扱う。
 - 読む `CONN` の範囲が `variant_begin[i] ≤ variant_begin[i + 1] ≤ variant_begin[entry_count]` を満たし、
-  変種の `pos_index` が `META.conn_pos_table` の要素数未満。違反はファイル内の破損なので、層ごと無効化する。
+  変種の `attr` の品詞の添字（bit 0〜13）が `META.conn_pos_table` の要素数未満。違反はファイル内の破損なので、
+  層ごと無効化する。
 - `CMAT` の添字表から読んだ添字が `0xffff`（使わない ID）でなく、かつ `left_count` / `right_count` 以上なら破損とし、
   lattice_core を無効化する。
 - 変種の `left_id` / `right_id` を lattice_core の `CMAT` で引けない（`raw_left_size` / `raw_right_size` 以上か、
@@ -381,8 +389,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 **(3) 全体検証（明示的に要求されたときのみ、O(N)）**。`content_hash` の照合と、(2) の
 参照検証の全件走査、復元キーの `key_id` 順が UTF-8 バイト辞書順であることの検査を行う。
 `SIDX` があれば、`(surface, entry_index)` が狭義の昇順であること（`ENTS` の置換であること）も検査する。
-`CONN` があれば、`variant_begin` が広義の単調増加であることと、各エントリの変種が `(cost, left_id, right_id, pos_index)` の
-昇順であることも検査する。
+`CONN` があれば、`variant_begin` が広義の単調増加であることと、各エントリの変種が `(cost, left_id, right_id, attr)` の
+昇順であること、`attr` の bit 14 が表層と一致することも検査する。
 C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は防御的措置として残す。
 実行するのは pack の DL 直後、`dictbuild --verify`、および設定
 `dictionary.verifyOnLoad` が真のときとする。
@@ -627,12 +635,15 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 
 **連接情報の取り込み**（M65。`docs/lattice-conversion-spec.md` §8）。抽出器は、語彙の中間 TSV とは別に、
 連接の中間 TSV を書く。列は `reading` / `surface` / `left_id`（列 2）/ `right_id`（列 3）/ `cost` /
-`pos`（上表と同じ）/ `conjugation`（活用型と活用形の `*` 以外を `-` で連結したもの。持たない語は空欄）とする。
+`pos`（上表と同じ）/ `conjugation`（活用型と活用形の `*` 以外を `-` で連結したもの。持たない語は空欄）/
+`normalized_form`（列 13 の正規化形。`\uXXXX` エスケープを戻す）とする。
 取り込む行と足切りは語彙と同じ規則による。ただし、表層形が読みと同じひらがなのエントリは、語彙には入れず、
 連接の中間 TSV には書く。
 
 - `sudachi_lexicon` は、`ENTS` の各エントリについて、同じ（正規化キー, 表層）を持つ行の
-  （`left_id`, `right_id`, `cost`, 品詞と活用）をすべて `CONN`（§15.5）に残す。`ENTS` の内容は変えない。
+  （`left_id`, `right_id`, `cost`, 品詞と活用、表記の印）をすべて `CONN`（§15.5）に残す。表記の印は、表層が
+  カタカナと長音符だけか（`attr` の bit 14）と、表層が `normalized_form` と異なるか（bit 15）である。`ENTS` の
+  内容は変えない。
 - lattice_core（`lattice_core.azdic`）は、表層形が読みと同じひらがなのエントリの `ENTS` と `CONN`、連接行列の `CMAT`、
   `META.lattice`（`docs/lattice-conversion-spec.md` §8.2）を持つ。ヘッダの `layer_id` と `ENTS.source` は
   語の出どころの `sudachi_lexicon` とする。`build_bundled.py` は `sudachi_lexicon` に続けて lattice_core を生成し、

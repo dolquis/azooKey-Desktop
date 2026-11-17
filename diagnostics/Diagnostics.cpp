@@ -132,61 +132,6 @@ j::Value RedactValue(const j::Value& value, std::string_view key = {}) {
   return value;
 }
 
-bool IsSafeSettingsControl(std::string_view key, const j::Value& value) {
-  constexpr std::array<std::string_view, 3> bool_keys = {
-      "aiCandidate", "includeContextInAITransform", "contextReselection"};
-  constexpr std::array<std::string_view, 4> number_keys = {
-      "maxCandidates", "maxContextLength", "emojiMaxCandidates", "emojiTriggerMinQueryLength"};
-  if (value.IsBool()) return std::find(bool_keys.begin(), bool_keys.end(), key) != bool_keys.end();
-  if (value.IsNumber())
-    return std::find(number_keys.begin(), number_keys.end(), key) != number_keys.end();
-  if (key == "candidateTagBoosts" && value.IsObject()) {
-    return std::all_of(value.AsObject().begin(), value.AsObject().end(),
-                       [](const auto& item) { return item.second.IsNumber(); });
-  }
-  return false;
-}
-
-j::Value RedactSettingsValue(const j::Value& value, std::string_view key = {}) {
-  if (key == "openAiApiKey") return j::Value("***redacted***");
-  if (key == "promptPrefixByApp") {
-    if (!value.IsObject()) return j::Value("***redacted***");
-    j::Object redacted;
-    for (const auto& [app, prefix] : value.AsObject()) {
-      (void)prefix;
-      redacted.emplace(app, j::Value("***redacted***"));
-    }
-    return j::Value(std::move(redacted));
-  }
-  if (key == "profilesByApp") {
-    if (!value.IsObject()) return j::Value("***redacted***");
-    j::Object redacted;
-    for (const auto& [app, profile] : value.AsObject()) {
-      redacted.emplace(
-          app, profile.IsObject() ? RedactSettingsValue(profile) : j::Value("***redacted***"));
-    }
-    return j::Value(std::move(redacted));
-  }
-  if (!key.empty() && logging::IsSensitiveRuntimeLogField(key) &&
-      !IsSafeSettingsControl(key, value)) {
-    return j::Value("***redacted***");
-  }
-  if (value.IsObject()) {
-    j::Object redacted;
-    for (const auto& [child_key, child] : value.AsObject()) {
-      redacted.emplace(child_key, RedactSettingsValue(child, child_key));
-    }
-    return j::Value(std::move(redacted));
-  }
-  if (value.IsArray()) {
-    j::Array redacted;
-    redacted.reserve(value.AsArray().size());
-    for (const auto& child : value.AsArray()) redacted.emplace_back(RedactSettingsValue(child));
-    return j::Value(std::move(redacted));
-  }
-  return value;
-}
-
 bool JsonValueEquals(const j::Value& left, const j::Value& right) {
   if (left.data.index() != right.data.index()) return false;
   if (left.IsNull()) return true;
@@ -319,6 +264,74 @@ bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
     }
   }
   return true;
+}
+
+bool MatchesSchemaType(const j::Value& value, const j::Value& schema) {
+  if (const auto type = schema.GetString("type")) return MatchesType(value, *type);
+  if (const auto* types = schema.GetArray("type")) {
+    return std::any_of(types->begin(), types->end(), [&](const auto& type) {
+      return type.IsString() && MatchesType(value, type.AsString());
+    });
+  }
+  return false;
+}
+
+bool MatchesSchemaEnum(const j::Value& value, const j::Value& schema) {
+  const auto* values = schema.GetArray("enum");
+  return values && std::any_of(values->begin(), values->end(), [&](const auto& candidate) {
+           return JsonValueEquals(value, candidate);
+         });
+}
+
+// settings.redacted.json keeps a value only when its shape cannot carry body text or a credential.
+// Names are judged by the RuntimeLogger body-field test (observability-spec section 7.6). Under a
+// matching name, or inside a container with one, a value survives only where the embedded schema
+// types it as boolean / integer / number, or as an enum string it matches. A path the schema does
+// not know keeps numbers and booleans only, and a known path holding another type is redacted.
+bool KeepSettingsScalar(const j::Value& value, const j::Value* schema, bool sensitive) {
+  if (!schema) return !sensitive && !value.IsString();
+  if (!MatchesSchemaType(value, *schema)) return false;
+  return !value.IsString() || !sensitive || MatchesSchemaEnum(value, *schema);
+}
+
+j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
+                             std::string_view key = {}, bool sensitive_parent = false) {
+  const bool sensitive = sensitive_parent || key == "openAiApiKey" ||
+                         (!key.empty() && logging::IsSensitiveRuntimeLogField(key));
+  const j::Value* shape = schema && MatchesSchemaType(value, *schema) ? schema : nullptr;
+  if (value.IsObject()) {
+    if (sensitive && !shape) return j::Value("***redacted***");
+    const auto* properties = shape ? shape->FindObject("properties") : nullptr;
+    const auto* additional = shape ? shape->Find("additionalProperties") : nullptr;
+    j::Object redacted;
+    for (const auto& [child_key, child] : value.AsObject()) {
+      const j::Value* child_schema = nullptr;
+      std::string_view child_name = child_key;
+      if (properties) {
+        const auto found = properties->find(child_key);
+        if (found != properties->end()) child_schema = &found->second;
+      }
+      if (!child_schema && additional && additional->IsObject()) {
+        // Map keys such as app names and tag names are data, not field names.
+        child_schema = additional;
+        child_name = {};
+      }
+      redacted.emplace(child_key, RedactSettingsValue(child, child_schema, child_name, sensitive));
+    }
+    return j::Value(std::move(redacted));
+  }
+  if (value.IsArray()) {
+    if (sensitive && !shape) return j::Value("***redacted***");
+    const auto* items = shape ? shape->Find("items") : nullptr;
+    j::Array redacted;
+    redacted.reserve(value.AsArray().size());
+    for (const auto& child : value.AsArray()) {
+      redacted.emplace_back(
+          RedactSettingsValue(child, items && items->IsObject() ? items : nullptr, {}, sensitive));
+    }
+    return j::Value(std::move(redacted));
+  }
+  return KeepSettingsScalar(value, schema, sensitive) ? value : j::Value("***redacted***");
 }
 
 struct SettingsProbe {
@@ -1824,7 +1837,10 @@ bool RepairReportSucceeded(const RepairReport& report) {
 std::string RedactSettingsJson(std::string_view json) {
   const auto value = j::Parse(json);
   if (!value) return "{}";
-  return RedactFreeText(j::Stringify(RedactSettingsValue(*value)));
+  // Without a parsed schema every path is unknown: only numbers and booleans under names the
+  // body-field test does not match survive.
+  static const auto schema = j::Parse(kSettingsSchemaJson);
+  return RedactFreeText(j::Stringify(RedactSettingsValue(*value, schema ? &*schema : nullptr)));
 }
 
 std::string RedactFreeText(std::string text) { return core::RedactFreeText(std::move(text)); }

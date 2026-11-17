@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66, M68]
+milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66, M68, M69]
 canonical_for: ["Phase 5（M13〜M19）のレガシー parity"]
 ---
 
@@ -20,7 +20,7 @@ Windows 版としての仕様判断は本書が正典であり、`legacy/` は�
 
 | 節 | マイルストーン |
 |---|---|
-| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown とページ内の数字）は M68 |
+| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown とページ内の数字）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69 |
 | §2 | M14 |
 | §3 | M15 |
 | §4 | M16 |
@@ -88,6 +88,9 @@ enum class UserAction : uint16_t {
     // 文節の伸縮（docs/segment-editing-spec.md §4、DEV-2036）
     ShrinkSegment,            // Shift+←（Selecting）
     ExtendSegment,            // Shift+→（Selecting）
+
+    // 確定の取り消し（docs/commit-undo-spec.md、DEV-2032）
+    UndoCommit,               // Ctrl+Backspace（Idle、確定の直後）
 };
 
 struct UserActionEvent {
@@ -150,6 +153,7 @@ enum class InputStateKind {
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
+| Idle | UndoCommit（確定の直後の Ctrl+Backspace） | Composing（liveConv ON なら Previewing） | 直前の確定を、確定する前の読みの composition へ戻す。取り消せる確定、条件、edit session は `docs/commit-undo-spec.md` |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
 > **候補窓の取得**: `StartConversion` は打鍵中の候補キャッシュの有無によらず、候補窓用の
@@ -310,6 +314,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_E | Ctrl | LineEnd |
 | VK_U | Ctrl+Shift | StartUnicodeInput |
 | VK_BACK | Ctrl+Shift | Forget |
+| VK_BACK | Ctrl（Idle） | UndoCommit（確定の取り消し。`docs/commit-undo-spec.md`） |
 | VK_KANJI | (none) | ToggleHankaku（core の写像。TIP は開閉キーとして写像より前に処理する。最終挙動は `docs/tsf-deep-integration-spec.md` §3.1） |
 | VK_NONCONVERT | (none) | ToggleHiraKata（core の写像。TIP の最終挙動は `docs/tsf-deep-integration-spec.md` §3.1・§3.1.1・§3.2） |
 | VK_F6 | (none) | 字種指定確定（ひらがな）。読みがある状態だけ |
@@ -340,14 +345,16 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 - PageUp / PageDown（`VK_PRIOR` / `VK_NEXT`。修飾キーなし）は Selecting でだけ `Up` / `Down` になり、ページ単位の移動で
   あることを `UserActionEvent` に載せる（`UserAction` は増やさない。§1.6.2 (B)。フィールドの名前は実装で決める）。
   ほかの状態では `nullopt` とする。
+- Ctrl+Backspace（修飾キーは Ctrl だけ）は Idle でだけ `UndoCommit` になり、ほかの状態では `nullopt` とする。
+  TIP は `docs/commit-undo-spec.md` §4 の条件が揃うときだけ消費し、揃わなければアプリへ渡す。
 - Alt または Win を含む組合せは常に `nullopt` とする。
 - 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、ひらがなキー `VK_DBE_HIRAGANA`、`convertKeysAction` が
   `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`
   §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` / `VK_DBE_HIRAGANA` はこの写像では `nullopt` である。
 - TIP は効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、Commit、Cancel、
   Selecting 中の Forward / Backward、TIP が確定する字種指定確定、モード切替（`ToggleHiraKata` /
-  `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8））を
-  消費する。`Forget` と `ToggleDebugWindow` を食う条件はそれぞれの節が定める。
+  `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8）、`UndoCommit`（`docs/commit-undo-spec.md`））を
+  消費する。`Forget`、`ToggleDebugWindow`、`UndoCommit` を食う条件はそれぞれの節と spec が定める。
   Magic Conversion のダブルタップ（`StartAlnumDouble` / `StartKanaDouble`）は `UserActionMap` の写像に無く、
   TIP が英数キーとひらがなキーの押下の間隔から検出する（§4.1）。
 
@@ -396,6 +403,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す。ただし Ctrl+Z / Ctrl+Y は読み入力中・候補選択中に消費して何もしない（下の段落） |
 | 英数キー | 英語への絶対指定。読み入力中は読みを残したまま英字を足し、候補選択中は確定してから英語に切り替える | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
 | 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す。読み入力中・候補選択中は消費して何もしない（§7.1） |
+| 確定の取り消し | 無い | 確定の直後の Ctrl+Backspace で、直前の確定を確定する前の読みの composition へ戻す（`docs/commit-undo-spec.md`） |
 | Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定した後、`fullWidthSpace` に従う（既定では全角空白を入れ、アプリへは渡さない。`docs/tsf-deep-integration-spec.md` §3.7）。hex 以外は確定して通常入力に移る（§6.1） |
 
 素通しにしたキーについて、TIP は composition を確定も取り消しもしない。キーを受けたアプリが
@@ -1382,6 +1390,7 @@ legacy との差: legacy の忘却は Ctrl+Delete（Backspace）で、候補選�
 Ctrl+Shift+Backspace とし、入力していないときだけ働いて直近に確定した組を消す（§7.2）。
 読み入力中と候補選択中は、TIP がこのキーを消費して何もしない（アプリの単語削除へ渡さない。§1.4）。
 確定前の候補を忘れさせるキーは無い。
+Shift の無い Ctrl+Backspace は忘却ではなく、確定の直後の確定の取り消しである（`docs/commit-undo-spec.md`）。
 
 ### 7.2 API
 
@@ -1405,7 +1414,7 @@ public:
   Ctrl+Shift+Backspace では、その組を `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で
   Host へ送り、組を捨てる。
   確定（候補・読み・Unicode 入力・カッコ挿入・再変換）のたびに保持した組を捨て、学習観測を送ったときだけ
-  保持し直す。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
+  保持し直す。確定の取り消し（`docs/commit-undo-spec.md` §7）でも、保持した組を捨てる。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
   忘却の対象が無く、それより前の組へは遡らない。対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。
   保持した組はフォーカスを跨がない。フォーカスの移動、context の push / pop、Deactivate で捨てる。
   secure の文脈では `ForgetLearningEntry` を送らず、組だけを捨てる（M46 の学習系メッセージと同じ扱い）。

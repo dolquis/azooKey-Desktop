@@ -35,6 +35,8 @@ canonical_for: ["TSF 深部統合"]
 
 既に確定済みのテキストに対して、「再変換」操作を提供する。
 ユーザーが「明日」を「あした」と再変換したい、等。
+確定の直後に直前の確定を確定する前の読みへ戻す確定の取り消し（Ctrl+Backspace、M69）は、逆引きを使わない別の操作で、
+`docs/commit-undo-spec.md` が定める。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 周辺テキスト取得には、transitory context
 > （検索ボックス等）の親コンテキストを `GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT` で

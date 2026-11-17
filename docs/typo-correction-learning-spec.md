@@ -947,6 +947,8 @@ v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_repl
 「辞書」ペインは、モードのほかに `typoCorrection.learnPersonalPatterns`（スイッチ）と
 `typoCorrection.maxReadingHypotheses`（1〜8 の整数。小数と範囲外は保存で拒む）を編集する。この 2 キーは
 `typoCorrection` の中に書き、既にファイルにあるか既定と違うときだけ書き、ほかの下位キーはそのまま残す。
+`learnPersonalPatterns` は Host の `ObserveTypo` の蓄積を今すぐ変える。`maxReadingHypotheses` は Host が読むが、
+補正エンジンが使うまで変換の結果は変わらず、ペインの注記もそう書く。
 `typoCorrection.enabled` はペインに専用のスイッチを持たず、false は `off` として示す。`rank` / `aggressive` と
 `minConfidenceForRanking` / `minConfidenceForTopCandidate` は、補正エンジンが変換に反映するまでペインに出さず、
 保存で残す。

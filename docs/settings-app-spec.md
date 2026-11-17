@@ -541,7 +541,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `safeMode.*` | — | M30（詳細ペインで解除だけを操作する） |
 | `reranker.*` | — | 専用 UI を持たない（`neural-reranker-nll-spec.md` §B9） |
 | `typoCorrection.learnPersonalPatterns` / `typoCorrection.maxReadingHypotheses` | — | M55（辞書ペイン。`typoCorrection.mode` は辞書ペインの `typoCorrectionMode` と一緒に書く。`typo-correction-learning-spec.md` §12.14） |
-| `typoCorrection` のほかの下位キー | — | 専用 UI を持たない（`enabled` は `off` として示し、`rank` / `aggressive` と信頼度の 2 キーは補正エンジンが変換に反映するまで出さない） |
+| `typoCorrection` のほかの下位キー | — | 専用 UI を持たない（`enabled` は `off` として示し、`rank` / `aggressive` と信頼度の 2 キーは補正エンジンが変換に反映するまで出さない。`keyboardLayout` は値が `auto` だけ、`disableInSecretApps` は `true` 固定） |
 | ユーザー辞書の内容（設定キーではない。`user_dict.json.enc`） | ◯（学習ペインのユーザー辞書タブで一覧・追加・忘却） | M30（語の編集、単独の書き出し、既定で入る語） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で

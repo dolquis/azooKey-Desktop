@@ -149,6 +149,13 @@ class CandidateWindow {
   // and the other_height of the elements below them fit work_height, otherwise
   // as many as fit above one position row, and at least one.
   static int ComputeVisibleRows(int count, int item_height, int other_height, int work_height);
+  // The height the candidate window may take (native-ui-spec §4.1): the larger of
+  // the room below the anchor and the room above the caret (caret_gap over it),
+  // within the work area. ComputePlacement puts a window of at most this height
+  // on that side, clear of a one-line composition no taller than caret_gap, and
+  // never moves it up against the top of the work area. At least 1; 0 for an empty
+  // work area, which ComputeVisibleRows reads as nothing to fit into.
+  static int ComputeFitHeight(POINT anchor, RECT work_area, int caret_gap);
   // The candidate in the top drawn row: the previous range, moved only as far as
   // it takes to include the selection, within [0, count - visible_rows].
   static int ComputeFirstVisibleRow(int previous_first, int selected, int count, int visible_rows);

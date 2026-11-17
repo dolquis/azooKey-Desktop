@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include <string_view>
+
 #include "KeyboardStateGuard.h"
 #include "azookey/tsf/TextService.h"
 #include "azookey/tsf/TextServiceFactory.h"
@@ -380,6 +382,19 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   GUID preserved_guid{};
   GUID unpreserved_guid{};
   TF_PRESERVEDKEY preserved_key{};
+
+  // What msctf does when the focus document changes: it tells the advised
+  // thread-manager sink at once. Returns whether a sink was there to tell.
+  bool NotifyFocus(ITfDocumentMgr* focus) {
+    if (!thread_sink_) return false;
+    ITfThreadMgrEventSink* sink = nullptr;
+    if (FAILED(thread_sink_->QueryInterface(IID_ITfThreadMgrEventSink,
+                                            reinterpret_cast<void**>(&sink))))
+      return false;
+    sink->OnSetFocus(focus, nullptr);
+    sink->Release();
+    return true;
+  }
 
  private:
   static constexpr DWORD kSinkCookie = 0x515;
@@ -1031,4 +1046,82 @@ TEST(TsfTipActivateUiLessTest, ClosedKeyboardLeavesCtrlShiftSpaceToTheApplicatio
   EXPECT_FALSE(service.proofread_capture_for_test());
   EXPECT_EQ(context.uses, 0);
   EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+namespace {
+
+// DestroyWindow on the prompt window gives the activation back to the
+// application, and msctf tells the thread-manager sink before DestroyWindow
+// returns (DEV-2084). A hook on the window's WM_DESTROY stands in for that, so
+// the window need not take the activation from the desktop.
+struct PromptDestroyFocus {
+  MockThreadMgrEx* thread_mgr{nullptr};
+  MockDocumentMgr application;
+  int destroyed{0};
+  int told{0};
+};
+PromptDestroyFocus* g_prompt_destroy_focus = nullptr;
+
+LRESULT CALLBACK TellFocusOnPromptDestroy(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HC_ACTION && g_prompt_destroy_focus) {
+    const auto* message = reinterpret_cast<const CWPSTRUCT*>(lparam);
+    wchar_t name[32]{};
+    if (message->message == WM_DESTROY && GetClassNameW(message->hwnd, name, 32) > 0 &&
+        std::wstring_view(name) == L"AzooKeyPromptDialog") {
+      auto& focus = *g_prompt_destroy_focus;
+      ++focus.destroyed;
+      if (focus.thread_mgr->NotifyFocus(&focus.application)) ++focus.told;
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+// Installs the hook for this thread and removes it however the test ends.
+class ScopedPromptDestroyFocus {
+ public:
+  explicit ScopedPromptDestroyFocus(PromptDestroyFocus& focus) {
+    g_prompt_destroy_focus = &focus;
+    hook_ =
+        SetWindowsHookExW(WH_CALLWNDPROC, &TellFocusOnPromptDestroy, nullptr, GetCurrentThreadId());
+  }
+  ~ScopedPromptDestroyFocus() {
+    if (hook_) UnhookWindowsHookEx(hook_);
+    g_prompt_destroy_focus = nullptr;
+  }
+  ScopedPromptDestroyFocus(const ScopedPromptDestroyFocus&) = delete;
+  ScopedPromptDestroyFocus& operator=(const ScopedPromptDestroyFocus&) = delete;
+  bool installed() const { return hook_ != nullptr; }
+
+ private:
+  HHOOK hook_{nullptr};
+};
+
+}  // namespace
+
+// DEV-2084: closing the prompt window while active tells the focus sink, as
+// msctf does; Deactivate closes it only after that sink is unadvised, so the
+// notification cannot run inside a half-deactivated service.
+TEST(TsfTipActivateUiLessTest, DeactivateClosesThePromptWindowAfterUnadvisingTheFocusSink) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  service.set_prompt_dialog_hidden_for_test(true);
+  PromptDestroyFocus focus;
+  focus.thread_mgr = &mock;
+  ScopedPromptDestroyFocus hook(focus);
+  ASSERT_TRUE(hook.installed());
+  // While active, closing the window reaches the sink (the Esc path).
+  service.open_prompt_notice_for_test(nullptr);
+  ASSERT_TRUE(service.prompt_dialog_for_test().IsOpen());
+  service.cancel_magic_conversion_for_test();
+  ASSERT_FALSE(service.prompt_dialog_for_test().IsOpen());
+  ASSERT_EQ(focus.destroyed, 1);
+  ASSERT_EQ(focus.told, 1);
+  // Deactivate closes the window too, but no longer tells the service.
+  service.open_prompt_notice_for_test(nullptr);
+  ASSERT_TRUE(service.prompt_dialog_for_test().IsOpen());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+  EXPECT_FALSE(service.prompt_dialog_for_test().IsOpen());
+  EXPECT_EQ(focus.destroyed, 2);
+  EXPECT_EQ(focus.told, 1);
 }

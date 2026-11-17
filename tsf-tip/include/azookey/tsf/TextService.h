@@ -770,6 +770,15 @@ class TextService final : public ITfTextInputProcessorEx,
     return transform_outcome_.has_value();
   }
   PromptDialog& prompt_dialog_for_test() { return prompt_dialog_; }
+  // Opens the notice window a secure field's double tap opens, over `owner`,
+  // without a context to read from.
+  void open_prompt_notice_for_test(HWND owner) {
+    MagicConversionSession session;
+    session.owner = owner;
+    session.model = PromptDialogModel::ForNotice(PromptNotice::Secure);
+    magic_session_ = std::move(session);
+    OpenPendingPromptDialog();
+  }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return reconversion_result_.has_value();

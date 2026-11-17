@@ -1631,8 +1631,6 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ++activation_epoch_;
-  // The prompt window and its request end with the activation (M16).
-  CancelMagicConversion();
   ResetTypoTracking();
   // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
   last_learned_commit_pairs_.clear();
@@ -1645,6 +1643,11 @@ STDMETHODIMP TextService::Deactivate() try {
   if (SUCCEEDED(result)) result = keyboard_result;
   const HRESULT sink_result = UnadviseTextServiceSinks();
   if (SUCCEEDED(result)) result = sink_result;
+  // The prompt window and its request end with the activation (M16). An active
+  // window gives the focus back as it is destroyed, and msctf tells the
+  // thread-manager sink before DestroyWindow returns, so it goes only after
+  // the sinks are unadvised (DEV-2084).
+  CancelMagicConversion();
   keyboard_open_ = true;
   ClearKeyboardOpenTracking();
 

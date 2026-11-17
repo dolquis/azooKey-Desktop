@@ -347,6 +347,7 @@ TEST(SettingsFieldsTest, FieldsSitInThePanesOfTheSpecTable) {
       {"emojiRewriter", Pane::Candidates},
       {"maxCandidates", Pane::Candidates},
       {"typoCorrectionMode", Pane::Dictionary},
+      {"typoCorrection.learnPersonalPatterns", Pane::Dictionary},
       {"autoWordRegistration.miningEnabled", Pane::Dictionary},
       {"powerProfile", Pane::AiConversion},
       {"inferenceThreads", Pane::AiConversion},

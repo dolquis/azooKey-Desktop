@@ -90,7 +90,8 @@ canonical_for: ["学習データ可視化とバックアップ"]
   一覧を検索し直す。失敗は応答の `error`（`busy` / `lock_failed` / `load_failed` / `save_failed` /
   `unavailable` / `invalid_request` / `not_authenticated`）ごとの文言で示す。利用者が明示的に行う編集なので、
   確定観測の secure・学習可否の判定は掛けない。設定の `dictionary.userDictionaryEnabled` が偽でも
-  追加と忘却はでき、変換に使うかどうかだけがその設定に従う。
+  追加と忘却はでき、変換に使うかどうかだけがその設定に従う。品詞の欄と、ほかの IME の辞書の取り込みは
+  `docs/user-dictionary-pos-spec.md` §8 が定める。
 - 「バックアップ」タブ: 対象ストアの選択、暗号化の切替、エクスポート、取り込み時の衝突解決
   （`merge` / `overwrite` / `keep_both`）の選択、インポートを持つ。暗号化をオフにしたときは警告を出し、
   書き出す前に確認する。インポートは確認ダイアログを経てから送る。
@@ -321,7 +322,8 @@ counts のキーは archive の item 名（§5.1）である。
   組の形は TIP の Ctrl+Shift+Backspace（`legacy-parity-spec.md` §7.2）が使い、`store` は `learning`（かなのチャネル）に限る。
   一致する項目が無いときは `ok = true`、`removed = false` を返す。
 - export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
-- Host は Handshake の capabilities に `learning_data_management` を載せる。
+- Host は Handshake の capabilities に `learning_data_management` を載せる。ユーザー辞書の品詞とテキスト形式の辞書の
+  取り込みの capability は `docs/user-dictionary-pos-spec.md` §7.4 が定める。
 - Host は一覧・忘却・エクスポート・インポート・全削除を `InferenceEngine` 上で行う。
   忘却・全削除は確定観測などの writer と専用の mutex で直列化し、ストアを短いロック区間で複写する。
   暗号化・保存・旧形式の書き戻し・再試行は状態と変換器のロックの外で行い、返る前に結果を反映する。
@@ -496,6 +498,8 @@ DPAPI ユーザースコープ（`CryptProtectData`）で各ファイルを暗�
 - export の manifest の `count` は item に実際に書いた行数（学習では忘却した組を除く）とする。
 - learning の migration は v2 の読み込み規則（`user-learning-enhancement-spec.md` §3.1）による。
   M7 形式の entry も v2 の行として取り込む。
+- 他 IME のテキスト形式の辞書の取り込み（`ImportUserDictionaryText`）も同じ 3 値を使う。不正な行の扱い、上限、
+  品詞の扱いは `docs/user-dictionary-pos-spec.md` §3.4・§6 が定める。
 
 ## 7. BackupArchive 実装
 
@@ -752,8 +756,9 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
 - `userdict import` の TSV は
   `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` の 5 列（後ろ 3 列は空可）を受け付ける。
   不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
-  置換する。`userdict export` は既存 JSON schema
-  `{ "version": 1, "entries": [...] }` で書き出す。
+  置換する。`userdict export` は `Save` と同じ JSON schema
+  `{ "version": 1, "entries": [...] }`（品詞を持つ語があれば version 2）で書き出す。6 列目の品詞 ID と
+  `--pos`・`--format`・`--conflict` は `docs/user-dictionary-pos-spec.md` §7.5 が定める。
 - 新語候補（M36-A）の承認には
   `azookey_inference_host.exe [--learning <path>] newwords <list|confirm|reject> ...` を使う。
   `confirm` / `reject` は `userdict add` と同じく既定で起動中 Host へ IPC 送信し、
@@ -840,7 +845,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
-| `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
+| `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`、`ImportUserDictionaryText`。`docs/user-dictionary-pos-spec.md` §6.8）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/host-availability-spec.md` §8.5.3）、TIP（入力インジケーターのメニューによる `liveConversion` / `predictionEnabled` の 2 キーだけ。`docs/tsf-deep-integration-spec.md` §4.5） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.v2.tsv.enc`（v2 移行前は `learning.tsv.enc` を読むだけ） | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、`docs/user-learning-enhancement-spec.md` §3.1.1）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `english_learning.v2.tsv.enc`（v2 移行前は `english_learning.tsv.enc` を読むだけ） | Host のみ（M60 の英単語確定。`docs/inline-english-candidate-spec.md` §5） | Host | Host 内で直列化し、確定のたびに `AcquireExclusiveFileLockForPath` + atomic replace。失敗時は終了時に再試行する |

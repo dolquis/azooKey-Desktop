@@ -3126,6 +3126,7 @@ TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {
   request.mode = "ai-cleanup";
   request.ai_allowed = true;
   request.reading = "にほん";
+  request.secure = false;
   const auto response = dispatcher.Dispatch(MakeReq(
       825, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(request)));
   ASSERT_TRUE(response);
@@ -3160,6 +3161,7 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   request.reading = "にほん";
   request.raw_romaji = "nihno";
   request.ai_allowed = request.external_ai_allowed = true;
+  request.secure = false;
   const auto query = [&](uint64_t id) {
     const auto response = handler.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
                                                    ipc::BuildQueryBatchConversionRequest(request)));
@@ -3231,7 +3233,192 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   ASSERT_TRUE(result);
   EXPECT_EQ(result->full_surface, "日本");
   EXPECT_EQ(result->segments.front().candidates.front().source, "privacy-fallback");
+  EXPECT_EQ(result->error_class, std::optional<std::string>("BlockedBySecure"));
   EXPECT_EQ(calls, before);
+  RemovePathNoThrow(path);
+}
+
+// DEV-2079 / DEV-2082: a secure request, an unreadable settings file
+// (privacy-and-secure-input-spec section 5.1) and SafeMode by the engine's
+// state (host-availability-spec section 8.5.3) each stop ai-cleanup before any
+// backend, whatever backend the request names. The reply is the one a secure
+// Host setting gets: neural, not learned.
+TEST_F(DispatcherTest, CleanupStopsBeforeAnyBackendWhenSecureOrInSafeMode) {
+  const auto path = temp_directory.File("azookey_cleanup_stop_settings.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(path, std::ios::trunc);
+    file << json;
+  };
+  constexpr const char* kOpenAi =
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  write_settings(kOpenAi);
+  azookey::host::SettingsStore settings(path);
+  settings.Load();
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{200,
+                                             R"({"choices":[{"message":{"content":"日本。"}}]})"};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+  ipc::QueryBatchConversionRequest request;
+  request.mode = "ai-cleanup";
+  request.reading = "にほん";
+  request.raw_romaji = "nihno";
+  request.ai_allowed = request.external_ai_allowed = true;
+  request.ai_backend = "openai";
+  request.secure = false;
+  const auto query = [&](uint64_t id, const ipc::QueryBatchConversionRequest& batch) {
+    const auto response = handler.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                                                   ipc::BuildQueryBatchConversionRequest(batch)));
+    return response ? ipc::ParseQueryBatchConversionResponse(response->payload_json) : std::nullopt;
+  };
+  const auto sent = query(836, request);
+  ASSERT_TRUE(sent);
+  ASSERT_FALSE(sent->segments.empty());
+  EXPECT_EQ(sent->segments.front().candidates.front().source, "llm");
+  ASSERT_EQ(calls, 1u);
+
+  const auto expect_stopped = [&](uint64_t id, const ipc::QueryBatchConversionRequest& batch,
+                                  const char* label) {
+    const auto stopped = query(id, batch);
+    ASSERT_TRUE(stopped) << label;
+    EXPECT_EQ(stopped->full_surface, "日本") << label;
+    ASSERT_FALSE(stopped->segments.empty()) << label;
+    EXPECT_EQ(stopped->segments.front().candidates.front().source, "privacy-fallback") << label;
+    EXPECT_EQ(stopped->error_class, std::optional<std::string>("BlockedBySecure")) << label;
+    EXPECT_EQ(calls, 1u) << label;
+  };
+  auto secure = request;
+  secure.secure = true;
+  expect_stopped(837, secure, "secure request");
+  // An unreadable file keeps the last good AI settings but resolves privacy to secure.
+  write_settings("{not json");
+  settings.Reload();
+  expect_stopped(838, request, "unreadable settings");
+  // The SafeMode overrides in the settings give the same reply.
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+                 R"("safeMode":{"enabled":true}})");
+  settings.Reload();
+  ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
+  expect_stopped(839, request, "safe mode overrides");
+  write_settings(kOpenAi);
+  settings.Reload();
+  // Settings without the SafeMode overrides, as after a save that raced the startup reload.
+  engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+  expect_stopped(840, request, "safe mode");
+  auto local = request;
+  local.ai_backend = "local-zenzai";
+  expect_stopped(841, local, "safe mode, local backend");
+  RemovePathNoThrow(path);
+}
+
+// DEV-2093: UpdateConfig reloads settings under the config lock, and a reload
+// of an unreadable file keeps the last good AI settings and marks only privacy
+// secure. A request that passed its privacy check before such a reload reads
+// privacy again with the AI settings under that lock, so it reaches no backend.
+// The test hook runs the reload at that point: after the check, before the lock.
+TEST_F(DispatcherTest, AiRequestsReadPrivacyAgainUnderTheConfigLock) {
+  const auto path = temp_directory.File("azookey_ai_config_lock_settings.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(path, std::ios::trunc);
+    file << json;
+  };
+  constexpr const char* kOpenAi =
+      R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  write_settings(kOpenAi);
+  azookey::host::SettingsStore settings(path);
+  settings.Load();
+  unsigned calls = 0;
+  bool reload_before_read = false;
+  auto config = DefaultDispatcherConfig();
+  ASSERT_TRUE(config.update_config_mutex);
+  const auto config_mutex = config.update_config_mutex;
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{
+            200, R"({"choices":[{"message":{"content":"{\"result\":\"[]\"}"}}]})"};
+      });
+  config.before_ai_settings_read_for_tests = [&] {
+    if (!reload_before_read) return;
+    reload_before_read = false;
+    // As UpdateConfig does, under the lock the request takes next.
+    write_settings("{not json");
+    std::lock_guard lock(*config_mutex);
+    settings.Reload();
+  };
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+
+  ipc::QueryBatchConversionRequest batch;
+  batch.mode = "ai-cleanup";
+  batch.reading = "にほん";
+  batch.raw_romaji = "nihno";
+  batch.ai_allowed = batch.external_ai_allowed = true;
+  batch.ai_backend = "openai";
+  batch.secure = false;
+  ipc::TransformSelectedTextRequest selection;
+  selection.mode = "free";
+  selection.prompt = "日本語に翻訳";
+  selection.selection = "Good morning.";
+  selection.secure = false;
+  selection.ai_allowed = selection.external_ai_allowed = true;
+  ipc::DetectAnomaliesRequest anomalies;
+  anomalies.text = "今日は晴れでした。";
+  anomalies.secure = false;
+  anomalies.learning_allowed = true;
+  const auto cleanup_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                   ipc::BuildQueryBatchConversionRequest(batch));
+  };
+  const auto transform_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::TransformSelectedText,
+                   ipc::BuildTransformSelectedTextRequest(selection));
+  };
+  const auto anomalies_request = [&](uint64_t id) {
+    return MakeReq(id, ipc::MessageType::DetectAnomalies,
+                   ipc::BuildDetectAnomaliesRequest(anomalies));
+  };
+
+  // Without the reload each request reaches the backend.
+  ASSERT_TRUE(handler.Dispatch(cleanup_request(845)));
+  ASSERT_TRUE(handler.Dispatch(transform_request(846)));
+  ASSERT_TRUE(handler.Dispatch(anomalies_request(847)));
+  ASSERT_EQ(calls, 3u);
+
+  const auto dispatch_across_reload = [&](const ipc::Envelope& request) {
+    write_settings(kOpenAi);
+    settings.Reload();
+    reload_before_read = true;
+    auto response = handler.Dispatch(request);
+    EXPECT_FALSE(reload_before_read) << "the hook did not run";
+    return response;
+  };
+
+  const auto cleanup = dispatch_across_reload(cleanup_request(842));
+  ASSERT_TRUE(cleanup);
+  const auto cleaned = ipc::ParseQueryBatchConversionResponse(cleanup->payload_json);
+  ASSERT_TRUE(cleaned);
+  ASSERT_FALSE(cleaned->segments.empty());
+  EXPECT_EQ(cleaned->segments.front().candidates.front().source, "privacy-fallback")
+      << "ai-cleanup";
+  EXPECT_EQ(cleaned->error_class, std::optional<std::string>("BlockedBySecure")) << "ai-cleanup";
+
+  const auto transformed = dispatch_across_reload(transform_request(843));
+  ASSERT_TRUE(transformed);
+  EXPECT_EQ(ipc::ParseTransformSelectedTextResponse(transformed->payload_json)->error_class,
+            std::optional<std::string>("BlockedBySecure"))
+      << "TransformSelectedText";
+
+  const auto detected = dispatch_across_reload(anomalies_request(844));
+  ASSERT_TRUE(detected);
+  EXPECT_EQ(ipc::ParseDetectAnomaliesResponse(detected->payload_json)->error,
+            std::optional<std::string>("blocked"))
+      << "DetectAnomalies";
+  EXPECT_EQ(calls, 3u);
   RemovePathNoThrow(path);
 }
 
@@ -6342,6 +6529,61 @@ TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) 
   scheduler.Cancel(768);
   EXPECT_FALSE(handler.Dispatch(
       MakeReq(768, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request))));
+  std::remove(settings_path.c_str());
+}
+
+// host-availability-spec section 8.5.3 (DEV-2082): SafeMode answers "blocked"
+// before any backend, both when its overrides reach the settings and when a
+// startup entry whose reload lost the flag leaves only the engine in SafeMode.
+TEST_F(DispatcherTest, DetectAnomaliesIsBlockedInSafeMode) {
+  const auto settings_path =
+      temp_directory.File("azookey_detect_anomalies_safe_mode_settings.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << json;
+  };
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder",)"
+                 R"("safeMode":{"enabled":true}})");
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  unsigned calls = 0;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string&, const auto*, auto) {
+        ++calls;
+        return azookey::host::AiHttpResponse{
+            200, R"({"choices":[{"message":{"content":"{\"result\":\"[]\"}"}}]})"};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+  ipc::DetectAnomaliesRequest request;
+  request.text = "今日は晴れでした。";
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto detect = [&](uint64_t id) {
+    const auto response = handler.Dispatch(
+        MakeReq(id, ipc::MessageType::DetectAnomalies, ipc::BuildDetectAnomaliesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseDetectAnomaliesResponse(response->payload_json) : std::nullopt;
+  };
+  ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
+  const auto overridden = detect(771);
+  ASSERT_TRUE(overridden.has_value());
+  EXPECT_EQ(overridden->error, std::optional<std::string>("blocked"));
+  EXPECT_EQ(calls, 0u);
+
+  write_settings(R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})");
+  settings.Reload();
+  const auto sent = detect(772);
+  ASSERT_TRUE(sent.has_value());
+  EXPECT_TRUE(sent->ok) << sent->error.value_or("");
+  ASSERT_EQ(calls, 1u);
+
+  engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+  const auto engine_only = detect(773);
+  ASSERT_TRUE(engine_only.has_value());
+  EXPECT_EQ(engine_only->error, std::optional<std::string>("blocked"));
+  EXPECT_EQ(calls, 1u);
   std::remove(settings_path.c_str());
 }
 

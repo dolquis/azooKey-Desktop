@@ -69,6 +69,10 @@ struct DispatcherConfig {
   std::chrono::milliseconds mixed_english_conversion_deadline{650};
   // Section 15.2: false keeps every in-sentence English segment low confidence.
   bool mixed_english_inline_high_confidence{true};
+  // Tests only: runs in the AI entries (ai-cleanup, TransformSelectedText,
+  // DetectAnomalies) after their privacy checks and before they take
+  // update_config_mutex, so a test can reload settings in between.
+  std::function<void()> before_ai_settings_read_for_tests;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code

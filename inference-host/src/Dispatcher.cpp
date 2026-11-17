@@ -1775,10 +1775,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   };
   const auto parsed = ipc::ParseDetectAnomaliesRequest(req.payload_json);
   if (!parsed) return fail(ipc::kLearningDataErrorInvalidRequest);
+  // SafeMode (host-availability-spec section 8.5.3) blocks as its overrides do
+  // through the privacy setting. The engine's state decides, as for
+  // TransformSelectedText: a startup entry whose reload lost the flag leaves
+  // settings without the overrides.
+  const bool safe_mode = SafeModeEnabled();
   auto privacy =
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
   const bool host_blocked =
-      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed);
+      safe_mode || (privacy && (privacy->policy.secure || !privacy->policy.learning_allowed));
   // Text from a secure or learning-disallowed context never leaves the Host.
   if (parsed->secure || !parsed->learning_allowed || host_blocked) {
     return fail(ipc::kAnomalyErrorBlocked);
@@ -1788,10 +1793,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
   AiBackendOptions options;
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
+  bool host_blocked_now = false;
+  if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
       const auto& settings = settings_store_->settings();
+      // Again with the AI settings, as for ai-cleanup: a reload of an
+      // unreadable file after the check above blocks only through privacy.
+      host_blocked_now =
+          settings.privacy_policy.secure || !settings.privacy_policy.learning_allowed;
       options.backend = settings.ai_backend;
       options.endpoint = settings.open_ai_api_endpoint;
       options.api_key = settings.open_ai_api_key;
@@ -1800,6 +1811,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelo
       ai_privacy = settings.ai_privacy;
     }
   }
+  if (host_blocked_now) return fail(ipc::kAnomalyErrorBlocked);
   AiTransformRequest transform;
   transform.task = AiTask::Anomalies;
   transform.text = parsed->text;
@@ -1882,10 +1894,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
   AiBackendOptions options;
   // Without settings there is no consent to send anything anywhere.
   core::AiPrivacy ai_privacy{false, false};
+  bool host_secure = false;
+  if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
   {
     std::lock_guard lock(*config_.update_config_mutex);
     if (settings_store_) {
       const auto& settings = settings_store_->settings();
+      // Again with the AI settings, as for ai-cleanup: a reload of an
+      // unreadable file after the check above marks only privacy secure.
+      host_secure = settings.privacy_mode_secure;
       options.backend = settings.ai_backend;
       options.endpoint = settings.open_ai_api_endpoint;
       options.api_key = settings.open_ai_api_key;
@@ -1895,6 +1912,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
       ai_privacy = settings.ai_privacy;
     }
   }
+  if (host_secure) return fail(AiErrorClass::BlockedBySecure);
   if (!parsed->ai_backend.empty()) options.backend = parsed->ai_backend;
   AiTransformRequest transform;
   transform.task = AiTask::Transform;
@@ -2018,12 +2036,27 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   ipc::QueryBatchConversionResponse res;
   bool suppress_learning = false;
   if (parsed->mode == "ai-cleanup") {
+    // Section 8.5.3 of host-availability-spec stops ai-cleanup in SafeMode by
+    // the engine's state, as for TransformSelectedText: a startup entry whose
+    // reload lost the flag leaves settings without the overrides, and the
+    // request's ai_backend would replace the forced "none". A secure request or
+    // Host setting (an unreadable file included, privacy-and-secure-input-spec
+    // section 5.1) stops it too. Neither reaches AiBackend; the reply is the one
+    // its guard gives a request without AI consent: neural, not learned.
+    bool ai_stopped = SafeModeEnabled() || parsed->secure ||
+                      (settings_store_ && settings_store_->LockPrivacyPolicy().privacy_mode_secure);
     AiBackendOptions options;
     core::AiPrivacy privacy{true, true};
+    if (config_.before_ai_settings_read_for_tests) config_.before_ai_settings_read_for_tests();
     {
       std::lock_guard lock(*config_.update_config_mutex);
       if (settings_store_) {
         const auto& settings = settings_store_->settings();
+        // Again with the AI settings, under the lock UpdateConfig reloads under
+        // (the only writer of settings at run time): a reload of an unreadable
+        // file between the two reads keeps the last good AI settings and marks
+        // only privacy secure.
+        ai_stopped = ai_stopped || settings.privacy_mode_secure;
         options.backend = settings.ai_backend;
         options.endpoint = settings.open_ai_api_endpoint;
         options.api_key = settings.open_ai_api_key;
@@ -2040,25 +2073,30 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     transform.text = parsed->reading;
     transform.raw_romaji = parsed->raw_romaji;
     transform.auto_punctuation = parsed->auto_punctuation;
-    transform.ai_allowed = privacy.ai && parsed->ai_allowed;
+    transform.ai_allowed = !ai_stopped && privacy.ai && parsed->ai_allowed;
     suppress_learning = !transform.ai_allowed;
-    transform.external_allowed = privacy.external && parsed->external_ai_allowed;
+    transform.external_allowed = !ai_stopped && privacy.external && parsed->external_ai_allowed;
     const auto phase_start = std::chrono::steady_clock::now();
     AiTransformResult result;
-    try {
-      result = config_.ai_backend->Transform(
-          transform, options, cancel.get(),
-          [this](const AiTransformRequest& local, const std::atomic<bool>* flag,
-                 AiDeadline deadline) { return engine_->TransformLocal(local, flag, deadline); });
-    } catch (...) {
-      core::EtwLogger::LogInferencePhase(
-          req.request_id, core::EtwPhase::AiTransform, core::EtwBackend::Ai,
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_start)
-              .count(),
-          cancel->load(std::memory_order_acquire) ? core::EtwResult::Cancelled
-                                                  : core::EtwResult::Failed,
-          trace.context()->client);
-      throw;
+    if (ai_stopped) {
+      result.error_class = AiErrorClass::BlockedBySecure;
+    } else {
+      try {
+        result = config_.ai_backend->Transform(
+            transform, options, cancel.get(),
+            [this](const AiTransformRequest& local, const std::atomic<bool>* flag,
+                   AiDeadline deadline) { return engine_->TransformLocal(local, flag, deadline); });
+      } catch (...) {
+        core::EtwLogger::LogInferencePhase(
+            req.request_id, core::EtwPhase::AiTransform, core::EtwBackend::Ai,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                      phase_start)
+                .count(),
+            cancel->load(std::memory_order_acquire) ? core::EtwResult::Cancelled
+                                                    : core::EtwResult::Failed,
+            trace.context()->client);
+        throw;
+      }
     }
     const auto phase_result =
         result.ok                                      ? core::EtwResult::Success

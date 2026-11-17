@@ -66,45 +66,46 @@ Microsoft IME と Google 日本語入力のテキスト形式の辞書を取り�
 
 ユーザー辞書の語は、次の表の品詞 ID を 1 つだけ持てる。品詞 ID は ASCII の文字列で、`user_dict.json` の
 `pos`（§3.1）に保存する。表示名は設定アプリの選択肢（§8）に使う。UniDic 系の品詞は、ラティスの品詞の表
-（`docs/lattice-conversion-spec.md` §8.2 の `META.lattice`）を引く品詞 1〜4 と活用型である。category は
-`docs/auto-word-registration-spec.md` §14.4 の値で、`dictionary_score` の `category_bonus` に使う。
+（`docs/lattice-conversion-spec.md` §8.2 の `META.lattice`）を引く品詞 1〜4 と活用型である。品詞はラティスの
+ID と文節のまとめにだけ使い、ユーザー辞書の候補の score とタグは変えない（候補の score は今までどおり
+`value` か既定の 1.5 である）。
 
-| 品詞 ID | 表示名 | 品詞 1〜4 | 活用型 | category |
-|---|---|---|---|---|
-| （持たない） | 名詞 | `名詞,普通名詞,一般,*` | — | `general` |
-| `noun_sahen` | サ変名詞 | `名詞,普通名詞,サ変可能,*` | — | `general` |
-| `noun_adjectival` | 形容動詞 | `形状詞,一般,*,*` | — | `general` |
-| `proper_noun` | 固有名詞 | `名詞,固有名詞,一般,*` | — | `general` |
-| `person_name` | 人名 | `名詞,固有名詞,人名,一般` | — | `person_name` |
-| `surname` | 姓 | `名詞,固有名詞,人名,姓` | — | `person_name` |
-| `given_name` | 名 | `名詞,固有名詞,人名,名` | — | `person_name` |
-| `place_name` | 地名 | `名詞,固有名詞,地名,一般` | — | `place_name` |
-| `organization` | 組織名 | `名詞,固有名詞,一般,*` | — | `company_org` |
-| `adverb` | 副詞 | `副詞,*,*,*` | — | `general` |
-| `adnominal` | 連体詞 | `連体詞,*,*,*` | — | `general` |
-| `conjunction` | 接続詞 | `接続詞,*,*,*` | — | `general` |
-| `interjection` | 感動詞 | `感動詞,一般,*,*` | — | `general` |
-| `prefix` | 接頭辞 | `接頭辞,*,*,*` | — | `general` |
-| `suffix` | 接尾辞 | `接尾辞,名詞的,一般,*` | — | `general` |
-| `counter` | 助数詞 | `接尾辞,名詞的,助数詞,*` | — | `general` |
-| `symbol` | 記号・顔文字 | `記号,一般,*,*` | — | `general` |
-| `verb_godan_ka` | 動詞（カ行五段） | `動詞,一般,*,*` | `五段-カ行` | `general` |
-| `verb_godan_ga` | 動詞（ガ行五段） | `動詞,一般,*,*` | `五段-ガ行` | `general` |
-| `verb_godan_sa` | 動詞（サ行五段） | `動詞,一般,*,*` | `五段-サ行` | `general` |
-| `verb_godan_ta` | 動詞（タ行五段） | `動詞,一般,*,*` | `五段-タ行` | `general` |
-| `verb_godan_na` | 動詞（ナ行五段） | `動詞,一般,*,*` | `五段-ナ行` | `general` |
-| `verb_godan_ba` | 動詞（バ行五段） | `動詞,一般,*,*` | `五段-バ行` | `general` |
-| `verb_godan_ma` | 動詞（マ行五段） | `動詞,一般,*,*` | `五段-マ行` | `general` |
-| `verb_godan_ra` | 動詞（ラ行五段） | `動詞,一般,*,*` | `五段-ラ行` | `general` |
-| `verb_godan_wa` | 動詞（ワ行五段） | `動詞,一般,*,*` | `五段-ワア行` | `general` |
-| `verb_ichidan` | 動詞（一段） | `動詞,一般,*,*` | `上一段-<行>` か `下一段-<行>`（§4.3） | `general` |
-| `verb_sahen` | 動詞（サ変・〜する） | `動詞,一般,*,*` | `サ行変格` | `general` |
-| `adjective` | 形容詞 | `形容詞,一般,*,*` | `形容詞` | `general` |
+| 品詞 ID | 表示名 | 品詞 1〜4 | 活用型 |
+|---|---|---|---|
+| （持たない） | 名詞 | `名詞,普通名詞,一般,*` | — |
+| `noun_sahen` | サ変名詞 | `名詞,普通名詞,サ変可能,*` | — |
+| `noun_adjectival` | 形容動詞 | `形状詞,一般,*,*` | — |
+| `proper_noun` | 固有名詞 | `名詞,固有名詞,一般,*` | — |
+| `person_name` | 人名 | `名詞,固有名詞,人名,一般` | — |
+| `surname` | 姓 | `名詞,固有名詞,人名,姓` | — |
+| `given_name` | 名 | `名詞,固有名詞,人名,名` | — |
+| `place_name` | 地名 | `名詞,固有名詞,地名,一般` | — |
+| `organization` | 組織名 | `名詞,固有名詞,一般,*` | — |
+| `adverb` | 副詞 | `副詞,*,*,*` | — |
+| `adnominal` | 連体詞 | `連体詞,*,*,*` | — |
+| `conjunction` | 接続詞 | `接続詞,*,*,*` | — |
+| `interjection` | 感動詞 | `感動詞,一般,*,*` | — |
+| `prefix` | 接頭辞 | `接頭辞,*,*,*` | — |
+| `suffix` | 接尾辞 | `接尾辞,名詞的,一般,*` | — |
+| `counter` | 助数詞 | `接尾辞,名詞的,助数詞,*` | — |
+| `symbol` | 記号・顔文字 | `記号,一般,*,*` | — |
+| `verb_godan_ka` | 動詞（カ行五段） | `動詞,一般,*,*` | `五段-カ行` |
+| `verb_godan_ga` | 動詞（ガ行五段） | `動詞,一般,*,*` | `五段-ガ行` |
+| `verb_godan_sa` | 動詞（サ行五段） | `動詞,一般,*,*` | `五段-サ行` |
+| `verb_godan_ta` | 動詞（タ行五段） | `動詞,一般,*,*` | `五段-タ行` |
+| `verb_godan_na` | 動詞（ナ行五段） | `動詞,一般,*,*` | `五段-ナ行` |
+| `verb_godan_ba` | 動詞（バ行五段） | `動詞,一般,*,*` | `五段-バ行` |
+| `verb_godan_ma` | 動詞（マ行五段） | `動詞,一般,*,*` | `五段-マ行` |
+| `verb_godan_ra` | 動詞（ラ行五段） | `動詞,一般,*,*` | `五段-ラ行` |
+| `verb_godan_wa` | 動詞（ワ行五段） | `動詞,一般,*,*` | `五段-ワア行` |
+| `verb_ichidan` | 動詞（一段） | `動詞,一般,*,*` | `上一段-<行>` か `下一段-<行>`（§4.3） |
+| `verb_sahen` | 動詞（サ変・〜する） | `動詞,一般,*,*` | `サ行変格` |
+| `adjective` | 形容詞 | `形容詞,一般,*,*` | `形容詞` |
 
 - 名詞は品詞 ID を持たない形で表す。品詞を持たない語（§2.2）と同じ扱いになるので、名詞だけの辞書は
   version 1 のまま書ける（§3.3）。
 - サ変名詞と形容動詞は活用しない。「する」「だ」「な」は付属語としてラティスの側（lattice_core）がつなぐ。
-- UniDic 系の品詞は組織名を分けないので、`organization` は固有名詞の組と category `company_org` で表す。
+- UniDic 系の品詞は組織名を分けないので、`organization` は固有名詞と同じ組で引く。
 - 表に無い品詞 ID を足すときは、本表とラティスの品詞の表への写像と、§6.5 の対応表を同時に改める。
 
 ### 2.2 品詞を持たない語
@@ -148,9 +149,14 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 ### 3.2 読み込み
 
 - `version` が無い辞書と、`version` が 1 か 2 の辞書を読む。
-- `version` が 3 以上の整数の辞書も読み、候補には使う。ただし保存を止める。Host の編集と取り込みは
-  `unsupported_version` で失敗し、`userdict` CLI の writer 操作は終了コード 1 で終わる。新しい版が書いた内容を、
-  知らない形のまま書き戻して壊さないためである。ファイルの隔離（`.corrupt.<stamp>`）はしない。
+- `version` が 3 以上の整数の辞書も読み、候補と一覧には使う。ただし、その辞書を書き換える操作と書き出す操作を
+  すべて止め、ファイルを変えない。新しい版が書いた内容を、知らない形のまま書き戻したり、違う版の番号で書き出したり
+  しないためである。ファイルの隔離（`.corrupt.<stamp>`）はしない。止める操作と返す値は次のとおりとする。
+  - `AddUserWord`、`RemoveUserWord`、`ImportUserDictionaryText`（§7.2）: `error = dictionary_too_new`
+  - `ForgetLearningEntry`・`ResetLearningStore`・`ExportLearningData`・`ImportLearningData` の `user_dict`:
+    `error = store_unavailable`（`docs/learning-data-management-spec.md` §6 の「保存を止めているストア」と同じ扱い）。
+    backup の archive の `user_dict` の item 自体が version 3 以上のときも、import 全体を `store_unavailable` で失敗させる
+  - `userdict` CLI の writer 操作（`--offline` の add / remove、`import`）と `export`: 終了コード 1
 - `version` が整数でない辞書は、version 1 と同じに読む。
 - entry と root の、本書と version 1 が定めない名前のメンバー（未知のメンバー）は、値を保ったまま読み込み、
   保存のときに同じ位置（entry のメンバーはその entry、root のメンバーは root）へ書き戻す。メンバーの順は保たなくてよい。
@@ -162,7 +168,7 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 
 - 品詞 ID を持つ語（表に無い文字列を保っている語を含む）が 1 つでもあれば `version: 2` を書き、無ければ
   `version: 1` を書く。品詞を使わない利用者の辞書は、品詞に対応する前の版と同じ形のまま残る。
-- 読み込んだ `version` が 3 以上なら保存しない（§3.2）。
+- 読み込んだ `version` が 3 以上なら、保存も書き出しもしない（§3.2）。
 - `Save` の書き方（DPAPI と atomic replace）と `.enc` への移行、平文の `.bak` は変えない
   （`docs/learning-data-management-spec.md` §13）。
 
@@ -182,7 +188,7 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 5 つのメンバーだけを書く。したがって次のとおりになる。
 
 - 品詞に対応する前の版は version 2 の辞書を読める。品詞を持つ語は名詞として候補に出る。
-- 品詞に対応する前の版の Host（`AddUserWord`、`RemoveUserWord`、学習データの import、全削除）と `userdict` CLI
+- 品詞に対応する前の版の Host（`AddUserWord`、`RemoveUserWord`、`ForgetLearningEntry`、学習データの import、全削除）と `userdict` CLI
   （`--offline` の add / remove、`import`）が辞書を保存すると、すべての語の `pos` と未知のメンバーが消え、
   `version: 1` に戻る。語そのものは消えない。
 - 品詞に対応する前の版は直せないので、この消失は防げない。本書はこれを既知の制約とし、版を戻した利用者には
@@ -239,8 +245,8 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 - い段のかななら `上一段`、え段のかななら `下一段` とする。
 - 行は、そのかなの行とする。「い」「え」は `ア行`、濁音は `ガ行`・`ザ行`・`ダ行`・`バ行` とする。
 - 例: 「たべる」（べ）は `下一段-バ行`、「みる」（み）は `上一段-マ行`、「かんがえる」（え）は `下一段-ア行`。
-- 直前のかなが、カ・ガ・サ・ザ・タ・ダ・ナ・ハ・バ・マ・ラ・ア の各行のい段・え段でないとき（「ぺ」「ゃ」など）は、
-  展開形を作らない。
+- 直前のかなが、カ・ガ・サ・ザ・タ・ダ・ナ・ハ・バ・マ・ラ・ア の各行のい段・え段でないとき（「ぺ」「ゃ」、う段の
+  「ぐ」など）は、活用型が決まらないので `verb_ichidan` を付けられない（§4.4）。
 
 ### 4.4 登録できる語
 
@@ -248,7 +254,7 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 取り込みが `pos_mismatch` で除く（§6.4）。
 
 - 読みが終止形の語尾（§4.2 の表の 1 行目）で終わり、語幹が 1 文字以上ある。五段は、読みの末尾のかなが品詞 ID の
-  行のう段である（`verb_godan_ra` なら「る」）。
+  行のう段である（`verb_godan_ra` なら「る」）。一段は、「る」の直前のかなで §4.3 の活用型が決まる。
 - 語の末尾が、読みと同じ終止形の語尾（ひらがな）で終わる。「ググる／ぐぐる」は付けられ、「Google／ぐぐる」と
   「ググル／ぐぐる」は付けられない。
 
@@ -291,13 +297,16 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 段階 1 の条件に当たらない要求（Zenzai が正常に候補を返した要求）では、次をすべて満たすときに限り、ラティスを作って
 ユーザー辞書の展開形を含む経路を 1 件足す。この経路を活用語の経路と呼ぶ。
 
-- live 変換ではない（`ConversionContext::live` が偽）。live 変換は 1 位しか示さず、活用語の経路は 1 位に来ないためである。
+- `live` が偽の要求である（`ConversionContext::live`）。ライブ変換は 1 位しか示さず、活用語の経路は 1 位に来ないためである。
+  再変換も `live = true` で送られ、Host はライブ変換と区別できない（`docs/host-availability-spec.md` §8.5.2）ので、
+  再変換の候補にも本節の経路は足されない。ラティスが `live` の要求で 1 件だけを出す（`docs/lattice-conversion-spec.md` §3.5）のと同じ扱いである。
 - `dictionary.userDictionaryEnabled` が真で、lattice_core が使える。
 - 読みの長さが 64 code point 以下である。
 - 正規化した読みのどこかの位置から、展開形の索引（§4.6）が前方一致で 1 件以上当たる。
 
-ラティスは段階 1 と同じに作る（同 §4）。探索は、前向き Viterbi の状態（同 §6.1）に「経路が展開形のノードを含むか」の
-1 bit を足し、EOS でその bit が立つ状態のうち最小コストの経路を 1 件取る。同点は同 §6.3 で決める。
+ラティスは段階 1 と同じに作る（同 §4）。探索は、前向き Viterbi の状態（同 §6.1）に「経路が活用する品詞のユーザー辞書の
+語のノード（登録した形か展開形）を含むか」の 1 bit を足し、EOS でその bit が立つ状態のうち最小コストの経路を 1 件取る。
+同点は同 §6.3 で決める。
 
 作る時機と期限は、同 §3.2 のモデル経路から落ちた要求と同じとする。変換の後に `state_mutex_` を取り直して作り、
 作り始めた時刻から最大 15 ms を deadline とし、要求の `cancel` と、要求自身の期限の残りを引き継ぐ。前向きの計算が
@@ -351,8 +360,10 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
   ヘッダと BOM を持たず、Mozc の内部の文字列（UTF-8）をそのまま書く。Google 日本語入力の製品が同じ形で書くことと、
   Windows 版の改行が CRLF か LF かは、実ファイルで未確認である。
 - `msime` の構造は、Mozc の importer が Microsoft IME の書き出しとして受け付ける形で確かめた。Microsoft は書き出しの
-  形式を公開していない（Microsoft Learn にあるのは `msime.h` の API だけである）。現行の Microsoft IME が書く
-  文字コード、ヘッダ行の並び、品詞名の一覧は、実ファイルで未確認である。
+  形式を公開していない（Microsoft Learn にあるのは `msime.h` の API だけである）。Microsoft IME が書く
+  文字コード、ヘッダ行の並び、品詞名の一覧は、実ファイルで未確認である。Mozc の importer は、利用者が選べる品詞の
+  名前のほかに `msime.h` の内部の品詞の名前（地名、社名、組織、数、記号、英字など）も受け付ける。それらが実ファイルに
+  現れるかも未確認で、§6.5 の表に無いので `unsupported_pos` として除く。
 - 実ファイルでの確認は Human Gate とする（§9）。
 
 ### 6.2 文字コード
@@ -369,22 +380,24 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 
 要求の `format` が `auto` のときは、解いた内容から次の順で決める。
 
-1. 最初の空でない行が `!Microsoft IME` で始まれば（大文字と小文字を区別しない）`msime`。
+1. 最初の空でない行が `!Microsoft IME` で始まれば（大文字と小文字を区別しない）`msime`。`# Gboard Dictionary version:`、
+   `!!DICUT`、`!!ATOK_TANGO_TEXT_HEADER` で始まれば（大文字と小文字を区別しない）、`unknown_format` で失敗する。
 2. `#` で始まらない最初の空でない行を TAB で分け、3 列以上あって 3 列目（§6.4 の品詞の正規化の後）が §6.5 の
    Google 日本語入力の品詞名にあれば `google`。
 3. 同じ行が `azookey_tsv` の 1 行として読めれば `azookey_tsv`。
 4. どれでもなければ `unknown_format` で失敗する。
 
 `format` を明示したときは判定しない。ただし `msime` を明示して 1 行目が `!Microsoft IME` で始まらなければ
-`unknown_format` で失敗する。Gboard（`# Gboard Dictionary version:1`）、ATOK（`!!DICUT`、`!!ATOK_TANGO_TEXT_HEADER`）、
-ことえり（引用符で囲む CSV）は判定の対象にせず、`auto` では `unknown_format` になる。
+`unknown_format` で失敗する。どの `format` でも、手順 1 の Gboard と ATOK のヘッダで始まるファイルは `unknown_format` で
+失敗する。ことえり（引用符で囲む CSV）は TAB を含まないので、`auto` では手順 4 の `unknown_format` になる。
 
 ### 6.4 行の解釈と正規化
 
 - 改行は CRLF、LF、CR のどれでもよい。空の行と、形式ごとの注釈の行は読み飛ばし、件数に数えない。
 - `msime` と `google` は TAB で分け、3 列未満の行を `malformed` として除く。5 列目以降は無視する。
 - `azookey_tsv` は `userdict import` の規則（`docs/learning-data-management-spec.md` §13）に 6 列目の品詞 ID を
-  足して読み、読めない行を `malformed` として除く。6 列目が空なら名詞とする。
+  足して読み、読めない行を `malformed` として除く。6 列目が空なら名詞とする。6 列目が §2.1 の表に無い値なら
+  `unsupported_pos` として除く（外部のファイルの未知の値は、§3.2 と違って保たない）。
 - 読みと語は、前後の空白（U+3000 を含む）を除き、読みのカタカナをひらがなに直す。設定アプリの追加
   （`docs/learning-data-management-spec.md` §3）と同じ正規化である。
 - 品詞名は、前後の空白を除き、全角英数を半角に、半角カタカナを全角に直してから §6.5 の表で引く。
@@ -473,22 +486,30 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 
 1. `source_path` を検査する。絶対パスで `..` を含まないこと、ファイル名に `:` を含まないこと、UNC・デバイス名前空間・
    予約デバイス名でないこと、シンボリックリンクでない通常のファイルであることを求める（規則は
-   `docs/learning-data-management-spec.md` §5 の `source_path` と同じ。拡張子は問わない）。
+   `docs/learning-data-management-spec.md` §5 の `source_path` と同じ。拡張子は問わない）。違反は `invalid_path`、
+   ファイルが無ければ `source_missing`（backup の import と同じ名前）とする。
 2. どのロックも取らずに、ファイルを読み、文字コードと形式を決め、全行を解析・正規化・検証する。ここで失敗したら、
    何も変えずに失敗を返す。元のファイルは変えず、隔離もしない。読み込んだ平文のバッファは、解析の後に
    `learning::SecureErase` で消す。
-3. `dry_run` なら、状態のロックの中で公開中の辞書と比べて件数を数え、何も変えずに返す。下見の件数は確定のときの
-   件数と違いうる（その間に他の編集が入りうる）。
+3. `dry_run` なら、状態のロックの中で公開中の辞書のキーの集合だけを複写し、ロックの外で比べて件数を数え、何も変えずに
+   返す。変換の問い合わせを止める区間を短くするためである。下見の件数は確定のときの件数と違いうる（その間に他の編集が
+   入りうる）。
 4. `AddUserWord` と同じ順（ユーザー辞書の writer の mutex、ユーザー辞書のファイルロック、状態のロック）でロックを取る。
-   待ちの予算は `AddUserWord` と同じ 5 秒で、使い切ったら `busy` で失敗する（`docs/learning-data-management-spec.md` §4.5・§13）。
+   待ちの予算は `AddUserWord` と同じ 5 秒とし、手順 2 を終えた時刻から数える（要求の受信からではない。大きなファイルの
+   解析で予算を使い切らないためである）。予算は、他の編集の終わりを待つ時間、ファイルロックを待つ時間、読み直しと merge
+   の時間を合わせて数え、保存を始める前に過ぎていたら `busy` で失敗する。保存を始めた後は打ち切らない
+   （`docs/learning-data-management-spec.md` §4.5・§13 の `AddUserWord` と同じ）。
 5. ディスクの辞書を読み直した複写（`ReloadIfChanged`）へ merge する。読み直しに失敗したら `load_failed`、読み込みの
-   失敗で保存を止めている辞書なら `store_unavailable`、version 3 以上なら `unsupported_version` で、何も変えずに失敗する。
+   失敗で保存を止めている辞書なら `store_unavailable`、version 3 以上なら `dictionary_too_new`（§3.2）で、何も変えずに失敗する。
 6. 語数の上限（§6.7）を検査してから、`Save`（DPAPI と atomic replace）で保存する。保存に失敗したら `save_failed` を返し、
    公開中の辞書を変えない。atomic replace なので、ディスクの辞書は変更前か変更後のどちらかである。
 7. 保存に成功したときだけ複写を公開し、展開形の索引（§4.6）を作り直す。
 
-- secure mode と学習を許さない状態では、`docs/learning-data-management-spec.md` §8 と同じ条件で拒否し、
-  `ImportLearningData` と同じ `error` を返す。
+- secure mode の拒否（`docs/learning-data-management-spec.md` §8）は、Host 全体の状態で判定する。設定アプリの要求は
+  入力欄の secure と学習可否を持たないためである。Host の privacy の方針（`SettingsStore::LockPrivacyPolicy`）が
+  secure か学習を許さないとき、または SafeMode のとき、手順 1 の前に `error = blocked` で失敗する。`AddUserWord` は
+  利用者が 1 語ずつ明示する編集なのでこの判定を掛けない（同 §3）が、外部のファイルからの一括の取り込みは、backup の
+  import と同じく §8 の対象とする。
 - Host は 1 回の取り込みを RuntimeLogger の `persistent_edit`（`docs/learning-data-management-spec.md` §13）に、
   `op` を `user_dict_import` として記録する。項目は同 §13 の項目と、件数（`added`、`replaced`、`kept`、
   `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。
@@ -501,8 +522,9 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 - Host は `pos` が表に無い値か、§4.4 を満たさない語に付いているとき、`ok = false`、`error = invalid_pos` を返し、保存しない。
 - 品詞に対応する前の Host は `pos` を黙って捨てる（`ipc/src/Payloads.cpp` の `ParseAddUserWordRequest` は
   知らないメンバーを無視する）。設定アプリは capability `user_dict_pos`（§7.4）を告知した Host にだけ `pos` を送る。
-- ユーザー辞書の `error` に `invalid_pos` と `unsupported_version`（§3.2）を足す。`userdict add` の表示は、
-  `invalid_pos` は品詞と語が合わないこと、`unsupported_version` は新しい版の辞書なので保存しないことを示す
+- ユーザー辞書の `error` に `invalid_pos` と `dictionary_too_new`（§3.2）を足す。backup の `BackupErrorCode` の
+  `unsupported_version`（archive の manifest の版）と意味を分けるため、別の名前にする。`userdict add` の表示は、
+  `invalid_pos` は品詞と語が合わないこと、`dictionary_too_new` は新しい版が書いた辞書なので変えないことを示す
   （表示の規則は `docs/learning-data-management-spec.md` §13）。
 
 ### 7.2 `ImportUserDictionaryText`
@@ -530,10 +552,10 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 - `encoding`: `utf-8` / `utf-16le` / `utf-16be` / `cp932`。
 - `kept` は衝突して既存を残した語、`replaced` は衝突して置き換えた語の数である。
 - 失敗のときは `ok = false` と `error` を返す。`error` は次のどれかである: `invalid_request`、`not_authenticated`、
-  `invalid_path`、`not_found`、`too_large`、`unsupported_encoding`、`bad_encoding`、`unknown_format`、`no_entries`、
-  `too_many_words`、`busy`、`lock_failed`、`load_failed`、`store_unavailable`、`unsupported_version`、`save_failed`、
-  `unavailable`（Host がユーザー辞書を持たない）、および §6.8 の secure mode の拒否の `error`。失敗のときも、
-  解析を終えていれば `format`、`encoding`、`counts` を返してよい。
+  `blocked`、`invalid_path`、`source_missing`、`too_large`、`unsupported_encoding`、`bad_encoding`、`unknown_format`、
+  `no_entries`、`too_many_words`、`busy`、`lock_failed`、`load_failed`、`store_unavailable`、`dictionary_too_new`、
+  `save_failed`、`unavailable`（Host がユーザー辞書を持たない）。失敗のときも、解析を終えていれば `format`、`encoding`、
+  `counts` を返してよい。
 
 ### 7.3 一覧
 
@@ -552,11 +574,19 @@ Host は両方を Handshake の capabilities に載せる。設定アプリは�
 
 `userdict` CLI は直接の writer のままとする（`docs/learning-data-management-spec.md` §13・§14）。
 
-- `userdict add` に `--pos <品詞 ID>` を足す。IPC 送信でも `--offline` でも、§7.1 と同じに検査する。
-- `userdict import <path>` に `--format <auto|msime|google|azookey_tsv>` と `--conflict <overwrite|merge|keep_both>` を足す。
-  既定は `--format azookey_tsv` と `--conflict overwrite` で、品詞に対応する前と同じ挙動（既存の語も後勝ちで置き換え、
-  不正な行は skip として数える）になる。`azookey_tsv` は 6 列目に品詞 ID を受け付ける。`msime` と `google` の解析、
-  文字コード、上限は §6.2〜§6.7 に従う。JSON の報告は既存の `imported` と `skipped` に、§7.2 の `counts` を足す。
+- `userdict add` に `--pos <品詞 ID>` を足す。IPC 送信でも `--offline` でも、§7.1 と同じに検査する。IPC 送信では、
+  Handshake の応答が capability `user_dict_pos` を告知しないとき、送らずに終了コード 1 で終わる（品詞に対応する前の
+  Host は `pos` を黙って捨てて `ok` を返すためである）。
+- `userdict import <path>` に `--input-format <auto|msime|google|azookey_tsv>` と `--conflict <overwrite|merge|keep_both>` を
+  足す。既存の `--format <json|tsv>` は出力の形の引数なので、入力の形には別の名前を使う。
+- 既定は `--input-format azookey_tsv` と `--conflict overwrite` で、5 列以下の行の扱いは品詞に対応する前と同じ
+  （`docs/learning-data-management-spec.md` §13 の規則のまま。BOM の除去、読みの正規化、§6.7 の上限は掛けない。
+  既存の語も後勝ちで置き換え、不正な行は skip として数える）。設定アプリと IPC の既定の `merge` と違うのは、既存の
+  スクリプトの結果を変えないためである。
+- 6 列目の品詞 ID は、どの経路でも §2.1 と §4.4 で検査する。表に無い値の行は `unsupported_pos`、§4.4 を満たさない行は
+  `pos_mismatch` として skip に数える。品詞に対応する前の CLI は 6 列の行を skip していたので、変わるのは 6 列の行だけである。
+- `--input-format` が `msime`・`google`・`auto` のときは、解析、文字コード、正規化、上限を §6.2〜§6.7 に従う。
+  JSON の報告は既存の `imported` と `skipped` に、§7.2 の `counts` を足す。
 - `userdict list` の JSON 行と `lookup` の JSON 行（`user_dict` の一致）に `pos` を足す。`lookup` の TSV の列は変えない。
 - `userdict export` は §3.3 の形で書く。
 
@@ -577,22 +607,23 @@ Host が §7.4 の capability を告知したときだけ出す。macOS 版の�
   5. 確認ダイアログを経て取り込み、結果の件数を示し、一覧を読み直す。
 - 取り込みの応答は 30 秒まで待つ。待ちきれなかったときは、取り込みが後から終わりうることと、一覧で確かめることを示す。
 - 失敗は §7.2 の `error` ごとの文言で示す。`busy` は再試行を促し、`unsupported_encoding`・`bad_encoding`・
-  `unknown_format` は対応する形式と文字コードを示す。
+  `unknown_format` は対応する形式と文字コードを示し、`dictionary_too_new` は新しい版の azooKey が書いた辞書なので
+  変えないことを示し、`blocked` はプライバシーの設定か SafeMode のために取り込めないことを示す。
 
 ## 9. テスト計画
 
 | 対象 | 試験 |
 |---|---|
-| `UserDictionary` | 品詞を持たない辞書の読み書きで version 1 のまま変わらない。品詞を足すと version 2 で書き、読み戻せる。未知のメンバー（entry と root）が往復で残る。表に無い品詞 ID が残る。version 3 以上で `Save` が失敗し、ファイルが変わらない |
+| `UserDictionary` | 品詞を持たない辞書の読み書きで version 1 のまま変わらない。品詞を足すと version 2 で書き、読み戻せる。未知のメンバー（entry と root）が往復で残る。表に無い品詞 ID が残る。version 3 以上の辞書で、§3.2 の各操作（Host の編集・忘却・全削除・export・import、CLI の writer と export）が決めた値で失敗し、ファイルが変わらない |
 | 展開 | §4.2 の各型の代表の語で展開形の読み・表層・活用形が表どおりになる。一段の行（§4.3）。§4.4 を満たさない語で展開しない。索引の上限（§4.6） |
 | 見える範囲 | 展開形が `DictionaryStore` の完全一致・前方一致・予測、`ContainsKnownWord`、`ListLearningEntries` に出ない |
 | ラティス | fixture の語彙と行列で、登録した動詞の展開形と助動詞がつながる経路が出る（「ぐぐった」→「ググった」）。§5.2 の 1 bit の状態で、展開形を含む最小コストの経路が全列挙の最小と一致する |
 | エンジン | §5.2 の各条件で活用語の経路が足され、それ以外（live、索引が当たらない、lattice_core が無い、cancel、deadline）では足されない。§5.3 の score・source・debug_info |
 | 取り込み | 自作の fixture（`msime` を UTF-16LE の BOM 付き、`google` を BOM なし UTF-8、`azookey_tsv`、CP932 の `msime`）で、§6.5 の対応表どおりに入る。§6.4 の除外の理由ごとの件数。§6.7 の各上限。`merge` と `overwrite`。CP932 は Windows だけで試す |
-| データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書と公開中の辞書が変わらない。`dry_run` が何も変えない。ログに語・読み・パスが出ない |
-| IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定が品詞に対応する前と同じ結果になる |
+| データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書と公開中の辞書が変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
+| IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定で 5 列以下の行の結果が品詞に対応する前と同じになり、6 列目が §2.1・§4.4 で検査される。`--pos` を capability `user_dict_pos` の無い Host へ送らない |
 | dictbuild | §4.2 の語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の代表の語の活用形と語尾表が一致する |
-| Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（形式と文字コードを §6.1 の未確認の点と照らす）。実機で、活用した登録語が候補に出る |
+| Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（形式、文字コード、改行、品詞名を §6.1 の未確認の点と照らし、`msime.h` の内部の品詞名が現れるかを記録する）。実機で、活用した登録語が候補に出る |
 
 試験の一覧の正典は `docs/test-inventory.md` である。利用者の実際の辞書は fixture にしない。
 

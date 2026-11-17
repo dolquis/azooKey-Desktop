@@ -323,7 +323,8 @@ counts のキーは archive の item 名（§5.1）である。
   一致する項目が無いときは `ok = true`、`removed = false` を返す。
 - export の応答は `manifest` の代わりに `encrypted` と `items`（`name`、`file`、`count`、`sha256`）を返す。
 - Host は Handshake の capabilities に `learning_data_management` を載せる。ユーザー辞書の品詞とテキスト形式の辞書の
-  取り込みの capability は `docs/user-dictionary-pos-spec.md` §7.4 が定める。
+  取り込みの capability は `docs/user-dictionary-pos-spec.md` §7.4 が定める。ユーザー辞書が version 3 以上のとき、
+  `user_dict` の忘却・全削除・export・import は `store_unavailable` で失敗する（同 §3.2）。
 - Host は一覧・忘却・エクスポート・インポート・全削除を `InferenceEngine` 上で行う。
   忘却・全削除は確定観測などの writer と専用の mutex で直列化し、ストアを短いロック区間で複写する。
   暗号化・保存・旧形式の書き戻し・再試行は状態と変換器のロックの外で行い、返る前に結果を反映する。
@@ -791,7 +792,7 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
   読み直しと保存（DPAPI と flush・置換）に合わせて 2 秒より長くかかったときだけである。新語の確定・却下には待ちの予算が無い。保存の中では暗号化ファイル自体のロックも最大 5 秒待つ。待たされるのは外側のロックを取らない古いプロセスと競合したときだけだが、この待ちは CLI の 7 秒の計算に入っていない。
   CLI の時間切れの表示は、変更が後から成功しうることと、`userdict list`（`newwords list`）で確かめることを示す。
 - Host は、ユーザー辞書の追加・削除と新語の確定・却下を 1 件ずつ RuntimeLogger のイベント `persistent_edit` に記録する。
-  項目は `trace_id`、`request_id`、`op`（`user_dict_add` / `user_dict_remove` / `new_word_resolve`）、`result`、
+  項目は `trace_id`、`request_id`、`op`（`user_dict_add` / `user_dict_remove` / `new_word_resolve`。テキスト形式の辞書の取り込みの `user_dict_import` は `docs/user-dictionary-pos-spec.md` §6.8）、`result`、
   同じ Host の編集を待った時間 `writer_wait_ms`、ファイルロックを待った時間 `lock_wait_ms`、`load_ms`、`load_skipped`、
   `save_ms` と、受信からの経過時間 `total_ms` である。受信時刻はレコードの時刻から `total_ms` を引いて求める。
   単語と読みは記録しない。新語の確定・却下はファイルロックを取らないので、待ちと保存を合わせて `save_ms` に入れる。

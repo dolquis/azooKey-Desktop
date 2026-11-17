@@ -2627,13 +2627,15 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **受け入れ条件**:
   - M71-A:
     - 品詞を持つ語の無い `user_dict.json` は、読み書きしても version 1 のまま変わらない。品詞を持つ語を足すと
-      version 2 で書き、読み戻せる。未知のメンバーは往復で残る。version 3 以上の辞書は読めるが、編集と取り込みは
-      `unsupported_version` で失敗し、ファイルを変えない（spec §3）
+      version 2 で書き、読み戻せる。未知のメンバーは往復で残る。version 3 以上の辞書は読めるが、それを書き換える操作と
+      書き出す操作はすべて失敗し、ファイルを変えない（spec §3.2）
     - 自作の fixture（Microsoft IME 形式の UTF-16LE と CP932、Google 日本語入力形式の UTF-8、azooKey TSV）を取り込むと、
       spec §6.5 の対応表どおりの品詞で入る。未対応の品詞と不正な行は、理由ごとの件数で除かれる
     - 文字コードの判定失敗、上限超過、ロックの時間切れ、保存の失敗のどれでも、ディスクの辞書と Host が公開中の辞書が
       変わらない。`dry_run` は何も変えない（spec §6.8）
-    - `merge` で既存の語が残り、`overwrite` で置き換わる。`userdict import` の既定の挙動は品詞に対応する前と同じである
+    - `merge` で既存の語が残り、`overwrite` で置き換わる。`userdict import` の既定で、5 列以下の行の扱いは品詞に対応する前と
+      同じである（spec §7.5）
+    - Host の privacy の方針が secure か学習を許さないとき、または SafeMode のとき、取り込みは `blocked` で失敗する（spec §6.8）
     - 設定アプリは、capability `user_dict_pos`・`user_dict_text_import` を告知した Host にだけ、品詞の欄と取り込みの
       導線を出す（spec §7.4・§8）
     - Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（Human Gate）
@@ -2642,8 +2644,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
       完全一致・前方一致・予測・新語判定・一覧に出ない（spec §4.6）
     - モデル無効構成で、「ググる」（ラ行五段）を登録すると、「ぐぐった」の候補に「ググった」が出る
     - Zenzai が正常に返した要求で、読みが展開形の索引に当たるとき、ユーザー辞書の展開形を含む経路の候補が、
-      モデルの 1 位の直下の score で 1 件足される。当たらない要求、live 変換、lattice_core が無いとき、cancel と
-      deadline では足されない（spec §5）
+      モデルの 1 位の直下の score で 1 件足される。当たらない要求、`live` の要求（ライブ変換と再変換）、lattice_core が
+      無いとき、cancel と deadline では足されない（spec §5）
     - M52 のベンチ（ユーザー辞書を読まない）の結果が変わらない
     - dictbuild の試験で、語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の
       代表の語の活用形と語尾表が一致する

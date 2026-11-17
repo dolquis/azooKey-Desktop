@@ -811,6 +811,73 @@ TEST(CandidateWindowPredictionTest, RenderFailureKeepsPredictionsHiddenAndUnclic
   window.Destroy();
 }
 
+// native-ui-spec §4.1: the window keeps the mouse from the press to the release,
+// so a click that hides it never hands the release to the application below.
+TEST(CandidateWindowClickTest, PressCapturesTheMouseUntilTheReleaseEvenAfterTheWindowHides) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  ReleaseCapture();
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  const HWND hwnd = window.hwnd_for_test();
+  int prediction_clicks = 0;
+  int candidate_clicks = 0;
+  // The TIP hides the window from inside the click, as accepting or committing does.
+  window.SetOnPredictionClick([&](int) {
+    ++prediction_clicks;
+    window.Hide();
+  });
+  window.SetOnClick([&](int) {
+    ++candidate_clicks;
+    window.Hide();
+  });
+
+  window.ShowPredictions(kAnchor, {L"一", L"二"});
+  ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(prediction_clicks, 1);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(GetCapture(), hwnd);
+  // The release ends the capture and accepts nothing more.
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(prediction_clicks, 1);
+
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(candidate_clicks, 1);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(GetCapture(), hwnd);
+  // A release outside the window, after a drag, still comes back and ends it.
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(-50, 500));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(candidate_clicks, 1);
+
+  // The details popup closes on the press and leaves the release to the window.
+  window.SetOnClick([&](int) { ++candidate_clicks; });
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  ASSERT_TRUE(window.ShowDetailsForTest()) << window.failure_stage();
+  SendMessageW(window.details_hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_FALSE(window.details_visible_for_test());
+  EXPECT_EQ(GetCapture(), hwnd);
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(candidate_clicks, 1);
+
+  // A press against a frame that was not drawn takes nothing, not even the mouse.
+  window.HideHealthBanner();
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Draw);
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_FALSE(window.IsVisible());
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(candidate_clicks, 1);
+  EXPECT_EQ(GetCapture(), nullptr);
+  window.Destroy();
+}
+
 TEST(CandidateWindowPredictionTest, BothModesPickTheMonitorAtTheAnchorsBottomLeft) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());

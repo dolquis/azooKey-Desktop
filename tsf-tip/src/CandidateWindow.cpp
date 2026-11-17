@@ -909,7 +909,12 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
     case WM_ERASEBKGND:
       return 1;
     case WM_LBUTTONDOWN:
-      if (self) self->HideDetails();
+      if (self) {
+        // The popup closes on the press, so the candidate window, which outlives
+        // it, takes the release instead of the application below.
+        if (self->hwnd_) SetCapture(self->hwnd_);
+        self->HideDetails();
+      }
       return 0;
     case WM_DESTROY:
       if (self) {
@@ -1369,6 +1374,11 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_LBUTTONDOWN: {
       // No click is taken against a frame that was not drawn.
       if (render_failed_) return 0;
+      // The press is taken here, so the release comes here too (native-ui-spec
+      // §4.1): a click that hides the window would otherwise hand the release to
+      // the application below, which can end the composition. Hiding the window
+      // keeps the capture; the release or WM_DESTROY ends it.
+      SetCapture(hwnd);
       RECT client_rc{};
       GetClientRect(hwnd, &client_rc);
       const Hit hit =
@@ -1405,6 +1415,11 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       }
       return 0;
     }
+
+    case WM_LBUTTONUP:
+      // The press already acted; the release only ends the capture, wherever it is.
+      if (GetCapture() == hwnd) ReleaseCapture();
+      return 0;
 
     case WM_SETTINGCHANGE:
     case WM_SYSCOLORCHANGE:

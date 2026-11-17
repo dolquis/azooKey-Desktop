@@ -18564,3 +18564,197 @@ TEST(TsfTipMagicConversionTest, CancelDropsTheQueuedRequest) {
     EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
   }
 }
+
+namespace {
+
+// DEV-2084: holds the IPC worker in its next Connecting once armed, until
+// released, so a test acts while the TIP reconnects after the connection
+// dropped. The Host is flagged absent by then (Disconnected came first).
+struct ReconnectGate {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool armed{false};
+  bool held{false};
+  bool released{false};
+
+  static void Hook(void* context, azookey::tsf::IpcConnectionState state) {
+    if (state != azookey::tsf::IpcConnectionState::Connecting) return;
+    auto& gate = *static_cast<ReconnectGate*>(context);
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    if (!std::exchange(gate.armed, false)) return;
+    gate.held = true;
+    gate.cv.notify_all();
+    gate.cv.wait_for(lock, std::chrono::seconds(30), [&] { return gate.released; });
+  }
+  void Arm() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    armed = true;
+    held = false;
+    released = false;
+  }
+  bool WaitHeld() {
+    std::unique_lock<std::mutex> lock(mutex);
+    return cv.wait_for(lock, std::chrono::seconds(10), [&] { return held; });
+  }
+  void Release() {
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      released = true;
+    }
+    cv.notify_all();
+  }
+};
+
+// Lets the worker go however the test ends, before the harness stops it.
+struct ReleaseGateOnExit {
+  ReconnectGate& gate;
+  ~ReleaseGateOnExit() { gate.Release(); }
+};
+
+// A Host that leaves the first TransformSelectedText unanswered, so the TIP
+// drops the connection to cancel it, and answers the later ones.
+class FirstTransformUnansweredHost {
+ public:
+  bool Start(const std::string& pipe_name) {
+    using namespace azookey::ipc;
+    return server_.Start(pipe_name, [this](const Envelope& request) -> std::optional<Envelope> {
+      auto response = request;
+      if (request.type == MessageType::Handshake) {
+        HandshakeResponse handshake;
+        handshake.accepted = true;
+        handshake.capabilities = {"transform_selected_text"};
+        response.payload_json = BuildHandshakeResponse(handshake);
+        return response;
+      }
+      if (request.type != MessageType::TransformSelectedText) return std::nullopt;
+      if (transforms_.fetch_add(1) == 0) return std::nullopt;
+      TransformSelectedTextResponse answer;
+      answer.result = "おはようございます。";
+      response.payload_json = BuildTransformSelectedTextResponse(answer);
+      return response;
+    });
+  }
+  void Stop() { server_.Stop(); }
+  int transforms() const { return transforms_.load(); }
+
+ private:
+  std::atomic<int> transforms_{0};
+  azookey::ipc::NamedPipeServer server_;
+};
+
+// Opens the window, sends, and leaves the TIP reconnecting after it dropped
+// the connection itself: at the request's timeout, or when the window closes
+// while the Host works. The worker is then held in Connecting.
+void DropTheConnectionWithARequest(MagicConversionHarness& m, FirstTransformUnansweredHost& host,
+                                   ReconnectGate& gate, bool timed_out) {
+  gate.Arm();
+  m.h.service.set_transform_wait_for_test(timed_out ? 300 : 60000);
+  m.DoubleTap(kKanaKey);
+  ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+  m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+  if (timed_out) {
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    const auto view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    ASSERT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                                std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
+  } else {
+    ASSERT_TRUE(WaitUntil([&] { return host.transforms() == 1; }, std::chrono::seconds(10)));
+  }
+  m.h.service.cancel_magic_conversion_for_test();
+  ASSERT_TRUE(gate.WaitHeld());
+  ASSERT_TRUE(m.h.service.ipc_host_unavailable_for_test());
+  // The window opens again with a wait far longer than the test.
+  m.h.service.set_transform_wait_for_test(60000);
+  m.DoubleTap(kKanaKey);
+  ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
+}
+
+}  // namespace
+
+// DEV-2084 (legacy-parity-spec §4.3): the TIP drops the connection itself to
+// cancel a request, at its timeout or when its window closes. A request sent
+// while the worker reconnects waits for the reconnect, though the Host is
+// flagged absent meanwhile, instead of getting the no-answer message at once.
+TEST(TsfTipMagicConversionTest, ARequestSentWhileTheTipReconnectsAfterItsOwnDropWaits) {
+  for (const bool timed_out : {true, false}) {
+    SCOPED_TRACE(timed_out);
+    const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-own-drop-" +
+                                  std::to_string(GetCurrentProcessId()) + "-" +
+                                  std::to_string(GetTickCount64());
+    FirstTransformUnansweredHost host;
+    ASSERT_TRUE(host.Start(pipe_name));
+    ReconnectGate gate;  // Outlives the harness, whose worker runs the hook.
+    TextServiceHarness handshake_token_guard;
+    {
+      MagicConversionHarness m;
+      ReleaseGateOnExit release{gate};
+      m.h.service.set_host_transform_capability_for_test(false);
+      m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+      m.h.service.set_ipc_state_published_hook_for_test(&ReconnectGate::Hook, &gate);
+      m.h.service.start_ipc_worker_for_test();
+      ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                            std::chrono::seconds(10)));
+      DropTheConnectionWithARequest(m, host, gate, timed_out);
+      if (HasFatalFailure()) return;
+      m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+      auto view = m.h.service.magic_conversion_view_for_test();
+      ASSERT_TRUE(view.has_value());
+      EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Waiting);
+      EXPECT_TRUE(m.h.service.has_queued_transform_for_test());
+      gate.Release();
+      ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+      m.h.service.process_candidates_ready_for_test();
+      view = m.h.service.magic_conversion_view_for_test();
+      ASSERT_TRUE(view.has_value());
+      EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Preview);
+      EXPECT_EQ(view->result, L"おはようございます。");
+      EXPECT_EQ(host.transforms(), 2);
+      m.h.service.stop_ipc_worker_for_test();
+    }
+    host.Stop();
+  }
+}
+
+// DEV-2084 (legacy-parity-spec §4.3): a request still queued when the
+// reconnect fails gets the no-answer message then, not at its deadline.
+TEST(TsfTipMagicConversionTest, AQueuedRequestGetsNoAnswerOnceTheReconnectFails) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-magic-reconnect-failed-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  FirstTransformUnansweredHost host;
+  ASSERT_TRUE(host.Start(pipe_name));
+  ReconnectGate gate;  // Outlives the harness, whose worker runs the hook.
+  TextServiceHarness handshake_token_guard;
+  {
+    MagicConversionHarness m;
+    ReleaseGateOnExit release{gate};
+    m.h.service.set_host_transform_capability_for_test(false);
+    m.h.service.set_ipc_pipe_name_for_test(pipe_name);
+    m.h.service.set_ipc_state_published_hook_for_test(&ReconnectGate::Hook, &gate);
+    m.h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return m.h.service.host_transform_capability_for_test(); },
+                          std::chrono::seconds(10)));
+    DropTheConnectionWithARequest(m, host, gate, /*timed_out=*/false);
+    if (HasFatalFailure()) return;
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    auto view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    ASSERT_EQ(view->state, azookey::tsf::PromptDialogState::Waiting);
+    ASSERT_TRUE(m.h.service.has_queued_transform_for_test());
+    // The Host goes away before the worker reconnects.
+    host.Stop();
+    gate.Release();
+    ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
+    m.h.service.process_candidates_ready_for_test();
+    view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_EQ(view->status, azookey::tsf::TransformFailureMessage(
+                                std::nullopt, std::nullopt, azookey::tsf::PromptFailure::NoAnswer));
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
+    EXPECT_EQ(host.transforms(), 1);
+    m.h.service.stop_ipc_worker_for_test();
+  }
+}

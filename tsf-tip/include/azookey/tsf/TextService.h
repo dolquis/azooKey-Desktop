@@ -1404,6 +1404,10 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   std::optional<TransformRequest> ipc_transform_request_;  // ipc_mtx_
   uint64_t ipc_transform_generation_{0};                   // ipc_mtx_
+  // The worker dropped the primary connection itself to cancel the window's
+  // request, and the reconnect has neither succeeded nor failed yet: a request
+  // sent meanwhile waits for it instead of failing as for a lost Host (DEV-2084).
+  bool ipc_reconnect_after_own_drop_{false};  // ipc_mtx_
   struct TransformOutcome {
     uint64_t generation{0};
     std::optional<ipc::TransformSelectedTextResponse> response;
@@ -1686,6 +1690,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyTransformOutcome();
   void UpdatePromptDialog();
   bool SendTransformSelectedText(const TransformRequest& request, uint64_t& next_id);
+  // A reconnect attempt ended, on the IPC worker (DEV-2084).
+  void FinishReconnectAttempt(bool established);
   // A left click on candidate row `idx`, from the candidate window.
   void OnCandidateClicked(int idx);
   void ClearReconversionState();

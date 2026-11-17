@@ -6891,9 +6891,11 @@ void TextService::IpcWorkerThreadImpl() {
     }
     if (!established) {
       ipc_client_.Disconnect();
+      FinishReconnectAttempt(false);
       if (WaitForReconnectOrStop(backoff.Next())) break;
       continue;
     }
+    FinishReconnectAttempt(true);
 
     // Healthy connection: reset backoff and serve until the pipe drops. A
     // QueryCandidates enqueued while the host was down is still pending and is
@@ -10450,19 +10452,25 @@ void TextService::SubmitMagicConversion(std::wstring prompt) {
     return;
   }
   session.request.prompt = session.model.prompt_utf8();
-  if (IpcHostUnavailable()) {
-    session.model.OnResponse(std::nullopt, PromptFailure::NoAnswer);
-    UpdatePromptDialog();
-    return;
-  }
   // legacy-parity-spec §4.3: the wait runs from here, while the request is
   // queued as well as after it is sent.
   session.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(session.wait_ms);
+  bool queued = false;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    session.generation = ++ipc_transform_generation_;
-    ipc_transform_request_ = TransformRequest{session.generation, session.request,
-                                              NewTraceIdNoThrow(), session.deadline};
+    // A lost Host is answered at once; the reconnect after the TIP dropped
+    // the connection itself is waited for (DEV-2084).
+    if (!IpcHostUnavailable() || ipc_reconnect_after_own_drop_) {
+      session.generation = ++ipc_transform_generation_;
+      ipc_transform_request_ = TransformRequest{session.generation, session.request,
+                                                NewTraceIdNoThrow(), session.deadline};
+      queued = true;
+    }
+  }
+  if (!queued) {
+    session.model.OnResponse(std::nullopt, PromptFailure::NoAnswer);
+    UpdatePromptDialog();
+    return;
   }
   ipc_cv_.notify_one();
   LogMagicConversion("submitted");
@@ -10583,13 +10591,21 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
     finish(std::nullopt, PromptFailure::NoAnswer);
     return false;
   }
+  // The Host serves a connection in order, so a request no one waits for is
+  // canceled and the connection dropped rather than left to block it. The
+  // reconnect that follows is the TIP's own (DEV-2084).
+  const auto drop_to_cancel = [&] {
+    SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      ipc_reconnect_after_own_drop_ = true;
+    }
+    ipc_client_.Disconnect();
+  };
   const auto deadline = request.deadline;
   while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
-    // The Host serves a connection in order, so a request no one waits for
-    // is canceled and the connection dropped rather than left to block it.
     if (stale()) {
-      SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
-      ipc_client_.Disconnect();
+      drop_to_cancel();
       return false;
     }
     auto response = ipc_client_.ReceiveWithTimeout(50, deadline);
@@ -10608,11 +10624,30 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
   const bool connected = ipc_client_.IsConnected();
   if (connected) {
     ipc_client_.FinishTraceRequest(envelope.request_id, core::EtwResult::Timeout);
-    SendCancelOutOfBand(envelope.request_id, envelope.trace_id);
-    ipc_client_.Disconnect();
+    drop_to_cancel();
   }
   finish(std::nullopt, connected ? PromptFailure::TimedOut : PromptFailure::NoAnswer);
   return false;
+}
+
+// Either way the connection is no longer the one the TIP dropped itself. A
+// failed attempt leaves no Host to answer the prompt window's queued request:
+// it gets the no-answer message now, not at its deadline (legacy-parity-spec §4.3).
+void TextService::FinishReconnectAttempt(bool established) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  std::optional<TransformRequest> unsent;
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconnect_after_own_drop_ = false;
+    if (!established) unsent = std::exchange(ipc_transform_request_, std::nullopt);
+  }
+  if (!unsent) return;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    transform_outcome_ =
+        TransformOutcome{unsent->generation, std::nullopt, PromptFailure::NoAnswer};
+  }
+  candidate_ui_.PostCandidatesReady();
 }
 
 HRESULT TextService::StartSelectionReconversion(ITfContext* context,

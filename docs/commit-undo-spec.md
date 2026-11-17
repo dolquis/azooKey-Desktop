@@ -125,7 +125,8 @@ Ctrl+Backspace を押した時点で、次がすべて成り立つときに取�
    §4.3）でもない。
 4. composition、候補窓（候補モードと予測モード）、確定の再試行の待ち、Space の応答待ちのどれも無い。
 5. 確定の edit の後に、選択とキャレットが動いていない。`OnEndEdit` で、確定した edit の後の選択の変化を見る
-   （`docs/user-learning-enhancement-spec.md` §4.1 の `undo` の窓と同じ見方）。
+   （`docs/user-learning-enhancement-spec.md` §4.1 の `undo` の窓と同じ見方）。この変化を見られるよう、TSF の text edit
+   sink が見ている context の確定だけを対象として記録する（同 §4.1 と同じ）。
 6. 取り消しの edit session の中で読み直したとき、選択が空で、キャレットが記録した位置にあり、その直前の文字列が
    確定した表層と一致する。
 
@@ -189,24 +190,29 @@ TIP は `OnKeyDown` の中で、同期の読み書きの edit session（`TF_ES_S
 取り消した時点では、学習のメッセージ（`CommitObservation`、`CommitCorrection`、`ForgetLearningEntry`）を Host へ
 送らない。戻した入力の打鍵ごとの要求（§5）は、読み入力中と同じに送る。
 
-取り消しの対象は、取り消した確定が送った学習観測の組（読みと表層。組が複数あるときは最後の組）を持つ。これを
-「取り消した観測」と呼ぶ。戻した入力が最初の確定で終わり、次の 2 つがともに成り立つときに限り、
-`CommitCorrection`（`kind: "undo"`、`docs/user-learning-enhancement-spec.md` §4.1）を 1 回送る。`reading` と
-`rejected_surface` は、取り消した観測の読みと表層とする。
+取り消しの対象は、取り消した確定が送った学習観測の組（読みと表層）のうち、自動句読点の組（`is_auto_punctuation`。
+`docs/dynamic-punctuation-spec.md` §7.4）を除いた最後の組を持つ。これを「取り消した観測」と呼ぶ。即 Backspace の
+`undo` が確定の最後の文節を対象にするのに倣う（`docs/user-learning-enhancement-spec.md` §4.1）。
+戻した入力が最初の確定で終わり、次の 2 つがともに成り立つときに限り、`CommitCorrection`（`kind: "undo"`、
+`docs/user-learning-enhancement-spec.md` §4.1）を 1 回送る。`reading` と `rejected_surface` は、取り消した観測の
+読みと表層とする。
 
-1. その確定が部分確定ではなく、取り消した観測と同じ読みの観測を送った。
-2. その観測の表層が、取り消した観測の表層と違う。
+1. その確定が部分確定ではなく、送った観測の組（自動句読点の組を除く）に、取り消した観測と同じ読みの組がある。
+2. その組の表層が、取り消した観測の表層と違う。
 
-比べるのは観測の組どうしなので、句読点の確定（観測は句読点を除いた組。`docs/tsf-deep-integration-spec.md` §3.5.1）も、
-文節の伸縮中に表示中の文字列を確定した確定（観測は先頭文節の組。`docs/segment-editing-spec.md` §8）も、同じ規則で
-決まる。
+比べるのは観測の組どうしなので、句読点の確定（観測は句読点を除いた組。`docs/tsf-deep-integration-spec.md` §3.5.1）、
+ライブ変換の確定が自動句読点の組を添えて送る `CommitSegmentsObservation`、文節の伸縮中に表示中の文字列を確定した
+確定（観測は先頭文節の組。`docs/segment-editing-spec.md` §8）も、同じ規則で決まる。
 
 次のときは送らない。
 
 - 取り消した確定が学習観測を送っていなかったとき。as-is 確定、F6・F9・F10、ローカル候補による確定、English タグの
   候補、secure と学習不可の文脈での確定が当たる。
-- 戻した入力の最初の確定が観測を送らなかったとき、または観測の読みが取り消した観測の読みと違うとき（打ち足し、
-  Backspace による訂正、句読点を足した確定）。
+- 取り消した確定が、自動句読点の組を除いて 2 つ以上の組を送ったとき。日英混在の自動変換（M63）の区間ごとの観測が
+  当たる（`docs/mixed-english-auto-conversion-spec.md`）。区間の区切りは戻した読みと対応しないので、どの組を拒否したかが
+  決まらない。取り消しそのものは §4.1 のとおり働く。
+- 戻した入力の最初の確定が観測を送らなかったとき、または取り消した観測と同じ読みの組を送らなかったとき（打ち足し、
+  読みが変わる Backspace、句読点を足した確定）。
 - 取り消した観測と同じ表層を確定し直したとき。
 - 部分確定したとき、Esc で取り消したとき、確定しないまま終わったとき（フォーカスの喪失など）。
 
@@ -261,7 +267,7 @@ secure の文脈（`docs/privacy-and-secure-input-spec.md` §5）でも、取り
 |---|---|
 | キーの写像 | `tsf-tip/tests/keymap_test.cpp`: Idle の Ctrl+Backspace が `UndoCommit` になり、ほかの状態の Ctrl+Backspace は `nullopt` になる。Ctrl+Shift+Backspace は `Forget` のまま、Alt・Win を含む組合せは `nullopt` |
 | core の状態機械 | `core/tests/input_state_test.cpp`: `UndoCommit` で、渡した読みを読みとする `Composing`（ライブ変換 ON は `Previewing`）に入り、打鍵ごとの要求を出す。その後の Space・Backspace・文字入力・Esc が読み入力中と同じに働く |
-| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: §4.1 の各確定の直後の Ctrl+Backspace で、確定した表層が戻す読みの composition に置き換わる。対象を記録しない確定の後と、§4.2 の条件が欠けるとき（別のキーの後、キャレットの移動、別の context、Off、英数モード、composition がある間）は、キーがアプリへ渡る。修飾キーだけの押下で対象を捨てない。取り消しに使った Ctrl+Backspace のキーリピートが戻した入力を消さない。確かめ直しの失敗と edit session の拒否で、文書が変わらずキーがアプリへ渡る。戻す読み（typo 補正、英単語、句読点、F6〜F10、生ローマ字）が §5 のとおりになる。部分確定の後は残りの読みだけが戻る。§7 の `undo` が送られる場合と送られない場合、忘却の対象と即 Backspace の窓を捨てること、secure で送らないこと |
+| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: §4.1 の各確定の直後の Ctrl+Backspace で、確定した表層が戻す読みの composition に置き換わる。対象を記録しない確定の後と、§4.2 の条件が欠けるとき（別のキーの後、キャレットの移動、別の context、Off、英数モード、composition がある間）は、キーがアプリへ渡る。修飾キーだけの押下で対象を捨てない。取り消しに使った Ctrl+Backspace のキーリピートが戻した入力を消さない。確かめ直しの失敗と edit session の拒否で、文書が変わらずキーがアプリへ渡る。composition を始めた後に読みへ置き換えられないとき（§6 の手順 3 の失敗）は、確定した表層のまま composition を終えてキーを消費する。戻す読み（typo 補正、英単語、句読点、F6〜F10、生ローマ字）が §5 のとおりになり、自動句読点は戻らない。部分確定の後は残りの読みだけが戻る。§7 の `undo` が送られる場合と送られない場合（自動句読点の組を添えた確定、M63 の区間の観測を含む）。取り消しで、忘却の対象、即 Backspace の窓、無変換の巡回の直近の確定を捨て、typo の確定直後の打ち直しの窓を閉じること。text edit sink の無い context の確定では対象を記録しないこと。secure で送らないこと |
 | 実機（Human Gate） | Notepad、Word、Edge と Chrome（textarea と contenteditable）、VS Code、Excel のセル編集、スタート検索で、二重入力と位置のずれが無いこと、Esc で消えること、別の候補で確定し直せること、アプリの Ctrl+Z の単位、条件外の Ctrl+Backspace がアプリの単語削除になること。Microsoft IME の確定の取り消しとの比較 |
 
 試験の一覧の正典は `docs/test-inventory.md` である。

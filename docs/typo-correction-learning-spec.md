@@ -91,7 +91,7 @@ host に送る。検出トリガは 2 種。
 確定したテキストを直後に backspace で消し、別入力をやり直したケース。
 
 - 確定成功時に tracker が最終かな読みを保存し、最初の 1 キーの判定窓を開く。
-- `TypoCorrectionTracker::BeginKey` は確定直後の **最初のキーが VK_BACK** かつ
+- `TypoCorrectionTracker::BeginKey` は確定直後の **最初のキーが Ctrl / Alt / Win を伴わない VK_BACK** かつ
   preedit が空（= 確定済みテキストを消す方向）のとき、保存した読みを訂正前の読みとする。
   以降の打ち直し→確定で §4-1 と同じ比較ロジックが発火する。
 - アプリへ渡すキーは `OnKeyDown` に届かないため、`OnTestKeyDown` でも判定する。

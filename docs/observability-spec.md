@@ -284,6 +284,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   （`core/include/azookey/core/Redaction.h`）とする。診断 ZIP の settings は、本文系 field の判定に
   `logging::IsSensitiveRuntimeLogField` を使い、それに加えて `diagnostics-compat-spec.md` §12.5 の `settings.redacted.json` 行が
   定める settings 固有の field（API key、prompt、path）を処理する。本文系の判定を別に書き起こさない。
+  判定に当たる名前でも、本文や資格情報を持てない形だと埋め込みの settings schema が定める値
+  （boolean・数値、enum に合う文字列）は残す。endpoint の URL は userinfo と query・fragment を伏せる。
+  条件は同じ行が持つ。
 - レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
   redact 対象外（phase 別 `latency_ms` は Release でも記録してよい）。
 - 互換性テスト（`diagnostics-compat-spec.md` §13）でも、Release 既定で本文がログ・成果物に残らないことを

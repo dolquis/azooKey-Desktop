@@ -288,6 +288,26 @@ TEST(RuntimeLoggerTest, EnvironmentOptInRequiresComponentAndResolvableDirectory)
   std::filesystem::remove_all(directory);
 }
 
+TEST(RuntimeLoggerTest, DefaultLogsDirectoryIsWhereEnvironmentOptionsWrite) {
+  const auto local_app_data = azookey::core::GetLocalAppDataDirectory();
+  const auto directory = azookey::logging::DefaultLogsDirectory();
+  if (local_app_data) {
+    EXPECT_EQ(directory, *local_app_data / "azooKey" / "logs");
+  } else {
+    EXPECT_TRUE(directory.empty());
+  }
+  EXPECT_EQ(azookey::logging::RuntimeLoggerOptionsFromEnvironment("host").logs_directory,
+            directory);
+}
+
+#ifndef _WIN32
+TEST(RuntimeLoggerTest, DefaultLogsDirectoryIsEmptyWithoutLocalAppData) {
+  ScopedEnvironment xdg("XDG_DATA_HOME", "");
+  ScopedEnvironment home("HOME", "");
+  EXPECT_TRUE(azookey::logging::DefaultLogsDirectory().empty());
+}
+#endif
+
 TEST(RuntimeLoggerTest, UnwritableDestinationDoesNotThrow) {
   const auto directory = TestDirectory("azookey_runtime_log_unwritable");
   const auto not_a_directory = directory / "blocked";

@@ -645,6 +645,226 @@ TEST(DiagnosticsTest, RedactedSettingsKeepTypedControlsAndHideSensitiveValues) {
   EXPECT_EQ(redacted.find("private malformed value"), std::string::npos);
 }
 
+TEST(DiagnosticsTest, RedactedSettingsKeepSchemaTypedValuesUnderBodyFieldNames) {
+  const auto redacted = diag::RedactSettingsJson(R"json({
+    "typoCorrection": {
+      "maxReadingHypotheses": 99,
+      "minConfidenceForTopCandidate": 0.75,
+      "disableInSecretApps": false,
+      "futureNote": "private future note"
+    },
+    "inlineEnglishCandidates": false,
+    "fullWidthEnglishCandidate": true,
+    "maxCandidates": "private malformed value",
+    "contextReselection": {"note": "private nested value"},
+    "openAiApiKey": "dpapi:AQID",
+    "unknownNote": "private unknown note",
+    "unknownCount": 3,
+    "unknownNull": null,
+    "profilesByApp": ["private array value", 7777]
+  })json");
+  const auto value = j::Parse(redacted);
+  ASSERT_TRUE(value.has_value());
+  const auto* typo = value->Find("typoCorrection");
+  ASSERT_NE(typo, nullptr);
+  // Outside the schema's range or enum, these are still only a number or a boolean.
+  EXPECT_EQ(typo->GetNumber("maxReadingHypotheses"), 99);
+  EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.75);
+  EXPECT_EQ(typo->GetBool("disableInSecretApps"), false);
+  EXPECT_EQ(typo->GetString("futureNote"), "***redacted***");
+  EXPECT_EQ(value->GetBool("inlineEnglishCandidates"), false);
+  EXPECT_EQ(value->GetBool("fullWidthEnglishCandidate"), true);
+  EXPECT_EQ(value->GetString("maxCandidates"), "***redacted***");
+  EXPECT_EQ(value->GetString("contextReselection"), "***redacted***");
+  EXPECT_EQ(value->GetString("openAiApiKey"), "***redacted***");
+  EXPECT_EQ(value->GetString("unknownNote"), "***redacted***");
+  EXPECT_EQ(value->GetNumber("unknownCount"), 3);
+  EXPECT_EQ(value->GetString("unknownNull"), "***redacted***");
+  // A known path holding a container of another type is redacted whole, numbers included.
+  EXPECT_EQ(value->GetString("profilesByApp"), "***redacted***");
+  EXPECT_EQ(redacted.find("7777"), std::string::npos);
+  EXPECT_EQ(redacted.find("private"), std::string::npos);
+  EXPECT_EQ(redacted.find("AQID"), std::string::npos);
+}
+
+TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
+  const std::string userinfo(24, 'a');
+  const std::string query(24, 'b');
+  const std::string fragment(24, 'c');
+  const auto endpoint = [](const std::string& settings) {
+    const auto value = j::Parse(diag::RedactSettingsJson(settings));
+    return value ? value->GetString("openAiApiEndpoint") : std::nullopt;
+  };
+
+  const auto with_credentials = R"({"openAiApiEndpoint":"https://user:)" + userinfo +
+                                R"(@example.invalid:8443/v1?api-key=)" + query + "#" + fragment +
+                                R"("})";
+  const auto redacted = diag::RedactSettingsJson(with_credentials);
+  EXPECT_EQ(endpoint(with_credentials),
+            "https://***redacted***@example.invalid:8443/v1?***redacted***");
+  for (const auto& secret : {userinfo, query, fragment, std::string("user:")}) {
+    EXPECT_EQ(redacted.find(secret), std::string::npos) << secret;
+  }
+  EXPECT_EQ(endpoint(R"({"openAiApiEndpoint":"https://example.invalid/v1#)" + fragment + R"("})"),
+            "https://example.invalid/v1#***redacted***");
+  EXPECT_EQ(endpoint(R"({"openAiApiEndpoint":"http://127.0.0.1:18089/v1"})"),
+            "http://127.0.0.1:18089/v1");
+
+  // Malformed endpoints redact more rather than leak part of a credential.
+  const std::string malformed(24, 'd');
+  const auto malformed_endpoint = [&](const std::string& url) {
+    return endpoint(R"({"openAiApiEndpoint":")" + url + R"("})");
+  };
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "/x@example.invalid/v1"),
+            "https://***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("user:" + malformed + "@example.invalid/x://y"),
+            "***redacted***@example.invalid/x://y");
+  EXPECT_EQ(malformed_endpoint("https:/user:" + malformed + "@example.invalid/v1"),
+            "***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("user:" + malformed + "://x@example.invalid/v1"),
+            "***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "?x@example.invalid/v1"),
+            "https://***redacted***");
+  EXPECT_EQ(malformed_endpoint("https://example.invalid/v1?k=x@" + malformed),
+            "https://***redacted***");
+  // Percent-encoded separators hide where a credential ends.
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "%40api.example.invalid/v1"),
+            "https://***redacted***");
+  EXPECT_EQ(malformed_endpoint("https://example.invalid/v1%3Fapi-key=" + malformed),
+            "https://***redacted***");
+
+  // Well-formed boundaries.
+  EXPECT_EQ(malformed_endpoint("http://u:p@[::1]:8080/v1"), "http://***redacted***@[::1]:8080/v1");
+  EXPECT_EQ(malformed_endpoint("HTTPS://u:p@h"), "HTTPS://***redacted***@h");
+  EXPECT_EQ(malformed_endpoint("https://a@b@h"), "https://***redacted***@h");
+  EXPECT_EQ(malformed_endpoint("u:p@h?k=x"), "***redacted***@h?***redacted***");
+}
+
+// One sample per schema path: a numbered marker for each free-text string, the first enum value,
+// true for booleans and the minimum (or 1) for numbers. Map entries are keyed "app.exe".
+struct SettingsSchemaSample {
+  std::vector<std::pair<std::string, std::string>> free_text;
+  std::vector<std::pair<std::string, j::Value>> typed;
+};
+
+j::Value SampleSettingsValue(const j::Value& schema, const std::string& path,
+                             SettingsSchemaSample& sample) {
+  std::string type;
+  if (const auto name = schema.GetString("type")) {
+    type = *name;
+  } else if (const auto* names = schema.GetArray("type");
+             names && !names->empty() && names->front().IsString()) {
+    type = names->front().AsString();
+  }
+  if (const auto* values = schema.GetArray("enum"); values && !values->empty()) {
+    sample.typed.emplace_back(path, values->front());
+    return values->front();
+  }
+  if (type == "object") {
+    j::Object object;
+    if (const auto* properties = schema.FindObject("properties")) {
+      for (const auto& [key, child] : *properties) {
+        object.emplace(key, SampleSettingsValue(child, path + "/" + key, sample));
+      }
+    }
+    if (const auto* additional = schema.Find("additionalProperties");
+        additional && additional->IsObject()) {
+      object.emplace("app.exe", SampleSettingsValue(*additional, path + "/*", sample));
+    }
+    return j::Value(std::move(object));
+  }
+  if (type == "array") {
+    j::Array array;
+    if (const auto* items = schema.Find("items")) {
+      array.emplace_back(SampleSettingsValue(*items, path + "/[]", sample));
+    }
+    return j::Value(std::move(array));
+  }
+  if (type == "string") {
+    auto marker = "free-text-" + std::to_string(sample.free_text.size());
+    sample.free_text.emplace_back(path, marker);
+    return j::Value(marker);
+  }
+  j::Value value =
+      type == "boolean" ? j::Value(true) : j::Value(schema.GetNumber("minimum").value_or(1));
+  sample.typed.emplace_back(path, value);
+  return value;
+}
+
+const j::Value* FindSettingsPath(const j::Value& root, const std::string& path) {
+  const j::Value* current = &root;
+  size_t start = 1;
+  while (current && start < path.size()) {
+    const auto end = std::min(path.find('/', start), path.size());
+    const auto segment = path.substr(start, end - start);
+    if (segment == "[]") {
+      current =
+          current->IsArray() && !current->AsArray().empty() ? &current->AsArray().front() : nullptr;
+    } else {
+      current = current->Find(segment == "*" ? "app.exe" : segment);
+    }
+    start = end + 1;
+  }
+  return current;
+}
+
+bool SameSettingsScalar(const j::Value& actual, const j::Value& expected) {
+  if (expected.IsBool()) return actual.IsBool() && actual.AsBool() == expected.AsBool();
+  if (expected.IsNumber()) return actual.IsNumber() && actual.AsNumber() == expected.AsNumber();
+  return actual.IsString() && expected.IsString() && actual.AsString() == expected.AsString();
+}
+
+TEST(DiagnosticsTest, RedactedSettingsClassifyEveryFreeTextSchemaPath) {
+  // Free-text settings whose names the body-field test does not match stay readable. A free-text
+  // key added to the schema fails here until it is redacted or reviewed into this list.
+  const std::vector<std::string> reviewed = {
+      "/profilesByApp/*/profileName",
+      "/bracketPairingApps/[]",
+      "/bracketPairsPath",
+      "/punctuationRulesPath",
+      "/customRomajiTablePath",
+      "/privacy/secureApps/[]",
+      "/openAiApiEndpoint",
+      "/openAiModel",
+      "/model/selectedPath",
+      "/model/benchmarkHistory/[]/path",
+      "/model/benchmarkHistory/[]/completedAt",
+      "/model/benchmarkHistory/[]/error",
+      "/inlineEnglishDictionaryPath",
+      "/symbolDataPath",
+      "/emojiDataPath",
+      "/safeMode/enteredAt",
+  };
+  std::ifstream input(
+      std::filesystem::path(AZOOKEY_TEST_SOURCE_DIR) / "settings/mvp-settings.schema.json",
+      std::ios::binary);
+  const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  const auto schema = j::Parse(text);
+  ASSERT_TRUE(schema.has_value());
+  SettingsSchemaSample sample;
+  const auto settings = SampleSettingsValue(*schema, "", sample);
+  const auto redacted = j::Parse(diag::RedactSettingsJson(j::Stringify(settings)));
+  ASSERT_TRUE(redacted.has_value());
+
+  for (const auto& [path, marker] : sample.free_text) {
+    const auto* value = FindSettingsPath(*redacted, path);
+    ASSERT_NE(value, nullptr) << path;
+    const bool listed = std::find(reviewed.begin(), reviewed.end(), path) != reviewed.end();
+    EXPECT_TRUE(SameSettingsScalar(*value, j::Value(listed ? marker : "***redacted***"))) << path;
+  }
+  for (const auto& path : reviewed) {
+    EXPECT_TRUE(std::any_of(sample.free_text.begin(), sample.free_text.end(),
+                            [&](const auto& item) { return item.first == path; }))
+        << path;
+  }
+  EXPECT_FALSE(sample.typed.empty());
+  for (const auto& [path, expected] : sample.typed) {
+    const auto* value = FindSettingsPath(*redacted, path);
+    ASSERT_NE(value, nullptr) << path;
+    EXPECT_TRUE(SameSettingsScalar(*value, expected)) << path;
+  }
+}
+
 TEST(DiagnosticsTest, CollectionBoundsEachRuntimeLogAndReportsTruncation) {
   const auto logs_directory = TempPath("azookey-diag-bounded-runtime-logs");
   std::error_code ec;

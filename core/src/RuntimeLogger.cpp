@@ -151,12 +151,6 @@ std::string DateFromTimestamp(std::string_view timestamp) {
   return date;
 }
 
-std::filesystem::path DefaultLogsDirectory() {
-  const auto local_app_data = azookey::core::GetLocalAppDataDirectory();
-  if (!local_app_data) return {};
-  return *local_app_data / "azooKey" / "logs";
-}
-
 RuntimeLogLevel ParseLevel(std::string value) {
   value = LowerAscii(std::move(value));
   if (value == "warn") return RuntimeLogLevel::Warn;
@@ -351,6 +345,15 @@ void AppendLine(const RuntimeLoggerOptions& options, const std::filesystem::path
 }
 
 }  // namespace
+
+std::filesystem::path DefaultLogsDirectory() noexcept {
+  try {
+    const auto local_app_data = azookey::core::GetLocalAppDataDirectory();
+    return local_app_data ? *local_app_data / "azooKey" / "logs" : std::filesystem::path{};
+  } catch (...) {
+    return {};
+  }
+}
 
 bool IsSensitiveRuntimeLogField(std::string_view key) {
   const auto lower = LowerAscii(std::string(key));

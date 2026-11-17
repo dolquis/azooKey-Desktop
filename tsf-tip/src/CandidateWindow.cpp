@@ -335,6 +335,18 @@ int CandidateWindow::ComputeVisibleRows(int count, int item_height, int other_he
 }
 
 // static
+int CandidateWindow::ComputeFitHeight(POINT anchor, RECT work_area, int caret_gap) {
+  const int work_height = static_cast<int>(work_area.bottom - work_area.top);
+  if (work_area.right <= work_area.left || work_height <= 0) return 0;
+  // The same sides ComputePlacement chooses between: below the anchor, or with
+  // the bottom caret_gap above it.
+  const long long below = static_cast<long long>(work_area.bottom) - anchor.y;
+  const long long above = static_cast<long long>(anchor.y) - caret_gap - work_area.top;
+  // At least 1, so a caret with no room on either side still gets the fewest rows.
+  return static_cast<int>(std::clamp<long long>(std::max(below, above), 1, work_height));
+}
+
+// static
 int CandidateWindow::ComputeFirstVisibleRow(int previous_first, int selected, int count,
                                             int visible_rows) {
   if (count <= 0 || visible_rows <= 0 || visible_rows >= count) return 0;
@@ -617,15 +629,16 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
         MeasureWrappedLines(BannerText(health_state_), width - metrics_.horizontal_padding * 2));
   };
   measure_banner();
-  // Keep the window inside the work area's height: draw only the rows that fit
-  // and follow the selection with them (native-ui-spec §4.1).
+  // Keep the window inside the larger room below or above the caret, so it never
+  // covers the composition: draw only the rows that fit and follow the selection
+  // with them (native-ui-spec §4.1).
   const int count = static_cast<int>(items_.size());
-  const int work_height = static_cast<int>(monitor.work_area.bottom - monitor.work_area.top);
+  const int fit_height = ComputeFitHeight(pt, monitor.work_area, metrics_.caret_gap);
   const auto fit_rows = [&] {
     const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
                              (secure_toast_visible_ ? metrics_.item_height : 0) +
                              (health_banner_visible_ ? HealthBannerHeight() : 0);
-    visible_rows_ = ComputeVisibleRows(count, metrics_.item_height, other_height, work_height);
+    visible_rows_ = ComputeVisibleRows(count, metrics_.item_height, other_height, fit_height);
     first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, count, visible_rows_);
   };
   fit_rows();

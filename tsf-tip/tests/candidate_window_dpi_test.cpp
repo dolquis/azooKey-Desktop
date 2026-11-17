@@ -1034,6 +1034,40 @@ TEST(CandidateWindowScrollTest, VisibleRowsFitTheWorkAreaWithAPositionRow) {
   EXPECT_EQ(CandidateWindow::ComputeVisibleRows(0, 24, 0, 240), 0);
 }
 
+TEST(CandidateWindowScrollTest, FitHeightIsTheLargerRoomBelowOrAboveTheCaret) {
+  // Near the top: the room below the anchor.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 200}, {0, 0, 1920, 1040}, 20), 840);
+  // Near the bottom: the room above the caret, the gap over the anchor left out.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 1000}, {0, 0, 1920, 1040}, 20), 980);
+  // A monitor at negative coordinates measures from its own work area.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({-100, 300}, {-1280, 40, 0, 1024}, 20), 724);
+  // An anchor outside the work area never asks for more than the work area.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 1100}, {0, 0, 1920, 1040}, 20), 1040);
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, -60}, {0, 0, 1920, 1040}, 20), 1040);
+  // No room on either side still leaves the fewest rows; no work area, nothing to fit.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({10, 30}, {0, 0, 100, 30}, 40), 1);
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 200}, {}, 20), 0);
+}
+
+// DEV-2086: a window taller than the room on either side of the caret was moved
+// up against the top of the work area after the flip, over the composition.
+TEST(CandidateWindowScrollTest, RowsThatFitTheLargerSideKeepTheWindowOffTheComposition) {
+  // 32 candidates at 192 DPI, the caret's line in the middle of a 2064 px work area.
+  constexpr int kRow = 48;
+  constexpr int kGap = 40;
+  const RECT work{0, 0, 2560, 2064};
+  const POINT anchor{1480, 1426};
+  const int fit = CandidateWindow::ComputeFitHeight(anchor, work, kGap);
+  EXPECT_EQ(fit, anchor.y - kGap);
+  const int rows = CandidateWindow::ComputeVisibleRows(32, kRow, 0, fit);
+  EXPECT_LT(rows, 32);
+  const int height = (rows + 1) * kRow;  // The rows and the position row.
+  const RECT placed = CandidateWindow::ComputePlacement(anchor, work, 160, height, kGap);
+  EXPECT_EQ(placed.bottom - placed.top, height);
+  EXPECT_GE(placed.top, work.top);
+  EXPECT_LE(placed.bottom, anchor.y - kGap);
+}
+
 TEST(CandidateWindowScrollTest, FirstVisibleRowFollowsTheSelectionAndTheWrap) {
   constexpr int kCount = 12;
   constexpr int kRows = 4;
@@ -1090,13 +1124,14 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
     window.Show(POINT{work.left + 20, work.top + 20}, items, 0);
     ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
 
+    // The room below the anchor is the larger; the rows fit it with the position row.
     const int visible = window.GetVisibleRowCount();
-    EXPECT_EQ(visible, (work_height - row) / row);
+    EXPECT_EQ(visible, (work_height - 20 - row) / row);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
-    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.top, work.top + 20);
     EXPECT_LE(bounds.bottom, work.bottom);
     EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
 
@@ -1130,6 +1165,42 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
     // Back to the first candidate: the first range again.
     window.SetSelected(0);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCoveringIt) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  RECT work{};
+  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
+  const int work_height = work.bottom - work.top;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    const int gap = MulDiv(20, static_cast<int>(dpi), 96);
+    // Two thirds down: more room above than below, and less than the work area.
+    const POINT anchor{work.left + 20, work.top + work_height * 2 / 3};
+    const int above = anchor.y - gap - work.top;
+    // More candidates than the work area holds, so the window must scroll.
+    const int count = work_height / row + 10;
+    std::vector<CandidateViewItem> items;
+    for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.Show(anchor, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+
+    const int visible = window.GetVisibleRowCount();
+    EXPECT_EQ(visible, (above - row) / row);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
+    // Flipped above the caret, inside the work area, and clear of the composition.
+    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.bottom, anchor.y - gap);
     window.Destroy();
   }
 }

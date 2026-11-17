@@ -49,6 +49,14 @@ Notepad は空の一時テキストファイル、VS Code は拡張機能を無�
 Edge の textarea は UIA ControlType と `aria-label` 由来の Name の両方で特定し、
 同じ Edit control type を持つアドレスバーを対象から除外する。
 
+Chromium の textarea は、UIA の TextPattern が本文ではなく `aria-label` 由来の要素名を返し、
+UIA の `SetValue` で本文を消すと composition が文書の外（画面左上の別窓）へ出る。Edge の
+target は `workarounds` の `read_source: "value"` で本文を Value だけから読み（Value が空なら
+空として扱い、Value を読めないときだけ TextPattern へ切り替える）、`clear_with_keyboard: true`
+で本文を Ctrl+A → Delete だけで消す。どちらも既定（省略時）は従来どおりで、Notepad と
+VS Code の判定は変わらない。`read_source` は `"auto"` か `"value"` だけで、
+それ以外の値（文字列でない値を含む）は target 定義を無効にする。
+
 azooKey TIP の登録と選択は machine-wide 設定を含むため、runner は行わない。
 実行前に利用者が登録・選択を完了する。対話セッション、対象アプリ、UI Automation
 のいずれかを利用できない場合は、silent skip せず `failing-skip` として報告する。
@@ -68,7 +76,7 @@ compat-test/
 │   ├── CaseSelection.cpp       # --cases / --skip の選択と C-001 前提の追加
 │   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
 │   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
-│   ├── ReadObservation.cpp     # 本文を持たない UIA 読み取り診断
+│   ├── ReadObservation.cpp     # 本文を持たない UIA 読み取り診断と、本文の取得元の選択（read_source）
 │   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
 │   ├── TargetConfigLoader.cpp  # target JSON の読込と実行ファイルの解決
 │   ├── WindowOwnership.cpp     # runner が所有するウィンドウ・tab の判定

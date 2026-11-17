@@ -17,8 +17,9 @@ Skills. It reads the files a PR changes and the PR body, and fails when:
 
 One reason covers every Skill the PR leaves untouched, so it should say why the
 Skills' routing tables, test tables and procedures need no change. Body parsing
-follows `check_docs_impact.py` (CRLF is normalised, `<!-- ... -->` comments are
-removed, a placeholder reason such as「影響なし」counts as empty). Owned-path
+is shared with `check_docs_impact.py` (`extract_section`, `extract_reason`): CRLF is
+normalised, `<!-- ... -->` comments and fenced code are removed, only the level-2
+heading counts, and a placeholder, `TODO`, bracketed or too short reason is empty. Owned-path
 globs use `check_docs_impact.path_matches`.
 
 `--freshness` prints, instead of gating, how many commits reached each Skill's
@@ -89,19 +90,7 @@ def skill_patterns(skill: str) -> tuple[str, ...]:
 
 def extract_section(body: str) -> list[str] | None:
     """Return the lines of the Skill impact section, or None."""
-    lines = DOCS_IMPACT.COMMENT_PATTERN.sub("", body.replace("\r\n", "\n")).split("\n")
-    section: list[str] | None = None
-    for line in lines:
-        heading = DOCS_IMPACT.HEADING_PATTERN.match(line)
-        if heading:
-            if section is not None:
-                break
-            if heading.group(2).strip().casefold() == SECTION_HEADING.casefold():
-                section = []
-            continue
-        if section is not None:
-            section.append(line)
-    return section
+    return DOCS_IMPACT.extract_section(body, SECTION_HEADING)
 
 
 def is_no_impact_checked(section: list[str]) -> bool:
@@ -164,7 +153,8 @@ def evaluate(
         if not reason:
             messages.append(
                 "「Reason:」の後に理由がありません"
-                "（コメントや「なし」「N/A」だけの記入は空とみなします）。"
+                "（コメント、「なし」「N/A」、TODO、記号だけ、<理由> のままの記入、"
+                f"{DOCS_IMPACT.MIN_REASON_CHARACTERS} 字に満たない短い記入は空とみなします）。"
             )
     messages += [
         "",

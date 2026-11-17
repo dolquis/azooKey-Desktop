@@ -330,6 +330,35 @@ class CheckDocContractsTest(unittest.TestCase):
             "docs/diagnostics-compat-spec.md:1: preset `linux-gone`",
         )
 
+    def test_presets_in_any_document_under_docs_are_checked(self) -> None:
+        problems = self.run_check(
+            **{
+                "docs/copilot-pc-backend-spec.md": "cmake --preset windows-gone\n",
+                "docs/handoff/runbook.md": "Use the `linux-gone` preset.\n",
+                "docs/archive/old/note.md": "ctest --preset windows-old\n",
+                # Not Markdown, and outside docs/: neither is scanned.
+                "docs/data.txt": "cmake --preset windows-text\n",
+                "plans/notes.md": "cmake --preset windows-plan\n",
+            }
+        )
+        self.assert_reported(
+            problems,
+            "docs/copilot-pc-backend-spec.md:1: preset `windows-gone`",
+            "docs/handoff/runbook.md:1: preset `linux-gone`",
+            "docs/archive/old/note.md:1: preset `windows-old`",
+        )
+        self.assertFalse(any("windows-text" in problem for problem in problems))
+        self.assertFalse(any("windows-plan" in problem for problem in problems))
+
+    def test_documents_without_preset_claims_add_nothing(self) -> None:
+        problems = self.run_check(
+            **{
+                "docs/ci-jobs.md": "The `windows-build` job runs on `windows-latest`.\n",
+                "docs/handoff/placeholder.md": "cmake --preset <preset>\n",
+            }
+        )
+        self.assertEqual(problems, [])
+
     def test_settings_key_table_is_read_from_settings_app_spec(self) -> None:
         self.assertEqual(MODULE.SETTINGS_INDEX_DOC, "docs/settings-app-spec.md")
         self.assertTrue((REPO_ROOT / MODULE.SETTINGS_INDEX_DOC).is_file())

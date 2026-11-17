@@ -35,6 +35,16 @@ TextCensus CensusOf(std::wstring_view text);
 TextRelation ClassifyRelation(const std::optional<std::wstring>& text,
                               std::string_view typed_ascii);
 
+// 本文の取得元の選び方（targets の workarounds.read_source）。
+// Auto: Value が非空ならそれ、空または取得不能なら TextPattern（従来どおり）。
+// ValueOnly: Value を読めたら空でもそれを返し、TextPattern へ切り替えない。Chromium のように
+// TextPattern が要素名（aria-label）を返し、Value の空を本文として誤読させるターゲット用。
+// Value を読めないときだけ TextPattern へ切り替える。
+enum class ReadSourcePolicy { Auto, ValueOnly };
+
+ObservedRead SelectReadText(ReadSourcePolicy policy, std::optional<std::wstring> value,
+                            const std::function<std::optional<std::wstring>()>& read_text);
+
 // failure.log の action 欄に出す、入力内容を含まないラベル（キーコードと文字数だけ）。
 std::string VirtualKeyAction(unsigned virtual_key, bool with_modifier);
 std::string AsciiInputAction(size_t count);

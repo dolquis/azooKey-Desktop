@@ -36,6 +36,8 @@
   "workarounds": {
     "require_new_window": true,
     "prefer_get_text_ext": true,
+    "read_source": "value",
+    "clear_with_keyboard": true,
     "display_attribute_fallback": "ime-default-rendering",
     "redact_target_and_candidate_windows": true
   },

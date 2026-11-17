@@ -20,14 +20,21 @@ crosses `/`: `settings/*.schema.json` does not match a nested directory.
 Body rules:
 
   - CRLF is normalised and `<!-- ... -->` comments are removed first, so the
-    template's guidance comment alone is an empty reason.
-  - The section is the heading "Documentation impact" (any level, any case) up
-    to the next heading.
+    template's guidance comment alone is an empty reason. A `<!--` that is never
+    closed hides the rest of the body, except one inside a code span or a fence.
+  - Fenced code blocks (``` and ~~~, read as CommonMark does) are dropped, so a
+    section heading or a reason written inside one does not count.
+  - The section is the level-2 heading `## Documentation impact` (any case) up
+    to the next heading of any level. A heading of another level is not the
+    section.
   - The checkbox line is `- [x] No documentation impact`; `[X]`, `[ x ]` and
     `*` / `+` bullets are accepted.
   - The reason is the text after `Reason:` (`**Reason:**` and a full-width
     colon are accepted) plus the following lines of the section. A reason that
-    is only a placeholder in `PLACEHOLDER_REASONS` counts as empty.
+    is empty when `is_substantive_reason` rejects it: a placeholder in
+    `PLACEHOLDER_REASONS`, a `TODO` / `TBD` / `FIXME` marker, text left in the
+    template's brackets (`<理由>`), or fewer than `MIN_REASON_CHARACTERS`
+    letters and digits once symbols are ignored.
 
 The changed files come either from `--changed-files <file>` (one path per
 line) or from `git diff --name-only --no-renames <base>...<head>`. Renames are
@@ -107,8 +114,22 @@ PLACEHOLDER_REASONS = frozenset(
     }
 )
 
-COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+# A reason shorter than this, counting letters and digits only, is too thin to
+# say why no document changes. "内部整理" (4) and "テストのみ" (5) pass; "なし"
+# and "N/A" are caught here as well as by `PLACEHOLDER_REASONS`.
+MIN_REASON_CHARACTERS = 4
+SECTION_LEVEL = 2
+# A reason that is only one of these, or one followed by a colon ("TODO: 後で"),
+# was never filled in. "TODO コメントの修正のみ" is a real reason and passes.
+UNFINISHED_MARKERS = ("todo", "tbd", "fixme")
+
 HEADING_PATTERN = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+FENCE_PATTERN = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+INLINE_CODE_OR_COMMENT_OPEN = re.compile(r"`[^`\n]*`|<!--")
+# A reason that is nothing but a bracketed phrase: the template's `<理由>`.
+BRACKETED_PATTERN = re.compile(
+    r"^(?:<[^<>]*>|\[[^\[\]]*\]|［[^［］]*］|【[^【】]*】|＜[^＜＞]*＞)$"
+)
 CHECKBOX_PATTERN = re.compile(r"^\s*[-*+]\s*\[\s*([^\]]?)\s*\]\s*(.*)$")
 REASON_PATTERN = re.compile(
     r"^\s*(?:[-*+]\s*)?(?:\*\*|__)?Reason\s*[:：]\s*(?:\*\*|__)?(.*)$",
@@ -176,16 +197,78 @@ def git_changed_files(repo_root: Path, base: str, head: str) -> list[str]:
     return [normalise_path(line) for line in result.stdout.splitlines() if line]
 
 
-def extract_section(body: str) -> list[str] | None:
-    """Return the lines of the Documentation impact section, or None."""
-    lines = COMMENT_PATTERN.sub("", body.replace("\r\n", "\n")).split("\n")
+def visible_lines(body: str) -> list[str]:
+    """Return the body's lines without fenced code and HTML comments.
+
+    One pass keeps the two apart: a `<!--` inside a fence is code, and a fence
+    inside a comment is part of the comment, so neither hides the other. A
+    comment that is never closed hides the rest of the body.
+
+    Fences follow CommonMark: a backtick fence's info string cannot hold a
+    backtick (so a line starting with an inline ```code``` is not a fence), and
+    a closing fence carries nothing after the fence characters. A `<!--` inside
+    an inline code span is text, not a comment.
+    """
+    kept: list[str] = []
+    fence: str | None = None
+    in_comment = False
+    for raw in body.replace("\r\n", "\n").split("\n"):
+        line = raw
+        if in_comment:
+            end = line.find("-->")
+            if end < 0:
+                continue
+            line = line[end + 3 :]
+            in_comment = False
+        elif fence is not None:
+            match = FENCE_PATTERN.match(line)
+            if (
+                match
+                and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= len(fence)
+                and not match.group(2).strip()
+            ):
+                fence = None
+            continue
+        else:
+            match = FENCE_PATTERN.match(line)
+            if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
+                fence = match.group(1)
+                continue
+        # Remove comments from the rest of the line; a code span hides its `<!--`.
+        text = ""
+        position = 0
+        for token in INLINE_CODE_OR_COMMENT_OPEN.finditer(line):
+            if token.group() != "<!--" or token.start() < position:
+                continue
+            text += line[position : token.start()]
+            end = line.find("-->", token.end())
+            if end < 0:
+                in_comment = True
+                position = len(line)
+                break
+            position = end + 3
+        kept.append(text + line[position:])
+    return kept
+
+
+def extract_section(body: str, title: str = SECTION_HEADING) -> list[str] | None:
+    """Return the lines of the level-2 section titled `title`, or None.
+
+    Both impact gates read their section through this function, so they cannot
+    disagree on comments, code fences or heading levels.
+    """
+    lines = visible_lines(body)
     section: list[str] | None = None
     for line in lines:
         heading = HEADING_PATTERN.match(line)
         if heading:
             if section is not None:
                 break
-            if heading.group(2).strip().casefold() == SECTION_HEADING.casefold():
+            if (
+                len(heading.group(1)) == SECTION_LEVEL
+                and heading.group(2).strip().casefold() == title.casefold()
+            ):
                 section = []
             continue
         if section is not None:
@@ -221,9 +304,20 @@ def extract_reason(section: list[str]) -> str:
     if reason_lines is None:
         return ""
     reason = "\n".join(reason_lines).strip()
-    if reason.strip("*_ .。").casefold() in PLACEHOLDER_REASONS:
-        return ""
-    return reason
+    return reason if is_substantive_reason(reason) else ""
+
+
+def is_substantive_reason(reason: str) -> bool:
+    """Return False for a reason that only fills the field in."""
+    plain = reason.strip("*_ \t\n.。")
+    folded = plain.casefold()
+    if folded in PLACEHOLDER_REASONS:
+        return False
+    if any(re.match(rf"{marker}(?:\s*[:：]|$)", folded) for marker in UNFINISHED_MARKERS):
+        return False
+    if BRACKETED_PATTERN.match(plain):
+        return False
+    return sum(character.isalnum() for character in reason) >= MIN_REASON_CHARACTERS
 
 
 def evaluate(changed: list[str], body: str) -> tuple[bool, list[str]]:
@@ -268,7 +362,8 @@ def evaluate(changed: list[str], body: str) -> tuple[bool, list[str]]:
         if not reason:
             messages.append(
                 "「Reason:」の後に理由がありません"
-                "（コメントや「なし」「N/A」だけの記入は空とみなします）。"
+                "（コメント、「なし」「N/A」、TODO、記号だけ、<理由> のままの記入、"
+                f"{MIN_REASON_CHARACTERS} 字に満たない短い記入は空とみなします）。"
             )
     messages += [
         "",

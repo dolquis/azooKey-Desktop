@@ -4422,7 +4422,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
   return E_FAIL;
 }
 
-STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
+STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite,
                                                   ITfComposition* pComposition) try {
   AZOOKEY_ASSERT_UI_THREAD();
   // DEV-1845: the mark of the last edit key belongs to this termination only.
@@ -4452,6 +4452,22 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
     if (!terminated_range && FAILED(pComposition->GetRange(&terminated_range))) {
       if (terminated_range) terminated_range->Release();
       terminated_range = nullptr;
+    }
+  }
+  // DEV-2065: the text the host keeps loses the preedit attribute now, as no
+  // commit may follow (Esc drops the input without one). A failure leaves only
+  // the attribute behind, never the composition (tsf-deep-integration-spec §5.6).
+  if (terminated_range) {
+    Microsoft::WRL::ComPtr<ITfContext> range_context;
+    Microsoft::WRL::ComPtr<ITfProperty> property;
+    if (SUCCEEDED(terminated_range->GetContext(range_context.GetAddressOf())) && range_context &&
+        SUCCEEDED(range_context->GetProperty(GUID_PROP_ATTRIBUTE, property.GetAddressOf())) &&
+        property && FAILED(ClearDisplayAttributes(ecWrite, property.Get(), terminated_range))) {
+      try {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                   "commit_display_attribute_clear_failed");
+      } catch (...) {
+      }
     }
   }
   if (!etw_composition_end_in_progress_)
@@ -11764,8 +11780,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "external_composition_text_changed");
           log_app_edit("kept_app_text");
         }
-        // The host ended the composition, but the text it kept still carries
-        // the attribute of the last preedit.
+        // The termination cleared the text the host kept (DEV-2065); text
+        // written back here, or kept by a host that refused that Clear, still
+        // carries the attribute of the last preedit.
         clear_display_attributes(service_->terminated_composition_range_);
       } else if (service_->composition_) {
         ITfRange* committed_range = nullptr;

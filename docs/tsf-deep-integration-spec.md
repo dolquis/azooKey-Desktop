@@ -1009,9 +1009,13 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
   予測変換を指定している（`app-profile-spec.md` §4。§5 の解決順でそのアプリに当たる層のどれかが、全体設定と同じ値でも `predictionEnabled` を持つ）ときは、チェックは全体設定のままにし、ラベルを
   「予測変換（このアプリはアプリ別の設定）」とする。選んだときに書くのは全体設定の `predictionEnabled` である。
   このアプリで予測を出すかはプロファイルの値に従う（`docs/legacy-parity-spec.md` §3.6）ので、この注記が出ているときに
-  切り替えても、このアプリの予測は変わらない。注記の判定も打鍵時の判定も、同じ入力先の識別（`app-profile-spec.md` §3）を
-  そのときに取り直して使う。メニューを開いている間に入力先の窓のクラス名が取れないと、窓のクラス名の層だけで
-  指定したアプリには注記が出ないことがある。
+  切り替えても、このアプリの予測は変わらない。注記の判定も、予測を照会する前と届いた予測を表示する前の判定も、
+  同じ入力先の識別（`app-profile-spec.md` §3）をそのときに取り直して使う。照会の時点の入力先は持たない。設定の再読込や
+  再試行で照会し直すときも、そのときの入力先で判定する。窓のクラス名が取れるのは、TIP のスレッドから見たフォーカスの
+  窓（`GetFocus`）が同じプロセスにあるときだけである。メニューを開いている間や、アプリが composition を終えないまま
+  フォーカスが別のプロセスへ移った後は、窓のクラス名の層は当たらない。この間はプロセス名と `default` の層と全体の値で
+  決まる。そのため、窓のクラス名の層だけで指定したアプリには注記が出ないことがある。また、その層だけで予測を止めたアプリでも、
+  フォーカスが外れている間に設定が再読込されると、予測を照会して表示しうる（DEV-2071）。
 - 表記: 項目の名前は設定アプリと同じ語にする（`docs/settings-app-spec.md` §3.2「表記規則」）。
 - 書き込み: settings.json の該当するトップレベルのキーだけを書き、他のキーはディスク上のまま残す。
   設定アプリと Host と同じファイルロック（`AcquireExclusiveFileLockForPath`）を取って読み、atomic に
@@ -1152,13 +1156,19 @@ clone した selection 用 range を `TF_ANCHOR_END` へ collapse し、`SetSele
 
 確定で composition を終えるとき（Enter、候補の選択、数字、句読点、フォーカスの喪失による確定を含む）は、
 確定する edit session で `EndComposition` の前に、composition の range の `GUID_PROP_ATTRIBUTE` を
-`ITfProperty::Clear` で消す。確定した文字列は preedit の表示属性を持たない。アプリが先に composition を
-終えたときは、アプリが残した range の属性を確定の edit session で消す。アプリが書き換えた文字列のまま
-composition を終えるとき（DEV-1845）も同じに消す。消せなくても確定は止めない。`ITfProperty::Clear` が失敗したときは
+`ITfProperty::Clear` で消す。確定した文字列は preedit の表示属性を持たない。TIP が入力を見せている composition を
+アプリが先に終えたときは、`ITfCompositionSink::OnCompositionTerminated` が受ける `ecWrite` で、TIP が最後に書いた
+composition の range の属性を消す（TIP が見せる入力が無いときは、終了を受けても range を持たないので消さない）。
+range は preedit の更新で clone したものを使う（終了後の `ITfComposition::GetRange` は失敗しうる）。property はその range の context から取る。こうすると、
+後に確定の edit session が走らなくても（アプリが composition を終えた後の Esc は TIP の入力の状態だけを捨てて
+文書に触らない）属性は残らない。その後の確定の edit session も、アプリが残した range の属性をもう一度消す。
+復元や置換で書き直した文字列も、この Clear で消える。アプリが書き換えた文字列のまま composition を終えるとき（DEV-1845）も
+確定の edit session で同じに消す。消せなくても、確定も入力の状態の破棄も止めない。`ITfProperty::Clear` が失敗したときは
 警告ログ `commit_display_attribute_clear_failed` を出す（property や range を取れないときはログを出さない。preedit の更新で
 属性を付けるときと同じ扱いである）。TIP が composition を持つ間の Esc は入力を文字列ごと消すので、消す属性が無い。
-アプリが先に composition を終えて文字列を残した後の Esc は、TIP の入力の状態だけを捨てて文書に触らないので、
-残った文字列の属性は消さない（確定の edit session が走らないため）。
+アプリが range を潰し、TIP が最後に書いた文字列を range の外（直後か直前）に残したとき（DEV-1927）は、終了時に
+消すのは潰れた range だけである。その後の Esc では、残った文字列の属性を消さない。確定の edit session は、直後に残った
+文字列なら置き換えてから消すが、直前に残った文字列は消さない。
 
 M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAttr` は
 [`TF_DA_ATTR_INFO`](https://learn.microsoft.com/windows/win32/api/msctf/ne-msctf-tf_da_attr_info)
@@ -1205,7 +1215,8 @@ enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー、文
 enumerator の境界テストは属性数（`kDisplayAttributeKindCount`）を基準に書く。
 打鍵から `GUID_PROP_ATTRIBUTE` に設定される範囲と属性（読み、候補選択中、Backspace での読みへの戻り、Esc での取り消し、一括変換の文節）は
 `tsf-tip/tests/onkeydown_preedit_test.cpp` の `TsfTipSelectingDisplayAttributeTest` が担う。
-確定した文字列に属性が残らないこと（Enter での読みと候補の確定、数字、句読点、アプリが先に composition を終えた後の確定）は、同じファイルの
+確定した文字列に属性が残らないこと（Enter での読みと候補の確定、数字、句読点、フォーカスの喪失による確定、
+アプリが書き換えた文字列のままの終了、アプリが先に composition を終えた後の確定と Esc）は、同じファイルの
 `TsfTipCommitDisplayAttributeTest` が担う。
 
 ### 5.7 アプリ互換チェックリスト（M3・実機 Win11）
@@ -1363,7 +1374,7 @@ Suggestion UI へ渡す統合を範囲に含めるときは、roadmap にマイ�
 | CandidateListUIElement | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | Windows 限定。UI-less 時の `GetCount` / `GetString` / `GetSelection`、app-drawn と TIP 描画の切替、`ITfUIElementMgr` 欠落時の fallback |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | DisplayAttribute（§5） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。4 属性の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること。文節の区間と属性の割り当て、文節ごとの `SetValue` と fallback |
-| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性。`TsfTipCommitDisplayAttributeTest`: Enter・数字・句読点の確定と、アプリが先に composition を終えた後の確定で、確定した文字列の属性を消すこと |
+| preedit の属性（§5.3、§5.5） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。`TsfTipSelectingDisplayAttributeTest`: 読みは入力属性、一括変換 OFF の候補選択中は全体が注目属性、Backspace で読みへ戻ると入力属性、Esc の後に属性が残らないこと、一括変換の文節属性。`TsfTipCommitDisplayAttributeTest`: Enter・数字・句読点の確定、フォーカスの喪失による確定、アプリが書き換えた文字列のままの終了、アプリが先に composition を終えた後の確定と Esc で、文書に残った文字列の属性を消すこと |
 | Preedit クリック（§7） | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。クリック位置の文節への注目移動、左ボタン以外と文節がないときに食わないこと |
 
 ## 10. 参照

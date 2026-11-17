@@ -289,7 +289,7 @@ bool MatchesSchemaEnum(const j::Value& value, const j::Value& schema) {
 // types it as boolean / integer / number, or as an enum string it matches. A path the schema does
 // not know keeps numbers and booleans only, and a known path holding another type is redacted.
 bool KeepSettingsScalar(const j::Value& value, const j::Value* schema, bool sensitive) {
-  if (!schema) return !sensitive && !value.IsString();
+  if (!schema) return !sensitive && (value.IsBool() || value.IsNumber());
   if (!MatchesSchemaType(value, *schema)) return false;
   return !value.IsString() || !sensitive || MatchesSchemaEnum(value, *schema);
 }
@@ -300,21 +300,25 @@ bool IsEndpointSettingName(std::string_view key) {
 }
 
 // The userinfo, query and fragment of an endpoint can carry a credential. The scheme, host, port
-// and path stay readable for diagnosis.
-std::string RedactUrlCredentials(std::string url) {
-  std::string suffix;
-  if (const auto cut = url.find_first_of("?#"); cut != std::string::npos) {
-    suffix = std::string(1, url[cut]) + "***redacted***";
-    url.erase(cut);
-  }
+// and path stay readable for diagnosis. A malformed endpoint may put '/' inside the userinfo, so
+// everything up to the last '@' goes, even when that also hides the host. When a '?' or '#' comes
+// before that '@', the two cannot be told apart and everything after the scheme goes.
+std::string RedactUrlCredentials(const std::string& url) {
+  constexpr std::string_view kRedactedPart = "***redacted***";
+  const auto at = url.rfind('@');
+  const auto cut = url.find_first_of("?#");
   const auto scheme = url.find("://");
-  const auto authority = scheme == std::string::npos ? 0 : scheme + 3;
-  const auto path = url.find('/', authority);
-  const auto at = url.rfind('@', path == std::string::npos ? std::string::npos : path);
-  if (at != std::string::npos && at >= authority) {
-    url.replace(authority, at - authority, "***redacted***");
+  const auto limit = std::min(at, cut);
+  const auto start = scheme != std::string::npos && scheme + 3 <= limit ? scheme + 3 : 0;
+  if (at != std::string::npos && cut != std::string::npos && cut < at) {
+    return url.substr(0, start) + std::string(kRedactedPart);
   }
-  return url + suffix;
+  std::string redacted = url.substr(0, cut);
+  if (at != std::string::npos) {
+    redacted = url.substr(0, start) + std::string(kRedactedPart) + url.substr(at, cut - at);
+  }
+  if (cut != std::string::npos) redacted += url[cut] + std::string(kRedactedPart);
+  return redacted;
 }
 
 j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
@@ -323,7 +327,7 @@ j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
                          (!key.empty() && logging::IsSensitiveRuntimeLogField(key));
   const j::Value* shape = schema && MatchesSchemaType(value, *schema) ? schema : nullptr;
   if (value.IsObject()) {
-    if (sensitive && !shape) return j::Value("***redacted***");
+    if ((sensitive || schema) && !shape) return j::Value("***redacted***");
     const auto* properties = shape ? shape->FindObject("properties") : nullptr;
     const auto* additional = shape ? shape->Find("additionalProperties") : nullptr;
     j::Object redacted;
@@ -344,7 +348,7 @@ j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
     return j::Value(std::move(redacted));
   }
   if (value.IsArray()) {
-    if (sensitive && !shape) return j::Value("***redacted***");
+    if ((sensitive || schema) && !shape) return j::Value("***redacted***");
     const auto* items = shape ? shape->Find("items") : nullptr;
     j::Array redacted;
     redacted.reserve(value.AsArray().size());

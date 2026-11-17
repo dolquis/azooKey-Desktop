@@ -659,7 +659,9 @@ TEST(DiagnosticsTest, RedactedSettingsKeepSchemaTypedValuesUnderBodyFieldNames) 
     "contextReselection": {"note": "private nested value"},
     "openAiApiKey": "dpapi:AQID",
     "unknownNote": "private unknown note",
-    "unknownCount": 3
+    "unknownCount": 3,
+    "unknownNull": null,
+    "profilesByApp": ["private array value", 7777]
   })json");
   const auto value = j::Parse(redacted);
   ASSERT_TRUE(value.has_value());
@@ -677,6 +679,10 @@ TEST(DiagnosticsTest, RedactedSettingsKeepSchemaTypedValuesUnderBodyFieldNames) 
   EXPECT_EQ(value->GetString("openAiApiKey"), "***redacted***");
   EXPECT_EQ(value->GetString("unknownNote"), "***redacted***");
   EXPECT_EQ(value->GetNumber("unknownCount"), 3);
+  EXPECT_EQ(value->GetString("unknownNull"), "***redacted***");
+  // A known path holding a container of another type is redacted whole, numbers included.
+  EXPECT_EQ(value->GetString("profilesByApp"), "***redacted***");
+  EXPECT_EQ(redacted.find("7777"), std::string::npos);
   EXPECT_EQ(redacted.find("private"), std::string::npos);
   EXPECT_EQ(redacted.find("AQID"), std::string::npos);
 }
@@ -703,6 +709,22 @@ TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
             "https://example.invalid/v1#***redacted***");
   EXPECT_EQ(endpoint(R"({"openAiApiEndpoint":"http://127.0.0.1:18089/v1"})"),
             "http://127.0.0.1:18089/v1");
+
+  // Malformed endpoints redact more rather than leak part of a credential.
+  const std::string malformed(24, 'd');
+  const auto malformed_endpoint = [&](const std::string& url) {
+    return endpoint(R"({"openAiApiEndpoint":")" + url + R"("})");
+  };
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "/x@example.invalid/v1"),
+            "https://***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("user:" + malformed + "@example.invalid/x://y"),
+            "***redacted***@example.invalid/x://y");
+  EXPECT_EQ(malformed_endpoint("https:/user:" + malformed + "@example.invalid/v1"),
+            "***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "?x@example.invalid/v1"),
+            "https://***redacted***");
+  EXPECT_EQ(malformed_endpoint("https://example.invalid/v1?k=x@" + malformed),
+            "https://***redacted***");
 }
 
 // One sample per schema path: a numbered marker for each free-text string, the first enum value,

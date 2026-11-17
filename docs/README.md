@@ -60,7 +60,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`azdic-physical-layer-spec.md`](azdic-physical-layer-spec.md) | M53 system 辞書の物理層（`.azdic` v1、ビルドパイプライン） |
 | [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
-| [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
+| [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル）、M67（入力欄の種類による切替、§13） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給 |

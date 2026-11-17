@@ -61,7 +61,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 |
@@ -481,6 +481,7 @@ Phase 6 完了 ─→ M33
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
 M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix → アプリ別プロファイル）
+M46 / M48 / M21 / M22 / M61 ─→ M67  （入力 scope の判定 + プロファイル + 英数モード + カッコ補完 → 入力欄の種類による切替）
 M6 / M13 / M14 ─→ M58-A ─→ M58-B（M20 も前提）
                        └─→ M58-C（M16 / M24 / M46 も前提）
 M13 / M14 ─→ M59
@@ -1801,6 +1802,40 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
       ときは、TIP のローカル候補で窓を開く（spec §5.2）。
     - **右の文脈**: Zenzai は先頭文節の読みだけを変換するので、縮めた先頭文節では後ろの語で決まる同音異義語を
       誤りやすい（spec §5.3）。
+
+### M67: 入力欄の種類（InputScope）による入力挙動の切替
+
+> アプリが TSF の `GUID_PROP_INPUTSCOPE` で伝える入力欄の種類に応じて、URL・メール・数値・電話・半角英数の欄では英数モードで
+> 入力を始め、カッコ補完と自動句読点を止める。検索欄ではひらがなのまま、自動句読点だけを止める。正典仕様は
+> `docs/app-profile-spec.md` §13 とし、本節は定義・依存・受け入れ条件・リスクだけを持つ。
+
+- **目的**: 入力欄ごとに英数モードへ手で切り替える手間を省く。アプリ単位の切替（M48）を、入力欄単位へ細かくする。
+- **前提**: M46（入力 scope の読み取りと secure 判定。本 M はその判定を変えない）、M48（共通 resolver とプロファイルの継承）、
+  M21・M22（英数モードと入力インジケーター）、M61（カッコ補完）。自動句読点の抑制は M59 の要求の `auto_punctuation` を使う。
+- **変更対象**: `tsf-tip/src/AiInputGuard.cpp`（同じ読み取りから欄の種類を得る）、`tsf-tip/src/TextService.cpp`（入口のモードと
+  戻し、カッコ補完と `auto_punctuation` の抑制、ログ）、`core/src/AppProfileResolver.cpp`（プロファイルの `inputScopeSwitching`）、
+  TIP の設定スナップショット、`settings/`（schema と sample。`inputScopeSwitching` は既定 ON）、`settings-app/`（全体の項目と
+  アプリ別の編集ダイアログ）と各層の focused test。
+- **受け入れ条件**:
+  - URL・メール・数値・電話・`IS_ALPHANUMERIC_HALFWIDTH` の欄に入ると英数モードになり、離れると入る前のモードに戻る。
+    その欄で利用者が切り替えたモードは、その欄にいる間保たれる
+  - その欄では入力モードによらずカッコ補完が働かず、プロファイルの `bracketPairing: "on"` でも働かない。その欄と検索欄では
+    自動句読点の要求の `auto_punctuation` が `false` になる。検索欄の入口のモードは変わらない
+  - composition があるとき、持ち越した入力があるとき、IME が Off のときは切り替えない
+  - secure の欄では切り替えず、secure・学習・AI 送信の判定が本 M の導入前と同じである（M46 の試験が通る）
+  - InputScope を返さないアプリと、spec §13.2 の表に無い値の欄では、挙動が変わらない
+  - グローバルとプロファイルの `inputScopeSwitching: false` で、切替と抑制をすべて行わない
+  - 実機での確認（Edge・Chrome・Firefox の各種の欄とアドレス欄、InPrivate、Windows の検索欄、メモ帳、Excel の最初の打鍵、
+    Microsoft IME との比較。`gate:human-required`）
+- **参照**: `docs/app-profile-spec.md` §13、`docs/privacy-and-secure-input-spec.md` §4.3、
+  `docs/tsf-deep-integration-spec.md` §4.2・§4.3・§4.5
+- **補足**:
+  - **既定**: `inputScopeSwitching` は既定 ON とする（根拠は spec §13.1・§13.6）。追加機能を既定 OFF にする方針の例外である。
+  - **リスク**:
+    - **アプリの誤報告**: 本文を打つ欄に URL などの scope を付けるアプリでは、日本語入力が英数モードから始まる。アプリ別の
+      `inputScopeSwitching: false` で外せる。主要なアプリを実機で確かめる。
+    - **Microsoft IME との差**: 値ごとの入口のモードが Microsoft IME と違うと、利用者が戸惑う。Human Gate で比べ、差があれば
+      spec を改める。
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

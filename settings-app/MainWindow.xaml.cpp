@@ -285,6 +285,19 @@ void MainWindow::ShowPane(std::wstring_view tag) {
 }
 
 void MainWindow::RefreshUpdateStatus() {
+  // DEV-2076 (sideload-packaging-spec section 6.1): the Microsoft Store updates a package it
+  // delivered, and the Host neither checks nor downloads under it. The pane then offers none of
+  // the update controls and says why. A process's package identity does not change.
+  static const bool managed_by_store = azookey::settings::UpdatesManagedByStore();
+  VersionFieldsPanel().Visibility(managed_by_store ? Microsoft::UI::Xaml::Visibility::Collapsed
+                                                   : Microsoft::UI::Xaml::Visibility::Visible);
+  if (managed_by_store) {
+    Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+    UpdateStatusText().Text(resources.GetString(L"UpdateStatus_StoreManaged"));
+    OpenReleasePageButton().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+    UpdateInstallPanel().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+    return;
+  }
   const auto* enabled_field = azookey::settings::FindSettingField("autoUpdate.enabled");
   const bool enabled = enabled_field && std::get<bool>(azookey::settings::SettingValueOrDefault(
                                             *enabled_field, saved_settings_.values));

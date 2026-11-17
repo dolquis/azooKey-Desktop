@@ -83,6 +83,12 @@ std::optional<std::filesystem::path> InstalledHostLauncher();
 bool StartInstalledHost();
 // HKLM\SOFTWARE\azooKey\VulkanAddon: the add-on, which this update leaves at the old version.
 bool VulkanAddonInstalled();
+// DEV-2076 (section 6.1): this process runs under the identity of a package the Microsoft Store
+// delivered (GetCurrentPackageFullName succeeds and GetStagedPackageOrigin is
+// PackageOrigin_Store). The Store updates it, and the Host neither checks nor downloads under the
+// same identity. False when unpackaged (the MSI), under an external-location identity package,
+// for a package of another origin, or when the origin cannot be read.
+bool UpdatesManagedByStore();
 // Restarts Windows (after the user agreed, for RebootRequired).
 bool RequestRestart();
 

@@ -9,6 +9,17 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/learning/AtomicFile.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#include <appmodel.h>
+#endif
+
 namespace azookey::host {
 namespace {
 
@@ -465,6 +476,36 @@ void UpdateChecker::NotifyOnce(const AvailableRelease& release) {
   // A failed write notifies the same version again at the next check rather than never.
   (void)learning::WriteTextFileAtomically(options_.notification_path,
                                           ipc::json::Stringify(ipc::json::Value(record)));
+}
+
+bool UpdatesManagedByStore(const PackageIdentityProbe& probe) {
+  return probe.has_package && probe.origin == kPackageOriginStore;
+}
+
+PackageIdentityProbe ProbeCurrentPackage() {
+  PackageIdentityProbe probe;
+#ifdef _WIN32
+  UINT32 length = 0;
+  if (GetCurrentPackageFullName(&length, nullptr) != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+    return probe;  // APPMODEL_ERROR_NO_PACKAGE: unpackaged.
+  }
+  std::wstring full_name(length, L'\0');
+  if (GetCurrentPackageFullName(&length, full_name.data()) != ERROR_SUCCESS) return probe;
+  probe.has_package = true;
+  // Exported by kernelbase.dll, but only onecoreuap.lib has its import: look it up instead of
+  // linking that umbrella library. Its absence leaves the origin unread.
+  using GetStagedPackageOriginFn = LONG(WINAPI*)(PCWSTR, PackageOrigin*);
+  const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  const auto get_origin = kernelbase
+                              ? reinterpret_cast<GetStagedPackageOriginFn>(reinterpret_cast<void*>(
+                                    GetProcAddress(kernelbase, "GetStagedPackageOrigin")))
+                              : nullptr;
+  PackageOrigin origin = PackageOrigin_Unknown;
+  if (get_origin && get_origin(full_name.c_str(), &origin) == ERROR_SUCCESS) {
+    probe.origin = static_cast<uint32_t>(origin);
+  }
+#endif
+  return probe;
 }
 
 }  // namespace azookey::host

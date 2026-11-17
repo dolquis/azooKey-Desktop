@@ -208,14 +208,20 @@ TEST(UpdateInstallerTest, EveryMessageOfTheInstallAreaIsInTheResources) {
   const auto source =
       ReadText(std::filesystem::path(std::u8string(u8"" AZOOKEY_SETTINGS_SOURCE_DIR)) /
                "MainWindow.xaml.cpp");
-  const std::regex pattern(R"(L"(UpdateInstall_[A-Za-z0-9_]+)\")");
+  const std::regex pattern(R"(L"(Update(?:Install|Status)_[A-Za-z0-9_]+)\")");
   size_t literals = 0;
   for (std::sregex_iterator it(source.begin(), source.end(), pattern), end; it != end; ++it) {
     names.insert((*it)[1].str());
     ++literals;
   }
   EXPECT_GT(literals, 0u);
+  EXPECT_TRUE(names.count("UpdateStatus_StoreManaged"));
   for (const auto& name : names) EXPECT_TRUE(has(name)) << name;
+}
+
+// DEV-2076: the test runs unpackaged, which keeps the update controls (the MSI channel).
+TEST(UpdateInstallerTest, AnUnpackagedProcessIsNotManagedByTheStore) {
+  EXPECT_FALSE(azookey::settings::UpdatesManagedByStore());
 }
 
 }  // namespace

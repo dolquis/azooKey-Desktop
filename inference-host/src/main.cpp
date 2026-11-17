@@ -1132,15 +1132,22 @@ int main(int argc, char** argv) {
   const auto update_fetch = std::make_shared<azookey::host::UpdateFetchService>(
       std::move(update_fetch_options), std::move(update_fetch_dependencies), &runtime_log);
   UpdateFetchShutdownGuard update_fetch_guard(update_fetch);
+  // DEV-2076 (sideload-packaging-spec section 6.1): the Microsoft Store updates a package it
+  // delivered, so under that identity neither the check nor the download runs, whatever
+  // autoUpdate.enabled says. Asked once: a process's package identity does not change.
+  const bool updates_managed_by_store =
+      azookey::host::UpdatesManagedByStore(azookey::host::ProbeCurrentPackage());
   const auto apply_update_check_settings =
-      [&update_checker, update_fetch_settings](const azookey::host::EngineConfig& applied) {
-        update_checker.UpdateSettings(applied.auto_update_enabled, applied.auto_update_channel,
+      [&update_checker, update_fetch_settings,
+       updates_managed_by_store](const azookey::host::EngineConfig& applied) {
+        const bool enabled = applied.auto_update_enabled && !updates_managed_by_store;
+        update_checker.UpdateSettings(enabled, applied.auto_update_channel,
                                       applied.auto_update_check_interval_hours);
         {
           std::lock_guard<std::mutex> lock(update_fetch_settings->mutex);
           update_fetch_settings->channel = applied.auto_update_channel;
         }
-        update_fetch_settings->enabled = applied.auto_update_enabled;
+        update_fetch_settings->enabled = enabled;
       };
   apply_update_check_settings(engine.config());
   if (entered_safe_mode) {

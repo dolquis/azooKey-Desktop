@@ -700,6 +700,19 @@ wingetcreate update --urls `
 - `autoUpdate.enabled` が `true` で、`privacy.mode` が `offline` でも `secure` でもないときだけ
   確認する（§6.2）。設定の再読込で無効になると、実行中の確認を取り消す（ダウンローダの
   取り消しは受信の待ちの間にも効く。`docs/model-management-spec.md` §3.1.2）。
+- Microsoft Store が配った package の identity の下では、`autoUpdate.enabled` にかかわらず
+  確認せず、§6.3 のダウンロードも `disabled` で断る（§5 のとおり Store が更新を担う）。Host は起動時に
+  一度、`GetCurrentPackageFullName` が成功し、その package の `GetStagedPackageOrigin` が
+  `PackageOrigin_Store` を返すかを確かめる。設定アプリも自分のプロセスで同じ判定をし、「バージョン」の
+  更新の確認の項目と「ダウンロード」を出さず、Store が更新することを示す（Store の MSIX は Host と
+  設定アプリを同じ package に入れる前提である）。判定ごとの扱いは次のとおりである。
+  - 非パッケージ（§4 の MSI、開発ビルド）: `APPMODEL_ERROR_NO_PACKAGE` になり、確認する。
+  - Store の MSIX: origin が `PackageOrigin_Store` になり、確認しない。
+  - external-location identity package（`msix-packaging-spec` §1.1.2）: 自前の証明書で署名するので
+    origin は `PackageOrigin_DeveloperSigned` などの Store 以外になる見込みで、確認する。実機で返る
+    値は確かめていない（DEV-2075）。
+  - Store 以外の MSIX と、origin を読めない package: 確認する。MSI の経路から確認を奪わないためで
+    ある。MSIX の sideload 配布は延期中（§2.0）で、その更新の経路は再開のときに決める。
 - `settings.json` が読めない・不正な間も確認しない。不正な再読込は設定を適用しないが、Host が
   publish するプライバシーの判定が secure に倒れる（`docs/privacy-and-secure-input-spec.md` §2 の
   fail closed）ので、それを見て止める。

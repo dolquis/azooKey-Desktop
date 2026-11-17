@@ -82,6 +82,25 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
                                                  std::string_view download_prefix,
                                                  uint64_t max_bytes, std::string* error);
 
+// DEV-2076 (section 6.1): what Windows says about the package this process runs under.
+struct PackageIdentityProbe {
+  // GetCurrentPackageFullName succeeded: the process has a package identity, from a full MSIX or
+  // an external-location identity package.
+  bool has_package{false};
+  // GetStagedPackageOrigin of that package (a PackageOrigin value); nullopt when unread.
+  std::optional<uint32_t> origin;
+};
+
+// PackageOrigin_Store (appmodel.h): the package came from, and is signed by, the Microsoft Store.
+inline constexpr uint32_t kPackageOriginStore = 3;
+
+// True only for a package the Microsoft Store delivered: the Store updates it, so neither the
+// update check nor the download runs. An unpackaged process, an external-location identity
+// package or a package of another origin (or one whose origin could not be read) keeps them.
+bool UpdatesManagedByStore(const PackageIdentityProbe& probe);
+// Asks Windows about the current process. Always {} off Windows.
+PackageIdentityProbe ProbeCurrentPackage();
+
 struct UpdateCheckerOptions {
   // This build's product version (AZOOKEY_PRODUCT_VERSION).
   std::string current_version;

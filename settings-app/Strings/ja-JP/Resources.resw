@@ -121,6 +121,7 @@
   <data name="UpdateStatus_None" xml:space="preserve"><value>まだ確認していません。</value></data>
   <data name="UpdateStatus_UpdateAvailable" xml:space="preserve"><value>新しいバージョン v{latest} が公開されています（確認: {checked}）。</value></data>
   <data name="UpdateStatus_UpToDate" xml:space="preserve"><value>最新のバージョンです（確認: {checked}）。</value></data>
+  <data name="UpdateStatus_StoreManaged" xml:space="preserve"><value>Microsoft Store から入れた azooKey は、Microsoft Store が更新します。azooKey 自身は更新を確認しません。</value></data>
   <data name="UpdateStatus_Failed" xml:space="preserve"><value>更新を確認できませんでした（{checked}）。次の確認で再び試します。</value></data>
   <data name="UpdateInstallDescription.Text" xml:space="preserve"><value>新しいバージョンをダウンロードして、この PC に適用できます。適用には管理者権限の確認が必要です。</value></data>
   <data name="DownloadUpdateButton.Content" xml:space="preserve"><value>ダウンロード</value></data>

@@ -1,5 +1,6 @@
 #include "UpdateInstaller.h"
 
+#include <appmodel.h>
 #include <bcrypt.h>
 #include <shellapi.h>
 
@@ -298,6 +299,25 @@ bool VulkanAddonInstalled() {
   }
   RegCloseKey(key);
   return true;
+}
+
+bool UpdatesManagedByStore() {
+  UINT32 length = 0;
+  if (GetCurrentPackageFullName(&length, nullptr) != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+    return false;  // APPMODEL_ERROR_NO_PACKAGE: unpackaged.
+  }
+  std::wstring full_name(length, L'\0');
+  if (GetCurrentPackageFullName(&length, full_name.data()) != ERROR_SUCCESS) return false;
+  // Exported by kernelbase.dll, but only onecoreuap.lib has its import (as in the Host).
+  using GetStagedPackageOriginFn = LONG(WINAPI*)(PCWSTR, PackageOrigin*);
+  const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  const auto get_origin = kernelbase
+                              ? reinterpret_cast<GetStagedPackageOriginFn>(reinterpret_cast<void*>(
+                                    GetProcAddress(kernelbase, "GetStagedPackageOrigin")))
+                              : nullptr;
+  PackageOrigin origin = PackageOrigin_Unknown;
+  return get_origin && get_origin(full_name.c_str(), &origin) == ERROR_SUCCESS &&
+         origin == PackageOrigin_Store;
 }
 
 bool RequestRestart() {

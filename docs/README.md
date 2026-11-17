@@ -39,7 +39,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69 |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69、§5.1・§5.4 のカスタムローマ字表の英字の大文字と小文字の区別は M70 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）の転送表。各項の契約は移動先の spec が正典 |
 | [`proofread-view-spec.md`](proofread-view-spec.md) | M24 の横断項目の意味的訂正（`DetectAnomalies`）と M30 の校正ペイン（バッチ訂正ビュー、Ctrl+Shift+Space） |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）、M66（§3.6・§5 の文節の伸縮中の扱い）、M68（§2.3 の候補のページ）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
@@ -73,6 +73,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入）。§3・§4.3 は M62-B の英字分の正典 |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61-A 自動カッコペアリングと M61-B 外部化・アプリ互換 |
 | [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) | 追加機能 M63（日英混在ローマ字入力の自動変換：M63-A 1 語 / M63-B 文中混在。分割器・IPC・順位・学習・設定） |
+| [`input-style-spec.md`](input-style-spec.md) | 追加機能 M70（入力方式の AZIK とかな入力、表駆動の入力方式の共通規則：設定 `inputStyle` の `azik`・`kanaJis`、かな入力〔JIS 配列〕のキーの表、かな入力での他の機能の扱い） |
 | [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）、M62-E 日付・時刻・計算（§20）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
 | [`segment-editing-spec.md`](segment-editing-spec.md) | 追加機能 M66（通常変換の文節の伸縮と部分確定：Shift+← / Shift+→ による先頭文節の伸縮、先頭文節だけの確定、先頭文節の候補の要求） |
 | [`commit-undo-spec.md`](commit-undo-spec.md) | 追加機能 M69（確定の取り消し：確定の直後の Ctrl+Backspace で直前の確定を読みの composition へ戻す。有効な条件、edit session、学習の扱い） |

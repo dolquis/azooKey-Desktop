@@ -859,6 +859,18 @@ TEST(CandidateWindowClickTest, PressCapturesTheMouseUntilTheReleaseEvenAfterTheW
   window.SetOnClick([&](int) { ++candidate_clicks; });
   window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
   window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  // The banner buttons follow the same rule.
+  int retries = 0;
+  window.SetOnRetry([&] { ++retries; });
+  RECT client{};
+  ASSERT_TRUE(GetClientRect(hwnd, &client));
+  const RECT retry = window.health_retry_button_for_test(client.right);
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM((retry.left + retry.right) / 2, (retry.top + retry.bottom) / 2));
+  EXPECT_EQ(retries, 1);
+  EXPECT_EQ(GetCapture(), hwnd);
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
   ASSERT_TRUE(window.ShowDetailsForTest()) << window.failure_stage();
   SendMessageW(window.details_hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
   EXPECT_FALSE(window.details_visible_for_test());

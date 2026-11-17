@@ -39,10 +39,10 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64 |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）の転送表。各項の契約は移動先の spec が正典 |
 | [`proofread-view-spec.md`](proofread-view-spec.md) | M24 の横断項目の意味的訂正（`DetectAnomalies`）と M30 の校正ペイン（バッチ訂正ビュー、Ctrl+Shift+Space） |
-| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
+| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合。M3（§5.6・§5.7 の単一 DisplayAttribute）、M5（§2.0・§2.8〜§2.11 の UI-less 最小契約）、M64（§3.6 の字種指定確定〔F6〜F10〕）、M66（§3.6・§5 の文節の伸縮中の扱い）も扱う。読みが無いときの Space の幅（`fullWidthSpace`）は §3.7、入力インジケーターとその右クリックのメニューは §4.5 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド。§4 の推論エンジン選定は M8 と共有 |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。§4.4 は M16 の Magic Conversion プロンプト、§4.5 は M34 の API キー入力、§4.6 は M53 の設定アプリの辞書ライセンス導線 |
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | MVP の配布方針と MSI（M11 / M12）、Phase 7（M29、M32〜M34）の配布・署名・更新・観測。MSIX（§1）と設定アプリ（§3）は転送表で下の spec へ |
@@ -67,13 +67,14 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker（Track A） |
 | [`neural-reranker-nll-spec.md`](neural-reranker-nll-spec.md) | NllScorer 型ニューラルリランク（Track B） |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
-| [`lattice-conversion-spec.md`](lattice-conversion-spec.md) | 変換品質トラック M65（モデル非経由のラティス変換：連接コスト付き N-best と文節の区切り） |
+| [`lattice-conversion-spec.md`](lattice-conversion-spec.md) | 変換品質トラック M65（モデル非経由のラティス変換：連接コスト付き N-best と文節の区切り）。§7.3 の語の境目の制約と先頭の区間の取り出しは M66 |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入）。§3・§4.3 は M62-B の英字分の正典 |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61-A 自動カッコペアリングと M61-B 外部化・アプリ互換 |
 | [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) | 追加機能 M63（日英混在ローマ字入力の自動変換：M63-A 1 語 / M63-B 文中混在。分割器・IPC・順位・学習・設定） |
 | [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
+| [`segment-editing-spec.md`](segment-editing-spec.md) | 追加機能 M66（通常変換の文節の伸縮と部分確定：Shift+← / Shift+→ による先頭文節の伸縮、先頭文節だけの確定、先頭文節の候補の要求） |
 
 ## 運用
 

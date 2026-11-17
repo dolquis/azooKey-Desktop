@@ -29,6 +29,7 @@ canonical_for: ["評価ベンチ"]
 | §10 | M52 |
 | §11〜§12 | M52 |
 | §13〜§14 | M52 |
+| §7 の `--dict-dir`・`--lattice`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice` | M65（`docs/lattice-conversion-spec.md` §10） |
 
 ## 1. 目的
 
@@ -406,6 +407,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--baseline <json>` | 比較 baseline |
 | `--backend <name>` | backend 強制 |
 | `--model <path>` | モデル強制 |
+| `--dict-dir <dir>` | 同梱辞書（`dictbuild/build_bundled.py` が出力する `dict` ディレクトリ）を静的層として読む。省略時は静的層を読まない。`config.dictionary_bundle_sha256` に記録（§14.1 互換キー） |
+| `--lattice on\|off` | ラティス変換の段階 1（`docs/lattice-conversion-spec.md` §3.2 の内部設定）を設定する。`--dict-dir` があるときの既定は製品と同じ `on`、無いときは `off`。`--dict-dir` 無しの `on` と、`on` で lattice_core を読めないときはエラーで止める。`config.lattice` に記録（§14.1 互換キー） |
 | `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る |
 | `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |
 | `--trace` | M51 trace ログを出す |
@@ -449,6 +452,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "batch_size": 1,
     "typo_correction_mode": "off",
     "learning_state": "empty",
+    "dictionary_bundle_sha256": "none",
+    "lattice": "off",
     "category_filter": "all",
     "eval_dataset_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
   },
@@ -599,10 +604,13 @@ main push / 日次 schedule / 手動実行の品質採取と advisory な baseli
 独立した `quality-benchmarks.yml` の `quality-benchmark` ジョブで行う。実行条件、artifact、比較スキップ、
 warning と終了コードの契約は `build-ci-spec.md` §4.5 を参照する。
 この定期採取はモデルなし CPU 経路の schema / artifact 接続 smoke とする。
-当該データセットでは top1 / top5 / exact が 0 となり、精度低下の検知を実証できない。
+`--dict-dir` を付けないので、当該データセットでは top1 / top5 / exact が 0 となり、精度低下の検知を実証できない。
 実品質の回帰検証には実辞書または固定モデルが必要であり、PR 向け回帰ゲートを別途構成する。
 実モデルで検証する場合は `--model` でモデルを指定し、
 §14.1 の config と互換な baseline を用意する必要がある。
+実辞書で検証する場合は `--dict-dir` で同梱辞書を指定する。モデルを指定せず `--lattice off` と `--lattice on` を
+比べる構成は M65 の測定に使う（`docs/lattice-conversion-spec.md` §10）。同梱辞書は品質 workflow では生成しないため、
+この構成を定期採取に入れるには、辞書の生成を workflow に足す必要がある。
 
 定期採取の CLI 配線は `scripts/run-quality-bench.py` が持つ。`kana_kanji_eval` と `typo_eval` の
 それぞれについて次の形で CLI を呼ぶ。baseline は品質 workflow の直前の `main` 成功 run の
@@ -804,6 +812,12 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   bench は既定 `off`。モードを変えた採取は互換キー差として baseline 再採取が必要）
 - `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
   混ざると user_adapt 以外の再現性が壊れる）
+- `dictionary_bundle_sha256`（`--dict-dir` で読んだ同梱辞書の内容ハッシュ。読まないときは `none`。
+  `.azdic` のファイル名をバイト昇順に並べ、`ファイル名(UTF-8) + 0x00 + ファイル生バイト列` を連結した全体の
+  SHA-256 とする。lattice_core の補正項（`docs/lattice-conversion-spec.md` §5.2）も含むので、校正し直すと
+  baseline 再採取が必要）
+- `lattice`（`on` / `off`。採取でラティス変換が有効だったか。`--dict-dir` が無いときは `off`。
+  `docs/lattice-conversion-spec.md` §10.1 の A / B を区別する）
 - `category_filter`（`--category` の値。既定 `all`。フィルタすると評価対象
   ケース集合が変わるが `eval_dataset_sha256` はファイル全体ハッシュで不変なため、
   本キーで区別する。フィルタ実行を全体 baseline と誤って比較しない）
@@ -839,6 +853,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
+  `dictionary_bundle_sha256` / `lattice` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に

@@ -649,6 +649,11 @@ CUDA backend の実リンクを中止し、`cuda` 要求を CPU へ降格する�
   経由で Health に反映。汎用 `last_error_`〔load/learning〕には**混ぜない**ので成功変換で確実に
   クリアできる）。
 - user_dict は degraded でも §7.1 手順 3 で得た候補を保つ（既定 score は §7.2）。
+- converter が `fallback_->Convert` の結果を返す経路（例外・空生成、`zenzai-deadline-fallback`）、エンジンが変換中の
+  例外を受けて `SimpleConverter` で変換し直す経路（§7.1）、モデル未ロードで active converter が `SimpleConverter` の
+  要求では、エンジンが辞書層からラティス変換の N-best を候補に足す（M65。`docs/lattice-conversion-spec.md` §3.2）。
+  converter の委譲と `debug_info` の付け方は変えない。足す候補の score 帯（0.1〜1.0）と source（`SystemDictionary`）は
+  同 spec §3.4 が定める。
 
 ロード時の降格と fallback（`InferenceEngine::LoadModelWithResult`）は次のとおりである。
 

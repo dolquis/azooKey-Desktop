@@ -64,7 +64,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
-| 変換品質トラック | M52〜M57 |
+| 変換品質トラック | M52〜M57 / M65 |
 
 ### M0: 廃止資産の削除
 
@@ -514,6 +514,7 @@ M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
+M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -2101,6 +2102,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/neural-reranker-spec.md`（M56 = Track A）
 > - `docs/neural-reranker-nll-spec.md`（Track B。M 番号を持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
+> - `docs/lattice-conversion-spec.md`（M65）
 >
 > リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
 > 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
@@ -2340,6 +2342,44 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     （spec §5.4）
   - 同一確定文脈の再変換で cache がヒットする（spec §5.2.1）
 - **参照仕様**: `docs/modernbert-ja-scoring-spec.md`
+
+### M65: モデル非経由のラティス変換
+
+- **目的**: Zenzai を通らない経路でも、読みを語に分割して変換する。辞書層の語と連接コストからラティスを作り、
+  コストの小さい順に N 件の候補と文節の区切りを出す。区切りを指定した再変換と、ユーザー辞書の活用対応の土台にする。
+- **前提**: M52（ベンチ）、M53（`.azdic` 物理層と `DictionaryStore`）。
+- **変更対象**: `dictbuild/`（連接情報の取り込み、`CONN` と lattice_core の生成、`matrix.def.zip` の固定）、
+  `core/`（ラティスの構築と N-best の探索、`CONN`・`CMAT` の読み出し）、`learning/src/DictionaryStore.cpp`、
+  `inference-host/src/InferenceEngine.cpp`、`bench/live_bench.cpp`（`--dict-dir`・`--lattice`）、
+  `bench/ConversionQuality.cpp` と `scripts/run-quality-bench.py`（互換キー `dictionary_bundle_sha256`・`lattice`）、
+  `pkg/msi/`（lattice_core の同梱）、`THIRD_PARTY_LICENSES`。
+- **受け入れ条件**:
+  - M52 ベンチをモデル無効構成（spec §10.1）で回したとき、ラティス有り（B）の `top1_accuracy` が
+    ラティス無し（A）より 10pp 以上高く、`cer` が 0.25 以上低い。補正項の校正は spec §10.3 の半分で行い、
+    判定は全件で行う
+  - B の p95 / p99 latency が M52 の合格基準 v1（50 ms / 100 ms）以下で、ラティスの構築と探索の p95 と
+    常駐 RSS の増分が spec §9 の予算に収まる
+  - モデルを指定し `--dict-dir` を付けた構成で、`--lattice on` の `top1_accuracy` が `--lattice off` より
+    0.5pp を超えて下がらない（M52 の回帰ゲートと同じ閾値。spec §10.1）
+  - lattice_core が無いか壊れているとき、ラティスだけが無効になり、それ以外の候補はラティスが無い構成と同じになる。
+    ある層の `connection_space` が lattice_core と違うか、`CONN` の ID を連接行列で引けないとき、その層の語は既定の
+    ID でラティスに入り、層の完全一致・前方一致・予測は変わらない（spec §3.6）
+  - `CONN` を持つ `.azdic` を、`CONN` を知らない reader が読め、完全一致・前方一致・予測の結果が変わらない。
+    `CONN` を持たない層（配布済みの `neologd_lexicon` pack を含む）の語が、既定の ID でラティスに入る
+  - 同梱 `.azdic` の合計が `docs/azdic-physical-layer-spec.md` §15.9 の 120 MB 以下に収まる
+  - `build_bundled.py` が `matrix.def.zip` の SHA256 を固定し、`THIRD_PARTY_LICENSES` と生成した
+    `ThirdPartyNotices.txt` に連接行列の由来が載る
+  - モデルを読まない実機で、助詞を含む文が変換される（Human Gate）
+- **参照仕様**: `docs/lattice-conversion-spec.md`、`docs/azdic-physical-layer-spec.md` §15.5・§15.12、
+  `docs/conversion-quality-benchmark-spec.md` §7・§10・§14.1、`docs/zenzai-inference-spec.md` §7.4
+- **補足**:
+  - SudachiDict の語コストと連接コストは形態素解析のために学習された値で、かな漢字変換では同じ読みの
+    カタカナ表記と漢字表記が競合する。補正項（spec §5.2）を M52 で校正しても受け入れ条件に届かないときは、
+    spec §8.5 の代案を検討する
+  - Zenzai が動いているときにラティスの候補を NLL 再ランクへ渡す段階 2（spec §3.3）は既定で無効とし、
+    本 M の受け入れ条件に含めない
+  - モデル無効構成の定期採取は、品質 workflow に同梱辞書の生成を足す変更を伴う
+    （`docs/conversion-quality-benchmark-spec.md` §10）
 
 ## 横断テーマと Phase の対応
 

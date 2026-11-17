@@ -710,7 +710,7 @@ wingetcreate update --urls `
   - Store の MSIX: origin が `PackageOrigin_Store` になり、確認しない。
   - external-location identity package（`msix-packaging-spec` §1.1.2）: 自前の証明書で署名するので
     origin は `PackageOrigin_DeveloperSigned` などの Store 以外になる見込みで、確認する。実機で返る
-    値は確かめていない（DEV-2075）。
+    値は DEV-2075 で確かめる。
   - Store 以外の MSIX と、origin を読めない package: 確認する。MSI の経路から確認を奪わないためで
     ある。MSIX の sideload 配布は延期中（§2.0）で、その更新の経路は再開のときに決める。
 - `settings.json` が読めない・不正な間も確認しない。不正な再読込は設定を適用しないが、Host が

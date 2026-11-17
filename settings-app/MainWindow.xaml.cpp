@@ -548,6 +548,8 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   const auto restart_failed = text(L"UpdateInstall_RestartFailed");
   const auto addon_installed_text = text(L"UpdateInstall_AddonInstalled");
   const auto addon_failed = text(L"UpdateInstall_AddonFailed");
+  const auto addon_failed_no_code = text(L"UpdateInstall_AddonFailedNoCode");
+  const auto addon_cancelled = text(L"UpdateInstall_AddonCancelled");
   const auto addon_verify_failed = text(L"UpdateInstall_AddonVerifyFailed");
 
   std::wstring body = text(L"UpdateInstall_ConfirmBody");
@@ -671,6 +673,12 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
         message += L"\n" + addon_verify_failed;
       } else if (azookey::settings::AddonFollowsBase(addon_result.outcome)) {
         message += L"\n" + addon_installed_text;
+      } else if (addon_result.outcome == UpdateInstallOutcome::Cancelled) {
+        // The second UAC prompt declined, or 1602.
+        message += L"\n" + addon_cancelled;
+      } else if (addon_result.code == 0) {
+        // An exception, with no msiexec exit code to show.
+        message += L"\n" + addon_failed_no_code;
       } else {
         std::wstring addon_message = addon_failed;
         if (const auto at = addon_message.find(L"{code}"); at != std::wstring::npos) {

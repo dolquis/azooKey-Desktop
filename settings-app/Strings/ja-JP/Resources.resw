@@ -147,6 +147,8 @@
   <data name="UpdateInstall_ConfirmVulkanFollows" xml:space="preserve"><value>Vulkan アドオンも、続けて同じバージョンに更新します。管理者権限の確認は、本体とアドオンで 2 回表示されます。</value></data>
   <data name="UpdateInstall_AddonInstalled" xml:space="preserve"><value>Vulkan アドオンも更新しました。</value></data>
   <data name="UpdateInstall_AddonFailed" xml:space="preserve"><value>Vulkan アドオンは更新できませんでした（コード {code}）。アドオンを同じバージョンにするまで、変換は CPU 版で動きます。リリースページからアドオンを更新してください。</value></data>
+  <data name="UpdateInstall_AddonFailedNoCode" xml:space="preserve"><value>Vulkan アドオンは更新できませんでした。アドオンを同じバージョンにするまで、変換は CPU 版で動きます。リリースページからアドオンを更新してください。</value></data>
+  <data name="UpdateInstall_AddonCancelled" xml:space="preserve"><value>Vulkan アドオンの更新を取り消しました。アドオンを同じバージョンにするまで、変換は CPU 版で動きます。リリースページからアドオンを更新してください。</value></data>
   <data name="UpdateInstall_AddonVerifyFailed" xml:space="preserve"><value>ダウンロードした Vulkan アドオンを検証できなかったため、アドオンは更新していません。アドオンを同じバージョンにするまで、変換は CPU 版で動きます。リリースページからアドオンを更新してください。</value></data>
   <data name="UpdateInstall_ConfirmPrimary" xml:space="preserve"><value>インストール</value></data>
   <data name="UpdateInstall_ConfirmClose" xml:space="preserve"><value>キャンセル</value></data>

@@ -818,7 +818,7 @@ optional フィールドを追加する（エンベロープ schema 自体は変
 
 | フィールド | 型 | 意味 | 欠落時・不正時 |
 |---|---|---|---|
-| `raw_keys` | string | 打鍵したキーの列（ローマ字入力は小文字の英字、かな入力はひらがな） | 空。補正の手がかりを持たない（v1 動作） |
+| `raw_keys` | string | 打鍵したキーの列（ローマ字入力は小文字の英字）。TIP が送るのはローマ字入力の打鍵だけ。ひらがなは Host が受け取れる値で、かな入力の打鍵は送らない | 空。補正の手がかりを持たない（v1 動作） |
 | `typo_correction_mode` | string（`off` / `suggest` / `rank` / `aggressive`） | 要求が求める補正モード（§12.6） | 空。Host 設定の実効値（§12.14）に従う（v1 動作） |
 
 両フィールドは optional で、空なら wire に出さない。`MessageType` は既存 `QueryCandidates` のまま
@@ -944,6 +944,13 @@ v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_repl
 `typoCorrection.mode` の v2 の値と同じ v1 の値（`rank` に対する `suggest` など）なら、v2 の値を残す。
 `off` 以外を選んだときは、`typoCorrection.enabled` の false も true に戻す。
 モードを変えない保存は `typoCorrection` をそのまま残すので、ペインの外で設定した `rank` は消えない。
+「辞書」ペインは、モードのほかに `typoCorrection.learnPersonalPatterns`（スイッチ）を編集する。これは
+`typoCorrection` の中に書き、既にファイルにあるか既定と違うときだけ書き、ほかの下位キーはそのまま残す。
+`learnPersonalPatterns` は Host の `ObserveTypo` の蓄積を今すぐ変える（`SettingsStore` が `typo_learning` を決め、
+`HandleObserveTypo` が止める）。
+`typoCorrection.enabled` はペインに専用のスイッチを持たず、false は `off` として示す。`rank` / `aggressive`、
+`maxReadingHypotheses`、`minConfidenceForRanking` / `minConfidenceForTopCandidate` は、補正エンジンが変換に
+反映するまでペインに出さず、保存で残す。
 v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
 その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
 M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。

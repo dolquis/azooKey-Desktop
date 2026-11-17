@@ -10993,6 +10993,79 @@ TEST(TsfTipTypoCorrectionTest, RawKeysGoOnlyToAHostThatAdvertisesThemAndNeverFor
   EXPECT_EQ(older_host.find("raw_keys"), std::string::npos) << older_host;
 }
 
+// DEV-2077: the capability is read per handshake, not once per TIP. The same
+// TextService that sent raw_keys to a Host advertising them stops sending them
+// after a settings-refresh handshake with a Host that does not.
+TEST(TsfTipTypoCorrectionTest, RawKeysStopAfterARehandshakeWithAHostThatDoesNotAdvertiseThem) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-typo-raw-keys-rehandshake-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::atomic<bool> advertise{true};
+  std::atomic<int> handshakes{0};
+  std::vector<std::string> payloads;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      ++handshakes;
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.host_generation_id = "same-generation";
+      if (advertise.load()) handshake.capabilities = {"raw_keys"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        payloads.push_back(request.payload_json);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  const auto payload_count = [&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return payloads.size();
+  };
+  const auto payload_at = [&](size_t index) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return payloads[index];
+  };
+
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  TypeTypoRomaji(h, "KA");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return payload_count() >= 1; }, std::chrono::seconds(10)));
+  ASSERT_EQ(handshakes.load(), 1);
+  const auto with_capability = ParseQueryCandidatesRequest(payload_at(0));
+  ASSERT_TRUE(with_capability);
+  ASSERT_EQ(with_capability->raw_keys, "ka");
+
+  // The Host now answers the handshake without "raw_keys" (a different or
+  // older Host behind the same pipe); the settings refresh handshakes again.
+  advertise.store(false);
+  h.service.request_host_option_refresh_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return handshakes.load() >= 2; }, std::chrono::seconds(10)));
+  h.service.post_window_query_for_test(&h.context, "か");
+  const bool arrived = WaitUntil([&] { return payload_count() >= 2; }, std::chrono::seconds(10));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+
+  ASSERT_TRUE(arrived);
+  const auto after_rehandshake = payload_at(1);
+  EXPECT_TRUE(ParseQueryCandidatesRequest(after_rehandshake));
+  EXPECT_EQ(after_rehandshake.find("raw_keys"), std::string::npos) << after_rehandshake;
+}
+
 TEST(TsfTipTypoCorrectionTest, StaleIdAndMismatchedReadingCannotApplyCorrection) {
   for (const bool stale_id : {false, true}) {
     SCOPED_TRACE(stale_id);

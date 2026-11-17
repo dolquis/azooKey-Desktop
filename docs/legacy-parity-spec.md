@@ -1460,8 +1460,9 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 
 - 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
   下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
-- 候補モードの描く行数は、anchor 点の下の空きと composition の上の空きの広い方に収め、窓を composition に重ねない（`docs/native-ui-spec.md` §4.1）。
-  候補の行を 1 行まで減らしても、案内行・secure toast・劣化バナーとともに広い方へ収まらないときだけ、作業領域の内側へ寄せて重なる。
+- 候補モードの描く行数は、anchor 点の下の空きと、上の空き（キャレットの高さの代わりの間隔を除く）の広い方に収め、
+  反転した窓を作業領域の上端へ寄せない。重なりうる場合（行の高さがその間隔を超えるとき、composition が複数行のとき、
+  1 行まで減らしても収まらないとき）は `docs/native-ui-spec.md` §4.1 が定める。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 

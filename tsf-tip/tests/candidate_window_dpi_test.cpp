@@ -1064,7 +1064,7 @@ TEST(CandidateWindowScrollTest, FitHeightIsTheLargerRoomBelowOrAboveTheCaret) {
 // DEV-2086: a window taller than the room on either side of the caret was moved
 // up against the top of the work area after the flip, over the composition.
 TEST(CandidateWindowScrollTest, RowsThatFitTheLargerSideKeepTheWindowOffTheComposition) {
-  // 32 candidates at 192 DPI, the caret's line in the middle of a 2064 px work area.
+  // 32 candidates at 192 DPI, the caret's line about two thirds down a 2064 px work area.
   constexpr int kRow = 48;
   constexpr int kGap = 40;
   const RECT work{0, 0, 2560, 2064};
@@ -1224,6 +1224,16 @@ TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCover
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
     // Flipped above the caret, inside the work area, and clear of the composition.
+    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.bottom, anchor.y - gap);
+
+    // A notice row below the rows takes its height from the same room.
+    window.Show(anchor, items, 0, L"案内");
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    const int with_notice = window.GetVisibleRowCount();
+    EXPECT_EQ(with_notice, (above - 2 * row) / row);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, (with_notice + 2) * row);
     EXPECT_GE(bounds.top, work.top);
     EXPECT_EQ(bounds.bottom, anchor.y - gap);
     window.Destroy();

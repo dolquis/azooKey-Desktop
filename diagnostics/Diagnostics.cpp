@@ -294,6 +294,29 @@ bool KeepSettingsScalar(const j::Value& value, const j::Value* schema, bool sens
   return !value.IsString() || !sensitive || MatchesSchemaEnum(value, *schema);
 }
 
+bool IsEndpointSettingName(std::string_view key) {
+  const auto lower = LowerAscii(std::string(key));
+  return lower.find("endpoint") != std::string::npos || lower.ends_with("url");
+}
+
+// The userinfo, query and fragment of an endpoint can carry a credential. The scheme, host, port
+// and path stay readable for diagnosis.
+std::string RedactUrlCredentials(std::string url) {
+  std::string suffix;
+  if (const auto cut = url.find_first_of("?#"); cut != std::string::npos) {
+    suffix = std::string(1, url[cut]) + "***redacted***";
+    url.erase(cut);
+  }
+  const auto scheme = url.find("://");
+  const auto authority = scheme == std::string::npos ? 0 : scheme + 3;
+  const auto path = url.find('/', authority);
+  const auto at = url.rfind('@', path == std::string::npos ? std::string::npos : path);
+  if (at != std::string::npos && at >= authority) {
+    url.replace(authority, at - authority, "***redacted***");
+  }
+  return url + suffix;
+}
+
 j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
                              std::string_view key = {}, bool sensitive_parent = false) {
   const bool sensitive = sensitive_parent || key == "openAiApiKey" ||
@@ -331,7 +354,11 @@ j::Value RedactSettingsValue(const j::Value& value, const j::Value* schema,
     }
     return j::Value(std::move(redacted));
   }
-  return KeepSettingsScalar(value, schema, sensitive) ? value : j::Value("***redacted***");
+  if (!KeepSettingsScalar(value, schema, sensitive)) return j::Value("***redacted***");
+  if (value.IsString() && IsEndpointSettingName(key)) {
+    return j::Value(RedactUrlCredentials(value.AsString()));
+  }
+  return value;
 }
 
 struct SettingsProbe {

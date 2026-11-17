@@ -681,6 +681,30 @@ TEST(DiagnosticsTest, RedactedSettingsKeepSchemaTypedValuesUnderBodyFieldNames) 
   EXPECT_EQ(redacted.find("AQID"), std::string::npos);
 }
 
+TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
+  const std::string userinfo(24, 'a');
+  const std::string query(24, 'b');
+  const std::string fragment(24, 'c');
+  const auto endpoint = [](const std::string& settings) {
+    const auto value = j::Parse(diag::RedactSettingsJson(settings));
+    return value ? value->GetString("openAiApiEndpoint") : std::nullopt;
+  };
+
+  const auto with_credentials = R"({"openAiApiEndpoint":"https://user:)" + userinfo +
+                                R"(@example.invalid:8443/v1?api-key=)" + query + "#" + fragment +
+                                R"("})";
+  const auto redacted = diag::RedactSettingsJson(with_credentials);
+  EXPECT_EQ(endpoint(with_credentials),
+            "https://***redacted***@example.invalid:8443/v1?***redacted***");
+  for (const auto& secret : {userinfo, query, fragment, std::string("user:")}) {
+    EXPECT_EQ(redacted.find(secret), std::string::npos) << secret;
+  }
+  EXPECT_EQ(endpoint(R"({"openAiApiEndpoint":"https://example.invalid/v1#)" + fragment + R"("})"),
+            "https://example.invalid/v1#***redacted***");
+  EXPECT_EQ(endpoint(R"({"openAiApiEndpoint":"http://127.0.0.1:18089/v1"})"),
+            "http://127.0.0.1:18089/v1");
+}
+
 // One sample per schema path: a numbered marker for each free-text string, the first enum value,
 // true for booleans and the minimum (or 1) for numbers. Map entries are keyed "app.exe".
 struct SettingsSchemaSample {

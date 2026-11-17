@@ -629,9 +629,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
         MeasureWrappedLines(BannerText(health_state_), width - metrics_.horizontal_padding * 2));
   };
   measure_banner();
-  // Keep the window inside the larger room below or above the caret, so it never
-  // covers the composition: draw only the rows that fit and follow the selection
-  // with them (native-ui-spec §4.1).
+  // Keep the window inside the larger room below or above the caret, so a flip
+  // never moves it up over the composition: draw only the rows that fit and
+  // follow the selection with them (native-ui-spec §4.1).
   const int count = static_cast<int>(items_.size());
   const int fit_height = ComputeFitHeight(pt, monitor.work_area, metrics_.caret_gap);
   const auto fit_rows = [&] {

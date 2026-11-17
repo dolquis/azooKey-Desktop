@@ -152,7 +152,8 @@ class CandidateWindow {
   // The height the candidate window may take (native-ui-spec §4.1): the larger of
   // the room below the anchor and the room above the caret (caret_gap over it),
   // within the work area. ComputePlacement puts a window of at most this height
-  // on that side, so it never covers the composition. At least 1; 0 for an empty
+  // on that side, clear of a one-line composition no taller than caret_gap, and
+  // never moves it up against the top of the work area. At least 1; 0 for an empty
   // work area, which ComputeVisibleRows reads as nothing to fit into.
   static int ComputeFitHeight(POINT anchor, RECT work_area, int caret_gap);
   // The candidate in the top drawn row: the previous range, moved only as far as

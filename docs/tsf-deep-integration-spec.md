@@ -220,7 +220,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 `GetCurrentPage` は選択を含むページを返す。いまのページが替わったら `TF_CLUIE_CURRENTPAGE` を、区切りが件数で変わったら `TF_CLUIE_PAGEINDEX` を
 立てて知らせ、選択の移動では区切りを動かさない（アプリは一覧が替わるときにページを数え直す。Microsoft Learn「UILess Mode Overview」の
 About PageIndex）。`SetPageIndex` は先頭が 0 で狭義に増え、どれも件数より小さい配列だけを受けて `S_OK` を返し（それ以外は `E_INVALIDARG`）、
-`pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで数字キーと PageUp / PageDown をその区切りで解く。9 件を超えるページの 10 件目以降は数字で選べない。
+受けた区切りを `pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで、`GetPageIndex` / `GetCurrentPage` と、数字キー・PageUp / PageDown に使う（区切りは TIP が持ち、core へ添える）。9 件を超えるページの 10 件目以降は数字で選べない。
 
 ### 2.4 動作分岐
 

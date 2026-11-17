@@ -370,7 +370,7 @@ Provider を置くかどうかを改めて判断する。
 UI-less のアプリ（`docs/tsf-deep-integration-spec.md` §2）が読み入力中ずっと予測を候補一覧として描き、
 予測の行が選択や番号で選べるように見えてしまうためである。UI-less の環境でも予測モードは TIP が描き
 （同 §8）、候補モードはアプリが描く（`pbShow == FALSE`）。UIElement の内容と契約は予測モードの有無で変えない。
-UIElement には候補の全件を渡し、ページは §4.1 と同じ 9 件ずつの区切りで返す（M68。`docs/tsf-deep-integration-spec.md` §2.3）。
+UIElement には候補の全件を渡し、ページは既定で §4.1 と同じ 9 件ずつの区切りで返す（M68。アプリが `SetPageIndex` で渡した区切りの扱いは `docs/tsf-deep-integration-spec.md` §2.3）。
 
 ## 6. アニメーション
 

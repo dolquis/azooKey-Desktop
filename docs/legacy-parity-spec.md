@@ -366,24 +366,30 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 > 確定するが、Windows 版は legacy と同じく 1 打で確定する。
 
 > **候補のページ（M68、DEV-2037）**: 候補選択中の候補は、先頭から 9 件ずつのページに分ける。選択中の候補を含む
-> ページをいまのページとし、ページは選択の index から決める（core・候補窓・UIElement で別に持たない）。
-> 例外として、アプリが候補一覧を描く構成で `SetPageIndex` がページの区切りを渡したときは、候補一覧が替わるまで
-> その区切りを使う（`docs/tsf-deep-integration-spec.md` §2.3）。
+> ページをいまのページとし、ページは区切りと選択の index から決める。区切りは既定の 9 件ずつで、core・候補窓・
+> UIElement で同じ区切りを使い、ページを別に持たない。例外として、アプリが候補一覧を描く構成（`pbShow == FALSE`）で
+> `SetPageIndex` が区切りを渡したときは、TIP がその区切りを持ち、候補一覧が替わるまで数字と PageUp / PageDown を
+> その区切りで解く。core へは、数字と PageUp / PageDown を渡すときに区切りを添える（渡し方は実装で決める。
+> `docs/tsf-deep-integration-spec.md` §2.3）。
 >
 > - 数字 `1`〜`9`（テンキーを含む）は、いまのページの n 件目を選んで Commit と同じく確定する。いまのページに
 >   n 件目が無ければ消費して何もしない。一括変換の複数文節では確定せずに選択だけを移す。`0` は上の表のとおり。
+> - ページ送りで選択が変わったときも、↑↓ と同じく選択中の候補を表示用の preedit に反映する
+>   （`docs/tsf-deep-integration-spec.md` §2.4.1）。
 > - PageDown は次のページ、PageUp は前のページへ選択を移す。移った先はページ内の同じ位置とし、そのページに
 >   同じ位置の候補が無ければ末尾の候補とする。最後のページの PageDown は先頭のページへ、先頭のページの PageUp は
 >   最後のページへ巡回する（↑↓ の巡回と同じ）。ページが 1 つだけのときは消費して何もしない。
 > - Space・↓・Ctrl+N と Shift+Space・↑・Ctrl+P は 1 件ずつ動き、ページの端を越えるといまのページが替わる。
 > - 当てる一覧は、通常変換の候補、先頭文節の候補（`docs/segment-editing-spec.md`。伸縮中の PageUp / PageDown は
 >   先頭文節の長さを保つ）、一括変換の文節の候補、TIP の前処理が出す候補窓（数字・英単語・記号・絵文字のリライター）、
->   絵文字検索、再変換の候補一覧（`docs/tsf-deep-integration-spec.md` §1）のすべてとする。予測モード（§3）には当てない。
+>   再変換の候補一覧（`docs/tsf-deep-integration-spec.md` §1）のすべてとする。予測モード（§3）には当てない。
+> - 絵文字検索の一覧（`docs/candidate-rewriter-spec.md` §11 の `Listing`）は、窓をページで描き、PageUp / PageDown で
+>   ページを送る。数字は同 §11 のとおり検索語を伸ばし、ページ内の番号では選ばない。
 > - `maxCandidates` は Host が返す件数の上限であり、ページの区切りに関係しない。TIP が足す候補（リライター、
 >   英単語、typo 補正の提案など）で、既定の 9 件でも 1 ページを超えうる。
 > - 候補窓の描き方（いまのページだけを描くこと、ページ内の番号、窓の大きさ）は `docs/native-ui-spec.md` §4.1 が定める。
-> - Selecting 以外の PageUp / PageDown はアプリへ渡す。候補選択中と Space の応答待ち（§1.2 の保留）の
->   PageUp / PageDown はアプリへ渡らない。10 件目以降の候補は、全件の通し番号ではなくページ内の番号で選ぶ。
+> - Selecting と絵文字検索の一覧のほかでは、PageUp / PageDown をアプリへ渡す。候補選択中と Space の応答待ち
+>   （§1.2 の保留）の PageUp / PageDown はアプリへ渡らない。10 件目以降の候補は、全件の通し番号ではなくページ内の番号で選ぶ。
 
 **キー割当の legacy との差**: 上の表と補足は Windows 版の割当であり、legacy の
 `UserAction.getUserAction` と `InputState` の写像そのものではない。legacy と違う割当は次のとおりで、
@@ -657,7 +663,7 @@ karukan を根拠に API やテストの設計を決めない。
   `ReplaceMarkedText(surface)` の列で反映する（§1.3）。
 - **候補のページ送り・スクロール**: M13 の範囲は 1〜9 の数字選択と Up/Down の巡回である。
   ページを持つ窓（M68、§1.4「候補のページ」）は `UserAction` を増やさず（§1.5.2）、PageUp / PageDown を
-  ページ単位の Up/Down として既存の意味を広げる。ページは選択の index から決まるので、`ClientAction` は足さず、
+  ページ単位の Up/Down として既存の意味を広げる。ページは区切りと選択の index から決まるので、`ClientAction` は足さず、
   `ShowCandidateWindow` も出し直さずに `UpdateCandidateSelection(index)` で表す。
 - **複合アクションと consume / fallthrough**: レガシー Swift の複合アクションは細粒度アクションの列で
   表す（§1.5.2）。`consume` / `fallthrough` は §1.5.3 の `nullopt` と eaten 判定に吸収し、

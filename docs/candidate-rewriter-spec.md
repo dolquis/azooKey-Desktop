@@ -499,6 +499,7 @@ UI-less モードとアプリ描画ホストでは、候補は `ITfCandidateList
 | Collecting | Esc | Inactive | 候補窓は既に閉じている。`:` と検索語を composing 文字列として残したままモードを抜ける |
 | Collecting | 応答が 1 件以上 | Listing | 候補窓を開く |
 | Listing | ↑ / ↓ / Space | Listing | 選択を移動する |
+| Listing | PageUp / PageDown | Listing | 選択を前 / 次のページへ移す（M68。ページの規則は `docs/legacy-parity-spec.md` §1.4「候補のページ」） |
 | Listing | `[A-Za-z0-9_+-]` の打鍵 | Collecting または Listing | 検索語を伸ばして引き直す。0 件なら Collecting へ戻り候補窓を閉じる |
 | Listing | Backspace | Collecting または Listing | 検索語を縮めて引き直す |
 | Listing | Enter、クリック、`:` の打鍵 | Inactive | 選択中の絵文字で `:` から検索語末尾までを置き換えて確定する |

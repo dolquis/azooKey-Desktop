@@ -1843,14 +1843,15 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     句読点の確定は句読点を足す、F6〜F10 は字種を変える前の読み）
   - spec §4.1 の対象にしない確定の後、および spec §4.2 の条件が欠けるとき（別のキーの後、キャレットの移動、別の
     context、IME Off、英数モード、composition がある間）は、Ctrl+Backspace がアプリへ渡る。修飾キーだけの押下では
-    取り消しの対象を捨てない
+    取り消しの対象を捨てない。取り消しに使った Ctrl+Backspace のキーリピートは消費され、戻した入力を消さない
   - 確かめ直しの失敗、同期の edit session の拒否、composition を始められないときは、文書が変わらず Ctrl+Backspace が
     アプリへ渡る
   - Ctrl+Shift+Backspace は忘却のまま変わらない。取り消しで忘却の対象と即 Backspace の `undo` の窓が捨てられる
-  - 戻した読みのまま別の表層で読み全体を確定したときだけ、取り消した表層の `CommitCorrection{kind:"undo"}` が
-    1 回送られる。同じ表層の選び直し、読みの変更、部分確定、Esc、secure・学習不可の文脈では送られない
+  - 戻した入力の最初の確定（部分確定でない）が、取り消した確定の観測と同じ読みで違う表層の観測を送ったときだけ、
+    取り消した観測の組の `CommitCorrection{kind:"undo"}` が 1 回送られる。同じ表層の選び直し、読みの変更、部分確定、
+    Esc、secure・学習不可の文脈では送られない。取り消した時点では学習のメッセージが送られない
   - 部分確定の後は、残りの読みを確定して Idle に戻った後の確定だけが戻り、先に確定した先頭文節へは遡らない
-  - secure の文脈でも取り消しが働き、Host へは何も送られず、読みと表層がログに出ない
+  - secure の文脈でも取り消しが働き、学習のメッセージが Host へ送られず、読みと表層がログに出ない
   - `keymap_test`・`input_state_test`・`onkeydown_preedit_test` に上記の検証がある
   - 実機での確認（Notepad・Word・Edge・Chrome・VS Code・Excel のセル編集・スタート検索、Microsoft IME との比較。
     `gate:human-required`）

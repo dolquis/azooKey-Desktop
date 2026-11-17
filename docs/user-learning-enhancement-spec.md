@@ -217,8 +217,8 @@ Host は以下のイベントを `LearningStore::ObserveEvent` で記録する�
 | イベント | 記録する event | weight | 回数 |
 |---|---|---|---|
 | 候補確定 | `commit` | `+alpha` | `commit_count += 1` |
-| 即 Backspace（確定の直後の取り消し） | 直前候補の `correction_reject` | `-alpha`（0 で止める） | `reject_count += 1` |
-| 確定の取り消しの後の選び直し（M69、`docs/commit-undo-spec.md` §7） | 取り消した表層の `correction_reject` | `-alpha`（0 で止める） | `reject_count += 1` |
+| 即 Backspace（確定の直後に Backspace で消す） | 直前候補の `correction_reject` | `-alpha`（0 で止める） | `reject_count += 1` |
+| 確定の取り消し（Ctrl+Backspace）の後の選び直し（M69、`docs/commit-undo-spec.md` §7） | 取り消した確定の観測の表層の `correction_reject` | `-alpha`（0 で止める） | `reject_count += 1` |
 | 再変換（`recommit`） | 変更前の `correction_reject` と変更後の `correction_accept` | `-alpha` / `+alpha` | `reject_count` / `commit_count` と `accept_count` |
 | typo 補正候補の採用（M55） | `typo_accept` | `+0.25` | `commit_count` と `accept_count` |
 | typo 補正候補の拒否（M55） | `typo_reject` | `-0.45`（0 で止める） | `reject_count += 1` |
@@ -254,9 +254,10 @@ TIP は次のときに送る。
   最後の文節が学習されなかった場合（English タグ、送信しなかった観測）は、前の文節を代わりに
   拒否せず、何も送らない。Ctrl+Shift+Backspace（Forget、`legacy-parity-spec.md` §7.2）は
   忘却だけを送り、`undo` は送らない。1 回の打鍵が両方を送ることはない。
-- **`undo`（確定の取り消しの後、M69）**: 確定の取り消し（Ctrl+Backspace、`docs/commit-undo-spec.md`）で戻した読みを
-  変えずに、読み全体を別の表層で確定したとき。`reading` は戻した読み、`rejected_surface` は取り消した表層である。
-  取り消した時点では送らず、同じ表層の選び直し・読みの変更・部分確定・Esc では送らない（同 §7）。
+- **`undo`（確定の取り消しの後、M69）**: 確定の取り消し（Ctrl+Backspace、`docs/commit-undo-spec.md`）で戻した入力の
+  最初の確定（部分確定でない）が、取り消した確定の観測と同じ読みで、違う表層の観測を送ったとき。`reading` と
+  `rejected_surface` は取り消した確定の観測の組である。取り消した時点では送らず、同じ表層の選び直し・読みの変更・
+  部分確定・Esc では送らない（同 §7）。
 - **`reconvert`**: azooKey の候補 UI で開いた再変換で、元の表記と違う候補を確定したとき。
   `reading` は再変換の逆変換で得た読み、`rejected_surface` は元の表記、`selected_surface` は
   選んだ候補である。元の表記を選び直したときは送らない。再変換の確定は Forget の対象にしない。
@@ -303,7 +304,7 @@ Host は `CommitObservation` と同じ判定（Handshake の `secure_flag`、要
 | 契機 | reading | rejected_surface | selected_surface |
 |---|---|---|---|
 | 候補ウィンドウでの再選択（`reconvert`、§4.1） | 元の reading | 旧確定 | 新確定 |
-| 確定の取り消しの後の選び直し（`undo`、§4.1。M69） | 戻した reading | 取り消した確定 | —（`undo` は送らない） |
+| 確定の取り消しの後の選び直し（`undo`、§4.1。M69） | 取り消した確定の観測の reading | 取り消した確定の観測の表層 | —（`undo` は送らない） |
 | 文脈再選択（§4.3。予定） | 元の reading | 旧確定 | 新確定 |
 | Post-Commit Lint の採用（`docs/ai-backend-spec.md` §4.3。予定） | 推測した reading | `finding.current` | `finding.suggestion` |
 

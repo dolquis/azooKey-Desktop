@@ -64,7 +64,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 / M72 / M73 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
-| 変換品質トラック | M52〜M57 / M65 |
+| 変換品質トラック | M52〜M57 / M65 / M74 |
 
 ### M0: 廃止資産の削除
 
@@ -523,6 +523,7 @@ M53 ─→ M55                    （Dictionary-Constrained Correction が辞書
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
+M52 + M54 ─→ M74              （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -573,6 +574,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   基盤を再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
   M36-B 単体の trending→AutoWordStore とは別経路。spec §14.10。未完了時は当該
   pack を無効として M53 v1 を受け入れる）。
+  M74（個人回帰ベンチ）は M52・M54 を前提とする。
   詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
@@ -2456,6 +2458,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/neural-reranker-nll-spec.md`（Track B。M 番号を持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
 > - `docs/lattice-conversion-spec.md`（M65）
+> - `docs/conversion-quality-benchmark-spec.md` §15（M74）
 >
 > リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
 > 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
@@ -2736,6 +2739,34 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - モデル無効構成の定期採取は、品質 workflow に同梱辞書の生成を足す変更を伴う
     （`docs/conversion-quality-benchmark-spec.md` §10）
 
+### M74: 個人回帰ベンチ
+
+- **目的**: 利用者の端末の中だけで、利用者自身の確定履歴（かなの学習ストア）を評価ケースにして、モデル・辞書・
+  ビルドを差し替えた前後の変換の当たり方を比べる。M52 の合成データでは測れない、利用者ごとの語彙への当たり方を測る。
+  結果はどこへも送らない。
+- **前提**: M52（指標・出力形式・互換キー）、M54（学習ストアの v2 形式と `app_name` 列）。
+- **変更対象**: `bench/live_bench.cpp`・`bench/BenchmarkCommandLine.cpp`（`--personal-eval` ほかのオプション）、
+  `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`）、`bench/CMakeLists.txt`（テスト）、
+  `scripts/run-quality-bench.py`（`eval_source` を持たない結果を `bundled` として比べる）、
+  `docs/learning-data-management-spec.md` §14（学習ストアの読み手の追記）。
+- **受け入れ条件**:
+  - `azookey_bench --personal-eval --output result.json` が spec §15.6 の指標を出し、学習ストアのファイルのバイト列と
+    更新時刻が実行の前後で変わらない
+  - `--output` と stderr に読み・表層が出ない。`--per-case` は `--include-personal-text` が無ければ入力エラーになり、
+    有れば spec §15.7 の警告を出して書く
+  - 学習許可が偽になる設定（`secure`、`private`、`custom.learning = false`、設定の読取失敗・JSON 不正）では評価しない
+  - 実効の `secureApps` とアプリ別プロファイルの `privacyMode` / `learningEnabled` に当たる行が、理由ごとの件数とともに
+    除かれ、`app_name` が空の行は含まれる（spec §15.4）
+  - 同じ学習ストアと構成で 2 回実行すると `eval_dataset_sha256` と精度系の指標が一致し、`--baseline` は互換キーが
+    一致するときだけ `diff_vs_baseline` を出す
+  - spec §15.5 で受け付けないオプションが入力エラーになる
+  - 実機の DPAPI で暗号化された学習ストアで実行でき、出力に本文が無いことと、1 万行の学習ストアでの所要時間を
+    記録する（Human Gate）
+- **参照仕様**: `docs/conversion-quality-benchmark-spec.md` §15・§14.1
+- **補足**:
+  - 左文脈による同音異義語の選び分けと、学習係数（`docs/user-learning-enhancement-spec.md` §13）の校正は測らない。
+    理由は spec §15.1 が持つ
+
 ## 横断テーマと Phase の対応
 
 各リッチ化テーマ（移動先は `docs/rich-features-spec.md` の転送表）の実装タイミングは
@@ -2774,3 +2805,4 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 順で効果を測定しながら進める。例外は `docs/neural-reranker-nll-spec.md`（Track B）
 （NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
 （前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。
+M74 は M52 と同じ `docs/conversion-quality-benchmark-spec.md` の §15 を正典とする。

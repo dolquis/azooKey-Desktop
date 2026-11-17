@@ -62,7 +62,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル）、M67（入力欄の種類による切替、§13） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
-| [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
+| [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ）。§15 は M74 の個人回帰ベンチ（利用者の確定履歴で端末内だけで測る） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給。§4.1 の確定の取り消しの後の `undo` は M69 |
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker（Track A） |
 | [`neural-reranker-nll-spec.md`](neural-reranker-nll-spec.md) | NllScorer 型ニューラルリランク（Track B） |

@@ -407,7 +407,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--baseline <json>` | 比較 baseline |
 | `--backend <name>` | backend 強制 |
 | `--model <path>` | モデル強制 |
-| `--dict-dir <dir>` | 同梱辞書（`dictbuild/build_bundled.py` が出力する `dict` ディレクトリ）を静的層として読む。省略時は静的層を読まない。`config.dictionary_bundle_sha256` に記録（§14.1 互換キー） |
+| `--dict-dir <dir>` | 同梱辞書（`dictbuild/build_bundled.py` が出力する `dict` ディレクトリ）を静的層として読む。同じディレクトリの `lattice_core.azdic` は層に登録せず、ラティス変換だけが読む（`docs/lattice-conversion-spec.md` §8.2）。省略時は静的層を読まない。`config.dictionary_bundle_sha256` に記録（§14.1 互換キー） |
 | `--lattice on\|off` | ラティス変換の段階 1（`docs/lattice-conversion-spec.md` §3.2 の内部設定）を設定する。`--dict-dir` があるときの既定は製品と同じ `on`、無いときは `off`。`--dict-dir` 無しの `on` と、`on` で lattice_core を読めないときはエラーで止める。`config.lattice` に記録（§14.1 互換キー） |
 | `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る |
 | `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |

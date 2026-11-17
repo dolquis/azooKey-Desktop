@@ -1273,8 +1273,9 @@ TEST(NamedPipeTransportTest, ClientIdleWaitEndsWhenServerCloses) {
   const bool started = WaitForFlag(receive_started);
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
+  // Closing the handle without DisconnectNamedPipe, as a crashed Host would.
   const auto close_start = std::chrono::steady_clock::now();
-  DisconnectNamedPipe(server.get());
+  server.Close();
   receiver.join();
   const auto close_elapsed = std::chrono::steady_clock::now() - close_start;
 

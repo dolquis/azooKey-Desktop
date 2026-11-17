@@ -451,10 +451,11 @@ PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE canc
     // Capture the wait failure before CancelIoEx overwrites the thread error.
     result.error = GetLastError();
   }
-  // The drain can observe a completion that raced the deadline. The frame is
+  // The drain can observe a completion that raced the deadline. A frame chunk is
   // abandoned regardless: once the budget is spent, one more chunk cannot make
   // the frame whole, and a cancelled message-mode read leaves unread remainder
-  // in the pipe that no amount of resynchronisation recovers.
+  // in the pipe that no amount of resynchronisation recovers. The zero-byte
+  // arrival wait takes nothing, so its caller just peeks again.
   CancelAndDrainOverlapped(pipe, overlapped, result.transferred);
   return result;
 }
@@ -943,8 +944,8 @@ ClientReceiveResult ReceiveClientEnvelope(
 
     if (arrival_without_bytes) {
       // The last arrival wait completed yet Peek saw nothing, as a zero-length
-      // message (never sent by this framing) would leave it. Another zero-byte
-      // read would complete at once, so back off on a timed wait instead.
+      // message (never sent by this framing) could leave it. Another zero-byte
+      // read might then complete at once, so back off on a timed wait instead.
       arrival_without_bytes = false;
       constexpr DWORD kEmptyArrivalBackoffMs = 10;
       const DWORD wait = WaitForSingleObject(connection->cancel_event.get(),

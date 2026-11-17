@@ -61,7 +61,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 |
@@ -416,8 +416,8 @@ v1.0 リリースに向けたリスクと対応:
 本ロードマップ（Windows 版）の対象外:
 
 - macOS 版 v1.0（`legacy/` 配下に保全）
-- `legacy/segment-edit-upstream.md` の文節エディット機能（macOS 向けの上流
-  計画、Windows MVP 後）
+- `legacy/segment-edit-upstream.md` の上流計画の残り。変換した文を複数の文節に分けて並べ、注目する文節を
+  移す編集と、確定した文節へ戻る編集である。候補選択中の先頭文節の伸縮と部分確定は M66 が扱う
 - `legacy/Core/Sources/Core/InputUtils/InputState.swift` の FIXME（macOS 側）<!-- lint:allow status -->
 - Linux 版（コミュニティフォーク `fcitx5-hazkey` で対応）
 
@@ -458,7 +458,8 @@ Phase 4 完了 ─→ M13 ─┬─→ M14 ─┐
                      ├─→ M17
                      ├─→ M18
                      ├─→ M61-A ─→ M61-B（M48 にも依存）
-                     └─→ M64（M22・M60 にも依存）
+                     ├─→ M64（M22・M60 にも依存）
+                     └─→ M66（M23 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
 Phase 5 完了 ─→ M20 ─→ M23
 Phase 5 完了 ─→ M21 ─→ M22 ─→ M64
 
@@ -1711,6 +1712,47 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     - **生ローマ字との対応**: 数字・記号の取り込み、Backspace、読みの補正で生ローマ字とかなの対応が崩れる。
       M60 のバッファと判定（`docs/inline-english-candidate-spec.md` §4.1）は変えず、崩れたときはヘボン式の小文字に
       戻して数字・記号は打鍵した ASCII に戻す。このとき大小と綴りが legacy と変わる（spec §3.6）。
+
+### M66: 文節の伸縮と部分確定
+
+> 通常変換の候補選択中に、Shift+← / Shift+→ で先頭の文節の長さを変え、その文節だけを確定して残りの読みの変換を
+> 続ける。legacy（macOS 版）にある操作で（parity 監査 P-09）、Windows 版の通常変換は読み全体しか確定できない。
+> 正典仕様は `docs/segment-editing-spec.md` とし、本節は定義・依存・受け入れ条件・リスクだけを持つ。
+
+- **目的**: 長い読みの区切りを変換器が誤ったとき、読みを消して打ち直さずに、先頭の文節から順に正しい候補で
+  確定できるようにする。
+- **前提**: M13（`UserActionMap` と `InputState`）、M23（文節ごとの表示属性）。モデルを通らない経路で先頭文節の
+  候補に残りの読みを使う部分だけが M65（ラティスの語の境目の制約）にも依存する。
+- **変更対象**: `core/include/azookey/core/UserAction.h`、`core/src/UserActionMap.cpp`、
+  `core/include/azookey/core/InputState.h`・`core/src/InputState.cpp`、`core/include/azookey/core/ClientAction.h`、
+  `tsf-tip/src/TextService.cpp`（先頭文節の要求、部分確定の edit session、表示属性、観測）、
+  `tsf-tip/src/DisplayAttribute.cpp`、`ipc/include/azookey/ipc/Payloads.h`・`ipc/src/Payloads.cpp`（残りの読み）、
+  `inference-host/src/InferenceEngine.cpp`（ラティスへの残りの読みの受け渡し）。
+- **受け入れ条件**:
+  - 一括変換 OFF の候補選択中に、Shift+← / Shift+→ が先頭文節の長さを spec §4 のとおりに変え、変えるたびに
+    先頭文節の読みで候補窓用の要求が出て、窓が先頭文節の候補に替わる
+  - 先頭文節が読みの一部だけを覆うとき、Enter・→・Ctrl+F・数字・F6〜F10 で先頭文節だけが確定し、
+    残りの読みの候補窓が開く。確定した文字列に表示属性が残らない
+  - 先頭文節が読み全体を覆うときの Enter・→・←・数字・F6〜F10 の挙動が、M66 を入れる前と変わらない
+  - 部分確定のたびに、先頭文節の読みと確定した表層の対だけが観測され、残りの読みの要求の左文脈に確定した表層が入る
+  - 伸縮中は先頭文節が Focused、残りの読みが Converted で描かれる
+  - Ctrl+I / Ctrl+O はアプリへ渡り、一括変換の候補選択中の Shift+← / Shift+→ は文節移動のまま変わらない
+  - モデルを読まない構成で、残りの読みを添えた要求の候補が、語の境目の制約を掛けたラティスの先頭文節の表層になる。
+    残りの読みを添えない要求の候補は変わらない
+  - `input_state_test`・`keymap_test`・`onkeydown_preedit_test`・`display_attribute_test`・`payloads_test` に上記の検証がある
+  - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成、モデルあり・なし、`gate:human-required`）
+- **参照**: `docs/segment-editing-spec.md`、`docs/legacy-parity-spec.md` §1.2・§1.4、
+  `docs/tsf-deep-integration-spec.md` §5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3
+- **補足**:
+  - **範囲**: 変換した文を複数の文節に分けて並べ、注目する文節を移す編集と、確定した文節へ戻る編集は含めない
+    （「スコープ外」）。Space の候補列の先頭に先頭文節の候補を並べる legacy の挙動も含めない。
+  - **リスク**:
+    - **部分確定のアプリ差**: `ITfComposition::ShiftStart` で composition の先頭をずらしたとき、確定した文字列の扱いと
+      元に戻す単位がアプリによって違う。失敗したときは composition を始め直す（spec §6.2）。実機で確かめる。
+    - **遅延**: 伸縮のたびに先頭文節の候補を取り直す。Zenzai の予算 600 ms と候補窓の期限 750 ms の内に収まらない
+      ときは、TIP のローカル候補で窓を開く（spec §5.2）。
+    - **右の文脈**: Zenzai は先頭文節の読みだけを変換するので、縮めた先頭文節では後ろの語で決まる同音異義語を
+      誤りやすい（spec §5.3）。
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

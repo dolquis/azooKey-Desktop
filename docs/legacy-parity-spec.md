@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M13, M14, M15, M16, M17, M18, M19, M64]
+milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66]
 canonical_for: ["Phase 5（M13〜M19）のレガシー parity"]
 ---
 
@@ -20,7 +20,7 @@ Windows 版としての仕様判断は本書が正典であり、`legacy/` は�
 
 | 節 | マイルストーン |
 |---|---|
-| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64 |
+| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66 |
 | §2 | M14 |
 | §3 | M15 |
 | §4 | M16 |
@@ -139,6 +139,7 @@ enum class InputStateKind {
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
 | Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
+| Selecting | 文節の伸縮（Shift+← / Shift+→） | Selecting | 先頭文節の長さを変え、先頭文節の読みで候補窓用の `QueryCandidates` を送る。伸縮中の Enter・→・数字・F6〜F10 は先頭文節だけを確定し、残りの読みを続ける（`docs/segment-editing-spec.md` §4・§6） |
 | Composing / Previewing / Selecting | Input（`、` `。` `？` `！`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
@@ -278,6 +279,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_DELETE | (none) | Delete |
 | VK_LEFT | (none) | Backward |
 | VK_RIGHT | (none) | Forward |
+| VK_LEFT / VK_RIGHT | Shift（Selecting） | 文節の伸縮（← は縮める、→ は伸ばす。`docs/segment-editing-spec.md` §4） |
 | VK_UP | (none) | Up |
 | VK_DOWN | (none) | Down |
 | VK_HOME | (none) | LineHead |
@@ -322,7 +324,10 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   である（§8.1）。字種と確定の規則は `docs/tsf-deep-integration-spec.md` §3.6。UnicodeInput でも F6〜F10 を
   字種指定確定の 5 値に写像し、TIP は消費して何もしない（16 進バッファを終えない）。
 - `VK_LEFT` / `VK_RIGHT` / Ctrl+B / Ctrl+F は Selecting でだけ `Backward` / `Forward` になる。
-  TIP は batch 変換の文節移動にだけ使い、文節が無いときはパススルーする。
+  TIP は batch 変換の文節移動と、通常変換の伸縮中（`docs/segment-editing-spec.md` §4）にだけ使い、
+  どちらでもないときはパススルーする。
+- Shift 付きの `VK_LEFT` / `VK_RIGHT` は、通常変換の Selecting で文節の伸縮になる。batch 変換の文節を表示している
+  ときは、Shift の無い ← / → と同じ文節移動とする。
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
   Selecting で `Up` / `Down` になる。
 - Alt または Win を含む組合せは常に `nullopt` とする。
@@ -339,7 +344,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 > **字種指定のキーと legacy との差（DEV-1812）**: F6〜F10 は legacy と Microsoft IME に共通の操作として
 > 割り当てる（roadmap M64）。legacy で F6〜F10 と同じ働きをする Ctrl+J / K / ; / L / : と、Microsoft IME の
 > Ctrl+U / I / O / P / T は割り当てない（Ctrl+P は Selecting の `Up` に使う）。legacy の Ctrl+I / O（文節の
-> 伸縮）と Ctrl+S（AI の提案）も割り当てない。Microsoft IME の F6〜F10 は確定せずに字種を巡回し、Enter で
+> 伸縮）は M66 でも割り当てず、伸縮は Shift+← / Shift+→ で行う（`docs/segment-editing-spec.md` §4）。
+> Ctrl+S（AI の提案）も割り当てない。Microsoft IME の F6〜F10 は確定せずに字種を巡回し、Enter で
 > 確定するが、Windows 版は legacy と同じく 1 打で確定する。
 
 **キー割当の legacy との差**: 上の表と補足は Windows 版の割当であり、legacy の
@@ -349,7 +355,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | キー・場面 | legacy | Windows |
 |---|---|---|
 | Ctrl+P / Ctrl+N | 読み入力中と候補選択中に ↑ / ↓ にする。読み入力中の Ctrl+N は候補選択を開き、Ctrl+P は何もしない | Selecting でだけ `Up` / `Down`。それ以外はアプリへ渡す |
-| Ctrl+F | → にする。読み入力中は何もせず、候補選択中は選択中の候補が覆う部分だけを確定して残りを続ける | Selecting でだけ `Forward`。TIP は一括変換の文節移動にだけ使い、文節が無いときはアプリへ渡す |
+| Ctrl+F | → にする。読み入力中は何もせず、候補選択中は選択中の候補が覆う部分だけを確定して残りを続ける | Selecting でだけ `Forward`。TIP は一括変換の文節移動と、通常変換の伸縮中の部分確定（`docs/segment-editing-spec.md` §4）に使い、どちらでもないときはアプリへ渡す |
+| Ctrl+I / Ctrl+O、Shift+← / Shift+→ | 読み入力中・先頭候補の表示中・候補選択中に文節を伸縮する（Ctrl+I と Shift+← が縮め、Ctrl+O と Shift+→ が伸ばす） | 候補選択中の Shift+← / Shift+→ だけを先頭文節の伸縮に使う（`docs/segment-editing-spec.md` §4・§9）。Ctrl+I / Ctrl+O は割り当てず、アプリへ渡す |
 | Ctrl+B / Ctrl+A / Ctrl+E | 割当なし（未定義の Ctrl 組合せ） | Ctrl+B は Ctrl+F と対にして Selecting の `Backward` とする。Ctrl+A / Ctrl+E は割り当てない。表の `LineHead` / `LineEnd` は `UserAction` の名前で、この版は割り当てない |
 | Ctrl+M | Enter と同じ | 割り当てない。アプリへ渡す |
 | Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する（Shift+Tab は第 2 候補。第 2 候補が無ければ素通し）。候補窓の応答を待つ間は消費して何もしない（§3.4）。それ以外はアプリへ渡す |

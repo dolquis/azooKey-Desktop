@@ -1057,7 +1057,8 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 
 色は provider から指定しない（§5.6）。
 「想定する描画」は、`bAttr` に応じてアプリが選ぶ配色の典型である。
-一括変換が OFF の候補選択中（§5.5）は、preedit 全体を Focused で表示する。
+一括変換が OFF の候補選択中（§5.5）は、preedit 全体を Focused で表示する。そのうち先頭文節を伸縮している間は、
+先頭文節を Focused、残りの読みを Converted で表示する（`docs/segment-editing-spec.md` §7）。
 
 ### 5.2 GUID 定義
 
@@ -1096,6 +1097,8 @@ for (const auto& segment : ranges) {
 
 一括変換が OFF の候補選択中（core の `Selecting`、§5.5）は、composition 全体を覆う Focused の
 range を 1 つ作る。この range は文節ではないので、preedit のクリックで注目を移す対象にしない（§7）。
+先頭文節を伸縮している間は、先頭文節を覆う Focused の range と、残りの読みを覆う Converted の range を作る。
+どちらも preedit のクリックで注目を移す対象にしない。
 
 アトムは `ITfCategoryMgr::RegisterGUID` で 4 つまとめて取得し、TextService インスタンス内に保持する。
 
@@ -1106,6 +1109,9 @@ segment は区間を持たないので、各文節が表示している文字列
 候補を選んでいなければ `reading`）の UTF-16 長を先頭から積み上げて境界を決める。
 この文字列は preedit 全体の表示文字列を作る規則と同じであり、区間の和が composition の長さと
 一致しないときは文節属性を使わず §5.6 の fallback にする。
+
+通常変換で先頭文節を伸縮している間は、先頭文節と残りの読みの 2 区間を使う。先頭文節の区間は、表示している
+文字列（選択中の候補の表層、応答を待つ間は読み）の UTF-16 長で決める（`docs/segment-editing-spec.md` §7）。
 
 ### 5.5 受け入れ条件
 
@@ -1121,8 +1127,8 @@ Focused で表示し、入力中（`Composing`）の fallback 属性（§5.6）�
 候補を移っても Focused のままである。Backspace で読みへ戻ると fallback 属性に戻る。
 Esc は入力ごと取り消して composition を終えるので、属性を付ける文字列が残らない。
 legacy が選択中の候補を `kTSMHiliteSelectedConvertedText` で描くのと同じ扱いである。
-legacy は残りの読みを `kTSMHiliteConvertedText` で描く。候補が読みの前方だけを覆う形になったときは、
-残りの読みを Converted にする。
+legacy は残りの読みを `kTSMHiliteConvertedText` で描く。先頭文節を縮めて候補が読みの前方だけを覆う形に
+なったとき（`docs/segment-editing-spec.md` §7）は、残りの読みを Converted にする。
 
 ### 5.6 M3 の単一 DisplayAttribute との対応関係
 

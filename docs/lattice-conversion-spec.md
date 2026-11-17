@@ -95,9 +95,14 @@ identity・長音・鉤括弧の候補、`Learn` / `Forget` / `Contains`（M36-A
 
 モデル未ロードの要求では、辞書の完全一致と同じロック区間でラティスを作る。モデル経路から落ちた要求では、
 変換の後に `state_mutex_` を取り直して作る。どちらも、合成（`DedupMergedCandidates` 以降）の前に候補へ足す。
-モデル経路から落ちた要求（`zenzai-degraded`、`zenzai-deadline-fallback`、例外）のラティスは、要求の deadline を
-使い切っているので、作り始めた時刻から 15 ms（§9 の 32 code point の p95 予算）を新しい deadline とし、要求の
-`cancel` だけを引き継ぐ（§6.4）。
+モデル経路から落ちた要求（`zenzai-degraded`、`zenzai-deadline-fallback`、例外）のラティスは、変換器の deadline
+（`docs/zenzai-inference-spec.md` §8.2 の Zenzai の予算）を引き継がない。その予算は使い切っているか、落ちた理由と
+関係しないためである。代わりに、作り始めた時刻から最大 15 ms（§9 の 32 code point の p95 予算）を deadline とし、
+要求の `cancel` を引き継ぐ。要求自身が期限を持つとき（`ConversionContext` に渡す期限。
+`docs/mixed-english-auto-conversion-spec.md` §10 の追加の変換の期限など）は、その残りを超えない。残りが無ければ
+ラティスを作らない。Zenzai の予算 600 ms とこの 15 ms の和は、候補窓用 `QueryCandidates` の timeout 750 ms
+（`docs/host-availability-spec.md` §8.5.2）に収まる。33〜64 code point の読みも同じ上限で打ち切り（§6.4）に入りうる。
+長い読みの予算は、ラティスの部品とエンジン組み込みの実装の実測で決める。
 
 段階 1 はエンジンの内部設定で切り替えられ、既定で有効とする。利用者向けの設定キーは持たない。ベンチの
 `--lattice off`（§10.1）はこの内部設定を使う。
@@ -136,9 +141,9 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 
 | 状況 | 挙動 |
 |---|---|
-| lattice_core が無い、検証で拒否された | ラティスを作らない。候補は段階 1 の前と同じになる |
+| lattice_core が無い、`docs/azdic-physical-layer-spec.md` §15.5 の (1)〜(3) で拒否された、または同 (4) で無効にされた（`CMAT` か lattice_core 自身の `CONN` の違反） | ラティスを作らない。候補は段階 1 の前と同じになる |
 | ある層が `CONN` を持たない | その層の語は §8.3 の既定 ID で使う |
-| ある層の `CONN` が `docs/azdic-physical-layer-spec.md` §15.5 の (4) の検査に通らない（構造の破損、品詞の添字が範囲外、ID が `CMAT` に無い、`connection_space` が lattice_core と違う） | その層の `CONN` だけを使わず、§8.3 の既定 ID で使う。層の完全一致・前方一致・予測は続ける |
+| lattice_core 以外のある層の `CONN` が `docs/azdic-physical-layer-spec.md` §15.5 の (4) の検査に通らない（構造の破損、品詞の添字が範囲外、ID が `CMAT` に無い、`connection_space` が lattice_core と違う） | その層の `CONN` だけを使わず、§8.3 の既定 ID で使う。層の完全一致・前方一致・予測は続ける |
 | 読みが 64 code point を超える | ラティスを作らない |
 | 探索中に cancel または deadline に達した | §6.4 のとおり、1 位だけを足すか、ラティスの候補を足さない |
 
@@ -369,6 +374,7 @@ M52 のモデル無効構成で、ラティスが受け入れ条件の top1 と 
 | 構築と N-best（N ≤ 16、読み 16 code point、warm、Release、1 スレッド）の p95 | 5 ms 以下 |
 | 同（読み 32 code point）の p95 | 15 ms 以下 |
 | lattice_core のロード（mmap とヘッダの検証） | 20 ms 以下 |
+| `docs/azdic-physical-layer-spec.md` §15.5 の (4) の連接情報の検査（ロード時、層ごとに 1 回、O(変種数)） | 実装の実測で決める。層のロードと同じスレッドで走り、変換の要求の経路では走らない |
 | ラティスによる常駐 RSS の増分（連接行列、`CONN`、lattice_core のページイン） | 30 MB 以下 |
 
 RSS の 30 MB は、`docs/azdic-physical-layer-spec.md` §15.9 の「常駐 RSS 増分 40 MB 以下」とは別の枠とする。連接行列は

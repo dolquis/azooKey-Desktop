@@ -378,12 +378,15 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 **(3) 全体検証（明示的に要求されたときのみ、O(N)）**。`content_hash` の照合と、(2) の
 参照検証の全件走査、復元キーの `key_id` 順が UTF-8 バイト辞書順であることの検査を行う。
 `SIDX` があれば、`(surface, entry_index)` が狭義の昇順であること（`ENTS` の置換であること）も検査する。
-`CONN` があれば、各エントリの変種が `(cost, left_id, right_id, attr)` の昇順であることと、`attr` の bit 14 が
-表層と一致することも検査する。`dictbuild --verify` はこの違反を失敗として返す。実行時の全体検証
-（`dictionary.verifyOnLoad`）では、`CONN` の違反は層を拒否せず、(4) と同じくその層の `CONN` だけを使わない。
 C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は防御的措置として残す。
 実行するのは pack の DL 直後、`dictbuild --verify`、および設定
 `dictionary.verifyOnLoad` が真のときとする。
+
+(3) は `CONN`・`CMAT` の中身を検査しない（`content_hash` による全バイトの照合は従来どおり行う）。pack の DL 直後と
+`dictionary.verifyOnLoad` の検証も同じで、既存の拒否の条件は変わらず、`CONN` の違反は (3) の後に行う (4) で、
+その層の `CONN` だけを使わない扱いになる。ビルド時の検査である `dictbuild --verify` だけは、(3) に加えて
+`CONN` の各エントリの変種が `(cost, left_id, right_id, attr)` の昇順であることと、`attr` の bit 14 が表層と
+一致することも検査し、違反を失敗にする。
 
 **(4) 連接情報の検査（ラティス変換が lattice_core と各層を読み込むときに 1 回、O(変種数)）**。結果は層を
 読み込み直すまで変えない。問い合わせの途中で検査して状態を変えることはしない。同じ入力に同じ候補を返すため

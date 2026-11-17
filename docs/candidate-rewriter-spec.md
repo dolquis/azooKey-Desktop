@@ -240,6 +240,8 @@ TSV は UTF-8（BOM なし）、改行は LF、区切りはタブ 1 文字とす
 wire generation 規約に従う）。旧 Host と新 TIP の組み合わせでは欄が欠けて空文字列になり、
 候補は表層形だけで表示される（§10.4 と同じ劣化）。
 
+同音異義語の注記（M73）も、Host がこの欄に入れる。注記を付ける候補とデータの正典は `docs/homophone-notes-spec.md` である。
+
 `core::CandidateSource` に `Emoji` を追加し、wire 表現は `"emoji"` とする。TIP はこの値で
 絵文字候補を識別し、学習観測から除外する（§12）。
 

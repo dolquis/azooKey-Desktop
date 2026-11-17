@@ -76,6 +76,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）、M62-E 日付・時刻・計算（§20）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
 | [`segment-editing-spec.md`](segment-editing-spec.md) | 追加機能 M66（通常変換の文節の伸縮と部分確定：Shift+← / Shift+→ による先頭文節の伸縮、先頭文節だけの確定、先頭文節の候補の要求） |
 | [`commit-undo-spec.md`](commit-undo-spec.md) | 追加機能 M69（確定の取り消し：確定の直後の Ctrl+Backspace で直前の確定を読みの composition へ戻す。有効な条件、edit session、学習の扱い） |
+| [`homophone-notes-spec.md`](homophone-notes-spec.md) | 追加機能 M73（同音異義語の注記：同音異義語の候補に使い分けの注記を付ける。注記データの出典とライセンス、再ポート、付ける候補、表示、`homophoneNotes`） |
 
 ## 運用
 

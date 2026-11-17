@@ -295,7 +295,13 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
       }
     }
     if (error.empty() && addon) {
-      if (fetch(*addon, package->size).ok()) {
+      // Its own try: an exception here is the add-on's failure, and the base stays ready.
+      bool addon_ok = false;
+      try {
+        addon_ok = fetch(*addon, package->size).ok();
+      } catch (...) {
+      }
+      if (addon_ok) {
         addon_sha256 = addon->sha256;
       } else {
         addon_error = category("download_failed");

@@ -757,8 +757,8 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 優先順位で現在の製品のバージョン（ビルド時の `AZOOKEY_PRODUCT_VERSION`）と比べ、新しければ
 `update_available` とする。応答は 1 MiB を上限とし、プロキシは WinHTTP の automatic proxy に従う。
 
-利用者が「バージョン」で更新のダウンロードを始めたとき（§6.3）だけ、Host は次の 2 つを取得する。
-Vulkan アドオンが導入されているときは、同じリリースのアドオンの MSI も続けて取得する（3 つ目の GET）。
+利用者が「バージョン」で更新のダウンロードを始めたとき（§6.3）だけ、Host は次の最初の 2 つを
+取得する。Vulkan アドオンが導入されているときは、3 つ目の同じリリースのアドオンの MSI も続けて取得する。
 MSI の取得は GitHub が配布用の host（`release-assets.githubusercontent.com` など）へ転送する
 ことがあり、WinHTTP の既定どおり https のまま転送に従う。届いた内容は SHA-256 で検証するので、
 最後の host は問わない。

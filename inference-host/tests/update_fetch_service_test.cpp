@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -154,6 +155,7 @@ struct FakeNetwork {
   HttpDownloadResult addon_download_result{HttpDownloadStatus::Downloaded};
   bool hold_download{false};
   bool hold_addon_download{false};
+  bool throw_addon_download{false};
   bool released{false};
 
   static bool IsAddon(const HttpDownloadRequest& request) {
@@ -169,6 +171,7 @@ struct FakeNetwork {
     downloads.push_back(request);
     changed.notify_all();
     const bool addon = IsAddon(request);
+    if (addon && throw_addon_download) throw std::runtime_error("add-on download threw");
     if (hold_download || (addon && hold_addon_download)) {
       // Bounded far above the time the test needs; the bound only keeps a failure from hanging.
       const auto deadline = std::chrono::steady_clock::now() + 10s;
@@ -531,6 +534,22 @@ TEST(UpdateFetchServiceTest, AnAddonFailureLeavesTheBaseReadyWithItsCategory) {
     EXPECT_EQ(response.addon_error, c.error);
     EXPECT_TRUE(response.result_error.empty());
   }
+}
+
+// An exception while the add-on downloads is the add-on's failure: the verified base stays ready.
+TEST(UpdateFetchServiceTest, AnExceptionDuringTheAddonLeavesTheBaseReady) {
+  Fixture f;
+  f.addon_installed = true;
+  f.WriteStatus("update_available", "1.2.3", "1.0.0");
+  f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()});
+  f.network.throw_addon_download = true;
+  auto service = f.Make();
+  ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+  const auto end = WaitForEnd(*service);
+  ASSERT_EQ(end.state, UpdateFetchSnapshot::State::Ready) << end.error;
+  EXPECT_EQ(end.sha256, kSha);
+  EXPECT_TRUE(end.addon_sha256.empty());
+  EXPECT_EQ(end.addon_error, "download_failed");
 }
 
 TEST(UpdateFetchServiceTest, AStopDuringTheAddonStopsTheWholeDownload) {

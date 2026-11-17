@@ -605,9 +605,15 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
     // The add-on only after an applied base, which its MSI requires; its failure keeps the base.
     if (with_addon && verified && azookey::settings::AddonFollowsBase(result.outcome)) {
       addon_attempted = true;
-      if (auto addon = azookey::settings::VerifiedUpdatePackage::Open(*addon_path, addon_sha256)) {
-        addon_verified = true;
-        addon_result = azookey::settings::RunElevatedMsiexec(*addon, owner);
+      // Its own try: whatever happens to the add-on, the applied base still brings the Host back.
+      try {
+        if (auto addon =
+                azookey::settings::VerifiedUpdatePackage::Open(*addon_path, addon_sha256)) {
+          addon_verified = true;
+          addon_result = azookey::settings::RunElevatedMsiexec(*addon, owner);
+        }
+      } catch (...) {
+        addon_result = {};  // Failed.
       }
     }
     // Once both are done, so the supervisor finds the versions matched (msix-packaging-spec
@@ -654,6 +660,11 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
     update_installed_ = true;
     update_sha256_.clear();
     update_addon_sha256_.clear();
+    // A base done at once with an add-on awaiting a restart still needs that restart.
+    if (result.outcome == UpdateInstallOutcome::Installed && addon_verified &&
+        addon_result.outcome == UpdateInstallOutcome::RebootRequired) {
+      message = reboot_pending;
+    }
     if (addon_attempted) {
       // The base stays updated whatever happened to the add-on; a failure only guides the user.
       if (!addon_verified) {

@@ -308,8 +308,19 @@ std::string RedactUrlCredentials(const std::string& url) {
   const auto at = url.rfind('@');
   const auto cut = url.find_first_of("?#");
   const auto scheme = url.find("://");
+  const auto is_alpha = [](unsigned char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+  };
+  // Only a real scheme (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / ".")) stays in front.
+  const bool has_scheme =
+      scheme != std::string::npos && scheme > 0 && is_alpha(url[0]) &&
+      std::all_of(url.begin() + 1, url.begin() + static_cast<std::ptrdiff_t>(scheme),
+                  [&](unsigned char ch) {
+                    return is_alpha(ch) || (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' ||
+                           ch == '.';
+                  });
   const auto limit = std::min(at, cut);
-  const auto start = scheme != std::string::npos && scheme + 3 <= limit ? scheme + 3 : 0;
+  const auto start = has_scheme && scheme + 3 <= limit ? scheme + 3 : 0;
   if (at != std::string::npos && cut != std::string::npos && cut < at) {
     return url.substr(0, start) + std::string(kRedactedPart);
   }

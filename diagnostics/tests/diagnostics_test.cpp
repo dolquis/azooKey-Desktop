@@ -721,6 +721,8 @@ TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
             "***redacted***@example.invalid/x://y");
   EXPECT_EQ(malformed_endpoint("https:/user:" + malformed + "@example.invalid/v1"),
             "***redacted***@example.invalid/v1");
+  EXPECT_EQ(malformed_endpoint("user:" + malformed + "://x@example.invalid/v1"),
+            "***redacted***@example.invalid/v1");
   EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "?x@example.invalid/v1"),
             "https://***redacted***");
   EXPECT_EQ(malformed_endpoint("https://example.invalid/v1?k=x@" + malformed),

@@ -57,6 +57,14 @@ enum class UpdateInstallOutcome : uint8_t {
 
 UpdateInstallOutcome ClassifyMsiexecExit(DWORD code);
 
+// DEV-2081: <settings dir>/updates/azooKey-vulkan-addon-<version>-x64.msi, where the Host puts the
+// add-on MSI of the same version. nullopt for the same versions UpdatePackagePath refuses.
+std::optional<std::filesystem::path> UpdateAddonPackagePath(
+    const std::filesystem::path& settings_path, std::string_view version);
+// The add-on is installed after the base only when the base was (0 or 3010): its MSI refuses a
+// base of another version (LaunchCondition), and its failure never undoes the base.
+bool AddonFollowsBase(UpdateInstallOutcome base);
+
 // Resource names for the "バージョン" pane: a refusal ("busy", "not_available", ...) or a result
 // error ("digest_missing", "cancelled", ...) of the Host's download, and the install outcome.
 std::string UpdateFetchErrorResource(std::string_view code);
@@ -81,8 +89,15 @@ std::optional<std::filesystem::path> InstalledHostLauncher();
 // Starts that launcher as this user, hidden, as the Run entry does at sign-in. The installation
 // stopped the Host, which the Run entry would bring back only at the next sign-in.
 bool StartInstalledHost();
-// HKLM\SOFTWARE\azooKey\VulkanAddon: the add-on, which this update leaves at the old version.
+// HKLM\SOFTWARE\azooKey\VulkanAddon: the add-on, which follows the base when the Host verified its
+// MSI too (DEV-2081) and otherwise stays at the old version.
 bool VulkanAddonInstalled();
+// DEV-2076 (section 6.1): this process runs under the identity of a package the Microsoft Store
+// delivered (GetCurrentPackageFullName succeeds and GetStagedPackageOrigin is
+// PackageOrigin_Store). The Store updates it, and the Host neither checks nor downloads under the
+// same identity. False when unpackaged (the MSI), under an external-location identity package,
+// for a package of another origin, or when the origin cannot be read.
+bool UpdatesManagedByStore();
 // Restarts Windows (after the user agreed, for RebootRequired).
 bool RequestRestart();
 

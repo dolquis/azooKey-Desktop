@@ -22,9 +22,10 @@ namespace azookey::host {
 
 // DEV-1974 (docs/sideload-packaging-spec.md section 6.3): downloads the base MSI of the release
 // the update check recorded as available, verified against the SHA-256 digest the GitHub
-// Releases API gives for the asset. One download at a time for the whole Host, on a background
-// thread; the settings app asks for its progress and installs the verified file itself. The last
-// result stays until the next download starts.
+// Releases API gives for the asset. DEV-2081: where the Vulkan add-on is installed, the add-on
+// MSI of the same release follows in the same download. One download at a time for the whole Host,
+// on a background thread; the settings app asks for its progress and installs the verified file
+// itself. The last result stays until the next download starts.
 struct UpdateFetchSnapshot {
   enum class State : uint8_t { Idle, Running, Ready, Failed };
   State state{State::Idle};
@@ -35,6 +36,10 @@ struct UpdateFetchSnapshot {
   std::string sha256;
   // Set once Failed: a fixed category, never the downloader's message.
   std::string error;
+  // Set once Ready where the add-on is installed: its verified SHA-256, or else the fixed
+  // category its download failed with. The base stays Ready either way.
+  std::string addon_sha256;
+  std::string addon_error;
 };
 
 std::string_view UpdateFetchStateName(UpdateFetchSnapshot::State state);
@@ -75,7 +80,12 @@ struct UpdateFetchDependencies {
   std::function<bool()> allowed;
   // The configured autoUpdate.channel; the recorded check must be of it. Must be thread-safe.
   std::function<std::string()> channel;
+  // Whether the Vulkan add-on is installed, asked once per download. Empty: not installed.
+  std::function<bool()> vulkan_addon_installed;
 };
+
+// HKLM\SOFTWARE\azooKey\VulkanAddon exists (the add-on MSI writes it). Always false off Windows.
+bool VulkanAddonInstalled();
 
 class UpdateFetchService {
  public:
@@ -101,7 +111,8 @@ class UpdateFetchService {
  private:
   bool RecordedAsAvailable(std::string_view version) const;
   void Run(std::string version, std::shared_ptr<std::atomic<bool>> stop);
-  void RemoveOtherPackages(const std::string& keep) const;
+  // Removes the base and add-on MSIs (and their .part files) of every other version.
+  void RemoveOtherPackages(const std::string& version) const;
 
   const UpdateFetchOptions options_;
   UpdateFetchDependencies dependencies_;

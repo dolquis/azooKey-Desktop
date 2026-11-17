@@ -107,6 +107,9 @@ struct MainWindow : MainWindowT<MainWindow> {
   // once its download is ready, and whether a download or an install runs.
   std::string update_version_;
   std::string update_sha256_;
+  // DEV-2081: the SHA-256 the Host verified the Vulkan add-on MSI of that version against; empty
+  // when the add-on is not installed, could not be downloaded, or the Host answers without it.
+  std::string update_addon_sha256_;
   bool update_downloading_{false};
   bool update_installing_{false};
   // The install of update_version_ succeeded (or awaits a restart): nothing more to offer.

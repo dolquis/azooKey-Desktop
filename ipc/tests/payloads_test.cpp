@@ -140,6 +140,23 @@ TEST(PayloadsTest, UpdateFetchRoundTripAndRequiresTheVersion) {
   EXPECT_EQ(decoded->total_bytes, 10u);
   EXPECT_EQ(decoded->sha256, std::string(64, 'a'));
   EXPECT_TRUE(decoded->result_error.empty());
+  // DEV-2081: the add-on fields stay out of the JSON while empty, so an older settings app and an
+  // older Host see the response they knew.
+  EXPECT_EQ(BuildUpdateFetchResponse(ready).find("addon_"), std::string::npos);
+  EXPECT_TRUE(decoded->addon_sha256.empty());
+  EXPECT_TRUE(decoded->addon_error.empty());
+  ready.addon_sha256 = std::string(64, 'b');
+  const auto with_addon = ParseUpdateFetchResponse(BuildUpdateFetchResponse(ready));
+  ASSERT_TRUE(with_addon);
+  EXPECT_EQ(with_addon->addon_sha256, std::string(64, 'b'));
+  EXPECT_TRUE(with_addon->addon_error.empty());
+  ready.addon_sha256.clear();
+  ready.addon_error = "asset_missing";
+  const auto addon_failed = ParseUpdateFetchResponse(BuildUpdateFetchResponse(ready));
+  ASSERT_TRUE(addon_failed);
+  EXPECT_TRUE(addon_failed->addon_sha256.empty());
+  EXPECT_EQ(addon_failed->addon_error, "asset_missing");
+  EXPECT_EQ(addon_failed->sha256, std::string(64, 'a'));
 
   UpdateFetchResponse refused;
   refused.ok = false;

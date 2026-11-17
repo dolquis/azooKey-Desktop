@@ -84,6 +84,10 @@ enum class UserAction : uint16_t {
     CommitHalfwidthKatakana,  // F8
     CommitFullwidthRoman,     // F9
     CommitHalfwidthRoman,     // F10（読みがあるとき）
+
+    // 文節の伸縮（docs/segment-editing-spec.md §4、DEV-2036）
+    ShrinkSegment,            // Shift+←（Selecting）
+    ExtendSegment,            // Shift+→（Selecting）
 };
 
 struct UserActionEvent {
@@ -131,15 +135,15 @@ enum class InputStateKind {
 | Idle | Space / Shift+Space（ひらがなモード） | Idle | `fullWidthSpace = true` なら Space、false なら Shift+Space で全角空白を composition を作らずに挿入する。もう一方は半角空白としてアプリへ渡す（core を通さず TIP が判定する。`docs/tsf-deep-integration-spec.md` §3.7） |
 | Composing (liveConv OFF) | Input（文字・数字・記号。§1.5.3） | Composing | 読みに足して Preedit 更新、打鍵ごとの `QueryCandidates` |
 | Composing | StartConversion | Composing | 候補窓用の `QueryCandidates`（`live = false`）送信のみ。打鍵中の候補キャッシュは使わない。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。応答を待つ間のキーは TIP が保留し、窓が開いた後に再生する） |
-| Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6）。F7・F8 だけ ObserveCommit を送る。確定は TIP が行い、`InputState` は Idle に戻される |
+| Composing / Previewing / Selecting | 字種指定確定（F6〜F10） | Idle | 読み全体を指定の字種に変えて確定する（`docs/tsf-deep-integration-spec.md` §3.6。文節の伸縮中は下の文節の伸縮の行）。F7・F8 だけ ObserveCommit を送る。確定は TIP が行い、`InputState` は Idle に戻される |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
-| Selecting | Commit | Idle | EndComposition + CommitObservation |
-| Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
+| Selecting | Commit | Idle | EndComposition + CommitObservation（文節の伸縮中は下の文節の伸縮の行） |
+| Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。文節の伸縮中は表示中の文字列を確定する（`docs/segment-editing-spec.md` §4）。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
-| Selecting | 文節の伸縮（Shift+← / Shift+→） | Selecting | 先頭文節の長さを変え、先頭文節の読みで候補窓用の `QueryCandidates` を送る。伸縮中の Enter・→・数字・F6〜F10 は先頭文節だけを確定し、残りの読みを続ける（`docs/segment-editing-spec.md` §4・§6） |
+| Selecting | 文節の伸縮（`ShrinkSegment` / `ExtendSegment`） | Selecting | 先頭文節の長さを変え、先頭文節の読みで候補窓用の `QueryCandidates` を送る。伸縮中の Enter・→・Ctrl+F・数字・F6〜F10 は先頭文節だけを確定して残りの読みを続け、文字入力などは表示中の文字列を確定する（`docs/segment-editing-spec.md` §4・§6） |
 | Composing / Previewing / Selecting | Input（`、` `。` `？` `！`、`punctuationConversion = commit`） | Idle | 第 1 候補（Selecting は選択中の候補）に句読点を続けて確定し、句読点を除いた読みと候補を観測する。条件と待ち方は `docs/tsf-deep-integration-spec.md` §3.5.1 |
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
@@ -279,7 +283,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_DELETE | (none) | Delete |
 | VK_LEFT | (none) | Backward |
 | VK_RIGHT | (none) | Forward |
-| VK_LEFT / VK_RIGHT | Shift（Selecting） | 文節の伸縮（← は縮める、→ は伸ばす。`docs/segment-editing-spec.md` §4） |
+| VK_LEFT / VK_RIGHT | Shift（Selecting） | ShrinkSegment（←）/ ExtendSegment（→）。文節の伸縮（`docs/segment-editing-spec.md` §4） |
 | VK_UP | (none) | Up |
 | VK_DOWN | (none) | Down |
 | VK_HOME | (none) | LineHead |

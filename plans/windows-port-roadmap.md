@@ -459,7 +459,7 @@ Phase 4 完了 ─→ M13 ─┬─→ M14 ─┐
                      ├─→ M18
                      ├─→ M61-A ─→ M61-B（M48 にも依存）
                      ├─→ M64（M22・M60 にも依存）
-                     └─→ M66（M23 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
+                     └─→ M66（M23・M64 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
 Phase 5 完了 ─→ M20 ─→ M23
 Phase 5 完了 ─→ M21 ─→ M22 ─→ M64
 
@@ -547,10 +547,11 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
   バックエンド・TSF 深耕・パッケージングに依存しない。詳細は
   `docs/bracket-pairing-spec.md`。
-- **入力拡張（M58〜M60 / M62〜M64）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
+- **入力拡張（M58〜M60 / M62〜M64 / M66）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
   M58-B は M20、M58-C は M16 / M24 / M46 を前提とする。M59（動的句読点）は M13 / M14、M60（インライン英単語候補）は
   M5 / M6、M62（候補リライター）は M5 / M6 / M13 を前提とし、M62-A は辞書・推論・IPC に依存しない。M63（日英混在の自動変換）は
-  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60 を前提とする。詳細は
+  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60、M66（文節の伸縮と部分確定）は M13・M23・M64 を
+  前提とする。詳細は
   「追加機能マイルストーン」章と各 `docs/*-spec.md`。
 - **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
@@ -1721,31 +1722,41 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 
 - **目的**: 長い読みの区切りを変換器が誤ったとき、読みを消して打ち直さずに、先頭の文節から順に正しい候補で
   確定できるようにする。
-- **前提**: M13（`UserActionMap` と `InputState`）、M23（文節ごとの表示属性）。モデルを通らない経路で先頭文節の
-  候補に残りの読みを使う部分だけが M65（ラティスの語の境目の制約）にも依存する。
+- **前提**: M13（`UserActionMap` と `InputState`）、M23（文節ごとの表示属性）、M64（字種指定確定の経路）。
+  モデルを通らない経路で先頭文節の候補に残りの読みを使う部分だけが M65（ラティスの語の境目の制約）にも依存する。
 - **変更対象**: `core/include/azookey/core/UserAction.h`、`core/src/UserActionMap.cpp`、
   `core/include/azookey/core/InputState.h`・`core/src/InputState.cpp`、`core/include/azookey/core/ClientAction.h`、
-  `tsf-tip/src/TextService.cpp`（先頭文節の要求、部分確定の edit session、表示属性、観測）、
-  `tsf-tip/src/DisplayAttribute.cpp`、`ipc/include/azookey/ipc/Payloads.h`・`ipc/src/Payloads.cpp`（残りの読み）、
+  `tsf-tip/src/TextService.cpp`（先頭文節の要求と応答待ちの保留、部分確定の edit session、表示属性、観測）、
+  `tsf-tip/src/CharacterFormEditSession.cpp`（F6〜F10 の部分確定）、`tsf-tip/src/DisplayAttribute.cpp`、
+  `ipc/include/azookey/ipc/Payloads.h`・`ipc/src/Payloads.cpp`（残りの読み）、
+  `inference-host/src/Dispatcher.cpp`（先頭文節の要求の補正の停止と、残りの読みの受け渡し）、
   `inference-host/src/InferenceEngine.cpp`（ラティスへの残りの読みの受け渡し）。
 - **受け入れ条件**:
-  - 一括変換 OFF の候補選択中に、Shift+← / Shift+→ が先頭文節の長さを spec §4 のとおりに変え、変えるたびに
-    先頭文節の読みで候補窓用の要求が出て、窓が先頭文節の候補に替わる
+  - 一括変換 OFF の候補選択中に、Shift+← / Shift+→ が先頭文節の長さを spec §4 のとおりに変え、短くなるたびに
+    先頭文節の読みで候補窓用の要求が出て、窓が先頭文節の候補に替わる。読み全体に戻ると、Space で出した候補に戻る
+  - 先頭文節の候補を待つ間のキーが保留され、候補が替わった後に打った順に再生される。伸縮中の ← / → もアプリへ渡らない
   - 先頭文節が読みの一部だけを覆うとき、Enter・→・Ctrl+F・数字・F6〜F10 で先頭文節だけが確定し、
-    残りの読みの候補窓が開く。確定した文字列に表示属性が残らない
+    残りの読みの候補窓が開く。確定した文字列に表示属性が残らない。`ShiftStart` が失敗したときも、composition を
+    始め直して残りの読みが残る
+  - 伸縮中の ← / Ctrl+B は消費され、Backspace は読み全体へ戻って末尾を消し、文字入力は表示中の文字列を確定して
+    次の入力を始める
   - 先頭文節が読み全体を覆うときの Enter・→・←・数字・F6〜F10 の挙動が、M66 を入れる前と変わらない
-  - 部分確定のたびに、先頭文節の読みと確定した表層の対だけが観測され、残りの読みの要求の左文脈に確定した表層が入る
+  - 読み入力中とライブ変換の表示中の Shift+← / Shift+→、Ctrl+I / Ctrl+O はアプリへ渡り、一括変換の候補選択中の
+    Shift+← / Shift+→ は文節移動のまま変わらない
+  - 部分確定のたびに、先頭文節の読みと確定した表層の対だけが観測され（観測の有無は spec §8）、残りの読みの要求の
+    左文脈に確定した表層が入る
   - 伸縮中は先頭文節が Focused、残りの読みが Converted で描かれる
-  - Ctrl+I / Ctrl+O はアプリへ渡り、一括変換の候補選択中の Shift+← / Shift+→ は文節移動のまま変わらない
-  - モデルを読まない構成で、残りの読みを添えた要求の候補が、語の境目の制約を掛けたラティスの先頭文節の表層になる。
-    残りの読みを添えない要求の候補は変わらない
-  - `input_state_test`・`keymap_test`・`onkeydown_preedit_test`・`display_attribute_test`・`payloads_test` に上記の検証がある
+  - 先頭文節の要求では、Host が読みを補正せず `corrected_reading` を返さない。モデルを読まない構成で、残りの読みを
+    添えた要求の候補が、語の境目の制約を掛けたラティスの先頭文節の表層になる。先頭文節の要求でない要求の候補は変わらない
+  - `input_state_test`・`keymap_test`・`onkeydown_preedit_test`・`display_attribute_test`・`payloads_test`・
+    `dispatcher_test`・`engine_test` に上記の検証がある
   - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成、モデルあり・なし、`gate:human-required`）
-- **参照**: `docs/segment-editing-spec.md`、`docs/legacy-parity-spec.md` §1.2・§1.4、
-  `docs/tsf-deep-integration-spec.md` §5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3
+- **参照**: `docs/segment-editing-spec.md`、`docs/legacy-parity-spec.md` §1.1・§1.2・§1.4、
+  `docs/tsf-deep-integration-spec.md` §3.6・§5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3
 - **補足**:
   - **範囲**: 変換した文を複数の文節に分けて並べ、注目する文節を移す編集と、確定した文節へ戻る編集は含めない
-    （「スコープ外」）。Space の候補列の先頭に先頭文節の候補を並べる legacy の挙動も含めない。
+    （「スコープ外」）。Space の候補列の先頭に先頭文節の候補を並べる legacy の挙動も含めない。M64 の受け入れ条件の
+    「読み全体が対象」は、先頭文節が読み全体を覆うときの挙動で、伸縮中の F6〜F10 は先頭文節を対象にする。
   - **リスク**:
     - **部分確定のアプリ差**: `ITfComposition::ShiftStart` で composition の先頭をずらしたとき、確定した文字列の扱いと
       元に戻す単位がアプリによって違う。失敗したときは composition を始め直す（spec §6.2）。実機で確かめる。

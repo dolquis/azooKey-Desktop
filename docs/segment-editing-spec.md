@@ -9,8 +9,8 @@ defers_to: [docs/legacy-parity-spec.md §1.4, docs/lattice-conversion-spec.md §
 
 対象リポジトリ: dolquis/azooKey-Desktop
 対応マイルストーン: M66（追加機能）
-関連: `docs/legacy-parity-spec.md`（§1.2 の状態遷移、§1.4 のキー割当）、
-      `docs/tsf-deep-integration-spec.md`（§3.6 の字種指定確定、§5 の文節ごとの表示属性）、
+関連: `docs/legacy-parity-spec.md`（§1.1 の `UserAction`、§1.2 の状態遷移、§1.4 のキー割当）、
+      `docs/tsf-deep-integration-spec.md`（§3.6 の字種指定確定、§4.2・§4.3 の確定、§5 の文節ごとの表示属性）、
       `docs/lattice-conversion-spec.md`（§7.3 の区切りの制約）、
       `docs/romaji-batch-conversion-spec.md`（一括変換の文節）、`docs/macos-input-parity-audit-report.md`（P-09）
 
@@ -28,18 +28,19 @@ legacy（macOS 版）の `SegmentsManager.editSegment` と、選択中の候補�
 
 ## 正典範囲
 
-本書が正典であるもの: 先頭文節の状態、伸縮と部分確定のキーごとの挙動、先頭文節の候補の要求、
+本書が正典であるもの: 先頭文節の状態、伸縮と部分確定のキーごとの挙動、先頭文節の候補の要求と応答を待つ間の扱い、
 部分確定の手順、伸縮中の表示属性の割り当て、部分確定の学習観測。
 
 本書が委ねるもの:
 
 | 主題 | 正典 |
 |---|---|
-| VK から `UserAction` への写像 | `docs/legacy-parity-spec.md` §1.4 |
-| 応答を待つ間のキーの保留と再生 | `docs/legacy-parity-spec.md` §1.2 |
+| `UserAction` の値と、VK からの写像 | `docs/legacy-parity-spec.md` §1.1・§1.4 |
+| 応答を待つ間に保留するキーの基本の規則、上限、期限 | `docs/legacy-parity-spec.md` §1.2 |
+| 字種指定確定の字種、綴り、観測 | `docs/tsf-deep-integration-spec.md` §3.6 |
+| 確定の edit session が拒否されたときの再試行 | `docs/tsf-deep-integration-spec.md` §2.4.1 |
 | 表示属性の値と、属性を付けられないときの fallback | `docs/tsf-deep-integration-spec.md` §5.6 |
-| 字種指定確定の字種と観測の規則 | `docs/tsf-deep-integration-spec.md` §3.6 |
-| 語の境目の制約付きの探索 | `docs/lattice-conversion-spec.md` §7.3 |
+| 語の境目の制約付きの探索と、先頭の区間の候補の取り出し | `docs/lattice-conversion-spec.md` §7.3 |
 | payload のフィールド名と wire key | `ipc/include/azookey/ipc/Payloads.h` |
 | 受け入れ条件 | `plans/windows-port-roadmap.md` M66 |
 
@@ -73,11 +74,18 @@ legacy（macOS 版）の `SegmentsManager.editSegment` と、選択中の候補�
 
 ## 3. 状態
 
-`InputState` は `Selecting` の状態データに e を持つ。新しい `InputStateKind` は足さない
-（`docs/legacy-parity-spec.md` §1.5.2）。`Selecting` に入ると e = n になる。e = n の間、`Selecting` の
-挙動は `docs/legacy-parity-spec.md` §1.2・§1.4 のとおりで、本書の規則は Shift+← / Shift+→ だけに掛かる。
+`InputState` は `Selecting` の状態データに次を持つ。新しい `InputStateKind` は足さない
+（`docs/legacy-parity-spec.md` §1.5.2）。
 
-候補のスナップショットは、先頭文節の候補とする。e = n なら読み全体の候補である。
+- e。`Selecting` に入ると e = n になる。
+- この `Selecting` で伸縮したかどうか。
+- `Selecting` に入ったときの読み全体の候補のスナップショット。
+- 先頭文節の候補を待っているかどうか（§5.2）。
+
+伸縮は `UserAction` の `ShrinkSegment`（Shift+←）と `ExtendSegment`（Shift+→）で受ける（`docs/legacy-parity-spec.md`
+§1.1・§1.4）。候補のスナップショットと選択は、伸縮中は先頭文節の候補、e = n のときは読み全体の候補を指す。
+e = n の間、`Selecting` の挙動は `docs/legacy-parity-spec.md` §1.2・§1.4 のとおりで、本書の規則は
+`ShrinkSegment` と `ExtendSegment` だけに掛かる。
 
 一括変換の文節を表示している候補選択は e を持たず、本書の対象外とする。
 
@@ -88,27 +96,34 @@ legacy（macOS 版）の `SegmentsManager.editSegment` と、選択中の候補�
 | キー | e = n のとき | e < n のとき |
 |---|---|---|
 | Shift+← | n ≥ 2 なら e = n − 1。n = 1 なら消費して何もしない | e ≥ 2 なら e − 1。e = 1 なら消費して何もしない |
-| Shift+→ | n ≥ 2 なら e = 1。n = 1 なら消費して何もしない | e + 1。e + 1 = n なら読み全体に戻る |
+| Shift+→ | まだ伸縮しておらず n ≥ 2 なら e = 1。伸縮した後か n = 1 なら消費して何もしない | e + 1。e + 1 = n なら読み全体に戻る |
 | → / Ctrl+F | `docs/legacy-parity-spec.md` §1.4 のとおりアプリへ渡す | 部分確定（§6） |
 | ← / Ctrl+B | `docs/legacy-parity-spec.md` §1.4 のとおりアプリへ渡す | 消費して何もしない |
 | Enter | 読み全体の確定（`docs/legacy-parity-spec.md` §1.2） | 部分確定 |
 | 数字（候補番号） | 番号の候補で読み全体を確定 | 番号の候補で部分確定 |
-| F6〜F10 | 読み全体の字種指定確定（`docs/tsf-deep-integration-spec.md` §3.6） | 先頭文節の読みに字種指定確定の規則を当てて部分確定 |
-| Space / Shift+Space / ↑↓ / Ctrl+P / Ctrl+N | 候補を移る | 先頭文節の候補を移る |
+| F6〜F10 | 読み全体の字種指定確定（`docs/tsf-deep-integration-spec.md` §3.6） | 先頭文節の読みの字種指定確定で部分確定（同 §3.6） |
+| Space / Shift+Space / ↑↓ / Ctrl+P / Ctrl+N / 変換キー | 候補を移る | 先頭文節の候補を移る |
 | Backspace | `docs/legacy-parity-spec.md` §1.2 のとおり読みへ戻る | e を捨てて読み全体に戻し、同じく読みへ戻る |
 | Esc | 入力を取り消す | 同じく入力を取り消す |
 
-e が変わると、先頭文節の候補を取り直す（§5）。Shift+→ を読み全体から押して e = 1 にするのは、
-legacy と同じく、短い先頭文節から伸ばし始められるようにするためである。
+Shift+→ を伸縮の前の読み全体から押して e = 1 にするのは、legacy と同じく、短い先頭文節から伸ばし始められる
+ようにするためである。一度伸縮した後は、legacy と同じく e = n で止まる。
 
-次の操作は、表示中の文字列（先頭文節の選択中の候補と、残りの読み）を確定する。観測するのは
-先頭文節だけで、残りの読みは読みのまま確定する（§8）。
+e が n より小さい値に変わると、先頭文節の候補を取り直す（§5）。e が n に戻ると候補を取り直さず、`Selecting` に
+入ったときの読み全体の候補に戻し、先頭の候補を選ぶ。
+
+次の操作は、伸縮中には表示中の文字列（先頭文節の選択中の候補と、残りの読み）を確定する。残りの読みは
+読みのまま確定する。
 
 - 文字・記号・長音の入力（`docs/legacy-parity-spec.md` §1.2 の `Selecting` の `Input`）。確定した後、
   そのキーで次の入力を始める。
 - 句読点の確定（`punctuationConversion = commit`、`docs/tsf-deep-integration-spec.md` §3.5.1）。
   表示中の文字列に句読点を続けて確定する。
-- IME を Off にするキー、英数モードへの切替、フォーカスの喪失（`docs/tsf-deep-integration-spec.md` §4.2・§4.3）。
+- Unicode 入力の開始（Ctrl+Shift+U）。確定した後、Unicode 入力を始める。
+- IME を Off にするキー（`docs/tsf-deep-integration-spec.md` §4.2）。
+- 英数モードへの切替、フォーカスの喪失、Deactivate、TIP の外からの Off（`docs/tsf-deep-integration-spec.md` §4.3）。
+
+これらの観測は §8 に従う。
 
 Ctrl+I / Ctrl+O は割り当てない（`docs/legacy-parity-spec.md` §1.4）。読み入力中とライブ変換の
 表示中の Shift+← / Shift+→ はアプリへ渡す。
@@ -117,60 +132,77 @@ Ctrl+I / Ctrl+O は割り当てない（`docs/legacy-parity-spec.md` §1.4）。
 
 ### 5.1 要求
 
-e が変わるたびに、TIP は候補窓用の `QueryCandidates`（`live = false`）を送る。
+e が n より小さい値に変わるたびに、TIP は候補窓用の `QueryCandidates`（`live = false`）を送る。
 
 - 読み（`reading`）は先頭文節の読みとする。
-- 残りの読みを任意のフィールドで添える。e = n のときは添えない。フィールドの名前と wire key は
-  `ipc/include/azookey/ipc/Payloads.h` が定める。
+- 残りの読みを任意のフィールドで添える。伸縮中の残りの読みは空でない。フィールドの名前と wire key は
+  `ipc/include/azookey/ipc/Payloads.h` が定める。Host は、このフィールドを持つ要求を先頭文節の要求として扱う（§5.3）。
 - 左文脈、`secure`、`learning_allowed`、`app`、`max_candidates` は、読み全体の要求と同じに決める。
-- 先頭文節の要求では、typo 補正を `off` にし、生ローマ字（`raw_romaji`・`raw_keys`）、英単語候補、日英混在、
-  `alt_readings`、絵文字検索の起点、自動句読点を送らない。補正や英字化で読みが変わると、e と読みの対応が
-  崩れるためである。
+- 生ローマ字（`raw_romaji`・`raw_keys`）、英単語候補、日英混在、`alt_readings`、絵文字検索の起点、自動句読点は
+  送らない。読みの前方だけでは生ローマ字との対応が取れず、英字化や別の読みで読みが変わると、e と読みの
+  対応が崩れるためである。
+- 応答が `corrected_reading` を持っていても、TIP は読みを置き換えない。
 
 前の e の要求が届いていなければ取り消し、その応答は staleness 判定で捨てる。連打を間引く待ち時間は置かない。
-Zenzai は取り消しを受けると次の token で decode を止める（`docs/zenzai-inference-spec.md` §9.2.2）。
+Zenzai は decode のループで取り消しを確かめて止まる（`docs/zenzai-inference-spec.md` §9.2.2）。
 
 ### 5.2 応答を待つ間
 
-応答が届くまで、先頭文節は読みのまま描く。キーの保留と再生、上限、待つ期限（候補窓用の 750 ms）、
-Host を失ったときのローカル候補は `docs/legacy-parity-spec.md` §1.2 に従う。ローカル候補は先頭文節の
-読みから作る。
+先頭文節の候補を待つ間、`InputState` は `Selecting` のまま待っていることを示す。候補窓は閉じず、前の一覧を
+残す。応答が届くと、`InputState` は先頭文節の候補を差し替えて先頭の候補を選ぶ。`Composing` から `Selecting` への
+遷移（`docs/legacy-parity-spec.md` §1.5.4）とは別の、`Selecting` の中の差し替えである。待つ前の e の応答は使わない。
 
-待つ間の Shift+← / Shift+→ は、保留しているキーが無ければその場で e を変えて要求を出し直す。保留しているキーが
+応答が届くまで、先頭文節は読みのまま描く（§7）。
+
+待つ間のキーは、Space の応答待ちと同じく保留し、候補が差し替わった後に打った順に再生する。保留するキーの
+基本の規則、上限、待つ期限（候補窓用の 750 ms）、Host を失ったときのローカル候補は `docs/legacy-parity-spec.md`
+§1.2 に従い、ローカル候補は先頭文節の読みから作る。伸縮中は、← / → / Ctrl+B / Ctrl+F も保留する。
+§4 のとおり、伸縮中のこれらのキーは部分確定するか消費するので、アプリへ渡さない。
+
+待つ間の Shift+← / Shift+→ は、保留しているキーが無ければ、その場で e を変えて要求を出し直す。保留しているキーが
 あれば同じく保留し、打った順に再生する。
 
 ### 5.3 Host 側の候補源
+
+先頭文節の要求では、Host は auto_replace を含む読みの補正をせず、要求の読みのまま変換し、`corrected_reading` を
+返さない。補正すると e と読みの対応が崩れるためである。Host の設定から決まる補正の強さを要求で弱める向きであり、
+要求で補正を強めない規則（`docs/typo-correction-learning-spec.md` §12.13）とは矛盾しない。
 
 Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは、要求の読み（先頭文節の読み）だけを使い、
 残りの読みを読まない。Zenzai は右の文脈を使わないので、先頭文節を縮めると、後ろの語で決まる同音異義語を
 読み全体の変換より誤りやすい。
 
 ラティス（`docs/lattice-conversion-spec.md` §3.2 の段階 1 の条件に当たる要求）は、先頭文節の読みと残りの読みを
-つないだ読みでラティスを作り、位置 e に語の境目の制約（同 §7.3）を掛けて探索する。各経路のうち位置 e より前の語の
-表層をつないだものを候補とし、同じ表層は 1 つに畳む。`score`、`source`、`debug_info`、件数は同 §3.4・§3.5 に従い、
-`reading` は先頭文節の読みとする。
+つないだ読みでラティスを作り、位置 e に語の境目の制約を掛けて探索する。候補には、各経路のうち位置 e より前の語の
+表層をつないだものを使う。取り出し、畳み方、順位と `score` は同 §7.3、`source`、`debug_info`、件数は同 §3.4・§3.5 に
+従う。§3.4 の「要求の読み全体」は、先頭文節の要求では先頭文節の読みである。つないだ読みが 64 code point を
+超えるときは、先頭文節の読みだけでラティスを作る。
 
-残りの読みを添えない要求の候補は、M66 の前と同じである。残りの読みのフィールドを知らない Host は
+先頭文節の要求でない要求の候補は、M66 を入れる前と同じである。残りの読みのフィールドを知らない Host は
 それを読まないので、ラティスを先頭文節の読みだけで作る。
 
 ## 6. 部分確定
 
 ### 6.1 InputState
 
-`InputState` は部分確定を、次の細粒度の `ClientAction` の列で表す（`docs/legacy-parity-spec.md` §1.5.2）。
+`InputState` は、Enter・→・Ctrl+F・数字による部分確定を、次の細粒度の `ClientAction` の列で表す
+（`docs/legacy-parity-spec.md` §1.5.2）。
 
 1. 候補窓を閉じる。
-2. composition の先頭文節を確定する表層に置き換えて確定し、残りの読みを composition に残す。この action は
+2. composition の先頭文節を確定する候補の表層に置き換えて確定し、残りの読みを composition に残す。この action は
    確定する表層と残りの読みを持つ。名前は実装で決め、`ClientAction` の末尾に足す。
-3. `ObserveCommit`（先頭文節の読み、確定した表層）。字種指定確定は、`docs/tsf-deep-integration-spec.md` §3.6 が
-   観測を送る字種のときだけ送る。
+3. `ObserveCommit`（先頭文節の読み、確定した表層）。
 4. 残りの読みの候補窓用の `QueryCandidates`。
 
-部分確定の後、`InputState` は残りの読みを読みとし、`Composing` で応答を待つ。応答が届くと e = 残りの長さの
-`Selecting` に入る。Space の応答待ち（`docs/legacy-parity-spec.md` §1.2）と同じ規則で、キーを保留して再生する。
+F6〜F10 による部分確定は、TIP が `docs/tsf-deep-integration-spec.md` §3.6 の確定の経路で、先頭文節の読みを字種を
+変えて確定する。`InputState` は、その後に上の 4 と同じく残りの読みで要求を出す。
 
-部分確定は 1 回ごとに独立した確定として扱う。確定の取り消しで戻す単位は、確定の取り消しを定める spec（DEV-2032）が
-決める。
+部分確定の後、`InputState` は残りの読みを読みとし、`Composing`（ライブ変換 ON なら `Previewing`）で応答を待つ。
+応答が届くと、e が残りの読みの長さの `Selecting` に入る。Space の応答待ち（`docs/legacy-parity-spec.md` §1.2）と
+同じ規則で、キーを保留して再生する。この間の残りの読みは、読み入力中と同じ表示属性で描く
+（`docs/tsf-deep-integration-spec.md` §5.6）。
+
+部分確定は 1 回ごとに独立した確定として扱う。確定の取り消しで戻す単位は、確定の取り消しを定める spec が決める。
 
 ### 6.2 TIP の edit session
 
@@ -186,7 +218,10 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 残りの読みの composition を始め直す。属性を消せないときの扱いは、確定で composition を終えるときと同じとする
 （`docs/tsf-deep-integration-spec.md` §5.6）。
 
-残りの読みの要求の左文脈は、この edit session の後に文書から読む。確定した表層は左文脈に入る。
+edit session が拒否されたときは、読み全体の確定と同じく確定を待つものとして残し、次のキーで確定し直す
+（`docs/tsf-deep-integration-spec.md` §2.4.1）。残りの読みの要求は、確定が済んでから出す。
+
+残りの読みの要求の左文脈は、確定が済んだ後に文書から読む。確定した表層は左文脈に入る。
 
 ## 7. 表示
 
@@ -201,14 +236,19 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 
 ## 8. 学習
 
-部分確定のたびに、単発の `CommitObservation` を送る。読みは先頭文節の読み、`chosen` は確定した候補、`shown` は
-先頭文節の候補一覧である。観測するかどうかの条件（候補の `source`、`secure`、`learning_allowed`）は、読み全体の確定と
-同じにする。文節ごとに確定する時点が違うので、`CommitSegmentsObservation` は使わない。
+Enter・→・Ctrl+F・数字による部分確定のたびに、単発の `CommitObservation` を送る。読みは先頭文節の読み、
+`chosen` は確定した候補、`shown` は先頭文節の候補一覧である。観測するかどうかの条件（候補の `source`、`secure`、
+`learning_allowed`）は、読み全体の確定と同じにする。文節ごとに確定する時点が違うので、`CommitSegmentsObservation` は
+使わない。F6〜F10 による部分確定の観測は、`docs/tsf-deep-integration-spec.md` §3.6 の字種ごとの規則を、先頭文節の
+読みと確定した文字列に当てる。
 
 候補は先頭文節の読みを変換したものなので、観測する読みと表層の対は対応する。新語の判定
 （`docs/auto-word-registration-spec.md` の M36-A）も、この対で行う。
 
-§4 で表示中の文字列を確定する操作は、先頭文節だけを観測する。読みのまま確定した残りの読みは、as-is 確定
+§4 で伸縮中に表示中の文字列を確定する操作は、その操作が読み全体の確定で観測を送るときに限り、先頭文節だけを
+観測する。文字入力、句読点の確定、Unicode 入力の開始、IME を Off にするキーは観測を送り、英数モードへの切替、
+フォーカスの喪失、Deactivate、TIP の外からの Off は送らない（`docs/legacy-parity-spec.md` §1.2、
+`docs/tsf-deep-integration-spec.md` §3.5.1・§4.2・§4.3）。読みのまま確定した残りの読みは、as-is 確定
 （`docs/legacy-parity-spec.md` §1.3）と同じく観測しない。
 
 区切りの位置は学習しない。次に同じ読みを打っても、先頭文節は読み全体から始まる。
@@ -227,14 +267,15 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 
 | 対象 | 試験 |
 |---|---|
-| core の状態機械 | `core/tests/input_state_test.cpp`: §4 の各キーが e と状態を表のとおりに変え、e が変わるたびに先頭文節の読みの候補窓用の要求を出す。部分確定が §6.1 の列を返す。e = n の各キーの結果が M66 の前と同じ |
-| キーの写像 | `tsf-tip/tests/keymap_test.cpp` と `core/tests/input_state_test.cpp`: Shift+← / Shift+→ が `Selecting` でだけ伸縮の `UserAction` になり、Shift の無い ← / → と区別される。Ctrl+I / Ctrl+O は割り当てない |
-| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: 先頭文節の要求が §5.1 のフィールドを止める。応答を待つ間のキーが保留され、窓が開いた後に再生される。部分確定で確定した表層の属性が消え、残りの読みが composition に残る。`ShiftStart` が失敗したときに composition を始め直す。観測が先頭文節の対になり、残りの読みの要求の左文脈に確定した表層が入る。一括変換の候補選択の挙動が変わらない |
+| core の状態機械 | `core/tests/input_state_test.cpp`: §4 の各キーが e と状態を表のとおりに変える。e が n より小さくなるたびに先頭文節の読みの候補窓用の要求を出し、e が n に戻ると読み全体の候補に戻す。先頭文節の候補を待つ間に届いた応答で候補が差し替わり、待つ前の e の応答は使われない。部分確定が §6.1 の列を返し、残りの読みで応答を待つ。e = n の各キーの結果が M66 を入れる前と同じ |
+| キーの写像 | `tsf-tip/tests/keymap_test.cpp` と `core/tests/input_state_test.cpp`: Shift+← / Shift+→ が `Selecting` でだけ `ShrinkSegment` / `ExtendSegment` になり、Shift の無い ← / → と区別される。Ctrl+I / Ctrl+O は割り当てない |
+| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: 先頭文節の要求が §5.1 のフィールドを止め、残りの読みを添える。待つ間のキー（伸縮中の ← / → を含む）が保留され、候補が差し替わった後に再生される。部分確定で確定した表層の属性が消え、残りの読みが composition に残る。`ShiftStart` が失敗したときに composition を始め直す。確定が拒否されたときに残りの読みの要求を出さない。観測が §8 のとおりになり、残りの読みの要求の左文脈に確定した表層が入る。F6〜F10 の部分確定が先頭文節だけを字種で確定する。一括変換の候補選択の挙動が変わらない |
 | 表示属性 | `tsf-tip/tests/display_attribute_test.cpp`: 伸縮中に Focused と Converted の 2 区間を作る |
 | IPC | `ipc/tests/payloads_test.cpp`: 残りの読みのフィールドの往復と、フィールドの無い JSON を空として読むこと |
-| Host | 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。添えない要求とモデルを通る要求の候補が変わらない |
+| Host | `inference-host/tests/dispatcher_test.cpp`: 先頭文節の要求で読みを補正せず `corrected_reading` を返さないこと、残りの読みがエンジンへ渡ること。`inference-host/tests/engine_test.cpp`: 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。先頭文節の要求でない要求とモデルを通る要求の候補が変わらない |
 
-試験の一覧の正典は `docs/test-inventory.md` である。
+ラティスの語の境目の制約と先頭の区間の取り出しは、`docs/lattice-conversion-spec.md` §11 の core のラティスの部品の
+試験が受け持つ。試験の一覧の正典は `docs/test-inventory.md` である。
 
 ## 11. 受け入れ条件
 

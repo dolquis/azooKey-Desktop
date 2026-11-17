@@ -727,6 +727,17 @@ TEST(DiagnosticsTest, RedactedSettingsHideEndpointCredentialsAndKeepTheHost) {
             "https://***redacted***");
   EXPECT_EQ(malformed_endpoint("https://example.invalid/v1?k=x@" + malformed),
             "https://***redacted***");
+  // Percent-encoded separators hide where a credential ends.
+  EXPECT_EQ(malformed_endpoint("https://user:" + malformed + "%40api.example.invalid/v1"),
+            "https://***redacted***");
+  EXPECT_EQ(malformed_endpoint("https://example.invalid/v1%3Fapi-key=" + malformed),
+            "https://***redacted***");
+
+  // Well-formed boundaries.
+  EXPECT_EQ(malformed_endpoint("http://u:p@[::1]:8080/v1"), "http://***redacted***@[::1]:8080/v1");
+  EXPECT_EQ(malformed_endpoint("HTTPS://u:p@h"), "HTTPS://***redacted***@h");
+  EXPECT_EQ(malformed_endpoint("https://a@b@h"), "https://***redacted***@h");
+  EXPECT_EQ(malformed_endpoint("u:p@h?k=x"), "***redacted***@h?***redacted***");
 }
 
 // One sample per schema path: a numbered marker for each free-text string, the first enum value,

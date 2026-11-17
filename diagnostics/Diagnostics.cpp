@@ -319,6 +319,17 @@ std::string RedactUrlCredentials(const std::string& url) {
                     return is_alpha(ch) || (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' ||
                            ch == '.';
                   });
+  const auto scheme_end = has_scheme ? scheme + 3 : 0;
+  // A percent-encoded '@', '?' or '#' hides where the userinfo or the query begins. When the
+  // authority holds any '%', or the path holds one of those three encoded, everything after the
+  // scheme goes.
+  const auto authority_end = std::min(url.find_first_of("/?#", scheme_end), url.size());
+  const auto path_end = std::min(url.find_first_of("?#", authority_end), url.size());
+  const auto path = LowerAscii(url.substr(authority_end, path_end - authority_end));
+  if (url.find('%', scheme_end) < authority_end || path.find("%3f") != std::string::npos ||
+      path.find("%23") != std::string::npos || path.find("%40") != std::string::npos) {
+    return url.substr(0, scheme_end) + std::string(kRedactedPart);
+  }
   const auto limit = std::min(at, cut);
   const auto start = has_scheme && scheme + 3 <= limit ? scheme + 3 : 0;
   if (at != std::string::npos && cut != std::string::npos && cut < at) {

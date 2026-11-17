@@ -64,7 +64,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 / M72 / M73 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
-| 変換品質トラック | M52〜M57 / M65 / M74 / M75 |
+| 変換品質トラック | M52〜M57 / M65 / M74 |
 
 ### M0: 廃止資産の削除
 
@@ -524,7 +524,6 @@ M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
 M52 + M54 ─→ M74              （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
-M8 + M74 ─→ M75               （Zenzai のプロファイル。効果を M74 の A/B で測る）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -575,7 +574,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   基盤を再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
   M36-B 単体の trending→AutoWordStore とは別経路。spec §14.10。未完了時は当該
   pack を無効として M53 v1 を受け入れる）。
-  M74（個人回帰ベンチ）は M52・M54 を、M75（Zenzai のプロファイル）は M8・M74 を前提とする。
+  M74（個人回帰ベンチ）は M52・M54 を前提とする。
   詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
@@ -2460,7 +2459,6 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
 > - `docs/lattice-conversion-spec.md`（M65）
 > - `docs/conversion-quality-benchmark-spec.md` §15（M74）
-> - `docs/zenzai-inference-spec.md` §9.4（M75）
 >
 > リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
 > 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
@@ -2748,7 +2746,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   結果はどこへも送らない。
 - **前提**: M52（指標・出力形式・互換キー）、M54（学習ストアの v2 形式と `app_name` 列）。
 - **変更対象**: `bench/live_bench.cpp`・`bench/BenchmarkCommandLine.cpp`（`--personal-eval` ほかのオプション）、
-  `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`）、`bench/CMakeLists.txt`（テスト）、
+  `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`・`profile_sha256`）、
+  `bench/CMakeLists.txt`（テスト）、
   `scripts/run-quality-bench.py`（`eval_source` を持たない結果を `bundled` として比べる）、
   `docs/learning-data-management-spec.md` §14（学習ストアの読み手の追記）。
 - **受け入れ条件**:
@@ -2762,39 +2761,17 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 同じ学習ストアと構成で 2 回実行すると `eval_dataset_sha256` と精度系の指標が一致し、`--baseline` は互換キーが
     一致するときだけ `diff_vs_baseline` を出す
   - spec §15.5 で受け付けないオプションが入力エラーになる
+  - bench 専用の `--profile` が prompt の `[PROF]` に文字列を置き、`config.profile_sha256` を記録する。文字列は出力に
+    出ず、製品の設定と Host の挙動は変わらない
   - 実機の DPAPI で暗号化された学習ストアで実行でき、出力に本文が無いことと、1 万行の学習ストアでの所要時間を
-    記録する（Human Gate）
-- **参照仕様**: `docs/conversion-quality-benchmark-spec.md` §15・§14.1
+    記録する。実モデルで `--profile` の有無と中立の文言の結果も記録する（Human Gate）
+- **参照仕様**: `docs/conversion-quality-benchmark-spec.md` §15・§14.1、`docs/zenzai-inference-spec.md` §9.4.3
 - **補足**:
   - 左文脈による同音異義語の選び分けと、学習係数（`docs/user-learning-enhancement-spec.md` §13）の校正は測らない。
     理由は spec §15.1 が持つ
-
-### M75: Zenzai のプロファイル
-
-- **目的**: 利用者が書いた短いプロファイル（職業・文体など）を Zenzai の prompt の `[PROF]` に付け、Zenzai の生成を
-  利用者に寄せる。個人化の方式の比較と、採らない方式（個人 n-gram のブレンド、学習データから作るプロファイル、
-  端末内での fine-tune）の理由は spec §9.4.1 が持つ。
-- **前提**: M8（Zenzai の prompt と接頭辞 KV キャッシュ）、M74（効果の測定）。
-- **変更対象**: `inference-host/src/InferenceEngine.cpp`（変換の文脈へのプロファイルの設定と secure の判定）、
-  `inference-host/src/Dispatcher.cpp`（要求の `secure` を engine の変換へ渡す）、`inference-host/src/SettingsStore.cpp`
-  （`model.profile` の読み込み）、`settings/mvp-settings.schema.json`、`settings-app/SettingsDocument.cpp`・
-  `settings-app/MainWindow.xaml`（「AI 変換」の欄）、`bench/live_bench.cpp`・`bench/ConversionQuality.cpp`（`--profile`、
-  互換キー `profile_sha256`）。
-- **受け入れ条件**:
-  - `model.profile` が空のとき、prompt のバイト列と M52 の baseline が変わらない
-  - `model.profile` を設定すると、`[PROF]` を使う形式のモデルで、かな漢字変換と NLL 再ランクの prompt に `[PROF]` と
-    その値が入る。secure の要求、ローカルの AI 処理（`TransformLocal`）、`kanakanji-edge-v1` には入らない
-  - 30 コードポイントを超える値は先頭の 30 コードポイントで使われ、schema と設定アプリは 30 を超える値を受け付けない
-  - プロファイルを変えない限り、2 回目以降の変換で接頭辞 KV キャッシュがプロファイルの token を再利用する
-  - ログと `QueryDiagnostics` にプロファイルの文字列が出ず、診断 ZIP の `settings.redacted.json` で伏せられる
-  - 学習データの全削除の後も `model.profile` が残り、設定アプリの欄の近くにそのことが示される
-  - M52 ベンチで、固定のプロファイルを `--profile` で渡した採取の `top1_accuracy` が、渡さない採取より 0.5pp を
-    超えて下がらない
-  - 実モデルと実機の学習ストアで、M74 の個人回帰ベンチの `--profile` の有無の結果を記録する（Human Gate）
-- **参照仕様**: `docs/zenzai-inference-spec.md` §9.4・§9.3・§3.2、`docs/conversion-quality-benchmark-spec.md` §14.1・§15.5
-- **補足**:
-  - 学習データから作った値で Zenzai の生成を変える個人化は v1 では採らない（spec §9.4.2）。学習した語彙と文体は
-    学習 reranker（spec §7.1 手順 8）を通じて候補の並びにだけ効く
+  - Zenzai の個人化は v1 では採らない（`docs/zenzai-inference-spec.md` §9.4.2）。`--profile` は、利用者のデータで
+    プロファイルの効果を確かめる手段であり、効果が出たときに `model.profile` を製品の設定にする M を立てる条件は
+    同 §9.4.3 が持つ
 
 ## 横断テーマと Phase の対応
 
@@ -2834,5 +2811,4 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 順で効果を測定しながら進める。例外は `docs/neural-reranker-nll-spec.md`（Track B）
 （NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
 （前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。
-M74 は M52 と同じ `docs/conversion-quality-benchmark-spec.md` の §15 を、M75 は M8 と同じ
-`docs/zenzai-inference-spec.md` の §9.4 を正典とする。
+M74 は M52 と同じ `docs/conversion-quality-benchmark-spec.md` の §15 を正典とする。

@@ -30,8 +30,7 @@ canonical_for: ["評価ベンチ"]
 | §11〜§12 | M52 |
 | §13〜§14 | M52 |
 | §7 の `--dict-dir`・`--lattice`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice` | M65（`docs/lattice-conversion-spec.md` §10） |
-| §14.1 の `eval_source`、§15（§15.5 の `--profile` を除く） | M74 |
-| §14.1 の `profile_sha256`、§15.5 の `--profile` | M75（`docs/zenzai-inference-spec.md` §9.4） |
+| §14.1 の `eval_source`・`profile_sha256`、§15 | M74 |
 
 ## 1. 目的
 
@@ -825,8 +824,8 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
   結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を
   比べない）
-- `profile_sha256`（§15.5 の `--profile` で渡した Zenzai のプロファイル（`docs/zenzai-inference-spec.md` §9.4）の
-  UTF-8 バイト列の SHA-256。渡さないときは `none`。プロファイルは Zenzai の候補を変えるので互換キーに入れる。
+- `profile_sha256`（§15.5 の bench 専用の `--profile` で渡した Zenzai のプロファイル（`docs/zenzai-inference-spec.md`
+  §9.4.3 の測定に使う）の UTF-8 バイト列の SHA-256。渡さないときは `none`。プロファイルは Zenzai の候補を変えるので互換キーに入れる。
   プロファイルの文字列そのものは出力しない）
 - `category_filter`（`--category` の値。既定 `all`。フィルタすると評価対象
   ケース集合が変わるが `eval_dataset_sha256` はファイル全体ハッシュで不変なため、
@@ -973,7 +972,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `--settings <path>` | privacy の判定に使う設定ファイルの位置（§15.2） |
 | `--max-cases <N>` | ケースの上限（§15.3） |
 | `--include-personal-text` | `--per-case` に読みと表層を書くことを許す（§15.7） |
-| `--profile <text>` | Zenzai のプロファイル（`docs/zenzai-inference-spec.md` §9.4）を与えて変換する（M75）。§4 の評価データでも使える。`config.profile_sha256` に記録する（§14.1） |
+| `--profile <text>` | bench 専用。変換の文脈の `instruction_profile` に文字列を入れ、Zenzai の prompt の `[PROF]` に置いて変換する。`docs/zenzai-inference-spec.md` §9.4.3 の効果の測定に使う。製品の設定（`model.profile`）は読まず、Host の挙動も変えない。§4 の評価データでも使える。空文字列、30 コードポイントを超える文字列、`[PROF]` を使わない形式のモデル（同 §2.4.2）、`--model` の無い構成では入力エラーとして終える。`config.profile_sha256` に記録する（§14.1） |
 
 `--output`、`--baseline`、`--per-case`、`--backend`、`--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` は
 §7 と同じ意味で使える。`--trace`、`--trace-output`、`--decode-stats`、`--category`、`--typo-mode` は個人回帰ベンチでは
@@ -1050,3 +1049,5 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 - unit: `--per-case` が `--include-personal-text` 無しで入力エラーになり、有りでは警告を出すこと
 - unit: 個人回帰ベンチで受け付けないオプション（§15.5）が入力エラーになること
 - unit: 学習ストアを書き換えないこと（実行の前後でファイルのバイト列と更新時刻が同じ）
+- unit: `--profile` が prompt の `[PROF]` に文字列を置き、`config.profile_sha256` を記録し、渡さないときは `none` に
+  なること。§15.5 の入力エラーの条件と、文字列が出力に出ないこと

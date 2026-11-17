@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M8, M75]
+milestones: [M8]
 canonical_for: ["Zenzai 推論コントラクト"]
 ---
 
@@ -32,7 +32,7 @@ canonical_for: ["Zenzai 推論コントラクト"]
 | §9（§9.2.2・§9.3・§9.4 を除く） | M8 |
 | §9.2.2 | M10（キャンセルとデッドラインの decode ループ反映） |
 | §9.3 | M8（設定キーの定義）。schema への反映は M11 |
-| §9.4 | M75（Zenzai のプロファイル。方式の比較と採否を含む） |
+| §9.4 | M8 の対象外（個人化の方式の比較と採否。効果の測定は M74 の個人回帰ベンチ） |
 | §10 | M8 |
 
 ---
@@ -694,8 +694,8 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**M56 の学習重みが無い
 構成での加算統合**であり、M56 が学習重みへ置換する。`Candidate` 構造体に raw score 用の
 数値フィールドを足すかは M56 で判断（M8 では `debug_info` 文字列で前方互換）。
-Zenzai の個人化はプロファイルで生成そのものを変える方式とし（§9.4）、この統合にも `final_score` にも個人化の加点の
-項を設けない。
+Zenzai の生成を利用者ごとに変える個人化は v1 では採らず（§9.4）、この統合にも `final_score` にも個人化の加点の項を
+設けない。
 
 ### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
 
@@ -1253,7 +1253,7 @@ schema 自体は変更しない）:
 |---|---|---|---|
 | `model.inferenceLimit` | 4 | 1〜8（MVP）/ 1〜50（将来） | §6.3 ビーム幅 |
 | `model.nBest` | 4 | 1〜8 | §6.1 出力上限 |
-| `model.profile` | "" | 文字列（30 コードポイントまで） | §3.2・§9.4（M75） |
+| `model.profile` | "" | 文字列 | §3.2（将来。M8 は空既定） |
 | `model.maxNewTokens` | 64 | 16〜256 | §8 |
 
 > M8 受け入れ条件（roadmap）は「配置時 LoadModel 成功 / 未配置でも落ちない / CPU・GPU
@@ -1261,18 +1261,18 @@ schema 自体は変更しない）:
 > 上記 Zenzai パラメータを足す形で、IPC payload の互換を壊さない（`tsf-ipc-protocol`）。新規
 > `model.*` キーの schema 反映は M11 / DEV-203 のスコープ。
 
-### 9.4 個人化（M75）
+### 9.4 個人化（方式の比較と採否）
 
-Zenzai の生成を利用者ごとに寄せる方式を比べ、採る方式と採らない方式を本節に定める。利用者が確定した
-表層は、§7.1 手順 8 の学習 reranker が候補の並びに反映する。本節が扱うのは、Zenzai の生成そのものを変える方式である。
+Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節に定める。利用者が確定した表層は、§7.1 手順 8 の学習 reranker
+が候補の並びに反映する。本節が扱うのは、Zenzai の生成そのものを変える方式である。
 
 #### 9.4.1 比較した方式
 
 | 方式 | 効果の見込み | 計算コスト | 保存するデータ | 結論 |
 |---|---|---|---|---|
 | A. 個人 n-gram のブレンド（legacy の `PersonalizationMode`） | 確定した文の言い回しに寄る。Windows では測れない | beam の各 step で token の確率を補正する | base と個人の n-gram 言語モデル。個人側の学習には文単位の確定本文が要る | 採らない |
-| B1. 利用者が書いたプロファイルを `[PROF]` に付ける | 職業・文体などの記述に寄る。未測定 | prompt がプロファイルの token 数だけ伸びる。接頭辞 KV キャッシュで再利用される | 設定値 1 つ（`model.profile`） | 採る（§9.4.3） |
-| B2. 学習データから作ったプロファイルを `[PROF]` に付ける | 確定の傾向に寄る。未測定 | B1 と同じ | B1 と同じ。値は学習データから作る | 採らない |
+| B1. 利用者が書いたプロファイルを `[PROF]` に付ける | 同梱データでは揺れの範囲で、正解を壊すことがある（下記の計測） | prompt がプロファイルの token 数だけ伸びる。接頭辞 KV キャッシュで再利用される | 設定値 1 つ | v1 では採らない。効果を測る手段だけを持つ（§9.4.3） |
+| B2. 学習データから作ったプロファイルを `[PROF]` に付ける | B1 と同じ仕組みで、同じ揺れを持つ | B1 と同じ | B1 と同じ。値は学習データから作る | 採らない |
 | C. 端末内での個人 fine-tune | 確定した組に強く寄る。過学習しやすい | 製品の中での学習。CPU で分から時間の単位 | 個人データから作った重み | 採らない |
 
 - **A**: legacy は base と個人の n-gram 言語モデル（marisa-trie の 4 ファイル）と alpha（オフ 0、弱く 0.5、
@@ -1285,12 +1285,16 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採る方式と�
   確定の本文を新たに保存すると、左文脈の別用途の再利用を禁じる `docs/privacy-and-secure-input-spec.md` §5.3 と、文脈を
   hash で持つ `docs/user-learning-enhancement-spec.md` §2 に反する。
 - **B1**: zenz-v3.2-small は `[PROF]` を学習している（§2.4.1）。`BuildZenzaiPrompt`（§3.3）は `instruction_profile` を
-  `[PROF]` に置く。かな漢字変換ではこの値は空で、ローカルの AI 処理（`InferenceEngine::TransformLocal`）だけが指示を入れる。
-  プロファイルは prompt の先頭に置かれるので、変換をまたぐ接頭辞 KV キャッシュ（§9.2.3.6）がそのまま再利用し、
-  decode し直すのはプロファイルを変えたときだけである。`[PROF]` を使わない形式（`kanakanji-edge-v1`。§2.4.2）では効かない。
-- **B2**: ペルソナの比率（`docs/learning-data-management-spec.md` §15）などから文字列を作る案である。モデルが学習した
-  プロファイルの書き方（legacy の例は「田中太郎/高校生」のような自由記述。§2.2）に合う保証が無く、学習データから
-  作った値を生成に入れる経路が 1 つ増える。
+  `[PROF]` に置く。かな漢字変換ではこの値は空で、ローカルの AI 処理（`InferenceEngine::TransformLocal`）だけが指示を
+  入れる。DEV-1576 の計測では、M52 の `kana_kanji_eval` 200 件で、アプリの種別から作った文字列（「会社員/文書作成」
+  「ソフトウェアエンジニア/プログラミング」）を zenz-v3.2-small Q5_K_M の `[PROF]` に付けると、top1 の変化は ±1 件で、
+  正解を 1〜3 件壊した。意味を持たない中立の文言（「日本語の文章」）を付けた対照でも同じ方向に動いたので、変化は文言の
+  意味ではなく、`[PROF]` の token が付くこと自体による揺れとみる。p95 の増分はノイズの範囲だった。利用者が書く文字列でも
+  同じ仕組みを通るので、同梱データの精度が上がる根拠は無い。利用者自身の語彙に効くかどうかは測っていない。
+  `[PROF]` を使わない形式（`kanakanji-edge-v1`。§2.4.2）では効かない。
+- **B2**: ペルソナの比率（`docs/learning-data-management-spec.md` §15）などから文字列を作る案である。B1 と同じ揺れを
+  持つうえ、モデルが学習したプロファイルの書き方（legacy の例は「田中太郎/高校生」のような自由記述。§2.2）に合う保証が
+  無く、学習データから作った値を生成に入れる経路が 1 つ増える。
 - **C**: Zenzai（zenz-v3.2-small は約 90M パラメータ。§2.4.1）を端末内で追加学習する案である（アダプタを足す形を含む）。
   製品の中に学習の処理が要る。個人データから作った重みを保存するので、暗号化と、学習データの全削除
   （`docs/learning-data-management-spec.md` §4.6）での消去も要る。学習に使える組は文脈の無い読みと表層だけで
@@ -1300,59 +1304,25 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採る方式と�
 
 #### 9.4.2 決定
 
-- B1 を採る。A、B2、C は採らない（理由は §9.4.1）。
+- v1 では A、B1、B2、C のいずれも採らない。Zenzai の生成は利用者ごとに変えない（理由は §9.4.1）。
 - 学習データから作った値で Zenzai の生成を変える個人化は、v1 では採らない。A、B2、C はいずれもこれに当たる。
   学習した語彙と文体は、§7.1 手順 8 の学習 reranker を通じて候補の並びにだけ効く。
-- legacy の `PersonalizationLevel`（A の alpha の設定）に当たる設定は持たない。
+- legacy の `ZenzaiProfile` と `PersonalizationLevel` に当たる製品の設定は持たない。`model.profile` は §9.3 の予約の
+  ままとする。§7.5 の統合点に個人化の加点を足す枠は使わない。
 
-#### 9.4.3 プロファイルの適用
+#### 9.4.3 効果の測り方と見直しの条件
 
-- **設定キー**: `model.profile`（§9.3。文字列、既定 `""`）。schema の `maxLength` は 30 とし、設定アプリは 30 コード
-  ポイントを超えて入力させない。Host は文字列でない値を `""` として扱い、30 コードポイントを超える値は先頭の 30
-  コードポイントだけを使う。上限は §9.2.3.7 の prompt 長の見積もりに入る。schema と設定アプリの「AI 変換」の欄は
-  M75 の実装で足す（`settings/mvp-settings.schema.json` の `model` は `additionalProperties: false`）。
-- **付ける要求**: かな漢字変換として `ZenzaiModelConverter::Convert` を呼ぶ要求（候補の照会とライブ変換）で、engine が
-  変換に渡す文脈の `instruction_profile` にこの値を入れる。NLL 再ランクは同じ文脈と prompt の接頭辞を使う
-  （`docs/neural-reranker-nll-spec.md` §B3.4）ので、同じ値で採点する。U+EE00〜U+EEFF の除去と、除いて空になった
-  ときに `[PROF]` を置かない規則は §3.1 のとおりである。
-- **付けない要求**:
-  - `InferenceEngine::TransformLocal` を通るローカルの AI 処理（整文、翻訳、要約、自由指示）。これらの `[PROF]` は
-    処理の指示に使う（§3.2）ので、利用者のプロファイルを混ぜない。
-  - 要求の `secure` が真の要求（`docs/privacy-and-secure-input-spec.md` §5.1.1。欠落は真として扱う）と、Host の設定が
-    secure の間（同 §5.1 の secure 相当を含む）。secure を engine の変換まで運ぶ経路は M75 の実装で足す。
-  - `[PROF]` を使わない形式のモデル。設定アプリは、その形式ではプロファイルが効かないことを欄の近くに示す。
-- **ログと診断**: 値を RuntimeLogger、ETW、trace、`QueryDiagnostics` に出さない（`docs/observability-spec.md` §7.6 の
-  本文と同じ扱い）。診断 ZIP の `settings.redacted.json` では、enum を持たない文字列として伏せる
-  （`docs/diagnostics-compat-spec.md` §12.5）。
-- **学習データの全削除との関係**: `model.profile` は利用者が書いた設定値であり、学習データではないので、学習データの
-  全削除（`docs/learning-data-management-spec.md` §4.6）では消えない。設定アプリはそのことを欄の近くに示す。欄を空に
-  して保存すれば消える。
-
-#### 9.4.4 score への加え方
-
-プロファイルは prompt を通じて Zenzai の生成と logprob を変えるだけである。§6.5 の正規化、§7.2 の score 帯
-[0.3, 1.4]、§7.1 の合成順、学習 reranker の加点は変えない。個人化の加点を後段で足す枠は設けない（§7.5）。
-`model.profile` が空のとき、prompt のバイト列はプロファイルの無い prompt と同じである（§3.1・§3.3）。
-
-#### 9.4.5 効果の測り方
-
-- **同梱データ（M52）**: `docs/conversion-quality-benchmark-spec.md` §4 の評価データで、プロファイルを渡さない採取と、
-  固定の短いプロファイルを `--profile`（同 §15.5）で渡した採取を比べる。互換キーは `profile_sha256` だけが違う
-  （同 §14.1）。`top1_accuracy` の悪化は 0.5pp 以内とする（同 §14.3 と同じ閾値）。
-- **個人回帰ベンチ（M74）**: 同じ学習ストアで、`--profile` の有無を続けて採取して比べる
-  （`docs/conversion-quality-benchmark-spec.md` §15.7）。プロファイルの文字列は結果に出ない。
-- **latency**: プロファイルの有無で p95 を比べて記録する。2 回目以降の変換でプロファイルの token を decode し直さない
-  ことは、unit で確かめる（§9.4.6）。
-- 既定は `""` のままとする。プロファイルは利用者が書くもので、測定の結果で既定値を変えない。
-
-#### 9.4.6 テスト
-
-- unit: `BuildZenzaiPrompt` が `model.profile` を `[PROF]` に置くこと、空と除去後に空になる値では `[PROF]` を置かない
-  こと、`kanakanji-edge-v1` では置かないこと、30 コードポイントを超える値を先頭 30 コードポイントにすること
-- unit: secure の要求とローカルの AI 処理に `model.profile` が入らないこと
-- unit: プロファイルを変えない限り、2 回目以降の変換で接頭辞 KV キャッシュがプロファイルの token を再利用すること
-- unit: ログと `QueryDiagnostics` にプロファイルの文字列が出ないこと、診断 ZIP の `settings.redacted.json` で伏せられること
-- unit: 学習データの全削除の後も `model.profile` が残ること
+- B1 の効果は、利用者自身の確定履歴で測る。個人回帰ベンチ（`docs/conversion-quality-benchmark-spec.md` §15）は
+  bench 専用の `--profile`（同 §15.5）を持ち、互換キー `profile_sha256`（同 §14.1）だけが違う結果を比べられる。
+  `--profile` は bench が作る変換の文脈の `instruction_profile` に文字列を入れるだけで、製品の設定と Host の挙動は変えない。
+- 次の 2 つを満たしたら、`model.profile` を製品の設定にする M を roadmap に立てる。
+  - 同じ学習ストアで、利用者が書いたプロファイルの `commit_coverage_top1`（同 §15.6）が、プロファイルなしと、
+    中立の文言（DEV-1576 の対照と同じ「日本語の文章」）の両方を上回る。
+  - M52 の同梱データ（同 §4）で、そのプロファイルを渡した採取の `top1_accuracy` の悪化が 0.5pp 以内である
+    （同 §14.3 と同じ閾値）。
+- その M では、設定キーの長さの上限（prompt 長の見積もり §9.2.3.7 に入る）、secure の要求とローカルの AI 処理
+  （`InferenceEngine::TransformLocal`）には付けないこと、ログと診断 ZIP（`docs/diagnostics-compat-spec.md` §12.5）で
+  文字列を出さないこと、学習データの全削除（`docs/learning-data-management-spec.md` §4.6）との関係を定める。
 
 ---
 

@@ -1558,7 +1558,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   - `calculatorRewriter=true` かつ `numberRewriter=true` で、`1+2=` から `3` と `1+2=3` が出る。`numberRewriter=false` では出ない
   - 0 除算、桁あふれ、読みの長さと括弧の入れ子の上限では計算の候補を出さない
   - 動的候補の確定が学習ストアと `CommitObservation.shown` に載らない
-  - 一括変換、ライブ変換、予測候補、再変換の経路に動的候補が出ない
+  - 一括変換、予測候補、再変換と、ライブ変換の表示に動的候補が出ない。通常の候補が 0 件のときは動的候補を足さない
   - 2 つのキーが settings.json から Host の `RuntimeSettings`、Handshake 応答、TIP の保持値まで伝播する
   - 既定 OFF で候補・確定・学習の挙動が変わらない
 - **参照仕様**: `docs/candidate-rewriter-spec.md` §20（範囲・時計の注入・読み・書式・和暦・計算の文法と打ち切り・数字リライター

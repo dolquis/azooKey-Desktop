@@ -60,7 +60,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`azdic-physical-layer-spec.md`](azdic-physical-layer-spec.md) | M53 system 辞書の物理層（`.azdic` v1、ビルドパイプライン） |
 | [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
-| [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
+| [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル）、M67（入力欄の種類による切替、§13） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給。§4.1 の確定の取り消しの後の `undo` は M69 |
@@ -73,7 +73,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入）。§3・§4.3 は M62-B の英字分の正典 |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61-A 自動カッコペアリングと M61-B 外部化・アプリ互換 |
 | [`mixed-english-auto-conversion-spec.md`](mixed-english-auto-conversion-spec.md) | 追加機能 M63（日英混在ローマ字入力の自動変換：M63-A 1 語 / M63-B 文中混在。分割器・IPC・順位・学習・設定） |
-| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
+| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）、M62-E 日付・時刻・計算（§20）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
 | [`segment-editing-spec.md`](segment-editing-spec.md) | 追加機能 M66（通常変換の文節の伸縮と部分確定：Shift+← / Shift+→ による先頭文節の伸縮、先頭文節だけの確定、先頭文節の候補の要求） |
 | [`commit-undo-spec.md`](commit-undo-spec.md) | 追加機能 M69（確定の取り消し：確定の直後の Ctrl+Backspace で直前の確定を読みの composition へ戻す。有効な条件、edit session、学習の扱い） |
 

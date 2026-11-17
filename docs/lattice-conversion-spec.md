@@ -119,8 +119,10 @@ Zenzai が正常に候補を返した要求で、ラティスの上位 k 件を 
 - `tag`: 付けない。`AssignHeuristicTags` と `ApplyTagBoosts` は他の候補と同じに掛かる。
 
 この帯は、ユーザー辞書の既定（1.5）と学習で足した候補（1.2）より下にある。1 位は `SimpleConverter` の identity
-（0.6）より上に来る。同じ表層の候補は `DedupMergedCandidates` が 1 つに畳む。`UserDictionary` の候補は
-score によらず残り、それ以外は score の高い方が残る。
+（0.6）より上に来る。辞書の完全一致の候補（`docs/auto-word-registration-spec.md` §14.11 の `dictionary_score`）は、
+帯を変えずにそのまま合成する。その score は頻度の高い語で 1.0 を超えるので、読み全体に一致する語はラティスの 1 位より
+上に来うる。1.0 以下の語はラティスの候補の間に入る。同じ表層の候補は `DedupMergedCandidates` が 1 つに畳む。
+`UserDictionary` の候補は score によらず残り、それ以外は score の高い方が残る。
 
 ### 3.5 live 変換と件数
 
@@ -195,7 +197,8 @@ cost = Σ_{t=1..k} ( word_cost(n_t) + penalty(n_t) )
 ```
 
 `connect(r, l)` は連接行列の値で、前のノードの右 ID r と次のノードの左 ID l から引く。和は 32 bit 符号付き整数で
-計算する。語コストと連接コストは 16 bit なので、64 code point の読みで溢れない。
+計算する。語コストと連接コストは 16 bit で、補正項（§5.2）は 1 ノードあたり 16 bit の範囲に収まる値とするので、
+64 code point の読みで溢れない。
 
 ### 5.2 補正項
 
@@ -391,7 +394,8 @@ CLI の正典は `docs/conversion-quality-benchmark-spec.md` §7、baseline の�
 ### 10.3 補正項の校正
 
 補正項（§5.2）と C（§3.4）は、評価ケースの半分で選ぶ。半分は、ケースの `id` を UTF-8 で SHA-256 した先頭バイトが
-偶数のケースとする。受け入れの判定は全件で行い、校正に使った半分と残りの半分の値も添える。校正の結果は
+偶数のケースとする。受け入れの判定は全件で行い、校正に使った半分と残りの半分の値も添える。P_kata は外来語にも
+掛かるので、`expected` がカタカナを含むケースの `top1_accuracy` も A と B で並べる。校正の結果は
 lattice_core の `META` に入るので、`dictionary_bundle_sha256` が変わり、baseline は採り直しになる
 （`docs/conversion-quality-benchmark-spec.md` §14.1）。
 

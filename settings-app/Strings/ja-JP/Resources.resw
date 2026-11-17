@@ -251,6 +251,8 @@
   <data name="Setting_autoWordRegistration_registrationMode" xml:space="preserve"><value>新語の登録方法</value></data>
   <data name="Setting_typoCorrectionMode" xml:space="preserve"><value>タイプミスの訂正</value></data>
   <data name="Setting_typoMinCount" xml:space="preserve"><value>タイプミスとみなす最小回数</value></data>
+  <data name="Setting_typoCorrection_learnPersonalPatterns" xml:space="preserve"><value>自分の打ち間違いを学習する</value></data>
+  <data name="Setting_typoCorrection_maxReadingHypotheses" xml:space="preserve"><value>1 つの読みから作る訂正案の最大数（1〜8）</value></data>
   <data name="Setting_aiBackend" xml:space="preserve"><value>AI サービス</value></data>
   <data name="Setting_llmMagicConversion" xml:space="preserve"><value>AI による変換（Magic Conversion）</value></data>
   <data name="Setting_includeContextInAITransform" xml:space="preserve"><value>AI に前後の文脈を送る</value></data>
@@ -331,6 +333,7 @@
   <data name="SettingOption_powerProfile_performance" xml:space="preserve"><value>パフォーマンス</value></data>
   <data name="SettingOption_powerProfile_battery_saver" xml:space="preserve"><value>省電力</value></data>
   <data name="SettingNote_autoUpdate_enabled" xml:space="preserve"><value>オンにすると、変換エンジンが起動時と設定した間隔ごとに GitHub の公開リリースを確認し、結果を下に表示します。送るのは、接続元の IP アドレスと、User-Agent に入る製品のバージョンだけです。プライバシーモードが「オフライン」か「常にセーフ入力」の間は確認しません。更新のダウンロードやインストールはしません。</value></data>
+  <data name="SettingNote_typoCorrection_learnPersonalPatterns" xml:space="preserve"><value>オフにすると、新しい打ち間違いの蓄積を止めます。すでに学習した訂正は使い続けます。「タイプミスの訂正」が「しない」のときは、どちらにしても学習しません。</value></data>
   <data name="SettingNote_inputMode" xml:space="preserve"><value>カッコ補完が入れるカッコの字形です（ひらがなは全角カッコ全般、半角英数は ( ) などの半角カッコ、全角英数は（ ）などの全角 ASCII カッコ）。起動時の入力モードや、カッコ以外の文字の字種は変えません。絵文字検索の「:」は「ひらがな」のときだけ働きます。</value></data>
   <data name="SettingNote_fullWidthSpace" xml:space="preserve"><value>ひらがなモードで読みが無いときに使います。Shift+Space はもう一方の幅の空白を入れます。英数モードと IME オフでは常に半角です。</value></data>
   <data name="SettingNote_convertKeysAction" xml:space="preserve"><value>どちらの設定でも、VK_IME_ON / VK_IME_OFF（AutoHotKey や PowerToys から送れるキー）で IME をオン・オフできます。</value></data>

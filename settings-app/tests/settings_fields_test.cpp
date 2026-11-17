@@ -294,6 +294,14 @@ TEST(SettingsFieldsTest, ValuesAreCheckedAgainstTypeRangeAndOptions) {
   EXPECT_FALSE(ValidateSettingValue(mode, std::string("auto_replace")));
   EXPECT_TRUE(ValidateSettingValue(mode, std::string("aggressive")));
   EXPECT_TRUE(ValidateSettingValue(*FindSettingField("privacy.secureApps"), std::string("a")));
+  // DEV-2064: the hypothesis count is a whole number from 1 to 8 (typo-correction-learning-spec
+  // section 12.14); a decimal or a value outside the range is refused.
+  const auto& hypotheses = *FindSettingField("typoCorrection.maxReadingHypotheses");
+  EXPECT_FALSE(ValidateSettingValue(hypotheses, int64_t{1}));
+  EXPECT_FALSE(ValidateSettingValue(hypotheses, int64_t{8}));
+  EXPECT_TRUE(ValidateSettingValue(hypotheses, int64_t{0}));
+  EXPECT_TRUE(ValidateSettingValue(hypotheses, int64_t{9}));
+  EXPECT_TRUE(ValidateSettingValue(hypotheses, 2.5));
 }
 
 TEST(SettingsFieldsTest, OnlyValuesChangedFromWhatWasLoadedAreSaved) {
@@ -347,6 +355,8 @@ TEST(SettingsFieldsTest, FieldsSitInThePanesOfTheSpecTable) {
       {"emojiRewriter", Pane::Candidates},
       {"maxCandidates", Pane::Candidates},
       {"typoCorrectionMode", Pane::Dictionary},
+      {"typoCorrection.learnPersonalPatterns", Pane::Dictionary},
+      {"typoCorrection.maxReadingHypotheses", Pane::Dictionary},
       {"autoWordRegistration.miningEnabled", Pane::Dictionary},
       {"powerProfile", Pane::AiConversion},
       {"inferenceThreads", Pane::AiConversion},

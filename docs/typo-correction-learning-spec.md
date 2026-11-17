@@ -944,6 +944,12 @@ v1 の 3 モードで示し（`rank` は `suggest`、`aggressive` は `auto_repl
 `typoCorrection.mode` の v2 の値と同じ v1 の値（`rank` に対する `suggest` など）なら、v2 の値を残す。
 `off` 以外を選んだときは、`typoCorrection.enabled` の false も true に戻す。
 モードを変えない保存は `typoCorrection` をそのまま残すので、ペインの外で設定した `rank` は消えない。
+「辞書」ペインは、モードのほかに `typoCorrection.learnPersonalPatterns`（スイッチ）と
+`typoCorrection.maxReadingHypotheses`（1〜8 の整数。小数と範囲外は保存で拒む）を編集する。この 2 キーは
+`typoCorrection` の中に書き、既にファイルにあるか既定と違うときだけ書き、ほかの下位キーはそのまま残す。
+`typoCorrection.enabled` はペインに専用のスイッチを持たず、false は `off` として示す。`rank` / `aggressive` と
+`minConfidenceForRanking` / `minConfidenceForTopCandidate` は、補正エンジンが変換に反映するまでペインに出さず、
+保存で残す。
 v1 root key は M55 を含むリリースから 3 マイナーバージョンの間は読み込み、
 その後のリリースで削除する（deprecation warning を CHANGELOG に記載）。
 M48 §6 の `promptPrefixByApp` と同じ段階的廃止ポリシー。

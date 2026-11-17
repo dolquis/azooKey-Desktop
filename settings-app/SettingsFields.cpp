@@ -145,6 +145,12 @@ std::vector<SettingField> BuildFields() {
       Enum("typoCorrectionMode", Pane::Dictionary, "Typo", "suggest",
            {"off", "suggest", "auto_replace"}),
       Integer("typoMinCount", Pane::Dictionary, "Typo", 3, 1.0, 100.0),
+      // typo-correction-learning-spec section 12.14: the v2 keys that already change what the Host
+      // does. rank / aggressive and the two confidences wait for the correction engine (M55), so
+      // the mode above stays the v1 three values and typoCorrection.enabled folds into "off".
+      Bool("typoCorrection.learnPersonalPatterns", Pane::Dictionary, "Typo", true, std::nullopt,
+           true),
+      Integer("typoCorrection.maxReadingHypotheses", Pane::Dictionary, "Typo", 3, 1.0, 8.0),
 
       Enum("powerProfile", Pane::AiConversion, "Performance", "auto",
            {"auto", "performance", "battery_saver"}),
@@ -259,18 +265,16 @@ const std::vector<UneditedSetting>& UneditedSettings() {
        "written with typoCorrectionMode when the pane changes it (typo-correction-learning-spec "
        "12.14)"},
       {"typoCorrection.enabled",
-       "kept on save; no v2 control yet (typo-correction-learning-spec "
-       "12.14)"},
-      {"typoCorrection.learnPersonalPatterns",
-       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+       "kept on save; the pane shows false as \"off\" and has no switch of its own "
+       "(typo-correction-learning-spec 12.14)"},
       {"typoCorrection.keyboardLayout",
        "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
-      {"typoCorrection.maxReadingHypotheses",
-       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
       {"typoCorrection.minConfidenceForRanking",
-       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+       "kept on save; shown once the correction engine uses it (typo-correction-learning-spec "
+       "12.14)"},
       {"typoCorrection.minConfidenceForTopCandidate",
-       "kept on save; no v2 control yet (typo-correction-learning-spec 12.14)"},
+       "kept on save; shown once the correction engine uses it (typo-correction-learning-spec "
+       "12.14)"},
       {"typoCorrection.disableInSecretApps", "fixed to true (typo-correction-learning-spec 12.14)"},
   };
   return settings;

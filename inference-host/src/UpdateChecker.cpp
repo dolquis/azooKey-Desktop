@@ -189,9 +189,17 @@ std::string UpdatePackageFileName(std::string_view version) {
   return "azooKey-" + std::string(version) + "-x64.msi";
 }
 
-std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
-                                                 std::string_view download_prefix,
-                                                 uint64_t max_bytes, std::string* error) {
+std::string VulkanAddonPackageFileName(std::string_view version) {
+  return "azooKey-vulkan-addon-" + std::string(version) + "-x64.msi";
+}
+
+namespace {
+
+// The asset named file_name of the release a GET /releases/tags/v<version> response describes.
+std::optional<UpdatePackage> SelectReleaseAsset(std::string_view json, std::string_view version,
+                                                const std::string& file_name,
+                                                std::string_view download_prefix,
+                                                uint64_t max_bytes, std::string* error) {
   const auto fail = [error](const char* category) {
     if (error) *error = category;
     return std::nullopt;
@@ -204,8 +212,8 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
   }
   const auto* assets = root->Find("assets");
   if (!assets || !assets->IsArray()) return fail("asset_missing");
-  const auto file_name = UpdatePackageFileName(version);
-  // The asset is named exactly, so neither the Vulkan add-on MSI nor any other file matches.
+  // The asset is named exactly: the base MSI and the Vulkan add-on MSI never stand in for each
+  // other, and no other file matches.
   const std::string expected_url =
       std::string(download_prefix) + "v" + std::string(version) + "/" + file_name;
   const ipc::json::Value* match = nullptr;
@@ -234,6 +242,23 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
   package.sha256 = digest->substr(kDigestPrefix.size());
   package.size = *size;
   return package;
+}
+
+}  // namespace
+
+std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
+                                                 std::string_view download_prefix,
+                                                 uint64_t max_bytes, std::string* error) {
+  return SelectReleaseAsset(json, version, UpdatePackageFileName(version), download_prefix,
+                            max_bytes, error);
+}
+
+std::optional<UpdatePackage> SelectVulkanAddonPackage(std::string_view json,
+                                                      std::string_view version,
+                                                      std::string_view download_prefix,
+                                                      uint64_t max_bytes, std::string* error) {
+  return SelectReleaseAsset(json, version, VulkanAddonPackageFileName(version), download_prefix,
+                            max_bytes, error);
 }
 
 UpdateChecker::UpdateChecker(UpdateCheckerOptions options, UpdateCheckDependencies dependencies)

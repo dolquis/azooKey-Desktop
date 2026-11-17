@@ -9,6 +9,16 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/logging/RuntimeLogger.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
 namespace azookey::host {
 namespace {
 
@@ -18,11 +28,12 @@ constexpr uint64_t kMaxStatusBytes = 64 * 1024;
 // one), so a byte-wise widening is exact.
 std::wstring WidenAscii(std::string_view text) { return std::wstring(text.begin(), text.end()); }
 
-// Only the files this service writes: azooKey-<MAJOR.MINOR.PATCH>-x64.msi and its .part. The
-// Vulkan add-on's MSI and anything else in the directory stay.
-bool IsPackageFileName(const std::filesystem::path::string_type& name) {
+// Only the files this service writes: <prefix><MAJOR.MINOR.PATCH>-x64.msi and its .part, where the
+// prefix is "azooKey-" for the base and "azooKey-vulkan-addon-" for the add-on. Anything else in
+// the directory stays.
+bool IsPackageFileName(const std::filesystem::path::string_type& name, const char* prefix_text) {
   using View = std::basic_string_view<std::filesystem::path::value_type>;
-  const std::filesystem::path prefix_path("azooKey-");
+  const std::filesystem::path prefix_path(prefix_text);
   const std::filesystem::path msi("-x64.msi");
   const std::filesystem::path part("-x64.msi.part");
   const View prefix(prefix_path.native());
@@ -171,7 +182,17 @@ void UpdateFetchService::Shutdown() {
   runtime_logger_ = nullptr;
 }
 
-void UpdateFetchService::RemoveOtherPackages(const std::string& keep) const {
+void UpdateFetchService::RemoveOtherPackages(const std::string& version) const {
+  const std::filesystem::path keep_base(UpdatePackageFileName(version));
+  const std::filesystem::path keep_addon(VulkanAddonPackageFileName(version));
+  const auto kept = [&](const std::filesystem::path::string_type& name) {
+    for (const auto& keep : {keep_base, keep_addon}) {
+      auto part = keep;
+      part += ".part";
+      if (name == keep.native() || name == part.native()) return true;
+    }
+    return false;
+  };
   std::error_code ec;
   // Incremented with an error_code: a failing iteration ends the cleanup instead of throwing.
   for (std::filesystem::directory_iterator it(options_.updates_dir, ec), end; !ec && it != end;
@@ -182,8 +203,9 @@ void UpdateFetchService::RemoveOtherPackages(const std::string& keep) const {
     const auto file_name = entry.path().filename();
     const auto& name = file_name.native();
     // Only this feature's own files; a file in use (an install in progress) stays.
-    if (!IsPackageFileName(name) || name == std::filesystem::path(keep).native() ||
-        name == std::filesystem::path(keep + ".part").native()) {
+    if ((!IsPackageFileName(name, "azooKey-") &&
+         !IsPackageFileName(name, "azooKey-vulkan-addon-")) ||
+        kept(name)) {
       continue;
     }
     std::error_code remove_ec;
@@ -205,7 +227,13 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
   std::string error;
   std::string sha256;
   uint64_t bytes_received = 0;
+  // DEV-2081: the add-on of the same version, only where it is installed. Its failure leaves the
+  // base Ready (addon_error); a stop by the user, the Host or the settings stops the whole job.
+  bool addon_wanted = false;
+  std::string addon_sha256;
+  std::string addon_error;
   try {
+    addon_wanted = dependencies_.vulkan_addon_installed && dependencies_.vulkan_addon_installed();
     HttpTextRequest request;
     request.url = options_.api_base_url + L"/releases/tags/v" + WidenAscii(version);
     request.max_bytes = ipc::kMaxJsonInputBytes;
@@ -213,6 +241,7 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
     request.network_allowed = allowed;
     const auto response = dependencies_.fetch_text(request);
     std::optional<UpdatePackage> package;
+    std::optional<UpdatePackage> addon;
     if (!response.ok()) {
       error = category("network");
     } else {
@@ -220,6 +249,10 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
       package = SelectUpdatePackage(response.body, version, options_.download_prefix,
                                     options_.max_bytes, &select_error);
       if (!package) error = select_error;
+      if (package && addon_wanted) {
+        addon = SelectVulkanAddonPackage(response.body, version, options_.download_prefix,
+                                         options_.max_bytes, &addon_error);
+      }
     }
     if (package) {
       std::error_code ec;
@@ -229,30 +262,45 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
         package.reset();
       }
     }
+    // The progress counts both files: the add-on's bytes follow the base's.
+    const uint64_t addon_size = addon ? addon->size : 0;
+    const auto fetch = [&](const UpdatePackage& file, uint64_t offset) {
+      HttpDownloadRequest download;
+      download.url = WidenAscii(file.download_url);
+      download.destination = options_.updates_dir / file.file_name;
+      download.expected_sha256 = file.sha256;
+      download.max_bytes = file.size;
+      download.cancelled = cancelled;
+      download.network_allowed = allowed;
+      const uint64_t after = offset == 0 ? addon_size : 0;
+      download.progress = [this, offset, after](uint64_t received, uint64_t total) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.received_bytes = offset + received;
+        if (total != 0) snapshot_.total_bytes = offset + total + after;
+      };
+      auto result = dependencies_.download(download);
+      bytes_received += result.bytes_received;
+      return result;
+    };
     if (package) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.total_bytes = package->size;
+        snapshot_.total_bytes = package->size + addon_size;
       }
-      HttpDownloadRequest download;
-      download.url = WidenAscii(package->download_url);
-      download.destination = options_.updates_dir / package->file_name;
-      download.expected_sha256 = package->sha256;
-      download.max_bytes = package->size;
-      download.cancelled = cancelled;
-      download.network_allowed = allowed;
-      download.progress = [this](uint64_t received, uint64_t total) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.received_bytes = received;
-        if (total != 0) snapshot_.total_bytes = total;
-      };
-      const auto result = dependencies_.download(download);
-      bytes_received = result.bytes_received;
-      if (result.ok()) {
+      if (fetch(*package, 0).ok()) {
         sha256 = package->sha256;
-        RemoveOtherPackages(package->file_name);
+        RemoveOtherPackages(version);
       } else {
         error = category("download_failed");
+      }
+    }
+    if (error.empty() && addon) {
+      if (fetch(*addon, package->size).ok()) {
+        addon_sha256 = addon->sha256;
+      } else {
+        addon_error = category("download_failed");
+        // A stop ends the job; any other failure of the add-on leaves the base to install.
+        if (addon_error == "cancelled" || addon_error == "disabled") error = addon_error;
       }
     }
   } catch (...) {
@@ -264,6 +312,10 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
     snapshot_.state = UpdateFetchSnapshot::State::Ready;
     snapshot_.sha256 = sha256;
     snapshot_.received_bytes = snapshot_.total_bytes;
+    if (addon_wanted) {
+      snapshot_.addon_sha256 = addon_sha256;
+      snapshot_.addon_error = addon_sha256.empty() ? addon_error : std::string();
+    }
   } else {
     snapshot_.state = UpdateFetchSnapshot::State::Failed;
     snapshot_.error = error;
@@ -272,7 +324,21 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
     // The result, the fixed category and the bytes received only: the URL, the path and the
     // downloader's message stay out of the log.
     const bool stopped = error == "cancelled" || error == "disabled";
-    if (error.empty() || stopped) {
+    if (error.empty() && addon_wanted && addon_sha256.empty()) {
+      // The base is ready but the add-on is not: a Warn with the add-on's fixed category.
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "update_fetch",
+                           {{"result", logging::RuntimeLogSafeText("ready")},
+                            {"reason", logging::RuntimeLogSafeText("verified")},
+                            {"addon_reason", logging::RuntimeLogSafeText(addon_error)},
+                            {"error_code", logging::RuntimeLogSafeText("business")},
+                            {"bytes_received", bytes_received}});
+    } else if (error.empty() && addon_wanted) {
+      runtime_logger_->Log(logging::RuntimeLogLevel::Info, "update_fetch",
+                           {{"result", logging::RuntimeLogSafeText("ready")},
+                            {"reason", logging::RuntimeLogSafeText("verified")},
+                            {"addon_reason", logging::RuntimeLogSafeText("verified")},
+                            {"bytes_received", bytes_received}});
+    } else if (error.empty() || stopped) {
       runtime_logger_->Log(
           logging::RuntimeLogLevel::Info, "update_fetch",
           {{"result", logging::RuntimeLogSafeText(error.empty() ? "ready" : "failed")},
@@ -289,6 +355,21 @@ void UpdateFetchService::Run(std::string version, std::shared_ptr<std::atomic<bo
   }
 }
 
+bool VulkanAddonInstalled() {
+#ifdef _WIN32
+  // The add-on MSI writes the key from a 64-bit component (pkg/msi-vulkan/VulkanAddon.wxs).
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\azooKey\\VulkanAddon", 0,
+                    KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
+    return false;
+  }
+  RegCloseKey(key);
+  return true;
+#else
+  return false;
+#endif
+}
+
 void FillUpdateFetchResponse(const UpdateFetchSnapshot& snapshot,
                              ipc::UpdateFetchResponse& response) {
   response.state = std::string(UpdateFetchStateName(snapshot.state));
@@ -297,7 +378,13 @@ void FillUpdateFetchResponse(const UpdateFetchSnapshot& snapshot,
   response.total_bytes = snapshot.total_bytes;
   response.sha256.clear();
   response.result_error.clear();
-  if (snapshot.state == UpdateFetchSnapshot::State::Ready) response.sha256 = snapshot.sha256;
+  response.addon_sha256.clear();
+  response.addon_error.clear();
+  if (snapshot.state == UpdateFetchSnapshot::State::Ready) {
+    response.sha256 = snapshot.sha256;
+    response.addon_sha256 = snapshot.addon_sha256;
+    response.addon_error = snapshot.addon_error;
+  }
   if (snapshot.state == UpdateFetchSnapshot::State::Failed) response.result_error = snapshot.error;
 }
 

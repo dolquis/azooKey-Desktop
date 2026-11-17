@@ -807,6 +807,8 @@ std::string BuildUpdateFetchResponse(const UpdateFetchResponse& p) {
   o.emplace("total_bytes", j::Value(p.total_bytes));
   if (!p.sha256.empty()) o.emplace("sha256", j::Value(p.sha256));
   if (!p.result_error.empty()) o.emplace("result_error", j::Value(p.result_error));
+  if (!p.addon_sha256.empty()) o.emplace("addon_sha256", j::Value(p.addon_sha256));
+  if (!p.addon_error.empty()) o.emplace("addon_error", j::Value(p.addon_error));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -824,6 +826,8 @@ std::optional<UpdateFetchResponse> ParseUpdateFetchResponse(const std::string& j
   p.total_bytes = v->GetUInt("total_bytes").value_or(0);
   p.sha256 = v->GetString("sha256").value_or(std::string());
   p.result_error = v->GetString("result_error").value_or(std::string());
+  p.addon_sha256 = v->GetString("addon_sha256").value_or(std::string());
+  p.addon_error = v->GetString("addon_error").value_or(std::string());
   return p;
 }
 

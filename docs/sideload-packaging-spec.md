@@ -758,6 +758,7 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 `update_available` とする。応答は 1 MiB を上限とし、プロキシは WinHTTP の automatic proxy に従う。
 
 利用者が「バージョン」で更新のダウンロードを始めたとき（§6.3）だけ、Host は次の 2 つを取得する。
+Vulkan アドオンが導入されているときは、同じリリースのアドオンの MSI も続けて取得する（3 つ目の GET）。
 MSI の取得は GitHub が配布用の host（`release-assets.githubusercontent.com` など）へ転送する
 ことがあり、WinHTTP の既定どおり https のまま転送に従う。届いた内容は SHA-256 で検証するので、
 最後の host は問わない。
@@ -765,6 +766,7 @@ MSI の取得は GitHub が配布用の host（`release-assets.githubusercontent
 ```
 GET https://api.github.com/repos/dolquis/azooKey-Desktop/releases/tags/v<version>
 GET https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/azooKey-<version>-x64.msi
+GET https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/azooKey-vulkan-addon-<version>-x64.msi
 User-Agent: azooKey-Desktop/<製品のバージョン>
 ```
 
@@ -785,13 +787,15 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
 
 1. 通知（トースト。下の「通知」）
 2. 利用者が設定アプリの「バージョン」で「ダウンロード」を押す（下の「ダウンロード」）
-3. Host が MSI をダウンロードし、Releases API が asset に付ける SHA-256 の digest で検証する
+3. Host が MSI をダウンロードし、Releases API が asset に付ける SHA-256 の digest で検証する。
+   Vulkan アドオンが導入されているときは、同じ版のアドオンの MSI も続けて取得・検証する
 4. 利用者が「インストール」を押し、確認のダイアログと Windows の管理者権限の確認（UAC）に
    同意する。この同意を、適用の承認として扱う（下の「適用」）
 5. 設定アプリが `msiexec /i <msi> /qn /norestart` で更新する（同一 `UpgradeCode` により in-place
    アップグレード。要昇格）。使用中の TIP DLL 置換で再起動要求が起き得るため、`/norestart` で
    自動再起動を抑止する
-   （[Standard Installer Command-Line Options](https://learn.microsoft.com/windows/win32/msi/standard-installer-command-line-options)）
+   （[Standard Installer Command-Line Options](https://learn.microsoft.com/windows/win32/msi/standard-installer-command-line-options)）。
+   アドオンの MSI も検証できていれば、続けて同じ形で適用する（昇格は base とアドオンで 2 回）
 6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
    利用者に示して同意を得てから再起動する
 
@@ -815,16 +819,28 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
   止めない。SafeMode が止めるのは AI・学習・モデルの読み込みであり、不具合を直した版へ更新する
   経路は SafeMode のときこそ残す。
 - `releases/tags/v<version>` の応答から、名前が `azooKey-<version>-x64.msi` に完全に一致する
-  asset を 1 つだけ選ぶ。Vulkan アドオンの MSI（`azooKey-vulkan-addon-*`）は選ばない。
+  asset を 1 つだけ選ぶ。Vulkan アドオンの MSI（`azooKey-vulkan-addon-*`）を base として選ぶことはない。
   `browser_download_url` は `https://github.com/dolquis/azooKey-Desktop/releases/download/v<version>/`
   の下のその名前に限り、`digest` は `sha256:` と 64 桁の小文字の 16 進数に限る。`size` は
   2 GiB を上限とする。タグが違う・draft のリリースは `not_available`、asset が無い・複数ある・
   URL が違うものは `asset_missing`、digest が無い・形が違うものは `digest_missing`、大きさが
   無い・上限を超えるものは `too_large` とし、どれもダウンロードしない。
-- 置き場所は `settings.json` と同じディレクトリの `updates\azooKey-<version>-x64.msi` である。
+- Vulkan アドオン（DEV-2081）: `HKLM\SOFTWARE\azooKey\VulkanAddon` があるときだけ、同じ応答から
+  名前が `azooKey-vulkan-addon-<version>-x64.msi` に完全に一致する asset を base と同じ規則
+  （URL、digest、大きさ）で選び、base の検証が済んだ後に続けて取得・検証する。API の要求は
+  増えない。進捗の受信バイト数と全体の大きさは、base とアドオンを足した値である。アドオンの
+  asset が無い（Release workflow の `attach-vulkan-addon` が添付しなかった）、digest が違う、
+  取得に失敗したときは、base は `ready` のまま適用でき、アドオンの失敗を base と同じ固定の分類で
+  別に返す。アドオンの取得中の利用者の中止、Host の停止、設定による `disabled` だけは、ジョブ
+  全体をその分類で止める。結果は `UpdateFetchResponse` の `addon_sha256`（検証した値）か
+  `addon_error`（失敗の分類）で、`state` が `ready` のときだけ返し、空なら JSON に書かない。
+  アドオンが導入されていないときは、どちらも返さない。
+- 置き場所は `settings.json` と同じディレクトリの `updates\azooKey-<version>-x64.msi`（アドオンは
+  `updates\azooKey-vulkan-addon-<version>-x64.msi`）である。
   `HttpDownloader` が `.part` に書き、digest と一致したときだけ名前を変える。一致しない
-  ファイルは置かない。検証が済んだら、同じディレクトリの古い版の base の MSI
-  （`azooKey-<MAJOR.MINOR.PATCH>-x64.msi`）と、その `.part` を消す。それ以外のファイルは残す。
+  ファイルは置かない。base の検証が済んだら、同じディレクトリの古い版の base とアドオンの MSI
+  （`azooKey-<MAJOR.MINOR.PATCH>-x64.msi` と `azooKey-vulkan-addon-<MAJOR.MINOR.PATCH>-x64.msi`）と、
+  それらの `.part` を消す。それ以外のファイルは残す。
 - 取得の途中でも、利用者の中止（`cancelled`）、Host の停止（`cancelled`）、設定の再読込で
   条件が満たされなくなったとき（`disabled`）に止まる。通信の失敗は `network`、取得か検証の
   失敗は `download_failed`、置き場所を作れないときは `save_failed` とする。
@@ -833,7 +849,9 @@ User-Agent: azooKey-Desktop/<製品のバージョン>
   MSI は未署名なので、Authenticode の検証は M29 の署名の後に足す（DEV-2080）。
 - Host は各ダウンロードの結果を RuntimeLog の `update_fetch` イベントに、`result`（`ready` /
   `failed`）、固定の `reason`（上の分類か `verified`）、受け取ったバイト数だけで記録する。中止と
-  `disabled` 以外の失敗は Warn とし、`error_code`（`business`）を添える。
+  `disabled` 以外の失敗は Warn とし、`error_code`（`business`）を添える。アドオンを取得した
+  ときは、アドオンの固定の分類（`verified` か上の分類）を `addon_reason` に添え、base が `ready`
+  でもアドオンが失敗したときは Warn とする。
   版、URL、パスは記録しない。
 
 #### 適用
@@ -844,9 +862,18 @@ supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
 
 - 「インストール」を押すと、管理者権限の確認が出ること、適用の間は変換が使えないこと、
   多くの場合は Windows の再起動で完了することを確認のダイアログで示す。Vulkan アドオンが
-  導入されているとき（`HKLM\SOFTWARE\azooKey\VulkanAddon` がある）は、アドオンはこの更新では
-  変わらないので、リリースページからアドオンも同じ版に更新するよう案内する。アドオンも続けて
-  適用する形は DEV-2081 とする。
+  導入されているとき（`HKLM\SOFTWARE\azooKey\VulkanAddon` がある）は、Host がアドオンの MSI も
+  検証していれば、アドオンも続けて更新することと、管理者権限の確認が 2 回出ることを示す。
+  検証した値が無い（アドオンの取得に失敗した、またはアドオンを返さない古い Host）ときは、
+  アドオンはこの更新では変わらないので、リリースページからアドオンも同じ版に更新するよう案内する。
+- アドオンの適用（DEV-2081）は base の後に限る。アドオンの MSI は、導入済みの base の
+  `ProductVersion` がアドオンと同じ版であることを LaunchCondition で求める
+  （`msix-packaging-spec` §1.6.3）ためである。base の終了コードが `0` か `3010` のときだけ、
+  アドオンの MSI を base と同じ形（書き込みを拒むハンドルで検証し直し、`msiexec` を昇格して
+  起動）で適用する。base が取り消し・実行中・失敗・検証の失敗なら、アドオンは試さない。アドオンの
+  検証か適用に失敗しても base は巻き戻さず、アドオンを同じ版にするまで変換は CPU 版の Host で
+  動くことと、リリースページからアドオンを更新することを示す。自動の再試行はしない（base の
+  適用の後は記録の `currentVersion` が新しい版になり、アドオンだけの取得は始められない）。
 - 設定アプリは、置き場所のファイルを書き込みと削除を拒むハンドル（`FILE_SHARE_READ` だけ）で
   開き、そのハンドルで SHA-256 を計算し直して、Host が答えた値と一致したときだけ
   `%SystemRoot%\System32\msiexec.exe` を昇格して起動する。ファイル自身がリンク（reparse point）
@@ -860,17 +887,20 @@ supervisor が戻り、Host は `--supervisor-pid` を見て終わる）。
   ほかのインストールの実行中、それ以外は失敗として、コードを示す。結果の文言は適用の前に
   読み込んでおく（適用が設定アプリ自身のファイルを置き換えるため）。
 - `0` と `3010` のどちらでも、設定アプリはインストール先（`HostStartup` の `InstallDirectory`）の
-  `start-installed-host.ps1` を利用者の権限で起動して Host を戻す。Run エントリはサインインの
+  `start-installed-host.ps1` を利用者の権限で起動して Host を戻す。アドオンを続けて適用する
+  ときは、その後に 1 回だけ起動する（先に起動すると supervisor が版の不一致で CPU 版を選ぶ）。Run エントリはサインインの
   ときにしか Host を起動しないためである。`3010` のときは、再起動するまで、動いているアプリの
   古い TIP と新しい Host が組み合わさる。その間にプロトコルの版がずれると Handshake が断られ、
   TIP はローカルの変換に落ちる。
-- `3010` では、自動で再起動せず、「再起動が必要」を示して同意を求める。同意したときだけ
+- `3010` では（base かアドオンのどちらかが `3010` なら 1 回だけ）、自動で再起動せず、
+  「再起動が必要」を示して同意を求める。同意したときだけ
   再起動する（`InitiateShutdownW`）。適用の間も設定アプリ自身の exe と DLL は使用中であり、
   入力中のアプリは TIP の DLL を読み込んでいる。MSI は `MSIRESTARTMANAGERCONTROL=DisableShutdown`
   でそれらを閉じさせない（`pkg/msi/Package.wxs`）ので、使用中のファイルの置き換えは再起動まで延び、終了コードは
   ほとんどの場合 `3010` になる見込みである（実際の値は DEV-2075 で記録する）。
 
-実機での昇格・適用・3010・Host の復帰の確認は Human Gate（DEV-2075）とする。
+実機での昇格・適用・3010・Host の復帰の確認は、アドオンを続けて適用する経路も含めて
+Human Gate（DEV-2075）とする。
 
 #### 通知
 

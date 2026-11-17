@@ -120,6 +120,19 @@ std::optional<std::filesystem::path> UpdatePackagePath(const std::filesystem::pa
          (L"azooKey-" + std::wstring(version.begin(), version.end()) + L"-x64.msi");
 }
 
+std::optional<std::filesystem::path> UpdateAddonPackagePath(
+    const std::filesystem::path& settings_path, std::string_view version) {
+  // The same version check as the base, then the add-on's own name beside it.
+  const auto base = UpdatePackagePath(settings_path, version);
+  if (!base) return std::nullopt;
+  return base->parent_path() /
+         (L"azooKey-vulkan-addon-" + std::wstring(version.begin(), version.end()) + L"-x64.msi");
+}
+
+bool AddonFollowsBase(UpdateInstallOutcome base) {
+  return base == UpdateInstallOutcome::Installed || base == UpdateInstallOutcome::RebootRequired;
+}
+
 bool IsSha256Hex(std::string_view text) {
   return text.size() == 64 && std::all_of(text.begin(), text.end(), [](char c) {
            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');

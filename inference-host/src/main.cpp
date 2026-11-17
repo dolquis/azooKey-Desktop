@@ -1129,6 +1129,8 @@ int main(int argc, char** argv) {
     std::lock_guard<std::mutex> lock(update_fetch_settings->mutex);
     return update_fetch_settings->channel;
   };
+  // DEV-2081: where the Vulkan add-on is installed, its MSI of the same version follows the base.
+  update_fetch_dependencies.vulkan_addon_installed = azookey::host::VulkanAddonInstalled;
   const auto update_fetch = std::make_shared<azookey::host::UpdateFetchService>(
       std::move(update_fetch_options), std::move(update_fetch_dependencies), &runtime_log);
   UpdateFetchShutdownGuard update_fetch_guard(update_fetch);

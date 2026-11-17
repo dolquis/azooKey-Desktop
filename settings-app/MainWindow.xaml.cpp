@@ -364,6 +364,7 @@ void MainWindow::RefreshUpdateStatus() {
   if (!update_downloading_ && !update_installing_ && offered != update_version_) {
     update_version_ = offered;
     update_sha256_.clear();
+    update_addon_sha256_.clear();
     update_installed_ = false;
     UpdateInstallText().Text(L"");
   }
@@ -392,12 +393,14 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
   const std::string version = update_version_;
   update_downloading_ = true;
   update_sha256_.clear();
+  update_addon_sha256_.clear();
   UpdateInstallText().Text(L"");
   UpdateDownloadProgress().Value(0);
   RenderUpdateInstall();
   const auto dispatcher = DispatcherQueue();
   std::string resource = "UpdateInstall_Error_Other";
   std::string verified_sha;
+  std::string verified_addon_sha;
   try {
     co_await winrt::resume_background();
     const auto options = azookey::settings::DefaultSettingsIpcOptions();
@@ -453,6 +456,10 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
     } else if (last->state == "ready" && last->version == version &&
                azookey::settings::IsSha256Hex(last->sha256)) {
       verified_sha = last->sha256;
+      // DEV-2081: the add-on of the same version, when the Host verified it too.
+      if (azookey::settings::IsSha256Hex(last->addon_sha256)) {
+        verified_addon_sha = last->addon_sha256;
+      }
       resource = "UpdateInstall_Ready";
     } else if (last->state == "failed") {
       resource = azookey::settings::UpdateFetchErrorResource(last->result_error);
@@ -466,7 +473,10 @@ winrt::fire_and_forget MainWindow::DownloadUpdateButton_Click(
     if (!*alive_) co_return;
     update_downloading_ = false;
     // Kept only while the pane still offers that version.
-    if (version == update_version_) update_sha256_ = verified_sha;
+    if (version == update_version_) {
+      update_sha256_ = verified_sha;
+      update_addon_sha256_ = verified_addon_sha;
+    }
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
     std::wstring text(resources.GetString(winrt::to_hstring(resource)));
     if (const auto at = text.find(L"{version}"); at != std::wstring::npos) {
@@ -512,6 +522,11 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   const std::string sha256 = update_sha256_;
   const auto package_path = azookey::settings::UpdatePackagePath(*settings_path_, version);
   if (!package_path) co_return;
+  // DEV-2081: an installed add-on follows the base when the Host verified its MSI of the version.
+  const bool addon_installed = azookey::settings::VulkanAddonInstalled();
+  const std::string addon_sha256 = update_addon_sha256_;
+  const auto addon_path = azookey::settings::UpdateAddonPackagePath(*settings_path_, version);
+  const bool with_addon = addon_installed && !addon_sha256.empty() && addon_path.has_value();
 
   // Every text the result can need is read now: the install replaces this app's own files.
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
@@ -531,10 +546,16 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   const auto reboot_primary = text(L"UpdateInstall_RebootPrimary");
   const auto reboot_close = text(L"UpdateInstall_RebootClose");
   const auto restart_failed = text(L"UpdateInstall_RestartFailed");
+  const auto addon_installed_text = text(L"UpdateInstall_AddonInstalled");
+  const auto addon_failed = text(L"UpdateInstall_AddonFailed");
+  const auto addon_verify_failed = text(L"UpdateInstall_AddonVerifyFailed");
 
   std::wstring body = text(L"UpdateInstall_ConfirmBody");
-  // The add-on stays at the old version, which its Host refuses (msix-packaging-spec 1.6.3).
-  if (azookey::settings::VulkanAddonInstalled()) {
+  if (with_addon) {
+    // Two elevations: the base, then the add-on (sideload-packaging-spec section 6.3).
+    body += L"\n\n" + text(L"UpdateInstall_ConfirmVulkanFollows");
+  } else if (addon_installed) {
+    // The add-on stays at the old version, which its Host refuses (msix-packaging-spec 1.6.3).
     body += L"\n\n" + text(L"UpdateInstall_ConfirmVulkan");
   }
   Microsoft::UI::Xaml::Controls::ContentDialog confirm;
@@ -571,6 +592,9 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   bool verified = false;
   bool host_started = true;
   azookey::settings::UpdateInstallResult result;
+  bool addon_attempted = false;
+  bool addon_verified = false;
+  azookey::settings::UpdateInstallResult addon_result;
   try {
     co_await winrt::resume_background();
     // The handle denies writes and deletion from the verification until msiexec has ended.
@@ -578,7 +602,16 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
       verified = true;
       result = azookey::settings::RunElevatedMsiexec(*package, owner);
     }
-    // The installation stopped the Host; bring it back (sideload-packaging-spec section 6.3).
+    // The add-on only after an applied base, which its MSI requires; its failure keeps the base.
+    if (with_addon && verified && azookey::settings::AddonFollowsBase(result.outcome)) {
+      addon_attempted = true;
+      if (auto addon = azookey::settings::VerifiedUpdatePackage::Open(*addon_path, addon_sha256)) {
+        addon_verified = true;
+        addon_result = azookey::settings::RunElevatedMsiexec(*addon, owner);
+      }
+    }
+    // Once both are done, so the supervisor finds the versions matched (msix-packaging-spec
+    // 1.6.3). The installation stopped the Host; bring it back (sideload-packaging-spec 6.3).
     if (verified && (result.outcome == azookey::settings::UpdateInstallOutcome::Installed ||
                      result.outcome == azookey::settings::UpdateInstallOutcome::RebootRequired)) {
       host_started = azookey::settings::StartInstalledHost();
@@ -620,11 +653,30 @@ winrt::fire_and_forget MainWindow::InstallUpdateButton_Click(
   if (applied) {
     update_installed_ = true;
     update_sha256_.clear();
+    update_addon_sha256_.clear();
+    if (addon_attempted) {
+      // The base stays updated whatever happened to the add-on; a failure only guides the user.
+      if (!addon_verified) {
+        message += L"\n" + addon_verify_failed;
+      } else if (azookey::settings::AddonFollowsBase(addon_result.outcome)) {
+        message += L"\n" + addon_installed_text;
+      } else {
+        std::wstring addon_message = addon_failed;
+        if (const auto at = addon_message.find(L"{code}"); at != std::wstring::npos) {
+          addon_message.replace(at, 6, std::to_wstring(addon_result.code));
+        }
+        message += L"\n" + addon_message;
+      }
+    }
     if (!host_started) message += L"\n" + host_start_failed;
   }
   UpdateInstallText().Text(message);
   RenderUpdateInstall();
-  if (result.outcome != UpdateInstallOutcome::RebootRequired) co_return;
+  // One restart dialog when either install asked for it.
+  const bool reboot_required =
+      result.outcome == UpdateInstallOutcome::RebootRequired ||
+      (addon_verified && addon_result.outcome == UpdateInstallOutcome::RebootRequired);
+  if (!reboot_required) co_return;
 
   // 3010: never restart on our own; ask first (section 6.3).
   Microsoft::UI::Xaml::Controls::ContentDialog reboot;

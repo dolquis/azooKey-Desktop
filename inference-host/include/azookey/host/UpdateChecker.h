@@ -82,6 +82,14 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
                                                  std::string_view download_prefix,
                                                  uint64_t max_bytes, std::string* error);
 
+// DEV-2081: the Vulkan add-on MSI of a release, azooKey-vulkan-addon-<MAJOR.MINOR.PATCH>-x64.msi
+// (pkg/msi-vulkan), chosen from the same response by the same rules and error categories.
+std::string VulkanAddonPackageFileName(std::string_view version);
+std::optional<UpdatePackage> SelectVulkanAddonPackage(std::string_view json,
+                                                      std::string_view version,
+                                                      std::string_view download_prefix,
+                                                      uint64_t max_bytes, std::string* error);
+
 // DEV-2076 (section 6.1): what Windows says about the package this process runs under.
 struct PackageIdentityProbe {
   // GetCurrentPackageFullName succeeded: the process has a package identity, from a full MSIX or

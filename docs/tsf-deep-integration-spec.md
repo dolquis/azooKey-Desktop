@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M3, M5, M20, M21, M22, M23, M64, M66, M68]
+milestones: [M3, M5, M20, M21, M22, M23, M64, M66, M68, M72]
 canonical_for: ["TSF 深部統合"]
 ---
 
@@ -22,8 +22,9 @@ canonical_for: ["TSF 深部統合"]
 | §3（§3.6 を除く） | M22 |
 | §3.6 | M64。文節の伸縮中の扱いは M66 |
 | §4 | M21 |
-| §5（§5.6・§5.7 を除く） | M23。§5.1・§5.3〜§5.5 の文節の伸縮中の扱いは M66 |
+| §5（§5.6〜§5.8 を除く） | M23。§5.1・§5.3〜§5.5 の文節の伸縮中の扱いは M66 |
 | §5.6・§5.7 | M3（単一 DisplayAttribute）。§5.6 は M23 との対応も定める |
+| §5.8 | M72 |
 | §6 | M11（設定アプリの起動）・M30 |
 | §7 | M23 |
 | §8 | M15・M21 |
@@ -1251,6 +1252,98 @@ enumerator の境界テストは属性数（`kDisplayAttributeKindCount`）を�
 ため実走は DEV-365（`gate:human-required`）で行い、**アプリ別の実測結果（可変ログ）
 は docs ではなく DEV-365（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
 M23 の文節ごとの属性とマウスクリックによる注目文節の移動も、同チェックリストの項目として確認する。
+
+### 5.8 確定した文字列の読み（`GUID_PROP_READING`、M72）
+
+確定した文字列に、TSF のプロパティ `GUID_PROP_READING` で読みを付けるかを定める。Excel のふりがなのように、
+入力したときの読みを使うアプリの機能に読みを渡すためである。本節は、一次情報で確かめたことと確かめられないこと、
+採否の決め方、採用するときの設計を持つ。採否は §5.8.3 の観測で決め、決めるまで TIP はこのプロパティを設定しない。
+
+#### 5.8.1 一次情報で確かめたこと
+
+| 事項 | 出典 |
+|---|---|
+| `GUID_PROP_READING` は、範囲の文字列の発音の読み（phonetic reading text）を持つ。読みは実際の文字列と違ってよい。Windows Store アプリはこのプロパティに対応しない | [Predefined Properties](https://learn.microsoft.com/windows/win32/tsf/predefined-properties) |
+| `ITfProperty::SetValue` が受け付ける型は `VT_I4`・`VT_UNKNOWN`・`VT_BSTR`・`VT_EMPTY` である。範囲の文字列が変わると値は捨てられる。`VT_UNKNOWN` 以外の値はシリアライズされる。同じ種類の値の重なりには対応しない。読み書きの edit session が要る | [ITfProperty::SetValue](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfproperty-setvalue) |
+| text service はアプリと直接やり取りせず、すべて TSF マネージャーを通す | [Architecture](https://learn.microsoft.com/windows/win32/tsf/architecture) |
+| IMM32 には、確定した文字列の読みを渡す `GCS_RESULTREADSTR` と、その文節の区切りを渡す `GCS_RESULTREADCLAUSE` がある | [IME Composition String Values](https://learn.microsoft.com/windows/win32/intl/ime-composition-string-values) |
+| Excel はセルのふりがなを `Phonetic` / `Phonetics` で持ち、`Application.GetPhonetic` で文字列から読みを求められる。`PHONETIC` 関数はセルのふりがなの文字列を取り出す | [Phonetic object](https://learn.microsoft.com/office/vba/api/excel.phonetic)、[Application.GetPhonetic](https://learn.microsoft.com/office/vba/api/excel.application.getphonetic)、[WorksheetFunction.Phonetic](https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.phonetic) |
+| `ITfThreadMgrEx::GetActiveFlags` は、TSF が Windows Store アプリの中で働いているとき `TF_TMF_IMMERSIVEMODE` を返す（Windows 8 以降） | [ITfThreadMgrEx::GetActiveFlags](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfthreadmgrex-getactiveflags) |
+
+`GUID_PROP_READING` の値の型は Predefined Properties に書かれていない。文字列を渡せる型は `VT_BSTR` だけである。
+
+#### 5.8.2 確かめられないこと
+
+次の点は一次情報で確かめられないので、採否の根拠にしない。
+
+- 値の表記（ひらがな、全角カタカナ、半角カタカナ）。
+- Excel や Word がこのプロパティを読むか。読むなら、どの時点の値を使うか。
+- TSF を直接使わないアプリへ IMM32 の形で渡す層が、このプロパティを `GCS_RESULTREADSTR` と `GCS_RESULTREADCLAUSE` へ
+  写すか。
+- 値を composition の間に付けるか、確定のときに付けるかで、アプリの受け取り方が変わるか。
+- Excel がセルのふりがなを、入力したときの読みから作るのか、`GetPhonetic` のように文字列から求めるのか。
+
+参考にした二次情報として、Mozc の TIP（`src/win32/tip/tip_edit_session_impl.cc`、BSD-3-Clause）がある。Mozc は
+`VT_BSTR` の半角カタカナを、composition の間は preedit の文節ごとに、確定のときは確定した文字列全体に付ける。同じ
+ファイルのコメントは、IMM32 の形で渡す層が `GUID_PROP_READING` の区切りから `GCS_RESULTCLAUSE` と
+`GCS_RESULTREADCLAUSE` を作ると述べる。これは Microsoft の文書ではないので、§5.8.3 の観測の組み立てにだけ使う。
+
+#### 5.8.3 採否の決め方
+
+採否は、実機の Excel（デスクトップ版）での次の観測で決める（M72 の最初の受け入れ条件。`gate:human-required`）。
+
+1. 次の 3 つの IME で、別々のセルへ「やまふじ」と「さんとう」を打ち、どちらも「山藤」に変換して確定する。
+   - Microsoft IME。比較のための参考であり、判定には使わない。
+   - `GUID_PROP_READING` を付ける TSF の IME。設定することをソースで確かめられる Mozc を使う（§5.8.2）。
+   - `GUID_PROP_READING` を付けない azooKey。
+2. 各セルの `PHONETIC` 関数（§5.8.1）の結果を記録する。
+
+読みの違う 2 つのセルを比べるのは、Excel が文字列から読みを求めた結果と、入力したときの読みを見分けるためである。
+TSF の IME はアプリと TSF マネージャーを通してだけやり取りする（§5.8.1）。そのため、2 つ目の IME で、打った読みの
+とおりのふりがなが付き、azooKey で付かなければ、ふりがなは TSF を通って届いている。この場合は採用し、§5.8.4 を
+実装する。次のときは採らない。その結果と理由を本節に記録し、M72 は実装しない。
+
+- 2 つ目の IME でも、打った読みのふりがなが付かない。
+- azooKey でも、打った読みのふりがなが付く（読みは TSF のプロパティによらずに届いている）。
+
+#### 5.8.4 採用するときの設計
+
+- **時機**: 確定の edit session の中で、確定した文字列の範囲が composition の中にある間に設定する。読み全体の確定では
+  `EndComposition` の前、部分確定では `docs/segment-editing-spec.md` §6.2 の 2（属性の消去）の後、3（`ShiftStart`）の前に
+  置く。部分確定で `ShiftStart` が失敗し、確定する表層だけで `EndComposition` する経路（同 §6.2）では、読み全体の確定と
+  同じく `EndComposition` の前に、確定する表層の範囲へ先頭文節の読みを付ける。composition の間（preedit の更新）には
+  付けない。§5.8.3 の観測で、composition の間に付けないと渡らないと分かったときは、この規則を見直す。
+- **型**: `VT_BSTR`。表記（ひらがな、全角カタカナ、半角カタカナ）は §5.8.3 の観測で決め、決めた表記を本節に記録する。
+  観測では、2 つ目の IME（Mozc）が付ける表記（§5.8.2 の半角カタカナ）で azooKey のふりがなが付くかを確かめる。
+- **範囲**: 複数の文節を一度に確定する一括変換では、文節ごとに範囲を分け、各文節の読みを付ける。範囲は §5.4 の文節の
+  区間と同じ求め方で決める。区間の和が確定した表層の長さと一致しないときは、文節に分けず、確定した表層の全体を
+  1 つの範囲にして、文節の読みを先頭からつないだ読みを付ける。それ以外の確定は、確定した表層の全体を 1 つの範囲にする。
+  部分確定では、確定する先頭文節の表層の範囲に、その文節の読みを付ける。範囲どうしは重ねない。長さ 0 の範囲は作らない。
+- **値**: 確定した候補の読みとする。確定の取り消しが戻す読み（`docs/commit-undo-spec.md` §5、composition の読み）とは
+  別に扱う。
+  - 予測の受理では、受理した予測の読みを付ける。
+  - 打ち間違えの補正候補では、補正後の読みを付ける。
+  - 読みのまま確定するとき（F6〜F8 の字種指定確定を含む）は、その読みを付ける。
+  - 句読点で確定するとき（§3.5.1）は、句読点の文字を読みに含める。
+- **付けない場合**:
+  - secure の文脈（`docs/privacy-and-secure-input-spec.md` §5）。
+  - Windows Store アプリの中（`ITfThreadMgrEx::GetActiveFlags` が `TF_TMF_IMMERSIVEMODE` を返すとき。§5.8.1 のとおり
+    このプロパティに対応しないため）。
+  - 表層が読みの発音を表さない確定。絵文字・記号・数字・日付・時刻・計算の候補（`docs/candidate-rewriter-spec.md`）、
+    英単語の候補（`docs/inline-english-candidate-spec.md`）、英字の区間を含む日英混在の候補（`docs/mixed-english-auto-conversion-spec.md`。
+    例「今日はmeeting」。候補全体に付けない）、
+    F9・F10 の字種指定確定（§3.6）、生ローマ字の確定がこれに当たる。
+  - 自動句読点（M59）のように、読みを持たずに挿入した文字列。
+  - 読みが空のとき。
+- **確定の取り消し**: 取り消しの edit session（`docs/commit-undo-spec.md` §6 の 3）は、文字列を読みに置き換えるときに、
+  その範囲の `GUID_PROP_READING` を `ITfProperty::Clear` で消す。§5.8.1 のとおり、文字列を変えると値は捨てられるが、
+  確定した文字列の読みを戻した読みの composition に残さないために明示して消す。戻した読みをもう一度確定すると、その確定の
+  読みが付く。
+- **失敗したとき**: property を取れない、または `SetValue` が失敗しても、確定は止めない。警告ログには理由の名前だけを
+  残し、読みと表層は残さない（`docs/observability-spec.md`）。イベントの名前は実装で決める。
+- **設定**: 設定キーは置かない。採用すると、既定でアプリへ確定した文字列の読みが渡る。
+- **試験**: TIP の打鍵の試験で、確定の範囲と値、部分確定の範囲、secure の文脈と付けない確定で設定しないこと、取り消しで
+  消えることを確かめる。
 
 ## 6. ITfFnConfigure (M30 連動)
 

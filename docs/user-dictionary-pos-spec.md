@@ -122,9 +122,10 @@ ID と文節のまとめにだけ使い、ユーザー辞書の候補の score �
 `docs/auto-word-registration-spec.md` §14.10 の ThirdPartyNotices で足りる。
 
 他 IME の形式と品詞名は、Mozc（BSD-3-Clause）の user dictionary の importer と書き出しのソース
-（google/mozc の `src/client/user_dictionary/` と `src/data/rules/`）を読んで確かめた。Mozc の表とコードは
-複写しない。Mozc 由来のデータを同梱する場合の手順は `docs/licensing-policy.md` の BSD-3-Clause の項に従うが、
-本書の表はその対象ではない。
+（google/mozc の `src/client/user_dictionary/` と `src/data/rules/`）を読んで確かめた。§6.5 の Microsoft IME の
+品詞名は、Microsoft IME の書き出しに出る名前で、Mozc の `third_party_pos_map.def` の MS-IME 節と名前を照合した。
+Google 日本語入力の品詞名は、同じく `user_pos.def` と照合した。Mozc の表とコードは複写していない。品詞名は書き出しに
+出る事実の名前なので帰属を要しないと判断し、`THIRD_PARTY_LICENSES` と `docs/licensing-policy.md` は変えない。
 
 ## 3. `user_dict.json` の形式と互換
 
@@ -308,6 +309,13 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 語のノード（登録した形か展開形）を含むか」の 1 bit を足し、EOS でその bit が立つ状態のうち最小コストの経路を 1 件取る。
 同点は同 §6.3 で決める。
 
+同じ前向きの計算で、bit によらない最小コスト（制約なしの最良の経路のコスト）も EOS で得られる。bit が立つ最良の経路の
+コストが、制約なしの最良の経路のコストより T を超えて大きいときは、何も足さない。T はエンジンの定数で、初期値は 10000
+（P_unk の初期値の半分）とし、実機確認（§9 の Human Gate）で見直す。語幹だけの展開形（一段の未然形・連用形、形容詞の
+語幹）は索引のキーが短く、無関係な読みでも当たるので、その読みでモデルの 1 位の直下に不自然な候補を出さないためである。
+たとえば「エモい」を登録して「えもじ」と打つと、「エモ」で索引が当たるが、「エモ＋じ」の経路が「絵文字」の経路より
+T を超えて高ければ足さない。「ぐぐった」のように、ユーザー辞書の語を含む経路が最良そのものなら差は 0 で、足す。
+
 作る時機と期限は、同 §3.2 のモデル経路から落ちた要求と同じとする。変換の後に `state_mutex_` を取り直して作り、
 作り始めた時刻から最大 15 ms を deadline とし、要求の `cancel` と、要求自身の期限の残りを引き継ぐ。前向きの計算が
 終わる前に cancel か deadline に達したら、何も足さない。Zenzai の予算 600 ms とこの 15 ms の和は、候補窓用の
@@ -339,6 +347,7 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
 | lattice_core が無いか無効（同 §3.6） | 活用語の経路を足さない |
 | 展開形の索引が当たらない | ラティスを作らない。候補は本節が無いときと同じになる |
 | 展開形を含む経路が無い（EOS で bit が立つ状態が無い） | 何も足さない |
+| bit が立つ最良の経路のコストが、制約なしの最良から T を超えて大きい（§5.2） | 何も足さない |
 | cancel か deadline | 何も足さない |
 
 どの縮退も Host を止めない。理由をログに残すときは、読みと表層を入れない（`docs/observability-spec.md` §7.6）。
@@ -411,8 +420,8 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 ### 6.5 品詞の対応表
 
 他 IME の品詞名から §2.1 の品詞 ID への対応を次に定める。品詞名は、Mozc の importer が各 IME の書き出しとして
-受け付ける名前（Microsoft IME は利用者が選べる品詞の名前、Google 日本語入力は Mozc の利用者向けの品詞の名前）で
-確かめた。表に無い名前の行は `unsupported_pos` として除く。
+受け付ける名前と照合した（Microsoft IME は `third_party_pos_map.def` の MS-IME 節のうち利用者が選べる品詞の名前、
+Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。§2.3）。表に無い名前の行は `unsupported_pos` として除く。
 
 | 品詞 ID | Microsoft IME の品詞名 | Google 日本語入力の品詞名 |
 |---|---|---|
@@ -617,8 +626,8 @@ Host が §7.4 の capability を告知したときだけ出す。macOS 版の�
 | `UserDictionary` | 品詞を持たない辞書の読み書きで version 1 のまま変わらない。品詞を足すと version 2 で書き、読み戻せる。未知のメンバー（entry と root）が往復で残る。表に無い品詞 ID が残る。version 3 以上の辞書で、§3.2 の各操作（Host の編集・忘却・全削除・export・import、CLI の writer と export）が決めた値で失敗し、ファイルが変わらない |
 | 展開 | §4.2 の各型の代表の語で展開形の読み・表層・活用形が表どおりになる。一段の行（§4.3）。§4.4 を満たさない語で展開しない。索引の上限（§4.6） |
 | 見える範囲 | 展開形が `DictionaryStore` の完全一致・前方一致・予測、`ContainsKnownWord`、`ListLearningEntries` に出ない |
-| ラティス | fixture の語彙と行列で、登録した動詞の展開形と助動詞がつながる経路が出る（「ぐぐった」→「ググった」）。§5.2 の 1 bit の状態で、展開形を含む最小コストの経路が全列挙の最小と一致する |
-| エンジン | §5.2 の各条件で活用語の経路が足され、それ以外（live、索引が当たらない、lattice_core が無い、cancel、deadline）では足されない。§5.3 の score・source・debug_info |
+| ラティス | fixture の語彙と行列で、登録した動詞の展開形と助動詞がつながる経路が出る（「ぐぐった」→「ググった」）。§5.2 の 1 bit の状態で、ユーザー辞書の語を含む最小コストの経路と、制約なしの最小コストが、それぞれ全列挙の最小と一致する |
+| エンジン | §5.2 の各条件で活用語の経路が足され、それ以外（live、索引が当たらない、lattice_core が無い、cancel、deadline、制約なしの最良から T を超えて高い）では足されない。T の境目（差が T ちょうどなら足し、T を超えたら足さない）。§5.3 の score・source・debug_info |
 | 取り込み | 自作の fixture（`msime` を UTF-16LE の BOM 付き、`google` を BOM なし UTF-8、`azookey_tsv`、CP932 の `msime`）で、§6.5 の対応表どおりに入る。§6.4 の除外の理由ごとの件数。§6.7 の各上限。`merge` と `overwrite`。CP932 は Windows だけで試す |
 | データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書と公開中の辞書が変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
 | IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定で 5 列以下の行の結果が品詞に対応する前と同じになり、6 列目が §2.1・§4.4 で検査される。`--pos` を capability `user_dict_pos` の無い Host へ送らない |

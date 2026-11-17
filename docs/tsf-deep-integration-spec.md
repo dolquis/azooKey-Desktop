@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M3, M5, M20, M21, M22, M23, M64]
+milestones: [M3, M5, M20, M21, M22, M23, M64, M66]
 canonical_for: ["TSF 深部統合"]
 ---
 
@@ -19,9 +19,9 @@ canonical_for: ["TSF 深部統合"]
 | §2（§2.0・§2.8〜§2.11 を除く） | M21 |
 | §2.0、§2.8〜§2.11 | M5（UI-less の最小契約）。M21 がこれを拡張する |
 | §3（§3.6 を除く） | M22 |
-| §3.6 | M64 |
+| §3.6 | M64。文節の伸縮中の扱いは M66 |
 | §4 | M21 |
-| §5（§5.6・§5.7 を除く） | M23 |
+| §5（§5.6・§5.7 を除く） | M23。§5.1・§5.3〜§5.5 の文節の伸縮中の扱いは M66 |
 | §5.6・§5.7 | M3（単一 DisplayAttribute）。§5.6 は M23 との対応も定める |
 | §6 | M11（設定アプリの起動）・M30 |
 | §7 | M23 |
@@ -742,10 +742,14 @@ F8 で半角にする文字は、Unicode に半角形がある文字に限る。
 F6〜F8 は読みの字種だけを変え、F9・F10 は英字の綴りを全角・半角にする。数字と記号の扱いはこの点で legacy の
 `submitHiraganaCandidate` 〜 `submitHalfWidthRomanCandidate` と同じである。ただし legacy の候補選択中の F6〜F8 は
 選択中の候補が覆う部分の読み（ruby）だけを変えて確定するのに対し、Windows 版は読み全体を変える（意図した
-legacy との差。Windows 版の通常変換は読み全体を確定するため）。
+legacy との差。Windows 版の通常変換は読み全体を確定するため）。ただし通常変換で先頭文節を伸縮している間は、
+legacy と同じく先頭文節だけを対象にする（下の項目）。
 
 - 対象は表示中の候補ではなく読み全体である。未確定ローマ字は先にかなへ確定する。一括変換の文節表示中は、
   全文節の読みをつないだものを対象にする。ライブ変換の表示中も、表示中の変換結果ではなく読みを変える。
+- 通常変換で先頭文節を伸縮している間（`docs/segment-editing-spec.md` §4）は、先頭文節の読みを字種を変えて確定し、
+  残りの読みを composition に残す（部分確定。同 §6）。F9・F10 の綴りは、生ローマ字が読みの前方とは対応しないので、
+  下の項目のヘボン式にする。確定した後の `InputState` は Idle へ戻らず、残りの読みで候補を待つ（同 §6.1）。
 - F9・F10 の英字の綴りは、M60 の英単語候補が使う打鍵どおりの生ローマ字（大小も打鍵どおり）とする。
   一括変換では一括変換の raw 入力から取る。生ローマ字のバッファと、それが読みと対応するかの判定は
   `docs/inline-english-candidate-spec.md` §4.1 の契約をそのまま使い、この機能のために変えない。
@@ -776,7 +780,7 @@ legacy との差。Windows 版の通常変換は読み全体を確定するた�
   確定した後に字種を変えるには §3.2 の無変換キーを使う。F6〜F10 で確定した後の巡回は、確定した字種の次から
   始まる（F7 の「カンジ」の後の無変換は「ｶﾝｼﾞ」、F10 の後はひらがな）。F6〜F10 以外の確定の後の巡回は変えない。
 - 確定は TIP が行い、core の経路（`InputState`）と TIP の前処理の経路（一括変換、数字リライター、リライターの
-  Space の候補窓）で同じ処理を通す。`InputState` は F6〜F10 の `UserAction` を扱わず、確定の後に Idle へ戻される。
+  Space の候補窓）で同じ処理を通す。`InputState` は F6〜F10 の `UserAction` を扱わず、確定の後に Idle へ戻される（先頭文節の伸縮中を除く）。
 
 ### 3.7 読みが無いときの Space（`fullWidthSpace`）
 
@@ -1057,7 +1061,8 @@ requirements」「TF_LANGBARITEMINFO」）。Windows の「デスクトップ言
 
 色は provider から指定しない（§5.6）。
 「想定する描画」は、`bAttr` に応じてアプリが選ぶ配色の典型である。
-一括変換が OFF の候補選択中（§5.5）は、preedit 全体を Focused で表示する。
+一括変換が OFF の候補選択中（§5.5）は、preedit 全体を Focused で表示する。そのうち先頭文節を伸縮している間は、
+先頭文節を Focused、残りの読みを Converted で表示する（`docs/segment-editing-spec.md` §7）。
 
 ### 5.2 GUID 定義
 
@@ -1096,6 +1101,8 @@ for (const auto& segment : ranges) {
 
 一括変換が OFF の候補選択中（core の `Selecting`、§5.5）は、composition 全体を覆う Focused の
 range を 1 つ作る。この range は文節ではないので、preedit のクリックで注目を移す対象にしない（§7）。
+先頭文節を伸縮している間は、先頭文節を覆う Focused の range と、残りの読みを覆う Converted の range を作る。
+どちらも preedit のクリックで注目を移す対象にしない。
 
 アトムは `ITfCategoryMgr::RegisterGUID` で 4 つまとめて取得し、TextService インスタンス内に保持する。
 
@@ -1106,6 +1113,9 @@ segment は区間を持たないので、各文節が表示している文字列
 候補を選んでいなければ `reading`）の UTF-16 長を先頭から積み上げて境界を決める。
 この文字列は preedit 全体の表示文字列を作る規則と同じであり、区間の和が composition の長さと
 一致しないときは文節属性を使わず §5.6 の fallback にする。
+
+通常変換で先頭文節を伸縮している間は、先頭文節と残りの読みの 2 区間を使う。先頭文節の区間は、表示している
+文字列（選択中の候補の表層、応答を待つ間は読み）の UTF-16 長で決める（`docs/segment-editing-spec.md` §7）。
 
 ### 5.5 受け入れ条件
 
@@ -1121,8 +1131,8 @@ Focused で表示し、入力中（`Composing`）の fallback 属性（§5.6）�
 候補を移っても Focused のままである。Backspace で読みへ戻ると fallback 属性に戻る。
 Esc は入力ごと取り消して composition を終えるので、属性を付ける文字列が残らない。
 legacy が選択中の候補を `kTSMHiliteSelectedConvertedText` で描くのと同じ扱いである。
-legacy は残りの読みを `kTSMHiliteConvertedText` で描く。候補が読みの前方だけを覆う形になったときは、
-残りの読みを Converted にする。
+legacy は残りの読みを `kTSMHiliteConvertedText` で描く。先頭文節を縮めて候補が読みの前方だけを覆う形に
+なったとき（`docs/segment-editing-spec.md` §7）は、残りの読みを Converted にする。
 
 ### 5.6 M3 の単一 DisplayAttribute との対応関係
 

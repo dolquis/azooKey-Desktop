@@ -61,7 +61,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M70 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 |
@@ -484,6 +484,7 @@ M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix →
 M6 / M13 / M14 ─→ M58-A ─→ M58-B（M20 も前提）
                        └─→ M58-C（M16 / M24 / M46 も前提）
 M13 / M14 ─→ M59
+M13 / M17 / M22 / M30 ─→ M70
 M5 / M6 ─→ M60
 M5 / M6 / M13 ─→ M62-A ─→ M62-B
                        └─→ M62-C ─→ M62-D
@@ -547,6 +548,8 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
   バックエンド・TSF 深耕・パッケージングに依存しない。詳細は
   `docs/bracket-pairing-spec.md`。
+- **入力方式（M70）** — 前提は M13・M17・M22・M30 で、推論バックエンドと辞書に依存しない。詳細は M70 節と
+  `docs/input-style-spec.md`。
 - **入力拡張（M58〜M60 / M62〜M64 / M66）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
   M58-B は M20、M58-C は M16 / M24 / M46 を前提とする。M59（動的句読点）は M13 / M14、M60（インライン英単語候補）は
   M5 / M6、M62（候補リライター）は M5 / M6 / M13 を前提とし、M62-A は辞書・推論・IPC に依存しない。M63（日英混在の自動変換）は
@@ -1776,6 +1779,57 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
       ときは、TIP のローカル候補で窓を開く（spec §5.2）。
     - **右の文脈**: Zenzai は先頭文節の読みだけを変換するので、縮めた先頭文節では後ろの語で決まる同音異義語を
       誤りやすい（spec §5.3）。
+
+### M70: 入力方式の追加（AZIK・かな入力）
+
+> 設定 `inputStyle` に AZIK とかな入力（JIS 配列）を足す。legacy（macOS 版）は AZIK・かな入力・カスタム表を選べるが、
+> Windows 版は内蔵ローマ字表とカスタム表だけである（parity 監査 P-18）。正典仕様は `docs/input-style-spec.md` とし、
+> 本節は定義・依存・受け入れ条件・リスクだけを持つ。
+
+- **目的**: AZIK とかな入力の利用者が、打ち方を変えずにこの IME を使えるようにする。あわせて、カスタムローマ字表で
+  英字の大文字と小文字を区別し、Shift 付きの英字に別の規則を書けるようにする。
+- **前提**: M13（キーの写像の 2 層と `InputState`）、M17（カスタムローマ字表の表駆動の変換）、M22（開閉キーと英数モード）、
+  M30（設定アプリの入力ペイン）。
+- **変更対象**: `core/include/azookey/core/RomajiKanaConverter.h`・`core/src/RomajiKanaConverter.cpp`（AZIK の内蔵表、
+  表駆動の変換での大文字と小文字）、`core/src/CustomRomajiLoader.cpp`（大文字の規則を小文字に正規化しない）、
+  かなの表と濁点・半濁点の合成を持つ core の純関数（新規）、`tsf-tip/src/TipLocalSettings.cpp`（`inputStyle` の読み込み）、
+  `tsf-tip/src/TextService.cpp`（かな入力のキーの経路、各機能の除外）、`inference-host/src/SettingsStore.cpp`、
+  `settings/mvp-settings.schema.json`・`settings/default-settings.sample.json`、`settings-app/SettingsFields.cpp`・
+  `settings-app/SettingsDocument.cpp`・`settings-app/Strings/ja-JP/Resources.resw`、`docs/settings-app-spec.md`（設定キーの表）、
+  `THIRD_PARTY_LICENSES`（上流の MIT の表記と AZIK の考案者）。
+- **受け入れ条件**:
+  - TIP・Host・設定アプリが `inputStyle` の `azik` と `kanaJis` を読み、列挙外の値を `default` として扱う。既定値は
+    `default` のままで、既定の入力の結果が変わらない
+  - AZIK の表が spec §3.1 の版から写され、全角のキーが ASCII に戻り、`ji` がある。`kk` → きん、`nt` → にち のように、
+    内蔵ローマ字表の特例を通らない。`;` が っ、`:` が ー になる（composition が空で、絵文字検索が有効なときの `:` を除く）
+  - かな入力で、spec §4.2 の全キーが Shift の有無ごとに表どおりのかなを生む。ろキーと ¥ キーが分かれ、スキャンコードの
+    無いキーは VK から写される。拡張キーとテンキーは表を引かない
+  - ゛ ゜ が直前の 1 文字と合成され、合成できないときは単独で入る。Backspace が合成した文字を 1 回で消す
+  - かな入力の Idle で数字の段のキーが composition を始め、候補窓の表示中の Shift なしの `1`〜`9` は候補番号になる。
+    英数モードと IME Off では、キーがアプリへ渡る
+  - AZIK とかな入力で `raw_keys` と `alt_readings` を送らない。かな入力で生ローマ字を送らず、一括変換と絵文字検索の
+    `:` の入口が働かない（spec §5・§6）
+  - カスタム表の大文字の規則が Shift 付きの打鍵だけに当たり、大文字の規則が無いときは小文字の規則に落ちる
+    （`docs/legacy-parity-spec.md` §5.1）
+  - 設定アプリの入力ペインの「ローマ字・かな入力」で 4 つの方式を選べ、`customRomajiTablePath` は `custom` のときだけ表示される
+  - `THIRD_PARTY_LICENSES` に、AZIK の表の出典（上流の MIT の表記）と考案者が記される
+  - core・TIP・settings の試験に、spec §8 の検証がある
+  - 実機での確認（JIS 配列の機械でのかな入力の全キー、JIS 配列の機械を 101 配列のドライバで使う構成、AZIK の `;` `:` を
+    JIS 配列と US 配列で打つこと、MS-IME のかな入力との比較、メモ帳・Word・Edge。`gate:human-required`）
+- **参照**: `docs/input-style-spec.md`、`docs/legacy-parity-spec.md` §1.5.3・§5、
+  `docs/tsf-deep-integration-spec.md` §3.1・§3.5・§3.6
+- **補足**:
+  - **範囲**: US 配列のかな入力、legacy の表エディタ・プリセット・書き出し、Alt+カタカナひらがな でのローマ字入力と
+    かな入力の切替は含めない（spec §1）。
+  - **外部挙動の変化**: カスタム表に大文字で書いた規則は、Shift なしの打鍵に当たらなくなる
+    （`docs/legacy-parity-spec.md` §5.1）。小文字だけの表と、既定の `default` の結果は変わらない。
+  - **リスク**:
+    - **AZIK の表の出典**: 上流は表を起こした資料を記さず、原典にも明示の利用条件が無い。写すのは spec §3.1 の版に
+      限り、版を上げるときは出典と条件を確かめ直す。
+    - **物理位置で引くこと**: スキャンコードを書き換えるリマップツールや、VK だけを注入する入力では、刻印と違うかなに
+      なりうる。実機で確かめる。
+    - **候補窓の数字キー**: かな入力でも Shift なしの `1`〜`9` は候補番号なので、候補窓の表示中に ぬ・ふ・あ などを
+      打つと候補を選ぶ。MS-IME と比べて確かめる。
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

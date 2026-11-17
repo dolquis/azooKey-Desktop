@@ -484,6 +484,8 @@ class UserLearningScorer {
   `store_` が無いときは user_score を 0 として元の順で返す。
 - 失敗時（store が無い、category の参照で例外が出た、値が非有限になった）は
   その候補の user_score を 0 として続行する。score が非有限の候補は並びの末尾に置く。
+- 学習した語彙と文体は、本節の rerank を通じて候補の並びにだけ効き、Zenzai の生成は変えない。Zenzai の生成側の
+  個人化（利用者が書いたプロファイル）は `docs/zenzai-inference-spec.md` §9.4 が定める。
 
 ## 8. プライバシー
 

@@ -37,7 +37,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 対応フェーズ／マイルストーン |
 |---|---|
-| [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
+| [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算）。§9.4 は M75 の Zenzai のプロファイル（個人化の方式の比較と採否） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
 | [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69、§5.1・§5.4 のカスタムローマ字表の英字の大文字と小文字の区別は M70 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）の転送表。各項の契約は移動先の spec が正典 |

@@ -30,7 +30,8 @@ canonical_for: ["評価ベンチ"]
 | §11〜§12 | M52 |
 | §13〜§14 | M52 |
 | §7 の `--dict-dir`・`--lattice`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice` | M65（`docs/lattice-conversion-spec.md` §10） |
-| §14.1 の `eval_source`、§15 | M74 |
+| §14.1 の `eval_source`、§15（§15.5 の `--profile` を除く） | M74 |
+| §14.1 の `profile_sha256`、§15.5 の `--profile` | M75（`docs/zenzai-inference-spec.md` §9.4） |
 
 ## 1. 目的
 
@@ -824,6 +825,9 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
   結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を
   比べない）
+- `profile_sha256`（§15.5 の `--profile` で渡した Zenzai のプロファイル（`docs/zenzai-inference-spec.md` §9.4）の
+  UTF-8 バイト列の SHA-256。渡さないときは `none`。プロファイルは Zenzai の候補を変えるので互換キーに入れる。
+  プロファイルの文字列そのものは出力しない）
 - `category_filter`（`--category` の値。既定 `all`。フィルタすると評価対象
   ケース集合が変わるが `eval_dataset_sha256` はファイル全体ハッシュで不変なため、
   本キーで区別する。フィルタ実行を全体 baseline と誤って比較しない）
@@ -859,7 +863,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
-  `dictionary_bundle_sha256` / `lattice` / `eval_source` /
+  `dictionary_bundle_sha256` / `lattice` / `eval_source` / `profile_sha256` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に
@@ -893,7 +897,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 
 - **測るもの**: 学習を空にした変換器が、左文脈なしで、利用者が確定した表層をどの順位に出すか。
   モデル（`--model`）、同梱辞書（`--dict-dir`）、ラティス変換（`--lattice`）、NLL 再ランク（`--nll`）、
-  ビルドを差し替えた前後を比べる。
+  Zenzai のプロファイル（§15.5 の `--profile`）、ビルドを差し替えた前後を比べる。
 - **v1 の対象外**:
   - 左文脈による同音異義語の選び分け。学習ストアは左文脈を `context_hash` でしか持たない
     （`docs/user-learning-enhancement-spec.md` §8.1）。評価のために左文脈を保存することは、左文脈の別用途の再利用を
@@ -969,6 +973,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `--settings <path>` | privacy の判定に使う設定ファイルの位置（§15.2） |
 | `--max-cases <N>` | ケースの上限（§15.3） |
 | `--include-personal-text` | `--per-case` に読みと表層を書くことを許す（§15.7） |
+| `--profile <text>` | Zenzai のプロファイル（`docs/zenzai-inference-spec.md` §9.4）を与えて変換する（M75）。§4 の評価データでも使える。`config.profile_sha256` に記録する（§14.1） |
 
 `--output`、`--baseline`、`--per-case`、`--backend`、`--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` は
 §7 と同じ意味で使える。`--trace`、`--trace-output`、`--decode-stats`、`--category`、`--typo-mode` は個人回帰ベンチでは
@@ -1001,7 +1006,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 
 ### 15.7 出力と baseline
 
-- `--output` は §8 の形式で、集計だけを書く。読みと表層は `--output` にも stderr にも出さない。
+- `--output` は §8 の形式で、集計だけを書く。読み、表層、プロファイルの文字列は `--output` にも stderr にも出さない。
 - `config.eval_source` は `personal` とする（§14.1）。`config.eval_dataset_sha256` は、ケースに使った表層の組を
   読み、表層の UTF-8 バイト列の昇順に並べ、組ごとに `読み + 0x00 + 表層 + 0x00 + commit_count の和（10 進） + 0x00 +
   reject_count の和（10 進） + 0x00` とした列を連結した全体の SHA-256 とする。純拒否の表層も含める。
@@ -1040,7 +1045,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
   区別、`--max-cases` の決定的な選び方
 - unit: 除外（§15.4）。実効の `secureApps`、`privacyMode`、`learningEnabled` の各理由と、`app_name` が空の行を含めること
 - unit: 実行を止める設定（§15.4）。secure、`private`、`custom.learning = false`、設定の読取失敗と JSON 不正で評価しない
-- unit: 出力に読みと表層が出ないこと（固定の学習ストアから作った `--output` と stderr を走査する）
+- unit: 出力に読み・表層・プロファイルの文字列が出ないこと（固定の学習ストアから作った `--output` と stderr を走査する）
 - unit: `eval_dataset_sha256` が同じ学習ストアで一致し、行の順序に依存しないこと
 - unit: `--per-case` が `--include-personal-text` 無しで入力エラーになり、有りでは警告を出すこと
 - unit: 個人回帰ベンチで受け付けないオプション（§15.5）が入力エラーになること

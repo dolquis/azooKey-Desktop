@@ -162,7 +162,7 @@ Mac 版のローマ字表、AZIK 表、かな表、`firstClauseResults`、`forge
 | P-34 | ライブ変換で 1 文字の読みも変換を表示する（Mac は 2 文字以上）。ライブ OFF の入力中に Mac が出す 1 行窓の位置関係（P-14）に伴い、予測窓の位置も違う | 記録のない差 |
 | P-35 | 確定直後の最初の問い合わせが、CommitObservation の ACK 待ち（最大 3 秒）の後になる。Host が自動語取得の保存を同期で行うと遅れうる（推測） | 記録のない差 |
 | P-36 | 候補を待つ間に Host が落ちると、窓は自動では開かず、もう一度 Space を押すとローカル候補が出る | 記録のない差 |
-| P-37 | ZenzaiProfile、PersonalizationLevel、InferenceLimit、SystemUserDictionary に当たる設定が無い（Zenzai の 3 件は `zenzai-inference-spec.md` §9 に将来の設定として書かれている）。OpenAI のエンドポイントの書式が違う（Mac は `/chat/completions` まで、Windows は `/v1` まで） | 記録のない予定／意図した差（`ai-backend-spec.md` §5.1） |
+| P-37 | ZenzaiProfile、PersonalizationLevel、InferenceLimit、SystemUserDictionary に当たる設定が無い（Zenzai の 3 件は `zenzai-inference-spec.md` §9 に将来の設定として書かれている）。OpenAI のエンドポイントの書式が違う（Mac は `/chat/completions` まで、Windows は `/v1` まで） | 記録のない予定／意図した差（`ai-backend-spec.md` §5.1）。注記: DEV-2039 で ZenzaiProfile に当たる `model.profile` を `zenzai-inference-spec.md` §9.4 と roadmap M75 に定め、PersonalizationLevel（個人 n-gram のブレンド）は採らない意図した差とした |
 
 ## 4. 同等と確認できた範囲
 

@@ -1173,6 +1173,26 @@ TEST(NamedPipeTransportTest, ZeroByteOverlappedReadCompletesWhenServerDisconnect
   EXPECT_NE(result.error, static_cast<DWORD>(ERROR_MORE_DATA));
 }
 
+// A crashed Host closes its handle without DisconnectNamedPipe; the pending
+// arrival wait must still complete so the client sees the loss at once.
+TEST(NamedPipeTransportTest, ZeroByteOverlappedReadCompletesWhenServerHandleCloses) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-zero-byte-read-close-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+  ScopedPipeHandle client(OpenOverlappedMessageClient(pipe_name));
+  ASSERT_TRUE(client.valid());
+  ASSERT_TRUE(AcceptConnectedClient(server.get()));
+
+  ZeroByteRead read(client.get());
+  ASSERT_EQ(read.start_error(), static_cast<DWORD>(ERROR_IO_PENDING));
+  server.Close();
+  ASSERT_TRUE(read.Wait(10000));
+  const auto result = read.Finish();
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_SUCCESS));
+  EXPECT_NE(result.error, static_cast<DWORD>(ERROR_MORE_DATA));
+}
+
 // Each idle timeout cancels the pending arrival wait, and the last one of each
 // request may race the response landing. None of those cancellations may take
 // bytes off the pipe. The request deadline is far off so the 1 ms slice bounds

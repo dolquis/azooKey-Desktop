@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M65]
+milestones: [M65, M66]
 canonical_for: ["モデル非経由のラティス変換"]
 defers_to: [docs/azdic-physical-layer-spec.md §15.5, docs/conversion-quality-benchmark-spec.md §14.1]
 ---
@@ -24,7 +24,8 @@ defers_to: [docs/azdic-physical-layer-spec.md §15.5, docs/conversion-quality-be
 
 | 節 | マイルストーン |
 |---|---|
-| §1〜§12 | M65 |
+| §1〜§12（下の行を除く） | M65 |
+| §7.3 の語の境目の制約と先頭の区間の候補の取り出し、§11 のその試験 | M66（`docs/segment-editing-spec.md` §5.3 の供給元） |
 
 ## 正典範囲
 
@@ -451,7 +452,7 @@ lattice_core の `META` に入るので、`dictionary_bundle_sha256` が変わ�
 
 | 対象 | 試験 |
 |---|---|
-| core のラティス部品 | 小さな語彙と行列の fixture で、1 位の経路が全列挙の最小と一致する。N-best がコスト順で、表層が重複しない。同点の順序が決まっている。区切りの制約（語の境目を含む）に合わない経路が出ない。未知語ノードだけの読みでも経路が出る。cancel と deadline で §6.4 のとおり返る |
+| core のラティス部品 | 小さな語彙と行列の fixture で、1 位の経路が全列挙の最小と一致する。N-best がコスト順で、表層が重複しない。同点の順序が決まっている。区切りの制約（語の境目を含む）に合わない経路が出ない。語の境目を 1 つ持つ制約で取り出した先頭の区間の候補が、全列挙した経路から先頭の区間の表層ごとに最小コストを取ってコスト順に並べたものの上位 N 件と一致する。後ろの区間に経路が 64 × N を超えてあっても、先頭の候補が N 件そろう（M66）。未知語ノードだけの読みでも経路が出る。cancel と deadline で §6.4 のとおり返る |
 | `.azdic` の読み出し | `CONN` を持つファイルを、`CONN` を知らない reader が読める。`CMAT` の破損で lattice_core だけが無効になる。ある層の `CONN` が azdic spec §15.5 の (4) の検査に通らないとき、読み込み時にその層の `CONN` だけが使われなくなり、層の完全一致・前方一致・予測は続く。検査の結果が問い合わせの途中で変わらない |
 | dictbuild | 連接の変種が `CONN` に残り、同じ入力から 2 回作った lattice_core がバイト単位で一致する |
 | エンジン | §3.2 の各条件で N-best が足され、それ以外では足されない。score、source、debug_info が §3.4 のとおり。§3.6 の各縮退で従来の候補が返る |

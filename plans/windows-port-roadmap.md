@@ -1730,29 +1730,39 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `tsf-tip/src/CharacterFormEditSession.cpp`（F6〜F10 の部分確定）、`tsf-tip/src/DisplayAttribute.cpp`、
   `ipc/include/azookey/ipc/Payloads.h`・`ipc/src/Payloads.cpp`（残りの読み）、
   `inference-host/src/Dispatcher.cpp`（先頭文節の要求の補正の停止と、残りの読みの受け渡し）、
-  `inference-host/src/InferenceEngine.cpp`（ラティスへの残りの読みの受け渡し）。
+  `inference-host/src/InferenceEngine.cpp`（ラティスへの残りの読みの受け渡し）、core のラティスの部品
+  （`docs/lattice-conversion-spec.md` §7.3 の語の境目の制約と先頭の区間の候補の取り出し）。
 - **受け入れ条件**:
   - 一括変換 OFF の候補選択中に、Shift+← / Shift+→ が先頭文節の長さを spec §4 のとおりに変え、短くなるたびに
     先頭文節の読みで候補窓用の要求が出て、窓が先頭文節の候補に替わる。読み全体に戻ると、Space で出した候補に戻る
-  - 先頭文節の候補を待つ間のキーが保留され、候補が替わった後に打った順に再生される。伸縮中の ← / → もアプリへ渡らない
-  - 先頭文節が読みの一部だけを覆うとき、Enter・→・Ctrl+F・数字・F6〜F10 で先頭文節だけが確定し、
+  - 先頭文節の要求は spec §5.1 のフィールドを送らず、残りの読みを添える。待つ前の長さの応答は使われない
+  - 先頭文節の候補を待つ間のキーが保留され、候補が替わった後に打った順に再生される。伸縮中の ← / → もアプリへ渡らず、
+    待つ間の候補窓のクリックは受けない。待つ間に読み全体へ戻ったとき、Esc、IME を Off にするキー、フォーカスの喪失で、
+    出している要求が取り消される。Off とフォーカスの喪失は先頭文節を読みのまま確定し、観測しない
+  - 候補窓用の 750 ms の期限と Host の喪失では、先頭文節の読みのローカル候補で窓が開く。`corrected_reading` を持つ
+    応答と、読みが要求と違う候補は使われず、ローカル候補に落ちる
+  - 先頭文節が読みの一部だけを覆うとき、Enter・→・Ctrl+F・数字・候補窓のクリック・F6〜F10 で先頭文節だけが確定し、
     残りの読みの候補窓が開く。確定した文字列に表示属性が残らない。`ShiftStart` が失敗したときも、composition を
-    始め直して残りの読みが残る
-  - 伸縮中の ← / Ctrl+B は消費され、Backspace は読み全体へ戻って末尾を消し、文字入力は表示中の文字列を確定して
-    次の入力を始める
-  - 先頭文節が読み全体を覆うときの Enter・→・←・数字・F6〜F10 の挙動が、M66 を入れる前と変わらない
-  - 読み入力中とライブ変換の表示中の Shift+← / Shift+→、Ctrl+I / Ctrl+O はアプリへ渡り、一括変換の候補選択中の
-    Shift+← / Shift+→ は文節移動のまま変わらない
+    始め直して残りの読みが残る。確定の edit session が拒否されたときは、確定し直すまで残りの読みの要求を出さない
+  - 伸縮中の ← / Ctrl+B は消費され、Backspace は読み全体へ戻って末尾を消す。文字入力・句読点の確定・Ctrl+Shift+U は
+    表示中の文字列を確定し、Esc は入力を取り消す
+  - 先頭文節が読み全体を覆うときの各キーの挙動は、`docs/legacy-parity-spec.md` §1.2・§1.4 のとおりで、本 M の規則を当てない
+  - 読み入力中とライブ変換の表示中の Shift+← / Shift+→、Ctrl+I / Ctrl+O はアプリへ渡る。Space の応答を待つ間の
+    Shift+← / Shift+→ は、窓が開いた後に伸縮として再生される。一括変換と TIP の前処理の候補窓の Shift+← / Shift+→ は、
+    Shift の無い ← / → と同じに扱われる
   - 部分確定のたびに、先頭文節の読みと確定した表層の対だけが観測され（観測の有無は spec §8）、残りの読みの要求の
     左文脈に確定した表層が入る
   - 伸縮中は先頭文節が Focused、残りの読みが Converted で描かれる
   - 先頭文節の要求では、Host が読みを補正せず `corrected_reading` を返さない。モデルを読まない構成で、残りの読みを
-    添えた要求の候補が、語の境目の制約を掛けたラティスの先頭文節の表層になる。先頭文節の要求でない要求の候補は変わらない
+    添えた要求の候補が、語の境目の制約を掛けたラティスの先頭文節の表層になる。先頭文節の要求でない要求には、spec §5.3 の
+    規則を当てない
+  - 語の境目を 1 つ持つ制約で取り出した先頭の区間の候補が、全列挙の結果と一致し、後ろの区間の経路が多くても N 件そろう
+    （`docs/lattice-conversion-spec.md` §11）
   - `input_state_test`・`keymap_test`・`onkeydown_preedit_test`・`display_attribute_test`・`payloads_test`・
-    `dispatcher_test`・`engine_test` に上記の検証がある
+    `dispatcher_test`・`engine_test` とラティスの部品の試験に、上記の検証がある
   - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成、モデルあり・なし、`gate:human-required`）
 - **参照**: `docs/segment-editing-spec.md`、`docs/legacy-parity-spec.md` §1.1・§1.2・§1.4、
-  `docs/tsf-deep-integration-spec.md` §3.6・§5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3
+  `docs/tsf-deep-integration-spec.md` §3.6・§5.3〜§5.5、`docs/lattice-conversion-spec.md` §7.3・§11
 - **補足**:
   - **範囲**: 変換した文を複数の文節に分けて並べ、注目する文節を移す編集と、確定した文節へ戻る編集は含めない
     （「スコープ外」）。Space の候補列の先頭に先頭文節の候補を並べる legacy の挙動も含めない。M64 の受け入れ条件の

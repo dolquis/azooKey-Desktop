@@ -101,10 +101,14 @@ e = n の間、`Selecting` の挙動は `docs/legacy-parity-spec.md` §1.2・§1
 | ← / Ctrl+B | `docs/legacy-parity-spec.md` §1.4 のとおりアプリへ渡す | 消費して何もしない |
 | Enter | 読み全体の確定（`docs/legacy-parity-spec.md` §1.2） | 部分確定 |
 | 数字（候補番号） | 番号の候補で読み全体を確定 | 番号の候補で部分確定 |
+| 候補窓の行のクリック（`docs/native-ui-spec.md` §4.1）、UI-less の候補 UI からの確定（`docs/tsf-deep-integration-spec.md` §2.3 の `Finalize`） | 選んだ候補で読み全体を確定 | 選んだ候補で部分確定 |
 | F6〜F10 | 読み全体の字種指定確定（`docs/tsf-deep-integration-spec.md` §3.6） | 先頭文節の読みの字種指定確定で部分確定（同 §3.6） |
-| Space / Shift+Space / ↑↓ / Ctrl+P / Ctrl+N / 変換キー | 候補を移る | 先頭文節の候補を移る |
+| Space / Shift+Space / ↑↓ / Ctrl+P / Ctrl+N / 変換キー / UI-less の `SetSelection` | 候補を移る | 先頭文節の候補を移る |
 | Backspace | `docs/legacy-parity-spec.md` §1.2 のとおり読みへ戻る | e を捨てて読み全体に戻し、同じく読みへ戻る |
 | Esc | 入力を取り消す | 同じく入力を取り消す |
+
+表に無いキー（Delete、Home、End、Tab、PageUp、PageDown、Ctrl+Z、Ctrl+Y、Ctrl+Shift+Backspace など）は e を保ち、
+e = n のときと同じに扱う（`docs/legacy-parity-spec.md` §1.4。Ctrl+Shift+Backspace は消費して何もしない）。
 
 Shift+→ を伸縮の前の読み全体から押して e = 1 にするのは、legacy と同じく、短い先頭文節から伸ばし始められる
 ようにするためである。一度伸縮した後は、legacy と同じく e = n で止まる。
@@ -126,7 +130,10 @@ e が n より小さい値に変わると、先頭文節の候補を取り直す
 これらの観測は §8 に従う。
 
 Ctrl+I / Ctrl+O は割り当てない（`docs/legacy-parity-spec.md` §1.4）。読み入力中とライブ変換の
-表示中の Shift+← / Shift+→ はアプリへ渡す。
+表示中の Shift+← / Shift+→ はアプリへ渡す。ただし Space の応答を待つ間は、同 §1.2 の保留に入り、窓が開いた後に
+伸縮として再生する（`Selecting` の写像で `ShrinkSegment` / `ExtendSegment` になるキーだからである）。
+TIP の前処理が出す候補窓（数字リライター、英単語候補、記号・絵文字のリライター。同 §1.2）は本書の対象外とし、
+Shift+← / Shift+→ は Shift の無い ← / → と同じに扱う。
 
 ## 5. 先頭文節の候補
 
@@ -136,12 +143,17 @@ e が n より小さい値に変わるたびに、TIP は候補窓用の `QueryC
 
 - 読み（`reading`）は先頭文節の読みとする。
 - 残りの読みを任意のフィールドで添える。伸縮中の残りの読みは空でない。フィールドの名前と wire key は
-  `ipc/include/azookey/ipc/Payloads.h` が定める。Host は、このフィールドを持つ要求を先頭文節の要求として扱う（§5.3）。
+  `ipc/include/azookey/ipc/Payloads.h` が定める。名前には `reading` を含め、ログの伏せ字の判定
+  （`core/src/RuntimeLogger.cpp` の `IsSensitiveRuntimeLogField`）に掛かるようにする。読みの本文を運ぶフィールドだからである。
+  Host は、このフィールドを持つ要求を先頭文節の要求として扱う（§5.3）。
 - 左文脈、`secure`、`learning_allowed`、`app`、`max_candidates` は、読み全体の要求と同じに決める。
 - 生ローマ字（`raw_romaji`・`raw_keys`）、英単語候補、日英混在、`alt_readings`、絵文字検索の起点、自動句読点は
   送らない。読みの前方だけでは生ローマ字との対応が取れず、英字化や別の読みで読みが変わると、e と読みの
   対応が崩れるためである。
-- 応答が `corrected_reading` を持っていても、TIP は読みを置き換えない。
+- 応答が `corrected_reading` を持つときは、TIP は読みを置き換えず、その応答の候補を使わない。候補の `reading` が
+  要求の読みと違う候補も使わない。使える候補が残らないときは、§5.2 の期限に達したときと同じく、先頭文節の読みの
+  ローカル候補にする。残りの読みのフィールドを知らない Host は先頭文節の読みを補正しうるので、補正した読みの候補を
+  補正前の読みに当てて確定し、観測することを防ぐためである。
 
 前の e の要求が届いていなければ取り消し、その応答は staleness 判定で捨てる。連打を間引く待ち時間は置かない。
 Zenzai は decode のループで取り消しを確かめて止まる（`docs/zenzai-inference-spec.md` §9.2.2）。
@@ -160,7 +172,16 @@ Zenzai は decode のループで取り消しを確かめて止まる（`docs/ze
 §4 のとおり、伸縮中のこれらのキーは部分確定するか消費するので、アプリへ渡さない。
 
 待つ間の Shift+← / Shift+→ は、保留しているキーが無ければ、その場で e を変えて要求を出し直す。保留しているキーが
-あれば同じく保留し、打った順に再生する。
+あれば同じく保留し、打った順に再生する。その場で e が n に戻ったときは、出している先頭文節の要求を取り消して待ちを
+終え、読み全体の候補に戻す（保留しているキーは無い）。
+
+待つ間の候補窓のクリックと、UI-less の `SetSelection` / `Finalize` は受けず、消費して何もしない。窓に残っている前の
+一覧は、いまの先頭文節の候補ではないためである。
+
+Esc、IME を Off にするキー、英数モードへの切替、フォーカスの喪失は、待つ間も保留せず、`docs/legacy-parity-spec.md`
+§1.2 のとおりその場で処理して保留中のキーを捨てる。このとき出している先頭文節の要求も取り消す。待つ間に表示中の
+文字列を確定する操作（§4）は、先頭文節を読みのまま、残りの読みとあわせて確定し、観測は送らない。Backspace は
+保留し、候補が差し替わった後に再生する。
 
 ### 5.3 Host 側の候補源
 
@@ -178,14 +199,15 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 従う。§3.4 の「要求の読み全体」は、先頭文節の要求では先頭文節の読みである。つないだ読みが 64 code point を
 超えるときは、先頭文節の読みだけでラティスを作る。
 
-先頭文節の要求でない要求の候補は、M66 を入れる前と同じである。残りの読みのフィールドを知らない Host は
-それを読まないので、ラティスを先頭文節の読みだけで作る。
+先頭文節の要求でない要求には、本節を当てない。残りの読みのフィールドを知らない Host はそれを読まないので、
+ラティスを先頭文節の読みだけで作り、読みを補正しうる。その応答の扱いは §5.1 が定める。
 
 ## 6. 部分確定
 
 ### 6.1 InputState
 
-`InputState` は、Enter・→・Ctrl+F・数字による部分確定を、次の細粒度の `ClientAction` の列で表す
+`InputState` は、Enter・→・Ctrl+F・数字（候補窓のクリックと UI-less の `Finalize` を含む。§4）による部分確定を、
+次の細粒度の `ClientAction` の列で表す
 （`docs/legacy-parity-spec.md` §1.5.2）。
 
 1. 候補窓を閉じる。
@@ -236,9 +258,10 @@ edit session が拒否されたときは、読み全体の確定と同じく確�
 
 ## 8. 学習
 
-Enter・→・Ctrl+F・数字による部分確定のたびに、単発の `CommitObservation` を送る。読みは先頭文節の読み、
-`chosen` は確定した候補、`shown` は先頭文節の候補一覧である。観測するかどうかの条件（候補の `source`、`secure`、
-`learning_allowed`）は、読み全体の確定と同じにする。文節ごとに確定する時点が違うので、`CommitSegmentsObservation` は
+Enter・→・Ctrl+F・数字（候補窓のクリックと UI-less の `Finalize` を含む）による部分確定のたびに、単発の
+`CommitObservation` を送る。読みは先頭文節の読み、`chosen` は確定した候補、`shown` は先頭文節の候補一覧である。
+観測するかどうかの条件（候補の `source`、`secure`、`learning_allowed`）は、読み全体の確定と同じにする。ローカル候補
+（§5.1・§5.2）による部分確定は、読み全体の確定と同じく観測しない。文節ごとに確定する時点が違うので、`CommitSegmentsObservation` は
 使わない。F6〜F10 による部分確定の観測は、`docs/tsf-deep-integration-spec.md` §3.6 の字種ごとの規則を、先頭文節の
 読みと確定した文字列に当てる。
 
@@ -267,12 +290,12 @@ Enter・→・Ctrl+F・数字による部分確定のたびに、単発の `Comm
 
 | 対象 | 試験 |
 |---|---|
-| core の状態機械 | `core/tests/input_state_test.cpp`: §4 の各キーが e と状態を表のとおりに変える。e が n より小さくなるたびに先頭文節の読みの候補窓用の要求を出し、e が n に戻ると読み全体の候補に戻す。先頭文節の候補を待つ間に届いた応答で候補が差し替わり、待つ前の e の応答は使われない。部分確定が §6.1 の列を返し、残りの読みで応答を待つ。e = n の各キーの結果が M66 を入れる前と同じ |
+| core の状態機械 | `core/tests/input_state_test.cpp`: §4 の各キーが e と状態を表のとおりに変える。e が n より小さくなるたびに先頭文節の読みの候補窓用の要求を出し、e が n に戻ると読み全体の候補に戻す。先頭文節の候補を待つ間に届いた応答で候補が差し替わり、待つ前の e の応答は使われない。部分確定が §6.1 の列を返し、残りの読みで応答を待つ。待つ間にその場で e が n に戻ると、要求を取り消して読み全体の候補に戻る。伸縮中の Esc・Ctrl+Shift+U・句読点・文字入力が §4 のとおりに確定する。表に無いキーが e を保つ。e = n の各キーの結果が `docs/legacy-parity-spec.md` §1.2・§1.4 のとおり |
 | キーの写像 | `tsf-tip/tests/keymap_test.cpp` と `core/tests/input_state_test.cpp`: Shift+← / Shift+→ が `Selecting` でだけ `ShrinkSegment` / `ExtendSegment` になり、Shift の無い ← / → と区別される。Ctrl+I / Ctrl+O は割り当てない |
-| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: 先頭文節の要求が §5.1 のフィールドを止め、残りの読みを添える。待つ間のキー（伸縮中の ← / → を含む）が保留され、候補が差し替わった後に再生される。部分確定で確定した表層の属性が消え、残りの読みが composition に残る。`ShiftStart` が失敗したときに composition を始め直す。確定が拒否されたときに残りの読みの要求を出さない。観測が §8 のとおりになり、残りの読みの要求の左文脈に確定した表層が入る。F6〜F10 の部分確定が先頭文節だけを字種で確定する。一括変換の候補選択の挙動が変わらない |
+| TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: 先頭文節の要求が §5.1 のフィールドを止め、残りの読みを添える。`corrected_reading` を持つ応答と、読みの違う候補を使わず、ローカル候補に落とす。待つ前の e の応答を使わない。待つ間のキー（伸縮中の ← / → と Backspace を含む）が保留され、候補が差し替わった後に再生される。待つ間のクリックを受けない。待つ間の Esc・IME を Off にするキー・フォーカスの喪失が要求を取り消し、Off とフォーカスの喪失は先頭文節を読みのまま確定して観測しない。750 ms の期限と Host の喪失で、先頭文節の読みのローカル候補になる。Space の応答を待つ間の Shift+← / Shift+→ が、窓が開いた後に伸縮として再生される。TIP の前処理の候補窓では伸縮しない。伸縮中の候補窓のクリックで部分確定する。部分確定で確定した表層の属性が消え、残りの読みが composition に残る。`ShiftStart` が失敗したときに composition を始め直す。確定が拒否されたときに残りの読みの要求を出さない。観測が §8 のとおりになり、残りの読みの要求の左文脈に確定した表層が入る。F6〜F10 の部分確定が先頭文節だけを字種で確定する。一括変換の候補選択の挙動が変わらない |
 | 表示属性 | `tsf-tip/tests/display_attribute_test.cpp`: 伸縮中に Focused と Converted の 2 区間を作る |
 | IPC | `ipc/tests/payloads_test.cpp`: 残りの読みのフィールドの往復と、フィールドの無い JSON を空として読むこと |
-| Host | `inference-host/tests/dispatcher_test.cpp`: 先頭文節の要求で読みを補正せず `corrected_reading` を返さないこと、残りの読みがエンジンへ渡ること。`inference-host/tests/engine_test.cpp`: 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。先頭文節の要求でない要求とモデルを通る要求の候補が変わらない |
+| Host | `inference-host/tests/dispatcher_test.cpp`: 先頭文節の要求で読みを補正せず `corrected_reading` を返さないこと、残りの読みがエンジンへ渡ること。`inference-host/tests/engine_test.cpp`: 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。先頭文節の要求でない要求とモデルを通る要求には、§5.3 の規則が掛からない |
 
 ラティスの語の境目の制約と先頭の区間の取り出しは、`docs/lattice-conversion-spec.md` §11 の core のラティスの部品の
 試験が受け持つ。試験の一覧の正典は `docs/test-inventory.md` である。

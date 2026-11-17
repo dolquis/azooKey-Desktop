@@ -67,7 +67,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker（Track A） |
 | [`neural-reranker-nll-spec.md`](neural-reranker-nll-spec.md) | NllScorer 型ニューラルリランク（Track B） |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
-| [`lattice-conversion-spec.md`](lattice-conversion-spec.md) | 変換品質トラック M65（モデル非経由のラティス変換：連接コスト付き N-best と文節の区切り） |
+| [`lattice-conversion-spec.md`](lattice-conversion-spec.md) | 変換品質トラック M65（モデル非経由のラティス変換：連接コスト付き N-best と文節の区切り）。§7.3 の語の境目の制約と先頭の区間の取り出しは M66 |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入）。§3・§4.3 は M62-B の英字分の正典 |

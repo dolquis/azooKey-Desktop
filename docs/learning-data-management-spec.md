@@ -759,7 +759,7 @@ ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用�
   不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
   置換する。`userdict export` は `Save` と同じ JSON schema
   `{ "version": 1, "entries": [...] }`（品詞を持つ語があれば version 2）で書き出す。6 列目の品詞 ID と
-  `--pos`・`--format`・`--conflict` は `docs/user-dictionary-pos-spec.md` §7.5 が定める。
+  `--pos`・`--input-format`・`--conflict` は `docs/user-dictionary-pos-spec.md` §7.5 が定める。
 - 新語候補（M36-A）の承認には
   `azookey_inference_host.exe [--learning <path>] newwords <list|confirm|reject> ...` を使う。
   `confirm` / `reject` は `userdict add` と同じく既定で起動中 Host へ IPC 送信し、

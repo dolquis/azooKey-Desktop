@@ -168,6 +168,7 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
   のうち有効なもの）
 - lattice_core
 - 可変層（`user_dictionary`、`auto_words`、`app_specific_dictionary`）
+- ユーザー辞書の展開形の索引（`docs/user-dictionary-pos-spec.md` §4.6）
 
 `max_results` は 0（無制限）で呼ぶ。上限に達した `CommonPrefixSearch` は短いキーから埋めて打ち切り、打ち切りを
 知らせない（`docs/azdic-physical-layer-spec.md` §15.4）。ラティスでは長い語ほど落ちるためである。

@@ -158,7 +158,10 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
     `error = store_unavailable`（`docs/learning-data-management-spec.md` §6 の「保存を止めているストア」と同じ扱い）。
     backup の archive の `user_dict` の item 自体が version 3 以上のときも、import 全体を `store_unavailable` で失敗させる
   - `userdict` CLI の writer 操作（`--offline` の add / remove、`import`）と `export`: 終了コード 1
-- `version` が整数でない辞書は、version 1 と同じに読む。
+- root が object で `version` が 3 以上の整数なら、`entries` が無いか配列でないなど、その先の構造を解釈できなくても、
+  隔離（平文の移行元の `.corrupt.<stamp>` を含む）をせず、空の辞書として保存もせず、上と同じに保存を止める。新しい版が
+  構造を変えた辞書を、壊れたものとして退避して空の辞書で置き換えないためである。このとき候補と一覧は空になる。
+- `version` が整数でない辞書と、0 以下の整数の辞書は、version 1 と同じに読む。
 - entry と root の、本書と version 1 が定めない名前のメンバー（未知のメンバー）は、値を保ったまま読み込み、
   保存のときに同じ位置（entry のメンバーはその entry、root のメンバーは root）へ書き戻す。メンバーの順は保たなくてよい。
 - `pos` が文字列でない entry は、`pos` を持たない語として読み、元の値を未知のメンバーとして保つ。
@@ -367,13 +370,12 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 
 - `google` の構造は、Mozc の書き出し（`UserDictionaryStorage::ExportDictionary`）のソースで確かめた。書き出しは
   ヘッダと BOM を持たず、Mozc の内部の文字列（UTF-8）をそのまま書く。Google 日本語入力の製品が同じ形で書くことと、
-  Windows 版の改行が CRLF か LF かは、実ファイルで未確認である。
+  Windows 版の改行が CRLF か LF かは、ソースからは決まらない。実ファイルとの照合は §9 の Human Gate が担う。
 - `msime` の構造は、Mozc の importer が Microsoft IME の書き出しとして受け付ける形で確かめた。Microsoft は書き出しの
   形式を公開していない（Microsoft Learn にあるのは `msime.h` の API だけである）。Microsoft IME が書く
-  文字コード、ヘッダ行の並び、品詞名の一覧は、実ファイルで未確認である。Mozc の importer は、利用者が選べる品詞の
-  名前のほかに `msime.h` の内部の品詞の名前（地名、社名、組織、数、記号、英字など）も受け付ける。それらが実ファイルに
-  現れるかも未確認で、§6.5 の表に無いので `unsupported_pos` として除く。
-- 実ファイルでの確認は Human Gate とする（§9）。
+  文字コード、ヘッダ行の並び、品詞名の一覧の実ファイルとの照合は、§9 の Human Gate が担う。Mozc の importer は、利用者が
+  選べる品詞の名前のほかに `msime.h` の内部の品詞の名前（地名、社名、組織、数、記号、英字など）も受け付ける。それらが
+  実ファイルに現れるかの照合も同じ Human Gate が担い、§6.5 の表に無いので `unsupported_pos` として除く。
 
 ### 6.2 文字コード
 
@@ -392,7 +394,8 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 1. 最初の空でない行が `!Microsoft IME` で始まれば（大文字と小文字を区別しない）`msime`。`# Gboard Dictionary version:`、
    `!!DICUT`、`!!ATOK_TANGO_TEXT_HEADER` で始まれば（大文字と小文字を区別しない）、`unknown_format` で失敗する。
 2. `#` で始まらない最初の空でない行を TAB で分け、3 列以上あって 3 列目（§6.4 の品詞の正規化の後）が §6.5 の
-   Google 日本語入力の品詞名にあれば `google`。
+   Google 日本語入力の品詞名にあれば `google`。判定には、対象外の行（抑制単語、サジェストのみなど）の名前も含める。
+   先頭の行が対象外の品詞の Google 日本語入力の辞書を、`unknown_format` にしないためである。
 3. 同じ行が `azookey_tsv` の 1 行として読めれば `azookey_tsv`。
 4. どれでもなければ `unknown_format` で失敗する。
 
@@ -500,19 +503,23 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
 2. どのロックも取らずに、ファイルを読み、文字コードと形式を決め、全行を解析・正規化・検証する。ここで失敗したら、
    何も変えずに失敗を返す。元のファイルは変えず、隔離もしない。読み込んだ平文のバッファは、解析の後に
    `learning::SecureErase` で消す。
-3. `dry_run` なら、状態のロックの中で公開中の辞書のキーの集合だけを複写し、ロックの外で比べて件数を数え、何も変えずに
-   返す。変換の問い合わせを止める区間を短くするためである。下見の件数は確定のときの件数と違いうる（その間に他の編集が
-   入りうる）。
-4. `AddUserWord` と同じ順（ユーザー辞書の writer の mutex、ユーザー辞書のファイルロック、状態のロック）でロックを取る。
+3. `dry_run` なら、状態のロックの中で、公開中の辞書のキーの集合と、その辞書が version 3 以上か・読み込みの失敗で保存を
+   止めているかだけを複写する。version 3 以上なら `dictionary_too_new`、保存を止めていれば `store_unavailable` で失敗する
+   （確定のときと同じ判定）。そうでなければロックの外で比べて件数を数え、何も変えずに返す。変換の問い合わせを止める区間を
+   短くするためである。下見の件数は確定のときの件数と違いうる（その間に他の編集が入りうる）。
+4. `AddUserWord` と同じ順と同じ区間でロックを取る（`docs/learning-data-management-spec.md` §4.5）。ユーザー辞書の writer の
+   mutex、ユーザー辞書のファイルロックの順に取り、どちらも手順 7 の公開まで持つ。状態のロックは、公開中の辞書を複写する
+   短い区間と、手順 7 の公開の区間だけで取る。手順 5 と 6 の読み直し・merge・上限の検査・保存（DPAPI の暗号化を含む）は
+   状態のロックの外で行い、その間も変換の問い合わせとライブ変換を待たせない。
    待ちの予算は `AddUserWord` と同じ 5 秒とし、手順 2 を終えた時刻から数える（要求の受信からではない。大きなファイルの
    解析で予算を使い切らないためである）。予算は、他の編集の終わりを待つ時間、ファイルロックを待つ時間、読み直しと merge
    の時間を合わせて数え、保存を始める前に過ぎていたら `busy` で失敗する。保存を始めた後は打ち切らない
-   （`docs/learning-data-management-spec.md` §4.5・§13 の `AddUserWord` と同じ）。
+   （`docs/learning-data-management-spec.md` §13 の `AddUserWord` と同じ）。
 5. ディスクの辞書を読み直した複写（`ReloadIfChanged`）へ merge する。読み直しに失敗したら `load_failed`、読み込みの
    失敗で保存を止めている辞書なら `store_unavailable`、version 3 以上なら `dictionary_too_new`（§3.2）で、何も変えずに失敗する。
 6. 語数の上限（§6.7）を検査してから、`Save`（DPAPI と atomic replace）で保存する。保存に失敗したら `save_failed` を返し、
    公開中の辞書を変えない。atomic replace なので、ディスクの辞書は変更前か変更後のどちらかである。
-7. 保存に成功したときだけ複写を公開し、展開形の索引（§4.6）を作り直す。
+7. 保存に成功したときだけ、状態のロックを取って複写を公開し、展開形の索引（§4.6）を作り直す。
 
 - secure mode の拒否（`docs/learning-data-management-spec.md` §8）は、Host 全体の状態で判定する。設定アプリの要求は
   入力欄の secure と学習可否を持たないためである。Host の privacy の方針（`SettingsStore::LockPrivacyPolicy`）が
@@ -596,6 +603,18 @@ Host は両方を Handshake の capabilities に載せる。設定アプリは�
   `pos_mismatch` として skip に数える。品詞に対応する前の CLI は 6 列の行を skip していたので、変わるのは 6 列の行だけである。
 - `--input-format` が `msime`・`google`・`auto` のときは、解析、文字コード、正規化、上限を §6.2〜§6.7 に従う。
   JSON の報告は既存の `imported` と `skipped` に、§7.2 の `counts` を足す。
+
+同じ `azookey_tsv` でも、IPC と CLI では次のとおり扱いが違う。CLI は既存のスクリプトの結果を保つことを優先する。
+
+| 項目 | IPC（`ImportUserDictionaryText` の `azookey_tsv`） | CLI（`userdict import --input-format azookey_tsv`、既定） |
+|---|---|---|
+| 文字コード | §6.2（BOM を除き、UTF-8 か CP932） | 既存のまま（UTF-8 として読み、BOM を除かない） |
+| 読みと語の正規化 | §6.4（前後の空白を除き、カタカナをひらがなに直す） | しない |
+| 制御文字・長さの検査（§6.4） | する | しない |
+| 上限（§6.7） | 掛ける | 掛けない |
+| 6 列目の品詞 ID | §2.1・§4.4 で検査し、外れた行を除く | 同じ |
+| 衝突の既定 | `merge` | `overwrite` |
+| 5 列以下の行の結果 | 上の規則による | 品詞に対応する前と同じ |
 - `userdict list` の JSON 行と `lookup` の JSON 行（`user_dict` の一致）に `pos` を足す。`lookup` の TSV の列は変えない。
 - `userdict export` は §3.3 の形で書く。
 
@@ -632,7 +651,7 @@ Host が §7.4 の capability を告知したときだけ出す。macOS 版の�
 | データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書と公開中の辞書が変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
 | IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定で 5 列以下の行の結果が品詞に対応する前と同じになり、6 列目が §2.1・§4.4 で検査される。`--pos` を capability `user_dict_pos` の無い Host へ送らない |
 | dictbuild | §4.2 の語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の代表の語の活用形と語尾表が一致する |
-| Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（形式、文字コード、改行、品詞名を §6.1 の未確認の点と照らし、`msime.h` の内部の品詞名が現れるかを記録する）。実機で、活用した登録語が候補に出る |
+| Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（§6.1 が照合を Human Gate に委ねた形式、文字コード、改行、品詞名を実ファイルと照らし、`msime.h` の内部の品詞名が現れるかを記録する）。実機で、活用した登録語が候補に出る |
 
 試験の一覧の正典は `docs/test-inventory.md` である。利用者の実際の辞書は fixture にしない。
 

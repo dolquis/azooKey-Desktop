@@ -346,7 +346,8 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   あることを `UserActionEvent` に載せる（`UserAction` は増やさない。§1.6.2 (B)。フィールドの名前は実装で決める）。
   ほかの状態では `nullopt` とする。
 - Ctrl+Backspace（修飾キーは Ctrl だけ）は Idle でだけ `UndoCommit` になり、ほかの状態では `nullopt` とする。
-  TIP は `docs/commit-undo-spec.md` §4 の条件が揃うときだけ消費し、揃わなければアプリへ渡す。
+  TIP は `docs/commit-undo-spec.md` §4 の条件が揃うときだけ消費し、揃わなければアプリへ渡す。例外として、取り消しに
+  使った Ctrl+Backspace のキーリピートは、戻した入力（Composing）の間も TIP が消費して何もしない（同 §3）。
 - Alt または Win を含む組合せは常に `nullopt` とする。
 - 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、ひらがなキー `VK_DBE_HIRAGANA`、`convertKeysAction` が
   `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`

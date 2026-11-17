@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M3, M5, M20, M21, M22, M23, M64, M66]
+milestones: [M3, M5, M20, M21, M22, M23, M64, M66, M68]
 canonical_for: ["TSF 深部統合"]
 ---
 
@@ -18,6 +18,7 @@ canonical_for: ["TSF 深部統合"]
 | §1 | M20 |
 | §2（§2.0・§2.8〜§2.11 を除く） | M21 |
 | §2.0、§2.8〜§2.11 | M5（UI-less の最小契約）。M21 がこれを拡張する |
+| §2.3 の候補のページ | M68 |
 | §3（§3.6 を除く） | M22 |
 | §3.6 | M64。文節の伸縮中の扱いは M66 |
 | §4 | M21 |
@@ -213,6 +214,12 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 - `ITfCandidateListUIElementBehavior`（`SetSelection` / `Finalize` / `Abort`）は M21 の full 実装で
   加える（§2.8「M5 と M21 の役割分担」）。
 
+ページ（M68）は `docs/legacy-parity-spec.md` §1.4「候補のページ」の 9 件ずつの区切りとし、`GetPageIndex` は各ページの先頭の index を、
+`GetCurrentPage` は選択を含むページを返す。いまのページが替わったら `TF_CLUIE_CURRENTPAGE` を、区切りが件数で変わったら `TF_CLUIE_PAGEINDEX` を
+立てて知らせ、選択の移動では区切りを動かさない（アプリは一覧が替わるときにページを数え直す。Microsoft Learn「UILess Mode Overview」の
+About PageIndex）。`SetPageIndex` は先頭が 0 で狭義に増え、どれも件数より小さい配列だけを受けて `S_OK` を返し（それ以外は `E_INVALIDARG`）、
+`pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで数字キーと PageUp / PageDown をその区切りで解く。9 件を超えるページの 10 件目以降は数字で選べない。
+
 ### 2.4 動作分岐
 
 > **改訂（§2.8 両立方式に統合）**: 描画分岐は `ui_less_mode_` ではなく
@@ -407,8 +414,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   カテゴリ登録（§2.9）。`pbShow==FALSE` 経路は `CandidateListUIElement` の最小実装
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
-- **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測
+- **M21**: `CandidateListUIElement` の full 実装（`...Behavior`・
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7。ページの API は M68 が持つ）、IME On/Off（§4）。予測
   は UIElement 化せず、自前の候補窓の予測モードで出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。

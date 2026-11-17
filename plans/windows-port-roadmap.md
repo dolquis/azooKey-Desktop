@@ -61,7 +61,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M68 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 |
@@ -459,7 +459,8 @@ Phase 4 完了 ─→ M13 ─┬─→ M14 ─┐
                      ├─→ M18
                      ├─→ M61-A ─→ M61-B（M48 にも依存）
                      ├─→ M64（M22・M60 にも依存）
-                     └─→ M66（M23・M64 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
+                     ├─→ M66（M23・M64 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
+                     └─→ M68（M19・M21・M26 にも依存）
 Phase 5 完了 ─→ M20 ─→ M23
 Phase 5 完了 ─→ M21 ─→ M22 ─→ M64
 
@@ -547,11 +548,11 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
   バックエンド・TSF 深耕・パッケージングに依存しない。詳細は
   `docs/bracket-pairing-spec.md`。
-- **入力拡張（M58〜M60 / M62〜M64 / M66）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
+- **入力拡張（M58〜M60 / M62〜M64 / M66 / M68）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
   M58-B は M20、M58-C は M16 / M24 / M46 を前提とする。M59（動的句読点）は M13 / M14、M60（インライン英単語候補）は
   M5 / M6、M62（候補リライター）は M5 / M6 / M13 を前提とし、M62-A は辞書・推論・IPC に依存しない。M63（日英混在の自動変換）は
-  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60、M66（文節の伸縮と部分確定）は M13・M23・M64 を
-  前提とする。詳細は
+  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60、M66（文節の伸縮と部分確定）は M13・M23・M64、M68（候補窓のページ送り）は
+  M13・M19・M21・M26 を前提とする。詳細は
   「追加機能マイルストーン」章と各 `docs/*-spec.md`。
 - **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
@@ -1776,6 +1777,50 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
       ときは、TIP のローカル候補で窓を開く（spec §5.2）。
     - **右の文脈**: Zenzai は先頭文節の読みだけを変換するので、縮めた先頭文節では後ろの語で決まる同音異義語を
       誤りやすい（spec §5.3）。
+
+### M68: 候補窓のページ送り
+
+> 候補選択中の候補を 9 件ずつのページに分け、PageUp / PageDown でページを送り、数字でいまのページの候補を選ぶ。
+> Windows 版の候補窓は全件に通し番号を振り、数字で選べるのは 1〜9 件目だけで、候補選択中の PageUp / PageDown は
+> アプリへ渡る（parity 監査 P-11）。正典仕様は `docs/legacy-parity-spec.md` §1.2・§1.4「候補のページ」、
+> `docs/native-ui-spec.md` §4.1・§5.2、`docs/tsf-deep-integration-spec.md` §2.3 とし、本節は定義・依存・受け入れ条件・
+> リスクだけを持つ。
+
+- **目的**: 10 件目以降の候補も数字で選べるようにし、候補選択中の PageUp / PageDown でアプリの画面が動かないようにする。
+- **前提**: M13（`UserActionMap` と `InputState`）、M19・M26（候補窓の配置と描画）、M21（`CandidateListUIElement`）。
+- **変更対象**: `core/include/azookey/core/UserAction.h`（`UserActionEvent` のページ単位の印）、`core/src/UserActionMap.cpp`、
+  `core/src/InputState.cpp`、`tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/CandidateUiCoordinator.cpp`、
+  `tsf-tip/src/CandidateListUIElement.cpp`、`tsf-tip/src/TextService.cpp`（数字の解決と TIP の前処理の候補窓）。
+- **受け入れ条件**:
+  - 10 件以上の候補で、窓がいまのページ（9 件まで）だけを描き、行頭の番号がページ内の `1.`〜`9.` になる。位置の行が
+    全件での番号と件数を出す
+  - 数字（テンキーを含む）がいまのページの n 件目を確定し、n 件目が無いページでは消費して何もしない。一括変換の
+    複数文節では選択だけが移る
+  - 候補選択中の PageDown / PageUp が、次 / 前のページのページ内の同じ位置（無ければ末尾）へ選択を移し、端のページでは
+    巡回する。ページが 1 つだけのときは消費して何もしない。どちらもアプリへ渡らない
+  - Space・↓ と Shift+Space・↑ が 1 件ずつ動き、ページの端でいまのページが替わる
+  - Space の応答待ちと先頭文節の候補待ちの PageUp / PageDown が保留され、窓が開いた後に再生される。Selecting 以外の
+    PageUp / PageDown はアプリへ渡る
+  - ページを替えても窓の位置と大きさが変わらず、最後のページの空いた行はクリック領域にならない。1 ページの行が
+    作業領域に収まらないときは、ページの中で描く範囲が選択に追従する
+  - 通常変換、先頭文節、一括変換の文節、TIP の前処理の候補窓、絵文字検索、再変換の一覧に同じ規則が掛かり、
+    予測モードには掛からない
+  - UI-less で、`GetPageIndex` が 9 件ずつのページの先頭を、`GetCurrentPage` が選択を含むページを返し、ページが
+    替わると `TF_CLUIE_CURRENTPAGE` が立つ。`SetPageIndex` が正しい配列を受けてその区切りで数字と PageUp / PageDown を
+    解き、不正な配列には `E_INVALIDARG` を返す
+  - `keymap_test`・`input_state_test`・`candidate_window_dpi_test`・`candidate_ui_coordinator_test`・
+    `onkeydown_preedit_test` に、上記の検証がある
+  - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成で、ページの表示、数字、PageUp / PageDown が
+    アプリへ渡らないこと、`SetPageIndex` を呼ぶアプリの有無。`gate:human-required`）
+- **参照**: `docs/legacy-parity-spec.md` §1.2・§1.4・§1.6.2・§9.2、`docs/native-ui-spec.md` §4.1・§5.2・§7、
+  `docs/tsf-deep-integration-spec.md` §2.3・§2.8、`docs/segment-editing-spec.md` §4
+- **補足**:
+  - **外部挙動の変更**: 10 件を超える候補では「10.」以降の通し番号が無くなり、窓は 9 行までになる。候補選択中の
+    PageUp / PageDown はアプリへ渡らない。
+  - **リスク**:
+    - **アプリが描くページとの食い違い**: `SetPageIndex` を呼ぶアプリでは、アプリの区切りで数字を解く。9 件を超える
+      ページの 10 件目以降は数字で選べない。どのアプリが呼ぶかは実機で確かめる。
+    - **窓の高さ**: 窓を 1 ページの高さに固めるので、最後のページの候補が少なくても窓は縮まない。
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

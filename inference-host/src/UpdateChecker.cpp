@@ -9,6 +9,17 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/learning/AtomicFile.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#include <appmodel.h>
+#endif
+
 namespace azookey::host {
 namespace {
 
@@ -178,9 +189,17 @@ std::string UpdatePackageFileName(std::string_view version) {
   return "azooKey-" + std::string(version) + "-x64.msi";
 }
 
-std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
-                                                 std::string_view download_prefix,
-                                                 uint64_t max_bytes, std::string* error) {
+std::string VulkanAddonPackageFileName(std::string_view version) {
+  return "azooKey-vulkan-addon-" + std::string(version) + "-x64.msi";
+}
+
+namespace {
+
+// The asset named file_name of the release a GET /releases/tags/v<version> response describes.
+std::optional<UpdatePackage> SelectReleaseAsset(std::string_view json, std::string_view version,
+                                                const std::string& file_name,
+                                                std::string_view download_prefix,
+                                                uint64_t max_bytes, std::string* error) {
   const auto fail = [error](const char* category) {
     if (error) *error = category;
     return std::nullopt;
@@ -193,8 +212,8 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
   }
   const auto* assets = root->Find("assets");
   if (!assets || !assets->IsArray()) return fail("asset_missing");
-  const auto file_name = UpdatePackageFileName(version);
-  // The asset is named exactly, so neither the Vulkan add-on MSI nor any other file matches.
+  // The asset is named exactly: the base MSI and the Vulkan add-on MSI never stand in for each
+  // other, and no other file matches.
   const std::string expected_url =
       std::string(download_prefix) + "v" + std::string(version) + "/" + file_name;
   const ipc::json::Value* match = nullptr;
@@ -223,6 +242,23 @@ std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::str
   package.sha256 = digest->substr(kDigestPrefix.size());
   package.size = *size;
   return package;
+}
+
+}  // namespace
+
+std::optional<UpdatePackage> SelectUpdatePackage(std::string_view json, std::string_view version,
+                                                 std::string_view download_prefix,
+                                                 uint64_t max_bytes, std::string* error) {
+  return SelectReleaseAsset(json, version, UpdatePackageFileName(version), download_prefix,
+                            max_bytes, error);
+}
+
+std::optional<UpdatePackage> SelectVulkanAddonPackage(std::string_view json,
+                                                      std::string_view version,
+                                                      std::string_view download_prefix,
+                                                      uint64_t max_bytes, std::string* error) {
+  return SelectReleaseAsset(json, version, VulkanAddonPackageFileName(version), download_prefix,
+                            max_bytes, error);
 }
 
 UpdateChecker::UpdateChecker(UpdateCheckerOptions options, UpdateCheckDependencies dependencies)
@@ -465,6 +501,36 @@ void UpdateChecker::NotifyOnce(const AvailableRelease& release) {
   // A failed write notifies the same version again at the next check rather than never.
   (void)learning::WriteTextFileAtomically(options_.notification_path,
                                           ipc::json::Stringify(ipc::json::Value(record)));
+}
+
+bool UpdatesManagedByStore(const PackageIdentityProbe& probe) {
+  return probe.has_package && probe.origin == kPackageOriginStore;
+}
+
+PackageIdentityProbe ProbeCurrentPackage() {
+  PackageIdentityProbe probe;
+#ifdef _WIN32
+  UINT32 length = 0;
+  if (GetCurrentPackageFullName(&length, nullptr) != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+    return probe;  // APPMODEL_ERROR_NO_PACKAGE: unpackaged.
+  }
+  std::wstring full_name(length, L'\0');
+  if (GetCurrentPackageFullName(&length, full_name.data()) != ERROR_SUCCESS) return probe;
+  probe.has_package = true;
+  // Exported by kernelbase.dll, but only onecoreuap.lib has its import: look it up instead of
+  // linking that umbrella library. Its absence leaves the origin unread.
+  using GetStagedPackageOriginFn = LONG(WINAPI*)(PCWSTR, PackageOrigin*);
+  const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  const auto get_origin = kernelbase
+                              ? reinterpret_cast<GetStagedPackageOriginFn>(reinterpret_cast<void*>(
+                                    GetProcAddress(kernelbase, "GetStagedPackageOrigin")))
+                              : nullptr;
+  PackageOrigin origin = PackageOrigin_Unknown;
+  if (get_origin && get_origin(full_name.c_str(), &origin) == ERROR_SUCCESS) {
+    probe.origin = static_cast<uint32_t>(origin);
+  }
+#endif
+  return probe;
 }
 
 }  // namespace azookey::host

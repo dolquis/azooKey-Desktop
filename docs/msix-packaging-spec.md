@@ -629,7 +629,7 @@ add-on は base とは別の MSI（`pkg/msi-vulkan/VulkanAddon.wxs`、独自の 
 | 配置先 | base が `HKLM\Software\azooKey\HostStartup` の `InstallDirectory` に記録した base の `INSTALLFOLDER`。supervisor は base の Host と同じディレクトリでしか add-on を探さない |
 | 導入の前提 | base が導入済みで、base の `ProductVersion`（同じキー）が add-on の版と一致すること。満たさない場合は LaunchCondition で導入を止める |
 | 版の記録 | base は `HKLM\Software\azooKey\HostStartup`、add-on は `HKLM\Software\azooKey\VulkanAddon` の `ProductVersion` に自分の版を書く |
-| 更新 | add-on は base と同じ版番号で出す。base だけを更新すると版が食い違い、supervisor は add-on を選ばない。add-on を同じ版へ更新すると Vulkan 版 Host の選択に戻る |
+| 更新 | add-on は base と同じ版番号で出す。base だけを更新すると版が食い違い、supervisor は add-on を選ばない。add-on を同じ版へ更新すると Vulkan 版 Host の選択に戻る。設定アプリからの自動更新は、導入済みの add-on を base に続けて同じ版へ更新する（`sideload-packaging-spec` §6.3） |
 | 削除 | add-on を削除しても base は残る。base だけを削除すると Run キーと base の版の記録が消え、supervisor は起動しない。残った add-on は、base を同じ版で入れ直すと再び選ばれ、違う版で入れ直すと版の照合で選ばれない。不要なら利用者が「アプリと機能」から削除する |
 
 稼働中の Host が add-on の実行体を使っているときの削除・更新は、ファイル使用中として

@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -34,6 +35,7 @@ using azookey::host::UpdateFetchService;
 using azookey::host::UpdateFetchSnapshot;
 using azookey::host::UpdateFetchStartResult;
 using azookey::host::UpdatePackageFileName;
+using azookey::host::VulkanAddonPackageFileName;
 using azookey::host::test::ScopedTempDirectory;
 
 constexpr std::string_view kDownload =
@@ -51,6 +53,15 @@ std::string BaseAsset(std::string_view version = "1.2.3", std::string_view diges
   const auto name = UpdatePackageFileName(version);
   return Asset(name, std::string(kDownload) + "v" + std::string(version) + "/" + name,
                digest.empty() ? "sha256:" + kSha : std::string(digest), size);
+}
+
+const std::string kAddonSha(64, 'b');
+
+std::string AddonAsset(std::string_view version = "1.2.3", std::string_view digest = {},
+                       uint64_t size = 200) {
+  const auto name = VulkanAddonPackageFileName(version);
+  return Asset(name, std::string(kDownload) + "v" + std::string(version) + "/" + name,
+               digest.empty() ? "sha256:" + kAddonSha : std::string(digest), size);
 }
 
 std::string ReleaseWith(std::string_view tag, const std::vector<std::string>& assets,
@@ -140,9 +151,16 @@ struct FakeNetwork {
   std::vector<HttpDownloadRequest> downloads;
   HttpTextResult release;
   HttpDownloadResult download_result{HttpDownloadStatus::Downloaded};
+  // DEV-2081: the add-on's download (named azooKey-vulkan-addon-*) has its own result and hold.
+  HttpDownloadResult addon_download_result{HttpDownloadStatus::Downloaded};
   bool hold_download{false};
+  bool hold_addon_download{false};
+  bool throw_addon_download{false};
   bool released{false};
 
+  static bool IsAddon(const HttpDownloadRequest& request) {
+    return request.destination.filename().string().starts_with("azooKey-vulkan-addon-");
+  }
   HttpTextResult FetchText(const HttpTextRequest& request) {
     std::lock_guard lock(mutex);
     text_requests.push_back(request);
@@ -152,7 +170,9 @@ struct FakeNetwork {
     std::unique_lock lock(mutex);
     downloads.push_back(request);
     changed.notify_all();
-    if (hold_download) {
+    const bool addon = IsAddon(request);
+    if (addon && throw_addon_download) throw std::runtime_error("add-on download threw");
+    if (hold_download || (addon && hold_addon_download)) {
       // Bounded far above the time the test needs; the bound only keeps a failure from hanging.
       const auto deadline = std::chrono::steady_clock::now() + 10s;
       while (!released && !(request.cancelled && request.cancelled()) &&
@@ -162,11 +182,11 @@ struct FakeNetwork {
       if (!released) return HttpDownloadResult{};  // Failed, as a cancelled download is.
     }
     if (request.progress) request.progress(request.max_bytes, request.max_bytes);
-    return download_result;
+    return addon ? addon_download_result : download_result;
   }
-  bool WaitForDownload() {
+  bool WaitForDownload(size_t count = 1) {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, 10s, [&] { return !downloads.empty(); });
+    return changed.wait_for(lock, 10s, [&] { return downloads.size() >= count; });
   }
   void Release() {
     std::lock_guard lock(mutex);
@@ -180,6 +200,7 @@ struct Fixture {
   FakeNetwork network;
   std::atomic<bool> allowed{true};
   std::string channel{"stable"};
+  bool addon_installed{false};
 
   std::filesystem::path StatusPath() const { return temp.path() / "update-status.json"; }
   std::filesystem::path UpdatesDir() const { return temp.path() / "updates"; }
@@ -204,6 +225,7 @@ struct Fixture {
     dependencies.download = [this](const HttpDownloadRequest& r) { return network.Download(r); };
     dependencies.allowed = [this] { return allowed.load(); };
     dependencies.channel = [this] { return channel; };
+    dependencies.vulkan_addon_installed = [this] { return addon_installed; };
     return std::make_unique<UpdateFetchService>(std::move(options), std::move(dependencies));
   }
 };
@@ -229,8 +251,10 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   // Built rather than listed as literals: a list of "azooKey-..." strings reads as an API key
   // assignment to the secret scanner.
   const auto older = UpdatePackageFileName("1.2.2");
-  const std::vector<std::string> names = {older, older + ".part", "notes.txt",
-                                          "azooKey-vulkan-addon-1.2.2-x64.msi"};
+  const auto older_addon = VulkanAddonPackageFileName("1.2.2");
+  const auto current_addon_part = VulkanAddonPackageFileName("1.2.3") + ".part";
+  const std::vector<std::string> names = {older,       older + ".part",       "notes.txt",
+                                          older_addon, older_addon + ".part", current_addon_part};
   for (const auto& name : names) {
     std::ofstream(f.UpdatesDir() / name) << "x";
   }
@@ -266,9 +290,12 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   EXPECT_TRUE(download.network_allowed());
   EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / "azooKey-1.2.2-x64.msi"));
   EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / "azooKey-1.2.2-x64.msi.part"));
-  // Only this service's own files go: the add-on's MSI and other names stay.
+  // DEV-2081: the add-on of an older version goes too; that of this version stays for a resume.
+  EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / older_addon));
+  EXPECT_FALSE(std::filesystem::exists(f.UpdatesDir() / (older_addon + ".part")));
+  EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / current_addon_part));
+  // Only this service's own files go: other names stay.
   EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "notes.txt"));
-  EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "azooKey-vulkan-addon-1.2.2-x64.msi"));
   EXPECT_TRUE(std::filesystem::exists(f.UpdatesDir() / "azooKey-latest-x64.msi"));
 
   azookey::ipc::UpdateFetchResponse response;
@@ -276,6 +303,9 @@ TEST(UpdateFetchServiceTest, DownloadsTheRecordedUpdateAgainstItsDigest) {
   EXPECT_EQ(response.state, "ready");
   EXPECT_EQ(response.sha256, kSha);
   EXPECT_TRUE(response.result_error.empty());
+  // Without the add-on installed, nothing about it is answered.
+  EXPECT_TRUE(response.addon_sha256.empty());
+  EXPECT_TRUE(response.addon_error.empty());
 }
 
 TEST(UpdateFetchServiceTest, StartsOnlyForTheRecordedAvailableVersion) {
@@ -399,6 +429,153 @@ TEST(UpdateFetchServiceTest, ShutdownStopsTheDownloadAndRefusesLaterStarts) {
   service->Shutdown();
   EXPECT_EQ(service->Snapshot().error, "cancelled");
   EXPECT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Unavailable);
+}
+
+// DEV-2081: the add-on MSI is chosen by its own exact name, by the same rules as the base.
+TEST(UpdatePackageTest, SelectsTheVulkanAddonMsiByItsOwnName) {
+  std::string error;
+  const auto addon = azookey::host::SelectVulkanAddonPackage(
+      ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()}), "1.2.3", kDownload, 1000, &error);
+  ASSERT_TRUE(addon) << error;
+  EXPECT_EQ(addon->file_name, VulkanAddonPackageFileName("1.2.3"));
+  EXPECT_EQ(addon->download_url,
+            std::string(kDownload) + "v1.2.3/" + VulkanAddonPackageFileName("1.2.3"));
+  EXPECT_EQ(addon->sha256, kAddonSha);
+  EXPECT_EQ(addon->size, 200u);
+  // The base alone never stands in for the add-on, and the add-on's digest is checked.
+  EXPECT_FALSE(azookey::host::SelectVulkanAddonPackage(ReleaseWith("v1.2.3", {BaseAsset()}),
+                                                       "1.2.3", kDownload, 1000, &error));
+  EXPECT_EQ(error, "asset_missing");
+  EXPECT_FALSE(azookey::host::SelectVulkanAddonPackage(
+      ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset("1.2.3", "sha256:x")}), "1.2.3", kDownload,
+      1000, &error));
+  EXPECT_EQ(error, "digest_missing");
+}
+
+TEST(UpdateFetchServiceTest, TheInstalledAddonFollowsTheBaseInTheSameDownload) {
+  Fixture f;
+  f.addon_installed = true;
+  f.WriteStatus("update_available", "1.2.3", "1.0.0");
+  f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()});
+  auto service = f.Make();
+  ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+  const auto end = WaitForEnd(*service);
+  ASSERT_EQ(end.state, UpdateFetchSnapshot::State::Ready) << end.error;
+  EXPECT_EQ(end.sha256, kSha);
+  EXPECT_EQ(end.addon_sha256, kAddonSha);
+  EXPECT_TRUE(end.addon_error.empty());
+  // The progress counts both files.
+  EXPECT_EQ(end.total_bytes, 300u);
+  EXPECT_EQ(end.received_bytes, 300u);
+  // One API request; the base first, then the add-on, each against its own digest and size.
+  EXPECT_EQ(f.network.text_requests.size(), 1u);
+  ASSERT_EQ(f.network.downloads.size(), 2u);
+  EXPECT_EQ(f.network.downloads[0].destination, f.UpdatesDir() / UpdatePackageFileName("1.2.3"));
+  const auto& addon = f.network.downloads[1];
+  EXPECT_EQ(addon.url,
+            L"https://github.com/dolquis/azooKey-Desktop/releases/download/v1.2.3/"
+            L"azooKey-vulkan-addon-1.2.3-x64.msi");
+  EXPECT_EQ(addon.destination, f.UpdatesDir() / VulkanAddonPackageFileName("1.2.3"));
+  EXPECT_EQ(addon.expected_sha256, kAddonSha);
+  EXPECT_EQ(addon.max_bytes, 200u);
+  ASSERT_TRUE(addon.network_allowed);
+  ASSERT_TRUE(addon.cancelled);
+
+  azookey::ipc::UpdateFetchResponse response;
+  azookey::host::FillUpdateFetchResponse(end, response);
+  EXPECT_EQ(response.sha256, kSha);
+  EXPECT_EQ(response.addon_sha256, kAddonSha);
+  EXPECT_TRUE(response.addon_error.empty());
+}
+
+TEST(UpdateFetchServiceTest, AnAddonNotInstalledIsNotDownloaded) {
+  Fixture f;
+  f.WriteStatus("update_available", "1.2.3", "1.0.0");
+  f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()});
+  auto service = f.Make();
+  ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+  const auto end = WaitForEnd(*service);
+  ASSERT_EQ(end.state, UpdateFetchSnapshot::State::Ready) << end.error;
+  EXPECT_EQ(f.network.downloads.size(), 1u);
+  EXPECT_EQ(end.total_bytes, 100u);
+  EXPECT_TRUE(end.addon_sha256.empty());
+  EXPECT_TRUE(end.addon_error.empty());
+}
+
+TEST(UpdateFetchServiceTest, AnAddonFailureLeavesTheBaseReadyWithItsCategory) {
+  struct Case {
+    std::vector<std::string> assets;
+    bool download_fails;
+    const char* error;
+  };
+  const std::vector<Case> cases = {
+      // A release the add-on job did not attach to.
+      {{BaseAsset()}, false, "asset_missing"},
+      {{BaseAsset(), AddonAsset("1.2.3", "md5:x")}, false, "digest_missing"},
+      {{BaseAsset(), AddonAsset("1.2.3", {}, 1001)}, false, "too_large"},
+      {{BaseAsset(), AddonAsset()}, true, "download_failed"},
+  };
+  for (const auto& c : cases) {
+    Fixture f;
+    f.addon_installed = true;
+    f.WriteStatus("update_available", "1.2.3", "1.0.0");
+    f.network.release.body = ReleaseWith("v1.2.3", c.assets);
+    if (c.download_fails) f.network.addon_download_result = HttpDownloadResult{};
+    auto service = f.Make();
+    ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+    const auto end = WaitForEnd(*service);
+    ASSERT_EQ(end.state, UpdateFetchSnapshot::State::Ready) << c.error;
+    EXPECT_EQ(end.sha256, kSha) << c.error;
+    EXPECT_TRUE(end.addon_sha256.empty()) << c.error;
+    EXPECT_EQ(end.addon_error, c.error);
+    azookey::ipc::UpdateFetchResponse response;
+    azookey::host::FillUpdateFetchResponse(end, response);
+    EXPECT_EQ(response.state, "ready");
+    EXPECT_EQ(response.addon_error, c.error);
+    EXPECT_TRUE(response.result_error.empty());
+  }
+}
+
+// An exception while the add-on downloads is the add-on's failure: the verified base stays ready.
+TEST(UpdateFetchServiceTest, AnExceptionDuringTheAddonLeavesTheBaseReady) {
+  Fixture f;
+  f.addon_installed = true;
+  f.WriteStatus("update_available", "1.2.3", "1.0.0");
+  f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()});
+  f.network.throw_addon_download = true;
+  auto service = f.Make();
+  ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+  const auto end = WaitForEnd(*service);
+  ASSERT_EQ(end.state, UpdateFetchSnapshot::State::Ready) << end.error;
+  EXPECT_EQ(end.sha256, kSha);
+  EXPECT_TRUE(end.addon_sha256.empty());
+  EXPECT_EQ(end.addon_error, "download_failed");
+}
+
+TEST(UpdateFetchServiceTest, AStopDuringTheAddonStopsTheWholeDownload) {
+  for (const bool by_settings : {false, true}) {
+    Fixture f;
+    f.addon_installed = true;
+    f.WriteStatus("update_available", "1.2.3", "1.0.0");
+    f.network.release.body = ReleaseWith("v1.2.3", {BaseAsset(), AddonAsset()});
+    f.network.hold_addon_download = true;
+    auto service = f.Make();
+    ASSERT_EQ(service->Start("1.2.3"), UpdateFetchStartResult::Started);
+    ASSERT_TRUE(f.network.WaitForDownload(2));
+    if (by_settings) {
+      f.allowed = false;
+    } else {
+      EXPECT_EQ(service->Cancel("1.2.3"), UpdateFetchCancelResult::Cancelling);
+    }
+    const auto end = WaitForEnd(*service);
+    EXPECT_EQ(end.state, UpdateFetchSnapshot::State::Failed);
+    EXPECT_EQ(end.error, by_settings ? "disabled" : "cancelled");
+    azookey::ipc::UpdateFetchResponse response;
+    azookey::host::FillUpdateFetchResponse(end, response);
+    EXPECT_TRUE(response.sha256.empty());
+    EXPECT_TRUE(response.addon_sha256.empty());
+    EXPECT_TRUE(response.addon_error.empty());
+  }
 }
 
 }  // namespace

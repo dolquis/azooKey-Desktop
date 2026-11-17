@@ -28,6 +28,7 @@ canonical_for: ["system 辞書の物理層"]
 | 節 | マイルストーン |
 |---|---|
 | §15 | M53（system 辞書の物理層） |
+| §15.5 の `CONN`・`CMAT`、§15.12 の連接情報の取り込み | M65（`docs/lattice-conversion-spec.md`） |
 
 ## 15. M53 追補: system 辞書の物理層
 
@@ -222,6 +223,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 | `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
 | `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
 | `SIDX` | 任意。表層形索引（`ENTS` の index 列、下記） |
+| `CONN` | 任意。`ENTS` の各エントリが持つ連接の変種（下記） |
+| `CMAT` | 任意。連接行列（下記）。lattice_core だけが持つ |
 
 `TRIE` の 1 ノードは 16 バイト固定の `u32 base` / `u32 check` /
 `u32 key_id` / `u32 depth` とする。root は index 0、`check = 0`、
@@ -292,7 +295,48 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 `SIDX` を持つアーティファクトも読める。`SIDX` を持たないアーティファクトは、
 `ENTS` を全件走査して同じ結果を返す。`dictbuild` は常に `SIDX` を書き出す。
 
-検証は 3 段に分ける。**どの段でも、違反を検出したらクランプや切り詰めで続行せず拒否する。**
+**連接の変種（`CONN`）**。ラティス変換（`docs/lattice-conversion-spec.md`）が使う任意セクションで、
+`ENTS` の各エントリについて、連接 ID と語コストの組（変種）を 0 個以上持つ。同じ（読み, 表層）が
+複数の連接 ID を持つ場合でも、`ENTS` のエントリは 1 つのまま、変種だけを並べる。
+
+| 範囲 | 内容 |
+|---|---|
+| 先頭 | `u32 variant_begin[entry_count + 1]`。エントリ i の変種は `[variant_begin[i], variant_begin[i + 1])` |
+| 続き | 8 バイト境界まで 0 埋め |
+| 続き | 変種のレコード列（8 バイト固定）: `u16 left_id` / `u16 right_id` / `i16 cost` / `u16 attr` |
+
+`left_id` と `right_id` は連接行列の元の ID であり、`CMAT` の詰めた添字ではない。`attr` は次の 3 つを詰めた値である。
+
+| bit | 内容 |
+|---|---|
+| 0〜13 | 品詞の添字。`META.conn_pos_table`（文字列の配列。最大 16384 要素）の index。各文字列は、上流の品詞 1〜4・活用型・活用形の 6 列を `*` も省かずにこの順で `,` で連結したもの（例: `動詞,一般,*,*,五段-カ行,連用形-一般`）。活用型の値自体が `-` を含むので、区切りに `-` は使わない |
+| 14 | 表層が次の文字だけからなる: U+30A1〜U+30FA（`ヴ`・`ヵ`・`ヶ` を含むカタカナ）、U+30FB（`・`）、U+30FC（`ー`）、U+30FD〜U+30FE（`ヽ`・`ヾ`） |
+| 15 | 表層が上流の正規化形（§15.12 の列 13）と異なる |
+
+ラティス変換は bit 14 と bit 15 からカタカナ表記の罰金の種類を決める（`docs/lattice-conversion-spec.md` §5.2）。1 エントリ内の
+変種は `(cost, left_id, right_id, attr)` の昇順に並べる（決定的）。変種の `cost` は上流の語コストをそのまま持ち、
+`ENTS.cost`（同じ（読み, 表層）の最小値）とは別に保つ。`CONN` を持つアーティファクトは、`META` に
+`conn_pos_table` と `connection_space`（ID 空間の識別子。値の形式は `docs/lattice-conversion-spec.md` §8.4 が定める）を持つ。
+
+**連接行列（`CMAT`）**。lattice_core（`docs/lattice-conversion-spec.md` §8.2）だけが持つ任意セクションである。
+
+| 範囲 | 内容 |
+|---|---|
+| 先頭 24 バイト | `u32 raw_left_size` / `u32 raw_right_size` / `u32 left_count` / `u32 right_count` / `u32 reserved[2]` |
+| 続き | `u16 left_index[raw_left_size]`。元の左 ID から詰めた添字へ。使わない ID は `0xffff` |
+| 続き | `u16 right_index[raw_right_size]`。元の右 ID から詰めた添字へ。使わない ID は `0xffff` |
+| 続き | 8 バイト境界まで 0 埋め |
+| 続き | `i16 cost[right_count × left_count]`。前の語の右 ID の添字 r と次の語の左 ID の添字 l について `cost[r × left_count + l]` |
+
+`left_count` と `right_count` は `0xffff` 未満とする。ID 0（文頭・文末）は必ず添字を持つ。詰める対象は、同梱する
+どれかの層の `CONN` と lattice_core の `CONN` が使う ID、および `docs/lattice-conversion-spec.md` §8.3 の代表 ID である。
+
+`CONN` と `CMAT` も `format_version` を上げずに足せる。v1 のリーダーは未知の `type` を無視するので、
+`CONN` を持つ層をラティス変換を知らないリーダーが読んでも、完全一致・前方一致・予測の結果は変わらない。
+`CONN` を持たない層は、ラティス変換が品詞から既定の ID を与えて使う。
+
+検証は (1)〜(3) の 3 段に分け、連接情報（`CONN`・`CMAT`）だけは (4) で扱う。**どの段でも、違反を検出したら
+クランプや切り詰めで続行しない。**(1)〜(3) は拒否し、(4) は連接情報だけを使わない。
 範囲外のオフセットを有効範囲へ丸めると、別のエントリや別の文字列を正しい値として読んで
 しまい、破損を検出せずに誤った候補を出すことになる。
 
@@ -311,6 +355,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
   `KEYS.size == key_count × 8`、`EIDX.size % 8 == 0`、`ENTS.size == entry_count × 32`。
   `SIDX` は存在する場合だけ `SIDX.size == entry_count × 4` を課す。
 - `TRIE` の `size` が double-array の要素長の倍数である。
+
+`CONN` と `CMAT` は (1)〜(3) の拒否の対象にしない。下の (4) で扱う。
 
 **(2) 参照検証（逆参照の時点、O(1)）**。内部参照は全件走査せず、実際に読む瞬間に検査する。
 違反を 1 件でも検出した層は、その場で無効化して以後は空を返す。検査項目は次のとおり。
@@ -336,7 +382,32 @@ C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は
 実行するのは pack の DL 直後、`dictbuild --verify`、および設定
 `dictionary.verifyOnLoad` が真のときとする。
 
-いずれの段でも、検出した層**のみを無効化**し、他層はそのまま動作を続ける。無効化は
+(3) は `CONN`・`CMAT` の中身を検査しない（`content_hash` による全バイトの照合は従来どおり行う）。pack の DL 直後と
+`dictionary.verifyOnLoad` の検証も同じで、既存の拒否の条件は変わらず、`CONN` の違反は (3) の後に行う (4) で、
+その層の `CONN` だけを使わない扱いになる。ビルド時の検査である `dictbuild --verify` だけは、(3) に加えて
+`CONN` の各エントリの変種が `(cost, left_id, right_id, attr)` の昇順であることと、`attr` の bit 14 が表層と
+一致することも検査し、違反を失敗にする。
+
+**(4) 連接情報の検査（ラティス変換が lattice_core と各層を読み込むときに 1 回、O(変種数)）**。結果は層を
+読み込み直すまで変えない。問い合わせの途中で検査して状態を変えることはしない。同じ入力に同じ候補を返すため
+である（`docs/lattice-conversion-spec.md` §6.3、`docs/conversion-quality-benchmark-spec.md` §14.2）。
+
+- lattice_core の `CMAT`: 先頭 24 バイトの `reserved` が 0 で、`raw_left_size` と `raw_right_size` が 65536 以下、
+  `left_count` と `right_count` が 1 以上 `0xffff` 未満であることを先に確かめ、そのうえで `size` が先頭・2 つの添字表・
+  0 埋め・`right_count × left_count × 2` の和に一致すること（上限を先に確かめるので、積は 64 bit で溢れない）。
+  添字表の値がすべて `0xffff`（使わない ID）か、`left_count` / `right_count` 未満であること。どれかに違反したら
+  lattice_core を無効にし、ラティス変換を行わない。
+- 各層の `CONN`（lattice_core 自身の `CONN` を含む）: `variant_begin` の表がセクションに収まり、`variant_begin[0] == 0`、
+  広義の単調増加で、`size` が表と 0 埋めと `variant_begin[entry_count] × 8` の和に一致すること。すべての変種について、
+  `attr` の品詞の添字（bit 0〜13）が `META.conn_pos_table` の要素数未満であり、`left_id` / `right_id` が `CMAT` の
+  `raw_left_size` / `raw_right_size` 未満で添字表の値が `0xffff` でないこと。`META.connection_space` が lattice_core と
+  一致すること。どれかに違反した層は、その層の `CONN` だけを使わず、ラティス変換はその層の語に既定の ID を与える
+  （`docs/lattice-conversion-spec.md` §3.6・§8.3）。層の完全一致・前方一致・予測は続ける。lattice_core 自身の
+  `CONN` が違反したら、lattice_core を無効にする。
+
+この走査はラティス変換の読み込みに含め、層のロード（§15.9 の 20 ms）には含めない。
+
+(1)〜(3) のいずれの段でも、検出した層**のみを無効化**し、他層はそのまま動作を続ける。無効化は
 §14.8 の missing-pack と同じ扱い（layer が空として振る舞う）とし、検出した検証条件を
 ログに残す。
 
@@ -546,7 +617,7 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 |---|---|
 | `surface` | 表層形の列（`\uXXXX` エスケープを戻す） |
 | `reading` | 読みの列をカタカナからひらがなへ変換したもの |
-| `pos` | 品詞 1〜4 の `*` 以外を `-` で連結したもの（例: `名詞-固有名詞-人名-姓`）。活用型・活用形は持たない |
+| `pos` | 品詞 1〜4 の `*` 以外を `-` で連結したもの（例: `名詞-固有名詞-人名-姓`）。活用型・活用形は持たない（連接の中間 TSV が持つ。下記） |
 | `cost` | 上流 `cost` をそのまま（`frequency` は空欄とし、§15.6 の写像に従う） |
 | `category` | 品詞が `固有名詞-人名` なら `person_name`、`固有名詞-地名` なら `place_name`、それ以外は `general` |
 
@@ -573,6 +644,34 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 `cost` 10000 超は希少な活用形と長い固有名詞が大半を占めるためである。品詞による足切りは
 しない。20260723 版ではこの規則で 623,065 エントリ、388,011 キー、約 70 MB の
 アーティファクトになる。
+
+**連接情報の取り込み**（M65。`docs/lattice-conversion-spec.md` §8）。抽出器は、語彙の中間 TSV とは別に、
+連接の中間 TSV を書く。列は `reading` / `surface` / `left_id`（列 2）/ `right_id`（列 3）/ `cost` /
+`pos`（上表と同じ）/ `conjugation`（活用型と活用形の `*` 以外を `-` で連結したもの。持たない語は空欄）/
+`normalized_form`（列 13 の正規化形。`\uXXXX` エスケープを戻す）とする。
+取り込む行と足切りは語彙と同じ規則による。ただし、表層形が読みと同じひらがなのエントリは、語彙には入れず、
+連接の中間 TSV には書く。
+
+- `sudachi_lexicon` は、`ENTS` の各エントリについて、同じ（正規化キー, 表層）を持つ行の
+  （`left_id`, `right_id`, `cost`, 品詞と活用、表記の印）をすべて `CONN`（§15.5）に残す。表記の印は、表層が
+  §15.5 の文字集合だけからなるか（`attr` の bit 14）と、表層が `normalized_form` と異なるか（bit 15）である。`ENTS` の
+  内容は変えない。
+- lattice_core（`lattice_core.azdic`）は、表層形が読みと同じひらがなのエントリの `ENTS` と `CONN`、連接行列の `CMAT`、
+  `META.lattice`（`docs/lattice-conversion-spec.md` §8.2）を持つ。ヘッダの `layer_id` と `ENTS.source` は
+  語の出どころの `sudachi_lexicon` とする。`build_bundled.py` は `sudachi_lexicon` に続けて lattice_core を生成し、
+  下の「同梱ビルドと再現性」の層集合、`bundle-provenance.json`、`check_bundle.py --compare` の比較対象に含める。
+- 連接行列は、SudachiDict の raw 配布の直下にある `matrix.def.zip` から作る。この 1 本は版ごとの
+  ディレクトリに置かれていないので、`build_bundled.py` に URL と SHA256 を固定し、ハッシュが一致しない取得は
+  ビルドエラーとする。`--cache` と `--offline` の扱いは語彙のアーカイブと同じとする。
+- 上流 `LEGAL` は `matrix.def.zip` を UniDic の一部と明記しているので、`notice_ids`（`sudachidict-legal`）は
+  変えない。`dictbuild/sources/sudachi_lexicon.metadata.json` の `transform` と `upstream_revision` に
+  `matrix.def.zip` とその SHA256 を記し、`THIRD_PARTY_LICENSES` の SudachiDict 節に、派生物として
+  lattice_core と `CONN` を足す。
+- `CONN` を持つ層と lattice_core は、`META.connection_space` に `matrix.def.zip` の SHA256 から作る識別子を書く
+  （形式は `docs/lattice-conversion-spec.md` §8.4）。
+
+20260723 版の語彙と上の規則では、使う連接 ID は左 3,332 種・右 3,336 種で、詰めた `CMAT` の行列は約 22 MB になる。
+足切りを外すと ID は約 5,800 種になり、行列は約 67 MB になる。
 
 **同梱ビルドと再現性**。`build_bundled.py` は SudachiDict に続けて、プロジェクト自作の
 `dictbuild/sources/technical_terms_lexicon.lex.tsv` を同じビルダで生成する。技術用語seedの

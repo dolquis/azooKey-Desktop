@@ -1460,6 +1460,9 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 
 - 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
   下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
+- 候補モードの描く行数は、anchor 点の下の空きと、上の空き（キャレットの高さの代わりの間隔を除く）の広い方に収め、
+  反転した窓を作業領域の上端へ寄せない。重なりうる場合（行の高さがその間隔を超えるとき、composition が複数行のとき、
+  1 行まで減らしても収まらないとき）は `docs/native-ui-spec.md` §4.1 が定める。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
@@ -1496,7 +1499,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | カスタムローマ字 TSV | `core/tests/custom_romaji_test.cpp` | パース、重複、コメント、不正行 |
 | LearningStore::Forget | `learning/tests/learning_store_v2_test.cpp` | Forget 後の Score=0、保存で行が除かれること、再観測が初回扱いになること |
 | Unicode 入力 | `core/tests/input_state_test.cpp` | 範囲チェック、桁数上限、`30A1` の確定 |
-| 候補ウィンドウのレイアウト、DPI 換算、配置 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算、作業領域内への配置と上への反転、負座標のモニタ（§9.2） |
+| 候補ウィンドウのレイアウト、DPI 換算、配置 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算、作業領域内への配置と上への反転、上下の空きの広い方に収める行数で composition に重ならないこと、負座標のモニタ（§9.2） |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3）、モニタ作業領域の解決と仮想スクリーンへの fallback（§9.2） |
 | 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/candidate_window_dpi_test.cpp`（`CandidateWindowPredictionTest`） | Windows 限定。予測モードで anchor の左下の下への配置と、下が溢れるときの上への反転、両モードが同じ anchor 点でモニタを選ぶこと、`WM_DPICHANGED` での測り直し |
 

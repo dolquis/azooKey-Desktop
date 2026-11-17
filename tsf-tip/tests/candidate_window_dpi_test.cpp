@@ -811,6 +811,85 @@ TEST(CandidateWindowPredictionTest, RenderFailureKeepsPredictionsHiddenAndUnclic
   window.Destroy();
 }
 
+// native-ui-spec §4.1: the window keeps the mouse from the press to the release,
+// so a click that hides it never hands the release to the application below.
+TEST(CandidateWindowClickTest, PressCapturesTheMouseUntilTheReleaseEvenAfterTheWindowHides) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  ReleaseCapture();
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  const HWND hwnd = window.hwnd_for_test();
+  int prediction_clicks = 0;
+  int candidate_clicks = 0;
+  // The TIP hides the window from inside the click, as accepting or committing does.
+  window.SetOnPredictionClick([&](int) {
+    ++prediction_clicks;
+    window.Hide();
+  });
+  window.SetOnClick([&](int) {
+    ++candidate_clicks;
+    window.Hide();
+  });
+
+  window.ShowPredictions(kAnchor, {L"一", L"二"});
+  ASSERT_TRUE(window.IsShowingPredictions()) << window.failure_stage();
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(prediction_clicks, 1);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(GetCapture(), hwnd);
+  // The release ends the capture and accepts nothing more.
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(prediction_clicks, 1);
+
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(candidate_clicks, 1);
+  EXPECT_FALSE(window.IsVisible());
+  EXPECT_EQ(GetCapture(), hwnd);
+  // A release outside the window, after a drag, still comes back and ends it.
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(-50, 500));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(candidate_clicks, 1);
+
+  // The details popup closes on the press and leaves the release to the window.
+  window.SetOnClick([&](int) { ++candidate_clicks; });
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  // The banner buttons follow the same rule.
+  int retries = 0;
+  window.SetOnRetry([&] { ++retries; });
+  RECT client{};
+  ASSERT_TRUE(GetClientRect(hwnd, &client));
+  const RECT retry = window.health_retry_button_for_test(client.right);
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM((retry.left + retry.right) / 2, (retry.top + retry.bottom) / 2));
+  EXPECT_EQ(retries, 1);
+  EXPECT_EQ(GetCapture(), hwnd);
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
+  ASSERT_TRUE(window.ShowDetailsForTest()) << window.failure_stage();
+  SendMessageW(window.details_hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_FALSE(window.details_visible_for_test());
+  EXPECT_EQ(GetCapture(), hwnd);
+  SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+  EXPECT_EQ(GetCapture(), nullptr);
+  EXPECT_EQ(candidate_clicks, 1);
+
+  // A press against a frame that was not drawn takes nothing, not even the mouse.
+  window.HideHealthBanner();
+  CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::Draw);
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  ASSERT_FALSE(window.IsVisible());
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(candidate_clicks, 1);
+  EXPECT_EQ(GetCapture(), nullptr);
+  window.Destroy();
+}
+
 TEST(CandidateWindowPredictionTest, BothModesPickTheMonitorAtTheAnchorsBottomLeft) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());
@@ -967,6 +1046,53 @@ TEST(CandidateWindowScrollTest, VisibleRowsFitTheWorkAreaWithAPositionRow) {
   EXPECT_EQ(CandidateWindow::ComputeVisibleRows(0, 24, 0, 240), 0);
 }
 
+TEST(CandidateWindowScrollTest, FitHeightIsTheLargerRoomBelowOrAboveTheCaret) {
+  // Near the top: the room below the anchor.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 200}, {0, 0, 1920, 1040}, 20), 840);
+  // Near the bottom: the room above the caret, the gap over the anchor left out.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 1000}, {0, 0, 1920, 1040}, 20), 980);
+  // A monitor at negative coordinates measures from its own work area.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({-100, 300}, {-1280, 40, 0, 1024}, 20), 724);
+  // An anchor outside the work area never asks for more than the work area.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 1100}, {0, 0, 1920, 1040}, 20), 1040);
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, -60}, {0, 0, 1920, 1040}, 20), 1040);
+  // No room on either side still leaves the fewest rows; no work area, nothing to fit.
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({10, 30}, {0, 0, 100, 30}, 40), 1);
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({100, 200}, {}, 20), 0);
+}
+
+// DEV-2086: a window taller than the room on either side of the caret was moved
+// up against the top of the work area after the flip, over the composition.
+TEST(CandidateWindowScrollTest, RowsThatFitTheLargerSideKeepTheWindowOffTheComposition) {
+  // 32 candidates at 192 DPI, the caret's line about two thirds down a 2064 px work area.
+  constexpr int kRow = 48;
+  constexpr int kGap = 40;
+  const RECT work{0, 0, 2560, 2064};
+  const POINT anchor{1480, 1426};
+  const int fit = CandidateWindow::ComputeFitHeight(anchor, work, kGap);
+  EXPECT_EQ(fit, anchor.y - kGap);
+  const int rows = CandidateWindow::ComputeVisibleRows(32, kRow, 0, fit);
+  EXPECT_LT(rows, 32);
+  const int height = (rows + 1) * kRow;  // The rows and the position row.
+  const RECT placed = CandidateWindow::ComputePlacement(anchor, work, 160, height, kGap);
+  EXPECT_EQ(placed.bottom - placed.top, height);
+  EXPECT_GE(placed.top, work.top);
+  EXPECT_LE(placed.bottom, anchor.y - kGap);
+
+  // The one exception: even one row with the elements below it fits neither side,
+  // so the window is kept inside the work area over the composition.
+  const RECT short_work{0, 0, 2560, 300};
+  const POINT middle{100, 150};
+  const int short_fit = CandidateWindow::ComputeFitHeight(middle, short_work, 20);
+  EXPECT_EQ(short_fit, 150);
+  constexpr int kBelowRows = 24 * 10;  // Notice, toast and banner.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, kBelowRows, short_fit), 1);
+  const RECT overlapping =
+      CandidateWindow::ComputePlacement(middle, short_work, 160, 2 * 24 + kBelowRows, 20);
+  EXPECT_EQ(overlapping.top, short_work.top);
+  EXPECT_GT(overlapping.bottom, middle.y - 20);
+}
+
 TEST(CandidateWindowScrollTest, FirstVisibleRowFollowsTheSelectionAndTheWrap) {
   constexpr int kCount = 12;
   constexpr int kRows = 4;
@@ -1023,13 +1149,14 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
     window.Show(POINT{work.left + 20, work.top + 20}, items, 0);
     ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
 
+    // The room below the anchor is the larger; the rows fit it with the position row.
     const int visible = window.GetVisibleRowCount();
-    EXPECT_EQ(visible, (work_height - row) / row);
+    EXPECT_EQ(visible, (work_height - 20 - row) / row);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
-    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.top, work.top + 20);
     EXPECT_LE(bounds.bottom, work.bottom);
     EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
 
@@ -1063,6 +1190,52 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
     // Back to the first candidate: the first range again.
     window.SetSelected(0);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    window.Destroy();
+  }
+}
+
+TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCoveringIt) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  RECT work{};
+  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
+  const int work_height = work.bottom - work.top;
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    const int gap = MulDiv(20, static_cast<int>(dpi), 96);
+    // Two thirds down: more room above than below, and less than the work area.
+    const POINT anchor{work.left + 20, work.top + work_height * 2 / 3};
+    const int above = anchor.y - gap - work.top;
+    // More candidates than the work area holds, so the window must scroll.
+    const int count = work_height / row + 10;
+    std::vector<CandidateViewItem> items;
+    for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    window.Show(anchor, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+
+    const int visible = window.GetVisibleRowCount();
+    EXPECT_EQ(visible, (above - row) / row);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
+    // Flipped above the caret, inside the work area, and clear of the composition.
+    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.bottom, anchor.y - gap);
+
+    // A notice row below the rows takes its height from the same room.
+    window.Show(anchor, items, 0, L"案内");
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    const int with_notice = window.GetVisibleRowCount();
+    EXPECT_EQ(with_notice, (above - 2 * row) / row);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom - bounds.top, (with_notice + 2) * row);
+    EXPECT_GE(bounds.top, work.top);
+    EXPECT_EQ(bounds.bottom, anchor.y - gap);
     window.Destroy();
   }
 }

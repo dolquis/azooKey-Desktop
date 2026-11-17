@@ -1995,7 +1995,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 注記は候補モードの候補窓にだけ出て、予測モード、UI-less、`ITfCandidateListUIElement` の文字列、確定文字列、
     学習観測に入らない
   - データの読み込みに失敗しても、注記だけが止まり、候補生成は続く
-  - 注記データの各行が出典と BSD-2-Clause の表記を継承し、`THIRD_PARTY_LICENSES` と配布物の帰属文書に該当の節がある
+  - 注記データのヘッダが出典と BSD-2-Clause の表記を継承し、`THIRD_PARTY_LICENSES`（MSI では `THIRD_PARTY_LICENSES.txt`）に
+    該当の節がある
   - porter の検証、core の突き合わせ、Host の合流の試験がある
 - **参照**: `docs/homophone-notes-spec.md`、`docs/candidate-rewriter-spec.md` §8.2・§10.1・§10.4、
   `docs/native-ui-spec.md` §4.1、`docs/licensing-policy.md`

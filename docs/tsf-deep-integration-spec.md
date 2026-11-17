@@ -1290,22 +1290,24 @@ M23 の文節ごとの属性とマウスクリックによる注目文節の移�
 採否は、実機の Excel（デスクトップ版）での次の観測で決める（M72 の最初の受け入れ条件。`gate:human-required`）。
 
 1. 次の 3 つの IME で、別々のセルへ「やまふじ」と「さんとう」を打ち、どちらも「山藤」に変換して確定する。
-   - Microsoft IME。
-   - `GUID_PROP_READING` を付ける TSF の IME（Google 日本語入力または Mozc）。
+   - Microsoft IME。比較のための参考であり、判定には使わない。
+   - `GUID_PROP_READING` を付ける TSF の IME。設定することをソースで確かめられる Mozc を使う（§5.8.2）。
    - `GUID_PROP_READING` を付けない azooKey。
 2. 各セルの `PHONETIC` の結果を記録する。
 
 読みの違う 2 つのセルを比べるのは、Excel が文字列から読みを求めた結果と、入力したときの読みを見分けるためである。
 TSF の IME はアプリと TSF マネージャーを通してだけやり取りする（§5.8.1）。そのため、2 つ目の IME で、打った読みの
 とおりのふりがなが付き、azooKey で付かなければ、ふりがなは TSF を通って届いている。この場合は採用し、§5.8.4 を
-実装する。2 つ目の IME でも打った読みのふりがなが付かなければ採らない。その結果と理由を本節に記録し、M72 は
-実装しない。
+実装する。次のときは採らない。その結果と理由を本節に記録し、M72 は実装しない。
+
+- 2 つ目の IME でも、打った読みのふりがなが付かない。
+- azooKey でも、打った読みのふりがなが付く（読みは TSF のプロパティによらずに届いている）。
 
 #### 5.8.4 採用するときの設計
 
 - **時機**: 確定の edit session の中で、確定した文字列の範囲が composition の中にある間に設定する。読み全体の確定では
-  `EndComposition` の前、部分確定では `ITfComposition::ShiftStart` の前（`docs/segment-editing-spec.md` §6.2 の 2 と同じ
-  所）に置く。composition の間（preedit の更新）には付けない。§5.8.3 の観測で、composition の間に付けないと渡らないと
+  `EndComposition` の前、部分確定では `docs/segment-editing-spec.md` §6.2 の 2（属性の消去）の後、3（`ShiftStart`）の前に
+  置く。composition の間（preedit の更新）には付けない。§5.8.3 の観測で、composition の間に付けないと渡らないと
   分かったときは、この規則を見直す。
 - **型**: `VT_BSTR`。表記は §5.8.3 の 2 つ目の IME と同じにする。Mozc と同じ半角カタカナを第一案とし、M72 の実機確認で
   確かめる。

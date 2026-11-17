@@ -1066,6 +1066,19 @@ TEST(CandidateWindowScrollTest, RowsThatFitTheLargerSideKeepTheWindowOffTheCompo
   EXPECT_EQ(placed.bottom - placed.top, height);
   EXPECT_GE(placed.top, work.top);
   EXPECT_LE(placed.bottom, anchor.y - kGap);
+
+  // The one exception: even one row with the elements below it fits neither side,
+  // so the window is kept inside the work area over the composition.
+  const RECT short_work{0, 0, 2560, 300};
+  const POINT middle{100, 150};
+  const int short_fit = CandidateWindow::ComputeFitHeight(middle, short_work, 20);
+  EXPECT_EQ(short_fit, 150);
+  constexpr int kBelowRows = 24 * 10;  // Notice, toast and banner.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, kBelowRows, short_fit), 1);
+  const RECT overlapping =
+      CandidateWindow::ComputePlacement(middle, short_work, 160, 2 * 24 + kBelowRows, 20);
+  EXPECT_EQ(overlapping.top, short_work.top);
+  EXPECT_GT(overlapping.bottom, middle.y - 20);
 }
 
 TEST(CandidateWindowScrollTest, FirstVisibleRowFollowsTheSelectionAndTheWrap) {

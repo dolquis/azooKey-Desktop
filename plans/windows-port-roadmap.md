@@ -481,7 +481,7 @@ Phase 6 完了 ─→ M33
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
 M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix → アプリ別プロファイル）
-M46 / M48 / M21 / M22 / M61 ─→ M67  （入力 scope の判定 + プロファイル + 英数モード + カッコ補完 → 入力欄の種類による切替）
+M46 / M48 / M21 / M22 / M59 / M61 ─→ M67  （入力 scope の判定 + プロファイル + 英数モード + 自動句読点 + カッコ補完 → 入力欄の種類による切替）
 M6 / M13 / M14 ─→ M58-A ─→ M58-B（M20 も前提）
                        └─→ M58-C（M16 / M24 / M46 も前提）
 M13 / M14 ─→ M59
@@ -1811,14 +1811,16 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 
 - **目的**: 入力欄ごとに英数モードへ手で切り替える手間を省く。アプリ単位の切替（M48）を、入力欄単位へ細かくする。
 - **前提**: M46（入力 scope の読み取りと secure 判定。本 M はその判定を変えない）、M48（共通 resolver とプロファイルの継承）、
-  M21・M22（英数モードと入力インジケーター）、M61（カッコ補完）。自動句読点の抑制は M59 の要求の `auto_punctuation` を使う。
+  M21・M22（英数モードと入力インジケーター）、M59（自動句読点。抑制は要求の `auto_punctuation` と TIP の待ちで行う）、
+  M61（カッコ補完）。
 - **変更対象**: `tsf-tip/src/AiInputGuard.cpp`（同じ読み取りから欄の種類を得る）、`tsf-tip/src/TextService.cpp`（入口のモードと
   戻し、カッコ補完と `auto_punctuation` の抑制、ログ）、`core/src/AppProfileResolver.cpp`（プロファイルの `inputScopeSwitching`）、
   TIP の設定スナップショット、`settings/`（schema と sample。`inputScopeSwitching` は既定 ON）、`settings-app/`（全体の項目と
   アプリ別の編集ダイアログ）と各層の focused test。
 - **受け入れ条件**:
   - URL・メール・数値・電話・`IS_ALPHANUMERIC_HALFWIDTH` の欄に入ると英数モードになり、離れると入る前のモードに戻る。
-    その欄で利用者が切り替えたモードは、その欄にいる間保たれる
+    新しい document の初回フォーカスで TIP が IME を On にした後（1 秒以内の戻しを含む）も英数モードで始まる。その欄で利用者が
+    切り替えたモードは、その欄にいる間保たれる。同じ document manager のまま scope が変わるアプリでも欄の移動として扱われる
   - その欄では入力モードによらずカッコ補完が働かず、プロファイルの `bracketPairing: "on"` でも働かない。その欄と検索欄では
     自動句読点の要求の `auto_punctuation` が `false` になる。検索欄の入口のモードは変わらない
   - composition があるとき、持ち越した入力があるとき、IME が Off のときは切り替えない
@@ -1830,7 +1832,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **参照**: `docs/app-profile-spec.md` §13、`docs/privacy-and-secure-input-spec.md` §4.3、
   `docs/tsf-deep-integration-spec.md` §4.2・§4.3・§4.5
 - **補足**:
-  - **既定**: `inputScopeSwitching` は既定 ON とする（根拠は spec §13.1・§13.6）。追加機能を既定 OFF にする方針の例外である。
+  - **既定**: `inputScopeSwitching` は既定 ON とする（根拠は spec §13.1・§13.6）。M59・M61・M62 の追加機能は既定 OFF だが、
+    本 M は既定 ON である。
   - **リスク**:
     - **アプリの誤報告**: 本文を打つ欄に URL などの scope を付けるアプリでは、日本語入力が英数モードから始まる。アプリ別の
       `inputScopeSwitching: false` で外せる。主要なアプリを実機で確かめる。

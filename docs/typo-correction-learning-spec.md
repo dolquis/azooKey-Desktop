@@ -818,7 +818,7 @@ optional フィールドを追加する（エンベロープ schema 自体は変
 
 | フィールド | 型 | 意味 | 欠落時・不正時 |
 |---|---|---|---|
-| `raw_keys` | string | 打鍵したキーの列（ローマ字入力は小文字の英字、かな入力はひらがな） | 空。補正の手がかりを持たない（v1 動作） |
+| `raw_keys` | string | 打鍵したキーの列（ローマ字入力は小文字の英字）。TIP が送るのはローマ字入力の打鍵だけ。ひらがなは Host が受け取れる値で、かな入力の打鍵は送らない | 空。補正の手がかりを持たない（v1 動作） |
 | `typo_correction_mode` | string（`off` / `suggest` / `rank` / `aggressive`） | 要求が求める補正モード（§12.6） | 空。Host 設定の実効値（§12.14）に従う（v1 動作） |
 
 両フィールドは optional で、空なら wire に出さない。`MessageType` は既存 `QueryCandidates` のまま

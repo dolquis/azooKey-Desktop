@@ -1987,7 +1987,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **前提**: M62-D（`CandidateField.description` と注記付きの候補窓）、M68（候補窓の幅を全ページの候補で測る規則）。
 - **変更対象**: 注記データの porter スクリプトと、そこから作る TSV、`core/`（注記の突き合わせ）、
   `inference-host/`（データの読み込みと応答への合流）、`settings/mvp-settings.schema.json`（`homophoneNotes`）、
-  `THIRD_PARTY_LICENSES` と配布物の帰属文書。
+  `THIRD_PARTY_LICENSES`、TSV を配る経路（`inference-host/CMakeLists.txt` の `data` への写し、`pkg/msi/Package.wxs`、
+  `scripts/make-vm-verify-package.ps1` とその試験）。
 - **受け入れ条件**:
   - `homophoneNotes == false`（既定）のとき、Host が注記データを読まず、候補の `description` が導入前と一致する
   - `homophoneNotes == true` のとき、同じ読みでデータにある表層が候補列に 2 つ以上あると、その候補に注記が付く。
@@ -1995,6 +1996,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 注記は候補モードの候補窓にだけ出て、予測モード、UI-less、`ITfCandidateListUIElement` の文字列、確定文字列、
     学習観測に入らない
   - データの読み込みに失敗しても、注記だけが止まり、候補生成は続く
+  - ビルドの出力先の `data`、MSI、VM 検証パッケージに TSV が入る
   - 注記データのヘッダが出典と BSD-2-Clause の表記を継承し、`THIRD_PARTY_LICENSES`（MSI では `THIRD_PARTY_LICENSES.txt`）に
     該当の節がある
   - porter の検証、core の突き合わせ、Host の合流の試験がある

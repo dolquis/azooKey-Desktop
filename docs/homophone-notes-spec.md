@@ -82,6 +82,9 @@ BSD-2-Clause は `docs/licensing-policy.md` の同梱できるライセンスに
 
 注記データは `inference-host` が読む 1 本の TSV であり、絵文字データ（`docs/candidate-rewriter-spec.md` §7.1）と同じく、
 Host の実行ファイルと同じ配布単位の `data` ディレクトリに読み取り専用の資産として置く。ファイル名は実装で決める。
+配る経路も絵文字データと同じく、ファイルを個別に挙げる 3 か所に足す。ビルドで Host の出力先の `data` へ写す
+`inference-host/CMakeLists.txt`、MSI の `pkg/msi/Package.wxs`（`RewriterDataDir`）、VM 検証パッケージの
+`scripts/make-vm-verify-package.ps1`（同梱する `data` のファイルの一覧と、その一覧を照合する試験）である。
 利用者が書き換える経路とホットリロードは持たない。TIP はこのファイルを読まない。
 
 ### 3.2 列定義
@@ -126,6 +129,7 @@ Host は、1 つの候補列（`QueryCandidates` の応答の候補列と、`Que
 2. 同じ候補列に、同じ `reading` でデータにある候補が、その候補を含めて 2 つ以上ある。
 3. 候補の `description` が空である。rewriter（`docs/candidate-rewriter-spec.md`）が付けた注記は上書きしない。
 
+2 の数は、Host が応答に入れる候補列で数える。TIP ローカルの候補（TIP が候補窓に足す rewriter の候補）は数えない。
 2 の条件は、読みの同じ候補が 1 つしか並ばないときに注記を出さないためである。選び分ける相手の無い注記は、候補窓を
 広げるだけになる。
 

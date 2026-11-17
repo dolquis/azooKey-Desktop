@@ -887,6 +887,58 @@ TEST(SettingsDocumentTest, ThePaneTypoModeFollowsTypoCorrectionAndAChangeWritesB
   EXPECT_EQ(typo->GetBool("enabled"), false);
 }
 
+// DEV-2064, section 12.14: the "辞書" pane edits typoCorrection.learnPersonalPatterns in place.
+// The other typoCorrection keys (a v2 mode, enabled false, maxReadingHypotheses, the confidences)
+// stay as they are on disk, and a key absent on disk is not written at its default.
+TEST(SettingsDocumentTest, ThePaneEditsLearnPersonalPatternsInPlaceAndKeepsTheOtherV2TypoKeys) {
+  ScopedTempDirectory temp("azookey_settings_typo_correction_pane_keys");
+  const auto path = temp.path() / "settings.json";
+  const auto save_edit = [&](const char* json, azookey::settings::SettingValues changes) {
+    WriteText(path, json);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    auto edited = loaded.settings;
+    for (auto& [key, value] : changes) edited.values[key] = std::move(value);
+    // As the window saves: only the generic values the user changed.
+    edited.values = azookey::settings::ChangedSettingValues(edited.values, loaded.settings.values);
+    const auto saved = azookey::settings::SaveSettingsDocument(path, edited);
+    EXPECT_TRUE(saved.ok) << saved.error.value_or("");
+    return azookey::ipc::json::Parse(ReadText(path));
+  };
+
+  WriteText(path, R"({"typoCorrection":{"learnPersonalPatterns":false}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_EQ(loaded.settings.values.at("typoCorrection.learnPersonalPatterns"),
+            azookey::settings::SettingValue(false));
+
+  auto parsed = save_edit(
+      R"({"typoCorrection":{"enabled":false,"mode":"rank","learnPersonalPatterns":false,
+          "maxReadingHypotheses":5,"minConfidenceForRanking":0.6,"minConfidenceForTopCandidate":0.8}})",
+      {{"typoCorrection.learnPersonalPatterns", true}});
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  EXPECT_EQ(typo->GetBool("learnPersonalPatterns"), true);
+  EXPECT_EQ(typo->GetBool("enabled"), false);
+  EXPECT_EQ(typo->GetString("mode"), "rank");
+  EXPECT_EQ(typo->GetInt("maxReadingHypotheses"), 5);
+  EXPECT_EQ(typo->GetNumber("minConfidenceForRanking"), 0.6);
+  EXPECT_EQ(typo->GetNumber("minConfidenceForTopCandidate"), 0.8);
+  EXPECT_EQ(typo->AsObject().size(), 6u);
+  // Not a mode change, so the root key stays absent.
+  EXPECT_FALSE(parsed->Find("typoCorrectionMode"));
+
+  // Absent on disk: a value different from the default is written, one at the default is not.
+  parsed = save_edit("{}", {{"typoCorrection.learnPersonalPatterns", false}});
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  typo = parsed->Find("typoCorrection");
+  ASSERT_TRUE(typo && typo->IsObject());
+  EXPECT_EQ(typo->AsObject().size(), 1u);
+  EXPECT_EQ(typo->GetBool("learnPersonalPatterns"), false);
+  parsed = save_edit("{}", {{"typoCorrection.learnPersonalPatterns", true}});
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_FALSE(parsed->Find("typoCorrection"));
+}
+
 TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {
   ScopedTempDirectory temp("azookey_settings_dictionary_preserve");
   const auto path = temp.path() / "settings.json";

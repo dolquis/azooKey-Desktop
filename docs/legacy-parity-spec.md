@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66]
+milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66, M68, M69]
 canonical_for: ["Phase 5（M13〜M19）のレガシー parity"]
 ---
 
@@ -20,7 +20,7 @@ Windows 版としての仕様判断は本書が正典であり、`legacy/` は�
 
 | 節 | マイルストーン |
 |---|---|
-| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66 |
+| §1 | M13。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown とページ内の数字）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69 |
 | §2 | M14 |
 | §3 | M15 |
 | §4 | M16 |
@@ -88,6 +88,9 @@ enum class UserAction : uint16_t {
     // 文節の伸縮（docs/segment-editing-spec.md §4、DEV-2036）
     ShrinkSegment,            // Shift+←（Selecting）
     ExtendSegment,            // Shift+→（Selecting）
+
+    // 確定の取り消し（docs/commit-undo-spec.md、DEV-2032）
+    UndoCommit,               // Ctrl+Backspace（Idle、確定の直後）
 };
 
 struct UserActionEvent {
@@ -140,6 +143,8 @@ enum class InputStateKind {
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新（`punctuationConversion = commit` の `、` `。` `？` `！` は下の句読点の行が優先） |
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
+| Selecting | Up / Down（ページ単位。PageUp / PageDown） | Selecting | 選択を前 / 次のページの同じ位置へ移す（§1.4「候補のページ」） |
+| Selecting | SelectByDigit | Idle（n 件目が無ければ Selecting のまま） | いまのページの n 件目を Commit と同じく確定する（§1.4「候補のページ」。一括変換の複数文節では選択だけを移し、文節の伸縮中は下の文節の伸縮の行） |
 | Selecting | Commit | Idle | EndComposition + CommitObservation（文節の伸縮中は下の文節の伸縮の行） |
 | Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。文節の伸縮中は表示中の文字列を確定する（`docs/segment-editing-spec.md` §4）。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |
@@ -148,6 +153,7 @@ enum class InputStateKind {
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
+| Idle | UndoCommit（確定の直後の Ctrl+Backspace） | Composing（liveConv ON なら Previewing） | 直前の確定を、確定する前の読みの composition へ戻す。取り消せる確定、条件、edit session は `docs/commit-undo-spec.md` |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
 > **候補窓の取得**: `StartConversion` は打鍵中の候補キャッシュの有無によらず、候補窓用の
@@ -167,7 +173,7 @@ enum class InputStateKind {
 
 > **応答を待つ間のキーは保留して再生する（DEV-1813）**: `StartConversion` の応答を待つ間に来たキーのうち、
 > `MapUserAction(VK, modifiers, Selecting)`（§1.5.3）が `nullopt` でないキー（Enter、Space、Shift+Space、↑↓、
-> 変換、数字、Backspace、Ctrl+P/N/H、Ctrl+Shift+U など）、F6〜F10、`docs/tsf-deep-integration-spec.md` §3.5 で
+> PageUp / PageDown、変換、数字、Backspace、Ctrl+P/N/H、Ctrl+Shift+U など）、F6〜F10、`docs/tsf-deep-integration-spec.md` §3.5 で
 > 取り込む文字・記号・数字は、TIP が消費して保留し、窓が開いた時点（応答の到着、上記の 750ms の deadline、
 > Host 不通のローカル候補）で打った順に `Selecting` へ再生する。それ以外のキー（`Selecting` で割り当ての
 > 無い ←→、Home など）は保留せず、その場でアプリへ渡す（保留中のキーはそのまま残す）。
@@ -286,13 +292,14 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_LEFT / VK_RIGHT | Shift（Selecting） | ShrinkSegment（←）/ ExtendSegment（→）。文節の伸縮（`docs/segment-editing-spec.md` §4） |
 | VK_UP | (none) | Up |
 | VK_DOWN | (none) | Down |
+| VK_PRIOR / VK_NEXT | (none, Selecting) | Up / Down（ページ単位。前 / 次のページ。下の「候補のページ」） |
 | VK_HOME | (none) | LineHead |
 | VK_END | (none) | LineEnd |
 | VK_SPACE | (none) | StartConversion / NextCandidate |
 | VK_SPACE | Shift | PrevCandidate |
 | VK_RETURN | (none) | Commit |
 | VK_ESCAPE | (none) | Cancel |
-| VK_1〜VK_9、VK_NUMPAD1〜VK_NUMPAD9 | (none, Selecting) | SelectByDigit（テンキーも候補番号。legacy はテンキーの数字を文字入力として扱うので、テンキーだけ legacy との差） |
+| VK_1〜VK_9、VK_NUMPAD1〜VK_NUMPAD9 | (none, Selecting) | SelectByDigit（いまのページの n 件目。下の「候補のページ」。テンキーも候補番号。legacy はテンキーの数字を文字入力として扱うので、テンキーだけ legacy との差） |
 | VK_0、VK_NUMPAD0 | (none, Selecting) | Input（選択中の候補を確定して `0` で次の composition を始める。legacy と同じ。数字リライターの候補窓の例外は §1.2） |
 | VK_0〜VK_9、VK_NUMPAD0〜VK_NUMPAD9 | (none, Composing / Previewing) | Input（半角数字を読みに足す。Idle は `numberRewriter` が OFF ならパススルー。§1.5.3） |
 | VK_ADD / VK_SUBTRACT / VK_MULTIPLY / VK_DECIMAL / VK_DIVIDE | (none, Composing / Previewing / Selecting) | Input（`＋` `ー` `＊` と半角の `.` `/`。Idle はパススルー。`docs/tsf-deep-integration-spec.md` §3.5） |
@@ -307,6 +314,7 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | VK_E | Ctrl | LineEnd |
 | VK_U | Ctrl+Shift | StartUnicodeInput |
 | VK_BACK | Ctrl+Shift | Forget |
+| VK_BACK | Ctrl（Idle） | UndoCommit（確定の取り消し。`docs/commit-undo-spec.md`） |
 | VK_KANJI | (none) | ToggleHankaku（core の写像。TIP は開閉キーとして写像より前に処理する。最終挙動は `docs/tsf-deep-integration-spec.md` §3.1） |
 | VK_NONCONVERT | (none) | ToggleHiraKata（core の写像。TIP の最終挙動は `docs/tsf-deep-integration-spec.md` §3.1・§3.1.1・§3.2） |
 | VK_F6 | (none) | 字種指定確定（ひらがな）。読みがある状態だけ |
@@ -334,14 +342,20 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   ときは、Shift の無い ← / → と同じ文節移動とする。
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
   Selecting で `Up` / `Down` になる。
+- PageUp / PageDown（`VK_PRIOR` / `VK_NEXT`。修飾キーなし）は Selecting でだけ `Up` / `Down` になり、ページ単位の移動で
+  あることを `UserActionEvent` に載せる（`UserAction` は増やさない。§1.6.2 (B)。フィールドの名前は実装で決める）。
+  ほかの状態では `nullopt` とする。
+- Ctrl+Backspace（修飾キーは Ctrl だけ）は Idle でだけ `UndoCommit` になり、ほかの状態では `nullopt` とする。
+  TIP は `docs/commit-undo-spec.md` §4 の条件が揃うときだけ消費し、揃わなければアプリへ渡す。例外として、取り消しに
+  使った Ctrl+Backspace のキーリピートは、戻した入力（Composing）の間も TIP が消費して何もしない（同 §3）。
 - Alt または Win を含む組合せは常に `nullopt` とする。
 - 開閉キー（半角/全角、`VK_IME_ON` / `VK_IME_OFF`、ひらがなキー `VK_DBE_HIRAGANA`、`convertKeysAction` が
   `imeOnOff` のときの変換・無変換）は、TIP がこの写像より前に処理する（`docs/tsf-deep-integration-spec.md`
   §3.1・§3.1.1）。`VK_IME_ON` / `VK_IME_OFF` / `VK_DBE_HIRAGANA` はこの写像では `nullopt` である。
 - TIP は効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、Commit、Cancel、
   Selecting 中の Forward / Backward、TIP が確定する字種指定確定、モード切替（`ToggleHiraKata` /
-  `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8））を
-  消費する。`Forget` と `ToggleDebugWindow` を食う条件はそれぞれの節が定める。
+  `ToggleAlnum`。`ToggleHankaku` のキーは前項の開閉キーとして写像より前に処理する）、`StartUnicodeInput`（§6）、`Forget`（§7）、`ToggleDebugWindow`（§8）、`UndoCommit`（`docs/commit-undo-spec.md`））を
+  消費する。`Forget`、`ToggleDebugWindow`、`UndoCommit` を食う条件はそれぞれの節と spec が定める。
   Magic Conversion のダブルタップ（`StartAlnumDouble` / `StartKanaDouble`）は `UserActionMap` の写像に無く、
   TIP が英数キーとひらがなキーの押下の間隔から検出する（§4.1）。
 
@@ -351,6 +365,32 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 > 伸縮）は M66 でも割り当てず、伸縮は Shift+← / Shift+→ で行う（`docs/segment-editing-spec.md` §4）。
 > Ctrl+S（AI の提案）も割り当てない。Microsoft IME の F6〜F10 は確定せずに字種を巡回し、Enter で
 > 確定するが、Windows 版は legacy と同じく 1 打で確定する。
+
+> **候補のページ（M68、DEV-2037）**: 候補選択中の候補は、先頭から 9 件ずつのページに分ける。選択中の候補を含む
+> ページをいまのページとし、ページは区切りと選択の index から決める。区切りは既定の 9 件ずつで、core・候補窓・
+> UIElement で同じ区切りを使い、ページを別に持たない。例外として、アプリが候補一覧を描く構成（`pbShow == FALSE`）で
+> `SetPageIndex` が区切りを渡したときは、TIP がその区切りを持ち、候補一覧が替わるまで数字と PageUp / PageDown を
+> その区切りで解く。core へは、数字と PageUp / PageDown を渡すときに区切りを添える（渡し方は実装で決める。
+> `docs/tsf-deep-integration-spec.md` §2.3）。
+>
+> - 数字 `1`〜`9`（テンキーを含む）は、いまのページの n 件目を選んで Commit と同じく確定する。いまのページに
+>   n 件目が無ければ消費して何もしない。一括変換の複数文節では確定せずに選択だけを移す。`0` は上の表のとおり。
+> - ページ送りで選択が変わったときも、↑↓ と同じく選択中の候補を表示用の preedit に反映する
+>   （`docs/tsf-deep-integration-spec.md` §2.4.1）。
+> - PageDown は次のページ、PageUp は前のページへ選択を移す。移った先はページ内の同じ位置とし、そのページに
+>   同じ位置の候補が無ければ末尾の候補とする。最後のページの PageDown は先頭のページへ、先頭のページの PageUp は
+>   最後のページへ巡回する（↑↓ の巡回と同じ）。ページが 1 つだけのときは消費して何もしない。
+> - Space・↓・Ctrl+N と Shift+Space・↑・Ctrl+P は 1 件ずつ動き、ページの端を越えるといまのページが替わる。
+> - 当てる一覧は、通常変換の候補、先頭文節の候補（`docs/segment-editing-spec.md`。伸縮中の PageUp / PageDown は
+>   先頭文節の長さを保つ）、一括変換の文節の候補、TIP の前処理が出す候補窓（数字・英単語・記号・絵文字のリライター）、
+>   再変換の候補一覧（`docs/tsf-deep-integration-spec.md` §1）のすべてとする。予測モード（§3）には当てない。
+> - 絵文字検索の一覧（`docs/candidate-rewriter-spec.md` §11 の `Listing`）は、窓をページで描き、PageUp / PageDown で
+>   ページを送る。数字は同 §11 のとおり検索語を伸ばし、ページ内の番号では選ばない。
+> - `maxCandidates` は Host が返す件数の上限であり、ページの区切りに関係しない。TIP が足す候補（リライター、
+>   英単語、typo 補正の提案など）で、既定の 9 件でも 1 ページを超えうる。
+> - 候補窓の描き方（いまのページだけを描くこと、ページ内の番号、窓の大きさ）は `docs/native-ui-spec.md` §4.1 が定める。
+> - Selecting と絵文字検索の一覧のほかでは、PageUp / PageDown をアプリへ渡す。候補選択中と Space の応答待ち
+>   （§1.2 の保留）の PageUp / PageDown はアプリへ渡らない。10 件目以降の候補は、全件の通し番号ではなくページ内の番号で選ぶ。
 
 **キー割当の legacy との差**: 上の表と補足は Windows 版の割当であり、legacy の
 `UserAction.getUserAction` と `InputState` の写像そのものではない。legacy と違う割当は次のとおりで、
@@ -366,9 +406,11 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
 | Tab | 読み入力中は予測の受理（予測が無ければ消費）。候補選択中は消費 | 予測窓があるときだけ第 1 候補を受理する（Shift+Tab は第 2 候補。第 2 候補が無ければ素通し）。候補窓の応答を待つ間は消費して何もしない（§3.4）。それ以外はアプリへ渡す |
 | ↓ | 読み入力中に候補選択を開く | Space で開く。Selecting 以外の ↓ はアプリへ渡す |
 | ← / → / ↑ | 読み入力中は消費する。候補選択中の → は選択中の候補が覆う部分の確定、↑ は前の候補 | Selecting 以外はアプリへ渡す。Selecting の ← / → は Ctrl+B / F と同じ、↑ は前の候補 |
+| PageUp / PageDown、候補の番号 | 候補窓に 9 行を表示してスクロールし、数字は表示中の 9 行の中で選ぶ。PageUp / PageDown のページ移動（9 行ずつ。先頭のページの PageUp は補助候補を出す）は upstream の #394 で入ったもので、`legacy/` には無い | 9 件ずつのページで、番号と数字はいまのページの中で決まる（上の「候補のページ」）。先頭のページの PageUp は最後のページへ巡回し、補助候補は出さない |
 | 未定義の Ctrl 組合せ | 読み入力中・候補選択中は消費する | アプリへ渡す。ただし Ctrl+Z / Ctrl+Y は読み入力中・候補選択中に消費して何もしない（下の段落） |
 | 英数キー | 英語への絶対指定。読み入力中は読みを残したまま英字を足し、候補選択中は確定してから英語に切り替える | `VK_OEM_ATTN` のトグル。読みがあれば確定してから切り替える（`docs/tsf-deep-integration-spec.md` §3.1） |
 | 忘却 | Ctrl+Delete（Backspace）。候補選択中に選択中の候補の記憶を消す | Ctrl+Shift+Backspace。入力していないときに直近の確定を消す。読み入力中・候補選択中は消費して何もしない（§7.1） |
+| 確定の取り消し | 無い | 確定の直後の Ctrl+Backspace で、直前の確定を確定する前の読みの composition へ戻す（`docs/commit-undo-spec.md`） |
 | Unicode 入力中の Space と hex 以外のキー | Space は確定してアプリへは渡さない。hex 以外は消費して入力を続ける | Space は確定した後、`fullWidthSpace` に従う（既定では全角空白を入れ、アプリへは渡さない。`docs/tsf-deep-integration-spec.md` §3.7）。hex 以外は確定して通常入力に移る（§6.1） |
 
 素通しにしたキーについて、TIP は composition を確定も取り消しもしない。キーを受けたアプリが
@@ -621,8 +663,9 @@ karukan を根拠に API やテストの設計を決めない。
 - **候補のハイライト移動**: 窓を作り直さず、`UpdateCandidateSelection(index)` +
   `ReplaceMarkedText(surface)` の列で反映する（§1.3）。
 - **候補のページ送り・スクロール**: M13 の範囲は 1〜9 の数字選択と Up/Down の巡回である。
-  ページを持つ窓へ進むときは `UserAction` を増やさず（§1.5.2）既存 Up/Down の意味を広げ、
-  `ClientAction` を append-only で足すか `ShowCandidateWindow` の再発行で表すかをそのとき選ぶ。
+  ページを持つ窓（M68、§1.4「候補のページ」）は `UserAction` を増やさず（§1.5.2）、PageUp / PageDown を
+  ページ単位の Up/Down として既存の意味を広げる。ページは区切りと選択の index から決まるので、`ClientAction` は足さず、
+  `ShowCandidateWindow` も出し直さずに `UpdateCandidateSelection(index)` で表す。
 - **複合アクションと consume / fallthrough**: レガシー Swift の複合アクションは細粒度アクションの列で
   表す（§1.5.2）。`consume` / `fallthrough` は §1.5.3 の `nullopt` と eaten 判定に吸収し、
   `ClientAction` にしない。
@@ -1354,6 +1397,7 @@ legacy との差: legacy の忘却は Ctrl+Delete（Backspace）で、候補選�
 Ctrl+Shift+Backspace とし、入力していないときだけ働いて直近に確定した組を消す（§7.2）。
 読み入力中と候補選択中は、TIP がこのキーを消費して何もしない（アプリの単語削除へ渡さない。§1.4）。
 確定前の候補を忘れさせるキーは無い。
+Shift の無い Ctrl+Backspace は忘却ではなく、確定の直後の確定の取り消しである（`docs/commit-undo-spec.md`）。
 
 ### 7.2 API
 
@@ -1377,7 +1421,7 @@ public:
   Ctrl+Shift+Backspace では、その組を `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で
   Host へ送り、組を捨てる。
   確定（候補・読み・Unicode 入力・カッコ挿入・再変換）のたびに保持した組を捨て、学習観測を送ったときだけ
-  保持し直す。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
+  保持し直す。確定の取り消し（`docs/commit-undo-spec.md` §7）でも、保持した組を捨てる。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
   忘却の対象が無く、それより前の組へは遡らない。対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。
   保持した組はフォーカスを跨がない。フォーカスの移動、context の push / pop、Deactivate で捨てる。
   secure の文脈では `ForgetLearningEntry` を送らず、組だけを捨てる（M46 の学習系メッセージと同じ扱い）。
@@ -1471,7 +1515,7 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 
 - 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
   下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
-- 候補モードの描く行数は、anchor 点の下の空きと、上の空き（キャレットの高さの代わりの間隔を除く）の広い方に収め、
+- 候補モードの描く行数は、1 ページ（§1.4「候補のページ」）の行を上限に、anchor 点の下の空きと、上の空き（キャレットの高さの代わりの間隔を除く）の広い方に収め、
   反転した窓を作業領域の上端へ寄せない。重なりうる場合（行の高さがその間隔を超えるとき、composition が複数行のとき、
   1 行まで減らしても収まらないとき）は `docs/native-ui-spec.md` §4.1 が定める。
 

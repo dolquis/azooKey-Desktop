@@ -61,7 +61,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | Phase 5: レガシー parity 復元 | M13〜M19 |
 | Phase 6: Windows 特化 | M20〜M27 |
 | Phase 7: 配布・パッケージング | M28〜M34 |
-| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M70 |
+| 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
 | 変換品質トラック | M52〜M57 / M65 |
@@ -459,7 +459,9 @@ Phase 4 完了 ─→ M13 ─┬─→ M14 ─┐
                      ├─→ M18
                      ├─→ M61-A ─→ M61-B（M48 にも依存）
                      ├─→ M64（M22・M60 にも依存）
-                     └─→ M66（M23・M64 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
+                     ├─→ M66（M23・M64 にも依存。ラティス経路の先頭文節の候補は M65 にも依存）
+                     ├─→ M68（M19・M21・M26 にも依存）
+                     └─→ M69（M22・M54・M66 にも依存）
 Phase 5 完了 ─→ M20 ─→ M23
 Phase 5 完了 ─→ M21 ─→ M22 ─→ M64
 
@@ -552,11 +554,11 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   `docs/bracket-pairing-spec.md`。
 - **入力方式（M70）** — 前提は M13・M17・M22・M30 で、推論バックエンドと辞書に依存しない。詳細は M70 節と
   `docs/input-style-spec.md`。
-- **入力拡張（M58〜M60 / M62〜M64 / M66 / M67）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
+- **入力拡張（M58〜M60 / M62〜M64 / M66 / M67 / M68 / M69）** — 前提は各 M 節の「前提」が持つ。M58（一括変換）は M6 / M13 / M14、
   M58-B は M20、M58-C は M16 / M24 / M46 を前提とする。M59（動的句読点）は M13 / M14、M60（インライン英単語候補）は
   M5 / M6、M62（候補リライター）は M5 / M6 / M13 を前提とし、M62-A は辞書・推論・IPC に依存しない。M63（日英混在の自動変換）は
-  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60、M66（文節の伸縮と部分確定）は M13・M23・M64 を
-  前提とする。M67（入力欄の種類による切替）は M46・M48・M21・M22・M59・M61 を前提とする。詳細は
+  M60 の実機確認・M14・M8・M52、M64（字種指定確定）は M13・M22・M60、M66（文節の伸縮と部分確定）は M13・M23・M64、M68（候補窓のページ送り）は
+  M13・M19・M21・M26、M69（確定の取り消し）は M13・M22・M54・M66 を前提とする。M67（入力欄の種類による切替）は M46・M48・M21・M22・M59・M61 を前提とする。詳細は
   「追加機能マイルストーン」章と各 `docs/*-spec.md`。
 - **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
@@ -1849,6 +1851,99 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
       `inputScopeSwitching: false` で外せる。主要なアプリを実機で確かめる。
     - **Microsoft IME との差**: 値ごとの入口のモードが Microsoft IME と違うと、利用者が戸惑う。Human Gate で比べ、差があれば
       spec を改める。
+
+### M68: 候補窓のページ送り
+
+> 候補選択中の候補を 9 件ずつのページに分け、PageUp / PageDown でページを送り、数字でいまのページの候補を選ぶ。
+> Windows 版の候補窓は全件に通し番号を振り、数字で選べるのは 1〜9 件目だけで、候補選択中の PageUp / PageDown は
+> アプリへ渡る（parity 監査 P-11）。正典仕様は `docs/legacy-parity-spec.md` §1.2・§1.4「候補のページ」、
+> `docs/native-ui-spec.md` §4.1・§5.2、`docs/tsf-deep-integration-spec.md` §2.3 とし、本節は定義・依存・受け入れ条件・
+> リスクだけを持つ。
+
+- **目的**: 10 件目以降の候補も数字で選べるようにし、候補選択中の PageUp / PageDown でアプリの画面が動かないようにする。
+- **前提**: M13（`UserActionMap` と `InputState`）、M19・M26（候補窓の配置と描画）、M21（`CandidateListUIElement`）。
+- **変更対象**: `core/include/azookey/core/UserAction.h`（`UserActionEvent` のページ単位の印）、`core/src/UserActionMap.cpp`、
+  `core/src/InputState.cpp`、`tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/CandidateUiCoordinator.cpp`、
+  `tsf-tip/src/CandidateListUIElement.cpp`、`tsf-tip/src/TextService.cpp`（数字の解決と TIP の前処理の候補窓）。
+- **受け入れ条件**:
+  - 10 件以上の候補で、窓がいまのページ（9 件まで）だけを描き、行頭の番号がページ内の `1.`〜`9.` になる。位置の行が
+    全件での番号と件数を出す
+  - 数字（テンキーを含む）がいまのページの n 件目を確定し、n 件目が無いページでは消費して何もしない。一括変換の
+    複数文節では選択だけが移る
+  - 候補選択中の PageDown / PageUp が、次 / 前のページのページ内の同じ位置（無ければ末尾）へ選択を移し、端のページでは
+    巡回する。ページが 1 つだけのときは消費して何もしない。どちらもアプリへ渡らない
+  - Space・↓ と Shift+Space・↑ が 1 件ずつ動き、ページの端でいまのページが替わる。ページ送りで選択が変わったときも、
+    選択中の候補が表示用の preedit に反映される
+  - Space の応答待ちと先頭文節の候補待ちの PageUp / PageDown が保留され、窓が開いた後に再生される。Selecting と
+    絵文字検索の一覧のほかでは、PageUp / PageDown はアプリへ渡る
+  - ページを替えても窓の位置と大きさが変わらず、最後のページの空いた行はクリック領域にならない。1 ページの行が
+    作業領域に収まらないときは、ページの中で描く範囲が選択に追従する
+  - 通常変換、先頭文節、一括変換の文節、TIP の前処理の候補窓、再変換の一覧に同じ規則が掛かり、予測モードには
+    掛からない。絵文字検索の一覧にはページの表示と PageUp / PageDown だけが掛かり、数字は検索語を伸ばす
+  - UI-less で、`GetPageIndex` が 9 件ずつのページの先頭を、`GetCurrentPage` が選択を含むページを返し、ページが
+    替わると `TF_CLUIE_CURRENTPAGE` が、区切りが件数で変わると `TF_CLUIE_PAGEINDEX` が立つ。`SetPageIndex` が正しい配列を
+    受けて、アプリが描く間はその区切りで数字と PageUp / PageDown を解き、一覧が替わる（`TF_CLUIE_STRING`）とその区切りを
+    捨てる。不正な配列には `E_INVALIDARG` を返す
+  - `keymap_test`・`input_state_test`・`candidate_window_dpi_test`・`candidate_ui_coordinator_test`・
+    `onkeydown_preedit_test` に、上記の検証がある
+  - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成で、ページの表示、数字、PageUp / PageDown が
+    アプリへ渡らないこと、`SetPageIndex` を呼ぶアプリの有無。`gate:human-required`）
+- **参照**: `docs/legacy-parity-spec.md` §1.2・§1.4・§1.6.2・§9.2、`docs/native-ui-spec.md` §4.1・§5.2・§7、
+  `docs/tsf-deep-integration-spec.md` §2.3・§2.8、`docs/segment-editing-spec.md` §4
+- **補足**:
+  - **外部挙動の変更**: 10 件を超える候補では「10.」以降の通し番号が無くなり、窓は 9 行までになる。候補選択中の
+    PageUp / PageDown はアプリへ渡らない。
+  - **リスク**:
+    - **アプリが描くページとの食い違い**: `SetPageIndex` を呼ぶアプリでは、アプリの区切りで数字を解く。9 件を超える
+      ページの 10 件目以降は数字で選べない。どのアプリが呼ぶかは実機で確かめる。
+    - **窓の高さ**: 窓を 1 ページの高さに固めるので、最後のページの候補が少なくても窓は縮まない。
+
+### M69: 確定の取り消し
+
+> 確定の直後に Ctrl+Backspace を押すと、直前の確定を確定する前の読みの composition へ戻す。Windows 版には
+> 確定を取り消す操作が無く、誤って確定すると文字を消して打ち直すしかない。正典仕様は `docs/commit-undo-spec.md` とし、
+> 本節は定義・依存・受け入れ条件・リスクだけを持つ。
+
+- **目的**: 確定した直後に誤りに気づいたとき、読みを打ち直さずに変換し直せるようにし、選び直しを訂正の信号として
+  学習に入れる。
+- **前提**: M13（`UserActionMap` と `InputState`）、M22（無変換の巡回が直近の確定を記録する仕組み）、M54
+  （`CommitCorrection`）、M66（部分確定）。
+- **変更対象**: `core/include/azookey/core/UserAction.h`（`UndoCommit`）、`core/src/UserActionMap.cpp`、
+  `core/src/InputState.cpp`、`tsf-tip/src/TextService.cpp`（取り消しの対象の記録と破棄、キーの判定、学習）、
+  取り消しの edit session（`tsf-tip/src/CharacterFormEditSession.cpp` の直近の確定の確かめ方を使う）。
+- **受け入れ条件**:
+  - spec §4.1 の各確定の直後の Ctrl+Backspace で、確定した表層が確定する前の読みの composition に置き換わり、
+    `Composing`（ライブ変換 ON は `Previewing`）になる。Space で候補窓が開き、Esc で文字列が消える
+  - 戻す読みが spec §5 のとおりになる（typo 補正・英単語・日英混在の候補でも composition の読み、生ローマ字、
+    句読点の確定は句読点を足す、F6〜F10 は字種を変える前の読み）。自動句読点は戻らない
+  - spec §4.1 の対象にしない確定の後、および spec §4.2 の条件が欠けるとき（別のキーの後、キャレットの移動、別の
+    context、IME Off、英数モード、composition がある間）は、Ctrl+Backspace がアプリへ渡る。修飾キーだけの押下では
+    取り消しの対象を捨てない。取り消しに使った Ctrl+Backspace のキーリピートは消費され、戻した入力を消さない
+  - 確かめ直しの失敗、同期の edit session の拒否、composition を始められないときは、文書が変わらず Ctrl+Backspace が
+    アプリへ渡る。composition を始めた後に読みへ置き換えられないときは、確定した表層のまま composition を終えて
+    キーを消費する
+  - Ctrl+Shift+Backspace は忘却のまま変わらない。取り消しで、忘却の対象、即 Backspace の `undo` の窓、無変換の巡回の
+    直近の確定が捨てられ、typo の確定直後の打ち直しの窓が閉じる
+  - 戻した入力の最初の確定（部分確定でない）が、取り消した確定の観測と同じ読みで違う表層の観測を送ったときだけ、
+    取り消した観測の組の `CommitCorrection{kind:"undo"}` が 1 回送られる。同じ表層の選び直し、読みの変更、部分確定、
+    Esc、secure・学習不可の文脈、M63 の区間ごとの観測を送った確定の取り消しでは送られない。自動句読点の組は比べる組に
+    数えない。取り消した時点では学習のメッセージが送られない
+  - 部分確定の後は、残りの読みを確定して Idle に戻った後の確定だけが戻り、先に確定した先頭文節へは遡らない
+  - secure の文脈でも取り消しが働き、学習のメッセージが Host へ送られず、読みと表層がログに出ない
+  - `keymap_test`・`input_state_test`・`onkeydown_preedit_test` に上記の検証がある
+  - 実機での確認（Notepad・Word・Edge・Chrome・VS Code・Excel のセル編集・スタート検索、Microsoft IME との比較。
+    `gate:human-required`）
+- **参照**: `docs/commit-undo-spec.md`、`docs/legacy-parity-spec.md` §1.1・§1.2・§1.4・§7、
+  `docs/user-learning-enhancement-spec.md` §4.1、`docs/segment-editing-spec.md` §6.1、`docs/tsf-deep-integration-spec.md` §1.1・§3.2
+- **補足**:
+  - **外部挙動の変更**: 確定の直後の Ctrl+Backspace は、アプリの単語削除にならない。設定キーは置かず、既定で働く。
+  - **範囲**: 2 回以上前の確定への遡り、取り消しのやり直し、一括変換の確定の取り消しは含めない。取り消した確定の
+    学習観測は Host から取り除かない（spec §7）。
+  - **リスク**:
+    - **アプリ差**: 確定した文字列の範囲で composition を始めたときの扱いと、アプリの元に戻すの単位が、アプリに
+      よって違う。条件を確かめ直してから書き換え、書き換えられなければキーをアプリへ渡す（spec §6）。実機で確かめる。
+    - **単語削除との衝突**: 確定の直後に単語削除のつもりで Ctrl+Backspace を押すと、読みが戻る。戻した読みは Esc で
+      消せる。
 
 ### M70: 入力方式の追加（AZIK・かな入力）
 

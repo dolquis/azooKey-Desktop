@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M3, M5, M20, M21, M22, M23, M64, M66]
+milestones: [M3, M5, M20, M21, M22, M23, M64, M66, M68]
 canonical_for: ["TSF 深部統合"]
 ---
 
@@ -18,6 +18,7 @@ canonical_for: ["TSF 深部統合"]
 | §1 | M20 |
 | §2（§2.0・§2.8〜§2.11 を除く） | M21 |
 | §2.0、§2.8〜§2.11 | M5（UI-less の最小契約）。M21 がこれを拡張する |
+| §2.3 の候補のページ | M68 |
 | §3（§3.6 を除く） | M22 |
 | §3.6 | M64。文節の伸縮中の扱いは M66 |
 | §4 | M21 |
@@ -34,6 +35,8 @@ canonical_for: ["TSF 深部統合"]
 
 既に確定済みのテキストに対して、「再変換」操作を提供する。
 ユーザーが「明日」を「あした」と再変換したい、等。
+確定の直後に直前の確定を確定する前の読みへ戻す確定の取り消し（Ctrl+Backspace、M69）は、逆引きを使わない別の操作で、
+`docs/commit-undo-spec.md` が定める。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 周辺テキスト取得には、transitory context
 > （検索ボックス等）の親コンテキストを `GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT` で
@@ -213,6 +216,12 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 - `ITfCandidateListUIElementBehavior`（`SetSelection` / `Finalize` / `Abort`）は M21 の full 実装で
   加える（§2.8「M5 と M21 の役割分担」）。
 
+ページ（M68）は `docs/legacy-parity-spec.md` §1.4「候補のページ」の 9 件ずつの区切りとし、`GetPageIndex` は各ページの先頭の index を、
+`GetCurrentPage` は選択を含むページを返す。いまのページが替わったら `TF_CLUIE_CURRENTPAGE` を、区切りが件数で変わったら `TF_CLUIE_PAGEINDEX` を
+立てて知らせ、選択の移動では区切りを動かさない（アプリは一覧が替わるときにページを数え直す。Microsoft Learn「UILess Mode Overview」の
+About PageIndex）。`SetPageIndex` は先頭が 0 で狭義に増え、どれも件数より小さい配列だけを受けて `S_OK` を返し（それ以外は `E_INVALIDARG`）、
+受けた区切りを `pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで、`GetPageIndex` / `GetCurrentPage` と、数字キー・PageUp / PageDown に使う（区切りは TIP が持ち、core へ添える）。`pbShow == TRUE` の間に呼ばれても正しい配列は受けるが、TIP が窓を描く間は窓と数字キーを 9 件ずつの割りのままにし、`ITfUIElement::Show(FALSE)` でアプリが描くようになってから使う。9 件を超えるページの 10 件目以降は数字で選べない。
+
 ### 2.4 動作分岐
 
 > **改訂（§2.8 両立方式に統合）**: 描画分岐は `ui_less_mode_` ではなく
@@ -240,9 +249,9 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 #### 2.4.1 候補選択と preedit の表示
 
 候補表示中も、かな reading は変換要求と再編集に使う正典として保持する。
-一方、候補ウィンドウを表示した時点と、上下キーまたは Space で候補選択が変わったときは、
+一方、候補ウィンドウを表示した時点と、上下キー・Space・ページ送り（PageUp / PageDown）で候補選択が変わったときは、
 選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
-Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
+Enter はこの表示中 `surface` と同じ候補を、数字キーはいまのページの n 件目（`docs/legacy-parity-spec.md` §1.4「候補のページ」）を確定する。
 
 Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
 へ戻してから次の編集を反映する（ライブ変換 ON で応答を引き継いでいれば、`docs/legacy-parity-spec.md` §2.3.1 の表示にする）。追加入力（英字・記号・長音・句読点）は、表示中 `surface` を
@@ -407,8 +416,8 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   カテゴリ登録（§2.9）。`pbShow==FALSE` 経路は `CandidateListUIElement` の最小実装
   （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
   通知）まで。
-- **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
-  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）。予測
+- **M21**: `CandidateListUIElement` の full 実装（`...Behavior`・
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7。ページの API は M68 が持つ）、IME On/Off（§4）。予測
   は UIElement 化せず、自前の候補窓の予測モードで出す（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。

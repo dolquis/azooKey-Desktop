@@ -849,11 +849,46 @@ struct ClientReceiveResult {
   core::EtwResult outcome{core::EtwResult::Disconnected};
 };
 
+enum class ArrivalWait {
+  Readable,
+  TimedOut,
+  Stopped,
+  Failed,
+};
+
+// Phase A of a client receive (docs/ipc-persistence-hardening-spec.md §6.4.8):
+// blocks until a message lands, the connection is cancelled, or `timeout_ms`
+// passes. A zero-byte overlapped read completes on arrival without taking any
+// of the message, so cancelling it at the timeout -- even when the
+// cancellation races the arrival -- leaves the response unread for the caller.
+ArrivalWait WaitForClientArrival(HANDLE pipe, HANDLE cancel_event, DWORD timeout_ms) {
+  HANDLE event = PrepareReusableOverlappedEvent();
+  if (!event) {
+    return ArrivalWait::Failed;
+  }
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event;
+
+  uint8_t unused = 0;
+  PipeIoResult result;
+  result.ok = ReadFile(pipe, &unused, 0, nullptr, &overlapped);
+  result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+  if (!result.ok && result.error == ERROR_IO_PENDING) {
+    result = FinishOverlappedIo(pipe, overlapped, cancel_event, timeout_ms);
+  }
+  if (result.stopped) return ArrivalWait::Stopped;
+  if (result.timed_out) return ArrivalWait::TimedOut;
+  // A message larger than the empty buffer completes as ERROR_MORE_DATA.
+  if (result.ok || result.error == ERROR_MORE_DATA) return ArrivalWait::Readable;
+  return ArrivalWait::Failed;
+}
+
 ClientReceiveResult ReceiveClientEnvelope(
     const std::shared_ptr<ClientConnection>& connection,
     std::optional<std::chrono::steady_clock::time_point> phase_a_deadline,
     std::optional<std::chrono::steady_clock::time_point> request_deadline,
     const core::EtwGuid& trace_client, logging::RuntimeLogger* logger) {
+  bool arrival_without_bytes = false;
   while (true) {
     if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
       return {ClientReceiveStatus::Failed, std::nullopt};
@@ -864,6 +899,14 @@ ClientReceiveResult ReceiveClientEnvelope(
       return {ClientReceiveStatus::Failed, std::nullopt};
     }
     if (available > 0) {
+      // Nothing of this frame has been read, so framing is still intact. With
+      // the request deadline already spent -- the phase-A wait can overshoot
+      // its slice -- ReadEnvelope would fail before its first read and drop the
+      // connection for nothing. Return a phase-A timeout and leave the frame
+      // for the caller's stale drain (§6.4.8).
+      if (request_deadline && std::chrono::steady_clock::now() >= *request_deadline) {
+        return {ClientReceiveStatus::IdleTimeout, std::nullopt};
+      }
       TransportContext ctx;
       ctx.cancel_event = connection->cancel_event.get();
       ctx.overlapped = true;
@@ -890,18 +933,38 @@ ClientReceiveResult ReceiveClientEnvelope(
       return {ClientReceiveStatus::IdleTimeout, std::nullopt};
     }
 
-    DWORD wait_ms = 10;
+    DWORD wait_ms = INFINITE;
     if (phase_a_deadline) {
+      // Rounded up: truncating would spin through the final sub-millisecond.
       const auto remaining =
-          std::chrono::duration_cast<std::chrono::milliseconds>(*phase_a_deadline - now).count();
-      if (remaining <= 0) {
-        continue;
-      }
-      wait_ms = static_cast<DWORD>(std::min<long long>(wait_ms, remaining));
+          std::chrono::ceil<std::chrono::milliseconds>(*phase_a_deadline - now).count();
+      wait_ms = static_cast<DWORD>(std::min<long long>(remaining, INFINITE - 1));
     }
-    const DWORD wait = WaitForSingleObject(connection->cancel_event.get(), wait_ms);
-    if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED) {
-      return {ClientReceiveStatus::Failed, std::nullopt};
+
+    if (arrival_without_bytes) {
+      // The last arrival wait completed yet Peek saw nothing, as a zero-length
+      // message (never sent by this framing) would leave it. Another zero-byte
+      // read would complete at once, so back off on a timed wait instead.
+      arrival_without_bytes = false;
+      constexpr DWORD kEmptyArrivalBackoffMs = 10;
+      const DWORD wait = WaitForSingleObject(connection->cancel_event.get(),
+                                             std::min<DWORD>(wait_ms, kEmptyArrivalBackoffMs));
+      if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED) {
+        return {ClientReceiveStatus::Failed, std::nullopt};
+      }
+      continue;
+    }
+
+    switch (WaitForClientArrival(connection->pipe.get(), connection->cancel_event.get(), wait_ms)) {
+      case ArrivalWait::Readable:
+        arrival_without_bytes = true;
+        break;
+      case ArrivalWait::TimedOut:
+        // Back to the top: one last Peek, then the deadline check.
+        break;
+      case ArrivalWait::Stopped:
+      case ArrivalWait::Failed:
+        return {ClientReceiveStatus::Failed, std::nullopt};
     }
   }
 }

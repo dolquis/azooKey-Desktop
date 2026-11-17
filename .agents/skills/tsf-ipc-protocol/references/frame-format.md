@@ -178,7 +178,9 @@ request ID を更新して旧世代の in-flight 応答を stale 化する。pen
 - request-aware overload は poll slice と request の絶対 deadline を別々に受ける。相 A は
   slice ごとに未読のまま戻り、相 B は `min(request deadline, read hard deadline)` で縛る。
   request deadline を持たない batch 待機は `std::nullopt` を渡し、相 B を read hard だけで
-  縛る。どちらの API も相 A は `PeekNamedPipe` の polling を使う。
+  縛る。どちらの API も相 A は `PeekNamedPipe` で未着を確かめたうえで、ゼロバイトの
+  overlapped read の完了と接続 cancel event を同時に待つ。ゼロバイト read はメッセージを
+  取り出さないので、timeout で取り消しても未読の応答は pipe に残る。
 - TIPのIPC workerはHost不在時に250msから最大3000msまで指数バックオフして再接続する。
   接続断直前に取り出した最新候補要求は再度pendingへ戻し、Handshake後に再送する。
 - Cancelは応答待ちのprimary接続を塞がないよう、Handshake済みの短命control接続を優先する。

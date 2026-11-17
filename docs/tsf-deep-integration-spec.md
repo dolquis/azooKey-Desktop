@@ -220,7 +220,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 `GetCurrentPage` は選択を含むページを返す。いまのページが替わったら `TF_CLUIE_CURRENTPAGE` を、区切りが件数で変わったら `TF_CLUIE_PAGEINDEX` を
 立てて知らせ、選択の移動では区切りを動かさない（アプリは一覧が替わるときにページを数え直す。Microsoft Learn「UILess Mode Overview」の
 About PageIndex）。`SetPageIndex` は先頭が 0 で狭義に増え、どれも件数より小さい配列だけを受けて `S_OK` を返し（それ以外は `E_INVALIDARG`）、
-受けた区切りを `pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで、`GetPageIndex` / `GetCurrentPage` と、数字キー・PageUp / PageDown に使う（区切りは TIP が持ち、core へ添える）。9 件を超えるページの 10 件目以降は数字で選べない。
+受けた区切りを `pbShow == FALSE` の間、一覧が替わる（`TF_CLUIE_STRING`）まで、`GetPageIndex` / `GetCurrentPage` と、数字キー・PageUp / PageDown に使う（区切りは TIP が持ち、core へ添える）。`pbShow == TRUE` の間に呼ばれても正しい配列は受けるが、TIP が窓を描く間は窓と数字キーを 9 件ずつの割りのままにし、`ITfUIElement::Show(FALSE)` でアプリが描くようになってから使う。9 件を超えるページの 10 件目以降は数字で選べない。
 
 ### 2.4 動作分岐
 
@@ -249,9 +249,9 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 #### 2.4.1 候補選択と preedit の表示
 
 候補表示中も、かな reading は変換要求と再編集に使う正典として保持する。
-一方、候補ウィンドウを表示した時点と、上下キーまたは Space で候補選択が変わったときは、
+一方、候補ウィンドウを表示した時点と、上下キー・Space・ページ送り（PageUp / PageDown）で候補選択が変わったときは、
 選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
-Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
+Enter はこの表示中 `surface` と同じ候補を、数字キーはいまのページの n 件目（`docs/legacy-parity-spec.md` §1.4「候補のページ」）を確定する。
 
 Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
 へ戻してから次の編集を反映する（ライブ変換 ON で応答を引き継いでいれば、`docs/legacy-parity-spec.md` §2.3.1 の表示にする）。追加入力（英字・記号・長音・句読点）は、表示中 `surface` を

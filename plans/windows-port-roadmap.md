@@ -1869,7 +1869,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     複数文節では選択だけが移る
   - 候補選択中の PageDown / PageUp が、次 / 前のページのページ内の同じ位置（無ければ末尾）へ選択を移し、端のページでは
     巡回する。ページが 1 つだけのときは消費して何もしない。どちらもアプリへ渡らない
-  - Space・↓ と Shift+Space・↑ が 1 件ずつ動き、ページの端でいまのページが替わる
+  - Space・↓ と Shift+Space・↑ が 1 件ずつ動き、ページの端でいまのページが替わる。ページ送りで選択が変わったときも、
+    選択中の候補が表示用の preedit に反映される
   - Space の応答待ちと先頭文節の候補待ちの PageUp / PageDown が保留され、窓が開いた後に再生される。Selecting と
     絵文字検索の一覧のほかでは、PageUp / PageDown はアプリへ渡る
   - ページを替えても窓の位置と大きさが変わらず、最後のページの空いた行はクリック領域にならない。1 ページの行が
@@ -1877,8 +1878,9 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 通常変換、先頭文節、一括変換の文節、TIP の前処理の候補窓、再変換の一覧に同じ規則が掛かり、予測モードには
     掛からない。絵文字検索の一覧にはページの表示と PageUp / PageDown だけが掛かり、数字は検索語を伸ばす
   - UI-less で、`GetPageIndex` が 9 件ずつのページの先頭を、`GetCurrentPage` が選択を含むページを返し、ページが
-    替わると `TF_CLUIE_CURRENTPAGE` が立つ。`SetPageIndex` が正しい配列を受けてその区切りで数字と PageUp / PageDown を
-    解き、不正な配列には `E_INVALIDARG` を返す
+    替わると `TF_CLUIE_CURRENTPAGE` が、区切りが件数で変わると `TF_CLUIE_PAGEINDEX` が立つ。`SetPageIndex` が正しい配列を
+    受けて、アプリが描く間はその区切りで数字と PageUp / PageDown を解き、一覧が替わる（`TF_CLUIE_STRING`）とその区切りを
+    捨てる。不正な配列には `E_INVALIDARG` を返す
   - `keymap_test`・`input_state_test`・`candidate_window_dpi_test`・`candidate_ui_coordinator_test`・
     `onkeydown_preedit_test` に、上記の検証がある
   - 実機での確認（Notepad・Word・Edge・VS Code と UI-less の構成で、ページの表示、数字、PageUp / PageDown が

@@ -144,7 +144,7 @@ enum class InputStateKind {
 | Previewing | StartConversion | Previewing | Composing と同じく候補窓用の `QueryCandidates` を送り、応答到着で `Selecting`（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Up / Down（ページ単位。PageUp / PageDown） | Selecting | 選択を前 / 次のページの同じ位置へ移す（§1.4「候補のページ」） |
-| Selecting | SelectByDigit | Idle | いまのページの n 件目を Commit と同じく確定する（§1.4「候補のページ」。一括変換の複数文節では選択だけを移し、文節の伸縮中は下の文節の伸縮の行） |
+| Selecting | SelectByDigit | Idle（n 件目が無ければ Selecting のまま） | いまのページの n 件目を Commit と同じく確定する（§1.4「候補のページ」。一括変換の複数文節では選択だけを移し、文節の伸縮中は下の文節の伸縮の行） |
 | Selecting | Commit | Idle | EndComposition + CommitObservation（文節の伸縮中は下の文節の伸縮の行） |
 | Selecting | Input（英字・記号・長音 `-`・句読点） | Composing（liveConv ON なら Previewing） | 選択中の候補を Commit と同じく確定して CommitObservation を送り、そのキーを Idle からの入力として新しい composition を始める。一括変換の複数文節は表示中の全文節を確定する。文節の伸縮中は表示中の文字列を確定する（`docs/segment-editing-spec.md` §4）。例外は `punctuationConversion = commit` の `、` `。` `？` `！`（下の句読点の行） |
 | Selecting | Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading の末尾 1 単位を消して再問い合わせ（選択中の候補は確定しない） |

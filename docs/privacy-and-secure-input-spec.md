@@ -208,6 +208,8 @@ compartment を読めない context は無効化されていないものとし�
 許すが、`IS_PRIVATE` では AI 送信軸の fail closed（scope が通常でない）が優先する。
 password / PIN の scope が同時にあれば secure を優先する。
 
+URL・メール・数値・検索欄の scope による入力挙動の切替は `docs/app-profile-spec.md` §13 が定め、本節の secure・学習・AI 送信の判定を変えない。
+
 判定に使った compartment、scope 値（`InputScope` の数値）、分類、結果は、値が
 変わったときだけ TIP の info ログ `input_gate` に記録する。入力本文は含めない。
 

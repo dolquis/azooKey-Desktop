@@ -1,13 +1,13 @@
 ---
 kind: spec
-milestones: [M48]
-canonical_for: ["アプリ別入力プロファイル"]
+milestones: [M48, M67]
+canonical_for: ["アプリ別入力プロファイル", "入力欄の種類による切替"]
 ---
 
 # アプリ別入力プロファイル 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M48（追加機能トラック）
+対応マイルストーン: M48（追加機能トラック）、M67（§13）
 関連: `plans/windows-port-roadmap.md` M30 / M46、
       `docs/privacy-and-secure-input-spec.md`（M46）、
       `docs/learning-data-management-spec.md` §15（Persona）
@@ -27,6 +27,7 @@ canonical_for: ["アプリ別入力プロファイル"]
 | §9 | M48 |
 | §10 | M48（e2e は M50 の connect） |
 | §11〜§12 | M48（§12 は M48 範囲外の将来拡張） |
+| §13 | M67（入力欄の種類による切替。プロファイルの `inputScopeSwitching` フィールドを含む） |
 
 ## 1. 目的
 
@@ -180,7 +181,8 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
           "type": "string",
           "enum": ["auto", "on", "off"],
           "default": "auto"
-        }
+        },
+        "inputScopeSwitching": { "type": "boolean", "default": true }
       }
     },
     "default": {}
@@ -203,6 +205,7 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 | `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |
 | `privacyMode` | enum | "inherit" | `inherit` / `normal` / `private` / `secure` |
 | `bracketPairing` | enum | "auto" | `auto` / `on` / `off`。`auto` はグローバルのアプリリスト判定に従い、`on` / `off` はそれを上書きする。root の boolean マスターが false の場合と前面アプリ解決失敗時は常に無効 |
+| `inputScopeSwitching` | bool | true | 入力欄の種類（InputScope）による入口のモードと抑制を、このアプリで行うか（§13）。未指定はグローバルの `inputScopeSwitching` を継承する |
 
 `bracketPairing` の未指定は下位プロファイルの値を継承する。上位で明示した `auto` は
 下位の `on` / `off` を解除し、`bracketPairingApps` / `bracketPairingAppPolicy` の判定に戻す。
@@ -402,7 +405,8 @@ else:
 編集ダイアログ:
 - profileName / predictionEnabled / sentenceCompletion /
   learningEnabled / aiBackend / promptPrefix / style /
-  preferTechnicalTerms / candidateTagBoosts / privacyMode / bracketPairing
+  preferTechnicalTerms / candidateTagBoosts / privacyMode / bracketPairing /
+  inputScopeSwitching（§13）
 
 各フィールドは「指定しない（継承）」を選べ、指定しないフィールドは `settings.json` に書かない（§4）。
 `promptPrefix` は「指定する」を切り替え、指定して空にすると §6 の「明示的な空文字」になる。
@@ -472,3 +476,203 @@ resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作�
 
 - ウィンドウタイトル単位の細分化（プライバシー上、本実装では非対応）
 - アプリ自動検出のクラウド辞書（プライバシー上、本実装では非対応）
+
+## 13. 入力欄の種類（InputScope）による切替
+
+本節は M67 を定める。§1〜§12 がアプリ単位の切替を扱うのに対し、本節は入力欄単位の切替を扱う。
+
+### 13.1 目的と根拠
+
+アプリは入力欄の種類を、TSF の `GUID_PROP_INPUTSCOPE` で IME に伝える。TIP はこれを読み、URL・メール・数値の欄では
+英数モードで入力を始め、カッコ補完と自動句読点を止める。検索欄ではひらがなのまま、自動句読点だけを止める。
+利用者が欄ごとに英数モードへ手で切り替える手間を省くためである。
+
+既定で有効にする（§13.6）根拠は次の 2 つである。
+
+- Microsoft Learn の互換性の記事（「Calling ImmSetConversionStatus() or ImmGetConversionStatus() from Windows Store apps
+  is not supported」）は、アプリが欄の入力 scope を指定して既定の IME モードを制御し、scope ごとのモードは各 IME が決める、
+  と述べる。
+- Chromium は、アドレス欄の入力の種類を URL にすると IME が英字モードを既定にして検索語を打ちにくくなるため、Windows で
+  入力ロケールが CJK のときはアドレス欄を検索の種類として報告する（`chrome/browser/ui/views/omnibox/omnibox_view_views.cc` の
+  `GetPreferredTextInputType`）。Web ページの欄は、`ui/base/ime/win/tsf_input_scope.cc` で `type=url` が `IS_URL`、
+  `type=email` が `IS_EMAIL_SMTPEMAILADDRESS`、`type=number` が `IS_NUMBER`、`type=tel` が
+  `IS_TELEPHONE_FULLTELEPHONENUMBER`、`type=search` が `IS_SEARCH` になる。
+
+Microsoft IME の値ごとの挙動は、本節の根拠に含めない。実機での比較は Human Gate で行う（§13.8）。
+
+パスワード・PIN・`IS_PRIVATE` の扱いは M46（`docs/privacy-and-secure-input-spec.md` §4.3）が定め、本節は変えない（§13.3）。
+
+### 13.2 対象の値と挙動
+
+| 群 | InputScope の値 | 入口のモード | カッコ補完 | 自動句読点 |
+|---|---|---|---|---|
+| URL | `IS_URL` | 英数 | 止める | 止める |
+| メール | `IS_EMAIL_USERNAME`、`IS_EMAIL_SMTPEMAILADDRESS`、`IS_EMAILNAME_OR_ADDRESS` | 英数 | 止める | 止める |
+| 数値・電話 | `IS_DIGITS`、`IS_NUMBER`、`IS_TELEPHONE_FULLTELEPHONENUMBER`、`IS_TELEPHONE_COUNTRYCODE`、`IS_TELEPHONE_AREACODE`、`IS_TELEPHONE_LOCALNUMBER` | 英数 | 止める | 止める |
+| 半角英数 | `IS_ALPHANUMERIC_HALFWIDTH` | 英数 | 止める | 止める |
+| 検索 | `IS_SEARCH`、`IS_SEARCH_INCREMENTAL` | 変えない | 変えない | 止める |
+
+表の上の 4 群をまとめて「英数で始める群」と呼ぶ。
+
+- **入口のモード**: 「英数」は、欄に入ったときに TIP の英数モード（`docs/tsf-deep-integration-spec.md` §4.2・§4.5。On のまま
+  キーを素通しする状態）にすることを指す。IME の開閉（`GUID_COMPARTMENT_KEYBOARD_OPENCLOSE`）は書かない。IME が Off の
+  ときは何もしない。
+- **カッコ補完**: 「止める」は、その欄にいる間、入力モードによらずカッコ補完（`docs/bracket-pairing-spec.md`）を働かせない
+  ことを指す。カッコのキーは、カッコ補完が無効のときと同じ扱いになる。
+- **自動句読点**: 「止める」は、その欄にいる間、TIP が動的句読点（M59）について `dynamicPunctuation == false` のときと同じに
+  振る舞うことを指す。要求の `auto_punctuation` を常に `false` で送り、idle のタイマーを張らず、Enter で最終要求を待たない
+  （`docs/dynamic-punctuation-spec.md` §4.3.1・§7.1.1・§7.3）。一括変換の `batchAutoPunctuation`（M58-C）は対象に含めない。
+
+次は変えない。
+
+- 記号の全角化（`docs/tsf-deep-integration-spec.md` §3.5）。英数モードでは記号はもともと半角でアプリへ渡る。利用者がその欄で
+  ひらがなへ切り替えた後は、通常どおり全角にする。
+- 学習。英数モードは打鍵を素通しするので、観測が生じない。`IS_PRIVATE` による学習の停止は M46 が担う。
+- 予測候補とライブ変換。
+
+表に無い値は対象外とし、従来どおり扱う。`IS_DEFAULT`、ファイル名、ログオン名、人名、住所、日付、時刻、
+`IS_FORMULA`、`IS_FORMULA_NUMBER`、`IS_YOMI` などがこれに当たる。ファイル名と人名には日本語が入りうる。
+`IS_HIRAGANA`、`IS_KATAKANA_HALFWIDTH`、`IS_KATAKANA_FULLWIDTH`、`IS_ALPHANUMERIC_FULLWIDTH`、`IS_NUMBER_FULLWIDTH` も
+対象外である。azooKey にはこれらに対応する入力モードが無い。
+
+### 13.3 欄の種類の判定と M46 との関係
+
+欄の種類は、M46 のパスワード欄の判定と同じ `GUID_PROP_INPUTSCOPE` の読み取りの処理（`docs/privacy-and-secure-input-spec.md`
+§4.3、`tsf-tip/src/AiInputGuard.cpp` の `ProbeInputScope`）が返す scope の値の列から求める。読み取るのは §13.4 の時機であり、
+M46 の判定は従来どおり入力イベントごとに行う。本節は M46 の判定の時機も結果も変えない。
+
+M46 の判定を先に確定させ、欄の種類はその結果を変えない。secure、学習の許可、AI 送信の許可は、欄の種類によらず M46 の規則で
+決まる。本節が切り替えるかを決めるときの secure には、同じ時点の M46 の判定を使う。
+
+- secure と判定した入力欄（パスワード・PIN の scope、パスワード形式のフォーカス窓、キーボード入力を無効にした context、
+  secure のアプリやモード）では、本節の切替を行わない。M46 の扱いだけが働く。
+- `IS_PRIVATE` と表の値が同時にあるときは、表の値で切り替え、`IS_PRIVATE` による学習と AI 送信の停止もそのまま働く。
+  Chromium は InPrivate のウィンドウでは欄の種類によらず `IS_PRIVATE` だけを返すので、そこでは切り替えない。
+
+アプリが複数の値を返したときは、返した順に見て、§13.2 の表に最初に当たった値で欄の種類を決める。
+
+次のときは欄の種類なしとし、本節の切替を行わない（§13.7）。
+
+- `GUID_PROP_INPUTSCOPE` を提供しない。
+- 値が 0 件である。
+- 表に当たる値が無い。
+
+読み取りに失敗したとき（edit session の拒否などで値の列を得られないとき）の扱いは §13.4 が定める。
+
+### 13.4 切替の時機と戻し
+
+欄の種類は、document manager へフォーカスが移ったとき（`ITfThreadMgrEventSink::OnSetFocus`）に 1 回だけ判定する。このとき
+前の欄を離れたものとして扱う。`docs/tsf-deep-integration-spec.md` §4.1 の初回フォーカスで TIP が IME を On にする処理の後に
+判定する。そのとき読み取りに失敗したときは、その入力先で composition の無い状態の最初のキーを処理する前に 1 回だけ読み直す。
+同じキーの `OnTestKeyDown` と `OnKeyDown` は同じ判定結果を使う。読み直しにも失敗したときは、欄の種類なしとして扱う。
+同じ入力先にいる間は、これ以上判定し直さない。
+
+Chromium は入力の種類ごとに document manager を持ち、同じ種類の欄へ移るときもフォーカスを一度外してから戻す
+（`ui/base/ime/win/tsf_bridge.cc` の `OnTextInputTypeChanged`）。このため Web ページの欄の移動はフォーカスの移動として届く。
+同じ document manager のまま欄の種類を変えるアプリでは、次のフォーカスの移動まで前の判定のままになる。
+
+英数で始める群の欄に入ったとき、IME が On なら、そのときの入力モード（ひらがなか英数）を入る前のモードとして覚え、英数モードで
+なければ英数モードにする。すでに英数モードなら、覚えるだけでモードは変えない。IME が Off なら何も覚えない。
+
+英数で始める群の欄にいる間に、利用者の操作によらずに IME が On になったときも、英数モードにする。TIP の外からの On と、
+`docs/tsf-deep-integration-spec.md` §4.1 で TIP が行う On（初回フォーカスと 1 秒以内の戻し）がこれに当たる。開閉の状態が
+変わると英数モードは解けるため、適用し直さなければひらがなで始まる。このとき入る前のモードを覚えていなければ、ひらがなを覚える
+（Off から On にしたときの初期化と同じ。同 §4.2）。利用者が開閉キーや入力インジケーターで On にしたときは、下の利用者の切替として
+扱う。
+
+次のときは切り替えない。
+
+- composition がある（通常はフォーカスの移動で確定済みである。`docs/tsf-deep-integration-spec.md` §4.3）。
+- 持ち越した入力がある（同 §4.3）。英数モードの切替先は持ち越した入力を捨てるため、切り替えると打鍵が失われる。
+- IME が Off である。
+
+これらで切り替えなかった欄でも、判定した欄の種類はその入力先の判定として残す。composition や持ち越した入力があって切り替え
+なかったときは、入る前のモードも覚えない。その欄にいる間、入口の切替を後からやり直さない（composition や持ち越した入力が
+片付いた後に英数モードへ変わると、続けて打つ文字の字種が途中で変わるため）。IME が Off で入った欄で、その後に利用者の操作に
+よらず On になったときだけは、上に述べた利用者の操作によらない On の規則で英数モードにする。
+例: 持ち越した入力があって切り替えずに入った URL 欄では、その入力を確定した後もひらがなのままである。IME が Off のまま URL 欄に
+入り、アプリや言語バーが IME を On にしたときは英数モードになり、その欄を離れるとひらがなへ戻る。
+
+利用者がその欄で入力モードや開閉を切り替えたとき（英数キー、ひらがなキー、`VK_IME_ON`、入力インジケーター、Off から On への
+切替（`docs/tsf-deep-integration-spec.md` §4.2））は、その欄にいる間は利用者の選択を保ち、本節は切り替え直さない。
+利用者の操作によらない On での英数モードの適用し直しも、その後は行わない。
+
+入る前のモードを覚えた欄から離れたときは、覚えたモードへ戻す。その欄で利用者が切り替えていても戻す。欄での切替はその欄の中だけ
+で効く。すでに英数モードで入った欄でひらがなに切り替えてから離れたときは、英数モードへ戻る。
+英数で始める群の欄から同じ群の別の欄へ移ったときも、前の欄を離れて戻してから、新しい欄に入る規則を当てる。新しい欄は英数モード
+で始まり、覚えるモードは前の欄に入る前のモードになる。
+戻すときに IME が Off なら何もしない（On にしたときの規則は `docs/tsf-deep-integration-spec.md` §4.2 に従う）。
+欄ごとの選択は保存しない。同じ欄へ戻ると、もう一度英数モードから始まる。
+
+モードの切替は、入力インジケーターの表示（`docs/tsf-deep-integration-spec.md` §4.5）を更新する。判定した欄の種類は、M46 の判定と同じ info ログ
+`input_gate`（`docs/privacy-and-secure-input-spec.md` §4.3）に、値が変わったときだけ記録する。入力本文は含めない。
+
+### 13.5 優先順位
+
+上ほど優先する。
+
+1. M46（`docs/privacy-and-secure-input-spec.md` §4.3）。secure の欄では本節の切替を行わず、本節は M46 の判定を変えない（§13.3）。
+2. その欄での利用者の切替（§13.4）。
+3. アプリ別プロファイルの `inputScopeSwitching`（§5 の解決順で継承する）。
+4. グローバルの `inputScopeSwitching`。
+
+`inputScopeSwitching` が実効で `false` のアプリでは、本節の入口のモードと抑制をすべて行わない。
+
+カッコ補完の抑制は、プロファイルの `bracketPairing: "on"`（§4.1、`docs/bracket-pairing-spec.md` §4.5.0）より優先する。欄の
+種類のほうがアプリより具体的だからである。マスターの `bracketPairing == false` はこれまでどおり全体を無効にする。
+URL などの欄でもカッコ補完を使いたいアプリでは、そのアプリの `inputScopeSwitching` を `false` にする。
+
+自動句読点の抑制も、グローバルの `dynamicPunctuation` より優先する。
+
+### 13.6 設定キー
+
+`settings/mvp-settings.schema.json` のトップレベルへ次を追加する。
+
+| キー | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `inputScopeSwitching` | boolean | `true` | M67: 入力欄の種類（§13.2）に応じて、入口のモードを英数にし、カッコ補完と自動句読点を止める |
+
+`profilesByApp` の各プロファイルにも、同名の boolean フィールド `inputScopeSwitching` を追加する（§4、§4.1）。
+未指定は §5 の解決順で下位層を継承し、どの層も持たなければグローバルの値に従う。
+旧版の resolver は未知のフィールドだけを除き、同じプロファイルの他のフィールドを保つ（§9.1）。
+
+既定を `true` にする根拠は §13.1 にある。影響は次の範囲に限られる。
+
+- `GUID_PROP_INPUTSCOPE` を返さないアプリと、表に無い値の欄は変わらない（§13.7）。
+- Chromium 系ブラウザのアドレス欄は、日本語の入力ロケールでは検索欄として報告されるので、ひらがなのまま始まる。
+- 英数モードになった欄でも、英数キーやひらがなキーで 1 打で戻せる。全体または特定のアプリで `false` にできる。
+
+供給経路は `bracketPairing` と同じで、TIP が settings.json から読み、Host を経由しない（`docs/bracket-pairing-spec.md` §6.1）。
+schema、`settings/default-settings.sample.json`、settings-app の許可キーと画面（グローバルの項目と §8 の編集ダイアログ）、
+TIP の設定スナップショットを同じ変更でそろえる。
+
+### 13.7 InputScope を返さないアプリ
+
+§13.3 で欄の種類なしになった入力欄では、本節の切替を行わない。入口のモード、カッコ補完、自動句読点は、本節の導入前と
+同じである。M46 の判定もそのまま働く。
+
+### 13.8 テストと実機確認
+
+単体テストと TIP のテストで、次を確かめる。
+
+| 対象 | 検証内容 | 層 |
+|---|---|---|
+| 分類（§13.2、§13.3） | 表の各値が対応する群になること。複数の値で最初に当たった値が決めること。`IS_DEFAULT`、表に無い値、0 件、読み直しまで失敗したときに種類なしになること。パスワード・PIN・`IS_PRIVATE` が群に入らないこと | tsf-tip |
+| M46 との関係（§13.3） | secure の欄で切り替えないこと。`IS_URL` と `IS_PRIVATE` の組で英数モードになり、学習と AI 送信の停止が保たれること。M46 の既存の試験が変わらず通ること | tsf-tip |
+| 時機（§13.4） | 欄に入ると英数モードになり、離れると入る前のモードへ戻ること。利用者の切替がその欄で保たれ、離れると戻ること。composition、持ち越した入力、IME Off で切り替えず、その欄で後から切り替えないこと。フォーカス時に読めないとき、composition の無い最初のキーの前に 1 回だけ読み直すこと | tsf-tip |
+| 開閉との関係（§13.4） | 新しい document の初回フォーカスで TIP が On にした後と、1 秒以内の戻しの後に英数モードになること。TIP の外からの On の後も英数モードになること。利用者の開閉キーと入力インジケーターでの On ではひらがなになり、その欄では適用し直さないこと | tsf-tip |
+| 戻す先（§13.4） | IME が Off で入り、利用者の操作によらない On で英数モードになった欄を離れると、ひらがなへ戻ること。すでに英数モードで入った欄でひらがなにしてから離れると、英数モードへ戻ること。英数で始める群の欄から同じ群の欄へ移ると、英数モードで始まり、最初の欄に入る前のモードへ戻ること | tsf-tip |
+| 抑制（§13.2、§13.5） | 英数で始める群の欄で、英数モードでもひらがなモードでもカッコ補完が働かないこと。プロファイルの `bracketPairing: "on"` でも働かないこと。検索欄と英数で始める群の欄で `auto_punctuation` が `false` になり、idle のタイマーを張らず、Enter が最終要求を待たないこと | tsf-tip |
+| 設定（§13.5、§13.6） | グローバルとプロファイルの `inputScopeSwitching: false` で切替と抑制をすべて行わないこと。プロファイルの未指定が継承されること | core / tsf-tip |
+| 返さないアプリ（§13.7） | 欄の種類なしで、入口のモード、カッコ補完、自動句読点が変わらないこと | tsf-tip |
+
+実機では次を確かめる（`gate:human-required`）。
+
+- Edge と Chrome の `type=url`・`email`・`number`・`tel`・`search` の欄と `inputmode` 属性で、欄の種類どおりに切り替わること。
+  同じページの中で、種類の違う欄へ移ったときと同じ種類の欄へ移ったときの両方で確かめる。
+- 新しいウィンドウやタブで初めて入った欄が、英数で始める群なら英数モードで始まること（初回フォーカスで TIP が On にした後）。
+- Edge と Chrome のアドレス欄が、日本語の入力ロケールでひらがなのまま始まること。
+- InPrivate のウィンドウで切り替わらないこと。
+- Firefox の同じ欄、Windows の検索欄、メモ帳（scope を返さない）、Excel の最初の打鍵（持ち越し）。
+- 入力インジケーターが `_A` を出すこと。
+- 同じ欄での Microsoft IME の入口のモードとの比較。

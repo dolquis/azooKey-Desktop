@@ -538,6 +538,7 @@ host は受け取った `auto_punctuation` が `true` のときだけ句読点�
 | `onPause`・`IdleTimeout`（§4.3.1）/ Commit 前の最終評価 | `true`（挿入） |
 | `eager`・打鍵による Input | `true`（毎回挿入） |
 | `dynamicPunctuation=false` または `liveConversion=false` | `false`（常に） |
+| 入力欄の種類で自動句読点を止める欄（`docs/app-profile-spec.md` §13） | `false`（常に） |
 
 これにより、同じ kana バッファでも「打鍵時リクエスト＝抑制」「idle/commit リクエスト＝挿入」を
 host 側のモード判定なしに区別できる（Codex 指摘の「host が打鍵と idle を区別できない」問題の解消）。

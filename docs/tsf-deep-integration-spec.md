@@ -879,7 +879,7 @@ TIP が compartment を書き換えると、TSF が同期に呼ぶ `OnChange` �
 | On | Off | composition があれば確定 (auto-commit) し、内部状態をクリア |
 | On（英数モード） | On | `VK_IME_ON`、ひらがなキー（§3.1）、`imeOnOff` の変換キーだけ。英数モードを解除して `hiragana` にする。compartment は書き換えない |
 
-入力欄の種類（InputScope）で英数モードから始める欄では、利用者の開閉キーと入力インジケーターでの Off → On は `hiragana` にし、それ以外の On の後は英数モードを適用し直す（`docs/app-profile-spec.md` §13.4）。
+入力欄の種類（InputScope）で英数モードから始める欄での Off → On の後の入力モードは、`docs/app-profile-spec.md` §13.4 に従う。
 
 On → Off で何を確定するかは、Off にした操作で決まる。
 

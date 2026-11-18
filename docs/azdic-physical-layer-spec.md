@@ -493,7 +493,7 @@ SPDX 識別子だけでは `ThirdPartyNotices.txt` を作れない。共通ラ�
 ### 15.7 mutable 層との併存
 
 `user_dictionary`（M9）/ `auto_words`（M36-A）/ `app_specific_dictionary`（M48）は
-`.azdic` へ移さない。既存の `user_dict.json`（`UserDictionary` の version 1 スキーマ）と
+`.azdic` へ移さない。既存の `user_dict.json`（`UserDictionary` の JSON スキーマ。品詞を持つ version 2 は `docs/user-dictionary-pos-spec.md` §3）と
 `auto_words.tsv` をそのまま使い、§14.13 の後方互換条件を維持する。
 
 double-array は構築が全件走査であり、1 語の追加ごとに再構築するには向かない。これらの層は

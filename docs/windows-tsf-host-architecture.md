@@ -152,9 +152,10 @@ CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は b
 | `TransformSelectedText` | `docs/ai-backend-spec.md` §4.1、`docs/legacy-parity-spec.md` §4.4 |
 | `Unknown` | `docs/ipc-persistence-hardening-spec.md` §6.3 |
 
-`MessageType` に無く、spec が定義を持つ予定の型は次の 1 つである。enum へ足すときに上の表へ移す。
+`MessageType` に無く、spec が定義を持つ予定の型は次の 2 つである。enum へ足すときに上の表へ移す。
 
 - `RequestPostCommitLint`（予定。横断 X-3-3）: `docs/ai-backend-spec.md` §4.3
+- `ImportUserDictionaryText`（予定。M71-A）: `docs/user-dictionary-pos-spec.md` §7.2
 
 校正ビューで TIP が設定アプリへ本文を渡し、範囲の選択を受ける session
 （`ipc/include/azookey/ipc/ProofreadSession.h`）は Host の IPC ではなく、TIP が押下ごとに作る

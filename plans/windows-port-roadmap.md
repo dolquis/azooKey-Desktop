@@ -64,7 +64,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | 追加機能マイルストーン | M35 / M36（M36-A・M36-B）/ M48 / M58〜M64 / M66 / M67 / M68 / M69 / M70 / M72 / M73 |
 | 開発基盤・品質強化トラック | M37〜M44 / M47 / M50 / M51 |
 | プライバシー / モデル管理 / 学習データ UI トラック | M45 / M46 / M49 |
-| 変換品質トラック | M52〜M57 / M65 |
+| 変換品質トラック | M52〜M57 / M65 / M71 |
 
 ### M0: 廃止資産の削除
 
@@ -523,6 +523,7 @@ M53 ─→ M55                    （Dictionary-Constrained Correction が辞書
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
+M9 / M30 / M49 ─→ M71-A ─→ M71-B（ユーザー辞書の品詞の保存と他 IME の辞書の取り込み → 活用形の展開。M71-B は M65 にも依存）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -2456,6 +2457,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 > - `docs/neural-reranker-nll-spec.md`（Track B。M 番号を持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
 > - `docs/lattice-conversion-spec.md`（M65）
+> - `docs/user-dictionary-pos-spec.md`（M71）
 >
 > リランカーは 2 トラックに分かれる。Track A（`docs/neural-reranker-spec.md` §1〜§14）が
 > 本トラックの M56、Track B（`docs/neural-reranker-nll-spec.md` §B1〜§B12）が **NllScorer 型ニューラルリランク**
@@ -2735,6 +2737,50 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
     本 M の受け入れ条件に含めない
   - モデル無効構成の定期採取は、品質 workflow に同梱辞書の生成を足す変更を伴う
     （`docs/conversion-quality-benchmark-spec.md` §10）
+
+### M71: ユーザー辞書の品詞・活用と他 IME の辞書の取り込み
+
+- **目的**: ユーザー辞書の語に品詞を持たせ、動詞と形容詞の活用形を変換の候補に出す（M71-B）。Microsoft IME と
+  Google 日本語入力のテキスト形式の辞書を取り込めるようにする（M71-A）。
+- **前提**: M71-A は M9（ユーザー辞書）、M30（設定アプリ）、M49（学習データ管理）。M71-B は M65（ラティス変換）と M71-A。
+- **変更対象**: `learning/`（`UserDictionary` の version 2、展開形の索引）、`ipc/`（`AddUserWord` の `pos`、
+  `ImportUserDictionaryText`）、`inference-host/`（テキスト辞書の解析と取り込み、`userdict` と `lookup` の CLI、
+  `InferenceEngine` の活用語の経路）、`core/`（ラティスの語彙へのユーザー辞書の展開形）、`settings-app/`（品詞の欄と
+  取り込みの導線）、`dictbuild/tests/`（語尾表の照合）。
+- **受け入れ条件**:
+  - M71-A:
+    - 品詞を持つ語の無い `user_dict.json` は、読み書きしても version 1 のまま変わらない。品詞を持つ語を足すと
+      version 2 で書き、読み戻せる。未知のメンバーは往復で残る。version 3 以上の辞書は読めるが、それを書き換える操作と
+      書き出す操作はすべて失敗し、ファイルを変えない（spec §3.2）
+    - 自作の fixture（Microsoft IME 形式の UTF-16LE と CP932、Google 日本語入力形式の UTF-8、azooKey TSV）を取り込むと、
+      spec §6.5 の対応表どおりの品詞で入る。未対応の品詞と不正な行は、理由ごとの件数で除かれる
+    - 文字コードの判定失敗、上限超過、ロックの時間切れ、保存の失敗のどれでも、ディスクの辞書と Host が公開中の辞書が
+      変わらない。`dry_run` は何も変えない（spec §6.8）
+    - `merge` で既存の語が残り、`overwrite` で置き換わる。`userdict import` の既定で、5 列以下の行の扱いは品詞に対応する前と
+      同じである（spec §7.5）
+    - Host の privacy の方針が secure か学習を許さないとき、または SafeMode のとき、取り込みは `blocked` で失敗する（spec §6.8）
+    - 設定アプリは、capability `user_dict_pos`・`user_dict_text_import` を告知した Host にだけ、品詞の欄と取り込みの
+      導線を出す（spec §7.4・§8）
+    - Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（Human Gate）
+  - M71-B:
+    - 五段・一段・サ変・形容詞の各型の語の展開形が、spec §4.2 の語尾表どおりにラティスのノードになる。展開形は
+      完全一致・前方一致・予測・新語判定・一覧に出ない（spec §4.6）
+    - モデル無効構成で、「ググる」（ラ行五段）を登録すると、「ぐぐった」の候補に「ググった」が出る
+    - Zenzai が正常に返した要求で、読みが展開形の索引に当たるとき、ユーザー辞書の展開形を含む経路の候補が、
+      モデルの 1 位の直下の score で 1 件足される。当たらない要求、`live` の要求（ライブ変換と再変換）、lattice_core が
+      無いとき、cancel と deadline では足されない（spec §5）
+    - 無関係な入力（ユーザー辞書の語を含む最良の経路のコストが、制約なしの最良の経路から T を超えて大きい）では足されない。
+      T はエンジンの定数で初期値 10000 とし、実機確認で見直す（spec §5.2）
+    - M52 のベンチ（ユーザー辞書を読まない）の結果が変わらない
+    - dictbuild の試験で、語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の
+      代表の語の活用形と語尾表が一致する
+    - 実機で、活用した登録語が候補に出る（Human Gate）
+- **参照仕様**: `docs/user-dictionary-pos-spec.md`、`docs/lattice-conversion-spec.md` §3・§8.3、
+  `docs/learning-data-management-spec.md` §4.5・§6・§13・§14
+- **補足**:
+  - 品詞に対応する前の版の Host と `userdict` CLI が辞書を保存すると、品詞が消える（語は残る）。防げないので
+    既知の制約とする（spec §3.5）
+  - ATOK・ことえり・Gboard・macOS のユーザ辞書の形式は扱わない（spec §1）
 
 ## 横断テーマと Phase の対応
 

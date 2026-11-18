@@ -353,13 +353,13 @@ int CandidateWindow::ComputeVisibleRows(int count, int item_height, int other_he
 }
 
 // static
-int CandidateWindow::ComputeFitHeight(POINT anchor, RECT work_area, int caret_gap) {
+int CandidateWindow::ComputeFitHeight(POINT anchor, RECT work_area, int flip_gap) {
   const int work_height = static_cast<int>(work_area.bottom - work_area.top);
   if (work_area.right <= work_area.left || work_height <= 0) return 0;
   // The same sides ComputePlacement chooses between: below the anchor, or with
-  // the bottom caret_gap above it.
+  // the bottom flip_gap above it.
   const long long below = static_cast<long long>(work_area.bottom) - anchor.y;
-  const long long above = static_cast<long long>(anchor.y) - caret_gap - work_area.top;
+  const long long above = static_cast<long long>(anchor.y) - flip_gap - work_area.top;
   // At least 1, so a caret with no room on either side still gets the fewest rows.
   return static_cast<int>(std::clamp<long long>(std::max(below, above), 1, work_height));
 }
@@ -627,10 +627,13 @@ int CandidateWindow::ComputeHealthBannerHeight(int text_lines, int item_height) 
   return item_height * (std::clamp(text_lines, 1, kMaxBannerLines) + 1);
 }
 
-void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
-                           std::wstring notice) {
+void CandidateWindow::Show(RECT anchor, const std::vector<CandidateViewItem>& items,
+                           int selected_idx, std::wstring notice) {
   if (!hwnd_ || items.empty()) return;
-  last_anchor_ = pt;
+  last_anchor_ = anchor;
+  // Both modes open at the anchor's bottom-left and pick the monitor there
+  // (legacy-parity-spec §9.2).
+  const POINT pt{anchor.left, anchor.bottom};
 
   const ScopedPerMonitorDpiAwareness dpi_context;
   // The window draws one mode at a time (native-ui-spec §4.1).
@@ -678,7 +681,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   // fit, following the selection within the page (native-ui-spec §4.1). The rows
   // do not depend on the page, so a page change keeps the window's size.
   const int page_rows = std::min(count, static_cast<int>(core::kCandidatePageSize));
-  const int fit_height = ComputeFitHeight(pt, monitor.work_area, metrics_.caret_gap);
+  // Flipped up, the window's bottom meets the anchor's top, as in prediction mode
+  // (native-ui-spec §4.1, §4.2); a point has no height, and caret_gap stands in.
+  const int flip_gap = anchor.bottom > anchor.top ? static_cast<int>(anchor.bottom - anchor.top)
+                                                  : metrics_.caret_gap;
+  const int fit_height = ComputeFitHeight(pt, monitor.work_area, flip_gap);
   const auto fit_rows = [&] {
     const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
                              (secure_toast_visible_ ? metrics_.item_height : 0) +
@@ -703,7 +710,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   }
   int height = HealthBannerTop();
   if (health_banner_visible_) height += HealthBannerHeight();
-  PresentAt(pt, monitor.work_area, width, height, metrics_.caret_gap);
+  PresentAt(pt, monitor.work_area, width, height, flip_gap);
 }
 
 void CandidateWindow::ShowPredictions(RECT anchor, const std::vector<std::wstring>& predictions) {

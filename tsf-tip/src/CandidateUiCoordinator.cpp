@@ -159,7 +159,7 @@ void CandidateUiCoordinator::CancelScheduledCandidatesReady() {
   own_window_.CancelScheduledCandidatesReady();
 }
 
-HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
+HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, RECT anchor,
                                         const std::vector<CandidateViewItem>& items,
                                         int selected_idx, std::wstring notice) {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
@@ -199,7 +199,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     items_ = items;
     notice_ = std::move(notice);
     selected_idx_ = ClampSelection(selected_idx);
-    last_pt_ = pt;
+    last_anchor_ = anchor;
 
     auto* element = new (std::nothrow)
         CandidateListUIElement(CandidateSurfaces(items_), selected_idx_, notice_);
@@ -284,7 +284,7 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
   ui_element_->Update(CandidateSurfaces(items_), selected_idx_,
                       TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    own_window_.Show(last_anchor_, items_, selected_idx_, notice_);
     return S_OK;
   }
   if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
@@ -371,7 +371,7 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
   if (!ui_element_) return;
   ui_element_->SetShown(tip_draws_);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    own_window_.Show(last_anchor_, items_, selected_idx_, notice_);
     ShowPendingSecureToast();
     ShowPendingHealthBanner();
   } else {
@@ -444,7 +444,7 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
   }
   tip_draws_ = true;
   if (showing_ && !items_.empty()) {
-    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    own_window_.Show(last_anchor_, items_, selected_idx_, notice_);
     ShowPendingSecureToast();
     ShowPendingHealthBanner();
   }

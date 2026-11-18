@@ -3455,8 +3455,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       if (state.candidate_window_visible && !state.shown_candidates.empty()) {
         const auto items = BuildCandidateViews(state.shown_candidates);
-        const POINT pt = CandidateAnchorPoint();
-        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx,
+        const RECT anchor = CompositionAnchorRect();
+        candidate_ui_.BeginUI(thread_mgr_, anchor, items, state.selected_candidate_idx,
                               state.batch_notice);
       } else {
         candidate_ui_.EndUI();
@@ -4120,8 +4120,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
               const auto items = BuildCandidateViews(snapshot);
               if (!items.empty()) {
                 selected_candidate_idx_ = 0;
-                const POINT pt = CandidateAnchorPoint();
-                const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+                const RECT anchor = CompositionAnchorRect();
+                const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, anchor, items, 0);
                 if (FAILED(begin_hr)) return begin_hr;
                 const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
                 if (FAILED(update_hr)) return update_hr;
@@ -4620,7 +4620,7 @@ STDMETHODIMP TextService::OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtn
     batch_segment_selections_ = previous_selections;
     shown_candidates_ = previous_candidates;
     selected_candidate_idx_ = previous_selected;
-    const HRESULT restore_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+    const HRESULT restore_hr = candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
                                                      BuildCandidateViews(shown_candidates_),
                                                      selected_candidate_idx_, shown_batch_notice_);
     if (FAILED(restore_hr)) {
@@ -9077,7 +9077,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     const auto items = BuildCandidateViews(shown_candidates_);
     if (items.empty()) return S_OK;
     const HRESULT hr =
-        candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, selected_candidate_idx_);
+        candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(), items, selected_candidate_idx_);
     if (FAILED(hr)) return hr;
     preedit_update_needed = true;
   } else if (const auto* selection = std::get_if<core::UpdateCandidateSelection>(&action)) {
@@ -9178,7 +9178,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     core_action_in_progress_ = false;
     try {
       if (was_showing && !shown_candidates_.empty()) {
-        candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+        candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
                               BuildCandidateViews(shown_candidates_), previous_selected);
       } else {
         candidate_ui_.EndUI();
@@ -9434,7 +9434,7 @@ HRESULT TextService::FocusBatchSegment(size_t index) {
   shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
   selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
   candidate_ui_.EndUI();
-  return candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+  return candidate_ui_.BeginUI(thread_mgr_, CompositionAnchorRect(),
                                BuildCandidateViews(shown_candidates_), selected_candidate_idx_,
                                shown_batch_notice_);
 }
@@ -9626,7 +9626,7 @@ void TextService::OnCandidatesReady(void* context) {
   }
 }
 
-RECT TextService::PredictionCaretRect() {
+RECT TextService::CompositionAnchorRect() {
   if (caret_rect_valid_) return caret_rect_;
   return CaretRectFromAnchor(CurrentCaretWin32Api(), CandidateAnchorPoint());
 }
@@ -9667,7 +9667,7 @@ void TextService::ShowPredictionWindow() {
   // UI element (native-ui-spec §5.2). CandidateWindowDecided() above includes
   // candidate_ui_.IsShowing(), so ShowPredictions never declines for the list
   // here, and WindowShowFailed below means the prediction frame failed to draw.
-  if (!candidate_ui_.ShowPredictions(PredictionCaretRect(), labels)) {
+  if (!candidate_ui_.ShowPredictions(CompositionAnchorRect(), labels)) {
     LogPredictionOnce(PredictionLogReason::WindowCreateFailed);
     return;
   }
@@ -11069,7 +11069,13 @@ void TextService::ShowReconversionList(uint64_t generation, ITfRange* range, HRE
   // composition cached, which lies elsewhere in the document.
   const CaretAnchor anchor =
       ResolveCurrentCaretAnchor(extent.valid ? &extent.rect : nullptr, extent.window);
-  const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, anchor.point, items, 0);
+  // DEV-2104: the window flips over the range's extent, measured like a
+  // composition's; a caret rect at the anchor point stands in without one.
+  RECT anchor_rect{};
+  if (!extent.valid || !azookey::tsf::ResolveCaretRect(CurrentCaretWin32Api(), extent.rect,
+                                                       extent.window, &anchor_rect))
+    anchor_rect = CaretRectFromAnchor(CurrentCaretWin32Api(), anchor.point);
+  const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, anchor_rect, items, 0);
   if (FAILED(ui_hr)) {
     LogReconversion("show", "ui_failed", ui_hr);
     ClearReconversionState();
@@ -11143,8 +11149,9 @@ bool TextService::ShowCandidateWindowFromCache() {
 
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
-  const POINT pt = CandidateAnchorPoint();
-  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0, shown_batch_notice_);
+  const RECT anchor = CompositionAnchorRect();
+  const HRESULT begin_hr =
+      candidate_ui_.BeginUI(thread_mgr_, anchor, items, 0, shown_batch_notice_);
   if (FAILED(begin_hr)) return false;
   if (emoji_mode_ == EmojiMode::Collecting) emoji_mode_ = EmojiMode::Listing;
 

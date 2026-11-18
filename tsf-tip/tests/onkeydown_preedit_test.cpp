@@ -15380,6 +15380,47 @@ TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
   }
 }
 
+// DEV-2104 (native-ui-spec §4.1): flipped above a composition line taller than
+// caret_gap, the candidate window's bottom meets the composition's top, as the
+// prediction window's does, on the core path and the legacy path.
+TEST(TsfTipCandidateAnchorTest, FlippedWindowClearsATallComposition) {
+  struct Geometry {
+    Geometry() {
+      azookey::tsf::CandidateWindow::SetMonitorDpiForTest(96);
+      // 20 px below the composition: the window goes above it.
+      azookey::tsf::CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 300});
+    }
+    ~Geometry() {
+      azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
+      azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
+    }
+  };
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    const Geometry geometry;
+    CaretFallbackGuard caret_fallback;
+    FakeContextView view;
+    // A 60 px tall line, {110, 220, 130, 280} on the screen once converted.
+    view.text_ext = {10, 20, 30, 80};
+    view.get_wnd_result = S_OK;
+    view.text_window = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(0x2104));
+    DocumentPreeditHarness h;
+    h.context.active_view = &view;
+    ASSERT_TRUE(h.service.create_candidate_window_for_test());
+    StartWindowWait(h, legacy);
+    AnswerWindow(h);
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    const HWND hwnd = h.service.candidate_window_for_test().hwnd_for_test();
+    ASSERT_TRUE(IsWindowVisible(hwnd));
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    EXPECT_EQ(bounds.bottom, 220);
+    EXPECT_EQ(bounds.left, 110);
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    h.context.active_view = nullptr;
+  }
+}
+
 TEST(TsfTipWindowWaitTest, PageDownWaitsForTheWindowAndReplays) {
   for (const bool legacy : {false, true}) {
     SCOPED_TRACE(legacy);

@@ -1018,6 +1018,40 @@ TEST(TsfTipCandidateUiCoordinatorTest, SplitSetWhileTheTipDrawsAppliesOnceTheApp
   EXPECT_EQ(coordinator.EndUI(), S_OK);
 }
 
+// DEV-2104: the window the TIP draws again after the app handed the list back
+// opens at the anchor rect BeginUI took, flipped over its top.
+TEST(TsfTipCandidateUiCoordinatorTest, RedrawnListKeepsTheAnchorRect) {
+  using azookey::tsf::CandidateWindow;
+  struct Geometry {
+    Geometry() {
+      CandidateWindow::SetMonitorDpiForTest(96);
+      CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 300});
+    }
+    ~Geometry() {
+      CandidateWindow::SetWorkAreaForTest({});
+      CandidateWindow::SetMonitorDpiForTest(0);
+    }
+  } geometry;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  // A 60 px tall composition 20 px above the bottom of the work area.
+  const RECT composition{110, 220, 130, 280};
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, composition, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(coordinator.own_window_for_test().IsVisible());
+
+  ASSERT_EQ(thread_mgr.element->Show(TRUE), S_OK);
+  const HWND hwnd = coordinator.own_window_for_test().hwnd_for_test();
+  ASSERT_TRUE(IsWindowVisible(hwnd)) << coordinator.window_failure_stage();
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom, composition.top);
+  EXPECT_EQ(bounds.left, composition.left);
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+  coordinator.Destroy();
+}
+
 namespace {
 
 class ScopedRenderFailure {

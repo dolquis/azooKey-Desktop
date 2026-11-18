@@ -1388,6 +1388,68 @@ TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCover
   }
 }
 
+// DEV-2104 (native-ui-spec §4.1): an anchor rect taller than caret_gap (a large
+// font, a zoomed or wrapped composition) is cleared when the window flips up:
+// its bottom meets the rect's top, and the room above is measured from there.
+TEST(CandidateWindowScrollTest, ARectAnchorFlipsOverItsTopAndFitsTheRoomAboveIt) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  EXPECT_EQ(CandidateWindow::ComputeFitHeight({20, 260}, {0, 0, 1920, 300}, 60), 200);
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    const int gap = MulDiv(20, static_cast<int>(dpi), 96);
+    std::vector<CandidateViewItem> items;
+    for (int i = 0; i < 20; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+
+    // Low in a tall work area: a page and its position row fit above the rect.
+    CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 30 * row});
+    const RECT composition{20, 23 * row, 300, 26 * row};
+    window.Show(composition, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    EXPECT_EQ(window.GetVisibleRowCount(), 9);
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom, composition.top);
+    EXPECT_EQ(bounds.top, composition.top - 10 * row);
+    EXPECT_EQ(bounds.left, composition.left);
+    // Both modes pick the monitor at the rect's bottom-left.
+    EXPECT_EQ(CandidateWindow::LastMonitorPointForTest().x, composition.left);
+    EXPECT_EQ(CandidateWindow::LastMonitorPointForTest().y, composition.bottom);
+    // A work area change is measured again at the same rect.
+    SendMessageW(window.hwnd_for_test(), WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom, composition.top);
+    // The bottom-left point alone flips over caret_gap, onto the rect.
+    window.Show(POINT{composition.left, composition.bottom}, items, 0);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom, composition.bottom - gap);
+    EXPECT_GT(bounds.bottom, composition.top);
+
+    // Less room above than a page: the rows that fit above the rect's top.
+    CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 12 * row});
+    const RECT high{20, 6 * row, 300, 9 * row};
+    window.Show(high, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    EXPECT_EQ(window.GetVisibleRowCount(), 5);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.bottom, high.top);
+    EXPECT_EQ(bounds.top, 0);
+
+    // Room below: the window opens under the rect's bottom-left as before.
+    CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 30 * row});
+    const RECT near_top{20, 2 * row, 300, 5 * row};
+    window.Show(near_top, items, 0);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_EQ(bounds.top, near_top.bottom);
+    window.Destroy();
+  }
+}
+
 TEST(CandidateWindowScrollTest, WorkAreaAndDisplayChangesRemeasureAShownWindow) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());

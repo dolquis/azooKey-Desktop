@@ -3,7 +3,10 @@
 #include <OleAuto.h>
 
 #include <algorithm>
+#include <new>
 #include <utility>
+
+#include "azookey/core/CandidatePage.h"
 
 namespace azookey::tsf {
 
@@ -97,35 +100,64 @@ STDMETHODIMP CandidateListUIElement::GetString(UINT uIndex, BSTR* pstr) {
   return *pstr ? S_OK : E_OUTOFMEMORY;
 }
 
+// M68: nine candidates to a page, or the split the app set while it draws the
+// list (tsf-deep-integration-spec §2.3).
 STDMETHODIMP CandidateListUIElement::GetPageIndex(UINT* pIndex, UINT uSize, UINT* puPageCnt) {
   if (!puPageCnt) return E_INVALIDARG;
-  *puPageCnt = 1;
-  if (uSize == 0) return S_OK;
-  if (!pIndex) return E_INVALIDARG;
-  pIndex[0] = 0;
+  const size_t pages = core::CandidatePageCount(items_.size(), AppPageSplit());
+  *puPageCnt = static_cast<UINT>(pages);
+  // A null buffer asks for the count first (Microsoft Learn, GetPageIndex).
+  if (!pIndex) return S_OK;
+  const size_t filled = std::min<size_t>(uSize, pages);
+  for (size_t i = 0; i < filled; ++i)
+    pIndex[i] =
+        static_cast<UINT>(core::CandidatePageNumbered(i, items_.size(), AppPageSplit()).begin);
   return S_OK;
 }
 
 STDMETHODIMP CandidateListUIElement::SetPageIndex(UINT* pIndex, UINT uPageCnt) {
-  UNREFERENCED_PARAMETER(pIndex);
-  return uPageCnt <= 1 ? S_OK : E_INVALIDARG;
+  if (!pIndex || uPageCnt == 0) return E_INVALIDARG;
+  try {
+    std::vector<uint32_t> starts(pIndex, pIndex + uPageCnt);
+    if (!core::IsValidCandidatePageStarts(starts, items_.size())) return E_INVALIDARG;
+    // Kept while the TIP draws too; AppPageSplit applies it once the app does.
+    app_page_starts_ = std::move(starts);
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  }
 }
 
 STDMETHODIMP CandidateListUIElement::GetCurrentPage(UINT* puPage) {
   if (!puPage) return E_INVALIDARG;
-  *puPage = 0;
+  *puPage = static_cast<UINT>(CurrentPage());
   return S_OK;
 }
 
 void CandidateListUIElement::Update(std::vector<std::wstring> items, int selected_idx,
                                     DWORD updated_flags) {
+  // The default split depends only on the page count; an app's split only on
+  // itself, and it never survives a different list.
+  const auto split = [this] {
+    return std::pair{core::IsValidCandidatePageStarts(AppPageSplit(), items_.size()),
+                     core::CandidatePageCount(items_.size(), AppPageSplit())};
+  };
+  const auto split_before = split();
+  const size_t page = CurrentPage();
+  // Showing the same list to the app keeps its split (Show(FALSE), §2.3).
+  if (items != items_) app_page_starts_.clear();
   items_ = std::move(items);
   selected_idx_ = ClampSelection(selected_idx, items_.size());
+  if (split() != split_before) updated_flags |= TF_CLUIE_PAGEINDEX;
+  if (CurrentPage() != page) updated_flags |= TF_CLUIE_CURRENTPAGE;
   updated_flags_ = updated_flags;
 }
 
 void CandidateListUIElement::SetSelection(int selected_idx, DWORD updated_flags) {
+  const size_t page = CurrentPage();
   selected_idx_ = ClampSelection(selected_idx, items_.size());
+  // Moving the selection never moves the split, only the current page.
+  if (CurrentPage() != page) updated_flags |= TF_CLUIE_CURRENTPAGE;
   updated_flags_ = updated_flags;
 }
 
@@ -133,6 +165,17 @@ void CandidateListUIElement::SetShown(bool shown) { shown_ = shown; }
 
 void CandidateListUIElement::SetShowCallback(std::function<void(bool)> callback) {
   show_callback_ = std::move(callback);
+}
+
+const std::vector<uint32_t>& CandidateListUIElement::AppPageSplit() const {
+  static const std::vector<uint32_t> kNinePerPage;
+  return shown_ ? kNinePerPage : app_page_starts_;
+}
+
+size_t CandidateListUIElement::CurrentPage() const {
+  if (selected_idx_ < 0) return 0;
+  return core::CandidatePageAt(static_cast<size_t>(selected_idx_), items_.size(), AppPageSplit())
+      .page;
 }
 
 int CandidateListUIElement::ClampSelection(int selected_idx, size_t count) {

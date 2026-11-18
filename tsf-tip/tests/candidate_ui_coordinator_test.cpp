@@ -870,6 +870,156 @@ TEST(TsfTipCandidateUiCoordinatorTest, ElementShowFalseSwitchesSubsequentUpdates
 
 namespace {
 
+std::vector<azookey::tsf::CandidateViewItem> NumberedItems(int count) {
+  std::vector<azookey::tsf::CandidateViewItem> items;
+  for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+  return items;
+}
+
+std::vector<UINT> PageIndex(ITfCandidateListUIElement* candidates) {
+  UINT pages = 0;
+  if (FAILED(candidates->GetPageIndex(nullptr, 0, &pages))) return {};
+  std::vector<UINT> starts(pages);
+  UINT filled = 0;
+  if (FAILED(candidates->GetPageIndex(starts.data(), pages, &filled)) || filled != pages) return {};
+  return starts;
+}
+
+UINT CurrentPage(ITfCandidateListUIElement* candidates) {
+  UINT page = 0xFFFFFFFF;
+  EXPECT_EQ(candidates->GetCurrentPage(&page), S_OK);
+  return page;
+}
+
+DWORD UpdatedFlags(ITfCandidateListUIElement* candidates) {
+  DWORD flags = 0;
+  EXPECT_EQ(candidates->GetUpdatedFlags(&flags), S_OK);
+  return flags;
+}
+
+}  // namespace
+
+// M68 (tsf-deep-integration-spec §2.3): nine candidates to a page.
+TEST(TsfTipCandidateUiCoordinatorTest, UiElementPagesAreNineCandidatesAndFollowTheSelection) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, NumberedItems(20), 0), S_OK);
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9, 18}));
+  EXPECT_EQ(UpdatedFlags(candidates) & (TF_CLUIE_PAGEINDEX | TF_CLUIE_CURRENTPAGE),
+            static_cast<DWORD>(TF_CLUIE_PAGEINDEX | TF_CLUIE_CURRENTPAGE));
+  // A short buffer takes the first pages and still learns the count.
+  UINT first_two[2] = {};
+  UINT pages = 0;
+  EXPECT_EQ(candidates->GetPageIndex(first_two, 2, &pages), S_OK);
+  EXPECT_EQ(pages, 3u);
+  EXPECT_EQ(first_two[1], 9u);
+  EXPECT_EQ(candidates->GetPageIndex(nullptr, 0, nullptr), E_INVALIDARG);
+  EXPECT_EQ(CurrentPage(candidates), 0u);
+
+  // Crossing into the second page flags the current page; moving inside it does not.
+  EXPECT_EQ(coordinator.SetSelection(10), S_OK);
+  EXPECT_EQ(CurrentPage(candidates), 1u);
+  EXPECT_EQ(UpdatedFlags(candidates),
+            static_cast<DWORD>(TF_CLUIE_SELECTION | TF_CLUIE_CURRENTPAGE));
+  EXPECT_EQ(coordinator.SetSelection(11), S_OK);
+  EXPECT_EQ(UpdatedFlags(candidates), static_cast<DWORD>(TF_CLUIE_SELECTION));
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9, 18}));
+
+  // The digits and the page keys go by the same pages.
+  EXPECT_TRUE(coordinator.PageSplit().empty());
+  EXPECT_EQ(coordinator.DigitTarget(1), 9);
+  EXPECT_EQ(coordinator.DigitTarget(9), 17);
+  const int update_count = thread_mgr.update_count;
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/true), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 19);  // The short last page's last candidate.
+  EXPECT_EQ(CurrentPage(candidates), 2u);
+  EXPECT_EQ(thread_mgr.update_count, update_count + 1);
+  EXPECT_EQ(coordinator.DigitTarget(3), -1);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/true), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 1);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/false), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 19);
+  candidates->Release();
+
+  // One page: the page keys change nothing.
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 1), S_OK);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/true), S_FALSE);
+  EXPECT_EQ(coordinator.GetSelected(), 1);
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SetPageIndexTakesAValidSplitUntilTheListChanges) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, NumberedItems(12), 0), S_OK);
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+
+  // Not from 0, not strictly increasing, past the list, or empty.
+  for (std::vector<UINT> invalid :
+       std::vector<std::vector<UINT>>{{1, 4}, {0, 4, 4}, {0, 6, 4}, {0, 12}}) {
+    EXPECT_EQ(candidates->SetPageIndex(invalid.data(), static_cast<UINT>(invalid.size())),
+              E_INVALIDARG);
+  }
+  UINT zero = 0;
+  EXPECT_EQ(candidates->SetPageIndex(&zero, 0), E_INVALIDARG);
+  EXPECT_EQ(candidates->SetPageIndex(nullptr, 1), E_INVALIDARG);
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9}));
+
+  std::vector<UINT> split{0, 4, 10};
+  EXPECT_EQ(candidates->SetPageIndex(split.data(), static_cast<UINT>(split.size())), S_OK);
+  EXPECT_EQ(PageIndex(candidates), split);
+  EXPECT_EQ(coordinator.PageSplit(), (std::vector<uint32_t>{0, 4, 10}));
+  EXPECT_EQ(coordinator.DigitTarget(4), 3);
+  EXPECT_EQ(coordinator.DigitTarget(5), -1);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/true), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 4);
+  EXPECT_EQ(CurrentPage(candidates), 1u);
+  EXPECT_EQ(coordinator.DigitTarget(6), 9);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/false), S_OK);
+  EXPECT_EQ(coordinator.MovePage(/*forward=*/false), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 10);
+
+  // A different list drops the split and announces the new pages.
+  EXPECT_EQ(coordinator.UpdateUI(NumberedItems(11), 0), S_OK);
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9}));
+  EXPECT_TRUE(coordinator.PageSplit().empty());
+  EXPECT_NE(UpdatedFlags(candidates) & TF_CLUIE_PAGEINDEX, 0u);
+  candidates->Release();
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SplitSetWhileTheTipDrawsAppliesOnceTheAppDraws) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = TRUE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, NumberedItems(12), 0), S_OK);
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+
+  std::vector<UINT> split{0, 4, 10};
+  EXPECT_EQ(candidates->SetPageIndex(split.data(), static_cast<UINT>(split.size())), S_OK);
+  // The TIP's window and its digits keep nine to a page.
+  EXPECT_TRUE(coordinator.PageSplit().empty());
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9}));
+  EXPECT_EQ(coordinator.DigitTarget(5), 4);
+
+  // Show(FALSE) hands the list to the app with the same items; the split stays.
+  EXPECT_EQ(thread_mgr.element->Show(FALSE), S_OK);
+  EXPECT_EQ(PageIndex(candidates), split);
+  EXPECT_EQ(coordinator.PageSplit(), (std::vector<uint32_t>{0, 4, 10}));
+  EXPECT_EQ(coordinator.DigitTarget(5), -1);
+  candidates->Release();
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
+namespace {
+
 class ScopedRenderFailure {
  public:
   explicit ScopedRenderFailure(azookey::tsf::CandidateWindow::RenderFailureForTest failure) {

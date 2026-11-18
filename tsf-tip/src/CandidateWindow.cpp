@@ -15,6 +15,7 @@
 #include <string>
 
 #include "CandidateSelection.h"
+#include "azookey/core/CandidatePage.h"
 #include "azookey/tsf/CaretRectResolver.h"
 #include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/RenderingEngine.h"
@@ -112,6 +113,7 @@ CandidateWindow::RenderFailureForTest g_render_failure_for_test =
     CandidateWindow::RenderFailureForTest::None;
 int g_client_area_animation_for_test = -1;
 POINT g_last_monitor_point_for_test{0, 0};
+RECT g_work_area_for_test{0, 0, 0, 0};
 #endif
 
 // The monitor and work area the candidate window opens on, for both modes
@@ -119,8 +121,23 @@ POINT g_last_monitor_point_for_test{0, 0};
 MonitorWorkArea ResolveCandidateMonitor(POINT anchor) {
 #ifdef AZOOKEY_TSF_TESTING
   g_last_monitor_point_for_test = anchor;
-#endif
+  MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), anchor);
+  if (!IsRectEmpty(&g_work_area_for_test)) monitor.work_area = g_work_area_for_test;
+  return monitor;
+#else
   return ResolveMonitorWorkArea(DefaultMonitorWin32Api(), anchor);
+#endif
+}
+
+// The window draws nine candidates to a page (legacy-parity-spec §1.4); an
+// app's own split applies only while the app draws the list.
+core::CandidatePageRange WindowPageAt(int index, int count) {
+  return core::CandidatePageAt(static_cast<size_t>(std::max(index, 0)),
+                               static_cast<size_t>(std::max(count, 0)));
+}
+
+std::wstring RowNumber(int index, int count) {
+  return std::to_wstring(CandidateWindow::ComputeRowNumber(index, count)) + L". ";
 }
 
 // The candidate window fades in over this long when it appears (native-ui-spec §6.1).
@@ -323,11 +340,12 @@ CandidateWindow::Hit CandidateWindow::HitTest(const HitLayout& layout, POINT poi
 
 // static
 int CandidateWindow::ComputeVisibleRows(int count, int item_height, int other_height,
-                                        int work_height) {
+                                        int work_height, bool position_row) {
   if (count <= 0) return 0;
   // Without a usable work area or row height there is nothing to fit into.
   if (item_height <= 0 || work_height <= 0) return count;
-  const long long all = static_cast<long long>(count) * item_height + other_height;
+  const long long all =
+      static_cast<long long>(count) * item_height + other_height + (position_row ? item_height : 0);
   if (all <= work_height) return count;
   // One row is left for the position ("3/12").
   const int rows = (work_height - other_height - item_height) / item_height;
@@ -355,6 +373,26 @@ int CandidateWindow::ComputeFirstVisibleRow(int previous_first, int selected, in
   if (selected < first) first = selected;
   if (selected >= first + visible_rows) first = selected - visible_rows + 1;
   return std::clamp(first, 0, count - visible_rows);
+}
+
+// static
+int CandidateWindow::ComputeRowNumber(int index, int count) {
+  return static_cast<int>(static_cast<size_t>(std::max(index, 0)) -
+                          WindowPageAt(index, count).begin + 1);
+}
+
+// static
+int CandidateWindow::ComputeFirstVisibleRowOnPage(int previous_first, int selected, int count,
+                                                  int visible_rows) {
+  if (count <= 0) return 0;
+  selected = std::clamp(selected, 0, count - 1);
+  const core::CandidatePageRange page = WindowPageAt(selected, count);
+  const int begin = static_cast<int>(page.begin);
+  const int rows = static_cast<int>(page.end - page.begin);
+  // The range keeps its place within the page across a page change.
+  const int previous_offset =
+      previous_first - static_cast<int>(WindowPageAt(previous_first, count).begin);
+  return begin + ComputeFirstVisibleRow(previous_offset, selected - begin, rows, visible_rows);
 }
 
 // static
@@ -406,6 +444,8 @@ void CandidateWindow::SetHealthBannerTextForTest(const std::wstring& text) {
 
 // static
 POINT CandidateWindow::LastMonitorPointForTest() { return g_last_monitor_point_for_test; }
+
+void CandidateWindow::SetWorkAreaForTest(RECT work_area) { g_work_area_for_test = work_area; }
 
 // static
 void CandidateWindow::SetClientAreaAnimationForTest(int enabled) {
@@ -601,12 +641,13 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
 
   // DirectWrite measures the same strings GDI did; widths may differ by a few
   // pixels, while the rows, padding and columns keep their metrics.
+  const int count = static_cast<int>(items_.size());
   int max_surface_w = metrics_.min_text_width;
   int max_description_w = 0;
-  for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+  // Every candidate with the number on its page, so a page change keeps the width.
+  for (int i = 0; i < count; ++i) {
     const auto& item = items_[static_cast<size_t>(i)];
-    max_surface_w =
-        std::max(max_surface_w, MeasureText(std::to_wstring(i + 1) + L". " + item.surface));
+    max_surface_w = std::max(max_surface_w, MeasureText(RowNumber(i, count) + item.surface));
     max_description_w = std::max(max_description_w, MeasureText(item.description));
   }
   int notice_width = MeasureText(notice_);
@@ -630,16 +671,19 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   };
   measure_banner();
   // Keep the window inside the larger room below or above the caret, so a flip
-  // never moves it up over the composition: draw only the rows that fit and
-  // follow the selection with them (native-ui-spec §4.1).
-  const int count = static_cast<int>(items_.size());
+  // never moves it up over the composition: one page's rows at most, as many as
+  // fit, following the selection within the page (native-ui-spec §4.1). The rows
+  // do not depend on the page, so a page change keeps the window's size.
+  const int page_rows = std::min(count, static_cast<int>(core::kCandidatePageSize));
   const int fit_height = ComputeFitHeight(pt, monitor.work_area, metrics_.caret_gap);
   const auto fit_rows = [&] {
     const int other_height = (notice_.empty() ? 0 : metrics_.item_height) +
                              (secure_toast_visible_ ? metrics_.item_height : 0) +
                              (health_banner_visible_ ? HealthBannerHeight() : 0);
-    visible_rows_ = ComputeVisibleRows(count, metrics_.item_height, other_height, fit_height);
-    first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, count, visible_rows_);
+    visible_rows_ = ComputeVisibleRows(page_rows, metrics_.item_height, other_height, fit_height,
+                                       /*position_row=*/count > page_rows);
+    first_visible_ =
+        ComputeFirstVisibleRowOnPage(first_visible_, selected_idx_, count, visible_rows_);
   };
   fit_rows();
   if (HasPositionRow()) {
@@ -963,7 +1007,18 @@ int CandidateWindow::FooterTop() const {
 }
 
 bool CandidateWindow::HasPositionRow() const {
-  return mode_ == Mode::Candidate && visible_rows_ < static_cast<int>(items_.size());
+  // More than one page, or fewer rows than the page holds (native-ui-spec §4.1).
+  const int count = static_cast<int>(items_.size());
+  return mode_ == Mode::Candidate &&
+         (count > static_cast<int>(core::kCandidatePageSize) || visible_rows_ < count);
+}
+
+int CandidateWindow::DrawnRowCount() const {
+  if (mode_ != Mode::Candidate || items_.empty()) return 0;
+  const int count = static_cast<int>(items_.size());
+  const int page_end = static_cast<int>(WindowPageAt(first_visible_, count).end);
+  // The last page's empty rows are neither drawn nor clicked.
+  return std::clamp(page_end - first_visible_, 0, visible_rows_);
 }
 
 std::wstring CandidateWindow::PositionText() const {
@@ -1005,7 +1060,7 @@ RECT CandidateWindow::HealthRetryButtonRect(int width) const {
 CandidateWindow::HitLayout CandidateWindow::CurrentHitLayout(int client_width) const {
   const bool prediction = mode_ == Mode::Prediction;
   return {metrics_.item_height,
-          prediction ? static_cast<int>(predictions_.size()) : visible_rows_,
+          prediction ? static_cast<int>(predictions_.size()) : DrawnRowCount(),
           client_width,
           SecureIndicatorWidth(),
           health_banner_visible_ && !prediction,
@@ -1035,15 +1090,15 @@ void CandidateWindow::MoveSelection(int delta) {
   if (items_.empty()) return;
   int n = static_cast<int>(items_.size());
   selected_idx_ = internal::WrapCandidateSelectionIndex(selected_idx_, delta, n);
-  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_, n, visible_rows_);
+  first_visible_ = ComputeFirstVisibleRowOnPage(first_visible_, selected_idx_, n, visible_rows_);
   Repaint();
 }
 
 void CandidateWindow::SetSelected(int idx) {
   if (items_.empty()) return;
   selected_idx_ = std::clamp(idx, 0, static_cast<int>(items_.size()) - 1);
-  first_visible_ = ComputeFirstVisibleRow(first_visible_, selected_idx_,
-                                          static_cast<int>(items_.size()), visible_rows_);
+  first_visible_ = ComputeFirstVisibleRowOnPage(first_visible_, selected_idx_,
+                                                static_cast<int>(items_.size()), visible_rows_);
   Repaint();
 }
 
@@ -1185,8 +1240,10 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
   // Candidate text stops short of the secure indicator column.
   const int content_right = width - SecureIndicatorWidth();
 
-  // Only the drawn range; numbers stay those of the full list (native-ui-spec §4.1).
-  const int last = std::min(first_visible_ + visible_rows_, static_cast<int>(items_.size()));
+  // Only the drawn range of the current page; the numbers are those on the page
+  // (native-ui-spec §4.1).
+  const int count = static_cast<int>(items_.size());
+  const int last = first_visible_ + DrawnRowCount();
   for (int i = first_visible_; i < last; ++i) {
     const int top = (i - first_visible_) * metrics_.item_height;
     const RECT row_rc = {0, top, width, top + metrics_.item_height};
@@ -1200,7 +1257,7 @@ void CandidateWindow::DrawContent(ID2D1DeviceContext* context, int width, int he
                                       static_cast<int>(surface_rc.left) + surface_column_width_)
                            : content_right - metrics_.horizontal_padding;
     // Font fallback picks Segoe UI Emoji for emoji, drawn in color (native-ui-spec §3.4).
-    paint.Text(std::to_wstring(i + 1) + L". " + item.surface, style.line.Get(), surface_rc,
+    paint.Text(RowNumber(i, count) + item.surface, style.line.Get(), surface_rc,
                selected ? theme_.selection_text : theme_.text);
     if (!item.description.empty()) {
       RECT description_rc = row_rc;

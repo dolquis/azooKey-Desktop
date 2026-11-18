@@ -1754,6 +1754,38 @@ TEST(TsfTipEmojiTest, CommitUsesOnlySurfaceAndNeverLearns) {
   }
 }
 
+// M68 (legacy-parity-spec §1.4「候補のページ」): the list turns pages with
+// PageUp / PageDown; digits still extend the query (candidate-rewriter-spec §11).
+TEST(TsfTipEmojiTest, ListingTurnsPagesAndStaysInTheSearch) {
+  EmojiHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  ASSERT_TRUE(h.Press('S'));
+  ASSERT_EQ(h.service.preedit_kana_, ":s");
+  std::vector<azookey::ipc::CandidateField> list(12);
+  for (size_t i = 0; i < list.size(); ++i) {
+    list[i].surface = "絵" + std::to_string(i);
+    list[i].source = "emoji";
+  }
+  h.service.set_cached_candidates_for_test(std::move(list));
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+
+  EXPECT_TRUE(h.TestPress(VK_NEXT));
+  ASSERT_TRUE(h.Press(VK_NEXT));
+  EXPECT_EQ(h.service.preedit_kana_, ":s");
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_TRUE(h.Press(VK_PRIOR));
+  ASSERT_TRUE(h.Press(VK_PRIOR));
+  EXPECT_EQ(h.service.preedit_kana_, ":s");
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  // PageDown, then PageUp twice: the first page, then the last page's same place.
+  EXPECT_EQ(attachment.composition_range.last_text, L"絵9");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
 TEST(TsfTipEmojiTest, MinimumLengthAndDisabledTriggerAreRespected) {
   EmojiHarness h;
   h.service.set_emoji_rewriter_for_test(true, true, 2);
@@ -15202,6 +15234,123 @@ TEST(TsfTipWindowWaitTest, NumpadDigitCommitsThatCandidate) {
     PressWhileWaiting(h, VK_NUMPAD3);
     AnswerWindow(h);
     EXPECT_EQ(h.context.document->text, L"課");
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+  }
+}
+
+// M68 (legacy-parity-spec §1.4「候補のページ」): nine candidates to a page, on
+// the core path and the number rewriter's legacy path.
+namespace {
+
+// The window answer with `count` candidates 候補0, 候補1, ...
+void AnswerWindowWith(DocumentPreeditHarness& h, int count) {
+  std::vector<azookey::ipc::CandidateField> candidates(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i)
+    candidates[static_cast<size_t>(i)] = {"候補" + std::to_string(i), "か", 1.0 - 0.01 * i,
+                                          "dictionary"};
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.process_candidates_ready_for_test();
+}
+
+std::wstring Numbered(int index) { return L"候補" + std::to_wstring(index); }
+
+void OpenPagedWindow(DocumentPreeditHarness& h, bool legacy) {
+  StartWindowWait(h, legacy);
+  AnswerWindowWith(h, 20);
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 20u);
+  ASSERT_EQ(h.context.document->text, Numbered(0));
+}
+
+}  // namespace
+
+TEST(TsfTipCandidatePageTest, PageDownMovesToTheNextPageAndADigitPicksOnIt) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    OpenPagedWindow(h, legacy);
+    EXPECT_TRUE(ProbeTypoKey(h, VK_NEXT));
+    ASSERT_TRUE(h.Press(VK_NEXT));
+    // The selection shows in the preedit, as with ↑↓ (tsf-deep-integration-spec §2.4.1).
+    EXPECT_EQ(h.context.document->text, Numbered(9));
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    ASSERT_TRUE(h.Press('2'));
+    EXPECT_EQ(h.context.document->text, Numbered(10));
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+TEST(TsfTipCandidatePageTest, PageUpWrapsToTheShortLastPageWhereAMissingDigitDoesNothing) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    OpenPagedWindow(h, legacy);
+    ASSERT_TRUE(h.Press(VK_PRIOR));
+    EXPECT_EQ(h.context.document->text, Numbered(18));
+    // The last page holds two: 3 is consumed and the window stays.
+    EXPECT_TRUE(ProbeTypoKey(h, '3'));
+    ASSERT_TRUE(h.Press('3'));
+    EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+    EXPECT_EQ(h.context.document->text, Numbered(18));
+    // The same place on the first page, wrapping forward.
+    ASSERT_TRUE(h.Press(VK_NEXT));
+    EXPECT_EQ(h.context.document->text, Numbered(0));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, Numbered(0));
+  }
+}
+
+TEST(TsfTipCandidatePageTest, PageKeysAreConsumedOnOnePageAndLeftToTheAppWithoutAWindow) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    AnswerWindow(h);
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    for (const WPARAM key : {static_cast<WPARAM>(VK_NEXT), static_cast<WPARAM>(VK_PRIOR)}) {
+      EXPECT_TRUE(ProbeTypoKey(h, key));
+      EXPECT_TRUE(h.Press(key));
+      EXPECT_EQ(h.context.document->text, L"蚊");
+      EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+    }
+
+    DocumentPreeditHarness reading;
+    ConfigureTypoHarness(reading, legacy);
+    ASSERT_TRUE(reading.Press('K'));
+    ASSERT_TRUE(reading.Press('A'));
+    ASSERT_EQ(reading.context.document->text, L"か");
+    EXPECT_FALSE(ProbeTypoKey(reading, VK_NEXT));
+    EXPECT_FALSE(reading.Press(VK_NEXT));
+    EXPECT_EQ(reading.context.document->text, L"か");
+  }
+}
+
+TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    OpenPagedWindow(h, legacy);
+    ASSERT_TRUE(h.Press(VK_NEXT));
+    ASSERT_EQ(h.context.document->text, Numbered(9));
+    h.service.click_candidate_for_test(11);
+    EXPECT_EQ(h.context.document->text, Numbered(11));
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+TEST(TsfTipWindowWaitTest, PageDownWaitsForTheWindowAndReplays) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    StartWindowWait(h, legacy);
+    PressWhileWaiting(h, VK_NEXT);
+    PressWhileWaiting(h, VK_RETURN);
+    ASSERT_EQ(h.service.window_waiting_key_count_for_test(), 2u);
+    AnswerWindowWith(h, 20);
+    EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
+    EXPECT_EQ(h.context.document->text, Numbered(9));
     EXPECT_TRUE(h.service.preedit_kana_.empty());
   }
 }

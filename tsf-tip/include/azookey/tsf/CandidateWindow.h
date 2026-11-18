@@ -145,10 +145,12 @@ class CandidateWindow {
   // row of buttons.
   static int ComputeHealthBannerHeight(int text_lines, int item_height);
 
-  // How many candidate rows fit (native-ui-spec §4.1): every row when the rows
-  // and the other_height of the elements below them fit work_height, otherwise
-  // as many as fit above one position row, and at least one.
-  static int ComputeVisibleRows(int count, int item_height, int other_height, int work_height);
+  // How many of `count` candidate rows fit (native-ui-spec §4.1): every row when
+  // the rows, the other_height of the elements below them and, with
+  // position_row (a list of more than one page), the position row fit
+  // work_height; otherwise as many as fit above one position row, and at least one.
+  static int ComputeVisibleRows(int count, int item_height, int other_height, int work_height,
+                                bool position_row = false);
   // The height the candidate window may take (native-ui-spec §4.1): the larger of
   // the room below the anchor and the room above the caret (caret_gap over it),
   // within the work area. ComputePlacement puts a window of at most this height
@@ -159,15 +161,26 @@ class CandidateWindow {
   // The candidate in the top drawn row: the previous range, moved only as far as
   // it takes to include the selection, within [0, count - visible_rows].
   static int ComputeFirstVisibleRow(int previous_first, int selected, int count, int visible_rows);
+  // The same within the page of nine holding the selection (M68, native-ui-spec
+  // §4.1), in indexes of the full list: the range keeps its place in the page
+  // across a page change and moves only as far as it takes to include the selection.
+  static int ComputeFirstVisibleRowOnPage(int previous_first, int selected, int count,
+                                          int visible_rows);
+  // The number at the head of candidate row `index` of `count`: its place on its
+  // page of nine, 1 to 9, never the place in the full list (native-ui-spec §4.1).
+  static int ComputeRowNumber(int index, int count);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);
   void SetSelected(int idx);
   int GetSelected() const { return selected_idx_; }
   int GetCount() const { return static_cast<int>(items_.size()); }
-  // The drawn range of candidates; every candidate when they all fit.
+  // The drawn range, within the current page: row slots from GetFirstVisibleRow
+  // (an index of the full list). The last page leaves its empty slots undrawn,
+  // so GetDrawnRowCount may be fewer than GetVisibleRowCount.
   int GetFirstVisibleRow() const { return first_visible_; }
   int GetVisibleRowCount() const { return visible_rows_; }
+  int GetDrawnRowCount() const { return DrawnRowCount(); }
 
   // Invoked when the user left-clicks a candidate row.
   using OnClickFn = std::function<void(int idx)>;
@@ -231,6 +244,8 @@ class CandidateWindow {
   static void SetMonitorDpiForTest(UINT dpi);
   // The point the last Show or ShowPredictions picked its monitor at.
   static POINT LastMonitorPointForTest();
+  // Stands in for the work area of every monitor; an empty rect restores it.
+  static void SetWorkAreaForTest(RECT work_area);
   // Draws the current content offscreen at the client size with grayscale text
   // and returns the pixels row by row as RGB values.
   bool RenderPixelsForTest(std::vector<COLORREF>* pixels, int* width, int* height) const;
@@ -316,7 +331,9 @@ class CandidateWindow {
   int surface_column_width_{0};
   int selected_idx_{0};
   int first_visible_{0};
-  int visible_rows_{0};  // Candidate rows drawn; less than items_ adds the position row.
+  // Row slots of one page (native-ui-spec §4.1); fewer than the page holds, or a
+  // second page, adds the position row.
+  int visible_rows_{0};
   Mode mode_{Mode::Candidate};
   std::vector<std::wstring> predictions_;
   int hint_column_width_{0};  // Prediction mode: the key hint column.
@@ -394,6 +411,8 @@ class CandidateWindow {
   int HealthBannerTextBottom(int width) const;
   // The "3/12" row below the candidate rows when not every candidate is drawn.
   bool HasPositionRow() const;
+  // Rows drawn from first_visible_: the slots, less the last page's empty ones.
+  int DrawnRowCount() const;
   std::wstring PositionText() const;
   // Candidate rows, the position row and the notice row end here; the secure
   // toast row, then the health banner, stack below it.

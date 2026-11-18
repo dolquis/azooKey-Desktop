@@ -552,8 +552,9 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 処理を制限する。入力先由来の secure 判定は TIP が担い、Host は前面アプリを
 検出しない。`TransformSelectedText` の secure 中の送信抑止は TIP が担い、Host も要求の
 `secure` と Host の privacy 設定で拒否する（§4.1）。`QueryBatchConversion` の `ai-cleanup`（§4.2）と
-`DetectAnomalies`（`docs/proofread-view-spec.md` §2.9）も、Host の `Dispatcher` の入口で同じく二重に検査し、
-SafeMode を加えた判定で `AiBackend` を呼ばずに止める。
+`DetectAnomalies`（`docs/proofread-view-spec.md` §2.9）も、Host の `Dispatcher` の入口で要求の値と Host の
+privacy 設定の両方を検査し、SafeMode を加えた判定で `AiBackend` を呼ばずに止める。判定に使う項目は各節が定める
+（`DetectAnomalies` は学習可否も見る）。
 本節の AI backend ガードは消費側の設計契約であり、共有ゲートインスタンスや
 M48 のモード通知 API を前提としない。
 

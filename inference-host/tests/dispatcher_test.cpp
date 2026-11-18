@@ -5567,6 +5567,7 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
   commit_all(true);
   EXPECT_GT(store.size(), before);
+  EXPECT_FALSE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
   EXPECT_EQ(typo.size(), 1u);
 
   engine.SetAutoWordStore(nullptr);

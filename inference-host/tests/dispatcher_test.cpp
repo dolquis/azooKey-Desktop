@@ -4944,6 +4944,86 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
   std::remove(typo_path.c_str());
 }
 
+// M66 (segment-editing-spec section 5.3): a first segment's request, one with
+// remaining_reading, is converted as given under every Host mode: no
+// corrected_reading, and no suggested candidate of another reading.
+TEST_F(DispatcherTest, FirstSegmentRequestIsNeverCorrected) {
+  const auto typo_path = temp_directory.File("azookey_dispatcher_typo_first_segment.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetTypoStore(&typo);
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+
+  uint64_t id = 7100;
+  const auto query = [&](const std::string& remaining) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "こんちには";
+    request.secure = false;
+    request.learning_allowed = true;
+    request.remaining_reading = remaining;
+    const auto response = dispatcher.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                      ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.value_or(ipc::QueryCandidatesResponse{});
+  };
+  const auto has_corrected_candidate = [](const ipc::QueryCandidatesResponse& response) {
+    return std::any_of(response.candidates.begin(), response.candidates.end(),
+                       [](const ipc::CandidateField& c) { return c.reading == "こんにちは"; });
+  };
+  for (const std::string host_mode : {"suggest", "auto_replace"}) {
+    SCOPED_TRACE(host_mode);
+    auto config = engine.config();
+    config.typo_correction_mode = host_mode;
+    config.typo_min_count = 2;
+    engine.ApplyConfig(config);
+    // Without the field the Host corrects, so the store does apply here.
+    const auto whole = query("");
+    ASSERT_FALSE(whole.candidates.empty());
+    EXPECT_EQ(whole.corrected_reading, host_mode == "auto_replace" ? "こんにちは" : "");
+    EXPECT_TRUE(has_corrected_candidate(whole));
+
+    const auto first = query("です");
+    ASSERT_FALSE(first.candidates.empty());
+    EXPECT_TRUE(first.corrected_reading.empty());
+    EXPECT_FALSE(has_corrected_candidate(first));
+  }
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+// Without a typo store there is nothing to correct, and the field leaves the
+// candidates as they are.
+TEST_F(DispatcherTest, FirstSegmentRequestWithoutATypoStoreConvertsLikeAnyOther) {
+  uint64_t id = 7200;
+  const auto surfaces = [&](const std::string& remaining) {
+    ipc::QueryCandidatesRequest request;
+    request.reading = "きょう";
+    request.remaining_reading = remaining;
+    const auto response = dispatcher.Dispatch(MakeReq(++id, ipc::MessageType::QueryCandidates,
+                                                      ipc::BuildQueryCandidatesRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    std::vector<std::string> result;
+    if (parsed)
+      for (const auto& candidate : parsed->candidates) result.push_back(candidate.surface);
+    return result;
+  };
+  const auto whole = surfaces("");
+  EXPECT_FALSE(whole.empty());
+  EXPECT_EQ(surfaces("は"), whole);
+}
+
 // M55 (typo-correction-learning-spec section 12.13): a requested
 // typo_correction_mode and raw_keys leave the conversion to the mode the Host
 // settings resolve to (SafeMode resolves to off), secure or not, so a request
@@ -7421,6 +7501,30 @@ TEST(AmbiguousReadingDispatchTest, ModelScoresChooseTheReadingTheWindowConverts)
   // An alternative longer than the reading is not one of its readings.
   auto longer = DispatchAmbiguous(dispatcher, AmbiguousQuery(5, "げんにん", {"ないぶげんいん"}));
   EXPECT_TRUE(longer.corrected_reading.empty());
+}
+
+// M66 (segment-editing-spec section 5.3): a first segment's request converts
+// the typed reading even with alt_readings, where the other reading would win.
+TEST(AmbiguousReadingDispatchTest, AFirstSegmentRequestKeepsTheTypedReading) {
+  azookey::host::InferenceEngine engine(std::make_unique<ScoredReadingConverter>(), nullptr, {});
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig());
+
+  // Without the field the other reading wins (ModelScoresChoose... above).
+  auto env = AmbiguousQuery(1, "ないぶげんにん", {"ないぶげんいん"});
+  ASSERT_EQ(DispatchAmbiguous(dispatcher, env).corrected_reading, "ないぶげんいん");
+  env.request_id = 2;
+  auto request = ipc::ParseQueryCandidatesRequest(env.payload_json);
+  ASSERT_TRUE(request);
+  request->remaining_reading = "です";
+  env.payload_json = ipc::BuildQueryCandidatesRequest(*request);
+  const auto first = DispatchAmbiguous(dispatcher, env);
+  EXPECT_TRUE(first.corrected_reading.empty());
+  ASSERT_FALSE(first.candidates.empty());
+  EXPECT_EQ(first.candidates.front().surface, "model:ないぶげんにん");
+  EXPECT_TRUE(
+      std::all_of(first.candidates.begin(), first.candidates.end(),
+                  [](const ipc::CandidateField& c) { return c.reading == "ないぶげんにん"; }));
 }
 
 // A switch the user did not mean (sennenn to せんえん, as the real model does)

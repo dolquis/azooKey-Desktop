@@ -35,10 +35,18 @@ class CandidateWindow {
   bool Create();
   void Destroy();
 
-  // Show at screen point 'pt' (bottom-left of the caret rect) with given items.
-  // selected_idx is clamped to [0, items.size()).
-  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+  // Show with the given items below the anchor's bottom-left, or above its top
+  // when the room below is the smaller (native-ui-spec §4.1). The anchor is the
+  // rect ShowPredictions takes: the composition's text extent, or a caret rect
+  // when the app reports none (legacy-parity-spec §3.2, §9.2). An anchor with no
+  // height is a caret point, the caret's bottom-left: caret_gap stands in for the
+  // caret's height. selected_idx is clamped to [0, items.size()).
+  void Show(RECT anchor, const std::vector<CandidateViewItem>& items, int selected_idx,
             std::wstring notice = {});
+  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+            std::wstring notice = {}) {
+    Show(RECT{pt.x, pt.y, pt.x, pt.y}, items, selected_idx, std::move(notice));
+  }
   void Hide();
   bool IsVisible() const;
 
@@ -152,12 +160,12 @@ class CandidateWindow {
   static int ComputeVisibleRows(int count, int item_height, int other_height, int work_height,
                                 bool position_row = false);
   // The height the candidate window may take (native-ui-spec §4.1): the larger of
-  // the room below the anchor and the room above the caret (caret_gap over it),
-  // within the work area. ComputePlacement puts a window of at most this height
-  // on that side, clear of a one-line composition no taller than caret_gap, and
+  // the room below the anchor point (the anchor's bottom-left) and the room above
+  // flip_gap over it (the anchor's top), within the work area. ComputePlacement
+  // puts a window of at most this height on that side, clear of the anchor, and
   // never moves it up against the top of the work area. At least 1; 0 for an empty
   // work area, which ComputeVisibleRows reads as nothing to fit into.
-  static int ComputeFitHeight(POINT anchor, RECT work_area, int caret_gap);
+  static int ComputeFitHeight(POINT anchor, RECT work_area, int flip_gap);
   // The candidate in the top drawn row: the previous range, moved only as far as
   // it takes to include the selection, within [0, count - visible_rows].
   static int ComputeFirstVisibleRow(int previous_first, int selected, int count, int visible_rows);
@@ -353,7 +361,7 @@ class CandidateWindow {
   bool secure_indicator_visible_{false};
   bool secure_toast_visible_{false};
   ULONGLONG secure_toast_until_{0};  // GetTickCount64 deadline of the last toast.
-  POINT last_anchor_{0, 0};
+  RECT last_anchor_{0, 0, 0, 0};
   RECT last_prediction_anchor_{0, 0, 0, 0};
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};

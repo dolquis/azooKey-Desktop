@@ -39,6 +39,7 @@
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
@@ -15377,6 +15378,81 @@ TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
     EXPECT_EQ(h.context.document->text, Numbered(11));
     EXPECT_TRUE(h.service.preedit_kana_.empty());
     EXPECT_FALSE(h.service.candidate_window_showing_for_test());
+  }
+}
+
+namespace {
+
+// 96 DPI, and a work area too short below the anchor for the window.
+class ScopedFlipGeometry {
+ public:
+  explicit ScopedFlipGeometry(RECT work_area) {
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(96);
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest(work_area);
+  }
+  ~ScopedFlipGeometry() {
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
+  }
+  ScopedFlipGeometry(const ScopedFlipGeometry&) = delete;
+  ScopedFlipGeometry& operator=(const ScopedFlipGeometry&) = delete;
+};
+
+// Opens the window that Space asked for and returns its screen rect.
+RECT OpenWindowAndMeasure(DocumentPreeditHarness& h, bool legacy) {
+  RECT bounds{};
+  EXPECT_TRUE(h.service.create_candidate_window_for_test());
+  StartWindowWait(h, legacy);
+  AnswerWindow(h);
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  const HWND hwnd = h.service.candidate_window_for_test().hwnd_for_test();
+  EXPECT_TRUE(IsWindowVisible(hwnd));
+  // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+  const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+  EXPECT_TRUE(GetWindowRect(hwnd, &bounds));
+  return bounds;
+}
+
+}  // namespace
+
+// DEV-2104 (native-ui-spec §4.1): flipped above a composition line taller than
+// caret_gap, the candidate window's bottom meets the composition's top, as the
+// prediction window's does, on the core path and the legacy path.
+TEST(TsfTipCandidateAnchorTest, FlippedWindowClearsATallComposition) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    // 20 px below the composition: the window goes above it.
+    const ScopedFlipGeometry geometry({0, 0, 1920, 300});
+    CaretFallbackGuard caret_fallback;
+    FakeContextView view;
+    // A 60 px tall line, {110, 220, 130, 280} on the screen once converted.
+    view.text_ext = {10, 20, 30, 80};
+    view.get_wnd_result = S_OK;
+    view.text_window = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(0x2104));
+    DocumentPreeditHarness h;
+    h.context.active_view = &view;
+    const RECT bounds = OpenWindowAndMeasure(h, legacy);
+    EXPECT_EQ(bounds.bottom, 220);
+    EXPECT_EQ(bounds.left, 110);
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    h.context.active_view = nullptr;
+  }
+}
+
+// Without a text extent both modes take the caret rect at the anchor point, 16
+// logical px tall (legacy-parity-spec §9.1): the flipped window's bottom meets
+// its top, so a caret line taller than that is covered by the difference.
+TEST(TsfTipCandidateAnchorTest, WithoutATextExtentTheWindowFlipsOverTheCaretRect) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    // The cursor stands in at {321, 654}: the anchor point is {321, 670}.
+    const ScopedFlipGeometry geometry({0, 0, 1920, 700});
+    CaretFallbackGuard caret_fallback;
+    DocumentPreeditHarness h;
+    const RECT bounds = OpenWindowAndMeasure(h, legacy);
+    EXPECT_EQ(bounds.bottom, 654);
+    EXPECT_EQ(bounds.left, 321);
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
   }
 }
 

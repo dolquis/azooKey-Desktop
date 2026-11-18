@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -67,6 +68,8 @@ constexpr UserAction kAllActions[] = {
     UserAction::Forget,
     UserAction::ToggleDebugWindow,
     UserAction::UndoCommit,
+    UserAction::ShrinkSegment,
+    UserAction::ExtendSegment,
 };
 constexpr size_t kActionCount = std::size(kAllActions);
 
@@ -88,34 +91,38 @@ struct Row {
 const Row kTransitionTable[] = {
     {"Idle",
      [] { return InputState{}; },
-     {K::Composing, K::Composing, K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
-      K::Idle,      K::Idle,      K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
-      K::Idle,      K::Idle,      K::UnicodeInput, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle}},
+     {K::Composing,    K::Composing, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::Idle,         K::Idle,      K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
+      K::UnicodeInput, K::Idle,      K::Idle, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle}},
     {"Composing",
      Composing,
      {K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Idle,      K::Idle,      K::Composing, K::Composing,
-      K::UnicodeInput, K::Composing, K::Composing, K::Composing, K::Composing, K::Composing}},
+      K::UnicodeInput, K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
+      K::Composing,    K::Composing}},
     {"Previewing",
      Previewing,
      {K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing, K::Idle,       K::Idle,       K::Previewing, K::Previewing,
-      K::UnicodeInput, K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing}},
+      K::UnicodeInput, K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
+      K::Previewing,   K::Previewing}},
     {"Selecting",
      Selecting,
      {K::Composing,    K::Composing, K::Composing, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
-      K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
+      K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
+      K::Selecting,    K::Selecting}},
     {"UnicodeInput",
      UnicodeInput,
      {K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::Idle,
       K::Idle,         K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
-      K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput}},
+      K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
+      K::UnicodeInput}},
 };
 
 TEST(InputStateTest, FixtureStatesHaveExpectedKinds) {
@@ -977,6 +984,375 @@ TEST(InputStateTest, StartUnicodeInputFromCompositionCommitsReadingFirst) {
   EXPECT_EQ(result.next.kind(), K::UnicodeInput);
   EXPECT_EQ(result.actions,
             (Actions{ReplaceMarkedText{"かな"}, CommitMarkedText{}, ReplaceMarkedText{"U+"}}));
+}
+
+// ---- M66 (docs/segment-editing-spec.md): the first segment ----
+
+// きょうは is four code points; the small ょ counts as one (spec §4).
+std::vector<Candidate> WholeCandidates() {
+  return {Candidate{"今日は", "きょうは"}, Candidate{"きょうは", "きょうは"}};
+}
+
+std::vector<Candidate> KyouCandidates() {
+  return {Candidate{"今日", "きょう"}, Candidate{"京", "きょう"}, Candidate{"きょう", "きょう"}};
+}
+
+InputState SelectingKyouha(bool live = false) {
+  const auto waiting = Feed(InputState{}.WithLiveConversion(live), U"kyouha")
+                           .HandleEvent(Ev(UserAction::StartConversion))
+                           .next;
+  return waiting.HandleCandidatesArrived(WholeCandidates()).next;
+}
+
+// The first segment shrunk to きょう with its candidates delivered.
+InputState ResizedKyou(bool live = false) {
+  const auto waiting = SelectingKyouha(live).HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  return waiting.HandleSegmentCandidatesArrived("きょう", KyouCandidates()).next;
+}
+
+TEST(SegmentEditingTest, SelectingStartsWithTheWholeReadingAsTheFirstSegment) {
+  const InputState selecting = SelectingKyouha();
+  EXPECT_EQ(selecting.segment_end(), 4u);
+  EXPECT_FALSE(selecting.resizing_segment());
+  EXPECT_EQ(selecting.FirstSegmentReading(), "きょうは");
+  EXPECT_EQ(selecting.RemainingReading(), "");
+  EXPECT_FALSE(selecting.awaiting_segment_candidates());
+}
+
+TEST(SegmentEditingTest, ShrinkAsksForTheFirstSegmentsCandidatesAndDrawsItAsTheReading) {
+  const HandleResult shrunk = SelectingKyouha().HandleEvent(Ev(UserAction::ShrinkSegment));
+  EXPECT_EQ(shrunk.next.kind(), K::Selecting);
+  EXPECT_EQ(shrunk.next.segment_end(), 3u);
+  EXPECT_TRUE(shrunk.next.resizing_segment());
+  EXPECT_TRUE(shrunk.next.awaiting_segment_candidates());
+  EXPECT_EQ(shrunk.next.FirstSegmentReading(), "きょう");
+  EXPECT_EQ(shrunk.next.RemainingReading(), "は");
+  // The window stays with the previous list; no HideCandidateWindow.
+  EXPECT_TRUE(SameCandidateList(shrunk.next.candidates(), WholeCandidates()));
+  EXPECT_EQ(shrunk.actions,
+            (Actions{ReplaceMarkedText{"きょうは"}, QueryCandidates{"きょう", true, "は"}}));
+}
+
+TEST(SegmentEditingTest, EveryShrinkBelowTheWholeReadingQueriesAgainAndStopsAtOneCodePoint) {
+  InputState state = SelectingKyouha();
+  const struct {
+    size_t end;
+    const char* first;
+    const char* rest;
+  } steps[] = {{3, "きょう", "は"}, {2, "きょ", "うは"}, {1, "き", "ょうは"}};
+  for (const auto& step : steps) {
+    SCOPED_TRACE(step.end);
+    const HandleResult shrunk = state.HandleEvent(Ev(UserAction::ShrinkSegment));
+    EXPECT_EQ(shrunk.next.segment_end(), step.end);
+    EXPECT_EQ(shrunk.actions, (Actions{ReplaceMarkedText{"きょうは"},
+                                       QueryCandidates{step.first, true, step.rest}}));
+    state = shrunk.next;
+  }
+  // e = 1: consumed without a change.
+  const HandleResult stopped = state.HandleEvent(Ev(UserAction::ShrinkSegment));
+  EXPECT_TRUE(stopped.actions.empty());
+  EXPECT_EQ(stopped.next.segment_end(), 1u);
+}
+
+TEST(SegmentEditingTest, ExtendBeforeAnyResizeStartsFromOneCodePoint) {
+  const HandleResult extended = SelectingKyouha().HandleEvent(Ev(UserAction::ExtendSegment));
+  EXPECT_EQ(extended.next.segment_end(), 1u);
+  EXPECT_EQ(extended.actions,
+            (Actions{ReplaceMarkedText{"きょうは"}, QueryCandidates{"き", true, "ょうは"}}));
+}
+
+TEST(SegmentEditingTest, ExtendingBackToTheWholeReadingRestoresItsListWithoutAQuery) {
+  const InputState resized = ResizedKyou().HandleEvent(Ev(UserAction::Down)).next;
+  const HandleResult whole = resized.HandleEvent(Ev(UserAction::ExtendSegment));
+  EXPECT_FALSE(whole.next.resizing_segment());
+  EXPECT_EQ(whole.next.segment_end(), 4u);
+  EXPECT_EQ(whole.next.selected_index(), 0u);
+  EXPECT_TRUE(SameCandidateList(whole.next.candidates(), WholeCandidates()));
+  EXPECT_EQ(whole.actions,
+            (Actions{ShowCandidateWindow{WholeCandidates(), 0}, ReplaceMarkedText{"今日は"}}));
+  // After a resize Shift+→ stops at the whole reading; Shift+← resizes again.
+  const HandleResult stopped = whole.next.HandleEvent(Ev(UserAction::ExtendSegment));
+  EXPECT_TRUE(stopped.actions.empty());
+  EXPECT_FALSE(stopped.next.resizing_segment());
+  EXPECT_EQ(whole.next.HandleEvent(Ev(UserAction::ShrinkSegment)).next.segment_end(), 3u);
+}
+
+TEST(SegmentEditingTest, ExtendWhileResizedGrowsByOneCodePoint) {
+  const InputState one = SelectingKyouha().HandleEvent(Ev(UserAction::ExtendSegment)).next;
+  const HandleResult two = one.HandleEvent(Ev(UserAction::ExtendSegment));
+  EXPECT_EQ(two.next.segment_end(), 2u);
+  EXPECT_EQ(two.actions,
+            (Actions{ReplaceMarkedText{"きょうは"}, QueryCandidates{"きょ", true, "うは"}}));
+}
+
+TEST(SegmentEditingTest, AOneCodePointReadingConsumesBothResizeKeys) {
+  const InputState waiting =
+      Feed(InputState{}, U"ka").HandleEvent(Ev(UserAction::StartConversion)).next;
+  const InputState single = waiting.HandleCandidatesArrived({Candidate{"蚊", "か"}}).next;
+  ASSERT_EQ(single.kind(), K::Selecting);
+  ASSERT_EQ(single.segment_end(), 1u);
+  for (const UserAction action : {UserAction::ShrinkSegment, UserAction::ExtendSegment}) {
+    const HandleResult result = single.HandleEvent(Ev(action));
+    EXPECT_TRUE(result.actions.empty());
+    EXPECT_EQ(result.next.kind(), K::Selecting);
+    EXPECT_FALSE(result.next.resizing_segment());
+  }
+}
+
+// Spec §5.2: only the answer for the current first segment replaces the list.
+TEST(SegmentEditingTest, TheFirstSegmentsAnswerReplacesTheListAndAnEarlierOneIsDropped) {
+  const InputState waiting = SelectingKyouha().HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  const HandleResult arrived = waiting.HandleSegmentCandidatesArrived("きょう", KyouCandidates());
+  EXPECT_EQ(arrived.next.kind(), K::Selecting);
+  EXPECT_FALSE(arrived.next.awaiting_segment_candidates());
+  EXPECT_EQ(arrived.next.selected_index(), 0u);
+  EXPECT_TRUE(SameCandidateList(arrived.next.candidates(), KyouCandidates()));
+  EXPECT_EQ(arrived.actions,
+            (Actions{ShowCandidateWindow{KyouCandidates(), 0}, ReplaceMarkedText{"今日は"}}));
+
+  // Shrunk again before the answer: the answer for きょう is the earlier end's.
+  const InputState again = waiting.HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  const HandleResult stale = again.HandleSegmentCandidatesArrived("きょう", KyouCandidates());
+  EXPECT_TRUE(stale.actions.empty());
+  EXPECT_TRUE(stale.next.awaiting_segment_candidates());
+  EXPECT_TRUE(SameCandidateList(stale.next.candidates(), WholeCandidates()));
+  // An empty answer and a second one change nothing either.
+  EXPECT_TRUE(
+      waiting.HandleSegmentCandidatesArrived("きょう", {}).next.awaiting_segment_candidates());
+  EXPECT_TRUE(arrived.next.HandleSegmentCandidatesArrived("きょう", {Candidate{"興", "きょう"}})
+                  .actions.empty());
+  // The whole reading's feedback never replaces the first segment's list,
+  // neither through the whole reading's entry nor as an answer for きょうは.
+  EXPECT_TRUE(waiting.HandleCandidatesArrived(KyouCandidates()).actions.empty());
+  const HandleResult whole_answer =
+      waiting.HandleSegmentCandidatesArrived("きょうは", WholeCandidates());
+  EXPECT_TRUE(whole_answer.actions.empty());
+  EXPECT_TRUE(whole_answer.next.awaiting_segment_candidates());
+  EXPECT_EQ(whole_answer.next.segment_end(), 3u);
+  EXPECT_TRUE(SelectingKyouha()
+                  .HandleSegmentCandidatesArrived("きょうは", WholeCandidates())
+                  .actions.empty());
+}
+
+TEST(SegmentEditingTest, KeysWhileAwaitingTheFirstSegmentAreLeftForTheFrontendToReplay) {
+  const InputState waiting = SelectingKyouha().HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  for (const UserActionEvent& event :
+       {Ev(UserAction::Commit), Ev(UserAction::Forward), Ev(UserAction::Backward),
+        Ev(UserAction::Backspace), Ev(UserAction::NextCandidate), Ev(UserAction::Input, U'k'),
+        Ev(UserAction::SelectByDigit, 0, 1), Ev(UserAction::StartUnicodeInput),
+        Ev(UserAction::CommitKatakana), PageEv(UserAction::Down)}) {
+    SCOPED_TRACE(static_cast<int>(event.action));
+    const HandleResult result = waiting.HandleEvent(event);
+    EXPECT_TRUE(result.actions.empty());
+    EXPECT_EQ(result.next.kind(), K::Selecting);
+    EXPECT_TRUE(result.next.awaiting_segment_candidates());
+    EXPECT_EQ(result.next.segment_end(), 3u);
+  }
+  // The keys every state handles alike act as with the whole reading and
+  // keep the wait.
+  for (const UserAction action : {UserAction::ToggleHankaku, UserAction::ToggleHiraKata,
+                                  UserAction::Forget, UserAction::ToggleDebugWindow}) {
+    SCOPED_TRACE(static_cast<int>(action));
+    const HandleResult result = waiting.HandleEvent(Ev(action));
+    EXPECT_EQ(result.actions, SelectingKyouha().HandleEvent(Ev(action)).actions);
+    EXPECT_EQ(result.actions.size(), 1u);
+    EXPECT_TRUE(result.next.awaiting_segment_candidates());
+    EXPECT_EQ(result.next.segment_end(), 3u);
+  }
+  const HandleResult canceled = waiting.HandleEvent(Ev(UserAction::Cancel));
+  EXPECT_EQ(canceled.next.kind(), K::Idle);
+  EXPECT_FALSE(canceled.next.awaiting_segment_candidates());
+  EXPECT_EQ(canceled.actions, (Actions{HideCandidateWindow{}, CancelMarkedText{}}));
+}
+
+TEST(SegmentEditingTest, ExtendingBackToTheWholeReadingWhileAwaitingStopsWaiting) {
+  const InputState waiting = SelectingKyouha().HandleEvent(Ev(UserAction::ShrinkSegment)).next;
+  const HandleResult whole = waiting.HandleEvent(Ev(UserAction::ExtendSegment));
+  EXPECT_FALSE(whole.next.awaiting_segment_candidates());
+  EXPECT_FALSE(whole.next.resizing_segment());
+  EXPECT_EQ(whole.actions,
+            (Actions{ShowCandidateWindow{WholeCandidates(), 0}, ReplaceMarkedText{"今日は"}}));
+  // The answer of the request the frontend cancels is dropped if it arrives.
+  EXPECT_TRUE(
+      whole.next.HandleSegmentCandidatesArrived("きょう", KyouCandidates()).actions.empty());
+}
+
+TEST(SegmentEditingTest, CandidateKeysMoveAmongTheFirstSegmentsCandidates) {
+  const InputState resized = ResizedKyou();
+  const HandleResult down = resized.HandleEvent(Ev(UserAction::Down));
+  EXPECT_EQ(down.next.selected_index(), 1u);
+  EXPECT_EQ(down.actions, (Actions{UpdateCandidateSelection{1}, ReplaceMarkedText{"京は"}}));
+  EXPECT_EQ(resized.HandleEvent(Ev(UserAction::PrevCandidate)).actions,
+            (Actions{UpdateCandidateSelection{2}, ReplaceMarkedText{"きょうは"}}));
+  EXPECT_EQ(down.next.segment_end(), 3u);
+}
+
+// Spec §6.1: Enter, → (and Ctrl+F) and the digits.
+TEST(SegmentEditingTest, PartialCommitCommitsTheFirstSegmentAndWaitsForTheRest) {
+  const InputState second = ResizedKyou().HandleEvent(Ev(UserAction::Down)).next;
+  for (const UserActionEvent& event :
+       {Ev(UserAction::Commit), Ev(UserAction::Forward), Ev(UserAction::SelectByDigit, 0, 2)}) {
+    SCOPED_TRACE(static_cast<int>(event.action));
+    const HandleResult committed = second.HandleEvent(event);
+    EXPECT_EQ(committed.next.kind(), K::Composing);
+    EXPECT_EQ(committed.next.Reading(), "は");
+    EXPECT_TRUE(committed.next.awaiting_candidates());
+    EXPECT_FALSE(committed.next.resizing_segment());
+    EXPECT_TRUE(committed.next.candidates().empty());
+    EXPECT_EQ(committed.actions,
+              (Actions{HideCandidateWindow{}, CommitFirstSegment{"京", "は"},
+                       ObserveCommit{"きょう", "京"}, QueryCandidates{"は", true}}));
+  }
+  const HandleResult third = second.HandleEvent(Ev(UserAction::SelectByDigit, 0, 3));
+  EXPECT_EQ(third.actions.at(1), (ClientAction{CommitFirstSegment{"きょう", "は"}}));
+  // A digit past the list does nothing.
+  EXPECT_TRUE(second.HandleEvent(Ev(UserAction::SelectByDigit, 0, 4)).actions.empty());
+  // With live conversion the remaining reading waits in Previewing.
+  EXPECT_EQ(ResizedKyou(true).HandleEvent(Ev(UserAction::Commit)).next.kind(), K::Previewing);
+}
+
+TEST(SegmentEditingTest, TheRemainingReadingsAnswerOpensSelectingWithItsWholeReading) {
+  const InputState waiting = ResizedKyou().HandleEvent(Ev(UserAction::Commit)).next;
+  const std::vector<Candidate> ha = {Candidate{"は", "は"}, Candidate{"葉", "は"}};
+  const HandleResult opened = waiting.HandleCandidatesArrived(ha);
+  EXPECT_EQ(opened.next.kind(), K::Selecting);
+  EXPECT_FALSE(opened.next.resizing_segment());
+  EXPECT_EQ(opened.next.segment_end(), 1u);
+  EXPECT_EQ(opened.actions, (Actions{ShowCandidateWindow{ha, 0}, ReplaceMarkedText{"は"}}));
+  // A one code point reading: Shift+→ cannot start over, Shift+← cannot shrink.
+  EXPECT_TRUE(opened.next.HandleEvent(Ev(UserAction::ExtendSegment)).actions.empty());
+  EXPECT_TRUE(opened.next.HandleEvent(Ev(UserAction::ShrinkSegment)).actions.empty());
+  // Enter commits it whole, the M13 way.
+  EXPECT_EQ(opened.next.HandleEvent(Ev(UserAction::Commit)).actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"は"}, CommitMarkedText{},
+                     ObserveCommit{"は", "は"}}));
+}
+
+// Spec §6.1: the frontend commits the first segment's reading in the form.
+TEST(SegmentEditingTest, CharacterFormKeysWhileResizedAskForTheRemainingReading) {
+  for (const UserAction action :
+       {UserAction::CommitHiragana, UserAction::CommitKatakana, UserAction::CommitHalfwidthKatakana,
+        UserAction::CommitFullwidthRoman, UserAction::CommitHalfwidthRoman}) {
+    SCOPED_TRACE(static_cast<int>(action));
+    const HandleResult result = ResizedKyou().HandleEvent(Ev(action));
+    EXPECT_EQ(result.next.kind(), K::Composing);
+    EXPECT_EQ(result.next.Reading(), "は");
+    EXPECT_TRUE(result.next.awaiting_candidates());
+    EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, QueryCandidates{"は", true}}));
+  }
+}
+
+TEST(SegmentEditingTest, BackspaceWhileResizedDropsTheSegmentAndEditsTheWholeReading) {
+  const HandleResult result = ResizedKyou().HandleEvent(Ev(UserAction::Backspace));
+  EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.Reading(), "きょう");
+  EXPECT_FALSE(result.next.resizing_segment());
+  EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"きょう"},
+                                     QueryCandidates{"きょう"}}));
+}
+
+TEST(SegmentEditingTest, CancelWhileResizedCancelsTheWholeInput) {
+  const HandleResult result = ResizedKyou().HandleEvent(Ev(UserAction::Cancel));
+  EXPECT_EQ(result.next.kind(), K::Idle);
+  EXPECT_EQ(result.next.Reading(), "");
+  EXPECT_FALSE(result.next.resizing_segment());
+  EXPECT_EQ(result.actions, (Actions{HideCandidateWindow{}, CancelMarkedText{}}));
+}
+
+// Spec §4, §8: typing, punctuation and Ctrl+Shift+U commit what is shown, the
+// remaining reading as typed, and observe the first segment only.
+TEST(SegmentEditingTest, TypingPunctuationAndUnicodeInputWhileResizedCommitTheShownText) {
+  const HandleResult typed = ResizedKyou().HandleEvent(Ev(UserAction::Input, U'k'));
+  EXPECT_EQ(typed.next.kind(), K::Composing);
+  EXPECT_EQ(typed.next.Reading(), "k");
+  EXPECT_EQ(typed.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"今日は"},
+                                    CommitMarkedText{}, ObserveCommit{"きょう", "今日"},
+                                    ReplaceMarkedText{"k"}, QueryCandidates{"k"}}));
+
+  const HandleResult period =
+      ResizedKyou().WithPunctuationConversion(true).HandleEvent(Ev(UserAction::Input, U'。'));
+  EXPECT_EQ(period.next.kind(), K::Idle);
+  EXPECT_EQ(period.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"今日は。"},
+                                     CommitMarkedText{}, ObserveCommit{"きょう", "今日"}}));
+
+  const HandleResult unicode = ResizedKyou().HandleEvent(Ev(UserAction::StartUnicodeInput));
+  EXPECT_EQ(unicode.next.kind(), K::UnicodeInput);
+  EXPECT_EQ(unicode.actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"今日は"}, CommitMarkedText{},
+                     ObserveCommit{"きょう", "今日"}, ReplaceMarkedText{"U+"}}));
+}
+
+// Spec §4: keys outside the table keep e and act as with the whole reading.
+TEST(SegmentEditingTest, KeysOutsideTheTableKeepTheFirstSegment) {
+  const InputState resized = ResizedKyou();
+  for (const UserActionEvent& event :
+       {Ev(UserAction::Delete), Ev(UserAction::LineHead), Ev(UserAction::LineEnd),
+        Ev(UserAction::Backward), PageEv(UserAction::Down), PageEv(UserAction::Up),
+        Ev(UserAction::Forget), Ev(UserAction::ToggleHankaku), Ev(UserAction::ToggleDebugWindow)}) {
+    SCOPED_TRACE(static_cast<int>(event.action));
+    const HandleResult result = resized.HandleEvent(event);
+    EXPECT_EQ(result.next.kind(), K::Selecting);
+    EXPECT_EQ(result.next.segment_end(), 3u);
+    EXPECT_EQ(result.next.FirstSegmentReading(), "きょう");
+    EXPECT_TRUE(SameCandidateList(result.next.candidates(), KyouCandidates()));
+  }
+  // ← is consumed without a change; one page has nowhere to move.
+  EXPECT_TRUE(resized.HandleEvent(Ev(UserAction::Backward)).actions.empty());
+  EXPECT_TRUE(resized.HandleEvent(PageEv(UserAction::Down)).actions.empty());
+  EXPECT_EQ(resized.HandleEvent(Ev(UserAction::Forget)).actions, (Actions{ForgetLastCommit{}}));
+}
+
+// The whole reading after a resize round trip behaves as before M66.
+TEST(SegmentEditingTest, TheWholeReadingAfterAResizeCommitsLikeM13) {
+  const InputState whole = ResizedKyou().HandleEvent(Ev(UserAction::ExtendSegment)).next;
+  EXPECT_EQ(whole.HandleEvent(Ev(UserAction::Commit)).actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"今日は"}, CommitMarkedText{},
+                     ObserveCommit{"きょうは", "今日は"}}));
+  EXPECT_TRUE(whole.HandleEvent(Ev(UserAction::Forward)).actions.empty());
+  EXPECT_TRUE(whole.HandleEvent(Ev(UserAction::CommitKatakana)).actions.empty());
+  EXPECT_EQ(
+      whole.HandleEvent(Ev(UserAction::Backspace)).actions,
+      (Actions{HideCandidateWindow{}, ReplaceMarkedText{"きょう"}, QueryCandidates{"きょう"}}));
+}
+
+TEST(SegmentEditingTest, ACorrectedReadingLeavesAResizedSegmentAlone) {
+  const InputState resized = ResizedKyou();
+  const InputState corrected = resized.WithCorrectedReading("きのうは");
+  EXPECT_EQ(corrected.Reading(), "きょうは");
+  EXPECT_EQ(corrected.FirstSegmentReading(), "きょう");
+  EXPECT_TRUE(SameCandidateList(corrected.candidates(), KyouCandidates()));
+}
+
+// Spec §3, §10: Shift+← / Shift+→ resize only while Selecting, and only with
+// segment_resize; Shift-less arrows stay Backward / Forward.
+TEST(SegmentEditingTest, ShiftArrowsMapToTheResizeActionsOnlyWhileSelecting) {
+  const auto action = [](uint32_t key, uint32_t modifiers, K kind,
+                         bool resize) -> std::optional<UserAction> {
+    const auto event = MapUserAction(key, modifiers, kind, resize);
+    if (!event) return std::nullopt;
+    return event->action;
+  };
+  EXPECT_EQ(action(vk::kLeft, kModifierShift, K::Selecting, true), UserAction::ShrinkSegment);
+  EXPECT_EQ(action(vk::kRight, kModifierShift, K::Selecting, true), UserAction::ExtendSegment);
+  for (const bool resize : {false, true}) {
+    SCOPED_TRACE(resize);
+    EXPECT_EQ(action(vk::kLeft, 0, K::Selecting, resize), UserAction::Backward);
+    EXPECT_EQ(action(vk::kRight, 0, K::Selecting, resize), UserAction::Forward);
+    for (const K kind : {K::Idle, K::Composing, K::Previewing, K::UnicodeInput}) {
+      EXPECT_FALSE(action(vk::kLeft, kModifierShift, kind, resize).has_value());
+      EXPECT_FALSE(action(vk::kRight, kModifierShift, kind, resize).has_value());
+    }
+  }
+  // Without segment_resize (the batch segments) they move like ← / →.
+  EXPECT_EQ(action(vk::kLeft, kModifierShift, K::Selecting, false), UserAction::Backward);
+  EXPECT_EQ(action(vk::kRight, kModifierShift, K::Selecting, false), UserAction::Forward);
+  EXPECT_EQ(MapUserAction(vk::kLeft, kModifierShift, K::Selecting),
+            MapUserAction(vk::kLeft, kModifierShift, K::Selecting, false));
+
+  // The mapped Shift+← reaches the state machine as a resize.
+  const auto shrink = MapUserAction(vk::kLeft, kModifierShift, K::Selecting, true);
+  ASSERT_TRUE(shrink.has_value());
+  EXPECT_EQ(SelectingKyouha().HandleEvent(*shrink).next.segment_end(), 3u);
 }
 
 }  // namespace

@@ -15,6 +15,10 @@ add_library(azookey_core STATIC
   src/InputState.cpp
   src/KanaInput.cpp
   src/KatakanaRewriter.cpp
+  src/Lattice.cpp
+  src/LatticeConnection.cpp
+  src/LatticeDictionary.cpp
+  src/LatticeSearch.cpp
   src/LiveConversionChunker.cpp
   src/MixedRomajiSplitter.cpp
   src/NumberRewriter.cpp

@@ -85,12 +85,12 @@ enum class UserAction : uint16_t {
     CommitFullwidthRoman,     // F9
     CommitHalfwidthRoman,     // F10（読みがあるとき）
 
+    // 確定の取り消し（docs/commit-undo-spec.md、DEV-2032）
+    UndoCommit,               // Ctrl+Backspace（Idle、確定の直後）
+
     // 文節の伸縮（docs/segment-editing-spec.md §4、DEV-2036）
     ShrinkSegment,            // Shift+←（Selecting）
     ExtendSegment,            // Shift+→（Selecting）
-
-    // 確定の取り消し（docs/commit-undo-spec.md、DEV-2032）
-    UndoCommit,               // Ctrl+Backspace（Idle、確定の直後）
 };
 
 struct UserActionEvent {
@@ -266,7 +266,7 @@ append-only で加える（§1.5.2）。preedit の更新は romaji のかな化
 
 | ClientAction | 意味 | TSF / TIP 側の操作 |
 |---|---|---|
-| `QueryCandidates(reading)` | reading の候補を問い合わせる | `PostQueryCandidates`。request id と staleness は TIP が持つ（§1.5.4） |
+| `QueryCandidates(reading)` | reading の候補を問い合わせる。先頭文節の要求は残りの読みを添える（`docs/segment-editing-spec.md` §5.1） | `PostQueryCandidates`。request id と staleness は TIP が持つ（§1.5.4） |
 | `UpdateCandidateSelection(index)` | 表示中の候補窓のハイライトだけを動かす | `CandidateUiCoordinator::MoveSelection`（§1.6.2 (B)） |
 | `ObserveCommit(reading, surface)` | 候補確定を学習へ記録する | `PostCommitObservation` |
 | `ToggleInputMode(Hankaku / HiraKata)` | 入力モードを切り替える | 入力モードの compartment 更新 |
@@ -275,6 +275,7 @@ append-only で加える（§1.5.2）。preedit の更新は romaji のかな化
 | `HideReplaceSuggestionPrompt` | 予約（同上） | — |
 | `ForgetLastCommit` | 直近確定を忘却する（§7） | 忘却 IPC |
 | `ToggleDebugWindow` | デバッグ窓を開閉する（§8） | デバッグ窓の表示切替 |
+| `CommitFirstSegment(surface, remaining_reading)` | 先頭文節を surface に置き換えて確定し、残りの読みを composition に残す（`docs/segment-editing-spec.md` §6.1） | 部分確定の edit session（同 §6.2） |
 
 候補確定は `[HideCandidateWindow, ReplaceMarkedText(surface), CommitMarkedText,
 ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading), CommitMarkedText]` の
@@ -342,7 +343,9 @@ ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading)
   TIP は batch 変換の文節移動と、通常変換の伸縮中（`docs/segment-editing-spec.md` §4）にだけ使い、
   どちらでもないときはパススルーする。
 - Shift 付きの `VK_LEFT` / `VK_RIGHT` は、通常変換の Selecting で文節の伸縮になる。batch 変換の文節を表示している
-  ときは、Shift の無い ← / → と同じ文節移動とする。
+  ときは、Shift の無い ← / → と同じ文節移動とする。この区別は `MapUserAction` の引数 `segment_resize`（既定 false）が
+  受け持ち、true の Selecting でだけ `ShrinkSegment` / `ExtendSegment` に写す。TIP は通常変換で true、batch 変換の
+  文節を表示しているときは false を渡す。
 - Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
   Selecting で `Up` / `Down` になる。
 - PageUp / PageDown（`VK_PRIOR` / `VK_NEXT`。修飾キーなし）は Selecting でだけ `Up` / `Down` になり、ページ単位の移動で
@@ -913,9 +916,9 @@ legacy（macOS）は予測と変換候補を別々の窓に描く。ライブ変
 4. 候補モードと同じ anchor 点（anchor の左下）で対象モニタを判定し（§9.2）、矩形外チェック
 
 打鍵で動く anchor の辺は、1 行に収まる composition では右辺だけである。左辺と上下辺から位置を
-決めるので、composition の間、窓は打鍵ごとに動かない。候補モードと同じ点
-（composition 開始位置の左下）を基準にする。Space の後に候補モードで出し直しても、基準の点は変わらない
-（窓の大きさが変わるので、下に収まらず上へ置くときの位置は変わりうる）。
+決めるので、composition の間、窓は打鍵ごとに動かない。候補モードも同じ anchor の矩形を受け、
+同じ点（composition 開始位置の左下）を基準にする（§9.2）。Space の後に候補モードで出し直しても、基準は変わらない。
+上へ置くときは両モードとも窓の下端を anchor の上辺にそろえる（窓の大きさが変わるので、上端の位置は変わりうる）。
 
 次の場合、窓は打鍵に合わせて動く。
 
@@ -1310,7 +1313,8 @@ sha	しゃ
     曖昧な位置があるときの Space は、打鍵ごとの候補キャッシュではなく変換窓の要求で候補を得る。
 - Host（`InferenceEngine::QueryAmbiguousCandidatesEx`）は、既定の読みと `alt_readings` の
   先頭の読みをそれぞれ変換する。M35 が既定の読みを補正したとき、既定の読みの変換が期限で
-  打ち切られたとき、M63 の分割で変換する要求では比べない（2 回目の変換をしない）。
+  打ち切られたとき、M63 の分割で変換する要求、先頭文節の要求（`docs/segment-editing-spec.md` §5.3）では
+  比べない（2 回目の変換をしない）。
   - 先に学習ストアの確定で決める。読みごとに、その読みの候補の表示文字列について
     `LearningStore::Score`（app ごとの行の減衰つき重みの合計）を引き、その最大値を比べる。
     どちらかの読みに確定があれば、もう一方の読みの最大値が既定の読みのものを上回るときだけ
@@ -1541,11 +1545,11 @@ MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
 候補ウィンドウは作業領域内に収まるよう配置する。
 配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`）とする。予測モードも `CandidateWindow::ComputePlacement` を使う。
 
-- 候補ウィンドウは両モードとも anchor 点（composition 開始位置の左下）を基準に、その下に開く。
-  下端からはみ出すときは composition の上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
-- 候補モードの描く行数は、1 ページ（§1.4「候補のページ」）の行を上限に、anchor 点の下の空きと、上の空き（キャレットの高さの代わりの間隔を除く）の広い方に収め、
-  反転した窓を作業領域の上端へ寄せない。重なりうる場合（行の高さがその間隔を超えるとき、composition が複数行のとき、
-  1 行まで減らしても収まらないとき）は `docs/native-ui-spec.md` §4.1 が定める。
+- 候補ウィンドウは両モードとも anchor の矩形（composition 全体の text extent。返さないときは anchor 点から上へ
+  16 論理 px のキャレット矩形。再変換の候補一覧では範囲の text extent）を基準に、その左下の下に開く。下端からはみ出すときは
+  窓の下端を矩形の上辺にそろえて上へ反転し、右端からはみ出す分は内側へ寄せる。幅は作業領域の幅を上限とする（§3.2）。
+- 候補モードの描く行数は、1 ページ（§1.4「候補のページ」）の行を上限に、矩形の下辺から下の空きと、上辺から上の空きの広い方に収め、
+  反転した窓を作業領域の上端へ寄せない。1 行まで減らしても収まらないときに重なることは `docs/native-ui-spec.md` §4.1 が定める。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
@@ -1567,7 +1571,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 最終フォールバックでは、参照 HWND を推測せず `GetPhysicalCursorPos` から物理 screen 座標を直接取得する。
 キャレット高の 16 論理 px は、カーソル位置のモニター拡大率を使って物理 px へ換算する。
 拡大率を取得できない場合は、16 物理 px を使う。
-予測候補ウィンドウが `GetTextExt` の矩形を得られずに anchor 点から矩形を作るときも、同じ換算でキャレット高を決める。
+候補ウィンドウ（両モード）が `GetTextExt` の矩形を得られずに anchor 点から矩形を作るときも、同じ換算でキャレット高を決める。
 
 候補ウィンドウは `WM_DPICHANGED` と表示先モニタの DPI に応じて、
 配置範囲、行高、余白、フォントを更新する。

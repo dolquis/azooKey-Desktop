@@ -120,6 +120,7 @@ def generate(directory: Path) -> None:
     write_surface_index_fixtures(directory, image, sections)
     write_neologd_pack_fixtures(directory, tsv, metadata, image, directory / "hash.azdic")
     write_connection_fixtures(directory, tsv, metadata)
+    write_lattice_fixtures(directory, metadata)
     (directory / "ready").write_text("ready", encoding="utf-8")
 
 
@@ -158,6 +159,138 @@ def write_connection_fixtures(directory: Path, tsv: Path, metadata: dict) -> Non
     (directory / "connections.azdic").write_bytes(image)
     lattice, _ = dictbuild.build_lattice_core([kana], connections, matrix, metadata, 1, directory)
     (directory / "lattice_core.azdic").write_bytes(lattice)
+
+
+def write_lattice_fixtures(directory: Path, metadata: dict) -> None:
+    """lattice/: a sentence vocabulary for the core lattice tests (DEV-2098) and broken copies.
+
+    The matrix costs 1000 everywhere except along 今日|は|いい|天気|です, which costs 0, so that
+    path is the best one. Each broken copy keeps the trie sound (content hash included) and breaks
+    one check (4) rule of azdic spec section 15.5 or one META.lattice key.
+    """
+    out = directory / "lattice"
+    out.mkdir(exist_ok=True)
+    header = "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+    lexicon_columns = "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n"
+    rows = [
+        # reading, surface, left, right, cost, pos, conjugation, normalized form, six POS fields
+        ("きょう", "今日", 10, 10, 3000, "名詞-普通名詞-副詞可能", "", "今日", "名詞,普通名詞,副詞可能,*,*,*"),
+        ("きょう", "京", 20, 20, 6000, "名詞-固有名詞-地名-一般", "", "京", "名詞,固有名詞,地名,一般,*,*"),
+        ("てんき", "天気", 30, 30, 2500, "名詞-普通名詞-一般", "", "天気", "名詞,普通名詞,一般,*,*,*"),
+        ("てんき", "転機", 30, 30, 5000, "名詞-普通名詞-一般", "", "転機", "名詞,普通名詞,一般,*,*,*"),
+        # Katakana spelling of 天気 (attr bits 14 and 15), and a loanword spelled so (bit 14 only).
+        ("てんき", "テンキ", 30, 30, 2500, "名詞-普通名詞-一般", "", "天気", "名詞,普通名詞,一般,*,*,*"),
+        ("こーひー", "コーヒー", 30, 30, 3000, "名詞-普通名詞-一般", "", "コーヒー", "名詞,普通名詞,一般,*,*,*"),
+        # Spelled in the hiragana of the reading: lattice_core only.
+        ("は", "は", 50, 50, 1000, "助詞-係助詞", "", "は", "助詞,係助詞,*,*,*,*"),
+        ("です", "です", 60, 60, 1000, "助動詞", "助動詞-デス-終止形-一般", "です",
+         "助動詞,*,*,*,助動詞-デス,終止形-一般"),
+        ("いい", "いい", 40, 40, 2000, "形容詞-非自立可能", "形容詞-終止形-一般", "良い",
+         "形容詞,非自立可能,*,*,形容詞,終止形-一般"),
+        ("お", "お", 70, 70, 1500, "接頭辞", "", "御", "接頭辞,*,*,*,*,*"),
+    ]
+    connections = out / "sentence.conn.tsv"
+    connections.write_text(header + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n" + "".join(
+        "\t".join(map(str, row)) + "\n" for row in rows), encoding="utf-8", newline="\n")
+    words = out / "sentence.lex.tsv"
+    words.write_text(header + lexicon_columns + "".join(
+        f"{surface}\t{reading}\t{pos}\t{cost}\t\tgeneral\tfixture\n"
+        for reading, surface, _, _, cost, pos, *_ in rows if surface != reading),
+        encoding="utf-8", newline="\n")
+    kana = out / "lattice_core.lex.tsv"
+    kana.write_text(header + lexicon_columns + "".join(
+        f"{surface}\t{reading}\t{pos}\t{cost}\t\tgeneral\tfixture\n"
+        for reading, surface, _, _, cost, pos, *_ in rows if surface == reading),
+        encoding="utf-8", newline="\n")
+    ids = sorted({0, *(row[2] for row in rows)})
+    sentence = {(0, 10), (10, 50), (50, 40), (40, 30), (30, 60), (60, 0)}
+    matrix = out / "sentence_matrix.def"
+    matrix.write_text("80 80\n" + "".join(f"{r} {l} {0 if (r, l) in sentence else 1000}\n"
+                                          for r in ids for l in ids), encoding="utf-8", newline="\n")
+    space = dictbuild.connection_space(matrix)
+    layer, _ = dictbuild.build([words], metadata, 1, directory, connections, space)
+    core, _ = dictbuild.build_lattice_core([kana], connections, matrix, metadata, 1, directory)
+    (out / "sudachi_lexicon.azdic").write_bytes(layer)
+    (out / "lattice_core.azdic").write_bytes(core)
+    # A layer without CONN: its words take the ids of their part of speech (lattice spec 8.3).
+    technical = out / "technical.lex.tsv"
+    technical.write_text(header + lexicon_columns + "テンソル\tてんそる\t名詞\t4000\t\ttechnical\tfixture\n",
+                         encoding="utf-8", newline="\n")
+    (out / "technical_terms_lexicon.azdic").write_bytes(dictbuild.build([technical], metadata, 4, directory)[0])
+    # mecab-ipadic part-of-speech names, read as neologd_lexicon (layer 2) and as another layer (4).
+    ipadic = out / "ipadic.lex.tsv"
+    ipadic.write_text(header + lexicon_columns +
+                      "札幌\tさっぽろ\t名詞-固有名詞-地域-一般\t4000\t\tplace_name\tfixture\n"
+                      "青空社\tあおぞらしゃ\t名詞-固有名詞-組織\t4000\t\tcompany_org\tfixture\n"
+                      "検索\tけんさく\t名詞-サ変接続\t4000\t\tgeneral\tfixture\n",
+                      encoding="utf-8", newline="\n")
+    (out / "neologd_lexicon.azdic").write_bytes(dictbuild.build([ipadic], metadata, 2, directory)[0])
+    (out / "ipadic_other_layer.azdic").write_bytes(dictbuild.build([ipadic], metadata, 4, directory)[0])
+
+    def sections(image: bytes) -> list[tuple[bytes, int, int]]:
+        found = []
+        for i in range(struct.unpack_from("<I", image, 28)[0]):
+            name, _, off, size = struct.unpack_from("<4sIQQ", image, 64 + i * 24)
+            found.append((name, off, size))
+        return found
+
+    def offset(image: bytes, name: bytes) -> int:
+        return next(off for section, off, _ in sections(image) if section == name)
+
+    def patched(image: bytes, name: bytes, at: int, fmt: str, value: int) -> bytes:
+        broken = bytearray(image)
+        struct.pack_into(fmt, broken, offset(image, name) + at, value)
+        struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
+        return bytes(broken)
+
+    def repacked(image: bytes, edit_meta=None, drop: bytes = b"") -> bytes:
+        parts = []
+        for name, off, size in sections(image):
+            data = image[off:off + size]
+            if name == drop:
+                continue
+            if name == b"META" and edit_meta:
+                meta = json.loads(data.decode("utf-8"))
+                edit_meta(meta)
+                data = json.dumps(meta, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            parts.append((name, data))
+        return dictbuild.pack(parts, *struct.unpack_from("<III", image, 16))
+
+    def first_record(image: bytes) -> int:
+        """Offset of the first CONN variant record inside the CONN section."""
+        table = (struct.unpack_from("<I", image, 20)[0] + 1) * 4
+        return table + (-table % 8)
+
+    def without_penalty(meta: dict) -> None:
+        del meta["lattice"]["penalties"]["P_unk"]
+
+    def zero_scale(meta: dict) -> None:
+        meta["lattice"]["C"] = 0
+
+    def other_space(meta: dict) -> None:
+        meta["connection_space"] = dictbuild.CONNECTION_SPACE_PREFIX + "0" * 64
+
+    def without_conn_pos(meta: dict) -> None:
+        del meta["conn_pos_table"]
+
+    broken = {
+        "core_cmat_reserved": patched(core, b"CMAT", 16, "<I", 1),
+        "core_cmat_size": patched(core, b"CMAT", 8, "<I", len(ids) + 1),
+        "core_cmat_index": patched(core, b"CMAT", 24 + 2 * 10, "<H", 0x7FFF),
+        "core_conn_pos": patched(core, b"CONN", first_record(core) + 6, "<H", 0x3FFF),
+        # EIDX[0] (the key いい) points outside ENTS: only a lookup of いい finds it (check (2)).
+        "core_entry": patched(core, b"EIDX", 0, "<I", 0xFFFFFFFF),
+        "core_no_cmat": repacked(core, drop=b"CMAT"),
+        "core_meta_penalty": repacked(core, without_penalty),
+        "core_meta_scale": repacked(core, zero_scale),
+        "layer_conn_order": patched(layer, b"CONN", 4, "<I", 0xFFFF),
+        "layer_conn_pos": patched(layer, b"CONN", first_record(layer) + 6, "<H", 0x3FFF),
+        "layer_conn_id": patched(layer, b"CONN", first_record(layer), "<H", 79),
+        "layer_space": repacked(layer, other_space),
+        "layer_conn_pos_table": repacked(layer, without_conn_pos),
+    }
+    for name, image in broken.items():
+        (out / f"{name}.azdic").write_bytes(image)
 
 
 def write_neologd_pack_fixtures(directory: Path, tsv: Path, metadata: dict, other_layer: bytes,

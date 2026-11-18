@@ -19,6 +19,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateWindow.h"
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TextService.h"
 
@@ -767,6 +768,64 @@ void VerifyReconversionAnchorsOnTheRange(MissingExtent missing) {
   EXPECT_EQ(anchor.y, 94);
   function->Release();
   service.Deactivate();
+}
+
+// DEV-2104: low on the screen, the list flips over the range's extent: its
+// bottom meets the extent's top, not caret_gap above the bottom-left.
+struct ScopedCandidateWindowGeometry {
+  ScopedCandidateWindowGeometry(UINT dpi, RECT work_area) {
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(dpi);
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest(work_area);
+  }
+  ~ScopedCandidateWindowGeometry() {
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
+  }
+};
+
+TEST(ReconversionFunctionTest, CandidateWindowFlipsOverTheReconvertedRange) {
+  NoCaretCursorOnMenu caret_api;
+  // Six pixels below the range: the list goes above it.
+  const ScopedCandidateWindowGeometry geometry(96, {0, 0, 1920, 100});
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日、今日");
+  TestRange range(&context, text, 0, 2);
+  TestView view;
+  view.window = reinterpret_cast<HWND>(static_cast<INT_PTR>(0x2104));
+  view.text_ext_result = S_OK;
+  view.text_ext = {40, 50, 120, 74};  // {50, 70, 130, 94} once converted.
+  context.view = &view;
+  context.selection = &range;
+  {
+    azookey::tsf::TextService service;
+    service.set_foreground_app_for_test({"winword.exe", "Word", true});
+    service.set_text_edit_context_for_test(&context);
+    ASSERT_TRUE(service.create_candidate_window_for_test());
+    IUnknown* unknown = nullptr;
+    ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+    ITfFnReconversion* function = nullptr;
+    ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+              S_OK);
+    unknown->Release();
+    ITfCandidateList* list = nullptr;
+    ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+    ASSERT_NE(list, nullptr);
+    list->Release();
+    service.deliver_reconversion_result_for_test({L"候補"}, "こうほ");
+    ASSERT_TRUE(service.has_reconversion_ui_for_test());
+    const HWND hwnd = service.candidate_window_for_test().hwnd_for_test();
+    ASSERT_TRUE(IsWindowVisible(hwnd));
+    RECT bounds{};
+    {
+      // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+      const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+      ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    }
+    EXPECT_EQ(bounds.bottom, 70);
+    EXPECT_EQ(bounds.left, 50);
+    function->Release();
+    service.Deactivate();
+  }
 }
 
 TEST(ReconversionFunctionTest, CandidateWindowAnchorsOnTheReconvertedRange) {

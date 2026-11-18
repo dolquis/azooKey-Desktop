@@ -67,7 +67,8 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 `INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置し、
 どちらかが欠けるとビルドは失敗します。`dictbuild\check_bundle.py` は、生成物と
 `Package.wxs` の同梱一覧の差、standalone の `neologd_lexicon` pack の混入、帰属の欠落を
-検出します。インストール後は Host の起動ログで `static_dictionary_load` が
+検出します。同じ `dict` に生成される `lattice_core.azdic` は MSI がまだ同梱しないので、この差の検査から
+除きます（`docs/azdic-physical-layer-spec.md` §15.12。DEV-2099 で必須に戻します）。インストール後は Host の起動ログで `static_dictionary_load` が
 両方の層で `result=ok` になることを確認します。設定アプリの「ライセンス」から
 インストール先の `ThirdPartyNotices.txt` を開けます。同梱しない層
 （`base_lexicon` など）は同じイベントが `result=error` の警告になります。

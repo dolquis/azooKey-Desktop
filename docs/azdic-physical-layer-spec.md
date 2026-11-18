@@ -677,6 +677,9 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 | `penalties` | 補正項（同 §5.2）。`P_kata_variant`・`P_kata_own`・`P_node`・`P_unk` の 4 つ。初期値は 6000・0・3000・20000 |
 | `C` | 経路コストの尺度（同 §3.4）。初期値は 10000 |
 | `default_word_cost` | 可変層の既定の語コスト（同 §5.3）。品詞 1〜4 が `名詞,普通名詞,一般,*` の行の語コストの中央値（件数が偶数なら小さい方） |
+
+`penalties` と `C` は初期値であり、M52 で校正する（`docs/lattice-conversion-spec.md` §10.3、DEV-2101）。校正した値は
+`dictbuild/dictbuild.py` の定数に書き、lattice_core を作り直す。
 - 連接行列は、SudachiDict の raw 配布の直下にある `matrix.def.zip` から作る。この 1 本は版ごとの
   ディレクトリに置かれていないので、`build_bundled.py` に URL と SHA256 を固定し、ハッシュが一致しない取得は
   ビルドエラーとする。`--cache` と `--offline` の扱いは語彙のアーカイブと同じとする。
@@ -711,6 +714,9 @@ lattice_coreと帰属表示のSHA-256を結ぶ。生成の前後で入力が異�
 release workflow は同じキャッシュを使って別出力先へ2回生成し、2回目を `--offline` とする。
 `check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
 `content_hash`、ファイルサイズ、全バイトのSHA256と帰属文書の一致を検査する。
+配布ガードは lattice_core について、`CONN`・`CMAT`・`META.lattice` を持つことと、`connection_space` が
+`sudachi_lexicon` と一致することも検査する。`check_bundle.py --package` の `Package.wxs` との突き合わせは、
+MSI が lattice_core を同梱するまで lattice_core を両側から除く一時的な扱いとし、DEV-2099 で必須に戻す。
 独立した2回の生成が一致しなければMSIを作成しない。
 
 ### 15.13 ビルダと Host の接続契約

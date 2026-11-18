@@ -722,6 +722,9 @@ class BundledBuildTests(unittest.TestCase):
             self.assertEqual({p.name for p in (first / "dict").iterdir()},
                              {"sudachi_lexicon.azdic", "lattice_core.azdic", "technical_terms_lexicon.azdic"})
             self.assertEqual(check_bundle.check(first, None), [])
+            # The release workflow checks the generated payload against the real MSI package.
+            package = Path(__file__).resolve().parents[2] / "pkg" / "msi" / "Package.wxs"
+            self.assertEqual(check_bundle.check(first, package), [])
             self.assertEqual(check_bundle.compare(first, second), [])
             notices = (first / "ThirdPartyNotices.txt").read_text(encoding="utf-8")
             for source in ("sudachidict-core", "azookey-technical-terms"):
@@ -844,6 +847,10 @@ class BundleGuardTests(unittest.TestCase):
             bundle = self.make_bundle(path)
             (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "lattice_core.azdic").read_bytes())
             self.assertEqual(check_bundle.check(bundle, None), [])
+            # Until the MSI ships lattice_core (DEV-2099), the package comparison leaves it out.
+            self.assertEqual(check_bundle.check(bundle, self.write_package(path, "technical_terms_lexicon.azdic")), [])
+            self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(
+                bundle, self.write_package(path, "lattice_core.azdic"))))
             # A sudachi_lexicon in another connection space (here: none) leaves the lattice unused.
             (bundle / "dict" / "sudachi_lexicon.azdic").write_bytes(
                 (path / "fixture" / "ambiguous" / "sudachi_lexicon.azdic").read_bytes())

@@ -3,6 +3,7 @@
 #include <optional>
 #include <utility>
 
+#include "azookey/core/CandidatePage.h"
 #include "azookey/core/Utf8.h"
 
 namespace azookey::core {
@@ -236,12 +237,22 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
   HandleResult result{{}, *this};
   InputState& next = result.next;
   const size_t count = candidates_.size();
-  auto move_selection = [&](bool forward) {
-    next.selected_index_ =
-        forward ? (selected_index_ + 1) % count : (selected_index_ + count - 1) % count;
-    result.actions.push_back(UpdateCandidateSelection{next.selected_index_});
-    result.actions.push_back(ReplaceMarkedText{candidates_[next.selected_index_].surface});
+  auto select = [&](size_t index) {
+    next.selected_index_ = index;
+    result.actions.push_back(UpdateCandidateSelection{index});
+    result.actions.push_back(ReplaceMarkedText{candidates_[index].surface});
   };
+  auto move_selection = [&](bool forward) {
+    select(forward ? (selected_index_ + 1) % count : (selected_index_ + count - 1) % count);
+  };
+  // PageUp / PageDown: the same position on the previous / next page; nothing
+  // with one page (spec §1.4「候補のページ」).
+  if (event.by_page && (event.action == UserAction::Up || event.action == UserAction::Down)) {
+    if (const auto target = CandidateOnAdjacentPage(
+            selected_index_, event.action == UserAction::Down, count, event.page_starts))
+      select(*target);
+    return result;
+  }
   switch (event.action) {
     case UserAction::Input:
     case UserAction::InputAlnum: {
@@ -275,9 +286,10 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
       move_selection(false);
       break;
     case UserAction::SelectByDigit:
-      if (event.digit >= 1 && static_cast<size_t>(event.digit) <= count) {
-        next.CommitCandidate(static_cast<size_t>(event.digit - 1), result.actions);
-      }
+      // The n-th candidate of the current page; nothing when it has none.
+      if (const auto target =
+              CandidateByDigit(selected_index_, event.digit, count, event.page_starts))
+        next.CommitCandidate(*target, result.actions);
       break;
     case UserAction::Commit:
       next.CommitCandidate(selected_index_, result.actions);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace azookey::core {
 
@@ -63,8 +64,15 @@ struct UserActionEvent {
   // Resolved by the TIP for Input / InputAlnum only.
   char32_t codepoint{0};
   uint32_t modifiers{0};
-  // 1-9 for SelectByDigit.
+  // 1-9 for SelectByDigit: the n-th candidate of the current page.
   int digit{0};
+  // Up / Down from PageUp / PageDown move a page instead of one candidate
+  // (docs/legacy-parity-spec.md §1.4「候補のページ」, §1.6.2 (B)).
+  bool by_page{false};
+  // The page split an app set with SetPageIndex, which the TIP attaches to
+  // SelectByDigit and paged Up / Down; empty for nine candidates per page
+  // (core/include/azookey/core/CandidatePage.h).
+  std::vector<uint32_t> page_starts;
 
   friend bool operator==(const UserActionEvent&, const UserActionEvent&) = default;
 };

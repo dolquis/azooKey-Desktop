@@ -225,7 +225,7 @@ TransformSelectedTextRequest:
                             // none / openai / local-zenzai 以外は不正な要求
 TransformSelectedTextResponse:
   result: string            // 変換後テキスト。成功のときだけ非空
-  results: optional<string[]>// 複数案（予約。MVP では wire に載せない）
+  results: optional<string[]>// 複数案（予約。M16 の結果は単一なので wire に載せない。§14.1）
   error_class: optional<string> // 失敗の AiErrorClass 名（§7.2、呼出側 fallback 用）
   error: optional<string>   // 拒否（invalid_request / not_authenticated / safe_mode）
 ```
@@ -351,7 +351,7 @@ LintFinding:
 
 M16 の `mode` は legacy macOS の選択テキストのプロンプト窓（`OpenAIClient.swift` の
 `sendTextTransformRequest`。単一の `result` を返す）に当たる。legacy の target-marker 辞書
-（同ファイルの `Prompt.dictionary`。絵文字・顔文字・記号・類義語・対義語・TeX・説明・つづき）は、未確定文字列を
+（同ファイルの `Prompt.dictionary`。文章補完・絵文字・顔文字・記号・類義語・対義語・TeX・説明・つづきなど）は、未確定文字列を
 `<target>` で挟んで 3〜5 件の候補を返す Replace Suggestion（legacy の Ctrl+S）のものであり、`mode` の系譜では
 ない（`docs/legacy-parity-spec.md` §4.1）。`mode` は次の表の 4 値とし、target-marker 辞書に当たる拡張 mode は
 置かない（§14）。`AiBackend` は `mode` から system プロンプトを選ぶ。`free` では `prompt`（ユーザー指示）を指示に加え、
@@ -683,8 +683,8 @@ wire の値として残す。利用者から見える挙動と既定値、設定
 - 利用者から複数案か拡張 mode の要望が出たとき。
 - Replace Suggestion（未確定文字列の AI 候補。legacy の Ctrl+S）を Windows 版へ移植するマイルストーンを
   置くとき。この移植は、新しい IPC メッセージ、キーの割り当て（`docs/legacy-parity-spec.md` §1.4）、候補窓への
-  表示、未確定文字列と左文脈の外部送信（M16 は `context` を空で送る。`docs/privacy-and-secure-input-spec.md`
-  §5.3）を要する。target-marker 辞書と複数案は、その移植で扱う。
+  表示、未確定文字列と左文脈の外部送信（M16 のプロンプト窓の文脈の扱いは §5.2 と
+  `docs/privacy-and-secure-input-spec.md` §5.3 が定める）を要する。target-marker 辞書と複数案は、その移植で扱う。
 
 ### 14.2 未確定事項
 

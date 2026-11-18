@@ -764,6 +764,14 @@ class BundledBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "pinned SHA256"):
                 build_bundled.build_bundle(path / "tampered", cache, True)
 
+    def test_metadata_records_the_pinned_matrix(self):
+        # azdic spec 15.12: transform and upstream_revision name matrix.def.zip and its SHA256.
+        source, = build_bundled.sudachi_metadata()["sources"]
+        name, digest = build_bundled.MATRIX_ARCHIVE
+        for field in ("transform", "upstream_revision"):
+            self.assertIn(f"{name} (SHA256 {digest})", source[field])
+        self.assertEqual(source["notice_ids"], ["sudachidict-legal"])
+
     def test_authored_seed_keeps_default_cost_frequency_and_curated_categories(self):
         layer = build_bundled.TECHNICAL_LAYER
         source = build_bundled.HERE / "sources"

@@ -43,7 +43,8 @@ class BuilderTests(unittest.TestCase):
             path = Path(temporary)
             generate(path)
             dictbuild.verify((path / "valid.azdic").read_bytes())
-            compatible = {"valid.azdic", "no_surface_index.azdic", "unknown_section.azdic"}
+            compatible = {"valid.azdic", "no_surface_index.azdic", "unknown_section.azdic",
+                          "connections.azdic", "lattice_core.azdic"}
             for broken in path.glob("*.azdic"):
                 if broken.name in compatible:
                     continue
@@ -165,6 +166,318 @@ class SudachiExtractTests(unittest.TestCase):
     def test_rejects_unexpected_columns(self):
         with self.assertRaises(ValueError):
             list(extract_sudachi.convert([["東京", "1"]]))
+
+    def connection_rows(self) -> list[list[str]]:
+        rows = [
+            sudachi_row("東京", "4789", "3000", "東京", "名詞,固有名詞,地名,一般", "トウキョウ"),
+            sudachi_row("ひらがな", "5139", "5000", "ひらがな", "名詞,普通名詞,一般", "ヒラガナ"),
+            sudachi_row("書く", "700", "4000", "書く", "動詞,一般,*,*,五段-カ行,終止形-一般", "カク"),
+            sudachi_row("コーヒー", "5142", "3000", "コーヒー", "名詞,普通名詞,一般", "コーヒー"),
+            sudachi_row("稀語", "5139", "10001", "稀語", "名詞,普通名詞,一般", "マレゴ"),  # above max cost
+            sudachi_row("、", "5980", "0", "、", "補助記号,読点", "、"),
+        ]
+        rows[2][2] = "701"  # A right id that differs from the left id.
+        rows[3][12] = "\\u73c8琲"  # The upstream normalized form, escaped like the other columns.
+        return rows
+
+    def test_connection_rows_keep_kana_words_and_all_six_part_of_speech_fields(self):
+        rows = self.connection_rows()
+        self.assertEqual([entry[0] for entry in extract_sudachi.convert(rows)], ["東京", "書く", "コーヒー"])
+        self.assertEqual(list(extract_sudachi.convert(rows, kana_only=True)),
+                         [("ひらがな", "ひらがな", "名詞-普通名詞-一般", 5000, "general")])
+        self.assertEqual(list(extract_sudachi.convert_connections(rows)), [
+            ("とうきょう", "東京", "4789", "4789", "3000", "名詞-固有名詞-地名-一般", "", "東京",
+             "名詞,固有名詞,地名,一般,*,*"),
+            ("ひらがな", "ひらがな", "5139", "5139", "5000", "名詞-普通名詞-一般", "", "ひらがな",
+             "名詞,普通名詞,一般,*,*,*"),
+            ("かく", "書く", "700", "701", "4000", "動詞-一般", "五段-カ行-終止形-一般", "書く",
+             "動詞,一般,*,*,五段-カ行,終止形-一般"),
+            ("こーひー", "コーヒー", "5142", "5142", "3000", "名詞-普通名詞-一般", "", "珈琲",
+             "名詞,普通名詞,一般,*,*,*"),
+        ])
+        broken = self.connection_rows()
+        broken[0][12] = "東\t京"
+        with self.assertRaisesRegex(ValueError, "normalized form"):
+            list(extract_sudachi.convert_connections(broken))
+
+    def test_writes_the_lexicon_kana_and_connection_tsvs_in_one_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            source = path / "small_lex.csv"
+            with source.open("w", encoding="utf-8", newline="") as stream:
+                csv.writer(stream).writerows(self.connection_rows())
+            lexicon, kana, connections = path / "a.lex.tsv", path / "kana.lex.tsv", path / "a.conn.tsv"
+            self.assertEqual(extract_sudachi.write_tsv([source], "20991231", lexicon,
+                                                       connections=connections, kana=kana), 3)
+            metadata = json.loads((build_bundled.HERE / "sources" / "sudachi_lexicon.metadata.json")
+                                  .read_text(encoding="utf-8"))
+            self.assertEqual([e["surface"] for e in dictbuild.load_entries([lexicon], metadata)],
+                             ["書く", "コーヒー", "東京"])
+            self.assertEqual([e["surface"] for e in dictbuild.load_entries([kana], metadata)], ["ひらがな"])
+            rows = dictbuild.read_connections(connections)
+            self.assertEqual([(r.key, r.surface, r.left_id, r.right_id, r.cost, r.kana_only) for r in rows], [
+                ("とうきょう", "東京", 4789, 4789, 3000, False), ("ひらがな", "ひらがな", 5139, 5139, 5000, True),
+                ("かく", "書く", 700, 701, 4000, False), ("こーひー", "コーヒー", 5142, 5142, 3000, False)])
+            text = connections.read_text(encoding="utf-8")
+            self.assertIn("SPDX-License-Identifier: Apache-2.0", text)
+            self.assertIn("\n" + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n", text)
+
+
+SYNTHETIC_HEADER = "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+
+
+class ConnectionTests(unittest.TestCase):
+    """CONN, CMAT and lattice_core (azdic spec sections 15.5 and 15.12) on synthetic data."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name)
+        (self.path / "MIT.txt").write_text("Synthetic test license text.\n", encoding="utf-8")
+        self.metadata = {"sources": [dict(source_id="fixture", spdx="MIT",
+                                          upstream_url="https://example.invalid/fixture",
+                                          upstream_revision="1", transform="synthetic",
+                                          copyright="Test fixture", notice_ids=[])]}
+
+    def lexicon(self, name: str, rows: list[tuple]) -> Path:
+        path = self.path / name
+        path.write_text(SYNTHETIC_HEADER + "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n" +
+                        "".join(f"{s}\t{r}\t{p}\t{c}\t\tgeneral\tfixture\n" for s, r, p, c in rows),
+                        encoding="utf-8", newline="\n")
+        return path
+
+    def connections(self, rows: list[tuple]) -> Path:
+        """rows: (reading, surface, left, right, cost, six POS fields, normalized form)."""
+        path = self.path / "words.conn.tsv"
+        lines = []
+        for reading, surface, left, right, cost, pos, normalized in rows:
+            fields = pos.split(",")
+            lines.append("\t".join(map(str, (
+                reading, surface, left, right, cost, "-".join(f for f in fields[:4] if f != "*"),
+                "-".join(f for f in fields[4:] if f != "*"), normalized, pos))) + "\n")
+        path.write_text(SYNTHETIC_HEADER + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n" + "".join(lines),
+                        encoding="utf-8", newline="\n")
+        return path
+
+    def matrix(self, header: str, cells: dict[tuple[int, int], int]) -> Path:
+        path = self.path / "matrix.def"
+        path.write_text(matrix_text(header, cells), encoding="utf-8", newline="\n")
+        return path
+
+    NOUN = "名詞,普通名詞,一般,*,*,*"
+    WORDS = [("東京", "とうきょう", "名詞-固有名詞-地名-一般", 3000), ("コーヒー", "こーひー", "名詞-普通名詞-一般", 3000),
+             ("珈琲", "こーひー", "名詞-普通名詞-一般", 4000), ("ヴァイオリン", "ゔぁいおりん", "名詞-普通名詞-一般", 5000)]
+    LINKS = [
+        ("とうきょう", "東京", 12, 13, 3000, "名詞,固有名詞,地名,一般,*,*", "東京"),
+        ("とうきょう", "東京", 11, 11, 3000, "名詞,固有名詞,地名,一般,*,*", "東京"),
+        ("とうきょう", "東京", 11, 11, 3000, "名詞,固有名詞,地名,一般,*,*", "東京"),  # Identical: kept once.
+        ("こーひー", "コーヒー", 20, 20, 3000, NOUN, "珈琲"),  # Katakana variant of 珈琲.
+        ("こーひー", "珈琲", 20, 20, 4000, NOUN, "珈琲"),
+        ("ゔぁいおりん", "ヴァイオリン", 20, 20, -5000, NOUN, "ヴァイオリン"),  # Katakana word itself.
+        ("は", "は", 40, 40, 3846, "助詞,係助詞,*,*,*,*", "は"),  # Kana word: lattice_core only.
+    ]
+
+    def build_words(self) -> tuple[bytes, bytes]:
+        words = self.lexicon("words.lex.tsv", self.WORDS)
+        plain, _ = dictbuild.build([words], self.metadata, 1, self.path)
+        linked, _ = dictbuild.build([words], self.metadata, 1, self.path, self.connections(self.LINKS),
+                                    "sudachidict-matrix:" + "0" * 64)
+        return plain, linked
+
+    def variants(self, image: bytes) -> list[list[tuple[int, int, int, int]]]:
+        count = struct.unpack_from("<I", image, 20)[0]
+        data = sections_of(image)[b"CONN"]
+        begin = struct.unpack_from(f"<{count + 1}I", data)
+        offset = 4 * (count + 1) + (-4 * (count + 1) % 8)
+        records = list(struct.iter_unpack("<HHhH", data[offset:]))
+        return [records[begin[i]:begin[i + 1]] for i in range(count)]
+
+    def test_conn_keeps_each_variant_and_leaves_the_lookup_sections_unchanged(self):
+        plain, linked = self.build_words()
+        dictbuild.verify(linked)
+        before, after = sections_of(plain), sections_of(linked)
+        for name in (b"TRIE", b"KEYS", b"EIDX", b"ENTS", b"STRS", b"SIDX"):
+            self.assertEqual(before[name], after[name], name)
+        self.assertNotIn(b"CONN", before)
+        self.assertNotIn(b"CMAT", after)
+        meta = json.loads(after[b"META"])
+        self.assertEqual(meta["pos_table"], json.loads(before[b"META"])["pos_table"])
+        # Code point order: 固 U+56FA before 普 U+666E.
+        self.assertEqual(meta["conn_pos_table"], ["名詞,固有名詞,地名,一般,*,*", self.NOUN])
+        self.assertEqual(meta["connection_space"], "sudachidict-matrix:" + "0" * 64)
+        self.assertEqual([item["name"] for item in meta["inputs"]], ["words.conn.tsv", "words.lex.tsv"])
+        # ENTS order is (key, surface): こーひー/コーヒー, こーひー/珈琲, とうきょう/東京, ゔぁいおりん/ヴァイオリン.
+        katakana, other = dictbuild.KATAKANA_ONLY, dictbuild.NOT_NORMALIZED
+        self.assertEqual(self.variants(linked), [
+            [(20, 20, 3000, 1 | katakana | other)],
+            [(20, 20, 4000, 1)],
+            [(11, 11, 3000, 0), (12, 13, 3000, 0)],  # Same cost: ordered by left id.
+            [(20, 20, -5000, 1 | katakana)],
+        ])
+
+    def test_conn_rejects_rows_without_an_entry_and_a_bad_space(self):
+        words = self.lexicon("words.lex.tsv", self.WORDS[:1])
+        with self.assertRaisesRegex(ValueError, "connection row without a lexicon entry"):
+            dictbuild.build([words], self.metadata, 1, self.path, self.connections(self.LINKS),
+                            "sudachidict-matrix:" + "0" * 64)
+        with self.assertRaisesRegex(ValueError, "invalid connection space"):
+            dictbuild.build([words], self.metadata, 1, self.path, self.connections(self.LINKS[:2]), "other")
+
+    def rebuild(self, image: bytes, change) -> bytes:
+        sections = sections_of(image)
+        change(sections)
+        return dictbuild.pack(list(sections.items()), struct.unpack_from("<I", image, 16)[0],
+                              *struct.unpack_from("<II", image, 20))
+
+    def test_verify_rejects_variant_order_attr_and_table_corruption(self):
+        _, linked = self.build_words()
+        count = struct.unpack_from("<I", linked, 20)[0]
+        offset = 4 * (count + 1) + (-4 * (count + 1) % 8)
+
+        def records(change):
+            def apply(sections):
+                data = bytearray(sections[b"CONN"])
+                change(data)
+                sections[b"CONN"] = bytes(data)
+            return apply
+
+        def meta(change):
+            def apply(sections):
+                value = json.loads(sections[b"META"])
+                change(value)
+                sections[b"META"] = json.dumps(value).encode("utf-8")
+            return apply
+
+        def swap_tokyo(data):  # Entry 2 holds the two 東京 variants, records 2 and 3.
+            first, second = offset + 16, offset + 24
+            data[first:first + 8], data[second:second + 8] = data[second:second + 8], data[first:first + 8]
+
+        cases = {
+            "invalid connection variant order": records(swap_tokyo),
+            "invalid connection variant attr": records(lambda d: d.__setitem__(offset + 7, d[offset + 7] ^ 0x40)),
+            "invalid connection variant attr ": records(lambda d: struct.pack_into("<H", d, offset + 14, 2)),
+            "invalid connection table": records(lambda d: struct.pack_into("<I", d, 4, 5)),
+            "invalid connection table ": records(lambda d: d.extend(b"\0" * 8)),
+            "invalid conn_pos_table": meta(lambda m: m.pop("conn_pos_table")),
+            "invalid connection_space": meta(lambda m: m.update(connection_space="")),
+        }
+        for message, change in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(ValueError, f"^{re.escape(message.strip())}$"):
+                dictbuild.verify(self.rebuild(linked, change))
+
+    def test_matrix_keeps_previous_right_by_next_left_cells_of_the_used_ids(self):
+        # Header and rows put the previous word's right id first: 4 right ids, 3 left ids.
+        matrix = self.matrix("4 3", {(r, l): 10 * r + l for r in range(4) for l in range(3)})
+        data = dictbuild.matrix_section(dictbuild.read_matrix(matrix), {2}, {3})
+        raw_left, raw_right, left_count, right_count, *reserved = struct.unpack_from("<6I", data)
+        self.assertEqual((raw_left, raw_right, left_count, right_count, reserved), (3, 4, 2, 2, [0, 0]))
+        self.assertEqual(struct.unpack_from("<3H", data, 24), (0, 0xFFFF, 1))
+        self.assertEqual(struct.unpack_from("<4H", data, 30), (0, 0xFFFF, 0xFFFF, 1))
+        # cost[r x left_count + l]: (r, l) = (0, 0), (0, 2), (3, 0), (3, 2).
+        self.assertEqual(struct.unpack_from("<4h", data, 40), (0, 2, 30, 32))
+        self.assertEqual(len(data), 48)
+        left, right = dictbuild.matrix_indices(data)
+        self.assertEqual((list(left), list(right)), ([0, 0xFFFF, 1], [0, 0xFFFF, 0xFFFF, 1]))
+
+    def test_matrix_rejects_missing_duplicate_and_out_of_range_cells(self):
+        cells = {(r, l): 1 for r in range(3) for l in range(3)}
+        cases = {
+            "missing cells": matrix_text("3 3", {k: v for k, v in cells.items() if k != (2, 2)}),
+            "duplicate cell": matrix_text("3 3", cells) + "2 2 5\n",
+            "outside the header sizes": matrix_text("3 3", cells) + "3 0 1\n",
+            "cost range": matrix_text("3 3", {**cells, (1, 1): 40000}),
+            "invalid header": "3\n0 0 0\n",
+            "invalid row": "3 3\n0 0\n",
+        }
+        for message, text in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                dictbuild.matrix_section(iter(text.splitlines(keepends=True)), {2}, {2})
+        with self.assertRaisesRegex(ValueError, "connection id outside matrix.def"):
+            dictbuild.matrix_section(iter(matrix_text("3 3", cells).splitlines(keepends=True)), {3}, {1})
+
+    def lattice_rows(self) -> list[tuple]:
+        verb = "動詞,一般,*,*,五段-カ行,"
+        return [
+            ("は", "は", 40, 40, 3846, "助詞,係助詞,*,*,*,*", "は"),
+            ("かく", "かく", 700, 700, 9000, verb + "終止形-一般", "書く"),
+            ("かく", "かく", 710, 710, 9000, verb + "終止形-一般", "書く"),
+            ("かく", "書く", 710, 710, 4000, verb + "終止形-一般", "書く"),
+            ("かく", "書く", 700, 700, 4100, verb + "終止形-一般", "書く"),
+            # More rows in another form must not move the conjugation-free representative.
+            *[(f"か{i}", f"書{i}", 720, 721, 4000, verb + "連用形-一般", "書") for i in range(5)],
+            ("ひと", "人", 5142, 5142, 3000, self.NOUN, "人"),
+            ("ひと", "ひと", 5142, 5142, 5000, self.NOUN, "人"),
+            ("もの", "物", 5143, 5143, 7000, self.NOUN, "物"),
+            ("こと", "事", 5142, 5142, 9000, self.NOUN, "事"),
+            ("さ", "さ", 900, 901, 6000, "接尾辞,名詞的,一般,*,形容詞,連用形-一般", "さ"),
+        ]
+
+    def build_lattice(self, rows=None) -> bytes:
+        rows = rows or self.lattice_rows()
+        kana = self.lexicon("lattice_core.lex.tsv", sorted({(r[1], r[0], "x", r[4]) for r in rows if r[0] == r[1]}))
+        ids = sorted({0, *(r[2] for r in rows), *(r[3] for r in rows)})
+        matrix = self.matrix("6000 6000", {(r, l): (r * 7 + l * 3) % 200 - 100 for r in ids for l in ids})
+        image, _ = dictbuild.build_lattice_core([kana], self.connections(rows), matrix, self.metadata, 1, self.path)
+        return image
+
+    def test_lattice_core_holds_kana_words_cmat_and_the_part_of_speech_tables(self):
+        image = self.build_lattice()
+        self.assertEqual(image, self.build_lattice())  # Same input, same bytes.
+        dictbuild.verify(image)
+        self.assertEqual(struct.unpack_from("<II", image, 16), (1, 4))  # layer sudachi_lexicon; かく は ひと さ
+        sections = sections_of(image)
+        meta = json.loads(sections[b"META"])
+        self.assertEqual(meta["connection_space"], "sudachidict-matrix:" + dictbuild.file_sha256(self.path / "matrix.def"))
+        lattice = meta["lattice"]
+        # Code point order: 助 U+52A9, 動 U+52D5, 名 U+540D, 接 U+63A5.
+        self.assertEqual(lattice["pos_names"], ["助詞-係助詞", "動詞-一般", "名詞-普通名詞-一般", "接尾辞-名詞的-一般"])
+        self.assertEqual(lattice["pos_ids"], [
+            [0, "*", "*", 40, 40],
+            [1, "五段-カ行", "終止形-一般", 700, 700],  # (700, 700) and (710, 710) tie at two rows each.
+            [1, "五段-カ行", "連用形-一般", 720, 721],
+            [2, "*", "*", 5142, 5142],
+            [3, "形容詞", "連用形-一般", 900, 901],
+        ])
+        # Conjugation unknown: the 終止形-一般 rows, or the "*" rows; 接尾辞 has neither.
+        self.assertEqual(lattice["pos_name_ids"], [[40, 40], [700, 700], [5142, 5142], None])
+        self.assertEqual(lattice["penalties"], {"P_kata_variant": 6000, "P_kata_own": 0, "P_node": 3000, "P_unk": 20000})
+        self.assertEqual(lattice["C"], dictbuild.LATTICE_C)
+        self.assertEqual(lattice["default_word_cost"], 5000)  # median_low of 3000, 5000, 7000, 9000
+        # CMAT holds id 0 and every id of every row, whichever layer the word goes to.
+        raw_left, raw_right, left_count, right_count = struct.unpack_from("<4I", sections[b"CMAT"])
+        self.assertEqual((raw_left, raw_right, left_count, right_count), (6000, 6000, 8, 8))
+        # Only the kana words: かく (two variants), さ, は, ひと.
+        self.assertEqual([len(v) for v in self.variants(image)], [2, 1, 1, 1])
+
+    def test_lattice_core_requires_connection_rows_for_every_kana_word(self):
+        rows = self.lattice_rows()
+        words = sorted({(r[1], r[0], "x", r[4]) for r in rows if r[0] == r[1]}) + [("ほか", "ほか", "x", 1)]
+        kana = self.lexicon("lattice_core.lex.tsv", words)
+        ids = sorted({0, *(r[2] for r in rows), *(r[3] for r in rows)})
+        matrix = self.matrix("6000 6000", {(r, l): 0 for r in ids for l in ids})
+        with self.assertRaisesRegex(ValueError, "^lexicon entry without connection rows$"):
+            dictbuild.build_lattice_core([kana], self.connections(rows), matrix, self.metadata, 1, self.path)
+
+    def test_verify_rejects_cmat_corruption_and_ids_outside_it(self):
+        image = self.build_lattice()
+
+        def cmat(change):
+            def apply(sections):
+                data = bytearray(sections[b"CMAT"])
+                change(data)
+                sections[b"CMAT"] = bytes(data)
+            return apply
+
+        cases = {
+            "invalid connection matrix": cmat(lambda d: struct.pack_into("<I", d, 16, 1)),
+            "invalid connection matrix size": cmat(lambda d: d.extend(b"\0" * 8)),
+            "invalid connection matrix index": cmat(lambda d: struct.pack_into("<H", d, 24 + 2 * 40, 9)),
+            "invalid connection matrix index ": cmat(lambda d: struct.pack_into("<H", d, 24, 0xFFFF)),
+            "connection id outside CMAT": cmat(lambda d: struct.pack_into("<H", d, 24 + 2 * 40, 0xFFFF)),
+        }
+        for message, change in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(ValueError, f"^{re.escape(message.strip())}$"):
+                dictbuild.verify(self.rebuild(image, change))
 
 
 def neologd_row(surface: str, cost: str, pos: str, reading: str) -> list[str]:
@@ -343,22 +656,44 @@ class NeologdPackTests(unittest.TestCase):
         self.assertIn("pack size mismatch", failed.stderr)
 
 
+def zipped(name: str, text: str) -> bytes:
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        archive.writestr(name, text)
+    return data.getvalue()
+
+
+def sections_of(image: bytes) -> dict[bytes, bytes]:
+    result = {}
+    for i in range(struct.unpack_from("<I", image, 28)[0]):
+        name, _, offset, length = struct.unpack_from("<4sIQQ", image, 64 + 24 * i)
+        result[name] = image[offset:offset + length]
+    return result
+
+
+def matrix_text(header: str, cells: dict[tuple[int, int], int]) -> str:
+    """matrix.def lines: right id of the previous word, left id of the next word, cost."""
+    return header + "\n" + "".join(f"{r} {l} {c}\n" for (r, l), c in sorted(cells.items()))
+
+
 class BundledBuildTests(unittest.TestCase):
     def archives(self) -> dict[str, bytes]:
         result = {}
         for name, rows in (
                 ("small_lex.zip", [sudachi_row("東京", "4789", "3000", "東京",
-                                             "名詞,固有名詞,地名,一般", "トウキョウ")]),
+                                             "名詞,固有名詞,地名,一般", "トウキョウ"),
+                                   sudachi_row("は", "662", "3846", "は", "助詞,係助詞", "ハ")]),
                 ("core_lex.zip", [sudachi_row("東京", "4789", "2000", "東京",
                                             "名詞,固有名詞,地名,一般", "トウキョウ"),
                                   sudachi_row("佐藤", "4790", "4000", "佐藤",
-                                             "名詞,固有名詞,人名,姓", "サトウ")])):
+                                             "名詞,固有名詞,人名,姓", "サトウ"),
+                                  sudachi_row("東", "5142", "5000", "東", "名詞,普通名詞,一般", "ヒガシ")])):
             csv_text = io.StringIO(newline="")
             csv.writer(csv_text).writerows(rows)
-            zipped = io.BytesIO()
-            with zipfile.ZipFile(zipped, "w") as archive:
-                archive.writestr("lexicon.csv", csv_text.getvalue())
-            result[name] = zipped.getvalue()
+            result[name] = zipped("lexicon.csv", csv_text.getvalue())
+        ids = (0, 662, 4789, 4790, 5142)
+        result["matrix.def.zip"] = zipped("matrix.def", matrix_text(
+            "5981 5981", {(r, l): r - l for r in ids for l in ids}))
         return result
 
     def test_builds_all_layers_twice_with_pinned_cache_and_identical_notices(self):
@@ -371,16 +706,21 @@ class BundledBuildTests(unittest.TestCase):
             self.assertEqual(timeout, 600)
             return io.BytesIO(archives[url.rsplit("/", 1)[-1]])
 
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(build_bundled, "SUDACHI_ARCHIVES", pins):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(build_bundled, "SUDACHI_ARCHIVES", pins[:2]), \
+                mock.patch.object(build_bundled, "MATRIX_ARCHIVE", pins[2]), \
+                mock.patch.object(build_bundled, "PINNED_ARCHIVES", pins):
             path = Path(temporary)
             first, second, cache = path / "first", path / "different-path" / "second", path / "source-cache"
             with mock.patch.object(build_bundled.urllib.request, "urlopen", side_effect=download):
                 build_bundled.build_bundle(first, cache, False)
             with mock.patch.object(build_bundled.urllib.request, "urlopen", side_effect=AssertionError("offline network")):
                 build_bundled.build_bundle(second, cache, True)
-            self.assertEqual(len(downloads), 2)
+            # The matrix sits directly under the raw distribution, outside the release directory.
+            self.assertEqual(sorted(url.removeprefix(build_bundled.SUDACHI_BASE_URL) for url in downloads),
+                             ["/20260723/core_lex.zip", "/20260723/small_lex.zip", "/matrix.def.zip"])
             self.assertEqual({p.name for p in (first / "dict").iterdir()},
-                             {"sudachi_lexicon.azdic", "technical_terms_lexicon.azdic"})
+                             {"sudachi_lexicon.azdic", "lattice_core.azdic", "technical_terms_lexicon.azdic"})
             self.assertEqual(check_bundle.check(first, None), [])
             self.assertEqual(check_bundle.compare(first, second), [])
             notices = (first / "ThirdPartyNotices.txt").read_text(encoding="utf-8")
@@ -389,21 +729,36 @@ class BundledBuildTests(unittest.TestCase):
             self.assertIn("Copyright (c) 2017-2023 Works Applications Co., Ltd.", notices)
             self.assertIn("Copyright (c) 2026 azooKey-Desktop contributors", notices)
             self.assertIn((build_bundled.HERE / "notices" / "sudachidict-legal.txt").read_text(encoding="utf-8"), notices)
+            self.assertIn(f"lattice_core.azdic\nDerived from the SudachiDict 20260723 raw lexicon and the "
+                          f"SudachiDict matrix.def.zip (SHA256 {pins[2][1]}), part of UniDic", notices)
+            self.assertIn("Attribution: the same as sudachi_lexicon.azdic above.", notices)
             for artifact in (first / "dict").iterdir():
                 image = artifact.read_bytes()
                 dictbuild.verify(image)
                 layer, _ = check_bundle.read_header(artifact)
-                self.assertEqual(layer, dictbuild.LAYERS.index(artifact.stem))
+                self.assertEqual(layer, check_bundle.BUNDLED[artifact.name])
                 self.assertNotIn(str(path).encode("utf-8"), image)
             sudachi = (first / "dict" / "sudachi_lexicon.azdic").read_bytes()
-            self.assertEqual(struct.unpack_from("<I", sudachi, 20)[0], 2)  # Duplicate Tokyo merged.
+            self.assertEqual(struct.unpack_from("<I", sudachi, 20)[0], 3)  # Duplicate Tokyo merged.
             # Metadata carries input names and hashes, never output/work/cache absolute paths.
-            section_count = struct.unpack_from("<I", sudachi, 28)[0]
-            sections = [struct.unpack_from("<4sIQQ", sudachi, 64 + 24 * i) for i in range(section_count)]
-            _, _, offset, length = next(section for section in sections if section[0] == b"META")
-            inputs = json.loads(sudachi[offset:offset + length])["inputs"]
-            self.assertEqual([item["name"] for item in inputs], ["sudachi_lexicon.lex.tsv"])
-            self.assertEqual(len(inputs[0]["sha256"]), 64)
+            meta = json.loads(sections_of(sudachi)[b"META"])
+            self.assertEqual([item["name"] for item in meta["inputs"]],
+                             ["sudachi_lexicon.conn.tsv", "sudachi_lexicon.lex.tsv"])
+            self.assertTrue(all(len(item["sha256"]) == 64 for item in meta["inputs"]))
+            space = "sudachidict-matrix:" + pins[2][1]
+            self.assertEqual(meta["connection_space"], space)
+            lattice = (first / "dict" / "lattice_core.azdic").read_bytes()
+            lattice_meta = json.loads(sections_of(lattice)[b"META"])
+            self.assertEqual(lattice_meta["connection_space"], space)
+            self.assertEqual(lattice_meta["sources"], build_bundled.sudachi_metadata()["sources"])
+            self.assertEqual([item["name"] for item in lattice_meta["inputs"]],
+                             ["lattice_core.lex.tsv", "matrix.def.zip", "sudachi_lexicon.conn.tsv"])
+            self.assertEqual(struct.unpack_from("<I", lattice, 20)[0], 1)  # は
+            # CMAT keeps id 0 and every id of both layers, nothing else of the 5981 x 5981 matrix.
+            self.assertEqual(struct.unpack_from("<4I", sections_of(lattice)[b"CMAT"]), (5981, 5981, 5, 5))
+            receipt = json.loads((first / bundle_provenance.RECEIPT).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["sudachi"]["archives"], dict(pins))
+            self.assertIn("dict/lattice_core.azdic", receipt["artifacts"])
             # A cached archive is still SHA256 checked in offline mode.
             (cache / build_bundled.SUDACHI_REVISION / "small_lex.zip").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "pinned SHA256"):
@@ -474,6 +829,16 @@ class BundleGuardTests(unittest.TestCase):
             self.assertIn("base_lexicon.azdic: layer id 4 does not match", errors)
             self.assertIn("source fixture is not attributed", errors)
             self.assertIn("Package.wxs ships", errors)
+
+    def test_accepts_lattice_core_only_under_the_sudachi_layer_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            bundle = self.make_bundle(path)
+            (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "lattice_core.azdic").read_bytes())
+            self.assertEqual(check_bundle.check(bundle, None), [])
+            (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "valid.azdic").read_bytes())
+            self.assertIn("lattice_core.azdic: layer id 4 does not match the file name",
+                          check_bundle.check(bundle, None))
 
     def test_rejects_versioned_neologd_pack_and_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -579,7 +944,7 @@ class VmBundleProvenanceTests(unittest.TestCase):
 
     def refresh_receipt(self):
         bundle_provenance.write_receipt(self.bundle, bundle_provenance.generation_inputs(self.repository),
-                                        build_bundled.SUDACHI_REVISION, build_bundled.SUDACHI_ARCHIVES)
+                                        build_bundled.SUDACHI_REVISION, build_bundled.PINNED_ARCHIVES)
 
     def rewrite_meta(self, change):
         artifact = self.bundle / "dict" / "sudachi_lexicon.azdic"
@@ -643,6 +1008,7 @@ class VmBundleProvenanceTests(unittest.TestCase):
             lambda r: r.update(extra="unexpected"),
             lambda r: r["sudachi"].update(revision="old"),
             lambda r: r["sudachi"]["archives"].update({"small_lex.zip": "0" * 64}),
+            lambda r: r["sudachi"]["archives"].pop("matrix.def.zip"),
             lambda r: r["inputs"].pop("dictbuild/build_bundled.py"),
             lambda r: r["inputs"].update({str(self.root / "outside"): "0" * 64}),
             lambda r: r["artifacts"].update({"../../outside": "0" * 64}),

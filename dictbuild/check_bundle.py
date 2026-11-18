@@ -1,8 +1,8 @@
 """Release guard for the bundled dictionary payload (auto-word-registration-spec section 14.10).
 
-Fails when the payload carries anything but the bundled static layers (in particular a
-standalone neologd_lexicon pack), when an artifact's layer id differs from its file name,
-when ThirdPartyNotices.txt lacks a contributing source, or when the MSI ships a different
+Fails when the payload carries anything but the bundled static layers and lattice_core (in
+particular a standalone neologd_lexicon pack), when an artifact's layer id differs from its file
+name, when ThirdPartyNotices.txt lacks a contributing source, or when the MSI ships a different
 set of dictionaries than the payload holds.
 """
 
@@ -26,6 +26,8 @@ HERE = Path(__file__).resolve().parent
 
 BUNDLED = {f"{layer}.azdic": index for index, layer in enumerate(dictbuild.LAYERS)
            if layer != "neologd_lexicon"}
+# lattice_core holds sudachi_lexicon words, so its header names that layer (azdic spec 15.12).
+BUNDLED[f"{build_bundled.LATTICE_CORE}.azdic"] = dictbuild.LAYERS.index(build_bundled.LAYER)
 WIX = "{http://wixtoolset.org/schemas/v4/wxs}"
 
 
@@ -55,10 +57,12 @@ def check_vm_package(bundle: Path) -> dict:
     payload = {relative: (bundle / relative).read_bytes() for relative in bundle_provenance.ARTIFACTS}
     artifact_hashes = {relative: hashlib.sha256(data).hexdigest() for relative, data in payload.items()}
     result = bundle_provenance.validate_receipt(
-        bundle, HERE.parent, build_bundled.SUDACHI_REVISION, build_bundled.SUDACHI_ARCHIVES, artifact_hashes)
+        bundle, HERE.parent, build_bundled.SUDACHI_REVISION, build_bundled.PINNED_ARCHIVES, artifact_hashes)
     notices = payload["ThirdPartyNotices.txt"].decode("utf-8")
-    for bundled_layer in bundle_provenance.LAYERS:
-        name = f"{bundled_layer}.azdic"
+    # lattice_core has no metadata JSON of its own: it carries the sources of sudachi_lexicon.
+    checked = [(f"{layer}.azdic", layer) for layer in bundle_provenance.LAYERS]
+    checked.append((f"{build_bundled.LATTICE_CORE}.azdic", build_bundled.LAYER))
+    for name, metadata_layer in checked:
         expected_layer = BUNDLED[name]
         artifact = bundle / "dict" / name
         image = payload[f"dict/{name}"]
@@ -70,7 +74,7 @@ def check_vm_package(bundle: Path) -> dict:
         sections = [struct.unpack_from("<4sIQQ", image, 64 + 24 * i) for i in range(count)]
         _, _, offset, length = next(section for section in sections if section[0] == b"META")
         metadata = json.loads(image[offset:offset + length])
-        expected = json.loads((HERE / "sources" / f"{artifact.stem}.metadata.json").read_text(encoding="utf-8"))
+        expected = json.loads((HERE / "sources" / f"{metadata_layer}.metadata.json").read_text(encoding="utf-8"))
         if metadata.get("sources") != expected["sources"]:
             raise ValueError(f"{name}: META sources differ from the current bundled metadata")
         attribution = dictbuild.validate_sources(metadata, HERE / "notices")

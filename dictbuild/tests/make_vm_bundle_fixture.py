@@ -31,6 +31,8 @@ def generate(repository: Path, output: Path) -> None:
                                   repository / "dictbuild" / "notices")
 
         with mock.patch.object(build_bundled, "build_sudachi", side_effect=lambda *_: tiny("sudachi_lexicon")), \
+                mock.patch.object(build_bundled, "build_lattice_core",
+                                  side_effect=lambda *_: tiny("sudachi_lexicon")), \
                 mock.patch.object(build_bundled, "build_technical_terms", side_effect=lambda: tiny("technical_terms_lexicon")), \
                 mock.patch.object(build_bundled.tempfile, "TemporaryDirectory",
                                   side_effect=lambda: temporary_directory(dir=repository)):

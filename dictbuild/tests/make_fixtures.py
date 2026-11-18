@@ -119,7 +119,45 @@ def generate(directory: Path) -> None:
     (directory / "truncated.azdic").write_bytes(image[:63])
     write_surface_index_fixtures(directory, image, sections)
     write_neologd_pack_fixtures(directory, tsv, metadata, image, directory / "hash.azdic")
+    write_connection_fixtures(directory, tsv, metadata)
     (directory / "ready").write_text("ready", encoding="utf-8")
+
+
+def write_connection_fixtures(directory: Path, tsv: Path, metadata: dict) -> None:
+    """connections.azdic: valid.azdic's words plus CONN. lattice_core.azdic: kana words, CONN, CMAT.
+
+    Ids, costs and the matrix are synthetic; the matrix is asymmetric so a reader that swaps the
+    previous-right and next-left axes reads other costs.
+    """
+    header = "# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
+    connections = directory / "fixture.conn.tsv"
+    rows = [
+        # reading, surface, left, right, cost, pos, conjugation, normalized form, six POS fields
+        ("とうきょう", "東京", 10, 10, 4000, "名詞-固有名詞-地名-一般", "", "東京", "名詞,固有名詞,地名,一般,*,*"),
+        ("とうきょう", "東京", 11, 12, 3500, "名詞-固有名詞-地名-一般", "", "東京", "名詞,固有名詞,地名,一般,*,*"),
+        ("とう", "都", 20, 20, 5000, "名詞-普通名詞-一般", "", "都", "名詞,普通名詞,一般,*,*,*"),
+        ("にほん", "日本", 30, 30, 4000, "名詞-固有名詞-地名-一般", "", "日本", "名詞,固有名詞,地名,一般,*,*"),
+        ("にっぽん", "日本", 30, 30, 4500, "名詞-固有名詞-地名-一般", "", "日本", "名詞,固有名詞,地名,一般,*,*"),
+        # Spelled in the hiragana of the reading: lattice_core only.
+        ("は", "は", 40, 40, 3846, "助詞-係助詞", "", "は", "助詞,係助詞,*,*,*,*"),
+        ("です", "です", 50, 51, 2000, "助動詞", "助動詞-デス-終止形-一般", "です",
+         "助動詞,*,*,*,助動詞-デス,終止形-一般"),
+    ]
+    connections.write_text(header + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n" + "".join(
+        "\t".join(map(str, row)) + "\n" for row in rows), encoding="utf-8", newline="\n")
+    kana = directory / "lattice_core.lex.tsv"
+    kana.write_text(header + "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n"
+                    "は\tは\t助詞-係助詞\t3846\t\tgeneral\tfixture\n"
+                    "です\tです\t助動詞\t2000\t\tgeneral\tfixture\n", encoding="utf-8", newline="\n")
+    lefts = sorted({0, *(row[2] for row in rows)})
+    rights = sorted({0, *(row[3] for row in rows)})
+    matrix = directory / "lattice_matrix.def"
+    matrix.write_text("64 64\n" + "".join(f"{r} {l} {(r * 7 + l * 3) % 200 - 100}\n"
+                                          for r in rights for l in lefts), encoding="utf-8", newline="\n")
+    image, _ = dictbuild.build([tsv], metadata, 4, directory, connections, dictbuild.connection_space(matrix))
+    (directory / "connections.azdic").write_bytes(image)
+    lattice, _ = dictbuild.build_lattice_core([kana], connections, matrix, metadata, 1, directory)
+    (directory / "lattice_core.azdic").write_bytes(lattice)
 
 
 def write_neologd_pack_fixtures(directory: Path, tsv: Path, metadata: dict, other_layer: bytes,

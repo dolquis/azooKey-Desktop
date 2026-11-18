@@ -110,6 +110,55 @@ TEST(DictionaryTrie, SurfaceIndexMatchesScanAndOlderArtifactsStillLoad) {
   EXPECT_TRUE(indexed.IsAvailable());
 }
 
+// CONN and CMAT (azdic spec section 15.5) are sections this reader does not know. A layer that
+// carries CONN answers every lookup as the same words without it, and lattice_core still loads.
+TEST(DictionaryTrie, ConnectionSectionsLeaveLookupsUnchanged) {
+  core::DoubleArrayTrie plain, linked, lattice;
+  ASSERT_TRUE(plain.Load(Fixture("valid.azdic"), true)) << plain.Error();
+  ASSERT_TRUE(linked.Load(Fixture("connections.azdic"), true)) << linked.Error();
+  ASSERT_TRUE(lattice.Load(Fixture("lattice_core.azdic"), true)) << lattice.Error();
+  const auto describe = [](const core::DoubleArrayTrie& trie,
+                           const std::vector<core::PrefixMatch>& matches) {
+    std::vector<std::string> result;
+    for (const auto& match : matches) {
+      std::vector<core::StaticDictionaryEntry> entries;
+      EXPECT_TRUE(trie.ReadEntries(match, entries));
+      for (const auto& entry : entries)
+        result.push_back(std::to_string(match.key_length) + ":" + entry.surface + "/" +
+                         entry.reading + "/" + std::to_string(entry.cost) + "/" +
+                         std::to_string(entry.pos_id));
+    }
+    return result;
+  };
+  for (const std::string key :
+       {"とうきょうと", "とう", "にほん", "にっぽん", "a", "aaaaa", "き", "よ", "ば", "ゔぁ"}) {
+    SCOPED_TRACE(key);
+    std::vector<core::PrefixMatch> expected, actual;
+    plain.CommonPrefixSearch(key, 0, expected);
+    linked.CommonPrefixSearch(key, 0, actual);
+    EXPECT_EQ(describe(linked, actual), describe(plain, expected));
+    plain.PredictiveSearch(key, 0, expected);
+    linked.PredictiveSearch(key, 0, actual);
+    EXPECT_EQ(describe(linked, actual), describe(plain, expected));
+    core::PrefixMatch exact;
+    EXPECT_EQ(linked.ExactMatch(key, exact), plain.ExactMatch(key, exact));
+  }
+  std::vector<core::StaticDictionaryEntry> expected, actual;
+  plain.LookupSurface("日本", expected);
+  linked.LookupSurface("日本", actual);
+  ASSERT_EQ(actual.size(), expected.size());
+  for (size_t i = 0; i < actual.size(); ++i) EXPECT_EQ(actual[i].reading, expected[i].reading);
+  EXPECT_TRUE(linked.IsAvailable());
+  // lattice_core holds the kana words under the sudachi_lexicon layer id (azdic spec 15.12).
+  EXPECT_EQ(lattice.LayerId(), 1U);
+  core::PrefixMatch particle;
+  ASSERT_TRUE(lattice.ExactMatch("は", particle));
+  std::vector<core::StaticDictionaryEntry> entries;
+  ASSERT_TRUE(lattice.ReadEntries(particle, entries));
+  ASSERT_EQ(entries.size(), 1U);
+  EXPECT_EQ(entries[0].surface, "は");
+}
+
 TEST(DictionaryTrie, CorruptSurfaceIndexDisablesOnlyItsLayerOnLookup) {
   for (const auto& [name, error] :
        {std::pair{"surface_index_entry", "invalid surface index"},

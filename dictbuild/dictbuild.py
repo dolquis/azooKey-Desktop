@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 from array import array
+from collections import Counter, deque
 import csv
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
+import statistics
 import struct
 import sys
-from collections import deque
+from typing import Iterable, Iterator, NamedTuple
+import zipfile
 
 LAYERS = ("base_lexicon", "sudachi_lexicon", "neologd_lexicon",
           "named_entity_lexicon", "technical_terms_lexicon")
@@ -20,6 +24,21 @@ CATEGORIES = ("general", "person_name", "place_name", "station_name", "product_n
               "software", "anime_game", "company_org", "technical", "neologism")
 NONE = 0xFFFFFFFF
 PAIRS = (("ゔぁ", "ば"), ("づ", "ず"), ("ぢ", "じ"))
+# Connection TSV (azdic spec section 15.12). conn_pos is the conn_pos_table string: the six
+# upstream part-of-speech and conjugation fields joined by "," with "*" kept.
+CONNECTION_COLUMNS = ("reading", "surface", "left_id", "right_id", "cost", "pos", "conjugation",
+                      "normalized_form", "conn_pos")
+# CONN attr (azdic spec section 15.5): bits 0-13 index META.conn_pos_table.
+MAX_CONN_POS = 1 << 14
+KATAKANA_ONLY = 1 << 14
+NOT_NORMALIZED = 1 << 15
+NO_INDEX = 0xFFFF
+CONNECTION_SPACE_PREFIX = "sudachidict-matrix:"
+# Initial lattice correction terms (lattice-conversion-spec sections 3.4 and 5.2), recalibrated in M52.
+LATTICE_PENALTIES = {"P_kata_variant": 6000, "P_kata_own": 0, "P_node": 3000, "P_unk": 20000}
+LATTICE_C = 10000
+DEFAULT_POS = ("名詞", "普通名詞", "一般", "*")
+TERMINAL_FORM = "終止形-一般"
 
 
 def normalize(text: str) -> str:
@@ -133,6 +152,178 @@ def load_entries(inputs: list[Path], metadata: dict) -> list[dict]:
     return [merged[k] for k in sorted(merged)]
 
 
+class Connection(NamedTuple):
+    key: str
+    reading: str
+    surface: str
+    left_id: int
+    right_id: int
+    cost: int
+    conn_pos: str
+    normalized_form: str
+
+    @property
+    def kana_only(self) -> bool:
+        """Spelled in the hiragana of its reading: such words live in lattice_core only."""
+        return self.surface == self.reading
+
+
+def read_connections(path: Path) -> list[Connection]:
+    """Reads a connection TSV. Fields are split on tabs without quoting."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    comments = "\n".join(line for line in lines if line.startswith("#"))
+    if "THIRD_PARTY_LICENSES" not in comments or "SPDX-License-Identifier:" not in comments:
+        raise ValueError(f"{path.name}: attribution header missing")
+    body = [line for line in lines if not line.startswith("#")]
+    if not body or tuple(body[0].split("\t")) != CONNECTION_COLUMNS:
+        raise ValueError(f"{path.name}: unexpected connection columns")
+    rows = []
+    for line in body[1:]:
+        fields = line.split("\t")
+        if len(fields) != len(CONNECTION_COLUMNS):
+            raise ValueError(f"{path.name}: invalid connection row")
+        reading, surface, left, right, cost, pos, _, normalized, conn_pos = fields
+        key = normalize(reading)
+        normalize(surface)
+        left_id, right_id = int(left), int(right)
+        if not (0 <= left_id <= NO_INDEX and 0 <= right_id <= NO_INDEX):
+            raise ValueError(f"{path.name}: connection id out of range")
+        if not pos or len(conn_pos.split(",")) != 6 or not all(conn_pos.split(",")):
+            raise ValueError(f"{path.name}: invalid connection part of speech")
+        rows.append(Connection(key, reading, surface, left_id, right_id,
+                               max(-32768, min(32767, int(cost))), sys.intern(conn_pos), normalized))
+    return rows
+
+
+def katakana_only(text: str) -> bool:
+    # U+30A1..U+30FA, U+30FB, U+30FC and U+30FD..U+30FE: one contiguous range (azdic spec 15.5).
+    return bool(text) and all(0x30A1 <= ord(c) <= 0x30FE for c in text)
+
+
+def connection_section(entries: list[dict], rows: Iterable[Connection],
+                       complete: bool = False) -> tuple[bytes, list[str]]:
+    """CONN for `entries` (azdic spec section 15.5) and the conn_pos_table its attr indices name.
+
+    Every row must belong to an entry by (normalized key, surface); with `complete`, every entry
+    must also have a row. Identical variants of one entry are kept once; the rest are ordered by
+    (cost, left_id, right_id, attr).
+    """
+    rows = list(rows)
+    positions = sorted({row.conn_pos for row in rows})
+    if len(positions) > MAX_CONN_POS:
+        raise ValueError("too many connection parts of speech")
+    position_ids = {pos: i for i, pos in enumerate(positions)}
+    index = {(entry["key"], entry["surface"]): i for i, entry in enumerate(entries)}
+    variants: list[set] = [set() for _ in entries]
+    for row in rows:
+        entry = index.get((row.key, row.surface))
+        if entry is None:
+            raise ValueError("connection row without a lexicon entry")
+        attr = (position_ids[row.conn_pos] | (KATAKANA_ONLY if katakana_only(row.surface) else 0)
+                | (NOT_NORMALIZED if row.surface != row.normalized_form else 0))
+        variants[entry].add((row.cost, row.left_id, row.right_id, attr))
+    if complete and not all(variants):
+        raise ValueError("lexicon entry without connection rows")
+    begin = [0]
+    records = bytearray()
+    for found in variants:
+        for cost, left, right, attr in sorted(found):
+            records.extend(struct.pack("<HHhH", left, right, cost, attr))
+        begin.append(begin[-1] + len(found))
+    table = bytearray(struct.pack(f"<{len(begin)}I", *begin))
+    table.extend(b"\0" * (-len(table) % 8))
+    return bytes(table + records), positions
+
+
+def matrix_section(lines: Iterator[str], left_ids: Iterable[int], right_ids: Iterable[int]) -> bytes:
+    """CMAT (azdic spec section 15.5) holding the matrix.def cells the given ids need.
+
+    matrix.def lists `right id of the previous word, left id of the next word, cost`, after a
+    header with the sizes of those two id spaces in the same order (the MeCab and Sudachi layout).
+    Id 0 (sentence start and end) always gets an index. Every needed cell must be listed once.
+    """
+    header = next(lines, "").split()
+    if len(header) != 2:
+        raise ValueError("matrix.def: invalid header")
+    raw_right, raw_left = int(header[0]), int(header[1])
+    if not (0 < raw_left <= 65536 and 0 < raw_right <= 65536):
+        raise ValueError("matrix.def: invalid id space size")
+    lefts, rights = sorted(set(left_ids) | {0}), sorted(set(right_ids) | {0})
+    if lefts[0] < 0 or rights[0] < 0 or lefts[-1] >= raw_left or rights[-1] >= raw_right:
+        raise ValueError("connection id outside matrix.def")
+    if len(lefts) >= NO_INDEX or len(rights) >= NO_INDEX:
+        raise ValueError("too many connection ids")
+    left_index, right_index = array("H", [NO_INDEX]) * raw_left, array("H", [NO_INDEX]) * raw_right
+    for i, value in enumerate(lefts):
+        left_index[value] = i
+    for i, value in enumerate(rights):
+        right_index[value] = i
+    width = len(lefts)
+    cost = array("h", bytes(2 * width * len(rights)))
+    seen = bytearray(width * len(rights))
+    for line in lines:
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) != 3:
+            raise ValueError("matrix.def: invalid row")
+        right, left, value = int(fields[0]), int(fields[1]), int(fields[2])
+        if not (0 <= right < raw_right and 0 <= left < raw_left and -32768 <= value <= 32767):
+            raise ValueError("matrix.def: row outside the header sizes or the cost range")
+        r, l = right_index[right], left_index[left]
+        if r == NO_INDEX or l == NO_INDEX:
+            continue
+        cell = r * width + l
+        if seen[cell]:
+            raise ValueError("matrix.def: duplicate cell")
+        seen[cell] = 1
+        cost[cell] = value
+    if seen.count(0):
+        raise ValueError("matrix.def: missing cells")
+    if sys.byteorder != "little":
+        for values in (left_index, right_index, cost):
+            values.byteswap()
+    data = bytearray(struct.pack("<6I", raw_left, raw_right, width, len(rights), 0, 0))
+    data.extend(left_index.tobytes() + right_index.tobytes())
+    data.extend(b"\0" * (-len(data) % 8))
+    data.extend(cost.tobytes())
+    return bytes(data)
+
+
+def representative(pairs: Counter) -> list[int]:
+    """The most frequent (left_id, right_id); the smaller pair on a tie (lattice spec 8.3)."""
+    return list(min(pairs.items(), key=lambda item: (-item[1], item[0]))[0])
+
+
+def lattice_tables(rows: list[Connection]) -> dict:
+    """META.lattice from every imported upstream row (azdic spec section 15.12)."""
+    by_pos: dict[str, Counter] = {}
+    for row in rows:
+        by_pos.setdefault(row.conn_pos, Counter())[row.left_id, row.right_id] += 1
+    name = lambda fields: "-".join(f for f in fields[:4] if f != "*")
+    names = sorted({name(pos.split(",")) for pos in by_pos})
+    name_ids = {value: i for i, value in enumerate(names)}
+    terminal = [Counter() for _ in names]
+    uninflected = [Counter() for _ in names]
+    table = []
+    for pos, pairs in by_pos.items():
+        fields = pos.split(",")
+        i = name_ids[name(fields)]
+        table.append([i, fields[4], fields[5], *representative(pairs)])
+        if fields[5] == TERMINAL_FORM:
+            terminal[i].update(pairs)
+        elif fields[5] == "*":
+            uninflected[i].update(pairs)
+    nouns = [row.cost for row in rows if tuple(row.conn_pos.split(",")[:4]) == DEFAULT_POS]
+    if not nouns:
+        raise ValueError(f"no {'-'.join(DEFAULT_POS[:3])} row for the default word cost")
+    return {"pos_names": names, "pos_ids": sorted(table),
+            "pos_name_ids": [representative(t or u) if t or u else None
+                             for t, u in zip(terminal, uninflected)],
+            "penalties": dict(LATTICE_PENALTIES), "C": LATTICE_C,
+            "default_word_cost": statistics.median_low(nouns)}
+
+
 def make_trie(keys: list[str]) -> bytes:
     # Sorted keys let each node own a contiguous range, so no per-node child map is
     # materialized; flat arrays keep a million-key lexicon within memory.
@@ -196,16 +387,88 @@ def make_trie(keys: list[str]) -> bytes:
     return nodes.tobytes()
 
 
-def build(inputs: list[Path], metadata: dict, layer: int, catalog: Path) -> tuple[bytes, str]:
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def read_matrix(path: Path) -> Iterator[str]:
+    """Lines of matrix.def, or of the only file in a .zip such as the upstream matrix.def.zip."""
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            names = [n for n in archive.namelist() if not n.endswith("/")]
+            if len(names) != 1:
+                raise ValueError(f"{path.name}: expected exactly one file")
+            with archive.open(names[0]) as raw:
+                yield from io.TextIOWrapper(raw, encoding="utf-8")
+    else:
+        with path.open(encoding="utf-8") as stream:
+            yield from stream
+
+
+def connection_space(matrix: Path) -> str:
+    """META.connection_space for connection ids from `matrix` (lattice-conversion-spec section 8.4)."""
+    return CONNECTION_SPACE_PREFIX + file_sha256(matrix)
+
+
+def build(inputs: list[Path], metadata: dict, layer: int, catalog: Path,
+          connections: Path | None = None, space: str | None = None) -> tuple[bytes, str]:
+    """Builds a layer from lexicon TSVs.
+
+    With `connections` (a connection TSV) and its `space`, CONN carries the connection variants of
+    every entry (azdic spec section 15.12). Rows of words spelled in the hiragana of their reading
+    are left to lattice_core (build_lattice_core).
+    """
+    if connections is None:
+        return assemble(inputs, metadata, layer, catalog, list(inputs))
+    rows = [row for row in read_connections(connections) if not row.kana_only]
+    return assemble(inputs, metadata, layer, catalog, [*inputs, connections], rows, space)
+
+
+def build_lattice_core(inputs: list[Path], connections: Path, matrix: Path, metadata: dict,
+                       layer: int, catalog: Path) -> tuple[bytes, str]:
+    """Builds lattice_core.azdic (azdic spec section 15.12, lattice-conversion-spec section 8.2).
+
+    `inputs` hold the words spelled in the hiragana of their reading. CMAT keeps the matrix cells
+    of every connection id in `connections` (both lattice_core and the layer built from the other
+    rows) and of the representative ids in META.lattice.
+    """
+    rows = read_connections(connections)
+    tables = lattice_tables(rows)
+    representatives = [row[3:5] for row in tables["pos_ids"]] + [p for p in tables["pos_name_ids"] if p]
+    cmat = matrix_section(read_matrix(matrix), {row.left_id for row in rows} | {p[0] for p in representatives},
+                          {row.right_id for row in rows} | {p[1] for p in representatives})
+    return assemble(inputs, metadata, layer, catalog, [*inputs, connections, matrix],
+                    [row for row in rows if row.kana_only], connection_space(matrix),
+                    complete=True, extra_sections=[(b"CMAT", cmat)], extra_metadata={"lattice": tables})
+
+
+def assemble(inputs: list[Path], metadata: dict, layer: int, catalog: Path, files: list[Path],
+             rows: list[Connection] | None = None, space: str | None = None, complete: bool = False,
+             extra_sections: Iterable[tuple[bytes, bytes]] = (), extra_metadata: dict | None = None
+             ) -> tuple[bytes, str]:
+    """Writes the .azdic image. `files` are recorded in META.inputs; `rows` become CONN."""
     notices = validate_sources(metadata, catalog)
     entries = load_entries(inputs, metadata)
     positions = sorted({e["pos"] for e in entries}) or ["unknown"]
     if len(positions) > 65536:
         raise ValueError("too many parts of speech")
     pos_ids = {pos: i for i, pos in enumerate(positions)}
+    if len({p.name for p in files}) != len(files):
+        raise ValueError("input basenames must be unique")
     metadata = dict(metadata, pos_table=positions, builder_version="azdic-1",
-                    inputs=[{"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
-                            for p in sorted(inputs, key=lambda p: p.name)])
+                    inputs=[{"name": p.name, "sha256": file_sha256(p)}
+                            for p in sorted(files, key=lambda p: p.name)], **(extra_metadata or {}))
+    conn = []
+    if rows is not None:
+        if not isinstance(space, str) or not space.startswith(CONNECTION_SPACE_PREFIX):
+            raise ValueError("invalid connection space")
+        data, metadata["conn_pos_table"] = connection_section(entries, rows, complete)
+        metadata["connection_space"] = space
+        conn = [(b"CONN", data)]
     strings = bytearray()
     string_ids = {}
 
@@ -237,7 +500,7 @@ def build(inputs: list[Path], metadata: dict, layer: int, catalog: Path) -> tupl
     by_surface = sorted(range(len(entries)), key=lambda i: (entries[i]["surface"].encode("utf-8"), i))
     sections = [(b"TRIE", make_trie(keys)), (b"KEYS", key_records), (b"EIDX", refs),
                 (b"ENTS", records), (b"STRS", strings),
-                (b"SIDX", struct.pack(f"<{len(by_surface)}I", *by_surface)),
+                (b"SIDX", struct.pack(f"<{len(by_surface)}I", *by_surface)), *conn, *extra_sections,
                 (b"META", json.dumps(metadata, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode("utf-8"))]
     image = pack(sections, layer, len(entries), len(keys))
@@ -344,6 +607,68 @@ def verify(image: bytes) -> None:
             if (kind == 0 and key != readings[entry]) or (kind == 1 and (
                     key == readings[entry] or key not in aliases(readings[entry]))):
                 raise ValueError("key does not match entry reading")
+    if b"CONN" in sections or b"CMAT" in sections:
+        verify_connections(sections, meta, count, surfaces)
+
+
+def matrix_indices(data: bytes) -> tuple[array, array]:
+    """The two id-to-index tables of a CMAT section after its structure checks (azdic spec 15.5 (4))."""
+    if len(data) < 24:
+        raise ValueError("invalid connection matrix")
+    raw_left, raw_right, left_count, right_count, *reserved = struct.unpack_from("<6I", data)
+    if (any(reserved) or not 1 <= raw_left <= 65536 or not 1 <= raw_right <= 65536
+            or not 1 <= left_count < NO_INDEX or not 1 <= right_count < NO_INDEX):
+        raise ValueError("invalid connection matrix")
+    head = 24 + 2 * (raw_left + raw_right)
+    padded = head + (-head % 8)
+    if len(data) != padded + 2 * left_count * right_count or any(data[head:padded]):
+        raise ValueError("invalid connection matrix size")
+    left, right = array("H"), array("H")
+    left.frombytes(data[24:24 + 2 * raw_left])
+    right.frombytes(data[24 + 2 * raw_left:head])
+    if sys.byteorder != "little":
+        left.byteswap()
+        right.byteswap()
+    for values, limit in ((left, left_count), (right, right_count)):
+        if any(value != NO_INDEX and value >= limit for value in values) or values[0] == NO_INDEX:
+            raise ValueError("invalid connection matrix index")
+    return left, right
+
+
+def verify_connections(sections: dict, meta: dict, count: int, surfaces: list[bytes]) -> None:
+    """dictbuild --verify of CONN and CMAT: the structure of azdic spec 15.5 (4), and for CONN also
+    the variant order and attr bit 14 against the surface. The upstream normalized form (bit 15)
+    is not stored, so that bit is not checked."""
+    matrix = matrix_indices(sections[b"CMAT"]) if b"CMAT" in sections else None
+    if b"CONN" not in sections:
+        return
+    table = meta.get("conn_pos_table")
+    if (not isinstance(table, list) or not table or len(table) > MAX_CONN_POS
+            or not all(isinstance(pos, str) and pos for pos in table)):
+        raise ValueError("invalid conn_pos_table")
+    if not isinstance(meta.get("connection_space"), str) or not meta["connection_space"]:
+        raise ValueError("invalid connection_space")
+    data = sections[b"CONN"]
+    head = 4 * (count + 1)
+    padded = head + (-head % 8)
+    if len(data) < padded:
+        raise ValueError("invalid connection table")
+    begin = struct.unpack_from(f"<{count + 1}I", data)
+    if (begin[0] != 0 or any(a > b for a, b in zip(begin, begin[1:]))
+            or len(data) != padded + 8 * begin[-1] or any(data[head:padded])):
+        raise ValueError("invalid connection table")
+    variants = list(struct.iter_unpack("<HHhH", data[padded:]))
+    for entry in range(count):
+        found = variants[begin[entry]:begin[entry + 1]]
+        if any((a[2], a[0], a[1], a[3]) > (b[2], b[0], b[1], b[3]) for a, b in zip(found, found[1:])):
+            raise ValueError("invalid connection variant order")
+        katakana = katakana_only(surfaces[entry].decode("utf-8"))
+        for left, right, _, attr in found:
+            if (attr & (MAX_CONN_POS - 1)) >= len(table) or bool(attr & KATAKANA_ONLY) != katakana:
+                raise ValueError("invalid connection variant attr")
+            if matrix and (left >= len(matrix[0]) or matrix[0][left] == NO_INDEX
+                           or right >= len(matrix[1]) or matrix[1][right] == NO_INDEX):
+                raise ValueError("connection id outside CMAT")
 
 
 def main() -> int:

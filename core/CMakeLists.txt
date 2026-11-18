@@ -1,5 +1,6 @@
 add_library(azookey_core STATIC
   src/AppProfileResolver.cpp
+  src/AzikTable.cpp
   src/BodyLogGate.cpp
   src/BracketPairing.cpp
   src/BracketSettings.cpp
@@ -12,6 +13,7 @@ add_library(azookey_core STATIC
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
   src/InputState.cpp
+  src/KanaInput.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
   src/MixedRomajiSplitter.cpp

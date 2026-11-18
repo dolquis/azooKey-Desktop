@@ -54,11 +54,9 @@ bool ParseLine(std::string_view line, CustomRomajiTable& table) {
         consume > input.size())
       return false;
   }
-  std::string normalized_input(input);
-  for (char& c : normalized_input) {
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-  }
-  table[std::move(normalized_input)] = CustomRomajiRule{std::string(output), consume};
+  // The input keeps its letter case: a rule written in capitals matches only Shift-typed
+  // letters (docs/legacy-parity-spec.md section 5.1).
+  table[std::string(input)] = CustomRomajiRule{std::string(output), consume};
   return true;
 }
 

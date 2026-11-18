@@ -5502,6 +5502,14 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetAutoWordStore(&mining);
   engine.SetTypoStore(&typo);
+  // Detach the stores even when an ASSERT below returns early, before they go.
+  struct DetachStores {
+    azookey::host::InferenceEngine& engine;
+    ~DetachStores() {
+      engine.SetAutoWordStore(nullptr);
+      engine.SetTypoStore(nullptr);
+    }
+  } detach_stores{engine};
   azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
                                    &settings, &mining);
   EnableEventPrivacy(target);
@@ -5570,8 +5578,6 @@ TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
   EXPECT_FALSE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
   EXPECT_EQ(typo.size(), 1u);
 
-  engine.SetAutoWordStore(nullptr);
-  engine.SetTypoStore(nullptr);
   std::remove(mining_path.c_str());
   std::remove(typo_path.c_str());
   std::remove(settings_path.c_str());

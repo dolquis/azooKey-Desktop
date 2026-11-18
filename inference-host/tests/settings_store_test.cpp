@@ -1389,6 +1389,51 @@ TEST(SettingsStoreTest, ApplySafeModeOverridesMatchesTheFlaggedLoad) {
   EXPECT_TRUE(after.model_path.empty());
 }
 
+// DEV-2091: a power source change rebuilds the engine config from the held
+// settings, which lack the SafeMode values when the startup reload lost the
+// flag; the engine's SafeMode puts them back, and nothing else changes them.
+TEST(SettingsStoreTest, SettingsForEngineConfigFollowsTheEngineSafeMode) {
+  ScopedTempDirectory temp("azookey_settings_for_engine_config");
+  const auto path = temp.path() / "settings.json";
+  const std::string rest =
+      R"("privacy":{"mode":"normal"},"reranker":{"nllRerankEnabled":true},)"
+      R"("typoCorrection":{"enabled":true,"mode":"suggest","learnPersonalPatterns":true},)"
+      R"("autoWordRegistration":{"miningEnabled":true},"powerProfile":"balanced",)"
+      R"("model":{"enabled":true,"selectedPath":"C:/models/zenzai.gguf"})";
+  WriteText(path, "{" + rest + "}");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto held = store.settings();
+  azookey::host::EngineConfig base;
+  base.model_path = "C:/models/zenzai.gguf";
+  const auto config_of = [&](const azookey::host::RuntimeSettings& settings) {
+    return azookey::host::ApplyRuntimeSettingsToEngineConfig(base, settings);
+  };
+
+  const auto healthy = config_of(azookey::host::SettingsForEngineConfig(held, false));
+  EXPECT_EQ(healthy.typo_correction_mode, config_of(held).typo_correction_mode);
+  ASSERT_NE(healthy.typo_correction_mode, "off");
+  EXPECT_TRUE(healthy.auto_word_mining_enabled);
+  EXPECT_FALSE(healthy.model_path.empty());
+
+  const auto lost_flag = azookey::host::SettingsForEngineConfig(held, true);
+  EXPECT_EQ(lost_flag.power_profile, held.power_profile);
+  const auto safe = config_of(lost_flag);
+  EXPECT_EQ(safe.typo_correction_mode, "off");
+  EXPECT_FALSE(safe.auto_word_mining_enabled);
+  EXPECT_FALSE(safe.nll.enabled);
+  EXPECT_TRUE(safe.model_path.empty());
+
+  WriteText(path, "{" + rest + R"(,"safeMode":{"enabled":true}})");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto flagged = config_of(store.settings());
+  const auto again = config_of(azookey::host::SettingsForEngineConfig(store.settings(), true));
+  EXPECT_EQ(again.typo_correction_mode, flagged.typo_correction_mode);
+  EXPECT_EQ(again.auto_word_mining_enabled, flagged.auto_word_mining_enabled);
+  EXPECT_EQ(again.nll.enabled, flagged.nll.enabled);
+  EXPECT_EQ(again.model_path, flagged.model_path);
+}
+
 TEST(SettingsStoreTest, SafeModeDefaultsOffAndIgnoresMistypedValues) {
   ScopedTempDirectory temp("azookey_settings_safe_mode_defaults");
   const auto& dir = temp.path();

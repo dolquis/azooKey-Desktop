@@ -187,6 +187,11 @@ void ApplySafeModeOverrides(RuntimeSettings& settings) {
   settings.auto_word.trending_enabled = false;
 }
 
+RuntimeSettings SettingsForEngineConfig(RuntimeSettings settings, bool engine_safe_mode) {
+  if (engine_safe_mode && !settings.safe_mode.enabled) ApplySafeModeOverrides(settings);
+  return settings;
+}
+
 namespace {
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {

@@ -842,8 +842,8 @@ int main(int argc, char** argv) {
   // Section 8.5.3: the engine config below must carry the SafeMode values (no
   // typo correction, no mining, ...) even when that reload lost the flag, as
   // the engine enters SafeMode either way (DEV-2091).
-  if (safe_mode && !settings_result.settings.safe_mode.enabled)
-    azookey::host::ApplySafeModeOverrides(settings_result.settings);
+  settings_result.settings =
+      azookey::host::SettingsForEngineConfig(std::move(settings_result.settings), safe_mode);
   const auto mark_clean_exit = [&]() {
     if (!owns_run_history) return;
     // Clear only this process's own mark: a Host that lost the pipe to another
@@ -1349,6 +1349,9 @@ int main(int argc, char** argv) {
   // lane and the thread count follow it. Both take effect from the next
   // conversion. Once the change has stood for kPowerSettleQuiet, `auto`
   // is resolved again and a different backend reloads the model (section 4.4).
+  // The held settings lack the SafeMode values after a startup entry whose
+  // reload lost the flag, so both rebuilds go through SettingsForEngineConfig
+  // with the engine's state (host-availability-spec section 8.5.3, DEV-2091).
   const auto apply_power_change = [&engine, &settings_store, &runtime_log, &current_auto_backend,
                                    update_config_mutex = dconf.update_config_mutex](
                                       azookey::host::PowerSource from,
@@ -1356,7 +1359,10 @@ int main(int argc, char** argv) {
     std::lock_guard<std::mutex> lock(*update_config_mutex);
     const auto& settings = settings_store.settings();
     engine.ApplyConfig(azookey::host::ApplyRuntimeSettingsToEngineConfig(
-        engine.config(), settings, current_auto_backend.load()));
+        engine.config(),
+        azookey::host::SettingsForEngineConfig(
+            settings, engine.health_state() == azookey::host::HealthState::SafeMode),
+        current_auto_backend.load()));
     runtime_log.Log(
         azookey::logging::RuntimeLogLevel::Info, "power_source_changed",
         {{"from", SafeLogText(std::string(azookey::host::PowerSourceName(from)))},
@@ -1391,8 +1397,11 @@ int main(int argc, char** argv) {
         if (!plan.reload) return;
         // An `auto` request has no CLI backend and no non-auto preference, so the
         // config's backend is the one just selected.
-        auto next = azookey::host::ApplyRuntimeSettingsToEngineConfig(engine.config(), settings,
-                                                                      plan.selection.backend);
+        auto next = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+            engine.config(),
+            azookey::host::SettingsForEngineConfig(
+                settings, engine.health_state() == azookey::host::HealthState::SafeMode),
+            plan.selection.backend);
         if (explicit_model_path) next.model_path = cli_model_path;
         engine.ApplyConfig(next);
         if (next.model_path.empty()) return;

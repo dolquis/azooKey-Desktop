@@ -15381,24 +15381,48 @@ TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {
   }
 }
 
+namespace {
+
+// 96 DPI, and a work area too short below the anchor for the window.
+class ScopedFlipGeometry {
+ public:
+  explicit ScopedFlipGeometry(RECT work_area) {
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(96);
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest(work_area);
+  }
+  ~ScopedFlipGeometry() {
+    azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
+    azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
+  }
+  ScopedFlipGeometry(const ScopedFlipGeometry&) = delete;
+  ScopedFlipGeometry& operator=(const ScopedFlipGeometry&) = delete;
+};
+
+// Opens the window that Space asked for and returns its screen rect.
+RECT OpenWindowAndMeasure(DocumentPreeditHarness& h, bool legacy) {
+  RECT bounds{};
+  EXPECT_TRUE(h.service.create_candidate_window_for_test());
+  StartWindowWait(h, legacy);
+  AnswerWindow(h);
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  const HWND hwnd = h.service.candidate_window_for_test().hwnd_for_test();
+  EXPECT_TRUE(IsWindowVisible(hwnd));
+  // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+  const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+  EXPECT_TRUE(GetWindowRect(hwnd, &bounds));
+  return bounds;
+}
+
+}  // namespace
+
 // DEV-2104 (native-ui-spec §4.1): flipped above a composition line taller than
 // caret_gap, the candidate window's bottom meets the composition's top, as the
 // prediction window's does, on the core path and the legacy path.
 TEST(TsfTipCandidateAnchorTest, FlippedWindowClearsATallComposition) {
-  struct Geometry {
-    Geometry() {
-      azookey::tsf::CandidateWindow::SetMonitorDpiForTest(96);
-      // 20 px below the composition: the window goes above it.
-      azookey::tsf::CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 300});
-    }
-    ~Geometry() {
-      azookey::tsf::CandidateWindow::SetWorkAreaForTest({});
-      azookey::tsf::CandidateWindow::SetMonitorDpiForTest(0);
-    }
-  };
   for (const bool legacy : {false, true}) {
     SCOPED_TRACE(legacy);
-    const Geometry geometry;
+    // 20 px below the composition: the window goes above it.
+    const ScopedFlipGeometry geometry({0, 0, 1920, 300});
     CaretFallbackGuard caret_fallback;
     FakeContextView view;
     // A 60 px tall line, {110, 220, 130, 280} on the screen once converted.
@@ -15407,22 +15431,28 @@ TEST(TsfTipCandidateAnchorTest, FlippedWindowClearsATallComposition) {
     view.text_window = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(0x2104));
     DocumentPreeditHarness h;
     h.context.active_view = &view;
-    ASSERT_TRUE(h.service.create_candidate_window_for_test());
-    StartWindowWait(h, legacy);
-    AnswerWindow(h);
-    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
-    const HWND hwnd = h.service.candidate_window_for_test().hwnd_for_test();
-    ASSERT_TRUE(IsWindowVisible(hwnd));
-    RECT bounds{};
-    {
-      // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
-      const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
-      ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
-    }
+    const RECT bounds = OpenWindowAndMeasure(h, legacy);
     EXPECT_EQ(bounds.bottom, 220);
     EXPECT_EQ(bounds.left, 110);
     ASSERT_TRUE(h.Press(VK_ESCAPE));
     h.context.active_view = nullptr;
+  }
+}
+
+// Without a text extent both modes take the caret rect at the anchor point, 16
+// logical px tall (legacy-parity-spec §9.1): the flipped window's bottom meets
+// its top, so a caret line taller than that is covered by the difference.
+TEST(TsfTipCandidateAnchorTest, WithoutATextExtentTheWindowFlipsOverTheCaretRect) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    // The cursor stands in at {321, 654}: the anchor point is {321, 670}.
+    const ScopedFlipGeometry geometry({0, 0, 1920, 700});
+    CaretFallbackGuard caret_fallback;
+    DocumentPreeditHarness h;
+    const RECT bounds = OpenWindowAndMeasure(h, legacy);
+    EXPECT_EQ(bounds.bottom, 654);
+    EXPECT_EQ(bounds.left, 321);
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
   }
 }
 

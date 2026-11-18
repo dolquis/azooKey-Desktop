@@ -317,9 +317,9 @@ EOS までの最小コストの和 B(r) を求める。そのうえで `[0, p)` 
 ### 7.4 SegmentPos との対応
 
 文節の末尾の語と先頭の自立語の品詞は、lattice_core の品詞名の表を通して `SegmentPos`
-（`core/include/azookey/core/SegmentPos.h`）へ写せる。`docs/dynamic-punctuation-spec.md` §7.2.2 の対応表は
-IPADIC 系の品詞名で書かれている。ラティスの品詞は UniDic 系の名前（`名詞-普通名詞-一般`、`動詞-一般` など）なので、
-同表に UniDic 系の名前を足す改訂は同 spec が持つ。
+（`core/include/azookey/core/SegmentPos.h`）へ写せる。ラティスの品詞は UniDic 系の名前（`名詞-普通名詞-一般`、
+`動詞-一般` など）なので、対応表は `docs/dynamic-punctuation-spec.md` §7.2.2 の「UniDic 系の品詞名」が持つ。
+同表は左 ID・右 ID ではなく、ノードの品詞 1〜4 を引く。
 
 ## 8. 連接情報と ID 空間
 

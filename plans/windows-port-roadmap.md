@@ -2749,7 +2749,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`・`profile_sha256`）、
   `bench/CMakeLists.txt`（テスト）、`inference-host/src/InferenceEngine.cpp`（bench から `instruction_profile` を渡す入口。
   Host の要求処理からは使わない）、
-  `scripts/run-quality-bench.py`（`eval_source` を持たない結果を `bundled` として比べる）、
+  `scripts/run-quality-bench.py`（`eval_source` を持たない結果を `bundled`、`profile_sha256` を持たない結果を `none` として
+  比べる）、
   `docs/learning-data-management-spec.md` §14（学習ストアの読み手の追記）。
 - **受け入れ条件**:
   - `azookey_bench --personal-eval --output result.json` が spec §15.6 の指標を出し、学習ストアのファイルのバイト列と
@@ -2762,7 +2763,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - 同じ学習ストアと構成で 2 回実行すると `eval_dataset_sha256` と精度系の指標が一致し、`--baseline` は互換キーが
     一致するときだけ `diff_vs_baseline` を出す
   - spec §15.5 で受け付けないオプションが入力エラーになる
-  - bench 専用の `--profile` が prompt の `[PROF]` に文字列を置き、`config.profile_sha256` を記録する。文字列は出力に
+  - bench 専用の `--profile`（`--profile-file`）がモデル変換と NLL 再ランクの prompt の `[PROF]` に文字列を置き、`config.profile_sha256` を記録する。文字列は出力に
     出ず、製品の設定と Host の挙動は変わらない
   - 実機の DPAPI で暗号化された学習ストアで実行でき、出力に本文が無いことと、1 万行の学習ストアでの所要時間を
     記録する。実モデルで `--profile` の有無と中立の文言の結果も記録する（Human Gate）

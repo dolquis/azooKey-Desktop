@@ -510,7 +510,8 @@ schema 自体は superset のまま変えない。
   （詳細は同 spec §3）。v1.0 は専用 GUI を作らず、この最小の導線だけを持つ。語の編集、辞書の単独の書き出し、
   既定で入る語は v1.x（M30）。設定アプリは v1.0 / v1.x とも `user_dict.json.enc` を直接開かず、Host への IPC を
   経由する（`docs/learning-data-management-spec.md` §14）。開発者向けの
-  CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。
+  CLI（`AddUserWord` / `RemoveUserWord`）も同じ経路で残る。品詞の欄と、ほかの IME の辞書の取り込み（M71-A）は
+  `docs/user-dictionary-pos-spec.md` §8 が定める。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。フォルダーはログを書き出したときに
   作られるので、まだ無いか開けないときは、その旨を InfoBar で示す。場所は RuntimeLogger の既定の書き出し先と同じ
   core の `azookey::logging::DefaultLogsDirectory()` から取り、設定アプリの中で組み立て直さない。

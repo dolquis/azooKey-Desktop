@@ -381,13 +381,13 @@ v1.0 方針として確定する。
 宣言の正典はヘッダで、本書はコードを写さない。描画責務に関わる入口の契約は次のとおり。
 
 - `SetUiLessMode(bool)`: `ActivateEx` で得た UI-less フラグを保持する（§2.10）。
-- `BeginUI(thread_mgr, pt, items, selected_idx, …)`: 候補表示を始める。内部で
+- `BeginUI(thread_mgr, anchor, items, selected_idx, …)`: 候補表示を始める。内部で
   1) `ITfCandidateListUIElement` を生成して候補を持たせ、2) `ITfUIElementMgr::BeginUIElement(elem,
   &pbShow, &ui_element_id)` を呼び、3) `pbShow` で描画責務を確定する。4) `pbShow==FALSE` のときは
   続けて `UpdateUIElement(ui_element_id)` を即時に呼び、初回の候補内容をアプリへ通知する。アプリは
   `BeginUIElement` では内容を読まず、最初の `UpdateUIElement`（全 update フラグ立ち）で読み始めるため、
-  これを省くと初回の候補が描画されない（§2.6 フローチャート）。`pt` は自前 HWND を出す場合の
-  キャレット直下のスクリーン座標である。
+  これを省くと初回の候補が描画されない（§2.6 フローチャート）。`anchor` は自前 HWND を出す場合の
+  基準の矩形（composition 全体の text extent か、キャレット矩形）のスクリーン座標である（`docs/native-ui-spec.md` §4.1）。
 - `UpdateUI(items, selected_idx)`: 候補リストか選択の変更。`pbShow==TRUE` 経路は自前 HWND を再描画し
   `UpdateUIElement` は呼ばない。`pbShow==FALSE` 経路は `UpdateUIElement(ui_element_id)` だけを呼ぶ。
 - `EndUI()`: `pbShow` の値に関わらず HWND を隠し、`EndUIElement` を必ず呼ぶ。

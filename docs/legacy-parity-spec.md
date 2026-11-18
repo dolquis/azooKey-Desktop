@@ -1560,7 +1560,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 最終フォールバックでは、参照 HWND を推測せず `GetPhysicalCursorPos` から物理 screen 座標を直接取得する。
 キャレット高の 16 論理 px は、カーソル位置のモニター拡大率を使って物理 px へ換算する。
 拡大率を取得できない場合は、16 物理 px を使う。
-予測候補ウィンドウが `GetTextExt` の矩形を得られずに anchor 点から矩形を作るときも、同じ換算でキャレット高を決める。
+候補ウィンドウ（両モード）が `GetTextExt` の矩形を得られずに anchor 点から矩形を作るときも、同じ換算でキャレット高を決める。
 
 候補ウィンドウは `WM_DPICHANGED` と表示先モニタの DPI に応じて、
 配置範囲、行高、余白、フォントを更新する。

@@ -164,6 +164,8 @@ std::optional<std::filesystem::path> QuarantineInvalidFile(const std::filesystem
   return std::nullopt;
 }
 
+}  // namespace
+
 // Section 8.5.3: SafeMode stops AI, learning and external APIs whatever the
 // rest of the file asks for. Overriding the parsed values, rather than checking
 // the flag at each use, keeps every reader of RuntimeSettings on the same stop.
@@ -184,6 +186,8 @@ void ApplySafeModeOverrides(RuntimeSettings& settings) {
   settings.auto_word.mining_enabled = false;
   settings.auto_word.trending_enabled = false;
 }
+
+namespace {
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   RuntimeSettings settings;

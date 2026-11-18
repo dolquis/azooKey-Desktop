@@ -839,6 +839,11 @@ int main(int argc, char** argv) {
   }
   // Entering counts even if a save raced the reload and dropped the flag again.
   const bool safe_mode = entered_safe_mode || settings_result.settings.safe_mode.enabled;
+  // Section 8.5.3: the engine config below must carry the SafeMode values (no
+  // typo correction, no mining, ...) even when that reload lost the flag, as
+  // the engine enters SafeMode either way (DEV-2091).
+  if (safe_mode && !settings_result.settings.safe_mode.enabled)
+    azookey::host::ApplySafeModeOverrides(settings_result.settings);
   const auto mark_clean_exit = [&]() {
     if (!owns_run_history) return;
     // Clear only this process's own mark: a Host that lost the pipe to another

@@ -431,6 +431,8 @@ AI の入口（`TransformSelectedText`、`QueryBatchConversion` の `ai-cleanup`
 engine の状態の SafeMode で止める。確定の観測は `ok = false` を返し、`ObserveTypo` は応答を返さない
 （secure と同じ）。自動単語登録の抽出は確定の観測の中で行うので、同じ判定で止まる。学習データの
 export と import も同じ判定で `blocked` にする（`docs/learning-data-management-spec.md` §8）。
+起動時に SafeMode へ入ったのに再読込した設定から flag が落ちていたときは、Host は engine の設定を作る前に
+その設定へ上の強制を当てる。打ち間違え補正の適用など engine の設定で動く処理も、こうして engine の状態と揃う。
 
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。

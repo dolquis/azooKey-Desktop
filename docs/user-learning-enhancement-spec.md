@@ -484,6 +484,8 @@ class UserLearningScorer {
   `store_` が無いときは user_score を 0 として元の順で返す。
 - 失敗時（store が無い、category の参照で例外が出た、値が非有限になった）は
   その候補の user_score を 0 として続行する。score が非有限の候補は並びの末尾に置く。
+- 学習した語彙と文体は、Zenzai の生成には効かない。Zenzai の生成を利用者ごとに変える個人化は v1 では採らない
+  （`docs/zenzai-inference-spec.md` §9.4）。
 
 ## 8. プライバシー
 
@@ -574,6 +576,7 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 - 校正は係数の数値のみを動かし、本表の「不変条件」列と §6 の 4 因子構成
   （乗算合成・各因子の中立 1.0）は固定する。スキーマ（§3.2 の TSV 列）を
   変える校正結果が出た場合は M54 範囲外とし、別 M（§12）で扱う。
+- 個人回帰ベンチ（`docs/conversion-quality-benchmark-spec.md` §15、M74）は学習を空にして測るので、本表の校正には使わない。
 
 ## 14. 学習ストアの reading-keyed 二層化と前方一致予測（M15 供給）
 

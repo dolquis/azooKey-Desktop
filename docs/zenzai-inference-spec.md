@@ -32,7 +32,7 @@ canonical_for: ["Zenzai 推論コントラクト"]
 | §9（§9.2.2・§9.3・§9.4 を除く） | M8 |
 | §9.2.2 | M10（キャンセルとデッドラインの decode ループ反映） |
 | §9.3 | M8（設定キーの定義）。schema への反映は M11 |
-| §9.4 | M8 の対象外（将来 M45・M54 で扱う） |
+| §9.4 | M8 の対象外（個人化の方式の比較と採否。効果の測定は M74 の個人回帰ベンチ） |
 | §10 | M8 |
 
 ---
@@ -61,8 +61,8 @@ canonical_for: ["Zenzai 推論コントラクト"]
 
 - バックエンド実行系（CPU/CUDA/WinML）の選定 → `docs/copilot-pc-backend-spec.md`。
 - llama.cpp の CMake 導入・リンク・GGUF ロード境界 → M8-1（DEV-220）。
-- 個人化 n-gram LM（marisa）のブレンド → §9.4 で**将来拡張**として枠のみ定義。
-  v1.0 / M8 では採用しない（legacy macOS の `PersonalizationMode` は参照のみ）。
+- 個人化 n-gram LM（marisa）のブレンド → §9.4 で方式を比べ、v1 では採らない（legacy macOS の
+  `PersonalizationMode` は参照のみ）。
 - 本格的な辞書ラティス（M53）・Tiny Reranker（M56）・ModernBERT（M57）→ §7.5 で
   将来統合点のみ示す。
 
@@ -91,7 +91,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 | `weight` | `ggml-model-Q5_K_M.gguf`（zenz-v3.x-small） | §3.1 モデル。`EngineConfig.model_path` |
 | `inferenceLimit` | 既定 5 / 範囲 1〜50（`Config.ZenzaiInferenceLimit`） | §6.3 にマップ（探索予算） |
 | `requestRichCandidates` | bool（候補選択時 true） | §6.1 n-best 要求フラグ |
-| `personalizationMode` | base/personal n-gram + alpha | §9.4 将来拡張（M8 非対象） |
+| `personalizationMode` | base/personal n-gram + alpha | §9.4 で比べ、v1 では採らない |
 | `versionDependentMode` | `.v3(profile, leftSideContext, enableAlignmentSeparator: true)` | §3.2 プロンプト構築 |
 
 - `leftSideContext`: 確定済み左文脈を**最大 30 文字**、改行で分割し最後の行、
@@ -696,6 +696,8 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**M56 の学習重みが無い
 構成での加算統合**であり、M56 が学習重みへ置換する。`Candidate` 構造体に raw score 用の
 数値フィールドを足すかは M56 で判断（M8 では `debug_info` 文字列で前方互換）。
+Zenzai の生成を利用者ごとに変える個人化は v1 では採らず（§9.4）、この統合にも `final_score` にも個人化の加点の項を
+設けない。
 
 ### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
 
@@ -1261,12 +1263,74 @@ schema 自体は変更しない）:
 > 上記 Zenzai パラメータを足す形で、IPC payload の互換を壊さない（`tsf-ipc-protocol`）。新規
 > `model.*` キーの schema 反映は M11 / DEV-203 のスコープ。
 
-### 9.4 個人化（将来拡張・M8 非対象）
+### 9.4 個人化（方式の比較と採否）
 
-legacy の `PersonalizationMode`（base/personal n-gram marisa + alpha 0.0/0.5/1.0/1.5）は
-**M8 では実装しない**。将来 M45（モデル管理）/ M54（学習強化）で扱う。本書は枠のみ予約し、
-Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せるよう、§7.5 の reranker
-統合点へ寄せる設計とする。
+Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節に定める。利用者が確定した表層は、§7.1 手順 8 の学習 reranker
+が候補の並びに反映する。本節が扱うのは、Zenzai の生成そのものを変える方式である。
+
+#### 9.4.1 比較した方式
+
+| 方式 | 効果の見込み | 計算コスト | 保存するデータ | 結論 |
+|---|---|---|---|---|
+| A. 個人 n-gram のブレンド（legacy の `PersonalizationMode`） | 確定した文の言い回しに寄る。Windows では測れない | beam の各 step で token の確率を補正する | base と個人の n-gram 言語モデル。個人側の学習には文単位の確定本文が要る | 採らない |
+| B1. 利用者が書いたプロファイルを `[PROF]` に付ける | 同梱データでは揺れの範囲で、正解を壊すことがある（下記の計測） | prompt がプロファイルの token 数だけ伸びる。接頭辞 KV キャッシュで再利用される | 設定値 1 つ | v1 では採らない。効果を測る手段だけを持つ（§9.4.3） |
+| B2. 学習データから作ったプロファイルを `[PROF]` に付ける | B1 と同じ仕組みで、同じ揺れを持つ | B1 と同じ | B1 と同じ。値は学習データから作る | 採らない |
+| C. 端末内での個人 fine-tune | 確定した組に強く寄る。過学習しやすい | 製品の中での学習。CPU で分から時間の単位 | 個人データから作った重み | 採らない |
+
+- **A**: legacy は base と個人の n-gram 言語モデル（marisa-trie の 4 ファイル）と alpha を変換ライブラリ
+  （AzooKeyKanaKanjiConverter）へ渡す（`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`）。alpha は設定
+  `ZenzaiPersonalizationLevel` の 4 段階（オフ 0、弱く 0.5、普通 1.0、強く 1.5。
+  `legacy/Core/Sources/Core/Configs/CustomCodableConfigItem.swift`）である。混ぜ方はライブラリの内部にあり、legacy の
+  中からは読めない。legacy は個人側のファイル（`p13n_v1/lm_*.marisa`）の有無を確かめて渡すだけで、repo の中にそれを作る
+  コードは無い。base 側は Hugging Face の `Miwa-Keita/base_n5_lm` を submodule（`.gitmodules` の
+  `legacy/azooKeyMac/Resources/base_n5_lm`）として持ち、アプリに同梱する。Windows で採るには、base の n-gram の配布と
+  ライセンスの確認、個人側を学習するための文単位の確定本文、marisa への依存、beam の各 step で
+  token の確率を補正する処理が要る。学習ストアは確定した文を持たない設計である
+  （`docs/learning-data-management-spec.md` §15.2）。確定の本文を新たに保存すると、文脈を hash で持つ
+  `docs/user-learning-enhancement-spec.md` §2 の方針に反する。
+- **B1**: zenz-v3.2-small は `[PROF]` を学習している（§2.4.1）。`BuildZenzaiPrompt`（§3.3）は `instruction_profile` を
+  `[PROF]` に置く。かな漢字変換ではこの値は空で、ローカルの AI 処理（`InferenceEngine::TransformLocal`）だけが指示を
+  入れる。DEV-1576 の計測では、M52 の `kana_kanji_eval` 200 件で、アプリの種別から作った文字列（「会社員/文書作成」
+  「ソフトウェアエンジニア/プログラミング」）を zenz-v3.2-small Q5_K_M の `[PROF]` に付けると、top1 の変化は ±1 件で、
+  正解を 1〜3 件壊した。意味を持たない中立の文言（「日本語の文章」）を付けた対照でも同じ方向に動いたので、変化は文言の
+  意味ではなく、`[PROF]` の token が付くこと自体による揺れとみる。p95 の増分はノイズの範囲だった。利用者が書く文字列でも
+  同じ仕組みを通るので、同梱データの精度が上がる根拠は無い。利用者自身の語彙に効くかどうかは測っていない。
+  `[PROF]` を使わない形式（`kanakanji-edge-v1`。§2.4.2）では効かない。
+- **B2**: ペルソナの比率（`docs/learning-data-management-spec.md` §15）などから文字列を作る案である。B1 と同じ揺れを
+  持つうえ、モデルが学習したプロファイルの書き方（legacy の例は「田中太郎/高校生」のような自由記述。§2.2）に合う保証が
+  無く、学習データから作った値を生成に入れる経路が 1 つ増える。
+- **C**: Zenzai（zenz-v3.2-small は約 90M パラメータ。§2.4.1）を端末内で追加学習する案である（アダプタを足す形を含む）。
+  製品の中に学習の処理が要る。個人データから作った重みを保存するので、暗号化と、学習データの全削除
+  （`docs/learning-data-management-spec.md` §4.6）での消去も要る。学習に使える組は文脈の無い読みと表層だけで
+  （`docs/conversion-quality-benchmark-spec.md` §15.1）、過学習とモデル本来の変換の劣化を招きやすい。確定した表層を
+  上げる効き目は学習 reranker と重なる。Tiny Neural Reranker の個人 fine-tune（`docs/neural-reranker-spec.md` §6.1）は
+  reranker の範囲であり、本節の結論に含めない。
+
+#### 9.4.2 決定
+
+- v1 では A、B1、B2、C のいずれも採らない。Zenzai の生成は利用者ごとに変えない（理由は §9.4.1）。
+- 学習データから作った値で Zenzai の生成を変える個人化は、v1 では採らない。A、B2、C はいずれもこれに当たる。
+  学習した語彙と文体は、Zenzai の生成には効かない（候補の並びには §7.1 手順 8 の学習 reranker が反映する）。
+- legacy の `ZenzaiProfile` と `PersonalizationLevel` に当たる製品の設定は持たない。`model.profile` は §9.3 の予約の
+  ままとする。§7.5 の統合点に個人化の加点を足す枠は使わない。
+
+#### 9.4.3 効果の測り方と見直しの条件
+
+- B1 の効果は、利用者自身の確定履歴で測る。個人回帰ベンチ（`docs/conversion-quality-benchmark-spec.md` §15）は
+  bench 専用の `--profile`（同 §15.5）を持つ。`--profile` は bench が作る変換の文脈の `instruction_profile` に文字列を
+  入れるだけで、製品の設定と Host の挙動は変えない。
+- 比べ方: 同じ学習ストアで、プロファイルなし、利用者が書いたプロファイル、中立の文言（DEV-1576 の対照と同じ
+  「日本語の文章」）の 3 通りを続けて採取し、3 つの `--output` の `summary` を比べる。互換キー `profile_sha256`
+  （同 §14.1）が違うので `diff_vs_baseline` は使わない（同 §15.7）。3 回の `eval_dataset_sha256` が一致しない採取は捨てる。
+- 次の 2 つを満たしたら、`model.profile` を製品の設定にする M を roadmap に立てる。
+  - `n_cases` が 300 以上の学習ストアで、利用者が書いたプロファイルの `commit_coverage_top1`（同 §15.6）が、
+    プロファイルなしと中立の文言の両方を 2.0pp 以上上回る。2.0pp は、DEV-1576 でプロファイルを付けたときに 200 件の
+    うち壊れた件数の最大（3 件、1.5pp）を超える幅である。測った学習ストアの数と各値は Human Gate で記録する。
+  - M52 の同梱データ（同 §4）で、そのプロファイルを渡した採取の `top1_accuracy` の悪化が 0.5pp 以内である
+    （同 §14.3 と同じ閾値）。
+- その M では、設定キーの長さの上限（prompt 長の見積もり §9.2.3.7 に入る）、secure の要求とローカルの AI 処理
+  （`InferenceEngine::TransformLocal`）には付けないこと、ログと診断 ZIP（`docs/diagnostics-compat-spec.md` §12.5）で
+  文字列を出さないこと、学習データの全削除（`docs/learning-data-management-spec.md` §4.6）との関係を定める。
 
 ---
 

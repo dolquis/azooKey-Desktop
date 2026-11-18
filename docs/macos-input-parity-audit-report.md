@@ -162,7 +162,7 @@ Mac 版のローマ字表、AZIK 表、かな表、`firstClauseResults`、`forge
 | P-34 | ライブ変換で 1 文字の読みも変換を表示する（Mac は 2 文字以上）。ライブ OFF の入力中に Mac が出す 1 行窓の位置関係（P-14）に伴い、予測窓の位置も違う | 記録のない差 |
 | P-35 | 確定直後の最初の問い合わせが、CommitObservation の ACK 待ち（最大 3 秒）の後になる。Host が自動語取得の保存を同期で行うと遅れうる（推測） | 記録のない差 |
 | P-36 | 候補を待つ間に Host が落ちると、窓は自動では開かず、もう一度 Space を押すとローカル候補が出る | 記録のない差 |
-| P-37 | ZenzaiProfile、PersonalizationLevel、InferenceLimit、SystemUserDictionary に当たる設定が無い（Zenzai の 3 件は `zenzai-inference-spec.md` §9 に将来の設定として書かれている）。OpenAI のエンドポイントの書式が違う（Mac は `/chat/completions` まで、Windows は `/v1` まで） | 記録のない予定／意図した差（`ai-backend-spec.md` §5.1） |
+| P-37 | ZenzaiProfile、PersonalizationLevel、InferenceLimit、SystemUserDictionary に当たる設定が無い（Zenzai の 3 件は `zenzai-inference-spec.md` §9 に将来の設定として書かれている）。OpenAI のエンドポイントの書式が違う（Mac は `/chat/completions` まで、Windows は `/v1` まで） | 記録のない予定／意図した差（`ai-backend-spec.md` §5.1）。注記: DEV-2039 で、ZenzaiProfile と PersonalizationLevel に当たる設定は v1 では採らない意図した差とした（`zenzai-inference-spec.md` §9.4） |
 
 ## 4. 同等と確認できた範囲
 
@@ -244,7 +244,7 @@ Windows 独自のキーとして、半角/全角、`VK_IME_ON` / `VK_IME_OFF`、
 | UserDictionary | 1 件（あずーきー） | `user_dict.json` | 空（推測） | spec と実装の不一致（v1.0 のボタン） | P-23 |
 | AIBackendPreference | off | `aiBackend` | none | 同等 | — |
 | OpenAiApiEndpoint | `.../v1/chat/completions` | `openAiApiEndpoint` | `.../v1` | 意図した差（`ai-backend-spec.md` §5.1） | P-37 |
-| ZenzaiProfile ほか 3 件 | — | なし | — | 記録のない予定 | P-37 |
+| ZenzaiProfile ほか 3 件 | — | なし | — | 記録のない予定。注記: うち ZenzaiProfile と PersonalizationLevel は v1 では採らない意図した差（P-37） | P-37 |
 
 Windows 独自の機能で、既定で ON のまま素の打鍵結果を変えるものは `predictionEnabled`（P-16）と `typoCorrectionMode = suggest`（同じ誤りを 3 回観測した後、補正読みの候補が混ざる）である。リライター、日英混在入力、カッコ補完、動的句読点、句読点の確定、一括変換は既定 OFF で影響しない。
 

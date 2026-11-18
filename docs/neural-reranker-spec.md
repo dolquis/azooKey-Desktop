@@ -296,7 +296,8 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   将来の SQLite オプション、`user-learning-enhancement-spec.md` §8）。そのため強負例
   と `correctionWindowMs` は上記トレースの訂正レコードから生成する（M54 集約 TSV に
   依存しない）。M54 SQLite オプションが有効な環境ではそのペアテーブルを併用してよい。
-- 個人ユーザーの学習データを **送信せず**、ローカルで個人 fine-tune（v2 で検討）。
+- 個人ユーザーの学習データを **送信せず**、ローカルで reranker を個人 fine-tune（v2 で検討）。
+  Zenzai 本体の個人 fine-tune は採らない（`docs/zenzai-inference-spec.md` §9.4）。
 - bundled モデルは公開コーパスから生成（青空文庫 / CC0・MIT 互換の IME 公開
   データセット）。M52 §11 と同じく CC BY-SA / GFDL 系（Wikipedia 等）は採用しない。
   bundled 生成では露出（chosen / shown）を公開コーパスの正解 + distractor 候補から
@@ -339,7 +340,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 - **secure 除外**: §13 のとおり M46 secure 中は学習データを**収集しない**
   （正例・負例・訂正イベントすべて）。
 - **bundled と個人の分離**: bundled モデルは §6.1 の公開コーパス由来のみ。個人の
-  `correction_events` 由来データはローカル fine-tune（v2 で検討）の範囲に留め、
+  `correction_events` 由来データは reranker のローカル fine-tune（v2 で検討）の範囲に留め、
   bundled 学習には混ぜない。
 
 > 上記の `trainNegativesPerSample` / `correctionWindowMs` / `minDwellMs` /
@@ -517,5 +518,6 @@ final_score =
 
 - v2 以降の embedding 強化
 - Mini Transformer 化
-- 個人 fine-tune（プライバシーを保ったまま）
+- reranker の個人 fine-tune（プライバシーを保ったまま。Zenzai 本体の個人 fine-tune は
+  `docs/zenzai-inference-spec.md` §9.4 で採らないとした）
 - M57 ModernBERT との 2 段 rerank（M57 が ambiguous 候補だけ精査）

@@ -485,7 +485,7 @@
     },
     "reranker": {
       "type": "object",
-      "description": "Track B NLL reranking; docs/neural-reranker-spec.md section B9",
+      "description": "Track B NLL reranking; docs/neural-reranker-nll-spec.md section B9",
       "properties": {
         "nllRerankEnabled": { "type": "boolean", "default": false },
         "nllTopK": { "type": "integer", "default": 8, "minimum": 1, "maximum": 16 },

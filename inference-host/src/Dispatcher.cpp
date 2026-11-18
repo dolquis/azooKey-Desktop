@@ -39,6 +39,9 @@ namespace azookey::host {
 namespace {
 
 constexpr std::int32_t kGenericFailureHresult = static_cast<std::int32_t>(0x80004005u);
+// learning-data-management-spec section 4.5: export and import refused by the
+// section 8 stop (the name user-dictionary-pos-spec section 6.8 also uses).
+constexpr std::string_view kLearningDataErrorBlocked = "blocked";
 
 logging::RuntimeLogger& DispatcherLogger(logging::RuntimeLogger* configured) {
   if (configured) return *configured;
@@ -733,9 +736,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(
-                        parsed->secure, parsed->learning_allowed,
-                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+          parsed &&
+          LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -1045,6 +1047,24 @@ bool Dispatcher::RequiresAuthenticatedSession() const {
 bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed,
                                  bool host_learning_blocked) const {
   return client_supports_secure_flag_ && !secure && learning_allowed && !host_learning_blocked;
+}
+
+bool Dispatcher::HostLearningBlocked(
+    const std::optional<SettingsStore::PrivacyGuard>& privacy) const {
+  // host-availability-spec section 8.5.3: SafeMode stops learning writes. The
+  // engine's state decides, not only the settings overrides: a startup entry
+  // whose reload lost the flag leaves settings without them (DEV-2091).
+  return SafeModeEnabled() ||
+         (privacy && (privacy->policy.secure || !privacy->policy.learning_allowed));
+}
+
+bool Dispatcher::LearningDataTransferBlocked() const {
+  // learning-data-management-spec section 8: the settings app's request has no
+  // input-field secure, so the Host-wide policy and SafeMode decide (DEV-2143).
+  // Checked once at the entry; the lock is not held through the archive I/O.
+  const auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  return HostLearningBlocked(privacy);
 }
 
 void Dispatcher::SetClientId(std::string client_id) {
@@ -1549,8 +1569,7 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   if (!parsed) return;
   auto privacy =
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
-  if (!LearningAllowed(parsed->secure, parsed->learning_allowed,
-                       privacy && (privacy->policy.secure || !privacy->policy.learning_allowed)))
+  if (!LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy)))
     return;
   // M55 (typo-correction-learning-spec 12.14): learnPersonalPatterns false, or
   // typo correction off, stops the accumulation under the settings lock. With
@@ -1941,6 +1960,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {
   ipc::ExportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildExportLearningDataResponse(res)); };
+  if (LearningDataTransferBlocked()) {
+    res.error = std::string(kLearningDataErrorBlocked);
+    return reply();
+  }
   const auto parsed = ipc::ParseExportLearningDataRequest(req.payload_json);
   const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
   if (!stores) {
@@ -1975,6 +1998,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Env
 std::optional<ipc::Envelope> Dispatcher::HandleImportLearningData(const ipc::Envelope& req) {
   ipc::ImportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildImportLearningDataResponse(res)); };
+  if (LearningDataTransferBlocked()) {
+    res.error = std::string(kLearningDataErrorBlocked);
+    return reply();
+  }
   const auto parsed = ipc::ParseImportLearningDataRequest(req.payload_json);
   const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
   const auto policy =
@@ -2275,8 +2302,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
       parsed &&
-      LearningAllowed(parsed->secure, parsed->learning_allowed,
-                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+      LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     if (IsEnglishObservation(parsed->reading, parsed->chosen.tag)) {
@@ -2305,8 +2331,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envel
   // section 4); a duplicate resend is answered ok=true without re-recording.
   if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
       parsed &&
-      LearningAllowed(parsed->secure, parsed->learning_allowed,
-                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+      LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
     engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
                               NowSec(), parsed->observation_id,
                               parsed->app ? parsed->app->process_name : std::string(),

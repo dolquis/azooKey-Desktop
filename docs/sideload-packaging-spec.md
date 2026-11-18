@@ -1014,7 +1014,7 @@ ETW は `docs/observability-spec.md` §7.6 の redaction ポリシー正典が�
 ゲートが無い）。そのため本文系フィールド（`reading` / `surface` / `candidate.text` /
 確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）は **build / env / mode に
 よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が `docs/observability-spec.md` §7.6 優先順位 4 の
-opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を持たない。
+opt-in で本文を出し得る（`raw_keys` は opt-in でも出さない）のとは異なり、ETW は本文出力経路を持たない。
 
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
   載せていたが `docs/observability-spec.md` §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /

@@ -450,6 +450,27 @@ TEST(RuntimeLoggerTest, BodyLoggingRequiresEveryPermissionAndPreservesNonBodyPro
   }
 }
 
+TEST(RuntimeLoggerTest, RawKeysStayRedactedEvenWhenBodyLoggingIsAllowed) {
+  for (const bool opt_in : {false, true}) {
+    RuntimeLoggerOptions options;
+    options.component = "tip";
+    options.body_opt_in = opt_in;
+    RuntimeLogger logger(options);
+    // Non-secure and detailed: the only policy under which body fields may appear.
+    const auto line = logger.FormatRecord(
+        RuntimeLogLevel::Info, "raw_keys_probe",
+        {{"reading", SafeLogText("body-sentinel")}, {"raw_keys", SafeLogText("rawkeys-sentinel")}},
+        {false, true});
+#if defined(_DEBUG) && !defined(NDEBUG)
+    EXPECT_EQ(line.find("body-sentinel") != std::string::npos, opt_in);
+#else
+    EXPECT_EQ(line.find("body-sentinel"), std::string::npos);
+#endif
+    EXPECT_EQ(line.find("rawkeys-sentinel"), std::string::npos);
+    EXPECT_NE(line.find("\"raw_keys\":\"***redacted***\""), std::string::npos);
+  }
+}
+
 TEST(RuntimeLoggerTest, BodyEnvironmentRequiresExactOne) {
   for (const auto* value : {"", "0", "true", "01", "1"}) {
     ScopedEnvironment body("AZOOKEY_LOG_BODY", value);

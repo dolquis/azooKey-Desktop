@@ -316,6 +316,7 @@ counts のキーは archive の item 名（§5.1）である。
   - `not_authenticated`: Handshake のトークン認証の前に送った。
   - `save_failed`: 忘却を保存できなかった。M7 ファイルからの除去の失敗も含む。
   - `unsupported`: `include_settings = true` を指定した。`settings.redacted.json` の export は未対応で、黙って無視しない。
+  - `blocked`: export と import を §8 の判定が止めた。payload の検査より前に返し、ファイルとストアを変えない。
   - archive の失敗は `invalid_path`、`destination_exists`、`decrypt_failed` などの名前で返す。
     いずれも `BackupErrorCode` の名前で、`bad_item` と `store_unavailable` を含む。
 - `ForgetLearningEntry` は、`id` か、`reading` と `surface` の組のどちらか一方を受ける。
@@ -521,7 +522,13 @@ STORE 方式で足りるためである。平文 export は圧縮されない。
 
 - M46 secure mode 中はエクスポート / インポート操作を blocking する
   （secure または学習不許可のとき。消費側の判定責務は
-  `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う）
+  `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う）。設定アプリの要求は入力欄の secure と学習可否を持たない
+  ので、Host 全体の状態で判定する。Host の privacy の方針（`SettingsStore::LockPrivacyPolicy`）が secure か学習を
+  許さないとき、または engine が SafeMode のとき（`docs/host-availability-spec.md` §8.5.3）、Host は認証の検査の後、
+  payload の検査の前に `status = error`、`error = blocked`（§4.5）で失敗する。判定と名前は
+  `docs/user-dictionary-pos-spec.md` §6.8 のテキスト形式の辞書の取り込みと同じである。判定は入口の 1 回だけで、
+privacy のロックを archive の読み書きの間は持たない（確定の観測と設定の再読込を待たせないため。途中で方針が
+変わっても、始まった export / import は最後まで進む）
 - バックアップ ZIP には API キー / OpenAI 関連設定を含めない（`settings`
   含める場合は M44 §12.5 と同じ redaction）
 

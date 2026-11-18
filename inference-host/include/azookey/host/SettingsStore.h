@@ -250,6 +250,16 @@ struct InferenceThreadEnvironment {
   unsigned int hardware_concurrency{0};
 };
 
+// host-availability-spec section 8.5.3: overwrites the parsed values with the
+// SafeMode ones (no model, NLL, AI, learning, typo correction or auto-word
+// mining). Load applies it while safeMode.enabled is set; the Host's startup
+// also applies it when it entered SafeMode but the reloaded file lost the flag.
+void ApplySafeModeOverrides(RuntimeSettings& settings);
+// The settings an engine config is built from outside UpdateConfig (at startup
+// and on a power source change): while the engine is in SafeMode they carry
+// the SafeMode values even when the held settings lost the flag (DEV-2091).
+RuntimeSettings SettingsForEngineConfig(RuntimeSettings settings, bool engine_safe_mode);
+
 // Sampled when runtime settings are applied; model reloads reuse the resolved value.
 InferenceThreadEnvironment QueryInferenceThreadEnvironment();
 using InferenceThreadEnvironmentProvider = std::function<InferenceThreadEnvironment()>;

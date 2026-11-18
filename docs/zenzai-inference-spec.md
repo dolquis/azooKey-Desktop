@@ -61,8 +61,8 @@ canonical_for: ["Zenzai 推論コントラクト"]
 
 - バックエンド実行系（CPU/CUDA/WinML）の選定 → `docs/copilot-pc-backend-spec.md`。
 - llama.cpp の CMake 導入・リンク・GGUF ロード境界 → M8-1（DEV-220）。
-- 個人化 n-gram LM（marisa）のブレンド → §9.4 で方式を比べ、v1 では採らない。
-  v1.0 / M8 では採用しない（legacy macOS の `PersonalizationMode` は参照のみ）。
+- 個人化 n-gram LM（marisa）のブレンド → §9.4 で方式を比べ、v1 では採らない（legacy macOS の
+  `PersonalizationMode` は参照のみ）。
 - 本格的な辞書ラティス（M53）・Tiny Reranker（M56）・ModernBERT（M57）→ §7.5 で
   将来統合点のみ示す。
 
@@ -1285,9 +1285,9 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節�
   コードは無い。base 側は Hugging Face の `Miwa-Keita/base_n5_lm` を submodule（`.gitmodules` の
   `legacy/azooKeyMac/Resources/base_n5_lm`）として持ち、アプリに同梱する。Windows で採るには、base の n-gram の配布と
   ライセンスの確認、個人側を学習するための文単位の確定本文、marisa への依存、beam の各 step で
-  token の確率を補正する処理が要る。学習ストアは文を持たない（`docs/learning-data-management-spec.md` §15.2）。
-  確定の本文を新たに保存すると、左文脈の別用途の再利用を禁じる `docs/privacy-and-secure-input-spec.md` §5.3 と、文脈を
-  hash で持つ `docs/user-learning-enhancement-spec.md` §2 に反する。
+  token の確率を補正する処理が要る。学習ストアは確定した文を持たない設計である
+  （`docs/learning-data-management-spec.md` §15.2）。確定の本文を新たに保存すると、文脈を hash で持つ
+  `docs/user-learning-enhancement-spec.md` §2 の方針に反する。
 - **B1**: zenz-v3.2-small は `[PROF]` を学習している（§2.4.1）。`BuildZenzaiPrompt`（§3.3）は `instruction_profile` を
   `[PROF]` に置く。かな漢字変換ではこの値は空で、ローカルの AI 処理（`InferenceEngine::TransformLocal`）だけが指示を
   入れる。DEV-1576 の計測では、M52 の `kana_kanji_eval` 200 件で、アプリの種別から作った文字列（「会社員/文書作成」
@@ -1310,7 +1310,7 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節�
 
 - v1 では A、B1、B2、C のいずれも採らない。Zenzai の生成は利用者ごとに変えない（理由は §9.4.1）。
 - 学習データから作った値で Zenzai の生成を変える個人化は、v1 では採らない。A、B2、C はいずれもこれに当たる。
-  学習した語彙と文体は、§7.1 手順 8 の学習 reranker を通じて候補の並びにだけ効く。
+  学習した語彙と文体は、Zenzai の生成には効かない（候補の並びには §7.1 手順 8 の学習 reranker が反映する）。
 - legacy の `ZenzaiProfile` と `PersonalizationLevel` に当たる製品の設定は持たない。`model.profile` は §9.3 の予約の
   ままとする。§7.5 の統合点に個人化の加点を足す枠は使わない。
 

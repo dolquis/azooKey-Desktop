@@ -104,7 +104,9 @@ TEST(ConversionQualityTest, CanonicalDatasetHashNormalizesLineEndingsAndFramesRe
 #endif
 }
 
-// A temporary directory removed when the test ends.
+#if defined(_WIN32)
+// Helpers for the tests below that need Windows CNG and Normaliz. A temporary directory removed
+// when the test ends.
 class ScopedDirectory {
  public:
   explicit ScopedDirectory(std::string_view name) {
@@ -137,6 +139,7 @@ std::string ReadText(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary);
   return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
+#endif
 
 TEST(ConversionQualityTest, DictionaryBundleHashFramesSortedAzdicNamesAndBytes) {
 #if !defined(_WIN32)

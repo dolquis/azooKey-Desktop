@@ -529,8 +529,8 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 
 ### 12.8 TypoLearningStore（v2）
 
-予定（M55）。形式は DEV-1955 で決める。本節の SQL は設計案であり、コードは v1
-（`typo_corrections.tsv`、`# azookey-typo-correction-tsv escaped=1`）だけを持つ。
+M55 の v2 ストアは SQLite で持ち、本節のスキーマを基にする（DEV-1955）。v1 のストアは
+`typo_corrections.tsv`（`# azookey-typo-correction-tsv escaped=1`）である。
 
 `last_used_at` / `created_at` / `updated_at` はいずれも epoch 秒
 （INTEGER、ミリ秒ではない。`docs/user-learning-enhancement-spec.md` §3.1
@@ -581,8 +581,9 @@ CREATE TABLE typo_settings (
 );
 ```
 
-実装は §3.1（M54）と同様に TSV 拡張で先行し、SQLite 化は将来 M に分離
-する。v1 の `typo_corrections.tsv` から自動マイグレートする。
+v2 は TSV の拡張を経ずに SQLite で始める。v1 の `typo_corrections.tsv` から自動マイグレートし、
+移行後も v1 のファイルを `.bak` として残す。SQLite の取り込み方（依存の入れ方、ライセンス表記、SBOM）、
+破損時の復旧、同時書き込みのロック、学習の削除の手順は DEV-2162 で定め、本節に書く。
 
 ### 12.9 信頼度更新
 
@@ -867,6 +868,11 @@ optional フィールドを追加する（エンベロープ schema 自体は変
   Host の学習許可は受理済み接続の `secure_flag` と両フラグの許可を必要とする。
 
 M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に従う。
+
+訂正候補だけを問い合わせる `QueryCorrections`（`MessageType` の値だけがあり、Dispatcher のハンドラを
+持たない。`docs/ipc-persistence-hardening-spec.md` §6.3）は M55 が所有する（DEV-1959）。上の
+`QueryCandidates` の加算的フィールドは補正の手がかりを運ぶだけで、`QueryCorrections` の payload と
+ハンドラは M55 の補正エンジンの実装で定める。
 
 #### `ObserveTypoRequest` への per-event `secure` / `learning_allowed`
 

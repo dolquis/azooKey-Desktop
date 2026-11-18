@@ -199,6 +199,9 @@ JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame
 request の `type`、`request_id`、`trace_id` を応答 envelope に維持する。
 `Cancel` など fire-and-forget の type のみ無応答を許す。
 認証済み Dispatcher の未配線 type と `Unknown` はこの応答へ統一する（DEV-266）。
+`UpdateUserWord` にはハンドラを置かない。ユーザー辞書の語の更新は `RemoveUserWord` と `AddUserWord` の
+組み合わせで表す（DEV-1959）。`QueryCorrections` の payload とハンドラは M55 の補正エンジンが定める
+（`docs/typo-correction-learning-spec.md` §12.13）。
 併せて MessageType 列挙 ↔ `Payloads` codec の網羅
 整合をテスト / CI で検査し、列挙追加時の codec 取りこぼしを防ぐ。
 

@@ -170,7 +170,7 @@ bool LatticeDictionary::ParseLattice(std::string_view metadata) {
     return Fail("lattice_core META.lattice.pos_name_ids is invalid");
   for (const auto& pair : name_ids->AsArray()) {
     if (pair.IsNull()) {
-      pos_name_ids_.emplace_back(kNoConnectionIndex, kNoConnectionIndex);
+      pos_name_ids_.emplace_back(std::nullopt);
       continue;
     }
     int64_t left = 0, right = 0;
@@ -178,12 +178,13 @@ bool LatticeDictionary::ParseLattice(std::string_view metadata) {
         !Integer(pair.AsArray()[0], 0, UINT16_MAX, left) ||
         !Integer(pair.AsArray()[1], 0, UINT16_MAX, right) || !has_ids(left, right))
       return Fail("lattice_core META.lattice.pos_name_ids is invalid");
-    pos_name_ids_.emplace_back(static_cast<uint16_t>(left), static_cast<uint16_t>(right));
+    pos_name_ids_.emplace_back(
+        std::pair{static_cast<uint16_t>(left), static_cast<uint16_t>(right)});
   }
   const auto noun = pos_index_.find(kDefaultNoun);
-  if (noun == pos_index_.end() || pos_name_ids_[noun->second].first == kNoConnectionIndex)
+  if (noun == pos_index_.end() || !pos_name_ids_[noun->second])
     return Fail("lattice_core META.lattice has no ids for 名詞-普通名詞-一般");
-  noun_ids_ = pos_name_ids_[noun->second];
+  noun_ids_ = *pos_name_ids_[noun->second];
 
   const auto* penalties = member("penalties");
   if (!penalties || !penalties->IsObject())
@@ -216,7 +217,15 @@ bool LatticeDictionary::ParseLattice(std::string_view metadata) {
   return true;
 }
 
-const ILatticeVocabulary& LatticeDictionary::Vocabulary() const noexcept { return *own_; }
+const ILatticeVocabulary& LatticeDictionary::Vocabulary() const noexcept {
+  class NoWords final : public ILatticeVocabulary {
+   public:
+    bool CommonPrefix(std::string_view, std::vector<LatticeEntry>&) const override { return true; }
+  };
+  static const NoWords none;
+  if (!own_) return none;
+  return *own_;
+}
 
 LatticePosInfo LatticeDictionary::ResolvePosName(std::string_view name) const {
   const auto fields = SplitFields(name, '-');
@@ -225,10 +234,9 @@ LatticePosInfo LatticeDictionary::ResolvePosName(std::string_view name) const {
   const auto found = pos_index_.find(name);
   if (found == pos_index_.end()) return info;
   info.pos = found->second;
-  const auto ids = pos_name_ids_[found->second];
-  if (ids.first != kNoConnectionIndex) {
-    info.left_id = ids.first;
-    info.right_id = ids.second;
+  if (const auto& ids = pos_name_ids_[found->second]) {
+    info.left_id = ids->first;
+    info.right_id = ids->second;
   }
   return info;
 }

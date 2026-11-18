@@ -67,9 +67,9 @@ struct LatticeResult {
   uint32_t rejected_entries{};
 };
 
-// Forward Viterbi and backward A* over a built lattice (spec sections 6 and 7).
-LatticeResult SearchLattice(const Lattice& lattice, const ConnectionMatrix& matrix,
-                            const LatticeQuery& query);
+// Forward Viterbi and backward A* over a built lattice, with the matrix it was built with
+// (spec sections 6 and 7).
+LatticeResult SearchLattice(const Lattice& lattice, const LatticeQuery& query);
 
 // Builds and searches `reading` (normalized, UTF-8) with lattice_core's own words followed by
 // `vocabularies`. Returns Unavailable when the dictionary is not loaded.

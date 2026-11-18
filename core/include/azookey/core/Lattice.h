@@ -94,6 +94,8 @@ class Lattice {
  public:
   uint32_t Length() const noexcept { return length_; }
   std::string_view Reading() const noexcept { return reading_; }
+  // The matrix the node indices refer to; null for a lattice that was not built.
+  const ConnectionMatrix* Matrix() const noexcept { return matrix_; }
   const std::vector<LatticeNode>& Nodes() const noexcept { return nodes_; }
   // Indices of the nodes beginning (ending) at code point position `position`, ascending.
   std::span<const uint32_t> BeginningAt(uint32_t position) const noexcept;
@@ -102,6 +104,7 @@ class Lattice {
  private:
   friend class LatticeBuilder;
   std::string_view reading_;
+  const ConnectionMatrix* matrix_{};
   uint32_t length_{};
   std::vector<LatticeNode> nodes_;
   std::vector<uint32_t> begin_offsets_, end_offsets_, by_begin_, by_end_;
@@ -110,6 +113,7 @@ class Lattice {
 enum class LatticeStage : uint8_t {
   Built,    // The lattice is built.
   Forward,  // The forward Viterbi pass is done.
+  Settled,  // The backward search settled its first path.
 };
 
 // Stops of spec section 6.4. on_stage runs after each stage, so tests can raise cancel there
@@ -140,7 +144,8 @@ struct LatticeBuildResult {
   uint32_t rejected_entries{};
 };
 
-// Builds the lattice of a normalized reading (spec section 4). `reading` must outlive `out`.
+// Builds the lattice of a normalized reading (spec section 4). `reading`, the vocabularies'
+// words and `parameters.matrix` must outlive `out`.
 LatticeBuildResult BuildLattice(std::string_view reading, const LatticeParameters& parameters,
                                 std::span<const ILatticeVocabulary* const> vocabularies,
                                 const LatticeLimits& limits, Lattice& out);

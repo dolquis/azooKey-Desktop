@@ -126,6 +126,7 @@ LatticeBuildResult LatticeBuilder::Build(std::string_view reading,
   std::vector<Candidate> candidates;
   Lattice lattice;
   lattice.reading_ = reading;
+  lattice.matrix_ = matrix;
   lattice.length_ = length;
   for (uint32_t p = 0; p < length; ++p) {
     if (limits.Stopped()) {

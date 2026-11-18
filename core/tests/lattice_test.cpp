@@ -242,7 +242,8 @@ LatticeResult Search(const Lattice& lattice, const TestMatrix& matrix, size_t ma
   LatticeQuery query;
   query.max_paths = max_paths;
   query.constraints = std::move(constraints);
-  return SearchLattice(lattice, matrix.Matrix(), query);
+  EXPECT_EQ(lattice.Matrix(), &matrix.Matrix());
+  return SearchLattice(lattice, query);
 }
 
 TEST(LatticeSearch, BestAndNBestMatchExhaustiveEnumeration) {
@@ -463,6 +464,9 @@ TEST(LatticeBuild, RejectsBadInputAndEntries) {
   LatticeConstraints only_break;
   only_break.segment_breaks = {1};
   EXPECT_FALSE(Search(lattice, matrix, 4, only_break).paths.empty());
+  // A lattice that was never built has no matrix to search with.
+  Lattice unbuilt;
+  EXPECT_EQ(SearchLattice(unbuilt, LatticeQuery{}).status, LatticeStatus::Rejected);
 }
 
 TEST(LatticeBuild, VocabularyFailureAndInvalidSurfaceGiveNoPaths) {
@@ -545,15 +549,33 @@ TEST(LatticeSearch, CancelAndDeadlineFollowSection64) {
     };
     // The Built stage is reported by BuildLattice, so it is replayed here before searching.
     if (stage == LatticeStage::Built) flag = true;
-    return SearchLattice(lattice, matrix.Matrix(), query);
+    return SearchLattice(lattice, query);
   };
   const auto before = stop_at(LatticeStage::Built);
   EXPECT_EQ(before.status, LatticeStatus::Aborted);
   EXPECT_TRUE(before.paths.empty());
+  // After the forward pass but before A* settles a path: the forward pass's best path.
   const auto after = stop_at(LatticeStage::Forward);
   EXPECT_EQ(after.status, LatticeStatus::Truncated);
   ASSERT_EQ(after.paths.size(), 1U);
   EXPECT_EQ(after.paths[0].cost, full.paths[0].cost);
+  // After A* settles its first path: that path, and nothing after it.
+  const auto settled = stop_at(LatticeStage::Settled);
+  EXPECT_EQ(settled.status, LatticeStatus::Truncated);
+  ASSERT_EQ(settled.paths.size(), 1U);
+  EXPECT_EQ(settled.paths[0].Surface(), full.paths[0].Surface());
+  EXPECT_EQ(settled.paths[0].cost, full.paths[0].cost);
+  // A deadline that passes after the forward pass truncates the same way as cancel.
+  LatticeQuery timed;
+  timed.max_paths = 4;
+  timed.limits.on_stage = [&timed](LatticeStage reached) {
+    if (reached == LatticeStage::Forward)
+      timed.limits.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  };
+  const auto expired = SearchLattice(lattice, timed);
+  EXPECT_EQ(expired.status, LatticeStatus::Truncated);
+  ASSERT_EQ(expired.paths.size(), 1U);
+  EXPECT_EQ(expired.paths[0].cost, full.paths[0].cost);
 
   // BuildLattice reports Built after the lattice is complete.
   std::atomic<bool> flag{false};

@@ -269,6 +269,8 @@ def write_lattice_fixtures(directory: Path, metadata: dict) -> None:
         "core_cmat_size": patched(core, b"CMAT", 8, "<I", len(ids) + 1),
         "core_cmat_index": patched(core, b"CMAT", 24 + 2 * 10, "<H", 0x7FFF),
         "core_conn_pos": patched(core, b"CONN", first_record(core) + 6, "<H", 0x3FFF),
+        # EIDX[0] (the key いい) points outside ENTS: only a lookup of いい finds it (check (2)).
+        "core_entry": patched(core, b"EIDX", 0, "<I", 0xFFFFFFFF),
         "core_no_cmat": repacked(core, drop=b"CMAT"),
         "core_meta_penalty": repacked(core, without_penalty),
         "core_meta_scale": repacked(core, zero_scale),

@@ -187,7 +187,7 @@ TEST_F(LatticeDictionaryTest, ConvertsASentenceWithParticles) {
   ASSERT_EQ(prefixed.paths[0].segments.size(), 1U);
   EXPECT_EQ(prefixed.paths[0].segments[0].head, 1U);
 
-  // lattice_core holds no katakana words; コーヒー is a loanword (P_kata_own, 0 here).
+  // コーヒー is spelled as its normalized form, so it is a loanword (P_kata_own, 0 here).
   const auto loanword = Convert("こーひー", vocabularies, 1);
   ASSERT_EQ(Surfaces(loanword), std::vector<std::string>{"コーヒー"});
   EXPECT_EQ(loanword.paths[0].cost, 3000 + 3000 + 1000 + 1000);
@@ -222,17 +222,37 @@ TEST_F(LatticeDictionaryTest, LayersWithoutConnectionsAndMutableWordsUseDefaultI
   const auto piyo = Convert("ぴよ", vocabularies, 1);
   ASSERT_EQ(Surfaces(piyo), std::vector<std::string>{"ピヨ"});
   EXPECT_EQ(piyo.paths[0].cost, 2500 + 3000 + 1000 + 1000);
+
+  // Section 4.2: an alias-key match (ヴァ under ば) is used like an exact one. Both cost the
+  // same, so the katakana bytes sort first (section 6.3).
+  DoubleArrayTrie plain;
+  ASSERT_TRUE(plain.Load(Fixture("valid.azdic"), true));
+  const StaticLatticeVocabulary words(dictionary_, plain);
+  const ILatticeVocabulary* plain_vocabularies[] = {&words};
+  EXPECT_EQ(Surfaces(Convert("ば", plain_vocabularies)),
+            (std::vector<std::string>{"ヴァ", "場", "ば"}));
 }
 
 // Section 3.6: a broken lattice_core disables only the lattice.
 TEST_F(LatticeDictionaryTest, BrokenLatticeCoreDisablesOnlyTheLattice) {
-  for (const char* name :
-       {"core_cmat_reserved", "core_cmat_size", "core_cmat_index", "core_conn_pos", "core_no_cmat",
-        "core_meta_penalty", "core_meta_scale"}) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"core_cmat_reserved", "CMAT reserved fields are not zero"},
+      {"core_cmat_size", "CMAT size does not match its header"},
+      {"core_cmat_index", "CMAT left index out of range"},
+      {"core_conn_pos", "CONN part-of-speech index out of range"},
+      {"core_no_cmat", "has no CMAT"},
+      {"core_meta_penalty", "META.lattice.penalties is invalid"},
+      {"core_meta_scale", "META.lattice.C is invalid"},
+  };
+  for (const auto& [name, reason] : cases) {
+    // The trie itself is sound (checks (1)-(3)), so the lattice checks reject it.
+    DoubleArrayTrie trie;
+    EXPECT_TRUE(trie.Load(LatticeFixture(name), true)) << name << ": " << trie.Error();
     LatticeDictionary broken;
     EXPECT_FALSE(broken.Load(LatticeFixture(name), true)) << name;
     EXPECT_FALSE(broken.IsAvailable()) << name;
-    EXPECT_FALSE(broken.Error().empty()) << name;
+    EXPECT_NE(broken.Error().find(reason), std::string_view::npos)
+        << name << ": " << broken.Error();
     const StaticLatticeVocabulary sudachi(broken, layer_);
     const ILatticeVocabulary* vocabularies[] = {&sudachi};
     LatticeQuery query;
@@ -242,9 +262,20 @@ TEST_F(LatticeDictionaryTest, BrokenLatticeCoreDisablesOnlyTheLattice) {
     PrefixMatch match;
     EXPECT_TRUE(layer_.ExactMatch("きょう", match)) << name;
   }
-  // The trie under a rejected lattice_core is still sound: only the lattice tables are not.
-  DoubleArrayTrie core;
-  EXPECT_TRUE(core.Load(LatticeFixture("core_cmat_reserved"), true));
+}
+
+// Section 3.6: lattice_core invalidated by a reference check (azdic spec 15.5 (2)) during a
+// request fails that request, and no lattice is made afterwards.
+TEST_F(LatticeDictionaryTest, LatticeCoreInvalidatedDuringARequestDisablesTheLattice) {
+  LatticeDictionary broken;
+  ASSERT_TRUE(broken.Load(LatticeFixture("core_entry"))) << broken.Error();
+  const StaticLatticeVocabulary sudachi(broken, layer_);
+  const ILatticeVocabulary* vocabularies[] = {&sudachi};
+  LatticeQuery query;
+  EXPECT_EQ(ConvertLattice("いい", broken, vocabularies, query).status, LatticeStatus::Failed);
+  EXPECT_FALSE(broken.IsAvailable());
+  EXPECT_EQ(ConvertLattice("きょう", broken, vocabularies, query).status,
+            LatticeStatus::Unavailable);
 }
 
 // Section 3.6: a layer whose CONN fails check (4) gives its words the default ids, keeps its
@@ -253,13 +284,20 @@ TEST_F(LatticeDictionaryTest, BrokenLayerConnectionsFallBackToDefaultIds) {
   const StaticLatticeVocabulary sound(dictionary_, layer_);
   const ILatticeVocabulary* sound_vocabularies[] = {&sound};
   const auto expected = Surfaces(Convert("きょうはいいてんきです", sound_vocabularies));
-  for (const char* name : {"layer_conn_order", "layer_conn_pos", "layer_conn_id", "layer_space",
-                           "layer_conn_pos_table"}) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"layer_conn_order", "CONN variant table is not monotonic"},
+      {"layer_conn_pos", "CONN part-of-speech index out of range"},
+      {"layer_conn_id", "CONN id is not in the connection matrix"},
+      {"layer_space", "connection_space differs from lattice_core"},
+      {"layer_conn_pos_table", "conn_pos_table is missing"},
+  };
+  for (const auto& [name, reason] : cases) {
     DoubleArrayTrie trie;
     ASSERT_TRUE(trie.Load(LatticeFixture(name), true)) << name << ": " << trie.Error();
     const StaticLatticeVocabulary vocabulary(dictionary_, trie);
     EXPECT_FALSE(vocabulary.UsesConnections()) << name;
-    EXPECT_FALSE(vocabulary.ConnectionError().empty()) << name;
+    EXPECT_NE(vocabulary.ConnectionError().find(reason), std::string_view::npos)
+        << name << ": " << vocabulary.ConnectionError();
     EXPECT_TRUE(trie.IsAvailable()) << name;
     for (const char* key : {"きょう", "てんき", "こーひー"})
       EXPECT_EQ(Lookups(trie, key), Lookups(layer_, key)) << name << " " << key;

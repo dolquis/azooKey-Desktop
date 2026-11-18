@@ -289,7 +289,8 @@ bool Searcher::Emit(const Chain& chain, int32_t cost, LatticeResult& result) {
 }
 
 // Section 6.3: complete paths of one cost, ordered by surface bytes, segment boundaries, word
-// boundaries, then the ids and parts of speech of the words, keep the first of each surface.
+// boundaries, the ids and parts of speech of the words, then their nodes in lattice order (a
+// total order, so no standard library picks differently), keep the first of each surface.
 bool Searcher::Flush(std::vector<Completed>& group, LatticeResult& result) {
   struct Key {
     std::string surface;
@@ -317,8 +318,8 @@ bool Searcher::Flush(std::vector<Completed>& group, LatticeResult& result) {
   }
   group.clear();
   std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
-    return std::tie(a.surface, a.segment_bounds, a.word_bounds, a.words) <
-           std::tie(b.surface, b.segment_bounds, b.word_bounds, b.words);
+    return std::tie(a.surface, a.segment_bounds, a.word_bounds, a.words, a.chain) <
+           std::tie(b.surface, b.segment_bounds, b.word_bounds, b.words, b.chain);
   });
   for (const auto& key : keys) {
     if (result.paths.size() >= query_.max_paths) break;
@@ -339,10 +340,17 @@ void Searcher::Backward(LatticeResult& result) {
   if (!lists_[end_list].empty()) Push(kNoItem, end_list, 0, 0, 0);
   std::vector<Completed> group;
   uint64_t takes = 0, expansions = 0;
+  bool settled = false;
   while (true) {
+    bool flushed = false;
     if (!group.empty() && (heap_.empty() || heap_.top().first > group.front().cost)) {
       if (!Flush(group, result)) return;
       if (result.paths.size() >= query_.max_paths) return;
+      flushed = true;
+      if (!settled && !result.paths.empty()) {
+        settled = true;
+        if (query_.limits.on_stage) query_.limits.on_stage(LatticeStage::Settled);
+      }
     }
     if (heap_.empty()) return;
     if (takes >= take_limit || expansions >= expansion_limit) {
@@ -351,7 +359,8 @@ void Searcher::Backward(LatticeResult& result) {
       if (result.paths.empty()) Emit(ViterbiChain(), best_cost_, result);
       return;
     }
-    if (expansions % kStopCheckInterval == 0 && query_.limits.Stopped()) {
+    // Checked every kStopCheckInterval expansions and after each settled group.
+    if ((flushed || expansions % kStopCheckInterval == 0) && query_.limits.Stopped()) {
       // Section 6.4: the best path only; the forward pass's when A* has not settled one.
       result.status = LatticeStatus::Truncated;
       if (result.paths.size() > 1) result.paths.resize(1);
@@ -426,14 +435,13 @@ std::string LatticePath::Surface() const {
   return surface;
 }
 
-LatticeResult SearchLattice(const Lattice& lattice, const ConnectionMatrix& matrix,
-                            const LatticeQuery& query) {
-  if (!matrix.IsValid()) {
+LatticeResult SearchLattice(const Lattice& lattice, const LatticeQuery& query) {
+  if (!lattice.Matrix() || !lattice.Matrix()->IsValid()) {
     LatticeResult result;
-    result.status = LatticeStatus::Unavailable;
+    result.status = lattice.Matrix() ? LatticeStatus::Unavailable : LatticeStatus::Rejected;
     return result;
   }
-  return Searcher(lattice, matrix, query).Run();
+  return Searcher(lattice, *lattice.Matrix(), query).Run();
 }
 
 LatticeResult ConvertLattice(std::string_view reading, const LatticeDictionary& dictionary,
@@ -453,7 +461,7 @@ LatticeResult ConvertLattice(std::string_view reading, const LatticeDictionary& 
     result.rejected_entries = built.rejected_entries;
     return result;
   }
-  result = SearchLattice(lattice, dictionary.Matrix(), query);
+  result = SearchLattice(lattice, query);
   result.rejected_entries = built.rejected_entries;
   return result;
 }

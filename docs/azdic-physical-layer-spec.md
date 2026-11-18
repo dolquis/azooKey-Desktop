@@ -187,8 +187,8 @@ class DoubleArrayTrie {
 
 1. `DictionaryStore::Lookup`（§14.7）の完全一致経路。`ExactMatch` を使う。
 2. M15 予測候補ウィンドウへの補完供給。`PredictiveSearch` を使う。
-3. 将来のラティス分割（複合語の切り出し）。`CommonPrefixSearch` を使う。M53 の範囲外
-   であり、契約だけを満たしておく。
+3. ラティス変換のノードの構築（`docs/lattice-conversion-spec.md` §4.2）。`CommonPrefixSearch` を
+   `max_results = 0` で使う。
 
 ### 15.5 直列化フォーマット `.azdic` v1
 

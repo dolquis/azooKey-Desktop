@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,7 +40,8 @@ class LatticeDictionary {
   // Loads and checks lattice_core: the trie checks (1)-(3) (`verify` adds (3)), check (4) of
   // CMAT and of its own CONN, and the META.lattice keys of azdic spec section 15.12.
   bool Load(const std::filesystem::path& path, bool verify = false) noexcept;
-  bool IsAvailable() const noexcept { return available_; }
+  // False also once a query has invalidated lattice_core's own trie (azdic spec 15.5 (2)).
+  bool IsAvailable() const noexcept { return available_ && trie_.IsAvailable(); }
   // Why the dictionary is unavailable. Holds no reading or surface.
   std::string_view Error() const noexcept { return error_; }
 
@@ -52,7 +54,7 @@ class LatticeDictionary {
   std::string_view ConnectionSpace() const noexcept { return connection_space_; }
   // META.lattice.pos_names: the part-of-speech index of LatticeEntry and LatticeWord.
   const std::vector<std::string>& PosNames() const noexcept { return pos_names_; }
-  // The kana-only words of lattice_core itself.
+  // The kana-only words of lattice_core itself; no words while unavailable.
   const ILatticeVocabulary& Vocabulary() const noexcept;
 
   // Index, class and representative ids of a UniDic part-of-speech name such as
@@ -73,7 +75,7 @@ class LatticeDictionary {
   LatticeParameters parameters_;
   std::vector<std::string> pos_names_;
   std::map<std::string, uint16_t, std::less<>> pos_index_;
-  std::vector<std::pair<uint16_t, uint16_t>> pos_name_ids_;  // kNoConnectionIndex pair: null
+  std::vector<std::optional<std::pair<uint16_t, uint16_t>>> pos_name_ids_;
   std::pair<uint16_t, uint16_t> noun_ids_{};
   int32_t score_scale_{};
   int16_t default_word_cost_{};

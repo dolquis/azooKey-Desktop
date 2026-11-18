@@ -290,6 +290,16 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 （文節あたり候補数）は Cleanup task では使わず、Host 正規化時に `max_results=1` 固定とする
 （文節候補数は M58-C 側の変換経路で扱う）。
 
+`Dispatcher` は正規化の前に次の 3 つを判定し、どれかに当たれば `AiBackend` を呼ばずに `neural` へ落とす。
+判定の意味は §4.1 の手順 1・2 と同じで、SafeMode は engine の状態で判定する。
+
+- Host が SafeMode（`docs/host-availability-spec.md` §8.5.3）である。
+- 要求の `secure` が true である。
+- Host の privacy 設定が secure（§8）である。
+
+要求が名指しする backend（`openai`、`local-zenzai`）はこの停止を解かない。M58-C は SafeMode でも
+`error=safe_mode` を返さず、secure と同じ応答にする。応答の値は `romaji-batch-conversion-spec.md` §5・§6.2 が定める。
+
 > 共有点: M58-C と M16 は**別 IPC メッセージ**だが、Host 側で同じ
 > `AiBackend::Transform` に集約される。これが「消費者の共有」の実体である。
 
@@ -513,7 +523,7 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 | 消費者 | 一次 | 失敗/`none`/secure 時 | さらに失敗時 |
 |---|---|---|---|
 | M16 | `aiBackend` 変換 | エラーをユーザーに提示し**選択を変更しない**（原文維持） | — |
-| M58-C | `ai-cleanup` | `neural`（zenz かな漢字変換） | かな確定 |
+| M58-C | `ai-cleanup` | `neural`（zenz かな漢字変換）。Host の SafeMode でも同じ（§4.2） | かな確定 |
 | X-3-3 | `local-zenzai` Lint | Lint 不実行（finding 0 件） | — |
 
 - M58-C の連鎖は `romaji-batch-conversion-spec.md` §5 / M58-C 受け入れ条件が正典。
@@ -541,7 +551,9 @@ HTTP status と内部 `AiErrorClass` だけで分類する。
 `AiBackend` の消費側は、設定と当該要求から解決した許可条件で
 処理を制限する。入力先由来の secure 判定は TIP が担い、Host は前面アプリを
 検出しない。`TransformSelectedText` の secure 中の送信抑止は TIP が担い、Host も要求の
-`secure` と Host の privacy 設定で拒否する（§4.1）。
+`secure` と Host の privacy 設定で拒否する（§4.1）。`QueryBatchConversion` の `ai-cleanup`（§4.2）と
+`DetectAnomalies`（`docs/proofread-view-spec.md` §2.9）も、Host の `Dispatcher` の入口で同じく二重に検査し、
+SafeMode を加えた判定で `AiBackend` を呼ばずに止める。
 本節の AI backend ガードは消費側の設計契約であり、共有ゲートインスタンスや
 M48 のモード通知 API を前提としない。
 

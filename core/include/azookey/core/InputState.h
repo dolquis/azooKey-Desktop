@@ -42,12 +42,22 @@ class InputState {
   const std::string& confirmed_kana() const { return kana_; }
   const RomajiKanaConverter& pending_romaji() const { return romaji_; }
   // Latest candidates delivered for the current reading, or the fixed
-  // snapshot while Selecting.
+  // snapshot while Selecting; while the first segment is resized, the list
+  // for it (docs/segment-editing-spec.md §3).
   const std::vector<Candidate>& candidates() const { return candidates_; }
   size_t selected_index() const { return selected_index_; }
   // StartConversion missed the candidate cache and waits for a response.
   bool awaiting_candidates() const { return awaiting_candidates_; }
   const std::string& unicode_hex() const { return unicode_hex_; }
+  // The first segment while Selecting (docs/segment-editing-spec.md §2, §3).
+  // segment_end() is its end e in code points, which is the reading's length n
+  // unless the segment has been shrunk; the remaining reading is empty then.
+  size_t segment_end() const;
+  bool resizing_segment() const { return segment_end_ != 0; }
+  std::string FirstSegmentReading() const;
+  std::string RemainingReading() const;
+  // A resize waits for the first segment's candidates (spec §5.2).
+  bool awaiting_segment_candidates() const { return awaiting_segment_candidates_; }
   bool live_conversion() const { return live_conversion_; }
   bool punctuation_conversion() const { return punctuation_conversion_; }
 
@@ -65,7 +75,9 @@ class InputState {
   InputState WithComposition(std::string confirmed_kana,
                              const RomajiKanaConverter& pending_romaji = {}) const;
   // Apply an accepted corrected reading while preserving active state and candidates.
-  // Clears pending romaji; empty readings and inactive states leave the state unchanged.
+  // Clears pending romaji; empty readings, inactive states and a resized first
+  // segment (whose answers are never corrected, segment-editing-spec §5.1)
+  // leave the state unchanged.
   InputState WithCorrectedReading(std::string confirmed_kana) const;
   // Discard logical composition state without emitting TSF actions.
   InputState Reset() const;
@@ -74,6 +86,13 @@ class InputState {
   // Feedback event: the frontend delivers a fresh (non-stale) candidate
   // response for the current reading.
   HandleResult HandleCandidatesArrived(std::vector<Candidate> candidates) const;
+  // Feedback event: the candidates of `reading`, the first segment a resize
+  // asked for (segment-editing-spec §5.2). They replace the list only while
+  // the state waits for an answer for that reading; an answer for another
+  // reading and an empty one change nothing. Telling a stale answer for the
+  // same reading apart stays with the frontend's request ids (§5.1).
+  HandleResult HandleSegmentCandidatesArrived(const std::string& reading,
+                                              std::vector<Candidate> candidates) const;
 
  private:
   HandleResult HandleIdle(const UserActionEvent& event) const;
@@ -90,6 +109,15 @@ class InputState {
   void CommitCandidate(size_t index, std::vector<ClientAction>& actions, char32_t punctuation = 0);
   void CommitAsIs(std::vector<ClientAction>& actions);
   void AfterReadingChanged(std::vector<ClientAction>& actions);
+  // segment-editing-spec §4, §5: moves e to `end`; an end of n returns to the
+  // whole reading's candidates.
+  void ResizeSegment(size_t end, std::vector<ClientAction>& actions);
+  // Spec §6.1: commits the first segment with candidate `index` and waits for
+  // the remaining reading's candidates.
+  void PartialCommit(size_t index, std::vector<ClientAction>& actions);
+  // The remaining reading becomes the reading and its window query goes out.
+  void ContinueWithRemainingReading(std::vector<ClientAction>& actions);
+  void ClearSegment();
 
   InputStateKind kind_{InputStateKind::Idle};
   std::string kana_;
@@ -97,6 +125,14 @@ class InputState {
   std::vector<Candidate> candidates_;
   size_t selected_index_{0};
   bool awaiting_candidates_{false};
+  // Selecting (segment-editing-spec §3): 0 while the first segment is the
+  // whole reading, otherwise its end e in code points (0 < e < n).
+  size_t segment_end_{0};
+  // Whether this Selecting has resized the first segment.
+  bool segment_resized_{false};
+  // The whole reading's candidates as Selecting was entered.
+  std::vector<Candidate> whole_candidates_;
+  bool awaiting_segment_candidates_{false};
   std::string unicode_hex_;
   bool live_conversion_{false};
   bool punctuation_conversion_{false};

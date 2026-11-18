@@ -214,12 +214,12 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 
 1. 候補窓を閉じる。
 2. composition の先頭文節を確定する候補の表層に置き換えて確定し、残りの読みを composition に残す。この action は
-   確定する表層と残りの読みを持つ。名前は実装で決め、`ClientAction` の末尾に足す。
+   確定する表層と残りの読みを持つ `CommitFirstSegment` で、`ClientAction` の末尾に足す。
 3. `ObserveCommit`（先頭文節の読み、確定した表層）。
 4. 残りの読みの候補窓用の `QueryCandidates`。
 
 F6〜F10 による部分確定は、TIP が `docs/tsf-deep-integration-spec.md` §3.6 の確定の経路で、先頭文節の読みを字種を
-変えて確定する。`InputState` は、その後に上の 4 と同じく残りの読みで要求を出す。
+変えて確定する。`InputState` は、その後に上の 1 と同じく候補窓を閉じ、上の 4 と同じく残りの読みで要求を出す。
 
 部分確定の後、`InputState` は残りの読みを読みとし、`Composing`（ライブ変換 ON なら `Previewing`）で応答を待つ。
 応答が届くと、e が残りの読みの長さの `Selecting` に入る。Space の応答待ち（`docs/legacy-parity-spec.md` §1.2）と
@@ -299,7 +299,7 @@ Enter・→・Ctrl+F・数字（候補窓のクリックと UI-less の `Finaliz
 | TIP | `tsf-tip/tests/onkeydown_preedit_test.cpp`（`DocumentPreeditHarness`）: 先頭文節の要求が §5.1 のフィールドを止め、残りの読みを添える。`corrected_reading` を持つ応答と、読みの違う候補を使わず、ローカル候補に落とす。待つ前の e の応答を使わない。待つ間のキー（伸縮中の ← / → と Backspace を含む）が保留され、候補が差し替わった後に再生される。待つ間のクリックを受けない。待つ間の Esc・IME を Off にするキー・英数モードへの切替・フォーカスの喪失が要求を取り消し、Off・英数モードへの切替・フォーカスの喪失は先頭文節を読みのまま確定して観測しない。待つ間の文字入力が保留され、候補が差し替わった後に表示中の文字列を確定する。750 ms の期限と Host の喪失で、先頭文節の読みのローカル候補になる。Space の応答を待つ間の Shift+← / Shift+→ が、窓が開いた後に伸縮として再生される。TIP の前処理の候補窓では伸縮しない。伸縮中の候補窓のクリックで部分確定する。部分確定で確定した表層の属性が消え、残りの読みが composition に残る。`ShiftStart` が失敗したときに composition を始め直す。確定が拒否されたときに残りの読みの要求を出さない。観測が §8 のとおりになり、残りの読みの要求の左文脈に確定した表層が入る。F6〜F10 の部分確定が先頭文節だけを字種で確定する。一括変換の候補選択の挙動が変わらない |
 | 表示属性 | `tsf-tip/tests/display_attribute_test.cpp`: 伸縮中に Focused と Converted の 2 区間を作る |
 | IPC | `ipc/tests/payloads_test.cpp`: 残りの読みのフィールドの往復と、フィールドの無い JSON を空として読むこと |
-| Host | `inference-host/tests/dispatcher_test.cpp`: 先頭文節の要求で読みを補正せず `corrected_reading` を返さないこと、残りの読みがエンジンへ渡ること。`inference-host/tests/engine_test.cpp`: 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。先頭文節の要求でない要求とモデルを通る要求には、§5.3 の規則が掛からない |
+| Host | `inference-host/tests/dispatcher_test.cpp`: 先頭文節の要求で読みを補正せず `corrected_reading` を返さないこと、残りの読みがエンジンへ渡ること。このうちエンジンへの受け渡しとその試験は、ラティスで残りの読みを使う変更（DEV-2108）と同じ変更で入れる。`inference-host/tests/engine_test.cpp`: 残りの読みを添えた要求で、ラティスの候補が位置 e より前の表層になる。先頭文節の要求でない要求とモデルを通る要求には、§5.3 の規則が掛からない |
 
 ラティスの語の境目の制約と先頭の区間の取り出しは、`docs/lattice-conversion-spec.md` §11 の core のラティスの部品の
 試験が受け持つ。試験の一覧の正典は `docs/test-inventory.md` である。

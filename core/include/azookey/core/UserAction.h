@@ -47,7 +47,9 @@ enum class UserAction : uint16_t {
 
   // F6-F10 commit the reading in one character form
   // (docs/tsf-deep-integration-spec.md §3.6). The TIP commits them on every
-  // input path with BuildCommitForm; InputState leaves them unhandled.
+  // input path with BuildCommitForm; InputState leaves them unhandled, except
+  // that a resized first segment asks for the remaining reading's candidates
+  // (docs/segment-editing-spec.md §6.1).
   CommitHiragana,
   CommitKatakana,
   CommitHalfwidthKatakana,
@@ -58,6 +60,11 @@ enum class UserAction : uint16_t {
   // (docs/commit-undo-spec.md §3). The TIP checks §4 and edits the document
   // (§6) first, then passes the reading it restored in UserActionEvent::reading.
   UndoCommit,
+
+  // Shift+← / Shift+→ while Selecting a normal conversion shrink and extend
+  // the first segment (docs/segment-editing-spec.md §4).
+  ShrinkSegment,
+  ExtendSegment,
 };
 
 inline constexpr uint32_t kModifierShift = 1u << 0;

@@ -27,8 +27,9 @@ using K = InputStateKind;
 constexpr K kAllKinds[] = {K::Idle,      K::Composing,         K::Previewing,
                            K::Selecting, K::ReplaceSuggestion, K::UnicodeInput};
 
-std::optional<UserAction> Action(uint32_t key, uint32_t modifiers, K kind) {
-  const auto event = MapUserAction(key, modifiers, kind);
+std::optional<UserAction> Action(uint32_t key, uint32_t modifiers, K kind,
+                                 bool segment_resize = false) {
+  const auto event = MapUserAction(key, modifiers, kind, segment_resize);
   if (!event) return std::nullopt;
   return event->action;
 }
@@ -52,6 +53,12 @@ const Entry kEntries[] = {
     {VK_DELETE, 0, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_LEFT, 0, {kNone, kNone, kNone, A::Backward, kNone, kNone}},
     {VK_RIGHT, 0, {kNone, kNone, kNone, A::Forward, kNone, kNone}},
+    // Without segment_resize Shift+← / → move like ← / → (the batch segments,
+    // romaji-batch-conversion-spec §4); KeymapTest.SegmentResize* covers it on.
+    {VK_LEFT, kShift, {kNone, kNone, kNone, A::Backward, kNone, kNone}},
+    {VK_RIGHT, kShift, {kNone, kNone, kNone, A::Forward, kNone, kNone}},
+    {VK_LEFT, kCtrl | kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_RIGHT, kCtrl | kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_UP, 0, {kNone, kNone, kNone, A::Up, kNone, kNone}},
     {VK_DOWN, 0, {kNone, kNone, kNone, A::Down, kNone, kNone}},
     // PageUp / PageDown are a page at a time while Selecting only (spec §1.4).
@@ -230,6 +237,27 @@ TEST(KeymapTest, EveryTableEntryMapsPerState) {
           << i;
     }
   }
+}
+
+// M66 (segment-editing-spec §3, §4): segment_resize turns only Shift+← / → of
+// Selecting into ShrinkSegment / ExtendSegment; every other entry is the same,
+// Ctrl+I / Ctrl+O among them.
+TEST(KeymapTest, SegmentResizeMapsOnlyShiftArrowsOfSelecting) {
+  for (const Entry& entry : kEntries) {
+    for (size_t i = 0; i < std::size(kAllKinds); ++i) {
+      auto expected = entry.expected[i];
+      if (kAllKinds[i] == K::Selecting && entry.modifiers == kShift) {
+        if (entry.key == VK_LEFT) expected = A::ShrinkSegment;
+        if (entry.key == VK_RIGHT) expected = A::ExtendSegment;
+      }
+      EXPECT_EQ(Action(entry.key, entry.modifiers, kAllKinds[i], true), expected)
+          << "vk=0x" << std::hex << entry.key << " mods=" << entry.modifiers << " kind=" << std::dec
+          << i;
+    }
+  }
+  const auto shrink = MapUserAction(VK_LEFT, kShift, K::Selecting, true);
+  ASSERT_TRUE(shrink.has_value());
+  EXPECT_EQ(*shrink, (UserActionEvent{A::ShrinkSegment, 0, kShift, 0}));
 }
 
 TEST(KeymapTest, EveryLetterIsInputOutsideReplaceSuggestion) {

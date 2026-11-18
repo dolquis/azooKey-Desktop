@@ -75,6 +75,10 @@ struct PlayBeep {
 struct QueryCandidates {
   std::string reading;
   bool for_window{false};
+  // The first segment's query (docs/segment-editing-spec.md §5.1): the reading
+  // after the first segment, which the frontend sends with the request. Empty
+  // for every other query.
+  std::string remaining_reading;
   friend bool operator==(const QueryCandidates&, const QueryCandidates&) = default;
 };
 // Move only the highlight of the visible candidate window.
@@ -130,6 +134,14 @@ struct ForgetLastCommit {
 struct ToggleDebugWindow {
   friend bool operator==(const ToggleDebugWindow&, const ToggleDebugWindow&) = default;
 };
+// Partial commit (docs/segment-editing-spec.md §6.1): replace the first segment
+// of the marked text with surface and commit it, and keep remaining_reading as
+// the marked text.
+struct CommitFirstSegment {
+  std::string surface;
+  std::string remaining_reading;
+  friend bool operator==(const CommitFirstSegment&, const CommitFirstSegment&) = default;
+};
 
 using ClientAction =
     std::variant<AppendToMarkedText, ReplaceMarkedText, CommitMarkedText, CancelMarkedText,
@@ -137,6 +149,6 @@ using ClientAction =
                  HidePredictionWindow, ReplaceSelectedText, PlayBeep, QueryCandidates,
                  UpdateCandidateSelection, ObserveCommit, ToggleInputMode,
                  ShowReplaceSuggestionPrompt, SubmitReplaceSuggestion, HideReplaceSuggestionPrompt,
-                 ForgetLastCommit, ToggleDebugWindow>;
+                 ForgetLastCommit, ToggleDebugWindow, CommitFirstSegment>;
 
 }  // namespace azookey::core

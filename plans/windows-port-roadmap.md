@@ -524,7 +524,7 @@ M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 M52 + M53 ─→ M65              （モデル非経由のラティス変換。.azdic 物理層とベンチの上に載る）
 M9 / M30 / M49 ─→ M71-A ─→ M71-B（ユーザー辞書の品詞の保存と他 IME の辞書の取り込み → 活用形の展開。M71-B は M65 にも依存）
-M52 + M54 ─→ M74              （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
+M46 + M48 + M52 + M54 ─→ M74  （個人回帰ベンチ。学習ストアを読み取り専用で読み、端末内だけで測る）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -575,7 +575,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   基盤を再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
   M36-B 単体の trending→AutoWordStore とは別経路。spec §14.10。未完了時は当該
   pack を無効として M53 v1 を受け入れる）。
-  M74（個人回帰ベンチ）は M52・M54 を前提とする。
+  M74（個人回帰ベンチ）は M46・M48・M52・M54 を前提とする。
   詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
@@ -2790,7 +2790,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **目的**: 利用者の端末の中だけで、利用者自身の確定履歴（かなの学習ストア）を評価ケースにして、モデル・辞書・
   ビルドを差し替えた前後の変換の当たり方を比べる。M52 の合成データでは測れない、利用者ごとの語彙への当たり方を測る。
   結果はどこへも送らない。
-- **前提**: M52（指標・出力形式・互換キー）、M54（学習ストアの v2 形式と `app_name` 列）。
+- **前提**: M46（privacy の設定の解決と実効の `secureApps`）、M48（アプリ別プロファイルの解決）、M52（指標・出力形式・
+  互換キー）、M54（学習ストアの v2 形式と `app_name` 列）。
 - **変更対象**: `bench/live_bench.cpp`・`bench/BenchmarkCommandLine.cpp`（`--personal-eval` ほかのオプション）、
   `bench/ConversionQuality.cpp`（ケースの作り方、指標、互換キー `eval_source`・`profile_sha256`）、
   `bench/CMakeLists.txt`（テスト）、`inference-host/src/InferenceEngine.cpp`（bench から `instruction_profile` を渡す入口。
@@ -2802,8 +2803,9 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - `azookey_bench --personal-eval --output result.json` が spec §15.6 の指標を出し、学習ストアのファイルのバイト列と
     更新時刻が実行の前後で変わらない
   - `--output` と stderr に読み・表層が出ない。`--per-case` は `--include-personal-text` が無ければ入力エラーになり、
-    有れば spec §15.7 の警告を出して書く
-  - 学習許可が偽になる設定（`secure`、`private`、`custom.learning = false`、設定の読取失敗・JSON 不正）では評価しない
+    有れば spec §15.7 の警告を出して書く。実行のたびに、結果ファイルを共有しない旨を stderr に出す
+  - 学習許可が偽になる設定（`secure`、`private`、`custom.learning = false`、設定の読取失敗・JSON 不正、`--settings` で
+    明示したファイルが無いとき）では評価せず、JSON 不正の設定ファイルを移さない
   - 実効の `secureApps` とアプリ別プロファイルの `privacyMode` / `learningEnabled` に当たる行が、理由ごとの件数とともに
     除かれ、`app_name` が空の行は含まれる（spec §15.4）
   - 同じ学習ストアと構成で 2 回実行すると `eval_dataset_sha256` と精度系の指標が一致し、`--baseline` は互換キーが
@@ -2817,6 +2819,8 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **補足**:
   - 左文脈による同音異義語の選び分けと、学習係数（`docs/user-learning-enhancement-spec.md` §13）の校正は測らない。
     理由は spec §15.1 が持つ
+  - `--dict-dir`・`--lattice` と互換キー `dictionary_bundle_sha256`・`lattice` は M65 が bench に足す。M65 を持たない
+    ビルドの個人回帰ベンチでは受け付けない（spec §15.5）。M65 は M74 の前提ではない
   - Zenzai の個人化は v1 では採らない（`docs/zenzai-inference-spec.md` §9.4.2）。`--profile` は、利用者のデータで
     プロファイルの効果を確かめる手段であり、効果が出たときに `model.profile` を製品の設定にする M を立てる条件は
     同 §9.4.3 が持つ

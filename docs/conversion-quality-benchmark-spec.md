@@ -920,9 +920,15 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   v2 ファイルが無ければ M7 ファイル）だけで、英語の学習チャネル、タイプミス補正、新語候補、ユーザー辞書は読まない。
 - 移行をしない読み込み（`LearningStore::LoadReadOnly`）で読み、保存しない。平文の移行、`.corrupt-*` の複写、
   M7 ファイルの削除は起こさない。読み込みに失敗したら、部分結果を出さずに入力エラーとして終える。学習ストアの
-  ファイルが無いときも読み込みの失敗として扱う。
+  ファイルが無いときも読み込みの失敗として扱う。解析できない行は Host と同じく読み飛ばし
+  （`docs/user-learning-enhancement-spec.md` §3.1）、その件数を除外の理由 `malformed_row`（§15.6）に数える。
 - 学習ストアの位置は Host と同じ既定の位置とし、`--learning <path>` で変えられる。privacy の判定（§15.4）に
   使う設定ファイルも Host と同じ既定の位置とし、`--settings <path>` で変えられる。
+- 設定ファイルは、隔離（`.invalid*` への rename）をしない読み取り専用の parse で読む。Host の `SettingsStore::Load` の
+  ように parse の失敗でファイルを移さない。parse の失敗は設定の不正として扱う（§15.4）。
+- `--settings` で明示したパスにファイルが無いときは、評価せずに入力エラーとして終える。設定ファイルが無いことを
+  normal とみなす `docs/privacy-and-secure-input-spec.md` §5.1 の規則は、既定の位置にファイルが無いとき（設定を
+  一度も保存していないとき）だけに適用する。
 - 行の単位は確定の文節である。文節ごとの確定観測（`CommitSegmentsObservation`）は文節ごとに 1 組を記録する。
 
 ### 15.3 評価ケースの作り方
@@ -958,8 +964,9 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 
 - **実行を止める設定**: 設定を解決した学習許可が偽のときは、評価をせずに入力エラーとして終える
   （`docs/privacy-and-secure-input-spec.md` §5.1 の解決に従う）。`privacy.mode` が `secure` のとき、`private` で学習が
-  止まるとき、`custom` の `custom.learning` が `false` のとき、設定の読取失敗・JSON 不正・未知のモードを含む。
-  学習データの書き出しを secure と学習不許可の間に止める `docs/learning-data-management-spec.md` §8 と同じ規則である。
+  止まるとき、`custom` の `custom.learning` が `false` のとき、設定の読取失敗・JSON 不正・未知のモード、`--settings` で
+  明示したファイルが無いとき（§15.2）を含む。学習データの書き出しを secure と学習不許可の間に止める
+  `docs/learning-data-management-spec.md` §8 と同じ規則である。
 - **除く行**: 実行時の設定で、行の `app_name` について次のどれかに当たる行を除く。理由ごとに件数を数える。
   - 実効の `secureApps`（`docs/privacy-and-secure-input-spec.md` §4.1 の同梱リストと `privacy.secureApps` の和。
     大文字小文字を無視して比べる）に含まれる（理由 `secure_app`）。
@@ -989,7 +996,8 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `--profile-file <path>` | `--profile` と同じ。文字列を UTF-8 のファイルから読み、末尾の改行 1 つを除く。シェルの履歴に文字列を残さないために使う。`--profile` と併用しない |
 
 個人回帰ベンチでは、上の表のオプションと、§7 と同じ意味で使う `--output`、`--baseline`、`--per-case`、`--backend`、
-`--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` だけを受け付ける。それ以外（`--eval`、`--trace`、
+`--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` だけを受け付ける。`--dict-dir` と `--lattice` は M65 が
+`azookey_bench` に足すオプションで（§0）、それを持たないビルドでは受け付けない。それ以外（`--eval`、`--trace`、
 `--trace-output`、`--decode-stats`、`--category`、`--typo-mode`、`--json`、`--ipc`、`--max-p95-ms` など）は入力エラーと
 して終える。変換ごとの記録をファイルへ書く経路を、§15.7 の明示した per-case 以外に作らない。
 
@@ -1018,7 +1026,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | `personal_other` | 上のどれにも当たらない |
 
 `summary` には件数として、ケース数 `n_cases`、純拒否の表層を持つケース数 `n_rejected_cases`、読んだ行数
-`n_rows_read`、理由ごとの除外の件数 `skipped`（`no_net_commit`、`secure_app`、`app_privacy_mode`、
+`n_rows_read`、理由ごとの除外の件数 `skipped`（`malformed_row`、`no_net_commit`、`secure_app`、`app_privacy_mode`、
 `app_learning_disabled`、`over_max_cases`）を載せる。latency は §6.3 と同じに求める。
 
 ### 15.7 出力と baseline
@@ -1033,9 +1041,12 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
   違うキーの名前だけを stderr に出す。A / B の比較は、学習ストアが変わらないうちに 2 つの構成を続けて実行する。
   間に確定があると `eval_dataset_sha256` が変わるので、実行し直す。学習ストアの写しは保存しない。プロファイルの
   有無のように互換キーが違う 2 回の結果は、`diff_vs_baseline` を使わず、2 つの `--output` の `summary` を比べる。
-- `config.profile_sha256` は塩を加えない SHA-256 なので、短いプロファイルは候補の文字列から推測されうる
-  （`docs/learning-data-management-spec.md` §5.1 が平文のハッシュを書かないのと同じ理由）。`none` でない結果ファイルは
-  共有しない。`--profile` か `--profile-file` を使ったときは、そのことを stderr に出す。
+- `eval_source = personal` の結果ファイルは共有しない。`config.eval_dataset_sha256` と `config.profile_sha256` は
+  塩を加えない SHA-256 なので、ケースが少ないときやプロファイルが短いときは、候補の文字列を総当たりして学習データや
+  プロファイルを推測されうる（`docs/learning-data-management-spec.md` §5.1 が平文のハッシュを書かないのと同じ理由）。
+  個人回帰ベンチは、実行のたびにそのことを stderr に出す。§4 の評価データで `--profile` か `--profile-file` を使った
+  結果も、`profile_sha256` が `none` でなければ共有せず、そのときも同じことを stderr に出す。新しい秘密値（塩や鍵）は
+  保存しない。
 - `--per-case <jsonl>` は `--include-personal-text` を併せたときだけ書く。無ければ入力エラーとして終える。形式は
   §8.1 の通常変換ケースで、`id` は `personal_` に §15.3 のケースの順の 1 始まりの 6 桁の連番を付けたもの、行の順も
   ケースの順とし、`category` は §15.6 のカテゴリとする。書くときは、ファイルが利用者の読みと表層を平文で含むこと、
@@ -1053,7 +1064,7 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 | §2 ローカル完結 | 端末の外へ何も送らない（§15.7） |
 | §4.1 `secureApps` | `app_name` を持つ行のうち、実効の `secureApps` に入るアプリの行を除く。大域行に入った過去の確定は除けない（§15.4） |
 | §5 secure 中は学習観測を送らず `Observe` を呼ばない | secure の入力は学習ストアに入らず、評価ケースにならない（§15.4） |
-| §5.1 設定の読取失敗・不正は secure 相当 | 評価をせずに終える（§15.4） |
+| §5.1 設定の読取失敗・不正は secure 相当 | 評価をせずに終える。`--settings` で明示したファイルが無いときも同じ（§15.2・§15.4） |
 | §5.3 左文脈を別用途に再利用しない | 左文脈を保存も利用もしない（§15.1） |
 | §8 ログに `reading` / `surface` を含めない | 出力と stderr に読みと表層を出さず、trace を作らない（§15.5・§15.7）。例外は利用者が明示した per-case ファイルだけ |
 
@@ -1069,7 +1080,10 @@ typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系
 - unit: ケースの作り方（§15.3）。`app_name` をまたぐ和、純確定・相殺・純拒否の分け方（確定の直後に即 Backspace で
   取り消した表層が正解にならないこと）、`expected` の同点の規則、`no_net_commit`、`--max-cases` の決定的な選び方
 - unit: 除外（§15.4）。実効の `secureApps`、`privacyMode`、`learningEnabled` の各理由と、`app_name` が空の行を含めること
-- unit: 実行を止める設定（§15.4）。secure、`private`、`custom.learning = false`、設定の読取失敗と JSON 不正で評価しない
+- unit: 実行を止める設定（§15.4）。secure、`private`、`custom.learning = false`、設定の読取失敗と JSON 不正、`--settings` で
+  明示したファイルが無いときに評価しないこと。JSON 不正の設定ファイルを移さないこと（§15.2）
+- unit: 解析できない行を読み飛ばし、`malformed_row` に数えること（§15.2）
+- unit: 個人回帰ベンチの実行のたびに、結果ファイルを共有しない旨を stderr に出すこと（§15.7）
 - unit: 学習ストアのファイルが無いときは入力エラー、空の学習ストアでは `n_cases = 0` で正常に終えること（§15.2・§15.6）
 - unit: 出力に読み・表層・プロファイルの文字列が出ないこと（固定の学習ストアから作った `--output` と stderr を走査する）
 - unit: `eval_dataset_sha256` が同じ学習ストアで一致し、行の順序に依存しないこと

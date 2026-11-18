@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "CandidateSelection.h"
+#include "azookey/core/CandidatePage.h"
 #include "azookey/tsf/TipRuntimeLog.h"
 
 namespace azookey::tsf {
@@ -330,6 +331,28 @@ HRESULT CandidateUiCoordinator::SetSelection(int selected_idx) {
     return ui_element_mgr_->UpdateUIElement(ui_element_id_);
   }
   return S_OK;
+}
+
+const std::vector<uint32_t>& CandidateUiCoordinator::PageSplit() const {
+  static const std::vector<uint32_t> kNinePerPage;
+  if (!ui_element_ || tip_draws_) return kNinePerPage;
+  return ui_element_->AppPageSplit();
+}
+
+int CandidateUiCoordinator::DigitTarget(int digit) const {
+  if (items_.empty() || selected_idx_ < 0) return -1;
+  const auto target =
+      core::CandidateByDigit(static_cast<size_t>(selected_idx_), digit, items_.size(), PageSplit());
+  return target ? static_cast<int>(*target) : -1;
+}
+
+HRESULT CandidateUiCoordinator::MovePage(bool forward) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  if (items_.empty() || selected_idx_ < 0) return S_FALSE;
+  const auto target = core::CandidateOnAdjacentPage(static_cast<size_t>(selected_idx_), forward,
+                                                    items_.size(), PageSplit());
+  if (!target) return S_FALSE;
+  return SetSelection(static_cast<int>(*target));
 }
 
 HRESULT CandidateUiCoordinator::EnsureUiElementMgr(ITfThreadMgr* thread_mgr) {

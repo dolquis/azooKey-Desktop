@@ -736,8 +736,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
-                                    HostLearningBlocked(privacy))) {
+          parsed &&
+          LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }

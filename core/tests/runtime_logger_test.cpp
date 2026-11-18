@@ -457,10 +457,10 @@ TEST(RuntimeLoggerTest, RawKeysStayRedactedEvenWhenBodyLoggingIsAllowed) {
     options.body_opt_in = opt_in;
     RuntimeLogger logger(options);
     // Non-secure and detailed: the only policy under which body fields may appear.
-    const auto line = logger.FormatRecord(RuntimeLogLevel::Info, "raw_keys_probe",
-                                          {{"reading", SafeLogText("body-sentinel")},
-                                           {"raw_keys", SafeLogText("rawkeys-sentinel")}},
-                                          {false, true});
+    const auto line = logger.FormatRecord(
+        RuntimeLogLevel::Info, "raw_keys_probe",
+        {{"reading", SafeLogText("body-sentinel")}, {"raw_keys", SafeLogText("rawkeys-sentinel")}},
+        {false, true});
 #if defined(_DEBUG) && !defined(NDEBUG)
     EXPECT_EQ(line.find("body-sentinel") != std::string::npos, opt_in);
 #else

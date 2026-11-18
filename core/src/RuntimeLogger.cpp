@@ -164,8 +164,8 @@ bool IsBodyField(std::string_view key) {
   // redacted even when body logging is opted in (typo-correction-learning-spec
   // §12.12.1 discards it right after abstraction).
   constexpr std::array<std::string_view, 8> fields = {
-      "reading",     "surface",        "surface_text", "candidate.text",
-      "preedit_text", "composition",   "committed_text", "prompt"};
+      "reading",      "surface",     "surface_text",   "candidate.text",
+      "preedit_text", "composition", "committed_text", "prompt"};
   return std::find(fields.begin(), fields.end(), lower) != fields.end();
 }
 

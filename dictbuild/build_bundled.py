@@ -23,7 +23,12 @@ SUDACHI_ARCHIVES = (
     ("small_lex.zip", "b578ac9545899783d5d7e30d5d78d5d9dcf40b36965d4af0663ec2eb041c1093"),
     ("core_lex.zip", "a2b39e1572adab08a649b1390b134517adc55f1d733c59358b113298788bf31c"),
 )
+# The connection matrix of the same id space. It sits directly under the raw distribution,
+# outside the per-release directories, so it is pinned by SHA256 alone (azdic spec section 15.12).
+MATRIX_ARCHIVE = ("matrix.def.zip", "3ccaed582481b31be170c7200cf1cb2856f2d14c2fa601b3692d97dbad5a3bd1")
+PINNED_ARCHIVES = (*SUDACHI_ARCHIVES, MATRIX_ARCHIVE)
 LAYER = "sudachi_lexicon"
+LATTICE_CORE = "lattice_core"
 TECHNICAL_LAYER = "technical_terms_lexicon"
 
 
@@ -35,15 +40,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def fetch(cache: Path, name: str, expected: str, offline: bool) -> Path:
-    path = cache / SUDACHI_REVISION / name
+def fetch(cache: Path, name: str, expected: str, offline: bool, directory: str = SUDACHI_REVISION) -> Path:
+    """Returns the cached upstream archive `directory/name`, downloading it unless `offline`."""
+    path = cache / directory / name if directory else cache / name
     if path.is_file() and sha256(path) == expected:
         return path
     if offline:
         raise ValueError(f"{path} is missing or does not match the pinned SHA256")
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".part")
-    url = f"{SUDACHI_BASE_URL}/{SUDACHI_REVISION}/{name}"
+    url = f"{SUDACHI_BASE_URL}/{directory}/{name}" if directory else f"{SUDACHI_BASE_URL}/{name}"
     print(f"build_bundled: downloading {url}", file=sys.stderr)
     with urllib.request.urlopen(url, timeout=600) as response, partial.open("wb") as out:
         while block := response.read(1 << 20):
@@ -56,12 +62,27 @@ def fetch(cache: Path, name: str, expected: str, offline: bool) -> Path:
     return path
 
 
+def sudachi_metadata() -> dict:
+    return json.loads((HERE / "sources" / f"{LAYER}.metadata.json").read_text(encoding="utf-8"))
+
+
 def build_sudachi(cache: Path, offline: bool, work: Path) -> tuple[bytes, str]:
+    """Builds sudachi_lexicon with CONN. Leaves in `work` the TSVs build_lattice_core reads."""
     archives = [fetch(cache, name, digest, offline) for name, digest in SUDACHI_ARCHIVES]
-    tsv = work / f"{LAYER}.lex.tsv"
-    extract_sudachi.write_tsv(archives, SUDACHI_REVISION, tsv)
-    metadata = json.loads((HERE / "sources" / f"{LAYER}.metadata.json").read_text(encoding="utf-8"))
-    return dictbuild.build([tsv], metadata, dictbuild.LAYERS.index(LAYER), HERE / "notices")
+    matrix = fetch(cache, *MATRIX_ARCHIVE, offline, directory="")
+    tsv, connections = work / f"{LAYER}.lex.tsv", work / f"{LAYER}.conn.tsv"
+    extract_sudachi.write_tsv(archives, SUDACHI_REVISION, tsv, connections=connections,
+                              kana=work / f"{LATTICE_CORE}.lex.tsv")
+    return dictbuild.build([tsv], sudachi_metadata(), dictbuild.LAYERS.index(LAYER), HERE / "notices",
+                           connections, dictbuild.connection_space(matrix))
+
+
+def build_lattice_core(cache: Path, offline: bool, work: Path) -> tuple[bytes, str]:
+    """Builds lattice_core from the TSVs build_sudachi left in `work` and the pinned matrix."""
+    matrix = fetch(cache, *MATRIX_ARCHIVE, offline, directory="")
+    return dictbuild.build_lattice_core([work / f"{LATTICE_CORE}.lex.tsv"], work / f"{LAYER}.conn.tsv",
+                                        matrix, sudachi_metadata(), dictbuild.LAYERS.index(LAYER),
+                                        HERE / "notices")
 
 
 def build_technical_terms() -> tuple[bytes, str]:
@@ -83,23 +104,37 @@ def build_bundle(output: Path, cache: Path, offline: bool) -> None:
             (LAYER, lambda: build_sudachi(cache, offline, Path(work)),
              f"Derived from the SudachiDict {SUDACHI_REVISION} raw lexicon by "
              f"dictbuild/extract_sudachi.py (entries filtered by part of speech, reading and cost "
-             f"<= {extract_sudachi.DEFAULT_MAX_COST}; readings converted to hiragana) and "
-             "dictbuild/dictbuild.py. It is not the upstream distribution."),
+             f"<= {extract_sudachi.DEFAULT_MAX_COST}; readings converted to hiragana; connection ids "
+             "and costs kept in the CONN section) and dictbuild/dictbuild.py. "
+             "It is not the upstream distribution."),
+            (LATTICE_CORE, lambda: build_lattice_core(cache, offline, Path(work)),
+             f"Derived from the SudachiDict {SUDACHI_REVISION} raw lexicon and the SudachiDict "
+             f"{MATRIX_ARCHIVE[0]} (SHA256 {MATRIX_ARCHIVE[1]}), part of UniDic, by "
+             "dictbuild/extract_sudachi.py and dictbuild/dictbuild.py: the words spelled in the "
+             "hiragana of their reading with their connection ids and costs, the connection "
+             "matrix cells those and the sudachi_lexicon words use, and a part-of-speech table. "
+             "It is not the upstream distribution."),
             (TECHNICAL_LAYER, build_technical_terms,
              "Built from the project-authored Apache-2.0 seed in "
              "dictbuild/sources/technical_terms_lexicon.lex.tsv by dictbuild/dictbuild.py."),
         )
+        attributed = {}
         for layer, builder, description in builders:
             image, layer_notices = builder()
             artifact = dictionaries / f"{layer}.azdic"
             artifact.write_bytes(image)
             dictbuild.verify(artifact.read_bytes())
+            # lattice_core carries the sources of sudachi_lexicon: refer to them, not repeat them.
+            if layer_notices in attributed:
+                layer_notices = f"Attribution: the same as {attributed[layer_notices]} above.\n"
+            else:
+                attributed[layer_notices] = artifact.name
             notices.append(f"{artifact.name}\n{description}\n\n{layer_notices}")
             print(f"build_bundled: wrote {artifact} ({len(image)} bytes)", file=sys.stderr)
     (output / "ThirdPartyNotices.txt").write_text("\n".join(notices), encoding="utf-8", newline="\n")
     if bundle_provenance.generation_inputs(HERE.parent) != inputs:
         raise ValueError("bundled dictionary inputs changed during generation; rebuild")
-    bundle_provenance.write_receipt(output, inputs, SUDACHI_REVISION, SUDACHI_ARCHIVES)
+    bundle_provenance.write_receipt(output, inputs, SUDACHI_REVISION, PINNED_ARCHIVES)
 
 
 def main() -> int:

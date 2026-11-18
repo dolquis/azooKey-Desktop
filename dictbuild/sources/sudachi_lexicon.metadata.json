@@ -4,8 +4,8 @@
       "source_id": "sudachidict-core",
       "spdx": "Apache-2.0",
       "upstream_url": "https://github.com/WorksApplications/SudachiDict",
-      "upstream_revision": "20260723 (raw small_lex.zip and core_lex.zip)",
-      "transform": "dictbuild/extract_sudachi.py --max-cost 10000 (skips non-proper-noun entries spelled with a non-CP932 variant glyph that SudachiDict normalizes to a CP932 one, except the Joyo standard forms 剝 塡 頰 𠮟)",
+      "upstream_revision": "20260723 (raw small_lex.zip and core_lex.zip); matrix.def.zip (SHA256 3ccaed582481b31be170c7200cf1cb2856f2d14c2fa601b3692d97dbad5a3bd1)",
+      "transform": "dictbuild/extract_sudachi.py --max-cost 10000 (skips non-proper-noun entries spelled with a non-CP932 variant glyph that SudachiDict normalizes to a CP932 one, except the Joyo standard forms 剝 塡 頰 𠮟); connection ids and costs kept in CONN; lattice_core built by dictbuild/dictbuild.py from the words spelled in the hiragana of their reading and matrix.def.zip (SHA256 3ccaed582481b31be170c7200cf1cb2856f2d14c2fa601b3692d97dbad5a3bd1)",
       "copyright": "Copyright (c) 2017-2023 Works Applications Co., Ltd.",
       "notice_ids": ["sudachidict-legal"]
     }

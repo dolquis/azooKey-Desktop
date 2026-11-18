@@ -738,6 +738,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // How long the worker waits for the Host's answer, instead of openAiTimeoutMs + 5 s.
   void set_transform_wait_for_test(int ms) { transform_wait_ms_for_test_ = ms; }
+  // Ends the worker's wait for the answer it sent as at the deadline, so a test
+  // drives the timeout without the wall clock (as DEV-1830 does for queries).
+  void expire_transform_deadline_for_test() { transform_deadline_expire_for_test_.store(true); }
   void set_host_transform_capability_for_test(bool supported) {
     ipc_host_transform_selected_text_.store(supported);
   }
@@ -1444,6 +1447,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool prompt_dialog_headless_for_test_{false};
   bool prompt_dialog_hidden_for_test_{false};
   std::optional<int> transform_wait_ms_for_test_;
+  std::atomic<bool> transform_deadline_expire_for_test_{false};
 #endif
   struct PredictionRequest {
     uint64_t generation;

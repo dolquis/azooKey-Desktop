@@ -18660,26 +18660,26 @@ class TransformHost {
 void DropTheConnectionWithARequest(MagicConversionHarness& m, TransformHost& host,
                                    ReconnectGate& gate, bool timed_out) {
   gate.Arm();
-  // Long enough for the worker to send it first, as in the timeout test above.
-  m.h.service.set_transform_wait_for_test(timed_out ? 1000 : 60000);
+  // Far longer than the test: the timeout comes from the hook below, once the
+  // request is with the Host, never from a late worker.
+  m.h.service.set_transform_wait_for_test(60000);
   m.DoubleTap(kKanaKey);
   ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
   m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+  ASSERT_TRUE(WaitUntil([&] { return host.transforms() == 1; }, std::chrono::seconds(10)));
   if (timed_out) {
+    m.h.service.expire_transform_deadline_for_test();
     ASSERT_TRUE(WaitForTransformOutcome(m.h.service));
     m.h.service.process_candidates_ready_for_test();
     const auto view = m.h.service.magic_conversion_view_for_test();
     ASSERT_TRUE(view.has_value());
     ASSERT_EQ(view->status, azookey::tsf::TransformFailureMessage(
                                 std::nullopt, std::nullopt, azookey::tsf::PromptFailure::TimedOut));
-  } else {
-    ASSERT_TRUE(WaitUntil([&] { return host.transforms() == 1; }, std::chrono::seconds(10)));
   }
   m.h.service.cancel_magic_conversion_for_test();
   ASSERT_TRUE(gate.WaitHeld());
   ASSERT_TRUE(m.h.service.ipc_host_unavailable_for_test());
-  // The window opens again with a wait far longer than the test.
-  m.h.service.set_transform_wait_for_test(60000);
+  // The window opens again.
   m.DoubleTap(kKanaKey);
   ASSERT_TRUE(m.h.service.magic_conversion_open_for_test());
 }

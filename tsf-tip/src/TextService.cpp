@@ -10610,6 +10610,9 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
   };
   const auto deadline = request.deadline;
   while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
+#ifdef AZOOKEY_TSF_TESTING
+    if (transform_deadline_expire_for_test_.exchange(false)) break;
+#endif
     if (stale()) {
       drop_to_cancel();
       return false;

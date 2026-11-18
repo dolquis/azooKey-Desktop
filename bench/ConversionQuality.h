@@ -37,6 +37,10 @@ struct ConversionQualityOptions {
   std::string decode{"simple"};
   std::string learning_state{"empty"};
   std::string typo_mode{"off"};
+  // Compatibility keys of the bundled dictionary run (spec section 14.1): DictionaryBundleSha256
+  // of --dict-dir, and whether lattice conversion stage 1 was on.
+  std::string dictionary_bundle_sha256{"none"};
+  std::string lattice{"off"};
   size_t beam_width{1};
   size_t n_best{kConversionQualityCandidateLimit};
   size_t max_new_tokens{0};
@@ -57,6 +61,11 @@ size_t LevenshteinDistance(const std::vector<char32_t>& hypothesis,
 CandidateMatchMetrics EvaluateCandidateMatch(const std::string& top1, const std::string& expected,
                                              const std::vector<std::string>& acceptable);
 std::string EvaluationDatasetSha256(const std::filesystem::path& path);
+// SHA-256 over the .azdic files of `directory`, ordered by file name bytes, each framed as
+// file name (UTF-8) + 0x00 + file bytes (spec section 14.1). Throws when there is none.
+std::string DictionaryBundleSha256(const std::filesystem::path& directory);
+// Whether `text` holds a katakana letter, U+30A1..U+30FA (lattice-conversion-spec section 10.2).
+bool ContainsKatakana(const std::string& text);
 
 bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
                                     const CandidateQuery& query, std::string* error);

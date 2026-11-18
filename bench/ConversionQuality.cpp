@@ -199,10 +199,10 @@ double Ratio(size_t numerator, size_t denominator) {
   return denominator == 0 ? 0.0 : static_cast<double>(numerator) / denominator;
 }
 
-double Percentile95(std::vector<double> values) {
+double Percentile(std::vector<double> values, double fraction) {
   if (values.empty()) return 0.0;
   std::sort(values.begin(), values.end());
-  const size_t index = static_cast<size_t>(0.95 * static_cast<double>(values.size() - 1));
+  const size_t index = static_cast<size_t>(fraction * static_cast<double>(values.size() - 1));
   return values[index];
 }
 
@@ -248,7 +248,8 @@ j::Object SerializeMetrics(const Aggregate& aggregate, bool include_diagnostics)
   output.emplace("acceptable_match_rate", j::Value(Ratio(aggregate.acceptable, aggregate.count)));
   output.emplace("cer", j::Value(Ratio(aggregate.edit_distance, aggregate.reference_length)));
   output.emplace("exact_match_rate", j::Value(Ratio(aggregate.exact, aggregate.count)));
-  output.emplace("latency_p95_ms", j::Value(Percentile95(aggregate.latencies)));
+  output.emplace("latency_p95_ms", j::Value(Percentile(aggregate.latencies, 0.95)));
+  output.emplace("latency_p99_ms", j::Value(Percentile(aggregate.latencies, 0.99)));
   output.emplace("nfkc_cer",
                  j::Value(Ratio(aggregate.nfkc_edit_distance, aggregate.nfkc_reference_length)));
   output.emplace("nfkc_exact_match_rate", j::Value(Ratio(aggregate.nfkc_exact, aggregate.count)));
@@ -330,13 +331,10 @@ std::string Hex(const std::vector<unsigned char>& bytes) {
   return output;
 }
 
-std::string Sha256File(const std::filesystem::path& path, std::string_view prefix,
-                       bool normalize_crlf) {
+// SHA-256 of the concatenation of each part's prefix followed by its file bytes.
+std::string Sha256Files(const std::vector<std::pair<std::string, std::filesystem::path>>& parts,
+                        bool normalize_crlf) {
 #if defined(_WIN32)
-  std::ifstream input(path, std::ios::binary);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open file for SHA-256: " + path.string());
-  }
   BCRYPT_ALG_HANDLE algorithm = nullptr;
   BCRYPT_HASH_HANDLE hash = nullptr;
   DWORD object_size = 0;
@@ -370,54 +368,69 @@ std::string Sha256File(const std::filesystem::path& path, std::string_view prefi
       throw std::runtime_error("failed to calculate SHA-256");
     }
   };
-  update(reinterpret_cast<const unsigned char*>(prefix.data()), prefix.size());
   std::array<unsigned char, 64 * 1024> buffer{};
-  bool pending_cr = false;
-  while (input) {
-    input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count <= 0) continue;
-    if (!normalize_crlf) {
-      update(buffer.data(), static_cast<size_t>(count));
-      continue;
+  for (const auto& [prefix, path] : parts) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+      cleanup();
+      throw std::runtime_error("failed to open file for SHA-256: " + path.string());
     }
-    std::vector<unsigned char> normalized;
-    normalized.reserve(static_cast<size_t>(count) + 1);
-    for (std::streamsize index = 0; index < count; ++index) {
-      const auto byte = buffer[static_cast<size_t>(index)];
-      if (pending_cr) {
-        if (byte == '\n') {
-          normalized.push_back('\n');
+    update(reinterpret_cast<const unsigned char*>(prefix.data()), prefix.size());
+    bool pending_cr = false;
+    while (input) {
+      input.read(reinterpret_cast<char*>(buffer.data()),
+                 static_cast<std::streamsize>(buffer.size()));
+      const auto count = input.gcount();
+      if (count <= 0) continue;
+      if (!normalize_crlf) {
+        update(buffer.data(), static_cast<size_t>(count));
+        continue;
+      }
+      std::vector<unsigned char> normalized;
+      normalized.reserve(static_cast<size_t>(count) + 1);
+      for (std::streamsize index = 0; index < count; ++index) {
+        const auto byte = buffer[static_cast<size_t>(index)];
+        if (pending_cr) {
+          if (byte == '\n') {
+            normalized.push_back('\n');
+            pending_cr = false;
+            continue;
+          }
+          normalized.push_back('\r');
           pending_cr = false;
-          continue;
         }
-        normalized.push_back('\r');
-        pending_cr = false;
+        if (byte == '\r') {
+          pending_cr = true;
+        } else {
+          normalized.push_back(byte);
+        }
       }
-      if (byte == '\r') {
-        pending_cr = true;
-      } else {
-        normalized.push_back(byte);
-      }
+      update(normalized.data(), normalized.size());
     }
-    update(normalized.data(), normalized.size());
+    if (pending_cr) {
+      constexpr unsigned char carriage_return = '\r';
+      update(&carriage_return, 1);
+    }
+    if (!input.eof()) {
+      cleanup();
+      throw std::runtime_error("failed to calculate SHA-256");
+    }
   }
-  if (pending_cr) {
-    constexpr unsigned char carriage_return = '\r';
-    update(&carriage_return, 1);
-  }
-  if (!input.eof() || BCryptFinishHash(hash, digest.data(), hash_size, 0) < 0) {
+  if (BCryptFinishHash(hash, digest.data(), hash_size, 0) < 0) {
     cleanup();
     throw std::runtime_error("failed to calculate SHA-256");
   }
   cleanup();
   return Hex(digest);
 #else
-  (void)path;
-  (void)prefix;
+  (void)parts;
   (void)normalize_crlf;
   throw std::runtime_error("conversion-quality SHA-256 is only available on Windows");
 #endif
+}
+
+std::string Sha256File(const std::filesystem::path& path, std::string prefix, bool normalize_crlf) {
+  return Sha256Files({{std::move(prefix), path}}, normalize_crlf);
 }
 
 std::string Sha256File(const std::filesystem::path& path) { return Sha256File(path, {}, false); }
@@ -468,6 +481,8 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
       "batch_size",
       "typo_correction_mode",
       "learning_state",
+      "dictionary_bundle_sha256",
+      "lattice",
       "category_filter",
       "eval_dataset_sha256",
   };
@@ -546,6 +561,29 @@ std::string EvaluationDatasetSha256(const std::filesystem::path& path) {
   std::string prefix(reinterpret_cast<const char*>(relative_utf8.data()), relative_utf8.size());
   prefix.push_back('\0');
   return Sha256File(absolute, prefix, true);
+}
+
+std::string DictionaryBundleSha256(const std::filesystem::path& directory) {
+  std::vector<std::pair<std::string, std::filesystem::path>> parts;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (!entry.is_regular_file() || entry.path().extension() != ".azdic") continue;
+    const auto name = entry.path().filename().u8string();
+    std::string prefix(reinterpret_cast<const char*>(name.data()), name.size());
+    prefix.push_back('\0');
+    parts.emplace_back(std::move(prefix), entry.path());
+  }
+  if (parts.empty()) {
+    throw std::invalid_argument("--dict-dir holds no .azdic file: " + directory.string());
+  }
+  // The NUL right after each name keeps the byte order of the names themselves.
+  std::sort(parts.begin(), parts.end());
+  return Sha256Files(parts, false);
+}
+
+bool ContainsKatakana(const std::string& text) {
+  const auto code_points = DecodeUtf8CodePoints(text);
+  return std::any_of(code_points.begin(), code_points.end(),
+                     [](char32_t c) { return c >= 0x30A1 && c <= 0x30FA; });
 }
 
 std::vector<char32_t> DecodeUtf8CodePoints(const std::string& text) {
@@ -685,6 +723,8 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     evaluated.reserve(cases.size());
     Aggregate summary;
     std::map<std::string, Aggregate> by_category;
+    // Cases whose expected surface holds katakana (lattice-conversion-spec section 10.2).
+    Aggregate katakana;
     for (auto& item : cases) {
       const std::string& reading = item.typo ? item.observed_reading : item.input;
       std::vector<double> latencies;
@@ -713,6 +753,9 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
       Add(&summary, result, !typo_clean, options.typo_mode);
       if (!typo_clean) {
         Add(&by_category[result.source.categories.front()], result, true, options.typo_mode);
+        if (ContainsKatakana(result.source.expected)) {
+          Add(&katakana, result, true, options.typo_mode);
+        }
       }
       evaluated.push_back(std::move(result));
     }
@@ -725,6 +768,10 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
       metrics.emplace("n", j::Value(static_cast<uint64_t>(aggregate.count)));
       categories_json.emplace(name, j::Value(std::move(metrics)));
     }
+    auto katakana_json = SerializeMetrics(katakana, false);
+    katakana_json.emplace("n", j::Value(static_cast<uint64_t>(katakana.count)));
+    j::Object subsets_json;
+    subsets_json.emplace("katakana", j::Value(std::move(katakana_json)));
     j::Object config;
     config.emplace("backend", j::Value(options.backend));
     config.emplace("batch_size", j::Value(options.batch_size));
@@ -732,8 +779,10 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     config.emplace("build_id", j::Value(options.build_id));
     config.emplace("category_filter", j::Value(options.category));
     config.emplace("decode", j::Value(options.decode));
+    config.emplace("dictionary_bundle_sha256", j::Value(options.dictionary_bundle_sha256));
     config.emplace("eval_dataset_sha256", j::Value(EvaluationDatasetSha256(options.eval_path)));
     config.emplace("host_version", j::Value(options.host_version));
+    config.emplace("lattice", j::Value(options.lattice));
     config.emplace("learning_state", j::Value(options.learning_state));
     config.emplace("max_new_tokens", j::Value(options.max_new_tokens));
     config.emplace(
@@ -749,6 +798,7 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
 
     j::Object root;
     root.emplace("by_category", j::Value(categories_json));
+    root.emplace("by_subset", j::Value(std::move(subsets_json)));
     root.emplace("diff_vs_baseline", j::Value(BaselineDiff(options.baseline_path, config,
                                                            summary_json, categories_json)));
     root.emplace("config", j::Value(std::move(config)));

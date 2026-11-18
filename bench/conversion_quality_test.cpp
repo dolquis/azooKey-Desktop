@@ -4,12 +4,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ConversionQuality.h"
+#include "azookey/ipc/Json.h"
 
 namespace azookey::bench {
 namespace {
@@ -99,6 +101,136 @@ TEST(ConversionQualityTest, CanonicalDatasetHashNormalizesLineEndingsAndFramesRe
 
   EXPECT_EQ(EvaluationDatasetSha256(lf_path), EvaluationDatasetSha256(crlf_path));
   EXPECT_NE(EvaluationDatasetSha256(lf_path), EvaluationDatasetSha256(other_path));
+#endif
+}
+
+// A temporary directory removed when the test ends.
+class ScopedDirectory {
+ public:
+  explicit ScopedDirectory(std::string_view name) {
+    static std::atomic<uint64_t> sequence{0};
+    path_ = std::filesystem::temp_directory_path() /
+            (std::string(name) + "-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+             std::to_string(sequence.fetch_add(1)));
+    std::filesystem::create_directories(path_);
+  }
+  ~ScopedDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+};
+
+void WriteBytes(const std::filesystem::path& path, std::string_view bytes) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(output.is_open());
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  ASSERT_TRUE(output.good());
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+TEST(ConversionQualityTest, DictionaryBundleHashFramesSortedAzdicNamesAndBytes) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "SHA-256 uses Windows CNG";
+#else
+  ScopedDirectory directory("azookey-dictionary-bundle");
+  const auto& root = directory.path();
+  EXPECT_THROW(DictionaryBundleSha256(root), std::invalid_argument);
+  WriteBytes(root / "a.azdic", "x");
+  WriteBytes(root / "notes.txt", "ignored");
+  // SHA-256 of "a.azdic\0x".
+  EXPECT_EQ(DictionaryBundleSha256(root),
+            "f25da710924b3f20a8d2b96ec1dff5167ef78f6b83c20a0eedba3127823ecb74");
+  WriteBytes(root / "b.azdic", "y");
+  // SHA-256 of "a.azdic\0x" + "b.azdic\0y": ordered by name, not by creation.
+  EXPECT_EQ(DictionaryBundleSha256(root),
+            "8ccb27bb741b326715f6f65cd954f3837e850973ad2138a672c3e7c7cde1808c");
+  WriteBytes(root / "b.azdic", "z");
+  EXPECT_NE(DictionaryBundleSha256(root),
+            "8ccb27bb741b326715f6f65cd954f3837e850973ad2138a672c3e7c7cde1808c");
+  EXPECT_THROW(DictionaryBundleSha256(root / "missing"), std::filesystem::filesystem_error);
+#endif
+}
+
+TEST(ConversionQualityTest, KatakanaMeansAKatakanaLetter) {
+  EXPECT_TRUE(ContainsKatakana("コーヒーを飲む"));
+  EXPECT_TRUE(ContainsKatakana("ヴ"));
+  EXPECT_TRUE(ContainsKatakana("ヶ月"));
+  EXPECT_FALSE(ContainsKatakana("ー"));
+  EXPECT_FALSE(ContainsKatakana("・"));
+  EXPECT_FALSE(ContainsKatakana("かな漢字"));
+  EXPECT_FALSE(ContainsKatakana("ｶﾀｶﾅ"));  // Halfwidth forms are outside U+30A1..U+30FA.
+}
+
+TEST(ConversionQualityTest, ReportsKatakanaSubsetP99AndDictionaryCompatibilityKeys) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "SHA-256 uses Windows CNG and NFKC uses the Windows Normaliz API";
+#else
+  ScopedDirectory directory("azookey-conversion-quality-subset");
+  const auto data = directory.path() / "bench" / "data" / "eval.jsonl";
+  const auto line = [](std::string_view id, std::string_view input, std::string_view expected) {
+    return "{\"id\":\"" + std::string(id) + "\",\"input\":\"" + std::string(input) +
+           "\",\"expected\":\"" + std::string(expected) +
+           "\",\"category\":[\"general\"],\"provenance\":\"authored\"}\n";
+  };
+  WriteBytes(data, line("a", "こーひー", "コーヒー") + line("b", "てすと", "テスト") +
+                       line("c", "こーひー2", "珈琲"));
+  ConversionQualityOptions options;
+  options.eval_path = data;
+  options.output_path = directory.path() / "result.json";
+  options.iterations = 1;
+  const auto query = [](const std::string& input, const std::string&) {
+    // テスト comes back unconverted, so the katakana subset is one of two.
+    const std::string surface = input == "こーひー" ? "コーヒー"
+                                : input == "てすと" ? "てすと"
+                                                    : "珈琲";
+    core::Candidate candidate;
+    candidate.surface = surface;
+    candidate.reading = input;
+    return std::vector<core::Candidate>{candidate};
+  };
+  std::string error;
+  ASSERT_TRUE(RunConversionQualityEvaluation(options, query, &error)) << error;
+  const auto report = ipc::json::Parse(ReadText(options.output_path));
+  ASSERT_TRUE(report && report->IsObject());
+  const auto* config = report->FindObject("config");
+  ASSERT_NE(config, nullptr);
+  EXPECT_EQ(config->at("dictionary_bundle_sha256").AsString(), "none");
+  EXPECT_EQ(config->at("lattice").AsString(), "off");
+  const auto* summary = report->FindObject("summary");
+  ASSERT_NE(summary, nullptr);
+  EXPECT_TRUE(summary->at("latency_p99_ms").IsNumber());
+  EXPECT_DOUBLE_EQ(summary->at("top1_accuracy").AsNumber(), 2.0 / 3.0);
+  const auto* subsets = report->FindObject("by_subset");
+  ASSERT_NE(subsets, nullptr);
+  const auto& katakana = subsets->at("katakana").AsObject();
+  EXPECT_DOUBLE_EQ(katakana.at("n").AsNumber(), 2.0);
+  EXPECT_DOUBLE_EQ(katakana.at("top1_accuracy").AsNumber(), 0.5);
+
+  // A baseline taken with the bundled dictionaries is not comparable with this run.
+  const auto baseline = directory.path() / "baseline.json";
+  std::string text = ReadText(options.output_path);
+  const std::string none = "\"dictionary_bundle_sha256\":\"none\"";
+  const auto at = text.find(none);
+  ASSERT_NE(at, std::string::npos);
+  text.replace(at, none.size(), "\"dictionary_bundle_sha256\":\"" + std::string(64, 'a') + "\"");
+  WriteBytes(baseline, text);
+  options.baseline_path = baseline;
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: dictionary_bundle_sha256");
+  options.dictionary_bundle_sha256 = std::string(64, 'a');
+  options.lattice = "on";
+  EXPECT_FALSE(RunConversionQualityEvaluation(options, query, &error));
+  EXPECT_EQ(error, "baseline is incompatible: lattice");
 #endif
 }
 

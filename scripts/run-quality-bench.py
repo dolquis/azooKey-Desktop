@@ -11,7 +11,8 @@ import subprocess
 COMPATIBLE_KEYS = (
     "model_sha256", "backend", "decode", "beam_width", "n_best",
     "max_new_tokens", "prompt_template_version", "thread_count", "batch_size",
-    "typo_correction_mode", "learning_state", "category_filter", "eval_dataset_sha256",
+    "typo_correction_mode", "learning_state", "dictionary_bundle_sha256", "lattice",
+    "category_filter", "eval_dataset_sha256",
 )
 METRICS = ("top1_accuracy", "top5_accuracy", "exact_match_rate",
            "nfkc_exact_match_rate", "cer", "nfkc_cer")

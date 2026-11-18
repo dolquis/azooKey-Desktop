@@ -49,14 +49,16 @@ void PrintUsage(const char* exe) {
       << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
          " [--backend cpu|cuda] [--model PATH] [--category NAME]"
          " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
-         " [--nll on|off] [--decode-stats JSONL]\n"
+         " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]\n"
       << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
          "failure gate. --json selects JSON stdout; --output writes the same JSON "
          "schema to a file. --ipc adds codec, Windows pipe echo and send/Host/receive "
          "timings. --eval selects the conversion-quality evaluator. --trace writes phase JSONL "
          "to trace.jsonl by default. --nll sets NLL rerank (default off, the shipped "
          "setting). --decode-stats writes one line per query with its latency, deadline "
-         "cut-off and candidate sources.\n";
+         "cut-off and candidate sources. --dict-dir loads the bundled static layers of DIR "
+         "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it, "
+         "and this build has no lattice conversion, so pass --lattice off.\n";
 }
 
 const char* CandidateSourceName(azookey::core::CandidateSource source) {
@@ -222,7 +224,9 @@ int main(int argc, char** argv) {
   std::filesystem::path baseline_path;
   std::filesystem::path trace_output_path;
   std::filesystem::path decode_stats_path;
+  std::filesystem::path dict_dir;
   std::optional<bool> nll_enabled;
+  std::optional<bool> lattice_enabled;
   azookey::bench::ConversionQualityOptions quality_options;
   try {
     for (int i = 1; i < argc; ++i) {
@@ -274,9 +278,34 @@ int main(int argc, char** argv) {
         const auto value = RequireValue(argc, argv, i, "--decode-stats");
         if (value.empty()) throw std::invalid_argument("--decode-stats requires a non-empty path");
         decode_stats_path = azookey::bench::Utf8Path(value);
+      } else if (arg == "--dict-dir") {
+        const auto value = RequireValue(argc, argv, i, "--dict-dir");
+        if (value.empty()) throw std::invalid_argument("--dict-dir requires a non-empty path");
+        dict_dir = azookey::bench::Utf8Path(value);
+      } else if (arg == "--lattice") {
+        const auto value = RequireValue(argc, argv, i, "--lattice");
+        if (value != "on" && value != "off") {
+          throw std::invalid_argument("--lattice must be on or off");
+        }
+        lattice_enabled = value == "on";
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
+    }
+    if (quality_options.eval_path.empty() && (!dict_dir.empty() || lattice_enabled)) {
+      throw std::invalid_argument("--dict-dir and --lattice require --eval");
+    }
+    // The shipped default is on, so a run with the bundled dictionaries is on unless told
+    // otherwise (conversion-quality-benchmark-spec section 7).
+    if (!lattice_enabled) lattice_enabled = !dict_dir.empty();
+    if (*lattice_enabled && dict_dir.empty()) {
+      throw std::invalid_argument("--lattice on requires --dict-dir");
+    }
+    if (*lattice_enabled) {
+      // Without lattice conversion, an "on" run would report lattice-off results as on.
+      throw std::invalid_argument(
+          "--lattice on needs lattice conversion, which this build does not have; "
+          "pass --lattice off");
     }
     if (quality_options.typo_mode != "off") {
       throw std::invalid_argument("--typo-mode supports only off until M55");
@@ -363,6 +392,31 @@ int main(int argc, char** argv) {
     std::cerr << "failed to load model" << std::endl;
     return 2;
   }
+  if (!dict_dir.empty()) {
+    try {
+      // Hash first: it also rejects a directory without any .azdic file.
+      quality_options.dictionary_bundle_sha256 = azookey::bench::DictionaryBundleSha256(dict_dir);
+    } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
+      return 2;
+    }
+    bool any_loaded = false;
+    for (const auto& layer : engine.LoadBundledDictionaryLayers(dict_dir)) {
+      if (layer.loaded) {
+        any_loaded = true;
+      } else if (std::filesystem::exists(dict_dir / layer.name)) {
+        // A present but unreadable layer would silently change the measured configuration.
+        std::cerr << "dictionary layer " << layer.name << " failed to load: " << layer.error
+                  << std::endl;
+        return 2;
+      }
+    }
+    if (!any_loaded) {
+      std::cerr << "--dict-dir holds no bundled dictionary layer" << std::endl;
+      return 2;
+    }
+  }
+  quality_options.lattice = *lattice_enabled ? "on" : "off";
 
   if (!quality_options.eval_path.empty()) {
     quality_options.output_path = output_path;

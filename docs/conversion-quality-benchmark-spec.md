@@ -1,6 +1,6 @@
 ---
 kind: spec
-milestones: [M52]
+milestones: [M52, M74]
 canonical_for: ["評価ベンチ"]
 ---
 
@@ -30,6 +30,7 @@ canonical_for: ["評価ベンチ"]
 | §11〜§12 | M52 |
 | §13〜§14 | M52 |
 | §7 の `--dict-dir`・`--lattice`、§10 のモデル無効構成、§14.1 の `dictionary_bundle_sha256`・`lattice` | M65（`docs/lattice-conversion-spec.md` §10） |
+| §7 の `--personal-eval`・`--profile`・`--profile-file`、§8 と §14.1 の `eval_source`・`profile_sha256`、§15 | M74 |
 
 ## 1. 目的
 
@@ -416,6 +417,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--category <name>` | カテゴリ絞込 |
 | `--iterations <N>` | 各ケースの繰返し回数（latency 用） |
 | `--typo-mode <mode>` | typo 補正モード（`off` / `suggest` / `rank` / `aggressive`、既定 `off`）。`config.typo_correction_mode` に記録（§14.1 互換キー） |
+| `--personal-eval` | 利用者の学習ストアで評価する個人回帰ベンチ（M74）。使えるオプションと出力の制約は §15.5・§15.7 |
+| `--profile <text>` / `--profile-file <path>` | bench 専用の Zenzai のプロファイル（M74）。§4 の評価データでも使える。詳細は §15.5。`config.profile_sha256` に記録（§14.1 互換キー） |
 
 **typo 評価のモード指定（マイルストーン別運用）**: §6.2 の typo 補正指標は
 補正が有効なモードでのみ意味を持つ。ただし**補正有効モード `suggest` /
@@ -454,6 +457,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "learning_state": "empty",
     "dictionary_bundle_sha256": "none",
     "lattice": "off",
+    "eval_source": "bundled",
+    "profile_sha256": "none",
     "category_filter": "all",
     "eval_dataset_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
   },
@@ -640,6 +645,8 @@ PR 向け回帰ゲートは、PR コメントに diff_vs_baseline サマリを�
   としてのみ二次利用する。コピーレフト（CC BY-SA / GFDL / GPL）と
   再配布不可・来歴不透明なデータは派生元に使わない（§13.2）。
 - ユーザー入力ログからの自動生成は **行わない**（プライバシー優先）。
+  利用者自身の確定履歴を端末内で評価に使う §15 の個人回帰ベンチ（M74）は、評価ケースをメモリ上に
+  作るだけで、`bench/data/` のデータも、そのほかの評価データのファイルも作らない。
 - データ追加・修正は PR レビュー必須。`authored` 以外を追加する PR は
   §13.3 manifest の更新を必須とする。
 
@@ -818,9 +825,15 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   baseline 再採取が必要）
 - `lattice`（`on` / `off`。採取でラティス変換が有効だったか。`--dict-dir` が無いときは `off`。
   `docs/lattice-conversion-spec.md` §10.1 の A / B を区別する）
+- `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
+  結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を
+  比べない）
+- `profile_sha256`（§15.5 の bench 専用の `--profile` で渡した Zenzai のプロファイル（`docs/zenzai-inference-spec.md`
+  §9.4.3 の測定に使う）の UTF-8 バイト列の SHA-256。渡さないときは `none`。このキーを持たない結果は `none` として
+  扱う。プロファイルは Zenzai の候補を変えるので互換キーに入れる。プロファイルの文字列そのものは出力しない）
 - `category_filter`（`--category` の値。既定 `all`。フィルタすると評価対象
   ケース集合が変わるが `eval_dataset_sha256` はファイル全体ハッシュで不変なため、
-  本キーで区別する。フィルタ実行を全体 baseline と誤って比較しない）
+  本キーで区別する。フィルタ実行を全体 baseline と誤って比較しない。`eval_source = personal` では常に `all`。§15.5）
 - `eval_dataset_sha256`（評価対象 `bench/data/*.jsonl` の内容ハッシュ。
   ケース集合が変わると指標差は converter 挙動ではなくデータ差に由来するため、
   **eval ファイル変更時は baseline 再採取が必須**）。**正準算法**: 評価対象の
@@ -830,7 +843,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   併せて `.gitattributes` の `bench/data/**.jsonl text eol=lf` で working-tree も
   LF に固定する（Windows の `core.autocrlf` で CRLF 化しても Win/Linux/CI で
   同一ハッシュになるように）。これにより glob 順・プラットフォーム差で同一
-  データが別ハッシュになることを防ぐ
+  データが別ハッシュになることを防ぐ。`eval_source = personal` では、ファイルではなく §15.7 の算法で求める
 - `version`（§8 出力 JSON の**指標スキーマ版**。指標計算ロジックや JSON 意味論
   を変えたら +1 する。同一の model/dataset/decode でも指標定義が変わると旧
   baseline との比較は無意味になるため、**`version` 変更時は baseline 再採取が
@@ -853,7 +866,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
-  `dictionary_bundle_sha256` / `lattice` /
+  `dictionary_bundle_sha256` / `lattice` / `eval_source` / `profile_sha256` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に
@@ -876,3 +889,206 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   レビュー注意喚起に留め、閾値による自動 fail 化は M53 以降でデータ規模が
   揃ってから検討する。NFKC 系（`nfkc_*`）は診断専用で fail・監視いずれの
   対象にもしない。
+
+## 15. 個人回帰ベンチ（M74）
+
+利用者の端末の中だけで、利用者自身の確定履歴を評価ケースにして、変換器を差し替えた前後の当たり方を比べる。
+§4 の評価データは合成で、利用者ごとの語彙への当たり方を測れない。本節はそれを補う。利用者が CLI を
+実行したときだけ動き（opt-in）、結果をどこへも送らない。
+
+### 15.1 範囲
+
+- **測るもの**: 学習を空にした変換器が、左文脈なしで、利用者が確定した表層をどの順位に出すか。
+  モデル（`--model`）、同梱辞書（`--dict-dir`）、ラティス変換（`--lattice`）、NLL 再ランク（`--nll`）、
+  Zenzai のプロファイル（§15.5 の `--profile`）、ビルドを差し替えた前後を比べる。
+- **v1 の対象外**:
+  - 左文脈による同音異義語の選び分け。学習ストアは左文脈を `context_hash` でしか持たない
+    （`docs/user-learning-enhancement-spec.md` §8.1）。評価のために左文脈を保存することは、左文脈の別用途の再利用を
+    禁じる `docs/privacy-and-secure-input-spec.md` §5.3 と、文脈を hash で持つ `docs/user-learning-enhancement-spec.md`
+    §2 に反するので行わない。
+  - 学習係数（`docs/user-learning-enhancement-spec.md` §13）の校正。学習ストアを変換器に載せると、評価ケースを作った
+    学習データ自身で候補を並べることになり、学習の効き目を過大に示す。学習ストアの行は集約で（同 §3.2）、時刻で
+    学習用と評価用に分けることもできない。係数の校正は M52 の `user_adapt`（§11.2）で行う。
+  - 同梱の評価データ（§4）の作成。§11.1 のとおり、利用者の入力からリポジトリのデータを作らない。
+- **実行の入口**: `azookey_bench --personal-eval`。`azookey_bench` は配布物（`pkg/msi/`）に含まれないので、
+  ソースからビルドした人だけが実行できる。設定アプリと配布される実行ファイル（`azookey_inference_host.exe` の
+  サブコマンドなど）からの実行は v1 では持たない。
+
+### 15.2 評価に使うデータ
+
+- 追加の保存はしない。読むのはかなの学習ストア（`docs/user-learning-enhancement-spec.md` §3.1 の v2 ファイル。
+  v2 ファイルが無ければ M7 ファイル）だけで、英語の学習チャネル、タイプミス補正、新語候補、ユーザー辞書は読まない。
+- 移行をしない読み込み（`LearningStore::LoadReadOnly`）で読み、保存しない。平文の移行、`.corrupt-*` の複写、
+  M7 ファイルの削除は起こさない。読み込みに失敗したら、部分結果を出さずに入力エラーとして終える。学習ストアの
+  ファイルが無いときも読み込みの失敗として扱う。解析できない行は Host と同じく読み飛ばし
+  （`docs/user-learning-enhancement-spec.md` §3.1）、その件数を除外の理由 `malformed_row`（§15.6）に数える。
+- 学習ストアの位置は Host と同じ既定の位置とし、`--learning <path>` で変えられる。privacy の判定（§15.4）に
+  使う設定ファイルも Host と同じ既定の位置とし、`--settings <path>` で変えられる。
+- 設定ファイルは、隔離（`.invalid*` への rename）をしない読み取り専用の parse で読む。Host の `SettingsStore::Load` の
+  ように parse の失敗でファイルを移さない。parse の失敗は設定の不正として扱う（§15.4）。
+- `--settings` で明示したパスにファイルが無いときは、評価せずに入力エラーとして終える。設定ファイルが無いことを
+  normal とみなす `docs/privacy-and-secure-input-spec.md` §5.1 の規則は、既定の位置にファイルが無いとき（設定を
+  一度も保存していないとき）だけに適用する。
+- 行の単位は確定の文節である。文節ごとの確定観測（`CommitSegmentsObservation`）は文節ごとに 1 組を記録する。
+
+### 15.3 評価ケースの作り方
+
+1. §15.4 で除く行を除いた残りを、読みごとにまとめる。同じ読みで同じ表層の行（`app_name` だけが違う行）は、
+   `commit_count` と `reject_count` を足し合わせる。和の差 `commit_count − reject_count` を、その表層の純確定数とする。
+2. 読みごとに、表層を次の 3 つに分ける。
+   - 純確定の表層: 純確定数が正
+   - 相殺の表層: 純確定数が 0。確定の直後に即 Backspace で取り消した表層は、確定と拒否が 1 ずつ増えるので
+     これに当たる（`docs/user-learning-enhancement-spec.md` §4）
+   - 純拒否の表層: 純確定数が負
+3. 純確定の表層を持つ読みごとに、ケースを 1 件作る。相殺の表層は、正解にも拒否にも数えない。
+
+   | フィールド（§4.2） | 値 |
+   |---|---|
+   | `input` | 読み |
+   | `expected` | 純確定数が最大の表層。同じなら `commit_count` の和が大きい方、それも同じなら UTF-8 バイト列の昇順で先の表層 |
+   | `acceptable` | `expected` 以外の純確定の表層 |
+   | `left_context` / `right_context` | 空 |
+   | `app_profile` | 既定（アプリ別の設定を当てない） |
+
+4. 純確定の表層を持たない読みはケースにせず、除外の件数（理由 `no_net_commit`）に数える。
+5. 件数の上限は `--max-cases <N>`（既定 1000、0 は上限なし）とする。読みごとの純確定の表層の純確定数の和の降順、
+   同じなら読みの UTF-8 バイト列の昇順に並べて先頭から N 件を取る。上限で落とした読みは除外の件数
+   （理由 `over_max_cases`）に数える。ケースの順はこの並びとする。
+
+### 15.4 含めないデータ
+
+学習ストアの行は、確定観測と訂正を TIP と Host が学習を許したときに記録する（`docs/privacy-and-secure-input-spec.md`
+§5.1.1）。secure の入力は記録しないので、評価ケースにも入らない。確定ごとの判定を通らない行は、M7 ファイルからの
+移行（`docs/user-learning-enhancement-spec.md` §3.1）と、学習データのインポート（`docs/learning-data-management-spec.md`
+§4.4。secure と学習不許可の間は止まる。同 §8）で入った行である。そのうえで次を適用する。
+
+- **実行を止める設定**: 設定を解決した学習許可が偽のときは、評価をせずに入力エラーとして終える
+  （`docs/privacy-and-secure-input-spec.md` §5.1 の解決に従う）。`privacy.mode` が `secure` のとき、`private` で学習が
+  止まるとき、`custom` の `custom.learning` が `false` のとき、設定の読取失敗・JSON 不正・未知のモード、`--settings` で
+  明示したファイルが無いとき（§15.2）を含む。学習データの書き出しを secure と学習不許可の間に止める
+  `docs/learning-data-management-spec.md` §8 と同じ規則である。
+- **除く行**: 実行時の設定で、行の `app_name` について次のどれかに当たる行を除く。理由ごとに件数を数える。
+  - 実効の `secureApps`（`docs/privacy-and-secure-input-spec.md` §4.1 の同梱リストと `privacy.secureApps` の和。
+    大文字小文字を無視して比べる）に含まれる（理由 `secure_app`）。
+  - アプリ別プロファイル（`docs/app-profile-spec.md` §5）を `profilesByApp[app_name]` と `profilesByApp["default"]` の
+    層で解決した `privacyMode` が `private` か `secure` である（理由 `app_privacy_mode`）、または `learningEnabled` が
+    `false` である（理由 `app_learning_disabled`）。行はウィンドウクラスを持たないので、`window_class` の層は使わない。
+- **含める行**: `app_name` が空の行は含め、記録した時点の判定で学習が許された行として扱う。確定観測と訂正が `app` を
+  運ばないとき（`docs/user-learning-enhancement-spec.md` §4.1）に Host が記録する大域行と、M7 ファイルから移行した行が
+  これに当たる。
+- 上の「除く行」は `app_name` を持つ行だけに効く。後から `secureApps` に加えたアプリや学習を止めたアプリの過去の
+  確定でも、大域行に入っていれば除かれない。
+
+### 15.5 変換の条件と CLI
+
+engine は空の一時学習ストアで作る（§3 の `azookey_bench` と同じ。`config.learning_state = "empty"`）。
+typo 補正は `off`、カテゴリの絞り込みは `all` とする。top5 系の指標のため、`n_best` は §6.1 の注記のとおり
+5 以上で採取する。
+
+| オプション | 意味 |
+|---|---|
+| `--personal-eval` | 個人回帰ベンチとして動かす。`--eval` と併用しない |
+| `--learning <path>` | 学習ストアの位置（§15.2） |
+| `--settings <path>` | privacy の判定に使う設定ファイルの位置（§15.2） |
+| `--max-cases <N>` | ケースの上限（§15.3） |
+| `--include-personal-text` | `--per-case` に読みと表層を書くことを許す（§15.7） |
+| `--profile <text>` | bench 専用。engine がモデル変換に渡す文脈と NLL 再ランクに渡す文脈の両方の `instruction_profile` に文字列を入れ、Zenzai の prompt の `[PROF]` に置いて変換する。`docs/zenzai-inference-spec.md` §9.4.3 の効果の測定に使う。製品の設定（`model.profile`）は読まず、Host の挙動も変えない。§4 の評価データでも使える。空文字列、U+EE00〜U+EEFF を含む文字列、30 コードポイントを超える文字列、`[PROF]` を使わない形式のモデル（同 §2.4.2）、`--model` の無い構成では入力エラーとして終える。`config.profile_sha256` に記録する（§14.1） |
+| `--profile-file <path>` | `--profile` と同じ。文字列を UTF-8 のファイルから読み、末尾の改行 1 つを除く。シェルの履歴に文字列を残さないために使う。`--profile` と併用しない |
+
+個人回帰ベンチでは、上の表のオプションと、§7 と同じ意味で使う `--output`、`--baseline`、`--per-case`、`--backend`、
+`--model`、`--dict-dir`、`--lattice`、`--nll`、`--iterations` だけを受け付ける。`--dict-dir` と `--lattice` は M65 が
+`azookey_bench` に足すオプションで（§0）、それを持たないビルドでは受け付けない。それ以外（`--eval`、`--trace`、
+`--trace-output`、`--decode-stats`、`--category`、`--typo-mode`、`--json`、`--ipc`、`--max-p95-ms` など）は入力エラーと
+して終える。変換ごとの記録をファイルへ書く経路を、§15.7 の明示した per-case 以外に作らない。
+
+### 15.6 指標
+
+§6.1 の指標（`named_entity_recall_at_5` と `neologism_recall_at_5` を除く）を、§15.3 の `expected` と `acceptable` で
+求める。加えて次を出す。純確定数は §15.3 の定義による。
+
+| 指標 | 定義 |
+|---|---|
+| `commit_coverage_top1` | 全ケースの純確定の表層の純確定数の和に対する、第 1 候補が純確定の表層だったときのその純確定数の和の割合。学習が無いときに、過去の確定のうち第 1 候補で済んだ割合を表す |
+| `commit_coverage_top5` | 同じ分母に対する、上位 5 候補に出た純確定の表層の純確定数の和の割合 |
+| `rejected_top1_rate` | 純拒否の表層（§15.3）を持つケースのうち、第 1 候補が純拒否の表層だったケースの割合 |
+
+ケースが 0 件のとき（学習データの全削除の後など）は、比率の指標をすべて 0 とし、`n_cases` を 0 として正常に終える。
+`rejected_top1_rate` は、純拒否の表層を持つケースが 0 件なら 0 とする。
+
+`by_category` は `expected` の字種で分ける。次の順に最初に当てはまるものとする。
+
+| カテゴリ | 条件 |
+|---|---|
+| `personal_identity` | 表層が読みと同じ |
+| `personal_kanji` | 漢字を含む |
+| `personal_katakana` | カタカナと長音だけから成る |
+| `personal_ascii` | ASCII だけから成る |
+| `personal_other` | 上のどれにも当たらない |
+
+`summary` には件数として、ケース数 `n_cases`、純拒否の表層を持つケース数 `n_rejected_cases`、読んだ行数
+`n_rows_read`、理由ごとの除外の件数 `skipped`（`malformed_row`、`no_net_commit`、`secure_app`、`app_privacy_mode`、
+`app_learning_disabled`、`over_max_cases`）を載せる。latency は §6.3 と同じに求める。
+
+### 15.7 出力と baseline
+
+- `--output` は §8 の形式で、集計だけを書く。読み、表層、プロファイルの文字列は `--output` にも stderr にも出さない。
+- `config.eval_source` は `personal` とする（§14.1）。`config.eval_dataset_sha256` は次の列の SHA-256 とする。
+  §15.3 でケースにした読みについて、§15.4 の除外の後に残る全表層（純確定・相殺・純拒否）を、読み、表層の UTF-8
+  バイト列の昇順に並べ、組ごとに `読み + 0x00 + 表層 + 0x00 + commit_count の和（10 進） + 0x00 + reject_count の和
+  （10 進） + 0x00` とした列を連結する。ケースにならなかった読みと、上限で落とした読みは含めない。`expected` と
+  `acceptable` はこの値だけから決まる。
+- `--baseline` は、§14.1 の互換キーがすべて一致するときだけ `diff_vs_baseline` を出す。一致しないときは出さず、
+  違うキーの名前だけを stderr に出す。A / B の比較は、学習ストアが変わらないうちに 2 つの構成を続けて実行する。
+  間に確定があると `eval_dataset_sha256` が変わるので、実行し直す。学習ストアの写しは保存しない。プロファイルの
+  有無のように互換キーが違う 2 回の結果は、`diff_vs_baseline` を使わず、2 つの `--output` の `summary` を比べる。
+- `eval_source = personal` の結果ファイルは共有しない。`config.eval_dataset_sha256` と `config.profile_sha256` は
+  塩を加えない SHA-256 なので、ケースが少ないときやプロファイルが短いときは、候補の文字列を総当たりして学習データや
+  プロファイルを推測されうる（`docs/learning-data-management-spec.md` §5.1 が平文のハッシュを書かないのと同じ理由）。
+  個人回帰ベンチは、実行のたびにそのことを stderr に出す。§4 の評価データで `--profile` か `--profile-file` を使った
+  結果も、`profile_sha256` が `none` でなければ共有せず、そのときも同じことを stderr に出す。新しい秘密値（塩や鍵）は
+  保存しない。
+- `--per-case <jsonl>` は `--include-personal-text` を併せたときだけ書く。無ければ入力エラーとして終える。形式は
+  §8.1 の通常変換ケースで、`id` は `personal_` に §15.3 のケースの順の 1 始まりの 6 桁の連番を付けたもの、行の順も
+  ケースの順とし、`category` は §15.6 のカテゴリとする。書くときは、ファイルが利用者の読みと表層を平文で含むこと、
+  暗号化しないこと、学習データの全削除（`docs/learning-data-management-spec.md` §4.6）では消えないことを stderr に
+  出す。このファイルの削除は利用者が行う。
+- ベンチはネットワークに接続しない。結果を送らず、テレメトリも持たない。CI の品質採取（§10、
+  `scripts/run-quality-bench.py`）は個人回帰ベンチを呼ばない。
+
+### 15.8 プライバシー spec との整合
+
+本節は `docs/privacy-and-secure-input-spec.md` と次のとおり矛盾しない。
+
+| privacy spec の規則 | 本節の対応 |
+|---|---|
+| §2 ローカル完結 | 端末の外へ何も送らない（§15.7） |
+| §4.1 `secureApps` | `app_name` を持つ行のうち、実効の `secureApps` に入るアプリの行を除く。大域行に入った過去の確定は除けない（§15.4） |
+| §5 secure 中は学習観測を送らず `Observe` を呼ばない | secure の入力は学習ストアに入らず、評価ケースにならない（§15.4） |
+| §5.1 設定の読取失敗・不正は secure 相当 | 評価をせずに終える。`--settings` で明示したファイルが無いときも同じ（§15.2・§15.4） |
+| §5.3 左文脈を別用途に再利用しない | 左文脈を保存も利用もしない（§15.1） |
+| §8 ログに `reading` / `surface` を含めない | 出力と stderr に読みと表層を出さず、trace を作らない（§15.5・§15.7）。例外は利用者が明示した per-case ファイルだけ |
+
+学習データの全削除の後は学習ストアが空になり、評価ケースは 0 件になる。ベンチは学習ストアの写しを持たないので、
+全削除の後に評価用のデータは残らない。残りうるのは、利用者が `--include-personal-text` で明示して書いた per-case
+ファイルと、利用者が保存した結果ファイルだけである。
+
+学習ストアの読み手は、Host と `lookup` CLI に `azookey_bench --personal-eval` が加わる。
+`docs/learning-data-management-spec.md` §14 の表への追記は M74 の実装で行う。
+
+### 15.9 テスト
+
+- unit: ケースの作り方（§15.3）。`app_name` をまたぐ和、純確定・相殺・純拒否の分け方（確定の直後に即 Backspace で
+  取り消した表層が正解にならないこと）、`expected` の同点の規則、`no_net_commit`、`--max-cases` の決定的な選び方
+- unit: 除外（§15.4）。実効の `secureApps`、`privacyMode`、`learningEnabled` の各理由と、`app_name` が空の行を含めること
+- unit: 実行を止める設定（§15.4）。secure、`private`、`custom.learning = false`、設定の読取失敗と JSON 不正、`--settings` で
+  明示したファイルが無いときに評価しないこと。JSON 不正の設定ファイルを移さないこと（§15.2）
+- unit: 解析できない行を読み飛ばし、`malformed_row` に数えること（§15.2）
+- unit: 個人回帰ベンチの実行のたびに、結果ファイルを共有しない旨を stderr に出すこと（§15.7）
+- unit: 学習ストアのファイルが無いときは入力エラー、空の学習ストアでは `n_cases = 0` で正常に終えること（§15.2・§15.6）
+- unit: 出力に読み・表層・プロファイルの文字列が出ないこと（固定の学習ストアから作った `--output` と stderr を走査する）
+- unit: `eval_dataset_sha256` が同じ学習ストアで一致し、行の順序に依存しないこと
+- unit: `--per-case` が `--include-personal-text` 無しで入力エラーになり、有りでは警告を出し、`id` と行の順が §15.7 のとおりであること
+- unit: 個人回帰ベンチで受け付けないオプション（§15.5）が入力エラーになること
+- unit: 学習ストアを書き換えないこと（実行の前後でファイルのバイト列と更新時刻が同じ）
+- unit: `--profile` と `--profile-file` が、モデル変換と NLL 再ランクの両方の prompt の `[PROF]` に文字列を置き、
+  `config.profile_sha256` を記録し、渡さないときは `none` になること。§15.5 の入力エラーの条件と、文字列が出力に出ないこと

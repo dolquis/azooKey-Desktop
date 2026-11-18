@@ -37,7 +37,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 対応フェーズ／マイルストーン |
 |---|---|
-| [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
+| [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算）。§9.4 は Zenzai の個人化の方式の比較と採否 |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
 | [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§1.2・§1.4 の字種指定確定（F6〜F10）は M64、§1.2・§1.4 の文節の伸縮（Shift+← / Shift+→）は M66、§1.2・§1.4 の候補のページ（PageUp / PageDown）は M68、§1.1・§1.2・§1.4 の確定の取り消し（Ctrl+Backspace）は M69、§5.1・§5.4 のカスタムローマ字表の英字の大文字と小文字の区別は M70 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）の転送表。各項の契約は移動先の spec が正典 |
@@ -62,7 +62,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード）。§7 の `crashReportConsent` は M33 |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル）、M67（入力欄の種類による切替、§13） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界、§12 は CommitObservation の配送保証 |
-| [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
+| [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ）。§15 は M74 の個人回帰ベンチ（利用者の確定履歴で端末内だけで測る） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給。§4.1 の確定の取り消しの後の `undo` は M69 |
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker（Track A） |
 | [`neural-reranker-nll-spec.md`](neural-reranker-nll-spec.md) | NllScorer 型ニューラルリランク（Track B） |

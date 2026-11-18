@@ -307,7 +307,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(meta["connection_space"], "sudachidict-matrix:" + "0" * 64)
         self.assertEqual([item["name"] for item in meta["inputs"]], ["words.conn.tsv", "words.lex.tsv"])
         # ENTS order is (key, surface): こーひー/コーヒー, こーひー/珈琲, とうきょう/東京, ゔぁいおりん/ヴァイオリン.
-        katakana, other = dictbuild.KATAKANA_ONLY, dictbuild.NOT_NORMALIZED
+        katakana, other = 0x4000, 0x8000  # attr bits 14 and 15 (azdic spec 15.5)
         self.assertEqual(self.variants(linked), [
             [(20, 20, 3000, 1 | katakana | other)],
             [(20, 20, 4000, 1)],
@@ -441,7 +441,7 @@ class ConnectionTests(unittest.TestCase):
         # Conjugation unknown: the 終止形-一般 rows, or the "*" rows; 接尾辞 has neither.
         self.assertEqual(lattice["pos_name_ids"], [[40, 40], [700, 700], [5142, 5142], None])
         self.assertEqual(lattice["penalties"], {"P_kata_variant": 6000, "P_kata_own": 0, "P_node": 3000, "P_unk": 20000})
-        self.assertEqual(lattice["C"], dictbuild.LATTICE_C)
+        self.assertEqual(lattice["C"], 10000)
         self.assertEqual(lattice["default_word_cost"], 5000)  # median_low of 3000, 5000, 7000, 9000
         # CMAT holds id 0 and every id of every row, whichever layer the word goes to.
         raw_left, raw_right, left_count, right_count = struct.unpack_from("<4I", sections[b"CMAT"])
@@ -844,6 +844,18 @@ class BundleGuardTests(unittest.TestCase):
             bundle = self.make_bundle(path)
             (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "lattice_core.azdic").read_bytes())
             self.assertEqual(check_bundle.check(bundle, None), [])
+            # A sudachi_lexicon in another connection space (here: none) leaves the lattice unused.
+            (bundle / "dict" / "sudachi_lexicon.azdic").write_bytes(
+                (path / "fixture" / "ambiguous" / "sudachi_lexicon.azdic").read_bytes())
+            self.assertEqual(check_bundle.check(bundle, None),
+                             ["lattice_core.azdic: connection_space differs from sudachi_lexicon.azdic"])
+            (bundle / "dict" / "sudachi_lexicon.azdic").unlink()
+            lattice = (path / "fixture" / "lattice_core.azdic").read_bytes()
+            sections = [(name, data) for name, data in sections_of(lattice).items() if name != b"CMAT"]
+            (bundle / "dict" / "lattice_core.azdic").write_bytes(
+                dictbuild.pack(sections, 1, *struct.unpack_from("<II", lattice, 20)))
+            self.assertEqual(check_bundle.check(bundle, None),
+                             ["lattice_core.azdic: CONN, CMAT or META.lattice is missing"])
             (bundle / "dict" / "lattice_core.azdic").write_bytes((path / "fixture" / "valid.azdic").read_bytes())
             self.assertIn("lattice_core.azdic: layer id 4 does not match the file name",
                           check_bundle.check(bundle, None))
@@ -1067,6 +1079,18 @@ class VmBundleProvenanceTests(unittest.TestCase):
                 self.refresh_receipt()
                 with self.assertRaises(ValueError):
                     check_bundle.check_vm_package(self.bundle)
+
+    def test_lattice_core_must_carry_cmat_in_the_sudachi_connection_space(self):
+        artifact = self.bundle / "dict" / "lattice_core.azdic"
+        image = artifact.read_bytes()
+        meta = json.loads(sections_of(image)[b"META"])
+        self.assertEqual(meta["connection_space"], json.loads(sections_of(
+            (self.bundle / "dict" / "sudachi_lexicon.azdic").read_bytes())[b"META"])["connection_space"])
+        sections = [(name, data) for name, data in sections_of(image).items() if name != b"CMAT"]
+        artifact.write_bytes(dictbuild.pack(sections, 1, *struct.unpack_from("<II", image, 20)))
+        self.refresh_receipt()
+        with self.assertRaisesRegex(ValueError, "CONN, CMAT or META.lattice is missing"):
+            check_bundle.check_vm_package(self.bundle)
 
     def test_meta_sources_must_match_current_metadata(self):
         self.rewrite_meta(lambda meta: meta.update(sources=[]))

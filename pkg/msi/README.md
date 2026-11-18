@@ -61,7 +61,7 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 テキストファイルとして配置します。
 
 静的辞書層は `dictbuild\build_bundled.py` が SHA256 固定の SudachiDict と自作の技術用語seedから生成します
-（Python 3.10 以降、初回は約 35 MB をダウンロードし、生成に数分かかります）。MSI は
+（Python 3.10 以降、初回は語彙の 2 本と連接行列の `matrix.def.zip` で約 165 MB をダウンロードし、生成に数分かかります）。MSI は
 `BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic` と
 `dict\technical_terms_lexicon.azdic` を
 `INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置し、

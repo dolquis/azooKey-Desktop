@@ -377,7 +377,7 @@ lattice_core は `.azdic` v1 の器を使う辞書ファイル `lattice_core.azd
 | 語の出どころ | 品詞の文字列 | 与える ID |
 |---|---|---|
 | `CONN` を持たない静的層（`base_lexicon`、`technical_terms_lexicon` など） | `META.pos_table` の品詞（UniDic 系） | 品詞の表で一致する組の代表 ID。無ければ `名詞-普通名詞-一般` |
-| `neologd_lexicon` | mecab-ipadic 系の品詞 | 固有名詞は人名・地名・組織名の区分を保って UniDic 系へ写す。それ以外は `名詞-普通名詞-一般` |
+| `neologd_lexicon` | mecab-ipadic 系の品詞 | 固有名詞の人名と地名（`地域`）は区分を保って UniDic 系（`名詞-固有名詞-人名-*`・`名詞-固有名詞-地名-*`）へ写す。UniDic に組織名の区分は無いので、組織名と一般の固有名詞は `名詞-固有名詞-一般` に写し、組織名の区分は連接 ID では保たず `category_mask`（`company_org`）で保つ。それ以外は `名詞-普通名詞-一般` |
 | 可変層 | 持たない | `名詞-普通名詞-一般` |
 
 代表 ID は、SudachiDict の語彙でその品詞に最も多く現れる（左 ID, 右 ID）の組とする。品詞 1〜4 だけが分かり活用型・

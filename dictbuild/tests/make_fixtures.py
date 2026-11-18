@@ -217,6 +217,15 @@ def write_lattice_fixtures(directory: Path, metadata: dict) -> None:
     technical.write_text(header + lexicon_columns + "テンソル\tてんそる\t名詞\t4000\t\ttechnical\tfixture\n",
                          encoding="utf-8", newline="\n")
     (out / "technical_terms_lexicon.azdic").write_bytes(dictbuild.build([technical], metadata, 4, directory)[0])
+    # mecab-ipadic part-of-speech names, read as neologd_lexicon (layer 2) and as another layer (4).
+    ipadic = out / "ipadic.lex.tsv"
+    ipadic.write_text(header + lexicon_columns +
+                      "札幌\tさっぽろ\t名詞-固有名詞-地域-一般\t4000\t\tplace_name\tfixture\n"
+                      "青空社\tあおぞらしゃ\t名詞-固有名詞-組織\t4000\t\tcompany_org\tfixture\n"
+                      "検索\tけんさく\t名詞-サ変接続\t4000\t\tgeneral\tfixture\n",
+                      encoding="utf-8", newline="\n")
+    (out / "neologd_lexicon.azdic").write_bytes(dictbuild.build([ipadic], metadata, 2, directory)[0])
+    (out / "ipadic_other_layer.azdic").write_bytes(dictbuild.build([ipadic], metadata, 4, directory)[0])
 
     def sections(image: bytes) -> list[tuple[bytes, int, int]]:
         found = []

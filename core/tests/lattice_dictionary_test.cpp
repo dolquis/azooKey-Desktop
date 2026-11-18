@@ -233,6 +233,37 @@ TEST_F(LatticeDictionaryTest, LayersWithoutConnectionsAndMutableWordsUseDefaultI
             (std::vector<std::string>{"ヴァ", "場", "ば"}));
 }
 
+// Section 8.3: neologd_lexicon's mecab-ipadic names are read in UniDic terms. Places keep their
+// division, organizations become general proper nouns, and other words common nouns. Another
+// layer reads the same names as they are.
+TEST_F(LatticeDictionaryTest, NeologdPartsOfSpeechMapToUniDic) {
+  const auto pos_of = [&](const DoubleArrayTrie& trie, std::string_view key) {
+    const StaticLatticeVocabulary vocabulary(dictionary_, trie);
+    std::vector<LatticeEntry> entries;
+    EXPECT_TRUE(vocabulary.CommonPrefix(key, entries));
+    EXPECT_EQ(entries.size(), 1U) << key;
+    return entries.empty() ? LatticePosInfo{}
+                           : LatticePosInfo{entries[0].pos, entries[0].word_class,
+                                            entries[0].left_id, entries[0].right_id};
+  };
+  DoubleArrayTrie neologd, other;
+  ASSERT_TRUE(neologd.Load(LatticeFixture("neologd_lexicon"), true));
+  ASSERT_TRUE(other.Load(LatticeFixture("ipadic_other_layer"), true));
+  ASSERT_EQ(neologd.LayerId(), 2U);
+  const auto place = dictionary_.ResolvePosName("名詞-固有名詞-地名-一般");
+  const auto noun = dictionary_.ResolvePosName("名詞-普通名詞-一般");
+  const auto sapporo = pos_of(neologd, "さっぽろ");
+  EXPECT_EQ(sapporo.pos, place.pos);
+  EXPECT_EQ(sapporo.left_id, 20);
+  // 名詞-固有名詞-一般 is not in this fixture's pos_names: no index, the common-noun ids.
+  const auto company = pos_of(neologd, "あおぞらしゃ");
+  EXPECT_EQ(company.pos, kNoLatticePos);
+  EXPECT_EQ(company.left_id, 30);
+  EXPECT_EQ(pos_of(neologd, "けんさく").pos, noun.pos);
+  EXPECT_EQ(pos_of(other, "さっぽろ").pos, kNoLatticePos);
+  EXPECT_EQ(pos_of(other, "けんさく").pos, kNoLatticePos);
+}
+
 // Section 3.6: a broken lattice_core disables only the lattice.
 TEST_F(LatticeDictionaryTest, BrokenLatticeCoreDisablesOnlyTheLattice) {
   const std::vector<std::pair<std::string, std::string>> cases = {

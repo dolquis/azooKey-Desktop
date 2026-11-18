@@ -54,3 +54,16 @@ target_link_libraries(runtime_logger_tests
 # RuntimeLogger uses a component-scoped OS mutex, so logger cases must not compete
 # with one another and hit the best-effort write timeout under parallel CTest.
 azookey_discover_tests(runtime_logger_tests RESOURCE_LOCK azookey-runtime-log)
+
+# The lattice reads the dictbuild fixtures (lattice/), generated at build time.
+add_executable(lattice_tests
+  lattice_dictionary_test.cpp
+  lattice_test.cpp
+)
+add_dependencies(lattice_tests dictionary_fixtures)
+target_compile_definitions(lattice_tests PRIVATE
+  AZOOKEY_DICT_FIXTURE="${CMAKE_BINARY_DIR}/dictbuild/fixtures")
+target_link_libraries(lattice_tests
+  PRIVATE azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(lattice_tests)

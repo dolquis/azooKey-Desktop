@@ -66,6 +66,16 @@ add_executable(azookey_ambiguous_reading_bench ambiguous_reading_bench.cpp)
 target_link_libraries(azookey_ambiguous_reading_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
+# DEV-2098: lattice building and N-best search (lattice-conversion-spec section 9).
+add_executable(azookey_lattice_bench lattice_bench.cpp)
+target_link_libraries(azookey_lattice_bench
+  PRIVATE azookey_benchmark_result azookey_core azookey_project_options azookey_project_warnings
+)
+target_compile_definitions(azookey_lattice_bench PRIVATE
+  AZOOKEY_LATTICE_BENCH_EVAL="${CMAKE_CURRENT_SOURCE_DIR}/data/kana_kanji_eval.jsonl")
+if(WIN32)
+  target_link_libraries(azookey_lattice_bench PRIVATE psapi)
+endif()
 # M63-B section 15.2: the mixed lattice quality gate (no model).
 add_executable(azookey_mixed_english_eval mixed_english_eval.cpp)
 target_link_libraries(azookey_mixed_english_eval
@@ -123,6 +133,7 @@ if(AZOOKEY_BUILD_TESTS)
     azookey_nll_bench
     azookey_reverse_lookup_bench
     azookey_mixed_english_eval
+    azookey_lattice_bench
   )
   # The dictbuild fixture is generated at build time, so the smoke needs no
   # CTest fixture that a coverage shard would pull in from another shard.
@@ -134,6 +145,15 @@ if(AZOOKEY_BUILD_TESTS)
   set_tests_properties(azookey_reverse_lookup_bench_smoke PROPERTIES
     TIMEOUT 30
     PASS_REGULAR_EXPRESSION "reverse_convert_warm n=10 p50_ms=")
+  # No time gate: coverage and sanitizer builds are many times slower (budgets in spec section 9).
+  add_dependencies(azookey_lattice_bench dictionary_fixtures)
+  add_test(NAME azookey_lattice_bench_smoke
+           COMMAND azookey_lattice_bench
+                   --dict-dir "${CMAKE_BINARY_DIR}/dictbuild/fixtures/lattice"
+                   --windows 4 --iterations 1)
+  set_tests_properties(azookey_lattice_bench_smoke PROPERTIES
+    TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "lattice_build_search length=32 n=8 count=4 p50_ms=.* complete=4")
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
   add_test(NAME azookey_trace_viewer_smoke

@@ -392,6 +392,11 @@
       "default": false,
       "description": "M62-E: true で読み きょう・ことし・いま などから日付・年・時刻の候補を先頭 1 件の直後へ注釈付きで差し込む"
     },
+    "calculatorRewriter": {
+      "type": "boolean",
+      "default": false,
+      "description": "M62-E: true で ＝ で終わる式の読みから計算結果と式の候補を先頭 1 件の直後へ注釈付きで差し込む。numberRewriter が false のときは無視される"
+    },
     "symbolRewriter": {
       "type": "boolean", "default": false,
       "description": "M62-C: 記号のかな読み引きと関連候補の展開"

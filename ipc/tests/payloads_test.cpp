@@ -251,6 +251,7 @@ TEST(PayloadsTest, Handshake) {
   res.number_rewriter = true;
   res.katakana_rewriter = true;
   res.date_time_rewriter = true;
+  res.calculator_rewriter = true;
   res.max_candidates = 32;
   auto json2 = azookey::ipc::BuildHandshakeResponse(res);
   auto parsed2 = azookey::ipc::ParseHandshakeResponse(json2);
@@ -265,6 +266,7 @@ TEST(PayloadsTest, Handshake) {
   EXPECT_TRUE(parsed2->number_rewriter);
   EXPECT_TRUE(parsed2->katakana_rewriter);
   EXPECT_TRUE(parsed2->date_time_rewriter);
+  EXPECT_TRUE(parsed2->calculator_rewriter);
   EXPECT_EQ(parsed2->max_candidates, 32u);
 
   auto legacy_response = azookey::ipc::ParseHandshakeResponse(
@@ -274,6 +276,7 @@ TEST(PayloadsTest, Handshake) {
   EXPECT_FALSE(legacy_response->number_rewriter);
   EXPECT_FALSE(legacy_response->katakana_rewriter);
   EXPECT_FALSE(legacy_response->date_time_rewriter);
+  EXPECT_FALSE(legacy_response->calculator_rewriter);
   EXPECT_EQ(legacy_response->max_candidates, 9u);
 
   auto out_of_range_response =

@@ -330,6 +330,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.number_rewriter = ReadBool(object, "numberRewriter", settings.number_rewriter);
   settings.katakana_rewriter = ReadBool(object, "katakanaRewriter", settings.katakana_rewriter);
   settings.date_time_rewriter = ReadBool(object, "dateTimeRewriter", settings.date_time_rewriter);
+  settings.calculator_rewriter =
+      ReadBool(object, "calculatorRewriter", settings.calculator_rewriter);
   settings.symbol_rewriter = ReadBool(object, "symbolRewriter", settings.symbol_rewriter);
   settings.symbol_data_path = ReadString(object, "symbolDataPath", settings.symbol_data_path);
   settings.emoji_rewriter = ReadBool(object, "emojiRewriter", settings.emoji_rewriter);

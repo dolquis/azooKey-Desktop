@@ -70,6 +70,7 @@
   "numberRewriter": false,
   "katakanaRewriter": false,
   "dateTimeRewriter": false,
+  "calculatorRewriter": false,
   "symbolRewriter": false,
   "symbolDataPath": "",
   "emojiRewriter": false,

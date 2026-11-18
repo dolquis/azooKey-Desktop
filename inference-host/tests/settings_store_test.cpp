@@ -338,6 +338,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_FALSE(result.settings.number_rewriter);
   EXPECT_FALSE(result.settings.katakana_rewriter);
   EXPECT_FALSE(result.settings.date_time_rewriter);
+  EXPECT_FALSE(result.settings.calculator_rewriter);
   EXPECT_EQ(result.settings.nll, azookey::host::NllConfig{});
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
@@ -381,6 +382,7 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
     "numberRewriter": true,
     "katakanaRewriter": true,
     "dateTimeRewriter": true,
+    "calculatorRewriter": true,
     "symbolRewriter": true,
     "emojiRewriter": true,
     "emojiTriggerSearch": false,
@@ -408,6 +410,7 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_TRUE(result.settings.number_rewriter);
   EXPECT_TRUE(result.settings.katakana_rewriter);
   EXPECT_TRUE(result.settings.date_time_rewriter);
+  EXPECT_TRUE(result.settings.calculator_rewriter);
   EXPECT_TRUE(result.settings.symbol_rewriter);
   EXPECT_TRUE(result.settings.emoji_rewriter);
   EXPECT_FALSE(result.settings.emoji_trigger_search);

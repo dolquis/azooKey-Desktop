@@ -6667,6 +6667,63 @@ TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterSkipsDuplicatesAndAnEmptyCandid
   EXPECT_EQ(h.service.candidate_views_for_test("きょうは", KyouHostCandidates()).size(), 2u);
 }
 
+// candidate-rewriter-spec §20.6 to §20.8 and §20.11.
+TEST(TsfTipOnKeyDownPreeditTest, CalculatorRewriterNeedsTheNumberRewriterAndFollowsTheFirstOne) {
+  TextServiceHarness h;
+  const std::vector<azookey::ipc::CandidateField> host_candidates = {
+      {"１＋２＝", "1＋2＝", 0.0, "test"}, {"1+2=", "1＋2＝", 0.0, "test"}};
+  const std::vector<std::wstring> host_only = {L"１＋２＝", L"1+2="};
+
+  // Off by default, and ignored without the number rewriter (§20.7).
+  EXPECT_EQ(ViewSurfaces(h.service.candidate_views_for_test("1＋2＝", host_candidates)), host_only);
+  h.service.set_calculator_rewriter_enabled_for_test(true);
+  EXPECT_EQ(ViewSurfaces(h.service.candidate_views_for_test("1＋2＝", host_candidates)), host_only);
+  h.service.set_calculator_rewriter_enabled_for_test(false);
+  h.service.set_number_rewriter_enabled_for_test(true);
+  EXPECT_EQ(ViewSurfaces(h.service.candidate_views_for_test("1＋2＝", host_candidates)), host_only);
+
+  h.service.set_calculator_rewriter_enabled_for_test(true);
+  const auto items = h.service.candidate_views_for_test("1＋2＝", host_candidates);
+  EXPECT_EQ(ViewSurfaces(items), (std::vector<std::wstring>{L"１＋２＝", L"3", L"1+2=3", L"1+2="}));
+  ASSERT_EQ(items.size(), 4u);
+  EXPECT_EQ(items[1].description, L"計算結果");
+  EXPECT_EQ(items[2].description, L"計算式");
+  // Parsing an expression reads no clock.
+  EXPECT_EQ(h.service.dynamic_candidate_clock_reads_for_test(), 0u);
+
+  // A digits-only reading gets the number candidates only, at the tail.
+  for (const auto& item : h.service.candidate_views_for_test("12", {{"十二", "12", 0.0, "test"}})) {
+    EXPECT_NE(item.description, L"計算結果");
+    EXPECT_NE(item.description, L"計算式");
+  }
+  // A Host candidate with the result's surface keeps its place.
+  const auto deduplicated = h.service.candidate_views_for_test(
+      "1＋2＝", {{"１＋２＝", "1＋2＝", 0.0, "test"}, {"3", "1＋2＝", 0.0, "test"}});
+  EXPECT_EQ(ViewSurfaces(deduplicated), (std::vector<std::wstring>{L"１＋２＝", L"1+2=3", L"3"}));
+  EXPECT_TRUE(h.service.candidate_views_for_test("1＋2＝", {}).empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesCalculatorCandidates) {
+  TextServiceHarness h;
+  h.service.preedit_kana_ = "1＋2＝";
+  h.service.set_number_rewriter_enabled_for_test(true);
+  h.service.set_calculator_rewriter_enabled_for_test(true);
+  // The number rewriter selects the legacy key path, where Space opens the
+  // window from the cache (as in CommitObservationExcludesNumberRewriteCandidates).
+  h.service.set_rewritten_cached_candidates_for_test("1＋2＝",
+                                                     {{"１＋２＝", "1＋2＝", 0.0, "test"}});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_EQ(shown.size(), 3u);
+  ASSERT_EQ(shown[1].surface, "3");
+  h.service.set_selected_candidate_index_for_test(1);
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitKeysBuildNumericPreedit) {
   TextServiceHarness h;
   AsciiDecimalDigitTranslationGuard digit_translation;
@@ -11446,8 +11503,9 @@ TEST(TsfTipTypoCorrectionTest, AmbiguousReadingChoiceReachesCandidatesButNotTheP
   EXPECT_EQ(std::count(received_types.begin(), received_types.end(), MessageType::ObserveTypo), 0);
 }
 
-// candidate-rewriter-spec §20.8 and §20.10: dateTimeRewriter arrives in the
-// Handshake response, and the dynamic candidates match the reading the Host
+// candidate-rewriter-spec §20.8 and §20.10: dateTimeRewriter and
+// calculatorRewriter arrive in the Handshake response, and the dynamic
+// candidates match the reading the Host
 // corrected the candidates to, not the typed one.
 TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedReading) {
   using namespace azookey::ipc;
@@ -11461,6 +11519,7 @@ TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedR
       HandshakeResponse handshake_response;
       handshake_response.accepted = true;
       handshake_response.date_time_rewriter = true;
+      handshake_response.calculator_rewriter = true;
       response.payload_json = BuildHandshakeResponse(handshake_response);
       return response;
     }
@@ -11483,6 +11542,7 @@ TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedR
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil([&] { return h.service.date_time_rewriter_enabled_for_test(); },
                         std::chrono::seconds(10)));
+  EXPECT_TRUE(h.service.calculator_rewriter_enabled_for_test());
   TypeTypoRomaji(h, "KIYOU");
   ASSERT_EQ(h.service.preedit_kana_, "きよう");
   const bool inserted = WaitUntil(
@@ -16430,6 +16490,41 @@ TEST(TsfTipReadingSymbolTest, UsAndJisLayoutsTypeTheirOwnSymbols) {
                            {VK_OEM_102, true},
                            {VK_OEM_2, false}}),
               L"あ＠：（＝＿・");
+  }
+}
+
+// candidate-rewriter-spec §20.6: a typed expression reaches the calculator as
+// the reading characters of tsf-deep-integration-spec §3.5, also in an app
+// that pairs brackets, where the expression has no brackets.
+TEST(TsfTipReadingSymbolTest, TypedExpressionGetsTheCalculatorCandidatesWithOrWithoutPairing) {
+  AsciiDecimalDigitTranslationGuard digits;
+  OemCompositionTranslationGuard oem_translation(&TranslateUsLayoutForTest);
+  for (const bool pairing : {false, true}) {
+    SCOPED_TRACE(pairing);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, /*legacy=*/true);
+    h.service.set_calculator_rewriter_enabled_for_test(true);
+    azookey::core::BracketSettings settings;
+    settings.pairing.enabled = pairing;
+    h.service.set_bracket_settings_for_test(settings);
+    for (const TypedKey& typed : {TypedKey{'1', false}, TypedKey{VK_OEM_PLUS, true},
+                                  TypedKey{'2', false}, TypedKey{VK_OEM_PLUS, false}}) {
+      h.keyboard_state.SetDown(VK_SHIFT, typed.shift);
+      ASSERT_TRUE(h.Press(typed.key)) << "key " << typed.key;
+      h.keyboard_state.SetDown(VK_SHIFT, false);
+    }
+    ASSERT_EQ(h.context.document->text, L"1＋2＝");
+    ASSERT_EQ(h.service.preedit_kana_, "1＋2＝");
+
+    // The number rewriter selects the legacy key path: Space opens the window
+    // from the cache.
+    h.service.set_rewritten_cached_candidates_for_test(h.service.preedit_kana_,
+                                                       {{"１＋２＝", "1＋2＝", 0.0, "test"}});
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_EQ(shown.size(), 3u);
+    EXPECT_EQ(shown[1].surface, "3");
+    EXPECT_EQ(shown[2].surface, "1+2=3");
   }
 }
 

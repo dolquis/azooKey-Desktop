@@ -153,6 +153,8 @@ struct RuntimeSettings {
   bool katakana_rewriter{false};
   // M62-E (docs/candidate-rewriter-spec.md §20.10).
   bool date_time_rewriter{false};
+  // The TIP ignores it while number_rewriter is false (spec §20.7).
+  bool calculator_rewriter{false};
   bool symbol_rewriter{false};
   std::string symbol_data_path;
   bool emoji_rewriter{false};

@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/CalculatorRewriter.h"
 #include "azookey/core/CandidatePage.h"
 #include "azookey/core/DateTimeRewriter.h"
 #include "azookey/core/EtwLogger.h"
@@ -4873,6 +4874,13 @@ std::vector<core::Candidate> TextService::DynamicCandidates(const std::string& r
     dynamic_candidate_clock_reads_.fetch_add(1, std::memory_order_relaxed);
     result = core::ExpandDateTimeCandidates(reading, *now);
   }
+  // §20.6: the two kinds never share a reading, so at most one adds anything.
+  if (calculator_rewriter_.load(std::memory_order_relaxed) &&
+      number_rewriter_.load(std::memory_order_relaxed)) {
+    auto calculated = core::ExpandCalculatorCandidates(reading);
+    result.insert(result.end(), std::make_move_iterator(calculated.begin()),
+                  std::make_move_iterator(calculated.end()));
+  }
   return result;
 }
 
@@ -6797,6 +6805,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
     katakana_rewriter_.store(hpayload->katakana_rewriter, std::memory_order_relaxed);
     date_time_rewriter_.store(hpayload->date_time_rewriter, std::memory_order_relaxed);
+    calculator_rewriter_.store(hpayload->calculator_rewriter, std::memory_order_relaxed);
     symbol_rewriter_.store(hpayload->symbol_rewriter, std::memory_order_relaxed);
     emoji_rewriter_.store(hpayload->emoji_rewriter, std::memory_order_relaxed);
     emoji_trigger_search_.store(hpayload->emoji_trigger_search, std::memory_order_relaxed);

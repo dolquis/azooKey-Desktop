@@ -155,6 +155,7 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("number_rewriter", j::Value(p.number_rewriter));
   o.emplace("katakana_rewriter", j::Value(p.katakana_rewriter));
   o.emplace("date_time_rewriter", j::Value(p.date_time_rewriter));
+  o.emplace("calculator_rewriter", j::Value(p.calculator_rewriter));
   o.emplace("symbol_rewriter", j::Value(p.symbol_rewriter));
   o.emplace("emoji_rewriter", j::Value(p.emoji_rewriter));
   o.emplace("emoji_trigger_search", j::Value(p.emoji_trigger_search));
@@ -190,6 +191,7 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.number_rewriter = v->GetBool("number_rewriter").value_or(false);
   p.katakana_rewriter = v->GetBool("katakana_rewriter").value_or(false);
   p.date_time_rewriter = v->GetBool("date_time_rewriter").value_or(false);
+  p.calculator_rewriter = v->GetBool("calculator_rewriter").value_or(false);
   p.symbol_rewriter = v->GetBool("symbol_rewriter").value_or(false);
   p.emoji_rewriter = v->GetBool("emoji_rewriter").value_or(false);
   p.emoji_trigger_search = v->GetBool("emoji_trigger_search").value_or(true);

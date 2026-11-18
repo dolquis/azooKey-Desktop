@@ -401,6 +401,7 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
     "numberRewriter": true,
     "katakanaRewriter": true,
     "dateTimeRewriter": true,
+    "calculatorRewriter": true,
     "symbolRewriter": true,
     "emojiRewriter": true,
     "emojiTriggerSearch": false,
@@ -443,6 +444,7 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_TRUE(root.at("numberRewriter").AsBool());
   EXPECT_TRUE(root.at("katakanaRewriter").AsBool());
   EXPECT_TRUE(root.at("dateTimeRewriter").AsBool());
+  EXPECT_TRUE(root.at("calculatorRewriter").AsBool());
   EXPECT_TRUE(root.at("symbolRewriter").AsBool());
   EXPECT_TRUE(root.at("emojiRewriter").AsBool());
   EXPECT_FALSE(root.at("emojiTriggerSearch").AsBool());

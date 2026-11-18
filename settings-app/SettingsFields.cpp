@@ -58,6 +58,7 @@ std::vector<SettingField> BuildFields() {
   const SettingCondition ai_cleanup{"batchConversionMode", "ai-cleanup"};
   const SettingCondition inline_english{"inlineEnglishCandidates", "true"};
   const SettingCondition english_dictionary{"inlineEnglishDictionary", "true"};
+  const SettingCondition numbers{"numberRewriter", "true"};
   const SettingCondition symbols{"symbolRewriter", "true"};
   const SettingCondition emoji{"emojiRewriter", "true"};
   const SettingCondition brackets{"bracketPairing", "true"};
@@ -109,6 +110,7 @@ std::vector<SettingField> BuildFields() {
       Bool("numberRewriter", Pane::Candidates, "Rewriters", false),
       Bool("katakanaRewriter", Pane::Candidates, "Rewriters", false),
       Bool("dateTimeRewriter", Pane::Candidates, "Rewriters", false),
+      Bool("calculatorRewriter", Pane::Candidates, "Rewriters", false, numbers),
       Bool("symbolRewriter", Pane::Candidates, "Rewriters", false),
       Text("symbolDataPath", Pane::Candidates, "Rewriters", "", symbols, true),
       Bool("emojiRewriter", Pane::Candidates, "Rewriters", false),

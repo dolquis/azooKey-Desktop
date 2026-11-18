@@ -345,6 +345,7 @@ TEST(SettingsFieldsTest, FieldsSitInThePanesOfTheSpecTable) {
       {"mixedEnglishAutoConversion", Pane::Candidates},
       {"numberRewriter", Pane::Candidates},
       {"dateTimeRewriter", Pane::Candidates},
+      {"calculatorRewriter", Pane::Candidates},
       {"emojiRewriter", Pane::Candidates},
       {"maxCandidates", Pane::Candidates},
       {"typoCorrectionMode", Pane::Dictionary},

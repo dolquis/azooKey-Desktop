@@ -540,6 +540,12 @@ class TextService final : public ITfTextInputProcessorEx,
   bool date_time_rewriter_enabled_for_test() const {
     return date_time_rewriter_.load(std::memory_order_relaxed);
   }
+  void set_calculator_rewriter_enabled_for_test(bool enabled) {
+    calculator_rewriter_.store(enabled, std::memory_order_relaxed);
+  }
+  bool calculator_rewriter_enabled_for_test() const {
+    return calculator_rewriter_.load(std::memory_order_relaxed);
+  }
   // Pins the clock the dynamic candidates read (spec §20.2); nullopt restores
   // GetLocalTime. Safe to call while the IPC worker builds candidate lists.
   void set_local_time_for_test(std::optional<core::LocalDateTime> now) {
@@ -1137,6 +1143,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> katakana_rewriter_{false};
   // M62-E (docs/candidate-rewriter-spec.md §20.10), from the Handshake response.
   std::atomic<bool> date_time_rewriter_{false};
+  // Ignored while number_rewriter_ is false (spec §20.7).
+  std::atomic<bool> calculator_rewriter_{false};
   mutable std::atomic<uint32_t> dynamic_candidate_clock_reads_{0};
   mutable std::mutex local_time_for_test_mtx_;
   std::optional<core::LocalDateTime> local_time_for_test_;
@@ -1745,7 +1753,8 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT ApplyInputStateResult(ITfContext* context, core::HandleResult result);
   std::vector<core::Candidate> CoreCandidatesFromCache();
   // M62-E dynamic candidates for `reading` (spec §20.8). Reads the clock at
-  // most once and only while dateTimeRewriter is on (§20.11).
+  // most once and only while dateTimeRewriter is on, and parses an expression
+  // only while both calculatorRewriter and numberRewriter are on (§20.11).
   std::vector<core::Candidate> DynamicCandidates(const std::string& reading) const;
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;

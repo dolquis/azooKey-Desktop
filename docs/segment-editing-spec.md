@@ -214,7 +214,7 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 
 1. 候補窓を閉じる。
 2. composition の先頭文節を確定する候補の表層に置き換えて確定し、残りの読みを composition に残す。この action は
-   確定する表層と残りの読みを持つ。名前は実装で決め、`ClientAction` の末尾に足す。
+   確定する表層と残りの読みを持つ `CommitFirstSegment` で、`ClientAction` の末尾に足す。
 3. `ObserveCommit`（先頭文節の読み、確定した表層）。
 4. 残りの読みの候補窓用の `QueryCandidates`。
 

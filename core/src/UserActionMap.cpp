@@ -164,6 +164,15 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
     case vk::kDown:
       if (kind == InputStateKind::Selecting) return Make(UserAction::Down, modifiers);
       break;
+    case vk::kPrior:
+    case vk::kNext:
+      // A page at a time, without a UserAction of its own (spec §1.4, §1.6.2 (B)).
+      if (!shift && kind == InputStateKind::Selecting) {
+        auto event = Make(virtual_key == vk::kPrior ? UserAction::Up : UserAction::Down, modifiers);
+        event->by_page = true;
+        return event;
+      }
+      break;
     case vk::kLeft:
       if (kind == InputStateKind::Selecting) return Make(UserAction::Backward, modifiers);
       break;

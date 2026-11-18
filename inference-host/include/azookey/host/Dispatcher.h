@@ -142,6 +142,9 @@ class Dispatcher {
   // policy that is secure or disallows learning. `privacy` is empty without a
   // settings store.
   bool HostLearningBlocked(const std::optional<SettingsStore::PrivacyGuard>& privacy) const;
+  // HostLearningBlocked under a fresh privacy lock, for ExportLearningData and
+  // ImportLearningData (learning-data-management-spec section 8).
+  bool LearningDataTransferBlocked() const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;

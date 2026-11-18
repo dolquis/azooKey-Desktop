@@ -6119,6 +6119,117 @@ TEST_F(DispatcherTest, LearningDataListForgetExportImportRoundTrip) {
   std::filesystem::remove_all(dir);
 }
 
+// DEV-2143 (learning-data-management-spec section 8): the Host-wide privacy
+// policy (secure, or learning not allowed) and SafeMode block export and
+// import at their entry, before any file or store is touched.
+TEST_F(DispatcherTest, LearningDataExportAndImportAreBlockedBySecureNoLearningAndSafeMode) {
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+  azookey::learning::test::TestByteCrypto backup_crypto;
+  engine.SetBackupCrypto(&backup_crypto);
+  EnableEventPrivacy(dispatcher);
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "にほん";
+  commit.chosen = {"日本", "にほん", 1.0, "model"};
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(720, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  ASSERT_GT(store.Score("にほん", "日本", now), 0.0);
+
+  const auto settings_path = temp_directory.File("azookey_learning_transfer_blocked.json");
+  const auto write_settings = [&](const char* json) {
+    std::ofstream file(settings_path, std::ios::trunc);
+    file << json;
+  };
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore settings(settings_path);
+  ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings);
+  const auto dir = std::filesystem::path(temp_directory.File("azookey_learning_transfer_blocked"));
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  uint64_t id = 721;
+  ipc::ExportLearningDataRequest export_request;
+  export_request.stores = {"learning"};
+  const auto export_to = [&](const std::filesystem::path& path) {
+    export_request.destination_path = azookey::core::PathToUtf8(path);
+    const auto response =
+        target.Dispatch(MakeReq(id++, ipc::MessageType::ExportLearningData,
+                                ipc::BuildExportLearningDataRequest(export_request)));
+    EXPECT_TRUE(response);
+    return response ? ipc::ParseExportLearningDataResponse(response->payload_json) : std::nullopt;
+  };
+  ipc::ImportLearningDataRequest import_request;
+  import_request.source_path = azookey::core::PathToUtf8(dir / "backup.zip");
+  import_request.stores = {"learning"};
+  const auto import_backup = [&]() {
+    const auto response =
+        target.Dispatch(MakeReq(id++, ipc::MessageType::ImportLearningData,
+                                ipc::BuildImportLearningDataRequest(import_request)));
+    EXPECT_TRUE(response);
+    return response ? ipc::ParseImportLearningDataResponse(response->payload_json) : std::nullopt;
+  };
+  // Allowed under the normal policy: the backup the blocked imports below name.
+  const auto exported = export_to(dir / "backup.zip");
+  ASSERT_TRUE(exported);
+  ASSERT_EQ(exported->status, "success") << exported->error.value_or("");
+  ipc::ForgetLearningEntryRequest forget;
+  forget.store = "learning";
+  forget.reading = "にほん";
+  forget.surface = "日本";
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(id++, ipc::MessageType::ForgetLearningEntry,
+                                          ipc::BuildForgetLearningEntryRequest(forget))));
+  ASSERT_DOUBLE_EQ(store.Score("にほん", "日本", now), 0.0);
+
+  struct Case {
+    const char* name;
+    const char* settings;
+    bool safe_mode;
+  };
+  for (const auto& blocked : {
+           Case{"secure", R"({"privacy":{"mode":"secure"}})", false},
+           Case{"no_learning", R"({"privacy":{"mode":"custom","custom":{"learning":false}}})",
+                false},
+           Case{"safe_mode", R"({"privacy":{"mode":"normal"}})", true},
+       }) {
+    SCOPED_TRACE(blocked.name);
+    write_settings(blocked.settings);
+    ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+    if (blocked.safe_mode) {
+      engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+      ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+    }
+    const auto destination = dir / (std::string(blocked.name) + ".zip");
+    const auto refused_export = export_to(destination);
+    ASSERT_TRUE(refused_export);
+    EXPECT_EQ(refused_export->status, "error");
+    EXPECT_EQ(refused_export->error, std::optional<std::string>("blocked"));
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    const auto refused_import = import_backup();
+    ASSERT_TRUE(refused_import);
+    EXPECT_EQ(refused_import->status, "error");
+    EXPECT_EQ(refused_import->error, std::optional<std::string>("blocked"));
+    EXPECT_DOUBLE_EQ(store.Score("にほん", "日本", now), 0.0);
+    if (blocked.safe_mode) {
+      (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared);
+      ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
+    }
+  }
+
+  // The same import goes through once nothing blocks it.
+  write_settings(R"({"privacy":{"mode":"normal"}})");
+  ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto imported = import_backup();
+  ASSERT_TRUE(imported);
+  EXPECT_EQ(imported->status, "success") << imported->error.value_or("");
+  EXPECT_GT(store.Score("にほん", "日本", now), 0.0);
+  std::filesystem::remove_all(dir);
+  std::remove(settings_path.c_str());
+}
+
 TEST_F(DispatcherTest, LearningDataRequestsRejectBadInput) {
   ipc::ListLearningEntriesRequest list;
   list.store = "everything";

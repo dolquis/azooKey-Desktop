@@ -429,7 +429,8 @@ AI の入口（`TransformSelectedText`、`QueryBatchConversion` の `ai-cleanup`
 `docs/proofread-view-spec.md` §2.9）。学習の書き込みの入口（`CommitObservation`、
 `CommitSegmentsObservation`、`CommitCorrection`、`ObserveTypo`）も、同じ理由で privacy の方針に加えて
 engine の状態の SafeMode で止める。確定の観測は `ok = false` を返し、`ObserveTypo` は応答を返さない
-（secure と同じ）。自動単語登録の抽出は確定の観測の中で行うので、同じ判定で止まる。
+（secure と同じ）。自動単語登録の抽出は確定の観測の中で行うので、同じ判定で止まる。学習データの
+export と import も同じ判定で `blocked` にする（`docs/learning-data-management-spec.md` §8）。
 
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。

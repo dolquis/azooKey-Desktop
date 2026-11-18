@@ -39,6 +39,9 @@ namespace azookey::host {
 namespace {
 
 constexpr std::int32_t kGenericFailureHresult = static_cast<std::int32_t>(0x80004005u);
+// learning-data-management-spec section 4.5: export and import refused by the
+// section 8 stop (the name user-dictionary-pos-spec section 6.8 also uses).
+constexpr std::string_view kLearningDataErrorBlocked = "blocked";
 
 logging::RuntimeLogger& DispatcherLogger(logging::RuntimeLogger* configured) {
   if (configured) return *configured;
@@ -1055,6 +1058,15 @@ bool Dispatcher::HostLearningBlocked(
          (privacy && (privacy->policy.secure || !privacy->policy.learning_allowed));
 }
 
+bool Dispatcher::LearningDataTransferBlocked() const {
+  // learning-data-management-spec section 8: the settings app's request has no
+  // input-field secure, so the Host-wide policy and SafeMode decide (DEV-2143).
+  // Checked once at the entry; the lock is not held through the archive I/O.
+  const auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  return HostLearningBlocked(privacy);
+}
+
 void Dispatcher::SetClientId(std::string client_id) {
   if (client_id == client_id_) return;
 
@@ -1948,6 +1960,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleTransformSelectedText(const ipc::
 std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Envelope& req) {
   ipc::ExportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildExportLearningDataResponse(res)); };
+  if (LearningDataTransferBlocked()) {
+    res.error = std::string(kLearningDataErrorBlocked);
+    return reply();
+  }
   const auto parsed = ipc::ParseExportLearningDataRequest(req.payload_json);
   const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
   if (!stores) {
@@ -1982,6 +1998,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleExportLearningData(const ipc::Env
 std::optional<ipc::Envelope> Dispatcher::HandleImportLearningData(const ipc::Envelope& req) {
   ipc::ImportLearningDataResponse res;
   const auto reply = [&]() { return MakeResponse(req, ipc::BuildImportLearningDataResponse(res)); };
+  if (LearningDataTransferBlocked()) {
+    res.error = std::string(kLearningDataErrorBlocked);
+    return reply();
+  }
   const auto parsed = ipc::ParseImportLearningDataRequest(req.payload_json);
   const auto stores = parsed ? ParseStoreList(parsed->stores) : std::nullopt;
   const auto policy =

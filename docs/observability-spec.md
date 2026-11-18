@@ -243,7 +243,7 @@ Cancel を送り、ローカル候補（`host-availability-spec.md` §8.3）で�
 
 IME である以上、入力本文・候補語をそのままログに出すとプライバシー
 リスクがある。本文系フィールド（`reading` / `surface` / `candidate.text` /
-確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）の出力可否は、
+確定文字列 / Magic Conversion prompt 等）の出力可否は、
 以下の **優先順位** で 1 つに定める。上位が下位を常に上書きする。
 
 | 優先 | 条件 | 本文系フィールドの扱い |
@@ -275,7 +275,7 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   `privacy.autoSecureInput` の値によらず詳細ログを拒否する。
   非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
-  パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
+  パス、typo の `raw_keys`（生の打鍵列。`typo-correction-learning-spec.md` §12.12.1）は本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
 - 本ポリシーの実装は M44 診断 ZIP（`diagnostics-compat-spec.md` §12.5）と secure redaction（`docs/privacy-and-secure-input-spec.md` §5 / §8）で
   **共通の redaction 関数** を用い、二重定義・不整合を作らない。共通関数は、フィールド名から
   本文系・機密を判定する `logging::IsSensitiveRuntimeLogField`

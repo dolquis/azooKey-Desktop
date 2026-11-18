@@ -386,7 +386,8 @@ C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は
 `dictionary.verifyOnLoad` の検証も同じで、既存の拒否の条件は変わらず、`CONN` の違反は (3) の後に行う (4) で、
 その層の `CONN` だけを使わない扱いになる。ビルド時の検査である `dictbuild --verify` だけは、(3) に加えて
 `CONN` の各エントリの変種が `(cost, left_id, right_id, attr)` の昇順であることと、`attr` の bit 14 が表層と
-一致することも検査し、違反を失敗にする。
+一致することも検査し、違反を失敗にする。それらを読む前提として、(4) の構造と参照の検査（`CMAT` を持つファイルでは、
+`CONN` の ID が `CMAT` の添字表で引けること）も行い、違反を同じく失敗にする。
 
 **(4) 連接情報の検査（ラティス変換が lattice_core と各層を読み込むときに 1 回、O(変種数)）**。結果は層を
 読み込み直すまで変えない。問い合わせの途中で検査して状態を変えることはしない。同じ入力に同じ候補を返すため
@@ -642,24 +643,43 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 **足切り**。上流 `cost` が 10000 を超えるエントリを捨てる（`--max-cost` の既定値）。
 上流の core 版を全件入れると `sudachi_lexicon` 単体で §15.9 の同梱合計を超え、
 `cost` 10000 超は希少な活用形と長い固有名詞が大半を占めるためである。品詞による足切りは
-しない。20260723 版ではこの規則で 623,065 エントリ、388,011 キー、約 70 MB の
-アーティファクトになる。
+しない。20260723 版ではこの規則で 622,165 エントリ、387,994 キーになり、`CONN`（下記）を含めた
+アーティファクトは約 80 MB になる。
 
 **連接情報の取り込み**（M65。`docs/lattice-conversion-spec.md` §8）。抽出器は、語彙の中間 TSV とは別に、
 連接の中間 TSV を書く。列は `reading` / `surface` / `left_id`（列 2）/ `right_id`（列 3）/ `cost` /
 `pos`（上表と同じ）/ `conjugation`（活用型と活用形の `*` 以外を `-` で連結したもの。持たない語は空欄）/
-`normalized_form`（列 13 の正規化形。`\uXXXX` エスケープを戻す）とする。
+`normalized_form`（列 13 の正規化形。`\uXXXX` エスケープを戻す）/ `conn_pos`（列 6〜11 の品詞 1〜4・活用型・
+活用形を `*` も省かずに `,` で連結したもの。§15.5 の `conn_pos_table` の要素）とする。活用型も活用形も `-` を含むので、
+`conjugation` から 2 つを分けて戻す規則は無い。ビルダは `conn_pos` だけを読み、`pos` と `conjugation` は人が読むための列である。
+連接の中間 TSV は引用符を解釈せずにタブで分けて読む（正規化形は二重引用符を含みうる）。
 取り込む行と足切りは語彙と同じ規則による。ただし、表層形が読みと同じひらがなのエントリは、語彙には入れず、
-連接の中間 TSV には書く。
+連接の中間 TSV と、lattice_core の語彙の中間 TSV（語彙と同じ列）に書く。
 
 - `sudachi_lexicon` は、`ENTS` の各エントリについて、同じ（正規化キー, 表層）を持つ行の
-  （`left_id`, `right_id`, `cost`, 品詞と活用、表記の印）をすべて `CONN`（§15.5）に残す。表記の印は、表層が
-  §15.5 の文字集合だけからなるか（`attr` の bit 14）と、表層が `normalized_form` と異なるか（bit 15）である。`ENTS` の
-  内容は変えない。
+  （`left_id`, `right_id`, `cost`, 品詞と活用、表記の印）をすべて `CONN`（§15.5）に残す。組がすべて同じ行は 1 つにまとめる。
+  表記の印は、表層が §15.5 の文字集合だけからなるか（`attr` の bit 14）と、表層が `normalized_form` と異なるか（bit 15）
+  である。`ENTS` の内容は変えない。連接の行がどのエントリにも当たらなければビルドエラーとする。
 - lattice_core（`lattice_core.azdic`）は、表層形が読みと同じひらがなのエントリの `ENTS` と `CONN`、連接行列の `CMAT`、
-  `META.lattice`（`docs/lattice-conversion-spec.md` §8.2）を持つ。ヘッダの `layer_id` と `ENTS.source` は
-  語の出どころの `sudachi_lexicon` とする。`build_bundled.py` は `sudachi_lexicon` に続けて lattice_core を生成し、
+  `META.lattice`（`docs/lattice-conversion-spec.md` §8.2。キーは下表）を持つ。`CONN` を持たないエントリはビルドエラーとする。
+  ヘッダの `layer_id` と `ENTS.source` は語の出どころの `sudachi_lexicon` とし、`META.sources` も `sudachi_lexicon` の
+  metadata を使う。`build_bundled.py` は `sudachi_lexicon` に続けて lattice_core を生成し、
   下の「同梱ビルドと再現性」の層集合、`bundle-provenance.json`、`check_bundle.py --compare` の比較対象に含める。
+
+`META.lattice` のキーは次のとおりとする。品詞の表・代表 ID・既定の語コストは、連接の中間 TSV の全行（かなだけの語を含む、
+足切り後の取り込み行。1 行を 1 回と数える）から求める。文字列の並びはすべて code point の昇順（UTF-8 のバイト順と同じ）とする。
+
+| キー | 内容 |
+|---|---|
+| `pos_names` | 品詞名の表。品詞 1〜4 の `*` 以外を `-` で連結した名前（例 `名詞-普通名詞-一般`。`pos` 列と同じ形）の重複の無い配列 |
+| `pos_ids` | 品詞の表。`[名前の添字, 活用型, 活用形, left_id, right_id]` の配列（活用しない語の活用型・活用形は `*`）。（名前の添字, 活用型, 活用形）の昇順で、組ごとに 1 要素。ID はその組で最も多く現れる（`left_id`, `right_id`）で、同数なら小さい方（`docs/lattice-conversion-spec.md` §8.3） |
+| `pos_name_ids` | `pos_names` と同じ長さの配列。活用が分からない語の代表 `[left_id, right_id]`。同じ名前の行のうち活用形が `終止形-一般` の行、それが無ければ活用形が `*` の行で最も多い組（同数なら小さい方）。どちらも無い名前は `null` |
+| `penalties` | 補正項（同 §5.2）。`P_kata_variant`・`P_kata_own`・`P_node`・`P_unk` の 4 つ。初期値は 6000・0・3000・20000 |
+| `C` | 経路コストの尺度（同 §3.4）。初期値は 10000 |
+| `default_word_cost` | 可変層の既定の語コスト（同 §5.3）。品詞 1〜4 が `名詞,普通名詞,一般,*` の行の語コストの中央値（件数が偶数なら小さい方） |
+
+`penalties` と `C` は初期値であり、M52 で校正する（`docs/lattice-conversion-spec.md` §10.3、DEV-2101）。校正した値は
+`dictbuild/dictbuild.py` の定数に書き、lattice_core を作り直す。
 - 連接行列は、SudachiDict の raw 配布の直下にある `matrix.def.zip` から作る。この 1 本は版ごとの
   ディレクトリに置かれていないので、`build_bundled.py` に URL と SHA256 を固定し、ハッシュが一致しない取得は
   ビルドエラーとする。`--cache` と `--offline` の扱いは語彙のアーカイブと同じとする。
@@ -670,7 +690,12 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 - `CONN` を持つ層と lattice_core は、`META.connection_space` に `matrix.def.zip` の SHA256 から作る識別子を書く
   （形式は `docs/lattice-conversion-spec.md` §8.4）。
 
-20260723 版の語彙と上の規則では、使う連接 ID は左 3,332 種・右 3,336 種で、詰めた `CMAT` の行列は約 22 MB になる。
+`matrix.def` の各行は、前の語の右 ID、次の語の左 ID、連接コストの順で、先頭行は同じ順の 2 つの ID 空間の大きさである
+（MeCab・Sudachi と同じ）。`CMAT` は、詰める対象のセルがすべてちょうど 1 回ずつ現れることを求め、欠けたセル・重複・範囲外の
+ID とコストをビルドエラーとする。
+
+20260723 版の語彙と上の規則では、語が使う連接 ID は左 3,332 種・右 3,336 種で、ID 0 を足して詰めた `CMAT` の行列は
+約 22 MB になる。lattice_core は 20,473 エントリ、約 25 MB で、同梱 `.azdic` の合計は約 105 MB になり §15.9 に収まる。
 足切りを外すと ID は約 5,800 種になり、行列は約 67 MB になる。
 
 **同梱ビルドと再現性**。`build_bundled.py` は SudachiDict に続けて、プロジェクト自作の
@@ -680,8 +705,8 @@ revision は `authored-v1`、ライセンスは Apache-2.0、category は `techn
 帰属は層の固定順で `ThirdPartyNotices.txt` へ集約する。
 生成完了時に `bundle-provenance.json` を書き、生成器とその依存コード、両層のmetadata、
 技術用語seed、参照するnoticeのリポジトリ相対パスとSHA-256を固定順で集約する。
-記録は入力全体のfingerprint、Sudachi revisionとアーカイブのSHA-256 pin、辞書2層と
-帰属表示のSHA-256を結ぶ。生成の前後で入力が異なる場合は成功の記録を残さない。
+記録は入力全体のfingerprint、Sudachi revisionとアーカイブ（`matrix.def.zip` を含む）のSHA-256 pin、辞書2層と
+lattice_coreと帰属表示のSHA-256を結ぶ。生成の前後で入力が異なる場合は成功の記録を残さない。
 絶対パス、生成時刻、commitはこの記録に含めず、同一入力での決定性を保つ。
 実機検証zipの生成では `check_bundle.py --vm-package-json` が形式・出所・入力と出力の一致を検査する
 （`vm-verification-package-spec.md` §1）。この記録はローカル成果物の取り違え・古い入力の検出に使い、
@@ -689,6 +714,9 @@ revision は `authored-v1`、ライセンスは Apache-2.0、category は `techn
 release workflow は同じキャッシュを使って別出力先へ2回生成し、2回目を `--offline` とする。
 `check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
 `content_hash`、ファイルサイズ、全バイトのSHA256と帰属文書の一致を検査する。
+配布ガードは lattice_core について、`CONN`・`CMAT`・`META.lattice` を持つことと、`connection_space` が
+`sudachi_lexicon` と一致することも検査する。`check_bundle.py --package` の `Package.wxs` との突き合わせは、
+MSI が lattice_core を同梱するまで lattice_core を両側から除く一時的な扱いとし、DEV-2099 で必須に戻す。
 独立した2回の生成が一致しなければMSIを作成しない。
 
 ### 15.13 ビルダと Host の接続契約

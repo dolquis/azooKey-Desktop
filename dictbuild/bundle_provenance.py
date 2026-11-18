@@ -9,7 +9,9 @@ import re
 
 RECEIPT = "bundle-provenance.json"
 LAYERS = ("sudachi_lexicon", "technical_terms_lexicon")
-ARTIFACTS = tuple(f"dict/{layer}.azdic" for layer in LAYERS) + ("ThirdPartyNotices.txt",)
+# lattice_core is not a DictionaryStore layer; it has no metadata JSON of its own (azdic spec 15.12).
+LATTICE_CORE = "dict/lattice_core.azdic"
+ARTIFACTS = tuple(f"dict/{layer}.azdic" for layer in LAYERS) + (LATTICE_CORE, "ThirdPartyNotices.txt")
 CODE_INPUTS = ("build_bundled.py", "dictbuild.py", "extract_sudachi.py", "bundle_provenance.py")
 
 

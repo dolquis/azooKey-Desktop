@@ -464,7 +464,8 @@ base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ�
 上流とリポジトリ内の自作seedから生成し、`BundledDictionaryDir` property で MSI へ渡す。
 2回生成の再現性検査は `azdic-physical-layer-spec.md` §15.12 を正典とする。`dictbuild/check_bundle.py` は
 MSI をビルドする前に、standalone の `neologd_lexicon` pack の混入、層 ID とファイル名の不一致、
-`ThirdPartyNotices.txt` の帰属欠落、`Package.wxs` の同梱一覧と生成物の差を検出して失敗させる。
+`ThirdPartyNotices.txt` の帰属欠落、`Package.wxs` の同梱一覧と生成物の差を検出して失敗させる
+（MSI がまだ同梱しない lattice_core の扱いは `azdic-physical-layer-spec.md` §15.12）。
 本節の帰属文書の配置先は、設定アプリのライセンス導線（`native-ui-spec.md` §4.6）から参照される。
 
 照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
@@ -1014,7 +1015,7 @@ ETW は `docs/observability-spec.md` §7.6 の redaction ポリシー正典が�
 ゲートが無い）。そのため本文系フィールド（`reading` / `surface` / `candidate.text` /
 確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）は **build / env / mode に
 よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が `docs/observability-spec.md` §7.6 優先順位 4 の
-opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を持たない。
+opt-in で本文を出し得る（`raw_keys` は opt-in でも出さない）のとは異なり、ETW は本文出力経路を持たない。
 
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
   載せていたが `docs/observability-spec.md` §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /

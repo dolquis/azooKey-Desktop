@@ -1336,6 +1336,104 @@ TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
   EXPECT_EQ(config.typo_correction_mode, "off");
 }
 
+// DEV-2091: the Host's startup applies the same overrides to settings whose
+// reload lost the SafeMode flag, so the engine config carries the SafeMode
+// values (typo correction off, no mining) while the engine is in SafeMode.
+TEST(SettingsStoreTest, ApplySafeModeOverridesMatchesTheFlaggedLoad) {
+  ScopedTempDirectory temp("azookey_settings_apply_safe_mode_overrides");
+  const auto path = temp.path() / "settings.json";
+  const std::string rest =
+      R"("aiBackend":"openai","llmMagicConversion":true,"batchConversionMode":"ai-cleanup",)"
+      R"("privacy":{"mode":"normal","redactLogs":false,"aiEnabled":true,"externalAiEnabled":true},)"
+      R"("reranker":{"nllRerankEnabled":true},"typoCorrectionMode":"auto_replace",)"
+      R"("typoCorrection":{"enabled":true,"mode":"aggressive","learnPersonalPatterns":true},)"
+      R"("autoWordRegistration":{"miningEnabled":true,"trendingEnabled":true},)"
+      R"("model":{"enabled":true,"selectedPath":"C:/models/zenzai.gguf","autoLoadOnHostStart":true})";
+  WriteText(path, "{" + rest + "}");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  auto lost_flag = store.settings();
+  ASSERT_FALSE(lost_flag.safe_mode.enabled);
+  azookey::host::EngineConfig base;
+  base.model_path = "C:/models/zenzai.gguf";
+  const auto before = azookey::host::ApplyRuntimeSettingsToEngineConfig(base, lost_flag);
+  ASSERT_NE(before.typo_correction_mode, "off");
+  ASSERT_TRUE(before.auto_word_mining_enabled);
+
+  azookey::host::ApplySafeModeOverrides(lost_flag);
+  WriteText(path, "{" + rest + R"(,"safeMode":{"enabled":true}})");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto& flagged = store.settings();
+  ASSERT_TRUE(flagged.safe_mode.enabled);
+  EXPECT_EQ(lost_flag.model.enabled, flagged.model.enabled);
+  EXPECT_EQ(lost_flag.model.auto_load_on_host_start, flagged.model.auto_load_on_host_start);
+  EXPECT_EQ(lost_flag.nll.enabled, flagged.nll.enabled);
+  EXPECT_EQ(lost_flag.llm_magic_conversion, flagged.llm_magic_conversion);
+  EXPECT_EQ(lost_flag.ai_backend, flagged.ai_backend);
+  EXPECT_EQ(lost_flag.batch_conversion_mode, flagged.batch_conversion_mode);
+  EXPECT_EQ(lost_flag.ai_privacy.ai, flagged.ai_privacy.ai);
+  EXPECT_EQ(lost_flag.ai_privacy.external, flagged.ai_privacy.external);
+  EXPECT_EQ(lost_flag.privacy_policy.secure, flagged.privacy_policy.secure);
+  EXPECT_EQ(lost_flag.privacy_policy.learning_allowed, flagged.privacy_policy.learning_allowed);
+  EXPECT_EQ(lost_flag.typo_correction.enabled, flagged.typo_correction.enabled);
+  EXPECT_EQ(lost_flag.typo_correction.mode, flagged.typo_correction.mode);
+  EXPECT_EQ(lost_flag.typo_correction.learn_personal_patterns,
+            flagged.typo_correction.learn_personal_patterns);
+  EXPECT_EQ(lost_flag.auto_word.mining_enabled, flagged.auto_word.mining_enabled);
+  EXPECT_EQ(lost_flag.auto_word.trending_enabled, flagged.auto_word.trending_enabled);
+
+  const auto after = azookey::host::ApplyRuntimeSettingsToEngineConfig(base, lost_flag);
+  EXPECT_EQ(after.typo_correction_mode, "off");
+  EXPECT_FALSE(after.auto_word_mining_enabled);
+  EXPECT_FALSE(after.nll.enabled);
+  EXPECT_TRUE(after.model_path.empty());
+}
+
+// DEV-2091: a power source change rebuilds the engine config from the held
+// settings, which lack the SafeMode values when the startup reload lost the
+// flag; the engine's SafeMode puts them back, and nothing else changes them.
+TEST(SettingsStoreTest, SettingsForEngineConfigFollowsTheEngineSafeMode) {
+  ScopedTempDirectory temp("azookey_settings_for_engine_config");
+  const auto path = temp.path() / "settings.json";
+  const std::string rest =
+      R"("privacy":{"mode":"normal"},"reranker":{"nllRerankEnabled":true},)"
+      R"("typoCorrection":{"enabled":true,"mode":"suggest","learnPersonalPatterns":true},)"
+      R"("autoWordRegistration":{"miningEnabled":true},"powerProfile":"balanced",)"
+      R"("model":{"enabled":true,"selectedPath":"C:/models/zenzai.gguf"})";
+  WriteText(path, "{" + rest + "}");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto held = store.settings();
+  azookey::host::EngineConfig base;
+  base.model_path = "C:/models/zenzai.gguf";
+  const auto config_of = [&](const azookey::host::RuntimeSettings& settings) {
+    return azookey::host::ApplyRuntimeSettingsToEngineConfig(base, settings);
+  };
+
+  const auto healthy = config_of(azookey::host::SettingsForEngineConfig(held, false));
+  EXPECT_EQ(healthy.typo_correction_mode, config_of(held).typo_correction_mode);
+  ASSERT_NE(healthy.typo_correction_mode, "off");
+  EXPECT_TRUE(healthy.auto_word_mining_enabled);
+  EXPECT_FALSE(healthy.model_path.empty());
+
+  const auto lost_flag = azookey::host::SettingsForEngineConfig(held, true);
+  EXPECT_EQ(lost_flag.power_profile, held.power_profile);
+  const auto safe = config_of(lost_flag);
+  EXPECT_EQ(safe.typo_correction_mode, "off");
+  EXPECT_FALSE(safe.auto_word_mining_enabled);
+  EXPECT_FALSE(safe.nll.enabled);
+  EXPECT_TRUE(safe.model_path.empty());
+
+  WriteText(path, "{" + rest + R"(,"safeMode":{"enabled":true}})");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto flagged = config_of(store.settings());
+  const auto again = config_of(azookey::host::SettingsForEngineConfig(store.settings(), true));
+  EXPECT_EQ(again.typo_correction_mode, flagged.typo_correction_mode);
+  EXPECT_EQ(again.auto_word_mining_enabled, flagged.auto_word_mining_enabled);
+  EXPECT_EQ(again.nll.enabled, flagged.nll.enabled);
+  EXPECT_EQ(again.model_path, flagged.model_path);
+}
+
 TEST(SettingsStoreTest, SafeModeDefaultsOffAndIgnoresMistypedValues) {
   ScopedTempDirectory temp("azookey_settings_safe_mode_defaults");
   const auto& dir = temp.path();

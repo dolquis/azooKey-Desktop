@@ -18,20 +18,50 @@ def generate(repository: Path, output: Path) -> None:
     import dictbuild
 
     temporary_directory = tempfile.TemporaryDirectory
+    header = "# SPDX-License-Identifier: Apache-2.0; THIRD_PARTY_LICENSES; synthetic fixture\n"
     with temporary_directory(dir=repository) as temporary:
-        def tiny(layer: str) -> tuple[bytes, str]:
-            metadata = json.loads((repository / "dictbuild" / "sources" /
-                                   f"{layer}.metadata.json").read_text(encoding="utf-8"))
-            tsv = Path(temporary) / f"{layer}.lex.tsv"
-            tsv.write_text("# SPDX-License-Identifier: Apache-2.0; THIRD_PARTY_LICENSES; synthetic fixture\n"
-                           "surface\treading\tpos\tsource_id\n"
-                           f"東京\tとうきょう\t名詞\t{metadata['sources'][0]['source_id']}\n",
-                           encoding="utf-8", newline="\n")
-            return dictbuild.build([tsv], metadata, dictbuild.LAYERS.index(layer),
-                                  repository / "dictbuild" / "notices")
+        work = Path(temporary)
+        notices = repository / "dictbuild" / "notices"
 
-        with mock.patch.object(build_bundled, "build_sudachi", side_effect=lambda *_: tiny("sudachi_lexicon")), \
-                mock.patch.object(build_bundled, "build_technical_terms", side_effect=lambda: tiny("technical_terms_lexicon")), \
+        def metadata(layer: str) -> dict:
+            return json.loads((repository / "dictbuild" / "sources" /
+                               f"{layer}.metadata.json").read_text(encoding="utf-8"))
+
+        def tiny(layer: str, reading: str = "とうきょう", surface: str = "東京",
+                 name: str | None = None) -> Path:
+            tsv = work / (name or f"{layer}.lex.tsv")
+            tsv.write_text(header + "surface\treading\tpos\tsource_id\n"
+                           f"{surface}\t{reading}\t名詞\t{metadata(layer)['sources'][0]['source_id']}\n",
+                           encoding="utf-8", newline="\n")
+            return tsv
+
+        # One word in sudachi_lexicon and one kana word in lattice_core, in one tiny connection space.
+        connections = work / "sudachi_lexicon.conn.tsv"
+        connections.write_text(
+            header + "\t".join(dictbuild.CONNECTION_COLUMNS) + "\n"
+            "とうきょう\t東京\t1\t1\t3000\t名詞-普通名詞-一般\t\t東京\t名詞,普通名詞,一般,*,*,*\n"
+            "は\tは\t2\t2\t3846\t助詞-係助詞\t\tは\t助詞,係助詞,*,*,*,*\n", encoding="utf-8", newline="\n")
+        matrix = work / "matrix.def"
+        matrix.write_text("3 3\n" + "".join(f"{r} {l} {r - l}\n" for r in range(3) for l in range(3)),
+                          encoding="utf-8", newline="\n")
+        sudachi = dictbuild.LAYERS.index("sudachi_lexicon")
+
+        def sudachi_layer(*_):
+            return dictbuild.build([tiny("sudachi_lexicon")], metadata("sudachi_lexicon"), sudachi, notices,
+                                   connections, dictbuild.connection_space(matrix))
+
+        def lattice_core(*_):
+            kana = tiny("sudachi_lexicon", "は", "は", "lattice_core.lex.tsv")
+            return dictbuild.build_lattice_core([kana], connections, matrix, metadata("sudachi_lexicon"),
+                                                sudachi, notices)
+
+        def technical_terms():
+            layer = "technical_terms_lexicon"
+            return dictbuild.build([tiny(layer)], metadata(layer), dictbuild.LAYERS.index(layer), notices)
+
+        with mock.patch.object(build_bundled, "build_sudachi", side_effect=sudachi_layer), \
+                mock.patch.object(build_bundled, "build_lattice_core", side_effect=lattice_core), \
+                mock.patch.object(build_bundled, "build_technical_terms", side_effect=technical_terms), \
                 mock.patch.object(build_bundled.tempfile, "TemporaryDirectory",
                                   side_effect=lambda: temporary_directory(dir=repository)):
             build_bundled.build_bundle(output, Path(temporary) / "unused-cache", True)

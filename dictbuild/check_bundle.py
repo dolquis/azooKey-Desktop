@@ -1,9 +1,9 @@
 """Release guard for the bundled dictionary payload (auto-word-registration-spec section 14.10).
 
-Fails when the payload carries anything but the bundled static layers (in particular a
-standalone neologd_lexicon pack), when an artifact's layer id differs from its file name,
-when ThirdPartyNotices.txt lacks a contributing source, or when the MSI ships a different
-set of dictionaries than the payload holds.
+Fails when the payload carries anything but the bundled static layers and lattice_core (in
+particular a standalone neologd_lexicon pack), when an artifact's layer id differs from its file
+name, when ThirdPartyNotices.txt lacks a contributing source, or when the MSI ships a different
+set of dictionaries than the payload holds (lattice_core aside until the MSI ships it, DEV-2099).
 """
 
 from __future__ import annotations
@@ -26,11 +26,13 @@ HERE = Path(__file__).resolve().parent
 
 BUNDLED = {f"{layer}.azdic": index for index, layer in enumerate(dictbuild.LAYERS)
            if layer != "neologd_lexicon"}
+# lattice_core holds sudachi_lexicon words, so its header names that layer (azdic spec 15.12).
+BUNDLED[f"{build_bundled.LATTICE_CORE}.azdic"] = dictbuild.LAYERS.index(build_bundled.LAYER)
 WIX = "{http://wixtoolset.org/schemas/v4/wxs}"
 
 
-def read_header(path: Path, image: bytes | None = None) -> tuple[int, list[str]]:
-    """Returns the layer id and META source ids without loading the whole artifact."""
+def read_summary(path: Path, image: bytes | None = None) -> tuple[int, set[bytes], dict]:
+    """Returns the layer id, the section names and META without loading the whole artifact."""
     with (io.BytesIO(image) if image is not None else path.open("rb")) as stream:
         header = stream.read(64)
         if len(header) < 64 or header[:8] != b"AZDIC1\0\0":
@@ -41,13 +43,32 @@ def read_header(path: Path, image: bytes | None = None) -> tuple[int, list[str]]
         table = stream.read(24 * section_count)
         if len(table) != 24 * section_count:
             raise ValueError(f"{path.name}: truncated section table")
-        for i in range(section_count):
-            name, _, offset, length = struct.unpack_from("<4sIQQ", table, 24 * i)
+        sections = [struct.unpack_from("<4sIQQ", table, 24 * i) for i in range(section_count)]
+        for name, _, offset, length in sections:
             if name == b"META":
                 stream.seek(offset)
-                meta = json.loads(stream.read(length))
-                return layer, [source["source_id"] for source in meta["sources"]]
+                return layer, {section[0] for section in sections}, json.loads(stream.read(length))
     raise ValueError(f"{path.name}: META section missing")
+
+
+def read_header(path: Path, image: bytes | None = None) -> tuple[int, list[str]]:
+    """Returns the layer id and META source ids without loading the whole artifact."""
+    layer, _, meta = read_summary(path, image)
+    return layer, [source["source_id"] for source in meta["sources"]]
+
+
+def lattice_errors(lattice: tuple[set[bytes], dict], sudachi: tuple[set[bytes], dict] | None) -> list[str]:
+    """lattice_core must carry CONN, CMAT and META.lattice in the connection space of sudachi_lexicon,
+    or the lattice (or the CONN of sudachi_lexicon) is silently left unused (azdic spec 15.5 (4))."""
+    name = f"{build_bundled.LATTICE_CORE}.azdic"
+    sections, meta = lattice
+    errors = []
+    if not {b"CONN", b"CMAT"} <= sections or not isinstance(meta.get("lattice"), dict):
+        errors.append(f"{name}: CONN, CMAT or META.lattice is missing")
+    space = meta.get("connection_space")
+    if sudachi is not None and (not space or sudachi[1].get("connection_space") != space):
+        errors.append(f"{name}: connection_space differs from {build_bundled.LAYER}.azdic")
+    return errors
 
 
 def check_vm_package(bundle: Path) -> dict:
@@ -55,27 +76,35 @@ def check_vm_package(bundle: Path) -> dict:
     payload = {relative: (bundle / relative).read_bytes() for relative in bundle_provenance.ARTIFACTS}
     artifact_hashes = {relative: hashlib.sha256(data).hexdigest() for relative, data in payload.items()}
     result = bundle_provenance.validate_receipt(
-        bundle, HERE.parent, build_bundled.SUDACHI_REVISION, build_bundled.SUDACHI_ARCHIVES, artifact_hashes)
+        bundle, HERE.parent, build_bundled.SUDACHI_REVISION, build_bundled.PINNED_ARCHIVES, artifact_hashes)
     notices = payload["ThirdPartyNotices.txt"].decode("utf-8")
-    for bundled_layer in bundle_provenance.LAYERS:
-        name = f"{bundled_layer}.azdic"
+    # lattice_core has no metadata JSON of its own: it carries the sources of sudachi_lexicon.
+    checked = [(f"{layer}.azdic", layer) for layer in bundle_provenance.LAYERS]
+    checked.append((f"{build_bundled.LATTICE_CORE}.azdic", build_bundled.LAYER))
+    summaries = {}
+    for name, metadata_layer in checked:
         expected_layer = BUNDLED[name]
         artifact = bundle / "dict" / name
         image = payload[f"dict/{name}"]
         dictbuild.verify(image)
         layer, sources = read_header(artifact, image)
+        summaries[name] = read_summary(artifact, image)[1:]
         if layer != expected_layer:
             raise ValueError(f"{name}: layer id does not match the file name")
         count = struct.unpack_from("<I", image, 28)[0]
         sections = [struct.unpack_from("<4sIQQ", image, 64 + 24 * i) for i in range(count)]
         _, _, offset, length = next(section for section in sections if section[0] == b"META")
         metadata = json.loads(image[offset:offset + length])
-        expected = json.loads((HERE / "sources" / f"{artifact.stem}.metadata.json").read_text(encoding="utf-8"))
+        expected = json.loads((HERE / "sources" / f"{metadata_layer}.metadata.json").read_text(encoding="utf-8"))
         if metadata.get("sources") != expected["sources"]:
             raise ValueError(f"{name}: META sources differ from the current bundled metadata")
         attribution = dictbuild.validate_sources(metadata, HERE / "notices")
         if not sources or attribution not in notices:
             raise ValueError(f"{name}: source attribution is missing from ThirdPartyNotices.txt")
+    errors = lattice_errors(summaries[f"{build_bundled.LATTICE_CORE}.azdic"],
+                            summaries[f"{build_bundled.LAYER}.azdic"])
+    if errors:
+        raise ValueError(errors[0])
     return result
 
 
@@ -99,23 +128,31 @@ def check(bundle: Path, package: Path | None) -> list[str]:
     notices = notices_path.read_text(encoding="utf-8") if notices_path.is_file() else ""
     if not notices.strip():
         errors.append(f"{notices_path}: missing or empty")
+    summaries = {}
     for name in found:
         if name not in BUNDLED:
             errors.append(f"{name}: not a bundled static layer (neologd_lexicon ships only as "
                           "a separate download pack)")
             continue
         try:
-            layer, sources = read_header(directory / name)
+            layer, sections, meta = read_summary(directory / name)
+            sources = [source["source_id"] for source in meta["sources"]]
         except (OSError, ValueError, KeyError, TypeError, struct.error) as exc:
             errors.append(str(exc))
             continue
+        summaries[name] = sections, meta
         if layer != BUNDLED[name]:
             errors.append(f"{name}: layer id {layer} does not match the file name")
         errors.extend(f"{name}: source {source} is not attributed in ThirdPartyNotices.txt"
                       for source in sources if source not in notices)
+    lattice = summaries.get(f"{build_bundled.LATTICE_CORE}.azdic")
+    if lattice is not None:
+        errors.extend(lattice_errors(lattice, summaries.get(f"{build_bundled.LAYER}.azdic")))
     if package is not None:
-        shipped = packaged_dictionaries(package)
-        if shipped != set(found):
+        # Temporary: lattice_core is left out until the MSI ships it; DEV-2099 makes it required again.
+        unshipped = {f"{build_bundled.LATTICE_CORE}.azdic"}
+        shipped = packaged_dictionaries(package) - unshipped
+        if shipped != set(found) - unshipped:
             errors.append(f"{package.name} ships {sorted(shipped)} but the payload holds {found}")
     return errors
 

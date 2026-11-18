@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <string>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/host/AiBackend.h"
@@ -288,6 +290,115 @@ TEST(AiBackendTest, RejectsEmptyMalformedAndOversizedResponses) {
         [&](const auto&, const auto&, const auto*, auto) { return AiHttpResponse{200, body}; });
     EXPECT_EQ(backend.Transform(Cleanup(), Remote()).error_class, AiErrorClass::Parse);
   }
+}
+// DEV-1967: compatibility cases for OpenAI-compatible servers (ai-backend-spec
+// section 5.3). The cases below do not depend on whether a 400 is re-sent
+// without response_format.
+AiTransformResult TransformReplying(const std::string& body) {
+  AiBackend backend(
+      [&](const auto&, const auto&, const auto*, auto) { return AiHttpResponse{200, body}; });
+  return backend.Transform(Cleanup(), Remote());
+}
+std::string ReplyWithFinishReason(const std::string& finish_reason, const std::string& content) {
+  return j::Stringify(
+      j::Object{{"choices", j::Array{j::Object{{"finish_reason", finish_reason},
+                                               {"message", j::Object{{"content", content}}}}}}});
+}
+TEST(AiBackendTest, AcceptsPlainTextContentFromServersThatIgnoreResponseFormat) {
+  const auto result = TransformReplying(Reply("  今日はいい天気\r\n"));
+  EXPECT_TRUE(result.ok);
+  EXPECT_EQ(result.result, "今日はいい天気");
+}
+TEST(AiBackendTest, RejectsJsonLookingContentThatDoesNotParse) {
+  for (const auto* content : {R"({"result":"今日は)", "[", "  {oops}", R"([1, 2)"}) {
+    EXPECT_EQ(TransformReplying(Reply(content)).error_class, AiErrorClass::Parse) << content;
+  }
+}
+TEST(AiBackendTest, RejectsValidJsonWithoutAStringResult) {
+  for (const auto* content : {R"(["a"])", R"({"result":1})", R"({"result":null})",
+                              R"({"results":"x"})", R"({"result":["a"]})"}) {
+    EXPECT_EQ(TransformReplying(Reply(content)).error_class, AiErrorClass::Parse) << content;
+  }
+}
+TEST(AiBackendTest, OnlyStopOrAbsentFinishReasonIsAccepted) {
+  for (const auto* reason : {"length", "content_filter", "tool_calls", "function_call", ""}) {
+    EXPECT_EQ(TransformReplying(ReplyWithFinishReason(reason, R"({"result":"整文"})")).error_class,
+              AiErrorClass::Parse)
+        << reason;
+  }
+  const auto stop = TransformReplying(ReplyWithFinishReason("stop", R"({"result":"整文"})"));
+  EXPECT_TRUE(stop.ok);
+  EXPECT_EQ(stop.result, "整文");
+  // Some servers send "finish_reason": null on the final chunk of a non-streamed reply.
+  const auto null_reason = TransformReplying(
+      R"({"choices":[{"finish_reason":null,"message":{"content":"{\"result\":\"整文\"}"}}]})");
+  EXPECT_TRUE(null_reason.ok);
+  EXPECT_EQ(null_reason.result, "整文");
+}
+TEST(AiBackendTest, RejectsRepliesWithoutUsableMessageContent) {
+  for (const auto* body : {
+           R"({"choices":[]})",
+           R"({"choices":[{}]})",
+           R"({"choices":[{"message":{}}]})",
+           R"({"choices":[{"message":{"content":null,"refusal":"no"}}]})",
+           R"({"choices":[{"message":{"content":[{"type":"text","text":"x"}]}}]})",
+           R"({"choices":[{"message":{"content":{"result":"x"}}}]})",
+           R"({"error":{"message":"overloaded"}})",
+           R"([])",
+           "",
+       }) {
+    EXPECT_EQ(TransformReplying(body).error_class, AiErrorClass::Parse) << body;
+  }
+}
+// DEV-1967: a 4xx other than 401/403/429 (for example a server that rejects
+// response_format with 400, or 404/422 from a gateway) is classified Parse and
+// sent exactly once: the request is not re-sent without response_format, and
+// the error body is never read (ai-backend-spec sections 5.3 and 7.2).
+TEST(AiBackendTest, ClientErrorsAreNotResentWithoutResponseFormat) {
+  const std::string error_body =
+      R"({"error":{"message":"Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model."}})";
+  for (const auto status : {400u, 404u, 405u, 413u, 415u, 422u}) {
+    for (const auto task : {AiTask::Cleanup, AiTask::Transform}) {
+      std::vector<std::string> bodies;
+      AiBackend backend([&](const auto&, const std::string& value, const auto*, auto) {
+        bodies.push_back(value);
+        return AiHttpResponse{status, error_body};
+      });
+      auto request = Cleanup();
+      request.task = task;
+      request.mode = "free";
+      request.prompt = "英語に翻訳";
+      const auto result = backend.Transform(request, Remote());
+      EXPECT_FALSE(result.ok) << status;
+      EXPECT_EQ(result.error_class, AiErrorClass::Parse) << status;
+      EXPECT_TRUE(result.result.empty()) << status;
+      ASSERT_EQ(bodies.size(), 1u) << status;
+      EXPECT_NE(bodies.front().find("response_format"), std::string::npos) << status;
+    }
+  }
+}
+TEST(AiBackendTest, RequestAlwaysAsksForStrictJsonSchema) {
+  std::string body;
+  AiBackend backend([&](const auto&, const std::string& value, const auto*, auto) {
+    body = value;
+    return AiHttpResponse{200, Reply(R"({"result":"整文"})")};
+  });
+  auto options = Remote();
+  options.model = "compat-model";
+  ASSERT_TRUE(backend.Transform(Cleanup(), options).ok);
+  const auto parsed = j::Parse(body);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->GetString("model"), "compat-model");
+  EXPECT_EQ(parsed->GetBool("stream"), false);
+  const auto* format = parsed->Find("response_format");
+  ASSERT_TRUE(format);
+  EXPECT_EQ(format->GetString("type"), "json_schema");
+  const auto* json_schema = format->Find("json_schema");
+  ASSERT_TRUE(json_schema);
+  EXPECT_EQ(json_schema->GetBool("strict"), true);
+  const auto* schema = json_schema->Find("schema");
+  ASSERT_TRUE(schema);
+  EXPECT_EQ(schema->GetBool("additionalProperties"), false);
 }
 TEST(AiBackendTest, PunctuationOffPreservesOnlyExistingMarks) {
   AiBackend backend([](const auto&, const auto&, const auto*, auto) {

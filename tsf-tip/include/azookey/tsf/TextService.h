@@ -738,6 +738,9 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   // How long the worker waits for the Host's answer, instead of openAiTimeoutMs + 5 s.
   void set_transform_wait_for_test(int ms) { transform_wait_ms_for_test_ = ms; }
+  // Ends the worker's wait for the answer it sent as at the deadline, so a test
+  // drives the timeout without the wall clock (as DEV-1830 does for queries).
+  void expire_transform_deadline_for_test() { transform_deadline_expire_for_test_.store(true); }
   void set_host_transform_capability_for_test(bool supported) {
     ipc_host_transform_selected_text_.store(supported);
   }
@@ -770,6 +773,15 @@ class TextService final : public ITfTextInputProcessorEx,
     return transform_outcome_.has_value();
   }
   PromptDialog& prompt_dialog_for_test() { return prompt_dialog_; }
+  // Opens the notice window a secure field's double tap opens, over `owner`,
+  // without a context to read from.
+  void open_prompt_notice_for_test(HWND owner) {
+    MagicConversionSession session;
+    session.owner = owner;
+    session.model = PromptDialogModel::ForNotice(PromptNotice::Secure);
+    magic_session_ = std::move(session);
+    OpenPendingPromptDialog();
+  }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return reconversion_result_.has_value();
@@ -886,6 +898,12 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
   void set_ipc_host_unavailable_for_test(bool unavailable) {
     ipc_host_unavailable_.store(unavailable, std::memory_order_release);
+  }
+  // As a worker stopped right after dropping the connection itself leaves it.
+  // Call while no worker runs.
+  void set_reconnect_after_own_drop_for_test(bool after_own_drop) {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconnect_after_own_drop_ = after_own_drop;
   }
   // Runs on the IPC worker inside TransitionIpcConnection, after the new state
   // is published and before ipc_host_unavailable_ follows it. Set it before
@@ -1395,6 +1413,10 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   std::optional<TransformRequest> ipc_transform_request_;  // ipc_mtx_
   uint64_t ipc_transform_generation_{0};                   // ipc_mtx_
+  // The worker dropped the primary connection itself to cancel the window's
+  // request, and the reconnect has neither succeeded nor failed yet: a request
+  // sent meanwhile waits for it instead of failing as for a lost Host (DEV-2084).
+  bool ipc_reconnect_after_own_drop_{false};  // ipc_mtx_
   struct TransformOutcome {
     uint64_t generation{0};
     std::optional<ipc::TransformSelectedTextResponse> response;
@@ -1425,6 +1447,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool prompt_dialog_headless_for_test_{false};
   bool prompt_dialog_hidden_for_test_{false};
   std::optional<int> transform_wait_ms_for_test_;
+  std::atomic<bool> transform_deadline_expire_for_test_{false};
 #endif
   struct PredictionRequest {
     uint64_t generation;
@@ -1677,6 +1700,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyTransformOutcome();
   void UpdatePromptDialog();
   bool SendTransformSelectedText(const TransformRequest& request, uint64_t& next_id);
+  // A reconnect attempt ended, on the IPC worker (DEV-2084).
+  void FinishReconnectAttempt(bool established);
   // A left click on candidate row `idx`, from the candidate window.
   void OnCandidateClicked(int idx);
   void ClearReconversionState();

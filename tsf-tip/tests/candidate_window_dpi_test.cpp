@@ -31,6 +31,7 @@ class ScopedTestInputs {
   ~ScopedTestInputs() {
     CandidateWindow::SetRenderFailureForTest(CandidateWindow::RenderFailureForTest::None);
     CandidateWindow::SetMonitorDpiForTest(0);
+    CandidateWindow::SetWorkAreaForTest({});
     CandidateWindow::SetClientAreaAnimationForTest(-1);
     CandidateWindow::SetHealthBannerTextForTest(L"");
     tsf::testing::ClearThemeInputsForTest();
@@ -1044,6 +1045,10 @@ TEST(CandidateWindowScrollTest, VisibleRowsFitTheWorkAreaWithAPositionRow) {
   // No work area or no candidates.
   EXPECT_EQ(CandidateWindow::ComputeVisibleRows(32, 24, 0, 0), 32);
   EXPECT_EQ(CandidateWindow::ComputeVisibleRows(0, 24, 0, 240), 0);
+  // More than one page (M68): the position row is always there, and only once.
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(4, 24, 0, 120, true), 4);
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(5, 24, 0, 120, true), 4);
+  EXPECT_EQ(CandidateWindow::ComputeVisibleRows(9, 24, 24, 240, true), 8);
 }
 
 TEST(CandidateWindowScrollTest, FitHeightIsTheLargerRoomBelowOrAboveTheCaret) {
@@ -1126,52 +1131,199 @@ TEST(CandidateWindowScrollTest, HitTestMapsDrawnRowsToTheFullList) {
   }
 }
 
-TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
+TEST(CandidateWindowScrollTest, FirstVisibleRowOnPageStaysOnThePageOfTheSelection) {
+  // 20 candidates in pages [0, 9), [9, 18), [18, 20), four rows drawn.
+  constexpr int kCount = 20;
+  constexpr int kRows = 4;
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(0, 3, kCount, kRows), 0);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(0, 4, kCount, kRows), 1);
+  // Down across the page edge shows the top of the next page; Up, the bottom.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(5, 9, kCount, kRows), 9);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(9, 8, kCount, kRows), 5);
+  // PageDown moves the range only as far as the selection needs, onto its page.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(1, 11, kCount, kRows), 9);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(4, 14, kCount, 5), 10);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(13, 4, kCount, 5), 4);
+  // The short last page fits its two rows from the top, however it was reached.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(0, 19, kCount, kRows), 18);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(14, 18, kCount, kRows), 18);
+  // A page that fits draws from its first candidate.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(3, 13, kCount, 9), 9);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(0, 0, 0, kRows), 0);
+}
+
+TEST(CandidateWindowPageTest, RowNumbersAreThePlaceOnThePage) {
+  EXPECT_EQ(CandidateWindow::ComputeRowNumber(0, 20), 1);
+  EXPECT_EQ(CandidateWindow::ComputeRowNumber(8, 20), 9);
+  EXPECT_EQ(CandidateWindow::ComputeRowNumber(9, 20), 1);
+  EXPECT_EQ(CandidateWindow::ComputeRowNumber(19, 20), 2);
+  EXPECT_EQ(CandidateWindow::ComputeRowNumber(2, 3), 3);
+}
+
+// M68 (native-ui-spec §4.1): only the current page is drawn, in a window of one
+// page's rows that keeps its place and size across pages.
+TEST(CandidateWindowPageTest, DrawsOnlyTheCurrentPageInAWindowThatKeepsItsSize) {
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());
   const ScopedTestInputs inputs;
   tsf::testing::SetThemeInputsForTest(false, 1u);
-  RECT work{};
-  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
-  const int work_height = work.bottom - work.top;
   for (const UINT dpi : {96u, 144u, 192u}) {
     SCOPED_TRACE(dpi);
     CandidateWindow::SetMonitorDpiForTest(dpi);
     const int row = MulDiv(24, static_cast<int>(dpi), 96);
-    // More candidates than any work area holds.
-    const int count = work_height / row + 10;
+    // A work area that holds a page of nine with room to spare.
+    CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 20 * row + 40});
+    // The last candidate is the widest, so only the full list sets the width.
     std::vector<CandidateViewItem> items;
-    for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    for (int i = 0; i < 19; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    items.push_back({L"とても長い候補の表層形", L""});
+    CandidateWindow window;
+    ASSERT_TRUE(window.Create());
+    // The first page alone draws narrower than the full list.
+    window.Show(POINT{20, 20}, std::vector<CandidateViewItem>(items.begin(), items.begin() + 9), 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    RECT first_page_only{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &first_page_only));
+    EXPECT_EQ(window.position_text_for_test(), L"");
+    int clicked = -1;
+    window.SetOnClick([&](int index) { clicked = index; });
+    window.Show(POINT{20, 20}, items, 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+
+    // Nine rows and the position row ("1/20") below them.
+    EXPECT_EQ(window.GetVisibleRowCount(), 9);
+    EXPECT_EQ(window.GetDrawnRowCount(), 9);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    EXPECT_EQ(window.footer_top_for_test(), 10 * row);
+    EXPECT_EQ(window.position_text_for_test(), L"1/20");
+    RECT first_page{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &first_page));
+    EXPECT_EQ(first_page.bottom - first_page.top, 10 * row);
+    EXPECT_GT(first_page.right - first_page.left, first_page_only.right - first_page_only.left);
+    // Shown at the last page, the window takes the same place and size.
+    window.Show(POINT{20, 20}, items, 19);
+    RECT shown_at_last{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &shown_at_last));
+    EXPECT_TRUE(EqualRect(&shown_at_last, &first_page));
+    window.SetSelected(0);
+
+    // The second page: its first candidate in the top row, the same window.
+    window.SetSelected(10);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 9);
+    EXPECT_EQ(window.GetDrawnRowCount(), 9);
+    EXPECT_EQ(window.HitTestForTest({2, 2}).index, 9);
+    EXPECT_EQ(window.position_text_for_test(), L"11/20");
+    RECT bounds{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_TRUE(EqualRect(&bounds, &first_page));
+
+    // The last page holds two: the window does not shrink, and the empty rows
+    // are neither drawn nor clicked.
+    window.MoveSelection(-11);
+    EXPECT_EQ(window.GetSelected(), 19);
+    EXPECT_EQ(window.position_text_for_test(), L"20/20");
+    EXPECT_EQ(window.GetFirstVisibleRow(), 18);
+    EXPECT_EQ(window.GetVisibleRowCount(), 9);
+    EXPECT_EQ(window.GetDrawnRowCount(), 2);
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
+    EXPECT_TRUE(EqualRect(&bounds, &first_page));
+    EXPECT_EQ(window.HitTestForTest({2, row + 2}).index, 19);
+    EXPECT_EQ(window.HitTestForTest({2, 2 * row + 2}).target, CandidateWindow::HitTarget::None);
+    EXPECT_EQ(window.HitTestForTest({2, 8 * row + 2}).target, CandidateWindow::HitTarget::None);
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 5 * row));
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONUP, 0, MAKELPARAM(2, 5 * row));
+    EXPECT_EQ(clicked, -1);
+    EXPECT_EQ(window.GetSelected(), 19);
+    // A drawn row returns its candidate's index in the full list.
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONUP, 0, MAKELPARAM(2, 2));
+    EXPECT_EQ(clicked, 18);
+
+    // The empty rows show the background only; the drawn ones carry text.
+    std::vector<COLORREF> pixels;
+    int width = 0;
+    int height = 0;
+    ASSERT_TRUE(window.RenderPixelsForTest(&pixels, &width, &height));
+    const ThemeColors& colors = window.theme_for_test();
+    const auto darkest_in_row = [&](int index) {
+      int darkest = 255;
+      for (int y = index * row + 1; y < (index + 1) * row - 1; ++y)
+        for (int x = 1; x < width - 1; ++x)
+          darkest = std::min(darkest, int{GetRValue(pixels[static_cast<size_t>(y * width + x)])});
+      return darkest;
+    };
+    EXPECT_LT(darkest_in_row(1), 200);
+    for (int empty = 2; empty < 9; ++empty)
+      EXPECT_EQ(darkest_in_row(empty), GetRValue(colors.background)) << empty;
+    // The position row stays below the nine slots.
+    EXPECT_LT(darkest_in_row(9), 200);
+    window.Destroy();
+  }
+}
+
+// A page that does not fit the work area scrolls within the page (DEV-1950, M68).
+TEST(CandidateWindowScrollTest, APageThatDoesNotFitScrollsWithinThePage) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  const ScopedTestInputs inputs;
+  tsf::testing::SetThemeInputsForTest(false, 1u);
+  for (const UINT dpi : {96u, 144u, 192u}) {
+    SCOPED_TRACE(dpi);
+    CandidateWindow::SetMonitorDpiForTest(dpi);
+    const int row = MulDiv(24, static_cast<int>(dpi), 96);
+    // Room below the anchor for five rows and the position row.
+    const RECT work{0, 0, 1920, 20 + 6 * row};
+    CandidateWindow::SetWorkAreaForTest(work);
+    std::vector<CandidateViewItem> items;
+    for (int i = 0; i < 20; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
     CandidateWindow window;
     ASSERT_TRUE(window.Create());
     int clicked = -1;
     window.SetOnClick([&](int index) { clicked = index; });
-    window.Show(POINT{work.left + 20, work.top + 20}, items, 0);
+    window.Show(POINT{20, 20}, items, 0);
     ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
 
-    // The room below the anchor is the larger; the rows fit it with the position row.
     const int visible = window.GetVisibleRowCount();
-    EXPECT_EQ(visible, (work_height - 20 - row) / row);
+    EXPECT_EQ(visible, 5);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    RECT shown{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &shown));
+    EXPECT_EQ(shown.bottom - shown.top, (visible + 1) * row);
+    EXPECT_EQ(shown.top, 20);
+    EXPECT_LE(shown.bottom, work.bottom);
+    EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
+    EXPECT_EQ(window.position_text_for_test(), L"1/20");
+
+    // Down past the drawn range moves it by one, within the first page.
+    window.SetSelected(5);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 1);
+    EXPECT_EQ(window.position_text_for_test(), L"6/20");
+    // PageDown to the same place on the next page moves the range only as far
+    // as that takes, onto the page.
+    window.SetSelected(14);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 10);
+    EXPECT_EQ(window.HitTestForTest({2, 2}).index, 10);
+    // Down off the page's end shows the top of the next page.
+    window.SetSelected(17);
+    window.MoveSelection(+1);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 18);
+    EXPECT_EQ(window.GetDrawnRowCount(), 2);
+    // Up off the first page's top wraps to the last page; back down to the first.
+    window.SetSelected(0);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 0);
+    window.MoveSelection(-1);
+    EXPECT_EQ(window.GetSelected(), 19);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 18);
+    // Up from the second page's top shows the first page's bottom range.
+    window.SetSelected(9);
+    window.MoveSelection(-1);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 9 - visible);
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, row + 2));
+    SendMessageW(window.hwnd_for_test(), WM_LBUTTONUP, 0, MAKELPARAM(2, row + 2));
+    EXPECT_EQ(clicked, 9 - visible + 1);
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
-    EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);
-    EXPECT_EQ(bounds.top, work.top + 20);
-    EXPECT_LE(bounds.bottom, work.bottom);
-    EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
-
-    // The wrap to the last candidate shows the last range; numbers stay global.
-    window.MoveSelection(-1);
-    EXPECT_EQ(window.GetSelected(), count - 1);
-    EXPECT_EQ(window.GetFirstVisibleRow(), count - visible);
-    EXPECT_EQ(window.GetCount(), count);
-    const auto top = window.HitTestForTest({2, 2});
-    EXPECT_EQ(top.target, CandidateWindow::HitTarget::Candidate);
-    EXPECT_EQ(top.index, count - visible);
-    SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, row + 2));
-    EXPECT_EQ(clicked, count - visible + 1);
-    EXPECT_EQ(window.GetSelected(), count - visible + 1);
-    EXPECT_EQ(window.GetFirstVisibleRow(), count - visible);
+    EXPECT_TRUE(EqualRect(&bounds, &shown));
 
     // The position row is drawn in sub_text below the rows, and not filled.
     std::vector<COLORREF> pixels;
@@ -1186,10 +1338,6 @@ TEST(CandidateWindowScrollTest, ManyCandidatesStayInsideTheWorkAreaAndScroll) {
     EXPECT_LT(darkest, 200);
     EXPECT_GE(darkest, GetRValue(colors.sub_text) - 8);
     EXPECT_EQ(at(width - 3, visible * row + row / 2), colors.background);
-
-    // Back to the first candidate: the first range again.
-    window.SetSelected(0);
-    EXPECT_EQ(window.GetFirstVisibleRow(), 0);
     window.Destroy();
   }
 }
@@ -1198,21 +1346,20 @@ TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCover
   ScopedPerMonitorDpi dpi_context;
   ASSERT_TRUE(dpi_context.valid());
   const ScopedTestInputs inputs;
-  RECT work{};
-  ASSERT_TRUE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0));
-  const int work_height = work.bottom - work.top;
   for (const UINT dpi : {96u, 144u, 192u}) {
     SCOPED_TRACE(dpi);
     CandidateWindow::SetMonitorDpiForTest(dpi);
     const int row = MulDiv(24, static_cast<int>(dpi), 96);
     const int gap = MulDiv(20, static_cast<int>(dpi), 96);
-    // Two thirds down: more room above than below, and less than the work area.
+    // Two thirds down a work area too short for a page above the caret: more
+    // room above than below, so the window flips up and scrolls within the page.
+    const RECT work{0, 0, 1920, 12 * row};
+    CandidateWindow::SetWorkAreaForTest(work);
+    const int work_height = work.bottom - work.top;
     const POINT anchor{work.left + 20, work.top + work_height * 2 / 3};
     const int above = anchor.y - gap - work.top;
-    // More candidates than the work area holds, so the window must scroll.
-    const int count = work_height / row + 10;
     std::vector<CandidateViewItem> items;
-    for (int i = 0; i < count; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    for (int i = 0; i < 20; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
     CandidateWindow window;
     ASSERT_TRUE(window.Create());
     window.Show(anchor, items, 0);
@@ -1220,6 +1367,7 @@ TEST(CandidateWindowScrollTest, ACaretLowInTheWorkAreaScrollsAboveItWithoutCover
 
     const int visible = window.GetVisibleRowCount();
     EXPECT_EQ(visible, (above - row) / row);
+    EXPECT_LT(visible, 9);
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_EQ(bounds.bottom - bounds.top, (visible + 1) * row);

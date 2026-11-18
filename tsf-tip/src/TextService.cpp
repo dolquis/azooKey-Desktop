@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/CandidatePage.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/MixedRomajiSplitter.h"
@@ -435,6 +436,18 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     default:
       return std::nullopt;
   }
+}
+
+// The keys the reconversion list takes as a candidate list (legacy-parity-spec
+// §1.4「候補のページ」): PageUp / PageDown and the digits 1-9, numpad included,
+// as while Selecting. nullopt for every other key, Shift+digits among them.
+std::optional<azookey::core::UserActionEvent> ReconversionListPageOrDigit(WPARAM key,
+                                                                          uint32_t modifiers) {
+  auto event = MapTipKey(key, modifiers, /*has_preedit=*/true, /*cand_visible=*/true,
+                         /*unicode_active=*/false);
+  if (event && (event->by_page || event->action == azookey::core::UserAction::SelectByDigit))
+    return event;
+  return std::nullopt;
 }
 
 const char* InputStateKindName(azookey::core::InputStateKind kind) {
@@ -2650,13 +2663,24 @@ HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_
        (*character >= L'0' && *character <= L'9') || *character == L'_' || *character == L'+' ||
        *character == L'-');
   const bool listing = emoji_mode_ == EmojiMode::Listing && candidate_ui_.IsShowing();
+  // The list turns pages like every candidate list; digits still extend the
+  // query (legacy-parity-spec §1.4「候補のページ」, candidate-rewriter-spec §11).
+  // Unmodified only, as while Selecting (spec §1.4).
+  const bool page_key = (key == VK_PRIOR || key == VK_NEXT) &&
+                        (CurrentKeyModifiers() & azookey::core::kModifierShift) == 0;
   if (entering || query_character || colon || key == VK_BACK || key == VK_ESCAPE ||
-      key == VK_RETURN || (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE))) {
+      key == VK_RETURN ||
+      (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE || page_key))) {
     handled = true;
     *eaten = TRUE;
   }
   if (test_only) return S_OK;
   if (listing && (key == VK_RETURN || colon)) return CommitSelected(context);
+  if (listing && page_key) {
+    const auto hr = candidate_ui_.MovePage(key == VK_NEXT);
+    if (SUCCEEDED(hr)) selected_candidate_idx_ = candidate_ui_.GetSelected();
+    return FAILED(hr) ? hr : S_OK;
+  }
   if (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE)) {
     const auto hr = candidate_ui_.MoveSelection(key == VK_UP ? -1 : 1);
     if (SUCCEEDED(hr)) selected_candidate_idx_ = candidate_ui_.GetSelected();
@@ -2838,7 +2862,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     if (reconversion_list_) {
       if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_UP || wParam == VK_DOWN ||
-          (wParam >= '1' && wParam <= '9')) {
+          ReconversionListPageOrDigit(wParam, modifiers)) {
         *eaten = TRUE;
         return S_OK;
       }
@@ -3242,11 +3266,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
         return S_OK;
       }
-      if (wParam == VK_RETURN || (wParam >= '1' && wParam <= '9')) {
-        const size_t index = wParam == VK_RETURN
-                                 ? static_cast<size_t>(std::max(0, candidate_ui_.GetSelected()))
-                                 : static_cast<size_t>(wParam - '1');
-        (void)CompleteReconversionSelection(index);
+      // Pages and digits as in every candidate list (legacy-parity-spec §1.4).
+      if (const auto list_key = ReconversionListPageOrDigit(wParam, modifiers)) {
+        if (list_key->by_page) {
+          (void)candidate_ui_.MovePage(list_key->action == core::UserAction::Down);
+        } else if (const int index = candidate_ui_.DigitTarget(list_key->digit); index >= 0) {
+          // A digit the current page has no candidate for does nothing.
+          (void)CompleteReconversionSelection(static_cast<size_t>(index));
+        }
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (wParam == VK_RETURN) {
+        (void)CompleteReconversionSelection(
+            static_cast<size_t>(std::max(0, candidate_ui_.GetSelected())));
         *eaten = TRUE;
         return S_OK;
       }
@@ -3664,9 +3697,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             return S_OK;
           }
         }
-        if (event.action == UserAction::SelectByDigit && event.digit >= 1 &&
-            static_cast<size_t>(event.digit) <= input_state_.candidates().size())
-          core_commit_selected_index_ = static_cast<size_t>(event.digit - 1);
+        // Digits and PageUp / PageDown follow the split an app that draws the
+        // list set (legacy-parity-spec §1.4「候補のページ」).
+        if (event.action == UserAction::SelectByDigit || event.by_page)
+          event.page_starts = candidate_ui_.PageSplit();
+        if (event.action == UserAction::SelectByDigit) {
+          if (const auto target =
+                  core::CandidateByDigit(input_state_.selected_index(), event.digit,
+                                         input_state_.candidates().size(), event.page_starts))
+            core_commit_selected_index_ = *target;
+        }
         // DEV-1735: a character typed while Selecting commits the selection and
         // starts the next composition in the same result.
         const bool continues_after_commit =
@@ -3716,8 +3756,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
     if (legacy_path) core_input_active_ = false;
     if (IsActionKey(key_event, UserAction::SelectByDigit)) {
-      int idx = key_event->digit - 1;
-      if (idx < candidate_ui_.GetCount()) {
+      // The n-th candidate of the current page (legacy-parity-spec §1.4).
+      const int idx = candidate_ui_.DigitTarget(key_event->digit);
+      if (idx >= 0) {
         if (shown_batch_segments_.size() > 1) {
           const auto rollback_state = capture_preedit_rollback_state();
           const auto move_hr = candidate_ui_.MoveSelection(idx - selected_candidate_idx_);
@@ -4105,21 +4146,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       *eaten = TRUE;
       return request_preedit_update_or_restore_on_oom(rollback_state);
-    } else if (IsActionKey(key_event, UserAction::Up)) {
+    } else if (IsActionKey(key_event, UserAction::Up) || IsActionKey(key_event, UserAction::Down)) {
       if (cand_visible) {
+        const bool down = key_event->action == UserAction::Down;
+        // PageUp / PageDown move a page; with one page they do nothing but are
+        // still consumed (legacy-parity-spec §1.4).
+        if (key_event->by_page &&
+            core::CandidatePageCount(static_cast<size_t>(candidate_ui_.GetCount()),
+                                     candidate_ui_.PageSplit()) <= 1) {
+          *eaten = TRUE;
+          return S_OK;
+        }
         const auto rollback_state = capture_preedit_rollback_state();
-        const HRESULT move_hr = candidate_ui_.MoveSelection(-1);
-        if (FAILED(move_hr)) return move_hr;
-        selected_candidate_idx_ = candidate_ui_.GetSelected();
-        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
-        if (FAILED(update_hr)) return update_hr;
-        *eaten = TRUE;
-      }
-
-    } else if (IsActionKey(key_event, UserAction::Down)) {
-      if (cand_visible) {
-        const auto rollback_state = capture_preedit_rollback_state();
-        const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
+        const HRESULT move_hr = key_event->by_page ? candidate_ui_.MovePage(down)
+                                                   : candidate_ui_.MoveSelection(down ? +1 : -1);
         if (FAILED(move_hr)) return move_hr;
         selected_candidate_idx_ = candidate_ui_.GetSelected();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
@@ -10765,9 +10805,17 @@ void TextService::OnCandidateClicked(int idx) {
   }
   if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
       active_context_) {
+    // The window draws only the current page, so the clicked row is on it; its
+    // place there is the digit (legacy-parity-spec §1.4). The window keeps nine
+    // to a page, the split the core reads from an empty page_starts.
     core::UserActionEvent event;
     event.action = core::UserAction::SelectByDigit;
-    event.digit = idx + 1;
+    const size_t clicked = static_cast<size_t>(std::max(idx, 0));
+    const size_t count = input_state_.candidates().size();
+    event.digit = static_cast<int>(clicked - core::CandidatePageAt(clicked, count).begin + 1);
+    // A row off the core's current page would commit another candidate.
+    if (core::CandidateByDigit(input_state_.selected_index(), event.digit, count) != clicked)
+      return;
     try {
       auto result = input_state_.HandleEvent(event);
       core_commit_selected_index_ = static_cast<size_t>(idx);

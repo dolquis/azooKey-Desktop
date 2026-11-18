@@ -54,6 +54,11 @@ const Entry kEntries[] = {
     {VK_RIGHT, 0, {kNone, kNone, kNone, A::Forward, kNone, kNone}},
     {VK_UP, 0, {kNone, kNone, kNone, A::Up, kNone, kNone}},
     {VK_DOWN, 0, {kNone, kNone, kNone, A::Down, kNone, kNone}},
+    // PageUp / PageDown are a page at a time while Selecting only (spec §1.4).
+    {VK_PRIOR, 0, {kNone, kNone, kNone, A::Up, kNone, kNone}},
+    {VK_NEXT, 0, {kNone, kNone, kNone, A::Down, kNone, kNone}},
+    {VK_PRIOR, kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    {VK_NEXT, kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_HOME, 0, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_END, 0, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_SPACE, 0, {kNone, A::StartConversion, A::StartConversion, A::NextCandidate, kNone, kNone}},
@@ -179,6 +184,8 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kOemAttn, static_cast<uint32_t>(VK_OEM_ATTN));
   EXPECT_EQ(vk::kDbeHiragana, static_cast<uint32_t>(VK_DBE_HIRAGANA));
   EXPECT_EQ(vk::kSpace, static_cast<uint32_t>(VK_SPACE));
+  EXPECT_EQ(vk::kPrior, static_cast<uint32_t>(VK_PRIOR));
+  EXPECT_EQ(vk::kNext, static_cast<uint32_t>(VK_NEXT));
   EXPECT_EQ(vk::kEnd, static_cast<uint32_t>(VK_END));
   EXPECT_EQ(vk::kHome, static_cast<uint32_t>(VK_HOME));
   EXPECT_EQ(vk::kLeft, static_cast<uint32_t>(VK_LEFT));
@@ -251,6 +258,26 @@ TEST(KeymapTest, DigitsCarryTheirIndexWhileSelecting) {
   }
 }
 
+TEST(KeymapTest, PageKeysCarryThePageFlagAndArrowsDoNot) {
+  const auto prior = MapUserAction(VK_PRIOR, 0, K::Selecting);
+  ASSERT_TRUE(prior.has_value());
+  EXPECT_EQ(prior->action, A::Up);
+  EXPECT_TRUE(prior->by_page);
+  const auto next = MapUserAction(VK_NEXT, 0, K::Selecting);
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(next->action, A::Down);
+  EXPECT_TRUE(next->by_page);
+  // The TIP attaches an app's split; the map never does.
+  EXPECT_TRUE(next->page_starts.empty());
+  for (const uint32_t key : {static_cast<uint32_t>(VK_UP), static_cast<uint32_t>(VK_DOWN),
+                             static_cast<uint32_t>('P'), static_cast<uint32_t>('N')}) {
+    const uint32_t modifiers = key == VK_UP || key == VK_DOWN ? 0 : kCtrl;
+    const auto event = MapUserAction(key, modifiers, K::Selecting);
+    ASSERT_TRUE(event.has_value()) << key;
+    EXPECT_FALSE(event->by_page) << key;
+  }
+}
+
 TEST(KeymapTest, EventCarriesModifiersAndLeavesCodepointToTip) {
   const auto event = MapUserAction('K', kShift, K::Composing);
   ASSERT_TRUE(event.has_value());
@@ -272,8 +299,8 @@ TEST(KeymapTest, AltAndWinChordsAlwaysPassThrough) {
 TEST(KeymapTest, UnlistedKeysPassThroughInEveryState) {
   // VK_IME_ON / VK_IME_OFF are decided by the TIP before the core map (OpenCloseKey.h).
   for (const uint32_t key : {static_cast<uint32_t>(VK_TAB), static_cast<uint32_t>(VK_F1),
-                             static_cast<uint32_t>(VK_PRIOR), static_cast<uint32_t>(VK_OEM_CLEAR),
-                             static_cast<uint32_t>(VK_IME_ON), static_cast<uint32_t>(VK_IME_OFF)}) {
+                             static_cast<uint32_t>(VK_OEM_CLEAR), static_cast<uint32_t>(VK_IME_ON),
+                             static_cast<uint32_t>(VK_IME_OFF)}) {
     for (const K kind : kAllKinds) {
       EXPECT_FALSE(MapUserAction(key, 0, kind).has_value()) << key;
     }

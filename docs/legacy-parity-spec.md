@@ -1,7 +1,7 @@
 ---
 kind: spec
 milestones: [M13, M14, M15, M16, M17, M18, M19, M64, M66, M68, M69, M70]
-canonical_for: ["Phase 5（M13〜M19）のレガシー parity"]
+canonical_for: ["Phase 5（M13〜M19）のレガシー parity", "字種指定確定（F6〜F10）"]
 ---
 
 # Legacy Parity 仕様（Phase 5）

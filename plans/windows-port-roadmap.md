@@ -543,7 +543,7 @@ M 番号は通し連番だが、各 M の「前提」から決まる順序では
   M39（永続化）・M40（IPC/JSON 堅牢化）は前提を持たず、M38（CI 拡張）・M43（WIL）は M37 を、
   M41（ログ）は M39 を、M42（Host 再接続）は M41 を前提とする。M44（診断）・M47（復旧 UX）・
   M50（互換性テスト）・M51（trace）はそれぞれ M40 と M41 / M42 / M38 / M41 を前提とする延長である。
-  詳細は「開発基盤・品質強化トラック」章と `docs/dev-infrastructure-spec.md`。
+  詳細は「開発基盤・品質強化トラック」章と、各節の移動先 spec（入口は `docs/dev-infrastructure-spec.md`）。
 - **プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）** —
   Phase 5/6/7 の既存 M に依存する付加機能。M46（セーフ入力）は M7、M45（モデル管理 UI）は
   M8 / M30、M49（学習データ可視化）は M30 / M34 を前提とする。M16 と M46 の順序のリスクは M16 節。
@@ -2073,7 +2073,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。
-> **正典仕様**は `docs/dev-infrastructure-spec.md`。
+> **正典仕様**は、各節の移動先（`docs/build-ci-spec.md`、`docs/vm-verification-package-spec.md`、`docs/ipc-persistence-hardening-spec.md`、`docs/observability-spec.md`、`docs/host-availability-spec.md`、`docs/diagnostics-compat-spec.md`）が持つ。入口は `docs/dev-infrastructure-spec.md`。
 > spec から参照されるため M 番号・Phase グルーピングは変更しない。
 >
 > M44（診断ウィザード）・M47（復旧 UX）・M50（互換性テスト）・M51（trace
@@ -2097,7 +2097,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
   - `.gitignore` に Windows/CMake エントリが追加され、ビルド生成物が `git status` に現れない
   - 依存更新手順が `docs/build-ci-spec.md` に記載され、次回の依存
     更新 PR がそれに従える
-- **参照仕様**: `docs/build-ci-spec.md` §2, §3
+- **参照仕様**: `docs/build-ci-spec.md` §2, §3、`docs/vm-verification-package-spec.md` §1（旧 §2.6）
 - **補足**:
   - **実装範囲（spec に同じ記述を確認できなかった分）**:
     - 依存更新手順の文書化: pin 済み依存（llama.cpp のフル SHA / GoogleTest の

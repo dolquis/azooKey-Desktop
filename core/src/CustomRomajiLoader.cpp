@@ -31,7 +31,7 @@ bool ValidOutput(std::string_view output) {
   return true;
 }
 
-bool ParseLine(std::string_view line, CustomRomajiTable& table) {
+bool ParseLine(std::string_view line, CustomRomajiTable& table, bool case_sensitive_rules) {
   const size_t first_tab = line.find('\t');
   if (first_tab == std::string_view::npos) return false;
   const size_t second_tab = line.find('\t', first_tab + 1);
@@ -54,15 +54,19 @@ bool ParseLine(std::string_view line, CustomRomajiTable& table) {
         consume > input.size())
       return false;
   }
-  // The input keeps its letter case: a rule written in capitals matches only Shift-typed
-  // letters (docs/legacy-parity-spec.md section 5.1).
-  table[std::string(input)] = CustomRomajiRule{std::string(output), consume};
+  std::string key(input);
+  if (!case_sensitive_rules) {
+    for (char& c : key) {
+      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+  }
+  table[std::move(key)] = CustomRomajiRule{std::string(output), consume};
   return true;
 }
 
 }  // namespace
 
-CustomRomajiParseResult CustomRomajiLoader::Parse(std::string_view tsv) {
+CustomRomajiParseResult CustomRomajiLoader::Parse(std::string_view tsv, bool case_sensitive_rules) {
   if (tsv.substr(0, 3) == "\xef\xbb\xbf") tsv.remove_prefix(3);
 
   auto table = std::make_shared<CustomRomajiTable>();
@@ -72,7 +76,7 @@ CustomRomajiParseResult CustomRomajiLoader::Parse(std::string_view tsv) {
     const size_t end = tsv.find('\n');
     std::string_view line = tsv.substr(0, end);
     if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-    if (!line.empty() && line.front() != '#' && !ParseLine(line, *table)) {
+    if (!line.empty() && line.front() != '#' && !ParseLine(line, *table, case_sensitive_rules)) {
       invalid_lines.push_back(line_number);
     }
     if (end == std::string_view::npos) break;

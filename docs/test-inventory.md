@@ -42,7 +42,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 |---|---|---|
 | `tsf_tip_typo_correction_tracker_tests` | `tsf-tip/tests/typo_correction_tracker_test.cpp` | M35 の確定前の backspace 訂正と確定直後の打ち直し、連続 backspace のスナップショット、最初の 1 キー限定、リセット、UTF-8 長と編集距離のフィルタ |
 | `core_tests` | `core/tests/romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音）、レガシー既定表の拡張綴り（`xtu`・`la`・`wi`・`ve` など）と 4 文字規則の接頭辞保持、`nn` + 母音の持ち越しと `AmbiguousReadings`（両方の読み、明示綴りと変換しきれない位置の除外、大文字・記号、3 か所の上限、カスタム表、`n'` を明示綴りとして除外）、`n'` / `nn'` の「ん」区切りとアポストロフィの消費（前に `n` が無いときとカスタム表は従来どおり、DEV-1748） |
-| `core_tests` | `core/tests/custom_romaji_test.cpp` | TSV の BOM・UTF-8・長さ・consume・不正行の検証、内蔵表との差し替え、最長一致と入力中の表保持、規則の英字の大小の保持と、大文字の規則が Shift 付きの打鍵だけに当たること・小文字の規則への落ち方・大小まで一致する前方一致の待ち・規則に当たらない英字の小文字化・一括変換の小文字の raw 入力（M70） |
+| `core_tests` | `core/tests/custom_romaji_test.cpp` | TSV の BOM・UTF-8・長さ・consume・不正行の検証、内蔵表との差し替え、最長一致と入力中の表保持、規則の英字の大小の保持と、大文字の規則が Shift 付きの打鍵だけに当たること・小文字の規則への落ち方・大小まで一致する前方一致の待ち・規則に当たらない英字の小文字化・一括変換の小文字の raw 入力、既定の読み込み（`case_sensitive_rules` false）が規則を小文字に折り畳んで従来と同じ結果になること（M70） |
 | `core_tests` | `core/tests/azik_table_test.cpp` | AZIK の内蔵表の 571 件（上流 569 件に `-` と `ji`）と全角キー 7 件の ASCII 化、表駆動の経路で `kk`・`nt`・`nz`・`nn`・記号キーが `Feed` の特例を通らず変換されること、確定時に残る `n` が英字のままのこと、Shift 付きの英字が小文字の規則で引かれること（M70） |
 | `core_tests` | `core/tests/kana_input_test.cpp` | かな入力（JIS 配列）の 48 キーの表（Shift の有無ごと）、表に無いスキャンコードと拡張フラグの立つキーで「表に無い」を返すこと、ろキーと ¥ キーの区別、濁点・半濁点の合成（う→ゔ、ち→ぢ、は→ぱ）と合成できないときの単独の ゛ ゜（M70） |
 | `core_tests` | `core/tests/simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn`、`Contains` が実辞書エントリと `Learn` 由来の確定履歴を区別すること、`Forget` / `ResetLearned` の辞書スコア・属性復元と確定候補除去、他の組の履歴と確定後にロードした TSV 辞書の保持 |

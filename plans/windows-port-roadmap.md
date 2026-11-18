@@ -1965,7 +1965,7 @@ Host の分割器（spec §6）が、生ローマ字の上の混合ラティス�
 - **前提**: M13（キーの写像の 2 層と `InputState`）、M17（カスタムローマ字表の表駆動の変換）、M22（開閉キーと英数モード）、
   M30（設定アプリの入力ペイン）。
 - **変更対象**: `core/src/RomajiKanaConverter.cpp`（表駆動の変換での大文字と小文字）、
-  `core/src/CustomRomajiLoader.cpp`（大文字の規則を小文字に正規化しない）、
+  `core/src/CustomRomajiLoader.cpp`（大小を区別する読み込みで、規則を小文字に正規化しない）、
   `core/include/azookey/core/AzikTable.h`・`core/src/AzikTable.cpp`（AZIK の内蔵表。新規）、
   `core/include/azookey/core/KanaInput.h`・`core/src/KanaInput.cpp`（かなの表と濁点・半濁点の合成を持つ純関数。新規）、
   `tsf-tip/src/TipLocalSettings.cpp`（`inputStyle` の読み込み）、

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cctype>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,11 @@ namespace {
 
 using azookey::core::CustomRomajiLoader;
 using azookey::core::RomajiKanaConverter;
+
+// The table that keeps the case of the rule keys (`case_sensitive_rules` true).
+std::shared_ptr<const azookey::core::CustomRomajiTable> ParseCased(const std::string& tsv) {
+  return CustomRomajiLoader::Parse(tsv, true).table;
+}
 
 std::string FeedAll(RomajiKanaConverter& converter, const std::string& input) {
   std::string output;
@@ -75,7 +81,7 @@ TEST(CustomRomajiTest, AcceptsEightAsciiInputAndRejectsInvalidUtf8Sequences) {
 }
 
 TEST(CustomRomajiTest, CustomTableReplacesBuiltInMappings) {
-  const auto parsed = CustomRomajiLoader::Parse("ka\tカ\n@@\t@\n");
+  const auto parsed = CustomRomajiLoader::Parse("KA\tカ\n@@\t@\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(parsed.table);
   EXPECT_EQ(FeedAll(converter, "ka"), "カ");
@@ -93,18 +99,18 @@ TEST(CustomRomajiTest, CustomTableReplacesBuiltInMappings) {
 // docs/legacy-parity-spec.md section 5.1 (M70): the rule keeps its letter case, so a rule
 // written in capitals matches only Shift-typed letters.
 TEST(CustomRomajiTest, KeepsTheCaseOfRuleKeys) {
-  const auto result = CustomRomajiLoader::Parse("KA\t大\nka\t小\nKa\t混\n");
-  ASSERT_TRUE(result.table);
-  EXPECT_EQ(result.table->size(), 3u);
-  EXPECT_EQ(result.table->at("KA").output, "大");
-  EXPECT_EQ(result.table->at("ka").output, "小");
-  EXPECT_EQ(result.table->at("Ka").output, "混");
+  const auto table = ParseCased("KA\t大\nka\t小\nKa\t混\n");
+  ASSERT_TRUE(table);
+  EXPECT_EQ(table->size(), 3u);
+  EXPECT_EQ(table->at("KA").output, "大");
+  EXPECT_EQ(table->at("ka").output, "小");
+  EXPECT_EQ(table->at("Ka").output, "混");
 }
 
 // External behavior change (M70): a rule written in capitals no longer matches the unshifted
 // keys. A version that folded the table to lowercase matched them whatever Shift said.
 TEST(CustomRomajiTest, CapitalRuleMatchesOnlyShiftTypedLetters) {
-  const auto table = CustomRomajiLoader::Parse("KA\tカ\n").table;
+  const auto table = ParseCased("KA\tカ\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(FeedAll(converter, "KA"), "カ");
@@ -117,7 +123,7 @@ TEST(CustomRomajiTest, CapitalRuleMatchesOnlyShiftTypedLetters) {
 }
 
 TEST(CustomRomajiTest, ShiftTypedLettersFallBackToLowercaseRules) {
-  const auto table = CustomRomajiLoader::Parse("ka\tか\nshi\tし\n").table;
+  const auto table = ParseCased("ka\tか\nshi\tし\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(FeedAll(converter, "KA"), "か");
@@ -129,7 +135,7 @@ TEST(CustomRomajiTest, ShiftTypedLettersFallBackToLowercaseRules) {
 
 // A table with no capital rule reads Shift-typed letters as if they were lowercase.
 TEST(CustomRomajiTest, TableWithoutCapitalRulesIgnoresTheCaseOfTheKeys) {
-  const auto table = CustomRomajiLoader::Parse("ka\tか\nkb\tX\nz.\t…\nn\tん\t1\n").table;
+  const auto table = ParseCased("ka\tか\nkb\tX\nz.\t…\nn\tん\t1\n");
   for (const char* lower : {"ka", "kb", "z.", "kak", "nk", "kz", "zz.", "q", "kakb"}) {
     std::string upper(lower);
     for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -144,7 +150,7 @@ TEST(CustomRomajiTest, TableWithoutCapitalRulesIgnoresTheCaseOfTheKeys) {
 // A rule with the same case that is still a prefix wins over the lowercase rule of a shorter
 // match, so the next key is awaited (section 5.1).
 TEST(CustomRomajiTest, CapitalPrefixWaitsBeforeTheLowercaseRule) {
-  const auto table = CustomRomajiLoader::Parse("KA\tX\nk\tY\n").table;
+  const auto table = ParseCased("KA\tX\nk\tY\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(converter.Feed('K'), "");
@@ -158,7 +164,7 @@ TEST(CustomRomajiTest, CapitalPrefixWaitsBeforeTheLowercaseRule) {
 // Awaited, but the next key does not continue the capital rule: the pending key is converted
 // by the lowercase rule and the new key is looked up again.
 TEST(CustomRomajiTest, FallsBackToTheLowercaseRuleWhenTheCapitalRuleDoesNotContinue) {
-  const auto table = CustomRomajiLoader::Parse("KA\tX\nk\tY\nx\tZ\n").table;
+  const auto table = ParseCased("KA\tX\nk\tY\nx\tZ\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(converter.Feed('K'), "");
@@ -176,7 +182,7 @@ TEST(CustomRomajiTest, FallsBackToTheLowercaseRuleWhenTheCapitalRuleDoesNotConti
 // When both a capital rule and the lowercase rule of the same letters exist, the rule with the
 // same case as the keys wins; a key with no same-case rule uses the lowercase rule.
 TEST(CustomRomajiTest, SameCaseRuleBeatsTheLowercaseFallback) {
-  const auto table = CustomRomajiLoader::Parse("KA\t大\nka\t小\nKa\t混\n").table;
+  const auto table = ParseCased("KA\t大\nka\t小\nKa\t混\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(FeedAll(converter, "KA"), "大");
@@ -190,7 +196,7 @@ TEST(CustomRomajiTest, SameCaseRuleBeatsTheLowercaseFallback) {
 }
 
 TEST(CustomRomajiTest, CanContinueFollowsTheCaseOfTheCapitalRule) {
-  const auto table = CustomRomajiLoader::Parse("KA\tX\nsa\tY\n").table;
+  const auto table = ParseCased("KA\tX\nsa\tY\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_TRUE(converter.CanContinueCustomWith('K'));
@@ -205,7 +211,7 @@ TEST(CustomRomajiTest, CanContinueFollowsTheCaseOfTheCapitalRule) {
 
 // A letter that matches no rule stays in the reading in lowercase, pending or flushed.
 TEST(CustomRomajiTest, UnmatchedLettersStayLowercase) {
-  const auto table = CustomRomajiLoader::Parse("ab\tX\n").table;
+  const auto table = ParseCased("ab\tX\n");
   RomajiKanaConverter converter;
   converter.SetCustomTable(table);
   EXPECT_EQ(FeedAll(converter, "ZQ"), "zq");
@@ -219,9 +225,83 @@ TEST(CustomRomajiTest, UnmatchedLettersStayLowercase) {
 
 // The batch conversion keeps its raw input in lowercase, so it reads lowercase rules only.
 TEST(CustomRomajiTest, BatchRawInputInLowercaseReadsLowercaseRulesOnly) {
-  const auto table = CustomRomajiLoader::Parse("KA\tカ\nsa\tさ\n").table;
+  const auto table = ParseCased("KA\tカ\nsa\tさ\n");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka", table), "ka");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("sa", table), "さ");
+}
+
+// The default load folds the rule keys to lowercase, so the lookup does not depend on Shift
+// (the behavior before M70). A TIP that feeds the VK's capital letters keeps working.
+TEST(CustomRomajiTest, DefaultLoadFoldsRuleKeysToLowercase) {
+  const auto result = CustomRomajiLoader::Parse("KA\t大\nKa\t混\nkA\t小\nsa\tさ\n");
+  ASSERT_TRUE(result.table);
+  EXPECT_TRUE(result.invalid_lines.empty());
+  // KA, Ka and kA are one rule; the last definition wins.
+  EXPECT_EQ(result.table->size(), 2u);
+  EXPECT_EQ(result.table->at("ka").output, "小");
+  EXPECT_EQ(result.table->count("KA"), 0u);
+  EXPECT_EQ(result.table->count("Ka"), 0u);
+  EXPECT_EQ(CustomRomajiLoader::Parse("KA\t大\n", false).table->count("ka"), 1u);
+}
+
+TEST(CustomRomajiTest, DefaultLoadMatchesCapitalAndMixedCaseRulesWhateverShiftSays) {
+  const auto table = CustomRomajiLoader::Parse("Ka\tか\nSHI\tし\n").table;
+  for (const char* typed : {"ka", "KA", "Ka", "kA"}) {
+    RomajiKanaConverter converter;
+    converter.SetCustomTable(table);
+    EXPECT_EQ(FeedAll(converter, typed), "か") << typed;
+  }
+  for (const char* typed : {"shi", "SHI", "Shi", "sHi"}) {
+    RomajiKanaConverter converter;
+    converter.SetCustomTable(table);
+    EXPECT_EQ(FeedAll(converter, typed), "し") << typed;
+  }
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka", table), "か");
+  EXPECT_EQ(RomajiKanaConverter::Preview("KA", table), "か");
+}
+
+// The default load keeps the behavior of a table with a capital rule beside a lowercase prefix
+// rule: the typed letters are looked up in lowercase only.
+TEST(CustomRomajiTest, DefaultLoadLooksUpTheLowercaseRulesOnly) {
+  const auto table = CustomRomajiLoader::Parse("K\tケー\nka\tか\n").table;
+  RomajiKanaConverter converter;
+  converter.SetCustomTable(table);
+  EXPECT_EQ(FeedAll(converter, "Ka"), "か");
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "k"), "ケー");
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "K"), "ケー");
+}
+
+// With the case-sensitive load, a Shift-typed `K` waits for the next key because the lowercase
+// rule `ka` could continue it, and `ka` (the longer match) wins over the rule `K`.
+TEST(CustomRomajiTest, CaseSensitiveLoadPrefersTheLongerLowercaseMatchOverTheCapitalRule) {
+  const auto table = ParseCased("K\tケー\nka\tか\n");
+  RomajiKanaConverter converter;
+  converter.SetCustomTable(table);
+  EXPECT_EQ(converter.Feed('K'), "");
+  EXPECT_EQ(converter.Feed('a'), "か");
+  EXPECT_EQ(converter.Flush(), "");
+  converter.Reset();
+  // The capital rule still works alone, or before a key that does not continue the lowercase one.
+  EXPECT_EQ(FeedAll(converter, "K"), "ケー");
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "Kx"), "ケーx");
+}
+
+// The two loads differ only for rules that carry a capital letter.
+TEST(CustomRomajiTest, BothLoadsAgreeOnLowercaseRules) {
+  const std::string tsv = "ka\tか\nkb\tX\nz.\t…\nn\tん\t1\n";
+  const auto folded = CustomRomajiLoader::Parse(tsv, false).table;
+  const auto cased = ParseCased(tsv);
+  ASSERT_TRUE(folded);
+  ASSERT_EQ(folded->size(), cased->size());
+  for (const auto& [key, rule] : *folded) {
+    const auto match = cased->find(key);
+    ASSERT_NE(match, cased->end()) << key;
+    EXPECT_EQ(match->second.output, rule.output) << key;
+    EXPECT_EQ(match->second.consume, rule.consume) << key;
+  }
 }
 
 TEST(CustomRomajiTest, CustomAsciiSymbolsAndDigitsAreRulePrefixes) {

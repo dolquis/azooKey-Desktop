@@ -59,8 +59,17 @@ class CandidateUiCoordinator {
   bool ScheduleCandidatesReady(UINT delay_ms);
   void CancelScheduledCandidatesReady();
 
+  // `anchor` is the rect the window opens at (CandidateWindow::Show): the
+  // composition's text extent or a caret rect, the same as ShowPredictions.
+  HRESULT BeginUI(ITfThreadMgr* thread_mgr, RECT anchor,
+                  const std::vector<CandidateViewItem>& items, int selected_idx,
+                  std::wstring notice = {});
+  // A caret point with no height (CandidateWindow::Show).
   HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<CandidateViewItem>& items,
-                  int selected_idx, std::wstring notice = {});
+                  int selected_idx, std::wstring notice = {}) {
+    return BeginUI(thread_mgr, RECT{pt.x, pt.y, pt.x, pt.y}, items, selected_idx,
+                   std::move(notice));
+  }
   HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
   HRESULT EndUI();
 
@@ -129,7 +138,7 @@ class CandidateUiCoordinator {
   DWORD ui_element_id_{kInvalidUiElementId};
   std::vector<CandidateViewItem> items_;
   std::wstring notice_;
-  POINT last_pt_{0, 0};
+  RECT last_anchor_{0, 0, 0, 0};
   int selected_idx_{-1};
   bool ui_less_mode_{false};
   bool tip_draws_{true};

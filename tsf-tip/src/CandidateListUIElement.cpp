@@ -106,7 +106,9 @@ STDMETHODIMP CandidateListUIElement::GetPageIndex(UINT* pIndex, UINT uSize, UINT
   if (!puPageCnt) return E_INVALIDARG;
   const size_t pages = core::CandidatePageCount(items_.size(), AppPageSplit());
   *puPageCnt = static_cast<UINT>(pages);
-  // A null buffer asks for the count first (Microsoft Learn, GetPageIndex).
+  // A null buffer asks for the count first (Microsoft Learn, GetPageIndex). A
+  // short buffer takes the first pages and still gets S_OK: Learn lists only
+  // S_OK, E_FAIL and E_INVALIDARG and leaves that case open.
   if (!pIndex) return S_OK;
   const size_t filled = std::min<size_t>(uSize, pages);
   for (size_t i = 0; i < filled; ++i)

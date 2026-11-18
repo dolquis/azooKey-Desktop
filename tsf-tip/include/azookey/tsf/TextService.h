@@ -1661,7 +1661,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void ClearPrediction();
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
   HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
-  RECT PredictionCaretRect();
+  // Where both modes of the candidate window open (legacy-parity-spec §3.2,
+  // §9.2): the composition's text extent, or a caret rect at the anchor point
+  // when the app reports none.
+  RECT CompositionAnchorRect();
   // `suggestions` come only from a batch correction select (proofread-view-spec
   // §2); every other caller opens Host candidates alone.
   HRESULT StartSelectionReconversion(ITfContext* context,

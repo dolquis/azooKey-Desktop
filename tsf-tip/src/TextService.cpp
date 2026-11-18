@@ -10630,16 +10630,18 @@ bool TextService::SendTransformSelectedText(const TransformRequest& request, uin
   return false;
 }
 
-// Either way the connection is no longer the one the TIP dropped itself. A
-// failed attempt leaves no Host to answer the prompt window's queued request:
-// it gets the no-answer message now, not at its deadline (legacy-parity-spec §4.3).
+// Either way the connection is no longer the one the TIP dropped itself. When
+// the reconnect after that drop fails, the prompt window's queued request gets
+// the no-answer message now, not at its deadline (legacy-parity-spec §4.3).
+// Any other failed attempt keeps it: a restarting Host may still come back.
 void TextService::FinishReconnectAttempt(bool established) {
   AZOOKEY_ASSERT_IPC_THREAD();
   std::optional<TransformRequest> unsent;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    ipc_reconnect_after_own_drop_ = false;
-    if (!established) unsent = std::exchange(ipc_transform_request_, std::nullopt);
+    const bool after_own_drop = std::exchange(ipc_reconnect_after_own_drop_, false);
+    if (!established && after_own_drop)
+      unsent = std::exchange(ipc_transform_request_, std::nullopt);
   }
   if (!unsent) return;
   {

@@ -5483,6 +5483,99 @@ TEST_F(DispatcherTest, HostCustomLearningOptInRestoresObservations) {
   std::remove(settings_path.c_str());
 }
 
+// DEV-2091 (host-availability-spec section 8.5.3): the engine's SafeMode stops
+// every learning write even when the settings carry no SafeMode override, as
+// after a startup entry whose reload lost the flag.
+TEST_F(DispatcherTest, EngineSafeModeStopsLearningWithoutTheSettingsOverride) {
+  const auto settings_path = temp_directory.File("azookey_learning_safe_mode_settings.json");
+  const auto mining_path = temp_directory.File("azookey_learning_safe_mode_mining.tsv");
+  const auto typo_path = temp_directory.File("azookey_learning_safe_mode_typo.tsv");
+  std::remove(mining_path.c_str());
+  std::remove(typo_path.c_str());
+  {
+    std::ofstream out(settings_path);
+    out << R"({"privacy":{"mode":"normal"}})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+  engine.SetAutoWordStore(&mining);
+  engine.SetTypoStore(&typo);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings, &mining);
+  EnableEventPrivacy(target);
+  ipc::CommitObservationRequest commit;
+  commit.reading = "あずきーしゃ";
+  commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+  commit.secure = false;
+  commit.learning_allowed = true;
+  ipc::CommitSegmentsObservationRequest segments;
+  segments.segments.push_back({commit.reading, commit.chosen, {}, false});
+  segments.secure = false;
+  segments.learning_allowed = true;
+  ipc::CommitCorrectionRequest correction;
+  correction.kind = std::string(ipc::kCorrectionKindReconvert);
+  correction.reading = commit.reading;
+  correction.rejected_surface = "あずきー社";
+  correction.selected_surface = commit.chosen.surface;
+  correction.secure = false;
+  correction.learning_allowed = true;
+  ipc::ObserveTypoRequest observation;
+  observation.wrong_reading = "こんちには";
+  observation.correct_reading = "こんにちは";
+  observation.secure = false;
+  observation.learning_allowed = true;
+  uint64_t id = 9360;
+  const auto commit_all = [&](bool expected_ok) {
+    for (auto type :
+         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation,
+          ipc::MessageType::CommitCorrection}) {
+      const auto payload = type == ipc::MessageType::CommitObservation
+                               ? ipc::BuildCommitObservationRequest(commit)
+                           : type == ipc::MessageType::CommitCorrection
+                               ? ipc::BuildCommitCorrectionRequest(correction)
+                               : ipc::BuildCommitSegmentsObservationRequest(segments);
+      const auto response = target.Dispatch(MakeReq(id++, type, payload));
+      ASSERT_TRUE(response);
+      const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->ok, expected_ok) << static_cast<int>(type);
+    }
+    EXPECT_FALSE(target.Dispatch(
+        MakeReq(id++, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
+  };
+
+  engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+  {
+    // No SafeMode override in the settings: only the engine is in SafeMode.
+    const auto privacy = settings.LockPrivacyPolicy();
+    ASSERT_FALSE(privacy.policy.secure);
+    ASSERT_TRUE(privacy.policy.learning_allowed);
+  }
+  const auto before = store.size();
+  commit_all(false);
+  EXPECT_EQ(store.size(), before);
+  EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
+  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_FALSE(std::filesystem::exists(mining_path));
+  EXPECT_FALSE(std::filesystem::exists(typo_path));
+
+  // The same requests write once SafeMode ends, so the stop above is SafeMode's.
+  (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared);
+  ASSERT_NE(engine.health_state(), azookey::host::HealthState::SafeMode);
+  commit_all(true);
+  EXPECT_GT(store.size(), before);
+  EXPECT_EQ(typo.size(), 1u);
+
+  engine.SetAutoWordStore(nullptr);
+  engine.SetTypoStore(nullptr);
+  std::remove(mining_path.c_str());
+  std::remove(typo_path.c_str());
+  std::remove(settings_path.c_str());
+}
+
 TEST_F(DispatcherTest, LearningPrivacyDoesNotWaitForUpdateConfigModelLoad) {
   using namespace std::chrono_literals;
   const auto path = temp_directory.File("azookey_privacy_model_reload.json");

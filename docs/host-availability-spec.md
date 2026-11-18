@@ -426,7 +426,10 @@ AI の入口（`TransformSelectedText`、`QueryBatchConversion` の `ai-cleanup`
 保存が競合して `settings.json` から flag が落ちると、強制の当たらない設定のまま engine が SafeMode に
 なりうるためである。要求が名指しする AI backend はこの停止を解かない。応答の値は各入口の spec が
 定める（`docs/ai-backend-spec.md` §4.1、`docs/romaji-batch-conversion-spec.md` §5、
-`docs/proofread-view-spec.md` §2.9）。
+`docs/proofread-view-spec.md` §2.9）。学習の書き込みの入口（`CommitObservation`、
+`CommitSegmentsObservation`、`CommitCorrection`、`ObserveTypo`）も、同じ理由で privacy の方針に加えて
+engine の状態の SafeMode で止める。確定の観測は `ok = false` を返し、`ObserveTypo` は応答を返さない
+（secure と同じ）。自動単語登録の抽出は確定の観測の中で行うので、同じ判定で止まる。
 
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。

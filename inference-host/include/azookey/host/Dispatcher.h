@@ -138,6 +138,10 @@ class Dispatcher {
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
   bool LearningAllowed(bool secure, bool learning_allowed, bool host_learning_blocked) const;
+  // The Host-wide learning stop: SafeMode (the engine's state), or a privacy
+  // policy that is secure or disallows learning. `privacy` is empty without a
+  // settings store.
+  bool HostLearningBlocked(const std::optional<SettingsStore::PrivacyGuard>& privacy) const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;

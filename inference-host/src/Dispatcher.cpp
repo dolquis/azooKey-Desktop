@@ -733,9 +733,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(
-                        parsed->secure, parsed->learning_allowed,
-                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
+                                    HostLearningBlocked(privacy))) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -1045,6 +1044,15 @@ bool Dispatcher::RequiresAuthenticatedSession() const {
 bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed,
                                  bool host_learning_blocked) const {
   return client_supports_secure_flag_ && !secure && learning_allowed && !host_learning_blocked;
+}
+
+bool Dispatcher::HostLearningBlocked(
+    const std::optional<SettingsStore::PrivacyGuard>& privacy) const {
+  // host-availability-spec section 8.5.3: SafeMode stops learning writes. The
+  // engine's state decides, not only the settings overrides: a startup entry
+  // whose reload lost the flag leaves settings without them (DEV-2091).
+  return SafeModeEnabled() ||
+         (privacy && (privacy->policy.secure || !privacy->policy.learning_allowed));
 }
 
 void Dispatcher::SetClientId(std::string client_id) {
@@ -1549,8 +1557,7 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   if (!parsed) return;
   auto privacy =
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
-  if (!LearningAllowed(parsed->secure, parsed->learning_allowed,
-                       privacy && (privacy->policy.secure || !privacy->policy.learning_allowed)))
+  if (!LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy)))
     return;
   // M55 (typo-correction-learning-spec 12.14): learnPersonalPatterns false, or
   // typo correction off, stops the accumulation under the settings lock. With
@@ -2275,8 +2282,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
       parsed &&
-      LearningAllowed(parsed->secure, parsed->learning_allowed,
-                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+      LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     if (IsEnglishObservation(parsed->reading, parsed->chosen.tag)) {
@@ -2305,8 +2311,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitCorrection(const ipc::Envel
   // section 4); a duplicate resend is answered ok=true without re-recording.
   if (auto parsed = ipc::ParseCommitCorrectionRequest(req.payload_json);
       parsed &&
-      LearningAllowed(parsed->secure, parsed->learning_allowed,
-                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
+      LearningAllowed(parsed->secure, parsed->learning_allowed, HostLearningBlocked(privacy))) {
     engine_->CommitCorrection(parsed->reading, parsed->rejected_surface, parsed->selected_surface,
                               NowSec(), parsed->observation_id,
                               parsed->app ? parsed->app->process_name : std::string(),

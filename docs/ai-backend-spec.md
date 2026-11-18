@@ -217,7 +217,7 @@ TransformSelectedTextRequest:
                             // TIP はアプリ別の promptPrefix を先頭に付ける（下記）
   selection: string         // 変換対象。必須・非空
   context: string           // 前後文脈。欠落は空
-  max_results: uint32       // 既定 1。複数案 UI は将来拡張（§14）のため 1 に丸める
+  max_results: uint32       // 既定 1。M16 の結果は単一（§14）なので 1 に丸める
   secure: bool              // 入力先の secure 判定。欠落は true。wire には false だけを載せる
   ai_allowed: bool          // TIP が解いた AI 候補生成許可。欠落は false
   external_ai_allowed: bool // TIP が解いた外部 AI 許可。欠落は false。ai_allowed が false なら false
@@ -349,9 +349,12 @@ LintFinding:
 
 ### 5.2 `mode` → system-prompt マッピング
 
-M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` の
-`Prompt.dictionary`）を Windows 版で 4 値に簡約したものである。`AiBackend` は
-`mode` から system プロンプトを選ぶ。`free` では `prompt`（ユーザー指示）を指示に加え、
+M16 の `mode` は legacy macOS の選択テキストのプロンプト窓（`OpenAIClient.swift` の
+`sendTextTransformRequest`。単一の `result` を返す）に当たる。legacy の target-marker 辞書
+（同ファイルの `Prompt.dictionary`。絵文字・顔文字・記号・類義語・対義語・TeX・説明・つづき）は、未確定文字列を
+`<target>` で挟んで 3〜5 件の候補を返す Replace Suggestion（legacy の Ctrl+S）のものであり、`mode` の系譜では
+ない（`docs/legacy-parity-spec.md` §4.1）。`mode` は次の表の 4 値とし、target-marker 辞書に当たる拡張 mode は
+置かない（§14）。`AiBackend` は `mode` から system プロンプトを選ぶ。`free` では `prompt`（ユーザー指示）を指示に加え、
 ほかの `mode` は `prompt` を使わない。`text`（選択）と `context` は user メッセージに組む。
 
 M16 のプロンプト窓は、英数・かなのどちらのダブルタップでも `free` を送り、利用者が窓で確かめた
@@ -590,7 +593,7 @@ M48 のモード通知 API を前提としない。
 - **Phase 6 拡張**: `stream=true`（SSE）。Host が部分トークンを受信し、**push IPC**で
   TIP へ逐次反映する。片方向の push 経路を要し、その契約はこの拡張で本書に定める。
 - **予約フィールド**: 将来の streaming / 複数案のため、本書の payload に予約を置く。
-  - `TransformSelectedTextResponse.results`（複数案。MVP 未使用）。
+  - `TransformSelectedTextResponse.results`（複数案。M16 の結果は単一とし、使わない。§14）。
   - streaming 中間応答は `partial:true` のチャンク + 最終 `partial:false`
     （`romaji-batch-conversion-spec.md` §6.3.5 の partial 規約と同形。MVP 既定は単発）。
   - `AiTransformRequest` に将来 `stream` フラグを足す余地を残す（MVP は実装しない）。
@@ -652,11 +655,41 @@ secure ガード（§8）、API キーの `dpapi:` prefix 規約（§9）であ�
 
 ## 14. 未確定事項 / 将来拡張
 
-- M16 の**複数案 UI**（`results[]`）と候補選択 UX（MVP は単一 `result`）。
+### 14.1 決めた事項（DEV-1964）: M16 の結果は単一、`mode` は 4 値
+
+M16 のプロンプト窓は複数案を出さず、単一の `result` を返す。`max_results` は 1 に丸め、
+`TransformSelectedTextResponse.results` は wire に載せない予約として残す（§4.1・§10）。`mode` は §5.2 の
+4 値とし、増やしも減らしもしない。TIP が送るのは `free` だけだが、`rewrite`・`translate`・`summarize` は
+wire の値として残す。利用者から見える挙動と既定値、設定キー、§8 の入口ガード、AI の結果を学習しない
+契約（§4.1）は、この決定で変わらない。
+
+根拠は次のとおり。
+
+- legacy の選択テキストのプロンプト窓も単一の結果を返す。複数案（3〜5 件の `predictions`）と target-marker
+  辞書を使うのは Replace Suggestion だけである（§5.2）。
+- 窓は結果を出した後も指示欄を編集でき、指示を直して [変換] で送り直せる（`docs/legacy-parity-spec.md` §4.3）。
+  別の案は送り直しで得られる。
+- 拡張 mode を足しても、窓は常に `free` を送り、mode を選ぶ操作を持たないので使われない。類義語・対義語・
+  TeX のような変換は、`free` の指示で頼める。
+- target-marker 辞書の一部はローカルの候補と重なる。絵文字は M62-D、記号は M62-C
+  （`docs/candidate-rewriter-spec.md` §6・§19）がローカルで決定的に候補を出し、外部へ送らない。顔文字を
+  生成するローカルの候補は無く、候補のラベル `CandidateTag::Kaomoji`（`docs/legacy-parity-spec.md` §3.9）と、
+  ユーザー辞書の `symbol` 品詞（`docs/user-dictionary-pos-spec.md`）による登録だけがある。
+- 複数案を出すと、`kMaxTransformResults`、応答の型と parser、§3.2 の `AiTransformResult`、§5.3・§5.4 の
+  `response_format`、窓の UI に変更が及び、外部 API の出力トークンも増える。
+
+次のときに再検討する。
+
+- 利用者から複数案か拡張 mode の要望が出たとき。
+- Replace Suggestion（未確定文字列の AI 候補。legacy の Ctrl+S）を Windows 版へ移植するマイルストーンを
+  置くとき。この移植は、新しい IPC メッセージ、キーの割り当て（`docs/legacy-parity-spec.md` §1.4）、候補窓への
+  表示、未確定文字列と左文脈の外部送信（M16 は `context` を空で送る。`docs/privacy-and-secure-input-spec.md`
+  §5.3）を要する。target-marker 辞書と複数案は、その移植で扱う。
+
+### 14.2 未確定事項
+
 - X-3-3 の**外部送信オプトイン**（既定は `local-zenzai` 寄せ。明示許可の設計）。
 - Phase 6 **streaming**（SSE → push IPC）の詳細プロトコル（中間 `partial` の単位）。
-- legacy の target-marker 辞書（絵文字/顔文字/類義語/TeX 等）相当の**拡張 mode**を
-  Windows 版に再導入するか（MVP は 4 値）。
 - `response_format` 非対応の OpenAI 互換実装に対する互換性マトリクス。
 - 実 API 結合テストの CI 組み込み（鍵管理・コスト）。
 

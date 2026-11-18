@@ -1763,7 +1763,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPersona(const ipc::Envelope&
   return MakeResponse(req, ipc::BuildQueryPersonaResponse(res));
 }
 
-// rich-features-spec X-3-6 (DEV-1532). The AI backend runs under the same
+// proofread-view-spec §2 (DEV-1532). The AI backend runs under the same
 // settings and consent as ai-cleanup, but only on the remote path; without it
 // the answer is "unsupported" rather than a guess from a weaker model.
 std::optional<ipc::Envelope> Dispatcher::HandleDetectAnomalies(const ipc::Envelope& req) {

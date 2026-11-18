@@ -1432,7 +1432,7 @@ void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
     ProfileValueText().Text(StatusText(profile_status, resources));
   }
 
-  // Ctrl+Shift+Space in an application (rich-features-spec X-3-6) wins over --pane (section 3.5).
+  // Ctrl+Shift+Space in an application (proofread-view-spec §2) wins over --pane (section 3.5).
   if (arguments.proofread_session_status == azookey::settings::LaunchArgumentStatus::Valid) {
     SettingsNavigationView().SelectedItem(ProofreadNavigationItem());
     proofread_pane_->OpenSession(arguments.proofread_session_token);

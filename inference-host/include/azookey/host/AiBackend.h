@@ -9,7 +9,7 @@
 
 namespace azookey::host {
 
-// Anomalies: rich-features-spec X-3-4 detection for the X-3-6 view. It and
+// Anomalies: proofread-view-spec §1 detection for the view of proofread-view-spec §2. It and
 // Transform (M16, the selected text) are remote-only: the local path has no
 // model that can do them.
 enum class AiTask { Transform, Cleanup, Lint, Anomalies };

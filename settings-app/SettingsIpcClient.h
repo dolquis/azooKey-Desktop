@@ -103,7 +103,7 @@ HostCallResult<azookey::ipc::ResetLearningStoreResponse> RequestResetLearningSto
 // cross-process file lock, so the call waits as long as a reset.
 HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
     const SettingsIpcOptions& options, const azookey::ipc::AddUserWordRequest& request);
-// Persona ratios (rich-features-spec X-2-7); the request payload is an empty object.
+// Persona ratios (learning-data-management-spec §15); the request payload is an empty object.
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(
     const SettingsIpcOptions& options);
 // Asks the Host's external AI backend for likely mistakes in a pasted text; the call waits as

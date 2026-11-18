@@ -7,7 +7,7 @@
 
 namespace azookey::learning {
 
-// Writing-style ratios of rich-features-spec X-2-7. Each ratio is the share of
+// Writing-style ratios of learning-data-management-spec §15. Each ratio is the share of
 // commits whose surface matches the style, so the four need not sum to 1.
 struct Persona {
   double polite_ratio{};
@@ -19,8 +19,8 @@ struct Persona {
 };
 
 // The store keeps one aggregate per (reading, surface), not the committed
-// sentences, so this approximates X-2-7: each pair's surface is classified and
-// weighted by its commit_count. A marker split across two committed segments
+// sentences, so this approximates learning-data-management-spec §15: each pair's surface is
+// classified and weighted by its commit_count. A marker split across two committed segments
 // ("だ" + "よ") is not seen.
 //
 // - polite: the surface contains "ます", "です" or "いただ"

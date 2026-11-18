@@ -148,7 +148,7 @@ struct CandidateField {
   double score{};
   std::string source;
   std::string description;
-  // core::CandidateTag value (docs/rich-features-spec.md X-2-3). Omitted on the
+  // core::CandidateTag value (docs/legacy-parity-spec.md §3.9). Omitted on the
   // wire when 0 (None); unknown values are carried through unchanged.
   uint8_t tag{0};
   // M63 section 9.2: the segments of this candidate, offsets in UTF-16 code
@@ -863,7 +863,7 @@ std::string BuildResetLearningStoreResponse(const ResetLearningStoreResponse& p)
 std::optional<ResetLearningStoreRequest> ParseResetLearningStoreRequest(const std::string& json);
 std::optional<ResetLearningStoreResponse> ParseResetLearningStoreResponse(const std::string& json);
 
-// Persona ratios (rich-features-spec X-2-7). Capability "persona"; the request
+// Persona ratios (learning-data-management-spec §15). Capability "persona"; the request
 // payload is an empty object. Only the four ratios and their basis are sent,
 // never a surface. A failure carries kLearningDataErrorNotAuthenticated or
 // kLearningDataErrorStoreUnavailable.
@@ -882,7 +882,7 @@ struct QueryPersonaResponse {
 std::string BuildQueryPersonaResponse(const QueryPersonaResponse& p);
 std::optional<QueryPersonaResponse> ParseQueryPersonaResponse(const std::string& json);
 
-// Batch correction view (rich-features-spec X-3-6, DEV-1532). Capability
+// Batch correction view (proofread-view-spec §2, DEV-1532). Capability
 // "detect_anomalies". The settings app sends text the user chose to check;
 // text from a secure or learning-disallowed context is never sent, and the
 // Host refuses it if it is.

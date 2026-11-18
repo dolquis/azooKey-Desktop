@@ -12,8 +12,8 @@
 
 namespace azookey::tsf {
 
-// The document text the batch correction view checks (rich-features-spec
-// X-3-6). Offsets are UTF-16 code units of `text`, matching DetectAnomalies.
+// The document text the batch correction view checks (proofread-view-spec
+// §2). Offsets are UTF-16 code units of `text`, matching DetectAnomalies.
 struct ProofreadDocument {
   std::wstring text;
   // Start of the selection (or the document start) within `text`.

@@ -5,7 +5,7 @@
 
 namespace azookey::core {
 
-// docs/rich-features-spec.md X-2-3. One tag per candidate; the values travel on
+// docs/legacy-parity-spec.md §3.9. One tag per candidate; the values travel on
 // the wire as CandidateField::tag, so only append.
 enum class CandidateTag : uint8_t {
   None = 0,

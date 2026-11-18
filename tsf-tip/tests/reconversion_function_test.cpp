@@ -1474,7 +1474,7 @@ TEST(ReconversionFunctionTest, ReconvertInAContextThatTurnedSecureSendsNoCorrect
   service.Deactivate();
 }
 
-// X-3-6: a select from the batch correction view places the selection and,
+// proofread-view-spec §2: a select from the batch correction view places the selection and,
 // once the select session has returned, opens reconversion for that range.
 class ProofreadReconversion {
  public:

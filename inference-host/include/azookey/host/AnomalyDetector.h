@@ -11,7 +11,7 @@
 
 namespace azookey::host {
 
-// rich-features-spec X-3-4 / X-3-6 (DEV-1532): semantic anomaly detection over
+// proofread-view-spec §1 / §2 (DEV-1532): semantic anomaly detection over
 // a paragraph through the AI backend. The model is asked for the exact text of
 // each suspicious span ("quote") rather than offsets, which language models do
 // not count reliably; the Host locates the quote and reports UTF-16 offsets.

@@ -536,7 +536,7 @@ class InferenceEngine {
                                             uint64_t now_epoch, bool auto_promote,
                                             const std::function<bool()>& still_current);
 
-  // rich-features-spec X-2-7: the persona of the kana learning store, computed
+  // learning-data-management-spec §15: the persona of the kana learning store, computed
   // by the learning flush worker at startup and every kPersonaRefreshInterval.
   struct PersonaSnapshot {
     learning::Persona persona;

@@ -58,7 +58,7 @@ inline constexpr GUID kDebugWindowPreservedKeyGuid = {
     0x3b7e9a52, 0x6c1d, 0x4f08, {0x9e, 0x2a, 0x8d, 0x5c, 0x4b, 0x1f, 0x7a, 0x63}};
 
 // TSF preserved key for Ctrl+Shift+Space, the batch correction view
-// (docs/rich-features-spec.md X-3-6).
+// (docs/proofread-view-spec.md §2).
 // {C8BE9EA1-D1EA-4A0F-BBCC-0277F468BCB7}
 inline constexpr GUID kProofreadPreservedKeyGuid = {
     0xc8be9ea1, 0xd1ea, 0x4a0f, {0xbb, 0xcc, 0x02, 0x77, 0xf4, 0x68, 0xbc, 0xb7}};
@@ -1201,7 +1201,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<std::pair<bool, bool>> debug_paint_policy_;
   bool debug_preserved_key_registered_{false};
   bool proofread_preserved_key_registered_{false};
-  // The batch correction session (X-3-6). The TIP keeps the window range and
+  // The batch correction session (proofread-view-spec §2). The TIP keeps the window range and
   // its hash, not the text, to place the selection the settings app asks for.
   std::unique_ptr<ProofreadSessionServer> proofread_session_;
   Microsoft::WRL::ComPtr<ITfContext> proofread_context_;
@@ -1553,7 +1553,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // A replacement session for the open list is queued; the next Enter, digit
   // or click is eaten so the range is not replaced twice (DEV-1926).
   bool reconversion_select_pending_{false};  // UI thread only
-  // A batch correction finding's suggestions for the open range (X-3-6). They
+  // A batch correction finding's suggestions for the open range (proofread-view-spec §2). They
   // are model text: shown as candidates only, never cached, never learned.
   std::vector<std::wstring> reconversion_suggestions_;  // UI thread only
   // Where each shown candidate came from; a Suggestion is replaced without a
@@ -1662,8 +1662,8 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
   HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
   RECT PredictionCaretRect();
-  // `suggestions` come only from a batch correction select (rich-features-spec
-  // X-3-6); every other caller opens Host candidates alone.
+  // `suggestions` come only from a batch correction select (proofread-view-spec
+  // §2); every other caller opens Host candidates alone.
   HRESULT StartSelectionReconversion(ITfContext* context,
                                      const std::wstring* expected_surface = nullptr,
                                      ITfRange* expected_range = nullptr,
@@ -1920,7 +1920,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
   void RegisterDebugPreservedKey();
   void UnregisterDebugPreservedKey();
-  // Ctrl+Shift+Space (rich-features-spec X-3-6). Taken only with the IME open
+  // Ctrl+Shift+Space (proofread-view-spec §2). Taken only with the IME open
   // in kana mode, no reading in progress, and a context that accepts keys.
   bool ClaimsProofreadKey(ITfContext* context) const;
   ProofreadCapture CaptureProofreadDocument(ITfContext* context);

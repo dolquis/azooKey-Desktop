@@ -910,7 +910,7 @@ TEST(TsfTipActivateUiLessTest, F10PreservedKeyOwnsTheDebugWindowToggle) {
   MockThreadMgrEx mock(0);
   mock.preserve_result = S_OK;
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  // Ctrl+Shift+Space (X-3-6) is preserved first, then F10.
+  // Ctrl+Shift+Space (proofread-view-spec §2) is preserved first, then F10.
   EXPECT_EQ(mock.preserve_calls, 2);
   EXPECT_TRUE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
   EXPECT_EQ(mock.preserved_key.uVKey, static_cast<UINT>(VK_F10));
@@ -943,7 +943,7 @@ TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
   MockThreadMgrEx mock(0);
   mock.preserve_result = S_OK;
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
-  // Only the Ctrl+Shift+Space preserved key (X-3-6).
+  // Only the Ctrl+Shift+Space preserved key (proofread-view-spec §2).
   EXPECT_EQ(mock.preserve_calls, 1);
   EXPECT_FALSE(IsEqualGUID(mock.preserved_guid, azookey::tsf::kDebugWindowPreservedKeyGuid));
 
@@ -959,7 +959,7 @@ TEST(TsfTipActivateUiLessTest, ReleaseBuildRegistersNoF10PreservedKey) {
   EXPECT_EQ(mock.unpreserve_calls, 1);
 }
 
-// rich-features-spec X-3-6: Ctrl+Shift+Space is a preserved key in every
+// proofread-view-spec §2: Ctrl+Shift+Space is a preserved key in every
 // build, and only a registered key is unpreserved.
 TEST(TsfTipActivateUiLessTest, CtrlShiftSpaceIsPreservedForTheProofreadView) {
   DebugWindowKeyGuard release_build(false);

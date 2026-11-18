@@ -18,7 +18,7 @@ struct LaunchArguments {
   LANGID langid = 0;
   LaunchArgumentStatus profile_status = LaunchArgumentStatus::NotSupplied;
   GUID profile{};
-  // --proofread-session <token> (rich-features-spec X-3-6): the TIP's batch
+  // --proofread-session <token> (proofread-view-spec §2): the TIP's batch
   // correction session to open. Only a 32-digit lowercase hexadecimal token is
   // accepted; anything else is a parse error.
   LaunchArgumentStatus proofread_session_status = LaunchArgumentStatus::NotSupplied;

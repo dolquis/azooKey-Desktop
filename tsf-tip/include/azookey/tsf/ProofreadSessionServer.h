@@ -24,7 +24,7 @@ struct ProofreadProcessToken {
 // The batch correction view runs only in a medium-integrity, unelevated,
 // non-AppContainer process: an elevated process would start the settings app
 // elevated, and a low or AppContainer process cannot serve the session pipe
-// to it (rich-features-spec X-3-6).
+// to it (proofread-view-spec §2).
 bool ProofreadAllowedForToken(const ProofreadProcessToken& token) noexcept;
 std::optional<ProofreadProcessToken> QueryCurrentProcessTokenForProofread() noexcept;
 bool ProofreadAllowedInCurrentProcess() noexcept;

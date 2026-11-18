@@ -211,22 +211,22 @@
     "contextReselection": {
       "type": "boolean",
       "default": false,
-      "description": "rich X-3-2: 同音異義語の文脈再選択を有効化（実験機能）"
+      "description": "user-learning-enhancement-spec §4.3: 同音異義語の文脈再選択を有効化（実験機能）"
     },
     "postCommitLint": {
       "type": "boolean",
       "default": false,
-      "description": "rich X-3-3: 確定後の誤変換検出と波線表示を有効化（実験機能）"
+      "description": "ai-backend-spec §4.3: 確定後の誤変換検出と波線表示を有効化（実験機能）"
     },
     "retroactiveRecompute": {
       "type": "boolean",
       "default": false,
-      "description": "rich X-1-3: 後戻り再評価を有効化（800ms idle で全体再評価）"
+      "description": "copilot-pc-backend-spec §11.2: 後戻り再評価を有効化（800ms idle で全体再評価）"
     },
     "sentenceCompletion": {
       "type": "boolean",
       "default": false,
-      "description": "rich X-2-1: 文単位の予測（Sentence モード）を有効化"
+      "description": "legacy-parity-spec §3.8: 文単位の予測（Sentence モード）を有効化"
     },
     "backendPreference": {
       "type": "string",
@@ -321,7 +321,7 @@
       "type": "object",
       "default": {},
       "additionalProperties": { "type": "string" },
-      "description": "rich X-2-6: 前面アプリ実行ファイル名 → prompt prefix のマップ（例: 'Code.exe', 'OUTLOOK.EXE'）"
+      "description": "app-profile-spec §6: 前面アプリ実行ファイル名 → prompt prefix のマップ（例: 'Code.exe', 'OUTLOOK.EXE'）"
     },
     "batchRomajiConversion": {
       "type": "boolean",
@@ -485,7 +485,7 @@
     },
     "reranker": {
       "type": "object",
-      "description": "Track B NLL reranking; docs/neural-reranker-spec.md section B9",
+      "description": "Track B NLL reranking; docs/neural-reranker-nll-spec.md section B9",
       "properties": {
         "nllRerankEnabled": { "type": "boolean", "default": false },
         "nllTopK": { "type": "integer", "default": 8, "minimum": 1, "maximum": 16 },

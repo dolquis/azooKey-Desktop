@@ -22,7 +22,7 @@
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
 
-// Batch correction view (docs/rich-features-spec.md X-3-6): the window cut to
+// Batch correction view (docs/proofread-view-spec.md §2): the window cut to
 // the DetectAnomalies limit, the document read, and the hotkey's privacy gate.
 
 namespace {
@@ -555,7 +555,7 @@ TEST_F(ProofreadHotkeyTest, ReadsNoTextWhereLearningIsNotAllowed) {
   EXPECT_EQ(document->get_text_calls, 0);
 }
 
-// The AI routes' gate (rich-features-spec X-3-6): the Host checks with an external backend only.
+// The AI routes' gate (proofread-view-spec §2): the Host checks with an external backend only.
 TEST_F(ProofreadHotkeyTest, ReadsNoTextFromAnInputFieldOfUnknownKind) {
   auto document = MakeDocument(L"種類の分からない入力欄の本文。");
   auto& context = NewContext(document);

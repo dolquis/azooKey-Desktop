@@ -43,10 +43,10 @@ enum class MessageType {
   ExportLearningData,
   ImportLearningData,
   // DEV-1208 settings app: whole-store reset (learning-data-management-spec
-  // section 4.6) and the persona view (rich-features-spec X-2-7).
+  // section 4.6) and the persona view (learning-data-management-spec §15).
   ResetLearningStore,
   QueryPersona,
-  // DEV-1532 batch correction view (rich-features-spec X-3-6).
+  // DEV-1532 batch correction view (proofread-view-spec §2).
   DetectAnomalies,
   // DEV-1821 catalog model fetch (model-management-spec section 4.4): start, then poll.
   FetchCatalogModel,

@@ -387,6 +387,11 @@
       "default": false,
       "description": "M62-B: true で純ひらがなの候補へ全角カタカナと半角カタカナを注釈付きで追加"
     },
+    "dateTimeRewriter": {
+      "type": "boolean",
+      "default": false,
+      "description": "M62-E: true で読み きょう・ことし・いま などから日付・年・時刻の候補を先頭 1 件の直後へ注釈付きで差し込む"
+    },
     "symbolRewriter": {
       "type": "boolean", "default": false,
       "description": "M62-C: 記号のかな読み引きと関連候補の展開"

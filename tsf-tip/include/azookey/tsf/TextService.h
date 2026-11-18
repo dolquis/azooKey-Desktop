@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/DateTimeRewriter.h"
 #include "azookey/core/InputState.h"
 #include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/ipc/Messages.h"
@@ -532,6 +533,22 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void set_katakana_rewriter_enabled_for_test(bool enabled) {
     katakana_rewriter_.store(enabled, std::memory_order_relaxed);
+  }
+  void set_date_time_rewriter_enabled_for_test(bool enabled) {
+    date_time_rewriter_.store(enabled, std::memory_order_relaxed);
+  }
+  bool date_time_rewriter_enabled_for_test() const {
+    return date_time_rewriter_.load(std::memory_order_relaxed);
+  }
+  // Pins the clock the dynamic candidates read (spec §20.2); nullopt restores
+  // GetLocalTime. Safe to call while the IPC worker builds candidate lists.
+  void set_local_time_for_test(std::optional<core::LocalDateTime> now) {
+    std::lock_guard<std::mutex> lock(local_time_for_test_mtx_);
+    local_time_for_test_ = now;
+  }
+  // How many times a candidate list read the clock for dynamic candidates.
+  uint32_t dynamic_candidate_clock_reads_for_test() const {
+    return dynamic_candidate_clock_reads_.load(std::memory_order_relaxed);
   }
   void set_selected_candidate_index_for_test(int index) { selected_candidate_idx_ = index; }
   void set_symbol_rewriter_for_test(bool enabled) { symbol_rewriter_.store(enabled); }
@@ -1118,6 +1135,11 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_auto_punctuation_{false};
   std::atomic<bool> number_rewriter_{false};
   std::atomic<bool> katakana_rewriter_{false};
+  // M62-E (docs/candidate-rewriter-spec.md §20.10), from the Handshake response.
+  std::atomic<bool> date_time_rewriter_{false};
+  mutable std::atomic<uint32_t> dynamic_candidate_clock_reads_{0};
+  mutable std::mutex local_time_for_test_mtx_;
+  std::optional<core::LocalDateTime> local_time_for_test_;
   std::atomic<bool> symbol_rewriter_{false};
   std::atomic<bool> emoji_rewriter_{false};
   std::atomic<bool> emoji_trigger_search_{true};
@@ -1722,6 +1744,9 @@ class TextService final : public ITfTextInputProcessorEx,
                             bool& preedit_update_needed, bool& commit_pending);
   HRESULT ApplyInputStateResult(ITfContext* context, core::HandleResult result);
   std::vector<core::Candidate> CoreCandidatesFromCache();
+  // M62-E dynamic candidates for `reading` (spec §20.8). Reads the clock at
+  // most once and only while dateTimeRewriter is on (§20.11).
+  std::vector<core::Candidate> DynamicCandidates(const std::string& reading) const;
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
   std::string CurrentDisplayedPreeditSurface() const;

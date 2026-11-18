@@ -32,6 +32,7 @@ struct HandshakeResponse {
   bool batch_auto_punctuation{false};
   bool number_rewriter{false};
   bool katakana_rewriter{false};
+  bool date_time_rewriter{false};
   uint32_t max_candidates{9};
   bool symbol_rewriter{false};
   bool emoji_rewriter{false};

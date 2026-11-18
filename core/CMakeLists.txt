@@ -9,6 +9,7 @@ add_library(azookey_core STATIC
   src/CrashRetention.cpp
   src/CrashReporting.cpp
   src/CustomRomajiLoader.cpp
+  src/DateTimeRewriter.cpp
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
   src/InputState.cpp

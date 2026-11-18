@@ -6591,6 +6591,82 @@ TEST(TsfTipOnKeyDownPreeditTest, KatakanaRewriterIsOffByDefaultAndAddsAnnotatedC
   EXPECT_EQ(mixed_items.size(), host_candidates.size());
 }
 
+namespace {
+
+// 2026-11-17 (Tuesday) 14:05, the candidate-rewriter-spec §20.4 example.
+constexpr azookey::core::LocalDateTime kDynamicCandidateTime{2026, 11, 17, 14, 5};
+
+std::vector<azookey::ipc::CandidateField> KyouHostCandidates() {
+  return {{"今日", "きょう", 0.0, "test"}, {"京", "きょう", 0.0, "test"}};
+}
+
+std::vector<std::wstring> ViewSurfaces(const std::vector<azookey::tsf::CandidateViewItem>& items) {
+  std::vector<std::wstring> surfaces;
+  for (const auto& item : items) surfaces.push_back(item.surface);
+  return surfaces;
+}
+
+}  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterIsOffByDefaultAndDoesNotReadTheClock) {
+  TextServiceHarness h;
+  h.service.set_local_time_for_test(kDynamicCandidateTime);
+
+  const auto off_items = h.service.candidate_views_for_test("きょう", KyouHostCandidates());
+  EXPECT_EQ(ViewSurfaces(off_items), (std::vector<std::wstring>{L"今日", L"京"}));
+  EXPECT_EQ(h.service.dynamic_candidate_clock_reads_for_test(), 0u);
+  EXPECT_FALSE(h.service.date_time_rewriter_enabled_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterInsertsAnnotatedCandidatesAfterTheFirstOne) {
+  TextServiceHarness h;
+  h.service.set_local_time_for_test(kDynamicCandidateTime);
+  h.service.set_date_time_rewriter_enabled_for_test(true);
+  h.service.set_katakana_rewriter_enabled_for_test(true);
+
+  const auto items = h.service.candidate_views_for_test("きょう", KyouHostCandidates());
+  // §20.8: Host order kept, the dynamic block right after the first candidate,
+  // the tail rewriters after the Host candidates.
+  EXPECT_EQ(ViewSurfaces(items),
+            (std::vector<std::wstring>{L"今日", L"2026年11月17日", L"令和8年11月17日",
+                                       L"2026/11/17", L"2026-11-17", L"11月17日（火）", L"火曜日",
+                                       L"京", L"キョウ", L"ｷｮｳ"}));
+  ASSERT_EQ(items.size(), 10u);
+  EXPECT_EQ(items[1].description, L"西暦");
+  EXPECT_EQ(items[2].description, L"和暦");
+  EXPECT_EQ(items[6].description, L"曜日");
+  // One clock read for the whole list (§20.2).
+  EXPECT_EQ(h.service.dynamic_candidate_clock_reads_for_test(), 1u);
+
+  const auto time_items = h.service.candidate_views_for_test("いま", {{"今", "いま", 0.0, "test"}});
+  EXPECT_EQ(ViewSurfaces(time_items), (std::vector<std::wstring>{L"今", L"14:05", L"14時5分",
+                                                                 L"午後2時5分", L"イマ", L"ｲﾏ"}));
+  const auto year_items =
+      h.service.candidate_views_for_test("ことし", {{"今年", "ことし", 0.0, "test"}});
+  EXPECT_EQ(ViewSurfaces(year_items),
+            (std::vector<std::wstring>{L"今年", L"2026年", L"令和8年", L"コトシ", L"ｺﾄｼ"}));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterSkipsDuplicatesAndAnEmptyCandidateList) {
+  TextServiceHarness h;
+  h.service.set_local_time_for_test(kDynamicCandidateTime);
+  h.service.set_date_time_rewriter_enabled_for_test(true);
+
+  // A Host candidate with the same surface stays where the Host put it.
+  auto host_candidates = KyouHostCandidates();
+  host_candidates.push_back({"火曜日", "きょう", 0.0, "test"});
+  const auto items = h.service.candidate_views_for_test("きょう", host_candidates);
+  EXPECT_EQ(ViewSurfaces(items), (std::vector<std::wstring>{
+                                     L"今日", L"2026年11月17日", L"令和8年11月17日", L"2026/11/17",
+                                     L"2026-11-17", L"11月17日（火）", L"京", L"火曜日"}));
+  EXPECT_EQ(items.back().description, L"");
+
+  // Live conversion shows the head of the list, so no list of only dates.
+  EXPECT_TRUE(h.service.candidate_views_for_test("きょう", {}).empty());
+  // Only exact readings (§20.3).
+  EXPECT_EQ(h.service.candidate_views_for_test("きょうは", KyouHostCandidates()).size(), 2u);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitKeysBuildNumericPreedit) {
   TextServiceHarness h;
   AsciiDecimalDigitTranslationGuard digit_translation;
@@ -6781,6 +6857,48 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesKatakanaRewriteCandida
   EXPECT_EQ(observation->chosen.surface, "仮名");
   ASSERT_EQ(observation->shown.size(), 1u);
   EXPECT_EQ(observation->shown[0].surface, "仮名");
+}
+
+// candidate-rewriter-spec §20.11: a dynamic candidate is never observed, and a
+// Host candidate pushed behind the dynamic block is observed with the Host's
+// own list as shown.
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesDateTimeCandidates) {
+  for (const bool secure : {false, true}) {
+    SCOPED_TRACE(secure ? "secure" : "normal");
+    for (const int index : {1, 7}) {
+      SCOPED_TRACE(index);
+      TextServiceHarness h;
+      if (secure) h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+      h.service.preedit_kana_ = "きょう";
+      h.service.set_local_time_for_test(kDynamicCandidateTime);
+      h.service.set_date_time_rewriter_enabled_for_test(true);
+      ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+        h.service.set_rewritten_cached_candidates_for_test("きょう", KyouHostCandidates());
+      }));
+      const auto shown = h.service.shown_candidates_for_test();
+      ASSERT_EQ(shown.size(), 8u);
+      ASSERT_EQ(shown[1].surface, "2026年11月17日");
+      ASSERT_EQ(shown[7].surface, "京");
+      h.service.set_selected_candidate_index_for_test(index);
+
+      FakeCompositionAttachment attachment(h);
+      EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+
+      // A secure field observes nothing (privacy spec section 5); the dynamic
+      // candidates are still offered there.
+      const auto observation = h.service.last_queued_commit_observation_for_test();
+      if (index == 1 || secure) {
+        EXPECT_FALSE(observation.has_value());
+        EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+        continue;
+      }
+      ASSERT_TRUE(observation.has_value());
+      EXPECT_EQ(observation->chosen.surface, "京");
+      ASSERT_EQ(observation->shown.size(), 2u);
+      EXPECT_EQ(observation->shown[0].surface, "今日");
+      EXPECT_EQ(observation->shown[1].surface, "京");
+    }
+  }
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
@@ -11326,6 +11444,62 @@ TEST(TsfTipTypoCorrectionTest, AmbiguousReadingChoiceReachesCandidatesButNotTheP
   for (const auto& query : queries)
     if (query.live) EXPECT_TRUE(query.alt_readings.empty()) << query.reading;
   EXPECT_EQ(std::count(received_types.begin(), received_types.end(), MessageType::ObserveTypo), 0);
+}
+
+// candidate-rewriter-spec §20.8 and §20.10: dateTimeRewriter arrives in the
+// Handshake response, and the dynamic candidates match the reading the Host
+// corrected the candidates to, not the typed one.
+TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedReading) {
+  using namespace azookey::ipc;
+  TextServiceHarness token_guard;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-date-time-rewriter-" + std::to_string(GetCurrentProcessId());
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake_response;
+      handshake_response.accepted = true;
+      handshake_response.date_time_rewriter = true;
+      response.payload_json = BuildHandshakeResponse(handshake_response);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      QueryCandidatesResponse payload;
+      if (const auto query = ParseQueryCandidatesRequest(request.payload_json);
+          query && query->reading == "きよう") {
+        payload.corrected_reading = "きょう";
+        payload.candidates = {{"今日", "きょう", 0.0, "dictionary"}};
+      }
+      response.payload_json = BuildQueryCandidatesResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_local_time_for_test(kDynamicCandidateTime);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return h.service.date_time_rewriter_enabled_for_test(); },
+                        std::chrono::seconds(10)));
+  TypeTypoRomaji(h, "KIYOU");
+  ASSERT_EQ(h.service.preedit_kana_, "きよう");
+  const bool inserted = WaitUntil(
+      [&] {
+        const auto cached = h.service.cached_candidates_for_test();
+        return cached.size() >= 2 && cached[0].surface == "今日" &&
+               cached[1].surface == "2026年11月17日";
+      },
+      std::chrono::seconds(10));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  ASSERT_TRUE(inserted);
+  const auto cached = h.service.cached_candidates_for_test();
+  ASSERT_EQ(cached.size(), 7u);
+  EXPECT_EQ(cached[1].reading, "きょう");
+  EXPECT_EQ(cached[1].source, "heuristic");
+  EXPECT_EQ(cached[6].surface, "火曜日");
 }
 
 // A candidate of the other reading is learned under that reading, as an M35

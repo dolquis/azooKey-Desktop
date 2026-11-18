@@ -6,6 +6,7 @@ add_executable(core_tests
   command_line_test.cpp
   crash_retention_test.cpp
   custom_romaji_test.cpp
+  date_time_rewriter_test.cpp
   etw_logger_test.cpp
   input_state_test.cpp
   katakana_rewriter_test.cpp

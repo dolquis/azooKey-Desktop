@@ -108,6 +108,7 @@ std::vector<SettingField> BuildFields() {
 
       Bool("numberRewriter", Pane::Candidates, "Rewriters", false),
       Bool("katakanaRewriter", Pane::Candidates, "Rewriters", false),
+      Bool("dateTimeRewriter", Pane::Candidates, "Rewriters", false),
       Bool("symbolRewriter", Pane::Candidates, "Rewriters", false),
       Text("symbolDataPath", Pane::Candidates, "Rewriters", "", symbols, true),
       Bool("emojiRewriter", Pane::Candidates, "Rewriters", false),

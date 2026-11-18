@@ -250,7 +250,7 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "postCommitLint" || key == "retroactiveRecompute" ||
                key == "sentenceCompletion" || key == "batchRomajiConversion" ||
                key == "batchAutoPunctuation" || key == "numberRewriter" ||
-               key == "katakanaRewriter" || key == "symbolRewriter" ||
+               key == "katakanaRewriter" || key == "dateTimeRewriter" || key == "symbolRewriter" ||
                key == "inlineEnglishCandidates" || key == "mixedEnglishAutoConversion" ||
                key == "inlineEnglishCaseVariants" || key == "fullWidthEnglishCandidate" ||
                key == "inlineEnglishDictionary" || key == "emojiRewriter" ||

@@ -151,6 +151,8 @@ struct RuntimeSettings {
   EnglishCandidateConfig english{true, false, 2, 0.6, false, kDefaultEnglishDictionaryPath};
   bool number_rewriter{false};
   bool katakana_rewriter{false};
+  // M62-E (docs/candidate-rewriter-spec.md §20.10).
+  bool date_time_rewriter{false};
   bool symbol_rewriter{false};
   std::string symbol_data_path;
   bool emoji_rewriter{false};

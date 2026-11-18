@@ -168,6 +168,16 @@ HandleResult InputState::HandleIdle(const UserActionEvent& event) const {
       next.kind_ = next.live_conversion_ ? InputStateKind::Previewing : InputStateKind::Composing;
       next.AfterReadingChanged(result.actions);
       break;
+    case UserAction::UndoCommit:
+      // The TIP has already written the reading into the composition
+      // (commit-undo-spec §6), so only the per-key query follows. Without a
+      // reading there is nothing to restore.
+      if (event.reading.empty()) return {{}, *this};
+      next.kana_ = event.reading;
+      next.romaji_.Reset();
+      next.kind_ = next.live_conversion_ ? InputStateKind::Previewing : InputStateKind::Composing;
+      result.actions.push_back(QueryCandidates{next.kana_});
+      break;
     case UserAction::StartUnicodeInput:
       next.kind_ = InputStateKind::UnicodeInput;
       next.unicode_hex_.clear();

@@ -100,6 +100,7 @@ struct UserActionEvent {
     int        digit     = 0;     // SelectByDigit 時の 1〜9（いまのページの n 件目。§1.4）
     bool       by_page   = false; // PageUp / PageDown の Up / Down（ページ単位。§1.4）
     std::vector<uint32_t> page_starts;  // アプリの区切り（数字と PageUp / PageDown に TIP が添える。空なら 9 件ずつ）
+    std::string reading;      // UndoCommit が戻す読み（かな。TIP が edit session の後に添える。`docs/commit-undo-spec.md` §5）
 };
 ```
 
@@ -155,7 +156,7 @@ enum class InputStateKind {
 | Composing / Previewing / Selecting / UnicodeInput | Cancel | Idle | 候補窓を閉じ（Selecting のとき）、CancelComposition。候補キャッシュは破棄し、学習観測は送らない。確定済みテキストには触れない |
 | Idle | StartAlnumDouble / StartKanaDouble | Idle | `ShowReplaceSuggestionPrompt`（英数は初期プロンプト英訳、かなは和訳。§4.1）。プロンプト窓は自分の欄とキーを持つ別の窓なので、この文書の状態は Idle のまま変えない |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
-| Idle | UndoCommit（確定の直後の Ctrl+Backspace） | Composing（liveConv ON なら Previewing） | 直前の確定を、確定する前の読みの composition へ戻す。取り消せる確定、条件、edit session は `docs/commit-undo-spec.md` |
+| Idle | UndoCommit（確定の直後の Ctrl+Backspace） | Composing（liveConv ON なら Previewing） | 直前の確定を、確定する前の読みの composition へ戻す。戻す読みは `UserActionEvent.reading` で受け、読みが空なら何もしない。composition の文字列は TIP が書くので `ReplaceMarkedText` は出さず、`QueryCandidates` だけを出す。取り消せる確定、条件、edit session は `docs/commit-undo-spec.md` |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
 > **候補窓の取得**: `StartConversion` は打鍵中の候補キャッシュの有無によらず、候補窓用の

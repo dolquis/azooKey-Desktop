@@ -51,6 +51,10 @@ std::optional<UserActionEvent> MapCtrl(uint32_t key, uint32_t modifiers, InputSt
     return std::nullopt;
   }
   switch (key) {
+    // Only Idle maps it; the TIP consumes it when commit-undo-spec §4 holds.
+    case vk::kBack:
+      if (kind == InputStateKind::Idle) return Make(UserAction::UndoCommit, modifiers);
+      break;
     case 'H':
       if (AcceptsEditing(kind)) return Make(UserAction::Backspace, modifiers);
       break;

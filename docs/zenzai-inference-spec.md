@@ -61,7 +61,7 @@ canonical_for: ["Zenzai 推論コントラクト"]
 
 - バックエンド実行系（CPU/CUDA/WinML）の選定 → `docs/copilot-pc-backend-spec.md`。
 - llama.cpp の CMake 導入・リンク・GGUF ロード境界 → M8-1（DEV-220）。
-- 個人化 n-gram LM（marisa）のブレンド → §9.4 で**将来拡張**として枠のみ定義。
+- 個人化 n-gram LM（marisa）のブレンド → §9.4 で方式を比べ、v1 では採らない。
   v1.0 / M8 では採用しない（legacy macOS の `PersonalizationMode` は参照のみ）。
 - 本格的な辞書ラティス（M53）・Tiny Reranker（M56）・ModernBERT（M57）→ §7.5 で
   将来統合点のみ示す。
@@ -91,7 +91,7 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
 | `weight` | `ggml-model-Q5_K_M.gguf`（zenz-v3.x-small） | §3.1 モデル。`EngineConfig.model_path` |
 | `inferenceLimit` | 既定 5 / 範囲 1〜50（`Config.ZenzaiInferenceLimit`） | §6.3 にマップ（探索予算） |
 | `requestRichCandidates` | bool（候補選択時 true） | §6.1 n-best 要求フラグ |
-| `personalizationMode` | base/personal n-gram + alpha | §9.4 将来拡張（M8 非対象） |
+| `personalizationMode` | base/personal n-gram + alpha | §9.4 で比べ、v1 では採らない |
 | `versionDependentMode` | `.v3(profile, leftSideContext, enableAlignmentSeparator: true)` | §3.2 プロンプト構築 |
 
 - `leftSideContext`: 確定済み左文脈を**最大 30 文字**、改行で分割し最後の行、
@@ -1275,12 +1275,14 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節�
 | B2. 学習データから作ったプロファイルを `[PROF]` に付ける | B1 と同じ仕組みで、同じ揺れを持つ | B1 と同じ | B1 と同じ。値は学習データから作る | 採らない |
 | C. 端末内での個人 fine-tune | 確定した組に強く寄る。過学習しやすい | 製品の中での学習。CPU で分から時間の単位 | 個人データから作った重み | 採らない |
 
-- **A**: legacy は base と個人の n-gram 言語モデル（marisa-trie の 4 ファイル）と alpha（オフ 0、弱く 0.5、
-  普通 1.0、強く 1.5）を変換ライブラリ（AzooKeyKanaKanjiConverter）へ渡す
-  （`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`）。混ぜ方はライブラリの内部にあり、legacy の中からは
-  読めない。legacy は個人側のファイル（`p13n_v1/lm_*.marisa`）の有無を確かめて渡すだけで、repo の中にそれを作るコードは
-  無い。base 側は Xcode プロジェクトが `base_n5_lm/` を参照するが、ファイルは repo に無い。Windows で採るには、base の
-  n-gram の入手と出典・ライセンスの確認、個人側を学習するための文単位の確定本文、marisa への依存、beam の各 step で
+- **A**: legacy は base と個人の n-gram 言語モデル（marisa-trie の 4 ファイル）と alpha を変換ライブラリ
+  （AzooKeyKanaKanjiConverter）へ渡す（`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`）。alpha は設定
+  `ZenzaiPersonalizationLevel` の 4 段階（オフ 0、弱く 0.5、普通 1.0、強く 1.5。
+  `legacy/Core/Sources/Core/Configs/CustomCodableConfigItem.swift`）である。混ぜ方はライブラリの内部にあり、legacy の
+  中からは読めない。legacy は個人側のファイル（`p13n_v1/lm_*.marisa`）の有無を確かめて渡すだけで、repo の中にそれを作る
+  コードは無い。base 側は Hugging Face の `Miwa-Keita/base_n5_lm` を submodule（`.gitmodules` の
+  `legacy/azooKeyMac/Resources/base_n5_lm`）として持ち、アプリに同梱する。Windows で採るには、base の n-gram の配布と
+  ライセンスの確認、個人側を学習するための文単位の確定本文、marisa への依存、beam の各 step で
   token の確率を補正する処理が要る。学習ストアは文を持たない（`docs/learning-data-management-spec.md` §15.2）。
   確定の本文を新たに保存すると、左文脈の別用途の再利用を禁じる `docs/privacy-and-secure-input-spec.md` §5.3 と、文脈を
   hash で持つ `docs/user-learning-enhancement-spec.md` §2 に反する。
@@ -1313,11 +1315,15 @@ Zenzai の生成を利用者ごとに寄せる方式を比べ、採否を本節�
 #### 9.4.3 効果の測り方と見直しの条件
 
 - B1 の効果は、利用者自身の確定履歴で測る。個人回帰ベンチ（`docs/conversion-quality-benchmark-spec.md` §15）は
-  bench 専用の `--profile`（同 §15.5）を持ち、互換キー `profile_sha256`（同 §14.1）だけが違う結果を比べられる。
-  `--profile` は bench が作る変換の文脈の `instruction_profile` に文字列を入れるだけで、製品の設定と Host の挙動は変えない。
+  bench 専用の `--profile`（同 §15.5）を持つ。`--profile` は bench が作る変換の文脈の `instruction_profile` に文字列を
+  入れるだけで、製品の設定と Host の挙動は変えない。
+- 比べ方: 同じ学習ストアで、プロファイルなし、利用者が書いたプロファイル、中立の文言（DEV-1576 の対照と同じ
+  「日本語の文章」）の 3 通りを続けて採取し、3 つの `--output` の `summary` を比べる。互換キー `profile_sha256`
+  （同 §14.1）が違うので `diff_vs_baseline` は使わない（同 §15.7）。3 回の `eval_dataset_sha256` が一致しない採取は捨てる。
 - 次の 2 つを満たしたら、`model.profile` を製品の設定にする M を roadmap に立てる。
-  - 同じ学習ストアで、利用者が書いたプロファイルの `commit_coverage_top1`（同 §15.6）が、プロファイルなしと、
-    中立の文言（DEV-1576 の対照と同じ「日本語の文章」）の両方を上回る。
+  - `n_cases` が 300 以上の学習ストアで、利用者が書いたプロファイルの `commit_coverage_top1`（同 §15.6）が、
+    プロファイルなしと中立の文言の両方を 2.0pp 以上上回る。2.0pp は、DEV-1576 でプロファイルを付けたときに 200 件の
+    うち壊れた件数の最大（3 件、1.5pp）を超える幅である。測った学習ストアの数と各値は Human Gate で記録する。
   - M52 の同梱データ（同 §4）で、そのプロファイルを渡した採取の `top1_accuracy` の悪化が 0.5pp 以内である
     （同 §14.3 と同じ閾値）。
 - その M では、設定キーの長さの上限（prompt 長の見積もり §9.2.3.7 に入る）、secure の要求とローカルの AI 処理

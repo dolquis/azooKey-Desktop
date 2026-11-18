@@ -244,7 +244,7 @@ Windows 独自のキーとして、半角/全角、`VK_IME_ON` / `VK_IME_OFF`、
 | UserDictionary | 1 件（あずーきー） | `user_dict.json` | 空（推測） | spec と実装の不一致（v1.0 のボタン） | P-23 |
 | AIBackendPreference | off | `aiBackend` | none | 同等 | — |
 | OpenAiApiEndpoint | `.../v1/chat/completions` | `openAiApiEndpoint` | `.../v1` | 意図した差（`ai-backend-spec.md` §5.1） | P-37 |
-| ZenzaiProfile ほか 3 件 | — | なし | — | 記録のない予定 | P-37 |
+| ZenzaiProfile ほか 3 件 | — | なし | — | 記録のない予定。注記: うち ZenzaiProfile と PersonalizationLevel は v1 では採らない意図した差（P-37） | P-37 |
 
 Windows 独自の機能で、既定で ON のまま素の打鍵結果を変えるものは `predictionEnabled`（P-16）と `typoCorrectionMode = suggest`（同じ誤りを 3 回観測した後、補正読みの候補が混ざる）である。リライター、日英混在入力、カッコ補完、動的句読点、句読点の確定、一括変換は既定 OFF で影響しない。
 

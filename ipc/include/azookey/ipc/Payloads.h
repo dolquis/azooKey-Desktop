@@ -202,6 +202,14 @@ struct QueryCandidatesRequest {
   // value, and absence, decode as empty (the Host settings apply). The Host
   // never lets it raise the mode its settings resolve to.
   std::string typo_correction_mode;
+  // M66 (segment-editing-spec section 5.1): the reading after the first
+  // segment, which `reading` then holds. A non-empty value makes this a first
+  // segment's request, which the Host converts as given, without any reading
+  // correction or corrected_reading (section 5.3). Omitted on the wire when
+  // empty; absence, an empty string and a non-string decode as empty, and an
+  // older Host ignores it. The name holds "reading" so the runtime log redacts
+  // it like the reading.
+  std::string remaining_reading;
 };
 
 // M55 section 12.13: raw_keys longer than this many bytes is dropped on decode.

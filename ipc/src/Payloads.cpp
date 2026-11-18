@@ -543,6 +543,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   if (!p.raw_keys.empty() && !p.secure) o.emplace("raw_keys", j::Value(p.raw_keys));
   if (!p.typo_correction_mode.empty())
     o.emplace("typo_correction_mode", j::Value(p.typo_correction_mode));
+  if (!p.remaining_reading.empty()) o.emplace("remaining_reading", j::Value(p.remaining_reading));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -573,6 +574,9 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
     p.raw_keys = std::move(*keys);
   if (auto mode = v->GetString("typo_correction_mode"); mode && IsTypoCorrectionMode(*mode))
     p.typo_correction_mode = std::move(*mode);
+  // M66: no length bound, since a dropped value would turn the request into
+  // one the Host corrects.
+  p.remaining_reading = v->GetString("remaining_reading").value_or(std::string());
   return p;
 }
 

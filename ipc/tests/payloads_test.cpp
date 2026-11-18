@@ -2212,6 +2212,44 @@ TEST(PayloadsTest, TypoFieldsAreOptionalOnQueryCandidates) {
   }
 }
 
+// M66 (segment-editing-spec section 5.1): remaining_reading is optional and
+// absent when empty. A peer that omits it, an empty string and a non-string
+// decode as empty, and the other fields read the same either way.
+TEST(PayloadsTest, RemainingReadingIsOptionalOnQueryCandidates) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "きょう";
+  request.left_context = "あしたの";
+  request.max_candidates = 9;
+  request.secure = false;
+  request.learning_allowed = true;
+  const auto plain = json::Parse(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(plain);
+  EXPECT_FALSE(plain->Find("remaining_reading"));
+
+  request.remaining_reading = "は";
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->remaining_reading, "は");
+  EXPECT_EQ(parsed->reading, "きょう");
+  EXPECT_EQ(parsed->left_context, "あしたの");
+  EXPECT_EQ(parsed->max_candidates, 9u);
+  EXPECT_FALSE(parsed->live);
+  EXPECT_FALSE(parsed->secure);
+  EXPECT_TRUE(parsed->learning_allowed);
+
+  const auto legacy = ParseQueryCandidatesRequest(R"({"reading":"きょう"})");
+  ASSERT_TRUE(legacy);
+  EXPECT_TRUE(legacy->remaining_reading.empty());
+  for (const std::string value : {R"("")", "1", "true", R"(["は"])", R"({"r":"は"})"}) {
+    const auto odd =
+        ParseQueryCandidatesRequest(R"({"reading":"きょう","remaining_reading":)" + value + "}");
+    ASSERT_TRUE(odd) << value;
+    EXPECT_TRUE(odd->remaining_reading.empty()) << value;
+    EXPECT_EQ(odd->reading, "きょう") << value;
+  }
+}
+
 // M55 section 12.12.2: the keys never travel with a secure request, and the
 // decoder drops any that a secure or privacy-less request carries anyway.
 TEST(PayloadsTest, RawKeysNeverTravelWithASecureRequest) {

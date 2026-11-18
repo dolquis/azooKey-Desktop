@@ -1260,15 +1260,21 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     // M55 (typo-correction-learning-spec section 12.13): raw_keys and
     // typo_correction_mode wait for the M55 correction engine. The conversion
     // uses the mode the Host settings resolve to, so a request cannot raise it.
-    auto queried =
-        !parsed->live && !parsed->secure && !parsed->alt_readings.empty() && !IsInlineSplit(split)
-            ? engine_->QueryAmbiguousCandidatesEx(parsed->reading, parsed->alt_readings,
-                                                  parsed->left_context, NowSec(), cancel.get(),
-                                                  ordinary_limit, trace.context(), &tag_boosts)
-            : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
-                                         cancel.get(), ordinary_limit, parsed->live,
-                                         trace.context(), &tag_boosts,
-                                         IsInlineSplit(split) ? &as_typed : nullptr);
+    // M66 (segment-editing-spec section 5.3): a first segment's request is
+    // converted as given, without M35 or the DEV-1734 reading, either of which
+    // would answer with a corrected_reading.
+    const bool first_segment = !parsed->remaining_reading.empty();
+    const bool weighs_alt_readings = !parsed->live && !parsed->secure &&
+                                     !parsed->alt_readings.empty() && !IsInlineSplit(split) &&
+                                     !first_segment;
+    const auto* conversion = IsInlineSplit(split) || first_segment ? &as_typed : nullptr;
+    auto queried = weighs_alt_readings
+                       ? engine_->QueryAmbiguousCandidatesEx(
+                             parsed->reading, parsed->alt_readings, parsed->left_context, NowSec(),
+                             cancel.get(), ordinary_limit, trace.context(), &tag_boosts)
+                       : engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(),
+                                                    cancel.get(), ordinary_limit, parsed->live,
+                                                    trace.context(), &tag_boosts, conversion);
     const auto all_japanese = IsInlineSplit(split) && !queried.candidates.empty()
                                   ? std::optional{queried.candidates.front()}
                                   : std::nullopt;

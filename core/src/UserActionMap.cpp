@@ -81,7 +81,7 @@ std::optional<UserActionEvent> MapCtrl(uint32_t key, uint32_t modifiers, InputSt
 }  // namespace
 
 std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modifiers,
-                                             InputStateKind kind) {
+                                             InputStateKind kind, bool segment_resize) {
   if ((modifiers & (kModifierAlt | kModifierWin)) != 0) return std::nullopt;
   if ((modifiers & kModifierCtrl) != 0) return MapCtrl(virtual_key, modifiers, kind);
 
@@ -177,11 +177,17 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
         return event;
       }
       break;
+    // Shift+← / Shift+→ resize the first segment (segment-editing-spec §4);
+    // without segment_resize they move like ← / → (see the declaration).
     case vk::kLeft:
-      if (kind == InputStateKind::Selecting) return Make(UserAction::Backward, modifiers);
+      if (kind == InputStateKind::Selecting)
+        return Make(shift && segment_resize ? UserAction::ShrinkSegment : UserAction::Backward,
+                    modifiers);
       break;
     case vk::kRight:
-      if (kind == InputStateKind::Selecting) return Make(UserAction::Forward, modifiers);
+      if (kind == InputStateKind::Selecting)
+        return Make(shift && segment_resize ? UserAction::ExtendSegment : UserAction::Forward,
+                    modifiers);
       break;
     case vk::kReturn:
       if (kind != InputStateKind::Idle) return Make(UserAction::Commit, modifiers);

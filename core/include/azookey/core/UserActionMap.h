@@ -66,7 +66,15 @@ inline constexpr uint32_t kOemEnlw = 0xF4;
 // IME does not consume the key in that state. Pure and layout independent;
 // the TIP resolves Input codepoints and applies setting- or hint-dependent
 // overrides (number rewriter digits, batch segments, bracket pairing).
+//
+// segment_resize tells whether Selecting resizes the first segment of a normal
+// conversion (docs/segment-editing-spec.md §3, §4). When true, Selecting maps
+// Shift+← / Shift+→ to ShrinkSegment / ExtendSegment. When false, they map
+// like ← / → to Backward / Forward, which the batch conversion's segments take
+// as the segment cursor (docs/romaji-batch-conversion-spec.md §4). The TIP is
+// to pass true for a normal conversion and false while it shows batch segments
+// (DEV-2107); a caller that passes nothing keeps Shift+arrows as arrows.
 std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modifiers,
-                                             InputStateKind kind);
+                                             InputStateKind kind, bool segment_resize = false);
 
 }  // namespace azookey::core

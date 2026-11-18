@@ -23,6 +23,7 @@
 
 #include "../src/CandidateSelection.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/TipRuntimeLog.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
@@ -1014,6 +1015,14 @@ TEST(TsfTipCandidateUiCoordinatorTest, SplitSetWhileTheTipDrawsAppliesOnceTheApp
   EXPECT_EQ(PageIndex(candidates), split);
   EXPECT_EQ(coordinator.PageSplit(), (std::vector<uint32_t>{0, 4, 10}));
   EXPECT_EQ(coordinator.DigitTarget(5), -1);
+  // The split stays with the list: the TIP draws nine to a page again, and the
+  // app's split comes back when the app draws the same list again.
+  EXPECT_EQ(thread_mgr.element->Show(TRUE), S_OK);
+  EXPECT_TRUE(coordinator.PageSplit().empty());
+  EXPECT_EQ(PageIndex(candidates), (std::vector<UINT>{0, 9}));
+  EXPECT_EQ(thread_mgr.element->Show(FALSE), S_OK);
+  EXPECT_EQ(PageIndex(candidates), split);
+  EXPECT_EQ(coordinator.PageSplit(), (std::vector<uint32_t>{0, 4, 10}));
   candidates->Release();
   EXPECT_EQ(coordinator.EndUI(), S_OK);
 }
@@ -1045,7 +1054,11 @@ TEST(TsfTipCandidateUiCoordinatorTest, RedrawnListKeepsTheAnchorRect) {
   const HWND hwnd = coordinator.own_window_for_test().hwnd_for_test();
   ASSERT_TRUE(IsWindowVisible(hwnd)) << coordinator.window_failure_stage();
   RECT bounds{};
-  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  {
+    // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+    const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  }
   EXPECT_EQ(bounds.bottom, composition.top);
   EXPECT_EQ(bounds.left, composition.left);
   EXPECT_EQ(coordinator.EndUI(), S_OK);

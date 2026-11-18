@@ -19,6 +19,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateWindow.h"
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TextService.h"
 
@@ -815,7 +816,11 @@ TEST(ReconversionFunctionTest, CandidateWindowFlipsOverTheReconvertedRange) {
     const HWND hwnd = service.candidate_window_for_test().hwnd_for_test();
     ASSERT_TRUE(IsWindowVisible(hwnd));
     RECT bounds{};
-    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    {
+      // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+      const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+      ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    }
     EXPECT_EQ(bounds.bottom, 70);
     EXPECT_EQ(bounds.left, 50);
     function->Release();

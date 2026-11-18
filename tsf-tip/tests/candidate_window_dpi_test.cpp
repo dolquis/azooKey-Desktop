@@ -1321,6 +1321,9 @@ TEST(CandidateWindowScrollTest, APageThatDoesNotFitScrollsWithinThePage) {
     SendMessageW(window.hwnd_for_test(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, row + 2));
     SendMessageW(window.hwnd_for_test(), WM_LBUTTONUP, 0, MAKELPARAM(2, row + 2));
     EXPECT_EQ(clicked, 9 - visible + 1);
+    // The click highlights the pressed row and leaves the drawn range in place.
+    EXPECT_EQ(window.GetSelected(), 9 - visible + 1);
+    EXPECT_EQ(window.GetFirstVisibleRow(), 9 - visible);
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_TRUE(EqualRect(&bounds, &shown));

@@ -39,6 +39,7 @@
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/tsf/DpiScaling.h"
 #include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
@@ -15413,7 +15414,11 @@ TEST(TsfTipCandidateAnchorTest, FlippedWindowClearsATallComposition) {
     const HWND hwnd = h.service.candidate_window_for_test().hwnd_for_test();
     ASSERT_TRUE(IsWindowVisible(hwnd));
     RECT bounds{};
-    ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    {
+      // Physical pixels, as the window was placed; a DPI unaware thread reads them scaled.
+      const azookey::tsf::ScopedPerMonitorDpiAwareness physical;
+      ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+    }
     EXPECT_EQ(bounds.bottom, 220);
     EXPECT_EQ(bounds.left, 110);
     ASSERT_TRUE(h.Press(VK_ESCAPE));

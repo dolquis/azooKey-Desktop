@@ -18756,6 +18756,14 @@ TEST(TsfTipMagicConversionTest, AQueuedRequestGetsNoAnswerOnceTheReconnectFails)
                                 std::nullopt, std::nullopt, azookey::tsf::PromptFailure::NoAnswer));
     EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
     EXPECT_EQ(host.transforms(), 1);
+    // The Host is lost now, not reconnected to: a request sent again gets the
+    // no-answer message at once and is not queued.
+    ASSERT_TRUE(m.h.service.ipc_host_unavailable_for_test());
+    m.h.service.submit_magic_conversion_for_test(L"日本語に翻訳");
+    view = m.h.service.magic_conversion_view_for_test();
+    ASSERT_TRUE(view.has_value());
+    EXPECT_EQ(view->state, azookey::tsf::PromptDialogState::Editing);
+    EXPECT_FALSE(m.h.service.has_queued_transform_for_test());
     m.h.service.stop_ipc_worker_for_test();
   }
 }

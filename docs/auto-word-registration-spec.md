@@ -663,6 +663,8 @@ auto-word の既知語判定（§4-2）が見るのは、この辞書層とフ�
 | `source` | どの層由来か |
 | `priority` | 0.0〜1.0、scoring 用 |
 
+`user_dictionary` の語が持つ品詞は `docs/user-dictionary-pos-spec.md` §2 の品詞 ID で、上の `pos` とは別の語彙である。
+
 ### 14.3 読み正規化
 
 | 入力 | 正規化 |

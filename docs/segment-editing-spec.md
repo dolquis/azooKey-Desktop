@@ -219,7 +219,7 @@ Zenzai、辞書の完全一致、`SimpleConverter`、候補のリライターは
 4. 残りの読みの候補窓用の `QueryCandidates`。
 
 F6〜F10 による部分確定は、TIP が `docs/tsf-deep-integration-spec.md` §3.6 の確定の経路で、先頭文節の読みを字種を
-変えて確定する。`InputState` は、その後に上の 4 と同じく残りの読みで要求を出す。
+変えて確定する。`InputState` は、その後に上の 1 と同じく候補窓を閉じ、上の 4 と同じく残りの読みで要求を出す。
 
 部分確定の後、`InputState` は残りの読みを読みとし、`Composing`（ライブ変換 ON なら `Previewing`）で応答を待つ。
 応答が届くと、e が残りの読みの長さの `Selecting` に入る。Space の応答待ち（`docs/legacy-parity-spec.md` §1.2）と

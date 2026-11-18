@@ -483,14 +483,24 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
       "learning_state",
       "dictionary_bundle_sha256",
       "lattice",
+      "nll",
       "category_filter",
       "eval_dataset_sha256",
   };
+  // Keys added after results were first kept: a result without one took the value below
+  // (spec section 14.1). Every other key must be present on both sides.
+  const auto value_or_default = [](const j::Object& object,
+                                   std::string_view key) -> std::optional<j::Value> {
+    if (const auto found = object.find(std::string(key)); found != object.end()) {
+      return found->second;
+    }
+    if (key == "nll") return j::Value("off");
+    return std::nullopt;
+  };
   for (const auto* key : compatible_keys) {
-    const auto current = config.find(key);
-    const auto baseline = baseline_config->find(key);
-    if (current == config.end() || baseline == baseline_config->end() ||
-        !compatible_value(current->second, baseline->second)) {
+    const auto current = value_or_default(config, key);
+    const auto baseline = value_or_default(*baseline_config, key);
+    if (!current || !baseline || !compatible_value(*current, *baseline)) {
       throw std::runtime_error(std::string("baseline is incompatible: ") + key);
     }
   }
@@ -796,6 +806,7 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     config.emplace("model_sha256",
                    j::Value(options.model.empty() ? "" : Sha256File(options.model)));
     config.emplace("n_best", j::Value(options.n_best));
+    config.emplace("nll", j::Value(options.nll));
     config.emplace("prompt_template_version", j::Value(options.prompt_template_version));
     config.emplace("thread_count", j::Value(options.thread_count));
     config.emplace("typo_correction_mode", j::Value(options.typo_mode));

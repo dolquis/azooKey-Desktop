@@ -24,7 +24,7 @@ def result():
         "n_best": 5, "max_new_tokens": 0, "prompt_template_version": 0,
         "thread_count": 1, "batch_size": 1, "typo_correction_mode": "off",
         "learning_state": "empty", "dictionary_bundle_sha256": "none", "lattice": "off",
-        "category_filter": "all",
+        "nll": "off", "category_filter": "all",
         "eval_dataset_sha256": "dataset-hash", "build_id": "current-commit",
     }, "summary": {key: 0.5 for key in QUALITY.METRICS},
         "by_category": {"general": {key: 0.5 for key in QUALITY.METRICS}},
@@ -57,6 +57,8 @@ class QualityBenchTests(unittest.TestCase):
     def test_each_compatibility_key_mismatch_or_absence_skips(self):
         for key in QUALITY.COMPATIBLE_KEYS:
             for missing in (True, False):
+                if missing and key in QUALITY.COMPATIBLE_KEY_DEFAULTS:
+                    continue  # Absence means the default (next test).
                 with self.subTest(key=key, missing=missing):
                     baseline = copy.deepcopy(self.current)
                     if missing:
@@ -67,6 +69,20 @@ class QualityBenchTests(unittest.TestCase):
                     state, reason, _ = QUALITY.baseline_status(self.current, self.baseline)
                     self.assertEqual(state, "incompatible")
                     self.assertIn(key, reason)
+
+    def test_result_without_nll_counts_as_nll_off(self):
+        # A baseline kept before the nll key existed was taken with NLL off (spec section 14.1).
+        baseline = copy.deepcopy(self.current)
+        del baseline["config"]["nll"]
+        self.write_baseline(baseline)
+        self.assertEqual(QUALITY.baseline_status(self.current, self.baseline)[0], "compatible")
+        self.current["config"]["nll"] = "on"
+        state, reason, _ = QUALITY.baseline_status(self.current, self.baseline)
+        self.assertEqual((state, reason), ("incompatible", "config differs: nll"))
+        # A result from a binary without the key compares the same way.
+        older = copy.deepcopy(baseline)
+        self.write_baseline(result())
+        self.assertEqual(QUALITY.baseline_status(older, self.baseline)[0], "compatible")
 
     def test_nonfinite_or_missing_metrics_skip(self):
         for value in (None, True, float("nan"), float("inf"), "0.5"):

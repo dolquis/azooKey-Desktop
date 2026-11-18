@@ -41,6 +41,8 @@ struct ConversionQualityOptions {
   // of --dict-dir, and whether lattice conversion stage 1 was on.
   std::string dictionary_bundle_sha256{"none"};
   std::string lattice{"off"};
+  // Whether NLL rerank was on (spec section 14.1). A result without the key counts as off.
+  std::string nll{"off"};
   size_t beam_width{1};
   size_t n_best{kConversionQualityCandidateLimit};
   size_t max_new_tokens{0};

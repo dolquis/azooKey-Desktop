@@ -417,6 +417,8 @@ int main(int argc, char** argv) {
     }
   }
   quality_options.lattice = *lattice_enabled ? "on" : "off";
+  // Recorded from the engine, so the compatibility key reflects the setting it ran with.
+  quality_options.nll = engine.config().nll.enabled ? "on" : "off";
 
   if (!quality_options.eval_path.empty()) {
     quality_options.output_path = output_path;

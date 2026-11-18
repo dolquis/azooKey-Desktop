@@ -12,8 +12,11 @@ COMPATIBLE_KEYS = (
     "model_sha256", "backend", "decode", "beam_width", "n_best",
     "max_new_tokens", "prompt_template_version", "thread_count", "batch_size",
     "typo_correction_mode", "learning_state", "dictionary_bundle_sha256", "lattice",
-    "category_filter", "eval_dataset_sha256",
+    "nll", "category_filter", "eval_dataset_sha256",
 )
+# Keys added after results were first kept: a result without one took this value.
+COMPATIBLE_KEY_DEFAULTS = {"nll": "off"}
+_MISSING = object()
 METRICS = ("top1_accuracy", "top5_accuracy", "exact_match_rate",
            "nfkc_exact_match_rate", "cer", "nfkc_cer")
 MONITORED_METRICS = ("top1_accuracy", "exact_match_rate", "cer")
@@ -96,8 +99,12 @@ def baseline_status(current, path):
             return "incompatible", "baseline config missing", None
         commit = config.get("build_id")
         for key in COMPATIBLE_KEYS:
-            value = current["config"][key]
-            if key not in config or not compatible_value(value, config[key]):
+            default = COMPATIBLE_KEY_DEFAULTS.get(key, _MISSING)
+            value = current["config"].get(key, default)
+            if value is _MISSING:
+                raise KeyError(key)
+            expected = config.get(key, default)
+            if expected is _MISSING or not compatible_value(value, expected):
                 return "incompatible", f"config differs: {key}", commit
         summary = baseline.get("summary")
         if not isinstance(summary, dict):

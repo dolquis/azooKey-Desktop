@@ -414,7 +414,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--model <path>` | モデル強制 |
 | `--dict-dir <dir>` | 同梱辞書（`dictbuild/build_bundled.py` が出力する `dict` ディレクトリ）を静的層として読む。同じディレクトリの `lattice_core.azdic` は層に登録せず、ラティス変換だけが読む（`docs/lattice-conversion-spec.md` §8.2）。省略時は静的層を読まない。`config.dictionary_bundle_sha256` に記録（§14.1 互換キー） |
 | `--lattice on\|off` | ラティス変換の段階 1（`docs/lattice-conversion-spec.md` §3.2 の内部設定）を設定する。`--dict-dir` があるときの既定は製品と同じ `on`、無いときは `off`。`--dict-dir` 無しの `on` と、`on` で lattice_core を読めないときはエラーで止める。`config.lattice` に記録（§14.1 互換キー） |
-| `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る |
+| `--nll on\|off` | NLL rerank を設定する（既定は製品と同じ off）。`--model` が要る。`config.nll` に記録（§14.1 互換キー） |
 | `--decode-stats <jsonl>` | 1 回の変換ごとに、所要時間、`docs/zenzai-inference-spec.md` §8.2 の deadline による打ち切りの有無、候補の source と未完了の印を 1 行ずつ出す（同 §2.4.3 の評価に使う） |
 | `--trace` | M51 trace ログを出す |
 | `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/observability-spec.md` §7.7.4） |
@@ -461,6 +461,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "learning_state": "empty",
     "dictionary_bundle_sha256": "none",
     "lattice": "off",
+    "nll": "off",
     "eval_source": "bundled",
     "profile_sha256": "none",
     "category_filter": "all",
@@ -836,6 +837,8 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   baseline 再採取が必要）
 - `lattice`（`on` / `off`。採取でラティス変換が有効だったか。`--dict-dir` が無いときは `off`。
   `docs/lattice-conversion-spec.md` §10.1 の A / B を区別する）
+- `nll`（`on` / `off`。採取で NLL 再ランク（§7 の `--nll`）が有効だったか。NLL は候補の並びを変えるので互換キーに入れる。
+  このキーを持たない結果は、製品の既定と同じ `off` として扱う）
 - `eval_source`（`bundled` / `personal`。§4 の同梱データを評価した結果は `bundled`、§15 の個人回帰ベンチの
   結果は `personal`。このキーを持たない結果は `bundled` として扱う。同梱データと利用者の確定履歴の結果を
   比べない）
@@ -877,7 +880,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
-  `dictionary_bundle_sha256` / `lattice` / `eval_source` / `profile_sha256` /
+  `dictionary_bundle_sha256` / `lattice` / `nll` / `eval_source` / `profile_sha256` /
   `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `main` の直前の成功 run の結果（§10）に

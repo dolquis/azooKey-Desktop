@@ -22,8 +22,8 @@ inline constexpr std::array<LearningStoreTab, 4> kLearningStoreTabs{{
     {"auto_word", "LearningStore_auto_word"},
 }};
 
-// The tabs of the "学習" pane in order: the four stores, "入力の傾向" (rich-features-spec X-2-7)
-// and "バックアップ" (sideload-packaging-spec section 3.2).
+// The tabs of the "学習" pane in order: the four stores, "入力の傾向"
+// (learning-data-management-spec §15) and "バックアップ" (sideload-packaging-spec section 3.2).
 enum class LearningTabKind { Store, Persona, Backup };
 inline constexpr size_t kLearningTabCount = kLearningStoreTabs.size() + 2;
 LearningTabKind LearningTabKindAt(size_t index);

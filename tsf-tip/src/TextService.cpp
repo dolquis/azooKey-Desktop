@@ -1030,7 +1030,7 @@ bool DebugWindowKeyEnabled() {
 #endif
 }
 
-// rich-features-spec X-3-6: no batch correction view in an elevated, low or
+// proofread-view-spec §2: no batch correction view in an elevated, low or
 // AppContainer process. Tests choose either behavior.
 bool ProofreadEnabled() {
 #ifdef AZOOKEY_TSF_TESTING
@@ -1702,7 +1702,7 @@ HRESULT TextService::AdviseTextServiceSinks() {
   key_mgr->Release();
   if (FAILED(hr)) return hr;
   key_event_sink_advised_ = true;
-  // Ctrl+Shift+Space (X-3-6) exists only as a preserved key. Best effort.
+  // Ctrl+Shift+Space (proofread-view-spec §2) exists only as a preserved key. Best effort.
   RegisterProofreadPreservedKey();
   // F10 arrives as WM_SYSKEYDOWN, which some hosts never route to the key
   // event sink. Best effort: without it OnKeyDown still toggles.
@@ -10930,7 +10930,7 @@ void TextService::ShowReconversionResult() {
     LogReconversion("show", reason, S_OK, result->candidates.size());
     return;
   }
-  // X-3-6: a batch correction finding's suggestions join as text after the
+  // proofread-view-spec §2: a batch correction finding's suggestions join as text after the
   // Host's first candidate, so the default choice stays the Host's. One equal
   // to the original or to a Host candidate is dropped and the Host's stays
   // where it was. Only this list carries them; the cache keeps the Host's.

@@ -17,7 +17,7 @@
 #endif
 
 // The batch correction view's session between the TIP and the settings app
-// (docs/rich-features-spec.md X-3-6). The TIP owns a one-shot named pipe, the
+// (docs/proofread-view-spec.md §2). The TIP owns a one-shot named pipe, the
 // settings app connects to it with the token from `--proofread-session`, the
 // TIP sends one document message, and the settings app sends select requests
 // that the TIP answers. Every message is a 4-byte little-endian length and a

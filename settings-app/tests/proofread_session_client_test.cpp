@@ -11,7 +11,7 @@
 #include "ProofreadSessionClient.h"
 #include "azookey/ipc/ProofreadSession.h"
 
-// The settings-app end of the batch correction session (rich-features-spec X-3-6), against a
+// The settings-app end of the batch correction session (proofread-view-spec §2), against a
 // stand-in TIP server on the real session pipe.
 
 namespace {

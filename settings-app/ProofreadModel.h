@@ -25,7 +25,7 @@ ProofreadInputProblem CheckProofreadInput(std::string_view utf8_text);
 std::string FormatProofreadSize(std::size_t utf8_bytes);
 
 // The request for text the user pasted into the settings app: it is the user's own text, so it is
-// not from a secure context and learning is allowed (rich-features-spec X-3-6). The Host still
+// not from a secure context and learning is allowed (proofread-view-spec §2). The Host still
 // refuses it unless the AI cleanup settings and consent allow an external backend.
 azookey::ipc::DetectAnomaliesRequest MakeProofreadRequest(std::string utf8_text);
 

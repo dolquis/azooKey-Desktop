@@ -120,7 +120,7 @@ TEST(ProofreadModelTest, ALongExcerptIsCutWithoutSplittingAPair) {
   EXPECT_FALSE(FindingExcerpt(text, 99, 5));
 }
 
-// rich-features-spec X-3-6: the document a TIP session hands over keeps the privacy the TIP read.
+// proofread-view-spec §2: the document a TIP session hands over keeps the privacy the TIP read.
 TEST(ProofreadModelTest, ASessionDocumentKeepsTheTipsEventPrivacy) {
   azookey::ipc::proofread::DocumentMessage document;
   document.status = azookey::ipc::proofread::DocumentStatus::Captured;

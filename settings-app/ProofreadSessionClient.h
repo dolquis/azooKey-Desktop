@@ -15,7 +15,7 @@
 namespace azookey::settings {
 
 // The settings-app end of the TIP's batch correction session
-// (ipc/ProofreadSession.h, rich-features-spec X-3-6). Every call blocks, so the
+// (ipc/ProofreadSession.h, proofread-view-spec §2). Every call blocks, so the
 // pane makes them off the UI thread; `timeout` bounds each wait.
 class ProofreadSessionClient final {
  public:

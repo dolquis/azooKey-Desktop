@@ -16,7 +16,7 @@
 #include "azookey/tsf/ProofreadSessionServer.h"
 #include "azookey/tsf/SettingsLauncher.h"
 
-// Batch correction session (docs/rich-features-spec.md X-3-6): the protocol,
+// Batch correction session (docs/proofread-view-spec.md §2): the protocol,
 // the session pipe's security, and the TIP server's request cycle.
 
 namespace {

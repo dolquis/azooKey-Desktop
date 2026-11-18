@@ -63,7 +63,7 @@ TEST(SettingsLaunchArgumentsTest, RejectsDuplicateOrUnknownOptions) {
 
 }  // namespace
 
-// rich-features-spec X-3-6: the TIP opens the batch correction view with a session token only.
+// proofread-view-spec §2: the TIP opens the batch correction view with a session token only.
 TEST(SettingsLaunchArgumentsTest, AcceptsAProofreadSessionToken) {
   const auto arguments = azookey::settings::ParseLaunchArguments(
       L"--proofread-session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");

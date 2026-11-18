@@ -6138,7 +6138,7 @@ TEST_F(DispatcherTest, ResetLearningStoreEmptiesTheStoreAndItsFile) {
   EXPECT_EQ(unknown->error, std::optional<std::string>("invalid_request"));
 }
 
-// rich-features-spec X-2-7: QueryPersona returns the cached ratios, and only
+// learning-data-management-spec §15: QueryPersona returns the cached ratios, and only
 // the ratios.
 TEST_F(DispatcherTest, QueryPersonaReturnsTheRatiosOfTheLearningStore) {
   EnableEventPrivacy(dispatcher);
@@ -6398,7 +6398,7 @@ TEST_F(DispatcherTest, DetectAnomaliesWithoutSettingsSendsNothing) {
   EXPECT_EQ(calls, 0u);
 }
 
-// rich-features-spec X-3-6 (DEV-1532): the remote AI backend finds the spans,
+// proofread-view-spec §2 (DEV-1532): the remote AI backend finds the spans,
 // the Host places them; privacy and a missing backend are refused explicitly.
 TEST_F(DispatcherTest, DetectAnomaliesPlacesTheBackendFindingsAndHonorsPrivacy) {
   const auto settings_path = temp_directory.File("azookey_detect_anomalies_settings.json");

@@ -10,7 +10,7 @@
 
 namespace azookey::settings {
 
-// The "校正" pane (rich-features-spec X-3-6): the user pastes a text, the Host asks the external AI
+// The "校正" pane (proofread-view-spec §2): the user pastes a text, the Host asks the external AI
 // backend for likely mistakes, and the findings are listed. What the AI wrote (reason, suggestions)
 // is shown as plain text only. Reading the text of the foreground app is the TIP's work: it opens
 // this pane on a session (OpenSession) that hands over the document and selects ranges in the app.

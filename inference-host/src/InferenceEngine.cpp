@@ -2737,7 +2737,7 @@ void InferenceEngine::RecordUserDictionaryFailureLocked(const char* error) {
 void InferenceEngine::LearningFlushWorker() {
   std::unique_lock<std::mutex> lock(state_mutex_);
   while (!learning_flush_stop_) {
-    // rich-features-spec X-2-7: the persona is computed at startup (the store
+    // learning-data-management-spec §15: the persona is computed at startup (the store
     // is loaded before the engine) and again every kPersonaRefreshInterval.
     const auto persona_due = persona_computed_steady_
                                  ? *persona_computed_steady_ + kPersonaRefreshInterval

@@ -580,6 +580,10 @@ std::string DictionaryBundleSha256(const std::filesystem::path& directory) {
   return Sha256Files(parts, false);
 }
 
+double LatencyPercentile(std::vector<double> values, double fraction) {
+  return Percentile(std::move(values), fraction);
+}
+
 bool ContainsKatakana(const std::string& text) {
   const auto code_points = DecodeUtf8CodePoints(text);
   return std::any_of(code_points.begin(), code_points.end(),

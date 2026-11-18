@@ -161,7 +161,25 @@ TEST(ConversionQualityTest, DictionaryBundleHashFramesSortedAzdicNamesAndBytes) 
   EXPECT_NE(DictionaryBundleSha256(root),
             "8ccb27bb741b326715f6f65cd954f3837e850973ad2138a672c3e7c7cde1808c");
   EXPECT_THROW(DictionaryBundleSha256(root / "missing"), std::filesystem::filesystem_error);
+
+  // Byte order puts "B" (0x42) before "a" (0x61); NTFS lists a.azdic first (case-insensitive).
+  ScopedDirectory mixed_case("azookey-dictionary-bundle-case");
+  WriteBytes(mixed_case.path() / "a.azdic", "x");
+  WriteBytes(mixed_case.path() / "B.azdic", "y");
+  // SHA-256 of "B.azdic\0y" + "a.azdic\0x".
+  EXPECT_EQ(DictionaryBundleSha256(mixed_case.path()),
+            "bd6df75ff340130618d281c4e75169e3a195dc4c1bd93f833b088f9db4083056");
 #endif
+}
+
+TEST(ConversionQualityTest, LatencyPercentilesTakeTheFlooredRank) {
+  // 101 values: p95 is the 95th and p99 the 99th (0-based) of the sorted values.
+  std::vector<double> values;
+  for (int i = 100; i >= 0; --i) values.push_back(i * 0.5);
+  EXPECT_DOUBLE_EQ(LatencyPercentile(values, 0.95), 47.5);
+  EXPECT_DOUBLE_EQ(LatencyPercentile(values, 0.99), 49.5);
+  EXPECT_DOUBLE_EQ(LatencyPercentile({3.0, 1.0, 2.0}, 0.99), 2.0);  // floor(0.99 x 2) = 1
+  EXPECT_DOUBLE_EQ(LatencyPercentile({}, 0.99), 0.0);
 }
 
 TEST(ConversionQualityTest, KatakanaMeansAKatakanaLetter) {

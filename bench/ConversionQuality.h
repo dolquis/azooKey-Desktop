@@ -66,6 +66,8 @@ std::string EvaluationDatasetSha256(const std::filesystem::path& path);
 std::string DictionaryBundleSha256(const std::filesystem::path& directory);
 // Whether `text` holds a katakana letter, U+30A1..U+30FA (lattice-conversion-spec section 10.2).
 bool ContainsKatakana(const std::string& text);
+// The floor(fraction x (n - 1))-th of the n sorted values, 0 when empty (spec section 8).
+double LatencyPercentile(std::vector<double> values, double fraction);
 
 bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
                                     const CandidateQuery& query, std::string* error);

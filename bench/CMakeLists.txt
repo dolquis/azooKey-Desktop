@@ -200,10 +200,8 @@ if(AZOOKEY_BUILD_TESTS)
     add_test(NAME azookey_conversion_quality_dict_dir
              COMMAND "${CMAKE_COMMAND}"
                      "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
-                     "-DEVAL_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data/conversion_quality_smoke.jsonl"
-                     "-DDICT_DIR=${CMAKE_BINARY_DIR}/dictbuild/fixtures/ambiguous"
-                     "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-dict-dir.json"
-                     "-DBASELINE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-dict-dir-baseline.json"
+                     "-DFIXTURE_DIR=${CMAKE_BINARY_DIR}/dictbuild/fixtures"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-dict-dir"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDictionaryBundleConfig.cmake")
     set_tests_properties(azookey_conversion_quality_dict_dir PROPERTIES TIMEOUT 30)
   endif()

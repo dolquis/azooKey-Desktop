@@ -17,7 +17,7 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
    ファイル種別が既存の filter に入るかを確認する。入らないなら filter を同じ変更で更新する。
 3. 変更する job の名前が branch ruleset の required check に含まれるかを
    `docs/build-ci-spec.md` §4.9 で確認する。名前を変えると必須チェックが外れる。
-   required check は `Secret scan` と `CI gate` の 2 つで、`windows.yml` に判定対象のジョブを
+   required check は `Secret scan`、`CI gate`、`docs-lint`、`docs-impact` の 4 つで、`windows.yml` に判定対象のジョブを
    足すときは `ci-gate` の `needs` にも加える。加えないとそのジョブの失敗が素通りする。
    advisory ジョブ（`cpp-tidy`、`windows-coverage`）は `needs` に入れない。
 4. ローカルで実行できる検査を先に回す。`pre-commit run --all-files`、`python3 scripts/tests/` の

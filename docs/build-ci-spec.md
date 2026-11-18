@@ -805,6 +805,8 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 |---|---|
 | `Secret scan` | `.github/workflows/secret-scan.yml` |
 | `CI gate` | `.github/workflows/windows.yml` |
+| `docs-lint` | `.github/workflows/docs.yml` |
+| `docs-impact` | `.github/workflows/docs.yml` |
 
 `.github/workflows/windows.yml` はワークフローレベルの `paths` / `paths-ignore` を持たず、
 すべての PR で発火する。ドキュメント・計画・エージェント設定・`legacy/` だけの変更で重量ジョブを
@@ -824,7 +826,9 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 `advisory-summary` 自体も `ci-gate` の判定対象にしない。
 
 `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
-`.github/workflows/docs.yml` は `paths` を持たずすべての PR で発火するので、`docs-lint` と `docs-impact`・`skill-impact`（後二者は push と Dependabot の PR では `if:` で skipped になる）は本節の基準を満たす。required に加えるかは ruleset の変更として別に判断する。
+`.github/workflows/docs.yml` は `paths` を持たずすべての PR で発火するので、`docs-lint` と `docs-impact`・`skill-impact`（後二者は push と Dependabot の PR では `if:` で skipped になる）は本節の基準を満たす。このうち `docs-lint` と `docs-impact` を required とする（DEV-1914）。
+`docs-lint` は数秒で終わり、誤検出は allowlist・ベースライン・`lint:allow` で吸収する。`docs-impact` は、契約ファイルを変えて文書を変えない PR でも、本文に理由を書けば通る。
+`skill-impact` は required にしない。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
 対話ジョブであり、required にしても判定に寄与しない。
 

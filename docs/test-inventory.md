@@ -31,7 +31,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 下表は CMake が登録するテストと 1 行ずつ対応し、`scripts/check_test_inventory.py` が
 `CMakeLists.txt` 側の登録との差分を検査する（テストを追加・削除する PR は同じ PR で
 本表を更新する）。登録の一部は構成に依存し、`tsf-tip` / `settings-app` / `diagnostics` /
-`compat-test` と `host_http_downloader_tests` / `host_trending_word_fetcher_tests` / `azookey_conversion_quality_smoke` / `azookey_conversion_quality_decode_stats` は
+`compat-test` と `host_http_downloader_tests` / `host_trending_word_fetcher_tests` / `azookey_conversion_quality_smoke` / `azookey_conversion_quality_decode_stats` / `azookey_conversion_quality_dict_dir` は
 `WIN32` のとき、`azookey_nll_real_model_*` と `azookey_zenzai_real_model_*` は
 `AZOOKEY_WITH_LLAMA_CPP` かつ `AZOOKEY_ZENZAI_TEST_MODEL` を与えたとき、
 `azookey_zenzai_bench_smoke` / `azookey_zenzai_bench_json_smoke` /
@@ -223,7 +223,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの 3 target 定義と C-014〜C-019 の列挙、自動化契約・既知回避策・一時文書の所有、C-013 と C-010 の最終配置、ケース選択（`--cases` / `--skip` の解析、C-001 前提の追加と除外）、C-013 watchdog の解除条件・期限再開の終了コードと一部停止時の再開記録、UIA 読み取り診断（文字種の個数・関係ラベル・本文を出さない整形、値の安定までの再読）、本文の取得元の選択（Edge の `read_source` / `clear_with_keyboard`）、レポート schema（`case_selection` を含む）と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
 | `temporary_learning_file_tests` | `bench/temporary_learning_file_test.cpp` | bench 用一時学習ファイルの並行予約時の独立性、他所有者への非干渉、巻き戻し時の後始末と想定外ファイルの保全 |
 | `benchmark_result_tests` | `bench/benchmark_result_test.cpp` | bench JSON schema の固定、`ipcPhases` の送信 / Host / 受信 field が計測時だけ出ること、baseline 比較の閾値と絶対ノイズ床、baseline 欠落・非互換時の非回帰扱い、UTF-8 出力パス |
-| `conversion_quality_tests` | `bench/conversion_quality_test.cpp` | 変換品質の符号位置単位 CER、canonical / acceptable 一致の区別、raw と NFKC の独立集計、不正 UTF-8 の reject、データセットハッシュの改行正規化 |
+| `conversion_quality_tests` | `bench/conversion_quality_test.cpp` | 変換品質の符号位置単位 CER、canonical / acceptable 一致の区別、raw と NFKC の独立集計、不正 UTF-8 の reject、データセットハッシュの改行正規化、同梱辞書ハッシュ（`.azdic` の名前のバイト順と枠付け、`.azdic` 以外の無視）、latency の p95・p99 の順位、カタカナの判定、`expected` がカタカナを含むケースの集計と `latency_p99_ms`、互換キー `dictionary_bundle_sha256`・`lattice` の出力と baseline 不一致の拒否 |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
 | `azookey_reverse_lookup_bench_smoke` | `azookey_reverse_lookup_bench` | dictbuild の fixture 辞書（`valid.azdic`）での `ReverseConvert` の load / cold / warm の p50/p95 出力 |
 | `azookey_rich_features_bench_smoke` | `azookey_rich_features_bench` | M14 軽量ライブ変換の Host 推論 p95 が 30ms 以下で、JSON 出力が schema に一致すること |
@@ -233,6 +233,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_bench_trace_smoke` | `azookey_bench` と `azookey_trace_viewer` | `--trace` 実行時の JSONL に `total` と Host の `model_inference` が出力され、viewer で集計できること |
 | `azookey_mixed_english_quality_gate` | `azookey_mixed_english_eval` | M63 §15.2 の分割器の品質ゲート: `bench/data/mixed_english_eval.jsonl` の全ケースが妥当（日本語の文の読みが内蔵表のかなと一致）で、同梱の英単語辞書で分割した先頭の経路の高確度の E 区間の適合率が 95% 以上、日本語だけの文に高確度の E 区間が無いこと（DEV-1687） |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
+| `azookey_conversion_quality_dict_dir` | `azookey_bench` | fixture の辞書だけが持つ読みの 1 位が `--dict-dir` の有無で変わること、`--dict-dir` 無しで `dictionary_bundle_sha256 = none`・`lattice = off`、`--dict-dir` と `--lattice off` で同じハッシュを 2 回出すこと、`--dict-dir` 無しの baseline を非互換として拒否すること、ラティスの無い構成で `--lattice on`（`--dict-dir` の既定）・`--dict-dir` 無しの `--lattice on`・`.azdic` の無いディレクトリ・読めない層・層の無いディレクトリを exit 2 で拒否すること（DEV-2095） |
 | `azookey_conversion_quality_decode_stats` | `azookey_bench` | 変換品質評価の `--decode-stats` が 1 回の問い合わせごとに 1 行（連番、latency、打ち切りの有無、候補の source と未完の印）を出し、モデルが無いときは打ち切りを null とすること。`--eval` の無い `--decode-stats` と `--model` の無い `--nll` を exit 2 で拒否すること（DEV-1767） |
 | `azookey_nll_fixture_smoke` | `bench/BuildNllFixture.cmake` | NLL 実モデルテストが要求する辞書 fixture の生成（fixture setup） |
 | `azookey_nll_comparison_self_test` | `azookey_nll_bench --self-test` | モデルなしで NLL 比較器の行入れ替え、NaN / Inf、件数不一致の拒否、CPU 絶対誤差、同点と重複表層を検証 |

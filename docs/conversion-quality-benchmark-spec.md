@@ -261,6 +261,10 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 | `named_entity_recall_at_5` | category=named_entity の top5 率 |
 | `neologism_recall_at_5` | category=neologism の top5 率 |
 
+`expected` がカタカナ（U+30A1〜U+30FA の字）を 1 字以上含むケースだけについて、同じ通常変換指標と件数 `n` を
+`by_subset.katakana` に出す（§8）。主カテゴリによらずに数え、`typo_clean` は含めない。カタカナ表記の罰金が
+外来語を壊していないかを見る部分集合である（`docs/lattice-conversion-spec.md` §10.2）。
+
 > **top5 系指標の前提**: `top5_accuracy` / `named_entity_recall_at_5` /
 > `neologism_recall_at_5` / `typo_correction_top5_accuracy`（§6.2）は候補が
 > 5 件以上あって初めて top5 として成立する。Zenzai の N_zenzai 既定は 4
@@ -473,7 +477,11 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "nfkc_cer": 0.032,
     "reading_fidelity_rate": 0.99,
     "latency_p95_ms": 45.2,
+    "latency_p99_ms": 61.8,
     "memory_peak_mb": 1820
+  },
+  "by_subset": {
+    "katakana": { "top1_accuracy": 0.71, "cer": 0.12, "...": "...", "n": 38 }
   },
   "by_category": {
     "homophone": {
@@ -497,6 +505,9 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 
 - `summary.cer` / `summary.nfkc_cer` は §6.1.2 の **micro 平均**。`by_category.<cat>.cer`
   も当該カテゴリ内の micro 平均（`Σ edit_distance / Σ len(expected)`、主カテゴリ§11.2 で集計）。
+- `latency_p95_ms` と `latency_p99_ms` は、ケースごとの latency（§8.1）を昇順に並べた n 件の
+  `floor(q × (n − 1))` 番目（0 始まり）の値である。
+- `by_subset.katakana`（§6.1）は `by_category` と同じ指標と件数 `n` を持つ。`diff_vs_baseline` の対象にしない。
 - `diff_vs_baseline` の符号は「値の増分」。精度系（`top1_accuracy` /
   `exact_match_rate` など）は **正が改善**、誤り系（`cer` / `nfkc_cer` /
   `typo_false_positive_rate` など）は**負が改善**。回帰ゲート（§14.3）はこの向きを

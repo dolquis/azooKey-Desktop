@@ -110,7 +110,7 @@ if(AZOOKEY_BUILD_TESTS)
 
   add_executable(conversion_quality_tests conversion_quality_test.cpp)
   target_link_libraries(conversion_quality_tests
-    PRIVATE azookey_conversion_quality GTest::gtest_main
+    PRIVATE azookey_conversion_quality azookey_ipc GTest::gtest_main
             azookey_project_options azookey_project_warnings
   )
   azookey_discover_tests(conversion_quality_tests)
@@ -195,6 +195,15 @@ if(AZOOKEY_BUILD_TESTS)
                      "-DDECODE_STATS_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-decode-stats.jsonl"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDecodeStatsOutput.cmake")
     set_tests_properties(azookey_conversion_quality_decode_stats PROPERTIES TIMEOUT 10)
+    # --dict-dir reads the dictbuild fixture in place; --lattice is checked without lattice support.
+    add_dependencies(azookey_bench dictionary_fixtures)
+    add_test(NAME azookey_conversion_quality_dict_dir
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                     "-DFIXTURE_DIR=${CMAKE_BINARY_DIR}/dictbuild/fixtures"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-dict-dir"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDictionaryBundleConfig.cmake")
+    set_tests_properties(azookey_conversion_quality_dict_dir PROPERTIES TIMEOUT 30)
   endif()
   # The bundled dictionary is read in place by path, never copied into bench/data.
   add_test(NAME azookey_mixed_english_quality_gate

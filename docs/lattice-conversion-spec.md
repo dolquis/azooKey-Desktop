@@ -430,8 +430,8 @@ CLI の正典は `docs/conversion-quality-benchmark-spec.md` §7、baseline の�
 カタカナ表記の罰金（§5.2）が外来語を壊していないかを、この部分集合で見る。受け入れの閾値は
 `plans/windows-port-roadmap.md` M65 が定める。
 
-`bench/data/kana_kanji_eval.jsonl` には、`expected` がカタカナを含むケースがごく少ない。そのため、構成 A の
-baseline を採る前に、外来語を含む文のケースを 30 件以上足す。ケースは自作（`provenance` は `authored`）とし、
+この部分集合を比べられるように、`bench/data/kana_kanji_eval.jsonl` は外来語を含む文のケースを 30 件以上持ち、
+構成 A の baseline はそれらを含めて採る。ケースは自作（`provenance` は `authored`）とし、
 置き場所とカテゴリは `docs/conversion-quality-benchmark-spec.md` §4・§5・§11 に、出典とライセンスは同 §13 と
 `bench/data/DATA-LICENSE.md` に従う。ケースを足すと `eval_dataset_sha256` が変わるので、A と B は足した後の
 同じデータで採る。

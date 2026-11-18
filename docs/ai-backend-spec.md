@@ -390,16 +390,36 @@ wire の値として残す。
 - **構造化出力**: legacy と同様に `response_format` で JSON 構造を固定する。
   - `Transform` / `Cleanup`: `json_schema` で `{ "result": string }`（`strict:true`、
     `additionalProperties:false`）。
-  - `Lint`: `json_schema` で `{ "findings": [{start_char,end_char,current,suggestion,
-    reason,confidence}] }`。
-- OpenAI 互換だが `response_format` 非対応のエンドポイントを将来許容するため、応答
-  パースは「`choices[].message.content` を JSON として解釈し、失敗時はプレーン文字列を
-  `result` とみなす」緩いパースを許す（§7.2 の `Parse` エラーは構造致命時のみ）。
+  - `Lint`: 対象外。常にローカル経路で処理し、chat/completions へ送らない（戻り値の
+    `{ "findings": [{start_char,end_char,current,suggestion,reason,confidence}] }` はローカル経路の形）。
+    リクエストの `response_format` に載るのは `{ "result": string }` だけである（`Anomalies` は `result` の
+    文字列に JSON 配列を載せる。§5.2）。
+- OpenAI 互換だが `response_format` 非対応のエンドポイントを許容するため、応答
+  パースは「`choices[0].message.content` を JSON として解釈し、失敗時はプレーン文字列を
+  `result` とみなす」緩いパースを許す。`{` / `[` で始まらない本文だけをプレーン文字列として受理し、
+  それ以外の失敗は下の表のとおり `Parse` とする。
+- 400 のとき、`response_format` を外して再送しない（§14.5）。
+
+**互換ケースの表**（モック HTTP の試験 `inference-host/tests/ai_backend_test.cpp` で守る。実 API は呼ばない。§14.3）。
+`result` が空、または 64 KiB を超える応答は、受理する行でも `Parse` とする。
+
+| 応答の形 | 例 | 分類 | 備考 |
+|---|---|---|---|
+| 構造化出力に従う | `content` が `{"result":"…"}` | 受理 | `result` の前後空白をトリムする |
+| `response_format` を無視したプレーン文 | `content` が `今日はいい天気` | 受理 | 文全体を `result` とみなす |
+| `{` / `[` で始まるが JSON として不正 | 途中で切れた `{"result":"今日は` | `Parse` | プレーン文として採らない |
+| JSON として正しいが `result` が文字列でない | `["a"]`、`{"result":1}`、`{"result":null}`、`{"results":"x"}` | `Parse` | |
+| `content` が文字列でない、または欠落 | 欠落、`null`（`refusal` のみ）、パーツの配列、オブジェクト | `Parse` | |
+| `choices` が空・欠落 | `{"choices":[]}`、`{"error":{…}}` | `Parse` | |
+| `finish_reason` が `stop` 以外 | `length`、`content_filter`、`tool_calls`、`function_call`、空文字 | `Parse` | `stop`、`null`、欠落は受理する |
+| 400・404・405・413・415・422 | `response_format` を拒否する 400 など | `Parse` | §7.2 の表に無い非 200 の status。1 回だけ送る。再送しない。本文は読まない（§7.2） |
+| コードフェンス付きの JSON | `content` が `` ```json … ``` `` | 試験では固定しない | 全文が `result` として受理される。DEV-2163 で扱う |
+| 本文が JSON のスカラー | `content` が `42`、`true` | 試験では固定しない | 構造化出力と解釈され `Parse` になる。DEV-2163 で扱う |
 
 ### 5.4 応答パース
 
 - 成功: HTTP 200 かつ `choices[0].message.content` を §5.3 のスキーマで解釈。
-  `Transform`/`Cleanup` は `result` を、`Lint` は `findings` を取り出す。
+  `Transform`/`Cleanup` は `result` を取り出す。`Lint` はローカル経路だけで処理し、本節の対象ではない（§5.3）。
 - `result` は前後空白をトリムする（legacy 準拠）。
 - 非 200 / 構造不正は §7.2 のエラー分類へ。
 
@@ -708,7 +728,7 @@ wire の値として残す。利用者から見える挙動と既定値、設定
 ### 14.3 決めた事項（DEV-1968）: OpenAI の実 API を呼ぶ結合テストは CI に置かない
 
 PR・定期実行・`workflow_dispatch` のいずれにも、OpenAI の実 API を呼ぶジョブを置かない。GitHub の
-secrets に OpenAI の鍵を置かない。応答形式（§5.4）と HTTP ステータスの分類（§7.2）は、実 API を
+secrets に OpenAI の鍵を置かない。応答形式（§5.3 の互換ケースの表と §5.4）と HTTP ステータスの分類（§7.2）は、実 API を
 呼ばないテストの互換ケースで守る。実 API での確認は、承認された OpenAI 互換 API を使う手動の実機確認で
 行い、Linear の課題で追跡する。
 
@@ -723,7 +743,35 @@ secrets に OpenAI の鍵を置かない。応答形式（§5.4）と HTTP ス�
 
 - X-3-3 の**外部送信オプトイン**（§3.3。既定は `local-zenzai` 寄せで、MVP では外部送信を許可しない）。
 - Phase 6 **streaming**（SSE → push IPC）の詳細プロトコル（中間 `partial` の単位）。
-- `response_format` 非対応の OpenAI 互換実装に対する互換性マトリクス。
 
 これらの追跡先は Linear の M16 tracking 課題（DEV-938）である。着手時に確定する
 論点として同課題が保持する（本書は状態を持たない）。
+
+### 14.5 決めた事項（DEV-1967）: 400 のときに `response_format` なしで再送しない
+
+`response_format`（`json_schema`、`strict:true`）を拒否するエンドポイントが 400 を返したとき、`response_format`
+を外して再送しない。400 は、§7.2 の表に無い非 200 の status と同じ `Parse`（「構造不正」の行と同じ分類）とし、1 回だけ送る。404・405・413・415・422 も同じである。
+応答のパースが許すプレーン文（§5.3 の互換ケースの表）は、`response_format` を無視して 200 を返す
+サーバーのための許容であり、400 を返すサーバーは対象にしない。
+
+根拠は次のとおり。
+
+- エラー本文は入力や鍵を含み得るので、参照しない（§7.2）。本文を読まなければ、400 が `response_format` の拒否か、
+  ほかの原因（コンテキスト長の超過、モデル名の誤り、競合するパラメータ）かを見分けられない。再送するなら全部の
+  400 が対象になり、別の原因の 400 でも選択テキストと文脈を含む同じ本文をもう 1 回送る。
+- 再送で救えるのは、`json_schema` に対応しない旧モデルや旧 API バージョンの 400 に限られ、既定の
+  `openAiModel` は対象ではない。
+- 再送を入れると、M16 の再試行（最大 1 回。§7.3）に再送を数えるかどうかを決める必要が生じ、最悪で 1 要求に 3 回
+  送る。期限は `openAiTimeoutMs` の 1 本（§7.1）なので、再送は残り時間に収まる範囲に限られる。
+- 実 API の結合テストを CI に置かない（§14.3）ので、再送経路の実サーバーでの挙動を自動では確かめられない。
+
+利用者から見える挙動は変わらない。送信先、本文、同意の範囲（§14.2）、再試行の回数も変わらない。
+
+互換サーバーへの対応は、要望が出たときに、設定で `response_format` を送らない選択を足す案を Linear の別課題で
+検討する。再送のように自動では切り替えない。コードフェンス付きの JSON と、JSON のスカラーだけの本文の扱い
+（§5.3 の表の最後の 2 行）は DEV-2163 で決める。
+
+次のときに再検討する。
+
+- `response_format` を拒否する互換サーバーの利用の要望が出たとき。
+- 実機確認（DEV-1046）で、再送すれば救えた 400 が見つかったとき。

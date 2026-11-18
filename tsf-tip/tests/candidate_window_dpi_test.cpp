@@ -1140,8 +1140,10 @@ TEST(CandidateWindowScrollTest, FirstVisibleRowOnPageStaysOnThePageOfTheSelectio
   // Down across the page edge shows the top of the next page; Up, the bottom.
   EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(5, 9, kCount, kRows), 9);
   EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(9, 8, kCount, kRows), 5);
-  // PageDown keeps the range's place on the page when the selection is inside it.
-  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(1, 11, kCount, kRows), 10);
+  // PageDown moves the range only as far as the selection needs, onto its page.
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(1, 11, kCount, kRows), 9);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(4, 14, kCount, 5), 10);
+  EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(13, 4, kCount, 5), 4);
   // The short last page fits its two rows from the top, however it was reached.
   EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(0, 19, kCount, kRows), 18);
   EXPECT_EQ(CandidateWindow::ComputeFirstVisibleRowOnPage(14, 18, kCount, kRows), 18);
@@ -1171,10 +1173,18 @@ TEST(CandidateWindowPageTest, DrawsOnlyTheCurrentPageInAWindowThatKeepsItsSize) 
     const int row = MulDiv(24, static_cast<int>(dpi), 96);
     // A work area that holds a page of nine with room to spare.
     CandidateWindow::SetWorkAreaForTest({0, 0, 1920, 20 * row + 40});
+    // The last candidate is the widest, so only the full list sets the width.
     std::vector<CandidateViewItem> items;
-    for (int i = 0; i < 20; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    for (int i = 0; i < 19; ++i) items.push_back({L"候補" + std::to_wstring(i), L""});
+    items.push_back({L"とても長い候補の表層形", L""});
     CandidateWindow window;
     ASSERT_TRUE(window.Create());
+    // The first page alone draws narrower than the full list.
+    window.Show(POINT{20, 20}, std::vector<CandidateViewItem>(items.begin(), items.begin() + 9), 0);
+    ASSERT_TRUE(window.IsVisible()) << window.failure_stage();
+    RECT first_page_only{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &first_page_only));
+    EXPECT_EQ(window.position_text_for_test(), L"");
     int clicked = -1;
     window.SetOnClick([&](int index) { clicked = index; });
     window.Show(POINT{20, 20}, items, 0);
@@ -1185,15 +1195,24 @@ TEST(CandidateWindowPageTest, DrawsOnlyTheCurrentPageInAWindowThatKeepsItsSize) 
     EXPECT_EQ(window.GetDrawnRowCount(), 9);
     EXPECT_EQ(window.GetFirstVisibleRow(), 0);
     EXPECT_EQ(window.footer_top_for_test(), 10 * row);
+    EXPECT_EQ(window.position_text_for_test(), L"1/20");
     RECT first_page{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &first_page));
     EXPECT_EQ(first_page.bottom - first_page.top, 10 * row);
+    EXPECT_GT(first_page.right - first_page.left, first_page_only.right - first_page_only.left);
+    // Shown at the last page, the window takes the same place and size.
+    window.Show(POINT{20, 20}, items, 19);
+    RECT shown_at_last{};
+    ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &shown_at_last));
+    EXPECT_TRUE(EqualRect(&shown_at_last, &first_page));
+    window.SetSelected(0);
 
     // The second page: its first candidate in the top row, the same window.
     window.SetSelected(10);
     EXPECT_EQ(window.GetFirstVisibleRow(), 9);
     EXPECT_EQ(window.GetDrawnRowCount(), 9);
     EXPECT_EQ(window.HitTestForTest({2, 2}).index, 9);
+    EXPECT_EQ(window.position_text_for_test(), L"11/20");
     RECT bounds{};
     ASSERT_TRUE(GetWindowRect(window.hwnd_for_test(), &bounds));
     EXPECT_TRUE(EqualRect(&bounds, &first_page));
@@ -1202,6 +1221,7 @@ TEST(CandidateWindowPageTest, DrawsOnlyTheCurrentPageInAWindowThatKeepsItsSize) 
     // are neither drawn nor clicked.
     window.MoveSelection(-11);
     EXPECT_EQ(window.GetSelected(), 19);
+    EXPECT_EQ(window.position_text_for_test(), L"20/20");
     EXPECT_EQ(window.GetFirstVisibleRow(), 18);
     EXPECT_EQ(window.GetVisibleRowCount(), 9);
     EXPECT_EQ(window.GetDrawnRowCount(), 2);
@@ -1272,11 +1292,14 @@ TEST(CandidateWindowScrollTest, APageThatDoesNotFitScrollsWithinThePage) {
     EXPECT_EQ(shown.top, 20);
     EXPECT_LE(shown.bottom, work.bottom);
     EXPECT_EQ(window.footer_top_for_test(), (visible + 1) * row);
+    EXPECT_EQ(window.position_text_for_test(), L"1/20");
 
     // Down past the drawn range moves it by one, within the first page.
     window.SetSelected(5);
     EXPECT_EQ(window.GetFirstVisibleRow(), 1);
-    // PageDown to the same place on the next page keeps the range's place.
+    EXPECT_EQ(window.position_text_for_test(), L"6/20");
+    // PageDown to the same place on the next page moves the range only as far
+    // as that takes, onto the page.
     window.SetSelected(14);
     EXPECT_EQ(window.GetFirstVisibleRow(), 10);
     EXPECT_EQ(window.HitTestForTest({2, 2}).index, 10);

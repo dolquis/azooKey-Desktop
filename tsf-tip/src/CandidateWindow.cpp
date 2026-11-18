@@ -388,11 +388,14 @@ int CandidateWindow::ComputeFirstVisibleRowOnPage(int previous_first, int select
   selected = std::clamp(selected, 0, count - 1);
   const core::CandidatePageRange page = WindowPageAt(selected, count);
   const int begin = static_cast<int>(page.begin);
-  const int rows = static_cast<int>(page.end - page.begin);
-  // The range keeps its place within the page across a page change.
-  const int previous_offset =
-      previous_first - static_cast<int>(WindowPageAt(previous_first, count).begin);
-  return begin + ComputeFirstVisibleRow(previous_offset, selected - begin, rows, visible_rows);
+  const int end = static_cast<int>(page.end);
+  if (visible_rows <= 0 || visible_rows >= end - begin) return begin;
+  // Moved only as far as it takes to include the selection, then kept on its
+  // page: a page change to the page's first or last candidate draws that end.
+  int first = previous_first;
+  if (selected < first) first = selected;
+  if (selected >= first + visible_rows) first = selected - visible_rows + 1;
+  return std::clamp(first, begin, end - visible_rows);
 }
 
 // static

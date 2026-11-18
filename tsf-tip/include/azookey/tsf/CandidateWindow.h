@@ -162,8 +162,8 @@ class CandidateWindow {
   // it takes to include the selection, within [0, count - visible_rows].
   static int ComputeFirstVisibleRow(int previous_first, int selected, int count, int visible_rows);
   // The same within the page of nine holding the selection (M68, native-ui-spec
-  // §4.1), in indexes of the full list: the range keeps its place in the page
-  // across a page change and moves only as far as it takes to include the selection.
+  // §4.1), in indexes of the full list: the range moves only as far as it takes
+  // to include the selection, and stays on the selection's page.
   static int ComputeFirstVisibleRowOnPage(int previous_first, int selected, int count,
                                           int visible_rows);
   // The number at the head of candidate row `index` of `count`: its place on its
@@ -229,6 +229,10 @@ class CandidateWindow {
   bool health_banner_visible_for_test() const { return health_banner_visible_; }
   CandidateHealthState health_state_for_test() const { return health_state_; }
   int footer_top_for_test() const { return FooterTop(); }
+  // The position row's text ("12/20"); empty while there is no position row.
+  std::wstring position_text_for_test() const {
+    return HasPositionRow() ? PositionText() : std::wstring{};
+  }
   int health_banner_top_for_test() const { return HealthBannerTop(); }
   int health_banner_height_for_test() const { return HealthBannerHeight(); }
   int health_banner_lines_for_test() const { return health_banner_lines_; }

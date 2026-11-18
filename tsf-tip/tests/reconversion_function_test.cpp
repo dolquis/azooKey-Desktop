@@ -930,11 +930,16 @@ TEST(ReconversionFunctionTest, FailedChoiceReturnsHighlightAndKeepsCandidates) {
 
 // M68 (legacy-parity-spec §1.4「候補のページ」): the reconversion list turns
 // pages with PageUp / PageDown, and a digit picks on the current page.
-TEST(ReconversionFunctionTest, PageKeysAndDigitsGoByTheCurrentPage) {
-  WordReconversionChoice test;
+std::vector<std::wstring> NumberedReconversionCandidates() {
   std::vector<std::wstring> candidates;
-  for (int i = 0; i < 12; ++i) candidates.push_back(L"候補" + std::to_wstring(i));
-  ASSERT_NO_FATAL_FAILURE(test.Open(candidates));
+  for (int i = 0; i < 20; ++i) candidates.push_back(L"候補" + std::to_wstring(i));
+  return candidates;
+}
+
+TEST(ReconversionFunctionTest, PageKeysAndDigitsGoByTheCurrentPage) {
+  // 20 candidates: pages [0, 9), [9, 18), [18, 20).
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open(NumberedReconversionCandidates()));
   test.context.refuse_sync = false;
   KeyboardStateGuard keyboard_state;
   const auto press = [&](WPARAM key) {
@@ -948,18 +953,36 @@ TEST(ReconversionFunctionTest, PageKeysAndDigitsGoByTheCurrentPage) {
 
   press(VK_NEXT);
   EXPECT_EQ(test.service.candidate_selected_for_test(), 9);
+  press(VK_NEXT);
+  EXPECT_EQ(test.service.candidate_selected_for_test(), 18);
+  // The last page holds two: 3 does nothing and keeps the list.
+  press('3');
   ASSERT_TRUE(test.service.has_reconversion_ui_for_test());
-  // The second page holds three: 4 does nothing and keeps the list.
-  press('4');
-  EXPECT_TRUE(test.service.has_reconversion_ui_for_test());
   EXPECT_EQ(*test.text, L"明日別");
-  press(VK_PRIOR);
+  press(VK_NEXT);
   EXPECT_EQ(test.service.candidate_selected_for_test(), 0);
   press(VK_PRIOR);
+  EXPECT_EQ(test.service.candidate_selected_for_test(), 18);
+  press(VK_PRIOR);
   EXPECT_EQ(test.service.candidate_selected_for_test(), 9);
-  press('3');
+  // The numpad digits are candidate numbers too.
+  press(VK_NUMPAD3);
   EXPECT_EQ(*test.text, L"候補11別");
   EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+}
+
+TEST(ReconversionFunctionTest, ShiftedDigitIsNoCandidateNumber) {
+  WordReconversionChoice test;
+  ASSERT_NO_FATAL_FAILURE(test.Open(NumberedReconversionCandidates()));
+  KeyboardStateGuard keyboard_state;
+  keyboard_state.SetDown(VK_SHIFT, true);
+  // The key is not the list's: the list closes and the range is left alone, as
+  // for any other key (tsf-deep-integration-spec §3.5, legacy-parity-spec §1.4).
+  BOOL tested = FALSE;
+  EXPECT_EQ(test.service.OnTestKeyDown(&test.context, '3', 0, &tested), S_OK);
+  EXPECT_FALSE(test.service.has_reconversion_ui_for_test());
+  EXPECT_EQ(*test.text, L"明日別");
+  keyboard_state.SetDown(VK_SHIFT, false);
 }
 
 TEST(ReconversionFunctionTest, ClickWhereTheLockIsGrantedReplacesAtOnce) {

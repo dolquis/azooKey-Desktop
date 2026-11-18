@@ -116,7 +116,9 @@ STDMETHODIMP CandidateListUIElement::GetPageIndex(UINT* pIndex, UINT uSize, UINT
 }
 
 STDMETHODIMP CandidateListUIElement::SetPageIndex(UINT* pIndex, UINT uPageCnt) {
-  if (!pIndex || uPageCnt == 0) return E_INVALIDARG;
+  // A usable split has at most one page per candidate; checked before the copy
+  // so a wrong count never reads past the app's array.
+  if (!pIndex || uPageCnt == 0 || uPageCnt > items_.size()) return E_INVALIDARG;
   try {
     std::vector<uint32_t> starts(pIndex, pIndex + uPageCnt);
     if (!core::IsValidCandidatePageStarts(starts, items_.size())) return E_INVALIDARG;

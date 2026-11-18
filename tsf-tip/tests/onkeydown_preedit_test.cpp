@@ -1763,7 +1763,8 @@ TEST(TsfTipEmojiTest, ListingTurnsPagesAndStaysInTheSearch) {
   ASSERT_TRUE(h.Press(VK_OEM_1));
   ASSERT_TRUE(h.Press('S'));
   ASSERT_EQ(h.service.preedit_kana_, ":s");
-  std::vector<azookey::ipc::CandidateField> list(12);
+  // 20 entries: pages [0, 9), [9, 18), [18, 20).
+  std::vector<azookey::ipc::CandidateField> list(20);
   for (size_t i = 0; i < list.size(); ++i) {
     list[i].surface = "絵" + std::to_string(i);
     list[i].source = "emoji";
@@ -1771,17 +1772,28 @@ TEST(TsfTipEmojiTest, ListingTurnsPagesAndStaysInTheSearch) {
   h.service.set_cached_candidates_for_test(std::move(list));
   h.service.show_candidate_window_from_cache_for_test();
   ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_EQ(h.service.candidate_selected_for_test(), 0);
 
   EXPECT_TRUE(h.TestPress(VK_NEXT));
   ASSERT_TRUE(h.Press(VK_NEXT));
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 9);
+  ASSERT_TRUE(h.Press(VK_NEXT));
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 18);
+  ASSERT_TRUE(h.Press(VK_NEXT));
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 0);
+  ASSERT_TRUE(h.Press(VK_PRIOR));
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 18);
+  ASSERT_TRUE(h.Press(VK_PRIOR));
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 9);
   EXPECT_EQ(h.service.preedit_kana_, ":s");
   EXPECT_TRUE(h.service.candidate_window_showing_for_test());
-  ASSERT_TRUE(h.Press(VK_PRIOR));
-  ASSERT_TRUE(h.Press(VK_PRIOR));
-  EXPECT_EQ(h.service.preedit_kana_, ":s");
+  // PageUp / PageDown are unmodified keys only (spec §1.4).
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(h.TestPress(VK_NEXT));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(h.service.candidate_selected_for_test(), 9);
   FakeCompositionAttachment attachment(h);
   ASSERT_TRUE(h.Press(VK_RETURN));
-  // PageDown, then PageUp twice: the first page, then the last page's same place.
   EXPECT_EQ(attachment.composition_range.last_text, L"絵9");
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
 }
@@ -15324,6 +15336,34 @@ TEST(TsfTipCandidatePageTest, PageKeysAreConsumedOnOnePageAndLeftToTheAppWithout
     EXPECT_FALSE(reading.Press(VK_NEXT));
     EXPECT_EQ(reading.context.document->text, L"か");
   }
+}
+
+// A batch of more than one segment: PageDown and a digit only move the focused
+// segment's selection; Enter commits every segment (spec §1.4).
+TEST(TsfTipCandidatePageTest, BatchSegmentTurnsPagesAndADigitOnlyMovesTheSelection) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_batch_romaji_options_for_test(true);
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{'N'}, WPARAM{'I'}})
+    ASSERT_TRUE(h.Press(key));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  std::vector<azookey::ipc::CandidateField> first;
+  for (int i = 0; i < 20; ++i) first.push_back(ModelField("候補" + std::to_string(i), "か"));
+  h.service.set_cached_batch_segments_for_test({{"か", first}, {"に", {ModelField("二", "に")}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_EQ(h.context.document->text, L"候補0二");
+
+  ASSERT_TRUE(h.Press(VK_NEXT));
+  EXPECT_EQ(h.context.document->text, L"候補9二");
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(h.context.document->text, L"候補10二");
+  EXPECT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_TRUE(h.Press(VK_PRIOR));
+  EXPECT_EQ(h.context.document->text, L"候補1二");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"候補1二");
+  EXPECT_FALSE(h.service.candidate_window_showing_for_test());
 }
 
 TEST(TsfTipCandidatePageTest, ClickOnTheSecondPageCommitsThatCandidate) {

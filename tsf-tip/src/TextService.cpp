@@ -438,6 +438,18 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
   }
 }
 
+// The keys the reconversion list takes as a candidate list (legacy-parity-spec
+// §1.4「候補のページ」): PageUp / PageDown and the digits 1-9, numpad included,
+// as while Selecting. nullopt for every other key, Shift+digits among them.
+std::optional<azookey::core::UserActionEvent> ReconversionListPageOrDigit(WPARAM key,
+                                                                          uint32_t modifiers) {
+  auto event = MapTipKey(key, modifiers, /*has_preedit=*/true, /*cand_visible=*/true,
+                         /*unicode_active=*/false);
+  if (event && (event->by_page || event->action == azookey::core::UserAction::SelectByDigit))
+    return event;
+  return std::nullopt;
+}
+
 const char* InputStateKindName(azookey::core::InputStateKind kind) {
   using azookey::core::InputStateKind;
   switch (kind) {
@@ -2653,7 +2665,9 @@ HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_
   const bool listing = emoji_mode_ == EmojiMode::Listing && candidate_ui_.IsShowing();
   // The list turns pages like every candidate list; digits still extend the
   // query (legacy-parity-spec §1.4「候補のページ」, candidate-rewriter-spec §11).
-  const bool page_key = key == VK_PRIOR || key == VK_NEXT;
+  // Unmodified only, as while Selecting (spec §1.4).
+  const bool page_key = (key == VK_PRIOR || key == VK_NEXT) &&
+                        (CurrentKeyModifiers() & azookey::core::kModifierShift) == 0;
   if (entering || query_character || colon || key == VK_BACK || key == VK_ESCAPE ||
       key == VK_RETURN ||
       (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE || page_key))) {
@@ -2848,7 +2862,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     if (reconversion_list_) {
       if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_UP || wParam == VK_DOWN ||
-          wParam == VK_PRIOR || wParam == VK_NEXT || (wParam >= '1' && wParam <= '9')) {
+          ReconversionListPageOrDigit(wParam, modifiers)) {
         *eaten = TRUE;
         return S_OK;
       }
@@ -3253,17 +3267,19 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         return S_OK;
       }
       // Pages and digits as in every candidate list (legacy-parity-spec §1.4).
-      if (wParam == VK_PRIOR || wParam == VK_NEXT) {
-        (void)candidate_ui_.MovePage(wParam == VK_NEXT);
+      if (const auto list_key = ReconversionListPageOrDigit(wParam, modifiers)) {
+        if (list_key->by_page) {
+          (void)candidate_ui_.MovePage(list_key->action == core::UserAction::Down);
+        } else if (const int index = candidate_ui_.DigitTarget(list_key->digit); index >= 0) {
+          // A digit the current page has no candidate for does nothing.
+          (void)CompleteReconversionSelection(static_cast<size_t>(index));
+        }
         *eaten = TRUE;
         return S_OK;
       }
-      if (wParam == VK_RETURN || (wParam >= '1' && wParam <= '9')) {
-        const int index = wParam == VK_RETURN
-                              ? std::max(0, candidate_ui_.GetSelected())
-                              : candidate_ui_.DigitTarget(static_cast<int>(wParam - '0'));
-        // A digit the current page has no candidate for does nothing.
-        if (index >= 0) (void)CompleteReconversionSelection(static_cast<size_t>(index));
+      if (wParam == VK_RETURN) {
+        (void)CompleteReconversionSelection(
+            static_cast<size_t>(std::max(0, candidate_ui_.GetSelected())));
         *eaten = TRUE;
         return S_OK;
       }

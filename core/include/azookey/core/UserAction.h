@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace azookey::core {
@@ -52,6 +53,11 @@ enum class UserAction : uint16_t {
   CommitHalfwidthKatakana,
   CommitFullwidthRoman,
   CommitHalfwidthRoman,
+
+  // Ctrl+Backspace in Idle right after a commit the TIP can undo
+  // (docs/commit-undo-spec.md §3). The TIP checks §4 and edits the document
+  // (§6) first, then passes the reading it restored in UserActionEvent::reading.
+  UndoCommit,
 };
 
 inline constexpr uint32_t kModifierShift = 1u << 0;
@@ -73,6 +79,10 @@ struct UserActionEvent {
   // SelectByDigit and paged Up / Down; empty for nine candidates per page
   // (core/include/azookey/core/CandidatePage.h).
   std::vector<uint32_t> page_starts;
+  // The reading UndoCommit restores as the composition's reading
+  // (docs/commit-undo-spec.md §5); the TIP sets it on UndoCommit only. It is
+  // kana: the reading the commit held, with no pending romaji.
+  std::string reading;
 
   friend bool operator==(const UserActionEvent&, const UserActionEvent&) = default;
 };

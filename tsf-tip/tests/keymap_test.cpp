@@ -119,7 +119,8 @@ const Entry kEntries[] = {
     // The TIP's Unicode mode (spec §6) relies on these reaching the hex buffer.
     {'U', kShift, {A::Input, A::Input, A::Input, A::Input, kNone, A::Input}},
     {VK_NUMPAD9, 0, {kNone, A::Input, A::Input, A::SelectByDigit, kNone, A::Input}},
-    {VK_BACK, kCtrl, {kNone, kNone, kNone, kNone, kNone, kNone}},
+    // Only Idle maps Ctrl+Backspace (commit-undo-spec §3); the TIP decides whether to consume it.
+    {VK_BACK, kCtrl, {A::UndoCommit, kNone, kNone, kNone, kNone, kNone}},
     {VK_F10, kShift, {kNone, kNone, kNone, kNone, kNone, kNone}},
     {VK_BACK, kCtrl | kShift, {A::Forget, kNone, kNone, kNone, kNone, kNone}},
     {VK_KANJI,
@@ -289,7 +290,8 @@ TEST(KeymapTest, AltAndWinChordsAlwaysPassThrough) {
     for (const K kind : kAllKinds) {
       for (const uint32_t key : {static_cast<uint32_t>('A'), static_cast<uint32_t>(VK_SPACE),
                                  static_cast<uint32_t>(VK_RETURN), static_cast<uint32_t>('U'),
-                                 static_cast<uint32_t>(VK_F7), static_cast<uint32_t>(VK_F10)}) {
+                                 static_cast<uint32_t>(VK_F7), static_cast<uint32_t>(VK_F10),
+                                 static_cast<uint32_t>(VK_BACK)}) {
         EXPECT_FALSE(MapUserAction(key, modifiers, kind).has_value());
       }
     }

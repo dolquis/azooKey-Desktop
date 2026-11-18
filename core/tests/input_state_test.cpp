@@ -66,6 +66,7 @@ constexpr UserAction kAllActions[] = {
     UserAction::StartKanaDouble,
     UserAction::Forget,
     UserAction::ToggleDebugWindow,
+    UserAction::UndoCommit,
 };
 constexpr size_t kActionCount = std::size(kAllActions);
 
@@ -89,32 +90,32 @@ const Row kTransitionTable[] = {
      [] { return InputState{}; },
      {K::Composing, K::Composing, K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
       K::Idle,      K::Idle,      K::Idle,         K::Idle, K::Idle, K::Idle, K::Idle, K::Idle,
-      K::Idle,      K::Idle,      K::UnicodeInput, K::Idle, K::Idle, K::Idle, K::Idle}},
+      K::Idle,      K::Idle,      K::UnicodeInput, K::Idle, K::Idle, K::Idle, K::Idle, K::Idle}},
     {"Composing",
      Composing,
      {K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Composing, K::Composing, K::Composing, K::Composing,
       K::Composing,    K::Composing, K::Idle,      K::Idle,      K::Composing, K::Composing,
-      K::UnicodeInput, K::Composing, K::Composing, K::Composing, K::Composing}},
+      K::UnicodeInput, K::Composing, K::Composing, K::Composing, K::Composing, K::Composing}},
     {"Previewing",
      Previewing,
      {K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing,
       K::Previewing,   K::Previewing, K::Idle,       K::Idle,       K::Previewing, K::Previewing,
-      K::UnicodeInput, K::Previewing, K::Previewing, K::Previewing, K::Previewing}},
+      K::UnicodeInput, K::Previewing, K::Previewing, K::Previewing, K::Previewing, K::Previewing}},
     {"Selecting",
      Selecting,
      {K::Composing,    K::Composing, K::Composing, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting,
       K::Selecting,    K::Idle,      K::Idle,      K::Idle,      K::Selecting, K::Selecting,
-      K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
+      K::UnicodeInput, K::Selecting, K::Selecting, K::Selecting, K::Selecting, K::Selecting}},
     {"UnicodeInput",
      UnicodeInput,
      {K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
       K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::Idle,
       K::Idle,         K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput,
-      K::UnicodeInput, K::UnicodeInput, K::UnicodeInput}},
+      K::UnicodeInput, K::UnicodeInput, K::UnicodeInput, K::UnicodeInput}},
 };
 
 TEST(InputStateTest, FixtureStatesHaveExpectedKinds) {
@@ -758,6 +759,92 @@ TEST(InputStateTest, ForgetAndDebugWindowKeepState) {
   const HandleResult debug = Composing().HandleEvent(Ev(UserAction::ToggleDebugWindow));
   EXPECT_EQ(debug.next.Reading(), "かな");
   EXPECT_EQ(debug.actions, (Actions{ToggleDebugWindow{}}));
+}
+
+// commit-undo-spec §5: the TIP has restored the reading into the composition
+// and passes it with UndoCommit; the state machine only enters Composing
+// (Previewing with live conversion) and asks for the per-key candidates.
+TEST(InputStateTest, UndoCommitEntersComposingWithTheRestoredReading) {
+  UserActionEvent undo = Ev(UserAction::UndoCommit);
+  undo.reading = "かな";
+  const HandleResult result = InputState{}.HandleEvent(undo);
+  EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.Reading(), "かな");
+  EXPECT_EQ(result.next.confirmed_kana(), "かな");
+  EXPECT_FALSE(result.next.pending_romaji().HasPending());
+  // No ReplaceMarkedText: the edit session already wrote the composition.
+  EXPECT_EQ(result.actions, (Actions{QueryCandidates{"かな"}}));
+}
+
+TEST(InputStateTest, UndoCommitEntersPreviewingWithLiveConversion) {
+  UserActionEvent undo = Ev(UserAction::UndoCommit);
+  undo.reading = "かな";
+  const HandleResult result = InputState{}.WithLiveConversion(true).HandleEvent(undo);
+  EXPECT_EQ(result.next.kind(), K::Previewing);
+  EXPECT_EQ(result.next.Reading(), "かな");
+  EXPECT_EQ(result.actions, (Actions{QueryCandidates{"かな"}}));
+}
+
+TEST(InputStateTest, UndoCommitWithoutAReadingStaysIdle) {
+  const HandleResult result = InputState{}.HandleEvent(Ev(UserAction::UndoCommit));
+  EXPECT_EQ(result.next.kind(), K::Idle);
+  EXPECT_TRUE(result.actions.empty());
+}
+
+TEST(InputStateTest, UndoCommitOutsideIdleLeavesTheStateAlone) {
+  UserActionEvent undo = Ev(UserAction::UndoCommit);
+  undo.reading = "べつ";
+  for (InputState (*make)() : {&Composing, &Previewing, &Selecting, &UnicodeInput}) {
+    const InputState state = make();
+    const HandleResult result = state.HandleEvent(undo);
+    EXPECT_EQ(result.next.kind(), state.kind());
+    EXPECT_EQ(result.next.Reading(), state.Reading());
+    EXPECT_EQ(result.next.unicode_hex(), state.unicode_hex());
+    EXPECT_TRUE(result.actions.empty());
+  }
+}
+
+// After the undo the keys work as while typing a reading (spec §5).
+TEST(InputStateTest, ReadingRestoredByUndoCommitEditsLikeATypedReading) {
+  UserActionEvent undo = Ev(UserAction::UndoCommit);
+  undo.reading = "かな";
+  const InputState restored = InputState{}.HandleEvent(undo).next;
+
+  const HandleResult typed = restored.HandleEvent(Ev(UserAction::Input, U'k'));
+  EXPECT_EQ(typed.next.Reading(), "かなk");
+  EXPECT_EQ(typed.actions, (Actions{ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
+
+  const HandleResult erased = restored.HandleEvent(Ev(UserAction::Backspace));
+  EXPECT_EQ(erased.next.Reading(), "か");
+  EXPECT_EQ(erased.actions, (Actions{ReplaceMarkedText{"か"}, QueryCandidates{"か"}}));
+
+  const HandleResult converting = restored.HandleEvent(Ev(UserAction::StartConversion));
+  EXPECT_EQ(converting.next.kind(), K::Composing);
+  EXPECT_TRUE(converting.next.awaiting_candidates());
+  EXPECT_EQ(converting.actions, (Actions{QueryCandidates{"かな", true}}));
+  const InputState selecting = converting.next.HandleCandidatesArrived(KanaCandidates()).next;
+  EXPECT_EQ(selecting.kind(), K::Selecting);
+
+  const HandleResult canceled = restored.HandleEvent(Ev(UserAction::Cancel));
+  EXPECT_EQ(canceled.next.kind(), K::Idle);
+  EXPECT_EQ(canceled.actions, (Actions{CancelMarkedText{}}));
+
+  // Enter commits the reading as it stands (legacy-parity-spec §1.3).
+  const HandleResult committed = restored.HandleEvent(Ev(UserAction::Commit));
+  EXPECT_EQ(committed.next.kind(), K::Idle);
+}
+
+// The chord reaches UndoCommit only from Idle (spec §3), so the ordinary
+// Ctrl+Backspace of a reading or a candidate window is not an undo.
+TEST(InputStateTest, UndoCommitKeyChordHasNoEffectWhileTyping) {
+  for (const K kind : {K::Composing, K::Previewing, K::Selecting, K::UnicodeInput}) {
+    EXPECT_FALSE(MapUserAction(vk::kBack, kModifierCtrl, kind).has_value());
+  }
+  const auto idle = MapUserAction(vk::kBack, kModifierCtrl, K::Idle);
+  ASSERT_TRUE(idle.has_value());
+  EXPECT_EQ(idle->action, UserAction::UndoCommit);
+  EXPECT_EQ(MapUserAction(vk::kBack, kModifierCtrl | kModifierShift, K::Idle)->action,
+            UserAction::Forget);
 }
 
 // tsf-deep-integration-spec §3.6 (DEV-1812): the TIP commits F6-F10 itself

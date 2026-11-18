@@ -160,7 +160,7 @@ Ctrl+Backspace を押した時点で、次がすべて成り立つときに取�
 確定していた文字列は文書から消える。
 
 core は、§6 の edit session が済んでから `UndoCommit` を受けて `Composing`（`Previewing`）に入る。戻す読みを core へ
-渡す入口の形は実装で決める（`HandleEvent` の純粋性は `docs/legacy-parity-spec.md` §1.5.1 のとおり保つ）。
+渡す入口は `UserActionEvent` の `reading` で、`HandleEvent` の純粋性は `docs/legacy-parity-spec.md` §1.5.1 のとおり保つ（同 §1.1）。
 composition の文字列は §6 の edit session が書き、core は書き直さない。
 
 ## 6. edit session

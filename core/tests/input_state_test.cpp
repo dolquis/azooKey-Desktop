@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/CandidatePage.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/InputState.h"
 #include "azookey/core/UserActionMap.h"
@@ -193,6 +194,120 @@ TEST(InputStateTest, SelectByDigitBeyondCandidateCountKeepsSelecting) {
   const HandleResult result = Selecting().HandleEvent(Ev(UserAction::SelectByDigit, 0, 4));
   EXPECT_EQ(result.next.kind(), K::Selecting);
   EXPECT_TRUE(result.actions.empty());
+}
+
+// M68 (legacy-parity-spec §1.4「候補のページ」): nine candidates to a page.
+std::vector<Candidate> NumberedCandidates(size_t count) {
+  std::vector<Candidate> candidates;
+  for (size_t i = 0; i < count; ++i) candidates.push_back(Candidate{std::to_string(i), "かな"});
+  return candidates;
+}
+
+InputState SelectingAt(size_t count, size_t selected) {
+  const auto waiting = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
+  InputState state = waiting.HandleCandidatesArrived(NumberedCandidates(count)).next;
+  for (size_t i = 0; i < selected; ++i) state = state.HandleEvent(Ev(UserAction::Down)).next;
+  return state;
+}
+
+UserActionEvent PageEv(UserAction action, std::vector<uint32_t> page_starts = {}) {
+  UserActionEvent event = Ev(action);
+  event.by_page = true;
+  event.page_starts = std::move(page_starts);
+  return event;
+}
+
+UserActionEvent DigitEv(int digit, std::vector<uint32_t> page_starts = {}) {
+  UserActionEvent event = Ev(UserAction::SelectByDigit, 0, digit);
+  event.page_starts = std::move(page_starts);
+  return event;
+}
+
+TEST(CandidatePageTest, DefaultSplitIsNinePerPageFromTheFirstCandidate) {
+  EXPECT_EQ(CandidatePageStarts(0), (std::vector<uint32_t>{}));
+  EXPECT_EQ(CandidatePageStarts(9), (std::vector<uint32_t>{0}));
+  EXPECT_EQ(CandidatePageStarts(20), (std::vector<uint32_t>{0, 9, 18}));
+  const CandidatePageRange last = CandidatePageAt(19, 20);
+  EXPECT_EQ(last.page, 2u);
+  EXPECT_EQ(last.begin, 18u);
+  EXPECT_EQ(last.end, 20u);
+  EXPECT_EQ(CandidatePageAt(8, 20).end, 9u);
+  EXPECT_EQ(CandidatePageAt(9, 20).begin, 9u);
+  // An index past the list belongs to the last page.
+  EXPECT_EQ(CandidatePageAt(40, 20).page, 2u);
+}
+
+TEST(CandidatePageTest, AppSplitAppliesOnlyWhenItStartsAtZeroAndStrictlyIncreasesBelowTheCount) {
+  EXPECT_TRUE(IsValidCandidatePageStarts({0, 4, 10}, 12));
+  EXPECT_EQ(CandidatePageStarts(12, {0, 4, 10}), (std::vector<uint32_t>{0, 4, 10}));
+  for (const auto& invalid :
+       std::vector<std::vector<uint32_t>>{{}, {1, 4}, {0, 4, 4}, {0, 6, 4}, {0, 12}, {0, 4, 13}}) {
+    EXPECT_FALSE(IsValidCandidatePageStarts(invalid, 12));
+    // An unusable split falls back to nine per page.
+    EXPECT_EQ(CandidatePageStarts(12, invalid), (std::vector<uint32_t>{0, 9}));
+  }
+}
+
+TEST(InputStateTest, PageDownAndPageUpMoveToTheSamePositionOnTheAdjacentPage) {
+  // 20 candidates: [0, 9), [9, 18), [18, 20).
+  const InputState third = SelectingAt(20, 2);
+  const HandleResult down = third.HandleEvent(PageEv(UserAction::Down));
+  EXPECT_EQ(down.next.kind(), K::Selecting);
+  EXPECT_EQ(down.next.selected_index(), 11u);
+  EXPECT_EQ(down.actions, (Actions{UpdateCandidateSelection{11}, ReplaceMarkedText{"11"}}));
+  // The short last page has no third candidate: its last one instead.
+  const HandleResult last = down.next.HandleEvent(PageEv(UserAction::Down));
+  EXPECT_EQ(last.next.selected_index(), 19u);
+  // The last page wraps to the first, and the first back to the last.
+  EXPECT_EQ(last.next.HandleEvent(PageEv(UserAction::Down)).next.selected_index(), 1u);
+  EXPECT_EQ(SelectingAt(20, 0).HandleEvent(PageEv(UserAction::Up)).next.selected_index(), 18u);
+  EXPECT_EQ(down.next.HandleEvent(PageEv(UserAction::Up)).next.selected_index(), 2u);
+  // Up / Down without the page flag still move one candidate across the page edge.
+  EXPECT_EQ(SelectingAt(20, 8).HandleEvent(Ev(UserAction::Down)).next.selected_index(), 9u);
+}
+
+TEST(InputStateTest, PageKeysDoNothingWithOnePage) {
+  for (const size_t count : {size_t{3}, size_t{9}}) {
+    SCOPED_TRACE(count);
+    const InputState selecting = SelectingAt(count, 1);
+    for (const UserAction action : {UserAction::Up, UserAction::Down}) {
+      const HandleResult result = selecting.HandleEvent(PageEv(action));
+      EXPECT_EQ(result.next.kind(), K::Selecting);
+      EXPECT_EQ(result.next.selected_index(), 1u);
+      EXPECT_TRUE(result.actions.empty());
+    }
+  }
+}
+
+TEST(InputStateTest, SelectByDigitCommitsTheNthCandidateOfTheCurrentPage) {
+  // The selection on the second page: 3 picks the twelfth candidate.
+  const HandleResult second = SelectingAt(20, 10).HandleEvent(DigitEv(3));
+  EXPECT_EQ(second.next.kind(), K::Idle);
+  EXPECT_EQ(second.actions, (Actions{HideCandidateWindow{}, ReplaceMarkedText{"11"},
+                                     CommitMarkedText{}, ObserveCommit{"かな", "11"}}));
+  // The last page holds two: 3 does nothing and keeps the window.
+  const HandleResult missing = SelectingAt(20, 18).HandleEvent(DigitEv(3));
+  EXPECT_EQ(missing.next.kind(), K::Selecting);
+  EXPECT_EQ(missing.next.selected_index(), 18u);
+  EXPECT_TRUE(missing.actions.empty());
+  EXPECT_EQ(SelectingAt(20, 18).HandleEvent(DigitEv(2)).actions.at(1),
+            ClientAction{ReplaceMarkedText{"19"}});
+}
+
+TEST(InputStateTest, PageKeysAndDigitsFollowTheSplitTheFrontendAttaches) {
+  // An app split of 12 candidates: [0, 4), [4, 10), [10, 12).
+  const std::vector<uint32_t> split{0, 4, 10};
+  EXPECT_EQ(SelectingAt(12, 2).HandleEvent(PageEv(UserAction::Down, split)).next.selected_index(),
+            6u);
+  EXPECT_EQ(SelectingAt(12, 2).HandleEvent(PageEv(UserAction::Up, split)).next.selected_index(),
+            11u);
+  EXPECT_EQ(SelectingAt(12, 5).HandleEvent(DigitEv(6, split)).actions.at(1),
+            ClientAction{ReplaceMarkedText{"9"}});
+  EXPECT_TRUE(SelectingAt(12, 5).HandleEvent(DigitEv(7, split)).actions.empty());
+  // A split that does not fit the list is read as nine per page.
+  EXPECT_EQ(
+      SelectingAt(12, 2).HandleEvent(PageEv(UserAction::Down, {0, 4, 12})).next.selected_index(),
+      11u);
 }
 
 TEST(InputStateTest, SelectingCancelDiscardsInputAndCandidateCacheWithoutObservation) {

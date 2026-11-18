@@ -4,6 +4,7 @@
 #include <msctf.h>
 #include <wil/com.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <utility>
@@ -83,6 +84,17 @@ class CandidateUiCoordinator {
   HRESULT SetSelection(int selected_idx);
   int GetSelected() const { return selected_idx_; }
   int GetCount() const { return static_cast<int>(items_.size()); }
+
+  // Candidate pages (legacy-parity-spec §1.4「候補のページ」). The split digits
+  // and PageUp / PageDown use: the one an app set with SetPageIndex while the
+  // app draws the list, otherwise empty for nine per page, as the window draws
+  // (tsf-deep-integration-spec §2.3). The TIP attaches it to the core's events.
+  const std::vector<uint32_t>& PageSplit() const;
+  // The candidate a digit 1-9 picks on the current page; -1 when it has none.
+  int DigitTarget(int digit) const;
+  // Moves the selection to the same position on the next (forward) or previous
+  // page, or that page's last candidate. S_FALSE without a move on one page.
+  HRESULT MovePage(bool forward);
 
 #ifdef AZOOKEY_TSF_TESTING
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }

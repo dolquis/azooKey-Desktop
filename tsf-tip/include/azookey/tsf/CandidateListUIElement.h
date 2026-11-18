@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <msctf.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -38,13 +39,23 @@ class CandidateListUIElement final : public ITfCandidateListUIElement {
   STDMETHODIMP SetPageIndex(UINT* pIndex, UINT uPageCnt) override;
   STDMETHODIMP GetCurrentPage(UINT* puPage) override;
 
+  // Replacing the items with different ones drops the split an app set with
+  // SetPageIndex. Both add TF_CLUIE_PAGEINDEX and TF_CLUIE_CURRENTPAGE to the
+  // flags when the split or the current page changes (tsf-deep-integration-spec
+  // §2.3).
   void Update(std::vector<std::wstring> items, int selected_idx, DWORD updated_flags);
   void SetSelection(int selected_idx, DWORD updated_flags);
   void SetShown(bool shown);
   void SetShowCallback(std::function<void(bool)> callback);
+  // The split an app set with SetPageIndex, while the app draws the list;
+  // empty (nine per page, core/include/azookey/core/CandidatePage.h) while the
+  // TIP draws it or no split was set.
+  const std::vector<uint32_t>& AppPageSplit() const;
 
  private:
   static int ClampSelection(int selected_idx, size_t count);
+  // The page holding the selection under AppPageSplit.
+  size_t CurrentPage() const;
 
   LONG ref_count_{1};
   std::vector<std::wstring> items_;
@@ -53,6 +64,8 @@ class CandidateListUIElement final : public ITfCandidateListUIElement {
   DWORD updated_flags_{TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION};
   bool shown_{false};
   std::function<void(bool)> show_callback_;
+  // Validated against items_ by SetPageIndex; empty when none was set.
+  std::vector<uint32_t> app_page_starts_;
 };
 
 }  // namespace azookey::tsf

@@ -97,7 +97,9 @@ struct UserActionEvent {
     UserAction action;
     char32_t   codepoint = 0;     // Input/InputAlnum 時のみ
     uint32_t   modifiers = 0;     // bit0=Shift bit1=Ctrl bit2=Alt bit3=Win
-    int        digit     = 0;     // SelectByDigit 時の 1〜9
+    int        digit     = 0;     // SelectByDigit 時の 1〜9（いまのページの n 件目。§1.4）
+    bool       by_page   = false; // PageUp / PageDown の Up / Down（ページ単位。§1.4）
+    std::vector<uint32_t> page_starts;  // アプリの区切り（数字と PageUp / PageDown に TIP が添える。空なら 9 件ずつ）
 };
 ```
 

@@ -896,6 +896,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_ipc_host_unavailable_for_test(bool unavailable) {
     ipc_host_unavailable_.store(unavailable, std::memory_order_release);
   }
+  // As a worker stopped right after dropping the connection itself leaves it.
+  // Call while no worker runs.
+  void set_reconnect_after_own_drop_for_test(bool after_own_drop) {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconnect_after_own_drop_ = after_own_drop;
+  }
   // Runs on the IPC worker inside TransitionIpcConnection, after the new state
   // is published and before ipc_host_unavailable_ follows it. Set it before
   // start_ipc_worker_for_test and return from it before stopping the worker.

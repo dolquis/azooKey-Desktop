@@ -6198,6 +6198,12 @@ void TextService::StartIpcWorker() {
   ipc_failed_connect_attempts_ = 0;
   ipc_host_unavailable_.store(false, std::memory_order_release);
   {
+    // A worker stopped right after its own drop leaves the mark; this one's
+    // first connect follows no drop (DEV-2084).
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconnect_after_own_drop_ = false;
+  }
+  {
     std::lock_guard<std::mutex> lock(health_state_mtx_);
     health_display_state_.reset();
     health_display_generation_id_.clear();

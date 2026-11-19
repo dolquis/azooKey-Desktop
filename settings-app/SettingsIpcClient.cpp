@@ -87,6 +87,8 @@ class HostSession {
     return std::find(capabilities_.begin(), capabilities_.end(), capability) != capabilities_.end();
   }
 
+  const std::vector<std::string>& capabilities() const { return capabilities_; }
+
   // Sends one request and returns the payload of the response with the same ID and type.
   // `sent` is false when the request never left; otherwise a missing result means no usable reply.
   std::optional<std::string> Exchange(MessageType type, std::string payload, uint32_t timeout_ms,
@@ -206,6 +208,18 @@ HostCallStatus ProbeHostCapability(const SettingsIpcOptions& options, const char
   return session.HasCapability(capability) ? HostCallStatus::Ok : HostCallStatus::Unsupported;
 }
 
+HostCallResult<std::vector<std::string>> RequestHostCapabilities(const SettingsIpcOptions& options) {
+  HostCallResult<std::vector<std::string>> result;
+  HostSession session;
+  if (const auto failure = session.Open(options); failure != OpenFailure::None) {
+    result.status = StatusFor(failure);
+    return result;
+  }
+  result.status = HostCallStatus::Ok;
+  result.response = session.capabilities();
+  return result;
+}
+
 HostCallResult<azookey::ipc::ListModelsResponse> RequestListModels(
     const SettingsIpcOptions& options, const azookey::ipc::ListModelsRequest& request) {
   return Call<azookey::ipc::ListModelsResponse>(
@@ -314,6 +328,14 @@ HostCallResult<azookey::ipc::AddUserWordResponse> RequestAddUserWord(
   return Call<azookey::ipc::AddUserWordResponse>(
       options, nullptr, MessageType::AddUserWord, azookey::ipc::BuildAddUserWordRequest(request),
       options.long_response_timeout_ms, azookey::ipc::ParseAddUserWordResponse);
+}
+
+HostCallResult<azookey::ipc::ImportUserDictionaryTextResponse> RequestImportUserDictionaryText(
+    const SettingsIpcOptions& options, const azookey::ipc::ImportUserDictionaryTextRequest& request) {
+  return Call<azookey::ipc::ImportUserDictionaryTextResponse>(
+      options, kCapabilityUserDictTextImport, MessageType::ImportUserDictionaryText,
+      azookey::ipc::BuildImportUserDictionaryTextRequest(request),
+      options.user_dict_import_timeout_ms, azookey::ipc::ParseImportUserDictionaryTextResponse);
 }
 
 HostCallResult<azookey::ipc::QueryPersonaResponse> RequestQueryPersona(

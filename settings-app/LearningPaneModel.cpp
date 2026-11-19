@@ -5,6 +5,7 @@
 #include <ctime>
 #include <cwctype>
 #include <filesystem>
+#include <utility>
 
 namespace azookey::settings {
 
@@ -140,6 +141,99 @@ std::string UserDictErrorResource(std::string_view error) {
                      kUserDictErrorCodes.end();
   if (!known) return "LearningUserDictError_other";
   return "LearningUserDictError_" + std::string(error);
+}
+
+UserDictHostFeatures UserDictHostFeaturesFrom(const std::vector<std::string>& capabilities) {
+  const auto has = [&capabilities](std::string_view name) {
+    return std::find(capabilities.begin(), capabilities.end(), name) != capabilities.end();
+  };
+  UserDictHostFeatures features;
+  features.pos = has(azookey::ipc::kCapabilityUserDictPos);
+  features.text_import = has(azookey::ipc::kCapabilityUserDictTextImport);
+  return features;
+}
+
+std::string UserDictEntryPosResource(const azookey::ipc::LearningEntryField& entry) {
+  if (const auto pos = entry.metadata.find("pos"); pos != entry.metadata.end()) {
+    for (const auto& option : kUserDictPosOptions) {
+      if (!option.id.empty() && option.id == pos->second) return std::string(option.resource);
+    }
+  }
+  return std::string(kUserDictPosOptions.front().resource);
+}
+
+azookey::ipc::AddUserWordRequest MakeAddUserWordRequest(const UserWordInput& input,
+                                                        size_t pos_index, bool host_has_pos) {
+  azookey::ipc::AddUserWordRequest request;
+  request.ruby = input.reading;
+  request.word = input.word;
+  if (host_has_pos && pos_index < kUserDictPosOptions.size() &&
+      !kUserDictPosOptions[pos_index].id.empty()) {
+    request.pos = std::string(kUserDictPosOptions[pos_index].id);
+  }
+  return request;
+}
+
+namespace {
+
+template <size_t N>
+bool Contains(const std::array<std::string_view, N>& values, std::string_view value) {
+  return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+}  // namespace
+
+std::string UserDictImportFormatResource(std::string_view format) {
+  if (!Contains(kUserDictImportFormats, format)) return "UserDictImportFormat_other";
+  return "UserDictImportFormat_" + std::string(format);
+}
+
+std::string UserDictImportEncodingResource(std::string_view encoding) {
+  if (!Contains(kUserDictImportEncodings, encoding)) return "UserDictImportEncoding_other";
+  std::string name(encoding);
+  std::replace(name.begin(), name.end(), '-', '_');
+  return "UserDictImportEncoding_" + name;
+}
+
+azookey::ipc::ImportUserDictionaryTextRequest MakeUserDictImportRequest(std::string source_path,
+                                                                        size_t format_index,
+                                                                        size_t conflict_index,
+                                                                        bool dry_run) {
+  azookey::ipc::ImportUserDictionaryTextRequest request;
+  request.source_path = std::move(source_path);
+  request.format = std::string(
+      kUserDictImportFormats[format_index < kUserDictImportFormats.size() ? format_index : 0]);
+  request.conflict_resolution = std::string(
+      kUserDictImportConflicts[conflict_index < kUserDictImportConflicts.size() ? conflict_index
+                                                                                 : 0]);
+  request.dry_run = dry_run;
+  return request;
+}
+
+std::string UserDictImportErrorResource(std::string_view error) {
+  if (!Contains(kUserDictImportErrorCodes, error)) return "UserDictImportError_other";
+  return "UserDictImportError_" + std::string(error);
+}
+
+std::vector<UserDictImportCountLine> UserDictImportCountLines(
+    const azookey::ipc::UserDictionaryTextImportCounts& counts, bool preview) {
+  std::vector<UserDictImportCountLine> lines;
+  lines.push_back({"UserDictImportCount_added", counts.added});
+  const auto add = [&lines](const char* name, uint64_t count) {
+    if (count > 0) lines.push_back({std::string("UserDictImportCount_") + name, count});
+  };
+  if (preview) {
+    add("existing", counts.kept + counts.replaced);
+  } else {
+    add("kept", counts.kept);
+    add("replaced", counts.replaced);
+  }
+  add("malformed", counts.malformed);
+  add("too_long", counts.too_long);
+  add("unsupported_pos", counts.unsupported_pos);
+  add("pos_mismatch", counts.pos_mismatch);
+  add("duplicates_in_file", counts.duplicates_in_file);
+  return lines;
 }
 
 }  // namespace azookey::settings

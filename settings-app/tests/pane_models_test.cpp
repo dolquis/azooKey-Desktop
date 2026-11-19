@@ -11,6 +11,7 @@
 #include "AppProfiles.h"
 #include "LearningPaneModel.h"
 #include "ModelPaneModel.h"
+#include "azookey/learning/UserDictionaryPos.h"
 
 namespace {
 
@@ -310,6 +311,189 @@ TEST(LearningPaneModelTest, EveryUserDictErrorHasAString) {
   EXPECT_TRUE(names.contains("LearningUserDictError_other"));
   EXPECT_EQ(azookey::settings::UserDictErrorResource("brand_new"), "LearningUserDictError_other");
   EXPECT_EQ(azookey::settings::UserDictErrorResource(""), "LearningUserDictError_other");
+}
+
+TEST(LearningPaneModelTest, UserDictErrorsIncludeThePartOfSpeechOnes) {
+  // user-dictionary-pos-spec section 7.1.
+  EXPECT_EQ(azookey::settings::UserDictErrorResource("invalid_pos"),
+            "LearningUserDictError_invalid_pos");
+  EXPECT_EQ(azookey::settings::UserDictErrorResource("dictionary_too_new"),
+            "LearningUserDictError_dictionary_too_new");
+}
+
+TEST(LearningPaneModelTest, PartOfSpeechChoicesStartWithTheNounAndFollowTheHostTable) {
+  // user-dictionary-pos-spec sections 2.1 and 8: the noun first (no id), then the table's ids in
+  // its order, which are the ones the Host checks.
+  using azookey::settings::kUserDictPosOptions;
+  const auto names = ResourceNames();
+  ASSERT_FALSE(kUserDictPosOptions.empty());
+  EXPECT_TRUE(kUserDictPosOptions.front().id.empty());
+  EXPECT_EQ(kUserDictPosOptions.front().resource, "UserDictPos_noun");
+  const auto& host_ids = azookey::learning::UserDictionaryPosIds();
+  ASSERT_EQ(kUserDictPosOptions.size(), host_ids.size() + 1);
+  for (size_t index = 0; index < host_ids.size(); ++index) {
+    const auto& option = kUserDictPosOptions[index + 1];
+    EXPECT_EQ(option.id, host_ids[index]) << index;
+    EXPECT_EQ(option.resource, "UserDictPos_" + std::string(option.id));
+  }
+  for (const auto& option : kUserDictPosOptions) {
+    EXPECT_TRUE(names.contains(std::string(option.resource))) << option.resource;
+  }
+  EXPECT_EQ(kUserDictPosOptions[17].resource, "UserDictPos_verb_godan_ka");
+  EXPECT_EQ(kUserDictPosOptions[24].resource, "UserDictPos_verb_godan_ra");
+}
+
+TEST(LearningPaneModelTest, AListedWordWithoutAKnownPartOfSpeechShowsTheNoun) {
+  using azookey::settings::UserDictEntryPosResource;
+  azookey::ipc::LearningEntryField entry;
+  EXPECT_EQ(UserDictEntryPosResource(entry), "UserDictPos_noun");
+  entry.metadata["pos"] = "verb_godan_ra";
+  EXPECT_EQ(UserDictEntryPosResource(entry), "UserDictPos_verb_godan_ra");
+  // An id a newer version wrote is kept on disk but shown as the noun (section 8).
+  entry.metadata["pos"] = "verb_kahen";
+  EXPECT_EQ(UserDictEntryPosResource(entry), "UserDictPos_noun");
+  entry.metadata["pos"] = "";
+  EXPECT_EQ(UserDictEntryPosResource(entry), "UserDictPos_noun");
+}
+
+TEST(LearningPaneModelTest, AddUserWordSendsThePartOfSpeechOnlyForANonNounToAHostThatHasIt) {
+  using azookey::settings::MakeAddUserWordRequest;
+  azookey::settings::UserWordInput input;
+  input.reading = "ぐぐる";
+  input.word = "ググる";
+  const auto noun = MakeAddUserWordRequest(input, 0, true);
+  EXPECT_EQ(noun.ruby, "ぐぐる");
+  EXPECT_EQ(noun.word, "ググる");
+  EXPECT_FALSE(noun.pos.has_value());
+  EXPECT_FALSE(noun.cid.has_value());
+
+  const auto verb = MakeAddUserWordRequest(input, 24, true);
+  ASSERT_TRUE(verb.pos.has_value());
+  EXPECT_EQ(*verb.pos, "verb_godan_ra");
+  // A Host without user_dict_pos would drop the field silently, so it is not sent.
+  EXPECT_FALSE(MakeAddUserWordRequest(input, 24, false).pos.has_value());
+  // No choice (a ComboBox's -1) or an index past the table is the noun.
+  EXPECT_FALSE(MakeAddUserWordRequest(input, static_cast<size_t>(-1), true).pos.has_value());
+  EXPECT_FALSE(
+      MakeAddUserWordRequest(input, azookey::settings::kUserDictPosOptions.size(), true)
+          .pos.has_value());
+}
+
+TEST(LearningPaneModelTest, UserDictFeaturesFollowTheHandshakeCapabilities) {
+  // Section 7.4: without the capabilities the tab shows neither the field nor the import.
+  using azookey::settings::UserDictHostFeaturesFrom;
+  auto features = UserDictHostFeaturesFrom({"settings", "learning_data_management"});
+  EXPECT_FALSE(features.pos);
+  EXPECT_FALSE(features.text_import);
+  features = UserDictHostFeaturesFrom({"user_dict_pos"});
+  EXPECT_TRUE(features.pos);
+  EXPECT_FALSE(features.text_import);
+  features = UserDictHostFeaturesFrom({"user_dict_text_import"});
+  EXPECT_FALSE(features.pos);
+  EXPECT_TRUE(features.text_import);
+  features = UserDictHostFeaturesFrom({"user_dict_pos", "user_dict_text_import"});
+  EXPECT_TRUE(features.pos);
+  EXPECT_TRUE(features.text_import);
+  EXPECT_FALSE(UserDictHostFeaturesFrom({}).pos);
+}
+
+TEST(LearningPaneModelTest, ImportRequestsCarryTheChoicesAndDefaultToAutoAndKeepingWords) {
+  using azookey::settings::MakeUserDictImportRequest;
+  const auto preview = MakeUserDictImportRequest("C:\\dict\\msime.txt", 0, 0, true);
+  EXPECT_EQ(preview.source_path, "C:\\dict\\msime.txt");
+  EXPECT_EQ(preview.format, "auto");
+  EXPECT_EQ(preview.conflict_resolution, "merge");
+  EXPECT_TRUE(preview.dry_run);
+
+  const auto run = MakeUserDictImportRequest("C:\\dict\\google.txt", 2, 1, false);
+  EXPECT_EQ(run.format, "google");
+  EXPECT_EQ(run.conflict_resolution, "overwrite");
+  EXPECT_FALSE(run.dry_run);
+  EXPECT_EQ(MakeUserDictImportRequest("p", 1, 0, false).format, "msime");
+  EXPECT_EQ(MakeUserDictImportRequest("p", 3, 0, false).format, "azookey_tsv");
+
+  const auto out_of_range =
+      MakeUserDictImportRequest("p", static_cast<size_t>(-1), static_cast<size_t>(-1), false);
+  EXPECT_EQ(out_of_range.format, "auto");
+  EXPECT_EQ(out_of_range.conflict_resolution, "merge");
+  // The settings app offers neither "keep_both" (it equals "merge" here, section 6.6).
+  EXPECT_EQ(azookey::settings::kUserDictImportConflicts.size(), 2u);
+}
+
+TEST(LearningPaneModelTest, EveryImportErrorFormatEncodingPolicyAndCountHasAString) {
+  using namespace azookey::settings;
+  const auto names = ResourceNames();
+  for (const auto code : kUserDictImportErrorCodes) {
+    const auto name = UserDictImportErrorResource(code);
+    EXPECT_EQ(name, "UserDictImportError_" + std::string(code));
+    EXPECT_TRUE(names.contains(name)) << name;
+  }
+  EXPECT_TRUE(names.contains("UserDictImportError_other"));
+  EXPECT_EQ(UserDictImportErrorResource("brand_new"), "UserDictImportError_other");
+  EXPECT_EQ(UserDictImportErrorResource(""), "UserDictImportError_other");
+  // An AddUserWord-only code is not one of the import's.
+  EXPECT_EQ(UserDictImportErrorResource("invalid_pos"), "UserDictImportError_other");
+
+  for (const auto format : kUserDictImportFormats) {
+    EXPECT_TRUE(names.contains(UserDictImportFormatResource(format))) << format;
+  }
+  EXPECT_EQ(UserDictImportFormatResource("kotoeri"), "UserDictImportFormat_other");
+  EXPECT_TRUE(names.contains("UserDictImportFormat_other"));
+  for (const auto encoding : kUserDictImportEncodings) {
+    EXPECT_TRUE(names.contains(UserDictImportEncodingResource(encoding))) << encoding;
+  }
+  EXPECT_EQ(UserDictImportEncodingResource("utf-16le"), "UserDictImportEncoding_utf_16le");
+  EXPECT_EQ(UserDictImportEncodingResource("latin-1"), "UserDictImportEncoding_other");
+  EXPECT_TRUE(names.contains("UserDictImportEncoding_other"));
+  for (const auto option : kUserDictImportConflicts) {
+    EXPECT_TRUE(names.contains("UserDictImportConflict_" + std::string(option))) << option;
+  }
+  for (const char* count : {"added", "existing", "kept", "replaced", "malformed", "too_long",
+                            "unsupported_pos", "pos_mismatch", "duplicates_in_file"}) {
+    EXPECT_TRUE(names.contains("UserDictImportCount_" + std::string(count))) << count;
+  }
+}
+
+TEST(LearningPaneModelTest, ImportCountsShowTheAddedWordsAndEveryNonZeroCount) {
+  using azookey::settings::UserDictImportCountLines;
+  azookey::ipc::UserDictionaryTextImportCounts counts;
+  counts.added = 120;
+  counts.kept = 3;
+  counts.replaced = 1;
+  counts.duplicates_in_file = 1;
+  counts.malformed = 2;
+  counts.unsupported_pos = 5;
+
+  const auto preview = UserDictImportCountLines(counts, true);
+  ASSERT_EQ(preview.size(), 5u);
+  EXPECT_EQ(preview[0].resource, "UserDictImportCount_added");
+  EXPECT_EQ(preview[0].count, 120u);
+  // The preview is sent before the policy is chosen: one line for words already there.
+  EXPECT_EQ(preview[1].resource, "UserDictImportCount_existing");
+  EXPECT_EQ(preview[1].count, 4u);
+  EXPECT_EQ(preview[2].resource, "UserDictImportCount_malformed");
+  EXPECT_EQ(preview[2].count, 2u);
+  EXPECT_EQ(preview[3].resource, "UserDictImportCount_unsupported_pos");
+  EXPECT_EQ(preview[3].count, 5u);
+  EXPECT_EQ(preview[4].resource, "UserDictImportCount_duplicates_in_file");
+  EXPECT_EQ(preview[4].count, 1u);
+
+  const auto result = UserDictImportCountLines(counts, false);
+  ASSERT_EQ(result.size(), 6u);
+  EXPECT_EQ(result[1].resource, "UserDictImportCount_kept");
+  EXPECT_EQ(result[1].count, 3u);
+  EXPECT_EQ(result[2].resource, "UserDictImportCount_replaced");
+  EXPECT_EQ(result[2].count, 1u);
+
+  counts = {};
+  counts.too_long = 1;
+  counts.pos_mismatch = 2;
+  const auto skipped_only = UserDictImportCountLines(counts, false);
+  ASSERT_EQ(skipped_only.size(), 3u);
+  EXPECT_EQ(skipped_only[0].resource, "UserDictImportCount_added");
+  EXPECT_EQ(skipped_only[0].count, 0u);
+  EXPECT_EQ(skipped_only[1].resource, "UserDictImportCount_too_long");
+  EXPECT_EQ(skipped_only[2].resource, "UserDictImportCount_pos_mismatch");
 }
 
 TEST(LearningPaneModelTest, UserWordInputIsTrimmedAndTheReadingFoldedToHiragana) {

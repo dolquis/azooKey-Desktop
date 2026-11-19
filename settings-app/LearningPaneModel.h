@@ -2,10 +2,12 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "SettingsIpcClient.h"
 #include "azookey/ipc/Payloads.h"
 
 namespace azookey::settings {
@@ -180,6 +182,15 @@ azookey::ipc::ImportUserDictionaryTextRequest MakeUserDictImportRequest(std::str
                                                                         size_t format_index,
                                                                         size_t conflict_index,
                                                                         bool dry_run);
+
+// The index in kUserDictImportFormats of the format the preview detected, so the import reads the
+// file as the preview did; `fallback` (the chosen one) when the response named none or an unknown.
+size_t UserDictImportFormatIndex(const std::optional<std::string>& detected, size_t fallback);
+
+// Whether an import that got no usable answer may still finish on the Host (section 8): the request
+// could have reached it (a timeout, or an answer that could not be read). The pane then says so and
+// lists the dictionary again, rather than reporting a failure.
+bool UserDictImportMayFinishLater(HostCallStatus status);
 
 // The `error` codes of ImportUserDictionaryTextResponse (section 7.2). Each has a
 // "UserDictImportError_<code>" string; any other falls back to "UserDictImportError_other".

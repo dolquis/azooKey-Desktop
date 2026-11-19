@@ -112,7 +112,8 @@ class LearningPane : public std::enable_shared_from_this<LearningPane> {
   bool loaded_once_{false};
   bool busy_{false};
   UserDictHostFeatures user_dict_features_;
-  bool user_dict_features_known_{false};
+  // Set while an import of another IME's dictionary runs, from the picker to the result.
+  bool user_dict_import_in_flight_{false};
   bool user_dict_probe_in_flight_{false};
 };
 

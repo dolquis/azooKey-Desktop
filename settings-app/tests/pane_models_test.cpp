@@ -396,6 +396,34 @@ TEST(LearningPaneModelTest, UserDictFeaturesFollowTheHandshakeCapabilities) {
   EXPECT_FALSE(UserDictHostFeaturesFrom({}).pos);
 }
 
+// user-dictionary-pos-spec 8: an import whose request may have reached the Host (a timeout, or
+// an answer that could not be read) may still finish there; any other failure sent nothing.
+TEST(LearningPaneModelTest, OnlyAnImportThatMayHaveReachedTheHostMayFinishLater) {
+  EXPECT_TRUE(azookey::settings::UserDictImportMayFinishLater(HostCallStatus::Timeout));
+  EXPECT_TRUE(azookey::settings::UserDictImportMayFinishLater(HostCallStatus::InvalidResponse));
+  for (const auto status :
+       {HostCallStatus::Ok, HostCallStatus::Unavailable, HostCallStatus::HostNotRunning,
+        HostCallStatus::HandshakeRejected, HostCallStatus::Unsupported}) {
+    EXPECT_FALSE(azookey::settings::UserDictImportMayFinishLater(status))
+        << static_cast<int>(status);
+  }
+}
+
+// The import reads the file as the preview did: the format the preview detected.
+TEST(LearningPaneModelTest, TheImportUsesTheFormatThePreviewDetected) {
+  using azookey::settings::kUserDictImportFormats;
+  using azookey::settings::UserDictImportFormatIndex;
+  const auto msime = UserDictImportFormatIndex(std::string("msime"), 0);
+  ASSERT_LT(msime, kUserDictImportFormats.size());
+  EXPECT_EQ(kUserDictImportFormats[msime], "msime");
+  const auto request =
+      azookey::settings::MakeUserDictImportRequest("C:\\d.txt", msime, 0, /*dry_run=*/false);
+  EXPECT_EQ(request.format, "msime");
+  // Without a detected format, or with one this app does not know, the chosen one stays.
+  EXPECT_EQ(UserDictImportFormatIndex(std::nullopt, 2), 2u);
+  EXPECT_EQ(UserDictImportFormatIndex(std::string("atok"), 3), 3u);
+}
+
 TEST(LearningPaneModelTest, ImportRequestsCarryTheChoicesAndDefaultToAutoAndKeepingWords) {
   using azookey::settings::MakeUserDictImportRequest;
   const auto preview = MakeUserDictImportRequest("C:\\dict\\msime.txt", 0, 0, true);

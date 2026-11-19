@@ -361,7 +361,8 @@ bool LearningPane::IsUserDictTab() const {
 
 winrt::fire_and_forget LearningPane::ProbeUserDictFeatures() {
   const auto self = shared_from_this();
-  if (user_dict_features_known_ || user_dict_probe_in_flight_) co_return;
+  // Asked each time the tab is shown, so a Host that was replaced or started since is followed.
+  if (user_dict_probe_in_flight_) co_return;
   user_dict_probe_in_flight_ = true;
   const auto dispatcher = dispatcher_;
   try {
@@ -373,7 +374,6 @@ winrt::fire_and_forget LearningPane::ProbeUserDictFeatures() {
     // listing beside this reports the failure itself.
     if (result.status != HostCallStatus::Ok) co_return;
     user_dict_features_ = UserDictHostFeaturesFrom(*result.response);
-    user_dict_features_known_ = true;
     ApplyUserDictFeatures();
   } catch (...) {
     // Not RecoverFromFailure: that would clear the busy state of the listing running beside this.
@@ -908,7 +908,14 @@ std::wstring CountLinesText(const ResourceLoader& resources,
 
 winrt::fire_and_forget LearningPane::ImportUserDictText() {
   const auto self = shared_from_this();
-  if (busy_ || !IsUserDictTab() || !user_dict_features_.text_import) co_return;
+  if (busy_ || user_dict_import_in_flight_ || !IsUserDictTab() || !user_dict_features_.text_import)
+    co_return;
+  // A second click while the picker or a dialog is open does not start a second import.
+  user_dict_import_in_flight_ = true;
+  struct ClearInFlight {
+    LearningPane* pane;
+    ~ClearInFlight() { pane->user_dict_import_in_flight_ = false; }
+  } clear_in_flight{this};
   const auto dispatcher = dispatcher_;
   try {
     ResourceLoader resources;
@@ -999,9 +1006,10 @@ winrt::fire_and_forget LearningPane::ImportUserDictText() {
                       after.GetString(L"Learning_UserDictImportNextButton"))) {
       co_return;
     }
+    // The import reads the file as the preview did: the format it detected, not "auto" again.
     const auto request = MakeUserDictImportRequest(
-        path, format_index, static_cast<size_t>(conflict_combo.SelectedIndex()),
-        /*dry_run=*/false);
+        path, UserDictImportFormatIndex(preview.response->format, format_index),
+        static_cast<size_t>(conflict_combo.SelectedIndex()), /*dry_run=*/false);
 
     // 5. Confirm, then import.
     auto message = after.GetString(L"Learning_UserDictImportConfirmMessage") + L"\n" + file.Path() +
@@ -1020,11 +1028,16 @@ winrt::fire_and_forget LearningPane::ImportUserDictText() {
 
     SetBusy(false);
     ResourceLoader done;
-    if (result.status == HostCallStatus::Timeout) {
-      // The Host may still finish the import after the wait (section 8).
+    if (UserDictImportMayFinishLater(result.status)) {
+      // The request may have reached the Host, which may still finish the import (section 8):
+      // say so, and list the dictionary again to show what is there now.
       ShowStatus(controls::InfoBarSeverity::Warning,
                  done.GetString(L"Learning_UserDictImportTimeoutTitle"),
                  done.GetString(L"Learning_UserDictImportTimeoutMessage"));
+      query_.clear();
+      search_box_.Text(L"");
+      offset_ = 0;
+      LoadPage(/*keep_status=*/true);
       co_return;
     }
     if (result.status != HostCallStatus::Ok) {

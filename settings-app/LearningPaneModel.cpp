@@ -5,6 +5,7 @@
 #include <ctime>
 #include <cwctype>
 #include <filesystem>
+#include <iterator>
 #include <utility>
 
 namespace azookey::settings {
@@ -208,6 +209,19 @@ azookey::ipc::ImportUserDictionaryTextRequest MakeUserDictImportRequest(std::str
                                                                                 : 0]);
   request.dry_run = dry_run;
   return request;
+}
+
+size_t UserDictImportFormatIndex(const std::optional<std::string>& detected, size_t fallback) {
+  if (!detected) return fallback;
+  const auto it =
+      std::find(kUserDictImportFormats.begin(), kUserDictImportFormats.end(), *detected);
+  return it == kUserDictImportFormats.end()
+             ? fallback
+             : static_cast<size_t>(std::distance(kUserDictImportFormats.begin(), it));
+}
+
+bool UserDictImportMayFinishLater(HostCallStatus status) {
+  return status == HostCallStatus::Timeout || status == HostCallStatus::InvalidResponse;
 }
 
 std::string UserDictImportErrorResource(std::string_view error) {

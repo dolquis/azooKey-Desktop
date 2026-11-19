@@ -605,7 +605,7 @@
   <data name="Learning_UserDictImportRunButton" xml:space="preserve"><value>取り込む</value></data>
   <data name="Learning_UserDictImportDoneTitle" xml:space="preserve"><value>ほかの IME の辞書を取り込みました</value></data>
   <data name="Learning_UserDictImportProblemTitle" xml:space="preserve"><value>辞書を取り込めませんでした</value></data>
-  <data name="Learning_UserDictImportTimeoutTitle" xml:space="preserve"><value>取り込みの結果を待ちきれませんでした</value></data>
+  <data name="Learning_UserDictImportTimeoutTitle" xml:space="preserve"><value>取り込みの結果を確かめられませんでした</value></data>
   <data name="Learning_UserDictImportTimeoutMessage" xml:space="preserve"><value>取り込みは後から終わることがあります。しばらくしてから一覧で確かめてください。</value></data>
   <data name="UserDictImportFormat_auto" xml:space="preserve"><value>自動</value></data>
   <data name="UserDictImportFormat_msime" xml:space="preserve"><value>Microsoft IME</value></data>

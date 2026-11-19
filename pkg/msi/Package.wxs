@@ -43,6 +43,10 @@
           <Component Id="TechnicalTermsLexiconComponent" Guid="*">
             <File Id="TechnicalTermsLexiconFile" Source="$(BundledDictionaryDir)\dict\technical_terms_lexicon.azdic" KeyPath="yes" />
           </Component>
+          <!-- Not a layer: only the lattice conversion reads it (lattice-conversion-spec section 8.2). -->
+          <Component Id="LatticeCoreComponent" Guid="*">
+            <File Id="LatticeCoreFile" Source="$(BundledDictionaryDir)\dict\lattice_core.azdic" KeyPath="yes" />
+          </Component>
         </Directory>
         <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
           <File
@@ -181,6 +185,7 @@
       <ComponentRef Id="ThirdPartyLicensesComponent" />
       <ComponentRef Id="SudachiLexiconComponent" />
       <ComponentRef Id="TechnicalTermsLexiconComponent" />
+      <ComponentRef Id="LatticeCoreComponent" />
       <ComponentRef Id="DictionaryNoticesComponent" />
       <ComponentRef Id="SettingsComponent" />
       <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">

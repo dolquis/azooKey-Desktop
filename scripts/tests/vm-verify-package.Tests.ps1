@@ -215,7 +215,7 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 19
+      @($manifest.files).Count | Should -Be 20
       $manifest.bundledDictionaries.selection | Should -BeExactly "default"
       $manifest.bundledDictionaries.sudachiRevision | Should -BeExactly "20260723"
       $manifest.bundledDictionaries.inputFingerprint | Should -Match '^[0-9a-f]{64}$'
@@ -225,7 +225,8 @@ Describe "VM verification package automation" {
       $provenance.path | Should -BeExactly "bundle-provenance.json"
       $provenance.sha256 | Should -BeExactly $manifest.bundledDictionaries.provenanceSha256
       @($manifest.files | Where-Object { $_.role -eq "bundled-dictionary" }).path |
-        Should -Be @("dict/sudachi_lexicon.azdic", "dict/technical_terms_lexicon.azdic")
+        Should -Be @("dict/lattice_core.azdic", "dict/sudachi_lexicon.azdic",
+          "dict/technical_terms_lexicon.azdic")
       @($manifest.files | Where-Object { $_.role -eq "dictionary-notices" }).path |
         Should -Be @("ThirdPartyNotices.txt")
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
@@ -282,7 +283,7 @@ Describe "VM verification package automation" {
         "selection", "sudachiRevision", "inputFingerprint", "provenanceSha256")
       ($result.Manifest.bundledDictionaries | ConvertTo-Json) | Should -Not -Match ([regex]::Escape($bundle))
       @(Get-ChildItem -LiteralPath (Join-Path $expanded "dict") -File).Name |
-        Should -Be @("sudachi_lexicon.azdic", "technical_terms_lexicon.azdic")
+        Should -Be @("lattice_core.azdic", "sudachi_lexicon.azdic", "technical_terms_lexicon.azdic")
       foreach ($file in @($result.Manifest.files | Where-Object {
             $_.role -in @("bundled-dictionary", "dictionary-notices", "dictionary-provenance")
           })) {
@@ -363,10 +364,12 @@ Describe "VM verification package automation" {
     It "rejects missing or empty dictionary payloads despite the omission switch: <Relative> / <State>" -ForEach @(
       @{ Relative = "dict\sudachi_lexicon.azdic"; State = "missing" }
       @{ Relative = "dict\technical_terms_lexicon.azdic"; State = "missing" }
+      @{ Relative = "dict\lattice_core.azdic"; State = "missing" }
       @{ Relative = "ThirdPartyNotices.txt"; State = "missing" }
       @{ Relative = "bundle-provenance.json"; State = "missing" }
       @{ Relative = "dict\sudachi_lexicon.azdic"; State = "empty" }
       @{ Relative = "dict\technical_terms_lexicon.azdic"; State = "empty" }
+      @{ Relative = "dict\lattice_core.azdic"; State = "empty" }
       @{ Relative = "ThirdPartyNotices.txt"; State = "empty" }
       @{ Relative = "bundle-provenance.json"; State = "empty" }
       @{ Relative = "ThirdPartyNotices.txt"; State = "whitespace" }
@@ -495,7 +498,7 @@ Describe "VM verification package automation" {
       [System.IO.File]::WriteAllText($checker, $content, [System.Text.UTF8Encoding]::new($false))
 
       $payloads = @(Get-VmVerifyDictionaryPayload -RepositoryRoot $script:testRepository)
-      $payloads.Count | Should -Be 4
+      $payloads.Count | Should -Be 5
       @($payloads.Role) | Should -Contain "dictionary-provenance"
     }
 

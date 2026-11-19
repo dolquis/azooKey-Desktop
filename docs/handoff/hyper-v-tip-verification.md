@@ -151,7 +151,7 @@ VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動
 展開した zip から `register-dev.ps1` を直接実行する場合、bench は Host exe と同じ
 ディレクトリから自動で見つかる（`-BenchPath` は不要）。
 いずれもローカルファイルだけを収集し、ネットワークには接続しない。
-静的辞書2層と `ThirdPartyNotices.txt` は `-BundledDictionaryDirectory`（既定
+静的辞書2層、lattice_core と `ThirdPartyNotices.txt` は `-BundledDictionaryDirectory`（既定
 `build/bundled-dictionaries`）から同梱する。既定ディレクトリが存在しない場合だけ
 `-AllowNoDictionary` で省略できる。辞書省略時に実施できないゲートの扱いは
 [`human-gate-batch-runbook.md`「セッション前にホスト側で用意するもの」](./human-gate-batch-runbook.md#セッション前にホスト側で用意するもの) に従う。

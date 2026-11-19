@@ -814,6 +814,8 @@ function Get-VmVerifyDictionaryPayload {
   $payloads = @(
     @{ Archive = "dict/sudachi_lexicon.azdic"; Role = "bundled-dictionary" }
     @{ Archive = "dict/technical_terms_lexicon.azdic"; Role = "bundled-dictionary" }
+    # Not a layer: the Host's lattice conversion reads it from the same dict/ (DEV-2099).
+    @{ Archive = "dict/lattice_core.azdic"; Role = "bundled-dictionary" }
     @{ Archive = "ThirdPartyNotices.txt"; Role = "dictionary-notices" }
     @{ Archive = "bundle-provenance.json"; Role = "dictionary-provenance" }
   )

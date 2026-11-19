@@ -572,8 +572,7 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
     out << "{" << "\"batchRomajiConversion\":true," << "\"batchRomajiPreviewStyle\":\"romaji\","
         << "\"batchConversionMode\":\"neural\"," << "\"batchAutoPunctuation\":true,"
         << "\"numberRewriter\":true," << "\"katakanaRewriter\":true,"
-        << "\"dateTimeRewriter\":true," << "\"calculatorRewriter\":true,"
-        << "\"maxCandidates\":17"
+        << "\"dateTimeRewriter\":true," << "\"calculatorRewriter\":true," << "\"maxCandidates\":17"
         << "}";
   }
   azookey::host::SettingsStore settings_store(settings_path);

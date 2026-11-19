@@ -322,10 +322,11 @@ void LogPersistentEdit(logging::RuntimeLogger* logger, const ipc::Envelope& req,
 }
 
 // user-dictionary-pos-spec section 6.8: one record per text import, with the
-// counts and the times. Never a word, a reading or the path.
+// counts and the times. Never a word, a reading or the path. The receipt is
+// the record's timestamp minus total_ms and parse_ms.
 void LogUserDictionaryImport(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                              const UserDictionaryEditReport& report,
-                             const ipc::UserDictionaryTextImportCounts& counts) {
+                             const ipc::UserDictionaryTextImportCounts& counts, double parse_ms) {
   if (!logger || !logger->enabled()) return;
   const uint64_t skipped =
       counts.malformed + counts.too_long + counts.unsupported_pos + counts.pos_mismatch;
@@ -342,7 +343,10 @@ void LogUserDictionaryImport(logging::RuntimeLogger* logger, const ipc::Envelope
                {"load_ms", report.load_ms},
                {"load_skipped", report.load_skipped},
                {"save_ms", report.save_ms},
+               // From the end of the parse, where the wait budget starts; the
+               // parse before it is parse_ms.
                {"total_ms", report.total_ms},
+               {"parse_ms", parse_ms},
                {"added", counts.added},
                {"replaced", counts.replaced},
                {"kept", counts.kept},
@@ -2452,6 +2456,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelop
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ipc::Envelope& req) {
+  const auto received = std::chrono::steady_clock::now();
   ipc::ImportUserDictionaryTextResponse res;
   const auto reply = [&] {
     return MakeResponse(req, ipc::BuildImportUserDictionaryTextResponse(res));
@@ -2493,8 +2498,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ip
     return reply();
   }
 
-  // Step 2, holding no lock. The plaintext is erased once parsed.
+  // Step 2, holding no lock. The plaintext is erased once parsed, and on any
+  // way out.
   std::string bytes;
+  struct EraseOnExit {
+    std::string& text;
+    ~EraseOnExit() { learning::SecureErase(text); }
+  } erase_bytes{bytes};
   const auto read = learning::ReadUserDictionaryTextFile(source, bytes);
   if (read != learning::TextImportError::None) {
     // A file that cannot be read as a regular file is not one the import takes.
@@ -2505,6 +2515,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ip
   }
   auto result = learning::ParseUserDictionaryText(bytes, *format);
   learning::SecureErase(bytes);
+  if (after_text_import_parse_for_tests_) after_text_import_parse_for_tests_();
   const auto parsed_at = std::chrono::steady_clock::now();
   if (result.format) res.format = std::string(learning::TextImportFormatName(*result.format));
   if (result.encoding)
@@ -2534,13 +2545,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleImportUserDictionaryText(const ip
     UserDictionaryEditReport report;
     UserDictionaryEditOptions options;
     options.received = parsed_at;
+    if (text_import_wait_budget_for_tests_)
+      options.wait_budget = *text_import_wait_budget_for_tests_;
     options.report = &report;
     const bool imported =
         engine_->ImportUserDictionaryText(result.words, *policy, options, &merged);
     counts.added = merged.added;
     counts.replaced = merged.replaced;
     counts.kept = merged.kept;
-    LogUserDictionaryImport(runtime_logger_, req, report, counts);
+    LogUserDictionaryImport(
+        runtime_logger_, req, report, counts,
+        std::chrono::duration<double, std::milli>(parsed_at - received).count());
     if (!imported) {
       res.error = UserDictionaryEditResultName(report.result);
       return reply();

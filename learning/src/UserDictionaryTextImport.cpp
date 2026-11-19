@@ -654,8 +654,7 @@ TextImportError ReadUserDictionaryTextFile(const std::filesystem::path& path, st
   out.clear();
   std::error_code ec;
   const auto status = std::filesystem::status(path, ec);
-  if (status.type() == std::filesystem::file_type::not_found)
-    return TextImportError::SourceMissing;
+  if (status.type() == std::filesystem::file_type::not_found) return TextImportError::SourceMissing;
   // A file that cannot be looked at, such as one access is denied to, is no
   // missing file.
   if (ec || !std::filesystem::is_regular_file(status)) return TextImportError::ReadFailed;

@@ -201,9 +201,8 @@ TEST(UserDictionaryTextImportTest, EncodingFailures) {
                 .error,
             TextImportError::BadEncoding);
   // Behind a UTF-8 BOM, an overlong form and an encoded surrogate are not UTF-8.
-  EXPECT_EQ(
-      al::ParseUserDictionaryText("\xEF\xBB\xBF\xC0\xAF\tA\n", TextImportFormat::Auto).error,
-      TextImportError::BadEncoding);
+  EXPECT_EQ(al::ParseUserDictionaryText("\xEF\xBB\xBF\xC0\xAF\tA\n", TextImportFormat::Auto).error,
+            TextImportError::BadEncoding);
   EXPECT_EQ(
       al::ParseUserDictionaryText("\xEF\xBB\xBF\xED\xA0\x80\tA\n", TextImportFormat::Auto).error,
       TextImportError::BadEncoding);

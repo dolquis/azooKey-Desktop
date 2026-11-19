@@ -602,7 +602,8 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
         if (!options.dry_run && replace) {
           dict.Add(*word);
         }
-        ++imported;
+        // imported counts the words added or replaced, as with --input-format.
+        if (replace) ++imported;
       } else {
         ++skipped;
       }

@@ -1232,6 +1232,12 @@ TEST(UserDictCliTest, ImportTsvWithConflictMergeKeepsTheExistingWord) {
   ASSERT_TRUE(options.has_value()) << error;
   const auto result = azookey::host::RunUserDictCli(*options, DirectRunOptions(path));
   EXPECT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(json.has_value());
+  // imported counts the words added or replaced: the kept one is not.
+  EXPECT_EQ(json->GetUInt("imported"), 1u);
+  EXPECT_EQ(json->GetUInt("skipped"), 0u);
   azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   EXPECT_EQ(dict.Size(), 2u);

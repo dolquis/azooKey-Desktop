@@ -366,7 +366,7 @@ M52 のベンチはユーザー辞書を読まないので、本節は baseline 
 
 | 形式 ID | 出どころ | 構造 |
 |---|---|---|
-| `msime` | Microsoft IME の辞書ツールの一覧の出力 | 1 行目が `!Microsoft IME` で始まる（大文字と小文字を区別しない）。`!` で始まる行は注釈。データ行は TAB 区切りで、読み・語句・品詞・コメント（任意）の順 |
+| `msime` | Microsoft IME の辞書ツールの一覧の出力 | 最初の空でない行が `!Microsoft IME` で始まる（大文字と小文字を区別しない）。`!` で始まる行は注釈。データ行は TAB 区切りで、読み・語句・品詞・コメント（任意）の順 |
 | `google` | Google 日本語入力の辞書ツールの書き出し | ヘッダを持たない。`#` で始まる行は注釈。データ行は TAB 区切りで、読み・単語・品詞・コメントの順。コメントが空でも 4 列目の区切りを持つ |
 | `azookey_tsv` | `userdict import` の TSV（§7.5） | 読み・語・`cid`・`mid`・`weight`・品詞 ID の 2〜6 列。3 列目以降は空でよい |
 
@@ -533,7 +533,8 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
   import と同じく §8 の対象とする。
 - Host は 1 回の取り込みを RuntimeLogger の `persistent_edit`（`docs/learning-data-management-spec.md` §13）に、
   `op` を `user_dict_import` として記録する。項目は同 §13 の項目と、件数（`added`、`replaced`、`kept`、
-  `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。
+  `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。`total_ms` は待ちの予算と同じく解析を終えた時刻から
+  数え、受信から解析を終えるまでの時間は `parse_ms` に記録する。
 
 ## 7. IPC と CLI
 
@@ -608,6 +609,7 @@ Host は両方を Handshake の capabilities に載せる。設定アプリは�
   `pos_mismatch` として skip に数える。品詞に対応する前の CLI は 6 列の行を skip していたので、変わるのは 6 列の行だけである。
 - `--input-format` が `msime`・`google`・`auto` のときは、解析、文字コード、正規化、上限を §6.2〜§6.7 に従う。
   JSON の報告は既存の `imported` と `skipped` に、§7.2 の `counts` を足す。
+- `imported` は、どの `--input-format` でも、足すか置き換えた語の数である。`--conflict merge`・`keep_both` で既存を残した語は数えない。
 
 同じ `azookey_tsv` でも、IPC と CLI では次のとおり扱いが違う。CLI は既存のスクリプトの結果を保つことを優先する。
 

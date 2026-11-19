@@ -11619,6 +11619,7 @@ TEST(TsfTipTypoCorrectionTest, DateTimeCandidatesReachTheWindowOpenedFromAHostAn
   ASSERT_TRUE(WaitUntil([&] { return h.service.date_time_rewriter_enabled_for_test(); },
                         std::chrono::seconds(10)));
   TypeTypoRomaji(h, "KYOU");
+  ASSERT_EQ(h.service.preedit_kana_, "きょう");
   // A per-key query has been answered, so the Host is connected for Space.
   ASSERT_TRUE(WaitUntil([&] { return queries.load() > 0; }, std::chrono::seconds(10)));
   ASSERT_TRUE(h.Press(VK_SPACE));

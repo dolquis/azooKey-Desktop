@@ -485,11 +485,12 @@ std::string NormalizeLearningAppName(std::string_view process_name) {
 LearningStore::LearningStore(std::filesystem::path path, const ByteCrypto* crypto)
     : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
-bool LearningStore::Load() { return LoadImpl(true); }
+bool LearningStore::Load() { return LoadImpl(true, nullptr); }
 
-bool LearningStore::LoadReadOnly() { return LoadImpl(false); }
+bool LearningStore::LoadReadOnly(size_t* malformed_rows) { return LoadImpl(false, malformed_rows); }
 
-bool LearningStore::LoadImpl(bool migrate_plaintext) {
+bool LearningStore::LoadImpl(bool migrate_plaintext, size_t* malformed_rows) {
+  if (malformed_rows) *malformed_rows = 0;
   table_.clear();
   dirty_ = false;
   save_blocked_by_load_failure_ = false;
@@ -512,10 +513,12 @@ bool LearningStore::LoadImpl(bool migrate_plaintext) {
     return false;
   }
   const size_t malformed = ParseInto(text, source_path, table_);
+  if (malformed_rows) *malformed_rows = malformed;
   // The next save would drop the rows that did not parse; keep the file as
   // it is now before that happens (never discard data silently).
   preserve_before_save_ = !from_legacy && malformed > 0;
-  if (preserve_before_save_) {
+  // A read-only load is never saved, so it has nothing to keep aside.
+  if (preserve_before_save_ && migrate_plaintext) {
     std::cerr << "LearningStore: " << malformed
               << " malformed rows; the file is kept aside before the next save\n";
   }

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,11 +18,15 @@
 #include "BenchmarkResult.h"
 #include "ConversionQuality.h"
 #include "IpcBenchmark.h"
+#include "PersonalEval.h"
 #include "TemporaryLearningFile.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/TraceId.h"
+#include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/Sha256.h"
 #include "azookey/logging/Phase.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -49,7 +54,13 @@ void PrintUsage(const char* exe) {
       << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
          " [--backend cpu|cuda] [--model PATH] [--category NAME]"
          " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]"
-         " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]\n"
+         " [--nll on|off] [--decode-stats JSONL] [--dict-dir DIR [--lattice on|off]]"
+         " [--profile TEXT | --profile-file PATH]\n"
+      << "       " << exe
+      << " --personal-eval --output JSON [--learning PATH] [--settings PATH] [--max-cases N]"
+         " [--per-case JSONL --include-personal-text] [--baseline JSON] [--backend cpu|cuda]"
+         " [--model PATH] [--nll on|off] [--dict-dir DIR [--lattice on|off]] [--iterations N]"
+         " [--profile TEXT | --profile-file PATH]\n"
       << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
          "failure gate. --json selects JSON stdout; --output writes the same JSON "
          "schema to a file. --ipc adds codec, Windows pipe echo and send/Host/receive "
@@ -58,7 +69,29 @@ void PrintUsage(const char* exe) {
          "setting). --decode-stats writes one line per query with its latency, deadline "
          "cut-off and candidate sources. --dict-dir loads the bundled static layers of DIR "
          "(the dict directory of dictbuild/build_bundled.py); --lattice defaults to on with it, "
-         "and this build has no lattice conversion, so pass --lattice off.\n";
+         "and this build has no lattice conversion, so pass --lattice off. --personal-eval "
+         "evaluates your own learning store, read without changing it, and writes aggregates "
+         "only; --profile places a bench-only Zenzai profile in the prompt and needs --model.\n";
+}
+
+// The options a personal run accepts (conversion-quality-benchmark-spec section 15.5).
+const std::set<std::string, std::less<>> kPersonalEvalOptions = {
+    "--personal-eval", "--learning",     "--settings", "--max-cases", "--include-personal-text",
+    "--profile",       "--profile-file", "--output",   "--baseline",  "--per-case",
+    "--backend",       "--model",        "--dict-dir", "--lattice",   "--nll",
+    "--iterations",
+};
+
+size_t ParseCount(const std::string& value, const char* name) {
+  // Digits only: std::stoull also takes leading spaces and a sign, so " -1" would wrap around.
+  const bool digits = !value.empty() && std::all_of(value.begin(), value.end(),
+                                                    [](char ch) { return ch >= '0' && ch <= '9'; });
+  try {
+    if (!digits) throw std::invalid_argument("invalid value");
+    return static_cast<size_t>(std::stoull(value));
+  } catch (const std::exception&) {
+    throw std::invalid_argument(std::string(name) + " must be a non-negative integer");
+  }
 }
 
 const char* CandidateSourceName(azookey::core::CandidateSource source) {
@@ -228,6 +261,22 @@ int main(int argc, char** argv) {
   std::optional<bool> nll_enabled;
   std::optional<bool> lattice_enabled;
   azookey::bench::ConversionQualityOptions quality_options;
+  bool personal_eval = false;
+  std::filesystem::path learning_path;
+  std::filesystem::path settings_path;
+  std::optional<size_t> max_cases;
+  std::optional<std::string> profile;
+  std::filesystem::path profile_file;
+  std::set<std::string, std::less<>> seen_options;
+  // A personal run or a profile may put private words on the command line, so an unknown
+  // token is reported by position only (spec section 15.7).
+  bool hide_arguments = false;
+  for (int i = 1; i < argc; ++i) {
+    // A prefix, so that a mistyped "--profile=TEXT" hides its text as well.
+    const std::string_view arg = argv[i];
+    hide_arguments =
+        hide_arguments || arg.starts_with("--personal-eval") || arg.starts_with("--profile");
+  }
   try {
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -235,7 +284,28 @@ int main(int argc, char** argv) {
         PrintUsage(argv[0]);
         return 0;
       }
-      if (arg == "--max-p95-ms") {
+      if (arg.rfind("--", 0) == 0) seen_options.insert(arg);
+      if (arg == "--personal-eval") {
+        personal_eval = true;
+      } else if (arg == "--learning") {
+        const auto value = RequireValue(argc, argv, i, "--learning");
+        if (value.empty()) throw std::invalid_argument("--learning requires a non-empty path");
+        learning_path = azookey::bench::Utf8Path(value);
+      } else if (arg == "--settings") {
+        const auto value = RequireValue(argc, argv, i, "--settings");
+        if (value.empty()) throw std::invalid_argument("--settings requires a non-empty path");
+        settings_path = azookey::bench::Utf8Path(value);
+      } else if (arg == "--max-cases") {
+        max_cases = ParseCount(RequireValue(argc, argv, i, "--max-cases"), "--max-cases");
+      } else if (arg == "--include-personal-text") {
+        quality_options.include_personal_text = true;
+      } else if (arg == "--profile") {
+        profile = RequireValue(argc, argv, i, "--profile");
+      } else if (arg == "--profile-file") {
+        const auto value = RequireValue(argc, argv, i, "--profile-file");
+        if (value.empty()) throw std::invalid_argument("--profile-file requires a non-empty path");
+        profile_file = azookey::bench::Utf8Path(value);
+      } else if (arg == "--max-p95-ms") {
         max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
       } else if (arg == "--json") {
         json_output = true;
@@ -288,12 +358,54 @@ int main(int argc, char** argv) {
           throw std::invalid_argument("--lattice must be on or off");
         }
         lattice_enabled = value == "on";
+      } else if (hide_arguments) {
+        throw std::invalid_argument("unknown option at argument " + std::to_string(i));
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
     }
-    if (quality_options.eval_path.empty() && (!dict_dir.empty() || lattice_enabled)) {
-      throw std::invalid_argument("--dict-dir and --lattice require --eval");
+    if (personal_eval) {
+      for (const auto& option : seen_options) {
+        if (!kPersonalEvalOptions.contains(option)) {
+          throw std::invalid_argument(option + " cannot be combined with --personal-eval");
+        }
+      }
+      if (output_path.empty()) {
+        throw std::invalid_argument("--output is required with --personal-eval");
+      }
+      if (!quality_options.per_case_path.empty() && !quality_options.include_personal_text) {
+        throw std::invalid_argument(
+            "--per-case requires --include-personal-text with --personal-eval");
+      }
+    } else if (!learning_path.empty() || !settings_path.empty() || max_cases ||
+               quality_options.include_personal_text) {
+      throw std::invalid_argument(
+          "--learning, --settings, --max-cases and --include-personal-text require "
+          "--personal-eval");
+    }
+    // A personal run is a conversion-quality run without an --eval file.
+    const bool quality_run = !quality_options.eval_path.empty() || personal_eval;
+    if (profile && !profile_file.empty()) {
+      throw std::invalid_argument("--profile and --profile-file cannot be combined");
+    }
+    if ((profile || !profile_file.empty()) && !quality_run) {
+      throw std::invalid_argument("--profile requires --eval or --personal-eval");
+    }
+    if ((profile || !profile_file.empty()) && quality_options.model.empty()) {
+      throw std::invalid_argument("--profile requires --model");
+    }
+    if (!profile_file.empty()) {
+      std::string profile_error;
+      profile = azookey::bench::ReadBenchProfileFile(profile_file, &profile_error);
+      if (!profile) throw std::invalid_argument(profile_error);
+    } else if (profile) {
+      std::string profile_error;
+      if (!azookey::bench::ValidateBenchProfile(*profile, &profile_error)) {
+        throw std::invalid_argument(profile_error);
+      }
+    }
+    if (!quality_run && (!dict_dir.empty() || lattice_enabled)) {
+      throw std::invalid_argument("--dict-dir and --lattice require --eval or --personal-eval");
     }
     // The shipped default is on, so a run with the bundled dictionaries is on unless told
     // otherwise (conversion-quality-benchmark-spec section 7).
@@ -310,13 +422,15 @@ int main(int argc, char** argv) {
     if (quality_options.typo_mode != "off") {
       throw std::invalid_argument("--typo-mode supports only off until M55");
     }
-    if (quality_options.eval_path.empty() &&
-        (!quality_options.per_case_path.empty() || quality_options.category != "all" ||
-         quality_options.typo_mode != "off")) {
+    if (!quality_run && (!quality_options.per_case_path.empty() ||
+                         quality_options.category != "all" || quality_options.typo_mode != "off")) {
       throw std::invalid_argument("conversion-quality options require --eval");
     }
-    if (quality_options.eval_path.empty() && (nll_enabled || !decode_stats_path.empty())) {
-      throw std::invalid_argument("--nll and --decode-stats require --eval");
+    if (!quality_run && nll_enabled) {
+      throw std::invalid_argument("--nll requires --eval or --personal-eval");
+    }
+    if (quality_options.eval_path.empty() && !decode_stats_path.empty()) {
+      throw std::invalid_argument("--decode-stats requires --eval");
     }
     if (nll_enabled && quality_options.model.empty()) {
       throw std::invalid_argument("--nll requires --model");
@@ -354,6 +468,68 @@ int main(int argc, char** argv) {
     std::cerr << ex.what() << std::endl;
     PrintUsage(argv[0]);
     return 2;
+  }
+
+  // Spec section 15.2: the store and the settings at the Host's default locations unless given.
+  // Only resolved here: nothing creates, migrates or locks them.
+  azookey::bench::PersonalEvaluationInput personal_input;
+  if (personal_eval) {
+    const bool explicit_settings = !settings_path.empty();
+    if (learning_path.empty() || settings_path.empty()) {
+      azookey::host::UserDataPathInputs inputs;
+      inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
+      const auto defaults = azookey::host::ResolveUserDataPaths(inputs);
+      if (!defaults) {
+        std::cerr << "cannot resolve the default user data location; pass --learning and --settings"
+                  << std::endl;
+        return 2;
+      }
+      if (learning_path.empty()) learning_path = defaults->learning_path;
+      if (settings_path.empty()) settings_path = defaults->settings_path;
+    }
+    // weakly_canonical can throw; an unusable path is an input error like the others.
+    try {
+      const auto v2_path = azookey::learning::LearningStoreV2PathFor(learning_path);
+      for (const auto& written : {output_path, quality_options.per_case_path}) {
+        for (const auto& input :
+             {learning_path, azookey::learning::EncryptedPathFor(learning_path), v2_path,
+              azookey::learning::EncryptedPathFor(v2_path), settings_path}) {
+          if (SamePath(written, input)) {
+            throw std::invalid_argument(
+                "--output and --per-case must differ from the learning store and the settings");
+          }
+        }
+      }
+      if (SamePath(output_path, quality_options.per_case_path)) {
+        throw std::invalid_argument("--output and --per-case must differ");
+      }
+    } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
+      return 2;
+    }
+    std::string error;
+    const auto privacy =
+        azookey::bench::LoadPersonalPrivacy(settings_path, explicit_settings, &error);
+    if (!privacy) {
+      std::cerr << error << std::endl;
+      return 2;
+    }
+    // Read-only and never handed to the engine, so it is neither migrated nor saved. A path the
+    // stream cannot read (libstdc++ throws for a directory) is the same input error as a failed
+    // load, with a fixed message.
+    try {
+      azookey::learning::LearningStore personal_store(learning_path);
+      size_t malformed_rows = 0;
+      if (!personal_store.LoadReadOnly(&malformed_rows)) {
+        throw std::runtime_error("load failed");
+      }
+      personal_input = azookey::bench::BuildPersonalCases(
+          personal_store.All(), malformed_rows, *privacy,
+          max_cases.value_or(azookey::bench::kDefaultPersonalMaxCases));
+    } catch (const std::exception&) {
+      std::cerr << "cannot read the learning store; evaluation does not run" << std::endl;
+      return 2;
+    }
   }
 
   std::optional<azookey::bench::TemporaryLearningFile> learning_file;
@@ -417,8 +593,21 @@ int main(int argc, char** argv) {
     }
   }
   quality_options.lattice = *lattice_enabled ? "on" : "off";
+  // Recorded from the engine, so the compatibility key reflects the setting it ran with.
+  quality_options.nll = engine.config().nll.enabled ? "on" : "off";
+  if (profile) {
+    // Spec section 15.5: only a format with [PROF] can carry the profile.
+    const auto format = engine.health_snapshot().prompt_format;
+    if (!format || !azookey::host::ZenzaiPromptFormatUsesInstructionProfile(*format)) {
+      std::cerr << "--profile needs a Zenzai model whose prompt format has [PROF]" << std::endl;
+      return 2;
+    }
+    engine.SetBenchInstructionProfile(*profile);
+    quality_options.profile_sha256 = azookey::learning::Sha256Hex(*profile);
+    if (!personal_eval) std::cerr << azookey::bench::kUnsaltedHashWarning << std::endl;
+  }
 
-  if (!quality_options.eval_path.empty()) {
+  if (!quality_options.eval_path.empty() || personal_eval) {
     quality_options.output_path = output_path;
     quality_options.baseline_path = baseline_path;
     quality_options.build_id = AZOOKEY_BENCH_COMMIT;
@@ -446,8 +635,7 @@ int main(int argc, char** argv) {
     std::string error;
     uint64_t request_id = 0;
     uint64_t decode_stats_call = 0;
-    const bool ok = azookey::bench::RunConversionQualityEvaluation(
-        quality_options,
+    const azookey::bench::CandidateQuery query =
         [&engine, &request_id, &trace_logger, &quality_options, &decode_stats, &decode_stats_call](
             const std::string& input, const std::string& context) {
           const auto now = static_cast<uint64_t>(
@@ -467,8 +655,11 @@ int main(int argc, char** argv) {
             if (!decode_stats) throw std::runtime_error("cannot write decode stats output");
           }
           return candidates;
-        },
-        &error);
+        };
+    const bool ok = personal_eval ? azookey::bench::RunPersonalEvaluation(
+                                        quality_options, personal_input, query, std::cerr, &error)
+                                  : azookey::bench::RunConversionQualityEvaluation(quality_options,
+                                                                                   query, &error);
     if (!ok) {
       std::cerr << error << std::endl;
       return 2;

@@ -15,10 +15,10 @@ if(WIN32)
   target_link_libraries(azookey_benchmark_result PRIVATE shell32)
 endif()
 
-add_library(azookey_conversion_quality STATIC ConversionQuality.cpp)
+add_library(azookey_conversion_quality STATIC ConversionQuality.cpp PersonalEval.cpp)
 target_include_directories(azookey_conversion_quality PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(azookey_conversion_quality
-  PUBLIC azookey_core
+  PUBLIC azookey_core azookey_learning
   PRIVATE azookey_ipc azookey_project_options azookey_project_warnings
 )
 if(WIN32)
@@ -125,6 +125,14 @@ if(AZOOKEY_BUILD_TESTS)
   )
   azookey_discover_tests(conversion_quality_tests)
 
+  # M74 personal regression bench (conversion-quality-benchmark-spec section 15.9).
+  add_executable(personal_eval_tests personal_eval_test.cpp)
+  target_link_libraries(personal_eval_tests
+    PRIVATE azookey_conversion_quality azookey_learning azookey_ipc GTest::gtest_main
+            azookey_project_options azookey_project_warnings
+  )
+  azookey_discover_tests(personal_eval_tests)
+
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
     azookey_trace_viewer
@@ -224,6 +232,14 @@ if(AZOOKEY_BUILD_TESTS)
                      "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-dict-dir"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertDictionaryBundleConfig.cmake")
     set_tests_properties(azookey_conversion_quality_dict_dir PROPERTIES TIMEOUT 30)
+    # M74: the personal bench on a synthetic plaintext store in a temporary directory only.
+    add_test(NAME azookey_personal_eval_smoke
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/personal-eval-smoke"
+                     "-DWITH_LLAMA=${AZOOKEY_WITH_LLAMA_CPP}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertPersonalEvalOutput.cmake")
+    set_tests_properties(azookey_personal_eval_smoke PROPERTIES TIMEOUT 120)
   endif()
   # The bundled dictionary is read in place by path, never copied into bench/data.
   add_test(NAME azookey_mixed_english_quality_gate

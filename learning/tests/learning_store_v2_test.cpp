@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -156,6 +157,42 @@ TEST(LearningStoreV2Test, ReadOnlyMigrationAndFailedSaveKeepLegacyFile) {
   EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), original);
   EXPECT_FALSE(
       std::filesystem::exists(learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path))));
+}
+
+TEST(LearningStoreV2Test, ReadOnlyLoadCountsMalformedRowsAndLeavesTheFile) {
+  ScopedLearningDirectory directory("azookey_learning_v2_read_only_malformed");
+  const auto path = directory.LegacyPath();
+  const auto v2_path = learning::LearningStoreV2PathFor(path);
+  ASSERT_TRUE(learning::WriteProtectedText(
+      v2_path,
+      std::string(learning::kLearningStoreV2Header) +
+          "\nにほん\t日本\t0.8\t1999999000\t1\t0\t0\t\tcommit\t\nnot a row\nbroken\trow\n",
+      learning::test::Crypto()));
+  const auto original = ReadBytes(learning::EncryptedPathFor(v2_path));
+  const auto names = [&path] {
+    std::vector<std::string> found;
+    for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
+      found.push_back(entry.path().filename().string());
+    }
+    std::sort(found.begin(), found.end());
+    return found;
+  };
+  const auto before = names();
+  const auto written_at = std::filesystem::last_write_time(learning::EncryptedPathFor(v2_path));
+  LearningStore store(path, &learning::test::Crypto());
+  size_t malformed = 99;
+  ASSERT_TRUE(store.LoadReadOnly(&malformed));
+  EXPECT_EQ(malformed, 2u);
+  EXPECT_EQ(store.size(), 1u);
+  // No .corrupt-* copy and no rewrite: the next save is what would keep the file aside.
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(v2_path)), original);
+  EXPECT_EQ(std::filesystem::last_write_time(learning::EncryptedPathFor(v2_path)), written_at);
+  EXPECT_EQ(names(), before);
+
+  size_t none = 99;
+  LearningStore missing(path.parent_path() / "absent.tsv", &learning::test::Crypto());
+  EXPECT_FALSE(missing.LoadReadOnly(&none));
+  EXPECT_EQ(none, 0u);
 }
 
 TEST(LearningStoreV2Test, FailedReadBackKeepsLegacyFileUntilVerifiedSave) {

@@ -121,7 +121,8 @@ class LearningStore {
 
   bool Load();
   // Load without migrating a legacy plaintext file or otherwise changing the source files.
-  bool LoadReadOnly();
+  // `malformed_rows`, when given, receives the number of rows skipped because they did not parse.
+  bool LoadReadOnly(size_t* malformed_rows = nullptr);
   // retry_budget bounds transient file-conflict retries; zero tries once.
   bool Save(std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) const;
   void Reset();
@@ -186,7 +187,7 @@ class LearningStore {
   ImportCounts Merge(const LearningStore& other, ImportConflictPolicy policy);
 
  private:
-  bool LoadImpl(bool migrate_plaintext);
+  bool LoadImpl(bool migrate_plaintext, size_t* malformed_rows);
   // nullopt removes every row.
   bool RewriteLegacyFile(const std::optional<std::pair<std::string, std::string>>& pair,
                          bool* removed_rows) const;

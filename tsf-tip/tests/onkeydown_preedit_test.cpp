@@ -21788,8 +21788,8 @@ TEST(TsfTipSegmentEditingTest, PartialCommitSendsNoTypoObservation) {
     ASSERT_TRUE(h.Press(VK_BACK));
     TypeTypoRomaji(h, "KU");
     ASSERT_EQ(h.service.preedit_kana_, "かきく");
-    ASSERT_TRUE(
-        PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(KakikuCandidates()); }));
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(KakikuCandidates()); }));
     ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
   };
   {

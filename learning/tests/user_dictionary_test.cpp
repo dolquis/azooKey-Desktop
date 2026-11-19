@@ -441,6 +441,27 @@ TEST(UserDictionaryPosTest, UnknownMembersAndUnknownPosSurviveSaveAndLoad) {
   std::filesystem::remove_all(root);
 }
 
+// Section 3.2: in a version 1 dictionary, which has no part of speech, the
+// unknown members of the root and of an entry survive byte for byte.
+TEST(UserDictionaryPosTest, Version1UnknownMembersSurviveByteForByte) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_v1_unknown";
+  const auto path = root / "user_dict.json";
+  std::filesystem::remove_all(root);
+  constexpr std::string_view kText =
+      R"({"entries":[{"cid":12,"note":{"by":"v9","tags":["a",null,true]},"ruby":"にほんご",)"
+      R"("value":-1.5,"word":"日本語"}],"future_root":[1,2.5,"x"],"version":1})";
+  {
+    al::UserDictionary dict(path, &al::test::Crypto());
+    ASSERT_TRUE(dict.LoadText(kText));
+    EXPECT_EQ(dict.SerializeText(), kText);
+    ASSERT_TRUE(dict.Save());
+  }
+  al::UserDictionary loaded(path, &al::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.SerializeText(), kText);
+  std::filesystem::remove_all(root);
+}
+
 // Section 3.2: a `pos` that is not a string is no part of speech; it is kept,
 // and with no other part of speech the dictionary is written as version 1.
 TEST(UserDictionaryPosTest, NonStringPosIsKeptAndWritesVersion1) {

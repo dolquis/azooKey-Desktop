@@ -64,6 +64,7 @@ AppProfiles ParseAppProfiles(const j::Object& object) {
     SetBool(fields, "preferTechnicalTerms", &profile.prefer_technical_terms);
     SetEnum(fields, "privacyMode", kProfilePrivacyModes, &profile.privacy_mode);
     SetEnum(fields, "bracketPairing", kProfileBracketPairings, &profile.bracket_pairing);
+    SetBool(fields, "inputScopeSwitching", &profile.input_scope_switching);
     if (const auto it = fields.find("candidateTagBoosts");
         it != fields.end() && it->second.IsObject()) {
       for (const auto& [tag, boost] : it->second.AsObject()) {
@@ -102,6 +103,9 @@ j::Object AppProfilesToJson(const AppProfiles& profiles) {
     }
     if (profile.privacy_mode) fields["privacyMode"] = j::Value(*profile.privacy_mode);
     if (profile.bracket_pairing) fields["bracketPairing"] = j::Value(*profile.bracket_pairing);
+    if (profile.input_scope_switching) {
+      fields["inputScopeSwitching"] = j::Value(*profile.input_scope_switching);
+    }
     output.emplace(key, j::Value(std::move(fields)));
   }
   return output;

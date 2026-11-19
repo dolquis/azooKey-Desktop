@@ -27,6 +27,8 @@ struct AppProfile {
   std::map<std::string, double> candidate_tag_boosts;
   std::optional<std::string> privacy_mode;
   std::optional<std::string> bracket_pairing;
+  // M67 (app-profile-spec section 13.6).
+  std::optional<bool> input_scope_switching;
 
   bool operator==(const AppProfile&) const = default;
 };

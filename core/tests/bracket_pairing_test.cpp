@@ -61,6 +61,24 @@ TEST(BracketAppPolicyTest, DenylistUnionsSeedsWhileAllowlistUsesOnlyExplicitName
   EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"notepad.exe", "", true}));
 }
 
+// M67 (app-profile-spec §13.5, §13.6): the TIP snapshot answers the effective
+// inputScopeSwitching, true unless a layer says false.
+TEST(InputScopeSwitchingSettingTest, ProfilesOverlayTheRootAndUnreadableSettingsStayOn) {
+  EXPECT_TRUE(InputScopeSwitchingEnabledForApp(ParseBracketSettings("{}"), {"a.exe", "", true}));
+  EXPECT_TRUE(InputScopeSwitchingEnabledForApp(ParseBracketSettings("not json"), {}));
+  EXPECT_FALSE(InputScopeSwitchingEnabledForApp(
+      ParseBracketSettings(R"({"inputScopeSwitching":false})"), {"a.exe", "", true}));
+  const auto settings = ParseBracketSettings(R"({"inputScopeSwitching":false,"profilesByApp":{
+      "msedge.exe":{"inputScopeSwitching":true},"Code.exe":{"style":"technical"}}})");
+  EXPECT_TRUE(InputScopeSwitchingEnabledForApp(settings, {"MSEDGE.EXE", "", true}));
+  EXPECT_FALSE(InputScopeSwitchingEnabledForApp(settings, {"code.exe", "", true}));
+  const auto off = ParseBracketSettings(R"({"profilesByApp":{
+      "default":{"inputScopeSwitching":false},"chrome.exe":{"inputScopeSwitching":true}}})");
+  EXPECT_FALSE(InputScopeSwitchingEnabledForApp(off, {"notepad.exe", "", true}));
+  EXPECT_FALSE(InputScopeSwitchingEnabledForApp(off, {}));
+  EXPECT_TRUE(InputScopeSwitchingEnabledForApp(off, {"chrome.exe", "", true}));
+}
+
 TEST(BracketAppPolicyTest, ProfileFieldsOverlayProcessWindowAndDefaultBeforeLists) {
   const auto settings = ParseBracketSettings(R"({"bracketPairing":true,
     "bracketPairingApps":["blocked.exe"],"profilesByApp":{

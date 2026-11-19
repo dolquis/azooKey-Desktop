@@ -28,7 +28,8 @@ std::optional<j::Value> Validate(std::string_view key, const j::Value& value) {
   if (key == "profileName" || key == "promptPrefix") {
     if (value.IsString()) return value;
   } else if (key == "predictionEnabled" || key == "sentenceCompletion" ||
-             key == "learningEnabled" || key == "preferTechnicalTerms") {
+             key == "learningEnabled" || key == "preferTechnicalTerms" ||
+             key == "inputScopeSwitching") {
     if (value.IsBool()) return value;
   } else if (key == "aiBackend") {
     if (Enum(value, {"auto", "local-zenzai", "openai", "none"})) return value;
@@ -150,7 +151,8 @@ AppProfileResolver AppProfileResolver::FromSettings(const j::Value& settings,
                        {"preferTechnicalTerms", false},
                        {"candidateTagBoosts", j::Object{}},
                        {"privacyMode", "inherit"},
-                       {"bracketPairing", "auto"}};
+                       {"bracketPairing", "auto"},
+                       {"inputScopeSwitching", true}};
   for (auto& [key, value] : resolver.globals_) {
     // The root bracketPairing boolean is a separate master switch. Only
     // profiles may carry the enum, even when a hand-edited root is malformed.

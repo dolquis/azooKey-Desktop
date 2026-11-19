@@ -105,6 +105,29 @@ TEST(AppProfileResolverTest, WindowsUnicodeProcessMatchAlsoReportsDeterministicC
   EXPECT_EQ(warnings.front(), "app profile case collision: greatest original key selected");
 }
 #endif
+// M67 (app-profile-spec §13.6): a profile that leaves inputScopeSwitching out
+// inherits the lower layer, then the root boolean; an invalid value inherits.
+TEST(AppProfileResolverTest, InputScopeSwitchingInheritsLowerLayersAndTheRootBoolean) {
+  const auto resolver = Parse(R"({"inputScopeSwitching":false,"profilesByApp":{
+    "default":{"inputScopeSwitching":true},"Editor":{"style":"polite"},
+    "code.exe":{"inputScopeSwitching":false},"other.exe":{"inputScopeSwitching":"no"}}})");
+  const auto value = [&](const azookey::core::ForegroundApp& app) {
+    const auto field = resolver.ResolveField("inputScopeSwitching", app);
+    return field && field->IsBool() ? std::optional<bool>(field->AsBool()) : std::nullopt;
+  };
+  EXPECT_EQ(value({"code.exe", "Editor", true}), false);
+  EXPECT_EQ(value({"notepad.exe", "Editor", true}), true);
+  EXPECT_EQ(value({"other.exe", "", true}), true);
+  EXPECT_EQ(value({"", "", false}), true);
+  EXPECT_EQ(j::Value(Parse(R"({"inputScopeSwitching":false})").Resolve({"a.exe", "", true}))
+                .GetBool("inputScopeSwitching"),
+            false);
+  EXPECT_EQ(j::Value(Parse(R"({})").Resolve({"a.exe", "", true})).GetBool("inputScopeSwitching"),
+            true);
+  EXPECT_EQ(j::Value(Parse(R"({"inputScopeSwitching":"off"})").Resolve({"a.exe", "", true}))
+                .GetBool("inputScopeSwitching"),
+            true);
+}
 TEST(AppProfileResolverTest, SingleFieldResolutionMatchesTheCommonOverlay) {
   const auto resolver = Parse(R"({"profilesByApp":{"default":{"style":"polite"},
     "Editor":{"promptPrefix":"window"},"code.exe":{"profileName":"Code"}}})");

@@ -379,6 +379,23 @@ class ConnectionTests(unittest.TestCase):
         left, right = dictbuild.matrix_indices(data)
         self.assertEqual((list(left), list(right)), ([0, 0xFFFF, 1], [0, 0xFFFF, 0xFFFF, 1]))
 
+    def test_matrix_merges_rows_and_columns_that_hold_the_same_costs(self):
+        # Rows 1 and 3 are equal, and so are columns 0 and 2 (lattice spec section 9, step 1).
+        costs = {0: [5, 6, 5], 1: [7, 8, 7], 2: [9, 1, 9], 3: [7, 8, 7]}
+        matrix = self.matrix("4 3", {(r, l): costs[r][l] for r in range(4) for l in range(3)})
+        data = dictbuild.matrix_section(dictbuild.read_matrix(matrix), {0, 1, 2}, {0, 1, 2, 3})
+        self.assertEqual(struct.unpack_from("<4I", data), (3, 4, 2, 3))
+        left, right = dictbuild.matrix_indices(data)
+        self.assertEqual((list(left), list(right)), ([0, 1, 0], [0, 1, 2, 1]))
+        # Indices in order of first use; every original cell reads back through the tables.
+        head = 24 + 2 * (3 + 4)
+        cells = struct.unpack_from("<6h", data, head + (-head % 8))
+        self.assertEqual(cells, (5, 6, 7, 8, 9, 1))
+        for r in range(4):
+            for l in range(3):
+                self.assertEqual(cells[right[r] * 2 + left[l]], costs[r][l])
+        self.assertEqual(data, dictbuild.matrix_section(dictbuild.read_matrix(matrix), {0, 1, 2}, {0, 1, 2, 3}))
+
     def test_matrix_rejects_missing_duplicate_and_out_of_range_cells(self):
         cells = {(r, l): 1 for r in range(3) for l in range(3)}
         cases = {
@@ -443,9 +460,12 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(lattice["penalties"], {"P_kata_variant": 6000, "P_kata_own": 0, "P_node": 3000, "P_unk": 20000})
         self.assertEqual(lattice["C"], 10000)
         self.assertEqual(lattice["default_word_cost"], 5000)  # median_low of 3000, 5000, 7000, 9000
-        # CMAT holds id 0 and every id of every row, whichever layer the word goes to.
+        # CMAT holds id 0 and every id of every row, whichever layer the word goes to. The left ids
+        # 700 and 900 have the same column ((r * 7 + l * 3) % 200), so they share one index.
         raw_left, raw_right, left_count, right_count = struct.unpack_from("<4I", sections[b"CMAT"])
-        self.assertEqual((raw_left, raw_right, left_count, right_count), (6000, 6000, 8, 8))
+        self.assertEqual((raw_left, raw_right, left_count, right_count), (6000, 6000, 7, 8))
+        left, _ = dictbuild.matrix_indices(sections[b"CMAT"])
+        self.assertEqual(left[700], left[900])
         # Only the kana words: かく (two variants), さ, は, ひと.
         self.assertEqual([len(v) for v in self.variants(image)], [2, 1, 1, 1])
 

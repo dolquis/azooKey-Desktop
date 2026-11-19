@@ -534,7 +534,8 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
 - Host は 1 回の取り込みを RuntimeLogger の `persistent_edit`（`docs/learning-data-management-spec.md` §13）に、
   `op` を `user_dict_import` として記録する。項目は同 §13 の項目と、件数（`added`、`replaced`、`kept`、
   `duplicates_in_file`、除いた行の合計）である。語、読み、パスは記録しない。`total_ms` は待ちの予算と同じく解析を終えた時刻から
-  数え、受信から解析を終えるまでの時間は `parse_ms` に記録する。
+  数え、受信から解析を終えるまでの時間は `parse_ms` に記録する。`dry_run` と、ロックを取る前に終わった取り込み（`blocked`、パスの検査や解析での失敗など）は記録しない。
+  ロックを取って保存を試みた取り込みは、失敗（`busy`・`save_failed` など）も記録する。
 
 ## 7. IPC と CLI
 

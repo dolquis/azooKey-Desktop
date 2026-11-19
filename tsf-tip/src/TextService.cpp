@@ -4466,6 +4466,9 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
   LogKeyPathContext("push", pic);
   ClearReconversionState();
   last_learned_commit_pairs_.clear();
+  // commit-undo-spec §4.2: a context push or pop drops the commit undo.
+  commit_undo_target_.reset();
+  pending_undo_correction_.reset();
   AdviseTextEditSink(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
@@ -4480,6 +4483,9 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
   AZOOKEY_ASSERT_UI_THREAD();
   LogKeyPathContext("pop", pic);
+  // commit-undo-spec §4.2, whichever context leaves.
+  commit_undo_target_.reset();
+  pending_undo_correction_.reset();
   if (pic && SameComIdentity(pic, text_edit_context_)) {
     UnadviseTextEditSink();
     ITfDocumentMgr* document = nullptr;
@@ -11860,6 +11866,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         return end_hr;
       }
       core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
+      // commit-undo-spec §7: a put-back input that ends uncommitted owes no "undo".
+      service_->pending_undo_correction_.reset();
       return S_OK;
     };
     // DEV-1954: text a composition leaves in the document keeps no preedit
@@ -11901,6 +11909,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         }
         comp->Release();
         core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
+        // Ended with the app's text, not committed (commit-undo-spec §6, §7).
+        service_->pending_undo_correction_.reset();
       }
       service_->external_edit_end_pending_ = false;
     }

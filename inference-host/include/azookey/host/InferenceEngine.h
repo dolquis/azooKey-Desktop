@@ -113,6 +113,17 @@ struct DictionaryLayerConfig {
   bool app_specific_dictionary_enabled{true};
 };
 
+// M65 lattice conversion (docs/lattice-conversion-spec.md section 3). Internal switches, not
+// settings.json keys.
+struct LatticeConfig {
+  // Stage 1 (section 3.2): the N-best on requests that do not go through the model. Off also
+  // keeps LoadBundledDictionaryLayers from loading lattice_core (bench --lattice off).
+  bool enabled{true};
+  // Stage 2 (section 3.3, DEV-2102): also on requests the model answered. Its score band is not
+  // decided, so no candidates are added while it is on.
+  bool with_model{false};
+};
+
 // M25 power-saving lanes (docs/copilot-pc-backend-spec.md section 6.2). Fast: one Zenzai pass with
 // a single beam. Heavy: the full beam and the extra passes on top of it (the NLL rerank).
 enum class InferenceLane { Fast, Heavy };
@@ -127,6 +138,7 @@ struct EngineConfig {
   // M60 inline English candidates (settings inlineEnglish*).
   EnglishCandidateConfig english;
   NllConfig nll;
+  LatticeConfig lattice;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
@@ -359,6 +371,8 @@ class InferenceEngine {
     bool loaded;
     std::string error;
   };
+  // The static layers, then, while EngineConfig::lattice.enabled, lattice_core.azdic
+  // (docs/lattice-conversion-spec.md section 8.2) as the last result.
   std::vector<DictionaryLoadResult> LoadBundledDictionaryLayers(
       const std::filesystem::path& directory);
   bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
@@ -452,7 +466,8 @@ class InferenceEngine {
   //   kAmbiguousReadingTypedKept candidates whose surfaces it lacks; otherwise
   //   kana's.
   // - Otherwise (no model) kana's candidates come back, followed by the
-  //   alternative's dictionary candidates whose surfaces kana's lack.
+  //   alternative's dictionary candidates whose surfaces kana's lack. The
+  //   alternative's lattice paths are not among them.
   CandidatesResult QueryAmbiguousCandidatesEx(const std::string& kana,
                                               const std::vector<std::string>& alternatives,
                                               const std::string& context, uint64_t now_epoch_sec,
@@ -584,6 +599,13 @@ class InferenceEngine {
                                          const InferenceTelemetry* telemetry,
                                          const TagBoosts* tag_boosts = nullptr,
                                          const MixedConversionOptions* mixed = nullptr);
+  // The lattice N-best of `kana` as candidates (docs/lattice-conversion-spec.md section 3.4).
+  // `failed` reports a vocabulary failure or an invalid surface (section 3.6).
+  std::vector<core::Candidate> LatticeCandidatesLocked(
+      const std::string& kana, size_t max_paths, const std::atomic<bool>* cancel,
+      std::optional<std::chrono::steady_clock::time_point> deadline, bool& failed) const;
+  // Logs the static layers whose CONN the lattice does not use (section 3.6).
+  void LogLatticeConnectionsLocked() const;
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

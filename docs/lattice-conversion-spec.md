@@ -162,6 +162,9 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 無効になったのが lattice_core 自身なら、表の 1 行目によりラティスを作らない。
 
 どの縮退も、理由をログに残し、Host を止めない。ログには読みと表層を入れない（`docs/observability-spec.md` §7.6）。
+lattice_core の読み込みの結果は同梱辞書の読み込みと同じ `static_dictionary_load`（`layer` が `lattice_core.azdic`）に、
+層の `CONN` を使わないことは `lattice_connections`（`layer` と `result=unused`）に、要求にラティスの候補を足さなかった
+ことは `lattice_conversion`（`result=failed`）に出す。
 
 ## 4. ラティスの構築
 

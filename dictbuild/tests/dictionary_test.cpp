@@ -644,13 +644,17 @@ TEST(DictionaryHost, ReservesConverterPredictionsWithLiveReranker) {
 TEST(DictionaryHost, BundledDiscoveryReportsErrorsAndContinues) {
   host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
   const auto results = engine.LoadBundledDictionaryLayers(Fixture("bundled"));
-  ASSERT_EQ(results.size(), 4U);
+  ASSERT_EQ(results.size(), 5U);
   EXPECT_FALSE(results[0].loaded);
   EXPECT_EQ(results[0].error, "layer id mismatch");
   EXPECT_FALSE(results[1].loaded);
   EXPECT_FALSE(results[1].error.empty());
   EXPECT_TRUE(results[3].loaded);
   EXPECT_TRUE(results[3].error.empty());
+  // DEV-2101: lattice_core comes last; without it only the lattice is off.
+  EXPECT_EQ(results[4].name, "lattice_core.azdic");
+  EXPECT_FALSE(results[4].loaded);
+  EXPECT_FALSE(results[4].error.empty());
 }
 
 TEST(DictionaryHost, SettingsApplyStaticLayerSwitchesToAllLookupDirections) {
@@ -660,8 +664,8 @@ TEST(DictionaryHost, SettingsApplyStaticLayerSwitchesToAllLookupDirections) {
   config.dictionary.technical_terms_enabled = false;
   host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, config);
   const auto loaded = engine.LoadBundledDictionaryLayers(Fixture("settings-layers"));
-  ASSERT_EQ(loaded.size(), 4u);
-  for (size_t i = 1; i < loaded.size(); ++i) ASSERT_TRUE(loaded[i].loaded) << loaded[i].error;
+  ASSERT_EQ(loaded.size(), 5u);  // The static layers, then lattice_core (absent here).
+  for (size_t i = 1; i < 4; ++i) ASSERT_TRUE(loaded[i].loaded) << loaded[i].error;
   const auto contains_fixture_word = [](const auto& candidates) {
     return std::any_of(candidates.begin(), candidates.end(),
                        [](const auto& candidate) { return candidate.surface == "high0"; });
@@ -730,7 +734,9 @@ TEST(DictionaryHost, ShippedBundleLoadsAndReverseConverts) {
       << technical.Error();
   host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
   const auto results = engine.LoadBundledDictionaryLayers(directory);
-  ASSERT_EQ(results.size(), 4U);
+  ASSERT_EQ(results.size(), 5U);
+  EXPECT_EQ(results[4].name, "lattice_core.azdic");
+  EXPECT_TRUE(results[4].loaded) << results[4].error;
   EXPECT_EQ(results[1].name, "sudachi_lexicon.azdic");
   EXPECT_TRUE(results[1].loaded) << results[1].error;
   EXPECT_EQ(engine.ReverseConvert("東京", 0), "とうきょう");

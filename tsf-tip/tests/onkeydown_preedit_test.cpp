@@ -11555,9 +11555,13 @@ TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedR
   h.service.set_local_time_for_test(kDynamicCandidateTime);
   h.service.set_ipc_pipe_name_for_test(pipe_name);
   h.service.start_ipc_worker_for_test();
-  ASSERT_TRUE(WaitUntil([&] { return h.service.date_time_rewriter_enabled_for_test(); },
-                        std::chrono::seconds(10)));
-  EXPECT_TRUE(h.service.calculator_rewriter_enabled_for_test());
+  // The worker stores the two flags one after the other.
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return h.service.date_time_rewriter_enabled_for_test() &&
+               h.service.calculator_rewriter_enabled_for_test();
+      },
+      std::chrono::seconds(10)));
   TypeTypoRomaji(h, "KIYOU");
   ASSERT_EQ(h.service.preedit_kana_, "きよう");
   const bool inserted = WaitUntil(

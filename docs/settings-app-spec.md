@@ -94,7 +94,7 @@ Microsoft Learn の事実は
 
 | 群 | ペイン | 内容 |
 |---|---|---|
-| 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
+| 設定 | 入力 | 入力方式（`convertKeysAction` / `fullWidthSpace` / `inputScopeSwitching` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled`）/ 句読点（`punctuationConversion` と動的句読点）/ ローマ字の一括変換 |
 | 設定 | 候補 | インライン英単語候補（`mixedEnglishAutoConversion` を含む）/ 候補リライター（数字・カタカナ・記号・絵文字）/ カッコ補完（カッコの字形を決める `inputMode` を含む）/ `maxCandidates` |
 | 設定 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意、Host が返す層の状態〔`QueryDiagnostics` の `neologd_layer`〕の表示を含む）/ `autoWordRegistration` / タイプミス学習 / 「学習」ペインのユーザー辞書タブを開くボタン |
 | 設定 | AI 変換 | `model.enabled` / `models` フォルダのモデル一覧と検証結果（`ListModels`）/ ベンチマーク（`BenchmarkModel`）/ `model.selectedPath` の選択（「選択を外す」で空の未選択に戻す。§3.7）/ `model.benchmarkHistory` の表示 / 既定の catalog の entry の一覧と取得ボタン（`FetchCatalogModel` と進捗の表示。§1.6.1「利用者の操作による取得」）と取得中の中止（`CancelCatalogFetch`。`model-management-spec.md` §6.1）（`model-management-spec.md` §4 / §6）/ `model.backendPreference` / `powerProfile` / `inferenceThreads` / `maxContextLength` |
@@ -309,6 +309,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 候補 | Phase 5（基本） | 即時 | `bracket-pairing-spec.md` §4.4（表示名「カッコ補完の字形」） |
 | `convertKeysAction` | enum `default`/`imeOnOff` | `default` | 入力 | DEV-1736 | 即時 | `tsf-deep-integration-spec.md` §3.1.1 |
 | `fullWidthSpace` | bool | `true` | 入力 | DEV-1814 | 即時 | `tsf-deep-integration-spec.md` §3.7 |
+| `inputScopeSwitching` | bool | `true` | 入力（`profilesByApp` の各プロファイルにも同名のフィールド。アプリ別の編集ダイアログで「指定しない（継承）」を選べる） | M67 | 即時 | `app-profile-spec.md` §13.6 |
 | `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
 | `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
 | `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
@@ -532,6 +533,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
 | `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（`powerProfile` / `inferenceThreads` / `maxContextLength` は AI 変換ペイン、`maxCandidates` は候補ペイン、実験フラグは詳細ペイン） |
 | `inputMode` / `convertKeysAction` / `fullWidthSpace` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン。`inputMode` は候補ペイン） |
+| `inputScopeSwitching` | — | M67（入力ペインとアプリ別の編集ダイアログ） |
 | 句読点・バッチ変換・インライン英単語候補・候補リライター・カッコ補完の各キー | — | M30（句読点・バッチ変換は入力ペイン、インライン英単語候補・候補リライター・カッコ補完は候補ペイン） |
 | `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI サービスペイン） |
 | `openAiApiKey` | — | M34（AI サービスペイン。鍵は `sideload-packaging-spec` §9 DPAPI） |

@@ -336,6 +336,7 @@ TEST(SettingsFieldsTest, FieldsSitInThePanesOfTheSpecTable) {
   using Pane = azookey::settings::SettingsPane;
   const std::vector<std::pair<const char*, Pane>> expected = {
       {"convertKeysAction", Pane::Input},
+      {"inputScopeSwitching", Pane::Input},
       {"liveConversion", Pane::Input},
       {"punctuationConversion", Pane::Input},
       {"batchRomajiConversion", Pane::Input},

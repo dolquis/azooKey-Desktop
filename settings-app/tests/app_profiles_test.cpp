@@ -72,7 +72,7 @@ AppProfile CodeProfile() {
 TEST(AppProfilesTest, ParsesOnlyTheFieldsThatAreSet) {
   const auto root = j::Parse(R"({
     "code.exe": {"profileName": "Code", "aiBackend": "openai", "promptPrefix": "",
-                 "candidateTagBoosts": {"Technical": 1.5}},
+                 "candidateTagBoosts": {"Technical": 1.5}, "inputScopeSwitching": false},
     "mail.exe": {}
   })");
   ASSERT_TRUE(root);
@@ -88,6 +88,7 @@ TEST(AppProfilesTest, ParsesOnlyTheFieldsThatAreSet) {
   EXPECT_EQ(*code.prompt_prefix, "");
   EXPECT_FALSE(code.prediction_enabled);
   EXPECT_FALSE(code.privacy_mode);
+  EXPECT_EQ(code.input_scope_switching, false);
   EXPECT_EQ(code.candidate_tag_boosts.at("Technical"), 1.5);
   EXPECT_EQ(profiles.at("mail.exe"), AppProfile{});
 }
@@ -97,6 +98,7 @@ TEST(AppProfilesTest, SerializesSetFieldsAndRoundTrips) {
   profiles["Code.exe"] = CodeProfile();
   profiles["Code.exe"].prompt_prefix = "";
   profiles["default"].privacy_mode = "secure";
+  profiles["mail.exe"].input_scope_switching = true;
 
   const auto object = azookey::settings::AppProfilesToJson(profiles);
 
@@ -105,6 +107,9 @@ TEST(AppProfilesTest, SerializesSetFieldsAndRoundTrips) {
   EXPECT_EQ(code.at("promptPrefix").AsString(), "");
   EXPECT_FALSE(code.contains("learningEnabled"));
   EXPECT_FALSE(code.contains("style"));
+  // Unset inherits (section 13.6): the key is left out, not written as the default.
+  EXPECT_FALSE(code.contains("inputScopeSwitching"));
+  EXPECT_TRUE(object.at("mail.exe").AsObject().at("inputScopeSwitching").AsBool());
   EXPECT_EQ(code.at("candidateTagBoosts").AsObject().at("English").AsNumber(), 1.3);
   EXPECT_EQ(object.at("default").AsObject().size(), 1u);
   EXPECT_EQ(azookey::settings::ParseAppProfiles(object), profiles);
@@ -179,6 +184,33 @@ TEST(AppProfilesDocumentTest, LoadShowsProfilesAndTheReadOnlyLegacyPrefixes) {
   EXPECT_EQ(loaded.settings.profiles_by_app, loaded.settings.profiles_by_app_loaded);
   ASSERT_EQ(loaded.settings.legacy_prompt_prefixes.size(), 1u);
   EXPECT_EQ(loaded.settings.legacy_prompt_prefixes.at("Outlook.exe"), "mail");
+}
+
+// M67 (app-profile-spec section 13.6): editing one profile keeps another's inputScopeSwitching,
+// the edited one writes it only when set, and the global key survives the save.
+TEST(AppProfilesDocumentTest, InputScopeSwitchingIsKeptWrittenAndLeftOutWhenUnset) {
+  TempDirectory dir;
+  WriteText(dir.File(), R"({
+    "inputScopeSwitching": false,
+    "profilesByApp": {"msedge.exe": {"inputScopeSwitching": true, "style": "polite"}}
+  })");
+  auto loaded = azookey::settings::LoadSettingsDocument(dir.File());
+  ASSERT_TRUE(loaded.settings.profiles_by_app);
+  ASSERT_EQ(loaded.settings.profiles_by_app->at("msedge.exe").input_scope_switching, true);
+  auto settings = loaded.settings;
+  (*settings.profiles_by_app)["code.exe"] = CodeProfile();
+  (*settings.profiles_by_app)["chrome.exe"].input_scope_switching = false;
+
+  const auto saved = azookey::settings::SaveSettingsDocument(dir.File(), settings);
+
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto root = ReadRoot(dir.File());
+  EXPECT_FALSE(root.at("inputScopeSwitching").AsBool());
+  const auto& profiles = root.at("profilesByApp").AsObject();
+  EXPECT_TRUE(profiles.at("msedge.exe").AsObject().at("inputScopeSwitching").AsBool());
+  EXPECT_EQ(profiles.at("msedge.exe").AsObject().at("style").AsString(), "polite");
+  EXPECT_FALSE(profiles.at("chrome.exe").AsObject().at("inputScopeSwitching").AsBool());
+  EXPECT_FALSE(profiles.at("code.exe").AsObject().contains("inputScopeSwitching"));
 }
 
 TEST(AppProfilesDocumentTest, ChangedProfilesAreWrittenAndLegacyPrefixesAreKept) {

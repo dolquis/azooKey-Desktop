@@ -72,6 +72,7 @@ std::vector<SettingField> BuildFields() {
       Enum("convertKeysAction", Pane::Input, "InputMethod", "default", {"default", "imeOnOff"},
            std::nullopt, true),
       Bool("fullWidthSpace", Pane::Input, "InputMethod", true, std::nullopt, true),
+      Bool("inputScopeSwitching", Pane::Input, "InputMethod", true, std::nullopt, true),
       Enum("inputStyle", Pane::Input, "InputMethod", "default", {"default", "custom"}),
       Text("customRomajiTablePath", Pane::Input, "InputMethod",
            "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv", custom_romaji),
@@ -246,7 +247,6 @@ const std::vector<std::string_view>& DedicatedSettingPaths() {
 const std::vector<UneditedSetting>& UneditedSettings() {
   static const std::vector<UneditedSetting> settings = {
       {"promptPrefixByApp", "legacy; new edits go to profilesByApp (app-profile-spec section 6)"},
-      {"inputScopeSwitching", "kept on save; the input pane item comes with DEV-2116"},
       {"backendPreference", "root tier is not bound to the UI (section 3.6)"},
       {"epPreference", "root tier is not bound to the UI (section 3.6)"},
       {"model.epPreference", "exposed once a build links the backend (section 3.7)"},

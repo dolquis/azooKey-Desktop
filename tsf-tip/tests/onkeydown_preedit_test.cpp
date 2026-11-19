@@ -1121,6 +1121,12 @@ class DocumentRange final : public FakeRange {
     *copy = new DocumentRange(document, start, end, context_);
     return S_OK;
   }
+  STDMETHODIMP IsEqualStart(TfEditCookie, ITfRange* other, TfAnchor anchor, BOOL* equal) override {
+    if (!other || !equal) return E_INVALIDARG;
+    const auto* range = static_cast<const DocumentRange*>(other);
+    *equal = start == (anchor == TF_ANCHOR_START ? range->start : range->end) ? TRUE : FALSE;
+    return S_OK;
+  }
   STDMETHODIMP GetContext(ITfContext** out) override {
     if (!out) return E_POINTER;
     *out = context_;
@@ -19478,4 +19484,668 @@ TEST(TsfTipMagicConversionTest, AQueuedRequestWaitsForTheHostWhenAConnectNotAfte
     }
     host.Stop();
   }
+}
+
+// --- M69 commit undo (docs/commit-undo-spec.md) ---
+namespace {
+constexpr LPARAM kKeyRepeat = LPARAM{1} << 30;
+
+// The fixed app and privacy of ConfigureTypoHarness, in the context the text
+// edit sink watches (commit-undo-spec §4.2 item 5), with 前 before the caret.
+void ConfigureUndoHarness(DocumentPreeditHarness& h, bool legacy = false) {
+  ConfigureTypoHarness(h, legacy);
+  h.service.set_commit_correction_supported_for_test(true);
+  h.service.set_text_edit_context_for_test(&h.context);
+  // Like a real document, ending our own composition sends no termination notice.
+  h.context.notify_owner_end = false;
+  h.context.document->text = L"前";
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+}
+
+// Ctrl+Backspace as TSF delivers it: the probe, then OnKeyDown for a claimed
+// key. True when the TIP took the key; false leaves it to the app.
+bool PressCtrlBackspace(DocumentPreeditHarness& h, LPARAM key_data = 0) {
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.Reapply();
+  BOOL probe = FALSE;
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, key_data, &probe, true, h.created),
+            S_OK);
+  BOOL eaten = FALSE;
+  if (probe)
+    EXPECT_EQ(RecordedKeyDown(h.service, &h.context, VK_BACK, key_data, &eaten, false, h.created),
+              S_OK);
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  return probe && eaten;
+}
+
+// A key the probe leaves to the app never reaches OnKeyDown.
+BOOL ProbeOnly(DocumentPreeditHarness& h, WPARAM key) {
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  EXPECT_EQ(RecordedKeyDown(h.service, &h.context, key, 0, &eaten, true, h.created), S_OK);
+  return eaten;
+}
+
+std::vector<azookey::ipc::CandidateField> KanaCandidates() {
+  return {ModelField("仮名", "かな"), ModelField("カナ", "かな")};
+}
+
+// Space and the window's answer, on the core path and on the legacy one (where
+// Space keeps the per-key query, so PressSpaceAndDeliver's check does not hold).
+void OpenCandidateWindow(DocumentPreeditHarness& h,
+                         std::vector<azookey::ipc::CandidateField> candidates) {
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+}
+
+// Types かな, opens the window and commits its candidate `index` with Enter.
+void CommitKanaCandidate(DocumentPreeditHarness& h, int index = 0) {
+  TypeTypoRomaji(h, "KANA");
+  ASSERT_EQ(h.service.preedit_kana_, "かな");
+  OpenCandidateWindow(h, KanaCandidates());
+  for (int i = 0; i < index; ++i) ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.preedit_kana_.empty());
+  ASSERT_EQ(h.service.composition_, nullptr);
+}
+
+void EndEditWithSelectionChange(DocumentPreeditHarness& h) {
+  SelectionChangedRecord record;
+  EXPECT_EQ(h.service.OnEndEdit(&h.context, 1, &record), S_OK);
+}
+
+size_t QueuedCorrections(DocumentPreeditHarness& h) {
+  return h.service.queued_corrections_for_test().size();
+}
+}  // namespace
+
+// §4.1, §5, §6: the commit right before the caret becomes the reading's
+// composition, with the caret at its end, and core asks for its candidates.
+TEST(TsfTipCommitUndoTest, CtrlBackspaceRightAfterACommitPutsTheReadingBack) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h, legacy);
+    CommitKanaCandidate(h);
+    ASSERT_EQ(h.context.document->text, L"前仮名");
+    ASSERT_TRUE(h.service.commit_undo_target_for_test());
+    const size_t observations = QueuedCount(h, azookey::ipc::MessageType::CommitObservation);
+    ASSERT_EQ(observations, 1u);
+
+    EXPECT_TRUE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前かな");
+    EXPECT_EQ(h.context.document->start, 3);
+    EXPECT_EQ(h.context.document->end, 3);
+    EXPECT_NE(h.service.composition_, nullptr);
+    EXPECT_EQ(h.service.preedit_kana_, "かな");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Composing);
+    EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かな");
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    // §7: the undo itself sends no learning message.
+    EXPECT_EQ(QueuedCount(h, azookey::ipc::MessageType::CommitObservation), observations);
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+    EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+  }
+}
+
+// §5: the put-back reading edits like a typed one, and Esc removes it.
+TEST(TsfTipCommitUndoTest, PutBackReadingEditsLikeATypedReading) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h, legacy);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_EQ(h.context.document->text, L"前かな");
+    ASSERT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.service.preedit_kana_, "か");
+    EXPECT_EQ(h.context.document->text, L"前か");
+    TypeTypoRomaji(h, "MI");
+    EXPECT_EQ(h.service.preedit_kana_, "かみ");
+    EXPECT_EQ(h.context.document->text, L"前かみ");
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    EXPECT_EQ(h.context.document->text, L"前");
+    EXPECT_EQ(h.service.composition_, nullptr);
+  }
+}
+
+// §5: Space converts the put-back reading again, and Enter commits the new
+// choice in place of the old one.
+TEST(TsfTipCommitUndoTest, PutBackReadingConvertsAgain) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+  ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"前カナ");
+  // The new commit is undone in turn.
+  EXPECT_TRUE(h.service.commit_undo_target_for_test());
+}
+
+// §5 (DEV-2121 review): with live conversion the input is Previewing and asks
+// for the live conversion again.
+TEST(TsfTipCommitUndoTest, LiveConversionPutsBackPreviewingAndAsksForTheLiveConversion) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  h.service.set_live_conversion_for_test(true);
+  TypeTypoRomaji(h, "KANA");
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Previewing);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前かな");
+  ASSERT_TRUE(h.service.commit_undo_target_for_test());
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Previewing);
+  EXPECT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かな");
+}
+
+// §4.2 item 1: the modifiers alone keep the target; any other key drops it.
+TEST(TsfTipCommitUndoTest, OnlyModifiersMayComeBeforeTheUndoKey) {
+  {
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    EXPECT_FALSE(ProbeOnly(h, VK_SHIFT));
+    EXPECT_FALSE(ProbeOnly(h, VK_CONTROL));
+    EXPECT_FALSE(ProbeOnly(h, VK_LCONTROL));
+    ASSERT_TRUE(h.service.commit_undo_target_for_test());
+    EXPECT_TRUE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前かな");
+  }
+  for (const WPARAM key : {WPARAM{VK_LEFT}, WPARAM{VK_BACK}, WPARAM{VK_DELETE}}) {
+    SCOPED_TRACE(key);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    EXPECT_FALSE(ProbeOnly(h, key));
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_EQ(h.service.composition_, nullptr);
+  }
+}
+
+// §4.2 item 5: the commit's own edit keeps the target; a later selection
+// change (a click, an app edit) drops it.
+TEST(TsfTipCommitUndoTest, SelectionChangeAfterTheCommitDropsTheTarget) {
+  {
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    EndEditWithSelectionChange(h);  // The commit's own edit session.
+    ASSERT_TRUE(h.service.commit_undo_target_for_test());
+    EXPECT_TRUE(PressCtrlBackspace(h));
+  }
+  {
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    EndEditWithSelectionChange(h);  // The commit's own edit session.
+    EndEditWithSelectionChange(h);  // The user clicks.
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+}
+
+// §4.2 item 6, §6: the session reads the commit again; a caret or text that
+// no longer matches leaves the document alone and the key to the app.
+TEST(TsfTipCommitUndoTest, CommitNoLongerBeforeTheCaretLeavesTheKeyToTheApp) {
+  {
+    SCOPED_TRACE("caret moved");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    h.context.document->start = 1;
+    h.context.document->end = 1;
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_EQ(h.service.composition_, nullptr);
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+  }
+  {
+    SCOPED_TRACE("text changed");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    h.context.document->text = L"前仮野";
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮野");
+    EXPECT_EQ(h.service.composition_, nullptr);
+  }
+  {
+    SCOPED_TRACE("selection");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    h.context.document->start = 1;
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+}
+
+// §6: a refused synchronous session changes nothing and passes the key on.
+TEST(TsfTipCommitUndoTest, RefusedEditSessionLeavesTheKeyToTheApp) {
+  for (const bool read_only : {false, true}) {
+    SCOPED_TRACE(read_only);
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    (read_only ? h.context.reject_write : h.context.lock_write) = true;
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    (read_only ? h.context.reject_write : h.context.lock_write) = false;
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_EQ(h.service.composition_, nullptr);
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    // The next Ctrl+Backspace is the app's too.
+    EXPECT_FALSE(PressCtrlBackspace(h));
+  }
+}
+
+// §6: once the composition started, a reading that cannot be written ends it
+// with the committed surface, and the key is eaten.
+TEST(TsfTipCommitUndoTest, UnwrittenReadingEndsTheCompositionWithTheSurface) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  h.context.document->fail_write = true;
+  EXPECT_TRUE(PressCtrlBackspace(h));
+  h.context.document->fail_write = false;
+  EXPECT_EQ(h.context.document->text, L"前仮名");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  EXPECT_FALSE(PressCtrlBackspace(h));
+}
+
+// §4.2 items 2-4: another context, the IME off, alphanumeric mode and a
+// composition leave Ctrl+Backspace to the app.
+TEST(TsfTipCommitUndoTest, UnmetConditionsLeaveTheKeyToTheApp) {
+  {
+    SCOPED_TRACE("another context");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    DocumentContext other;
+    other.run_edit_session = true;
+    h.keyboard_state.SetDown(VK_CONTROL, true);
+    h.keyboard_state.Reapply();
+    BOOL eaten = TRUE;
+    EXPECT_EQ(RecordedKeyDown(h.service, &other, VK_BACK, 0, &eaten, true, h.created), S_OK);
+    EXPECT_FALSE(eaten);
+    h.keyboard_state.SetDown(VK_CONTROL, false);
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+  for (const bool off : {true, false}) {
+    SCOPED_TRACE(off ? "off" : "alphanumeric");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    if (off)
+      h.service.set_keyboard_open_for_test(false);
+    else
+      h.service.set_alnum_mode_for_test(true);
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+  {
+    SCOPED_TRACE("composition");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    TypeTypoRomaji(h, "KA");
+    ASSERT_EQ(h.service.preedit_kana_, "か");
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名か");
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_EQ(h.context.document->text, L"前仮名");
+    // The key that started the composition dropped the target.
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+}
+
+// §4.1, §4.2 item 5: a context without the text edit sink records nothing, and
+// neither does a commit that goes on into the next composition.
+TEST(TsfTipCommitUndoTest, CommitsThatRecordNoTarget) {
+  {
+    SCOPED_TRACE("no text edit sink");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    h.service.set_text_edit_context_for_test(nullptr);
+    CommitKanaCandidate(h);
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+  {
+    SCOPED_TRACE("typed while selecting");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    TypeTypoRomaji(h, "KANA");
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_EQ(h.context.document->text, L"前仮名k");
+    EXPECT_FALSE(h.service.commit_undo_target_for_test());
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_FALSE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前仮名");
+  }
+}
+
+// §3: the Ctrl+Backspace held down after the undo repeats into the put-back
+// input; the repeats are eaten, and a fresh press goes to the app again.
+TEST(TsfTipCommitUndoTest, RepeatOfTheUndoKeyIsEaten) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  ASSERT_EQ(h.context.document->text, L"前かな");
+  EXPECT_TRUE(PressCtrlBackspace(h, kKeyRepeat));
+  EXPECT_TRUE(PressCtrlBackspace(h, kKeyRepeat));
+  EXPECT_EQ(h.context.document->text, L"前かな");
+  EXPECT_EQ(h.service.preedit_kana_, "かな");
+  EXPECT_NE(h.service.composition_, nullptr);
+  // Released and pressed again: Ctrl+Backspace while reading goes to the app.
+  EXPECT_FALSE(PressCtrlBackspace(h));
+  EXPECT_FALSE(PressCtrlBackspace(h, kKeyRepeat));
+}
+
+// §5: the reading comes back, not the form of an F7 commit, and a punctuation
+// commit puts its mark back with the reading.
+TEST(TsfTipCommitUndoTest, FormAndPunctuationCommitsPutTheReadingBack) {
+  {
+    SCOPED_TRACE("F7");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    TypeTypoRomaji(h, "KANA");
+    ASSERT_TRUE(h.Press(VK_F7));
+    ASSERT_EQ(h.context.document->text, L"前カナ");
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前かな");
+    EXPECT_EQ(h.service.preedit_kana_, "かな");
+  }
+  {
+    SCOPED_TRACE("punctuation");
+    DocumentPreeditHarness h;
+    OemCompositionTranslationGuard oem_translation;
+    ConfigureUndoHarness(h);
+    StartPunctuationConversion(h);
+    TypeTenkiWithCache(h);
+    ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+    ASSERT_EQ(h.context.document->text, L"前天気、");
+    ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    EXPECT_EQ(h.context.document->text, L"前てんき、");
+    EXPECT_EQ(h.service.preedit_kana_, "てんき、");
+  }
+}
+
+// §5: the romaji typed comes back too, so F10 spells it as before the commit.
+TEST(TsfTipCommitUndoTest, TypedRomajiComesBack) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.service.english_raw_romaji_for_test(), "kana");
+  ASSERT_TRUE(h.Press(VK_F10));
+  EXPECT_EQ(h.context.document->text, L"前kana");
+}
+
+// §7: a different surface for the same reading, chosen as the first commit of
+// the put-back input, sends "undo" for the commit taken back, once.
+TEST(TsfTipCommitUndoTest, ChoosingAnotherSurfaceSendsUndoForTheCommitTakenBack) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  ASSERT_TRUE(h.service.pending_undo_correction_for_test());
+  ASSERT_EQ(QueuedCorrections(h), 0u);
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前カナ");
+  const auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].kind, "undo");
+  EXPECT_EQ(corrections[0].reading, "かな");
+  EXPECT_EQ(corrections[0].rejected_surface, "仮名");
+  EXPECT_FALSE(corrections[0].selected_surface.has_value());
+  // The commit itself is observed as usual.
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "カナ");
+  EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+}
+
+// §7: no "undo" for the same surface again, a changed reading, an as-is
+// commit, Esc, or a taken-back commit that was not learned.
+TEST(TsfTipCommitUndoTest, UndoIsNotSentWithoutADifferentSurfaceForTheSameReading) {
+  {
+    SCOPED_TRACE("same surface");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+  }
+  {
+    SCOPED_TRACE("reading changed");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    TypeTypoRomaji(h, "I");
+    ASSERT_EQ(h.service.preedit_kana_, "かない");
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test({ModelField("家内", "かない")}); }));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前家内");
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+  }
+  {
+    SCOPED_TRACE("as is");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前かな");
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+    EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+  }
+  {
+    SCOPED_TRACE("escape");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    CommitKanaCandidate(h);
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    ASSERT_EQ(h.context.document->text, L"前");
+    EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+    // A document's selection follows the erased text; this fake's does not.
+    h.context.document->start = 1;
+    h.context.document->end = 1;
+    CommitKanaCandidate(h, 1);
+    ASSERT_EQ(h.context.document->text, L"前カナ");
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+  }
+  {
+    SCOPED_TRACE("as-is commit taken back");
+    DocumentPreeditHarness h;
+    ConfigureUndoHarness(h);
+    TypeTypoRomaji(h, "KANA");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前かな");
+    ASSERT_TRUE(PressCtrlBackspace(h));
+    EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+    ASSERT_TRUE(PressSpaceAndDeliver(
+        h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.context.document->text, L"前仮名");
+    EXPECT_EQ(QueuedCorrections(h), 0u);
+  }
+}
+
+// §9: undo works in a secure field and sends nothing to the Host.
+TEST(TsfTipCommitUndoTest, SecureContextUndoesWithoutLearning) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  h.service.set_foreground_app_for_test({"KeePass.exe", "WindowsForms10.Window.8.app.0", true});
+  CommitKanaCandidate(h);
+  ASSERT_EQ(h.context.document->text, L"前仮名");
+  ASSERT_FALSE(h.service.last_queued_commit_observation_for_test());
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前かな");
+  EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+  ASSERT_TRUE(
+      PressSpaceAndDeliver(h, [&] { h.service.set_cached_candidates_for_test(KanaCandidates()); }));
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前カナ");
+  EXPECT_EQ(QueuedCorrections(h), 0u);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
+// §7: the undo drops the forget pair, the Backspace undo window and the
+// NonConvert cycle of the commit it takes back.
+TEST(TsfTipCommitUndoTest, UndoDropsTheOtherRecordsOfTheCommit) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_FALSE(h.service.learned_pairs_for_test().empty());
+  ASSERT_TRUE(h.service.undo_window_open_for_test());
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_TRUE(h.service.learned_pairs_for_test().empty());
+  EXPECT_FALSE(h.service.undo_window_open_for_test());
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.context.document->text, L"前");
+  // Nothing is left for Ctrl+Shift+Backspace or NonConvert to name.
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_FALSE(ProbeOnly(h, VK_BACK));
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_TRUE(h.service.queued_forget_requests_for_test().empty());
+  EXPECT_FALSE(ProbeOnly(h, VK_NONCONVERT));
+  EXPECT_EQ(QueuedCorrections(h), 0u);
+}
+
+// §4.2: focus loss drops the target.
+TEST(TsfTipCommitUndoTest, FocusLossDropsTheTarget) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  CommitKanaCandidate(h);
+  ASSERT_TRUE(h.service.commit_undo_target_for_test());
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_FALSE(h.service.commit_undo_target_for_test());
+  EXPECT_FALSE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前仮名");
+}
+
+// §5: the reading after the typo correction comes back, not the one typed.
+TEST(TsfTipCommitUndoTest, CorrectedReadingComesBack) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  h.service.set_corrected_candidates_for_test("かに", "かみ", CorrectedTypoCandidates());
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test(CorrectedTypoCandidates()); }));
+  ASSERT_EQ(h.service.preedit_kana_, "かみ");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前神");
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前かみ");
+  EXPECT_EQ(h.service.preedit_kana_, "かみ");
+}
+
+// §5, §7: an English candidate commit puts the kana reading back, and names
+// no pair to undo (English is not learned under the kana reading).
+TEST(TsfTipCommitUndoTest, EnglishCandidateCommitPutsTheKanaReadingBack) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  auto english = ModelField("Kana", "kana");
+  english.tag = static_cast<uint8_t>(azookey::core::CandidateTag::English);
+  TypeTypoRomaji(h, "KANA");
+  ASSERT_TRUE(PressSpaceAndDeliver(
+      h, [&] { h.service.set_cached_candidates_for_test({english, ModelField("仮名", "かな")}); }));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前Kana");
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前かな");
+  EXPECT_EQ(h.service.preedit_kana_, "かな");
+  EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+}
+
+// §5, §7: the automatic punctuation of a live conversion commit does not come
+// back, and the undo names the pair before it.
+TEST(TsfTipCommitUndoTest, AutomaticPunctuationIsNeitherPutBackNorNamed) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h);
+  StartLive(h, DynamicPunctuation(), /*commit_segments=*/true);
+  TypeKaAndShow(h);
+  h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.final_punctuation_hold_pending_for_test());
+  const uint64_t final_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_with_segments_for_test(
+      final_id, "か", "蚊。", {LiveSeg("蚊", "か", false), LiveSeg("。", "", true)}, true);
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"前蚊。");
+  ASSERT_TRUE(h.service.last_queued_segments_observation_for_test());
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  ASSERT_TRUE(h.service.pending_undo_correction_for_test());
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_cached_candidates_for_test({ModelField("課", "か"), ModelField("蚊", "か")});
+  }));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前課");
+  const auto corrections = h.service.queued_corrections_for_test();
+  ASSERT_EQ(corrections.size(), 1u);
+  EXPECT_EQ(corrections[0].reading, "か");
+  EXPECT_EQ(corrections[0].rejected_surface, "蚊");
+}
+
+// §7: a commit observed per mixed-English section names no pair to undo.
+TEST(TsfTipCommitUndoTest, MixedEnglishSectionsNameNoPair) {
+  DocumentPreeditHarness h;
+  ConfigureUndoHarness(h, /*legacy=*/true);
+  h.service.set_commit_segments_supported_for_test(true);
+  azookey::ipc::CandidateField sections = ModelField("仮な", "かな");
+  sections.segments = {MixedSeg(0, "仮", "か", false), MixedSeg(1, "な", "な", false)};
+  TypeTypoRomaji(h, "KANA");
+  OpenCandidateWindow(h, {sections, ModelField("仮名", "かな")});
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前仮な");
+  const auto observation = h.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(observation);
+  ASSERT_EQ(observation->segments.size(), 2u);
+  ASSERT_TRUE(PressCtrlBackspace(h));
+  EXPECT_EQ(h.context.document->text, L"前かな");
+  EXPECT_FALSE(h.service.pending_undo_correction_for_test());
+  OpenCandidateWindow(h, KanaCandidates());
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前仮名");
+  EXPECT_EQ(QueuedCorrections(h), 0u);
 }

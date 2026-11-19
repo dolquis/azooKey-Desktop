@@ -593,6 +593,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void age_undo_window_for_test(std::chrono::steady_clock::duration age) {
     if (undo_target_) undo_target_->armed_at -= age;
   }
+  bool commit_undo_target_for_test() const { return commit_undo_target_.has_value(); }
+  bool pending_undo_correction_for_test() const { return pending_undo_correction_.has_value(); }
   bool first_key_carry_open_for_test() const { return first_key_carry_deadline_.has_value(); }
   // A live conversion answer for `reading`, as the IPC worker leaves it.
   void set_live_display_for_test(std::string reading, std::string surface) {
@@ -1198,6 +1200,10 @@ class TextService final : public ITfTextInputProcessorEx,
     // M59 section 7.4: a segment the Host inserted without a reading. It is sent
     // as is_auto_punctuation and never observed or recorded for undo.
     bool is_auto_punctuation{false};
+    // M63-B section 11: one observation per mixed-English section. Its pairs
+    // do not follow the reading, so the commit undo learns nothing from them
+    // (commit-undo-spec §7).
+    bool per_section_mixed_english{false};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
   // (reading, surface) pairs of the last learning observation actually sent,
@@ -1223,6 +1229,45 @@ class TextService final : public ITfTextInputProcessorEx,
     bool awaiting_commit_edit{true};
   };
   std::optional<UndoTarget> undo_target_;
+
+  // M69 (docs/commit-undo-spec.md §4.1): the last commit Ctrl+Backspace can
+  // put back as a reading composition. Recorded only after the commit's edit
+  // session, with the caret right after its surface; dropped by any key but
+  // Ctrl+Backspace and the modifiers alone, by a selection change that is not
+  // the commit's own edit (OnEndEdit), and on focus, lifecycle, off and
+  // alphanumeric changes. The reading, surface and romaji stay in the TIP and
+  // never reach a log (§9). UI thread only.
+  struct CommitUndoTarget {
+    Microsoft::WRL::ComPtr<ITfContext> context;
+    Microsoft::WRL::ComPtr<ITfRange> caret;
+    std::wstring surface;
+    std::string reading;
+    std::string raw_romaji;
+    // §7: the last learned (reading, surface) the commit sent, without the
+    // automatic punctuation. Absent when it sent none that undo can name.
+    std::optional<std::pair<std::string, std::string>> observed;
+  };
+  std::optional<CommitUndoTarget> commit_undo_target_;
+  // The undo-nameable pair of the commit whose edit session just finished;
+  // taken by the CommitUndoTarget recorded after it.
+  std::optional<std::pair<std::string, std::string>> last_commit_undo_pair_;
+  // §7: after an undo, the observation it put back. The first commit of that
+  // composition sends "undo" for it when it learns a different surface for
+  // the same reading. composition_generation_ tells the composition apart.
+  struct PendingUndoCorrection {
+    std::string reading;
+    std::string surface;
+    uint64_t composition_generation{0};
+  };
+  std::optional<PendingUndoCorrection> pending_undo_correction_;
+  // Counts the compositions this TIP started.
+  uint64_t composition_generation_{0};
+  // The commit's own edit session has not reached OnEndEdit yet; that
+  // selection change keeps commit_undo_target_ (commit-undo-spec §4.2 item 5).
+  bool commit_end_edit_pending_{false};
+  // §3: the Ctrl+Backspace that undid a commit, held down, repeats into the
+  // put-back composition; its repeats are eaten until the key is pressed anew.
+  bool undo_key_repeat_guard_{false};
 
   // M18-3 debug window (docs/legacy-parity-spec.md §8). The window is created
   // lazily on the UI thread; the IPC worker only records into its buffer.
@@ -1954,6 +1999,21 @@ class TextService final : public ITfTextInputProcessorEx,
   // drops the record and leaves the key to the application (M46).
   bool ClaimsForgetKey(ITfContext* context);
   void ForgetLastCommit(ITfContext* context);
+  // M69 (docs/commit-undo-spec.md). Called after a commit's edit session
+  // finished, with the reading to put back and the surface written.
+  void RecordCommitUndoTarget(ITfContext* context, std::string reading, const std::string& surface,
+                              std::string raw_romaji);
+  // §4.2 item 1: any key but Ctrl+Backspace and the modifiers alone drops the target.
+  void TrackCommitUndoKey(WPARAM key, LPARAM key_data);
+  // §4.2 items 2-5, without touching the document; drops a target that fails them.
+  bool ClaimsCommitUndoKey(ITfContext* context);
+  // §6: puts the commit back; *eaten as §6 decides.
+  HRESULT UndoLastCommit(ITfContext* context, uint32_t modifiers, BOOL* eaten);
+  // §3: a repeat of the Ctrl+Backspace that undid the commit.
+  bool ConsumesUndoKeyRepeat(ITfContext* context, WPARAM key, LPARAM key_data) const;
+  // §7: after the commit edit session, the "undo" a put-back input owes.
+  void SendPendingUndoCorrection(ITfContext* context, bool committed_from_composition,
+                                 TfEditCookie edit_cookie);
   void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
   void RegisterDebugPreservedKey();
   void UnregisterDebugPreservedKey();

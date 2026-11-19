@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <new>
@@ -451,6 +452,7 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     case UserAction::CommitHalfwidthKatakana:
     case UserAction::CommitFullwidthRoman:
     case UserAction::CommitHalfwidthRoman:
+    case UserAction::UndoCommit:
       return event;
     default:
       return std::nullopt;
@@ -1664,8 +1666,11 @@ STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ++activation_epoch_;
   ResetTypoTracking();
-  // The forget record never crosses a focus or activation (legacy-parity-spec §7.2).
+  // The forget record never crosses a focus or activation (legacy-parity-spec §7.2),
+  // nor does the commit undo (commit-undo-spec §4.2, §7).
   last_learned_commit_pairs_.clear();
+  commit_undo_target_.reset();
+  pending_undo_correction_.reset();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
   if (FAILED(input_mode_langbar_.Remove()))
@@ -2615,6 +2620,7 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
       // A Backspace now erases the bracket, not the word committed before it.
       last_learned_commit_pairs_.clear();
       undo_target_.reset();
+      commit_undo_target_.reset();  // commit-undo-spec §4.1.
       if (active_context_ != context) {
         if (active_context_) active_context_->Release();
         active_context_ = context;
@@ -2791,6 +2797,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     if (final_punctuation_hold_) ResolveFinalPunctuationHold("test_key");
     TrackTypoKey(context, wParam);
     TrackUndoKey(context, wParam);
+    TrackCommitUndoKey(wParam, lParam);
     typo_test_key_context_ = context;
     typo_test_key_ = wParam;
 #ifdef AZOOKEY_TSF_TESTING
@@ -2859,7 +2866,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = TRUE;
       return S_OK;
     }
-    if (ConsumesCompositionEditChord(context, wParam, modifiers)) {
+    if (ConsumesCompositionEditChord(context, wParam, modifiers) ||
+        ConsumesUndoKeyRepeat(context, wParam, lParam)) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -2917,6 +2925,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
     if (IsActionKey(m18_key, core::UserAction::Forget)) {
       *eaten = ClaimsForgetKey(context) ? TRUE : FALSE;
+      return S_OK;
+    }
+    // commit-undo-spec §4.2: claimed on the record alone; OnKeyDown reads the
+    // document and leaves the key to the app when the commit is not there.
+    if (IsActionKey(m18_key, core::UserAction::UndoCommit)) {
+      *eaten = ClaimsCommitUndoKey(context) ? TRUE : FALSE;
       return S_OK;
     }
     // F6-F10 with a reading, the Unicode buffer or the emoji query (spec §3.6).
@@ -3119,6 +3133,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (typo_test_key_context_ != context || typo_test_key_ != wParam) {
       TrackTypoKey(context, wParam);
       TrackUndoKey(context, wParam);
+      TrackCommitUndoKey(wParam, lParam);
     }
     typo_test_key_context_ = nullptr;
     // A commit a later edit session finished, without a key, drops the keys
@@ -3236,8 +3251,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
       return S_OK;
     }
-    // DEV-1845: eaten, doing nothing, as the probe answered.
-    if (ConsumesCompositionEditChord(context, wParam, modifiers)) {
+    // DEV-1845: eaten, doing nothing, as the probe answered. So is a repeat of
+    // the Ctrl+Backspace that undid a commit (commit-undo-spec §3).
+    if (ConsumesCompositionEditChord(context, wParam, modifiers) ||
+        ConsumesUndoKeyRepeat(context, wParam, lParam)) {
       *eaten = TRUE;
       return S_OK;
     }
@@ -3351,6 +3368,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       ForgetLastCommit(context);
       *eaten = TRUE;
       return S_OK;
+    }
+    if (IsActionKey(mode_key, core::UserAction::UndoCommit)) {
+      if (!ClaimsCommitUndoKey(context)) return S_OK;
+      // DEV-1928: the input put back is no first key a focus change carries.
+      first_key_carry_record.had_input = true;
+      const HRESULT undo_hr = UndoLastCommit(context, modifiers, eaten);
+      return undo_hr == E_OUTOFMEMORY ? undo_hr : S_OK;
     }
     if (IsActionKey(mode_key, core::UserAction::ToggleAlnum)) {
       // Two presses toggle twice, back to the mode the user was in, and a
@@ -3506,6 +3530,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     auto commit_selection_then_retype = [&]() -> HRESULT {
       const HRESULT commit_hr = commit_selection();
       if (commit_hr != S_OK) return FAILED(commit_hr) ? commit_hr : S_OK;
+      // The key starts the next composition, so the commit is no undo target
+      // (commit-undo-spec §4.1).
+      commit_undo_target_.reset();
       // One retype at most: a commit that left the window shown must not loop.
       if (retyped) return S_OK;
       // The key was already tracked for typo and undo above.
@@ -3767,8 +3794,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           if (typo_learning_allowed_.load(std::memory_order_relaxed))
             typo_tracker_.BeforeBackspace(before_backspace);
         }
-        if (event.action == UserAction::Cancel && input_state_.kind() == core::InputStateKind::Idle)
+        if (event.action == UserAction::Cancel &&
+            input_state_.kind() == core::InputStateKind::Idle) {
           ResetTypoTracking();
+          // commit-undo-spec §7: Esc on a put-back input sends no "undo".
+          pending_undo_correction_.reset();
+        }
         *eaten = TRUE;
         return S_OK;
       }
@@ -4349,6 +4380,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     app_edit_key_passed_ = false;
     ResetTypoTracking();
     last_learned_commit_pairs_.clear();
+    commit_undo_target_.reset();
+    pending_undo_correction_.reset();
     UnadviseTextEditSink();
     const bool log_key_path = KeyPathLogging();
     const bool had_active_context = active_context_ != nullptr;
@@ -4503,6 +4536,8 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite,
     ResetTypoTracking();
     // The keys waiting for the window or the held Enter go with the input (DEV-1813).
     window_waiting_keys_.clear();
+    // A put-back input the app ended was not committed by the user (commit-undo-spec §7).
+    pending_undo_correction_.reset();
   }
   std::string terminated_surface =
       external_termination ? (committing_ ? commit_surface_ : CurrentDisplayedPreeditSurface())
@@ -5293,6 +5328,7 @@ void TextService::PostPendingCommitObservation() {
   // Ctrl+Shift+Backspace must not reach an older pair past it.
   last_learned_commit_pairs_.clear();
   undo_target_.reset();
+  last_commit_undo_pair_.reset();
   if (!pending.learning_allowed) return;
   // PostIpcSend drops observations while the context is secure.
   const bool sendable = !pending.secure && !secure_input_.load(std::memory_order_relaxed);
@@ -5351,6 +5387,19 @@ void TextService::PostPendingCommitObservation() {
         last_learned_commit_pairs_.back() == std::pair{last.reading, last.chosen.surface})
       undo_target_ = UndoTarget{last.reading, last.chosen.surface, committed_context,
                                 std::chrono::steady_clock::now()};
+    // commit-undo-spec §7: an undo of this commit names its last learned pair,
+    // the automatic punctuation left out; an English or unsent last pair names
+    // none, and neither do the sections of a mixed-English commit.
+    const PendingCommitObservation* named = pending.segments.empty() ? &pending : nullptr;
+    for (auto segment = pending.segments.rbegin(); segment != pending.segments.rend(); ++segment) {
+      if (segment->is_auto_punctuation) continue;
+      named = &*segment;
+      break;
+    }
+    if (named && !pending.per_section_mixed_english && !last_learned_commit_pairs_.empty() &&
+        named->chosen.tag != static_cast<uint8_t>(core::CandidateTag::English) &&
+        last_learned_commit_pairs_.back() == std::pair{named->reading, named->chosen.surface})
+      last_commit_undo_pair_ = last_learned_commit_pairs_.back();
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
     // observations are posted. Drop best-effort learning telemetry rather than
@@ -5727,6 +5776,11 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
   // focus or lifecycle loss and must not reopen the undo window.
   if (pending_commit_observation_) pending_commit_observation_->arms_undo = false;
   recent_character_form_commit_.reset();
+  // Nor a commit undo (commit-undo-spec §4.1, §4.2): the focus, off and
+  // alphanumeric changes all come through here.
+  commit_undo_target_.reset();
+  pending_undo_correction_.reset();
+  undo_key_repeat_guard_ = false;
   ClearReconversionState();
   if (reconversion_cache_context_) {
     reconversion_cache_context_->Release();
@@ -5939,6 +5993,10 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   const bool multi_segment = shown_batch_segments_.size() > 1;
   const std::string batch_surface =
       multi_segment ? CurrentDisplayedPreeditSurface() : std::string{};
+  // commit-undo-spec §4.1: batch input and the emoji search are not undone.
+  const bool records_undo =
+      batch_raw_romaji_.empty() && emoji_mode_ == EmojiMode::Inactive && !bracket_composition_;
+  const std::string raw_romaji = english_raw_romaji_;
   PendingCommitObservation batch_observation;
   batch_observation.secure = secure;
   batch_observation.learning_allowed = privacy.learning_allowed && batch_learning_allowed_;
@@ -6017,6 +6075,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       // M63-B section 11: one observation per segment, each from the Host's
       // own strings; an English segment keeps its raw romaji and tag.
       PendingCommitObservation observed{reading, chosen.field, {}, {}, secure, learning};
+      observed.per_section_mixed_english = true;
       for (const auto& segment : chosen.field.segments) {
         PendingCommitObservation part;
         part.reading = segment.reading;
@@ -6090,6 +6149,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       core_marked_surface_.clear();
     }
     ClearBatchState();
+    if (records_undo && !multi_segment)
+      RecordCommitUndoTarget(context, reading, committed_surface, raw_romaji);
   } else if (!committing_) {
     commit_surface_.clear();
     pending_commit_observation_.reset();
@@ -6099,6 +6160,10 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
 
 HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
   if (!context) return S_OK;
+  // commit-undo-spec §4.1: batch input and the emoji query are not undone.
+  const bool records_undo =
+      batch_raw_romaji_.empty() && emoji_mode_ == EmojiMode::Inactive && !bracket_composition_;
+  const std::string raw_romaji = english_raw_romaji_;
 
   std::string surface;
   if (!batch_raw_romaji_.empty()) {
@@ -6169,6 +6234,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
       core_marked_surface_.clear();
     }
     ClearBatchState();
+    if (records_undo) RecordCommitUndoTarget(context, reading, committed_surface, raw_romaji);
   } else if (!committing_) {
     commit_surface_.clear();
   }
@@ -6196,6 +6262,9 @@ HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm f
     if (!romaji_.HasCustomTable()) typed_romaji = EnglishRawRomajiFor(reading);
   }
   if (reading.empty()) return S_OK;
+  // commit-undo-spec §5: the reading comes back, not the form; batch input is not undone.
+  const bool records_undo = batch_raw_romaji_.empty();
+  const std::string raw_romaji = english_raw_romaji_;
   const bool roman =
       form == core::CommitForm::FullwidthRoman || form == core::CommitForm::HalfwidthRoman;
   const std::string surface =
@@ -6267,6 +6336,7 @@ HRESULT TextService::CommitReadingInForm(ITfContext* context, core::CommitForm f
     input_state_ = input_state_.Reset();
     core_marked_surface_.clear();
     ClearBatchState();
+    if (records_undo) RecordCommitUndoTarget(context, reading, committed_surface, raw_romaji);
   } else if (!committing_) {
     commit_surface_.clear();
     pending_commit_observation_.reset();
@@ -7817,6 +7887,11 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
     else if (!selection_status_read || changed)
       undo_target_.reset();
   }
+  // The same for the commit undo (commit-undo-spec §4.2 item 5). The commit's
+  // edit may end before or after its target is recorded, so the mark is set
+  // inside that edit session.
+  if (!std::exchange(commit_end_edit_pending_, false) && (!selection_status_read || changed))
+    commit_undo_target_.reset();
   if (!selection_status_read || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
   reconversion_prefetch_surface_.clear();
@@ -9264,6 +9339,8 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     // candidate. The character-form cycle of that commit would rewrite the mark
     // too, so it is not offered.
     bool commits_typed_mark = false;
+    // The mark joins the reading a commit undo puts back (commit-undo-spec §5).
+    std::optional<std::string> typed_mark = std::string{};
     {
       const core::ReplaceMarkedText* replaced = nullptr;
       const core::ObserveCommit* observed = nullptr;
@@ -9272,6 +9349,10 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         if (const auto* observe = std::get_if<core::ObserveCommit>(&action)) observed = observe;
       }
       commits_typed_mark = replaced && observed && replaced->text != observed->surface;
+      if (commits_typed_mark)
+        typed_mark = replaced->text.starts_with(observed->surface)
+                         ? std::optional(replaced->text.substr(observed->surface.size()))
+                         : std::nullopt;
     }
     input_state_ = std::move(result.next);
     core_action_in_progress_ = true;
@@ -9380,6 +9461,12 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       auto final_romaji = previous_state.pending_romaji();
       const std::string recent_reading = previous_state.confirmed_kana() + final_romaji.Flush();
       const std::string committed_surface = commit_surface_;
+      const std::string raw_romaji = english_raw_romaji_;
+      // commit-undo-spec §4.1: a commit that goes on into more marked text (a
+      // key typed while Selecting, Ctrl+Shift+U) and Unicode input are not undone.
+      const bool records_undo =
+          post_commit_actions.empty() && typed_mark &&
+          (was_composing || previous_state.kind() == core::InputStateKind::Selecting);
       PrepareTypoCommit(recent_reading);
       // Ending the composition may run the lifecycle cleanup, which resets
       // input_state_; the post-commit marked text belongs to this state.
@@ -9405,6 +9492,9 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
           input_state_ = state_after_commit;
           core_input_active_ = true;
           ApplyPostCommitActions(context, post_commit_actions);
+        } else if (records_undo) {
+          RecordCommitUndoTarget(context, recent_reading + *typed_mark, committed_surface,
+                                 raw_romaji);
         }
       } else {
         if (!committing_) {
@@ -10996,9 +11086,11 @@ void TextService::FinishReconversionSelection(
   // Choosing another candidate corrects the earlier commit (user-learning-
   // enhancement-spec §4.1). The correction is its learning event, so the pair
   // is not Forget's to name, and Ctrl+Shift+Backspace must not reach an older
-  // pair past it either (spec §7.2).
+  // pair past it either (spec §7.2). Nor is it a commit to undo
+  // (commit-undo-spec §4.1).
   last_learned_commit_pairs_.clear();
   undo_target_.reset();
+  commit_undo_target_.reset();
   if (correction && correction_context) {
     try {
       // This runs inside the replacement session: privacy is read with its cookie.
@@ -11823,6 +11915,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       auto pending_typo_commit = std::move(service_->pending_typo_commit_);
       const std::wstring surface = Utf8ToWide(pending_commit_surface);
       bool committed_surface_in_document = true;
+      // The user's own commit of a composition, not one the host ended.
+      bool committed_from_composition = false;
       std::wstring terminated_text;
       std::wstring previous_surface;
       if (!service_->terminated_composition_previous_surface_.empty())
@@ -11977,6 +12071,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           return end_hr;
         }
         core::EtwLogger::LogCompositionEnd(surface.size(), true);
+        committed_from_composition = true;
         if (committed_range) {
           TF_SELECTION sel{};
           sel.range = committed_range;
@@ -12008,10 +12103,16 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       // This commit is now the most recent one (legacy-parity-spec §7.2); only
       // a learning observation posted below makes it forgettable.
       service_->last_learned_commit_pairs_.clear();
+      service_->last_commit_undo_pair_.reset();
+      // commit-undo-spec §4.2 item 5: the OnEndEdit of this session is the
+      // commit's own selection change.
+      service_->commit_end_edit_pending_ = true;
       if (committed_surface_in_document)
         post_pending_commit_observation();
       else
         service_->pending_commit_observation_.reset();
+      service_->SendPendingUndoCorrection(
+          context_, committed_from_composition && committed_surface_in_document, ec);
       return S_OK;
     }
 
@@ -12043,6 +12144,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       sel.range->Release();
       pCtxComp->Release();
       if (FAILED(hr) || !service_->composition_) return hr;
+      ++service_->composition_generation_;
       core::EtwLogger::LogCompositionStart(kana.size());
       service_->etw_composition_length_ = kana.size();
       // prediction_state is logged once per reason for each input, so the log
@@ -12177,6 +12279,339 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     LogComBoundaryException("EditSession::DoEditSession", E_FAIL);
     return E_FAIL;
   }
+}
+
+// --- Commit undo (M69, docs/commit-undo-spec.md) ---
+
+namespace {
+
+// The longest surface a commit undo reads back, as the NonConvert cycle.
+constexpr size_t kMaxCommitUndoSurface = 4096;
+constexpr LPARAM kKeyWasDown = LPARAM{1} << 30;
+
+// A synchronous session that runs its body once with the granted cookie.
+class CommitUndoEditSession final : public ITfEditSession {
+ public:
+  explicit CommitUndoEditSession(std::function<HRESULT(TfEditCookie)> body)
+      : body_(std::move(body)) {}
+
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfEditSession) return E_NOINTERFACE;
+    *out = static_cast<ITfEditSession*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refs_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG refs = static_cast<ULONG>(InterlockedDecrement(&refs_));
+    if (!refs) delete this;
+    return refs;
+  }
+  STDMETHODIMP DoEditSession(TfEditCookie cookie) override {
+    if (!body_ || ran_) return E_UNEXPECTED;
+    ran_ = true;
+    try {
+      return body_(cookie);
+    } catch (const std::bad_alloc&) {
+      LogComBoundaryException("CommitUndoEditSession::DoEditSession", E_OUTOFMEMORY);
+      return E_OUTOFMEMORY;
+    } catch (...) {
+      LogComBoundaryException("CommitUndoEditSession::DoEditSession", E_FAIL);
+      return E_FAIL;
+    }
+  }
+  // A provider that keeps a synchronous session must never reach the caller's
+  // stack through it later.
+  void Disarm() { body_ = {}; }
+  bool ran() const { return ran_; }
+
+ private:
+  ~CommitUndoEditSession() = default;
+
+  LONG refs_{1};
+  std::function<HRESULT(TfEditCookie)> body_;
+  bool ran_{false};
+};
+
+// The body's result, or E_FAIL when TSF did not run it (a lock not granted).
+HRESULT RunCommitUndoSession(ITfContext* context, TfClientId client_id, DWORD access,
+                             std::function<HRESULT(TfEditCookie)> body, bool& ran) {
+  ran = false;
+  auto* session = new (std::nothrow) CommitUndoEditSession(std::move(body));
+  if (!session) return E_OUTOFMEMORY;
+  HRESULT session_hr = E_FAIL;
+  const HRESULT hr =
+      context->RequestEditSession(client_id, session, TF_ES_SYNC | access, &session_hr);
+  session->Disarm();
+  ran = session->ran();
+  session->Release();
+  if (FAILED(hr)) return hr;
+  return ran ? session_hr : E_FAIL;
+}
+
+// S_OK with `committed` over the `surface` right before an empty selection,
+// at `expected_caret` when one is given (commit-undo-spec §4.1, §4.2 item 6).
+HRESULT FindCommitBeforeCaret(ITfContext* context, TfEditCookie ec, ITfRange* expected_caret,
+                              const std::wstring& surface, Microsoft::WRL::ComPtr<ITfRange>& caret,
+                              Microsoft::WRL::ComPtr<ITfRange>& committed) {
+  TF_SELECTION selection{};
+  ULONG fetched = 0;
+  const HRESULT hr = context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+  caret.Attach(selection.range);
+  if (FAILED(hr) || fetched != 1 || !caret) return S_FALSE;
+  BOOL empty = FALSE;
+  if (FAILED(caret->IsEmpty(ec, &empty)) || !empty) return S_FALSE;
+  if (expected_caret) {
+    BOOL same = FALSE;
+    if (FAILED(caret->IsEqualStart(ec, expected_caret, TF_ANCHOR_START, &same)) || !same)
+      return S_FALSE;
+  }
+  if (FAILED(caret->Clone(committed.ReleaseAndGetAddressOf())) || !committed) return S_FALSE;
+  const LONG length = static_cast<LONG>(surface.size());
+  LONG shifted = 0;
+  if (FAILED(committed->ShiftStart(ec, -length, &shifted, nullptr)) || shifted != -length)
+    return S_FALSE;
+  return ReadRangeText(ec, committed.Get(), surface.size()) == surface ? S_OK : S_FALSE;
+}
+
+}  // namespace
+
+void TextService::RecordCommitUndoTarget(ITfContext* context, std::string reading,
+                                         const std::string& surface, std::string raw_romaji) {
+  commit_undo_target_.reset();
+  auto observed = std::exchange(last_commit_undo_pair_, std::nullopt);
+  // §4.2 item 5: only the context the text edit sink watches reports a caret
+  // move after the commit. A commit that left input behind is no target.
+  if (!context || reading.empty() || surface.empty() || committing_ || composition_ ||
+      !preedit_kana_.empty() || romaji_.HasPending() || !batch_raw_romaji_.empty() ||
+      !SameComIdentity(context, text_edit_context_))
+    return;
+  try {
+    CommitUndoTarget target;
+    target.surface = Utf8ToWide(surface);
+    if (target.surface.empty() || target.surface.size() > kMaxCommitUndoSurface) return;
+    Microsoft::WRL::ComPtr<ITfRange> committed;
+    bool ran = false;
+    const HRESULT hr = RunCommitUndoSession(
+        context, client_id_, TF_ES_READ,
+        [&](TfEditCookie ec) {
+          return FindCommitBeforeCaret(context, ec, nullptr, target.surface, target.caret,
+                                       committed);
+        },
+        ran);
+    if (hr != S_OK) return;
+    target.context = context;
+    target.reading = std::move(reading);
+    target.raw_romaji = std::move(raw_romaji);
+    target.observed = std::move(observed);
+    commit_undo_target_ = std::move(target);
+  } catch (...) {
+    // Without a target, Ctrl+Backspace stays the app's.
+  }
+}
+
+void TextService::TrackCommitUndoKey(WPARAM key, LPARAM key_data) {
+  if (IsModifierOnlyKey(key)) return;
+  const bool undo_key = key == VK_BACK && CurrentKeyModifiers() == core::kModifierCtrl;
+  if (!undo_key || (key_data & kKeyWasDown) == 0) undo_key_repeat_guard_ = false;
+  // Ctrl+Backspace is decided by ClaimsCommitUndoKey; any other key comes
+  // after the commit first, so the commit is no longer undone (§4.2 item 1).
+  if (!undo_key) commit_undo_target_.reset();
+}
+
+bool TextService::ConsumesUndoKeyRepeat(ITfContext* context, WPARAM key, LPARAM key_data) const {
+  return undo_key_repeat_guard_ && key == VK_BACK && (key_data & kKeyWasDown) != 0 &&
+         CurrentKeyModifiers() == core::kModifierCtrl && SameComIdentity(context, active_context_);
+}
+
+bool TextService::ClaimsCommitUndoKey(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!commit_undo_target_) return false;
+  // §4.2 items 2-4. Item 6 is read in the edit session itself.
+  const bool usable =
+      context && SameComIdentity(context, commit_undo_target_->context.Get()) && keyboard_open_ &&
+      !alnum_mode_ && !azookey::tsf::IsContextKeyboardDisabled(context) && !composition_ &&
+      !committing_ && preedit_kana_.empty() && !romaji_.HasPending() && batch_raw_romaji_.empty() &&
+      !candidate_ui_.IsShowing() && !candidate_ui_.IsShowingPredictions() &&
+      !AwaitingCandidateWindow() && emoji_mode_ == EmojiMode::Inactive && !bracket_composition_ &&
+      !reconversion_list_ && !UnicodeInputActive() && terminated_composition_surface_.empty() &&
+      !final_punctuation_hold_ && !external_edit_end_pending_ && !discarding_first_key_composition_;
+  if (!usable) commit_undo_target_.reset();
+  return usable;
+}
+
+HRESULT TextService::UndoLastCommit(ITfContext* context, uint32_t modifiers, BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  *eaten = FALSE;
+  if (!context || !commit_undo_target_) return S_OK;
+  CommitUndoTarget target = std::move(*commit_undo_target_);
+  commit_undo_target_.reset();
+  // §7: the undo itself sends nothing. The forget pair, the Backspace undo
+  // window and the NonConvert cycle named the commit that now leaves.
+  last_learned_commit_pairs_.clear();
+  undo_target_.reset();
+  recent_character_form_commit_.reset();
+  character_form_cycle_state_.reset();
+  pending_undo_correction_.reset();
+
+  // §5: the reading as a typed reading shows it; the session below writes it.
+  auto table = local_settings_.RomajiSnapshot();
+  romaji_ = {};
+  romaji_.SetCustomTable(table);
+  batch_romaji_table_ = std::move(table);
+  preedit_kana_ = target.reading;
+  english_raw_romaji_ = target.raw_romaji;
+  core_marked_surface_ = target.reading;
+  core_input_active_ = true;
+  input_state_ = input_state_.Reset();
+  live_display_reading_.clear();
+  live_display_surface_.clear();
+  live_display_segments_.clear();
+  live_display_auto_punctuation_ = false;
+  live_carries_.clear();
+  composition_range_surface_.clear();
+  composition_range_readback_.reset();
+  if (carried_from_context_ == ComIdentity(context)) carried_from_context_ = nullptr;
+  if (active_context_ != context) {
+    if (active_context_) active_context_->Release();
+    active_context_ = context;
+    active_context_->AddRef();
+  }
+
+  enum class Stage { Unverified, NotStarted, NotWritten, Restored };
+  Stage stage = Stage::Unverified;
+  bool ran = false;
+  const HRESULT session_hr = RunCommitUndoSession(
+      context, client_id_, TF_ES_READWRITE,
+      [&](TfEditCookie ec) -> HRESULT {
+        // §6 step 1: the commit is still right before the caret.
+        Microsoft::WRL::ComPtr<ITfRange> caret;
+        Microsoft::WRL::ComPtr<ITfRange> committed;
+        HRESULT hr = FindCommitBeforeCaret(context, ec, target.caret.Get(), target.surface, caret,
+                                           committed);
+        if (hr != S_OK) return hr;
+        // M72 (DEV-2133) clears GUID_PROP_READING over `committed` here, before
+        // the composition takes it (tsf-deep-integration-spec §5.8.4).
+        // Step 2: the composition over the committed surface.
+        stage = Stage::NotStarted;
+        Microsoft::WRL::ComPtr<ITfContextComposition> composer;
+        hr = context->QueryInterface(IID_PPV_ARGS(&composer));
+        if (FAILED(hr) || !composer) return FAILED(hr) ? hr : E_NOINTERFACE;
+        ITfComposition* started = nullptr;
+        hr = composer->StartComposition(ec, committed.Get(), this, &started);
+        if (FAILED(hr) || !started) {
+          if (started) started->Release();
+          return FAILED(hr) ? hr : E_FAIL;
+        }
+        composition_ = started;
+        ++composition_generation_;
+        const size_t reading_length = Utf8ToWide(target.reading).size();
+        core::EtwLogger::LogCompositionStart(reading_length);
+        etw_composition_length_ = reading_length;
+        prediction_logged_reasons_.store(0, std::memory_order_relaxed);
+        // Steps 3-4: the reading, its input attribute and the caret at its
+        // end, written as every preedit update writes them.
+        stage = Stage::NotWritten;
+        ITfEditSession* write = NewComBoundaryObject<EditSession>(this, context);
+        hr = write ? write->DoEditSession(ec) : E_OUTOFMEMORY;
+        if (write) write->Release();
+        if (SUCCEEDED(hr) && composition_ && composition_range_surface_ == target.reading) {
+          stage = Stage::Restored;
+          return S_OK;
+        }
+        // §6: the composition ends with the committed surface; the document
+        // keeps its text.
+        if (ITfComposition* comp = composition_) {
+          ITfRange* range = nullptr;
+          if (SUCCEEDED(comp->GetRange(&range)) && range) {
+            (void)range->SetText(ec, 0, target.surface.c_str(),
+                                 static_cast<LONG>(target.surface.size()));
+            Microsoft::WRL::ComPtr<ITfProperty> property;
+            if (SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, property.GetAddressOf())) &&
+                property)
+              (void)ClearDisplayAttributes(ec, property.Get(), range);
+            range->Release();
+          }
+          comp->AddRef();
+          etw_composition_end_in_progress_ = true;
+          const HRESULT end_hr = comp->EndComposition(ec);
+          etw_composition_end_in_progress_ = false;
+          if (SUCCEEDED(end_hr) && composition_ == comp) {
+            composition_ = nullptr;
+            UnadviseCompositionMouseSink();
+            comp->Release();
+          }
+          comp->Release();
+          core::EtwLogger::LogCompositionEnd(target.surface.size(), true);
+        }
+        if (composition_range_) {
+          composition_range_->Release();
+          composition_range_ = nullptr;
+        }
+        composition_range_surface_.clear();
+        composition_range_readback_.reset();
+        return FAILED(hr) ? hr : E_FAIL;
+      },
+      ran);
+
+  if (stage != Stage::Restored) {
+    preedit_kana_.clear();
+    romaji_.Reset();
+    core_marked_surface_.clear();
+    english_raw_romaji_.clear();
+    input_state_ = input_state_.Reset();
+    // Only the name of the reason (§6); never the reading or the surface.
+    const char* reason = !ran                         ? "edit_session_refused"
+                         : stage == Stage::Unverified ? "commit_not_found"
+                         : stage == Stage::NotStarted ? "composition_not_started"
+                                                      : "reading_not_written";
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "commit_undo_failed",
+               {{"reason", SafeLogText(reason)}});
+    // §6: once the composition was started the key is the TIP's; before
+    // that the document is unchanged and the app takes the key.
+    if (stage == Stage::NotWritten) {
+      *eaten = TRUE;
+      undo_key_repeat_guard_ = true;
+    }
+    return session_hr == E_OUTOFMEMORY ? session_hr : S_OK;
+  }
+
+  // §5: core enters Composing (Previewing with live conversion) after the
+  // session and asks for the reading's candidates once.
+  *eaten = TRUE;
+  undo_key_repeat_guard_ = true;
+  // The romaji table goes in as for a typed input; the state stays Idle.
+  input_state_ = input_state_.WithComposition(std::string{}, romaji_)
+                     .WithLiveConversion(local_settings_.LiveConversionSnapshot())
+                     .WithPunctuationConversion(local_settings_.PunctuationConversionSnapshot());
+  core::UserActionEvent event{core::UserAction::UndoCommit, 0, modifiers, 0};
+  event.reading = target.reading;
+  const HRESULT apply_hr = ApplyInputStateResult(context, input_state_.HandleEvent(event));
+  if (target.observed)
+    pending_undo_correction_ =
+        PendingUndoCorrection{std::move(target.observed->first), std::move(target.observed->second),
+                              composition_generation_};
+  return apply_hr;
+}
+
+void TextService::SendPendingUndoCorrection(ITfContext* context, bool committed_from_composition,
+                                            TfEditCookie edit_cookie) {
+  auto pending = std::exchange(pending_undo_correction_, std::nullopt);
+  // §7: only the first commit of the composition the undo put back.
+  if (!pending || !committed_from_composition ||
+      pending->composition_generation != composition_generation_)
+    return;
+  const auto same_reading =
+      std::find_if(last_learned_commit_pairs_.begin(), last_learned_commit_pairs_.end(),
+                   [&](const auto& pair) { return pair.first == pending->reading; });
+  if (same_reading == last_learned_commit_pairs_.end() || same_reading->second == pending->surface)
+    return;
+  PostCommitCorrection(context, ipc::kCorrectionKindUndo, std::move(pending->reading),
+                       std::move(pending->surface), std::nullopt, edit_cookie);
 }
 
 }  // namespace azookey::tsf

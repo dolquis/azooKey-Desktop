@@ -65,12 +65,12 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 `BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic`、
 `dict\technical_terms_lexicon.azdic`、`dict\lattice_core.azdic` を
 `INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置します。
-`sudachi_lexicon.azdic`・`lattice_core.azdic`・`ThirdPartyNotices.txt` のどれかが欠けるとビルドは失敗します。
+3 つの `.azdic` と `ThirdPartyNotices.txt` のどれかが欠けるとビルドは失敗します。
 `lattice_core.azdic` は層ではなく、ラティス変換だけが読みます（`docs/lattice-conversion-spec.md` §8.2）。
 `dictbuild\check_bundle.py` は、生成物と `Package.wxs` の同梱一覧の差、lattice_core の欠落、
 standalone の `neologd_lexicon` pack の混入、帰属の欠落を検出します（`docs/azdic-physical-layer-spec.md` §15.12）。
 インストール後は Host の起動ログで `static_dictionary_load` が
-両方の層で `result=ok` になることを確認します（ラティス変換を持つ Host では `lattice_core.azdic` の行も `result=ok` になります）。設定アプリの「ライセンス」から
+両方の層で `result=ok` になることを確認します。設定アプリの「ライセンス」から
 インストール先の `ThirdPartyNotices.txt` を開けます。同梱しない層
 （`base_lexicon` など）は同じイベントが `result=error` の警告になります。
 

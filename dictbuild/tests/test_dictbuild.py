@@ -888,8 +888,10 @@ class BundleGuardTests(unittest.TestCase):
             self.assertIn("neologd_lexicon-20991231.azdic: not a bundled static layer", errors)
             self.assertIn("neologd_lexicon.manifest.json: not a bundled static layer", errors)
             package = path / "Package.wxs"
+            # Only the pack manifest differs from the clean payload, so it alone makes the drift.
             package.write_text('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package>'
                                '<File Source="$(BundledDictionaryDir)\\dict\\technical_terms_lexicon.azdic" />'
+                               '<File Source="$(BundledDictionaryDir)\\dict\\lattice_core.azdic" />'
                                '<File Source="$(PackDir)\\neologd_lexicon.manifest.json" /></Package></Wix>',
                                encoding="utf-8")
             clean = self.make_bundle(path / "clean")
@@ -900,9 +902,12 @@ class BundleGuardTests(unittest.TestCase):
             path = Path(temporary)
             bundle = self.make_bundle(path)
             package = path / "Package.wxs"
+            # Only the installed name differs from the payload, so it alone makes the drift.
             package.write_text('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package>'
                                '<File Source="$(BundledDictionaryDir)\\dict\\technical_terms_lexicon.azdic" '
-                               'Name="base_lexicon.azdic" /></Package></Wix>', encoding="utf-8")
+                               'Name="base_lexicon.azdic" />'
+                               '<File Source="$(BundledDictionaryDir)\\dict\\lattice_core.azdic" /></Package></Wix>',
+                               encoding="utf-8")
             self.assertTrue(any("Package.wxs ships" in e for e in check_bundle.check(bundle, package)))
 
     def test_rejects_an_empty_bundle(self):

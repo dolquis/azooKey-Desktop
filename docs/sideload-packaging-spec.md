@@ -456,7 +456,8 @@ Build workflow の `windows-llama-build` も、Release / CPU / llama.cpp 構成�
 self-contained 設定アプリに同じ検査を実行する（実行条件は `build-ci-spec.md` §4.3）。
 本節は同 spec の app-local MSVC runtime 検査から参照される。
 
-base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ、その帰属を
+base MSI は静的辞書層の `.azdic` と lattice_core（層ではなくラティス変換だけが読む。`lattice-conversion-spec.md` §8.2）を
+`%ProgramFiles%\azooKey\dict\` へ、その帰属を
 `%ProgramFiles%\azooKey\ThirdPartyNotices.txt` へ配置する。Host はこの `dict` だけを
 探索する。同梱する層、配布判定、取得元とサイズ予算の正典は
 `docs/auto-word-registration-spec.md` §14.9 / §14.10 と `docs/azdic-physical-layer-spec.md` §15.9 / §15.12 であり、本節は

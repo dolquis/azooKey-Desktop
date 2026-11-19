@@ -105,7 +105,7 @@ zip のルートには次を置く。
 - `verify-bootstrap.ps1`
 - `learning-data-snapshot.ps1`
 - `tip-manual-verification-checklist.md`
-- `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`。辞書省略時は含めない）
+- `dict/`（`sudachi_lexicon.azdic`、`technical_terms_lexicon.azdic`、`lattice_core.azdic`。辞書省略時は含めない）
 - `ThirdPartyNotices.txt`（辞書省略時は含めない）
 - `bundle-provenance.json`（辞書省略時は含めない）
 - `manifest.json`

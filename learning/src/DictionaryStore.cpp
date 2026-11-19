@@ -49,13 +49,45 @@ bool DictionaryStore::LoadStatic(LayerId layer, const std::filesystem::path& pat
   static_errors_[index].clear();
   auto trie = std::make_unique<core::DoubleArrayTrie>();
   const bool loaded = trie->Load(path, verify);
+  // The old vocabulary refers to the trie replaced below.
+  ResetLatticeLayer(index);
   if (loaded && trie->LayerId() != index) {
     static_[index].reset();
     static_errors_[index] = "layer id mismatch";
     return false;
   }
   static_[index] = std::move(trie);
+  BuildLatticeLayer(index);
   return loaded;
+}
+void DictionaryStore::ResetLatticeLayer(size_t index) { lattice_layers_[index].reset(); }
+void DictionaryStore::BuildLatticeLayer(size_t index) {
+  if (!lattice_ || !lattice_->IsAvailable() || !static_[index] || !static_[index]->IsAvailable())
+    return;
+  lattice_layers_[index] =
+      std::make_unique<core::StaticLatticeVocabulary>(*lattice_, *static_[index]);
+}
+bool DictionaryStore::LoadLatticeCore(const std::filesystem::path& path, bool verify) {
+  // Every vocabulary refers to the dictionary replaced below (DEV-2098 review).
+  for (size_t i = 0; i < lattice_layers_.size(); ++i) ResetLatticeLayer(i);
+  auto dictionary = std::make_unique<core::LatticeDictionary>();
+  const bool loaded = dictionary->Load(path, verify);
+  lattice_ = std::move(dictionary);
+  for (size_t i = 0; i < static_.size(); ++i) BuildLatticeLayer(i);
+  return loaded;
+}
+bool DictionaryStore::IsLatticeAvailable() const { return lattice_ && lattice_->IsAvailable(); }
+std::string DictionaryStore::LatticeError() const {
+  if (!lattice_) return "not loaded";
+  return lattice_->IsAvailable() ? std::string{} : std::string(lattice_->Error());
+}
+std::string DictionaryStore::LatticeConnectionError(LayerId layer) const {
+  const auto index = IndexOf(layer);
+  if (index >= lattice_layers_.size() || !lattice_layers_[index]) return {};
+  return std::string(lattice_layers_[index]->ConnectionError());
+}
+int32_t DictionaryStore::LatticeScoreScale() const {
+  return IsLatticeAvailable() ? lattice_->ScoreScale() : 0;
 }
 void DictionaryStore::EnableLayer(LayerId layer, bool enabled) {
   if (IndexOf(layer) < enabled_.size()) enabled_[IndexOf(layer)] = enabled;
@@ -285,5 +317,50 @@ std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view s
     }
   }
   return best;
+}
+
+namespace {
+// The words of one mutable layer for the lattice (lattice-conversion-spec sections 5.3 and 8.3).
+// Alias keys match like exact keys (spec section 4.2).
+class MutableLatticeVocabulary final : public core::ILatticeVocabulary {
+ public:
+  MutableLatticeVocabulary(const core::LatticeDictionary& dictionary,
+                           const std::map<std::string, std::vector<DictionaryEntry>>& index)
+      : dictionary_(dictionary), index_(index) {}
+
+  bool CommonPrefix(std::string_view key, std::vector<core::LatticeEntry>& out) const override {
+    for (size_t length = 1; length <= key.size(); ++length) {
+      if (length != key.size() && (static_cast<uint8_t>(key[length]) & 0xc0) == 0x80) continue;
+      const auto it = index_.find(std::string(key.substr(0, length)));
+      if (it == index_.end()) continue;
+      for (const auto& entry : it->second)
+        out.push_back(dictionary_.MutableWord(static_cast<uint32_t>(length), entry.surface));
+    }
+    return true;
+  }
+
+ private:
+  const core::LatticeDictionary& dictionary_;
+  const std::map<std::string, std::vector<DictionaryEntry>>& index_;
+};
+}  // namespace
+
+core::LatticeResult DictionaryStore::ConvertLattice(std::string_view reading,
+                                                    const core::LatticeQuery& query) const {
+  if (!IsLatticeAvailable()) {
+    core::LatticeResult result;
+    result.status = core::LatticeStatus::Unavailable;
+    return result;
+  }
+  std::vector<const core::ILatticeVocabulary*> vocabularies;
+  for (size_t i = 0; i < lattice_layers_.size(); ++i)
+    if (enabled_[i] && lattice_layers_[i]) vocabularies.push_back(lattice_layers_[i].get());
+  std::vector<MutableLatticeVocabulary> mutable_words;
+  mutable_words.reserve(mutable_.size());
+  for (size_t i = 0; i < mutable_.size(); ++i)
+    if (enabled_[static_.size() + i] && !mutable_[i].empty())
+      mutable_words.emplace_back(*lattice_, mutable_[i]);
+  for (const auto& words : mutable_words) vocabularies.push_back(&words);
+  return core::ConvertLattice(core::NormalizeReading(reading), *lattice_, vocabularies, query);
 }
 }  // namespace azookey::learning

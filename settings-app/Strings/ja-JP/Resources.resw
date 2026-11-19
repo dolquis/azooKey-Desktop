@@ -227,6 +227,8 @@
   <data name="Setting_inlineEnglishDictionaryPath" xml:space="preserve"><value>英単語辞書のパス</value></data>
   <data name="Setting_numberRewriter" xml:space="preserve"><value>数字の表記候補</value></data>
   <data name="Setting_katakanaRewriter" xml:space="preserve"><value>カタカナの全角・半角候補</value></data>
+  <data name="Setting_dateTimeRewriter" xml:space="preserve"><value>日付・時刻の候補</value></data>
+  <data name="Setting_calculatorRewriter" xml:space="preserve"><value>計算の候補（＝ で終わる式）</value></data>
   <data name="Setting_symbolRewriter" xml:space="preserve"><value>記号の候補</value></data>
   <data name="Setting_symbolDataPath" xml:space="preserve"><value>記号データのパス</value></data>
   <data name="Setting_emojiRewriter" xml:space="preserve"><value>絵文字の候補</value></data>

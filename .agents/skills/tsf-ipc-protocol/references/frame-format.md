@@ -157,6 +157,8 @@ TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。
 | `batch_auto_punctuation` | `bool` | 省略時は `false` |
 | `number_rewriter` | `bool` | 省略時は `false` |
 | `katakana_rewriter` | `bool` | 省略時は `false` |
+| `date_time_rewriter` | `bool` | 省略時は `false` |
+| `calculator_rewriter` | `bool` | 省略時は `false` |
 | `max_candidates` | `uint32` | 省略時または `1..32` の範囲外は `9` |
 
 TIP は初回の非空 `host_generation_id` を保存し、同じ値への再接続では pending 要求を

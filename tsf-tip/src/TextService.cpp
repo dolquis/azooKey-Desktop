@@ -21,7 +21,9 @@
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/CalculatorRewriter.h"
 #include "azookey/core/CandidatePage.h"
+#include "azookey/core/DateTimeRewriter.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/MixedRomajiSplitter.h"
@@ -277,32 +279,49 @@ std::vector<azookey::ipc::CandidateField> StandalonePunctuationCandidates(
 std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
     const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
     bool number_rewriter_enabled, bool katakana_rewriter_enabled,
-    bool symbol_rewriter_enabled = false) {
+    bool symbol_rewriter_enabled = false,
+    const std::vector<azookey::core::Candidate>& dynamic_candidates = {}) {
   if (IsStandalonePunctuation(reading)) {
     auto local = StandalonePunctuationCandidates(reading);
     return {{std::move(local[0]), "", true}, {std::move(local[1]), "半角", true}};
   }
   std::vector<azookey::tsf::TipCandidate> result;
-  result.reserve(candidates.size() + 8);
+  result.reserve(candidates.size() + dynamic_candidates.size() + 8);
   for (auto& candidate : candidates) {
     auto description = candidate.description;
     result.push_back({std::move(candidate), std::move(description), false});
   }
 
+  auto is_duplicate = [&](const azookey::core::Candidate& item) {
+    return std::any_of(result.begin(), result.end(), [&](const auto& candidate) {
+      return candidate.field.surface == item.surface;
+    });
+  };
+  auto to_tip_candidate = [](const azookey::core::Candidate& item) {
+    azookey::ipc::CandidateField candidate;
+    candidate.surface = item.surface;
+    candidate.reading = item.reading;
+    candidate.score = item.score;
+    candidate.source =
+        item.source == azookey::core::CandidateSource::Symbol ? "symbol" : "heuristic";
+    return azookey::tsf::TipCandidate{std::move(candidate), item.description, true};
+  };
+
+  // M62-E (spec §20.8): right after the first candidate, never into an empty
+  // list (live conversion shows the head). The tail rewriters below then skip
+  // what the dynamic candidates already added.
+  if (!result.empty()) {
+    auto insert_at = result.begin() + 1;
+    for (const auto& item : dynamic_candidates) {
+      if (is_duplicate(item)) continue;
+      insert_at = result.insert(insert_at, to_tip_candidate(item)) + 1;
+    }
+  }
+
   auto append_rewritten = [&](const std::vector<azookey::core::Candidate>& rewritten) {
     for (const auto& item : rewritten) {
-      const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& candidate) {
-        return candidate.field.surface == item.surface;
-      });
-      if (duplicate) continue;
-
-      azookey::ipc::CandidateField candidate;
-      candidate.surface = item.surface;
-      candidate.reading = item.reading;
-      candidate.score = item.score;
-      candidate.source =
-          item.source == azookey::core::CandidateSource::Symbol ? "symbol" : "heuristic";
-      result.push_back({std::move(candidate), item.description, true});
+      if (is_duplicate(item)) continue;
+      result.push_back(to_tip_candidate(item));
     }
   };
 
@@ -4102,10 +4121,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                 // The pending query stays queued for when the Host returns;
                 // until then the TIP-local candidates keep input moving.
                 const std::string reading = CurrentPreeditSurface();
-                candidates_ =
-                    BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
-                                       number_rewriter_.load(std::memory_order_relaxed),
-                                       katakana_rewriter_.load(std::memory_order_relaxed));
+                candidates_ = BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
+                                                 number_rewriter_.load(std::memory_order_relaxed),
+                                                 katakana_rewriter_.load(std::memory_order_relaxed),
+                                                 /*symbol_rewriter_enabled=*/false,
+                                                 DynamicCandidates(reading));
               }
               if (candidates_.empty()) {
                 candidate_window_show_pending_ = true;
@@ -4836,15 +4856,45 @@ bool TextService::EatsTabWhileAwaitingCandidateWindow(ITfContext* context, WPARA
          SameComIdentity(context, active_context_) && AwaitingCandidateWindow();
 }
 
+std::vector<core::Candidate> TextService::DynamicCandidates(const std::string& reading) const {
+  std::vector<core::Candidate> result;
+  if (date_time_rewriter_.load(std::memory_order_relaxed)) {
+    // §20.2: one clock read per candidate list, so every candidate in it
+    // shares the same time.
+    std::optional<core::LocalDateTime> now;
+    {
+      std::lock_guard<std::mutex> lock(local_time_for_test_mtx_);
+      now = local_time_for_test_;
+    }
+    if (!now) {
+      SYSTEMTIME local{};
+      GetLocalTime(&local);
+      now = core::LocalDateTime{local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute};
+    }
+    dynamic_candidate_clock_reads_.fetch_add(1, std::memory_order_relaxed);
+    result = core::ExpandDateTimeCandidates(reading, *now);
+  }
+  // §20.6: the two kinds never share a reading, so at most one adds anything.
+  if (calculator_rewriter_.load(std::memory_order_relaxed) &&
+      number_rewriter_.load(std::memory_order_relaxed)) {
+    auto calculated = core::ExpandCalculatorCandidates(reading);
+    result.insert(result.end(), std::make_move_iterator(calculated.begin()),
+                  std::make_move_iterator(calculated.end()));
+  }
+  return result;
+}
+
 // Without a Host the TIP-local candidates answer the window query that core
 // waits for.
 HRESULT TextService::OpenLocalCandidateWindow(ITfContext* context) {
   const std::string reading = input_state_.Reading();
+  auto dynamic_candidates = DynamicCandidates(reading);
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     candidates_ = BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
                                      number_rewriter_.load(std::memory_order_relaxed),
-                                     katakana_rewriter_.load(std::memory_order_relaxed));
+                                     katakana_rewriter_.load(std::memory_order_relaxed),
+                                     /*symbol_rewriter_enabled=*/false, dynamic_candidates);
   }
   return ApplyInputStateResult(context,
                                input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
@@ -6754,6 +6804,8 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
     katakana_rewriter_.store(hpayload->katakana_rewriter, std::memory_order_relaxed);
+    date_time_rewriter_.store(hpayload->date_time_rewriter, std::memory_order_relaxed);
+    calculator_rewriter_.store(hpayload->calculator_rewriter, std::memory_order_relaxed);
     symbol_rewriter_.store(hpayload->symbol_rewriter, std::memory_order_relaxed);
     emoji_rewriter_.store(hpayload->emoji_rewriter, std::memory_order_relaxed);
     emoji_trigger_search_.store(hpayload->emoji_trigger_search, std::memory_order_relaxed);
@@ -7621,15 +7673,18 @@ void TextService::ServeConnection() {
       RecordDebugIpc(std::move(debug_entry), secure, detailed_logging_allowed);
     };
 
-    auto tip_candidates =
-        BuildTipCandidates(!corrected_reading.empty()  ? corrected_reading
-                           : !ambiguous_choice.empty() ? ambiguous_choice
-                                                       : reading,
-                           std::move(response_candidates),
-                           !is_batch && number_rewriter_.load(std::memory_order_relaxed),
-                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
-                           !is_batch && !live && emoji_trigger.empty() &&
-                               symbol_rewriter_.load(std::memory_order_relaxed));
+    // The reading the candidates belong to; the rewriters match against it
+    // (spec §20.8).
+    const std::string& candidates_reading = !corrected_reading.empty()  ? corrected_reading
+                                            : !ambiguous_choice.empty() ? ambiguous_choice
+                                                                        : reading;
+    auto tip_candidates = BuildTipCandidates(
+        candidates_reading, std::move(response_candidates),
+        !is_batch && number_rewriter_.load(std::memory_order_relaxed),
+        !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
+        !is_batch && !live && emoji_trigger.empty() &&
+            symbol_rewriter_.load(std::memory_order_relaxed),
+        is_batch ? std::vector<core::Candidate>{} : DynamicCandidates(candidates_reading));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -11178,10 +11233,10 @@ void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField
 void TextService::set_rewritten_cached_candidates_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  candidates_ = BuildTipCandidates(reading, std::move(candidates),
-                                   number_rewriter_.load(std::memory_order_relaxed),
-                                   katakana_rewriter_.load(std::memory_order_relaxed),
-                                   symbol_rewriter_.load(std::memory_order_relaxed));
+  candidates_ = BuildTipCandidates(
+      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
+      katakana_rewriter_.load(std::memory_order_relaxed),
+      symbol_rewriter_.load(std::memory_order_relaxed), DynamicCandidates(reading));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -11195,10 +11250,10 @@ std::vector<ipc::CandidateField> TextService::shown_candidates_for_test() const 
 
 std::vector<CandidateViewItem> TextService::candidate_views_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) const {
-  return BuildCandidateViews(BuildTipCandidates(reading, std::move(candidates),
-                                                number_rewriter_.load(std::memory_order_relaxed),
-                                                katakana_rewriter_.load(std::memory_order_relaxed),
-                                                symbol_rewriter_.load(std::memory_order_relaxed)));
+  return BuildCandidateViews(BuildTipCandidates(
+      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
+      katakana_rewriter_.load(std::memory_order_relaxed),
+      symbol_rewriter_.load(std::memory_order_relaxed), DynamicCandidates(reading)));
 }
 
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }

@@ -69,6 +69,8 @@
   "inlineEnglishDictionaryPath": "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv",
   "numberRewriter": false,
   "katakanaRewriter": false,
+  "dateTimeRewriter": false,
+  "calculatorRewriter": false,
   "symbolRewriter": false,
   "symbolDataPath": "",
   "emojiRewriter": false,

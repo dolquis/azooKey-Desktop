@@ -32,6 +32,7 @@
 #include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/ipc/TraceId.h"
+#include "azookey/learning/UserDictionaryPos.h"
 #include "azookey/logging/Phase.h"
 
 namespace azookey::host {
@@ -294,6 +295,8 @@ static_assert(UserDictErrorMatches(UserDictionaryEditResult::NotFound,
                                    ipc::kUserDictErrorNotFound));
 static_assert(UserDictErrorMatches(UserDictionaryEditResult::Unavailable,
                                    ipc::kUserDictErrorUnavailable));
+static_assert(UserDictErrorMatches(UserDictionaryEditResult::DictionaryTooNew,
+                                   ipc::kUserDictErrorDictionaryTooNew));
 
 // DEV-1572: one record per user dictionary or new-word edit, so a CLI failure
 // can be matched with what the Host was waiting for. Never the word itself.
@@ -971,6 +974,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   // advertises it (typo-correction-learning-spec section 12.13).
   // transform_selected_text = M16: the TIP sends TransformSelectedText only to
   // a Host that advertises it (ai-backend-spec section 4.1).
+  // user_dict_pos = M71-A: version 2 of the user dictionary, AddUserWord.pos
+  // and the list's pos (user-dictionary-pos-spec section 7.4).
   res.capabilities = {"oob_cancel",
                       "commit_segments",
                       "query_live_conversion",
@@ -987,7 +992,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
                       "detect_anomalies",
                       "mixed_english",
                       "raw_keys",
-                      "transform_selected_text"};
+                      "transform_selected_text",
+                      "user_dict_pos"};
   // DEV-1974 (sideload-packaging-spec section 6.3): FetchUpdate, QueryUpdateFetch and
   // CancelUpdateFetch.
   if (config_.update_fetch) {
@@ -1746,6 +1752,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleForgetLearningEntry(const ipc::En
   if (outcome == InferenceEngine::ForgetOutcome::SaveFailed) {
     res.ok = false;
     res.error = std::string(ipc::kLearningDataErrorSaveFailed);
+  } else if (outcome == InferenceEngine::ForgetOutcome::StoreUnavailable) {
+    res.ok = false;
+    res.error = std::string(ipc::kLearningDataErrorStoreUnavailable);
   }
   return reply();
 }
@@ -2361,12 +2370,20 @@ std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& 
     return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
   }
   if (auto parsed = ipc::ParseAddUserWordRequest(req.payload_json)) {
+    // user-dictionary-pos-spec 7.1: nothing is saved for a part of speech that
+    // is not in the table or does not fit the word.
+    if (parsed->pos && learning::CheckUserWordPos(parsed->word, parsed->ruby, *parsed->pos) !=
+                           learning::UserWordPosCheck::Ok) {
+      res.error = std::string(ipc::kUserDictErrorInvalidPos);
+      return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
+    }
     learning::UserWord w;
     w.word = parsed->word;
     w.ruby = parsed->ruby;
     w.cid = parsed->cid;
     w.mid = parsed->mid;
     w.value = parsed->value;
+    w.pos = parsed->pos;
     res.ok = engine_->AddUserWord(w, options);
     if (!res.ok) res.error = UserDictionaryEditResultName(report.result);
     LogPersistentEdit(runtime_logger_, req, "user_dict_add", report);

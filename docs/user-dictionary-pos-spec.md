@@ -158,10 +158,14 @@ version 2 は、version 1（`learning/include/azookey/learning/UserDictionary.h`
     `error = store_unavailable`（`docs/learning-data-management-spec.md` §6 の「保存を止めているストア」と同じ扱い）。
     backup の archive の `user_dict` の item 自体が version 3 以上のときも、import 全体を `store_unavailable` で失敗させる
   - `userdict` CLI の writer 操作（`--offline` の add / remove、`import`）と `export`: 終了コード 1
+- Host の上の操作は、ディスクから読み直した辞書が version 3 以上なら、ディスクの辞書を変えずに断り、公開中の辞書を
+  読み直した辞書に置き換える。稼働中に別の版が書き換えた辞書を、候補・一覧・export が古いまま扱わないためである。
+  公開した後に利用者が辞書のファイルを消しても、Host を再起動するまで上の操作は断られ続ける（既知の制約）。
 - root が object で `version` が 3 以上の整数なら、`entries` が無いか配列でないなど、その先の構造を解釈できなくても、
   隔離（平文の移行元の `.corrupt.<stamp>` を含む）をせず、空の辞書として保存もせず、上と同じに保存を止める。新しい版が
   構造を変えた辞書を、壊れたものとして退避して空の辞書で置き換えないためである。このとき候補と一覧は空になる。
-- `version` が整数でない辞書と、0 以下の整数の辞書は、version 1 と同じに読む。
+- version 3 以上の辞書が平文の移行元（`.enc` へ移す前の `user_dict.json`）のときも、`.enc` へ移行しない。移行は書き換えに当たるためである。
+- `version` が整数でない辞書と、0 以下の整数の辞書は、version 1 と同じに読む。`3.0` のように整数に等しい数は、その整数として扱う。
 - entry と root の、本書と version 1 が定めない名前のメンバー（未知のメンバー）は、値を保ったまま読み込み、
   保存のときに同じ位置（entry のメンバーはその entry、root のメンバーは root）へ書き戻す。メンバーの順は保たなくてよい。
 - `pos` が文字列でない entry は、`pos` を持たない語として読み、元の値を未知のメンバーとして保つ。
@@ -516,7 +520,7 @@ Google 日本語入力は `user_pos.def` の利用者向けの品詞の名前。
    の時間を合わせて数え、保存を始める前に過ぎていたら `busy` で失敗する。保存を始めた後は打ち切らない
    （`docs/learning-data-management-spec.md` §13 の `AddUserWord` と同じ）。
 5. ディスクの辞書を読み直した複写（`ReloadIfChanged`）へ merge する。読み直しに失敗したら `load_failed`、読み込みの
-   失敗で保存を止めている辞書なら `store_unavailable`、version 3 以上なら `dictionary_too_new`（§3.2）で、何も変えずに失敗する。
+   失敗で保存を止めている辞書なら `store_unavailable`、version 3 以上なら `dictionary_too_new`（§3.2）で、ディスクの辞書を変えずに失敗する。version 3 以上のときは、公開中の辞書が読み直した辞書に置き換わる（§3.2）。それ以外の失敗では公開中の辞書も変えない。
 6. 語数の上限（§6.7）を検査してから、`Save`（DPAPI と atomic replace）で保存する。保存に失敗したら `save_failed` を返し、
    公開中の辞書を変えない。atomic replace なので、ディスクの辞書は変更前か変更後のどちらかである。
 7. 保存に成功したときだけ、状態のロックを取って複写を公開し、展開形の索引（§4.6）を作り直す。
@@ -648,7 +652,7 @@ Host が §7.4 の capability を告知したときだけ出す。macOS 版の�
 | ラティス | fixture の語彙と行列で、登録した動詞の展開形と助動詞がつながる経路が出る（「ぐぐった」→「ググった」）。§5.2 の 1 bit の状態で、ユーザー辞書の語を含む最小コストの経路と、制約なしの最小コストが、それぞれ全列挙の最小と一致する |
 | エンジン | §5.2 の各条件で活用語の経路が足され、それ以外（live、索引が当たらない、lattice_core が無い、cancel、deadline、制約なしの最良から T を超えて高い）では足されない。T の境目（差が T ちょうどなら足し、T を超えたら足さない）。§5.3 の score・source・debug_info |
 | 取り込み | 自作の fixture（`msime` を UTF-16LE の BOM 付き、`google` を BOM なし UTF-8、`azookey_tsv`、CP932 の `msime`）で、§6.5 の対応表どおりに入る。§6.4 の除外の理由ごとの件数。§6.7 の各上限。`merge` と `overwrite`。CP932 は Windows だけで試す |
-| データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書と公開中の辞書が変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
+| データ安全 | 保存の失敗、ロックの時間切れ、読み直しの失敗、version 3 以上のそれぞれで、ディスクの辞書が変わらない。公開中の辞書は、version 3 以上のときだけ読み直した辞書に置き換わり、ほかでは変わらない。`dry_run` が何も変えない。待ちの予算が解析の後から数えられる（予算の注入で確かめる）。privacy の方針が secure・学習不可、SafeMode のとき `blocked`。ログに語・読み・パスが出ない |
 | IPC と CLI | `AddUserWord` の `pos` と `invalid_pos`。`ImportUserDictionaryText` の要求と応答の往復。`userdict import` の既定で 5 列以下の行の結果が品詞に対応する前と同じになり、6 列目が §2.1・§4.4 で検査される。`--pos` を capability `user_dict_pos` の無い Host へ送らない |
 | dictbuild | §4.2 の語尾表の各（活用型、活用形）の組が `META.lattice` の品詞の表にあり、SudachiDict の代表の語の活用形と語尾表が一致する |
 | Human Gate | Microsoft IME と Google 日本語入力の実際の書き出しファイルを取り込める（§6.1 が照合を Human Gate に委ねた形式、文字コード、改行、品詞名を実ファイルと照らし、`msime.h` の内部の品詞名が現れるかを記録する）。実機で、活用した登録語が候補に出る |

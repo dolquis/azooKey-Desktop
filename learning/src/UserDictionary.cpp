@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +31,13 @@ namespace j = ::azookey::ipc::json;
 
 namespace {
 
+// The entry members this version defines (docs/user-dictionary-pos-spec.md
+// section 3.1); every other member is kept in UserWord::extra.
+bool IsKnownEntryMember(std::string_view name) {
+  return name == "word" || name == "ruby" || name == "cid" || name == "mid" || name == "value" ||
+         name == "pos";
+}
+
 j::Value WordToJson(const UserWord& w) {
   j::Object o;
   o.emplace("word", j::Value(w.word));
@@ -37,6 +45,9 @@ j::Value WordToJson(const UserWord& w) {
   if (w.cid) o.emplace("cid", j::Value(static_cast<double>(*w.cid)));
   if (w.mid) o.emplace("mid", j::Value(static_cast<double>(*w.mid)));
   if (w.value) o.emplace("value", j::Value(*w.value));
+  if (w.pos) o.emplace("pos", j::Value(*w.pos));
+  // emplace leaves a member written above in place.
+  for (const auto& [name, value] : w.extra) o.emplace(name, value);
   return j::Value(std::move(o));
 }
 
@@ -51,6 +62,17 @@ std::optional<UserWord> WordFromJson(const j::Value& v) {
   if (auto cid = v.GetInt("cid")) w.cid = static_cast<int32_t>(*cid);
   if (auto mid = v.GetInt("mid")) w.mid = static_cast<int32_t>(*mid);
   if (auto val = v.GetNumber("value")) w.value = *val;
+  // Section 3.2: a `pos` that is not a string is no part of speech, but kept.
+  if (const auto* pos = v.Find("pos")) {
+    if (pos->IsString()) {
+      w.pos = pos->AsString();
+    } else {
+      w.extra.emplace("pos", *pos);
+    }
+  }
+  for (const auto& [name, value] : v.AsObject()) {
+    if (!IsKnownEntryMember(name)) w.extra.emplace(name, value);
+  }
   return w;
 }
 
@@ -73,6 +95,12 @@ bool QuarantineCorruptFile(const std::filesystem::path& source) {
 }
 
 }  // namespace
+
+bool UserWord::operator==(const UserWord& other) const {
+  return word == other.word && ruby == other.ruby && cid == other.cid && mid == other.mid &&
+         value == other.value && pos == other.pos &&
+         j::Stringify(j::Value(extra)) == j::Stringify(j::Value(other.extra));
+}
 
 UserDictionary::UserDictionary(std::filesystem::path path, const ByteCrypto* crypto)
     : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
@@ -139,9 +167,42 @@ std::optional<UserDictionary::FileStamp> UserDictionary::ReadStorageStamp() cons
   return stamp;
 }
 
+UserDictionary::ParseResult UserDictionary::ParseInto(std::string_view text) {
+  auto v = j::Parse(text);
+  if (!v || !v->IsObject()) return ParseResult::NotDictionary;
+  // Section 3.2: a version that is not an integer, or is 0 or less, reads as
+  // version 1. A number equal to an integer is that integer (3.0, and 1e300,
+  // which no integer type holds, are too new as well).
+  bool too_new = false;
+  if (const auto* version = v->Find("version"); version && version->IsNumber()) {
+    const double number = version->AsNumber();
+    double integral = 0.0;
+    too_new = std::isfinite(number) && std::modf(number, &integral) == 0.0 && number >= 3.0;
+  }
+  const auto* entries = v->GetArray("entries");
+  // A newer version may have changed the structure: never quarantine it.
+  if (!entries && !too_new) return ParseResult::NotDictionary;
+  by_ruby_.clear();
+  root_extra_.clear();
+  too_new_ = too_new;
+  for (const auto& [name, value] : v->AsObject()) {
+    if (name != "version" && name != "entries") root_extra_.emplace(name, value);
+  }
+  if (entries) {
+    for (const auto& e : *entries) {
+      if (auto w = WordFromJson(e)) {
+        by_ruby_[w->ruby].push_back(std::move(*w));
+      }
+    }
+  }
+  return too_new ? ParseResult::TooNew : ParseResult::Loaded;
+}
+
 bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
   ++revision_;
   by_ruby_.clear();
+  root_extra_.clear();
+  too_new_ = false;
   save_blocked_by_corrupt_load_ = false;
   disk_state_.reset();
   // Taken before the read: a file replaced in between then fails to match.
@@ -170,27 +231,17 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
     remember_encrypted_file();
     return true;
   }
-  auto v = j::Parse(text);
-  if (!v || !v->IsObject()) {
+  const auto parsed = ParseInto(text);
+  if (parsed == ParseResult::NotDictionary) {
     save_blocked_by_corrupt_load_ = source == ProtectedFileSource::Encrypted ||
                                     !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
     SecureErase(text);
     return false;
   }
-  const auto* entries = v->GetArray("entries");
-  if (!entries) {
-    save_blocked_by_corrupt_load_ = source == ProtectedFileSource::Encrypted ||
-                                    !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
-    SecureErase(text);
-    return false;
-  }
-  for (const auto& e : *entries) {
-    if (auto w = WordFromJson(e)) {
-      by_ruby_[w->ruby].push_back(std::move(*w));
-    }
-  }
-  if (source == ProtectedFileSource::Plaintext && quarantine_corrupt_file &&
-      !MigratePlaintextFile(path_, text, *crypto_)) {
+  // Section 3.2: a dictionary too new to write is not migrated either; the
+  // plaintext stays where it is.
+  if (parsed == ParseResult::Loaded && source == ProtectedFileSource::Plaintext &&
+      quarantine_corrupt_file && !MigratePlaintextFile(path_, text, *crypto_)) {
     save_blocked_by_corrupt_load_ = true;
     SecureErase(text);
     return false;
@@ -234,7 +285,7 @@ static bool SameExportTarget(const std::filesystem::path& left,
 }
 
 bool UserDictionary::Save() const {
-  if (save_blocked_by_corrupt_load_) {
+  if (save_blocked()) {
     return false;
   }
   disk_state_.reset();
@@ -246,7 +297,7 @@ bool UserDictionary::Save() const {
 }
 
 bool UserDictionary::SavePlaintextExport(const std::filesystem::path& export_path) const {
-  if (save_blocked_by_corrupt_load_) return false;
+  if (save_blocked()) return false;
   auto backup = path_;
   backup += ".bak";
   if (SameExportTarget(export_path, path_) || SameExportTarget(export_path, storage_path()) ||
@@ -257,29 +308,27 @@ bool UserDictionary::SavePlaintextExport(const std::filesystem::path& export_pat
 
 std::string UserDictionary::Serialize() const {
   j::Object root;
-  root.emplace("version", j::Value(1));
+  // Section 3.3: version 2 only when a word has a part of speech, so a
+  // dictionary without one keeps the form of the versions before them.
+  bool has_pos = false;
   j::Array entries;
   for (const auto& [ruby, bucket] : by_ruby_) {
     for (const auto& w : bucket) {
+      has_pos = has_pos || w.pos.has_value();
       entries.push_back(WordToJson(w));
     }
   }
+  root.emplace("version", j::Value(has_pos ? 2 : 1));
   root.emplace("entries", j::Value(std::move(entries)));
+  for (const auto& [name, value] : root_extra_) root.emplace(name, value);
   return j::Stringify(j::Value(std::move(root)));
 }
 
 std::string UserDictionary::SerializeText() const { return Serialize(); }
 
 bool UserDictionary::LoadText(std::string_view text) {
-  auto v = j::Parse(text);
-  const auto* entries = v && v->IsObject() ? v->GetArray("entries") : nullptr;
-  if (!entries) return false;
-  Clear();
-  for (const auto& e : *entries) {
-    if (auto w = WordFromJson(e)) {
-      by_ruby_[w->ruby].push_back(std::move(*w));
-    }
-  }
+  if (ParseInto(text) == ParseResult::NotDictionary) return false;
+  ++revision_;
   return true;
 }
 

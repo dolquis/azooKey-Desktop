@@ -1263,6 +1263,17 @@ bool InferenceEngine::EditUserDictionary(const std::function<bool(learning::User
     return finish(UserDictionaryEditResult::LoadFailed, kUserDictionaryLoadError);
   }
   report.load_ms = MillisecondsBetween(stage_start, SteadyClock::now());
+  // user-dictionary-pos-spec section 3.2: a newer version's dictionary is not
+  // changed. What was read is published, so the candidates, the list and an
+  // export follow the dictionary on disk.
+  if (edited->too_new()) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      *user_dict_ = std::move(*edited);
+      indexed_user_dict_ = nullptr;
+    }
+    return finish(UserDictionaryEditResult::DictionaryTooNew);
+  }
   if (!edit(*edited)) return finish(UserDictionaryEditResult::NotFound);
   // The last point at which giving up leaves the dictionary as it was.
   if (SteadyClock::now() > deadline) {

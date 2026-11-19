@@ -34,6 +34,8 @@ struct UserDictCliOptions {
   std::optional<int32_t> cid;
   std::optional<int32_t> mid;
   std::optional<double> weight;
+  // add --pos: a part-of-speech id (docs/user-dictionary-pos-spec.md 7.5).
+  std::optional<std::string> pos;
   std::string path;
   UserDictCliFormat format{UserDictCliFormat::Json};
   bool dry_run{false};

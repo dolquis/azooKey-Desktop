@@ -82,8 +82,10 @@ struct UserWordInput {
 };
 UserWordInput NormalizeUserWordInput(std::string_view reading, std::string_view word);
 
-// The `error` codes of AddUserWordResponse (ipc/Payloads.h kUserDictError*). Each has a
-// "LearningUserDictError_<code>" string; any other falls back to "LearningUserDictError_other".
+// The `error` codes of AddUserWordResponse (ipc/Payloads.h kUserDictError*) that this pane has
+// strings for. Each has a "LearningUserDictError_<code>" string; any other falls back to
+// "LearningUserDictError_other". invalid_pos and dictionary_too_new
+// (user-dictionary-pos-spec section 7.1) are added with the part-of-speech field (DEV-2138).
 inline constexpr std::array<std::string_view, 7> kUserDictErrorCodes{
     "busy",        "lock_failed",     "load_failed",      "save_failed",
     "unavailable", "invalid_request", "not_authenticated"};

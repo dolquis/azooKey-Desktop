@@ -441,11 +441,19 @@ struct AddUserWordRequest {
   std::optional<int32_t> cid;
   std::optional<int32_t> mid;
   std::optional<double> value;
+  // A part-of-speech id (docs/user-dictionary-pos-spec.md 7.1); absent for a
+  // noun. Sent only to a Host announcing the `user_dict_pos` capability: an
+  // older Host drops it silently.
+  std::optional<std::string> pos;
 };
 
+// Handshake capabilities of the user dictionary (user-dictionary-pos-spec 7.4).
+inline constexpr std::string_view kCapabilityUserDictPos = "user_dict_pos";
+
 // Error codes carried in the `error` field of AddUserWordResponse and
-// RemoveUserWordResponse (DEV-1581). The first six are the names of
-// host::UserDictionaryEditResult; the Dispatcher checks that they agree.
+// RemoveUserWordResponse (DEV-1581). The first six, and dictionary_too_new,
+// are the names of host::UserDictionaryEditResult; the Dispatcher checks that
+// they agree.
 inline constexpr std::string_view kUserDictErrorBusy = "busy";
 inline constexpr std::string_view kUserDictErrorLockFailed = "lock_failed";
 inline constexpr std::string_view kUserDictErrorLoadFailed = "load_failed";
@@ -454,6 +462,10 @@ inline constexpr std::string_view kUserDictErrorNotFound = "not_found";
 inline constexpr std::string_view kUserDictErrorUnavailable = "unavailable";
 inline constexpr std::string_view kUserDictErrorInvalidRequest = "invalid_request";
 inline constexpr std::string_view kUserDictErrorNotAuthenticated = "not_authenticated";
+// The `pos` is not an id of the table, or the word does not meet section 4.4.
+inline constexpr std::string_view kUserDictErrorInvalidPos = "invalid_pos";
+// The dictionary on disk has version 3 or later and is not changed (section 3.2).
+inline constexpr std::string_view kUserDictErrorDictionaryTooNew = "dictionary_too_new";
 
 struct AddUserWordResponse {
   bool ok{false};

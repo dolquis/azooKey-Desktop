@@ -120,6 +120,15 @@ InferenceEngine::ForgetOutcome InferenceEngine::ForgetLearningEntry(LearningData
   if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ForgetOutcome::SaveFailed;
   }
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as
+  // it is, and what was read is published.
+  if (snapshot->too_new()) {
+    std::scoped_lock lock(state_mutex_);
+    *user_dict_ = std::move(*snapshot);
+    indexed_user_dict_ = nullptr;
+    RefreshDictionaryLocked();
+    return ForgetOutcome::StoreUnavailable;
+  }
   const auto before = *snapshot;
   if (!snapshot->Remove(entry->surface, entry->reading)) return ForgetOutcome::NotFound;
   const bool saved = snapshot->Save();
@@ -332,6 +341,15 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
   if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ResetOutcome::SaveFailed;
   }
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as
+  // it is, and what was read is published.
+  if (snapshot->too_new()) {
+    std::scoped_lock lock(state_mutex_);
+    *user_dict_ = std::move(*snapshot);
+    indexed_user_dict_ = nullptr;
+    RefreshDictionaryLocked();
+    return ResetOutcome::Unavailable;
+  }
   const auto before = *snapshot;
   snapshot->Clear();
   const bool saved = snapshot->Save();
@@ -418,6 +436,28 @@ LearningExportResult InferenceEngine::ExportLearningData(
   std::optional<std::vector<BackupItem>> items;
   const learning::ByteCrypto* crypto = nullptr;
   LearningExportResult result;
+  // user-dictionary-pos-spec 3.2: another version may have rewritten the user
+  // dictionary since it was loaded. Read it again under its locks, as an edit
+  // does, and publish what was read when it is too new; the snapshot below then
+  // refuses it as a store that blocks saving.
+  if (detail::LearningStoreSelected(selected, LearningDataStore::UserDictionary) && user_dict_) {
+    std::lock_guard writer_lock(user_dict_writer_mutex_);
+    std::optional<learning::UserDictionary> snapshot;
+    {
+      std::scoped_lock lock(state_mutex_);
+      snapshot = *user_dict_;
+    }
+    learning::FileLockFailure lock_failure;
+    const auto file_lock =
+        learning::AcquireExclusiveFileLockForPath(snapshot->path(), lock_failure);
+    if (file_lock && detail::UserDictionaryFileExists(*snapshot) && snapshot->ReloadIfChanged() &&
+        snapshot->too_new()) {
+      std::scoped_lock lock(state_mutex_);
+      *user_dict_ = std::move(*snapshot);
+      indexed_user_dict_ = nullptr;
+      RefreshDictionaryLocked();
+    }
+  }
   {
     std::scoped_lock lock(state_mutex_, english_mutex_, typo_store_mutex_);
     crypto = backup_crypto_ ? backup_crypto_ : &learning::DpapiCrypto();
@@ -471,6 +511,17 @@ LearningImportResult InferenceEngine::ImportLearningData(
       return failed;
     }
     if (detail::UserDictionaryFileExists(*user_dict_copy) && !user_dict_copy->ReloadIfChanged()) {
+      LearningImportResult failed;
+      failed.error = BackupError::StoreUnavailable;
+      return failed;
+    }
+    // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left
+    // as it is, and what was read is published, as an edit does.
+    if (user_dict_copy->too_new()) {
+      std::scoped_lock lock(state_mutex_);
+      *user_dict_ = std::move(*user_dict_copy);
+      indexed_user_dict_ = nullptr;
+      RefreshDictionaryLocked();
       LearningImportResult failed;
       failed.error = BackupError::StoreUnavailable;
       return failed;

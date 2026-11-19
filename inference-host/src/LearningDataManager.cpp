@@ -68,6 +68,8 @@ std::vector<LearningDataEntry> CollectEntries(const LearningDataStores& stores,
         entry.weight = word.value.value_or(0.0);
         if (word.cid) entry.metadata.emplace("cid", std::to_string(*word.cid));
         if (word.mid) entry.metadata.emplace("mid", std::to_string(*word.mid));
+        // user-dictionary-pos-spec 7.3.
+        if (word.pos) entry.metadata.emplace("pos", *word.pos);
         entries.push_back(std::move(entry));
       }
       break;
@@ -332,8 +334,9 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
   auto* items = &items_in;
   // A row that does not parse means the item is not what this Host wrote;
   // importing the rest would lose data silently.
+  // The first failure is the one reported.
   const auto parsed_or_fail = [&](bool ok) {
-    if (!ok) result.error = BackupError::BadItem;
+    if (!ok && result.error == BackupError::None) result.error = BackupError::BadItem;
   };
 
   // Parse everything first: a store is changed only once the whole archive
@@ -354,7 +357,12 @@ LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
     if (const auto* item = FindItem(*items, "user_dictionary")) {
       parsed.user_dictionary =
           std::make_unique<learning::UserDictionary>(std::filesystem::path{}, crypto);
-      parsed_or_fail(parsed.user_dictionary->LoadText(item->plaintext));
+      const bool loaded = parsed.user_dictionary->LoadText(item->plaintext);
+      parsed_or_fail(loaded);
+      // user-dictionary-pos-spec 3.2: an item of version 3 or later fails the
+      // whole import, as a store that blocks saving does.
+      if (loaded && parsed.user_dictionary->too_new() && result.error == BackupError::None)
+        result.error = BackupError::StoreUnavailable;
     }
   }
   if (detail::LearningStoreSelected(selected, LearningDataStore::Typo) && stores.typo) {

@@ -1105,6 +1105,7 @@ std::string BuildAddUserWordRequest(const AddUserWordRequest& p) {
   if (p.cid) o.emplace("cid", j::Value(static_cast<int64_t>(*p.cid)));
   if (p.mid) o.emplace("mid", j::Value(static_cast<int64_t>(*p.mid)));
   if (p.value) o.emplace("value", j::Value(*p.value));
+  if (p.pos) o.emplace("pos", j::Value(*p.pos));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -1120,6 +1121,10 @@ std::optional<AddUserWordRequest> ParseAddUserWordRequest(const std::string& jso
   if (auto cid = v->GetInt("cid")) p.cid = static_cast<int32_t>(*cid);
   if (auto mid = v->GetInt("mid")) p.mid = static_cast<int32_t>(*mid);
   if (auto val = v->GetNumber("value")) p.value = *val;
+  if (const auto* pos = v->Find("pos")) {
+    if (!pos->IsString()) return std::nullopt;
+    p.pos = pos->AsString();
+  }
   return p;
 }
 

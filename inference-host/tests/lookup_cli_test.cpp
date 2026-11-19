@@ -172,6 +172,39 @@ TEST_F(LookupCliTest, ExactReadingFindsUserDictionaryAndLearningEntries) {
   EXPECT_TRUE(saw_learning);
 }
 
+// user-dictionary-pos-spec 7.5 (DEV-2135): the JSON line carries the part of
+// speech; the TSV keeps its columns.
+TEST_F(LookupCliTest, UserDictionaryPosIsInTheJsonLineOnly) {
+  {
+    azookey::learning::UserDictionary dictionary(paths.user_dict,
+                                                 &azookey::learning::test::Crypto());
+    azookey::learning::UserWord word;
+    word.word = "ググる";
+    word.ruby = "ぐぐる";
+    word.pos = "verb_godan_ra";
+    dictionary.Add(word);
+    ASSERT_TRUE(dictionary.Save());
+  }
+  const auto json_options = Parse({"--mode", "exact", "--query", "ぐぐる"});
+  ASSERT_TRUE(json_options);
+  const auto json_result = RunLookup(*json_options, paths);
+  EXPECT_EQ(json_result.exit_code, 0);
+  ASSERT_EQ(json_result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(json_result.output_lines.front());
+  ASSERT_TRUE(json);
+  EXPECT_EQ(json->GetString("source"), "user_dict");
+  EXPECT_EQ(json->GetString("pos"), "verb_godan_ra");
+
+  const auto tsv_options = Parse({"--mode", "exact", "--query", "ぐぐる", "--format", "tsv"});
+  ASSERT_TRUE(tsv_options);
+  const auto tsv_result = RunLookup(*tsv_options, paths);
+  EXPECT_EQ(tsv_result.exit_code, 0);
+  ASSERT_FALSE(tsv_result.output_lines.empty());
+  for (const auto& line : tsv_result.output_lines) {
+    EXPECT_EQ(line.find("verb_godan_ra"), std::string::npos) << line;
+  }
+}
+
 TEST_F(LookupCliTest, ReadingPrefixFindsAllMatchingReadingsOnly) {
   SeedStores(paths);
   const auto options = Parse({"--mode", "prefix", "--query", "にほん"});

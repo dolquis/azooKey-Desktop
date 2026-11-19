@@ -145,8 +145,8 @@ TEST(EngineLattice, OffOrWithoutAUsableLatticeCoreTheCandidatesStayAsBefore) {
   for (int i = 0; i < 65; ++i) long_reading += "て";
   const auto on = MakeEngine(NoLimitConfig(), Fixture("lattice"));
   EXPECT_TRUE(LatticeCandidates(on->QueryCandidates(long_reading, "", kNow)).empty());
-  EXPECT_FALSE(LatticeCandidates(on->QueryCandidates(long_reading.substr(0, 64 * 3), "", kNow))
-                   .empty());
+  EXPECT_FALSE(
+      LatticeCandidates(on->QueryCandidates(long_reading.substr(0, 64 * 3), "", kNow)).empty());
 }
 
 TEST(EngineLattice, ALayerWhoseConnectionsFailKeepsItsLookupsAndEntersWithDefaultIds) {
@@ -177,8 +177,7 @@ TEST(EngineLattice, ALayerWhoseConnectionsFailKeepsItsLookupsAndEntersWithDefaul
 TEST(EngineLattice, AnotherReadingsLatticePathsAreNotAppendedAsItsDictionaryWords) {
   const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
   // DEV-1773 without a model: the other reading's dictionary words follow the typed ones.
-  const auto result =
-      engine->QueryAmbiguousCandidatesEx(kSentence, {"てんき"}, "", kNow, nullptr);
+  const auto result = engine->QueryAmbiguousCandidatesEx(kSentence, {"てんき"}, "", kNow, nullptr);
   bool found_word = false;
   for (const auto& c : result.candidates) {
     if (c.reading != "てんき") continue;

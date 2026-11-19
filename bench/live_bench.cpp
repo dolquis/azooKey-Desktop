@@ -514,16 +514,22 @@ int main(int argc, char** argv) {
       std::cerr << error << std::endl;
       return 2;
     }
-    // Read-only and never handed to the engine, so it is neither migrated nor saved.
-    azookey::learning::LearningStore personal_store(learning_path);
-    size_t malformed_rows = 0;
-    if (!personal_store.LoadReadOnly(&malformed_rows)) {
+    // Read-only and never handed to the engine, so it is neither migrated nor saved. A path the
+    // stream cannot read (libstdc++ throws for a directory) is the same input error as a failed
+    // load, with a fixed message.
+    try {
+      azookey::learning::LearningStore personal_store(learning_path);
+      size_t malformed_rows = 0;
+      if (!personal_store.LoadReadOnly(&malformed_rows)) {
+        throw std::runtime_error("load failed");
+      }
+      personal_input = azookey::bench::BuildPersonalCases(
+          personal_store.All(), malformed_rows, *privacy,
+          max_cases.value_or(azookey::bench::kDefaultPersonalMaxCases));
+    } catch (const std::exception&) {
       std::cerr << "cannot read the learning store; evaluation does not run" << std::endl;
       return 2;
     }
-    personal_input = azookey::bench::BuildPersonalCases(
-        personal_store.All(), malformed_rows, *privacy,
-        max_cases.value_or(azookey::bench::kDefaultPersonalMaxCases));
   }
 
   std::optional<azookey::bench::TemporaryLearningFile> learning_file;

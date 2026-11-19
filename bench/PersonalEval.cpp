@@ -81,6 +81,21 @@ struct ReadingGroup {
 
 std::string ToDecimal(uint64_t value) { return std::to_string(value); }
 
+// Reads a regular file whole. False for a directory or a failed read: libstdc++ opens a directory
+// and then throws from basic_filebuf::underflow, where MSVC fails the open.
+bool ReadRegularFile(const std::filesystem::path& path, std::string& text) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec) || ec) return false;
+  try {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) return false;
+    text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    return !input.bad();
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 }  // namespace
 
 std::optional<PersonalPrivacy> LoadPersonalPrivacy(const std::filesystem::path& settings_path,
@@ -101,17 +116,9 @@ std::optional<PersonalPrivacy> LoadPersonalPrivacy(const std::filesystem::path& 
     return PersonalPrivacy{};
   }
   std::string text;
-  {
-    std::ifstream input(settings_path, std::ios::binary);
-    if (!input.is_open()) {
-      SetError(error, "cannot read the settings file; evaluation does not run");
-      return std::nullopt;
-    }
-    text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-    if (input.bad()) {
-      SetError(error, "cannot read the settings file; evaluation does not run");
-      return std::nullopt;
-    }
+  if (!ReadRegularFile(settings_path, text)) {
+    SetError(error, "cannot read the settings file; evaluation does not run");
+    return std::nullopt;
   }
   // Parsed in place: unlike SettingsStore::Load, an invalid file is never moved aside.
   const auto parsed = j::Parse(text);
@@ -272,17 +279,9 @@ bool ValidateBenchProfile(const std::string& profile, std::string* error) {
 std::optional<std::string> ReadBenchProfileFile(const std::filesystem::path& path,
                                                 std::string* error) {
   std::string text;
-  {
-    std::ifstream input(path, std::ios::binary);
-    if (!input.is_open()) {
-      SetError(error, "cannot read --profile-file");
-      return std::nullopt;
-    }
-    text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-    if (input.bad()) {
-      SetError(error, "cannot read --profile-file");
-      return std::nullopt;
-    }
+  if (!ReadRegularFile(path, text)) {
+    SetError(error, "cannot read --profile-file");
+    return std::nullopt;
   }
   if (text.rfind("\xEF\xBB\xBF", 0) == 0) {
     SetError(error, "--profile-file must not start with a byte order mark");

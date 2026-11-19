@@ -346,6 +346,9 @@ TEST(PersonalEvalTest, ValidatesBenchProfilesWithoutQuotingThem) {
     EXPECT_EQ(error.find(secret), std::string::npos);
   }
   EXPECT_FALSE(ReadBenchProfileFile(directory.path() / "absent.txt", &error));
+  // libstdc++ opens a directory and throws when reading it; this is an input error as well.
+  EXPECT_FALSE(ReadBenchProfileFile(directory.path(), &error));
+  EXPECT_EQ(error, "cannot read --profile-file");
 }
 
 #if defined(_WIN32)

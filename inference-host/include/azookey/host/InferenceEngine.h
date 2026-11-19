@@ -40,6 +40,7 @@
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/learning/UserDictionaryTextImport.h"
 #include "azookey/logging/RuntimeLogger.h"
 
 namespace azookey::host {
@@ -221,6 +222,10 @@ enum class UserDictionaryEditResult {
   // The dictionary on disk has version 3 or later; nothing was written
   // (user-dictionary-pos-spec section 3.2).
   DictionaryTooNew,
+  // A text import: the dictionary refuses to save after a failed load, or it
+  // would hold more words than the limit (user-dictionary-pos-spec 6.7, 6.8).
+  StoreUnavailable,
+  TooManyWords,
 };
 
 constexpr const char* UserDictionaryEditResultName(UserDictionaryEditResult result) {
@@ -241,6 +246,10 @@ constexpr const char* UserDictionaryEditResultName(UserDictionaryEditResult resu
       return "save_failed";
     case UserDictionaryEditResult::DictionaryTooNew:
       return "dictionary_too_new";
+    case UserDictionaryEditResult::StoreUnavailable:
+      return "store_unavailable";
+    case UserDictionaryEditResult::TooManyWords:
+      return "too_many_words";
   }
   return "unavailable";
 }
@@ -374,6 +383,20 @@ class InferenceEngine {
   bool AddUserWord(const learning::UserWord& word, const UserDictionaryEditOptions& options = {});
   bool RemoveUserWord(const std::string& word, const std::string& ruby,
                       const UserDictionaryEditOptions& options = {});
+  // user-dictionary-pos-spec section 6.8, steps 4 to 7: merges parsed words of
+  // another IME's dictionary as AddUserWord edits. Pass the end of the parse as
+  // options.received. False on any failure (report->result names it); the
+  // dictionary on disk and in memory is then unchanged.
+  bool ImportUserDictionaryText(const std::vector<learning::UserWord>& words,
+                                learning::ImportConflictPolicy policy,
+                                const UserDictionaryEditOptions& options,
+                                learning::TextImportMergeCounts* counts);
+  // Section 6.8, step 3: what that import would do to the dictionary served
+  // now, from a copy of its keys. Ok, Unavailable, DictionaryTooNew,
+  // StoreUnavailable or TooManyWords; changes nothing.
+  UserDictionaryEditResult DryRunUserDictionaryText(const std::vector<learning::UserWord>& words,
+                                                    learning::ImportConflictPolicy policy,
+                                                    learning::TextImportMergeCounts* counts);
   // Test-only (DEV-1740): the bundled TSV and the configured path that counts
   // as the default, in place of <exe>\data\english-words.tsv and
   // kDefaultEnglishDictionaryPath. Set it before the first lookup.

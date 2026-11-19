@@ -87,7 +87,8 @@ TEST(MessagesTest, TypeStringMapping) {
         azookey::ipc::MessageType::ResetLearningStore, azookey::ipc::MessageType::QueryPersona,
         azookey::ipc::MessageType::DetectAnomalies, azookey::ipc::MessageType::FetchCatalogModel,
         azookey::ipc::MessageType::QueryCatalogFetch, azookey::ipc::MessageType::CancelCatalogFetch,
-        azookey::ipc::MessageType::TransformSelectedText}) {
+        azookey::ipc::MessageType::TransformSelectedText,
+        azookey::ipc::MessageType::ImportUserDictionaryText}) {
     EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
   }
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::TransformSelectedText),

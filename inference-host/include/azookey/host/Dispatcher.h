@@ -125,6 +125,8 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleForgetLearningEntry(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleExportLearningData(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleImportLearningData(const ipc::Envelope& req);
+  // user-dictionary-pos-spec section 6.8 (M71-A).
+  std::optional<ipc::Envelope> HandleImportUserDictionaryText(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleResetLearningStore(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryPersona(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleDetectAnomalies(const ipc::Envelope& req);

@@ -868,6 +868,49 @@ std::optional<ExportLearningDataResponse> ParseExportLearningDataResponse(const 
 std::optional<ImportLearningDataRequest> ParseImportLearningDataRequest(const std::string& json);
 std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const std::string& json);
 
+// Text dictionaries of other IMEs (docs/user-dictionary-pos-spec.md section
+// 7.2). Capability "user_dict_text_import"; MessageType::ImportUserDictionaryText.
+inline constexpr std::string_view kCapabilityUserDictTextImport = "user_dict_text_import";
+
+struct ImportUserDictionaryTextRequest {
+  std::string source_path;                   // UTF-8 absolute path; any extension.
+  std::string format{"auto"};                // "auto" | "msime" | "google" | "azookey_tsv".
+  std::string conflict_resolution{"merge"};  // "merge" | "overwrite" | "keep_both".
+  bool dry_run{false};
+};
+
+struct UserDictionaryTextImportCounts {
+  uint64_t added{};
+  uint64_t replaced{};
+  uint64_t kept{};
+  uint64_t duplicates_in_file{};
+  uint64_t malformed{};
+  uint64_t too_long{};
+  uint64_t unsupported_pos{};
+  uint64_t pos_mismatch{};
+};
+
+struct ImportUserDictionaryTextResponse {
+  bool ok{false};
+  // Section 7.2: invalid_request, not_authenticated, blocked, invalid_path,
+  // source_missing, too_large, unsupported_encoding, bad_encoding,
+  // unknown_format, no_entries, too_many_words, busy, lock_failed,
+  // load_failed, store_unavailable, dictionary_too_new, save_failed,
+  // unavailable.
+  std::optional<std::string> error;
+  // Set once the file was parsed, also on a later failure.
+  std::optional<std::string> format;
+  std::optional<std::string> encoding;
+  std::optional<UserDictionaryTextImportCounts> counts;
+};
+
+std::string BuildImportUserDictionaryTextRequest(const ImportUserDictionaryTextRequest& p);
+std::optional<ImportUserDictionaryTextRequest> ParseImportUserDictionaryTextRequest(
+    const std::string& json);
+std::string BuildImportUserDictionaryTextResponse(const ImportUserDictionaryTextResponse& p);
+std::optional<ImportUserDictionaryTextResponse> ParseImportUserDictionaryTextResponse(
+    const std::string& json);
+
 // Whole-store reset (learning-data-management-spec section 4.6). Capability
 // "learning_reset". Errors are the kLearningDataError* codes.
 struct ResetLearningStoreRequest {

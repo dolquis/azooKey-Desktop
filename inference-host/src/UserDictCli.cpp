@@ -9,6 +9,7 @@
 #include <limits>
 #include <locale>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -442,6 +443,84 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
   return result;
 }
 
+// import --input-format auto / msime / google (user-dictionary-pos-spec 7.5):
+// decoded, parsed and limited as sections 6.2 to 6.7 say, then merged by
+// --conflict. The report adds the counts of section 7.2 to imported and skipped.
+UserDictCliResult ImportText(const UserDictCliOptions& options,
+                             azookey::learning::UserDictionary& dict) {
+  namespace al = azookey::learning;
+  UserDictCliResult result;
+  const auto report = [&](const al::TextImportParseResult* parsed,
+                          const al::TextImportMergeCounts* merged, std::string_view reason) {
+    const size_t skipped = parsed ? parsed->skipped.total() : 0;
+    const size_t imported = merged ? merged->added + merged->replaced : 0;
+    auto object = BaseOperationJson("import", result.exit_code == 0);
+    object.emplace("path", j::Value(options.path));
+    object.emplace("imported", j::Value(static_cast<uint64_t>(imported)));
+    object.emplace("skipped", j::Value(static_cast<uint64_t>(skipped)));
+    object.emplace("via", j::Value("direct"));
+    if (options.dry_run) object.emplace("dry_run", j::Value(true));
+    if (parsed && parsed->format)
+      object.emplace("format", j::Value(std::string(al::TextImportFormatName(*parsed->format))));
+    if (parsed && parsed->encoding)
+      object.emplace("encoding",
+                     j::Value(std::string(al::TextImportEncodingName(*parsed->encoding))));
+    if (parsed && parsed->format) {
+      j::Object reasons;
+      reasons.emplace("malformed", j::Value(static_cast<uint64_t>(parsed->skipped.malformed)));
+      reasons.emplace("too_long", j::Value(static_cast<uint64_t>(parsed->skipped.too_long)));
+      reasons.emplace("unsupported_pos",
+                      j::Value(static_cast<uint64_t>(parsed->skipped.unsupported_pos)));
+      reasons.emplace("pos_mismatch",
+                      j::Value(static_cast<uint64_t>(parsed->skipped.pos_mismatch)));
+      j::Object counts;
+      counts.emplace("added", j::Value(static_cast<uint64_t>(merged ? merged->added : 0)));
+      counts.emplace("replaced", j::Value(static_cast<uint64_t>(merged ? merged->replaced : 0)));
+      counts.emplace("kept", j::Value(static_cast<uint64_t>(merged ? merged->kept : 0)));
+      counts.emplace("duplicates_in_file",
+                     j::Value(static_cast<uint64_t>(parsed->duplicates_in_file)));
+      counts.emplace("skipped", j::Value(std::move(reasons)));
+      object.emplace("counts", j::Value(std::move(counts)));
+    }
+    if (!result.error.empty()) object.emplace("error", j::Value(result.error));
+    if (!reason.empty()) object.emplace("reason", j::Value(std::string(reason)));
+    result.output_lines.push_back(j::Stringify(j::Value(std::move(object))));
+    return result;
+  };
+  const auto fail = [&](std::string_view reason, const al::TextImportParseResult* parsed) {
+    result.exit_code = 1;
+    result.error = "failed to import the dictionary file: " + std::string(reason);
+    return report(parsed, nullptr, reason);
+  };
+
+  std::string bytes;
+  const auto read = al::ReadUserDictionaryTextFile(azookey::core::Utf8Path(options.path), bytes);
+  if (read != al::TextImportError::None) return fail(al::TextImportErrorName(read), nullptr);
+  const auto parsed = al::ParseUserDictionaryText(bytes, options.input_format);
+  al::SecureErase(bytes);
+  if (parsed.error != al::TextImportError::None)
+    return fail(al::TextImportErrorName(parsed.error), &parsed);
+
+  al::TextImportMergeCounts merged;
+  if (options.dry_run) {
+    std::set<std::pair<std::string, std::string>> keys;
+    for (const auto& word : dict.All()) keys.emplace(word.ruby, word.word);
+    merged = al::CountUserDictionaryTextMerge(keys, parsed.words, options.conflict);
+    if (keys.size() + merged.added > al::kTextImportMaxWords)
+      return fail("too_many_words", &parsed);
+  } else {
+    const auto result_counts = al::MergeUserDictionaryText(dict, parsed.words, options.conflict);
+    if (!result_counts) return fail("too_many_words", &parsed);
+    merged = *result_counts;
+    if (!dict.Save()) {
+      result.exit_code = 1;
+      result.error = "failed to save user dictionary";
+      return report(&parsed, nullptr, {});
+    }
+  }
+  return report(&parsed, &merged, {});
+}
+
 UserDictCliResult RunDirect(const UserDictCliOptions& options,
                             const UserDictCliRunOptions& run_options) {
   UserDictCliResult result;
@@ -487,6 +566,11 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     return result;
   }
 
+  if (options.command == UserDictCliCommand::Import &&
+      options.input_format != azookey::learning::TextImportFormat::AzookeyTsv) {
+    return ImportText(options, dict);
+  }
+
   if (options.command == UserDictCliCommand::Import) {
     // options.path holds UTF-8 bytes so it can be echoed back in the JSON
     // report; Utf8Path is what turns it into a path without going through the
@@ -510,7 +594,12 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
         continue;
       }
       if (auto word = ParseUserWordTsvLine(line)) {
-        if (!options.dry_run) {
+        // --conflict merge / keep_both keep a word the dictionary already had;
+        // overwrite, the default, replaces it as before.
+        const bool replace =
+            options.conflict == azookey::learning::ImportConflictPolicy::Overwrite ||
+            !ContainsWord(before, *word);
+        if (!options.dry_run && replace) {
           dict.Add(*word);
         }
         ++imported;
@@ -648,6 +737,24 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
       std::string value;
       if (!ReadOptionValue(args, &i, "--pos", &value, error)) return std::nullopt;
       options.pos = std::move(value);
+    } else if (arg == "--input-format" && options.command == UserDictCliCommand::Import) {
+      std::string value;
+      if (!ReadOptionValue(args, &i, "--input-format", &value, error)) return std::nullopt;
+      const auto format = learning::ParseTextImportFormat(value);
+      if (!format) {
+        SetError(error, "invalid --input-format value: " + value);
+        return std::nullopt;
+      }
+      options.input_format = *format;
+    } else if (arg == "--conflict" && options.command == UserDictCliCommand::Import) {
+      std::string value;
+      if (!ReadOptionValue(args, &i, "--conflict", &value, error)) return std::nullopt;
+      const auto policy = learning::ParseImportConflictPolicy(value);
+      if (!policy) {
+        SetError(error, "invalid --conflict value: " + value);
+        return std::nullopt;
+      }
+      options.conflict = *policy;
     } else if (arg == "--format") {
       std::string value;
       if (!ReadOptionValue(args, &i, "--format", &value, error)) return std::nullopt;

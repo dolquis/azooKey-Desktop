@@ -55,6 +55,9 @@ enum class MessageType {
   CancelCatalogFetch,
   // DEV-1963 M16 Magic Conversion (ai-backend-spec section 4.1).
   TransformSelectedText,
+  // M71-A: other IMEs' text dictionaries into the user dictionary
+  // (user-dictionary-pos-spec section 7.2).
+  ImportUserDictionaryText,
   Unknown,
 };
 

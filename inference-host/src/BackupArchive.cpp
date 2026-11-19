@@ -61,8 +61,9 @@ bool IsReservedDeviceName(const fs::path& filename) {
          base[3] >= '0' && base[3] <= '9';
 }
 
-// Absolute, no "." or ".." component, and a case-insensitive ".zip" extension.
-bool IsAcceptableArchivePath(const fs::path& path) {
+// Absolute, no "." or ".." component, no UNC or device namespace, no ':' in
+// the file name and no reserved device name.
+bool IsAcceptableSourcePath(const fs::path& path) {
   if (!path.is_absolute() || !path.has_filename()) return false;
   // Two leading separators mean UNC (\\host\share) or a device namespace
   // (\\?\, \\.\); the settings app has no reason to name either.
@@ -77,6 +78,12 @@ bool IsAcceptableArchivePath(const fs::path& path) {
   for (const auto& part : path.relative_path()) {
     if (part == "." || part == "..") return false;
   }
+  return true;
+}
+
+// IsAcceptableSourcePath, and a case-insensitive ".zip" extension.
+bool IsAcceptableArchivePath(const fs::path& path) {
+  if (!IsAcceptableSourcePath(path)) return false;
   // extension() returns a temporary; keep a copy of its string.
   const auto extension = path.extension().native();
   constexpr std::string_view kZip = ".zip";
@@ -398,6 +405,10 @@ std::optional<std::vector<BackupItem>> ReadArchive(const fs::path& source,
 }
 
 }  // namespace backup_archive_detail
+
+bool IsAcceptableUserDataSourcePath(const std::filesystem::path& path) {
+  return backup_archive_detail::IsAcceptableSourcePath(path);
+}
 
 std::string_view BackupErrorCode(BackupError error) {
   switch (error) {

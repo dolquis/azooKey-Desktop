@@ -69,4 +69,11 @@ bool BracketPairingEnabledForApp(const BracketSettings& settings, const Foregrou
                       [&](const auto name) { return equal(name, app.process_name); });
 }
 
+bool InputScopeSwitchingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
+                                      AppNameEqual equal) {
+  if (!settings.profiles) return true;
+  const auto field = settings.profiles->ResolveField("inputScopeSwitching", app, equal);
+  return !field || !field->IsBool() || field->AsBool();
+}
+
 }  // namespace azookey::core

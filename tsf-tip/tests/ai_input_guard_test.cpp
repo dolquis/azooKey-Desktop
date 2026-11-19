@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/SecureApps.h"
@@ -663,6 +664,89 @@ TEST(TsfTipAiInputGuardTest, ProbeReportsScopeValuesAndWhereItStopped) {
   }
   EXPECT_EQ(azookey::tsf::ProbeInputScope(nullptr, 1).status,
             azookey::tsf::InputScopeProbeStatus::NoContext);
+}
+
+// M67 (app-profile-spec §13.2, §13.3): the field kind comes from the same
+// probe as the M46 classification and never changes that classification.
+TEST(TsfTipInputScopeFieldTest, EachTableValueNamesItsGroup) {
+  using azookey::tsf::InputScopeField;
+  const std::vector<std::pair<InputScope, InputScopeField>> table{
+      {IS_URL, InputScopeField::Url},
+      {IS_EMAIL_USERNAME, InputScopeField::Email},
+      {IS_EMAIL_SMTPEMAILADDRESS, InputScopeField::Email},
+      {IS_EMAILNAME_OR_ADDRESS, InputScopeField::Email},
+      {IS_DIGITS, InputScopeField::Number},
+      {IS_NUMBER, InputScopeField::Number},
+      {IS_TELEPHONE_FULLTELEPHONENUMBER, InputScopeField::Number},
+      {IS_TELEPHONE_COUNTRYCODE, InputScopeField::Number},
+      {IS_TELEPHONE_AREACODE, InputScopeField::Number},
+      {IS_TELEPHONE_LOCALNUMBER, InputScopeField::Number},
+      {IS_ALPHANUMERIC_HALFWIDTH, InputScopeField::AlphanumericHalfWidth},
+      {IS_SEARCH, InputScopeField::Search},
+      {IS_SEARCH_INCREMENTAL, InputScopeField::Search}};
+  for (const auto& [value, field] : table) {
+    FakeGuardContext context;
+    FakeInputScope scope({value});
+    context.property.scope = &scope;
+    const auto probe = azookey::tsf::ProbeInputScope(&context, 1);
+    EXPECT_EQ(probe.field, field) << value;
+    EXPECT_EQ(probe.classification, InputScopeClass::Normal) << value;
+    EXPECT_EQ(azookey::tsf::StartsInAlphanumericMode(field), field != InputScopeField::Search)
+        << value;
+    EXPECT_TRUE(azookey::tsf::SuppressesAutoPunctuation(field)) << value;
+  }
+}
+
+TEST(TsfTipInputScopeFieldTest, FirstListedValueDecidesAndOthersNameNoKind) {
+  using azookey::tsf::InputScopeField;
+  const auto field_of = [](std::vector<InputScope> values) {
+    FakeGuardContext context;
+    FakeInputScope scope(std::move(values));
+    context.property.scope = &scope;
+    return azookey::tsf::ProbeInputScope(&context, 1).field;
+  };
+  EXPECT_EQ(field_of({IS_DEFAULT, IS_SEARCH, IS_URL}), InputScopeField::Search);
+  EXPECT_EQ(field_of({IS_URL, IS_SEARCH}), InputScopeField::Url);
+  for (const auto value : {IS_DEFAULT, IS_FILE_FULLFILEPATH, IS_LOGINNAME, IS_PERSONALNAME_FULLNAME,
+                           IS_DATE_FULLDATE, IS_TIME_FULLTIME, IS_FORMULA, IS_YOMI, IS_HIRAGANA,
+                           IS_KATAKANA_HALFWIDTH, IS_KATAKANA_FULLWIDTH, IS_ALPHANUMERIC_FULLWIDTH,
+                           IS_NUMBER_FULLWIDTH, IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN,
+                           IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_PRIVATE})
+    EXPECT_EQ(field_of({value}), InputScopeField::None) << value;
+  EXPECT_EQ(field_of({}), InputScopeField::None);
+  // IS_PRIVATE alongside a listed value keeps both: the kind and the learning ban.
+  FakeGuardContext context;
+  FakeInputScope scope({IS_URL, IS_PRIVATE});
+  context.property.scope = &scope;
+  const auto probe = azookey::tsf::ProbeInputScope(&context, 1);
+  EXPECT_EQ(probe.field, InputScopeField::Url);
+  EXPECT_TRUE(probe.private_scope);
+  EXPECT_EQ(probe.classification, InputScopeClass::Private);
+  // A password value alongside a listed value stays a password field.
+  EXPECT_EQ(field_of({IS_PASSWORD, IS_URL}), InputScopeField::Url);
+  FakeGuardContext password_context;
+  FakeInputScope password({IS_PASSWORD, IS_URL});
+  EXPECT_EQ(ClassifyWithScopes(password_context, password), InputScopeClass::Password);
+}
+
+TEST(TsfTipInputScopeFieldTest, UnreadScopesNameNoKind) {
+  using azookey::tsf::InputScopeField;
+  {
+    FakeGuardContext context;
+    context.provides_input_scope = false;
+    EXPECT_EQ(azookey::tsf::ProbeInputScope(&context, 1).field, InputScopeField::None);
+  }
+  {
+    FakeGuardContext context;
+    FakeInputScope scope({IS_URL});
+    context.property.scope = &scope;
+    context.run_session = false;
+    const auto probe = azookey::tsf::ProbeInputScope(&context, 1);
+    EXPECT_EQ(probe.status, azookey::tsf::InputScopeProbeStatus::SessionFailed);
+    EXPECT_EQ(probe.field, InputScopeField::None);
+  }
+  EXPECT_EQ(azookey::tsf::InputScopeFieldName(InputScopeField::Url), "url");
+  EXPECT_EQ(azookey::tsf::InputScopeFieldName(InputScopeField::None), "none");
 }
 
 // The bundled list ships with the app and is only ever changed by a reviewed

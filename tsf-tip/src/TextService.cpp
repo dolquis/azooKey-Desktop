@@ -1687,6 +1687,9 @@ STDMETHODIMP TextService::Deactivate() try {
   CancelMagicConversion();
   keyboard_open_ = true;
   ClearKeyboardOpenTracking();
+  // M67: the mode a field chose does not outlive the activation that chose it.
+  if (input_scope_field_.restore_alnum) alnum_mode_ = *input_scope_field_.restore_alnum;
+  input_scope_field_ = {};
 
   StopIpcWorker();
 
@@ -1930,6 +1933,105 @@ void TextService::ReopenIfInitialOpenWasUndone() {
   OpenKeyboardIfClosed("reopen_after_restore");
 }
 
+// M67 (app-profile-spec §13.3, §13.4): one read of the field when its document
+// gains focus, or once more before the first key when that read failed. The
+// M46 decision of the same probe decides first: a secure field never switches.
+void TextService::EnterInputScopeField(ITfContext* context, std::string_view source) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  const bool first_read = source == "focus";
+  input_scope_field_ = {};
+  if (!context) {
+    input_scope_field_.reprobe = first_read;
+    return;
+  }
+  // The decision only: applying it here would move M46 to the focus change.
+  const auto privacy = EvaluatePrivacy(context, false);
+  if (privacy.secure) {
+    LogInputScopeFieldOnChange(InputScopeField::None, source);
+    return;
+  }
+  if (privacy.scope_status == InputScopeProbeStatus::SessionFailed ||
+      privacy.scope_status == InputScopeProbeStatus::NoContext) {
+    input_scope_field_.reprobe = first_read;
+    if (!first_read) LogInputScopeFieldOnChange(InputScopeField::None, source);
+    return;
+  }
+  auto& field = input_scope_field_;
+  field.field = privacy.field;
+  LogInputScopeFieldOnChange(field.field, source);
+  if (field.field == InputScopeField::None ||
+      !core::InputScopeSwitchingEnabledForApp(local_settings_.Snapshot(), foreground_app_.Get(),
+                                              WindowsAppNameEqual))
+    return;
+  field.applies = true;
+  if (!StartsInAlphanumericMode(field.field)) return;
+  // Switching would drop input still shown or carried, and switching once it
+  // is gone would change the characters mid-word: the field keeps hiragana.
+  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) return;
+  field.reapply_on_open = true;
+  if (!keyboard_open_) return;
+  field.restore_alnum = alnum_mode_;
+  if (!alnum_mode_) SwitchToAlphanumericForInputScope();
+}
+
+void TextService::ReprobeInputScopeFieldBeforeKey(ITfContext* context) {
+  if (!input_scope_field_.reprobe || !context) return;
+  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) return;
+  EnterInputScopeField(context, "first_key");
+}
+
+void TextService::RestoreInputModeAfterInputScopeField(std::optional<bool> alnum) {
+  if (!alnum || !keyboard_open_ || alnum_mode_ == *alnum) return;
+  // The alphanumeric mode holds no input; entering it would drop what is left.
+  if (*alnum && (composition_ || committing_ || HasInputToCommitBeforeClose())) return;
+  alnum_mode_ = *alnum;
+  character_form_cycle_state_.reset();
+  recent_character_form_commit_.reset();
+  UpdateInputModeLangBar();
+}
+
+void TextService::ApplyInputScopeFieldAfterAutoOpen() {
+  auto& field = input_scope_field_;
+  if (!field.applies || !field.reapply_on_open || !StartsInAlphanumericMode(field.field)) return;
+  if (composition_ || committing_ || HasInputToCommitBeforeClose()) return;
+  // Opening from off starts in hiragana (tsf-deep-integration-spec §4.2).
+  if (!field.restore_alnum) field.restore_alnum = false;
+  SwitchToAlphanumericForInputScope();
+}
+
+void TextService::SwitchToAlphanumericForInputScope() {
+  alnum_mode_ = true;
+  character_form_cycle_state_.reset();
+  recent_character_form_commit_.reset();
+  UpdateInputModeLangBar();
+}
+
+bool TextService::InputScopeSuppressesBrackets() const {
+  return input_scope_field_.applies && StartsInAlphanumericMode(input_scope_field_.field);
+}
+
+TipDynamicPunctuationSettings TextService::EffectiveDynamicPunctuation() const {
+  auto settings = local_settings_.DynamicPunctuationSnapshot();
+  if (input_scope_field_.applies && SuppressesAutoPunctuation(input_scope_field_.field))
+    settings.enabled = false;
+  return settings;
+}
+
+void TextService::LogInputScopeFieldOnChange(InputScopeField field,
+                                             std::string_view source) noexcept {
+  // A fixed word for the kind; never a scope value's field text.
+  try {
+    if (!TipRuntimeLogger().enabled()) return;
+    const auto name = InputScopeFieldName(field);
+    if (name == input_scope_field_logged_) return;
+    input_scope_field_logged_ = name;
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "input_gate",
+               {{"field_kind", SafeLogText(std::string(name))},
+                {"source", SafeLogText(std::string(source))}});
+  } catch (...) {
+  }
+}
+
 void TextService::ClearKeyboardOpenTracking() {
   keyboard_open_seen_documents_.clear();
   focused_document_identity_ = nullptr;
@@ -2162,6 +2264,9 @@ void TextService::RefreshKeyboardOpen(std::string_view source) {
     // Preserve a denied composition so a later TSF edit session can retry.
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
+    // M67 (app-profile-spec §13.4): an On from outside the TIP, or the TIP's
+    // own initial open, loses the alphanumeric mode an input scope field chose.
+    if (open && !keyboard_open_by_user_) ApplyInputScopeFieldAfterAutoOpen();
   }
   LogKeyboardOpenState("keyboard_open_refresh", source, open_before);
   UpdateInputModeLangBar();
@@ -2223,6 +2328,7 @@ void TextService::RunInputModeMenuCommand(InputModeMenuCommand command,
       CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                               LifecycleCleanupFailurePolicy::PreserveComposition);
       if (composition_ || committing_) return;
+      NoteUserInputModeSwitch();
       alnum_mode_ = true;
       character_form_cycle_state_.reset();
       recent_character_form_commit_.reset();
@@ -2306,6 +2412,8 @@ HRESULT TextService::ToggleKeyboardOpen() { return SetKeyboardOpen(!keyboard_ope
 HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return E_UNEXPECTED;
+  // M67 (app-profile-spec §13.4): the field keeps the user's choice.
+  NoteUserInputModeSwitch();
   if (open == keyboard_open_) {
     // On and off keys do not toggle. On while alphanumeric returns to hiragana;
     // alphanumeric mode never holds a composition, so nothing is committed.
@@ -2326,10 +2434,20 @@ HRESULT TextService::SetKeyboardOpen(bool open, std::string_view source) {
   VariantInit(&value);
   value.vt = VT_I4;
   value.lVal = open ? 1 : 0;
-  const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
-  // Closing commits what is left through RefreshKeyboardOpen, the lifecycle
-  // path that commits the shown text (spec §4.3).
-  if (SUCCEEDED(hr)) RefreshKeyboardOpen(source);
+  // The compartment notifies its sinks, this TIP's OnChange included, inside
+  // SetValue; that notification is the user's change too.
+  const bool by_user_before = std::exchange(keyboard_open_by_user_, true);
+  HRESULT hr = E_FAIL;
+  try {
+    hr = keyboard_open_compartment_->SetValue(client_id_, &value);
+    // Closing commits what is left through RefreshKeyboardOpen, the lifecycle
+    // path that commits the shown text (spec §4.3).
+    if (SUCCEEDED(hr)) RefreshKeyboardOpen(source);
+  } catch (...) {
+    keyboard_open_by_user_ = by_user_before;
+    throw;
+  }
+  keyboard_open_by_user_ = by_user_before;
   return hr;
 }
 
@@ -2554,6 +2672,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   const auto settings = local_settings_.Snapshot();
   const bool alnum = settings.input_mode != core::BracketInputMode::Hiragana;
   if (!settings.pairing.enabled) return S_OK;
+  // M67 (app-profile-spec §13.5): the field outranks a profile's "on".
+  if (InputScopeSuppressesBrackets()) return S_OK;
   if (!core::BracketPairingEnabledForApp(settings, foreground_app_.Get(), WindowsAppNameEqual))
     return S_OK;
   const bool enabled = !alnum || settings.pairing.enabled_in_alnum_mode;
@@ -2820,6 +2940,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       }
     }
     ResolveCarriedInput(context);
+    ReprobeInputScopeFieldBeforeKey(context);
 
     // An app-disabled context (Chromium's password field) is not ours to
     // convert: TSF still calls the key sinks, so leave every key to the app.
@@ -3172,6 +3293,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
     ResolveCarriedInput(context);
+    ReprobeInputScopeFieldBeforeKey(context);
     // Spec §3.7: a space whose lock was not granted is inserted again once,
     // before this key, which is then handled as usual. The probe does it, as
     // it finishes Unicode input, so a key the app takes lands after the space.
@@ -3394,6 +3516,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
         return S_OK;
       }
+      NoteUserInputModeSwitch();
       alnum_mode_ = !alnum_mode_;
       character_form_cycle_state_.reset();
       recent_character_form_commit_.reset();
@@ -4381,9 +4504,18 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
 }
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) try {
   AZOOKEY_ASSERT_UI_THREAD();
+  const bool document_changed = !SameComIdentity(pdimFocus, pdimPrevFocus);
+  // M67 (app-profile-spec §13.4): the previous field ends before the initial
+  // open of the new document can act on it. Its mode returns after the input
+  // left there is committed; an IME that is off now restores nothing.
+  std::optional<bool> restore_alnum;
+  if (document_changed) {
+    if (keyboard_open_) restore_alnum = input_scope_field_.restore_alnum;
+    input_scope_field_ = {};
+  }
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   UpdateInputModeLangBar();
-  if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
+  if (document_changed) {
     // DEV-1845: a termination after the switch is the focus loss's, not an edit.
     app_edit_key_passed_ = false;
     ResetTypoTracking();
@@ -4450,12 +4582,12 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
       } catch (...) {
       }
     }
+    RestoreInputModeAfterInputScopeField(restore_alnum);
     if (pdimFocus) {
-      ITfContext* top = nullptr;
-      if (SUCCEEDED(pdimFocus->GetTop(&top)) && top) {
-        AdviseTextEditSink(top);
-        top->Release();
-      }
+      Microsoft::WRL::ComPtr<ITfContext> top;
+      if (SUCCEEDED(pdimFocus->GetTop(&top)) && top) AdviseTextEditSink(top.Get());
+      // Without a context yet, the first key reads the field (§13.4).
+      EnterInputScopeField(top.Get(), "focus");
     }
   }
   return S_OK;
@@ -8458,7 +8590,7 @@ std::string TextService::PostQueryLiveConversion(ITfContext* context, const std:
   std::string raw_romaji = MixedEnglishRawRomajiFor(reading, privacy.secure);
   // Section 7.1.1: the timing of the insertion is the TIP's decision, carried in
   // this request only.
-  const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
+  const auto punctuation = EffectiveDynamicPunctuation();
   const bool live_conversion = local_settings_.LiveConversionSnapshot();
   live_query_reading_ = reading;
   if (timing == LiveRequestTiming::Edit && UsesIdleTimer(punctuation, live_conversion)) {
@@ -8504,9 +8636,44 @@ std::string TextService::PostQueryLiveConversion(ITfContext* context, const std:
 TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bool evaluate_ai,
                                                          std::optional<TfEditCookie> edit_cookie) {
   AZOOKEY_ASSERT_UI_THREAD();
+  InputGateDecision gate;
+  const auto decision = EvaluatePrivacy(context, evaluate_ai, edit_cookie, &gate);
+  LogInputGateOnChange(gate, decision.secure);
+  secure_input_.store(decision.secure, std::memory_order_relaxed);
+  typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);
+  if (!decision.learning_allowed) ResetTypoTracking();
+  if (decision.secure) {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    corrected_reading_result_.reset();
+  }
+  prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
+  detailed_logging_allowed_.store(decision.detailed_logging_allowed, std::memory_order_relaxed);
+  // The debug window paints body text only under the current decision; stored
+  // entries were already gated when recorded (legacy-parity-spec §8.3).
+  const std::pair paint_policy{decision.secure, decision.detailed_logging_allowed};
+  if (debug_paint_policy_ != paint_policy) {
+    debug_paint_policy_ = paint_policy;
+    core::PrivacyPolicy policy;
+    policy.secure = decision.secure;
+    policy.detailed_logging_allowed = decision.detailed_logging_allowed;
+    policy.learning_allowed = decision.learning_allowed;
+    debug_window_.SetPrivacyPolicy(policy);
+  }
+  // Spec §6: the indicator reflects the same decision every route just used.
+  candidate_ui_.SetSecureState(decision.secure, decision.show_secure_indicator);
+  return decision;
+}
+
+// The decision alone: no state, indicator, log or tracking changes, so a caller
+// that only reads it (M67 at a focus change) leaves M46 exactly as it was.
+TextService::PrivacyDecision TextService::EvaluatePrivacy(ITfContext* context, bool evaluate_ai,
+                                                          std::optional<TfEditCookie> edit_cookie,
+                                                          InputGateDecision* gate_out) {
+  AZOOKEY_ASSERT_UI_THREAD();
   static const std::vector<std::string> kNoUserSecureApps;
   const auto ai_settings = local_settings_.AiSnapshot();
   PrivacyDecision decision;
+  decision.show_secure_indicator = ai_settings.show_secure_indicator;
   decision.ai = ai_settings.privacy;
   decision.backend = ai_settings.backend;
   decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
@@ -8515,8 +8682,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
-  const auto gate =
-      EvaluateInputGate(context, client_id_, edit_cookie, !ai_settings.auto_secure_input);
+  auto gate = EvaluateInputGate(context, client_id_, edit_cookie, !ai_settings.auto_secure_input);
   // Automatic detection is optional; explicit secure mode and app-disabled
   // keyboard input remain independent safety contracts (privacy spec section 4).
   decision.secure =
@@ -8555,29 +8721,9 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   }
   // An unresolved app or failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && app.resolved && gate.ai_allowed;
-  LogInputGateOnChange(gate, decision.secure);
-  secure_input_.store(decision.secure, std::memory_order_relaxed);
-  typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);
-  if (!decision.learning_allowed) ResetTypoTracking();
-  if (decision.secure) {
-    std::lock_guard<std::mutex> lock(candidates_mtx_);
-    corrected_reading_result_.reset();
-  }
-  prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
-  detailed_logging_allowed_.store(decision.detailed_logging_allowed, std::memory_order_relaxed);
-  // The debug window paints body text only under the current decision; stored
-  // entries were already gated when recorded (legacy-parity-spec §8.3).
-  const std::pair paint_policy{decision.secure, decision.detailed_logging_allowed};
-  if (debug_paint_policy_ != paint_policy) {
-    debug_paint_policy_ = paint_policy;
-    core::PrivacyPolicy policy;
-    policy.secure = decision.secure;
-    policy.detailed_logging_allowed = decision.detailed_logging_allowed;
-    policy.learning_allowed = decision.learning_allowed;
-    debug_window_.SetPrivacyPolicy(policy);
-  }
-  // Spec §6: the indicator reflects the same decision every route just used.
-  candidate_ui_.SetSecureState(decision.secure, ai_settings.show_secure_indicator);
+  decision.scope_status = gate.scope.status;
+  decision.field = gate.scope.field;
+  if (gate_out) *gate_out = std::move(gate);
   return decision;
 }
 
@@ -10072,8 +10218,7 @@ void TextService::OnPunctuationTimer(DelayedActionTimer::Slot slot) {
   }
   const bool live_conversion = local_settings_.LiveConversionSnapshot();
   if (final_punctuation_hold_ || !active_context_ || committing_ ||
-      !UsesIdleTimer(local_settings_.DynamicPunctuationSnapshot(), live_conversion) ||
-      !core_input_active_ ||
+      !UsesIdleTimer(EffectiveDynamicPunctuation(), live_conversion) || !core_input_active_ ||
       (input_state_.kind() != core::InputStateKind::Composing &&
        input_state_.kind() != core::InputStateKind::Previewing) ||
       input_state_.awaiting_candidates() || candidate_ui_.IsShowing() ||
@@ -10102,7 +10247,7 @@ bool TextService::BeginFinalPunctuationHold(ITfContext* context, const core::Inp
   if (!commits || candidate_ui_.IsShowing() || committing_ || IpcHostUnavailable()) return false;
   const std::string reading = CurrentPreeditSurface();
   if (reading.empty() || IsStandalonePunctuation(reading)) return false;
-  const auto punctuation = local_settings_.DynamicPunctuationSnapshot();
+  const auto punctuation = EffectiveDynamicPunctuation();
   const bool live_conversion = local_settings_.LiveConversionSnapshot();
   // Eager results always carry the punctuation, and an onPause result that came
   // from an idle or final request and has not changed already does.

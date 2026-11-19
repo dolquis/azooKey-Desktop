@@ -246,6 +246,7 @@ const std::vector<std::string_view>& DedicatedSettingPaths() {
 const std::vector<UneditedSetting>& UneditedSettings() {
   static const std::vector<UneditedSetting> settings = {
       {"promptPrefixByApp", "legacy; new edits go to profilesByApp (app-profile-spec section 6)"},
+      {"inputScopeSwitching", "kept on save; the input pane item comes with DEV-2116"},
       {"backendPreference", "root tier is not bound to the UI (section 3.6)"},
       {"epPreference", "root tier is not bound to the UI (section 3.6)"},
       {"model.epPreference", "exposed once a build links the backend (section 3.7)"},

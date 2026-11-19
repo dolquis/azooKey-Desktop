@@ -22,6 +22,21 @@ enum class InputScopeClass { Unknown, Password, Private, Normal };
 // Skipped: a disabled context or a password-styled window already decided.
 enum class InputScopeProbeStatus { NoContext, SessionFailed, NoProperty, Empty, Read, Skipped };
 
+// M67 (app-profile-spec §13.2): the kind of field the scope values name. The
+// probe takes the first value in the app's order that the §13.2 table lists;
+// values outside it (IS_DEFAULT, password, PIN, IS_PRIVATE, ...) name no kind.
+enum class InputScopeField { None, Url, Email, Number, AlphanumericHalfWidth, Search };
+
+// One InputScope value (an int so this header need not include inputscope.h,
+// whose GUIDs AiInputGuard.cpp defines).
+InputScopeField InputScopeFieldOf(int scope) noexcept;
+// The URL, mail, number/telephone and half-width alphanumeric groups: start in
+// the alphanumeric mode and suppress bracket pairing.
+bool StartsInAlphanumericMode(InputScopeField field) noexcept;
+// Those groups and the search group suppress automatic punctuation.
+bool SuppressesAutoPunctuation(InputScopeField field) noexcept;
+std::string_view InputScopeFieldName(InputScopeField field) noexcept;
+
 struct InputScopeProbe {
   InputScopeClass classification{InputScopeClass::Unknown};
   InputScopeProbeStatus status{InputScopeProbeStatus::NoContext};
@@ -29,6 +44,8 @@ struct InputScopeProbe {
   std::string scopes;
   // Preserve IS_PRIVATE independently when a password/PIN scope also exists.
   bool private_scope{false};
+  // From the same values as the classification. M46 never reads it.
+  InputScopeField field{InputScopeField::None};
 };
 
 // Win32 half: the focus window's class name and ES_PASSWORD style.

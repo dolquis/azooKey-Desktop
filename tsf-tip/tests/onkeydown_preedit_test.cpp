@@ -20381,3 +20381,505 @@ TEST(TsfTipCommitUndoTest, PutBackInputErasedWithBackspaceOwesNoUndo) {
   ASSERT_EQ(h.service.composition_, nullptr);
   EXPECT_FALSE(h.service.pending_undo_correction_for_test());
 }
+
+// --- M67: the input scope field (app-profile-spec §13) ---
+// Apps name the kind of field through GUID_PROP_INPUTSCOPE. URL, mail,
+// number/telephone and half-width alphanumeric fields start in the
+// alphanumeric mode without bracket pairing or automatic punctuation; search
+// fields keep hiragana and only lose automatic punctuation.
+
+namespace {
+// Tells the TIP inside SetValue, as the TSF compartment does.
+class NotifyingOpenCloseCompartment final : public ITfCompartment {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartment) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartment*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP SetValue(TfClientId, const VARIANT* value) override {
+    if (!value || value->vt != VT_I4) return E_INVALIDARG;
+    const bool next = value->lVal != 0;
+    const bool changed = next != open;
+    open = next;
+    if (changed && service) service->OnChange(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE);
+    return S_OK;
+  }
+  STDMETHODIMP GetValue(VARIANT* value) override {
+    if (!value) return E_INVALIDARG;
+    VariantInit(value);
+    value->vt = VT_I4;
+    value->lVal = open ? 1 : 0;
+    return S_OK;
+  }
+  // Another language bar, ImmSetOpenStatus or a per-context restore.
+  void SetFromOutside(bool value) {
+    open = value;
+    if (service) service->OnChange(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE);
+  }
+  bool open{true};
+  azookey::tsf::TextService* service{nullptr};
+};
+
+// `field` (h.context) is the document under test; `plain` and `other` carry
+// IS_DEFAULT unless a test changes them.
+class InputScopeFieldHarness {
+ public:
+  explicit InputScopeFieldHarness(InputScope value = IS_URL) {
+    field_scope.scope.value = value;
+    plain_scope.scope.value = IS_DEFAULT;
+    other_scope.scope.value = IS_DEFAULT;
+    Bind(field_document, h.context, field_scope);
+    Bind(plain_document, plain, plain_scope);
+    Bind(other_document, other, other_scope);
+    ConfigureTypoHarness(h);
+    compartment.service = &h.service;
+    h.service.set_keyboard_open_compartment_for_test(&compartment, 7);
+  }
+  ~InputScopeFieldHarness() {
+    if (!brackets_) return;
+    azookey::tsf::testing::ClearTranslateBracketCharacterForTest();
+    azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
+  }
+  void Focus(FakeDocumentMgr* to, FakeDocumentMgr* from) {
+    EXPECT_EQ(h.service.OnSetFocus(to, from), S_OK);
+  }
+  // From the plain document into the field.
+  void Enter() {
+    Focus(&plain_document, nullptr);
+    Focus(&field_document, &plain_document);
+  }
+  BOOL Press(DocumentContext& context, WPARAM key, bool probe = false) {
+    h.keyboard_state.Reapply();
+    BOOL eaten = FALSE;
+    EXPECT_EQ(RecordedKeyDown(h.service, &context, key, 0, &eaten, probe, h.created), S_OK);
+    return eaten;
+  }
+  // Both callbacks, as TSF delivers a key it was told the TIP takes.
+  BOOL Type(DocumentContext& context, WPARAM key) {
+    const BOOL probed = Press(context, key, true);
+    const BOOL eaten = Press(context, key);
+    EXPECT_EQ(probed, eaten) << key;
+    return eaten;
+  }
+  void EnableBrackets(std::string_view settings_json) {
+    brackets_ = true;
+    h.service.set_bracket_settings_for_test(azookey::core::ParseBracketSettings(settings_json));
+    azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
+    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+        [](WPARAM key, LPARAM key_data) -> std::optional<WCHAR> {
+          if (const auto bracket = TranslateBracketForTest(key, key_data)) return bracket;
+          return TranslateUsLayoutForTest(key, key_data);
+        });
+  }
+
+  // Declared before the harness so they outlive its Deactivate.
+  NotifyingOpenCloseCompartment compartment;
+  PrivateScopeProperty field_scope;
+  PrivateScopeProperty plain_scope;
+  PrivateScopeProperty other_scope;
+  FakeDocumentMgr field_document;
+  FakeDocumentMgr plain_document;
+  FakeDocumentMgr other_document;
+  DocumentContext plain;
+  DocumentContext other;
+  DocumentPreeditHarness h;
+
+ private:
+  static void Bind(FakeDocumentMgr& document, DocumentContext& context,
+                   PrivateScopeProperty& scope) {
+    document.context_ = &context;
+    context.document_mgr_ = &document;
+    context.run_edit_session = true;
+    context.input_scope_property = &scope;
+  }
+  bool brackets_{false};
+};
+}  // namespace
+
+// §13.2, §13.4: every value of the four groups starts in the alphanumeric
+// mode, letters reach the app, and leaving returns to the mode before.
+TEST(TsfTipInputScopeFieldTest, AlphanumericGroupsStartInAlphanumericAndLeavingRestores) {
+  using azookey::tsf::InputScopeField;
+  for (const auto value :
+       {IS_URL, IS_EMAIL_USERNAME, IS_EMAIL_SMTPEMAILADDRESS, IS_EMAILNAME_OR_ADDRESS, IS_DIGITS,
+        IS_NUMBER, IS_TELEPHONE_FULLTELEPHONENUMBER, IS_TELEPHONE_COUNTRYCODE,
+        IS_TELEPHONE_AREACODE, IS_TELEPHONE_LOCALNUMBER, IS_ALPHANUMERIC_HALFWIDTH}) {
+    SCOPED_TRACE(value);
+    InputScopeFieldHarness s(value);
+    s.Focus(&s.plain_document, nullptr);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.Focus(&s.field_document, &s.plain_document);
+    EXPECT_NE(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_TRUE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.composition_, nullptr);
+    s.Focus(&s.plain_document, &s.field_document);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_TRUE(s.Type(s.plain, 'K'));
+  }
+}
+
+// §13.3, §13.7: no kind, no change; the same values M46 reads stay M46's.
+TEST(TsfTipInputScopeFieldTest, FieldsWithoutAKindChangeNothing) {
+  using azookey::tsf::InputScopeField;
+  for (const auto value : {IS_DEFAULT, IS_PERSONALNAME_FULLNAME, IS_FILE_FILENAME, IS_PRIVATE}) {
+    SCOPED_TRACE(value);
+    InputScopeFieldHarness s(value);
+    s.Enter();
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+  }
+  InputScopeFieldHarness s;
+  s.h.context.input_scope_property = nullptr;  // The app gives no scope at all.
+  s.Enter();
+  EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+  EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4: a field entered in the alphanumeric mode remembers it; the user's
+// hiragana holds while in the field and leaving returns to alphanumeric.
+TEST(TsfTipInputScopeFieldTest, TheUsersChoiceHoldsInTheFieldAndLeavingRestoresTheModeBefore) {
+  {
+    InputScopeFieldHarness s;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    ASSERT_TRUE(s.Type(s.h.context, VK_RETURN));
+    // An off and on from outside no longer switches: the user chose.
+    s.compartment.SetFromOutside(false);
+    s.compartment.SetFromOutside(true);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    s.Focus(&s.plain_document, &s.field_document);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    InputScopeFieldHarness s;
+    s.Focus(&s.plain_document, nullptr);
+    ASSERT_TRUE(s.Type(s.plain, VK_OEM_ATTN));
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    s.Focus(&s.field_document, &s.plain_document);
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.Focus(&s.plain_document, &s.field_document);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    // Returning to the field starts in alphanumeric again; nothing is stored.
+    ASSERT_TRUE(s.Type(s.plain, VK_OEM_ATTN));
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.Focus(&s.field_document, &s.plain_document);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.4: from one field of the group to another, the first field returns its
+// mode before the second starts in alphanumeric and remembers that mode.
+TEST(TsfTipInputScopeFieldTest, FieldToFieldStartsAlphanumericAndReturnsTheFirstModeBefore) {
+  InputScopeFieldHarness s;
+  s.other_scope.scope.value = IS_EMAIL_SMTPEMAILADDRESS;
+  s.Enter();
+  ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+  s.Focus(&s.other_document, &s.field_document);
+  EXPECT_EQ(s.h.service.input_scope_field_for_test(), azookey::tsf::InputScopeField::Email);
+  EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  s.Focus(&s.plain_document, &s.other_document);
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4: an IME that is off at the entry stays off; an On that is not the
+// user's switches to alphanumeric and leaving returns to hiragana.
+TEST(TsfTipInputScopeFieldTest, AnOnThatIsNotTheUsersSwitchesAFieldEnteredWhileOff) {
+  InputScopeFieldHarness s;
+  s.Enter();
+  s.Focus(&s.plain_document, &s.field_document);
+  s.compartment.SetFromOutside(false);
+  ASSERT_FALSE(s.h.service.keyboard_open());
+  // The field document was focused before, so its focus opens nothing.
+  s.Focus(&s.field_document, &s.plain_document);
+  ASSERT_FALSE(s.h.service.keyboard_open());
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  s.compartment.SetFromOutside(true);
+  ASSERT_TRUE(s.h.service.keyboard_open());
+  EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  s.Focus(&s.plain_document, &s.field_document);
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4, tsf-deep-integration-spec §4.1: the TIP's own opens, at a new
+// document's first focus and when undoing the restore right after it.
+TEST(TsfTipInputScopeFieldTest, TheTipsInitialOpenAndItsUndoOfTheRestoreSwitchToo) {
+  InputScopeFieldHarness s;
+  s.Focus(&s.plain_document, nullptr);
+  // The first close right after the plain document's first focus is undone.
+  s.compartment.SetFromOutside(false);
+  s.compartment.SetFromOutside(false);
+  ASSERT_FALSE(s.h.service.keyboard_open());
+  s.Focus(&s.field_document, &s.plain_document);
+  ASSERT_TRUE(s.h.service.keyboard_open());
+  EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  // The input context restore closes it once more; the TIP opens it again.
+  s.compartment.SetFromOutside(false);
+  ASSERT_TRUE(s.h.service.keyboard_open());
+  EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+  s.Focus(&s.plain_document, &s.field_document);
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4: the user's On (a key or the input indicator) starts in hiragana and
+// the field never switches again.
+TEST(TsfTipInputScopeFieldTest, TheUsersOnStartsInHiraganaAndTheFieldStopsSwitching) {
+  for (const bool indicator : {false, true}) {
+    SCOPED_TRACE(indicator);
+    InputScopeFieldHarness s;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    // The first close right after the first focus is undone, in alphanumeric.
+    s.compartment.SetFromOutside(false);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    s.compartment.SetFromOutside(false);
+    ASSERT_FALSE(s.h.service.keyboard_open());
+    if (indicator)
+      s.h.service.click_input_mode_langbar_for_test(TF_LBI_CLK_LEFT);
+    else
+      ASSERT_TRUE(s.Type(s.h.context, VK_IME_ON));
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    s.compartment.SetFromOutside(false);
+    s.compartment.SetFromOutside(true);
+    ASSERT_TRUE(s.h.service.keyboard_open());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.4: a composition the focus change could not commit keeps hiragana, and
+// the field does not switch once it is gone; the kind stays.
+TEST(TsfTipInputScopeFieldTest, ACompositionLeftAtTheEntryKeepsHiraganaForTheField) {
+  InputScopeFieldHarness s;
+  s.Focus(&s.plain_document, nullptr);
+  ASSERT_TRUE(s.Type(s.plain, 'K'));
+  ASSERT_TRUE(s.Type(s.plain, 'A'));
+  ASSERT_NE(s.h.service.composition_, nullptr);
+  s.plain.reject_write = true;
+  s.Focus(&s.field_document, &s.plain_document);
+  ASSERT_NE(s.h.service.composition_, nullptr);
+  EXPECT_EQ(s.h.service.input_scope_field_for_test(), azookey::tsf::InputScopeField::Url);
+  EXPECT_TRUE(s.h.service.input_scope_field_applies_for_test());
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  s.plain.reject_write = false;
+  // An off and on from outside commit what was left and still keep hiragana.
+  s.compartment.SetFromOutside(false);
+  s.compartment.SetFromOutside(false);
+  s.compartment.SetFromOutside(true);
+  ASSERT_TRUE(s.h.service.keyboard_open());
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4: input carried into the field (DEV-1637) stays hiragana; switching
+// would drop it.
+TEST(TsfTipInputScopeFieldTest, InputCarriedIntoTheFieldKeepsHiragana) {
+  PrivateScopeProperty url;
+  url.scope.value = IS_URL;
+  DocumentSwitch s(/*batch_romaji=*/false);
+  FixDocumentSwitchHarness(s);
+  s.cell.input_scope_property = &url;
+  s.TypeFirstKey(/*shown=*/false);
+  s.Switch(&s.cell_document, &s.grid_document);
+  ASSERT_NE(s.h.service.composition_, nullptr);
+  EXPECT_EQ(s.h.service.input_scope_field_for_test(), azookey::tsf::InputScopeField::Url);
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  s.Type(s.cell, {'Y', 'O', 'U'});
+  EXPECT_EQ(s.cell.document->text, kKyouText);
+  s.Type(s.cell, {VK_RETURN});
+  ASSERT_EQ(s.h.service.composition_, nullptr);
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4: a focus read that fails is read once more before the first key
+// without a composition; the probe and the key itself see the same answer.
+TEST(TsfTipInputScopeFieldTest, AFailedFocusReadIsReadOnceMoreBeforeTheFirstKey) {
+  using azookey::tsf::InputScopeField;
+  {
+    InputScopeFieldHarness s;
+    s.h.context.reject_read = true;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    ASSERT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    s.h.context.reject_read = false;
+    EXPECT_FALSE(s.Press(s.h.context, 'K', /*probe=*/true));
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::Url);
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.Press(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.composition_, nullptr);
+  }
+  {
+    // The read fails again: no kind, and no further reads in this field.
+    InputScopeFieldHarness s;
+    s.h.context.reject_read = true;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    s.h.context.reject_read = false;
+    ASSERT_TRUE(s.Type(s.h.context, VK_RETURN));
+    EXPECT_TRUE(s.Type(s.h.context, 'K'));
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), InputScopeField::None);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.3, §13.5: M46 decides first. A secure field never switches; IS_PRIVATE
+// with a listed value switches and still withholds learning and AI.
+TEST(TsfTipInputScopeFieldTest, SecureFieldsNeverSwitchAndPrivateScopeKeepsItsBans) {
+  {
+    InputScopeFieldHarness s;
+    s.field_scope.scope.include_private = true;
+    s.Enter();
+    EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.h.service.resolve_secure_for_test(&s.h.context));
+    EXPECT_FALSE(s.h.service.resolve_learning_allowed_for_test(&s.h.context));
+    const auto ai = s.h.service.resolve_ai_privacy_for_test(&s.h.context);
+    EXPECT_FALSE(ai.ai);
+    EXPECT_FALSE(ai.external);
+  }
+  {
+    InputScopeFieldHarness s;
+    s.Focus(&s.plain_document, nullptr);
+    s.h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    s.Focus(&s.field_document, &s.plain_document);
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.h.service.resolve_secure_for_test(&s.h.context));
+  }
+  {
+    ChromiumCompartmentMgr compartments;
+    InputScopeFieldHarness s;
+    compartments.keyboard_disabled.value = 1;
+    s.h.context.compartment_mgr = &compartments;
+    s.Enter();
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    // The focus only reads the M46 decision: the secure state and its toast
+    // still come with the first route that resolves it, as before M67.
+    EXPECT_FALSE(s.h.service.secure_input_for_test());
+    EXPECT_FALSE(s.h.service.secure_toast_pending_for_test());
+    EXPECT_TRUE(s.h.service.resolve_secure_for_test(&s.h.context));
+    s.h.context.compartment_mgr = nullptr;
+  }
+  {
+    InputScopeFieldHarness s;
+    s.Focus(&s.plain_document, nullptr);
+    s.h.service.set_foreground_app_for_test({});  // An unknown app is secure (M46).
+    s.Focus(&s.field_document, &s.plain_document);
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}
+
+// §13.5, §13.6: inputScopeSwitching false, globally or for the app, does none
+// of it; a profile's true overrides a global false.
+TEST(TsfTipInputScopeFieldTest, InputScopeSwitchingFalseSwitchesAndSuppressesNothing) {
+  for (const auto* settings : {R"({"inputScopeSwitching":false})",
+                               R"({"profilesByApp":{"notepad.exe":{"inputScopeSwitching":false}}})",
+                               R"({"profilesByApp":{"default":{"inputScopeSwitching":false}}})"}) {
+    SCOPED_TRACE(settings);
+    InputScopeFieldHarness s;
+    s.h.service.set_bracket_settings_for_test(azookey::core::ParseBracketSettings(settings));
+    StartLive(s.h, DynamicPunctuation());
+    s.Enter();
+    EXPECT_EQ(s.h.service.input_scope_field_for_test(), azookey::tsf::InputScopeField::Url);
+    EXPECT_FALSE(s.h.service.input_scope_field_applies_for_test());
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.h.Press('K'));
+    ASSERT_TRUE(s.h.Press('A'));
+    EXPECT_TRUE(s.h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+  InputScopeFieldHarness s;
+  s.h.service.set_bracket_settings_for_test(azookey::core::ParseBracketSettings(
+      R"({"inputScopeSwitching":false,"profilesByApp":{"notepad.exe":{"inputScopeSwitching":true}}})"));
+  s.Enter();
+  EXPECT_TRUE(s.h.service.input_scope_field_applies_for_test());
+  EXPECT_TRUE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.2, §13.5: bracket pairing stops in the alphanumeric groups in hiragana
+// too, over a profile's "on"; a search field keeps it.
+TEST(TsfTipInputScopeFieldTest, AlphanumericGroupsStopBracketPairingOverAProfilesOn) {
+  constexpr std::string_view kSettings =
+      R"({"bracketPairing":true,"profilesByApp":{"notepad.exe":{"bracketPairing":"on"}}})";
+  {
+    InputScopeFieldHarness s;
+    s.EnableBrackets(kSettings);
+    s.Focus(&s.plain_document, nullptr);
+    ASSERT_TRUE(s.Type(s.plain, VK_OEM_4));
+    ASSERT_EQ(s.plain.document->text, L"「」");
+    s.Focus(&s.field_document, &s.plain_document);
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_FALSE(s.Type(s.h.context, VK_OEM_4));
+    ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, VK_OEM_4));
+    EXPECT_EQ(s.h.context.document->text.find(L"「」"), std::wstring::npos);
+    EXPECT_NE(s.h.context.document->text.find(L"「"), std::wstring::npos);
+  }
+  {
+    InputScopeFieldHarness s(IS_SEARCH);
+    s.EnableBrackets(kSettings);
+    s.Enter();
+    ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+    EXPECT_TRUE(s.Type(s.h.context, VK_OEM_4));
+    EXPECT_EQ(s.h.context.document->text, L"「」");
+  }
+}
+
+// §13.2: automatic punctuation stops in search fields and in the alphanumeric
+// groups once the user is in hiragana: no auto_punctuation, no idle timer,
+// no wait for a final request on Enter.
+TEST(TsfTipInputScopeFieldTest, SearchAndAlphanumericGroupsStopAutomaticPunctuation) {
+  for (const auto value : {IS_SEARCH, IS_SEARCH_INCREMENTAL, IS_URL, IS_NUMBER}) {
+    for (const bool eager : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << value << " eager " << eager);
+      InputScopeFieldHarness s(value);
+      StartLive(s.h, DynamicPunctuation(eager), /*commit_segments=*/true);
+      s.Enter();
+      if (s.h.service.alnum_mode_for_test()) ASSERT_TRUE(s.Type(s.h.context, VK_OEM_ATTN));
+      ASSERT_FALSE(s.h.service.alnum_mode_for_test());
+      TypeKaAndShow(s.h);
+      ASSERT_EQ(s.h.context.document->text, L"蚊");
+      EXPECT_FALSE(s.h.service.pending_ipc_auto_punctuation_for_test());
+      EXPECT_FALSE(s.h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+      s.h.service.mark_pending_ipc_query_sent_for_test();
+      ASSERT_TRUE(s.h.Press(VK_RETURN));
+      EXPECT_FALSE(s.h.service.final_punctuation_hold_pending_for_test());
+      EXPECT_FALSE(s.h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kFinal));
+      EXPECT_EQ(s.h.context.document->text, L"蚊");
+    }
+  }
+  // The same document without a kind inserts as before.
+  InputScopeFieldHarness s(IS_DEFAULT);
+  StartLive(s.h, DynamicPunctuation(), /*commit_segments=*/true);
+  s.Enter();
+  TypeKaAndShow(s.h);
+  EXPECT_TRUE(s.h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  s.h.service.mark_pending_ipc_query_sent_for_test();
+  ASSERT_TRUE(s.h.Press(VK_RETURN));
+  EXPECT_TRUE(s.h.service.final_punctuation_hold_pending_for_test());
+}

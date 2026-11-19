@@ -3,11 +3,15 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "TestByteCrypto.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/learning/UserDictionaryPos.h"
 
 namespace {
 void RemoveStoreFiles(const std::filesystem::path& path) {
@@ -342,4 +346,289 @@ TEST(UserDictionaryTest, ReloadIfChangedReadsWithoutAKnownFile) {
   EXPECT_FALSE(skipped);
   EXPECT_EQ(dict.Lookup("ええ").size(), 1u);
   RemoveStoreFiles(path);
+}
+
+// docs/user-dictionary-pos-spec.md section 3 (DEV-2135).
+namespace {
+namespace al = azookey::learning;
+
+std::string ReadBytes(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void WriteBytes(const std::filesystem::path& path, std::string_view bytes) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+size_t CountCorruptFiles(const std::filesystem::path& root) {
+  size_t count = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(root)) {
+    if (entry.path().filename().string().find(".corrupt.") != std::string::npos) ++count;
+  }
+  return count;
+}
+
+al::UserWord Word(std::string word, std::string ruby, std::optional<std::string> pos = {}) {
+  al::UserWord w;
+  w.word = std::move(word);
+  w.ruby = std::move(ruby);
+  w.pos = std::move(pos);
+  return w;
+}
+}  // namespace
+
+// Section 3.3: a dictionary without parts of speech keeps the version 1 form,
+// byte for byte, of the versions before them.
+TEST(UserDictionaryPosTest, WithoutPosWritesTheVersion1FormAsBefore) {
+  al::UserDictionary dict("azookey_user_dict_v1_golden.json", &al::test::Crypto());
+  dict.Add({"日本語", "にほんご", 1, 2, 0.5});
+  dict.Add(Word("ググる", "ぐぐる"));
+  EXPECT_EQ(dict.SerializeText(),
+            R"({"entries":[{"ruby":"ぐぐる","word":"ググる"},)"
+            R"({"cid":1,"mid":2,"ruby":"にほんご","value":0.5,"word":"日本語"}],"version":1})");
+}
+
+TEST(UserDictionaryPosTest, PosWritesVersion2AndRoundTrips) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_pos_v2";
+  const auto path = root / "user_dict.json";
+  std::filesystem::remove_all(root);
+  {
+    al::UserDictionary dict(path, &al::test::Crypto());
+    dict.Add(Word("ググる", "ぐぐる", "verb_godan_ra"));
+    dict.Add(Word("日本語", "にほんご"));
+    EXPECT_EQ(dict.SerializeText(),
+              R"({"entries":[{"pos":"verb_godan_ra","ruby":"ぐぐる","word":"ググる"},)"
+              R"({"ruby":"にほんご","word":"日本語"}],"version":2})");
+    ASSERT_TRUE(dict.Save());
+  }
+  al::UserDictionary loaded(path, &al::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  const auto hits = loaded.Lookup("ぐぐる");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits.front().pos, std::optional<std::string>("verb_godan_ra"));
+  EXPECT_FALSE(loaded.Lookup("にほんご").front().pos.has_value());
+  // Without the word that has a part of speech, version 1 again.
+  ASSERT_TRUE(loaded.Remove("ググる", "ぐぐる"));
+  EXPECT_EQ(loaded.SerializeText(),
+            R"({"entries":[{"ruby":"にほんご","word":"日本語"}],"version":1})");
+  std::filesystem::remove_all(root);
+}
+
+// Section 3.2: unknown members of the root and of an entry, and a part of
+// speech this version does not know, survive a save and a load.
+TEST(UserDictionaryPosTest, UnknownMembersAndUnknownPosSurviveSaveAndLoad) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_pos_unknown";
+  const auto path = root / "user_dict.json";
+  std::filesystem::remove_all(root);
+  constexpr std::string_view kText =
+      R"({"entries":[{"note":"x","pos":"verb_kahen_future","ruby":"くる","weight_v3":1.25,)"
+      R"("word":"来る"}],"future_root":{"a":[1,2]},"version":2})";
+  {
+    al::UserDictionary dict(path, &al::test::Crypto());
+    ASSERT_TRUE(dict.LoadText(kText));
+    EXPECT_FALSE(dict.too_new());
+    const auto hits = dict.Lookup("くる");
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits.front().pos, std::optional<std::string>("verb_kahen_future"));
+    EXPECT_EQ(hits.front().extra.size(), 2u);
+    ASSERT_TRUE(dict.Save());
+  }
+  al::UserDictionary loaded(path, &al::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.SerializeText(), kText);
+  std::filesystem::remove_all(root);
+}
+
+// Section 3.2: a `pos` that is not a string is no part of speech; it is kept,
+// and with no other part of speech the dictionary is written as version 1.
+TEST(UserDictionaryPosTest, NonStringPosIsKeptAndWritesVersion1) {
+  al::UserDictionary dict("azookey_user_dict_pos_non_string.json", &al::test::Crypto());
+  ASSERT_TRUE(dict.LoadText(R"({"version":2,"entries":[{"word":"a","ruby":"あ","pos":7}]})"));
+  const auto hits = dict.Lookup("あ");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_FALSE(hits.front().pos.has_value());
+  EXPECT_EQ(dict.SerializeText(), R"({"entries":[{"pos":7,"ruby":"あ","word":"a"}],"version":1})");
+}
+
+// Section 3.2: a version that is not an integer, or is 0 or less, reads as 1.
+TEST(UserDictionaryPosTest, VersionThatIsNotAnIntegerOrBelowOneReadsAsVersion1) {
+  for (const std::string_view version : {R"("3")", "2.5", "3.5", "0", "-4", "null"}) {
+    SCOPED_TRACE(std::string(version));
+    al::UserDictionary dict("azookey_user_dict_pos_version.json", &al::test::Crypto());
+    const std::string text = std::string(R"({"version":)") + std::string(version) +
+                             R"(,"entries":[{"word":"a","ruby":"あ"}]})";
+    ASSERT_TRUE(dict.LoadText(text));
+    EXPECT_FALSE(dict.too_new());
+    EXPECT_FALSE(dict.save_blocked());
+    EXPECT_EQ(dict.Size(), 1u);
+    EXPECT_EQ(dict.SerializeText(), R"({"entries":[{"ruby":"あ","word":"a"}],"version":1})");
+  }
+  al::UserDictionary missing("azookey_user_dict_pos_version.json", &al::test::Crypto());
+  ASSERT_TRUE(missing.LoadText(R"({"entries":[]})"));
+  EXPECT_FALSE(missing.too_new());
+}
+
+TEST(UserDictionaryPosTest, LoadTextOfVersion3OrLaterSetsTooNew) {
+  for (const std::string_view version : {"3", "3.0", "17", "9223372036854775808", "1e300"}) {
+    SCOPED_TRACE(std::string(version));
+    al::UserDictionary dict("azookey_user_dict_pos_too_new.json", &al::test::Crypto());
+    ASSERT_TRUE(dict.LoadText(std::string(R"({"version":)") + std::string(version) +
+                              R"(,"entries":[{"word":"a","ruby":"あ"}]})"));
+    EXPECT_TRUE(dict.too_new());
+    EXPECT_TRUE(dict.save_blocked());
+    EXPECT_EQ(dict.Size(), 1u);
+  }
+  // Even with entries in a shape this version cannot read.
+  al::UserDictionary reshaped("azookey_user_dict_pos_too_new.json", &al::test::Crypto());
+  ASSERT_TRUE(reshaped.LoadText(R"({"version":3,"entries":{"shape":"new"}})"));
+  EXPECT_TRUE(reshaped.too_new());
+  EXPECT_EQ(reshaped.Size(), 0u);
+}
+
+// Section 3.2: a dictionary of version 3 or later serves its words, but no save
+// or export changes or writes it.
+TEST(UserDictionaryPosTest, EncryptedVersion3IsReadButNeverWritten) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_pos_v3_enc";
+  const auto path = root / "user_dict.json";
+  const auto encrypted = al::EncryptedPathFor(path);
+  const auto exported = root / "export.json";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  ASSERT_TRUE(al::WriteProtectedText(
+      path, R"({"version":3,"entries":[{"word":"ググる","ruby":"ぐぐる","pos":"verb_godan_ra"}]})",
+      al::test::Crypto()));
+  const auto before = ReadBytes(encrypted);
+
+  al::UserDictionary dict(path, &al::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  EXPECT_TRUE(dict.too_new());
+  EXPECT_EQ(dict.Lookup("ぐぐる").size(), 1u);
+  dict.Add(Word("日本語", "にほんご"));
+  EXPECT_FALSE(dict.Save());
+  EXPECT_FALSE(dict.SavePlaintextExport(exported));
+  EXPECT_FALSE(std::filesystem::exists(exported));
+  ASSERT_TRUE(dict.ReloadIfChanged());
+  EXPECT_TRUE(dict.too_new());
+  EXPECT_EQ(ReadBytes(encrypted), before);
+  EXPECT_EQ(CountCorruptFiles(root), 0u);
+  std::filesystem::remove_all(root);
+}
+
+// Section 3.2: legacy plaintext of version 3 or later is neither migrated nor
+// quarantined, even when its structure cannot be read.
+TEST(UserDictionaryPosTest, PlaintextVersion3IsNeitherMigratedNorQuarantined) {
+  for (const std::string_view text :
+       {std::string_view(R"({"version":3,"entries":[{"word":"a","ruby":"あ"}]})"),
+        std::string_view(R"({"version":4,"entries":{"shape":"new"}})")}) {
+    SCOPED_TRACE(std::string(text));
+    const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_pos_v3_plain";
+    const auto path = root / "user_dict.json";
+    auto backup = path;
+    backup += ".bak";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    WriteBytes(path, text);
+
+    al::UserDictionary dict(path, &al::test::Crypto());
+    EXPECT_TRUE(dict.Load());
+    EXPECT_TRUE(dict.too_new());
+    dict.Add(Word("日本語", "にほんご"));
+    EXPECT_FALSE(dict.Save());
+    EXPECT_EQ(ReadBytes(path), text);
+    EXPECT_FALSE(std::filesystem::exists(al::EncryptedPathFor(path)));
+    EXPECT_FALSE(std::filesystem::exists(backup));
+    EXPECT_EQ(CountCorruptFiles(root), 0u);
+    std::filesystem::remove_all(root);
+  }
+}
+
+// Section 3.4: Add replaces the word with its part of speech and unknown members.
+TEST(UserDictionaryPosTest, AddReplacesPosAndUnknownMembers) {
+  al::UserDictionary dict("azookey_user_dict_pos_add.json", &al::test::Crypto());
+  ASSERT_TRUE(
+      dict.LoadText(R"({"version":2,"entries":[)"
+                    R"({"word":"ググる","ruby":"ぐぐる","pos":"verb_godan_ra","note":1}]})"));
+  EXPECT_FALSE(dict.Add(Word("ググる", "ぐぐる")));
+  const auto hits = dict.Lookup("ぐぐる");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_FALSE(hits.front().pos.has_value());
+  EXPECT_TRUE(hits.front().extra.empty());
+}
+
+// Section 3.4: a backup import keeps or replaces a word together with its part of speech.
+TEST(UserDictionaryPosTest, MergeTreatsPosAsPartOfTheWord) {
+  auto imported_word = Word("ググる", "ぐぐる");
+  imported_word.value = -1.0;
+  al::UserDictionary imported("azookey_user_dict_pos_merge_in.json", &al::test::Crypto());
+  imported.Add(imported_word);
+
+  for (const auto policy : {al::ImportConflictPolicy::Merge, al::ImportConflictPolicy::KeepBoth}) {
+    al::UserDictionary local("azookey_user_dict_pos_merge.json", &al::test::Crypto());
+    local.Add(Word("ググる", "ぐぐる", "verb_godan_ra"));
+    local.Merge(imported, policy);
+    const auto hits = local.Lookup("ぐぐる");
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits.front().pos, std::optional<std::string>("verb_godan_ra"));
+    EXPECT_FALSE(hits.front().value.has_value());
+  }
+  al::UserDictionary local("azookey_user_dict_pos_merge.json", &al::test::Crypto());
+  local.Add(Word("ググる", "ぐぐる", "verb_godan_ra"));
+  local.Merge(imported, al::ImportConflictPolicy::Overwrite);
+  const auto hits = local.Lookup("ぐぐる");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_FALSE(hits.front().pos.has_value());
+  EXPECT_EQ(hits.front().value, std::optional<double>(-1.0));
+}
+
+TEST(UserDictionaryPosTest, PosIdsFollowTheTableOfSection2_1) {
+  const auto& ids = al::UserDictionaryPosIds();
+  ASSERT_EQ(ids.size(), 28u);
+  EXPECT_EQ(ids.front(), "noun_sahen");
+  EXPECT_EQ(ids.back(), "adjective");
+  for (const auto id : ids) EXPECT_TRUE(al::IsKnownUserDictionaryPos(id)) << id;
+  EXPECT_FALSE(al::IsKnownUserDictionaryPos(""));
+  EXPECT_FALSE(al::IsKnownUserDictionaryPos("noun"));
+  EXPECT_TRUE(al::IsConjugatingUserDictionaryPos("verb_godan_wa"));
+  EXPECT_TRUE(al::IsConjugatingUserDictionaryPos("adjective"));
+  EXPECT_FALSE(al::IsConjugatingUserDictionaryPos("noun_sahen"));
+}
+
+// Sections 4.3 and 4.4.
+TEST(UserDictionaryPosTest, CheckUserWordPosAppliesSection4_4) {
+  using al::UserWordPosCheck;
+  struct Case {
+    const char* word;
+    const char* ruby;
+    const char* pos;
+    UserWordPosCheck expected;
+  };
+  const Case cases[] = {
+      {"ググる", "ぐぐる", "verb_godan_ra", UserWordPosCheck::Ok},
+      {"Google", "ぐぐる", "verb_godan_ra", UserWordPosCheck::PosMismatch},
+      {"ググル", "ぐぐる", "verb_godan_ra", UserWordPosCheck::PosMismatch},
+      {"ググる", "ぐぐる", "verb_godan_ka", UserWordPosCheck::PosMismatch},
+      {"る", "る", "verb_godan_ra", UserWordPosCheck::PosMismatch},
+      {"書く", "かく", "verb_godan_ka", UserWordPosCheck::Ok},
+      {"笑う", "わらう", "verb_godan_wa", UserWordPosCheck::Ok},
+      {"食べる", "たべる", "verb_ichidan", UserWordPosCheck::Ok},
+      {"見る", "みる", "verb_ichidan", UserWordPosCheck::Ok},
+      {"考える", "かんがえる", "verb_ichidan", UserWordPosCheck::Ok},
+      {"ぺる", "ぺる", "verb_ichidan", UserWordPosCheck::PosMismatch},
+      {"ゃる", "ゃる", "verb_ichidan", UserWordPosCheck::PosMismatch},
+      {"ググる", "ぐぐる", "verb_ichidan", UserWordPosCheck::PosMismatch},
+      {"る", "る", "verb_ichidan", UserWordPosCheck::PosMismatch},
+      {"察する", "さっする", "verb_sahen", UserWordPosCheck::Ok},
+      {"する", "する", "verb_sahen", UserWordPosCheck::PosMismatch},
+      {"エモい", "えもい", "adjective", UserWordPosCheck::Ok},
+      {"エモイ", "えもい", "adjective", UserWordPosCheck::PosMismatch},
+      {"azooKey", "あずーきー", "proper_noun", UserWordPosCheck::Ok},
+      {"azooKey", "あずーきー", "noun", UserWordPosCheck::UnknownPos},
+      {"azooKey", "あずーきー", "", UserWordPosCheck::UnknownPos},
+  };
+  for (const auto& c : cases) {
+    EXPECT_EQ(al::CheckUserWordPos(c.word, c.ruby, c.pos), c.expected)
+        << c.word << " / " << c.ruby << " / " << c.pos;
+  }
 }

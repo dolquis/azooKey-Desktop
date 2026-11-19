@@ -36,6 +36,8 @@ struct LookupMatch {
   std::optional<int32_t> mid;
   std::optional<double> weight;
   std::optional<uint64_t> last_updated_epoch_sec;
+  // The user dictionary word's part-of-speech id (user-dictionary-pos-spec 7.5).
+  std::optional<std::string> pos;
 };
 
 bool SetError(std::string* error, std::string message) {
@@ -93,6 +95,7 @@ std::string JsonLine(const LookupCliOptions& options, const LookupMatch& match) 
   if (match.cid) object.emplace("cid", j::Value(static_cast<int64_t>(*match.cid)));
   if (match.mid) object.emplace("mid", j::Value(static_cast<int64_t>(*match.mid)));
   if (match.weight) object.emplace("weight", j::Value(*match.weight));
+  if (match.pos) object.emplace("pos", j::Value(*match.pos));
   if (match.last_updated_epoch_sec) {
     object.emplace("last_updated_epoch_sec", j::Value(*match.last_updated_epoch_sec));
   }
@@ -225,7 +228,7 @@ LookupCliResult RunLookupCli(const LookupCliOptions& options,
       for (const auto& word : dictionary.All()) {
         if (!Matches(options, word.ruby, word.word)) continue;
         matches.push_back({LookupSource::UserDictionary, word.ruby, word.word, word.cid, word.mid,
-                           word.value, std::nullopt});
+                           word.value, std::nullopt, word.pos});
       }
     }
   }

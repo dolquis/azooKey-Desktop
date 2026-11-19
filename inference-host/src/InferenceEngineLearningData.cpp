@@ -332,6 +332,8 @@ InferenceEngine::ResetOutcome InferenceEngine::ResetLearningStore(LearningDataSt
   if (detail::UserDictionaryFileExists(*snapshot) && !snapshot->ReloadIfChanged()) {
     return ResetOutcome::SaveFailed;
   }
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is left as it is.
+  if (snapshot->too_new()) return ResetOutcome::Unavailable;
   const auto before = *snapshot;
   snapshot->Clear();
   const bool saved = snapshot->Save();

@@ -547,7 +547,8 @@ TEST_F(DispatcherTest, Handshake) {
   for (const char* capability :
        {"app_profile", "candidate_tag", "list_models", "benchmark_model", "english_candidates",
         "learning_data_management", "commit_correction", "learning_reset", "persona",
-        "detect_anomalies", "mixed_english", "raw_keys", "transform_selected_text"}) {
+        "detect_anomalies", "mixed_english", "raw_keys", "transform_selected_text",
+        "user_dict_pos"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -3780,6 +3781,69 @@ TEST_F(DispatcherTest, AddRemoveUserWord) {
   ASSERT_TRUE(malformed_parsed.has_value());
   EXPECT_FALSE(malformed_parsed->ok);
   EXPECT_EQ(malformed_parsed->error, "invalid_request");
+}
+
+// user-dictionary-pos-spec 7.1 and 7.3 (DEV-2135): AddUserWord keeps a part of
+// speech that fits the word, refuses one that does not, and the list shows it.
+TEST_F(DispatcherTest, AddUserWordCarriesPosAndRejectsInvalidPos) {
+  const auto add_word = [&](uint64_t id, const std::string& payload) {
+    auto response = dispatcher.Dispatch(MakeReq(id, ipc::MessageType::AddUserWord, payload));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseAddUserWordResponse(response->payload_json) : std::nullopt;
+  };
+  ipc::AddUserWordRequest add;
+  add.word = "ググる";
+  add.ruby = "ぐぐる";
+  add.pos = "verb_godan_ra";
+  auto added = add_word(68, ipc::BuildAddUserWordRequest(add));
+  ASSERT_TRUE(added.has_value());
+  EXPECT_TRUE(added->ok);
+  auto hits = user_dict.Lookup("ぐぐる");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits.front().pos, std::optional<std::string>("verb_godan_ra"));
+
+  ipc::ListLearningEntriesRequest list;
+  list.store = "user_dict";
+  auto listed_response = dispatcher.Dispatch(MakeReq(69, ipc::MessageType::ListLearningEntries,
+                                                     ipc::BuildListLearningEntriesRequest(list)));
+  ASSERT_TRUE(listed_response.has_value());
+  auto listed = ipc::ParseListLearningEntriesResponse(listed_response->payload_json);
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_EQ(listed->entries.size(), 1u);
+  EXPECT_EQ(listed->entries.front().metadata.at("pos"), "verb_godan_ra");
+
+  // An id outside the table, and one the word does not end like, save nothing.
+  for (const auto& [word, pos] : {std::pair<std::string, std::string>{"ググる", "noun"},
+                                  {"Google", "verb_godan_ra"},
+                                  {"ググる", "verb_godan_ka"}}) {
+    SCOPED_TRACE(word + " / " + pos);
+    ipc::AddUserWordRequest invalid;
+    invalid.word = word;
+    invalid.ruby = "ぐぐる";
+    invalid.pos = pos;
+    auto rejected = add_word(70, ipc::BuildAddUserWordRequest(invalid));
+    ASSERT_TRUE(rejected.has_value());
+    EXPECT_FALSE(rejected->ok);
+    EXPECT_EQ(rejected->error, "invalid_pos");
+    hits = user_dict.Lookup("ぐぐる");
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits.front().word, "ググる");
+    EXPECT_EQ(hits.front().pos, std::optional<std::string>("verb_godan_ra"));
+  }
+
+  // A pos that is not a string is no request.
+  auto not_string = add_word(71, R"({"word":"ググる","ruby":"ぐぐる","pos":7})");
+  ASSERT_TRUE(not_string.has_value());
+  EXPECT_FALSE(not_string->ok);
+  EXPECT_EQ(not_string->error, "invalid_request");
+
+  // Section 3.4: adding the word again without a part of speech drops it.
+  add.pos.reset();
+  added = add_word(72, ipc::BuildAddUserWordRequest(add));
+  ASSERT_TRUE(added && added->ok);
+  hits = user_dict.Lookup("ぐぐる");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_FALSE(hits.front().pos.has_value());
 }
 
 // DEV-1581: a Dispatcher without a user dictionary says so.

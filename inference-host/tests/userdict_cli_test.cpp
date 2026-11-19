@@ -910,3 +910,231 @@ TEST(UserDictCliTest, ListAndExportDoNotMigrateZeroByteFile) {
 
   std::filesystem::remove_all(root);
 }
+
+// user-dictionary-pos-spec 7.5 (DEV-2135): the sixth TSV column is a
+// part-of-speech id, checked as AddUserWord checks it; rows of five columns or
+// fewer import as before.
+TEST(UserDictCliTest, ImportReadsThePosColumnAndSkipsPosThatDoesNotFit) {
+  const auto path = TestPath("azookey_userdict_cli_import_pos");
+  const auto root = path.parent_path();
+  const auto import_path = root / "import.tsv";
+  const auto export_path = root / "export.json";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream tsv(import_path, std::ios::binary);
+    ASSERT_TRUE(tsv.is_open());
+    tsv << "nihongo\tNihongo\t1285\t501\t-5.5\n";
+    tsv << "ぐぐる\tググる\t\t\t\tverb_godan_ra\n";
+    tsv << "たべる\t食べる\t\t\t\t\n";
+    tsv << "ぐぐる\tGoogle\t\t\t\tverb_godan_ra\n";
+    tsv << "あ\tA\t\t\t\tnoun\n";
+    tsv << "い\tI\t\t\t\t\t\n";
+  }
+
+  std::vector<std::string> import_args = {"import", import_path.string()};
+  std::string error;
+  auto import_options = azookey::host::ParseUserDictCliArgs(import_args, &error);
+  ASSERT_TRUE(import_options.has_value()) << error;
+  auto import_result = azookey::host::RunUserDictCli(*import_options, DirectRunOptions(path));
+  EXPECT_EQ(import_result.exit_code, 0) << import_result.error;
+  ASSERT_EQ(import_result.output_lines.size(), 1u);
+  auto import_json = azookey::ipc::json::Parse(import_result.output_lines.front());
+  ASSERT_TRUE(import_json.has_value());
+  EXPECT_EQ(import_json->GetUInt("imported"), 3u);
+  EXPECT_EQ(import_json->GetUInt("skipped"), 3u);
+
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 3u);
+  ASSERT_EQ(dict.Lookup("ぐぐる").size(), 1u);
+  EXPECT_EQ(dict.Lookup("ぐぐる").front().pos, std::optional<std::string>("verb_godan_ra"));
+  ASSERT_EQ(dict.Lookup("たべる").size(), 1u);
+  EXPECT_FALSE(dict.Lookup("たべる").front().pos.has_value());
+
+  auto list = Parse({"list"});
+  ASSERT_TRUE(list.has_value());
+  auto list_result = azookey::host::RunUserDictCli(*list, DirectRunOptions(path));
+  EXPECT_EQ(list_result.exit_code, 0);
+  size_t with_pos = 0;
+  for (const auto& line : list_result.output_lines) {
+    auto json = azookey::ipc::json::Parse(line);
+    ASSERT_TRUE(json.has_value());
+    if (json->GetString("pos")) {
+      EXPECT_EQ(json->GetString("surface"), "ググる");
+      EXPECT_EQ(json->GetString("pos"), "verb_godan_ra");
+      ++with_pos;
+    }
+  }
+  EXPECT_EQ(with_pos, 1u);
+
+  std::vector<std::string> export_args = {"export", export_path.string()};
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  ASSERT_EQ(azookey::host::RunUserDictCli(*export_options, DirectRunOptions(path)).exit_code, 0);
+  const auto exported = ReadAll(export_path);
+  EXPECT_NE(exported.find(R"("version":2)"), std::string::npos);
+  EXPECT_NE(exported.find(R"("pos":"verb_godan_ra")"), std::string::npos);
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(UserDictCliTest, DirectAddChecksPos) {
+  const auto path = TestPath("azookey_userdict_cli_add_pos");
+  std::filesystem::remove_all(path.parent_path());
+
+  auto add = Parse(
+      {"add", "--reading", "ぐぐる", "--surface", "ググる", "--pos", "verb_godan_ra", "--offline"});
+  ASSERT_TRUE(add.has_value());
+  auto add_result = azookey::host::RunUserDictCli(*add, DirectRunOptions(path));
+  EXPECT_EQ(add_result.exit_code, 0) << add_result.error;
+  ASSERT_EQ(add_result.output_lines.size(), 1u);
+  auto add_json = azookey::ipc::json::Parse(add_result.output_lines.front());
+  ASSERT_TRUE(add_json.has_value());
+  EXPECT_EQ(add_json->GetString("pos"), "verb_godan_ra");
+
+  for (const auto& [surface, pos] :
+       {std::pair<const char*, const char*>{"ググる", "noun"}, {"Google", "verb_godan_ra"}}) {
+    SCOPED_TRACE(std::string(surface) + " / " + pos);
+    auto invalid =
+        Parse({"add", "--reading", "ぐぐる", "--surface", surface, "--pos", pos, "--offline"});
+    ASSERT_TRUE(invalid.has_value());
+    auto invalid_result = azookey::host::RunUserDictCli(*invalid, DirectRunOptions(path));
+    EXPECT_EQ(invalid_result.exit_code, 1);
+    ASSERT_EQ(invalid_result.output_lines.size(), 1u);
+    auto invalid_json = azookey::ipc::json::Parse(invalid_result.output_lines.front());
+    ASSERT_TRUE(invalid_json.has_value());
+    EXPECT_EQ(invalid_json->GetString("reason"), "invalid_pos");
+  }
+
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
+  ASSERT_TRUE(dict.Load());
+  ASSERT_EQ(dict.Size(), 1u);
+  EXPECT_EQ(dict.Lookup("ぐぐる").front().pos, std::optional<std::string>("verb_godan_ra"));
+
+  std::string error;
+  EXPECT_FALSE(Parse({"remove", "--reading", "a", "--surface", "A", "--pos", "adverb"}, &error));
+  EXPECT_EQ(error, "unknown userdict option: --pos");
+  std::filesystem::remove_all(path.parent_path());
+}
+
+// user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is listed,
+// and every writer and export fails without changing it.
+TEST(UserDictCliTest, DirectWritersAndExportRefuseVersion3) {
+  const auto path = TestPath("azookey_userdict_cli_too_new");
+  const auto root = path.parent_path();
+  const auto import_path = root / "import.tsv";
+  const auto export_path = root / "export.json";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  ASSERT_TRUE(azookey::learning::WriteProtectedText(
+      path, R"({"version":3,"entries":[{"word":"A","ruby":"a"}]})",
+      azookey::learning::test::Crypto()));
+  const auto encrypted = azookey::learning::EncryptedPathFor(path);
+  const auto before = ReadAll(encrypted);
+  {
+    std::ofstream tsv(import_path, std::ios::binary);
+    tsv << "b\tB\n";
+  }
+
+  auto list = Parse({"list"});
+  ASSERT_TRUE(list.has_value());
+  auto list_result = azookey::host::RunUserDictCli(*list, DirectRunOptions(path));
+  EXPECT_EQ(list_result.exit_code, 0);
+  EXPECT_EQ(list_result.output_lines.size(), 1u);
+
+  const std::vector<std::vector<std::string>> writers = {
+      {"add", "--reading", "b", "--surface", "B", "--offline"},
+      {"remove", "--reading", "a", "--surface", "A", "--offline"},
+      {"import", import_path.string()},
+      {"import", import_path.string(), "--dry-run"},
+      {"export", export_path.string()},
+  };
+  for (const auto& args : writers) {
+    SCOPED_TRACE(args.front());
+    std::string error;
+    auto options = azookey::host::ParseUserDictCliArgs(args, &error);
+    ASSERT_TRUE(options.has_value()) << error;
+    auto result = azookey::host::RunUserDictCli(*options, DirectRunOptions(path));
+    EXPECT_EQ(result.exit_code, 1);
+    EXPECT_NE(result.error.find("newer version"), std::string::npos) << result.error;
+  }
+  EXPECT_EQ(ReadAll(encrypted), before);
+  EXPECT_FALSE(std::filesystem::exists(export_path));
+  std::filesystem::remove_all(root);
+}
+
+// user-dictionary-pos-spec 7.5: an older Host drops `pos` and answers ok, so
+// add --pos is sent only to a Host announcing user_dict_pos.
+TEST(UserDictCliTest, PosIsSentOnlyToAHostWithTheCapability) {
+  const auto path = TestPath("azookey_userdict_cli_ipc_pos");
+  std::filesystem::remove_all(path.parent_path());
+
+  const std::string pipe_name = UniquePipeName("azookey-userdict-cli-pos-test");
+  std::mutex mutex;
+  bool announce = false;
+  std::optional<azookey::ipc::AddUserWordRequest> add_seen;
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        std::lock_guard<std::mutex> lock(mutex);
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "userdict-cli-test-host";
+          payload.protocol_version = 1;
+          payload.accepted = true;
+          if (announce) payload.capabilities = {"user_dict_pos"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::AddUserWord) {
+          add_seen = azookey::ipc::ParseAddUserWordRequest(req.payload_json);
+          azookey::ipc::AddUserWordResponse payload;
+          payload.ok = add_seen.has_value();
+          res.payload_json = azookey::ipc::BuildAddUserWordResponse(payload);
+          return res;
+        }
+        return std::nullopt;
+      });
+  if (!started) {
+    GTEST_SKIP() << "NamedPipeTransport is Windows-only";
+  }
+
+  azookey::host::UserDictCliRunOptions run_options;
+  run_options.crypto = &azookey::learning::test::Crypto();
+  run_options.user_dict_path = path.string();
+  run_options.pipe_name = pipe_name;
+  run_options.prefer_pipe = true;
+  run_options.connect_timeout_ms = 2000;
+  run_options.handshake_timeout_ms = 2000;
+  run_options.command_timeout_ms = 2000;
+
+  auto add = Parse({"add", "--reading", "ぐぐる", "--surface", "ググる", "--pos", "verb_godan_ra"});
+  ASSERT_TRUE(add.has_value());
+  auto refused = azookey::host::RunUserDictCli(*add, run_options);
+  EXPECT_EQ(refused.exit_code, 1);
+  EXPECT_NE(refused.error.find("user_dict_pos"), std::string::npos) << refused.error;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_FALSE(add_seen.has_value());
+    announce = true;
+  }
+
+  auto sent = azookey::host::RunUserDictCli(*add, run_options);
+  EXPECT_EQ(sent.exit_code, 0) << sent.error;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_TRUE(add_seen.has_value());
+    EXPECT_EQ(add_seen->pos, std::optional<std::string>("verb_godan_ra"));
+  }
+  EXPECT_FALSE(std::filesystem::exists(path));
+
+  server.Stop();
+  std::filesystem::remove_all(path.parent_path());
+}

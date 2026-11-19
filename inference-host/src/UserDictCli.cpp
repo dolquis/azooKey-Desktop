@@ -23,6 +23,7 @@
 #include "azookey/ipc/TraceId.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/learning/UserDictionaryPos.h"
 
 namespace azookey::host {
 
@@ -92,6 +93,9 @@ void AddWordFields(j::Object* object, const learning::UserWord& word) {
   }
   if (word.value) {
     object->emplace("weight", j::Value(*word.value));
+  }
+  if (word.pos) {
+    object->emplace("pos", j::Value(*word.pos));
   }
 }
 
@@ -205,10 +209,10 @@ std::optional<learning::UserWord> ParseUserWordTsvLine(std::string line) {
     return std::nullopt;
   }
   auto cells = SplitTsvLine(line);
-  if (cells.size() < 2 || cells.size() > 5 || cells[0].empty() || cells[1].empty()) {
+  if (cells.size() < 2 || cells.size() > 6 || cells[0].empty() || cells[1].empty()) {
     return std::nullopt;
   }
-  cells.resize(5);
+  cells.resize(6);
 
   learning::UserWord word;
   word.ruby = cells[0];
@@ -217,6 +221,16 @@ std::optional<learning::UserWord> ParseUserWordTsvLine(std::string line) {
       !ParseOptionalInt32Cell(cells[3], &word.mid) ||
       !ParseOptionalFiniteDoubleCell(cells[4], &word.value)) {
     return std::nullopt;
+  }
+  // docs/user-dictionary-pos-spec.md 7.5: the sixth column is a part-of-speech
+  // id; empty is a noun. An id outside the table or one the word does not
+  // meet section 4.4 for skips the line.
+  if (!cells[5].empty()) {
+    if (learning::CheckUserWordPos(word.word, word.ruby, cells[5]) !=
+        learning::UserWordPosCheck::Ok) {
+      return std::nullopt;
+    }
+    word.pos = cells[5];
   }
   return word;
 }
@@ -228,8 +242,15 @@ learning::UserWord ToUserWord(const UserDictCliOptions& options) {
   word.cid = options.cid;
   word.mid = options.mid;
   word.value = options.weight;
+  word.pos = options.pos;
   return word;
 }
+
+constexpr const char* kInvalidPosMessage =
+    "the part of speech does not fit the word (unknown --pos id, or the reading and the word "
+    "do not end in the dictionary form of that id); nothing was saved";
+constexpr const char* kDictionaryTooNewMessage =
+    "the user dictionary was written by a newer version of azooKey; it is left unchanged";
 
 bool ContainsWord(const std::vector<learning::UserWord>& entries, const learning::UserWord& word) {
   return std::any_of(entries.begin(), entries.end(), [&](const learning::UserWord& entry) {
@@ -291,6 +312,11 @@ std::string HostRejectionMessage(const char* op, std::string_view c) {
     message += " (the running host could not read the request)";
   } else if (c == azookey::ipc::kUserDictErrorNotAuthenticated) {
     message += " (the running host did not accept this connection)";
+  } else if (c == azookey::ipc::kUserDictErrorInvalidPos) {
+    message += " (the part of speech does not fit the word; nothing was saved)";
+  } else if (c == azookey::ipc::kUserDictErrorDictionaryTooNew) {
+    message +=
+        " (the user dictionary was written by a newer version of azooKey; it is left unchanged)";
   } else {
     return std::string("running host rejected ") + op + " (unrecognized reason)";
   }
@@ -346,6 +372,18 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     result.error = "handshake rejected by running host";
     return result;
   }
+  // user-dictionary-pos-spec 7.5: a Host without the capability drops `pos`
+  // silently and answers ok, so the word is never sent to it.
+  const auto& capabilities = handshake_payload->capabilities;
+  if (word.pos && std::find(capabilities.begin(), capabilities.end(),
+                            azookey::ipc::kCapabilityUserDictPos) == capabilities.end()) {
+    result.exit_code = 1;
+    result.error =
+        "the running host does not support parts of speech (no user_dict_pos capability); "
+        "nothing was sent";
+    result.output_lines.push_back(OperationJsonLine(op, false, word, false, "ipc", result.error));
+    return result;
+  }
 
   azookey::ipc::Envelope command;
   if (options.command == UserDictCliCommand::Add) {
@@ -355,6 +393,7 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     req.cid = word.cid;
     req.mid = word.mid;
     req.value = word.value;
+    req.pos = word.pos;
     command = MakeEnvelope(kCommandRequestId, azookey::ipc::MessageType::AddUserWord,
                            azookey::ipc::BuildAddUserWordRequest(req), trace_id);
   } else {
@@ -419,6 +458,13 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
   if (!(read_only ? dict.LoadReadOnly() : dict.Load())) {
     result.exit_code = 1;
     result.error = "failed to load user dictionary";
+    return result;
+  }
+  // user-dictionary-pos-spec 3.2: a dictionary of version 3 or later is listed
+  // but never written or exported, dry runs included.
+  if (dict.too_new() && options.command != UserDictCliCommand::List) {
+    result.exit_code = 1;
+    result.error = kDictionaryTooNewMessage;
     return result;
   }
 
@@ -488,7 +534,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     auto entries = dict.All();
     SortEntries(&entries);
     if (!options.dry_run) {
-      azookey::learning::UserDictionary exported(dict.path(), run_options.crypto);
+      // A copy keeps the root's unknown members, so the export has Save's form
+      // (user-dictionary-pos-spec 3.4).
+      auto exported = dict;
       exported.ReplaceAll(entries);
       if (!exported.SavePlaintextExport(azookey::core::Utf8Path(options.path))) {
         result.exit_code = 1;
@@ -596,6 +644,10 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
         return std::nullopt;
       }
       options.weight = parsed;
+    } else if (arg == "--pos" && options.command == UserDictCliCommand::Add) {
+      std::string value;
+      if (!ReadOptionValue(args, &i, "--pos", &value, error)) return std::nullopt;
+      options.pos = std::move(value);
     } else if (arg == "--format") {
       std::string value;
       if (!ReadOptionValue(args, &i, "--format", &value, error)) return std::nullopt;
@@ -640,6 +692,19 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
 
 UserDictCliResult RunUserDictCli(const UserDictCliOptions& options,
                                  const UserDictCliRunOptions& run_options) {
+  // user-dictionary-pos-spec 7.5: --pos is checked as the Host checks it
+  // (7.1), whichever way the word goes.
+  if (options.pos && learning::CheckUserWordPos(options.surface, options.reading, *options.pos) !=
+                         learning::UserWordPosCheck::Ok) {
+    UserDictCliResult result;
+    result.exit_code = 1;
+    result.error = kInvalidPosMessage;
+    result.output_lines.push_back(OperationJsonLine(
+        "add", false, ToUserWord(options), options.dry_run,
+        options.offline || !run_options.prefer_pipe || options.dry_run ? "direct" : "ipc",
+        result.error, std::string(azookey::ipc::kUserDictErrorInvalidPos)));
+    return result;
+  }
   if (!options.offline && run_options.prefer_pipe && !options.dry_run &&
       (options.command == UserDictCliCommand::Add ||
        options.command == UserDictCliCommand::Remove)) {

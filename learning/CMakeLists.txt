@@ -10,6 +10,7 @@ add_library(azookey_learning STATIC
   src/Sha256.cpp
   src/TypoCorrectionStore.cpp
   src/UserDictionary.cpp
+  src/UserDictionaryPos.cpp
 )
 
 # These TSV stores define the same anonymous-namespace helpers.

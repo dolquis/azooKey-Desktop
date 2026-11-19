@@ -948,6 +948,22 @@ TEST(PayloadsTest, UserWord) {
   EXPECT_EQ(parsed2->word, "azooKey");
 }
 
+// user-dictionary-pos-spec 7.1 (DEV-2135): `pos` is sent only when present.
+TEST(PayloadsTest, AddUserWordPos) {
+  azookey::ipc::AddUserWordRequest add;
+  add.word = "ググる";
+  add.ruby = "ぐぐる";
+  EXPECT_EQ(azookey::ipc::BuildAddUserWordRequest(add).find("\"pos\""), std::string::npos);
+  add.pos = "verb_godan_ra";
+  auto parsed = azookey::ipc::ParseAddUserWordRequest(azookey::ipc::BuildAddUserWordRequest(add));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->pos, std::optional<std::string>("verb_godan_ra"));
+  EXPECT_FALSE(azookey::ipc::ParseAddUserWordRequest(R"({"word":"a","ruby":"あ","pos":null})"));
+  const auto without = azookey::ipc::ParseAddUserWordRequest(R"({"word":"a","ruby":"あ"})");
+  ASSERT_TRUE(without.has_value());
+  EXPECT_FALSE(without->pos.has_value());
+}
+
 TEST(PayloadsTest, UpdateConfigResponse) {
   azookey::ipc::UpdateConfigResponse ok;
   ok.ok = true;

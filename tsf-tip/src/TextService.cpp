@@ -1685,11 +1685,13 @@ STDMETHODIMP TextService::Deactivate() try {
   // thread-manager sink before DestroyWindow returns, so it goes only after
   // the sinks are unadvised (DEV-2084).
   CancelMagicConversion();
+  // M67: the mode a field chose does not outlive the activation that chose it;
+  // an IME that is off restores nothing (app-profile-spec §13.4).
+  if (keyboard_open_ && input_scope_field_.restore_alnum)
+    alnum_mode_ = *input_scope_field_.restore_alnum;
+  input_scope_field_ = {};
   keyboard_open_ = true;
   ClearKeyboardOpenTracking();
-  // M67: the mode a field chose does not outlive the activation that chose it.
-  if (input_scope_field_.restore_alnum) alnum_mode_ = *input_scope_field_.restore_alnum;
-  input_scope_field_ = {};
 
   StopIpcWorker();
 
@@ -1939,9 +1941,14 @@ void TextService::ReopenIfInitialOpenWasUndone() {
 void TextService::EnterInputScopeField(ITfContext* context, std::string_view source) {
   AZOOKEY_ASSERT_UI_THREAD();
   const bool first_read = source == "focus";
+  // Input that was there before a late read kept the entry too (§13.4).
+  const bool entry_kept = !first_read && input_scope_field_.entry_kept;
   input_scope_field_ = {};
+  const bool input_left =
+      composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose();
   if (!context) {
     input_scope_field_.reprobe = first_read;
+    input_scope_field_.entry_kept = first_read && input_left;
     return;
   }
   // The decision only: applying it here would move M46 to the focus change.
@@ -1953,21 +1960,19 @@ void TextService::EnterInputScopeField(ITfContext* context, std::string_view sou
   if (privacy.scope_status == InputScopeProbeStatus::SessionFailed ||
       privacy.scope_status == InputScopeProbeStatus::NoContext) {
     input_scope_field_.reprobe = first_read;
+    input_scope_field_.entry_kept = first_read && input_left;
     if (!first_read) LogInputScopeFieldOnChange(InputScopeField::None, source);
     return;
   }
   auto& field = input_scope_field_;
   field.field = privacy.field;
   LogInputScopeFieldOnChange(field.field, source);
-  if (field.field == InputScopeField::None ||
-      !core::InputScopeSwitchingEnabledForApp(local_settings_.Snapshot(), foreground_app_.Get(),
-                                              WindowsAppNameEqual))
-    return;
+  if (field.field == InputScopeField::None || !InputScopeSwitchingEnabled()) return;
   field.applies = true;
   if (!StartsInAlphanumericMode(field.field)) return;
   // Switching would drop input still shown or carried, and switching once it
   // is gone would change the characters mid-word: the field keeps hiragana.
-  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) return;
+  if (entry_kept || input_left) return;
   field.reapply_on_open = true;
   if (!keyboard_open_) return;
   field.restore_alnum = alnum_mode_;
@@ -1976,7 +1981,11 @@ void TextService::EnterInputScopeField(ITfContext* context, std::string_view sou
 
 void TextService::ReprobeInputScopeFieldBeforeKey(ITfContext* context) {
   if (!input_scope_field_.reprobe || !context) return;
-  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) return;
+  if (composition_ || committing_ || bracket_composition_ || HasInputToCommitBeforeClose()) {
+    // The read waits for a key without input; the entry stays as it is now.
+    input_scope_field_.entry_kept = true;
+    return;
+  }
   EnterInputScopeField(context, "first_key");
 }
 
@@ -1992,7 +2001,9 @@ void TextService::RestoreInputModeAfterInputScopeField(std::optional<bool> alnum
 
 void TextService::ApplyInputScopeFieldAfterAutoOpen() {
   auto& field = input_scope_field_;
-  if (!field.applies || !field.reapply_on_open || !StartsInAlphanumericMode(field.field)) return;
+  if (!field.applies || !field.reapply_on_open || !StartsInAlphanumericMode(field.field) ||
+      !InputScopeSwitchingEnabled())
+    return;
   if (composition_ || committing_ || HasInputToCommitBeforeClose()) return;
   // Opening from off starts in hiragana (tsf-deep-integration-spec §4.2).
   if (!field.restore_alnum) field.restore_alnum = false;
@@ -2006,13 +2017,20 @@ void TextService::SwitchToAlphanumericForInputScope() {
   UpdateInputModeLangBar();
 }
 
-bool TextService::InputScopeSuppressesBrackets() const {
-  return input_scope_field_.applies && StartsInAlphanumericMode(input_scope_field_.field);
+bool TextService::InputScopeSwitchingEnabled() {
+  return core::InputScopeSwitchingEnabledForApp(local_settings_.Snapshot(), foreground_app_.Get(),
+                                                WindowsAppNameEqual);
 }
 
-TipDynamicPunctuationSettings TextService::EffectiveDynamicPunctuation() const {
+bool TextService::InputScopeSuppressesBrackets() {
+  return input_scope_field_.applies && StartsInAlphanumericMode(input_scope_field_.field) &&
+         InputScopeSwitchingEnabled();
+}
+
+TipDynamicPunctuationSettings TextService::EffectiveDynamicPunctuation() {
   auto settings = local_settings_.DynamicPunctuationSnapshot();
-  if (input_scope_field_.applies && SuppressesAutoPunctuation(input_scope_field_.field))
+  if (settings.enabled && input_scope_field_.applies &&
+      SuppressesAutoPunctuation(input_scope_field_.field) && InputScopeSwitchingEnabled())
     settings.enabled = false;
   return settings;
 }

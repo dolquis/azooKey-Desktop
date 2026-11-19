@@ -606,6 +606,7 @@ Chromium は入力の種類ごとに document manager を持ち、同じ種類�
 
 モードの切替は、入力インジケーターの表示（`docs/tsf-deep-integration-spec.md` §4.5）を更新する。判定した欄の種類は、M46 の判定と同じ info ログ
 `input_gate`（`docs/privacy-and-secure-input-spec.md` §4.3）に、値が変わったときだけ記録する。入力本文は含めない。
+この記録は M46 の判定の記録とは別のレコードで、欄の種類（`field_kind`）と判定した時機（`source`。フォーカス時は `focus`、読み直しは `first_key`）だけを持つ。
 
 ### 13.5 優先順位
 

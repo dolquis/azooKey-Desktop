@@ -20883,3 +20883,64 @@ TEST(TsfTipInputScopeFieldTest, SearchAndAlphanumericGroupsStopAutomaticPunctuat
   ASSERT_TRUE(s.h.Press(VK_RETURN));
   EXPECT_TRUE(s.h.service.final_punctuation_hold_pending_for_test());
 }
+
+// §13.4: input left at an entry whose read failed keeps hiragana when the
+// field is read again later, as it would at the focus.
+TEST(TsfTipInputScopeFieldTest, InputLeftBeforeALateReadKeepsTheEntryMode) {
+  InputScopeFieldHarness s;
+  s.Focus(&s.plain_document, nullptr);
+  ASSERT_TRUE(s.Type(s.plain, 'K'));
+  ASSERT_TRUE(s.Type(s.plain, 'A'));
+  ASSERT_NE(s.h.service.composition_, nullptr);
+  s.plain.reject_write = true;
+  s.h.context.reject_read = true;
+  s.Focus(&s.field_document, &s.plain_document);
+  ASSERT_NE(s.h.service.composition_, nullptr);
+  ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+  s.plain.reject_write = false;
+  s.h.context.reject_read = false;
+  // A later lifecycle session commits what was left there.
+  EXPECT_EQ(s.h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_EQ(s.h.service.composition_, nullptr);
+  ASSERT_EQ(s.plain.document->text, L"か");
+  ASSERT_TRUE(s.h.service.input_scope_field_reprobe_for_test());
+  EXPECT_TRUE(s.Type(s.h.context, 'K'));
+  EXPECT_FALSE(s.h.service.input_scope_field_reprobe_for_test());
+  EXPECT_EQ(s.h.service.input_scope_field_for_test(), azookey::tsf::InputScopeField::Url);
+  EXPECT_TRUE(s.h.service.input_scope_field_applies_for_test());
+  EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+}
+
+// §13.4, §13.5: turning inputScopeSwitching off while in the field ends the
+// suppressions at once; deactivating returns the mode before the field
+// unless the IME is off.
+TEST(TsfTipInputScopeFieldTest, SettingOffInTheFieldAndDeactivationEndWhatTheFieldDid) {
+  {
+    InputScopeFieldHarness s(IS_SEARCH);
+    StartLive(s.h, DynamicPunctuation());
+    s.Enter();
+    ASSERT_TRUE(s.h.service.input_scope_field_applies_for_test());
+    s.h.service.set_bracket_settings_for_test(
+        azookey::core::ParseBracketSettings(R"({"inputScopeSwitching":false})"));
+    TypeKaAndShow(s.h);
+    EXPECT_TRUE(s.h.service.punctuation_timer_armed_for_test(DelayedActionTimer::kIdle));
+  }
+  {
+    InputScopeFieldHarness s;
+    s.Enter();
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    EXPECT_EQ(s.h.service.Deactivate(), S_OK);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+  {
+    InputScopeFieldHarness s;
+    s.Focus(&s.plain_document, nullptr);
+    ASSERT_TRUE(s.Type(s.plain, VK_OEM_ATTN));
+    s.Focus(&s.field_document, &s.plain_document);
+    ASSERT_TRUE(s.h.service.alnum_mode_for_test());
+    ASSERT_TRUE(s.Type(s.h.context, VK_IME_OFF));
+    ASSERT_FALSE(s.h.service.keyboard_open());
+    EXPECT_EQ(s.h.service.Deactivate(), S_OK);
+    EXPECT_FALSE(s.h.service.alnum_mode_for_test());
+  }
+}

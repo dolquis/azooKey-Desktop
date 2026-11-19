@@ -1063,6 +1063,9 @@ class TextService final : public ITfTextInputProcessorEx,
     // An On that is not the user's switches to the alphanumeric mode. Off once
     // the user switches, and when input kept the entry from switching.
     bool reapply_on_open{false};
+    // Input was there while the field waited to be read again, so the late
+    // read keeps the entry mode as well.
+    bool entry_kept{false};
     // The mode before entering (true: alphanumeric), restored on leaving.
     std::optional<bool> restore_alnum;
   };
@@ -1986,9 +1989,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyInputScopeFieldAfterAutoOpen();
   void NoteUserInputModeSwitch() { input_scope_field_.reapply_on_open = false; }
   void SwitchToAlphanumericForInputScope();
-  bool InputScopeSuppressesBrackets() const;
+  // The effective inputScopeSwitching of the app now (§13.5, §13.6).
+  bool InputScopeSwitchingEnabled();
+  bool InputScopeSuppressesBrackets();
   // dynamicPunctuation as the focused field allows it.
-  TipDynamicPunctuationSettings EffectiveDynamicPunctuation() const;
+  TipDynamicPunctuationSettings EffectiveDynamicPunctuation();
   void LogInputScopeFieldOnChange(InputScopeField field, std::string_view source) noexcept;
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();

@@ -99,8 +99,10 @@ TEST(DateTimeRewriterTest, DayOffsetsCrossMonthEndsYearEndsAndLeapDays) {
   EXPECT_EQ(DateTimeSeireki("あした", {2000, 2, 28, 0, 0}), "2000年2月29日");
 }
 
-TEST(DateTimeRewriterTest, YearOffsetFromLeapDayLandsOnFebruary28) {
-  // The year candidates show only the year; the shifted date stays valid.
+TEST(DateTimeRewriterTest, YearOffsetFromLeapDayStillGivesTheYearCandidates) {
+  // §20.3 moves Feb 29 to Feb 28 in a common year. The year candidates show
+  // only the year and no era starts in February, so the move itself is not
+  // visible here; the candidates must still come out.
   EXPECT_EQ(DateTimeSurfaces("らいねん", {2024, 2, 29, 12, 0}),
             (std::vector<std::string>{"2025年", "令和7年"}));
   EXPECT_EQ(DateTimeSurfaces("きょねん", {2024, 2, 29, 12, 0}),

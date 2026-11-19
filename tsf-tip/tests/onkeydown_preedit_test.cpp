@@ -6616,6 +6616,21 @@ TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterIsOffByDefaultAndDoesNotReadThe
   EXPECT_EQ(ViewSurfaces(off_items), (std::vector<std::wstring>{L"今日", L"京"}));
   EXPECT_EQ(h.service.dynamic_candidate_clock_reads_for_test(), 0u);
   EXPECT_FALSE(h.service.date_time_rewriter_enabled_for_test());
+
+  // The commit and its observation are those of the Host list as before.
+  h.service.preedit_kana_ = "きょう";
+  ASSERT_TRUE(PressSpaceAndDeliver(h, [&] {
+    h.service.set_rewritten_cached_candidates_for_test("きょう", KyouHostCandidates());
+  }));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+  h.service.set_selected_candidate_index_for_test(1);
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "京");
+  ASSERT_EQ(observation->shown.size(), 2u);
+  EXPECT_EQ(h.service.dynamic_candidate_clock_reads_for_test(), 0u);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, DateTimeRewriterInsertsAnnotatedCandidatesAfterTheFirstOne) {
@@ -11562,6 +11577,64 @@ TEST(TsfTipTypoCorrectionTest, DateTimeRewriterFromHandshakeMatchesTheCorrectedR
   EXPECT_EQ(cached[6].surface, "火曜日");
 }
 
+// candidate-rewriter-spec §20.8: the window Space opens from a Host answer
+// shows the dynamic candidates after the first one.
+TEST(TsfTipTypoCorrectionTest, DateTimeCandidatesReachTheWindowOpenedFromAHostAnswer) {
+  using namespace azookey::ipc;
+  TextServiceHarness token_guard;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-date-time-window-" + std::to_string(GetCurrentProcessId());
+  std::atomic<int> queries{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake_response;
+      handshake_response.accepted = true;
+      handshake_response.date_time_rewriter = true;
+      response.payload_json = BuildHandshakeResponse(handshake_response);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      QueryCandidatesResponse payload;
+      if (const auto query = ParseQueryCandidatesRequest(request.payload_json);
+          query && query->reading == "きょう")
+        payload.candidates = {{"今日", "きょう", 0.0, "dictionary"},
+                              {"京", "きょう", 0.0, "dictionary"}};
+      ++queries;
+      response.payload_json = BuildQueryCandidatesResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_local_time_for_test(kDynamicCandidateTime);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return h.service.date_time_rewriter_enabled_for_test(); },
+                        std::chrono::seconds(10)));
+  TypeTypoRomaji(h, "KYOU");
+  // A per-key query has been answered, so the Host is connected for Space.
+  ASSERT_TRUE(WaitUntil([&] { return queries.load() > 0; }, std::chrono::seconds(10)));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const bool opened = WaitUntil(
+      [&] {
+        h.service.process_candidates_ready_for_test();
+        return h.service.candidate_window_showing_for_test();
+      },
+      std::chrono::seconds(10));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  ASSERT_TRUE(opened);
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_EQ(shown.size(), 8u);
+  EXPECT_EQ(shown[0].surface, "今日");
+  EXPECT_EQ(shown[1].surface, "2026年11月17日");
+  EXPECT_EQ(shown[6].surface, "火曜日");
+  EXPECT_EQ(shown[7].surface, "京");
+}
+
 // A candidate of the other reading is learned under that reading, as an M35
 // correction is learned under the corrected one: げんいん → 原因, never
 // げんにん → 原因. The undo record names the same pair.
@@ -15807,6 +15880,36 @@ TEST(TsfTipWindowWaitTest, HostUnavailableOpensAtOnceAndEnterIsNotHeld) {
   EXPECT_EQ(h.service.window_waiting_key_count_for_test(), 0u);
   EXPECT_TRUE(h.service.preedit_kana_.empty());
   EXPECT_FALSE(h.context.document->text.empty());
+}
+
+// candidate-rewriter-spec §20.8: the TIP's own list without a Host gets the
+// dynamic candidates after its first entry; a batch conversion never does.
+TEST(TsfTipWindowWaitTest, HostUnavailableLocalWindowGetsDateTimeCandidatesButBatchDoesNot) {
+  for (const bool batch : {false, true}) {
+    SCOPED_TRACE(batch ? "batch" : "window");
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_local_time_for_test(kDynamicCandidateTime);
+    h.service.set_date_time_rewriter_enabled_for_test(true);
+    if (batch) h.service.set_batch_romaji_options_for_test(true);
+    h.service.set_ipc_host_unavailable_for_test(true);
+    TypeTypoRomaji(h, "KYOU");
+    ASSERT_EQ(h.service.preedit_kana_, "きょう");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.service.candidate_window_showing_for_test());
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_FALSE(shown.empty());
+    EXPECT_EQ(shown[0].surface, "きょう");
+    const bool has_date = std::any_of(shown.begin(), shown.end(), [](const auto& candidate) {
+      return candidate.surface == "2026年11月17日";
+    });
+    EXPECT_EQ(has_date, !batch);
+    if (!batch) {
+      ASSERT_GE(shown.size(), 7u);
+      EXPECT_EQ(shown[1].surface, "2026年11月17日");
+      EXPECT_EQ(shown[6].surface, "火曜日");
+    }
+  }
 }
 
 // A Host lost after the query was sent leaves no answer and no deadline: the

@@ -1690,6 +1690,8 @@ STDMETHODIMP TextService::Deactivate() try {
   if (keyboard_open_ && input_scope_field_.restore_alnum)
     alnum_mode_ = *input_scope_field_.restore_alnum;
   input_scope_field_ = {};
+  // The next activation reports its first field even when the kind is the same.
+  input_scope_field_logged_.clear();
   keyboard_open_ = true;
   ClearKeyboardOpenTracking();
 

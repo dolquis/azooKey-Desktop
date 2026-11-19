@@ -76,7 +76,7 @@ local-zenzai の品質確認のように実 GGUF での推論結果を見るゲ�
 GGUF なしでは同梱辞書などの候補へフォールバックするため、その品質判定が成立しない。
 
 静的辞書は `-BundledDictionaryDirectory`（既定 `build/bundled-dictionaries`）から
-`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic` と
+`dict/sudachi_lexicon.azdic`、`dict/technical_terms_lexicon.azdic`、`dict/lattice_core.azdic` と
 `ThirdPartyNotices.txt` を同梱し、各ファイルの SHA-256 を `manifest.json` に記録する。
 生成入力と出力を結ぶ `bundle-provenance.json` も同梱する。パッケージ生成は形式・出所と現在の生成入力を照合するため、
 古い生成結果で拒否された場合は上の辞書生成コマンドを実行し直す。manifestの `bundledDictionaries` には

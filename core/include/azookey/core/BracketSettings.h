@@ -38,5 +38,10 @@ struct BracketSettings {
 BracketSettings ParseBracketSettings(std::string_view json);
 bool BracketPairingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
                                  AppNameEqual equal = EqualAppName);
+// M67 (app-profile-spec §13.5, §13.6): the effective inputScopeSwitching for
+// `app`, the profile layers over the root boolean. Absent everywhere, or an
+// unreadable settings file: true.
+bool InputScopeSwitchingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
+                                      AppNameEqual equal = EqualAppName);
 
 }  // namespace azookey::core

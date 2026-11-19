@@ -66,6 +66,9 @@ class ScopeSession final : public ITfEditSession {
           password = true;
         // Chromium marks password fields IS_PRIVATE, never IS_PASSWORD.
         if (scopes[i] == IS_PRIVATE) private_scope = true;
+        // M67: the first listed value in the app's order names the field.
+        if (probe.field == InputScopeField::None)
+          probe.field = InputScopeFieldOf(static_cast<int>(scopes[i]));
         if (i < kMaxLoggedScopes) {
           if (i) probe.scopes += ',';
           probe.scopes += std::to_string(static_cast<int>(scopes[i]));
@@ -74,11 +77,13 @@ class ScopeSession final : public ITfEditSession {
     } catch (const std::bad_alloc&) {
       CoTaskMemFree(scopes);
       probe.status = InputScopeProbeStatus::SessionFailed;
+      probe.field = InputScopeField::None;
       LogComBoundaryException("ScopeSession::DoEditSession", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
       CoTaskMemFree(scopes);
       probe.status = InputScopeProbeStatus::SessionFailed;
+      probe.field = InputScopeField::None;
       LogComBoundaryException("ScopeSession::DoEditSession", E_FAIL);
       return E_FAIL;
     }
@@ -122,6 +127,57 @@ ScopedFocusClassificationForTest::~ScopedFocusClassificationForTest() {
 }
 #endif
 
+InputScopeField InputScopeFieldOf(int scope) noexcept {
+  switch (scope) {
+    case IS_URL:
+      return InputScopeField::Url;
+    case IS_EMAIL_USERNAME:
+    case IS_EMAIL_SMTPEMAILADDRESS:
+    case IS_EMAILNAME_OR_ADDRESS:
+      return InputScopeField::Email;
+    case IS_DIGITS:
+    case IS_NUMBER:
+    case IS_TELEPHONE_FULLTELEPHONENUMBER:
+    case IS_TELEPHONE_COUNTRYCODE:
+    case IS_TELEPHONE_AREACODE:
+    case IS_TELEPHONE_LOCALNUMBER:
+      return InputScopeField::Number;
+    case IS_ALPHANUMERIC_HALFWIDTH:
+      return InputScopeField::AlphanumericHalfWidth;
+    case IS_SEARCH:
+    case IS_SEARCH_INCREMENTAL:
+      return InputScopeField::Search;
+    default:
+      return InputScopeField::None;
+  }
+}
+
+bool StartsInAlphanumericMode(InputScopeField field) noexcept {
+  return field != InputScopeField::None && field != InputScopeField::Search;
+}
+
+bool SuppressesAutoPunctuation(InputScopeField field) noexcept {
+  return field != InputScopeField::None;
+}
+
+std::string_view InputScopeFieldName(InputScopeField field) noexcept {
+  switch (field) {
+    case InputScopeField::Url:
+      return "url";
+    case InputScopeField::Email:
+      return "email";
+    case InputScopeField::Number:
+      return "number";
+    case InputScopeField::AlphanumericHalfWidth:
+      return "alphanumeric";
+    case InputScopeField::Search:
+      return "search";
+    case InputScopeField::None:
+      break;
+  }
+  return "none";
+}
+
 InputScopeClass ClassifyFocusWindow(HWND focus) {
   if (!focus) return InputScopeClass::Unknown;
   wchar_t name[32]{};
@@ -150,6 +206,7 @@ InputScopeProbe ProbeInputScope(ITfContext* context, TfClientId client_id,
   if (FAILED(result) || executed != S_OK) {
     auto failed = std::move(session->probe);
     failed.classification = InputScopeClass::Unknown;
+    failed.field = InputScopeField::None;
     // A session the app deferred or refused never reached the property.
     if (FAILED(result) || executed == TF_S_ASYNC)
       failed.status = InputScopeProbeStatus::SessionFailed;

@@ -24,7 +24,8 @@
             "default": {},
             "additionalProperties": {"type": "number", "minimum": 1.0, "maximum": 3.0}
           },
-          "privacyMode": {"type": "string", "enum": ["inherit", "normal", "private", "secure"], "default": "inherit"}
+          "privacyMode": {"type": "string", "enum": ["inherit", "normal", "private", "secure"], "default": "inherit"},
+          "inputScopeSwitching": {"type": "boolean", "default": true}
         }
       }
     },
@@ -84,6 +85,10 @@
     "fullWidthSpace": {
       "type": "boolean", "default": true,
       "description": "DEV-1814: ひらがなモードで読みが無いとき、true なら Space で全角空白・Shift+Space で半角空白、false なら逆。TIP だけが読む"
+    },
+    "inputScopeSwitching": {
+      "type": "boolean", "default": true,
+      "description": "M67: 入力欄の種類（InputScope）に応じて、URL・メール・数値と電話・半角英数の欄は英数モードで始めてカッコ補完と自動句読点を止め、検索欄は自動句読点だけを止める。profilesByApp でアプリごとに上書きできる。TIP だけが読む"
     },
     "liveConversion": {
       "type": "boolean",

@@ -245,12 +245,12 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     } else if (key == "convertKeysAction") {
       valid = IsStringEnum(value, {"default", "imeOnOff"});
     } else if (key == "liveConversion" || key == "fullWidthSpace" || key == "dynamicPunctuation" ||
-               key == "llmMagicConversion" || key == "predictionEnabled" ||
-               key == "includeContextInAITransform" || key == "contextReselection" ||
-               key == "postCommitLint" || key == "retroactiveRecompute" ||
-               key == "sentenceCompletion" || key == "batchRomajiConversion" ||
-               key == "batchAutoPunctuation" || key == "numberRewriter" ||
-               key == "katakanaRewriter" || key == "dateTimeRewriter" ||
+               key == "inputScopeSwitching" || key == "llmMagicConversion" ||
+               key == "predictionEnabled" || key == "includeContextInAITransform" ||
+               key == "contextReselection" || key == "postCommitLint" ||
+               key == "retroactiveRecompute" || key == "sentenceCompletion" ||
+               key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
+               key == "numberRewriter" || key == "katakanaRewriter" || key == "dateTimeRewriter" ||
                key == "calculatorRewriter" || key == "symbolRewriter" ||
                key == "inlineEnglishCandidates" || key == "mixedEnglishAutoConversion" ||
                key == "inlineEnglishCaseVariants" || key == "fullWidthEnglishCandidate" ||

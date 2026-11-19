@@ -149,6 +149,7 @@ struct ProfilesPane::Editor {
   controls::ComboBox technical{nullptr};
   controls::ComboBox privacy{nullptr};
   controls::ComboBox bracket{nullptr};
+  controls::ComboBox input_scope{nullptr};
   controls::StackPanel boosts_panel{nullptr};
   controls::TextBlock error_text{nullptr};
   std::vector<BoostRow> boost_rows;
@@ -218,6 +219,7 @@ struct ProfilesPane::Editor {
     read.prefer_technical_terms = TriStateValue(technical);
     read.privacy_mode = EnumValue(privacy, kProfilePrivacyModes);
     read.bracket_pairing = EnumValue(bracket, kProfileBracketPairings);
+    read.input_scope_switching = TriStateValue(input_scope);
     for (const auto& boost : boost_rows) {
       std::string tag = winrt::to_string(boost.tag.Text());
       const auto first = tag.find_first_not_of(" \t");
@@ -324,6 +326,9 @@ xaml::UIElement ProfilesPane::SummaryRow(const std::string& key, const AppProfil
   }
   if (profile.bracket_pairing) {
     add(label(L"Profiles_Summary_Bracket") + OptionText(resources, *profile.bracket_pairing));
+  }
+  if (profile.input_scope_switching) {
+    add(label(L"Profiles_Summary_InputScope") + on_off(*profile.input_scope_switching));
   }
   if (!profile.candidate_tag_boosts.empty()) {
     std::wstring boosts;
@@ -508,6 +513,10 @@ winrt::fire_and_forget ProfilesPane::Edit(std::optional<std::string> key) {
         EnumCombo(resources, resources.GetString(L"Profiles_Bracket_Header"),
                   kProfileBracketPairings, current.bracket_pairing, L"ProfileBracketCombo");
     form.Children().Append(editor->bracket);
+    editor->input_scope =
+        TriStateCombo(resources, resources.GetString(L"Profiles_InputScope_Header"),
+                      current.input_scope_switching, L"ProfileInputScopeCombo");
+    form.Children().Append(editor->input_scope);
 
     controls::TextBlock boosts_header;
     boosts_header.Text(resources.GetString(L"Profiles_Boosts_Header"));

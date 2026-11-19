@@ -396,6 +396,10 @@ class InferenceEngine {
   // with the transient-conflict retry budget that save is given. Set it before
   // any observation is committed.
   void SetBeforeLearningSaveForTests(std::function<void(std::chrono::milliseconds)> hook);
+  // Test-only: the budget of a lattice built after the model fell back (15 ms,
+  // docs/lattice-conversion-spec.md section 3.2), so a slow build (coverage) does not cut the
+  // lattice off by time. Set it before any query.
+  void SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds budget);
   // azookey_bench only (conversion-quality-benchmark-spec section 15.5): the instruction_profile
   // of the contexts QueryCandidates gives the model conversion and NLL rerank. The Host never
   // calls it, so its requests keep the empty profile (zenzai-inference-spec section 9.4.2).
@@ -747,6 +751,8 @@ class InferenceEngine {
   std::function<void()> before_user_dictionary_file_lock_for_tests_;
   std::function<void(std::chrono::milliseconds)> before_learning_save_for_tests_;
   std::function<void(const core::ConversionContext&)> nll_context_observer_for_tests_;
+  // Nanoseconds, set by the constructor; read by every query that falls back from the model.
+  std::atomic<int64_t> lattice_fallback_budget_ns_{0};
   // Guarded by state_mutex_.
   std::string bench_instruction_profile_;
   // Written with state_mutex_ and english_mutex_; either protects reads.

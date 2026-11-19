@@ -4,10 +4,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +17,8 @@
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/ipc/Json.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace engine_lattice_test {
 namespace {
@@ -30,6 +34,14 @@ constexpr std::string_view kLatticePrefix = "lattice;rank=";
 
 std::filesystem::path Fixture(const std::string& name) {
   return std::filesystem::path(AZOOKEY_DICT_FIXTURE) / name;
+}
+
+// A temporary path no other test run shares: the time and a counter.
+std::filesystem::path UniqueTempPath(const std::string& stem, const std::string& extension) {
+  static std::atomic<int> next_id{0};
+  return std::filesystem::temp_directory_path() /
+         (stem + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+          "_" + std::to_string(next_id++) + extension);
 }
 
 // A dict directory holding the fixture's sudachi_lexicon and the given lattice_core.
@@ -217,8 +229,7 @@ TEST(EngineLattice, SafeModeConvertsWithoutTheModelAndGetsTheLattice) {
   const auto engine = MakeEngine(NoLimitConfig(), Fixture("lattice"));
   engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
   azookey::host::ModelLoadOptions options;
-  options.path =
-      (std::filesystem::temp_directory_path() / "azookey_engine_lattice_safe.gguf").string();
+  options.path = UniqueTempPath("azookey_engine_lattice_safe", ".gguf").string();
   // SafeMode refuses the load before reading the file, so the fallback converter stays active.
   ASSERT_FALSE(engine->LoadModelWithResult(options).ok);
   const auto lattice = LatticeCandidates(engine->QueryCandidates(kSentence, "", kNow));
@@ -226,11 +237,69 @@ TEST(EngineLattice, SafeModeConvertsWithoutTheModelAndGetsTheLattice) {
   EXPECT_EQ(lattice.front().surface, "今日はいい天気です");
 }
 
+// Section 3.6: the degradations are logged by their result (and the layer) only, never with the
+// reading or a surface, and a canceled request logs none.
+TEST(EngineLattice, DegradationsAreLoggedWithoutTheReading) {
+  const auto log_path = UniqueTempPath("azookey_engine_lattice_log", ".jsonl");
+  std::string long_reading;
+  for (int i = 0; i < 65; ++i) long_reading += "て";
+  {
+    azookey::logging::RuntimeLoggerOptions log_options;
+    log_options.enabled = true;
+    log_options.component = "host";
+    log_options.output_path = log_path;
+    azookey::logging::RuntimeLogger logger(log_options);
+    // A layer whose CONN is in another id space is logged once, when it loads.
+    const LatticeDirectory other_space("layer_space", "lattice_core");
+    InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                           NoLimitConfig(), &logger);
+    const auto results = engine.LoadBundledDictionaryLayers(other_space.Path());
+    ASSERT_TRUE(results.back().loaded) << results.back().error;
+    (void)engine.QueryCandidates(long_reading, "", kNow);  // rejected
+    std::atomic<bool> cancel{true};
+    EXPECT_TRUE(engine.QueryCandidates(kSentence, "", kNow, &cancel).empty());
+    EXPECT_FALSE(LatticeCandidates(engine.QueryCandidates(kSentence, "", kNow)).empty());
+  }
+  std::ifstream stream(log_path);
+  ASSERT_TRUE(stream.is_open());
+  size_t connections = 0;
+  std::vector<std::string> conversions;
+  for (std::string line; std::getline(stream, line);) {
+    const auto value = azookey::ipc::json::Parse(line);
+    ASSERT_TRUE(value) << line;
+    const auto event = value->GetString("event");
+    if (!event || !event->starts_with("lattice_")) continue;
+    EXPECT_EQ(line.find("て"), std::string::npos) << line;
+    EXPECT_EQ(line.find("きょう"), std::string::npos) << line;
+    std::set<std::string> fields;
+    for (const auto& [key, field] : value->AsObject()) {
+      (void)field;
+      if (key != "ts" && key != "component" && key != "level" && key != "event") fields.insert(key);
+    }
+    if (*event == "lattice_connections") {
+      ++connections;
+      EXPECT_EQ(fields, (std::set<std::string>{"layer", "result"}));
+      EXPECT_EQ(value->GetString("layer"), "sudachi_lexicon");
+      EXPECT_EQ(value->GetString("result"), "unused");
+    } else {
+      EXPECT_EQ(*event, "lattice_conversion");
+      EXPECT_EQ(fields, std::set<std::string>{"result"});
+      conversions.push_back(value->GetString("result").value_or(""));
+    }
+  }
+  stream.close();
+  EXPECT_EQ(connections, 1U);
+  // Only the over-long reading; the canceled and the complete requests log nothing.
+  EXPECT_EQ(conversions, std::vector<std::string>{"rejected"});
+  std::error_code ec;
+  std::filesystem::remove(log_path, ec);
+}
+
 #if !AZOOKEY_WITH_LLAMA_CPP
 // Section 3.2: a request the model converter fell back on gets the lattice; one it answered
 // does not. The minimal GGUF loads only with the mock runtime (no real llama.cpp).
 TEST(EngineLattice, ModelFallbacksGetTheLatticeAndAnsweredRequestsDoNot) {
-  const auto model = std::filesystem::temp_directory_path() / "azookey_engine_lattice_model.gguf";
+  const auto model = UniqueTempPath("azookey_engine_lattice_model", ".gguf");
   {
     std::ofstream out(model, std::ios::binary);
     out.write("GGUF\x03\x00\x00\x00", 8);
@@ -240,6 +309,9 @@ TEST(EngineLattice, ModelFallbacksGetTheLatticeAndAnsweredRequestsDoNot) {
   options.path = model.string();
   options.mock_zenzai_candidates_for_tests = true;
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  // The 15 ms budget of section 3.2 would let a slow build (coverage) cut the lattice off by
+  // time; an hour leaves only the conditions under test. The budget itself is checked below.
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::hours(1));
 
   // The mock generates nothing for this reading: zenzai-degraded.
   const auto degraded = engine->QueryCandidates(kSentence, "", kNow);
@@ -264,6 +336,13 @@ TEST(EngineLattice, ModelFallbacksGetTheLatticeAndAnsweredRequestsDoNot) {
   ASSERT_FALSE(answered.empty());
   EXPECT_EQ(answered.front().source, CandidateSource::Model);
   EXPECT_TRUE(LatticeCandidates(answered).empty());
+
+  // A spent budget cuts the lattice off before its forward pass: no paths (section 6.4). The
+  // deadline has passed before the search starts, so this does not depend on the machine's speed.
+  engine->SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds(0));
+  const auto spent = engine->QueryCandidates(kSentence, "", kNow);
+  ASSERT_FALSE(spent.empty());
+  EXPECT_TRUE(LatticeCandidates(spent).empty());
   std::error_code ec;
   std::filesystem::remove(model, ec);
 }

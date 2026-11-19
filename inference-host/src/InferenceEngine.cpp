@@ -279,6 +279,9 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       reranker_(store),
       config_(std::move(config)),
       runtime_logger_(runtime_logger) {
+  lattice_fallback_budget_ns_.store(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(kLatticeFallbackBudget).count(),
+      std::memory_order_relaxed);
   ApplyDictionaryConfigLocked();
   if (store_) {
     learning_flush_thread_ = std::thread([this] {
@@ -1287,6 +1290,10 @@ void InferenceEngine::SetBeforeLearningSaveForTests(
   before_learning_save_for_tests_ = std::move(hook);
 }
 
+void InferenceEngine::SetLatticeFallbackBudgetForTests(std::chrono::nanoseconds budget) {
+  lattice_fallback_budget_ns_.store(budget.count(), std::memory_order_relaxed);
+}
+
 void InferenceEngine::SetBenchInstructionProfile(std::string profile) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   bench_instruction_profile_ = std::move(profile);
@@ -2180,7 +2187,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       LatticeApplies(config.lattice, !model_fell_back) && request_time_left()) {
     // Section 3.2: not the converter's spent budget but 15 ms from here, within the request's
     // own deadline and under its cancel.
-    auto deadline = std::chrono::steady_clock::now() + kLatticeFallbackBudget;
+    auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::nanoseconds(lattice_fallback_budget_ns_.load(std::memory_order_relaxed)));
     if (request_deadline) deadline = (std::min)(deadline, *request_deadline);
     std::lock_guard<std::mutex> lock(state_mutex_);
     lattice = LatticeCandidatesLocked(kana, LatticePathCount(effective_max_candidates, live),

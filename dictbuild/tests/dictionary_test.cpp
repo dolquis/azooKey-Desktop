@@ -743,4 +743,85 @@ TEST(DictionaryHost, ShippedBundleLoadsAndReverseConverts) {
   EXPECT_TRUE(std::any_of(candidates.begin(), candidates.end(),
                           [](const auto& candidate) { return candidate.surface == "TensorRT"; }));
 }
+
+// DEV-2101: DictionaryStore owns lattice_core and the lattice vocabularies of its layers
+// (docs/lattice-conversion-spec.md sections 3.1, 3.6 and 8.2).
+std::vector<std::string> LatticeSurfaces(const learning::DictionaryStore& store,
+                                         std::string_view reading, size_t max_paths = 4) {
+  core::LatticeQuery query;
+  query.max_paths = max_paths;
+  std::vector<std::string> surfaces;
+  for (const auto& path : store.ConvertLattice(reading, query).paths)
+    surfaces.push_back(path.Surface());
+  return surfaces;
+}
+
+TEST(DictionaryStoreLattice, ConvertsWithLatticeCoreStaticLayersAndUserWords) {
+  learning::DictionaryStore store;
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice/lattice_core.azdic"), true))
+      << store.LatticeError();
+  ASSERT_TRUE(
+      store.LoadStatic(learning::LayerId::Sudachi, Fixture("lattice/sudachi_lexicon.azdic")));
+  EXPECT_TRUE(store.IsLatticeAvailable());
+  EXPECT_TRUE(store.LatticeError().empty());
+  EXPECT_EQ(store.LatticeScoreScale(), 10000);
+  EXPECT_TRUE(store.LatticeConnectionError(learning::LayerId::Sudachi).empty());
+  EXPECT_EQ(LatticeSurfaces(store, "きょうはいいてんきです"),
+            (std::vector<std::string>{"今日はいい天気です", "今日はいい転機です",
+                                      "京はいい天気です", "今日はいいテンキです"}));
+  // lattice_core is not a layer: its kana-only words stay out of the lookups.
+  learning::LookupContext exact;
+  EXPECT_TRUE(store.Lookup("です", exact).empty());
+  EXPECT_FALSE(store.ContainsKnownWord("です", "です"));
+
+  // The user dictionary's words enter with the default ids and word cost (spec section 5.3).
+  store.SetUserWords({{"ピヨ", "ぴよ", std::nullopt, std::nullopt, std::nullopt}});
+  EXPECT_EQ(LatticeSurfaces(store, "ぴよは", 1), std::vector<std::string>{"ピヨは"});
+  store.EnableLayer(learning::LayerId::User, false);
+  EXPECT_EQ(LatticeSurfaces(store, "ぴよは", 1), std::vector<std::string>{"ぴよは"});
+  // A disabled static layer leaves the lattice too.
+  store.EnableLayer(learning::LayerId::Sudachi, false);
+  EXPECT_EQ(LatticeSurfaces(store, "てんき", 1), std::vector<std::string>{"てんき"});
+  store.EnableLayer(learning::LayerId::Sudachi, true);
+  EXPECT_EQ(LatticeSurfaces(store, "てんき", 1), std::vector<std::string>{"天気"});
+}
+
+TEST(DictionaryStoreLattice, RebuildsVocabulariesWhenALayerOrLatticeCoreLoadsAgain) {
+  learning::DictionaryStore store;
+  core::LatticeQuery query;
+  EXPECT_EQ(store.ConvertLattice("てんき", query).status, core::LatticeStatus::Unavailable);
+  EXPECT_EQ(store.LatticeError(), "not loaded");
+  EXPECT_EQ(store.LatticeScoreScale(), 0);
+  // A layer loaded before lattice_core gets its vocabulary once lattice_core loads.
+  ASSERT_TRUE(
+      store.LoadStatic(learning::LayerId::Sudachi, Fixture("lattice/sudachi_lexicon.azdic")));
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice/lattice_core.azdic")));
+  EXPECT_EQ(LatticeSurfaces(store, "てんき", 1), std::vector<std::string>{"天気"});
+
+  // Loading the layer again rebuilds its vocabulary: here its CONN is in another id space.
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::Sudachi, Fixture("lattice/layer_space.azdic")));
+  EXPECT_FALSE(store.LatticeConnectionError(learning::LayerId::Sudachi).empty());
+  // Its words take the default ids (spec section 8.3), so テンキ is no longer a variant.
+  const auto defaults = LatticeSurfaces(store, "てんき");
+  EXPECT_NE(std::find(defaults.begin(), defaults.end(), "天気"), defaults.end());
+  learning::LookupContext exact;
+  EXPECT_FALSE(store.Lookup("てんき", exact).empty());
+  ASSERT_TRUE(
+      store.LoadStatic(learning::LayerId::Sudachi, Fixture("lattice/sudachi_lexicon.azdic")));
+  EXPECT_TRUE(store.LatticeConnectionError(learning::LayerId::Sudachi).empty());
+
+  // A broken lattice_core disables the lattice only; the layers keep answering lookups.
+  EXPECT_FALSE(store.LoadLatticeCore(Fixture("lattice/core_no_cmat.azdic")));
+  EXPECT_FALSE(store.IsLatticeAvailable());
+  EXPECT_FALSE(store.LatticeError().empty());
+  EXPECT_EQ(store.LatticeScoreScale(), 0);
+  EXPECT_EQ(store.ConvertLattice("てんき", query).status, core::LatticeStatus::Unavailable);
+  EXPECT_FALSE(store.Lookup("てんき", exact).empty());
+  EXPECT_FALSE(store.LoadLatticeCore(Fixture("lattice/missing.azdic")));
+  EXPECT_EQ(store.ConvertLattice("てんき", query).status, core::LatticeStatus::Unavailable);
+  // Loading it again rebuilds every layer's vocabulary against the new dictionary.
+  ASSERT_TRUE(store.LoadLatticeCore(Fixture("lattice/lattice_core.azdic")));
+  EXPECT_TRUE(store.LatticeConnectionError(learning::LayerId::Sudachi).empty());
+  EXPECT_EQ(LatticeSurfaces(store, "てんき", 1), std::vector<std::string>{"天気"});
+}
 }  // namespace

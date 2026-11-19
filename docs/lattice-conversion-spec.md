@@ -179,6 +179,9 @@ live 変換（`ConversionContext::live`）では N = 1 とする。それ以外�
 - 可変層（`user_dictionary`、`auto_words`、`app_specific_dictionary`）
 - ユーザー辞書の展開形の索引（`docs/user-dictionary-pos-spec.md` §4.6）
 
+M65 の版は、可変層の語として `DictionaryStore` の可変層（ユーザー辞書の語）だけを引く。確定した auto-word の語は
+`AutoWordStore` が持ち、前方一致を持たないので、ノードにする対応は DEV-2167 が受け持つ。
+
 `max_results` は 0（無制限）で呼ぶ。上限に達した `CommonPrefixSearch` は短いキーから埋めて打ち切り、打ち切りを
 知らせない（`docs/azdic-physical-layer-spec.md` §15.4）。ラティスでは長い語ほど落ちるためである。alias キー
 （`docs/azdic-physical-layer-spec.md` §15.3）の一致は、完全一致と同じに扱う。

@@ -330,6 +330,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 
 `left_count` と `right_count` は `0xffff` 未満とする。ID 0（文頭・文末）は必ず添字を持つ。詰める対象は、同梱する
 どれかの層の `CONN` と lattice_core の `CONN` が使う ID、および `docs/lattice-conversion-spec.md` §8.3 の代表 ID である。
+コストの並びが同じ行（列）を持つ ID は、同じ添字を指す（`docs/lattice-conversion-spec.md` §9 の縮め方の 1）。添字は、
+ID の昇順に見て、並びが初めて現れた順に振る。
 
 `CONN` と `CMAT` も `format_version` を上げずに足せる。v1 のリーダーは未知の `type` を無視するので、
 `CONN` を持つ層をラティス変換を知らないリーダーが読んでも、完全一致・前方一致・予測の結果は変わらない。
